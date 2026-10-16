@@ -17,6 +17,15 @@ import {
 import { TCWSessionManager, importKey, initPanicHook } from "@tinycloud/node-sdk-wasm";
 import { invokeOperation } from "@tinycloud/operations";
 import { tcAppsApprovalMessage, tcAppsApprovalReason } from "@tinycloud/operations/tc-apps";
+import {
+  beginDiagnosticPhase,
+  diagnosticId,
+  emitDiagnostic,
+  getDiagnosticContext,
+  isDiagnosticId,
+  withDiagnosticContext,
+} from "@tinycloud/operations/diagnostics";
+import type { HostedDiagnostics } from "./hosted-diagnostics.js";
 
 const PROFILE = "agent";
 const MAX_CALLBACK_BYTES = 256 * 1024;
@@ -67,6 +76,8 @@ interface PendingApproval {
   readonly ownerDids: string[];
   readonly createdAt: string;
   readonly expiresAt: string;
+  /** Random internal linkage only; never the signed state or authority request ID. */
+  readonly diagnosticReference?: string;
 }
 
 export interface ConnectStatus {
@@ -148,9 +159,11 @@ export class ApprovalRequestError extends Error {
 export class RemoteTenantStore {
   readonly #config: RemoteStoreConfig;
   readonly #initializing = new Map<string, Promise<TenantProfile>>();
+  readonly #diagnostics?: Pick<HostedDiagnostics, "tenant">;
 
-  constructor(config: RemoteStoreConfig) {
+  constructor(config: RemoteStoreConfig, diagnostics?: Pick<HostedDiagnostics, "tenant">) {
     this.#config = config;
+    this.#diagnostics = diagnostics;
   }
 
   tenantStateRoot(subject: string): string {
@@ -268,18 +281,34 @@ export class RemoteTenantStore {
     if (!isRecord(data)) throw new ApprovalRequestError("body_invalid", "Callback body is invalid.");
 
     const pending = await this.#readPending(state, true);
-    try {
-      const tenant = await this.#readTenant(pending.tenantId);
-      if (pending.kind === "bootstrap") {
-        await this.#storeBootstrap(tenant, pending, data);
-      } else {
-        await this.#storeDelegation(tenant, pending, data);
+    return this.#withPendingDiagnostics(pending, async () => {
+      const startedAt = performance.now();
+      emitDiagnostic({ type: "invocation.start", activity: "connect", role: "approval" });
+      // A callback is a new invocation, not resumption of any waiting tool.
+      // No monotonic wait is reconstructed from persisted wall-clock timestamps.
+      emitDiagnostic({ type: "operation.step", phase: "approval_wait", outcome: "complete", role: "approval" });
+      try {
+        const tenant = await this.#readTenant(pending.tenantId);
+        if (pending.kind === "bootstrap") {
+          await this.#storeBootstrap(tenant, pending, data);
+        } else {
+          await this.#storeDelegation(tenant, pending, data);
+        }
+        const finish = beginDiagnosticPhase("approval_commit", { action: "commit", service: "local", role: "approval" });
+        try {
+          await rm(this.#pendingPath(tenant.stateRoot, pending.nonce) + ".processing", { force: true });
+          finish({ outcome: "complete" });
+        } catch (error) {
+          finish({ outcome: "error" });
+          throw error;
+        }
+        emitDiagnostic({ type: "invocation.finish", activity: "connect", role: "approval", business: "complete", duration_ms: performance.now() - startedAt, timing_scope: "invocation" });
+      } catch (error) {
+        emitDiagnostic({ type: "invocation.finish", activity: "connect", role: "approval", business: "failed", outcome: error instanceof ApprovalOwnerMismatchError ? "denied" : "error", duration_ms: performance.now() - startedAt, timing_scope: "invocation" });
+        await this.#restorePending(pending).catch(() => undefined);
+        throw error;
       }
-      await rm(this.#pendingPath(tenant.stateRoot, pending.nonce) + ".processing", { force: true });
-    } catch (error) {
-      await this.#restorePending(pending).catch(() => undefined);
-      throw error;
-    }
+    });
   }
 
   async #storeBootstrap(
@@ -287,25 +316,42 @@ export class RemoteTenantStore {
     pending: PendingApproval,
     data: Record<string, unknown>,
   ): Promise<void> {
-    const { node, session } = await this.#restoreApproval(tenant, data);
-    if (pending.ownerDids.length > 0 && !pending.ownerDids.some((did) => samePrincipal(node.did, did))) {
-      throw new ApprovalOwnerMismatchError();
+    const finishVerification = beginDiagnosticPhase("approval_verify", { action: "verify", role: "approval" });
+    let verified: { node: TinyCloudNode; session: CallbackSession };
+    try {
+      verified = await this.#restoreApproval(tenant, data);
+      if (pending.ownerDids.length > 0 && !pending.ownerDids.some((did) => samePrincipal(verified.node.did, did))) {
+        throw new ApprovalOwnerMismatchError();
+      }
+      // The verifier reports one entry per signed action; the SDK subset check
+      // judges each requested entry against every matching grant together.
+      if (!isCapabilitySubset(pending.permissions, verified.node.getVerifiedSessionCapabilities()).subset) {
+        finishVerification({ outcome: "denied" });
+        throw new Error("The approved delegation does not cover the requested account access.");
+      }
+      finishVerification({ outcome: "pass" });
+    } catch (error) {
+      finishVerification({ outcome: error instanceof ApprovalOwnerMismatchError ? "denied" : "fail" });
+      throw error;
     }
-    // The verifier reports one entry per signed action; the SDK subset check
-    // judges each requested entry against every matching grant together.
-    if (!isCapabilitySubset(pending.permissions, node.getVerifiedSessionCapabilities()).subset) {
-      throw new Error("The approved delegation does not cover the requested account access.");
+    const { node, session } = verified;
+    const finishCommit = beginDiagnosticPhase("local_commit", { action: "commit", service: "local", role: "approval" });
+    try {
+      const profile = await readJson<Record<string, unknown>>(this.#profilePath(tenant.stateRoot));
+      await secureWrite(this.#profilePath(tenant.stateRoot), {
+        ...profile,
+        ownerDid: normalizeDid(node.did),
+        spaceId: session.spaceId,
+      });
+      await secureWrite(this.#sessionPath(tenant.stateRoot), {
+        authMethod: "openkey",
+        ...session,
+      });
+      finishCommit({ outcome: "complete" });
+    } catch (error) {
+      finishCommit({ outcome: "error" });
+      throw error;
     }
-    const profile = await readJson<Record<string, unknown>>(this.#profilePath(tenant.stateRoot));
-    await secureWrite(this.#profilePath(tenant.stateRoot), {
-      ...profile,
-      ownerDid: normalizeDid(node.did),
-      spaceId: session.spaceId,
-    });
-    await secureWrite(this.#sessionPath(tenant.stateRoot), {
-      authMethod: "openkey",
-      ...session,
-    });
   }
 
   async #storeDelegation(
@@ -316,12 +362,22 @@ export class RemoteTenantStore {
     if (pending.requestId === undefined) throw new Error("Authority request is missing.");
     // Unlike bootstrap there is no empty-list exemption: a delegation is only
     // imported when its verified signer is the OAuth principal that asked.
-    const { node, session } = await this.#restoreApproval(tenant, data);
-    if (!pending.ownerDids.some((did) => samePrincipal(node.did, did))) throw new ApprovalOwnerMismatchError();
+    const finishVerification = beginDiagnosticPhase("approval_verify", { action: "verify", role: "approval" });
+    let verified: { node: TinyCloudNode; session: CallbackSession };
+    try {
+      verified = await this.#restoreApproval(tenant, data);
+      if (!pending.ownerDids.some((did) => samePrincipal(verified.node.did, did))) throw new ApprovalOwnerMismatchError();
+      finishVerification({ outcome: "pass" });
+    } catch (error) {
+      finishVerification({ outcome: error instanceof ApprovalOwnerMismatchError ? "denied" : "fail" });
+      throw error;
+    }
+    const { node, session } = verified;
     // OpenKey returns a signed-login (CACAO) delegation. Every field is
     // projected from the verified SIWE; `tinycloud.auth.import` verifies it
     // again and checks it stays within the stored request.
     let delegation: PortableDelegation;
+    const finishProjection = beginDiagnosticPhase("validation", { action: "verify", role: "approval" });
     try {
       delegation = siweRuntimeDelegation(node, {
         authorization: session.delegationHeader.Authorization,
@@ -333,7 +389,9 @@ export class RemoteTenantStore {
         signature: session.signature,
         host: this.#config.nodeHost,
       });
+      finishProjection({ outcome: "pass" });
     } catch (error) {
+      finishProjection({ outcome: "fail" });
       throw new ApprovalStageError(
         "siwe_runtime_delegation",
         "DELEGATION_REJECTED",
@@ -341,18 +399,32 @@ export class RemoteTenantStore {
         error,
       );
     }
-    const result = await invokeOperation(
-      "tinycloud.auth.import",
-      1,
-      { profile: PROFILE, stateRoot: tenant.stateRoot },
-      {
-        kind: "tinycloud.auth.delegation",
-        version: 1,
-        requestId: pending.requestId,
-        delegationCid: delegation.cid,
-        delegation,
-      },
-    );
+    const current = getDiagnosticContext();
+    const operationId = current === undefined ? undefined : diagnosticId();
+    const result = await withDiagnosticContext(current === undefined ? undefined : {
+      ...current, operation_id: operationId, parent_id: current.operation_id ?? current.invocation_id,
+    }, async () => {
+      const finishImport = beginDiagnosticPhase("import", { action: "commit", role: "approval", operation_id: operationId });
+      try {
+        const result = await invokeOperation(
+          "tinycloud.auth.import",
+          1,
+          { profile: PROFILE, stateRoot: tenant.stateRoot },
+          {
+            kind: "tinycloud.auth.delegation",
+            version: 1,
+            requestId: pending.requestId,
+            delegationCid: delegation.cid,
+            delegation,
+          },
+        );
+        finishImport({ outcome: result.status === "ok" ? "complete" : "error", canonical_status: result.status });
+        return result;
+      } catch (error) {
+        finishImport({ outcome: "error" });
+        throw error;
+      }
+    });
     if (result.status === "error") {
       const reason = result.error.details?.reason;
       // Only a refused node activation carries a rejection reason on DELEGATION_REJECTED.
@@ -494,7 +566,10 @@ export class RemoteTenantStore {
       this.#pendingDirectory(tenant.stateRoot),
       { tenantId, kind, requestId, permissions, ownerDids: ownerDids.map(normalizeDid) },
     );
-    if (reusable !== undefined) return reusable;
+    if (reusable !== undefined) {
+      this.#observePending(reusable, "reused");
+      return reusable;
+    }
     const nonce = randomBytes(24).toString("base64url");
     const created = Date.now();
     const pending: PendingApproval = {
@@ -507,8 +582,15 @@ export class RemoteTenantStore {
       ownerDids: ownerDids.map(normalizeDid),
       createdAt: new Date(created).toISOString(),
       expiresAt: new Date(created + this.#config.approvalTtlSeconds * 1000).toISOString(),
+      ...(getDiagnosticContext() === undefined ? {} : { diagnosticReference: diagnosticId() }),
     };
-    await secureWrite(this.#pendingPath(tenant.stateRoot, nonce), pending);
+    try {
+      await secureWrite(this.#pendingPath(tenant.stateRoot, nonce), pending);
+    } catch (error) {
+      emitDiagnostic({ type: "operation.step", phase: "approval_request", role: "approval", outcome: "error" });
+      throw error;
+    }
+    this.#observePending(pending, "pending");
     return pending;
   }
 
@@ -554,6 +636,9 @@ export class RemoteTenantStore {
       }
       if (new Date(pending.expiresAt).getTime() <= Date.now()) {
         await rm(consume ? claimed : path, { force: true });
+        await this.#withPendingDiagnostics(pending, async () => {
+          emitDiagnostic({ type: "operation.step", phase: "approval_wait", role: "approval", outcome: "expired" });
+        });
         throw new ApprovalRequestError("state_expired", "Approval state has expired.");
       }
       return pending;
@@ -567,6 +652,32 @@ export class RemoteTenantStore {
     const stateRoot = join(this.#config.stateDir, "tenants", pending.tenantId);
     const path = this.#pendingPath(stateRoot, pending.nonce);
     await rename(`${path}.processing`, path);
+  }
+
+  #observePending(pending: PendingApproval, outcome: "pending" | "reused"): void {
+    const current = getDiagnosticContext();
+    if (current === undefined) return;
+    withDiagnosticContext({
+      ...current,
+      workflow_id: isDiagnosticId(pending.diagnosticReference) ? pending.diagnosticReference : undefined,
+    }, () => {
+      emitDiagnostic({ type: "operation.step", phase: "approval_request", role: "approval", outcome });
+      emitDiagnostic({ type: "operation.step", phase: "approval_wait", role: "approval", outcome: "awaiting_owner", business: "awaiting_owner" });
+    });
+  }
+
+  /** Called only after the signed state and its stored tenant/nonce match. */
+  #withPendingDiagnostics<T>(pending: PendingApproval, action: () => Promise<T>): Promise<T> {
+    if (this.#diagnostics === undefined) return withDiagnosticContext(undefined, action);
+    return this.#diagnostics.tenant(pending.tenantId, () => {
+      const current = getDiagnosticContext();
+      return withDiagnosticContext(current === undefined ? undefined : {
+        ...current,
+        workflow_id: isDiagnosticId(pending.diagnosticReference) ? pending.diagnosticReference : undefined,
+        role: "approval",
+        role_provenance: "observed",
+      }, action);
+    });
   }
 
   #connectUrl(pending: PendingApproval): string {

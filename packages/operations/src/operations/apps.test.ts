@@ -9,6 +9,7 @@ import { appsNow, appsTimezone, withLocalOffset } from "../tc-apps/state.js";
 import type { AppsKv, KvResult, KvValue } from "../tc-apps/kv.js";
 import { appsOperationDefinitions, type ContextOutput, type ReadOutput, type WriteOutput, type QueryOutput } from "./apps.js";
 import { checkCopyKinds, copyRowChunks, COPY_INSERT, COPY_DELETE, COPY_REQUEST_LIMIT, syncCopyRows, type AppsDatabase, type CopyRow } from "../tc-apps/copy.js";
+import { diagnosticId, getDiagnosticContext, makeDiagnosticContext, projectDiagnosticObservation, withDiagnosticContext, type DiagnosticContext, type DiagnosticObservation, type DiagnosticRuntime } from "../diagnostics.js";
 
 const SPACE = "tinycloud:pkh:eip155:1:0x1111111111111111111111111111111111111111:default";
 const app = { app: "fitness", title: "Fitness", about: "Health", created: "2026-10-14" };
@@ -96,7 +97,7 @@ class FakeKv implements AppsKv {
     return { ok: true, data: { data: undefined, headers: {} } };
   }
 }
-async function fixture(run: (kv: FakeKv, context: RuntimeOperationContext) => Promise<void>, timezone: string | null = "Europe/Berlin") {
+async function fixture(run: (kv: FakeKv, context: RuntimeOperationContext, events: DiagnosticObservation[]) => Promise<void>, timezone: string | null = "Europe/Berlin") {
   const root = await mkdtemp(join(tmpdir(), "tc-apps-test-"));
   try {
     await withTinyCloudStateRoot(root, async () => {
@@ -108,7 +109,19 @@ async function fixture(run: (kv: FakeKv, context: RuntimeOperationContext) => Pr
         runtime: { granted: [], node: { kvForSpace: (space: string) => { expect(space).toBe(SPACE); return kv; } } },
       };
       if (timezone) await appsTimezone("apps", timezone);
-      await run(kv, context);
+      const events: DiagnosticObservation[] = [];
+      const invalid: DiagnosticObservation[] = [];
+      const runtime = {
+        emit(observation: DiagnosticObservation, scope: DiagnosticContext) {
+          const event = projectDiagnosticObservation({ operation_id: scope.operation_id, parent_id: scope.parent_id, role: scope.role, ...observation });
+          if (event) events.push(event);
+          else invalid.push(observation);
+          return event !== undefined;
+        },
+      } as unknown as DiagnosticRuntime;
+      const binding = { runtime, source_id: diagnosticId(), partition_id: diagnosticId(), generation: 1 };
+      await withDiagnosticContext(makeDiagnosticContext(binding, "mcp_http"), () => run(kv, context, events));
+      expect(invalid).toEqual([]);
     });
   } finally { await rm(root, { recursive: true, force: true }); }
 }
@@ -133,7 +146,7 @@ describe("personal apps records", () => {
     });
   });
   test("context returns records rules, persists a tenant-local timezone, and reads catalog only through forty keys", async () => {
-    await fixture(async (kv, context) => {
+    await fixture(async (kv, context, events) => {
       const first = await definition("context").execute(context, {});
       expect(first.output.timezone).toBeNull();
       expect(first.output.now).toMatch(/\+00:00$/);
@@ -153,6 +166,9 @@ describe("personal apps records", () => {
       const reads = kv.reads.length;
       expect((await definition("context").execute(context, {})).output.catalog.records).toBeUndefined();
       expect(kv.reads.length).toBe(reads);
+      expect(events.filter((event) => event.role === "copy" && event.action === "context").map((event) => event.outcome)).toEqual(["skipped", "skipped", "expired", "accepted", "accepted"]);
+      expect(events.some((event) => event.copy_state === "ready")).toBe(false);
+      expect(events.find((event) => event.action === "read" && event.outcome === "skipped")).toMatchObject({ role: "catalog", requested: 41, returned: 0 });
     }, null);
   });
   test("local dates get the offset on that date, not the current season", () => {
@@ -194,7 +210,7 @@ describe("personal apps records", () => {
     });
   });
   test("writes app, kind and first record sequentially as CLI-identical bytes, defaults metadata and marks the kind stale", async () => {
-    await fixture(async (kv, context) => {
+    await fixture(async (kv, context, events) => {
       kv.values.clear();
       const result = await write(context, [
         { op: "put", key: `${R}catalog/fitness`, value: app },
@@ -210,6 +226,12 @@ describe("personal apps records", () => {
       const marker = JSON.parse(kv.values.get(`${R}index-stale/fitness/weight`)!.text);
       expect(marker).toEqual({ since: expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/), by: "tinycloud-mcp" });
       expect(kv.reads.flat()).not.toContain(key);
+      const members = events.filter((event) => event.type === "operation.step" && event.action === "create");
+      expect(members.map((event) => [event.ordinal, event.role, event.mutations])).toEqual([[1, "catalog", 1], [2, "catalog", 1], [3, "record", 1]]);
+      expect(new Set(members.map((event) => event.operation_id)).size).toBe(3);
+      expect(new Set(members.map((event) => event.parent_id)).size).toBe(1);
+      expect(events.filter((event) => event.type === "operation.step" && event.action === "put").every((event) => event.verification === "write_response")).toBe(true);
+      expect(events.some((event) => event.verification === "read_back")).toBe(false);
     });
   });
   test("timezone is required for record ops but not catalog ops", async () => {
@@ -219,12 +241,15 @@ describe("personal apps records", () => {
     }, null);
   });
   test("warns about unknown fields and date slips rather than refusing them", async () => {
-    await fixture(async (_kv, context) => {
+    await fixture(async (kv, context, events) => {
       const result = await write(context, [{ op: "put", key, value: { at: "2026-10-13", data: { "Odd-field": 1, due: "October", done: "2026-10-14" } } }]);
       expect(result.output.ops[0].outcome).toBe("ok");
       expect(result.output.ops[0].warnings).toEqual(expect.arrayContaining([
         expect.stringContaining("Odd-field"), expect.stringContaining("due"), expect.stringContaining("at"),
       ]));
+      expect(JSON.parse(kv.values.get(key)!.text).data).toEqual({ "Odd-field": 1, due: "October", done: "2026-10-14" });
+      expect(events.filter((event) => event.warning !== undefined).map((event) => event.warning)).toEqual(["field_name_invalid", "field_not_in_catalog", "date_format_invalid", "record_date_mismatch"]);
+      expect(JSON.stringify(events)).not.toContain("Odd-field");
     });
   });
   test("only timed creates suffix after 412; other creates expose EXISTS and replacements expose CHANGED", async () => {
@@ -272,7 +297,7 @@ describe("personal apps records", () => {
     });
   });
   test("moves stop before deletion when destination exists, and expose committed destination when source changed or deletion fails", async () => {
-    await fixture(async (kv, context) => {
+    await fixture(async (kv, context, events) => {
       const from = `${R}fitness/weight/open/legacy`;
       const to = `${R}fitness/weight/done/legacy`;
       const sourceEtag = kv.seed(from, { data: {} });
@@ -292,10 +317,13 @@ describe("personal apps records", () => {
       expect(refused.status).toBe("ok");
       expect(refused.output.ops[0]).toMatchObject({ outcome: "AUTH_REQUIRED", steps: ["written"] });
       expect(kv.values.has(`${R}index-stale/fitness/weight`)).toBe(true);
+      expect(events.filter((event) => event.type === "operation.step" && event.phase === "execution").map((event) => event.business)).toEqual(["failed", "partial", "partial"]);
+      expect(events.filter((event) => event.action === "destination_write" && event.mutation === "confirmed")).toHaveLength(2);
+      expect(events.filter((event) => event.action === "source_delete").map((event) => event.mutation)).toEqual(["rejected", "unknown"]);
     });
   });
   test("node refusals and stale-mark failure never hide previous effects", async () => {
-    await fixture(async (kv, context) => {
+    await fixture(async (kv, context, events) => {
       const second = `${R}fitness/weight/2026-10/2026-10-15`;
       kv.putFailure = (key) => key === second ? "PERMISSION_DENIED" : key.includes("index-stale/") ? "AUTH_REQUIRED" : undefined;
       const result = await write(context, [{ op: "put", key, value: { data: {} } }, { op: "put", key: second, value: { data: {} } }]);
@@ -303,10 +331,13 @@ describe("personal apps records", () => {
       expect(result.output.ops.map((op) => op.outcome)).toEqual(["ok", "PERMISSION_DENIED"]);
       expect(result.output.ops[0].warnings).toEqual(expect.arrayContaining([expect.stringContaining("AUTH_REQUIRED")]));
       expect(kv.values.has(key)).toBe(true);
+      expect(kv.values.has(`${R}index-stale/fitness/weight`)).toBe(false);
+      expect(events.find((event) => event.warning === "stale_mark_failed")).toMatchObject({ mutation: "unknown", copy_state: "unknown" });
+      expect(events.find((event) => event.type === "operation.step" && event.phase === "execution")).toMatchObject({ business: "partial", mutations: 1 });
     });
   });
   test("new records require catalogs and fit log frequency, month and item states", async () => {
-    await fixture(async (kv, context) => {
+    await fixture(async (kv, context, events) => {
       const invalid = await write(context, [
         { op: "put", key: `${R}unknown/weight/2026-10/2026-10-14`, value: { data: {} } },
         { op: "put", key: `${R}fitness/weight/2026-11/2026-10-14`, value: { data: {} } },
@@ -314,6 +345,10 @@ describe("personal apps records", () => {
       ]);
       expect(invalid.output.ops.map((op) => op.outcome)).toEqual(["INVALID", "INVALID", "INVALID"]);
       expect(kv.writes).toEqual([]);
+      expect(events.find((event) => event.type === "operation.step" && event.phase === "execution")).toMatchObject({ business: "failed", mutations: 0, requested: 3, returned: 0, mutation: "not_dispatched" });
+      const members = events.filter((event) => event.type === "phase.finish" && event.action === "create");
+      expect(members.map((event) => event.ordinal)).toEqual([1, 2, 3]);
+      expect(new Set(members.map((event) => event.operation_id)).size).toBe(3);
       kv.seed(`${R}catalog/fitness/goal`, itemKind);
       const state = await write(context, [{ op: "put", key: `${R}fitness/goal/unknown/2026-10-14-weight`, value: { data: {} } }]);
       expect(state.output.ops[0].outcome).toBe("INVALID");
@@ -341,11 +376,123 @@ describe("personal apps records", () => {
     });
   });
   test("read and context refuse successful objects without an ETag", async () => {
-    await fixture(async (kv, context) => {
+    await fixture(async (kv, context, events) => {
       kv.seed(key, { v: 1, at: "2026-10-14", data: { kg: 70 } });
       kv.omitReadEtag = true;
       expect((await definition("read").execute(context, { keys: [key] })).error.code).toBe("NODE_ERROR");
       expect((await definition("context").execute(context, {})).error.code).toBe("NODE_ERROR");
+      expect(events.filter((event) => event.warning === "read_etag_missing")).toHaveLength(2);
+      expect(events.filter((event) => event.type === "phase.finish" && event.action === "batchGet").map((event) => event.returned)).toEqual([0, 0]);
+    });
+  });
+  test("all attempted puts may fail under canonical ok without claiming a dispatched or committed mutation", async () => {
+    await fixture(async (kv, context, events) => {
+      const second = `${R}fitness/weight/2026-10/2026-10-15`;
+      kv.putFailure = () => "PERMISSION_DENIED";
+      const result = await write(context, [key, second].map((key) => ({ op: "put", key, value: { data: {} } })));
+      expect(result.status).toBe("ok");
+      expect(result.output.ops.map((op) => op.outcome)).toEqual(["PERMISSION_DENIED", "PERMISSION_DENIED"]);
+      expect(kv.writes.map((write) => write.key)).toEqual([key, second]);
+      expect(kv.values.has(key)).toBe(false);
+      expect(kv.values.has(second)).toBe(false);
+      expect(events.find((event) => event.type === "operation.step" && event.phase === "execution")).toMatchObject({ business: "failed", mutation: "unknown", mutations: 0, requested: 2, returned: 0 });
+      expect(events.some((event) => event.dispatched === true)).toBe(false);
+    });
+  });
+  test("a committed put with a lost acknowledgement remains unknown and is not replayed or read back", async () => {
+    await fixture(async (kv, context, events) => {
+      const put = kv.put.bind(kv);
+      let dispatchScope: DiagnosticContext | undefined;
+      kv.put = async (...args) => {
+        dispatchScope = getDiagnosticContext();
+        const result = await put(...args);
+        if (result.ok) throw new Error("synthetic private lost acknowledgement");
+        return result;
+      };
+      const result = await write(context, [{ op: "put", key, value: { data: { kg: 71 } } }]);
+      expect(result.output.ops[0].outcome).toBe("NODE_ERROR");
+      expect(JSON.parse(kv.values.get(key)!.text).data).toEqual({ kg: 71 });
+      expect(kv.writes.map((write) => write.key)).toEqual([key]);
+      expect(kv.reads).toEqual([[`${R}catalog/fitness`, `${R}catalog/fitness/weight`]]);
+      const member = events.find((event) => event.type === "phase.finish" && event.action === "create")!;
+      expect(member).toMatchObject({ mutation: "unknown", mutations: 0, ordinal: 1, role: "record" });
+      expect(dispatchScope?.operation_id).toBe(member.operation_id);
+      expect(Object.isFrozen(dispatchScope)).toBe(true);
+      expect(events.some((event) => event.verification === "read_back")).toBe(false);
+      expect(JSON.stringify(events)).not.toContain(key);
+      expect(JSON.stringify(events)).not.toContain("synthetic private");
+    });
+  });
+  test("a move whose source delete commits then throws retains separate confirmed and unknown evidence", async () => {
+    await fixture(async (kv, context, events) => {
+      const from = `${R}fitness/weight/open/legacy`;
+      const to = `${R}fitness/weight/done/legacy`;
+      const original = kv.seed(from, { v: 1, data: {} });
+      const remove = kv.delete.bind(kv);
+      kv.delete = async (...args) => {
+        const result = await remove(...args);
+        if (result.ok) throw new Error("lost delete acknowledgement");
+        return result;
+      };
+      const result = await write(context, [{ op: "move", from, to, etag: original, value: { data: { kg: 72 } } }]);
+      expect(result.output.ops[0]).toMatchObject({ outcome: "NODE_ERROR", steps: ["written"] });
+      expect(kv.values.has(from)).toBe(false);
+      expect(JSON.parse(kv.values.get(to)!.text).data).toEqual({ kg: 72 });
+      expect(kv.deletes.map((entry) => entry.key)).toEqual([from]);
+      expect(kv.reads).toEqual([[`${R}catalog/fitness`, `${R}catalog/fitness/weight`]]);
+      expect(events.find((event) => event.action === "destination_write")).toMatchObject({ mutation: "confirmed", verification: "write_response" });
+      expect(events.find((event) => event.action === "source_delete")).toMatchObject({ mutation: "unknown" });
+      const summary = events.filter((event) => event.type === "operation.step" && event.phase === "execution");
+      expect(summary).toMatchObject([{ business: "partial", mutations: 1, mutation: "unknown", returned: 0 }]);
+      expect(summary[0].ordinal).toBeUndefined();
+    });
+  });
+  test("read slot accounting retains duplicates and distinguishes malformed JSON, nonobjects and absent records", async () => {
+    await fixture(async (kv, context, events) => {
+      const bad = `${key}-bad`;
+      const array = `${key}-array`;
+      const absent = `${key}-missing`;
+      kv.seed(key, { v: 1, data: { kg: 70 } });
+      kv.values.set(bad, { text: "{", etag: etag(100) });
+      kv.seed(array, []);
+      const result = await definition("read").execute(context, { keys: [key, key, bad, array, absent] });
+      expect(result.output.records).toMatchObject([{ value: { data: { kg: 70 } } }, { value: { data: { kg: 70 } } }, { outcome: "MALFORMED" }, { outcome: "MALFORMED" }, { outcome: "NOT_FOUND" }]);
+      expect(kv.reads).toEqual([[key, bad, array, absent]]);
+      expect(events.find((event) => event.type === "phase.finish" && event.action === "batchGet")).toMatchObject({ requested: 5, unique: 4, returned: 2, malformed: 2, missing: 1, outcome: "partial" });
+      expect(events.find((event) => event.type === "operation.step" && event.phase === "execution")).toMatchObject({ business: "partial", verification: "read_back" });
+    });
+  });
+  test("omitted batch members abort delivery after preserving only traversed readable slots", async () => {
+    await fixture(async (kv, context, events) => {
+      kv.seed(key, { data: {} });
+      const batchGet = kv.batchGet.bind(kv);
+      kv.batchGet = async (keys) => {
+        const batch = await batchGet(keys);
+        batch.data.results = batch.data.results.filter((entry) => entry.key !== `${key}-omitted`);
+        return batch;
+      };
+      const result = await definition("read").execute(context, { keys: [key, `${key}-omitted`, key] });
+      expect(result.error.code).toBe("NODE_ERROR");
+      expect(kv.reads).toEqual([[key, `${key}-omitted`]]);
+      expect(events.find((event) => event.warning === "read_member_omitted")).toMatchObject({ ordinal: 2 });
+      expect(events.find((event) => event.type === "phase.finish" && event.action === "batchGet")).toMatchObject({ requested: 3, unique: 2, returned: 1, missing: 0, malformed: 0, outcome: "failed" });
+      expect(events.find((event) => event.type === "operation.step" && event.phase === "execution")).toMatchObject({ business: "failed" });
+    });
+  });
+  test("incomplete and repeated cursors fail without inventing list exhaustion or repairing pagination", async () => {
+    for (const repeated of [false, true]) await fixture(async (kv, context, events) => {
+      let pages = 0;
+      kv.list = async (options) => {
+        kv.lists.push(options);
+        pages++;
+        return { ok: true, data: { keys: [key], truncated: true, nextCursor: repeated ? "again" : undefined } };
+      };
+      const result = await definition("read").execute(context, { prefixes: [`${R}fitness/weight/`] });
+      expect(result.error.code).toBe("NODE_ERROR");
+      expect(pages).toBe(repeated ? 2 : 1);
+      expect(events.find((event) => event.warning === "pagination_incomplete")).toMatchObject({ pages, returned: pages, truncated: true });
+      expect(events.find((event) => event.type === "phase.finish" && event.action === "list")).toMatchObject({ pages, returned: pages, outcome: "failed" });
+      expect(events.some((event) => event.action === "list" && event.truncated === false)).toBe(false);
     });
   });
 });
@@ -474,7 +621,7 @@ describe("personal apps fast copy", () => {
     });
   });
   test("repeated sync refusal and missing schema preserve committed outcomes and mark kinds stale", async () => {
-    for (const missing of [false, true]) await fixture(async (kv, context) => {
+    for (const missing of [false, true]) await fixture(async (kv, context, events) => {
       const sql = new FakeSql();
       if (missing) sql.table = false;
       else sql.failures.push({ code: "AUTH_UNAUTHORIZED" }, { code: "AUTH_UNAUTHORIZED" });
@@ -483,10 +630,13 @@ describe("personal apps fast copy", () => {
       expect(kv.values.has(key)).toBe(true);
       expect(kv.values.has(staleKey)).toBe(true);
       expect(sql.calls.length).toBe(missing ? 1 : 2);
+      expect(events.filter((event) => event.warning === "copy_maintenance_failed")).toHaveLength(1);
+      expect(events.filter((event) => event.type === "retry.scheduled" && event.layer === "copy_chunk")).toHaveLength(missing ? 0 : 1);
+      expect(events.find((event) => event.type === "operation.step" && event.phase === "execution")).toMatchObject({ business: "complete", mutations: 1 });
     });
   });
   test("queries create missing schema, rebuild every listed key in batches of at most 100, and bind parameters", async () => {
-    await fixture(async (kv, context) => {
+    await fixture(async (kv, context, events) => {
       kv.pageSize = 73;
       const keys = Array.from({ length: 205 }, (_, i) => `${key}-${i}`);
       for (const key of keys) kv.seed(key, { v: 1, data: { kg: 72 } });
@@ -498,16 +648,21 @@ describe("personal apps fast copy", () => {
       expect([...sql.rows.keys()]).toEqual(keys);
       expect(kv.reads.every((batch) => batch.length <= 100)).toBe(true);
       expect(kv.values.has(staleKey)).toBe(false);
+      expect(events.find((event) => event.action === "create" && event.warning === "schema_warning")).toBeDefined();
+      expect(events.find((event) => event.copy_check === "key_set")).toMatchObject({ requested: 205, returned: 205, verification_result: "match" });
+      expect(events.filter((event) => event.type === "phase.finish" && event.action === "list").map((event) => event.pages)).toEqual([1, 3, 3]);
     });
   });
   test("equal counts skip rebuild only without a stale mark; mismatch deletes obsolete rows", async () => {
-    await fixture(async (kv) => {
+    await fixture(async (kv, _context, events) => {
       const value = { data: { kg: 72 } };
       kv.seed(key, value);
       const sql = new FakeSql();
       sql.rows.set(key, { data: { kg: 60 } });
       expect(await checkCopyKinds(kv, sql.handle(), [weightKind])).toEqual({ kinds: [{ ...weightKind, records: 1 }] });
       expect(sql.rows.get(key)).toEqual({ data: { kg: 60 } });
+      expect(events.filter((event) => event.copy_check === "count")).toMatchObject([{ verification_result: "match", requested: 1, returned: 1 }]);
+      expect(events.some((event) => event.verification === "read_back" || event.copy_check === "key_set" || event.action === "rebuild")).toBe(false);
       kv.seed(staleKey, { since: "2026-10-14" });
       await checkCopyKinds(kv, sql.handle(), [weightKind]);
       expect(sql.rows.get(key)).toEqual(value);
@@ -536,12 +691,13 @@ describe("personal apps fast copy", () => {
     });
   });
   test("a changing key set fails verification and leaves the kind stale", async () => {
-    await fixture(async (kv) => {
+    await fixture(async (kv, _context, events) => {
       kv.seed(key, { data: {} });
       const sql = new FakeSql();
       sql.afterInsert = () => { kv.seed(`${key}-new`, { data: {} }); };
       await expect(checkCopyKinds(kv, sql.handle(), [weightKind])).rejects.toThrow();
       expect(kv.values.has(staleKey)).toBe(true);
+      expect(events.find((event) => event.copy_check === "key_set")).toMatchObject({ verification_result: "mismatch", requested: 1, returned: 2 });
     });
   });
   test("a missing view is recreated without discarding an already checked copy", async () => {
@@ -583,7 +739,7 @@ describe("personal apps fast copy", () => {
     });
   });
   test("409 is nonretryable copy_unavailable, without an approval or retry loop", async () => {
-    await fixture(async (kv, context) => {
+    await fixture(async (kv, context, events) => {
       const sql = new FakeSql();
       sql.failures.push({ code: "NETWORK_ERROR", meta: { status: 409 } });
       const result = await definition("query").execute(withSql(context, sql), { kinds: [weightKind], sql: "SELECT 1" });
@@ -596,6 +752,70 @@ describe("personal apps fast copy", () => {
       expect(written.output.ops[0]?.outcome).toBe("ok");
       expect(sql.calls.length).toBe(2);
       expect(kv.values.has(staleKey)).toBe(true);
+      expect(events.some((event) => event.type === "retry.scheduled")).toBe(false);
+      expect(events.filter((event) => event.type === "operation.step" && event.phase === "execution").map((event) => event.business)).toEqual(["failed", "complete"]);
+    });
+  });
+  test("lost copy-delete acknowledgement preserves uncertainty while retrying exactly the existing insert-delete pair", async () => {
+    await fixture(async (kv, context, events) => {
+      kv.seed(key, { data: {} });
+      const sql = new FakeSql();
+      sql.rows.set(key, { data: {} });
+      const execute = sql.execute.bind(sql);
+      let lost = false;
+      sql.execute = async (statement, params) => {
+        const result = await execute(statement, params);
+        if (statement === COPY_DELETE && !lost) { lost = true; throw new Error("lost copy acknowledgement"); }
+        return result;
+      };
+      const result = await write(withSql(context, sql), [{ op: "delete", key }]);
+      expect(result.output.ops[0].outcome).toBe("ok");
+      expect(kv.values.has(key)).toBe(false);
+      expect(sql.rows.has(key)).toBe(false);
+      expect(sql.calls.map((call) => call.sql)).toEqual([COPY_INSERT, COPY_DELETE, COPY_INSERT, COPY_DELETE]);
+      expect(events.filter((event) => event.type === "attempt.finish" && event.layer === "copy_chunk").map((event) => event.outcome)).toEqual(["failed", "complete"]);
+      expect(events.filter((event) => event.type === "retry.scheduled" && event.layer === "copy_chunk")).toHaveLength(1);
+      expect(events.filter((event) => event.role === "copy" && event.action === "delete" && event.type === "operation.step").map((event) => event.mutation)).toEqual(["unknown", "confirmed"]);
+      expect(events.find((event) => event.type === "operation.step" && event.phase === "execution")).toMatchObject({ business: "complete", mutations: 1 });
+    });
+  });
+  test("registered query finishes its started kind then returns partial without issuing the user's query", async () => {
+    await fixture(async (kv, context, events) => {
+      kv.seed(key, { data: { kg: 70 } });
+      const sql = new FakeSql();
+      const originalNow = Date.now;
+      let now = 0;
+      Date.now = () => now;
+      sql.afterInsert = () => { now = 60_000; };
+      try {
+        const remaining = [{ app: "fitness", kind: "lift" }];
+        const result = await definition("query").execute(withSql(context, sql), { kinds: [weightKind, ...remaining], sql: "SELECT 42 AS answer" });
+        expect(result.output).toEqual({ outcome: "COPY_PARTIAL", remaining });
+        expect(sql.rows.get(key)).toEqual({ data: { kg: 70 } });
+        expect(kv.values.has(staleKey)).toBe(false);
+        expect(kv.values.has(`${R}index-stale/fitness/lift`)).toBe(true);
+        expect(sql.calls.some((call) => call.sql === "SELECT 42 AS answer")).toBe(false);
+        expect(events.find((event) => event.type === "operation.step" && event.phase === "execution")).toMatchObject({ business: "partial", copy_state: "partial", requested: 2, returned: 1 });
+      } finally { Date.now = originalNow; }
+    });
+  });
+  test("an omitted canonical rebuild member retains the stale marker and never runs the requested query", async () => {
+    await fixture(async (kv, context, events) => {
+      kv.seed(key, { data: {} });
+      const batchGet = kv.batchGet.bind(kv);
+      kv.batchGet = async (keys) => {
+        const batch = await batchGet(keys);
+        batch.data.results = batch.data.results.filter((entry) => entry.key !== key);
+        return batch;
+      };
+      const sql = new FakeSql();
+      const result = await definition("query").execute(withSql(context, sql), { kinds: [weightKind], sql: "SELECT 42" });
+      expect(result.error.code).toBe("NODE_ERROR");
+      expect(kv.values.has(staleKey)).toBe(true);
+      expect(sql.rows.has(key)).toBe(false);
+      expect(sql.calls.some((call) => call.sql === "SELECT 42")).toBe(false);
+      expect(events.find((event) => event.warning === "read_member_omitted")).toBeDefined();
+      expect(events.find((event) => event.type === "operation.step" && event.phase === "execution")).toMatchObject({ business: "failed" });
     });
   });
 });

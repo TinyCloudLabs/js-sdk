@@ -9,6 +9,8 @@ import { CLIError } from "../output/errors.js";
 import { normalizePkhIdentifier } from "../lib/space.js";
 import { keyToDID } from "./local-key.js";
 import { canonicalJson, CLOCK_SKEW_MS, isLegacyNestedDecrypt, scopeCovers, sessionExpiresAt, SIGNED_RECAP } from "./scoped-login.js";
+import { withCliDiagnosticPhase } from "../lib/diagnostics.js";
+import { emitDiagnostic } from "@tinycloud/operations/diagnostics";
 
 /** Scoped and device logins never turn a local-owner-key profile into a mixed OpenKey profile. */
 export function assertNotLocalOwner(profileName: string, profile: ProfileConfig | null, flow: string): void {
@@ -158,6 +160,7 @@ function errorMessage(error: unknown): string {
  * every failure.
  */
 export async function commitLogin(profileName: string, snapshot: ProfileSnapshot, commit: LoginCommit): Promise<void> {
+  return withCliDiagnosticPhase("approval_commit", { service: "local", action: "commit", role: "approval" }, async () => {
   await ProfileManager.withLock(profileName, async () => {
     const current = await readProfileSnapshot(profileName);
     if (
@@ -179,8 +182,10 @@ export async function commitLogin(profileName: string, snapshot: ProfileSnapshot
       await ProfileManager.setKey(profileName, commit.key);
       await ProfileManager.setSession(profileName, commit.session);
       await ProfileManager.setProfile(profileName, commit.profile);
+      emitDiagnostic({ type: "operation.step", phase: "local_commit", outcome: "complete", mutation: "confirmed" });
     } catch (error) {
       const failures = await restore(profileName, current);
+      emitDiagnostic({ type: "operation.step", phase: "local_commit", outcome: "failed", mutation: failures.length === 0 ? "rejected" : "unknown" });
       if (failures.length === 0) throw error;
       throw new CLIError(
         "PROFILE_STATE_INCONSISTENT",
@@ -196,5 +201,6 @@ export async function commitLogin(profileName: string, snapshot: ProfileSnapshot
       `Another tc process kept profile "${profileName}" locked for ${PROFILE_COMMIT_LOCK_TIMEOUT_MS / 1000} s, so the approved login was not saved. Wait for it to finish (a crashed process's lock is reclaimed after 30 s) and run the login again.`,
       ExitCode.ERROR,
     );
+  });
   });
 }

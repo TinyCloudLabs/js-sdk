@@ -8,10 +8,105 @@ var __export = (target, all) => {
     __defProp(target, name, { get: all[name], enumerable: true });
 };
 
+// src/lib/diagnostics.ts
+import {
+  beginDiagnosticPhase,
+  createDiagnosticRuntime,
+  decodeDiagnosticContext,
+  diagnosticId,
+  emitDiagnostic,
+  diagnosticClientProvenance,
+  getDiagnosticContext,
+  makeDiagnosticContext,
+  withDiagnosticContext
+} from "@tinycloud/operations/diagnostics";
+async function withCliDiagnosticPhase(phase, fields, action, completed) {
+  const current = getDiagnosticContext();
+  if (!current) return action();
+  let operationId;
+  try {
+    operationId = diagnosticId();
+  } catch {
+    return action();
+  }
+  const parentId = current.operation_id ?? current.invocation_id;
+  return withDiagnosticContext({
+    ...current,
+    operation_id: operationId,
+    parent_id: parentId,
+    ...fields.role ? { role: fields.role, role_provenance: "observed" } : {}
+  }, async () => {
+    const finish = beginDiagnosticPhase(phase, { ...fields, operation_id: operationId, parent_id: parentId });
+    try {
+      const value = await action();
+      try {
+        finish({ outcome: "complete", ...completed?.(value) });
+      } catch {
+        finish({ outcome: "complete" });
+      }
+      return value;
+    } catch (error) {
+      finish({ outcome: "error" });
+      throw error;
+    }
+  });
+}
+function cliDiagnosticImported() {
+  const state2 = globals[stateKey];
+  if (!state2) return;
+  state2.imported = true;
+  emitDiagnostic({ type: "phase.finish", phase: "import", outcome: "complete" });
+  emitDiagnostic({ type: "phase.start", phase: "parse" });
+}
+function cliDiagnosticParsed() {
+  const state2 = globals[stateKey];
+  if (!state2 || state2.parsed) return;
+  state2.parsed = true;
+  emitDiagnostic({ type: "phase.finish", phase: "parse", outcome: "complete" });
+}
+function finishCliDiagnostics(code3 = 0, signal) {
+  const state2 = globals[stateKey];
+  if (!state2 || state2.finished) return;
+  state2.finished = true;
+  try {
+    if (state2.context && state2.runtime) {
+      if (!state2.imported || !state2.parsed) {
+        state2.runtime.emit({
+          type: "phase.finish",
+          phase: state2.imported ? "parse" : "import",
+          activity: state2.imported ? "parser" : "import",
+          outcome: signal ? "interrupted" : code3 === 0 ? "complete" : "error"
+        }, state2.context);
+      }
+      state2.runtime.emit({
+        type: "invocation.finish",
+        exit_code: code3,
+        activity: state2.activity ?? "unknown",
+        duration_ms: Math.max(0, Math.round(performance.now() - state2.started)),
+        business: "unknown",
+        timing_scope: "invocation",
+        ...signal ? { signal } : {}
+      }, state2.context);
+      state2.runtime.drainSync();
+    }
+  } catch {
+  }
+}
+var stateKey, globals;
+var init_diagnostics = __esm({
+  "src/lib/diagnostics.ts"() {
+    "use strict";
+    stateKey = /* @__PURE__ */ Symbol.for("tinycloud.cli.diagnostics.v1");
+    globals = globalThis;
+  }
+});
+
 // src/lib/replication-registry.ts
 function stopForSignal(signal) {
   void closeReplication().finally(() => {
-    process.exit(signal === "SIGINT" ? 130 : 143);
+    const code3 = signal === "SIGINT" ? 130 : 143;
+    finishCliDiagnostics(code3, signal);
+    process.exit(code3);
   });
 }
 function installSignalHandlers() {
@@ -103,6 +198,7 @@ var registryKey, globalState, state, CLOSE_TIMEOUT_MS, scheduleTimeout;
 var init_replication_registry = __esm({
   "src/lib/replication-registry.ts"() {
     "use strict";
+    init_diagnostics();
     registryKey = /* @__PURE__ */ Symbol.for("@tinycloud/cli/replication-registry");
     globalState = globalThis;
     state = globalState[registryKey] ??= {
@@ -226,6 +322,7 @@ var init_warnings = __esm({
 // src/output/formatter.ts
 import ora from "ora";
 import { CLI_NAME as CLI_NAME2 } from "@tinycloud/operations/cli-name";
+import { beginDiagnosticPhase as beginDiagnosticPhase2, emitDiagnostic as emitDiagnostic2 } from "@tinycloud/operations/diagnostics";
 function warningLine(warnings) {
   const which = warnings.map((warning) => `${warning.grantCid ?? "unidentified"}: ${warning.reason}`).join(", ");
   const subject = warnings.length === 1 ? "A stored grant was" : `${warnings.length} stored grants were`;
@@ -258,6 +355,7 @@ function outputError(code3, message, hint, details = {}) {
     if (warnings.length > 0) payload.error.warnings = warnings;
     process.stderr.write(JSON.stringify(payload, null, 2) + "\n");
   }
+  emitDiagnostic2({ type: "operation.step", phase: "output_projection", outcome: "complete", is_error: true });
 }
 function outputWarnings(warnings) {
   const combined = mergeWarnings(drainWarnings(), operationWarnings(warnings));
@@ -265,6 +363,7 @@ function outputWarnings(warnings) {
   process.stderr.write(shouldOutputJson() ? `${JSON.stringify({ warnings: combined })}
 ` : `${theme.warn("!")} ${warningLine(combined)}
 `);
+  emitDiagnostic2({ type: "operation.step", phase: "output_projection", outcome: "complete", warning: "unknown" });
 }
 function operationWarnings(value) {
   if (!Array.isArray(value)) return [];
@@ -392,6 +491,7 @@ import {
   SECRET_REQUEST_MAX_NAMES
 } from "@tinycloud/operations/secret-request";
 import { authorizationVerdictOf, parseCapabilityResource, SERVICE_LONG_TO_SHORT, validatedCapabilityOf } from "@tinycloud/sdk-core";
+import { emitDiagnostic as emitDiagnostic3 } from "@tinycloud/operations/diagnostics";
 function setActiveProfileName(name) {
   activeProfileName = name;
 }
@@ -453,6 +553,7 @@ function storageFullError(error, progress) {
 }
 function handleError(error) {
   const cliError = wrapError(error);
+  emitDiagnostic3({ type: "operation.step", outcome: cliError.code === "CANCELLED" ? "cancelled" : "failed", error_class: Object.hasOwn(DIAGNOSTIC_ERROR_CLASSES, cliError.code) ? DIAGNOSTIC_ERROR_CLASSES[cliError.code] : "unknown", exit_code: cliError.exitCode });
   const prebuilt = typeof cliError.metadata?.hint === "string" ? cliError.metadata.hint : void 0;
   const hint = prebuilt ?? buildAuthHint(cliError) ?? (cliError.code === "NETWORK_ERROR" ? buildNetworkHint() : void 0);
   const authMeta = cliError.code === "AUTH_REQUIRED" || cliError.code === "PERMISSION_DENIED" ? cliError.metadata : void 0;
@@ -586,7 +687,7 @@ function buildNetworkHint() {
   lines.push(`Or override per-command with --host or TC_HOST.`);
   return lines.join("\n");
 }
-var activeProfileName, CLIError, SETUP_KEYS;
+var DIAGNOSTIC_ERROR_CLASSES, activeProfileName, CLIError, SETUP_KEYS;
 var init_errors = __esm({
   "src/output/errors.ts"() {
     "use strict";
@@ -595,6 +696,25 @@ var init_errors = __esm({
     init_formatter();
     init_storage();
     init_warnings();
+    DIAGNOSTIC_ERROR_CLASSES = {
+      USAGE_ERROR: "input_invalid",
+      INVALID_ARGUMENT: "input_invalid",
+      SELF_COPY: "input_invalid",
+      EMPTY_PLAN: "input_invalid",
+      AUTH_REQUIRED: "auth_required",
+      AUTH_EXPIRED: "auth_required",
+      PASTE_CODE_MISSING: "auth_required",
+      PERMISSION_DENIED: "permission_denied",
+      DEVICE_AUTH_DENIED: "permission_denied",
+      SCOPE_REJECTED: "permission_denied",
+      NOT_FOUND: "not_found",
+      KV_NOT_FOUND: "not_found",
+      NETWORK_ERROR: "network",
+      OPENKEY_UNREACHABLE: "network",
+      STORAGE_FULL: "storage_full",
+      KV_PRECONDITION_FAILED: "precondition",
+      CANCELLED: "cancelled"
+    };
     CLIError = class extends Error {
       constructor(code3, message, exitCode = ExitCode.ERROR, metadata) {
         super(message);
@@ -693,7 +813,7 @@ var init_types = __esm({
 });
 
 // src/lib/space.ts
-import { CLI_NAME as CLI_NAME5 } from "@tinycloud/operations/cli-name";
+import { CLI_NAME as CLI_NAME6 } from "@tinycloud/operations/cli-name";
 function canonicalizeAddress(address) {
   const trimmed = address.trim();
   return trimmed.startsWith("0x") ? `0x${trimmed.slice(2).toLowerCase()}` : trimmed.toLowerCase();
@@ -735,7 +855,7 @@ function resolveAddress(profile, session) {
   }
   throw new CLIError(
     "ADDRESS_UNKNOWN",
-    `Cannot determine Ethereum address for profile "${profile.name}". Run \`${CLI_NAME5} auth login\` to refresh the session.`,
+    `Cannot determine Ethereum address for profile "${profile.name}". Run \`${CLI_NAME6} auth login\` to refresh the session.`,
     ExitCode.AUTH_REQUIRED
   );
 }
@@ -2070,11 +2190,11 @@ function datetimeRegex(args) {
   regex = `${regex}(${opts.join("|")})`;
   return new RegExp(`^${regex}$`);
 }
-function isValidIP(ip, version2) {
-  if ((version2 === "v4" || !version2) && ipv4Regex.test(ip)) {
+function isValidIP(ip, version) {
+  if ((version === "v4" || !version) && ipv4Regex.test(ip)) {
     return true;
   }
-  if ((version2 === "v6" || !version2) && ipv6Regex.test(ip)) {
+  if ((version === "v6" || !version) && ipv6Regex.test(ip)) {
     return true;
   }
   return false;
@@ -2101,11 +2221,11 @@ function isValidJWT(jwt, alg) {
     return false;
   }
 }
-function isValidCidr(ip, version2) {
-  if ((version2 === "v4" || !version2) && ipv4CidrRegex.test(ip)) {
+function isValidCidr(ip, version) {
+  if ((version === "v4" || !version) && ipv4CidrRegex.test(ip)) {
     return true;
   }
-  if ((version2 === "v6" || !version2) && ipv6CidrRegex.test(ip)) {
+  if ((version === "v6" || !version) && ipv6CidrRegex.test(ip)) {
     return true;
   }
   return false;
@@ -5684,7 +5804,7 @@ var init_permissions = __esm({
 
 // src/auth/session-expired.ts
 import { signInRecovery } from "@tinycloud/operations/recovery";
-import { CLI_NAME as CLI_NAME6 } from "@tinycloud/operations/cli-name";
+import { CLI_NAME as CLI_NAME7 } from "@tinycloud/operations/cli-name";
 function signInAgainHint(profileName, posture) {
   const delegate = posture === "delegate-session";
   const { command } = signInRecovery(
@@ -5692,7 +5812,7 @@ function signInAgainHint(profileName, posture) {
     delegate ? "delegate-session" : posture === "local-owner-key" ? "local-owner-key" : "owner-openkey"
   );
   if (command === void 0) {
-    return delegate ? `Have the owner approve a new scoped login for profile ${JSON.stringify(profileName)} with ${CLI_NAME6} auth login --method openkey --paste --manifest <manifest.json>.` : `Sign in again to profile ${JSON.stringify(profileName)} with ${CLI_NAME6} auth login.`;
+    return delegate ? `Have the owner approve a new scoped login for profile ${JSON.stringify(profileName)} with ${CLI_NAME7} auth login --method openkey --paste --manifest <manifest.json>.` : `Sign in again to profile ${JSON.stringify(profileName)} with ${CLI_NAME7} auth login.`;
   }
   return delegate ? `Have the owner approve a new scoped login: ${command}. Pass the owner's code on stdin, newline-terminated.` : `Sign in again with: ${command}`;
 }
@@ -5730,7 +5850,7 @@ var init_delegation_expiry = __esm({
 });
 
 // src/lib/replication-log.ts
-import { CLI_NAME as CLI_NAME7 } from "@tinycloud/operations/cli-name";
+import { CLI_NAME as CLI_NAME8 } from "@tinycloud/operations/cli-name";
 import { appendFileSync, chmodSync, mkdirSync, renameSync, statSync, writeFileSync } from "fs";
 import { dirname as dirname2, join as join4 } from "path";
 function appendReplicationEvent(root, event) {
@@ -5793,7 +5913,7 @@ function createReplicationEventSink(profileRoot, options) {
     }
     if (event.type === "replication.read" && (event.pendingState === "in_flight" || event.pendingState === "ambiguous") && !options.quiet && !pinnedNotices.has(event.key)) {
       pinnedNotices.add(event.key);
-      process.stderr.write(`[replication] ${event.key} reads from the network: an earlier write's outcome is unknown (${event.pendingState}${event.code ? `, ${event.code}` : ""}). Review: ${CLI_NAME7} replica report
+      process.stderr.write(`[replication] ${event.key} reads from the network: an earlier write's outcome is unknown (${event.pendingState}${event.code ? `, ${event.code}` : ""}). Review: ${CLI_NAME8} replica report
 `);
     }
   };
@@ -7788,7 +7908,7 @@ var init_dist = __esm({
 
 // src/lib/replication-config.ts
 import { join as join5 } from "path";
-import { CLI_NAME as CLI_NAME8 } from "@tinycloud/operations/cli-name";
+import { CLI_NAME as CLI_NAME9 } from "@tinycloud/operations/cli-name";
 import { profilePath, withProfileLock as withProfileLock2 } from "@tinycloud/operations/state";
 import { sqliteReplicaStorage } from "@tinycloud/node-sdk";
 function createCliReplicationConfig(profile, settings, output, enabled) {
@@ -7803,7 +7923,7 @@ function createCliReplicationConfig(profile, settings, output, enabled) {
         "INVALID_REPLICATION_PREFIX",
         error instanceof Error ? error.message : String(error),
         ExitCode.USAGE_ERROR,
-        { hint: `Replace the saved replication prefix with \`${CLI_NAME8} auth login --replication-prefix ${replacement}\`; purging a replica alone does not change this profile setting.` }
+        { hint: `Replace the saved replication prefix with \`${CLI_NAME9} auth login --replication-prefix ${replacement}\`; purging a replica alone does not change this profile setting.` }
       );
     }
   }
@@ -7849,7 +7969,8 @@ __export(sdk_exports, {
   storedSessionVerifiesLocally: () => storedSessionVerifiesLocally
 });
 import { TinyCloudNode, signedCompactUcanExpiry } from "@tinycloud/node-sdk";
-import { CLI_NAME as CLI_NAME9 } from "@tinycloud/operations/cli-name";
+import { CLI_NAME as CLI_NAME10 } from "@tinycloud/operations/cli-name";
+import { diagnosticTelemetry, getDiagnosticContext as getDiagnosticContext2 } from "@tinycloud/operations/diagnostics";
 import { ownerSessionLacksProof } from "@tinycloud/operations/profile";
 function jwkHasPrivateParameter(jwk) {
   if (!jwk || typeof jwk !== "object") return false;
@@ -7872,7 +7993,7 @@ function signerJwkForProfile(profileName, sessionJwk, key) {
     `Profile "${profileName}" cannot restore its session because its private key material is missing.`,
     ExitCode.AUTH_REQUIRED,
     {
-      hint: `Sign in again with: ${CLI_NAME9} --profile ${profileName} auth login --method openkey`
+      hint: `Sign in again with: ${CLI_NAME10} --profile ${profileName} auth login --method openkey`
     }
   );
 }
@@ -7881,19 +8002,22 @@ function signedLifetimePassed(delegation) {
   const expiry = typeof authorization === "string" ? signedCompactUcanExpiry(authorization) : void 0;
   return expiry !== void 0 && expiry.getTime() <= Date.now();
 }
-async function restoreProfileSession(node, profileName, profile, sessionData) {
-  const posture = profile === null ? void 0 : resolveProfilePosture(profile);
-  if (ownerSessionLacksProof(sessionData, profile)) {
-    throw sessionExpiredError(profileName, posture);
-  }
-  try {
-    await node.restoreSession(sessionData);
-  } catch (error) {
-    if (typeof error === "object" && error !== null && "code" in error && error.code === "AUTH_EXPIRED") {
+async function restoreProfileSession(node, profileName, profile, resolveSessionData) {
+  return withCliDiagnosticPhase("restore", { service: "auth", action: "restore" }, async () => {
+    const sessionData = resolveSessionData();
+    const posture = profile === null ? void 0 : resolveProfilePosture(profile);
+    if (ownerSessionLacksProof(sessionData, profile)) {
       throw sessionExpiredError(profileName, posture);
     }
-    throw error;
-  }
+    try {
+      await node.restoreSession(sessionData);
+    } catch (error) {
+      if (typeof error === "object" && error !== null && "code" in error && error.code === "AUTH_EXPIRED") {
+        throw sessionExpiredError(profileName, posture);
+      }
+      throw error;
+    }
+  });
 }
 function persistedSessionData(profileName, profile, session, key) {
   return {
@@ -7921,10 +8045,11 @@ async function restoreProfileSessionNode(ctx) {
   const key = await ProfileManager.getKey(ctx.profile);
   try {
     const node = new TinyCloudNode({
+      telemetry: getDiagnosticContext2() ? diagnosticTelemetry : void 0,
       host: ctx.host,
       ...profile.authMethod === "local" && profile.privateKey ? { privateKey: profile.privateKey } : {}
     });
-    await restoreProfileSession(node, ctx.profile, profile, persistedSessionData(ctx.profile, profile, session, key));
+    await restoreProfileSession(node, ctx.profile, profile, () => persistedSessionData(ctx.profile, profile, session, key));
     return { node };
   } catch (error) {
     if (error instanceof CLIError && error.metadata?.reason === "session_expired") {
@@ -7942,84 +8067,89 @@ async function storedSessionVerifiesLocally(profileName) {
     if (!session || typeof session.delegationCid !== "string" || typeof session.spaceId !== "string" || session.delegationHeader === null || typeof session.delegationHeader !== "object" || !("Authorization" in session.delegationHeader) || typeof session.delegationHeader.Authorization !== "string") return true;
     const key = await ProfileManager.getKey(profileName);
     const node = new TinyCloudNode({
+      telemetry: getDiagnosticContext2() ? diagnosticTelemetry : void 0,
       host: profile.host ?? DEFAULT_HOST,
       ...local ? { privateKey: profile.privateKey } : {}
     });
-    await restoreProfileSession(node, profileName, profile, persistedSessionData(profileName, profile, session, key));
+    await restoreProfileSession(node, profileName, profile, () => persistedSessionData(profileName, profile, session, key));
     return true;
   } catch {
     return false;
   }
 }
 async function createSDKInstance(ctx, options) {
-  const profile = options?.privateKey ? await ProfileManager.getProfile(ctx.profile).catch(() => null) : await ProfileManager.getProfile(ctx.profile);
-  const session = await ProfileManager.getSession(ctx.profile);
-  const key = await ProfileManager.getKey(ctx.profile);
-  const effectivePrivateKey = options?.privateKey ?? profile?.privateKey;
-  if (!key && !effectivePrivateKey && !(profile?.authMethod === "openkey" && session !== null)) {
-    throw new CLIError(
-      "AUTH_REQUIRED",
-      `No key found for profile "${ctx.profile}". Run \`${CLI_NAME9} --profile ${ctx.profile} auth rotate\` to create a new key and sign in.`,
-      ExitCode.AUTH_REQUIRED
-    );
-  }
-  if (profile?.authMethod === "local" && effectivePrivateKey) {
-    const replication2 = createCliReplicationConfig(
+  return withCliDiagnosticPhase("preparation", { service: "auth" }, async () => {
+    const profile = options?.privateKey ? await ProfileManager.getProfile(ctx.profile).catch(() => null) : await ProfileManager.getProfile(ctx.profile);
+    const session = await ProfileManager.getSession(ctx.profile);
+    const key = await ProfileManager.getKey(ctx.profile);
+    const effectivePrivateKey = options?.privateKey ?? profile?.privateKey;
+    if (!key && !effectivePrivateKey && !(profile?.authMethod === "openkey" && session !== null)) {
+      throw new CLIError(
+        "AUTH_REQUIRED",
+        `No key found for profile "${ctx.profile}". Run \`${CLI_NAME10} --profile ${ctx.profile} auth rotate\` to create a new key and sign in.`,
+        ExitCode.AUTH_REQUIRED
+      );
+    }
+    if (profile?.authMethod === "local" && effectivePrivateKey) {
+      const replication2 = createCliReplicationConfig(
+        ctx.profile,
+        profile?.replication,
+        { debug: ctx.replicationDebug, quiet: ctx.quiet },
+        ctx.replication
+      );
+      if (ctx.replication && !replication2) {
+        process.stderr.write("[replication] Enabled, but this profile has no configured prefixes; reads use the network.\n");
+      }
+      const node2 = new TinyCloudNode({
+        telemetry: getDiagnosticContext2() ? diagnosticTelemetry : void 0,
+        host: ctx.host,
+        privateKey: effectivePrivateKey,
+        ...replication2 ? { replication: replication2 } : {}
+      });
+      if (node2.replication) registerReplication(ctx.profile, node2.replication);
+      const restoredOwnSession = Boolean(session && session.delegationHeader && session.delegationCid && session.spaceId);
+      if (restoredOwnSession) {
+        await restoreProfileSession(node2, ctx.profile, profile, () => persistedSessionData(ctx.profile, profile, session, key));
+      } else {
+        await withCliDiagnosticPhase("restore", { service: "auth", action: "login" }, () => node2.signIn());
+      }
+      if (restoredOwnSession) {
+        recordWarnings(await replayAdditionalDelegations(node2, ctx.profile, {
+          host: ctx.host,
+          ownerSpace: profile.spaceId,
+          migrate: options?.privateKey === void 0
+        }));
+      }
+      return node2;
+    }
+    const replication = createCliReplicationConfig(
       ctx.profile,
       profile?.replication,
       { debug: ctx.replicationDebug, quiet: ctx.quiet },
       ctx.replication
     );
-    if (ctx.replication && !replication2) {
+    if (ctx.replication && !replication) {
       process.stderr.write("[replication] Enabled, but this profile has no configured prefixes; reads use the network.\n");
     }
-    const node2 = new TinyCloudNode({
+    const node = new TinyCloudNode({
+      telemetry: getDiagnosticContext2() ? diagnosticTelemetry : void 0,
       host: ctx.host,
-      privateKey: effectivePrivateKey,
-      ...replication2 ? { replication: replication2 } : {}
+      privateKey: options?.privateKey,
+      ...replication ? { replication } : {}
     });
-    if (node2.replication) registerReplication(ctx.profile, node2.replication);
-    const restoredOwnSession = Boolean(session && session.delegationHeader && session.delegationCid && session.spaceId);
-    if (restoredOwnSession) {
-      await restoreProfileSession(node2, ctx.profile, profile, persistedSessionData(ctx.profile, profile, session, key));
-    } else {
-      await node2.signIn();
-    }
-    if (restoredOwnSession) {
-      recordWarnings(await replayAdditionalDelegations(node2, ctx.profile, {
+    if (node.replication) registerReplication(ctx.profile, node.replication);
+    if (options?.privateKey) {
+      await withCliDiagnosticPhase("restore", { service: "auth", action: "login" }, () => node.signIn());
+    } else if (session && session.delegationHeader && session.delegationCid && session.spaceId) {
+      await restoreProfileSession(node, ctx.profile, profile, () => persistedSessionData(ctx.profile, profile, session, key));
+      recordWarnings(await replayAdditionalDelegations(node, ctx.profile, {
         host: ctx.host,
-        ownerSpace: profile.spaceId,
-        migrate: options?.privateKey === void 0
+        ownerSpace: profile?.spaceId,
+        migrate: true
       }));
     }
-    return node2;
-  }
-  const replication = createCliReplicationConfig(
-    ctx.profile,
-    profile?.replication,
-    { debug: ctx.replicationDebug, quiet: ctx.quiet },
-    ctx.replication
-  );
-  if (ctx.replication && !replication) {
-    process.stderr.write("[replication] Enabled, but this profile has no configured prefixes; reads use the network.\n");
-  }
-  const node = new TinyCloudNode({
-    host: ctx.host,
-    privateKey: options?.privateKey,
-    ...replication ? { replication } : {}
+    return node;
   });
-  if (node.replication) registerReplication(ctx.profile, node.replication);
-  if (options?.privateKey) {
-    await node.signIn();
-  } else if (session && session.delegationHeader && session.delegationCid && session.spaceId) {
-    await restoreProfileSession(node, ctx.profile, profile, persistedSessionData(ctx.profile, profile, session, key));
-    recordWarnings(await replayAdditionalDelegations(node, ctx.profile, {
-      host: ctx.host,
-      ownerSpace: profile?.spaceId,
-      migrate: true
-    }));
-  }
-  return node;
 }
 async function bootstrapDelegatedSession(ctx, delegation) {
   const written = await ProfileManager.withLock(ctx.profile, async () => {
@@ -8078,7 +8208,7 @@ async function bootstrapDelegatedSession(ctx, delegation) {
       return restoreBeforeBootstrap(ctx.profile, written.previousProfile);
     }, { timeoutMs: PROFILE_COMMIT_LOCK_TIMEOUT_MS }).catch((error) => (
       // The lock or a read failed: the import's error stays the one reported.
-      `Rolling back the provisional session of profile "${ctx.profile}" could not run (${failureName(error)}); check \`${CLI_NAME9} --profile ${ctx.profile} context\`.`
+      `Rolling back the provisional session of profile "${ctx.profile}" could not run (${failureName(error)}); check \`${CLI_NAME10} --profile ${ctx.profile} context\`.`
     ));
     throw annotate(reported, note);
   };
@@ -8108,7 +8238,7 @@ async function restoreBeforeBootstrap(profileName, previousProfile) {
     });
   }
   if (failures.length === 0) return void 0;
-  return `Rolling back the provisional session of profile "${profileName}" failed too (${failures.join("; ")}); check \`${CLI_NAME9} --profile ${profileName} context\`.`;
+  return `Rolling back the provisional session of profile "${profileName}" failed too (${failures.join("; ")}); check \`${CLI_NAME10} --profile ${profileName} context\`.`;
 }
 function failureName(error) {
   if (error instanceof SyntaxError) return "a profile file is not valid JSON";
@@ -8121,27 +8251,30 @@ function annotate(error, note) {
   return new CLIError(cause.code, `${cause.message} ${note}`, cause.exitCode, cause.metadata);
 }
 async function ensureAuthenticated(ctx, options) {
-  if (options?.privateKey) {
+  return withCliDiagnosticPhase("preparation", { service: "auth" }, async () => {
+    if (options?.privateKey) {
+      return createSDKInstance(ctx, options);
+    }
+    const profile = await ProfileManager.getProfile(ctx.profile).catch(() => null);
+    if (profile?.authMethod === "local" && profile.privateKey) {
+      return createSDKInstance(ctx);
+    }
+    const session = await ProfileManager.getSession(ctx.profile);
+    if (!session) {
+      throw new CLIError(
+        "AUTH_REQUIRED",
+        `Not authenticated. Run \`${CLI_NAME10} auth login\` or \`${CLI_NAME10} init\` first.`,
+        ExitCode.AUTH_REQUIRED
+      );
+    }
     return createSDKInstance(ctx, options);
-  }
-  const profile = await ProfileManager.getProfile(ctx.profile).catch(() => null);
-  if (profile?.authMethod === "local" && profile.privateKey) {
-    return createSDKInstance(ctx);
-  }
-  const session = await ProfileManager.getSession(ctx.profile);
-  if (!session) {
-    throw new CLIError(
-      "AUTH_REQUIRED",
-      `Not authenticated. Run \`${CLI_NAME9} auth login\` or \`${CLI_NAME9} init\` first.`,
-      ExitCode.AUTH_REQUIRED
-    );
-  }
-  return createSDKInstance(ctx, options);
+  });
 }
 var BOOTSTRAP_PROFILE_FIELDS;
 var init_sdk = __esm({
   "src/lib/sdk.ts"() {
     "use strict";
+    init_diagnostics();
     init_profiles();
     init_types();
     init_errors();
@@ -8169,7 +8302,7 @@ __export(host_exports, {
   spaceNameFromUri: () => spaceNameFromUri,
   unhostedSpaceError: () => unhostedSpaceError
 });
-import { CLI_NAME as CLI_NAME10 } from "@tinycloud/operations/cli-name";
+import { CLI_NAME as CLI_NAME11 } from "@tinycloud/operations/cli-name";
 import {
   discoverLocalTinyCloudNode
 } from "@tinycloud/sdk-core";
@@ -8263,13 +8396,13 @@ async function unhostedSpaceError(error, spaceUri, profileName) {
   const owner = await isRootAuthority(spaceUri, profileName);
   const hint = owner ? [
     "You are the owner. Host it once:",
-    `  ${CLI_NAME10} space host ${spaceName}`,
+    `  ${CLI_NAME11} space host ${spaceName}`,
     "Then retry."
   ].join("\n") : [
     "You are a delegate and CANNOT host this space \u2014 only its owner can.",
     "Emit a host request:",
-    `  ${CLI_NAME10} space host-request ${spaceName} --emit ./host-request.json`,
-    `Send it to the owner; they run \`${CLI_NAME10} space host\` and confirm. Then retry.`
+    `  ${CLI_NAME11} space host-request ${spaceName} --emit ./host-request.json`,
+    `Send it to the owner; they run \`${CLI_NAME11} space host\` and confirm. Then retry.`
   ].join("\n");
   const message = owner ? `Space '${spaceName}' (${spaceUri}) is not hosted.` : `Space '${spaceName}' (owner ${ownerDidFromSpaceUri(spaceUri) ?? spaceUri}) is not hosted.`;
   return new CLIError("SPACE_NOT_HOSTED", message, ExitCode.ERROR, { hint });
@@ -8294,7 +8427,7 @@ var init_host = __esm({
 
 // src/config/profiles.ts
 import { chmod as chmod2, lstat, readdir as readdir2, rm as rm2, rmdir } from "fs/promises";
-import { CLI_NAME as CLI_NAME11 } from "@tinycloud/operations/cli-name";
+import { CLI_NAME as CLI_NAME12 } from "@tinycloud/operations/cli-name";
 import { join as join6 } from "path";
 import {
   profilePath as profilePath2,
@@ -8380,7 +8513,7 @@ var init_profiles = __esm({
         if (!profile) {
           throw new CLIError(
             "PROFILE_NOT_FOUND",
-            `Profile "${name}" does not exist. Create it with \`${CLI_NAME11} init --name ${name}\`.`
+            `Profile "${name}" does not exist. Create it with \`${CLI_NAME12} init --name ${name}\`.`
           );
         }
         return profile;
@@ -8438,7 +8571,7 @@ var init_profiles = __esm({
         if (config.defaultProfile === name) {
           throw new CLIError(
             "PROFILE_DELETE_DEFAULT",
-            `Cannot delete the default profile "${name}". Change the default first with \`${CLI_NAME11} profile default <other>\`.`
+            `Cannot delete the default profile "${name}". Change the default first with \`${CLI_NAME12} profile default <other>\`.`
           );
         }
         const kind = await lstat(profileDir).then((stats) => stats.isSymbolicLink() ? "link" : "present", (error) => {
@@ -8580,9 +8713,7 @@ var TC_OPTIONS_BEFORE_COURIER = `${CLI_NAME} courier takes no ${CLI_NAME} option
 
 // src/index.ts
 init_errors();
-import { readFileSync as readFileSync2 } from "fs";
-import { CLI_NAME as CLI_NAME13 } from "@tinycloud/operations/cli-name";
-import { Command } from "commander";
+import { CLI_NAME as CLI_NAME14 } from "@tinycloud/operations/cli-name";
 
 // src/output/banner.ts
 init_formatter();
@@ -8654,10 +8785,10 @@ function resolveCommitHash() {
     return null;
   }
 }
-function formatBannerLine(version2) {
+function formatBannerLine(version) {
   const commit = resolveCommitHash();
   const tagline = pickTagline();
-  const versionPart = `${CLI_NAME4} v${version2}`;
+  const versionPart = `${CLI_NAME4} v${version}`;
   const commitPart = commit ? ` (${commit})` : "";
   const separator = " \u2014 ";
   if (!isInteractive()) {
@@ -8666,28 +8797,66 @@ function formatBannerLine(version2) {
   return [
     theme.brand(`\u2601\uFE0F  ${CLI_NAME4}`),
     " ",
-    theme.muted(`v${version2}`),
+    theme.muted(`v${version}`),
     commit ? theme.dim(` (${commit})`) : "",
     theme.dim(separator),
     theme.primary(tagline)
   ].join("");
 }
-function emitBanner(version2) {
+function emitBanner(version) {
   if (bannerEmitted) return;
   if (shouldOutputJson()) return;
   if (process.env.TC_HIDE_BANNER === "1") return;
   bannerEmitted = true;
-  process.stderr.write(formatBannerLine(version2) + "\n\n");
+  process.stderr.write(formatBannerLine(version) + "\n\n");
 }
 
 // src/index.ts
 init_replication_registry();
+
+// src/command-token.ts
+function firstCommandIndex(values) {
+  for (let index = 0; index < values.length; index += 1) {
+    const value = values[index];
+    if (value === "--") return index + 1;
+    if (value.startsWith("--")) {
+      if (value === "--profile" || value === "--host") index += 1;
+      continue;
+    }
+    if (value.length > 1 && value.startsWith("-")) {
+      for (let char = 1; char < value.length; char += 1) {
+        if (value[char] !== "p" && value[char] !== "H") continue;
+        if (char === value.length - 1) index += 1;
+        break;
+      }
+      continue;
+    }
+    return index;
+  }
+  return -1;
+}
+
+// src/index.ts
+init_diagnostics();
+
+// src/root-command.ts
+import { readFileSync as readFileSync2 } from "fs";
+import { Command } from "commander";
+import { CLI_NAME as CLI_NAME5 } from "@tinycloud/operations/cli-name";
+var CLI_VERSION = JSON.parse(
+  readFileSync2(new URL("../package.json", import.meta.url), "utf-8")
+).version;
+function createRootCommand() {
+  return new Command().name(CLI_NAME5).description("TinyCloud CLI \u2014 self-sovereign storage from the terminal").version(CLI_VERSION).option("-p, --profile <name>", "Profile to use").option("-H, --host <url>", "TinyCloud node URL").option("-v, --verbose", "Enable verbose output").option("--no-cache", "Disable caching").option("-q, --quiet", "Suppress non-essential output").option("--json", "Force JSON output").option("--replication", "Enable read-through replication for this invocation").option("--no-replication", "Disable read-through replication for this invocation").option("--replication-debug", "Write replication diagnostics to stderr");
+}
+
+// src/index.ts
 init_theme();
 init_formatter();
 init_profiles();
 
 // src/commands/share.ts
-import { CLI_NAME as CLI_NAME12 } from "@tinycloud/operations/cli-name";
+import { CLI_NAME as CLI_NAME13 } from "@tinycloud/operations/cli-name";
 
 // ../share-sdk/dist/index.js
 init_sha2();
@@ -9675,11 +9844,11 @@ function datetimeRegex2(args) {
   regex = `${regex}(${opts.join("|")})`;
   return new RegExp(`^${regex}$`);
 }
-function isValidIP2(ip, version2) {
-  if ((version2 === "v4" || !version2) && ipv4Regex2.test(ip)) {
+function isValidIP2(ip, version) {
+  if ((version === "v4" || !version) && ipv4Regex2.test(ip)) {
     return true;
   }
-  if ((version2 === "v6" || !version2) && ipv6Regex2.test(ip)) {
+  if ((version === "v6" || !version) && ipv6Regex2.test(ip)) {
     return true;
   }
   return false;
@@ -9706,11 +9875,11 @@ function isValidJWT2(jwt, alg) {
     return false;
   }
 }
-function isValidCidr2(ip, version2) {
-  if ((version2 === "v4" || !version2) && ipv4CidrRegex2.test(ip)) {
+function isValidCidr2(ip, version) {
+  if ((version === "v4" || !version) && ipv4CidrRegex2.test(ip)) {
     return true;
   }
-  if ((version2 === "v6" || !version2) && ipv6CidrRegex2.test(ip)) {
+  if ((version === "v6" || !version) && ipv6CidrRegex2.test(ip)) {
     return true;
   }
   return false;
@@ -13258,8 +13427,8 @@ var Digest = class {
   }
 };
 function format(link2, base22) {
-  const { bytes: bytes3, version: version2 } = link2;
-  switch (version2) {
+  const { bytes: bytes3, version } = link2;
+  switch (version) {
     case 0:
       return toStringV0(bytes3, baseCache(link2), base22 ?? base58btc.encoder);
     default:
@@ -13287,9 +13456,9 @@ var CID = class _CID {
    * @param code - Code of the codec content is encoded in, see https://github.com/multiformats/multicodec/blob/master/table.csv
    * @param multihash - (Multi)hash of the of the content.
    */
-  constructor(version2, code22, multihash, bytes3) {
+  constructor(version, code22, multihash, bytes3) {
     this.code = code22;
-    this.version = version2;
+    this.version = version;
     this.multihash = multihash;
     this.bytes = bytes3;
     this["/"] = bytes3;
@@ -13385,12 +13554,12 @@ var CID = class _CID {
     if (value instanceof _CID) {
       return value;
     } else if (value["/"] != null && value["/"] === value.bytes || value.asCID === value) {
-      const { version: version2, code: code22, multihash, bytes: bytes3 } = value;
-      return new _CID(version2, code22, multihash, bytes3 ?? encodeCID(version2, code22, multihash.bytes));
+      const { version, code: code22, multihash, bytes: bytes3 } = value;
+      return new _CID(version, code22, multihash, bytes3 ?? encodeCID(version, code22, multihash.bytes));
     } else if (value[cidSymbol] === true) {
-      const { version: version2, multihash, code: code22 } = value;
+      const { version, multihash, code: code22 } = value;
       const digest3 = decode4(multihash);
-      return _CID.create(version2, code22, digest3);
+      return _CID.create(version, code22, digest3);
     } else {
       return null;
     }
@@ -13400,24 +13569,24 @@ var CID = class _CID {
    * @param code - Code of the codec content is encoded in, see https://github.com/multiformats/multicodec/blob/master/table.csv
    * @param digest - (Multi)hash of the of the content.
    */
-  static create(version2, code22, digest3) {
+  static create(version, code22, digest3) {
     if (typeof code22 !== "number") {
       throw new Error("String codecs are no longer supported");
     }
     if (!(digest3.bytes instanceof Uint8Array)) {
       throw new Error("Invalid digest");
     }
-    switch (version2) {
+    switch (version) {
       case 0: {
         if (code22 !== DAG_PB_CODE) {
           throw new Error(`Version 0 CID must use dag-pb (code: ${DAG_PB_CODE}) block encoding`);
         } else {
-          return new _CID(version2, code22, digest3, digest3.bytes);
+          return new _CID(version, code22, digest3, digest3.bytes);
         }
       }
       case 1: {
-        const bytes3 = encodeCID(version2, code22, digest3.bytes);
-        return new _CID(version2, code22, digest3, bytes3);
+        const bytes3 = encodeCID(version, code22, digest3.bytes);
+        return new _CID(version, code22, digest3, bytes3);
       }
       default: {
         throw new Error("Invalid version");
@@ -13490,23 +13659,23 @@ var CID = class _CID {
       offset += length22;
       return i;
     };
-    let version2 = next();
+    let version = next();
     let codec = DAG_PB_CODE;
-    if (version2 === 18) {
-      version2 = 0;
+    if (version === 18) {
+      version = 0;
       offset = 0;
     } else {
       codec = next();
     }
-    if (version2 !== 0 && version2 !== 1) {
-      throw new RangeError(`Invalid CID version ${version2}`);
+    if (version !== 0 && version !== 1) {
+      throw new RangeError(`Invalid CID version ${version}`);
     }
     const prefixSize = offset;
     const multihashCode = next();
     const digestSize = next();
     const size = offset + digestSize;
     const multihashSize = size - prefixSize;
-    return { version: version2, codec, multihashCode, digestSize, multihashSize, size };
+    return { version, codec, multihashCode, digestSize, multihashSize, size };
   }
   /**
    * Takes cid in a string representation and creates an instance. If `base`
@@ -13581,11 +13750,11 @@ function toStringV1(bytes3, cache22, base22) {
 }
 var DAG_PB_CODE = 112;
 var SHA_256_CODE = 18;
-function encodeCID(version2, code22, multihash) {
-  const codeOffset = encodingLength(version2);
+function encodeCID(version, code22, multihash) {
+  const codeOffset = encodingLength(version);
   const hashOffset = codeOffset + encodingLength(code22);
   const bytes3 = new Uint8Array(hashOffset + multihash.byteLength);
-  encodeTo(version2, bytes3, 0);
+  encodeTo(version, bytes3, 0);
   encodeTo(code22, bytes3, codeOffset);
   bytes3.set(multihash, hashOffset);
   return bytes3;
@@ -15395,8 +15564,8 @@ var Digest2 = class {
   }
 };
 function format2(link2, base33) {
-  const { bytes: bytes3, version: version2 } = link2;
-  switch (version2) {
+  const { bytes: bytes3, version } = link2;
+  switch (version) {
     case 0:
       return toStringV02(bytes3, baseCache2(link2), base33 ?? base58btc2.encoder);
     default:
@@ -15424,9 +15593,9 @@ var CID2 = class _CID2 {
    * @param code - Code of the codec content is encoded in, see https://github.com/multiformats/multicodec/blob/master/table.csv
    * @param multihash - (Multi)hash of the of the content.
    */
-  constructor(version2, code3, multihash, bytes3) {
+  constructor(version, code3, multihash, bytes3) {
     this.code = code3;
-    this.version = version2;
+    this.version = version;
     this.multihash = multihash;
     this.bytes = bytes3;
     this["/"] = bytes3;
@@ -15522,12 +15691,12 @@ var CID2 = class _CID2 {
     if (value instanceof _CID2) {
       return value;
     } else if (value["/"] != null && value["/"] === value.bytes || value.asCID === value) {
-      const { version: version2, code: code3, multihash, bytes: bytes3 } = value;
-      return new _CID2(version2, code3, multihash, bytes3 ?? encodeCID2(version2, code3, multihash.bytes));
+      const { version, code: code3, multihash, bytes: bytes3 } = value;
+      return new _CID2(version, code3, multihash, bytes3 ?? encodeCID2(version, code3, multihash.bytes));
     } else if (value[cidSymbol2] === true) {
-      const { version: version2, multihash, code: code3 } = value;
+      const { version, multihash, code: code3 } = value;
       const digest3 = decode8(multihash);
-      return _CID2.create(version2, code3, digest3);
+      return _CID2.create(version, code3, digest3);
     } else {
       return null;
     }
@@ -15537,24 +15706,24 @@ var CID2 = class _CID2 {
    * @param code - Code of the codec content is encoded in, see https://github.com/multiformats/multicodec/blob/master/table.csv
    * @param digest - (Multi)hash of the of the content.
    */
-  static create(version2, code3, digest3) {
+  static create(version, code3, digest3) {
     if (typeof code3 !== "number") {
       throw new Error("String codecs are no longer supported");
     }
     if (!(digest3.bytes instanceof Uint8Array)) {
       throw new Error("Invalid digest");
     }
-    switch (version2) {
+    switch (version) {
       case 0: {
         if (code3 !== DAG_PB_CODE2) {
           throw new Error(`Version 0 CID must use dag-pb (code: ${DAG_PB_CODE2}) block encoding`);
         } else {
-          return new _CID2(version2, code3, digest3, digest3.bytes);
+          return new _CID2(version, code3, digest3, digest3.bytes);
         }
       }
       case 1: {
-        const bytes3 = encodeCID2(version2, code3, digest3.bytes);
-        return new _CID2(version2, code3, digest3, bytes3);
+        const bytes3 = encodeCID2(version, code3, digest3.bytes);
+        return new _CID2(version, code3, digest3, bytes3);
       }
       default: {
         throw new Error("Invalid version");
@@ -15627,23 +15796,23 @@ var CID2 = class _CID2 {
       offset += length32;
       return i;
     };
-    let version2 = next();
+    let version = next();
     let codec = DAG_PB_CODE2;
-    if (version2 === 18) {
-      version2 = 0;
+    if (version === 18) {
+      version = 0;
       offset = 0;
     } else {
       codec = next();
     }
-    if (version2 !== 0 && version2 !== 1) {
-      throw new RangeError(`Invalid CID version ${version2}`);
+    if (version !== 0 && version !== 1) {
+      throw new RangeError(`Invalid CID version ${version}`);
     }
     const prefixSize = offset;
     const multihashCode = next();
     const digestSize = next();
     const size = offset + digestSize;
     const multihashSize = size - prefixSize;
-    return { version: version2, codec, multihashCode, digestSize, multihashSize, size };
+    return { version, codec, multihashCode, digestSize, multihashSize, size };
   }
   /**
    * Takes cid in a string representation and creates an instance. If `base`
@@ -15718,11 +15887,11 @@ function toStringV12(bytes3, cache32, base33) {
 }
 var DAG_PB_CODE2 = 112;
 var SHA_256_CODE2 = 18;
-function encodeCID2(version2, code3, multihash) {
-  const codeOffset = encodingLength2(version2);
+function encodeCID2(version, code3, multihash) {
+  const codeOffset = encodingLength2(version);
   const hashOffset = codeOffset + encodingLength2(code3);
   const bytes3 = new Uint8Array(hashOffset + multihash.byteLength);
-  encodeTo2(version2, bytes3, 0);
+  encodeTo2(version, bytes3, 0);
   encodeTo2(code3, bytes3, codeOffset);
   bytes3.set(multihash, hashOffset);
   return bytes3;
@@ -16600,8 +16769,8 @@ var Digest3 = class {
   }
 };
 function format3(link2, base22) {
-  const { bytes, version: version2 } = link2;
-  switch (version2) {
+  const { bytes, version } = link2;
+  switch (version) {
     case 0:
       return toStringV03(bytes, baseCache3(link2), base22 ?? base58btc3.encoder);
     default:
@@ -16629,9 +16798,9 @@ var CID3 = class _CID3 {
    * @param code - Code of the codec content is encoded in, see https://github.com/multiformats/multicodec/blob/master/table.csv
    * @param multihash - (Multi)hash of the of the content.
    */
-  constructor(version2, code22, multihash, bytes) {
+  constructor(version, code22, multihash, bytes) {
     this.code = code22;
-    this.version = version2;
+    this.version = version;
     this.multihash = multihash;
     this.bytes = bytes;
     this["/"] = bytes;
@@ -16727,12 +16896,12 @@ var CID3 = class _CID3 {
     if (value instanceof _CID3) {
       return value;
     } else if (value["/"] != null && value["/"] === value.bytes || value.asCID === value) {
-      const { version: version2, code: code22, multihash, bytes } = value;
-      return new _CID3(version2, code22, multihash, bytes ?? encodeCID3(version2, code22, multihash.bytes));
+      const { version, code: code22, multihash, bytes } = value;
+      return new _CID3(version, code22, multihash, bytes ?? encodeCID3(version, code22, multihash.bytes));
     } else if (value[cidSymbol3] === true) {
-      const { version: version2, multihash, code: code22 } = value;
+      const { version, multihash, code: code22 } = value;
       const digest = decode42(multihash);
-      return _CID3.create(version2, code22, digest);
+      return _CID3.create(version, code22, digest);
     } else {
       return null;
     }
@@ -16742,24 +16911,24 @@ var CID3 = class _CID3 {
    * @param code - Code of the codec content is encoded in, see https://github.com/multiformats/multicodec/blob/master/table.csv
    * @param digest - (Multi)hash of the of the content.
    */
-  static create(version2, code22, digest) {
+  static create(version, code22, digest) {
     if (typeof code22 !== "number") {
       throw new Error("String codecs are no longer supported");
     }
     if (!(digest.bytes instanceof Uint8Array)) {
       throw new Error("Invalid digest");
     }
-    switch (version2) {
+    switch (version) {
       case 0: {
         if (code22 !== DAG_PB_CODE3) {
           throw new Error(`Version 0 CID must use dag-pb (code: ${DAG_PB_CODE3}) block encoding`);
         } else {
-          return new _CID3(version2, code22, digest, digest.bytes);
+          return new _CID3(version, code22, digest, digest.bytes);
         }
       }
       case 1: {
-        const bytes = encodeCID3(version2, code22, digest.bytes);
-        return new _CID3(version2, code22, digest, bytes);
+        const bytes = encodeCID3(version, code22, digest.bytes);
+        return new _CID3(version, code22, digest, bytes);
       }
       default: {
         throw new Error("Invalid version");
@@ -16832,23 +17001,23 @@ var CID3 = class _CID3 {
       offset += length22;
       return i;
     };
-    let version2 = next();
+    let version = next();
     let codec = DAG_PB_CODE3;
-    if (version2 === 18) {
-      version2 = 0;
+    if (version === 18) {
+      version = 0;
       offset = 0;
     } else {
       codec = next();
     }
-    if (version2 !== 0 && version2 !== 1) {
-      throw new RangeError(`Invalid CID version ${version2}`);
+    if (version !== 0 && version !== 1) {
+      throw new RangeError(`Invalid CID version ${version}`);
     }
     const prefixSize = offset;
     const multihashCode = next();
     const digestSize = next();
     const size = offset + digestSize;
     const multihashSize = size - prefixSize;
-    return { version: version2, codec, multihashCode, digestSize, multihashSize, size };
+    return { version, codec, multihashCode, digestSize, multihashSize, size };
   }
   /**
    * Takes cid in a string representation and creates an instance. If `base`
@@ -16923,11 +17092,11 @@ function toStringV13(bytes, cache22, base22) {
 }
 var DAG_PB_CODE3 = 112;
 var SHA_256_CODE3 = 18;
-function encodeCID3(version2, code22, multihash) {
-  const codeOffset = encodingLength3(version2);
+function encodeCID3(version, code22, multihash) {
+  const codeOffset = encodingLength3(version);
   const hashOffset = codeOffset + encodingLength3(code22);
   const bytes = new Uint8Array(hashOffset + multihash.byteLength);
-  encodeTo3(version2, bytes, 0);
+  encodeTo3(version, bytes, 0);
   encodeTo3(code22, bytes, codeOffset);
   bytes.set(multihash, hashOffset);
   return bytes;
@@ -17698,12 +17867,12 @@ function shareCliError(error, operation = "publish") {
     const profileName = "profileName" in failure ? failure.profileName : void 0;
     const localKey = "localKey" in failure && failure.localKey === true;
     const profileHint = profileName === void 0 ? "" : `--profile ${profileName} `;
-    const loginHint = localKey ? `\`${CLI_NAME12} ${profileHint}auth login --method local\`` : `\`${CLI_NAME12} ${profileHint}auth login --device --manifest builtin:share-publishing\` (or \`${CLI_NAME12} ${profileHint}enable share\`)`;
+    const loginHint = localKey ? `\`${CLI_NAME13} ${profileHint}auth login --method local\`` : `\`${CLI_NAME13} ${profileHint}auth login --device --manifest builtin:share-publishing\` (or \`${CLI_NAME13} ${profileHint}enable share\`)`;
     if (failure.kind === "caveated-session") {
       const holder = profileName === void 0 ? "this session" : `profile ${profileName}'s session`;
       return new CLIError(
         "PERMISSION_DENIED",
-        `${holder} carries signed restrictions (caveats) on the authority an anyone-with-link share needs, so it cannot create the share link; nothing was shared. Approve Share publishing without restrictions on a new, dedicated profile (any unused name): \`${CLI_NAME12} init --name publisher --key-only && ${CLI_NAME12} --profile publisher enable share\``,
+        `${holder} carries signed restrictions (caveats) on the authority an anyone-with-link share needs, so it cannot create the share link; nothing was shared. Approve Share publishing without restrictions on a new, dedicated profile (any unused name): \`${CLI_NAME13} init --name publisher --key-only && ${CLI_NAME13} --profile publisher enable share\``,
         5
       );
     }
@@ -18067,6 +18236,7 @@ import { join as join8 } from "path";
 import { createHash } from "crypto";
 import { writeJsonAtomic as writeJsonAtomic2 } from "@tinycloud/operations/state";
 import { withoutBearer } from "@tinycloud/operations/delegation-binding";
+import { diagnosticTelemetry as diagnosticTelemetry2, getDiagnosticContext as getDiagnosticContext3 } from "@tinycloud/operations/diagnostics";
 import {
   LocationRecordValidationError,
   LocationRegistryHttpError,
@@ -18088,9 +18258,9 @@ function throwKvUploadFailure(error) {
 }
 var DEFAULT_SHARE_ORIGIN = "https://share.tinycloud.xyz";
 var MIN_DOMAIN_DELIVERY_VERSION = "1.17.3";
-function supportsDomainDelivery(version2) {
-  if (typeof version2 !== "string") return false;
-  const normalized = version2.trim();
+function supportsDomainDelivery(version) {
+  if (typeof version !== "string") return false;
+  const normalized = version.trim();
   if (normalized.length > 128) return false;
   const match = /^v?(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/.exec(normalized);
   if (match === null) return false;
@@ -18104,9 +18274,9 @@ function supportsDomainDelivery(version2) {
   if (patch !== 3) return patch > 3;
   return match[4] === void 0;
 }
-function displayedNodeVersion(version2) {
-  if (typeof version2 !== "string") return "(unrecognized)";
-  const trimmed = version2.trim();
+function displayedNodeVersion(version) {
+  if (typeof version !== "string") return "(unrecognized)";
+  const trimmed = version.trim();
   return /^[A-Za-z0-9.+_-]{1,64}$/.test(trimmed) ? trimmed : "(unrecognized)";
 }
 var URI_SAFE_FILENAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
@@ -18412,11 +18582,11 @@ function createShareAuthorityAdapters(input = {}) {
     } catch {
       info = void 0;
     }
-    const version2 = typeof info === "object" && info !== null && "version" in info ? info.version : void 0;
-    if (!supportsDomainDelivery(version2)) {
+    const version = typeof info === "object" && info !== null && "version" in info ? info.version : void 0;
+    if (!supportsDomainDelivery(version)) {
       throw new SharePublishAuthorityError({
         kind: "invalid-request",
-        reason: `domain notifications require tinycloud-node ${MIN_DOMAIN_DELIVERY_VERSION} or later; node reports version ${displayedNodeVersion(version2)}. Upgrade the node before inviting; ${operation === "publish" ? "nothing was shared and no invitation was sent" : "no invitation was sent"}`
+        reason: `domain notifications require tinycloud-node ${MIN_DOMAIN_DELIVERY_VERSION} or later; node reports version ${displayedNodeVersion(version)}. Upgrade the node before inviting; ${operation === "publish" ? "nothing was shared and no invitation was sent" : "no invitation was sent"}`
       });
     }
   };
@@ -18763,7 +18933,7 @@ function createShareAuthorityAdapters(input = {}) {
   };
   const nativeReader = async (link2) => {
     const { TinyCloudNode: TinyCloudNode2 } = await import("@tinycloud/node-sdk");
-    const sharing = input.nativeSharing ?? ((host) => new TinyCloudNode2({ ...host === void 0 ? {} : { host }, autoDiscoverLocalNode: false }).sharing);
+    const sharing = input.nativeSharing ?? ((host) => new TinyCloudNode2({ ...host === void 0 ? {} : { host }, autoDiscoverLocalNode: false, telemetry: getDiagnosticContext3() ? diagnosticTelemetry2 : void 0 }).sharing);
     const token = parseNativeShareUrl(link2);
     const decoded = sharing(void 0).decodeLink(token);
     if (typeof decoded.host !== "string") throw new Error("native share has no owner Node");
@@ -18804,10 +18974,7 @@ async function loadCourierEntry() {
 }
 
 // src/index.ts
-var { version } = JSON.parse(
-  readFileSync2(new URL("../package.json", import.meta.url), "utf-8")
-);
-var program = new Command();
+var program = createRootCommand();
 var shareAuthority = createShareAuthorityAdapters({
   profileName: async () => selectedShareProfile() ?? (await ProfileManager.getConfig()).defaultProfile,
   fetchFn: globalThis.fetch
@@ -18821,14 +18988,14 @@ function selectedShareProfile() {
   }
   return process.env.TC_PROFILE;
 }
-program.name(CLI_NAME13).description("TinyCloud CLI \u2014 self-sovereign storage from the terminal").version(version).option("-p, --profile <name>", "Profile to use").option("-H, --host <url>", "TinyCloud node URL").option("-v, --verbose", "Enable verbose output").option("--no-cache", "Disable caching").option("-q, --quiet", "Suppress non-essential output").option("--json", "Force JSON output").option("--replication", "Enable read-through replication for this invocation").option("--no-replication", "Disable read-through replication for this invocation").option("--replication-debug", "Write replication diagnostics to stderr");
 program.hook("preAction", async (thisCommand) => {
+  cliDiagnosticParsed();
   const opts = thisCommand.optsWithGlobals();
   setJsonOutputRequested(opts.json === true);
   const parentName = thisCommand.parent?.name();
   const isShareCommand = parentName === "share" || thisCommand.name() === "share";
   if (!opts.quiet && !isShareCommand) {
-    emitBanner(version);
+    emitBanner(CLI_VERSION);
   }
   const commandName = thisCommand.name();
   const isRootCommand = thisCommand === program;
@@ -18840,11 +19007,11 @@ program.hook("preAction", async (thisCommand) => {
       const profileName = opts.profile || config.defaultProfile;
       const hasProfile = await ProfileManager.profileExists(profileName);
       if (!hasProfile) {
-        process.stderr.write(theme.warn("\u26A0 No profile configured.") + " " + theme.muted(`Run: ${CLI_NAME13} init`) + "\n\n");
+        process.stderr.write(theme.warn("\u26A0 No profile configured.") + " " + theme.muted(`Run: ${CLI_NAME14} init`) + "\n\n");
       } else {
         const key = await ProfileManager.getKey(profileName);
         if (!key) {
-          process.stderr.write(theme.warn("\u26A0 No key found.") + " " + theme.muted(`Run: ${CLI_NAME13} init`) + "\n\n");
+          process.stderr.write(theme.warn("\u26A0 No key found.") + " " + theme.muted(`Run: ${CLI_NAME14} init`) + "\n\n");
         }
       }
     } catch {
@@ -18863,50 +19030,31 @@ configureShareCommandServices({
   nativeReader: shareAuthority.nativeReader
 });
 var argv = process.argv.slice(2);
-var globalLongOptionsWithValues = { "--profile": true, "--host": true };
-var globalShortOptionsWithValues = { p: true, H: true };
-function firstCommandToken(values) {
-  for (let index = 0; index < values.length; index += 1) {
-    const value = values[index];
-    if (value === "--") return values[index + 1];
-    if (value.startsWith("--")) {
-      if (globalLongOptionsWithValues[value]) index += 1;
-      continue;
-    }
-    if (value.length > 1 && value.startsWith("-")) {
-      for (let char = 1; char < value.length; char += 1) {
-        if (!globalShortOptionsWithValues[value[char]]) continue;
-        if (char === value.length - 1) index += 1;
-        break;
-      }
-      continue;
-    }
-    return value;
-  }
-  return void 0;
-}
-program.addHelpText("before", () => `${theme.label("Version:")} ${theme.value(version)}
+program.addHelpText("before", () => `${theme.label("Version:")} ${theme.value(CLI_VERSION)}
 `);
 program.addHelpText("afterAll", () => {
   if (!process.stdout.isTTY) return "";
   return `
 ${theme.heading("Examples:")}
-  ${theme.command(`${CLI_NAME13} init`)}                              ${theme.muted("Set up a profile and generate keys")}
-  ${theme.command(`${CLI_NAME13} auth login`)}                        ${theme.muted("Authenticate via browser")}
-  ${theme.command(`${CLI_NAME13} kv put greeting "Hello"`)}           ${theme.muted("Store a value")}
-  ${theme.command(`${CLI_NAME13} kv list`)}                           ${theme.muted("List all keys")}
-  ${theme.command(`${CLI_NAME13} secrets network init`)}              ${theme.muted("Create the default secrets network")}
-  ${theme.command(`${CLI_NAME13} account apps list`)}                 ${theme.muted("List registered account apps")}
-  ${theme.command(`${CLI_NAME13} delegation create --to did:pkh:...`)}  ${theme.muted("Grant access to another user")}
-  ${theme.command(`${CLI_NAME13} space list`)}                        ${theme.muted("Show your spaces")}
+  ${theme.command(`${CLI_NAME14} init`)}                              ${theme.muted("Set up a profile and generate keys")}
+  ${theme.command(`${CLI_NAME14} auth login`)}                        ${theme.muted("Authenticate via browser")}
+  ${theme.command(`${CLI_NAME14} kv put greeting "Hello"`)}           ${theme.muted("Store a value")}
+  ${theme.command(`${CLI_NAME14} kv list`)}                           ${theme.muted("List all keys")}
+  ${theme.command(`${CLI_NAME14} secrets network init`)}              ${theme.muted("Create the default secrets network")}
+  ${theme.command(`${CLI_NAME14} account apps list`)}                 ${theme.muted("List registered account apps")}
+  ${theme.command(`${CLI_NAME14} delegation create --to did:pkh:...`)}  ${theme.muted("Grant access to another user")}
+  ${theme.command(`${CLI_NAME14} space list`)}                        ${theme.muted("Show your spaces")}
 
 ${theme.muted("Docs:")} ${theme.accent("https://docs.tinycloud.xyz/cli")}
 ${theme.muted("Repo:")} ${theme.accent("https://github.com/tinycloudlabs/web-sdk")}
 `;
 });
-var commandToken = firstCommandToken(argv);
+var commandToken = argv[firstCommandIndex(argv)];
 if (argv[0] === "courier") {
-  const code3 = await (await loadCourierEntry()).runCourier(argv.slice(1));
+  const courier = await loadCourierEntry();
+  cliDiagnosticImported();
+  cliDiagnosticParsed();
+  const code3 = await courier.runCourier(argv.slice(1));
   if (code3 !== 0) process.exit(code3);
 } else if (commandToken === "courier") {
   process.stderr.write(`${TC_OPTIONS_BEFORE_COURIER}
@@ -18920,6 +19068,7 @@ if (argv[0] === "courier") {
     const { registerTinyCloudCommands } = await loadLegacy(new URL("./legacy-entry.js", import.meta.url).href);
     registerTinyCloudCommands(program);
   }
+  cliDiagnosticImported();
   try {
     await program.parseAsync(process.argv);
     process.stdin.unref?.();

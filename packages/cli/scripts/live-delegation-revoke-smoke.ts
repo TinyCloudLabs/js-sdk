@@ -89,7 +89,7 @@ if (!HOST) {
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const cliRoot = resolve(scriptDir, "..");
-const cliEntry = resolve(cliRoot, "src/index.ts");
+const cliEntry = resolve(cliRoot, "src/bootstrap.ts");
 const root = await mkdtemp(join(tmpdir(), "tc-live-delegation-revoke-"));
 const ownerHome = join(root, "owner");
 const deviceHome = join(root, "device");

@@ -2,7 +2,7 @@ import { Command } from "commander";
 import { CLI_NAME } from "@tinycloud/operations/cli-name";
 import { writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
-import type { TinyCloudNode, IDatabaseHandle } from "@tinycloud/node-sdk";
+import type { TinyCloudNode, IDatabaseHandle, SqlValue } from "@tinycloud/node-sdk";
 import { ProfileManager } from "../config/profiles.js";
 import { outputJson, withSpinner, shouldOutputJson, formatTable, formatBytes } from "../output/formatter.js";
 import { handleError, CLIError, cliErrorFromService, storageFullError } from "../output/errors.js";
@@ -11,6 +11,8 @@ import { ensureAuthenticated } from "../lib/sdk.js";
 import { resolveSpaceUri } from "../lib/space.js";
 import { unhostedSpaceError } from "../lib/host.js";
 import { theme } from "../output/theme.js";
+import { emitDiagnostic, enterDiagnosticContext, getDiagnosticContext } from "@tinycloud/operations/diagnostics";
+import { cliDiagnosticScope, withCliDiagnosticPhase } from "../lib/diagnostics.js";
 
 /**
  * Pick a database handle for the requested space + db name.
@@ -106,22 +108,25 @@ Output:
 `)
     .action(async (sqlStr: string, options, cmd) => {
       try {
+        enterDiagnosticContext(await cliDiagnosticScope("sql", options.db));
         const globalOpts = cmd.optsWithGlobals();
-        const ctx = await ProfileManager.resolveContext(globalOpts);
+        const ctx = await withCliDiagnosticPhase("preparation", { service: "local" }, () => ProfileManager.resolveContext(globalOpts));
         const node = await ensureAuthenticated(ctx);
 
-        const params = options.params ? JSON.parse(options.params) : undefined;
+        const params = await withCliDiagnosticPhase("input_validation", { service: "sql" }, async () => options.params ? JSON.parse(options.params) : undefined);
         const { handle, spaceUri } = await dbHandle(node, options.db, options.space, ctx.profile);
 
         const result = await withSpinner("Running query...", () =>
-          handle.query(sqlStr, params)
-        ) as any;
+          withCliDiagnosticPhase("execution", { service: "sql", action: "query" }, () => handle.query<SqlValue>(sqlStr, params))
+        );
 
         if (!result.ok) {
-          await throwSqlError(result.error, spaceUri, ctx.profile);
+          emitDiagnostic({ type: "operation.step", service: "sql", action: "query", business: "failed", verification: getDiagnosticContext()?.role === "verification" ? "read_back" : "none", verification_result: "failed" });
+          return await throwSqlError(result.error, spaceUri, ctx.profile);
         }
 
         const { columns, rows, rowCount } = result.data;
+        emitDiagnostic({ type: "operation.step", service: "sql", action: "query", business: "complete", returned: rowCount, verification: getDiagnosticContext()?.role === "verification" ? "read_back" : "none", verification_result: "unknown" });
 
         if (shouldOutputJson()) {
           outputJson({ columns, rows, rowCount });
@@ -162,20 +167,24 @@ Output:
 `)
     .action(async (sqlStr: string, options, cmd) => {
       try {
+        enterDiagnosticContext(await cliDiagnosticScope("sql", options.db));
+        emitDiagnostic({ type: "operation.step", service: "sql", action: "execute", mutation: "not_dispatched" });
         const globalOpts = cmd.optsWithGlobals();
-        const ctx = await ProfileManager.resolveContext(globalOpts);
+        const ctx = await withCliDiagnosticPhase("preparation", { service: "local" }, () => ProfileManager.resolveContext(globalOpts));
         const node = await ensureAuthenticated(ctx);
 
-        const params = options.params ? JSON.parse(options.params) : undefined;
+        const params = await withCliDiagnosticPhase("input_validation", { service: "sql" }, async () => options.params ? JSON.parse(options.params) : undefined);
         const { handle, spaceUri } = await dbHandle(node, options.db, options.space, ctx.profile);
 
         const result = await withSpinner("Executing statement...", () =>
-          handle.execute(sqlStr, params)
-        ) as any;
+          withCliDiagnosticPhase("execution", { service: "sql", action: "execute", mutation: "unknown" }, () => handle.execute(sqlStr, params), (value) => ({ mutation: value.ok ? "confirmed" : "unknown" }))
+        );
 
         if (!result.ok) {
-          await throwSqlError(result.error, spaceUri, ctx.profile);
+          emitDiagnostic({ type: "operation.step", service: "sql", action: "execute", business: "failed", mutation: "unknown" });
+          return await throwSqlError(result.error, spaceUri, ctx.profile);
         }
+        emitDiagnostic({ type: "operation.step", service: "sql", action: "execute", business: "complete", mutation: "confirmed", verification: "write_response", mutations: result.data.changes });
 
         outputJson({
           changes: result.data.changes,
@@ -205,24 +214,27 @@ Output:
 `)
     .action(async (options, cmd) => {
       try {
+        enterDiagnosticContext(await cliDiagnosticScope("sql", options.db));
         const globalOpts = cmd.optsWithGlobals();
-        const ctx = await ProfileManager.resolveContext(globalOpts);
+        const ctx = await withCliDiagnosticPhase("preparation", { service: "local" }, () => ProfileManager.resolveContext(globalOpts));
         const node = await ensureAuthenticated(ctx);
 
         const { handle, spaceUri } = await dbHandle(node, options.db, options.space, ctx.profile);
 
         const result = await withSpinner("Exporting database...", () =>
-          handle.export()
-        ) as any;
+          withCliDiagnosticPhase("execution", { service: "sql", action: "export" }, () => handle.export())
+        );
 
         if (!result.ok) {
-          await throwSqlError(result.error, spaceUri, ctx.profile);
+          emitDiagnostic({ type: "operation.step", service: "sql", action: "export", business: "failed" });
+          return await throwSqlError(result.error, spaceUri, ctx.profile);
         }
 
         const blob: Blob = result.data;
         const buffer = Buffer.from(await blob.arrayBuffer());
         const outputPath = resolve(options.output);
         await writeFile(outputPath, buffer);
+        emitDiagnostic({ type: "operation.step", service: "sql", action: "export", business: "complete", bytes: blob.size });
 
         outputJson({
           file: outputPath,
@@ -265,8 +277,10 @@ Notes:
 `)
     .action(async (options, cmd) => {
       try {
+        enterDiagnosticContext(await cliDiagnosticScope("sql", options.fromDb));
+        enterDiagnosticContext(await cliDiagnosticScope("sql", options.toDb));
         const globalOpts = cmd.optsWithGlobals();
-        const ctx = await ProfileManager.resolveContext(globalOpts);
+        const ctx = await withCliDiagnosticPhase("preparation", { service: "local" }, () => ProfileManager.resolveContext(globalOpts));
         const node = await ensureAuthenticated(ctx);
 
         // commander's `--space` shorthand supports both --from-space and a default.
@@ -277,6 +291,7 @@ Notes:
         const toSpaceUri = (await resolveSpaceUri(toSpaceInput, ctx.profile)) ?? "<primary>";
 
         if (fromSpaceUri === toSpaceUri && options.fromDb === options.toDb) {
+          emitDiagnostic({ type: "operation.step", phase: "input_validation", outcome: "fail", error_class: "input_invalid", mutation: "not_dispatched" });
           throw new CLIError(
             "SELF_COPY",
             `Refusing to copy: source and destination resolve to the same (space, db) — ${fromSpaceUri} / ${options.fromDb}.`,
@@ -292,16 +307,15 @@ Notes:
         if (options.table && options.table.length > 0) {
           tables = options.table.flatMap((t: string) => t.split(",").map((s) => s.trim()).filter(Boolean));
         } else {
-          const listing = await fromHandle.query(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name",
-          ) as any;
+          const listing = await withCliDiagnosticPhase("execution", { service: "sql", action: "source_read", role: "copy" }, () => fromHandle.query<SqlValue>("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name",));
           if (!listing.ok) {
-            await throwSqlError(listing.error, fromSpaceUriResolved, ctx.profile, "Cannot list source tables: ");
+            return await throwSqlError(listing.error, fromSpaceUriResolved, ctx.profile, "Cannot list source tables: ");
           }
-          tables = (listing.data.rows as unknown[][]).map((r) => String(r[0]));
+          tables = listing.data.rows.map((r) => String(r[0]));
         }
 
         if (tables.length === 0) {
+          emitDiagnostic({ type: "operation.step", phase: "input_validation", outcome: "fail", error_class: "input_invalid", mutation: "not_dispatched" });
           throw new CLIError(
             "EMPTY_PLAN",
             `No tables to copy. Use --table to specify tables, or check that the source database has user tables.`,
@@ -313,15 +327,16 @@ Notes:
 
         for (const table of tables) {
           const safe = quoteIdent(table);
-          const countResult = await fromHandle.query(`SELECT count(*) AS n FROM ${safe}`) as any;
+          const countResult = await withCliDiagnosticPhase("execution", { service: "sql", action: "source_read", role: "copy" }, () => fromHandle.query<SqlValue>(`SELECT count(*) AS n FROM ${safe}`));
           if (!countResult.ok) {
-            await throwSqlError(countResult.error, fromSpaceUriResolved, ctx.profile, `Cannot count rows in source table "${table}": `);
+            return await throwSqlError(countResult.error, fromSpaceUriResolved, ctx.profile, `Cannot count rows in source table "${table}": `);
           }
           const rows = Number(countResult.data.rows[0]?.[0] ?? 0);
           plan.push({ table, rows, copied: 0, skipped: 0 });
         }
 
         if (options.dryRun) {
+          emitDiagnostic({ type: "operation.step", service: "sql", action: "copy", role: "copy", outcome: "skipped", mutation: "not_dispatched", requested: tables.length });
           outputJson({
             dryRun: true,
             from: { space: fromSpaceUri, db: options.fromDb },
@@ -333,12 +348,13 @@ Notes:
 
         for (const entry of plan) {
           const safe = quoteIdent(entry.table);
-          const fetched = await fromHandle.query(`SELECT * FROM ${safe}`) as any;
+          const fetched = await withCliDiagnosticPhase("execution", { service: "sql", action: "source_read", role: "copy" }, () => fromHandle.query<SqlValue>(`SELECT * FROM ${safe}`));
           if (!fetched.ok) {
-            await throwSqlError(fetched.error, fromSpaceUriResolved, ctx.profile, `Failed to read "${entry.table}": `);
+            return await throwSqlError(fetched.error, fromSpaceUriResolved, ctx.profile, `Failed to read "${entry.table}": `);
           }
           const columns: string[] = fetched.data.columns;
-          const rows: unknown[][] = fetched.data.rows;
+          const rows = fetched.data.rows;
+          emitDiagnostic({ type: "operation.step", service: "sql", action: "source_read", role: "copy", returned: rows.length });
 
           if (rows.length === 0) continue;
 
@@ -347,13 +363,16 @@ Notes:
           const insertSql = `INSERT INTO ${safe} (${colList}) VALUES (${placeholders})`;
 
           for (const row of rows) {
-            const writeResult = await toHandle.execute(insertSql, row as any) as any;
+            const writeResult = await withCliDiagnosticPhase("execution", { service: "sql", action: "destination_write", role: "copy", mutation: "unknown" }, () => toHandle.execute(insertSql, row), (value) => ({ mutation: value.ok ? "confirmed" : "unknown" }));
             if (!writeResult.ok) {
-              await throwSqlError(writeResult.error, toSpaceUriResolved, ctx.profile, `Insert into "${entry.table}" failed after ${entry.copied} row(s): `);
+              emitDiagnostic({ type: "operation.step", service: "sql", action: "destination_write", role: "copy", business: "failed", mutation: "unknown" });
+              return await throwSqlError(writeResult.error, toSpaceUriResolved, ctx.profile, `Insert into "${entry.table}" failed after ${entry.copied} row(s): `);
             }
             entry.copied += writeResult.data.changes ?? 1;
+            emitDiagnostic({ type: "operation.step", service: "sql", action: "destination_write", role: "copy", mutation: "confirmed", verification: "write_response", mutations: writeResult.data.changes ?? 1 });
           }
         }
+        emitDiagnostic({ type: "operation.step", service: "sql", action: "copy", role: "copy", business: "complete", verification: "write_response" });
 
         outputJson({
           from: { space: fromSpaceUri, db: options.fromDb },

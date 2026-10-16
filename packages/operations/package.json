@@ -64,6 +64,20 @@
       "import": "./dist/tc-apps.js",
       "require": "./dist/tc-apps.cjs"
     },
+    "./diagnostics": {
+      "types": "./dist/diagnostics.d.ts",
+      "import": "./dist/diagnostics.js",
+      "require": "./dist/diagnostics.cjs"
+    },
+    "./diagnostics-worker": {
+      "import": "./dist/diagnostics-worker.js",
+      "require": "./dist/diagnostics-worker.cjs"
+    },
+    "./diagnostics-reproduction": {
+      "types": "./dist/diagnostics-reproduction.d.ts",
+      "import": "./dist/diagnostics-reproduction.js",
+      "require": "./dist/diagnostics-reproduction.cjs"
+    },
     "./operations.json": "./generated/operations.json"
   },
   "engines": {
@@ -75,7 +89,7 @@
     "coverage.json"
   ],
   "scripts": {
-    "build": "tsup --entry src/index.ts --entry src/state.ts --entry src/artifacts.ts --entry src/cli-runtime.ts --entry src/profile.ts --entry src/secret-capabilities.ts --entry src/delegation-binding.ts --entry src/secret-request.ts --entry src/recovery.ts --entry src/cli-name.ts --entry src/tc-apps.ts",
+    "build": "tsup",
     "clean": "rm -rf dist",
     "test": "bun scripts/test.ts",
     "typecheck": "tsc -p tsconfig.typecheck.json",

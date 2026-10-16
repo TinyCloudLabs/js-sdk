@@ -7,6 +7,7 @@ import { invokeOperation } from "@tinycloud/operations";
 
 import { toMcpToolResult, type McpToolResult } from "./results.js";
 import { logToolCall } from "./logging.js";
+import { diagnosticExecutor, diagnosticSchema } from "./diagnostics.js";
 
 export const TOOL_NAMES = [
   "tinycloud_status",
@@ -362,11 +363,19 @@ export function registerTinyCloudTools(
       {
         title: operation.title,
         description: operation.description,
-        inputSchema,
-        outputSchema,
+        inputSchema: diagnosticSchema(inputSchema, "input_validation"),
+        outputSchema: diagnosticSchema(outputSchema, "output_validation"),
         annotations,
       },
-      async (input: unknown): Promise<McpToolResult> => {
+      async (input: unknown, context): Promise<McpToolResult> => diagnosticExecutor(
+        binding.name === "tinycloud_apps_context" ? "apps_context"
+          : binding.name === "tinycloud_apps_read" ? "apps_read"
+          : binding.name === "tinycloud_apps_write" ? "apps_write"
+          : binding.name === "tinycloud_apps_query" ? "apps_index"
+          : binding.name.startsWith("tinycloud_kv_") ? "kv"
+          : binding.name.startsWith("tinycloud_sql_") ? "sql" : "unknown",
+        context,
+        async () => {
         const startedAt = performance.now();
         const metrics = { replayedGrants: 0 };
         let code = "INTERNAL_ERROR";
@@ -393,7 +402,8 @@ export function registerTinyCloudTools(
             logToolCall(binding.name, code, startedAt, metrics.replayedGrants);
           }
         }
-      },
+        },
+      ),
     );
   }
 }

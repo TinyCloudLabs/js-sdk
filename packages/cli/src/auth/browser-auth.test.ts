@@ -9,6 +9,16 @@ import {
   validateDelegationCallbackPayload,
 } from "./browser-auth.js";
 import { CLIError, wrapError } from "../output/errors.js";
+import { diagnosticId, makeDiagnosticContext, withDiagnosticContext, type DiagnosticBinding, type DiagnosticObservation } from "@tinycloud/operations/diagnostics";
+
+function diagnosticCapture() {
+  const events: DiagnosticObservation[] = [];
+  const context = makeDiagnosticContext({
+    source_id: diagnosticId(), partition_id: diagnosticId(), generation: 1,
+    runtime: { emit(event: DiagnosticObservation) { events.push(event); return true; } } as DiagnosticBinding["runtime"],
+  }, "cli");
+  return { events, context };
+}
 
 /** Run the paste flow with `chunks` as stdin. */
 async function pasteWithStdin(chunks: string[], options: { did?: string; jwk?: object; openkeyApiHost?: string } = {}) {
@@ -125,7 +135,11 @@ describe("paste login", () => {
   const code = { delegationHeader: { Authorization: "Bearer x" }, delegationCid: "bafy", spaceId: "tinycloud:pkh:eip155:1:0xabc:secrets" };
 
   test("accepts a code whose final line has no newline", async () => {
-    expect(await pasteWithStdin([JSON.stringify(code)])).toEqual(code);
+    const { events, context } = diagnosticCapture();
+    expect(await withDiagnosticContext(context, () => pasteWithStdin([JSON.stringify(code)]))).toEqual(code);
+    expect(events).toContainEqual(expect.objectContaining({ type: "phase.finish", phase: "approval_verify", outcome: "complete" }));
+    expect(events.some((event) => event.business === "awaiting_owner")).toBe(false);
+    expect(JSON.stringify(events)).not.toContain("Bearer x");
     expect(await pasteWithStdin(["\n", Buffer.from(JSON.stringify(code)).toString("base64"), "\n"])).toEqual(code);
   });
   test("looks up an eight-character code and rejects a result bound to another CLI key", async () => {
@@ -190,13 +204,17 @@ describe("paste login", () => {
   });
 
   test("fails non-zero and names the approval URL when stdin ends without a code", async () => {
-    const failure = await pasteWithStdin([]).catch((error: unknown) => error);
+    const { events, context } = diagnosticCapture();
+    const failure = await withDiagnosticContext(context, () => pasteWithStdin([])).catch((error: unknown) => error);
     expect(failure).toBeInstanceOf(CLIError);
     if (!(failure instanceof CLIError)) return;
     expect(failure).toMatchObject({ code: "PASTE_CODE_MISSING", exitCode: 3 });
     const approvalUrl = String(failure.metadata?.approvalUrl);
     expect(approvalUrl).toStartWith("https://openkey.test/delegate?");
     expect(failure.message).toContain(approvalUrl);
+    expect(events).toContainEqual(expect.objectContaining({ phase: "approval_request", business: "awaiting_owner" }));
+    expect(events.some((event) => event.phase === "approval_verify")).toBe(false);
+    expect(JSON.stringify(events)).not.toContain(approvalUrl);
   });
 });
 
@@ -319,13 +337,16 @@ describe("browser callback login", () => {
     Object.defineProperty(process, "stdin", { configurable: true, value: input });
     Object.defineProperty(process.stderr, "isTTY", { configurable: true, value: true });
     try {
-      const flow = startAuthFlow("did:key:z6MkDelegate", { paste, noPopup: true, openkeyHost: "https://openkey.test" })
+      const { events, context } = diagnosticCapture();
+      const flow = withDiagnosticContext(context, () => startAuthFlow("did:key:z6MkDelegate", { paste, noPopup: true, openkeyHost: "https://openkey.test" }))
         .catch((failure: unknown) => failure);
       // Wait until the flow is reading the terminal.
       while (!messages.some((message) => message.includes("/delegate?"))) await new Promise<void>((resolve) => setImmediate(resolve));
       await new Promise<void>((resolve) => setImmediate(resolve));
       input.write("\x03");
       expect(await flow).toMatchObject({ code: "CANCELLED", exitCode: 130 });
+      expect(events).toContainEqual(expect.objectContaining({ type: "phase.finish", phase: "approval_wait", outcome: "cancelled" }));
+      expect(events.some((event) => event.business === "awaiting_owner")).toBe(false);
     } finally {
       error.mockRestore();
       input.destroy();

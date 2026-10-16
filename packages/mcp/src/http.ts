@@ -1,5 +1,7 @@
+import { basename, isAbsolute, resolve, sep } from "node:path";
+
 import {
-  McpServer,
+  type McpServer,
   createMcpHandler,
   fromJsonSchema,
   getOAuthProtectedResourceMetadataUrl,
@@ -10,9 +12,12 @@ import {
   type OAuthMetadata,
 } from "@modelcontextprotocol/server";
 import { RUNTIME_DELEGATION_REJECTIONS } from "@tinycloud/node-sdk";
+import { beginDiagnosticPhase } from "@tinycloud/operations/diagnostics";
 
 import { createOpenKeyTokenVerifier } from "./oauth.js";
 import { logToolCall } from "./logging.js";
+import { DiagnosticMcpServer, diagnosticExecutor, diagnosticSchema } from "./diagnostics.js";
+import { HostedDiagnostics, type HostedDiagnosticConfig } from "./hosted-diagnostics.js";
 import {
   ApprovalOwnerMismatchError,
   ApprovalRequestError,
@@ -29,14 +34,24 @@ const REQUIRED_SCOPE = "tinycloud:mcp";
 export interface HostedMcpConfig extends RemoteStoreConfig {
   readonly oauthMetadata: OAuthMetadata;
   readonly allowedOrigins?: readonly string[];
+  readonly diagnostics?: HostedDiagnosticConfig;
 }
 
 export interface HostedMcpApp {
   readonly fetch: (request: Request) => Promise<Response>;
   readonly close: () => Promise<void>;
+  readonly diagnostics?: HostedDiagnostics;
 }
 
 export function createHostedMcpApp(config: HostedMcpConfig): HostedMcpApp {
+  const diagnosticRoot = config.diagnostics?.root;
+  const stateRoot = resolve(config.stateDir);
+  const diagnosticPath = diagnosticRoot === undefined ? undefined : resolve(diagnosticRoot);
+  const separateRoot = diagnosticRoot !== undefined && isAbsolute(diagnosticRoot) && diagnosticPath !== stateRoot
+    && !diagnosticPath!.startsWith(`${stateRoot}${sep}`)
+    && !stateRoot.startsWith(diagnosticPath!.endsWith(sep) ? diagnosticPath! : `${diagnosticPath}${sep}`);
+  // Invalid/overlapping capture configuration disables diagnostics, not the app.
+  const diagnostics = separateRoot ? new HostedDiagnostics(config.diagnostics!, stateRoot) : undefined;
   const resourceUrl = canonicalResourceUrl(config.publicUrl);
   const issuer = String(config.oauthMetadata.issuer);
   const jwksUri = String(config.oauthMetadata.jwks_uri);
@@ -52,13 +67,22 @@ export function createHostedMcpApp(config: HostedMcpConfig): HostedMcpApp {
     requiredScopes: [REQUIRED_SCOPE],
     resourceMetadataUrl,
   });
-  const store = new RemoteTenantStore({ ...config, publicUrl: resourceUrl });
+  const store = new RemoteTenantStore({ ...config, publicUrl: resourceUrl }, diagnostics);
   const handler = createMcpHandler(async ({ authInfo }) => {
+    diagnostics?.factoryEntered();
     const identity = oauthIdentity(authInfo);
     const { subject, ownerDids } = identity;
-    const stateRoot = await store.initializeTenant(subject);
+    const finishTenant = beginDiagnosticPhase("tenant_init");
+    let stateRoot: string;
+    try {
+      stateRoot = await store.initializeTenant(subject);
+      finishTenant({ outcome: "complete" });
+    } catch (error) {
+      finishTenant({ outcome: "error" });
+      throw error;
+    }
     const validator = createJsonSchemaValidator();
-    const server = new McpServer(
+    const server = new DiagnosticMcpServer(
       { name: MCP_SERVER_NAME, version: MCP_VERSION },
       {
         jsonSchemaValidator: validator,
@@ -89,8 +113,7 @@ export function createHostedMcpApp(config: HostedMcpConfig): HostedMcpApp {
   };
   const allowedHosts = [resourceUrl.hostname];
 
-  return {
-    async fetch(request: Request): Promise<Response> {
+  const fetch = async (request: Request): Promise<Response> => {
       const metadata = oauthMetadataResponse(request, metadataOptions);
       if (metadata !== undefined) return metadata;
       const url = new URL(request.url);
@@ -99,7 +122,9 @@ export function createHostedMcpApp(config: HostedMcpConfig): HostedMcpApp {
           ? json({ ok: true })
           : methodNotAllowed("GET");
       }
+      const finishHost = beginDiagnosticPhase("host_validation");
       const hostFailure = hostHeaderValidationResponse(request, allowedHosts);
+      finishHost({ outcome: hostFailure === undefined ? "pass" : "refused", status: hostFailure?.status });
       if (hostFailure !== undefined) return hostFailure;
 
       if (url.pathname === "/connect") {
@@ -107,19 +132,27 @@ export function createHostedMcpApp(config: HostedMcpConfig): HostedMcpApp {
         try {
           const destination = await store.approvalRedirect(requiredState(url));
           return Response.redirect(destination, 302);
-        } catch {
+        } catch (error) {
+          if (error instanceof ApprovalRequestError && error.detail !== "state_expired") {
+            diagnostics?.emit({ type: "operation.step", phase: "approval_request", role: "approval", outcome: "refused" });
+          }
           return json({ error: "The approval link is invalid or expired." }, 400);
         }
       }
       if (url.pathname === "/connect/callback") {
         if (request.method === "OPTIONS") return callbackCors(new Response(null, { status: 204 }), config.openkeyHost);
         if (request.method !== "POST") return methodNotAllowed("POST");
+        const finishOrigin = beginDiagnosticPhase("origin_validation");
         const originFailure = validateCallbackOrigin(request, config.openkeyHost);
+        finishOrigin({ outcome: originFailure === undefined ? "pass" : "refused", status: originFailure?.status });
         if (originFailure !== undefined) return callbackCors(originFailure, config.openkeyHost);
         try {
           await store.completeApproval(requiredState(url), request);
           return callbackCors(json({ success: true }), config.openkeyHost);
         } catch (error) {
+          if (error instanceof ApprovalRequestError && error.detail !== "state_expired") {
+            diagnostics?.emit({ type: "operation.step", phase: error.detail === "body_invalid" ? "input_validation" : "approval_request", role: "approval", outcome: "refused" });
+          }
           // Only fixed server-authored text reaches OpenKey; callback input is never echoed.
           if (error instanceof ApprovalOwnerMismatchError) {
             return callbackCors(json({ error: error.message, code: "approval_owner_mismatch" }, 403), config.openkeyHost);
@@ -150,13 +183,36 @@ export function createHostedMcpApp(config: HostedMcpConfig): HostedMcpApp {
         }
       }
       if (url.pathname !== resourceUrl.pathname) return json({ error: "Not found" }, 404);
+      const finishOrigin = beginDiagnosticPhase("origin_validation");
       const originFailure = validateOrigin(request, config.allowedOrigins);
+      finishOrigin({ outcome: originFailure === undefined ? "pass" : "refused", status: originFailure?.status });
       if (originFailure !== undefined) return originFailure;
-      const auth = await authenticate(request);
+      const finishAuth = beginDiagnosticPhase("bearer_validation");
+      let auth: AuthInfo | Response;
+      try {
+        auth = await authenticate(request);
+      } catch (error) {
+        finishAuth({ outcome: "error" });
+        throw error;
+      }
+      finishAuth({ outcome: auth instanceof Response ? "refused" : "pass", status: auth instanceof Response ? auth.status : undefined });
       if (auth instanceof Response) return auth;
-      return handler.fetch(request, { authInfo: auth });
+      if (diagnostics === undefined || typeof auth.extra?.subject !== "string") {
+        return handler.fetch(request, { authInfo: auth });
+      }
+      // Only the verified OAuth subject is used by the existing HMAC tenant
+      // mapping. Peer _meta, headers and diagnostic IDs never choose a partition.
+      const tenantId = basename(store.tenantStateRoot(auth.extra.subject));
+      return diagnostics.tenant(tenantId, () => handler.fetch(request, { authInfo: auth }));
+  };
+  return {
+    diagnostics,
+    fetch: (request) => diagnostics === undefined
+      ? fetch(request)
+      : diagnostics.exchange(() => diagnostics.response(() => fetch(request), new URL(request.url).pathname === resourceUrl.pathname)),
+    close: async () => {
+      try { await handler.close(); } finally { await diagnostics?.close(); }
     },
-    close: () => handler.close(),
   };
 }
 
@@ -183,8 +239,8 @@ function registerConnectTool(
     {
       title: "Connect TinyCloud",
       description: "Check the hosted delegate connection and return a one-time OpenKey approval URL when setup is required.",
-      inputSchema,
-      outputSchema,
+      inputSchema: diagnosticSchema(inputSchema, "input_validation"),
+      outputSchema: diagnosticSchema(outputSchema, "output_validation"),
       annotations: {
         readOnlyHint: false,
         idempotentHint: true,
@@ -192,7 +248,7 @@ function registerConnectTool(
         openWorldHint: true,
       },
     },
-    async () => {
+    async (_input, context) => diagnosticExecutor("connect", context, async () => {
       const startedAt = performance.now();
       let code = "INTERNAL_ERROR";
       try {
@@ -210,7 +266,7 @@ function registerConnectTool(
       } finally {
         logToolCall("tinycloud_connect", code, startedAt, 0);
       }
-    },
+    }),
   );
 }
 

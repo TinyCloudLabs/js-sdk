@@ -54,13 +54,13 @@ jobs:
           bun run --cwd packages/share-envelope build
           bun run --cwd packages/share-sdk build
           bun run --cwd packages/sdk-core build
+          bun run --cwd packages/replica build
           bun run --cwd packages/node-sdk build
       # The scanners import the CLI command registry, whose `tc replica`
       # handlers import @tinycloud/replica.
-      - name: Build operations and replica packages for source scanners
+      - name: Build operations for source scanners
         run: |
           bun run --cwd packages/operations build
-          bun run --cwd packages/replica build
       - name: Generate and scan authored coverage
         run: |
           bun run check:operations-mcp
@@ -73,7 +73,6 @@ jobs:
       - name: Run focused conformance and concurrency tests
         run: |
           bun test tests/operations-mcp-conformance/conformance.test.ts
-          bun test packages/operations/src/legacy-cli-concurrency.test.ts
           bun test packages/cli/src/commands/auth.test.ts
           bun test packages/cli/src/commands/auth.portable-proof.test.ts
           bun test packages/cli/src/commands/secrets.test.ts
@@ -95,13 +94,28 @@ jobs:
           bun test packages/cli/src/lib/secrets-wait.test.ts
           bun test packages/cli/src/lib/probe-child.test.ts
           bun test packages/cli/src/commands/secrets-wait.test.ts
-          bun test packages/mcp/src/results.test.ts packages/mcp/src/tools.test.ts packages/mcp/src/stdio.test.ts packages/mcp/src/http.test.ts packages/mcp/src/remote-store.test.ts packages/mcp/src/http.e2e.test.ts
+      - name: Verify scoped diagnostics with synthetic state
+        run: |
+          export HOME="$(mktemp -d)"
+          export TC_HOME="$HOME/state"
+          trap 'rm -rf "$HOME"' EXIT
+          bun run --cwd packages/operations test
+          bun test packages/sdk-services/src/context.test.ts
+          bun test packages/cli/test/diagnostics.e2e.test.ts
+          bun test packages/cli/test/diagnostics-approval.e2e.test.ts
+          bun test packages/cli/src/commands/kv.test.ts
+          bun test packages/cli/src/commands/authorization-errors.test.ts
+          bun test packages/cli/src/commands/auth-paste-exit.test.ts
+          bun test packages/cli/src/lib/replication-registry.test.ts
+      - name: Verify MCP diagnostics and business behavior in isolation
+        working-directory: packages/mcp
+        run: |
+          export HOME="$(mktemp -d)"
+          export TC_HOME="$HOME/state"
+          trap 'rm -rf "$HOME"' EXIT
+          bun scripts/test.ts
       - name: Run production private-key secrets regression in isolation
         run: bun test packages/cli/src/commands/secrets-private-key-production.test.ts
-      - name: Run MCP CLI regression in isolation
-        run: bun test packages/mcp/src/cli.test.ts
-      - name: Run packed MCP CLI regression in isolation
-        run: bun test packages/mcp/src/packed-cli.test.ts
       - name: Verify generated files and coverage ledger
         run: |
           bun run check:operations-mcp

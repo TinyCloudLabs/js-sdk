@@ -1,14 +1,12 @@
 import { TC_OPTIONS_BEFORE_COURIER } from "./commands/courier.js";
-import { readFileSync } from "node:fs";
 import { CLI_NAME } from "@tinycloud/operations/cli-name";
-import { Command } from "commander";
 import { handleError } from "./output/errors.js";
 import { emitBanner } from "./output/banner.js";
 import { closeReplication } from "./lib/replication-registry.js";
+import { firstCommandIndex } from "./command-token.js";
+import { cliDiagnosticImported, cliDiagnosticParsed } from "./lib/diagnostics.js";
 
-const { version } = JSON.parse(
-  readFileSync(new URL("../package.json", import.meta.url), "utf-8")
-);
+import { createRootCommand, CLI_VERSION as version } from "./root-command.js";
 import { theme } from "./output/theme.js";
 import { setJsonOutputRequested, shouldOutputJson, outputWarnings } from "./output/formatter.js";
 import { ProfileManager } from "./config/profiles.js";
@@ -16,7 +14,7 @@ import { configureShareCommandServices, registerShareCommand } from "./commands/
 import { createShareAuthorityAdapters } from "./share/adapters.js";
 import { loadCourierEntry } from "./lib/courier-loader.js";
 
-const program = new Command();
+const program = createRootCommand();
 const shareAuthority = createShareAuthorityAdapters({
   profileName: async () => selectedShareProfile() ?? (await ProfileManager.getConfig()).defaultProfile,
   fetchFn: globalThis.fetch,
@@ -32,23 +30,8 @@ function selectedShareProfile(): string | undefined {
   return process.env.TC_PROFILE;
 }
 
-// Ubuntu's iproute2 ships /usr/sbin/tc, so the CLI is also installed as `tinycloud`.
-// Help, usage and hints name whichever bin was invoked.
-program
-  .name(CLI_NAME)
-  .description("TinyCloud CLI — self-sovereign storage from the terminal")
-  .version(version)
-  .option("-p, --profile <name>", "Profile to use")
-  .option("-H, --host <url>", "TinyCloud node URL")
-  .option("-v, --verbose", "Enable verbose output")
-  .option("--no-cache", "Disable caching")
-  .option("-q, --quiet", "Suppress non-essential output")
-  .option("--json", "Force JSON output")
-  .option("--replication", "Enable read-through replication for this invocation")
-  .option("--no-replication", "Disable read-through replication for this invocation")
-  .option("--replication-debug", "Write replication diagnostics to stderr")
-
 program.hook("preAction", async (thisCommand) => {
+  cliDiagnosticParsed();
   const opts = thisCommand.optsWithGlobals();
   setJsonOutputRequested(opts.json === true);
   const parentName = thisCommand.parent?.name();
@@ -96,30 +79,6 @@ configureShareCommandServices({
 });
 
 const argv = process.argv.slice(2);
-// Mirrors Commander's parsing of tc's global options: clustered shorts (-vp p, -vpp),
-// attached values (-Hurl, --host=url), separate values and `--`.
-const globalLongOptionsWithValues: Record<string, true> = { "--profile": true, "--host": true };
-const globalShortOptionsWithValues: Record<string, true> = { p: true, H: true };
-function firstCommandToken(values: readonly string[]): string | undefined {
-  for (let index = 0; index < values.length; index += 1) {
-    const value = values[index]!;
-    if (value === "--") return values[index + 1];
-    if (value.startsWith("--")) {
-      if (globalLongOptionsWithValues[value]) index += 1;
-      continue;
-    }
-    if (value.length > 1 && value.startsWith("-")) {
-      for (let char = 1; char < value.length; char += 1) {
-        if (!globalShortOptionsWithValues[value[char]!]) continue;
-        if (char === value.length - 1) index += 1; // value is the next argument
-        break; // otherwise the rest of this argument is the value
-      }
-      continue;
-    }
-    return value;
-  }
-  return undefined;
-}
 program.addHelpText("before", () => `${theme.label("Version:")} ${theme.value(version)}\n`);
 
 program.addHelpText("afterAll", () => {
@@ -140,11 +99,14 @@ ${theme.muted("Repo:")} ${theme.accent("https://github.com/tinycloudlabs/web-sdk
 `;
 });
 
-const commandToken = firstCommandToken(argv);
+const commandToken = argv[firstCommandIndex(argv)];
 if (argv[0] === "courier") {
   // Courier owns its argv (including --host and --json) and its own profile,
   // so Commander, the banner and the tc profile guard never see it.
-  const code = await (await loadCourierEntry()).runCourier(argv.slice(1));
+  const courier = await loadCourierEntry();
+  cliDiagnosticImported();
+  cliDiagnosticParsed();
+  const code = await courier.runCourier(argv.slice(1));
   if (code !== 0) process.exit(code);
 } else if (commandToken === "courier") {
   process.stderr.write(`${TC_OPTIONS_BEFORE_COURIER}\n`);
@@ -162,6 +124,7 @@ if (argv[0] === "courier") {
     registerTinyCloudCommands(program);
   }
 
+  cliDiagnosticImported();
   try {
     await program.parseAsync(process.argv);
     // The command is done with stdin. A pipe a caller keeps open (an agent

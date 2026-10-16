@@ -5,6 +5,28 @@ import { authorizationFailure } from "../kv-failure.js";
 import { operationSpaceResolver } from "../secrets.js";
 import { TC_APPS_RECORDS_ACTIONS, TC_APPS_ROOT } from "../tc-apps.js";
 import { isObject, type JsonObject } from "./records.js";
+import { beginDiagnosticPhase, diagnosticId, emitDiagnostic, getDiagnosticContext, withDiagnosticContext, type DiagnosticFields } from "../diagnostics.js";
+
+const unobserved = (_fields?: DiagnosticFields): void => {};
+/** A logical apps boundary owns its immutable scope, including physical SDK children. */
+export async function withAppsWork<T>(fields: DiagnosticFields, run: (finish: (fields?: DiagnosticFields) => void) => Promise<T>): Promise<T> {
+  const current = getDiagnosticContext();
+  if (!current) return run(unobserved);
+  let operation_id: string;
+  try { operation_id = diagnosticId(); } catch { return run(unobserved); }
+  const child = { ...current, operation_id, parent_id: current.operation_id ?? current.invocation_id, role: fields.role ?? current.role, role_provenance: "observed" as const };
+  return withDiagnosticContext(child, async () => {
+    const finish = beginDiagnosticPhase(fields.phase ?? "execution", { ...fields, operation_id });
+    try {
+      const result = await run(finish);
+      finish({ outcome: "complete" });
+      return result;
+    } catch (error) {
+      finish({ outcome: "failed" });
+      throw error;
+    }
+  });
+}
 
 export interface KvError { readonly code?: string; readonly meta?: Readonly<Record<string, unknown>> }
 export type KvResult<T> = { readonly ok: true; readonly data: T } | { readonly ok: false; readonly error: KvError };
@@ -44,38 +66,84 @@ export function requireKv<T>(result: KvResult<T>): T {
   return result.data;
 }
 export async function listAppsKeys(kv: AppsKv, prefix: string): Promise<string[]> {
-  const keys: string[] = [];
-  let cursor: string | undefined;
-  const seen = new Set<string>();
-  do {
-    const page = requireKv(await kv.list({ prefix, limit: 1000, ...(cursor === undefined ? {} : { cursor }) }));
-    keys.push(...page.keys);
-    cursor = page.nextCursor;
-    if ((page.truncated && !cursor) || (cursor !== undefined && seen.has(cursor))) throw new OperationInvocationError(operationError("NODE_ERROR", "The node returned incomplete pagination."));
-    if (cursor !== undefined) seen.add(cursor);
-  } while (cursor !== undefined);
-  return keys;
+  return withAppsWork({ action: "list", service: "kv" }, async (finish) => {
+    const keys: string[] = [];
+    let cursor: string | undefined;
+    const seen = new Set<string>();
+    let pages = 0;
+    try {
+      do {
+        const page = requireKv(await kv.list({ prefix, limit: 1000, ...(cursor === undefined ? {} : { cursor }) }));
+        pages++;
+        keys.push(...page.keys);
+        cursor = page.nextCursor;
+        if ((page.truncated && !cursor) || (cursor !== undefined && seen.has(cursor))) {
+          emitDiagnostic({ type: "operation.step", action: "list", warning: "pagination_incomplete", pages, returned: keys.length, truncated: true, outcome: "failed" });
+          throw new OperationInvocationError(operationError("NODE_ERROR", "The node returned incomplete pagination."));
+        }
+        if (cursor !== undefined) seen.add(cursor);
+      } while (cursor !== undefined);
+      finish({ pages, returned: keys.length, truncated: false, outcome: "complete" });
+      return keys;
+    } catch (error) {
+      finish({ pages, returned: keys.length, outcome: "failed" });
+      throw error;
+    }
+  });
 }
 export async function readAppsRecords(kv: AppsKv, keys: readonly string[]): Promise<ReadRecord[]> {
   if (!keys.length) return [];
   if (keys.length > 100) throw new TypeError("Personal-record batch reads accept at most 100 keys.");
-  const batch = requireKv(await kv.batchGet([...new Set(keys)]));
-  const byKey = new Map(batch.results.map((entry) => [entry.key, entry.result]));
-  return keys.map((key): ReadRecord => {
-    const result = byKey.get(key);
-    if (!result) throw new OperationInvocationError(operationError("NODE_ERROR", "The node omitted a requested record."));
-    if (!result.ok) {
-      if (result.error.code === "KV_NOT_FOUND" || result.error.code === "NOT_FOUND") return { key, outcome: "NOT_FOUND" };
-      throw new OperationInvocationError(appsFailure(result.error));
+  const unique = [...new Set(keys)];
+  return withAppsWork({ action: "batchGet", service: "kv", requested: keys.length, unique: unique.length }, async (finish) => {
+    // Returned counts readable input slots, not raw service entries or delivered output.
+    let returned = 0;
+    let missing = 0;
+    let malformed = 0;
+    try {
+      const batch = requireKv(await kv.batchGet(unique));
+      const byKey = new Map(batch.results.map((entry) => [entry.key, entry.result]));
+      const records = keys.map((key, index): ReadRecord => {
+        const result = byKey.get(key);
+        if (!result) {
+          emitDiagnostic({ type: "operation.step", action: "read", ordinal: index + 1, warning: "read_member_omitted", outcome: "failed" });
+          throw new OperationInvocationError(operationError("NODE_ERROR", "The node omitted a requested record."));
+        }
+        if (!result.ok) {
+          if (result.error.code === "KV_NOT_FOUND" || result.error.code === "NOT_FOUND") {
+            missing++;
+            emitDiagnostic({ type: "operation.step", action: "read", ordinal: index + 1, warning: "read_partial", verification_result: "missing" });
+            return { key, outcome: "NOT_FOUND" };
+          }
+          throw new OperationInvocationError(appsFailure(result.error));
+        }
+        let value = result.data.data;
+        if (typeof value === "string") {
+          try { value = JSON.parse(value); } catch {
+            malformed++;
+            emitDiagnostic({ type: "operation.step", action: "read", ordinal: index + 1, warning: "malformed_record", verification_result: "failed" });
+            return { key, outcome: "MALFORMED" };
+          }
+        }
+        if (!isObject(value)) {
+          malformed++;
+          emitDiagnostic({ type: "operation.step", action: "read", ordinal: index + 1, warning: "malformed_record", verification_result: "failed" });
+          return { key, outcome: "MALFORMED" };
+        }
+        const etag = result.data.headers.etag;
+        if (typeof etag !== "string" || etag.length === 0) {
+          emitDiagnostic({ type: "operation.step", action: "read", ordinal: index + 1, warning: "read_etag_missing", outcome: "failed" });
+          throw new OperationInvocationError(operationError("NODE_ERROR", "The node omitted the record's ETag; it cannot be safely edited."));
+        }
+        returned++;
+        return { key, value, etag };
+      });
+      finish({ returned, missing, malformed, outcome: missing || malformed ? "partial" : "complete" });
+      return records;
+    } catch (error) {
+      finish({ returned, missing, malformed, outcome: "failed" });
+      throw error;
     }
-    let value = result.data.data;
-    if (typeof value === "string") {
-      try { value = JSON.parse(value); } catch { return { key, outcome: "MALFORMED" }; }
-    }
-    if (!isObject(value)) return { key, outcome: "MALFORMED" };
-    const etag = result.data.headers.etag;
-    if (typeof etag !== "string" || etag.length === 0) throw new OperationInvocationError(operationError("NODE_ERROR", "The node omitted the record's ETag; it cannot be safely edited."));
-    return { key, value, etag };
   });
 }
 export function jsonBytes(value: JsonObject): Uint8Array {
@@ -84,5 +152,13 @@ export function jsonBytes(value: JsonObject): Uint8Array {
 
 /** Mark derived data stale; a caller with committed writes must retain their outcomes if this throws. */
 export async function markAppsKindStale(kv: AppsKv, app: string, kind: string, at: string): Promise<void> {
-  requireKv(await kv.put(`${TC_APPS_ROOT}index-stale/${app}/${kind}`, jsonBytes({ since: at.slice(0, 10), by: "tinycloud-mcp" }), {}));
+  return withAppsWork({ phase: "copy", role: "copy", action: "stale_mark", service: "kv" }, async (finish) => {
+    try {
+      requireKv(await kv.put(`${TC_APPS_ROOT}index-stale/${app}/${kind}`, jsonBytes({ since: at.slice(0, 10), by: "tinycloud-mcp" }), {}));
+      finish({ mutation: "confirmed", verification: "write_response", copy_state: "stale", outcome: "complete" });
+    } catch (error) {
+      finish({ mutation: "unknown", copy_state: "unknown", warning: "stale_mark_failed", outcome: "failed" });
+      throw error;
+    }
+  });
 }

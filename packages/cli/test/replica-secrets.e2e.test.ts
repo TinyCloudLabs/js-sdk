@@ -9,7 +9,7 @@ import { createServer } from "node:net";
 import { join, resolve } from "node:path";
 
 const NODE_BIN = process.env.TC_REPLICA_E2E_NODE_BIN;
-const CLI = resolve(import.meta.dir, "../dist/index.js");
+const CLI = resolve(import.meta.dir, "../dist/bootstrap.js");
 const NO_NETWORK = resolve(import.meta.dir, "../test-support/no-network.cjs");
 const ambient = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("TC_")));
 const cliEnvBase = ambient;

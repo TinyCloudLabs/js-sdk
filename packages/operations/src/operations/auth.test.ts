@@ -10,6 +10,9 @@ import {
 } from "@tinycloud/node-sdk";
 import type { PermissionEntry } from "@tinycloud/sdk-core";
 import { z } from "zod";
+import { makeDiagnosticContext, withDiagnosticContext } from "../diagnostics/context.js";
+import { DiagnosticRuntime } from "../diagnostics/runtime.js";
+import { diagnosticId, type DiagnosticObservation } from "../diagnostics/model.js";
 
 import { canonicalizeCapabilities } from "../authority.js";
 import type {
@@ -810,10 +813,25 @@ test("does not report a persistence failure as a delegation rejection", async ()
       { formatVersion: 2 },
     );
 
-    const result = await importDefinition().execute(
+    const events: DiagnosticObservation[] = [];
+    const sink = new DiagnosticRuntime({ source: "cli" });
+    sink.emit = (event) => { events.push(event); return true; };
+    const diagnosticContext = makeDiagnosticContext({
+      source_id: diagnosticId(), partition_id: diagnosticId(), generation: 1,
+      runtime: sink,
+    }, "cli");
+    const delegation = await fixture.hermetic.mintDelegation();
+    const result = await withDiagnosticContext(diagnosticContext, () => importDefinition().execute(
       runtime,
-      importArtifact(requestId, await fixture.hermetic.mintDelegation()),
-    );
+      importArtifact(requestId, delegation),
+    ));
+    expect(events).toContainEqual(expect.objectContaining({
+      type: "phase.finish", phase: "approval_verify", outcome: "complete",
+    }));
+    expect(events).toContainEqual(expect.objectContaining({
+      type: "phase.finish", phase: "approval_commit", outcome: "failed",
+    }));
+    expect(JSON.stringify(events)).not.toContain(delegation.cid);
 
     expect(result).toMatchObject({ status: "error", error: { code: "INTERNAL_ERROR" } });
   } finally {

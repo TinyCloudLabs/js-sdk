@@ -117,7 +117,7 @@ async function main(): Promise<void> {
   const { generateLocalIdentity } = await import("../src/auth/local-key.ts");
   const scriptDir = dirname(fileURLToPath(import.meta.url));
   const cliRoot = resolve(scriptDir, "..");
-  const cliEntry = resolve(cliRoot, "src/index.ts");
+  const cliEntry = resolve(cliRoot, "src/bootstrap.ts");
   const tempHome = await mkdtemp(join(tmpdir(), "tc-cli-live-smoke-"));
   const profile = `delegated-smoke-${Date.now().toString(36)}`;
   const secretName = `SMOKE_${Date.now().toString(36).toUpperCase()}_${randomBytes(3).toString("hex").toUpperCase()}`;

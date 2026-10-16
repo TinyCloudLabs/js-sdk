@@ -2,9 +2,17 @@ import ora from "ora";
 import { CLI_NAME } from "@tinycloud/operations/cli-name";
 import { theme } from "./theme.js";
 import { drainWarnings, mergeWarnings } from "./warnings.js";
+import { beginDiagnosticPhase, emitDiagnostic } from "@tinycloud/operations/diagnostics";
 
 export function outputJson(data: unknown): void {
-  process.stdout.write(JSON.stringify(data, null, 2) + "\n");
+  const finish = beginDiagnosticPhase("output_projection");
+  try {
+    process.stdout.write(JSON.stringify(data, null, 2) + "\n");
+    finish({ outcome: "complete" });
+  } catch (error) {
+    finish({ outcome: "failed" });
+    throw error;
+  }
 }
 
 /** A skipped-grant (or other) diagnostic from an operation result: fixed codes only. */
@@ -80,6 +88,7 @@ export function outputError(
     if (warnings.length > 0) payload.error.warnings = warnings;
     process.stderr.write(JSON.stringify(payload, null, 2) + "\n");
   }
+  emitDiagnostic({ type: "operation.step", phase: "output_projection", outcome: "complete", is_error: true });
 }
 
 /**
@@ -94,6 +103,7 @@ export function outputWarnings(warnings: readonly OperationWarningOutput[]): voi
   process.stderr.write(shouldOutputJson()
     ? `${JSON.stringify({ warnings: combined })}\n`
     : `${theme.warn("!")} ${warningLine(combined)}\n`);
+  emitDiagnostic({ type: "operation.step", phase: "output_projection", outcome: "complete", warning: "unknown" });
 }
 
 const WARNING_CODE = /^[A-Z][A-Z_]{0,63}$/;

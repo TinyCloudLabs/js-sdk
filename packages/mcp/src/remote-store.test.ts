@@ -1,11 +1,13 @@
 import { afterEach, expect, spyOn, test } from "bun:test";
-import { access, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 
 import { invokeOperation } from "@tinycloud/operations";
+import { DiagnosticStore, isDiagnosticId, resolveDiagnosticTenant } from "@tinycloud/operations/diagnostics";
+import { HostedDiagnostics } from "./hosted-diagnostics.js";
 
-import { ApprovalOwnerMismatchError, ApprovalStageError, RemoteTenantStore } from "./remote-store.js";
+import { ApprovalOwnerMismatchError, ApprovalRequestError, ApprovalStageError, RemoteTenantStore, type RemoteStoreConfig } from "./remote-store.js";
 import {
   OTHER_OWNER_KEY,
   REQUESTER_KEY,
@@ -327,6 +329,176 @@ test("a delegation approval outside the stored request is not imported", async (
       .toMatchObject({ status: "authority_required" });
   }
 });
+
+test("protected approval capture links reused waiters without retaining signed state or other tenants", async () => {
+  const fixture = await approvalCapture();
+  const owner = await ownerDid(REQUESTER_KEY);
+  const firstHistory = await fixture.enable("PRIVATE_APPROVAL_A");
+  const secondHistory = await fixture.enable("PRIVATE_APPROVAL_B");
+  const [first, second] = await Promise.all([
+    fixture.connect("PRIVATE_APPROVAL_A", owner),
+    fixture.connect("PRIVATE_APPROVAL_B", owner),
+  ]);
+  const repeated = await fixture.connect("PRIVATE_APPROVAL_A", owner);
+  expect(repeated.approvalUrl).toBe(first.approvalUrl);
+  const firstState = new URL(first.approvalUrl!).searchParams.get("state")!;
+  const secondState = new URL(second.approvalUrl!).searchParams.get("state")!;
+  const firstPending = await fixture.pending("PRIVATE_APPROVAL_A", firstState);
+  const secondPending = await fixture.pending("PRIVATE_APPROVAL_B", secondState);
+  expect(isDiagnosticId(firstPending.diagnosticReference)).toBe(true);
+  expect(isDiagnosticId(secondPending.diagnosticReference)).toBe(true);
+  expect(secondPending.diagnosticReference).not.toBe(firstPending.diagnosticReference);
+
+  const disabled = await fixture.connect("PRIVATE_DISABLED", owner);
+  const disabledState = new URL(disabled.approvalUrl!).searchParams.get("state")!;
+  expect(await fixture.pending("PRIVATE_DISABLED", disabledState)).not.toHaveProperty("diagnosticReference");
+  // A different tenant label with the first link's signature establishes no authority.
+  const forged = `${secondState.split(".")[0]}.${firstState.split(".").slice(1).join(".")}`;
+  await expect(fixture.diagnostics.exchange(() => fixture.store.completeApproval(forged, callbackRequest({}))))
+    .rejects.toMatchObject({ detail: "state_invalid" });
+  await fixture.diagnostics.close();
+  const firstSnapshot = await firstHistory.snapshot({ all: true });
+  const secondSnapshot = await secondHistory.snapshot({ all: true });
+  const requests = firstSnapshot.events.filter((event) => event.phase === "approval_request");
+  expect(requests.map((event) => event.outcome)).toEqual(["pending", "reused"]);
+  expect(requests[0]!.invocation_id).not.toBe(requests[1]!.invocation_id);
+  expect(requests.every((event) => event.workflow_id === firstPending.diagnosticReference)).toBe(true);
+  expect(secondSnapshot.events.filter((event) => event.phase === "approval_request").map((event) => event.outcome)).toEqual(["pending"]);
+  expect(secondSnapshot.events.every((event) => event.workflow_id === secondPending.diagnosticReference)).toBe(true);
+  expect(firstSnapshot.events.filter((event) => event.phase === "approval_wait")
+    .every((event) => event.business === "awaiting_owner" && event.duration_ms === undefined)).toBe(true);
+  for (const secret of [firstState, secondState, owner, first.approvalUrl!, "PRIVATE_", firstPending.nonce]) {
+    expect(JSON.stringify([firstSnapshot, secondSnapshot])).not.toContain(String(secret));
+  }
+}, 30_000);
+
+test("callback denial and verified proof followed by failed commit remain distinct after restart", async () => {
+  const fixture = await approvalCapture();
+  const owner = await ownerDid(REQUESTER_KEY);
+  const history = await fixture.enable("PRIVATE_APPROVAL_OWNER");
+  const status = await fixture.connect("PRIVATE_APPROVAL_OWNER", owner);
+  const state = new URL(status.approvalUrl!).searchParams.get("state")!;
+  const pending = await fixture.pending("PRIVATE_APPROVAL_OWNER", state);
+  const stateRoot = fixture.store.tenantStateRoot("PRIVATE_APPROVAL_OWNER");
+  await fixture.diagnostics.close();
+  const restarted = new HostedDiagnostics({ root: fixture.historyRoot }, fixture.config.stateDir);
+  cleanups.push(() => restarted.close());
+  const store = new RemoteTenantStore(fixture.config, restarted);
+  const foreign = await openKeyCallbackBody({
+    tenantStateRoot: stateRoot, privateKey: OTHER_OWNER_KEY, space: "account", abilities: BOOTSTRAP_ABILITIES,
+  });
+  await expect(restarted.exchange(() => store.completeApproval(state, callbackRequest(foreign))))
+    .rejects.toBeInstanceOf(ApprovalOwnerMismatchError);
+  expect(await exists(join(stateRoot, ".tinycloud/profiles/agent/session.json"))).toBe(false);
+  const own = await openKeyCallbackBody({
+    tenantStateRoot: stateRoot, privateKey: REQUESTER_KEY, space: "account", abilities: BOOTSTRAP_ABILITIES,
+  });
+  // A genuine local persistence refusal after proof/owner/capability verification.
+  const sessionPath = join(stateRoot, ".tinycloud/profiles/agent/session.json");
+  await mkdir(sessionPath);
+  const refused = await restarted.exchange(() => store.completeApproval(state, callbackRequest(own))).catch((error: unknown) => error);
+  expect(refused).toBeInstanceOf(Error);
+  expect(refused).not.toBeInstanceOf(ApprovalStageError);
+  expect(await fixture.pending("PRIVATE_APPROVAL_OWNER", state)).toMatchObject({ diagnosticReference: pending.diagnosticReference });
+  await rm(sessionPath, { recursive: true });
+  await restarted.exchange(() => store.completeApproval(state, callbackRequest(own)));
+  expect(JSON.parse(await readFile(sessionPath, "utf8"))).toMatchObject({ delegationCid: own.delegationCid });
+  await restarted.close();
+  const snapshot = await history.snapshot({ all: true });
+  const callbacks = snapshot.events.filter((event) => event.type === "invocation.start");
+  expect(callbacks).toHaveLength(3);
+  expect(new Set(callbacks.map((event) => event.invocation_id)).size).toBe(3);
+  expect(callbacks.every((event) => event.workflow_id === pending.diagnosticReference)).toBe(true);
+  const denied = snapshot.events.filter((event) => event.invocation_id === callbacks[0]!.invocation_id);
+  expect(denied.some((event) => event.phase === "approval_verify" && event.outcome === "denied")).toBe(true);
+  expect(denied.some((event) => event.phase === "local_commit")).toBe(false);
+  const failed = snapshot.events.filter((event) => event.invocation_id === callbacks[1]!.invocation_id);
+  expect(failed.some((event) => event.phase === "approval_verify" && event.outcome === "pass")).toBe(true);
+  expect(failed.some((event) => event.phase === "local_commit" && event.outcome === "error")).toBe(true);
+  expect(failed.find((event) => event.type === "invocation.finish")?.business).toBe("failed");
+  expect(snapshot.events.filter((event) => event.phase === "approval_wait").every((event) => event.duration_ms === undefined)).toBe(true);
+  expect(snapshot.events.some((event) => event.activity === "apps_write")).toBe(false);
+  for (const secret of [state, owner, own.siwe, own.signature, own.delegationCid, pending.nonce, "PRIVATE_"]) {
+    expect(JSON.stringify(snapshot)).not.toContain(String(secret));
+  }
+}, 30_000);
+
+test("expired signed approvals are scoped to their verified tenant and cannot commit", async () => {
+  const fixture = await approvalCapture();
+  const owner = await ownerDid(REQUESTER_KEY);
+  const history = await fixture.enable("PRIVATE_EXPIRED");
+  const status = await fixture.connect("PRIVATE_EXPIRED", owner);
+  const state = new URL(status.approvalUrl!).searchParams.get("state")!;
+  const pending = await fixture.pending("PRIVATE_EXPIRED", state);
+  const path = join(fixture.store.tenantStateRoot("PRIVATE_EXPIRED"), ".tinycloud/profiles/agent/pending", `${pending.nonce}.json`);
+  await writeFile(path, JSON.stringify({ ...pending, expiresAt: new Date(Date.now() - 1000).toISOString() }));
+  await expect(fixture.diagnostics.exchange(() => fixture.store.completeApproval(state, callbackRequest({}))))
+    .rejects.toBeInstanceOf(ApprovalRequestError);
+  expect(await exists(path)).toBe(false);
+  await fixture.diagnostics.close();
+  const snapshot = await history.snapshot({ all: true });
+  expect(snapshot.events.filter((event) => event.outcome === "expired")).toMatchObject([
+    { phase: "approval_wait", workflow_id: pending.diagnosticReference },
+  ]);
+  expect(snapshot.events.some((event) => event.phase === "approval_verify" || event.phase === "local_commit")).toBe(false);
+}, 30_000);
+
+test("a signed bootstrap approval with declined capabilities never reaches local commit", async () => {
+  const fixture = await approvalCapture();
+  const owner = await ownerDid(REQUESTER_KEY);
+  const history = await fixture.enable("PRIVATE_DECLINED");
+  const status = await fixture.connect("PRIVATE_DECLINED", owner);
+  const state = new URL(status.approvalUrl!).searchParams.get("state")!;
+  const stateRoot = fixture.store.tenantStateRoot("PRIVATE_DECLINED");
+  const declined = await openKeyCallbackBody({
+    tenantStateRoot: stateRoot, privateKey: REQUESTER_KEY, space: "account",
+    abilities: { kv: { "spaces/": ["tinycloud.kv/get"] } },
+  });
+  await expect(fixture.diagnostics.exchange(() => fixture.store.completeApproval(state, callbackRequest(declined))))
+    .rejects.toBeInstanceOf(Error);
+  expect(await exists(join(stateRoot, ".tinycloud/profiles/agent/session.json"))).toBe(false);
+  await fixture.diagnostics.close();
+  const snapshot = await history.snapshot({ all: true });
+  expect(snapshot.events.filter((event) => event.type === "phase.finish" && event.phase === "approval_verify"))
+    .toMatchObject([{ outcome: "denied" }]);
+  expect(snapshot.events.some((event) => event.phase === "local_commit")).toBe(false);
+  expect(snapshot.events.find((event) => event.type === "invocation.finish")?.business).toBe("failed");
+}, 30_000);
+
+async function approvalCapture() {
+  const root = await mkdtemp(join(tmpdir(), "tinycloud-approval-diagnostics-"));
+  directories.push(root);
+  const historyRoot = join(root, "history");
+  const config: RemoteStoreConfig = {
+    stateDir: join(root, "state"),
+    stateSecret: "synthetic-approval-secret-at-least-thirty-two-bytes",
+    publicUrl: new URL("https://mcp.test/mcp"),
+    nodeHost: "http://127.0.0.1:1",
+    openkeyHost: "https://openkey.test",
+    approvalTtlSeconds: 300,
+    delegationExpiry: "1h",
+  };
+  const diagnostics = new HostedDiagnostics({ root: historyRoot }, config.stateDir);
+  cleanups.push(() => diagnostics.close());
+  const store = new RemoteTenantStore(config, diagnostics);
+  return {
+    store, diagnostics, config, historyRoot,
+    async enable(subject: string) {
+      const partition = await resolveDiagnosticTenant(historyRoot, basename(store.tenantStateRoot(subject)), { create: true });
+      const history = new DiagnosticStore(historyRoot, partition!);
+      await history.control("enable", { scope: "tc-apps" });
+      return history;
+    },
+    connect(subject: string, owner: string) {
+      return diagnostics.exchange(() => diagnostics.tenant(basename(store.tenantStateRoot(subject)),
+        () => store.connectStatus(subject, [owner])));
+    },
+    async pending(subject: string, state: string): Promise<Record<string, unknown>> {
+      const nonce = state.split(".")[1]!;
+      return JSON.parse(await readFile(join(store.tenantStateRoot(subject), ".tinycloud/profiles/agent/pending", `${nonce}.json`), "utf8"));
+    },
+  };
+}
 
 function record(value: unknown): Record<string, unknown> {
   if (typeof value !== "object" || value === null || Array.isArray(value)) throw new Error("Expected an object.");

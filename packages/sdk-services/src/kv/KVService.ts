@@ -5,6 +5,7 @@
  * Uses dependency injection via IServiceContext for platform dependencies.
  */
 
+import { dispatchDiagnosticFetch } from "../diagnostics";
 import { BaseService } from "../base/BaseService";
 import {
   Result,
@@ -299,7 +300,7 @@ export class KVService extends BaseService implements IKVService {
       ? [...headers, ...Object.entries(extraHeaders ?? {})]
       : { ...headers, ...extraHeaders };
 
-    return this.context.fetch(`${this.host}/invoke`, {
+    return dispatchDiagnosticFetch(this.context, this.context.fetch, "kv", action, `${this.host}/invoke`, {
       method: "POST",
       headers: requestHeaders,
       body,
@@ -610,7 +611,7 @@ export class KVService extends BaseService implements IKVService {
       const headers: ServiceHeaders = Array.isArray(invocationHeaders)
         ? [...invocationHeaders, ...Object.entries(limitHeaders)]
         : { ...invocationHeaders, ...limitHeaders };
-      const response = await this.context.fetch(`${this.host}/invoke`, {
+      const response = await dispatchDiagnosticFetch(this.context, this.context.fetch, "kv", action === KVAction.GET ? "batchGet" : "unknown", `${this.host}/invoke`, {
         method: "POST",
         headers,
         signal: request.signal,
@@ -1209,7 +1210,7 @@ export class KVService extends BaseService implements IKVService {
         // request was ever handed to a transport (Sol B2).
         const fetchFn = this.context.fetch;
         requestMayHaveDispatched = true;
-        const response = await fetchFn(url, init);
+        const response = await dispatchDiagnosticFetch(this.context, fetchFn, "kv", "batchPut", url, init);
 
         if (!response.ok) {
           let errorText: string;
@@ -1930,7 +1931,7 @@ export class KVService extends BaseService implements IKVService {
 
       const request = this.createRequestSignal(options?.signal, options?.timeout);
       try {
-        const response = await this.context.fetch(`${this.host}/signed/kv`, {
+        const response = await dispatchDiagnosticFetch(this.context, this.context.fetch, "kv", "unknown", `${this.host}/signed/kv`, {
           method: "POST",
           headers: this.withJsonContentType(headers),
           body: JSON.stringify(body),

@@ -3,6 +3,7 @@ import { Command } from "commander";
 import { KVService, SQLService, SpaceService } from "@tinycloud/sdk-core";
 import type { SpaceServiceConfig } from "@tinycloud/sdk-core";
 import { setActiveProfileName } from "../output/errors.js";
+import { diagnosticId, makeDiagnosticContext, withDiagnosticContext, type DiagnosticBinding, type DiagnosticObservation } from "@tinycloud/operations/diagnostics";
 
 const SPACE = "tinycloud:pkh:eip155:1:0xabc:default";
 let node: Record<string, unknown>;
@@ -192,4 +193,26 @@ test.each([401, 403] as const)("space list HTTP %i from real SpaceService cannot
   const result = await captureCommand("space", ["list"]);
   expect(result.exitCode).toBe(status === 401 ? 3 : 5);
   expect(result.error).toMatchObject({ code: status === 401 ? "AUTH_REQUIRED" : "PERMISSION_DENIED", meta: { status } });
+});
+
+test("SQL lost write acknowledgment preserves the failure and never retries or claims verification", async () => {
+  let stored = 0;
+  const events: DiagnosticObservation[] = [];
+  const context = makeDiagnosticContext({
+    source_id: diagnosticId(), partition_id: diagnosticId(), generation: 1,
+    runtime: { emit(event: DiagnosticObservation) { events.push(event); return true; } } as DiagnosticBinding["runtime"],
+  }, "cli");
+  node = { sql: { db: () => ({
+    execute: async () => {
+      stored += 1;
+      throw new Error("synthetic lost acknowledgment");
+    },
+  }) } };
+  const result = await withDiagnosticContext(context, () => captureCommand("sql", ["execute", "INSERT INTO synthetic VALUES (1)"]));
+  expect(stored).toBe(1);
+  expect(result.exitCode).toBe(1);
+  expect(result.error.code).toBe("ERROR");
+  expect(events).toContainEqual(expect.objectContaining({ type: "phase.finish", action: "execute", outcome: "error", mutation: "unknown" }));
+  expect(events.some((event) => event.mutation === "confirmed" || event.verification === "read_back")).toBe(false);
+  expect(JSON.stringify(events)).not.toContain("INSERT");
 });

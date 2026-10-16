@@ -158,6 +158,8 @@ class LoopbackEncryptedNode {
     revokedInvocations: 0,
     kvReads: 0,
     kvWrites: 0,
+    sqlRequests: 0,
+    sqlEffects: 0,
   };
 
   readonly requestLog: HermeticRequestRecord[] = [];
@@ -185,6 +187,8 @@ class LoopbackEncryptedNode {
   private readonly deniedKvReadPaths = new Set<string>();
   private stallMatch: ((invocation: HermeticInvocationRecord) => boolean) | null = null;
   private readonly stalledResponses = new WeakSet<Response>();
+  private readonly lostAcknowledgments = new WeakSet<Response>();
+  sqlFault: "none" | "lose_ack" = "none";
   /** Compact grants activated through `/delegate`; they authorize their audience's invocations. */
   private readonly activatedGrants: CompactPayload[] = [];
 
@@ -211,6 +215,10 @@ class LoopbackEncryptedNode {
           },
         );
         const response = await this.handle(request);
+        if (this.lostAcknowledgments.has(response)) {
+          outgoing.destroy();
+          return;
+        }
         if (this.stalledResponses.has(response)) {
           // A 404 whose body never finishes: headers and a first chunk only.
           outgoing.writeHead(404, { "content-type": "text/plain", "content-length": "64" });
@@ -677,6 +685,31 @@ class LoopbackEncryptedNode {
         return new Response("activated browser session proof required", { status: 403 });
       }
       if (payload.iss) this.observed.signingIssuers.push(payload.iss);
+      // A fixed synthetic SQL endpoint, not a SQL interpreter. Capability and
+      // dispatch are real; execute effects count accepted requests only.
+      const sqlInvocation = invoked.find((invocation) => invocation.service === "sql");
+      if (sqlInvocation) {
+        const resource = `${sqlInvocation.space}/sql/${sqlInvocation.path}`;
+        // Restored CLI sessions can retain their SIWE proof in `prf` while
+        // receiving SQL authority through a separately activated compact grant.
+        // Resolve that grant by its signed audience/resource/action, as KV does;
+        // merely knowing an activated CID must not authorize another invoker.
+        if (!hasExactCapability(payload, resource, sqlInvocation.action, this.delegationCids) &&
+          !this.authorizedByActivatedGrant(payload, resource, sqlInvocation.action)) {
+          return new Response("sql proof required", { status: 403 });
+        }
+        const body = await request.json() as { action?: string };
+        this.observed.sqlRequests += 1;
+        if (body.action === "execute") this.observed.sqlEffects += 1;
+        const response = this.json(body.action === "query"
+          ? { columns: ["synthetic"], rows: [[7]], rowCount: 1 }
+          : { changes: 1, lastInsertRowId: 1 });
+        if (this.sqlFault === "lose_ack") {
+          this.sqlFault = "none";
+          this.lostAcknowledgments.add(response);
+        }
+        return response;
+      }
       const writes = Object.entries(payload.att ?? {}).flatMap(([resource, actions]) =>
         Object.keys(actions).map((action) => ({ resource, action }))
       ).filter(({ resource, action }) => {
@@ -1054,11 +1087,14 @@ export interface HermeticEncryptedNode {
     revokedInvocations: number;
     kvReads: number;
     kvWrites: number;
+    sqlRequests: number;
+    sqlEffects: number;
   }>;
   /** Every HTTP request received so far, in order. */
   requests(): readonly HermeticRequestRecord[];
   /** Every capability of every verified `/invoke` invocation so far, in order. */
   invocations(): readonly HermeticInvocationRecord[];
+  setSqlFault(fault: "none" | "lose_ack"): void;
   rejectRootRawCidActivations(refuse: boolean): void;
   /** Answer every `/delegate` with this HTTP status (`null`: activate normally); forgets earlier grant activations. */
   failDelegate(status: number | null): void;
@@ -1116,6 +1152,7 @@ export async function createHermeticEncryptedNode(
     secretPresent?: boolean;
     /** Configure the authenticated owner for a single native KV bearer path. */
     nativeBearerPath?: string;
+    nativeSqlDatabase?: string;
   }> = {},
 ): Promise<HermeticEncryptedNode> {
   const transport = new LoopbackEncryptedNode();
@@ -1174,9 +1211,14 @@ export async function createHermeticEncryptedNode(
   });
 
   const ownerSessionSpaceId = options.nativeBearerPath === undefined ? spaceId : applicationsSpaceId;
-  const ownerSessionAbilities = options.nativeBearerPath === undefined
+  const ownerSessionAbilities: Record<string, Record<string, string[]>> = options.nativeBearerPath === undefined
     ? { kv: { [SECRET_PATH]: ["tinycloud.kv/get"] } }
-    : { kv: { [options.nativeBearerPath]: ["tinycloud.kv/get", "tinycloud.kv/put"] } };
+    : {
+      kv: { [options.nativeBearerPath]: ["tinycloud.kv/get", "tinycloud.kv/put"] },
+      ...(options.nativeSqlDatabase === undefined ? {} : {
+        sql: { [options.nativeSqlDatabase]: ["tinycloud.sql/read", "tinycloud.sql/write"] },
+      }),
+    };
   const ownerSession = await makeSession(ownerRuntime.node, ownerRuntime.signer, {
     address: ownerAddress,
     spaceId: ownerSessionSpaceId,
@@ -1295,9 +1337,12 @@ export async function createHermeticEncryptedNode(
       revokedInvocations: transport.observed.revokedInvocations,
       kvReads: transport.observed.kvReads,
       kvWrites: transport.observed.kvWrites,
+      sqlRequests: transport.observed.sqlRequests,
+      sqlEffects: transport.observed.sqlEffects,
     }),
     requests: () => [...transport.requestLog],
     invocations: () => [...transport.invocationLog],
+    setSqlFault: (fault) => { transport.sqlFault = fault; },
     rejectRootRawCidActivations: (refuse) => transport.rejectRootRawCidActivations(refuse),
     failDelegate: (status) => transport.failDelegate(status),
     denyKvReads: (paths) => transport.denyKvReads(paths),

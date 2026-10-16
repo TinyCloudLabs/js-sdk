@@ -72,6 +72,8 @@ import { canonicalOwnerDid } from "../lib/owner-did.js";
 import { assertNotLocalOwner, assertSessionReplaceable, commitLogin, readProfileSnapshot } from "../auth/login-commit.js";
 import { announceFirstOwner, openKeyPrimaryFlag, ownerLoginPermissions, warnIfNotPrimaryKey, withOwnerKeyPrimary } from "../auth/owner-key.js";
 import { SHARE_PUBLISHING_MANIFEST_REF } from "../share/publishing-manifest.js";
+import { beginDiagnosticPhase, emitDiagnostic } from "@tinycloud/operations/diagnostics";
+import { withCliDiagnosticPhase } from "../lib/diagnostics.js";
 import {
   generateLocalIdentity,
   deriveAddress,
@@ -180,7 +182,7 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
           );
         }
         const globalOpts = cmd.optsWithGlobals();
-        const ctx = await ProfileManager.resolveContext(globalOpts, { storedSession: "unused" });
+        const ctx = await withCliDiagnosticPhase("preparation", { service: "local" }, () => ProfileManager.resolveContext(globalOpts, { storedSession: "unused" }));
         const owner = options.owner === undefined ? undefined : canonicalOwnerDid(options.owner);
         const permissions = options.manifest
           ? await loadManifestPermissions(options.manifest, ctx.profile, { allowLogicalSpaces: true, ownerDid: owner, device: options.device === true })
@@ -291,7 +293,7 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
     .action(async (options, cmd) => {
       try {
         const globalOpts = cmd.optsWithGlobals();
-        const ctx = await ProfileManager.resolveContext(globalOpts, { storedSession: "unused" });
+        const ctx = await withCliDiagnosticPhase("preparation", { service: "local" }, () => ProfileManager.resolveContext(globalOpts, { storedSession: "unused" }));
         // Refuse a profile that does not exist rather than report it logged out.
         await ProfileManager.getProfile(ctx.profile);
         await ProfileManager.clearSession(ctx.profile);
@@ -318,7 +320,7 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
     .action(async (options, cmd) => {
       try {
         const globalOpts = cmd.optsWithGlobals();
-        const ctx = await ProfileManager.resolveContext(globalOpts, { storedSession: "unused" });
+        const ctx = await withCliDiagnosticPhase("preparation", { service: "local" }, () => ProfileManager.resolveContext(globalOpts, { storedSession: "unused" }));
         await rotateAuthKey(ctx.profile, ctx.host, {
           paste: options.paste,
           noPopup: options.popup === false,
@@ -334,7 +336,7 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
     .action(async (_options, cmd) => {
       try {
         const globalOpts = cmd.optsWithGlobals();
-        const ctx = await ProfileManager.resolveContext(globalOpts, { storedSession: "unused" });
+        const ctx = await withCliDiagnosticPhase("preparation", { service: "local" }, () => ProfileManager.resolveContext(globalOpts, { storedSession: "unused" }));
 
         const hasKey = await ProfileManager.getKey(ctx.profile);
         const session = await ProfileManager.getSession(ctx.profile) as Record<string, unknown> | null;
@@ -416,7 +418,7 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
       try {
         const globalOpts = cmd.optsWithGlobals();
         // Without --grant, the request records the host it is for and no session is restored.
-        const ctx = await ProfileManager.resolveContext(globalOpts, options.grant ? {} : { storedSession: "unused" });
+        const ctx = await withCliDiagnosticPhase("preparation", { service: "local" }, () => ProfileManager.resolveContext(globalOpts, options.grant ? {} : { storedSession: "unused" }));
         const profile = await ProfileManager.getProfile(ctx.profile);
         if (options.device && (!options.grant || resolveProfilePosture(profile) !== "owner-openkey")) {
           throw new CLIError("INVALID_ARGUMENT", "--device requires --grant on an OpenKey owner profile.", ExitCode.USAGE_ERROR);
@@ -585,7 +587,7 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
     .action(async (source: string | undefined, options, cmd) => {
       try {
         const globalOpts = cmd.optsWithGlobals();
-        const ctx = await ProfileManager.resolveContext(globalOpts);
+        const ctx = await withCliDiagnosticPhase("preparation", { service: "local" }, () => ProfileManager.resolveContext(globalOpts));
         const raw = await readAuthArtifactSource(source, {
           stdin: options.stdin === true || options.paste === true,
         });
@@ -760,7 +762,7 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
     .action(async (source: string | undefined, options, cmd) => {
       try {
         const globalOpts = cmd.optsWithGlobals();
-        const ctx = await ProfileManager.resolveContext(globalOpts);
+        const ctx = await withCliDiagnosticPhase("preparation", { service: "local" }, () => ProfileManager.resolveContext(globalOpts));
         const profile = await ProfileManager.getProfile(ctx.profile);
         const raw = await readAuthArtifactSource(source, {
           stdin: options.stdin === true || options.paste === true,
@@ -813,7 +815,7 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
     .action(async (requestId: string | undefined, options, cmd) => {
       try {
         const globalOpts = cmd.optsWithGlobals();
-        const ctx = await ProfileManager.resolveContext(globalOpts);
+        const ctx = await withCliDiagnosticPhase("preparation", { service: "local" }, () => ProfileManager.resolveContext(globalOpts));
         const artifact = options.last
           ? await getLastPermissionRequestArtifact(ctx.profile)
           : requestId
@@ -871,7 +873,7 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
     .action(async (options, cmd) => {
       try {
         const globalOpts = cmd.optsWithGlobals();
-        const ctx = await ProfileManager.resolveContext(globalOpts);
+        const ctx = await withCliDiagnosticPhase("preparation", { service: "local" }, () => ProfileManager.resolveContext(globalOpts));
 
         if (options.history) {
           const history = (await readGrantHistory(ctx.profile)).slice(-20);
@@ -941,7 +943,7 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
     .action(async (_options, cmd) => {
       try {
         const globalOpts = cmd.optsWithGlobals();
-        const ctx = await ProfileManager.resolveContext(globalOpts, { storedSession: "unused" });
+        const ctx = await withCliDiagnosticPhase("preparation", { service: "local" }, () => ProfileManager.resolveContext(globalOpts, { storedSession: "unused" }));
 
         const profile = await ProfileManager.getProfile(ctx.profile);
         const session = await ProfileManager.getSession(ctx.profile) as Record<string, unknown> | null;
@@ -1764,6 +1766,7 @@ async function handleLocalAuth(
   host: string,
   options: { emitOutput?: boolean; forceSessionKey?: boolean; replication?: ReplicationLoginOptions } = {},
 ): Promise<LocalAuthResult> {
+  return withCliDiagnosticPhase("preparation", { service: "auth", action: "login" }, async () => {
   const snapshot = await readProfileSnapshot(profileName);
   const profile = snapshot.profile;
   const posture = profile ? resolveProfilePosture(profile) : null;
@@ -1874,6 +1877,7 @@ async function handleLocalAuth(
   }
 
   return { profile: updatedProfile, sessionResult };
+  });
 }
 
 /**
@@ -1911,6 +1915,7 @@ async function handleOpenKeyAuth(
 /** Tell the operator which requested capabilities the owner unchecked or OpenKey signed incorrectly. */
 function reportDeclined(declined: PermissionEntry[], signed?: PermissionEntry[]): void {
   if (declined.length === 0) return;
+  emitDiagnostic({ type: "operation.step", phase: "approval_verify", role: "approval", outcome: "partial", missing: declined.length });
   process.stderr.write(
     `${theme.warn("Not granted in this session:")}\n${declined.map((permission) => `  ${compactPermission(permission)}`).join("\n")}\n`,
   );
@@ -1960,6 +1965,7 @@ export async function refreshOpenKeySession(
   host: string,
   options: OpenKeyLoginOptions = {},
 ): Promise<{ profile: ProfileConfig; delegationData: Record<string, unknown>; declined: PermissionEntry[]; legacyNested: PermissionEntry[] }> {
+  return withCliDiagnosticPhase("preparation", { service: "auth", action: "login", role: "approval" }, async () => {
   const snapshot = await readProfileSnapshot(profileName);
   // A missing profile is PROFILE_NOT_FOUND, not a missing key: `tc init` alone
   // would create the default profile instead of this one.
@@ -2024,6 +2030,8 @@ export async function refreshOpenKeySession(
   let verifiedOwner: string | undefined;
   let declined: PermissionEntry[] = [];
   let legacyNested: PermissionEntry[] = [];
+  const finishVerification = beginDiagnosticPhase("approval_verify", { service: "auth", action: "verify" });
+  try {
   if (permissions) {
     const verified = verifyScopedLogin(delegationData, key, sessionDid, permissions, { expectedOwner, expiry });
     sanitizedSession = verified.session;
@@ -2040,6 +2048,11 @@ export async function refreshOpenKeySession(
     }
     verifiedOwner = signed.ownerDid;
     sanitizedSession = withVerifiedAuthority({ ...delegationData, jwk: key }, signed);
+  }
+    finishVerification({ outcome: "pass", missing: declined.length });
+  } catch (error) {
+    finishVerification({ outcome: "fail" });
+    throw error;
   }
 
   // OpenKey's unsigned `primary` flag describes the key that signed, so it is
@@ -2068,4 +2081,5 @@ export async function refreshOpenKeySession(
   announceFirstOwner(profileName, expectedOwner, verifiedOwner);
 
   return { profile: updatedProfile, delegationData: sanitizedSession, declined, legacyNested };
+  });
 }

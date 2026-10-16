@@ -1,6 +1,6 @@
 /**
  * `tc replica` against a real TinyCloud node, through the public CLI only
- * (TC-18). Spawns the built CLI (`node dist/index.js`) in an isolated
+ * (TC-18). Spawns the built CLI (`node dist/bootstrap.js`) in an isolated
  * TC_HOME, and a node binary on SQLite in a temp data directory.
  *
  * Needs TC_REPLICA_E2E_NODE_BIN: a tinycloud node binary serving
@@ -24,7 +24,7 @@ import { join, resolve } from "node:path";
 
 const NODE_BIN = process.env.TC_REPLICA_E2E_NODE_BIN;
 const DATABASE_URL = process.env.TC_REPLICA_E2E_DATABASE_URL || undefined;
-const CLI = process.env.TC_REPLICA_E2E_CLI ?? resolve(import.meta.dir, "../dist/index.js");
+const CLI = process.env.TC_REPLICA_E2E_CLI ?? resolve(import.meta.dir, "../dist/bootstrap.js");
 const NO_NETWORK = resolve(import.meta.dir, "../test-support/no-network.cjs");
 const NODE20 = resolve(import.meta.dir, "../test-support/node20.cjs");
 

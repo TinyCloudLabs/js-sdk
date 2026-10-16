@@ -1,4 +1,5 @@
 import type { ReplicationControl } from "@tinycloud/node-sdk";
+import { finishCliDiagnostics } from "./diagnostics.js";
 
 export type ReplicationCloseScheduler = (callback: () => void, delayMs: number) => NodeJS.Timeout;
 type RegistryState = {
@@ -24,7 +25,9 @@ const scheduleTimeout: ReplicationCloseScheduler = (callback, delayMs) => setTim
 
 function stopForSignal(signal: "SIGINT" | "SIGTERM"): void {
   void closeReplication().finally(() => {
-    process.exit(signal === "SIGINT" ? 130 : 143);
+    const code = signal === "SIGINT" ? 130 : 143;
+    finishCliDiagnostics(code, signal);
+    process.exit(code);
   });
 }
 

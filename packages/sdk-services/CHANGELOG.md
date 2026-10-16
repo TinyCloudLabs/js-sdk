@@ -1,5 +1,10 @@
 # @tinycloudlabs/sdk-services
 
+## Unreleased
+
+- Opt-in configured telemetry now observes each KV/SQL fetch dispatch with a local attempt UUID and fixed, projected start/finish fields. Authorization, serialization and fetch-getter failures before dispatch produce no transport attempt; response bodies are not read for diagnostics. Scoped Node KV services preserve configured telemetry, like scoped SQL. Disabled capture allocates no attempt IDs, and diagnostic callbacks cannot change business results or log exception contents.
+- The fixed `diagnostic.retry.scheduled` vocabulary is available for explicit retry producers; KV/SQL services do not introduce automatic retries or infer retry relationships between separate calls.
+
 ## 3.2.6-beta.2
 
 ### Patch Changes

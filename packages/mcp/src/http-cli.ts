@@ -1,81 +1,31 @@
-import { createServer } from "node:http";
-import { isAbsolute, resolve } from "node:path";
+import { join } from "node:path";
+import { pathToFileURL } from "node:url";
+import { DiagnosticDeletionError } from "@tinycloud/operations/diagnostics";
 
-import { toNodeHandler } from "@modelcontextprotocol/node";
+import { diagnosticsAdmin } from "./diagnostics-admin.js";
+import type { HostedServerEntrypoint } from "./http-server.js";
 
-import { createHostedMcpApp } from "./http.js";
-import { loadOAuthMetadata } from "./oauth.js";
-
-export async function main(): Promise<void> {
+export async function main(arguments_: readonly string[] = process.argv.slice(2)): Promise<void> {
   process.umask(0o077);
-  const publicUrl = requiredUrl("TC_MCP_PUBLIC_URL");
-  const stateDir = requiredAbsolutePath("TC_MCP_STATE_DIR");
-  const stateSecret = requiredString("TC_MCP_STATE_SECRET");
-  if (Buffer.byteLength(stateSecret) < 32) throw new Error("TC_MCP_STATE_SECRET must contain at least 32 bytes.");
-  const openkeyHost = process.env.TC_OPENKEY_HOST ?? "https://openkey.so";
-  const oauthMetadataUrl = new URL(
-    process.env.TC_MCP_OAUTH_METADATA_URL ??
-      "https://api.openkey.so/.well-known/oauth-authorization-server/api/auth",
-  );
-  const oauthMetadata = await loadOAuthMetadata(oauthMetadataUrl);
-  const app = createHostedMcpApp({
-    publicUrl,
-    stateDir,
-    stateSecret,
-    nodeHost: process.env.TC_HOST ?? "https://tee.node.tinycloud.xyz",
-    openkeyHost,
-    approvalTtlSeconds: positiveInteger(process.env.TC_MCP_APPROVAL_TTL_SECONDS, 300),
-    delegationExpiry: process.env.TC_MCP_DELEGATION_EXPIRY ?? "1h",
-    allowedOrigins: commaList(process.env.TC_MCP_ALLOWED_ORIGINS),
-    oauthMetadata,
-  });
-  const nodeHandler = toNodeHandler(app);
-  const server = createServer(nodeHandler);
-  const host = process.env.HOST ?? "0.0.0.0";
-  const port = positiveInteger(process.env.PORT, 3000);
-  server.listen(port, host, () => {
-    process.stderr.write(`[tinycloud-mcp-http] listening on ${host}:${port}\n`);
-  });
-  const shutdown = () => {
-    server.close(() => void app.close());
-  };
-  process.once("SIGINT", shutdown);
-  process.once("SIGTERM", shutdown);
-}
-
-function requiredString(name: string): string {
-  const value = process.env[name]?.trim();
-  if (!value) throw new Error(`${name} is required.`);
-  return value;
-}
-
-function requiredUrl(name: string): URL {
-  const url = new URL(requiredString(name));
-  if (url.protocol !== "https:" && url.hostname !== "localhost" && url.hostname !== "127.0.0.1") {
-    throw new Error(`${name} must use HTTPS outside localhost.`);
+  if (arguments_[0] === "diagnostics") {
+    const result = await diagnosticsAdmin(arguments_.slice(1));
+    process.stdout.write(`${JSON.stringify(result)}\n`);
+    return;
   }
-  return url;
+  if (arguments_.length !== 0) throw new Error("Invalid command line.");
+  // Runtime-selected ESM/CJS sibling: a static import would load business SDK/
+  // WASM before offline controls, even when bundled with splitting disabled.
+  const entry = typeof __dirname === "string"
+    ? pathToFileURL(join(__dirname, "http-server.cjs")).href
+    : new URL(import.meta.url.endsWith(".ts") ? "./http-server.ts" : "./http-server.js", import.meta.url).href;
+  const server: HostedServerEntrypoint = await import(entry);
+  await server.startHostedServer();
 }
 
-function requiredAbsolutePath(name: string): string {
-  const value = requiredString(name);
-  if (!isAbsolute(value)) throw new Error(`${name} must be an absolute path.`);
-  return resolve(value);
-}
 
-function positiveInteger(value: string | undefined, fallback: number): number {
-  if (value === undefined) return fallback;
-  const parsed = Number(value);
-  if (!Number.isInteger(parsed) || parsed <= 0) throw new Error("Expected a positive integer environment value.");
-  return parsed;
-}
-
-function commaList(value: string | undefined): string[] | undefined {
-  if (value === undefined) return undefined;
-  return value.split(",").map((entry) => entry.trim()).filter(Boolean);
-}
-
-void main().catch(() => {
-  process.stderr.write("[tinycloud-mcp-http] Startup failed.\n");
+void main().catch((error) => {
+  process.stderr.write(error instanceof DiagnosticDeletionError
+    ? `${JSON.stringify({ error: "diagnostic_deletion_incomplete", incomplete: true, message: "Diagnostic deletion incomplete; inspect capture status." })}\n`
+    : "[tinycloud-mcp-http] Startup failed.\n");
   process.exitCode = 1;
 });

@@ -1,5 +1,7 @@
 import { join } from "node:path";
 import { parseSignedCompactUcanAttenuation } from "@tinycloud/sdk-core";
+import { beginDiagnosticPhase, getDiagnosticContext, withDiagnosticContext } from "./diagnostics/context.js";
+import { diagnosticId } from "./diagnostics/model.js";
 
 // Keep the value import namespace-shaped so modules that import this one stay
 // compatible with lightweight node-sdk test doubles.
@@ -365,29 +367,53 @@ export async function replayStoredDelegationRecords(
   node: RuntimeDelegationActivator,
   options: { readonly host: string; readonly resolveSpace: OperationSpaceResolver },
 ): Promise<{ installed: ValidatedRuntimeDelegation[]; warnings: OperationWarning[] }> {
+  const current = getDiagnosticContext();
+  const operation_id = current === undefined ? undefined : diagnosticId();
+  return withDiagnosticContext(current === undefined ? undefined : {
+    ...current, operation_id, parent_id: current.operation_id ?? current.invocation_id,
+  }, async () => {
+  const finish = beginDiagnosticPhase("replay", { operation_id });
+  let examined = 0;
+  let skipped = 0;
   const installed: ValidatedRuntimeDelegation[] = [];
   const warnings: OperationWarning[] = [];
   const seen = new Set<string>();
+  try {
   // Cross-user imports are retained for wallet-mode use, not replayed into
   // this session. They are neither broken bindings nor actionable skips.
   for (const entry of await readAdditionalDelegations<unknown>(profile)) {
-    if (storedDelegationForAnotherKey(entry, node)) continue;
+    examined++;
+    if (storedDelegationForAnotherKey(entry, node)) {
+      skipped++;
+      continue;
+    }
     const replay = await replayStoredDelegation(node, entry, options);
     if (replay.status === "installed") {
       if (!seen.has(replay.delegation.cid)) {
         seen.add(replay.delegation.cid);
         installed.push(replay.delegation);
+      } else {
+        skipped++;
       }
     } else if (replay.status === "skipped") {
+      skipped++;
       const grantCid = verifiedStoredCid(node, entry);
       warnings.push({
         code: "STORED_GRANT_SKIPPED",
         reason: replay.reason,
         ...(grantCid === undefined ? {} : { grantCid }),
       });
+    } else {
+      skipped++;
     }
   }
+  finish({ outcome: "complete", replay_examined: examined, replay_installed: installed.length, replay_skipped: skipped });
   return { installed, warnings };
+  } catch (error) {
+    finish({ outcome: "failed", replay_examined: examined, replay_installed: installed.length, replay_skipped: skipped });
+    throw error;
+  }
+  });
 }
 
 /** Return an audience only after the exact compact bytes, CID and signature verify. */

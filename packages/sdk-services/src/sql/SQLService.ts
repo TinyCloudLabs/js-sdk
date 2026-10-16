@@ -5,6 +5,7 @@
  * Uses dependency injection via IServiceContext for platform dependencies.
  */
 
+import { dispatchDiagnosticFetch } from "../diagnostics";
 import { BaseService } from "../base/BaseService";
 import {
   Result,
@@ -500,7 +501,7 @@ export class SQLService extends BaseService implements ISQLService {
         ? this.context.invoke(session, "sql", dbName, actionList[0]!)
         : this.invokeSQLAny(session, dbName, actionList);
 
-    return this.context.fetch(`${this.host}/invoke`, {
+    return dispatchDiagnosticFetch(this.context, this.context.fetch, "sql", typeof body.action === "string" ? body.action : "unknown", `${this.host}/invoke`, {
       method: "POST",
       headers: {
         ...(headers as Record<string, string>),

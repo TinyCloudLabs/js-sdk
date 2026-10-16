@@ -9,6 +9,7 @@ import { CLIError } from "../output/errors.js";
 import { isSessionExpiredError } from "../auth/session-expired.js";
 import { writeJsonAtomic } from "@tinycloud/operations/state";
 import { withoutBearer } from "@tinycloud/operations/delegation-binding";
+import { diagnosticTelemetry, getDiagnosticContext } from "@tinycloud/operations/diagnostics";
 import {
   createNativeShare,
   parseNativeShareUrl,
@@ -795,7 +796,7 @@ export function createShareAuthorityAdapters(input: {
   };
   const nativeReader = async (link: string): Promise<{ readonly bytes: Uint8Array; readonly filename: string }> => {
     const { TinyCloudNode } = await import("@tinycloud/node-sdk");
-    const sharing = input.nativeSharing ?? ((host: string | undefined) => new TinyCloudNode({ ...(host === undefined ? {} : { host }), autoDiscoverLocalNode: false }).sharing);
+    const sharing = input.nativeSharing ?? ((host: string | undefined) => new TinyCloudNode({ ...(host === undefined ? {} : { host }), autoDiscoverLocalNode: false, telemetry: getDiagnosticContext() ? diagnosticTelemetry : undefined }).sharing);
     const token = parseNativeShareUrl(link);
     const decoded = sharing(undefined).decodeLink(token) as { readonly host?: unknown };
     if (typeof decoded.host !== "string") throw new Error("native share has no owner Node");

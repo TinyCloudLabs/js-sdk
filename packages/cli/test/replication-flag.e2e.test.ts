@@ -10,7 +10,7 @@ import { join, resolve } from "node:path";
 
 const NODE_BIN = process.env.TC_REPLICA_E2E_NODE_BIN;
 const DATABASE_URL = process.env.TC_REPLICA_E2E_DATABASE_URL || undefined;
-const CLI = process.env.TC_REPLICA_E2E_CLI ?? resolve(import.meta.dir, "../dist/index.js");
+const CLI = process.env.TC_REPLICA_E2E_CLI ?? resolve(import.meta.dir, "../dist/bootstrap.js");
 type ReplicationRunOptions = { profile: string; preload?: string; input?: string; replication?: "on" | "off" | "env"; extraEnv?: Record<string, string>; host?: string };
 const NO_NETWORK = resolve(import.meta.dir, "../test-support/no-network.cjs");
 const NODE20 = resolve(import.meta.dir, "../test-support/node20.cjs");

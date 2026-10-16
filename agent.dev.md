@@ -145,3 +145,39 @@ version metadata and make the immutable release checkout fail the clean-tree pub
 - Never add a response `deadlineMs` to personal-record writes: deadlines abandon
   work rather than cancel it. Preserve per-op outcomes after any committed write,
   including a partial move or failed derived-copy upkeep.
+- Private history lives at `@tinycloud/operations/diagnostics`, independently of
+  the lazy, framework-free operations root. Keep worker ESM/CJS assets published;
+  diagnostics status/control must not load profiles, SDK/WASM, Commander or MCP.
+  CLI diagnostics remain excluded in `packages/operations/coverage.json`, never
+  shared business operations or public MCP tools/routes.
+- Capture is default off. Scope only an explicitly selected tc-apps block;
+  whole-client launch supplies attribution, never scope. Metadata is closed and
+  content-free; selected detail requires independent owner selection and policy.
+  Main business processes perform no diagnostic filesystem I/O. Preserve unknown
+  outcomes, lost coverage, and separate business/protocol/delivery evidence.
+- MCP inbound dispatch and transport sends stay synchronous, including cancellation
+  during stdio policy refresh. Admission contexts are immutable across generation
+  changes; racing requests may lack evidence, never gain permission to replay.
+- Reject duplicate decoded JSON property names before importing raw bytes.
+  Evidence identity is `source_id/event_id`; conflict-only imported assertions
+  retain their original expiry. Do not renew retention or merge independent sources.
+- Preserve global CLI option parsing before profile-free diagnostic controls:
+  help/version and unknown options must never execute enable/delete actions.
+  Resolve credential/app-state aliases only in isolated storage/control paths;
+  the default app-state directory is protected even without `TC_APPS_STATE`.
+  Retire cancelled MCP correlation without reassigning late responses, and keep
+  verified callback evidence outside the service partition. Case expansion must
+  retain source/event associations, not a cross-product of unrelated imports.
+- After changing command inventory, run `bun run generate:operations-mcp` and
+  `bun run --cwd packages/cli generate:reference`; verify CLI coverage, generated
+  references/skills, boundaries and `bun run check:operations-mcp-pack` in isolated
+  synthetic homes. Never use `tests/cli/setup.ts` with owner state. Packed fixture
+  proof does not authorize publication, client installation or capture enablement.
+  Native fault acceptance requires unprivileged Linux with `/proc` and `mkfifo`.
+  Create private fixture ancestors explicitly; never weaken path validation to
+  accommodate a group-writable directory inherited from the process umask.
+- Release affected packages with minor/patch changesets and coordinated exact
+  internal dependency pins; do not invent a next published version. Actual
+  published-package/container worker checks, hosted isolated-volume encryption,
+  backup/deletion and restart/rollback acceptance are separate authorized gates.
+  Keep public logs/sysinfo disabled and preserve the single-replica assumption.

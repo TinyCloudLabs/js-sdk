@@ -15,6 +15,15 @@ import { operationWarnings, outputError, type ErrorOutputDetails } from "./forma
 import { authorizationVerdictOf, parseCapabilityResource, SERVICE_LONG_TO_SHORT, validatedCapabilityOf } from "@tinycloud/sdk-core";
 import { describeStorageRejection, storageRejection } from "./storage.js";
 import { drainWarnings, mergeWarnings } from "./warnings.js";
+import { emitDiagnostic, type DiagnosticFields } from "@tinycloud/operations/diagnostics";
+
+const DIAGNOSTIC_ERROR_CLASSES: Readonly<Record<string, DiagnosticFields["error_class"]>> = {
+  USAGE_ERROR: "input_invalid", INVALID_ARGUMENT: "input_invalid", SELF_COPY: "input_invalid", EMPTY_PLAN: "input_invalid",
+  AUTH_REQUIRED: "auth_required", AUTH_EXPIRED: "auth_required", PASTE_CODE_MISSING: "auth_required",
+  PERMISSION_DENIED: "permission_denied", DEVICE_AUTH_DENIED: "permission_denied", SCOPE_REJECTED: "permission_denied",
+  NOT_FOUND: "not_found", KV_NOT_FOUND: "not_found", NETWORK_ERROR: "network", OPENKEY_UNREACHABLE: "network",
+  STORAGE_FULL: "storage_full", KV_PRECONDITION_FAILED: "precondition", CANCELLED: "cancelled",
+};
 
 let activeProfileName: string | undefined;
 
@@ -159,6 +168,7 @@ export function storageFullError(error: unknown, progress?: string): CLIError | 
 
 export function handleError(error: unknown): Promise<never> {
   const cliError = wrapError(error);
+  emitDiagnostic({ type: "operation.step", outcome: cliError.code === "CANCELLED" ? "cancelled" : "failed", error_class: Object.hasOwn(DIAGNOSTIC_ERROR_CLASSES, cliError.code) ? DIAGNOSTIC_ERROR_CLASSES[cliError.code] : "unknown", exit_code: cliError.exitCode });
   // A pre-built hint on the error (e.g. the identity-aware SPACE_NOT_HOSTED
   // hint) takes precedence over the derived auth/network hints.
   const prebuilt = typeof cliError.metadata?.hint === "string"

@@ -7,6 +7,7 @@ import {
 } from "@modelcontextprotocol/server";
 import { pkhDid } from "@tinycloud/node-sdk";
 import { createRemoteJWKSet, errors, jwtVerify, type JWTPayload } from "jose";
+import { beginDiagnosticPhase } from "@tinycloud/operations/diagnostics";
 
 const OWNER_DIDS_CLAIM = "https://tinycloud.xyz/owner_dids";
 
@@ -21,13 +22,17 @@ export function createOpenKeyTokenVerifier(config: OpenKeyOAuthConfig): OAuthTok
   const jwks = createRemoteJWKSet(new URL(config.jwksUri));
   return {
     async verifyAccessToken(token: string): Promise<AuthInfo> {
+      const finish = beginDiagnosticPhase("validation", { service: "auth", action: "verify" });
       try {
         const { payload } = await jwtVerify(token, jwks, {
           issuer: config.issuer,
           audience: config.audience,
         });
-        return authInfo(token, payload, config);
+        const verified = authInfo(token, payload, config);
+        finish({ outcome: "pass" });
+        return verified;
       } catch (error) {
+        finish({ outcome: error instanceof errors.JOSEError || error instanceof OAuthError ? "refused" : "error" });
         if (error instanceof errors.JOSEError) {
           throw new OAuthError(OAuthErrorCode.InvalidToken, "The OpenKey access token is invalid.");
         }

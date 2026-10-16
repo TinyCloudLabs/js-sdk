@@ -1,6 +1,8 @@
 import { createHash } from "node:crypto";
 import { isAbsolute } from "node:path";
 
+import { beginDiagnosticPhase, emitDiagnostic, getDiagnosticContext, withDiagnosticContext } from "./diagnostics/context.js";
+import { diagnosticId, type DiagnosticFields, type DiagnosticPhase } from "./diagnostics/model.js";
 import { CLI_NAME } from "./cli-name.js";
 import {
   makePkhSpaceId,
@@ -27,6 +29,7 @@ import {
   operationError,
   sanitizeOperationError,
   sanitizeThrownOperationError,
+  type OperationError,
 } from "./errors.js";
 import {
   canonicalizeOperationCapabilities,
@@ -62,21 +65,26 @@ export async function invokeOperation(
   metrics?: OperationMetrics,
 ): Promise<OperationResult<unknown>> {
   if (metrics !== undefined) metrics.replayedGrants = 0;
+  const finishTarget = beginDiagnosticPhase("preparation");
   const target = normalizeInvocationTarget(invocationTarget);
   if (target === undefined) {
+    finishTarget({ outcome: "refused", protocol: "before_executor_refusal", mutation: "not_dispatched" });
     return errorResult(
       { operationId, operationVersion },
       unresolvedContextSummary(),
       operationError("INPUT_INVALID", "The invocation target is invalid."),
     );
   }
+  finishTarget({ outcome: "pass" });
   const run = withTinyCloudStateRoot(target.stateRoot, async () => {
-    const prepared = await prepareInvocation(
+    const prepared = await observeInvocationPhase("preparation", () => prepareInvocation(
       operationId,
       operationVersion,
       target,
       unknownInput,
-    );
+    ), (result) => isPreparedError(result)
+      ? { outcome: "refused", canonical_status: result.result.status, mutation: "not_dispatched" }
+      : { outcome: "complete" });
     if (isPreparedError(prepared)) return prepared.result;
     if (metrics !== undefined) {
       metrics.replayedGrants = prepared.runtimeResolution.context.runtime?.replayedGrants ?? 0;
@@ -98,6 +106,29 @@ export async function invokeOperation(
       { retryable: true },
     ),
   ));
+}
+
+/** Scope physical attempts to their logical phase without mutating the caller. */
+async function observeInvocationPhase<T>(
+  phase: DiagnosticPhase,
+  action: () => Promise<T>,
+  classify: (value: T) => DiagnosticFields,
+): Promise<T> {
+  const current = getDiagnosticContext();
+  const operation_id = current === undefined ? undefined : diagnosticId();
+  return withDiagnosticContext(current === undefined ? undefined : {
+    ...current, operation_id, parent_id: current.operation_id ?? current.invocation_id,
+  }, async () => {
+    const finish = beginDiagnosticPhase(phase, { operation_id });
+    try {
+      const value = await action();
+      finish(classify(value));
+      return value;
+    } catch (error) {
+      finish({ outcome: "failed", ...(phase === "executor" ? { mutation: "unknown" as const } : {}) });
+      throw error;
+    }
+  });
 }
 
 /**
@@ -345,6 +376,8 @@ async function prepareInvocation(
   // made, while preserving registry resolution before input or profile access.
   const { lookupOperation } = await import("./registry.js");
   const lookup = lookupOperation(operationId, operationVersion);
+  emitDiagnostic({ type: "operation.step", phase: "preparation", action: "context",
+    outcome: lookup.status === "found" ? "pass" : "refused" });
 
   // Registry resolution is deliberately complete before any input parsing or
   // profile access. An unrecognized operation must not cause an invocation to
@@ -373,6 +406,8 @@ async function prepareInvocation(
 
   const definition = lookup.definition;
   const parsedInput = definition.input.safeParse(unknownInput);
+  emitDiagnostic({ type: "operation.step", phase: "input_validation",
+    outcome: parsedInput.success ? "pass" : "refused" });
   if (!parsedInput.success) {
     return { status: "error", result: errorResult(
       operation,
@@ -390,7 +425,9 @@ async function prepareInvocation(
   // Only a registered operation with valid input may inspect the pinned
   // profile. Inspection is deliberately node-free, so owner opt-in and status
   // availability are decided before any authentication or external effect.
-  const inspectionResolution = await resolveRuntime(target, "inspection");
+  const inspectionResolution = await observeInvocationPhase("preparation",
+    () => resolveRuntime(target, "inspection"),
+    (result) => ({ outcome: result.ok ? "pass" : "refused" }));
   if (!inspectionResolution.ok) {
     return { status: "error", result: errorResult(
       operation,
@@ -403,6 +440,7 @@ async function prepareInvocation(
     target.privateKey === undefined &&
     !definition.postures.includes(inspectionResolution.context.summary.posture)
   ) {
+    emitDiagnostic({ type: "operation.step", phase: "preparation", action: "verify", role: "context", outcome: "refused" });
     return { status: "error", result: errorResult(
       operation,
       inspectionResolution.context.summary,
@@ -418,6 +456,7 @@ async function prepareInvocation(
     isOwnerPosture(inspectionResolution.context.summary.posture) &&
     target.allowOwnerProfile !== true
   ) {
+    emitDiagnostic({ type: "operation.step", phase: "preparation", action: "verify", role: "context", outcome: "refused" });
     return { status: "error", result: errorResult(
       operation,
       inspectionResolution.context.summary,
@@ -427,11 +466,14 @@ async function prepareInvocation(
       ),
     ) };
   }
+  emitDiagnostic({ type: "operation.step", phase: "preparation", action: "verify", role: "context", outcome: "pass" });
 
   const runtimeResolution =
     definition.runtime === "inspection"
       ? inspectionResolution
-      : await resolveRuntime(target, definition.runtime);
+      : await observeInvocationPhase("preparation",
+        () => resolveRuntime(target, definition.runtime),
+        (result) => ({ outcome: result.ok ? "complete" : "failed" }));
   if (!runtimeResolution.ok) {
     // Runtime-preparation errors share the execution errors' detail allowlist.
     return { status: "error", result: errorResult(
@@ -443,6 +485,7 @@ async function prepareInvocation(
   if (requiresRuntime(definition.runtime)) {
     const actualPosture = runtimeResolution.context.summary.posture;
     if (!definition.postures.includes(actualPosture)) {
+      emitDiagnostic({ type: "operation.step", phase: "preparation", action: "verify", role: "context", outcome: "refused" });
       return { status: "error", result: errorResult(
         operation,
         runtimeResolution.context.summary,
@@ -453,6 +496,7 @@ async function prepareInvocation(
       ) };
     }
     if (isOwnerPosture(actualPosture) && target.allowOwnerProfile !== true) {
+      emitDiagnostic({ type: "operation.step", phase: "preparation", action: "verify", role: "context", outcome: "refused" });
       return { status: "error", result: errorResult(
         operation,
         runtimeResolution.context.summary,
@@ -463,6 +507,7 @@ async function prepareInvocation(
       ) };
     }
   }
+  emitDiagnostic({ type: "operation.step", phase: "preparation", action: "verify", role: "context", outcome: "pass" });
   return {
     operation,
     definition,
@@ -488,12 +533,25 @@ async function executePreparedInvocation(
     );
 
   try {
-    const planned = await definition.authority(
-      (runtimeContext ?? runtimeResolution.context) as RuntimeOperationContext,
-      parsedInput.data,
-    );
-    const required = exactCapabilities(planned);
-    if (required === undefined) {
+    const plan = await observeInvocationPhase("authority_planning", async () => {
+      const planned = await definition.authority(
+        (runtimeContext ?? runtimeResolution.context) as RuntimeOperationContext,
+        parsedInput.data,
+      );
+      const required = exactCapabilities(planned);
+      if (required === undefined) return undefined;
+      const evaluation = evaluateOperationAuthority(
+        (runtimeContext?.runtime.granted ?? []) as unknown as PermissionEntry[],
+        required as unknown as PermissionEntry[],
+        resolveSpace,
+      );
+      return { required, evaluation };
+    }, (value) => value === undefined
+      ? { outcome: "refused", mutation: "not_dispatched" }
+      : { outcome: value.evaluation.satisfied ? "pass" : "refused",
+        requested: value.required.length, missing: value.evaluation.missing.length,
+        mutation: "not_dispatched" });
+    if (plan === undefined) {
       return errorResult(
         operation,
         runtimeResolution.context.summary,
@@ -504,11 +562,7 @@ async function executePreparedInvocation(
       );
     }
 
-    const evaluation = evaluateOperationAuthority(
-      (runtimeContext?.runtime.granted ?? []) as unknown as PermissionEntry[],
-      required as unknown as PermissionEntry[],
-      resolveSpace,
-    );
+    const { required, evaluation } = plan;
     if (!evaluation.satisfied) {
       if (runtimeContext === undefined) {
         return errorResult(
@@ -570,14 +624,21 @@ async function executePreparedInvocation(
       );
     }
 
-    const outcome = await definition.execute(
+    const outcome = await observeInvocationPhase("executor", () => definition.execute(
       runtimeResolution.context,
       parsedInput.data,
-    );
+    ), (result) => ({
+      outcome: "response",
+      canonical_status: result.status === "ok" || result.status === "error" ||
+        result.status === "authority_required" || result.status === "setup_required" ? result.status : "unknown",
+    }));
 
     switch (outcome.status) {
       case "ok": {
-        const parsedOutput = definition.output.safeParse(outcome.output);
+        const parsedOutput = await observeInvocationPhase("output_validation",
+          async () => definition.output.safeParse(outcome.output),
+          (parsed) => ({ outcome: parsed.success ? "pass" : "fail",
+            protocol: parsed.success ? "output_valid" : "output_invalid" }));
         if (!parsedOutput.success) {
           return errorResult(
             operation,
@@ -782,7 +843,7 @@ function unresolvedContextSummary(
 function errorResult(
   operation: OperationRef,
   context: OperationContextSummary,
-  error: ReturnType<typeof sanitizeOperationError>,
+  error: OperationError,
 ): OperationResult<never> {
   return { status: "error", operation, context, error };
 }
@@ -815,7 +876,7 @@ type PersistedAuthority =
     }>
   | Readonly<{
       status: "error";
-      error: ReturnType<typeof sanitizeOperationError>;
+      error: OperationError;
     }>;
 
 async function persistAuthorityRequest(
@@ -825,6 +886,7 @@ async function persistAuthorityRequest(
 ): Promise<PersistedAuthority> {
   const sessionDid = context.summary.sessionDid;
   if (sessionDid === undefined) {
+    emitDiagnostic({ type: "operation.step", phase: "approval_request", role: "approval", outcome: "refused" });
     return {
       status: "error",
       error: operationError(
@@ -858,6 +920,9 @@ async function persistAuthorityRequest(
         : canonicalGranted) as unknown as PermissionEntry[],
       resolveSpace,
     });
+    emitDiagnostic({ type: "operation.step", phase: "approval_request", role: "approval",
+      outcome: resolution.status === "created" ? (resolution.reused ? "reused" : "accepted") : "failed",
+      missing: canonicalMissing.length });
     if (resolution.status !== "created") {
       return {
         status: "error",
@@ -873,6 +938,7 @@ async function persistAuthorityRequest(
       missing: canonicalMissing as CapabilityRequirement[],
     };
   } catch {
+    emitDiagnostic({ type: "operation.step", phase: "approval_request", role: "approval", outcome: "failed" });
     return {
       status: "error",
       error: operationError(
