@@ -5596,6 +5596,7 @@ export class TinyCloudNode {
       invokeAny: this._serviceContext.invokeAny,
       fetch: this._serviceContext.fetch,
       hosts: this._serviceContext.hosts,
+      telemetry: this.config.telemetry,
     }));
     spaceScopedContext.setSession({ ...this._serviceContext.session, spaceId });
     kv.initialize(spaceScopedContext);

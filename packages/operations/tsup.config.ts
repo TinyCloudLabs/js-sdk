@@ -5,7 +5,22 @@ import { fileURLToPath } from 'node:url';
 const packageDirectory = dirname(fileURLToPath(import.meta.url));
 
 export default defineConfig({
-  entry: ['src/index.ts', 'src/state.ts', 'src/cli-runtime.ts', 'src/profile.ts'],
+  entry: {
+    index: 'src/index.ts',
+    state: 'src/state.ts',
+    artifacts: 'src/artifacts.ts',
+    'cli-runtime': 'src/cli-runtime.ts',
+    profile: 'src/profile.ts',
+    'secret-capabilities': 'src/secret-capabilities.ts',
+    'delegation-binding': 'src/delegation-binding.ts',
+    'secret-request': 'src/secret-request.ts',
+    recovery: 'src/recovery.ts',
+    'cli-name': 'src/cli-name.ts',
+    'tc-apps': 'src/tc-apps.ts',
+    diagnostics: 'src/diagnostics.ts',
+    'diagnostics-worker': 'src/diagnostics/worker.ts',
+    'diagnostics-reproduction': 'src/diagnostics-reproduction.ts',
+  },
   format: ['esm', 'cjs'],
   dts: true,
   clean: true,

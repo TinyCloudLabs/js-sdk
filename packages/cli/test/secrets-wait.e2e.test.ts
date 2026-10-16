@@ -14,7 +14,7 @@ import { join, resolve } from "node:path";
 // talk to it through separate listeners so each request is attributed.
 
 const NODE_BIN = process.env.TC_REPLICA_E2E_NODE_BIN;
-const CLI = resolve(import.meta.dir, "../dist/index.js");
+const CLI = resolve(import.meta.dir, "../dist/bootstrap.js");
 const ambient = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("TC_")));
 
 type Run = { code: number; stdout: string; stderr: string; startedAt: number; endedAt: number };

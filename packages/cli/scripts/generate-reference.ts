@@ -23,6 +23,7 @@ const generatedBlock = [
   `- ${counts.get("migrated") ?? 0} migrated registration(s).`,
   `- ${counts.get("partially-migrated") ?? 0} partially migrated registration(s).`,
   `- ${counts.get("legacy") ?? 0} legacy registration(s) remain Commander-owned.`,
+  `- ${counts.get("excluded") ?? 0} local-only or delegated registration(s), excluded from shared business operations.`,
   "",
   ...coverage.commands
     .filter((entry) => entry.status === "migrated" || entry.status === "partially-migrated")
@@ -31,6 +32,12 @@ const generatedBlock = [
       if (entry.status === "migrated") return `- \`${entry.command}\` → \`${operation}\` (migrated).`;
       return `- \`${entry.command}\` → \`${operation}\` (partial; legacy inputs: ${entry.remainingLegacyInputs!.join(", ")}).`;
     }),
+  "",
+  "Local-only and delegated commands (not shared business operations or MCP tools):",
+  "",
+  ...coverage.commands
+    .filter((entry) => entry.status === "excluded")
+    .map((entry) => `- \`${entry.command}\`: ${entry.reason}`),
   "<!-- END GENERATED TINYCloud operations coverage -->",
 ].join("\n");
 

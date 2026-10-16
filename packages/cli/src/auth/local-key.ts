@@ -2,6 +2,7 @@ import { TCWSessionManager, importKey, initPanicHook } from "@tinycloud/node-sdk
 import { PrivateKeySigner } from "@tinycloud/node-sdk";
 import { randomBytes } from "node:crypto";
 import { createCliReplicationConfig, type ProfileReplicationSettings } from "../lib/replication-config.js";
+import { diagnosticTelemetry, getDiagnosticContext } from "@tinycloud/operations/diagnostics";
 
 let wasmInitialized = false;
 
@@ -106,6 +107,7 @@ export async function localKeySignIn(options: {
   );
 
   const node = new TinyCloudNode({
+    telemetry: getDiagnosticContext() ? diagnosticTelemetry : undefined,
     privateKey: options.privateKey,
     host: options.host,
     autoCreateSpace: true,

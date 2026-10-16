@@ -1,3 +1,4 @@
+import { emitDiagnostic } from "../diagnostics.js";
 import { z } from "zod";
 import { TC_APPS_ROOT } from "../tc-apps.js";
 
@@ -101,14 +102,29 @@ export function newRecordFits(key: string, kind: JsonObject): boolean {
 export function recordWarnings(key: string, value: JsonObject, kind?: JsonObject): string[] {
   const warnings: string[] = [];
   if (isObject(value.data)) for (const field of Object.keys(value.data)) {
-    if (!/^[a-z0-9_]+$/.test(field)) warnings.push(`Field ${field} does not use lowercase letters, digits and underscores.`);
-    if (field !== "due" && field !== "done" && isObject(kind?.fields) && !Object.prototype.hasOwnProperty.call(kind.fields, field)) warnings.push(`Field ${field} is not in the kind's fields.`);
-    if ((field === "due" || field === "done") && (typeof value.data[field] !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value.data[field] as string))) warnings.push(`${field} should be YYYY-MM-DD.`);
+    if (!/^[a-z0-9_]+$/.test(field)) {
+      warnings.push(`Field ${field} does not use lowercase letters, digits and underscores.`);
+      emitDiagnostic({ type: "operation.step", role: "record", warning: "field_name_invalid" });
+    }
+    if (field !== "due" && field !== "done" && isObject(kind?.fields) && !Object.prototype.hasOwnProperty.call(kind.fields, field)) {
+      warnings.push(`Field ${field} is not in the kind's fields.`);
+      emitDiagnostic({ type: "operation.step", role: "record", warning: "field_not_in_catalog" });
+    }
+    if ((field === "due" || field === "done") && (typeof value.data[field] !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value.data[field] as string))) {
+      warnings.push(`${field} should be YYYY-MM-DD.`);
+      emitDiagnostic({ type: "operation.step", role: "record", warning: "date_format_invalid" });
+    }
   }
   if (typeof value.at === "string") {
-    if (!/^\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:\d{2}))?$/.test(value.at) || Number.isNaN(Date.parse(value.at))) warnings.push("at should be a date or a local date and time with UTC offset.");
+    if (!/^\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:\d{2}))?$/.test(value.at) || Number.isNaN(Date.parse(value.at))) {
+      warnings.push("at should be a date or a local date and time with UTC offset.");
+      emitDiagnostic({ type: "operation.step", role: "record", warning: "timestamp_invalid" });
+    }
     const id = recordParts(key).id;
-    if (/^\d{4}-\d{2}-\d{2}/.test(id) && value.at.slice(0, 10) !== id.slice(0, 10)) warnings.push("at falls on a different date than the record id.");
+    if (/^\d{4}-\d{2}-\d{2}/.test(id) && value.at.slice(0, 10) !== id.slice(0, 10)) {
+      warnings.push("at falls on a different date than the record id.");
+      emitDiagnostic({ type: "operation.step", role: "record", warning: "record_date_mismatch" });
+    }
   }
   return warnings;
 }

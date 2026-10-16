@@ -5,6 +5,8 @@ import { createServer } from "node:http";
 import { promisify } from "node:util";
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
+import { verifyInstalledDiagnostics, verifyInstalledDiagnosticReproduction } from "../tests/packed-runtime/diagnostics.js";
+import { verifyInstalledDiagnosticFailures } from "../tests/packed-runtime/diagnostics-failures.js";
 
 const exec = promisify(execFile);
 const root = resolve(process.cwd());
@@ -17,16 +19,39 @@ const packages = [
   { directory: "packages/sdk-services", name: "@tinycloud/sdk-services", required: ["package/dist/index.js", "package/dist/index.cjs"] },
   { directory: "packages/share-envelope", name: "@tinycloud/share-envelope", required: ["package/dist/index.js", "package/dist/index.cjs"] },
   { directory: "packages/share-sdk", name: "@tinycloud/share-sdk", required: ["package/dist/index.js", "package/dist/index.cjs"] },
-  { directory: "packages/operations", name: "@tinycloud/operations", required: ["package/dist/index.js", "package/dist/index.cjs", "package/dist/secret-capabilities.js", "package/dist/secret-request.js", "package/dist/recovery.js", "package/generated/operations.json", "package/coverage.json"] },
-  { directory: "packages/cli", name: "@tinycloud/cli", required: ["package/dist/index.js", "package/bin/tc"] },
-  { directory: "packages/mcp", name: "@tinycloud/mcp", required: ["package/dist/index.js", "package/dist/index.cjs", "package/dist/http.js", "package/dist/http-cli.js", "package/bin/tinycloud-mcp-http", "package/generated/mcp-facts.json", "package/skills/tinycloud-delegated-secrets/SKILL.md"] },
+  { directory: "packages/operations", name: "@tinycloud/operations", required: ["package/dist/index.js", "package/dist/index.cjs", "package/dist/secret-capabilities.js", "package/dist/secret-request.js", "package/dist/recovery.js", "package/dist/diagnostics.js", "package/dist/diagnostics.cjs", "package/dist/diagnostics-worker.js", "package/dist/diagnostics-worker.cjs", "package/dist/diagnostics-reproduction.js", "package/dist/diagnostics-reproduction.cjs", "package/generated/operations.json", "package/coverage.json"] },
+  { directory: "packages/cli", name: "@tinycloud/cli", required: ["package/dist/bootstrap.js", "package/dist/diagnostics-entry.js", "package/dist/index.js", "package/bin/tc", "package/bin/tinycloud"] },
+  { directory: "packages/mcp", name: "@tinycloud/mcp", required: ["package/dist/index.js", "package/dist/index.cjs", "package/dist/http.js", "package/dist/http-cli.js", "package/dist/http-cli.cjs", "package/dist/http-server.js", "package/dist/http-server.cjs", "package/bin/tinycloud-mcp-http", "package/generated/mcp-facts.json", "package/skills/tinycloud-delegated-secrets/SKILL.md"] },
   { directory: "packages/replica", name: "@tinycloud/replica", required: ["package/dist/index.js", "package/dist/index.cjs", "package/dist/sqlite.js", "package/dist/sqlite.cjs"] },
 ] as const;
 
-type PublishedPackage = { manifest: Record<string, any>; bytes: Buffer; filename: string };
+interface PublishedManifest {
+  [key: string]: unknown;
+  name: string;
+  version: string;
+  dependencies?: Record<string, string>;
+  optionalDependencies?: Record<string, string>;
+  peerDependencies?: Record<string, string>;
+}
+type PublishedPackage = { manifest: PublishedManifest; bytes: Buffer; filename: string };
+
+function assertPublishedManifest(value: unknown): asserts value is PublishedManifest {
+  if (value === null || typeof value !== "object" || Array.isArray(value)
+    || !("name" in value) || typeof value.name !== "string"
+    || !("version" in value) || typeof value.version !== "string") {
+    throw new Error("Invalid packed package manifest");
+  }
+  for (const [key, dependencies] of Object.entries(value)) {
+    if (key !== "dependencies" && key !== "optionalDependencies" && key !== "peerDependencies") continue;
+    if (dependencies === null || typeof dependencies !== "object" || Array.isArray(dependencies)
+      || Object.values(dependencies).some((version) => typeof version !== "string")) {
+      throw new Error("Invalid packed dependency manifest");
+    }
+  }
+}
 
 async function startNpmRegistry(packagesToPublish: PublishedPackage[]): Promise<{ origin: string; close: () => Promise<void> }> {
-  const byName = new Map(packagesToPublish.map((package_) => [package_.manifest.name as string, package_]));
+  const byName = new Map(packagesToPublish.map((package_) => [package_.manifest.name, package_]));
   const server = createServer((request, response) => {
     try {
       const pathname = decodeURIComponent(new URL(request.url ?? "/", "http://127.0.0.1").pathname);
@@ -69,11 +94,12 @@ const working = await mkdtemp(join(tmpdir(), "tinycloud-i5-pack-"));
 const packDirectory = join(working, "packs");
 const fixture = join(working, "node20-fixture");
 const extracted = new Map<string, string>();
-await Bun.$`mkdir -p ${packDirectory} ${fixture}`;
+// Diagnostic fixtures reject group-writable ancestors even inside a private temp root.
+await Promise.all([packDirectory, fixture].map((path) => mkdir(path, { recursive: true, mode: 0o700 })));
 
 try {
   const tarballs = new Map<string, string>();
-  const manifests = new Map<string, Record<string, any>>();
+  const manifests = new Map<string, PublishedManifest>();
   for (const package_ of packages) {
     const { stdout } = await exec("npm", ["pack", "--json", "--pack-destination", packDirectory], {
       cwd: join(root, package_.directory),
@@ -82,7 +108,8 @@ try {
     if (packed.length !== 1) throw new Error(`expected one tarball for ${package_.name}`);
     const tarball = join(packDirectory, packed[0]!.filename);
     tarballs.set(package_.name, tarball);
-    const manifest = JSON.parse((await exec("tar", ["-xOf", tarball, "package/package.json"])).stdout) as Record<string, any>;
+    const manifest: unknown = JSON.parse((await exec("tar", ["-xOf", tarball, "package/package.json"])).stdout);
+    assertPublishedManifest(manifest);
     manifests.set(package_.name, manifest);
     const listing = (await exec("tar", ["-tzf", tarball])).stdout.split("\n").filter(Boolean);
     for (const required of package_.required) {
@@ -127,9 +154,11 @@ try {
         if (!resolved.startsWith(packageRoot)) throw new Error(`${package_.name} has an escaping relative import in ${file}`);
       }
       const executableSource = source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*$/gm, "");
-      for (const match of executableSource.matchAll(/@tinycloud\/[a-z0-9-]+/g)) {
-        if (match[0] === package_.name) continue;
-        if (!declaredWorkspacePackages.has(match[0]!)) throw new Error(`${package_.name} uses undeclared ${match[0]}`);
+      // Package names also occur as safe provenance data; only module
+      // specifiers create a dependency, not an allowlisted descriptor label.
+      for (const match of executableSource.matchAll(/(?:from\s*|import\s*\(|require(?:\.resolve)?\s*\()\s*(['"])(@tinycloud\/[a-z0-9-]+)(?:\/[^'"]*)?\1/g)) {
+        if (match[2] === package_.name) continue;
+        if (!declaredWorkspacePackages.has(match[2]!)) throw new Error(`${package_.name} uses undeclared ${match[2]}`);
       }
     }
   }
@@ -159,8 +188,11 @@ try {
     throw new Error(`packed fixture requires Node >=20, received ${nodeVersion}`);
   }
   await exec(nodeBinary, ["--input-type=module", "-e", "await import('@tinycloud/operations'); await import('@tinycloud/mcp');"], { cwd: fixture });
-  await exec(nodeBinary, [join(fixture, "node_modules/@tinycloud/cli/dist/index.js"), "--version"], { cwd: fixture });
-  console.log(`Packed Node 20 fixture verified for operations ${operationsVersion}, CLI, and MCP.`);
+  await exec(nodeBinary, [join(fixture, "node_modules/@tinycloud/cli/bin/tc"), "--version"], { cwd: fixture });
+  await verifyInstalledDiagnostics(fixture, nodeBinary);
+  await verifyInstalledDiagnosticReproduction(fixture, nodeBinary);
+  await verifyInstalledDiagnosticFailures(fixture, nodeBinary);
+  console.log(`Packed ${nodeVersion} fixture verified for operations ${operationsVersion}, CLI, and MCP.`);
 } finally {
   await rm(working, { recursive: true, force: true });
 }

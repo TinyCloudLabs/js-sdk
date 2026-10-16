@@ -1,3 +1,5 @@
+import { emitDiagnostic } from "@tinycloud/operations/diagnostics";
+
 /** MCP preserves the canonical envelope; hosted clients also receive readable JSON. */
 export interface CanonicalOperationResult {
   readonly status: "ok" | "authority_required" | "setup_required" | "error";
@@ -35,10 +37,14 @@ export function toMcpToolResult(
       context: {},
       error: { code: "INTERNAL_ERROR" },
     };
+  // Canonical status is observed before adapter size conversion; it does not
+  // establish business completeness, mutation commitment or delivery.
+  emitDiagnostic({ type: "phase.finish", phase: "result_projection", canonical_status: canonical.status, business: "unknown" });
   let serialized: string | undefined;
   if (options.surface === "hosted") {
     serialized = JSON.stringify(canonical);
     if (options.readOnly === true && serialized.length > 100_000) {
+      emitDiagnostic({ type: "phase.finish", phase: "result_projection", outcome: "converted", warning: "size_limit" });
       const sql = options.operationId?.startsWith("tinycloud.sql.") ||
         options.operationId === "tinycloud.apps.query";
       canonical = {

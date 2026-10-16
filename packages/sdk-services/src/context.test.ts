@@ -7,6 +7,9 @@ import {
   getTinyCloudDebugLogs,
 } from "./debug";
 import { ServiceContext } from "./context";
+import { KVService } from "./kv/KVService";
+import { SQLService } from "./sql/SQLService";
+import { projectAttemptDiagnostic } from "./diagnostics";
 
 function createContext(telemetry?: ConstructorParameters<typeof ServiceContext>[0]["telemetry"]) {
   return new ServiceContext({
@@ -243,5 +246,112 @@ describe("ServiceContext retirement", () => {
     expect(() => context.invoke({} as any, "kv", "after", "tinycloud.kv/get")).toThrow(
       "Service graph has been retired",
     );
+  });
+});
+
+describe("physical diagnostic attempts", () => {
+  function fixture(options: { enabled?: boolean; preflight?: "auth" | "fetch"; reject?: boolean; sinkThrows?: boolean } = {}) {
+    const events: Array<[string, Record<string, unknown>]> = [];
+    let dispatched = 0;
+    const context = new ServiceContext({
+      hosts: ["http://127.0.0.1:1"],
+      invoke: () => {
+        if (options.preflight === "auth") throw new Error("authorization-canary");
+        return {};
+      },
+      invokeAny: () => ({}),
+      fetch: async () => {
+        dispatched++;
+        if (options.reject) throw new Error("transport-canary");
+        return new Response('{"rows":[],"columns":[]}', { headers: { "content-type": "application/json" } });
+      },
+      session: { delegationHeader: {}, delegationCid: "synthetic", spaceId: "synthetic", verificationMethod: "synthetic", jwk: {} },
+      telemetry: {
+        enabled: options.enabled ?? true,
+        onEvent: (name, data) => {
+          // ServiceContext has already projected this local diagnostic callback.
+          if (name.startsWith("diagnostic.")) events.push([name, data as Record<string, unknown>]);
+          if (options.sinkThrows) throw new Error("sink-secret-canary");
+        },
+      },
+    });
+    if (options.preflight === "fetch") {
+      Object.defineProperty(context, "fetch", { get() { throw new Error("retired-canary"); } });
+    }
+    const kv = new KVService({});
+    const sql = new SQLService({});
+    kv.initialize(context);
+    sql.initialize(context);
+    return { kv, sql, context, events, dispatched: () => dispatched };
+  }
+
+  test("preflight failures are not dispatched mutation attempts", async () => {
+    for (const preflight of ["auth", "fetch"] as const) {
+      const f = fixture({ preflight });
+      expect((await f.kv.put("key-canary", "value-canary")).ok).toBe(false);
+      expect((await f.sql.query("SELECT 'sql-preflight-canary'")).ok).toBe(false);
+      expect((await f.sql.execute("INSERT INTO synthetic VALUES (1)")).ok).toBe(false);
+      expect(f.dispatched()).toBe(0);
+      expect(f.events).toEqual([]);
+    }
+  });
+
+  test("each dispatch has one matching finish, separate identities, and no payload", async () => {
+    const f = fixture({ reject: true });
+    await f.kv.put("key-canary", "value-canary");
+    await f.kv.put("key-canary", "value-canary");
+    expect(f.dispatched()).toBe(2);
+    expect(f.events.map(([name]) => name)).toEqual([
+      "diagnostic.attempt.start", "diagnostic.attempt.finish",
+      "diagnostic.attempt.start", "diagnostic.attempt.finish",
+    ]);
+    expect(f.events[0]![1].attempt_id).toBe(f.events[1]![1].attempt_id);
+    expect(f.events[2]![1].attempt_id).toBe(f.events[3]![1].attempt_id);
+    expect(f.events[0]![1].attempt_id).not.toBe(f.events[2]![1].attempt_id);
+    expect(f.events[1]![1]).toMatchObject({ service: "kv", action: "put", outcome: "error" });
+    expect(JSON.stringify(f.events)).not.toContain("canary");
+  });
+
+  test("SQL responses and spans do not double count or consume the body", async () => {
+    const f = fixture();
+    const result = await f.sql.query("SELECT 'sql-canary'");
+    expect(result.ok).toBe(true);
+    expect(f.dispatched()).toBe(1);
+    expect(f.events).toHaveLength(2);
+    expect(f.events[1]![1]).toMatchObject({ service: "sql", action: "query", outcome: "response", status: 200 });
+    expect(JSON.stringify(f.events)).not.toContain("sql-canary");
+  });
+
+  test("list and batch branches observe transport rather than logical response events", async () => {
+    const f = fixture({ reject: true });
+    await f.kv.list();
+    await f.kv.batchPut([{ key: "private-key", value: "private-value" }]);
+    await f.kv.batchGet(["private-key", "another-private-key"]);
+    expect(f.dispatched()).toBe(3);
+    expect(f.events.map(([name, data]) => [name, data.action])).toEqual([
+      ["diagnostic.attempt.start", "list"], ["diagnostic.attempt.finish", "list"],
+      ["diagnostic.attempt.start", "batchPut"], ["diagnostic.attempt.finish", "batchPut"],
+      ["diagnostic.attempt.start", "batchGet"], ["diagnostic.attempt.finish", "batchGet"],
+    ]);
+  });
+
+  test("disabled and throwing sinks preserve successful business behavior", async () => {
+    const disabled = fixture({ enabled: false });
+    expect((await disabled.kv.put("key", "value")).ok).toBe(true);
+    expect(disabled.events).toEqual([]);
+    const throwing = fixture({ sinkThrows: true });
+    expect((await throwing.kv.put("key", "value")).ok).toBe(true);
+    expect(throwing.events).toHaveLength(2);
+  });
+
+  test("retry projection preserves only explicit attempt linkage and rejects raw extras/getters", () => {
+    const payload = { attempt_id: crypto.randomUUID(), service: "kv", action: "put", ordinal: 2, delay_ms: 50 };
+    expect(projectAttemptDiagnostic("diagnostic.retry.scheduled", payload)).toEqual(payload);
+    expect(projectAttemptDiagnostic("diagnostic.retry.scheduled", { ...payload, key: "secret" })).toBeUndefined();
+    let read = false;
+    expect(projectAttemptDiagnostic("diagnostic.retry.scheduled", {
+      ...payload, get delay_ms() { read = true; return 50; },
+    })).toBeUndefined();
+    expect(read).toBe(false);
   });
 });

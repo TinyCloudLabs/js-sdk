@@ -2,6 +2,7 @@ import { join } from "node:path";
 import { profilePath, readJson, writeJsonAtomic, readAdditionalDelegations, withProfileLock } from "../state.js";
 import { isTcAppsPermission, TC_APPS_COPY_ACTIONS } from "../tc-apps.js";
 import { isObject } from "./records.js";
+import { emitDiagnostic } from "../diagnostics.js";
 
 export function validTimezone(timezone: string): boolean {
   try { new Intl.DateTimeFormat("en", { timeZone: timezone }).format(); return true; }
@@ -11,14 +12,22 @@ export function validTimezone(timezone: string): boolean {
 export async function appsTimezone(profile: string, timezone?: string): Promise<string | null> {
   const path = join(profilePath(profile), "tc-apps.json");
   if (timezone !== undefined) {
-    await withProfileLock(profile, async () => {
-      const current = await readJson<Record<string, unknown>>(path);
-      await writeJsonAtomic(path, { ...current, timezone });
-    });
+    try {
+      await withProfileLock(profile, async () => {
+        const current = await readJson<Record<string, unknown>>(path);
+        await writeJsonAtomic(path, { ...current, timezone });
+      });
+      emitDiagnostic({ type: "operation.step", phase: "local_commit", role: "context", service: "local", timezone_configured: true, outcome: "complete", mutation: "confirmed" });
+    } catch (error) {
+      emitDiagnostic({ type: "operation.step", phase: "local_commit", role: "context", service: "local", outcome: "failed", mutation: "unknown" });
+      throw error;
+    }
     return timezone;
   }
   const stored = await readJson<{ timezone?: unknown }>(path);
-  return typeof stored?.timezone === "string" && validTimezone(stored.timezone) ? stored.timezone : null;
+  const configured = typeof stored?.timezone === "string" && validTimezone(stored.timezone);
+  emitDiagnostic({ type: "operation.step", role: "context", action: "context", timezone_configured: configured });
+  return configured ? stored!.timezone as string : null;
 }
 
 function localParts(date: Date, timezone: string): Record<string, string> {
@@ -59,8 +68,12 @@ export async function appsCopyState(profile: string, space: string): Promise<"pr
     if (!copy || typeof entry.delegation.expiry !== "string") continue;
     const expiry = Date.parse(entry.delegation.expiry);
     if (!Number.isFinite(expiry)) continue;
-    if (expiry > Date.now()) return "present";
+    if (expiry > Date.now()) {
+      emitDiagnostic({ type: "operation.step", role: "copy", action: "context", outcome: "accepted" });
+      return "present";
+    }
     expired = true;
   }
+  emitDiagnostic({ type: "operation.step", role: "copy", action: "context", outcome: expired ? "expired" : "skipped" });
   return expired ? "expired" : "none";
 }

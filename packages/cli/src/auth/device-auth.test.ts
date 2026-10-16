@@ -6,6 +6,16 @@ import { join } from "node:path";
 import { NodeWasmBindings, PrivateKeySigner, type PermissionEntry } from "@tinycloud/node-sdk";
 import { withRecapCaveat } from "./test-support/recap-caveat.js";
 import type { DeviceAuthorizationInput } from "./device-auth.js";
+import { diagnosticId, makeDiagnosticContext, withDiagnosticContext, type DiagnosticBinding, type DiagnosticObservation } from "@tinycloud/operations/diagnostics";
+
+function diagnosticCapture() {
+  const events: DiagnosticObservation[] = [];
+  const context = makeDiagnosticContext({
+    source_id: diagnosticId(), partition_id: diagnosticId(), generation: 1,
+    runtime: { emit(event: DiagnosticObservation) { events.push(event); return true; } } as DiagnosticBinding["runtime"],
+  }, "cli");
+  return { events, context };
+}
 
 // TC_HOME is read when the profile store loads, so import it afterwards.
 const originalTcHome = process.env.TC_HOME;
@@ -364,9 +374,17 @@ describe("OpenKey device authorization", () => {
   });
 
   test("stops on denial or expiry instead of retrying", async () => {
-    await expect(acquire(fakeOpenKey(() => response({ error: "access_denied" }, 400)))).rejects.toMatchObject({ code: "DEVICE_AUTH_DENIED" });
-    await expect(acquire(fakeOpenKey(() => response({ error: "expired_token" }, 410)), { openkeyHost: "https://openkey.localhost" }))
-      .rejects.toMatchObject({ code: "DEVICE_AUTH_EXPIRED" });
+    for (const [remote, code, outcome, status] of [
+      ["access_denied", "DEVICE_AUTH_DENIED", "denied", 400],
+      ["expired_token", "DEVICE_AUTH_EXPIRED", "expired", 410],
+    ] as const) {
+      const openkey = fakeOpenKey(() => response({ error: remote }, status));
+      const { events, context } = diagnosticCapture();
+      await expect(withDiagnosticContext(context, () => acquire(openkey))).rejects.toMatchObject({ code });
+      expect(openkey.polls).toBe(1);
+      expect(events).toContainEqual(expect.objectContaining({ type: "phase.finish", phase: "approval_wait", outcome }));
+      expect(events.some((event) => event.phase === "approval_commit")).toBe(false);
+    }
   });
 
   test("refuses multi-space requests and lifetimes above 30 days before contacting OpenKey", async () => {
@@ -602,7 +620,11 @@ describe("device login persistence", () => {
       await ProfileManager.setProfile("agent", ownerB);
       return approved(start, id, { signed: requested });
     });
-    await expect(login(openkey)).rejects.toMatchObject({ code: "PROFILE_CHANGED_DURING_LOGIN" });
+    const { events, context } = diagnosticCapture();
+    await expect(withDiagnosticContext(context, () => login(openkey))).rejects.toMatchObject({ code: "PROFILE_CHANGED_DURING_LOGIN" });
+    expect(events).toContainEqual(expect.objectContaining({ type: "phase.finish", phase: "approval_verify", outcome: "complete" }));
+    expect(events).toContainEqual(expect.objectContaining({ type: "phase.finish", phase: "approval_commit", outcome: "error" }));
+    expect(events.some((event) => event.mutation === "confirmed")).toBe(false);
     expect(await ProfileManager.getProfile("agent")).toEqual(ownerB);
     expect(await ProfileManager.getSession("agent")).toEqual(sessionB);
   });
@@ -684,7 +706,10 @@ describe("device login persistence", () => {
     await ProfileManager.setKey("agent", key);
     await writeFile(join(PROFILES_DIR, "agent", "profile.json"), "{ not json");
     const openkey = fakeOpenKey((start, id) => approved(start, id, { signed: requested }));
-    await expect(login(openkey)).rejects.toBeInstanceOf(SyntaxError);
+    const { events, context } = diagnosticCapture();
+    await expect(withDiagnosticContext(context, () => login(openkey))).rejects.toBeInstanceOf(SyntaxError);
+    expect(events).toContainEqual(expect.objectContaining({ type: "phase.finish", phase: "preparation", outcome: "error" }));
+    expect(events.some((event) => event.phase === "approval_request")).toBe(false);
     expect(openkey.urls).toEqual([]);
   });
 

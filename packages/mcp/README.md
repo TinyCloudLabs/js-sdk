@@ -118,6 +118,233 @@ Configure a local stdio server in your MCP client:
 The selected profile is fixed for the life of the process. Restart the server
 to select another profile.
 
+## Private diagnostic history (default off)
+
+The private diagnostic spool is separate from the existing four-field stderr
+log. No diagnostic tool, HTTP route, response header or result receipt is added.
+Record grants and OAuth access tokens do not grant diagnostic access.
+
+### Hosted configuration and protected controls
+
+`TC_MCP_DIAGNOSTICS_ROOT` is an explicit absolute private diagnostic root; it has
+no fallback to `TC_MCP_STATE_DIR`, `TC_HOME`, or the local diagnostic root. It
+must be disjoint from the credential-state tree. Missing, invalid, overlapping
+or inaccessible capture configuration must not change business requests. Merely
+setting the root does **not** enable capture. Requests only discover existing
+mappings from the service's verified HMAC tenant directory identifier to a
+separate random diagnostic partition. Protected provisioning must first call
+`resolveDiagnosticTenant(root, verifiedTenantId, { create: true })` from
+`@tinycloud/operations/diagnostics`, using an identity established through the
+existing verified-account boundary. This is an operator integration API, not a
+public provisioning route or a CLI that accepts arbitrary identities. If that
+mapping is unavailable, stop; never guess an identity or scan all tenants.
+No subject or credential is stored in events, and request metadata cannot select
+the partition. Provisioning a mapping leaves capture disabled.
+
+An operator acting on an owner's request can use the offline command:
+
+```text
+tinycloud-mcp-http diagnostics <action> --root <absolute-root> --tenant <existing-64-hex-tenant-id> --owner-request
+```
+
+Actions are `status`, `enable`, `pause`, `resume`, `disable`, `history`, `export`
+and `delete`. This command runs before loading the business server, discovering
+OAuth metadata or opening a listener. Its authority is the protected OS account
+and private filesystem access; `--owner-request` is the operator's explicit
+acknowledgment, not a new authentication mechanism or an audit receipt. Tenant selection resolves an
+**existing** verified mapping; the command never accepts an OAuth subject or
+creates an arbitrary tenant mapping. `enable` arms metadata only; `pause` retains
+history, `resume` restores capture, and `disable` disarms capture without deletion.
+
+- `history` requires `--selection <json-file>`. Explicit selections use generated
+  `event_ids`, `invocation_ids`, `source_ids`, or bounded `from`/`until` UTC times.
+  An explicit `{"all":true}` can select current partition history for local review.
+- `export` additionally requires `--out <directory> --expires <UTC-time>`.
+  Export selection must be explicit and nonempty. Managed exports remain within
+  the protected export subtree and source retention/deletion controls. An output
+  outside the entire root requires `--external`; its expiry and later deletion
+  cannot be enforced by the source. Exports are private, selected metadata, not
+  automatic uploads.
+- `delete` requires a selection and exactly one of `--pause-after` or
+  `--keep-enabled`. It does not delete records, profiles, grants or approvals.
+
+Pre-verification host/origin/auth failures have **no tenant authority**. They
+are captured only when both `TC_MCP_DIAGNOSTICS_SERVICE=1` and the separately
+controlled service partition are enabled. An operator addresses it with
+`--service` instead of `--tenant ... --owner-request`; only service `enable`
+may create this reserved mapping. Enabling a tenant never enables service capture.
+
+One runtime/worker is shared by the application's per-request servers. Protocol
+observations use public SDK transport and Standard Schema composition. HTTP
+status, canonical operation status, size conversion, protocol send completion,
+and real Node response finish/close/error remain independent facts. A finished
+send is not client receipt, and a finished response is not evidence that a user
+read it. Arbitrary request IDs, method/tool names, metadata, URLs, token claims,
+keys, values, SQL, error prose and response content are not persisted. The only
+supported client hint is `_meta["xyz.tinycloud/diagnostic-role"]` with
+`catalog|record|verification|copy|approval|context|unknown`; it is marked
+client-reported, never authority. Missing task/run/client linkage stays unknown.
+
+### Local stdio and readiness limits
+
+Local stdio attaches capture only with a validated
+`TC_DIAGNOSTICS_CONTEXT` containing `{"version":1,"scope":"tc-apps"}` **and**
+separate local capture enablement. A run/task identifier alone does not establish
+scope. Use this only for an explicitly scoped, dedicated tc-apps process, not a
+general long-lived shared MCP server. Stdout remains strictly MCP; local context
+does not invent a hosted tenant or client identity.
+
+Connection startup performs bounded policy discovery. Thereafter requests use
+an immutable cached admission context while one background refresh discovers
+live enable/resume/delete changes. Inbound messages and cancellation are never
+queued behind discovery; queued or in-flight observations are never rebound to
+a new generation. Requests racing a transition may lack history; later requests
+use the refreshed policy. Do not retry a mutation merely to obtain history.
+
+Coverage includes approval wait/verification/commit, grant replay, record/read/copy
+phases and KV/SQL physical attempts as well as protocol and delivery boundaries.
+An owner approval wait is not machine execution time; an unfinished mutation
+remains unknown even if a later attempt succeeds. Metadata cannot establish
+intended dates, units, record values or the client's final answer.
+
+Hosted capture must remain disabled until the following separately authorized
+deployment gates are complete. Source and loopback fixtures are not proof of a
+released package or running container:
+
+1. Release through the existing changeset process, then build the image from the
+   actual published package. Record package versions, image digest and generated
+   rules revision; verify installed ESM/CJS worker resolution and cold append,
+   bounded drain, loss reporting and unchanged business exit/response behavior.
+2. Provision a dedicated encrypted diagnostic volume, for example mounted at
+   `/var/lib/tinycloud-diagnostics`, disjoint from the credential-state volume.
+   Set `TC_MCP_DIAGNOSTICS_ROOT` only to that absolute mount. Keep
+   `TC_MCP_DIAGNOSTICS_SERVICE` unset unless separately authorized; root
+   configuration and tenant mapping alone never arm capture. Keep one replica,
+   public logs and sysinfo disabled. The repository's production compose and image
+   configuration deliberately add no mount or capture enablement.
+3. Verify service-account ownership, 0700 directories and 0600 files, rejected
+   symlink/unsafe-parent paths, encrypted storage and key recovery/rotation policy.
+   Modes are not encryption. Budget 100 MiB per partition (including 10 MiB detail)
+   and 1 GiB globally; ensure the volume and enabled-tenant count fit these caps.
+   Metadata expires after 30 days, selected detail after 7 days. Missing/full/slow
+   storage must lose diagnostics, not block or change business requests.
+4. Establish snapshot/backup exclusion or enforceable expiry/deletion and encrypted
+   protected transfer before enablement. Selected detail requires independent
+   explicit intake and encrypted-disk/backup-policy acknowledgment; the hosted
+   admin `enable` action enables metadata only. Never collect transcripts by
+   directory scan or include credential state in diagnostic backups/exports.
+5. With two synthetic tenants, verify protected mapping, status, selected
+   export/import and cross-tenant isolation. Prove retention, pause/delete cutoff,
+   incomplete-deletion reporting and idle cleanup across restart, container
+   replacement and authorized redeploy. Then obtain explicit per-tenant metadata
+   authorization. Hosted capture does not depend on an owner's laptop being online.
+6. For rollback, disable capture and adapter emission first, without changing
+   record grants, profiles or sessions. Decide explicitly whether to retain or
+   delete history; verify managed exports/cases/imports follow expiry and deletion.
+   External transfers and recipient backups cannot be recalled by source deletion.
+   Remove capture configuration before an older image is restored and prove that
+   restart/restore cannot re-enable capture or resurrect deleted copies. Reverting
+   an image digest alone does not prove data/configuration rollback.
+
+Diagnostic history is best effort, not an audit trail; lost, expired and unfinished
+evidence must remain visible as gaps. Actual client/phone coverage and deployment
+encryption, persistence and backup guarantees require their own authorized
+acceptance; neither package installation nor a server fixture establishes them.
+Health recovery retains at most 64 attribution buckets per producer/helper.
+Terminal failure or overflow can leave loss unknown; recovery is best effort,
+not guaranteed durable accounting.
+
+Behavior checks live in `src/diagnostics.test.ts`,
+`src/hosted-diagnostics.test.ts`, `src/diagnostics-admin.test.ts`,
+`src/diagnostics-stdio.test.ts`, and the existing
+registered hosted write scenario in `src/http.e2e.test.ts`. Run them through the
+package's isolated test runner after building all integrated dependencies.
+
+### Synthetic calibration (2026-10-16)
+
+From the SDK root, after building the runtime prerequisites:
+
+```sh
+bun packages/mcp/test-support/diagnostics-measure.ts \
+  --node20 /absolute/path/to/node20 \
+  --wrapper /absolute/path/to/prompts/skills/tc-apps/tc-wrapper.sh \
+  --samples 3 --calls 8 --records 205
+```
+
+The fixture writes a private results file with runtime versions, source hashes,
+raw observations and limitations. It uses disposable homes/profiles and loopback
+services, not owner records or installed clients. The Node 20.20.2 workload runs
+registered built MCP handlers, one cold plus eight repeated calls, and eight
+real CLI/wrapper children in two runs. The separate Bun 1.4.2 workload executes
+source apps operations: a 100-record read and a fresh 205-record SQLite rebuild.
+Its synthetic invocation headers replace cryptographic authorization; it is not
+Node copy timing or hosted OAuth acceptance.
+These were unpublished worktree builds labeled operations/MCP `0.6.1-beta.3`,
+CLI `1.2.6-beta.3`, SDK services/core `3.2.6-beta.2`, and Node SDK
+`3.2.6-beta.3`. Those labels do not claim that registry releases contain this
+feature.
+
+The original 64-event queue lost 12–16 of 131 copy observations in each of three
+healthy samples. One concurrent Node sample retained 511 of 515 expected events.
+The revised bounds are **128 events / 256 KiB**, eight-event batches, **200 ms**
+lock wait and **300 ms** terminal drain (previously 100/150 ms). Ten instrumented
+eight-child wrapper samples then retained all 80 child links; none of their 240
+observed helper drains reported drops, pending work or failure. Instrumentation
+can affect scheduling; this is evidence for the chosen bounds, not a capacity
+or losslessness guarantee.
+
+Final integrated run: three fresh-process samples per mode, fixed off/on/held-lock
+order, unflushed OS caches. Ranges below are **not percentiles**. Whole-process
+GNU `time` CPU includes reaped-child CPU where supplied by the OS; maximum RSS
+is a high-water maximum, not summed concurrent memory. The separate Bun node
+fixture is excluded from Node CPU/RSS; the Bun SQLite backend is included in its
+consumer. No exclusive-host, negligible-overhead or latency-SLA claim is made.
+
+| Measurement | Off | On | Held writer lock |
+|---|---:|---:|---:|
+| Node whole-process wall, s | 8.17–8.23 | 8.99–9.17 | 9.41–9.78 |
+| Node CPU user + system, s | 23.64–23.87 | 27.46–27.68 | 24.09–24.30 |
+| Node maximum RSS, KiB | 394992–397864 | 404700–416916 | 406408–414364 |
+| Node module import, ms | 1155.98–1382.16 | 1240.65–1349.75 | 1155.27–1244.02 |
+| First MCP call, ms | 869.26–885.34 | 876.23–911.75 | 885.30–897.97 |
+| Repeated MCP calls, ms (24/mode) | 456.72–584.36 | 457.82–589.20 | 457.31–591.89 |
+| Eight-child fan-out, ms | 1708.12–2043.11 | 2390.84–2522.70 | 2233.48–2514.81 |
+| Node local review, ms | 4.20–4.33 | 97.75–100.47 | 10.51–142.26 |
+| Bun whole-process wall, s | 0.65–0.68 | 0.77–0.79 | 2.70–2.78 |
+| Bun CPU user + system, s | 1.47–1.50 | 1.76–1.81 | 1.76–1.78 |
+| Bun maximum RSS, KiB | 216028–229384 | 219128–230236 | 221364–227196 |
+| 100-record read, ms | 17.29–17.85 | 19.65–22.45 | 19.96–20.94 |
+| 205-record copy rebuild, ms | 36.67–41.75 | 48.36–51.24 | 47.30–52.19 |
+| Bun terminal drain, ms | 4.29–6.30 | 53.60–59.74 | 300.24–300.28 |
+| Bun local review, ms | 4.81–4.94 | 23.35–23.66 | 10.82–12.05 |
+
+Paired on-minus-off whole-process wall differences were +0.76–1.00 s
+(+9.2–12.2%) for Node and +0.11–0.12 s (+16.2–18.5%) for Bun. Whole-process
+time includes setup, business work, drain, review and exit; module import and
+first-call measurements do not isolate process startup. No human approval wait
+or interpretation was measured. Healthy wrappers did not take their existing
+2/4-second retry sleeps; those are exercised separately by wrapper acceptance.
+
+All nine mode/sample pairs preserved synthetic business results and effects.
+Each healthy Node sample acknowledged its own 315 events with zero drops and
+reviewed 515 events, 21 starts/finishes and two run IDs; each healthy Bun sample
+acknowledged/reviewed all 131 events with one start/finish. Metadata occupied
+325621–325656 bytes and 84554–84565 bytes respectively; selected-detail bytes
+were zero, not a selected-detail performance result. Ordinary CLI child health
+counters are unavailable. These fixture-owned runtimes omit descriptors/task
+IDs, so `descriptor_missing` and `linkage_unknown` remain explicit.
+
+With the writer lock held, each Node runtime lost all 315 submitted observations
+(281 admitted), and each Bun runtime lost all 131 (128 admitted). No events
+appeared in the sampled reviews; empty review remains `coverage_unknown`.
+Terminal waits were about 300 ms; Bun's subsequent asynchronous cleanup took
+1709–1710 ms. The lock remained held through business-child completion and the
+measured runtime's close, not independently observed child-writer quiescence:
+late child evidence after unlocking remains possible. Usage inspection is not
+atomic with review. Native FIFO stalls, injected append-time ENOSPC, filesystem
+child death, denied paths and incomplete deletion are separate installed-package
+fixtures, not proof of actual deployment full-disk or container durability.
+
 ## Tools
 
 The local server exposes 17 tools. Hosted mode exposes 20: it adds

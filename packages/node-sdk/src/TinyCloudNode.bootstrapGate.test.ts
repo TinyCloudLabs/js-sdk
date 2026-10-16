@@ -509,6 +509,53 @@ describe("account bootstrap — sqlForSpace threads invokeAny (issue #300)", () 
   });
 });
 
+describe("scoped physical diagnostic attempts", () => {
+  test("scoped KV and SQL emit once per dispatch through nested service contexts", async () => {
+    const events: Array<[string, Record<string, unknown>]> = [];
+    const telemetry = { enabled: true, onEvent: (name: string, data: unknown) => {
+      // Only ServiceContext's projected local diagnostic callback reaches this collector.
+      if (name.startsWith("diagnostic.")) events.push([name, data as Record<string, unknown>]);
+    } };
+    const node = new TinyCloudNode({
+      wasmBindings: makeFakeWasmBindings(),
+      signer: makeExternalSigner(),
+      signStrategy: createOpenKeyCallbackSigningStrategy({ endpoint: "http://127.0.0.1:1" }),
+      host: "http://127.0.0.1:1",
+      telemetry,
+    });
+    let dispatched = 0;
+    const ctx = new ServiceContext({
+      hosts: ["http://127.0.0.1:1"],
+      invoke: () => ({}),
+      invokeAny: () => ({}),
+      telemetry,
+      fetch: async (_url, init) => {
+        dispatched++;
+        const sql = typeof init?.body === "string" && init.body.includes('"action":"query"');
+        return new Response(sql ? '{"rows":[],"columns":[]}' : "", {
+          status: 200, headers: { "content-type": "application/json" },
+        });
+      },
+      session: { delegationHeader: {}, delegationCid: "synthetic", spaceId: "synthetic-primary", verificationMethod: "synthetic", jwk: {} },
+    });
+    Object.defineProperty(node, "_serviceContext", { value: ctx, writable: true });
+    expect((await node.kvForSpace("synthetic-scoped").put("private-key", "private-value")).ok).toBe(true);
+    expect((await node.sqlForSpace("synthetic-scoped").query("SELECT 'private-sql'")).ok).toBe(true);
+    expect(dispatched).toBe(2);
+    expect(events.map(([name, data]) => [name, data.service, data.action])).toEqual([
+      ["diagnostic.attempt.start", "kv", "put"],
+      ["diagnostic.attempt.finish", "kv", "put"],
+      ["diagnostic.attempt.start", "sql", "query"],
+      ["diagnostic.attempt.finish", "sql", "query"],
+    ]);
+    expect(events[0]![1].attempt_id).toBe(events[1]![1].attempt_id);
+    expect(events[2]![1].attempt_id).toBe(events[3]![1].attempt_id);
+    expect(events[0]![1].attempt_id).not.toBe(events[2]![1].attempt_id);
+    expect(JSON.stringify(events)).not.toContain("private-");
+    expect(JSON.stringify(events)).not.toContain("synthetic-scoped");
+  });
+});
+
 // ---------------------------------------------------------------------------
 // (e) Purpose tagging — strategies can tell bootstrap signs from user signs
 // ---------------------------------------------------------------------------

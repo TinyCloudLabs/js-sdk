@@ -17,7 +17,7 @@ import {
   TelemetryConfig,
 } from "./types";
 import { tinyCloudDebugLogger } from "./debug";
-import { projectDiagnosticData } from "./diagnostics";
+import { projectDiagnosticData, projectAttemptDiagnostic } from "./diagnostics";
 
 /**
  * Configuration options for ServiceContext.
@@ -202,6 +202,10 @@ export class ServiceContext implements IServiceContext {
   // Event System (Telemetry)
   // ============================================================
 
+  get diagnosticTelemetryEnabled(): boolean {
+    return this._telemetryEnabled && this._telemetryHandler !== undefined;
+  }
+
   /**
    * Emit a telemetry event.
    *
@@ -209,14 +213,24 @@ export class ServiceContext implements IServiceContext {
    * @param data - Event data
    */
   emit(event: string, data: unknown): void {
+    if (event.startsWith("diagnostic.")) {
+      if (!this.diagnosticTelemetryEnabled) return;
+      const projected = projectAttemptDiagnostic(event, data);
+      if (!projected) return;
+      try {
+        this._telemetryHandler!(event, projected);
+      } catch {
+        // Private diagnostics are fail-open and never log callback error content.
+      }
+      return;
+    }
     tinyCloudDebugLogger.log(event, data);
 
     if (this._telemetryEnabled && this._telemetryHandler) {
       try {
         this._telemetryHandler(event, projectDiagnosticData(data));
-      } catch (error) {
-        // Don't let telemetry handlers break SDK operations.
-        console.error(`Error in telemetry handler for "${event}":`, error);
+      } catch {
+        // Telemetry callbacks must not leak exception content or steer operations.
       }
     }
 

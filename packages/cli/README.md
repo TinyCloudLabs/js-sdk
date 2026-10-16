@@ -207,6 +207,122 @@ tc doctor
 
 Checks Node.js version, profile configuration, keys, session status, node connectivity (with latency), and space availability. Outputs actionable guidance for any failing checks.
 
+### Private diagnostic history
+
+`tc diagnostics` (also `tinycloud diagnostics`) is local-only and does not load a
+profile, authentication, or the business SDK. Capture is **off by default** and
+is separate from `doctor`, service logs, replication, and personal application data.
+
+```bash
+tc diagnostics status --json
+tc diagnostics enable --scope tc-apps
+tc diagnostics pause
+tc diagnostics resume
+tc diagnostics disable
+```
+
+Enablement does not make unrelated CLI work eligible for capture. Validated
+personal-app KV targets and the exact personal-app SQL copy database establish
+scope after parsing. To include startup/parser failures, scope only a selected
+command or shell block:
+
+```bash
+tc diagnostics run --scope tc-apps -- sh ./selected-app-block.sh
+```
+
+Never scope a whole coding client or shared long-lived server. Without `--scope`,
+`diagnostics run -- <executable> <args...>` creates run attribution only and
+removes inherited activity scope. It inherits stdin/stdout/stderr directly,
+preserves child exit/signal results, and records no command line or terminal
+content. Ordinary KV/SQL commands require no launcher or context.
+
+`diagnostics status` reports scope, retention, current storage usage, available
+native-source provenance and baseline adapter support without reading profiles
+or inspecting client installations. Controlled exports and selected detail count
+toward partition usage; the partition limit includes detail. Selected content is
+not printed by status.
+The partition cap is 100 MiB, including a 10 MiB selected-detail cap; the root-wide
+cap is 1 GiB. These bounds include managed imports, cases and exports, not just
+active metadata segments. Keep the root on private encrypted storage and exclude
+selected detail from backups. Filesystem permissions alone do not encrypt it.
+
+Private review and transfer use exact JSON selections containing generated
+`source_ids`, `event_ids`, `invocation_ids`, or explicit `from`/`until` bounds:
+
+Review keeps business outcome, canonical status, mutation certainty, verification,
+copy state, protocol result, transport send settlement, and observed HTTP delivery
+separate. A successful send is not client receipt. An initial `not_dispatched`
+marker alone does not prove that a mutation never ran; an unknown attempt remains
+unknown after a later recovery. Missing task linkage and provenance stay explicit.
+Phase and wrapper-attempt parents are resolved only through source-qualified
+explicit IDs; ambiguous links remain unknown. Comparisons require both invocation
+start and finish evidence rather than treating a finish-only selection as full
+coverage.
+
+```bash
+tc diagnostics review --selection selection.json --json
+tc diagnostics export --selection selection.json --out /private/diagnostics/exports/11111111-1111-4111-8111-111111111111 --expires-at 2026-10-20T00:00:00.000Z
+tc diagnostics import /private/received-bundle
+tc diagnostics compare --left left-selection.json --right right-selection.json
+tc diagnostics delete --selection selection.json
+tc diagnostics delete --selection selection.json --confirm --pause-after
+```
+
+The managed export destination must use a fresh generated UUID beneath the configured
+root's `exports` subtree. Transfer the portable directory returned in the command's
+`path` field, not its parent containing local management metadata.
+`--external` explicitly permits a destination outside the entire diagnostic root
+and reports that recipient copies are outside automatic quota, expiry and
+deletion enforcement. Delete defaults to preview; `--confirm` authorizes only
+the exact file selection. A selection with `"all": true` additionally requires
+`--pause-after` or `--keep-enabled`.
+
+Selected passages are a separate, explicit detail tier. First acknowledge the
+encrypted-disk and backup policy with
+`diagnostics enable --scope tc-apps --detail-policy encrypted-excluded-backups`.
+`diagnostics select --manifest selected-case.json` accepts only the bounded
+owner-selected manifest, never a transcript directory. Review detail only with
+`case_ids` and `include_detail: true`. Use
+`diagnostics bundle --case <id> --fixture synthetic-fixture.json --out <directory> --expires-at <UTC>`
+to assemble reviewed synthetic reproduction evidence; it does not execute it.
+
+History is best effort: bounded queues and a 300 ms synchronous terminal-wait
+budget can lose evidence; scheduling and teardown add overhead. Missing
+completion remains unknown. Scoped policy discovery uses a read-only helper,
+including when capture is disabled; unrelated commands start no diagnostic
+helper. Diagnostic filesystem work stays outside the business process.
+Retention is 30 days for metadata and 7 days for selected detail. Quota exhaustion
+drops diagnostic writes rather than blocking business work. Disable does not
+delete history or change business records/grants. Coverage includes CLI startup
+and termination, approval wait/verification/commit, grant replay, KV/SQL physical
+attempts, record/read/copy phases, and hosted protocol/delivery outcomes. Wrapper,
+transport and copy retries remain separate. A paste handoff is `awaiting_owner`,
+not a completed login; a lost mutation acknowledgment remains unknown even if
+a later attempt succeeds. Metadata alone cannot verify the intended date, units,
+record values, final client answer, or receipt of a response.
+Health recovery retains at most 64 attribution buckets per producer/helper;
+terminal failure or overflow may leave loss unknown rather than a durable count.
+Native signal death retains the process's original signal behavior and may leave
+no finish event. Existing auth and replication signal handlers observe only
+their own boundaries; diagnostics installs no replacement signal handler.
+
+Client launch is attribution only, not automatic capture or proof of a client
+version. Claude Code and Codex use baseline capture plus explicit selected-block
+launch/manual selection; automatic hooks are unsupported. The optional OpenCode
+v1 adapter has a pinned 1.18.31 source/loopback contract, not installed-client
+acceptance; OpenCode v2 uses the same baseline/manual fallback. No adapter
+permission or installation is implied by installing this package.
+
+Before using a released package, verify its exact version and worker assets in a
+disposable home, then obtain separate metadata enablement and adapter-installation
+authorization. Package installation must leave capture off. Disabling capture
+does not delete managed history; use an explicit selection and inspect deletion
+results. Offline machines enforce cleanup on next use, not while powered off.
+Backups and external recipient copies have separate deletion boundaries. Rollback
+starts by disabling capture/adapter emission, not removing profiles or revoking
+record access; retained history still needs expiry or an explicit delete decision.
+
+
 ## Profiles
 
 `tc` supports multiple profiles for different environments:
@@ -243,6 +359,8 @@ file.
 | `TC_HIDE_BANNER` | Set to `1` to suppress the startup banner |
 | `TC_REPLICATION` | Set to `1` to enable replication by default; `--no-replication` overrides it. |
 | `TC_REPLICATION_DEBUG` | Set to `1` to enable replication diagnostics on stderr. |
+| `TC_DIAGNOSTICS_HOME` | Explicit private diagnostic root; defaults to `${XDG_STATE_HOME:-$HOME/.local/state}/tinycloud/diagnostics`. Never a profile or replication directory. |
+| `TC_DIAGNOSTICS_CONTEXT` | Bounded versioned opaque attribution and selected-block scope; does not enable capture or select diagnostic storage. |
 
 ## Development
 

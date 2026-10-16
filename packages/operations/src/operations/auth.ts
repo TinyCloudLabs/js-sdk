@@ -3,9 +3,12 @@ import type {
   PermissionEntry,
   PortableDelegation,
   RuntimeDelegationActivator,
+  ValidatedRuntimeDelegation,
 } from "@tinycloud/node-sdk";
 import { z } from "zod";
 
+import { beginDiagnosticPhase, getDiagnosticContext, withDiagnosticContext } from "../diagnostics/context.js";
+import { diagnosticId, type DiagnosticFields } from "../diagnostics/model.js";
 import {
   canonicalizeCapabilities,
   canonicalizeOperationCapabilities,
@@ -353,13 +356,13 @@ async function importRequestBoundDelegation(
       expiry,
       host: explicitHost ?? host,
     } as PortableDelegation;
-    let activated: Awaited<ReturnType<typeof nodeSdk.activateValidatedRuntimeDelegation>>;
+    let activated: ValidatedRuntimeDelegation;
     try {
-      activated = await nodeSdk.activateValidatedRuntimeDelegation(
+      activated = await observeImportPhase("approval_verify", () => nodeSdk.activateValidatedRuntimeDelegation(
         context.runtime.node as RuntimeDelegationActivator,
         delegation,
         { host },
-      );
+      ), () => ({ outcome: "complete" }));
     } catch (error) {
       const reason = typeof error === "object" && error !== null && "reason" in error ? error.reason : undefined;
       // Validated activation read an expiry that has passed: the delegation expired, it was not otherwise refused.
@@ -387,7 +390,7 @@ async function importRequestBoundDelegation(
     }
 
     try {
-      return await withProfileLock(context.summary.profile, async () => {
+      return await observeImportPhase("approval_commit", () => withProfileLock(context.summary.profile, async () => {
         const previousRecords = await readAdditionalDelegations<unknown>(context.summary.profile);
         const result = await updateProfileStore<Record<string, unknown>, OperationExecutionOutcome<AuthImportOutput>>(
         context.summary.profile,
@@ -458,13 +461,35 @@ async function importRequestBoundDelegation(
           return expiredDelegation();
         }
         return result;
-      });
+      }), (result) => ({ outcome: result.status === "ok" ? "complete" : "refused", canonical_status: result.status }));
     } catch {
       return internalImportFailure();
     }
   } catch {
     return internalImportFailure();
   }
+}
+
+async function observeImportPhase<T>(
+  phase: "approval_verify" | "approval_commit",
+  action: () => Promise<T>,
+  classify: (value: T) => DiagnosticFields,
+): Promise<T> {
+  const current = getDiagnosticContext();
+  const operation_id = current === undefined ? undefined : diagnosticId();
+  return withDiagnosticContext(current === undefined ? undefined : {
+    ...current, operation_id, parent_id: current.operation_id ?? current.invocation_id,
+  }, async () => {
+    const finish = beginDiagnosticPhase(phase, { operation_id, role: "approval" });
+    try {
+      const value = await action();
+      finish(classify(value));
+      return value;
+    } catch (error) {
+      finish({ outcome: "failed" });
+      throw error;
+    }
+  });
 }
 
 async function importState(

@@ -9,6 +9,7 @@ export default defineConfig({
     "src/cli.ts",
     "src/http.ts",
     "src/http-cli.ts",
+    "src/http-server.ts",
   ],
   format: ["esm", "cjs"],
   target: "node20",
@@ -26,5 +27,6 @@ export default defineConfig({
     "@tinycloud/operations",
     "@tinycloud/operations/operations.json",
     "@tinycloud/operations/profile",
+    "@tinycloud/operations/diagnostics",
   ],
 });

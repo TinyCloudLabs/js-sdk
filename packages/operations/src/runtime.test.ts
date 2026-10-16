@@ -7,7 +7,7 @@ import type { PermissionEntry } from "@tinycloud/sdk-core";
 
 import { canonicalizeCapabilities, evaluateAuthority } from "./authority.js";
 import type { OperationDefinition, RuntimeOperationContext } from "./contract.js";
-import { BINDING_NOTES, bindingMigrationPath, inspectStoredDelegation } from "./delegation-binding.js";
+import { BINDING_NOTES, bindingMigrationPath, inspectStoredDelegation, replayStoredDelegationRecords } from "./delegation-binding.js";
 import { invokeOperation } from "./invoke.js";
 import { createInvocationRuntime } from "./runtime.js";
 import {
@@ -29,6 +29,22 @@ import {
   type StoredRuntimeDelegation,
 } from "../test-support/auth-runtime.js";
 
+import { makeDiagnosticContext, withDiagnosticContext } from "./diagnostics/context.js";
+import { DiagnosticRuntime } from "./diagnostics/runtime.js";
+import { diagnosticId, type DiagnosticObservation } from "./diagnostics/model.js";
+import { operationSpaceResolver } from "./secrets.js";
+import type { RuntimeDelegationActivator } from "@tinycloud/node-sdk";
+
+function replayCapture() {
+  const events: DiagnosticObservation[] = [];
+  const sink = new DiagnosticRuntime({ source: "cli" });
+  sink.emit = (event) => { events.push(event); return true; };
+  const context = makeDiagnosticContext({
+    source_id: diagnosticId(), partition_id: diagnosticId(), generation: 1,
+    runtime: sink,
+  }, "cli");
+  return { context, events };
+}
 let home: string;
 
 beforeEach(async () => {
@@ -133,6 +149,58 @@ test("replay skips expired and CID-tampered stored records, reporting the invali
   }
 });
 
+test("replay counts duplicate success and terminal skips independently from legacy grants", async () => {
+  const fixture = await createAuthRuntimeFixture();
+  const { context, events } = replayCapture();
+  try {
+    const grant = await fixture.hermetic.mintDelegation();
+    await persistRuntimeDelegations(fixture, [grant, grant,
+      { ...grant, expiry: new Date(0) }, { ...grant, cid: `${grant.cid}-tampered` }]);
+    const result = await withDiagnosticContext(context, () => createInvocationRuntime({ profile: fixture.profile }));
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error("expected a runtime");
+    expect(result.context.runtime.replayedGrants).toBe(1);
+    expect(result.context.runtime.granted).toEqual(canonicalizeCapabilities(fixture.hermetic.permissions));
+    expect(events).toContainEqual(expect.objectContaining({
+      type: "phase.finish", phase: "replay", outcome: "complete",
+      replay_examined: 4, replay_installed: 1, replay_skipped: 3,
+    }));
+    expect(JSON.stringify(events)).not.toContain(grant.cid);
+    expect(JSON.stringify(events)).not.toContain("Authorization");
+  } finally {
+    fixture.hermetic.stop();
+  }
+});
+
+test("interrupted stored replay reports reached records without inventing a terminal skip", async () => {
+  const fixture = await createAuthRuntimeFixture();
+  const { context, events } = replayCapture();
+  try {
+    const runtime = await createInvocationRuntime({ profile: fixture.profile });
+    if (!runtime.ok) throw new Error("expected a runtime");
+    const grant = await fixture.hermetic.mintDelegation();
+    await persistRuntimeDelegations(fixture, [grant]);
+    const records = await readAdditionalDelegations<unknown>(fixture.profile);
+    await writeJsonAtomic(additionalDelegationsPath(fixture.profile), [null, ...records]);
+    const node = runtime.context.runtime.node as RuntimeDelegationActivator;
+    const interrupted = new Proxy(node, { get(target, key) {
+      if (key === "sessionDid") throw new Error("synthetic-session-access-failure");
+      return Reflect.get(target, key);
+    } });
+    await expect(withDiagnosticContext(context, () => replayStoredDelegationRecords(
+      fixture.profile, interrupted,
+      { host: runtime.context.summary.host, resolveSpace: operationSpaceResolver(node, runtime.context.summary.space) },
+    ))).rejects.toThrow("synthetic-session-access-failure");
+    expect(events).toContainEqual(expect.objectContaining({
+      type: "phase.finish", phase: "replay", outcome: "failed",
+      replay_examined: 2, replay_installed: 0, replay_skipped: 1,
+    }));
+    expect(JSON.stringify(events)).not.toContain("synthetic-session-access-failure");
+  } finally {
+    fixture.hermetic.stop();
+  }
+});
+
 test("skipped-grant warnings publish fixed codes, never a node response or a stored host", async () => {
   const fixture = await createAuthRuntimeFixture();
   // The loopback node answers a refused activation with this body.
@@ -226,7 +294,12 @@ test("only a verified signed foreign audience is silently excluded from replay",
     ] as const;
     for (const { label, grant, reason } of cases) {
       await persistRuntimeDelegations(fixture, [grant]);
-      const runtime = await authenticatedRuntime(fixture.profile);
+      const { context, events } = replayCapture();
+      const runtime = await withDiagnosticContext(context, () => authenticatedRuntime(fixture.profile));
+      expect(events, label).toContainEqual(expect.objectContaining({
+        type: "phase.finish", phase: "replay", outcome: "complete",
+        replay_examined: 1, replay_installed: 0, replay_skipped: 1,
+      }));
       expect(installedCids(runtime), label).toEqual([]);
       expect(runtime.runtime.warnings, label).toEqual(reason === null ? undefined : [{
         code: "STORED_GRANT_SKIPPED", reason,

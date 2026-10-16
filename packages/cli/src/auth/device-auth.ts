@@ -26,6 +26,8 @@ import {
 } from "./scoped-login.js";
 import { assertNotLocalOwner, assertSessionReplaceable, commitLogin, readProfileSnapshot } from "./login-commit.js";
 import { announceFirstOwner, openKeyPrimaryFlag, warnIfNotPrimaryKey, withOwnerKeyPrimary } from "./owner-key.js";
+import { beginDiagnosticPhase, emitDiagnostic } from "@tinycloud/operations/diagnostics";
+import { withCliDiagnosticPhase } from "../lib/diagnostics.js";
 
 /** OpenKey caps device-approved delegations at 30 days. */
 const DEVICE_DELEGATION_MAX_SECONDS = 30 * 24 * 60 * 60;
@@ -424,6 +426,7 @@ function writeApprovalPrompt(prompt: DeviceApprovalPrompt): void {
  * verified session. Nothing is persisted here.
  */
 export async function acquireDeviceDelegation(input: DeviceAuthorizationInput): Promise<DeviceAuthorizationResult> {
+  return withCliDiagnosticPhase("preparation", { service: "auth", action: "login", role: "approval" }, async () => {
   validateLoginPermissions(input.permissions);
   if (input.permissions.some((permission) =>
     permission.service === "tinycloud.encryption" ||
@@ -451,6 +454,7 @@ export async function acquireDeviceDelegation(input: DeviceAuthorizationInput): 
   relayKey.generateKeys();
   const relayPublicJwk = relayPublicJwkOf(relayKey);
   const publicJwk = publicSessionJwk(input.jwk);
+  const started = await withCliDiagnosticPhase("approval_request", { service: "auth", action: "request" }, async () => {
   let startResponse: Response;
   try {
     startResponse = await fetchFn(`${openkeyHost}/api/device-authorizations`, {
@@ -496,7 +500,8 @@ export async function acquireDeviceDelegation(input: DeviceAuthorizationInput): 
     }
     throw new CLIError("DEVICE_AUTH_FAILED", `OpenKey device authorization failed: ${code ?? `HTTP ${startResponse.status}`}${description ? ` (${description})` : ""}`, ExitCode.ERROR);
   }
-  const started = validateStart(startValue, openkeyHost);
+  return validateStart(startValue, openkeyHost);
+  });
   const deadline = Date.now() + started.expiresIn * 1000;
   (input.emitInstructions ?? writeApprovalPrompt)({
     verificationUri: started.verificationUri,
@@ -507,9 +512,15 @@ export async function acquireDeviceDelegation(input: DeviceAuthorizationInput): 
 
   let interval = started.interval;
   const wait = input.wait ?? ((milliseconds: number) => new Promise<void>((resolve) => setTimeout(resolve, milliseconds)));
+  let polls = 0;
+  const finishWait = beginDiagnosticPhase("approval_wait", { service: "auth", timing_scope: "approval_wait" });
+  try {
   while (Date.now() < deadline) {
+    emitDiagnostic({ type: polls === 0 ? "operation.step" : "retry.scheduled", phase: "approval_poll", service: "auth", action: "poll", delay_ms: interval * 1000 });
     await wait(interval * 1000);
+    polls += 1;
     let response: Response;
+    const finishPoll = beginDiagnosticPhase("approval_poll", { service: "auth", action: "poll" });
     try {
       response = await fetchFn(`${openkeyHost}/api/device-authorizations/token`, {
         method: "POST",
@@ -520,11 +531,13 @@ export async function acquireDeviceDelegation(input: DeviceAuthorizationInput): 
         body: JSON.stringify({ transactionId: started.transactionId, deviceSecret, codeVerifier }),
       });
     } catch {
+      finishPoll({ outcome: "failed", error_class: "network" });
       // Phone approval takes minutes; a dropped poll must not end the window.
       continue;
     }
     const value = await responseJson(response);
     const code = errorCode(value);
+    finishPoll({ outcome: response.ok ? "response" : "error", status: response.status });
     if (response.status >= 500 || (response.status === 429 && code !== "slow_down")) continue;
     if (code === "slow_down") {
       interval += 5;
@@ -532,9 +545,11 @@ export async function acquireDeviceDelegation(input: DeviceAuthorizationInput): 
     }
     if (code === "authorization_pending") continue;
     if (code === "access_denied") {
+      finishWait({ outcome: "denied" });
       throw new CLIError("DEVICE_AUTH_DENIED", "The owner denied the OpenKey device authorization. No session was saved.", ExitCode.PERMISSION_DENIED);
     }
     if (code === "expired_token") {
+      finishWait({ outcome: "expired" });
       throw new CLIError("DEVICE_AUTH_EXPIRED", "OpenKey device authorization expired_token: the approval window closed. Run the command again.", ExitCode.AUTH_REQUIRED);
     }
     if (!response.ok) throw new CLIError("DEVICE_AUTH_FAILED", `OpenKey device authorization failed: ${code ?? `HTTP ${response.status}`}`, ExitCode.ERROR);
@@ -546,6 +561,8 @@ export async function acquireDeviceDelegation(input: DeviceAuthorizationInput): 
     if (result?.status !== "approved" || !result.relay || !result.binding) {
       throw invalidResponse("OpenKey returned an invalid device authorization result");
     }
+    finishWait({ outcome: "accepted" });
+    return withCliDiagnosticPhase("approval_verify", { service: "auth", action: "verify" }, async () => {
     const delegation = decryptRelayResult(result.relay, started.transactionId, relayKey);
     return verifyApproval({
       binding: result.binding,
@@ -560,8 +577,14 @@ export async function acquireDeviceDelegation(input: DeviceAuthorizationInput): 
       expiry,
       expectedOwner: input.expectedOwner,
     });
+    });
   }
+  finishWait({ outcome: "expired" });
   throw new CLIError("DEVICE_AUTH_EXPIRED", "OpenKey device authorization expired before approval. Run the command again.", ExitCode.AUTH_REQUIRED);
+  } finally {
+    finishWait({ outcome: "failed" });
+  }
+  });
 }
 
 /**
@@ -576,6 +599,7 @@ export async function loginWithDeviceAuthorization(input: Omit<DeviceAuthorizati
   /** Record `nodeOrigin` as the profile host (an explicit `--host`, or a profile without one). */
   persistHost?: boolean;
 }): Promise<{ profile: ProfileConfig; result: DeviceAuthorizationResult }> {
+  return withCliDiagnosticPhase("preparation", { service: "auth", action: "login", role: "approval" }, async () => {
   const snapshot = await readProfileSnapshot(input.profileName);
   const existing = snapshot.profile;
   assertNotLocalOwner(input.profileName, existing, "Device login");
@@ -623,4 +647,5 @@ export async function loginWithDeviceAuthorization(input: Omit<DeviceAuthorizati
   warnIfNotPrimaryKey(result.ownerDid, result.primary);
   announceFirstOwner(input.profileName, expectedOwner, result.ownerDid);
   return { profile, result };
+  });
 }

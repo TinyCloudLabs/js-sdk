@@ -354,6 +354,8 @@ export interface IServiceContext {
   getService<T extends IService>(name: string): T | undefined;
 
   // Telemetry/Events
+  /** Whether fixed transport diagnostics have a configured sink. Default off. */
+  readonly diagnosticTelemetryEnabled?: boolean;
   /** Emit a telemetry event */
   emit(event: string, data: unknown): void;
   /** Subscribe to events */
@@ -435,6 +437,9 @@ export interface TelemetrySpanEvent {
  * Telemetry event names.
  */
 export const TelemetryEvents = {
+  DIAGNOSTIC_ATTEMPT_START: "diagnostic.attempt.start",
+  DIAGNOSTIC_ATTEMPT_FINISH: "diagnostic.attempt.finish",
+  DIAGNOSTIC_RETRY_SCHEDULED: "diagnostic.retry.scheduled",
   SPAN: "telemetry.span",
   SERVICE_REQUEST: "service.request",
   SERVICE_RESPONSE: "service.response",

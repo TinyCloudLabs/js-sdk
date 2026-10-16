@@ -1,5 +1,7 @@
 import { TinyCloudNode, signedCompactUcanExpiry, type PortableDelegation } from "@tinycloud/node-sdk";
 import { CLI_NAME } from "@tinycloud/operations/cli-name";
+import { diagnosticTelemetry, getDiagnosticContext } from "@tinycloud/operations/diagnostics";
+import { withCliDiagnosticPhase } from "./diagnostics.js";
 import { ProfileManager } from "../config/profiles.js";
 import { resolveProfilePosture, type CLIContext, type ProfileConfig } from "../config/types.js";
 import { CLIError, wrapError } from "../output/errors.js";
@@ -79,8 +81,10 @@ async function restoreProfileSession(
   node: TinyCloudNode,
   profileName: string,
   profile: ProfileConfig | null,
-  sessionData: Parameters<TinyCloudNode["restoreSession"]>[0],
+  resolveSessionData: () => Parameters<TinyCloudNode["restoreSession"]>[0],
 ): Promise<void> {
+  return withCliDiagnosticPhase("restore", { service: "auth", action: "restore" }, async () => {
+  const sessionData = resolveSessionData();
   const posture = profile === null ? undefined : resolveProfilePosture(profile);
   if (ownerSessionLacksProof(sessionData, profile)) {
     throw sessionExpiredError(profileName, posture);
@@ -93,6 +97,7 @@ async function restoreProfileSession(
     }
     throw error;
   }
+  });
 }
 
 function persistedSessionData(
@@ -136,10 +141,11 @@ export async function restoreProfileSessionNode(
   const key = await ProfileManager.getKey(ctx.profile);
   try {
     const node = new TinyCloudNode({
+      telemetry: getDiagnosticContext() ? diagnosticTelemetry : undefined,
       host: ctx.host,
       ...(profile.authMethod === "local" && profile.privateKey ? { privateKey: profile.privateKey } : {}),
     });
-    await restoreProfileSession(node, ctx.profile, profile, persistedSessionData(ctx.profile, profile, session, key));
+    await restoreProfileSession(node, ctx.profile, profile, () => persistedSessionData(ctx.profile, profile, session, key));
     return { node };
   } catch (error) {
     if (error instanceof CLIError && error.metadata?.reason === "session_expired") {
@@ -166,10 +172,11 @@ export async function storedSessionVerifiesLocally(profileName: string): Promise
       typeof session.delegationHeader.Authorization !== "string") return true;
     const key = await ProfileManager.getKey(profileName);
     const node = new TinyCloudNode({
+      telemetry: getDiagnosticContext() ? diagnosticTelemetry : undefined,
       host: profile.host ?? DEFAULT_HOST,
       ...(local ? { privateKey: profile.privateKey } : {}),
     });
-    await restoreProfileSession(node, profileName, profile, persistedSessionData(profileName, profile, session, key));
+    await restoreProfileSession(node, profileName, profile, () => persistedSessionData(profileName, profile, session, key));
     return true;
   } catch {
     return false;
@@ -188,6 +195,7 @@ export async function createSDKInstance(
   ctx: CLIContext,
   options?: { privateKey?: string }
 ): Promise<TinyCloudNode> {
+  return withCliDiagnosticPhase("preparation", { service: "auth" }, async () => {
   // A headless delegate may pass a private key with no persisted profile at all.
   // Only require a profile when we have no explicit key to fall back on.
   const profile = options?.privateKey
@@ -220,6 +228,7 @@ export async function createSDKInstance(
       process.stderr.write("[replication] Enabled, but this profile has no configured prefixes; reads use the network.\n");
     }
     const node = new TinyCloudNode({
+      telemetry: getDiagnosticContext() ? diagnosticTelemetry : undefined,
       host: ctx.host,
       privateKey: effectivePrivateKey,
       ...(replication ? { replication } : {}),
@@ -228,9 +237,9 @@ export async function createSDKInstance(
 
     const restoredOwnSession = Boolean(session && session.delegationHeader && session.delegationCid && session.spaceId);
     if (restoredOwnSession) {
-      await restoreProfileSession(node, ctx.profile, profile, persistedSessionData(ctx.profile, profile, session!, key));
+      await restoreProfileSession(node, ctx.profile, profile, () => persistedSessionData(ctx.profile, profile, session!, key));
     } else {
-      await node.signIn();
+      await withCliDiagnosticPhase("restore", { service: "auth", action: "login" }, () => node.signIn());
     }
     // The restored persisted session may replay even when an explicit local
     // key is supplied; only ordinary invocations run binding migration.
@@ -255,6 +264,7 @@ export async function createSDKInstance(
     process.stderr.write("[replication] Enabled, but this profile has no configured prefixes; reads use the network.\n");
   }
   const node = new TinyCloudNode({
+    telemetry: getDiagnosticContext() ? diagnosticTelemetry : undefined,
     host: ctx.host,
     privateKey: options?.privateKey,
     ...(replication ? { replication } : {}),
@@ -262,9 +272,9 @@ export async function createSDKInstance(
   if (node.replication) registerReplication(ctx.profile, node.replication);
 
   if (options?.privateKey) {
-    await node.signIn();
+    await withCliDiagnosticPhase("restore", { service: "auth", action: "login" }, () => node.signIn());
   } else if (session && session.delegationHeader && session.delegationCid && session.spaceId) {
-    await restoreProfileSession(node, ctx.profile, profile, persistedSessionData(ctx.profile, profile!, session, key));
+    await restoreProfileSession(node, ctx.profile, profile, () => persistedSessionData(ctx.profile, profile!, session, key));
     recordWarnings(await replayAdditionalDelegations(node, ctx.profile, {
       host: ctx.host,
       ownerSpace: profile?.spaceId,
@@ -272,6 +282,7 @@ export async function createSDKInstance(
     }));
   }
   return node;
+  });
 }
 
 /**
@@ -449,6 +460,7 @@ export async function ensureAuthenticated(
   ctx: CLIContext,
   options?: { privateKey?: string }
 ): Promise<TinyCloudNode> {
+  return withCliDiagnosticPhase("preparation", { service: "auth" }, async () => {
   // An explicitly-provided private key (--private-key / TC_PRIVATE_KEY) is a
   // first-class headless identity: accept it before any profile/session gate so
   // delegates can authenticate with no persisted profile and no login session.
@@ -476,4 +488,5 @@ export async function ensureAuthenticated(
   }
 
   return createSDKInstance(ctx, options);
+  });
 }

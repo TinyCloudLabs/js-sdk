@@ -3,6 +3,16 @@ import { Command } from "commander";
 import * as fsPromises from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { diagnosticId, makeDiagnosticContext, withDiagnosticContext, type DiagnosticBinding, type DiagnosticObservation } from "@tinycloud/operations/diagnostics";
+
+function diagnosticCapture() {
+  const events: DiagnosticObservation[] = [];
+  const context = makeDiagnosticContext({
+    source_id: diagnosticId(), partition_id: diagnosticId(), generation: 1,
+    runtime: { emit(event: DiagnosticObservation) { events.push(event); return true; } } as DiagnosticBinding["runtime"],
+  }, "cli");
+  return { events, context };
+}
 
 type PutCall = { handle: string; key: string; value: unknown };
 type DeleteCall = { handle: string; key: string };
@@ -28,6 +38,7 @@ const recorded = {
 // One list page per cursor; the first request has no cursor ("").
 type ListPage = { keys: string[]; truncated?: boolean; nextCursor?: string };
 let listPages: Record<string, ListPage> = {};
+let lostAcknowledgment = false;
 
 function resetState(): void {
   recorded.outputs = [];
@@ -41,6 +52,7 @@ function resetState(): void {
   recorded.fileWrites = [];
   recorded.lists = [];
   listPages = { "": { keys: [] } };
+  lostAcknowledgment = false;
 }
 
 function toBytes(chunk: unknown): Uint8Array {
@@ -70,6 +82,7 @@ function makeKv(handle: string) {
   return {
     put: async (key: string, value: unknown) => {
       recorded.puts.push({ handle, key, value });
+      if (lostAcknowledgment) throw new Error("synthetic lost acknowledgment");
       return errorFor(key) ?? { ok: true, data: { data: undefined, headers: {} } };
     },
     delete: async (key: string) => {
@@ -435,7 +448,9 @@ describe("CLI kv list paging (TC-982)", () => {
       c2: { keys: ["e"], truncated: false },
     };
 
-    await runKv(["list", "--all", "--limit", "2"]);
+    const { events, context } = diagnosticCapture();
+    await withDiagnosticContext(context, () => runKv(["list", "--all", "--limit", "2"]));
+    expect(events).toContainEqual(expect.objectContaining({ action: "list", business: "complete", pages: 3, returned: 5, truncated: false }));
 
     expect(recorded.lists.map((options) => options.cursor)).toEqual([undefined, "c1", "c2"]);
     expect(recorded.outputs).toEqual([{ keys: ["a", "b", "c", "d", "e"], count: 5, prefix: null, truncated: false, nextCursor: null }]);
@@ -447,7 +462,9 @@ describe("CLI kv list paging (TC-982)", () => {
       c1: { keys: ["a"], truncated: true, nextCursor: "c1" },
     };
 
-    await runKv(["list", "--all"]);
+    const { events, context } = diagnosticCapture();
+    await withDiagnosticContext(context, () => runKv(["list", "--all"]));
+    expect(events).toContainEqual(expect.objectContaining({ warning: "pagination_incomplete", pages: 2, returned: 2, business: "partial" }));
 
     expect(recorded.outputs).toEqual([]);
     expect(recorded.errors).toEqual([expect.objectContaining({ code: "KV_LIST_CURSOR_STALLED" })]);
@@ -490,4 +507,17 @@ describe("CLI kv list paging (TC-982)", () => {
     ]);
     expect(recorded.lists).toEqual([]);
   });
+});
+
+test("a put with a lost acknowledgment is not replayed or reported as confirmed", async () => {
+  resetState();
+  lostAcknowledgment = true;
+  const { events, context } = diagnosticCapture();
+  await withDiagnosticContext(context, () => runKv(["put", "synthetic-key", "synthetic-value"]));
+  expect(recorded.puts).toEqual([{ handle: "primary", key: "synthetic-key", value: "synthetic-value" }]);
+  expect(recorded.outputs).toEqual([]);
+  expect(recorded.errors).toEqual([expect.objectContaining({ message: "synthetic lost acknowledgment" })]);
+  expect(events).toContainEqual(expect.objectContaining({ type: "phase.finish", action: "put", outcome: "error", mutation: "unknown" }));
+  expect(events.some((event) => event.mutation === "confirmed")).toBe(false);
+  expect(JSON.stringify(events)).not.toContain("synthetic-value");
 });

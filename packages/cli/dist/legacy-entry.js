@@ -131,10 +131,133 @@ var init_storage = __esm({
   }
 });
 
+// src/lib/diagnostics.ts
+import {
+  beginDiagnosticPhase,
+  createDiagnosticRuntime,
+  decodeDiagnosticContext,
+  diagnosticId,
+  emitDiagnostic,
+  diagnosticClientProvenance,
+  getDiagnosticContext,
+  makeDiagnosticContext,
+  withDiagnosticContext
+} from "@tinycloud/operations/diagnostics";
+async function activate(activity) {
+  const state2 = globals[stateKey];
+  if (!state2 || state2.finished) return getDiagnosticContext();
+  if (state2.context) return state2.context;
+  try {
+    const links = decodeDiagnosticContext(process.env.TC_DIAGNOSTICS_CONTEXT);
+    state2.runtime ??= createDiagnosticRuntime({
+      source: "cli",
+      descriptor: {
+        descriptor_id: diagnosticId(),
+        source: "cli",
+        package: "@tinycloud/cli",
+        ...true ? { version: "1.2.6-beta.3" } : {},
+        ...diagnosticClientProvenance(links)
+      }
+    });
+    const binding = await state2.runtime.binding();
+    if (!binding) return void 0;
+    state2.context = makeDiagnosticContext(binding, "cli", links);
+    state2.activity = activity;
+    state2.runtime.emit({ type: "invocation.start", activity: activity ?? "unknown" }, state2.context);
+    if (state2.imported) state2.runtime.emit({ type: "phase.finish", phase: "import" }, state2.context);
+    if (state2.parsed) state2.runtime.emit({ type: "phase.finish", phase: "parse" }, state2.context);
+    return state2.context;
+  } catch {
+    return void 0;
+  }
+}
+async function cliDiagnosticScope(service, target) {
+  const state2 = globals[stateKey];
+  const context = getDiagnosticContext() ?? state2?.context;
+  if (context) {
+    if (state2) state2.activity = service;
+    return context;
+  }
+  if (typeof target !== "string") return void 0;
+  if (service === "kv" ? target.startsWith("xyz.tinycloud.agent-data/") : target === "xyz.tinycloud.agent-data.index") {
+    return activate(service);
+  }
+  return void 0;
+}
+async function withCliDiagnosticPhase(phase, fields, action, completed) {
+  const current = getDiagnosticContext();
+  if (!current) return action();
+  let operationId;
+  try {
+    operationId = diagnosticId();
+  } catch {
+    return action();
+  }
+  const parentId = current.operation_id ?? current.invocation_id;
+  return withDiagnosticContext({
+    ...current,
+    operation_id: operationId,
+    parent_id: parentId,
+    ...fields.role ? { role: fields.role, role_provenance: "observed" } : {}
+  }, async () => {
+    const finish = beginDiagnosticPhase(phase, { ...fields, operation_id: operationId, parent_id: parentId });
+    try {
+      const value = await action();
+      try {
+        finish({ outcome: "complete", ...completed?.(value) });
+      } catch {
+        finish({ outcome: "complete" });
+      }
+      return value;
+    } catch (error) {
+      finish({ outcome: "error" });
+      throw error;
+    }
+  });
+}
+function finishCliDiagnostics(code3 = 0, signal) {
+  const state2 = globals[stateKey];
+  if (!state2 || state2.finished) return;
+  state2.finished = true;
+  try {
+    if (state2.context && state2.runtime) {
+      if (!state2.imported || !state2.parsed) {
+        state2.runtime.emit({
+          type: "phase.finish",
+          phase: state2.imported ? "parse" : "import",
+          activity: state2.imported ? "parser" : "import",
+          outcome: signal ? "interrupted" : code3 === 0 ? "complete" : "error"
+        }, state2.context);
+      }
+      state2.runtime.emit({
+        type: "invocation.finish",
+        exit_code: code3,
+        activity: state2.activity ?? "unknown",
+        duration_ms: Math.max(0, Math.round(performance.now() - state2.started)),
+        business: "unknown",
+        timing_scope: "invocation",
+        ...signal ? { signal } : {}
+      }, state2.context);
+      state2.runtime.drainSync();
+    }
+  } catch {
+  }
+}
+var stateKey, globals;
+var init_diagnostics = __esm({
+  "src/lib/diagnostics.ts"() {
+    "use strict";
+    stateKey = /* @__PURE__ */ Symbol.for("tinycloud.cli.diagnostics.v1");
+    globals = globalThis;
+  }
+});
+
 // src/lib/replication-registry.ts
 function stopForSignal(signal) {
   void closeReplication().finally(() => {
-    process.exit(signal === "SIGINT" ? 130 : 143);
+    const code3 = signal === "SIGINT" ? 130 : 143;
+    finishCliDiagnostics(code3, signal);
+    process.exit(code3);
   });
 }
 function installSignalHandlers() {
@@ -226,6 +349,7 @@ var registryKey, globalState, state, CLOSE_TIMEOUT_MS, scheduleTimeout;
 var init_replication_registry = __esm({
   "src/lib/replication-registry.ts"() {
     "use strict";
+    init_diagnostics();
     registryKey = /* @__PURE__ */ Symbol.for("@tinycloud/cli/replication-registry");
     globalState = globalThis;
     state = globalState[registryKey] ??= {
@@ -320,8 +444,16 @@ var init_warnings = __esm({
 // src/output/formatter.ts
 import ora from "ora";
 import { CLI_NAME } from "@tinycloud/operations/cli-name";
+import { beginDiagnosticPhase as beginDiagnosticPhase2, emitDiagnostic as emitDiagnostic2 } from "@tinycloud/operations/diagnostics";
 function outputJson(data) {
-  process.stdout.write(JSON.stringify(data, null, 2) + "\n");
+  const finish = beginDiagnosticPhase2("output_projection");
+  try {
+    process.stdout.write(JSON.stringify(data, null, 2) + "\n");
+    finish({ outcome: "complete" });
+  } catch (error) {
+    finish({ outcome: "failed" });
+    throw error;
+  }
 }
 function warningLine(warnings) {
   const which = warnings.map((warning) => `${warning.grantCid ?? "unidentified"}: ${warning.reason}`).join(", ");
@@ -355,6 +487,7 @@ function outputError(code3, message, hint, details = {}) {
     if (warnings.length > 0) payload.error.warnings = warnings;
     process.stderr.write(JSON.stringify(payload, null, 2) + "\n");
   }
+  emitDiagnostic2({ type: "operation.step", phase: "output_projection", outcome: "complete", is_error: true });
 }
 function outputWarnings(warnings) {
   const combined = mergeWarnings(drainWarnings(), operationWarnings(warnings));
@@ -362,6 +495,7 @@ function outputWarnings(warnings) {
   process.stderr.write(shouldOutputJson() ? `${JSON.stringify({ warnings: combined })}
 ` : `${theme.warn("!")} ${warningLine(combined)}
 `);
+  emitDiagnostic2({ type: "operation.step", phase: "output_projection", outcome: "complete", warning: "unknown" });
 }
 function operationWarnings(value) {
   if (!Array.isArray(value)) return [];
@@ -539,6 +673,7 @@ import {
   SECRET_REQUEST_MAX_NAMES
 } from "@tinycloud/operations/secret-request";
 import { authorizationVerdictOf, parseCapabilityResource, SERVICE_LONG_TO_SHORT, validatedCapabilityOf } from "@tinycloud/sdk-core";
+import { emitDiagnostic as emitDiagnostic3 } from "@tinycloud/operations/diagnostics";
 function setActiveProfileName(name) {
   activeProfileName = name;
 }
@@ -622,6 +757,7 @@ function storageFullError(error, progress) {
 }
 function handleError(error) {
   const cliError = wrapError(error);
+  emitDiagnostic3({ type: "operation.step", outcome: cliError.code === "CANCELLED" ? "cancelled" : "failed", error_class: Object.hasOwn(DIAGNOSTIC_ERROR_CLASSES, cliError.code) ? DIAGNOSTIC_ERROR_CLASSES[cliError.code] : "unknown", exit_code: cliError.exitCode });
   const prebuilt = typeof cliError.metadata?.hint === "string" ? cliError.metadata.hint : void 0;
   const hint = prebuilt ?? buildAuthHint(cliError) ?? (cliError.code === "NETWORK_ERROR" ? buildNetworkHint() : void 0);
   const authMeta = cliError.code === "AUTH_REQUIRED" || cliError.code === "PERMISSION_DENIED" ? cliError.metadata : void 0;
@@ -755,7 +891,7 @@ function buildNetworkHint() {
   lines.push(`Or override per-command with --host or TC_HOST.`);
   return lines.join("\n");
 }
-var activeProfileName, CLIError, SETUP_KEYS;
+var DIAGNOSTIC_ERROR_CLASSES, activeProfileName, CLIError, SETUP_KEYS;
 var init_errors = __esm({
   "src/output/errors.ts"() {
     "use strict";
@@ -764,6 +900,25 @@ var init_errors = __esm({
     init_formatter();
     init_storage2();
     init_warnings();
+    DIAGNOSTIC_ERROR_CLASSES = {
+      USAGE_ERROR: "input_invalid",
+      INVALID_ARGUMENT: "input_invalid",
+      SELF_COPY: "input_invalid",
+      EMPTY_PLAN: "input_invalid",
+      AUTH_REQUIRED: "auth_required",
+      AUTH_EXPIRED: "auth_required",
+      PASTE_CODE_MISSING: "auth_required",
+      PERMISSION_DENIED: "permission_denied",
+      DEVICE_AUTH_DENIED: "permission_denied",
+      SCOPE_REJECTED: "permission_denied",
+      NOT_FOUND: "not_found",
+      KV_NOT_FOUND: "not_found",
+      NETWORK_ERROR: "network",
+      OPENKEY_UNREACHABLE: "network",
+      STORAGE_FULL: "storage_full",
+      KV_PRECONDITION_FAILED: "precondition",
+      CANCELLED: "cancelled"
+    };
     CLIError = class extends Error {
       constructor(code3, message, exitCode = ExitCode.ERROR, metadata) {
         super(message);
@@ -6521,6 +6676,52 @@ function projectDiagnosticData(value) {
     return REDACTED;
   }
 }
+function dispatchDiagnosticFetch(context, fetch2, service, action, url, init) {
+  if (typeof fetch2 !== "function") throw new TypeError("Fetch transport is not callable");
+  if (!context.diagnosticTelemetryEnabled) return fetch2(url, init);
+  let fields;
+  let started;
+  try {
+    const normalized = action.startsWith("tinycloud.kv/") ? action.slice("tinycloud.kv/".length) : action;
+    fields = { attempt_id: globalThis.crypto.randomUUID(), service, action: Object.prototype.hasOwnProperty.call(ATTEMPT_ACTIONS, normalized) ? normalized : "unknown" };
+    started = performance.now();
+  } catch {
+    return fetch2(url, init);
+  }
+  const emit = (event, data) => {
+    try {
+      context.emit(event, data);
+    } catch {
+    }
+  };
+  emit("diagnostic.attempt.start", fields);
+  const finish = (outcome, status) => {
+    try {
+      emit("diagnostic.attempt.finish", {
+        ...fields,
+        outcome,
+        ...status === void 0 ? {} : { status },
+        duration_ms: Math.min(MAX_METRIC, Math.max(0, performance.now() - started))
+      });
+    } catch {
+    }
+  };
+  try {
+    return fetch2(url, init).then(
+      (response) => {
+        finish("response", response.status);
+        return response;
+      },
+      (error) => {
+        finish("error");
+        throw error;
+      }
+    );
+  } catch (error) {
+    finish("error");
+    throw error;
+  }
+}
 function getGlobal() {
   return globalThis;
 }
@@ -8462,7 +8663,7 @@ function encOk(data) {
 function encErr(error) {
   return { ok: false, error };
 }
-var import_decrypt_transport_response_error, ErrorCodes, defaultRetryPolicy, TelemetryEvents, REDACTED, SAFE_NUMBER_FIELDS, SAFE_BOOLEAN_FIELDS, SAFE_REPLICATION_FIELDS, DEBUG_FLAG, MAX_EVENTS, TinyCloudDebugLogger, tinyCloudDebugLogger, ServiceErrorSchema, GenericResultSchema, KVResponseHeadersSchema, GenericKVResponseSchema, KVListResponseSchema, KVListResultSchema, ServiceRequestEventSchema, ServiceResponseEventSchema, ServiceErrorEventSchema, ServiceRetryEventSchema, TelemetrySpanEventSchema, RetryPolicySchema, ServiceSessionSchema, URN_PREFIX, NETWORK_NAME_RE, PKH_EIP155_DID_RE, NetworkIdError, RequestTimeoutError, grantableActions, capabilityServices, MAX_CAUSE_DEPTH2, STORAGE_FULL_MESSAGE, STORAGE_WRITE_TOO_LARGE_MESSAGE, STORAGE_REJECTION_BODY_ERRORS, MAX_TIMER_DELAY_MS, BaseService, PrefixedKVService, DEFAULT_SIGNED_READ_URL_EXPIRY_MS, KVAction, MAX_KV_BATCH_READ_ITEMS, pathByteEncoder, REVOKED_BODY, KVService, SQLMigrations, DatabaseHandle, SQLAction, DDL_TOKENS, MIGRATIONS_TABLE, MIGRATIONS_SCHEMA, MIGRATIONS_META_NAMESPACE, MIGRATIONS_META_ID, SQLService, DuckDbDatabaseHandle, DuckDbAction, DuckDbService, AsyncQueue, HOOK_STREAM_RETRY_BASE_DELAY_MS, HOOK_STREAM_RETRY_MAX_DELAY_MS, HOOK_STREAM_HEALTHY_MS, HooksService, SUPERSEDED, STREAM_ERROR_NAMES, STREAM_ERROR_CODES, VaultVersionConfig, CURRENT_VAULT_VERSION, VaultHeaders, DB_NAME, DB_VERSION, STORE_NAME, WRAP_KEY_ID, DataVaultService, SECRET_NAME_RE, SECRET_PREFIX, SCOPED_SECRET_PREFIX, RESERVED_SECRET_SCOPES, TC832_RESERVED_SCOPES, HEX, DEFAULT_ENCRYPTION_ALG, ENVELOPE_VERSION, DEFAULT_KEY_VERSION, DECRYPT_FACT_TYPE, DECRYPT_RESULT_TYPE, EncryptionService;
+var import_decrypt_transport_response_error, ErrorCodes, defaultRetryPolicy, TelemetryEvents, REDACTED, SAFE_NUMBER_FIELDS, SAFE_BOOLEAN_FIELDS, SAFE_REPLICATION_FIELDS, ATTEMPT_ACTIONS, MAX_METRIC, DEBUG_FLAG, MAX_EVENTS, TinyCloudDebugLogger, tinyCloudDebugLogger, ServiceErrorSchema, GenericResultSchema, KVResponseHeadersSchema, GenericKVResponseSchema, KVListResponseSchema, KVListResultSchema, ServiceRequestEventSchema, ServiceResponseEventSchema, ServiceErrorEventSchema, ServiceRetryEventSchema, TelemetrySpanEventSchema, RetryPolicySchema, ServiceSessionSchema, URN_PREFIX, NETWORK_NAME_RE, PKH_EIP155_DID_RE, NetworkIdError, RequestTimeoutError, grantableActions, capabilityServices, MAX_CAUSE_DEPTH2, STORAGE_FULL_MESSAGE, STORAGE_WRITE_TOO_LARGE_MESSAGE, STORAGE_REJECTION_BODY_ERRORS, MAX_TIMER_DELAY_MS, BaseService, PrefixedKVService, DEFAULT_SIGNED_READ_URL_EXPIRY_MS, KVAction, MAX_KV_BATCH_READ_ITEMS, pathByteEncoder, REVOKED_BODY, KVService, SQLMigrations, DatabaseHandle, SQLAction, DDL_TOKENS, MIGRATIONS_TABLE, MIGRATIONS_SCHEMA, MIGRATIONS_META_NAMESPACE, MIGRATIONS_META_ID, SQLService, DuckDbDatabaseHandle, DuckDbAction, DuckDbService, AsyncQueue, HOOK_STREAM_RETRY_BASE_DELAY_MS, HOOK_STREAM_RETRY_MAX_DELAY_MS, HOOK_STREAM_HEALTHY_MS, HooksService, SUPERSEDED, STREAM_ERROR_NAMES, STREAM_ERROR_CODES, VaultVersionConfig, CURRENT_VAULT_VERSION, VaultHeaders, DB_NAME, DB_VERSION, STORE_NAME, WRAP_KEY_ID, DataVaultService, SECRET_NAME_RE, SECRET_PREFIX, SCOPED_SECRET_PREFIX, RESERVED_SECRET_SCOPES, TC832_RESERVED_SCOPES, HEX, DEFAULT_ENCRYPTION_ALG, ENVELOPE_VERSION, DEFAULT_KEY_VERSION, DECRYPT_FACT_TYPE, DECRYPT_RESULT_TYPE, EncryptionService;
 var init_dist2 = __esm({
   "../sdk-services/dist/index.js"() {
     "use strict";
@@ -8528,6 +8729,9 @@ var init_dist2 = __esm({
       retryableErrors: [ErrorCodes.NETWORK_ERROR, ErrorCodes.TIMEOUT]
     };
     TelemetryEvents = {
+      DIAGNOSTIC_ATTEMPT_START: "diagnostic.attempt.start",
+      DIAGNOSTIC_ATTEMPT_FINISH: "diagnostic.attempt.finish",
+      DIAGNOSTIC_RETRY_SCHEDULED: "diagnostic.retry.scheduled",
       SPAN: "telemetry.span",
       SERVICE_REQUEST: "service.request",
       SERVICE_RESPONSE: "service.response",
@@ -8578,6 +8782,22 @@ var init_dist2 = __esm({
       strategy: ["session", "minted", "installed"],
       verify: ["match", "diverged", "error", "aborted"]
     };
+    ATTEMPT_ACTIONS = {
+      get: true,
+      put: true,
+      delete: true,
+      list: true,
+      batchPut: true,
+      batchGet: true,
+      query: true,
+      execute: true,
+      batch: true,
+      create: true,
+      drop: true,
+      describe: true,
+      unknown: true
+    };
+    MAX_METRIC = Number.MAX_SAFE_INTEGER;
     DEBUG_FLAG = "TinyCloud_debug";
     MAX_EVENTS = 1e3;
     TinyCloudDebugLogger = class {
@@ -9354,7 +9574,7 @@ var init_dist2 = __esm({
           action
         );
         const requestHeaders = Array.isArray(headers) ? [...headers, ...Object.entries(extraHeaders ?? {})] : { ...headers, ...extraHeaders };
-        return this.context.fetch(`${this.host}/invoke`, {
+        return dispatchDiagnosticFetch(this.context, this.context.fetch, "kv", action, `${this.host}/invoke`, {
           method: "POST",
           headers: requestHeaders,
           body,
@@ -9582,7 +9802,7 @@ var init_dist2 = __esm({
             );
           }
           const headers = Array.isArray(invocationHeaders) ? [...invocationHeaders, ...Object.entries(limitHeaders)] : { ...invocationHeaders, ...limitHeaders };
-          const response = await this.context.fetch(`${this.host}/invoke`, {
+          const response = await dispatchDiagnosticFetch(this.context, this.context.fetch, "kv", action === KVAction.GET ? "batchGet" : "unknown", `${this.host}/invoke`, {
             method: "POST",
             headers,
             signal: request.signal
@@ -10061,7 +10281,7 @@ var init_dist2 = __esm({
           };
           const fetchFn = this.context.fetch;
           requestMayHaveDispatched = true;
-          const response = await fetchFn(url, init);
+          const response = await dispatchDiagnosticFetch(this.context, fetchFn, "kv", "batchPut", url, init);
           if (!response.ok) {
             let errorText;
             try {
@@ -10623,7 +10843,7 @@ var init_dist2 = __esm({
           }
           const request = this.createRequestSignal(options?.signal, options?.timeout);
           try {
-            const response = await this.context.fetch(`${this.host}/signed/kv`, {
+            const response = await dispatchDiagnosticFetch(this.context, this.context.fetch, "kv", "unknown", `${this.host}/signed/kv`, {
               method: "POST",
               headers: this.withJsonContentType(headers),
               body: JSON.stringify(body),
@@ -11057,7 +11277,7 @@ var init_dist2 = __esm({
         const session = this.context.session;
         const actionList = Array.isArray(actions) ? actions : [actions];
         const headers = actionList.length === 1 ? this.context.invoke(session, "sql", dbName, actionList[0]) : this.invokeSQLAny(session, dbName, actionList);
-        return this.context.fetch(`${this.host}/invoke`, {
+        return dispatchDiagnosticFetch(this.context, this.context.fetch, "sql", typeof body.action === "string" ? body.action : "unknown", `${this.host}/invoke`, {
           method: "POST",
           headers: {
             ...headers,
@@ -17811,6 +18031,7 @@ __export(sdk_exports, {
 });
 import { TinyCloudNode, signedCompactUcanExpiry } from "@tinycloud/node-sdk";
 import { CLI_NAME as CLI_NAME7 } from "@tinycloud/operations/cli-name";
+import { diagnosticTelemetry, getDiagnosticContext as getDiagnosticContext2 } from "@tinycloud/operations/diagnostics";
 import { ownerSessionLacksProof } from "@tinycloud/operations/profile";
 function jwkHasPrivateParameter(jwk) {
   if (!jwk || typeof jwk !== "object") return false;
@@ -17842,19 +18063,22 @@ function signedLifetimePassed(delegation) {
   const expiry = typeof authorization === "string" ? signedCompactUcanExpiry(authorization) : void 0;
   return expiry !== void 0 && expiry.getTime() <= Date.now();
 }
-async function restoreProfileSession(node, profileName2, profile, sessionData) {
-  const posture = profile === null ? void 0 : resolveProfilePosture(profile);
-  if (ownerSessionLacksProof(sessionData, profile)) {
-    throw sessionExpiredError(profileName2, posture);
-  }
-  try {
-    await node.restoreSession(sessionData);
-  } catch (error) {
-    if (typeof error === "object" && error !== null && "code" in error && error.code === "AUTH_EXPIRED") {
+async function restoreProfileSession(node, profileName2, profile, resolveSessionData) {
+  return withCliDiagnosticPhase("restore", { service: "auth", action: "restore" }, async () => {
+    const sessionData = resolveSessionData();
+    const posture = profile === null ? void 0 : resolveProfilePosture(profile);
+    if (ownerSessionLacksProof(sessionData, profile)) {
       throw sessionExpiredError(profileName2, posture);
     }
-    throw error;
-  }
+    try {
+      await node.restoreSession(sessionData);
+    } catch (error) {
+      if (typeof error === "object" && error !== null && "code" in error && error.code === "AUTH_EXPIRED") {
+        throw sessionExpiredError(profileName2, posture);
+      }
+      throw error;
+    }
+  });
 }
 function persistedSessionData(profileName2, profile, session, key) {
   return {
@@ -17882,10 +18106,11 @@ async function restoreProfileSessionNode(ctx) {
   const key = await ProfileManager.getKey(ctx.profile);
   try {
     const node = new TinyCloudNode({
+      telemetry: getDiagnosticContext2() ? diagnosticTelemetry : void 0,
       host: ctx.host,
       ...profile.authMethod === "local" && profile.privateKey ? { privateKey: profile.privateKey } : {}
     });
-    await restoreProfileSession(node, ctx.profile, profile, persistedSessionData(ctx.profile, profile, session, key));
+    await restoreProfileSession(node, ctx.profile, profile, () => persistedSessionData(ctx.profile, profile, session, key));
     return { node };
   } catch (error) {
     if (error instanceof CLIError && error.metadata?.reason === "session_expired") {
@@ -17903,84 +18128,89 @@ async function storedSessionVerifiesLocally(profileName2) {
     if (!session || typeof session.delegationCid !== "string" || typeof session.spaceId !== "string" || session.delegationHeader === null || typeof session.delegationHeader !== "object" || !("Authorization" in session.delegationHeader) || typeof session.delegationHeader.Authorization !== "string") return true;
     const key = await ProfileManager.getKey(profileName2);
     const node = new TinyCloudNode({
+      telemetry: getDiagnosticContext2() ? diagnosticTelemetry : void 0,
       host: profile.host ?? DEFAULT_HOST,
       ...local ? { privateKey: profile.privateKey } : {}
     });
-    await restoreProfileSession(node, profileName2, profile, persistedSessionData(profileName2, profile, session, key));
+    await restoreProfileSession(node, profileName2, profile, () => persistedSessionData(profileName2, profile, session, key));
     return true;
   } catch {
     return false;
   }
 }
 async function createSDKInstance(ctx, options) {
-  const profile = options?.privateKey ? await ProfileManager.getProfile(ctx.profile).catch(() => null) : await ProfileManager.getProfile(ctx.profile);
-  const session = await ProfileManager.getSession(ctx.profile);
-  const key = await ProfileManager.getKey(ctx.profile);
-  const effectivePrivateKey = options?.privateKey ?? profile?.privateKey;
-  if (!key && !effectivePrivateKey && !(profile?.authMethod === "openkey" && session !== null)) {
-    throw new CLIError(
-      "AUTH_REQUIRED",
-      `No key found for profile "${ctx.profile}". Run \`${CLI_NAME7} --profile ${ctx.profile} auth rotate\` to create a new key and sign in.`,
-      ExitCode.AUTH_REQUIRED
-    );
-  }
-  if (profile?.authMethod === "local" && effectivePrivateKey) {
-    const replication2 = createCliReplicationConfig(
+  return withCliDiagnosticPhase("preparation", { service: "auth" }, async () => {
+    const profile = options?.privateKey ? await ProfileManager.getProfile(ctx.profile).catch(() => null) : await ProfileManager.getProfile(ctx.profile);
+    const session = await ProfileManager.getSession(ctx.profile);
+    const key = await ProfileManager.getKey(ctx.profile);
+    const effectivePrivateKey = options?.privateKey ?? profile?.privateKey;
+    if (!key && !effectivePrivateKey && !(profile?.authMethod === "openkey" && session !== null)) {
+      throw new CLIError(
+        "AUTH_REQUIRED",
+        `No key found for profile "${ctx.profile}". Run \`${CLI_NAME7} --profile ${ctx.profile} auth rotate\` to create a new key and sign in.`,
+        ExitCode.AUTH_REQUIRED
+      );
+    }
+    if (profile?.authMethod === "local" && effectivePrivateKey) {
+      const replication2 = createCliReplicationConfig(
+        ctx.profile,
+        profile?.replication,
+        { debug: ctx.replicationDebug, quiet: ctx.quiet },
+        ctx.replication
+      );
+      if (ctx.replication && !replication2) {
+        process.stderr.write("[replication] Enabled, but this profile has no configured prefixes; reads use the network.\n");
+      }
+      const node2 = new TinyCloudNode({
+        telemetry: getDiagnosticContext2() ? diagnosticTelemetry : void 0,
+        host: ctx.host,
+        privateKey: effectivePrivateKey,
+        ...replication2 ? { replication: replication2 } : {}
+      });
+      if (node2.replication) registerReplication(ctx.profile, node2.replication);
+      const restoredOwnSession = Boolean(session && session.delegationHeader && session.delegationCid && session.spaceId);
+      if (restoredOwnSession) {
+        await restoreProfileSession(node2, ctx.profile, profile, () => persistedSessionData(ctx.profile, profile, session, key));
+      } else {
+        await withCliDiagnosticPhase("restore", { service: "auth", action: "login" }, () => node2.signIn());
+      }
+      if (restoredOwnSession) {
+        recordWarnings(await replayAdditionalDelegations(node2, ctx.profile, {
+          host: ctx.host,
+          ownerSpace: profile.spaceId,
+          migrate: options?.privateKey === void 0
+        }));
+      }
+      return node2;
+    }
+    const replication = createCliReplicationConfig(
       ctx.profile,
       profile?.replication,
       { debug: ctx.replicationDebug, quiet: ctx.quiet },
       ctx.replication
     );
-    if (ctx.replication && !replication2) {
+    if (ctx.replication && !replication) {
       process.stderr.write("[replication] Enabled, but this profile has no configured prefixes; reads use the network.\n");
     }
-    const node2 = new TinyCloudNode({
+    const node = new TinyCloudNode({
+      telemetry: getDiagnosticContext2() ? diagnosticTelemetry : void 0,
       host: ctx.host,
-      privateKey: effectivePrivateKey,
-      ...replication2 ? { replication: replication2 } : {}
+      privateKey: options?.privateKey,
+      ...replication ? { replication } : {}
     });
-    if (node2.replication) registerReplication(ctx.profile, node2.replication);
-    const restoredOwnSession = Boolean(session && session.delegationHeader && session.delegationCid && session.spaceId);
-    if (restoredOwnSession) {
-      await restoreProfileSession(node2, ctx.profile, profile, persistedSessionData(ctx.profile, profile, session, key));
-    } else {
-      await node2.signIn();
-    }
-    if (restoredOwnSession) {
-      recordWarnings(await replayAdditionalDelegations(node2, ctx.profile, {
+    if (node.replication) registerReplication(ctx.profile, node.replication);
+    if (options?.privateKey) {
+      await withCliDiagnosticPhase("restore", { service: "auth", action: "login" }, () => node.signIn());
+    } else if (session && session.delegationHeader && session.delegationCid && session.spaceId) {
+      await restoreProfileSession(node, ctx.profile, profile, () => persistedSessionData(ctx.profile, profile, session, key));
+      recordWarnings(await replayAdditionalDelegations(node, ctx.profile, {
         host: ctx.host,
-        ownerSpace: profile.spaceId,
-        migrate: options?.privateKey === void 0
+        ownerSpace: profile?.spaceId,
+        migrate: true
       }));
     }
-    return node2;
-  }
-  const replication = createCliReplicationConfig(
-    ctx.profile,
-    profile?.replication,
-    { debug: ctx.replicationDebug, quiet: ctx.quiet },
-    ctx.replication
-  );
-  if (ctx.replication && !replication) {
-    process.stderr.write("[replication] Enabled, but this profile has no configured prefixes; reads use the network.\n");
-  }
-  const node = new TinyCloudNode({
-    host: ctx.host,
-    privateKey: options?.privateKey,
-    ...replication ? { replication } : {}
+    return node;
   });
-  if (node.replication) registerReplication(ctx.profile, node.replication);
-  if (options?.privateKey) {
-    await node.signIn();
-  } else if (session && session.delegationHeader && session.delegationCid && session.spaceId) {
-    await restoreProfileSession(node, ctx.profile, profile, persistedSessionData(ctx.profile, profile, session, key));
-    recordWarnings(await replayAdditionalDelegations(node, ctx.profile, {
-      host: ctx.host,
-      ownerSpace: profile?.spaceId,
-      migrate: true
-    }));
-  }
-  return node;
 }
 async function bootstrapDelegatedSession(ctx, delegation) {
   const written = await ProfileManager.withLock(ctx.profile, async () => {
@@ -18082,27 +18312,30 @@ function annotate(error, note) {
   return new CLIError(cause.code, `${cause.message} ${note}`, cause.exitCode, cause.metadata);
 }
 async function ensureAuthenticated(ctx, options) {
-  if (options?.privateKey) {
+  return withCliDiagnosticPhase("preparation", { service: "auth" }, async () => {
+    if (options?.privateKey) {
+      return createSDKInstance(ctx, options);
+    }
+    const profile = await ProfileManager.getProfile(ctx.profile).catch(() => null);
+    if (profile?.authMethod === "local" && profile.privateKey) {
+      return createSDKInstance(ctx);
+    }
+    const session = await ProfileManager.getSession(ctx.profile);
+    if (!session) {
+      throw new CLIError(
+        "AUTH_REQUIRED",
+        `Not authenticated. Run \`${CLI_NAME7} auth login\` or \`${CLI_NAME7} init\` first.`,
+        ExitCode.AUTH_REQUIRED
+      );
+    }
     return createSDKInstance(ctx, options);
-  }
-  const profile = await ProfileManager.getProfile(ctx.profile).catch(() => null);
-  if (profile?.authMethod === "local" && profile.privateKey) {
-    return createSDKInstance(ctx);
-  }
-  const session = await ProfileManager.getSession(ctx.profile);
-  if (!session) {
-    throw new CLIError(
-      "AUTH_REQUIRED",
-      `Not authenticated. Run \`${CLI_NAME7} auth login\` or \`${CLI_NAME7} init\` first.`,
-      ExitCode.AUTH_REQUIRED
-    );
-  }
-  return createSDKInstance(ctx, options);
+  });
 }
 var BOOTSTRAP_PROFILE_FIELDS;
 var init_sdk = __esm({
   "src/lib/sdk.ts"() {
     "use strict";
+    init_diagnostics();
     init_profiles();
     init_types();
     init_errors();
@@ -20298,9 +20531,11 @@ init_types();
 // src/auth/browser-auth.ts
 init_constants();
 init_errors();
+init_diagnostics();
 import { createServer } from "http";
 import { randomBytes as randomBytes3 } from "crypto";
 import { createInterface } from "readline";
+import { beginDiagnosticPhase as beginDiagnosticPhase3, emitDiagnostic as emitDiagnostic4, getDiagnosticContext as getDiagnosticContext3, withDiagnosticContext as withDiagnosticContext2 } from "@tinycloud/operations/diagnostics";
 var PRIVATE_JWK_FIELDS = /* @__PURE__ */ new Set([
   "d",
   "p",
@@ -20322,19 +20557,21 @@ function publicJwkForDelegation(jwk) {
   return publicJwk;
 }
 async function startAuthFlow(did, options = {}) {
-  if (options.paste) {
-    return pasteFlow(did, options);
-  }
-  try {
-    return await callbackFlow(did, options);
-  } catch (error) {
-    if (error instanceof CLIError && error.code === "CANCELLED") throw error;
-    if (process.stdin.isTTY) {
-      console.error("Could not open browser. Falling back to manual paste mode.");
+  return withCliDiagnosticPhase("approval_request", { service: "auth", action: "request", role: "approval" }, async () => {
+    if (options.paste) {
       return pasteFlow(did, options);
     }
-    throw new Error("Cannot open browser in non-interactive mode. Use --paste flag.");
-  }
+    try {
+      return await callbackFlow(did, options);
+    } catch (error) {
+      if (error instanceof CLIError && error.code === "CANCELLED") throw error;
+      if (process.stdin.isTTY) {
+        console.error("Could not open browser. Falling back to manual paste mode.");
+        return pasteFlow(did, options);
+      }
+      throw new Error("Cannot open browser in non-interactive mode. Use --paste flag.");
+    }
+  });
 }
 function buildAuthUrl(did, options = {}) {
   const params = new URLSearchParams();
@@ -20456,11 +20693,13 @@ function shouldOpenBrowser(options) {
 async function callbackFlow(did, options = {}) {
   return new Promise((resolve5, reject) => {
     let timeout;
+    let finishWait;
     let settled = false;
     let rl;
     function settle(result) {
       if (settled) return;
       settled = true;
+      finishWait?.({ outcome: result.data ? "accepted" : result.error instanceof CLIError && result.error.code === "CANCELLED" ? "cancelled" : "failed" });
       clearTimeout(timeout);
       server.close();
       server.closeAllConnections();
@@ -20545,6 +20784,7 @@ async function callbackFlow(did, options = {}) {
       } else if (!openBrowser || hasTerminal) {
         console.error(`Open this URL in a browser to authenticate: ${authUrl}`);
       }
+      finishWait = beginDiagnosticPhase3("approval_wait", { service: "auth", role: "approval", timing_scope: "approval_wait" });
       if (openBrowser) {
         try {
           const open8 = (await import("open")).default;
@@ -20577,12 +20817,14 @@ If the browser can't connect back, enter the short code or paste the full delega
       }
     });
     timeout = setTimeout(() => {
+      emitDiagnostic4({ type: "operation.step", phase: "approval_wait", outcome: "expired" });
       settle({ error: new Error("Authentication timed out after 5 minutes") });
     }, 5 * 60 * 1e3);
   });
 }
 async function pasteFlow(did, options = {}) {
   const authUrl = buildAuthUrl(did, options);
+  const requestContext = getDiagnosticContext3();
   console.error(`
 Open this URL in a browser to authenticate:
 `);
@@ -20593,16 +20835,21 @@ Open this URL in a browser to authenticate:
     output: process.stderr
   });
   return new Promise((resolve5, reject) => {
+    const finishWait = beginDiagnosticPhase3("approval_wait", { service: "auth", role: "approval", timing_scope: "approval_wait" });
     let answered = false;
-    rl.on("line", (input) => {
+    rl.on("line", (input) => withDiagnosticContext2(requestContext, () => {
       if (answered || input.trim() === "") return;
       answered = true;
+      finishWait({ outcome: "accepted" });
+      emitDiagnostic4({ type: "operation.step", phase: "approval_request", action: "request", outcome: "accepted" });
       rl.close();
-      void delegationFromInput(input, did, options).then(resolve5, reject);
-    });
-    rl.on("close", () => {
+      void withCliDiagnosticPhase("approval_verify", { service: "auth", action: "verify" }, () => delegationFromInput(input, did, options)).then(resolve5, reject);
+    }));
+    rl.on("close", () => withDiagnosticContext2(requestContext, () => {
       if (answered) return;
       answered = true;
+      finishWait({ outcome: "pending" });
+      emitDiagnostic4({ type: "operation.step", phase: "approval_request", business: "awaiting_owner", outcome: "awaiting_owner" });
       reject(new CLIError(
         "PASTE_CODE_MISSING",
         `Stdin ended before a delegation code was pasted; no session was saved. Approve at ${authUrl} and pass the returned code on stdin.`,
@@ -20612,10 +20859,11 @@ Open this URL in a browser to authenticate:
           hint: `Open ${authUrl}, approve, then pass the code on stdin followed by a newline.`
         }
       ));
-    });
+    }));
     rl.on("SIGINT", () => {
       if (answered) return;
       answered = true;
+      finishWait({ outcome: "cancelled", signal: "SIGINT" });
       rl.close();
       reject(loginCancelled());
     });
@@ -20643,6 +20891,7 @@ init_replication_config();
 import { TCWSessionManager, importKey, initPanicHook } from "@tinycloud/node-sdk-wasm";
 import { PrivateKeySigner } from "@tinycloud/node-sdk";
 import { randomBytes as randomBytes4 } from "crypto";
+import { diagnosticTelemetry as diagnosticTelemetry2, getDiagnosticContext as getDiagnosticContext4 } from "@tinycloud/operations/diagnostics";
 var wasmInitialized = false;
 function ensureWasm() {
   if (!wasmInitialized) {
@@ -20693,6 +20942,7 @@ async function localKeySignIn(options) {
     options.replication !== void 0
   );
   const node = new TinyCloudNode3({
+    telemetry: getDiagnosticContext4() ? diagnosticTelemetry2 : void 0,
     privateKey: options.privateKey,
     host: options.host,
     autoCreateSpace: true,
@@ -21054,6 +21304,8 @@ init_space();
 import { CLI_NAME as CLI_NAME10 } from "@tinycloud/operations/cli-name";
 import { isLocalOwnerProfile as isLocalOwnerProfile3, ownerSessionLacksProof as ownerSessionLacksProof3 } from "@tinycloud/operations/profile";
 import { ProfileLockTimeoutError as ProfileLockTimeoutError2 } from "@tinycloud/operations/state";
+init_diagnostics();
+import { emitDiagnostic as emitDiagnostic5 } from "@tinycloud/operations/diagnostics";
 function assertNotLocalOwner(profileName2, profile, flow) {
   if (profile === null || !isLocalOwnerProfile3(profile)) return;
   throw new CLIError(
@@ -21133,39 +21385,43 @@ function errorMessage(error) {
   return error instanceof Error ? error.message : String(error);
 }
 async function commitLogin(profileName2, snapshot, commit) {
-  await ProfileManager.withLock(profileName2, async () => {
-    const current = await readProfileSnapshot(profileName2);
-    if (canonicalJson(current.profile) !== canonicalJson(snapshot.profile) || canonicalJson(current.key) !== canonicalJson(snapshot.key) || canonicalJson(current.session) !== canonicalJson(snapshot.session)) {
+  return withCliDiagnosticPhase("approval_commit", { service: "local", action: "commit", role: "approval" }, async () => {
+    await ProfileManager.withLock(profileName2, async () => {
+      const current = await readProfileSnapshot(profileName2);
+      if (canonicalJson(current.profile) !== canonicalJson(snapshot.profile) || canonicalJson(current.key) !== canonicalJson(snapshot.key) || canonicalJson(current.session) !== canonicalJson(snapshot.session)) {
+        throw new CLIError(
+          "PROFILE_CHANGED_DURING_LOGIN",
+          `Profile "${profileName2}" changed while this login was in progress (another login, key rotation or logout). Nothing was saved; check \`${CLI_NAME10} --profile ${profileName2} context\` and run the login again if it is still needed.`,
+          ExitCode.ERROR
+        );
+      }
+      if (commit.approved && !commit.approved.replaceSession) {
+        const newExpiresAt = sessionExpiresAt(commit.session) ?? void 0;
+        assertSessionReplaceable(profileName2, current, commit.approved.ownerDid, commit.approved.scope, newExpiresAt);
+      }
+      try {
+        await ProfileManager.setKey(profileName2, commit.key);
+        await ProfileManager.setSession(profileName2, commit.session);
+        await ProfileManager.setProfile(profileName2, commit.profile);
+        emitDiagnostic5({ type: "operation.step", phase: "local_commit", outcome: "complete", mutation: "confirmed" });
+      } catch (error) {
+        const failures = await restore(profileName2, current);
+        emitDiagnostic5({ type: "operation.step", phase: "local_commit", outcome: "failed", mutation: failures.length === 0 ? "rejected" : "unknown" });
+        if (failures.length === 0) throw error;
+        throw new CLIError(
+          "PROFILE_STATE_INCONSISTENT",
+          `Saving the login for profile "${profileName2}" failed (${errorMessage(error)}), and restoring its previous state failed too (${failures.map(errorMessage).join("; ")}). The profile's key, session and settings may not match. Check \`${CLI_NAME10} --profile ${profileName2} context\`, then run the login again with --replace-session, or use a new profile.`,
+          ExitCode.ERROR
+        );
+      }
+    }, { timeoutMs: PROFILE_COMMIT_LOCK_TIMEOUT_MS }).catch((error) => {
+      if (!(error instanceof ProfileLockTimeoutError2)) throw error;
       throw new CLIError(
-        "PROFILE_CHANGED_DURING_LOGIN",
-        `Profile "${profileName2}" changed while this login was in progress (another login, key rotation or logout). Nothing was saved; check \`${CLI_NAME10} --profile ${profileName2} context\` and run the login again if it is still needed.`,
+        "PROFILE_LOCK_TIMEOUT",
+        `Another tc process kept profile "${profileName2}" locked for ${PROFILE_COMMIT_LOCK_TIMEOUT_MS / 1e3} s, so the approved login was not saved. Wait for it to finish (a crashed process's lock is reclaimed after 30 s) and run the login again.`,
         ExitCode.ERROR
       );
-    }
-    if (commit.approved && !commit.approved.replaceSession) {
-      const newExpiresAt = sessionExpiresAt(commit.session) ?? void 0;
-      assertSessionReplaceable(profileName2, current, commit.approved.ownerDid, commit.approved.scope, newExpiresAt);
-    }
-    try {
-      await ProfileManager.setKey(profileName2, commit.key);
-      await ProfileManager.setSession(profileName2, commit.session);
-      await ProfileManager.setProfile(profileName2, commit.profile);
-    } catch (error) {
-      const failures = await restore(profileName2, current);
-      if (failures.length === 0) throw error;
-      throw new CLIError(
-        "PROFILE_STATE_INCONSISTENT",
-        `Saving the login for profile "${profileName2}" failed (${errorMessage(error)}), and restoring its previous state failed too (${failures.map(errorMessage).join("; ")}). The profile's key, session and settings may not match. Check \`${CLI_NAME10} --profile ${profileName2} context\`, then run the login again with --replace-session, or use a new profile.`,
-        ExitCode.ERROR
-      );
-    }
-  }, { timeoutMs: PROFILE_COMMIT_LOCK_TIMEOUT_MS }).catch((error) => {
-    if (!(error instanceof ProfileLockTimeoutError2)) throw error;
-    throw new CLIError(
-      "PROFILE_LOCK_TIMEOUT",
-      `Another tc process kept profile "${profileName2}" locked for ${PROFILE_COMMIT_LOCK_TIMEOUT_MS / 1e3} s, so the approved login was not saved. Wait for it to finish (a crashed process's lock is reclaimed after 30 s) and run the login again.`,
-      ExitCode.ERROR
-    );
+    });
   });
 }
 
@@ -21204,6 +21460,8 @@ function ownerLoginPermissions(owner) {
 }
 
 // src/auth/device-auth.ts
+init_diagnostics();
+import { beginDiagnosticPhase as beginDiagnosticPhase4, emitDiagnostic as emitDiagnostic6 } from "@tinycloud/operations/diagnostics";
 var DEVICE_DELEGATION_MAX_SECONDS = 30 * 24 * 60 * 60;
 var DEVICE_APPROVAL_WINDOW_MAX_SECONDS = 60 * 60;
 var DEVICE_REASON_MAX_LENGTH = 200;
@@ -21421,192 +21679,217 @@ function writeApprovalPrompt(prompt) {
   );
 }
 async function acquireDeviceDelegation(input) {
-  validateLoginPermissions(input.permissions);
-  if (input.permissions.some((permission) => permission.service === "tinycloud.encryption" || permission.space === "secrets" || permission.space?.startsWith("tinycloud:") && permission.space.endsWith(":secrets"))) {
-    throw new CLIError(
-      "DEVICE_AUTH_UNSUPPORTED_SCOPE",
-      "--device cannot authorize tinycloud.encryption or the secrets space. Use another OpenKey approval method for this manifest.",
-      ExitCode.USAGE_ERROR
-    );
-  }
-  const expiry = input.expiry ?? { durationMs: DEVICE_DELEGATION_MAX_SECONDS * 1e3 };
-  const ttlSeconds = Math.floor(expiry.durationMs / 1e3);
-  if (!Number.isSafeInteger(ttlSeconds) || ttlSeconds < 60 || ttlSeconds > DEVICE_DELEGATION_MAX_SECONDS) {
-    throw new CLIError("INVALID_EXPIRY", "Device authorization --expiry must be between 1 minute and 30 days.", ExitCode.USAGE_ERROR);
-  }
-  const reason = input.reason?.trim().slice(0, DEVICE_REASON_MAX_LENGTH);
-  const openkeyHost = canonicalOrigin(input.openkeyHost ?? DEFAULT_OPENKEY_DEVICE_API_HOST, "OpenKey host");
-  const nodeOrigin = canonicalOrigin(input.nodeOrigin, "TinyCloud node origin");
-  const shareOrigin = canonicalOrigin(input.shareOrigin, "Share origin");
-  const fetchFn = input.fetchFn ?? globalThis.fetch;
-  const deviceSecret = randomBytes5(32).toString("base64url");
-  const codeVerifier = randomBytes5(32).toString("base64url");
-  const relayKey = createECDH("prime256v1");
-  relayKey.generateKeys();
-  const relayPublicJwk = relayPublicJwkOf(relayKey);
-  const publicJwk = publicSessionJwk(input.jwk);
-  let startResponse;
-  try {
-    startResponse = await fetchFn(`${openkeyHost}/api/device-authorizations`, {
-      method: "POST",
-      credentials: "omit",
-      redirect: "error",
-      referrerPolicy: "no-referrer",
-      headers: { accept: "application/json", "content-type": "application/json" },
-      body: JSON.stringify({
-        deviceSecretHash: digest(deviceSecret),
-        codeChallenge: digest(codeVerifier),
-        relayPublicJwk,
-        sessionDid: input.sessionDid,
-        publicJwk,
-        permissions: input.permissions.map(({ service, space, path, actions }) => ({ service, space, path, actions })),
-        nodeOrigin,
-        shareOrigin,
-        delegationTtlSeconds: ttlSeconds,
-        ...reason ? { reason } : {}
-      })
-    });
-  } catch (error) {
-    throw new CLIError(
-      "OPENKEY_UNREACHABLE",
-      `Could not reach the OpenKey device API at ${openkeyHost}: ${error instanceof Error ? error.message : String(error)}. Check TC_OPENKEY_HOST or the profile's openkeyHost.`,
-      ExitCode.NETWORK_ERROR
-    );
-  }
-  const startValue = await responseJson(startResponse);
-  if (!startResponse.ok) {
-    const code3 = errorCode(startValue);
-    const description = errorDescription(startValue);
-    if (startResponse.status === 429 && code3 === "rate_limited") {
-      throw deviceAuthRateLimit(startResponse);
-    }
-    if (code3 === "invalid_scope") {
+  return withCliDiagnosticPhase("preparation", { service: "auth", action: "login", role: "approval" }, async () => {
+    validateLoginPermissions(input.permissions);
+    if (input.permissions.some((permission) => permission.service === "tinycloud.encryption" || permission.space === "secrets" || permission.space?.startsWith("tinycloud:") && permission.space.endsWith(":secrets"))) {
       throw new CLIError(
-        "SCOPE_REJECTED",
-        `OpenKey rejected the requested scope${description ? `: ${description}` : "."} Remove that capability from the manifest or use another approval flow.`,
-        ExitCode.PERMISSION_DENIED,
-        { openkeyError: code3, ...description ? { capability: description } : {} }
+        "DEVICE_AUTH_UNSUPPORTED_SCOPE",
+        "--device cannot authorize tinycloud.encryption or the secrets space. Use another OpenKey approval method for this manifest.",
+        ExitCode.USAGE_ERROR
       );
     }
-    throw new CLIError("DEVICE_AUTH_FAILED", `OpenKey device authorization failed: ${code3 ?? `HTTP ${startResponse.status}`}${description ? ` (${description})` : ""}`, ExitCode.ERROR);
-  }
-  const started = validateStart(startValue, openkeyHost);
-  const deadline = Date.now() + started.expiresIn * 1e3;
-  (input.emitInstructions ?? writeApprovalPrompt)({
-    verificationUri: started.verificationUri,
-    ...started.verificationUriComplete ? { verificationUriComplete: started.verificationUriComplete } : {},
-    userCode: started.userCode,
-    expiresAt: new Date(deadline).toISOString().replace(/\.\d{3}Z$/, "Z")
-  });
-  let interval = started.interval;
-  const wait = input.wait ?? ((milliseconds) => new Promise((resolve5) => setTimeout(resolve5, milliseconds)));
-  while (Date.now() < deadline) {
-    await wait(interval * 1e3);
-    let response;
-    try {
-      response = await fetchFn(`${openkeyHost}/api/device-authorizations/token`, {
-        method: "POST",
-        credentials: "omit",
-        redirect: "error",
-        referrerPolicy: "no-referrer",
-        headers: { accept: "application/json", "content-type": "application/json" },
-        body: JSON.stringify({ transactionId: started.transactionId, deviceSecret, codeVerifier })
-      });
-    } catch {
-      continue;
+    const expiry = input.expiry ?? { durationMs: DEVICE_DELEGATION_MAX_SECONDS * 1e3 };
+    const ttlSeconds = Math.floor(expiry.durationMs / 1e3);
+    if (!Number.isSafeInteger(ttlSeconds) || ttlSeconds < 60 || ttlSeconds > DEVICE_DELEGATION_MAX_SECONDS) {
+      throw new CLIError("INVALID_EXPIRY", "Device authorization --expiry must be between 1 minute and 30 days.", ExitCode.USAGE_ERROR);
     }
-    const value = await responseJson(response);
-    const code3 = errorCode(value);
-    if (response.status >= 500 || response.status === 429 && code3 !== "slow_down") continue;
-    if (code3 === "slow_down") {
-      interval += 5;
-      continue;
-    }
-    if (code3 === "authorization_pending") continue;
-    if (code3 === "access_denied") {
-      throw new CLIError("DEVICE_AUTH_DENIED", "The owner denied the OpenKey device authorization. No session was saved.", ExitCode.PERMISSION_DENIED);
-    }
-    if (code3 === "expired_token") {
-      throw new CLIError("DEVICE_AUTH_EXPIRED", "OpenKey device authorization expired_token: the approval window closed. Run the command again.", ExitCode.AUTH_REQUIRED);
-    }
-    if (!response.ok) throw new CLIError("DEVICE_AUTH_FAILED", `OpenKey device authorization failed: ${code3 ?? `HTTP ${response.status}`}`, ExitCode.ERROR);
-    const result = value;
-    if (result?.status === "pending") {
-      interval = Math.max(interval, Number.isSafeInteger(result.interval) ? result.interval : interval);
-      continue;
-    }
-    if (result?.status !== "approved" || !result.relay || !result.binding) {
-      throw invalidResponse("OpenKey returned an invalid device authorization result");
-    }
-    const delegation = decryptRelayResult(result.relay, started.transactionId, relayKey);
-    return verifyApproval({
-      binding: result.binding,
-      delegation,
-      transactionId: started.transactionId,
-      sessionDid: input.sessionDid,
-      nodeOrigin,
-      shareOrigin,
-      publicJwk,
-      key: input.jwk,
-      requested: input.permissions,
-      expiry,
-      expectedOwner: input.expectedOwner
+    const reason = input.reason?.trim().slice(0, DEVICE_REASON_MAX_LENGTH);
+    const openkeyHost = canonicalOrigin(input.openkeyHost ?? DEFAULT_OPENKEY_DEVICE_API_HOST, "OpenKey host");
+    const nodeOrigin = canonicalOrigin(input.nodeOrigin, "TinyCloud node origin");
+    const shareOrigin = canonicalOrigin(input.shareOrigin, "Share origin");
+    const fetchFn = input.fetchFn ?? globalThis.fetch;
+    const deviceSecret = randomBytes5(32).toString("base64url");
+    const codeVerifier = randomBytes5(32).toString("base64url");
+    const relayKey = createECDH("prime256v1");
+    relayKey.generateKeys();
+    const relayPublicJwk = relayPublicJwkOf(relayKey);
+    const publicJwk = publicSessionJwk(input.jwk);
+    const started = await withCliDiagnosticPhase("approval_request", { service: "auth", action: "request" }, async () => {
+      let startResponse;
+      try {
+        startResponse = await fetchFn(`${openkeyHost}/api/device-authorizations`, {
+          method: "POST",
+          credentials: "omit",
+          redirect: "error",
+          referrerPolicy: "no-referrer",
+          headers: { accept: "application/json", "content-type": "application/json" },
+          body: JSON.stringify({
+            deviceSecretHash: digest(deviceSecret),
+            codeChallenge: digest(codeVerifier),
+            relayPublicJwk,
+            sessionDid: input.sessionDid,
+            publicJwk,
+            permissions: input.permissions.map(({ service, space, path, actions }) => ({ service, space, path, actions })),
+            nodeOrigin,
+            shareOrigin,
+            delegationTtlSeconds: ttlSeconds,
+            ...reason ? { reason } : {}
+          })
+        });
+      } catch (error) {
+        throw new CLIError(
+          "OPENKEY_UNREACHABLE",
+          `Could not reach the OpenKey device API at ${openkeyHost}: ${error instanceof Error ? error.message : String(error)}. Check TC_OPENKEY_HOST or the profile's openkeyHost.`,
+          ExitCode.NETWORK_ERROR
+        );
+      }
+      const startValue = await responseJson(startResponse);
+      if (!startResponse.ok) {
+        const code3 = errorCode(startValue);
+        const description = errorDescription(startValue);
+        if (startResponse.status === 429 && code3 === "rate_limited") {
+          throw deviceAuthRateLimit(startResponse);
+        }
+        if (code3 === "invalid_scope") {
+          throw new CLIError(
+            "SCOPE_REJECTED",
+            `OpenKey rejected the requested scope${description ? `: ${description}` : "."} Remove that capability from the manifest or use another approval flow.`,
+            ExitCode.PERMISSION_DENIED,
+            { openkeyError: code3, ...description ? { capability: description } : {} }
+          );
+        }
+        throw new CLIError("DEVICE_AUTH_FAILED", `OpenKey device authorization failed: ${code3 ?? `HTTP ${startResponse.status}`}${description ? ` (${description})` : ""}`, ExitCode.ERROR);
+      }
+      return validateStart(startValue, openkeyHost);
     });
-  }
-  throw new CLIError("DEVICE_AUTH_EXPIRED", "OpenKey device authorization expired before approval. Run the command again.", ExitCode.AUTH_REQUIRED);
+    const deadline = Date.now() + started.expiresIn * 1e3;
+    (input.emitInstructions ?? writeApprovalPrompt)({
+      verificationUri: started.verificationUri,
+      ...started.verificationUriComplete ? { verificationUriComplete: started.verificationUriComplete } : {},
+      userCode: started.userCode,
+      expiresAt: new Date(deadline).toISOString().replace(/\.\d{3}Z$/, "Z")
+    });
+    let interval = started.interval;
+    const wait = input.wait ?? ((milliseconds) => new Promise((resolve5) => setTimeout(resolve5, milliseconds)));
+    let polls = 0;
+    const finishWait = beginDiagnosticPhase4("approval_wait", { service: "auth", timing_scope: "approval_wait" });
+    try {
+      while (Date.now() < deadline) {
+        emitDiagnostic6({ type: polls === 0 ? "operation.step" : "retry.scheduled", phase: "approval_poll", service: "auth", action: "poll", delay_ms: interval * 1e3 });
+        await wait(interval * 1e3);
+        polls += 1;
+        let response;
+        const finishPoll = beginDiagnosticPhase4("approval_poll", { service: "auth", action: "poll" });
+        try {
+          response = await fetchFn(`${openkeyHost}/api/device-authorizations/token`, {
+            method: "POST",
+            credentials: "omit",
+            redirect: "error",
+            referrerPolicy: "no-referrer",
+            headers: { accept: "application/json", "content-type": "application/json" },
+            body: JSON.stringify({ transactionId: started.transactionId, deviceSecret, codeVerifier })
+          });
+        } catch {
+          finishPoll({ outcome: "failed", error_class: "network" });
+          continue;
+        }
+        const value = await responseJson(response);
+        const code3 = errorCode(value);
+        finishPoll({ outcome: response.ok ? "response" : "error", status: response.status });
+        if (response.status >= 500 || response.status === 429 && code3 !== "slow_down") continue;
+        if (code3 === "slow_down") {
+          interval += 5;
+          continue;
+        }
+        if (code3 === "authorization_pending") continue;
+        if (code3 === "access_denied") {
+          finishWait({ outcome: "denied" });
+          throw new CLIError("DEVICE_AUTH_DENIED", "The owner denied the OpenKey device authorization. No session was saved.", ExitCode.PERMISSION_DENIED);
+        }
+        if (code3 === "expired_token") {
+          finishWait({ outcome: "expired" });
+          throw new CLIError("DEVICE_AUTH_EXPIRED", "OpenKey device authorization expired_token: the approval window closed. Run the command again.", ExitCode.AUTH_REQUIRED);
+        }
+        if (!response.ok) throw new CLIError("DEVICE_AUTH_FAILED", `OpenKey device authorization failed: ${code3 ?? `HTTP ${response.status}`}`, ExitCode.ERROR);
+        const result = value;
+        if (result?.status === "pending") {
+          interval = Math.max(interval, Number.isSafeInteger(result.interval) ? result.interval : interval);
+          continue;
+        }
+        if (result?.status !== "approved" || !result.relay || !result.binding) {
+          throw invalidResponse("OpenKey returned an invalid device authorization result");
+        }
+        finishWait({ outcome: "accepted" });
+        return withCliDiagnosticPhase("approval_verify", { service: "auth", action: "verify" }, async () => {
+          const delegation = decryptRelayResult(result.relay, started.transactionId, relayKey);
+          return verifyApproval({
+            binding: result.binding,
+            delegation,
+            transactionId: started.transactionId,
+            sessionDid: input.sessionDid,
+            nodeOrigin,
+            shareOrigin,
+            publicJwk,
+            key: input.jwk,
+            requested: input.permissions,
+            expiry,
+            expectedOwner: input.expectedOwner
+          });
+        });
+      }
+      finishWait({ outcome: "expired" });
+      throw new CLIError("DEVICE_AUTH_EXPIRED", "OpenKey device authorization expired before approval. Run the command again.", ExitCode.AUTH_REQUIRED);
+    } finally {
+      finishWait({ outcome: "failed" });
+    }
+  });
 }
 async function loginWithDeviceAuthorization(input) {
-  const snapshot = await readProfileSnapshot(input.profileName);
-  const existing = snapshot.profile;
-  assertNotLocalOwner(input.profileName, existing, "Device login");
-  const expectedOwner = expectedOwnerFor(input.profileName, existing, input.expectedOwner);
-  validateLoginPermissions(input.permissions);
-  const permissions = scopedLoginPermissions(input.permissions);
-  if (input.replaceSession !== true) {
-    const estimatedExpiry = new Date(Date.now() + (input.expiry?.durationMs ?? DEVICE_DELEGATION_MAX_SECONDS * 1e3)).toISOString();
-    assertSessionReplaceable(input.profileName, snapshot, expectedOwner, permissions, estimatedExpiry);
-  }
-  const key = snapshot.key ?? generateKey().jwk;
-  const sessionDid = keyToDID(key);
-  const result = await acquireDeviceDelegation({
-    ...input,
-    permissions,
-    sessionDid,
-    jwk: key,
-    openkeyHost: input.openkeyHost ?? resolveDeviceApiHost(existing),
-    expectedOwner
+  return withCliDiagnosticPhase("preparation", { service: "auth", action: "login", role: "approval" }, async () => {
+    const snapshot = await readProfileSnapshot(input.profileName);
+    const existing = snapshot.profile;
+    assertNotLocalOwner(input.profileName, existing, "Device login");
+    const expectedOwner = expectedOwnerFor(input.profileName, existing, input.expectedOwner);
+    validateLoginPermissions(input.permissions);
+    const permissions = scopedLoginPermissions(input.permissions);
+    if (input.replaceSession !== true) {
+      const estimatedExpiry = new Date(Date.now() + (input.expiry?.durationMs ?? DEVICE_DELEGATION_MAX_SECONDS * 1e3)).toISOString();
+      assertSessionReplaceable(input.profileName, snapshot, expectedOwner, permissions, estimatedExpiry);
+    }
+    const key = snapshot.key ?? generateKey().jwk;
+    const sessionDid = keyToDID(key);
+    const result = await acquireDeviceDelegation({
+      ...input,
+      permissions,
+      sessionDid,
+      jwk: key,
+      openkeyHost: input.openkeyHost ?? resolveDeviceApiHost(existing),
+      expectedOwner
+    });
+    const profile = withOwnerKeyPrimary({
+      ...existing,
+      name: input.profileName,
+      host: input.persistHost === true || !existing?.host ? input.nodeOrigin : existing.host,
+      chainId: existing?.chainId ?? DEFAULT_CHAIN_ID,
+      spaceName: result.spaceId.slice(result.spaceId.lastIndexOf(":") + 1),
+      did: sessionDid,
+      sessionDid,
+      ownerDid: result.ownerDid,
+      spaceId: result.spaceId,
+      createdAt: existing?.createdAt ?? (/* @__PURE__ */ new Date()).toISOString(),
+      posture: "owner-openkey",
+      operatorType: existing?.operatorType ?? "human",
+      authMethod: "openkey"
+    }, result.primary);
+    await commitLogin(input.profileName, snapshot, {
+      key,
+      session: result.session,
+      profile,
+      // The signed permissions, with their caveats; `approved` is the action summary.
+      approved: { scope: result.session.permissions, ownerDid: result.ownerDid, replaceSession: input.replaceSession === true }
+    });
+    warnIfNotPrimaryKey(result.ownerDid, result.primary);
+    announceFirstOwner(input.profileName, expectedOwner, result.ownerDid);
+    return { profile, result };
   });
-  const profile = withOwnerKeyPrimary({
-    ...existing,
-    name: input.profileName,
-    host: input.persistHost === true || !existing?.host ? input.nodeOrigin : existing.host,
-    chainId: existing?.chainId ?? DEFAULT_CHAIN_ID,
-    spaceName: result.spaceId.slice(result.spaceId.lastIndexOf(":") + 1),
-    did: sessionDid,
-    sessionDid,
-    ownerDid: result.ownerDid,
-    spaceId: result.spaceId,
-    createdAt: existing?.createdAt ?? (/* @__PURE__ */ new Date()).toISOString(),
-    posture: "owner-openkey",
-    operatorType: existing?.operatorType ?? "human",
-    authMethod: "openkey"
-  }, result.primary);
-  await commitLogin(input.profileName, snapshot, {
-    key,
-    session: result.session,
-    profile,
-    // The signed permissions, with their caveats; `approved` is the action summary.
-    approved: { scope: result.session.permissions, ownerDid: result.ownerDid, replaceSession: input.replaceSession === true }
-  });
-  warnIfNotPrimaryKey(result.ownerDid, result.primary);
-  announceFirstOwner(input.profileName, expectedOwner, result.ownerDid);
-  return { profile, result };
 }
 
 // src/commands/auth.ts
 init_raw_encryption();
 init_owner_did();
 init_publishing_manifest();
+init_diagnostics();
+import { beginDiagnosticPhase as beginDiagnosticPhase5, emitDiagnostic as emitDiagnostic7 } from "@tinycloud/operations/diagnostics";
 init_theme();
 
 // src/commands/auth-grants.ts
@@ -22173,7 +22456,7 @@ function registerAuthCommand(program, options) {
         );
       }
       const globalOpts = cmd.optsWithGlobals();
-      const ctx = await ProfileManager.resolveContext(globalOpts, { storedSession: "unused" });
+      const ctx = await withCliDiagnosticPhase("preparation", { service: "local" }, () => ProfileManager.resolveContext(globalOpts, { storedSession: "unused" }));
       const owner = options2.owner === void 0 ? void 0 : canonicalOwnerDid(options2.owner);
       const permissions = options2.manifest ? await loadManifestPermissions(options2.manifest, ctx.profile, { allowLogicalSpaces: true, ownerDid: owner, device: options2.device === true }) : void 0;
       const profileConfig = await ProfileManager.getProfile(ctx.profile).catch((error) => {
@@ -22267,7 +22550,7 @@ function registerAuthCommand(program, options) {
   auth.command("logout").description(`Clear the local session and remove local replicas. Logout is local; delegations and grants on the node stay valid until they expire. Use \`${CLI_NAME14} delegation revoke <cid>\` to end access now.`).option("--keep-replicas", "Keep this profile's local replicas").action(async (options2, cmd) => {
     try {
       const globalOpts = cmd.optsWithGlobals();
-      const ctx = await ProfileManager.resolveContext(globalOpts, { storedSession: "unused" });
+      const ctx = await withCliDiagnosticPhase("preparation", { service: "local" }, () => ProfileManager.resolveContext(globalOpts, { storedSession: "unused" }));
       await ProfileManager.getProfile(ctx.profile);
       await ProfileManager.clearSession(ctx.profile);
       const replicasRemoved = options2.keepReplicas ? [] : await removeProfileReplicasAndReplication(ctx.profile);
@@ -22285,7 +22568,7 @@ function registerAuthCommand(program, options) {
   auth.command("rotate").description("Rotate the active profile session key").option("--paste", "Use manual paste mode instead of browser callback").option("--no-popup", "Print the OpenKey URL without opening a browser").action(async (options2, cmd) => {
     try {
       const globalOpts = cmd.optsWithGlobals();
-      const ctx = await ProfileManager.resolveContext(globalOpts, { storedSession: "unused" });
+      const ctx = await withCliDiagnosticPhase("preparation", { service: "local" }, () => ProfileManager.resolveContext(globalOpts, { storedSession: "unused" }));
       await rotateAuthKey(ctx.profile, ctx.host, {
         paste: options2.paste,
         noPopup: options2.popup === false
@@ -22297,7 +22580,7 @@ function registerAuthCommand(program, options) {
   auth.command("status").description("Show current authentication state").action(async (_options, cmd) => {
     try {
       const globalOpts = cmd.optsWithGlobals();
-      const ctx = await ProfileManager.resolveContext(globalOpts, { storedSession: "unused" });
+      const ctx = await withCliDiagnosticPhase("preparation", { service: "local" }, () => ProfileManager.resolveContext(globalOpts, { storedSession: "unused" }));
       const hasKey = await ProfileManager.getKey(ctx.profile);
       const session = await ProfileManager.getSession(ctx.profile);
       let profile;
@@ -22364,7 +22647,7 @@ ${signInAgainHint(ctx.profile, posture ?? void 0)}
   ).option("--emit [file]", "Emit the request artifact to stdout, or write it to file when provided").option("--grant", "Grant the requested permissions immediately with this owner profile").option("--yes", "Skip local-key TTY confirmation", false).option("--no-popup", "Print the OpenKey URL without opening a browser when granting with OpenKey").option("--device", "With --grant: approve on another device (e.g. a phone) through OpenKey device authorization (KV-scoped; SQL needs browser login)").action(async (options2, cmd) => {
     try {
       const globalOpts = cmd.optsWithGlobals();
-      const ctx = await ProfileManager.resolveContext(globalOpts, options2.grant ? {} : { storedSession: "unused" });
+      const ctx = await withCliDiagnosticPhase("preparation", { service: "local" }, () => ProfileManager.resolveContext(globalOpts, options2.grant ? {} : { storedSession: "unused" }));
       const profile = await ProfileManager.getProfile(ctx.profile);
       if (options2.device && (!options2.grant || resolveProfilePosture(profile) !== "owner-openkey")) {
         throw new CLIError("INVALID_ARGUMENT", "--device requires --grant on an OpenKey owner profile.", ExitCode.USAGE_ERROR);
@@ -22509,7 +22792,7 @@ ${signInAgainHint(ctx.profile, posture ?? void 0)}
   auth.command("import [source]").description("Import a TinyCloud delegation or permission request artifact").option("--stdin", "Read the JSON artifact from stdin").option("--paste", "Read the JSON artifact from stdin").action(async (source, options2, cmd) => {
     try {
       const globalOpts = cmd.optsWithGlobals();
-      const ctx = await ProfileManager.resolveContext(globalOpts);
+      const ctx = await withCliDiagnosticPhase("preparation", { service: "local" }, () => ProfileManager.resolveContext(globalOpts));
       const raw = await readAuthArtifactSource(source, {
         stdin: options2.stdin === true || options2.paste === true
       });
@@ -22650,7 +22933,7 @@ ${signInAgainHint(ctx.profile, posture ?? void 0)}
   auth.command("grant [request]").description("Grant a TinyCloud permission request artifact to its requester").option("--stdin", "Read the JSON request artifact from stdin").option("--paste", "Read the JSON request artifact from stdin").option("--yes", "Skip local-key TTY confirmation", false).action(async (source, options2, cmd) => {
     try {
       const globalOpts = cmd.optsWithGlobals();
-      const ctx = await ProfileManager.resolveContext(globalOpts);
+      const ctx = await withCliDiagnosticPhase("preparation", { service: "local" }, () => ProfileManager.resolveContext(globalOpts));
       const profile = await ProfileManager.getProfile(ctx.profile);
       const raw = await readAuthArtifactSource(source, {
         stdin: options2.stdin === true || options2.paste === true
@@ -22691,7 +22974,7 @@ ${signInAgainHint(ctx.profile, posture ?? void 0)}
   auth.command("retry [requestId]").description("Check whether a stored permission request is now satisfied").option("--last", "Use the latest stored permission request for this profile").option("--exec", "Run the captured command when the request is covered").action(async (requestId, options2, cmd) => {
     try {
       const globalOpts = cmd.optsWithGlobals();
-      const ctx = await ProfileManager.resolveContext(globalOpts);
+      const ctx = await withCliDiagnosticPhase("preparation", { service: "local" }, () => ProfileManager.resolveContext(globalOpts));
       const artifact = options2.last ? await getLastPermissionRequestArtifact(ctx.profile) : requestId ? await getPermissionRequestArtifact(ctx.profile, requestId) : null;
       if (!artifact) {
         throw new CLIError(
@@ -22734,7 +23017,7 @@ ${signInAgainHint(ctx.profile, posture ?? void 0)}
   auth.command("caps").description("Show granted capabilities for the active session").option("--diff <spec>", "Show missing capabilities for a spec").option("--history", "Show recent permission grants").action(async (options2, cmd) => {
     try {
       const globalOpts = cmd.optsWithGlobals();
-      const ctx = await ProfileManager.resolveContext(globalOpts);
+      const ctx = await withCliDiagnosticPhase("preparation", { service: "local" }, () => ProfileManager.resolveContext(globalOpts));
       if (options2.history) {
         const history = (await readGrantHistory(ctx.profile)).slice(-20);
         if (shouldOutputJson()) {
@@ -22792,7 +23075,7 @@ ${signInAgainHint(ctx.profile, posture ?? void 0)}
   auth.command("whoami").description("Show identity information").action(async (_options, cmd) => {
     try {
       const globalOpts = cmd.optsWithGlobals();
-      const ctx = await ProfileManager.resolveContext(globalOpts, { storedSession: "unused" });
+      const ctx = await withCliDiagnosticPhase("preparation", { service: "local" }, () => ProfileManager.resolveContext(globalOpts, { storedSession: "unused" }));
       const profile = await ProfileManager.getProfile(ctx.profile);
       const session = await ProfileManager.getSession(ctx.profile);
       const posture = resolveProfilePosture(profile);
@@ -23393,97 +23676,99 @@ async function persistCurrentLocalSession(profileName2, profile, session) {
   });
 }
 async function handleLocalAuth(profileName2, host, options = {}) {
-  const snapshot = await readProfileSnapshot(profileName2);
-  const profile = snapshot.profile;
-  const posture = profile ? resolveProfilePosture(profile) : null;
-  let privateKey;
-  let address;
-  let did;
-  let sessionDid = profile?.sessionDid;
-  if (profile && (profile.authMethod === "local" || posture === "local-owner-key") && profile.privateKey) {
-    privateKey = profile.privateKey;
-    address = profile.address ?? await deriveAddress(privateKey);
-    did = profile.did.startsWith("did:pkh:") ? profile.did : addressToDID(address, profile.chainId ?? DEFAULT_CHAIN_ID);
-    if (isInteractive()) {
-      process.stderr.write(theme.muted("Using existing local key") + "\n");
-      process.stderr.write(formatField("Address", address) + "\n");
+  return withCliDiagnosticPhase("preparation", { service: "auth", action: "login" }, async () => {
+    const snapshot = await readProfileSnapshot(profileName2);
+    const profile = snapshot.profile;
+    const posture = profile ? resolveProfilePosture(profile) : null;
+    let privateKey;
+    let address;
+    let did;
+    let sessionDid = profile?.sessionDid;
+    if (profile && (profile.authMethod === "local" || posture === "local-owner-key") && profile.privateKey) {
+      privateKey = profile.privateKey;
+      address = profile.address ?? await deriveAddress(privateKey);
+      did = profile.did.startsWith("did:pkh:") ? profile.did : addressToDID(address, profile.chainId ?? DEFAULT_CHAIN_ID);
+      if (isInteractive()) {
+        process.stderr.write(theme.muted("Using existing local key") + "\n");
+        process.stderr.write(formatField("Address", address) + "\n");
+      }
+    } else {
+      const identity = await withSpinner("Generating Ethereum key...", async () => {
+        return generateLocalIdentity(DEFAULT_CHAIN_ID);
+      });
+      privateKey = identity.privateKey;
+      address = identity.address;
+      did = identity.did;
+      if (isInteractive()) {
+        process.stderr.write("\n" + theme.heading("Local Key Generated") + "\n");
+        process.stderr.write(formatField("Address", address) + "\n");
+        process.stderr.write(formatField("DID", did) + "\n\n");
+      }
     }
-  } else {
-    const identity = await withSpinner("Generating Ethereum key...", async () => {
-      return generateLocalIdentity(DEFAULT_CHAIN_ID);
-    });
-    privateKey = identity.privateKey;
-    address = identity.address;
-    did = identity.did;
-    if (isInteractive()) {
-      process.stderr.write("\n" + theme.heading("Local Key Generated") + "\n");
-      process.stderr.write(formatField("Address", address) + "\n");
-      process.stderr.write(formatField("DID", did) + "\n\n");
+    const hasKey = snapshot.key;
+    let key;
+    if (options.forceSessionKey || !hasKey) {
+      const { jwk, did: generatedSessionDid } = await withSpinner("Generating session key...", async () => {
+        return generateKey();
+      });
+      key = jwk;
+      sessionDid = generatedSessionDid;
+    } else {
+      key = hasKey;
+      sessionDid ??= keyToDID(hasKey);
     }
-  }
-  const hasKey = snapshot.key;
-  let key;
-  if (options.forceSessionKey || !hasKey) {
-    const { jwk, did: generatedSessionDid } = await withSpinner("Generating session key...", async () => {
-      return generateKey();
+    const sessionResult = await withSpinner("Signing in...", async () => {
+      const replication = options.replication ?? profile?.replication;
+      return localKeySignIn({
+        privateKey,
+        host,
+        ...replication?.prefixes.length ? { profile: profileName2, replication } : {}
+      });
     });
-    key = jwk;
-    sessionDid = generatedSessionDid;
-  } else {
-    key = hasKey;
-    sessionDid ??= keyToDID(hasKey);
-  }
-  const sessionResult = await withSpinner("Signing in...", async () => {
-    const replication = options.replication ?? profile?.replication;
-    return localKeySignIn({
-      privateKey,
+    const session = {
+      authMethod: "local",
+      address,
+      chainId: DEFAULT_CHAIN_ID,
+      spaceId: sessionResult.spaceId,
+      delegationHeader: sessionResult.delegationHeader,
+      delegationCid: sessionResult.delegationCid,
+      jwk: sessionResult.jwk,
+      verificationMethod: sessionResult.verificationMethod,
+      siwe: sessionResult.siwe,
+      signature: sessionResult.signature
+    };
+    sessionDid = sessionResult.verificationMethod;
+    const updatedProfile = {
+      ...profile,
+      name: profileName2,
       host,
-      ...replication?.prefixes.length ? { profile: profileName2, replication } : {}
-    });
-  });
-  const session = {
-    authMethod: "local",
-    address,
-    chainId: DEFAULT_CHAIN_ID,
-    spaceId: sessionResult.spaceId,
-    delegationHeader: sessionResult.delegationHeader,
-    delegationCid: sessionResult.delegationCid,
-    jwk: sessionResult.jwk,
-    verificationMethod: sessionResult.verificationMethod,
-    siwe: sessionResult.siwe,
-    signature: sessionResult.signature
-  };
-  sessionDid = sessionResult.verificationMethod;
-  const updatedProfile = {
-    ...profile,
-    name: profileName2,
-    host,
-    chainId: DEFAULT_CHAIN_ID,
-    spaceName: "default",
-    did,
-    sessionDid,
-    ownerDid: did,
-    spaceId: sessionResult.spaceId,
-    createdAt: profile?.createdAt ?? (/* @__PURE__ */ new Date()).toISOString(),
-    posture: profile?.posture ?? "local-owner-key",
-    operatorType: profile?.operatorType ?? "human",
-    authMethod: "local",
-    privateKey,
-    address
-  };
-  await commitLogin(profileName2, snapshot, { key, session, profile: updatedProfile });
-  if (options.emitOutput ?? true) {
-    outputJson({
-      authenticated: true,
-      profile: profileName2,
+      chainId: DEFAULT_CHAIN_ID,
+      spaceName: "default",
       did,
       sessionDid,
-      address,
+      ownerDid: did,
       spaceId: sessionResult.spaceId,
-      authMethod: "local"
-    });
-  }
-  return { profile: updatedProfile, sessionResult };
+      createdAt: profile?.createdAt ?? (/* @__PURE__ */ new Date()).toISOString(),
+      posture: profile?.posture ?? "local-owner-key",
+      operatorType: profile?.operatorType ?? "human",
+      authMethod: "local",
+      privateKey,
+      address
+    };
+    await commitLogin(profileName2, snapshot, { key, session, profile: updatedProfile });
+    if (options.emitOutput ?? true) {
+      outputJson({
+        authenticated: true,
+        profile: profileName2,
+        did,
+        sessionDid,
+        address,
+        spaceId: sessionResult.spaceId,
+        authMethod: "local"
+      });
+    }
+    return { profile: updatedProfile, sessionResult };
+  });
 }
 async function handleOpenKeyAuth(profileName2, host, options = {}) {
   const { profile, delegationData, declined, legacyNested } = await refreshOpenKeySession(profileName2, host, options);
@@ -23507,6 +23792,7 @@ async function handleOpenKeyAuth(profileName2, host, options = {}) {
 }
 function reportDeclined(declined, signed) {
   if (declined.length === 0) return;
+  emitDiagnostic7({ type: "operation.step", phase: "approval_verify", role: "approval", outcome: "partial", missing: declined.length });
   process.stderr.write(
     `${theme.warn("Not granted in this session:")}
 ${declined.map((permission) => `  ${compactPermission(permission)}`).join("\n")}
@@ -23534,90 +23820,99 @@ function writeReplicationSecretsWarning() {
 `);
 }
 async function refreshOpenKeySession(profileName2, host, options = {}) {
-  const snapshot = await readProfileSnapshot(profileName2);
-  const profile = snapshot.profile ?? await ProfileManager.getProfile(profileName2);
-  const key = snapshot.key;
-  if (!key) {
-    throw new CLIError(
-      "NO_KEY",
-      `No key found for profile "${profileName2}". Run \`${CLI_NAME14} --profile ${profileName2} auth rotate\` to create a new key and sign in.`,
-      ExitCode.AUTH_REQUIRED
-    );
-  }
-  const expiry = options.expiry === void 0 ? void 0 : parseRequestedExpiry(options.expiry);
-  const openKeyExpiry = expiry === void 0 ? void 0 : openKeyExpiryParam(expiry);
-  const expectedOwner = expectedOwnerFor(profileName2, profile, options.expectedOwner);
-  const replication = options.replication ?? profile.replication ?? { prefixes: [] };
-  const previousSession = options.replication === void 0 && profile.replication?.prefixes.length ? await ProfileManager.getSession(profileName2) : null;
-  const rememberedPermissions = Array.isArray(previousSession?.permissions) ? previousSession.permissions : void 0;
-  const baseRequest = options.permissions ?? rememberedPermissions;
-  const requested = buildReplicationLoginRequest(baseRequest, {
-    ...replication,
-    ownerOpenKey: resolveProfilePosture(profile) === "owner-openkey",
-    ...expectedOwner === void 0 ? {} : { ownerDid: expectedOwner }
-  });
-  if (requested !== void 0) validateLoginPermissions(requested);
-  const permissions = requested === void 0 ? void 0 : scopedLoginPermissions(requested);
-  if (permissions !== void 0) {
-    assertNotLocalOwner(profileName2, profile, "Scoped browser login");
-  }
-  if (permissions !== void 0 && options.replaceSession !== true) {
-    const estimatedExpiry = expiry === void 0 ? void 0 : new Date(Date.now() + expiry.durationMs).toISOString();
-    assertSessionReplaceable(profileName2, snapshot, expectedOwner, permissions, estimatedExpiry);
-  }
-  const acquireOpenKey = options.openKeyAcquisition ?? startAuthFlow;
-  const delegationData = await acquireOpenKey(profile.did, {
-    paste: options.paste,
-    noPopup: options.noPopup,
-    jwk: key,
-    host,
-    openkeyHost: resolveOpenKeyHost(profile),
-    // A plain login with --owner names that owner's space, so OpenKey
-    // preselects its key; the signed owner is verified below.
-    permissions: permissions ?? (options.expectedOwner === void 0 ? void 0 : ownerLoginPermissions(expectedOwner)),
-    expiry: openKeyExpiry,
-    ...permissions ? { reason: "Allow this TinyCloud CLI profile to use the permissions in the requested manifest." } : {}
-  });
-  const sessionDid = profile.sessionDid ?? profile.did;
-  let sanitizedSession;
-  let verifiedOwner;
-  let declined = [];
-  let legacyNested = [];
-  if (permissions) {
-    const verified = verifyScopedLogin(delegationData, key, sessionDid, permissions, { expectedOwner, expiry });
-    sanitizedSession = verified.session;
-    legacyNested = verified.legacyNested;
-    verifiedOwner = sanitizedSession.ownerDid;
-    declined = declinedPermissions(permissions, sanitizedSession.permissions, verifiedOwner);
-  } else {
-    const signed = verifySignedSession(delegationData, key, sessionDid, { expectedOwner, expiry });
-    const spaceId = String(delegationData.spaceId);
-    if (normalizePkhIdentifier(ownerSpaceId(spaceId.split(":").at(-1) ?? "", signed.ownerDid)) !== normalizePkhIdentifier(spaceId)) {
-      throw new CLIError("OPENKEY_SCOPE_MISMATCH", "The approved session is for a space the signing account doesn't own. No session was saved.", ExitCode.PERMISSION_DENIED);
+  return withCliDiagnosticPhase("preparation", { service: "auth", action: "login", role: "approval" }, async () => {
+    const snapshot = await readProfileSnapshot(profileName2);
+    const profile = snapshot.profile ?? await ProfileManager.getProfile(profileName2);
+    const key = snapshot.key;
+    if (!key) {
+      throw new CLIError(
+        "NO_KEY",
+        `No key found for profile "${profileName2}". Run \`${CLI_NAME14} --profile ${profileName2} auth rotate\` to create a new key and sign in.`,
+        ExitCode.AUTH_REQUIRED
+      );
     }
-    verifiedOwner = signed.ownerDid;
-    sanitizedSession = withVerifiedAuthority({ ...delegationData, jwk: key }, signed);
-  }
-  const ownerKeyPrimary = verifiedOwner === void 0 ? void 0 : openKeyPrimaryFlag(delegationData);
-  const updatedProfile = withOwnerKeyPrimary({
-    ...profile,
-    host: options.persistHost === true || !profile.host ? host : profile.host,
-    sessionDid: profile.sessionDid ?? profile.did,
-    posture: profile.posture ?? "owner-openkey",
-    operatorType: profile.operatorType ?? "human",
-    authMethod: "openkey",
-    ...typeof sanitizedSession.spaceId === "string" ? { spaceId: sanitizedSession.spaceId } : {},
-    ...verifiedOwner === void 0 ? {} : { ownerDid: verifiedOwner }
-  }, ownerKeyPrimary);
-  await commitLogin(profileName2, snapshot, {
-    key,
-    session: sanitizedSession,
-    profile: updatedProfile,
-    ...permissions && verifiedOwner ? { approved: { scope: sanitizedSession.permissions, ownerDid: verifiedOwner, replaceSession: options.replaceSession === true } } : {}
+    const expiry = options.expiry === void 0 ? void 0 : parseRequestedExpiry(options.expiry);
+    const openKeyExpiry = expiry === void 0 ? void 0 : openKeyExpiryParam(expiry);
+    const expectedOwner = expectedOwnerFor(profileName2, profile, options.expectedOwner);
+    const replication = options.replication ?? profile.replication ?? { prefixes: [] };
+    const previousSession = options.replication === void 0 && profile.replication?.prefixes.length ? await ProfileManager.getSession(profileName2) : null;
+    const rememberedPermissions = Array.isArray(previousSession?.permissions) ? previousSession.permissions : void 0;
+    const baseRequest = options.permissions ?? rememberedPermissions;
+    const requested = buildReplicationLoginRequest(baseRequest, {
+      ...replication,
+      ownerOpenKey: resolveProfilePosture(profile) === "owner-openkey",
+      ...expectedOwner === void 0 ? {} : { ownerDid: expectedOwner }
+    });
+    if (requested !== void 0) validateLoginPermissions(requested);
+    const permissions = requested === void 0 ? void 0 : scopedLoginPermissions(requested);
+    if (permissions !== void 0) {
+      assertNotLocalOwner(profileName2, profile, "Scoped browser login");
+    }
+    if (permissions !== void 0 && options.replaceSession !== true) {
+      const estimatedExpiry = expiry === void 0 ? void 0 : new Date(Date.now() + expiry.durationMs).toISOString();
+      assertSessionReplaceable(profileName2, snapshot, expectedOwner, permissions, estimatedExpiry);
+    }
+    const acquireOpenKey = options.openKeyAcquisition ?? startAuthFlow;
+    const delegationData = await acquireOpenKey(profile.did, {
+      paste: options.paste,
+      noPopup: options.noPopup,
+      jwk: key,
+      host,
+      openkeyHost: resolveOpenKeyHost(profile),
+      // A plain login with --owner names that owner's space, so OpenKey
+      // preselects its key; the signed owner is verified below.
+      permissions: permissions ?? (options.expectedOwner === void 0 ? void 0 : ownerLoginPermissions(expectedOwner)),
+      expiry: openKeyExpiry,
+      ...permissions ? { reason: "Allow this TinyCloud CLI profile to use the permissions in the requested manifest." } : {}
+    });
+    const sessionDid = profile.sessionDid ?? profile.did;
+    let sanitizedSession;
+    let verifiedOwner;
+    let declined = [];
+    let legacyNested = [];
+    const finishVerification = beginDiagnosticPhase5("approval_verify", { service: "auth", action: "verify" });
+    try {
+      if (permissions) {
+        const verified = verifyScopedLogin(delegationData, key, sessionDid, permissions, { expectedOwner, expiry });
+        sanitizedSession = verified.session;
+        legacyNested = verified.legacyNested;
+        verifiedOwner = sanitizedSession.ownerDid;
+        declined = declinedPermissions(permissions, sanitizedSession.permissions, verifiedOwner);
+      } else {
+        const signed = verifySignedSession(delegationData, key, sessionDid, { expectedOwner, expiry });
+        const spaceId = String(delegationData.spaceId);
+        if (normalizePkhIdentifier(ownerSpaceId(spaceId.split(":").at(-1) ?? "", signed.ownerDid)) !== normalizePkhIdentifier(spaceId)) {
+          throw new CLIError("OPENKEY_SCOPE_MISMATCH", "The approved session is for a space the signing account doesn't own. No session was saved.", ExitCode.PERMISSION_DENIED);
+        }
+        verifiedOwner = signed.ownerDid;
+        sanitizedSession = withVerifiedAuthority({ ...delegationData, jwk: key }, signed);
+      }
+      finishVerification({ outcome: "pass", missing: declined.length });
+    } catch (error) {
+      finishVerification({ outcome: "fail" });
+      throw error;
+    }
+    const ownerKeyPrimary = verifiedOwner === void 0 ? void 0 : openKeyPrimaryFlag(delegationData);
+    const updatedProfile = withOwnerKeyPrimary({
+      ...profile,
+      host: options.persistHost === true || !profile.host ? host : profile.host,
+      sessionDid: profile.sessionDid ?? profile.did,
+      posture: profile.posture ?? "owner-openkey",
+      operatorType: profile.operatorType ?? "human",
+      authMethod: "openkey",
+      ...typeof sanitizedSession.spaceId === "string" ? { spaceId: sanitizedSession.spaceId } : {},
+      ...verifiedOwner === void 0 ? {} : { ownerDid: verifiedOwner }
+    }, ownerKeyPrimary);
+    await commitLogin(profileName2, snapshot, {
+      key,
+      session: sanitizedSession,
+      profile: updatedProfile,
+      ...permissions && verifiedOwner ? { approved: { scope: sanitizedSession.permissions, ownerDid: verifiedOwner, replaceSession: options.replaceSession === true } } : {}
+    });
+    warnIfNotPrimaryKey(verifiedOwner, ownerKeyPrimary);
+    announceFirstOwner(profileName2, expectedOwner, verifiedOwner);
+    return { profile: updatedProfile, delegationData: sanitizedSession, declined, legacyNested };
   });
-  warnIfNotPrimaryKey(verifiedOwner, ownerKeyPrimary);
-  announceFirstOwner(profileName2, expectedOwner, verifiedOwner);
-  return { profile: updatedProfile, delegationData: sanitizedSession, declined, legacyNested };
 }
 
 // src/commands/completion.ts
@@ -24035,6 +24330,304 @@ function registerDoctorCommand(program) {
   });
 }
 
+// src/commands/diagnostics.ts
+import { spawn as spawn2 } from "child_process";
+import {
+  DiagnosticStore,
+  diagnosticId as diagnosticId3,
+  decodeDiagnosticContext as decodeDiagnosticContext3,
+  encodeDiagnosticContext as encodeDiagnosticContext2,
+  validateDiagnosticSelection,
+  readDiagnosticJsonFile,
+  exportDiagnosticBundle,
+  importDiagnosticBundle,
+  selectDiagnosticCase,
+  reviewDiagnostics,
+  compareDiagnostics,
+  bundleDiagnosticCase
+} from "@tinycloud/operations/diagnostics";
+
+// src/lib/diagnostic-wrapper.ts
+import {
+  createDiagnosticRuntime as createDiagnosticRuntime2,
+  decodeDiagnosticContext as decodeDiagnosticContext2,
+  diagnosticClientProvenance as diagnosticClientProvenance2,
+  diagnosticDataObject,
+  diagnosticId as diagnosticId2,
+  encodeDiagnosticContext,
+  isDiagnosticId,
+  makeDiagnosticContext as makeDiagnosticContext2,
+  METADATA_RETENTION_MS
+} from "@tinycloud/operations/diagnostics";
+var STATE_FIELDS = {
+  version: true,
+  activity: true,
+  source_id: true,
+  generation: true,
+  wrapper_id: true,
+  started_ns: true,
+  context: true,
+  ordinal: true,
+  attempt_id: true,
+  attempt_started_ns: true
+};
+var MAX_STATE_BYTES = 4096;
+var MAX_INTERVAL_NS = BigInt(METADATA_RETENTION_MS) * 1000000n;
+function wrapperState(raw, now) {
+  if (!raw || Buffer.byteLength(raw) > MAX_STATE_BYTES) return void 0;
+  try {
+    const value = diagnosticDataObject(JSON.parse(raw), 10);
+    if (!value || Object.keys(value).some((key) => !Object.prototype.hasOwnProperty.call(STATE_FIELDS, key)) || value.version !== 1 || value.activity !== "kv" && value.activity !== "sql" || !isDiagnosticId(value.source_id) || !isDiagnosticId(value.wrapper_id) || !Number.isSafeInteger(value.generation) || Number(value.generation) < 1) return void 0;
+    const context = value.context;
+    if (!encodeDiagnosticContext(context) || context.scope !== "tc-apps") return void 0;
+    for (const field of ["started_ns", "attempt_started_ns"]) {
+      const stamp = value[field];
+      if (field === "attempt_started_ns" && stamp === void 0) continue;
+      if (typeof stamp !== "string" || !/^[0-9]{1,20}$/.test(stamp)) return void 0;
+      const elapsed = now - BigInt(stamp);
+      if (elapsed < 0n || elapsed > MAX_INTERVAL_NS) return void 0;
+    }
+    if (value.ordinal !== void 0 && (!Number.isInteger(value.ordinal) || Number(value.ordinal) < 1 || Number(value.ordinal) > 3)) return void 0;
+    if (value.attempt_id === void 0 !== (value.attempt_started_ns === void 0)) return void 0;
+    if (value.attempt_id !== void 0 && (!isDiagnosticId(value.attempt_id) || value.ordinal === void 0 || BigInt(value.attempt_started_ns) < BigInt(value.started_ns))) return void 0;
+    return value;
+  } catch {
+    return void 0;
+  }
+}
+async function observeDiagnosticWrapper(stage, value, exitCode, decision) {
+  let runtime;
+  let output2;
+  let expected = 0;
+  try {
+    const now = process.hrtime.bigint();
+    const inherited = decodeDiagnosticContext2(process.env.TC_DIAGNOSTICS_CONTEXT);
+    let state2;
+    if (stage === "begin") {
+      if (inherited?.scope !== "tc-apps" || value !== "kv" && value !== "sql" || exitCode !== void 0 || decision !== void 0) return;
+    } else {
+      if (stage !== "child" && stage !== "finish") return;
+      state2 = wrapperState(process.env.TC_DIAGNOSTICS_WRAPPER_STATE, now);
+      if (!state2 || !value || !/^[1-3]$/.test(value)) return;
+      if (stage === "child" && (exitCode !== void 0 || decision !== void 0 || state2.attempt_id !== void 0 || Number(value) !== (state2.ordinal ?? 0) + 1)) return;
+      if (stage === "finish" && (!state2.attempt_id || Number(value) !== state2.ordinal || !exitCode || !/^(?:0|[1-9][0-9]{0,2})$/.test(exitCode) || Number(exitCode) > 255 || decision !== "retry" && decision !== "stop" || decision === "retry" && (Number(exitCode) === 0 || state2.ordinal === 3))) return;
+    }
+    runtime = createDiagnosticRuntime2({ source: "wrapper", descriptor: {
+      descriptor_id: diagnosticId2(),
+      source: "wrapper",
+      package: "tc-apps",
+      wrapper_revision: "1.0.0",
+      ...diagnosticClientProvenance2(state2?.context ?? inherited)
+    } });
+    const binding = await runtime.binding();
+    if (!binding || state2 && (state2.source_id !== binding.source_id || state2.generation !== binding.generation)) return;
+    if (stage === "begin") {
+      const context = makeDiagnosticContext2(binding, "wrapper", inherited);
+      const environment = {
+        ...inherited,
+        workflow_id: inherited.workflow_id ?? context.invocation_id
+      };
+      state2 = {
+        version: 1,
+        activity: value,
+        source_id: binding.source_id,
+        generation: binding.generation,
+        wrapper_id: context.invocation_id,
+        started_ns: now.toString(),
+        context: environment
+      };
+      expected = 1;
+      if (runtime.emit({ type: "invocation.start", activity: state2.activity, business: "not_applicable" }, {
+        ...context,
+        workflow_id: environment.workflow_id
+      })) output2 = JSON.stringify(state2);
+    } else {
+      const current = state2;
+      const context = makeDiagnosticContext2(binding, "wrapper", { ...current.context, invocation_id: current.wrapper_id });
+      if (stage === "child") {
+        const attempt = diagnosticId2();
+        const ordinal = Number(value);
+        state2 = { ...current, ordinal, attempt_id: attempt, attempt_started_ns: process.hrtime.bigint().toString() };
+        expected = 1;
+        if (runtime.emit({
+          type: "attempt.start",
+          activity: current.activity,
+          layer: "wrapper_child",
+          ordinal,
+          attempt_id: attempt,
+          parent_id: current.wrapper_id
+        }, context)) {
+          const environment = encodeDiagnosticContext({
+            ...current.context,
+            wrapper_id: current.wrapper_id,
+            child_ordinal: ordinal,
+            parent_id: attempt
+          });
+          if (environment) output2 = `${JSON.stringify(state2)}
+${environment}`;
+        }
+      } else {
+        const code3 = Number(exitCode);
+        const accepted = runtime.emit({
+          type: "attempt.finish",
+          activity: current.activity,
+          layer: "wrapper_child",
+          attempt_id: current.attempt_id,
+          parent_id: current.wrapper_id,
+          ordinal: current.ordinal,
+          exit_code: code3,
+          outcome: code3 === 0 ? "complete" : "error",
+          timing_scope: "wrapper_child",
+          duration_ms: Number(now - BigInt(current.attempt_started_ns)) / 1e6
+        }, context);
+        expected = 2;
+        if (decision === "retry") {
+          const scheduled = runtime.emit({
+            type: "retry.scheduled",
+            activity: current.activity,
+            layer: "wrapper_child",
+            attempt_id: current.attempt_id,
+            parent_id: current.wrapper_id,
+            ordinal: current.ordinal,
+            delay_ms: current.ordinal * 2e3,
+            outcome: "pending"
+          }, context);
+          if (accepted && scheduled) {
+            const { attempt_id: _attempt, attempt_started_ns: _started, ...next } = current;
+            output2 = JSON.stringify(next);
+          }
+        } else {
+          runtime.emit({
+            type: "invocation.finish",
+            activity: current.activity,
+            exit_code: code3,
+            business: "not_applicable",
+            timing_scope: "invocation",
+            duration_ms: Number(now - BigInt(current.started_ns)) / 1e6
+          }, context);
+        }
+      }
+    }
+  } catch {
+  } finally {
+    try {
+      const drain = runtime?.drainSync();
+      if (output2 && Buffer.byteLength(output2) <= MAX_STATE_BYTES + 2048 + 1 && drain?.acknowledged === expected && drain.pending === 0 && drain.dropped === 0) process.stdout.write(`${output2}
+`);
+    } catch {
+    }
+  }
+}
+
+// src/commands/diagnostics.ts
+async function selectionFile(path) {
+  const selection = validateDiagnosticSelection(await readDiagnosticJsonFile(path));
+  if (!selection) throw new Error("invalid_selection");
+  return selection;
+}
+function print(value) {
+  process.stdout.write(`${JSON.stringify(value, null, 2)}
+`);
+}
+async function runChild(executable, args, scope, role) {
+  if (scope !== void 0 && scope !== "tc-apps") throw new Error("invalid_scope");
+  if (role !== void 0 && scope !== "tc-apps") throw new Error("scope_required_for_role");
+  const inherited = decodeDiagnosticContext3(process.env.TC_DIAGNOSTICS_CONTEXT);
+  const context = {
+    version: 1,
+    run_id: scope === "tc-apps" ? inherited?.run_id ?? diagnosticId3() : diagnosticId3(),
+    ...inherited?.turn_id ? { turn_id: inherited.turn_id } : {},
+    ...inherited?.task_id ? { task_id: inherited.task_id } : {},
+    ...scope === "tc-apps" ? {
+      scope: "tc-apps",
+      workflow_id: inherited?.workflow_id ?? diagnosticId3(),
+      ...role !== void 0 ? { role } : {},
+      ...inherited?.parent_id ? { parent_id: inherited.parent_id } : {},
+      adapter: inherited?.adapter ?? "explicit_launcher",
+      adapter_revision: inherited?.adapter_revision ?? 1,
+      ...inherited?.client_version ? { client_version: inherited.client_version } : {}
+    } : {
+      ...inherited?.workflow_id ? { workflow_id: inherited.workflow_id } : {},
+      adapter: "explicit_launcher",
+      adapter_revision: 1
+    }
+  };
+  const encoded = encodeDiagnosticContext2(context);
+  if (encoded === void 0) throw new Error("invalid_context");
+  const env = { ...process.env, TC_DIAGNOSTICS_CONTEXT: encoded };
+  const child = spawn2(executable, args, { env, stdio: "inherit" });
+  const signals = ["SIGINT", "SIGTERM", "SIGHUP"];
+  const listeners = signals.map((signal) => {
+    const listener = () => {
+      child.kill(signal);
+    };
+    process.on(signal, listener);
+    return listener;
+  });
+  const outcome = await new Promise((resolve5) => {
+    child.once("error", (error) => {
+      process.stderr.write("Diagnostic launcher could not start the child.\n");
+      resolve5({ code: error.code === "ENOENT" ? 127 : 126, signal: null });
+    });
+    child.once("exit", (code3, signal) => resolve5({ code: code3, signal }));
+  });
+  signals.forEach((signal, index) => process.removeListener(signal, listeners[index]));
+  if (outcome.signal) {
+    process.kill(process.pid, outcome.signal);
+  } else {
+    process.exitCode = outcome.code ?? 1;
+  }
+}
+function registerDiagnosticsCommand(program) {
+  const diagnostics = program.command("diagnostics").description("Private local diagnostic history (capture is disabled by default)").enablePositionalOptions();
+  diagnostics.command("status").option("--json", "JSON status").action(async () => print(await new DiagnosticStore().inspect()));
+  diagnostics.command("enable").requiredOption("--scope <scope>", "Selected activity scope: tc-apps").option("--detail-policy <policy>", "Explicit encrypted-excluded-backups policy for selected detail").action(async (options) => {
+    if (options.scope !== "tc-apps" || options.detailPolicy !== void 0 && options.detailPolicy !== "encrypted-excluded-backups") throw new Error("invalid_policy");
+    print(await new DiagnosticStore().control("enable", { scope: "tc-apps", detail_policy: options.detailPolicy }));
+  });
+  for (const action of ["pause", "resume", "disable"]) {
+    diagnostics.command(action).action(async () => print(await new DiagnosticStore().control(action)));
+  }
+  diagnostics.command("run <executable> [args...]").description("Attribute a child run; --scope is only for a selected tc-apps command/block, never a whole client").option("--scope <scope>", "Explicit selected-block scope: tc-apps").option("--role <role>", "Selected-block workflow hint: catalog, record, verification, copy, approval or context").passThroughOptions().action(async (executable, args, options) => runChild(executable, args, options.scope, options.role));
+  diagnostics.command("_wrapper <stage> [value] [exitCode] [decision]", { hidden: true }).action(observeDiagnosticWrapper);
+  diagnostics.command("export").requiredOption("--selection <file>", "Exact authorized selection JSON").requiredOption("--out <directory>", "Managed export destination, or explicit external output").requiredOption("--expires-at <UTC>", "Explicit export expiry").option("--external", "Acknowledge this copy is outside automatic cleanup and deletion").action(async (options) => print(await exportDiagnosticBundle(new DiagnosticStore(), {
+    selection: await selectionFile(options.selection),
+    out: options.out,
+    expires_at: options.expiresAt,
+    external: options.external
+  })));
+  diagnostics.command("import <directory>").action(async (directory) => print(await importDiagnosticBundle(new DiagnosticStore(), directory)));
+  diagnostics.command("select").requiredOption("--manifest <file>", "Exact selected passages, purpose, links and expiry").action(async (options) => print(await selectDiagnosticCase(new DiagnosticStore(), options.manifest)));
+  diagnostics.command("review").requiredOption("--selection <file>", "Exact evidence selection JSON").option("--json", "JSON review").action(async (options) => print(await reviewDiagnostics(new DiagnosticStore(), await selectionFile(options.selection))));
+  diagnostics.command("compare").requiredOption("--left <selection>", "Left selection JSON").requiredOption("--right <selection>", "Right selection JSON").action(async (options) => print(await compareDiagnostics(new DiagnosticStore(), await selectionFile(options.left), await selectionFile(options.right))));
+  diagnostics.command("bundle").requiredOption("--case <id>", "Reviewed case ID").requiredOption("--fixture <file>", "Explicit synthetic fixture JSON").requiredOption("--out <directory>", "Managed bundle destination, or explicit external output").requiredOption("--expires-at <UTC>", "Explicit bundle expiry").option("--external", "Acknowledge this copy is outside automatic cleanup and deletion").action(async (options) => print(await bundleDiagnosticCase(new DiagnosticStore(), {
+    case_id: options.case,
+    fixture: options.fixture,
+    out: options.out,
+    expires_at: options.expiresAt,
+    external: options.external
+  })));
+  diagnostics.command("delete").requiredOption("--selection <file>", "Exact evidence selection JSON").option("--confirm", "Authorize deletion of this exact selection; otherwise preview only").option("--pause-after", "Leave capture paused after deletion (required decision for all)").option("--keep-enabled", "Do not leave capture paused after deletion (required decision for all)").action(async (options) => {
+    const store = new DiagnosticStore();
+    const selection = await selectionFile(options.selection);
+    if (options.pauseAfter && options.keepEnabled) throw new Error("invalid_pause_decision");
+    if (!options.confirm) {
+      const snapshot = await store.snapshot(selection);
+      print({
+        preview: true,
+        selection,
+        event_ids: snapshot.events.map((event) => event.event_id),
+        controlled_derivatives: "referencing_selection_removed_or_rewritten",
+        gaps: snapshot.gaps
+      });
+      return;
+    }
+    if (selection.all && !options.pauseAfter && !options.keepEnabled) throw new Error("pause_decision_required");
+    const pauseAfter = options.pauseAfter ? true : options.keepEnabled ? false : void 0;
+    print(await store.delete(selection, pauseAfter === void 0 ? {} : { pause_after: pauseAfter }));
+  });
+}
+
 // src/commands/duckdb.ts
 init_profiles();
 init_formatter();
@@ -24373,6 +24966,8 @@ init_sdk();
 init_space();
 init_host();
 init_theme();
+init_diagnostics();
+import { emitDiagnostic as emitDiagnostic8, enterDiagnosticContext, getDiagnosticContext as getDiagnosticContext5 } from "@tinycloud/operations/diagnostics";
 async function throwKvError(error, spaceUri, profileName2) {
   const hosted = await unhostedSpaceError(error, spaceUri, profileName2);
   if (hosted) throw hosted;
@@ -24382,6 +24977,7 @@ function assertAddressableKey(key) {
   for (let i = 0; i < key.length; i++) {
     const code3 = key.charCodeAt(i);
     if (code3 <= 32 || code3 === 127) {
+      emitDiagnostic8({ type: "operation.step", phase: "input_validation", outcome: "fail", error_class: "input_invalid", mutation: "not_dispatched" });
       throw new CLIError("USAGE_ERROR", "KV keys cannot contain spaces or control characters; use a URL-safe key", ExitCode.USAGE_ERROR);
     }
   }
@@ -24403,25 +24999,31 @@ function registerKvCommand(program) {
   kv.command("get <key>").description("Get a value by key").option("--raw", "Output raw value (no JSON wrapping)").option("-o, --output <file>", "Write value to file").option("--space <name|uri>", "Target a non-primary space (short name or full URI)").action(async (key, options, cmd) => {
     try {
       assertAddressableKey(key);
+      enterDiagnosticContext(await cliDiagnosticScope("kv", key));
+      emitDiagnostic8({ type: "operation.step", service: "kv", action: "get", requested: 1 });
       const globalOpts = cmd.optsWithGlobals();
-      const ctx = await ProfileManager.resolveContext(globalOpts);
+      const ctx = await withCliDiagnosticPhase("preparation", { service: "local" }, () => ProfileManager.resolveContext(globalOpts));
       const node = await ensureAuthenticated(ctx);
       const { kv: kv2, spaceUri } = await kvHandle(node, options.space, ctx.profile);
       const wantBytes = !!options.output || !!options.raw;
       const result = await withSpinner(
         `Getting ${key}...`,
-        () => kv2.get(key, wantBytes ? { binary: true } : void 0)
+        () => withCliDiagnosticPhase("execution", { service: "kv", action: "get", requested: 1 }, () => kv2.get(key, wantBytes ? { binary: true } : void 0))
       );
       if (!result.ok) {
+        emitDiagnostic8({ type: "operation.step", service: "kv", action: "get", business: "failed", verification: getDiagnosticContext5()?.role === "verification" ? "read_back" : "none", verification_result: "failed" });
         const hosted = await unhostedSpaceError(result.error, spaceUri, ctx.profile);
         if (hosted) throw hosted;
         if (result.error.code === "KV_NOT_FOUND" || result.error.code === "NOT_FOUND") {
+          emitDiagnostic8({ type: "operation.step", service: "kv", action: "get", missing: 1, verification_result: "missing" });
           throw new CLIError("NOT_FOUND", `Key "${key}" not found`, ExitCode.NOT_FOUND);
         }
-        await throwKvError(result.error, spaceUri, ctx.profile);
+        return await throwKvError(result.error, spaceUri, ctx.profile);
       }
+      emitDiagnostic8({ type: "operation.step", service: "kv", action: "get", business: "complete", returned: 1, verification: getDiagnosticContext5()?.role === "verification" ? "read_back" : "none", verification_result: "found" });
       const data = result.data.data;
       const metadata = result.data.headers ?? {};
+      if (data instanceof Uint8Array) emitDiagnostic8({ type: "operation.step", service: "kv", action: "get", bytes: data.byteLength });
       if (options.output) {
         await writePrivateOutput(options.output, data);
         outputJson({ key, written: options.output });
@@ -24448,15 +25050,19 @@ function registerKvCommand(program) {
   kv.command("put <key> [value]").description("Set a value").option("--file <path>", "Read value from file").option("--stdin", "Read value from stdin").option("--space <name|uri>", "Target a non-primary space (short name or full URI)").action(async (key, value, options, cmd) => {
     try {
       assertAddressableKey(key);
+      enterDiagnosticContext(await cliDiagnosticScope("kv", key));
+      emitDiagnostic8({ type: "operation.step", service: "kv", action: "put", requested: 1, mutation: "not_dispatched" });
       const globalOpts = cmd.optsWithGlobals();
-      const ctx = await ProfileManager.resolveContext(globalOpts);
+      const ctx = await withCliDiagnosticPhase("preparation", { service: "local" }, () => ProfileManager.resolveContext(globalOpts));
       const node = await ensureAuthenticated(ctx);
       let putValue;
       const sources = [value !== void 0, !!options.file, !!options.stdin].filter(Boolean);
       if (sources.length === 0) {
+        emitDiagnostic8({ type: "operation.step", phase: "input_validation", outcome: "fail", error_class: "input_invalid", mutation: "not_dispatched" });
         throw new CLIError("USAGE_ERROR", "Must provide a value, --file, or --stdin", ExitCode.USAGE_ERROR);
       }
       if (sources.length > 1) {
+        emitDiagnostic8({ type: "operation.step", phase: "input_validation", outcome: "fail", error_class: "input_invalid", mutation: "not_dispatched" });
         throw new CLIError("USAGE_ERROR", "Provide only one of: value argument, --file, or --stdin", ExitCode.USAGE_ERROR);
       }
       if (options.file) {
@@ -24470,11 +25076,14 @@ function registerKvCommand(program) {
           putValue = value;
         }
       }
+      emitDiagnostic8({ type: "operation.step", phase: "input_validation", outcome: "pass", ...Buffer.isBuffer(putValue) ? { bytes: putValue.byteLength } : {} });
       const { kv: kv2, spaceUri } = await kvHandle(node, options.space, ctx.profile);
-      const result = await withSpinner(`Writing ${key}...`, () => kv2.put(key, putValue));
+      const result = await withSpinner(`Writing ${key}...`, () => withCliDiagnosticPhase("execution", { service: "kv", action: "put", requested: 1, mutation: "unknown" }, () => kv2.put(key, putValue), (value2) => ({ mutation: value2.ok ? "confirmed" : "unknown" })));
       if (!result.ok) {
+        emitDiagnostic8({ type: "operation.step", service: "kv", action: "put", business: "failed", mutation: "unknown" });
         await throwKvError(result.error, spaceUri, ctx.profile);
       }
+      emitDiagnostic8({ type: "operation.step", service: "kv", action: "put", business: "complete", mutation: "confirmed", verification: "write_response", mutations: 1 });
       outputJson({ key, written: true });
     } catch (error) {
       return handleError(error);
@@ -24483,14 +25092,18 @@ function registerKvCommand(program) {
   kv.command("delete <key>").description("Delete a key").option("--space <name|uri>", "Target a non-primary space (short name or full URI)").action(async (key, options, cmd) => {
     try {
       assertAddressableKey(key);
+      enterDiagnosticContext(await cliDiagnosticScope("kv", key));
+      emitDiagnostic8({ type: "operation.step", service: "kv", action: "delete", requested: 1, mutation: "not_dispatched" });
       const globalOpts = cmd.optsWithGlobals();
-      const ctx = await ProfileManager.resolveContext(globalOpts);
+      const ctx = await withCliDiagnosticPhase("preparation", { service: "local" }, () => ProfileManager.resolveContext(globalOpts));
       const node = await ensureAuthenticated(ctx);
       const { kv: kv2, spaceUri } = await kvHandle(node, options.space, ctx.profile);
-      const result = await withSpinner(`Deleting ${key}...`, () => kv2.delete(key));
+      const result = await withSpinner(`Deleting ${key}...`, () => withCliDiagnosticPhase("execution", { service: "kv", action: "delete", requested: 1, mutation: "unknown" }, () => kv2.delete(key), (value) => ({ mutation: value.ok ? "confirmed" : "unknown" })));
       if (!result.ok) {
+        emitDiagnostic8({ type: "operation.step", service: "kv", action: "delete", business: "failed", mutation: "unknown" });
         await throwKvError(result.error, spaceUri, ctx.profile);
       }
+      emitDiagnostic8({ type: "operation.step", service: "kv", action: "delete", business: "complete", mutation: "confirmed", mutations: 1 });
       outputJson({ key, deleted: true });
     } catch (error) {
       return handleError(error);
@@ -24499,25 +25112,29 @@ function registerKvCommand(program) {
   kv.command("list").description("List keys").option("--prefix <prefix>", "Filter by key prefix").option("--space <name|uri>", "Target a non-primary space (short name or full URI)").option("--limit <n>", "Keys per page, 1-1000 (the node's default otherwise)").option("--cursor <cursor>", "Continue from a previous page's nextCursor").option("--all", "Follow nextCursor until the listing is complete").action(async (options, cmd) => {
     try {
       if (options.prefix) assertAddressableKey(options.prefix);
+      enterDiagnosticContext(await cliDiagnosticScope("kv", options.prefix));
       const limit = options.limit === void 0 ? void 0 : Number(options.limit);
       if (limit !== void 0 && (!Number.isInteger(limit) || limit < 1 || limit > 1e3)) {
+        emitDiagnostic8({ type: "operation.step", phase: "input_validation", outcome: "fail", error_class: "input_invalid", mutation: "not_dispatched" });
         throw new CLIError("USAGE_ERROR", "--limit must be an integer from 1 through 1000", ExitCode.USAGE_ERROR);
       }
       const globalOpts = cmd.optsWithGlobals();
-      const ctx = await ProfileManager.resolveContext(globalOpts);
+      const ctx = await withCliDiagnosticPhase("preparation", { service: "local" }, () => ProfileManager.resolveContext(globalOpts));
       const node = await ensureAuthenticated(ctx);
       const { kv: kv2, spaceUri } = await kvHandle(node, options.space, ctx.profile);
       const keyList = [];
       let cursor = options.cursor;
       let truncated;
       const seenCursors = /* @__PURE__ */ new Set();
+      let pages = 0;
       for (; ; ) {
-        const result = await withSpinner("Listing keys...", () => kv2.list({
+        const result = await withSpinner("Listing keys...", () => withCliDiagnosticPhase("execution", { service: "kv", action: "list" }, () => kv2.list({
           ...options.prefix ? { prefix: options.prefix } : {},
           ...limit === void 0 ? {} : { limit },
           ...cursor === void 0 ? {} : { cursor }
-        }));
+        })));
         if (!result.ok) {
+          emitDiagnostic8({ type: "operation.step", service: "kv", action: "list", business: "failed", pages, returned: keyList.length });
           if (cursor !== void 0 && result.error.meta?.status === 400) {
             throw new CLIError(
               "KV_LIST_CURSOR_INVALID",
@@ -24529,18 +25146,23 @@ function registerKvCommand(program) {
           await throwKvError(result.error, spaceUri, ctx.profile);
           break;
         }
+        pages += 1;
         for (const key of result.data.keys) keyList.push(key);
         truncated = result.data.truncated;
         cursor = truncated === true ? result.data.nextCursor : void 0;
+        emitDiagnostic8({ type: "operation.step", service: "kv", action: "list", ordinal: pages, pages, returned: keyList.length, ...truncated === void 0 ? {} : { truncated } });
         if (options.all && truncated === true && cursor === void 0) {
+          emitDiagnostic8({ type: "operation.step", service: "kv", action: "list", business: "partial", warning: "pagination_incomplete", pages, returned: keyList.length });
           throw new CLIError("KV_LIST_CURSOR_MISSING", "The node reported more keys but no cursor to continue from, so the listing can't be completed.", ExitCode.ERROR);
         }
         if (!options.all || cursor === void 0) break;
         if (seenCursors.has(cursor)) {
+          emitDiagnostic8({ type: "operation.step", service: "kv", action: "list", business: "partial", warning: "pagination_incomplete", pages, returned: keyList.length });
           throw new CLIError("KV_LIST_CURSOR_STALLED", "The node returned a list cursor it had already returned, so the listing can't be completed.", ExitCode.ERROR);
         }
         seenCursors.add(cursor);
       }
+      emitDiagnostic8({ type: "operation.step", service: "kv", action: "list", business: truncated === true ? "partial" : truncated === false ? "complete" : "unknown", returned: keyList.length, pages, ...truncated === void 0 ? {} : { truncated } });
       if (shouldOutputJson()) {
         outputJson({
           keys: keyList,
@@ -24570,20 +25192,23 @@ function registerKvCommand(program) {
   kv.command("head <key>").description("Get metadata for a key (no body)").option("--space <name|uri>", "Target a non-primary space (short name or full URI)").action(async (key, options, cmd) => {
     try {
       assertAddressableKey(key);
+      enterDiagnosticContext(await cliDiagnosticScope("kv", key));
       const globalOpts = cmd.optsWithGlobals();
-      const ctx = await ProfileManager.resolveContext(globalOpts);
+      const ctx = await withCliDiagnosticPhase("preparation", { service: "local" }, () => ProfileManager.resolveContext(globalOpts));
       const node = await ensureAuthenticated(ctx);
       const { kv: kv2, spaceUri } = await kvHandle(node, options.space, ctx.profile);
-      const result = await withSpinner(`Checking ${key}...`, () => kv2.head(key));
+      const result = await withSpinner(`Checking ${key}...`, () => withCliDiagnosticPhase("execution", { service: "kv", action: "head", requested: 1 }, () => kv2.head(key)));
       if (!result.ok) {
         const hosted = await unhostedSpaceError(result.error, spaceUri, ctx.profile);
         if (hosted) throw hosted;
         if (result.error.code === "KV_NOT_FOUND" || result.error.code === "NOT_FOUND") {
+          emitDiagnostic8({ type: "operation.step", service: "kv", action: "head", business: "complete", missing: 1, verification: "none", verification_result: "missing" });
           outputJson({ key, exists: false, metadata: {} });
           return;
         }
-        await throwKvError(result.error, spaceUri, ctx.profile);
+        return await throwKvError(result.error, spaceUri, ctx.profile);
       }
+      emitDiagnostic8({ type: "operation.step", service: "kv", action: "head", business: "complete", returned: 1, verification: "none", verification_result: "found" });
       outputJson({
         key,
         exists: true,
@@ -25195,8 +25820,8 @@ async function run(action) {
   }
 }
 async function profileName(cmd) {
-  const globals = cmd.optsWithGlobals();
-  if (globals.profile) return globals.profile;
+  const globals2 = cmd.optsWithGlobals();
+  if (globals2.profile) return globals2.profile;
   if (process.env.TC_PROFILE) return process.env.TC_PROFILE;
   const config = await ProfileManager.getConfig().catch(() => void 0);
   return config?.defaultProfile ?? DEFAULT_PROFILE;
@@ -25470,8 +26095,8 @@ or coverage incomplete; 5 grant expired, revoked or not yet valid; 6 network;
   );
   replica.command("report").description("Report replication reads, syncs, pending writes and local identity partitions").option("--since <duration>", "Include events from the last duration (default: 24h)", "24h").option("--purge", "Purge configured replicas for the current identity").option("--clear-pending", "Clear ambiguous and likely orphaned in-flight writes").action(
     (options, cmd) => run(async () => {
-      const globals = cmd.optsWithGlobals();
-      const context = await ProfileManager.resolveContext(globals);
+      const globals2 = cmd.optsWithGlobals();
+      const context = await ProfileManager.resolveContext(globals2);
       const node = context.replication ? await ensureAuthenticated(context) : void 0;
       const profile = await profileName(cmd);
       let durationMs;
@@ -25525,7 +26150,7 @@ or coverage incomplete; 5 grant expired, revoked or not yet valid; 6 network;
           throw new CLIError("INVALID_REPLICATION_PREFIX", error instanceof Error ? error.message : String(error), ExitCode.USAGE_ERROR);
         }
       }
-      const globals = cmd.optsWithGlobals();
+      const globals2 = cmd.optsWithGlobals();
       const config = await ProfileManager.getProfile(profile);
       const deviceDid = config.sessionDid ?? config.did;
       const jwk = await ProfileManager.getKey(profile);
@@ -25545,7 +26170,7 @@ or coverage incomplete; 5 grant expired, revoked or not yet valid; 6 network;
         const differs = syncOptionsDiffer(state2.config, {
           ...options.space === void 0 ? {} : { space: options.space },
           ...options.prefix === void 0 ? {} : { prefix: options.prefix },
-          ...globals.host === void 0 ? {} : { host: globals.host }
+          ...globals2.host === void 0 ? {} : { host: globals2.host }
         });
         if (differs !== void 0) {
           await store.close();
@@ -25566,7 +26191,7 @@ or coverage incomplete; 5 grant expired, revoked or not yet valid; 6 network;
             `Replicating ${space}/kv/${prefix} copies encrypted secret material to this disk; pass --allow-secrets to opt in.`
           );
         }
-        const host = (globals.host ?? process.env.TC_HOST ?? config.host)?.replace(/\/+$/, "");
+        const host = (globals2.host ?? process.env.TC_HOST ?? config.host)?.replace(/\/+$/, "");
         if (!host) throw new CLIError("USAGE_ERROR", "Pass --host: the profile has no host to pin.", ExitCode.USAGE_ERROR);
         chooseGrant(grants, deviceDid, space, prefix);
         store = await createReplica(profile, {
@@ -25818,14 +26443,14 @@ function runProbeChild(request, options = {}) {
   const args = options.argv ?? probeChildArgv(request);
   const budgetMs = options.budgetMs ?? ATTEMPT_BUDGET_MS;
   const killGraceMs = options.killGraceMs ?? KILL_GRACE_MS;
-  const spawn2 = options.spawn ?? nodeSpawn;
+  const spawn3 = options.spawn ?? nodeSpawn;
   const signal = options.signal;
   return new Promise((resolve5) => {
     if (signal?.aborted) {
       resolve5({ kind: "cancelled" });
       return;
     }
-    const child = spawn2(command, args, { env: process.env, stdio: ["ignore", "pipe", "pipe"] });
+    const child = spawn3(command, args, { env: process.env, stdio: ["ignore", "pipe", "pipe"] });
     let outcome;
     let stdout = Buffer.alloc(0);
     let stderr = Buffer.alloc(0);
@@ -36399,9 +37024,11 @@ init_sdk();
 init_space();
 init_host();
 init_theme();
+init_diagnostics();
 import { CLI_NAME as CLI_NAME27 } from "@tinycloud/operations/cli-name";
 import { writeFile as writeFile5 } from "fs/promises";
 import { resolve as resolve4 } from "path";
+import { emitDiagnostic as emitDiagnostic9, enterDiagnosticContext as enterDiagnosticContext2, getDiagnosticContext as getDiagnosticContext6 } from "@tinycloud/operations/diagnostics";
 async function dbHandle(node, dbName, spaceInput, profileName2) {
   const spaceUri = await resolveSpaceUri(spaceInput, profileName2);
   const sql = spaceUri ? node.sqlForSpace(spaceUri) : node.sql;
@@ -36455,19 +37082,22 @@ Output:
   { "columns": string[], "rows": unknown[][], "rowCount": number }.
 `).action(async (sqlStr, options, cmd) => {
     try {
+      enterDiagnosticContext2(await cliDiagnosticScope("sql", options.db));
       const globalOpts = cmd.optsWithGlobals();
-      const ctx = await ProfileManager.resolveContext(globalOpts);
+      const ctx = await withCliDiagnosticPhase("preparation", { service: "local" }, () => ProfileManager.resolveContext(globalOpts));
       const node = await ensureAuthenticated(ctx);
-      const params = options.params ? JSON.parse(options.params) : void 0;
+      const params = await withCliDiagnosticPhase("input_validation", { service: "sql" }, async () => options.params ? JSON.parse(options.params) : void 0);
       const { handle, spaceUri } = await dbHandle(node, options.db, options.space, ctx.profile);
       const result = await withSpinner(
         "Running query...",
-        () => handle.query(sqlStr, params)
+        () => withCliDiagnosticPhase("execution", { service: "sql", action: "query" }, () => handle.query(sqlStr, params))
       );
       if (!result.ok) {
-        await throwSqlError(result.error, spaceUri, ctx.profile);
+        emitDiagnostic9({ type: "operation.step", service: "sql", action: "query", business: "failed", verification: getDiagnosticContext6()?.role === "verification" ? "read_back" : "none", verification_result: "failed" });
+        return await throwSqlError(result.error, spaceUri, ctx.profile);
       }
       const { columns, rows, rowCount } = result.data;
+      emitDiagnostic9({ type: "operation.step", service: "sql", action: "query", business: "complete", returned: rowCount, verification: getDiagnosticContext6()?.role === "verification" ? "read_back" : "none", verification_result: "unknown" });
       if (shouldOutputJson()) {
         outputJson({ columns, rows, rowCount });
       } else {
@@ -36499,18 +37129,22 @@ Output:
   Returns JSON with the changed row count and last inserted row id when available.
 `).action(async (sqlStr, options, cmd) => {
     try {
+      enterDiagnosticContext2(await cliDiagnosticScope("sql", options.db));
+      emitDiagnostic9({ type: "operation.step", service: "sql", action: "execute", mutation: "not_dispatched" });
       const globalOpts = cmd.optsWithGlobals();
-      const ctx = await ProfileManager.resolveContext(globalOpts);
+      const ctx = await withCliDiagnosticPhase("preparation", { service: "local" }, () => ProfileManager.resolveContext(globalOpts));
       const node = await ensureAuthenticated(ctx);
-      const params = options.params ? JSON.parse(options.params) : void 0;
+      const params = await withCliDiagnosticPhase("input_validation", { service: "sql" }, async () => options.params ? JSON.parse(options.params) : void 0);
       const { handle, spaceUri } = await dbHandle(node, options.db, options.space, ctx.profile);
       const result = await withSpinner(
         "Executing statement...",
-        () => handle.execute(sqlStr, params)
+        () => withCliDiagnosticPhase("execution", { service: "sql", action: "execute", mutation: "unknown" }, () => handle.execute(sqlStr, params), (value) => ({ mutation: value.ok ? "confirmed" : "unknown" }))
       );
       if (!result.ok) {
-        await throwSqlError(result.error, spaceUri, ctx.profile);
+        emitDiagnostic9({ type: "operation.step", service: "sql", action: "execute", business: "failed", mutation: "unknown" });
+        return await throwSqlError(result.error, spaceUri, ctx.profile);
       }
+      emitDiagnostic9({ type: "operation.step", service: "sql", action: "execute", business: "complete", mutation: "confirmed", verification: "write_response", mutations: result.data.changes });
       outputJson({
         changes: result.data.changes,
         lastInsertRowId: result.data.lastInsertRowId
@@ -36530,21 +37164,24 @@ Output:
   Writes the database file locally and returns JSON with the path and size.
 `).action(async (options, cmd) => {
     try {
+      enterDiagnosticContext2(await cliDiagnosticScope("sql", options.db));
       const globalOpts = cmd.optsWithGlobals();
-      const ctx = await ProfileManager.resolveContext(globalOpts);
+      const ctx = await withCliDiagnosticPhase("preparation", { service: "local" }, () => ProfileManager.resolveContext(globalOpts));
       const node = await ensureAuthenticated(ctx);
       const { handle, spaceUri } = await dbHandle(node, options.db, options.space, ctx.profile);
       const result = await withSpinner(
         "Exporting database...",
-        () => handle.export()
+        () => withCliDiagnosticPhase("execution", { service: "sql", action: "export" }, () => handle.export())
       );
       if (!result.ok) {
-        await throwSqlError(result.error, spaceUri, ctx.profile);
+        emitDiagnostic9({ type: "operation.step", service: "sql", action: "export", business: "failed" });
+        return await throwSqlError(result.error, spaceUri, ctx.profile);
       }
       const blob = result.data;
       const buffer = Buffer.from(await blob.arrayBuffer());
       const outputPath = resolve4(options.output);
       await writeFile5(outputPath, buffer);
+      emitDiagnostic9({ type: "operation.step", service: "sql", action: "export", business: "complete", bytes: blob.size });
       outputJson({
         file: outputPath,
         size: blob.size,
@@ -36574,14 +37211,17 @@ Notes:
     AND sql/write on destination. Otherwise the relevant operation will fail.
 `).action(async (options, cmd) => {
     try {
+      enterDiagnosticContext2(await cliDiagnosticScope("sql", options.fromDb));
+      enterDiagnosticContext2(await cliDiagnosticScope("sql", options.toDb));
       const globalOpts = cmd.optsWithGlobals();
-      const ctx = await ProfileManager.resolveContext(globalOpts);
+      const ctx = await withCliDiagnosticPhase("preparation", { service: "local" }, () => ProfileManager.resolveContext(globalOpts));
       const node = await ensureAuthenticated(ctx);
       const fromSpaceInput = options.fromSpace ?? options.space;
       const toSpaceInput = options.toSpace ?? options.space;
       const fromSpaceUri = await resolveSpaceUri(fromSpaceInput, ctx.profile) ?? "<primary>";
       const toSpaceUri = await resolveSpaceUri(toSpaceInput, ctx.profile) ?? "<primary>";
       if (fromSpaceUri === toSpaceUri && options.fromDb === options.toDb) {
+        emitDiagnostic9({ type: "operation.step", phase: "input_validation", outcome: "fail", error_class: "input_invalid", mutation: "not_dispatched" });
         throw new CLIError(
           "SELF_COPY",
           `Refusing to copy: source and destination resolve to the same (space, db) \u2014 ${fromSpaceUri} / ${options.fromDb}.`,
@@ -36594,15 +37234,14 @@ Notes:
       if (options.table && options.table.length > 0) {
         tables = options.table.flatMap((t) => t.split(",").map((s) => s.trim()).filter(Boolean));
       } else {
-        const listing = await fromHandle.query(
-          "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name"
-        );
+        const listing = await withCliDiagnosticPhase("execution", { service: "sql", action: "source_read", role: "copy" }, () => fromHandle.query("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name"));
         if (!listing.ok) {
-          await throwSqlError(listing.error, fromSpaceUriResolved, ctx.profile, "Cannot list source tables: ");
+          return await throwSqlError(listing.error, fromSpaceUriResolved, ctx.profile, "Cannot list source tables: ");
         }
         tables = listing.data.rows.map((r) => String(r[0]));
       }
       if (tables.length === 0) {
+        emitDiagnostic9({ type: "operation.step", phase: "input_validation", outcome: "fail", error_class: "input_invalid", mutation: "not_dispatched" });
         throw new CLIError(
           "EMPTY_PLAN",
           `No tables to copy. Use --table to specify tables, or check that the source database has user tables.`,
@@ -36612,14 +37251,15 @@ Notes:
       const plan = [];
       for (const table of tables) {
         const safe = quoteIdent(table);
-        const countResult = await fromHandle.query(`SELECT count(*) AS n FROM ${safe}`);
+        const countResult = await withCliDiagnosticPhase("execution", { service: "sql", action: "source_read", role: "copy" }, () => fromHandle.query(`SELECT count(*) AS n FROM ${safe}`));
         if (!countResult.ok) {
-          await throwSqlError(countResult.error, fromSpaceUriResolved, ctx.profile, `Cannot count rows in source table "${table}": `);
+          return await throwSqlError(countResult.error, fromSpaceUriResolved, ctx.profile, `Cannot count rows in source table "${table}": `);
         }
         const rows = Number(countResult.data.rows[0]?.[0] ?? 0);
         plan.push({ table, rows, copied: 0, skipped: 0 });
       }
       if (options.dryRun) {
+        emitDiagnostic9({ type: "operation.step", service: "sql", action: "copy", role: "copy", outcome: "skipped", mutation: "not_dispatched", requested: tables.length });
         outputJson({
           dryRun: true,
           from: { space: fromSpaceUri, db: options.fromDb },
@@ -36630,24 +37270,28 @@ Notes:
       }
       for (const entry of plan) {
         const safe = quoteIdent(entry.table);
-        const fetched2 = await fromHandle.query(`SELECT * FROM ${safe}`);
+        const fetched2 = await withCliDiagnosticPhase("execution", { service: "sql", action: "source_read", role: "copy" }, () => fromHandle.query(`SELECT * FROM ${safe}`));
         if (!fetched2.ok) {
-          await throwSqlError(fetched2.error, fromSpaceUriResolved, ctx.profile, `Failed to read "${entry.table}": `);
+          return await throwSqlError(fetched2.error, fromSpaceUriResolved, ctx.profile, `Failed to read "${entry.table}": `);
         }
         const columns = fetched2.data.columns;
         const rows = fetched2.data.rows;
+        emitDiagnostic9({ type: "operation.step", service: "sql", action: "source_read", role: "copy", returned: rows.length });
         if (rows.length === 0) continue;
         const colList = columns.map(quoteIdent).join(", ");
         const placeholders = columns.map(() => "?").join(", ");
         const insertSql = `INSERT INTO ${safe} (${colList}) VALUES (${placeholders})`;
         for (const row of rows) {
-          const writeResult = await toHandle.execute(insertSql, row);
+          const writeResult = await withCliDiagnosticPhase("execution", { service: "sql", action: "destination_write", role: "copy", mutation: "unknown" }, () => toHandle.execute(insertSql, row), (value) => ({ mutation: value.ok ? "confirmed" : "unknown" }));
           if (!writeResult.ok) {
-            await throwSqlError(writeResult.error, toSpaceUriResolved, ctx.profile, `Insert into "${entry.table}" failed after ${entry.copied} row(s): `);
+            emitDiagnostic9({ type: "operation.step", service: "sql", action: "destination_write", role: "copy", business: "failed", mutation: "unknown" });
+            return await throwSqlError(writeResult.error, toSpaceUriResolved, ctx.profile, `Insert into "${entry.table}" failed after ${entry.copied} row(s): `);
           }
           entry.copied += writeResult.data.changes ?? 1;
+          emitDiagnostic9({ type: "operation.step", service: "sql", action: "destination_write", role: "copy", mutation: "confirmed", verification: "write_response", mutations: writeResult.data.changes ?? 1 });
         }
       }
+      emitDiagnostic9({ type: "operation.step", service: "sql", action: "copy", role: "copy", business: "complete", verification: "write_response" });
       outputJson({
         from: { space: fromSpaceUri, db: options.fromDb },
         to: { space: toSpaceUri, db: options.toDb },
@@ -37422,6 +38066,7 @@ function registerVarsCommand(program) {
 // src/command-registry.ts
 function registerTinyCloudCommands(program) {
   registerInitCommand(program);
+  registerDiagnosticsCommand(program);
   registerContextCommand(program);
   registerAuthCommand(program);
   registerEnableCommand(program);

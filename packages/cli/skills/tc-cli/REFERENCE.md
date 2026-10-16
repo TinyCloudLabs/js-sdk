@@ -6,10 +6,31 @@ This release has **Commander coverage tracked, not complete parity**:
 - 2 migrated registration(s).
 - 1 partially migrated registration(s).
 - 128 legacy registration(s) remain Commander-owned.
+- 17 local-only or delegated registration(s), excluded from shared business operations.
 
 - `auth import [source]` → `tinycloud.auth.import@1` (partial; legacy inputs: v1 delegation artifact, v1 permission artifact without command, bare portable delegation, stored delegation wrapper, cross-user delegation persisted with activated=false).
 - `secrets get <name>` → `tinycloud.secrets.get@1` (migrated).
 - `secrets probe <name>` → `tinycloud.secrets.status@1` (migrated).
+
+Local-only and delegated commands (not shared business operations or MCP tools):
+
+- `diagnostics`: Private local diagnostic control; never a shared business operation or MCP tool.
+- `diagnostics status`: Local capture policy and health; no profile or SDK initialization.
+- `diagnostics enable`: Explicit OS-account-authorized local capture policy.
+- `diagnostics pause`: Explicit OS-account-authorized local capture policy.
+- `diagnostics resume`: Explicit OS-account-authorized local capture policy.
+- `diagnostics disable`: Explicit OS-account-authorized local capture policy.
+- `diagnostics run <executable> [args]`: Local child attribution and optional selected-block scope; no terminal recording.
+- `diagnostics _wrapper <stage> [value] [exitCode] [decision]`: Private bounded wrapper observation channel; no stdin, business payload or MCP tool.
+- `diagnostics export`: Explicit private diagnostic evidence selection; no business-storage authority.
+- `diagnostics import <directory>`: Private bounded diagnostic bundle import; no networking or execution.
+- `diagnostics select`: Explicit selected-detail intake under local policy.
+- `diagnostics review`: Read-only local diagnostic evidence review.
+- `diagnostics compare`: Read-only local diagnostic evidence comparison.
+- `diagnostics bundle`: Explicit private synthetic reproduction assembly; no replay.
+- `diagnostics delete`: Authorized diagnostic-only deletion and cutoff; never business data.
+- `context`: Read-only local CLI context diagnostics; performs no storage operation.
+- `courier [args]`: Delegates argv to @tinycloud/courier; Courier's own agent identity and profile, not a TinyCloud operations surface.
 <!-- END GENERATED TINYCloud operations coverage -->
 
 ## Calling the CLI

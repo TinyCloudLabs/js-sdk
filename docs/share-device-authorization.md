@@ -45,7 +45,7 @@ Build the CLI, then run the cross-repository smoke from the OpenKey checkout:
 
 ```bash
 bun run --cwd packages/cli build
-bun ../openkey/scripts/share-device-auth-smoke.ts --cli "$PWD/packages/cli/dist/index.js"
+bun ../openkey/scripts/share-device-auth-smoke.ts --cli "$PWD/packages/cli/bin/tc"
 ```
 
 The harness invokes the public `tc share publish report.md` entry point against

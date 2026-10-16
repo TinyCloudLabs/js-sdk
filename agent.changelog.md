@@ -3,6 +3,27 @@
 Track changes to agent-facing development guidance for the TinyCloud JavaScript SDK. Add a concise
 entry when `agent.dev.md` or related agent workflow expectations change.
 
+## 2026-10-16
+
+- Added the default-off private tc-apps diagnostics contract: independent packaged
+  worker/subpath, local-only command inventory, explicit block scope and separate
+  selected-detail authority. Preserve loss/unknown outcomes without changing
+  business authorization or retries. Release/container and encrypted-volume,
+  backup/deletion, client-installation and enablement checks remain separately
+  authorized gates; synthetic fixtures are not production acceptance.
+- Preserve synchronous MCP cancellation during live stdio policy changes; reject
+  duplicate-key JSON imports and retain source-qualified conflict identity and
+  original expiry. Record calibrated limits/overhead in the MCP README and run
+  installed Node 20/22 worker, native-failure and generated-reproduction acceptance.
+- Rollout review hardened global-option refusal, default/aliased state-root
+  separation, cancelled MCP correlation and callback/executor classification.
+  Source-qualified case expansion and HTTP delivery timing remain explicit;
+  these fixes do not authorize selected detail, publication or live capture.
+- Pace healthy live-policy probes instead of flooding the bounded diagnostic
+  queue with calls and snapshots; keep the policy-transition assertions intact.
+- Give the conformance job the operations suite's existing Linux namespace
+  preflight; namespace tests remain mandatory in CI, not skipped.
+
 ## 2026-10-14
 
 - Hosted personal apps now use canonical operations with CLI-compatible JSON

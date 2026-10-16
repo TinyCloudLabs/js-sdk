@@ -1,3 +1,5 @@
+import type { FetchFunction, FetchResponse, IServiceContext } from "./types";
+
 /** Safe projections for diagnostic sinks. */
 
 const REDACTED = "[REDACTED]";
@@ -112,5 +114,91 @@ export function projectDiagnosticData(value: unknown): unknown {
     // Projection is best-effort only. Hostile Proxy traps and exotic objects
     // must never block telemetry, debug logging, or ordinary subscribers.
     return REDACTED;
+  }
+}
+
+const ATTEMPT_ACTIONS: Readonly<Record<string, true>> = {
+  get: true, put: true, delete: true, list: true, batchPut: true, batchGet: true,
+  query: true, execute: true, batch: true, create: true, drop: true, describe: true, unknown: true,
+};
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+const MAX_METRIC = Number.MAX_SAFE_INTEGER;
+
+/** Closed, event-specific transport vocabulary; never inspect arbitrary getters. */
+export function projectAttemptDiagnostic(event: string, value: unknown): Record<string, unknown> | undefined {
+  try {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+    const fields = Object.getOwnPropertyDescriptors(value);
+    const allowed = event === "diagnostic.attempt.start"
+      ? ["attempt_id", "service", "action"]
+      : event === "diagnostic.attempt.finish"
+        ? ["attempt_id", "service", "action", "status", "duration_ms", "outcome"]
+        : event === "diagnostic.retry.scheduled"
+          ? ["attempt_id", "service", "action", "delay_ms", "ordinal"]
+          : [];
+    if (Object.keys(fields).some((key) => !allowed.includes(key) || !("value" in fields[key]!))) return undefined;
+    const id = fields.attempt_id?.value;
+    const service = fields.service?.value;
+    const action = fields.action?.value;
+    if (typeof id !== "string" || !UUID.test(id) || (service !== "kv" && service !== "sql") || typeof action !== "string" || !Object.prototype.hasOwnProperty.call(ATTEMPT_ACTIONS, action)) return undefined;
+    const result: Record<string, unknown> = { attempt_id: id, service, action };
+    for (const key of ["status", "duration_ms", "delay_ms", "ordinal"]) {
+      if (!fields[key]) continue;
+      const n = fields[key]!.value;
+      if (typeof n !== "number" || !Number.isFinite(n) || n < 0 || n > MAX_METRIC) return undefined;
+      if ((key === "status" && (!Number.isInteger(n) || n < 100 || n > 599)) ||
+          (key === "ordinal" && (!Number.isSafeInteger(n) || n < 1))) return undefined;
+      result[key] = n;
+    }
+    if (fields.outcome) {
+      if (fields.outcome.value !== "response" && fields.outcome.value !== "error") return undefined;
+      result.outcome = fields.outcome.value;
+    }
+    return result;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Observe only this dispatch, not nested context fetch wrappers or response reads. */
+export function dispatchDiagnosticFetch(
+  context: IServiceContext,
+  fetch: FetchFunction,
+  service: "kv" | "sql",
+  action: string,
+  url: Parameters<FetchFunction>[0],
+  init: Parameters<FetchFunction>[1],
+): Promise<FetchResponse> {
+  if (typeof fetch !== "function") throw new TypeError("Fetch transport is not callable");
+  if (!context.diagnosticTelemetryEnabled) return fetch(url, init);
+  let fields: { attempt_id: string; service: "kv" | "sql"; action: string };
+  let started: number;
+  try {
+    const normalized = action.startsWith("tinycloud.kv/") ? action.slice("tinycloud.kv/".length) : action;
+    fields = { attempt_id: globalThis.crypto.randomUUID(), service, action: Object.prototype.hasOwnProperty.call(ATTEMPT_ACTIONS, normalized) ? normalized : "unknown" };
+    started = performance.now();
+  } catch {
+    return fetch(url, init);
+  }
+  const emit = (event: string, data: unknown): void => {
+    try { context.emit(event, data); } catch { /* Diagnostics never steer transport. */ }
+  };
+  emit("diagnostic.attempt.start", fields);
+  const finish = (outcome: "response" | "error", status?: number): void => {
+    try {
+      emit("diagnostic.attempt.finish", {
+        ...fields, outcome, ...(status === undefined ? {} : { status }),
+        duration_ms: Math.min(MAX_METRIC, Math.max(0, performance.now() - started)),
+      });
+    } catch { /* No error content leaves the diagnostic path. */ }
+  };
+  try {
+    return fetch(url, init).then(
+      (response) => { finish("response", response.status); return response; },
+      (error) => { finish("error"); throw error; },
+    );
+  } catch (error) {
+    finish("error");
+    throw error;
   }
 }

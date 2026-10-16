@@ -9,7 +9,7 @@ import { AGENT_GRANT } from "@tinycloud/courier";
 import { registerCourierCommand } from "./courier.ts";
 
 // Runs the built CLI (`bun run --cwd packages/cli build` first) under Node, as users do.
-const CLI = fileURLToPath(new URL("../../dist/index.js", import.meta.url));
+const CLI = fileURLToPath(new URL("../../dist/bootstrap.js", import.meta.url));
 
 function tc(args: string[]) {
   const home = mkdtempSync(join(tmpdir(), "tc-courier-"));

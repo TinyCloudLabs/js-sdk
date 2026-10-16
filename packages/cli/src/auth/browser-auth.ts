@@ -1,9 +1,11 @@
 import type { PermissionEntry } from "@tinycloud/node-sdk";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { randomBytes } from "node:crypto";
-import { createInterface } from "node:readline";
+import { createInterface, type Interface } from "node:readline";
 import { DEFAULT_OPENKEY_HOST, DEFAULT_OPENKEY_DEVICE_API_HOST, ExitCode } from "../config/constants.js";
 import { CLIError } from "../output/errors.js";
+import { beginDiagnosticPhase, emitDiagnostic, getDiagnosticContext, withDiagnosticContext, type DiagnosticFields } from "@tinycloud/operations/diagnostics";
+import { withCliDiagnosticPhase } from "../lib/diagnostics.js";
 
 interface DelegationData {
   delegationHeader: { Authorization: string };
@@ -76,6 +78,7 @@ export async function startAuthFlow(
   did: string,
   options: AuthFlowOptions = {}
 ): Promise<DelegationData> {
+  return withCliDiagnosticPhase("approval_request", { service: "auth", action: "request", role: "approval" }, async () => {
   if (options.paste) {
     return pasteFlow(did, options);
   }
@@ -92,6 +95,7 @@ export async function startAuthFlow(
     }
     throw new Error("Cannot open browser in non-interactive mode. Use --paste flag.");
   }
+  });
 }
 
 export function buildAuthUrl(did: string, options: AuthFlowOptions & { callback?: string } = {}): string {
@@ -244,13 +248,15 @@ function shouldOpenBrowser(options: AuthFlowOptions): boolean {
 
 async function callbackFlow(did: string, options: AuthFlowOptions = {}): Promise<DelegationData> {
   return new Promise((resolve, reject) => {
-    let timeout: ReturnType<typeof setTimeout>;
+    let timeout: NodeJS.Timeout;
+    let finishWait: ((fields?: DiagnosticFields) => void) | undefined;
     let settled = false;
-    let rl: ReturnType<typeof createInterface> | undefined;
+    let rl: Interface | undefined;
 
     function settle(result: { data?: DelegationData; error?: Error }) {
       if (settled) return;
       settled = true;
+      finishWait?.({ outcome: result.data ? "accepted" : result.error instanceof CLIError && result.error.code === "CANCELLED" ? "cancelled" : "failed" });
       clearTimeout(timeout);
       server.close();
       // A held-open socket must not keep the CLI alive after the login settles.
@@ -351,6 +357,7 @@ async function callbackFlow(did: string, options: AuthFlowOptions = {}): Promise
       } else if (!openBrowser || hasTerminal) {
         console.error(`Open this URL in a browser to authenticate: ${authUrl}`);
       }
+      finishWait = beginDiagnosticPhase("approval_wait", { service: "auth", role: "approval", timing_scope: "approval_wait" });
 
       if (openBrowser) {
         try {
@@ -388,6 +395,7 @@ async function callbackFlow(did: string, options: AuthFlowOptions = {}): Promise
 
     // Timeout after 5 minutes
     timeout = setTimeout(() => {
+      emitDiagnostic({ type: "operation.step", phase: "approval_wait", outcome: "expired" });
       settle({ error: new Error("Authentication timed out after 5 minutes") });
     }, 5 * 60 * 1000);
   });
@@ -395,6 +403,7 @@ async function callbackFlow(did: string, options: AuthFlowOptions = {}): Promise
 
 async function pasteFlow(did: string, options: AuthFlowOptions = {}): Promise<DelegationData> {
   const authUrl = buildAuthUrl(did, options);
+  const requestContext = getDiagnosticContext();
 
   console.error(`\nOpen this URL in a browser to authenticate:\n`);
   console.error(`  ${authUrl}\n`);
@@ -405,18 +414,23 @@ async function pasteFlow(did: string, options: AuthFlowOptions = {}): Promise<De
   });
 
   return new Promise((resolve, reject) => {
+    const finishWait = beginDiagnosticPhase("approval_wait", { service: "auth", role: "approval", timing_scope: "approval_wait" });
     let answered = false;
     // `line` also fires for a final line without a newline when stdin ends;
     // `question` would drop it. Blank lines are not a code.
-    rl.on("line", (input) => {
+    rl.on("line", (input) => withDiagnosticContext(requestContext, () => {
       if (answered || input.trim() === "") return;
       answered = true;
+      finishWait({ outcome: "accepted" });
+      emitDiagnostic({ type: "operation.step", phase: "approval_request", action: "request", outcome: "accepted" });
       rl.close();
-      void delegationFromInput(input, did, options).then(resolve, reject);
-    });
-    rl.on("close", () => {
+      void withCliDiagnosticPhase("approval_verify", { service: "auth", action: "verify" }, () => delegationFromInput(input, did, options)).then(resolve, reject);
+    }));
+    rl.on("close", () => withDiagnosticContext(requestContext, () => {
       if (answered) return;
       answered = true;
+      finishWait({ outcome: "pending" });
+      emitDiagnostic({ type: "operation.step", phase: "approval_request", business: "awaiting_owner", outcome: "awaiting_owner" });
       reject(new CLIError(
         "PASTE_CODE_MISSING",
         `Stdin ended before a delegation code was pasted; no session was saved. Approve at ${authUrl} and pass the returned code on stdin.`,
@@ -426,11 +440,12 @@ async function pasteFlow(did: string, options: AuthFlowOptions = {}): Promise<De
           hint: `Open ${authUrl}, approve, then pass the code on stdin followed by a newline.`,
         },
       ));
-    });
+    }));
     // On a TTY, readline takes Ctrl-C itself and would only pause (TC-1062).
     rl.on("SIGINT", () => {
       if (answered) return;
       answered = true;
+      finishWait({ outcome: "cancelled", signal: "SIGINT" });
       rl.close();
       reject(loginCancelled());
     });

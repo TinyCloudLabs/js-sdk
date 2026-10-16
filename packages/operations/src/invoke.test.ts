@@ -23,6 +23,21 @@ import { migrationRecovery, signInRecovery } from "./recovery.js";
 import { secretsGetOperationDefinition } from "./operations/secrets-get.js";
 import { secretsStatusOperationDefinition } from "./operations/secrets-status.js";
 import { profileConfigPath, writeJsonAtomic } from "./state.js";
+import { makeDiagnosticContext, withDiagnosticContext } from "./diagnostics/context.js";
+import { DiagnosticRuntime } from "./diagnostics/runtime.js";
+import { diagnosticId, type DiagnosticObservation } from "./diagnostics/model.js";
+
+async function captureInvocation<T>(run: () => Promise<T>) {
+  const events: DiagnosticObservation[] = [];
+  const sink = new DiagnosticRuntime({ source: "cli" });
+  sink.emit = (event) => { events.push(event); return true; };
+  const context = makeDiagnosticContext({
+    source_id: diagnosticId(), partition_id: diagnosticId(), generation: 1,
+    runtime: sink,
+  }, "cli");
+  const result = await withDiagnosticContext(context, run);
+  return { result, events };
+}
 
 type TestInput = {
   readonly name: string;
@@ -146,6 +161,89 @@ test("rejects an unknown operation before it attempts input parsing or context r
   expect(resolvedContext).toBe(false);
 });
 
+test("preparation refusal preserves zero legacy metrics and never starts execution", async () => {
+  const metrics = { replayedGrants: 99 };
+  const { result, events } = await captureInvocation(() =>
+    invokeOperation("tinycloud.unknown.get", 1, {}, {}, metrics));
+  expect(result.status).toBe("error");
+  expect(metrics.replayedGrants).toBe(0);
+  expect(events).toContainEqual(expect.objectContaining({ type: "phase.start", phase: "preparation" }));
+  expect(events).toContainEqual(expect.objectContaining({ type: "phase.finish", phase: "preparation", outcome: "refused", mutation: "not_dispatched" }));
+  expect(events.some((event) => event.phase === "executor")).toBe(false);
+  expect(events.some((event) => event.type === "invocation.finish")).toBe(false);
+});
+
+test("output rejection and thrown execution retain uncertain mutation evidence", async () => {
+  for (const throws of [false, true]) {
+    let effects = 0;
+    definitions = [createDefinition({ execute: async () => {
+      effects++;
+      if (throws) throw new Error("private-execution-canary");
+      return { status: "ok", output: { value: 42 } } as never;
+    } })];
+    const { result, events } = await captureInvocation(() =>
+      invokeOperation("tinycloud.test.get", 1, {}, { name: "valid" }));
+    expect(result.status).toBe("error");
+    expect(effects).toBe(1);
+    expect(events).toContainEqual(expect.objectContaining({
+      type: "phase.finish", phase: "executor", outcome: throws ? "failed" : "response",
+    }));
+    if (throws) expect(events).toContainEqual(expect.objectContaining({ phase: "executor", mutation: "unknown" }));
+    else expect(events).toContainEqual(expect.objectContaining({ phase: "output_validation", outcome: "fail", protocol: "output_invalid" }));
+    expect(events.some((event) => event.mutation === "confirmed")).toBe(false);
+    expect(JSON.stringify(events)).not.toContain("private-execution-canary");
+  }
+});
+
+test("failed runtime preparation leaves replayedGrants zero", async () => {
+  definitions = [createDefinition()];
+  let resolutions = 0;
+  const initialResolver = resolver;
+  resolver = async (target, requirement) => {
+    resolutions++;
+    if (requirement === "inspection") return initialResolver(target, requirement);
+    return { ok: false, context: (await initialResolver(target, requirement) as { ok: true; context: RuntimeOperationContext }).context.summary,
+      error: { code: "PROFILE_NOT_FOUND", message: "synthetic", retryable: false } };
+  };
+  const metrics = { replayedGrants: 7 };
+  const { result, events } = await captureInvocation(() =>
+    invokeOperation("tinycloud.test.get", 1, {}, { name: "valid" }, metrics));
+  expect(result.status).toBe("error");
+  expect(resolutions).toBe(2);
+  expect(metrics.replayedGrants).toBe(0);
+  expect(events.some((event) => event.phase === "executor")).toBe(false);
+});
+
+test("an unfinished handler has no fabricated execution completion", async () => {
+  let release!: () => void;
+  let started!: () => void;
+  const held = new Promise<void>((resolve) => { release = resolve; });
+  const entered = new Promise<void>((resolve) => { started = resolve; });
+  definitions = [createDefinition({ execute: async () => {
+    started();
+    await held;
+    return { status: "ok", output: { value: "finished" } };
+  } })];
+  const events: DiagnosticObservation[] = [];
+  const sink = new DiagnosticRuntime({ source: "cli" });
+  sink.emit = (event) => { events.push(event); return true; };
+  const context = makeDiagnosticContext({
+    source_id: diagnosticId(), partition_id: diagnosticId(), generation: 1,
+    runtime: sink,
+  }, "cli");
+  const result = withDiagnosticContext(context, () =>
+    invokeOperation("tinycloud.test.get", 1, {}, { name: "valid" }));
+  try {
+    await entered;
+    expect(events).toContainEqual(expect.objectContaining({ type: "phase.start", phase: "executor" }));
+    expect(events.some((event) => event.type === "phase.finish" && event.phase === "executor")).toBe(false);
+    expect(events.some((event) => event.type === "invocation.finish")).toBe(false);
+  } finally {
+    release();
+    await result;
+  }
+});
+
 test("rejects an unsupported operation version before it attempts input parsing or context resolution", async () => {
   definitions = [createDefinition()];
   let resolvedContext = false;
@@ -259,12 +357,20 @@ test("plans and persists exact missing authority before it can execute a handler
     }),
   ];
 
-  const result = await invokeOperation(
+  const { result, events } = await captureInvocation(() => invokeOperation(
     "tinycloud.test.get",
     1,
     {},
     { name: "valid" },
-  );
+  ));
+  expect(events).toContainEqual(expect.objectContaining({
+    type: "phase.finish", phase: "authority_planning", outcome: "refused", requested: 1, missing: 1,
+  }));
+  expect(events).toContainEqual(expect.objectContaining({
+    phase: "approval_request", outcome: "accepted", missing: 1,
+  }));
+  expect(events.some((event) => event.phase === "executor")).toBe(false);
+  expect(JSON.stringify(events)).not.toContain(testCapability.path);
 
   expect(result.status).toBe("authority_required");
   expect(invocationTrace).toEqual(["runtime", "runtime", "plan", "persist"]);

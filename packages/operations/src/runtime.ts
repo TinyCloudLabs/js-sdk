@@ -19,6 +19,8 @@ import { operationError, type OperationError } from "./errors.js";
 import { isLocalOwnerProfile, ownerSessionLacksProof, resolveInvocationProfile, resolvePosture, type InvocationProfileResolution } from "./profile.js";
 import { migrationRecovery, signInRecovery } from "./recovery.js";
 import { operationSpaceResolver } from "./secrets.js";
+import { beginDiagnosticPhase, diagnosticTelemetry, getDiagnosticContext, withDiagnosticContext } from "./diagnostics/context.js";
+import { diagnosticId } from "./diagnostics/model.js";
 import {
   profilePath,
   readAdditionalDelegations,
@@ -153,6 +155,7 @@ export async function createInvocationRuntime(
     }
     const node = new TinyCloudNodeConstructor({
       host: summary.host,
+      ...(getDiagnosticContext() === undefined ? {} : { telemetry: diagnosticTelemetry }),
       ...(privateKey === undefined ? {} : { privateKey }),
     });
 
@@ -160,10 +163,10 @@ export async function createInvocationRuntime(
     if (explicitPrivateKeyOverride) {
       // An explicit key is a complete, non-persisted identity. Do not inherit
       // an OpenKey session (or require one) from the selected profile.
-      await node.signIn();
+      await observeSessionPreparation("login", () => node.signIn());
     } else if (activeSession === undefined) {
       if (profile.authMethod === "local" && privateKey !== undefined) {
-        await node.signIn();
+        await observeSessionPreparation("login", () => node.signIn());
       } else {
         return failed(summary, operationError(
           "SESSION_NOT_FOUND",
@@ -178,7 +181,7 @@ export async function createInvocationRuntime(
       ));
     } else {
       try {
-        await node.restoreSession(activeSession);
+        await observeSessionPreparation("restore", () => node.restoreSession(activeSession));
       } catch (error) {
         // node-sdk refuses expired or otherwise unusable persisted authority
         // (`AUTH_EXPIRED`) while verifying it locally, before any node request.
@@ -336,10 +339,11 @@ async function createRestoredRuntime(
     // Wallet-mode restore needs the profile's own key when it has one.
     const node = new TinyCloudNodeConstructor({
       host: summary.host,
+      ...(getDiagnosticContext() === undefined ? {} : { telemetry: diagnosticTelemetry }),
       ...(typeof profile.privateKey === "string" ? { privateKey: profile.privateKey } : {}),
     });
     try {
-      await node.restoreSession(activeSession);
+      await observeSessionPreparation("restore", () => node.restoreSession(activeSession));
     } catch (error) {
       if (isRecord(error) && error.code === "AUTH_EXPIRED") {
         return failed(summary, operationError(
@@ -389,6 +393,27 @@ async function createRestoredRuntime(
       { retryable: true },
     ));
   }
+}
+
+async function observeSessionPreparation<T>(
+  action: "login" | "restore",
+  prepare: () => Promise<T>,
+): Promise<T> {
+  const current = getDiagnosticContext();
+  const operation_id = current === undefined ? undefined : diagnosticId();
+  return withDiagnosticContext(current === undefined ? undefined : {
+    ...current, operation_id, parent_id: current.operation_id ?? current.invocation_id,
+  }, async () => {
+    const finish = beginDiagnosticPhase("restore", { operation_id, action });
+    try {
+      const result = await prepare();
+      finish({ outcome: "complete" });
+      return result;
+    } catch (error) {
+      finish({ outcome: "failed" });
+      throw error;
+    }
+  });
 }
 
 function spaceForAuthenticatedPrincipal(principal: string | undefined): string | undefined {

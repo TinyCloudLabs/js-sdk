@@ -1,5 +1,6 @@
 import { afterEach, expect, spyOn, test } from "bun:test";
 import { generateKeyPair, exportJWK, SignJWT } from "jose";
+import { randomUUID } from "node:crypto";
 import { createServer, type Server } from "node:http";
 import { access, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -7,6 +8,7 @@ import { join } from "node:path";
 
 import { Client, StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
 import { TinyCloudNode } from "@tinycloud/node-sdk";
+import { DiagnosticStore, exportDiagnosticBundle, importDiagnosticBundle, resolveDiagnosticTenant, reviewDiagnostics } from "@tinycloud/operations/diagnostics";
 
 import { createHostedMcpApp, type HostedMcpApp } from "./http.js";
 import {
@@ -239,14 +241,20 @@ test("hosted apps approvals persist records and recover an expired session witho
   const hermetic = await hermeticModule.createHermeticEncryptedNode();
   resources.push(async () => hermetic.stop());
   hermetic.provisionKvSpace(await ownerSpace(hermetic.ownerPrivateKey, "default"));
+  const diagnosticRoot = await mkdtemp(join(tmpdir(), "tinycloud-hosted-history-"));
+  resources.push(() => rm(diagnosticRoot, { recursive: true, force: true }));
   const { app, client, stateDir } = await startHostedMcp({
-    nodeHost: hermetic.host, ownerDids: [hermetic.ownerDid],
+    nodeHost: hermetic.host, ownerDids: [hermetic.ownerDid], diagnosticRoot,
   });
   const first = record((await client.callTool({ name: "tinycloud_apps_context", arguments: {} })).structuredContent);
   expect(first).toMatchObject({ status: "error", error: { code: "SESSION_NOT_FOUND" } });
   const bootstrapUrl = String(record(record(first.error).details).approvalUrl);
   const [tenantId] = await readdir(join(stateDir, "tenants"));
   const tenantStateRoot = join(stateDir, "tenants", tenantId!);
+  const partition = await resolveDiagnosticTenant(diagnosticRoot, tenantId!, { create: true });
+  expect(partition).toBeDefined();
+  const history = new DiagnosticStore(diagnosticRoot, partition!);
+  await history.control("enable", { scope: "tc-apps" });
   const bootstrap = await openKeyApprovalBody({
     redirect: await openKeyRedirect(app, bootstrapUrl), tenantStateRoot, privateKey: hermetic.ownerPrivateKey,
   });
@@ -327,6 +335,36 @@ test("hosted apps approvals persist records and recover an expired session witho
   expect(await postCallback(app, reloginUrl, renewed)).toEqual({ status: 200, body: { success: true } });
   expect((await client.callTool({ name: "tinycloud_apps_read", arguments: { keys: [key] } })).structuredContent)
     .toMatchObject({ status: "ok", output: { records: [{ key, value: { data: { kg: 80.5 } } }] } });
+  await client.close();
+  await app.close();
+  const snapshot = await history.snapshot({ all: true });
+  const writeStart = snapshot.events.find((event) => event.type === "phase.start" && event.activity === "apps_write");
+  expect(writeStart).toBeDefined();
+  const invocation = snapshot.events.filter((event) => event.invocation_id === writeStart!.invocation_id);
+  expect(invocation.some((event) => event.canonical_status === "ok")).toBe(true);
+  expect(invocation.some((event) => event.protocol === "result")).toBe(true);
+  expect(invocation.some((event) => event.phase === "output_validation" && event.outcome === "pass")).toBe(true);
+  expect(invocation.every((event) => event.run_id === undefined && event.task_id === undefined)).toBe(true);
+  expect(JSON.stringify(snapshot)).not.toContain(key);
+  expect(JSON.stringify(snapshot)).not.toContain("80.5");
+  const receiverRoot = await mkdtemp(join(tmpdir(), "tinycloud-hosted-review-"));
+  resources.push(() => rm(receiverRoot, { recursive: true, force: true }));
+  const selection = { invocation_ids: [writeStart!.invocation_id] };
+  const exported = await exportDiagnosticBundle(history, {
+    selection, out: join(diagnosticRoot, "exports", randomUUID()), expires_at: new Date(Date.now() + 60_000).toISOString(),
+  });
+  const receiver = new DiagnosticStore(receiverRoot);
+  const imported = await importDiagnosticBundle(receiver, exported.path);
+  expect((await importDiagnosticBundle(receiver, exported.path)).import_id).toBe(imported.import_id);
+  const review = await reviewDiagnostics(receiver, selection);
+  expect(review.timeline.map((node) => node.event.event_id).sort()).toEqual(invocation.map((event) => event.event_id).sort());
+  expect(review.invocations).toHaveLength(1);
+  expect(review.invocations[0]).toMatchObject({
+    finish: "observed", canonical_status: "ok", protocol: "result", transport_send: "send_finished", task_linkage: "unknown",
+  });
+  expect(review.coverage.gaps).toContain("import_untrusted");
+  expect(JSON.stringify(review)).not.toContain(key);
+  expect(JSON.stringify(review)).not.toContain("80.5");
 }, 60_000);
 
 test("a refused delegation approval names its stage, code and reason, and never echoes the approval", async () => {
@@ -540,7 +578,7 @@ interface HermeticNode {
   stop(): void;
 }
 
-async function startHostedMcp(options: { nodeHost: string; ownerDids: string[] }): Promise<{
+async function startHostedMcp(options: { nodeHost: string; ownerDids: string[]; diagnosticRoot?: string }): Promise<{
   app: HostedMcpApp;
   client: Client;
   stateDir: string;
@@ -560,6 +598,7 @@ async function startHostedMcp(options: { nodeHost: string; ownerDids: string[] }
     openkeyHost: "https://openkey.test",
     approvalTtlSeconds: 300,
     delegationExpiry: "1h",
+    ...(options.diagnosticRoot === undefined ? {} : { diagnostics: { root: options.diagnosticRoot } }),
     oauthMetadata: {
       issuer: "https://openkey.test/api/auth",
       authorization_endpoint: "https://openkey.test/api/auth/oauth2/authorize",
