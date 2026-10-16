@@ -289,10 +289,15 @@ denied while startup retries erasure. A signed-out profile cannot implicitly
 authenticate with its stored owner key; use explicit `auth login` for a new
 session. A missing or corrupt replica gate with uncertain local writes refuses
 logout without deleting credentials or files: sync first, or explicitly pass
-`--discard-local-changes` to wipe both replica roots. `auth logout --revoke`
+`--discard-local-changes` to wipe both replica roots after their exact listed
+contents are approved. With a verified local-owner key, `auth logout --revoke`
 revokes verified owner-controlled stored grants and then the active session CID
 online before deleting local files. Failed or ambiguous remote revoke retains
-session, key and physical replica files behind a denied gate for retry.
+session, key and physical replica files behind a denied gate for retry. OpenKey
+owner revocation currently fails closed with `REVOCATION_AUTHORITY_UNAVAILABLE`,
+retaining credentials and denied replica files until signed owner revoke
+authority is supported.
+
 `--keep-replicas` retains legacy files only when no replica gate, flag-owned
 partition or pending purge exists; gated profiles refuse before mutation and
 legacy-only keep still shreds credentials.

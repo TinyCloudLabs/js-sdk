@@ -193,12 +193,16 @@ An explicit logout also blocks implicit sign-in with the stored profile owner
 key; use `auth login` to establish a fresh session. If a missing or corrupt
 replica gate makes unsynced writes uncertain, logout refuses without deleting
 credentials or files; sync first or explicitly pass `--discard-local-changes`
-to wipe both replica roots. `auth logout --revoke` first denies local reads,
+to wipe both replica roots after their exact listed contents are approved.
+For a verified local-owner key, `auth logout --revoke` first denies local reads,
 then revokes verified owner-controlled grant CIDs and the session CID on the node;
 an unavailable or ambiguous node leaves session, key and physical replica files
-intact for retry. `--keep-replicas` is available only for legacy-only profiles
-with no gate, flag-owned partition or pending purge; it retains those legacy
-files but still shreds credentials and blocks implicit reauthentication.
+intact for retry. OpenKey owner revocation currently fails closed with
+`REVOCATION_AUTHORITY_UNAVAILABLE`, retaining credentials and denied replica
+files until signed owner revoke authority is supported. `--keep-replicas` is
+available only for legacy-only profiles with no gate, flag-owned partition or
+pending purge; it retains those legacy files but still shreds credentials and
+blocks implicit reauthentication.
 
 `tc auth grants list` labels the signed-in delegation CID `(current session)`.
 `tc delegation revoke <cid>` still accepts any eligible exact CID, but when
