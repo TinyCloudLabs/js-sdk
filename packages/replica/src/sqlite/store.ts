@@ -21,6 +21,7 @@ import type {
   VerifiedPage,
 } from "../types.js";
 import { loadSqlite, type SqliteDatabase, type SqliteOpener, type SqlValue } from "./driver.js";
+import { removeSqliteReplicaLayout } from "./layout.js";
 
 const SCHEMA_VERSION = 2;
 export const DURABILITY = "sqlite-wal-synchronous-full+fsynced-blobs";
@@ -1138,13 +1139,10 @@ export class SqliteReplicaStore implements ReplicaStore {
   }
 
   /**
-   * Remove this replica's directory for good (`tc replica reset --purge`).
-   * Fenced like a commit: `t` must still be a live lease on the database this
-   * store opened, checked under the write lock, so a paused process can
-   * never remove a replica another process took over or recreated. Allowed
-   * on a revoked replica. The store is unusable afterwards; close it.
+   * Remove the source-created mirror layout under a live lease. Unknown files
+   * are refused unless the caller explicitly accepted their loss.
    */
-  async destroy(t: LeaseToken): Promise<void> {
+  async destroy(t: LeaseToken, options: { discardLocalChanges?: boolean; allowAdapterFence?: boolean } = {}): Promise<void> {
     await this.#mutate(async () => {
       try {
         this.#db.exec("BEGIN IMMEDIATE");
@@ -1166,11 +1164,7 @@ export class SqliteReplicaStore implements ReplicaStore {
         await assertDirectory();
         // Holding the write lock: no other lease holder can mutate this store.
         await this.#assertPresent();
-        for (const entry of await readdir(this.#pinnedDir)) {
-          await rm(join(this.#pinnedDir, entry), { recursive: true, force: true });
-        }
-        await assertDirectory();
-        await rmdir(this.dir);
+        await removeSqliteReplicaLayout(this.dir, options);
       } catch (error) {
         throw storageError(error, "Removing the replica");
       } finally {

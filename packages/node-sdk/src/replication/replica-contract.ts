@@ -441,7 +441,7 @@ export interface SqliteReplicaStore extends ReplicaStore {
   grantInstallTimes(): Promise<Array<{ cid: string; installedAt: number }>>;
   installGatedGrant(g: GrantRecord, policy: SqliteGrantPolicy): Promise<SqliteGrantInstall>;
   recomputeGrantInstall(g: GrantRecord, policy: SqliteGrantPolicy): Promise<SqliteGrantInstall | null>;
-  destroy(t: LeaseToken): Promise<void>;
+  destroy(t: LeaseToken, options?: { discardLocalChanges?: boolean; allowAdapterFence?: boolean }): Promise<void>;
   readTransaction<T>(
     generation: number,
     checkGate: () => Promise<void>,
@@ -481,7 +481,9 @@ export interface ReplicaRuntime {
 }
 
 /** The members of `@tinycloud/replica/sqlite` the adapter uses. */
+export type SqliteReplicaLayout = { unknownPaths: string[] };
 export interface SqliteRuntime {
+  inspectSqliteReplicaLayout(dir: string, options?: { allowAdapterFence?: boolean }): Promise<SqliteReplicaLayout>;
   SqliteReplicaStore: {
     open(dir: string, options: SqliteReplicaStoreOptions): Promise<SqliteReplicaStore>;
     inspect(dir: string, options?: { now?: () => number; signal?: AbortSignal }): Promise<{

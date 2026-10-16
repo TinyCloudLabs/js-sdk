@@ -4,7 +4,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { mkdir, rmdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { extractRecapAttenuations, parseCanonicalRecapResource, pkhDid } from "@tinycloud/sdk-core";
+import { extractRecapAttenuations, parseCanonicalRecapResource, pkhDid, type ReplicationEvent } from "@tinycloud/sdk-core";
 import { registerReplicationLoaders } from "./core";
 import { NodeWasmBindings } from "./NodeWasmBindings";
 import { PrivateKeySigner } from "./signers/PrivateKeySigner";
@@ -82,7 +82,7 @@ function profileGuard(dir: string): <T>(section: () => Promise<T>) => Promise<T>
   };
 }
 
-function replicatedNode(dir?: string): TinyCloudNode {
+function replicatedNode(dir?: string, onEvent?: (event: ReplicationEvent) => void): TinyCloudNode {
   const guard = dir === undefined ? undefined : profileGuard(dir);
   const replicaStorage = dir === undefined ? storage
     : createSqliteReplicaStorage({ dir: join(dir, "replicas"), guard });
@@ -90,7 +90,7 @@ function replicatedNode(dir?: string): TinyCloudNode {
     host: RESTORE_HOST,
     signer: new PrivateKeySigner(PROOF_PRIVATE_KEY),
     wasmBindings: new NodeWasmBindings(),
-    replication: { enabled: true, prefixes: ["notes/"], storage: replicaStorage, profileDir: dir, profileGuard: guard },
+    replication: { enabled: true, prefixes: ["notes/"], storage: replicaStorage, profileDir: dir, profileGuard: guard, onEvent },
   });
 }
 
@@ -613,6 +613,50 @@ describe("replica gate: sign-out", () => {
     const after = readGateFile(dir);
     expect(after.principalHash).toBeNull();
     expect(after.lifecycleEpoch).toBe(before.lifecycleEpoch + 1);
+  });
+
+  test("sign-out emits one committed lifecycle denial to the callback and retiring context", async () => {
+    const dir = profileDir();
+    const proof = await signedRestorableSession();
+    const principal = pkhDid(proof.address, proof.chainId);
+    const stamp = await replicaGate.establishSessionStamp(dir, principal, { siweIssuedAt: Date.now() });
+    const emitted: ReplicationEvent[] = [];
+    const observed: unknown[] = [];
+    const node = replicatedNode(dir, (event) => emitted.push(event));
+    await node.restoreSession({ ...proof, replicaStamp: stamp });
+    const context = Reflect.get(node, "_serviceContext") as { on(name: string, listener: (data: unknown) => void): void };
+    context.on("replication.lifecycle", (data) => observed.push(data));
+
+    await node.signOut();
+
+    expect(readGateFile(dir).principalHash).toBeNull();
+    expect(emitted.filter((event) => event.type === "replication.lifecycle")).toEqual([
+      expect.objectContaining({ type: "replication.lifecycle", action: "denied", reason: "sign_out" }),
+    ]);
+    expect(observed).toEqual([expect.objectContaining({ action: "denied", reason: "sign_out" })]);
+    expect(JSON.stringify(emitted)).not.toContain(principal);
+    expect(JSON.stringify(emitted)).not.toContain(proof.spaceId);
+  });
+
+  test("account-switch denial emits once and a stale retry cannot claim a second denial", async () => {
+    const dir = profileDir();
+    const proof = await signedRestorableSession();
+    const principal = pkhDid(proof.address, proof.chainId);
+    const stamp = await replicaGate.establishSessionStamp(dir, principal, { siweIssuedAt: Date.now() });
+    const emitted: ReplicationEvent[] = [];
+    const node = replicatedNode(dir, (event) => emitted.push(event));
+    await node.restoreSession({ ...proof, replicaStamp: stamp });
+    const deny = Reflect.get(node, "denyReplicaGate") as (input: {
+      reason: "account_switch"; principal: string; next: string;
+    }) => Promise<{ status: string }>;
+    const input = { reason: "account_switch" as const, principal, next: pkhDid(OTHER_ADDRESS, proof.chainId) };
+
+    expect(await deny.call(node, input)).toMatchObject({ status: "denied" });
+    expect(await deny.call(node, input)).toMatchObject({ status: "stale" });
+    expect(emitted.filter((event) => event.type === "replication.lifecycle")).toEqual([
+      expect.objectContaining({ type: "replication.lifecycle", action: "denied", reason: "account_switch" }),
+    ]);
+    expect(JSON.stringify(emitted)).not.toContain(principal);
   });
 
   test("durably denies before awaiting registry cleanup and refuses pending reads", async () => {

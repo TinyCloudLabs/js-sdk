@@ -4,7 +4,7 @@
  */
 import { loadSqlite } from "./sqlite/driver.js";
 import { afterAll, describe, expect, test } from "bun:test";
-import { chmod, mkdir, readdir, rm, stat, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readdir, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import { FakeNode, NODE_DID, SPACE, config, deviceGrant, etagOf, newStore, removeTempDirs, tempDir, type TestStoreOptions } from "../test/fixtures.js";
@@ -538,6 +538,44 @@ describe("replica removal (reset --purge)", () => {
     await store.markRevoked("delegation-revoked: bafy");
     await store.destroy((await store.acquireSyncLease(60_000))!);
     expect(await stat(dir).then(() => "exists", () => "gone")).toBe("gone");
+  });
+
+  test("source-created hash-sharded blob files erase without discard", async () => {
+    const dir = await tempDir();
+    const store = await newStore(dir);
+    const node = new FakeNode();
+    node.put("notes/a", "mirror content");
+    await new Replica({ store, transport: node }).sync();
+    expect(await blobCount(dir)).toBe(1);
+    await store.destroy((await store.acquireSyncLease(60_000))!);
+    expect(await stat(dir).then(() => "exists", () => "gone")).toBe("gone");
+  });
+
+  test("unknown child refuses ordinary destruction without deleting its mirror", async () => {
+    const dir = await tempDir();
+    const store = await newStore(dir);
+    const lease = (await store.acquireSyncLease(60_000))!;
+    await writeFile(join(dir, "pending-v2.json"), "unreviewed local changes");
+    expect(await codeOf(store.destroy(lease))).toBe(ReplicaErrorCode.STORAGE_ERROR);
+    expect((await store.open())?.config.name).toBe("notes");
+    expect(await readdir(dir)).toContain("pending-v2.json");
+    await rm(join(dir, "pending-v2.json"));
+    await store.destroy(lease);
+    expect(await stat(dir).then(() => "exists", () => "gone")).toBe("gone");
+  });
+
+  test("explicit discard removes unknown nested files but never follows an outside symlink", async () => {
+    const dir = await tempDir();
+    const outside = await tempDir();
+    const store = await newStore(dir);
+    const lease = (await store.acquireSyncLease(60_000))!;
+    await writeFile(join(outside, "keep"), "outside");
+    await mkdir(join(dir, "future"));
+    await writeFile(join(dir, "future", "pending-v2.json"), "unreviewed");
+    await symlink(outside, join(dir, "future", "outside"), "dir");
+    await store.destroy(lease, { discardLocalChanges: true });
+    expect(await stat(dir).then(() => "exists", () => "gone")).toBe("gone");
+    expect(await stat(join(outside, "keep")).then(() => "exists", () => "gone")).toBe("exists");
   });
 });
 
