@@ -24,6 +24,7 @@ import type { ReplicaSessionStamp } from "@tinycloud/sdk-services/kv/replication
 
 import {
   createSqliteReplicaStorage,
+  createProfileReplicaPurge,
   type SqliteReplicaStorageOptions,
 } from "./sqlite";
 import { denyGate, establishSessionStamp, readGateSnapshot } from "@tinycloud/replica/profile-gate";
@@ -275,6 +276,112 @@ describe("mandatory Node lifecycle gate", () => {
     const report = await storage.lifecycle!.erasePending({ signal: new AbortController().signal });
     expect(report.failed).toEqual([]);
     expect(await filesNamed(dir, "device.jwk")).toEqual([]);
+  });
+
+  test("deferred revoke survives restart without erasing files, then resumes the exact denial", async () => {
+    const dir = await makeDir();
+    const profileDir = dirname(dir);
+    const storage = createSqliteReplicaStorage(storageOptions());
+    const handle = await storage.open(spec());
+    const pending = storage.pendingWrites!(identity(), { stamp: stamps.get(profileDir)! });
+    await pending.update((state) => { state.seq = 1; });
+    const before = await filesNamed(dir, "pending.json");
+    const devices = await filesNamed(dir, "device.jwk");
+    const databases = await filesNamed(dir, "replica.db");
+    const purge = createProfileReplicaPurge({ profileDir, guard: sharedGuard });
+
+    const denied = await purge.deny({ reason: "sign_out", principal: PRINCIPAL }, { deferErase: true });
+    expect(denied).toMatchObject({ status: "denied" });
+    if (denied.status !== "denied" || denied.resumeToken === undefined) throw new Error("Missing durable resume token");
+    const token = denied.resumeToken;
+    expect(await filesNamed(dir, "pending.json")).toEqual(before);
+    expect(await filesNamed(dir, "device.jwk")).toEqual(devices);
+    expect(await filesNamed(dir, "replica.db")).toEqual(databases);
+    await expect(handle.get("notes/a")).rejects.toMatchObject({ code: "REPLICA_GATED" });
+    await expect(pending.read()).rejects.toMatchObject({ code: "REPLICA_GATED" });
+    await handle.close();
+
+    const restarted = createProfileReplicaPurge({ profileDir, guard: sharedGuard });
+    expect(await restarted.deferredErase()).toEqual(token);
+    expect((await restarted.recover({ signal: new AbortController().signal })).remaining).toBeGreaterThan(0);
+    expect((await restarted.erasePending({ signal: new AbortController().signal })).remaining).toBeGreaterThan(0);
+    expect(await filesNamed(dir, "pending.json")).toEqual(before);
+    expect(await filesNamed(dir, "device.jwk")).toEqual(devices);
+    expect(await filesNamed(dir, "replica.db")).toEqual(databases);
+    await expect(restarted.resumeDeferredErase({ ...token, principalHash: "0".repeat(64) }, {
+      signal: new AbortController().signal,
+    })).rejects.toMatchObject({ code: "REPLICA_GATED", gate: "stamp_stale" });
+    expect(await restarted.deferredErase()).toEqual(token);
+
+    const report = await restarted.resumeDeferredErase(token, { signal: new AbortController().signal });
+    expect(report.failed).toEqual([]);
+    expect(report.remaining).toBe(0);
+    expect(await filesNamed(dir, "pending.json")).toEqual([]);
+    expect(await filesNamed(dir, "device.jwk")).toEqual([]);
+    expect(await filesNamed(dir, "replica.db")).toEqual([]);
+    expect(await restarted.deferredErase()).toBeNull();
+    expect(await restarted.resumeDeferredErase(token, { signal: new AbortController().signal }))
+      .toEqual({ erased: [], failed: [], remaining: 0 });
+  });
+
+  test("interruption after clearing deferred marker leaves intents for restart recovery", async () => {
+    const dir = await makeDir();
+    const profileDir = dirname(dir);
+    const storage = createSqliteReplicaStorage(storageOptions());
+    await storage.pendingWrites!(identity(), { stamp: stamps.get(profileDir)! })
+      .update((state) => { state.seq = 1; });
+    const purge = createProfileReplicaPurge({ profileDir, guard: sharedGuard });
+    const denied = await purge.deny({ reason: "sign_out", principal: PRINCIPAL }, { deferErase: true });
+    if (denied.status !== "denied" || denied.resumeToken === undefined) throw new Error("Missing durable resume token");
+    const controller = new AbortController();
+    let lockTurns = 0;
+    const interrupted = createProfileReplicaPurge({ profileDir, guard: async (section) => {
+      const result = await sharedGuard(section);
+      if (++lockTurns === 1) controller.abort();
+      return result;
+    } });
+
+    await expect(interrupted.resumeDeferredErase(denied.resumeToken, { signal: controller.signal }))
+      .rejects.toMatchObject({ name: "AbortError" });
+    expect(await purge.deferredErase()).toBeNull();
+    expect(await filesNamed(dir, "pending.json")).toHaveLength(1);
+    const restarted = createProfileReplicaPurge({ profileDir, guard: sharedGuard });
+    expect(await restarted.recover({ signal: new AbortController().signal }))
+      .toMatchObject({ failed: [], remaining: 0 });
+    expect(await filesNamed(dir, "pending.json")).toEqual([]);
+  });
+
+  test("deferred denial blocks account switch until purge and rejects old token after successor", async () => {
+    const dir = await makeDir();
+    const profileDir = dirname(dir);
+    const purge = createProfileReplicaPurge({ profileDir, guard: sharedGuard });
+    await createSqliteReplicaStorage(storageOptions()).pendingWrites!(identity(), {
+      stamp: stamps.get(profileDir)!,
+    }).update((state) => { state.seq = 1; });
+    expect(() => purge.deny({ reason: "account_switch", principal: PRINCIPAL, next: "did:key:Bob" }, {
+      deferErase: true,
+    })).toThrow(TypeError);
+    expect((await readGateSnapshot(profileDir))?.principalHash).not.toBeNull();
+    const denied = await purge.deny({ reason: "sign_out", principal: PRINCIPAL }, { deferErase: true });
+    if (denied.status !== "denied" || denied.resumeToken === undefined) throw new Error("Missing durable resume token");
+    const token = denied.resumeToken;
+    expect(await purge.deny({ reason: "account_switch", principal: PRINCIPAL, next: "did:key:Bob" }))
+      .toMatchObject({ status: "stale" });
+    expect(await purge.deferredErase()).toEqual(token);
+    expect(await createSqliteReplicaStorage(storageOptions()).lifecycle!.activationAllowed("did:key:Bob")).toBe(false);
+    await purge.resumeDeferredErase(token, { signal: new AbortController().signal });
+    const deniedAt = (await readGateSnapshot(profileDir))!.deniedAt!;
+    const originalNow = Date.now();
+    try {
+      setSystemTime(new Date(deniedAt + 2));
+      await createSqliteReplicaStorage(storageOptions()).lifecycle!.establishSessionStamp("did:key:Bob", {
+        consentAnchor: { at: deniedAt + 1, source: "siwe" },
+      });
+    } finally {
+      setSystemTime(originalNow);
+    }
+    await expect(purge.resumeDeferredErase(token, { signal: new AbortController().signal }))
+      .rejects.toMatchObject({ code: "REPLICA_GATED", gate: "stamp_stale" });
   });
 
   test("deny advances a pending generation once and fences a queued update", async () => {

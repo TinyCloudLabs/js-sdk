@@ -429,6 +429,40 @@ describe("replica gate: sign-out", () => {
     expect(after.lifecycleEpoch).toBe(before.lifecycleEpoch + 1);
   });
 
+  test("durably denies before awaiting registry cleanup and refuses pending reads", async () => {
+    const dir = profileDir();
+    const guard = profileGuard(dir);
+    const proof = await signedRestorableSession();
+    const principal = pkhDid(proof.address, proof.chainId);
+    const replicaStamp = await replicaGate.establishSessionStamp(dir, principal, { siweIssuedAt: Date.now() });
+    const replicaStorage = createSqliteReplicaStorage({ dir: join(dir, "replicas"), guard });
+    const identity = { host: RESTORE_HOST, space: proof.spaceId, principal };
+    await replicaStorage.pendingWrites(identity, { stamp: replicaStamp }).update((state) => { state.seq = 1; });
+    const node = new TinyCloudNode({
+      host: RESTORE_HOST,
+      signer: new PrivateKeySigner(PROOF_PRIVATE_KEY),
+      wasmBindings: new NodeWasmBindings(),
+      replication: { enabled: true, prefixes: ["notes/"], storage: replicaStorage, profileDir: dir, profileGuard: guard },
+    });
+    await node.restoreSession({ ...proof, replicaStamp });
+
+    let cleanupObservedDenial = false;
+    Reflect.set(node, "accountRegistryTail", {
+      then(resolve: () => void, reject: (error: unknown) => void) {
+        (async () => {
+          cleanupObservedDenial = readGateFile(dir).principalHash === null;
+          await expect(replicaStorage.pendingWrites(identity, { stamp: replicaStamp }).read())
+            .rejects.toMatchObject({ code: "REPLICA_GATED" });
+          resolve();
+        })().catch(reject);
+      },
+    });
+
+    await node.signOut();
+    expect(cleanupObservedDenial).toBe(true);
+    expect(node.restorableSession).toBeUndefined();
+  });
+
   test("node sign-out records an identity pending intent before replica erase", async () => {
     const dir = profileDir();
     const guard = profileGuard(dir);

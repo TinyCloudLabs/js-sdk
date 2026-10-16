@@ -2151,19 +2151,22 @@ export class TinyCloudNode {
     try {
       this.teardownSession();
     } finally {
-      // Begin browser denial before waiting for account or worker cleanup.
+      // Invalidate this tab's delivery permission before any asynchronous cleanup.
       const denial = leavingPrincipal
         ? this.denyReplicaGate({ reason: "sign_out", principal: leavingPrincipal })
         : Promise.resolve(undefined);
       try {
-        await this.accountRegistryTail;
-        await this.quiesceReplicaRuntime();
-      } finally {
         denied = await denial;
-        if (leavingAddress) {
-          await (leavingAuth
-            ? leavingAuth.clearPersistedSession(leavingAddress)
-            : this.config.sessionStorage?.clear(leavingAddress));
+      } finally {
+        try {
+          await this.accountRegistryTail;
+          await this.quiesceReplicaRuntime();
+        } finally {
+          if (leavingAddress) {
+            await (leavingAuth
+              ? leavingAuth.clearPersistedSession(leavingAddress)
+              : this.config.sessionStorage?.clear(leavingAddress));
+          }
         }
       }
     }
