@@ -92,7 +92,7 @@ test("interrupted legacy cleanup removes an empty child through direct and combi
   await expect(stat(empty)).rejects.toMatchObject({ code: "ENOENT" });
   expect(await removeProfileReplicas("dogfood")).toEqual([]);
   const interruptedAgain = join(root, "again");
-  await mkdir(interruptedAgain);
+  await mkdir(interruptedAgain, { recursive: true });
   expect(await removeProfileReplicasAndReplication("dogfood")).toEqual(["again"]);
   await expect(stat(interruptedAgain)).rejects.toMatchObject({ code: "ENOENT" });
 });

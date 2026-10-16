@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promis
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { createProfileReplicaPurge, PrivateKeySigner, REPLICA_LOGOUT_PENDING_FILE } from "@tinycloud/node-sdk";
+import { REPLICA_GATE_FILE } from "@tinycloud/sdk-services/kv/replication/contractConstants";
 import { profileConfigPath, profilePath, sessionPath, withProfileLock, withTinyCloudStateRoot, writeJsonAtomic } from "@tinycloud/operations/state";
 import { readGateSnapshot } from "@tinycloud/replica/profile-gate";
 import { SqliteReplicaStore } from "@tinycloud/replica/sqlite";
@@ -188,4 +189,23 @@ test("startup completes a pinned empty legacy child left after the database was 
   await expect(readFile(paths.key)).rejects.toMatchObject({ code: "ENOENT" });
   await expect(readdir(legacyDir)).rejects.toMatchObject({ code: "ENOENT" });
   await expect(readFile(join(paths.directory, REPLICA_LOGOUT_PENDING_FILE))).rejects.toMatchObject({ code: "ENOENT" });
+}, 30_000);
+
+test("startup refuses a corrupt gate without a logout marker before network restore or local byte delivery", async () => {
+  const { home, paths, networkPaths } = await fixture();
+  const session = await readFile(paths.session);
+  const key = await readFile(paths.key);
+  const db = await readFile(paths.db);
+  const requestsBefore = networkPaths.length;
+  await writeFile(join(paths.directory, REPLICA_GATE_FILE), "{invalid gate json");
+  expect(await Bun.file(join(paths.directory, REPLICA_LOGOUT_PENDING_FILE)).exists()).toBe(false);
+
+  const status = await run(home, ["auth", "status"]);
+  expect(status.exitCode).toBeGreaterThan(0);
+  expect(status.stdout).not.toContain("private replica value");
+  expect(status.stderr).toMatch(/gate_unavailable|REPLICA_GATED|REPLICA_PURGE_FAILED/);
+  expect(networkPaths).toHaveLength(requestsBefore);
+  expect(await readFile(paths.session)).toEqual(session);
+  expect(await readFile(paths.key)).toEqual(key);
+  expect(await readFile(paths.db)).toEqual(db);
 }, 30_000);
