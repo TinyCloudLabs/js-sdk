@@ -51,7 +51,7 @@ function setup({ durable = true, pendingStore, initialEpoch = 0, onSync, statusO
   allowSecrets?: boolean;
   delivery?: () => { status: "allow" } | { status: "consent_expired"; code: "CONSENT_EXPIRED" } | { status: "gated"; gate: "stamp_stale" };
   onDeny?: (input: { reason: string; principal: string }) => void | Promise<void>;
-  consentAnchor?: { at: number; source: "siwe" };
+  consentAnchor?: { at: number; source: "siwe" | "first_install" };
   durableDeadline?: number | null;
   anchorError?: boolean;
 } = {}) {
@@ -417,6 +417,23 @@ describe("consent deadline delivery", () => {
     await env.controller.get(readRequest(env.network));
     expect(durations).toEqual([10_000]);
   });
+  test("a first-install expiry bound cannot authorize a fresh browser mint", async () => {
+    let mints = 0;
+    const env = setup({
+      consentAnchor: { at: 1_000_000, source: "first_install" },
+      delivery: () => ({ status: "allow" }),
+      statusOverrides: { grant: null },
+      runtimeMint: async () => {
+        mints++;
+        return { ucan: "minted-token", parentCid: "parent", expiresAt: 2_000_000 };
+      },
+    });
+    const result = await env.controller.get(readRequest(env.network));
+    expect(mints).toBe(0);
+    expect(result.ok && result.data.data).toBe("network");
+    expect(env.counters()).toMatchObject({ installs: 0, localReads: 0, networkCalls: 1 });
+  });
+
   test("an unanchored node session cannot mint a fresh replica grant", async () => {
     let mints = 0;
     const env = setup({
