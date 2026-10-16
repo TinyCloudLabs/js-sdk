@@ -5,8 +5,8 @@ import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { measureReplicaOptionalLoaded, type LoadedSizes } from "./measure-replica-optional";
 import {
-  approvedMeasurementCorrection, approvedRelocations, correctedOptionalAllowance,
-  ciOptionalAllowance, fixRequiredOptionalAllowance, optionalFormats, priorOptionalAllowance,
+  approvedCompactFixRequired, approvedMeasurementCorrection, approvedRelocations, compactFixOptionalAllowance,
+  correctedOptionalAllowance, ciOptionalAllowance, fixRequiredOptionalAllowance, optionalFormats, priorOptionalAllowance,
   relocatedOptionalAllowance, relocationCommit, validateOptionalEntryTransition, validateOptionalLedger, type OptionalLedger,
 } from "./replica-optional-size-policy";
 import { assertCiSizeToolchain, approvedCiToolchainCorrection, approvedFixRequiredRatchet, approvedGatedOnlyRatchet, approvedPhase2, ciCorrectionPolicyOnlyPaths, isPolicyOnlySinceApprovedSource, validateCiToolchainTransition, validateGatedOnlyRatchet, validateLedger, type GzipSizes, type Ledger, type LedgerEntry } from "./replica-size-policy";
@@ -183,6 +183,11 @@ if (prBaseSha) {
   validateOptionalLedger(baseOptional, baseLedger.fixRequiredRatchet !== undefined,
     baseLedger.canonicalToolchainCorrection !== undefined);
   validateGatedOnlyRatchet(optionalLedger.gatedOnlyRatchet, baseOptional.gatedOnlyRatchet);
+  if (baseOptional.fixRequired !== undefined &&
+      JSON.stringify(optionalLedger.fixRequired) !== JSON.stringify(baseOptional.fixRequired)) {
+    console.error("Merged fix-required measured-source rows must remain unchanged.");
+    failed = true;
+  }
   if (optionalLedger.gatedOnlyRatchet !== undefined && baseOptional.gatedOnlyRatchet === undefined &&
       spawnSync("git", ["merge-base", "--is-ancestor", approvedGatedOnlyRatchet.sourceCommit, "HEAD"], {
         cwd: repoRoot,
@@ -203,13 +208,14 @@ if (prBaseSha) {
   }
   if (optionalResult.status === 0 && optionalFormats.some((format) =>
     optionalLedger.allowance[format] > baseOptional.allowance[format])) {
+    const ciAllowance = optionalLedger.fixRequired === undefined ? ciOptionalAllowance : compactFixOptionalAllowance;
     const pairedTransition = baseOptional.relocations === undefined &&
       JSON.stringify(optionalLedger.relocations) === JSON.stringify(approvedRelocations) &&
       baseOptional.measurementCorrection === undefined &&
       optionalFormats.every((format) =>
         baseOptional.allowance[format] === priorOptionalAllowance[format] &&
         optionalLedger.allowance[format] ===
-          (ciCorrection !== undefined ? ciOptionalAllowance[format]
+          (ciCorrection !== undefined ? ciAllowance[format]
             : ledger.fixRequiredRatchet !== undefined ? fixRequiredOptionalAllowance[format]
               : optionalLedger.measurementCorrection === undefined
                 ? relocatedOptionalAllowance[format] : correctedOptionalAllowance[format]));
@@ -234,9 +240,14 @@ if (prBaseSha) {
       JSON.stringify(optionalLedger.measurementCorrection) === JSON.stringify(approvedMeasurementCorrection) &&
       optionalFormats.every((format) =>
         baseOptional.allowance[format] === priorOptionalAllowance[format] &&
-        optionalLedger.allowance[format] === ciOptionalAllowance[format]);
-    if (!pairedTransition && !measurementCorrection && !reviewedFixTransition && !ciCorrectionTransition) {
-      console.error(`${baseOptionalPath}: optional allowance may increase only with the exact paired relocation, Bun correction, ddc032ca reviewed fix, or CI Rust 1.99.0 measurement correction.`);
+        optionalLedger.allowance[format] === ciAllowance[format]);
+    const compactFixTransition = baseOptional.fixRequired === undefined &&
+      JSON.stringify(optionalLedger.fixRequired) === JSON.stringify([approvedCompactFixRequired]) &&
+      optionalFormats.every((format) =>
+        baseOptional.allowance[format] === ciOptionalAllowance[format] &&
+        optionalLedger.allowance[format] === compactFixOptionalAllowance[format]);
+    if (!pairedTransition && !measurementCorrection && !reviewedFixTransition && !ciCorrectionTransition && !compactFixTransition) {
+      console.error(`${baseOptionalPath}: optional allowance may increase only with an exact reviewed relocation, toolchain correction, or fix-required source row.`);
       failed = true;
     }
   }
@@ -246,8 +257,11 @@ if (prBaseSha) {
     baseLedger.canonicalToolchainCorrection === undefined;
   if (ciCorrectionIntroduced) {
     const graph = await collectMeasuredArtifactInputs(repoRoot);
-    if (!isPolicyOnlySinceApprovedSource(repoRoot, approvedCiToolchainCorrection.approvedSource, ciCorrectionPolicyOnlyPaths, graph)) {
-      console.error("CI toolchain size correction requires unchanged measured web/worker artifact inputs since ddc032ca.");
+    if (!isPolicyOnlySinceApprovedSource(
+      repoRoot, approvedCiToolchainCorrection.approvedSource, ciCorrectionPolicyOnlyPaths, graph,
+      optionalLedger.fixRequired?.[0]?.measuredPaths,
+    )) {
+      console.error("CI toolchain size correction requires unchanged measured inputs except exact ruled source blobs since ddc032ca.");
       failed = true;
     }
   }

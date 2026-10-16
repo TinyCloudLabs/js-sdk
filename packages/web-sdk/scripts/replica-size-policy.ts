@@ -307,6 +307,7 @@ export const ciCorrectionPolicyOnlyPaths: ReadonlySet<string> = new Set([
 
 export function isPolicyOnlySinceApprovedSource(
   root: string, approvedSource: string, allowed: ReadonlySet<string>, graph?: MeasuredInputGraph,
+  approvedMeasuredBlobs: Readonly<Record<string, string>> = {},
 ): boolean {
   if (spawnSync("git", ["merge-base", "--is-ancestor", approvedSource, "HEAD"], { cwd: root }).status !== 0) {
     return false;
@@ -314,7 +315,16 @@ export function isPolicyOnlySinceApprovedSource(
   const changed = execFileSync("git", ["diff", "--no-renames", "--name-only", "-z", `${approvedSource}...HEAD`], { cwd: root });
   return changed.toString("utf8").split("\0").filter(Boolean).every((path) => {
     if (allowed.has(path) || /^\.changeset\/[^/]+\.md$/.test(path) || path === unbundledContract) return true;
-    if (isMeasuredArtifactInput(path) && !isMeasuredTest(path)) return false;
+    if (isMeasuredArtifactInput(path) && !isMeasuredTest(path)) {
+      if (!Object.hasOwn(approvedMeasuredBlobs, path)) return false;
+      try {
+        return execFileSync("git", ["rev-parse", `HEAD:${path}`], {
+          cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"],
+        }).trim() === approvedMeasuredBlobs[path];
+      } catch {
+        return false;
+      }
+    }
     if (!isMeasuredTest(path) && !isCliNonInput(path)) return false;
     return graph !== undefined && !graph.bundleInputs.has(path) && !graph.sourceMapInputs.has(path);
   });

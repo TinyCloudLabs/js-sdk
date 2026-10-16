@@ -2,6 +2,18 @@ import { execFileSync } from "node:child_process";
 import { resolve } from "node:path";
 import type { LoadedSizes } from "./measure-replica-optional";
 import { approvedCiToolchainCorrection, approvedFixRequiredRatchet, validateGatedOnlyRatchet, type GatedOnlyRatchet } from "./replica-size-policy";
+export type CompactFixRequired = {
+  sourceCommit: string;
+  integratedCommit: string;
+  ruling: string;
+  controlledAB: {
+    before: Pick<LoadedSizes, "replica.mjs" | "replica.cjs">;
+    after: Pick<LoadedSizes, "replica.mjs" | "replica.cjs">;
+    delta: Pick<LoadedSizes, "replica.mjs" | "replica.cjs">;
+  };
+  measuredPaths: Record<string, string>;
+  status: string;
+};
 
 export type OptionalEntry = LoadedSizes & { pr: string; ticket: string; note: string };
 export type OptionalLedger = {
@@ -10,6 +22,7 @@ export type OptionalLedger = {
   relocations?: unknown;
   measurementCorrection?: unknown;
   gatedOnlyRatchet?: GatedOnlyRatchet;
+  fixRequired?: CompactFixRequired[];
 };
 export const optionalFormats = ["replica.mjs", "replica.cjs", "activation.mjs", "activation.cjs"] as const;
 export const relocationCommit = "2578c6a7624a3408b4584ed2331723694b8afb4b";
@@ -29,6 +42,24 @@ export const fixRequiredOptionalAllowance: LoadedSizes = {
 export const ciOptionalAllowance: LoadedSizes = {
   ...approvedCiToolchainCorrection.measured.firstImportCeiling,
   ...approvedCiToolchainCorrection.measured.activationCeiling,
+};
+/** The only approved measured-source change after ddc032ca; CI will ratchet down to its observed bytes. */
+export const approvedCompactFixRequired: CompactFixRequired = {
+  sourceCommit: "a5b1ae1fc61ff352d6ea6940a1791d6cf01f1492",
+  integratedCommit: "b796dc52894524ee01a4458f640ecf45906b3040",
+  ruling: "Naomi TC-858 compact delegate §3:646, 2026-10-16",
+  controlledAB: {
+    before: { "replica.mjs": 52355, "replica.cjs": 67328 },
+    after: { "replica.mjs": 52362, "replica.cjs": 67332 },
+    delta: { "replica.mjs": 7, "replica.cjs": 4 },
+  },
+  measuredPaths: {
+    "packages/node-sdk/src/replication/authority.ts": "0990eecad96ebaa25a615fafe7558ec124b62c7f",
+  },
+  status: "provisional pending GitHub CI measurement",
+};
+export const compactFixOptionalAllowance: LoadedSizes = {
+  ...ciOptionalAllowance, "replica.mjs": 51792, "replica.cjs": 66999,
 };
 export const approvedMeasurementCorrection = {
   commit: "ce52494d0cb1ea236578bc6b709e9e6e016f8c78",
@@ -50,7 +81,7 @@ export const approvedRelocations = [
 export function validateOptionalLedger(value: OptionalLedger, fixRequired = false, ciToolchainCorrection = false): void {
   const path = "packages/web-sdk/scripts/replica-optional-size-ledger.json";
   if (!value || !value.allowance || !Array.isArray(value.entries) ||
-      Object.keys(value).some((key) => key !== "allowance" && key !== "entries" && key !== "relocations" && key !== "measurementCorrection" && key !== "gatedOnlyRatchet") ||
+      Object.keys(value).some((key) => key !== "allowance" && key !== "entries" && key !== "relocations" && key !== "measurementCorrection" && key !== "gatedOnlyRatchet" && key !== "fixRequired") ||
       Object.keys(value.allowance).some((key) => !optionalFormats.includes(key as typeof optionalFormats[number])) ||
       optionalFormats.some((format) => !Number.isSafeInteger(value.allowance[format]) || value.allowance[format] < 0)) {
     throw new Error(`Invalid ${path} shape or allowance`);
@@ -65,13 +96,26 @@ export function validateOptionalLedger(value: OptionalLedger, fixRequired = fals
   }
   const relocated = value.relocations !== undefined;
   const corrected = value.measurementCorrection !== undefined;
-  const ceiling = ciToolchainCorrection ? ciOptionalAllowance : fixRequired ? fixRequiredOptionalAllowance
-    : corrected ? correctedOptionalAllowance : relocated ? relocatedOptionalAllowance : priorOptionalAllowance;
+  const hasCompactFix = value.fixRequired !== undefined;
+  const ceiling = hasCompactFix ? compactFixOptionalAllowance
+    : ciToolchainCorrection ? ciOptionalAllowance : fixRequired ? fixRequiredOptionalAllowance
+      : corrected ? correctedOptionalAllowance : relocated ? relocatedOptionalAllowance : priorOptionalAllowance;
   if (optionalFormats.some((format) => value.allowance[format] !== ceiling[format]) ||
       (relocated && JSON.stringify(value.relocations) !== JSON.stringify(approvedRelocations)) ||
       (corrected && (!relocated || JSON.stringify(value.measurementCorrection) !== JSON.stringify(approvedMeasurementCorrection))) ||
-      (fixRequired && !corrected) || (ciToolchainCorrection && !fixRequired)) {
-    throw new Error(`${path}: only the exact paired relocation, canonical toolchain correction and reviewed ddc032ca first-import cap are approved`);
+      (fixRequired && !corrected) || (ciToolchainCorrection && !fixRequired) ||
+      (hasCompactFix && (!ciToolchainCorrection ||
+        JSON.stringify(value.fixRequired) !== JSON.stringify([approvedCompactFixRequired])))) {
+    throw new Error(`${path}: only the exact paired relocation, canonical toolchain correction and reviewed fix-required first-import caps are approved`);
+  }
+  if (hasCompactFix) {
+    try {
+      execFileSync("git", ["merge-base", "--is-ancestor", approvedCompactFixRequired.integratedCommit, "HEAD"], {
+        cwd: resolve(import.meta.dir, "../../.."), stdio: "ignore",
+      });
+    } catch {
+      throw new Error(`${path}: compact fix requires the integrated source commit`);
+    }
   }
   validateGatedOnlyRatchet(value.gatedOnlyRatchet);
   const repoRoot = resolve(import.meta.dir, "../../..");

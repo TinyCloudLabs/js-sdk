@@ -7,7 +7,7 @@ import {
 
 const current = JSON.parse(readFileSync(resolve(import.meta.dir, "replica-optional-size-ledger.json"), "utf8")) as OptionalLedger;
 const copy = () => structuredClone(current);
-const observed = { "replica.mjs": 51785, "replica.cjs": 66995, "activation.mjs": 23071, "activation.cjs": 24650 };
+const observed = { "replica.mjs": 51792, "replica.cjs": 66999, "activation.mjs": 23071, "activation.cjs": 24650 };
 
 describe("TC-858 optional loaded-byte policy", () => {
   it("accepts the exact approved first-import, activation and refused-admission ledger", () => {
@@ -15,6 +15,7 @@ describe("TC-858 optional loaded-byte policy", () => {
     const beforeFix = copy();
     beforeFix.allowance = correctedOptionalAllowance;
     beforeFix.entries = [];
+    delete beforeFix.fixRequired;
     expect(() => validateOptionalLedger(beforeFix)).not.toThrow();
   });
 
@@ -98,5 +99,49 @@ describe("TC-858 merge-base optional ledger prefix", () => {
 describe("TC-858 Rust 1.99.0 optional measurement correction", () => {
   it("requires the root's exact CI correction before accepting rebuilt optional measurements", () => {
     expect(() => validateOptionalLedger(current, true)).toThrow();
+  });
+});
+
+describe("TC-858 compact delegate installed-grant fix-required first import", () => {
+  const authority = "packages/node-sdk/src/replication/authority.ts";
+  const approved = {
+    sourceCommit: "a5b1ae1fc61ff352d6ea6940a1791d6cf01f1492",
+    integratedCommit: "b796dc52894524ee01a4458f640ecf45906b3040",
+    ruling: "Naomi TC-858 compact delegate §3:646, 2026-10-16",
+    controlledAB: {
+      before: { "replica.mjs": 52355, "replica.cjs": 67328 },
+      after: { "replica.mjs": 52362, "replica.cjs": 67332 },
+      delta: { "replica.mjs": 7, "replica.cjs": 4 },
+    },
+    measuredPaths: { [authority]: "0990eecad96ebaa25a615fafe7558ec124b62c7f" },
+    status: "provisional pending GitHub CI measurement",
+  };
+  const fixed = () => {
+    const ledger = copy() as OptionalLedger & { fixRequired?: unknown };
+    ledger.fixRequired = [structuredClone(approved)];
+    ledger.allowance["replica.mjs"] = 51792;
+    ledger.allowance["replica.cjs"] = 66999;
+    ledger.entries[0]["replica.mjs"] = 51792;
+    ledger.entries[0]["replica.cjs"] = 66999;
+    return ledger;
+  };
+
+  it("admits only the signed compact fix's exact provisional first-import delta", () => {
+    expect(() => validateOptionalLedger(fixed(), true, true)).not.toThrow();
+  });
+
+  it("rejects another byte, another source blob, another row or activation growth", () => {
+    const extraByte = fixed();
+    extraByte.allowance["replica.mjs"]++;
+    expect(() => validateOptionalLedger(extraByte, true, true)).toThrow();
+    const changedBlob = fixed();
+    (changedBlob.fixRequired as typeof approved[])[0].measuredPaths[authority] = "deadbeef";
+    expect(() => validateOptionalLedger(changedBlob, true, true)).toThrow();
+    const secondRow = fixed();
+    (secondRow.fixRequired as typeof approved[]).push(approved);
+    expect(() => validateOptionalLedger(secondRow, true, true)).toThrow();
+    const activation = fixed();
+    activation.allowance["activation.cjs"]++;
+    expect(() => validateOptionalLedger(activation, true, true)).toThrow();
   });
 });

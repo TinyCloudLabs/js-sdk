@@ -567,3 +567,81 @@ describe("TC-858 emitted-map coverage for measured Node and worker entries", () 
     }
   });
 });
+
+describe("TC-858 exact-blob fix-required measured source exception", () => {
+  const git = (root: string, ...args: string[]) =>
+    execFileSync("git", ["-C", root, ...args], { encoding: "utf8" }).trim();
+  const authority = "packages/node-sdk/src/replication/authority.ts";
+
+  function fixture(): { root: string; base: string; blob: string } {
+    const root = mkdtempSync(join(tmpdir(), "tc858-compact-source-"));
+    git(root, "init", "-q");
+    git(root, "config", "user.email", "policy@example.test");
+    git(root, "config", "user.name", "Policy Test");
+    mkdirSync(dirname(join(root, authority)), { recursive: true });
+    writeFileSync(join(root, authority), "export const ownerOnly = true;\n");
+    git(root, "add", ".");
+    git(root, "commit", "-qm", "approved baseline");
+    const base = git(root, "rev-parse", "HEAD");
+    writeFileSync(join(root, authority), "export const coveredCompactGrant = true;\n");
+    git(root, "add", ".");
+    git(root, "commit", "-qm", "approved compact fix");
+    return { root, base, blob: git(root, "rev-parse", `HEAD:${authority}`) };
+  }
+
+  it("allows only the approved authority source blob", () => {
+    const { root, base, blob } = fixture();
+    try {
+      expect(isPolicyOnlySinceApprovedSource(root, base, ciCorrectionPolicyOnlyPaths, {
+        bundleInputs: new Set([authority]), sourceMapInputs: new Set([authority]),
+      }, { [authority]: blob })).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("refuses a later authority edit even when its path remains listed", () => {
+    const { root, base, blob } = fixture();
+    try {
+      writeFileSync(join(root, authority), "export const coveredCompactGrant = false;\n");
+      git(root, "add", ".");
+      git(root, "commit", "-qm", "unreviewed measured source edit");
+      expect(isPolicyOnlySinceApprovedSource(root, base, ciCorrectionPolicyOnlyPaths, {
+        bundleInputs: new Set(), sourceMapInputs: new Set(),
+      }, { [authority]: blob })).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("refuses another measured file changed alongside the approved authority blob", () => {
+    const { root, base, blob } = fixture();
+    try {
+      const other = "packages/sdk-services/src/kv/replication/controller.ts";
+      mkdirSync(dirname(join(root, other)), { recursive: true });
+      writeFileSync(join(root, other), "export const weakened = true;\n");
+      git(root, "add", ".");
+      git(root, "commit", "-qm", "unreviewed controller change");
+      expect(isPolicyOnlySinceApprovedSource(root, base, ciCorrectionPolicyOnlyPaths, {
+        bundleInputs: new Set(), sourceMapInputs: new Set(),
+      }, { [authority]: blob })).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("refuses moving the approved authority source into an otherwise admitted CLI path", () => {
+    const { root, base, blob } = fixture();
+    try {
+      const destination = "packages/cli/src/authority.ts";
+      mkdirSync(dirname(join(root, destination)), { recursive: true });
+      git(root, "mv", authority, destination);
+      git(root, "commit", "-qm", "rename approved authority out of measured graph");
+      expect(isPolicyOnlySinceApprovedSource(root, base, ciCorrectionPolicyOnlyPaths, {
+        bundleInputs: new Set(), sourceMapInputs: new Set(),
+      }, { [authority]: blob })).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
