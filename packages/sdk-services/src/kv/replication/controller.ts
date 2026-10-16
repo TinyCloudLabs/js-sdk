@@ -232,6 +232,17 @@ export function createKVReplication(deps: KVReplicationDeps): KVReplicationContr
       (grant.expiresAt === null || typeof grant.expiresAt === "number" && Number.isFinite(grant.expiresAt) && now < grant.expiresAt) &&
       now < Math.min(grant.effectiveExpiresAt, grant.consentDeadline, deadline);
   }
+  function sessionRefusal(prefix: string): string | undefined {
+    try {
+      if (authority.sessionOnly !== true) return undefined;
+      // A signed get+sync grant for the configured prefix covers its contained get key/list path.
+      const grant = authority.sessionGrant(prefix);
+      return "refused" in grant ? grant.refused : undefined;
+    } catch {
+      return "NOT_COVERED";
+    }
+  }
+
 
   async function open(prefix: string): Promise<KVReplicaHandle> {
     const delivery = checkDelivery();
@@ -275,7 +286,7 @@ export function createKVReplication(deps: KVReplicationDeps): KVReplicationContr
       if (afterOpen.status !== "allow") throw deliveryError(afterOpen);
       emit({ type: "replication.state", space: session.space, replica: prefix, state: "opened" });
       const runtimePlan = !sessionOnly && plan && !("refused" in plan) ? plan : undefined;
-      let installed = runtimePlan || delegated || (sessionOnly && deps.stamp) ? await handle.grant() : undefined;
+      let installed = runtimePlan || delegated ? await handle.grant() : undefined;
       if (installed && !canReuseInstalled(installed, sessionOnly)) {
         if (installed.unconstrained) refusalCode = consentAnchor === null && !sessionOnly ? "REPLICA_GATED" : "GRANT_EXPIRED";
         installed = undefined;
@@ -458,6 +469,8 @@ export function createKVReplication(deps: KVReplicationDeps): KVReplicationContr
     if (prefix === "/" && deps.nodeFeatures !== undefined && !deps.nodeFeatures.includes("kv-sync-root")) {
       throw unsupportedRoot(prefix);
     }
+    const initialRefusal = sessionRefusal(prefix);
+    if (initialRefusal) throw Object.assign(new Error("Current session does not cover replica sync"), { code: initialRefusal });
     const handle = await open(prefix);
     const state = replicas.get(prefix)!;
     if (state.sync) return state.sync;
@@ -480,6 +493,8 @@ export function createKVReplication(deps: KVReplicationDeps): KVReplicationContr
         await maybeRenew(prefix, handle);
         const afterRenewal = checkDelivery();
         if (afterRenewal.status !== "allow") throw deliveryError(afterRenewal);
+        const refusal = sessionRefusal(prefix);
+        if (refusal) throw Object.assign(new Error("Current session does not cover replica sync"), { code: refusal });
         const result = await handle.sync({ signal: abort.signal, syncStartEpoch });
         const afterSyncDelivery = checkDelivery();
         if (afterSyncDelivery.status !== "allow") throw deliveryError(afterSyncDelivery);
@@ -665,6 +680,11 @@ export function createKVReplication(deps: KVReplicationDeps): KVReplicationContr
         readEvent("get", r.path, prefix, "network", delivery.status === "consent_expired" ? "grant_expired" : "replica_gated", network.ok ? "found" : "error", started, { code: delivery.status === "consent_expired" ? delivery.code : "REPLICA_GATED" });
         return network;
       }
+      const refusal = prefix === null ? undefined : sessionRefusal(prefix);
+      if (refusal) {
+        readEvent("get", r.path, prefix, "network", "grant_missing", network.ok ? "found" : "error", started, { code: refusal });
+        return network;
+      }
       if (!network.ok && network.error.code !== ErrorCodes.KV_NOT_FOUND) {
         readEvent("get", r.path, prefix, "replica", reason, outcome, started, { ...extra, code: network.error.code, verify: "error" });
         return local;
@@ -700,6 +720,11 @@ export function createKVReplication(deps: KVReplicationDeps): KVReplicationContr
         readEvent("get", r.path, prefix, "network", delivery.status === "consent_expired" ? "grant_expired" : "replica_gated", "error", started, { code: delivery.status === "consent_expired" ? delivery.code : "REPLICA_GATED" });
         return err(wrapError("kv", error));
       }
+      const refusal = prefix === null ? undefined : sessionRefusal(prefix);
+      if (refusal) {
+        readEvent("get", r.path, prefix, "network", "grant_missing", "error", started, { code: refusal });
+        return err(wrapError("kv", error));
+      }
       readEvent("get", r.path, prefix, "replica", reason, outcome, started, { ...extra, code: errorCode(error), verify: "error" });
       return local;
     }
@@ -720,6 +745,11 @@ export function createKVReplication(deps: KVReplicationDeps): KVReplicationContr
       const delivery = checkDelivery();
       if (delivery.status !== "allow") {
         readEvent("list", r.listPath, prefix, "network", delivery.status === "consent_expired" ? "grant_expired" : "replica_gated", network.ok ? "found" : "error", started, { code: delivery.status === "consent_expired" ? delivery.code : "REPLICA_GATED" });
+        return network;
+      }
+      const refusal = prefix === null ? undefined : sessionRefusal(prefix);
+      if (refusal) {
+        readEvent("list", r.listPath, prefix, "network", "grant_missing", network.ok ? "found" : "error", started, { code: refusal });
         return network;
       }
       if (!network.ok) {
@@ -757,6 +787,11 @@ export function createKVReplication(deps: KVReplicationDeps): KVReplicationContr
         readEvent("list", r.listPath, prefix, "network", delivery.status === "consent_expired" ? "grant_expired" : "replica_gated", "error", started, { code: delivery.status === "consent_expired" ? delivery.code : "REPLICA_GATED" });
         return err(wrapError("kv", error));
       }
+      const refusal = prefix === null ? undefined : sessionRefusal(prefix);
+      if (refusal) {
+        readEvent("list", r.listPath, prefix, "network", "grant_missing", "error", started, { code: refusal });
+        return err(wrapError("kv", error));
+      }
       readEvent("list", r.listPath, prefix, "replica", "hit", "found", started, { ...extra, code: errorCode(error), verify: "error" });
       return ok(local);
     }
@@ -789,6 +824,12 @@ export function createKVReplication(deps: KVReplicationDeps): KVReplicationContr
     if (delivery.status !== "allow") {
       const value = await r.network();
       readEvent("get", r.path, prefix, "network", delivery.status === "consent_expired" ? "grant_expired" : "replica_gated", value.ok ? "found" : "error", started, { code: delivery.status === "consent_expired" ? delivery.code : "REPLICA_GATED" });
+      return value;
+    }
+    const refusal = sessionRefusal(prefix);
+    if (refusal) {
+      const value = await r.network();
+      readEvent("get", r.path, prefix, "network", "grant_missing", value.ok ? "found" : "error", started, { code: refusal });
       return value;
     }
     try { await raceSignal(reportExistingPins(), r.signal); } catch { if (r.signal.aborted) return abortedResult(r.signal); }
@@ -838,6 +879,12 @@ export function createKVReplication(deps: KVReplicationDeps): KVReplicationContr
       const local = await raceSignal(handle.get(r.path), r.signal);
       const delivery = checkDelivery();
       if (delivery.status !== "allow") throw deliveryError(delivery);
+      const refusal = sessionRefusal(prefix);
+      if (refusal) {
+        const value = await r.network();
+        readEvent("get", r.path, prefix, "network", "grant_missing", value.ok ? "found" : "error", started, { code: refusal });
+        return value;
+      }
       try { validateReadMeta(local.meta); }
       catch (error) {
         const code = errorCode(error);
@@ -901,6 +948,15 @@ export function createKVReplication(deps: KVReplicationDeps): KVReplicationContr
         return result;
       }
     }
+    if (prefix !== undefined && !r.options?.raw) {
+      const refusal = sessionRefusal(prefix);
+      if (refusal) {
+        if (decoded) { readEvent("list", r.listPath, prefix, "none", "cursor_restart", "error", started); return cursorRestart(); }
+        const result = await r.network();
+        readEvent("list", r.listPath, prefix, "network", "grant_missing", result.ok ? "found" : "error", started, { code: refusal });
+        return result;
+      }
+    }
     try { await raceSignal(reportExistingPins(), r.signal); } catch { if (r.signal.aborted) return abortedResult(r.signal); }
     const restart = () => { readEvent("list", r.listPath, prefix ?? null, "none", "cursor_restart", "error", started); return cursorRestart(); };
     if (cursor && decoded && (decoded.space !== r.space || decoded.path !== r.listPath)) return restart();
@@ -958,6 +1014,13 @@ export function createKVReplication(deps: KVReplicationDeps): KVReplicationContr
       const page = await raceSignal(localList(signalHandle, r.space, r.listPath, r.options?.limit, cursor, validateReadMeta), r.signal);
       const delivery = checkDelivery();
       if (delivery.status !== "allow") throw deliveryError(delivery);
+      const refusal = sessionRefusal(prefix);
+      if (refusal) {
+        if (decoded) return restart();
+        const result = await r.network();
+        readEvent("list", r.listPath, prefix, "network", "grant_missing", result.ok ? "found" : "error", started, { code: refusal });
+        return result;
+      }
       const event = {
         count: page.keys.length,
         syncedBeforeRead: fresh.syncedBeforeRead,

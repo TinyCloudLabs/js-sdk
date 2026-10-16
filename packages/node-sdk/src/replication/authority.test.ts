@@ -322,6 +322,7 @@ function makeHost(over: Partial<ReplicationAuthorityHost> = {}): ReplicationAuth
   const session = fakeSession();
   return {
     replicationSession: () => session,
+    verifiedConsentAnchor: (bound) => bound.siwe === undefined ? null : { at: 1_000_000, source: "siwe" },
     siweExpiration: () => new Date(Date.now() + 86_400_000),
     planDelegation: mock(() => ({
       path: "runtime" as const,
