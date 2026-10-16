@@ -2,6 +2,7 @@ import { chmod, mkdtemp, readdir, readlink, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, test } from "bun:test";
+import { Database } from "bun:sqlite";
 
 import { FAULTS, SqliteReplicaStore } from "./store.js";
 import { config, deviceGrant } from "../../test/fixtures.js";
@@ -26,6 +27,55 @@ async function databaseDescriptors(): Promise<string[]> {
   const links = await Promise.all(fds.map(async (fd) => readlink(`/proc/self/fd/${fd}`).catch(() => "")));
   return links.filter((link) => /\/replica\.db(?:-wal|-shm)?$/.test(link));
 }
+
+describe("SQLite gated read transaction", () => {
+  test("reads the partition generation and data in one readonly transaction", async () => {
+    const dir = await makeStore();
+    const store = await SqliteReplicaStore.open(dir, { create: false });
+    let checks = 0;
+    try {
+      const generation = await store.readTransaction(0, async () => { checks++; }, async (snapshot) =>
+        (await snapshot.open())?.generation);
+      expect(generation).toBe(0);
+      expect(checks).toBe(2);
+    } finally {
+      await store.close();
+    }
+  });
+
+  test("refuses a changed partition generation before reading", async () => {
+    const dir = await makeStore();
+    const store = await SqliteReplicaStore.open(dir, { create: false });
+    try {
+      const writer = new Database(join(dir, "replica.db"));
+      writer.exec("UPDATE replica SET generation = generation + 1 WHERE id = 1");
+      writer.close();
+      let read = false;
+      await expect(store.readTransaction(0, async () => {}, async () => { read = true; }))
+        .rejects.toMatchObject({ code: "RESET_REQUIRED" });
+      expect(read).toBe(false);
+    } finally {
+      await store.close();
+    }
+  });
+
+  test("a gate denial during the snapshot refuses delivery", async () => {
+    const dir = await makeStore();
+    const store = await SqliteReplicaStore.open(dir, { create: false });
+    let allowed = true;
+    try {
+      await expect(store.readTransaction(0, async () => {
+        if (!allowed) throw Object.assign(new Error("Denied"), { code: "REPLICA_GATED", gate: "stamp_stale" });
+      }, async (snapshot) => {
+        const state = await snapshot.open();
+        allowed = false;
+        return state;
+      })).rejects.toMatchObject({ code: "REPLICA_GATED" });
+    } finally {
+      await store.close();
+    }
+  });
+});
 
 describe("SQLite status inspection lifecycle", () => {
   test("inspection of an existing database may create only SQLite sidecars", async () => {

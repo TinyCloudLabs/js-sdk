@@ -12,6 +12,7 @@ import { TinyCloudNode } from "./TinyCloudNode";
 import { mintCompactDelegation } from "./test-support/compact-delegation";
 import { PROOF_PRIVATE_KEY, signedRestorableSession } from "./test-support/signed-restorable-session";
 import type { ReplicationModuleLoaders } from "./replication/module-registry";
+import { createSqliteReplicaStorage } from "./replication/sqlite";
 // @ts-ignore node-sdk moduleResolution "node" cannot read replica exports (see replica-contract.ts)
 import * as replicaGate from "@tinycloud/replica/profile-gate";
 import { createIndexedDbLifecycle, inspectReplicaKeyPresence } from "../../replica/src/kv-storage/lifecycle";
@@ -82,11 +83,14 @@ function profileGuard(dir: string): <T>(section: () => Promise<T>) => Promise<T>
 }
 
 function replicatedNode(dir?: string): TinyCloudNode {
+  const guard = dir === undefined ? undefined : profileGuard(dir);
+  const replicaStorage = dir === undefined ? storage
+    : createSqliteReplicaStorage({ dir: join(dir, "replicas"), guard });
   return new TinyCloudNode({
     host: RESTORE_HOST,
     signer: new PrivateKeySigner(PROOF_PRIVATE_KEY),
     wasmBindings: new NodeWasmBindings(),
-    replication: { enabled: true, prefixes: ["notes/"], storage, profileDir: dir, profileGuard: dir ? profileGuard(dir) : undefined },
+    replication: { enabled: true, prefixes: ["notes/"], storage: replicaStorage, profileDir: dir, profileGuard: guard },
   });
 }
 
@@ -211,10 +215,11 @@ describe("replica gate: restore", () => {
     const proof = await signedRestorableSession();
     const principal = pkhDid(proof.address, proof.chainId);
     const replicaStamp = await replicaGate.establishSessionStamp(dir, principal, { siweIssuedAt: Date.now() });
+    const partitionId = `${"a".repeat(64)}:${"a".repeat(26)}`;
     await replicaGate.denyGate(dir, { reason: "sign_out", principal }, async (principalHash) => [{
-      id: "pending-partition",
+      id: partitionId,
       kind: "partition",
-      partitionId: "partition-1",
+      partitionId,
       principalHash,
       recordedAt: 1,
     }]);
@@ -422,6 +427,31 @@ describe("replica gate: sign-out", () => {
     const after = readGateFile(dir);
     expect(after.principalHash).toBeNull();
     expect(after.lifecycleEpoch).toBe(before.lifecycleEpoch + 1);
+  });
+
+  test("node sign-out records an identity pending intent before replica erase", async () => {
+    const dir = profileDir();
+    const guard = profileGuard(dir);
+    const proof = await signedRestorableSession();
+    const principal = pkhDid(proof.address, proof.chainId);
+    const replicaStamp = await replicaGate.establishSessionStamp(dir, principal, { siweIssuedAt: Date.now() });
+    const replicaStorage = createSqliteReplicaStorage({ dir: join(dir, "replicas"), guard });
+    const identity = { host: RESTORE_HOST, space: proof.spaceId, principal };
+    await replicaStorage.pendingWrites(identity, { stamp: replicaStamp }).update((state) => { state.seq = 1; });
+    const node = new TinyCloudNode({
+      host: RESTORE_HOST,
+      signer: new PrivateKeySigner(PROOF_PRIVATE_KEY),
+      wasmBindings: new NodeWasmBindings(),
+      replication: { enabled: true, prefixes: ["notes/"], storage: replicaStorage, profileDir: dir, profileGuard: guard },
+    });
+    await node.restoreSession({ ...proof, replicaStamp });
+
+    await node.signOut();
+
+    const gate = JSON.parse(readFileSync(join(dir, GATE_FILE), "utf8"));
+    expect(gate.principalHash).toBeNull();
+    expect(gate.intents).toEqual([expect.objectContaining({ kind: "pending", id: expect.stringMatching(/^pending:/) })]);
+    expect(node.restorableSession).toBeUndefined();
   });
 
   test("refuses an unlocked profile denial while still ending the network session", async () => {
