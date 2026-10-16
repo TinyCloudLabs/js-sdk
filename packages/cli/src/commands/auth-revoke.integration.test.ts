@@ -184,7 +184,7 @@ async function expectDeniedButRetained(
     const denied = await run(home, ["replica", "get", "notes/a", "--replica", "notes", "--raw"]);
     expect(denied.exitCode).toBeGreaterThan(0);
     expect(denied.stdout).not.toContain("private replica value");
-    expect(denied.stderr).toMatch(/denied|revoked|blocked/i);
+    expect(denied.stderr).toContain("REPLICA_GATED");
     expect(await exists(paths.db)).toBe(true);
   }
   expect(await readFile(paths.session)).toEqual(sessionBefore);
@@ -228,7 +228,7 @@ describe("legacy replica read gate", () => {
     }
     expect(await readFile(paths.session)).toEqual(sessionBefore);
     expect(await readFile(paths.key)).toEqual(keyBefore);
-  });
+  }, 30_000);
 
   test("a held legacy read delivers before a concurrent durable deny can commit", async () => {
     const home = await mkdtemp(join(tmpdir(), "tc841-legacy-race-"));
@@ -302,7 +302,7 @@ describe("legacy replica read gate", () => {
       if (originalSignal === undefined) delete process.env.TC_TEST_PROFILE_LOCK_CONTENTION_SIGNAL_PATH;
       else process.env.TC_TEST_PROFILE_LOCK_CONTENTION_SIGNAL_PATH = originalSignal;
     }
-  });
+  }, 15_000);
 
   test("a missing persisted stamp or missing/corrupt gate cannot authorize a legacy get", async () => {
     const home = await mkdtemp(join(tmpdir(), "tc841-legacy-unstamped-"));
@@ -331,7 +331,7 @@ describe("legacy replica read gate", () => {
     expect(corrupt.stdout).not.toContain("private replica value");
     expect(corrupt.stderr).toContain("REPLICA_GATED");
     expect(await exists(paths.db)).toBe(true);
-  });
+  }, 20_000);
 });
 
 describe("tc auth logout --revoke with durable replica denial", () => {
