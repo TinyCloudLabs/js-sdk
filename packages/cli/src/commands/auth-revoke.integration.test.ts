@@ -52,7 +52,7 @@ async function exists(path: string): Promise<boolean> {
   return stat(path).then(() => true, () => false);
 }
 
-async function seed(home: string, host: string): Promise<{ db: string; session: string; key: string; delegationCid: string; ownerDid: string; spaceId: string }> {
+async function seed(home: string, host: string, authMethod: "local" | "openkey" = "local"): Promise<{ db: string; session: string; key: string; delegationCid: string; ownerDid: string; spaceId: string }> {
   const wasm = new NodeWasmBindings();
   const signer = new PrivateKeySigner(OWNER_KEY);
   const address = await signer.getAddress();
@@ -75,11 +75,19 @@ async function seed(home: string, host: string): Promise<{ db: string; session: 
     siwe: prepared.siwe, signature, ownerDid,
     expiresAt: new Date(Date.now() + 3_600_000).toISOString(),
   };
+  if (authMethod === "openkey") {
+    // The fixture signs an owner session, but stores no owner wallet signer in this profile.
+    const signed = await parseSignedSiweCacao(
+      session.delegationHeader.Authorization.replace(/^Bearer\s+/i, ""), session.delegationCid,
+    );
+    expect(signed.issuer).toBe(ownerDid);
+  }
   const paths = await withTinyCloudStateRoot(home, async () => {
     await writeJsonAtomic(profileConfigPath(PROFILE), {
       name: PROFILE, host, chainId: 1, spaceName: "default", did: ownerDid,
-      sessionDid, ownerDid, spaceId, posture: "local-owner-key", authMethod: "local",
-      privateKey: OWNER_KEY, operatorType: "human", createdAt: "2026-10-01T00:00:00.000Z",
+      sessionDid, ownerDid, spaceId, posture: authMethod === "local" ? "local-owner-key" : "owner-openkey",
+      authMethod, ...(authMethod === "local" ? { privateKey: OWNER_KEY } : {}),
+      operatorType: "human", createdAt: "2026-10-01T00:00:00.000Z",
     });
     const replicaStamp = await withProfileLock(PROFILE,
       () => establishSessionStamp(profilePath(PROFILE), ownerDid, { siweIssuedAt: Date.parse(issuedAt) }),
@@ -122,6 +130,7 @@ async function server(mode: "fail" | "hold" | "success", cid: () => string) {
   const revokedCids: string[] = [];
   const queryRequests: string[] = [];
   const authorizationKinds: Array<{ scheme: string; encoding: string; prefix: string; dots: number }> = [];
+  const networkPaths: string[] = [];
   let queryRecords: Array<Record<string, unknown>> | undefined;
   const started = Promise.withResolvers<void>();
   let state = mode;
@@ -130,6 +139,7 @@ async function server(mode: "fail" | "hold" | "success", cid: () => string) {
     port: 0,
     async fetch(request) {
       const path = new URL(request.url).pathname;
+      networkPaths.push(path);
       if (path === "/delegation/query" && request.method === "POST" && queryRecords !== undefined) {
         queryRequests.push(request.headers.get("authorization") ?? "");
         return Response.json({ schemaVersion: 2, items: queryRecords });
@@ -175,6 +185,7 @@ async function server(mode: "fail" | "hold" | "success", cid: () => string) {
     requests,
     revokedCids,
     queryRequests,
+    networkPaths,
     setQueryRecords(records: Array<Record<string, unknown>>) { queryRecords = records; },
     authorizationKinds,
     snapshots,
@@ -349,6 +360,68 @@ describe("legacy replica read gate", () => {
 });
 
 describe("tc auth logout --revoke with durable replica denial", () => {
+  test("OpenKey without an owner revoke signer defers erase and refuses online revocation without losing local state", async () => {
+    const home = await mkdtemp(join(tmpdir(), "tc841-revoke-openkey-"));
+    homes.push(home);
+    const node = await server("success", () => "should-not-revoke");
+    const paths = await seed(home, node.host, "openkey");
+    const profile = JSON.parse(await withTinyCloudStateRoot(home, () =>
+      readFile(profileConfigPath(PROFILE), "utf8"))) as Record<string, unknown>;
+    expect(profile.authMethod).toBe("openkey");
+    expect("privateKey" in profile).toBe(false);
+    const commands = [
+      ["replica", "get", "notes/a", "--replica", "notes", "--raw"],
+      ["replica", "list", "--replica", "notes"],
+      ["replica", "status", "--replica", "notes"],
+    ];
+    for (const [index, command] of commands.entries()) {
+      const before = await run(home, command);
+      expect(before.exitCode).toBe(0);
+      if (index === 0) expect(before.stdout).toBe("private replica value");
+    }
+    const sessionBefore = await readFile(paths.session);
+    const keyBefore = await readFile(paths.key);
+    const historyCid = new NodeWasmBindings().computeCid(new TextEncoder().encode("tc841-openkey-owned-history"), 0x55n);
+    await withTinyCloudStateRoot(home, () =>
+      writeFile(join(profilePath(PROFILE), "auth-grants.jsonl"), JSON.stringify({
+        ts: new Date().toISOString(), profile: PROFILE, source: "cli",
+        delegationCid: historyCid, expiry: new Date(Date.now() + 3_600_000).toISOString(), addedCaps: [],
+      }) + "\n", { mode: 0o600 }));
+    expect(node.networkPaths).toEqual([]);
+
+    const refused = await run(home, ["auth", "logout", "--revoke"]);
+    expect(refused.exitCode).toBeGreaterThan(0);
+    const error = JSON.parse(refused.stderr) as { error?: { code?: string; message?: string } };
+    expect(error.error?.code).toBe("REVOCATION_AUTHORITY_UNAVAILABLE");
+    expect(error.error?.message).toMatch(/OpenKey/i);
+    expect(error.error?.message).toMatch(/owner.*(key|signer)|revoke-control/i);
+    expect(node.requests).toHaveLength(0);
+    expect(node.networkPaths).toEqual([]);
+    const profileDir = join(home, ".tinycloud", "profiles", PROFILE);
+    const guard = <T>(section: () => Promise<T>): Promise<T> =>
+      withTinyCloudStateRoot(home, () => withProfileLock(PROFILE, section, { requireProfile: true }));
+    const purge = createProfileReplicaPurge({ profileDir, guard });
+    const token = await purge.deferredErase();
+    expect(token).toMatchObject({ deniedEpoch: expect.any(Number), principalHash: expect.any(String) });
+    for (let pass = 0; pass < 2; pass += 1) {
+      if (pass === 1) {
+        await purge.recover();
+        expect(await purge.deferredErase()).toEqual(token);
+      }
+      for (const command of commands) {
+        const denied = await run(home, command);
+        expect(denied.exitCode).toBeGreaterThan(0);
+        expect(denied.stderr).toContain("REPLICA_GATED");
+        expect(denied.stdout).not.toContain("notes/a");
+        expect(denied.stdout).not.toContain("private replica value");
+      }
+      expect(await readFile(paths.session)).toEqual(sessionBefore);
+      expect(await readFile(paths.key)).toEqual(keyBefore);
+      expect(await exists(paths.db)).toBe(true);
+    }
+    expect(node.networkPaths).toEqual([]);
+  }, 40_000);
+
   test("failed node revoke blocks local reads without erasing the session, key, or replica across restart", async () => {
     const home = await mkdtemp(join(tmpdir(), "tc841-revoke-fail-"));
     homes.push(home);
