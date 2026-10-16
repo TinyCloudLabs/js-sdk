@@ -276,6 +276,9 @@ Report `--purge` and `--clear-pending` refuse with exit 2 `REPORT_READ_ONLY`.
 `tinycloud replica reset --replica <name> --purge` is a partial alternative
 for a named local replica only. Flag-owned purge and pending clearing have no
 equivalent yet (TC-1309).
+On macOS and Windows, `replica reset --purge` and `auth logout` with a legacy
+`replicas/` tree refuse local removal rather than delete through an unpinned
+path. The existing files are retained.
 `auth logout` purges legacy and flag-owned replicas unless `--keep-replicas`
 is used.
 

@@ -1,7 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { closeSync, constants as fsConstants, fstatSync, lstatSync, openSync, readdirSync, readlinkSync, type Stats } from "node:fs";
 import { chmod, link, lstat, mkdir, open, readFile, readdir, rm, rmdir, stat, unlink } from "node:fs/promises";
-import { join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 
 import { ReplicaError, ReplicaErrorCode, isReplicaError } from "../errors.js";
 import { assertFolderPrefix, effectiveAuthority } from "../scope.js";
@@ -22,6 +22,33 @@ import type {
 import { loadSqlite, type SqliteDatabase, type SqliteOpener, type SqlValue } from "./driver.js";
 
 const SCHEMA_VERSION = 1;
+
+// Descriptor discovery below is process-wide. Keep native SQLite opens from
+// overlapping so another store's new descriptor cannot be mistaken for this one.
+let sqliteOpenQueue: Promise<void> = Promise.resolve();
+async function acquireSqliteOpen(): Promise<() => void> {
+  const previous = sqliteOpenQueue;
+  let release!: () => void;
+  sqliteOpenQueue = new Promise<void>((resolve) => { release = resolve; });
+  await previous;
+  return release;
+}
+
+type NamedPathIdentity = { path: string; dev: bigint; ino: bigint };
+
+async function captureNamedPath(path: string): Promise<NamedPathIdentity[]> {
+  const names: string[] = [];
+  for (let current = resolve(path); ; current = dirname(current)) {
+    names.push(current);
+    if (dirname(current) === current) break;
+  }
+  const identities: NamedPathIdentity[] = [];
+  for (const name of names.reverse()) {
+    const stats = await lstat(name, { bigint: true });
+    identities.push({ path: name, dev: stats.dev, ino: stats.ino });
+  }
+  return identities;
+}
 export const DURABILITY = "sqlite-wal-synchronous-full+fsynced-blobs";
 
 const SCHEMA = `
@@ -246,8 +273,9 @@ export class SqliteReplicaStore implements ReplicaStore {
   /** Identity of the database file this store opened: a deleted-and-recreated replica is a different file. */
   readonly #ino: number;
   readonly #dev: number;
+  readonly #namedAncestors: readonly NamedPathIdentity[];
 
-  private constructor(dir: string, db: SqliteDatabase, identity: { dev: number; ino: number }, options: SqliteReplicaStoreOptions, directoryFd?: number) {
+  private constructor(dir: string, db: SqliteDatabase, identity: { dev: number; ino: number }, options: SqliteReplicaStoreOptions, directoryFd?: number, namedAncestors: readonly NamedPathIdentity[] = []) {
     this.dir = dir;
     this.#pinnedDir = directoryFd !== undefined && process.platform === "linux" ? `/proc/self/fd/${directoryFd}` : dir;
     this.#directoryFd = directoryFd;
@@ -258,6 +286,7 @@ export class SqliteReplicaStore implements ReplicaStore {
     this.#now = options.now ?? Date.now;
     this.#faults = (options as InternalOptions)[FAULTS] ?? {};
     this.#guard = options.guard ?? ((section) => section());
+    this.#namedAncestors = namedAncestors;
   }
 
   /**
@@ -328,6 +357,7 @@ export class SqliteReplicaStore implements ReplicaStore {
       if (!exists) throw new ReplicaError(ReplicaErrorCode.NOT_FOUND, `No regular replica database at ${dir}.`);
     }
     const opener = options.sqlite ?? (await loadSqlite());
+    const releaseOpen = await acquireSqliteOpen();
     let store: SqliteReplicaStore | undefined;
     let directoryFd: number | undefined;
     try {
@@ -337,14 +367,21 @@ export class SqliteReplicaStore implements ReplicaStore {
       if (options.expectedDirectory && (opened.dev !== options.expectedDirectory.dev || opened.ino !== options.expectedDirectory.ino)) {
         throw new Error("The replica directory changed before SQLite opened it.");
       }
+      const namedAncestors = process.platform === "linux" ? [] : await captureNamedPath(dir);
       const pinnedDir = process.platform === "linux" ? `/proc/self/fd/${directoryFd}` : dir;
       const dbPath = join(pinnedDir, "replica.db");
       if (options.create) {
         await mkdir(join(pinnedDir, "blobs", ".tmp"), { recursive: true, mode: 0o700 });
         await Promise.all([chmod(pinnedDir, 0o700), chmod(join(pinnedDir, "blobs"), 0o700), chmod(join(pinnedDir, "blobs", ".tmp"), 0o700)]);
         // SQLite gives -wal and -shm the database file's mode.
-        const handle = await open(dbPath, fsConstants.O_CREAT | fsConstants.O_RDWR | fsConstants.O_NOFOLLOW, 0o600);
-        try { await handle.chmod(0o600); } finally { await handle.close(); }
+        // Only the winner creates/chmods the file; concurrent openers use the existing leaf.
+        const handle = await open(dbPath, fsConstants.O_CREAT | fsConstants.O_EXCL | fsConstants.O_RDWR | fsConstants.O_NOFOLLOW, 0o600).catch((error: unknown) => {
+          if (errnoOf(error) === "EEXIST") return null;
+          throw error;
+        });
+        if (handle) {
+          try { await handle.chmod(0o600); } finally { await handle.close(); }
+        }
       }
       const leaf = await open(dbPath, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
       let db: SqliteDatabase | undefined;
@@ -365,6 +402,8 @@ export class SqliteReplicaStore implements ReplicaStore {
           throw new Error("The replica database changed while SQLite opened it.");
         }
         // Bun opens the file lazily on its first read. Verify that descriptor before any mutating PRAGMA.
+        // SQLite may resolve WAL/SHM sidecars by the database's named path;
+        // the pinned directory does not make a concurrent external rename atomic.
         if (previousFds) db.get("SELECT count(*) FROM sqlite_master");
         if (previousFds) {
           const databases = readdirSync("/proc/self/fd").filter((fd) => {
@@ -373,7 +412,7 @@ export class SqliteReplicaStore implements ReplicaStore {
               return target.endsWith("/replica.db") && previousFds.get(fd) !== target;
             } catch { return false; }
           });
-          if (databases.length !== 1 || databases.some((fd) => {
+          if (databases.length === 0 || databases.some((fd) => {
             try {
               const actual = fstatSync(Number(fd));
               return actual.dev !== identity.dev || actual.ino !== identity.ino;
@@ -404,7 +443,7 @@ export class SqliteReplicaStore implements ReplicaStore {
           db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`);
           db.exec("COMMIT");
         }
-        store = new SqliteReplicaStore(dir, db, identity, options, directoryFd);
+        store = new SqliteReplicaStore(dir, db, identity, options, directoryFd, namedAncestors);
         db = undefined;
       } finally {
         try { db?.close(); } finally { await leaf.close(); }
@@ -413,6 +452,8 @@ export class SqliteReplicaStore implements ReplicaStore {
       if (store) await store.close().catch(() => undefined);
       else if (directoryFd !== undefined) closeSync(directoryFd);
       throw storageError(error, `Opening the replica at ${dir}`);
+    } finally {
+      releaseOpen();
     }
     // A revocation purge interrupted by a crash (or by a writer that put
     // content back after it) finishes on the next open.
@@ -946,8 +987,8 @@ export class SqliteReplicaStore implements ReplicaStore {
       }
       try {
         this.#checkLease(t, { allowRevoked: true });
-        if (process.platform !== "linux" || this.#directoryFd === undefined) {
-          throw new ReplicaError(ReplicaErrorCode.RUNTIME_UNSUPPORTED, "Pinned replica removal is unavailable on this platform.");
+        if (this.#directoryFd === undefined) {
+          throw new ReplicaError(ReplicaErrorCode.RUNTIME_UNSUPPORTED, "Pinned replica removal requires an opened directory.");
         }
         const pinned = fstatSync(this.#directoryFd);
         const assertDirectory = async () => {
@@ -959,11 +1000,86 @@ export class SqliteReplicaStore implements ReplicaStore {
         await assertDirectory();
         // Holding the write lock: no other lease holder can mutate this store.
         await this.#assertPresent();
-        for (const entry of await readdir(this.#pinnedDir)) {
-          await rm(join(this.#pinnedDir, entry), { recursive: true, force: true });
+        if (process.platform === "linux") {
+          // The directory is pinned, but recursive rm does not pin each
+          // descendant against a noncooperating rename during traversal.
+          for (const entry of await readdir(this.#pinnedDir)) {
+            await rm(join(this.#pinnedDir, entry), { recursive: true, force: true });
+          }
+          await assertDirectory();
+          await rmdir(this.dir);
+        } else {
+          // Named-path removal cannot be atomic. Recheck captured ancestors
+          // and each enumerated layout entry before nonrecursive unlink/rmdir;
+          // initial aliases above this store belong to its caller's path policy.
+          const ancestors = this.#namedAncestors;
+          const checkAncestors = async (): Promise<void> => {
+            for (const expected of ancestors) {
+              const current = await lstat(expected.path, { bigint: true });
+              if (current.dev !== expected.dev || current.ino !== expected.ino) {
+                throw new ReplicaError(ReplicaErrorCode.NOT_FOUND, "The replica ancestry changed during removal.");
+              }
+            }
+          };
+          const directories = new Map<string, Stats>([[this.dir, pinned]]);
+          const files = new Map<string, Stats>();
+          const check = async (path: string, expected: Stats, directory: boolean): Promise<void> => {
+            if (path !== this.dir) {
+              const parent = dirname(path);
+              await check(parent, directories.get(parent)!, true);
+            }
+            await checkAncestors();
+            const current = await lstat(path);
+            if ((directory ? !current.isDirectory() : !current.isFile()) ||
+                current.dev !== expected.dev || current.ino !== expected.ino) {
+              throw new ReplicaError(ReplicaErrorCode.NOT_FOUND, "The replica layout changed during removal.");
+            }
+          };
+          const record = async (path: string, directory: boolean): Promise<void> => {
+            const parent = dirname(path);
+            await check(parent, directories.get(parent)!, true);
+            const current = await lstat(path);
+            if (!(directory ? current.isDirectory() : current.isFile())) {
+              throw new ReplicaError(ReplicaErrorCode.STORAGE_ERROR, "Unexpected replica layout during removal.");
+            }
+            (directory ? directories : files).set(path, current);
+          };
+          const blobs = join(this.dir, "blobs");
+          for (const name of await readdir(this.dir)) {
+            if (name === "blobs") await record(blobs, true);
+            else if (["replica.db", "replica.db-wal", "replica.db-shm"].includes(name)) await record(join(this.dir, name), false);
+            else throw new ReplicaError(ReplicaErrorCode.STORAGE_ERROR, "Unexpected replica layout during removal.");
+          }
+          if (directories.has(blobs)) {
+            await check(blobs, directories.get(blobs)!, true);
+            for (const shard of await readdir(blobs)) {
+              if (shard !== ".tmp" && !/^[0-9a-f]{2}$/.test(shard)) {
+                throw new ReplicaError(ReplicaErrorCode.STORAGE_ERROR, "Unexpected replica blob shard during removal.");
+              }
+              const shardPath = join(blobs, shard);
+              await record(shardPath, true);
+              await check(shardPath, directories.get(shardPath)!, true);
+              for (const name of await readdir(shardPath)) {
+                if (shard === ".tmp" ? !/^[0-9a-f]{64}\.[0-9a-f]{12}$/.test(name) : !isHash(name) || !name.startsWith(shard)) {
+                  throw new ReplicaError(ReplicaErrorCode.STORAGE_ERROR, "Unexpected replica blob file during removal.");
+                }
+                await record(join(shardPath, name), false);
+              }
+            }
+          }
+          for (const [path, identity] of files) {
+            await check(path, identity, false);
+            await unlink(path);
+          }
+          for (const [path, identity] of [...directories].reverse()) {
+            if (path === this.dir) continue;
+            await check(path, identity, true);
+            await rmdir(path);
+          }
+          await assertDirectory();
+          await checkAncestors();
+          await rmdir(this.dir);
         }
-        await assertDirectory();
-        await rmdir(this.dir);
       } catch (error) {
         throw storageError(error, "Removing the replica");
       } finally {

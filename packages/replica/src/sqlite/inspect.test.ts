@@ -1,3 +1,4 @@
+import { linkSync, renameSync, symlinkSync } from "node:fs";
 import { chmod, mkdtemp, readdir, readlink, rm, stat, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -42,6 +43,53 @@ test("opening a symlinked replica.db refuses before changing the victim lease", 
   expect((await SqliteReplicaStore.inspect(victim))?.status).toEqual(before?.status);
 });
 
+test("100 simultaneous create opens use the same database over four rounds", async () => {
+  const root = await mkdtemp(join(tmpdir(), "tc-replica-open-race-"));
+  dirs.push(root);
+  const dir = join(root, "replica");
+  for (let round = 0; round < 4; round++) {
+    const results = await Promise.allSettled(Array.from({ length: 100 }, () => SqliteReplicaStore.open(dir, { create: true })));
+    try {
+      expect(results.filter((result) => result.status === "rejected")).toEqual([]);
+    } finally {
+      await Promise.all(results.map((result) => result.status === "fulfilled" ? result.value.close() : undefined));
+    }
+  }
+  expect((await stat(join(dir, "replica.db"))).isFile()).toBe(true);
+});
+
+test("concurrent prefixes do not confuse SQLite descriptor identity", async () => {
+  const root = await mkdtemp(join(tmpdir(), "tc-replica-prefix-opens-"));
+  dirs.push(root);
+  const paths = Array.from({ length: 4 }, (_, index) => join(root, `prefix-${index}`));
+  const results = await Promise.allSettled(Array.from({ length: 100 }, (_, index) =>
+    SqliteReplicaStore.open(paths[index % paths.length]!, { create: true })));
+  try {
+    expect(results.filter((result) => result.status === "rejected")).toEqual([]);
+    for (const path of paths) expect((await stat(join(path, "replica.db"))).isFile()).toBe(true);
+  } finally {
+    await Promise.all(results.map((result) => result.status === "fulfilled" ? result.value.close() : undefined));
+  }
+});
+
+test("a regular replica.db swapped for another real database during open is rejected", async () => {
+  const selected = await makeStore();
+  const victim = await makeStore();
+  const selectedDb = join(selected, "replica.db");
+  const victimDb = join(victim, "replica.db");
+  const before = await SqliteReplicaStore.inspect(victim);
+  const opener = await loadSqlite();
+  await expect(SqliteReplicaStore.open(selected, {
+    create: false,
+    sqlite: (path) => {
+      renameSync(selectedDb, `${selectedDb}.original`);
+      linkSync(victimDb, selectedDb);
+      return opener(path);
+    },
+  })).rejects.toMatchObject({ code: "STORAGE_ERROR" });
+  expect((await SqliteReplicaStore.inspect(victim))?.status).toEqual(before?.status);
+});
+
 test("a replica.db replaced during the native opener is rejected before SQL executes", async () => {
   const selected = await makeStore();
   const victim = await makeStore();
@@ -49,7 +97,6 @@ test("a replica.db replaced during the native opener is rejected before SQL exec
   const victimDb = join(victim, "replica.db");
   const opener = await loadSqlite();
   let executed = false;
-  const { renameSync, symlinkSync } = await import("node:fs");
   await expect(SqliteReplicaStore.open(selected, {
     create: false,
     sqlite: (path) => {

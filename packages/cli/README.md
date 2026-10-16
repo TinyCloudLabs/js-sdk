@@ -177,6 +177,9 @@ and identity partitions. Live replica status is unavailable there. Report
 `tc replica reset --replica <name> --purge` is a partial alternative for a
 named local replica only.
 Flag-owned purge and pending clearing have no equivalent yet (TC-1309).
+On macOS and Windows, `replica reset --purge` and `auth logout` with a legacy
+`replicas/` tree refuse local removal rather than delete through an unpinned
+path; leave that tree intact and retry on a supported platform.
 `auth logout` removes both legacy replicas and the flag-owned
 `replication/` root; `auth logout --keep-replicas` keeps both. B-int release
 acceptance must verify the OpenKey `tc auth request --grant` fallback against

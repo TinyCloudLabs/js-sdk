@@ -3,8 +3,9 @@
  * `tc profile delete` (TC-18): a deleted profile is never recreated, and
  * nothing is written into it.
  */
-import { afterAll, beforeEach, describe, expect, test } from "bun:test";
+import { afterAll, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { mkdir, mkdtemp, readFile, readdir, rename, rm, stat, symlink, unlink, writeFile } from "node:fs/promises";
+import * as fsPromises from "node:fs/promises";
 import { renameSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -450,6 +451,46 @@ describe("replica reset purge containment", () => {
       expect(result.exited).toBe(false);
       expect(JSON.parse(result.stdout)).toMatchObject({ name: "notes" });
     } finally {
+      Object.defineProperty(process, "platform", { value: originalPlatform });
+    }
+  });
+
+  test.each(["darwin", "win32"])("named-path %s reset rechecks a moved profile immediately before SQLite open", async (platform) => {
+    await createProfile("victim");
+    const own = await createReplica(PROFILE, config);
+    await own.close();
+    const victim = await victimDatabaseAtOldVersion();
+    const selected = join(PROFILES_DIR, PROFILE);
+    const parked = `${selected}.parked`;
+    const originalLstat = fsPromises.lstat;
+    const originalOpen = SqliteReplicaStore.open;
+    const originalPlatform = process.platform;
+    let moved = false;
+    let sqliteOpenAttempted = false;
+    const lstatSpy = spyOn(fsPromises, "lstat").mockImplementation(async (...args) => {
+      const info = await originalLstat(...args);
+      if (!moved && String(args[0]) === join(selected, "replicas", "notes", "replica.db")) {
+        await rename(selected, parked);
+        await symlink(join(PROFILES_DIR, "victim"), selected);
+        moved = true;
+      }
+      return info;
+    });
+    SqliteReplicaStore.open = async function (dir, options) {
+      if (!options.create) sqliteOpenAttempted = true;
+      return originalOpen.call(this, dir, options);
+    };
+    Object.defineProperty(process, "platform", { value: platform });
+    try {
+      const result = await readFromCli(PROFILE, ["replica", "reset", "--replica", "notes"]);
+      expect(moved).toBe(true);
+      expect(result.exited).toBe(true);
+      expect(sqliteOpenAttempted).toBe(false);
+      await expectVictimDatabaseUnchanged(victim.path, victim.before);
+      expect(await exists(join(parked, "replicas", "notes", "replica.db"))).toBe(true);
+    } finally {
+      lstatSpy.mockRestore();
+      SqliteReplicaStore.open = originalOpen;
       Object.defineProperty(process, "platform", { value: originalPlatform });
     }
   });

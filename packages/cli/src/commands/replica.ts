@@ -148,7 +148,7 @@ function assertName(name: string): string {
 /** The profile pin is held by the caller's lock or command. Child pins outlive every SQLite use. */
 async function withReplicaRoot<T>(
   profile: string,
-  action: (root: string, recheckRoot: () => Promise<void>) => Promise<T>,
+  action: (root: string, recheckRoot: () => Promise<void>, recheckProfile?: () => Promise<void>) => Promise<T>,
   create = false,
 ): Promise<T | null> {
   const profileDirectory = profilePath(profile);
@@ -160,7 +160,7 @@ async function withReplicaRoot<T>(
       });
     }
     return withPinnedLocalDirectory(profile, directory, "replicas",
-      (root, _named, _identity, recheckRoot) => action(root, recheckRoot));
+      (root, _named, _identity, recheckRoot) => action(root, recheckRoot, recheckProfile));
   };
   if (process.platform === "linux") return readRoot(profileDirectory);
   const checked = await withPinnedLocalDirectory(profile, dirname(profileDirectory), basename(profileDirectory),
@@ -176,7 +176,7 @@ async function withReplicaDirectory<T>(
   create = false,
 ): Promise<T> {
   assertName(name);
-  const result = await withReplicaRoot(profile, async (root, recheckRoot) => {
+  const result = await withReplicaRoot(profile, async (root, recheckRoot, recheckProfile) => {
     if (create) {
       await recheckRoot();
       await mkdir(join(root, name), { mode: 0o700 }).catch((error: NodeJS.ErrnoException) => {
@@ -192,6 +192,13 @@ async function withReplicaDirectory<T>(
           throw error;
         });
         if (database && (database.isSymbolicLink() || !database.isFile())) throw localPathChanged(profile);
+        // Named-path platforms must recheck every ancestor after the leaf
+        // inspection and immediately before SQLite can open or migrate it.
+        if (recheckProfile) {
+          await recheckProfile();
+          await recheckRoot();
+          await recheckChild();
+        }
         return action(path, expectedDirectory);
       });
     if (opened === null) throw new ReplicaError(ReplicaErrorCode.NOT_FOUND, `Replica "${name}" was not found.`);
@@ -271,8 +278,9 @@ async function withLegacyReplicaRead(profile: string, action: (checkDelivery: ()
 }
 
 /**
- * Create a replica (or open the one a concurrent sync just created) inside
- * the profile guard: a profile deleted before or during this gets nothing.
+ * Construct a test replica under the profile guard. Its descriptor-relative
+ * path expires when this helper returns; command handlers keep the store
+ * inside withReplicaDirectory for every SQLite use.
  */
 export async function createReplica(profile: string, config: ReplicaConfig): Promise<SqliteReplicaStore> {
   const guard = profileGuard(profile);
