@@ -13,6 +13,7 @@ function loaders(): ReplicationModuleLoaders {
   return {
     runtime: () => import("./replication/runtime"),
     authority: () => import("./replication/authority"),
+    gate: () => import("@tinycloud/replica/profile-gate"),
   };
 }
 
@@ -36,6 +37,7 @@ test("/core enables replication when browser-safe controller loaders are registe
       return { ReplicationRuntime: InjectedRuntime } as never;
     },
     authority: async () => import("./replication/authority"),
+    gate: async () => import("@tinycloud/replica/profile-gate"),
   });
 
   const wasmBindings = {

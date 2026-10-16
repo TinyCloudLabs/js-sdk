@@ -62,6 +62,17 @@ import {
   defaultSignStrategy,
 } from "./strategies";
 import { MemorySessionStorage } from "../storage/MemorySessionStorage";
+import type { OpenKeyBridgeInput, NodeUserAuthorizationAuthorizeFn } from "./openKeyBridge";
+
+export type OpenKeyAuthorizeInput = OpenKeyBridgeInput;
+export type OpenKeyAuthorizationResultV1 = Awaited<ReturnType<NodeUserAuthorizationAuthorizeFn>>;
+
+type PreparedOpenKeySession = {
+  siwe: string;
+  jwk: Record<string, unknown>;
+  spaceId: string;
+  verificationMethod: string;
+};
 
 /**
  * A PKH space id with its EIP-155 address lowercased: the address is
@@ -253,6 +264,11 @@ export interface NodeUserAuthorizationConfig {
    * scheduling never reach this layer.
    */
   replication?: Pick<ReplicationOptions, "enabled" | "prefixes" | "allowSecrets">;
+  /**
+   * Mints the replica session stamp on each fresh sign-in (TC-858 §4). Returns
+   * `undefined` when replication is off, so the persisted session carries no stamp.
+   */
+  establishReplicaStamp?: (session: TinyCloudSession) => Promise<PersistedSessionData["replicaStamp"]>;
 }
 
 export interface CreateBootstrapSessionOptions {
@@ -315,6 +331,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
   private readonly localNodeIdentityStore?: LocalNodeIdentityStore;
   private readonly enablePublicSpace: boolean;
   private readonly replication?: Pick<ReplicationOptions, "enabled" | "prefixes" | "allowSecrets">;
+  private readonly establishReplicaStamp?: NodeUserAuthorizationConfig["establishReplicaStamp"];
   private readonly nonce?: string;
   private readonly siweConfig?: SiweConfig;
   private readonly wasm: IWasmBindings;
@@ -409,6 +426,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
       config.includeAccountRegistryPermissions ?? true;
     this.replication =
       config.replication?.enabled === true ? config.replication : undefined;
+    this.establishReplicaStamp = config.establishReplicaStamp;
     this._manifest = config.manifest;
     this._capabilityRequest = config.capabilityRequest;
 
@@ -1502,6 +1520,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
       signature,
     };
 
+    const replicaStamp = await this.establishReplicaStamp?.(tinyCloudSession);
     // Persist session with TinyCloud-specific data
     const persistedData: PersistedSessionData = {
       address,
@@ -1520,6 +1539,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
       createdAt: now.toISOString(),
       version: "1.0",
       tinycloudHosts: this.tinycloudHosts,
+      ...(replicaStamp ? { replicaStamp } : {}),
     };
     await this.enqueuePersistence(async () => {
       await this.sessionStorage.save(address, persistedData);
@@ -1753,13 +1773,14 @@ export class NodeUserAuthorization implements IUserAuthorization {
     };
 
     // Extract expiration from SIWE message (parse the string)
-    const expirationMatch = prepared.siwe.match(/Expiration Time: (.+)/);
-    const issuedAtMatch = prepared.siwe.match(/Issued At: (.+)/);
+    const expirationMatch = prepared.siwe?.match(/Expiration Time: (.+)/);
+    const issuedAtMatch = prepared.siwe?.match(/Issued At: (.+)/);
     const expiresAt =
       expirationMatch?.[1] ??
       new Date(Date.now() + this.sessionExpirationMs).toISOString();
     const createdAt = issuedAtMatch?.[1] ?? new Date().toISOString();
 
+    const replicaStamp = await this.establishReplicaStamp?.(tinyCloudSession);
     // Persist session with TinyCloud-specific data
     const persistedData: PersistedSessionData = {
       address,
@@ -1778,6 +1799,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
       createdAt,
       version: "1.0",
       tinycloudHosts: this.tinycloudHosts,
+      ...(replicaStamp ? { replicaStamp } : {}),
     };
     await this.sessionStorage.save(address, persistedData);
 
@@ -1838,45 +1860,22 @@ export class NodeUserAuthorization implements IUserAuthorization {
    * @param options Optional overrides for the OpenKey request.
    */
   async signInWithOpenKey(
-    authorizeFn: (input: {
-      protocolVersion: 1;
-      siwe: string;
-      jwk: Record<string, unknown>;
-      host?: string;
-      /**
-       * Sol MAJOR-3: OpenKey key ID (managed or external key) to sign
-       * with. When omitted, the OpenKey SDK falls back to the last
-       * connected key. Callers who want to bind the flow to a specific
-       * OpenKey key can override via options.openkeyKeyId; otherwise the
-       * bridge relies on the SDK's connected-key state.
-       */
-      keyId?: string;
-      /**
-       * Optional presentation envelope forwarded to the OpenKey widget.
-       * Built from this instance's `_manifest` when set. Display-only —
-       * the widget/server MUST NOT let it expand authority. The envelope
-       * carries `manifests` payloads plus a stable SHA-256 digest so the
-       * OpenKey server can origin-bind the browser origin against the
-       * app's well-known manifest.
-       */
-      presentation?: CapabilityPresentationEnvelopeV1;
-    }) => Promise<{
-      protocolVersion: 1;
-      address: string;
-      signature: string;
-      signedMessage: string;
-      selectedActionKeys: string[];
-      permissions: Array<{ service: string; space: string; path: string; actions: string[] }>;
-    }>,
+    authorizeFn: NodeUserAuthorizationAuthorizeFn,
     options?: {
       host?: string;
       openkeyKeyId?: string;
-      /**
-       * Optional caller-supplied reason string forwarded in the
-       * presentation envelope. Rendered as caller-supplied (never
-       * verified) in the widget.
-       */
+      /** Caller-supplied display reason, not signed authority. */
       reason?: string;
+      /**
+       * Supply another candidate without regenerating the SIWE or session key.
+       * Called only after transport or pre-commit verification rejects a result.
+       * Return null to cancel; activation errors are never signing retries.
+       */
+      retryResult?: (
+        error: Error,
+        originalRequest: OpenKeyAuthorizeInput,
+        attempt: number,
+      ) => Promise<OpenKeyAuthorizationResultV1 | null>;
     },
   ): Promise<ClientSession> {
     // A per-call host override is the host this session will actually use,
@@ -1920,21 +1919,43 @@ export class NodeUserAuthorization implements IUserAuthorization {
     //    one so the widget/SDK routes to the specific OpenKey key rather
     //    than the SDK's connected-key default.
     const hostHint = this.primaryTinyCloudHost;
-    const result = await authorizeFn({
+    const originalRequest: OpenKeyAuthorizeInput = {
       protocolVersion: 1,
       siwe: prepared.siwe,
       jwk,
+      verificationMethod: prepared.verificationMethod,
       host: hostHint,
       keyId: options?.openkeyKeyId,
       presentation,
-    });
-
-    // 4. Complete with the EXACT bytes OpenKey signed. Every subset
-    //    invariant (immutable fields preserved, capabilities ⊆ prepared,
-    //    selectedActionKeys grounded in signedMessage, permissions
-    //    consistent) is enforced by signInWithOpenKeyResult before any
-    //    session state is created.
-    return this.signInWithOpenKeyResult(result, prepared, keyId, jwk);
+    };
+    let attempt = 0;
+    const retry = async (error: unknown): Promise<OpenKeyAuthorizationResultV1> => {
+      if (!options?.retryResult) throw error;
+      const next = await options.retryResult(
+        error instanceof Error ? error : new Error(String(error)),
+        originalRequest,
+        ++attempt,
+      );
+      if (next === null) throw error;
+      return next;
+    };
+    let result: OpenKeyAuthorizationResultV1;
+    try {
+      result = await authorizeFn(originalRequest);
+    } catch (error) {
+      result = await retry(error);
+    }
+    for (;;) {
+      let signed: PreparedOpenKeySession;
+      try {
+        signed = await this.verifyOpenKeyResult(result, prepared);
+      } catch (error) {
+        result = await retry(error);
+        continue;
+      }
+      // Verification retries never repeat network activation or create a new SIWE.
+      return this.signInWithPreparedSession(signed, result.signature, keyId, jwk);
+    }
   }
 
   /**
@@ -2027,28 +2048,20 @@ export class NodeUserAuthorization implements IUserAuthorization {
    *    (resource, action) pair in the returned SIWE.
    */
   async signInWithOpenKeyResult(
-    result: {
-      protocolVersion: 1;
-      address: string;
-      signature: string;
-      signedMessage: string;
-      selectedActionKeys: string[];
-      permissions: Array<{ service: string; space: string; path: string; actions: string[] }>;
-    },
-    prepared: {
-      /**
-       * The ORIGINAL SIWE the SDK produced via {@link prepareSessionForSigning}.
-       * Used as the source-of-truth reference for immutable-header and
-       * capability-subset comparison against `result.signedMessage`.
-       */
-      siwe: string;
-      jwk: Record<string, unknown>;
-      spaceId: string;
-      verificationMethod: string;
-    },
+    result: OpenKeyAuthorizationResultV1,
+    prepared: PreparedOpenKeySession,
     keyId: string,
     jwk: Record<string, unknown>,
   ): Promise<ClientSession> {
+    const signed = await this.verifyOpenKeyResult(result, prepared);
+    return this.signInWithPreparedSession(signed, result.signature, keyId, jwk);
+  }
+
+  /** Validate a candidate without activating a network session, so paste retries reuse one preparation. */
+  private async verifyOpenKeyResult(
+    result: OpenKeyAuthorizationResultV1,
+    prepared: PreparedOpenKeySession,
+  ): Promise<PreparedOpenKeySession> {
     if (result.protocolVersion !== 1) {
       throw new Error(`Unsupported OpenKey protocol version ${result.protocolVersion}`);
     }
@@ -2495,17 +2508,12 @@ export class NodeUserAuthorization implements IUserAuthorization {
     // Retain nonRequiredGrantedPairs reference so tsc doesn't drop it.
     void nonRequiredGrantedPairs;
 
-    return this.signInWithPreparedSession(
-      {
-        siwe: result.signedMessage,
-        jwk: prepared.jwk,
-        spaceId: prepared.spaceId,
-        verificationMethod: prepared.verificationMethod,
-      },
-      result.signature,
-      keyId,
-      jwk,
-    );
+    return {
+      siwe: result.signedMessage,
+      jwk: prepared.jwk,
+      spaceId: prepared.spaceId,
+      verificationMethod: prepared.verificationMethod,
+    };
   }
 
   /**

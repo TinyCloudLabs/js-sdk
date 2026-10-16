@@ -347,6 +347,12 @@ export interface ReplicaLifecycleGate {
    */
   consentDeadline(stamp: ReplicaSessionStamp): number | null;
   /**
+   * Browser-only post-commit consent expiry observer. Fires only after deny/delete
+   * destroys the origin account keys; a subscriber failure cannot undo denial.
+   * Controllers register after binding so events use their opened opaque replica IDs.
+   */
+  subscribeConsentExpired?(listener: (stamp: ReplicaSessionStamp) => void): () => void;
+  /**
    * Synchronous main-thread delivery check before replica-served values/list keys/event fields,
    * and before open, installGrant and sync. Browser checks marker, origin deny tombstone,
    * durable consent deadline against the same injected clock, and this tab's gate view; node

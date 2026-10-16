@@ -13,12 +13,13 @@ const identity = canonicalReplicationIdentity({ host: "https://node.example", sp
 const status = (epoch = 0): LocalReplicaStatus => ({ coverage: "complete", lastSyncAt: new Date(1_000_000).toISOString(), syncedThroughEpoch: epoch, authority: { state: "valid", expiresAt: null }, grant: { cid: "grant", parentCid: null, expiresAt: null, state: "active", unconstrained: true }, counts: { keys: 1, contentMissing: 0, tombstones: 0 }, bytes: 1, lastError: null });
 const options: ResolvedReplicationOptions = { enabled: true, prefixes: ["notes/"], allowSecrets: false, syncIntervalMs: 60_000, maxStalenessMs: 120_000, staleSyncTimeoutMs: 10_000, verify: false };
 
-function setup({ durable = true, pendingStore, initialEpoch = 0, onSync, statusOverrides = {}, localGetStatus = "present", syncOutcome = "synced", mode = "foreground", purgeImpl, verify = false, openError, runtimeMint, sessionOnly = false, sessionRefused = false, setTimeoutImpl = () => () => undefined, beforePendingRead, afterPendingRead, statusImpl, inspectStatus, prefixes = options.prefixes, nodeFeatures, allowSecrets = false }: {
+function setup({ durable = true, pendingStore, initialEpoch = 0, onSync, statusOverrides = {}, localGetStatus = "present", localListKeys = ["notes/a"], syncOutcome = "synced", mode = "foreground", purgeImpl, verify = false, openError, runtimeMint, sessionOnly = false, sessionRefused = false, setTimeoutImpl = () => () => undefined, beforePendingRead, afterPendingRead, statusImpl, inspectStatus, prefixes = options.prefixes, nodeFeatures, allowSecrets = false }: {
   pendingStore?: PendingWriteStore;
   initialEpoch?: number;
   onSync?: (epoch: number, signal: AbortSignal) => Promise<void> | void;
   statusOverrides?: Partial<LocalReplicaStatus>;
   localGetStatus?: "present" | "absent" | "deleted" | "content_missing" | "throw";
+  localListKeys?: string[];
   syncOutcome?: "synced" | "busy" | "network_error" | "node_error";
   mode?: "background" | "foreground";
   purgeImpl?: (target: { sessionDeviceDid?: string }) => void | Promise<void>;
@@ -45,6 +46,7 @@ function setup({ durable = true, pendingStore, initialEpoch = 0, onSync, statusO
   let statusCalls = 0;
   let networkCalls = 0;
   const events: ReplicationEvent[] = [];
+  let openedSpec: KVReplicaSpec | undefined;
   const memory = createMemoryPendingStore(identity);
   const pending = pendingStore ?? (durable ? ({ ...memory, durable: true } as PendingWriteStore) : memory);
   const pendingRead = pending.read.bind(pending);
@@ -65,7 +67,11 @@ function setup({ durable = true, pendingStore, initialEpoch = 0, onSync, statusO
       if (localGetStatus !== "present") return { status: localGetStatus, key, meta };
       return { status: "present" as const, key, value: new TextEncoder().encode('"local"'), etag: '"blake3-local"', metadata: { "content-type": "application/json" }, meta };
     },
-    async list() { listReads++; return { keys: ["notes/a"], meta: { asOf: new Date(now).toISOString(), coverage: localStatus.coverage, authority: localStatus.authority.state, syncedThroughEpoch: localStatus.syncedThroughEpoch } }; },
+    async list({ prefix, after, limit }: { prefix: string; after?: string; limit?: number }) {
+      listReads++;
+      const keys = localListKeys.filter((key) => key.startsWith(prefix) && (after === undefined || key > after));
+      return { keys: limit === undefined ? keys : keys.slice(0, limit), meta: { asOf: new Date(now).toISOString(), coverage: localStatus.coverage, authority: localStatus.authority.state, syncedThroughEpoch: localStatus.syncedThroughEpoch } };
+    },
     async grant() { return localStatus.grant; }, async installGrant() { return localStatus.grant!; },
     async sync({ signal, syncStartEpoch }: { signal: AbortSignal; syncStartEpoch: number }) {
       syncs++;
@@ -79,7 +85,7 @@ function setup({ durable = true, pendingStore, initialEpoch = 0, onSync, statusO
   } as unknown as KVReplicaHandle;
   const storage: KVReplicaStorage = {
     kind: "sqlite",
-    async open() { opens++; if (openError) throw Object.assign(new Error("open failed"), { code: openError }); return handle; },
+    async open(spec) { opens++; openedSpec = spec; if (openError) throw Object.assign(new Error("open failed"), { code: openError }); return handle; },
     ...(inspectStatus ? { inspectStatus: async (_spec: KVReplicaSpec, { signal }: { signal: AbortSignal }) => inspectStatus(signal) } : {}),
     async purge(target) { await purgeImpl?.(target); },
     pendingWrites() { return pending; },
@@ -88,11 +94,26 @@ function setup({ durable = true, pendingStore, initialEpoch = 0, onSync, statusO
   const scheduler = { now: () => now, setTimeout: setTimeoutImpl };
   const createController = () => createKVReplication({ options: { ...options, prefixes, verify, allowSecrets }, mode, storage, identity, session: { id: "session", did: identity.principal, space: identity.space }, authority, pending, scheduler, emit: (event) => events.push(event), nodeFeatures });
   const controller = createController();
-  return { controller, createController, storage, pending, events, counters: () => ({ localReads, syncs, opens, networkCalls }), listReads: () => listReads, network: async (): Promise<Result<KVResponse<unknown>>> => { networkCalls++; return ok({ data: "network", headers: { get: () => null } }); }, setNow: (value: number) => { now = value; }, setStatus: (value: LocalReplicaStatus) => { localStatus = value; } };
+  return { controller, createController, storage, pending, events, peerCommit: (info: { at: number; syncedThroughEpoch: number; changes: number; coverage: "complete" }) => openedSpec?.onPeerCommit?.(info), counters: () => ({ localReads, syncs, opens, networkCalls }), listReads: () => listReads, network: async (): Promise<Result<KVResponse<unknown>>> => { networkCalls++; return ok({ data: "network", headers: { get: () => null } }); }, setNow: (value: number) => { now = value; }, setStatus: (value: LocalReplicaStatus) => { localStatus = value; } };
 }
 
 const readRequest = (network: () => Promise<Result<KVResponse<unknown>>>) => ({ space: identity.space, key: "notes/a", path: "notes/a", options: undefined, signal: new AbortController().signal, network });
 const listRequest = (options: KVListOptions | undefined, network: () => Promise<Result<KVListPage>>) => ({ space: identity.space, listPath: "notes/", options, signal: new AbortController().signal, network });
+
+test("peer commits emit an onEvent sync without running a local sync, then stop after close", async () => {
+  const env = setup();
+  await env.controller.get(readRequest(env.network));
+  env.peerCommit({ at: 999_990, syncedThroughEpoch: 8, changes: 2, coverage: "complete" });
+  expect(env.events.filter((event) => event.type === "replication.sync")).toEqual([{
+    type: "replication.sync", at: new Date(1_000_000).toISOString(),
+    space: identity.space, replica: "notes/", trigger: "peer", origin: "peer",
+    outcome: "ok", durationMs: 0, lagMs: null, changes: 2, coverage: "complete",
+  }]);
+  expect(env.counters().syncs).toBe(0);
+  await env.controller.close();
+  env.peerCommit({ at: 1_000_010, syncedThroughEpoch: 9, changes: 1, coverage: "complete" });
+  expect(env.events.filter((event) => event.type === "replication.sync")).toHaveLength(1);
+});
 
 describe("whole-space replication", () => {
   test("reports unsupported nodes and serves covered reads when advertised", async () => {
@@ -322,6 +343,93 @@ describe("KVReplication list parity and cursor rules", () => {
     expect(result.ok && result.data.keys).toEqual(["notes/a"]);
     expect(env.listReads()).toBe(1);
     expect(env.counters().networkCalls).toBe(0);
+  });
+
+  test("pending creates and deletes in the LIST range use the network on the first page", async () => {
+    for (const op of ["put", "delete"] as const) {
+      for (const pendingState of ["in_flight", "ambiguous", "committed"] as const) {
+        const env = setup({ initialEpoch: pendingState === "committed" ? 1 : 0 });
+        await env.pending.update((state) => {
+          begin(state, "write", [{ key: op === "put" ? "notes/b" : "notes/a", op }], new Date(1_000_000).toISOString());
+          if (pendingState !== "in_flight") settle(state, "write", pendingState, new Date(1_000_000).toISOString());
+        });
+        let networkCalls = 0;
+        const result = await env.controller.list(listRequest(undefined, async () => {
+          networkCalls++;
+          return ok({ keys: op === "put" ? ["notes/a", "notes/b"] : [], truncated: false });
+        }));
+        expect(result.ok && result.data.keys).toEqual(op === "put" ? ["notes/a", "notes/b"] : []);
+        expect(networkCalls).toBe(1);
+        expect(env.listReads()).toBe(0);
+        expect(env.events.findLast((event) => event.type === "replication.read")).toMatchObject({
+          source: "network", reason: "pending_write", pendingState,
+        });
+      }
+    }
+  });
+
+  test("a paginated local LIST restarts if a pending mutation affects any key in the range", async () => {
+    for (const op of ["put", "delete"] as const) {
+      for (const pendingState of ["in_flight", "ambiguous", "committed"] as const) {
+        for (const key of ["notes/a", "notes/b"]) {
+          const env = setup({ localListKeys: ["notes/a", "notes/b"] });
+          let networkCalls = 0;
+          const network = async () => { networkCalls++; return ok({ keys: ["notes/server"], truncated: false }); };
+          const first = await env.controller.list(listRequest({ limit: 1 }, network));
+          expect(first.ok && first.data).toMatchObject({ keys: ["notes/a"], truncated: true });
+          const cursor = first.ok ? first.data.nextCursor : undefined;
+          expect(cursor?.startsWith("tcr1.")).toBe(true);
+          await env.pending.update((state) => {
+            begin(state, "write", [{ key, op }], new Date(1_000_000).toISOString());
+            if (pendingState !== "in_flight") settle(state, "write", pendingState, new Date(1_000_000).toISOString());
+          });
+          if (pendingState === "committed") env.setStatus(status(1));
+          const continuation = await env.controller.list(listRequest({ cursor, limit: 1 }, network));
+          expect(continuation.ok).toBe(false);
+          expect(!continuation.ok && continuation.error.meta?.replication).toBe("cursor_restart");
+          expect(networkCalls).toBe(0);
+          expect(env.listReads()).toBe(1);
+        }
+      }
+    }
+  });
+
+  test("a pending create or delete arriving after LIST admission cannot return a stale local page", async () => {
+    for (const op of ["put", "delete"] as const) {
+      for (const cursorMode of ["first", "continuation"] as const) {
+        let reads = 0;
+        let armed = cursorMode === "first";
+        let pending!: PendingWriteStore;
+        const env = setup({
+          localListKeys: ["notes/a", "notes/b"],
+          afterPendingRead: async () => {
+            if (!armed || ++reads !== (cursorMode === "first" ? 3 : 2)) return;
+            await pending.update((state) => begin(state, "interleaved", [{ key: "notes/b", op }], new Date(1_000_000).toISOString()));
+          },
+        });
+        pending = env.pending;
+        let networkCalls = 0;
+        const network = async () => { networkCalls++; return ok({ keys: ["notes/server"], truncated: false }); };
+        let cursor: string | undefined;
+        if (cursorMode === "continuation") {
+          const first = await env.controller.list(listRequest({ limit: 1 }, network));
+          expect(first.ok && first.data.keys).toEqual(["notes/a"]);
+          cursor = first.ok ? first.data.nextCursor : undefined;
+          expect(cursor?.startsWith("tcr1.")).toBe(true);
+          armed = true;
+        }
+        const result = await env.controller.list(listRequest(cursor ? { cursor, limit: 1 } : undefined, network));
+        if (cursorMode === "continuation") {
+          expect(result.ok).toBe(false);
+          expect(!result.ok && result.error.meta?.replication).toBe("cursor_restart");
+          expect(networkCalls).toBe(0);
+        } else {
+          expect(result.ok && result.data.keys).toEqual(["notes/server"]);
+          expect(networkCalls).toBe(1);
+        }
+        expect((await env.pending.read()).records).toMatchObject([{ key: "notes/b", state: "in_flight", op }]);
+      }
+    }
   });
 
   const networkCases = [

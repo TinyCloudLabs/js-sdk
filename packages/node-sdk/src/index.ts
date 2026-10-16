@@ -158,6 +158,8 @@ export { FileSessionStorage } from "./storage/FileSessionStorage";
 export {
   NodeUserAuthorization,
   type NodeUserAuthorizationConfig,
+  type OpenKeyAuthorizeInput,
+  type OpenKeyAuthorizationResultV1,
 } from "./authorization/NodeUserAuthorization";
 
 // OpenKey integration adapter — Sol continuation contract requires a
@@ -627,4 +629,13 @@ export {
 // Read-through replication storage (TC-858 §11.1): Node entry ONLY —
 // loading the adapter is lazy (replica/sqlite/wasm import at first use),
 // but the export itself must never reach `@tinycloud/node-sdk/core`.
-export { sqliteReplicaStorage } from "./replication/sqlite";
+export {
+  sqliteReplicaStorage,
+  createProfileReplicaPurge,
+  REPLICA_LOGOUT_PENDING_FILE,
+  assertProfileLogoutClear,
+  type ProfileReplicaLogoutPending,
+  type ProfileReplicaPurge,
+  type ProfileReplicaDeferredToken,
+  type ProfileReplicaApprovalEntry,
+} from "./replication/sqlite";

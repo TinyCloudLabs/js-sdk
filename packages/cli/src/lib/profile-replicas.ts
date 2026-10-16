@@ -94,7 +94,7 @@ export async function removeProfileReplicas(profile: string, heldLeases?: Readon
         }
         const lease = heldLeases?.get(entryPath) ?? await store.acquireSyncLease(SYNC_LEASE_MS);
         if (lease === null) {
-          throw new CLIError("REPLICA_BUSY", `Cannot log out: replica "${entry.name}" is syncing. The session was cleared and no replicas were removed.`, ExitCode.ERROR);
+          throw new CLIError("REPLICA_BUSY", `Cannot log out: replica "${entry.name}" is syncing. The session was kept and no replicas were removed.`, ExitCode.ERROR);
         }
         opened[opened.length - 1]!.lease = lease;
       }
@@ -216,7 +216,7 @@ export async function removeProfileReplication(profile: string, heldLeases?: Rea
           const lease = heldLeases?.get(join(replicasRoot, entry.name)) ?? await store.acquireSyncLease(SYNC_LEASE_MS);
           if (lease === null) {
             await store.close();
-            throw new CLIError("REPLICA_BUSY", `Cannot log out: flag replica "${name}" is syncing. The session was cleared and no replicas were removed.`, ExitCode.ERROR);
+            throw new CLIError("REPLICA_BUSY", `Cannot log out: flag replica "${name}" is syncing. The session was kept and no replicas were removed.`, ExitCode.ERROR);
           }
           opened.push({ name, path: join(replicasRoot, entry.name), store, lease });
         }
@@ -271,7 +271,7 @@ async function acquireLogoutLeases(profile: string): Promise<Array<{ path: strin
           const lease = await store.acquireSyncLease(SYNC_LEASE_MS);
           if (lease === null) {
             await store.close();
-            throw new CLIError("REPLICA_BUSY", `Cannot log out: replica "${entry.name}" is syncing. The session was cleared and no replicas were removed.`, ExitCode.ERROR);
+            throw new CLIError("REPLICA_BUSY", `Cannot log out: replica "${entry.name}" is syncing. The session was kept and no replicas were removed.`, ExitCode.ERROR);
           }
           opened.push({ path, store, lease });
         }
@@ -333,7 +333,7 @@ async function acquireLogoutLeases(profile: string): Promise<Array<{ path: strin
             const lease = await store.acquireSyncLease(SYNC_LEASE_MS);
             if (lease === null) {
               await store.close();
-              throw new CLIError("REPLICA_BUSY", `Cannot log out: flag replica "replication/${partition.name}/${replica.name}" is syncing. The session was cleared and no replicas were removed.`, ExitCode.ERROR);
+              throw new CLIError("REPLICA_BUSY", `Cannot log out: flag replica "replication/${partition.name}/${replica.name}" is syncing. The session was kept and no replicas were removed.`, ExitCode.ERROR);
             }
             opened.push({ path, store, lease });
           }

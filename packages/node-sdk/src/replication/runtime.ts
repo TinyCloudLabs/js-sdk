@@ -12,6 +12,7 @@ import type {
   ReplicationOptions,
   ReplicationScheduler,
 } from "@tinycloud/sdk-services";
+import type { ReplicaSessionStamp } from "@tinycloud/sdk-services/kv/replication";
 type ReplicationServices = typeof import("@tinycloud/sdk-services/kv/replication");
 
 export interface ReplicationRuntimeOptions extends ReplicationOptions {
@@ -25,6 +26,7 @@ export interface ReplicationRuntimeBinding {
   address?: string;
   chainId?: number;
   principal?: string;
+  stamp?: ReplicaSessionStamp;
   authority: ReplicationAuthority;
   nodeFeatures?: readonly string[];
   primaryKV: Array<{ space: string; kv: { setReadThrough(readThrough: KVReadThrough | null): void } }>;
@@ -181,6 +183,7 @@ export class ReplicationRuntime {
         storage: this.options.storage,
         identity,
         session: { id: session.delegationCid, did: session.verificationMethod, space: session.spaceId },
+        stamp: input.stamp,
         authority: input.authority,
         pending,
         scheduler: this.clock,

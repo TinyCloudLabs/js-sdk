@@ -71,6 +71,36 @@ describe("BrowserSessionStorage", () => {
     });
   });
 
+  it("round-trips replicaStamp through save and loadWithStatus", async () => {
+    const storage = new BrowserSessionStorage({ storage: new MemoryStorage() });
+    const session = persistedSession({
+      replicaStamp: { incarnation: "inc-1", lifecycleEpoch: 3 },
+    });
+
+    await storage.save(ADDRESS, session);
+
+    await expect(storage.loadWithStatus(ADDRESS)).resolves.toEqual({
+      status: "loaded",
+      data: session,
+    });
+  });
+
+  it("forwards replicaStamp from persisted data into restore data", async () => {
+    const storage = new BrowserSessionStorage({ storage: new MemoryStorage() });
+    const session = persistedSession({
+      replicaStamp: { incarnation: "inc-1", lifecycleEpoch: 3 },
+    });
+
+    await storage.save(ADDRESS, session);
+    const loaded = await storage.loadWithStatus(ADDRESS);
+    if (loaded.status !== "loaded") throw new Error("expected a loaded session");
+
+    expect(restoreDataFromPersisted(loaded.data).replicaStamp).toEqual({
+      incarnation: "inc-1",
+      lifecycleEpoch: 3,
+    });
+  });
+
   it("rejects and removes expired sessions", async () => {
     const backend = new MemoryStorage();
     const storage = new BrowserSessionStorage({ storage: backend });
