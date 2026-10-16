@@ -1095,6 +1095,7 @@ export function createSqliteReplicaStorage(
     spec: KVReplicaSpec,
     partitionId: string,
     store: SqliteReplicaStore,
+    replicaDir: string,
     generation: number,
     section: (snapshot: SqliteReplicaStore, syncedThroughEpoch: number) => Promise<T>,
     withFence = false,
@@ -1139,7 +1140,7 @@ export function createSqliteReplicaStorage(
     if (withFence) await checkGate();
     // A fence written after the SQLite snapshot starts belongs to newer rows.
     // Capture it first; a concurrent sync can only make this value conservative.
-    const fence = withFence ? await readFence(store.dir) : 0;
+    const fence = withFence ? await readFence(replicaDir) : 0;
     return store.readTransaction(generation, checkGate, (sqliteSnapshot) => section(sqliteSnapshot, fence));
   }
 
@@ -1555,7 +1556,7 @@ export function createSqliteReplicaStorage(
       replicaDir,
       replica,
       guard: storeGuard,
-      read: (section, withFence) => readGated(spec, partitionId!, store, generation, section, withFence),
+      read: (section, withFence) => readGated(spec, partitionId!, store, replicaDir, generation, section, withFence),
       policy: resolvePolicy,
       recordGrantInstall: async (cid, at) =>
         gate.recordGrantInstall(profileDir, await gate.grantInstallHashOf(snapshot.salt, identityKeyHash, cid), at),
