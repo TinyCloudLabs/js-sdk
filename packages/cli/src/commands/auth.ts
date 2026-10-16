@@ -539,7 +539,7 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
           requested,
           expiryOption !== undefined ? { expiry: expiryOption } : undefined,
         );
-        await persistCurrentLocalSession(ctx.profile, profile, node.restorableSession);
+        await persistCurrentLocalSession(ctx.profile, profile, node.restorableSession, node.replicaStamp);
         const delegationCids: string[] = [];
         let expiry: string | undefined;
         // Sol MAJOR-9: accumulate EFFECTIVE grants across every signed
@@ -1723,6 +1723,7 @@ async function persistCurrentLocalSession(
   profileName: string,
   profile: ProfileConfig,
   session: TinyCloudSession | undefined,
+  replicaStamp: TinyCloudNode["replicaStamp"],
 ): Promise<void> {
   if (!session) return;
 
@@ -1731,6 +1732,7 @@ async function persistCurrentLocalSession(
       authMethod: "local",
       address: session.address,
       chainId: session.chainId,
+      ownerDid: profile.ownerDid ?? profile.did,
       spaceId: session.spaceId,
       delegationHeader: session.delegationHeader,
       delegationCid: session.delegationCid,
@@ -1738,6 +1740,7 @@ async function persistCurrentLocalSession(
       verificationMethod: session.verificationMethod,
       siwe: session.siwe,
       signature: session.signature,
+      ...(replicaStamp === undefined ? {} : { replicaStamp }),
     });
     if (profile.sessionDid !== session.verificationMethod || profile.spaceId !== session.spaceId) {
       await ProfileManager.updateProfile(profileName, (current) => ({
@@ -1830,6 +1833,7 @@ async function handleLocalAuth(
     authMethod: "local",
     address,
     chainId: DEFAULT_CHAIN_ID,
+    ownerDid: did,
     spaceId: sessionResult.spaceId,
     delegationHeader: sessionResult.delegationHeader,
     delegationCid: sessionResult.delegationCid,
@@ -1837,6 +1841,7 @@ async function handleLocalAuth(
     verificationMethod: sessionResult.verificationMethod,
     siwe: sessionResult.siwe,
     signature: sessionResult.signature,
+    ...(sessionResult.replicaStamp === undefined ? {} : { replicaStamp: sessionResult.replicaStamp }),
   };
   sessionDid = sessionResult.verificationMethod;
 
