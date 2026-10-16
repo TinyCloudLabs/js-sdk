@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { closeReplication, registerReplication, registeredReplications, waitForReplicationCloseSettlement } from "./replication-registry.js";
+import { closeReplication, registerReplication, registeredReplications } from "./replication-registry.js";
 import type { ReplicationControl } from "@tinycloud/node-sdk";
 
 const control = (close: () => void | Promise<void>) => ({ close }) as unknown as ReplicationControl;
@@ -45,53 +45,32 @@ describe("replication registry shutdown", () => {
     } finally {
       first.resolve();
       second.resolve();
-      await waitForReplicationCloseSettlement();
     }
   });
 
-  test("a second close after the deadline shares the pending shutdown", async () => {
-    const callbacks: Array<() => void> = [];
+  test("SIGTERM keeps its bounded exit when a controller close never settles", async () => {
+    const before = new Set(process.listeners("SIGTERM"));
     const release = Promise.withResolvers<void>();
-    registerReplication("late-event", control(() => release.promise));
-    const closing = closeReplication(delayedScheduler(callbacks));
-    await Promise.resolve();
+    registerReplication("stalled-signal", control(() => release.promise));
+    const signal = process.listeners("SIGTERM").find((listener) => !before.has(listener));
+    expect(signal).toBeDefined();
+    const previousExit = process.exit;
+    const exited = Promise.withResolvers<number>();
+    let exitCode: number | undefined;
+    process.exit = ((code?: number) => { exitCode = code; exited.resolve(code ?? 0); return undefined as never; }) as typeof process.exit;
     try {
-      callbacks[0]!();
-      expect(await closing).toBe(true);
-      let lateClosed = false;
-      registerReplication("registered-after-deadline", control(() => { lateClosed = true; }));
-      expect(closeReplication()).toBe(closing);
-      let settled = false;
-      const completion = waitForReplicationCloseSettlement().then(() => { settled = true; });
-      await Promise.resolve();
-      expect(settled).toBe(false);
-      release.resolve();
-      await completion;
-      expect(lateClosed).toBe(true);
+      signal!();
+      const elapsed = Promise.withResolvers<void>();
+      setTimeout(elapsed.resolve, 3_300);
+      await elapsed.promise;
+      expect(exitCode).toBe(143);
     } finally {
       release.resolve();
-      await waitForReplicationCloseSettlement();
+      await closeReplication();
+      await exited.promise;
+      process.exit = previousExit;
     }
-  });
-
-  test("a rejected late close also releases the shutdown lifetime", async () => {
-    const callbacks: Array<() => void> = [];
-    const release = Promise.withResolvers<void>();
-    registerReplication("late-failure", control(() => release.promise));
-    const closing = closeReplication(delayedScheduler(callbacks));
-    await Promise.resolve();
-    try {
-      callbacks[0]!();
-      expect(await closing).toBe(true);
-      const settled = waitForReplicationCloseSettlement();
-      release.reject(new Error("close failed"));
-      await settled;
-      expect(registeredReplications().size).toBe(0);
-    } finally {
-      release.resolve();
-      await waitForReplicationCloseSettlement();
-    }
-  });
+  }, 10_000);
 
   test("removes signal handlers after a mid-drain registration empties the registry", async () => {
     const beforeInt = process.listenerCount("SIGINT");

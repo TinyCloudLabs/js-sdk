@@ -4,10 +4,8 @@ import { randomBytes } from "node:crypto";
 import { constants as fsConstants, lstatSync } from "node:fs";
 import { open, readdir, rename, stat, unlink, readFile, lstat } from "node:fs/promises";
 import { basename, dirname, join, resolve } from "node:path";
-import { ensureAuthenticated } from "../lib/sdk.js";
-import { closeReplication, replicationForProfile, waitForReplicationCloseSettlement } from "../lib/replication-registry.js";
 import { withPinnedReplicaForReset } from "../lib/profile-replicas.js";
-import { CLEAR_PENDING_WARNING, createReplicationReport, renderReplicationReport, type ReplicationPartitionSummary } from "../lib/replication-report.js";
+import { createReplicationReport, renderReplicationReport, type ReplicationPartitionSummary } from "../lib/replication-report.js";
 import { parseDuration } from "../lib/duration.js";
 import {
   ProfileDeletedError,
@@ -18,7 +16,7 @@ import {
   withPinnedProfileDirectory,
 } from "@tinycloud/operations/state";
 import { ownerSessionLacksProof } from "@tinycloud/operations/profile";
-import type { ReplicationEvent, ReplicationControl } from "@tinycloud/node-sdk";
+import type { ReplicationEvent } from "@tinycloud/node-sdk";
 import {
   assertFolderPrefix,
   Replica,
@@ -100,10 +98,9 @@ function toCliError(error: unknown): unknown {
   return new CLIError(error.code, error.message, EXIT_BY_CODE[error.code], hint === undefined ? undefined : { hint });
 }
 
-async function run(action: () => Promise<void>): Promise<void> {
+async function run(action: () => Promise<void>, needsSqlite = true): Promise<void> {
   try {
-    // Every replica command needs the runtime's built-in SQLite; fail the same way on all of them.
-    await loadSqlite();
+    if (needsSqlite) await loadSqlite();
     await action();
   } catch (error) {
     return handleError(toCliError(error));
@@ -463,70 +460,37 @@ or coverage incomplete; 5 grant expired, revoked or not yet valid; 6 network;
     );
   replica
     .command("report")
-    .description("Report replication reads, syncs, pending writes and local identity partitions")
+    .description("Read-only report of persisted replication events and identity partitions")
     .option("--since <duration>", "Include events from the last duration (default: 24h)", "24h")
-    .option("--purge", "Purge configured replicas for the current identity")
-    .option("--clear-pending", "Clear ambiguous and likely orphaned in-flight writes")
+    .option("--purge", "Unavailable in read-only report; use replica reset --purge for a named local replica")
+    .option("--clear-pending", "Temporarily unavailable; see TC-1309")
     .action((options, cmd: Command) =>
       run(async () => {
         const profile = await profileName(cmd);
-        await withPinnedProfileDirectory(profile, async (directory) => {
+        if (options.purge) {
+          throw new CLIError("REPORT_READ_ONLY", `Replica report is read-only. To remove a named local replica, run ${CLI_NAME} replica reset --replica <name> --purge; flag-owned purge needs TC-1309.`, ExitCode.USAGE_ERROR);
+        }
+        if (options.clearPending) {
+          throw new CLIError("REPORT_READ_ONLY", "Clearing pending replica writes is temporarily unavailable; see TC-1309 for a safe replacement command.", ExitCode.USAGE_ERROR);
+        }
+        let durationMs: number;
+        try {
+          durationMs = parseDuration(options.since);
+        } catch (error) {
+          throw new CLIError("USAGE_ERROR", error instanceof Error ? error.message : String(error), ExitCode.USAGE_ERROR);
+        }
+        const report = await withPinnedProfileDirectory(profile, async (directory) => {
           if (directory === null) throw new CLIError("PROFILE_NOT_FOUND", `Profile "${profile}" does not exist.`, ExitCode.ERROR);
-          try {
-            const globals = cmd.optsWithGlobals();
-            const context = await ProfileManager.resolveContext(globals);
-            const node = context.replication ? await ensureAuthenticated(context) : undefined;
-            let durationMs: number;
-            try {
-              durationMs = parseDuration(options.since);
-            } catch (error) {
-              throw new CLIError("USAGE_ERROR", error instanceof Error ? error.message : String(error), ExitCode.USAGE_ERROR);
-            }
-            const control: ReplicationControl | undefined = node?.replication ?? replicationForProfile(profile);
-            let cleared: number | undefined;
-            let purged: unknown;
-            let warning: string | undefined;
-            if (options.clearPending || options.purge) {
-              if (!control) throw new CLIError("REPLICATION_UNAVAILABLE", "No replication runtime is registered for this profile.", ExitCode.ERROR);
-              warning = CLEAR_PENDING_WARNING;
-              process.stderr.write(`Warning: ${warning}\n`);
-              if (options.clearPending) cleared = await control.clearPending();
-              if (options.purge) purged = await control.purge();
-            }
-            const sinceMs = Date.now() - durationMs;
-            const [events, partitions, replicas] = await Promise.all([
-              readReplicationEvents(profile, sinceMs),
-              replicationPartitions(profile),
-              node?.replication ? node.replication.status() : control ? control.status() : Promise.resolve([]),
-            ]);
-            const report = createReplicationReport(options.since, events, replicas, partitions, warning);
-            if (shouldOutputJson()) {
-              outputJson({
-                ...report,
-                ...(cleared === undefined ? {} : { cleared }),
-                ...(purged === undefined ? {} : { purged }),
-              });
-            } else {
-              process.stdout.write(`${renderReplicationReport(report)}\n`);
-              if (cleared !== undefined) process.stdout.write(`Cleared ${cleared} pending write record(s).\n`);
-              if (purged !== undefined) process.stdout.write(`Purge: ${JSON.stringify(purged)}\n`);
-            }
-          } finally {
-            // The event sink and SQLite storage capture this pinned profile path.
-            // The deadline reports failure, but the descriptor remains live for
-            // any close work that settles after it.
-            let timedOut = false;
-            try {
-              timedOut = await closeReplication();
-            } finally {
-              await waitForReplicationCloseSettlement();
-            }
-            if (timedOut) {
-              throw new CLIError("REPLICATION_CLOSE_TIMEOUT", "replication close did not finish within three seconds.", ExitCode.ERROR);
-            }
-          }
+          const sinceMs = Date.now() - durationMs;
+          const [events, partitions] = await Promise.all([
+            readReplicationEvents(profile, sinceMs),
+            replicationPartitions(profile),
+          ]);
+          return createReplicationReport(options.since, events, partitions);
         });
-      }),
+        if (shouldOutputJson()) outputJson(report);
+        else process.stdout.write(`${renderReplicationReport(report)}\n`);
+      }, false),
     );
 
   replica

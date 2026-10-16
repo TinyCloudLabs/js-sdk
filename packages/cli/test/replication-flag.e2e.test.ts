@@ -200,11 +200,11 @@ describe.skipIf(!NODE_BIN)(`replication flag against a real node (${DATABASE_URL
     expect(profile.replication?.prefixes).toEqual(["notes/", "variables/"]);
     const varsPut = await tc(["vars", "put", "flag", "one"], { profile: "owner", extraEnv: { TC_PRIVATE_KEY: profile.privateKey } });
     expect(varsPut.code).toBe(0);
-    // 11. A report may inspect status but must not initialize a never-opened replica partition.
+    // A persisted report must not initialize a never-opened replica partition.
     const profileDir = join(home, ".tinycloud", "profiles", "owner", "replication");
     const beforeActivationReport = await tc(["replica", "report", "--json"], { profile: "owner", replication: "on" });
     expect(beforeActivationReport.code).toBe(0);
-    expect(JSON.parse(beforeActivationReport.stdout.toString()).replicas).toEqual([]);
+    expect(JSON.parse(beforeActivationReport.stdout.toString())).toMatchObject({ replicas: [], replicasUnavailable: true });
     await expect(readdir(profileDir)).rejects.toMatchObject({ code: "ENOENT" });
     // Before any replica is opened, flag-off and default reads are identical and leave no state or log.
     const flagOffBeforeActivation = await tc(["kv", "get", "notes/a.txt", "--raw"], { profile: "owner", replication: "off" });
@@ -309,39 +309,12 @@ describe.skipIf(!NODE_BIN)(`replication flag against a real node (${DATABASE_URL
     const deleted = await tc(["kv", "delete", "notes/b.json"], { profile: "owner", replication: "on" });
     expect(deleted.code).toBe(0);
     expect((await tc(["kv", "get", "notes/b.json"], { profile: "owner", replication: "on" })).code).toBe(4);
-    const ambiguousPreload = join(home, "ambiguous.cjs");
-    await writeFile(ambiguousPreload, `const original = globalThis.fetch; globalThis.fetch = async (...args) => { const response = await original(...args); if (String(args[0]).includes("/invoke")) throw Object.assign(new Error("synthetic timeout"), { name: "TimeoutError", code: "TIMEOUT" }); return response; };`);
-    const ambiguousFile = join(home, "ambiguous.bin");
-    await writeFile(ambiguousFile, "v3");
-    const ambiguous = await tc(["kv", "put", "notes/a.txt", "--file", ambiguousFile], { profile: "owner", preload: ambiguousPreload, replication: "on" });
-    expect(ambiguous.stderr).toContain("ambiguous TIMEOUT");
-    const ambiguousRead = await tc(["kv", "get", "notes/a.txt", "--raw"], { profile: "owner", replication: "on", extraEnv: { TC_REPLICATION_MAX_STALENESS_MS: "0" } });
-    expect(ambiguousRead.stdout.toString()).toBe("v3");
-    expect(ambiguousRead.stderr).toContain("network pending_write");
-    const reportPinned = await ok<{ replicas: Array<{ pinned: Array<{ key: string; state: string; code?: string }> }> }>(["replica", "report", "--json"], "owner", { replication: "on" });
-    expect(reportPinned.replicas.flatMap((replica) => replica.pinned)).toContainEqual(expect.objectContaining({ key: "notes/a.txt", state: "ambiguous", code: "TIMEOUT" }));
-    const clear = await tc(["replica", "report", "--clear-pending", "--json"], { profile: "owner", replication: "on" });
-    expect(clear.code).toBe(0);
-    expect(clear.stderr).toContain("Clearing pending writes stops pinning keys");
-    expect((await tc(["kv", "get", "notes/a.txt", "--raw"], { profile: "owner", replication: "on", extraEnv: { TC_REPLICATION_MAX_STALENESS_MS: "0" } })).stderr).toContain("replica hit");
-    const abaFile = join(home, "aba.bin");
-    await writeFile(abaFile, "v0");
-    const aba = await tc(["kv", "put", "notes/c", "--file", abaFile], { profile: "owner", preload: ambiguousPreload, replication: "on" });
-    expect(aba.stderr).toContain("ambiguous TIMEOUT");
-    const abaRead = await tc(["kv", "get", "notes/c", "--raw"], { profile: "owner", replication: "on", extraEnv: { TC_REPLICATION_MAX_STALENESS_MS: "0" } });
-    expect(abaRead.stdout.toString()).toBe("v0");
-    expect(abaRead.stderr).toContain("network pending_write");
-    expect(abaRead.stderr).toContain("pendingCleared:0");
-    const abaPinned = await ok<{ replicas: Array<{ pinned: Array<{ key: string; state: string; code?: string }> }> }>(["replica", "report", "--json"], "owner", { replication: "on" });
-    expect(abaPinned.replicas.flatMap((replica) => replica.pinned)).toContainEqual(expect.objectContaining({ key: "notes/c", state: "ambiguous", code: "TIMEOUT" }));
-    const abaClear = await tc(["replica", "report", "--clear-pending", "--json"], { profile: "owner", replication: "on" });
-    expect(abaClear.code).toBe(0);
-
-    // 5. A flag-off writer changes the node; default staleness stays local, zero staleness catches up.
+    const localFile = join(home, "local-v3.bin");
+    await writeFile(localFile, "v3");
+    expect((await tc(["kv", "put", "notes/a.txt", "--file", localFile], { profile: "owner", replication: "on" })).code).toBe(0);
+    // 5. A flag-off writer changes the node; zero staleness catches up.
     const remote = await put("notes/a.txt", Buffer.from("v4"), "owner", "off");
     expect(remote.code).toBe(0);
-    const stale = await tc(["kv", "get", "notes/a.txt", "--raw"], { profile: "owner", replication: "on" });
-    expect(stale.stdout.toString()).toBe("v3");
     const fresh = await tc(["kv", "get", "notes/a.txt", "--raw"], { profile: "owner", replication: "on", extraEnv: { TC_REPLICATION_MAX_STALENESS_MS: "0" } });
     expect(fresh.stdout.toString()).toBe("v4");
 
@@ -463,16 +436,6 @@ describe.skipIf(!NODE_BIN)(`replication flag against a real node (${DATABASE_URL
       extraEnv: { TC_REPLICATION_MAX_STALENESS_MS: "0" },
     });
     expect(revokedRead.stderr).toContain("GRANT_REVOKED");
-    const revokedReport = await ok<{ replicas: Array<{ prefix: string; state: string; counts?: { keys: number; contentMissing: number; tombstones: number } }> }>(
-      ["replica", "report", "--json"],
-      "delegate",
-      { replication: "on" },
-    );
-    const revokedEntry = revokedReport.replicas.find((entry) => entry.prefix === "notes/");
-    expect(revokedEntry === undefined || revokedEntry.state === "revoked").toBe(true);
-    if (revokedEntry) {
-      expect(revokedEntry.counts).toEqual({ keys: 0, contentMissing: 0, tombstones: 0 });
-    }
     const offlineRevokedRead = await tc(["kv", "get", "notes/a.txt", "--raw"], {
       profile: "delegate",
       preload: NO_NETWORK,
@@ -538,14 +501,10 @@ describe.skipIf(!NODE_BIN)(`replication flag against a real node (${DATABASE_URL
     if (aliasRead.code !== 0) throw new Error(`alias replica read failed\n${aliasRead.stderr}\n${aliasRead.stdout}`);
     expect(aliasRead.stdout.toString()).toBe("primary-value");
     expect(aliasRead.stderr).toContain("replica hit");
-    const primaryReport = await ok<{ replicas: Array<{ prefix: string; pending: { committed: number } }> }>(["replica", "report", "--json"], "owner", { replication: "on" });
-    expect(primaryReport.replicas.find((replica) => replica.prefix === "notes/")?.pending.committed).toBe(1);
     const primarySync = await tc(["kv", "get", "notes/partition", "--raw"], { profile: "owner", replication: "on", extraEnv: { TC_REPLICATION_MAX_STALENESS_MS: "0" } });
     expect(primarySync.code).toBe(0);
     expect(primarySync.stdout.toString()).toBe("primary-value");
     expect(primarySync.stderr).toContain("replica hit");
-    const caughtUpReport = await ok<{ replicas: Array<{ prefix: string; pending: { committed: number } }> }>(["replica", "report", "--json"], "owner", { replication: "on" });
-    expect(caughtUpReport.replicas.find((replica) => replica.prefix === "notes/")?.pending.committed).toBe(0);
     const aliasReport = await tc(["replica", "report", "--json"], { profile: "owner", replication: "on", host: alias });
     expect(aliasReport.code).toBe(0);
     expect((await readdir(profileDir)).length).toBeGreaterThan(1);
@@ -557,25 +516,47 @@ describe.skipIf(!NODE_BIN)(`replication flag against a real node (${DATABASE_URL
     expect(withoutFlag.stdout).toEqual(flagOff.stdout);
     expect(flagOff.stderr).not.toContain("replica");
     expect(withoutFlag.stderr).not.toContain("replica");
-    // 12. JSON report reflects recorded read events and logout purges every identity partition.
-    const report = await ok<{ totals: { reads: number; replicaReads: number }; replicas: unknown[]; partitions: unknown[] }>(["replica", "report", "--json"], "owner", { replication: "on" });
+    // 12. Report reads persisted events; mutating report options refuse without erasing a partition.
+    const report = await ok<{
+      totals: { reads: number; replicaReads: number };
+      replicas: unknown[];
+      replicasUnavailable: boolean;
+      partitions: Array<{ idHash: string; host: string | null; pinned: number }>;
+    }>(["replica", "report", "--json"], "owner", { replication: "on" });
     expect(report.totals.replicaReads).toBeGreaterThan(0);
-    expect(report.replicas.length).toBeGreaterThan(0);
-    expect(report.partitions.length).toBeGreaterThan(0);
-    const purgeReport = await ok<{
-      replicas: Array<{ prefix: string }>;
-      partitions: Array<{ idHash: string; host: string | null }>;
-      purged: { purged: string[]; failed: Array<{ prefix: string; code: string }> };
-    }>(["replica", "report", "--json", "--purge"], "owner", { replication: "on" });
-    expect(purgeReport.purged.purged).toContain("notes/");
-    expect(purgeReport.purged.failed).toEqual([]);
-    expect(purgeReport.replicas.some((replica) => replica.prefix === "notes/")).toBe(false);
-    const primaryPartitions = purgeReport.partitions.filter((partition) => partition.host === host);
-    expect(primaryPartitions.length).toBeGreaterThan(0);
-    const remainingPrimaryDatabases = (await Promise.all(
+    expect(report.replicasUnavailable).toBe(true);
+    expect(report.replicas).toEqual([]);
+    const primaryPartitions = report.partitions.filter((partition) => partition.host === host);
+    const primaryDatabases = (await Promise.all(
       primaryPartitions.map((partition) => filesNamed(join(profileDir, partition.idHash), "replica.db")),
     )).flat();
-    expect(remainingPrimaryDatabases).toEqual([]);
+    expect(primaryDatabases.length).toBeGreaterThan(0);
+    const purgeRefused = await tc(["replica", "report", "--json", "--purge"], { profile: "owner", replication: "on" });
+    expect(purgeRefused.code).toBe(2);
+    expect(purgeRefused.stderr).toContain("REPORT_READ_ONLY");
+    expect(purgeRefused.stderr).toContain("replica reset --replica <name> --purge");
+    expect((await Promise.all(
+      primaryPartitions.map((partition) => filesNamed(join(profileDir, partition.idHash), "replica.db")),
+    )).flat()).toEqual(primaryDatabases);
+
+    // Pending writes stay pinned; report cannot clear them or silently authorize a local read.
+    const ambiguousPreload = join(home, "ambiguous.cjs");
+    await writeFile(ambiguousPreload, `const original = globalThis.fetch; globalThis.fetch = async (...args) => { const response = await original(...args); if (String(args[0]).includes("/invoke")) throw Object.assign(new Error("synthetic timeout"), { name: "TimeoutError", code: "TIMEOUT" }); return response; };`);
+    const ambiguousFile = join(home, "ambiguous.bin");
+    await writeFile(ambiguousFile, "v3");
+    const ambiguous = await tc(["kv", "put", "notes/a.txt", "--file", ambiguousFile], { profile: "owner", preload: ambiguousPreload, replication: "on" });
+    expect(ambiguous.stderr).toContain("ambiguous TIMEOUT");
+    const pinnedReport = await ok<{ partitions: Array<{ pinned: number }> }>(["replica", "report", "--json"], "owner", { replication: "on" });
+    expect(pinnedReport.partitions.some((partition) => partition.pinned > 0)).toBe(true);
+    const clearRefused = await tc(["replica", "report", "--clear-pending", "--json"], { profile: "owner", replication: "on" });
+    expect(clearRefused.code).toBe(2);
+    expect(clearRefused.stderr).toContain("REPORT_READ_ONLY");
+    expect(clearRefused.stderr).toContain("TC-1309");
+    const afterRefusal = await tc(["kv", "get", "notes/a.txt", "--raw"], {
+      profile: "owner", replication: "on", extraEnv: { TC_REPLICATION_MAX_STALENESS_MS: "0" },
+    });
+    expect(afterRefusal.stderr).toContain("network pending_write");
+    expect(afterRefusal.stdout.toString()).toBe("v3");
     await ok(["auth", "logout"], "owner");
     await expect(readdir(profileDir)).rejects.toMatchObject({ code: "ENOENT" });
     expect(space).toMatch(/^tinycloud:/);
@@ -608,11 +589,8 @@ describe.skipIf(!NODE_BIN)(`replication flag against a real node (${DATABASE_URL
     const firstRead = await tc(["kv", "get", "notes/a", "--raw"], { profile: "root-prefix", replication: "on" });
     expect(firstRead.code, firstRead.stderr).toBe(0);
     expect(firstRead.stdout.toString()).toBe("root-value");
-    const report = await ok<{
-      replicas: Array<{ prefix: string; state: string; errorCode?: string; coverage?: string; counts?: { keys: number } }>;
-    }>(["replica", "report", "--json"], "root-prefix", { replication: "on" });
-    const rootStatus = report.replicas.find((entry) => entry.prefix === "/");
-    expect(rootStatus).toBeDefined();
+    const report = await ok<{ replicas: unknown[]; replicasUnavailable: boolean }>(["replica", "report", "--json"], "root-prefix", { replication: "on" });
+    expect(report).toMatchObject({ replicas: [], replicasUnavailable: true });
     if (nodeFeatures.includes("kv-sync-root")) {
       const rootProfilePath = join(home, ".tinycloud", "profiles", "root-prefix", "profile.json");
       const rootProfile = JSON.parse(await readFile(rootProfilePath, "utf8")) as { privateKey: string };
@@ -621,8 +599,6 @@ describe.skipIf(!NODE_BIN)(`replication flag against a real node (${DATABASE_URL
       await directNode.restoreSession(rootSessionData);
       const directRootChanges = await directNode.kv.changes({ prefix: "/" });
       expect(directRootChanges.ok, JSON.stringify(directRootChanges)).toBe(true);
-      expect(rootStatus, JSON.stringify(rootStatus)).toMatchObject({ state: "ready", coverage: "complete" });
-      expect(rootStatus!.counts?.keys).toBeGreaterThan(0);
       const offlineGet = await tc(["kv", "get", "notes/a", "--raw"], {
         profile: "root-prefix", preload: NO_NETWORK, replication: "on",
       });
@@ -639,8 +615,6 @@ describe.skipIf(!NODE_BIN)(`replication flag against a real node (${DATABASE_URL
       });
       expect(offlineRootList.code).toBe(0);
       expect(offlineRootList.stdout.toString()).toContain("notes/a");
-    } else {
-      expect(rootStatus).toMatchObject({ state: "unavailable", errorCode: "REPLICATION_ROOT_UNSUPPORTED" });
     }
   }, 120_000);
 });

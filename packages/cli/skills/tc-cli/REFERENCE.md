@@ -268,11 +268,12 @@ and sync details to stderr. The event log is
 `profiles/<profile>/replication/events.jsonl` under `TC_HOME`; it records
 operational metadata, not values.
 
-`tinycloud replica report [--since 24h]` renders read source/reason counts, hit ratio,
-latency and staleness percentiles, sync/write outcomes, recent divergences,
-replica/grant status, and pinned keys. `--json` emits the aggregate as JSON.
-`--clear-pending` clears pending replica writes and prints a warning: commits
-that arrive later can be observed as stale until a subsequent sync.
+`tinycloud replica report [--since 24h]` reads persisted event and identity
+partition files only. It renders read source/reason counts, hit ratio, latency
+and staleness percentiles, sync/write outcomes, and recent divergences; JSON
+marks live replica status unavailable. It never starts a replication runtime.
+`--purge` refuses; use `tinycloud replica reset --replica <name> --purge` for
+a named local replica. `--clear-pending` is temporarily unavailable (TC-1309).
 `auth logout` purges legacy and flag-owned replicas unless `--keep-replicas`
 is used.
 

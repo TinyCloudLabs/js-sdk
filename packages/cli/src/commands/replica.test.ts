@@ -27,7 +27,7 @@ const { ProfileManager } = await import("../config/profiles.js");
 const { PROFILES_DIR } = await import("../config/constants.js");
 const { createReplica, profileGuard, registerReplicaCommand, replicaSecretsWarning } = await import("./replica.js");
 const { removeProfileReplicas } = await import("../lib/profile-replicas.js");
-const { profilePath } = await import("@tinycloud/operations/state");
+const { profilePath, withPinnedProfileDirectory } = await import("@tinycloud/operations/state");
 const { createReplicationEventSink } = await import("../lib/replication-log.js");
 const { registerReplication, closeReplication } = await import("../lib/replication-registry.js");
 
@@ -384,150 +384,98 @@ describe("replica reset purge containment", () => {
     }
   });
 
-  test("report keeps local diagnostics scoped to the selected profile after a directory swap", async () => {
-    await createProfile("victim");
-    const partition = join(PROFILES_DIR, "victim", "replication", "a".repeat(26));
-    await mkdir(partition, { recursive: true });
-    await writeFile(join(partition, "identity.json"), JSON.stringify({ host: "victim.example", space: "victim-space" }));
-    const selected = join(PROFILES_DIR, PROFILE);
-    const originalResolve = ProfileManager.resolveContext;
-    let swapped = false;
-    ProfileManager.resolveContext = async function (globals) {
-      const context = await originalResolve.call(this, globals);
-      if (!swapped) {
-        swapped = true;
-        await rename(selected, `${selected}.moved`);
-        await symlink(join(PROFILES_DIR, "victim"), selected);
-      }
-      return context;
-    };
-    try {
-      const result = await readFromCli(PROFILE, ["replica", "report"]);
-      expect(swapped).toBe(true);
-      expect(result.stdout).not.toContain("victim.example");
-      expect(result.stdout).not.toContain("victim-space");
-    } finally {
-      ProfileManager.resolveContext = originalResolve;
-    }
-  });
-
-  test.skipIf(process.platform !== "linux")("report closes its replication runtime before releasing the pinned profile", async () => {
-    const originalResolve = ProfileManager.resolveContext;
-    const selected = await stat(join(PROFILES_DIR, PROFILE));
-    let closedWhilePinned = false;
-    ProfileManager.resolveContext = async function (globals) {
-      const context = await originalResolve.call(this, globals);
-      const root = profilePath(PROFILE);
-      const sink = createReplicationEventSink(root, { debug: false, quiet: true });
-      registerReplication(PROFILE, {
-        status: async () => [],
-        sync: async () => undefined,
-        purge: async () => ({ purged: [], failed: [] }),
-        clearPending: async () => 0,
-        close: async () => {
-          const pinned = await stat(root).then(
-            (entry) => entry.isDirectory() && entry.dev === selected.dev && entry.ino === selected.ino,
-            () => false,
-          );
-          if (!pinned) return;
-          sink({ type: "replication.state", at: new Date().toISOString(), space: "default", replica: "notes/", state: "closed" });
-          closedWhilePinned = true;
-        },
-      });
-      return context;
-    };
-    try {
-      const result = await readFromCli(PROFILE, ["replica", "report"]);
-      expect(result.exited).toBe(false);
-      expect(closedWhilePinned).toBe(true);
-      const events = await readFile(join(PROFILES_DIR, PROFILE, "replication", "events.jsonl"), "utf8");
-      expect(events).toContain('"state":"closed"');
-    } finally {
-      ProfileManager.resolveContext = originalResolve;
-      await closeReplication();
-    }
-  });
-
-  test.skipIf(process.platform !== "linux")("report times out nonzero but retains the profile pin until a late close settles", async () => {
-    const originalResolve = ProfileManager.resolveContext;
-    const selected = await stat(join(PROFILES_DIR, PROFILE));
-    const entered = Promise.withResolvers<void>();
-    const release = Promise.withResolvers<void>();
-    let root = "";
-    let closedWhilePinned = false;
-    ProfileManager.resolveContext = async function (globals) {
-      const context = await originalResolve.call(this, globals);
-      root = profilePath(PROFILE);
-      const sink = createReplicationEventSink(root, { debug: false, quiet: true });
-      registerReplication(PROFILE, {
-        status: async () => [],
-        sync: async () => undefined,
-        purge: async () => ({ purged: [], failed: [] }),
-        clearPending: async () => 0,
-        close: async () => {
-          entered.resolve();
-          await release.promise;
-          const pinned = await stat(root).then(
-            (entry) => entry.isDirectory() && entry.dev === selected.dev && entry.ino === selected.ino,
-            () => false,
-          );
-          if (!pinned) return;
-          sink({ type: "replication.state", at: new Date().toISOString(), space: "default", replica: "notes/", state: "closed" });
-          closedWhilePinned = true;
-        },
-      });
-      return context;
-    };
-    let running: ReturnType<typeof readFromCli> | undefined;
-    try {
-      running = readFromCli(PROFILE, ["replica", "report"]);
-      await entered.promise;
-      const elapsed = Promise.withResolvers<void>();
-      setTimeout(elapsed.resolve, 3_300);
-      await elapsed.promise;
-      const pinnedAfterDeadline = await stat(root).then(
-        (entry) => entry.isDirectory() && entry.dev === selected.dev && entry.ino === selected.ino,
-        () => false,
-      );
-      release.resolve();
-      const result = await running;
-      expect(pinnedAfterDeadline).toBe(true);
-      expect(closedWhilePinned).toBe(true);
-      expect(result.exited).toBe(true);
-      expect(JSON.parse(result.stderr)).toMatchObject({ error: { code: "REPLICATION_CLOSE_TIMEOUT" } });
-      expect(result.stderr).toContain("replication close did not finish");
-      const events = await readFile(join(PROFILES_DIR, PROFILE, "replication", "events.jsonl"), "utf8");
-      expect(events).toContain('"state":"closed"');
-    } finally {
-      release.resolve();
-      if (running) await running;
-      ProfileManager.resolveContext = originalResolve;
-      await closeReplication();
-    }
-  }, 10_000);
-
-  test("report refuses an absent profile even when it becomes a victim alias during context resolution", async () => {
+  test("report refuses a whole-profile alias without reading the target diagnostics", async () => {
     await createProfile("victim");
     const partition = join(PROFILES_DIR, "victim", "replication", "a".repeat(26));
     await mkdir(partition, { recursive: true });
     await writeFile(join(partition, "identity.json"), JSON.stringify({ host: "victim.example", space: "victim-space" }));
     const selected = join(PROFILES_DIR, PROFILE);
     await rm(selected, { recursive: true });
-    const originalResolve = ProfileManager.resolveContext;
-    ProfileManager.resolveContext = async function (globals) {
-      const context = await originalResolve.call(this, globals);
-      await symlink(join(PROFILES_DIR, "victim"), selected);
-      return context;
-    };
+    await symlink(join(PROFILES_DIR, "victim"), selected);
+    const result = await readFromCli(PROFILE, ["replica", "report"]);
+    expect(result.exited).toBe(true);
+    expect(JSON.parse(result.stderr)).toMatchObject({ error: { code: "PROFILE_SYMLINK" } });
+    expect(result.stdout).toBe("");
+  });
+
+  test("report reads persisted events without starting replication", async () => {
+    const root = join(PROFILES_DIR, PROFILE, "replication");
+    await mkdir(root, { recursive: true });
+    const eventsPath = join(root, "events.jsonl");
+    const original = Buffer.from(`${JSON.stringify({
+      type: "replication.read",
+      at: new Date().toISOString(),
+      source: "replica",
+      reason: "hit",
+      latencyMs: 1,
+      stalenessMs: 0,
+    })}\n`);
+    await writeFile(eventsPath, original);
+    const previousReplication = process.env.TC_REPLICATION;
+    process.env.TC_REPLICATION = "1";
     try {
       const result = await readFromCli(PROFILE, ["replica", "report"]);
-      expect(result.exited).toBe(true);
-      expect(JSON.parse(result.stderr)).toMatchObject({ error: { code: "PROFILE_NOT_FOUND" } });
-      expect(result.stdout).toBe("");
-      expect(result.stdout).not.toContain("victim.example");
+      expect(result.exited).toBe(false);
+      expect(JSON.parse(result.stdout)).toMatchObject({ totals: { reads: 1 }, replicasUnavailable: true });
+      expect(await readFile(eventsPath)).toEqual(original);
     } finally {
-      ProfileManager.resolveContext = originalResolve;
+      if (previousReplication === undefined) delete process.env.TC_REPLICATION;
+      else process.env.TC_REPLICATION = previousReplication;
     }
+  });
+
+  test.skipIf(process.platform !== "linux")("report never closes a control whose descriptor now names another profile", async () => {
+    await createProfile("victim");
+    const victimEvents = join(PROFILES_DIR, "victim", "replication", "events.jsonl");
+    await mkdir(join(PROFILES_DIR, "victim", "replication"), { recursive: true });
+    const original = Buffer.from("victim-event-sentinel\n");
+    await writeFile(victimEvents, original);
+    await withPinnedProfileDirectory("victim", async () => {
+      const reusedRoot = profilePath("victim");
+      const sink = createReplicationEventSink(reusedRoot, { debug: false, quiet: true });
+      let emitOnClose = true;
+      registerReplication(PROFILE, {
+        status: async () => [],
+        sync: async () => undefined,
+        purge: async () => ({ purged: [], failed: [] }),
+        clearPending: async () => 0,
+        close: async () => {
+          if (emitOnClose) sink({ type: "replication.state", at: new Date().toISOString(), space: "default", replica: "notes/", state: "closed" });
+        },
+      });
+      try {
+        const result = await readFromCli(PROFILE, ["replica", "report"]);
+        expect(result.exited).toBe(false);
+        expect(await readFile(victimEvents)).toEqual(original);
+        expect(JSON.parse(result.stdout)).toMatchObject({ replicasUnavailable: true });
+      } finally {
+        emitOnClose = false;
+        await closeReplication();
+      }
+    });
+  });
+
+  test.each([
+    ["--purge", "replica reset --replica <name> --purge"],
+    ["--clear-pending", "TC-1309"],
+  ])("report refuses %s without starting a runtime", async (option, guidance) => {
+    const result = await readFromCli(PROFILE, ["replica", "report", option]);
+    expect(result.exited).toBe(true);
+    expect(result.stdout).toBe("");
+    expect(JSON.parse(result.stderr)).toMatchObject({ error: { code: "REPORT_READ_ONLY" } });
+    expect(result.stderr).toContain(guidance);
+  });
+
+  test("report refuses an absent profile without reading another profile's diagnostics", async () => {
+    await createProfile("victim");
+    const partition = join(PROFILES_DIR, "victim", "replication", "a".repeat(26));
+    await mkdir(partition, { recursive: true });
+    await writeFile(join(partition, "identity.json"), JSON.stringify({ host: "victim.example", space: "victim-space" }));
+    await rm(join(PROFILES_DIR, PROFILE), { recursive: true });
+    const result = await readFromCli(PROFILE, ["replica", "report"]);
+    expect(result.exited).toBe(true);
+    expect(JSON.parse(result.stderr)).toMatchObject({ error: { code: "PROFILE_NOT_FOUND" } });
+    expect(result.stdout).toBe("");
   });
 
   test("a symlinked replica.db cannot acquire a lease in the victim database", async () => {

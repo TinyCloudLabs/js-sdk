@@ -8,7 +8,6 @@ type RegistryState = {
   sigintHandler?: () => void;
   sigtermHandler?: () => void;
   closing?: Promise<boolean>;
-  closeSettled?: Promise<void>;
   generation: number;
 };
 
@@ -24,10 +23,7 @@ const CLOSE_TIMEOUT_MS = 3_000;
 const scheduleTimeout: ReplicationCloseScheduler = (callback, delayMs) => setTimeout(callback, delayMs);
 
 function stopForSignal(signal: "SIGINT" | "SIGTERM"): void {
-  void closeReplication().then(
-    () => waitForReplicationCloseSettlement(),
-    () => waitForReplicationCloseSettlement(),
-  ).finally(() => {
+  void closeReplication().finally(() => {
     process.exit(signal === "SIGINT" ? 130 : 143);
   });
 }
@@ -65,88 +61,71 @@ export function registeredReplications(): ReadonlyMap<string, ReplicationControl
   return state.controls;
 }
 
-/** Drain registered controllers; the result has a three-second budget, but shutdown retains its lifetime until all closes settle. */
+/** Drain registered controllers; all generations share one three-second shutdown budget. */
 export function closeReplication(schedule: ReplicationCloseScheduler = scheduleTimeout): Promise<boolean> {
   if (state.closing) return state.closing;
   removeSignalHandlers();
 
-  const closing = Promise.withResolvers<boolean>();
-  const settled = Promise.withResolvers<void>();
-  state.closing = closing.promise;
-  state.closeSettled = settled.promise;
+  let resolveClosing!: (timedOut: boolean) => void;
+  let rejectClosing!: (error: unknown) => void;
+  const closing = new Promise<boolean>((resolve, reject) => {
+    resolveClosing = resolve;
+    rejectClosing = reject;
+  });
+  state.closing = closing;
 
   void (async () => {
-    let timeout: NodeJS.Timeout | undefined;
-    const deadline = Promise.withResolvers<boolean>();
-    const inflight = new Set<Promise<void>>();
-    const startClose = (control: ReplicationControl): Promise<void> => {
-      const job = Promise.resolve().then(() => control.close()).then(
-        () => undefined,
-        () => undefined,
-      );
-      inflight.add(job);
-      void job.then(() => inflight.delete(job));
-      return job;
-    };
-    const drainQueued = (): Promise<void>[] => {
-      const pending = [...state.allControls];
+    let timeout!: NodeJS.Timeout;
+    const deadline = new Promise<boolean>((resolve) => {
+      timeout = schedule(() => resolve(true), CLOSE_TIMEOUT_MS);
+    });
+    let timedOut = false;
+
+    const abandonQueuedControls = (): void => {
+      for (const control of state.allControls) {
+        void Promise.resolve().then(() => control.close()).catch(() => undefined);
+      }
       state.controls.clear();
       state.allControls.clear();
-      return pending.map(startClose);
-    };
-    const settleRemaining = async (): Promise<void> => {
-      while (inflight.size > 0 || state.allControls.size > 0) {
-        if (state.allControls.size > 0) drainQueued();
-        await Promise.all([...inflight]);
-      }
     };
 
     try {
-      timeout = schedule(() => deadline.resolve(true), CLOSE_TIMEOUT_MS);
-      let timedOut = false;
       while (!timedOut) {
         while (state.allControls.size > 0) {
           const generation = state.generation;
-          const drained = Promise.all(drainQueued()).then(() => false);
-          timedOut ||= await Promise.race([drained, deadline.promise]);
-          if (timedOut) break;
+          const pending = [...state.allControls];
+          state.controls.clear();
+          state.allControls.clear();
+          const drained = Promise.allSettled(pending.map((control) => Promise.resolve().then(() => control.close())))
+            .then(() => false);
+          timedOut ||= await Promise.race([drained, deadline]);
+          if (timedOut) {
+            abandonQueuedControls();
+            break;
+          }
           if (state.generation === generation && state.allControls.size === 0) break;
         }
 
         if (timedOut) break;
         // Keep the shared close promise pending through this turn. A registration
         // arriving after a generation settles is picked up before shutdown resolves.
-        const turn = Promise.withResolvers<boolean>();
-        setImmediate(() => turn.resolve(false));
-        timedOut ||= await Promise.race([turn.promise, deadline.promise]);
-        if (!timedOut && state.allControls.size === 0) break;
+        const turn = new Promise<boolean>((resolve) => setImmediate(() => resolve(false)));
+        timedOut ||= await Promise.race([turn, deadline]);
+        if (timedOut) abandonQueuedControls();
+        else if (state.allControls.size === 0) break;
       }
 
-      if (timedOut) {
-        drainQueued();
-        closing.resolve(true);
-        // The deadline is only a response deadline. A pinned profile path used
-        // by an event sink must outlive every close, including queued controls.
-        await settleRemaining();
-      } else {
-        closing.resolve(false);
-      }
+      state.closing = undefined;
+      if (state.allControls.size === 0) removeSignalHandlers();
+      resolveClosing(timedOut);
     } catch (error) {
-      closing.reject(error);
-      await settleRemaining();
+      state.closing = undefined;
+      if (state.allControls.size === 0) removeSignalHandlers();
+      rejectClosing(error);
     } finally {
       clearTimeout(timeout);
-      state.closing = undefined;
-      state.closeSettled = undefined;
-      if (state.allControls.size === 0) removeSignalHandlers();
-      settled.resolve();
     }
   })();
 
-  return closing.promise;
-}
-
-/** Wait for actual close work, not just the bounded close result. */
-export function waitForReplicationCloseSettlement(): Promise<void> {
-  return state.closeSettled ?? Promise.resolve();
+  return closing;
 }

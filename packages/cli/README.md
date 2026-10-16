@@ -171,9 +171,11 @@ whole space. Whole-space replication requires `kv-sync-root` support and
 `--replication-allow-secrets`, because it includes `vault/`. Replication needs
 unrestricted `get` and explicit `sync` on that folder or broader; an exact-key
 grant never qualifies. Bare replica prefixes are rejected; use `notes/`.
-Use `tc replica report` for event aggregates and pinned keys; `--clear-pending`
-prints a warning because later commits can be read as stale until a subsequent
-sync. `auth logout` removes both legacy replicas and the flag-owned
+Use `tc replica report` for read-only aggregates of persisted replication events
+and identity partitions. Live replica status is unavailable there; `--purge`
+refuses and points to `tc replica reset --replica <name> --purge` for named
+local replicas. `--clear-pending` is temporarily unavailable (TC-1309).
+`auth logout` removes both legacy replicas and the flag-owned
 `replication/` root; `auth logout --keep-replicas` keeps both. B-int release
 acceptance must verify the OpenKey `tc auth request --grant` fallback against
 a real OpenKey using a test account and no production writes: approve the
