@@ -103,6 +103,11 @@ jobs:
       - name: Build web-sdk for the Phase 1 dist acceptance
         run: bun run --cwd packages/web-sdk build
 
+      - name: Prove built web core and opt-in replica share signed-session authority
+        run: |
+          bun packages/web-sdk/scripts/check-replica-built-entry.ts mjs
+          bun packages/web-sdk/scripts/check-replica-built-entry.ts cjs
+
       - name: Check Phase 1 web-sdk dist and test baseline
         env:
           REPLICA_BUDGET_PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
