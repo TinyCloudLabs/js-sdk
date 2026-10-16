@@ -179,8 +179,10 @@ signed result before saving its new key, session and replica stamp. Safari may
 block the HTTPS page's plain-HTTP loopback callback: use an interactive CLI
 terminal and paste the same one-line code shown by OpenKey, or start with
 `tc auth login --method openkey --replication-prefix notes/ --owner DID --paste`
-for a headless terminal. Approval and paste expire after five minutes; retry
-starts a new session key and approval URL.
+for a headless terminal. Non-TTY `--no-popup` cannot accept a paste; if that
+callback fails, it exits nonzero at the five-minute expiry with a `--paste`
+retry hint and discards the candidate key. Restarting requires a new approval
+and cannot reuse the old signed code.
 
 Use `tc replica report` for event aggregates and pinned keys; `--clear-pending`
 prints a warning because later commits can be read as stale until a subsequent

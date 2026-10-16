@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createProfileReplicaPurge, PrivateKeySigner, REPLICA_LOGOUT_PENDING_FILE } from "@tinycloud/node-sdk";
+import { SqliteReplicaStore } from "@tinycloud/replica/sqlite";
 import { profileConfigPath, profilePath, sessionPath, withProfileLock, withTinyCloudStateRoot, writeJsonAtomic } from "@tinycloud/operations/state";
 import { readGateSnapshot } from "@tinycloud/replica/profile-gate";
 
@@ -66,8 +67,59 @@ test("a crash immediately after durable marker write removes both credentials be
   expect((await readGateSnapshot(paths.dir))?.principalHash).toBeNull();
 }, 30_000);
 
-test("orphan replica writes refuse plain logout until explicit discard, then shred both credentials and root", async () => {
-  const home = await mkdtemp(join(tmpdir(), "tc858-orphan-logout-cli-"));
+for (const layout of ["unknown-child", "missing-pending"] as const) test(
+  `orphan ${layout} refuses plain logout until explicit discard, then shreds both credentials and root`,
+  async () => {
+    const home = await mkdtemp(join(tmpdir(), "tc858-orphan-logout-cli-"));
+    homes.push(home);
+    const node = Bun.serve({ port: 0, fetch(request) {
+      const path = new URL(request.url).pathname;
+      if (path === "/info") return Response.json({ protocol: 1, version: "1.0.0", features: [] });
+      if (path === "/delegate" && request.method === "POST") return Response.json({ activated: [], skipped: [] });
+      return new Response("not found", { status: 404 });
+    } });
+    servers.push(node);
+    const ownerDid = `did:pkh:eip155:1:${await new PrivateKeySigner(OWNER_KEY).getAddress()}`;
+    const paths = await withTinyCloudStateRoot(home, async () => {
+      await writeJsonAtomic(profileConfigPath(PROFILE), {
+        name: PROFILE, host: node.url.origin, chainId: 1, spaceName: "default", did: ownerDid,
+        ownerDid, privateKey: OWNER_KEY, authMethod: "local", posture: "local-owner-key",
+        createdAt: "2026-10-01T00:00:00.000Z",
+      });
+      return { dir: profilePath(PROFILE), session: sessionPath(PROFILE) };
+    });
+    expect((await run(home, ["auth", "login", "--method", "local", "--replication-prefix", "notes/"])).exitCode).toBe(0);
+    const key = join(paths.dir, "key.json");
+    const sessionBefore = await readFile(paths.session);
+    const keyBefore = await readFile(key);
+    await rm(join(paths.dir, "replica-gate.json"));
+    const pendingDir = layout === "missing-pending"
+      ? join(paths.dir, "replication", "a".repeat(26))
+      : join(paths.dir, "replication", "unknown-child");
+    await mkdir(pendingDir, { recursive: true });
+    const uncertain = layout === "missing-pending" ? join(pendingDir, "identity.json") : join(pendingDir, "pending.json");
+    await writeFile(uncertain, layout === "missing-pending"
+      ? JSON.stringify({ host: node.url.origin, space: `tinycloud:pkh:eip155:1:${ownerDid.split(":").at(-1)}:default`, principal: ownerDid })
+      : "{uncertain local writes");
+    const refused = await run(home, ["auth", "logout"]);
+    expect(refused.exitCode).toBeGreaterThan(0);
+    expect(refused.stderr).toContain("REPLICA_GATED");
+    expect(refused.stderr).toContain("--discard-local-changes");
+    expect(await readFile(paths.session)).toEqual(sessionBefore);
+    expect(await readFile(key)).toEqual(keyBefore);
+    expect(await readFile(uncertain, "utf8")).toContain(layout === "missing-pending" ? ownerDid : "uncertain local writes");
+    const discarded = await run(home, ["auth", "logout", "--discard-local-changes"]);
+    expect(discarded.exitCode).toBe(0);
+    await expect(readFile(paths.session)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(readFile(key)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(readFile(uncertain)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(readFile(join(paths.dir, REPLICA_LOGOUT_PENDING_FILE))).rejects.toMatchObject({ code: "ENOENT" });
+    expect(JSON.parse(await readFile(join(paths.dir, "profile.json"), "utf8")).authSignedOut).toBe(true);
+  }, 30_000,
+);
+
+test("inactive gate marker survives credential-unlink crash and recovers legacy data before reopening profile", async () => {
+  const home = await mkdtemp(join(tmpdir(), "tc858-inactive-logout-cli-"));
   homes.push(home);
   const node = Bun.serve({ port: 0, fetch(request) {
     const path = new URL(request.url).pathname;
@@ -86,25 +138,40 @@ test("orphan replica writes refuse plain logout until explicit discard, then shr
     return { dir: profilePath(PROFILE), session: sessionPath(PROFILE) };
   });
   expect((await run(home, ["auth", "login", "--method", "local", "--replication-prefix", "notes/"])).exitCode).toBe(0);
+  const legacyDir = join(paths.dir, "replicas", "notes");
+  const legacy = join(legacyDir, "replica.db");
   const key = join(paths.dir, "key.json");
-  const sessionBefore = await readFile(paths.session);
-  const keyBefore = await readFile(key);
-  await rm(join(paths.dir, "replica-gate.json"));
-  const pendingDir = join(paths.dir, "replication", "unknown-child");
-  await mkdir(pendingDir, { recursive: true });
-  await writeFile(join(pendingDir, "pending.json"), "{uncertain local writes");
-  const refused = await run(home, ["auth", "logout"]);
-  expect(refused.exitCode).toBeGreaterThan(0);
-  expect(refused.stderr).toContain("REPLICA_GATED");
-  expect(refused.stderr).toContain("--discard-local-changes");
-  expect(await readFile(paths.session)).toEqual(sessionBefore);
-  expect(await readFile(key)).toEqual(keyBefore);
-  expect(await readFile(join(pendingDir, "pending.json"), "utf8")).toContain("uncertain local writes");
-  const discarded = await run(home, ["auth", "logout", "--discard-local-changes"]);
-  expect(discarded.exitCode).toBe(0);
+  const session = JSON.parse(await readFile(paths.session, "utf8")) as { spaceId: string; verificationMethod: string };
+  const store = await SqliteReplicaStore.open(legacyDir, { create: true });
+  try {
+    await store.init({
+      name: "notes", replicaId: "r-test", host: node.url.origin, space: session.spaceId,
+      prefix: "notes/", deviceDid: session.verificationMethod, allowSecrets: false,
+      localReadPolicy: "whileGrantValid", retentionGrantCid: null,
+    });
+  } finally {
+    await store.close();
+  }
+  const purge = createProfileReplicaPurge({
+    profileDir: paths.dir,
+    guard: <T>(section: () => Promise<T>): Promise<T> =>
+      withTinyCloudStateRoot(home, () => withProfileLock(PROFILE, section, { requireProfile: true })),
+  });
+  expect((await purge.deny({ reason: "sign_out", principal: ownerDid })).status).toBe("denied");
+  expect(await purge.prepareLogoutPending({ principal: ownerDid, discardLocalChanges: true }))
+    .toMatchObject({ v: 3, scope: "inactive_gate" });
+  expect(await readFile(paths.session, "utf8")).toContain("delegationCid");
+  expect(await readFile(key, "utf8")).toContain('"d"');
+  const deniedRead = await run(home, ["replica", "get", "notes/a"]);
+  expect(deniedRead.exitCode).toBeGreaterThan(0);
+  expect(deniedRead.stderr).toContain("REPLICA_GATED");
+  expect(deniedRead.stdout).not.toContain("ciphertext");
+  const status = await run(home, ["auth", "status"]);
+  expect(status.exitCode).toBe(0);
+  expect(JSON.parse(status.stdout)).toMatchObject({ authenticated: false, hasKey: false });
   await expect(readFile(paths.session)).rejects.toMatchObject({ code: "ENOENT" });
   await expect(readFile(key)).rejects.toMatchObject({ code: "ENOENT" });
-  await expect(readFile(join(pendingDir, "pending.json"))).rejects.toMatchObject({ code: "ENOENT" });
+  await expect(readFile(legacy)).rejects.toMatchObject({ code: "ENOENT" });
   await expect(readFile(join(paths.dir, REPLICA_LOGOUT_PENDING_FILE))).rejects.toMatchObject({ code: "ENOENT" });
   expect(JSON.parse(await readFile(join(paths.dir, "profile.json"), "utf8")).authSignedOut).toBe(true);
 }, 30_000);

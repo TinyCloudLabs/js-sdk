@@ -71,7 +71,7 @@ export async function recoverPendingLogout(name: string): Promise<void> {
   }), { requireProfile: true });
   if (report.failed.length || report.remaining) {
     throw new CLIError("REPLICA_PURGE_FAILED",
-      "A durable logout is pending. Network restore and replica reads remain blocked; retry this command to complete credential and replica cleanup.",
+      `A durable logout is pending (${report.failed.map(({ code }) => code).join(", ") || `${report.remaining} intents remaining`}). Network restore and replica reads remain blocked; retry this command to complete credential and replica cleanup.`,
       ExitCode.ERROR, { failed: report.failed, remaining: report.remaining });
   }
 }

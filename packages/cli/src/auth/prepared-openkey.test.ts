@@ -1,4 +1,4 @@
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, expect, test, vi } from "bun:test";
 import { ownerIdentitySigner, startPreparedOpenKeyHandoff } from "./prepared-openkey.js";
 
 const servers: Array<{ stop(closeActiveConnections?: boolean): void }> = [];
@@ -130,5 +130,29 @@ test("overlong prepared SIWE refuses the fragment rather than falling back to le
     expect(error).toMatchObject({ code: "V2_URL_TOO_LONG" });
   } finally {
     await flow?.complete(false);
+  }
+});
+
+test("headless callback expiry exits with a Safari paste retry hint and invalidates its state", async () => {
+  const api = Bun.serve({ port: 0, fetch: () => Response.json({ cancelled: true }) });
+  servers.push(api);
+  vi.useFakeTimers();
+  try {
+    const flow = await startPreparedOpenKeyHandoff({
+      prepared: { protocolVersion: 1, siwe: "original SDK SIWE", jwk: { kty: "OKP", crv: "Ed25519", x: "public", d: "private" },
+        host: "https://node.example", verificationMethod: "did:key:z6MkPrepared#z6MkPrepared" },
+      openKeyHost: "https://openkey.test", apiHost: api.url.origin, noPopup: true,
+    });
+    const callback = JSON.parse(Buffer.from(new URL(flow.url).hash.slice("#tv2=".length), "base64url").toString("utf8")).delivery.callback as string;
+    vi.advanceTimersByTime(300_000);
+    await expect(flow.result).rejects.toMatchObject({
+      code: "V2_EXPIRED", message: expect.stringContaining("Re-run with --paste (Safari may require it)"),
+    });
+    await expect(fetch(callback, {
+      method: "POST", headers: { Origin: "https://openkey.test", "Content-Type": "application/json" },
+      body: JSON.stringify({ transportVersion: 2, state: "A".repeat(43), result }),
+    })).rejects.toThrow();
+  } finally {
+    vi.useRealTimers();
   }
 });

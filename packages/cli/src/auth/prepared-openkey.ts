@@ -227,9 +227,15 @@ export async function startPreparedOpenKeyHandoff(options: {
         if (!delivered && !completed) rejectResult(invalid("CANCELLED", "Prepared OpenKey sign-in cancelled; no session was saved."));
       });
     }
+    if (!options.paste && !process.stdin.isTTY) {
+      console.error("This CLI cannot read a paste from non-interactive stdin. If the callback fails, re-run with --paste (Safari may require it).");
+    }
     timeout = setTimeout(() => {
       if (!delivered && !completed) {
-        rejectResult(invalid("V2_EXPIRED", "Prepared OpenKey handoff expired; restart login for a fresh SIWE."));
+        rejectResult(invalid("V2_EXPIRED",
+          !options.paste && !process.stdin.isTTY
+            ? "The browser could not reach the CLI. Re-run with --paste (Safari may require it). No session or key was saved."
+            : "Prepared OpenKey handoff expired; restart login for a fresh SIWE. No session or key was saved."));
         close();
         void cancel();
       }
