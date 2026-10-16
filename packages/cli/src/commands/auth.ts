@@ -7,7 +7,7 @@ import { lstat, mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { createInterface } from "node:readline";
 import type { IncomingMessage } from "node:http";
-import { TinyCloudNode, grantAuthRequest, principalDidEquals, REPLICA_LOGOUT_PENDING_FILE, signedCompactUcanExpiry, type PermissionEntry, type PortableDelegation, type ProfileReplicaDeferredToken, type ProfileReplicaLogoutPending, type RuntimeDelegationActivator, type TinyCloudSession } from "@tinycloud/node-sdk";
+import { TinyCloudNode, grantAuthRequest, principalDidEquals, REPLICA_LOGOUT_PENDING_FILE, signedCompactUcanExpiry, type PermissionEntry, type PortableDelegation, type ProfileReplicaApprovalEntry, type ProfileReplicaDeferredToken, type ProfileReplicaLogoutPending, type RuntimeDelegationActivator, type TinyCloudSession } from "@tinycloud/node-sdk";
 import { composeManifestRequest } from "@tinycloud/sdk-core";
 import { invokeOperation } from "@tinycloud/operations";
 import { profilePath } from "@tinycloud/operations/state";
@@ -340,7 +340,7 @@ async function revokeForLogout(ctx: CLIContext, discardLocalChanges: boolean): P
 /** Complete the same durable local logout after plain logout or an exact-CID node receipt. */
 export async function finishProfileLogout(
   ctx: CLIContext,
-  options: { keepReplicas?: boolean; discardLocalChanges?: boolean; online?: PreparedRemoteLogout; expectedSessionCid?: string } = {},
+  options: { keepReplicas?: boolean; discardLocalChanges?: boolean; approveInventory?: string; online?: PreparedRemoteLogout; expectedSessionCid?: string } = {},
 ): Promise<string[]> {
   const { online } = options;
   let replicasRemoved: string[] = [];
@@ -395,19 +395,57 @@ export async function finishProfileLogout(
         if (online) {
           marker = online.marker ? await purge.completeRemoteLogout({ principal }) : null;
         } else {
-          const approval = await preflightLogout(purge, principal, options.discardLocalChanges === true);
           let pendingMarker = false;
+          let remotePending = false;
           try {
-            await lstat(join(profilePath(ctx.profile), REPLICA_LOGOUT_PENDING_FILE));
+            const pending = JSON.parse(await readFile(
+              join(profilePath(ctx.profile), REPLICA_LOGOUT_PENDING_FILE), "utf8",
+            )) as { remotePending?: unknown };
             pendingMarker = true;
+            remotePending = pending.remotePending === true;
           } catch (error) {
             if (typeof error !== "object" || error === null || !("code" in error) || error.code !== "ENOENT") throw error;
           }
-          marker = pendingMarker && profile.authSignedOut === true && options.discardLocalChanges
-            ? await purge.reapproveLogoutPending({ principal, approval })
-            : await purge.prepareLogoutPending({
-              principal, approval, discardLocalChanges: options.discardLocalChanges === true,
-            });
+          // A changed pending inventory must issue its two-command challenge
+          // before an unapproved unknown path triggers the ordinary preflight
+          // refusal. The facade still refuses any deletion without consent.
+          const approval = await preflightLogout(
+            purge, principal, remotePending || options.discardLocalChanges === true,
+          );
+          if (options.approveInventory !== undefined && !remotePending) {
+            throw new CLIError("INVALID_ARGUMENT",
+              "--approve-inventory requires a pending remote logout with changed local files.",
+              ExitCode.USAGE_ERROR);
+          }
+          if (remotePending) {
+            try {
+              marker = options.approveInventory !== undefined
+                ? await purge.approveChangedPlainLogout({
+                    principal, approval, discardLocalChanges: true,
+                    inventoryApprovalToken: options.approveInventory,
+                  })
+                : await purge.abandonRemoteLogout({
+                    principal, approval, discardLocalChanges: options.discardLocalChanges === true,
+                  });
+            } catch (error) {
+              if (error instanceof Error && "inventoryApprovalToken" in error &&
+                  "inventoryApprovalEntries" in error && Array.isArray(error.inventoryApprovalEntries)) {
+                // These entries are the locked snapshot hashed into the SDK's
+                // challenge, not the earlier read-only CLI preflight.
+                process.stderr.write(`Inventory approval entries: ${JSON.stringify(
+                  error.inventoryApprovalEntries as ProfileReplicaApprovalEntry[],
+                )}\n`);
+                throw new CLIError("REPLICA_GATED", error.message, ExitCode.ERROR);
+              }
+              throw error;
+            }
+          } else {
+            marker = pendingMarker && profile.authSignedOut === true && options.discardLocalChanges
+              ? await purge.reapproveLogoutPending({ principal, approval })
+              : await purge.prepareLogoutPending({
+                  principal, approval, discardLocalChanges: options.discardLocalChanges === true,
+                });
+          }
         }
         if (marker) {
           const legacyRemoved: string[] = [];
@@ -593,6 +631,7 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
     .option("--keep-replicas", "Keep legacy replicas only when this profile has no replica gate or flag-owned state")
     .option("--revoke", "Revoke owner-controlled grants and the session CID on the node before local logout")
     .option("--discard-local-changes", "Approve deletion of the exact local replica paths and identities listed before logout; with --revoke, deletion waits for every node receipt")
+    .option("--approve-inventory <token>", "After a refused pending remote logout, confirm the exact changed paths printed by the previous command; requires --discard-local-changes")
     .action(async (options, cmd) => {
       try {
         const globalOpts = cmd.optsWithGlobals();
@@ -604,10 +643,20 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
           throw new CLIError("INVALID_ARGUMENT",
             "--discard-local-changes cannot be combined with --keep-replicas.", ExitCode.USAGE_ERROR);
         }
+        if (options.approveInventory !== undefined && !options.discardLocalChanges) {
+          throw new CLIError("INVALID_ARGUMENT",
+            "--approve-inventory requires --discard-local-changes.", ExitCode.USAGE_ERROR);
+        }
+        if (options.approveInventory !== undefined && (options.revoke || options.keepReplicas)) {
+          throw new CLIError("INVALID_ARGUMENT",
+            "--approve-inventory only applies to a separate plain logout after a refused pending remote revocation.",
+            ExitCode.USAGE_ERROR);
+        }
         const online = options.revoke ? await revokeForLogout(ctx, options.discardLocalChanges === true) : undefined;
         const replicasRemoved = await finishProfileLogout(ctx, {
           keepReplicas: options.keepReplicas,
           discardLocalChanges: options.discardLocalChanges,
+          approveInventory: options.approveInventory,
           online,
         });
         outputJson({

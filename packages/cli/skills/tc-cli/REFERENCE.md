@@ -294,6 +294,11 @@ paths, types and file identities. New or changed entries need fresh approval.
 With a verified local-owner key, `auth logout --revoke --discard-local-changes`
 preserves session, key and physical replicas through every online exact-CID
 receipt; partial failure leaves them behind a durable denied marker for retry.
+After a failed revoke, plain logout compares the original approved inventory
+first. Changed paths refuse even with `--discard-local-changes`, retain all
+credentials and files, and print a 32-hex-character token. A separate
+`auth logout --discard-local-changes --approve-inventory <token>` approves
+only the newly displayed identities; further changes invalidate the token.
 After full remote success, cleanup shreds credentials and erases only approved
 entries. A later inventory mismatch retains the marker and remaining files;
 repeat `auth logout --discard-local-changes` for fresh approval without

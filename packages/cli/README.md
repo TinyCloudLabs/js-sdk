@@ -197,10 +197,15 @@ pass `--discard-local-changes` to approve the displayed paths, types and file
 identities; newly added or changed paths require fresh approval. With
 `auth logout --revoke --discard-local-changes`, physical files and credentials
 remain through partial or failed node revocation. Only after every exact-CID
-receipt does local cleanup begin. If the inventory changes after those receipts,
-the marker blocks reads and the profile stays signed out until a new
-`auth logout --discard-local-changes` approves the remaining paths, without
-revoking CIDs again. OpenKey owner revocation currently fails closed with
+receipt does local cleanup begin. After a failed revoke, plain `auth logout`
+first compares the original approved inventory. If it changed, even
+`--discard-local-changes` refuses without deleting credentials or files and
+prints the changed identities and a 32-character approval token. Run a separate
+`auth logout --discard-local-changes --approve-inventory <token>` to approve
+that exact inventory; a new change invalidates the token. After successful
+remote revocation, a cleanup mismatch retains the marker and remaining files
+while the profile stays signed out; `auth logout --discard-local-changes`
+reapproves cleanup without repeating node revocations. OpenKey
 `REVOCATION_AUTHORITY_UNAVAILABLE`, retaining credentials and denied replica
 files until signed owner revoke authority is supported. `--keep-replicas` is
 available only for legacy-only profiles with no gate, flag-owned partition or

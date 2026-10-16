@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, mkdtemp, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import { Database } from "bun:sqlite";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -142,6 +142,46 @@ test("plain logout overrides a failed remote revocation and ends the retained se
   await expect(readFile(join(paths.directory, REPLICA_LOGOUT_PENDING_FILE))).rejects.toMatchObject({ code: "ENOENT" });
 }, 30_000);
 
+test("a changed known SQLite inode needs a second explicit token before plain logout", async () => {
+  const { home, paths, networkPaths, setMode } = await fixture();
+  setMode("fail");
+  expect((await run(home, ["auth", "logout", "--revoke"])).exitCode).toBeGreaterThan(0);
+  const markerPath = join(paths.directory, REPLICA_LOGOUT_PENDING_FILE);
+  const marker = await readFile(markerPath);
+  const session = await readFile(paths.session);
+  const key = await readFile(paths.key);
+  const originalInode = (await stat(paths.db, { bigint: true })).ino;
+  const replacement = `${paths.db}.replacement`;
+  await copyFile(paths.db, replacement);
+  await rename(replacement, paths.db);
+  expect((await stat(paths.db, { bigint: true })).ino).not.toBe(originalInode);
+  const before = networkPaths.length;
+
+  const refused = await run(home, ["auth", "logout"]);
+  expect(refused.exitCode).toBeGreaterThan(0);
+  const token = refused.stderr.match(/--approve-inventory ([0-9a-f]{32})\b/)?.[1];
+  expect(token).toBeDefined();
+  const printedEntries = refused.stderr.match(/^Inventory approval entries: (.+)$/m)?.[1];
+  expect(printedEntries).toBeDefined();
+  expect(JSON.parse(printedEntries!)).toContainEqual(expect.objectContaining({
+    path: "replicas/notes/replica.db", kind: "file", dev: expect.any(String), ino: expect.any(String),
+  }));
+  expect(networkPaths).toHaveLength(before);
+  expect(await readFile(markerPath)).toEqual(marker);
+  expect(await readFile(paths.session)).toEqual(session);
+  expect(await readFile(paths.key)).toEqual(key);
+
+  const confirmed = await run(home, ["auth", "logout", "--discard-local-changes", "--approve-inventory", token!]);
+  expect(confirmed.exitCode, confirmed.stderr).toBe(0);
+  expect(networkPaths).toHaveLength(before);
+  for (const file of [paths.session, paths.key, paths.db, markerPath]) {
+    await expect(readFile(file)).rejects.toMatchObject({ code: "ENOENT" });
+  }
+  expect(JSON.parse(await readFile(join(paths.directory, "profile.json"), "utf8")).authSignedOut).toBe(true);
+  expect((await run(home, ["auth", "logout", "--discard-local-changes", "--approve-inventory", token!])).exitCode)
+    .toBeGreaterThan(0);
+}, 30_000);
+
 test("changed inventory before plain override leaves failed remote logout retryable", async () => {
   const { home, paths, networkPaths, setMode } = await fixture();
   await addUnknown(paths.unknown);
@@ -157,10 +197,27 @@ test("changed inventory before plain override leaves failed remote logout retrya
   const latePath = join(dirname(paths.unknown), "late-write.pending");
   await addUnknown(latePath);
   const before = networkPaths.length;
+  const withoutDiscard = await run(home, ["auth", "logout"]);
+  expect(withoutDiscard.exitCode).toBeGreaterThan(0);
+  expect(withoutDiscard.stderr).toContain("late-write.pending");
+  expect(withoutDiscard.stderr).toMatch(/--approve-inventory [0-9a-f]{32}\b/);
+  expect(networkPaths).toHaveLength(before);
+  expect(await readFile(markerPath)).toEqual(marker);
+  expect(await readFile(paths.session)).toEqual(session);
+  expect(await readFile(paths.key)).toEqual(key);
 
   const refused = await run(home, ["auth", "logout", "--discard-local-changes"]);
   expect(refused.exitCode).toBeGreaterThan(0);
   expect(refused.stderr).toContain("late-write.pending");
+  const printedEntries = refused.stderr.match(/^Inventory approval entries: (.+)$/m)?.[1];
+  expect(printedEntries).toBeDefined();
+  const boundEntries = JSON.parse(printedEntries!) as Array<{ path: string; kind: string; dev: string; ino: string }>;
+  expect(boundEntries).toContainEqual(expect.objectContaining({
+    path: "replicas/notes/replica.db", kind: "file", dev: expect.any(String), ino: expect.any(String),
+  }));
+  expect(boundEntries).toContainEqual(expect.objectContaining({
+    path: "replicas/notes/late-write.pending", kind: "file", dev: expect.any(String), ino: expect.any(String),
+  }));
   expect(networkPaths).toHaveLength(before);
   expect(await readFile(markerPath)).toEqual(marker);
   expect(await readFile(paths.session)).toEqual(session);
@@ -199,6 +256,7 @@ test("inventory approval requires both a token and explicit discard consent", as
   const { home, paths, networkPaths } = await fixture();
   const session = await readFile(paths.session);
   const key = await readFile(paths.key);
+  const requestsBefore = networkPaths.length;
   for (const [args, message] of [
     [["auth", "logout", "--approve-inventory"], /--approve-inventory.*(requires|missing)/i],
     [["auth", "logout", "--approve-inventory", "0".repeat(32)], /--discard-local-changes/],
@@ -209,7 +267,7 @@ test("inventory approval requires both a token and explicit discard consent", as
     expect(await readFile(paths.session)).toEqual(session);
     expect(await readFile(paths.key)).toEqual(key);
     expect(await Bun.file(paths.db).exists()).toBe(true);
-    expect(networkPaths).toHaveLength(0);
+    expect(networkPaths).toHaveLength(requestsBefore);
   }
 }, 30_000);
 
