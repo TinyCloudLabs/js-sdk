@@ -1,9 +1,12 @@
-import type { PermissionEntry } from "@tinycloud/node-sdk";
+import { lstat } from "node:fs/promises";
+import { join } from "node:path";
+import { REPLICA_LOGOUT_PENDING_FILE, type PermissionEntry } from "@tinycloud/node-sdk";
 import { CLI_NAME } from "@tinycloud/operations/cli-name";
 import { isLocalOwnerProfile, ownerSessionLacksProof } from "@tinycloud/operations/profile";
-import { ProfileLockTimeoutError } from "@tinycloud/operations/state";
+import { ProfileLockTimeoutError, profilePath } from "@tinycloud/operations/state";
 import { ExitCode, PROFILE_COMMIT_LOCK_TIMEOUT_MS } from "../config/constants.js";
 import { ProfileManager } from "../config/profiles.js";
+import { syncAuthCredentialFiles } from "../config/storage.js";
 import type { ProfileConfig } from "../config/types.js";
 import { CLIError } from "../output/errors.js";
 import { normalizePkhIdentifier } from "../lib/space.js";
@@ -127,11 +130,20 @@ export interface LoginCommit {
  * write is attempted even if an earlier one fails; returns the failures.
  */
 async function restore(profileName: string, state: ProfileSnapshot): Promise<unknown[]> {
-  const writes = [
-    () => state.key === null ? ProfileManager.removeKey(profileName) : ProfileManager.setKey(profileName, state.key),
-    () => state.session === null ? ProfileManager.clearSession(profileName) : ProfileManager.setSession(profileName, state.session),
-    () => state.profile === null ? ProfileManager.removeProfileConfig(profileName) : ProfileManager.setProfile(profileName, state.profile),
-  ];
+  const restoreProfile = () => state.profile === null
+    ? ProfileManager.removeProfileConfig(profileName)
+    : state.profile.authSignedOut === true
+      ? ProfileManager.setProfileDurable(profileName, state.profile)
+      : ProfileManager.setProfile(profileName, state.profile);
+  const writes = state.profile?.authSignedOut === true
+    ? [restoreProfile,
+      () => state.key === null ? ProfileManager.removeKey(profileName) : ProfileManager.setKey(profileName, state.key),
+      () => state.session === null ? ProfileManager.clearSession(profileName) : ProfileManager.setSession(profileName, state.session)]
+    : [
+      () => state.key === null ? ProfileManager.removeKey(profileName) : ProfileManager.setKey(profileName, state.key),
+      () => state.session === null ? ProfileManager.clearSession(profileName) : ProfileManager.setSession(profileName, state.session),
+      restoreProfile,
+    ];
   const failures: unknown[] = [];
   for (const write of writes) {
     try {
@@ -171,6 +183,14 @@ export async function commitLogin(profileName: string, snapshot: ProfileSnapshot
         ExitCode.ERROR,
       );
     }
+    try {
+      await lstat(join(profilePath(profileName), REPLICA_LOGOUT_PENDING_FILE));
+      throw new CLIError("REPLICA_GATED",
+        "A durable logout started while sign-in was awaiting approval; no session or key was saved. Finish logout and start a fresh sign-in.",
+        ExitCode.AUTH_REQUIRED);
+    } catch (error) {
+      if (!(typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT")) throw error;
+    }
     if (commit.approved && !commit.approved.replaceSession) {
       const newExpiresAt = sessionExpiresAt(commit.session) ?? undefined;
       assertSessionReplaceable(profileName, current, commit.approved.ownerDid, commit.approved.scope, newExpiresAt);
@@ -178,7 +198,12 @@ export async function commitLogin(profileName: string, snapshot: ProfileSnapshot
     try {
       await ProfileManager.setKey(profileName, commit.key);
       await ProfileManager.setSession(profileName, commit.session);
-      await ProfileManager.setProfile(profileName, commit.profile);
+      if (current.profile?.authSignedOut === true) {
+        await syncAuthCredentialFiles(profilePath(profileName));
+        await ProfileManager.setProfileDurable(profileName, { ...commit.profile, authSignedOut: false });
+      } else {
+        await ProfileManager.setProfile(profileName, commit.profile);
+      }
     } catch (error) {
       const failures = await restore(profileName, current);
       if (failures.length === 0) throw error;

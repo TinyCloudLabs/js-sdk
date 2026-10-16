@@ -1,11 +1,14 @@
-import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { Command } from "commander";
 import { createServer } from "node:http";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Readable } from "node:stream";
+import { profilePath, withTinyCloudStateRoot } from "@tinycloud/operations/state";
 
+const testHome = await mkdtemp(join(tmpdir(), "tc858-auth-mocks-"));
+afterAll(async () => { await rm(testHome, { recursive: true, force: true }); });
 // Keep the import-artifact characterization wired to the shipped validators.
 // The rest of this file mocks persistence to isolate unrelated auth branches.
 const {
@@ -228,11 +231,16 @@ mock.module("../config/profiles.js", () => ({
       profiles.set(name, data);
       recorded.setProfiles.push({ profile: name, data });
     },
+    setProfileDurable: async (name: string, data: ProfileLike) => {
+      profiles.set(name, data);
+      recorded.setProfiles.push({ profile: name, data });
+    },
     getKey: async (name: string) => keys.get(name) ?? null,
     setKey: async (name: string, jwk: object) => {
       keys.set(name, jwk);
       recorded.setKeys.push({ profile: name, jwk });
     },
+    removeKey: async (name: string) => { keys.delete(name); },
     getSession: async (name: string) => sessions.get(name) ?? null,
     setSession: async (name: string, session: object) => {
       sessions.set(name, session);
@@ -245,6 +253,11 @@ mock.module("../config/profiles.js", () => ({
   },
 }));
 mock.module("../lib/profile-replicas.js", () => ({
+  removeProfileReplicas: async (profile: string) => {
+    if (recorded.replicaRemovalError) throw recorded.replicaRemovalError;
+    recorded.removedReplicaProfiles.push(profile);
+    return ["notes"];
+  },
   removeProfileReplicasAndReplication: async (profile: string) => {
     if (recorded.replicaRemovalError) throw recorded.replicaRemovalError;
     recorded.removedReplicaProfiles.push(profile);
@@ -515,9 +528,12 @@ const {
 } = await import("./auth.js");
 
 async function runAuthCommand(args: string[]): Promise<void> {
-  const program = new Command();
-  registerAuthCommand(program);
-  await program.parseAsync(["node", "tc", ...args], { from: "node" });
+  await withTinyCloudStateRoot(testHome, async () => {
+    await mkdir(profilePath(activeProfile), { recursive: true });
+    const program = new Command();
+    registerAuthCommand(program);
+    await program.parseAsync(["node", "tc", ...args], { from: "node" });
+  });
 }
 
 describe("CLI auth rotate command", () => {
@@ -577,19 +593,21 @@ describe("CLI auth rotate command", () => {
     ]);
   });
 
-  test("rotation replays the previously scoped permissions after clearing the session", async () => {
+  test("replica-enabled OpenKey rotation refuses legacy approval before replacing a live session or key", async () => {
     profiles.set("default", makeProfile({
       replication: { prefixes: ["applications/apps/"] },
     }));
-    keys.set("default", { kty: "OKP", crv: "Ed25519", x: "old", d: "private" });
-    sessions.set("default", {
+    const originalKey = { kty: "OKP", crv: "Ed25519", x: "old", d: "private" };
+    const originalSession = {
       permissions: [{
         service: "tinycloud.kv",
         space: "applications",
         path: "",
         actions: ["tinycloud.kv/get"],
       }],
-    });
+    };
+    keys.set("default", originalKey);
+    sessions.set("default", originalSession);
     generatedKeys.push({
       jwk: { kty: "OKP", crv: "Ed25519", x: "new", d: "new-private" },
       did: "did:key:new-openkey",
@@ -597,16 +615,12 @@ describe("CLI auth rotate command", () => {
 
     await runAuthCommand(["auth", "rotate", "--paste"]);
 
-    expect(recorded.startAuthFlows[0]?.options.permissions).toContainEqual(expect.objectContaining({
-      service: "tinycloud.kv",
-      space: "applications",
-      path: "",
-      actions: expect.arrayContaining(["tinycloud.kv/get", "tinycloud.kv/sync"]),
-    }));
-    expect(recorded.startAuthFlows[0]?.options.permissions).not.toContainEqual(expect.objectContaining({
-      space: "default",
-      path: "",
-    }));
+    expect(recorded.errors).toEqual([expect.objectContaining({ code: "V2_REQUIRED" })]);
+    expect(recorded.startAuthFlows).toEqual([]);
+    expect(recorded.setKeys).toEqual([]);
+    expect(recorded.clearSessions).toEqual([]);
+    expect(keys.get("default")).toEqual(originalKey);
+    expect(sessions.get("default")).toEqual(originalSession);
   });
 
   test("passes --no-popup through owner OpenKey rotation", async () => {
@@ -811,7 +825,7 @@ describe("CLI auth commands on a missing profile (TC-682)", () => {
     })]);
   });
 
-  test("logout clears the session of an existing profile and keeps its key", async () => {
+  test("logout removes both restorable credentials of an existing profile", async () => {
     const key = { kty: "OKP", crv: "Ed25519", x: "key-public", d: "key-private" };
     profiles.set("owner", makeProfile({ name: "owner" }));
     keys.set("owner", key);
@@ -821,13 +835,11 @@ describe("CLI auth commands on a missing profile (TC-682)", () => {
 
     expect(recorded.errors).toEqual([]);
     expect(recorded.clearSessions).toEqual(["owner"]);
-    expect(keys.get("owner")).toBe(key);
-    expect(recorded.removedReplicaProfiles).toEqual(["owner"]);
-    expect(recorded.removedReplicationProfiles).toEqual(["owner"]);
+    expect(keys.has("owner")).toBe(false);
     expect(recorded.outputs).toEqual([{
       profile: "owner",
       authenticated: false,
-      replicasRemoved: ["notes", "replication/idHash/replicaHash"],
+      replicasRemoved: [],
       replicasKept: false,
       warning: expect.stringContaining("delegations and grants on the node stay valid until they expire"),
     }]);

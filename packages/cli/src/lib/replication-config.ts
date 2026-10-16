@@ -1,7 +1,7 @@
 import { join } from "node:path";
 import { CLI_NAME } from "@tinycloud/operations/cli-name";
 import { profilePath, withProfileLock } from "@tinycloud/operations/state";
-import { sqliteReplicaStorage, type KVReplicaStorage, type ReplicationOptions } from "@tinycloud/node-sdk";
+import { REPLICA_LOGOUT_PENDING_FILE, sqliteReplicaStorage, type KVReplicaStorage, type ReplicationOptions } from "@tinycloud/node-sdk";
 import { createReplicationEventSink } from "./replication-log.js";
 import { assertFolderPrefix } from "@tinycloud/replica";
 import { CLIError } from "../output/errors.js";
@@ -49,6 +49,7 @@ export function createCliReplicationConfig(
     staleSyncTimeoutMs: Number(process.env.TC_REPLICATION_SYNC_TIMEOUT_MS ?? 10_000),
     storage: sqliteReplicaStorage({
       dir: join(root, "replication"),
+      logoutPendingFile: join(root, REPLICA_LOGOUT_PENDING_FILE),
       guard: (section) => withProfileLock(profile, section, { requireProfile: true, timeoutMs: 35_000 }),
     }),
     onEvent: createReplicationEventSink(root, output),

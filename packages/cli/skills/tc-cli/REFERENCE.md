@@ -273,14 +273,19 @@ latency and staleness percentiles, sync/write outcomes, recent divergences,
 replica/grant status, and pinned keys. `--json` emits the aggregate as JSON.
 `--clear-pending` clears pending replica writes and prints a warning: commits
 that arrive later can be observed as stale until a subsequent sync.
-`auth logout` denies local replica reads, removes legacy and flag-owned files,
-and clears the local session even if erasure is pending; retry cleanup after a
-reported failure. `auth logout --revoke` revokes verified owner-controlled
-stored grants and then the active session CID online before deleting local
-files. A failed or ambiguous remote revoke leaves session, key and replica
-files intact, with local replica reads denied for retry. `--keep-replicas`
-keeps legacy files only when there is no replica gate, flag-owned partition or
-pending purge; a gated profile refuses the option before logout.
+`auth logout` durably denies local replica reads, removes legacy and flag-owned
+files, and shreds both restorable session and key. A pending marker keeps reads
+denied while startup retries erasure. A signed-out profile cannot implicitly
+authenticate with its stored owner key; use explicit `auth login` for a new
+session. A missing or corrupt replica gate with uncertain local writes refuses
+logout without deleting credentials or files: sync first, or explicitly pass
+`--discard-local-changes` to wipe both replica roots. `auth logout --revoke`
+revokes verified owner-controlled stored grants and then the active session CID
+online before deleting local files. Failed or ambiguous remote revoke retains
+session, key and physical replica files behind a denied gate for retry.
+`--keep-replicas` retains legacy files only when no replica gate, flag-owned
+partition or pending purge exists; gated profiles refuse before mutation and
+legacy-only keep still shreds credentials.
 
 B-int release acceptance: test `tinycloud auth request --grant` against a real
 OpenKey test account without production writes. Approve the request, confirm

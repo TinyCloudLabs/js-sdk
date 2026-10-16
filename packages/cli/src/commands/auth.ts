@@ -7,14 +7,15 @@ import { lstat, mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { createInterface } from "node:readline";
 import type { IncomingMessage } from "node:http";
-import { createProfileReplicaPurge, grantAuthRequest, principalDidEquals, signedCompactUcanExpiry, type PermissionEntry, type PortableDelegation, type ProfileReplicaDeferredToken, type RuntimeDelegationActivator, type TinyCloudNode, type TinyCloudSession } from "@tinycloud/node-sdk";
+import { grantAuthRequest, principalDidEquals, REPLICA_LOGOUT_PENDING_FILE, signedCompactUcanExpiry, type PermissionEntry, type PortableDelegation, type ProfileReplicaDeferredToken, type RuntimeDelegationActivator, type TinyCloudNode, type TinyCloudSession } from "@tinycloud/node-sdk";
 import { invokeOperation } from "@tinycloud/operations";
 import { profilePath } from "@tinycloud/operations/state";
-import { removeProfileReplicasAndReplication } from "../lib/profile-replicas.js";
+import { removeProfileReplicas } from "../lib/profile-replicas.js";
 import { principalHashOf, readGateSnapshot } from "@tinycloud/replica/profile-gate";
 import { REPLICA_GATE_FILE } from "@tinycloud/sdk-services/kv/replication/contractConstants";
 import { ProfileManager } from "../config/profiles.js";
 import { logoutInventorySnapshot, planLogoutRevocations, type LogoutRevocationPlan } from "../lib/logout-revocation.js";
+import { clearProfileCredentials, profilePurge, recoverPendingLogout } from "../lib/logout-pending.js";
 import {
   outputJson,
   outputWarnings,
@@ -150,18 +151,12 @@ async function promptAuthMethod(): Promise<AuthMethod> {
   });
 }
 
-function profilePurge(name: string) {
-  return createProfileReplicaPurge({
-    profileDir: profilePath(name),
-    guard: (section) => ProfileManager.withLock(name, section, { requireProfile: true }),
-  });
-}
 
 /** A keep request is safe only when no flag-owned partition or durable gate can exist. */
 async function hasGatedReplicaState(profile: ProfileConfig, name: string, replicationEnabled: boolean): Promise<boolean> {
   if (replicationEnabled || profile.replication !== undefined) return true;
   const root = profilePath(name);
-  for (const path of [join(root, REPLICA_GATE_FILE), join(root, "replication")]) {
+  for (const path of [join(root, REPLICA_GATE_FILE), join(root, REPLICA_LOGOUT_PENDING_FILE), join(root, "replication")]) {
     try {
       await lstat(path);
       return true;
@@ -175,13 +170,28 @@ async function hasGatedReplicaState(profile: ProfileConfig, name: string, replic
   return false;
 }
 
+/** A markerless logout is safe only when no on-disk replica root survives. */
+async function existingReplicaRoots(profile: string): Promise<string[]> {
+  const roots: string[] = [];
+  for (const name of ["replicas", "replication"]) {
+    try {
+      await lstat(join(profilePath(profile), name));
+      roots.push(name);
+    } catch (error) {
+      if (typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT") continue;
+      throw error;
+    }
+  }
+  return roots;
+}
+
 interface CompletedOnlineLogout {
   ownerDid: string;
   sessionCid: string;
   sessionSnapshot: string;
   profileSnapshot: string;
   inventorySnapshot: string;
-  token: ProfileReplicaDeferredToken;
+  token?: ProfileReplicaDeferredToken;
   plan: LogoutRevocationPlan;
 }
 
@@ -197,20 +207,22 @@ async function revokeForLogout(ctx: CLIContext): Promise<CompletedOnlineLogout> 
       throw new CLIError("AUTH_REQUIRED", "Online revocation needs a stored owner session and delegation CID; no local files were deleted.", ExitCode.AUTH_REQUIRED);
     }
     const purge = profilePurge(ctx.profile);
+    const gate = await readGateSnapshot(profilePath(ctx.profile));
     let token = await purge.deferredErase();
     if (token) {
-      const gate = await readGateSnapshot(profilePath(ctx.profile));
       if (!gate || gate.principalHash !== null ||
           token.principalHash !== await principalHashOf(gate.salt, ownerDid)) {
         throw new CLIError("REPLICA_GATED", "The pending revocation belongs to a different session; no online revoke or local erase was attempted.", ExitCode.ERROR);
       }
-    } else {
+    } else if (gate || (await existingReplicaRoots(ctx.profile)).length !== 0) {
       const denied = await purge.deny({ reason: "sign_out", principal: ownerDid }, { deferErase: true });
       if (denied.status !== "denied" || !denied.resumeToken) {
         throw new CLIError("REPLICA_GATED", `Durable deferred denial failed (${denied.status}); no online revoke or local erase was attempted.`, ExitCode.ERROR);
       }
       token = denied.resumeToken;
     }
+    // A network-only profile with no gate or physical replicas has no local
+    // read authority to defer; node revocation still must be available.
     return {
       profile, ownerDid, sessionCid,
       sessionSnapshot: JSON.stringify(session),
@@ -299,6 +311,7 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
         }
         const globalOpts = cmd.optsWithGlobals();
         const ctx = await ProfileManager.resolveContext(globalOpts, { storedSession: "unused" });
+        await recoverPendingLogout(ctx.profile);
         const owner = options.owner === undefined ? undefined : canonicalOwnerDid(options.owner);
         const permissions = options.manifest
           ? await loadManifestPermissions(options.manifest, ctx.profile, { allowLogicalSpaces: true, ownerDid: owner, device: options.device === true })
@@ -407,12 +420,18 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
     .description(`Clear the local session and remove local replicas. With --revoke, revoke owner-controlled node grants and the session CID before deleting local files.`)
     .option("--keep-replicas", "Keep legacy replicas only when this profile has no replica gate or flag-owned state")
     .option("--revoke", "Revoke owner-controlled grants and the session CID on the node before local logout")
+    .option("--discard-local-changes", "Explicitly discard unsynced local replica writes when a missing or corrupt gate requires profile-wide cleanup")
     .action(async (options, cmd) => {
       try {
         const globalOpts = cmd.optsWithGlobals();
         const ctx = await ProfileManager.resolveContext(globalOpts, { storedSession: "unused" });
         if (options.revoke && options.keepReplicas) {
           throw new CLIError("INVALID_ARGUMENT", "--revoke cannot be combined with --keep-replicas.", ExitCode.USAGE_ERROR);
+        }
+        if (options.discardLocalChanges && (options.keepReplicas || options.revoke)) {
+          throw new CLIError("INVALID_ARGUMENT",
+            "--discard-local-changes is only available with plain logout, without --keep-replicas or --revoke.",
+            ExitCode.USAGE_ERROR);
         }
         const online = options.revoke ? await revokeForLogout(ctx) : undefined;
         let replicasRemoved: string[] = [];
@@ -432,48 +451,64 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
           const purge = profilePurge(ctx.profile);
           if (online) {
             const currentToken = await purge.deferredErase();
+            const tokenUnchanged = online.token
+              ? currentToken?.deniedEpoch === online.token.deniedEpoch &&
+                currentToken.principalHash === online.token.principalHash
+              : currentToken === null &&
+                await readGateSnapshot(profilePath(ctx.profile)) === undefined &&
+                (await existingReplicaRoots(ctx.profile)).length === 0;
             if (!session || JSON.stringify(session) !== online.sessionSnapshot ||
                 JSON.stringify(profile) !== online.profileSnapshot ||
                 await logoutInventorySnapshot(ctx.profile) !== online.inventorySnapshot ||
-                !currentToken || currentToken.deniedEpoch !== online.token.deniedEpoch ||
-                currentToken.principalHash !== online.token.principalHash) {
+                !tokenUnchanged) {
               throw new CLIError("PROFILE_CHANGED_DURING_REVOKE",
                 "The profile session, stored grants, or denied gate changed during online revocation; the new session and local files were not erased.",
                 ExitCode.ERROR);
             }
           }
           try {
-            const deferred = await purge.deferredErase();
-            if (deferred) {
-              const report = await purge.resumeDeferredErase(deferred, { signal: new AbortController().signal });
-              if (report.failed.length || report.remaining) {
-                throw new CLIError("REPLICA_PURGE_FAILED", "Replica erasure is pending after a previous revocation attempt.", ExitCode.ERROR);
-              }
-            }
-            if (ctx.replication || profile.replication !== undefined || deferred ||
-                await readGateSnapshot(profilePath(ctx.profile)) !== undefined) {
-              if (!principal) {
-                throw new CLIError("REPLICA_GATED", "Replica denial needs the session owner DID; local replicas were not erased.", ExitCode.ERROR);
-              }
-              const denied = await purge.deny({ reason: "sign_out", principal });
-              const alreadyDenied = denied.status === "stale" &&
-                (await readGateSnapshot(profilePath(ctx.profile)))?.principalHash === null;
-              if (denied.status !== "denied" && !alreadyDenied) {
-                throw new CLIError("REPLICA_GATED", `Replica denial was not durable (${denied.status}); local replicas were not erased.`, ExitCode.ERROR);
-              }
-              if (denied.status === "denied") {
-                const report = await purge.erasePending({ signal: new AbortController().signal });
+            if (options.keepReplicas) {
+              // Only legacy-only profiles reach this branch; the signed-out
+              // fence makes retained files inaccessible after credential shred.
+              await clearProfileCredentials(ctx.profile, true);
+            } else {
+              const roots = await existingReplicaRoots(ctx.profile);
+              // Always ask the facade, including when the gate is absent or
+              // corrupt. It owns v1 scoped, v2 orphan and v3 inactive fences.
+              const marker = await purge.prepareLogoutPending({
+                principal,
+                ...(options.discardLocalChanges ? { discardLocalChanges: true } : {}),
+              });
+              if (marker) {
+                const legacyRemoved: string[] = [];
+                const report = await purge.recoverLogoutPending({
+                  signal: new AbortController().signal,
+                  clearCredentials: () => clearProfileCredentials(ctx.profile),
+                  eraseLegacyReplicas: async () => {
+                    legacyRemoved.push(...await removeProfileReplicas(ctx.profile));
+                  },
+                });
                 if (report.failed.length || report.remaining) {
-                  throw new CLIError("REPLICA_PURGE_FAILED", "Replica erasure is pending; retry logout to finish local cleanup.", ExitCode.ERROR);
+                  throw new CLIError("REPLICA_PURGE_FAILED",
+                    `Logout is pending behind the durable marker (${report.failed.map(({ code }) => code).join(", ") || `${report.remaining} intents remaining`}); retry to finish credential and replica cleanup.`,
+                    ExitCode.ERROR, { failed: report.failed, remaining: report.remaining });
                 }
+                replicasRemoved = marker.v === 2 ? roots : [...legacyRemoved, ...report.erased];
+              } else {
+                const gate = await readGateSnapshot(profilePath(ctx.profile));
+                if (roots.length || (gate && (gate.principalHash !== null || gate.intents.length))) {
+                  throw new CLIError("REPLICA_GATED",
+                    "Replica files or pending intents survived without a durable logout marker; credentials remain for retry.",
+                    ExitCode.ERROR);
+                }
+                await clearProfileCredentials(ctx.profile, true);
               }
             }
-            replicasRemoved = options.keepReplicas ? [] : await removeProfileReplicasAndReplication(ctx.profile);
           } catch (error) {
-            cleanupError = error;
+            cleanupError = error instanceof Error && "code" in error && error.code === "REPLICA_GATED"
+              ? new CLIError("REPLICA_GATED", error.message, ExitCode.ERROR)
+              : error;
           }
-          // Explicit logout ends the network session even when erasure is pending.
-          await ProfileManager.clearSession(ctx.profile);
         });
         if (cleanupError) throw cleanupError;
         outputJson({
@@ -521,6 +556,7 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
       try {
         const globalOpts = cmd.optsWithGlobals();
         const ctx = await ProfileManager.resolveContext(globalOpts, { storedSession: "unused" });
+        await recoverPendingLogout(ctx.profile);
 
         const hasKey = await ProfileManager.getKey(ctx.profile);
         const session = await ProfileManager.getSession(ctx.profile) as Record<string, unknown> | null;
@@ -1823,6 +1859,7 @@ async function rotateAuthKey(
   host: string,
   options: { paste?: boolean; noPopup?: boolean } = {},
 ): Promise<void> {
+  await recoverPendingLogout(profileName);
   const profile = await ProfileManager.getProfile(profileName);
   const posture = resolveProfilePosture(profile);
   const oldDid = profile.sessionDid ?? profile.did;
@@ -1851,6 +1888,12 @@ async function rotateAuthKey(
     });
     outputRotationResult(result.profile, profileName, oldDid, "local");
     return;
+  }
+
+  if (profile.replication?.prefixes.length) {
+    throw new CLIError("V2_REQUIRED",
+      "Replica-enabled OpenKey rotation requires an SDK-prepared SIWE v2 handoff; the existing key and session were not changed.",
+      ExitCode.AUTH_REQUIRED);
   }
 
   const { jwk, did } = await withSpinner("Generating session key...", async () => {
@@ -2138,6 +2181,7 @@ export async function refreshOpenKeySession(
   host: string,
   options: OpenKeyLoginOptions = {},
 ): Promise<{ profile: ProfileConfig; delegationData: Record<string, unknown>; declined: PermissionEntry[]; legacyNested: PermissionEntry[] }> {
+  await recoverPendingLogout(profileName);
   const snapshot = await readProfileSnapshot(profileName);
   // A missing profile is PROFILE_NOT_FOUND, not a missing key: `tc init` alone
   // would create the default profile instead of this one.

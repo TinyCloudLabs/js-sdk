@@ -12,6 +12,7 @@ import { delegationExpiredError } from "../auth/delegation-expiry.js";
 
 import { createCliReplicationConfig } from "./replication-config.js";
 import { registerReplication } from "./replication-registry.js";
+import { recoverPendingLogout } from "./logout-pending.js";
 export { closeReplication, registerReplication, registeredReplications, replicationForProfile } from "./replication-registry.js";
 /**
  * Returns true when a JWK carries the private-key parameter required by the
@@ -122,6 +123,7 @@ function persistedSessionData(
 export async function restoreProfileSessionNode(
   ctx: CLIContext,
 ): Promise<{ node: TinyCloudNode } | { unavailable: "session_missing" | "session_expired" | "session_invalid" }> {
+  await recoverPendingLogout(ctx.profile);
   const profile = await ProfileManager.getProfile(ctx.profile);
   const session = await ProfileManager.getSession(ctx.profile) as Record<string, unknown> | null;
   if (!session) return { unavailable: "session_missing" };
@@ -159,6 +161,7 @@ export async function storedSessionVerifiesLocally(profileName: string): Promise
   const profile = await ProfileManager.getProfile(profileName).catch(() => null);
   if (profile === null) return true;
   const local = profile.authMethod === "local" && typeof profile.privateKey === "string";
+  await recoverPendingLogout(profileName);
   try {
     const session = await ProfileManager.getSession(profileName) as Record<string, unknown> | null;
     if (!session || typeof session.delegationCid !== "string" || typeof session.spaceId !== "string" ||
@@ -189,11 +192,19 @@ export async function createSDKInstance(
   ctx: CLIContext,
   options?: { privateKey?: string }
 ): Promise<TinyCloudNode> {
+  await recoverPendingLogout(ctx.profile);
   // A headless delegate may pass a private key with no persisted profile at all.
   // Only require a profile when we have no explicit key to fall back on.
-  const profile = options?.privateKey
+  const storedProfile = options?.privateKey
     ? await ProfileManager.getProfile(ctx.profile).catch(() => null)
     : await ProfileManager.getProfile(ctx.profile);
+  if (storedProfile?.authSignedOut === true && !options?.privateKey) {
+    throw new CLIError("AUTH_REQUIRED",
+      `Profile "${ctx.profile}" was explicitly signed out. Run \`${CLI_NAME} --profile ${ctx.profile} auth login\` to establish a new session.`,
+      ExitCode.AUTH_REQUIRED);
+  }
+  // A headless --private-key identity is not the logged-out profile's key or replica.
+  const profile = storedProfile?.authSignedOut === true ? null : storedProfile;
   const session = await ProfileManager.getSession(ctx.profile) as Record<string, unknown> | null;
   const key = await ProfileManager.getKey(ctx.profile);
 
@@ -458,6 +469,11 @@ export async function ensureAuthenticated(
   }
 
   const profile = await ProfileManager.getProfile(ctx.profile).catch(() => null);
+  if (profile?.authSignedOut === true) {
+    throw new CLIError("AUTH_REQUIRED",
+      `Profile "${ctx.profile}" was explicitly signed out. Run \`${CLI_NAME} --profile ${ctx.profile} auth login\` to establish a new session.`,
+      ExitCode.AUTH_REQUIRED);
+  }
 
   // For local auth, we can sign in directly without a stored session. The
   // profile's own key is not an override: createSDKInstance reads it from the

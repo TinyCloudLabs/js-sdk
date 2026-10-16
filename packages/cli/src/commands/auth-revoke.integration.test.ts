@@ -622,7 +622,7 @@ describe("tc auth logout --revoke with durable replica denial", () => {
     expect(await exists(paths.db)).toBe(true);
     node.setMode("success");
     const retried = await run(home, ["auth", "logout", "--revoke"]);
-    expect(retried.exitCode).toBe(0);
+    expect(retried).toMatchObject({ exitCode: 0 });
     expect(node.requests).toHaveLength(2);
     expect(node.snapshots).toEqual([
       { session: true, db: true },

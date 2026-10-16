@@ -68,6 +68,8 @@ export interface ProfileConfig {
   authMethod?: AuthMethod;
   /** Hex-encoded Ethereum private key (only present when authMethod is "local") */
   privateKey?: string;
+  /** Explicit logout fences profile-key auto-login until a verified explicit login commits. */
+  authSignedOut?: boolean;
   /** Ethereum address derived from privateKey (only present when authMethod is "local") */
   address?: string;
   /**

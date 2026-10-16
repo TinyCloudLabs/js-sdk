@@ -173,14 +173,21 @@ unrestricted `get` and explicit `sync` on that folder or broader; an exact-key
 grant never qualifies. Bare replica prefixes are rejected; use `notes/`.
 Use `tc replica report` for event aggregates and pinned keys; `--clear-pending`
 prints a warning because later commits can be read as stale until a subsequent
-sync. `auth logout` durably denies replica reads, removes both legacy replicas
-and the flag-owned `replication/` root, and clears the local session even when
-erasure must be retried. `auth logout --revoke` first denies local replica reads,
+sync. `auth logout` durably fences replica reads, removes both legacy replicas
+and the flag-owned `replication/` root, and shreds `session.json` and `key.json`.
+If erasure fails, the marker keeps reads denied and startup retries cleanup.
+An explicit logout also blocks implicit sign-in with the stored profile owner
+key; use `auth login` to establish a fresh session. If a missing or corrupt
+replica gate makes unsynced writes uncertain, logout refuses without deleting
+credentials or files; sync first or explicitly pass `--discard-local-changes`
+to wipe both replica roots. `auth logout --revoke` first denies local reads,
 then revokes verified owner-controlled grant CIDs and the session CID on the node;
-an unavailable or ambiguous node leaves the session, key and physical replica
-files intact for retry. `--keep-replicas` is available only for legacy-only
-profiles with no gate, flag-owned partition or pending purge; it leaves those
-legacy files on disk but still clears the session. B-int release acceptance must
+an unavailable or ambiguous node leaves session, key and physical replica files
+intact for retry. `--keep-replicas` is available only for legacy-only profiles
+with no gate, flag-owned partition or pending purge; it retains those legacy
+files but still shreds credentials and blocks implicit reauthentication.
+
+B-int release acceptance must
 verify the OpenKey `tc auth request --grant` fallback against a real OpenKey
 using a test account and no production writes: approve the request, confirm the
 grant is stored, start a fresh process, and verify the saved prefixes are
