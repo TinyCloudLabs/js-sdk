@@ -448,6 +448,64 @@ describe("replica reset purge containment", () => {
     }
   });
 
+  test.skipIf(process.platform !== "linux")("report times out nonzero but retains the profile pin until a late close settles", async () => {
+    const originalResolve = ProfileManager.resolveContext;
+    const selected = await stat(join(PROFILES_DIR, PROFILE));
+    const entered = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    let root = "";
+    let closedWhilePinned = false;
+    ProfileManager.resolveContext = async function (globals) {
+      const context = await originalResolve.call(this, globals);
+      root = profilePath(PROFILE);
+      const sink = createReplicationEventSink(root, { debug: false, quiet: true });
+      registerReplication(PROFILE, {
+        status: async () => [],
+        sync: async () => undefined,
+        purge: async () => ({ purged: [], failed: [] }),
+        clearPending: async () => 0,
+        close: async () => {
+          entered.resolve();
+          await release.promise;
+          const pinned = await stat(root).then(
+            (entry) => entry.isDirectory() && entry.dev === selected.dev && entry.ino === selected.ino,
+            () => false,
+          );
+          if (!pinned) return;
+          sink({ type: "replication.state", at: new Date().toISOString(), space: "default", replica: "notes/", state: "closed" });
+          closedWhilePinned = true;
+        },
+      });
+      return context;
+    };
+    let running: ReturnType<typeof readFromCli> | undefined;
+    try {
+      running = readFromCli(PROFILE, ["replica", "report"]);
+      await entered.promise;
+      const elapsed = Promise.withResolvers<void>();
+      setTimeout(elapsed.resolve, 3_300);
+      await elapsed.promise;
+      const pinnedAfterDeadline = await stat(root).then(
+        (entry) => entry.isDirectory() && entry.dev === selected.dev && entry.ino === selected.ino,
+        () => false,
+      );
+      release.resolve();
+      const result = await running;
+      expect(pinnedAfterDeadline).toBe(true);
+      expect(closedWhilePinned).toBe(true);
+      expect(result.exited).toBe(true);
+      expect(JSON.parse(result.stderr)).toMatchObject({ error: { code: "REPLICATION_CLOSE_TIMEOUT" } });
+      expect(result.stderr).toContain("replication close did not finish");
+      const events = await readFile(join(PROFILES_DIR, PROFILE, "replication", "events.jsonl"), "utf8");
+      expect(events).toContain('"state":"closed"');
+    } finally {
+      release.resolve();
+      if (running) await running;
+      ProfileManager.resolveContext = originalResolve;
+      await closeReplication();
+    }
+  }, 10_000);
+
   test("report refuses an absent profile even when it becomes a victim alias during context resolution", async () => {
     await createProfile("victim");
     const partition = join(PROFILES_DIR, "victim", "replication", "a".repeat(26));

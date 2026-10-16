@@ -5,7 +5,7 @@ import { constants as fsConstants, lstatSync } from "node:fs";
 import { open, readdir, rename, stat, unlink, readFile, lstat } from "node:fs/promises";
 import { basename, dirname, join, resolve } from "node:path";
 import { ensureAuthenticated } from "../lib/sdk.js";
-import { closeReplication, replicationForProfile } from "../lib/replication-registry.js";
+import { closeReplication, replicationForProfile, waitForReplicationCloseSettlement } from "../lib/replication-registry.js";
 import { withPinnedReplicaForReset } from "../lib/profile-replicas.js";
 import { CLEAR_PENDING_WARNING, createReplicationReport, renderReplicationReport, type ReplicationPartitionSummary } from "../lib/replication-report.js";
 import { parseDuration } from "../lib/duration.js";
@@ -513,8 +513,17 @@ or coverage incomplete; 5 grant expired, revoked or not yet valid; 6 network;
             }
           } finally {
             // The event sink and SQLite storage capture this pinned profile path.
-            // Shut down the runtime before the descriptor backing it is released.
-            await closeReplication();
+            // The deadline reports failure, but the descriptor remains live for
+            // any close work that settles after it.
+            let timedOut = false;
+            try {
+              timedOut = await closeReplication();
+            } finally {
+              await waitForReplicationCloseSettlement();
+            }
+            if (timedOut) {
+              throw new CLIError("REPLICATION_CLOSE_TIMEOUT", "replication close did not finish within three seconds.", ExitCode.ERROR);
+            }
           }
         });
       }),
