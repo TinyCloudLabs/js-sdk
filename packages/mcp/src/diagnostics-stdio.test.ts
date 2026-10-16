@@ -2,7 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { setImmediate } from "node:timers/promises";
+import { setTimeout } from "node:timers/promises";
 import { Client } from "@modelcontextprotocol/client";
 import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
 import { DiagnosticStore, diagnosticId } from "@tinycloud/operations/diagnostics";
@@ -77,9 +77,12 @@ for (const initiallyEnabled of [false, true]) {
       let completed = false;
       // Each call is a new read-only business invocation. A control transition's
       // first call may only refresh policy; require actual later source evidence.
+      // Rate-limit this native Node/helper integration probe, not its readiness:
+      // parent fake timers cannot advance the child. Flooding calls and snapshots
+      // saturates the bounded queue, where missing finishes are expected.
       while (!completed && Date.now() < deadline) {
         await invoke(role);
-        await setImmediate();
+        await setTimeout(100);
         snapshot = await store.snapshot({ all: true });
         completed = snapshot.events.some((event) => event.phase === "executor" && event.outcome === "complete" && event.role === role
           && snapshot.events.some((finish) => finish.type === "invocation.finish" && finish.invocation_id === event.invocation_id));

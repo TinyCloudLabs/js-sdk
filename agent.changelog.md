@@ -19,6 +19,8 @@ entry when `agent.dev.md` or related agent workflow expectations change.
   separation, cancelled MCP correlation and callback/executor classification.
   Source-qualified case expansion and HTTP delivery timing remain explicit;
   these fixes do not authorize selected detail, publication or live capture.
+- Pace healthy live-policy probes instead of flooding the bounded diagnostic
+  queue with calls and snapshots; keep the policy-transition assertions intact.
 
 ## 2026-10-14
 
