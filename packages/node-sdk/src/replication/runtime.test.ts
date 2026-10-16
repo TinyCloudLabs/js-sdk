@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { ServiceContext, ok, type KVReadThrough, type KVReplicaHandle, type KVReplicaStorage, type ReplicationScheduler } from "@tinycloud/sdk-services";
+import { ServiceContext, ok, type KVReadThrough, type KVReplicaHandle, type KVReplicaStorage, type PendingWriteStore, type ReplicationScheduler } from "@tinycloud/sdk-services";
 import { createMemoryPendingStore } from "@tinycloud/sdk-services/kv/replication";
 import type { ServiceSession } from "@tinycloud/sdk-core";
 import { ReplicationRuntime } from "./runtime";
@@ -71,6 +71,96 @@ describe("node ReplicationRuntime binding", () => {
     expect(attached).toBeNull();
     expect(await runtime.control.status()).toEqual([]);
     await runtime.control.sync();
+  });
+
+  test("gate-issued stamps bind pending writes and quota-limited opens across session replacement", async () => {
+    const first = { incarnation: "gate", lifecycleEpoch: 1 };
+    const second = { incarnation: "gate", lifecycleEpoch: 2 };
+    let active = first;
+    let pendingStores = 0;
+    let syncs = 0;
+    let firstPending: PendingWriteStore | undefined;
+    const refusal = (gate: string) => Object.assign(new Error(`Replica gate refused: ${gate}`), { code: "REPLICA_GATED", gate });
+    const check = (stamp: typeof first | undefined) => {
+      if (!stamp) throw refusal("not_established");
+      if (stamp.incarnation !== active.incarnation || stamp.lifecycleEpoch !== active.lifecycleEpoch) throw refusal("stamp_stale");
+    };
+    const grant = {
+      cid: "installed", parentCid: null, expiresAt: clock.now() + 120_000,
+      installedAt: clock.now(), effectiveExpiresAt: clock.now() + 120_000,
+      consentDeadline: clock.now() + 604_800_000, state: "active" as const, unconstrained: true,
+    };
+    const storage: KVReplicaStorage = {
+      kind: "indexeddb",
+      lifecycle: {
+        kind: "indexeddb",
+        checkDelivery(stamp) {
+          return !stamp ? { status: "gated", gate: "not_established" }
+            : stamp.incarnation === active.incarnation && stamp.lifecycleEpoch === active.lifecycleEpoch
+              ? { status: "allow" } : { status: "gated", gate: "stamp_stale" };
+        },
+        consentDeadline: () => clock.now() + 604_800_000,
+      } as NonNullable<KVReplicaStorage["lifecycle"]>,
+      pendingWrites(identity, options) {
+        check(options?.stamp);
+        pendingStores++;
+        const bound = options!.stamp!;
+        const store = createMemoryPendingStore(identity);
+        const gated = {
+          ...store,
+          read: async () => { check(bound); return store.read(); },
+          update: async (mutate: Parameters<PendingWriteStore["update"]>[0]) => { check(bound); return store.update(mutate); },
+        };
+        if (bound.lifecycleEpoch === first.lifecycleEpoch) firstPending = gated;
+        return gated;
+      },
+      async open(spec) {
+        check(spec.stamp);
+        if (spec.grantPolicy?.grantTtlMs !== 120_000 ||
+            spec.quota?.maxBytes !== 4_096 || spec.quota.minFreeBytes !== 512) {
+          throw Object.assign(new Error("Configured grant and quota policy required"), { code: "REPLICA_INVALID_ARGUMENT" });
+        }
+        return {
+          spec, deviceDid: "did:key:replica",
+          async grant() { return grant; },
+          async installGrant() { throw new Error("Installed grant must be reused"); },
+          async sync({ syncStartEpoch }) {
+            check(spec.stamp);
+            syncs++;
+            return { status: "synced", pages: 0, changes: 0, deleted: 0, fetched: 0, contentMissing: 0, coverage: "complete", syncedThroughEpoch: syncStartEpoch };
+          },
+          async close() {},
+        } as KVReplicaHandle;
+      },
+      async purge() {},
+    };
+    const runtime = new ReplicationRuntime({
+      enabled: true, prefixes: ["notes/"], storage, grantTtlMs: 120_000, maxBytes: 4_096, minFreeBytes: 512,
+    }, clock);
+    const sessionAuthority = {
+      sessionOnly: true,
+      sessionGrant: () => ({ ucan: "current-session", device: { did: "did:key:replica", jwk: {} } }),
+      plan: () => { throw new Error("Session-only authority must not plan"); },
+      mint: async () => { throw new Error("Session-only authority must not mint"); },
+    };
+    const bind = (stamp: typeof first) => runtime.bind({
+      context: context("https://gate.example"), session, address, chainId: 1, stamp,
+      authority: sessionAuthority, primaryKV: [],
+    });
+
+    await bind(first);
+    await runtime.control.sync();
+    active = second;
+    await expect(firstPending!.read()).rejects.toMatchObject({ code: "REPLICA_GATED", gate: "stamp_stale" });
+    await bind(second);
+    await runtime.control.sync();
+    expect(pendingStores).toBe(2);
+    expect(syncs).toBe(2);
+    await expect(runtime.bind({
+      context: context("https://gate.example"), session, address, chainId: 1,
+      authority: sessionAuthority, primaryKV: [],
+    })).rejects.toMatchObject({ code: "REPLICA_GATED", gate: "not_established" });
+    await runtime.control.close();
   });
 
   test("isolates pending stores when the bind host changes", async () => {

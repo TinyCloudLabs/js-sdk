@@ -8,6 +8,7 @@ import type {
   ReplicationAuthority,
   ReplicationControl,
   ReplicationEvent,
+  ReplicaSessionStamp,
   ReplicationIdentity,
   ReplicationOptions,
   ReplicationScheduler,
@@ -58,7 +59,7 @@ type ReadThroughKV = {
 
 export class ReplicationRuntime {
   readonly control: ReplicationControl;
-  private readonly pending = new Map<string, PendingWriteStore>();
+  private readonly pending = new Map<string, { stamp?: ReplicaSessionStamp; store: PendingWriteStore }>();
   private readonly attached = new Map<ReadThroughKV, string>();
   private current?: KVReplicationController;
   private lastController?: KVReplicationController;
@@ -174,11 +175,17 @@ export class ReplicationRuntime {
         return;
       }
       const key = services.replicationIdentityKey(identity);
-      let pending = this.pending.get(key);
-      if (!pending) {
-        pending = this.options.storage.pendingWrites?.(identity) ?? services.createMemoryPendingStore(identity);
-        this.pending.set(key, pending);
+      let cached = this.pending.get(key);
+      const stamp = input.stamp;
+      if (!cached || cached.stamp?.incarnation !== stamp?.incarnation || cached.stamp?.lifecycleEpoch !== stamp?.lifecycleEpoch) {
+        const store = this.options.storage.pendingWrites?.(identity, { stamp });
+        if (!store && this.options.storage.lifecycle) {
+          throw Object.assign(new Error("Gated replication requires a stamped pending store"), { code: "REPLICA_GATED", gate: "gate_unavailable" });
+        }
+        cached = { stamp, store: store ?? services.createMemoryPendingStore(identity) };
+        this.pending.set(key, cached);
       }
+      const pending = cached.store;
       this.lastPending = pending;
       const controller = services.createKVReplication({
         options: resolvedOptions(this.options),
@@ -189,6 +196,7 @@ export class ReplicationRuntime {
         stamp: input.stamp,
         authority: input.authority,
         pending,
+        stamp,
         scheduler: this.clock,
         emit,
         fetch: context.fetch as FetchFunction,

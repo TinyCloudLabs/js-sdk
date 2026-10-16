@@ -74,6 +74,8 @@ export function createKVReplication(deps: KVReplicationDeps): KVReplicationContr
     anchorUnavailable = true;
   }
   const grantPolicy = { grantTtlMs: options.grantTtlMs ?? DEFAULT_GRANT_TTL_MS, consentAnchor };
+  const quota = options.maxBytes === undefined && options.minFreeBytes === undefined
+    ? undefined : { maxBytes: options.maxBytes, minFreeBytes: options.minFreeBytes };
   const policyDeadline = consentAnchor === null ? null : consentDeadlineMs(consentAnchor);
   let scheduledConsentDeadline: number | null = null;
   let cancelConsentTimer: (() => void) | undefined;
@@ -278,6 +280,7 @@ export function createKVReplication(deps: KVReplicationDeps): KVReplicationContr
       if (delegated) { device = delegated.device; state!.strategy = "session"; }
       const spec = {
         identity, space: session.space, prefix, allowSecrets: options.allowSecrets, grantPolicy,
+        ...(quota ? { quota } : {}),
         ...(deps.stamp ? { stamp: deps.stamp } : {}),
         ...(device ? { device } : {}),
         ...(deps.fetch ? { fetch: deps.fetch } : {}),
