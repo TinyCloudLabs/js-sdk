@@ -8,7 +8,7 @@
  */
 
 import { afterEach, describe, expect, setSystemTime, test } from "bun:test";
-import { chmod, mkdir, mkdtemp, readdir, rename, rm, symlink, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, open as openFile, readdir, rename, rm, symlink, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -534,7 +534,20 @@ describe("mandatory Node lifecycle gate", () => {
     await storage.pendingWrites!(identity(), { stamp: stamps.get(profileDir)! })
       .update((state) => { state.seq = 1; });
     const pendingFiles = await filesNamed(dir, "pending.json");
-    const purge = createProfileReplicaPurge({ profileDir, guard: sharedGuard });
+    const durableBoundaries: Array<{ session: boolean; key: boolean; marker: boolean }> = [];
+    const purge = createProfileReplicaPurge({
+      profileDir,
+      guard: sharedGuard,
+      dirSync: async (path) => {
+        const handle = await openFile(path, "r");
+        try { await handle.sync(); } finally { await handle.close(); }
+        durableBoundaries.push({
+          session: existsSync(session),
+          key: existsSync(key),
+          marker: existsSync(join(profileDir, REPLICA_LOGOUT_PENDING_FILE)),
+        });
+      },
+    });
     const denied = await purge.deny({ reason: "sign_out", principal: PRINCIPAL }, { deferErase: true });
     expect(denied.status).toBe("denied");
     expect((await purge.recover({ signal: new AbortController().signal })).remaining).toBeGreaterThan(0);
@@ -552,6 +565,11 @@ describe("mandatory Node lifecycle gate", () => {
     expect(existsSync(session)).toBe(false);
     expect(existsSync(key)).toBe(false);
     expect(await filesNamed(dir, "pending.json")).toEqual([]);
+    expect(durableBoundaries).toEqual([
+      { session: true, key: true, marker: true },
+      { session: false, key: false, marker: true },
+      { session: false, key: false, marker: false },
+    ]);
     expect(await purge.deferredErase()).toBeNull();
   });
 
