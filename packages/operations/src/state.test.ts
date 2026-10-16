@@ -104,6 +104,67 @@ test("ordinary profile reads and writes remain available on darwin and win32", a
   }
 });
 
+test("a numeric file-handle identity reopens the same profile but still refuses a real swap", async () => {
+  const home = await isolatedHome();
+  const stateUrl = new URL("./state.ts", import.meta.url).href;
+  const child = Bun.spawn([process.execPath, "-e", `
+    const fs = await import("node:fs/promises");
+    const fsSync = await import("node:fs");
+    const path = await import("node:path");
+    const state = await import(${JSON.stringify(stateUrl)});
+    await state.writeSession("selected", { owner: "selected" });
+    await state.writeSession("victim", { owner: "victim" });
+    const selected = state.profilePath("selected");
+    const victim = state.profilePath("victim");
+    const handle = await fs.open(selected, "r");
+    const prototype = Object.getPrototypeOf(handle);
+    const originalStat = prototype.stat;
+    await handle.close();
+    const numeric = (stats) => Object.assign(Object.create(stats), {
+      dev: Number(stats.dev), ino: Number(stats.ino),
+    });
+    prototype.stat = async function (options) {
+      const stats = await originalStat.call(this, options);
+      return options?.bigint ? numeric(stats) : stats;
+    };
+    const same = await state.readSession("selected").catch((error) => ({ code: error.code }));
+    let swapped = false;
+    prototype.stat = function (options) {
+      if (options?.bigint && !swapped &&
+          fsSync.readlinkSync("/proc/self/fd/" + this.fd) === selected) {
+        swapped = true;
+        fsSync.renameSync(selected, selected + ".moved");
+        fsSync.renameSync(victim, selected);
+      }
+      return originalStat.call(this, options).then((stats) =>
+        options?.bigint ? numeric(stats) : stats);
+    };
+    const replacement = await state.readSession("selected").then(
+      () => ({ code: "READ_SUCCEEDED" }),
+      (error) => ({ code: error.code }),
+    );
+    const victimSession = JSON.parse(await fs.readFile(path.join(selected, "session.json"), "utf8"));
+    console.log(JSON.stringify({ same, swapped, replacement, victimSession }));
+  `], {
+    env: { ...process.env, TC_HOME: home },
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const [stdout, stderr, exit] = await Promise.all([
+    new Response(child.stdout).text(),
+    new Response(child.stderr).text(),
+    child.exited,
+  ]);
+  expect(exit).toBe(0);
+  expect(stderr).toBe("");
+  expect(JSON.parse(stdout)).toEqual({
+    same: { owner: "selected" },
+    swapped: true,
+    replacement: { code: "PROFILE_SYMLINK" },
+    victimSession: { owner: "victim" },
+  });
+});
+
 test("a deferred profile read refuses its expired descriptor even when another profile reuses the fd", async () => {
   await isolatedHome();
   await writeSession("selected", { owner: "selected" });

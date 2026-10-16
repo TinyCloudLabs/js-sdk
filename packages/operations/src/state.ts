@@ -636,11 +636,17 @@ export class ProfileSymlinkError extends Error {
   }
 }
 
+/** Bun versions may return numeric FileHandle.stat IDs despite bigint: true. */
+function exactFileId(value: number | bigint): bigint | null {
+  if (typeof value === "bigint") return value >= 0n ? value : null;
+  return Number.isSafeInteger(value) && value >= 0 ? BigInt(value) : null;
+}
+
 function isPinnedLive(pinned: PinnedProfileDirectory): boolean {
   if (!pinned.active) return false;
   try {
     const stats = fstatSync(pinned.fd, { bigint: true });
-    return stats.dev === pinned.dev && stats.ino === pinned.ino;
+    return exactFileId(stats.dev) === pinned.dev && exactFileId(stats.ino) === pinned.ino;
   } catch {
     return false;
   }
@@ -697,17 +703,23 @@ export async function withPinnedProfileDirectory<T>(
     }
     const opened = handles[2]!;
     const [actual, namedStats] = await Promise.all([opened.stat({ bigint: true }), lstat(named, { bigint: true })]);
-    if (!namedStats.isDirectory() || namedStats.dev !== actual.dev || namedStats.ino !== actual.ino) {
+    const dev = exactFileId(actual.dev);
+    const ino = exactFileId(actual.ino);
+    if (!namedStats.isDirectory() || dev === null || ino === null ||
+        dev !== exactFileId(namedStats.dev) || ino !== exactFileId(namedStats.ino)) {
       throw new ProfileSymlinkError(profile, "changed while opening its directory");
     }
     const directory = fdPath(opened.fd);
     const pinned: PinnedProfileDirectory = {
-      path: directory, fd: opened.fd, dev: actual.dev, ino: actual.ino, active: true,
+      path: directory, fd: opened.fd, dev, ino, active: true,
     };
     const homeHandle = handles[0]!;
     const homeStats = await homeHandle.stat({ bigint: true });
+    const homeDev = exactFileId(homeStats.dev);
+    const homeIno = exactFileId(homeStats.ino);
+    if (homeDev === null || homeIno === null) throw new ProfileSymlinkError(profile, "has an unverified home directory identity");
     const homePinned: PinnedProfileDirectory = {
-      path: fdPath(homeHandle.fd), fd: homeHandle.fd, dev: homeStats.dev, ino: homeStats.ino, active: true,
+      path: fdPath(homeHandle.fd), fd: homeHandle.fd, dev: homeDev, ino: homeIno, active: true,
     };
     const context = new Map(pinnedProfiles.getStore());
     context.set(named, pinned);
@@ -792,7 +804,10 @@ export async function withProfileLock<T>(
       if (ownership.deletedProfile || acquired.deletedWhileWaiting) {
         const current = await lstat(namedProfilePath(normalizedProfile), { bigint: true }).catch(() => null);
         const original = await stat(directory, { bigint: true }).catch(() => null);
-        if (current && original && current.dev === original.dev && current.ino === original.ino) {
+        const currentDev = current && exactFileId(current.dev);
+        const currentIno = current && exactFileId(current.ino);
+        if (currentDev !== null && currentIno !== null && original &&
+            currentDev === exactFileId(original.dev) && currentIno === exactFileId(original.ino)) {
           await rmdir(namedProfilePath(normalizedProfile)).catch(() => undefined);
         }
       }
