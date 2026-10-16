@@ -13,7 +13,6 @@ import type {
   ReplicationOptions,
   ReplicationScheduler,
 } from "@tinycloud/sdk-services";
-import type { ReplicaSessionStamp } from "@tinycloud/sdk-services/kv/replication";
 type ReplicationServices = typeof import("@tinycloud/sdk-services/kv/replication");
 
 export interface ReplicationRuntimeOptions extends ReplicationOptions {
@@ -196,7 +195,6 @@ export class ReplicationRuntime {
         stamp: input.stamp,
         authority: input.authority,
         pending,
-        stamp,
         scheduler: this.clock,
         emit,
         fetch: context.fetch as FetchFunction,
