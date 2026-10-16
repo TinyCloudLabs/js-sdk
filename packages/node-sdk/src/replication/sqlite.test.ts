@@ -1820,6 +1820,70 @@ describe("mandatory Node lifecycle gate", () => {
     expect(existsSync(join(legacy, "replica.db"))).toBe(false);
   });
 
+  test("orphan cleanup refuses a corrupt replacement gate before credential or replica erasure", async () => {
+    const profileDir = await mkdtemp(join(tmpdir(), "tc858-orphan-replaced-gate-"));
+    dirs.push(profileDir);
+    await mkdir(join(profileDir, "replication"));
+    const legacy = await makeLegacyMirror(profileDir);
+    const session = join(profileDir, "session.json");
+    const key = join(profileDir, "key.json");
+    await writeFile(session, "network session");
+    await writeFile(key, "owner key");
+    const purge = createProfileReplicaPurge({ profileDir, guard: sharedGuard });
+    const approval = await purge.preflightLogout({ principal: PRINCIPAL });
+    await purge.prepareLogoutPending({ principal: PRINCIPAL, approval });
+    const marker = join(profileDir, REPLICA_LOGOUT_PENDING_FILE);
+    await writeFile(join(profileDir, REPLICA_GATE_FILE), "{replacement");
+    let credentialErases = 0;
+    let replicaErases = 0;
+    const result = await purge.recoverLogoutPending({
+      signal: new AbortController().signal,
+      clearCredentials: async () => { credentialErases++; await rm(session); await rm(key); },
+      eraseLegacyReplicas: async () => { replicaErases++; await eraseLegacy(profileDir); },
+    });
+    expect(result).toMatchObject({ failed: [{ id: "logout", code: "gate_unavailable" }], remaining: 1 });
+    expect(credentialErases).toBe(0);
+    expect(replicaErases).toBe(0);
+    expect(await readFile(session, "utf8")).toBe("network session");
+    expect(await readFile(key, "utf8")).toBe("owner key");
+    expect(existsSync(join(legacy, "replica.db"))).toBe(true);
+    expect(existsSync(marker)).toBe(true);
+    expect(await readFile(join(profileDir, REPLICA_GATE_FILE), "utf8")).toBe("{replacement");
+  });
+
+  test("orphan recovery retains its marker if a replacement gate appears during cleanup", async () => {
+    for (const replacement of ["corrupt", "valid"] as const) {
+      const profileDir = await mkdtemp(join(tmpdir(), "tc858-orphan-late-gate-"));
+      dirs.push(profileDir);
+      await mkdir(join(profileDir, "replication"));
+      await makeLegacyMirror(profileDir);
+      const session = join(profileDir, "session.json");
+      const key = join(profileDir, "key.json");
+      await writeFile(session, "network session");
+      await writeFile(key, "owner key");
+      const purge = createProfileReplicaPurge({ profileDir, guard: sharedGuard });
+      const approval = await purge.preflightLogout({ principal: PRINCIPAL });
+      await purge.prepareLogoutPending({ principal: PRINCIPAL, approval });
+      const result = await purge.recoverLogoutPending({
+        signal: new AbortController().signal,
+        clearCredentials: async () => { await rm(session); await rm(key); },
+        eraseLegacyReplicas: async () => {
+          await eraseLegacy(profileDir);
+          if (replacement === "corrupt") await writeFile(join(profileDir, REPLICA_GATE_FILE), "{replacement");
+          else await establishSessionStamp(profileDir, PRINCIPAL, { siweIssuedAt: 1 });
+        },
+      });
+      expect(result).toMatchObject({
+        failed: [{ id: "logout", code: replacement === "corrupt" ? "gate_unavailable" : "stamp_stale" }],
+        remaining: 1,
+      });
+      expect(existsSync(join(profileDir, REPLICA_LOGOUT_PENDING_FILE))).toBe(true);
+      expect(existsSync(session)).toBe(false);
+      expect(existsSync(key)).toBe(false);
+      expect(existsSync(join(profileDir, REPLICA_GATE_FILE))).toBe(true);
+    }
+  });
+
   test("unremovable corrupt gate keeps the durable v2 marker and credentials before remote revoke", async () => {
     const profileDir = await mkdtemp(join(tmpdir(), "tc858-corrupt-gate-directory-"));
     dirs.push(profileDir);
