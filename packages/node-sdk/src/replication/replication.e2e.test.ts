@@ -1,7 +1,7 @@
 import { createPrivateKey, sign as signEd25519 } from "node:crypto";
 import { ucanCid } from "@tinycloud/replica";
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { ServiceContext } from "@tinycloud/sdk-core";
+import { ServiceContext, pkhDid } from "@tinycloud/sdk-core";
 import {
   type KVReadThrough,
   type KVReplicaHandle,
@@ -17,6 +17,7 @@ import { ReplicationRuntime } from "./runtime";
 import { NodeWasmBindings } from "../NodeWasmBindings";
 import { PrivateKeySigner } from "../signers/PrivateKeySigner";
 import "./node-loader";
+import { getNodeReplicationLoaders } from "./module-registry";
 import { TinyCloudNode } from "../TinyCloudNode";
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomBytes } from "node:crypto";
@@ -318,6 +319,11 @@ describe("node replication integration", () => {
   });
   test("ten TinyCloudNode restores near the four-minute grant boundary issue zero POST /delegate calls", async () => {
     const { proof } = await replicationRestorableSession();
+    const profileDir = await mkdtemp(join(tmpdir(), "tc858-restored-owner-"));
+    const gate = await getNodeReplicationLoaders().gate();
+    const replicaStamp = await gate.establishSessionStamp(profileDir, pkhDid(proof.address, proof.chainId), {
+      siweIssuedAt: Date.parse(proof.siwe.match(/^Issued At: (.+)$/m)![1]!),
+    });
     const originalFetch = globalThis.fetch;
     let delegatePosts = 0;
     let opened = 0;
@@ -380,9 +386,9 @@ describe("node replication integration", () => {
           host,
           autoBootstrapAccount: false,
           wasmBindings: new NodeWasmBindings(),
-          replication: { enabled: true, prefixes: ["notes/"], storage, mode: "foreground" },
+          replication: { enabled: true, prefixes: ["notes/"], storage, mode: "foreground", profileDir },
         });
-        await node.restoreSession({ ...proof, tinycloudHosts: [host] });
+        await node.restoreSession({ ...proof, replicaStamp, tinycloudHosts: [host] });
         const control = node.replication;
         if (!control) throw new Error("replication control missing after restore");
         await control.sync();
@@ -393,6 +399,7 @@ describe("node replication integration", () => {
       expect(delegatePosts).toBe(0);
     } finally {
       globalThis.fetch = originalFetch;
+      await rm(profileDir, { recursive: true, force: true });
     }
   });
   test("two hosts sharing one storage directory keep separate replica partitions", async () => {
@@ -424,6 +431,11 @@ describe("node replication integration", () => {
   });
   test("signed graph retirement unbinds before metadata-light compact delegate activation", async () => {
     const signed = await replicationRestorableSession();
+    const profileDir = await mkdtemp(join(tmpdir(), "tc858-restored-compact-"));
+    const gate = await getNodeReplicationLoaders().gate();
+    const replicaStamp = await gate.establishSessionStamp(profileDir, pkhDid(signed.address, signed.chainId), {
+      siweIssuedAt: Date.parse(signed.proof.siwe.match(/^Issued At: (.+)$/m)![1]!),
+    });
     const wasm = new NodeWasmBindings();
     const delegateManager = wasm.createSessionManager();
     const delegateKeyId = delegateManager.createSessionKey("delegate-session");
@@ -493,7 +505,7 @@ describe("node replication integration", () => {
       host: "https://signed-restore.example",
       autoBootstrapAccount: false,
       wasmBindings: wasm,
-      replication: { enabled: true, prefixes: ["notes/"], storage, mode: "foreground" },
+      replication: { enabled: true, prefixes: ["notes/"], storage, mode: "foreground", profileDir },
     });
     const originalFetch = globalThis.fetch;
     try {
@@ -505,7 +517,7 @@ describe("node replication integration", () => {
         status: 200,
         headers: { "Content-Type": "application/json" },
       });
-      await node.restoreSession({ ...signed.proof, tinycloudHosts: ["https://signed-restore.example"] });
+      await node.restoreSession({ ...signed.proof, replicaStamp, tinycloudHosts: ["https://signed-restore.example"] });
       await node.replication!.sync();
       expect(opened).toHaveLength(1);
       await node.restoreSession({
@@ -515,6 +527,7 @@ describe("node replication integration", () => {
         jwk: delegateJwk,
         verificationMethod: delegateVerificationMethod,
         tinycloudHosts: ["https://signed-restore.example"],
+        replicaStamp,
       });
       expect(closed).toEqual(["https://signed-restore.example"]);
       expect(await node.replication!.status()).toMatchObject([{ prefix: "notes/", state: "ready" }]);
@@ -531,6 +544,7 @@ describe("node replication integration", () => {
     } finally {
       globalThis.fetch = originalFetch;
       await node.replication?.close();
+      await rm(profileDir, { recursive: true, force: true });
     }
   });
 });
