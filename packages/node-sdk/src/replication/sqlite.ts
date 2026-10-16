@@ -1470,7 +1470,7 @@ export function createSqliteReplicaStorage(
               if (!isNotFound(error)) throw error;
             }
           }
-          await fsyncDir(profileDir);
+          await (options.dirSync ?? fsyncDir)(profileDir);
           if (state.principalHash !== null) {
             // A marker is an epoch/hash fence, not a raw principal. The precomputed hash
             // is checked again by denyGate under this same profile lock.
@@ -1484,7 +1484,7 @@ export function createSqliteReplicaStorage(
             });
           }
           await rm(path);
-          await fsyncDir(profileDir);
+          await (options.dirSync ?? fsyncDir)(profileDir);
         });
       } catch (error) {
         return failure(error);
@@ -1927,10 +1927,13 @@ export function createSqliteReplicaStorage(
 export function createProfileReplicaPurge(options: {
   profileDir: string;
   guard: MutationGuard;
+  /** Observe directory-fsync ordering in tests; production uses fsyncDir. @internal */
+  dirSync?: DirSync;
 }): ProfileReplicaPurge {
   return createSqliteReplicaStorage({
     dir: join(options.profileDir, "replication"),
     guard: options.guard,
+    dirSync: options.dirSync,
     logoutPendingFile: join(options.profileDir, REPLICA_LOGOUT_PENDING_FILE),
   }).lifecycle;
 }
