@@ -188,17 +188,22 @@ async function existingReplicaRoots(profile: string): Promise<string[]> {
   return roots;
 }
 
-interface CompletedOnlineLogout {
-  ownerDid: string;
-  sessionCid: string;
-  sessionSnapshot: string;
-  profileSnapshot: string;
-  inventorySnapshot: string;
-  token?: ProfileReplicaDeferredToken;
-  plan: LogoutRevocationPlan;
+export interface PreparedRemoteLogout {
+  readonly profile: ProfileConfig;
+  readonly ownerDid: string;
+  readonly sessionCid: string;
+  readonly sessionSnapshot: string;
+  readonly profileSnapshot: string;
+  readonly inventorySnapshot: string;
+  readonly token?: ProfileReplicaDeferredToken;
 }
 
-async function revokeForLogout(ctx: CLIContext): Promise<CompletedOnlineLogout> {
+interface CompletedOnlineLogout extends PreparedRemoteLogout {
+  readonly plan: LogoutRevocationPlan;
+}
+
+/** Deny local reads durably before any online revocation, including a generic current-session CID. */
+export async function prepareProfileRemoteLogout(ctx: CLIContext, expectedSessionCid?: string): Promise<PreparedRemoteLogout> {
   const selected = await ProfileManager.withLock(ctx.profile, async () => {
     const profile = await ProfileManager.getProfile(ctx.profile);
     const session = await ProfileManager.getSession(ctx.profile);
@@ -208,6 +213,11 @@ async function revokeForLogout(ctx: CLIContext): Promise<CompletedOnlineLogout> 
       ? session.delegationCid : undefined;
     if (!session || !ownerDid || !sessionCid) {
       throw new CLIError("AUTH_REQUIRED", "Online revocation needs a stored owner session and delegation CID; no local files were deleted.", ExitCode.AUTH_REQUIRED);
+    }
+    if (expectedSessionCid !== undefined && sessionCid !== expectedSessionCid) {
+      throw new CLIError("PROFILE_CHANGED_DURING_REVOKE",
+        "The current sign-in session changed before node revocation; no replica denial or online request was attempted.",
+        ExitCode.ERROR);
     }
     const purge = profilePurge(ctx.profile);
     // A malformed or unknown legacy layout must refuse before the durable
@@ -251,6 +261,11 @@ async function revokeForLogout(ctx: CLIContext): Promise<CompletedOnlineLogout> 
       "The local owner key does not match the signed session owner. No CID was revoked; session, key and replica files remain for retry, while local replica reads stay denied.",
       ExitCode.AUTH_REQUIRED);
   }
+  return selected;
+}
+
+async function revokeForLogout(ctx: CLIContext): Promise<CompletedOnlineLogout> {
+  const selected = await prepareProfileRemoteLogout(ctx);
   try {
     // No profile lock spans an unbounded node request. The denied gate remains
     // durable across interruption; the exact session and epoch are rechecked before erasure.

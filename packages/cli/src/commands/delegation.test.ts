@@ -82,10 +82,17 @@ mock.module("./auth.js", () => ({
     return { cid: "bafy-command-authority" };
   },
   requirePermissionConsent: async () => {},
+  prepareProfileRemoteLogout: async () => {
+    throw new Error("Unrelated-CID tests must not prepare the current-session logout gate");
+  },
+  finishProfileLogout: async () => {
+    throw new Error("Unrelated-CID tests must not complete current-session logout");
+  },
 }));
 
 mock.module("../output/formatter.js", () => ({
   outputJson: (value: unknown) => outputs.push(value),
+  isInteractive: () => false,
 }));
 
 mock.module("../output/errors.js", () => ({

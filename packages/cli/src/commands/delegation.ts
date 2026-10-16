@@ -1,6 +1,6 @@
 import { Command } from "commander";
 import { createInterface } from "node:readline";
-import { finishProfileLogout, type OpenKeyAcquisition } from "./auth.js";
+import { finishProfileLogout, prepareProfileRemoteLogout, type OpenKeyAcquisition } from "./auth.js";
 import { ProfileManager } from "../config/profiles.js";
 import { isInteractive, outputJson } from "../output/formatter.js";
 import { handleError, CLIError, cliErrorFromService } from "../output/errors.js";
@@ -158,16 +158,17 @@ export function registerDelegationCommand(
         const session = await ProfileManager.getSession(ctx.profile);
         const currentSession = session && "delegationCid" in session && session.delegationCid === cid;
         if (currentSession) await confirmCurrentSessionRevoke(options.yes === true);
+        const prepared = currentSession ? await prepareProfileRemoteLogout(ctx, cid) : undefined;
         // This CID is about to end the session: do not open a replica runtime
         // that could hold a lease across the post-receipt durable erase.
-        const node = await ensureAuthenticated(currentSession ? { ...ctx, replication: false } : ctx);
-        const profile = await ProfileManager.getProfile(ctx.profile);
+        const node = await ensureAuthenticated(prepared ? { ...ctx, replication: false } : ctx);
+        const profile = prepared?.profile ?? await ProfileManager.getProfile(ctx.profile);
         const revoked = await revokeDelegationOnNode({
           ctx, node, profile, cid, yes: options.yes === true || Boolean(currentSession),
           openKeyAcquisition: configuration.openKeyAcquisition,
         });
-        const replicasRemoved = currentSession
-          ? await finishProfileLogout(ctx, { expectedSessionCid: cid })
+        const replicasRemoved = prepared
+          ? await finishProfileLogout(ctx, { online: prepared, expectedSessionCid: cid })
           : undefined;
         outputJson({
           ...revoked,

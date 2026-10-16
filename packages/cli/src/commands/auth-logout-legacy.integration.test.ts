@@ -33,6 +33,7 @@ async function fixture() {
   const home = await mkdtemp(join(tmpdir(), "tc858-v1-legacy-cli-"));
   homes.push(home);
   let nodeMode: "success" | "fail" = "success";
+  let onRevocationReceipt: (() => Promise<void>) | undefined;
   const networkPaths: string[] = [];
   const revokedCids: string[] = [];
   let atRevoke: { session: boolean; key: boolean; replica: boolean; unknown: boolean } | undefined;
@@ -53,6 +54,7 @@ async function fixture() {
       const cid = signed.audience.startsWith("ucan:") ? signed.audience.slice("ucan:".length) : "";
       if (!cid) return new Response("exact CID owner proof required", { status: 403 });
       revokedCids.push(cid);
+      await onRevocationReceipt?.();
       return Response.json({ cid, revoked: true });
     }
     return new Response("not found", { status: 404 });
@@ -90,6 +92,7 @@ async function fixture() {
   return {
     home, paths, sessionCid: session.delegationCid, networkPaths, revokedCids,
     setMode(value: "success" | "fail") { nodeMode = value; },
+    setOnRevocationReceipt(callback: () => Promise<void>) { onRevocationReceipt = callback; },
     atRevoke() { return atRevoke; },
   };
 }
@@ -166,6 +169,36 @@ test("discard plus online revoke retains all local files on 503 then erases only
   await expect(readFile(paths.key)).rejects.toMatchObject({ code: "ENOENT" });
   await expect(readFile(paths.db)).rejects.toMatchObject({ code: "ENOENT" });
   await expect(readFile(paths.unknown)).rejects.toMatchObject({ code: "ENOENT" });
+}, 30_000);
+
+test("a new unknown path after online success retains the marker and requires fresh approval without another revoke", async () => {
+  const { home, paths, sessionCid, networkPaths, revokedCids, setOnRevocationReceipt } = await fixture();
+  await addUnknown(paths.unknown);
+  const latePath = join(dirname(paths.unknown), "late-write.pending");
+  setOnRevocationReceipt(() => addUnknown(latePath));
+
+  const incomplete = await run(home, ["auth", "logout", "--revoke", "--discard-local-changes"]);
+  expect(incomplete.exitCode).toBeGreaterThan(0);
+  expect(incomplete.stderr).toMatch(/cleanup incomplete|approval.*changed/i);
+  expect(revokedCids).toEqual([sessionCid]);
+  expect(await Bun.file(join(paths.directory, REPLICA_LOGOUT_PENDING_FILE)).exists()).toBe(true);
+  expect(JSON.parse(await readFile(join(paths.directory, "profile.json"), "utf8")).authSignedOut).toBe(true);
+  await expect(readFile(paths.session)).rejects.toMatchObject({ code: "ENOENT" });
+  await expect(readFile(paths.key)).rejects.toMatchObject({ code: "ENOENT" });
+  expect(await Bun.file(paths.db).exists()).toBe(true);
+  expect(await readFile(paths.unknown, "utf8")).toBe("unsynced future bytes");
+  expect(await readFile(latePath, "utf8")).toBe("unsynced future bytes");
+
+  const requestsBefore = networkPaths.length;
+  const retried = await run(home, ["auth", "logout", "--discard-local-changes"]);
+  expect(retried.exitCode).toBe(0);
+  expect(retried.stdout).toContain("late-write.pending");
+  expect(networkPaths).toHaveLength(requestsBefore);
+  expect(revokedCids).toEqual([sessionCid]);
+  expect(await Bun.file(join(paths.directory, REPLICA_LOGOUT_PENDING_FILE)).exists()).toBe(false);
+  await expect(readFile(paths.db)).rejects.toMatchObject({ code: "ENOENT" });
+  await expect(readFile(paths.unknown)).rejects.toMatchObject({ code: "ENOENT" });
+  await expect(readFile(latePath)).rejects.toMatchObject({ code: "ENOENT" });
 }, 30_000);
 
 test("startup completes a pinned empty legacy child left after the database was unlinked under a durable v1 marker", async () => {

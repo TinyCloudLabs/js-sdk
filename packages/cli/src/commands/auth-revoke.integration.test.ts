@@ -2,12 +2,12 @@ import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { Command } from "commander";
 import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { createProfileReplicaPurge, NodeWasmBindings, PrivateKeySigner } from "@tinycloud/node-sdk";
 import { parseSignedCompactUcanAttenuation, parseSignedSiweCacao } from "@tinycloud/sdk-core";
 import { Replica, parseUcanGrant } from "@tinycloud/replica";
 import { SqliteReplicaStore, inspectSqliteReplicaLayout } from "@tinycloud/replica/sqlite";
-import { establishSessionStamp, restoreSessionStamp } from "@tinycloud/replica/profile-gate";
+import { establishSessionStamp, readGateSnapshot, restoreSessionStamp } from "@tinycloud/replica/profile-gate";
 import { REPLICA_GATE_FILE } from "@tinycloud/sdk-services/kv/replication/contractConstants";
 import {
   profileConfigPath,
@@ -162,6 +162,7 @@ async function seedWithPublicLogin(home: string, host: string): ReturnType<typeo
 async function server(mode: "fail" | "fail-after-first" | "hold" | "success", cid: () => string) {
   const requests: string[] = [];
   const snapshots: Array<{ session: boolean; db: boolean; unknown?: boolean }> = [];
+  const deniedAtRevoke: boolean[] = [];
   const revokedCids: string[] = [];
   const queryRequests: string[] = [];
   const authorizationKinds: Array<{ scheme: string; encoding: string; prefix: string; dots: number }> = [];
@@ -186,6 +187,9 @@ async function server(mode: "fail" | "fail-after-first" | "hold" | "success", ci
           session: await exists(localPaths.session), db: await exists(localPaths.db),
           ...(unknownPath ? { unknown: await exists(unknownPath) } : {}),
         });
+        if (localPaths) {
+          deniedAtRevoke.push((await readGateSnapshot(dirname(localPaths.session)))?.principalHash === null);
+        }
         started.resolve();
         if (state === "hold") return new Promise<Response>(() => {});
         if (queryRecords !== undefined) {
@@ -242,6 +246,7 @@ async function server(mode: "fail" | "fail-after-first" | "hold" | "success", ci
     setQueryRecords(records: Array<Record<string, unknown>>) { queryRecords = records; },
     authorizationKinds,
     snapshots,
+    deniedAtRevoke,
     started: started.promise,
     setMode(value: "fail" | "fail-after-first" | "hold" | "success") { state = value; },
     setPaths(paths: { session: string; db: string }) { localPaths = paths; },
@@ -821,6 +826,30 @@ describe("explicit delegation revoke of the current sign-in CID", () => {
     expect(await exists(paths.db)).toBe(true);
   }, 30_000);
 
+  test("unknown legacy writes refuse current-session revoke before gate or node mutation", async () => {
+    const home = await mkdtemp(join(tmpdir(), "tc858-current-session-unknown-"));
+    homes.push(home);
+    let sessionCid = "";
+    const node = await server("success", () => sessionCid);
+    const paths = await seedWithPublicLogin(home, node.host);
+    sessionCid = paths.delegationCid;
+    const unknown = join(dirname(paths.db), "future-write.pending");
+    await writeFile(unknown, "unsynced private bytes");
+    const gateBefore = await readGateSnapshot(dirname(paths.session));
+    const session = await readFile(paths.session);
+    const key = await readFile(paths.key);
+    const requestsBefore = node.networkPaths.length;
+
+    const refused = await run(home, ["delegation", "revoke", sessionCid, "--yes"]);
+    expect(refused.exitCode).toBeGreaterThan(0);
+    expect(refused.stderr).toContain("future-write.pending");
+    expect(node.networkPaths).toHaveLength(requestsBefore);
+    expect(await readGateSnapshot(dirname(paths.session))).toEqual(gateBefore);
+    expect(await readFile(paths.session)).toEqual(session);
+    expect(await readFile(paths.key)).toEqual(key);
+    expect(await readFile(unknown, "utf8")).toBe("unsynced private bytes");
+  }, 30_000);
+
   test("--yes revokes the exact current CID and completes durable local sign-out", async () => {
     const home = await mkdtemp(join(tmpdir(), "tc858-current-session-yes-"));
     homes.push(home);
@@ -828,6 +857,7 @@ describe("explicit delegation revoke of the current sign-in CID", () => {
     const node = await server("success", () => sessionCid);
     const paths = await seedWithPublicLogin(home, node.host);
     sessionCid = paths.delegationCid;
+    node.setPaths(paths);
     node.setQueryRecords([{
       cid: sessionCid, direction: "granted", delegatorDid: paths.ownerDid,
       delegateDid: "did:key:z6MkSessionTc858",
@@ -839,6 +869,7 @@ describe("explicit delegation revoke of the current sign-in CID", () => {
     const revoked = await run(home, ["delegation", "revoke", sessionCid, "--yes"]);
     expect({ exitCode: revoked.exitCode, stderr: revoked.stderr }).toEqual({ exitCode: 0, stderr: "" });
     expect(node.revokedCids).toEqual([sessionCid]);
+    expect(node.deniedAtRevoke).toEqual([true]);
     expect(await exists(paths.session)).toBe(false);
     expect(await exists(paths.key)).toBe(false);
     expect(await exists(paths.db)).toBe(false);
@@ -857,6 +888,7 @@ describe("explicit delegation revoke of the current sign-in CID", () => {
     const node = await server("fail", () => sessionCid);
     const paths = await seedWithPublicLogin(home, node.host);
     sessionCid = paths.delegationCid;
+    node.setPaths(paths);
     node.setQueryRecords([{
       cid: sessionCid, direction: "granted", delegatorDid: paths.ownerDid,
       delegateDid: "did:key:z6MkSessionTc858",
@@ -871,6 +903,12 @@ describe("explicit delegation revoke of the current sign-in CID", () => {
     const refused = await run(home, ["delegation", "revoke", sessionCid, "--yes"]);
     expect(refused.exitCode).toBeGreaterThan(0);
     expect(node.revokedCids).toEqual([sessionCid]);
+    expect(node.deniedAtRevoke).toEqual([true]);
+    expect((await readGateSnapshot(dirname(paths.session)))?.principalHash).toBeNull();
+    const deniedRead = await run(home, ["replica", "get", "notes/a", "--replica", "notes", "--raw"]);
+    expect(deniedRead.exitCode).toBeGreaterThan(0);
+    expect(deniedRead.stderr).toContain("REPLICA_GATED");
+    expect(deniedRead.stdout).not.toContain("private replica value");
     expect(await readFile(paths.session)).toEqual(session);
     expect(await readFile(paths.key)).toEqual(key);
     expect(await readFile(paths.db)).toEqual(db);
@@ -881,6 +919,7 @@ describe("explicit delegation revoke of the current sign-in CID", () => {
     const retried = await run(home, ["delegation", "revoke", sessionCid, "--yes"]);
     expect({ exitCode: retried.exitCode, stderr: retried.stderr }).toEqual({ exitCode: 0, stderr: "" });
     expect(node.revokedCids).toEqual([sessionCid, sessionCid]);
+    expect(node.deniedAtRevoke).toEqual([true, true]);
     expect(await exists(paths.session)).toBe(false);
     expect(await exists(paths.key)).toBe(false);
     expect(await exists(paths.db)).toBe(false);
