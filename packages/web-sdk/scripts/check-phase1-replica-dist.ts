@@ -8,7 +8,7 @@ type GzipSizes = { "index.mjs": number; "index.cjs": number };
 type LedgerEntry = { pr: string; ticket: string; "index.mjs": number; "index.cjs": number; note: string };
 type Ledger = { allowance: GzipSizes; entries: LedgerEntry[] };
 type OptionalEntry = LoadedSizes & { pr: string; ticket: string; note: string };
-type OptionalLedger = { allowance: LoadedSizes; entries: OptionalEntry[] };
+type OptionalLedger = { allowance: LoadedSizes; entries: OptionalEntry[]; relocations?: unknown };
 type Baseline = {
   webSdkTestBaseline: { ref: string; unhandledErrors: number; failingNames: string[]; unhandledSignatures: string[] };
 };
@@ -60,6 +60,19 @@ const optionalLedgerPath = resolve(import.meta.dir, "replica-optional-size-ledge
 const optionalLedger = JSON.parse(await readFile(optionalLedgerPath, "utf8")) as OptionalLedger;
 const formats = ["index.mjs", "index.cjs"] as const;
 const optionalFormats = ["replica.mjs", "replica.cjs", "activation.mjs", "activation.cjs"] as const;
+// Naomi-approved 2578c6a7 stamp-dispatch relocation. Both measured buckets
+// travel together; the root ceiling and the immutable #546 ledger row do not change.
+const relocationCommit = "2578c6a7624a3408b4584ed2331723694b8afb4b";
+const priorOptionalAllowance: LoadedSizes = {
+  "replica.mjs": 45507, "replica.cjs": 65006, "activation.mjs": 23081, "activation.cjs": 24886,
+};
+const relocatedOptionalAllowance: LoadedSizes = {
+  ...priorOptionalAllowance, "replica.mjs": 45657, "replica.cjs": 65176,
+};
+const approvedRelocations = [
+  { commit: relocationCommit, bucket: "web-core", "index.mjs": -143, "index.cjs": -130 },
+  { commit: relocationCommit, bucket: "web-optional:first-import", "replica.mjs": 150, "replica.cjs": 170 },
+];
 let failed = false;
 
 function validateLedger(value: Ledger): void {
@@ -87,7 +100,7 @@ function validateLedger(value: Ledger): void {
 function validateOptionalLedger(value: OptionalLedger): void {
   const path = "packages/web-sdk/scripts/replica-optional-size-ledger.json";
   if (!value || !value.allowance || !Array.isArray(value.entries) ||
-      Object.keys(value).some((key) => key !== "allowance" && key !== "entries") ||
+      Object.keys(value).some((key) => key !== "allowance" && key !== "entries" && key !== "relocations") ||
       Object.keys(value.allowance).some((key) => !optionalFormats.includes(key as typeof optionalFormats[number])) ||
       optionalFormats.some((format) => !Number.isSafeInteger(value.allowance[format]) || value.allowance[format] < 0)) {
     throw new Error(`Invalid ${path} shape or allowance`);
@@ -98,6 +111,21 @@ function validateOptionalLedger(value: OptionalLedger): void {
         typeof entry.pr !== "string" || typeof entry.ticket !== "string" || typeof entry.note !== "string" ||
         optionalFormats.some((format) => !Number.isSafeInteger(entry[format]))) {
       throw new Error(`Invalid ${path} entries[] item`);
+    }
+  }
+  const relocated = value.relocations !== undefined;
+  const ceiling = relocated ? relocatedOptionalAllowance : priorOptionalAllowance;
+  if (optionalFormats.some((format) => value.allowance[format] !== ceiling[format]) ||
+      (relocated && JSON.stringify(value.relocations) !== JSON.stringify(approvedRelocations))) {
+    throw new Error(`${path}: only the exact paired ${relocationCommit} relocation is approved`);
+  }
+  if (relocated) {
+    try {
+      execFileSync("git", ["merge-base", "--is-ancestor", relocationCommit, "HEAD"], {
+        cwd: repoRoot, stdio: "ignore",
+      });
+    } catch {
+      throw new Error(`${path}: approved relocation commit is not an ancestor of HEAD`);
     }
   }
 }
@@ -167,7 +195,7 @@ if (prBaseSha) {
     baseOptional = JSON.parse(optionalResult.stdout) as OptionalLedger;
   } else if (optionalResult.stderr.includes("does not exist in") ||
       optionalResult.stderr.includes("exists on disk, but not in")) {
-    baseOptional = { allowance: optionalLedger.allowance, entries: [] };
+    baseOptional = { allowance: priorOptionalAllowance, entries: [] };
   } else {
     throw new Error(`Unable to read base ${baseOptionalPath}: ${optionalResult.stderr.trim()}`);
   }
@@ -185,8 +213,15 @@ if (prBaseSha) {
   }
   if (optionalResult.status === 0 && optionalFormats.some((format) =>
     optionalLedger.allowance[format] > baseOptional.allowance[format])) {
-    console.error(`${baseOptionalPath} must not raise its allowance without a separate policy decision.`);
-    failed = true;
+    const pairedTransition = baseOptional.relocations === undefined &&
+      JSON.stringify(optionalLedger.relocations) === JSON.stringify(approvedRelocations) &&
+      optionalFormats.every((format) =>
+        baseOptional.allowance[format] === priorOptionalAllowance[format] &&
+        optionalLedger.allowance[format] === relocatedOptionalAllowance[format]);
+    if (!pairedTransition) {
+      console.error(`${baseOptionalPath}: optional allowance may increase only with the exact approved paired core relocation.`);
+      failed = true;
+    }
   }
   const replicaPaths = changedPaths.filter(replicaOwnedPath);
   const prefixMatches = ledger.entries.length >= baseLedger.entries.length &&

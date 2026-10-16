@@ -1,19 +1,33 @@
 {
   "allowance": {
-    "replica.mjs": 45507,
-    "replica.cjs": 65006,
+    "replica.mjs": 45657,
+    "replica.cjs": 65176,
     "activation.mjs": 23081,
     "activation.cjs": 24886
   },
+  "relocations": [
+    {
+      "commit": "2578c6a7624a3408b4584ed2331723694b8afb4b",
+      "bucket": "web-core",
+      "index.mjs": -143,
+      "index.cjs": -130
+    },
+    {
+      "commit": "2578c6a7624a3408b4584ed2331723694b8afb4b",
+      "bucket": "web-optional:first-import",
+      "replica.mjs": 150,
+      "replica.cjs": 170
+    }
+  ],
   "entries": [
     {
       "pr": "#548",
       "ticket": "TC-858",
-      "replica.mjs": 45507,
-      "replica.cjs": 65006,
-      "activation.mjs": 23081,
-      "activation.cjs": 24886,
-      "note": "Bun 1.4.3 browser graph: first import includes parser/noble, activation adds deferred IDB factory; shared root external, worker separately ratcheted by #550"
+      "replica.mjs": 45657,
+      "replica.cjs": 65177,
+      "activation.mjs": 23136,
+      "activation.cjs": 24946,
+      "note": "Bun 1.4.3 post-#550 observed loaded gzip; root-external first import, deferred IDB activation and #550 worker are separate buckets. The approved 2578c6a7 relocation moves stamp dispatch only; current optional overages remain red."
     }
   ]
 }
