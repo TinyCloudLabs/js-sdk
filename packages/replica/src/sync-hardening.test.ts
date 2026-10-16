@@ -4,6 +4,7 @@
  */
 import { loadSqlite } from "./sqlite/driver.js";
 import { afterAll, describe, expect, spyOn, test } from "bun:test";
+import * as fsSync from "node:fs";
 import { chmod, lstat, mkdir, readdir, readFile, rename, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
@@ -568,6 +569,30 @@ describe("replica removal (reset --purge)", () => {
       await store.close();
     });
   }
+
+  test("win32 path-based purge does not require an openable directory descriptor", async () => {
+    const dir = await tempDir();
+    const original = fsSync.openSync;
+    let directoryOpens = 0;
+    const intercepted = spyOn(fsSync, "openSync").mockImplementation((path, flags) => {
+      if (String(path) === dir) {
+        directoryOpens++;
+        throw Object.assign(new Error("directory descriptors unavailable"), { code: "EISDIR" });
+      }
+      return original(path, flags);
+    });
+    let store: SqliteReplicaStore | undefined;
+    try {
+      store = await simulatedNonLinux(() => newStore(dir), "win32");
+      const lease = (await store.acquireSyncLease(60_000))!;
+      await simulatedNonLinux(() => store!.destroy(lease), "win32");
+      expect(directoryOpens).toBe(0);
+      expect(await lstat(dir).then(() => "exists", () => "gone")).toBe("gone");
+    } finally {
+      intercepted.mockRestore();
+      await store?.close();
+    }
+  });
 
   test("non-Linux removal rejects a symlinked shard without touching its victim or remaining replica", async () => {
     const dir = await tempDir();
