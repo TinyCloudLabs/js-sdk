@@ -8,7 +8,7 @@
  * `published` storages run the published `kv-storage.worker.js`, which has
  * no gate wired and must fail closed.
  */
-import type { KVReplicaHandle, KVReplicaSpec, KVReplicaStorage, PurgeTarget, ReplicaPeerCommit, ReplicaQuotaSpec, ReplicaSessionStamp, ReplicationIdentity } from "@tinycloud/sdk-services/kv/replication";
+import type { KVReplicaHandle, KVReplicaSpec, KVReplicaStorage, PendingWriteStore, PurgeTarget, ReplicaPeerCommit, ReplicaQuotaSpec, ReplicaSessionStamp, ReplicationIdentity } from "@tinycloud/sdk-services/kv/replication";
 import { indexedDbReplicaStorage } from "@tinycloud/replica/kv-storage";
 import { killReplicaWorker } from "@tinycloud/replica/kv-storage/testing";
 // @ts-expect-error `?url` is a Vite module query.
@@ -40,6 +40,7 @@ const handles = new Map<string, KVReplicaHandle>();
 const fakeWorkers = new Map<string, Worker>();
 const fakeClocks = new Map<string, number>();
 const peerCommits = new Map<string, ReplicaPeerCommit[]>();
+let capturedPending: PendingWriteStore | undefined;
 const syncs = new Map<string, { abort: AbortController; result: Promise<Outcome<unknown>> }>();
 const closes = new Map<string, Promise<void>>();
 /** Settlement order of started syncs and closes (`sync:<name>`, `close:<name>`). */
@@ -102,6 +103,10 @@ const api = {
     const report = await createIndexedDbLifecycle({ now: () => at }).recover({ signal: new AbortController().signal });
     return { report, keys: await inspectReplicaKeyPresence() };
   },
+  /** Production deny/erase over the same test gate's real IndexedDB rows. */
+  productionDeny: (principal: string) => createIndexedDbLifecycle().deny({ reason: "sign_out", principal }),
+  productionPurge: () => createIndexedDbLifecycle().erasePending({ signal: new AbortController().signal }),
+  productionPending: () => createIndexedDbLifecycle().pendingPurge(),
   /** Open with `spec.stamp`, or a fresh stamp for the spec's principal; `stamp: null` opens without one. */
   open: (storage: string, name: string, spec: Omit<WireSpec, "stamp"> & { stamp?: ReplicaSessionStamp | null }) =>
     outcome(async () => {
@@ -147,6 +152,17 @@ const api = {
     abort.abort();
     return outcome(() => result);
   },
+  capturePending: async (storage: string, identity: ReplicationIdentity) => {
+    capturedPending = need(storages, storage).pendingWrites!(identity, { stamp: await gate.establish(identity.principal) });
+  },
+  updateCapturedPending: (tag: string) => outcome(async () => {
+    if (capturedPending === undefined) throw new Error("pending store not captured");
+    return capturedPending.update((state) => {
+      state.seq++;
+      state.records.push({ opId: tag, seq: state.seq, key: `notes/${tag}`, op: "put", state: "in_flight", epoch: null, at: new Date().toISOString(), settledAt: null });
+      return state.seq;
+    });
+  }),
   /** `count` concurrent read-modify-writes, each appending one record tagged `tag`. */
   pendingWrites: (storage: string, identity: ReplicationIdentity, tag: string, count: number) =>
     outcome(async () => {

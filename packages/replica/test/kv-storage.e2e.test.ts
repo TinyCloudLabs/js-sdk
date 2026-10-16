@@ -712,6 +712,35 @@ describe.skipIf(!RUN)("kv-storage over a fake feed (Chromium)", () => {
     expect(await other.evaluate(() => window.__kv.sync("h", 2))).toMatchObject({ ok: false, code: "REPLICA_GATED" });
     expect(await other.evaluate(([jwt]) => window.__kv.installGrant("h", jwt), [grantFor(deviceDid)] as const)).toMatchObject({ ok: false, code: "REPLICA_GATED" });
   }, 60_000);
+  test("production deny records both partition and pending intents before two-tab erase", async () => {
+    feed("deny-erase").put("notes/a", "private");
+    const current = await kvPage();
+    await current.evaluate(() => window.__kv.createStorage("s", "fake"));
+    await openGranted(current, "s", "h", "deny-erase");
+    expect(await current.evaluate(() => window.__kv.sync("h", 1))).toMatchObject({ ok: true });
+
+    const stale = await kvPage();
+    await stale.evaluate(() => window.__kv.createStorage("s", "fake"));
+    const identity = identityOf("deny-erase");
+    await stale.evaluate((id) => window.__kv.capturePending("s", id), identity);
+    expect(await stale.evaluate(() => window.__kv.updateCapturedPending("before-deny"))).toMatchObject({ ok: true });
+
+    expect(await current.evaluate((principal) => window.__kv.productionDeny(principal), PRINCIPAL))
+      .toMatchObject({ status: "denied", intents: 2 });
+    expect((await current.evaluate(() => window.__kv.productionPending())).map((intent) => intent.kind).sort())
+      .toEqual(["partition", "pending"]);
+    const beforeErase = await current.evaluate(() => window.__kv.dump());
+    expect(Object.values(beforeErase.entries ?? {}).reduce((sum, count) => sum + count, 0)).toBeGreaterThan(0);
+    expect(Object.values(beforeErase.pending ?? {}).reduce((sum, count) => sum + count, 0)).toBe(1);
+
+    expect(await current.evaluate(() => window.__kv.productionPurge())).toMatchObject({ failed: [], remaining: 0 });
+    const afterErase = await current.evaluate(() => window.__kv.dump());
+    for (const store of ["entries", "blobs", "pending", "partitions", "purgeIntents"]) {
+      expect(Object.values(afterErase[store] ?? {}).reduce((sum, count) => sum + count, 0)).toBe(0);
+    }
+    expect(await stale.evaluate(() => window.__kv.updateCapturedPending("after-deny")))
+      .toMatchObject({ ok: false, code: "REPLICA_GATED" });
+  }, 60_000);
 });
 
 const NODE_BIN = process.env.TC_REPLICA_E2E_NODE_BIN ?? process.env.TC_NODE_BIN;
