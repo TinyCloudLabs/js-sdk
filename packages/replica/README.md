@@ -97,12 +97,14 @@ worker URL. Keep old hashed worker assets available while clients referencing
 them may still be cached.
 
 In the separate web SDK integration, the first local open loads the optional
-first-import chunk (45,507/65,006 gzip bytes ESM/CJS), deferred IndexedDB
-activation chunk (23,081/24,886), and worker budget (818,196). That is
-approximately 886,784/908,088 gzip bytes beyond the mandatory root on first
+first-import chunk (51,786/66,995 gzip bytes ESM/CJS), deferred IndexedDB
+activation chunk (23,073/24,653), and worker budget (820,101). That is
+approximately 894,960/911,749 gzip bytes beyond the mandatory root on first
 use; subsequent opens reuse cacheable hashed assets when the host honors the
 immutable cache policy above. These optional costs do not waive the separate
-mandatory-root bundle budget.
+mandatory-root bundle budget. The worker ceiling has zero headroom against the
+GitHub Bun 1.3.14 / Rust 1.99.0 measurement; its checker rejects other
+toolchains before comparing bytes.
 
 ## Node and SQLite
 

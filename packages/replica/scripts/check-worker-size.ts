@@ -10,6 +10,13 @@ import { join, resolve } from "node:path";
 export const MAX_WORKER_GZIP_BYTES = 820_101;
 const canonicalName = /^kv-storage\.worker\.([0-9a-f]{64})\.js$/;
 
+export function assertWorkerSizeToolchain(bunVersion: string, rustcOutput: string): void {
+  const rustcVersion = /^rustc (\d+\.\d+\.\d+)(?:\s|$)/.exec(rustcOutput)?.[1];
+  if (bunVersion !== "1.3.14" || rustcVersion !== "1.99.0") {
+    throw new Error(`Worker size requires Bun 1.3.14 and Rust 1.99.0; received Bun ${bunVersion} and ${rustcOutput}.`);
+  }
+}
+
 export function checkWorkerSize(distDir: string, maxBytes = MAX_WORKER_GZIP_BYTES): { bytes: number; headroom: number } {
   if (!Number.isSafeInteger(maxBytes) || maxBytes <= 0) {
     throw new Error(`Invalid worker gzip threshold: ${maxBytes}`);
@@ -43,6 +50,7 @@ export function checkWorkerSize(distDir: string, maxBytes = MAX_WORKER_GZIP_BYTE
 
 if (import.meta.main) {
   try {
+    assertWorkerSizeToolchain(Bun.version, execFileSync("rustc", ["--version"], { encoding: "utf8" }).trim());
     checkWorkerSize(resolve(import.meta.dir, "../dist"));
   } catch (error) {
     console.error(error);
