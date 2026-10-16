@@ -4,7 +4,7 @@ import { createHash } from "node:crypto";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { checkWorkerSize } from "./check-worker-size";
+import { assertWorkerSizeToolchain, checkWorkerSize, MAX_WORKER_GZIP_BYTES } from "./check-worker-size";
 
 const directories: string[] = [];
 afterEach(() => {
@@ -26,6 +26,16 @@ test("measures the canonical worker exactly once at gzip level 9", () => {
   const { dir } = fixture(bytes);
   const measured = execFileSync("gzip", ["-9", "-c"], { input: bytes }).byteLength;
   expect(checkWorkerSize(dir, measured)).toEqual({ bytes: measured, headroom: 0 });
+});
+test("uses the reviewed GitHub worker ceiling without additional headroom", () => {
+  expect(MAX_WORKER_GZIP_BYTES).toBe(820_101);
+});
+
+test("refuses worker size measurements from a different Bun or Rust toolchain", () => {
+  expect(() => assertWorkerSizeToolchain("1.3.14", "rustc 1.99.0 (b940084d7 2026-09-28)")).not.toThrow();
+  expect(() => assertWorkerSizeToolchain("1.4.3", "rustc 1.99.0 (b940084d7 2026-09-28)")).toThrow(/Bun 1\.3\.14/);
+  expect(() => assertWorkerSizeToolchain("1.3.14", "rustc 1.97.1 (8bab26f4f 2026-07-14)")).toThrow(/Rust 1\.99\.0/);
+  expect(() => assertWorkerSizeToolchain("1.3.14", "unknown")).toThrow(/Rust 1\.99\.0/);
 });
 
 test("rejects a missing canonical artifact", () => {
