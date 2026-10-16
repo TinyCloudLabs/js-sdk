@@ -67,6 +67,82 @@ test("a crash immediately after durable marker write removes both credentials be
   expect((await readGateSnapshot(paths.dir))?.principalHash).toBeNull();
 }, 30_000);
 
+test("orphan v2 marker refuses a corrupt replacement gate before credential or legacy cleanup", async () => {
+  const home = await mkdtemp(join(tmpdir(), "tc858-orphan-replacement-cli-"));
+  homes.push(home);
+  const networkPaths: string[] = [];
+  const node = Bun.serve({ port: 0, fetch(request) {
+    const path = new URL(request.url).pathname;
+    networkPaths.push(path);
+    if (path === "/info") return Response.json({ protocol: 1, version: "1.0.0", features: [] });
+    if (path === "/delegate" && request.method === "POST") return Response.json({ activated: [], skipped: [] });
+    return new Response("not found", { status: 404 });
+  } });
+  servers.push(node);
+  const ownerDid = `did:pkh:eip155:1:${await new PrivateKeySigner(OWNER_KEY).getAddress()}`;
+  const paths = await withTinyCloudStateRoot(home, async () => {
+    await writeJsonAtomic(profileConfigPath(PROFILE), {
+      name: PROFILE, host: node.url.origin, chainId: 1, spaceName: "default", did: ownerDid,
+      ownerDid, privateKey: OWNER_KEY, authMethod: "local", posture: "local-owner-key",
+      createdAt: "2026-10-01T00:00:00.000Z",
+    });
+    const dir = profilePath(PROFILE);
+    return {
+      dir, session: sessionPath(PROFILE), key: join(dir, "key.json"),
+      db: join(dir, "replicas", "notes", "replica.db"),
+      marker: join(dir, REPLICA_LOGOUT_PENDING_FILE), gate: join(dir, "replica-gate.json"),
+    };
+  });
+  expect((await run(home, ["auth", "login", "--method", "local", "--replication-prefix", "notes/"])).exitCode).toBe(0);
+  const session = JSON.parse(await readFile(paths.session, "utf8")) as { spaceId: string; verificationMethod: string };
+  const store = await SqliteReplicaStore.open(join(paths.dir, "replicas", "notes"), { create: true });
+  try {
+    await store.init({
+      name: "notes", replicaId: "r-test", host: node.url.origin, space: session.spaceId,
+      prefix: "notes/", deviceDid: session.verificationMethod, allowSecrets: false,
+      localReadPolicy: "whileGrantValid", retentionGrantCid: null,
+    });
+  } finally {
+    await store.close();
+  }
+  await writeFile(paths.gate, "{original-corrupt");
+  const purge = createProfileReplicaPurge({
+    profileDir: paths.dir,
+    guard: <T>(section: () => Promise<T>): Promise<T> =>
+      withTinyCloudStateRoot(home, () => withProfileLock(PROFILE, section, { requireProfile: true })),
+  });
+  const approval = await purge.preflightLogout({ principal: ownerDid, discardLocalChanges: true });
+  expect(await purge.prepareLogoutPending({ principal: ownerDid, approval, discardLocalChanges: true }))
+    .toMatchObject({ v: 2, scope: "orphan_profile" });
+  await expect(readFile(paths.gate)).rejects.toMatchObject({ code: "ENOENT" });
+  await writeFile(paths.gate, "{replacement-corrupt");
+  const marker = await readFile(paths.marker);
+  const sessionBefore = await readFile(paths.session);
+  const keyBefore = await readFile(paths.key);
+  const dbBefore = await readFile(paths.db);
+  const requestsBefore = networkPaths.length;
+
+  const refused = await run(home, ["auth", "status"]);
+  expect(refused.exitCode).toBeGreaterThan(0);
+  expect(refused.stderr).toMatch(/REPLICA_GATED|gate_unavailable/i);
+  expect(networkPaths).toHaveLength(requestsBefore);
+  expect(await readFile(paths.marker)).toEqual(marker);
+  expect(await readFile(paths.session)).toEqual(sessionBefore);
+  expect(await readFile(paths.key)).toEqual(keyBefore);
+  expect(await readFile(paths.db)).toEqual(dbBefore);
+  expect(await readFile(paths.gate, "utf8")).toBe("{replacement-corrupt");
+  expect(JSON.parse(await readFile(join(paths.dir, "profile.json"), "utf8")).authSignedOut).not.toBe(true);
+
+  await rm(paths.gate);
+  const recovered = await run(home, ["auth", "status"]);
+  expect(recovered.exitCode, recovered.stderr).toBe(0);
+  expect(networkPaths).toHaveLength(requestsBefore);
+  for (const path of [paths.marker, paths.session, paths.key, paths.db, paths.gate]) {
+    await expect(readFile(path)).rejects.toMatchObject({ code: "ENOENT" });
+  }
+  expect(JSON.parse(await readFile(join(paths.dir, "profile.json"), "utf8")).authSignedOut).toBe(true);
+}, 30_000);
+
 for (const layout of ["unknown-child", "missing-pending"] as const) test(
   `orphan ${layout} refuses plain logout until explicit discard, then shreds both credentials and root`,
   async () => {
