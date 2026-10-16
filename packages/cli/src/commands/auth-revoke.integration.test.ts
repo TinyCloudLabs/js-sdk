@@ -142,7 +142,7 @@ async function server(mode: "fail" | "hold" | "success", cid: () => string) {
         started.resolve();
         if (state === "hold") return new Promise<Response>(() => {});
         if (queryRecords !== undefined) {
-          const signed = await parseSignedSiweCacao((request.headers.get("authorization") ?? "").replace(/^Bearer\\s+/i, ""));
+          const signed = await parseSignedSiweCacao((request.headers.get("authorization") ?? "").replace(/^Bearer\s+/i, ""));
           const target = signed.audience.startsWith("ucan:") ? signed.audience.slice("ucan:".length) : "";
           if (target.length === 0) return new Response("CID-bound owner proof required", { status: 403 });
           revokedCids.push(target);
