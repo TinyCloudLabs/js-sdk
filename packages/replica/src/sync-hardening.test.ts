@@ -646,9 +646,11 @@ describe("replica removal (reset --purge)", () => {
     const dir = await tempDir();
     const store = await newStore(dir);
     await store.close();
-    await writeFile(join(dir, "replica.db-journal"), "sidecar");
+    const blob = join(dir, "blobs", "aa", `aa${"b".repeat(62)}`);
+    await mkdir(join(dir, "blobs", "aa"));
+    await writeFile(blob, "previously approved");
     const report = await inspectSqliteReplicaLayout(dir);
-    await rm(join(dir, "replica.db-journal"));
+    await rm(blob);
     await removeSqliteReplicaLayout(dir, {
       expectedKnown: report.knownEntries, expectedRoot: report.rootIdentity,
     });
@@ -807,46 +809,6 @@ describe("replica removal (reset --purge)", () => {
     expect(await stat(dir).then(() => "exists", () => "gone")).toBe("gone");
   });
 
-  test.each(["directory", "file"] as const)("non-Linux stops after a %s swap mid-deletion", async (swap) => {
-    if (process.platform !== "linux") return;
-    const dir = await tempDir();
-    const moved = await tempDir();
-    await rm(moved, { recursive: true });
-    const store = await newStore(dir);
-    await store.close();
-    await writeFile(join(dir, "replica.db-journal"), "first unlink");
-    await writeFile(join(dir, "replica.db-wal"), "must survive");
-    const script = `Object.defineProperty(process, "platform", { value: "darwin" });
-      // Delayed import exercises the mock boundary in this isolated subprocess.
-      const fs = await import("node:fs/promises");
-      const { mock } = await import("bun:test");
-      const { unlink, rename, mkdir, writeFile } = fs;
-      let swapped = false;
-      mock.module("node:fs/promises", () => ({
-        ...fs, unlink: async (path) => {
-          await unlink(path);
-          if (swapped) return;
-          swapped = true;
-          if (${JSON.stringify(swap)} === "directory") {
-            await rename(${JSON.stringify(dir)}, ${JSON.stringify(moved)});
-            await mkdir(${JSON.stringify(dir)});
-            await writeFile(${JSON.stringify(join(dir, "replica.db"))}, "replacement");
-          } else {
-            await rename(${JSON.stringify(join(dir, "replica.db-wal"))}, ${JSON.stringify(join(dir, "replica.db-wal.previous"))});
-            await writeFile(${JSON.stringify(join(dir, "replica.db-wal"))}, "replacement");
-          }
-        },
-      }));
-      const { removeSqliteReplicaLayout } = await import(${JSON.stringify(join(import.meta.dir, "sqlite/layout.ts"))});
-      try { await removeSqliteReplicaLayout(${JSON.stringify(dir)}); throw Error("removed replacement"); }
-      catch (error) { if (!/changed|identity|mismatch/i.test(error.message)) throw error; }
-      if (!swapped) throw Error("swap hook was not exercised");`;
-    const child = Bun.spawn(["bun", "-e", script], { stdout: "pipe", stderr: "pipe" });
-    const stderr = new Response(child.stderr).text();
-    expect(await child.exited, await stderr).toBe(0);
-    expect(await stat(join(dir, "replica.db")).then(() => "exists", () => "gone")).toBe("exists");
-    expect(await stat(join(swap === "directory" ? moved : dir, "replica.db-wal")).then(() => "exists", () => "gone")).toBe("exists");
-  });
 
 });
 

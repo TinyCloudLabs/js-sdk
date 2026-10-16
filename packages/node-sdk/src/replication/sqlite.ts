@@ -102,6 +102,10 @@ export interface ProfileReplicaPurge extends Pick<ReplicaLifecycleGate, "recover
     principal: string; approval?: ProfileReplicaPreflight; discardLocalChanges?: boolean; remotePending?: true;
   }): Promise<ProfileReplicaLogoutPending | null>;
   completeRemoteLogout(input: { principal: string }): Promise<ProfileReplicaLogoutPending>;
+  /** Validates a denied, pending marker for a selected network-only session retry; never permits replica delivery. */
+  remotePendingLogout(input: { principal: string }): Promise<boolean>;
+  /** Explicit plain logout supersedes an unfinished remote revoke without representing it as completed. */
+  abandonRemoteLogout(input: { principal: string }): Promise<ProfileReplicaLogoutPending>;
   reapproveLogoutPending(input: {
     principal: string; approval: ProfileReplicaPreflight;
   }): Promise<ProfileReplicaLogoutPending>;
@@ -136,8 +140,11 @@ export type ProfileReplicaLogoutPending = ({
   incarnation: string;
   lifecycleEpoch: number;
 }) & {
+  /** Profile-local owner binding; v1 also retains its salted gate principalHash. */
+  principalDigest: string;
   discardLocalChanges?: true;
   remotePending?: true;
+  remoteAbandoned?: true;
   approvedUnknown: ProfileReplicaUnknownEntry[];
   knownRoots: ProfileReplicaRootIdentity[];
   knownEntries: ProfileReplicaUnknownEntry[];
@@ -166,6 +173,10 @@ function safeInventoryPath(path: string): boolean {
      path === "replicas" || path.startsWith("replicas/"));
 }
 
+function logoutPrincipalDigest(principal: string): string {
+  return createHash("sha256").update("tinycloud-replica-logout\0").update(principal, "utf8").digest("hex");
+}
+
 function decimalIdentity(value: unknown): value is string {
   return typeof value === "string" && /^(0|[1-9][0-9]*)$/.test(value);
 }
@@ -186,24 +197,28 @@ function logoutMarkerOf(value: unknown): ProfileReplicaLogoutPending {
     safeInventoryPath((item as ProfileReplicaRootIdentity).path) &&
     decimalIdentity((item as ProfileReplicaRootIdentity).dev) &&
     decimalIdentity((item as ProfileReplicaRootIdentity).ino);
-  if (!Array.isArray(row.approvedUnknown) || !row.approvedUnknown.every(entry) ||
+  if (typeof row.principalDigest !== "string" || !/^[0-9a-f]{64}$/.test(row.principalDigest) ||
+      !Array.isArray(row.approvedUnknown) || !row.approvedUnknown.every(entry) ||
       !Array.isArray(row.knownRoots) || !row.knownRoots.every(root) ||
       !Array.isArray(row.knownEntries) || !row.knownEntries.every(entry) ||
       !Array.isArray(row.missingDatabases) || !row.missingDatabases.every(
         (path: unknown) => typeof path === "string" && safeInventoryPath(path) && path.endsWith("/replica.db")) ||
       (row.discardLocalChanges !== undefined && row.discardLocalChanges !== true) ||
-      (row.remotePending !== undefined && row.remotePending !== true)) throw gated("gate_unavailable");
-  const optional = Number(row.discardLocalChanges === true) + Number(row.remotePending === true);
-  if (row.v === 2 && Object.keys(row).length === 7 + optional &&
+      (row.remotePending !== undefined && row.remotePending !== true) ||
+      (row.remoteAbandoned !== undefined && row.remoteAbandoned !== true) ||
+      (row.remotePending === true && row.remoteAbandoned === true)) throw gated("gate_unavailable");
+  const optional = Number(row.discardLocalChanges === true) + Number(row.remotePending === true) +
+    Number(row.remoteAbandoned === true);
+  if (row.v === 2 && Object.keys(row).length === 8 + optional &&
       row.scope === "orphan_profile" && typeof row.nonce === "string" &&
       /^[0-9a-f]{32}$/.test(row.nonce)) return row as ProfileReplicaLogoutPending;
-  if (row.v === 3 && Object.keys(row).length === 8 + optional &&
+  if (row.v === 3 && Object.keys(row).length === 9 + optional &&
       row.scope === "inactive_gate" &&
       typeof row.incarnation === "string" && row.incarnation.length > 0 &&
       Number.isSafeInteger(row.lifecycleEpoch) && (row.lifecycleEpoch as number) >= 0) {
     return row as ProfileReplicaLogoutPending;
   }
-  if (Object.keys(row).length !== 8 + optional || row.v !== 1 ||
+  if (Object.keys(row).length !== 9 + optional || row.v !== 1 ||
       typeof row.incarnation !== "string" || row.incarnation.length === 0 ||
       !Number.isSafeInteger(row.lifecycleEpoch) || (row.lifecycleEpoch as number) < 0 ||
       typeof row.principalHash !== "string" || !/^[0-9a-f]{64}$/.test(row.principalHash)) {
@@ -251,8 +266,8 @@ async function orphanRoot(profileDir: string, name: "replication" | "replicas"):
 }
 
 /** Without a readable gate, uncertain pending files are treated as local changes. */
-async function hasOrphanPending(profileDir: string, name: "replication" | "replicas"): Promise<boolean> {
-  const root = await orphanRoot(profileDir, name);
+async function hasOrphanPending(profileDir: string): Promise<boolean> {
+  const root = await orphanRoot(profileDir, "replication");
   if (root === null) return false;
   let entries;
   try {
@@ -267,15 +282,6 @@ async function hasOrphanPending(profileDir: string, name: "replication" | "repli
       if (!(await lstat(dir)).isDirectory()) return true;
     } catch {
       return true;
-    }
-    if (name === "replicas") {
-      // Legacy SQLite child layouts have no reviewed pending-write index.
-      try {
-        if ((await readdir(dir)).length !== 0) return true;
-      } catch {
-        return true;
-      }
-      continue;
     }
     if (!/^[a-z2-7]{26}$/.test(entry.name)) return true;
     let children;
@@ -330,7 +336,7 @@ async function inventoryUnknown(
 
 /** Inventory all unknown descendants, including both CLI legacy and flag-owned roots. */
 async function inspectProfileReplicaLayout(
-  profileDir: string, gateReadable: boolean,
+  profileDir: string, gateReadable: boolean, approvedMarker?: ProfileReplicaLogoutPending,
 ): Promise<ProfileReplicaPreflight> {
   const report: ProfileReplicaPreflight = {
     knownLegacyReplicas: 0, unknownLegacyPaths: [], unknownPaths: [],
@@ -374,10 +380,17 @@ async function inspectProfileReplicaLayout(
     }
   }
   if (active !== null) {
-    const cleanOrphan = !gateReadable && !(await hasOrphanPending(profileDir, "replication"));
+    const cleanOrphan = !gateReadable &&
+      (approvedMarker?.v === 2 || !(await hasOrphanPending(profileDir)));
     for (const entry of await readdir(active, { withFileTypes: true })) {
       const relative = `replication/${entry.name}`;
       const dir = join(active, entry.name);
+      // Explicitly approved opaque roots remain opaque through replay; a
+      // marker must not turn their children into newly trusted control files.
+      if (approvedMarker?.approvedUnknown.some((item) => item.path === relative)) {
+        await inventoryUnknown(profileDir, relative, report.unknownEntries);
+        continue;
+      }
       if ((!gateReadable && !cleanOrphan) || !entry.isDirectory() || !/^[a-z2-7]{26}$/.test(entry.name)) {
         await inventoryUnknown(profileDir, relative, report.unknownEntries);
         continue;
@@ -390,6 +403,24 @@ async function inspectProfileReplicaLayout(
         if ((await lstat(identityPath)).isFile()) identity = identityRecordOf(await readJsonFile(identityPath));
       } catch { /* Conservatively inventory the whole identity directory below. */ }
       if (identity === undefined) {
+        const approvedRoot = approvedMarker?.knownRoots.find((item) => item.path === relative);
+        if (approvedRoot?.dev === info.dev.toString() && approvedRoot.ino === info.ino.toString()) {
+          const children = await readdir(dir);
+          if (children.length === 0) continue; // Crash after the final source file was unlinked.
+          if (children.length === 1 && children[0] === "replicas") {
+            const replicasPath = `${relative}/replicas`;
+            const replicasDir = join(dir, "replicas");
+            const replicasInfo = await lstat(replicasDir, { bigint: true });
+            const approvedReplicas = approvedMarker!.knownRoots.find((item) => item.path === replicasPath);
+            if (replicasInfo.isDirectory() && !replicasInfo.isSymbolicLink() &&
+                approvedReplicas?.dev === replicasInfo.dev.toString() &&
+                approvedReplicas.ino === replicasInfo.ino.toString() &&
+                (await readdir(replicasDir)).length === 0) {
+              report.knownRoots.push(inventoryIdentity(replicasPath, replicasInfo.dev, replicasInfo.ino));
+              continue;
+            }
+          }
+        }
         report.knownRoots.pop();
         await inventoryUnknown(profileDir, relative, report.unknownEntries);
         continue;
@@ -475,13 +506,25 @@ function assertApprovedInventory(
     if (expected?.dev !== root.dev || expected.ino !== root.ino) throw localChangesRefusal([root.path]);
   }
   for (const entry of current.knownEntries) {
+    if (allowRemoved && entry.kind === "file" &&
+        /^replication\/[a-z2-7]{26}\/replicas\/[a-z2-7]{26}\/replica\.db-(?:wal|shm|journal)$/.test(entry.path)) {
+      const database = entry.path.replace(/-(?:wal|shm|journal)$/, "");
+      const original = knownFiles.get(database);
+      const present = current.knownEntries.find((item) => item.path === database);
+      // SQLite can create/recreate only these sidecars after an approved
+      // snapshot. The database and partition root must retain their inode;
+      // the eraser captures each sidecar's current inode before unlink.
+      if (original?.kind === "file" && present?.dev === original.dev &&
+          present.ino === original.ino) continue;
+    }
     const expected = knownFiles.get(entry.path);
     if (expected?.kind !== entry.kind || expected.dev !== entry.dev || expected.ino !== entry.ino) {
       throw localChangesRefusal([entry.path]);
     }
   }
   for (const path of current.missingDatabases) {
-    if (!approval.missingDatabases.includes(path)) throw localChangesRefusal([path]);
+    if (!approval.missingDatabases.includes(path) &&
+        !(allowRemoved && knownFiles.get(path)?.kind === "file")) throw localChangesRefusal([path]);
   }
   if (!allowRemoved &&
       (current.unknownEntries.length !== approved.size || current.knownRoots.length !== known.size ||
@@ -528,7 +571,7 @@ async function eraseApprovedUnknown(
 ): Promise<void> {
   const entries = marker.approvedUnknown.filter((entry) => entry.path.startsWith(`${prefix}/`));
   for (const entry of entries.sort((a, b) => b.path.length - a.path.length)) {
-    assertApprovedInventory(await inspectProfileReplicaLayout(profileDir, marker.v !== 2), {
+    assertApprovedInventory(await inspectProfileReplicaLayout(profileDir, marker.v !== 2, marker), {
       unknownEntries: marker.approvedUnknown, knownRoots: marker.knownRoots,
       knownEntries: marker.knownEntries, missingDatabases: marker.missingDatabases,
     }, true);
@@ -552,7 +595,9 @@ async function eraseKnownFlagResidue(
   profileDir: string, marker: ProfileReplicaLogoutPending,
 ): Promise<void> {
   for (const entry of marker.knownEntries.filter((item) =>
-    item.path.startsWith("replication/") && item.path.endsWith("/identity.json"))) {
+    /^replication\/[a-z2-7]{26}\/(?:identity\.json|pending\.json|device\.jwk)$/.test(item.path))
+    .sort((a, b) => Number(a.path.endsWith("/identity.json")) -
+      Number(b.path.endsWith("/identity.json")))) {
     if (!(await assertApprovedParents(profileDir, marker, entry.path))) continue;
     const file = join(profileDir, entry.path);
     let details;
@@ -587,6 +632,16 @@ function localChangesRefusal(unknownPaths: readonly string[] = []): Error & { co
   return error;
 }
 
+
+/** Reject an approval that the named-path remover cannot safely replay. */
+function assertSupportedProfileLayout(report: ProfileReplicaPreflight): void {
+  if (process.platform === "linux") return;
+  const link = report.unknownEntries.find((entry) => entry.kind === "symlink");
+  if (link === undefined) return;
+  const error = gated("gate_unavailable");
+  error.message = `Replica symlink ${JSON.stringify(link.path)} cannot be removed safely on this platform.`;
+  throw error;
+}
 
 type FileGateState = ReplicaAccountGate & {
   intents: ReplicaPurgeIntent[];
@@ -1685,7 +1740,10 @@ export function createSqliteReplicaStorage(
         }
       }
       return entries.filter((entry) => entry.isDirectory() &&
-        /^[a-z2-7]{26}$/.test(entry.name)).map((entry) => join(root, entry.name));
+        /^[a-z2-7]{26}$/.test(entry.name) &&
+        !marker?.approvedUnknown.some((item) =>
+          item.path === `replication/${entry.name}` && item.kind === "directory"))
+        .map((entry) => join(root, entry.name));
     } catch (error) {
       if (isNotFound(error)) return [];
       throw storageError("STORAGE_ERROR", `Listing ${root}`, error);
@@ -1735,6 +1793,33 @@ export function createSqliteReplicaStorage(
       const key = await gate.grantInstallHashOf(gateState.salt, identityKeyHash, cid);
       await gate.recordGrantInstall(profileDir, key, installedAt);
     }
+  }
+
+  /** The marker is only a network-retry fence after the scoped gate is denied. */
+  async function validatedRemoteMarker(
+    marker: ProfileReplicaLogoutPending, principal: string, allowActive: boolean,
+  ): Promise<void> {
+    if (marker.principalDigest !== logoutPrincipalDigest(principal)) throw gated("principal_mismatch");
+    const gate = await fileGate();
+    const state = await gate.readGateSnapshot(profileDir);
+    if (marker.v === 2) {
+      if (state !== undefined) throw gated("stamp_stale");
+      return;
+    }
+    if (state === undefined || state.incarnation !== marker.incarnation) throw gated("stamp_stale");
+    if (marker.v === 3) {
+      if (state.lifecycleEpoch !== marker.lifecycleEpoch ||
+          state.principalHash !== null || state.eraseDeferred) throw gated("stamp_stale");
+      return;
+    }
+    if (marker.principalHash !== await gate.principalHashOf(state.salt, principal)) {
+      throw gated("principal_mismatch");
+    }
+    const denied = state.lifecycleEpoch === marker.lifecycleEpoch + 1 &&
+      state.principalHash === null && state.deferredPrincipalHash === marker.principalHash;
+    const active = state.lifecycleEpoch === marker.lifecycleEpoch &&
+      state.principalHash === marker.principalHash;
+    if (!denied && !(allowActive && active)) throw gated("stamp_stale");
   }
 
   const lifecycle: ReplicaLifecycleGate & ProfileReplicaPurge = {
@@ -1898,9 +1983,10 @@ export function createSqliteReplicaStorage(
           if (marker?.v === 1 && marker.principalHash !== hash) throw gated("principal_mismatch");
         }
         const report = await inspectProfileReplicaLayout(profileDir, state !== undefined);
+        assertSupportedProfileLayout(report);
         if (!discardLocalChanges && (report.unknownPaths.length > 0 || corruptGate ||
-            (state === undefined && (await hasOrphanPending(profileDir, "replication") ||
-              await hasOrphanPending(profileDir, "replicas"))))) {
+            ((state === undefined || (state.principalHash === null && !state.eraseDeferred)) &&
+              await hasOrphanPending(profileDir)))) {
           throw localChangesRefusal(report.unknownPaths);
         }
         return report;
@@ -1922,6 +2008,7 @@ export function createSqliteReplicaStorage(
           } else throw error;
         }
         const report = await inspectProfileReplicaLayout(profileDir, state !== undefined);
+        assertSupportedProfileLayout(report);
         if (approval !== undefined) {
           assertApprovedInventory(report, approval);
           if (approval.knownLegacyReplicas !== report.knownLegacyReplicas ||
@@ -1933,11 +2020,12 @@ export function createSqliteReplicaStorage(
           throw localChangesRefusal(report.unknownPaths);
         }
         if (!discardLocalChanges && (report.unknownPaths.length > 0 || corruptGate ||
-            (state === undefined && (await hasOrphanPending(profileDir, "replication") ||
-              await hasOrphanPending(profileDir, "replicas"))))) {
+            ((state === undefined || (state.principalHash === null && !state.eraseDeferred)) &&
+              await hasOrphanPending(profileDir)))) {
           throw localChangesRefusal(report.unknownPaths);
         }
         if (previous !== null) {
+          if (previous.principalDigest !== logoutPrincipalDigest(principal)) throw gated("principal_mismatch");
           if (state === undefined ? previous.v !== 2 :
               previous.v === 2 || previous.incarnation !== state.incarnation ||
               !(previous.lifecycleEpoch === state.lifecycleEpoch ||
@@ -1951,10 +2039,13 @@ export function createSqliteReplicaStorage(
             unknownEntries: previous.approvedUnknown, knownRoots: previous.knownRoots,
             knownEntries: previous.knownEntries, missingDatabases: previous.missingDatabases,
           });
-          if (previous.remotePending && remotePending !== true) throw gated("gate_unavailable");
+          if (previous.remotePending !== remotePending || previous.remoteAbandoned) {
+            throw gated("gate_unavailable");
+          }
           return previous;
         }
         const approvalFields = {
+          principalDigest: logoutPrincipalDigest(principal),
           approvedUnknown: discardLocalChanges ? report.unknownEntries : [],
           knownRoots: report.knownRoots, knownEntries: report.knownEntries,
           missingDatabases: report.missingDatabases,
@@ -1990,32 +2081,38 @@ export function createSqliteReplicaStorage(
         const path = join(profileDir, REPLICA_LOGOUT_PENDING_FILE);
         const marker = await readLogoutMarker(path);
         if (marker === null || marker.remotePending !== true) throw gated("gate_unavailable");
-        const gate = await fileGate();
-        let state: FileGateState | undefined;
-        try { state = await gate.readGateSnapshot(profileDir); }
-        catch (error) { if (marker.v !== 2) throw error; }
-        if (marker.v === 1) {
-          if (state === undefined || state.incarnation !== marker.incarnation ||
-              state.lifecycleEpoch !== marker.lifecycleEpoch + 1 ||
-              state.principalHash !== null || !state.eraseDeferred ||
-              state.deferredPrincipalHash !== marker.principalHash ||
-              marker.principalHash !== await gate.principalHashOf(state.salt, principal)) {
-            throw gated("stamp_stale");
-          }
-        } else if (marker.v === 3 && (state === undefined ||
-            state.incarnation !== marker.incarnation || state.lifecycleEpoch !== marker.lifecycleEpoch ||
-            state.principalHash !== null || state.eraseDeferred)) throw gated("stamp_stale");
-        else if (marker.v === 2 && state !== undefined) throw gated("stamp_stale");
+        await validatedRemoteMarker(marker, principal, false);
         const { remotePending: _, ...complete } = marker;
         await writeJsonAtomic(path, complete, options.dirSync);
         return complete as ProfileReplicaLogoutPending;
+      });
+    },
+    async remotePendingLogout({ principal }) {
+      return profileSection(async () => {
+        const marker = await readLogoutMarker(join(profileDir, REPLICA_LOGOUT_PENDING_FILE));
+        if (marker === null || marker.remotePending !== true) return false;
+        await validatedRemoteMarker(marker, principal, false);
+        return true;
+      });
+    },
+    async abandonRemoteLogout({ principal }) {
+      return profileSection(async () => {
+        const path = join(profileDir, REPLICA_LOGOUT_PENDING_FILE);
+        const marker = await readLogoutMarker(path);
+        if (marker === null || marker.remotePending !== true) throw gated("gate_unavailable");
+        await validatedRemoteMarker(marker, principal, true);
+        const { remotePending: _, ...previous } = marker;
+        const abandoned: ProfileReplicaLogoutPending = { ...previous, remoteAbandoned: true };
+        await writeJsonAtomic(path, abandoned, options.dirSync);
+        return abandoned;
       });
     },
     async reapproveLogoutPending({ principal, approval }) {
       return profileSection(async () => {
         const path = join(profileDir, REPLICA_LOGOUT_PENDING_FILE);
         const marker = await readLogoutMarker(path);
-        if (marker === null) throw gated("gate_unavailable");
+        if (marker === null || marker.remotePending) throw gated("gate_unavailable");
+        if (marker.principalDigest !== logoutPrincipalDigest(principal)) throw gated("principal_mismatch");
         const gate = await fileGate();
         let state: FileGateState | undefined;
         try { state = await gate.readGateSnapshot(profileDir); } catch { /* Corrupt gate: inventory remains unknown. */ }
@@ -2024,6 +2121,7 @@ export function createSqliteReplicaStorage(
           throw gated("principal_mismatch");
         }
         const report = await inspectProfileReplicaLayout(profileDir, state !== undefined);
+        assertSupportedProfileLayout(report);
         assertApprovedInventory(report, approval);
         if (JSON.stringify(report.unknownPaths) !== JSON.stringify(approval.unknownPaths)) {
           throw localChangesRefusal(report.unknownPaths);
@@ -2086,11 +2184,11 @@ export function createSqliteReplicaStorage(
             catch (error) { if (!isNotFound(error)) throw error; }
           }
           await (options.dirSync ?? fsyncDir)(profileDir);
-          const report = await inspectProfileReplicaLayout(profileDir, state !== undefined);
+          const report = await inspectProfileReplicaLayout(profileDir, state !== undefined, marker);
           assertApprovedInventory(report, { unknownEntries: marker.approvedUnknown,
             knownRoots: marker.knownRoots, knownEntries: marker.knownEntries,
             missingDatabases: marker.missingDatabases }, true);
-          if (!marker.discardLocalChanges && report.unknownPaths.length > 0) {
+          if (!marker.discardLocalChanges && report.unknownEntries.length > 0) {
             throw localChangesRefusal(report.unknownPaths);
           }
           if (marker.v === 1 && state !== undefined) {
@@ -2128,13 +2226,13 @@ export function createSqliteReplicaStorage(
           let state: FileGateState | undefined;
           try { state = await gate.readGateSnapshot(profileDir); }
           catch (error) { if (marker.v !== 2) throw error; }
-          const report = await inspectProfileReplicaLayout(profileDir, state !== undefined);
+          const report = await inspectProfileReplicaLayout(profileDir, state !== undefined, marker);
           assertApprovedInventory(report, { unknownEntries: marker.approvedUnknown,
             knownRoots: marker.knownRoots, knownEntries: marker.knownEntries,
             missingDatabases: marker.missingDatabases }, true);
           await eraseApprovedUnknown(profileDir, marker, "replication");
           await eraseKnownFlagResidue(profileDir, marker);
-          const finalReport = await inspectProfileReplicaLayout(profileDir, state !== undefined);
+          const finalReport = await inspectProfileReplicaLayout(profileDir, state !== undefined, marker);
           assertApprovedInventory(finalReport, { unknownEntries: marker.approvedUnknown,
             knownRoots: marker.knownRoots, knownEntries: marker.knownEntries,
             missingDatabases: marker.missingDatabases }, true);
@@ -2246,9 +2344,19 @@ export function createSqliteReplicaStorage(
                   (item) => ({ ...item, path: item.path.slice(relative.length + 1) }));
                 // @ts-ignore — optional replica dependency is checked by replica-contract.test.ts.
                 const sqlite = await import("@tinycloud/replica/sqlite") as SqliteRuntime;
-                if (marker?.missingDatabases.includes(`${relative}/replica.db`)) {
+                if (!(await pathExists(join(replicaDir, "replica.db")))) {
+                  const layout = await sqlite.inspectSqliteReplicaLayout(replicaDir, { allowAdapterFence: true });
+                  if (!layout.unknownPaths.includes("replica.db") ||
+                      layout.unknownEntries.some((item) => item.path === "replica.db") ||
+                      layout.unknownPaths.some((path) =>
+                        path !== "replica.db" && !approvedUnknown?.some((item) => item.path === path))) {
+                    throw localChangesRefusal([relative]);
+                  }
+                  // A formerly approved database inode may already be gone after a crash.
+                  // Only the still-present, re-inventoried files are passed to exact removal.
                   await sqlite.removeSqliteReplicaLayout(replicaDir, { approvedUnknown,
-                    expectedKnown, expectedRoot, allowAdapterFence: true, allowMissingDatabase: true });
+                    expectedKnown: layout.knownEntries, expectedRoot, allowAdapterFence: true,
+                    allowMissingDatabase: true });
                 } else {
                   let store: SqliteReplicaStore | undefined;
                   try {
@@ -2560,6 +2668,20 @@ export function createSqliteReplicaStorage(
     if (target.sessionDeviceDid !== undefined) deviceDids.push(target.sessionDeviceDid);
     const devices = [...new Map(deviceDids.map((did) => [principalOf(did), did])).values()];
 
+    const removeLeftover = async (replicaDir: string): Promise<void> => {
+      const layout = await sqlite.inspectSqliteReplicaLayout(replicaDir, { allowAdapterFence: true });
+      const missingDatabase = !(await pathExists(join(replicaDir, "replica.db")));
+      if (layout.unknownPaths.some((path) => path !== "replica.db") ||
+          layout.unknownPaths.includes("replica.db") !== missingDatabase ||
+          layout.unknownEntries.some((item) => item.path === "replica.db")) {
+        throw localChangesRefusal(layout.unknownPaths);
+      }
+      await sqlite.removeSqliteReplicaLayout(replicaDir, {
+        expectedRoot: layout.rootIdentity, expectedKnown: layout.knownEntries,
+        allowAdapterFence: true, allowMissingDatabase: missingDatabase,
+      });
+    };
+
     let firstError: unknown;
     for (const deviceDid of devices) {
       const replicaDir = join(idDir, "replicas", replicaHashOf(target.prefix, deviceDid));
@@ -2570,8 +2692,7 @@ export function createSqliteReplicaStorage(
           store = await sqlite.SqliteReplicaStore.open(replicaDir, { create: false, guard: profileSection });
         } catch (error) {
           if (replica.isReplicaError(error, replica.ReplicaErrorCode.NOT_FOUND)) {
-            // A leftover directory without a database still gets removed.
-            await profileSection(() => rm(replicaDir, { recursive: true, force: true }));
+            await removeLeftover(replicaDir);
             continue;
           }
           throw error;
@@ -2580,7 +2701,7 @@ export function createSqliteReplicaStorage(
           const state = await store.open();
           if (state === null) {
             await store.close().catch(() => undefined);
-            await profileSection(() => rm(replicaDir, { recursive: true, force: true }));
+            await removeLeftover(replicaDir);
             continue;
           }
           const lease = await store.acquireSyncLease(SYNC_LEASE_TTL_MS);

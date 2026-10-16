@@ -2,6 +2,60 @@ import { constants as fsConstants, type BigIntStats } from "node:fs";
 import { lstat, open, readdir, rmdir, unlink, type FileHandle } from "node:fs/promises";
 import { join, parse, resolve, sep } from "node:path";
 
+import { loadSqlite } from "./driver.js";
+import { SCHEMA, SCHEMA_VERSION } from "./schema.js";
+
+// The policy-v2 branch migrated v1 in place with these exact ALTER TABLEs,
+// whereas the other v2 lineage created grant_install without changing replica.
+const POLICY_COLUMNS = [
+  "grant_installed_at REAL", "grant_effective_expires_at REAL", "grant_consent_deadline REAL",
+  "grant_consent_anchor_at REAL", "grant_consent_anchor_source TEXT",
+  "pending_grant_installed_at REAL", "pending_grant_effective_expires_at REAL",
+  "pending_grant_consent_deadline REAL", "pending_grant_consent_anchor_at REAL",
+  "pending_grant_consent_anchor_source TEXT",
+];
+const normalizeSchema = (sql: string): string =>
+  sql.replace(" IF NOT EXISTS", "").replace(/\s+/g, " ").trim();
+const SOURCE_SCHEMA = SCHEMA.trim().split(";").map((sql) => sql.trim()).filter(Boolean).map((sql) => {
+  const match = /^CREATE (TABLE|INDEX) IF NOT EXISTS ([a-z_]+)/.exec(sql);
+  if (match === null) throw new Error("Invalid source replica schema.");
+  return { type: match[1]!.toLowerCase(), name: match[2]!, sql: normalizeSchema(sql) };
+});
+const V1_SCHEMA = SOURCE_SCHEMA.filter((entry) => entry.name !== "grant_install");
+const POLICY_REPLICA = V1_SCHEMA.find((entry) => entry.name === "replica")!.sql
+  .replace(/\) STRICT$/, `, ${POLICY_COLUMNS.join(", ")}) STRICT`);
+const POLICY_SCHEMA = V1_SCHEMA.map((entry) =>
+  entry.name === "replica" ? { ...entry, sql: POLICY_REPLICA } : entry);
+
+/** A pathname alone cannot prove that a database contains no local outbox. */
+async function sourceMirrorSchema(path: string): Promise<boolean> {
+  let db;
+  try {
+    db = (await loadSqlite())(path, { readonly: true });
+    db.exec("BEGIN");
+    const version = db.get<{ user_version: number }>("PRAGMA user_version")?.user_version;
+    if (version !== 1 && version !== SCHEMA_VERSION) return false;
+    const rows = db.all<{ type: string; name: string; sql: string | null }>(
+      "SELECT type, name, sql FROM sqlite_schema WHERE sql IS NOT NULL ORDER BY name",
+    );
+    const expected = version === 1 ? V1_SCHEMA : SOURCE_SCHEMA;
+    const matches = (schema: typeof expected): boolean =>
+      rows.length === schema.length && rows.every((row) => {
+        const source = schema.find((entry) => entry.name === row.name);
+        return source?.type === row.type && source.sql === normalizeSchema(row.sql!);
+      });
+    if (matches(expected)) return true;
+    if (version !== 2) return false;
+    // 351dd45b defined a separate v2 migration: ten nullable policy columns,
+    // no grant_install. Accept only that exact source-created shape.
+    return matches(POLICY_SCHEMA);
+  } catch {
+    return false;
+  } finally {
+    try { db?.close(); } catch { /* A failed schema read remains unknown. */ }
+  }
+}
+
 const SQLITE_FILE = /^(?:replica\.db|replica\.db-(?:wal|shm|journal))$/;
 const SHARD = /^[0-9a-f]{2}$/;
 const HASH = /^[0-9a-f]{64}$/;
@@ -159,7 +213,46 @@ async function inspect(dir: string, allowAdapterFence: boolean): Promise<{
       }
     }
     await walk(root);
-    if (!hasDatabase) unknownPaths.push("replica.db");
+    if (!hasDatabase) {
+      unknownPaths.push("replica.db");
+    } else if (!(await sourceMirrorSchema(join(root.path, "replica.db")))) {
+      const index = knownEntries.findIndex((entry) => entry.path === "replica.db");
+      if (index >= 0) unknownEntries.push(knownEntries.splice(index, 1)[0]!);
+      unknownPaths.push("replica.db");
+    }
+    // SQLite may materialize a WAL shared-memory sidecar for a readonly
+    // schema query. Record the *post-query* inode, never approve a file that
+    // was not actually present in the displayed inventory.
+    await checkDirectory(root);
+    const names = new Set(await readdir(root.path));
+    for (let index = root.children.length - 1; index >= 0; index--) {
+      const child = root.children[index]!;
+      if (!names.has(child.relative)) {
+        if (child.directory) throw new Error(`Replica directory vanished: ${child.relative}`);
+        root.children.splice(index, 1);
+        for (const list of [knownEntries, unknownEntries]) {
+          const entryIndex = list.findIndex((entry) => entry.path === child.relative);
+          if (entryIndex >= 0) list.splice(entryIndex, 1);
+        }
+        const pathIndex = unknownPaths.indexOf(child.relative);
+        if (pathIndex >= 0) unknownPaths.splice(pathIndex, 1);
+        continue;
+      }
+      const current = await lstat(child.path, { bigint: true });
+      if (!sameFile(child.identity, current) || fileKind(current) !== child.kind) {
+        throw new Error(`Replica child changed during schema inspection: ${child.relative}`);
+      }
+    }
+    for (const name of names) {
+      if (root.children.some((child) => child.relative === name)) continue;
+      const path = join(root.path, name);
+      const details = await lstat(path, { bigint: true });
+      if (!/^replica\.db-(?:wal|shm|journal)$/.test(name) || !details.isFile()) {
+        throw new Error(`Unexpected replica child during schema inspection: ${name}`);
+      }
+      root.children.push({ path, relative: name, kind: "file", identity: details, parent: root });
+      knownEntries.push(identityOf(name, "file", details));
+    }
     return { root, directories, knownEntries, unknownPaths, unknownEntries };
   } catch (error) {
     await closeDirectories(directories);
@@ -204,6 +297,9 @@ function approvedEntries(entries: readonly SqliteLayoutEntry[]): Map<string, Sql
   return approved;
 }
 
+/** Test-only interleaving seam for replacement races between enumerated unlinks. */
+export const LAYOUT_FAULTS = Symbol("tinycloud.replica.layout-faults");
+
 /** Lease holder only: delete enumerated files, never recurse into an unapproved child. */
 export async function removeSqliteReplicaLayout(
   dir: string, options: {
@@ -212,6 +308,7 @@ export async function removeSqliteReplicaLayout(
     allowMissingDatabase?: boolean;
     expectedRoot?: SqliteLayoutIdentity;
     allowAdapterFence?: boolean;
+    [LAYOUT_FAULTS]?: { beforeUnlink?(path: string): void | Promise<void> };
   } = {},
 ): Promise<void> {
   const inventory = await inspect(dir, options.allowAdapterFence === true);
@@ -254,6 +351,7 @@ export async function removeSqliteReplicaLayout(
         if (child.directory) {
           await removeDirectory(child.directory);
         }
+        await options[LAYOUT_FAULTS]?.beforeUnlink?.(child.relative);
         await checkDirectory(directory);
         const details = await lstat(child.path, { bigint: true });
         if (process.platform !== "linux" && details.isSymbolicLink()) {
