@@ -16,6 +16,7 @@ import publishedWorkerUrl from "@tinycloud/replica/kv-storage/worker?url";
 
 import { createTestGate, createTestLifecycle } from "../../test-gate.js";
 import { ledgerFor } from "../../../src/kv-storage/ledger.js";
+import { createIndexedDbLifecycle, inspectReplicaKeyPresence } from "../../../src/kv-storage/lifecycle.js";
 
 const gate = createTestGate();
 const lifecycle = createTestLifecycle(gate);
@@ -94,6 +95,11 @@ const api = {
   deny: () => gate.deny(),
   /** Make this tab's view refuse delivery under `stamp` (the main-thread check). */
   revoke: (stamp: ReplicaSessionStamp) => lifecycle.revoke(stamp),
+  /** Test-only: recover at an injected lifecycle clock and inspect key presence, not key material. */
+  recoverAt: async (at: number) => {
+    const report = await createIndexedDbLifecycle({ now: () => at }).recover({ signal: new AbortController().signal });
+    return { report, keys: await inspectReplicaKeyPresence() };
+  },
   /** Open with `spec.stamp`, or a fresh stamp for the spec's principal; `stamp: null` opens without one. */
   open: (storage: string, name: string, spec: Omit<WireSpec, "stamp"> & { stamp?: ReplicaSessionStamp | null }) =>
     outcome(async () => {
