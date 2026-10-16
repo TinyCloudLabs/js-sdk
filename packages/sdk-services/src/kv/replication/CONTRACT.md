@@ -8,9 +8,10 @@ This document is normative for every `KVReplicaStorage` adapter: the browser Ind
 | `lifecycle.ts` | session stamp, account gate, `ReplicaGateTx.run`, erase seam, lifecycle facade |
 | `grantPolicyTypes.ts` | consent anchor, grant policy, policy function signatures |
 | `quota.ts` | quota spec, page admission, ledger seam, node admit hook |
-| `contractConstants.ts` | error codes, defaults, store and file names |
+| `contractConstants.ts` | error codes, browser storage names, free-space default; re-exports grant numeric constants |
+| `grantPolicyConstants.ts` | single source for grant TTL, consent window and renewal threshold, with no browser storage identifiers |
 
-`contractConstants` and `grantPolicyTypes` are subpath exports (`@tinycloud/sdk-services/kv/replication/contractConstants`, `…/grantPolicyTypes`). The constants are not re-exported from the package root.
+`contractConstants`, `grantPolicyConstants` and `grantPolicyTypes` are subpath exports (`@tinycloud/sdk-services/kv/replication/contractConstants`, `…/grantPolicyConstants`, `…/grantPolicyTypes`). Runtime policy and config import the numeric-only subpath so the default web bundle does not include browser database, marker or control names. The existing `contractConstants` export keeps the same named values for adapter consumers. None are re-exported from the package root.
 
 **Only replication off is byte-identical.** With replication off, nothing in this contract runs. With replication on, everything here is mandatory:
 - the lifecycle gate (§2);
