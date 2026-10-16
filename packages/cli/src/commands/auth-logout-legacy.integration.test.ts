@@ -476,6 +476,66 @@ test("corrupt-gate orphan revoke failure keeps the remote-pending marker and all
   }
 }, 30_000);
 
+for (const replacement of ["corrupt", "valid"] as const)
+  test(`online orphan revoke retains completed marker on late ${replacement} gate replacement`, async () => {
+    const { home, paths, sessionCid, networkPaths, revokedCids, atRevoke, setOnRevocationReceipt } = await fixture();
+    const gatePath = join(paths.directory, REPLICA_GATE_FILE);
+    const markerPath = join(paths.directory, REPLICA_LOGOUT_PENDING_FILE);
+    const originalGate = await readFile(gatePath);
+    await writeFile(gatePath, "{initial-corrupt");
+    let releaseBusy: (() => Promise<void>) | undefined;
+    setOnRevocationReceipt(async () => {
+      const store = await SqliteReplicaStore.open(dirname(paths.db), { create: false });
+      await store.open();
+      const lease = await store.acquireSyncLease(60_000);
+      if (!lease) {
+        await store.close();
+        throw new Error("The online receipt must hold the legacy SQLite lease before cleanup.");
+      }
+      releaseBusy = async () => {
+        await store.releaseLease(lease);
+        await store.close();
+      };
+    });
+    try {
+      const incomplete = await run(home, ["auth", "logout", "--revoke", "--discard-local-changes"]);
+      expect(incomplete.exitCode).toBeGreaterThan(0);
+      expect(incomplete.stderr).toContain("REPLICA_BUSY");
+      expect(revokedCids).toEqual([sessionCid]);
+      expect(atRevoke()).toEqual({ session: true, key: true, replica: true, unknown: false });
+      expect(JSON.parse(await readFile(markerPath, "utf8")).remotePending).not.toBe(true);
+      expect(JSON.parse(await readFile(join(paths.directory, "profile.json"), "utf8")).authSignedOut).toBe(true);
+      await expect(readFile(paths.session)).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(readFile(paths.key)).rejects.toMatchObject({ code: "ENOENT" });
+      expect(await Bun.file(paths.db).exists()).toBe(true);
+    } finally {
+      await releaseBusy?.();
+    }
+
+    const marker = await readFile(markerPath);
+    const replacementBytes = replacement === "corrupt" ? Buffer.from("{replacement-corrupt") : originalGate;
+    await writeFile(gatePath, replacementBytes);
+    const requestsBefore = networkPaths.length;
+    const refused = await run(home, ["auth", "status"]);
+    expect(refused.exitCode).toBeGreaterThan(0);
+    expect(refused.stderr).toContain(replacement === "corrupt" ? "gate_unavailable" : "stamp_stale");
+    expect(networkPaths).toHaveLength(requestsBefore);
+    expect(revokedCids).toEqual([sessionCid]);
+    expect(await readFile(markerPath)).toEqual(marker);
+    await expect(readFile(paths.session)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(readFile(paths.key)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(await Bun.file(paths.db).exists()).toBe(true);
+    expect(await readFile(gatePath)).toEqual(replacementBytes);
+
+    await rm(gatePath);
+    const recovered = await run(home, ["auth", "status"]);
+    expect(recovered.exitCode, recovered.stderr).toBe(0);
+    expect(networkPaths).toHaveLength(requestsBefore);
+    for (const file of [paths.session, paths.key, paths.db, markerPath, gatePath]) {
+      await expect(readFile(file)).rejects.toMatchObject({ code: "ENOENT" });
+    }
+  }, 30_000);
+
 test("markerless deferred v1 gate refuses online revoke before node I/O and retains the owner session", async () => {
   const { home, paths, networkPaths } = await fixture();
   const principal = JSON.parse(await readFile(paths.session, "utf8")).ownerDid as string;
