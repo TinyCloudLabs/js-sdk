@@ -1573,11 +1573,18 @@ export function createSqliteReplicaStorage(
     },
     async recoverLogoutPending({ signal, clearCredentials, eraseLegacyReplicas }) {
       const path = join(profileDir, REPLICA_LOGOUT_PENDING_FILE);
-      const failure = (error: unknown): ReplicaEraseReport => ({
+      const remainingIntents = async (): Promise<number> => {
+        try {
+          return (await (await fileGate()).readGateSnapshot(profileDir))?.intents.length ?? 0;
+        } catch {
+          return 0; // Inspection failed; the failed gate row below still refuses completion.
+        }
+      };
+      const failure = async (error: unknown): Promise<ReplicaEraseReport> => ({
         erased: [],
         failed: [{ id: "logout", code: typeof error === "object" && error !== null &&
           "code" in error && typeof error.code === "string" ? error.code : "STORAGE_ERROR" }],
-        remaining: 1,
+        remaining: await remainingIntents(),
       });
       let orphaned = false;
       let noMarkerReport: ReplicaEraseReport | undefined;
