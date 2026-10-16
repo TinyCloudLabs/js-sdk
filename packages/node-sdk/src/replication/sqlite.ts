@@ -104,9 +104,14 @@ export interface ProfileReplicaPurge extends Pick<ReplicaLifecycleGate, "recover
   completeRemoteLogout(input: { principal: string }): Promise<ProfileReplicaLogoutPending>;
   /** Validates a denied, pending marker for a selected network-only session retry; never permits replica delivery. */
   remotePendingLogout(input: { principal: string }): Promise<boolean>;
-  /** Explicit plain logout rechecks a freshly shown inventory before superseding unfinished remote revoke. */
+  /** First plain attempt refuses changed inventory and prints a nonsecret token without mutating the marker. */
   abandonRemoteLogout(input: {
     principal: string; approval: ProfileReplicaPreflight; discardLocalChanges?: boolean;
+  }): Promise<ProfileReplicaLogoutPending>;
+  /** Only a separate, user-confirmed CLI command may use the displayed token; rechecks all identities under lock. */
+  approveChangedPlainLogout(input: {
+    principal: string; approval: ProfileReplicaPreflight; discardLocalChanges: true;
+    inventoryApprovalToken: string;
   }): Promise<ProfileReplicaLogoutPending>;
   reapproveLogoutPending(input: {
     principal: string; approval: ProfileReplicaPreflight;
@@ -144,6 +149,8 @@ export type ProfileReplicaLogoutPending = ({
 }) & {
   /** Profile-local owner binding; v1 also retains its salted gate principalHash. */
   principalDigest: string;
+  /** Random durable challenge salt, retained across a crash while this marker exists. */
+  approvalSalt: string;
   discardLocalChanges?: true;
   remotePending?: true;
   remoteAbandoned?: true;
@@ -178,6 +185,54 @@ function safeInventoryPath(path: string): boolean {
 function logoutPrincipalDigest(principal: string): string {
   return createHash("sha256").update("tinycloud-replica-logout\0").update(principal, "utf8").digest("hex");
 }
+/** A visible confirmation fence, not authority: every field is rechecked under the profile lock. */
+function inventoryApprovalToken(
+  marker: ProfileReplicaLogoutPending, principal: string, report: ProfileReplicaPreflight,
+): string {
+  const markerId = marker.v === 2
+    ? [marker.v, marker.nonce, marker.principalDigest]
+    : [marker.v, marker.incarnation, marker.lifecycleEpoch, marker.principalDigest];
+  const entries = [
+    ...report.unknownEntries,
+    ...report.knownEntries,
+    ...report.knownRoots.map((root) => ({ ...root, kind: "directory" })),
+    ...report.missingDatabases.map((path) => ({ path, kind: "missing", dev: "", ino: "" })),
+  ].map(({ path, kind, dev, ino }) => ({ path, kind, dev, ino }))
+    .sort((a, b) => a.path < b.path ? -1 : a.path > b.path ? 1 :
+      a.kind < b.kind ? -1 : a.kind > b.kind ? 1 : 0);
+  return createHash("sha256").update("tc-logout-approve-v1\0")
+    .update(JSON.stringify([markerId, marker.approvalSalt, principal,
+      marker.v === 2 ? null : marker.lifecycleEpoch, entries]))
+    .digest().subarray(0, 16).toString("hex");
+}
+
+function changedInventoryRefusal(
+  marker: ProfileReplicaLogoutPending, principal: string, report: ProfileReplicaPreflight,
+): Error & { code: "REPLICA_GATED"; gate: string; inventoryApprovalToken: string } {
+  const token = inventoryApprovalToken(marker, principal, report);
+  const error = localChangesRefusal(report.unknownPaths.length > 0 ? report.unknownPaths :
+    [...report.knownEntries.map(({ path }) => path), ...report.knownRoots.map(({ path }) => path)]);
+  error.message += ` To approve this exact changed inventory in a separate command, use --discard-local-changes --approve-inventory ${token}.`;
+  return Object.assign(error, { inventoryApprovalToken: token });
+}
+function storedInventoryChanged(
+  marker: ProfileReplicaLogoutPending, report: ProfileReplicaPreflight,
+): boolean {
+  try {
+    assertApprovedInventory(report, {
+      unknownEntries: marker.approvedUnknown, knownRoots: marker.knownRoots,
+      knownEntries: marker.knownEntries, missingDatabases: marker.missingDatabases,
+    });
+    return false;
+  } catch (error) {
+    if (typeof error === "object" && error !== null && "code" in error &&
+        error.code === "REPLICA_GATED" && "gate" in error && error.gate === "gate_unavailable") {
+      return true;
+    }
+    throw error;
+  }
+}
+
 
 function decimalIdentity(value: unknown): value is string {
   return typeof value === "string" && /^(0|[1-9][0-9]*)$/.test(value);
@@ -200,6 +255,7 @@ function logoutMarkerOf(value: unknown): ProfileReplicaLogoutPending {
     decimalIdentity((item as ProfileReplicaRootIdentity).dev) &&
     decimalIdentity((item as ProfileReplicaRootIdentity).ino);
   if (typeof row.principalDigest !== "string" || !/^[0-9a-f]{64}$/.test(row.principalDigest) ||
+      typeof row.approvalSalt !== "string" || !/^[0-9a-f]{32}$/.test(row.approvalSalt) ||
       !Array.isArray(row.approvedUnknown) || !row.approvedUnknown.every(entry) ||
       !Array.isArray(row.knownRoots) || !row.knownRoots.every(root) ||
       !Array.isArray(row.knownEntries) || !row.knownEntries.every(entry) ||
@@ -211,16 +267,16 @@ function logoutMarkerOf(value: unknown): ProfileReplicaLogoutPending {
       (row.remotePending === true && row.remoteAbandoned === true)) throw gated("gate_unavailable");
   const optional = Number(row.discardLocalChanges === true) + Number(row.remotePending === true) +
     Number(row.remoteAbandoned === true);
-  if (row.v === 2 && Object.keys(row).length === 8 + optional &&
+  if (row.v === 2 && Object.keys(row).length === 9 + optional &&
       row.scope === "orphan_profile" && typeof row.nonce === "string" &&
       /^[0-9a-f]{32}$/.test(row.nonce)) return row as ProfileReplicaLogoutPending;
-  if (row.v === 3 && Object.keys(row).length === 9 + optional &&
+  if (row.v === 3 && Object.keys(row).length === 10 + optional &&
       row.scope === "inactive_gate" &&
       typeof row.incarnation === "string" && row.incarnation.length > 0 &&
       Number.isSafeInteger(row.lifecycleEpoch) && (row.lifecycleEpoch as number) >= 0) {
     return row as ProfileReplicaLogoutPending;
   }
-  if (Object.keys(row).length !== 9 + optional || row.v !== 1 ||
+  if (Object.keys(row).length !== 10 + optional || row.v !== 1 ||
       typeof row.incarnation !== "string" || row.incarnation.length === 0 ||
       !Number.isSafeInteger(row.lifecycleEpoch) || (row.lifecycleEpoch as number) < 0 ||
       typeof row.principalHash !== "string" || !/^[0-9a-f]{64}$/.test(row.principalHash)) {
@@ -1823,6 +1879,22 @@ export function createSqliteReplicaStorage(
       state.principalHash === marker.principalHash;
     if (!denied && !(allowActive && active)) throw gated("stamp_stale");
   }
+  async function commitPlainAbandon(
+    path: string, marker: ProfileReplicaLogoutPending, report: ProfileReplicaPreflight,
+    discardLocalChanges: boolean,
+  ): Promise<ProfileReplicaLogoutPending> {
+    const { remotePending: _, discardLocalChanges: _oldDiscard, ...previous } = marker;
+    const abandoned: ProfileReplicaLogoutPending = {
+      ...previous, remoteAbandoned: true,
+      approvedUnknown: discardLocalChanges ? report.unknownEntries : [],
+      knownRoots: report.knownRoots, knownEntries: report.knownEntries,
+      missingDatabases: report.missingDatabases,
+      ...(discardLocalChanges ? { discardLocalChanges: true } : {}),
+    };
+    await writeJsonAtomic(path, abandoned, options.dirSync);
+    return abandoned;
+  }
+
 
   const lifecycle: ReplicaLifecycleGate & ProfileReplicaPurge = {
     kind: "file",
@@ -2046,8 +2118,19 @@ export function createSqliteReplicaStorage(
           }
           return previous;
         }
+        if (state === undefined && report.knownRoots.length === 0 && !corruptGate) return null;
+        if (state !== undefined && state.principalHash === null && !state.eraseDeferred &&
+            report.knownRoots.length === 0 && state.intents.length === 0) return null;
+        let principalHash: string | undefined;
+        if (state !== undefined && (state.principalHash !== null || state.eraseDeferred)) {
+          principalHash = await gate.principalHashOf(state.salt, principal);
+          if (state.principalHash !== principalHash &&
+              !(state.eraseDeferred && state.principalHash === null &&
+                state.deferredPrincipalHash === principalHash)) throw gated("principal_mismatch");
+        }
         const approvalFields = {
           principalDigest: logoutPrincipalDigest(principal),
+          approvalSalt: randomBytes(16).toString("hex"),
           approvedUnknown: discardLocalChanges ? report.unknownEntries : [],
           knownRoots: report.knownRoots, knownEntries: report.knownEntries,
           missingDatabases: report.missingDatabases,
@@ -2056,20 +2139,14 @@ export function createSqliteReplicaStorage(
         };
         let marker: ProfileReplicaLogoutPending;
         if (state === undefined) {
-          if (report.knownRoots.length === 0 && !corruptGate) return null;
           marker = { v: 2, scope: "orphan_profile", nonce: randomBytes(16).toString("hex"),
             ...approvalFields };
         } else if (state.principalHash === null && !state.eraseDeferred) {
-          if (report.knownRoots.length === 0 && state.intents.length === 0) return null;
           marker = { v: 3, scope: "inactive_gate", incarnation: state.incarnation,
             lifecycleEpoch: state.lifecycleEpoch, ...approvalFields };
         } else {
-          const principalHash = await gate.principalHashOf(state.salt, principal);
-          if (state.principalHash !== principalHash &&
-              !(state.eraseDeferred && state.principalHash === null &&
-                state.deferredPrincipalHash === principalHash)) throw gated("principal_mismatch");
           marker = { v: 1, incarnation: state.incarnation,
-            lifecycleEpoch: state.lifecycleEpoch, principalHash, ...approvalFields };
+            lifecycleEpoch: state.lifecycleEpoch, principalHash: principalHash!, ...approvalFields };
         }
         await writeJsonAtomic(path, marker, options.dirSync);
         visibleStamp = undefined;
@@ -2106,6 +2183,7 @@ export function createSqliteReplicaStorage(
         const state = await (await fileGate()).readGateSnapshot(profileDir);
         const report = await inspectProfileReplicaLayout(profileDir, state !== undefined);
         assertSupportedProfileLayout(report);
+        if (storedInventoryChanged(marker, report)) throw changedInventoryRefusal(marker, principal, report);
         assertApprovedInventory(report, approval);
         if (approval.knownLegacyReplicas !== report.knownLegacyReplicas ||
             JSON.stringify(approval.unknownPaths) !== JSON.stringify(report.unknownPaths) ||
@@ -2113,16 +2191,30 @@ export function createSqliteReplicaStorage(
             (!discardLocalChanges && report.unknownPaths.length > 0)) {
           throw localChangesRefusal(report.unknownPaths);
         }
-        const { remotePending: _, discardLocalChanges: oldDiscard, ...previous } = marker;
-        const abandoned: ProfileReplicaLogoutPending = {
-          ...previous, remoteAbandoned: true,
-          approvedUnknown: discardLocalChanges ? report.unknownEntries : [],
-          knownRoots: report.knownRoots, knownEntries: report.knownEntries,
-          missingDatabases: report.missingDatabases,
-          ...(discardLocalChanges ? { discardLocalChanges: true } : {}),
-        };
-        await writeJsonAtomic(path, abandoned, options.dirSync);
-        return abandoned;
+        return commitPlainAbandon(path, marker, report, discardLocalChanges);
+      });
+    },
+    async approveChangedPlainLogout({ principal, approval, discardLocalChanges, inventoryApprovalToken: token }) {
+      return profileSection(async () => {
+        const path = join(profileDir, REPLICA_LOGOUT_PENDING_FILE);
+        const marker = await readLogoutMarker(path);
+        if (marker === null || marker.remotePending !== true) throw gated("gate_unavailable");
+        await validatedRemoteMarker(marker, principal, true);
+        const state = await (await fileGate()).readGateSnapshot(profileDir);
+        const report = await inspectProfileReplicaLayout(profileDir, state !== undefined);
+        assertSupportedProfileLayout(report);
+        if (!storedInventoryChanged(marker, report)) throw gated("gate_unavailable");
+        if (discardLocalChanges !== true || typeof token !== "string" ||
+            !/^[0-9a-f]{32}$/.test(token) || token !== inventoryApprovalToken(marker, principal, report)) {
+          throw changedInventoryRefusal(marker, principal, report);
+        }
+        assertApprovedInventory(report, approval);
+        if (approval.knownLegacyReplicas !== report.knownLegacyReplicas ||
+            JSON.stringify(approval.unknownPaths) !== JSON.stringify(report.unknownPaths) ||
+            JSON.stringify(approval.unknownLegacyPaths) !== JSON.stringify(report.unknownLegacyPaths)) {
+          throw changedInventoryRefusal(marker, principal, report);
+        }
+        return commitPlainAbandon(path, marker, report, true);
       });
     },
     async reapproveLogoutPending({ principal, approval }) {
