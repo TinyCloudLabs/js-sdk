@@ -69,6 +69,7 @@ export function createKVReplication(deps: KVReplicationDeps): KVReplicationContr
   let consentAnchor: ReplicaConsentAnchor | null = null;
   try {
     consentAnchor = clampConsentAnchor(authority.consentAnchor?.() ?? null, scheduler.now());
+    if (consentAnchor?.source === "first_install") consentAnchor = null;
   } catch {
     anchorUnavailable = true;
   }
