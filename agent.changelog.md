@@ -23,6 +23,9 @@ entry when `agent.dev.md` or related agent workflow expectations change.
   queue with calls and snapshots; keep the policy-transition assertions intact.
 - Give the conformance job the operations suite's existing Linux namespace
   preflight; namespace tests remain mandatory in CI, not skipped.
+- Await CLI exit sentinels directly in authorization fixtures: Bun 1.3.14's
+  rejection matcher fails across nested async-local scope transitions. Keep
+  all lost-acknowledgment and authorization assertions without changing runtime code.
 
 ## 2026-10-14
 

@@ -3,7 +3,8 @@ import { Command } from "commander";
 import { KVService, SQLService, SpaceService } from "@tinycloud/sdk-core";
 import type { SpaceServiceConfig } from "@tinycloud/sdk-core";
 import { setActiveProfileName } from "../output/errors.js";
-import { diagnosticId, makeDiagnosticContext, withDiagnosticContext, type DiagnosticBinding, type DiagnosticObservation } from "@tinycloud/operations/diagnostics";
+import { diagnosticId, makeDiagnosticContext, withDiagnosticContext } from "@tinycloud/operations/diagnostics";
+import type { DiagnosticBinding, DiagnosticObservation } from "@tinycloud/operations/diagnostics";
 
 const SPACE = "tinycloud:pkh:eip155:1:0xabc:default";
 let node: Record<string, unknown>;
@@ -52,16 +53,26 @@ async function captureCommand(command: "kv" | "sql" | "space", args: string[]) {
   const originalWrite = stderr.write;
   const originalExit = process.exit;
   let rendered = "";
+  const expectedExit = new Error("expected process exit");
   let exitCode: number | undefined;
   stderr.write = (chunk: unknown) => { rendered += String(chunk); return true; };
   process.exit = ((code?: number): never => {
     exitCode = code;
-    throw new Error("expected process exit");
+    throw expectedExit;
   }) as typeof process.exit;
   try {
     const program = new Command();
     ({ kv: registerKvCommand, sql: registerSqlCommand, space: registerSpaceCommand })[command](program);
-    await expect(program.parseAsync(["node", "tc", command, ...args], { from: "node" })).rejects.toThrow("expected process exit");
+    // Bun 1.3.14's rejects matcher fails across nested run/enterWith scopes.
+    // Await normally and accept only this command's exact exit sentinel.
+    let exited = false;
+    try {
+      await program.parseAsync(["node", "tc", command, ...args], { from: "node" });
+    } catch (error) {
+      if (error !== expectedExit) throw error;
+      exited = true;
+    }
+    if (!exited) throw new Error("Expected the CLI command to exit");
   } finally {
     stderr.write = originalWrite;
     process.exit = originalExit;
