@@ -3,7 +3,7 @@ import { createRequire } from "node:module";
 import { IDBKeyRange, indexedDB } from "fake-indexeddb";
 import { signedRestorableSession } from "../../node-sdk/src/test-support/signed-restorable-session";
 import { createIndexedDbLifecycle } from "../../replica/src/kv-storage/lifecycle";
-import { pkhDid } from "@tinycloud/sdk-core";
+import { pkhDid, type ReplicationEvent } from "@tinycloud/sdk-core";
 
 const format = process.argv[2];
 assert(format === "mjs" || format === "cjs", "pass mjs or cjs");
@@ -118,13 +118,43 @@ const saved = await sessionStorage.load(proof.address);
 assert(saved, "signed browser session was not persisted");
 const staleStamp = { ...stamp, incarnation: crypto.randomUUID() };
 await sessionStorage.save(proof.address, { ...saved, replicaStamp: staleStamp });
-const stale = await root.TinyCloudWeb.create({ ...config, provider });
+const gatedReads: ReplicationEvent[] = [];
+const stale = await root.TinyCloudWeb.create({
+  ...config, provider,
+  replication: { ...config.replication, onEvent: (event: ReplicationEvent) => gatedReads.push(event) },
+});
 assert.equal((await stale.restoreSession(proof.address)).status, "restored",
   "stale replica stamp must not invalidate the verified network session");
 assert.equal((await stale.replication.status())[0].gate, "stamp_stale",
   "persisted stale stamp must not allow any local replica read");
 assert.equal((await sessionStorage.load(proof.address))?.replicaStamp?.incarnation, staleStamp.incarnation,
   "restore must not mint or silently repair a stale stamp");
+const gatedRead = await stale.kv.get("notes/a");
+assert.equal(gatedRead.ok, false, "a stale stamp must not serve local replica bytes");
+assert.equal(gatedRead.error.code, "NETWORK_ERROR", "gated fallback must retain the network result");
+const networkReads = gatedReads.filter(
+  (event): event is Extract<ReplicationEvent, { type: "replication.read" }> => event.type === "replication.read",
+);
+assert.equal(networkReads.length, 1, "covered gated read must report exactly one network result");
+assert.deepEqual(
+  { source: networkReads[0].source, reason: networkReads[0].reason, outcome: networkReads[0].outcome, code: networkReads[0].code },
+  { source: "network", reason: "replica_gated", outcome: "error", code: "REPLICA_GATED" },
+);
+const gatedLoader = optional.browserReplicaPlugin.loaders.gatedNetwork;
+optional.browserReplicaPlugin.loaders.gatedNetwork = async () => { throw new Error("gated chunk unavailable"); };
+try {
+  const stillNetwork = await root.TinyCloudWeb.create({ ...config, provider });
+  assert.equal((await stillNetwork.restoreSession(proof.address)).status, "restored",
+    "a missing optional observer must not fail signed network restoration");
+  assert.equal((await stillNetwork.replication.status())[0].gate, "stamp_stale");
+  const result = await stillNetwork.kv.get("notes/a");
+  assert.equal(result.ok, false);
+  assert.equal(result.error.code, "NETWORK_ERROR");
+  assert.equal(result.error.message, "offline by fixture",
+    "a missing optional observer must leave the real network KV path usable");
+} finally {
+  optional.browserReplicaPlugin.loaders.gatedNetwork = gatedLoader;
+}
 await web.signOut();
 assert("refused" in authority.plan("notes/"), "old authority survived sign-out and key rotation");
 console.log(`${format}: built core+optional signed owner restore, single registration and stale-session fence passed`);

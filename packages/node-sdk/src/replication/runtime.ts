@@ -158,27 +158,18 @@ export class ReplicationRuntime {
     loadGatedNetwork: () => Promise<typeof import("./gated-network")>,
   ): Promise<void> {
     if (this.closed || !this.options.enabled) return Promise.resolve();
-    const generation = ++this.generation;
-    this.bindingActive = false;
+    const retired = this.unbind();
+    const generation = this.generation;
     this.purgedGeneration = undefined;
-    this.pendingPurgeSet = false;
     this.pendingPurge = undefined;
     this.pendingPurgeResult = undefined;
-    this.unsubscribeConsentExpired?.();
-    this.unsubscribeConsentExpired = undefined;
-    const previous = this.current;
-    this.current = undefined;
-    this.gated = undefined;
-    this.detachAll();
     this.pending.clear();
     this.lastController = undefined;
     this.lastPending = undefined;
     this.lastIdentity = undefined;
     this.gatedReason = input.gate;
     this.primarySpace = input.session.spaceId;
-    const close = previous ? previous.close().catch(() => undefined) : Promise.resolve();
-    this.previous = this.previous.then(() => close);
-    this.binding = this.previous.then(async () => {
+    this.binding = retired.then(async () => {
       let create: typeof import("./gated-network").createGatedNetworkReadThrough;
       try {
         ({ createGatedNetworkReadThrough: create } = await loadGatedNetwork());
