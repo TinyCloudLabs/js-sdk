@@ -18,7 +18,7 @@ type Phase2Ratchet = {
 };
 type Ledger = { allowance: GzipSizes; entries: LedgerEntry[]; phase2Ratchet?: Phase2Ratchet };
 type OptionalEntry = LoadedSizes & { pr: string; ticket: string; note: string };
-type OptionalLedger = { allowance: LoadedSizes; entries: OptionalEntry[]; relocations?: unknown };
+type OptionalLedger = { allowance: LoadedSizes; entries: OptionalEntry[]; relocations?: unknown; measurementCorrection?: unknown };
 type Baseline = {
   webSdkTestBaseline: { ref: string; unhandledErrors: number; failingNames: string[]; unhandledSignatures: string[] };
 };
@@ -81,6 +81,22 @@ const priorOptionalAllowance: LoadedSizes = {
 const relocatedOptionalAllowance: LoadedSizes = {
   ...priorOptionalAllowance, "replica.mjs": 45657, "replica.cjs": 65176,
 };
+// ce52494d was approved with Bun 1.4.3, while the replica-size CI job now pins
+// Bun 1.3.14. The same 25-module browser graph minifies differently; correct
+// only the first-import measurement, leaving root, activation and worker fixed.
+const correctedOptionalAllowance: LoadedSizes = {
+  ...relocatedOptionalAllowance, "replica.mjs": 51201, "replica.cjs": 66132,
+};
+const approvedMeasurementCorrection = {
+  commit: "ce52494d0cb1ea236578bc6b709e9e6e016f8c78",
+  ciRun: "38958197518",
+  buildEvidence: "artifact://1325",
+  previousToolchain: "Bun 1.4.3",
+  canonicalToolchain: "Bun 1.3.14",
+  previousFirstImport: { "replica.mjs": 45538, "replica.cjs": 65096 },
+  canonicalFirstImport: { "replica.mjs": 51201, "replica.cjs": 66132 },
+  reason: "CI-pinned Bun.build emits a different minified graph from Bun 1.4.3 for the same 25 modules. This corrects the ce52494d first-import measurement with zero headroom; no new adapter bytes or activation/root allowance.",
+};
 const approvedRelocations = [
   { commit: relocationCommit, bucket: "web-core", "index.mjs": -143, "index.cjs": -130 },
   { commit: relocationCommit, bucket: "web-optional:first-import", "replica.mjs": 150, "replica.cjs": 170 },
@@ -88,7 +104,7 @@ const approvedRelocations = [
 const approvedPhase2 = {
   label: "TC-858 Phase 2 (#548 stack): security fences + required sync paths, approved by Naomi 2026-10-16",
   base: "9891ed9dddc19a57198ed156804948e04d8ea025",
-  toolchain: "Bun 1.4.3; production webpack; gzip -9 -c",
+  toolchain: "Bun 1.3.14; CI Rust 1.99.0; production webpack; gzip -9 -c",
   baseline: { "index.mjs": 1460603, "index.cjs": 1390460 },
   delta: { "index.mjs": 1322, "index.cjs": 1205 },
   ceiling: { "index.mjs": 1461925, "index.cjs": 1391665 },
@@ -145,7 +161,7 @@ function validateLedger(value: Ledger): void {
 function validateOptionalLedger(value: OptionalLedger): void {
   const path = "packages/web-sdk/scripts/replica-optional-size-ledger.json";
   if (!value || !value.allowance || !Array.isArray(value.entries) ||
-      Object.keys(value).some((key) => key !== "allowance" && key !== "entries" && key !== "relocations") ||
+      Object.keys(value).some((key) => key !== "allowance" && key !== "entries" && key !== "relocations" && key !== "measurementCorrection") ||
       Object.keys(value.allowance).some((key) => !optionalFormats.includes(key as typeof optionalFormats[number])) ||
       optionalFormats.some((format) => !Number.isSafeInteger(value.allowance[format]) || value.allowance[format] < 0)) {
     throw new Error(`Invalid ${path} shape or allowance`);
@@ -159,10 +175,21 @@ function validateOptionalLedger(value: OptionalLedger): void {
     }
   }
   const relocated = value.relocations !== undefined;
-  const ceiling = relocated ? relocatedOptionalAllowance : priorOptionalAllowance;
+  const corrected = value.measurementCorrection !== undefined;
+  const ceiling = corrected ? correctedOptionalAllowance : relocated ? relocatedOptionalAllowance : priorOptionalAllowance;
   if (optionalFormats.some((format) => value.allowance[format] !== ceiling[format]) ||
-      (relocated && JSON.stringify(value.relocations) !== JSON.stringify(approvedRelocations))) {
-    throw new Error(`${path}: only the exact paired ${relocationCommit} relocation is approved`);
+      (relocated && JSON.stringify(value.relocations) !== JSON.stringify(approvedRelocations)) ||
+      (corrected && (!relocated || JSON.stringify(value.measurementCorrection) !== JSON.stringify(approvedMeasurementCorrection)))) {
+    throw new Error(`${path}: only the exact paired ${relocationCommit} relocation and ce52494d Bun correction are approved`);
+  }
+  if (corrected) {
+    try {
+      execFileSync("git", ["merge-base", "--is-ancestor", approvedMeasurementCorrection.commit, "HEAD"], {
+        cwd: repoRoot, stdio: "ignore",
+      });
+    } catch {
+      throw new Error(`${path}: ce52494d measurement correction requires its approved source ancestor`);
+    }
   }
   if (relocated) {
     try {
@@ -268,11 +295,20 @@ if (prBaseSha) {
     optionalLedger.allowance[format] > baseOptional.allowance[format])) {
     const pairedTransition = baseOptional.relocations === undefined &&
       JSON.stringify(optionalLedger.relocations) === JSON.stringify(approvedRelocations) &&
+      baseOptional.measurementCorrection === undefined &&
       optionalFormats.every((format) =>
         baseOptional.allowance[format] === priorOptionalAllowance[format] &&
-        optionalLedger.allowance[format] === relocatedOptionalAllowance[format]);
-    if (!pairedTransition) {
-      console.error(`${baseOptionalPath}: optional allowance may increase only with the exact approved paired core relocation.`);
+        optionalLedger.allowance[format] ===
+          (optionalLedger.measurementCorrection === undefined
+            ? relocatedOptionalAllowance[format] : correctedOptionalAllowance[format]));
+    const measurementCorrection = JSON.stringify(baseOptional.relocations) === JSON.stringify(approvedRelocations) &&
+      baseOptional.measurementCorrection === undefined &&
+      JSON.stringify(optionalLedger.measurementCorrection) === JSON.stringify(approvedMeasurementCorrection) &&
+      optionalFormats.every((format) =>
+        baseOptional.allowance[format] === relocatedOptionalAllowance[format] &&
+        optionalLedger.allowance[format] === correctedOptionalAllowance[format]);
+    if (!pairedTransition && !measurementCorrection) {
+      console.error(`${baseOptionalPath}: optional allowance may increase only with the exact paired core relocation or ce52494d canonical-toolchain correction.`);
       failed = true;
     }
   }
@@ -280,8 +316,15 @@ if (prBaseSha) {
   const phase2Introduced = ledger.phase2Ratchet !== undefined && baseLedger.phase2Ratchet === undefined;
   if (baseLedger.phase2Ratchet !== undefined &&
       JSON.stringify(ledger.phase2Ratchet) !== JSON.stringify(baseLedger.phase2Ratchet)) {
-    console.error("The approved TC-858 Phase 2 ratchet must remain unchanged after its introduction.");
-    failed = true;
+    const prior = baseLedger.phase2Ratchet;
+    const toolchainCorrection = prior.toolchain === "Bun 1.4.3; production webpack; gzip -9 -c" &&
+      baseOptional.measurementCorrection === undefined &&
+      JSON.stringify(optionalLedger.measurementCorrection) === JSON.stringify(approvedMeasurementCorrection) &&
+      JSON.stringify({ ...prior, toolchain: approvedPhase2.toolchain }) === JSON.stringify(ledger.phase2Ratchet);
+    if (!toolchainCorrection) {
+      console.error("The approved TC-858 Phase 2 ratchet must remain unchanged after its one canonical-toolchain correction.");
+      failed = true;
+    }
   }
   if (phase2Introduced) {
     const oldEntriesAdded = ledger.entries.slice(baseLedger.entries.length);

@@ -82,22 +82,31 @@ wallet. An unknown, unavailable, or different provider account leaves network
 use intact and gates local reads; restoring never creates or repairs a replica
 stamp. Local reads recheck the connected account before returning replica data.
 
-Size accounting under Bun 1.4.3 has an absolute web-root ceiling and separate
-opt-in first-import, activation, and worker ceilings. TC-858 Phase 2 is capped
-at 1,461,925 B ESM / 1,391,665 B CJS gzip for the root: +1,322 / +1,205 B
-against the official master `9891ed9d` build (1,460,603 / 1,390,460 B).
-Base re-measured with the official recipe; the provisional base is superseded.
-This approved ratchet replaces further cumulative headroom for the #548 stack;
-the historical 388 / 861 B allowance and #546/#553 entries remain unchanged.
+Size accounting uses the replica-size CI toolchain (Bun 1.3.14, Rust 1.99.0),
+an absolute web-root ceiling, and separate opt-in first-import, activation,
+and worker ceilings. TC-858 Phase 2 is capped at 1,461,925 B ESM /
+1,391,665 B CJS gzip for the root: +1,322 / +1,205 B against the official
+master `9891ed9d` build (1,460,603 / 1,390,460 B). Base re-measured with
+the official recipe; the provisional base is superseded. This approved ratchet
+replaces further cumulative headroom for the #548 stack; the historical
+388 / 861 B allowance and #546/#553 entries remain unchanged.
 
-The opt-in first-import ceiling is 45,657 B ESM / 65,176 B CJS gzip
+The opt-in first-import ceiling is 51,201 B ESM / 66,132 B CJS gzip
 (including the replica parser and noble dependencies); awaiting the IndexedDB
 factory has a separate 23,081 B / 24,886 B ceiling. The content-hashed worker
 and WASM asset has an 818,196 B ceiling owned by `@tinycloud/replica`.
-A compliant first local open therefore costs at most about 886,934 B ESM /
-908,258 B CJS incremental gzip beyond the already-loaded web root; those
+A compliant first local open therefore costs at most 892,478 B ESM /
+909,214 B CJS incremental gzip beyond the already-loaded web root; those
 assets can then be cached. These byte ceilings do not replace real-worker
 Chromium acceptance of local reads, denial, expiry, and sign-out.
+
+The first-import ceiling is a measurement correction, not allowance for new
+adapter code: exact `ce52494d` built with Bun 1.3.14 measured 51,201/66,132 B,
+versus 45,538/65,096 B with Bun 1.4.3 on the same built SDK. Both builds
+resolved the same 25 modules; Bun's emitted minified/chunk graph differed.
+The replica-size CI run [38958197518](https://github.com/TinyCloudLabs/js-sdk/actions/runs/38958197518)
+pins Bun 1.3.14. The official checker remains authoritative for the root;
+local Rust/WASM rebuild differences do not change its absolute ceiling.
 
 ## Basic Storage Operations
 

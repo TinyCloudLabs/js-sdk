@@ -1,7 +1,7 @@
 {
   "allowance": {
-    "replica.mjs": 45657,
-    "replica.cjs": 65176,
+    "replica.mjs": 51201,
+    "replica.cjs": 66132,
     "activation.mjs": 23081,
     "activation.cjs": 24886
   },
@@ -19,6 +19,16 @@
       "replica.cjs": 170
     }
   ],
+  "measurementCorrection": {
+    "commit": "ce52494d0cb1ea236578bc6b709e9e6e016f8c78",
+    "ciRun": "38958197518",
+    "buildEvidence": "artifact://1325",
+    "previousToolchain": "Bun 1.4.3",
+    "canonicalToolchain": "Bun 1.3.14",
+    "previousFirstImport": { "replica.mjs": 45538, "replica.cjs": 65096 },
+    "canonicalFirstImport": { "replica.mjs": 51201, "replica.cjs": 66132 },
+    "reason": "CI-pinned Bun.build emits a different minified graph from Bun 1.4.3 for the same 25 modules. This corrects the ce52494d first-import measurement with zero headroom; no new adapter bytes or activation/root allowance."
+  },
   "entries": [
     {
       "pr": "#548",
