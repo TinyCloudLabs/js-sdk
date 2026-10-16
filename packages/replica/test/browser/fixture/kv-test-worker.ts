@@ -15,9 +15,10 @@ import { ReplicaError } from "../../../src/errors.js";
 import type { FetchedContent, ReplicaTransport, SyncPage } from "../../../src/types.js";
 import { createTestGate } from "../../test-gate.js";
 
+type ClockMessage = { testOnly: "setClock"; at: number };
 const scope = self as unknown as {
   postMessage(message: unknown, transfer?: Transferable[]): void;
-  onmessage: ((message: MessageEvent<{ id: number } & KvRequest>) => void) | null;
+  onmessage: ((message: MessageEvent<({ id: number } & KvRequest) | ClockMessage>) => void) | null;
 };
 
 const BASE58 = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
@@ -42,8 +43,11 @@ async function call(url: string, body: unknown, signal: AbortSignal | undefined)
   return data;
 }
 
+let clockMs: number | undefined;
+
 const host = createKvWorkerHost({
   post: (message, transfer) => scope.postMessage(message, transfer ?? []),
+  now: () => clockMs ?? Date.now(),
   createDevice() {
     const secret = ed25519.utils.randomPrivateKey();
     const did = `did:key:z${base58(Uint8Array.from([0xed, 0x01, ...ed25519.getPublicKey(secret)]))}`;
@@ -72,5 +76,13 @@ const host = createKvWorkerHost({
   ...(navigator.locks === undefined ? {} : { locks: navigator.locks }),
 });
 
-scope.onmessage = (message) => host.receive(message.data);
+scope.onmessage = ({ data }) => {
+  if ("testOnly" in data) {
+    if (!Number.isSafeInteger(data.at) || data.at < 0) throw new Error("Invalid test worker clock");
+    clockMs = data.at;
+    scope.postMessage({ testOnly: "clockSet", at: clockMs });
+    return;
+  }
+  host.receive(data);
+};
 scope.postMessage({ event: { event: "ready" } });

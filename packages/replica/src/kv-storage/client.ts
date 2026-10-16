@@ -1,5 +1,5 @@
 /**
- * `indexedDbReplicaStorage()`: the browser `KVReplicaStorage` (TC-858 Phase 2
+ * `indexedDbReplicaStorage()`: the browser `ReplicaGatedStorage` (TC-858 Phase 2
  * plan §3, CONTRACT.md §1). Main-thread half: a thin RPC client over one
  * dedicated worker per storage instance, which owns the engine, the network
  * and the device key. Pending writes, `inspectStatus` and `purge` run here
@@ -12,9 +12,7 @@
  * worker's reply carries exactly the handle's stamp and `deliverable(stamp)`.
  */
 import type {
-  KVReplicaHandle,
   KVReplicaSpec,
-  KVReplicaStorage,
   LocalGetResult,
   LocalListResult,
   LocalReplicaStatus,
@@ -23,6 +21,9 @@ import type {
   PurgeTarget,
   ReplicaDenyOutcome,
   ReplicaBrowserGateSnapshot,
+  ReplicaGatedHandle,
+  ReplicaGatedSpec,
+  ReplicaGatedStorage,
   ReplicaGrantInfo,
   ReplicaLifecycleGate,
   ReplicaQuotaLedger,
@@ -56,7 +57,7 @@ export type IndexedDbReplicaStorageOptions = {
   /**
    * The main-thread transaction guard (`createIndexedDbGateTx`): the pending
    * store runs every read and update through it, and `purge`/`inspectStatus`
-   * derive salted ids from its `snapshot()`.
+   * derive private gate-HMAC ids from its `snapshot()`.
    */
   gateTx?: BrowserReplicaGateTx;
   /** Releases quota for partitions `purge()` erases, in the erase transaction. */
@@ -153,8 +154,8 @@ class WorkerConnection {
   }
 }
 
-class IndexedDbReplicaHandle implements KVReplicaHandle {
-  readonly spec: KVReplicaSpec;
+class IndexedDbReplicaHandle implements ReplicaGatedHandle {
+  readonly spec: ReplicaGatedSpec;
   readonly deviceDid: string;
   readonly replicaId: string;
   readonly #storage: IndexedDbReplicaStorage;
@@ -169,7 +170,7 @@ class IndexedDbReplicaHandle implements KVReplicaHandle {
   constructor(
     storage: IndexedDbReplicaStorage,
     gate: { lifecycle: ReplicaLifecycleGate; stamp: ReplicaSessionStamp },
-    spec: KVReplicaSpec,
+    spec: ReplicaGatedSpec,
     wire: KvOpenSpec,
     connection: WorkerConnection,
     opened: KvResults["open"],
@@ -294,16 +295,16 @@ async function purgePendingFor(lifecycle: ReplicaLifecycleGate, partitionId: str
 }
 
 
-class IndexedDbReplicaStorage implements KVReplicaStorage {
+class IndexedDbReplicaStorage implements ReplicaGatedStorage {
   readonly kind = "indexeddb" as const;
-  readonly lifecycle: ReplicaLifecycleGate | undefined;
+  readonly lifecycle: ReplicaLifecycleGate;
   readonly #options: IndexedDbReplicaStorageOptions;
   readonly #handles = new Set<IndexedDbReplicaHandle>();
   #connection: WorkerConnection | undefined;
   #persisted: Promise<boolean | null> | undefined;
   #recovery: Promise<void> | undefined;
 
-  constructor(options: IndexedDbReplicaStorageOptions) {
+  constructor(options: IndexedDbReplicaStorageOptions & { lifecycle: ReplicaLifecycleGate }) {
     this.#options = { ...options, ledger: options.ledger ?? ledgerFor() };
     this.lifecycle = options.lifecycle;
   }
@@ -381,11 +382,10 @@ class IndexedDbReplicaStorage implements KVReplicaStorage {
     return this.#recovery;
   }
 
-  async open(spec: KVReplicaSpec): Promise<KVReplicaHandle> {
+  async open(spec: ReplicaGatedSpec): Promise<ReplicaGatedHandle> {
     assertFolderPrefix(spec.prefix);
     const identity = canonicalReplicationIdentity(spec.identity);
     const lifecycle = this.lifecycle;
-    if (lifecycle === undefined) throw gated("gate_unavailable", "No lifecycle gate is wired into the replica storage.");
     const stamp = spec.stamp;
     if (stamp === undefined) throw gated("not_established", "The session has no replica stamp.");
     await this.#recoverBeforeOpen(lifecycle);
@@ -398,7 +398,7 @@ class IndexedDbReplicaStorage implements KVReplicaStorage {
       allowSecrets: spec.allowSecrets,
       stamp: { incarnation: stamp.incarnation, lifecycleEpoch: stamp.lifecycleEpoch },
       ...(spec.device === undefined ? {} : { device: { did: spec.device.did, jwk: spec.device.jwk } }),
-      ...(spec.grantPolicy === undefined ? {} : { grantPolicy: structuredClone(spec.grantPolicy) }),
+      grantPolicy: structuredClone(spec.grantPolicy),
       ...(spec.quota === undefined ? {} : { quota: { ...spec.quota } }),
     };
     const connection = this.connection();
@@ -590,12 +590,12 @@ class IndexedDbReplicaStorage implements KVReplicaStorage {
 }
 
 /**
- * The IndexedDB `KVReplicaStorage`: one origin database
+ * The IndexedDB `ReplicaGatedStorage`: one origin database
  * (`tinycloud-replica-kv`) and one dedicated worker per storage instance.
  * Pass it as `replication.storage`; the worker is spawned lazily on the
  * first `open`, so an app with replication off never starts it.
  */
-export function indexedDbReplicaStorage(options: IndexedDbReplicaStorageOptions = {}): KVReplicaStorage {
+export function indexedDbReplicaStorage(options: IndexedDbReplicaStorageOptions = {}): ReplicaGatedStorage {
   const ledger = options.ledger ?? ledgerFor();
   const lifecycle = options.lifecycle ?? createIndexedDbLifecycle({ ledger });
   const gateTx = options.gateTx ?? createIndexedDbGateTx((create) => openKvDatabase({ create }), {

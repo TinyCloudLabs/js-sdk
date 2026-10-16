@@ -7,8 +7,8 @@ import { measureSealedRow } from "./sealed.js";
 import { ERASE_STORES, KV_DATABASE, KV_STORE, kvPartitionEraser, openKvDatabase } from "./schema.js";
 
 beforeAll(() => {
-  (globalThis as { indexedDB?: unknown }).indexedDB = fakeIndexedDB;
-  (globalThis as { IDBKeyRange?: unknown }).IDBKeyRange = fakeIDBKeyRange;
+  Object.defineProperty(globalThis, "indexedDB", { configurable: true, value: fakeIndexedDB });
+  Object.defineProperty(globalThis, "IDBKeyRange", { configurable: true, value: fakeIDBKeyRange });
 });
 
 beforeEach(async () => {

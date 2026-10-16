@@ -177,6 +177,25 @@ describe.skipIf(!RUN)("kv-storage over a fake feed (Chromium)", () => {
     expect(await page.evaluate(() => window.__kv.list("shorter", "notes/"))).toMatchObject({ ok: false, code: "GRANT_EXPIRED" });
   }, 60_000);
 
+  test("test-only worker clock expires gated reads without waiting for wall time", async () => {
+    feed("clock").put("notes/a", "clock-private");
+    const page = await kvPage();
+    await page.evaluate(() => window.__kv.createStorage("s", "fake"));
+    await openGranted(page, "s", "h", "clock");
+    expect(await page.evaluate(() => window.__kv.sync("h", 1))).toMatchObject({ ok: true });
+    expect(await page.evaluate(() => window.__kv.get("h", "notes/a"))).toMatchObject({
+      ok: true, value: { status: "present", value: "clock-private" },
+    });
+    const grant = (await page.evaluate(() => window.__kv.grant("h"))) as Outcome<{ effectiveExpiresAt: number; consentDeadline: number }>;
+    expect(grant.ok).toBe(true);
+    if (!grant.ok) return;
+    await page.evaluate((at) => window.__kv.setClock("s", at), grant.value.effectiveExpiresAt);
+    expect(await page.evaluate(() => window.__kv.get("h", "notes/a"))).toMatchObject({ ok: false, code: "GRANT_EXPIRED" });
+    expect(await page.evaluate(() => window.__kv.list("h", "notes/"))).toMatchObject({ ok: false, code: "GRANT_EXPIRED" });
+    await page.evaluate((at) => window.__kv.setClock("s", at), grant.value.consentDeadline);
+    expect(await page.evaluate(() => window.__kv.get("h", "notes/a"))).toMatchObject({ ok: false, code: "CONSENT_EXPIRED" });
+  }, 60_000);
+
   test("first-install consent and a CID install time survive partition purge and reinstall", async () => {
     feed("reinstall").put("notes/a", "one");
     const page = await kvPage();
@@ -581,6 +600,18 @@ describe.skipIf(!RUN)("kv-storage over a fake feed (Chromium)", () => {
     node.put("notes/a", "two");
     expect(await page.evaluate(() => window.__kv.sync("h", 2))).toMatchObject({ ok: true, value: { syncedThroughEpoch: 2 } });
     expect(await page.evaluate(() => window.__kv.get("h", "notes/a"))).toMatchObject({ ok: true, value: { status: "present", value: "two" } });
+  }, 60_000);
+
+  test("published production worker refuses missing origin gate and opens after establishment", async () => {
+    const page = await kvPage();
+    await page.evaluate(() => window.__kv.createStorage("s", "published"));
+    const spec = specOf("default-gate");
+    const missing = await page.evaluate((input) => window.__kv.open("s", "missing", {
+      ...input, stamp: { incarnation: "absent-gate", lifecycleEpoch: 0 },
+    } as never), spec);
+    expect(missing).toMatchObject({ ok: false, code: "REPLICA_GATED", gate: "not_established" });
+    const opened = await page.evaluate((input) => window.__kv.open("s", "h", input as never), spec);
+    expect(opened).toMatchObject({ ok: true, value: { deviceDid: expect.stringContaining("did:key:") } });
   }, 60_000);
 
   test("without a stamp, open fails closed", async () => {

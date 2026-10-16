@@ -36,6 +36,8 @@ type WireSpec = Omit<KVReplicaSpec, "fetch" | "onPeerCommit">;
 
 const storages = new Map<string, KVReplicaStorage>();
 const handles = new Map<string, KVReplicaHandle>();
+const fakeWorkers = new Map<string, Worker>();
+const fakeClocks = new Map<string, number>();
 const peerCommits = new Map<string, ReplicaPeerCommit[]>();
 const syncs = new Map<string, { abort: AbortController; result: Promise<Outcome<unknown>> }>();
 const closes = new Map<string, Promise<void>>();
@@ -52,11 +54,39 @@ const api = {
   createStorage(name: string, kind: "fake" | "real" | "published", quota?: ReplicaQuotaSpec): void {
     const worker =
       kind === "fake"
-        ? () => new Worker(new URL("./kv-test-worker.ts", import.meta.url), { type: "module" })
+        ? () => {
+          const instance = new Worker(new URL("./kv-test-worker.ts", import.meta.url), { type: "module" });
+          fakeWorkers.set(name, instance);
+          if (fakeClocks.has(name)) instance.postMessage({ testOnly: "setClock", at: need(fakeClocks, name) });
+          return instance;
+        }
         : kind === "real"
           ? () => new Worker(new URL("./kv-real-worker.ts", import.meta.url), { type: "module" })
           : new URL(publishedWorkerUrl, import.meta.url);
     storages.set(name, indexedDbReplicaStorage({ worker, lifecycle, gateTx: gate, ...(quota === undefined ? {} : { ledger: ledgerFor(quota) }) }));
+  },
+  /** Test worker only: wait for the clock ACK before making the next guarded call. */
+  async setClock(storage: string, at: number): Promise<void> {
+    if (!Number.isSafeInteger(at) || at < 0) throw new Error("Invalid test worker clock");
+    fakeClocks.set(storage, at);
+    const worker = need(fakeWorkers, storage);
+    await new Promise<void>((resolve, reject) => {
+      const receive = ({ data }: MessageEvent<unknown>) => {
+        if (data === null || typeof data !== "object" || Reflect.get(data, "testOnly") !== "clockSet" ||
+            Reflect.get(data, "at") !== at) return;
+        worker.removeEventListener("message", receive);
+        worker.removeEventListener("error", fail);
+        resolve();
+      };
+      const fail = (error: ErrorEvent) => {
+        worker.removeEventListener("message", receive);
+        worker.removeEventListener("error", fail);
+        reject(new Error(error.message || "Test worker failed while advancing clock"));
+      };
+      worker.addEventListener("message", receive);
+      worker.addEventListener("error", fail);
+      worker.postMessage({ testOnly: "setClock", at });
+    });
   },
   /** The session stamp a fresh sign-in of `principal` gets from the test gate. */
   establish: (principal: string) => gate.establish(principal),

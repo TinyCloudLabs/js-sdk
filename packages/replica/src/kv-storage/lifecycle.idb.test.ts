@@ -75,6 +75,41 @@ describe("origin deny tombstone", () => {
     expect(await inspectReplicaKeyPresence()).toEqual({ gateHmac: true, accountKey: true });
   });
 
+  test("recover preserves the componentwise v1 deny floor before destructive v2 migration", async () => {
+    const now = Date.now();
+    const legacyDeniedAt = now - 200;
+    const externalDeniedAt = now - 100;
+    const old = indexedDB.open(KV_DATABASE, 1);
+    old.onupgradeneeded = () => {
+      old.result.createObjectStore(KV_STORE.gate);
+      old.result.createObjectStore(KV_STORE.meta);
+    };
+    const legacy = await requestAsPromise(old);
+    const tx = legacy.transaction([KV_STORE.gate, KV_STORE.meta], "readwrite");
+    const committed = transactionDone(tx);
+    tx.objectStore(KV_STORE.gate).put({ incarnation: "legacy", lifecycleEpoch: 5, deniedAt: legacyDeniedAt }, "account");
+    tx.objectStore(KV_STORE.meta).put({ key: "notes/private", value: "plaintext-secret" }, "old-key");
+    await committed;
+    legacy.close();
+    entries.set(tombstoneKey, JSON.stringify({ epoch: 4, deniedAt: externalDeniedAt }));
+
+    const lifecycle = createIndexedDbLifecycle({ now: () => now });
+    expect(await openKvDatabase({ create: false })).toBeNull();
+    expect(await lifecycle.recover({ signal: new AbortController().signal }))
+      .toMatchObject({ failed: [], remaining: 0 });
+    expect(JSON.parse(entries.get(tombstoneKey)!)).toEqual({ epoch: 5, deniedAt: externalDeniedAt });
+    const upgraded = (await openKvDatabase({ create: false }))!;
+    expect(upgraded.version).toBe(2);
+    expect(await requestAsPromise(upgraded.transaction(KV_STORE.meta).objectStore(KV_STORE.meta).count())).toBe(0);
+    upgraded.close();
+
+    await expect(lifecycle.establishSessionStamp(principal, { consentAnchor: { source: "siwe", at: externalDeniedAt } }))
+      .rejects.toMatchObject({ code: "REPLICA_GATED", gate: "stamp_stale" });
+    const fresh = await lifecycle.establishSessionStamp(principal, { consentAnchor: { source: "siwe", at: now } });
+    expect(fresh.lifecycleEpoch).toBe(5);
+    expect(fresh.incarnation).not.toBe("legacy");
+  });
+
   test("fallback delete retains epoch and rejects a pre-deny SIWE across lifecycle instances", async () => {
     const first = createIndexedDbLifecycle();
     const issuedAt = Date.now() - 1000;
