@@ -98,6 +98,7 @@ function harness(options: {
   sessionGrant?: ReplicationAuthority["sessionGrant"];
   plan?: ReplicationAuthority["plan"];
   mint?: ReplicationAuthority["mint"];
+  ownerAnchor?: boolean;
   scheduler?: ReplicationScheduler;
 } = {}) {
   const pendingByIdentity = new Map<string, PendingWriteStore>();
@@ -164,6 +165,7 @@ function harness(options: {
     },
   };
   const authority: ReplicationAuthority = {
+    consentAnchor: () => options.ownerAnchor ? { at: now, source: "siwe" } : null,
     sessionGrant: options.sessionGrant ?? (() => ({ refused: "NOT_COVERED" })),
     plan: options.plan ?? (() => ({ refused: "NOT_COVERED" })),
     async mint(deviceDid, prefix, signal) {
@@ -241,6 +243,7 @@ describe("node replication integration", () => {
 
   test("partial authority opens only covered prefixes and preserves pending state on re-sign-in", async () => {
     const env = harness({
+      ownerAnchor: true,
       prefixes: ["notes/", "photos/"],
       sessionGrant: (prefix) => prefix === "notes/"
         ? { ucan: "session-grant", device: { did: "did:key:zSession", jwk: {} } }
@@ -290,6 +293,7 @@ describe("node replication integration", () => {
 
   test("unconstrained installed grants survive an offline mint failure near expiry", async () => {
     const env = harness({
+      ownerAnchor: true,
       initialGrant: () => ({ cid: "bafy-installed", parentCid: "bafy-old-parent", expiresAt: expiringAt, state: "active", unconstrained: true }),
       plan: () => ({ path: "runtime", parentCid: "bafy-parent", expiresAt: expiringAt }),
       mint: async () => { throw new Error("offline"); },
@@ -517,17 +521,10 @@ describe("node replication integration", () => {
         tinycloudHosts: ["https://signed-restore.example"],
       });
       expect(closed).toEqual(["https://signed-restore.example"]);
-      expect(await node.replication!.status()).toMatchObject([{ prefix: "notes/", state: "ready" }]);
-      expect(opened).toHaveLength(1);
-      expect(closed).toEqual(["https://signed-restore.example"]);
-      await node.replication!.sync();
-      expect(opened).toHaveLength(2);
-      expect(opened[1]!.spec.identity).toMatchObject({
-        host: "https://signed-restore.example",
-        space: delegateSpace.toLowerCase(),
-        principal: `did:pkh:eip155:${signed.chainId}:${signed.address.toLowerCase()}`,
-      });
       expect((await node.replication!.status()).map((entry) => entry.prefix)).toEqual(["notes/"]);
+      expect(opened).toHaveLength(1);
+      await expect(node.replication!.sync()).rejects.toMatchObject({ code: "NOT_COVERED" });
+      expect(opened).toHaveLength(1);
     } finally {
       globalThis.fetch = originalFetch;
       await node.replication?.close();
