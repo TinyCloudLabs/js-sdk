@@ -8,7 +8,7 @@ const home = await mkdtemp(join("/var/tmp", "tc-replica-logout-"));
 process.env.TC_HOME = home;
 const { ProfileManager } = await import("../config/profiles.js");
 const { profilePath } = await import("@tinycloud/operations/state");
-const { removeProfileReplicasAndReplication, removeProfileReplication } = await import("./profile-replicas.js");
+const { removeProfileReplicas, removeProfileReplicasAndReplication, removeProfileReplication } = await import("./profile-replicas.js");
 const { appendGrantHistory, grantHistoryPath, loadLocalGrantArtifacts, localGrantArtifactsPath, readGrantHistory } = await import("./permissions.js");
 
 beforeEach(async () => {
@@ -21,6 +21,30 @@ beforeEach(async () => {
 });
 
 afterAll(async () => { await rm(home, { recursive: true, force: true }); });
+
+test("legacy-only logout cleanup is idempotent and leaves flag-owned replicas untouched", async () => {
+  const legacy = join(profilePath("dogfood"), "replicas", "notes");
+  const flag = join(profilePath("dogfood"), "replication", "a".repeat(26), "replicas", "b".repeat(26));
+  for (const [path, prefix] of [[legacy, "notes/"], [flag, "apps/"]] as const) {
+    const store = await SqliteReplicaStore.open(path, { create: true });
+    await store.init({
+      name: prefix, replicaId: "b".repeat(26), host: "https://node.example.test",
+      space: "tinycloud:pkh:eip155:1:0x0000000000000000000000000000000000000001:default",
+      prefix, deviceDid: "did:key:device", allowSecrets: false,
+      localReadPolicy: "whileGrantValid", retentionGrantCid: null,
+    });
+    await store.close();
+  }
+  const legacyDb = join(legacy, "replica.db");
+  const flagDb = join(flag, "replica.db");
+  const flagBefore = await readFile(flagDb);
+
+  expect(await removeProfileReplicas("dogfood")).toEqual(["notes"]);
+  await expect(stat(legacyDb)).rejects.toMatchObject({ code: "ENOENT" });
+  expect(await readFile(flagDb)).toEqual(flagBefore);
+  expect(await removeProfileReplicas("dogfood")).toEqual([]);
+  expect(await readFile(flagDb)).toEqual(flagBefore);
+});
 
 test("local grant artifact reads refuse an alias instead of exposing another profile", async () => {
   await ProfileManager.setProfile("victim", {
