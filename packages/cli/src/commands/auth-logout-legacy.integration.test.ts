@@ -120,6 +120,28 @@ test("source-created legacy SQLite layout logs out normally without discard", as
   expect(JSON.parse(await readFile(join(paths.directory, "profile.json"), "utf8")).authSignedOut).toBe(true);
 }, 30_000);
 
+test("plain logout overrides a failed remote revocation and ends the retained session", async () => {
+  const { home, paths, networkPaths, setMode } = await fixture();
+  setMode("fail");
+  const failed = await run(home, ["auth", "logout", "--revoke"]);
+  expect(failed.exitCode).toBeGreaterThan(0);
+  expect(failed.stderr).toContain("REVOCATION_FAILED");
+  expect(JSON.parse(await readFile(join(paths.directory, REPLICA_LOGOUT_PENDING_FILE), "utf8")).remotePending).toBe(true);
+  expect(await Bun.file(paths.session).exists()).toBe(true);
+  expect(await Bun.file(paths.key).exists()).toBe(true);
+  expect(await Bun.file(paths.db).exists()).toBe(true);
+  const requestsBeforePlain = networkPaths.length;
+
+  const plain = await run(home, ["auth", "logout"]);
+  expect(plain.exitCode, plain.stderr).toBe(0);
+  expect(networkPaths).toHaveLength(requestsBeforePlain);
+  await expect(readFile(paths.session)).rejects.toMatchObject({ code: "ENOENT" });
+  await expect(readFile(paths.key)).rejects.toMatchObject({ code: "ENOENT" });
+  await expect(readFile(paths.db)).rejects.toMatchObject({ code: "ENOENT" });
+  expect(JSON.parse(await readFile(join(paths.directory, "profile.json"), "utf8")).authSignedOut).toBe(true);
+  await expect(readFile(join(paths.directory, REPLICA_LOGOUT_PENDING_FILE))).rejects.toMatchObject({ code: "ENOENT" });
+}, 30_000);
+
 test("unexpected SQLite outbox refuses logout before a marker, credentials or node request", async () => {
   const { home, paths, networkPaths } = await fixture();
   const database = new Database(paths.db);
