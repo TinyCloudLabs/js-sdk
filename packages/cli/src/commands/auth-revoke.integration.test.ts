@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { Command } from "commander";
 import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -357,6 +357,95 @@ describe("legacy replica read gate", () => {
     expect(corrupt.stderr).toContain("REPLICA_GATED");
     expect(await exists(paths.db)).toBe(true);
   }, 20_000);
+
+  test("a crash-before-unlink logout marker blocks fresh legacy get, list, and status without erasing credentials", async () => {
+    const home = await mkdtemp(join(tmpdir(), "tc841-legacy-logout-marker-"));
+    homes.push(home);
+    const paths = await seed(home, "https://node.example.test");
+    const commands = [
+      ["replica", "get", "notes/a", "--replica", "notes", "--raw"],
+      ["replica", "list", "--replica", "notes"],
+      ["replica", "status", "--replica", "notes"],
+    ];
+    for (const command of commands) expect((await run(home, command)).exitCode).toBe(0);
+    const sessionBefore = await readFile(paths.session);
+    const keyBefore = await readFile(paths.key);
+    const profileDir = join(home, ".tinycloud", "profiles", PROFILE);
+    const guard = <T>(section: () => Promise<T>): Promise<T> =>
+      withTinyCloudStateRoot(home, () => withProfileLock(PROFILE, section, { requireProfile: true }));
+    const purge = createProfileReplicaPurge({ profileDir, guard });
+    expect(await purge.prepareLogoutPending({ principal: paths.ownerDid })).not.toBeNull();
+
+    for (const command of commands) {
+      const denied = await run(home, command);
+      expect(denied.exitCode).toBeGreaterThan(0);
+      expect(denied.stderr).toContain("REPLICA_GATED");
+      expect(denied.stdout).not.toContain("notes/a");
+      expect(denied.stdout).not.toContain("private replica value");
+    }
+    expect(await readFile(paths.session)).toEqual(sessionBefore);
+    expect(await readFile(paths.key)).toEqual(keyBefore);
+    expect(await exists(paths.db)).toBe(true);
+  }, 30_000);
+
+  test("an already-open legacy read checks a newly committed logout marker before delivering bytes", async () => {
+    const home = await mkdtemp(join(tmpdir(), "tc841-legacy-marker-race-"));
+    homes.push(home);
+    const paths = await seed(home, "https://node.example.test");
+    const sessionBefore = await readFile(paths.session);
+    const keyBefore = await readFile(paths.key);
+    const profileDir = join(home, ".tinycloud", "profiles", PROFILE);
+    // Simulate an external marker arriving while this CLI command holds its cooperative profile lock.
+    const markerWriter = createProfileReplicaPurge({ profileDir, guard: async (section) => section() });
+    const originalGet = SqliteReplicaStore.prototype.get;
+    const originalWrite = process.stdout.write;
+    const originalError = process.stderr.write;
+    const originalHome = process.env.TC_HOME;
+    const stdout: string[] = [];
+    const stderr: string[] = [];
+    let markerWritten = false;
+    process.env.TC_HOME = home;
+    SqliteReplicaStore.prototype.get = async function (key) {
+      const entry = await originalGet.call(this, key);
+      expect(await markerWriter.prepareLogoutPending({ principal: paths.ownerDid })).not.toBeNull();
+      markerWritten = true;
+      return entry;
+    };
+    process.stdout.write = ((chunk: string | Uint8Array) => { stdout.push(Buffer.from(chunk).toString("utf8")); return true; }) as typeof process.stdout.write;
+    process.stderr.write = ((chunk: string | Uint8Array) => { stderr.push(Buffer.from(chunk).toString("utf8")); return true; }) as typeof process.stderr.write;
+    const exit = spyOn(process, "exit").mockImplementation(((code?: number) => {
+      throw Object.assign(new Error("CLI exited"), { commandExitCode: code });
+    }) as typeof process.exit);
+    try {
+      const program = new Command().option("-p, --profile <name>").option("--json");
+      registerReplicaCommand(program);
+      let exitCode: number | undefined;
+      try {
+        await withTinyCloudStateRoot(home, () => program.parseAsync(
+          ["--profile", PROFILE, "--json", "replica", "get", "notes/a", "--replica", "notes", "--raw"],
+          { from: "user" },
+        ));
+      } catch (error) {
+        if (!error || typeof error !== "object" || !("commandExitCode" in error)) throw error;
+        exitCode = error.commandExitCode as number;
+      }
+      expect(markerWritten).toBe(true);
+      expect(exitCode).toBeGreaterThan(0);
+      expect(stderr.join("")).toContain("REPLICA_GATED");
+      expect(stdout.join("")).not.toContain("private replica value");
+      expect(await readFile(paths.session)).toEqual(sessionBefore);
+      expect(await readFile(paths.key)).toEqual(keyBefore);
+      expect(await exists(paths.db)).toBe(true);
+    } finally {
+      SqliteReplicaStore.prototype.get = originalGet;
+      process.stdout.write = originalWrite;
+      process.stderr.write = originalError;
+      exit.mockRestore();
+      if (originalHome === undefined) delete process.env.TC_HOME;
+      else process.env.TC_HOME = originalHome;
+    }
+  }, 20_000);
+
 });
 
 describe("tc auth logout --revoke with durable replica denial", () => {
