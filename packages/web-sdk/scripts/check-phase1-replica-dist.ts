@@ -245,7 +245,7 @@ if (prBaseSha) {
     baseLedger.canonicalToolchainCorrection === undefined;
   if (ciCorrectionIntroduced) {
     if (!isPolicyOnlySinceApprovedSource(repoRoot, approvedCiToolchainCorrection.approvedSource, ciCorrectionPolicyOnlyPaths)) {
-      console.error("CI toolchain size correction requires unchanged approved shipped sources since ddc032ca.");
+      console.error("CI toolchain size correction requires unchanged measured web/worker artifact inputs since ddc032ca.");
       failed = true;
     }
   }
