@@ -526,15 +526,15 @@ or coverage incomplete; 5 grant expired, revoked or not yet valid; 6 network;
     .action((options, cmd: Command) =>
       run(async () => {
         const profile = await profileName(cmd);
+        if (options.prefix !== undefined) {
+          try {
+            assertFolderPrefix(options.prefix);
+          } catch (error) {
+            throw new CLIError("INVALID_REPLICATION_PREFIX", error instanceof Error ? error.message : String(error), ExitCode.USAGE_ERROR);
+          }
+        }
         await withPinnedProfileDirectory(profile, async (directory) => {
           if (directory === null) throw new CLIError("PROFILE_NOT_FOUND", `Profile "${profile}" does not exist.`, ExitCode.ERROR);
-          if (options.prefix !== undefined) {
-            try {
-              assertFolderPrefix(options.prefix);
-            } catch (error) {
-              throw new CLIError("INVALID_REPLICATION_PREFIX", error instanceof Error ? error.message : String(error), ExitCode.USAGE_ERROR);
-            }
-          }
           const globals = cmd.optsWithGlobals() as { host?: string };
           const config = await ProfileManager.getProfile(profile);
           const deviceDid = config.sessionDid ?? config.did;
