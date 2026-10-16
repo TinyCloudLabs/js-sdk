@@ -9,7 +9,7 @@ import { cursorRestart, decodeTcr1, listPathCovered, localList } from "./listLoc
 import { emitEvent, type ReplicationEventInput } from "./events";
 import type { KVListPage, KVReplicaHandle, KVReplicationController, LocalGetResult, LocalReadMeta, LocalReplicaStatus, ReplicaInspectedStatus, ReplicaGrantInfo, PendingWriteState, ReplicaDevice, ReplicaPeerCommit, ReplicationEvent, ReplicationReason, ReplicaStatusEntry, KVReplicationDeps, LocalSyncResult } from "./types";
 import type { ReplicaDeliveryDecision, ReplicaSessionStamp } from "./lifecycle";
-import { DEFAULT_GRANT_TTL_MS, RENEW_BELOW_FRACTION } from "./contractConstants";
+import { DEFAULT_GRANT_TTL_MS, RENEW_BELOW_FRACTION } from "./grantPolicyConstants";
 import { clampConsentAnchor, consentDeadlineMs, mintRemainingMs, needsSilentRenewal } from "./grantPolicy";
 import type { ReplicaConsentAnchor } from "./grantPolicyTypes";
 

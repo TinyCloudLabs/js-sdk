@@ -13,13 +13,17 @@
  * `unconstrained` flag; the controller enforces it on reuse).
  */
 
+import { SiweMessage } from "siwe";
 import {
   actionContains,
   KV,
   canonicalizeRecapCaveats,
   isCapabilitySubset,
+  principalDid,
   parseSpaceUri,
   type PermissionEntry,
+  type IWasmBindings,
+  type WasmRecapEntry,
   type TinyCloudSession,
 } from "@tinycloud/sdk-core";
 import {
@@ -28,6 +32,7 @@ import {
   type ReplicaDevice,
   type ReplicationAuthority,
 } from "@tinycloud/sdk-services";
+import type { DelegateToOptions, DelegateToResult, TinyCloudNode } from "../TinyCloudNode";
 import type { ReplicaRuntime } from "./replica-contract";
 // @ts-ignore -- node-sdk builds before replica declarations; keep the literal import for bundlers.
 import { parseUcanGrant as replicaParseUcanGrant } from "@tinycloud/replica";
@@ -153,6 +158,67 @@ export interface ReplicationAuthorityHost {
     entries: PermissionEntry[],
     options?: { expiryMs?: number; renewalOnly?: boolean },
   ): Promise<{ ucan: string; expiresAt: number }>;
+}
+
+/** Owner consent requires a current, signed SIWE root with verified unrestricted get+sync. */
+export function verifiedOwnerConsentAnchor(
+  session: ReplicationAuthoritySession,
+  wasmBindings: Pick<IWasmBindings, "validatePersistedSession">,
+  exactVerifiedRecap: (verified: { verifiedRecap?: unknown }) => WasmRecapEntry[],
+): ReplicaConsentAnchor | null {
+  if (typeof session.siwe !== "string" || typeof session.signature !== "string" ||
+      typeof session.address !== "string" || typeof session.chainId !== "number") return null;
+  try {
+    const verified = wasmBindings.validatePersistedSession?.({
+      delegationHeader: session.delegationHeader,
+      delegationCid: session.delegationCid,
+      spaceId: session.spaceId,
+      jwk: session.jwk,
+      address: session.address,
+      chainId: session.chainId,
+      siwe: session.siwe,
+      signature: session.signature,
+    });
+    if (!verified || !Number.isSafeInteger(Date.parse(verified.expiresAt ?? ""))) return null;
+    const signedIssuedAt = new SiweMessage(session.siwe).issuedAt;
+    if (typeof signedIssuedAt !== "string") return null;
+    const issuedAt = Date.parse(signedIssuedAt);
+    if (!Number.isSafeInteger(issuedAt) || issuedAt < 0) return null;
+    const granted = exactVerifiedRecap(verified)
+      .filter((entry) => entry.space === session.spaceId && entry.service === "kv" && entry.path === "")
+      .map((entry) => ({ ...entry, service: "tinycloud.kv" }));
+    const coversGetAndSync = isCapabilitySubset([{
+      service: "tinycloud.kv",
+      space: session.spaceId,
+      path: "",
+      actions: [KV.GET, KV.SYNC],
+    }], granted).subset;
+    return coversGetAndSync ? { at: issuedAt, source: "siwe" } : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Delegate a replica grant only through the selected owner parent for silent renewal. */
+export async function mintNodeReplicationGrant(
+  deviceDid: string,
+  entries: PermissionEntry[],
+  options: { expiryMs?: number; renewalOnly?: boolean } | undefined,
+  renewalSession: ReplicationAuthoritySession | undefined,
+  node: Pick<TinyCloudNode, "delegateTo">,
+): Promise<{ ucan: string; expiresAt: number }> {
+  if (options?.renewalOnly && !renewalSession) throw new Error("replication renewal lost its owner session");
+  const delegateOptions: DelegateToOptions | undefined = options?.renewalOnly ? {
+    expiry: options.expiryMs,
+    onPrepared: async (prepared) => {
+      assertRenewalParent(prepared.delegationHeader.Authorization, renewalSession!);
+    },
+  } : options?.expiryMs === undefined ? undefined : { expiry: options.expiryMs };
+  const result: DelegateToResult = await node.delegateTo(principalDid(deviceDid), entries, delegateOptions);
+  return {
+    ucan: result.delegation.delegationHeader.Authorization,
+    expiresAt: result.delegation.expiry.getTime(),
+  };
 }
 
 /** Milliseconds of validity a session or parent must have left for authority reuse (delegateTo's margin). */

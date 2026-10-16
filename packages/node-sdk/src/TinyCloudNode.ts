@@ -35,7 +35,7 @@ import { generateNonce, SiweMessage } from "siwe";
 
 import { assertValidReplicationConfig } from "./replication/config";
 import type { KVReplicaStorage, ReplicationAuthority, ReplicationControl, ReplicationOptions } from "@tinycloud/sdk-core";
-import type { ReplicaConsentAnchor, ReplicaDenyInput, ReplicaGateReason, ReplicaSessionStamp } from "@tinycloud/sdk-services/kv/replication";
+import type { ReplicaDenyInput, ReplicaGateReason, ReplicaSessionStamp } from "@tinycloud/sdk-services/kv/replication";
 import type { ReplicationRuntime } from "./replication/runtime";
 import { getNodeReplicationLoaders } from "./replication/module-registry";
 import {
@@ -144,7 +144,6 @@ import {
   verifyDidKeyEd25519Signature,
   canonicalizeAddress,
   pkhDid,
-  principalDid,
   parseSpaceUri,
   resolveTinyCloudHosts,
   publishLocationRecord,
@@ -1237,7 +1236,9 @@ export class TinyCloudNode {
     const epoch = this.sessionEpoch;
     const attempt = this.latestSessionAttempt;
     try {
-      const anchor = this.verifiedOwnerConsentAnchor(session);
+      const { verifiedOwnerConsentAnchor } = await getNodeReplicationLoaders().authority();
+      if (epoch !== this.sessionEpoch || attempt !== this.latestSessionAttempt) return undefined;
+      const anchor = verifiedOwnerConsentAnchor(session, this.wasmBindings, exactVerifiedRecap);
       if (anchor === null) {
         throw Object.assign(new Error("Replica sign-in requires a verified finite owner SIWE and exact-space KV get+sync."), {
           code: "REPLICA_GATED" as const,
@@ -7159,68 +7160,28 @@ export class TinyCloudNode {
     }
     return auth.replicationSignInEntries();
   }
-  private verifiedOwnerConsentAnchor(session: TinyCloudSession): ReplicaConsentAnchor | null {
-    if (typeof session.siwe !== "string" || typeof session.signature !== "string" ||
-        typeof session.address !== "string" || typeof session.chainId !== "number") return null;
-    try {
-      const verified = this.wasmBindings.validatePersistedSession?.({
-        delegationHeader: session.delegationHeader,
-        delegationCid: session.delegationCid,
-        spaceId: session.spaceId,
-        jwk: session.jwk,
-        address: session.address,
-        chainId: session.chainId,
-        siwe: session.siwe,
-        signature: session.signature,
-      });
-      if (!verified || !Number.isSafeInteger(Date.parse(verified.expiresAt ?? ""))) return null;
-      const signedIssuedAt = new SiweMessage(session.siwe).issuedAt;
-      if (typeof signedIssuedAt !== "string") return null;
-      const issuedAt = Date.parse(signedIssuedAt);
-      if (!Number.isSafeInteger(issuedAt) || issuedAt < 0) return null;
-      const granted = exactVerifiedRecap(verified)
-        .filter((entry) => entry.space === session.spaceId && entry.service === "kv" && entry.path === "")
-        .map((entry) => ({ ...entry, service: "tinycloud.kv" }));
-      const coversGetAndSync = isCapabilitySubset([{
-        service: "tinycloud.kv",
-        space: session.spaceId,
-        path: "",
-        actions: [KV.GET, KV.SYNC],
-      }], granted).subset;
-      return coversGetAndSync ? { at: issuedAt, source: "siwe" } : null;
-    } catch {
-      return null;
-    }
-  }
 
   private async replicationAuthority(): Promise<ReplicationAuthority> {
-    const { createReplicationAuthority, assertRenewalParent } = await getNodeReplicationLoaders().authority();
-    const host = {
+    const { createReplicationAuthority, mintNodeReplicationGrant, verifiedOwnerConsentAnchor } = await getNodeReplicationLoaders().authority();
+    return createReplicationAuthority({
       replicationSession: () => this.currentTinyCloudSession() ?? this.replicationDelegateSession,
       verifiedConsentAnchor: (session: unknown) => {
         const current = this.currentTinyCloudSession();
-        return session === current && current !== undefined ? this.verifiedOwnerConsentAnchor(current) : null;
+        return session === current && current !== undefined
+          ? verifiedOwnerConsentAnchor(current, this.wasmBindings, exactVerifiedRecap)
+          : null;
       },
       siweExpiration: (siwe) => extractSiweExpiration(siwe),
       planDelegation: (entries, options) => this.planDelegation(entries, options),
-      mintDelegation: async (deviceDid, entries, options) => {
-        const renewalSession = options?.renewalOnly ? this.currentTinyCloudSession() : undefined;
-        if (options?.renewalOnly && !renewalSession) throw new Error("replication renewal lost its owner session");
-        const result = await this.delegateTo(principalDid(deviceDid), entries, options?.renewalOnly ? {
-          expiry: options.expiryMs,
-          onPrepared: async (prepared) => {
-            assertRenewalParent(prepared.delegationHeader.Authorization, renewalSession!);
-          },
-        } : options?.expiryMs === undefined ? undefined : { expiry: options.expiryMs });
-        return {
-          ucan: result.delegation.delegationHeader.Authorization,
-          expiresAt: result.delegation.expiry.getTime(),
-        };
-      },
-    } satisfies Parameters<typeof createReplicationAuthority>[0] & {
-      verifiedConsentAnchor: (session: unknown) => ReplicaConsentAnchor | null;
-    };
-    return createReplicationAuthority(host);
+      mintDelegation: (deviceDid, entries, options) =>
+        mintNodeReplicationGrant(
+          deviceDid,
+          entries,
+          options,
+          options?.renewalOnly ? this.currentTinyCloudSession() : undefined,
+          this,
+        ),
+    });
   }
 
   private async quiesceReplicaRuntime(): Promise<void> {
