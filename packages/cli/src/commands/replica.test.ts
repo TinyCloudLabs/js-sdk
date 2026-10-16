@@ -424,6 +424,7 @@ describe("replica reset purge containment", () => {
     try {
       const result = await readFromCli(PROFILE, ["replica", "report"]);
       expect(result.exited).toBe(true);
+      expect(JSON.parse(result.stderr)).toMatchObject({ error: { code: "PROFILE_NOT_FOUND" } });
       expect(result.stdout).toBe("");
       expect(result.stdout).not.toContain("victim.example");
     } finally {
