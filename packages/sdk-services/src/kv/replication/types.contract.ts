@@ -264,6 +264,12 @@ type _ResumeRequiresSignal = Assert<
     (token: ProfileReplicaDeferredToken, options: { signal: AbortSignal }) => Promise<ReplicaEraseReport>
   >
 >;
+type _CommonGateHasNoDeferredErase = Assert<
+  Equal<"deferredErase" extends keyof ReplicaLifecycleGate ? true : false, false>
+>;
+type _CommonGateHasNoResume = Assert<
+  Equal<"resumeDeferredErase" extends keyof ReplicaLifecycleGate ? true : false, false>
+>;
 declare const commonLifecycle: ReplicaLifecycleGate;
 // @ts-expect-error Deferral is confined to the node/CLI profile facade.
 commonLifecycle.deny({ reason: "sign_out", principal: "did:example:owner" }, { deferErase: true });
