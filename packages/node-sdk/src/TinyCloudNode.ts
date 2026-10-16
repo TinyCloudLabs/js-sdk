@@ -2121,6 +2121,13 @@ export class TinyCloudNode {
     return this.currentTinyCloudSession();
   }
 
+  /** The active, verified replica stamp. Undefined when the replica is refused or the session has ended. */
+  get replicaStamp(): ReplicaSessionStamp | undefined {
+    const stamp = this.replicaSessionStamp;
+    if (!stamp || this.replicaRestoreGate !== undefined || !this.currentTinyCloudSession()) return undefined;
+    return { incarnation: stamp.incarnation, lifecycleEpoch: stamp.lifecycleEpoch };
+  }
+
   /**
    * Sign out and end the session on this instance.
    *
@@ -2284,14 +2291,32 @@ export class TinyCloudNode {
         "Cannot signIn() in session-only mode. Provide a privateKey in config to create your own space."
       );
     }
+    await this.signInWith(() => this.tc!.signIn(options));
+  }
 
+  /**
+   * Fresh OpenKey sign-in. The callback receives the SDK's original SIWE and
+   * session JWK before approval; the signed result is verified against those
+   * bytes before the network session or replica stamp is committed.
+   */
+  async signInWithOpenKey(
+    authorizeFn: Parameters<NodeUserAuthorization["signInWithOpenKey"]>[0],
+    options?: Parameters<NodeUserAuthorization["signInWithOpenKey"]>[1],
+  ): Promise<void> {
+    if (!this.signer || !this.tc || !this.auth) {
+      throw new Error("Cannot signInWithOpenKey() in session-only mode. Provide a signer in config.");
+    }
+    await this.signInWith(() => this.auth!.signInWithOpenKey(authorizeFn, options));
+  }
+
+  private async signInWith(performSignIn: () => Promise<unknown>): Promise<void> {
     // Read synchronously: a sign-out called after this sign-in started wins,
     // while a sign-out already in progress finishes before it starts.
     const epoch = this.sessionEpoch;
     const attempt = ++this.latestSessionAttempt;
     await this.signOutInFlight;
     try {
-      await this.establishSignIn(epoch, options);
+      await this.establishSignIn(epoch, performSignIn);
     } catch (error) {
       // A sign-out during sign-in wins: end whatever this sign-in established,
       // unless a newer sign-in or restore has started since.
@@ -2302,7 +2327,7 @@ export class TinyCloudNode {
     }
   }
 
-  private async establishSignIn(epoch: number, options?: SignInOptions): Promise<void> {
+  private async establishSignIn(epoch: number, performSignIn: () => Promise<unknown>): Promise<void> {
     if (!this.signer || !this.tc) {
       throw new Error("Not signed in. Call signIn() first.");
     }
@@ -2353,7 +2378,7 @@ export class TinyCloudNode {
     this.replicaRestoreGate = undefined;
     this.replicaSessionStamp = undefined;
     try {
-      await this.tc.signIn(options);
+      await performSignIn();
     } catch (error) {
       if (epoch === this.sessionEpoch && signInAttempt === this.latestSessionAttempt) {
         this.replicaRestoreGate = previousReplicaGate;
