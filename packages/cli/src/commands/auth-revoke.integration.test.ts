@@ -405,7 +405,7 @@ describe("tc auth logout --revoke with durable replica denial", () => {
     expect(token).toMatchObject({ deniedEpoch: expect.any(Number), principalHash: expect.any(String) });
     for (let pass = 0; pass < 2; pass += 1) {
       if (pass === 1) {
-        await purge.recover();
+        await purge.recover({ signal: new AbortController().signal });
         expect(await purge.deferredErase()).toEqual(token);
       }
       for (const command of commands) {
