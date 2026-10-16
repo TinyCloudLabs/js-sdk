@@ -11,12 +11,11 @@ import { TinyCloudNode, grantAuthRequest, principalDidEquals, REPLICA_LOGOUT_PEN
 import { composeManifestRequest } from "@tinycloud/sdk-core";
 import { invokeOperation } from "@tinycloud/operations";
 import { profilePath } from "@tinycloud/operations/state";
-import { removeProfileReplicas } from "../lib/profile-replicas.js";
 import { principalHashOf, readGateSnapshot } from "@tinycloud/replica/profile-gate";
 import { REPLICA_GATE_FILE } from "@tinycloud/sdk-services/kv/replication/contractConstants";
 import { ProfileManager } from "../config/profiles.js";
 import { logoutInventorySnapshot, planLogoutRevocations, type LogoutRevocationPlan } from "../lib/logout-revocation.js";
-import { assertPendingRemoteLogoutSession, clearProfileCredentials, profilePurge, recoverPendingLogout } from "../lib/logout-pending.js";
+import { assertPendingRemoteLogoutSession, clearProfileCredentials, eraseApprovedLegacyReplicas, profilePurge, recoverPendingLogout } from "../lib/logout-pending.js";
 import {
   outputJson,
   outputWarnings,
@@ -395,56 +394,64 @@ export async function finishProfileLogout(
         if (online) {
           marker = online.marker ? await purge.completeRemoteLogout({ principal }) : null;
         } else {
-          let pendingMarker = false;
+          let pendingMarker: ProfileReplicaLogoutPending | null = null;
           let remotePending = false;
           try {
             const pending = JSON.parse(await readFile(
               join(profilePath(ctx.profile), REPLICA_LOGOUT_PENDING_FILE), "utf8",
-            )) as { remotePending?: unknown };
-            pendingMarker = true;
+            )) as ProfileReplicaLogoutPending;
+            pendingMarker = pending;
             remotePending = pending.remotePending === true;
           } catch (error) {
             if (typeof error !== "object" || error === null || !("code" in error) || error.code !== "ENOENT") throw error;
           }
-          // A changed pending inventory must issue its two-command challenge
-          // before an unapproved unknown path triggers the ordinary preflight
-          // refusal. The facade still refuses any deletion without consent.
-          const approval = await preflightLogout(
-            purge, principal, remotePending || options.discardLocalChanges === true,
-          );
-          if (options.approveInventory !== undefined && !remotePending) {
-            throw new CLIError("INVALID_ARGUMENT",
-              "--approve-inventory requires a pending remote logout with changed local files.",
-              ExitCode.USAGE_ERROR);
-          }
-          if (remotePending) {
-            try {
-              marker = options.approveInventory !== undefined
-                ? await purge.approveChangedPlainLogout({
-                    principal, approval, discardLocalChanges: true,
-                    inventoryApprovalToken: options.approveInventory,
-                  })
-                : await purge.abandonRemoteLogout({
+          // A previously signed-out, cleanup-ready marker is already the
+          // durable approval. Retry its guarded recovery before preflighting
+          // an orphaned, denied gate as if this were a new logout.
+          if (pendingMarker && profile.authSignedOut === true && !remotePending &&
+              options.approveInventory === undefined && options.discardLocalChanges !== true) {
+            marker = pendingMarker;
+          } else {
+            // A changed pending inventory must issue its two-command challenge
+            // before an unapproved unknown path triggers the ordinary preflight
+            // refusal. The facade still refuses any deletion without consent.
+            const approval = await preflightLogout(
+              purge, principal, remotePending || options.discardLocalChanges === true,
+            );
+            if (options.approveInventory !== undefined && !remotePending) {
+              throw new CLIError("INVALID_ARGUMENT",
+                "--approve-inventory requires a pending remote logout with changed local files.",
+                ExitCode.USAGE_ERROR);
+            }
+            if (remotePending) {
+              try {
+                marker = options.approveInventory !== undefined
+                  ? await purge.approveChangedPlainLogout({
+                      principal, approval, discardLocalChanges: true,
+                      inventoryApprovalToken: options.approveInventory,
+                    })
+                  : await purge.abandonRemoteLogout({
+                      principal, approval, discardLocalChanges: options.discardLocalChanges === true,
+                    });
+              } catch (error) {
+                if (error instanceof Error && "inventoryApprovalToken" in error &&
+                    "inventoryApprovalEntries" in error && Array.isArray(error.inventoryApprovalEntries)) {
+                  // These entries are the locked snapshot hashed into the SDK's
+                  // challenge, not the earlier read-only CLI preflight.
+                  process.stderr.write(`Inventory approval entries: ${JSON.stringify(
+                    error.inventoryApprovalEntries as ProfileReplicaApprovalEntry[],
+                  )}\n`);
+                  throw new CLIError("REPLICA_GATED", error.message, ExitCode.ERROR);
+                }
+                throw error;
+              }
+            } else {
+              marker = pendingMarker && profile.authSignedOut === true && options.discardLocalChanges
+                ? await purge.reapproveLogoutPending({ principal, approval })
+                : await purge.prepareLogoutPending({
                     principal, approval, discardLocalChanges: options.discardLocalChanges === true,
                   });
-            } catch (error) {
-              if (error instanceof Error && "inventoryApprovalToken" in error &&
-                  "inventoryApprovalEntries" in error && Array.isArray(error.inventoryApprovalEntries)) {
-                // These entries are the locked snapshot hashed into the SDK's
-                // challenge, not the earlier read-only CLI preflight.
-                process.stderr.write(`Inventory approval entries: ${JSON.stringify(
-                  error.inventoryApprovalEntries as ProfileReplicaApprovalEntry[],
-                )}\n`);
-                throw new CLIError("REPLICA_GATED", error.message, ExitCode.ERROR);
-              }
-              throw error;
             }
-          } else {
-            marker = pendingMarker && profile.authSignedOut === true && options.discardLocalChanges
-              ? await purge.reapproveLogoutPending({ principal, approval })
-              : await purge.prepareLogoutPending({
-                  principal, approval, discardLocalChanges: options.discardLocalChanges === true,
-                });
           }
         }
         if (marker) {
@@ -452,8 +459,8 @@ export async function finishProfileLogout(
           const report = await purge.recoverLogoutPending({
             signal: new AbortController().signal,
             clearCredentials: () => clearProfileCredentials(ctx.profile),
-            eraseLegacyReplicas: async ({ discardLocalChanges }) => {
-              legacyRemoved.push(...await removeProfileReplicas(ctx.profile, { discardLocalChanges }));
+            eraseLegacyReplicas: async (inventory) => {
+              legacyRemoved.push(...await eraseApprovedLegacyReplicas(ctx.profile, inventory));
             },
           });
           if (report.failed.length || report.remaining) {

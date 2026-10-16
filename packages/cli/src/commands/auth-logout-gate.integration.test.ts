@@ -113,7 +113,7 @@ test("plain logout durably denies reads and ends the session even when a replica
   }
 
   const resumed = await run(home);
-  expect(resumed.exitCode).toBe(0);
+  expect(resumed.exitCode, resumed.stderr).toBe(0);
   await expect(stat(join(paths.replica, "replica.db"))).rejects.toMatchObject({ code: "ENOENT" });
   await expect(stat(paths.session)).rejects.toMatchObject({ code: "ENOENT" });
 });
@@ -159,7 +159,7 @@ test("a pending flag-owned erase fences an open handle and is retried after its 
       await handle.close();
     }
     const resumed = await run(home);
-    expect(resumed).toMatchObject({ exitCode: 0 });
+    expect(resumed.exitCode, resumed.stderr).toBe(0);
     await expect(stat(join(replicationRoot, replicaFile!))).rejects.toMatchObject({ code: "ENOENT" });
   });
 });

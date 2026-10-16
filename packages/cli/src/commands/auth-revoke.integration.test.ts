@@ -795,8 +795,8 @@ test("plain logout removes a synced source-created legacy mirror after fresh ver
   const paths = await seedWithPublicLogin(home, node.host);
   sessionCid = paths.delegationCid;
 
-  expect(await inspectSqliteReplicaLayout(join(home, ".tinycloud", "profiles", PROFILE, "replicas", "notes")))
-    .toEqual({ unknownPaths: [] });
+  expect((await inspectSqliteReplicaLayout(join(home, ".tinycloud", "profiles", PROFILE, "replicas", "notes")))
+    .unknownPaths).toEqual([]);
   const logout = await run(home, ["auth", "logout"]);
   expect({ exitCode: logout.exitCode, stderr: logout.stderr }).toEqual({ exitCode: 0, stderr: "" });
   expect(await exists(paths.session)).toBe(false);

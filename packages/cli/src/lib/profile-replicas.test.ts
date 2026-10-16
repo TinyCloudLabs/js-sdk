@@ -1,4 +1,4 @@
-import { SqliteReplicaStore, loadSqlite } from "@tinycloud/replica/sqlite";
+import { SqliteReplicaStore, inspectSqliteReplicaLayout, loadSqlite } from "@tinycloud/replica/sqlite";
 import { afterAll, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { lstat, mkdir, mkdtemp, readFile, rename, rm, stat, symlink, unlink, writeFile } from "node:fs/promises";
 import * as fsPromises from "node:fs/promises";
@@ -22,6 +22,39 @@ beforeEach(async () => {
 });
 
 afterAll(async () => { await rm(home, { recursive: true, force: true }); });
+
+async function approvedLegacyInventory(name: string, approvedPaths: readonly string[]) {
+  const root = join(profilePath("dogfood"), "replicas");
+  const parent = await lstat(root, { bigint: true });
+  const layout = await inspectSqliteReplicaLayout(join(root, name));
+  const prefix = `replicas/${name}/`;
+  return {
+    discardLocalChanges: true,
+    approvedUnknown: layout.unknownEntries.filter((entry) => approvedPaths.includes(entry.path))
+      .map((entry) => ({ ...entry, path: `${prefix}${entry.path}` })),
+    knownRoots: [
+      { path: "replicas", dev: parent.dev.toString(), ino: parent.ino.toString() },
+      { path: `replicas/${name}`, ...layout.rootIdentity },
+    ],
+    knownEntries: layout.knownEntries.map((entry) => ({ ...entry, path: `${prefix}${entry.path}` })),
+    missingDatabases: layout.unknownPaths.includes("replica.db") &&
+      !layout.unknownEntries.some((entry) => entry.path === "replica.db")
+      ? [`${prefix}replica.db`] : [],
+  };
+}
+
+async function initializedLegacy(name = "notes"): Promise<string> {
+  const entry = join(profilePath("dogfood"), "replicas", name);
+  const store = await SqliteReplicaStore.open(entry, { create: true });
+  await store.init({
+    name, replicaId: name, host: "https://node.example.test",
+    space: "tinycloud:pkh:eip155:1:0x0000000000000000000000000000000000000001:default",
+    prefix: "notes/", deviceDid: "did:key:device", allowSecrets: false,
+    localReadPolicy: "whileGrantValid", retentionGrantCid: null,
+  });
+  await store.close();
+  return entry;
+}
 
 test("legacy-only logout cleanup is idempotent and leaves flag-owned replicas untouched", async () => {
   const legacy = join(profilePath("dogfood"), "replicas", "notes");
@@ -83,7 +116,7 @@ test("a mixed marker passes only legacy paths to logout cleanup", async () => {
   expect(await readFile(flagFile, "utf8")).toBe("flag-owned");
 });
 
-test("legacy adapter fence is retained without durable discard consent and removed only with it", async () => {
+test("legacy adapter fence requires exact recorded identity; Boolean discard cannot erase it", async () => {
   const root = join(profilePath("dogfood"), "replicas");
   const entry = join(root, "notes");
   const store = await SqliteReplicaStore.open(entry, { create: true });
@@ -102,7 +135,11 @@ test("legacy adapter fence is retained without durable discard consent and remov
   expect(await readFile(unknown)).toEqual(bytes);
   expect((await stat(join(entry, "replica.db"))).isFile()).toBe(true);
 
-  expect(await removeProfileReplicas("dogfood", { discardLocalChanges: true })).toEqual(["notes"]);
+  await expect(removeProfileReplicas("dogfood", { discardLocalChanges: true }))
+    .rejects.toMatchObject({ code: "REPLICA_PURGE_FAILED" });
+  expect(await readFile(unknown)).toEqual(bytes);
+  const approval = await approvedLegacyInventory("notes", ["fence.json"]);
+  expect(await removeProfileReplicas("dogfood", approval)).toEqual(["notes"]);
   await expect(stat(unknown)).rejects.toMatchObject({ code: "ENOENT" });
   await expect(stat(root)).rejects.toMatchObject({ code: "ENOENT" });
 });

@@ -185,6 +185,8 @@ test("a changed known SQLite inode needs a second explicit token before plain lo
 test("changed inventory before plain override leaves failed remote logout retryable", async () => {
   const { home, paths, networkPaths, setMode } = await fixture();
   await addUnknown(paths.unknown);
+  const flagPath = join(paths.directory, "replication", "future-flag.pending");
+  await addUnknown(flagPath);
   setMode("fail");
   const failed = await run(home, ["auth", "logout", "--revoke", "--discard-local-changes"]);
   expect(failed.exitCode).toBeGreaterThan(0);
@@ -205,6 +207,7 @@ test("changed inventory before plain override leaves failed remote logout retrya
   expect(await readFile(markerPath)).toEqual(marker);
   expect(await readFile(paths.session)).toEqual(session);
   expect(await readFile(paths.key)).toEqual(key);
+  expect(await readFile(flagPath, "utf8")).toBe("unsynced future bytes");
 
   const refused = await run(home, ["auth", "logout", "--discard-local-changes"]);
   expect(refused.exitCode).toBeGreaterThan(0);
@@ -218,6 +221,9 @@ test("changed inventory before plain override leaves failed remote logout retrya
   expect(boundEntries).toContainEqual(expect.objectContaining({
     path: "replicas/notes/late-write.pending", kind: "file", dev: expect.any(String), ino: expect.any(String),
   }));
+  expect(boundEntries).toContainEqual(expect.objectContaining({
+    path: "replication/future-flag.pending", kind: "file", dev: expect.any(String), ino: expect.any(String),
+  }));
   expect(networkPaths).toHaveLength(before);
   expect(await readFile(markerPath)).toEqual(marker);
   expect(await readFile(paths.session)).toEqual(session);
@@ -225,6 +231,7 @@ test("changed inventory before plain override leaves failed remote logout retrya
   expect(await readFile(paths.db)).toEqual(db);
   expect(await readFile(paths.unknown, "utf8")).toBe("unsynced future bytes");
   expect(await readFile(latePath, "utf8")).toBe("unsynced future bytes");
+  expect(await readFile(flagPath, "utf8")).toBe("unsynced future bytes");
   expect(JSON.parse(await readFile(join(paths.directory, "profile.json"), "utf8")).authSignedOut).not.toBe(true);
   const token = refused.stderr.match(/--approve-inventory ([0-9a-f]{32})\b/)?.[1];
   expect(token).toBeDefined();
@@ -244,7 +251,7 @@ test("changed inventory before plain override leaves failed remote logout retrya
   const confirmed = await run(home, ["auth", "logout", "--discard-local-changes", "--approve-inventory", freshToken!]);
   expect(confirmed.exitCode, confirmed.stderr).toBe(0);
   expect(networkPaths).toHaveLength(before);
-  for (const file of [paths.session, paths.key, paths.db, paths.unknown, latePath, secondLatePath, markerPath]) {
+  for (const file of [paths.session, paths.key, paths.db, paths.unknown, flagPath, latePath, secondLatePath, markerPath]) {
     await expect(readFile(file)).rejects.toMatchObject({ code: "ENOENT" });
   }
   const reused = await run(home, ["auth", "logout", "--discard-local-changes", "--approve-inventory", freshToken!]);

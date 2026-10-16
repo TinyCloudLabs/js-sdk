@@ -1,6 +1,6 @@
 import { lstat, open } from "node:fs/promises";
 import { join } from "node:path";
-import { createProfileReplicaPurge, REPLICA_LOGOUT_PENDING_FILE, type ProfileReplicaLogoutPending } from "@tinycloud/node-sdk";
+import { createProfileReplicaPurge, REPLICA_LOGOUT_PENDING_FILE, type ProfileReplicaLogoutPending, type ProfileReplicaPurge } from "@tinycloud/node-sdk";
 import { profilePath } from "@tinycloud/operations/state";
 import { readGateSnapshot } from "@tinycloud/replica/profile-gate";
 import { REPLICA_GATE_FILE } from "@tinycloud/sdk-services/kv/replication/contractConstants";
@@ -13,6 +13,20 @@ export function profilePurge(name: string) {
   return createProfileReplicaPurge({
     profileDir: profilePath(name),
     guard: (section) => ProfileManager.withLock(name, section, { requireProfile: true }),
+  });
+}
+
+type LegacyEraseInventory = Parameters<Parameters<ProfileReplicaPurge["recoverLogoutPending"]>[0]["eraseLegacyReplicas"]>[0];
+
+/** The facade validates the full marker; only its legacy paths belong to the CLI remover. */
+export async function eraseApprovedLegacyReplicas(name: string, inventory: LegacyEraseInventory): Promise<string[]> {
+  const isLegacy = (path: string) => path === "replicas" || path.startsWith("replicas/");
+  return removeProfileReplicas(name, {
+    discardLocalChanges: inventory.discardLocalChanges,
+    approvedUnknown: inventory.approvedUnknown.filter((entry) => isLegacy(entry.path)),
+    knownRoots: inventory.knownRoots.filter((entry) => isLegacy(entry.path)),
+    knownEntries: inventory.knownEntries.filter((entry) => isLegacy(entry.path)),
+    missingDatabases: inventory.missingDatabases.filter(isLegacy),
   });
 }
 /**
@@ -152,8 +166,8 @@ export async function recoverPendingLogout(name: string): Promise<void> {
   const report = await ProfileManager.withLock(name, () => profilePurge(name).recoverLogoutPending({
     signal: new AbortController().signal,
     clearCredentials: () => clearProfileCredentials(name),
-    eraseLegacyReplicas: async ({ discardLocalChanges }) => {
-      await removeProfileReplicas(name, { discardLocalChanges });
+    eraseLegacyReplicas: async (inventory) => {
+      await eraseApprovedLegacyReplicas(name, inventory);
     },
   }), { requireProfile: true });
   if (report.failed.length || report.remaining) {

@@ -158,7 +158,8 @@ test("inactive gate marker survives credential-unlink crash and recovers legacy 
       withTinyCloudStateRoot(home, () => withProfileLock(PROFILE, section, { requireProfile: true })),
   });
   expect((await purge.deny({ reason: "sign_out", principal: ownerDid })).status).toBe("denied");
-  expect(await purge.prepareLogoutPending({ principal: ownerDid, discardLocalChanges: true }))
+  const approval = await purge.preflightLogout({ principal: ownerDid });
+  expect(await purge.prepareLogoutPending({ principal: ownerDid, approval }))
     .toMatchObject({ v: 3, scope: "inactive_gate" });
   expect(await readFile(paths.session, "utf8")).toContain("delegationCid");
   expect(await readFile(key, "utf8")).toContain('"d"');
