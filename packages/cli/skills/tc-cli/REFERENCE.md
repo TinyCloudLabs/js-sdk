@@ -273,8 +273,14 @@ latency and staleness percentiles, sync/write outcomes, recent divergences,
 replica/grant status, and pinned keys. `--json` emits the aggregate as JSON.
 `--clear-pending` clears pending replica writes and prints a warning: commits
 that arrive later can be observed as stale until a subsequent sync.
-`auth logout` purges legacy and flag-owned replicas unless `--keep-replicas`
-is used.
+`auth logout` denies local replica reads, removes legacy and flag-owned files,
+and clears the local session even if erasure is pending; retry cleanup after a
+reported failure. `auth logout --revoke` revokes verified owner-controlled
+stored grants and then the active session CID online before deleting local
+files. A failed or ambiguous remote revoke leaves session, key and replica
+files intact, with local replica reads denied for retry. `--keep-replicas`
+keeps legacy files only when there is no replica gate, flag-owned partition or
+pending purge; a gated profile refuses the option before logout.
 
 B-int release acceptance: test `tinycloud auth request --grant` against a real
 OpenKey test account without production writes. Approve the request, confirm

@@ -637,7 +637,6 @@ describe("CLI auth rotate command", () => {
 
   test("rotates a local owner session while preserving the owner key and address", async () => {
     const oldJwk = { kty: "OKP", crv: "Ed25519", x: "old-local", d: "old-local-private" };
-    const newJwk = { kty: "OKP", crv: "Ed25519", x: "new-local", d: "new-local-private" };
     profiles.set("default", makeProfile({
       did: "did:pkh:eip155:1:0xLocalOwner",
       sessionDid: "did:key:old-local-session",
@@ -650,13 +649,11 @@ describe("CLI auth rotate command", () => {
     }));
     keys.set("default", oldJwk);
     sessions.set("default", { delegationCid: "old-local-session" });
-    generatedKeys.push({ jwk: newJwk, did: "did:key:generated-local" });
 
     await runAuthCommand(["auth", "rotate"]);
 
     expect(recorded.errors).toEqual([]);
-    expect(recorded.generateKeyCalls).toBe(1);
-    expect(keys.get("default")).toBe(newJwk);
+    expect(keys.get("default")).toBe(localSignInResult.jwk);
     expect(keys.get("default")).not.toBe(oldJwk);
     expect(recorded.clearSessions).toEqual([]);
     expect(recorded.localSignIns).toEqual([
@@ -665,6 +662,7 @@ describe("CLI auth rotate command", () => {
     expect(sessions.get("default")).toEqual({
       authMethod: "local",
       address: "0xLocalOwner",
+      ownerDid: "did:pkh:eip155:1:0xLocalOwner",
       chainId: 1,
       spaceId: "space-local-new",
       delegationHeader: { Authorization: "Bearer local-new" },
@@ -897,7 +895,6 @@ describe("CLI auth commands on a missing profile (TC-682)", () => {
     expect(recorded.outputs).toEqual([expect.objectContaining({
       replicasRemoved: [],
       replicasKept: true,
-      warning: expect.stringContaining("tc delegation revoke <cid>"),
     })]);
   });
   test("OpenKey login reports PROFILE_NOT_FOUND, not NO_KEY, before any approval starts", async () => {
@@ -912,10 +909,11 @@ describe("CLI auth commands on a missing profile (TC-682)", () => {
     expect(profiles.has("owner")).toBe(false);
   });
   test("local login bootstraps a profile that does not yet exist", async () => {
-    generatedKeys.push({ jwk: { kty: "OKP", crv: "Ed25519", x: "local-session", d: "private" }, did: "did:key:local-session" });
     await runAuthCommand(["auth", "login", "--method", "local"]);
 
     expect(recorded.errors).toEqual([]);
+    expect(keys.get("owner")).toBe(localSignInResult.jwk);
+    expect(profiles.get("owner")?.sessionDid).toBe(localSignInResult.verificationMethod);
     expect(profiles.get("owner")).toEqual(expect.objectContaining({
       name: "owner",
       authMethod: "local",
@@ -924,17 +922,41 @@ describe("CLI auth commands on a missing profile (TC-682)", () => {
     expect(recorded.outputs).toContainEqual(expect.objectContaining({ authenticated: true, profile: "owner" }));
   });
 
-  test("OpenKey login on an existing profile without a key keeps NO_KEY with a hint for that profile", async () => {
+  test("OpenKey login with a missing key prepares a fresh session DID before approval", async () => {
+    const key = { kty: "OKP", crv: "Ed25519", x: "new-public", d: "new-private" };
     profiles.set("owner", makeProfile({ name: "owner", authMethod: "openkey" }));
+    generatedKeys.push({ jwk: key, did: "did:key:new-openkey" });
+
+    await runAuthCommand(["auth", "login", "--method", "openkey", "--paste"]);
+
+    expect(recorded.errors).toEqual([]);
+    expect(recorded.startAuthFlows).toEqual([expect.objectContaining({
+      did: "did:key:new-openkey",
+      options: expect.objectContaining({ jwk: key }),
+    })]);
+    expect(keys.get("owner")).toEqual(key);
+    expect(profiles.get("owner")).toEqual(expect.objectContaining({
+      did: "did:key:new-openkey",
+      sessionDid: "did:key:new-openkey",
+      ownerDid: "did:pkh:eip155:1:0xowner",
+    }));
+  });
+  test("a rejected fresh-key OpenKey approval leaves the old profile without a stray key or session", async () => {
+    const previous = makeProfile({ name: "owner", authMethod: "openkey" });
+    profiles.set("owner", previous);
+    generatedKeys.push({
+      jwk: { kty: "OKP", crv: "Ed25519", x: "candidate-public", d: "candidate-private" },
+      did: "did:key:candidate",
+    });
+    openKeyDelegation = { ...openKeyDelegation, delegationCid: "" };
 
     await runAuthCommand(["auth", "login", "--method", "openkey", "--paste"]);
 
     expect(recorded.errors).toHaveLength(1);
-    const error = recorded.errors[0] as CLIErrorLike;
-    expect(error.code).toBe("NO_KEY");
-    expect(error.message).toContain("tc --profile owner auth rotate");
-    expect(error.message).not.toContain("Run `tc init` first");
-    expect(recorded.startAuthFlows).toEqual([]);
+    expect(recorded.startAuthFlows).toHaveLength(1);
+    expect(keys.has("owner")).toBe(false);
+    expect(sessions.has("owner")).toBe(false);
+    expect(profiles.get("owner")).toEqual(previous);
   });
 });
 
@@ -1758,6 +1780,7 @@ describe("CLI auth request command", () => {
     expect(sessions.get("default")).toEqual({
       authMethod: "local",
       address: "0xLocalOwner",
+      ownerDid: "did:pkh:eip155:1:0xLocalOwner",
       chainId: 1,
       spaceId: "space-local-new",
       delegationHeader: { Authorization: "Bearer runtime-session" },

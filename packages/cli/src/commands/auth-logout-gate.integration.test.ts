@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { mkdtemp, readdir, rm, stat } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { profileConfigPath, profilePath, sessionPath, withProfileLock, withTinyCloudStateRoot, writeJsonAtomic } from "@tinycloud/operations/state";
@@ -17,8 +17,9 @@ afterEach(async () => {
   await Promise.all(homes.splice(0).map((home) => rm(home, { recursive: true, force: true })));
 });
 
-async function run(home: string) {
-  const child = Bun.spawn([process.execPath, cliEntry, "--quiet", "--json", "--profile", PROFILE, "--replication", "auth", "logout"], {
+async function run(home: string, args: string[] = [], replication = true) {
+  const child = Bun.spawn([process.execPath, cliEntry, "--quiet", "--json", "--profile", PROFILE,
+    ...(replication ? ["--replication"] : []), "auth", "logout", ...args], {
     env: { ...process.env, HOME: home, TC_HOME: home }, stdin: "ignore", stdout: "pipe", stderr: "pipe",
   });
   const [stdout, stderr, exitCode] = await Promise.all([
@@ -26,6 +27,58 @@ async function run(home: string) {
   ]);
   return { stdout, stderr, exitCode };
 }
+
+test("keep-replicas refuses gated state before altering session, key, gate or either replica root", async () => {
+  const home = await mkdtemp(join(tmpdir(), "tc858-cli-logout-keep-gated-"));
+  homes.push(home);
+  const paths = await withTinyCloudStateRoot(home, async () => {
+    await writeJsonAtomic(profileConfigPath(PROFILE), {
+      name: PROFILE, host: "https://node.example.test", chainId: 1, spaceName: "default",
+      did: PRINCIPAL, ownerDid: PRINCIPAL, createdAt: "2026-10-01T00:00:00.000Z",
+    });
+    await writeJsonAtomic(sessionPath(PROFILE), { ownerDid: PRINCIPAL, delegationCid: "bafy-session" });
+    const directory = profilePath(PROFILE);
+    await establishSessionStamp(directory, PRINCIPAL, { siweIssuedAt: 1 });
+    const key = join(directory, "key.json");
+    const legacy = join(directory, "replicas", "notes", "replica.db");
+    const flag = join(directory, "replication", "identity", "replicas", "replica.db");
+    await mkdir(join(directory, "replicas", "notes"), { recursive: true });
+    await mkdir(join(directory, "replication", "identity", "replicas"), { recursive: true });
+    await writeFile(key, "private-session-key");
+    await writeFile(legacy, "legacy-private-bytes");
+    await writeFile(flag, "flag-private-bytes");
+    return { directory, session: sessionPath(PROFILE), key, legacy, flag };
+  });
+  const gate = await readGateSnapshot(paths.directory);
+  const refused = await run(home, ["--keep-replicas"], false);
+  expect(refused.exitCode).toBe(2);
+  expect(refused.stderr).toContain("INVALID_ARGUMENT");
+  expect(await readFile(paths.session, "utf8")).toContain("bafy-session");
+  expect(await readFile(paths.key, "utf8")).toBe("private-session-key");
+  expect(await readFile(paths.legacy, "utf8")).toBe("legacy-private-bytes");
+  expect(await readFile(paths.flag, "utf8")).toBe("flag-private-bytes");
+  expect(await readGateSnapshot(paths.directory)).toEqual(gate);
+});
+
+test("keep-replicas preserves a legacy-only root while ending its stored session", async () => {
+  const home = await mkdtemp(join(tmpdir(), "tc858-cli-logout-keep-legacy-"));
+  homes.push(home);
+  const paths = await withTinyCloudStateRoot(home, async () => {
+    await writeJsonAtomic(profileConfigPath(PROFILE), {
+      name: PROFILE, host: "https://node.example.test", chainId: 1, spaceName: "default",
+      did: PRINCIPAL, ownerDid: PRINCIPAL, createdAt: "2026-10-01T00:00:00.000Z",
+    });
+    await writeJsonAtomic(sessionPath(PROFILE), { ownerDid: PRINCIPAL, delegationCid: "bafy-session" });
+    const legacy = join(profilePath(PROFILE), "replicas", "notes", "replica.db");
+    await mkdir(join(profilePath(PROFILE), "replicas", "notes"), { recursive: true });
+    await writeFile(legacy, "legacy-private-bytes");
+    return { session: sessionPath(PROFILE), legacy };
+  });
+  const kept = await run(home, ["--keep-replicas"], false);
+  expect(kept.exitCode).toBe(0);
+  await expect(stat(paths.session)).rejects.toMatchObject({ code: "ENOENT" });
+  expect(await readFile(paths.legacy, "utf8")).toBe("legacy-private-bytes");
+});
 
 test("plain logout durably denies reads and ends the session even when a replica is busy, then resumes cleanup", async () => {
   const home = await mkdtemp(join(tmpdir(), "tc858-cli-logout-gate-"));

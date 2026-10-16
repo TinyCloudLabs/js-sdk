@@ -111,6 +111,7 @@ function persistedSessionData(
     chainId: session.chainId as number | undefined,
     siwe: session.siwe as string | undefined,
     signature: session.signature as string | undefined,
+    replicaStamp: session.replicaStamp as Parameters<TinyCloudNode["restoreSession"]>[0]["replicaStamp"],
   };
 }
 

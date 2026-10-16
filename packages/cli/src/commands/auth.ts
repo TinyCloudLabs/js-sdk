@@ -3,16 +3,18 @@ import { CLI_NAME } from "@tinycloud/operations/cli-name";
 import { get as httpGet } from "node:http";
 import { get as httpsGet } from "node:https";
 import { spawn } from "node:child_process";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { dirname } from "node:path";
+import { lstat, mkdir, readFile, writeFile } from "node:fs/promises";
+import { dirname, join } from "node:path";
 import { createInterface } from "node:readline";
 import type { IncomingMessage } from "node:http";
-import { createProfileReplicaPurge, grantAuthRequest, principalDidEquals, signedCompactUcanExpiry, type PermissionEntry, type PortableDelegation, type RuntimeDelegationActivator, type TinyCloudNode, type TinyCloudSession } from "@tinycloud/node-sdk";
+import { createProfileReplicaPurge, grantAuthRequest, principalDidEquals, signedCompactUcanExpiry, type PermissionEntry, type PortableDelegation, type ProfileReplicaDeferredToken, type RuntimeDelegationActivator, type TinyCloudNode, type TinyCloudSession } from "@tinycloud/node-sdk";
 import { invokeOperation } from "@tinycloud/operations";
 import { profilePath } from "@tinycloud/operations/state";
 import { removeProfileReplicasAndReplication } from "../lib/profile-replicas.js";
-import { readGateSnapshot } from "@tinycloud/replica/profile-gate";
+import { principalHashOf, readGateSnapshot } from "@tinycloud/replica/profile-gate";
+import { REPLICA_GATE_FILE } from "@tinycloud/sdk-services/kv/replication/contractConstants";
 import { ProfileManager } from "../config/profiles.js";
+import { logoutInventorySnapshot, planLogoutRevocations, type LogoutRevocationPlan } from "../lib/logout-revocation.js";
 import {
   outputJson,
   outputWarnings,
@@ -146,6 +148,106 @@ async function promptAuthMethod(): Promise<AuthMethod> {
       }
     });
   });
+}
+
+function profilePurge(name: string) {
+  return createProfileReplicaPurge({
+    profileDir: profilePath(name),
+    guard: (section) => ProfileManager.withLock(name, section, { requireProfile: true }),
+  });
+}
+
+/** A keep request is safe only when no flag-owned partition or durable gate can exist. */
+async function hasGatedReplicaState(profile: ProfileConfig, name: string, replicationEnabled: boolean): Promise<boolean> {
+  if (replicationEnabled || profile.replication !== undefined) return true;
+  const root = profilePath(name);
+  for (const path of [join(root, REPLICA_GATE_FILE), join(root, "replication")]) {
+    try {
+      await lstat(path);
+      return true;
+    } catch (error) {
+      if (typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT") continue;
+      throw new CLIError("INVALID_ARGUMENT",
+        "Cannot prove this profile has no gated replica state; --keep-replicas refused without changing session or files.",
+        ExitCode.USAGE_ERROR);
+    }
+  }
+  return false;
+}
+
+interface CompletedOnlineLogout {
+  ownerDid: string;
+  sessionCid: string;
+  sessionSnapshot: string;
+  profileSnapshot: string;
+  inventorySnapshot: string;
+  token: ProfileReplicaDeferredToken;
+  plan: LogoutRevocationPlan;
+}
+
+async function revokeForLogout(ctx: CLIContext): Promise<CompletedOnlineLogout> {
+  const selected = await ProfileManager.withLock(ctx.profile, async () => {
+    const profile = await ProfileManager.getProfile(ctx.profile);
+    const session = await ProfileManager.getSession(ctx.profile);
+    const ownerDid = session && "ownerDid" in session && typeof session.ownerDid === "string"
+      ? session.ownerDid : undefined;
+    const sessionCid = session && "delegationCid" in session && typeof session.delegationCid === "string"
+      ? session.delegationCid : undefined;
+    if (!session || !ownerDid || !sessionCid) {
+      throw new CLIError("AUTH_REQUIRED", "Online revocation needs a stored owner session and delegation CID; no local files were deleted.", ExitCode.AUTH_REQUIRED);
+    }
+    const purge = profilePurge(ctx.profile);
+    let token = await purge.deferredErase();
+    if (token) {
+      const gate = await readGateSnapshot(profilePath(ctx.profile));
+      if (!gate || gate.principalHash !== null ||
+          token.principalHash !== await principalHashOf(gate.salt, ownerDid)) {
+        throw new CLIError("REPLICA_GATED", "The pending revocation belongs to a different session; no online revoke or local erase was attempted.", ExitCode.ERROR);
+      }
+    } else {
+      const denied = await purge.deny({ reason: "sign_out", principal: ownerDid }, { deferErase: true });
+      if (denied.status !== "denied" || !denied.resumeToken) {
+        throw new CLIError("REPLICA_GATED", `Durable deferred denial failed (${denied.status}); no online revoke or local erase was attempted.`, ExitCode.ERROR);
+      }
+      token = denied.resumeToken;
+    }
+    return {
+      profile, ownerDid, sessionCid,
+      sessionSnapshot: JSON.stringify(session),
+      profileSnapshot: JSON.stringify(profile),
+      inventorySnapshot: await logoutInventorySnapshot(ctx.profile),
+      token,
+    };
+  });
+  try {
+    // No profile lock spans an unbounded node request. The denied gate remains
+    // durable across interruption; the exact session and epoch are rechecked before erasure.
+    const node = await ensureAuthenticated({ ...ctx, replication: false });
+    const plan = await planLogoutRevocations({
+      profileName: ctx.profile, profile: selected.profile,
+      session: { ownerDid: selected.ownerDid, delegationCid: selected.sessionCid },
+      host: ctx.host, node,
+    });
+    for (const cid of plan.cids) {
+      const result = await node.revokeDelegation(cid);
+      if (!result.ok) {
+        throw new CLIError("REVOCATION_FAILED",
+          `Revocation failed for ${cid}: ${result.error.message}. Session, key, and replica files are retained for retry; local reads stay denied.`,
+          ExitCode.ERROR, { cid, hint: `Retry \`${CLI_NAME} auth logout --revoke\` when the node is available.` });
+      }
+      if (result.data.cid !== cid || result.data.revoked !== true) {
+        throw new CLIError("REVOCATION_FAILED",
+          `Revocation failed for ${cid}: the node did not confirm that exact CID. Session, key, and replica files are retained for retry.`,
+          ExitCode.ERROR, { cid });
+      }
+    }
+    return { ...selected, plan };
+  } catch (error) {
+    if (error instanceof CLIError && (error.code === "REVOCATION_FAILED" || error.code === "REVOKE_INVENTORY_UNVERIFIED")) throw error;
+    throw new CLIError("REVOCATION_FAILED",
+      `Revocation failed before local logout: ${error instanceof Error ? error.message : String(error)}. Session, key, and replica files are retained for retry; local reads stay denied.`,
+      ExitCode.ERROR, { hint: `Retry \`${CLI_NAME} auth logout --revoke\` when online authority is available.` });
+  }
 }
 
 export function registerAuthCommand(program: Command, options?: { openKeyAcquisition?: OpenKeyAcquisition }): void {
@@ -288,25 +390,44 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
 
   auth
     .command("logout")
-    .description(`Clear the local session and remove local replicas. Logout is local; delegations and grants on the node stay valid until they expire. Use \`${CLI_NAME} delegation revoke <cid>\` to end access now.`)
-    .option("--keep-replicas", "Keep this profile's local replicas")
+    .description(`Clear the local session and remove local replicas. With --revoke, revoke owner-controlled node grants and the session CID before deleting local files.`)
+    .option("--keep-replicas", "Keep legacy replicas only when this profile has no replica gate or flag-owned state")
+    .option("--revoke", "Revoke owner-controlled grants and the session CID on the node before local logout")
     .action(async (options, cmd) => {
       try {
         const globalOpts = cmd.optsWithGlobals();
         const ctx = await ProfileManager.resolveContext(globalOpts, { storedSession: "unused" });
+        if (options.revoke && options.keepReplicas) {
+          throw new CLIError("INVALID_ARGUMENT", "--revoke cannot be combined with --keep-replicas.", ExitCode.USAGE_ERROR);
+        }
+        const online = options.revoke ? await revokeForLogout(ctx) : undefined;
         let replicasRemoved: string[] = [];
         let cleanupError: unknown;
         await ProfileManager.withLock(ctx.profile, async () => {
           // Refuse a profile that does not exist rather than report it logged out.
           const profile = await ProfileManager.getProfile(ctx.profile);
+          if (options.keepReplicas && await hasGatedReplicaState(profile, ctx.profile, ctx.replication)) {
+            throw new CLIError("INVALID_ARGUMENT",
+              "--keep-replicas is only available for legacy-only profiles without a replica gate or flag-owned state. Run plain `auth logout` to deny and erase local replicas.",
+              ExitCode.USAGE_ERROR);
+          }
           const session = await ProfileManager.getSession(ctx.profile);
           const sessionOwner = session && "ownerDid" in session && typeof session.ownerDid === "string"
             ? session.ownerDid : undefined;
           const principal = sessionOwner ?? profile.ownerDid ?? profile.did;
-          const purge = createProfileReplicaPurge({
-            profileDir: profilePath(ctx.profile),
-            guard: (section) => ProfileManager.withLock(ctx.profile, section, { requireProfile: true }),
-          });
+          const purge = profilePurge(ctx.profile);
+          if (online) {
+            const currentToken = await purge.deferredErase();
+            if (!session || JSON.stringify(session) !== online.sessionSnapshot ||
+                JSON.stringify(profile) !== online.profileSnapshot ||
+                await logoutInventorySnapshot(ctx.profile) !== online.inventorySnapshot ||
+                !currentToken || currentToken.deniedEpoch !== online.token.deniedEpoch ||
+                currentToken.principalHash !== online.token.principalHash) {
+              throw new CLIError("PROFILE_CHANGED_DURING_REVOKE",
+                "The profile session, stored grants, or denied gate changed during online revocation; the new session and local files were not erased.",
+                ExitCode.ERROR);
+            }
+          }
           try {
             const deferred = await purge.deferredErase();
             if (deferred) {
@@ -315,7 +436,8 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
                 throw new CLIError("REPLICA_PURGE_FAILED", "Replica erasure is pending after a previous revocation attempt.", ExitCode.ERROR);
               }
             }
-            if (ctx.replication || profile.replication?.prefixes.length || deferred) {
+            if (ctx.replication || profile.replication !== undefined || deferred ||
+                await readGateSnapshot(profilePath(ctx.profile)) !== undefined) {
               if (!principal) {
                 throw new CLIError("REPLICA_GATED", "Replica denial needs the session owner DID; local replicas were not erased.", ExitCode.ERROR);
               }
@@ -345,7 +467,15 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
           authenticated: false,
           replicasRemoved,
           replicasKept: options.keepReplicas === true,
-          warning: `Logout is local; delegations and grants on the node stay valid until they expire. Use \`${CLI_NAME} delegation revoke <cid>\` to end access now.`,
+          warning: online
+            ? "The node confirmed revocation of the listed CIDs before local logout."
+            : options.keepReplicas
+              ? "Legacy replica files remain on disk; this local logout clears the session but does not revoke node grants. Purge the files before a future sign-in if they must not be reused."
+              : `Logout is local; delegations and grants on the node stay valid until they expire. Use \`${CLI_NAME} delegation revoke <cid>\` to end access now.`,
+          ...(online === undefined ? {} : {
+            revokedCids: online.plan.cids,
+            revocationExcluded: online.plan.excluded,
+          }),
         });
       } catch (error) {
         return handleError(error);
@@ -581,7 +711,7 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
           requested,
           expiryOption !== undefined ? { expiry: expiryOption } : undefined,
         );
-        await persistCurrentLocalSession(ctx.profile, profile, node.restorableSession);
+        await persistCurrentLocalSession(ctx.profile, profile, node.restorableSession, node.replicaStamp);
         const delegationCids: string[] = [];
         let expiry: string | undefined;
         // Sol MAJOR-9: accumulate EFFECTIVE grants across every signed
@@ -1704,7 +1834,6 @@ async function rotateAuthKey(
     // if the profile changed meanwhile, the commit refuses and keeps it.
     const result = await handleLocalAuth(profileName, host, {
       emitOutput: false,
-      forceSessionKey: true,
     });
     outputRotationResult(result.profile, profileName, oldDid, "local");
     return;
@@ -1765,6 +1894,7 @@ async function persistCurrentLocalSession(
   profileName: string,
   profile: ProfileConfig,
   session: TinyCloudSession | undefined,
+  replicaStamp: TinyCloudNode["replicaStamp"],
 ): Promise<void> {
   if (!session) return;
 
@@ -1773,6 +1903,7 @@ async function persistCurrentLocalSession(
       authMethod: "local",
       address: session.address,
       chainId: session.chainId,
+      ownerDid: profile.ownerDid ?? profile.did,
       spaceId: session.spaceId,
       delegationHeader: session.delegationHeader,
       delegationCid: session.delegationCid,
@@ -1780,6 +1911,7 @@ async function persistCurrentLocalSession(
       verificationMethod: session.verificationMethod,
       siwe: session.siwe,
       signature: session.signature,
+      ...(replicaStamp === undefined ? {} : { replicaStamp }),
     });
     if (profile.sessionDid !== session.verificationMethod || profile.spaceId !== session.spaceId) {
       await ProfileManager.updateProfile(profileName, (current) => ({
@@ -1804,7 +1936,7 @@ type LocalAuthResult = {
 async function handleLocalAuth(
   profileName: string,
   host: string,
-  options: { emitOutput?: boolean; forceSessionKey?: boolean; replication?: ReplicationLoginOptions } = {},
+  options: { emitOutput?: boolean; replication?: ReplicationLoginOptions } = {},
 ): Promise<LocalAuthResult> {
   const snapshot = await readProfileSnapshot(profileName);
   const profile = snapshot.profile;
@@ -1813,7 +1945,6 @@ async function handleLocalAuth(
   let privateKey: string;
   let address: string;
   let did: string;
-  let sessionDid = profile?.sessionDid;
 
   if (profile && (profile.authMethod === "local" || posture === "local-owner-key") && profile.privateKey) {
     // Reuse existing local key
@@ -1844,20 +1975,6 @@ async function handleLocalAuth(
     }
   }
 
-  // We also need a session key (Ed25519 JWK) for the profile
-  const hasKey = snapshot.key;
-  let key: object;
-  if (options.forceSessionKey || !hasKey) {
-    const { jwk, did: generatedSessionDid } = await withSpinner("Generating session key...", async () => {
-      return generateKey();
-    });
-    key = jwk;
-    sessionDid = generatedSessionDid;
-  } else {
-    key = hasKey;
-    sessionDid ??= keyToDID(hasKey);
-  }
-
   // Sign in using the private key
   const sessionResult = await withSpinner("Signing in...", async () => {
     const replication = options.replication ?? profile?.replication;
@@ -1867,11 +1984,15 @@ async function handleLocalAuth(
       ...(replication?.prefixes.length ? { profile: profileName, replication } : {}),
     });
   });
+  // TinyCloudNode signs with its own fresh session JWK. Persist that exact
+  // key, never an independently generated key that cannot restore the proof.
+  const key = sessionResult.jwk;
 
   const session = {
     authMethod: "local",
     address,
     chainId: DEFAULT_CHAIN_ID,
+    ownerDid: did,
     spaceId: sessionResult.spaceId,
     delegationHeader: sessionResult.delegationHeader,
     delegationCid: sessionResult.delegationCid,
@@ -1879,8 +2000,9 @@ async function handleLocalAuth(
     verificationMethod: sessionResult.verificationMethod,
     siwe: sessionResult.siwe,
     signature: sessionResult.signature,
+    ...(sessionResult.replicaStamp === undefined ? {} : { replicaStamp: sessionResult.replicaStamp }),
   };
-  sessionDid = sessionResult.verificationMethod;
+  const sessionDid = sessionResult.verificationMethod;
 
   // Update profile
   const updatedProfile = {
@@ -2006,14 +2128,6 @@ export async function refreshOpenKeySession(
   // A missing profile is PROFILE_NOT_FOUND, not a missing key: `tc init` alone
   // would create the default profile instead of this one.
   const profile = snapshot.profile ?? await ProfileManager.getProfile(profileName);
-  const key = snapshot.key;
-  if (!key) {
-    throw new CLIError(
-      "NO_KEY",
-      `No key found for profile "${profileName}". Run \`${CLI_NAME} --profile ${profileName} auth rotate\` to create a new key and sign in.`,
-      ExitCode.AUTH_REQUIRED,
-    );
-  }
   // Resolve before consent so an invalid scope, --expiry, owner conflict or
   // live session in use never opens OpenKey.
   const expiry = options.expiry === undefined ? undefined : parseRequestedExpiry(options.expiry);
@@ -2042,9 +2156,17 @@ export async function refreshOpenKeySession(
     assertSessionReplaceable(profileName, snapshot, expectedOwner, permissions, estimatedExpiry);
   }
 
+  // A logged-out nonreplica profile has no restorable signer. Keep the
+  // candidate private key in memory until the signed OpenKey result verifies
+  // and commitLogin atomically writes the key, session and matching DID.
+  const fresh = snapshot.key === null ? generateKey() : null;
+  const key = snapshot.key ?? fresh!.jwk;
+  const sessionDid = fresh?.did ?? profile.sessionDid ?? profile.did;
+  const requestDid = fresh && profile.did.startsWith("did:key:") ? fresh.did : profile.did;
+
   // Start browser auth flow
   const acquireOpenKey = options.openKeyAcquisition ?? startAuthFlow;
-  const delegationData = await acquireOpenKey(profile.did, {
+  const delegationData = await acquireOpenKey(requestDid, {
     paste: options.paste,
     noPopup: options.noPopup,
     jwk: key,
@@ -2061,7 +2183,6 @@ export async function refreshOpenKeySession(
   // expiry and space all come from OpenKey's proof for this profile's key.
   // The saved session always signs with key.json's key, the one the proof was
   // verified against; a JWK the callback echoes is never trusted (TC-1053).
-  const sessionDid = profile.sessionDid ?? profile.did;
   let sanitizedSession: Record<string, unknown>;
   let verifiedOwner: string | undefined;
   let declined: PermissionEntry[] = [];
@@ -2090,7 +2211,8 @@ export async function refreshOpenKeySession(
   const updatedProfile: ProfileConfig = withOwnerKeyPrimary({
     ...profile,
     host: options.persistHost === true || !profile.host ? host : profile.host,
-    sessionDid: profile.sessionDid ?? profile.did,
+    did: requestDid,
+    sessionDid,
     posture: profile.posture ?? "owner-openkey",
     operatorType: profile.operatorType ?? "human",
     authMethod: "openkey" as const,
