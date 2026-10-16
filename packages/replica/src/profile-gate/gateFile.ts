@@ -14,6 +14,7 @@ import type {
   ReplicaAccountGate,
   ReplicaDenyInput,
   ReplicaDenyOutcome,
+  ReplicaGateAccess,
   ReplicaGateReason,
   ReplicaPurgeIntent,
   ReplicaSessionStamp,
@@ -39,6 +40,11 @@ export function principalHashOf(salt: string, principal: string): Promise<string
   return saltedHash(salt, principal.toLowerCase());
 }
 
+/** Salted opaque identity id, derived before a guarded data operation. */
+export function identityHashOf(salt: string, identityKey: string): Promise<string> {
+  return saltedHash(salt, identityKey);
+}
+
 function parseState(text: string): NodeGateState {
   let raw: unknown;
   try {
@@ -60,26 +66,49 @@ function parseState(text: string): NodeGateState {
   ) {
     throw gateRefusal("gate_unavailable", "The replica gate file has an invalid salt.");
   }
-  if (record.principalHash !== null && typeof record.principalHash !== "string") {
+  if (record.principalHash !== null &&
+      (typeof record.principalHash !== "string" || !/^[0-9a-f]{64}$/.test(record.principalHash))) {
     throw gateRefusal("gate_unavailable", "The replica gate file has an invalid principal hash.");
   }
-  if (typeof record.lifecycleEpoch !== "number" || !Number.isInteger(record.lifecycleEpoch) || record.lifecycleEpoch < 0) {
+  if (typeof record.lifecycleEpoch !== "number" || !Number.isSafeInteger(record.lifecycleEpoch) || record.lifecycleEpoch < 0) {
     throw gateRefusal("gate_unavailable", "The replica gate file has an invalid lifecycle epoch.");
   }
-  if (record.deniedAt !== null && (typeof record.deniedAt !== "number" || !Number.isFinite(record.deniedAt))) {
+  if (record.deniedAt !== null && (typeof record.deniedAt !== "number" ||
+      !Number.isSafeInteger(record.deniedAt) || record.deniedAt < 0)) {
     throw gateRefusal("gate_unavailable", "The replica gate file has an invalid deniedAt.");
   }
   if (!Array.isArray(record.intents)) throw gateRefusal("gate_unavailable", "The replica gate file has no intents list.");
-  const firstInstall = record.firstInstall ?? {};
-  if (typeof firstInstall !== "object" || firstInstall === null || Array.isArray(firstInstall)) {
-    throw gateRefusal("gate_unavailable", "The replica gate file has an invalid firstInstall map.");
+  for (const intent of record.intents) {
+    if (typeof intent !== "object" || intent === null || typeof intent.id !== "string" ||
+        !/^[0-9a-f]{64}$/.test(intent.principalHash) || !Number.isSafeInteger(intent.recordedAt) ||
+        intent.recordedAt < 0 ||
+        (intent.kind === "pending"
+          ? !/^[0-9a-f]{64}$/.test(intent.identityKeyHash) || intent.id !== `pending:${intent.identityKeyHash}`
+          : intent.kind !== "partition" || typeof intent.partitionId !== "string" ||
+            intent.partitionId.length === 0 || intent.id !== intent.partitionId)) {
+      throw gateRefusal("gate_unavailable", "The replica gate file has an invalid purge intent.");
+    }
   }
-  for (const value of Object.values(firstInstall)) {
-    if (typeof value !== "number" || !Number.isFinite(value)) {
+  const firstInstall = record.firstInstall;
+  if (typeof firstInstall !== "object" || firstInstall === null || Array.isArray(firstInstall)) {
+    throw gateRefusal("gate_unavailable", "The replica gate file has no valid firstInstall map.");
+  }
+  for (const [hash, value] of Object.entries(firstInstall)) {
+    if (!/^[0-9a-f]{64}$/.test(hash) || typeof value !== "number" ||
+        !Number.isSafeInteger(value) || value < 0) {
       throw gateRefusal("gate_unavailable", "The replica gate file has an invalid firstInstall entry.");
     }
   }
-  // Intent entries are validated where they are consumed (erase), not here.
+  const pendingGenerations = record.pendingGenerations;
+  if (typeof pendingGenerations !== "object" || pendingGenerations === null || Array.isArray(pendingGenerations)) {
+    throw gateRefusal("gate_unavailable", "The replica gate file has an invalid pending generation map.");
+  }
+  for (const [hash, generation] of Object.entries(pendingGenerations)) {
+    if (!/^[0-9a-f]{64}$/.test(hash) || typeof generation !== "number" ||
+        !Number.isSafeInteger(generation) || generation < 0) {
+      throw gateRefusal("gate_unavailable", "The replica gate file has an invalid pending generation.");
+    }
+  }
   return {
     incarnation: record.incarnation,
     salt: record.salt,
@@ -88,6 +117,7 @@ function parseState(text: string): NodeGateState {
     deniedAt: record.deniedAt,
     intents: record.intents as ReplicaPurgeIntent[],
     firstInstall: firstInstall as Record<string, number>,
+    pendingGenerations: pendingGenerations as Record<string, number>,
   };
 }
 
@@ -101,6 +131,49 @@ async function readState(profileDir: string): Promise<NodeGateState | undefined>
     throw gateRefusal("gate_unavailable", "The replica gate file cannot be read.");
   }
   return parseState(text);
+}
+
+/** Control-only snapshot. In particular, a missing gate is never minted by a pending read. */
+export function readGateSnapshot(profileDir: string): Promise<NodeGateState | undefined> {
+  return readState(profileDir);
+}
+
+/** Call under the profile lock; caller derives both hashes before entering its data section. */
+export async function assertGateAccess(
+  profileDir: string,
+  access: ReplicaGateAccess,
+  salt: string,
+): Promise<NodeGateState> {
+  if (access.stamp === undefined) {
+    throw gateRefusal("not_established", "The replica session has no stamp.");
+  }
+  const state = await readState(profileDir);
+  if (state === undefined || state.salt !== salt) {
+    throw gateRefusal("gate_unavailable", "The replica gate is unavailable or was replaced.");
+  }
+  if (state.incarnation !== access.incarnation) {
+    throw gateRefusal("stamp_stale", "The replica gate was replaced.");
+  }
+  if (state.lifecycleEpoch !== access.stamp.lifecycleEpoch || state.incarnation !== access.stamp.incarnation) {
+    throw gateRefusal("stamp_stale", "The replica session stamp has changed.");
+  }
+  if (state.principalHash === null || state.principalHash !== access.principalHash) {
+    throw gateRefusal("principal_mismatch", "The replica belongs to a different account.");
+  }
+  if (state.intents.some((intent) =>
+    (intent.kind === "partition" && intent.partitionId === access.partitionId) ||
+    (intent.kind === "pending" && intent.identityKeyHash === access.identityKeyHash)
+  )) {
+    throw gateRefusal("purge_pending", "This replica has a pending erase.");
+  }
+  return state;
+}
+
+/** Erase precedes this operation. Keeping generations makes replay and stale-store fencing durable. */
+export async function clearGateIntent(profileDir: string, id: string): Promise<void> {
+  const state = await readState(profileDir);
+  if (state === undefined || !state.intents.some((intent) => intent.id === id)) return;
+  await writeState(profileDir, { ...state, intents: state.intents.filter((intent) => intent.id !== id) });
 }
 
 async function writeState(profileDir: string, state: NodeGateState): Promise<void> {
@@ -151,6 +224,9 @@ export async function readFirstInstall(profileDir: string, identityKeyHash: stri
 
 /** Records the first-install anchor only when absent. Returns the stored value. */
 export async function recordFirstInstall(profileDir: string, identityKeyHash: string, atMs: number): Promise<number> {
+  if (!/^[0-9a-f]{64}$/.test(identityKeyHash) || !Number.isSafeInteger(atMs) || atMs < 0) {
+    throw gateRefusal("gate_unavailable", "A salted identity hash and finite first-install time are required.");
+  }
   const state = await readGateState(profileDir);
   const existing = state.firstInstall[identityKeyHash];
   if (existing !== undefined) return existing;
@@ -226,6 +302,7 @@ export async function denyGate(
   profileDir: string,
   input: ReplicaDenyInput,
   collectIntents: (principalHash: string) => Promise<readonly ReplicaPurgeIntent[]>,
+  precomputed?: { salt: string; principalHash: string },
 ): Promise<ReplicaDenyOutcome> {
   if (input.reason === "account_switch" && input.next === undefined) {
     throw new TypeError("An account switch needs the incoming principal.");
@@ -233,7 +310,12 @@ export async function denyGate(
   try {
     const state = await readState(profileDir);
     if (state === undefined || state.principalHash === null) return { status: "stale" };
-    if (state.principalHash !== (await principalHashOf(state.salt, input.principal))) return { status: "stale" };
+    if (precomputed !== undefined && state.salt !== precomputed.salt) {
+      throw gateRefusal("gate_unavailable", "The replica gate salt changed before denial.");
+    }
+    if (state.principalHash !== (precomputed?.principalHash ?? await principalHashOf(state.salt, input.principal))) {
+      return { status: "stale" };
+    }
     const intents = await collectIntents(state.principalHash);
     const known = new Set(state.intents.map((intent) => intent.id));
     const merged = [...state.intents, ...intents.filter((intent) => !known.has(intent.id))];

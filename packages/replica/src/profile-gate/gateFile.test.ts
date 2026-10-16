@@ -5,16 +5,23 @@ import { REPLICA_GATE_FILE } from "@tinycloud/sdk-services/kv/replication/contra
 import type { ReplicaPurgeIntent } from "@tinycloud/sdk-services/kv/replication";
 import {
   denyGate,
+  assertGateAccess,
+  clearGateIntent,
   establishSessionStamp,
   principalHashOf,
+  identityHashOf,
   readFirstInstall,
   readGateState,
   recordFirstInstall,
   restoreSessionStamp,
+  readGateSnapshot,
 } from "./gateFile";
+import type { ReplicaGateAccess } from "@tinycloud/sdk-services/kv/replication";
 
 const ALICE = "did:key:z6MkAlice";
 const BOB = "did:key:z6MkBob";
+const HASH_A = "a".repeat(64);
+const HASH_B = "b".repeat(64);
 
 let dir: string;
 
@@ -42,6 +49,40 @@ async function expectGated(promise: Promise<unknown>, gate: string): Promise<voi
 async function readGateFile(): Promise<Record<string, unknown>> {
   return JSON.parse(await Bun.file(join(dir, REPLICA_GATE_FILE)).text()) as Record<string, unknown>;
 }
+
+test("readonly gate snapshot never creates a missing gate", async () => {
+  expect(await readGateSnapshot(dir)).toBeUndefined();
+  expect(await readdir(dir)).toEqual([]);
+});
+
+test("guarded access rejects a stale stamp and pending intent before data access", async () => {
+  const stamp = await establishSessionStamp(dir, ALICE, { siweIssuedAt: 1 });
+  const state = await readGateSnapshot(dir);
+  const principalHash = await principalHashOf(state!.salt, ALICE);
+  const identityKeyHash = await identityHashOf(state!.salt, "identity");
+  const access: ReplicaGateAccess = { stamp, incarnation: stamp.incarnation, principalHash, identityKeyHash };
+  expect(await assertGateAccess(dir, access, state!.salt)).toEqual(state);
+  const pending: ReplicaPurgeIntent = {
+    id: `pending:${identityKeyHash}`, kind: "pending", identityKeyHash, principalHash, recordedAt: 1,
+  };
+  await denyGate(dir, { reason: "sign_out", principal: ALICE }, async () => [pending]);
+  await expectGated(assertGateAccess(dir, access, state!.salt), "stamp_stale");
+  expect((await readGateSnapshot(dir))!.pendingGenerations[identityKeyHash]).toBe(1);
+});
+
+test("clearing an intent retains its generation and is idempotent", async () => {
+  await establishSessionStamp(dir, ALICE, { siweIssuedAt: 1 });
+  const state = await readGateSnapshot(dir);
+  const identityKeyHash = await identityHashOf(state!.salt, "identity");
+  await denyGate(dir, { reason: "sign_out", principal: ALICE }, async (principalHash) => [
+    { id: `pending:${identityKeyHash}`, kind: "pending", identityKeyHash, principalHash, recordedAt: 1 },
+  ]);
+  await clearGateIntent(dir, `pending:${identityKeyHash}`);
+  await clearGateIntent(dir, `pending:${identityKeyHash}`);
+  const after = await readGateSnapshot(dir);
+  expect(after!.intents).toEqual([]);
+  expect(after!.pendingGenerations[identityKeyHash]).toBe(1);
+});
 
 describe("readGateState", () => {
   test("creates a gate with a fresh incarnation, 32-byte salt and no principal", async () => {
@@ -74,6 +115,13 @@ describe("readGateState", () => {
     await expectGated(readGateState(dir), "gate_unavailable");
   });
 
+  test("rejects malformed intents before checking a pending file", async () => {
+    const stamp = await establishSessionStamp(dir, ALICE, { siweIssuedAt: 1 });
+    const state = await readGateFile();
+    await writeFile(join(dir, REPLICA_GATE_FILE), JSON.stringify({ ...state, intents: [null] }));
+    await expectGated(restoreSessionStamp(dir, ALICE, stamp), "gate_unavailable");
+  });
+
   test("fails closed on an unknown version", async () => {
     await readGateState(dir);
     const parsed = await readGateFile();
@@ -96,6 +144,20 @@ describe("readGateState", () => {
     await expectGated(readGateState(dir), "gate_unavailable");
   });
 
+  test("refuses a corrupt pending generation map instead of resetting the replay fence", async () => {
+    const stamp = await establishSessionStamp(dir, ALICE, { siweIssuedAt: 1 });
+    const state = await readGateFile();
+    await writeFile(join(dir, REPLICA_GATE_FILE), JSON.stringify({ ...state, pendingGenerations: null }));
+    await expectGated(restoreSessionStamp(dir, ALICE, stamp), "gate_unavailable");
+  });
+
+  test("missing pending generation map cannot silently reset the replay fence", async () => {
+    const stamp = await establishSessionStamp(dir, ALICE, { siweIssuedAt: 1 });
+    const state = await readGateFile();
+    delete state.pendingGenerations;
+    await writeFile(join(dir, REPLICA_GATE_FILE), JSON.stringify(state));
+    await expectGated(restoreSessionStamp(dir, ALICE, stamp), "gate_unavailable");
+  });
   test("leaves no temp files behind after writes", async () => {
     await establishSessionStamp(dir, ALICE, { siweIssuedAt: 1 });
     const entries = await readdir(dir);
@@ -202,6 +264,18 @@ describe("restoreSessionStamp", () => {
 });
 
 describe("denyGate", () => {
+  test("precomputed principal hash is rechecked against the locked salt", async () => {
+    await establishSessionStamp(dir, ALICE, { siweIssuedAt: 1 });
+    const state = await readGateState(dir);
+    const principalHash = await principalHashOf(state.salt, ALICE);
+    const wrongSalt = Buffer.alloc(32, 7).toString("base64url");
+    const outcome = await denyGate(dir, { reason: "sign_out", principal: ALICE }, async () => [], {
+      salt: wrongSalt, principalHash,
+    });
+    expect(outcome.status).toBe("unguarded");
+    expect((await readGateState(dir)).principalHash).toBe(principalHash);
+  });
+
   test("returns stale and writes nothing when the principal does not match", async () => {
     await establishSessionStamp(dir, ALICE, { siweIssuedAt: 1 });
     const before = await readGateState(dir);
@@ -268,8 +342,8 @@ describe("denyGate", () => {
 
   test("clears every firstInstall anchor", async () => {
     await establishSessionStamp(dir, ALICE, { siweIssuedAt: 1 });
-    await recordFirstInstall(dir, "hash-a", 10);
-    await recordFirstInstall(dir, "hash-b", 20);
+    await recordFirstInstall(dir, HASH_A, 10);
+    await recordFirstInstall(dir, HASH_B, 20);
     await denyGate(dir, { reason: "sign_out", principal: ALICE }, async () => []);
     expect((await readGateState(dir)).firstInstall).toEqual({});
   });
@@ -284,21 +358,21 @@ describe("denyGate", () => {
 
 describe("firstInstall anchors", () => {
   test("recordFirstInstall keeps the first value", async () => {
-    expect(await recordFirstInstall(dir, "hash-a", 10)).toBe(10);
-    expect(await recordFirstInstall(dir, "hash-a", 99)).toBe(10);
-    expect(await readFirstInstall(dir, "hash-a")).toBe(10);
+    expect(await recordFirstInstall(dir, HASH_A, 10)).toBe(10);
+    expect(await recordFirstInstall(dir, HASH_A, 99)).toBe(10);
+    expect(await readFirstInstall(dir, HASH_A)).toBe(10);
   });
 
   test("readFirstInstall returns undefined without creating the gate", async () => {
-    expect(await readFirstInstall(dir, "hash-a")).toBeUndefined();
+    expect(await readFirstInstall(dir, HASH_A)).toBeUndefined();
     await expect(stat(join(dir, REPLICA_GATE_FILE))).rejects.toThrow();
   });
 
   test("a deny clears the anchor, so the next record starts over", async () => {
     await establishSessionStamp(dir, ALICE, { siweIssuedAt: 1 });
-    await recordFirstInstall(dir, "hash-a", 10);
+    await recordFirstInstall(dir, HASH_A, 10);
     await denyGate(dir, { reason: "sign_out", principal: ALICE }, async () => []);
-    expect(await readFirstInstall(dir, "hash-a")).toBeUndefined();
-    expect(await recordFirstInstall(dir, "hash-a", 50)).toBe(50);
+    expect(await readFirstInstall(dir, HASH_A)).toBeUndefined();
+    expect(await recordFirstInstall(dir, HASH_A, 50)).toBe(50);
   });
 });
