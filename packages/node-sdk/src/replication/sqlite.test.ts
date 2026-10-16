@@ -947,15 +947,92 @@ describe("mandatory Node lifecycle gate", () => {
     expect(fresh.unknownEntries).toContainEqual(expect.objectContaining({
       path: "replicas/notes/new-unsynced", kind: "file",
     }));
-    const abandoned = await purge.abandonRemoteLogout({
+    let token = "";
+    try {
+      await purge.abandonRemoteLogout({ principal: PRINCIPAL, approval: fresh, discardLocalChanges: true });
+      throw new Error("expected an inventory challenge");
+    } catch (error) {
+      token = (error as { inventoryApprovalToken: string }).inventoryApprovalToken;
+      expect(token).toMatch(/^[0-9a-f]{32}$/);
+      expect(error).toMatchObject({ code: "REPLICA_GATED", gate: "gate_unavailable" });
+    }
+    expect(await readFile(markerFile, "utf8")).toBe(before);
+    expect(await readFile(session, "utf8")).toBe("session private");
+    expect(await readFile(key, "utf8")).toBe("owner private");
+    await expect(purge.approveChangedPlainLogout({
+      principal: PRINCIPAL, approval: fresh, discardLocalChanges: true, inventoryApprovalToken: "",
+    })).rejects.toMatchObject({ code: "REPLICA_GATED", gate: "gate_unavailable" });
+    await expect(purge.approveChangedPlainLogout({
       principal: PRINCIPAL, approval: fresh, discardLocalChanges: true,
+      inventoryApprovalToken: "0".repeat(32),
+    })).rejects.toMatchObject({ code: "REPLICA_GATED", gate: "gate_unavailable" });
+    expect(await readFile(markerFile, "utf8")).toBe(before);
+    const restarted = createProfileReplicaPurge({ profileDir, guard: sharedGuard });
+    await expect(restarted.abandonRemoteLogout({
+      principal: PRINCIPAL, approval: fresh, discardLocalChanges: true,
+    })).rejects.toMatchObject({ inventoryApprovalToken: token });
+    const accepted = await restarted.approveChangedPlainLogout({
+      principal: PRINCIPAL, approval: fresh, discardLocalChanges: true, inventoryApprovalToken: token,
     });
-    expect(abandoned).toMatchObject({ remoteAbandoned: true, discardLocalChanges: true });
-    expect(abandoned.approvedUnknown).toContainEqual(expect.objectContaining({
+    expect(accepted).toMatchObject({ remoteAbandoned: true, discardLocalChanges: true });
+    expect(accepted.approvedUnknown).toContainEqual(expect.objectContaining({
       path: "replicas/notes/new-unsynced", kind: "file",
     }));
     expect(await readFile(session, "utf8")).toBe("session private");
     expect(await readFile(key, "utf8")).toBe("owner private");
+    expect(await readFile(unknown, "utf8")).toBe("local change after remote failure");
+    await expect(restarted.approveChangedPlainLogout({
+      principal: PRINCIPAL, approval: fresh, discardLocalChanges: true, inventoryApprovalToken: token,
+    })).rejects.toMatchObject({ code: "REPLICA_GATED", gate: "gate_unavailable" });
+  });
+
+  test("a changed-again inventory invalidates the stateless plain-logout challenge", async () => {
+    const dir = await makeDir();
+    const profileDir = dirname(dir);
+    const legacy = await makeLegacyMirror(profileDir);
+    const purge = createProfileReplicaPurge({ profileDir, guard: sharedGuard });
+    const initial = await purge.preflightLogout({ principal: PRINCIPAL });
+    await purge.prepareLogoutPending({ principal: PRINCIPAL, approval: initial, remotePending: true });
+    expect((await purge.deny({ reason: "sign_out", principal: PRINCIPAL }, { deferErase: true })).status)
+      .toBe("denied");
+    const markerPath = join(profileDir, REPLICA_LOGOUT_PENDING_FILE);
+    const marker = await readFile(markerPath, "utf8");
+    await writeFile(join(legacy, "unknown-X"), "X");
+    const first = await purge.preflightLogout({ principal: PRINCIPAL, discardLocalChanges: true });
+    let oldToken = "";
+    try {
+      await purge.abandonRemoteLogout({ principal: PRINCIPAL, approval: first, discardLocalChanges: true });
+    } catch (error) {
+      oldToken = (error as { inventoryApprovalToken: string }).inventoryApprovalToken;
+    }
+    expect(oldToken).toMatch(/^[0-9a-f]{32}$/);
+    await writeFile(join(legacy, "unknown-Y"), "Y");
+    const changed = await purge.preflightLogout({ principal: PRINCIPAL, discardLocalChanges: true });
+    let newToken = "";
+    try {
+      await purge.approveChangedPlainLogout({
+        principal: PRINCIPAL, approval: changed, discardLocalChanges: true,
+        inventoryApprovalToken: oldToken,
+      });
+    } catch (error) {
+      expect(error).toMatchObject({ code: "REPLICA_GATED", gate: "gate_unavailable" });
+      newToken = (error as { inventoryApprovalToken: string }).inventoryApprovalToken;
+    }
+    expect(newToken).toMatch(/^[0-9a-f]{32}$/);
+    expect(newToken).not.toBe(oldToken);
+    expect(await readFile(markerPath, "utf8")).toBe(marker);
+    await expect(purge.approveChangedPlainLogout({
+      principal: PRINCIPAL, approval: changed, discardLocalChanges: false as true,
+      inventoryApprovalToken: newToken,
+    })).rejects.toMatchObject({ code: "REPLICA_GATED", gate: "gate_unavailable" });
+    const approved = await purge.approveChangedPlainLogout({
+      principal: PRINCIPAL, approval: changed, discardLocalChanges: true,
+      inventoryApprovalToken: newToken,
+    });
+    expect(approved).toMatchObject({ remoteAbandoned: true });
+    expect(approved.approvedUnknown.map(({ path }) => path)).toEqual([
+      "replicas/notes/unknown-X", "replicas/notes/unknown-Y",
+    ]);
   });
 
   test("consumed deferred denial still accepts remote completion or explicit abandon at its original epoch", async () => {
