@@ -168,6 +168,45 @@ test("only an exact approved X and Y inventory is removed after successful remot
   await expect(stat(join(profilePath("dogfood"), "replicas"))).rejects.toMatchObject({ code: "ENOENT" });
 });
 
+test("a resumed legacy cleanup tolerates SQLite's own recreated sidecar without widening unknown-file approval", async () => {
+  const entry = await initializedLegacy();
+  const store = await SqliteReplicaStore.open(entry, { create: false });
+  await store.open();
+  const lease = await store.acquireSyncLease(60_000);
+  expect(lease).not.toBeNull();
+  const approved = await approvedLegacyInventory("notes", []);
+  expect(approved.knownEntries.some((item) => item.path.endsWith("/replica.db-shm"))).toBe(true);
+  await store.releaseLease(lease!);
+  await store.close();
+
+  expect(await removeProfileReplicas("dogfood", approved)).toEqual(["notes"]);
+  await expect(stat(entry)).rejects.toMatchObject({ code: "ENOENT" });
+});
+
+test("sidecar churn cannot authorize a changed database or a new unknown file", async () => {
+  const entry = await initializedLegacy();
+  const store = await SqliteReplicaStore.open(entry, { create: false });
+  await store.open();
+  const lease = await store.acquireSyncLease(60_000);
+  expect(lease).not.toBeNull();
+  const approved = await approvedLegacyInventory("notes", []);
+  await store.releaseLease(lease!);
+  await store.close();
+
+  const unknown = join(entry, "private.bin");
+  await writeFile(unknown, "unapproved");
+  await expect(removeProfileReplicas("dogfood", approved)).rejects.toMatchObject({ code: "REPLICA_PURGE_FAILED" });
+  expect(await readFile(unknown, "utf8")).toBe("unapproved");
+
+  await unlink(unknown);
+  const database = join(entry, "replica.db");
+  const parked = join(profilePath("dogfood"), "parked-replica.db");
+  await rename(database, parked);
+  await fsPromises.copyFile(parked, database);
+  await expect(removeProfileReplicas("dogfood", approved)).rejects.toMatchObject({ code: "REPLICA_PURGE_FAILED" });
+  expect(await readFile(database)).toEqual(await readFile(parked));
+});
+
 test("approved root-level file and nested unknown directory are removed only by exact identities", async () => {
   await initializedLegacy();
   const root = join(profilePath("dogfood"), "replicas");

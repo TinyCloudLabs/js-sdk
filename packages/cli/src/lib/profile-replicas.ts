@@ -256,7 +256,18 @@ function assertRecordedChild(
   if (!root || root.dev !== layout.rootIdentity.dev || root.ino !== layout.rootIdentity.ino) {
     throw refuseUnsafeReplicaPath(profile, `replica entry "${name}" changed since the recorded inventory`);
   }
+  const databaseEntry = layout.knownEntries.find((entry) => entry.path === "replica.db");
+  const approvedDatabase = inventory.knownEntries.find((entry) => entry.path === prefix + "replica.db");
+  const stableDatabase = databaseEntry?.kind === "file" && approvedDatabase?.kind === "file" &&
+    databaseEntry.dev === approvedDatabase.dev && databaseEntry.ino === approvedDatabase.ino;
   for (const entry of layout.knownEntries) {
+    const recorded = inventory.knownEntries.find((item) => item.path === prefix + entry.path);
+    // SQLite can recreate its own sidecars while a lease is held or acquired.
+    // Never extend this to the database, an unknown child, or a changed root.
+    if (stableDatabase && entry.kind === "file" &&
+        /^replica\.db-(?:wal|shm|journal)$/.test(entry.path) &&
+        (recorded === undefined || recorded.kind === "file") &&
+        !inventory.approvedUnknown.some((item) => item.path === prefix + entry.path)) continue;
     assertApprovedEntry(profile, prefix + entry.path, entry, inventory.knownEntries);
   }
   for (const entry of layout.unknownEntries) {
@@ -434,23 +445,27 @@ export async function removeProfileReplicas(profile: string, options: LegacyRemo
         for (const { entry, empty, path, layout } of checked) {
           if (empty) continue;
           await pinned.assertNamed();
-          const layoutOptions = {
-            approvedUnknown: inventory ? childEntries(entry.name, inventory.approvedUnknown) : [],
-            expectedKnown: inventory ? childEntries(entry.name, inventory.knownEntries) : undefined,
-            expectedRoot: inventory?.roots.get(`replicas/${entry.name}`),
-            allowMissingDatabase: inventory?.missingDatabases.has(`replicas/${entry.name}/replica.db`) === true ||
-              layout?.unknownEntries.some((item) => item.path === "replica.db") === true,
-            allowAdapterFence: false,
-          };
           const replica = opened.find(({ name }) => name === entry.name);
           try {
+            if (replica && process.platform !== "linux") {
+              await replica.store.close();
+              replica.closed = true;
+            }
+            // Opening/closing the lease can replace SQLite sidecars. Reinspect
+            // under the profile lock, then pin their current inode for unlink.
+            const current = inventory && replica ? await inspectSqliteReplicaLayout(path) : null;
+            if (current && inventory) assertRecordedChild(profile, entry.name, current, inventory, false);
+            const layoutOptions = {
+              approvedUnknown: inventory ? childEntries(entry.name, inventory.approvedUnknown) : [],
+              expectedKnown: current?.knownEntries ?? (inventory ? childEntries(entry.name, inventory.knownEntries) : undefined),
+              expectedRoot: inventory?.roots.get(`replicas/${entry.name}`),
+              allowMissingDatabase: inventory?.missingDatabases.has(`replicas/${entry.name}/replica.db`) === true ||
+                layout?.unknownEntries.some((item) => item.path === "replica.db") === true,
+              allowAdapterFence: false,
+            };
             if (replica && process.platform === "linux") {
               await replica.store.destroy(replica.lease!, layoutOptions);
             } else {
-              if (replica) {
-                await replica.store.close();
-                replica.closed = true;
-              }
               await removeSqliteReplicaLayout(path, layoutOptions);
             }
             removed.push(entry.name);
