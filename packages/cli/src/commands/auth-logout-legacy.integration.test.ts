@@ -1,9 +1,9 @@
 import { afterEach, expect, test } from "bun:test";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { PrivateKeySigner, REPLICA_LOGOUT_PENDING_FILE } from "@tinycloud/node-sdk";
-import { profileConfigPath, profilePath, sessionPath, withTinyCloudStateRoot, writeJsonAtomic } from "@tinycloud/operations/state";
+import { createProfileReplicaPurge, PrivateKeySigner, REPLICA_LOGOUT_PENDING_FILE } from "@tinycloud/node-sdk";
+import { profileConfigPath, profilePath, sessionPath, withProfileLock, withTinyCloudStateRoot, writeJsonAtomic } from "@tinycloud/operations/state";
 import { readGateSnapshot } from "@tinycloud/replica/profile-gate";
 import { SqliteReplicaStore } from "@tinycloud/replica/sqlite";
 import { parseSignedSiweCacao } from "@tinycloud/sdk-core";
@@ -165,4 +165,27 @@ test("discard plus online revoke retains all local files on 503 then erases only
   await expect(readFile(paths.key)).rejects.toMatchObject({ code: "ENOENT" });
   await expect(readFile(paths.db)).rejects.toMatchObject({ code: "ENOENT" });
   await expect(readFile(paths.unknown)).rejects.toMatchObject({ code: "ENOENT" });
+}, 30_000);
+
+test("startup completes a pinned empty legacy child left after the database was unlinked under a durable v1 marker", async () => {
+  const { home, paths } = await fixture();
+  const ownerDid = JSON.parse(await readFile(paths.session, "utf8")).ownerDid as string;
+  const purge = createProfileReplicaPurge({
+    profileDir: paths.directory,
+    guard: <T>(section: () => Promise<T>): Promise<T> =>
+      withTinyCloudStateRoot(home, () => withProfileLock(PROFILE, section, { requireProfile: true })),
+  });
+  expect(await purge.prepareLogoutPending({ principal: ownerDid })).toMatchObject({ v: 1 });
+  const legacyDir = dirname(paths.db);
+  for (const child of await readdir(legacyDir)) {
+    await rm(join(legacyDir, child), { recursive: true, force: true });
+  }
+  expect(await readdir(legacyDir)).toEqual([]);
+  const recovered = await run(home, ["auth", "status"]);
+  expect(recovered.exitCode).toBe(0);
+  expect(JSON.parse(recovered.stdout)).toMatchObject({ authenticated: false, hasKey: false });
+  await expect(readFile(paths.session)).rejects.toMatchObject({ code: "ENOENT" });
+  await expect(readFile(paths.key)).rejects.toMatchObject({ code: "ENOENT" });
+  await expect(readdir(legacyDir)).rejects.toMatchObject({ code: "ENOENT" });
+  await expect(readFile(join(paths.directory, REPLICA_LOGOUT_PENDING_FILE))).rejects.toMatchObject({ code: "ENOENT" });
 }, 30_000);
