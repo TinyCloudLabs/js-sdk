@@ -46,6 +46,30 @@ test("legacy-only logout cleanup is idempotent and leaves flag-owned replicas un
   expect(await readFile(flagDb)).toEqual(flagBefore);
 });
 
+test("legacy adapter fence is retained without durable discard consent and removed only with it", async () => {
+  const root = join(profilePath("dogfood"), "replicas");
+  const entry = join(root, "notes");
+  const store = await SqliteReplicaStore.open(entry, { create: true });
+  await store.init({
+    name: "notes", replicaId: "notes", host: "https://node.example.test",
+    space: "tinycloud:pkh:eip155:1:0x0000000000000000000000000000000000000001:default",
+    prefix: "notes/", deviceDid: "did:key:device", allowSecrets: false,
+    localReadPolicy: "whileGrantValid", retentionGrantCid: null,
+  });
+  await store.close();
+  const unknown = join(entry, "fence.json");
+  const bytes = Buffer.from("not a legacy replica file");
+  await writeFile(unknown, bytes);
+
+  await expect(removeProfileReplicas("dogfood")).rejects.toMatchObject({ code: "REPLICA_PURGE_FAILED" });
+  expect(await readFile(unknown)).toEqual(bytes);
+  expect((await stat(join(entry, "replica.db"))).isFile()).toBe(true);
+
+  expect(await removeProfileReplicas("dogfood", { discardLocalChanges: true })).toEqual(["notes"]);
+  await expect(stat(unknown)).rejects.toMatchObject({ code: "ENOENT" });
+  await expect(stat(root)).rejects.toMatchObject({ code: "ENOENT" });
+});
+
 test("legacy cleanup refuses a new root file without deleting it", async () => {
   const root = join(profilePath("dogfood"), "replicas");
   const entry = join(root, "notes");

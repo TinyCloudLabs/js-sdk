@@ -154,7 +154,12 @@ export async function withPinnedReplicaForReset<T>(
 }
 
 /** Remove each replica through its fenced store API; refuse before deletion if any sync owns a lease. */
-export async function removeProfileReplicas(profile: string, heldLeases?: ReadonlyMap<string, LeaseToken>, preflightRoot?: PinnedReplicaRoot): Promise<string[]> {
+export async function removeProfileReplicas(profile: string, options: {
+  discardLocalChanges?: boolean;
+  heldLeases?: ReadonlyMap<string, LeaseToken>;
+  preflightRoot?: PinnedReplicaRoot;
+} = {}): Promise<string[]> {
+  const { heldLeases, preflightRoot } = options;
   return withProfileLock(profile, async () => {
     const namedRoot = join(profilePath(profile), "replicas");
     const pinned = preflightRoot ?? await pinReplicaRoot(profile, namedRoot, "logout");
@@ -248,7 +253,7 @@ export async function removeProfileReplicas(profile: string, heldLeases?: Readon
         // Empty interrupted entries were already removed before SQLite opened.
         for (const replica of opened) {
           try {
-            await replica.store.destroy(replica.lease!);
+            await replica.store.destroy(replica.lease!, { discardLocalChanges: options.discardLocalChanges === true });
             removed.push(replica.name);
           } catch (error) {
             const replicaStillExists = await lstat(join(root, replica.name)).then(
@@ -598,7 +603,9 @@ export async function removeProfileReplicasAndReplication(profile: string): Prom
     const heldLeases = new Map(acquired.stores.map(({ path, lease }) => [path, lease]));
     let legacyRemoved: string[] = [];
     try {
-      legacyRemoved = await removeProfileReplicas(profile, heldLeases, acquired.roots.get("replicas"));
+      legacyRemoved = await removeProfileReplicas(profile, {
+        heldLeases, preflightRoot: acquired.roots.get("replicas"),
+      });
       const replication = await removeProfileReplication(profile, heldLeases, acquired.roots.get("replication"));
       return [...legacyRemoved, ...replication];
     } catch (error) {
