@@ -18,7 +18,6 @@ import {
   writeJsonAtomic,
 } from "@tinycloud/operations/state";
 import { FakeNode, owner, signUcan } from "../../../replica/test/fixtures.js";
-import { appendGrantHistory } from "../lib/permissions.js";
 import { registerReplicaCommand } from "./replica.js";
 
 const PROFILE = "owner";
@@ -451,15 +450,14 @@ describe("tc auth logout --revoke with durable replica denial", () => {
     const expiredCid = cid("tc841-history-owner-expired");
     const future = new Date(Date.now() + 3_600_000).toISOString();
     const past = new Date(Date.now() - 3_600_000).toISOString();
-    await withTinyCloudStateRoot(home, async () => {
-      for (const [delegationCid, expiry] of [
-        [issuedCid, future], [importedCid, future], [expiredCid, past],
-      ]) {
-        await appendGrantHistory(PROFILE, {
-          source: "cli", delegationCid, expiry, addedCaps: [],
-        });
-      }
-    });
+    const history = [
+      [issuedCid, future], [importedCid, future], [expiredCid, past],
+    ].map(([delegationCid, expiry]) => JSON.stringify({
+      ts: new Date().toISOString(), profile: PROFILE,
+      source: "cli", delegationCid, expiry, addedCaps: [],
+    })).join("\n") + "\n";
+    await withTinyCloudStateRoot(home, () =>
+      writeFile(join(profilePath(PROFILE), "auth-grants.jsonl"), history, { mode: 0o600 }));
     const record = (delegationCid: string, delegatorDid: string, status: "active" | "expired", expiresAt: string) => ({
       cid: delegationCid,
       direction: delegatorDid === paths.ownerDid ? "granted" : "received",
