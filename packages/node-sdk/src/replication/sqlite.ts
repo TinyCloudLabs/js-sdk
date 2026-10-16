@@ -84,6 +84,7 @@ type FileGateState = ReplicaAccountGate & {
   intents: ReplicaPurgeIntent[];
   pendingGenerations: Record<string, number>;
   firstInstall: Record<string, number>;
+  grantInstall: Record<string, number>;
   eraseDeferred: boolean;
   deferredPrincipalHash: string | null;
 };
@@ -92,9 +93,11 @@ type FileGate = {
   readGateSnapshot(profileDir: string): Promise<FileGateState | undefined>;
   identityHashOf(salt: string, identityKey: string): Promise<string>;
   principalHashOf(salt: string, principal: string): Promise<string>;
+  grantInstallHashOf(salt: string, identityKeyHash: string, cid: string): Promise<string>;
   assertGateAccess(profileDir: string, access: ReplicaGateAccess, salt: string): Promise<FileGateState>;
   readFirstInstall(profileDir: string, identityKeyHash: string): Promise<number | undefined>;
   recordFirstInstall(profileDir: string, identityKeyHash: string, atMs: number): Promise<number>;
+  recordGrantInstall(profileDir: string, hash: string, atMs: number): Promise<number>;
   establishSessionStamp(profileDir: string, principal: string, o: { siweIssuedAt: number }): Promise<ReplicaSessionStamp>;
   restoreSessionStamp(profileDir: string, principal: string, persisted: ReplicaSessionStamp | undefined): Promise<ReplicaSessionStamp>;
   denyGate(
@@ -674,8 +677,9 @@ class SqliteReplicaHandle implements KVReplicaHandle {
   readonly #replicaDir: string;
   readonly #replica: ReplicaRuntime;
   readonly #guard: MutationGuard;
-  readonly #read: <T>(section: (snapshot: SqliteReplicaStore) => Promise<T>) => Promise<T>;
+  readonly #read: <T>(section: (snapshot: SqliteReplicaStore, syncedThroughEpoch: number) => Promise<T>, withFence?: boolean) => Promise<T>;
   readonly #policy: (at: number, recordFirst: boolean) => Promise<SqliteGrantPolicy | null>;
+  readonly #recordGrantInstall: (cid: string, at: number) => Promise<number>;
   readonly #dirSync?: DirSync;
   /** The replica row generation this handle opened under — the durable fence a purge commits past (browser-parity wipe). */
   readonly #generation: number;
@@ -694,8 +698,9 @@ class SqliteReplicaHandle implements KVReplicaHandle {
     replicaDir: string;
     replica: ReplicaRuntime;
     guard: MutationGuard;
-    read: <T>(section: (snapshot: SqliteReplicaStore) => Promise<T>) => Promise<T>;
+    read: <T>(section: (snapshot: SqliteReplicaStore, syncedThroughEpoch: number) => Promise<T>, withFence?: boolean) => Promise<T>;
     policy: (at: number, recordFirst: boolean) => Promise<SqliteGrantPolicy | null>;
+    recordGrantInstall: (cid: string, at: number) => Promise<number>;
     transportFor?: SqliteReplicaStorageOptions["transportFor"];
     dirSync?: DirSync;
     generation: number;
@@ -711,6 +716,7 @@ class SqliteReplicaHandle implements KVReplicaHandle {
     this.#guard = input.guard;
     this.#read = input.read;
     this.#policy = input.policy;
+    this.#recordGrantInstall = input.recordGrantInstall;
     this.#transportOverride = input.transportFor;
     this.#dirSync = input.dirSync;
     this.#generation = input.generation;
@@ -816,8 +822,21 @@ class SqliteReplicaHandle implements KVReplicaHandle {
     }
   }
 
+  /** Refuse an expired installed grant before constructing transports or fetching pages. */
+  async #assertSyncEffective(): Promise<void> {
+    const state = await this.#store.open();
+    const selected = state?.pendingGrant ?? state?.grant;
+    if (selected === undefined || selected === null) return;
+    const installed = await this.#store.getGrantInstall(selected.cid);
+    const now = Date.now();
+    if (installed === null || !Number.isSafeInteger(installed.effectiveExpiresAt) ||
+        now >= installed.effectiveExpiresAt || now >= installed.consentDeadline) {
+      throw new ReplicaStorageError("GRANT_EXPIRED", "The replica grant's effective lifetime has expired.");
+    }
+  }
+
   async get(key: string): Promise<LocalGetResult> {
-    return this.#read(async (snapshot) => {
+    return this.#read(async (snapshot, syncedThroughEpoch) => {
     this.#assertOpen();
     await this.#assertEffective(snapshot);
     const result = await new this.#replica.Replica({ store: snapshot }).get(key);
@@ -826,7 +845,7 @@ class SqliteReplicaHandle implements KVReplicaHandle {
       asOf: result.meta.asOf,
       coverage: result.meta.coverage,
       authority: result.meta.authority,
-      syncedThroughEpoch: await readFence(this.#replicaDir),
+      syncedThroughEpoch,
     };
     switch (result.status) {
       case "present":
@@ -849,11 +868,11 @@ class SqliteReplicaHandle implements KVReplicaHandle {
       default:
         return { status: result.status, key: result.key, meta };
     }
-    });
+    }, true);
   }
 
   async list(options: { prefix: string; after?: string; limit?: number }): Promise<LocalListResult> {
-    return this.#read(async (snapshot) => {
+    return this.#read(async (snapshot, syncedThroughEpoch) => {
     this.#assertOpen();
     await this.#assertEffective(snapshot);
     const result = await new this.#replica.Replica({ store: snapshot }).list({
@@ -868,10 +887,10 @@ class SqliteReplicaHandle implements KVReplicaHandle {
         asOf: result.meta.asOf,
         coverage: result.meta.coverage,
         authority: result.meta.authority,
-        syncedThroughEpoch: await readFence(this.#replicaDir),
+        syncedThroughEpoch,
       },
     };
-    });
+    }, true);
   }
 
   /**
@@ -923,17 +942,24 @@ class SqliteReplicaHandle implements KVReplicaHandle {
         "The grant's get or sync coverage carries caveats; re-mint instead of installing it.",
       );
     }
-    const policy = await this.#policy(Date.now(), true);
-    if (policy === null || Date.now() >= policy.consentDeadline) {
+    const now = Date.now();
+    const policy = await this.#policy(now, true);
+    if (policy === null || now >= policy.consentDeadline) {
       throw new ReplicaStorageError("CONSENT_EXPIRED", "The replica's consent window has expired.");
     }
-    const installed = await this.#store.installGatedGrant(parsed, policy);
+    // The profile gate survives targeted partition purge; persist the CID
+    // floor before the SQLite install so a crash cannot refresh its TTL.
+    const installedAt = await this.#recordGrantInstall(parsed.cid, now);
+    const installed = await this.#store.installGatedGrant(parsed, { ...policy, at: installedAt });
     return newestGrantInfo(this.#replica, parsed, parsed, this.spec, installed)!;
     });
   }
 
   async sync(options: { signal: AbortSignal; syncStartEpoch: number }): Promise<LocalSyncResult> {
-    await this.#guard(() => this.#assertLive());
+    await this.#guard(async () => {
+      await this.#assertLive();
+      await this.#assertSyncEffective();
+    });
     const transportFor = await this.#transports();
     const abort = new AbortController();
     options.signal.throwIfAborted();
@@ -979,11 +1005,11 @@ class SqliteReplicaHandle implements KVReplicaHandle {
   }
 
   async status(): Promise<LocalReplicaStatus> {
-    return this.#read(async (snapshot) => {
+    return this.#read(async (snapshot, syncedThroughEpoch) => {
     this.#assertOpen();
     const engine = new this.#replica.Replica({ store: snapshot });
     const status = await engine.status();
-    const syncedThroughEpoch = await readFence(this.#replicaDir);
+    // The fence was captured before the SQLite snapshot began.
     const state = await snapshot.open();
     const selected = state?.pendingGrant ?? state?.grant ?? null;
     const selectedInstall = selected === null ? null : await snapshot.getGrantInstall(selected.cid);
@@ -1012,7 +1038,7 @@ class SqliteReplicaHandle implements KVReplicaHandle {
       bytes: status.bytes,
       lastError: status.lastError,
     };
-    });
+    }, true);
   }
 
   async close(): Promise<void> {
@@ -1070,7 +1096,8 @@ export function createSqliteReplicaStorage(
     partitionId: string,
     store: SqliteReplicaStore,
     generation: number,
-    section: (snapshot: SqliteReplicaStore) => Promise<T>,
+    section: (snapshot: SqliteReplicaStore, syncedThroughEpoch: number) => Promise<T>,
+    withFence = false,
   ): Promise<T> {
     if (spec.stamp === undefined) throw gated("not_established");
     const gate = await fileGate();
@@ -1109,7 +1136,11 @@ export function createSqliteReplicaStorage(
       }
       checked = after;
     };
-    return store.readTransaction(generation, checkGate, section);
+    if (withFence) await checkGate();
+    // A fence written after the SQLite snapshot starts belongs to newer rows.
+    // Capture it first; a concurrent sync can only make this value conservative.
+    const fence = withFence ? await readFence(store.dir) : 0;
+    return store.readTransaction(generation, checkGate, (sqliteSnapshot) => section(sqliteSnapshot, fence));
   }
 
   async function identityDirs(): Promise<string[]> {
@@ -1157,6 +1188,19 @@ export function createSqliteReplicaStorage(
       }
     }
     return intents;
+  }
+
+  /** Preserve even superseded CIDs before legacy DBs are purged or recomputed. Call with the profile lock held. */
+  async function retainGrantInstalls(
+    gate: FileGate,
+    gateState: FileGateState,
+    identityKeyHash: string,
+    store: SqliteReplicaStore,
+  ): Promise<void> {
+    for (const { cid, installedAt } of await store.grantInstallTimes()) {
+      const key = await gate.grantInstallHashOf(gateState.salt, identityKeyHash, cid);
+      await gate.recordGrantInstall(profileDir, key, installedAt);
+    }
   }
 
   const lifecycle: ReplicaLifecycleGate & ProfileReplicaPurge = {
@@ -1483,6 +1527,7 @@ export function createSqliteReplicaStorage(
           "The stored replica belongs to a different device key; purge the partition to rekey.",
         );
       }
+      await retainGrantInstalls(gate, snapshot, identityKeyHash, store);
       if (state.grant !== null || state.pendingGrant !== null) {
         const policy = await resolvePolicy(Date.now(), false);
         if (policy === null) throw gated("gate_unavailable");
@@ -1510,8 +1555,10 @@ export function createSqliteReplicaStorage(
       replicaDir,
       replica,
       guard: storeGuard,
-      read: (section) => readGated(spec, partitionId!, store, generation, section),
+      read: (section, withFence) => readGated(spec, partitionId!, store, generation, section, withFence),
       policy: resolvePolicy,
+      recordGrantInstall: async (cid, at) =>
+        gate.recordGrantInstall(profileDir, await gate.grantInstallHashOf(snapshot.salt, identityKeyHash, cid), at),
       transportFor: options.transportFor,
       dirSync: options.dirSync,
       generation,
@@ -1553,6 +1600,8 @@ export function createSqliteReplicaStorage(
       import("@tinycloud/replica/sqlite"),
     ])) as [ReplicaRuntime, SqliteRuntime];
     checkAbort();
+    const syncedThroughEpoch = await readFence(replicaDir);
+    checkAbort();
     const inspected = await sqlite.SqliteReplicaStore.inspect(replicaDir, { signal });
     checkAbort();
     if (inspected === null) return undefined;
@@ -1560,7 +1609,6 @@ export function createSqliteReplicaStorage(
     if (state.config.host !== spec.identity.host || state.config.space !== spec.space || state.config.prefix !== spec.prefix || principalOf(state.config.deviceDid) !== principalOf(device.did)) {
       throw new ReplicaStorageError("STORAGE_ERROR", `The replica at ${replicaDir} does not match the requested identity, space, prefix, or device.`);
     }
-    const syncedThroughEpoch = await readFence(replicaDir);
     checkAbort();
     return {
       coverage: status.coverage,
@@ -1639,6 +1687,13 @@ export function createSqliteReplicaStorage(
             );
           }
           try {
+            const gate = await fileGate();
+            const currentGate = await gate.readGateSnapshot(profileDir);
+            if (currentGate !== undefined && currentGate.principalHash !== null &&
+                currentGate.principalHash === await gate.principalHashOf(currentGate.salt, target.identity.principal)) {
+              const identityKeyHash = await gate.identityHashOf(currentGate.salt, replicationIdentityKey(target.identity));
+              await retainGrantInstalls(gate, currentGate, identityKeyHash, store);
+            }
             // Generation fencing (review): wipe in place FIRST so the
             // replica row's generation commits past every handle opened
             // before this purge — the same contract the browser purge

@@ -7200,14 +7200,17 @@ export class TinyCloudNode {
       const issuedAt = Date.parse(signedIssuedAt);
       if (!Number.isSafeInteger(issuedAt) || issuedAt < 0) return null;
       const granted = exactVerifiedRecap(verified)
-        .filter((entry) => entry.space === session.spaceId && entry.service === "kv" && entry.path === "")
+        .filter((entry) => entry.space === session.spaceId && entry.service === "kv")
         .map((entry) => ({ ...entry, service: "tinycloud.kv" }));
-      const coversGetAndSync = isCapabilitySubset([{
+      // Consent provenance needs one uncaveated get+sync scope in this exact
+      // signed space. It need not be the root: prefix authority is checked
+      // separately when a replica grant is planned and installed.
+      const coversGetAndSync = granted.some((entry) => isCapabilitySubset([{
         service: "tinycloud.kv",
         space: session.spaceId,
-        path: "",
+        path: entry.path,
         actions: [KV.GET, KV.SYNC],
-      }], granted).subset;
+      }], granted).subset);
       return coversGetAndSync ? { at: issuedAt, source: "siwe" } : null;
     } catch {
       return null;
