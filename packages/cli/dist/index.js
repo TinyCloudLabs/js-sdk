@@ -382,7 +382,7 @@ var init_storage = __esm({
 // src/output/errors.ts
 import { readFileSync, readdirSync } from "fs";
 import { join } from "path";
-import { ProfileDeletedError, ProfileLockTimeoutError } from "@tinycloud/operations/state";
+import { ProfileDeletedError, ProfileLockTimeoutError, ProfileSymlinkError } from "@tinycloud/operations/state";
 import { isSafeRecovery } from "@tinycloud/operations/recovery";
 import { CLI_NAME as CLI_NAME3 } from "@tinycloud/operations/cli-name";
 import {
@@ -420,6 +420,9 @@ function wrapError(error) {
   }
   if (error instanceof ProfileDeletedError) {
     return new CLIError("PROFILE_NOT_FOUND", message);
+  }
+  if (error instanceof ProfileSymlinkError) {
+    return new CLIError("PROFILE_SYMLINK", message, ExitCode.ERROR);
   }
   if (verdict === void 0 && (message.includes("Not signed in") || message.includes("AUTH_EXPIRED") || message.includes("Session expired"))) {
     return new CLIError("AUTH_REQUIRED", message, ExitCode.AUTH_REQUIRED);
@@ -5649,12 +5652,14 @@ import { resolveSecretsOwner } from "@tinycloud/operations/secret-request";
 import {
   additionalDelegationsPath as sharedAdditionalDelegationsPath,
   authRequestsPath as sharedAuthRequestsPath,
+  profilePath,
   profileStoreMetadataPath,
   readAdditionalDelegations,
   readAuthRequests,
   refuseWriteToDeletedProfile,
   updateProfileStore,
   withProfileLock,
+  withPinnedProfileDirectory,
   writeJsonAtomic
 } from "@tinycloud/operations/state";
 async function replayAdditionalDelegations(node, profile, options) {
@@ -5669,7 +5674,6 @@ async function replayAdditionalDelegations(node, profile, options) {
 var init_permissions = __esm({
   "src/lib/permissions.ts"() {
     "use strict";
-    init_constants();
     init_storage2();
     init_profiles();
     init_errors();
@@ -7796,7 +7800,7 @@ var init_dist = __esm({
 // src/lib/replication-config.ts
 import { join as join5 } from "path";
 import { CLI_NAME as CLI_NAME8 } from "@tinycloud/operations/cli-name";
-import { profilePath, withProfileLock as withProfileLock2 } from "@tinycloud/operations/state";
+import { profilePath as profilePath2, withProfileLock as withProfileLock2 } from "@tinycloud/operations/state";
 import { sqliteReplicaStorage } from "@tinycloud/node-sdk";
 function createCliReplicationConfig(profile, settings, output, enabled) {
   if (!enabled || !settings || settings.prefixes.length === 0) return void 0;
@@ -7814,7 +7818,7 @@ function createCliReplicationConfig(profile, settings, output, enabled) {
       );
     }
   }
-  const root = profilePath(profile);
+  const root = profilePath2(profile);
   return {
     enabled: true,
     prefixes: settings.prefixes,
@@ -8300,17 +8304,21 @@ var init_host = __esm({
 });
 
 // src/config/profiles.ts
-import { chmod as chmod2, lstat, readdir as readdir2, rm as rm2, rmdir } from "fs/promises";
+import { chmod as chmod2, lstat, readdir as readdir2, rm as rm2 } from "fs/promises";
 import { CLI_NAME as CLI_NAME11 } from "@tinycloud/operations/cli-name";
 import { join as join6 } from "path";
 import {
-  profilePath as profilePath2,
+  assertRealProfileDirectory,
+  ProfileSymlinkError as ProfileSymlinkError2,
+  namedProfilePath,
+  profilePath as profilePath3,
   readSession,
   recordProfileDeletion,
   refuseWriteToDeletedProfile as refuseWriteToDeletedProfile2,
   removeSession,
   withProfileLock as withProfileLock3,
-  writeSession
+  writeSession,
+  withPinnedProfileDirectory as withPinnedProfileDirectory2
 } from "@tinycloud/operations/state";
 var ProfileManager;
 var init_profiles = __esm({
@@ -8352,8 +8360,13 @@ var init_profiles = __esm({
       }
       /** Owner-only profile directory (0700), created or tightened before any write into it. */
       static async ensureProfileDir(name) {
+        const profileDir = profilePath3(name);
+        if (profileDir !== join6(PROFILES_DIR, name)) {
+          await chmod2(profileDir, PRIVATE_DIR_MODE);
+          return profileDir;
+        }
         await _ProfileManager.ensureConfigDir();
-        const profileDir = join6(PROFILES_DIR, name);
+        await assertRealProfileDirectory(name);
         await ensureDir(profileDir);
         await chmod2(profileDir, PRIVATE_DIR_MODE);
         return profileDir;
@@ -8382,8 +8395,7 @@ var init_profiles = __esm({
        * Throws CLIError if the profile doesn't exist.
        */
       static async getProfile(name) {
-        const profilePath3 = join6(PROFILES_DIR, name, "profile.json");
-        const profile = await readJson(profilePath3);
+        const profile = await withPinnedProfileDirectory2(name, (directory) => directory ? readJson(join6(directory, "profile.json")) : Promise.resolve(null));
         if (!profile) {
           throw new CLIError(
             "PROFILE_NOT_FOUND",
@@ -8403,13 +8415,13 @@ var init_profiles = __esm({
       }
       /** Removes profile.json under the profile lock (rollback of a profile a failed login created). */
       static async removeProfileConfig(name) {
-        await _ProfileManager.withLock(name, () => rm2(join6(PROFILES_DIR, name, "profile.json"), { force: true }));
+        await _ProfileManager.withLock(name, () => rm2(join6(profilePath3(name), "profile.json"), { force: true }));
       }
       /**
        * Returns true if a profile directory exists.
        */
       static async profileExists(name) {
-        return fileExists(join6(PROFILES_DIR, name, "profile.json"));
+        return withPinnedProfileDirectory2(name, (directory) => directory ? fileExists(join6(directory, "profile.json")) : Promise.resolve(false));
       }
       /**
        * Returns an array of profile directory names.
@@ -8433,7 +8445,7 @@ var init_profiles = __esm({
       static async deleteProfile(name) {
         let profileDir;
         try {
-          profileDir = profilePath2(name);
+          profileDir = namedProfilePath(name);
         } catch {
           throw new CLIError(
             "INVALID_PROFILE_NAME",
@@ -8458,15 +8470,13 @@ var init_profiles = __esm({
           return;
         }
         await _ProfileManager.withLock(name, async () => {
-          for (const file of ["session.json", "key.json"]) await rm2(join6(profileDir, file), { force: true });
-          for (const entry of await readdir2(profileDir)) {
-            if (entry !== ".lock" && entry !== "profile.json") await rm2(join6(profileDir, entry), { recursive: true, force: true });
+          const directory = profilePath3(name);
+          for (const file of ["session.json", "key.json"]) await rm2(join6(directory, file), { force: true });
+          for (const entry of await readdir2(directory)) {
+            if (entry !== ".lock" && entry !== "profile.json") await rm2(join6(directory, entry), { recursive: true, force: true });
           }
-          await rm2(join6(profileDir, "profile.json"), { force: true });
+          await rm2(join6(directory, "profile.json"), { force: true });
           await recordProfileDeletion(name);
-        });
-        await rmdir(profileDir).catch((error) => {
-          if (error.code !== "ENOENT" && error.code !== "ENOTEMPTY" && error.code !== "EEXIST") throw error;
         });
       }
       // ── Key management ──────────────────────────────────────────────────
@@ -8474,7 +8484,7 @@ var init_profiles = __esm({
        * Returns the parsed JWK for a profile, or null if no key exists.
        */
       static async getKey(name) {
-        return readJson(join6(PROFILES_DIR, name, "key.json"));
+        return withPinnedProfileDirectory2(name, (directory) => directory ? readJson(join6(directory, "key.json")) : Promise.resolve(null));
       }
       /**
        * Saves a JWK key under the profile lock (0600, in an owner-only profile
@@ -8489,7 +8499,7 @@ var init_profiles = __esm({
       }
       /** Removes key.json under the profile lock (rollback of a key a failed login created). */
       static async removeKey(name) {
-        await _ProfileManager.withLock(name, () => rm2(join6(PROFILES_DIR, name, "key.json"), { force: true }));
+        await _ProfileManager.withLock(name, () => rm2(join6(profilePath3(name), "key.json"), { force: true }));
       }
       // ── Session management ──────────────────────────────────────────────
       /**
@@ -8516,10 +8526,13 @@ var init_profiles = __esm({
        * created or tightened to 0700.
        */
       static async getCacheDir(name) {
-        const cacheDir = join6(await _ProfileManager.ensureProfileDir(name), "cache");
-        await ensureDir(cacheDir);
-        await chmod2(cacheDir, PRIVATE_DIR_MODE);
-        return cacheDir;
+        const alreadyPinned = profilePath3(name) !== namedProfilePath(name);
+        return _ProfileManager.withLock(name, async () => {
+          const cacheDir = join6(await _ProfileManager.ensureProfileDir(name), "cache");
+          await ensureDir(cacheDir);
+          await chmod2(cacheDir, PRIVATE_DIR_MODE);
+          return alreadyPinned ? cacheDir : join6(namedProfilePath(name), "cache");
+        });
       }
       // ── Resolution helpers ──────────────────────────────────────────────
       /**
@@ -8543,7 +8556,8 @@ var init_profiles = __esm({
         try {
           profileConfig = await _ProfileManager.getProfile(profile);
           profileHost = profileConfig.host;
-        } catch {
+        } catch (error) {
+          if (error instanceof ProfileSymlinkError2) throw error;
         }
         const envReplication = process.env.TC_REPLICATION?.toLowerCase();
         const envEnabled = envReplication === "1" || envReplication === "true" || envReplication === "on";

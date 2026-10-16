@@ -170,15 +170,15 @@ function closeReplication(schedule = scheduleTimeout) {
   removeSignalHandlers();
   let resolveClosing;
   let rejectClosing;
-  const closing = new Promise((resolve5, reject) => {
-    resolveClosing = resolve5;
+  const closing = new Promise((resolve6, reject) => {
+    resolveClosing = resolve6;
     rejectClosing = reject;
   });
   state.closing = closing;
   void (async () => {
     let timeout;
-    const deadline = new Promise((resolve5) => {
-      timeout = schedule(() => resolve5(true), CLOSE_TIMEOUT_MS);
+    const deadline = new Promise((resolve6) => {
+      timeout = schedule(() => resolve6(true), CLOSE_TIMEOUT_MS);
     });
     let timedOut = false;
     const abandonQueuedControls = () => {
@@ -204,7 +204,7 @@ function closeReplication(schedule = scheduleTimeout) {
           if (state.generation === generation && state.allControls.size === 0) break;
         }
         if (timedOut) break;
-        const turn = new Promise((resolve5) => setImmediate(() => resolve5(false)));
+        const turn = new Promise((resolve6) => setImmediate(() => resolve6(false)));
         timedOut ||= await Promise.race([turn, deadline]);
         if (timedOut) abandonQueuedControls();
         else if (state.allControls.size === 0) break;
@@ -529,7 +529,7 @@ var init_storage2 = __esm({
 // src/output/errors.ts
 import { readFileSync, readdirSync } from "fs";
 import { join as join2 } from "path";
-import { ProfileDeletedError, ProfileLockTimeoutError } from "@tinycloud/operations/state";
+import { ProfileDeletedError, ProfileLockTimeoutError, ProfileSymlinkError } from "@tinycloud/operations/state";
 import { isSafeRecovery } from "@tinycloud/operations/recovery";
 import { CLI_NAME as CLI_NAME2 } from "@tinycloud/operations/cli-name";
 import {
@@ -589,6 +589,9 @@ function wrapError(error) {
   }
   if (error instanceof ProfileDeletedError) {
     return new CLIError("PROFILE_NOT_FOUND", message);
+  }
+  if (error instanceof ProfileSymlinkError) {
+    return new CLIError("PROFILE_SYMLINK", message, ExitCode.ERROR);
   }
   if (verdict === void 0 && (message.includes("Not signed in") || message.includes("AUTH_EXPIRED") || message.includes("Session expired"))) {
     return new CLIError("AUTH_REQUIRED", message, ExitCode.AUTH_REQUIRED);
@@ -7094,7 +7097,7 @@ async function awaitOwned(signal, operation) {
     throw SUPERSEDED;
   }
   const promise = typeof operation === "function" ? operation() : operation;
-  return new Promise((resolve5, reject) => {
+  return new Promise((resolve6, reject) => {
     let settled = false;
     const cleanup = () => signal.removeEventListener("abort", onAbort);
     const onAbort = () => {
@@ -7112,7 +7115,7 @@ async function awaitOwned(signal, operation) {
         }
         settled = true;
         cleanup();
-        resolve5(value);
+        resolve6(value);
       },
       (error) => {
         if (settled) return;
@@ -7165,11 +7168,11 @@ function readProperty(value, key) {
   }
 }
 function sleep(delayMs, _attempt, signal) {
-  return new Promise((resolve5) => {
+  return new Promise((resolve6) => {
     const finish = () => {
       clearTimeout(timer);
       signal.removeEventListener("abort", stop);
-      resolve5();
+      resolve6();
     };
     const timer = setTimeout(finish, delayMs);
     timer.unref?.();
@@ -7182,13 +7185,13 @@ function sleep(delayMs, _attempt, signal) {
   });
 }
 function abortPromise(signal) {
-  let resolve5;
+  let resolve6;
   const promise = new Promise((done) => {
-    resolve5 = done;
+    resolve6 = done;
   });
-  const onAbort = () => resolve5();
+  const onAbort = () => resolve6();
   if (signal.aborted) {
-    resolve5();
+    resolve6();
   } else {
     signal.addEventListener("abort", onAbort, { once: true });
   }
@@ -7491,7 +7494,7 @@ function isBrowser() {
   }
 }
 function openDB() {
-  return new Promise((resolve5, reject) => {
+  return new Promise((resolve6, reject) => {
     const request = indexedDB.open(DB_NAME, DB_VERSION);
     request.onupgradeneeded = () => {
       const db = request.result;
@@ -7499,43 +7502,43 @@ function openDB() {
         db.createObjectStore(STORE_NAME);
       }
     };
-    request.onsuccess = () => resolve5(request.result);
+    request.onsuccess = () => resolve6(request.result);
     request.onerror = () => reject(request.error);
   });
 }
 function idbGet(db, key) {
-  return new Promise((resolve5, reject) => {
+  return new Promise((resolve6, reject) => {
     const tx = db.transaction(STORE_NAME, "readonly");
     const store = tx.objectStore(STORE_NAME);
     const req = store.get(key);
-    req.onsuccess = () => resolve5(req.result);
+    req.onsuccess = () => resolve6(req.result);
     req.onerror = () => reject(req.error);
   });
 }
 function idbPut(db, key, value) {
-  return new Promise((resolve5, reject) => {
+  return new Promise((resolve6, reject) => {
     const tx = db.transaction(STORE_NAME, "readwrite");
     const store = tx.objectStore(STORE_NAME);
     const req = store.put(value, key);
-    req.onsuccess = () => resolve5();
+    req.onsuccess = () => resolve6();
     req.onerror = () => reject(req.error);
   });
 }
 function idbDelete(db, key) {
-  return new Promise((resolve5, reject) => {
+  return new Promise((resolve6, reject) => {
     const tx = db.transaction(STORE_NAME, "readwrite");
     const store = tx.objectStore(STORE_NAME);
     const req = store.delete(key);
-    req.onsuccess = () => resolve5();
+    req.onsuccess = () => resolve6();
     req.onerror = () => reject(req.error);
   });
 }
 function idbKeys(db) {
-  return new Promise((resolve5, reject) => {
+  return new Promise((resolve6, reject) => {
     const tx = db.transaction(STORE_NAME, "readonly");
     const store = tx.objectStore(STORE_NAME);
     const req = store.getAllKeys();
-    req.onsuccess = () => resolve5(req.result.filter((k) => typeof k === "string"));
+    req.onsuccess = () => resolve6(req.result.filter((k) => typeof k === "string"));
     req.onerror = () => reject(req.error);
   });
 }
@@ -11594,8 +11597,8 @@ var init_dist2 = __esm({
         if (this.closed) {
           return Promise.resolve({ value: void 0, done: true });
         }
-        return new Promise((resolve5, reject) => {
-          this.waiters.push({ resolve: resolve5, reject });
+        return new Promise((resolve6, reject) => {
+          this.waiters.push({ resolve: resolve6, reject });
         });
       }
     };
@@ -11991,7 +11994,7 @@ var init_dist2 = __esm({
         } finally {
           for (const abort of aborts) abort.dispose();
         }
-        await new Promise((resolve5) => setTimeout(resolve5, 0));
+        await new Promise((resolve6) => setTimeout(resolve6, 0));
       }
       /** The stream the current subscribers need, or undefined when none remain. */
       plan() {
@@ -14362,12 +14365,14 @@ import { resolveSecretsOwner } from "@tinycloud/operations/secret-request";
 import {
   additionalDelegationsPath as sharedAdditionalDelegationsPath,
   authRequestsPath as sharedAuthRequestsPath,
+  profilePath,
   profileStoreMetadataPath,
   readAdditionalDelegations,
   readAuthRequests,
   refuseWriteToDeletedProfile,
   updateProfileStore,
   withProfileLock,
+  withPinnedProfileDirectory,
   writeJsonAtomic
 } from "@tinycloud/operations/state";
 function isCompatiblePermissionRequestArtifact(value) {
@@ -14385,10 +14390,10 @@ function permissionRequestsPath(profile) {
   return sharedAuthRequestsPath(profile);
 }
 function grantHistoryPath(profile) {
-  return join3(PROFILES_DIR, profile, "auth-grants.jsonl");
+  return join3(profilePath(profile), "auth-grants.jsonl");
 }
 function localGrantArtifactsPath(profile) {
-  return join3(PROFILES_DIR, profile, "auth-grant-artifacts.json");
+  return join3(profilePath(profile), "auth-grant-artifacts.json");
 }
 function createPermissionRequestArtifact(params) {
   return buildPermissionRequestArtifact({
@@ -14415,22 +14420,30 @@ async function loadAdditionalDelegations(profile) {
   return readAdditionalDelegations(profile);
 }
 async function loadLocalGrantArtifacts(profile) {
-  const path = localGrantArtifactsPath(profile);
-  if (!await fileExists(path)) return [];
-  let parsed;
-  try {
-    parsed = JSON.parse(await readFile2(path, "utf8"));
-  } catch {
-    return [];
-  }
-  if (!Array.isArray(parsed)) return [];
-  return parsed.filter(
-    (value) => value !== null && typeof value === "object" && typeof value.delegationCid === "string" && value.delegation !== null && typeof value.delegation === "object" && value.delegation.cid === value.delegationCid && typeof value.delegation.delegationHeader?.Authorization === "string"
-  );
+  return withPinnedProfileDirectory(profile, async (directory) => {
+    if (!directory) return [];
+    const path = localGrantArtifactsPath(profile);
+    if (!await fileExists(path)) return [];
+    let parsed;
+    try {
+      parsed = JSON.parse(await readFile2(path, "utf8"));
+    } catch {
+      return [];
+    }
+    if (!Array.isArray(parsed)) return [];
+    const records = parsed;
+    return records.filter((value) => {
+      if (value === null || typeof value !== "object" || !("delegationCid" in value) || typeof value.delegationCid !== "string" || !("delegation" in value) || value.delegation === null || typeof value.delegation !== "object") return false;
+      const delegation = value.delegation;
+      if (!("cid" in delegation) || delegation.cid !== value.delegationCid || !("delegationHeader" in delegation) || delegation.delegationHeader === null || typeof delegation.delegationHeader !== "object") return false;
+      const header = delegation.delegationHeader;
+      return "Authorization" in header && typeof header.Authorization === "string";
+    });
+  });
 }
 async function appendLocalGrantArtifact(profile, delegation) {
-  await ProfileManager.ensureProfileDir(profile);
   await withProfileLock(profile, async () => {
+    await ProfileManager.ensureProfileDir(profile);
     await refuseWriteToDeletedProfile(profile);
     const records = await loadLocalGrantArtifacts(profile);
     if (records.some((record2) => record2.delegationCid === delegation.cid)) return;
@@ -14523,21 +14536,27 @@ async function cliGrantRecord(node, delegation, permissions, host) {
   );
 }
 async function appendGrantHistory(profile, entry) {
-  await ProfileManager.ensureProfileDir(profile);
-  const line = JSON.stringify({
-    ts: (/* @__PURE__ */ new Date()).toISOString(),
-    profile,
-    ...entry
-  }) + "\n";
-  const path = grantHistoryPath(profile);
-  await appendFile(path, line, { encoding: "utf8", mode: PRIVATE_FILE_MODE });
-  await chmod(path, PRIVATE_FILE_MODE);
+  await withProfileLock(profile, async () => {
+    await ProfileManager.ensureProfileDir(profile);
+    await refuseWriteToDeletedProfile(profile);
+    const line = JSON.stringify({
+      ts: (/* @__PURE__ */ new Date()).toISOString(),
+      profile,
+      ...entry
+    }) + "\n";
+    const path = grantHistoryPath(profile);
+    await appendFile(path, line, { encoding: "utf8", mode: PRIVATE_FILE_MODE });
+    await chmod(path, PRIVATE_FILE_MODE);
+  });
 }
 async function readGrantHistory(profile) {
-  const path = grantHistoryPath(profile);
-  if (!await fileExists(path)) return [];
-  const raw = await readFile2(path, "utf8");
-  return raw.split("\n").map((line) => line.trim()).filter(Boolean).map((line) => JSON.parse(line));
+  return withPinnedProfileDirectory(profile, async (directory) => {
+    if (!directory) return [];
+    const path = grantHistoryPath(profile);
+    if (!await fileExists(path)) return [];
+    const raw = await readFile2(path, "utf8");
+    return raw.split("\n").map((line) => line.trim()).filter(Boolean).map((line) => JSON.parse(line));
+  });
 }
 async function parseCapSpec(spec, profile) {
   const firstColon = spec.indexOf(":");
@@ -14786,7 +14805,6 @@ var init_permissions = __esm({
   "src/lib/permissions.ts"() {
     "use strict";
     init_manifest();
-    init_constants();
     init_storage();
     init_profiles();
     init_errors();
@@ -17765,7 +17783,7 @@ var init_dist3 = __esm({
 // src/lib/replication-config.ts
 import { join as join5 } from "path";
 import { CLI_NAME as CLI_NAME6 } from "@tinycloud/operations/cli-name";
-import { profilePath, withProfileLock as withProfileLock2 } from "@tinycloud/operations/state";
+import { profilePath as profilePath2, withProfileLock as withProfileLock2 } from "@tinycloud/operations/state";
 import { sqliteReplicaStorage } from "@tinycloud/node-sdk";
 function createCliReplicationConfig(profile, settings, output2, enabled) {
   if (!enabled || !settings || settings.prefixes.length === 0) return void 0;
@@ -17783,7 +17801,7 @@ function createCliReplicationConfig(profile, settings, output2, enabled) {
       );
     }
   }
-  const root = profilePath(profile);
+  const root = profilePath2(profile);
   return {
     enabled: true,
     prefixes: settings.prefixes,
@@ -18269,17 +18287,21 @@ var init_host = __esm({
 });
 
 // src/config/profiles.ts
-import { chmod as chmod2, lstat, readdir as readdir2, rm as rm2, rmdir } from "fs/promises";
+import { chmod as chmod2, lstat, readdir as readdir2, rm as rm2 } from "fs/promises";
 import { CLI_NAME as CLI_NAME9 } from "@tinycloud/operations/cli-name";
 import { join as join6 } from "path";
 import {
-  profilePath as profilePath2,
+  assertRealProfileDirectory,
+  ProfileSymlinkError as ProfileSymlinkError2,
+  namedProfilePath,
+  profilePath as profilePath3,
   readSession,
   recordProfileDeletion,
   refuseWriteToDeletedProfile as refuseWriteToDeletedProfile2,
   removeSession,
   withProfileLock as withProfileLock3,
-  writeSession
+  writeSession,
+  withPinnedProfileDirectory as withPinnedProfileDirectory2
 } from "@tinycloud/operations/state";
 var ProfileManager;
 var init_profiles = __esm({
@@ -18321,8 +18343,13 @@ var init_profiles = __esm({
       }
       /** Owner-only profile directory (0700), created or tightened before any write into it. */
       static async ensureProfileDir(name) {
+        const profileDir = profilePath3(name);
+        if (profileDir !== join6(PROFILES_DIR, name)) {
+          await chmod2(profileDir, PRIVATE_DIR_MODE);
+          return profileDir;
+        }
         await _ProfileManager.ensureConfigDir();
-        const profileDir = join6(PROFILES_DIR, name);
+        await assertRealProfileDirectory(name);
         await ensureDir(profileDir);
         await chmod2(profileDir, PRIVATE_DIR_MODE);
         return profileDir;
@@ -18351,8 +18378,7 @@ var init_profiles = __esm({
        * Throws CLIError if the profile doesn't exist.
        */
       static async getProfile(name) {
-        const profilePath5 = join6(PROFILES_DIR, name, "profile.json");
-        const profile = await readJson(profilePath5);
+        const profile = await withPinnedProfileDirectory2(name, (directory) => directory ? readJson(join6(directory, "profile.json")) : Promise.resolve(null));
         if (!profile) {
           throw new CLIError(
             "PROFILE_NOT_FOUND",
@@ -18372,13 +18398,13 @@ var init_profiles = __esm({
       }
       /** Removes profile.json under the profile lock (rollback of a profile a failed login created). */
       static async removeProfileConfig(name) {
-        await _ProfileManager.withLock(name, () => rm2(join6(PROFILES_DIR, name, "profile.json"), { force: true }));
+        await _ProfileManager.withLock(name, () => rm2(join6(profilePath3(name), "profile.json"), { force: true }));
       }
       /**
        * Returns true if a profile directory exists.
        */
       static async profileExists(name) {
-        return fileExists(join6(PROFILES_DIR, name, "profile.json"));
+        return withPinnedProfileDirectory2(name, (directory) => directory ? fileExists(join6(directory, "profile.json")) : Promise.resolve(false));
       }
       /**
        * Returns an array of profile directory names.
@@ -18402,7 +18428,7 @@ var init_profiles = __esm({
       static async deleteProfile(name) {
         let profileDir;
         try {
-          profileDir = profilePath2(name);
+          profileDir = namedProfilePath(name);
         } catch {
           throw new CLIError(
             "INVALID_PROFILE_NAME",
@@ -18427,15 +18453,13 @@ var init_profiles = __esm({
           return;
         }
         await _ProfileManager.withLock(name, async () => {
-          for (const file of ["session.json", "key.json"]) await rm2(join6(profileDir, file), { force: true });
-          for (const entry of await readdir2(profileDir)) {
-            if (entry !== ".lock" && entry !== "profile.json") await rm2(join6(profileDir, entry), { recursive: true, force: true });
+          const directory = profilePath3(name);
+          for (const file of ["session.json", "key.json"]) await rm2(join6(directory, file), { force: true });
+          for (const entry of await readdir2(directory)) {
+            if (entry !== ".lock" && entry !== "profile.json") await rm2(join6(directory, entry), { recursive: true, force: true });
           }
-          await rm2(join6(profileDir, "profile.json"), { force: true });
+          await rm2(join6(directory, "profile.json"), { force: true });
           await recordProfileDeletion(name);
-        });
-        await rmdir(profileDir).catch((error) => {
-          if (error.code !== "ENOENT" && error.code !== "ENOTEMPTY" && error.code !== "EEXIST") throw error;
         });
       }
       // ── Key management ──────────────────────────────────────────────────
@@ -18443,7 +18467,7 @@ var init_profiles = __esm({
        * Returns the parsed JWK for a profile, or null if no key exists.
        */
       static async getKey(name) {
-        return readJson(join6(PROFILES_DIR, name, "key.json"));
+        return withPinnedProfileDirectory2(name, (directory) => directory ? readJson(join6(directory, "key.json")) : Promise.resolve(null));
       }
       /**
        * Saves a JWK key under the profile lock (0600, in an owner-only profile
@@ -18458,7 +18482,7 @@ var init_profiles = __esm({
       }
       /** Removes key.json under the profile lock (rollback of a key a failed login created). */
       static async removeKey(name) {
-        await _ProfileManager.withLock(name, () => rm2(join6(PROFILES_DIR, name, "key.json"), { force: true }));
+        await _ProfileManager.withLock(name, () => rm2(join6(profilePath3(name), "key.json"), { force: true }));
       }
       // ── Session management ──────────────────────────────────────────────
       /**
@@ -18485,10 +18509,13 @@ var init_profiles = __esm({
        * created or tightened to 0700.
        */
       static async getCacheDir(name) {
-        const cacheDir = join6(await _ProfileManager.ensureProfileDir(name), "cache");
-        await ensureDir(cacheDir);
-        await chmod2(cacheDir, PRIVATE_DIR_MODE);
-        return cacheDir;
+        const alreadyPinned = profilePath3(name) !== namedProfilePath(name);
+        return _ProfileManager.withLock(name, async () => {
+          const cacheDir = join6(await _ProfileManager.ensureProfileDir(name), "cache");
+          await ensureDir(cacheDir);
+          await chmod2(cacheDir, PRIVATE_DIR_MODE);
+          return alreadyPinned ? cacheDir : join6(namedProfilePath(name), "cache");
+        });
       }
       // ── Resolution helpers ──────────────────────────────────────────────
       /**
@@ -18512,7 +18539,8 @@ var init_profiles = __esm({
         try {
           profileConfig = await _ProfileManager.getProfile(profile);
           profileHost = profileConfig.host;
-        } catch {
+        } catch (error) {
+          if (error instanceof ProfileSymlinkError2) throw error;
         }
         const envReplication = process.env.TC_REPLICATION?.toLowerCase();
         const envEnabled = envReplication === "1" || envReplication === "true" || envReplication === "on";
@@ -18876,22 +18904,23 @@ import { get as httpGet } from "http";
 import { get as httpsGet } from "https";
 import { spawn } from "child_process";
 import { mkdir as mkdir3, readFile as readFile5, writeFile as writeFile2 } from "fs/promises";
-import { dirname as dirname3 } from "path";
+import { dirname as dirname4 } from "path";
 import { createInterface as createInterface2 } from "readline";
 import { grantAuthRequest, principalDidEquals, signedCompactUcanExpiry as signedCompactUcanExpiry3 } from "@tinycloud/node-sdk";
 import { invokeOperation } from "@tinycloud/operations";
 
 // src/lib/profile-replicas.ts
 init_dist3();
-import { lstat as lstat2, readdir as readdir4, realpath, rm as rm4 } from "fs/promises";
+import { lstat as lstat3, open as open3, readdir as readdir4, realpath, rm as rm4, rmdir as rmdir2, stat as stat3 } from "fs/promises";
+import { constants as fsConstants2 } from "fs";
 import { join as join8, relative, sep } from "path";
-import { ProfileDeletedError as ProfileDeletedError2, profilePath as profilePath3, withProfileLock as withProfileLock4 } from "@tinycloud/operations/state";
+import { ProfileDeletedError as ProfileDeletedError2, profilePath as profilePath4, withProfileLock as withProfileLock4 } from "@tinycloud/operations/state";
 
 // ../replica/dist/sqlite.js
 import { randomBytes as randomBytes2 } from "crypto";
-import { constants as fsConstants } from "fs";
-import { chmod as chmod3, link, mkdir as mkdir2, open as open2, readFile as readFile4, readdir as readdir3, rm as rm3, rmdir as rmdir2, stat as stat2, unlink } from "fs/promises";
-import { join as join7 } from "path";
+import { closeSync, constants as fsConstants, fstatSync, lstatSync, openSync, readdirSync as readdirSync2, readlinkSync } from "fs";
+import { chmod as chmod3, link, lstat as lstat2, mkdir as mkdir2, open as open2, readFile as readFile4, readdir as readdir3, rm as rm3, rmdir, stat as stat2, unlink } from "fs/promises";
+import { dirname as dirname3, join as join7, resolve } from "path";
 var ReplicaErrorCode2 = {
   /** Another process holds the sync lease. */
   BUSY: "REPLICA_BUSY",
@@ -19078,6 +19107,29 @@ async function loadSqlite() {
   return (path, options) => wrap(options?.readonly ? new DatabaseSync(path, { readOnly: true }) : new DatabaseSync(path));
 }
 var SCHEMA_VERSION = 1;
+var sqliteOpenQueue = Promise.resolve();
+async function acquireSqliteOpen() {
+  const previous = sqliteOpenQueue;
+  let release;
+  sqliteOpenQueue = new Promise((resolve22) => {
+    release = resolve22;
+  });
+  await previous;
+  return release;
+}
+async function captureNamedPath(path) {
+  const names = [];
+  for (let current = resolve(path); ; current = dirname3(current)) {
+    names.push(current);
+    if (dirname3(current) === current) break;
+  }
+  const identities = [];
+  for (const name of names.reverse()) {
+    const stats = await lstat2(name, { bigint: true });
+    identities.push({ path: name, dev: stats.dev, ino: stats.ino });
+  }
+  return identities;
+}
 var DURABILITY = "sqlite-wal-synchronous-full+fsynced-blobs";
 var SCHEMA = `
 CREATE TABLE IF NOT EXISTS replica (
@@ -19176,22 +19228,37 @@ async function entriesOf(path) {
   }
 }
 var FAULTS = /* @__PURE__ */ Symbol("tinycloud.replica.faults");
+var pinnedDirectories = new FinalizationRegistry((fd) => {
+  try {
+    closeSync(fd);
+  } catch {
+  }
+});
 var SqliteReplicaStore = class _SqliteReplicaStore {
   dir;
   #db;
+  #pinnedDir;
+  #directoryFd;
   #holder = `${process.pid}-${randomBytes2(6).toString("hex")}`;
   #now;
   #faults;
   #guard;
   /** Identity of the database file this store opened: a deleted-and-recreated replica is a different file. */
   #ino;
-  constructor(dir, db, ino, options) {
+  #dev;
+  #namedAncestors;
+  constructor(dir, db, identity, options, directoryFd, namedAncestors = []) {
     this.dir = dir;
+    this.#pinnedDir = directoryFd !== void 0 && process.platform === "linux" ? `/proc/self/fd/${directoryFd}` : dir;
+    this.#directoryFd = directoryFd;
+    if (directoryFd !== void 0) pinnedDirectories.register(this, directoryFd, this);
     this.#db = db;
-    this.#ino = ino;
+    this.#ino = identity.ino;
+    this.#dev = identity.dev;
     this.#now = options.now ?? Date.now;
     this.#faults = options[FAULTS] ?? {};
     this.#guard = options.guard ?? ((section) => section());
+    this.#namedAncestors = namedAncestors;
   }
   /**
    * Read-only status snapshot; does not create a replica, migrate, recover
@@ -19204,9 +19271,10 @@ var SqliteReplicaStore = class _SqliteReplicaStore {
     };
     checkAbort();
     const dbPath = join7(dir, "replica.db");
-    let ino;
+    let identity;
     try {
-      ino = (await stat2(dbPath)).ino;
+      identity = await lstat2(dbPath);
+      if (!identity.isFile()) return null;
     } catch (error) {
       if (errnoOf(error) === "ENOENT") return null;
       throw storageError(error, "Inspecting the replica");
@@ -19219,14 +19287,14 @@ var SqliteReplicaStore = class _SqliteReplicaStore {
       db = opener(dbPath, { readonly: true });
       db.exec("PRAGMA busy_timeout = 0");
       checkAbort();
-      const store = new _SqliteReplicaStore(dir, db, ino, { create: false, ...options.now ? { now: options.now } : {} });
+      const store = new _SqliteReplicaStore(dir, db, identity, { create: false, ...options.now ? { now: options.now } : {} });
       for (let attempt = 0; attempt < 2; attempt++) {
         const before = db.get("PRAGMA data_version").data_version;
         const state2 = await store.open();
         checkAbort();
         if (state2 === null) return null;
         const status = await store.status();
-        await new Promise((resolve5) => setImmediate(resolve5));
+        await new Promise((resolve22) => setImmediate(resolve22));
         checkAbort();
         const after = db.get("PRAGMA data_version").data_version;
         if (before === after) return { state: state2, status };
@@ -19246,65 +19314,145 @@ var SqliteReplicaStore = class _SqliteReplicaStore {
    * REPLICA_NOT_FOUND and nothing is written to disk.
    */
   static async open(dir, options) {
-    const dbPath = join7(dir, "replica.db");
+    const namedDbPath = join7(dir, "replica.db");
     if (!options.create) {
-      const exists = await stat2(dbPath).then(
-        () => true,
+      const exists = await lstat2(namedDbPath).then(
+        (stats) => stats.isFile(),
         () => false
       );
-      if (!exists) throw new ReplicaError2(ReplicaErrorCode2.NOT_FOUND, `No replica at ${dir}.`);
+      if (!exists) throw new ReplicaError2(ReplicaErrorCode2.NOT_FOUND, `No regular replica database at ${dir}.`);
     }
     const opener = options.sqlite ?? await loadSqlite();
+    const releaseOpen = await acquireSqliteOpen();
     let store;
+    let directoryFd;
     try {
+      if (options.create) await mkdir2(dir, { recursive: true, mode: 448 });
+      if (process.platform === "linux") {
+        directoryFd = openSync(dir, fsConstants.O_RDONLY | fsConstants.O_DIRECTORY | fsConstants.O_NOFOLLOW);
+      }
+      const opened = directoryFd === void 0 ? lstatSync(dir, { bigint: true }) : fstatSync(directoryFd, { bigint: true });
+      if (!opened.isDirectory() || opened.isSymbolicLink() || options.expectedDirectory && (opened.dev !== BigInt(options.expectedDirectory.dev) || opened.ino !== BigInt(options.expectedDirectory.ino))) {
+        throw new Error("The replica directory changed before SQLite opened it.");
+      }
+      const namedAncestors = process.platform === "linux" ? [] : await captureNamedPath(dir);
+      if (namedAncestors.length && (namedAncestors[namedAncestors.length - 1].dev !== opened.dev || namedAncestors[namedAncestors.length - 1].ino !== opened.ino)) {
+        throw new Error("The replica directory changed while checking its ancestry.");
+      }
+      const pinnedDir = directoryFd === void 0 ? dir : `/proc/self/fd/${directoryFd}`;
+      const dbPath = join7(pinnedDir, "replica.db");
       if (options.create) {
-        await mkdir2(join7(dir, "blobs", ".tmp"), { recursive: true, mode: 448 });
-        await Promise.all([chmod3(dir, 448), chmod3(join7(dir, "blobs"), 448), chmod3(join7(dir, "blobs", ".tmp"), 448)]);
-        const handle = await open2(dbPath, fsConstants.O_CREAT | fsConstants.O_RDWR, 384);
-        await handle.close();
-        await chmod3(dbPath, 384);
+        await mkdir2(join7(pinnedDir, "blobs", ".tmp"), { recursive: true, mode: 448 });
+        await Promise.all([chmod3(pinnedDir, 448), chmod3(join7(pinnedDir, "blobs"), 448), chmod3(join7(pinnedDir, "blobs", ".tmp"), 448)]);
+        const handle = await open2(dbPath, fsConstants.O_CREAT | fsConstants.O_EXCL | fsConstants.O_RDWR | fsConstants.O_NOFOLLOW, 384).catch((error) => {
+          if (errnoOf(error) === "EEXIST") return null;
+          throw error;
+        });
+        if (handle) {
+          try {
+            await handle.chmod(384);
+          } finally {
+            await handle.close();
+          }
+        }
       }
-      const ino = (await stat2(dbPath)).ino;
-      const db = opener(dbPath);
-      db.exec("PRAGMA busy_timeout = 5000");
-      db.exec("PRAGMA journal_mode = WAL");
-      db.exec("PRAGMA synchronous = FULL");
-      db.exec("PRAGMA secure_delete = ON");
-      db.exec("PRAGMA foreign_keys = ON");
-      const version = db.get("PRAGMA user_version")?.user_version ?? 0;
-      if (version > SCHEMA_VERSION) {
-        db.close();
-        throw new ReplicaError2(
-          ReplicaErrorCode2.STORAGE_ERROR,
-          `The replica at ${dir} was written by a newer tc (schema ${version}); upgrade tc to read it.`
-        );
+      const leaf = await open2(dbPath, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
+      let db;
+      try {
+        const identity = await leaf.stat();
+        const named = await lstat2(dbPath);
+        if (!identity.isFile() || !named.isFile() || named.dev !== identity.dev || named.ino !== identity.ino) {
+          throw new Error("The replica database changed before SQLite opened it.");
+        }
+        const previousFds = process.platform === "linux" && !options.sqlite ? new Map(readdirSync2("/proc/self/fd").map((fd) => {
+          try {
+            return [fd, readlinkSync(`/proc/self/fd/${fd}`)];
+          } catch {
+            return [fd, ""];
+          }
+        })) : null;
+        db = opener(dbPath);
+        const afterOpen = lstatSync(dbPath);
+        if (!afterOpen.isFile() || afterOpen.dev !== identity.dev || afterOpen.ino !== identity.ino) {
+          throw new Error("The replica database changed while SQLite opened it.");
+        }
+        if (previousFds) db.get("SELECT count(*) FROM sqlite_master");
+        if (previousFds) {
+          const databases = readdirSync2("/proc/self/fd").filter((fd) => {
+            try {
+              const target = readlinkSync(`/proc/self/fd/${fd}`);
+              return target.endsWith("/replica.db") && previousFds.get(fd) !== target;
+            } catch {
+              return false;
+            }
+          });
+          if (databases.length === 0 || databases.some((fd) => {
+            try {
+              const actual = fstatSync(Number(fd));
+              return actual.dev !== identity.dev || actual.ino !== identity.ino;
+            } catch {
+              return true;
+            }
+          })) {
+            throw new Error("SQLite opened a different replica database.");
+          }
+        }
+        const after = lstatSync(dbPath);
+        if (!after.isFile() || after.dev !== identity.dev || after.ino !== identity.ino) {
+          throw new Error("The replica database changed while SQLite opened it.");
+        }
+        db.exec("PRAGMA busy_timeout = 5000");
+        db.exec("PRAGMA journal_mode = WAL");
+        db.exec("PRAGMA synchronous = FULL");
+        db.exec("PRAGMA secure_delete = ON");
+        db.exec("PRAGMA foreign_keys = ON");
+        const version = db.get("PRAGMA user_version")?.user_version ?? 0;
+        if (version > SCHEMA_VERSION) {
+          throw new ReplicaError2(
+            ReplicaErrorCode2.STORAGE_ERROR,
+            `The replica at ${dir} was written by a newer tc (schema ${version}); upgrade tc to read it.`
+          );
+        }
+        if (version < SCHEMA_VERSION) {
+          db.exec("BEGIN IMMEDIATE");
+          db.exec(SCHEMA);
+          db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`);
+          db.exec("COMMIT");
+        }
+        store = new _SqliteReplicaStore(dir, db, identity, options, directoryFd, namedAncestors);
+        db = void 0;
+      } finally {
+        try {
+          db?.close();
+        } finally {
+          await leaf.close();
+        }
       }
-      if (version < SCHEMA_VERSION) {
-        db.exec("BEGIN IMMEDIATE");
-        db.exec(SCHEMA);
-        db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`);
-        db.exec("COMMIT");
-      }
-      store = new _SqliteReplicaStore(dir, db, ino, options);
     } catch (error) {
+      if (store) await store.close().catch(() => void 0);
+      else if (directoryFd !== void 0) closeSync(directoryFd);
       throw storageError(error, `Opening the replica at ${dir}`);
+    } finally {
+      releaseOpen();
     }
-    const row = store.#row();
-    if (row?.revoked_detail != null && (row.purge_pending === 1 || await store.#holdsContentFiles().catch(() => true))) {
-      await store.#finishRevocationPurge().catch(() => void 0);
+    try {
+      const row = store.#row();
+      if (row?.revoked_detail != null && (row.purge_pending === 1 || await store.#holdsContentFiles().catch(() => true))) {
+        await store.#finishRevocationPurge().catch(() => void 0);
+      }
+      return store;
+    } catch (error) {
+      await store.close().catch(() => void 0);
+      throw error;
     }
-    return store;
   }
   #row() {
     return this.#db.get("SELECT * FROM replica WHERE id = 1");
   }
   /** Refuse to touch the filesystem for a replica that was deleted (or replaced) under us. */
   async #assertPresent() {
-    const ino = await stat2(join7(this.dir, "replica.db")).then(
-      (stats) => stats.ino,
-      () => void 0
-    );
-    if (ino !== this.#ino) {
+    const identity = await lstat2(join7(this.#pinnedDir, "replica.db")).catch(() => null);
+    if (!identity?.isFile() || identity.dev !== this.#dev || identity.ino !== this.#ino) {
       throw new ReplicaError2(
         ReplicaErrorCode2.NOT_FOUND,
         `The replica at ${this.dir} was deleted while this command ran (its profile was deleted or the replica purged); nothing more was written.`
@@ -19534,7 +19682,7 @@ var SqliteReplicaStore = class _SqliteReplicaStore {
     return held;
   }
   #blobPath(hash) {
-    return join7(this.dir, "blobs", hash.slice(0, 2), hash);
+    return join7(this.#pinnedDir, "blobs", hash.slice(0, 2), hash);
   }
   /**
    * Make every blob durable before any row references it: write to a fresh
@@ -19551,11 +19699,11 @@ var SqliteReplicaStore = class _SqliteReplicaStore {
         () => false
       );
       if (exists) continue;
-      const shard = join7(this.dir, "blobs", hash.slice(0, 2));
+      const shard = join7(this.#pinnedDir, "blobs", hash.slice(0, 2));
       await mkdir2(shard, { mode: 448 }).catch((error) => {
         if (errnoOf(error) !== "EEXIST") throw error;
       });
-      const temp = join7(this.dir, "blobs", ".tmp", `${hash}.${randomBytes2(6).toString("hex")}`);
+      const temp = join7(this.#pinnedDir, "blobs", ".tmp", `${hash}.${randomBytes2(6).toString("hex")}`);
       const handle = await open2(temp, fsConstants.O_CREAT | fsConstants.O_EXCL | fsConstants.O_WRONLY, 384);
       try {
         await handle.writeFile(bytes);
@@ -19571,7 +19719,7 @@ var SqliteReplicaStore = class _SqliteReplicaStore {
         await unlink(temp);
       }
       dirs.add(shard);
-      dirs.add(join7(this.dir, "blobs"));
+      dirs.add(join7(this.#pinnedDir, "blobs"));
     }
     for (const dir of dirs) {
       const handle = await open2(dir, fsConstants.O_RDONLY);
@@ -19679,7 +19827,7 @@ var SqliteReplicaStore = class _SqliteReplicaStore {
   /** Unlink every blob not in `keep`, and every temp file. Only a missing directory counts as empty. */
   async #unlinkBlobs(keep) {
     let removed = 0;
-    const root = join7(this.dir, "blobs");
+    const root = join7(this.#pinnedDir, "blobs");
     for (const shard of await entriesOf(root)) {
       const shardPath = join7(root, shard);
       if (shard === ".tmp") {
@@ -19698,13 +19846,13 @@ var SqliteReplicaStore = class _SqliteReplicaStore {
         await rm3(join7(shardPath, name), { force: true });
         removed += 1;
       }
-      if (kept === 0) await rmdir2(shardPath).catch(() => void 0);
+      if (kept === 0) await rmdir(shardPath).catch(() => void 0);
     }
     return removed;
   }
   /** Whether any content file (a blob or a temp file) is on disk. */
   async #holdsContentFiles() {
-    const root = join7(this.dir, "blobs");
+    const root = join7(this.#pinnedDir, "blobs");
     for (const shard of await entriesOf(root)) {
       if ((await entriesOf(join7(root, shard))).length > 0) return true;
     }
@@ -19770,8 +19918,93 @@ var SqliteReplicaStore = class _SqliteReplicaStore {
       }
       try {
         this.#checkLease(t, { allowRevoked: true });
+        const expected = this.#directoryFd === void 0 ? this.#namedAncestors.at(-1) : fstatSync(this.#directoryFd, { bigint: true });
+        if (!expected) {
+          throw new ReplicaError2(ReplicaErrorCode2.RUNTIME_UNSUPPORTED, "Replica removal requires an opened or identity-checked directory.");
+        }
+        const assertDirectory2 = async () => {
+          const current = await lstat2(this.dir, { bigint: true });
+          if (!current.isDirectory() || current.dev !== expected.dev || current.ino !== expected.ino) {
+            throw new ReplicaError2(ReplicaErrorCode2.NOT_FOUND, "The replica directory changed during removal.");
+          }
+          return current;
+        };
+        const pinned = await assertDirectory2();
         await this.#assertPresent();
-        await rm3(this.dir, { recursive: true, force: true });
+        if (process.platform === "linux") {
+          for (const entry of await readdir3(this.#pinnedDir)) {
+            await rm3(join7(this.#pinnedDir, entry), { recursive: true, force: true });
+          }
+          await assertDirectory2();
+          await rmdir(this.dir);
+        } else {
+          const ancestors = this.#namedAncestors;
+          const checkAncestors = async () => {
+            for (const expected2 of ancestors) {
+              const current = await lstat2(expected2.path, { bigint: true });
+              if (current.dev !== expected2.dev || current.ino !== expected2.ino) {
+                throw new ReplicaError2(ReplicaErrorCode2.NOT_FOUND, "The replica ancestry changed during removal.");
+              }
+            }
+          };
+          const directories = /* @__PURE__ */ new Map([[this.dir, pinned]]);
+          const files = /* @__PURE__ */ new Map();
+          const check = async (path, expected2, directory) => {
+            if (path !== this.dir) {
+              const parent = dirname3(path);
+              await check(parent, directories.get(parent), true);
+            }
+            await checkAncestors();
+            const current = await lstat2(path, { bigint: true });
+            if ((directory ? !current.isDirectory() : !current.isFile()) || current.dev !== expected2.dev || current.ino !== expected2.ino) {
+              throw new ReplicaError2(ReplicaErrorCode2.NOT_FOUND, "The replica layout changed during removal.");
+            }
+          };
+          const record2 = async (path, directory) => {
+            const parent = dirname3(path);
+            await check(parent, directories.get(parent), true);
+            const current = await lstat2(path, { bigint: true });
+            if (!(directory ? current.isDirectory() : current.isFile())) {
+              throw new ReplicaError2(ReplicaErrorCode2.STORAGE_ERROR, "Unexpected replica layout during removal.");
+            }
+            (directory ? directories : files).set(path, current);
+          };
+          const blobs = join7(this.dir, "blobs");
+          for (const name of await readdir3(this.dir)) {
+            if (name === "blobs") await record2(blobs, true);
+            else if (["replica.db", "replica.db-wal", "replica.db-shm"].includes(name)) await record2(join7(this.dir, name), false);
+            else throw new ReplicaError2(ReplicaErrorCode2.STORAGE_ERROR, "Unexpected replica layout during removal.");
+          }
+          if (directories.has(blobs)) {
+            await check(blobs, directories.get(blobs), true);
+            for (const shard of await readdir3(blobs)) {
+              if (shard !== ".tmp" && !/^[0-9a-f]{2}$/.test(shard)) {
+                throw new ReplicaError2(ReplicaErrorCode2.STORAGE_ERROR, "Unexpected replica blob shard during removal.");
+              }
+              const shardPath = join7(blobs, shard);
+              await record2(shardPath, true);
+              await check(shardPath, directories.get(shardPath), true);
+              for (const name of await readdir3(shardPath)) {
+                if (shard === ".tmp" ? !/^[0-9a-f]{64}\.[0-9a-f]{12}$/.test(name) : !isHash(name) || !name.startsWith(shard)) {
+                  throw new ReplicaError2(ReplicaErrorCode2.STORAGE_ERROR, "Unexpected replica blob file during removal.");
+                }
+                await record2(join7(shardPath, name), false);
+              }
+            }
+          }
+          for (const [path, identity] of files) {
+            await check(path, identity, false);
+            await unlink(path);
+          }
+          for (const [path, identity] of [...directories].reverse()) {
+            if (path === this.dir) continue;
+            await check(path, identity, true);
+            await rmdir(path);
+          }
+          await assertDirectory2();
+          await checkAncestors();
+          await rmdir(this.dir);
+        }
       } catch (error) {
         throw storageError(error, "Removing the replica");
       } finally {
@@ -19937,7 +20170,14 @@ var SqliteReplicaStore = class _SqliteReplicaStore {
     };
   }
   async close() {
-    this.#db.close();
+    const fd = this.#directoryFd;
+    this.#directoryFd = void 0;
+    if (fd !== void 0) pinnedDirectories.unregister(this);
+    try {
+      this.#db.close();
+    } finally {
+      if (fd !== void 0) closeSync(fd);
+    }
   }
 };
 
@@ -19945,229 +20185,388 @@ var SqliteReplicaStore = class _SqliteReplicaStore {
 init_errors();
 init_constants();
 var SYNC_LEASE_MS = 6e4;
-function refuseUnsafeReplicaPath(profile, detail) {
+function refuseUnsafeReplicaPath(profile, detail, operation = "logout") {
   return new CLIError(
     "REPLICA_PURGE_FAILED",
-    `Logout for profile "${profile}" cleared the session, but ${detail}; the replicas were left untouched.`,
+    operation === "logout" ? `Logout for profile "${profile}" cleared the session, but ${detail}; the replicas were left untouched.` : `Cannot reset a replica in profile "${profile}": ${detail}; no replica was removed.`,
     ExitCode.ERROR
   );
 }
-async function safeReplicaRoot(profile, root) {
+async function safeReplicaRoot(profile, root, operation = "logout") {
   let rootStats;
   try {
-    rootStats = await lstat2(root);
+    rootStats = root.startsWith("/proc/self/fd/") ? await stat3(root) : await lstat3(root);
   } catch (error) {
     if (error?.code === "ENOENT") return null;
     throw error;
   }
   if (rootStats.isSymbolicLink()) {
-    throw refuseUnsafeReplicaPath(profile, `the replicas directory "${root}" is a symlink`);
+    throw refuseUnsafeReplicaPath(profile, `the replicas directory "${root}" is a symlink`, operation);
   }
   if (!rootStats.isDirectory()) {
-    throw refuseUnsafeReplicaPath(profile, `the replicas path "${root}" is not a real directory`);
+    throw refuseUnsafeReplicaPath(profile, `the replicas path "${root}" is not a real directory`, operation);
   }
-  const [profileRealPath, rootRealPath] = await Promise.all([realpath(profilePath3(profile)), realpath(root)]);
+  const [profileRealPath, rootRealPath] = await Promise.all([realpath(profilePath4(profile)), realpath(root)]);
   if (!rootRealPath.startsWith(profileRealPath + sep)) {
-    throw refuseUnsafeReplicaPath(profile, `the replicas directory "${root}" resolves outside the selected profile`);
+    throw refuseUnsafeReplicaPath(profile, `the replicas directory "${root}" resolves outside the selected profile`, operation);
   }
   return rootRealPath;
 }
-async function safeReplicaEntry(profile, root, entry) {
+async function safeReplicaEntry(profile, root, entry, operation = "logout") {
   const entryPath = join8(root, entry.name);
-  const rootRealPath = await safeReplicaRoot(profile, root);
+  const rootRealPath = await safeReplicaRoot(profile, root, operation);
   if (rootRealPath === null) {
-    throw refuseUnsafeReplicaPath(profile, `the replicas directory "${root}" disappeared`);
+    throw refuseUnsafeReplicaPath(profile, `the replicas directory "${root}" disappeared`, operation);
   }
-  const entryStats = await lstat2(entryPath);
+  const entryStats = await lstat3(entryPath);
   if (entry.isSymbolicLink() || entryStats.isSymbolicLink()) {
-    throw refuseUnsafeReplicaPath(profile, `replica entry "${entry.name}" is a symlink`);
+    throw refuseUnsafeReplicaPath(profile, `replica entry "${entry.name}" is a symlink`, operation);
   }
   if (!entry.isDirectory() || !entryStats.isDirectory()) {
-    throw refuseUnsafeReplicaPath(profile, `replica entry "${entry.name}" is not a real directory`);
+    throw refuseUnsafeReplicaPath(profile, `replica entry "${entry.name}" is not a real directory`, operation);
   }
   const entryRealPath = await realpath(entryPath);
   if (!entryRealPath.startsWith(rootRealPath + sep)) {
-    throw refuseUnsafeReplicaPath(profile, `replica entry "${entry.name}" resolves outside the replicas directory`);
+    throw refuseUnsafeReplicaPath(profile, `replica entry "${entry.name}" resolves outside the replicas directory`, operation);
   }
-  return entryPath;
+  return { path: entryPath, identity: { dev: entryStats.dev, ino: entryStats.ino } };
 }
-async function removeProfileReplicas(profile, heldLeases) {
+async function inspectLegacyReplica(profile, root, entry) {
+  const { path, identity } = await safeReplicaEntry(profile, root, entry);
+  const handle = await open3(path, fsConstants2.O_RDONLY | fsConstants2.O_DIRECTORY | fsConstants2.O_NOFOLLOW);
+  try {
+    const pinnedEntry = await handle.stat();
+    if (pinnedEntry.dev !== identity.dev || pinnedEntry.ino !== identity.ino) {
+      throw refuseUnsafeReplicaPath(profile, `replica entry "${entry.name}" changed during inspection`);
+    }
+    const children = await readdir4(`/proc/self/fd/${handle.fd}`, { withFileTypes: true });
+    if (children.length > 0 && !children.some((child) => child.name === "replica.db" && child.isFile())) {
+      throw refuseUnsafeReplicaPath(profile, `replica entry "${entry.name}" has files but no regular replica database`);
+    }
+    return { path, identity, empty: children.length === 0 };
+  } finally {
+    await handle.close();
+  }
+}
+async function pinReplicaRoot(profile, named, operation) {
+  const initial = await lstat3(named).catch((error) => {
+    if (error.code === "ENOENT") return null;
+    throw error;
+  });
+  if (await safeReplicaRoot(profile, named, operation) === null) return null;
+  if (process.platform !== "linux") {
+    throw refuseUnsafeReplicaPath(profile, "pinned replica removal is unavailable on this platform", operation);
+  }
+  const handle = await open3(named, fsConstants2.O_RDONLY | fsConstants2.O_DIRECTORY | fsConstants2.O_NOFOLLOW);
+  try {
+    const pinned = await handle.stat();
+    const assertNamed = async () => {
+      const current = await lstat3(named);
+      if (!current.isDirectory() || current.dev !== initial?.dev || current.ino !== initial?.ino || current.dev !== pinned.dev || current.ino !== pinned.ino) {
+        throw refuseUnsafeReplicaPath(profile, "the replicas directory changed during cleanup", operation);
+      }
+    };
+    await assertNamed();
+    return { path: `/proc/self/fd/${handle.fd}`, assertNamed, close: () => handle.close() };
+  } catch (error) {
+    await handle.close();
+    throw error;
+  }
+}
+async function withPinnedReplicaForReset(profile, name, action) {
   return withProfileLock4(profile, async () => {
-    const root = join8(profilePath3(profile), "replicas");
-    if (await safeReplicaRoot(profile, root) === null) return [];
-    const replicas = (await readdir4(root, { withFileTypes: true })).sort((a, b) => a.name.localeCompare(b.name));
-    if (replicas.length === 0) return [];
-    for (const entry of replicas) await safeReplicaEntry(profile, root, entry);
-    await loadSqlite();
-    const opened = [];
+    const root = join8(profilePath4(profile), "replicas");
+    const pinned = await pinReplicaRoot(profile, root, "reset");
+    if (!pinned) throw new ReplicaError(ReplicaErrorCode.NOT_FOUND, `Profile "${profile}" has no replicas.`);
     try {
-      for (const entry of replicas) {
-        const entryPath = await safeReplicaEntry(profile, root, entry);
-        const store = await SqliteReplicaStore.open(entryPath, {
-          create: false,
-          guard: async (action) => {
-            try {
-              return await withProfileLock4(profile, action, { requireProfile: true });
-            } catch (error) {
-              if (error instanceof ProfileDeletedError2) {
-                throw new ReplicaError(ReplicaErrorCode.NOT_FOUND, `Profile "${profile}" was deleted; its replicas are gone and nothing was written.`);
-              }
-              throw error;
-            }
-          }
-        });
-        opened.push({ name: entry.name, store, lease: null });
-        if (await store.open() === null) {
-          throw new CLIError("REPLICA_PURGE_FAILED", `Replica "${entry.name}" has no initialized store; logout cleared the session but removed no replicas.`, ExitCode.ERROR);
+      const fdRoot = pinned.path;
+      const entry = (await readdir4(fdRoot, { withFileTypes: true })).find((item) => item.name === name);
+      if (!entry) throw new ReplicaError(ReplicaErrorCode.NOT_FOUND, `Replica "${name}" was not found.`);
+      const { path, identity: initial } = await safeReplicaEntry(profile, fdRoot, entry, "reset");
+      const recheck = async () => {
+        const current = await lstat3(path);
+        if (!current.isDirectory() || current.isSymbolicLink() || current.dev !== initial.dev || current.ino !== initial.ino) {
+          throw refuseUnsafeReplicaPath(profile, `replica entry "${name}" changed during removal`, "reset");
         }
-        const lease = heldLeases?.get(entryPath) ?? await store.acquireSyncLease(SYNC_LEASE_MS);
-        if (lease === null) {
-          throw new CLIError("REPLICA_BUSY", `Cannot log out: replica "${entry.name}" is syncing. The session was cleared and no replicas were removed.`, ExitCode.ERROR);
-        }
-        opened[opened.length - 1].lease = lease;
-      }
-      const removed = [];
-      for (const replica of opened) {
-        try {
-          await replica.store.destroy(replica.lease);
-          removed.push(replica.name);
-        } catch (error) {
-          const replicaStillExists = await lstat2(join8(root, replica.name)).then(
-            () => true,
-            (statError) => statError.code !== "ENOENT"
-          );
-          if (!replicaStillExists) removed.push(replica.name);
-          const remaining = opened.filter(({ name }) => !removed.includes(name)).map(({ name }) => name);
-          throw new CLIError(
-            "REPLICA_PURGE_FAILED",
-            `Logout cleared the session, but replica removal failed. Removed: ${removed.length ? removed.join(", ") : "none"}. Not removed: ${remaining.join(", ") || "none"}. ${error instanceof Error ? error.message : String(error)}`,
-            ExitCode.ERROR,
-            { replicasRemoved: removed, replicasRemaining: remaining }
-          );
-        }
-      }
-      return removed;
-    } catch (error) {
-      if (error instanceof CLIError) throw error;
-      throw new CLIError(
-        "REPLICA_PURGE_FAILED",
-        `Logout cleared the session, but replica cleanup could not start; no replicas were removed. ${error instanceof Error ? error.message : String(error)}`,
-        ExitCode.ERROR
-      );
+      };
+      await recheck();
+      return await action(path, recheck, { dev: initial.dev, ino: initial.ino });
     } finally {
-      await Promise.all(opened.map(async ({ name, store, lease }) => {
-        if (lease !== null && heldLeases?.has(join8(root, name)) !== true) await store.releaseLease(lease).catch(() => void 0);
-        await store.close().catch(() => void 0);
-      }));
+      await pinned.close();
     }
   });
 }
-async function removeProfileReplication(profile, heldLeases) {
+async function removeProfileReplicas(profile, heldLeases, preflightRoot) {
   return withProfileLock4(profile, async () => {
-    const root = join8(profilePath3(profile), "replication");
-    const rootReal = await safeReplicaRoot(profile, root);
-    if (rootReal === null) return [];
-    const profileReal = await realpath(profilePath3(profile));
-    const partitions = await readdir4(root, { withFileTypes: true });
-    const opened = [];
-    const removed = [];
-    let deleting = false;
+    const namedRoot = join8(profilePath4(profile), "replicas");
+    const pinned = preflightRoot ?? await pinReplicaRoot(profile, namedRoot, "logout");
+    if (!pinned) return [];
+    if (preflightRoot) await pinned.assertNamed();
     try {
-      for (const partition of partitions) {
-        const partitionPath = join8(root, partition.name);
-        const partitionStats = await lstat2(partitionPath);
-        if (partition.isSymbolicLink() || partitionStats.isSymbolicLink()) {
-          throw refuseUnsafeReplicaPath(profile, `replication entry "${partition.name}" is a symlink`);
+      const root = pinned.path;
+      const replicas = (await readdir4(root, { withFileTypes: true })).sort((a, b) => a.name.localeCompare(b.name));
+      if (replicas.length === 0) return [];
+      const checked = await Promise.all(replicas.map(async (entry) => ({
+        entry,
+        ...await inspectLegacyReplica(profile, root, entry)
+      })));
+      const removed = [];
+      const opened = [];
+      try {
+        for (const { entry, identity, empty: empty4 } of checked) {
+          if (!empty4) continue;
+          await pinned.assertNamed();
+          const current = await safeReplicaEntry(profile, root, entry);
+          if (current.identity.dev !== identity.dev || current.identity.ino !== identity.ino) {
+            throw refuseUnsafeReplicaPath(profile, `empty replica entry "${entry.name}" changed during cleanup`);
+          }
+          const handle = await open3(current.path, fsConstants2.O_RDONLY | fsConstants2.O_DIRECTORY | fsConstants2.O_NOFOLLOW);
+          try {
+            const pinnedEntry = await handle.stat();
+            if (pinnedEntry.dev !== identity.dev || pinnedEntry.ino !== identity.ino || (await readdir4(`/proc/self/fd/${handle.fd}`)).length !== 0) {
+              throw refuseUnsafeReplicaPath(profile, `empty replica entry "${entry.name}" changed during cleanup`);
+            }
+            await pinned.assertNamed();
+            const namedEntry = await lstat3(current.path);
+            if (!namedEntry.isDirectory() || namedEntry.dev !== pinnedEntry.dev || namedEntry.ino !== pinnedEntry.ino) {
+              throw refuseUnsafeReplicaPath(profile, `empty replica entry "${entry.name}" changed at removal`);
+            }
+            await rmdir2(current.path);
+          } finally {
+            await handle.close();
+          }
+          removed.push(entry.name);
         }
-        if (partitionStats.isDirectory()) {
-          const partitionReal = await realpath(partitionPath);
-          if (!partitionReal.startsWith(rootReal + sep) || !partitionReal.startsWith(profileReal + sep)) {
-            throw refuseUnsafeReplicaPath(profile, `replication entry "${partition.name}" resolves outside the selected profile`);
-          }
-          const replicasRoot2 = join8(partitionPath, "replicas");
-          const replicasStats = await lstat2(replicasRoot2).catch((error) => {
-            if (error.code === "ENOENT") return null;
-            throw error;
+        if (removed.length === replicas.length) return removed;
+        await loadSqlite();
+        for (const { entry, empty: empty4 } of checked) {
+          if (empty4) continue;
+          const { path: entryPath, identity: expectedDirectory } = await safeReplicaEntry(profile, root, entry);
+          const store = await SqliteReplicaStore.open(entryPath, {
+            create: false,
+            expectedDirectory,
+            guard: async (action) => {
+              try {
+                return await withProfileLock4(profile, async () => {
+                  await safeReplicaEntry(profile, root, entry);
+                  return action();
+                }, { requireProfile: true });
+              } catch (error) {
+                if (error instanceof ProfileDeletedError2) {
+                  throw new ReplicaError(ReplicaErrorCode.NOT_FOUND, `Profile "${profile}" was deleted; its replicas are gone and nothing was written.`);
+                }
+                throw error;
+              }
+            }
           });
-          if (!replicasStats) continue;
-          if (replicasStats.isSymbolicLink() || !replicasStats.isDirectory()) {
-            throw refuseUnsafeReplicaPath(profile, `replication replicas path "${replicasRoot2}" is not a real directory`);
+          opened.push({ name: entry.name, store, lease: null });
+          if (await store.open() === null) {
+            throw new CLIError("REPLICA_PURGE_FAILED", `Replica "${entry.name}" has no initialized store; logout cleared the session but removed no replicas.`, ExitCode.ERROR);
           }
-          const replicas = await readdir4(replicasRoot2, { withFileTypes: true });
-          for (const replica of replicas) {
-            const replicaPath = join8(replicasRoot2, replica.name);
-            const replicaStats = await lstat2(replicaPath);
-            if (replica.isSymbolicLink() || replicaStats.isSymbolicLink() || !replicaStats.isDirectory()) {
-              throw refuseUnsafeReplicaPath(profile, `replication replica "${replica.name}" is not a real directory`);
+          const lease = heldLeases?.get(join8(namedRoot, entry.name)) ?? await store.acquireSyncLease(SYNC_LEASE_MS);
+          if (lease === null) {
+            throw new CLIError("REPLICA_BUSY", `Cannot log out: replica "${entry.name}" is syncing. The session was cleared and no replicas were removed.`, ExitCode.ERROR);
+          }
+          opened[opened.length - 1].lease = lease;
+        }
+        for (const replica of opened) {
+          try {
+            await replica.store.destroy(replica.lease);
+            removed.push(replica.name);
+          } catch (error) {
+            const replicaStillExists = await lstat3(join8(root, replica.name)).then(
+              () => true,
+              (statError) => statError.code !== "ENOENT"
+            );
+            if (!replicaStillExists) removed.push(replica.name);
+            const remaining = opened.filter(({ name }) => !removed.includes(name)).map(({ name }) => name);
+            throw new CLIError(
+              "REPLICA_PURGE_FAILED",
+              `Logout cleared the session, but replica removal failed. Removed: ${removed.length ? removed.join(", ") : "none"}. Not removed: ${remaining.join(", ") || "none"}. ${error instanceof Error ? error.message : String(error)}`,
+              ExitCode.ERROR,
+              { replicasRemoved: removed, replicasRemaining: remaining }
+            );
+          }
+        }
+        return removed;
+      } catch (error) {
+        if (error instanceof CLIError) throw error;
+        throw new CLIError(
+          "REPLICA_PURGE_FAILED",
+          `Logout cleared the session, but replica cleanup could not finish. Removed: ${removed.length ? removed.join(", ") : "none"}. ${error instanceof Error ? error.message : String(error)}`,
+          ExitCode.ERROR
+        );
+      } finally {
+        await Promise.all(opened.map(async ({ name, store, lease }) => {
+          if (lease !== null && heldLeases?.has(join8(namedRoot, name)) !== true) await store.releaseLease(lease).catch(() => void 0);
+          await store.close().catch(() => void 0);
+        }));
+      }
+    } finally {
+      if (!preflightRoot) await pinned.close();
+    }
+  });
+}
+async function assertSafeFlagReplica(profile, root, partition, name) {
+  const rootReal = await safeReplicaRoot(profile, root);
+  if (rootReal === null) throw refuseUnsafeReplicaPath(profile, `the replication root "${root}" disappeared`);
+  const partitionPath = join8(root, partition);
+  const partitionStats = await lstat3(partitionPath);
+  if (partitionStats.isSymbolicLink() || !partitionStats.isDirectory()) {
+    throw refuseUnsafeReplicaPath(profile, `replication entry "${partition}" is not a real directory`);
+  }
+  const partitionReal = await realpath(partitionPath);
+  if (!partitionReal.startsWith(rootReal + sep)) {
+    throw refuseUnsafeReplicaPath(profile, `replication entry "${partition}" resolves outside the replication root`);
+  }
+  const replicasRoot = join8(partitionPath, "replicas");
+  const replicasStats = await lstat3(replicasRoot);
+  if (replicasStats.isSymbolicLink() || !replicasStats.isDirectory()) {
+    throw refuseUnsafeReplicaPath(profile, `replication replicas path "${replicasRoot}" is not a real directory`);
+  }
+  const replicaPath = join8(replicasRoot, name);
+  const replicaStats = await lstat3(replicaPath);
+  if (replicaStats.isSymbolicLink() || !replicaStats.isDirectory()) {
+    throw refuseUnsafeReplicaPath(profile, `replication replica "${name}" is not a real directory`);
+  }
+  const replicaReal = await realpath(replicaPath);
+  if (!replicaReal.startsWith(partitionReal + sep)) {
+    throw refuseUnsafeReplicaPath(profile, `replication replica "${name}" resolves outside the partition`);
+  }
+  const database = await lstat3(join8(replicaPath, "replica.db"));
+  if (database.isSymbolicLink() || !database.isFile()) {
+    throw refuseUnsafeReplicaPath(profile, `replication database "${name}" is not a regular file`);
+  }
+  return { dev: replicaStats.dev, ino: replicaStats.ino };
+}
+async function removeProfileReplication(profile, heldLeases, preflightRoot) {
+  return withProfileLock4(profile, async () => {
+    const namedRoot = join8(profilePath4(profile), "replication");
+    const pinned = preflightRoot ?? await pinReplicaRoot(profile, namedRoot, "logout");
+    if (!pinned) return [];
+    if (preflightRoot) await pinned.assertNamed();
+    try {
+      const root = pinned.path;
+      const rootReal = await safeReplicaRoot(profile, root);
+      const profileReal = await realpath(profilePath4(profile));
+      const partitions = await readdir4(root, { withFileTypes: true });
+      const opened = [];
+      const removed = [];
+      let deleting = false;
+      try {
+        for (const partition of partitions) {
+          const partitionPath = join8(root, partition.name);
+          const partitionStats = await lstat3(partitionPath);
+          if (partition.isSymbolicLink() || partitionStats.isSymbolicLink()) {
+            throw refuseUnsafeReplicaPath(profile, `replication entry "${partition.name}" is a symlink`);
+          }
+          if (partitionStats.isDirectory()) {
+            const partitionReal = await realpath(partitionPath);
+            if (!partitionReal.startsWith(rootReal + sep) || !partitionReal.startsWith(profileReal + sep)) {
+              throw refuseUnsafeReplicaPath(profile, `replication entry "${partition.name}" resolves outside the selected profile`);
             }
-            const replicaReal = await realpath(replicaPath);
-            if (!replicaReal.startsWith(rootReal + sep)) {
-              throw refuseUnsafeReplicaPath(profile, `replication replica "${replica.name}" resolves outside the replication root`);
+            const replicasRoot = join8(partitionPath, "replicas");
+            const replicasStats = await lstat3(replicasRoot).catch((error) => {
+              if (error.code === "ENOENT") return null;
+              throw error;
+            });
+            if (!replicasStats) continue;
+            if (replicasStats.isSymbolicLink() || !replicasStats.isDirectory()) {
+              throw refuseUnsafeReplicaPath(profile, `replication replicas path "${replicasRoot}" is not a real directory`);
             }
-            const database = await lstat2(join8(replicaPath, "replica.db")).catch((error) => {
+            const replicas = await readdir4(replicasRoot, { withFileTypes: true });
+            for (const replica of replicas) {
+              const replicaPath = join8(replicasRoot, replica.name);
+              const replicaStats = await lstat3(replicaPath);
+              if (replica.isSymbolicLink() || replicaStats.isSymbolicLink() || !replicaStats.isDirectory()) {
+                throw refuseUnsafeReplicaPath(profile, `replication replica "${replica.name}" is not a real directory`);
+              }
+              const replicaReal = await realpath(replicaPath);
+              if (!replicaReal.startsWith(rootReal + sep)) {
+                throw refuseUnsafeReplicaPath(profile, `replication replica "${replica.name}" resolves outside the replication root`);
+              }
+              const database = await lstat3(join8(replicaPath, "replica.db")).catch((error) => {
+                if (error.code === "ENOENT") return null;
+                throw error;
+              });
+              if (!database) continue;
+              if (database.isSymbolicLink() || !database.isFile()) {
+                throw refuseUnsafeReplicaPath(profile, `replication database "${replica.name}" is not a regular file`);
+              }
+            }
+          } else if (!partitionStats.isFile()) {
+            throw refuseUnsafeReplicaPath(profile, `replication path "${partition.name}" is not a regular file or directory`);
+          }
+        }
+        const hasReplicaDatabase = await Promise.all(partitions.filter((entry) => entry.isDirectory()).map(async (partition) => {
+          return Promise.all((await readdir4(join8(root, partition.name, "replicas"), { withFileTypes: true }).catch(() => [])).filter((entry) => entry.isDirectory()).map((entry) => lstat3(join8(root, partition.name, "replicas", entry.name, "replica.db")).then(() => true, () => false)));
+        })).then((values) => values.some((partition) => partition.some(Boolean)));
+        if (hasReplicaDatabase) await loadSqlite();
+        for (const partition of partitions.filter((entry) => entry.isDirectory())) {
+          const replicasRoot = join8(root, partition.name, "replicas");
+          for (const entry of await readdir4(replicasRoot, { withFileTypes: true }).catch(() => [])) {
+            if (!entry.isDirectory()) continue;
+            const database = await lstat3(join8(replicasRoot, entry.name, "replica.db")).catch((error) => {
               if (error.code === "ENOENT") return null;
               throw error;
             });
             if (!database) continue;
-            if (database.isSymbolicLink() || !database.isFile()) {
-              throw refuseUnsafeReplicaPath(profile, `replication database "${replica.name}" is not a regular file`);
+            const name = `replication/${partition.name}/${entry.name}`;
+            const expectedDirectory = await assertSafeFlagReplica(profile, root, partition.name, entry.name);
+            const store = await SqliteReplicaStore.open(join8(replicasRoot, entry.name), {
+              create: false,
+              expectedDirectory,
+              guard: async (action) => withProfileLock4(profile, async () => {
+                await assertSafeFlagReplica(profile, root, partition.name, entry.name);
+                return action();
+              }, { requireProfile: true })
+            });
+            try {
+              if (await store.open() === null) {
+                throw new CLIError("REPLICA_PURGE_FAILED", `Logout cleared the session, but flag replica "${name}" has no initialized store.`, ExitCode.ERROR);
+              }
+              const leasePath = join8(namedRoot, partition.name, "replicas", entry.name);
+              const lease = heldLeases?.get(leasePath) ?? await store.acquireSyncLease(SYNC_LEASE_MS);
+              if (lease === null) {
+                throw new CLIError("REPLICA_BUSY", `Cannot log out: flag replica "${name}" is syncing. The session was cleared and no replicas were removed.`, ExitCode.ERROR);
+              }
+              opened.push({ name, path: leasePath, store, lease });
+            } catch (error) {
+              await store.close().catch(() => void 0);
+              throw error;
             }
           }
-        } else if (!partitionStats.isFile()) {
-          throw refuseUnsafeReplicaPath(profile, `replication path "${partition.name}" is not a regular file or directory`);
         }
-      }
-      const hasReplicaDatabase = await Promise.all(partitions.filter((entry) => entry.isDirectory()).map(async (partition) => {
-        return Promise.all((await readdir4(join8(root, partition.name, "replicas"), { withFileTypes: true }).catch(() => [])).filter((entry) => entry.isDirectory()).map((entry) => lstat2(join8(root, partition.name, "replicas", entry.name, "replica.db")).then(() => true, () => false)));
-      })).then((values) => values.some((partition) => partition.some(Boolean)));
-      if (hasReplicaDatabase) await loadSqlite();
-      for (const partition of partitions.filter((entry) => entry.isDirectory())) {
-        const replicasRoot2 = join8(root, partition.name, "replicas");
-        for (const entry of await readdir4(replicasRoot2, { withFileTypes: true }).catch(() => [])) {
-          if (!entry.isDirectory()) continue;
-          const database = await lstat2(join8(replicasRoot2, entry.name, "replica.db")).catch((error) => {
-            if (error.code === "ENOENT") return null;
-            throw error;
-          });
-          if (!database) continue;
-          const name = `replication/${partition.name}/${entry.name}`;
-          const store = await SqliteReplicaStore.open(join8(replicasRoot2, entry.name), { create: false, guard: async (action) => withProfileLock4(profile, action, { requireProfile: true }) });
-          if (await store.open() === null) {
-            await store.close();
-            throw new CLIError("REPLICA_PURGE_FAILED", `Logout cleared the session, but flag replica "${name}" has no initialized store.`, ExitCode.ERROR);
-          }
-          const lease = heldLeases?.get(join8(replicasRoot2, entry.name)) ?? await store.acquireSyncLease(SYNC_LEASE_MS);
-          if (lease === null) {
-            await store.close();
-            throw new CLIError("REPLICA_BUSY", `Cannot log out: flag replica "${name}" is syncing. The session was cleared and no replicas were removed.`, ExitCode.ERROR);
-          }
-          opened.push({ name, path: join8(replicasRoot2, entry.name), store, lease });
+        deleting = true;
+        for (const item of opened) {
+          await item.store.destroy(item.lease);
+          removed.push(item.name);
         }
+        await pinned.assertNamed();
+        for (const entry of await readdir4(root)) await rm4(join8(root, entry), { recursive: true, force: true });
+        await pinned.assertNamed();
+        await rmdir2(namedRoot);
+        return removed;
+      } catch (error) {
+        if (deleting) {
+          const remaining = opened.filter(({ name }) => !removed.includes(name)).map(({ name }) => name);
+          throw new CLIError(
+            "REPLICA_PURGE_FAILED",
+            `Logout cleared the session, but replication cleanup failed. Removed: ${removed.join(", ") || "none"}. Not removed: ${remaining.join(", ") || "none"}. ${error instanceof Error ? error.message : String(error)}`,
+            ExitCode.ERROR,
+            { replicasRemoved: removed, replicasRemaining: remaining }
+          );
+        }
+        if (error instanceof CLIError) throw error;
+        throw new CLIError("REPLICA_PURGE_FAILED", `Logout cleared the session, but replication cleanup failed; no flag replicas were removed. ${error instanceof Error ? error.message : String(error)}`, ExitCode.ERROR);
+      } finally {
+        await Promise.all(opened.map(async ({ path, store, lease }) => {
+          if (heldLeases?.has(path) !== true) await store.releaseLease(lease).catch(() => void 0);
+          await store.close().catch(() => void 0);
+        }));
       }
-      deleting = true;
-      for (const item of opened) {
-        await item.store.destroy(item.lease);
-        removed.push(item.name);
-      }
-      await rm4(root, { recursive: true });
-      return removed;
-    } catch (error) {
-      if (deleting) {
-        const remaining = opened.filter(({ name }) => !removed.includes(name)).map(({ name }) => name);
-        throw new CLIError(
-          "REPLICA_PURGE_FAILED",
-          `Logout cleared the session, but replication cleanup failed. Removed: ${removed.join(", ") || "none"}. Not removed: ${remaining.join(", ") || "none"}. ${error instanceof Error ? error.message : String(error)}`,
-          ExitCode.ERROR,
-          { replicasRemoved: removed, replicasRemaining: remaining }
-        );
-      }
-      if (error instanceof CLIError) throw error;
-      throw new CLIError("REPLICA_PURGE_FAILED", `Logout cleared the session, but replication cleanup failed; no flag replicas were removed. ${error instanceof Error ? error.message : String(error)}`, ExitCode.ERROR);
     } finally {
-      await Promise.all(opened.map(async ({ path, store, lease }) => {
-        if (heldLeases?.has(path) !== true) await store.releaseLease(lease).catch(() => void 0);
-        await store.close().catch(() => void 0);
-      }));
+      if (!preflightRoot) await pinned.close();
     }
   });
 }
@@ -20175,36 +20574,54 @@ async function acquireLogoutLeases(profile) {
   return withProfileLock4(profile, async () => {
     let sqliteLoaded = false;
     const opened = [];
+    const roots = /* @__PURE__ */ new Map();
     try {
-      const legacyRoot = join8(profilePath3(profile), "replicas");
-      if (await safeReplicaRoot(profile, legacyRoot) !== null) {
+      const legacyNamed = join8(profilePath4(profile), "replicas");
+      const legacyPin = await pinReplicaRoot(profile, legacyNamed, "logout");
+      if (legacyPin) {
+        roots.set("replicas", legacyPin);
+        const legacyRoot = legacyPin.path;
         const entries = (await readdir4(legacyRoot, { withFileTypes: true })).sort((a, b) => a.name.localeCompare(b.name));
         for (const entry of entries) {
-          const path = await safeReplicaEntry(profile, legacyRoot, entry);
+          const { path, identity: expectedDirectory, empty: empty4 } = await inspectLegacyReplica(profile, legacyRoot, entry);
+          if (empty4) continue;
           if (!sqliteLoaded) {
             await loadSqlite();
             sqliteLoaded = true;
           }
-          const store = await SqliteReplicaStore.open(path, { create: false, guard: async (action) => withProfileLock4(profile, action, { requireProfile: true }) });
-          if (await store.open() === null) {
-            await store.close();
-            throw new CLIError("REPLICA_PURGE_FAILED", `Replica "${entry.name}" has no initialized store; logout cleared the session but removed no replicas.`, ExitCode.ERROR);
+          const store = await SqliteReplicaStore.open(path, {
+            create: false,
+            expectedDirectory,
+            guard: async (action) => withProfileLock4(profile, async () => {
+              await safeReplicaEntry(profile, legacyRoot, entry);
+              return action();
+            }, { requireProfile: true })
+          });
+          try {
+            if (await store.open() === null) {
+              throw new CLIError("REPLICA_PURGE_FAILED", `Replica "${entry.name}" has no initialized store; logout cleared the session but removed no replicas.`, ExitCode.ERROR);
+            }
+            const lease = await store.acquireSyncLease(SYNC_LEASE_MS);
+            if (lease === null) {
+              throw new CLIError("REPLICA_BUSY", `Cannot log out: replica "${entry.name}" is syncing. The session was cleared and no replicas were removed.`, ExitCode.ERROR);
+            }
+            opened.push({ path: join8(legacyNamed, entry.name), store, lease });
+          } catch (error) {
+            await store.close().catch(() => void 0);
+            throw error;
           }
-          const lease = await store.acquireSyncLease(SYNC_LEASE_MS);
-          if (lease === null) {
-            await store.close();
-            throw new CLIError("REPLICA_BUSY", `Cannot log out: replica "${entry.name}" is syncing. The session was cleared and no replicas were removed.`, ExitCode.ERROR);
-          }
-          opened.push({ path, store, lease });
         }
       }
-      const replicationRoot = join8(profilePath3(profile), "replication");
-      const replicationReal = await safeReplicaRoot(profile, replicationRoot);
-      if (replicationReal !== null) {
+      const replicationNamed = join8(profilePath4(profile), "replication");
+      const replicationPin = await pinReplicaRoot(profile, replicationNamed, "logout");
+      if (replicationPin) {
+        roots.set("replication", replicationPin);
+        const replicationRoot = replicationPin.path;
+        const replicationReal = await safeReplicaRoot(profile, replicationRoot);
         const partitions = await readdir4(replicationRoot, { withFileTypes: true });
         for (const partition of partitions) {
           const partitionPath = join8(replicationRoot, partition.name);
-          const partitionStats = await lstat2(partitionPath);
+          const partitionStats = await lstat3(partitionPath);
           if (partition.isSymbolicLink() || partitionStats.isSymbolicLink()) {
             throw refuseUnsafeReplicaPath(profile, `replication entry "${partition.name}" is a symlink`);
           }
@@ -20216,22 +20633,22 @@ async function acquireLogoutLeases(profile) {
           if (!partitionReal.startsWith(replicationReal + sep)) {
             throw refuseUnsafeReplicaPath(profile, `replication entry "${partition.name}" resolves outside the replication root`);
           }
-          const replicasRoot2 = join8(partitionPath, "replicas");
-          const replicasStats = await lstat2(replicasRoot2).catch((error) => {
+          const replicasRoot = join8(partitionPath, "replicas");
+          const replicasStats = await lstat3(replicasRoot).catch((error) => {
             if (error.code === "ENOENT") return null;
             throw error;
           });
           if (!replicasStats) continue;
           if (replicasStats.isSymbolicLink() || !replicasStats.isDirectory()) {
-            throw refuseUnsafeReplicaPath(profile, `replication replicas path "${replicasRoot2}" is not a real directory`);
+            throw refuseUnsafeReplicaPath(profile, `replication replicas path "${replicasRoot}" is not a real directory`);
           }
-          for (const replica of await readdir4(replicasRoot2, { withFileTypes: true })) {
-            const path = join8(replicasRoot2, replica.name);
-            const stats = await lstat2(path);
+          for (const replica of await readdir4(replicasRoot, { withFileTypes: true })) {
+            const path = join8(replicasRoot, replica.name);
+            const stats = await lstat3(path);
             if (!replica.isDirectory() || replica.isSymbolicLink() || stats.isSymbolicLink() || !stats.isDirectory()) {
               throw refuseUnsafeReplicaPath(profile, `replication replica "${replica.name}" is not a real directory`);
             }
-            const database = await lstat2(join8(path, "replica.db")).catch((error) => {
+            const database = await lstat3(join8(path, "replica.db")).catch((error) => {
               if (error.code === "ENOENT") return null;
               throw error;
             });
@@ -20247,26 +20664,38 @@ async function acquireLogoutLeases(profile) {
               await loadSqlite();
               sqliteLoaded = true;
             }
-            const store = await SqliteReplicaStore.open(path, { create: false, guard: async (action) => withProfileLock4(profile, action, { requireProfile: true }) });
-            if (await store.open() === null) {
-              await store.close();
-              throw new CLIError("REPLICA_PURGE_FAILED", `Logout cleared the session, but flag replica "replication/${partition.name}/${replica.name}" has no initialized store.`, ExitCode.ERROR);
+            const expectedDirectory = await assertSafeFlagReplica(profile, replicationRoot, partition.name, replica.name);
+            const store = await SqliteReplicaStore.open(path, {
+              create: false,
+              expectedDirectory,
+              guard: async (action) => withProfileLock4(profile, async () => {
+                await assertSafeFlagReplica(profile, replicationRoot, partition.name, replica.name);
+                return action();
+              }, { requireProfile: true })
+            });
+            try {
+              if (await store.open() === null) {
+                throw new CLIError("REPLICA_PURGE_FAILED", `Logout cleared the session, but flag replica "replication/${partition.name}/${replica.name}" has no initialized store.`, ExitCode.ERROR);
+              }
+              const lease = await store.acquireSyncLease(SYNC_LEASE_MS);
+              if (lease === null) {
+                throw new CLIError("REPLICA_BUSY", `Cannot log out: flag replica "replication/${partition.name}/${replica.name}" is syncing. The session was cleared and no replicas were removed.`, ExitCode.ERROR);
+              }
+              opened.push({ path: join8(replicationNamed, partition.name, "replicas", replica.name), store, lease });
+            } catch (error) {
+              await store.close().catch(() => void 0);
+              throw error;
             }
-            const lease = await store.acquireSyncLease(SYNC_LEASE_MS);
-            if (lease === null) {
-              await store.close();
-              throw new CLIError("REPLICA_BUSY", `Cannot log out: flag replica "replication/${partition.name}/${replica.name}" is syncing. The session was cleared and no replicas were removed.`, ExitCode.ERROR);
-            }
-            opened.push({ path, store, lease });
           }
         }
       }
-      return opened;
+      return { stores: opened, roots };
     } catch (error) {
       await Promise.all(opened.map(async ({ store, lease }) => {
         await store.releaseLease(lease).catch(() => void 0);
         await store.close().catch(() => void 0);
       }));
+      await Promise.all([...roots.values()].map((root) => root.close()));
       throw error;
     }
   });
@@ -20274,31 +20703,32 @@ async function acquireLogoutLeases(profile) {
 async function removeProfileReplicasAndReplication(profile) {
   return withProfileLock4(profile, async () => {
     const acquired = await acquireLogoutLeases(profile);
-    const heldLeases = new Map(acquired.map(({ path, lease }) => [path, lease]));
+    const heldLeases = new Map(acquired.stores.map(({ path, lease }) => [path, lease]));
     let legacyRemoved = [];
     try {
-      legacyRemoved = await removeProfileReplicas(profile, heldLeases);
-      const replication = await removeProfileReplication(profile, heldLeases);
+      legacyRemoved = await removeProfileReplicas(profile, heldLeases, acquired.roots.get("replicas"));
+      const replication = await removeProfileReplication(profile, heldLeases, acquired.roots.get("replication"));
       return [...legacyRemoved, ...replication];
     } catch (error) {
       const partialRemoved = error instanceof CLIError && Array.isArray(error.metadata?.replicasRemoved) ? error.metadata.replicasRemoved.filter((name) => typeof name === "string") : [];
       const removed = [.../* @__PURE__ */ new Set([...legacyRemoved, ...partialRemoved])];
       const removedSet = new Set(removed);
-      const remaining = acquired.map(({ path }) => {
-        const name = relative(profilePath3(profile), path).split(sep).join("/");
+      const remaining = acquired.stores.map(({ path }) => {
+        const name = relative(profilePath4(profile), path).split(sep).join("/");
         return name.startsWith("replication/") ? name.replace("/replicas/", "/") : name.split("/").at(-1);
       }).filter((name) => !removedSet.has(name));
       throw new CLIError(
         error instanceof CLIError ? error.code : "REPLICA_PURGE_FAILED",
-        `Logout cleared the session, but replica cleanup failed. Removed: ${removed.join(", ") || "none"}. Not removed: ${remaining.join(", ") || "none"}.`,
+        `Logout cleared the session, but replica cleanup failed. Removed: ${removed.join(", ") || "none"}. Not removed: ${remaining.join(", ") || "none"}. ${error instanceof Error ? error.message : String(error)}`,
         error instanceof CLIError ? error.exitCode : ExitCode.ERROR,
         { replicasRemoved: removed, replicasRemaining: remaining }
       );
     } finally {
-      await Promise.all(acquired.map(async ({ store, lease }) => {
+      await Promise.all(acquired.stores.map(async ({ store, lease }) => {
         await store.releaseLease(lease).catch(() => void 0);
         await store.close().catch(() => void 0);
       }));
+      await Promise.all([...acquired.roots.values()].map((root) => root.close()));
     }
   });
 }
@@ -20469,7 +20899,7 @@ function shouldOpenBrowser(options) {
   return env !== "1" && env !== "true";
 }
 async function callbackFlow(did, options = {}) {
-  return new Promise((resolve5, reject) => {
+  return new Promise((resolve6, reject) => {
     let timeout;
     let settled = false;
     let rl;
@@ -20483,7 +20913,7 @@ async function callbackFlow(did, options = {}) {
         rl.close();
       }
       if (result.data) {
-        resolve5(result.data);
+        resolve6(result.data);
       } else {
         reject(result.error);
       }
@@ -20562,8 +20992,8 @@ async function callbackFlow(did, options = {}) {
       }
       if (openBrowser) {
         try {
-          const open8 = (await import("open")).default;
-          await open8(authUrl);
+          const open9 = (await import("open")).default;
+          await open9(authUrl);
         } catch {
           settle({ error: new Error("Failed to open browser") });
           return;
@@ -20607,13 +21037,13 @@ Open this URL in a browser to authenticate:
     input: process.stdin,
     output: process.stderr
   });
-  return new Promise((resolve5, reject) => {
+  return new Promise((resolve6, reject) => {
     let answered = false;
     rl.on("line", (input) => {
       if (answered || input.trim() === "") return;
       answered = true;
       rl.close();
-      void delegationFromInput(input, did, options).then(resolve5, reject);
+      void delegationFromInput(input, did, options).then(resolve6, reject);
     });
     rl.on("close", () => {
       if (answered) return;
@@ -21514,7 +21944,7 @@ async function acquireDeviceDelegation(input) {
     expiresAt: new Date(deadline).toISOString().replace(/\.\d{3}Z$/, "Z")
   });
   let interval = started.interval;
-  const wait = input.wait ?? ((milliseconds) => new Promise((resolve5) => setTimeout(resolve5, milliseconds)));
+  const wait = input.wait ?? ((milliseconds) => new Promise((resolve6) => setTimeout(resolve6, milliseconds)));
   while (Date.now() < deadline) {
     await wait(interval * 1e3);
     let response;
@@ -22150,7 +22580,7 @@ async function promptAuthMethod() {
     input: process.stdin,
     output: process.stderr
   });
-  return new Promise((resolve5) => {
+  return new Promise((resolve6) => {
     process.stderr.write("\n" + theme.heading("Choose authentication method:") + "\n");
     process.stderr.write(`  ${theme.accent("1)")} OpenKey ${theme.muted("(browser-based, for interactive use)")}
 `);
@@ -22161,9 +22591,9 @@ async function promptAuthMethod() {
       rl.close();
       const trimmed = answer.trim();
       if (trimmed === "2" || trimmed.toLowerCase() === "local") {
-        resolve5("local");
+        resolve6("local");
       } else {
-        resolve5("openkey");
+        resolve6("openkey");
       }
     });
   });
@@ -22865,7 +23295,7 @@ function describeSession(state2, expiresAt) {
 }
 async function emitPermissionRequestArtifact(artifact, emitOption) {
   if (typeof emitOption === "string" && emitOption.length > 0) {
-    await mkdir3(dirname3(emitOption), { recursive: true });
+    await mkdir3(dirname4(emitOption), { recursive: true });
     await writeFile2(emitOption, JSON.stringify(artifact, null, 2) + "\n", "utf8");
     outputJson({
       emitted: true,
@@ -22901,13 +23331,13 @@ async function readStdin() {
   return Buffer.concat(chunks).toString("utf8");
 }
 function readUrl(source) {
-  return new Promise((resolve5, reject) => {
+  return new Promise((resolve6, reject) => {
     const getter = source.startsWith("https://") ? httpsGet : httpGet;
     const request = getter(source, (response) => {
       const status = response.statusCode ?? 0;
       if (status >= 300 && status < 400 && response.headers.location) {
         response.resume();
-        readUrl(new URL(response.headers.location, source).toString()).then(resolve5, reject);
+        readUrl(new URL(response.headers.location, source).toString()).then(resolve6, reject);
         return;
       }
       if (status < 200 || status >= 300) {
@@ -22923,7 +23353,7 @@ function readUrl(source) {
       response.on("data", (chunk) => {
         chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
       });
-      response.on("end", () => resolve5(Buffer.concat(chunks).toString("utf8")));
+      response.on("end", () => resolve6(Buffer.concat(chunks).toString("utf8")));
     });
     request.on("error", reject);
   });
@@ -23163,7 +23593,7 @@ function permissionGrantReason(context, permissions) {
   return `${context} Requested: ${summary}${more}.`;
 }
 function execCapturedCommand(command) {
-  return new Promise((resolve5, reject) => {
+  return new Promise((resolve6, reject) => {
     const child = spawn(process.execPath, [process.argv[1], ...command.argv], {
       cwd: command.cwd,
       env: process.env,
@@ -23182,7 +23612,7 @@ function execCapturedCommand(command) {
       if (code3 && code3 !== 0) {
         process.exitCode = code3;
       }
-      resolve5();
+      resolve6();
     });
   });
 }
@@ -23211,8 +23641,8 @@ async function confirmPermissionRequest(permissions) {
     input: process.stdin,
     output: process.stderr
   });
-  const answer = await new Promise((resolve5) => {
-    rl.question("Approve local-key delegation? [y/N] ", resolve5);
+  const answer = await new Promise((resolve6) => {
+    rl.question("Approve local-key delegation? [y/N] ", resolve6);
   });
   rl.close();
   if (!/^y(es)?$/i.test(answer.trim())) {
@@ -24057,7 +24487,7 @@ init_errors();
 init_sdk();
 init_theme();
 import { readFile as readFile6, writeFile as writeFile3 } from "fs/promises";
-import { resolve } from "path";
+import { resolve as resolve2 } from "path";
 function registerDuckdbCommand(program) {
   const duckdb = program.command("duckdb").description("DuckDB database operations");
   duckdb.command("query <sql>").description("Run a SELECT query").option("--db <name>", "Database name", "default").option("--params <json>", "Bind parameters as JSON array").action(async (sqlStr, options, cmd) => {
@@ -24169,7 +24599,7 @@ ${rowCount} row${rowCount === 1 ? "" : "s"} returned`) + "\n");
       }
       const blob = result.data;
       const buffer = Buffer.from(await blob.arrayBuffer());
-      const outputPath = resolve(options.output);
+      const outputPath = resolve2(options.output);
       await writeFile3(outputPath, buffer);
       outputJson({
         file: outputPath,
@@ -24185,7 +24615,7 @@ ${rowCount} row${rowCount === 1 ? "" : "s"} returned`) + "\n");
       const globalOpts = cmd.optsWithGlobals();
       const ctx = await ProfileManager.resolveContext(globalOpts);
       const node = await ensureAuthenticated(ctx);
-      const filePath = resolve(file);
+      const filePath = resolve2(file);
       const bytes = new Uint8Array(await readFile6(filePath));
       const result = await withSpinner(
         "Importing database...",
@@ -24327,11 +24757,11 @@ init_storage();
 init_errors();
 init_constants();
 import { randomUUID as randomUUID2 } from "crypto";
-import { lstat as lstat3, open as open3, rename as rename2, rm as rm5 } from "fs/promises";
-import { basename as basename2, dirname as dirname4, join as join9 } from "path";
+import { lstat as lstat4, open as open4, rename as rename2, rm as rm5 } from "fs/promises";
+import { basename as basename2, dirname as dirname5, join as join9 } from "path";
 async function validatePrivateOutput(path, label = "output") {
   try {
-    const destination = await lstat3(path);
+    const destination = await lstat4(path);
     if (!destination.isFile()) {
       throw new CLIError("INVALID_ARGUMENT", `${label} "${path}" must be a regular file, not a symlink, directory, or device.`, ExitCode.USAGE_ERROR);
     }
@@ -24339,7 +24769,7 @@ async function validatePrivateOutput(path, label = "output") {
     if (error?.code !== "ENOENT") throw error;
   }
   try {
-    const parent = await lstat3(dirname4(path));
+    const parent = await lstat4(dirname5(path));
     if (!parent.isDirectory()) {
       throw new CLIError("INVALID_ARGUMENT", `${label} "${path}" requires an existing directory parent.`, ExitCode.USAGE_ERROR);
     }
@@ -24350,11 +24780,11 @@ async function validatePrivateOutput(path, label = "output") {
 }
 async function writePrivateOutput(path, value, label = "output") {
   await validatePrivateOutput(path, label);
-  const parentPath = dirname4(path);
+  const parentPath = dirname5(path);
   const temp = join9(parentPath, `.${basename2(path)}.${randomUUID2()}.tmp`);
   let created = false;
   try {
-    const handle = await open3(temp, "wx", PRIVATE_FILE_MODE);
+    const handle = await open4(temp, "wx", PRIVATE_FILE_MODE);
     created = true;
     try {
       await handle.writeFile(value);
@@ -24369,7 +24799,7 @@ async function writePrivateOutput(path, value, label = "output") {
     throw new CLIError("ERROR", `Could not write ${label.toLowerCase()} "${path}"${code3}.`, ExitCode.ERROR);
   }
   try {
-    const parent = await open3(parentPath, "r");
+    const parent = await open4(parentPath, "r");
     try {
       await parent.sync();
     } finally {
@@ -25009,8 +25439,8 @@ Examples:
     try {
       if (isInteractive()) {
         const rl = createInterface3({ input: process.stdin, output: process.stderr });
-        const answer = await new Promise((resolve5) => {
-          rl.question(`Delete profile "${name}"? This cannot be undone. [y/N] `, resolve5);
+        const answer = await new Promise((resolve6) => {
+          rl.question(`Delete profile "${name}"? This cannot be undone. [y/N] `, resolve6);
         });
         rl.close();
         if (answer.toLowerCase() !== "y") {
@@ -25045,22 +25475,19 @@ function parseOperatorType(raw) {
 }
 
 // src/commands/replica.ts
-init_sdk();
-init_replication_registry();
 import { CLI_NAME as CLI_NAME22 } from "@tinycloud/operations/cli-name";
 import { randomBytes as randomBytes6 } from "crypto";
-import { constants as fsConstants2 } from "fs";
-import { open as open4, readdir as readdir5, rename as rename3, stat as stat3, unlink as unlink2, readFile as readFile9, lstat as lstat4 } from "fs/promises";
-import { basename as basename3, dirname as dirname5, join as join10, resolve as resolve2 } from "path";
+import { constants as fsConstants3, lstatSync as lstatSync2 } from "fs";
+import { mkdir as mkdir4, open as open5, readdir as readdir5, rename as rename3, unlink as unlink2, lstat as lstat5 } from "fs/promises";
+import { basename as basename3, dirname as dirname6, join as join10, resolve as resolve3 } from "path";
 
 // src/lib/replication-report.ts
-var CLEAR_PENDING_WARNING = "Clearing pending writes stops pinning keys whose last write had an unknown outcome or never finished. If such a write did commit, or commits later, this device can serve the older value for that key until the next sync after the commit, as it would for a write from another device.";
 function percentile(values, fraction) {
   if (values.length === 0) return null;
   values.sort((left, right) => left - right);
   return values[Math.ceil(fraction * values.length) - 1] ?? values[values.length - 1];
 }
-function createReplicationReport(since, events, replicas, partitions, warning) {
+function createReplicationReport(since, events, partitions) {
   const reads = events.filter((event) => event.type === "replication.read");
   const replicaReads = reads.filter((event) => event.source === "replica");
   const sourceLatency = /* @__PURE__ */ new Map();
@@ -25103,9 +25530,9 @@ function createReplicationReport(since, events, replicas, partitions, warning) {
     syncs,
     writes,
     divergences,
-    replicas,
+    replicas: [],
     partitions,
-    ...warning === void 0 ? {} : { warning }
+    replicasUnavailable: true
   };
 }
 function renderReplicationReport(report) {
@@ -25118,34 +25545,30 @@ function renderReplicationReport(report) {
     `Writes: ${Object.entries(report.writes).map(([key, count]) => `${key}=${count}`).join(", ") || "none"}`,
     `Read source/reason: ${Object.entries(report.readsBySourceReason).map(([key, count]) => `${key}=${count}`).join(", ") || "none"}`,
     `Divergences: ${report.totals.divergences}; showing ${report.divergences.length} of ${report.totals.divergences}`,
-    `Replicas: ${report.replicas.length}`
+    "Replicas: unavailable (read-only report)"
   ];
   for (const divergence of report.divergences) {
     if (divergence.type === "replication.divergence") {
       lines.push(`  ${divergence.space} ${divergence.key}: ${divergence.kind} stalenessMs=${divergence.stalenessMs}`);
     }
   }
-  for (const replica of report.replicas) {
-    const grant = replica.grant ? ` grant=${replica.grant.cid} parent=${replica.grant.parentCid ?? "\u2014"} expires=${replica.grant.expiresAt ?? "\u2014"}` : " grant=missing";
-    lines.push(`  ${replica.prefix}: ${replica.state}; pending in_flight=${replica.pending.inFlight} committed=${replica.pending.committed} ambiguous=${replica.pending.ambiguous}${grant}`);
-    for (const pinned of replica.pinned) lines.push(`    pinned ${pinned.key} ${pinned.state} ${pinned.op} since=${pinned.since} code=${pinned.code ?? "\u2014"} likelyOrphaned=${pinned.likelyOrphaned}`);
-  }
   for (const partition of report.partitions) {
     lines.push(`Partition ${partition.idHash}: host=${partition.host ?? "unknown"} space=${partition.space ?? "unknown"} pinned=${partition.pinned}`);
   }
   if (report.partitions.some((partition) => partition.pinned > 100)) lines.push("Warning: a partition holds more than 100 pinned records.");
-  if (report.warning) lines.push(`Warning: ${report.warning}`);
   return lines.join("\n");
 }
 
 // src/commands/replica.ts
 init_dist3();
 import {
+  ProfileSymlinkError as ProfileSymlinkError3,
   ProfileDeletedError as ProfileDeletedError3,
-  profilePath as profilePath4,
+  profilePath as profilePath5,
   readAdditionalDelegations as readAdditionalDelegations2,
   readSession as readSession2,
-  withProfileLock as withProfileLock5
+  withProfileLock as withProfileLock5,
+  withPinnedProfileDirectory as withPinnedProfileDirectory3
 } from "@tinycloud/operations/state";
 import { ownerSessionLacksProof as ownerSessionLacksProof4 } from "@tinycloud/operations/profile";
 init_profiles();
@@ -25201,9 +25624,9 @@ function toCliError(error) {
   const hint = error.code === ReplicaErrorCode.GRANT_MISSING && typeof error.detail?.hint === "string" ? error.detail.hint : void 0;
   return new CLIError(error.code, error.message, EXIT_BY_CODE[error.code], hint === void 0 ? void 0 : { hint });
 }
-async function run(action) {
+async function run(action, needsSqlite = true) {
   try {
-    await loadSqlite();
+    if (needsSqlite) await loadSqlite();
     await action();
   } catch (error) {
     return handleError(toCliError(error));
@@ -25216,26 +25639,92 @@ async function profileName(cmd) {
   const config = await ProfileManager.getConfig().catch(() => void 0);
   return config?.defaultProfile ?? DEFAULT_PROFILE;
 }
-function replicasRoot(profile) {
-  return join10(profilePath4(profile), "replicas");
-}
 async function replicaNames(profile) {
-  const names = [];
-  for (const name of await readdir5(replicasRoot(profile)).catch(() => [])) {
-    if (!NAME.test(name)) continue;
-    const exists = await stat3(join10(replicasRoot(profile), name, "replica.db")).then(
-      () => true,
-      () => false
-    );
-    if (exists) names.push(name);
-  }
-  return names.sort();
+  return await withReplicaRoot(profile, async (root) => {
+    const names = [];
+    for (const entry of await readdir5(root, { withFileTypes: true })) {
+      if (entry.isSymbolicLink()) throw localPathChanged(profile);
+      if (!NAME.test(entry.name) || !entry.isDirectory()) continue;
+      const present = await withPinnedLocalDirectory(profile, root, entry.name, async (directory) => {
+        const database = await lstat5(join10(directory, "replica.db"), { bigint: true }).catch((error) => {
+          if (error.code === "ENOENT") return null;
+          throw error;
+        });
+        if (database && (database.isSymbolicLink() || !database.isFile())) throw localPathChanged(profile);
+        return database !== null;
+      });
+      if (present === null) throw localPathChanged(profile);
+      if (present) names.push(entry.name);
+    }
+    return names.sort();
+  }) ?? [];
 }
 function assertName(name) {
   if (!NAME.test(name)) {
     throw new CLIError("USAGE_ERROR", `Replica names use letters, digits, '.', '_' and '-' (got ${JSON.stringify(name)}).`, ExitCode.USAGE_ERROR);
   }
   return name;
+}
+async function withReplicaRoot(profile, action, create4 = false) {
+  const profileDirectory = profilePath5(profile);
+  const readRoot = async (directory, recheckProfile) => {
+    if (create4) {
+      if (recheckProfile) await recheckProfile();
+      await mkdir4(join10(directory, "replicas"), { mode: 448 }).catch((error) => {
+        if (error.code !== "EEXIST") throw error;
+      });
+    }
+    return withPinnedLocalDirectory(
+      profile,
+      directory,
+      "replicas",
+      (root, _named, _identity, recheckRoot) => action(root, recheckRoot, recheckProfile)
+    );
+  };
+  if (process.platform === "linux") return readRoot(profileDirectory);
+  const checked = await withPinnedLocalDirectory(
+    profile,
+    dirname6(profileDirectory),
+    basename3(profileDirectory),
+    (directory, _named, _identity, recheckProfile) => readRoot(directory, recheckProfile)
+  );
+  if (checked === null) throw localPathChanged(profile);
+  return checked;
+}
+async function withReplicaDirectory(profile, name, action, create4 = false) {
+  assertName(name);
+  const result = await withReplicaRoot(profile, async (root, recheckRoot, recheckProfile) => {
+    if (create4) {
+      await recheckRoot();
+      await mkdir4(join10(root, name), { mode: 448 }).catch((error) => {
+        if (error.code !== "EEXIST") throw error;
+      });
+    }
+    const opened = await withPinnedLocalDirectory(
+      profile,
+      root,
+      name,
+      async (_directory, path, expectedDirectory, recheckChild) => {
+        await recheckRoot();
+        await recheckChild();
+        const database = await lstat5(join10(_directory, "replica.db"), { bigint: true }).catch((error) => {
+          if (error.code === "ENOENT") return null;
+          throw error;
+        });
+        if (database && (database.isSymbolicLink() || !database.isFile())) throw localPathChanged(profile);
+        if (recheckProfile) {
+          await recheckProfile();
+          await recheckRoot();
+          await recheckChild();
+        }
+        return action(path, expectedDirectory);
+      }
+    );
+    if (opened === null) throw new ReplicaError(ReplicaErrorCode.NOT_FOUND, `Replica "${name}" was not found.`);
+    return opened;
+  }, create4);
+  if (result === null) throw new ReplicaError(ReplicaErrorCode.NOT_FOUND, `Profile "${profile}" has no replicas.`);
+  return result;
 }
 async function existingReplicaName(profile, option) {
   if (option !== void 0) return assertName(option);
@@ -25258,16 +25747,36 @@ function profileGuard(profile) {
     }
   };
 }
-async function openReplica(profile, name) {
-  return SqliteReplicaStore.open(join10(replicasRoot(profile), name), { create: false, guard: profileGuard(profile) });
-}
-async function createReplica(profile, config) {
-  const guard = profileGuard(profile);
-  return guard(async () => {
-    const store = await SqliteReplicaStore.open(join10(replicasRoot(profile), config.name), { create: true, guard });
-    if (await store.open() === null) await store.init(config);
-    return store;
+async function withOpenReplica(profile, name, action, guard = profileGuard(profile)) {
+  return withReplicaDirectory(profile, name, async (path, expectedDirectory) => {
+    const store = await SqliteReplicaStore.open(path, { create: false, guard, expectedDirectory });
+    try {
+      return await action(store);
+    } finally {
+      await store.close();
+    }
   });
+}
+function assertLegacyLogoutClear(profile) {
+  try {
+    lstatSync2(join10(profilePath5(profile), "replica-logout-pending.json"));
+  } catch (error) {
+    if (error?.code === "ENOENT") return;
+  }
+  throw new CLIError(
+    "REPLICA_GATED",
+    "A logout is pending or its state cannot be checked for this profile.",
+    ExitCode.PERMISSION_DENIED
+  );
+}
+async function withLegacyReplicaRead(profile, action) {
+  await withProfileLock5(profile, async () => {
+    const checkDelivery = async () => {
+      assertLegacyLogoutClear(profile);
+    };
+    await checkDelivery();
+    await action(checkDelivery);
+  }, { requireProfile: true });
 }
 async function storedGrants(profile) {
   const authorizations = [];
@@ -25398,9 +25907,9 @@ function describeStatus(status) {
   ].join("\n");
 }
 async function writeFileAtomic(path, bytes) {
-  const target = resolve2(path);
-  const temp = join10(dirname5(target), `.${basename3(target)}.${randomBytes6(6).toString("hex")}.tmp`);
-  const handle = await open4(temp, fsConstants2.O_CREAT | fsConstants2.O_EXCL | fsConstants2.O_WRONLY, 384);
+  const target = resolve3(path);
+  const temp = join10(dirname6(target), `.${basename3(target)}.${randomBytes6(6).toString("hex")}.tmp`);
+  const handle = await open5(temp, fsConstants3.O_CREAT | fsConstants3.O_EXCL | fsConstants3.O_WRONLY, 384);
   try {
     await handle.writeFile(bytes);
     await handle.sync();
@@ -25425,14 +25934,86 @@ function replicaSecretsWarning(space, prefix, secretsAllowed) {
   if (!secretsAllowed || !requiresSecretsOptIn(space, prefix)) return void 0;
   return `This replica stores the ciphertext of every secret under "${prefix}". A tinycloud.encryption/decrypt grant covers the whole encryption network, not one secret (TC-755), so whoever holds decrypt can open every replicated secret.`;
 }
-async function readReplicationEvents(profile, sinceMs) {
-  const root = join10(profilePath4(profile), "replication");
+function localFileId(value) {
+  if (typeof value === "bigint") return value >= 0n ? value : null;
+  return Number.isSafeInteger(value) && value >= 0 ? BigInt(value) : null;
+}
+function sameLocalEntry(left, right) {
+  const dev = localFileId(left.dev);
+  const ino = localFileId(left.ino);
+  return dev !== null && ino !== null && dev === localFileId(right.dev) && ino === localFileId(right.ino);
+}
+function localPathChanged(profile) {
+  return new ProfileSymlinkError3(profile, "its local replica files contain a symlink or changed while reading");
+}
+async function assertNamedLocalEntry(profile, path, expected, kind) {
+  const current = await lstat5(path, { bigint: true }).catch(() => null);
+  if (!current || current.isSymbolicLink() || (kind === "directory" ? !current.isDirectory() : !current.isFile()) || !sameLocalEntry(expected, current)) throw localPathChanged(profile);
+}
+async function withPinnedLocalDirectory(profile, parent, name, action) {
+  const path = join10(parent, name);
+  const before = await lstat5(path, { bigint: true }).catch((error) => {
+    if (error.code === "ENOENT") return null;
+    throw error;
+  });
+  if (!before) return null;
+  if (before.isSymbolicLink() || !before.isDirectory()) throw localPathChanged(profile);
+  const handle = await open5(path, fsConstants3.O_RDONLY | fsConstants3.O_DIRECTORY | fsConstants3.O_NOFOLLOW).catch((error) => {
+    if (error.code === "ELOOP" || error.code === "ENOTDIR" || error.code === "ENOENT") throw localPathChanged(profile);
+    throw error;
+  });
+  try {
+    const opened = await handle.stat({ bigint: true });
+    if (!opened.isDirectory() || !sameLocalEntry(before, opened)) throw localPathChanged(profile);
+    const dev = localFileId(opened.dev);
+    const ino = localFileId(opened.ino);
+    if (dev === null || ino === null || dev > BigInt(Number.MAX_SAFE_INTEGER) || ino > BigInt(Number.MAX_SAFE_INTEGER)) {
+      throw localPathChanged(profile);
+    }
+    const pinned = process.platform === "linux" ? `/proc/self/fd/${handle.fd}` : path;
+    const recheck = () => assertNamedLocalEntry(profile, path, opened, "directory");
+    const result = await action(pinned, path, { dev: Number(dev), ino: Number(ino) }, recheck);
+    await recheck();
+    return result;
+  } finally {
+    await handle.close();
+  }
+}
+async function readReportFile(profile, parent, name) {
+  const path = join10(parent, name);
+  const before = await lstat5(path, { bigint: true }).catch((error) => {
+    if (error.code === "ENOENT") return null;
+    throw error;
+  });
+  if (!before) return null;
+  if (before.isSymbolicLink() || !before.isFile()) throw localPathChanged(profile);
+  const handle = await open5(path, fsConstants3.O_RDONLY | fsConstants3.O_NOFOLLOW).catch((error) => {
+    if (error.code === "ELOOP" || error.code === "ENOTDIR" || error.code === "ENOENT") throw localPathChanged(profile);
+    throw error;
+  });
+  try {
+    const opened = await handle.stat({ bigint: true });
+    if (!opened.isFile() || !sameLocalEntry(before, opened)) throw localPathChanged(profile);
+    const data = await handle.readFile("utf8");
+    await assertNamedLocalEntry(profile, path, opened, "file");
+    return data;
+  } finally {
+    await handle.close();
+  }
+}
+async function readReportJson(profile, parent, name) {
+  const data = await readReportFile(profile, parent, name);
+  if (data === null) return null;
+  try {
+    return JSON.parse(data);
+  } catch {
+    return null;
+  }
+}
+async function readReplicationEvents(profile, root, sinceMs) {
   const events = [];
   for (const name of ["events.jsonl.1", "events.jsonl"]) {
-    const data = await readFile9(join10(root, name), "utf8").catch((error) => {
-      if (error.code === "ENOENT") return "";
-      throw error;
-    });
+    const data = await readReportFile(profile, root, name) ?? "";
     for (const line of data.split("\n")) {
       if (!line) continue;
       try {
@@ -25444,27 +26025,26 @@ async function readReplicationEvents(profile, sinceMs) {
   }
   return events;
 }
-async function replicationPartitions(profile) {
-  const root = join10(profilePath4(profile), "replication");
-  const entries = await readdir5(root, { withFileTypes: true }).catch((error) => {
-    if (error.code === "ENOENT") return [];
-    throw error;
-  });
+async function replicationPartitions(profile, root) {
+  const entries = await readdir5(root, { withFileTypes: true });
   const partitions = [];
   for (const entry of entries) {
-    if (!entry.isDirectory() || !/^[a-z2-7]{26}$/.test(entry.name)) continue;
-    const directory = join10(root, entry.name);
-    const info = await lstat4(directory);
-    if (info.isSymbolicLink() || !info.isDirectory()) continue;
-    const identity = await readFile9(join10(directory, "identity.json"), "utf8").then((value) => JSON.parse(value)).catch(() => null);
-    const pending = await readFile9(join10(directory, "pending.json"), "utf8").then((value) => JSON.parse(value)).catch(() => null);
-    const pinned = pending?.records?.filter((record2) => record2.state === "in_flight" || record2.state === "ambiguous").length ?? 0;
-    partitions.push({
-      idHash: entry.name,
-      host: typeof identity?.host === "string" ? identity.host : null,
-      space: typeof identity?.space === "string" ? identity.space : null,
-      pinned
+    if (!/^[a-z2-7]{26}$/.test(entry.name)) continue;
+    if (entry.isSymbolicLink()) throw localPathChanged(profile);
+    if (!entry.isDirectory()) continue;
+    const partition = await withPinnedLocalDirectory(profile, root, entry.name, async (pinned) => {
+      const identity = await readReportJson(profile, pinned, "identity.json");
+      const pending = await readReportJson(profile, pinned, "pending.json");
+      const pinnedCount = pending?.records?.filter((record2) => record2.state === "in_flight" || record2.state === "ambiguous").length ?? 0;
+      return {
+        idHash: entry.name,
+        host: typeof identity?.host === "string" ? identity.host : null,
+        space: typeof identity?.space === "string" ? identity.space : null,
+        pinned: pinnedCount
+      };
     });
+    if (!partition) throw localPathChanged(profile);
+    partitions.push(partition);
   }
   return partitions.sort((left, right) => left.idHash.localeCompare(right.idHash));
 }
@@ -25483,52 +26063,41 @@ SECRETS_OPT_IN_REQUIRED; 3 grant missing; 4 key absent, deleted, content missing
 or coverage incomplete; 5 grant expired, revoked or not yet valid; 6 network;
 7 node, protocol or integrity error; 10 storage full.`
   );
-  replica.command("report").description("Report replication reads, syncs, pending writes and local identity partitions").option("--since <duration>", "Include events from the last duration (default: 24h)", "24h").option("--purge", "Purge configured replicas for the current identity").option("--clear-pending", "Clear ambiguous and likely orphaned in-flight writes").action(
+  replica.command("report").description("Read-only report of persisted replication events and identity partitions").option("--since <duration>", "Include events from the last duration (default: 24h)", "24h").option("--purge", "Refused: named replica reset --replica <name> --purge only; flag-owned purge unavailable (TC-1309)").option("--clear-pending", "Refused: no equivalent pending-clear command yet (TC-1309)").action(
     (options, cmd) => run(async () => {
-      const globals = cmd.optsWithGlobals();
-      const context = await ProfileManager.resolveContext(globals);
-      const node = context.replication ? await ensureAuthenticated(context) : void 0;
       const profile = await profileName(cmd);
+      if (options.purge) {
+        throw new CLIError("REPORT_READ_ONLY", `Replica report is read-only. To remove a named local replica, run ${CLI_NAME22} replica reset --replica <name> --purge; flag-owned purge has no equivalent yet (TC-1309).`, ExitCode.USAGE_ERROR);
+      }
+      if (options.clearPending) {
+        throw new CLIError("REPORT_READ_ONLY", "Clearing pending replica writes has no equivalent yet; see TC-1309 for a safe replacement command.", ExitCode.USAGE_ERROR);
+      }
       let durationMs;
       try {
         durationMs = parseDuration(options.since);
       } catch (error) {
         throw new CLIError("USAGE_ERROR", error instanceof Error ? error.message : String(error), ExitCode.USAGE_ERROR);
       }
-      const control = node?.replication ?? replicationForProfile(profile);
-      let cleared;
-      let purged;
-      let warning;
-      if (options.clearPending || options.purge) {
-        if (!control) throw new CLIError("REPLICATION_UNAVAILABLE", "No replication runtime is registered for this profile.", ExitCode.ERROR);
-        warning = CLEAR_PENDING_WARNING;
-        process.stderr.write(`Warning: ${warning}
+      const report = await withPinnedProfileDirectory3(profile, async (directory) => {
+        if (directory === null) throw new CLIError("PROFILE_NOT_FOUND", `Profile "${profile}" does not exist.`, ExitCode.ERROR);
+        const readPersistedReport = async (root) => {
+          await replicaNames(profile);
+          const sinceMs = Date.now() - durationMs;
+          const persisted = await withPinnedLocalDirectory(profile, root, "replication", async (directory2) => ({
+            events: await readReplicationEvents(profile, directory2, sinceMs),
+            partitions: await replicationPartitions(profile, directory2)
+          }));
+          return createReplicationReport(options.since, persisted?.events ?? [], persisted?.partitions ?? []);
+        };
+        if (process.platform === "linux") return readPersistedReport(directory);
+        const checked = await withPinnedLocalDirectory(profile, dirname6(directory), basename3(directory), readPersistedReport);
+        if (checked === null) throw localPathChanged(profile);
+        return checked;
+      });
+      if (shouldOutputJson()) outputJson(report);
+      else process.stdout.write(`${renderReplicationReport(report)}
 `);
-        if (options.clearPending) cleared = await control.clearPending();
-        if (options.purge) purged = await control.purge();
-      }
-      const sinceMs = Date.now() - durationMs;
-      const [events, partitions, replicas] = await Promise.all([
-        readReplicationEvents(profile, sinceMs),
-        replicationPartitions(profile),
-        node?.replication ? node.replication.status() : control ? control.status() : Promise.resolve([])
-      ]);
-      const report = createReplicationReport(options.since, events, replicas, partitions, warning);
-      if (shouldOutputJson()) {
-        outputJson({
-          ...report,
-          ...cleared === void 0 ? {} : { cleared },
-          ...purged === void 0 ? {} : { purged }
-        });
-      } else {
-        process.stdout.write(`${renderReplicationReport(report)}
-`);
-        if (cleared !== void 0) process.stdout.write(`Cleared ${cleared} pending write record(s).
-`);
-        if (purged !== void 0) process.stdout.write(`Purge: ${JSON.stringify(purged)}
-`);
-      }
-    })
+    }, false)
   );
   replica.command("sync").description("Create or update a replica from its source host").option("--replica <name>", "Replica name (default: the profile's only replica, or one named after the prefix)").option("--space <id|name>", "Space to replicate (first sync; default: the space of the sync grant)").option("--prefix <prefix>", "KV prefix to replicate, e.g. notes/ (first sync)").option("--retention-grant <cid>", "CID of a tinycloud.kv/retain grant: keep local reads after the sync grant expires").option("--limit <n>", "Feed page size (1-1000)", (value) => Number.parseInt(value, 10)).option("--allow-secrets", "Opt in to copying ciphertext from a secrets space, vault prefix, or whole space").action(
     (options, cmd) => run(async () => {
@@ -25540,87 +26109,98 @@ or coverage incomplete; 5 grant expired, revoked or not yet valid; 6 network;
           throw new CLIError("INVALID_REPLICATION_PREFIX", error instanceof Error ? error.message : String(error), ExitCode.USAGE_ERROR);
         }
       }
-      const globals = cmd.optsWithGlobals();
-      const config = await ProfileManager.getProfile(profile);
-      const deviceDid = config.sessionDid ?? config.did;
-      const jwk = await ProfileManager.getKey(profile);
-      if (jwk === null) {
-        throw new CLIError("AUTH_REQUIRED", `Profile "${profile}" has no device key.`, ExitCode.AUTH_REQUIRED);
-      }
-      if (options.limit !== void 0 && (!Number.isInteger(options.limit) || options.limit < 1 || options.limit > 1e3)) {
-        throw new CLIError("USAGE_ERROR", "--limit must be an integer from 1 through 1000.", ExitCode.USAGE_ERROR);
-      }
-      const existing = await replicaNames(profile);
-      const name = options.replica !== void 0 ? assertName(options.replica) : options.prefix !== void 0 ? assertName(options.prefix.replace(/\/+$/, "").replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^[^A-Za-z0-9]+/, "") || "default") : await existingReplicaName(profile, void 0);
-      const grants = await storedGrants(profile);
-      let store;
-      if (existing.includes(name)) {
-        store = await openReplica(profile, name);
-        const state2 = await store.open();
-        const differs = syncOptionsDiffer(state2.config, {
-          ...options.space === void 0 ? {} : { space: options.space },
-          ...options.prefix === void 0 ? {} : { prefix: options.prefix },
-          ...globals.host === void 0 ? {} : { host: globals.host }
-        });
-        if (differs !== void 0) {
-          await store.close();
-          throw new ReplicaError(
-            ReplicaErrorCode.CONFIG_MISMATCH,
-            `Replica ${name} already follows ${differs}. Use another --replica name, or ${CLI_NAME22} replica reset --replica ${name} --purge first.`
-          );
+      await withPinnedProfileDirectory3(profile, async (directory) => {
+        if (directory === null) throw new CLIError("PROFILE_NOT_FOUND", `Profile "${profile}" does not exist.`, ExitCode.ERROR);
+        const globals = cmd.optsWithGlobals();
+        const config = await ProfileManager.getProfile(profile);
+        const deviceDid = config.sessionDid ?? config.did;
+        const jwk = await ProfileManager.getKey(profile);
+        if (jwk === null) {
+          throw new CLIError("AUTH_REQUIRED", `Profile "${profile}" has no device key.`, ExitCode.AUTH_REQUIRED);
         }
-      } else {
-        const prefix = options.prefix;
-        if (prefix === void 0) {
-          throw new CLIError("USAGE_ERROR", "The first sync of a replica needs --prefix (and a device grant covering it).", ExitCode.USAGE_ERROR);
+        if (options.limit !== void 0 && (!Number.isInteger(options.limit) || options.limit < 1 || options.limit > 1e3)) {
+          throw new CLIError("USAGE_ERROR", "--limit must be an integer from 1 through 1000.", ExitCode.USAGE_ERROR);
         }
-        const space = resolveSpace(options.space, prefix, grants);
-        if (requiresSecretsOptIn(space, prefix) && options.allowSecrets !== true) {
-          throw new ReplicaError(
-            ReplicaErrorCode.SECRETS_OPT_IN_REQUIRED,
-            `Replicating ${space}/kv/${prefix} copies encrypted secret material to this disk; pass --allow-secrets to opt in.`
-          );
-        }
-        const host = (globals.host ?? process.env.TC_HOST ?? config.host)?.replace(/\/+$/, "");
-        if (!host) throw new CLIError("USAGE_ERROR", "Pass --host: the profile has no host to pin.", ExitCode.USAGE_ERROR);
-        chooseGrant(grants, deviceDid, space, prefix);
-        store = await createReplica(profile, {
-          name,
-          replicaId: randomBytes6(16).toString("hex"),
-          host,
-          space,
-          prefix,
-          deviceDid,
-          allowSecrets: options.allowSecrets === true,
-          localReadPolicy: "whileGrantValid",
-          retentionGrantCid: null
-        });
-      }
-      try {
-        const state2 = await store.open();
-        const { space, prefix, host } = state2.config;
-        if (requiresSecretsOptIn(space, prefix) && !state2.config.allowSecrets && options.allowSecrets !== true) {
-          throw new ReplicaError(ReplicaErrorCode.SECRETS_OPT_IN_REQUIRED, `Replicating ${space}/kv/${prefix} needs --allow-secrets.`);
-        }
-        let grant;
-        try {
-          grant = chooseGrant(grants, state2.config.deviceDid, space, prefix);
-        } catch (error) {
-          if (!isReplicaError(error, ReplicaErrorCode.GRANT_MISSING) || (state2.grant ?? state2.pendingGrant) === null) throw error;
-        }
-        if (grant !== void 0) await store.installGrant(grant);
-        if (options.retentionGrant !== void 0 && options.retentionGrant !== state2.config.retentionGrantCid) {
-          await store.setRetentionGrant(options.retentionGrant === "" ? null : options.retentionGrant);
-        }
-        const current = await store.open();
-        const transportFor = await grantTransports({ host, space, deviceDid: current.config.deviceDid, jwk });
-        const warning = replicaSecretsWarning(space, prefix, options.allowSecrets === true || state2.config.allowSecrets);
+        const existing = await replicaNames(profile);
+        const name = options.replica !== void 0 ? assertName(options.replica) : options.prefix !== void 0 ? assertName(options.prefix.replace(/\/+$/, "").replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^[^A-Za-z0-9]+/, "") || "default") : await existingReplicaName(profile, void 0);
+        const grants = await storedGrants(profile);
+        const initialConfig = existing.includes(name) ? null : (() => {
+          const prefix = options.prefix;
+          if (prefix === void 0) {
+            throw new CLIError("USAGE_ERROR", "The first sync of a replica needs --prefix (and a device grant covering it).", ExitCode.USAGE_ERROR);
+          }
+          const space = resolveSpace(options.space, prefix, grants);
+          if (requiresSecretsOptIn(space, prefix) && options.allowSecrets !== true) {
+            throw new ReplicaError(
+              ReplicaErrorCode.SECRETS_OPT_IN_REQUIRED,
+              `Replicating ${space}/kv/${prefix} copies encrypted secret material to this disk; pass --allow-secrets to opt in.`
+            );
+          }
+          const host = (globals.host ?? process.env.TC_HOST ?? config.host)?.replace(/\/+$/, "");
+          if (!host) throw new CLIError("USAGE_ERROR", "Pass --host: the profile has no host to pin.", ExitCode.USAGE_ERROR);
+          chooseGrant(grants, deviceDid, space, prefix);
+          return {
+            name,
+            replicaId: randomBytes6(16).toString("hex"),
+            host,
+            space,
+            prefix,
+            deviceDid,
+            allowSecrets: options.allowSecrets === true,
+            localReadPolicy: "whileGrantValid",
+            retentionGrantCid: null
+          };
+        })();
+        const { replica: replica2, report, status, warning } = await withReplicaDirectory(profile, name, async (path, expectedDirectory) => {
+          const store = await SqliteReplicaStore.open(path, {
+            create: initialConfig !== null,
+            guard: profileGuard(profile),
+            expectedDirectory
+          });
+          try {
+            if (initialConfig !== null && await store.open() === null) await store.init(initialConfig);
+            const state2 = await store.open();
+            if (initialConfig === null) {
+              const differs = syncOptionsDiffer(state2.config, {
+                ...options.space === void 0 ? {} : { space: options.space },
+                ...options.prefix === void 0 ? {} : { prefix: options.prefix },
+                ...globals.host === void 0 ? {} : { host: globals.host }
+              });
+              if (differs !== void 0) {
+                throw new ReplicaError(
+                  ReplicaErrorCode.CONFIG_MISMATCH,
+                  `Replica ${name} already follows ${differs}. Use another --replica name, or ${CLI_NAME22} replica reset --replica ${name} --purge first.`
+                );
+              }
+            }
+            const { space, prefix, host } = state2.config;
+            if (requiresSecretsOptIn(space, prefix) && !state2.config.allowSecrets && options.allowSecrets !== true) {
+              throw new ReplicaError(ReplicaErrorCode.SECRETS_OPT_IN_REQUIRED, `Replicating ${space}/kv/${prefix} needs --allow-secrets.`);
+            }
+            let grant;
+            try {
+              grant = chooseGrant(grants, state2.config.deviceDid, space, prefix);
+            } catch (error) {
+              if (!isReplicaError(error, ReplicaErrorCode.GRANT_MISSING) || (state2.grant ?? state2.pendingGrant) === null) throw error;
+            }
+            if (grant !== void 0) await store.installGrant(grant);
+            if (options.retentionGrant !== void 0 && options.retentionGrant !== state2.config.retentionGrantCid) {
+              await store.setRetentionGrant(options.retentionGrant === "" ? null : options.retentionGrant);
+            }
+            const current = await store.open();
+            const transportFor = await grantTransports({ host, space, deviceDid: current.config.deviceDid, jwk });
+            const warning2 = replicaSecretsWarning(space, prefix, options.allowSecrets === true || state2.config.allowSecrets);
+            const report2 = await new Replica({ store, transportFor }).sync(options.limit === void 0 ? {} : { limit: options.limit });
+            const status2 = await store.status();
+            return { replica: current.config.name, report: report2, status: status2, warning: warning2 };
+          } finally {
+            await store.close();
+          }
+        }, initialConfig !== null);
         if (warning !== void 0) process.stderr.write(`Warning: ${warning}
 `);
-        const report = await new Replica({ store, transportFor }).sync(options.limit === void 0 ? {} : { limit: options.limit });
-        const status = await store.status();
         if (shouldOutputJson()) {
-          outputJson({ replica: current.config.name, sync: report, status, ...warning === void 0 ? {} : { warning } });
+          outputJson({ replica: replica2, sync: report, status, ...warning === void 0 ? {} : { warning } });
         } else {
           process.stdout.write(
             `${theme.success("\u2713")} Synced ${report.changes} change(s) in ${report.pages} page(s), fetched ${report.fetched} value(s).
@@ -25628,40 +26208,39 @@ ${describeStatus(status)}
 `
           );
         }
-      } finally {
-        await store.close();
-      }
+      });
     })
   );
   replica.command("get <key>").description("Read a key from the local replica (never touches the network)").option("--replica <name>", "Replica name").option("--raw", "Write the value's bytes to stdout").option("-o, --output <file>", "Write the value to a file (atomically, mode 0600)").option("--no-verify", "Skip re-hashing the stored content").action(
     (key, options, cmd) => run(async () => {
       const profile = await profileName(cmd);
-      const store = await openReplica(profile, await existingReplicaName(profile, options.replica));
-      let result;
-      try {
-        result = await new Replica({ store }).get(key, { verify: options.verify !== false });
-      } finally {
-        await store.close();
-      }
-      if (result.status !== "present") {
-        const failure = READ_FAILURE[result.status];
-        throw new CLIError(failure.code, `Key ${JSON.stringify(key)} ${failure.what}.`, failure.exit);
-      }
-      if (options.output) {
-        await writeFileAtomic(options.output, result.value);
-        outputJson({ key, written: options.output, etag: result.etag, meta: result.meta });
-        return;
-      }
-      if (options.raw) {
+      await withLegacyReplicaRead(profile, async (checkDelivery) => {
+        const result = await withOpenReplica(
+          profile,
+          await existingReplicaName(profile, options.replica),
+          (store) => new Replica({ store }).get(key, { verify: options.verify !== false })
+        );
+        await checkDelivery();
+        if (result.status !== "present") {
+          const failure = READ_FAILURE[result.status];
+          throw new CLIError(failure.code, `Key ${JSON.stringify(key)} ${failure.what}.`, failure.exit);
+        }
+        if (options.output) {
+          await writeFileAtomic(options.output, result.value);
+          outputJson({ key, written: options.output, etag: result.etag, meta: result.meta });
+          return;
+        }
+        if (options.raw) {
+          process.stdout.write(result.value);
+          return;
+        }
+        if (shouldOutputJson()) {
+          outputJson({ key, status: result.status, ...jsonValue(result.value), etag: result.etag, metadata: result.metadata, meta: result.meta });
+          return;
+        }
         process.stdout.write(result.value);
-        return;
-      }
-      if (shouldOutputJson()) {
-        outputJson({ key, status: result.status, ...jsonValue(result.value), etag: result.etag, metadata: result.metadata, meta: result.meta });
-        return;
-      }
-      process.stdout.write(result.value);
-      process.stdout.write("\n");
+        process.stdout.write("\n");
+      });
     })
   );
   replica.command("list [prefix]").description("List live keys in the local replica (never touches the network)").option("--replica <name>", "Replica name").option("--after <key>", "Start after this key").option("--limit <n>", "Maximum keys", (value) => Number.parseInt(value, 10)).action(
@@ -25670,13 +26249,17 @@ ${describeStatus(status)}
         throw new CLIError("USAGE_ERROR", "--limit must be a positive integer.", ExitCode.USAGE_ERROR);
       }
       const profile = await profileName(cmd);
-      const store = await openReplica(profile, await existingReplicaName(profile, options.replica));
-      try {
-        const { entries, meta } = await new Replica({ store }).list({
-          ...prefix === void 0 ? {} : { prefix },
-          ...options.after === void 0 ? {} : { after: options.after },
-          ...options.limit === void 0 ? {} : { limit: options.limit }
-        });
+      await withLegacyReplicaRead(profile, async (checkDelivery) => {
+        const { entries, meta } = await withOpenReplica(
+          profile,
+          await existingReplicaName(profile, options.replica),
+          (store) => new Replica({ store }).list({
+            ...prefix === void 0 ? {} : { prefix },
+            ...options.after === void 0 ? {} : { after: options.after },
+            ...options.limit === void 0 ? {} : { limit: options.limit }
+          })
+        );
+        await checkDelivery();
         if (shouldOutputJson()) {
           outputJson({ keys: entries, count: entries.length, prefix: prefix ?? null, meta });
         } else if (entries.length === 0) {
@@ -25689,50 +26272,57 @@ ${describeStatus(status)}
             ) + "\n"
           );
         }
-      } finally {
-        await store.close();
-      }
+      });
     })
   );
   replica.command("status").description("Show one replica's sync state, authority and counts, or all of them").option("--replica <name>", "Replica name").action(
     (options, cmd) => run(async () => {
       const profile = await profileName(cmd);
-      const names = options.replica === void 0 ? await replicaNames(profile) : [assertName(options.replica)];
-      const statuses = [];
-      for (const name of names) {
-        const store = await openReplica(profile, name);
-        try {
-          statuses.push(await new Replica({ store }).status());
-        } finally {
-          await store.close();
+      await withLegacyReplicaRead(profile, async (checkDelivery) => {
+        const names = options.replica === void 0 ? await replicaNames(profile) : [assertName(options.replica)];
+        const statuses = [];
+        for (const name of names) {
+          statuses.push(await withOpenReplica(profile, name, (store) => new Replica({ store }).status()));
         }
-      }
-      if (shouldOutputJson()) {
-        outputJson(options.replica === void 0 ? { replicas: statuses } : statuses[0]);
-      } else if (statuses.length === 0) {
-        process.stdout.write(theme.muted(`Profile "${profile}" has no replicas.`) + "\n");
-      } else {
-        process.stdout.write(statuses.map(describeStatus).join("\n\n") + "\n");
-      }
+        await checkDelivery();
+        if (shouldOutputJson()) {
+          outputJson(options.replica === void 0 ? { replicas: statuses } : statuses[0]);
+        } else if (statuses.length === 0) {
+          process.stdout.write(theme.muted(`Profile "${profile}" has no replicas.`) + "\n");
+        } else {
+          process.stdout.write(statuses.map(describeStatus).join("\n\n") + "\n");
+        }
+      });
     })
   );
   replica.command("reset").description("Clear a replica's entries, content and cursor (keeps its configuration and grant)").option("--replica <name>", "Replica name").option("--purge", "Remove the replica entirely").action(
     (options, cmd) => run(async () => {
       const profile = await profileName(cmd);
-      const name = await existingReplicaName(profile, options.replica);
-      const store = await openReplica(profile, name);
-      try {
+      await withProfileLock5(profile, async () => {
+        const name = await existingReplicaName(profile, options.replica);
         if (options.purge) {
-          const lease = await store.acquireSyncLease(6e4);
-          if (lease === null) throw new ReplicaError(ReplicaErrorCode.BUSY, "Another process is syncing this replica.");
-          await store.destroy(lease);
+          await withPinnedReplicaForReset(profile, name, async (path, recheck, expectedDirectory) => {
+            const profileLock = profileGuard(profile);
+            const safeGuard = (section) => profileLock(async () => {
+              await recheck();
+              return section();
+            });
+            const store = await SqliteReplicaStore.open(path, { create: false, guard: safeGuard, expectedDirectory });
+            try {
+              await recheck();
+              const lease = await store.acquireSyncLease(6e4);
+              if (lease === null) throw new ReplicaError(ReplicaErrorCode.BUSY, "Another process is syncing this replica.");
+              await recheck();
+              await store.destroy(lease);
+            } finally {
+              await store.close();
+            }
+          });
         } else {
-          await new Replica({ store }).reset("manual");
+          await withOpenReplica(profile, name, (store) => new Replica({ store }).reset("manual"));
         }
-      } finally {
-        await store.close();
-      }
-      outputJson({ replica: name, reset: true, purged: options.purge === true });
+        outputJson({ replica: name, reset: true, purged: options.purge === true });
+      }, { requireProfile: true });
     })
   );
 }
@@ -25745,7 +26335,7 @@ init_errors();
 init_warnings();
 init_constants();
 import { CLI_NAME as CLI_NAME24 } from "@tinycloud/operations/cli-name";
-import { readFile as readFile10 } from "fs/promises";
+import { readFile as readFile9 } from "fs/promises";
 import { join as join11 } from "path";
 import { homedir, hostname, userInfo } from "os";
 import { appSecretScope } from "@tinycloud/sdk-core";
@@ -25774,24 +26364,24 @@ init_space();
 // src/lib/browser.ts
 init_formatter();
 init_theme();
-import open5 from "open";
+import open6 from "open";
 var LAUNCH_CHECK_MS = 1e3;
 async function tryOpenBrowser(url) {
   let launcher;
   try {
-    launcher = await open5(url);
+    launcher = await open6(url);
   } catch {
     return false;
   }
-  return new Promise((resolve5) => {
-    const timer = setTimeout(() => resolve5(true), LAUNCH_CHECK_MS);
+  return new Promise((resolve6) => {
+    const timer = setTimeout(() => resolve6(true), LAUNCH_CHECK_MS);
     launcher.once("error", () => {
       clearTimeout(timer);
-      resolve5(false);
+      resolve6(false);
     });
     launcher.once("exit", (code3) => {
       clearTimeout(timer);
-      resolve5(code3 === 0);
+      resolve6(code3 === 0);
     });
   });
 }
@@ -25835,9 +26425,9 @@ function runProbeChild(request, options = {}) {
   const killGraceMs = options.killGraceMs ?? KILL_GRACE_MS;
   const spawn2 = options.spawn ?? nodeSpawn;
   const signal = options.signal;
-  return new Promise((resolve5) => {
+  return new Promise((resolve6) => {
     if (signal?.aborted) {
-      resolve5({ kind: "cancelled" });
+      resolve6({ kind: "cancelled" });
       return;
     }
     const child = spawn2(command, args, { env: process.env, stdio: ["ignore", "pipe", "pipe"] });
@@ -25873,7 +26463,7 @@ function runProbeChild(request, options = {}) {
         const envelope = stdout.length > 0 && stdout.length <= MAX_PROBE_LINE_BYTES ? parseStatusEnvelope(stdout.toString("utf8")) : void 0;
         outcome = envelope !== void 0 ? { kind: "ok", envelope } : probeFailed(stderr.toString("utf8"));
       }
-      resolve5(outcome);
+      resolve6(outcome);
     };
     if (child.pid !== void 0) options.onSpawn?.(child.pid);
     child.stdout?.on("data", (chunk) => {
@@ -25965,15 +26555,15 @@ var TIMEOUT_RE = /^(0|\d+s|\d+m)$/;
 var RETRYABLE_STATUS_ERRORS = { NODE_UNREACHABLE: true, NODE_ERROR: true };
 var EXPLICIT_KEY_HINT = `${CLI_NAME23} secrets wait never signs in, and an explicit private key has no stored session. Use a local profile signed in once with ${CLI_NAME23} --profile <profile> auth login --method local, without TC_PRIVATE_KEY.`;
 function abortableSleep(ms2, signal) {
-  return new Promise((resolve5) => {
+  return new Promise((resolve6) => {
     if (signal.aborted) {
-      resolve5();
+      resolve6();
       return;
     }
     const done = () => {
       clearTimeout(timer);
       signal.removeEventListener("abort", done);
-      resolve5();
+      resolve6();
     };
     const timer = setTimeout(done, ms2);
     signal.addEventListener("abort", done, { once: true });
@@ -26639,7 +27229,7 @@ function permissionsFromDelegation2(delegation) {
 }
 async function loadDelegationCandidates(source) {
   try {
-    const raw = JSON.parse(await readFile10(source, "utf8"));
+    const raw = JSON.parse(await readFile9(source, "utf8"));
     return normalizeDelegationCandidates(raw, source);
   } catch (error) {
     if (error?.code !== "ENOENT") {
@@ -26659,7 +27249,7 @@ async function loadDelegationCandidates(source) {
   }
   try {
     const importedPath = join11(resolveProfilesDir(), source, "additional-delegations.json");
-    const raw = JSON.parse(await readFile10(importedPath, "utf8"));
+    const raw = JSON.parse(await readFile9(importedPath, "utf8"));
     return normalizeDelegationCandidates(raw, source);
   } catch (error) {
     if (error?.code === "ENOENT") {
@@ -27166,7 +27756,7 @@ function registerSecretsCommand(program, openKeyAcquisition) {
         throw new CLIError("USAGE_ERROR", "Provide only one of: value argument, --file, or --stdin", ExitCode.USAGE_ERROR);
       }
       if (options.file) {
-        secretValue = await readFile10(options.file, "utf-8");
+        secretValue = await readFile9(options.file, "utf-8");
       } else if (options.stdin) {
         secretValue = (await readStdin3()).toString("utf-8");
       } else {
@@ -32753,7 +33343,7 @@ async function importAesKey(key32, usage) {
     [usage]
   );
 }
-async function open6(blob, key32) {
+async function open7(blob, key32) {
   if (blob.length < HEADER_LENGTH + NONCE_LENGTH + TAG_LENGTH) {
     throw new TypeError(`sealed blob too short: ${blob.length} bytes`);
   }
@@ -33091,7 +33681,7 @@ async function resolvePolicyShare(link3, options) {
   options.signal?.throwIfAborted();
   let envelope;
   try {
-    const encoded = new TextDecoder("utf-8", { fatal: true }).decode(await open6(parsed.ciphertext, parsed.key32));
+    const encoded = new TextDecoder("utf-8", { fatal: true }).decode(await open7(parsed.ciphertext, parsed.key32));
     const value = JSON.parse(encoded);
     if (canonicalize2(value) !== encoded) throw new Error("non-canonical envelope");
     envelope = shareEnvelopeV3Schema.parse(value);
@@ -35683,9 +36273,9 @@ function receiveJson(result, path) {
 
 // src/share/io.ts
 import { constants } from "fs";
-import { lstat as lstat5, mkdir as mkdir4, mkdtemp, open as open7, readFile as readFile11, realpath as realpath2, stat as stat4, link as link2, rename as rename4, rm as rm6, unlink as unlink3 } from "fs/promises";
+import { lstat as lstat6, mkdir as mkdir5, mkdtemp, open as open8, readFile as readFile10, realpath as realpath2, stat as stat5, link as link2, rename as rename4, rm as rm6, unlink as unlink3 } from "fs/promises";
 import { randomBytes as randomBytes7 } from "crypto";
-import { basename as basename4, join as join12, resolve as resolve3, sep as sep2 } from "path";
+import { basename as basename4, join as join12, resolve as resolve4, sep as sep2 } from "path";
 init_errors();
 var MAX_SHARE_STDIN_BYTES = 100 * 1024 * 1024;
 var MAX_SHARE_URL_BYTES = 64 * 1024;
@@ -35722,26 +36312,26 @@ function shareFilename(value) {
   }
 }
 function shareInputFilename(input, name) {
-  return shareFilename(name ?? (input === "-" ? "stdin.md" : basename4(resolve3(input))));
+  return shareFilename(name ?? (input === "-" ? "stdin.md" : basename4(resolve4(input))));
 }
 async function readShareInput(input, name, limit = MAX_SHARE_STDIN_BYTES) {
   const filename = shareInputFilename(input, name);
   if (input === "-") return { bytes: await readBoundedStdin(limit), filename };
-  const path = resolve3(input);
-  const info = await stat4(path);
+  const path = resolve4(input);
+  const info = await stat5(path);
   if (!info.isFile() || info.size > limit) throw new Error("MAX_BYTES_EXCEEDED");
-  const bytes = new Uint8Array(await readFile11(path));
+  const bytes = new Uint8Array(await readFile10(path));
   if (bytes.byteLength > limit) throw new Error("MAX_BYTES_EXCEEDED");
   return { bytes, filename };
 }
 async function assertDirectory(path) {
-  const absolute = resolve3(path);
+  const absolute = resolve4(path);
   const segments = absolute.split(sep2).filter(Boolean);
   let current = absolute.startsWith(sep2) ? sep2 : "";
   for (const segment of segments) {
     current = current === sep2 ? join12(current, segment) : join12(current, segment);
     try {
-      const info = await lstat5(current);
+      const info = await lstat6(current);
       if (info.isSymbolicLink()) {
         const canonical = await realpath2(current);
         if (current !== "/tmp" && current !== "/var") throw new Error("OUTPUT_EXISTS");
@@ -35749,27 +36339,27 @@ async function assertDirectory(path) {
       } else if (!info.isDirectory()) throw new Error("OUTPUT_EXISTS");
     } catch (error) {
       if (error.code !== "ENOENT") throw error;
-      await mkdir4(current, { mode: 448 });
-      const created = await lstat5(current);
+      await mkdir5(current, { mode: 448 });
+      const created = await lstat6(current);
       if (created.isSymbolicLink() || !created.isDirectory()) throw new Error("OUTPUT_EXISTS");
     }
   }
 }
 async function writeShareOutput(directory, filename, bytes, force) {
-  const outputDirectory = resolve3(directory);
+  const outputDirectory = resolve4(directory);
   await assertDirectory(outputDirectory);
   const safeName = safeFilename(filename);
-  const directoryHandle = await open7(outputDirectory, constants.O_RDONLY | (constants.O_DIRECTORY ?? 0) | (constants.O_NOFOLLOW ?? 0));
+  const directoryHandle = await open8(outputDirectory, constants.O_RDONLY | (constants.O_DIRECTORY ?? 0) | (constants.O_NOFOLLOW ?? 0));
   const stableDirectory = await realpath2(outputDirectory);
   const outputPath = join12(stableDirectory, safeName);
   const directoryIdentity = await directoryHandle.stat();
   const assertStableDirectory = async () => {
-    const current = await stat4(stableDirectory);
+    const current = await stat5(stableDirectory);
     if (current.dev !== directoryIdentity.dev || current.ino !== directoryIdentity.ino) throw new Error("OUTPUT_EXISTS");
   };
   await assertStableDirectory();
   const stagingDirectory = await mkdtemp(join12(stableDirectory, ".tinycloud-share-stage-"));
-  const stagingInfo = await lstat5(stagingDirectory);
+  const stagingInfo = await lstat6(stagingDirectory);
   if (!stagingInfo.isDirectory() || (stagingInfo.mode & 511) !== 448) throw new Error("OUTPUT_EXISTS");
   const stagingPath = join12(stagingDirectory, `.tinycloud-share-${randomBytes7(16).toString("hex")}.tmp`);
   let temporaryPath;
@@ -35777,13 +36367,13 @@ async function writeShareOutput(directory, filename, bytes, force) {
   try {
     await assertStableDirectory();
     try {
-      const existing = await lstat5(outputPath);
+      const existing = await lstat6(outputPath);
       if (existing.isSymbolicLink()) throw new Error("UNSAFE_FILENAME");
     } catch (error) {
       if (error.code !== "ENOENT") throw error;
     }
     temporaryPath = stagingPath;
-    handle = await open7(temporaryPath, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | (constants.O_NOFOLLOW ?? 0), 384);
+    handle = await open8(temporaryPath, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | (constants.O_NOFOLLOW ?? 0), 384);
     await handle.writeFile(bytes);
     await handle.close();
     handle = void 0;
@@ -36233,8 +36823,8 @@ init_theme();
 import { CLI_NAME as CLI_NAME26 } from "@tinycloud/operations/cli-name";
 import { ACCOUNT_REGISTRY_SPACE as ACCOUNT_REGISTRY_SPACE2 } from "@tinycloud/node-sdk";
 import { randomBytes as randomBytes8 } from "crypto";
-import { mkdir as mkdir5, writeFile as writeFile4 } from "fs/promises";
-import { dirname as dirname6 } from "path";
+import { mkdir as mkdir6, writeFile as writeFile4 } from "fs/promises";
+import { dirname as dirname7 } from "path";
 function didWithoutFragment2(did) {
   const fragment = did.indexOf("#");
   return fragment === -1 ? did : did.slice(0, fragment);
@@ -36390,7 +36980,7 @@ it directly with \`${CLI_NAME26} space host <name>\` (no request needed).
 }
 async function emitHostRequestArtifact(artifact, emitOption) {
   if (typeof emitOption === "string" && emitOption.length > 0) {
-    await mkdir5(dirname6(emitOption), { recursive: true });
+    await mkdir6(dirname7(emitOption), { recursive: true });
     await writeFile4(emitOption, JSON.stringify(artifact, null, 2) + "\n", "utf8");
     outputJson({
       emitted: true,
@@ -36416,7 +37006,7 @@ init_host();
 init_theme();
 import { CLI_NAME as CLI_NAME27 } from "@tinycloud/operations/cli-name";
 import { writeFile as writeFile5 } from "fs/promises";
-import { resolve as resolve4 } from "path";
+import { resolve as resolve5 } from "path";
 async function dbHandle(node, dbName, spaceInput, profileName2) {
   const spaceUri = await resolveSpaceUri(spaceInput, profileName2);
   const sql = spaceUri ? node.sqlForSpace(spaceUri) : node.sql;
@@ -36558,7 +37148,7 @@ Output:
       }
       const blob = result.data;
       const buffer = Buffer.from(await blob.arrayBuffer());
-      const outputPath = resolve4(options.output);
+      const outputPath = resolve5(options.output);
       await writeFile5(outputPath, buffer);
       outputJson({
         file: outputPath,
@@ -37114,7 +37704,7 @@ function registerUpgradeCommand(program) {
 }
 
 // src/commands/vault.ts
-import { readFile as readFile12 } from "fs/promises";
+import { readFile as readFile11 } from "fs/promises";
 init_profiles();
 init_formatter();
 init_errors();
@@ -37176,7 +37766,7 @@ function registerVaultCommand(program) {
         throw new CLIError("USAGE_ERROR", "Provide only one of: value argument, --file, or --stdin", ExitCode.USAGE_ERROR);
       }
       if (options.file) {
-        putValue = new Uint8Array(await readFile12(options.file));
+        putValue = new Uint8Array(await readFile11(options.file));
       } else if (options.stdin) {
         putValue = new Uint8Array(await readStdin4());
       } else {
@@ -37291,7 +37881,7 @@ function registerVaultCommand(program) {
 }
 
 // src/commands/vars.ts
-import { readFile as readFile13 } from "fs/promises";
+import { readFile as readFile12 } from "fs/promises";
 init_profiles();
 init_formatter();
 init_errors();
@@ -37396,7 +37986,7 @@ function registerVarsCommand(program) {
         throw new CLIError("USAGE_ERROR", "Provide only one of: value argument, --file, or --stdin", ExitCode.USAGE_ERROR);
       }
       if (options.file) {
-        varValue = await readFile13(options.file, "utf-8");
+        varValue = await readFile12(options.file, "utf-8");
       } else if (options.stdin) {
         varValue = (await readStdin5()).toString("utf-8");
       } else {
