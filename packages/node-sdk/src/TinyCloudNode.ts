@@ -1237,36 +1237,22 @@ export class TinyCloudNode {
     const epoch = this.sessionEpoch;
     const attempt = this.latestSessionAttempt;
     try {
-      const anchor = this.verifiedOwnerConsentAnchor(session);
+      const { verifiedOwnerConsentAnchor, establishReplicaSessionStamp } =
+        await getNodeReplicationLoaders().authority();
+      if (epoch !== this.sessionEpoch || attempt !== this.latestSessionAttempt) return undefined;
+      const anchor = verifiedOwnerConsentAnchor(session, this.wasmBindings, exactVerifiedRecap);
       if (anchor === null) {
         throw Object.assign(new Error("Replica sign-in requires a verified finite owner SIWE and exact-space KV get+sync."), {
           code: "REPLICA_GATED" as const,
           gate: "not_established" as const,
         });
       }
-      const principal = pkhDid(session.address, session.chainId);
-      if (replication.storage.kind === "indexeddb" && replication.storage.lifecycle?.kind === "indexeddb") {
-        const stamp = await replication.storage.lifecycle.establishSessionStamp(principal, { consentAnchor: anchor });
-        if (epoch !== this.sessionEpoch || attempt !== this.latestSessionAttempt) return undefined;
-        this.replicaSessionStamp = stamp;
-        return stamp;
-      }
-      if (replication.storage.kind === "sqlite") {
-        const lifecycle = replication.storage.lifecycle;
-        if (lifecycle?.kind !== "file") {
-          throw Object.assign(new Error("Replica sign-in requires the profile lifecycle gate."), {
-            code: "REPLICA_GATED" as const, gate: "gate_unavailable" as const,
-          });
-        }
-        const stamp = await lifecycle.establishSessionStamp(principal, { consentAnchor: anchor });
-        if (epoch !== this.sessionEpoch || attempt !== this.latestSessionAttempt) return undefined;
-        this.replicaSessionStamp = stamp;
-        return stamp;
-      }
-      throw Object.assign(new Error("Replica sign-in requires its platform lifecycle gate."), {
-        code: "REPLICA_GATED" as const,
-        gate: "gate_unavailable" as const,
-      });
+      const stamp = await establishReplicaSessionStamp(
+        replication.storage, pkhDid(session.address, session.chainId), anchor,
+      );
+      if (epoch !== this.sessionEpoch || attempt !== this.latestSessionAttempt) return undefined;
+      this.replicaSessionStamp = stamp;
+      return stamp;
     } catch (error) {
       // A refused local replica must not cancel the independently verified network sign-in.
       if (epoch === this.sessionEpoch && attempt === this.latestSessionAttempt) {
@@ -3939,15 +3925,10 @@ export class TinyCloudNode {
         replicaRestoreGate = replicationScopeUnavailable ? "gate_unavailable" : "principal_mismatch";
       } else {
         try {
-          if (replication.storage.kind === "indexeddb") {
-            const lifecycle = replication.storage.lifecycle;
-            if (lifecycle?.kind !== "indexeddb") throw new Error("Browser replica lifecycle is unavailable.");
-            restoredReplicaStamp = await lifecycle.restoreSessionStamp(replicationPrincipal, sessionData.replicaStamp ?? undefined);
-          } else {
-            const lifecycle = replication.storage.lifecycle;
-            if (lifecycle?.kind !== "file") throw new Error("Replica profile lifecycle is unavailable.");
-            restoredReplicaStamp = await lifecycle.restoreSessionStamp(replicationPrincipal, sessionData.replicaStamp ?? undefined);
-          }
+          const { restoreReplicaSessionStamp } = await getNodeReplicationLoaders().authority();
+          restoredReplicaStamp = await restoreReplicaSessionStamp(
+            replication.storage, replicationPrincipal, sessionData.replicaStamp ?? undefined,
+          );
         } catch (error) {
           replicaRestoreGate = replicaRestoreRefusal(error);
         }
@@ -7180,50 +7161,16 @@ export class TinyCloudNode {
     }
     return auth.replicationSignInEntries();
   }
-  private verifiedOwnerConsentAnchor(session: TinyCloudSession): ReplicaConsentAnchor | null {
-    if (typeof session.siwe !== "string" || typeof session.signature !== "string" ||
-        typeof session.address !== "string" || typeof session.chainId !== "number") return null;
-    try {
-      const verified = this.wasmBindings.validatePersistedSession?.({
-        delegationHeader: session.delegationHeader,
-        delegationCid: session.delegationCid,
-        spaceId: session.spaceId,
-        jwk: session.jwk,
-        address: session.address,
-        chainId: session.chainId,
-        siwe: session.siwe,
-        signature: session.signature,
-      });
-      if (!verified || !Number.isSafeInteger(Date.parse(verified.expiresAt ?? ""))) return null;
-      const signedIssuedAt = new SiweMessage(session.siwe).issuedAt;
-      if (typeof signedIssuedAt !== "string") return null;
-      const issuedAt = Date.parse(signedIssuedAt);
-      if (!Number.isSafeInteger(issuedAt) || issuedAt < 0) return null;
-      const granted = exactVerifiedRecap(verified)
-        .filter((entry) => entry.space === session.spaceId && entry.service === "kv")
-        .map((entry) => ({ ...entry, service: "tinycloud.kv" }));
-      // Consent provenance needs one uncaveated get+sync scope in this exact
-      // signed space. It need not be the root: prefix authority is checked
-      // separately when a replica grant is planned and installed.
-      const coversGetAndSync = granted.some((entry) => isCapabilitySubset([{
-        service: "tinycloud.kv",
-        space: session.spaceId,
-        path: entry.path,
-        actions: [KV.GET, KV.SYNC],
-      }], granted).subset);
-      return coversGetAndSync ? { at: issuedAt, source: "siwe" } : null;
-    } catch {
-      return null;
-    }
-  }
 
   private async replicationAuthority(): Promise<ReplicationAuthority> {
-    const { createReplicationAuthority } = await getNodeReplicationLoaders().authority();
+    const { createReplicationAuthority, verifiedOwnerConsentAnchor } = await getNodeReplicationLoaders().authority();
     const host = {
       replicationSession: () => this.currentTinyCloudSession() ?? this.replicationDelegateSession,
       verifiedConsentAnchor: (session: unknown) => {
         const current = this.currentTinyCloudSession();
-        return session === current && current !== undefined ? this.verifiedOwnerConsentAnchor(current) : null;
+        return session === current && current !== undefined
+          ? verifiedOwnerConsentAnchor(current, this.wasmBindings, exactVerifiedRecap)
+          : null;
       },
       siweExpiration: (siwe) => extractSiweExpiration(siwe),
       planDelegation: (entries, options) => this.planDelegation(entries, options),
