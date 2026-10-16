@@ -138,6 +138,28 @@ test("unknown legacy file refuses plain and online logout before marker, credent
   }
 }, 30_000);
 
+test("a DB-absent nonempty legacy child refuses online logout without changing user files", async () => {
+  const { home, paths, networkPaths } = await fixture();
+  const unrecognized = join(paths.directory, "replicas", "future", "payload.bin");
+  await addUnknown(unrecognized);
+  const [session, key, db, unknown, gate] = await Promise.all([
+    readFile(paths.session), readFile(paths.key), readFile(paths.db),
+    readFile(unrecognized), readGateSnapshot(paths.directory),
+  ]);
+  const before = networkPaths.length;
+
+  const refusal = await run(home, ["auth", "logout", "--revoke"]);
+  expect(refusal.exitCode).toBeGreaterThan(0);
+  expect(refusal.stderr).toContain("--discard-local-changes");
+  expect(networkPaths).toHaveLength(before);
+  expect(await readGateSnapshot(paths.directory)).toEqual(gate);
+  expect(await Bun.file(join(paths.directory, REPLICA_LOGOUT_PENDING_FILE)).exists()).toBe(false);
+  expect(await readFile(paths.session)).toEqual(session);
+  expect(await readFile(paths.key)).toEqual(key);
+  expect(await readFile(paths.db)).toEqual(db);
+  expect(await readFile(unrecognized)).toEqual(unknown);
+}, 30_000);
+
 test("explicit discard of unknown legacy files succeeds on plain logout", async () => {
   const { home, paths } = await fixture();
   await addUnknown(paths.unknown);
