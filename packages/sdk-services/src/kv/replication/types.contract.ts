@@ -40,7 +40,7 @@ import type {
 import type { ReplicaAdmitHook, ReplicaBrowserPageAdmission, ReplicaPageAdmission, ReplicaQuotaLedger } from "./quota";
 import type { ReplicaConsentAnchor } from "./grantPolicyTypes";
 import type { REPLICA_DENY_TOMBSTONE, REPLICA_KV_SCHEMA_VERSION } from "./contractConstants";
-import type { ProfileReplicaDeferredToken, ProfileReplicaPurge } from "./index";
+import type { ProfileReplicaDeferredToken, ProfileReplicaLogoutPending, ProfileReplicaPurge } from "./index";
 
 type Assert<T extends true> = T;
 type Equal<A, B> = (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ? 1 : 2
@@ -262,6 +262,36 @@ type _ResumeRequiresSignal = Assert<
   Equal<
     ProfileReplicaPurge["resumeDeferredErase"],
     (token: ProfileReplicaDeferredToken, options: { signal: AbortSignal }) => Promise<ReplicaEraseReport>
+  >
+>;
+type _LogoutMarkerScopes = Assert<
+  Equal<
+    ProfileReplicaLogoutPending,
+    | { v: 1; incarnation: string; lifecycleEpoch: number; principalHash: string }
+    | { v: 2; scope: "orphan_profile"; nonce: string }
+    | { v: 3; scope: "inactive_gate"; incarnation: string; lifecycleEpoch: number }
+  >
+>;
+type _PrepareLogoutMarker = Assert<
+  Equal<
+    ProfileReplicaPurge["prepareLogoutPending"],
+    (input: { principal: string; discardLocalChanges?: boolean }) => Promise<ProfileReplicaLogoutPending | null>
+  >
+>;
+type _RecoverLogoutMarker = Assert<
+  Equal<
+    ProfileReplicaPurge["recoverLogoutPending"],
+    (options: {
+      signal: AbortSignal;
+      clearCredentials: () => Promise<void>;
+      eraseLegacyReplicas: () => Promise<void>;
+    }) => Promise<ReplicaEraseReport>
+  >
+>;
+type _CommonGateHasNoLogoutMarker = Assert<
+  Equal<
+    Extract<"prepareLogoutPending" | "recoverLogoutPending", keyof ReplicaLifecycleGate>,
+    never
   >
 >;
 type _CommonGateHasNoDeferredErase = Assert<

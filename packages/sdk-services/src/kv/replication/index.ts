@@ -40,6 +40,7 @@ export type {
 } from "./types";
 export type {
   ProfileReplicaDeferredToken,
+  ProfileReplicaLogoutPending,
   ProfileReplicaPurge,
   ReplicaAccountGate,
   ReplicaBrowserGateAccess,

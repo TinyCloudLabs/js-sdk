@@ -374,6 +374,12 @@ export interface ProfileReplicaDeferredToken {
   principalHash: string;
 }
 
+/** CLI-only durable crash fence; v2/v3 never fabricate a scoped principal hash. */
+export type ProfileReplicaLogoutPending =
+  | { v: 1; incarnation: string; lifecycleEpoch: number; principalHash: string }
+  | { v: 2; scope: "orphan_profile"; nonce: string }
+  | { v: 3; scope: "inactive_gate"; incarnation: string; lifecycleEpoch: number };
+
 /**
  * Node/CLI-only lifecycle facade for a profile's replica root. The node-sdk exports
  * `createProfileReplicaPurge({ profileDir, guard })`; `guard` is the caller's
@@ -409,6 +415,42 @@ export interface ProfileReplicaPurge extends Pick<ReplicaLifecycleGate, "recover
    * the same denied epoch/hash persists; a successor establishment fences it.
    */
   resumeDeferredErase(token: ProfileReplicaDeferredToken, options: { signal: AbortSignal }): Promise<ReplicaEraseReport>;
+  /**
+   * CLI-only: under the profile lock, atomically write and fsync a logout
+   * marker before credential unlink. A readable active gate uses scoped v1;
+   * a missing/corrupt gate with flag-owned files uses profile-wide orphan v2;
+   * an inactive readable gate with intents or legacy files uses epoch-bound
+   * v3, without fabricating a principal hash. Before v2, pending/unknown
+   * local writes or a corrupt gate refuse unless the user explicitly opts
+   * to `discardLocalChanges`; v3 treats any nonempty legacy child as unknown
+   * and requires the same consent. Return null only when no marker is needed
+   * and the owned state is verified empty or already safely denied.
+   * All CLI-bound replica reads and network restore refuse any marker.
+   */
+  prepareLogoutPending(input: { principal: string; discardLocalChanges?: boolean }): Promise<ProfileReplicaLogoutPending | null>;
+  /**
+   * CLI startup and logout recovery, under the same profile lock.
+   * `clearCredentials` first atomically writes and file+directory fsyncs
+   * CLI `profile.json.authSignedOut: true`, then removes and fsyncs both
+   * session.json and key.json; it throws on any failure. The facade verifies
+   * credential absence but does not parse CLI ProfileConfig. For v1 it
+   * commits complete opaque intents/generations or resumes a deferred gate.
+   * For v3 it validates the unchanged null-principal gate and exact epoch,
+   * without creating new intents. Both idempotently remove only the legacy
+   * `<profile>/replicas` tree through `eraseLegacyReplicas`, verify absence
+   * and fsync before clearing the marker; ordinary flagged erase follows
+   * with crash replay. For v2 it invents no gate/intents, validates and wipes
+   * only this profile's `replication` and `replicas` roots, then verifies
+   * absence/fsync before clearing the marker. Failures retain the marker
+   * when still present and return a report; `failed` or `remaining > 0`
+   * requires a nonzero CLI result. Both callbacks stay in Node, not a
+   * worker; v2 does not call `eraseLegacyReplicas`.
+   */
+  recoverLogoutPending(options: {
+    signal: AbortSignal;
+    clearCredentials: () => Promise<void>;
+    eraseLegacyReplicas: () => Promise<void>;
+  }): Promise<ReplicaEraseReport>;
 }
 
 /** Worker replies that carry replica-served data are stamped; a reply without a stamp is dropped. */
