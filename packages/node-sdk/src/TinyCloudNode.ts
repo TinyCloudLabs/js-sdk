@@ -1251,10 +1251,14 @@ export class TinyCloudNode {
         this.replicaSessionStamp = stamp;
         return stamp;
       }
-      if (replication.storage.kind === "sqlite" && replication.profileDir && replication.profileGuard) {
-        const gate = await getNodeReplicationLoaders().gate();
-        const stamp = await replication.profileGuard(() =>
-          gate.establishSessionStamp(replication.profileDir!, principal, { siweIssuedAt: anchor.at }));
+      if (replication.storage.kind === "sqlite") {
+        const lifecycle = replication.storage.lifecycle;
+        if (lifecycle?.kind !== "file") {
+          throw Object.assign(new Error("Replica sign-in requires the profile lifecycle gate."), {
+            code: "REPLICA_GATED" as const, gate: "gate_unavailable" as const,
+          });
+        }
+        const stamp = await lifecycle.establishSessionStamp(principal, { consentAnchor: anchor });
         if (epoch !== this.sessionEpoch || attempt !== this.latestSessionAttempt) return undefined;
         this.replicaSessionStamp = stamp;
         return stamp;
@@ -2173,11 +2177,9 @@ export class TinyCloudNode {
         if (lifecycle?.kind !== "indexeddb") return { status: "unguarded", code: "gate_unavailable" };
         return await lifecycle.deny(input);
       }
-      if (!replication.profileDir || !replication.profileGuard) return { status: "unguarded", code: "gate_unavailable" };
-      const gate = await getNodeReplicationLoaders().gate();
-      // The caller's profile lock spans the gate write and its pending-intent snapshot.
-      return await replication.profileGuard(() =>
-        gate.denyGate(replication.profileDir!, input, async () => []));
+      const lifecycle = replication.storage.lifecycle;
+      if (lifecycle?.kind !== "file") return { status: "unguarded", code: "gate_unavailable" };
+      return await lifecycle.deny(input);
     } catch (error) {
       const code = typeof error === "object" && error !== null && "code" in error && typeof error.code === "string"
         ? error.code
@@ -3914,9 +3916,9 @@ export class TinyCloudNode {
             if (lifecycle?.kind !== "indexeddb") throw new Error("Browser replica lifecycle is unavailable.");
             restoredReplicaStamp = await lifecycle.restoreSessionStamp(replicationPrincipal, sessionData.replicaStamp ?? undefined);
           } else {
-            if (!replication.profileDir) throw new Error("Replica profile directory is unavailable.");
-            const gate = await getNodeReplicationLoaders().gate();
-            restoredReplicaStamp = await gate.restoreSessionStamp(replication.profileDir, replicationPrincipal, sessionData.replicaStamp ?? undefined);
+            const lifecycle = replication.storage.lifecycle;
+            if (lifecycle?.kind !== "file") throw new Error("Replica profile lifecycle is unavailable.");
+            restoredReplicaStamp = await lifecycle.restoreSessionStamp(replicationPrincipal, sessionData.replicaStamp ?? undefined);
           }
         } catch (error) {
           replicaRestoreGate = replicaRestoreRefusal(error);
