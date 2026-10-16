@@ -502,38 +502,39 @@ test("markerless deferred v1 gate refuses online revoke before node I/O and reta
   expect((await readGateSnapshot(paths.directory))?.principalHash).toBeNull();
 }, 30_000);
 
-test("an approved unknown SQLite sidecar name cannot become a different regular file on revoke retry", async () => {
+test("a sidecar-shaped approved unknown cannot become a source-owned SQLite file after remote receipt", async () => {
   if (process.platform !== "linux") return;
-  const { home, paths, networkPaths, setMode } = await fixture();
+  const { home, paths, sessionCid, networkPaths, revokedCids, setOnRevocationReceipt } = await fixture();
   const sidecar = `${paths.db}-shm`;
   const outside = join(home, "outside-sentinel");
   await writeFile(outside, "outside-stays");
   await rm(sidecar, { force: true });
   await symlink(outside, sidecar);
   expect((await lstat(sidecar)).isSymbolicLink()).toBe(true);
-  setMode("fail");
-  const first = await run(home, ["auth", "logout", "--revoke", "--discard-local-changes"]);
-  expect(first.exitCode).toBeGreaterThan(0);
-  expect(first.stderr).toContain("REVOCATION_FAILED");
-  const markerPath = join(paths.directory, REPLICA_LOGOUT_PENDING_FILE);
-  const marker = await readFile(markerPath);
-  expect(JSON.parse(marker.toString()).remotePending).toBe(true);
-  const session = await readFile(paths.session);
-  const key = await readFile(paths.key);
-  const before = networkPaths.length;
-  await rm(sidecar);
-  await writeFile(sidecar, "replacement-sidecar");
-  setMode("success");
+  setOnRevocationReceipt(async () => {
+    await rm(sidecar);
+    await writeFile(sidecar, "replacement-sidecar");
+  });
 
-  const refused = await run(home, ["auth", "logout", "--revoke", "--discard-local-changes"]);
-  expect(refused.exitCode).toBeGreaterThan(0);
-  expect(networkPaths).toHaveLength(before);
-  expect(await readFile(markerPath)).toEqual(marker);
-  expect(await readFile(paths.session)).toEqual(session);
-  expect(await readFile(paths.key)).toEqual(key);
+  const incomplete = await run(home, ["auth", "logout", "--revoke", "--discard-local-changes"]);
+  expect(incomplete.exitCode).toBeGreaterThan(0);
+  expect(incomplete.stderr).toMatch(/cleanup incomplete|approval.*changed/i);
+  expect(revokedCids).toEqual([sessionCid]);
+  const markerPath = join(paths.directory, REPLICA_LOGOUT_PENDING_FILE);
+  expect(JSON.parse(await readFile(markerPath, "utf8")).remotePending).not.toBe(true);
+  expect(JSON.parse(await readFile(join(paths.directory, "profile.json"), "utf8")).authSignedOut).toBe(true);
+  await expect(readFile(paths.session)).rejects.toMatchObject({ code: "ENOENT" });
+  await expect(readFile(paths.key)).rejects.toMatchObject({ code: "ENOENT" });
   expect(await Bun.file(paths.db).exists()).toBe(true);
-  expect(await readFile(sidecar, "utf8")).toBe("replacement-sidecar");
+  expect((await lstat(sidecar)).isFile()).toBe(true);
   expect(await readFile(outside, "utf8")).toBe("outside-stays");
+
+  const requestsBefore = networkPaths.length;
+  const blocked = await run(home, ["auth", "status"]);
+  expect(blocked.exitCode).toBeGreaterThan(0);
+  expect(networkPaths).toHaveLength(requestsBefore);
+  expect(await Bun.file(markerPath).exists()).toBe(true);
+  expect(await Bun.file(paths.db).exists()).toBe(true);
 }, 30_000);
 
 test("a new unknown path after online success retains the marker and requires fresh approval without another revoke", async () => {
