@@ -37,6 +37,11 @@ export async function assertPendingRemoteLogoutSession(
         "The retained revocation session changed; no online request was attempted.", ExitCode.ERROR);
     }
     const purge = profilePurge(name);
+    if (!await purge.remotePendingLogout({ principal: expected.ownerDid })) {
+      throw new CLIError("REPLICA_GATED",
+        "The original denied remote revocation marker is absent; no online request was attempted.",
+        ExitCode.ERROR);
+    }
     const approval = await purge.preflightLogout({ principal: expected.ownerDid, discardLocalChanges: true });
     const marker = await purge.prepareLogoutPending({
       principal: expected.ownerDid,
