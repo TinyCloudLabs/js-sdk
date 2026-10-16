@@ -235,6 +235,8 @@ if (prBaseSha) {
   console.log("Replica size budget: no pull-request merge base; reporting only.");
 }
 
+// Keep structural/size inspection independent of the web test suite.
+if (process.argv.includes("--dist-only")) process.exit(failed ? 1 : 0);
 const reportDir = await mkdtemp(join(tmpdir(), "tc-web-sdk-junit-"));
 const report = join(reportDir, "web-sdk.xml");
 try {
