@@ -12,6 +12,14 @@ export type CompactFixRequired = {
     delta: Pick<LoadedSizes, "replica.mjs" | "replica.cjs">;
   };
   measuredPaths: Record<string, string>;
+  canonicalCI: {
+    run: string;
+    jobs: string[];
+    before: Pick<LoadedSizes, "replica.mjs" | "replica.cjs">;
+    after: Pick<LoadedSizes, "replica.mjs" | "replica.cjs">;
+    delta: Pick<LoadedSizes, "replica.mjs" | "replica.cjs">;
+    source: string;
+  };
   status: string;
 };
 
@@ -43,7 +51,7 @@ export const ciOptionalAllowance: LoadedSizes = {
   ...approvedCiToolchainCorrection.measured.firstImportCeiling,
   ...approvedCiToolchainCorrection.measured.activationCeiling,
 };
-/** The only approved measured-source change after ddc032ca; CI will ratchet down to its observed bytes. */
+/** Only the exact approved compact grant source blob may change; CI bytes are final. */
 export const approvedCompactFixRequired: CompactFixRequired = {
   sourceCommit: "a5b1ae1fc61ff352d6ea6940a1791d6cf01f1492",
   integratedCommit: "b796dc52894524ee01a4458f640ecf45906b3040",
@@ -56,10 +64,21 @@ export const approvedCompactFixRequired: CompactFixRequired = {
   measuredPaths: {
     "packages/node-sdk/src/replication/authority.ts": "0990eecad96ebaa25a615fafe7558ec124b62c7f",
   },
-  status: "provisional pending GitHub CI measurement",
+  canonicalCI: {
+    run: "https://github.com/TinyCloudLabs/js-sdk/actions/runs/38977256904",
+    jobs: [
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/38977256904/job/117229580745",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/38977256904/job/117229580982",
+    ],
+    before: { "replica.mjs": 51785, "replica.cjs": 66995 },
+    after: { "replica.mjs": 51791, "replica.cjs": 67009 },
+    delta: { "replica.mjs": 6, "replica.cjs": 14 },
+    source: "Only measured-input change: approved authority.ts blob 0990eecad96ebaa25a615fafe7558ec124b62c7f",
+  },
+  status: "final: GitHub CI canonical, zero headroom",
 };
 export const compactFixOptionalAllowance: LoadedSizes = {
-  ...ciOptionalAllowance, "replica.mjs": 51792, "replica.cjs": 66999,
+  ...ciOptionalAllowance, "replica.mjs": 51791, "replica.cjs": 67009,
 };
 export const approvedMeasurementCorrection = {
   commit: "ce52494d0cb1ea236578bc6b709e9e6e016f8c78",

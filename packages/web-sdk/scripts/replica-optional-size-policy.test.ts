@@ -7,7 +7,7 @@ import {
 
 const current = JSON.parse(readFileSync(resolve(import.meta.dir, "replica-optional-size-ledger.json"), "utf8")) as OptionalLedger;
 const copy = () => structuredClone(current);
-const observed = { "replica.mjs": 51792, "replica.cjs": 66999, "activation.mjs": 23071, "activation.cjs": 24650 };
+const observed = { "replica.mjs": 51791, "replica.cjs": 67009, "activation.mjs": 23071, "activation.cjs": 24650 };
 
 describe("TC-858 optional loaded-byte policy", () => {
   it("accepts the exact approved first-import, activation and refused-admission ledger", () => {
@@ -114,19 +114,30 @@ describe("TC-858 compact delegate installed-grant fix-required first import", ()
       delta: { "replica.mjs": 7, "replica.cjs": 4 },
     },
     measuredPaths: { [authority]: "0990eecad96ebaa25a615fafe7558ec124b62c7f" },
-    status: "provisional pending GitHub CI measurement",
+    canonicalCI: {
+      run: "https://github.com/TinyCloudLabs/js-sdk/actions/runs/38977256904",
+      jobs: [
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/38977256904/job/117229580745",
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/38977256904/job/117229580982",
+      ],
+      before: { "replica.mjs": 51785, "replica.cjs": 66995 },
+      after: { "replica.mjs": 51791, "replica.cjs": 67009 },
+      delta: { "replica.mjs": 6, "replica.cjs": 14 },
+      source: "Only measured-input change: approved authority.ts blob 0990eecad96ebaa25a615fafe7558ec124b62c7f",
+    },
+    status: "final: GitHub CI canonical, zero headroom",
   };
   const fixed = () => {
     const ledger = copy() as OptionalLedger & { fixRequired?: unknown };
     ledger.fixRequired = [structuredClone(approved)];
-    ledger.allowance["replica.mjs"] = 51792;
-    ledger.allowance["replica.cjs"] = 66999;
-    ledger.entries[0]["replica.mjs"] = 51792;
-    ledger.entries[0]["replica.cjs"] = 66999;
+    ledger.allowance["replica.mjs"] = 51791;
+    ledger.allowance["replica.cjs"] = 67009;
+    ledger.entries[0]["replica.mjs"] = 51791;
+    ledger.entries[0]["replica.cjs"] = 67009;
     return ledger;
   };
 
-  it("admits only the signed compact fix's exact provisional first-import delta", () => {
+  it("admits only the signed compact fix's canonical first-import bytes", () => {
     expect(() => validateOptionalLedger(fixed(), true, true)).not.toThrow();
   });
 
@@ -137,6 +148,9 @@ describe("TC-858 compact delegate installed-grant fix-required first import", ()
     const changedBlob = fixed();
     (changedBlob.fixRequired as typeof approved[])[0].measuredPaths[authority] = "deadbeef";
     expect(() => validateOptionalLedger(changedBlob, true, true)).toThrow();
+    const wrongCI = fixed();
+    (wrongCI.fixRequired as typeof approved[])[0].canonicalCI.jobs[0] = "unreviewed job";
+    expect(() => validateOptionalLedger(wrongCI, true, true)).toThrow();
     const secondRow = fixed();
     (secondRow.fixRequired as typeof approved[]).push(approved);
     expect(() => validateOptionalLedger(secondRow, true, true)).toThrow();
