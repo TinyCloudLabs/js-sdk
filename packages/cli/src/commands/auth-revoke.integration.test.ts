@@ -7,7 +7,7 @@ import { createProfileReplicaPurge, NodeWasmBindings, PrivateKeySigner } from "@
 import { parseSignedSiweCacao } from "@tinycloud/sdk-core";
 import { Replica, parseUcanGrant } from "@tinycloud/replica";
 import { SqliteReplicaStore } from "@tinycloud/replica/sqlite";
-import { establishSessionStamp } from "@tinycloud/replica/profile-gate";
+import { establishSessionStamp, restoreSessionStamp } from "@tinycloud/replica/profile-gate";
 import { REPLICA_GATE_FILE } from "@tinycloud/sdk-services/kv/replication/contractConstants";
 import {
   profileConfigPath,
@@ -50,6 +50,30 @@ async function run(home: string, args: string[]): Promise<{ exitCode: number; st
 
 async function exists(path: string): Promise<boolean> {
   return stat(path).then(() => true, () => false);
+}
+
+async function seedLegacyReplica(home: string, host: string, spaceId: string, sessionDid: string): Promise<void> {
+  const replicaDir = join(home, ".tinycloud", "profiles", PROFILE, "replicas", "notes");
+  const store = await SqliteReplicaStore.open(replicaDir, { create: true });
+  try {
+    await store.init({
+      name: "notes", replicaId: "r-test", host, space: spaceId, prefix: "notes/",
+      deviceDid: sessionDid, allowSecrets: false, localReadPolicy: "whileGrantValid", retentionGrantCid: null,
+    });
+    await store.installGrant(parseUcanGrant(signUcan(owner, {
+      aud: sessionDid.split("#", 1)[0], exp: Math.floor(Date.now() / 1000) + 3_600,
+      att: { [`${spaceId}/kv/notes/`]: {
+        "tinycloud.kv/get": [{}], "tinycloud.kv/list": [{}], "tinycloud.kv/sync": [{}],
+      } },
+      prf: ["bafyparent"],
+    })));
+    const fake = new FakeNode();
+    fake.space = spaceId;
+    fake.put("notes/a", "private replica value");
+    await new Replica({ store, transport: fake }).sync();
+  } finally {
+    await store.close();
+  }
 }
 
 async function seed(home: string, host: string, authMethod: "local" | "openkey" = "local"): Promise<{ db: string; session: string; key: string; delegationCid: string; ownerDid: string; spaceId: string }> {
@@ -100,28 +124,39 @@ async function seed(home: string, host: string, authMethod: "local" | "openkey" 
     return { db, session: sessionPath(PROFILE), key };
   });
 
-  const replicaDir = join(home, ".tinycloud", "profiles", PROFILE, "replicas", "notes");
-  const store = await SqliteReplicaStore.open(replicaDir, { create: true });
-  try {
-    await store.init({
-      name: "notes", replicaId: "r-test", host, space: spaceId, prefix: "notes/",
-      deviceDid: sessionDid, allowSecrets: false, localReadPolicy: "whileGrantValid", retentionGrantCid: null,
-    });
-    await store.installGrant(parseUcanGrant(signUcan(owner, {
-      aud: sessionDid.split("#", 1)[0], exp: Math.floor(Date.now() / 1000) + 3_600,
-      att: { [`${spaceId}/kv/notes/`]: {
-        "tinycloud.kv/get": [{}], "tinycloud.kv/list": [{}], "tinycloud.kv/sync": [{}],
-      } },
-      prf: ["bafyparent"],
-    })));
-    const fake = new FakeNode();
-    fake.space = spaceId;
-    fake.put("notes/a", "private replica value");
-    await new Replica({ store, transport: fake }).sync();
-  } finally {
-    await store.close();
-  }
+  await seedLegacyReplica(home, host, spaceId, sessionDid);
   return { ...paths, delegationCid: session.delegationCid, ownerDid, spaceId };
+}
+
+async function seedWithPublicLogin(home: string, host: string): ReturnType<typeof seed> {
+  const signer = new PrivateKeySigner(OWNER_KEY);
+  const ownerDid = `did:pkh:eip155:1:${await signer.getAddress()}`;
+  const paths = await withTinyCloudStateRoot(home, async () => {
+    await writeJsonAtomic(profileConfigPath(PROFILE), {
+      name: PROFILE, host, chainId: 1, spaceName: "default", did: ownerDid,
+      ownerDid, privateKey: OWNER_KEY, authMethod: "local", posture: "local-owner-key",
+      createdAt: "2026-10-01T00:00:00.000Z",
+    });
+    const directory = profilePath(PROFILE);
+    return {
+      directory, db: join(directory, "replicas", "notes", "replica.db"),
+      session: sessionPath(PROFILE), key: join(directory, "key.json"),
+    };
+  });
+  const login = await run(home, ["auth", "login", "--method", "local", "--replication-prefix", "notes/"]);
+  expect(login.exitCode).toBe(0);
+  const session = JSON.parse(await readFile(paths.session, "utf8")) as {
+    ownerDid: string; replicaStamp: Parameters<typeof restoreSessionStamp>[2];
+    spaceId: string; verificationMethod: string; delegationCid: string;
+  };
+  expect(session.ownerDid).toBe(ownerDid);
+  if (!session.replicaStamp) throw new Error("Public login did not persist a replica stamp");
+  expect(await restoreSessionStamp(paths.directory, ownerDid, session.replicaStamp)).toEqual(session.replicaStamp);
+  await seedLegacyReplica(home, host, session.spaceId, session.verificationMethod);
+  return {
+    db: paths.db, session: paths.session, key: paths.key,
+    delegationCid: session.delegationCid, ownerDid, spaceId: session.spaceId,
+  };
 }
 
 async function server(mode: "fail" | "hold" | "success", cid: () => string) {
@@ -174,8 +209,9 @@ async function server(mode: "fail" | "hold" | "success", cid: () => string) {
         if (state === "fail") return new Response("node unavailable", { status: 503 });
         return Response.json({ cid: cid(), revoked: true });
       }
+      if (path === "/delegate" && request.method === "POST") return Response.json({ activated: [], skipped: [] });
       if (path === "/healthz") return new Response("ok");
-      if (path === "/info") return Response.json({ nodeId: "did:key:z6MkLocalNodeTc841" });
+      if (path === "/info") return Response.json({ protocol: 1, version: "1.0.0", features: [] });
       return new Response("not found", { status: 404 });
     },
   });
@@ -516,7 +552,7 @@ describe("tc auth logout --revoke with durable replica denial", () => {
     homes.push(home);
     let delegationCid = "";
     const node = await server("fail", () => delegationCid);
-    const paths = await seed(home, node.host);
+    const paths = await seedWithPublicLogin(home, node.host);
     delegationCid = paths.delegationCid;
     node.setPaths(paths);
     const before = await run(home, ["replica", "get", "notes/a", "--replica", "notes", "--raw"]);
@@ -529,14 +565,14 @@ describe("tc auth logout --revoke with durable replica denial", () => {
     expect(failed.stderr).toMatch(/revocation failed/i);
     expect(node.requests).toHaveLength(1);
     await expectDeniedButRetained(home, paths, sessionBefore, keyBefore);
-  });
+  }, 30_000);
 
   test("offline revocation denies reads while keeping the session, key, and replica after restart", async () => {
     const home = await mkdtemp(join(tmpdir(), "tc841-revoke-offline-"));
     homes.push(home);
     let delegationCid = "";
     const node = await server("success", () => delegationCid);
-    const paths = await seed(home, node.host);
+    const paths = await seedWithPublicLogin(home, node.host);
     delegationCid = paths.delegationCid;
     const sessionBefore = await readFile(paths.session);
     const keyBefore = await readFile(paths.key);
@@ -547,14 +583,14 @@ describe("tc auth logout --revoke with durable replica denial", () => {
     expect(failed.stderr).toMatch(/revocation failed/i);
     expect(node.requests).toEqual([]);
     await expectDeniedButRetained(home, paths, sessionBefore, keyBefore);
-  });
+  }, 30_000);
 
   test("interrupted online revocation leaves durable denial, session, key, and files", async () => {
     const home = await mkdtemp(join(tmpdir(), "tc841-revoke-interrupted-"));
     homes.push(home);
     let delegationCid = "";
     const node = await server("hold", () => delegationCid);
-    const paths = await seed(home, node.host);
+    const paths = await seedWithPublicLogin(home, node.host);
     delegationCid = paths.delegationCid;
     node.setPaths(paths);
     const sessionBefore = await readFile(paths.session);
@@ -571,14 +607,14 @@ describe("tc auth logout --revoke with durable replica denial", () => {
       await child.exited;
     }
     await expectDeniedButRetained(home, paths, sessionBefore, keyBefore);
-  });
+  }, 30_000);
 
   test("a successful online retry revokes the CID before erasing the persisted replica", async () => {
     const home = await mkdtemp(join(tmpdir(), "tc841-revoke-retry-"));
     homes.push(home);
     let delegationCid = "";
     const node = await server("fail", () => delegationCid);
-    const paths = await seed(home, node.host);
+    const paths = await seedWithPublicLogin(home, node.host);
     delegationCid = paths.delegationCid;
     node.setPaths(paths);
 
@@ -594,14 +630,15 @@ describe("tc auth logout --revoke with durable replica denial", () => {
     ]);
     expect(await exists(paths.session)).toBe(false);
     expect(await exists(paths.db)).toBe(false);
-  });
+    expect(await exists(paths.key)).toBe(false);
+  }, 30_000);
 
   test("history-only owner grants revoke before the session, while imported and expired source-cli rows are excluded", async () => {
     const home = await mkdtemp(join(tmpdir(), "tc841-revoke-history-"));
     homes.push(home);
     let sessionCid = "";
     const node = await server("success", () => sessionCid);
-    const paths = await seed(home, node.host);
+    const paths = await seedWithPublicLogin(home, node.host);
     sessionCid = paths.delegationCid;
     node.setPaths(paths);
 
@@ -662,5 +699,5 @@ describe("tc auth logout --revoke with durable replica denial", () => {
     ]);
     expect(await exists(paths.session)).toBe(false);
     expect(await exists(paths.db)).toBe(false);
-  });
+  }, 30_000);
 });
