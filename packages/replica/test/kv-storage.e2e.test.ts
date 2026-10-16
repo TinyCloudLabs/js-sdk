@@ -628,17 +628,23 @@ describe.skipIf(!RUN)("kv-storage over a fake feed (Chromium)", () => {
     expect(await reader.evaluate(() => window.__kv.peerCommits("r"))).toHaveLength(1);
   }, 60_000);
 
-  test("a crashed worker restarts cleanly: the next call reopens and serves current data", async () => {
+  test("the testing helper and worker error both restart an open handle", async () => {
     const node = feed("kill");
     node.put("notes/a", "one");
     const page = await kvPage();
     await page.evaluate(() => window.__kv.createStorage("s", "fake"));
+    await page.evaluate(() => window.__kv.killStorageWorker("s"));
+    expect(await page.evaluate(() => window.__kv.fakeWorkerStarted("s"))).toBe(false);
     await openGranted(page, "s", "h", "kill");
     expect(await page.evaluate(() => window.__kv.sync("h", 1))).toMatchObject({ ok: true });
-    await page.evaluate(() => window.__kv.crashWorker("s"));
+    await page.evaluate(() => window.__kv.killStorageWorker("s"));
     node.put("notes/a", "two");
     expect(await page.evaluate(() => window.__kv.sync("h", 2))).toMatchObject({ ok: true, value: { syncedThroughEpoch: 2 } });
     expect(await page.evaluate(() => window.__kv.get("h", "notes/a"))).toMatchObject({ ok: true, value: { status: "present", value: "two" } });
+    await page.evaluate(() => window.__kv.crashWorker("s"));
+    node.put("notes/a", "three");
+    expect(await page.evaluate(() => window.__kv.sync("h", 3))).toMatchObject({ ok: true, value: { syncedThroughEpoch: 3 } });
+    expect(await page.evaluate(() => window.__kv.get("h", "notes/a"))).toMatchObject({ ok: true, value: { status: "present", value: "three" } });
   }, 60_000);
 
   test("default worker loads immutable content-hashed WASM asset", async () => {

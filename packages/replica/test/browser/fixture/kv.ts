@@ -10,6 +10,7 @@
  */
 import type { KVReplicaHandle, KVReplicaSpec, KVReplicaStorage, PurgeTarget, ReplicaPeerCommit, ReplicaQuotaSpec, ReplicaSessionStamp, ReplicationIdentity } from "@tinycloud/sdk-services/kv/replication";
 import { indexedDbReplicaStorage } from "@tinycloud/replica/kv-storage";
+import { killReplicaWorker } from "@tinycloud/replica/kv-storage/testing";
 // @ts-expect-error `?url` is a Vite module query.
 import publishedWorkerUrl from "@tinycloud/replica/kv-storage/worker?url";
 
@@ -162,6 +163,8 @@ const api = {
     }),
   pendingRead: (storage: string, identity: ReplicationIdentity) =>
     outcome(async () => need(storages, storage).pendingWrites!(identity, { stamp: await gate.establish(identity.principal) }).read()),
+  fakeWorkerStarted: (storage: string) => fakeWorkers.has(storage),
+  killStorageWorker: (storage: string) => killReplicaWorker(need(storages, storage)),
   crashWorker: (storage: string) => {
     // Exercise the production Worker.onerror path, including rejection and respawn.
     need(fakeWorkers, storage).dispatchEvent(new ErrorEvent("error", { message: "The replica worker was terminated." }));
