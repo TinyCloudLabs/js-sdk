@@ -131,6 +131,7 @@ export function registerDelegationCommand(
   delegation
     .command("revoke <cid>")
     .description("Revoke a delegation")
+    .addHelpText("after", "\n  If this profile cannot sign an owner revocation, use account.tinycloud.xyz/delegations or a local owner key.\n")
     .option("--yes", "Skip local-key TTY confirmation", false)
     .action(async (cid: string, options, cmd) => {
       try {

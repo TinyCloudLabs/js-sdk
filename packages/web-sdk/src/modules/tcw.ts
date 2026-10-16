@@ -1020,6 +1020,12 @@ export class TinyCloudWeb {
     });
   }
 
+  /** Revoke one delegation with a short-lived owner wallet signature, not session controls. */
+  async revokeDelegationAsOwner(cid: string): Promise<{ revoked: true; cid: string }> {
+    const node = await this.ensureNode();
+    return node.revokeDelegationAsOwner(cid);
+  }
+
   /** Register signed policy material through the Node-owned Policy/v3 runtime. */
   async registerPolicy(
     params: Omit<RegisterPolicyV3Input, "nodeOrigin" | "fetch">,

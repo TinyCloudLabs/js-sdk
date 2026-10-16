@@ -147,10 +147,16 @@ export async function revokeDelegationOnNode(params: {
       }
     }
   }
+  if (profile.authMethod === "local" && profile.privateKey) {
+    await node.revokeDelegationAsOwner(cid);
+    return {
+      cid, revoked: true, targetSpaceSource, authorityScopeSource: "cid-resource",
+      authorityScopeReason: "The owner signed a revocation bound to the exact delegation CID.",
+    };
+  }
 
-  let authorityScopeSource: RevocationResult["authorityScopeSource"] = "cid-resource";
-  let authorityScopeReason = "The revoke authority is scoped to the exact delegation CID.";
-  let fallbackSpaceId: string | undefined;
+  const authorityScopeSource: RevocationResult["authorityScopeSource"] = "cid-resource";
+  const authorityScopeReason = "The revoke authority is scoped to the exact delegation CID.";
   let commandAuthorityCid: string | undefined;
   if (!rawAuthorityCovered) {
     try {
@@ -175,34 +181,17 @@ export async function revokeDelegationOnNode(params: {
           ExitCode.PERMISSION_DENIED,
         );
       }
-      fallbackSpaceId = fallback.space;
-      authorityScopeSource = fallback.source;
-      authorityScopeReason = fallback.source === "local-signed-grant-artifact"
-        ? "Raw-CID revoke authority could not be issued; the fallback space came from an owner-signed local grant whose Authorization recomputes to this CID."
-        : "Raw-CID revoke authority could not be issued; the fallback space came from a locally verified owner-signed stored grant bound to this CID.";
-      targetSpaceSource = fallback.source;
-      const acquired = await ensureDelegationAuthority({
-        ctx, profile, node,
-        requested: [{ service: "tinycloud.delegation",
-          space: profile.authMethod !== "openkey" && fallback.space === node.accountSpaceId ? "default" : fallback.space,
-          path: "", actions: ["tinycloud.delegation/revoke"] }],
-        expiryOption: undefined,
-        reason: `Revoke delegation ${cid} using its CID-bound owner-signed grant ${fallback.source === "local-stored-grant" ? "record" : "artifact"}`,
-        yes: params.yes, consentAlreadyGiven: true, persist: false,
-        openKeyAcquisition: params.openKeyAcquisition,
-      });
-      commandAuthorityCid = acquired?.cid;
+      throw new CLIError(
+        "OWNER_SIGNATURE_REQUIRED",
+        "This profile cannot sign a direct owner revocation. Revoke from account.tinycloud.xyz/delegations or with a local owner key.",
+        ExitCode.AUTH_REQUIRED,
+      );
     }
   }
 
-  const result = fallbackSpaceId
-    ? await node.delegationManager.revoke(cid, {
-      targetSpaceId: fallbackSpaceId,
-      ...(commandAuthorityCid === undefined ? {} : { authorityCid: commandAuthorityCid }),
-    })
-    : commandAuthorityCid === undefined
-      ? await node.revokeDelegation(cid)
-      : await node.delegationManager.revoke(cid, { authorityCid: commandAuthorityCid });
+  const result = commandAuthorityCid === undefined
+    ? await node.revokeDelegation(cid)
+    : await node.delegationManager.revoke(cid, { authorityCid: commandAuthorityCid });
   if (!result.ok) {
     if (result.error.meta?.status === 403 && result.error.message === "Failed to revoke delegation: 403 - Unauthorized Revoker") {
       const profileDid = profile.ownerDid ?? ownerDidFromSpace(node.accountSpaceId) ?? ownerDidFromSpace(profile.spaceId) ?? "unknown";

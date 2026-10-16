@@ -11,6 +11,7 @@ import {
   canonicalSignedResponse,
   extractRecapAttenuations,
   parsePkhDid,
+  parseSignedSiweCacao,
   principalDidEquals,
   verifyDidKeyEd25519Signature,
   verifyEip191MessageSignature,
@@ -624,12 +625,27 @@ class LoopbackEncryptedNode {
     if (url.pathname === "/revoke" && request.method === "POST") {
       const authorization = request.headers.get("authorization");
       if (!authorization) return new Response("missing authorization", { status: 401 });
-      const payload = verifiedCompactPayload(authorization);
-      const target = Object.entries(payload.att ?? {}).find(([, actions]) =>
-        Object.keys(actions).includes("tinycloud.delegation/revoke")
-      )?.[0];
-      if (!target?.startsWith("urn:cid:")) return new Response("delegation revoke proof required", { status: 403 });
-      const cid = target.slice("urn:cid:".length);
+      let cid: string;
+      if (authorization.replace(/^Bearer /i, "").split(".").length === 3) {
+        const payload = verifiedCompactPayload(authorization);
+        const target = Object.entries(payload.att ?? {}).find(([, actions]) =>
+          Object.keys(actions).includes("tinycloud.delegation/revoke")
+        )?.[0];
+        if (!target?.startsWith("urn:cid:")) return new Response("delegation revoke proof required", { status: 403 });
+        cid = target.slice("urn:cid:".length);
+      } else {
+        const signed = await parseSignedSiweCacao(authorization);
+        const owner = /^tinycloud:(?:did:)?(pkh:eip155:[1-9]\d*:0x[0-9a-fA-F]{40})(?::|\/)/.exec(this.spaceId ?? "")?.[1];
+        const cacao = Cbor.decode<CacaoActivation>(decodeAuthorizationBytes(authorization));
+        if (
+          !owner || !principalDidEquals(signed.issuer, `did:${owner}`) ||
+          !signed.audience.startsWith("ucan:") ||
+          !signed.expiresAt || Date.parse(signed.expiresAt) <= Date.now() ||
+          Object.keys(signed.attenuation).length !== 0 ||
+          cacao.p?.resources !== undefined || cacao.p?.statement !== undefined
+        ) return new Response("owner-signed CID revocation required", { status: 403 });
+        cid = signed.audience.slice("ucan:".length);
+      }
       if (!this.delegationCids.has(cid)) return new Response("delegation not found", { status: 404 });
       this.revokedDelegationCids.add(cid);
       this.observed.revocations += 1;

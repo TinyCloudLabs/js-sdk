@@ -1620,6 +1620,22 @@ describe("TinyCloudNode runtime permission delegations", () => {
 
 
 
+  test.each(["tinycloud.delegation/revoke", "tinycloud.delegation/*"])(
+    "refuses a runtime root grant with %s before preparation",
+    async (action) => {
+      const node = makeNode(mock(() => ({})) as IWasmBindings["invoke"]);
+      await withActivatedDelegations(async () => {
+        await expect(node.grantRuntimePermissions([{
+          service: "tinycloud.delegation",
+          space: "default",
+          path: "",
+          actions: [action],
+        }])).rejects.toMatchObject({ code: "REVOKE_GRANT_DISABLED" });
+      });
+      expect((node as unknown as { wasmBindings: IWasmBindings }).wasmBindings.prepareSession).not.toHaveBeenCalled();
+    },
+  );
+
   test("classifies a host missing-parent rejection for raw CID revoke authority", async () => {
     const node = makeNode(mock(() => ({})) as any);
     const originalFetch = globalThis.fetch;

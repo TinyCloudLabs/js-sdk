@@ -5,4 +5,4 @@
 "@tinycloud/cli": patch
 ---
 
-Restrict high-privilege delegation abilities in creation flows with `REVOKE_GRANT_DISABLED`. Scoped grants and direct revocation of an existing delegation remain available.
+Restrict high-privilege delegation abilities in creation flows with `REVOKE_GRANT_DISABLED`. Scoped grants and direct owner revocation of an existing delegation remain available. Session-only CLI profiles without CID authority can use the account dashboard or a local owner key.

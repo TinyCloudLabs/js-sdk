@@ -87,13 +87,26 @@ export class RevokeGrantDisabledError extends Error {
   }
 }
 
-export function isRootRevocationGrant(path: string, actions: readonly string[]): boolean {
-  return (path === "" || path === "/" || path === "*") &&
-    actions.some((action) => actionContains(action, "tinycloud.delegation/revoke"));
+export function isRootRevocationGrant(
+  path: string,
+  actions: readonly string[],
+  resource?: string,
+  service?: string,
+): boolean {
+  return resource?.startsWith("urn:cid:") !== true &&
+    (path === "" || path === "/" || path === "*") &&
+    actions.some((action) =>
+      ((service === "delegation" || service === "tinycloud.delegation") && action === "revoke") ||
+      actionContains(action, "tinycloud.delegation/revoke"));
 }
 
-export function assertDelegationGrantEnabled(path: string, actions: readonly string[]): void {
-  if (isRootRevocationGrant(path, actions)) throw new RevokeGrantDisabledError();
+export function assertDelegationGrantEnabled(
+  path: string,
+  actions: readonly string[],
+  resource?: string,
+  service?: string,
+): void {
+  if (isRootRevocationGrant(path, actions, resource, service)) throw new RevokeGrantDisabledError();
 }
 
 // ---------------------------------------------------------------------------

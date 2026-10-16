@@ -5374,23 +5374,49 @@ export class TinyCloudNode {
    * target, whichever key issued it. Valid for 60 seconds. Requires the
    * owner wallet signer.
    */
-  async signOwnerRevocation(cid: string): Promise<string> {
+  async signOwnerRevocation(
+    cid: string,
+    messageOptions?: { readonly nonce: string; readonly issuedAt: Date },
+  ): Promise<string> {
     if (!this.signer) throw new Error("Owner wallet signer is required");
     const session = this.currentTinyCloudSession();
     if (!session) throw new Error("Owner session is required");
-    const issuedAt = new Date();
+    const issuedAt = messageOptions?.issuedAt ?? new Date();
     const siwe = new SiweMessage({
       domain: this.siweDomain,
       address: this.wasmBindings.ensureEip55(session.address),
       uri: `ucan:${cid}`,
       version: "1",
       chainId: session.chainId,
-      nonce: generateNonce(),
+      nonce: messageOptions?.nonce ?? generateNonce(),
       issuedAt: issuedAt.toISOString(),
       expirationTime: new Date(issuedAt.getTime() + 60_000).toISOString(),
     }).prepareMessage();
     const signature = await this.signer.signMessage(siwe);
     return this.wasmBindings.siweToDelegationHeaders({ siwe, signature }).Authorization;
+  }
+
+  /** Revoke one delegation with a fresh, owner-signed CID-bound wallet authorization. */
+  async revokeDelegationAsOwner(cid: string): Promise<{ revoked: true; cid: string }> {
+    const authorization = await this.signOwnerRevocation(cid);
+    const host = this.config.host;
+    if (!host) throw new Error("A TinyCloud host is required for owner revocation");
+    const response = await fetch(`${host}/revoke`, {
+      method: "POST",
+      headers: { Authorization: authorization },
+    });
+    if (!response.ok) {
+      throw new Error(`Failed to revoke delegation: ${response.status} - ${await response.text()}`);
+    }
+    const receipt: unknown = await response.json();
+    if (
+      !receipt || typeof receipt !== "object" ||
+      !("revoked" in receipt) || receipt.revoked !== true ||
+      !("cid" in receipt) || receipt.cid !== cid
+    ) {
+      throw new Error("Invalid owner revocation receipt");
+    }
+    return { revoked: true, cid };
   }
 
   /** Register a signed policy and sibling roots with this Node's Policy/v3 runtime. */
@@ -6184,6 +6210,9 @@ export class TinyCloudNode {
     }
 
     const expanded = this.expandPermissionEntries(permissions);
+    for (const entry of expanded) {
+      assertDelegationGrantEnabled(entry.path, entry.actions, entry.space);
+    }
     if (this.sessionCoversPermissionEntries(session, expanded)) {
       return [];
     }
