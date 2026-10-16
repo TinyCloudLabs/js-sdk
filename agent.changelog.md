@@ -21,6 +21,8 @@ entry when `agent.dev.md` or related agent workflow expectations change.
   these fixes do not authorize selected detail, publication or live capture.
 - Pace healthy live-policy probes instead of flooding the bounded diagnostic
   queue with calls and snapshots; keep the policy-transition assertions intact.
+- Give the conformance job the operations suite's existing Linux namespace
+  preflight; namespace tests remain mandatory in CI, not skipped.
 
 ## 2026-10-14
 
