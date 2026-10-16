@@ -333,12 +333,23 @@ never rebinding an existing controller.
 
 ### The structural guard: `ReplicaGateTx.run`
 
-**Rule:** every transaction that reads or writes a data store (`meta`, `entries`, `blobs`, `pending`, and `device`) MUST go through `run(scope, access, fn)`. Only purge/erase transactions are exempt. This explicitly includes:
+**Rule:** every **session-bound** transaction that reads or writes a data store
+(`meta`, `entries`, `blobs`, `pending`, `device`) MUST go through
+`run(scope, access, fn)`. This includes:
 - open, get, list, status and `grant()`;
 - `installGrant`;
 - every page commit, repair batch and GC pass;
 - sync completion;
 - every pending-store `read`/`readExisting`/`update`.
+
+Only these **narrow** operations are exempt: purge/erase transactions; a
+pre-transaction `snapshot()` of the gate/private gate-key control records; and
+bounded ungated read-only `inspectStatus` (§1), which uses the private-key
+snapshot to recheck incarnation/keyId before reading `byLookupId` and the
+outer opaque/numeric `meta` controls. Inspection may retrieve a sealed meta
+row but MUST NOT acquire the account key, decrypt/interpret `bytes`, return
+value bytes/list keys, or mutate any store. No exemption applies to a
+session-bound read, owner-device read or pending update.
 
 `run(scope, access, fn)` opens its own transaction over `scope.stores` plus
 `gate`, `device`, `partitions`, `purgeIntents` and `quota`. The **first IDB
@@ -349,13 +360,15 @@ gate-HMAC and account-key records, incarnation, stamp, required browser
 stale stamp/key/principal is gated before checking an active deadline; an
 active browser deadline is checked before signed/effective grant expiry.
 The assert is internal to `run`, with no public `assert`. Browser callers
-derive `principalHash` and stored opaque ids asynchronously from
-`ReplicaBrowserGateSnapshot.gateHmac` **before** the IDB transaction; raw
-principal and WebCrypto promises never enter it. Browser
-`ReplicaGateTx<IDBTransaction, ReplicaBrowserGateAccess>` requires both
-key IDs at compile time. Node callers precompute `SaltedHash` principalHash
-before the guarded operation, then recheck the gate's incarnation/salt/stamp
-under the profile lock or SQLite read transaction.
+obtain a typed `ReplicaBrowserGateSnapshot` from
+`ReplicaBrowserGateTx<IDBTransaction>.snapshot()`, then derive `principalHash`
+and stored opaque ids asynchronously from `snapshot.gateHmac` **before** the
+IDB transaction. Raw principal and WebCrypto promises never enter it.
+`ReplicaBrowserGateTx` requires `ReplicaBrowserGateAccess` (including both
+`keyId` and `accountKeyId`) at compile time; its snapshot cannot degrade to
+the public-salt-only `ReplicaGateSnapshot`. Node callers precompute
+`SaltedHash` principalHash before the guarded operation, then recheck the
+gate's incarnation/salt/stamp under the profile lock or SQLite read transaction.
 
 **Browser completion:** `readwrite` transactions use `{ durability: "strict" }`. `run` resolves only on the transaction's `oncomplete`; an abort or error rejects.
 
@@ -467,8 +480,13 @@ a stamp is dropped. This includes get bytes, list keys and replica-derived diver
 A transient `BUSY`, lock timeout or retryable I/O failure **before erase** does
 not end the user's network session; the deny/tombstone has already gated the
 replica. Erase is resumable and idempotent on the next command/load, and no
-failure after committed denial resurrects replica reads. An explicit user
+failure after committed denial resurrects replica reads. An explicit plain
 logout always ends the network session, even while erase remains pending.
+**Exception:** `logout --revoke` aborts network logout when online revocation
+fails: it preserves the session/key so revocation can be retried, reports a
+non-zero result and instructs the user to retry. The replica remains denied
+immediately and cannot serve while the network session is retained. This
+exception does not reopen a TC-1208 sign-out path or weaken plain logout.
 
 **Startup.** `recover()` runs before anything binds:
 1. browser retries a pending database delete if the marker is set;
@@ -624,7 +642,7 @@ node-enforced signed `exp` still bounds network use.
 | -- | -- |
 | Fresh mint | `mint(deviceDid, prefix, signal, { expiryMs })`, where `expiryMs = mintRemainingMs(…) = min(grantTtlMs, consentDeadline − now)`. It is a **duration**, forwarded as `delegateTo(…, { expiry: expiryMs })`. No mint when it is `≤ 0` (`CONSENT_EXPIRED`) |
 | Session grant reused directly | installed only if within policy. Otherwise it's replaced by a derived capped grant (`canRenew`), or its effective expiry is enforced locally (`capped`) |
-| Compact delegated / `sessionOnly` | no plan, mint or silent renewal. A **matching restored stamp** can use an already installed, independently verified active grant for the same identity/device partition and covered prefix while its effective expiry and applicable consent deadline (browser: durable gate) remain valid, even if `sessionGrant(prefix)` refuses. No matching stamp/valid installed grant means network-only; a leaf never establishes fresh consent |
+| Compact delegated / `sessionOnly` | no plan, mint or silent renewal. A matching restored stamp and an independently verified installed grant for the same identity/device/prefix are **necessary but not sufficient** for local serving. Every get/list also requires the **current session's own** uncaveated get authority for the requested key/list prefix, independently of that stored device grant. If `sessionGrant(prefix)` refuses `NOT_COVERED`, `CAVEATED_AUTHORITY` or `SESSION_EXPIRING`, or cannot establish current coverage, use the network even while the stored grant is active. Otherwise the effective expiry and durable browser consent deadline still apply |
 | Installed grant reused at open | only if its stored effective authority is `valid`, it covers the prefix, its `effectiveExpiresAt` is ahead and `now <` the applicable consent deadline |
 | Restored from an older policy | recomputed at open; capped locally |
 
@@ -672,15 +690,20 @@ Both are forwarded as `KVReplicaSpec.quota`.
 `[opaquePid, accountHmac(path)]` and value
 `{ pid, hashId?, v: 1, iv: Uint8Array, bytes: Uint8Array, size: number }`;
 `blobs` rows use `[opaquePid, accountHmac(hash)]` and
-`{ pid, v: 1, iv, bytes, size }`. A `meta` row uses key `opaquePid` and value
-`{ pid, revision, generation, coverageCode, syncedThroughEpoch, keys,
-contentMissing, tombstones, contentBytes, purged, v: 1, iv, bytes, size }`:
-all named controls except `pid`, `coverageCode: 0 | 1 | 2`, `purged: boolean`
-and `v` are finite numeric fields. `coverageCode` maps 0 = empty,
-1 = bootstrapping, 2 = complete. `revision`/`generation` support guarded CAS
-and tombstones; counts/epoch/`contentBytes` support redacted inspection.
-Config, grant, authority, cursor, error and lease holder/token/serial/times
-are sealed in `bytes`, not exposed in the numeric control row.
+`{ pid, v: 1, iv, bytes, size }`. An **active** `meta` row uses key
+`opaquePid` and value `{ pid, revision, generation, coverageCode,
+syncedThroughEpoch, keys, contentMissing, tombstones, contentBytes, purged:
+false, v: 1, iv, bytes, size }`. A **purged** meta tombstone at that key is
+keyless: `{ pid, revision, generation, coverageCode: 0, syncedThroughEpoch: 0,
+keys: 0, contentMissing: 0, tombstones: 0, contentBytes: 0, purged: true,
+size }`; it has **no** `v`, `iv` or `bytes`, and contains no sealed secret or
+literal account/path data. All named controls except opaque `pid`,
+`coverageCode: 0 | 1 | 2`, `purged: boolean` and active-row `v` are finite
+numeric fields. `coverageCode` maps 0 = empty, 1 = bootstrapping, 2 =
+complete. `revision`/`generation` support guarded CAS and stale-handle
+`RESET_REQUIRED`; counts/epoch/`contentBytes` support redacted inspection.
+Active config, grant, authority, cursor, error and lease
+holder/token/serial/times are sealed in `bytes`, never exposed in controls.
 
 `bytes` contains AES-GCM ciphertext (including its 16-byte tag). Plain
 key/path/hash/content/config/grant/cursor/error values live **only inside**
@@ -691,18 +714,18 @@ unobservable and excluded. `navigator.storage.estimate()` is approximate
 and origin-wide: it supplies the separate free-space floor, not row usage.
 
 `kv-storage/sealed.ts` defines `measureSealedRow(key: IDBValidKey, sealedRow)` (read-only
-test export) as the **one** metric:
+test export) as the **one** metric for active rows **and** keyless purged meta tombstones:
 4-byte length + UTF-8 JSON encoding of the primary key; 2-byte object frame;
 for every persisted field, 1-byte delimiter + UTF-8 field name; `pid` and
-optional `hashId` each add 4-byte length + UTF-8 value; `v` and
-`coverageCode` each add one byte; `purged` adds one byte; every other
+optional `hashId` each add 4-byte length + UTF-8 value; `v` (active rows only)
+and `coverageCode` each add one byte; `purged` adds one byte; every other
 numeric field (`revision`, `generation`, `syncedThroughEpoch`, `keys`,
 `contentMissing`, `tombstones`, `contentBytes`, **and `size`**) adds a fixed
-eight bytes; `iv` and `bytes` each add 4-byte length + raw bytes. The
-`bytes` ciphertext includes its 16-byte AES-GCM authentication tag. Fixed
-eight-byte `size` avoids recursive decimal-length accounting. The same
-helper measures final presealed rows, old stored rows and GC/erase removals;
-it does not claim IDB filesystem bytes.
+eight bytes; `iv` and `bytes` each add 4-byte length + raw bytes **only when
+present**. Active-row `bytes` ciphertext includes its 16-byte AES-GCM
+authentication tag. Fixed eight-byte `size` avoids recursive decimal-length
+accounting. The same helper measures final presealed rows, old stored rows,
+purged tombstones and GC/erase removals; it does not claim IDB filesystem bytes.
 
 The same deterministic **application encoding** charges the final persisted
 key+value envelope of the sealed owner-device record and the numeric
@@ -739,9 +762,14 @@ device bucket released **in that deny transaction** with key deletion; later
 erase/replay cannot release them twice. Partition erase retains the
 `accountErase` rule below. Node admission is unchanged.
 
-Erase measures the same stored row metric for blobs, entries and meta, then
-calls `accountErase(tx, { partitionId, bytes })` in the erase transaction;
-once the partition index is gone replay subtracts nothing.
+Erase measures stored blobs, entries and active meta, writes the keyless
+`purged: true` meta tombstone to fence open handles, then calls
+`accountErase(tx, { partitionId, bytes })` with the **old total minus the
+measured tombstone** in the same exempt transaction. The tombstone's `size`
+remains charged to the partition bucket until it is physically deleted or
+replaced; a same-pid reinitialisation admits the signed new-meta-minus-old-
+tombstone delta. Once the partition index is gone replay releases zero and
+never charges or subtracts the tombstone twice.
 
 **Outcomes:**
 - `STORAGE_BUDGET`: admission refuses the page or owner-device/stamp write before
@@ -773,7 +801,7 @@ One IndexedDB database per origin, `REPLICA_KV_DATABASE` = `tinycloud-replica-kv
 
 | Store (`REPLICA_KV_STORES`) | Owner | Key | Guarded by `run` |
 | -- | -- | -- | -- |
-| `meta` | adapter (S1) | private gate-HMAC `partitionId`; v2 numeric/opaque inspection and CAS controls plus AES-sealed config/grants/authority/cursor/errors/lease (§4) | yes |
+| `meta` | adapter (S1) | private gate-HMAC `partitionId`; active v2 numeric/opaque inspection and CAS controls plus AES-sealed config/grants/authority/cursor/errors/lease, or keyless opaque/numeric `purged: true` tombstone with no `v`/`iv`/`bytes` (§4) | yes |
 | `entries` | adapter | `[partitionId, accountHmac(path)]`; AES-sealed path, entry metadata and hash | yes |
 | `blobs` | adapter | `[partitionId, accountHmac(hash)]`; AES-GCM ciphertext and sealed hash | yes |
 | `pending` | adapter | private gate-HMAC `identityKeyHash`; AES-sealed identity, keys and pending state | yes |
@@ -783,13 +811,16 @@ One IndexedDB database per origin, `REPLICA_KV_DATABASE` = `tinycloud-replica-kv
 | `purgeIntents` | lifecycle | private `ReplicaPurgeIntent.id` and stored opaque ids | control |
 | `quota` | ledger (S5) | opaque partition id, reserved `DEVICE_QUOTA_PARTITION_ID = "device"` and numeric application-encoded byte accounting | control |
 
-The v2 `entries`, `blobs` and `meta` values have the sealed envelopes and
-persisted `size` field specified in §4. `kv-storage/sealed.ts:measureSealedRow`
-is the canonical key-plus-row metric for page/meta admission, repair/GC and
-erase. The sealed owner-device and grant/first-install device rows contribute
-their final key-plus-row application encoding to the reserved device bucket;
-deny releases that bucket before background purge. No metric claims
-unobservable IDB engine/page or native CryptoKey allocation.
+Active v2 `entries`, `blobs` and `meta` values have the sealed envelopes and
+persisted `size` field specified in §4. A purged `meta` tombstone keeps only
+opaque/numeric fence controls and its measured `size`, with no ciphertext or
+key record; it stays charged in the partition ledger until replacement or
+physical deletion. `kv-storage/sealed.ts:measureSealedRow` is the canonical
+key-plus-row metric for active page/meta admission, keyless tombstones,
+repair/GC and erase. The sealed owner-device and grant/first-install device
+rows contribute their final key-plus-row application encoding to the reserved
+device bucket; deny releases that bucket before background purge. No metric
+claims unobservable IDB engine/page or native CryptoKey allocation.
 
 **Destructive v1→v2 migration.** `REPLICA_KV_SCHEMA_VERSION = 2`. V1 contains
 plaintext replica-owned rows incompatible with the sealed/HMAC v2 schema.

@@ -42,6 +42,7 @@ export type {
   ReplicaAccountGate,
   ReplicaBrowserGateAccess,
   ReplicaBrowserGateSnapshot,
+  ReplicaBrowserGateTx,
   ReplicaClock,
   ReplicaDenyInput,
   ReplicaDenyOutcome,
