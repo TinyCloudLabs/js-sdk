@@ -425,12 +425,12 @@ describe.skipIf(!RUN)("kv-storage over a fake feed (Chromium)", () => {
     expect(await page.evaluate(() => window.__kv.get("again", "notes/a"))).toMatchObject({ ok: true, value: { status: "coverage_incomplete", meta: { syncedThroughEpoch: 0 } } });
   }, 60_000);
 
-  test("close() while a sync reopens a killed worker waits and prevents that sync", async () => {
+  test("close() while a sync reopens a crashed worker waits and prevents that sync", async () => {
     feed("close-race").put("notes/a", "one");
     const page = await kvPage();
     await page.evaluate(() => window.__kv.createStorage("s", "fake"));
     await openGranted(page, "s", "h", "close-race");
-    await page.evaluate(() => window.__kv.killWorker("s"));
+    await page.evaluate(() => window.__kv.crashWorker("s"));
     await page.evaluate(() => {
       window.__kv.startSync("h", "queued", 5);
       window.__kv.startClose("h");
@@ -628,14 +628,14 @@ describe.skipIf(!RUN)("kv-storage over a fake feed (Chromium)", () => {
     expect(await reader.evaluate(() => window.__kv.peerCommits("r"))).toHaveLength(1);
   }, 60_000);
 
-  test("a killed worker restarts cleanly: the next call reopens and serves current data", async () => {
+  test("a crashed worker restarts cleanly: the next call reopens and serves current data", async () => {
     const node = feed("kill");
     node.put("notes/a", "one");
     const page = await kvPage();
     await page.evaluate(() => window.__kv.createStorage("s", "fake"));
     await openGranted(page, "s", "h", "kill");
     expect(await page.evaluate(() => window.__kv.sync("h", 1))).toMatchObject({ ok: true });
-    await page.evaluate(() => window.__kv.killWorker("s"));
+    await page.evaluate(() => window.__kv.crashWorker("s"));
     node.put("notes/a", "two");
     expect(await page.evaluate(() => window.__kv.sync("h", 2))).toMatchObject({ ok: true, value: { syncedThroughEpoch: 2 } });
     expect(await page.evaluate(() => window.__kv.get("h", "notes/a"))).toMatchObject({ ok: true, value: { status: "present", value: "two" } });

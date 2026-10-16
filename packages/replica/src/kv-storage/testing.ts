@@ -2,10 +2,9 @@
  * `@tinycloud/replica/kv-storage/testing`: fault seams for acceptance
  * suites. Never imported by a production entry.
  */
-import type { KVReplicaStorage, ReplicaPartitionEraser } from "@tinycloud/sdk-services/kv/replication";
+import type { ReplicaPartitionEraser } from "@tinycloud/sdk-services/kv/replication";
 
 import { ReplicaError, ReplicaErrorCode } from "../errors.js";
-import { KILL_WORKER } from "./client.js";
 import type { DenyFaultPoint } from "./lifecycle.js";
 import { denyFaults } from "./lifecycle.js";
 import { kvPartitionEraser } from "./schema.js";
@@ -14,16 +13,6 @@ import { kvPartitionEraser } from "./schema.js";
 export { createIndexedDbLifecycle } from "./lifecycle.js";
 /** Inspect encrypted raw-row sizes without exposing the sealed codec on the production entry. */
 export { measureSealedRow } from "./sealed.js";
-
-/**
- * Terminate the storage's worker as a crash would: in-flight calls reject,
- * and the next call on any handle respawns the worker and reopens its spec.
- */
-export function killReplicaWorker(storage: KVReplicaStorage): void {
-  const kill: unknown = Reflect.get(storage, KILL_WORKER);
-  if (typeof kill !== "function") throw new TypeError("killReplicaWorker needs a storage from indexedDbReplicaStorage().");
-  kill.call(storage);
-}
 
 /**
  * An eraser whose `erasePartition` fails (aborting the erase transaction)
