@@ -473,13 +473,16 @@ describe("browser replica gate without a profile directory", () => {
       };
       try {
         let approvedSiwe: string | undefined;
+        let preparedDid: string | undefined;
         let preparedCalls = 0;
         let retryCalls = 0;
-        await node.signInWithOpenKey(async ({ siwe, jwk }) => {
+        await node.signInWithOpenKey(async ({ siwe, jwk, verificationMethod }) => {
           preparedCalls++;
           expect(node.replicaStamp).toBeUndefined();
           expect(JSON.stringify(jwk)).toBeTruthy();
           approvedSiwe = siwe;
+          preparedDid = verificationMethod;
+          expect(verificationMethod).toMatch(/^did:key:/);
           const selectedActionKeys: string[] = [];
           const permissions: Array<{ service: string; space: string; path: string; actions: string[] }> = [];
           for (const [resource, actions] of Object.entries(extractRecapAttenuations(siwe))) {
@@ -510,6 +513,7 @@ describe("browser replica gate without a profile directory", () => {
             expect(error.message).toContain("OpenKey signature verification failed");
             expect(attempt).toBe(1);
             expect(original.siwe).toBe(approvedSiwe);
+            expect(original.verificationMethod).toBe(preparedDid);
             const selectedActionKeys: string[] = [];
             const permissions: Array<{ service: string; space: string; path: string; actions: string[] }> = [];
             for (const [resource, actions] of Object.entries(extractRecapAttenuations(original.siwe))) {
@@ -539,6 +543,7 @@ describe("browser replica gate without a profile directory", () => {
         expect(preparedCalls).toBe(1);
         expect(retryCalls).toBe(1);
         expect(node.session?.siwe).toBe(approvedSiwe);
+        expect(node.sessionDid).toBe(preparedDid);
         expect(node.replicaStamp).toBeDefined();
         expect(await inspectReplicaKeyPresence()).toEqual({ gateHmac: true, accountKey: true });
         const local = new TinyCloudNode({
