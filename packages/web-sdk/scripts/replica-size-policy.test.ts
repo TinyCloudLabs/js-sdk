@@ -340,7 +340,7 @@ describe("TC-858 policy-only source identity", () => {
     }
   });
 
-  it("permits CLI-only auth changes because neither measured bundle imports the CLI", () => {
+  it("permits CLI-only auth changes absent from a measured entry graph", async () => {
     const { root, base } = fixture();
     try {
       const cliSource = "packages/cli/src/auth/local-key.ts";
@@ -348,56 +348,132 @@ describe("TC-858 policy-only source identity", () => {
       writeFileSync(join(root, cliSource), "export const persistedReplicaStamp = true;\n");
       git(root, "add", ".");
       git(root, "commit", "-qm", "persist CLI sign-in stamp");
-      expect(isPolicyOnlySinceApprovedSource(root, base, ciCorrectionPolicyOnlyPaths)).toBe(true);
+      expect(isPolicyOnlySinceApprovedSource(root, base, ciCorrectionPolicyOnlyPaths)).toBe(false);
+      const { collectBuildInputs } = await import("./replica-size-inputs");
+      const inputs = collectBuildInputs(root, [{ entries: [source], target: "browser" }]);
+      expect(inputs.has(cliSource)).toBe(false);
+      expect(isPolicyOnlySinceApprovedSource(root, base, ciCorrectionPolicyOnlyPaths, {
+        bundleInputs: inputs, sourceMapInputs: new Set(),
+      })).toBe(true);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
   });
 
-  it("permits the unbundled Node real-node test fixture but refuses measured package inputs", () => {
+  it("allows an unbundled Node test only with a current build graph", async () => {
+    const { root } = fixture();
+    try {
+      const testFixture = "packages/node-sdk/src/replication/replication.e2e.test.ts";
+      const entry = "packages/node-sdk/src/index.ts";
+      mkdirSync(dirname(join(root, testFixture)), { recursive: true });
+      writeFileSync(join(root, entry), "export const node = true;\n");
+      git(root, "add", ".");
+      git(root, "commit", "-qm", "approved measured entry");
+      const base = git(root, "rev-parse", "HEAD");
+      writeFileSync(join(root, testFixture), "export const guardedFixture = true;\n");
+      git(root, "add", ".");
+      git(root, "commit", "-qm", "guard real-node fixture");
+      expect(isPolicyOnlySinceApprovedSource(root, base, ciCorrectionPolicyOnlyPaths)).toBe(false);
+      const { collectBuildInputs } = await import("./replica-size-inputs");
+      const inputs = collectBuildInputs(root, [{ entries: [entry], target: "bun" }]);
+      expect(inputs.has(testFixture)).toBe(false);
+      expect(isPolicyOnlySinceApprovedSource(root, base, ciCorrectionPolicyOnlyPaths, {
+        bundleInputs: inputs, sourceMapInputs: new Set(),
+      })).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("refuses a changed test imported by an unchanged measured entry", async () => {
+    const { root } = fixture();
+    try {
+      const testFixture = "packages/node-sdk/src/replication/replication.e2e.test.ts";
+      const entry = "packages/node-sdk/src/index.ts";
+      mkdirSync(dirname(join(root, testFixture)), { recursive: true });
+      writeFileSync(join(root, testFixture), "export const guardedFixture = true;\n");
+      writeFileSync(join(root, entry), 'import "./replication/replication.e2e.test";\n');
+      git(root, "add", ".");
+      git(root, "commit", "-qm", "approved measured entry imports test");
+      const base = git(root, "rev-parse", "HEAD");
+      writeFileSync(join(root, testFixture), "export const guardedFixture = false;\n");
+      git(root, "add", ".");
+      git(root, "commit", "-qm", "change imported test alone");
+      const { collectBuildInputs } = await import("./replica-size-inputs");
+      const inputs = collectBuildInputs(root, [{ entries: [entry], target: "bun" }]);
+      expect(inputs.has(testFixture)).toBe(true);
+      expect(isPolicyOnlySinceApprovedSource(root, base, ciCorrectionPolicyOnlyPaths, {
+        bundleInputs: inputs, sourceMapInputs: new Set(),
+      })).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("refuses a test missing from the throwaway graph but present in emitted source maps", () => {
     const { root, base } = fixture();
     try {
       const testFixture = "packages/node-sdk/src/replication/replication.e2e.test.ts";
       mkdirSync(dirname(join(root, testFixture)), { recursive: true });
-      writeFileSync(join(root, testFixture), "export const guardedFixture = true;\n");
+      writeFileSync(join(root, testFixture), "export const bundledOnlyInTsup = true;\n");
       git(root, "add", ".");
-      git(root, "commit", "-qm", "guard real-node fixture");
-      expect(isPolicyOnlySinceApprovedSource(root, base, ciCorrectionPolicyOnlyPaths)).toBe(true);
+      git(root, "commit", "-qm", "change a test appearing in emitted maps");
+      expect(isPolicyOnlySinceApprovedSource(root, base, ciCorrectionPolicyOnlyPaths, {
+        bundleInputs: new Set(), sourceMapInputs: new Set([testFixture]),
+      })).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
 
+  it("keeps the contract Markdown outside the measured entry graph", () => {
+    const { root, base } = fixture();
+    try {
       const contract = "packages/sdk-services/src/kv/replication/CONTRACT.md";
       mkdirSync(dirname(join(root, contract)), { recursive: true });
       writeFileSync(join(root, contract), "A replica must be stamped before checking node root support.\n");
       git(root, "add", ".");
       git(root, "commit", "-qm", "freeze root gate precedence");
       expect(isPolicyOnlySinceApprovedSource(root, base, ciCorrectionPolicyOnlyPaths)).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
 
-      for (const measured of [
-        "packages/web-sdk/src/modules/tcw.ts",
-        "packages/node-sdk/src/TinyCloudNode.ts",
-        "packages/sdk-services/src/kv/replication/controller.ts",
-        "packages/sdk-core/src/index.ts",
-        "packages/replica/src/kv-storage/worker.ts",
-        "packages/sdk-rs/web-sdk-wasm/src/lib.rs",
-        "packages/bootstrap/src/index.ts",
-        "packages/share-sdk/src/index.ts",
-        "packages/share-envelope/src/index.ts",
-        "packages/web-sdk/webpack.config.cjs",
-        "packages/replica/tsup.config.ts",
-        "packages/node-sdk/package.json",
-        "bun.lock",
-        ".github/workflows/replica-e2e.yml",
-      ]) {
+  for (const measured of [
+    "packages/web-sdk/src/modules/tcw.ts",
+    "packages/node-sdk/src/TinyCloudNode.ts",
+    "packages/sdk-services/src/kv/replication/controller.ts",
+    "packages/sdk-core/src/index.ts",
+    "packages/replica/src/kv-storage/worker.ts",
+    "packages/sdk-rs/web-sdk-wasm/src/lib.rs",
+    "packages/bootstrap/src/index.ts",
+    "packages/share-sdk/src/index.ts",
+    "packages/share-envelope/src/index.ts",
+    "packages/web-sdk/webpack.config.cjs",
+    "packages/replica/tsup.config.ts",
+    "packages/node-sdk/package.json",
+    "packages/cli/package.json",
+    "packages/cli/tsup.config.ts",
+    "packages/cli/bunfig.toml",
+    "packages/cli/scripts/new-build.ts",
+    "bun.lock",
+    ".github/workflows/replica-e2e.yml",
+  ]) {
+    it(`independently refuses changed build input ${measured}`, () => {
+      const { root, base } = fixture();
+      try {
         const path = join(root, measured);
         mkdirSync(dirname(path), { recursive: true });
         writeFileSync(path, `measured ${measured}\n`);
         git(root, "add", ".");
         git(root, "commit", "-qm", `change measured ${measured}`);
         expect(isPolicyOnlySinceApprovedSource(root, base, ciCorrectionPolicyOnlyPaths)).toBe(false);
+      } finally {
+        rmSync(root, { recursive: true, force: true });
       }
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
+    });
+  }
 
   it("refuses moving measured source into an otherwise ignored CLI path", () => {
     const { root, base } = fixture();
@@ -408,6 +484,21 @@ describe("TC-858 policy-only source identity", () => {
       git(root, "commit", "-qm", "move measured web source into CLI");
       expect(git(root, "diff", "--name-only", `${base}...HEAD`)).toBe(cliSource);
       expect(isPolicyOnlySinceApprovedSource(root, base, ciCorrectionPolicyOnlyPaths)).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("refuses moving measured source into a test-shaped path", () => {
+    const { root, base } = fixture();
+    try {
+      const testPath = "packages/web-sdk/src/removed.test.ts";
+      git(root, "mv", source, testPath);
+      git(root, "commit", "-qm", "move measured source into test");
+      expect(git(root, "diff", "--name-only", `${base}...HEAD`)).toBe(testPath);
+      expect(isPolicyOnlySinceApprovedSource(root, base, ciCorrectionPolicyOnlyPaths, {
+        bundleInputs: new Set(), sourceMapInputs: new Set(),
+      })).toBe(false);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

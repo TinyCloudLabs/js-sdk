@@ -1,4 +1,5 @@
 import { execFileSync, spawnSync } from "node:child_process";
+import type { MeasuredInputGraph } from "./replica-size-inputs";
 
 export type GzipSizes = { "index.mjs": number; "index.cjs": number };
 export type LedgerEntry = { pr: string; ticket: string; "index.mjs": number; "index.cjs": number; note: string };
@@ -259,24 +260,34 @@ const measuredPackagePrefixes = [
   "packages/share-envelope/",
 ] as const;
 
-// These files are exercised by tests or reviewed as contract text, but are not
-// reachable from the build entrypoints above.
-const unbundledMeasuredPackageFiles: ReadonlySet<string> = new Set([
-  "packages/node-sdk/src/replication/replication.e2e.test.ts",
-  "packages/sdk-services/src/kv/replication/CONTRACT.md",
-]);
+// The reviewed S0 sentence is contract text, not a module. Test files are
+// admitted separately only after a fresh graph and emitted-map absence check.
+const unbundledContract = "packages/sdk-services/src/kv/replication/CONTRACT.md";
+
+function isCliNonInput(path: string): boolean {
+  return path.startsWith("packages/cli/src/") ||
+    path.startsWith("packages/cli/test/") ||
+    path.startsWith("packages/cli/tests/") ||
+    path.startsWith("packages/cli/__tests__/") ||
+    path === "packages/cli/README.md" || path === "packages/cli/CHANGELOG.md";
+}
+
+function isMeasuredTest(path: string): boolean {
+  return measuredPackagePrefixes.some((prefix) => path.startsWith(prefix)) &&
+    (/\.test\.ts$/.test(path) || /\/(?:tests|__tests__)\//.test(path));
+}
 
 function isMeasuredArtifactInput(path: string): boolean {
-  if (unbundledMeasuredPackageFiles.has(path)) return false;
   return path === "bun.lock" || path === "package.json" || path === "bunfig.toml" ||
     path === "turbo.json" || /^tsconfig(?:\.[^/]+)?\.json$/.test(path) ||
     path === ".github/workflows/replica-e2e.yml" ||
+    (path.startsWith("packages/cli/") && !isCliNonInput(path)) ||
     measuredPackagePrefixes.some((prefix) => path.startsWith(prefix));
 }
 
-// A CLI implementation cannot enter either measured entry graph. Keep the
-// excluded class narrow; unknown paths fail closed until their graph is reviewed
-// (notably executable files beside Changesets release notes).
+// A CLI implementation cannot enter either measured entry graph. Its manifest,
+// scripts and configs can influence the CI build and remain frozen. Unknown
+// paths fail closed, including executable files beside Changesets release notes.
 export const ciCorrectionPolicyOnlyPaths: ReadonlySet<string> = new Set([
   "packages/replica/CHANGELOG.md",
   "packages/replica/README.md",
@@ -291,15 +302,20 @@ export const ciCorrectionPolicyOnlyPaths: ReadonlySet<string> = new Set([
   "packages/web-sdk/scripts/replica-size-ledger.json",
   "packages/web-sdk/scripts/replica-size-policy.test.ts",
   "packages/web-sdk/scripts/replica-size-policy.ts",
+  "packages/web-sdk/scripts/replica-size-inputs.ts",
 ]);
 
-export function isPolicyOnlySinceApprovedSource(root: string, approvedSource: string, allowed: ReadonlySet<string>): boolean {
+export function isPolicyOnlySinceApprovedSource(
+  root: string, approvedSource: string, allowed: ReadonlySet<string>, graph?: MeasuredInputGraph,
+): boolean {
   if (spawnSync("git", ["merge-base", "--is-ancestor", approvedSource, "HEAD"], { cwd: root }).status !== 0) {
     return false;
   }
   const changed = execFileSync("git", ["diff", "--no-renames", "--name-only", "-z", `${approvedSource}...HEAD`], { cwd: root });
-  return changed.toString("utf8").split("\0").filter(Boolean).every((path) =>
-    allowed.has(path) || /^\.changeset\/[^/]+\.md$/.test(path) ||
-    (!isMeasuredArtifactInput(path) &&
-      (path.startsWith("packages/cli/") || unbundledMeasuredPackageFiles.has(path))));
+  return changed.toString("utf8").split("\0").filter(Boolean).every((path) => {
+    if (allowed.has(path) || /^\.changeset\/[^/]+\.md$/.test(path) || path === unbundledContract) return true;
+    if (isMeasuredArtifactInput(path) && !isMeasuredTest(path)) return false;
+    if (!isMeasuredTest(path) && !isCliNonInput(path)) return false;
+    return graph !== undefined && !graph.bundleInputs.has(path) && !graph.sourceMapInputs.has(path);
+  });
 }

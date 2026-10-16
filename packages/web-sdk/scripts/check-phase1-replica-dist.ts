@@ -10,6 +10,7 @@ import {
   relocatedOptionalAllowance, relocationCommit, validateOptionalEntryTransition, validateOptionalLedger, type OptionalLedger,
 } from "./replica-optional-size-policy";
 import { assertCiSizeToolchain, approvedCiToolchainCorrection, approvedFixRequiredRatchet, approvedGatedOnlyRatchet, approvedPhase2, ciCorrectionPolicyOnlyPaths, isPolicyOnlySinceApprovedSource, validateCiToolchainTransition, validateGatedOnlyRatchet, validateLedger, type GzipSizes, type Ledger, type LedgerEntry } from "./replica-size-policy";
+import { collectMeasuredArtifactInputs } from "./replica-size-inputs";
 type Baseline = {
   webSdkTestBaseline: { ref: string; unhandledErrors: number; failingNames: string[]; unhandledSignatures: string[] };
 };
@@ -244,7 +245,8 @@ if (prBaseSha) {
   const ciCorrectionIntroduced = ciCorrection !== undefined &&
     baseLedger.canonicalToolchainCorrection === undefined;
   if (ciCorrectionIntroduced) {
-    if (!isPolicyOnlySinceApprovedSource(repoRoot, approvedCiToolchainCorrection.approvedSource, ciCorrectionPolicyOnlyPaths)) {
+    const graph = await collectMeasuredArtifactInputs(repoRoot);
+    if (!isPolicyOnlySinceApprovedSource(repoRoot, approvedCiToolchainCorrection.approvedSource, ciCorrectionPolicyOnlyPaths, graph)) {
       console.error("CI toolchain size correction requires unchanged measured web/worker artifact inputs since ddc032ca.");
       failed = true;
     }
