@@ -511,7 +511,7 @@ export class FilePendingWriteStore implements PendingWriteStore {
       const result = await section(file);
       await gate.assertGateAccess(this.#profileDir, access, snapshot.salt);
       this.#generation = generation;
-      if (await pathExists(this.#dir)) this.#canonicalDir = dirname(file);
+      if (await pathExists(this.#dir)) this.#canonicalDir = await realpath(this.#dir);
       return result;
     }));
   }
