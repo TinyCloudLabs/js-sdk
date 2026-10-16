@@ -118,6 +118,7 @@ async function v2OrphanFixture(remoteCompleted = false) {
     ...(remoteCompleted ? { remotePending: true as const } : {}),
   })).toMatchObject({ v: 2, scope: "orphan_profile" });
   if (remoteCompleted) {
+    // Model a completed node receipt; the public --revoke case exercises the real request.
     expect(await purge.completeRemoteLogout({ principal: ownerDid }))
       .toMatchObject({ v: 2, scope: "orphan_profile" });
   }
