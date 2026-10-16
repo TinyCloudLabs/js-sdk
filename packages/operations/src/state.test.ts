@@ -83,6 +83,48 @@ test("refuses writes through a whole-profile symlink without changing the target
   expect(await readSession("victim")).toEqual({ owner: "victim" });
 });
 
+test("ordinary profile reads and writes remain available on darwin and win32", async () => {
+  await isolatedHome();
+  const originalPlatform = process.platform;
+  try {
+    for (const platform of ["darwin", "win32"] as const) {
+      Object.defineProperty(process, "platform", { value: platform });
+      expect(await readSession(platform)).toBeNull();
+      await writeSession(platform, { owner: platform });
+      expect(await readSession(platform)).toEqual({ owner: platform });
+      await withProfileLock(platform, async () => {
+        await writeSession(platform, { owner: `${platform}-updated` });
+        expect(await readSession(platform)).toEqual({ owner: `${platform}-updated` });
+      });
+      await symlink(profilePath(platform), profilePath(`${platform}-linked`));
+      await expect(readSession(`${platform}-linked`)).rejects.toMatchObject({ code: "PROFILE_SYMLINK" });
+    }
+  } finally {
+    Object.defineProperty(process, "platform", { value: originalPlatform });
+  }
+});
+
+test("a deferred profile read refuses its expired descriptor even when another profile reuses the fd", async () => {
+  await isolatedHome();
+  await writeSession("selected", { owner: "selected" });
+  await writeSession("victim", { owner: "victim" });
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  let deferred!: Promise<unknown>;
+  await withProfileLock("selected", async () => {
+    deferred = (async () => {
+      await gate;
+      return readSession("selected");
+    })();
+  });
+  await withProfileLock("victim", async () => {
+    release();
+    await expect(deferred).rejects.toMatchObject({ code: "PROFILE_SYMLINK" });
+  });
+  expect(await readSession("selected")).toEqual({ owner: "selected" });
+  expect(await readSession("victim")).toEqual({ owner: "victim" });
+});
+
 test("a profile lock keeps reads and removal on its original directory after a real-directory swap", async () => {
   await isolatedHome();
   await writeSession("selected", { owner: "selected" });

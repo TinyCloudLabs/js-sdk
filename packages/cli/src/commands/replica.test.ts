@@ -4,7 +4,7 @@
  * nothing is written into it.
  */
 import { afterAll, beforeEach, describe, expect, test } from "bun:test";
-import { mkdir, mkdtemp, readdir, rename, rm, stat, symlink, unlink } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, rename, rm, stat, symlink, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Command } from "commander";
@@ -78,6 +78,31 @@ async function resetFromCli(profile: string, name: string): Promise<{ exited: bo
     process.exit = previousExit;
     process.stderr.write = previousWrite;
   }
+}
+
+async function readFromCli(profile: string, args: string[]): Promise<{ exited: boolean; stdout: string; stderr: string }> {
+  const program = new Command().option("--profile <name>").option("--json");
+  registerReplicaCommand(program);
+  const previousExit = process.exit;
+  const previousOutput = process.stdout.write;
+  const previousError = process.stderr.write;
+  let stdout = "";
+  let stderr = "";
+  let exited = false;
+  process.exit = (() => { throw new Error("expected CLI exit"); }) as typeof process.exit;
+  process.stdout.write = ((chunk: string | Uint8Array) => { stdout += Buffer.from(chunk).toString("utf8"); return true; }) as typeof process.stdout.write;
+  process.stderr.write = ((chunk: string | Uint8Array) => { stderr += Buffer.from(chunk).toString("utf8"); return true; }) as typeof process.stderr.write;
+  try {
+    await program.parseAsync(["node", "tc", "--profile", profile, "--json", ...args], { from: "node" });
+  } catch (error) {
+    if (!(error instanceof Error) || error.message !== "expected CLI exit") throw error;
+    exited = true;
+  } finally {
+    process.exit = previousExit;
+    process.stdout.write = previousOutput;
+    process.stderr.write = previousError;
+  }
+  return { exited, stdout, stderr };
 }
 
 function page(): VerifiedPage {
@@ -352,6 +377,59 @@ describe("replica reset purge containment", () => {
       process.exit = previousExit;
       process.stderr.write = previousWrite;
     }
+  });
+
+  test("a pending logout marker blocks every legacy read for its profile and an alias", async () => {
+    const store = await createReplica(PROFILE, config);
+    const lease = await store.acquireSyncLease(60_000);
+    expect(lease).not.toBeNull();
+    await store.applyPage(lease!, page());
+    await store.releaseLease(lease!);
+    await store.close();
+    const commands = [
+      ["replica", "get", "notes/a", "--replica", "notes", "--raw"],
+      ["replica", "list", "--replica", "notes"],
+      ["replica", "status", "--replica", "notes"],
+    ];
+    for (const command of commands) expect((await readFromCli(PROFILE, command)).exited).toBe(false);
+    await writeFile(join(PROFILES_DIR, PROFILE, "replica-logout-pending.json"), "{}");
+    await symlink(join(PROFILES_DIR, PROFILE), join(PROFILES_DIR, "linked"));
+
+    for (const profile of [PROFILE, "linked"]) {
+      for (const command of commands) {
+        const result = await readFromCli(profile, command);
+        expect(result.exited).toBe(true);
+        expect(JSON.parse(result.stderr).error.code).toBe(profile === PROFILE ? "REPLICA_GATED" : "PROFILE_SYMLINK");
+        expect(result.stdout).not.toContain("secret");
+        expect(result.stdout).not.toContain("notes/a");
+      }
+    }
+    expect(await exists(join(PROFILES_DIR, PROFILE, "replicas", "notes", "replica.db"))).toBe(true);
+  });
+
+  test("a whole-profile alias cannot read another profile's legacy values or keys", async () => {
+    await createProfile("victim");
+    const store = await createReplica("victim", config);
+    const lease = await store.acquireSyncLease(60_000);
+    expect(lease).not.toBeNull();
+    await store.applyPage(lease!, page());
+    await store.releaseLease(lease!);
+    await store.close();
+    expect((await readFromCli("victim", ["replica", "get", "notes/a", "--replica", "notes", "--raw"])).stdout).toContain("secret");
+    await symlink(join(PROFILES_DIR, "victim"), join(PROFILES_DIR, "linked"));
+
+    for (const command of [
+      ["replica", "get", "notes/a", "--replica", "notes", "--raw"],
+      ["replica", "list", "--replica", "notes"],
+      ["replica", "status", "--replica", "notes"],
+    ]) {
+      const result = await readFromCli("linked", command);
+      expect(result.exited).toBe(true);
+      expect(JSON.parse(result.stderr).error.code).toBe("PROFILE_SYMLINK");
+      expect(result.stdout).not.toContain("secret");
+      expect(result.stdout).not.toContain("notes/a");
+    }
+    expect((await readFromCli("victim", ["replica", "get", "notes/a", "--replica", "notes", "--raw"])).stdout).toContain("secret");
   });
 
   test("refuses an entry replaced after lookup, before opening the store", async () => {
