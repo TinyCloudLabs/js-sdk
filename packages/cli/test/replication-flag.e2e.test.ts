@@ -405,8 +405,10 @@ describe.skipIf(!NODE_BIN)(`replication flag against a real node (${DATABASE_URL
     const offlineOutsideOff = await tc(["kv", "get", "other/x"], { profile: "owner", replication: "off" });
     expect(offlineOutside.code).toBe(offlineOutsideOff.code);
     expect(offlineOutside.code).toBe(1);
-    expect(offlineOutside.stderr).toBe(offlineOutsideOff.stderr);
+    expect(offlineOutside.stdout).toHaveLength(0);
+    expect(offlineOutside.stderr).toContain("not_covered");
     expect(offlineOutside.stderr).toContain("NETWORK_ERROR");
+    expect(offlineOutsideOff.stderr).toContain("NETWORK_ERROR");
     await startNode();
 
     // 7. A held stale sync serves offline; SIGINT still drains the active controller.
@@ -445,7 +447,7 @@ describe.skipIf(!NODE_BIN)(`replication flag against a real node (${DATABASE_URL
     const interrupted = await tc(["kv", "get", "notes/a.txt"], { profile: "owner", preload: interruptPreload, replication: "on", extraEnv: { TC_REPLICATION_MAX_STALENESS_MS: "0" } });
     expect(interrupted.code).toBe(130);
     expect((await tc(["kv", "get", "notes/a.txt"], { profile: "owner", replication: "on", extraEnv: { TC_REPLICATION_MAX_STALENESS_MS: "0" } })).stderr).not.toContain("busy");
-    // 8. A delegate-session device uses its signed session grant for the replica.
+    // 8. Importing a signed delegate grant authorizes the network, not a fresh replica consent stamp.
     await ok(["profile", "create", "delegate", "--posture", "delegate-session"]);
     // Profiles have no config-only CLI command; seed the persisted setting created by auth login.
     const delegateProfilePath = join(home, ".tinycloud", "profiles", "delegate", "profile.json");
@@ -478,7 +480,15 @@ describe.skipIf(!NODE_BIN)(`replication flag against a real node (${DATABASE_URL
     expect(signedGrant.audience.split("#", 1)[0]).toBe(delegateIdentity.sessionDid.split("#", 1)[0]);
     const delegatedHit = await tc(["kv", "get", "notes/a.txt"], { profile: "delegate", replication: "on" });
     expect(delegatedHit.code).toBe(0);
-    expect(delegatedHit.stderr).toContain("replica hit");
+    expect(delegatedHit.stdout.toString()).toContain("v4");
+    expect(delegatedHit.stderr).toContain("replica_gated");
+    expect(delegatedHit.stderr).not.toContain("replica hit");
+    const delegatedReport = await ok<{ replicas: Array<{ prefix: string; state: string; gate?: string }> }>(
+      ["replica", "report", "--json"], "delegate", { replication: "on" });
+    expect(delegatedReport.replicas.find((entry) => entry.prefix === "notes/")).toMatchObject({
+      state: "gated", gate: "not_established",
+    });
+    expect(await filesNamed(join(home, ".tinycloud", "profiles", "delegate", "replication"), "replica.db")).toEqual([]);
     const revoker = new TinyCloudNode({
       host,
       privateKey: profile.privateKey,
@@ -507,17 +517,18 @@ describe.skipIf(!NODE_BIN)(`replication flag against a real node (${DATABASE_URL
       replication: "on",
       extraEnv: { TC_REPLICATION_MAX_STALENESS_MS: "0" },
     });
-    expect(revokedRead.stderr).toContain("GRANT_REVOKED");
-    const revokedReport = await ok<{ replicas: Array<{ prefix: string; state: string; counts?: { keys: number; contentMissing: number; tombstones: number } }> }>(
+    expect(revokedRead.code).not.toBe(0);
+    expect(revokedRead.stderr).toContain("delegation-revoked");
+    expect(revokedRead.stderr).toContain(importedDelegate.delegationCid);
+    const revokedReport = await ok<{ replicas: Array<{ prefix: string; state: string; gate?: string }> }>(
       ["replica", "report", "--json"],
       "delegate",
       { replication: "on" },
     );
-    const revokedEntry = revokedReport.replicas.find((entry) => entry.prefix === "notes/");
-    expect(revokedEntry === undefined || revokedEntry.state === "revoked").toBe(true);
-    if (revokedEntry) {
-      expect(revokedEntry.counts).toEqual({ keys: 0, contentMissing: 0, tombstones: 0 });
-    }
+    expect(revokedReport.replicas.find((entry) => entry.prefix === "notes/")).toMatchObject({
+      state: "gated", gate: "not_established",
+    });
+    expect(await filesNamed(join(home, ".tinycloud", "profiles", "delegate", "replication"), "replica.db")).toEqual([]);
     const offlineRevokedRead = await tc(["kv", "get", "notes/a.txt", "--raw"], {
       profile: "delegate",
       preload: NO_NETWORK,
@@ -528,10 +539,10 @@ describe.skipIf(!NODE_BIN)(`replication flag against a real node (${DATABASE_URL
     expect(offlineRevokedRead.stderr).not.toContain("replica hit");
     expect(offlineRevokedRead.stdout.toString()).not.toBe("v4");
 
-    // 9. Node 20 is refused; the real grant revocation path was exercised above.
-    const unsupported = await tc(["kv", "get", "notes/a.txt"], { profile: "delegate", preload: NODE20, replication: "on" });
+    // 9. Node 20 is refused for an established owner replica, not the unstamped revoked delegate.
+    const unsupported = await tc(["kv", "get", "notes/a.txt"], { profile: "owner", preload: NODE20, replication: "on" });
     expect(unsupported.stderr).toContain("runtime_unsupported");
-    // Grant edge cases use the real node and fail closed at the login boundary.
+    // A later profile-only prefix edit cannot mint the stamp missing from a network-only login.
     await ok(["init", "--name", "owner-no-prefix", "--key-only"], "owner-no-prefix");
     await ok(["auth", "login", "--method", "local"], "owner-no-prefix");
     expect((await put("notes/no-sync", Buffer.from("network-only"), "owner-no-prefix", "off")).code).toBe(0);
@@ -545,8 +556,14 @@ describe.skipIf(!NODE_BIN)(`replication flag against a real node (${DATABASE_URL
     });
     expect(missingGrant.code).toBe(0);
     expect(missingGrant.stdout.toString()).toBe("network-only");
-    expect(missingGrant.stderr).toContain("grant_missing");
-    expect(missingGrant.stderr.match(/Warning:/g) ?? []).toHaveLength(1);
+    expect(missingGrant.stderr).toContain("replica_gated");
+    expect(missingGrant.stderr).not.toContain("replica hit");
+    const noPrefixReport = await ok<{ replicas: Array<{ prefix: string; state: string; gate?: string }> }>(
+      ["replica", "report", "--json"], "owner-no-prefix", { replication: "on" });
+    expect(noPrefixReport.replicas.find((entry) => entry.prefix === "notes/")).toMatchObject({
+      state: "gated", gate: "not_established",
+    });
+    expect(await filesNamed(join(home, ".tinycloud", "profiles", "owner-no-prefix", "replication"), "replica.db")).toEqual([]);
 
     await ok(["init", "--name", "outside-scope", "--key-only"], "outside-scope");
     const outsideManifest = join(home, "outside-scope-manifest.json");
