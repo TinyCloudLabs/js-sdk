@@ -596,6 +596,13 @@ describe("mandatory Node lifecycle gate", () => {
     });
     await expect(busy.prepareLogoutPending({ principal: PRINCIPAL }))
       .rejects.toMatchObject({ code: "REPLICA_GATED" });
+    let cleanupCalls = 0;
+    const report = await busy.recoverLogoutPending({
+      signal: new AbortController().signal,
+      clearCredentials: async () => { cleanupCalls++; },
+    });
+    expect(report).toMatchObject({ failed: [{ id: "logout", code: "REPLICA_GATED" }], remaining: 1 });
+    expect(cleanupCalls).toBe(0);
     expect(existsSync(join(profileDir, REPLICA_LOGOUT_PENDING_FILE))).toBe(false);
     expect((await readGateSnapshot(profileDir))?.principalHash).not.toBeNull();
   });
