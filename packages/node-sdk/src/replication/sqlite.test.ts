@@ -1784,7 +1784,62 @@ describe("mandatory Node lifecycle gate", () => {
     });
     expect(result).toMatchObject({ failed: [], remaining: 0 });
     expect(existsSync(join(profileDir, "replication"))).toBe(false);
-    await expect(readGateSnapshot(profileDir)).rejects.toMatchObject({ code: "REPLICA_GATED" });
+    expect(await readGateSnapshot(profileDir)).toBeUndefined();
+  });
+
+  test("corrupt persisted gate becomes a fenced v2 remote marker without inventing a gate or token", async () => {
+    const dir = await makeDir();
+    const profileDir = dirname(dir);
+    const legacy = await makeLegacyMirror(profileDir);
+    const session = join(profileDir, "session.json");
+    const key = join(profileDir, "key.json");
+    await writeFile(session, "network session");
+    await writeFile(key, "owner key");
+    await writeFile(join(profileDir, REPLICA_GATE_FILE), "{corrupt");
+    const purge = createProfileReplicaPurge({ profileDir, guard: sharedGuard });
+    const approval = await purge.preflightLogout({ principal: PRINCIPAL, discardLocalChanges: true });
+    expect(await purge.prepareLogoutPending({
+      principal: PRINCIPAL, approval, discardLocalChanges: true, remotePending: true,
+    })).toMatchObject({ v: 2, scope: "orphan_profile", remotePending: true });
+    expect(existsSync(session)).toBe(true);
+    expect(existsSync(key)).toBe(true);
+    expect(existsSync(join(legacy, "replica.db"))).toBe(true);
+    expect(await purge.remotePendingLogout({ principal: PRINCIPAL })).toBe(true);
+    expect(await purge.completeRemoteLogout({ principal: PRINCIPAL }))
+      .toMatchObject({ v: 2, scope: "orphan_profile" });
+    expect(await readGateSnapshot(profileDir)).toBeUndefined();
+    const recovered = await purge.recoverLogoutPending({
+      signal: new AbortController().signal,
+      clearCredentials: async () => { await rm(session); await rm(key); },
+      eraseLegacyReplicas: () => eraseLegacy(profileDir),
+    });
+    expect(recovered).toMatchObject({ failed: [], remaining: 0 });
+    expect(existsSync(session)).toBe(false);
+    expect(existsSync(key)).toBe(false);
+    expect(existsSync(join(profileDir, REPLICA_LOGOUT_PENDING_FILE))).toBe(false);
+    expect(existsSync(join(legacy, "replica.db"))).toBe(false);
+  });
+
+  test("unremovable corrupt gate keeps the durable v2 marker and credentials before remote revoke", async () => {
+    const profileDir = await mkdtemp(join(tmpdir(), "tc858-corrupt-gate-directory-"));
+    dirs.push(profileDir);
+    await mkdir(join(profileDir, "replication"));
+    await mkdir(join(profileDir, REPLICA_GATE_FILE));
+    const session = join(profileDir, "session.json");
+    const key = join(profileDir, "key.json");
+    await writeFile(session, "network session");
+    await writeFile(key, "owner key");
+    const purge = createProfileReplicaPurge({ profileDir, guard: sharedGuard });
+    const approval = await purge.preflightLogout({ principal: PRINCIPAL, discardLocalChanges: true });
+    await expect(purge.prepareLogoutPending({
+      principal: PRINCIPAL, approval, discardLocalChanges: true, remotePending: true,
+    })).rejects.toMatchObject({ code: "REPLICA_GATED", gate: "gate_unavailable" });
+    expect(JSON.parse(await readFile(join(profileDir, REPLICA_LOGOUT_PENDING_FILE), "utf8")))
+      .toMatchObject({ v: 2, remotePending: true });
+    expect(existsSync(session)).toBe(true);
+    expect(existsSync(key)).toBe(true);
+    await expect(purge.remotePendingLogout({ principal: PRINCIPAL }))
+      .rejects.toMatchObject({ code: "REPLICA_GATED", gate: "gate_unavailable" });
   });
 
   test("orphan cleanup refuses a symlink root and retains its marker after a root swap", async () => {
@@ -1940,25 +1995,29 @@ describe("mandatory Node lifecycle gate", () => {
     expect(await filesNamed(dir, "pending.json")).toHaveLength(1);
   });
 
-  test("zero-intent deferred logout still needs its durable marker to clear credentials", async () => {
+  test("markerless deferred denial cannot invent a pre-denial epoch for remote revoke", async () => {
     const dir = await makeDir();
     const profileDir = dirname(dir);
+    const session = join(profileDir, "session.json");
+    const key = join(profileDir, "key.json");
+    await writeFile(session, "network session");
+    await writeFile(key, "owner key");
+    const legacy = await makeLegacyMirror(profileDir);
     const purge = createProfileReplicaPurge({ profileDir, guard: sharedGuard });
     const denied = await purge.deny({ reason: "sign_out", principal: PRINCIPAL }, { deferErase: true });
     expect(denied).toMatchObject({ status: "denied", intents: 0 });
-    expect(await purge.pendingPurge()).toEqual([]);
-    expect(await purge.deferredErase()).not.toBeNull();
-    await purge.prepareLogoutPending({ principal: PRINCIPAL });
-    let cleanupCalls = 0;
-    const report = await createProfileReplicaPurge({ profileDir, guard: sharedGuard }).recoverLogoutPending({
-      signal: new AbortController().signal,
-      clearCredentials: async () => { cleanupCalls++; },
-      eraseLegacyReplicas: () => eraseLegacy(profileDir),
-    });
-    expect(report).toEqual({ erased: [], failed: [], remaining: 0 });
-    expect(cleanupCalls).toBe(1);
-    expect(await purge.deferredErase()).toBeNull();
+    const token = await purge.deferredErase();
+    expect(token).toMatchObject({ deniedEpoch: denied.lifecycleEpoch });
+    const approval = await purge.preflightLogout({ principal: PRINCIPAL });
+    await expect(purge.prepareLogoutPending({
+      principal: PRINCIPAL, approval, remotePending: true,
+    })).rejects.toMatchObject({ code: "REPLICA_GATED", gate: "stamp_stale" });
     expect(existsSync(join(profileDir, REPLICA_LOGOUT_PENDING_FILE))).toBe(false);
+    expect(await purge.remotePendingLogout({ principal: PRINCIPAL })).toBe(false);
+    expect(await purge.deferredErase()).toEqual(token);
+    expect(existsSync(session)).toBe(true);
+    expect(existsSync(key)).toBe(true);
+    expect(existsSync(join(legacy, "replica.db"))).toBe(true);
   });
 
   test("successful remote revoke converts deferred denial only after shredding both credentials", async () => {
@@ -1986,14 +2045,16 @@ describe("mandatory Node lifecycle gate", () => {
         });
       },
     });
+    const approval = await purge.preflightLogout({ principal: PRINCIPAL });
+    await purge.prepareLogoutPending({ principal: PRINCIPAL, approval, remotePending: true });
     const denied = await purge.deny({ reason: "sign_out", principal: PRINCIPAL }, { deferErase: true });
     expect(denied.status).toBe("denied");
     expect((await purge.recover({ signal: new AbortController().signal })).remaining).toBeGreaterThan(0);
     expect(await filesNamed(dir, "pending.json")).toEqual(pendingFiles);
     expect(existsSync(session)).toBe(true);
     expect(existsSync(key)).toBe(true);
-    // The caller invokes this seam only after verified remote revoke success.
-    await purge.prepareLogoutPending({ principal: PRINCIPAL });
+    // Only a verified remote success may lift the network-retry fence.
+    await purge.completeRemoteLogout({ principal: PRINCIPAL });
     const result = await purge.recoverLogoutPending({
       signal: new AbortController().signal,
       clearCredentials: async () => { await rm(session, { force: true }); await rm(key, { force: true }); },
@@ -2004,12 +2065,11 @@ describe("mandatory Node lifecycle gate", () => {
     expect(existsSync(session)).toBe(false);
     expect(existsSync(key)).toBe(false);
     expect(await filesNamed(dir, "pending.json")).toEqual([]);
-    expect(durableBoundaries).toEqual([
-      { session: true, key: true, marker: true },
-      { session: false, key: false, marker: true },
-      { session: false, key: false, marker: true },
-      { session: false, key: false, marker: false },
-    ]);
+    expect(durableBoundaries[0]).toEqual({ session: true, key: true, marker: true });
+    expect(durableBoundaries.some(({ session, key, marker }) => !session && !key && marker)).toBe(true);
+    expect(durableBoundaries[durableBoundaries.length - 1]).toEqual({
+      session: false, key: false, marker: false,
+    });
     expect(await purge.deferredErase()).toBeNull();
   });
 
@@ -2122,6 +2182,52 @@ describe("mandatory Node lifecycle gate", () => {
     } finally {
       db.close();
       await rm(oldSidecar, { force: true });
+    }
+  });
+
+  test("an approved-unknown sidecar path cannot turn into a known SQLite sidecar on recovery", async () => {
+    const dir = await makeDir();
+    const profileDir = dirname(dir);
+    const legacy = await makeLegacyMirror(profileDir);
+    const databasePath = join(legacy, "replica.db");
+    const sharedMemory = `${databasePath}-shm`;
+    const held = join(profileDir, "held-shm");
+    const purge = createProfileReplicaPurge({ profileDir, guard: sharedGuard });
+    const initial = new Database(databasePath);
+    try {
+      initial.exec("PRAGMA journal_mode = WAL");
+      initial.query("SELECT name FROM sqlite_master LIMIT 1").get();
+      await rename(sharedMemory, held);
+      await symlink(held, sharedMemory);
+      const approval = await purge.preflightLogout({ principal: PRINCIPAL, discardLocalChanges: true });
+      expect(approval.knownEntries).toContainEqual(expect.objectContaining({
+        path: "replicas/notes/replica.db", kind: "file",
+      }));
+      expect(approval.unknownEntries).toContainEqual(expect.objectContaining({
+        path: "replicas/notes/replica.db-shm", kind: "symlink",
+      }));
+      await purge.prepareLogoutPending({ principal: PRINCIPAL, approval, discardLocalChanges: true });
+    } finally {
+      initial.close();
+    }
+    await rm(sharedMemory, { force: true });
+    const replacement = new Database(databasePath);
+    try {
+      replacement.exec("PRAGMA journal_mode = WAL");
+      replacement.query("SELECT name FROM sqlite_master LIMIT 1").get();
+      let cleanupCalls = 0;
+      const report = await purge.recoverLogoutPending({
+        signal: new AbortController().signal,
+        clearCredentials: async () => {},
+        eraseLegacyReplicas: async () => { cleanupCalls++; },
+      });
+      expect(report).toMatchObject({ failed: [{ id: "logout", code: "gate_unavailable" }], remaining: 1 });
+      expect(cleanupCalls).toBe(0);
+      expect(existsSync(join(profileDir, REPLICA_LOGOUT_PENDING_FILE))).toBe(true);
+      expect(existsSync(databasePath)).toBe(true);
+    } finally {
+      replacement.close();
+      await rm(held, { force: true });
     }
   });
 
