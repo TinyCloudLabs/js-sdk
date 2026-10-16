@@ -868,13 +868,14 @@ describe("mandatory Node lifecycle gate", () => {
     dirs.push(profileDir);
     await mkdir(join(profileDir, "replication"));
     const purge = createProfileReplicaPurge({ profileDir, guard: sharedGuard });
+    const approval = await purge.preflightLogout({ principal: PRINCIPAL });
     await purge.prepareLogoutPending({ principal: PRINCIPAL, remotePending: true });
     await writeFile(join(profileDir, REPLICA_GATE_FILE), "{broken");
     await expect(purge.remotePendingLogout({ principal: PRINCIPAL }))
       .rejects.toMatchObject({ code: "REPLICA_GATED" });
     await expect(purge.completeRemoteLogout({ principal: PRINCIPAL }))
       .rejects.toMatchObject({ code: "REPLICA_GATED" });
-    await expect(purge.abandonRemoteLogout({ principal: PRINCIPAL }))
+    await expect(purge.abandonRemoteLogout({ principal: PRINCIPAL, approval }))
       .rejects.toMatchObject({ code: "REPLICA_GATED" });
     expect(JSON.parse(await readFile(join(profileDir, REPLICA_LOGOUT_PENDING_FILE), "utf8")))
       .toMatchObject({ remotePending: true });
@@ -893,9 +894,10 @@ describe("mandatory Node lifecycle gate", () => {
     await purge.prepareLogoutPending({ principal: PRINCIPAL, approval, remotePending: true });
     expect((await purge.deny({ reason: "sign_out", principal: PRINCIPAL }, { deferErase: true })).status)
       .toBe("denied");
-    await expect(purge.abandonRemoteLogout({ principal: "did:key:Successor" }))
+    await expect(purge.abandonRemoteLogout({ principal: "did:key:Successor", approval }))
       .rejects.toMatchObject({ gate: "principal_mismatch" });
-    const abandoned = await purge.abandonRemoteLogout({ principal: PRINCIPAL });
+    const fresh = await purge.preflightLogout({ principal: PRINCIPAL });
+    const abandoned = await purge.abandonRemoteLogout({ principal: PRINCIPAL, approval: fresh });
     expect(abandoned.remoteAbandoned).toBe(true);
     expect(abandoned.remotePending).toBeUndefined();
     const markerPath = join(profileDir, REPLICA_LOGOUT_PENDING_FILE);
@@ -918,6 +920,44 @@ describe("mandatory Node lifecycle gate", () => {
     expect(existsSync(legacy)).toBe(false);
   });
 
+  test("plain override after failed remote revoke refuses changed inventory before marker or credential mutation", async () => {
+    const dir = await makeDir();
+    const profileDir = dirname(dir);
+    const legacy = await makeLegacyMirror(profileDir);
+    const session = join(profileDir, "session.json");
+    const key = join(profileDir, "key.json");
+    await writeFile(session, "session private");
+    await writeFile(key, "owner private");
+    const purge = createProfileReplicaPurge({ profileDir, guard: sharedGuard });
+    const approval = await purge.preflightLogout({ principal: PRINCIPAL });
+    await purge.prepareLogoutPending({ principal: PRINCIPAL, approval, remotePending: true });
+    expect((await purge.deny({ reason: "sign_out", principal: PRINCIPAL }, { deferErase: true })).status)
+      .toBe("denied");
+    const markerFile = join(profileDir, REPLICA_LOGOUT_PENDING_FILE);
+    const before = await readFile(markerFile, "utf8");
+    const unknown = join(legacy, "new-unsynced");
+    await writeFile(unknown, "local change after remote failure");
+    await expect(purge.abandonRemoteLogout({ principal: PRINCIPAL, approval }))
+      .rejects.toMatchObject({ code: "REPLICA_GATED", gate: "gate_unavailable" });
+    expect(await readFile(markerFile, "utf8")).toBe(before);
+    expect(await readFile(session, "utf8")).toBe("session private");
+    expect(await readFile(key, "utf8")).toBe("owner private");
+    expect(await readFile(unknown, "utf8")).toBe("local change after remote failure");
+    const fresh = await purge.preflightLogout({ principal: PRINCIPAL, discardLocalChanges: true });
+    expect(fresh.unknownEntries).toContainEqual(expect.objectContaining({
+      path: "replicas/notes/new-unsynced", kind: "file",
+    }));
+    const abandoned = await purge.abandonRemoteLogout({
+      principal: PRINCIPAL, approval: fresh, discardLocalChanges: true,
+    });
+    expect(abandoned).toMatchObject({ remoteAbandoned: true, discardLocalChanges: true });
+    expect(abandoned.approvedUnknown).toContainEqual(expect.objectContaining({
+      path: "replicas/notes/new-unsynced", kind: "file",
+    }));
+    expect(await readFile(session, "utf8")).toBe("session private");
+    expect(await readFile(key, "utf8")).toBe("owner private");
+  });
+
   test("consumed deferred denial still accepts remote completion or explicit abandon at its original epoch", async () => {
     for (const transition of ["completeRemoteLogout", "abandonRemoteLogout"] as const) {
       const dir = await makeDir();
@@ -929,7 +969,11 @@ describe("mandatory Node lifecycle gate", () => {
       expect(denied.status).toBe("denied");
       await purge.resumeDeferredErase(denied.resumeToken!, { signal: new AbortController().signal });
       expect(await purge.remotePendingLogout({ principal: PRINCIPAL })).toBe(true);
-      const converted = await purge[transition]({ principal: PRINCIPAL });
+      const converted = transition === "completeRemoteLogout"
+        ? await purge.completeRemoteLogout({ principal: PRINCIPAL })
+        : await purge.abandonRemoteLogout({
+          principal: PRINCIPAL, approval: await purge.preflightLogout({ principal: PRINCIPAL }),
+        });
       expect(converted.remotePending).toBeUndefined();
       expect(converted.remoteAbandoned).toBe(transition === "abandonRemoteLogout" ? true : undefined);
     }
@@ -939,6 +983,7 @@ describe("mandatory Node lifecycle gate", () => {
     const dir = await makeDir();
     const profileDir = dirname(dir);
     const purge = createProfileReplicaPurge({ profileDir, guard: sharedGuard });
+    const approval = await purge.preflightLogout({ principal: PRINCIPAL });
     await purge.prepareLogoutPending({ principal: PRINCIPAL, remotePending: true });
     const denied = await purge.deny({ reason: "sign_out", principal: PRINCIPAL }, { deferErase: true });
     expect(denied.status).toBe("denied");
@@ -951,7 +996,7 @@ describe("mandatory Node lifecycle gate", () => {
     } finally { setSystemTime(originalNow); }
     await expect(purge.completeRemoteLogout({ principal: PRINCIPAL }))
       .rejects.toMatchObject({ code: "REPLICA_GATED" });
-    await expect(purge.abandonRemoteLogout({ principal: PRINCIPAL }))
+    await expect(purge.abandonRemoteLogout({ principal: PRINCIPAL, approval }))
       .rejects.toMatchObject({ code: "REPLICA_GATED" });
     expect(JSON.parse(await readFile(join(profileDir, REPLICA_LOGOUT_PENDING_FILE), "utf8")))
       .toMatchObject({ remotePending: true });
@@ -997,7 +1042,9 @@ describe("mandatory Node lifecycle gate", () => {
     expect(await purge.remotePendingLogout({ principal: PRINCIPAL })).toBe(true);
     await expect(purge.remotePendingLogout({ principal: `${PRINCIPAL}:other` }))
       .rejects.toMatchObject({ code: "REPLICA_GATED", gate: "principal_mismatch" });
-    expect((await purge.abandonRemoteLogout({ principal: PRINCIPAL })))
+    expect((await purge.abandonRemoteLogout({
+      principal: PRINCIPAL, approval: await purge.preflightLogout({ principal: PRINCIPAL }),
+    })))
       .toMatchObject({ v: 1, remoteAbandoned: true });
     expect(await purge.remotePendingLogout({ principal: PRINCIPAL })).toBe(false);
     const report = await createProfileReplicaPurge({ profileDir, guard: sharedGuard }).recoverLogoutPending({
@@ -1027,7 +1074,9 @@ describe("mandatory Node lifecycle gate", () => {
       await expect(purge.remotePendingLogout({ principal: `${PRINCIPAL}:other` }))
         .rejects.toMatchObject({ code: "REPLICA_GATED", gate: "principal_mismatch" });
       expect(await purge.remotePendingLogout({ principal: PRINCIPAL })).toBe(true);
-      expect((await purge.abandonRemoteLogout({ principal: PRINCIPAL })).remoteAbandoned).toBe(true);
+      expect((await purge.abandonRemoteLogout({
+        principal: PRINCIPAL, approval: await purge.preflightLogout({ principal: PRINCIPAL }),
+      })).remoteAbandoned).toBe(true);
     },
   );
 
@@ -1041,7 +1090,9 @@ describe("mandatory Node lifecycle gate", () => {
     const purge = createProfileReplicaPurge({ profileDir, guard: sharedGuard });
     const approval = await purge.preflightLogout({ principal: PRINCIPAL });
     await purge.prepareLogoutPending({ principal: PRINCIPAL, approval, remotePending: true });
-    expect((await purge.abandonRemoteLogout({ principal: PRINCIPAL })))
+    expect((await purge.abandonRemoteLogout({
+      principal: PRINCIPAL, approval: await purge.preflightLogout({ principal: PRINCIPAL }),
+    })))
       .toMatchObject({ v: 1, remoteAbandoned: true });
     const report = await purge.recoverLogoutPending({
       signal: new AbortController().signal,
