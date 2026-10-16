@@ -45,6 +45,12 @@ assert.deepEqual(importTouches, { indexedDB: 0, worker: 0 });
 assert.throws(() => new root.TinyCloudWeb({ replication: {
   enabled: true, prefixes: ["notes/"], storage: { kind: "indexeddb" },
 } }), /registerBrowserReplica/);
+const actualGatedLoader = optional.browserReplicaPlugin.loaders.gatedNetwork;
+let gatedLoads = 0;
+optional.browserReplicaPlugin.loaders.gatedNetwork = () => {
+  gatedLoads++;
+  return actualGatedLoader();
+};
 root.registerBrowserReplica(optional.browserReplicaPlugin);
 assert.throws(() => root.registerBrowserReplica(optional.browserReplicaPlugin), /already registered/);
 Object.defineProperty(globalThis, "indexedDB", { configurable: true, value: indexedDB });
@@ -90,6 +96,10 @@ const node = (web as any)._node;
 assert(node instanceof root.TinyCloudNode && node.restorableSession?.address === proof.address);
 const authority = await node.replicationAuthority();
 assert.equal(authority.consentAnchor()?.source, "siwe", "signed owner anchor unavailable across bundles");
+assert.equal(gatedLoads, 0, "a successful signed replica opt-in must not fetch the gated-only artifact");
+const replicaOff = await root.TinyCloudWeb.create({ ...config, replication: undefined, persistSession: false, provider });
+assert.equal(replicaOff.replication, undefined);
+assert.equal(gatedLoads, 0, "replica-off clients must not fetch the gated-only artifact");
 // A full verified owner proof can plan an initial session-parent mint, but
 // without a usable installed grant an offline get cannot return local bytes.
 const offlineRead = await web.kv.get("notes/a");
@@ -140,6 +150,7 @@ assert.deepEqual(
   { source: networkReads[0].source, reason: networkReads[0].reason, outcome: networkReads[0].outcome, code: networkReads[0].code },
   { source: "network", reason: "replica_gated", outcome: "error", code: "REPLICA_GATED" },
 );
+assert(gatedLoads > 0, "a refused restore must fetch the gated-only observer");
 const gatedLoader = optional.browserReplicaPlugin.loaders.gatedNetwork;
 optional.browserReplicaPlugin.loaders.gatedNetwork = async () => { throw new Error("gated chunk unavailable"); };
 try {
@@ -155,6 +166,8 @@ try {
 } finally {
   optional.browserReplicaPlugin.loaders.gatedNetwork = gatedLoader;
 }
+const beforeSignOut = gatedLoads;
 await web.signOut();
+assert.equal(gatedLoads, beforeSignOut, "sign-out uses the loaded authority event path, not the gated-only artifact");
 assert("refused" in authority.plan("notes/"), "old authority survived sign-out and key rotation");
 console.log(`${format}: built core+optional signed owner restore, single registration and stale-session fence passed`);
