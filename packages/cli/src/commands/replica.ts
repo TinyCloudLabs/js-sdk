@@ -501,7 +501,8 @@ or coverage incomplete; 5 grant expired, revoked or not yet valid; 6 network;
     .action((options, cmd: Command) =>
       run(async () => {
         const profile = await profileName(cmd);
-        await withPinnedProfileDirectory(profile, async () => {
+        await withPinnedProfileDirectory(profile, async (directory) => {
+          if (directory === null) throw new CLIError("PROFILE_NOT_FOUND", `Profile "${profile}" does not exist.`, ExitCode.ERROR);
           const globals = cmd.optsWithGlobals();
           const context = await ProfileManager.resolveContext(globals);
           const node = context.replication ? await ensureAuthenticated(context) : undefined;
@@ -556,7 +557,8 @@ or coverage incomplete; 5 grant expired, revoked or not yet valid; 6 network;
     .action((options, cmd: Command) =>
       run(async () => {
         const profile = await profileName(cmd);
-        await withPinnedProfileDirectory(profile, async () => {
+        await withPinnedProfileDirectory(profile, async (directory) => {
+          if (directory === null) throw new CLIError("PROFILE_NOT_FOUND", `Profile "${profile}" does not exist.`, ExitCode.ERROR);
           if (options.prefix !== undefined) {
             try {
               assertFolderPrefix(options.prefix);
