@@ -90,8 +90,12 @@ const node = (web as any)._node;
 assert(node instanceof root.TinyCloudNode && node.restorableSession?.address === proof.address);
 const authority = await node.replicationAuthority();
 assert.equal(authority.consentAnchor()?.source, "siwe", "signed owner anchor unavailable across bundles");
-// A full SIWE has a CACAO header. Only compact UCAN grants can directly serve local bytes.
-assert.deepEqual(authority.sessionGrant("notes/"), { refused: "NOT_COVERED" });
+// A full verified owner proof can plan an initial session-parent mint, but
+// without a usable installed grant an offline get cannot return local bytes.
+const offlineRead = await web.kv.get("notes/a");
+assert(!offlineRead.ok, "offline read without an installed grant returned local bytes");
+assert.equal(offlineRead.error.code, "NETWORK_ERROR", "offline read did not fall back to the network");
+assert.equal(offlineRead.error.message, "offline by fixture", "offline read did not attempt the network");
 assert.equal(authority.plan("notes/").path, "session", "verified owner cannot plan session-parent mint");
 const otherWallet = { request: async ({ method }: { method: string }) => {
   if (method === "eth_accounts") return ["0x0000000000000000000000000000000000000001"];
