@@ -1,7 +1,7 @@
 import { Command } from "commander";
 import { CLI_NAME } from "@tinycloud/operations/cli-name";
 import { randomBytes } from "node:crypto";
-import { constants as fsConstants } from "node:fs";
+import { constants as fsConstants, lstatSync } from "node:fs";
 import { open, readdir, rename, stat, unlink, readFile, lstat } from "node:fs/promises";
 import { basename, dirname, join, resolve } from "node:path";
 import { ensureAuthenticated } from "../lib/sdk.js";
@@ -230,7 +230,6 @@ async function withLegacyReplicaRead(
 function openReplicaForRead(profile: string, name: string): Promise<SqliteReplicaStore> {
   return SqliteReplicaStore.open(join(replicasRoot(profile), name), { create: false });
 }
-
 /**
  * Create a replica (or open the one a concurrent sync just created) inside
  * the profile guard: a profile deleted before or during this gets nothing.

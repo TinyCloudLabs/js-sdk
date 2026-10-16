@@ -407,6 +407,34 @@ describe("replica reset purge containment", () => {
     expect(await exists(join(PROFILES_DIR, PROFILE, "replicas", "notes", "replica.db"))).toBe(true);
   });
 
+  test("an in-flight legacy get refuses a marker committed after SQLite read", async () => {
+    const store = await createReplica(PROFILE, config);
+    const lease = await store.acquireSyncLease(60_000);
+    expect(lease).not.toBeNull();
+    await store.applyPage(lease!, page());
+    await store.releaseLease(lease!);
+    await store.close();
+    const originalGet = SqliteReplicaStore.prototype.get;
+    const marker = join(PROFILES_DIR, PROFILE, "replica-logout-pending.json");
+    let readCompleted = false;
+    SqliteReplicaStore.prototype.get = async function (key) {
+      const entry = await originalGet.call(this, key);
+      readCompleted = true;
+      await writeFile(marker, "{}");
+      return entry;
+    };
+    try {
+      const result = await readFromCli(PROFILE, ["replica", "get", "notes/a", "--replica", "notes", "--raw"]);
+      expect(readCompleted).toBe(true);
+      expect(result.exited).toBe(true);
+      expect(JSON.parse(result.stderr).error.code).toBe("REPLICA_GATED");
+      expect(result.stdout).not.toContain("secret");
+      expect(await exists(join(PROFILES_DIR, PROFILE, "replicas", "notes", "replica.db"))).toBe(true);
+    } finally {
+      SqliteReplicaStore.prototype.get = originalGet;
+    }
+  });
+
   test("a whole-profile alias cannot read another profile's legacy values or keys", async () => {
     await createProfile("victim");
     const store = await createReplica("victim", config);
