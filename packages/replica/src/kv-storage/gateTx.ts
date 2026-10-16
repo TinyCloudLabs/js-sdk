@@ -12,9 +12,9 @@
 import type {
   ReplicaBrowserGateAccess,
   ReplicaBrowserGateSnapshot,
+  ReplicaBrowserGateTx,
   ReplicaGateReason,
   ReplicaGateScope,
-  ReplicaGateTx,
   ReplicaPartitionIndexEntry,
   ReplicaDenyOutcome,
 } from "@tinycloud/sdk-services/kv/replication";
@@ -50,7 +50,7 @@ export async function withDatabase<T>(open: KvDatabaseOpener, create: boolean, u
 export type BrowserGateAccess = ReplicaBrowserGateAccess;
 export type BrowserGateSnapshot = ReplicaBrowserGateSnapshot;
 
-export interface BrowserReplicaGateTx extends ReplicaGateTx<IDBTransaction, BrowserGateAccess> {
+export interface BrowserReplicaGateTx extends ReplicaBrowserGateTx<IDBTransaction> {
   snapshot(): Promise<BrowserGateSnapshot | null>;
   readAccountKey(access: BrowserGateAccess): Promise<AccountKeyRecord>;
 }
@@ -124,7 +124,6 @@ export function createIndexedDbGateTx(
           if (gate.keyId !== access.keyId || gate.accountKeyId !== access.accountKeyId) throw refusal("stamp_stale");
           if (gate.principalHash !== access.principalHash) throw refusal("principal_mismatch");
           if (typeof gate.consentDeadline !== "number" || !Number.isSafeInteger(gate.consentDeadline) || gate.consentDeadline < 0) throw refusal("gate_unavailable");
-          if (checkedNow() >= gate.consentDeadline) throw new ReplicaError(ReplicaErrorCode.CONSENT_EXPIRED, "The account consent has expired.");
           const device = tx.objectStore(KV_STORE.device);
           const hash = await requestAsPromise<GateHmacRecord | undefined>(device.get(GATE_HMAC_KEY));
           const account = await requestAsPromise<AccountKeyRecord | undefined>(device.get(ACCOUNT_KEY));
@@ -132,6 +131,7 @@ export function createIndexedDbGateTx(
           const intents = tx.objectStore(KV_STORE.purgeIntents);
           if (access.partitionId !== undefined && (await requestAsPromise(intents.count(access.partitionId))) > 0) throw refusal("purge_pending");
           if (access.identityKeyHash !== undefined && (await requestAsPromise(intents.count(`pending:${access.identityKeyHash}`))) > 0) throw refusal("purge_pending");
+          if (checkedNow() >= gate.consentDeadline) throw new ReplicaError(ReplicaErrorCode.CONSENT_EXPIRED, "The account consent has expired.");
           const value = await fn(tx, account);
           await done;
           return { value };

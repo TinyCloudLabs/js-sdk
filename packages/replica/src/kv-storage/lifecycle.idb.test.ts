@@ -253,6 +253,33 @@ describe("origin deny tombstone", () => {
     await expect(lifecycle.restoreSessionStamp(principal, stamp)).rejects.toMatchObject({ code: "REPLICA_GATED", gate: "stamp_stale" });
   });
 
+  test("the active consent timer destroys both keys without a read or recovery call", async () => {
+    const clock = { ms: Date.now() };
+    const expired = Promise.withResolvers<string>();
+    const lifecycle = createIndexedDbLifecycle({
+      now: () => clock.ms,
+      onConsentExpired: (stamp) => expired.resolve(stamp.incarnation),
+    });
+    const stamp = await lifecycle.establishSessionStamp(principal, {
+      consentAnchor: { source: "siwe", at: clock.ms - CONSENT_WINDOW_MS + 20 },
+    });
+    clock.ms += 20;
+    expect(await expired.promise).toBe(stamp.incarnation);
+    expect(await inspectReplicaKeyPresence()).toEqual({ gateHmac: false, accountKey: false });
+    expect(lifecycle.deliverable(stamp)).toBe(false);
+  });
+
+  test("a fresh open after consent expiry shreds existing keys rather than renewing them", async () => {
+    const clock = { ms: Date.now() };
+    const lifecycle = createIndexedDbLifecycle({ now: () => clock.ms });
+    const stamp = await lifecycle.establishSessionStamp(principal, { consentAnchor: { source: "siwe", at: clock.ms } });
+    clock.ms += CONSENT_WINDOW_MS;
+    await expect(lifecycle.establishSessionStamp(principal, { consentAnchor: { source: "siwe", at: clock.ms } }))
+      .rejects.toMatchObject({ code: "CONSENT_EXPIRED" });
+    expect(await inspectReplicaKeyPresence()).toEqual({ gateHmac: false, accountKey: false });
+    expect(lifecycle.deliverable(stamp)).toBe(false);
+  });
+
   test("a failed expiry observer cannot relabel committed key destruction as unguarded", async () => {
     const clock = { ms: Date.now() };
     const lifecycle = createIndexedDbLifecycle({
@@ -342,6 +369,28 @@ describe("origin deny tombstone", () => {
     expect(await inspectReplicaKeyPresence()).toEqual({ gateHmac: false, accountKey: false });
     expect(JSON.parse(entries.get(tombstoneKey)!)).toEqual({ epoch: stamp.lifecycleEpoch + 1, deniedAt: clock.ms });
     await expect(resumed.restoreSessionStamp(principal, stamp)).rejects.toMatchObject({ code: "REPLICA_GATED", gate: "stamp_stale" });
+  });
+
+  test("worker snapshots and guarded reads do not require main-thread localStorage", async () => {
+    const lifecycle = createIndexedDbLifecycle();
+    const stamp = await lifecycle.establishSessionStamp(principal, { consentAnchor: { source: "siwe", at: Date.now() } });
+    const gateTx = createIndexedDbGateTx((create) => openKvDatabase({ create }), { onConsentExpired: () => lifecycle.expireConsent() });
+    Object.defineProperty(globalThis, "localStorage", { configurable: true, value: undefined });
+    try {
+      const snapshot = (await gateTx.snapshot())!;
+      const access = {
+        stamp,
+        incarnation: snapshot.incarnation,
+        keyId: snapshot.keyId,
+        accountKeyId: snapshot.accountKeyId,
+        principalHash: await gateHash(snapshot.gateHmac, "principal", principal.toLowerCase()),
+      };
+      expect((await gateTx.readAccountKey(access)).keyId).toBe(snapshot.accountKeyId);
+      expect(await gateTx.run({ stores: [KV_STORE.meta], mode: "readonly" }, access, (tx) =>
+        requestAsPromise(tx.objectStore(KV_STORE.meta).get("missing")))).toBeUndefined();
+    } finally {
+      Object.defineProperty(globalThis, "localStorage", { configurable: true, value: storage });
+    }
   });
 
   test("an invalid injected clock cannot authorize delivery or a guarded read", async () => {
@@ -577,6 +626,33 @@ describe("origin deny tombstone", () => {
     entries.set(markerKey, "1");
     expect(lifecycle.checkDelivery(fresh)).toEqual({ status: "gated", gate: "gate_unavailable" });
     await expect(lifecycle.restoreSessionStamp(principal, stamp)).rejects.toMatchObject({ code: "REPLICA_GATED", gate: "gate_unavailable" });
+  });
+
+  test("a second tab drops stale replies when deny and delete both fail", async () => {
+    const first = createIndexedDbLifecycle();
+    const stamp = await first.establishSessionStamp(principal, { consentAnchor: { source: "siwe", at: Date.now() } });
+    const peer = createIndexedDbLifecycle();
+    await peer.restoreSessionStamp(principal, stamp);
+    const clearTx = injectDenyFailure("deny_tx");
+    const clearDelete = injectDenyFailure("delete_database");
+    try {
+      expect((await first.deny({ reason: "sign_out", principal })).status).toBe("marker");
+    } finally {
+      clearTx();
+      clearDelete();
+    }
+    expect(peer.checkDelivery(stamp)).toEqual({ status: "gated", gate: "logout_pending" });
+    expect(peer.deliverable(stamp)).toBe(false);
+    expect(await inspectReplicaKeyPresence()).toEqual({ gateHmac: true, accountKey: true });
+    entries.delete(markerKey);
+    expect(peer.checkDelivery(stamp)).toEqual({ status: "gated", gate: "stamp_stale" });
+    expect(peer.deliverable(stamp)).toBe(false);
+    await expect(createIndexedDbLifecycle().restoreSessionStamp(principal, stamp))
+      .rejects.toMatchObject({ code: "REPLICA_GATED", gate: "gate_unavailable" });
+    const db = (await openKvDatabase({ create: false }))!;
+    const staleGate = await requestAsPromise<{ lifecycleEpoch: number }>(db.transaction(KV_STORE.gate).objectStore(KV_STORE.gate).get("account"));
+    db.close();
+    expect(staleGate.lifecycleEpoch).toBe(stamp.lifecycleEpoch);
   });
 
   test("fallback marker recovery deletes the database but not the deny floor", async () => {
