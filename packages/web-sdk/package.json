@@ -19,6 +19,11 @@
       "import": "./dist/replica.mjs",
       "require": "./dist/replica.cjs"
     },
+    "./replica-gated": {
+      "types": "./dist/replica-gated.d.ts",
+      "import": "./dist/replica-gated.mjs",
+      "require": "./dist/replica-gated.cjs"
+    },
     "./package.json": "./package.json"
   },
   "repository": {

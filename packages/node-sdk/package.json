@@ -38,6 +38,16 @@
         "types": "./dist/replication/authority.d.cts",
         "default": "./dist/replication/authority.cjs"
       }
+    },
+    "./replication/gated-network": {
+      "import": {
+        "types": "./dist/replication/gated-network.d.ts",
+        "default": "./dist/replication/gated-network.js"
+      },
+      "require": {
+        "types": "./dist/replication/gated-network.d.cts",
+        "default": "./dist/replication/gated-network.cjs"
+      }
     }
   },
   "engines": {

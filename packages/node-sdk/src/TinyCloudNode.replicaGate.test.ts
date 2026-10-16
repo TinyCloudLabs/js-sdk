@@ -49,6 +49,7 @@ function loaders(): ReplicationModuleLoaders {
     validateConfig: assertValidReplicationConfig,
     runtime: () => import("./replication/runtime"),
     authority: () => import("./replication/authority"),
+    gatedNetwork: () => import("./replication/gated-network"),
     gate: () => import("@tinycloud/replica/profile-gate"),
   };
 }

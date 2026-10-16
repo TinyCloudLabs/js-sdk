@@ -20,6 +20,7 @@ registerReplicationLoaders({
   validateConfig: assertValidReplicationConfig,
   runtime: () => import("@tinycloud/node-sdk/replication/runtime"),
   authority: () => import("@tinycloud/node-sdk/replication/authority"),
+  gatedNetwork: () => import("@tinycloud/node-sdk/replication/gated-network"),
   gate: () => import("@tinycloud/replica/profile-gate"),
 });
 

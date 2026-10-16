@@ -162,6 +162,10 @@ const replicaExternals = (moduleType) => ({ context, request }, callback) => {
     callback(null, `${moduleType} @tinycloud/web-sdk`);
     return;
   }
+  if (request === "./replica-gated" && context === path.resolve(__dirname, "src")) {
+    callback(null, `${moduleType} @tinycloud/web-sdk/replica-gated`);
+    return;
+  }
   if (request && /^@tinycloud\/replica(?:\/|$)/.test(request)) {
     const deferred = request === "@tinycloud/replica/kv-storage" || request === "@tinycloud/replica/profile-gate";
     callback(null, `${deferred ? "import" : moduleType} ${request}`);
@@ -205,4 +209,15 @@ const replicaCjsConfig = {
   },
 };
 
-module.exports = [esmConfig, cjsConfig, replicaEsmConfig, replicaCjsConfig];
+const gatedEsmConfig = {
+  ...replicaEsmConfig,
+  entry: "./src/replica-gated.ts",
+  output: { ...replicaEsmConfig.output, filename: "replica-gated.mjs" },
+};
+const gatedCjsConfig = {
+  ...replicaCjsConfig,
+  entry: "./src/replica-gated.ts",
+  output: { ...replicaCjsConfig.output, filename: "replica-gated.cjs" },
+};
+
+module.exports = [esmConfig, cjsConfig, replicaEsmConfig, replicaCjsConfig, gatedEsmConfig, gatedCjsConfig];

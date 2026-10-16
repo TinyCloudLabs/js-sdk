@@ -5,6 +5,7 @@ registerReplicationLoaders({
   validateConfig: assertValidReplicationConfig,
   runtime: () => import("./runtime"),
   authority: () => import("./authority"),
+  gatedNetwork: () => import("./gated-network"),
   // Lazy by contract: replica loads only when replication is enabled. Literal specifier typed by
   // ProfileGateModule; TS2307 under moduleResolution "node" is suppressed (see replica-contract.ts).
   // @ts-ignore

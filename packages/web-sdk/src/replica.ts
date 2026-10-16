@@ -172,6 +172,7 @@ export const browserReplicaPlugin: BrowserReplicaPlugin = {
     validateConfig,
     runtime: () => import("@tinycloud/node-sdk/replication/runtime"),
     authority: () => import("@tinycloud/node-sdk/replication/authority"),
+    gatedNetwork: () => import("./replica-gated"),
     gate: () => import("@tinycloud/replica/profile-gate"),
   },
   recover: recoveredBrowserReplication,

@@ -51,7 +51,7 @@ describe("node ReplicationRuntime binding", () => {
         { space: "tinycloud:pkh:eip155:1:0xabc:other", kv: { setReadThrough(value: KVReadThrough | null) { secondary = value; } } },
       ],
     };
-    await runtime.bindGatedNetworkOnly(scope);
+    await runtime.bindGatedNetworkOnly(scope, () => import("./gated-network"));
     expect(primary).not.toBeNull();
     expect(secondary).toBeNull();
     expect(await runtime.control.status()).toMatchObject([{ prefix: "notes/", state: "gated", gate: "stamp_stale" }]);
@@ -111,6 +111,53 @@ describe("node ReplicationRuntime binding", () => {
     delayedNetwork.reject(offline);
     await expect(delayed).rejects.toBe(offline);
     expect(events.filter((event) => event.type === "replication.read")).toHaveLength(readCount);
+  });
+
+  test("a failed gated-only loader leaves a refused restore on the original network KV path", async () => {
+    let reads: KVReadThrough | null = null;
+    let opens = 0;
+    const storage = {
+      kind: "indexeddb" as const,
+      async open() { opens++; throw new Error("must not open local replica"); },
+      pendingWrites() { throw new Error("must not touch pending writes"); },
+    } as KVReplicaStorage;
+    const runtime = new ReplicationRuntime({ enabled: true, prefixes: ["notes/"], storage }, clock);
+    const scoped = { space: primarySpace, kv: { setReadThrough(value: KVReadThrough | null) { reads = value; } } };
+    await runtime.bindGatedNetworkOnly({
+      context: context("https://node.example"), session, gate: "stamp_stale", primaryKV: [scoped],
+    }, async () => { throw new Error("gated-only chunk offline"); });
+    expect(reads).toBeNull();
+    expect(await runtime.control.status()).toMatchObject([{ state: "gated", gate: "stamp_stale" }]);
+    await expect(runtime.control.sync()).rejects.toMatchObject({ code: "REPLICA_GATED" });
+    const networkResult = ok({ data: "alpha", headers: {} });
+    let requests = 0;
+    const network = async () => { requests++; return networkResult; };
+    const readResult = reads
+      ? await reads.get({ space: primarySpace, key: "notes/a", path: "notes/a",
+        options: undefined, signal: new AbortController().signal, network })
+      : await network();
+    expect(readResult).toBe(networkResult);
+    expect(requests).toBe(1);
+    expect(opens).toBe(0);
+    await runtime.control.close();
+  });
+
+  test("a gated-only module resolving after sign-out cannot attach or emit into the retired session", async () => {
+    const runtime = new ReplicationRuntime({ enabled: true, prefixes: ["notes/"],
+      storage: { kind: "indexeddb", async open() { throw new Error("local open"); } } as KVReplicaStorage }, clock);
+    const loading = Promise.withResolvers<typeof import("./gated-network")>();
+    let attached = 0;
+    const bind = runtime.bindGatedNetworkOnly({
+      context: context("https://node.example"), session, gate: "stamp_stale",
+      primaryKV: [{ space: primarySpace, kv: { setReadThrough(value: KVReadThrough | null) {
+        if (value) attached++;
+      } } }],
+    }, () => loading.promise);
+    const unbind = runtime.unbind();
+    loading.resolve(await import("./gated-network"));
+    await Promise.all([bind, unbind]);
+    expect(attached).toBe(0);
+    expect(await runtime.control.status()).toEqual([]);
   });
 
   test("binds by canonical host/session identity and shares pending state on session replacement", async () => {

@@ -45,7 +45,7 @@ const parseUcanGrant = replicaParseUcanGrant as ReplicaRuntime["parseUcanGrant"]
 export { assertValidReplicationConfig } from "./config";
 export { augmentSignInEntriesWithReplication, hasUnrestrictedGetCoverage } from "./authority-sign-in";
 
-/** Report a completed deny from the lazy replica path; delivery was already revoked synchronously. */
+/** Report a completed deny from the already-loaded authority; delivery was revoked synchronously. */
 export function reportReplicaDenial(
   result: { status: string; code?: string; intents?: number },
   reason: ReplicaDenyInput["reason"],

@@ -27,6 +27,7 @@ export type ReplicationModuleLoaders = {
   validateConfig: (replication: ReplicationOptions & { storage?: unknown }) => void;
   runtime: () => Promise<typeof import("./runtime")>;
   authority: () => Promise<typeof import("./authority")>;
+  gatedNetwork: () => Promise<typeof import("./gated-network")>;
   gate: () => Promise<ProfileGateModule>;
 };
 

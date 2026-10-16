@@ -763,7 +763,7 @@ export class TinyCloudWeb {
     const restoreAddress = await this.resolveRestoreAddress(address);
     if (this.signOutCount !== signOuts || this.signOutInFlight > 0) {
       if (address) this.untrackRestoreAddress(address);
-      return { status: "restore-failed", error: new Error("Session restore was cancelled by sign-out.") };
+      return refused();
     }
     if (!restoreAddress) {
       if (address) this.untrackRestoreAddress(address);
@@ -792,7 +792,7 @@ export class TinyCloudWeb {
       };
     } catch (err) {
       if (this.signOutCount !== signOuts || this.signOutInFlight > 0) {
-        return { status: "restore-failed", error: new Error("Session restore was cancelled by sign-out.") };
+        return refused();
       }
       // Restore rejection is intentionally transactional. Persisted storage
       // is user state, and attempting best-effort cleanup here can both mask

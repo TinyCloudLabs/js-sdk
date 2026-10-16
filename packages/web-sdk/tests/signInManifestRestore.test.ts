@@ -785,6 +785,7 @@ test.each([
     validateConfig: assertValidReplicationConfig,
     runtime: () => import("@tinycloud/node-sdk/replication/runtime"),
     authority: () => import("@tinycloud/node-sdk/replication/authority"),
+    gatedNetwork: () => import("@tinycloud/node-sdk/replication/gated-network"),
     gate: () => import("@tinycloud/replica/profile-gate"),
   });
   const events: unknown[] = [];
@@ -1210,6 +1211,7 @@ test("signOut during real browser gate restore and awaited storage clear cannot 
       validateConfig: assertValidReplicationConfig,
       runtime: () => import("@tinycloud/node-sdk/replication/runtime"),
       authority: () => import("@tinycloud/node-sdk/replication/authority"),
+      gatedNetwork: () => import("@tinycloud/node-sdk/replication/gated-network"),
       gate: () => import("@tinycloud/replica/profile-gate"),
     });
     const replication = { enabled: true, prefixes: ["notes/"], storage: replicaStorage };

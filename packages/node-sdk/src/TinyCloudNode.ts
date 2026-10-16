@@ -7226,7 +7226,7 @@ export class TinyCloudNode {
       if (gate) {
         await runtime.bindGatedNetworkOnly({
           context, session, gate, primaryKV: [{ space: session.spaceId, kv }],
-        });
+        }, getNodeReplicationLoaders().gatedNetwork);
         return;
       }
       const identityPrincipal = principal ??

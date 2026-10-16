@@ -1,6 +1,5 @@
 import { pkhDid } from "@tinycloud/sdk-core";
 import type { FetchFunction, ServiceContext, ServiceSession } from "@tinycloud/sdk-core";
-import { kvPrefixCovers } from "@tinycloud/sdk-services/kv/replication/prefix";
 import type {
   KVReadThrough,
   KVReplicaStorage,
@@ -153,8 +152,11 @@ export class ReplicationRuntime {
     this.attached.clear();
   }
 
-  /** Observe network fallbacks after a refused restore without opening any local replica state. */
-  bindGatedNetworkOnly(input: GatedReplicationRuntimeBinding): Promise<void> {
+  /** Observe a refused restore without opening replica state; loader failure leaves raw network KV usable. */
+  bindGatedNetworkOnly(
+    input: GatedReplicationRuntimeBinding,
+    loadGatedNetwork: () => Promise<typeof import("./gated-network")>,
+  ): Promise<void> {
     if (this.closed || !this.options.enabled) return Promise.resolve();
     const generation = ++this.generation;
     this.bindingActive = false;
@@ -166,6 +168,7 @@ export class ReplicationRuntime {
     this.unsubscribeConsentExpired = undefined;
     const previous = this.current;
     this.current = undefined;
+    this.gated = undefined;
     this.detachAll();
     this.pending.clear();
     this.lastController = undefined;
@@ -175,69 +178,29 @@ export class ReplicationRuntime {
     this.primarySpace = input.session.spaceId;
     const close = previous ? previous.close().catch(() => undefined) : Promise.resolve();
     this.previous = this.previous.then(() => close);
-    this.binding = this.previous;
-    const active = () => generation === this.generation && !this.closed && this.gated === networkOnly;
-    const emit = (event: ReplicationEvent) => {
-      if (!active()) return;
-      try { this.options.onEvent?.(event); } catch { /* Telemetry cannot change network results. */ }
-      const { type, ...data } = event;
-      try { input.context.emit(type, data); } catch { /* Telemetry cannot change network results. */ }
-    };
-    const report = (
-      op: "get" | "list", space: string, path: string, replica: string | null,
-      reason: "replica_gated" | "not_covered" | "unsupported_option" | "network_cursor" | "NETWORK_REQUESTED" | "cursor_restart",
-      outcome: "found" | "not_found" | "error", latencyMs: number,
-    ) => emit({
-      type: "replication.read", at: new Date(this.clock.now()).toISOString(), op, space, key: path,
-      replica, source: reason === "cursor_restart" ? "none" : "network", reason, outcome, latencyMs,
-      stalenessMs: null, coverage: null, authority: null,
-      ...(reason === "replica_gated" ? { code: "REPLICA_GATED" } : {}),
-    });
-    const readNetwork = async <T extends { ok: boolean }>(
-      r: { space: string; network: () => Promise<T> }, op: "get" | "list", path: string,
-      prefix: string | null, reason: "replica_gated" | "not_covered" | "unsupported_option" | "network_cursor" | "NETWORK_REQUESTED",
-    ): Promise<T> => {
-      const started = this.clock.now();
-      let outcome: "found" | "not_found" | "error" = "error";
+    this.binding = this.previous.then(async () => {
+      let create: typeof import("./gated-network").createGatedNetworkReadThrough;
       try {
-        const result = await r.network();
-        outcome = result.ok ? "found" : op === "get" && reason === "not_covered" && "error" in result &&
-          (result.error as { code?: string }).code === "KV_NOT_FOUND" ? "not_found" : "error";
-        return result;
-      } finally {
-        report(op, r.space, path, prefix, reason, outcome, this.clock.now() - started);
+        ({ createGatedNetworkReadThrough: create } = await loadGatedNetwork());
+      } catch {
+        // Refusal already gates local delivery; a missing observer cannot end a network session.
+        return;
       }
-    };
-    const covered = (path: string) => this.options.prefixes.find((prefix) => kvPrefixCovers(prefix, path));
-    const networkOnly: KVReadThrough = {
-      get: (r) => {
-        if (r.space !== input.session.spaceId) return r.network();
-        if (r.options?.source === "network") return readNetwork(r, "get", r.path, null, "NETWORK_REQUESTED");
-        const prefix = covered(r.path);
-        return readNetwork(r, "get", r.path, prefix ?? null, prefix === undefined ? "not_covered" : "replica_gated");
-      },
-      list: (r) => {
-        if (r.space !== input.session.spaceId) return r.network();
-        if (r.options?.source === "network") return readNetwork(r, "list", r.listPath, null, "NETWORK_REQUESTED");
-        if (r.options?.cursor?.startsWith("tcr1.")) {
-          report("list", r.space, r.listPath, null, "cursor_restart", "error", 0);
-          return Promise.resolve({ ok: false, error: {
-            code: "INVALID_INPUT", message: "Local list cursor cannot be served; restart without the cursor",
-            service: "kv", meta: { replication: "cursor_restart" },
-          } });
-        }
-        if (r.options?.cursor) return readNetwork(r, "list", r.listPath, null, "network_cursor");
-        if (r.options?.raw) return readNetwork(r, "list", r.listPath, null, "unsupported_option");
-        const prefix = covered(r.listPath);
-        return readNetwork(r, "list", r.listPath, prefix ?? null, prefix === undefined ? "not_covered" : "replica_gated");
-      },
-      write: (r) => r.network(),
-      observeNetworkRequested: (r) => {
-        if (r.space === input.session.spaceId) report(r.op, r.space, r.path, null, r.reason, r.outcome, r.latencyMs);
-      },
-    };
-    this.gated = networkOnly;
-    for (const scoped of input.primaryKV) this.attach(scoped.space, scoped.kv);
+      if (generation !== this.generation || this.closed || typeof create !== "function") return;
+      const networkOnly = create({
+        space: input.session.spaceId,
+        prefixes: this.options.prefixes,
+        now: () => this.clock.now(),
+        emit: (event) => {
+          if (generation !== this.generation || this.closed || this.gated !== networkOnly) return;
+          try { this.options.onEvent?.(event); } catch { /* Telemetry cannot change network results. */ }
+          const { type, ...data } = event;
+          try { input.context.emit(type, data); } catch { /* Telemetry cannot change network results. */ }
+        },
+      });
+      this.gated = networkOnly;
+      for (const scoped of input.primaryKV) this.attach(scoped.space, scoped.kv);
+    });
     return this.binding;
   }
 
