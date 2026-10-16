@@ -9,7 +9,7 @@
 
 import { afterEach, describe, expect, setSystemTime, test } from "bun:test";
 import { chmod, mkdir, mkdtemp, open as openFile, readdir, rename, rm, symlink, writeFile } from "node:fs/promises";
-import { existsSync } from "node:fs";
+import { constants as fsConstants, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
@@ -629,6 +629,65 @@ describe("mandatory Node lifecycle gate", () => {
     expect(await readGateSnapshot(profileDir)).toBeUndefined();
   });
 
+  test("pinned proc-fd profile refuses unknown writes and wipes only its original directory after replacement", async () => {
+    if (process.platform !== "linux") return;
+    const named = await mkdtemp(join(tmpdir(), "tc858-pinned-profile-"));
+    const moved = `${named}-moved`;
+    const outside = await mkdtemp(join(tmpdir(), "tc858-pinned-outside-"));
+    dirs.push(named, moved, outside);
+    await mkdir(join(named, "replication", "unknown-child"), { recursive: true });
+    await writeFile(join(named, "replication", "unknown-child", "pending.json"), "unsynced");
+    await writeFile(join(named, "session.json"), "private session");
+    await writeFile(join(named, "key.json"), "private key");
+    await mkdir(join(outside, "replication"));
+    await writeFile(join(outside, "replication", "keep.db"), "outside");
+    const handle = await openFile(named, fsConstants.O_RDONLY | fsConstants.O_DIRECTORY | fsConstants.O_NOFOLLOW);
+    const pinned = `/proc/self/fd/${handle.fd}`;
+    try {
+      const purge = createProfileReplicaPurge({ profileDir: pinned, guard: sharedGuard });
+      await expect(purge.prepareLogoutPending({ principal: PRINCIPAL }))
+        .rejects.toThrow(/sync first.*--discard-local-changes/i);
+      expect(existsSync(join(named, "session.json"))).toBe(true);
+      expect(existsSync(join(named, REPLICA_LOGOUT_PENDING_FILE))).toBe(false);
+      expect(await purge.prepareLogoutPending({ principal: PRINCIPAL, discardLocalChanges: true }))
+        .toMatchObject({ v: 2, scope: "orphan_profile" });
+      await rename(named, moved);
+      await symlink(outside, named, "dir");
+      const report = await purge.recoverLogoutPending({
+        signal: new AbortController().signal,
+        clearCredentials: async () => {
+          await rm(join(pinned, "session.json"));
+          await rm(join(pinned, "key.json"));
+        },
+        eraseLegacyReplicas: async () => { throw new Error("v2 owns both roots"); },
+      });
+      expect(report).toMatchObject({ failed: [], remaining: 0 });
+      expect(existsSync(join(moved, "replication"))).toBe(false);
+      expect(existsSync(join(moved, REPLICA_LOGOUT_PENDING_FILE))).toBe(false);
+      expect(existsSync(join(outside, "replication", "keep.db"))).toBe(true);
+      expect(existsSync(join(outside, REPLICA_LOGOUT_PENDING_FILE))).toBe(false);
+    } finally {
+      await handle.close();
+    }
+  });
+
+  test("arbitrary profile aliases and closed descriptor pins fail closed even without replica roots", async () => {
+    const profileDir = await mkdtemp(join(tmpdir(), "tc858-profile-alias-"));
+    const alias = `${profileDir}-alias`;
+    dirs.push(profileDir, alias);
+    await symlink(profileDir, alias, "dir");
+    await expect(createProfileReplicaPurge({ profileDir: alias, guard: sharedGuard })
+      .prepareLogoutPending({ principal: PRINCIPAL }))
+      .rejects.toMatchObject({ code: "REPLICA_GATED", gate: "gate_unavailable" });
+    await rm(alias);
+    const handle = await openFile(profileDir, fsConstants.O_RDONLY | fsConstants.O_DIRECTORY | fsConstants.O_NOFOLLOW);
+    const pinned = `/proc/self/fd/${handle.fd}`;
+    await handle.close();
+    await expect(createProfileReplicaPurge({ profileDir: pinned, guard: sharedGuard })
+      .prepareLogoutPending({ principal: PRINCIPAL }))
+      .rejects.toMatchObject({ code: "REPLICA_GATED", gate: "gate_unavailable" });
+  });
+
   test("orphan wipe refuses unsynced pending records until explicit discard consent", async () => {
     const profileDir = await mkdtemp(join(tmpdir(), "tc858-orphan-pending-"));
     dirs.push(profileDir);
@@ -679,6 +738,38 @@ describe("mandatory Node lifecycle gate", () => {
     expect(report).toMatchObject({ failed: [], remaining: 0 });
     expect(existsSync(root)).toBe(false);
     expect(existsSync(join(outside, "keep.db"))).toBe(true);
+  });
+
+  test("missing flag pending index refuses even a known identity without discard", async () => {
+    const profileDir = await mkdtemp(join(tmpdir(), "tc858-orphan-no-index-"));
+    dirs.push(profileDir);
+    const partition = join(profileDir, "replication", "a".repeat(26));
+    await mkdir(partition, { recursive: true });
+    await writeFile(join(partition, "identity.json"), JSON.stringify(identity()));
+    const purge = createProfileReplicaPurge({ profileDir, guard: sharedGuard });
+    await expect(purge.prepareLogoutPending({ principal: PRINCIPAL }))
+      .rejects.toThrow(/sync first.*--discard-local-changes/i);
+    expect(existsSync(join(profileDir, REPLICA_LOGOUT_PENDING_FILE))).toBe(false);
+  });
+
+  test("unrecognized flag child refuses beside a missing or empty pending index", async () => {
+    const profileDir = await mkdtemp(join(tmpdir(), "tc858-orphan-v2-pending-"));
+    dirs.push(profileDir);
+    const partition = join(profileDir, "replication", "a".repeat(26));
+    await mkdir(partition, { recursive: true });
+    await writeFile(join(partition, "identity.json"), JSON.stringify(identity()));
+    await writeFile(join(partition, "pending-v2.json"), "unsynced state");
+    const purge = createProfileReplicaPurge({ profileDir, guard: sharedGuard });
+    await expect(purge.prepareLogoutPending({ principal: PRINCIPAL }))
+      .rejects.toThrow(/sync first.*--discard-local-changes/i);
+    await writeFile(join(partition, "pending.json"), JSON.stringify({
+      v: 2, identity: identity(), committedEpoch: 1, seq: 1, records: [],
+    }));
+    await expect(purge.prepareLogoutPending({ principal: PRINCIPAL }))
+      .rejects.toThrow(/sync first.*--discard-local-changes/i);
+    expect(existsSync(join(profileDir, REPLICA_LOGOUT_PENDING_FILE))).toBe(false);
+    expect(await purge.prepareLogoutPending({ principal: PRINCIPAL, discardLocalChanges: true }))
+      .toMatchObject({ v: 2, scope: "orphan_profile" });
   });
 
   test("an inspected empty pending file does not require discard consent", async () => {

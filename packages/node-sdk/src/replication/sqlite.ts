@@ -147,8 +147,24 @@ async function readLogoutMarker(path: string): Promise<ProfileReplicaLogoutPendi
   return value === undefined ? null : logoutMarkerOf(value);
 }
 
-/** Only the selected profile's real replica directories may be wiped. */
+/** Only a real selected profile or its Linux directory-fd pin may own a wipe. */
 async function orphanRoot(profileDir: string, name: "replication" | "replicas"): Promise<string | null> {
+  let profile;
+  try {
+    profile = await lstat(profileDir);
+  } catch {
+    throw gated("gate_unavailable");
+  }
+  let pinned = false;
+  if (process.platform === "linux" && /^\/proc\/self\/fd\/[1-9]\d*$/.test(profileDir) &&
+      profile.isSymbolicLink()) {
+    try {
+      pinned = (await stat(profileDir)).isDirectory();
+    } catch {
+      throw gated("gate_unavailable");
+    }
+  }
+  if (!profile.isDirectory() && !pinned) throw gated("gate_unavailable");
   const root = join(profileDir, name);
   let entry;
   try {
@@ -157,7 +173,7 @@ async function orphanRoot(profileDir: string, name: "replication" | "replicas"):
     if (isNotFound(error)) return null;
     throw error;
   }
-  if (!entry.isDirectory() || !(await lstat(profileDir)).isDirectory() ||
+  if (!entry.isDirectory() ||
       await realpath(root) !== join(await realpath(profileDir), name)) {
     throw gated("gate_unavailable");
   }
@@ -168,7 +184,13 @@ async function orphanRoot(profileDir: string, name: "replication" | "replicas"):
 async function hasOrphanPending(profileDir: string, name: "replication" | "replicas"): Promise<boolean> {
   const root = await orphanRoot(profileDir, name);
   if (root === null) return false;
-  for (const entry of await readdir(root, { withFileTypes: true })) {
+  let entries;
+  try {
+    entries = await readdir(root, { withFileTypes: true });
+  } catch {
+    return true;
+  }
+  for (const entry of entries) {
     if (!entry.isDirectory()) return true;
     const dir = join(root, entry.name);
     try {
@@ -177,12 +199,25 @@ async function hasOrphanPending(profileDir: string, name: "replication" | "repli
       return true;
     }
     if (name === "replicas") {
-      // Legacy SQLite child layouts do not have a reviewed pending-write index.
-      // Any nested file may contain unsynced data, including unknown future layouts.
-      if ((await readdir(dir)).length !== 0) return true;
+      // Legacy SQLite child layouts have no reviewed pending-write index.
+      try {
+        if ((await readdir(dir)).length !== 0) return true;
+      } catch {
+        return true;
+      }
       continue;
     }
     if (!/^[a-z2-7]{26}$/.test(entry.name)) return true;
+    let children;
+    try {
+      children = await readdir(dir, { withFileTypes: true });
+    } catch {
+      return true;
+    }
+    // Only a verified empty pending index proves no unsynced writes. A missing
+    // index, a replica DB, device key, or any future child format is unknown.
+    if (children.length !== 2 || children.some((child) =>
+      !child.isFile() || (child.name !== "identity.json" && child.name !== "pending.json"))) return true;
     const pendingFile = join(dir, "pending.json");
     let text: string;
     try {
@@ -190,7 +225,7 @@ async function hasOrphanPending(profileDir: string, name: "replication" | "repli
       if (!pending.isFile()) return true;
       text = await readFile(pendingFile, "utf8");
     } catch (error) {
-      if (isNotFound(error)) continue;
+      if (isNotFound(error)) return true;
       return true;
     }
     try {
