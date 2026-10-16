@@ -491,10 +491,13 @@ describe("tc auth logout --revoke with durable replica denial", () => {
       { session: true, db: true },
       { session: true, db: true },
     ]);
-    const report = JSON.stringify(JSON.parse(logout.stdout));
-    expect(report).toContain(importedCid);
-    expect(report).toContain(expiredCid);
-    expect(report).toMatch(/excluded|skipped/);
+    const report = JSON.parse(logout.stdout) as {
+      revocationExcluded: Array<{ cid: string; reason: string }>;
+    };
+    expect(report.revocationExcluded).toEqual([
+      { cid: importedCid, reason: "inbound" },
+      { cid: expiredCid, reason: "expired" },
+    ]);
     expect(await exists(paths.session)).toBe(false);
     expect(await exists(paths.db)).toBe(false);
   });
