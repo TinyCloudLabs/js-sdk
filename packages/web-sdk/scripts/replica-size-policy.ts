@@ -10,7 +10,25 @@ export type Phase2Ratchet = {
   rationale: { module: string; controlledMarginalBeforeSafeCuts: GzipSizes; requiredAtLoad: string }[];
   safeCuts: string;
 };
-export type Ledger = { allowance: GzipSizes; entries: LedgerEntry[]; phase2Ratchet?: Phase2Ratchet };
+export type FirstImportSizes = { "replica.mjs": number; "replica.cjs": number };
+export type FixRequiredRatchet = {
+  label: string;
+  measuredAt: string;
+  toolchain: string;
+  priorRoot: GzipSizes;
+  rootCeiling: GzipSizes;
+  priorFirstImport: FirstImportSizes;
+  firstImportCeiling: FirstImportSizes;
+  groupedMarginals: {
+    from: string;
+    to: string;
+    root: GzipSizes;
+    firstImport: FirstImportSizes;
+    reason: string;
+  }[];
+  s4Marginal: string;
+};
+export type Ledger = { allowance: GzipSizes; entries: LedgerEntry[]; phase2Ratchet?: Phase2Ratchet; fixRequiredRatchet?: FixRequiredRatchet };
 
 const formats = ["index.mjs", "index.cjs"] as const;
 export const approvedPhase2 = {
@@ -21,6 +39,33 @@ export const approvedPhase2 = {
   delta: { "index.mjs": 1322, "index.cjs": 1205 },
   ceiling: { "index.mjs": 1461925, "index.cjs": 1391665 },
 } as const;
+
+export const approvedFixRequiredRatchet: FixRequiredRatchet = {
+  label: "TC-858 Phase 2 reviewed correctness fixes: copied-proof restore, gated observation, durable denial event, GRANT_REVOKED",
+  measuredAt: "ddc032caef81a2177e7f9c30a6a28a8f593a4580",
+  toolchain: approvedPhase2.toolchain,
+  priorRoot: { "index.mjs": 1461925, "index.cjs": 1391665 },
+  rootCeiling: { "index.mjs": 1462034, "index.cjs": 1391799 },
+  priorFirstImport: { "replica.mjs": 51201, "replica.cjs": 66132 },
+  firstImportCeiling: { "replica.mjs": 51785, "replica.cjs": 66995 },
+  groupedMarginals: [
+    {
+      from: "ce52494d0cb1ea236578bc6b709e9e6e016f8c78",
+      to: "18e9f58983727c63c8ad1bab0378e6c3248bbfa3",
+      root: { "index.mjs": 180, "index.cjs": 157 },
+      firstImport: { "replica.mjs": 1155, "replica.cjs": 1197 },
+      reason: "Copied-proof restore refusal, scoped gated network-read events, S3 durable-denial event; TC-1208 synchronous sign-out and session-attempt fences preserved.",
+    },
+    {
+      from: "18e9f58983727c63c8ad1bab0378e6c3248bbfa3",
+      to: "ddc032caef81a2177e7f9c30a6a28a8f593a4580",
+      root: { "index.mjs": -71, "index.cjs": -23 },
+      firstImport: { "replica.mjs": -571, "replica.cjs": -334 },
+      reason: "Refused-admission observer physically deferred, existing runtime unbind reused, S3 sign-out event kept in loaded authority; no security or network semantics removed.",
+    },
+  ],
+  s4Marginal: "S4 GRANT_REVOKED network-read projection from 28addd98 integrated as d3930dee; standalone gzip marginal was not isolated and grouped measurements are nonadditive.",
+};
 
 export type GatedOnlyRatchet = {
   label: string;
@@ -54,7 +99,7 @@ const historicalToolchain = "Bun 1.4.3; production webpack; gzip -9 -c";
 /** Only a git merge-base ledger may retain the pre-correction toolchain. */
 export function validateLedger(value: Ledger, historicalBase = false): void {
   if (!value || !value.allowance || !Array.isArray(value.entries) ||
-      Object.keys(value).some((key) => key !== "allowance" && key !== "entries" && key !== "phase2Ratchet")) {
+      Object.keys(value).some((key) => key !== "allowance" && key !== "entries" && key !== "phase2Ratchet" && key !== "fixRequiredRatchet")) {
     throw new Error("Invalid packages/web-sdk/scripts/replica-size-ledger.json shape");
   }
   if (Object.keys(value.allowance).some((key) => !formats.includes(key as typeof formats[number]))) {
@@ -93,5 +138,10 @@ export function validateLedger(value: Ledger, historicalBase = false): void {
         typeof row.safeCuts !== "string" || row.safeCuts.length < 40) {
       throw new Error("TC-858 Phase 2 root ratchet must match Naomi's exact master9891 approval and document nonadditive file marginals");
     }
+  }
+  if (value.fixRequiredRatchet !== undefined &&
+      (!value.phase2Ratchet ||
+       JSON.stringify(value.fixRequiredRatchet) !== JSON.stringify(approvedFixRequiredRatchet))) {
+    throw new Error("Only Naomi's exact ddc032ca fix-required root and first-import ratchet is approved.");
   }
 }

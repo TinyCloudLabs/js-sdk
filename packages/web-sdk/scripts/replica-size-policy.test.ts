@@ -1,7 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { approvedGatedOnlyRatchet, validateGatedOnlyRatchet, validateLedger, type Ledger } from "./replica-size-policy";
+import { approvedFixRequiredRatchet, approvedGatedOnlyRatchet, validateGatedOnlyRatchet, validateLedger, type Ledger } from "./replica-size-policy";
 
 const current = JSON.parse(readFileSync(resolve(import.meta.dir, "replica-size-ledger.json"), "utf8")) as Ledger;
 const historical: Ledger = {
@@ -68,5 +68,30 @@ describe("TC-858 deferred refused-admission artifact", () => {
     changed.sourceCommit = approvedGatedOnlyRatchet.sourceCommit;
     changed.toolchain = "Bun 1.4.3";
     expect(() => validateGatedOnlyRatchet(changed)).toThrow();
+  });
+});
+
+describe("TC-858 reviewed fix-required root and first-import ratchet", () => {
+  it("accepts the exact measured ddc032ca row without changing the immutable historical entries or original phase2 row", () => {
+    expect(() => validateLedger(current)).not.toThrow();
+    expect(current.fixRequiredRatchet).toEqual(approvedFixRequiredRatchet);
+    expect(current.phase2Ratchet?.ceiling).toEqual({ "index.mjs": 1461925, "index.cjs": 1391665 });
+    expect(current.entries.find((entry) => entry.pr === "#546")).toMatchObject({ "index.mjs": 238, "index.cjs": 183 });
+    expect(current.entries.find((entry) => entry.pr === "#553")).toMatchObject({ "index.mjs": 52, "index.cjs": 55 });
+  });
+
+  it("rejects unreviewed root/first growth, source changes and synthetic historical-row edits", () => {
+    const rootGrowth = copy(current);
+    rootGrowth.fixRequiredRatchet!.rootCeiling["index.mjs"]++;
+    expect(() => validateLedger(rootGrowth)).toThrow();
+    const firstGrowth = copy(current);
+    firstGrowth.fixRequiredRatchet!.firstImportCeiling["replica.cjs"]++;
+    expect(() => validateLedger(firstGrowth)).toThrow();
+    const changedEvidence = copy(current);
+    changedEvidence.fixRequiredRatchet!.groupedMarginals[0].root["index.cjs"]++;
+    expect(() => validateLedger(changedEvidence)).toThrow();
+    const syntheticAllowance = copy(current);
+    syntheticAllowance.allowance["index.mjs"]++;
+    expect(() => validateLedger(syntheticAllowance)).toThrow();
   });
 });

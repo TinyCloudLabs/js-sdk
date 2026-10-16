@@ -58,5 +58,31 @@
       }
     ],
     "safeCuts": "Bun 1.4.3 controlled combined root reduction -385/-279 against the pre-cut S2 stack: optional-only pure scope predicate reuse -77/-36, then registered synchronous Node config validation -308/-243. S4 event correction changed root by 0. Marginals are nonadditive before-cut attribution, not fabricated exact post-cut per-file gzip; the absolute built combined root ceiling is binding. Base re-measured with the official recipe; earlier provisional base superseded."
+  },
+  "fixRequiredRatchet": {
+    "label": "TC-858 Phase 2 reviewed correctness fixes: copied-proof restore, gated observation, durable denial event, GRANT_REVOKED",
+    "measuredAt": "ddc032caef81a2177e7f9c30a6a28a8f593a4580",
+    "toolchain": "Bun 1.3.14; replica-e2e Node size job Rust 1.99.0; production webpack; gzip -9 -c",
+    "priorRoot": { "index.mjs": 1461925, "index.cjs": 1391665 },
+    "rootCeiling": { "index.mjs": 1462034, "index.cjs": 1391799 },
+    "priorFirstImport": { "replica.mjs": 51201, "replica.cjs": 66132 },
+    "firstImportCeiling": { "replica.mjs": 51785, "replica.cjs": 66995 },
+    "groupedMarginals": [
+      {
+        "from": "ce52494d0cb1ea236578bc6b709e9e6e016f8c78",
+        "to": "18e9f58983727c63c8ad1bab0378e6c3248bbfa3",
+        "root": { "index.mjs": 180, "index.cjs": 157 },
+        "firstImport": { "replica.mjs": 1155, "replica.cjs": 1197 },
+        "reason": "Copied-proof restore refusal, scoped gated network-read events, S3 durable-denial event; TC-1208 synchronous sign-out and session-attempt fences preserved."
+      },
+      {
+        "from": "18e9f58983727c63c8ad1bab0378e6c3248bbfa3",
+        "to": "ddc032caef81a2177e7f9c30a6a28a8f593a4580",
+        "root": { "index.mjs": -71, "index.cjs": -23 },
+        "firstImport": { "replica.mjs": -571, "replica.cjs": -334 },
+        "reason": "Refused-admission observer physically deferred, existing runtime unbind reused, S3 sign-out event kept in loaded authority; no security or network semantics removed."
+      }
+    ],
+    "s4Marginal": "S4 GRANT_REVOKED network-read projection from 28addd98 integrated as d3930dee; standalone gzip marginal was not isolated and grouped measurements are nonadditive."
   }
 }

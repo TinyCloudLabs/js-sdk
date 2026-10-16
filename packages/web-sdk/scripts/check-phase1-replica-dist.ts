@@ -4,7 +4,7 @@ import { cp, mkdtemp, readFile, rm } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { measureReplicaOptionalLoaded, type LoadedSizes } from "./measure-replica-optional";
-import { approvedGatedOnlyRatchet, approvedPhase2, validateGatedOnlyRatchet, validateLedger, type GatedOnlyRatchet, type GzipSizes, type Ledger, type LedgerEntry } from "./replica-size-policy";
+import { approvedFixRequiredRatchet, approvedGatedOnlyRatchet, approvedPhase2, validateGatedOnlyRatchet, validateLedger, type GatedOnlyRatchet, type GzipSizes, type Ledger, type LedgerEntry } from "./replica-size-policy";
 
 type OptionalEntry = LoadedSizes & { pr: string; ticket: string; note: string };
 type OptionalLedger = { allowance: LoadedSizes; entries: OptionalEntry[]; relocations?: unknown; measurementCorrection?: unknown; gatedOnlyRatchet?: GatedOnlyRatchet };
@@ -79,6 +79,9 @@ const relocatedOptionalAllowance: LoadedSizes = {
 const correctedOptionalAllowance: LoadedSizes = {
   ...relocatedOptionalAllowance, "replica.mjs": 51201, "replica.cjs": 66132,
 };
+const fixRequiredOptionalAllowance: LoadedSizes = {
+  ...correctedOptionalAllowance, ...approvedFixRequiredRatchet.firstImportCeiling,
+};
 const approvedMeasurementCorrection = {
   commit: "ce52494d0cb1ea236578bc6b709e9e6e016f8c78",
   ciRun: "38958197518",
@@ -100,7 +103,7 @@ const preexistingS3Entry: LedgerEntry = {
 };
 let failed = false;
 
-function validateOptionalLedger(value: OptionalLedger): void {
+function validateOptionalLedger(value: OptionalLedger, fixRequired = false): void {
   const path = "packages/web-sdk/scripts/replica-optional-size-ledger.json";
   if (!value || !value.allowance || !Array.isArray(value.entries) ||
       Object.keys(value).some((key) => key !== "allowance" && key !== "entries" && key !== "relocations" && key !== "measurementCorrection" && key !== "gatedOnlyRatchet") ||
@@ -118,11 +121,12 @@ function validateOptionalLedger(value: OptionalLedger): void {
   }
   const relocated = value.relocations !== undefined;
   const corrected = value.measurementCorrection !== undefined;
-  const ceiling = corrected ? correctedOptionalAllowance : relocated ? relocatedOptionalAllowance : priorOptionalAllowance;
+  const ceiling = fixRequired ? fixRequiredOptionalAllowance
+    : corrected ? correctedOptionalAllowance : relocated ? relocatedOptionalAllowance : priorOptionalAllowance;
   if (optionalFormats.some((format) => value.allowance[format] !== ceiling[format]) ||
       (relocated && JSON.stringify(value.relocations) !== JSON.stringify(approvedRelocations)) ||
-      (corrected && (!relocated || JSON.stringify(value.measurementCorrection) !== JSON.stringify(approvedMeasurementCorrection)))) {
-    throw new Error(`${path}: only the exact paired ${relocationCommit} relocation and ce52494d Bun correction are approved`);
+      (corrected && (!relocated || JSON.stringify(value.measurementCorrection) !== JSON.stringify(approvedMeasurementCorrection))) ||
+      (fixRequired && !corrected)) {
   }
   validateGatedOnlyRatchet(value.gatedOnlyRatchet);
   if (corrected) {
@@ -158,7 +162,7 @@ async function gzipSizes(directory: string): Promise<GzipSizes> {
 }
 
 validateLedger(ledger);
-validateOptionalLedger(optionalLedger);
+validateOptionalLedger(optionalLedger, ledger.fixRequiredRatchet !== undefined);
 const optionalCurrent = await measureReplicaOptionalLoaded(distDir);
 for (const format of optionalFormats) {
   const total = optionalLedger.entries.reduce((sum, entry) => sum + entry[format], 0);
@@ -200,7 +204,7 @@ for (const format of formats) {
     }
   }
   console.log(`${format}: current=${currentSizes[format]} gzip-bytes`);
-  const ceiling = ledger.phase2Ratchet?.ceiling[format];
+  const ceiling = ledger.fixRequiredRatchet?.rootCeiling[format] ?? ledger.phase2Ratchet?.ceiling[format];
   if (ceiling !== undefined) {
     console.log(`${format}: TC-858 Phase 2 absolute root ceiling=${ceiling} gzip-bytes`);
     if (currentSizes[format] > ceiling) {
@@ -244,7 +248,7 @@ if (prBaseSha) {
   } else {
     throw new Error(`Unable to read base ${baseOptionalPath}: ${optionalResult.stderr.trim()}`);
   }
-  validateOptionalLedger(baseOptional);
+  validateOptionalLedger(baseOptional, baseLedger.fixRequiredRatchet !== undefined);
   validateGatedOnlyRatchet(optionalLedger.gatedOnlyRatchet, baseOptional.gatedOnlyRatchet);
   if (optionalLedger.gatedOnlyRatchet !== undefined && baseOptional.gatedOnlyRatchet === undefined &&
       spawnSync("git", ["merge-base", "--is-ancestor", approvedGatedOnlyRatchet.sourceCommit, "HEAD"], {
@@ -272,21 +276,45 @@ if (prBaseSha) {
       optionalFormats.every((format) =>
         baseOptional.allowance[format] === priorOptionalAllowance[format] &&
         optionalLedger.allowance[format] ===
-          (optionalLedger.measurementCorrection === undefined
-            ? relocatedOptionalAllowance[format] : correctedOptionalAllowance[format]));
+          (ledger.fixRequiredRatchet !== undefined ? fixRequiredOptionalAllowance[format]
+            : optionalLedger.measurementCorrection === undefined
+              ? relocatedOptionalAllowance[format] : correctedOptionalAllowance[format]));
     const measurementCorrection = JSON.stringify(baseOptional.relocations) === JSON.stringify(approvedRelocations) &&
       baseOptional.measurementCorrection === undefined &&
       JSON.stringify(optionalLedger.measurementCorrection) === JSON.stringify(approvedMeasurementCorrection) &&
       optionalFormats.every((format) =>
         baseOptional.allowance[format] === relocatedOptionalAllowance[format] &&
-        optionalLedger.allowance[format] === correctedOptionalAllowance[format]);
-    if (!pairedTransition && !measurementCorrection) {
-      console.error(`${baseOptionalPath}: optional allowance may increase only with the exact paired core relocation or ce52494d canonical-toolchain correction.`);
+        optionalLedger.allowance[format] ===
+          (ledger.fixRequiredRatchet !== undefined ? fixRequiredOptionalAllowance[format] : correctedOptionalAllowance[format]));
+    const reviewedFixTransition = baseLedger.fixRequiredRatchet === undefined &&
+      ledger.fixRequiredRatchet !== undefined &&
+      JSON.stringify(baseOptional.measurementCorrection) === JSON.stringify(approvedMeasurementCorrection) &&
+      JSON.stringify(optionalLedger.measurementCorrection) === JSON.stringify(baseOptional.measurementCorrection) &&
+      JSON.stringify(optionalLedger.gatedOnlyRatchet) === JSON.stringify(baseOptional.gatedOnlyRatchet) &&
+      optionalFormats.every((format) =>
+        baseOptional.allowance[format] === correctedOptionalAllowance[format] &&
+        optionalLedger.allowance[format] === fixRequiredOptionalAllowance[format]);
+    if (!pairedTransition && !measurementCorrection && !reviewedFixTransition) {
+      console.error(`${baseOptionalPath}: optional allowance may increase only with the exact paired relocation, Bun correction or ddc032ca reviewed fix-required ratchet.`);
       failed = true;
     }
   }
   const replicaPaths = changedPaths.filter(replicaOwnedPath);
   const phase2Introduced = ledger.phase2Ratchet !== undefined && baseLedger.phase2Ratchet === undefined;
+  const reviewedFixIntroduced = ledger.fixRequiredRatchet !== undefined && baseLedger.fixRequiredRatchet === undefined;
+  if (baseLedger.fixRequiredRatchet !== undefined &&
+      JSON.stringify(ledger.fixRequiredRatchet) !== JSON.stringify(baseLedger.fixRequiredRatchet)) {
+    console.error("The exact ddc032ca fix-required ratchet cannot change after introduction.");
+    failed = true;
+  }
+  if (reviewedFixIntroduced &&
+      (optionalLedger.gatedOnlyRatchet === undefined ||
+       spawnSync("git", ["merge-base", "--is-ancestor", approvedFixRequiredRatchet.measuredAt, "HEAD"], {
+         cwd: repoRoot,
+       }).status !== 0)) {
+    console.error("The reviewed fix-required root/first-import transition requires the measured ddc032ca source and approved gated-only artifact.");
+    failed = true;
+  }
   if (baseLedger.phase2Ratchet !== undefined &&
       JSON.stringify(ledger.phase2Ratchet) !== JSON.stringify(baseLedger.phase2Ratchet)) {
     const prior = baseLedger.phase2Ratchet;

@@ -92,12 +92,19 @@ the official recipe; the provisional base is superseded. This approved ratchet
 replaces further cumulative headroom for the #548 stack; the historical
 388 / 861 B allowance and #546/#553 entries remain unchanged.
 
-The opt-in first-import ceiling is 51,201 B ESM / 66,132 B CJS gzip
+The separately reviewed fix-required row at `ddc032ca` caps the integrated
+root at 1,462,034 B ESM / 1,391,799 B CJS (+109 / +134 B over that Phase 2
+ceiling). It covers copied-proof restore, gated network-read observability,
+the committed sign-out event, and GRANT_REVOKED projection; the grouped
+nonadditive measurements and exact source commits are in the size ledger.
+Neither the #546/#553 historical rows nor synchronous TC-1208 fences changed.
+
+The opt-in first-import ceiling is 51,785 B ESM / 66,995 B CJS gzip
 (including the replica parser and noble dependencies); awaiting the IndexedDB
 factory has a separate 23,081 B / 24,886 B ceiling. The content-hashed worker
 and WASM asset has an 818,196 B ceiling owned by `@tinycloud/replica`.
-A compliant first local open therefore costs at most 892,478 B ESM /
-909,214 B CJS incremental gzip beyond the already-loaded web root; those
+A compliant first local open therefore costs at most 893,062 B ESM /
+910,077 B CJS incremental gzip beyond the already-loaded web root; those
 assets can then be cached. These byte ceilings do not replace real-worker
 Chromium acceptance of local reads, denial, expiry, and sign-out.
 
@@ -107,10 +114,11 @@ at 926 B ESM / 1,014 B CJS gzip. Successful opt-ins and replica-off clients
 never fetch it; sign-out uses the already-loaded authority. If this observer
 cannot load, the signed network session remains usable and local reads stay gated.
 
-The first-import ceiling is a measurement correction, not allowance for new
-adapter code: exact `ce52494d` built with Bun 1.3.14 measured 51,201/66,132 B,
-versus 45,538/65,096 B with Bun 1.4.3 on the same built SDK. Both builds
-resolved the same 25 modules; Bun's emitted minified/chunk graph differed.
+The original 51,201/66,132 B first-import ceiling was a toolchain measurement
+correction, not adapter allowance: exact `ce52494d` built with Bun 1.3.14
+measured 51,201/66,132 B versus 45,538/65,096 B with Bun 1.4.3 on the same
+SDK. Both builds resolved the same 25 modules; Bun's emitted graph differed.
+The fix-required row separately adds 584/863 B, with no further headroom.
 The [replica-e2e Node size job 117166290134](https://github.com/TinyCloudLabs/js-sdk/actions/runs/38958197518/job/117166290134)
 pins Bun 1.3.14 and Rust 1.99.0 for the Phase-1 size step; its separate
 browser job uses a different Rust version. The official checker remains
