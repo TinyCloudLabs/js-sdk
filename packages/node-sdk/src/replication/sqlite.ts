@@ -82,6 +82,8 @@ export interface ProfileReplicaPurge extends Pick<ReplicaLifecycleGate, "recover
     signal: AbortSignal;
     /** Remove both session.json and key.json; the facade verifies absence and fsyncs the profile. */
     clearCredentials: () => Promise<void>;
+    /** Idempotently erase only <profile>/replicas after the gate commits; never touch <profile>/replication. */
+    eraseLegacyReplicas: () => Promise<void>;
   }): Promise<ReplicaEraseReport>;
 }
 
@@ -1433,7 +1435,7 @@ export function createSqliteReplicaStorage(
         return marker;
       });
     },
-    async recoverLogoutPending({ signal, clearCredentials }) {
+    async recoverLogoutPending({ signal, clearCredentials, eraseLegacyReplicas }) {
       const path = join(profileDir, REPLICA_LOGOUT_PENDING_FILE);
       const remainingIntents = async (): Promise<number> => {
         try {
@@ -1494,6 +1496,14 @@ export function createSqliteReplicaStorage(
               deniedEpoch: state.lifecycleEpoch, principalHash: marker.principalHash,
             });
           }
+          await eraseLegacyReplicas();
+          try {
+            await lstat(join(profileDir, "replicas"));
+            throw gated("gate_unavailable");
+          } catch (error) {
+            if (!isNotFound(error)) throw error;
+          }
+          await (options.dirSync ?? fsyncDir)(profileDir);
           await rm(path);
           await (options.dirSync ?? fsyncDir)(profileDir);
         });

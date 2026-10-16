@@ -51,6 +51,10 @@ async function makeDir(): Promise<string> {
   return dir;
 }
 
+async function eraseLegacy(profileDir: string): Promise<void> {
+  await rm(join(profileDir, "replicas"), { recursive: true, force: true });
+}
+
 afterEach(async () => {
   await Promise.all(dirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
   roots.length = 0;
@@ -452,6 +456,7 @@ describe("mandatory Node lifecycle gate", () => {
         await rm(session, { force: true });
         await rm(key, { force: true });
       },
+      eraseLegacyReplicas: () => eraseLegacy(profileDir),
     });
     expect(report.failed).toEqual([]);
     expect(report.remaining).toBe(0);
@@ -482,6 +487,7 @@ describe("mandatory Node lifecycle gate", () => {
     const report = await createProfileReplicaPurge({ profileDir, guard: sharedGuard }).recoverLogoutPending({
       signal: new AbortController().signal,
       clearCredentials: async () => { await rm(session); await rm(key); },
+      eraseLegacyReplicas: () => eraseLegacy(profileDir),
     });
     expect(report.failed).toEqual([]);
     expect(await filesNamed(dir, "pending.json")).toEqual([]);
@@ -497,6 +503,7 @@ describe("mandatory Node lifecycle gate", () => {
     const result = await purge.recoverLogoutPending({
       signal: new AbortController().signal,
       clearCredentials: async () => { cleanupCalls++; },
+      eraseLegacyReplicas: () => eraseLegacy(profileDir),
     });
     expect(result).toEqual({ erased: [], failed: [], remaining: 0 });
     expect(cleanupCalls).toBe(0);
@@ -515,6 +522,7 @@ describe("mandatory Node lifecycle gate", () => {
     const report = await purge.recoverLogoutPending({
       signal: new AbortController().signal,
       clearCredentials: async () => { cleanupCalls++; },
+      eraseLegacyReplicas: () => eraseLegacy(profileDir),
     });
     expect(report).toEqual({ erased: [], failed: [], remaining: 1 });
     expect(cleanupCalls).toBe(0);
@@ -534,6 +542,7 @@ describe("mandatory Node lifecycle gate", () => {
     const report = await createProfileReplicaPurge({ profileDir, guard: sharedGuard }).recoverLogoutPending({
       signal: new AbortController().signal,
       clearCredentials: async () => { cleanupCalls++; },
+      eraseLegacyReplicas: () => eraseLegacy(profileDir),
     });
     expect(report).toEqual({ erased: [], failed: [], remaining: 0 });
     expect(cleanupCalls).toBe(1);
@@ -577,6 +586,7 @@ describe("mandatory Node lifecycle gate", () => {
     const result = await purge.recoverLogoutPending({
       signal: new AbortController().signal,
       clearCredentials: async () => { await rm(session, { force: true }); await rm(key, { force: true }); },
+      eraseLegacyReplicas: () => eraseLegacy(profileDir),
     });
     expect(result.failed).toEqual([]);
     expect(result.remaining).toBe(0);
@@ -586,9 +596,127 @@ describe("mandatory Node lifecycle gate", () => {
     expect(durableBoundaries).toEqual([
       { session: true, key: true, marker: true },
       { session: false, key: false, marker: true },
+      { session: false, key: false, marker: true },
       { session: false, key: false, marker: false },
     ]);
     expect(await purge.deferredErase()).toBeNull();
+  });
+
+  test("legacy root is removed only after full gate intent commit and before marker clear", async () => {
+    const dir = await makeDir();
+    const profileDir = dirname(dir);
+    const legacyRoot = join(profileDir, "replicas");
+    const marker = join(profileDir, REPLICA_LOGOUT_PENDING_FILE);
+    await mkdir(join(legacyRoot, "notes"), { recursive: true });
+    await writeFile(join(legacyRoot, "notes", "replica.db"), "legacy");
+    await writeFile(join(profileDir, "session.json"), "{}");
+    await writeFile(join(profileDir, "key.json"), "{}");
+    const storage = createSqliteReplicaStorage(storageOptions());
+    await storage.pendingWrites!(identity(), { stamp: stamps.get(profileDir)! })
+      .update((state) => { state.seq = 1; });
+    const purge = createProfileReplicaPurge({ profileDir, guard: sharedGuard });
+    await purge.prepareLogoutPending({ principal: PRINCIPAL });
+    const report = await purge.recoverLogoutPending({
+      signal: new AbortController().signal,
+      clearCredentials: async () => {
+        await rm(join(profileDir, "session.json"));
+        await rm(join(profileDir, "key.json"));
+      },
+      eraseLegacyReplicas: async () => {
+        const gate = await readGateSnapshot(profileDir);
+        expect(gate?.principalHash).toBeNull();
+        expect(gate?.intents).toHaveLength(1);
+        expect(existsSync(marker)).toBe(true);
+        expect(await filesNamed(dir, "pending.json")).toHaveLength(1);
+        expect(existsSync(join(profileDir, "session.json"))).toBe(false);
+        expect(existsSync(join(profileDir, "key.json"))).toBe(false);
+        await rm(legacyRoot, { recursive: true });
+      },
+    });
+    expect(report).toMatchObject({ failed: [], remaining: 0 });
+    expect(existsSync(legacyRoot)).toBe(false);
+    expect(existsSync(marker)).toBe(false);
+    expect(await filesNamed(dir, "pending.json")).toEqual([]);
+  });
+
+  test("partial legacy cleanup failure keeps the marker and committed S3 intents for restart", async () => {
+    const dir = await makeDir();
+    const profileDir = dirname(dir);
+    const legacyRoot = join(profileDir, "replicas");
+    const marker = join(profileDir, REPLICA_LOGOUT_PENDING_FILE);
+    await mkdir(join(legacyRoot, "notes"), { recursive: true });
+    await writeFile(join(legacyRoot, "notes", "replica.db"), "legacy");
+    const storage = createSqliteReplicaStorage(storageOptions());
+    await storage.pendingWrites!(identity(), { stamp: stamps.get(profileDir)! })
+      .update((state) => { state.seq = 1; });
+    const purge = createProfileReplicaPurge({ profileDir, guard: sharedGuard });
+    await purge.prepareLogoutPending({ principal: PRINCIPAL });
+    const failed = await purge.recoverLogoutPending({
+      signal: new AbortController().signal,
+      clearCredentials: async () => {},
+      eraseLegacyReplicas: async () => { throw Object.assign(new Error("legacy erase failed"), { code: "EIO" }); },
+    });
+    expect(failed).toMatchObject({ failed: [{ id: "logout", code: "EIO" }], remaining: 1 });
+    expect(existsSync(marker)).toBe(true);
+    expect(existsSync(legacyRoot)).toBe(true);
+    expect((await readGateSnapshot(profileDir))?.principalHash).toBeNull();
+    expect(await filesNamed(dir, "pending.json")).toHaveLength(1);
+    const recovered = await createProfileReplicaPurge({ profileDir, guard: sharedGuard }).recoverLogoutPending({
+      signal: new AbortController().signal,
+      clearCredentials: async () => {},
+      eraseLegacyReplicas: async () => { await rm(legacyRoot, { recursive: true }); },
+    });
+    expect(recovered).toMatchObject({ failed: [], remaining: 0 });
+    expect(existsSync(marker)).toBe(false);
+    expect(await filesNamed(dir, "pending.json")).toEqual([]);
+  });
+
+  test("interruption after legacy unlink but before marker clear retries idempotently", async () => {
+    const dir = await makeDir();
+    const profileDir = dirname(dir);
+    const legacyRoot = join(profileDir, "replicas");
+    const marker = join(profileDir, REPLICA_LOGOUT_PENDING_FILE);
+    await mkdir(join(legacyRoot, "notes"), { recursive: true });
+    await writeFile(join(legacyRoot, "notes", "replica.db"), "legacy");
+    const purge = createProfileReplicaPurge({ profileDir, guard: sharedGuard });
+    await purge.prepareLogoutPending({ principal: PRINCIPAL });
+    const failed = await purge.recoverLogoutPending({
+      signal: new AbortController().signal,
+      clearCredentials: async () => {},
+      eraseLegacyReplicas: async () => {
+        await rm(legacyRoot, { recursive: true });
+        throw Object.assign(new Error("crash after legacy unlink"), { code: "EIO" });
+      },
+    });
+    expect(failed).toMatchObject({ failed: [{ id: "logout", code: "EIO" }], remaining: 0 });
+    expect(existsSync(legacyRoot)).toBe(false);
+    expect(existsSync(marker)).toBe(true);
+    const restarted = await createProfileReplicaPurge({ profileDir, guard: sharedGuard }).recoverLogoutPending({
+      signal: new AbortController().signal,
+      clearCredentials: async () => {},
+      eraseLegacyReplicas: () => eraseLegacy(profileDir),
+    });
+    expect(restarted).toEqual({ erased: [], failed: [], remaining: 0 });
+    expect(existsSync(marker)).toBe(false);
+  });
+
+  test("legacy cleanup callback cannot clear the marker while the physical legacy root survives", async () => {
+    const dir = await makeDir();
+    const profileDir = dirname(dir);
+    const legacyRoot = join(profileDir, "replicas");
+    const marker = join(profileDir, REPLICA_LOGOUT_PENDING_FILE);
+    await mkdir(join(legacyRoot, "notes"), { recursive: true });
+    await writeFile(join(legacyRoot, "notes", "replica.db"), "legacy");
+    const purge = createProfileReplicaPurge({ profileDir, guard: sharedGuard });
+    await purge.prepareLogoutPending({ principal: PRINCIPAL });
+    const failed = await purge.recoverLogoutPending({
+      signal: new AbortController().signal,
+      clearCredentials: async () => {},
+      eraseLegacyReplicas: async () => {},
+    });
+    expect(failed).toMatchObject({ failed: [{ id: "logout", code: "REPLICA_GATED" }], remaining: 0 });
+    expect(existsSync(legacyRoot)).toBe(true);
+    expect(existsSync(marker)).toBe(true);
   });
 
   test("a failed credential unlink retains the marker and refuses every second-process read", async () => {
@@ -607,6 +735,7 @@ describe("mandatory Node lifecycle gate", () => {
     const failed = await purge.recoverLogoutPending({
       signal: new AbortController().signal,
       clearCredentials: async () => { await rm(key); throw Object.assign(new Error("session unlink failed"), { code: "EIO" }); },
+      eraseLegacyReplicas: () => eraseLegacy(profileDir),
     });
     expect(failed).toMatchObject({ failed: [{ id: "logout", code: "EIO" }], remaining: 0 });
     expect(existsSync(session)).toBe(true);
@@ -616,6 +745,7 @@ describe("mandatory Node lifecycle gate", () => {
     const resumed = await purge.recoverLogoutPending({
       signal: new AbortController().signal,
       clearCredentials: async () => { await rm(session, { force: true }); await rm(key, { force: true }); },
+      eraseLegacyReplicas: () => eraseLegacy(profileDir),
     });
     expect(resumed.failed).toEqual([]);
     expect(existsSync(session)).toBe(false);
@@ -633,6 +763,7 @@ describe("mandatory Node lifecycle gate", () => {
     const result = await purge.recoverLogoutPending({
       signal: new AbortController().signal,
       clearCredentials: async () => { await rm(join(profileDir, "key.json")); },
+      eraseLegacyReplicas: () => eraseLegacy(profileDir),
     });
     expect(result).toMatchObject({ failed: [{ id: "logout", code: "REPLICA_GATED" }], remaining: 0 });
     expect(existsSync(join(profileDir, "session.json"))).toBe(true);
@@ -653,6 +784,7 @@ describe("mandatory Node lifecycle gate", () => {
     const report = await busy.recoverLogoutPending({
       signal: new AbortController().signal,
       clearCredentials: async () => { cleanupCalls++; },
+      eraseLegacyReplicas: () => eraseLegacy(profileDir),
     });
     expect(report).toMatchObject({ failed: [{ id: "logout", code: "REPLICA_GATED" }], remaining: 0 });
     expect(cleanupCalls).toBe(0);
@@ -695,6 +827,7 @@ describe("mandatory Node lifecycle gate", () => {
           await rm(key);
           await chmod(profileDir, 0o500);
         },
+        eraseLegacyReplicas: () => eraseLegacy(profileDir),
       });
       expect(failed).toMatchObject({ failed: [{ id: "logout", code: "REPLICA_GATED" }], remaining: 0 });
       expect((await readGateSnapshot(profileDir))?.principalHash).not.toBeNull();
@@ -708,6 +841,7 @@ describe("mandatory Node lifecycle gate", () => {
     const recovered = await createProfileReplicaPurge({ profileDir, guard: sharedGuard }).recoverLogoutPending({
       signal: new AbortController().signal,
       clearCredentials: async () => {},
+      eraseLegacyReplicas: () => eraseLegacy(profileDir),
     });
     expect(recovered).toMatchObject({ failed: [], remaining: 0 });
     expect(await filesNamed(dir, "pending.json")).toEqual([]);
@@ -749,6 +883,7 @@ describe("mandatory Node lifecycle gate", () => {
     const failed = await purge.recoverLogoutPending({
       signal: new AbortController().signal,
       clearCredentials: async () => { cleanupCalls++; },
+      eraseLegacyReplicas: () => eraseLegacy(profileDir),
     });
     expect(failed.failed).toEqual([{ id: "logout", code: "REPLICA_GATED" }]);
     expect(cleanupCalls).toBe(0);
