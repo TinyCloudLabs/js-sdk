@@ -31,6 +31,8 @@
   "changesets": [
     "account-manifest-primary",
     "account-space-list-manifest",
+    "persisted-restore-signout-race",
+    "replica-shared-contract",
     "sign-out-ends-session"
   ]
 }

@@ -14,3 +14,15 @@ test("replication diagnostic projection retains approved scalars and drops ident
     unknownReason: "NOT_AN_ENUM",
   })).toEqual({ reason: "NETWORK_REQUESTED", source: "network", latencyMs: 12, stalenessMs: 24 });
 });
+
+test("consent-expiry denial remains observable without account identifiers", () => {
+  expect(projectDiagnosticData({
+    type: "replication.lifecycle",
+    action: "denied",
+    reason: "consent_expired",
+    replicaId: "opaque-partition",
+    principal: "did:example:private",
+    space: "private-space",
+    prefix: "notes/private/",
+  })).toEqual({ action: "denied", reason: "consent_expired" });
+});
