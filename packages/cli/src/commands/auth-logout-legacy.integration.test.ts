@@ -419,9 +419,10 @@ test("corrupt-gate orphan revoke commits v2 marker before node receipt and never
   const gatePath = join(paths.directory, REPLICA_GATE_FILE);
   await writeFile(gatePath, "{corrupt");
   setOnRevocationReceipt(async () => {
-    expect(JSON.parse(await readFile(markerPath, "utf8"))).toMatchObject({
-      v: 2, scope: "orphan_profile", remotePending: true,
-    });
+    const marker = JSON.parse(await readFile(markerPath, "utf8"));
+    expect(marker).toMatchObject({ v: 2, scope: "orphan_profile", remotePending: true });
+    expect(marker.deniedEpoch).toBeUndefined();
+    expect(marker.resumeToken).toBeUndefined();
     await expect(readFile(gatePath)).rejects.toMatchObject({ code: "ENOENT" });
     expect(await Bun.file(paths.session).exists()).toBe(true);
     expect(await Bun.file(paths.key).exists()).toBe(true);
@@ -453,9 +454,10 @@ test("corrupt-gate orphan revoke failure keeps the remote-pending marker and all
   expect(refused.exitCode).toBeGreaterThan(0);
   expect(refused.stderr).toContain("REVOCATION_FAILED");
   expect(networkPaths).toContain("/revoke");
-  expect(JSON.parse(await readFile(markerPath, "utf8"))).toMatchObject({
-    v: 2, scope: "orphan_profile", remotePending: true,
-  });
+  const marker = JSON.parse(await readFile(markerPath, "utf8"));
+  expect(marker).toMatchObject({ v: 2, scope: "orphan_profile", remotePending: true });
+  expect(marker.deniedEpoch).toBeUndefined();
+  expect(marker.resumeToken).toBeUndefined();
   await expect(readFile(gatePath)).rejects.toMatchObject({ code: "ENOENT" });
   expect(await readFile(paths.session)).toEqual(session);
   expect(await readFile(paths.key)).toEqual(key);
