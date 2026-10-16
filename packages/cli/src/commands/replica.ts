@@ -17,7 +17,7 @@ import {
 } from "@tinycloud/operations/state";
 import { ownerSessionLacksProof } from "@tinycloud/operations/profile";
 import { assertGateAccess, principalHashOf, readGateSnapshot, restoreSessionStamp } from "@tinycloud/replica/profile-gate";
-import type { ReplicationEvent, ReplicationControl } from "@tinycloud/node-sdk";
+import { assertProfileLogoutClear, type ReplicationEvent, type ReplicationControl } from "@tinycloud/node-sdk";
 import {
   assertFolderPrefix,
   Replica,
@@ -178,6 +178,18 @@ async function openReplica(profile: string, name: string): Promise<SqliteReplica
   return SqliteReplicaStore.open(join(replicasRoot(profile), name), { create: false, guard: profileGuard(profile) });
 }
 
+function assertLegacyLogoutClear(dir: string): void {
+  try {
+    assertProfileLogoutClear(dir);
+  } catch {
+    throw new CLIError(
+      "REPLICA_GATED",
+      "A logout is pending or its state cannot be checked for this profile.",
+      ExitCode.PERMISSION_DENIED,
+    );
+  }
+}
+
 /** Legacy stores predate the gated adapter; serialize their reads and delivery with denial. */
 async function withLegacyReplicaRead(
   profile: string,
@@ -185,6 +197,7 @@ async function withLegacyReplicaRead(
 ): Promise<void> {
   await withProfileLock(profile, async () => {
     const dir = profilePath(profile);
+    assertLegacyLogoutClear(dir);
     const session = await readSession<{
       ownerDid?: string;
       replicaStamp?: { incarnation: string; lifecycleEpoch: number };
@@ -202,7 +215,11 @@ async function withLegacyReplicaRead(
       incarnation: snapshot.incarnation,
       principalHash: await principalHashOf(snapshot.salt, session.ownerDid),
     };
-    const checkDelivery = async () => { await assertGateAccess(dir, access, snapshot.salt); };
+    const checkDelivery = async () => {
+      assertLegacyLogoutClear(dir);
+      await assertGateAccess(dir, access, snapshot.salt);
+      assertLegacyLogoutClear(dir);
+    };
     await checkDelivery();
     await action(checkDelivery);
   }, { requireProfile: true });
