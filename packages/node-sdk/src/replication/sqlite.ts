@@ -104,8 +104,10 @@ export interface ProfileReplicaPurge extends Pick<ReplicaLifecycleGate, "recover
   completeRemoteLogout(input: { principal: string }): Promise<ProfileReplicaLogoutPending>;
   /** Validates a denied, pending marker for a selected network-only session retry; never permits replica delivery. */
   remotePendingLogout(input: { principal: string }): Promise<boolean>;
-  /** Explicit plain logout supersedes an unfinished remote revoke without representing it as completed. */
-  abandonRemoteLogout(input: { principal: string }): Promise<ProfileReplicaLogoutPending>;
+  /** Explicit plain logout rechecks a freshly shown inventory before superseding unfinished remote revoke. */
+  abandonRemoteLogout(input: {
+    principal: string; approval: ProfileReplicaPreflight; discardLocalChanges?: boolean;
+  }): Promise<ProfileReplicaLogoutPending>;
   reapproveLogoutPending(input: {
     principal: string; approval: ProfileReplicaPreflight;
   }): Promise<ProfileReplicaLogoutPending>;
@@ -2095,14 +2097,30 @@ export function createSqliteReplicaStorage(
         return true;
       });
     },
-    async abandonRemoteLogout({ principal }) {
+    async abandonRemoteLogout({ principal, approval, discardLocalChanges = false }) {
       return profileSection(async () => {
         const path = join(profileDir, REPLICA_LOGOUT_PENDING_FILE);
         const marker = await readLogoutMarker(path);
         if (marker === null || marker.remotePending !== true) throw gated("gate_unavailable");
         await validatedRemoteMarker(marker, principal, true);
-        const { remotePending: _, ...previous } = marker;
-        const abandoned: ProfileReplicaLogoutPending = { ...previous, remoteAbandoned: true };
+        const state = await (await fileGate()).readGateSnapshot(profileDir);
+        const report = await inspectProfileReplicaLayout(profileDir, state !== undefined);
+        assertSupportedProfileLayout(report);
+        assertApprovedInventory(report, approval);
+        if (approval.knownLegacyReplicas !== report.knownLegacyReplicas ||
+            JSON.stringify(approval.unknownPaths) !== JSON.stringify(report.unknownPaths) ||
+            JSON.stringify(approval.unknownLegacyPaths) !== JSON.stringify(report.unknownLegacyPaths) ||
+            (!discardLocalChanges && report.unknownPaths.length > 0)) {
+          throw localChangesRefusal(report.unknownPaths);
+        }
+        const { remotePending: _, discardLocalChanges: oldDiscard, ...previous } = marker;
+        const abandoned: ProfileReplicaLogoutPending = {
+          ...previous, remoteAbandoned: true,
+          approvedUnknown: discardLocalChanges ? report.unknownEntries : [],
+          knownRoots: report.knownRoots, knownEntries: report.knownEntries,
+          missingDatabases: report.missingDatabases,
+          ...(discardLocalChanges ? { discardLocalChanges: true } : {}),
+        };
         await writeJsonAtomic(path, abandoned, options.dirSync);
         return abandoned;
       });
