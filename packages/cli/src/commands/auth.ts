@@ -7,7 +7,8 @@ import { lstat, mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { createInterface } from "node:readline";
 import type { IncomingMessage } from "node:http";
-import { TinyCloudNode, grantAuthRequest, principalDidEquals, REPLICA_LOGOUT_PENDING_FILE, signedCompactUcanExpiry, type PermissionEntry, type PortableDelegation, type ProfileReplicaApprovalEntry, type ProfileReplicaDeferredToken, type ProfileReplicaLogoutPending, type RuntimeDelegationActivator, type TinyCloudSession } from "@tinycloud/node-sdk";
+import { TinyCloudNode, grantAuthRequest, principalDidEquals, REPLICA_LOGOUT_PENDING_FILE, signedCompactUcanExpiry, type PermissionEntry, type PortableDelegation, type RuntimeDelegationActivator, type TinyCloudSession } from "@tinycloud/node-sdk";
+import type { ProfileReplicaApprovalEntry, ProfileReplicaDeferredToken, ProfileReplicaLogoutPending } from "@tinycloud/sdk-services/kv/replication";
 import { composeManifestRequest } from "@tinycloud/sdk-core";
 import { invokeOperation } from "@tinycloud/operations";
 import { profilePath } from "@tinycloud/operations/state";
@@ -274,7 +275,7 @@ export async function prepareProfileRemoteLogout(
       sessionSnapshot: JSON.stringify(session),
       profileSnapshot: JSON.stringify(profile),
       inventorySnapshot: await logoutInventorySnapshot(ctx.profile),
-      marker, token,
+      marker, token: token ?? undefined,
     };
   });
   if (selected.profile.authMethod !== "local" || !selected.profile.privateKey) {

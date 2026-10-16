@@ -1,4 +1,5 @@
-import { TinyCloudNode, signedCompactUcanExpiry, type PortableDelegation, type ProfileReplicaLogoutPending } from "@tinycloud/node-sdk";
+import { TinyCloudNode, signedCompactUcanExpiry, type PortableDelegation } from "@tinycloud/node-sdk";
+import type { ProfileReplicaLogoutPending } from "@tinycloud/sdk-services/kv/replication";
 import { CLI_NAME } from "@tinycloud/operations/cli-name";
 import { ProfileManager } from "../config/profiles.js";
 import { resolveProfilePosture, type CLIContext, type ProfileConfig } from "../config/types.js";

@@ -1,6 +1,7 @@
 import { lstat, open } from "node:fs/promises";
 import { join } from "node:path";
-import { createProfileReplicaPurge, REPLICA_LOGOUT_PENDING_FILE, type ProfileReplicaLogoutPending, type ProfileReplicaPurge } from "@tinycloud/node-sdk";
+import { createProfileReplicaPurge, REPLICA_LOGOUT_PENDING_FILE } from "@tinycloud/node-sdk";
+import type { ProfileReplicaLogoutPending, ProfileReplicaPurge } from "@tinycloud/sdk-services/kv/replication";
 import { profilePath } from "@tinycloud/operations/state";
 import { readGateSnapshot } from "@tinycloud/replica/profile-gate";
 import { REPLICA_GATE_FILE } from "@tinycloud/sdk-services/kv/replication/contractConstants";
