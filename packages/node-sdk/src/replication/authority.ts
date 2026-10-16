@@ -12,8 +12,8 @@
  * any reuse of an installed grant (the adapter marks every grant's
  * `unconstrained` flag; the controller enforces it on reuse).
  */
-
 import { SiweMessage } from "siwe";
+
 import {
   actionContains,
   KV,
@@ -25,6 +25,7 @@ import {
   type IWasmBindings,
   type WasmRecapEntry,
   type TinyCloudSession,
+  type KVReplicaStorage,
 } from "@tinycloud/sdk-core";
 import {
   type AuthorityRefusal,
@@ -32,6 +33,7 @@ import {
   type ReplicaDevice,
   type ReplicationAuthority,
 } from "@tinycloud/sdk-services";
+import type { ReplicaSessionStamp } from "@tinycloud/sdk-services/kv/replication";
 import type { DelegateToOptions, DelegateToResult, TinyCloudNode } from "../TinyCloudNode";
 import type { ReplicaRuntime } from "./replica-contract";
 // @ts-ignore -- node-sdk builds before replica declarations; keep the literal import for bundlers.
@@ -43,6 +45,79 @@ export { augmentSignInEntriesWithReplication, hasUnrestrictedGetCoverage } from 
 const KV_GET = KV.GET;
 const KV_SYNC = KV.SYNC;
 const KV_SERVICE = "tinycloud.kv";
+
+/** The verified owner proof is signed, finite, exact-space, and uncaveated on one get+sync scope. */
+export function verifiedOwnerConsentAnchor(
+  session: TinyCloudSession,
+  wasmBindings: Pick<IWasmBindings, "validatePersistedSession">,
+  exactVerifiedRecap: (verified: { verifiedRecap?: unknown }) => WasmRecapEntry[],
+): ReplicaConsentAnchor | null {
+  if (typeof session.siwe !== "string" || typeof session.signature !== "string" ||
+      typeof session.address !== "string" || typeof session.chainId !== "number") return null;
+  try {
+    const verified = wasmBindings.validatePersistedSession?.({
+      delegationHeader: session.delegationHeader,
+      delegationCid: session.delegationCid,
+      spaceId: session.spaceId,
+      jwk: session.jwk,
+      address: session.address,
+      chainId: session.chainId,
+      siwe: session.siwe,
+      signature: session.signature,
+    });
+    if (!verified || !Number.isSafeInteger(Date.parse(verified.expiresAt ?? ""))) return null;
+    const signedIssuedAt = new SiweMessage(session.siwe).issuedAt;
+    if (typeof signedIssuedAt !== "string") return null;
+    const issuedAt = Date.parse(signedIssuedAt);
+    if (!Number.isSafeInteger(issuedAt) || issuedAt < 0) return null;
+    const granted = exactVerifiedRecap(verified)
+      .filter((entry) => entry.space === session.spaceId && entry.service === "kv")
+      .map((entry) => ({ ...entry, service: "tinycloud.kv" }));
+    const coversGetAndSync = granted.some((entry) => isCapabilitySubset([{
+      service: "tinycloud.kv",
+      space: session.spaceId,
+      path: entry.path,
+      actions: [KV.GET, KV.SYNC],
+    }], granted).subset);
+    return coversGetAndSync ? { at: issuedAt, source: "siwe" } : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Fresh sign-in only: the lifecycle creates keys; restore never calls this. */
+export function establishReplicaSessionStamp(
+  storage: KVReplicaStorage,
+  principal: string,
+  anchor: ReplicaConsentAnchor,
+): Promise<ReplicaSessionStamp> {
+  if (storage.kind === "indexeddb" && storage.lifecycle?.kind === "indexeddb") {
+    return storage.lifecycle.establishSessionStamp(principal, { consentAnchor: anchor });
+  }
+  if (storage.kind === "sqlite" && storage.lifecycle?.kind === "file") {
+    return storage.lifecycle.establishSessionStamp(principal, { consentAnchor: anchor });
+  }
+  throw Object.assign(new Error("Replica sign-in requires its platform lifecycle gate."), {
+    code: "REPLICA_GATED" as const, gate: "gate_unavailable" as const,
+  });
+}
+
+/** Existing persisted stamp only: never manufactures an authority on restore. */
+export function restoreReplicaSessionStamp(
+  storage: KVReplicaStorage,
+  principal: string,
+  persisted: ReplicaSessionStamp | undefined,
+): Promise<ReplicaSessionStamp> {
+  if (storage.kind === "indexeddb" && storage.lifecycle?.kind === "indexeddb") {
+    return storage.lifecycle.restoreSessionStamp(principal, persisted);
+  }
+  if (storage.kind === "sqlite" && storage.lifecycle?.kind === "file") {
+    return storage.lifecycle.restoreSessionStamp(principal, persisted);
+  }
+  throw Object.assign(new Error("Replica restore requires its platform lifecycle gate."), {
+    code: "REPLICA_GATED" as const, gate: "gate_unavailable" as const,
+  });
+}
 
 /** The delegation the replication grant delegates: get + sync on one folder prefix. */
 function replicationEntries(spaceId: string, prefix: string): PermissionEntry[] {
@@ -158,45 +233,6 @@ export interface ReplicationAuthorityHost {
     entries: PermissionEntry[],
     options?: { expiryMs?: number; renewalOnly?: boolean },
   ): Promise<{ ucan: string; expiresAt: number }>;
-}
-
-/** Owner consent requires a current, signed SIWE root with verified unrestricted get+sync. */
-export function verifiedOwnerConsentAnchor(
-  session: ReplicationAuthoritySession,
-  wasmBindings: Pick<IWasmBindings, "validatePersistedSession">,
-  exactVerifiedRecap: (verified: { verifiedRecap?: unknown }) => WasmRecapEntry[],
-): ReplicaConsentAnchor | null {
-  if (typeof session.siwe !== "string" || typeof session.signature !== "string" ||
-      typeof session.address !== "string" || typeof session.chainId !== "number") return null;
-  try {
-    const verified = wasmBindings.validatePersistedSession?.({
-      delegationHeader: session.delegationHeader,
-      delegationCid: session.delegationCid,
-      spaceId: session.spaceId,
-      jwk: session.jwk,
-      address: session.address,
-      chainId: session.chainId,
-      siwe: session.siwe,
-      signature: session.signature,
-    });
-    if (!verified || !Number.isSafeInteger(Date.parse(verified.expiresAt ?? ""))) return null;
-    const signedIssuedAt = new SiweMessage(session.siwe).issuedAt;
-    if (typeof signedIssuedAt !== "string") return null;
-    const issuedAt = Date.parse(signedIssuedAt);
-    if (!Number.isSafeInteger(issuedAt) || issuedAt < 0) return null;
-    const granted = exactVerifiedRecap(verified)
-      .filter((entry) => entry.space === session.spaceId && entry.service === "kv" && entry.path === "")
-      .map((entry) => ({ ...entry, service: "tinycloud.kv" }));
-    const coversGetAndSync = isCapabilitySubset([{
-      service: "tinycloud.kv",
-      space: session.spaceId,
-      path: "",
-      actions: [KV.GET, KV.SYNC],
-    }], granted).subset;
-    return coversGetAndSync ? { at: issuedAt, source: "siwe" } : null;
-  } catch {
-    return null;
-  }
 }
 
 /** Delegate a replica grant only through the selected owner parent for silent renewal. */

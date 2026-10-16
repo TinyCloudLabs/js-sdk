@@ -1236,7 +1236,8 @@ export class TinyCloudNode {
     const epoch = this.sessionEpoch;
     const attempt = this.latestSessionAttempt;
     try {
-      const { verifiedOwnerConsentAnchor } = await getNodeReplicationLoaders().authority();
+      const { verifiedOwnerConsentAnchor, establishReplicaSessionStamp } =
+        await getNodeReplicationLoaders().authority();
       if (epoch !== this.sessionEpoch || attempt !== this.latestSessionAttempt) return undefined;
       const anchor = verifiedOwnerConsentAnchor(session, this.wasmBindings, exactVerifiedRecap);
       if (anchor === null) {
@@ -1245,29 +1246,12 @@ export class TinyCloudNode {
           gate: "not_established" as const,
         });
       }
-      const principal = pkhDid(session.address, session.chainId);
-      if (replication.storage.kind === "indexeddb" && replication.storage.lifecycle?.kind === "indexeddb") {
-        const stamp = await replication.storage.lifecycle.establishSessionStamp(principal, { consentAnchor: anchor });
-        if (epoch !== this.sessionEpoch || attempt !== this.latestSessionAttempt) return undefined;
-        this.replicaSessionStamp = stamp;
-        return stamp;
-      }
-      if (replication.storage.kind === "sqlite") {
-        const lifecycle = replication.storage.lifecycle;
-        if (lifecycle?.kind !== "file") {
-          throw Object.assign(new Error("Replica sign-in requires the profile lifecycle gate."), {
-            code: "REPLICA_GATED" as const, gate: "gate_unavailable" as const,
-          });
-        }
-        const stamp = await lifecycle.establishSessionStamp(principal, { consentAnchor: anchor });
-        if (epoch !== this.sessionEpoch || attempt !== this.latestSessionAttempt) return undefined;
-        this.replicaSessionStamp = stamp;
-        return stamp;
-      }
-      throw Object.assign(new Error("Replica sign-in requires its platform lifecycle gate."), {
-        code: "REPLICA_GATED" as const,
-        gate: "gate_unavailable" as const,
-      });
+      const stamp = await establishReplicaSessionStamp(
+        replication.storage, pkhDid(session.address, session.chainId), anchor,
+      );
+      if (epoch !== this.sessionEpoch || attempt !== this.latestSessionAttempt) return undefined;
+      this.replicaSessionStamp = stamp;
+      return stamp;
     } catch (error) {
       // A refused local replica must not cancel the independently verified network sign-in.
       if (epoch === this.sessionEpoch && attempt === this.latestSessionAttempt) {
@@ -3924,15 +3908,10 @@ export class TinyCloudNode {
         replicaRestoreGate = replicationScopeUnavailable ? "gate_unavailable" : "principal_mismatch";
       } else {
         try {
-          if (replication.storage.kind === "indexeddb") {
-            const lifecycle = replication.storage.lifecycle;
-            if (lifecycle?.kind !== "indexeddb") throw new Error("Browser replica lifecycle is unavailable.");
-            restoredReplicaStamp = await lifecycle.restoreSessionStamp(replicationPrincipal, sessionData.replicaStamp ?? undefined);
-          } else {
-            const lifecycle = replication.storage.lifecycle;
-            if (lifecycle?.kind !== "file") throw new Error("Replica profile lifecycle is unavailable.");
-            restoredReplicaStamp = await lifecycle.restoreSessionStamp(replicationPrincipal, sessionData.replicaStamp ?? undefined);
-          }
+          const { restoreReplicaSessionStamp } = await getNodeReplicationLoaders().authority();
+          restoredReplicaStamp = await restoreReplicaSessionStamp(
+            replication.storage, replicationPrincipal, sessionData.replicaStamp ?? undefined,
+          );
         } catch (error) {
           replicaRestoreGate = replicaRestoreRefusal(error);
         }
