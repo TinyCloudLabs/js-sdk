@@ -588,8 +588,8 @@ function assertApprovedInventory(
       // SQLite can create/recreate only these source-owned sidecars after
       // approval. The database and replica root must retain their inode;
       // the remover captures each sidecar's current inode before unlink.
-      if (original?.kind === "file" && present?.dev === original.dev &&
-          present.ino === original.ino) continue;
+      if (!approved.has(entry.path) && original?.kind === "file" &&
+          present?.dev === original.dev && present.ino === original.ino) continue;
     }
     const expected = knownFiles.get(entry.path);
     if (expected?.kind !== entry.kind || expected.dev !== entry.dev || expected.ino !== entry.ino) {
@@ -1869,6 +1869,29 @@ export function createSqliteReplicaStorage(
     }
   }
 
+  /** A v2 marker must be durable before an unreadable old gate can be unlinked. */
+  async function removeCorruptOrphanGate(gate: FileGate): Promise<void> {
+    const path = join(profileDir, REPLICA_GATE_FILE);
+    const before = await lstat(path, { bigint: true });
+    if (!before.isFile() || before.isSymbolicLink()) throw gated("gate_unavailable");
+    let corrupt = false;
+    try {
+      await gate.readGateSnapshot(profileDir);
+    } catch (error) {
+      if (typeof error === "object" && error !== null && "code" in error &&
+          error.code === "REPLICA_GATED" && "gate" in error && error.gate === "gate_unavailable") {
+        corrupt = true;
+      } else throw error;
+    }
+    if (!corrupt) throw gated("stamp_stale");
+    const current = await lstat(path, { bigint: true });
+    if (current.dev !== before.dev || current.ino !== before.ino ||
+        current.mtimeNs !== before.mtimeNs || current.size !== before.size) throw gated("stamp_stale");
+    await rm(path);
+    await (options.dirSync ?? fsyncDir)(profileDir);
+    if (await gate.readGateSnapshot(profileDir) !== undefined) throw gated("stamp_stale");
+  }
+
   /** The marker is only a network-retry fence after the scoped gate is denied. */
   async function validatedRemoteMarker(
     marker: ProfileReplicaLogoutPending, principal: string, allowActive: boolean,
@@ -2125,6 +2148,11 @@ export function createSqliteReplicaStorage(
               previous.principalHash !== await gate.principalHashOf(state.salt, principal)) {
             throw gated("principal_mismatch");
           }
+          if (previous.v === 1 && state?.eraseDeferred &&
+              (state.lifecycleEpoch !== previous.lifecycleEpoch + 1 ||
+               state.principalHash !== null || state.deferredPrincipalHash !== previous.principalHash)) {
+            throw gated("stamp_stale");
+          }
           assertApprovedInventory(report, {
             unknownEntries: previous.approvedUnknown, knownRoots: previous.knownRoots,
             knownEntries: previous.knownEntries, missingDatabases: previous.missingDatabases,
@@ -2132,8 +2160,10 @@ export function createSqliteReplicaStorage(
           if (previous.remotePending !== remotePending || previous.remoteAbandoned) {
             throw gated("gate_unavailable");
           }
+          if (corruptGate) await removeCorruptOrphanGate(gate);
           return previous;
         }
+        if (state?.eraseDeferred) throw gated("stamp_stale");
         if (state === undefined && report.knownRoots.length === 0 && !corruptGate) return null;
         if (state !== undefined && state.principalHash === null && !state.eraseDeferred &&
             report.knownRoots.length === 0 && state.intents.length === 0) return null;
@@ -2168,6 +2198,7 @@ export function createSqliteReplicaStorage(
         visibleStamp = undefined;
         visiblePrincipalHash = undefined;
         checkedGate = undefined;
+        if (corruptGate) await removeCorruptOrphanGate(gate);
         return marker;
       });
     },
