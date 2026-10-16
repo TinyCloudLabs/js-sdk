@@ -4,6 +4,7 @@ import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createProfileReplicaPurge, NodeWasmBindings, PrivateKeySigner } from "@tinycloud/node-sdk";
+import { parseSignedSiweCacao } from "@tinycloud/sdk-core";
 import { Replica, parseUcanGrant } from "@tinycloud/replica";
 import { SqliteReplicaStore } from "@tinycloud/replica/sqlite";
 import { establishSessionStamp } from "@tinycloud/replica/profile-gate";
@@ -17,6 +18,7 @@ import {
   writeJsonAtomic,
 } from "@tinycloud/operations/state";
 import { FakeNode, owner, signUcan } from "../../../replica/test/fixtures.js";
+import { appendGrantHistory } from "../lib/permissions.js";
 import { registerReplicaCommand } from "./replica.js";
 
 const PROFILE = "owner";
@@ -51,7 +53,7 @@ async function exists(path: string): Promise<boolean> {
   return stat(path).then(() => true, () => false);
 }
 
-async function seed(home: string, host: string): Promise<{ db: string; session: string; key: string; delegationCid: string }> {
+async function seed(home: string, host: string): Promise<{ db: string; session: string; key: string; delegationCid: string; ownerDid: string; spaceId: string }> {
   const wasm = new NodeWasmBindings();
   const signer = new PrivateKeySigner(OWNER_KEY);
   const address = await signer.getAddress();
@@ -112,12 +114,15 @@ async function seed(home: string, host: string): Promise<{ db: string; session: 
   } finally {
     await store.close();
   }
-  return { ...paths, delegationCid: session.delegationCid };
+  return { ...paths, delegationCid: session.delegationCid, ownerDid, spaceId };
 }
 
 async function server(mode: "fail" | "hold" | "success", cid: () => string) {
   const requests: string[] = [];
   const snapshots: Array<{ session: boolean; db: boolean }> = [];
+  const revokedCids: string[] = [];
+  const queryRequests: string[] = [];
+  let queryRecords: Array<Record<string, unknown>> | undefined;
   const started = Promise.withResolvers<void>();
   let state = mode;
   let localPaths: { session: string; db: string } | undefined;
@@ -125,6 +130,10 @@ async function server(mode: "fail" | "hold" | "success", cid: () => string) {
     port: 0,
     async fetch(request) {
       const path = new URL(request.url).pathname;
+      if (path === "/delegation/query" && request.method === "POST" && queryRecords !== undefined) {
+        queryRequests.push(request.headers.get("authorization") ?? "");
+        return Response.json({ schemaVersion: 2, items: queryRecords });
+      }
       if (path === "/revoke" && request.method === "POST") {
         requests.push(request.headers.get("authorization") ?? "");
         if (localPaths) snapshots.push({
@@ -132,6 +141,13 @@ async function server(mode: "fail" | "hold" | "success", cid: () => string) {
         });
         started.resolve();
         if (state === "hold") return new Promise<Response>(() => {});
+        if (queryRecords !== undefined) {
+          const signed = await parseSignedSiweCacao((request.headers.get("authorization") ?? "").replace(/^Bearer\\s+/i, ""));
+          const target = signed.audience.startsWith("ucan:") ? signed.audience.slice("ucan:".length) : "";
+          if (target.length === 0) return new Response("CID-bound owner proof required", { status: 403 });
+          revokedCids.push(target);
+          return Response.json({ cid: target, revoked: true });
+        }
         if (state === "fail") return new Response("node unavailable", { status: 503 });
         return Response.json({ cid: cid(), revoked: true });
       }
@@ -144,6 +160,9 @@ async function server(mode: "fail" | "hold" | "success", cid: () => string) {
   return {
     host: node.url.origin,
     requests,
+    revokedCids,
+    queryRequests,
+    setQueryRecords(records: Array<Record<string, unknown>>) { queryRecords = records; },
     snapshots,
     started: started.promise,
     setMode(value: "fail" | "hold" | "success") { state = value; },
@@ -397,6 +416,71 @@ describe("tc auth logout --revoke with durable replica denial", () => {
       { session: true, db: true },
       { session: true, db: true },
     ]);
+    expect(await exists(paths.session)).toBe(false);
+    expect(await exists(paths.db)).toBe(false);
+  });
+
+  test("history-only owner grants revoke before the session, while imported and expired source-cli rows are excluded", async () => {
+    const home = await mkdtemp(join(tmpdir(), "tc841-revoke-history-"));
+    homes.push(home);
+    let sessionCid = "";
+    const node = await server("success", () => sessionCid);
+    const paths = await seed(home, node.host);
+    sessionCid = paths.delegationCid;
+    node.setPaths(paths);
+
+    const wasm = new NodeWasmBindings();
+    const cid = (name: string) => wasm.computeCid(new TextEncoder().encode(name), 0x55n);
+    const issuedCid = cid("tc841-history-owner-issued");
+    const importedCid = cid("tc841-history-imported");
+    const expiredCid = cid("tc841-history-owner-expired");
+    const future = new Date(Date.now() + 3_600_000).toISOString();
+    const past = new Date(Date.now() - 3_600_000).toISOString();
+    await withTinyCloudStateRoot(home, async () => {
+      for (const [delegationCid, expiry] of [
+        [issuedCid, future], [importedCid, future], [expiredCid, past],
+      ]) {
+        await appendGrantHistory(PROFILE, {
+          source: "cli", delegationCid, expiry, addedCaps: [],
+        });
+      }
+    });
+    const record = (delegationCid: string, delegatorDid: string, status: "active" | "expired", expiresAt: string) => ({
+      cid: delegationCid,
+      direction: delegatorDid === paths.ownerDid ? "granted" : "received",
+      delegatorDid,
+      delegateDid: delegatorDid === paths.ownerDid
+        ? "did:key:z6MkRecipientTc841"
+        : paths.ownerDid,
+      resources: [{
+        resource: `${paths.spaceId}/kv/notes/`,
+        actions: ["tinycloud.kv/get"],
+        caveats: [],
+      }],
+      parents: [],
+      issuedAt: new Date(Date.now() - 60_000).toISOString(),
+      notBefore: null,
+      expiresAt,
+      status,
+    });
+    node.setQueryRecords([
+      record(issuedCid, paths.ownerDid, "active", future),
+      record(importedCid, "did:pkh:eip155:1:0x1111111111111111111111111111111111111111", "active", future),
+      record(expiredCid, paths.ownerDid, "expired", past),
+    ]);
+
+    const logout = await run(home, ["auth", "logout", "--revoke"]);
+    expect(logout.exitCode).toBe(0);
+    expect(node.queryRequests.length).toBeGreaterThan(0);
+    expect(node.revokedCids).toEqual([issuedCid, sessionCid]);
+    expect(node.snapshots).toEqual([
+      { session: true, db: true },
+      { session: true, db: true },
+    ]);
+    const report = JSON.stringify(JSON.parse(logout.stdout));
+    expect(report).toContain(importedCid);
+    expect(report).toContain(expiredCid);
+    expect(report).toMatch(/excluded|skipped/);
     expect(await exists(paths.session)).toBe(false);
     expect(await exists(paths.db)).toBe(false);
   });
