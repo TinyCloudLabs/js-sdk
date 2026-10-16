@@ -298,6 +298,67 @@ describe("consent deadline delivery", () => {
     expect(timers).toContain(earlier);
     expect(timers).not.toContain(CONSENT_WINDOW_MS);
   });
+  test("policy-only expiry before open falls through as GRANT_EXPIRED until the durable gate deadline", async () => {
+    const policyDeadline = 1_001_000;
+    const gateDeadline = 1_000_000 + CONSENT_WINDOW_MS;
+    let gateExpired = false;
+    let denials = 0;
+    const env = setup({
+      consentAnchor: { at: policyDeadline - CONSENT_WINDOW_MS, source: "siwe" },
+      durableDeadline: gateDeadline,
+      delivery: () => gateExpired ? { status: "consent_expired", code: "CONSENT_EXPIRED" } : { status: "allow" },
+      onDeny: () => { denials++; },
+      openError: "GRANT_EXPIRED",
+      sessionOnly: true,
+    });
+
+    env.setNow(policyDeadline + 1);
+    expect((await env.controller.get(readRequest(env.network))).ok).toBe(true);
+    expect(lastEvent(env.events, (event) => event.type === "replication.read")).toMatchObject({
+      type: "replication.read", source: "network", reason: "grant_expired", code: "GRANT_EXPIRED",
+    });
+    expect(await env.controller.list(listRequest(undefined, async () => ok({ keys: ["network/a"] }))))
+      .toMatchObject({ ok: true, data: { keys: ["network/a"] } });
+    expect(lastEvent(env.events, (event) => event.type === "replication.read")).toMatchObject({
+      type: "replication.read", op: "list", source: "network", reason: "grant_expired", code: "GRANT_EXPIRED",
+    });
+    expect(denials).toBe(0);
+    expect(env.events.filter((event) => event.type === "replication.grant" && event.action === "consent_deadline_reached")).toEqual([]);
+
+    env.setNow(gateDeadline);
+    gateExpired = true;
+    expect((await env.controller.get(readRequest(env.network))).ok).toBe(true);
+    expect(lastEvent(env.events, (event) => event.type === "replication.read")).toMatchObject({
+      type: "replication.read", source: "network", reason: "grant_expired", code: "CONSENT_EXPIRED",
+    });
+    expect(denials).toBe(1);
+  });
+  test("an opened policy-expired grant reports expiry without denying the still-valid gate", async () => {
+    const policyDeadline = 1_001_000;
+    let denials = 0;
+    const env = setup({
+      consentAnchor: { at: policyDeadline - CONSENT_WINDOW_MS, source: "siwe" },
+      durableDeadline: 1_000_000 + CONSENT_WINDOW_MS,
+      delivery: () => ({ status: "allow" }),
+      onDeny: () => { denials++; },
+      sessionOnly: true,
+      statusOverrides: {
+        grant: { ...status().grant!, installedAt: 1_000_000, effectiveExpiresAt: policyDeadline, consentDeadline: policyDeadline },
+      },
+    });
+    expect((await env.controller.get(readRequest(env.network))).ok).toBe(true);
+    env.setStatus({ ...status(), authority: { state: "expired", expiresAt: policyDeadline } });
+    env.setNow(policyDeadline + 1);
+    expect((await env.controller.get(readRequest(env.network))).ok).toBe(true);
+    expect(lastEvent(env.events, (event) => event.type === "replication.read")).toMatchObject({
+      type: "replication.read", source: "network", reason: "grant_expired",
+    });
+    expect(env.events.filter((event) => event.type === "replication.grant" && event.action === "expired")).toEqual([
+      expect.objectContaining({ replicaId: "opaque-partition", code: "GRANT_EXPIRED" }),
+    ]);
+    expect(denials).toBe(0);
+    expect(env.events.filter((event) => event.type === "replication.grant" && event.action === "consent_deadline_reached")).toEqual([]);
+  });
   test("the durable deadline timer denies an unopened session without a grant event", async () => {
     const timers: Array<{ run: () => void; ms: number }> = [];
     let expired = false;

@@ -856,7 +856,7 @@ export function createKVReplication(deps: KVReplicationDeps): KVReplicationContr
       if (r.signal.aborted) return abortedResult(r.signal);
       if (errorCode(error) === "CONSENT_EXPIRED") startConsentDenial();
       const code = errorCode(error);
-      const value = await r.network(); readEvent("get", r.path, prefix, "network", code === "RUNTIME_UNSUPPORTED" ? "runtime_unsupported" : code === "CONSENT_EXPIRED" || code === "REPLICA_GATED" ? deliveryReason(code) : "replica_unavailable", value.ok ? "found" : "error", started, { code }); return value;
+      const value = await r.network(); readEvent("get", r.path, prefix, "network", code === "RUNTIME_UNSUPPORTED" ? "runtime_unsupported" : code === "CONSENT_EXPIRED" || code === "REPLICA_GATED" || code === "GRANT_EXPIRED" ? deliveryReason(code) : "replica_unavailable", value.ok ? "found" : "error", started, { code }); return value;
     }
     if (replicas.get(prefix)?.reason === "grant_missing") {
       const code = replicas.get(prefix)?.lastError;
@@ -986,7 +986,7 @@ export function createKVReplication(deps: KVReplicationDeps): KVReplicationContr
       if (cursor && decoded) return restart();
       const result = await r.network();
       const code = errorCode(error);
-      readEvent("list", r.listPath, prefix, "network", code === "RUNTIME_UNSUPPORTED" ? "runtime_unsupported" : code === "CONSENT_EXPIRED" || code === "REPLICA_GATED" ? deliveryReason(code) : "replica_unavailable", result.ok ? "found" : "error", started, { code });
+      readEvent("list", r.listPath, prefix, "network", code === "RUNTIME_UNSUPPORTED" ? "runtime_unsupported" : code === "CONSENT_EXPIRED" || code === "REPLICA_GATED" || code === "GRANT_EXPIRED" ? deliveryReason(code) : "replica_unavailable", result.ok ? "found" : "error", started, { code });
       return result;
     }
     if (replicas.get(prefix)?.reason === "grant_missing") {
