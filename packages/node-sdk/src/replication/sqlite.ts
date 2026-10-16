@@ -76,6 +76,10 @@ export interface ProfileReplicaRootIdentity {
   dev: string;
   ino: string;
 }
+/** Exact, nonsecret identity displayed with the token issued under the profile lock. */
+export interface ProfileReplicaApprovalEntry extends ProfileReplicaRootIdentity {
+  kind: ProfileReplicaUnknownEntry["kind"] | "missing";
+}
 export interface ProfileReplicaPreflight {
   knownLegacyReplicas: number;
   unknownLegacyPaths: string[];
@@ -185,21 +189,30 @@ function safeInventoryPath(path: string): boolean {
 function logoutPrincipalDigest(principal: string): string {
   return createHash("sha256").update("tinycloud-replica-logout\0").update(principal, "utf8").digest("hex");
 }
+function compareInventoryString(left: string, right: string): number {
+  return left < right ? -1 : left > right ? 1 : 0;
+}
+
+function approvalEntries(report: ProfileReplicaPreflight): ProfileReplicaApprovalEntry[] {
+  return [
+    ...report.unknownEntries,
+    ...report.knownEntries,
+    ...report.knownRoots.map((root) => ({ ...root, kind: "directory" as const })),
+    ...report.missingDatabases.map((path) => ({ path, kind: "missing" as const, dev: "", ino: "" })),
+  ].map(({ path, kind, dev, ino }) => ({ path, kind, dev, ino }))
+    .sort((a, b) => compareInventoryString(a.path, b.path) ||
+      compareInventoryString(a.kind, b.kind) ||
+      compareInventoryString(a.dev, b.dev) ||
+      compareInventoryString(a.ino, b.ino));
+}
+
 /** A visible confirmation fence, not authority: every field is rechecked under the profile lock. */
 function inventoryApprovalToken(
-  marker: ProfileReplicaLogoutPending, principal: string, report: ProfileReplicaPreflight,
+  marker: ProfileReplicaLogoutPending, principal: string, entries: readonly ProfileReplicaApprovalEntry[],
 ): string {
   const markerId = marker.v === 2
     ? [marker.v, marker.nonce, marker.principalDigest]
     : [marker.v, marker.incarnation, marker.lifecycleEpoch, marker.principalDigest];
-  const entries = [
-    ...report.unknownEntries,
-    ...report.knownEntries,
-    ...report.knownRoots.map((root) => ({ ...root, kind: "directory" })),
-    ...report.missingDatabases.map((path) => ({ path, kind: "missing", dev: "", ino: "" })),
-  ].map(({ path, kind, dev, ino }) => ({ path, kind, dev, ino }))
-    .sort((a, b) => a.path < b.path ? -1 : a.path > b.path ? 1 :
-      a.kind < b.kind ? -1 : a.kind > b.kind ? 1 : 0);
   return createHash("sha256").update("tc-logout-approve-v1\0")
     .update(JSON.stringify([markerId, marker.approvalSalt, principal,
       marker.v === 2 ? null : marker.lifecycleEpoch, entries]))
@@ -208,12 +221,15 @@ function inventoryApprovalToken(
 
 function changedInventoryRefusal(
   marker: ProfileReplicaLogoutPending, principal: string, report: ProfileReplicaPreflight,
-): Error & { code: "REPLICA_GATED"; gate: string; inventoryApprovalToken: string } {
-  const token = inventoryApprovalToken(marker, principal, report);
-  const error = localChangesRefusal(report.unknownPaths.length > 0 ? report.unknownPaths :
-    [...report.knownEntries.map(({ path }) => path), ...report.knownRoots.map(({ path }) => path)]);
-  error.message += ` To approve this exact changed inventory in a separate command, use --discard-local-changes --approve-inventory ${token}.`;
-  return Object.assign(error, { inventoryApprovalToken: token });
+  entries = approvalEntries(report),
+): Error & { code: "REPLICA_GATED"; gate: string; inventoryApprovalToken: string;
+  inventoryApprovalEntries: ProfileReplicaApprovalEntry[] } {
+  const token = inventoryApprovalToken(marker, principal, entries);
+  const error = localChangesRefusal(report.unknownPaths);
+  error.message += ` Current token-bound inventory (path/kind/dev/ino): ${entries.length === 0 ?
+    "(empty)" : entries.map((entry) => JSON.stringify(entry)).join(", ")}.` +
+    ` To approve this exact changed inventory in a separate command, use --discard-local-changes --approve-inventory ${token}.`;
+  return Object.assign(error, { inventoryApprovalToken: token, inventoryApprovalEntries: entries });
 }
 function storedInventoryChanged(
   marker: ProfileReplicaLogoutPending, report: ProfileReplicaPreflight,
@@ -2204,15 +2220,16 @@ export function createSqliteReplicaStorage(
         const report = await inspectProfileReplicaLayout(profileDir, state !== undefined);
         assertSupportedProfileLayout(report);
         if (!storedInventoryChanged(marker, report)) throw gated("gate_unavailable");
+        const entries = approvalEntries(report);
         if (discardLocalChanges !== true || typeof token !== "string" ||
-            !/^[0-9a-f]{32}$/.test(token) || token !== inventoryApprovalToken(marker, principal, report)) {
-          throw changedInventoryRefusal(marker, principal, report);
+            !/^[0-9a-f]{32}$/.test(token) || token !== inventoryApprovalToken(marker, principal, entries)) {
+          throw changedInventoryRefusal(marker, principal, report, entries);
         }
         assertApprovedInventory(report, approval);
         if (approval.knownLegacyReplicas !== report.knownLegacyReplicas ||
             JSON.stringify(approval.unknownPaths) !== JSON.stringify(report.unknownPaths) ||
             JSON.stringify(approval.unknownLegacyPaths) !== JSON.stringify(report.unknownLegacyPaths)) {
-          throw changedInventoryRefusal(marker, principal, report);
+          throw changedInventoryRefusal(marker, principal, report, entries);
         }
         return commitPlainAbandon(path, marker, report, true);
       });
