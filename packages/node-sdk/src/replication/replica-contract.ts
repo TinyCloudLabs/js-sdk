@@ -438,6 +438,7 @@ export type SqliteGrantPolicy = {
  */
 export interface SqliteReplicaStore extends ReplicaStore {
   getGrantInstall(cid: string): Promise<SqliteGrantInstall | null>;
+  grantInstallTimes(): Promise<Array<{ cid: string; installedAt: number }>>;
   installGatedGrant(g: GrantRecord, policy: SqliteGrantPolicy): Promise<SqliteGrantInstall>;
   recomputeGrantInstall(g: GrantRecord, policy: SqliteGrantPolicy): Promise<SqliteGrantInstall | null>;
   destroy(t: LeaseToken): Promise<void>;

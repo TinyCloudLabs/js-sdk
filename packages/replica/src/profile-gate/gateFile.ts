@@ -29,6 +29,8 @@ export interface NodeGateState extends ReplicaAccountGate {
   intents: ReplicaPurgeIntent[];
   /** Identity key hash to first-install time (ms). Cleared by every committed deny. */
   firstInstall: Record<string, number>;
+  /** Salted identity+CID hash to immutable first-install time; survives targeted partition purge. */
+  grantInstall: Record<string, number>;
   /** Identity key hash to generation; advanced once with a newly queued pending intent. */
   pendingGenerations: Record<string, number>;
   /** Deferred revoke blocks recovery from erasing these already-durable intents. */
@@ -49,6 +51,11 @@ export function principalHashOf(salt: string, principal: string): Promise<string
 /** Salted opaque identity id, derived before a guarded data operation. */
 export function identityHashOf(salt: string, identityKey: string): Promise<string> {
   return saltedHash(salt, identityKey);
+}
+
+/** One account identity and signed CID, without persisting a plaintext CID in gate metadata. */
+export function grantInstallHashOf(salt: string, identityKeyHash: string, cid: string): Promise<string> {
+  return saltedHash(salt, `grantInstall\0${identityKeyHash}\0${cid}`);
 }
 
 function parseState(text: string): NodeGateState {
@@ -105,6 +112,15 @@ function parseState(text: string): NodeGateState {
       throw gateRefusal("gate_unavailable", "The replica gate file has an invalid firstInstall entry.");
     }
   }
+  const grantInstall = Object.prototype.hasOwnProperty.call(record, "grantInstall") ? record.grantInstall : {};
+  if (typeof grantInstall !== "object" || grantInstall === null || Array.isArray(grantInstall)) {
+    throw gateRefusal("gate_unavailable", "The replica gate has an invalid grantInstall map.");
+  }
+  for (const [hash, installedAt] of Object.entries(grantInstall)) {
+    if (!/^[0-9a-f]{64}$/.test(hash) || !Number.isSafeInteger(installedAt) || (installedAt as number) < 0) {
+      throw gateRefusal("gate_unavailable", "The replica gate has an invalid grant install time.");
+    }
+  }
   const pendingGenerations = record.pendingGenerations;
   if (typeof pendingGenerations !== "object" || pendingGenerations === null || Array.isArray(pendingGenerations)) {
     throw gateRefusal("gate_unavailable", "The replica gate file has an invalid pending generation map.");
@@ -132,6 +148,7 @@ function parseState(text: string): NodeGateState {
     deniedAt: record.deniedAt,
     intents: record.intents as ReplicaPurgeIntent[],
     firstInstall: firstInstall as Record<string, number>,
+    grantInstall: grantInstall as Record<string, number>,
     pendingGenerations: pendingGenerations as Record<string, number>,
     eraseDeferred,
     deferredPrincipalHash,
@@ -228,6 +245,7 @@ function freshState(): NodeGateState {
     deniedAt: null,
     intents: [],
     firstInstall: {},
+    grantInstall: {},
     pendingGenerations: {},
     eraseDeferred: false,
     deferredPrincipalHash: null,
@@ -260,6 +278,24 @@ export async function recordFirstInstall(profileDir: string, identityKeyHash: st
   const existing = state.firstInstall[identityKeyHash];
   if (existing !== undefined) return existing;
   await writeState(profileDir, { ...state, firstInstall: { ...state.firstInstall, [identityKeyHash]: atMs } });
+  return atMs;
+}
+
+/** A per-CID install floor, persisted before committing a SQLite grant install. Call under the profile lock. */
+export async function recordGrantInstall(profileDir: string, hash: string, atMs: number): Promise<number> {
+  if (!/^[0-9a-f]{64}$/.test(hash) || !Number.isSafeInteger(atMs) || atMs < 0) {
+    throw gateRefusal("gate_unavailable", "A salted grant hash and finite install time are required.");
+  }
+  const state = await readState(profileDir);
+  if (state === undefined || state.principalHash === null) {
+    throw gateRefusal("gate_unavailable", "The replica account gate is not established.");
+  }
+  if (state.eraseDeferred || state.intents.length > 0) {
+    throw gateRefusal("purge_pending", "A purge is pending for this profile.");
+  }
+  const previous = state.grantInstall[hash];
+  if (previous !== undefined && previous <= atMs) return previous;
+  await writeState(profileDir, { ...state, grantInstall: { ...state.grantInstall, [hash]: atMs } });
   return atMs;
 }
 
@@ -385,6 +421,7 @@ export async function denyGate(
       deniedAt,
       intents: merged,
       firstInstall: {},
+      grantInstall: {},
       pendingGenerations,
       eraseDeferred: options?.deferErase === true,
       deferredPrincipalHash: options?.deferErase === true ? state.principalHash : null,
