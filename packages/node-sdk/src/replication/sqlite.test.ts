@@ -52,6 +52,14 @@ async function makeDir(): Promise<string> {
   return dir;
 }
 
+async function makeLegacyMirror(profileDir: string): Promise<string> {
+  const dir = join(profileDir, "replicas", "notes");
+  await mkdir(dirname(dir), { recursive: true });
+  const store = await SqliteReplicaStore.open(dir, { create: true });
+  await store.close();
+  return dir;
+}
+
 async function eraseLegacy(profileDir: string): Promise<void> {
   await rm(join(profileDir, "replicas"), { recursive: true, force: true });
 }
@@ -425,6 +433,45 @@ describe("mandatory Node lifecycle gate", () => {
     expect(await filesNamed(dir, "pending.json")).toHaveLength(1);
   });
 
+  test("no-marker recovery refuses corrupt gate without touching credentials", async () => {
+    const dir = await makeDir();
+    const profileDir = dirname(dir);
+    const session = join(profileDir, "session.json");
+    const key = join(profileDir, "key.json");
+    await writeFile(session, "session");
+    await writeFile(key, "key");
+    await writeFile(join(profileDir, REPLICA_GATE_FILE), "{corrupt");
+    let cleanupCalls = 0;
+    const report = await createProfileReplicaPurge({ profileDir, guard: sharedGuard }).recoverLogoutPending({
+      signal: new AbortController().signal,
+      clearCredentials: async () => { cleanupCalls++; },
+      eraseLegacyReplicas: async () => { cleanupCalls++; },
+    });
+    expect(report.erased).toEqual([]);
+    expect(report.failed).toEqual([{ id: "logout", code: "gate_unavailable" }]);
+    expect(report.remaining).toBeGreaterThan(0);
+    expect(cleanupCalls).toBe(0);
+    expect(existsSync(session)).toBe(true);
+    expect(existsSync(key)).toBe(true);
+  });
+
+  test("no-marker recovery reports a gate inspection I/O failure, not an empty queue", async () => {
+    const dir = await makeDir();
+    const profileDir = dirname(dir);
+    const gatePath = join(profileDir, REPLICA_GATE_FILE);
+    await rm(gatePath);
+    await mkdir(gatePath);
+    const report = await createProfileReplicaPurge({ profileDir, guard: sharedGuard }).recoverLogoutPending({
+      signal: new AbortController().signal,
+      clearCredentials: async () => { throw new Error("no marker must not touch credentials"); },
+      eraseLegacyReplicas: async () => { throw new Error("no marker must not touch replicas"); },
+    });
+    expect(report.erased).toEqual([]);
+    expect(report.failed).toEqual([{ id: "logout", code: "gate_unavailable" }]);
+    expect(report.remaining).toBeGreaterThan(0);
+    expect(existsSync(gatePath)).toBe(true);
+  });
+
   test("a durable CLI logout marker fences a second opened handle before credentials are removed", async () => {
     const dir = await makeDir();
     const profileDir = dirname(dir);
@@ -511,6 +558,95 @@ describe("mandatory Node lifecycle gate", () => {
     expect(await filesNamed(dir, "pending.json")).toEqual([]);
     expect(existsSync(session)).toBe(false);
     expect(existsSync(key)).toBe(false);
+  });
+
+  test("v1 preflight accepts a source-created legacy mirror before any denial", async () => {
+    const dir = await makeDir();
+    const profileDir = dirname(dir);
+    const legacy = await makeLegacyMirror(profileDir);
+    const purge = createProfileReplicaPurge({ profileDir, guard: sharedGuard });
+    expect(await purge.preflightLogout({ principal: PRINCIPAL }))
+      .toEqual({ knownLegacyReplicas: 1, unknownLegacyPaths: [] });
+    await writeFile(join(legacy, "fence.json"), "only the flag-owned adapter creates this");
+    await expect(purge.preflightLogout({ principal: PRINCIPAL }))
+      .rejects.toThrow(/fence.json/);
+    await rm(join(legacy, "fence.json"));
+    expect(await purge.prepareLogoutPending({ principal: PRINCIPAL }))
+      .toMatchObject({ v: 1 });
+    expect((await readGateSnapshot(profileDir))?.principalHash).not.toBeNull();
+    expect(existsSync(join(legacy, "replica.db"))).toBe(true);
+  });
+
+  test("v1 preflight refuses unknown legacy state before marker, credentials, or remote revoke", async () => {
+    const dir = await makeDir();
+    const profileDir = dirname(dir);
+    const legacy = await makeLegacyMirror(profileDir);
+    await writeFile(join(legacy, "pending-v2.json"), "unsynced");
+    const session = join(profileDir, "session.json");
+    const key = join(profileDir, "key.json");
+    await writeFile(session, "private");
+    await writeFile(key, "private");
+    const purge = createProfileReplicaPurge({ profileDir, guard: sharedGuard });
+    await expect(purge.preflightLogout({ principal: PRINCIPAL }))
+      .rejects.toThrow(/sync first.*--discard-local-changes.*pending-v2.json/i);
+    await expect(purge.prepareLogoutPending({ principal: PRINCIPAL }))
+      .rejects.toThrow(/sync first.*--discard-local-changes.*pending-v2.json/i);
+    expect(existsSync(join(profileDir, REPLICA_LOGOUT_PENDING_FILE))).toBe(false);
+    expect(existsSync(session)).toBe(true);
+    expect(existsSync(key)).toBe(true);
+    expect(existsSync(join(legacy, "pending-v2.json"))).toBe(true);
+    expect((await readGateSnapshot(profileDir))?.principalHash).not.toBeNull();
+  });
+
+  test("v1 explicit discard reports unknown state and persists consent across crash recovery", async () => {
+    const dir = await makeDir();
+    const profileDir = dirname(dir);
+    const legacy = await makeLegacyMirror(profileDir);
+    await writeFile(join(legacy, "pending-v2.json"), "unsynced");
+    const purge = createProfileReplicaPurge({ profileDir, guard: sharedGuard });
+    expect(await purge.preflightLogout({ principal: PRINCIPAL, discardLocalChanges: true }))
+      .toEqual({ knownLegacyReplicas: 0, unknownLegacyPaths: ["replicas/notes/pending-v2.json"] });
+    const marker = await purge.prepareLogoutPending({ principal: PRINCIPAL, discardLocalChanges: true });
+    expect(marker).toMatchObject({ v: 1, discardLocalChanges: true });
+    let callbackDiscard: boolean | undefined;
+    const report = await createProfileReplicaPurge({ profileDir, guard: sharedGuard }).recoverLogoutPending({
+      signal: new AbortController().signal,
+      clearCredentials: async () => {},
+      eraseLegacyReplicas: async ({ discardLocalChanges }) => {
+        callbackDiscard = discardLocalChanges;
+        await eraseLegacy(profileDir);
+      },
+    });
+    expect(callbackDiscard).toBe(true);
+    expect(report).toMatchObject({ failed: [], remaining: 0 });
+    expect(existsSync(join(profileDir, REPLICA_LOGOUT_PENDING_FILE))).toBe(false);
+  });
+
+  test("v1 preflight and final marker stay on the pinned profile after a named-path replacement", async () => {
+    if (process.platform !== "linux") return;
+    const dir = await makeDir();
+    const named = dirname(dir);
+    const moved = `${named}-moved`;
+    const outside = await mkdtemp(join(tmpdir(), "tc858-v1-outside-"));
+    dirs.push(moved, outside);
+    await makeLegacyMirror(named);
+    await mkdir(join(outside, "replicas"));
+    await writeFile(join(outside, "replicas", "keep"), "outside");
+    const handle = await openFile(named, fsConstants.O_RDONLY | fsConstants.O_DIRECTORY | fsConstants.O_NOFOLLOW);
+    const pinned = `/proc/self/fd/${handle.fd}`;
+    try {
+      const purge = createProfileReplicaPurge({ profileDir: pinned, guard: sharedGuard });
+      expect(await purge.preflightLogout({ principal: PRINCIPAL }))
+        .toEqual({ knownLegacyReplicas: 1, unknownLegacyPaths: [] });
+      await rename(named, moved);
+      await symlink(outside, named, "dir");
+      expect(await purge.prepareLogoutPending({ principal: PRINCIPAL })).toMatchObject({ v: 1 });
+      expect(existsSync(join(moved, REPLICA_LOGOUT_PENDING_FILE))).toBe(true);
+      expect(existsSync(join(outside, REPLICA_LOGOUT_PENDING_FILE))).toBe(false);
+      expect(existsSync(join(outside, "replicas", "keep"))).toBe(true);
+    } finally {
+      await handle.close();
+    }
   });
 
   test("already-denied gate still persists a marker for legacy cleanup across credential-unlink crash", async () => {

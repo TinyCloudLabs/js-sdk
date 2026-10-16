@@ -77,13 +77,18 @@ export interface ProfileReplicaPurge extends Pick<ReplicaLifecycleGate, "recover
   }>;
   deferredErase(): Promise<ProfileReplicaDeferredToken | null>;
   resumeDeferredErase(token: ProfileReplicaDeferredToken, options: { signal: AbortSignal }): Promise<ReplicaEraseReport>;
+  /** Read-only, profile-locked layout check before defer-deny or any remote revoke. */
+  preflightLogout(input: { principal: string; discardLocalChanges?: boolean }): Promise<{
+    knownLegacyReplicas: number;
+    unknownLegacyPaths: string[];
+  }>;
   prepareLogoutPending(input: { principal: string; discardLocalChanges?: boolean }): Promise<ProfileReplicaLogoutPending | null>;
   recoverLogoutPending(options: {
     signal: AbortSignal;
     /** CLI atomically fsyncs authSignedOut=true before unlinking+fsyncing session.json/key.json; a failure rejects. */
     clearCredentials: () => Promise<void>;
-    /** Idempotently erase only <profile>/replicas after the gate commits; never touch <profile>/replication. */
-    eraseLegacyReplicas: () => Promise<void>;
+    /** Only the pinned legacy root, after durable deny; explicit discard survives crash in the marker. */
+    eraseLegacyReplicas: (options: { discardLocalChanges: boolean }) => Promise<void>;
   }): Promise<ReplicaEraseReport>;
 }
 
@@ -94,6 +99,7 @@ export type ProfileReplicaLogoutPending = {
   incarnation: string;
   lifecycleEpoch: number;
   principalHash: string;
+  discardLocalChanges?: true;
 } | {
   v: 2;
   scope: "orphan_profile";
@@ -104,6 +110,7 @@ export type ProfileReplicaLogoutPending = {
   scope: "inactive_gate";
   incarnation: string;
   lifecycleEpoch: number;
+  discardLocalChanges?: true;
 };
 
 /** Every CLI read path, including legacy replica commands, checks this marker before delivery. */
@@ -127,13 +134,15 @@ function logoutMarkerOf(value: unknown): ProfileReplicaLogoutPending {
   if (row.v === 2 && Object.keys(row).length === 3 &&
       row.scope === "orphan_profile" && typeof row.nonce === "string" &&
       /^[0-9a-f]{32}$/.test(row.nonce)) return row as ProfileReplicaLogoutPending;
-  if (row.v === 3 && Object.keys(row).length === 4 &&
+  if (row.v === 3 && (Object.keys(row).length === 4 ||
+      (Object.keys(row).length === 5 && row.discardLocalChanges === true)) &&
       row.scope === "inactive_gate" &&
       typeof row.incarnation === "string" && row.incarnation.length > 0 &&
       Number.isSafeInteger(row.lifecycleEpoch) && (row.lifecycleEpoch as number) >= 0) {
     return row as ProfileReplicaLogoutPending;
   }
-  if (Object.keys(row).length !== 4 || row.v !== 1 ||
+  if ((Object.keys(row).length !== 4 &&
+       !(Object.keys(row).length === 5 && row.discardLocalChanges === true)) || row.v !== 1 ||
       typeof row.incarnation !== "string" || row.incarnation.length === 0 ||
       !Number.isSafeInteger(row.lifecycleEpoch) || (row.lifecycleEpoch as number) < 0 ||
       typeof row.principalHash !== "string" || !/^[0-9a-f]{64}$/.test(row.principalHash)) {
@@ -242,9 +251,44 @@ async function hasOrphanPending(profileDir: string, name: "replication" | "repli
   return false;
 }
 
-function localChangesRefusal(): Error & { code: "REPLICA_GATED"; gate: string } {
+/** Source-owned legacy layout only; never follow a profile or child alias. */
+async function inspectLegacyReplicas(profileDir: string): Promise<{
+  knownLegacyReplicas: number;
+  unknownLegacyPaths: string[];
+}> {
+  const root = await orphanRoot(profileDir, "replicas");
+  const report = { knownLegacyReplicas: 0, unknownLegacyPaths: [] as string[] };
+  if (root === null) return report;
+  // @ts-ignore — the optional replica module is checked by replica-contract.test.ts.
+  const sqlite = await import("@tinycloud/replica/sqlite") as SqliteRuntime;
+  const rootPath = await realpath(root);
+  for (const entry of await readdir(root, { withFileTypes: true })) {
+    const relative = `replicas/${entry.name}`;
+    const child = join(root, entry.name);
+    if (!entry.isDirectory() || !(await lstat(child)).isDirectory() ||
+        await realpath(child) !== join(rootPath, entry.name)) {
+      report.unknownLegacyPaths.push(relative);
+      continue;
+    }
+    try {
+      const layout = await sqlite.inspectSqliteReplicaLayout(child);
+      if (layout.unknownPaths.length > 0) {
+        report.unknownLegacyPaths.push(...layout.unknownPaths.map((path) => `${relative}/${path}`));
+      } else {
+        report.knownLegacyReplicas++;
+      }
+    } catch {
+      // An unreadable or changing directory never proves its contents safe.
+      report.unknownLegacyPaths.push(relative);
+    }
+  }
+  return report;
+}
+
+function localChangesRefusal(unknownPaths: readonly string[] = []): Error & { code: "REPLICA_GATED"; gate: string } {
   const error = gated("gate_unavailable");
-  error.message = "Unsynced local replica writes may be lost; sync first, or retry logout with --discard-local-changes.";
+  error.message = "Unknown or unsynced local replica data may be lost; sync first, or retry logout with --discard-local-changes." +
+    (unknownPaths.length === 0 ? "" : ` Unknown: ${unknownPaths.slice(0, 5).map((path) => JSON.stringify(path)).join(", ")}.`);
   return error;
 }
 
@@ -1523,6 +1567,39 @@ export function createSqliteReplicaStorage(
       await profileSection(async () => (await fileGate()).resumeDeferredGate(profileDir, token));
       return lifecycle.erasePending({ signal });
     },
+    async preflightLogout({ principal, discardLocalChanges = false }) {
+      return profileSection(async () => {
+        if (await readLogoutMarker(join(profileDir, REPLICA_LOGOUT_PENDING_FILE)) !== null) {
+          throw gated("gate_unavailable");
+        }
+        const gate = await fileGate();
+        let state: FileGateState | undefined;
+        let corruptGate = false;
+        try {
+          state = await gate.readGateSnapshot(profileDir);
+        } catch (error) {
+          if (typeof error === "object" && error !== null && "code" in error &&
+              error.code === "REPLICA_GATED" && "gate" in error && error.gate === "gate_unavailable") {
+            corruptGate = true;
+          } else {
+            throw error;
+          }
+        }
+        if (state !== undefined) {
+          const hash = await gate.principalHashOf(state.salt, principal);
+          if (state.principalHash !== hash &&
+              !(state.eraseDeferred && state.principalHash === null && state.deferredPrincipalHash === hash)) {
+            throw gated("principal_mismatch");
+          }
+        }
+        const report = await inspectLegacyReplicas(profileDir);
+        if (!discardLocalChanges && (report.unknownLegacyPaths.length > 0 || corruptGate ||
+            (state === undefined && await hasOrphanPending(profileDir, "replication")))) {
+          throw localChangesRefusal(report.unknownLegacyPaths);
+        }
+        return report;
+      });
+    },
     async prepareLogoutPending({ principal, discardLocalChanges = false }) {
       const gate = await fileGate();
       return profileSection(async () => {
@@ -1567,6 +1644,11 @@ export function createSqliteReplicaStorage(
           if (state.principalHash !== null || state.eraseDeferred ||
               previous.incarnation !== state.incarnation ||
               previous.lifecycleEpoch !== state.lifecycleEpoch) throw gated("stamp_stale");
+          if (discardLocalChanges && !previous.discardLocalChanges) {
+            const amended = { ...previous, discardLocalChanges: true as const };
+            await writeJsonAtomic(path, amended, options.dirSync);
+            return amended;
+          }
           return previous;
         }
         const principalHash = await gate.principalHashOf(state.salt, principal);
@@ -1576,6 +1658,11 @@ export function createSqliteReplicaStorage(
               !(previous.lifecycleEpoch === state.lifecycleEpoch ||
                 (previous.lifecycleEpoch + 1 === state.lifecycleEpoch && state.principalHash === null))) {
             throw gated("stamp_stale");
+          }
+          if (discardLocalChanges && !previous.discardLocalChanges) {
+            const amended = { ...previous, discardLocalChanges: true as const };
+            await writeJsonAtomic(path, amended, options.dirSync);
+            return amended;
           }
           return previous;
         }
@@ -1589,14 +1676,20 @@ export function createSqliteReplicaStorage(
           marker = {
             v: 3, scope: "inactive_gate", incarnation: state.incarnation,
             lifecycleEpoch: state.lifecycleEpoch,
+            ...(discardLocalChanges ? { discardLocalChanges: true } : {}),
           };
         } else {
           if (state.principalHash !== principalHash &&
               !(state.eraseDeferred && state.principalHash === null && state.deferredPrincipalHash === principalHash)) {
             throw gated("principal_mismatch");
           }
+          const layout = await inspectLegacyReplicas(profileDir);
+          if (!discardLocalChanges && layout.unknownLegacyPaths.length > 0) {
+            throw localChangesRefusal(layout.unknownLegacyPaths);
+          }
           marker = {
             v: 1, incarnation: state.incarnation, lifecycleEpoch: state.lifecycleEpoch, principalHash,
+            ...(discardLocalChanges ? { discardLocalChanges: true } : {}),
           };
         }
         await writeJsonAtomic(path, marker, options.dirSync);
@@ -1612,7 +1705,7 @@ export function createSqliteReplicaStorage(
         try {
           return (await (await fileGate()).readGateSnapshot(profileDir))?.intents.length ?? 0;
         } catch {
-          return 0; // Inspection failed; the failed gate row below still refuses completion.
+          return 1; // Unknown outstanding work; a failed inspection cannot report completion.
         }
       };
       const failure = async (error: unknown): Promise<ReplicaEraseReport> => ({
@@ -1627,7 +1720,12 @@ export function createSqliteReplicaStorage(
         await profileSection(async () => {
           const marker = await readLogoutMarker(path);
           if (marker === null) {
-            noMarkerReport = { erased: [], failed: [], remaining: await remainingIntents() };
+            try {
+              const state = await (await fileGate()).readGateSnapshot(profileDir);
+              noMarkerReport = { erased: [], failed: [], remaining: state?.intents.length ?? 0 };
+            } catch {
+              noMarkerReport = { erased: [], failed: [{ id: "logout", code: "gate_unavailable" }], remaining: 1 };
+            }
             return;
           }
           signal.throwIfAborted();
@@ -1702,7 +1800,7 @@ export function createSqliteReplicaStorage(
               });
             }
           }
-          await eraseLegacyReplicas();
+          await eraseLegacyReplicas({ discardLocalChanges: marker.discardLocalChanges === true });
           try {
             await lstat(join(profileDir, "replicas"));
             throw gated("gate_unavailable");
@@ -2114,7 +2212,7 @@ export function createSqliteReplicaStorage(
             if (state.revoked === null) {
               await store.reset(lease, "purged");
             }
-            await store.destroy(lease);
+            await store.destroy(lease, { allowAdapterFence: true });
           } finally {
             await store.releaseLease(lease).catch(() => undefined);
           }
