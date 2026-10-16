@@ -1,4 +1,4 @@
-import { TinyCloudNode, signedCompactUcanExpiry, type PortableDelegation } from "@tinycloud/node-sdk";
+import { TinyCloudNode, signedCompactUcanExpiry, type PortableDelegation, type ProfileReplicaLogoutPending } from "@tinycloud/node-sdk";
 import { CLI_NAME } from "@tinycloud/operations/cli-name";
 import { ProfileManager } from "../config/profiles.js";
 import { resolveProfilePosture, type CLIContext, type ProfileConfig } from "../config/types.js";
@@ -12,7 +12,7 @@ import { delegationExpiredError } from "../auth/delegation-expiry.js";
 
 import { createCliReplicationConfig } from "./replication-config.js";
 import { registerReplication } from "./replication-registry.js";
-import { recoverPendingLogout } from "./logout-pending.js";
+import { assertPendingRemoteLogoutSession, recoverPendingLogout } from "./logout-pending.js";
 export { closeReplication, registerReplication, registeredReplications, replicationForProfile } from "./replication-registry.js";
 /**
  * Returns true when a JWK carries the private-key parameter required by the
@@ -190,9 +190,16 @@ export async function storedSessionVerifiesLocally(profileName: string): Promise
  */
 export async function createSDKInstance(
   ctx: CLIContext,
-  options?: { privateKey?: string }
+  options?: {
+    privateKey?: string;
+    pendingRemoteLogout?: { marker: ProfileReplicaLogoutPending; ownerDid: string; sessionCid: string };
+  },
 ): Promise<TinyCloudNode> {
-  await recoverPendingLogout(ctx.profile);
+  if (options?.pendingRemoteLogout) {
+    await assertPendingRemoteLogoutSession(ctx.profile, options.pendingRemoteLogout);
+  } else {
+    await recoverPendingLogout(ctx.profile);
+  }
   // A headless delegate may pass a private key with no persisted profile at all.
   // Only require a profile when we have no explicit key to fall back on.
   const storedProfile = options?.privateKey
@@ -238,6 +245,11 @@ export async function createSDKInstance(
     });
     if (node.replication) registerReplication(ctx.profile, node.replication);
 
+    if (options?.pendingRemoteLogout &&
+        (!session || session.delegationCid !== options.pendingRemoteLogout.sessionCid)) {
+      throw new CLIError("PROFILE_CHANGED_DURING_REVOKE",
+        "The retained revocation session disappeared before SDK restore.", ExitCode.ERROR);
+    }
     const restoredOwnSession = Boolean(session && session.delegationHeader && session.delegationCid && session.spaceId);
     if (restoredOwnSession) {
       await restoreProfileSession(node, ctx.profile, profile, persistedSessionData(ctx.profile, profile, session!, key));
@@ -250,8 +262,11 @@ export async function createSDKInstance(
       recordWarnings(await replayAdditionalDelegations(node, ctx.profile, {
         host: ctx.host,
         ownerSpace: profile.spaceId,
-        migrate: options?.privateKey === undefined,
+        migrate: options?.privateKey === undefined && options?.pendingRemoteLogout === undefined,
       }));
+    }
+    if (options?.pendingRemoteLogout) {
+      await assertPendingRemoteLogoutSession(ctx.profile, options.pendingRemoteLogout);
     }
     return node;
   }
@@ -272,6 +287,11 @@ export async function createSDKInstance(
     ...(replication ? { replication } : {}),
   });
   if (node.replication) registerReplication(ctx.profile, node.replication);
+  if (options?.pendingRemoteLogout &&
+      (!session || session.delegationCid !== options.pendingRemoteLogout.sessionCid)) {
+    throw new CLIError("PROFILE_CHANGED_DURING_REVOKE",
+      "The retained revocation session disappeared before SDK restore.", ExitCode.ERROR);
+  }
 
   if (options?.privateKey) {
     await node.signIn();
@@ -280,8 +300,11 @@ export async function createSDKInstance(
     recordWarnings(await replayAdditionalDelegations(node, ctx.profile, {
       host: ctx.host,
       ownerSpace: profile?.spaceId,
-      migrate: true,
+      migrate: options?.pendingRemoteLogout === undefined,
     }));
+  }
+  if (options?.pendingRemoteLogout) {
+    await assertPendingRemoteLogoutSession(ctx.profile, options.pendingRemoteLogout);
   }
   return node;
 }
@@ -459,7 +482,10 @@ function annotate(error: unknown, note: string | undefined): unknown {
  */
 export async function ensureAuthenticated(
   ctx: CLIContext,
-  options?: { privateKey?: string }
+  options?: {
+    privateKey?: string;
+    pendingRemoteLogout?: { marker: ProfileReplicaLogoutPending; ownerDid: string; sessionCid: string };
+  },
 ): Promise<TinyCloudNode> {
   // An explicitly-provided private key (--private-key / TC_PRIVATE_KEY) is a
   // first-class headless identity: accept it before any profile/session gate so
@@ -479,7 +505,7 @@ export async function ensureAuthenticated(
   // profile's own key is not an override: createSDKInstance reads it from the
   // profile, so the profile's binding migration may run.
   if (profile?.authMethod === "local" && profile.privateKey) {
-    return createSDKInstance(ctx);
+    return createSDKInstance(ctx, options);
   }
 
   const session = await ProfileManager.getSession(ctx.profile);

@@ -159,9 +159,9 @@ export function registerDelegationCommand(
         const currentSession = session && "delegationCid" in session && session.delegationCid === cid;
         if (currentSession) await confirmCurrentSessionRevoke(options.yes === true);
         const prepared = currentSession ? await prepareProfileRemoteLogout(ctx, cid) : undefined;
-        // This CID is about to end the session: do not open a replica runtime
-        // that could hold a lease across the post-receipt durable erase.
-        const node = await ensureAuthenticated(prepared ? { ...ctx, replication: false } : ctx);
+        // The prepared node restored the exact retained session without a
+        // replica runtime; ordinary SDK creation must not bypass the marker.
+        const node = prepared?.node ?? await ensureAuthenticated(ctx);
         const profile = prepared?.profile ?? await ProfileManager.getProfile(ctx.profile);
         const revoked = await revokeDelegationOnNode({
           ctx, node, profile, cid, yes: options.yes === true || Boolean(currentSession),

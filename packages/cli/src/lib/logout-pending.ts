@@ -1,6 +1,6 @@
 import { lstat, open } from "node:fs/promises";
 import { join } from "node:path";
-import { createProfileReplicaPurge, REPLICA_LOGOUT_PENDING_FILE } from "@tinycloud/node-sdk";
+import { createProfileReplicaPurge, REPLICA_LOGOUT_PENDING_FILE, type ProfileReplicaLogoutPending } from "@tinycloud/node-sdk";
 import { profilePath } from "@tinycloud/operations/state";
 import { readGateSnapshot } from "@tinycloud/replica/profile-gate";
 import { REPLICA_GATE_FILE } from "@tinycloud/sdk-services/kv/replication/contractConstants";
@@ -15,6 +15,42 @@ export function profilePurge(name: string) {
     guard: (section) => ProfileManager.withLock(name, section, { requireProfile: true }),
   });
 }
+/**
+ * A failed online revoke retains the original session for that retry alone.
+ * Revalidate the persisted marker, inventory and exact session under the
+ * profile lock; ordinary SDK callers still run recovery and reject the marker.
+ */
+export async function assertPendingRemoteLogoutSession(
+  name: string,
+  expected: { marker: ProfileReplicaLogoutPending; ownerDid: string; sessionCid: string },
+): Promise<void> {
+  if (expected.marker.remotePending !== true) {
+    throw new CLIError("REPLICA_GATED", "Remote revocation is not pending for this profile.", ExitCode.ERROR);
+  }
+  await ProfileManager.withLock(name, async () => {
+    const profile = await ProfileManager.getProfile(name);
+    const session = await ProfileManager.getSession(name);
+    if (profile.authSignedOut === true || !session ||
+        !("ownerDid" in session) || session.ownerDid !== expected.ownerDid ||
+        !("delegationCid" in session) || session.delegationCid !== expected.sessionCid) {
+      throw new CLIError("PROFILE_CHANGED_DURING_REVOKE",
+        "The retained revocation session changed; no online request was attempted.", ExitCode.ERROR);
+    }
+    const purge = profilePurge(name);
+    const approval = await purge.preflightLogout({ principal: expected.ownerDid, discardLocalChanges: true });
+    const marker = await purge.prepareLogoutPending({
+      principal: expected.ownerDid,
+      approval,
+      discardLocalChanges: expected.marker.discardLocalChanges === true,
+      remotePending: true,
+    });
+    if (marker === null || JSON.stringify(marker) !== JSON.stringify(expected.marker)) {
+      throw new CLIError("REPLICA_GATED",
+        "The approved remote revocation marker changed; no online request was attempted.", ExitCode.ERROR);
+    }
+  }, { requireProfile: true });
+}
+
 
 /** Attempt both unlinks independently; the durable marker remains until both are absent and fsynced. */
 export async function clearProfileCredentials(name: string, syncDirectory = false): Promise<void> {

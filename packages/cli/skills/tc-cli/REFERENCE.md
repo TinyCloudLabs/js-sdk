@@ -287,13 +287,17 @@ that arrive later can be observed as stale until a subsequent sync.
 files, and shreds both restorable session and key. A pending marker keeps reads
 denied while startup retries erasure. A signed-out profile cannot implicitly
 authenticate with its stored owner key; use explicit `auth login` for a new
-session. A missing or corrupt replica gate with uncertain local writes refuses
-logout without deleting credentials or files: sync first, or explicitly pass
-`--discard-local-changes` to wipe both replica roots after their exact listed
-contents are approved. With a verified local-owner key, `auth logout --revoke`
-revokes verified owner-controlled stored grants and then the active session CID
-online before deleting local files. Failed or ambiguous remote revoke retains
-session, key and physical replica files behind a denied gate for retry. OpenKey
+session. An unknown replica path, an unverified legacy SQLite schema, or an
+unreadable gate refuses logout before a marker, credential deletion or node
+request. Sync first, or pass `--discard-local-changes` to approve the displayed
+paths, types and file identities. New or changed entries need fresh approval.
+With a verified local-owner key, `auth logout --revoke --discard-local-changes`
+preserves session, key and physical replicas through every online exact-CID
+receipt; partial failure leaves them behind a durable denied marker for retry.
+After full remote success, cleanup shreds credentials and erases only approved
+entries. A later inventory mismatch retains the marker and remaining files;
+repeat `auth logout --discard-local-changes` for fresh approval without
+repeating node revocations. OpenKey
 owner revocation currently fails closed with `REVOCATION_AUTHORITY_UNAVAILABLE`,
 retaining credentials and denied replica files until signed owner revoke
 authority is supported.

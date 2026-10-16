@@ -219,7 +219,7 @@ test("discard plus online revoke retains all local files on 503 then erases only
   await expectRetained(paths, session, key);
   setMode("success");
   const retried = await run(home, ["auth", "logout", "--revoke", "--discard-local-changes"]);
-  expect(retried.exitCode).toBe(0);
+  expect(retried.exitCode, retried.stderr).toBe(0);
   expect(revokedCids).toEqual([sessionCid]);
   await expect(readFile(paths.session)).rejects.toMatchObject({ code: "ENOENT" });
   await expect(readFile(paths.key)).rejects.toMatchObject({ code: "ENOENT" });
@@ -247,8 +247,8 @@ test("a new unknown path after online success retains the marker and requires fr
 
   const requestsBefore = networkPaths.length;
   const retried = await run(home, ["auth", "logout", "--discard-local-changes"]);
-  expect(retried.exitCode).toBe(0);
-  expect(retried.stdout).toContain("late-write.pending");
+  expect(retried.exitCode, retried.stderr).toBe(0);
+  expect(retried.stderr).toContain("late-write.pending");
   expect(networkPaths).toHaveLength(requestsBefore);
   expect(revokedCids).toEqual([sessionCid]);
   expect(await Bun.file(join(paths.directory, REPLICA_LOGOUT_PENDING_FILE)).exists()).toBe(false);

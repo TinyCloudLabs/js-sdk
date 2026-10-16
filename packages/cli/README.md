@@ -190,14 +190,17 @@ sync. `auth logout` durably fences replica reads, removes both legacy replicas
 and the flag-owned `replication/` root, and shreds `session.json` and `key.json`.
 If erasure fails, the marker keeps reads denied and startup retries cleanup.
 An explicit logout also blocks implicit sign-in with the stored profile owner
-key; use `auth login` to establish a fresh session. If a missing or corrupt
-replica gate makes unsynced writes uncertain, logout refuses without deleting
-credentials or files; sync first or explicitly pass `--discard-local-changes`
-to wipe both replica roots after their exact listed contents are approved.
-For a verified local-owner key, `auth logout --revoke` first denies local reads,
-then revokes verified owner-controlled grant CIDs and the session CID on the node;
-an unavailable or ambiguous node leaves session, key and physical replica files
-intact for retry. OpenKey owner revocation currently fails closed with
+key; use `auth login` to establish a fresh session. Unknown legacy or flag-owned
+paths, an unverified legacy SQLite schema, or an unreadable gate refuse logout
+before a marker, credential deletion, or node revocation. Sync local writes or
+pass `--discard-local-changes` to approve the displayed paths, types and file
+identities; newly added or changed paths require fresh approval. With
+`auth logout --revoke --discard-local-changes`, physical files and credentials
+remain through partial or failed node revocation. Only after every exact-CID
+receipt does local cleanup begin. If the inventory changes after those receipts,
+the marker blocks reads and the profile stays signed out until a new
+`auth logout --discard-local-changes` approves the remaining paths, without
+revoking CIDs again. OpenKey owner revocation currently fails closed with
 `REVOCATION_AUTHORITY_UNAVAILABLE`, retaining credentials and denied replica
 files until signed owner revoke authority is supported. `--keep-replicas` is
 available only for legacy-only profiles with no gate, flag-owned partition or
