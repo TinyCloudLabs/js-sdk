@@ -192,8 +192,9 @@ export type ReplicaDenyOutcome =
   /**
    * Gate moved, intents recorded, first-install anchors cleared and pending generations advanced
    * in one commit. Browser: owner device deleted in that same IDB transaction. Node: the gate
-   * file cannot commit atomically with the device file, so the device is durably deleted by its
-   * identity's pending-intent erase before that intent clears (idempotent replay).
+   * file cannot commit atomically with the device file, so an ordinary denial deletes it
+   * through the identity's pending-intent erase before intent clear. Deferred node sign-out
+   * holds that intent and the device file until validated resume (CONTRACT.md §2).
    */
   | { status: "denied"; lifecycleEpoch: number; intents: number }
   /** The caller's principal didn't match the gate: disabled in memory only; gate untouched. */
@@ -298,6 +299,8 @@ export interface ReplicaLifecycleGate {
    * if expired, denies and crypto-shreds keys before any replica access; it also retries a
    * pending `deleteDatabase` marker and erases intents. Failures remain gated and visible via
    * `pendingPurge()` / `purgePending`; a browser closed at expiry catches it on its next load.
+   * Node/CLI recovery leaves durably deferred revoke intents and physical files untouched,
+   * reporting them as remaining until `ProfileReplicaPurge.resumeDeferredErase`.
    */
   recover(o: { signal: AbortSignal }): Promise<ReplicaEraseReport>;
   /**
@@ -363,6 +366,46 @@ export interface ReplicaLifecycleGate {
   erasePending(o: { signal: AbortSignal }): Promise<ReplicaEraseReport>;
   /** Outstanding intents; non-empty means status `purgePending: true`. */
   pendingPurge(): Promise<ReplicaPurgeIntent[]>;
+}
+
+/** Node/CLI profile-local fencing token, not a secret capability; the profile lock remains authoritative. */
+export interface ProfileReplicaDeferredToken {
+  deniedEpoch: number;
+  principalHash: string;
+}
+
+/**
+ * Node/CLI-only lifecycle facade for a profile's replica root. The node-sdk exports
+ * `createProfileReplicaPurge({ profileDir, guard })`; `guard` is the caller's mandatory,
+ * nonreentrant profile lock. This does not widen the browser `ReplicaLifecycleGate`.
+ *
+ * While a durable deferred denial is active, `recover` and `erasePending` report the
+ * outstanding intents without erasing them; `pendingPurge` still returns all intents.
+ * All guarded reads and new establishment remain refused. CONTRACT.md §2 specifies
+ * crash/retry ordering and the explicit plain-logout/account-switch/expiry override.
+ */
+export interface ProfileReplicaPurge extends Pick<ReplicaLifecycleGate, "recover" | "erasePending" | "pendingPurge"> {
+  /**
+   * `deferErase: true` is valid only for `reason: "sign_out"`; other reasons throw
+   * TypeError before any mutation. A successful deferred `denied` outcome MUST carry
+   * `resumeToken`; stale or unguarded outcomes do not authorize a retryable revoke.
+   * Step 1 atomically denies, records every opaque partition/pending intent and
+   * pending generation, and persists the deferred marker. Physical files remain
+   * until `resumeDeferredErase`, even across process restart.
+   */
+  deny(input: ReplicaDenyInput, options?: { deferErase?: boolean }): Promise<ReplicaDenyOutcome & {
+    resumeToken?: ProfileReplicaDeferredToken;
+  }>;
+  /** Returns the persisted active token across restart, or null after the marker clears. */
+  deferredErase(): Promise<ProfileReplicaDeferredToken | null>;
+  /**
+   * Under the profile lock, require the exact denied epoch and principal hash and a
+   * null gate principal; otherwise throw `REPLICA_GATED`/`stamp_stale` without erasure.
+   * Clear the deferred marker durably before idempotent erase. A crash after clearing
+   * is completed by ordinary recovery. Repeating the same token is safe only while
+   * the same denied epoch/hash persists; a successor establishment fences it.
+   */
+  resumeDeferredErase(token: ProfileReplicaDeferredToken, options: { signal: AbortSignal }): Promise<ReplicaEraseReport>;
 }
 
 /** Worker replies that carry replica-served data are stamped; a reply without a stamp is dropped. */

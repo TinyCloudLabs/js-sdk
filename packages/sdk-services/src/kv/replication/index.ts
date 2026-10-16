@@ -39,6 +39,8 @@ export type {
   ResolvedReplicationOptions,
 } from "./types";
 export type {
+  ProfileReplicaDeferredToken,
+  ProfileReplicaPurge,
   ReplicaAccountGate,
   ReplicaBrowserGateAccess,
   ReplicaBrowserGateSnapshot,

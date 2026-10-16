@@ -26,6 +26,7 @@ import type {
   ReplicaClock,
   ReplicaDeliveryDecision,
   ReplicaDenyInput,
+  ReplicaDenyOutcome,
   ReplicaEraseReport,
   ReplicaGateAccess,
   ReplicaGateSnapshot,
@@ -39,6 +40,7 @@ import type {
 import type { ReplicaAdmitHook, ReplicaBrowserPageAdmission, ReplicaPageAdmission, ReplicaQuotaLedger } from "./quota";
 import type { ReplicaConsentAnchor } from "./grantPolicyTypes";
 import type { REPLICA_DENY_TOMBSTONE, REPLICA_KV_SCHEMA_VERSION } from "./contractConstants";
+import type { ProfileReplicaDeferredToken, ProfileReplicaPurge } from "./index";
 
 type Assert<T extends true> = T;
 type Equal<A, B> = (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ? 1 : 2
@@ -235,3 +237,33 @@ type _PendingStoreTakesStamp = Assert<
     ReplicaSessionStamp | undefined
   >
 >;
+
+// Node/CLI-only deferred revoke: the common browser lifecycle never accepts deferErase.
+type _DeferredTokenIsOpaqueFence = Assert<
+  Equal<ProfileReplicaDeferredToken, { deniedEpoch: number; principalHash: string }>
+>;
+type _ProfilePurgeKeepsLifecycleRecovery = Assert<
+  ProfileReplicaPurge extends Pick<ReplicaLifecycleGate, "recover" | "erasePending" | "pendingPurge">
+    ? true : false
+>;
+type _ProfileDenyTakesOptionalDeferral = Assert<
+  Equal<Parameters<ProfileReplicaPurge["deny"]>[1], { deferErase?: boolean } | undefined>
+>;
+type _DeferredDenyCarriesToken = Assert<
+  Equal<
+    ReturnType<ProfileReplicaPurge["deny"]>,
+    Promise<ReplicaDenyOutcome & { resumeToken?: ProfileReplicaDeferredToken }>
+  >
+>;
+type _DeferredTokenSurvivesRestart = Assert<
+  Equal<ReturnType<ProfileReplicaPurge["deferredErase"]>, Promise<ProfileReplicaDeferredToken | null>>
+>;
+type _ResumeRequiresSignal = Assert<
+  Equal<
+    ProfileReplicaPurge["resumeDeferredErase"],
+    (token: ProfileReplicaDeferredToken, options: { signal: AbortSignal }) => Promise<ReplicaEraseReport>
+  >
+>;
+declare const commonLifecycle: ReplicaLifecycleGate;
+// @ts-expect-error Deferral is confined to the node/CLI profile facade.
+commonLifecycle.deny({ reason: "sign_out", principal: "did:example:owner" }, { deferErase: true });

@@ -252,10 +252,17 @@ partition or identity with an outstanding intent is unreadable.
 
 | | Browser | Node/CLI |
 | -- | -- | -- |
-| Gate, index, intents | `gate` (key `"account"`), `partitions`, `purgeIntents` stores in `tinycloud-replica-kv`; gate carries opaque hashes/keyId and durable consent deadline, no raw principal | `replica-gate.json` (`REPLICA_GATE_FILE`): `{ v: 1, incarnation, salt, principalHash, lifecycleEpoch, deniedAt, intents, firstInstall, pendingGenerations }`, where `principalHash` is `SaltedHash` hex and `pendingGenerations: { [identityKeyHash]: non-negative integer }` persists pending-file tombstone generations. Written atomically (temp file + rename) under the profile lock. CLI: `<profile>/replica-gate.json`. The node-sdk `gateFile` option defaults next to `dir`, outside the replication data. The index may be derived from the on-disk layout |
+| Gate, index, intents | `gate` (key `"account"`), `partitions`, `purgeIntents` stores in `tinycloud-replica-kv`; gate carries opaque hashes/keyId and durable consent deadline, no raw principal | `replica-gate.json` (`REPLICA_GATE_FILE`): `{ v: 1, incarnation, salt, principalHash, lifecycleEpoch, deniedAt, intents, firstInstall, pendingGenerations, eraseDeferred, deferredPrincipalHash }`, where `principalHash` is `SaltedHash` hex and `pendingGenerations: { [identityKeyHash]: non-negative integer }` persists pending-file tombstone generations. Written atomically (temp file + rename) under the profile lock. CLI: `<profile>/replica-gate.json`. The node-sdk `gateFile` option defaults next to `dir`, outside the replication data. The index may be derived from the on-disk layout |
 | First-install anchors | `device` store, key `"firstInstall:" + identityKeyHash` | the gate file's `firstInstall: { [identityKeyHash]: ms }` |
 | Cross-tab/process signal | `localStorage` marker `REPLICA_LOGOUT_MARKER`; durable `REPLICA_DENY_TOMBSTONE`; BroadcastChannel `REPLICA_KV_CHANNEL`; the `storage` event | the gate file, checked by `run` |
 | Session stamp persisted in | sdk-core `PersistedSessionData.replicaStamp` (S3 adds it to the zod schema: `incarnation: string`, `lifecycleEpoch: non-negative int`), next to the SIWE | the profile's persisted session record |
+
+**Node/CLI deferred marker.** `eraseDeferred: boolean` and
+`deferredPrincipalHash: string | null` are gate-file fields; older v1 gate
+files without them read as `false` and `null`. A malformed combination fails
+closed. A deferred denial stores the original salted principal hash while
+clearing `principalHash`; after resume the deferred hash remains only to
+recognize an idempotent same-token retry. A new establishment clears it.
 
 **Browser deny floor.** `REPLICA_DENY_TOMBSTONE = "tinycloud-replica:deny-tombstone"` holds
 `{"epoch": <positive safe integer>, "deniedAt": <non-negative safe integer ms>}` in origin
@@ -470,6 +477,11 @@ a stamp is dropped. This includes get bytes, list keys and replica-derived diver
 
      The partition erase must be durable before the intent clears.
    - **Node pending identity order:** intent and generation bump in step 1's atomic gate-file rename → unlink `pending.json` and owner `device.jwk` and sync the directory under the profile lock → clear intent durably. Replay sees the already advanced generation, retries deletion, and does not advance it twice. A missing file is success, never permission to read before intent clear.
+   - **Node/CLI deferred revoke exception:** while `eraseDeferred` is true,
+     `erasePending()` and `recover()` report outstanding intents but MUST NOT
+     erase a partition, `pending.json` or `device.jwk`, or clear an intent.
+     The full intent set and generation fences still block every guarded read,
+     write and new establishment. Browser denial and erasure are unchanged.
 4. **Activate** (switch only). `activationAllowed(next)` requires a **non-null**
    gate principal hash computed under the **current** gate key matching `next`, no old
    intent and no marker. A null gate returns false; only `establishSessionStamp` on a
@@ -489,6 +501,50 @@ non-zero result and instructs the user to retry. The replica remains denied
 immediately and cannot serve while the network session is retained. This
 exception does not reopen a TC-1208 sign-out path or weaken plain logout.
 
+**Node/CLI `logout --revoke` deferred erase.** The node-sdk root export
+`createProfileReplicaPurge({ profileDir, guard })` returns `ProfileReplicaPurge`
+for `<profileDir>/replication`; `guard` is the mandatory existing nonreentrant
+profile lock. This facade does not extend the browser lifecycle interface.
+The CLI uses `deny({ reason: "sign_out", principal }, { deferErase: true })`
+**before** the online revoke. Any other reason with `deferErase: true` throws
+`TypeError` before mutation. Every deny outcome fences this process in memory
+before its first await; only a committed `denied` outcome with a
+`resumeToken: { deniedEpoch, principalHash }` proves the deferral durable.
+Stale/unguarded outcomes and a missing token are not permission to proceed
+as a retryable revoked session.
+
+The profile-locked, fsynced atomic gate-file replacement commits the denied
+epoch/time, null principal, **all** scoped opaque partition and pending intents,
+the pending identity generations, cleared first-install anchors,
+`eraseDeferred: true` and the original salted `deferredPrincipalHash` together.
+No empty-intent marker or unchecked flag is sufficient. An old handle cannot
+read despite retained physical files. `deferredErase()` returns the durable
+nonsecret fencing token after restart; `pendingPurge()` still lists the intents
+and `purgePending` stays true. While deferred, recovery reports the remaining
+count and does not erase. `activationAllowed`/establish/restore refuse until
+the intents are erased; a plain `deny` from the now-null principal is stale.
+
+If remote revoke fails, times out or is interrupted, CLI returns nonzero and
+keeps the network session/key for retry; the SQLite replica, `pending.json`
+and owner `device.jwk` remain physically present but unreadable locally. On
+remote success, `resumeDeferredErase(token, { signal })` validates the **same**
+denied epoch, salted principal hash and null principal under the profile lock.
+A wrong/old/successor token throws `REPLICA_GATED` (`stamp_stale`) and erases
+nothing. It durably clears `eraseDeferred` **before** ordinary idempotent
+erasure. A crash before that write remains deferred; a crash after it is
+replayed by normal `recover()`. Repeating the same token after a completed
+resume is idempotent only while the same denied epoch/hash and null principal
+persist. A successor establishment or later denial fences the old token.
+The token is not a secret bearer credential: the mandatory profile lock and
+gate checks are authoritative.
+
+An explicit plain logout, account switch or consent-expiry cleanup MUST
+obtain and resume any earlier deferred denial **before** its ordinary purge
+and session transition, even though the gate principal is already null and
+a second deny would be stale. Plain logout still ends the network session;
+failed `logout --revoke` alone retains it. No browser gate path uses this
+exception.
+
 **Startup.** `recover()` runs before anything binds:
 1. browser retries a pending database delete if the marker is set;
 2. before any v1→v2 upgrade, under the origin gate Web Lock it probes the v1
@@ -499,7 +555,9 @@ exception does not reopen a TC-1208 sign-out path or weaken plain logout.
    deletes both encryption keys before any replica read/open, then schedules
    erase. `ReplicaEraseReport.consentExpired` is true only after that key-deletion
    commit; failures leave the gate closed;
-4. every outstanding intent is erased.
+4. every outstanding intent is erased, **except** Node/CLI intents held by
+   a durable `eraseDeferred` revoke. Those remain fenced and physically intact
+   until the validated resume or an explicit plain-logout/switch/expiry override.
 
 It never rejects; leftovers show as `purgePending`. A browser closed through the
 deadline cannot delete keys while closed; the next load checks before serving.
