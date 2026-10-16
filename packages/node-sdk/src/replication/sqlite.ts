@@ -99,6 +99,11 @@ export type ProfileReplicaLogoutPending = {
   scope: "orphan_profile";
   /** Random opaque marker identity; never a fabricated principal or gate epoch. */
   nonce: string;
+} | {
+  v: 3;
+  scope: "inactive_gate";
+  incarnation: string;
+  lifecycleEpoch: number;
 };
 
 /** Every CLI read path, including legacy replica commands, checks this marker before delivery. */
@@ -122,6 +127,12 @@ function logoutMarkerOf(value: unknown): ProfileReplicaLogoutPending {
   if (row.v === 2 && Object.keys(row).length === 3 &&
       row.scope === "orphan_profile" && typeof row.nonce === "string" &&
       /^[0-9a-f]{32}$/.test(row.nonce)) return row as ProfileReplicaLogoutPending;
+  if (row.v === 3 && Object.keys(row).length === 4 &&
+      row.scope === "inactive_gate" &&
+      typeof row.incarnation === "string" && row.incarnation.length > 0 &&
+      Number.isSafeInteger(row.lifecycleEpoch) && (row.lifecycleEpoch as number) >= 0) {
+    return row as ProfileReplicaLogoutPending;
+  }
   if (Object.keys(row).length !== 4 || row.v !== 1 ||
       typeof row.incarnation !== "string" || row.incarnation.length === 0 ||
       !Number.isSafeInteger(row.lifecycleEpoch) || (row.lifecycleEpoch as number) < 0 ||
@@ -166,7 +177,9 @@ async function hasOrphanPending(profileDir: string, name: "replication" | "repli
       return true;
     }
     if (name === "replicas") {
-      if (await pathExists(join(dir, "pending.json"))) return true;
+      // Legacy SQLite child layouts do not have a reviewed pending-write index.
+      // Any nested file may contain unsynced data, including unknown future layouts.
+      if ((await readdir(dir)).length !== 0) return true;
       continue;
     }
     if (!/^[a-z2-7]{26}$/.test(entry.name)) return true;
@@ -1515,6 +1528,12 @@ export function createSqliteReplicaStorage(
           return marker;
         }
         if (previous?.v === 2) throw gated("stamp_stale");
+        if (previous?.v === 3) {
+          if (state.principalHash !== null || state.eraseDeferred ||
+              previous.incarnation !== state.incarnation ||
+              previous.lifecycleEpoch !== state.lifecycleEpoch) throw gated("stamp_stale");
+          return previous;
+        }
         const principalHash = await gate.principalHashOf(state.salt, principal);
         if (previous !== null) {
           if (previous.incarnation !== state.incarnation ||
@@ -1525,14 +1544,26 @@ export function createSqliteReplicaStorage(
           }
           return previous;
         }
-        if (state.principalHash !== principalHash &&
-            !(state.eraseDeferred && state.principalHash === null && state.deferredPrincipalHash === principalHash)) {
-          if (state.principalHash === null) return null;
-          throw gated("principal_mismatch");
+        let marker: ProfileReplicaLogoutPending;
+        if (state.principalHash === null && !state.eraseDeferred) {
+          const legacyRoot = await orphanRoot(profileDir, "replicas");
+          if (legacyRoot === null && state.intents.length === 0) return null;
+          if (legacyRoot !== null && !discardLocalChanges && await hasOrphanPending(profileDir, "replicas")) {
+            throw localChangesRefusal();
+          }
+          marker = {
+            v: 3, scope: "inactive_gate", incarnation: state.incarnation,
+            lifecycleEpoch: state.lifecycleEpoch,
+          };
+        } else {
+          if (state.principalHash !== principalHash &&
+              !(state.eraseDeferred && state.principalHash === null && state.deferredPrincipalHash === principalHash)) {
+            throw gated("principal_mismatch");
+          }
+          marker = {
+            v: 1, incarnation: state.incarnation, lifecycleEpoch: state.lifecycleEpoch, principalHash,
+          };
         }
-        const marker: ProfileReplicaLogoutPending = {
-          v: 1, incarnation: state.incarnation, lifecycleEpoch: state.lifecycleEpoch, principalHash,
-        };
         await writeJsonAtomic(path, marker, options.dirSync);
         visibleStamp = undefined;
         visiblePrincipalHash = undefined;
@@ -1555,17 +1586,15 @@ export function createSqliteReplicaStorage(
           "code" in error && typeof error.code === "string" ? error.code : "STORAGE_ERROR" }],
         remaining: await remainingIntents(),
       });
-      let found = false;
       let orphaned = false;
-      let noMarkerRemaining = 0;
+      let noMarkerReport: ReplicaEraseReport | undefined;
       try {
         await profileSection(async () => {
           const marker = await readLogoutMarker(path);
           if (marker === null) {
-            noMarkerRemaining = await remainingIntents();
+            noMarkerReport = { erased: [], failed: [], remaining: await remainingIntents() };
             return;
           }
-          found = true;
           signal.throwIfAborted();
           if (marker.v === 2) {
             orphaned = true;
@@ -1601,16 +1630,19 @@ export function createSqliteReplicaStorage(
           }
           const gate = await fileGate();
           const state = await gate.readGateSnapshot(profileDir);
-          if (state === undefined || state.incarnation !== marker.incarnation ||
-              !(state.lifecycleEpoch === marker.lifecycleEpoch ||
-                (state.lifecycleEpoch === marker.lifecycleEpoch + 1 && state.principalHash === null))) {
-            throw gated("stamp_stale");
+          if (state === undefined || state.incarnation !== marker.incarnation) throw gated("stamp_stale");
+          if (marker.v === 3) {
+            if (state.principalHash !== null || state.eraseDeferred ||
+                state.lifecycleEpoch !== marker.lifecycleEpoch) throw gated("stamp_stale");
+          } else {
+            if (!(state.lifecycleEpoch === marker.lifecycleEpoch ||
+                  (state.lifecycleEpoch === marker.lifecycleEpoch + 1 && state.principalHash === null)) ||
+                (state.principalHash !== marker.principalHash &&
+                  !(state.principalHash === null && (
+                    state.deferredPrincipalHash === marker.principalHash ||
+                    state.lifecycleEpoch === marker.lifecycleEpoch + 1
+                  )))) throw gated("stamp_stale");
           }
-          if (state.principalHash !== marker.principalHash &&
-              !(state.principalHash === null && (
-                state.deferredPrincipalHash === marker.principalHash ||
-                state.lifecycleEpoch === marker.lifecycleEpoch + 1
-              ))) throw gated("stamp_stale");
           signal.throwIfAborted();
           await clearCredentials();
           for (const file of ["session.json", "key.json"]) {
@@ -1622,17 +1654,18 @@ export function createSqliteReplicaStorage(
             }
           }
           await (options.dirSync ?? fsyncDir)(profileDir);
-          if (state.principalHash !== null) {
-            // A marker is an epoch/hash fence, not a raw principal. The precomputed hash
-            // is checked again by denyGate under this same profile lock.
-            const denied = await gate.denyGate(profileDir, { reason: "sign_out", principal: "" },
-              (principalHash) => collectIntents(principalHash, state.salt),
-              { salt: state.salt, principalHash: marker.principalHash });
-            if (denied.status !== "denied") throw gated("gate_unavailable");
-          } else if (state.eraseDeferred) {
-            await gate.resumeDeferredGate(profileDir, {
-              deniedEpoch: state.lifecycleEpoch, principalHash: marker.principalHash,
-            });
+          if (marker.v === 1) {
+            if (state.principalHash !== null) {
+              // A marker is an epoch/hash fence, not a raw principal. Deny rechecks under this lock.
+              const denied = await gate.denyGate(profileDir, { reason: "sign_out", principal: "" },
+                (principalHash) => collectIntents(principalHash, state.salt),
+                { salt: state.salt, principalHash: marker.principalHash });
+              if (denied.status !== "denied") throw gated("gate_unavailable");
+            } else if (state.eraseDeferred) {
+              await gate.resumeDeferredGate(profileDir, {
+                deniedEpoch: state.lifecycleEpoch, principalHash: marker.principalHash,
+              });
+            }
           }
           await eraseLegacyReplicas();
           try {
@@ -1648,7 +1681,7 @@ export function createSqliteReplicaStorage(
       } catch (error) {
         return failure(error);
       }
-      if (!found) return { erased: [], failed: [], remaining: noMarkerRemaining };
+      if (noMarkerReport !== undefined) return noMarkerReport;
       if (orphaned) return { erased: [], failed: [], remaining: 0 };
       return lifecycle.erasePending({ signal });
     },

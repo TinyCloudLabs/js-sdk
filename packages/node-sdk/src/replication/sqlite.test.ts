@@ -408,6 +408,23 @@ describe("mandatory Node lifecycle gate", () => {
       .rejects.toMatchObject({ code: "REPLICA_GATED", gate: "stamp_stale" });
   });
 
+  test("no-marker recovery reports durable intents without deleting credentials or replaying", async () => {
+    const dir = await makeDir();
+    const profileDir = dirname(dir);
+    const storage = createSqliteReplicaStorage(storageOptions());
+    await storage.pendingWrites!(identity(), { stamp: stamps.get(profileDir)! })
+      .update((state) => { state.seq = 1; });
+    const purge = createProfileReplicaPurge({ profileDir, guard: sharedGuard });
+    expect((await purge.deny({ reason: "sign_out", principal: PRINCIPAL })).status).toBe("denied");
+    const report = await purge.recoverLogoutPending({
+      signal: new AbortController().signal,
+      clearCredentials: async () => { throw new Error("no marker must not shred credentials"); },
+      eraseLegacyReplicas: async () => { throw new Error("no marker must not erase legacy files"); },
+    });
+    expect(report).toMatchObject({ erased: [], failed: [], remaining: 1 });
+    expect(await filesNamed(dir, "pending.json")).toHaveLength(1);
+  });
+
   test("a durable CLI logout marker fences a second opened handle before credentials are removed", async () => {
     const dir = await makeDir();
     const profileDir = dirname(dir);
@@ -496,6 +513,86 @@ describe("mandatory Node lifecycle gate", () => {
     expect(existsSync(key)).toBe(false);
   });
 
+  test("already-denied gate still persists a marker for legacy cleanup across credential-unlink crash", async () => {
+    const dir = await makeDir();
+    const profileDir = dirname(dir);
+    const legacy = join(profileDir, "replicas", "notes");
+    await mkdir(legacy, { recursive: true });
+    await writeFile(join(legacy, "replica.db"), "unsynced legacy state");
+    const session = join(profileDir, "session.json");
+    const key = join(profileDir, "key.json");
+    await writeFile(session, "private session");
+    await writeFile(key, "private key");
+    const storage = createSqliteReplicaStorage(storageOptions());
+    await storage.pendingWrites!(identity(), { stamp: stamps.get(profileDir)! })
+      .update((state) => { state.seq = 1; });
+    const purge = createProfileReplicaPurge({ profileDir, guard: sharedGuard });
+    expect((await purge.deny({ reason: "sign_out", principal: PRINCIPAL })).status).toBe("denied");
+    await expect(purge.prepareLogoutPending({ principal: PRINCIPAL }))
+      .rejects.toThrow(/sync first.*--discard-local-changes/i);
+    expect(existsSync(join(profileDir, REPLICA_LOGOUT_PENDING_FILE))).toBe(false);
+    const marker = await purge.prepareLogoutPending({ principal: PRINCIPAL, discardLocalChanges: true });
+    expect(marker).toMatchObject({ v: 3, scope: "inactive_gate" });
+    await rm(session);
+    await rm(key);
+    const restarted = createProfileReplicaPurge({ profileDir, guard: sharedGuard });
+    const report = await restarted.recoverLogoutPending({
+      signal: new AbortController().signal,
+      clearCredentials: async () => {},
+      eraseLegacyReplicas: () => eraseLegacy(profileDir),
+    });
+    expect(report).toMatchObject({ failed: [], remaining: 0 });
+    expect(existsSync(join(profileDir, "replicas"))).toBe(false);
+    expect(existsSync(join(profileDir, REPLICA_LOGOUT_PENDING_FILE))).toBe(false);
+    expect(await filesNamed(dir, "pending.json")).toEqual([]);
+  });
+
+  test("inactive gate with only pending intents still requires a crash-replay marker", async () => {
+    const dir = await makeDir();
+    const profileDir = dirname(dir);
+    const storage = createSqliteReplicaStorage(storageOptions());
+    await storage.pendingWrites!(identity(), { stamp: stamps.get(profileDir)! })
+      .update((state) => { state.seq = 1; });
+    const purge = createProfileReplicaPurge({ profileDir, guard: sharedGuard });
+    expect((await purge.deny({ reason: "sign_out", principal: PRINCIPAL })).status).toBe("denied");
+    expect(await purge.prepareLogoutPending({ principal: PRINCIPAL }))
+      .toMatchObject({ v: 3, scope: "inactive_gate" });
+    const report = await createProfileReplicaPurge({ profileDir, guard: sharedGuard }).recoverLogoutPending({
+      signal: new AbortController().signal,
+      clearCredentials: async () => {},
+      eraseLegacyReplicas: async () => {},
+    });
+    expect(report).toMatchObject({ failed: [], remaining: 0 });
+    expect(await filesNamed(dir, "pending.json")).toEqual([]);
+  });
+
+  test("inactive gate marker cannot erase a successor account's legacy files", async () => {
+    const dir = await makeDir();
+    const profileDir = dirname(dir);
+    const legacy = join(profileDir, "replicas", "notes");
+    await mkdir(legacy, { recursive: true });
+    await writeFile(join(legacy, "replica.db"), "keep");
+    const purge = createProfileReplicaPurge({ profileDir, guard: sharedGuard });
+    expect((await purge.deny({ reason: "sign_out", principal: PRINCIPAL })).status).toBe("denied");
+    await purge.prepareLogoutPending({ principal: PRINCIPAL, discardLocalChanges: true });
+    const deniedAt = (await readGateSnapshot(profileDir))!.deniedAt!;
+    const originalNow = Date.now();
+    try {
+      setSystemTime(new Date(deniedAt + 2));
+      await establishSessionStamp(profileDir, "did:key:Successor", { siweIssuedAt: deniedAt + 1 });
+    } finally {
+      setSystemTime(originalNow);
+    }
+    const report = await purge.recoverLogoutPending({
+      signal: new AbortController().signal,
+      clearCredentials: async () => {},
+      eraseLegacyReplicas: () => eraseLegacy(profileDir),
+    });
+    expect(report.failed).toEqual([{ id: "logout", code: "REPLICA_GATED" }]);
+    expect(existsSync(join(legacy, "replica.db"))).toBe(true);
+    expect(existsSync(join(profileDir, REPLICA_LOGOUT_PENDING_FILE))).toBe(true);
+  });
+
   test("missing gate with profile replica files writes an orphan marker and recovers after a crash", async () => {
     const profileDir = await mkdtemp(join(tmpdir(), "tc858-orphan-replica-"));
     dirs.push(profileDir);
@@ -513,7 +610,7 @@ describe("mandatory Node lifecycle gate", () => {
     await writeFile(session, "session private key");
     await writeFile(key, "owner private key");
     const purge = createProfileReplicaPurge({ profileDir, guard: sharedGuard });
-    const marker = await purge.prepareLogoutPending({ principal: PRINCIPAL });
+    const marker = await purge.prepareLogoutPending({ principal: PRINCIPAL, discardLocalChanges: true });
     expect(marker).toMatchObject({ v: 2, scope: "orphan_profile" });
     expect(existsSync(join(profileDir, REPLICA_LOGOUT_PENDING_FILE))).toBe(true);
     expect(existsSync(session)).toBe(true);
@@ -556,6 +653,32 @@ describe("mandatory Node lifecycle gate", () => {
     });
     expect(recovered).toMatchObject({ failed: [], remaining: 0 });
     expect(existsSync(replicaRoot)).toBe(false);
+  });
+
+  test("nested legacy state and symlinks are indeterminate without explicit discard", async () => {
+    const profileDir = await mkdtemp(join(tmpdir(), "tc858-orphan-legacy-"));
+    const outside = await mkdtemp(join(tmpdir(), "tc858-legacy-outside-"));
+    dirs.push(profileDir, outside);
+    const root = join(profileDir, "replicas");
+    const legacy = join(root, "notes");
+    await mkdir(join(legacy, "nested"), { recursive: true });
+    await writeFile(join(legacy, "nested", "pending.json"), "unsynced state");
+    await writeFile(join(outside, "keep.db"), "outside");
+    await symlink(outside, join(legacy, "linked"), "dir");
+    const purge = createProfileReplicaPurge({ profileDir, guard: sharedGuard });
+    await expect(purge.prepareLogoutPending({ principal: PRINCIPAL }))
+      .rejects.toThrow(/sync first.*--discard-local-changes/i);
+    expect(existsSync(join(profileDir, REPLICA_LOGOUT_PENDING_FILE))).toBe(false);
+    expect(await purge.prepareLogoutPending({ principal: PRINCIPAL, discardLocalChanges: true }))
+      .toMatchObject({ v: 2, scope: "orphan_profile" });
+    const report = await purge.recoverLogoutPending({
+      signal: new AbortController().signal,
+      clearCredentials: async () => {},
+      eraseLegacyReplicas: async () => { throw new Error("v2 owns the legacy root"); },
+    });
+    expect(report).toMatchObject({ failed: [], remaining: 0 });
+    expect(existsSync(root)).toBe(false);
+    expect(existsSync(join(outside, "keep.db"))).toBe(true);
   });
 
   test("an inspected empty pending file does not require discard consent", async () => {
