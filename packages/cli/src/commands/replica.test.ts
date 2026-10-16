@@ -408,6 +408,29 @@ describe("replica reset purge containment", () => {
     }
   });
 
+  test("report refuses an absent profile even when it becomes a victim alias during context resolution", async () => {
+    await createProfile("victim");
+    const partition = join(PROFILES_DIR, "victim", "replication", "a".repeat(26));
+    await mkdir(partition, { recursive: true });
+    await writeFile(join(partition, "identity.json"), JSON.stringify({ host: "victim.example", space: "victim-space" }));
+    const selected = join(PROFILES_DIR, PROFILE);
+    await rm(selected, { recursive: true });
+    const originalResolve = ProfileManager.resolveContext;
+    ProfileManager.resolveContext = async function (globals) {
+      const context = await originalResolve.call(this, globals);
+      await symlink(join(PROFILES_DIR, "victim"), selected);
+      return context;
+    };
+    try {
+      const result = await readFromCli(PROFILE, ["replica", "report"]);
+      expect(result.exited).toBe(true);
+      expect(result.stdout).toBe("");
+      expect(result.stdout).not.toContain("victim.example");
+    } finally {
+      ProfileManager.resolveContext = originalResolve;
+    }
+  });
+
   test("a symlinked replica.db cannot acquire a lease in the victim database", async () => {
     await createProfile("victim");
     const own = await createReplica(PROFILE, config);
