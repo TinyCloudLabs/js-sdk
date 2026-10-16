@@ -470,11 +470,24 @@ export async function finishProfileLogout(
                 throw error;
               }
             } else {
-              marker = pendingMarker && profile.authSignedOut === true && options.discardLocalChanges
-                ? await purge.reapproveLogoutPending({ principal, approval })
-                : await purge.prepareLogoutPending({
-                    principal, approval, discardLocalChanges: options.discardLocalChanges === true,
-                  });
+              try {
+                marker = pendingMarker && profile.authSignedOut === true && options.discardLocalChanges
+                  ? await purge.reapproveLogoutPending({ principal, approval })
+                  : await purge.prepareLogoutPending({
+                      principal, approval, discardLocalChanges: options.discardLocalChanges === true,
+                    });
+              } catch (error) {
+                if (pendingMarker?.v === 2 && typeof error === "object" && error !== null &&
+                    "code" in error && error.code === "REPLICA_GATED" &&
+                    "gate" in error && error.gate === "gate_unavailable") {
+                  throw new CLIError("REPLICA_GATED",
+                    "The orphan replica gate cannot be validated after its durable logout marker. " +
+                    "Inspect replica-gate.json in this profile; resolve a corrupt file only after confirming it is not a valid replacement, " +
+                    "then retry `auth logout --discard-local-changes`. The marker remains and cleanup did not proceed.",
+                    ExitCode.ERROR);
+                }
+                throw error;
+              }
             }
           }
         }

@@ -676,6 +676,19 @@ for (const replacement of ["corrupt", "valid"] as const)
     await expect(readFile(paths.key)).rejects.toMatchObject({ code: "ENOENT" });
     expect(await Bun.file(paths.db).exists()).toBe(true);
     expect(await readFile(gatePath)).toEqual(replacementBytes);
+    if (replacement === "corrupt") {
+      await addUnknown(paths.unknown);
+      const reapproval = await run(home, ["auth", "logout", "--discard-local-changes"]);
+      expect(reapproval.exitCode).toBeGreaterThan(0);
+      expect(reapproval.stderr).toContain("replica-gate.json");
+      expect(networkPaths).toHaveLength(requestsBefore);
+      expect(await readFile(markerPath)).toEqual(marker);
+      await expect(readFile(paths.session)).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(readFile(paths.key)).rejects.toMatchObject({ code: "ENOENT" });
+      expect(await Bun.file(paths.db).exists()).toBe(true);
+      expect(await readFile(paths.unknown, "utf8")).toBe("unsynced future bytes");
+      await rm(paths.unknown);
+    }
 
     await rm(gatePath);
     const recovered = await run(home, ["auth", "status"]);
