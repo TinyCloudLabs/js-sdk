@@ -63,7 +63,12 @@ export function createReplicationEventSink(
         process.stderr.write(`[replication] ${event.op} ${event.keys.join(",")} ${event.outcome}${event.code ? ` ${event.code}` : ""}\n`);
       } else if (event.type === "replication.sync") {
         const pending = event.pendingCleared === undefined ? "" : ` pendingCleared:${event.pendingCleared}`;
-        process.stderr.write(`[replication] sync ${event.replica} ${event.outcome}${event.code ? ` ${event.code}` : ""}${pending}\n`);
+        const origin = event.origin === undefined ? "" : ` origin:${event.origin}`;
+        process.stderr.write(`[replication] sync ${event.replica} ${event.outcome}${event.code ? ` ${event.code}` : ""}${pending}${origin}\n`);
+      } else if (event.type === "replication.grant") {
+        process.stderr.write(`[replication] grant ${event.replicaId} ${event.action}${event.code ? ` ${event.code}` : ""}${event.effectiveExpiresAt ? ` effectiveExpiresAt:${event.effectiveExpiresAt}` : ""}\n`);
+      } else if (event.type === "replication.lifecycle") {
+        process.stderr.write(`[replication] lifecycle ${event.action}${event.reason ? ` ${event.reason}` : ""}${event.gate ? ` gate:${event.gate}` : ""}${event.code ? ` ${event.code}` : ""}${event.remaining === undefined ? "" : ` remaining:${event.remaining}`}\n`);
       }
     }
     if (event.type === "replication.read" && (event.pendingState === "in_flight" || event.pendingState === "ambiguous") && !options.quiet && !pinnedNotices.has(event.key)) {

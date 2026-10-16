@@ -9,6 +9,9 @@ export default defineConfig({
     "kv/index": "src/kv/index.ts",
     "kv/replication/index": "src/kv/replication/index.ts",
     "kv/replication/prefix": "src/kv/replication/prefix.ts",
+    "kv/replication/contractConstants": "src/kv/replication/contractConstants.ts",
+    "kv/replication/grantPolicyConstants": "src/kv/replication/grantPolicyConstants.ts",
+    "kv/replication/grantPolicyTypes": "src/kv/replication/grantPolicyTypes.ts",
     "sql/index": "src/sql/index.ts",
     "encryption/index": "src/encryption/index.ts",
     "internal/decrypt-transport-response-error":
