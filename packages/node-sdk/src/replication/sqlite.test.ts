@@ -2080,6 +2080,51 @@ describe("mandatory Node lifecycle gate", () => {
     expect(await filesNamed(dir, "pending.json")).toEqual([]);
   });
 
+  test("retries legacy cleanup after SQLite creates a known sidecar while denial is pending", async () => {
+    const dir = await makeDir();
+    const profileDir = dirname(dir);
+    const legacy = await makeLegacyMirror(profileDir);
+    const databasePath = join(legacy, "replica.db");
+    const purge = createProfileReplicaPurge({ profileDir, guard: sharedGuard });
+    const approval = await purge.preflightLogout({ principal: PRINCIPAL });
+    await purge.prepareLogoutPending({ principal: PRINCIPAL, approval });
+    const first = await purge.recoverLogoutPending({
+      signal: new AbortController().signal,
+      clearCredentials: async () => {},
+      eraseLegacyReplicas: async () => { throw Object.assign(new Error("busy lease"), { code: "BUSY" }); },
+    });
+    expect(first).toMatchObject({ failed: [{ id: "logout", code: "BUSY" }], remaining: 1 });
+    expect(existsSync(join(profileDir, REPLICA_LOGOUT_PENDING_FILE))).toBe(true);
+
+    const oldSidecar = join(profileDir, "held-original-shm");
+    await rename(`${databasePath}-shm`, oldSidecar);
+
+    const db = new Database(databasePath);
+    try {
+      db.exec("PRAGMA journal_mode = WAL");
+      db.query("SELECT name FROM sqlite_master LIMIT 1").get();
+      const sidecar = await openFile(`${databasePath}-shm`, "r");
+      try {
+        const current = await sidecar.stat();
+        const approved = approval.knownEntries.find((entry) => entry.path === "replicas/notes/replica.db-shm");
+        expect(current.ino.toString()).not.toBe(approved?.ino);
+      } finally {
+        await sidecar.close();
+      }
+      const retried = await createProfileReplicaPurge({ profileDir, guard: sharedGuard }).recoverLogoutPending({
+        signal: new AbortController().signal,
+        clearCredentials: async () => {},
+        eraseLegacyReplicas: async () => { db.close(); await eraseLegacy(profileDir); },
+      });
+      expect(retried).toMatchObject({ failed: [], remaining: 0 });
+      expect(existsSync(join(profileDir, REPLICA_LOGOUT_PENDING_FILE))).toBe(false);
+      expect(existsSync(databasePath)).toBe(false);
+    } finally {
+      db.close();
+      await rm(oldSidecar, { force: true });
+    }
+  });
+
   test("interruption after legacy unlink but before marker clear retries idempotently", async () => {
     const dir = await makeDir();
     const profileDir = dirname(dir);
