@@ -4,7 +4,7 @@
  * nothing is written into it.
  */
 import { afterAll, beforeEach, describe, expect, test } from "bun:test";
-import { mkdir, mkdtemp, readdir, rename, rm, stat, symlink, unlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rename, rm, stat, symlink, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Command } from "commander";
@@ -56,7 +56,7 @@ async function createProfile(name = PROFILE): Promise<void> {
   });
 }
 
-async function resetFromCli(profile: string, name: string): Promise<{ exited: boolean; stderr: string }> {
+async function resetFromCli(profile: string, name: string, purge = true): Promise<{ exited: boolean; stderr: string }> {
   const program = new Command();
   program.option("--profile <name>").option("--json");
   registerReplicaCommand(program);
@@ -69,7 +69,10 @@ async function resetFromCli(profile: string, name: string): Promise<{ exited: bo
     return true;
   }) as typeof process.stderr.write;
   try {
-    await program.parseAsync(["node", "tc", "--profile", profile, "--json", "replica", "reset", "--replica", name, "--purge"], { from: "node" });
+    await program.parseAsync(
+      ["node", "tc", "--profile", profile, "--json", "replica", "reset", "--replica", name, ...(purge ? ["--purge"] : [])],
+      { from: "node" },
+    );
     return { exited: false, stderr };
   } catch (error) {
     if (!(error instanceof Error) || error.message !== "expected CLI exit") throw error;
@@ -306,6 +309,33 @@ describe("replica reset purge containment", () => {
     expect(result.exited).toBe(true);
     expect(JSON.parse(result.stderr)).toMatchObject({ error: { code: "PROFILE_SYMLINK" } });
     expect(await exists(join(PROFILES_DIR, "victim", "replicas", "notes", "replica.db"))).toBe(true);
+  });
+
+  test("non-purge reset refuses a profile alias before opening or migrating its database", async () => {
+    await createProfile("victim");
+    const victim = await createReplica("victim", config);
+    await victim.close();
+    const victimDb = join(PROFILES_DIR, "victim", "replicas", "notes", "replica.db");
+    const sqlite = await loadSqlite();
+    const db = sqlite(victimDb);
+    try {
+      db.exec("PRAGMA user_version = 0");
+    } finally {
+      db.close();
+    }
+    const before = await readFile(victimDb);
+    await symlink(join(PROFILES_DIR, "victim"), join(PROFILES_DIR, "linked"));
+
+    const result = await resetFromCli("linked", "notes", false);
+    expect(result.exited).toBe(true);
+    expect(JSON.parse(result.stderr)).toMatchObject({ error: { code: "PROFILE_SYMLINK" } });
+    expect(await readFile(victimDb)).toEqual(before);
+    const readonly = sqlite(victimDb, { readonly: true });
+    try {
+      expect(readonly.get<{ user_version: number }>("PRAGMA user_version")?.user_version).toBe(0);
+    } finally {
+      readonly.close();
+    }
   });
 
   test("a symlinked replica.db cannot acquire a lease in the victim database", async () => {
