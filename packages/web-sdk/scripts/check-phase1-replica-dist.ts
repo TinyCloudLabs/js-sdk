@@ -3,20 +3,8 @@ import { cp, mkdtemp, readFile, rm } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { measureReplicaOptionalLoaded, type LoadedSizes } from "./measure-replica-optional";
+import { approvedPhase2, validateLedger, type GzipSizes, type Ledger, type LedgerEntry } from "./replica-size-policy";
 
-type GzipSizes = { "index.mjs": number; "index.cjs": number };
-type LedgerEntry = { pr: string; ticket: string; "index.mjs": number; "index.cjs": number; note: string };
-type Phase2Ratchet = {
-  label: string;
-  base: string;
-  toolchain: string;
-  baseline: GzipSizes;
-  delta: GzipSizes;
-  ceiling: GzipSizes;
-  rationale: { module: string; controlledMarginalBeforeSafeCuts: GzipSizes; requiredAtLoad: string }[];
-  safeCuts: string;
-};
-type Ledger = { allowance: GzipSizes; entries: LedgerEntry[]; phase2Ratchet?: Phase2Ratchet };
 type OptionalEntry = LoadedSizes & { pr: string; ticket: string; note: string };
 type OptionalLedger = { allowance: LoadedSizes; entries: OptionalEntry[]; relocations?: unknown; measurementCorrection?: unknown };
 type Baseline = {
@@ -90,7 +78,8 @@ const correctedOptionalAllowance: LoadedSizes = {
 const approvedMeasurementCorrection = {
   commit: "ce52494d0cb1ea236578bc6b709e9e6e016f8c78",
   ciRun: "38958197518",
-  buildEvidence: "artifact://1325",
+  ciJob: "117166290134",
+  reproduce: "At detached ce52494d, PATH=<Bun-1.3.14-bin>:$PATH bun install --frozen-lockfile && PATH=<Bun-1.3.14-bin>:$PATH bunx turbo build --filter=@tinycloud/web-sdk... --force && PATH=<Bun-1.3.14-bin>:$PATH bun packages/web-sdk/scripts/measure-replica-optional.ts; repeat the measurement with Bun 1.4.3 on the same built dist.",
   previousToolchain: "Bun 1.4.3",
   canonicalToolchain: "Bun 1.3.14",
   previousFirstImport: { "replica.mjs": 45538, "replica.cjs": 65096 },
@@ -101,63 +90,12 @@ const approvedRelocations = [
   { commit: relocationCommit, bucket: "web-core", "index.mjs": -143, "index.cjs": -130 },
   { commit: relocationCommit, bucket: "web-optional:first-import", "replica.mjs": 150, "replica.cjs": 170 },
 ];
-const approvedPhase2 = {
-  label: "TC-858 Phase 2 (#548 stack): security fences + required sync paths, approved by Naomi 2026-10-16",
-  base: "9891ed9dddc19a57198ed156804948e04d8ea025",
-  toolchain: "Bun 1.3.14; CI Rust 1.99.0; production webpack; gzip -9 -c",
-  baseline: { "index.mjs": 1460603, "index.cjs": 1390460 },
-  delta: { "index.mjs": 1322, "index.cjs": 1205 },
-  ceiling: { "index.mjs": 1461925, "index.cjs": 1391665 },
-} as const;
 const preexistingS3Entry: LedgerEntry = {
   pr: "#553", ticket: "TC-858", "index.mjs": 52, "index.cjs": 55,
   note: "Replica gzip growth measured against this PR's merge base 9516f840 (includes S1 #550 kv-storage code merged into this branch)",
 };
 let failed = false;
 
-function validateLedger(value: Ledger): void {
-  if (!value || !value.allowance || !Array.isArray(value.entries) ||
-      Object.keys(value).some((key) => key !== "allowance" && key !== "entries" && key !== "phase2Ratchet")) {
-    throw new Error("Invalid packages/web-sdk/scripts/replica-size-ledger.json shape");
-  }
-  if (Object.keys(value.allowance).some((key) => !formats.includes(key as (typeof formats)[number]))) {
-    throw new Error("Invalid packages/web-sdk/scripts/replica-size-ledger.json allowance shape");
-  }
-  for (const format of formats) {
-    if (!Number.isFinite(value.allowance[format])) {
-      throw new Error(`Invalid packages/web-sdk/scripts/replica-size-ledger.json allowance for ${format}`);
-    }
-  }
-  for (const entry of value.entries) {
-    if (!entry || Object.keys(entry).some((key) =>
-      key !== "pr" && key !== "ticket" && key !== "note" && !formats.includes(key as (typeof formats)[number])) ||
-        typeof entry.pr !== "string" || typeof entry.ticket !== "string" || typeof entry.note !== "string" ||
-        formats.some((format) => !Number.isFinite(entry[format]))) {
-      throw new Error("Invalid packages/web-sdk/scripts/replica-size-ledger.json entries[] item");
-    }
-  }
-  const row = value.phase2Ratchet;
-  if (row !== undefined) {
-    if (value.allowance["index.mjs"] !== 388 || value.allowance["index.cjs"] !== 861 ||
-        !row || Object.keys(row).some((key) =>
-          !["label", "base", "toolchain", "baseline", "delta", "ceiling", "rationale", "safeCuts"].includes(key)) ||
-        row.label !== approvedPhase2.label || row.base !== approvedPhase2.base ||
-        row.toolchain !== approvedPhase2.toolchain ||
-        formats.some((format) => row.baseline?.[format] !== approvedPhase2.baseline[format] ||
-          row.delta?.[format] !== approvedPhase2.delta[format] ||
-          row.ceiling?.[format] !== approvedPhase2.ceiling[format] ||
-          row.baseline[format] + row.delta[format] !== row.ceiling[format]) ||
-        !Array.isArray(row.rationale) || row.rationale.length < 3 ||
-        row.rationale.some((item) => !item || Object.keys(item).some((key) =>
-          !["module", "controlledMarginalBeforeSafeCuts", "requiredAtLoad"].includes(key)) ||
-          typeof item.module !== "string" || item.module.length === 0 ||
-          typeof item.requiredAtLoad !== "string" || item.requiredAtLoad.length < 40 ||
-          formats.some((format) => !Number.isSafeInteger(item.controlledMarginalBeforeSafeCuts?.[format]))) ||
-        typeof row.safeCuts !== "string" || row.safeCuts.length < 40) {
-      throw new Error("TC-858 Phase 2 root ratchet must match Naomi's exact master9891 approval and document nonadditive file marginals");
-    }
-  }
-}
 function validateOptionalLedger(value: OptionalLedger): void {
   const path = "packages/web-sdk/scripts/replica-optional-size-ledger.json";
   if (!value || !value.allowance || !Array.isArray(value.entries) ||
@@ -265,7 +203,7 @@ if (prBaseSha) {
   } else {
     throw new Error(`Unable to read base ${baseLedgerPath}: ${baseLedgerResult.stderr.trim()}`);
   }
-  validateLedger(baseLedger);
+  validateLedger(baseLedger, true);
   const baseOptionalPath = "packages/web-sdk/scripts/replica-optional-size-ledger.json";
   const optionalResult = spawnSync("git", ["show", `${mergeBase}:${baseOptionalPath}`], {
     cwd: repoRoot, encoding: "utf8",

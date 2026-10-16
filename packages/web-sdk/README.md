@@ -82,9 +82,10 @@ wallet. An unknown, unavailable, or different provider account leaves network
 use intact and gates local reads; restoring never creates or repairs a replica
 stamp. Local reads recheck the connected account before returning replica data.
 
-Size accounting uses the replica-size CI toolchain (Bun 1.3.14, Rust 1.99.0),
-an absolute web-root ceiling, and separate opt-in first-import, activation,
-and worker ceilings. TC-858 Phase 2 is capped at 1,461,925 B ESM /
+Size accounting uses the replica-e2e **Node size job** (Bun 1.3.14,
+Rust 1.99.0), an absolute web-root ceiling, and separate opt-in first-import,
+activation, and worker ceilings.
+TC-858 Phase 2 is capped at 1,461,925 B ESM /
 1,391,665 B CJS gzip for the root: +1,322 / +1,205 B against the official
 master `9891ed9d` build (1,460,603 / 1,390,460 B). Base re-measured with
 the official recipe; the provisional base is superseded. This approved ratchet
@@ -104,9 +105,11 @@ The first-import ceiling is a measurement correction, not allowance for new
 adapter code: exact `ce52494d` built with Bun 1.3.14 measured 51,201/66,132 B,
 versus 45,538/65,096 B with Bun 1.4.3 on the same built SDK. Both builds
 resolved the same 25 modules; Bun's emitted minified/chunk graph differed.
-The replica-size CI run [38958197518](https://github.com/TinyCloudLabs/js-sdk/actions/runs/38958197518)
-pins Bun 1.3.14. The official checker remains authoritative for the root;
-local Rust/WASM rebuild differences do not change its absolute ceiling.
+The [replica-e2e Node size job 117166290134](https://github.com/TinyCloudLabs/js-sdk/actions/runs/38958197518/job/117166290134)
+pins Bun 1.3.14 and Rust 1.99.0 for the Phase-1 size step; its separate
+browser job uses a different Rust version. The official checker remains
+authoritative for the root; local Rust/WASM rebuild differences do not change
+its absolute ceiling.
 
 ## Basic Storage Operations
 
