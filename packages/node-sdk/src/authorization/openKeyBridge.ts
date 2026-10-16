@@ -56,7 +56,7 @@ export interface OpenKeyBridgeInput {
   siwe: string;
   jwk: Record<string, unknown>;
   /** SDK-prepared session-key DID, for local handoff consistency only; not an OpenKey request field. */
-  verificationMethod: string;
+  readonly verificationMethod: string;
   host?: string;
   /** Optional keyId hint the caller wants OpenKey to bind to. */
   keyId?: string;
