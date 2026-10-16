@@ -1207,7 +1207,19 @@ export function createSqliteReplicaStorage(
   const lifecycle: ReplicaLifecycleGate & ProfileReplicaPurge = {
     kind: "file",
     async recover({ signal }) {
-      return lifecycle.erasePending({ signal });
+      try {
+        return await lifecycle.erasePending({ signal });
+      } catch (error) {
+        const code = typeof error === "object" && error !== null && "code" in error && typeof error.code === "string"
+          ? error.code : "STORAGE_ERROR";
+        let remaining = 0;
+        try {
+          remaining = (await (await fileGate()).readGateSnapshot(profileDir))?.intents.length ?? 0;
+        } catch {
+          // Failed inspection is already represented by the failed gate entry.
+        }
+        return { erased: [], failed: [{ id: "gate", code }], remaining };
+      }
     },
     async establishSessionStamp(principal, { consentAnchor }) {
       if (consentAnchor?.source === "first_install" || !Number.isSafeInteger(consentAnchor?.at) || consentAnchor.at < 0) {
@@ -1240,7 +1252,7 @@ export function createSqliteReplicaStorage(
         return await profileSection(async () => {
           const state = await gate.readGateSnapshot(profileDir);
           return state !== undefined && !state.eraseDeferred && state.intents.length === 0 &&
-            (state.principalHash === null || state.principalHash === await gate.principalHashOf(state.salt, next));
+            state.principalHash !== null && state.principalHash === await gate.principalHashOf(state.salt, next);
         });
       } catch {
         return false;

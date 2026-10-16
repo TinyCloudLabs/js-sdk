@@ -280,6 +280,20 @@ describe("mandatory Node lifecycle gate", () => {
     expect(await filesNamed(dir, "device.jwk")).toEqual([]);
   });
 
+  test("recover reports a busy profile lock without erasing pending files", async () => {
+    const dir = await makeDir();
+    const active = createSqliteReplicaStorage(storageOptions());
+    await active.pendingWrites!(identity(), { stamp: stamps.get(dirname(dir))! })
+      .update((state) => { state.seq = 1; });
+    expect((await active.lifecycle!.deny({ reason: "sign_out", principal: PRINCIPAL })).status).toBe("denied");
+    const busy = createSqliteReplicaStorage(storageOptions({
+      guard: async () => { throw Object.assign(new Error("Profile lock busy"), { code: "BUSY" }); },
+    }));
+    const report = await busy.lifecycle!.recover({ signal: new AbortController().signal });
+    expect(report).toMatchObject({ erased: [], failed: [{ id: "gate", code: "REPLICA_GATED" }], remaining: 1 });
+    expect(await filesNamed(dir, "pending.json")).toHaveLength(1);
+  });
+
   test("deferred revoke survives restart without erasing files, then resumes the exact denial", async () => {
     const dir = await makeDir();
     const profileDir = dirname(dir);
@@ -372,6 +386,7 @@ describe("mandatory Node lifecycle gate", () => {
     expect(await purge.deferredErase()).toEqual(token);
     expect(await createSqliteReplicaStorage(storageOptions()).lifecycle!.activationAllowed("did:key:Bob")).toBe(false);
     await purge.resumeDeferredErase(token, { signal: new AbortController().signal });
+    expect(await createSqliteReplicaStorage(storageOptions()).lifecycle!.activationAllowed("did:key:Bob")).toBe(false);
     const deniedAt = (await readGateSnapshot(profileDir))!.deniedAt!;
     const originalNow = Date.now();
     try {
@@ -382,6 +397,7 @@ describe("mandatory Node lifecycle gate", () => {
     } finally {
       setSystemTime(originalNow);
     }
+    expect(await createSqliteReplicaStorage(storageOptions()).lifecycle!.activationAllowed("did:key:Bob")).toBe(true);
     await expect(purge.resumeDeferredErase(token, { signal: new AbortController().signal }))
       .rejects.toMatchObject({ code: "REPLICA_GATED", gate: "stamp_stale" });
   });
