@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { ok, type Result } from "../../types";
+import { err, ok, type Result } from "../../types";
 import { begin, settle } from "./pendingWrites";
 import type { KVListOptions, KVResponse } from "../types";
 import { canonicalReplicationIdentity } from "./identity";
@@ -147,6 +147,175 @@ function setup({ durable = true, pendingStore, initialEpoch = 0, onSync, statusO
 
 const readRequest = (network: () => Promise<Result<KVResponse<unknown>>>) => ({ space: identity.space, key: "notes/a", path: "notes/a", options: undefined, signal: new AbortController().signal, network });
 const listRequest = (options: KVListOptions | undefined, network: () => Promise<Result<KVListPage>>) => ({ space: identity.space, listPath: "notes/", options, signal: new AbortController().signal, network });
+
+describe("rejected network read-through events", () => {
+  test("a stale gate reports one failed network event per get/list without opening", async () => {
+    const env = setup({ delivery: () => ({ status: "gated", gate: "stamp_stale" }) });
+    const offline = Object.assign(new Error("offline by fixture"), { code: "NETWORK_ERROR" });
+    let requests = 0;
+    const network = async (): Promise<never> => { requests++; throw offline; };
+    await expect(env.controller.get(readRequest(network))).rejects.toBe(offline);
+    await expect(env.controller.list(listRequest(undefined, network))).rejects.toBe(offline);
+    expect(requests).toBe(2);
+    expect(env.counters()).toMatchObject({ opens: 0, localReads: 0, installs: 0 });
+    expect(env.listReads()).toBe(0);
+    expect(env.events.filter((event) => event.type === "replication.read")).toEqual([
+      expect.objectContaining({ op: "get", source: "network", reason: "replica_gated", code: "REPLICA_GATED", outcome: "error" }),
+      expect.objectContaining({ op: "list", source: "network", reason: "replica_gated", code: "REPLICA_GATED", outcome: "error" }),
+    ]);
+  });
+
+  test("a gate refusal at open retains the failed-network event and never reads local bytes", async () => {
+    const env = setup({ delivery: () => ({ status: "allow" }), openError: "REPLICA_GATED", consentAnchor: { at: 1_000_000, source: "siwe" } });
+    const offline = Object.assign(new Error("offline by fixture"), { code: "NETWORK_ERROR" });
+    let requests = 0;
+    const network = async (): Promise<never> => { requests++; throw offline; };
+    await expect(env.controller.get(readRequest(network))).rejects.toBe(offline);
+    await expect(env.controller.list(listRequest(undefined, network))).rejects.toBe(offline);
+    expect(requests).toBe(2);
+    expect(env.counters()).toMatchObject({ opens: 2, localReads: 0, installs: 0 });
+    expect(env.listReads()).toBe(0);
+    expect(env.events.filter((event) => event.type === "replication.read")).toEqual([
+      expect.objectContaining({ op: "get", source: "network", reason: "replica_gated", code: "REPLICA_GATED", outcome: "error" }),
+      expect.objectContaining({ op: "list", source: "network", reason: "replica_gated", code: "REPLICA_GATED", outcome: "error" }),
+    ]);
+  });
+
+  test("a compact current-session refusal reports its own code when network rejects", async () => {
+    const env = setup({ sessionOnly: true, sessionRefusal: () => "NOT_COVERED", delivery: () => ({ status: "allow" }) });
+    const offline = Object.assign(new Error("offline by fixture"), { code: "NETWORK_ERROR" });
+    const network = async (): Promise<never> => { throw offline; };
+    await expect(env.controller.get(readRequest(network))).rejects.toBe(offline);
+    await expect(env.controller.list(listRequest(undefined, network))).rejects.toBe(offline);
+    expect(env.counters()).toMatchObject({ opens: 0, localReads: 0, installs: 0 });
+    expect(env.events.filter((event) => event.type === "replication.read")).toEqual([
+      expect.objectContaining({ op: "get", source: "network", reason: "grant_missing", code: "NOT_COVERED", outcome: "error" }),
+      expect.objectContaining({ op: "list", source: "network", reason: "grant_missing", code: "NOT_COVERED", outcome: "error" }),
+    ]);
+  });
+  test("a compact refusal discovered after local get never retries a rejected network fallback", async () => {
+    let refused: AuthorityRefusal["refused"] | null = null;
+    const env = setup({
+      sessionOnly: true,
+      sessionRefusal: () => refused,
+      delivery: () => ({ status: "allow" }),
+      beforeLocalGet: () => { refused = "SESSION_EXPIRING"; },
+    });
+    const offline = Object.assign(new Error("offline by fixture"), { code: "NETWORK_ERROR" });
+    let requests = 0;
+    const network = async (): Promise<never> => { requests++; throw offline; };
+    await expect(env.controller.get(readRequest(network))).rejects.toBe(offline);
+    expect(requests).toBe(1);
+    expect(env.counters()).toMatchObject({ localReads: 1 });
+    expect(env.events.filter((event) => event.type === "replication.read")).toEqual([
+      expect.objectContaining({ op: "get", source: "network", reason: "grant_missing", code: "SESSION_EXPIRING", outcome: "error" }),
+    ]);
+  });
+
+  test("a compact refusal discovered after local list never retries a rejected network fallback", async () => {
+    let refused: AuthorityRefusal["refused"] | null = null;
+    const env = setup({
+      sessionOnly: true,
+      sessionRefusal: () => refused,
+      delivery: () => ({ status: "allow" }),
+      statusImpl: async () => { refused = "CAVEATED_AUTHORITY"; return status(); },
+    });
+    const offline = Object.assign(new Error("offline by fixture"), { code: "NETWORK_ERROR" });
+    let requests = 0;
+    const network = async (): Promise<never> => { requests++; throw offline; };
+    await expect(env.controller.list(listRequest(undefined, network))).rejects.toBe(offline);
+    expect(requests).toBe(1);
+    expect(env.listReads()).toBe(1);
+    expect(env.events.filter((event) => event.type === "replication.read")).toEqual([
+      expect.objectContaining({ op: "list", source: "network", reason: "grant_missing", code: "CAVEATED_AUTHORITY", outcome: "error" }),
+    ]);
+  });
+
+  for (const [code, reason] of [["REPLICA_GATED", "replica_gated"], ["GRANT_EXPIRED", "grant_expired"]] as const) {
+    test(`an opened replica ${code} refusal reports failed get/list network reads`, async () => {
+      const env = setup({
+        delivery: () => ({ status: "allow" }),
+        consentAnchor: { at: 1_000_000, source: "siwe" },
+        statusImpl: async () => { throw Object.assign(new Error("local status gated"), { code }); },
+      });
+      const offline = Object.assign(new Error("offline by fixture"), { code: "NETWORK_ERROR" });
+      let requests = 0;
+      const network = async (): Promise<never> => { requests++; throw offline; };
+      await expect(env.controller.get(readRequest(network))).rejects.toBe(offline);
+      await expect(env.controller.list(listRequest(undefined, network))).rejects.toBe(offline);
+      expect(requests).toBe(2);
+      expect(env.counters()).toMatchObject({ opens: 1, localReads: 0 });
+      expect(env.listReads()).toBe(0);
+      expect(env.events.filter((event) => event.type === "replication.read")).toEqual([
+        expect.objectContaining({ op: "get", source: "network", reason, code, outcome: "error" }),
+        expect.objectContaining({ op: "list", source: "network", reason, code, outcome: "error" }),
+      ]);
+    });
+  }
+  test("a gate revoked during pending-state read keeps the gated reason on offline get/list", async () => {
+    const env = setup({
+      delivery: () => ({ status: "allow" }),
+      consentAnchor: { at: 1_000_000, source: "siwe" },
+      beforePendingRead: () => { throw Object.assign(new Error("pending gate stale"), { code: "REPLICA_GATED" }); },
+    });
+    const offline = Object.assign(new Error("offline by fixture"), { code: "NETWORK_ERROR" });
+    let requests = 0;
+    const network = async (): Promise<never> => { requests++; throw offline; };
+    await expect(env.controller.get(readRequest(network))).rejects.toBe(offline);
+    await expect(env.controller.list(listRequest(undefined, network))).rejects.toBe(offline);
+    expect(requests).toBe(2);
+    expect(env.counters()).toMatchObject({ localReads: 0 });
+    expect(env.listReads()).toBe(0);
+    expect(env.events.filter((event) => event.type === "replication.read")).toEqual([
+      expect.objectContaining({ op: "get", source: "network", reason: "replica_gated", code: "REPLICA_GATED", outcome: "error" }),
+      expect.objectContaining({ op: "list", source: "network", reason: "replica_gated", code: "REPLICA_GATED", outcome: "error" }),
+    ]);
+  });
+  test("a pending write discovered after local list reports one network error without retry", async () => {
+    const offline = Object.assign(new Error("offline by fixture"), { code: "NETWORK_ERROR" });
+    let requests = 0;
+    const env = setup({
+      beforePendingRead: async () => {
+        if (env.listReads() !== 1) return;
+        await env.pending.update((state) => { begin(state, "late", [{ key: "notes/a", op: "put" }], new Date(1_000_000).toISOString()); });
+      },
+    });
+    const network = async (): Promise<never> => { requests++; throw offline; };
+    await expect(env.controller.list(listRequest(undefined, network))).rejects.toBe(offline);
+    expect(requests).toBe(1);
+    expect(env.events.filter((event) => event.type === "replication.read")).toEqual([
+      expect.objectContaining({ op: "list", source: "network", reason: "pending_write", outcome: "error", pendingState: "in_flight" }),
+    ]);
+  });
+
+  test("a pending get fallback reports a thrown network error once", async () => {
+    const env = setup();
+    await env.pending.update((state) => { begin(state, "pending", [{ key: "notes/a", op: "put" }], new Date(1_000_000).toISOString()); });
+    const offline = Object.assign(new Error("offline by fixture"), { code: "NETWORK_ERROR" });
+    let requests = 0;
+    const network = async (): Promise<never> => { requests++; throw offline; };
+    await expect(env.controller.get(readRequest(network))).rejects.toBe(offline);
+    expect(requests).toBe(1);
+    expect(env.events.filter((event) => event.type === "replication.read")).toEqual([
+      expect.objectContaining({ op: "get", source: "network", reason: "pending_write", outcome: "error", pendingState: "in_flight" }),
+    ]);
+  });
+
+  test("a gated read-through reports an error Result once for get and list", async () => {
+    const env = setup({ delivery: () => ({ status: "gated", gate: "stamp_stale" }) });
+    const failure = err(wrapError("kv", Object.assign(new Error("offline"), { code: "NETWORK_ERROR" })));
+    let requests = 0;
+    const network = async () => { requests++; return failure; };
+    expect(await env.controller.get(readRequest(network))).toBe(failure);
+    expect(await env.controller.list(listRequest(undefined, network))).toBe(failure);
+    expect(requests).toBe(2);
+    expect(env.events.filter((event) => event.type === "replication.read")).toEqual([
+      expect.objectContaining({ op: "get", source: "network", reason: "replica_gated", code: "REPLICA_GATED", outcome: "error" }),
+      expect.objectContaining({ op: "list", source: "network", reason: "replica_gated", code: "REPLICA_GATED", outcome: "error" }),
+    ]);
+  });
+
+});
 
 describe("consent deadline delivery", () => {
   test("an expired unopened session never opens a replica or fabricates a grant event", async () => {
