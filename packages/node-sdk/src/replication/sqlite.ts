@@ -1807,19 +1807,19 @@ export function createSqliteReplicaStorage(
   /** The marker is only a network-retry fence after the scoped gate is denied. */
   async function validatedRemoteMarker(
     marker: ProfileReplicaLogoutPending, principal: string, allowActive: boolean,
-  ): Promise<void> {
+  ): Promise<FileGateState | undefined> {
     if (marker.principalDigest !== logoutPrincipalDigest(principal)) throw gated("principal_mismatch");
     const gate = await fileGate();
     const state = await gate.readGateSnapshot(profileDir);
     if (marker.v === 2) {
       if (state !== undefined) throw gated("stamp_stale");
-      return;
+      return state;
     }
     if (state === undefined || state.incarnation !== marker.incarnation) throw gated("stamp_stale");
     if (marker.v === 3) {
       if (state.lifecycleEpoch !== marker.lifecycleEpoch ||
           state.principalHash !== null || state.eraseDeferred) throw gated("stamp_stale");
-      return;
+      return state;
     }
     if (marker.principalHash !== await gate.principalHashOf(state.salt, principal)) {
       throw gated("principal_mismatch");
@@ -1829,6 +1829,7 @@ export function createSqliteReplicaStorage(
     const active = state.lifecycleEpoch === marker.lifecycleEpoch &&
       state.principalHash === marker.principalHash;
     if (!denied && !(allowActive && active)) throw gated("stamp_stale");
+    return state;
   }
   async function commitPlainAbandon(
     path: string, marker: ProfileReplicaLogoutPending, report: ProfileReplicaPreflight,
@@ -2051,6 +2052,9 @@ export function createSqliteReplicaStorage(
         }
         if (previous !== null) {
           if (previous.principalDigest !== logoutPrincipalDigest(principal)) throw gated("principal_mismatch");
+          // The marker has no original corrupt-gate identity: never unlink a file
+          // first observed only after that marker was committed.
+          if (corruptGate) throw gated("gate_unavailable");
           if (state === undefined ? previous.v !== 2 :
               previous.v === 2 || previous.incarnation !== state.incarnation ||
               !(previous.lifecycleEpoch === state.lifecycleEpoch ||
@@ -2072,7 +2076,6 @@ export function createSqliteReplicaStorage(
           if (previous.remotePending !== remotePending || previous.remoteAbandoned) {
             throw gated("gate_unavailable");
           }
-          if (corruptGate) await removeCorruptOrphanGate(gate);
           return previous;
         }
         if (state?.eraseDeferred) throw gated("stamp_stale");
@@ -2183,13 +2186,7 @@ export function createSqliteReplicaStorage(
         const marker = await readLogoutMarker(path);
         if (marker === null || marker.remotePending) throw gated("gate_unavailable");
         if (marker.principalDigest !== logoutPrincipalDigest(principal)) throw gated("principal_mismatch");
-        const gate = await fileGate();
-        let state: FileGateState | undefined;
-        try { state = await gate.readGateSnapshot(profileDir); } catch { /* Corrupt gate: inventory remains unknown. */ }
-        if (marker.v === 1 && (state === undefined ||
-            marker.principalHash !== await gate.principalHashOf(state.salt, principal))) {
-          throw gated("principal_mismatch");
-        }
+        const state = await validatedRemoteMarker(marker, principal, true);
         const report = await inspectProfileReplicaLayout(profileDir, state !== undefined);
         assertSupportedProfileLayout(report);
         assertApprovedInventory(report, approval);

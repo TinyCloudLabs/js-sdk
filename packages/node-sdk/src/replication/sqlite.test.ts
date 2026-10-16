@@ -1820,6 +1820,79 @@ describe("mandatory Node lifecycle gate", () => {
     expect(existsSync(join(legacy, "replica.db"))).toBe(false);
   });
 
+  test("orphan marker retry does not unlink a newly corrupt replacement gate", async () => {
+    const profileDir = await mkdtemp(join(tmpdir(), "tc858-orphan-retry-gate-"));
+    dirs.push(profileDir);
+    await mkdir(join(profileDir, "replication"));
+    const legacy = await makeLegacyMirror(profileDir);
+    const session = join(profileDir, "session.json");
+    const key = join(profileDir, "key.json");
+    await writeFile(session, "network session");
+    await writeFile(key, "owner key");
+    const purge = createProfileReplicaPurge({ profileDir, guard: sharedGuard });
+    const approval = await purge.preflightLogout({ principal: PRINCIPAL });
+    const original = await purge.prepareLogoutPending({ principal: PRINCIPAL, approval });
+    expect(original).toMatchObject({ v: 2, scope: "orphan_profile" });
+    const markerPath = join(profileDir, REPLICA_LOGOUT_PENDING_FILE);
+    const markerBytes = await readFile(markerPath, "utf8");
+    const gatePath = join(profileDir, REPLICA_GATE_FILE);
+    await writeFile(gatePath, "{new-corrupt-gate");
+    const fresh = await purge.preflightLogout({ principal: PRINCIPAL, discardLocalChanges: true });
+    await expect(purge.prepareLogoutPending({
+      principal: PRINCIPAL, approval: fresh, discardLocalChanges: true,
+    })).rejects.toMatchObject({ code: "REPLICA_GATED", gate: "gate_unavailable" });
+    expect(await readFile(markerPath, "utf8")).toBe(markerBytes);
+    expect(await readFile(gatePath, "utf8")).toBe("{new-corrupt-gate");
+    expect(await readFile(session, "utf8")).toBe("network session");
+    expect(await readFile(key, "utf8")).toBe("owner key");
+    expect(existsSync(join(legacy, "replica.db"))).toBe(true);
+    await rm(gatePath);
+    expect(await purge.prepareLogoutPending({ principal: PRINCIPAL, approval })).toEqual(original);
+    const recovered = await purge.recoverLogoutPending({
+      signal: new AbortController().signal,
+      clearCredentials: async () => { await rm(session); await rm(key); },
+      eraseLegacyReplicas: () => eraseLegacy(profileDir),
+    });
+    expect(recovered).toMatchObject({ failed: [], remaining: 0 });
+  });
+
+  for (const version of [2, 3] as const) {
+    test(`v${version} reapproval refuses a newly corrupt gate without changing marker or credentials`, async () => {
+      const profileDir = version === 2
+        ? await mkdtemp(join(tmpdir(), "tc858-orphan-reapprove-gate-"))
+        : dirname(await makeDir());
+      if (version === 2) {
+        dirs.push(profileDir);
+        await mkdir(join(profileDir, "replication"));
+      }
+      const legacy = await makeLegacyMirror(profileDir);
+      const session = join(profileDir, "session.json");
+      const key = join(profileDir, "key.json");
+      await writeFile(session, "network session");
+      await writeFile(key, "owner key");
+      const purge = createProfileReplicaPurge({ profileDir, guard: sharedGuard });
+      if (version === 3) expect((await purge.deny({ reason: "sign_out", principal: PRINCIPAL })).status)
+        .toBe("denied");
+      const initial = await purge.preflightLogout({ principal: PRINCIPAL });
+      expect(await purge.prepareLogoutPending({ principal: PRINCIPAL, approval: initial }))
+        .toMatchObject({ v: version });
+      const markerPath = join(profileDir, REPLICA_LOGOUT_PENDING_FILE);
+      const markerBytes = await readFile(markerPath, "utf8");
+      await writeFile(join(legacy, "after-marker.bin"), "new local data");
+      const gatePath = join(profileDir, REPLICA_GATE_FILE);
+      await writeFile(gatePath, "{new-corrupt-gate");
+      const fresh = await purge.preflightLogout({ principal: PRINCIPAL, discardLocalChanges: true });
+      await expect(purge.reapproveLogoutPending({ principal: PRINCIPAL, approval: fresh }))
+        .rejects.toMatchObject({ code: "REPLICA_GATED", gate: "gate_unavailable" });
+      expect(await readFile(markerPath, "utf8")).toBe(markerBytes);
+      expect(await readFile(gatePath, "utf8")).toBe("{new-corrupt-gate");
+      expect(await readFile(session, "utf8")).toBe("network session");
+      expect(await readFile(key, "utf8")).toBe("owner key");
+      expect(await readFile(join(legacy, "after-marker.bin"), "utf8")).toBe("new local data");
+      expect(existsSync(join(legacy, "replica.db"))).toBe(true);
+    });
+  }
+
   test("orphan cleanup refuses a corrupt replacement gate before credential or replica erasure", async () => {
     const profileDir = await mkdtemp(join(tmpdir(), "tc858-orphan-replaced-gate-"));
     dirs.push(profileDir);
