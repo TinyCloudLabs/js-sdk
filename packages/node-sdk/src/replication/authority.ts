@@ -241,6 +241,7 @@ export function createReplicationAuthority(host: ReplicationAuthorityHost): Repl
     sessionGrant(prefix: string): { ucan: string; device: ReplicaDevice } | AuthorityRefusal {
       const session = activeSession();
       if (session === undefined) return { refused: "SESSION_EXPIRING" };
+      if (verifiedAnchor === null) return { refused: "NOT_COVERED" };
       const siweExpiry = session.siwe ? host.siweExpiration(session.siwe)?.getTime() : undefined;
       if (siweExpiry !== undefined && siweExpiry <= Date.now() + AUTHORITY_EXPIRY_MARGIN_MS) {
         return { refused: "SESSION_EXPIRING" };
@@ -271,6 +272,7 @@ export function createReplicationAuthority(host: ReplicationAuthorityHost): Repl
     plan(prefix: string): DelegationPlanResult | AuthorityRefusal {
       const session = activeSession();
       if (session === undefined) return { refused: "SESSION_EXPIRING" };
+      if (verifiedAnchor === null) return { refused: "NOT_COVERED" };
       const sessionGrant = this.sessionGrant(prefix);
       if (!("refused" in sessionGrant)) {
         const signed = signedSessionGrant(session);

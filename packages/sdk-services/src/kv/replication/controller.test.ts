@@ -6,7 +6,7 @@ import { canonicalReplicationIdentity } from "./identity";
 import { createKVReplication } from "./controller";
 import { encodeTcr1 } from "./listLocal";
 import { createMemoryPendingStore } from "./memoryPendingStore";
-import type { KVListPage, KVReplicaHandle, KVReplicaSpec, KVReplicaStorage, LocalReplicaStatus, ReplicaInspectedStatus, PendingWriteStore, ReplicationEvent, ResolvedReplicationOptions } from "./types";
+import type { AuthorityRefusal, KVListPage, KVReplicaHandle, KVReplicaSpec, KVReplicaStorage, LocalReplicaStatus, ReplicaInspectedStatus, PendingWriteStore, ReplicationEvent, ResolvedReplicationOptions } from "./types";
 import { RequestTimeoutError, wrapError } from "../../errors";
 import { CONSENT_WINDOW_MS, DEFAULT_GRANT_TTL_MS } from "./contractConstants";
 
@@ -21,7 +21,7 @@ function lastEvent(events: readonly ReplicationEvent[], matches: (event: Replica
 }
 
 
-function setup({ durable = true, pendingStore, initialEpoch = 0, onSync, statusOverrides = {}, localGetStatus = "present", localGetErrorCode = "INTEGRITY_ERROR", beforeLocalGet, syncOutcome = "synced", mode = "foreground", purgeImpl, verify = false, openError, runtimeMint, sessionOnly = false, sessionRefused = false, canRenew = false, planPath = "runtime", setTimeoutImpl = () => () => undefined, beforePendingRead, afterPendingRead, statusImpl, inspectStatus, prefixes = options.prefixes, nodeFeatures, allowSecrets = false, delivery, onDeny, consentAnchor, durableDeadline, anchorError = false }: {
+function setup({ durable = true, pendingStore, initialEpoch = 0, onSync, statusOverrides = {}, localGetStatus = "present", localGetErrorCode = "INTEGRITY_ERROR", beforeLocalGet, syncOutcome = "synced", mode = "foreground", purgeImpl, verify = false, openError, runtimeMint, sessionOnly = false, sessionRefused = false, sessionRefusal, canRenew = false, planPath = "runtime", setTimeoutImpl = () => () => undefined, beforePendingRead, afterPendingRead, statusImpl, inspectStatus, prefixes = options.prefixes, nodeFeatures, allowSecrets = false, delivery, onDeny, consentAnchor, durableDeadline, anchorError = false }: {
   durable?: boolean;
   pendingStore?: PendingWriteStore;
   initialEpoch?: number;
@@ -38,6 +38,7 @@ function setup({ durable = true, pendingStore, initialEpoch = 0, onSync, statusO
   runtimeMint?: (signal: AbortSignal, options?: { expiryMs: number }) => Promise<{ ucan: string; parentCid: string; expiresAt: number }>;
   sessionOnly?: boolean;
   sessionRefused?: boolean;
+  sessionRefusal?: () => AuthorityRefusal["refused"] | null;
   canRenew?: boolean;
   planPath?: "session" | "runtime";
   setTimeoutImpl?: (fn: () => void, ms: number) => () => void;
@@ -118,7 +119,12 @@ function setup({ durable = true, pendingStore, initialEpoch = 0, onSync, statusO
     sessionOnly,
     canRenew,
     consentAnchor: () => { if (anchorError) throw new Error("authority proof unavailable"); return consentAnchor ?? null; },
-    sessionGrant: () => sessionRefused || runtimeMint ? { refused: "NOT_COVERED" as const } : ({ ucan: "token", device: { did: identity.principal, jwk: {} } }),
+    sessionGrant: () => {
+      const refusal = sessionRefusal?.();
+      return refusal ? { refused: refusal } : sessionRefused || runtimeMint
+        ? { refused: "NOT_COVERED" as const }
+        : { ucan: "token", device: { did: identity.principal, jwk: {} } };
+    },
     plan: () => {
       if (sessionOnly) throw new Error("session-only authority consulted the plan");
       return runtimeMint ? { path: planPath, parentCid: "parent", expiresAt: now + 60_000 } : { refused: "NOT_COVERED" as const };
@@ -263,7 +269,6 @@ describe("consent deadline delivery", () => {
     const env = setup({
       durableDeadline: 1_000_000 + CONSENT_WINDOW_MS,
       sessionOnly: true,
-      sessionRefused: true,
       statusOverrides: { grant: { ...status().grant!, installedAt: 1_000_000, effectiveExpiresAt: 1_000_000 + DEFAULT_GRANT_TTL_MS, consentDeadline: 1_000_000 + 2 * CONSENT_WINDOW_MS } },
       delivery: () => ({ status: "allow" }),
       setTimeoutImpl: (_run, ms) => { timers.push(ms); return () => undefined; },
@@ -386,6 +391,26 @@ describe("consent deadline delivery", () => {
     expect(env.events.some((event) => event.type === "replication.divergence")).toBe(false);
     expect(env.events).toContainEqual(expect.objectContaining({ type: "replication.read", source: "network", reason: "grant_expired", code: "CONSENT_EXPIRED" }));
   });
+  test("verified get drops local bytes when compact session authority disappears during network comparison", async () => {
+    let refused: AuthorityRefusal["refused"] | null = null;
+    const env = setup({ sessionOnly: true, verify: true, sessionRefusal: () => refused, delivery: () => ({ status: "allow" }) });
+    const result = await env.controller.get(readRequest(async () => {
+      refused = "NOT_COVERED";
+      return ok({ data: "network", headers: { get: () => null } });
+    }));
+    expect(result.ok && result.data.data).toBe("network");
+    expect(env.events.some((event) => event.type === "replication.divergence")).toBe(false);
+  });
+  test("verified list drops local keys when compact session authority disappears during network comparison", async () => {
+    let refused: AuthorityRefusal["refused"] | null = null;
+    const env = setup({ sessionOnly: true, verify: true, sessionRefusal: () => refused, delivery: () => ({ status: "allow" }) });
+    const result = await env.controller.list(listRequest(undefined, async () => {
+      refused = "CAVEATED_AUTHORITY";
+      return ok({ keys: ["network/a"] });
+    }));
+    expect(result).toMatchObject({ ok: true, data: { keys: ["network/a"] } });
+    expect(env.events.some((event) => event.type === "replication.divergence")).toBe(false);
+  });
   test("browser refuses local serving when its durable deadline is unavailable despite a signed anchor", async () => {
     const env = setup({
       consentAnchor: { at: 1_000_000, source: "siwe" },
@@ -454,10 +479,9 @@ describe("consent deadline delivery", () => {
     expect(result.ok && result.data.data).toBe("local");
     expect(durations).toEqual([DEFAULT_GRANT_TTL_MS]);
   });
-  test("a matching compact restore serves only its installed grant under the durable deadline", async () => {
+  test("a matching compact restore serves only an active installed grant covered by its current session", async () => {
     const env = setup({
       sessionOnly: true,
-      sessionRefused: true,
       durableDeadline: 1_000_000 + CONSENT_WINDOW_MS,
       delivery: () => ({ status: "allow" }),
     });
@@ -465,14 +489,79 @@ describe("consent deadline delivery", () => {
     expect(result.ok && result.data.data).toBe("local");
     expect(env.counters()).toMatchObject({ installs: 0, networkCalls: 0 });
   });
-  test("a compact restored grant with missing or expired effective authority cannot serve local bytes", async () => {
+  test("a valid installed compact grant never overrides a current-session refusal", async () => {
+    for (const refused of ["NOT_COVERED", "CAVEATED_AUTHORITY", "SESSION_EXPIRING"] as const) {
+      const env = setup({
+        sessionOnly: true,
+        sessionRefusal: () => refused,
+        delivery: () => ({ status: "allow" }),
+      });
+      const get = await env.controller.get(readRequest(env.network));
+      const list = await env.controller.list(listRequest(undefined, async () => ok({ keys: ["network/a"] })));
+      expect(get.ok && get.data.data).toBe("network");
+      expect(list).toMatchObject({ ok: true, data: { keys: ["network/a"] } });
+      expect(env.counters()).toMatchObject({ localReads: 0, installs: 0, networkCalls: 1 });
+      expect(env.listReads()).toBe(0);
+    }
+  });
+  test("a compact current-session refusal after open blocks further local get and list", async () => {
+    let refused: AuthorityRefusal["refused"] | null = null;
+    const env = setup({
+      sessionOnly: true,
+      sessionRefusal: () => refused,
+      delivery: () => ({ status: "allow" }),
+    });
+    const local = await env.controller.get(readRequest(env.network));
+    expect(local.ok && local.data.data).toBe("local");
+    refused = "SESSION_EXPIRING";
+    const network = await env.controller.get(readRequest(env.network));
+    expect(network.ok && network.data.data).toBe("network");
+    expect(await env.controller.list(listRequest(undefined, async () => ok({ keys: ["network/a"] }))))
+      .toMatchObject({ ok: true, data: { keys: ["network/a"] } });
+    expect(env.counters()).toMatchObject({ localReads: 1, networkCalls: 1 });
+    expect(env.listReads()).toBe(0);
+  });
+  test("a compact authority refusal restarts an existing local list cursor without exposing keys", async () => {
+    let refused: AuthorityRefusal["refused"] | null = null;
+    const env = setup({
+      sessionOnly: true,
+      sessionRefusal: () => refused,
+      delivery: () => ({ status: "allow" }),
+    });
+    const first = await env.controller.list(listRequest(undefined, async () => ok({ keys: ["network/a"] })));
+    expect(first).toMatchObject({ ok: true, data: { keys: ["notes/a"] } });
+    refused = "CAVEATED_AUTHORITY";
+    let networkCalls = 0;
+    const cursor = encodeTcr1(identity.space, "notes/", "notes/a");
+    const next = await env.controller.list(listRequest({ cursor }, async () => {
+      networkCalls++;
+      return ok({ keys: ["network/a"] });
+    }));
+    expect(next.ok).toBe(false);
+    if (!next.ok) expect(next.error.meta).toMatchObject({ replication: "cursor_restart" });
+    expect(env.listReads()).toBe(1);
+    expect(networkCalls).toBe(0);
+  });
+  test("a compact refusal after open cannot sync through the stored grant", async () => {
+    let refused: AuthorityRefusal["refused"] | null = null;
+    const env = setup({
+      sessionOnly: true,
+      sessionRefusal: () => refused,
+      delivery: () => ({ status: "allow" }),
+    });
+    const local = await env.controller.get(readRequest(env.network));
+    expect(local.ok && local.data.data).toBe("local");
+    refused = "NOT_COVERED";
+    await env.controller.sync().catch(() => undefined);
+    expect(env.counters().syncs).toBe(0);
+  });
+  test("a stale installed compact grant cannot serve even with current-session coverage", async () => {
     for (const grant of [
       { ...status().grant!, installedAt: 1_000_000, consentDeadline: 1_000_000 + CONSENT_WINDOW_MS },
       { ...status().grant!, installedAt: 1_000_000, effectiveExpiresAt: 1_000_000, consentDeadline: 1_000_000 + CONSENT_WINDOW_MS },
     ]) {
       const env = setup({
         sessionOnly: true,
-        sessionRefused: true,
         statusOverrides: { grant },
         delivery: () => ({ status: "allow" }),
       });
@@ -609,12 +698,12 @@ describe("whole-space replication", () => {
 });
 describe("KVReplication fallback and pending behavior", () => {
   test("session-only refusal ignores an installed grant and serves the network", async () => {
-    const env = setup({ sessionOnly: true, sessionRefused: true });
+    const env = setup({ sessionOnly: true, sessionRefused: true, delivery: () => ({ status: "allow" }) });
     const result = await env.controller.get(readRequest(env.network));
     expect(result.ok && result.data.data).toBe("network");
     expect(env.counters().localReads).toBe(0);
     expect(env.counters().networkCalls).toBe(1);
-    expect(env.events.some((event) => event.type === "replication.state" && event.state === "grant_missing")).toBe(true);
+    expect(env.counters().opens).toBe(0);
     expect(env.events.some((event) => event.type === "replication.read" && event.source === "network" && event.reason === "grant_missing")).toBe(true);
   });
   test("a previously installed grant cannot outlive the current session authority", async () => {
