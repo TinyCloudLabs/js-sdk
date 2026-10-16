@@ -48,21 +48,15 @@ console.log(result.data); // { hello: 'world' }
 
 ## Optional local KV replication
 
-Install `@tinycloud/replica` and register the browser replication loaders **before**
-constructing a replication-enabled client:
+Install `@tinycloud/replica`, then load and register the optional browser plugin
+**before** constructing a replication-enabled client:
 
 ```typescript
-import { TinyCloudWeb, registerReplicationLoaders } from '@tinycloud/web-sdk';
-import { indexedDbReplicaStorage } from '@tinycloud/replica/kv-storage';
+import { TinyCloudWeb, registerBrowserReplica } from '@tinycloud/web-sdk';
+import { browserReplicaPlugin, loadIndexedDbReplicaStorage } from '@tinycloud/web-sdk/replica';
 
-registerReplicationLoaders({
-  runtime: () => import('@tinycloud/node-sdk/replication/runtime'),
-  authority: () => import('@tinycloud/node-sdk/replication/authority'),
-  gate: async () => {
-    throw new Error('Browser replicas use IndexedDB, not the Node file gate');
-  },
-});
-
+const indexedDbReplicaStorage = await loadIndexedDbReplicaStorage();
+registerBrowserReplica(browserReplicaPlugin);
 const tc = new TinyCloudWeb({
   replication: {
     enabled: true,
@@ -72,9 +66,13 @@ const tc = new TinyCloudWeb({
 });
 ```
 
-Without registration, enabling replication throws at construction; leaving
-replication off requires no registration. A refused local replica does not end
-an otherwise valid network session.
+Importing the optional entry alone does not register loaders or touch IndexedDB.
+Duplicate registration throws immediately; enabling replication without
+registration throws at construction. Replication off requires no plugin, and a
+refused local replica does not end an otherwise valid network session.
+
+Use the same module format for registration and the client: importing both
+ESM and CJS root bundles in one process creates independent module registries.
 
 `signIn()` selects a persisted session for the currently connected wallet;
 switching wallets starts a fresh sign-in instead of reviving the prior wallet's

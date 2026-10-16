@@ -105,17 +105,24 @@ const { restoreDataFromPersisted } = require("../src/modules/browserSessionPersi
 const { dispatchSDKEvent } = require("../src/notifications");
 const { TinyCloudNode, NodeWasmBindings, PrivateKeySigner } = require("@tinycloud/node-sdk");
 
-test("replication opt-in requires explicit browser loaders before construction", () => {
-  let previous: ReturnType<typeof getNodeReplicationLoaders> | undefined;
-  try { previous = getNodeReplicationLoaders(); } catch { /* No registration in this realm. */ }
-  registerReplicationLoaders(undefined as never);
-  try {
-    expect(() => new TinyCloudWeb({
-      replication: { enabled: true, prefixes: ["notes/"], storage: { kind: "indexeddb" } as never },
-    })).toThrow("registerReplicationLoaders");
-  } finally {
-    registerReplicationLoaders(previous as never);
-  }
+test("optional replica import is inert until one explicit root registration", () => {
+  const plugin = require("../src/replica").browserReplicaPlugin;
+  const { registerBrowserReplica } = require("../src/modules/tcw");
+  const config = {
+    replication: { enabled: true, prefixes: ["notes/"], storage: { kind: "indexeddb" } as never },
+  };
+  expect(() => new TinyCloudWeb(config)).toThrow("registerBrowserReplica");
+  registerBrowserReplica(plugin);
+  expect(() => registerBrowserReplica(plugin)).toThrow("already registered");
+  expect(() => new TinyCloudWeb({ ...config, replication: {
+    ...config.replication, grantTtlMs: 8 * 24 * 60 * 60 * 1000,
+  } })).toThrow(TypeError);
+  expect(() => new TinyCloudWeb({ ...config, replication: {
+    ...config.replication, prefixes: ["notes/", "notes/sub/"],
+  } })).toThrow(TypeError);
+  expect(() => new TinyCloudWeb({ ...config, replication: {
+    ...config.replication, prefixes: ["/"],
+  } })).toThrow(TypeError);
 });
 
 test("passes persisted additional spaces and expiry through browser restore data", () => {

@@ -1,6 +1,6 @@
 import { afterEach, expect, test } from "bun:test";
 import type { TinyCloudNodeConfig } from "./TinyCloudNode";
-import { registerReplicationLoaders, TinyCloudNode } from "./core";
+import { getNodeReplicationLoaders, registerReplicationLoaders, TinyCloudNode } from "./core";
 import type { ReplicationModuleLoaders } from "./replication/module-registry";
 
 const storage = {
@@ -17,7 +17,25 @@ function loaders(): ReplicationModuleLoaders {
   };
 }
 
+const wasmBindings = {
+  createSessionManager: () => ({
+    createSessionKey: (id: string) => id,
+    getDID: (id: string) => `did:key:${id}`,
+    jwk: () => JSON.stringify({ kty: "OKP", crv: "Ed25519", x: "synthetic" }),
+  }),
+} as never;
+
 afterEach(() => registerReplicationLoaders(loaders()));
+test("/core without replication does not register or load replica modules", () => {
+  registerReplicationLoaders(undefined as never);
+  const node = new TinyCloudNode({
+    wasmBindings,
+    replication: { enabled: false, prefixes: ["notes/"], storage },
+  } satisfies TinyCloudNodeConfig);
+  expect(node.replication).toBeUndefined();
+  expect(() => getNodeReplicationLoaders()).toThrow("registering replication controller loaders");
+});
+
 
 test("/core enables replication when browser-safe controller loaders are registered", async () => {
   let runtimeLoads = 0;
@@ -40,13 +58,6 @@ test("/core enables replication when browser-safe controller loaders are registe
     gate: async () => import("@tinycloud/replica/profile-gate"),
   });
 
-  const wasmBindings = {
-    createSessionManager: () => ({
-      createSessionKey: (id: string) => id,
-      getDID: (id: string) => `did:key:${id}`,
-      jwk: () => JSON.stringify({ kty: "OKP", crv: "Ed25519", x: "synthetic" }),
-    }),
-  } as never;
   const node = new TinyCloudNode({
     wasmBindings,
     replication: { enabled: true, prefixes: ["notes/"], storage },

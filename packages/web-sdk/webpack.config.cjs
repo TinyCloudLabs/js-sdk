@@ -155,4 +155,32 @@ const cjsConfig = {
   },
 };
 
-module.exports = [esmConfig, cjsConfig];
+// Keep the optional browser adapter external: kv-storage has an ESM-only entry,
+// while the authority parser and profile gate also expose CJS entrypoints.
+const replicaExternals = (moduleType) => ({ request }, callback) => {
+  if (request && /^@tinycloud\/replica(?:\/|$)/.test(request)) {
+    callback(null, `${request === "@tinycloud/replica/kv-storage" ? "import" : moduleType} ${request}`);
+    return;
+  }
+  callback();
+};
+
+const replicaEsmConfig = {
+  ...esmConfig,
+  entry: "./src/replica.ts",
+  externals: replicaExternals("module"),
+  output: { ...esmConfig.output, filename: "replica.mjs" },
+};
+
+const replicaCjsConfig = {
+  ...cjsConfig,
+  entry: "./src/replica.ts",
+  externals: replicaExternals("commonjs"),
+  output: {
+    ...cjsConfig.output,
+    filename: "replica.cjs",
+    environment: { ...cjsConfig.output.environment, dynamicImport: true },
+  },
+};
+
+module.exports = [esmConfig, cjsConfig, replicaEsmConfig, replicaCjsConfig];
