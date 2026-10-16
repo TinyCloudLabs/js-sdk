@@ -1,5 +1,13 @@
 # @tinycloudlabs/web-sdk
 
+## 3.2.6-beta.3
+
+### Patch Changes
+
+- 41e5fca: A pending persisted-session restore or delegation activation no longer resumes after `signOut()` if it was waiting for storage or SDK initialization. The signed-out session stays inactive, and a later explicit sign-in can start a new session. If replacement session-key creation fails during sign-out, the node still retires the old authority and clears its persisted session.
+- Updated dependencies [41e5fca]
+  - @tinycloud/node-sdk@3.2.6-beta.3
+
 ## 3.2.6-beta.2
 
 ### Patch Changes
