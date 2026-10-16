@@ -64,9 +64,6 @@ export type IndexedDbReplicaStorageOptions = {
   ledger?: Pick<ReplicaQuotaLedger<IDBTransaction>, "accountErase">;
 };
 
-/** Test seam: `@tinycloud/replica/kv-storage/testing` terminates the storage's worker through it. */
-export const KILL_WORKER = Symbol.for("tinycloud.replica.kv-storage.killWorker");
-
 function replyError(err: KvWireError): ReplicaError {
   const error = new ReplicaError(err.code as ReplicaErrorCode, err.message, err.detail);
   // Contract shape for gate refusals: `Error & { code: "REPLICA_GATED"; gate }`.
@@ -584,10 +581,6 @@ class IndexedDbReplicaStorage implements ReplicaGatedStorage {
       ...(this.#options.gateTx === undefined ? {} : { gateTx: this.#options.gateTx }),
       ...(options.stamp === undefined ? {} : { stamp: options.stamp }),
     });
-  }
-
-  [KILL_WORKER](): void {
-    this.#connection?.kill(new ReplicaError(ReplicaErrorCode.STORAGE_ERROR, "The replica worker was terminated."));
   }
 }
 
