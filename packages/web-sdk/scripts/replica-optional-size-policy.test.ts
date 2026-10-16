@@ -7,7 +7,7 @@ import {
 
 const current = JSON.parse(readFileSync(resolve(import.meta.dir, "replica-optional-size-ledger.json"), "utf8")) as OptionalLedger;
 const copy = () => structuredClone(current);
-const observed = { "replica.mjs": 51786, "replica.cjs": 66995, "activation.mjs": 23073, "activation.cjs": 24653 };
+const observed = { "replica.mjs": 51785, "replica.cjs": 66995, "activation.mjs": 23071, "activation.cjs": 24650 };
 
 describe("TC-858 optional loaded-byte policy", () => {
   it("accepts the exact approved first-import, activation and refused-admission ledger", () => {
@@ -28,6 +28,20 @@ describe("TC-858 optional loaded-byte policy", () => {
     const changed = copy();
     changed.allowance["activation.cjs"]++;
     expect(() => validateOptionalLedger(changed, true, true)).toThrow();
+  });
+
+  it("rejects the old local first-import and activation readings as canonical allowances", () => {
+    const oldLocal = copy();
+    oldLocal.allowance["replica.mjs"] = 51786;
+    oldLocal.allowance["activation.mjs"] = 23073;
+    oldLocal.allowance["activation.cjs"] = 24653;
+    expect(() => validateOptionalLedger(oldLocal, true, true)).toThrow();
+    expect(() => validateOptionalEntryTransition([], [{
+      ...current.entries[0],
+      "replica.mjs": 51786,
+      "activation.mjs": 23073,
+      "activation.cjs": 24653,
+    }], observed, "#548")).toThrow();
   });
 
   it("rejects a changed measurement correction witness", () => {
@@ -64,7 +78,7 @@ describe("TC-858 merge-base optional ledger prefix", () => {
   });
 
   it("rejects a stale, missing or duplicate unmerged #548 measurement", () => {
-    const stale = { ...current.entries[0], "activation.cjs": 24654 };
+    const stale = { ...current.entries[0], "activation.cjs": 24651 };
     expect(() => validateOptionalEntryTransition([], [stale], observed, "#548")).toThrow();
     expect(() => validateOptionalEntryTransition([], [], observed, "#548")).toThrow();
     expect(() => validateOptionalEntryTransition([], [current.entries[0], current.entries[0]], observed, "#548")).toThrow();

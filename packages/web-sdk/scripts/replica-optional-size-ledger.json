@@ -1,9 +1,9 @@
 {
   "allowance": {
-    "replica.mjs": 51786,
+    "replica.mjs": 51785,
     "replica.cjs": 66995,
-    "activation.mjs": 23073,
-    "activation.cjs": 24653
+    "activation.mjs": 23071,
+    "activation.cjs": 24650
   },
   "relocations": [
     {
@@ -42,11 +42,11 @@
     {
       "pr": "#548",
       "ticket": "TC-858",
-      "replica.mjs": 51786,
+      "replica.mjs": 51785,
       "replica.cjs": 66995,
-      "activation.mjs": 23073,
-      "activation.cjs": 24653,
-      "note": "Unmerged #548 Bun 1.3.14 / CI rustc 1.99.0 observed incremental gzip against merge-base 8bfd6df4 (no optional entry): first import shares the root and includes the parser; activation adds the deferred IDB factory. The earlier 51785/66995 first-import and 23071/24650 activation readings remain in canonicalToolchainCorrection history; this row has zero additional headroom. The refused-admission-only observer is separately capped at 926/1014, and the hashed worker has its own ratchet."
+      "activation.mjs": 23071,
+      "activation.cjs": 24650,
+      "note": "Unmerged #548 first-import and activation gzip measured by both GitHub replica-e2e Node size jobs 117210798521 and 117210798348 in run 38971529166 against merge-base 8bfd6df4 (no optional entry): first import shares the root and includes the parser; activation adds the deferred IDB factory. Previous local 51786/66995 first-import and 23073/24653 activation readings are non-canonical and remain in canonicalToolchainCorrection.priorNoncanonical. These observed amounts have zero additional headroom. The refused-admission-only observer is separately capped at 926/1014, and the hashed worker has its own ratchet."
     }
   ]
 }

@@ -105,8 +105,14 @@ describe("TC-858 CI Rust toolchain measurement correction", () => {
     label: "TC-858 #548 canonical CI toolchain measurement correction, zero headroom",
     approvedSource: "ddc032caef81a2177e7f9c30a6a28a8f593a4580",
     policyOnlyThrough: "2acd4ac57697333ebe780bc69a54e9586e164998",
-    ciRun: "38958197518",
-    ciJob: "117166290134",
+    ciRun: "38971529166",
+    ciJob: "117210798521",
+    ciSecondJob: "117210798348",
+    ciRunUrl: "https://github.com/TinyCloudLabs/js-sdk/actions/runs/38971529166",
+    ciJobUrls: [
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/38971529166/job/117210798521",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/38971529166/job/117210798348",
+    ],
     toolchain: { bun: "1.3.14", rustc: "1.99.0" },
     historical: {
       master: { "index.mjs": 1460603, "index.cjs": 1390460 },
@@ -115,15 +121,61 @@ describe("TC-858 CI Rust toolchain measurement correction", () => {
       firstImportCeiling: { "replica.mjs": 51785, "replica.cjs": 66995 },
       activation: { "activation.mjs": 23071, "activation.cjs": 24650 },
     },
-    measured: {
+    priorNoncanonical: {
       master: { "index.mjs": 1462685, "index.cjs": 1393687 },
-      delta: { "index.mjs": 1504, "index.cjs": 1348 },
       rootCeiling: { "index.mjs": 1464189, "index.cjs": 1395035 },
       firstImportCeiling: { "replica.mjs": 51786, "replica.cjs": 66995 },
       activationCeiling: { "activation.mjs": 23073, "activation.cjs": 24653 },
     },
-    reason: "The approved shipped source is unchanged from ddc032ca; CI rustc 1.99.0 and Bun 1.3.14 rebuild master and candidate with the same WASM. The old values remain in the historical rows; measured candidate ceilings add no headroom.",
+    measured: {
+      master: { "index.mjs": 1462590, "index.cjs": 1393500 },
+      delta: { "index.mjs": 1512, "index.cjs": 1369 },
+      rootCeiling: { "index.mjs": 1464102, "index.cjs": 1394869 },
+      firstImportCeiling: { "replica.mjs": 51785, "replica.cjs": 66995 },
+      activationCeiling: { "activation.mjs": 23071, "activation.cjs": 24650 },
+    },
+    reason: "GitHub replica-e2e Node size jobs 117210798521 and 117210798348 in run 38971529166 independently measured the same master9891 and #548 e5b080d5 build under CI Bun 1.3.14 and rustc 1.99.0. Local rebuilds, including the previous 1462685/1393687 master baseline, are non-canonical smoke tests. The GitHub candidate sets stricter zero-headroom root and first-import ceilings without changing shipped source or historical rows.",
   };
+
+  it("binds zero-headroom correction to GitHub's two identical #548 Node size jobs", () => {
+    const correction = current.canonicalToolchainCorrection!;
+    expect(correction.ciRun).toBe("38971529166");
+    expect(correction.ciJob).toBe("117210798521");
+    expect(correction.ciSecondJob).toBe("117210798348");
+    expect(correction.ciRunUrl).toBe("https://github.com/TinyCloudLabs/js-sdk/actions/runs/38971529166");
+    expect(correction.ciJobUrls).toEqual([
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/38971529166/job/117210798521",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/38971529166/job/117210798348",
+    ]);
+    expect(correction.measured).toEqual({
+      master: { "index.mjs": 1462590, "index.cjs": 1393500 },
+      delta: { "index.mjs": 1512, "index.cjs": 1369 },
+      rootCeiling: { "index.mjs": 1464102, "index.cjs": 1394869 },
+      firstImportCeiling: { "replica.mjs": 51785, "replica.cjs": 66995 },
+      activationCeiling: { "activation.mjs": 23071, "activation.cjs": 24650 },
+    });
+    expect(correction.priorNoncanonical).toEqual({
+      master: { "index.mjs": 1462685, "index.cjs": 1393687 },
+      rootCeiling: { "index.mjs": 1464189, "index.cjs": 1395035 },
+      firstImportCeiling: { "replica.mjs": 51786, "replica.cjs": 66995 },
+      activationCeiling: { "activation.mjs": 23073, "activation.cjs": 24653 },
+    });
+  });
+
+  it("rejects changes to GitHub provenance, prior local smoke values, or tight root caps", () => {
+    const job = copy(current);
+    job.canonicalToolchainCorrection!.ciJobUrls = [
+      job.canonicalToolchainCorrection!.ciJobUrls[0],
+      "https://example.invalid/other-job",
+    ];
+    expect(() => validateLedger(job)).toThrow();
+    const previous = copy(current);
+    previous.canonicalToolchainCorrection!.priorNoncanonical.master["index.cjs"]++;
+    expect(() => validateLedger(previous)).toThrow();
+    const extraByte = copy(current);
+    extraByte.canonicalToolchainCorrection!.measured.rootCeiling["index.cjs"]++;
+    expect(() => validateLedger(extraByte)).toThrow();
+  });
 
   it("accepts exactly the measured CI correction while preserving the old Phase 2 and fix-required rows", () => {
     expect(() => validateLedger(corrected)).not.toThrow();
