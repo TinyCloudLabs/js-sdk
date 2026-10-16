@@ -142,6 +142,104 @@ test("plain logout overrides a failed remote revocation and ends the retained se
   await expect(readFile(join(paths.directory, REPLICA_LOGOUT_PENDING_FILE))).rejects.toMatchObject({ code: "ENOENT" });
 }, 30_000);
 
+test("changed inventory before plain override leaves failed remote logout retryable", async () => {
+  const { home, paths, networkPaths, setMode } = await fixture();
+  await addUnknown(paths.unknown);
+  setMode("fail");
+  const failed = await run(home, ["auth", "logout", "--revoke", "--discard-local-changes"]);
+  expect(failed.exitCode).toBeGreaterThan(0);
+  const markerPath = join(paths.directory, REPLICA_LOGOUT_PENDING_FILE);
+  const marker = await readFile(markerPath);
+  expect(JSON.parse(marker.toString()).remotePending).toBe(true);
+  const session = await readFile(paths.session);
+  const key = await readFile(paths.key);
+  const db = await readFile(paths.db);
+  const latePath = join(dirname(paths.unknown), "late-write.pending");
+  await addUnknown(latePath);
+  const before = networkPaths.length;
+
+  const refused = await run(home, ["auth", "logout", "--discard-local-changes"]);
+  expect(refused.exitCode).toBeGreaterThan(0);
+  expect(refused.stderr).toContain("late-write.pending");
+  expect(networkPaths).toHaveLength(before);
+  expect(await readFile(markerPath)).toEqual(marker);
+  expect(await readFile(paths.session)).toEqual(session);
+  expect(await readFile(paths.key)).toEqual(key);
+  expect(await readFile(paths.db)).toEqual(db);
+  expect(await readFile(paths.unknown, "utf8")).toBe("unsynced future bytes");
+  expect(await readFile(latePath, "utf8")).toBe("unsynced future bytes");
+  expect(JSON.parse(await readFile(join(paths.directory, "profile.json"), "utf8")).authSignedOut).not.toBe(true);
+  const token = refused.stderr.match(/--approve-inventory ([0-9a-f]{32})\b/)?.[1];
+  expect(token).toBeDefined();
+  const secondLatePath = join(dirname(paths.unknown), "still-later.pending");
+  await addUnknown(secondLatePath);
+  const stale = await run(home, ["auth", "logout", "--discard-local-changes", "--approve-inventory", token!]);
+  expect(stale.exitCode).toBeGreaterThan(0);
+  expect(stale.stderr).toContain("still-later.pending");
+  const freshToken = stale.stderr.match(/--approve-inventory ([0-9a-f]{32})\b/)?.[1];
+  expect(freshToken).toMatch(/^[0-9a-f]{32}$/);
+  expect(freshToken).not.toBe(token);
+  expect(await readFile(markerPath)).toEqual(marker);
+  expect(await readFile(paths.session)).toEqual(session);
+  expect(await readFile(paths.key)).toEqual(key);
+  expect(networkPaths).toHaveLength(before);
+
+  const confirmed = await run(home, ["auth", "logout", "--discard-local-changes", "--approve-inventory", freshToken!]);
+  expect(confirmed.exitCode, confirmed.stderr).toBe(0);
+  expect(networkPaths).toHaveLength(before);
+  for (const file of [paths.session, paths.key, paths.db, paths.unknown, latePath, secondLatePath, markerPath]) {
+    await expect(readFile(file)).rejects.toMatchObject({ code: "ENOENT" });
+  }
+  const reused = await run(home, ["auth", "logout", "--discard-local-changes", "--approve-inventory", freshToken!]);
+  expect(reused.exitCode).toBeGreaterThan(0);
+  expect(networkPaths).toHaveLength(before);
+}, 30_000);
+
+test("inventory approval requires both a token and explicit discard consent", async () => {
+  const { home, paths, networkPaths } = await fixture();
+  const session = await readFile(paths.session);
+  const key = await readFile(paths.key);
+  for (const [args, message] of [
+    [["auth", "logout", "--approve-inventory"], /--approve-inventory.*(requires|missing)/i],
+    [["auth", "logout", "--approve-inventory", "0".repeat(32)], /--discard-local-changes/],
+  ] as const) {
+    const refused = await run(home, args);
+    expect(refused.exitCode).toBeGreaterThan(0);
+    expect(refused.stderr).toMatch(message);
+    expect(await readFile(paths.session)).toEqual(session);
+    expect(await readFile(paths.key)).toEqual(key);
+    expect(await Bun.file(paths.db).exists()).toBe(true);
+    expect(networkPaths).toHaveLength(0);
+  }
+}, 30_000);
+
+test("changed inventory after a failed revoke cannot send another CID", async () => {
+  const { home, paths, networkPaths, setMode } = await fixture();
+  await addUnknown(paths.unknown);
+  setMode("fail");
+  expect((await run(home, ["auth", "logout", "--revoke", "--discard-local-changes"])).exitCode).toBeGreaterThan(0);
+  const markerPath = join(paths.directory, REPLICA_LOGOUT_PENDING_FILE);
+  const marker = await readFile(markerPath);
+  const session = await readFile(paths.session);
+  const key = await readFile(paths.key);
+  const db = await readFile(paths.db);
+  const latePath = join(dirname(paths.unknown), "late-write.pending");
+  await addUnknown(latePath);
+  const before = networkPaths.length;
+  setMode("ok");
+
+  const refused = await run(home, ["auth", "logout", "--revoke", "--discard-local-changes"]);
+  expect(refused.exitCode).toBeGreaterThan(0);
+  expect(refused.stderr).toContain("late-write.pending");
+  expect(networkPaths).toHaveLength(before);
+  expect(await readFile(markerPath)).toEqual(marker);
+  expect(await readFile(paths.session)).toEqual(session);
+  expect(await readFile(paths.key)).toEqual(key);
+  expect(await readFile(paths.db)).toEqual(db);
+  expect(await readFile(paths.unknown, "utf8")).toBe("unsynced future bytes");
+  expect(await readFile(latePath, "utf8")).toBe("unsynced future bytes");
+}, 30_000);
+
 test("unexpected SQLite outbox refuses logout before a marker, credentials or node request", async () => {
   const { home, paths, networkPaths } = await fixture();
   const database = new Database(paths.db);
