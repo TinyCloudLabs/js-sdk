@@ -1,6 +1,6 @@
 import { SqliteReplicaStore, loadSqlite } from "@tinycloud/replica/sqlite";
 import { afterAll, beforeEach, describe, expect, spyOn, test } from "bun:test";
-import { mkdir, mkdtemp, readFile, rename, rm, stat, symlink, writeFile } from "node:fs/promises";
+import { lstat, mkdir, mkdtemp, readFile, rename, rm, stat, symlink, unlink, writeFile } from "node:fs/promises";
 import * as fsPromises from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -71,6 +71,200 @@ test("legacy adapter fence is retained without durable discard consent and remov
   await expect(stat(root)).rejects.toMatchObject({ code: "ENOENT" });
 });
 
+test("a new unknown child after exact approval stops cleanup before any approved bytes are erased", async () => {
+  const entry = await initializedLegacy();
+  const x = join(entry, "private.bin");
+  const y = join(entry, "new.bin");
+  await writeFile(x, "approved-X");
+  const approval = await approvedLegacyInventory("notes", ["private.bin"]);
+  await writeFile(y, "unapproved-Y");
+
+  await expect(removeProfileReplicas("dogfood", approval)).rejects.toMatchObject({ code: "REPLICA_PURGE_FAILED" });
+  expect(await readFile(x, "utf8")).toBe("approved-X");
+  expect(await readFile(y, "utf8")).toBe("unapproved-Y");
+  expect((await stat(join(entry, "replica.db"))).isFile()).toBe(true);
+});
+
+test("only an exact approved X and Y inventory is removed after successful remote logout", async () => {
+  const entry = await initializedLegacy();
+  await writeFile(join(entry, "private.bin"), "approved-X");
+  await writeFile(join(entry, "new.bin"), "approved-Y");
+  const approval = await approvedLegacyInventory("notes", ["private.bin", "new.bin"]);
+
+  expect(await removeProfileReplicas("dogfood", approval)).toEqual(["notes"]);
+  await expect(stat(join(profilePath("dogfood"), "replicas"))).rejects.toMatchObject({ code: "ENOENT" });
+});
+
+test("approved root-level file and nested unknown directory are removed only by exact identities", async () => {
+  await initializedLegacy();
+  const root = join(profilePath("dogfood"), "replicas");
+  const extra = join(root, "extra");
+  await mkdir(extra);
+  await writeFile(join(root, "private.bin"), "approved-root");
+  await writeFile(join(extra, "nested.bin"), "approved-nested");
+  const approval = await approvedLegacyInventory("notes", []);
+  for (const [relative, kind] of [
+    ["private.bin", "file"], ["extra", "directory"], ["extra/nested.bin", "file"],
+  ] as const) {
+    const info = await lstat(join(root, relative), { bigint: true });
+    approval.approvedUnknown.push({ path: `replicas/${relative}`, kind, dev: info.dev.toString(), ino: info.ino.toString() });
+  }
+
+  expect(await removeProfileReplicas("dogfood", approval)).toContain("notes");
+  await expect(stat(root)).rejects.toMatchObject({ code: "ENOENT" });
+});
+
+test("a new nested file under an approved root-level directory keeps all unapproved data", async () => {
+  const entry = await initializedLegacy();
+  const root = join(profilePath("dogfood"), "replicas");
+  const extra = join(root, "extra");
+  await mkdir(extra);
+  await writeFile(join(extra, "approved.bin"), "approved-X");
+  const approval = await approvedLegacyInventory("notes", []);
+  for (const [relative, kind] of [["extra", "directory"], ["extra/approved.bin", "file"]] as const) {
+    const info = await lstat(join(root, relative), { bigint: true });
+    approval.approvedUnknown.push({ path: `replicas/${relative}`, kind, dev: info.dev.toString(), ino: info.ino.toString() });
+  }
+  await writeFile(join(extra, "new.bin"), "unapproved-Y");
+
+  await expect(removeProfileReplicas("dogfood", approval)).rejects.toMatchObject({ code: "REPLICA_PURGE_FAILED" });
+  expect(await readFile(join(extra, "approved.bin"), "utf8")).toBe("approved-X");
+  expect(await readFile(join(extra, "new.bin"), "utf8")).toBe("unapproved-Y");
+  expect((await stat(join(entry, "replica.db"))).isFile()).toBe(true);
+});
+
+test("an explicitly approved Linux link removes only its name, never the other profile", async () => {
+  if (process.platform !== "linux") return;
+  await initializedLegacy();
+  await ProfileManager.setProfile("victim", {
+    name: "victim", host: "https://node.example.test", did: "did:key:victim", chainId: 1,
+    spaceName: "default", createdAt: "2026-10-01T00:00:00.000Z",
+  });
+  const victim = join(profilePath("victim"), "protected");
+  await mkdir(victim);
+  await writeFile(join(victim, "owner-data.bin"), "victim-stays");
+  const root = join(profilePath("dogfood"), "replicas");
+  const linked = join(root, "external");
+  await symlink(victim, linked);
+  const approval = await approvedLegacyInventory("notes", []);
+  const info = await lstat(linked, { bigint: true });
+  approval.approvedUnknown.push({
+    path: "replicas/external", kind: "symlink", dev: info.dev.toString(), ino: info.ino.toString(),
+  });
+
+  expect(await removeProfileReplicas("dogfood", approval)).toContain("notes");
+  expect(await readFile(join(victim, "owner-data.bin"), "utf8")).toBe("victim-stays");
+  await expect(stat(root)).rejects.toMatchObject({ code: "ENOENT" });
+});
+
+test("an approved Linux replica.db link is unlinked without opening the target database", async () => {
+  if (process.platform !== "linux") return;
+  const entry = await initializedLegacy();
+  const victim = join(profilePath("dogfood"), "victim.db");
+  await writeFile(victim, "outside-selected-replica");
+  await unlink(join(entry, "replica.db"));
+  await symlink(victim, join(entry, "replica.db"));
+  const approval = await approvedLegacyInventory("notes", ["replica.db"]);
+
+  expect(await removeProfileReplicas("dogfood", approval)).toEqual(["notes"]);
+  expect(await readFile(victim, "utf8")).toBe("outside-selected-replica");
+});
+
+test("named-path platforms refuse even an explicitly approved legacy link", async () => {
+  await initializedLegacy();
+  const root = join(profilePath("dogfood"), "replicas");
+  const target = join(profilePath("dogfood"), "protected");
+  await mkdir(target);
+  await writeFile(join(target, "owner-data.bin"), "keep");
+  const linked = join(root, "external");
+  await symlink(target, linked);
+  const approval = await approvedLegacyInventory("notes", []);
+  const info = await lstat(linked, { bigint: true });
+  approval.approvedUnknown.push({
+    path: "replicas/external", kind: "symlink", dev: info.dev.toString(), ino: info.ino.toString(),
+  });
+  const originalPlatform = process.platform;
+  Object.defineProperty(process, "platform", { value: "darwin" });
+  try {
+    await expect(removeProfileReplicas("dogfood", approval)).rejects.toMatchObject({ code: "REPLICA_PURGE_FAILED" });
+    expect(await readFile(join(target, "owner-data.bin"), "utf8")).toBe("keep");
+    expect((await stat(join(root, "notes", "replica.db"))).isFile()).toBe(true);
+  } finally {
+    Object.defineProperty(process, "platform", { value: originalPlatform });
+  }
+});
+
+test("an approved unknown path whose inode changes keeps both the replacement and the parked original", async () => {
+  const entry = await initializedLegacy();
+  const unknown = join(entry, "private.bin");
+  await writeFile(unknown, "original-X");
+  const approval = await approvedLegacyInventory("notes", ["private.bin"]);
+  const parked = join(profilePath("dogfood"), "parked-X");
+  await rename(unknown, parked);
+  await writeFile(unknown, "replacement-Y");
+
+  await expect(removeProfileReplicas("dogfood", approval)).rejects.toMatchObject({ code: "REPLICA_PURGE_FAILED" });
+  expect(await readFile(unknown, "utf8")).toBe("replacement-Y");
+  expect(await readFile(parked, "utf8")).toBe("original-X");
+  expect((await stat(join(entry, "replica.db"))).isFile()).toBe(true);
+});
+
+test.each(["darwin", "win32"])("named-path %s removes a known mirror but refuses an approved child swap", async (platform) => {
+  const entry = await initializedLegacy();
+  const approval = await approvedLegacyInventory("notes", []);
+  const originalPlatform = process.platform;
+  Object.defineProperty(process, "platform", { value: platform });
+  try {
+    expect(await removeProfileReplicas("dogfood", approval)).toEqual(["notes"]);
+    await expect(stat(join(profilePath("dogfood"), "replicas"))).rejects.toMatchObject({ code: "ENOENT" });
+  } finally {
+    Object.defineProperty(process, "platform", { value: originalPlatform });
+  }
+
+  const replacement = await initializedLegacy();
+  const nextApproval = await approvedLegacyInventory("notes", []);
+  const parked = join(profilePath("dogfood"), "parked-notes");
+  await rename(replacement, parked);
+  await mkdir(replacement);
+  await writeFile(join(replacement, "private.bin"), "keep");
+  Object.defineProperty(process, "platform", { value: platform });
+  try {
+    await expect(removeProfileReplicas("dogfood", nextApproval)).rejects.toMatchObject({ code: "REPLICA_PURGE_FAILED" });
+    expect(await readFile(join(replacement, "private.bin"), "utf8")).toBe("keep");
+    expect((await stat(join(parked, "replica.db"))).isFile()).toBe(true);
+  } finally {
+    Object.defineProperty(process, "platform", { value: originalPlatform });
+  }
+});
+
+test("a DB-absent legacy child is erased only with its exact approved inventory", async () => {
+  const entry = join(profilePath("dogfood"), "replicas", "notes");
+  await mkdir(entry, { recursive: true });
+  const unknown = join(entry, "private.bin");
+  await writeFile(unknown, "approved-X");
+  const approval = await approvedLegacyInventory("notes", ["private.bin"]);
+  expect(approval.missingDatabases).toEqual(["replicas/notes/replica.db"]);
+
+  await expect(removeProfileReplicas("dogfood", { discardLocalChanges: true })).rejects.toMatchObject({ code: "REPLICA_PURGE_FAILED" });
+  expect(await readFile(unknown, "utf8")).toBe("approved-X");
+  expect(await removeProfileReplicas("dogfood", approval)).toEqual(["notes"]);
+  await expect(stat(join(profilePath("dogfood"), "replicas"))).rejects.toMatchObject({ code: "ENOENT" });
+});
+
+test("a legacy child replaced after approval never deletes the replacement or parked original", async () => {
+  const entry = await initializedLegacy();
+  await writeFile(join(entry, "private.bin"), "original-X");
+  const approval = await approvedLegacyInventory("notes", ["private.bin"]);
+  const parked = join(profilePath("dogfood"), "parked-notes");
+  await rename(entry, parked);
+  await mkdir(entry);
+  await writeFile(join(entry, "private.bin"), "replacement-Y");
+
+  await expect(removeProfileReplicas("dogfood", approval)).rejects.toMatchObject({ code: "REPLICA_PURGE_FAILED" });
+  expect(await readFile(join(entry, "private.bin"), "utf8")).toBe("replacement-Y");
+  expect(await readFile(join(parked, "private.bin"), "utf8")).toBe("original-X");
+  expect((await stat(join(parked, "replica.db"))).isFile()).toBe(true);
+});
 test("legacy cleanup refuses a new root file without deleting it", async () => {
   const root = join(profilePath("dogfood"), "replicas");
   const entry = join(root, "notes");
