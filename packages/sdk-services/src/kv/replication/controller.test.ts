@@ -767,14 +767,14 @@ describe("consent deadline delivery", () => {
     const env = setup({
       sessionOnly: true,
       statusOverrides: { grant: null },
-      openError: "NOT_COVERED",
+      openError: "GRANT_MISSING",
       delivery: () => ({ status: "allow" }),
     });
     const result = await env.controller.get(readRequest(env.network));
     expect(result.ok && result.data.data).toBe("network");
     expect(env.counters()).toMatchObject({ opens: 1, installs: 0, localReads: 0, networkCalls: 1 });
     expect(env.events.filter((event) => event.type === "replication.read")).toEqual([
-      expect.objectContaining({ op: "get", source: "network", code: "NOT_COVERED" }),
+      expect.objectContaining({ op: "get", source: "network", reason: "replica_unavailable", code: "GRANT_MISSING" }),
     ]);
   });
 

@@ -958,6 +958,10 @@ describe.skipIf(!REAL_NODE_BIN)("node-sdk replication against a real node", () =
       const spaceId = signedOwner.spaceId;
       expect((await owner.kv.put("notes/covered", "cached")).ok).toBe(true);
       await owner.replication!.sync();
+      const ownerSyncedEpoch = (await owner.replication!.status())[0]?.syncedThroughEpoch;
+      if (ownerSyncedEpoch === undefined || !Number.isSafeInteger(ownerSyncedEpoch)) {
+        throw new Error("Owner replica must have a committed sync fence.");
+      }
       const grant = await owner.delegateTo(verificationMethod.split("#")[0]!, [{
         service: "tinycloud.kv",
         space: spaceId,
@@ -973,7 +977,7 @@ describe.skipIf(!REAL_NODE_BIN)("node-sdk replication against a real node", () =
         tinycloudHosts: [host],
         replicaStamp: ownerStamp,
       });
-      await expect(onlineDelegate.replication!.sync()).rejects.toMatchObject({ code: "NOT_COVERED" });
+      await expect(onlineDelegate.replication!.sync()).rejects.toMatchObject({ name: "ReplicaError", code: "GRANT_MISSING" });
       await onlineDelegate.replication!.close();
       let delegatePosts = 0;
       globalThis.fetch = (async (input: RequestInfo | URL) => {
@@ -994,7 +998,7 @@ describe.skipIf(!REAL_NODE_BIN)("node-sdk replication against a real node", () =
       expect(withoutInstall.ok).toBe(false);
       expect(offlineEvents.some((event) =>
         event.type === "replication.read" && event.key === "notes/covered" &&
-        event.source === "network" && event.reason === "grant_missing" && event.code === "NOT_COVERED"
+        event.source === "network" && event.reason === "grant_missing" && event.outcome === "error"
       )).toBe(true);
       expect(offlineEvents.some((event) =>
         event.type === "replication.read" && event.key === "notes/covered" &&
@@ -1021,7 +1025,7 @@ describe.skipIf(!REAL_NODE_BIN)("node-sdk replication against a real node", () =
       try {
         const installed = await handle.installGrant(grant.delegation.delegationHeader.Authorization);
         expect(installed).toMatchObject({ parentCid: expect.any(String), unconstrained: true });
-        await handle.sync({ signal: new AbortController().signal, syncStartEpoch: 0 });
+        await handle.sync({ signal: new AbortController().signal, syncStartEpoch: ownerSyncedEpoch });
         expect((await handle.get("notes/covered")).status).toBe("present");
       } finally {
         await handle.close();
