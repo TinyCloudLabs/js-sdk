@@ -122,6 +122,7 @@ async function server(mode: "fail" | "hold" | "success", cid: () => string) {
   const snapshots: Array<{ session: boolean; db: boolean }> = [];
   const revokedCids: string[] = [];
   const queryRequests: string[] = [];
+  const authorizationKinds: Array<{ scheme: string; encoding: string; prefix: string; dots: number }> = [];
   let queryRecords: Array<Record<string, unknown>> | undefined;
   const started = Promise.withResolvers<void>();
   let state = mode;
@@ -142,7 +143,20 @@ async function server(mode: "fail" | "hold" | "success", cid: () => string) {
         started.resolve();
         if (state === "hold") return new Promise<Response>(() => {});
         if (queryRecords !== undefined) {
-          const signed = await parseSignedSiweCacao((request.headers.get("authorization") ?? "").replace(/^Bearer\s+/i, ""));
+          const authorization = request.headers.get("authorization") ?? "";
+          const scheme = /^([A-Za-z][A-Za-z0-9_-]*)\s+/.exec(authorization)?.[1]?.toLowerCase() ?? "none";
+          const token = authorization.replace(/^Bearer\s+/i, "");
+          authorizationKinds.push({
+            scheme,
+            encoding: /^[A-Za-z0-9_-]+={0,2}$/.test(token)
+              ? "base64url"
+              : token.split(".").length === 3 ? "compact-jwt" : "other",
+            prefix: token.startsWith("o2Foo") ? "cacao-cbor"
+              : token.startsWith("eyJ") ? "json-token"
+              : token.startsWith("Bearer ") ? "nested-bearer" : "other",
+            dots: (token.match(/\./g) ?? []).length,
+          });
+          const signed = await parseSignedSiweCacao(token);
           const target = signed.audience.startsWith("ucan:") ? signed.audience.slice("ucan:".length) : "";
           if (target.length === 0) return new Response("CID-bound owner proof required", { status: 403 });
           revokedCids.push(target);
@@ -163,6 +177,7 @@ async function server(mode: "fail" | "hold" | "success", cid: () => string) {
     revokedCids,
     queryRequests,
     setQueryRecords(records: Array<Record<string, unknown>>) { queryRecords = records; },
+    authorizationKinds,
     snapshots,
     started: started.promise,
     setMode(value: "fail" | "hold" | "success") { state = value; },
@@ -470,6 +485,7 @@ describe("tc auth logout --revoke with durable replica denial", () => {
     ]);
 
     const logout = await run(home, ["auth", "logout", "--revoke"]);
+    expect(node.authorizationKinds[0]).toMatchObject({ encoding: "base64url", prefix: "cacao-cbor", dots: 0 });
     expect(logout.exitCode).toBe(0);
     expect(node.queryRequests.length).toBeGreaterThan(0);
     expect(node.revokedCids).toEqual([issuedCid, sessionCid]);
