@@ -1,6 +1,7 @@
 import { SqliteReplicaStore, loadSqlite } from "@tinycloud/replica/sqlite";
-import { afterAll, beforeEach, describe, expect, test } from "bun:test";
+import { afterAll, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { mkdir, mkdtemp, readFile, rename, rm, stat, symlink, writeFile } from "node:fs/promises";
+import * as fsPromises from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -68,6 +69,34 @@ test("interrupted legacy cleanup removes an empty child through direct and combi
   await mkdir(interruptedAgain);
   expect(await removeProfileReplicasAndReplication("dogfood")).toEqual(["again"]);
   await expect(stat(interruptedAgain)).rejects.toMatchObject({ code: "ENOENT" });
+});
+
+test("an empty child replaced by another real directory at final inspection is not removed", async () => {
+  const root = join(profilePath("dogfood"), "replicas");
+  const selected = join(root, "notes");
+  const replacement = join(profilePath("dogfood"), "replacement");
+  const parked = join(profilePath("dogfood"), "parked");
+  await mkdir(selected, { recursive: true });
+  await mkdir(replacement);
+  const originalReaddir = fsPromises.readdir;
+  let inspected = 0;
+  const readdirSpy = spyOn(fsPromises, "readdir").mockImplementation(async (path, options) => {
+    const children = await originalReaddir(path, options);
+    if (typeof path === "string" && path.startsWith("/proc/self/fd/") &&
+        await fsPromises.realpath(path) === selected && ++inspected === 2) {
+      await rename(selected, parked);
+      await rename(replacement, selected);
+    }
+    return children;
+  });
+  try {
+    await expect(removeProfileReplicas("dogfood")).rejects.toMatchObject({ code: "REPLICA_PURGE_FAILED" });
+    expect(inspected).toBe(2);
+    expect((await stat(selected)).isDirectory()).toBe(true);
+    expect((await stat(parked)).isDirectory()).toBe(true);
+  } finally {
+    readdirSpy.mockRestore();
+  }
 });
 
 test("local grant artifact reads refuse an alias instead of exposing another profile", async () => {

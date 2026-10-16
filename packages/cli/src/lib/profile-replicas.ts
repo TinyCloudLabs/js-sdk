@@ -186,6 +186,10 @@ export async function removeProfileReplicas(profile: string, heldLeases?: Readon
               throw refuseUnsafeReplicaPath(profile, `empty replica entry "${entry.name}" changed during cleanup`);
             }
             await pinned.assertNamed();
+            const namedEntry = await lstat(current.path);
+            if (!namedEntry.isDirectory() || namedEntry.dev !== pinnedEntry.dev || namedEntry.ino !== pinnedEntry.ino) {
+              throw refuseUnsafeReplicaPath(profile, `empty replica entry "${entry.name}" changed at removal`);
+            }
             await rmdir(current.path);
           } finally {
             await handle.close();
