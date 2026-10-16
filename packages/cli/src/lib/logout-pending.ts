@@ -2,6 +2,8 @@ import { lstat, open } from "node:fs/promises";
 import { join } from "node:path";
 import { createProfileReplicaPurge, REPLICA_LOGOUT_PENDING_FILE } from "@tinycloud/node-sdk";
 import { profilePath } from "@tinycloud/operations/state";
+import { readGateSnapshot } from "@tinycloud/replica/profile-gate";
+import { REPLICA_GATE_FILE } from "@tinycloud/sdk-services/kv/replication/contractConstants";
 import { ProfileManager } from "../config/profiles.js";
 import { ExitCode } from "../config/constants.js";
 import { CLIError } from "../output/errors.js";
@@ -58,16 +60,60 @@ export async function recoverPendingLogout(name: string): Promise<void> {
   try {
     await lstat(join(profilePath(name), REPLICA_LOGOUT_PENDING_FILE));
   } catch (error) {
-    if (typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT") {
-      await finishSignedOutCredentialRemoval(name);
+    if (typeof error !== "object" || error === null || !("code" in error) || error.code !== "ENOENT") throw error;
+    await finishSignedOutCredentialRemoval(name);
+    // A headless explicit-key identity may have no stored profile at all.
+    try {
+      await lstat(profilePath(name));
+    } catch (missing) {
+      if (typeof missing === "object" && missing !== null && "code" in missing && missing.code === "ENOENT") return;
+      throw missing;
+    }
+    // No marker means no erase is authorized. Inspect only: taking the
+    // profile lock here would block unrelated node revocations while another
+    // command holds it for a later local grant removal.
+    const profile = await ProfileManager.getProfile(name).catch((profileError: unknown) => {
+      if (profileError instanceof CLIError && profileError.code === "PROFILE_NOT_FOUND") return null;
+      throw profileError;
+    });
+    if (!profile) {
+      // `auth login` can create a fresh profile directory before profile.json.
+      // Do not accept a missing profile when orphan replica state survived.
+      for (const child of [REPLICA_GATE_FILE, "replicas", "replication"]) {
+        try {
+          await lstat(join(profilePath(name), child));
+        } catch (childError) {
+          if (typeof childError === "object" && childError !== null &&
+              "code" in childError && childError.code === "ENOENT") continue;
+          throw childError;
+        }
+        throw new CLIError("REPLICA_GATED",
+          `Profile "${name}" is missing its settings but retains replica state (${child}); refuse implicit recovery.`,
+          ExitCode.ERROR);
+      }
       return;
     }
-    throw error;
+    let remaining: number;
+    try {
+      remaining = (await readGateSnapshot(profilePath(name)))?.intents.length ?? 0;
+    } catch {
+      throw new CLIError("REPLICA_PURGE_FAILED",
+        "The replica gate is unreadable without a logout marker; network restore and local replica reads remain blocked.",
+        ExitCode.ERROR, { failed: [{ id: "logout", code: "gate_unavailable" }], remaining: 1 });
+    }
+    if (remaining) {
+      throw new CLIError("REPLICA_PURGE_FAILED",
+        `The replica gate has ${remaining} pending purge intents without a logout marker; network restore is blocked.`,
+        ExitCode.ERROR, { remaining });
+    }
+    return;
   }
   const report = await ProfileManager.withLock(name, () => profilePurge(name).recoverLogoutPending({
     signal: new AbortController().signal,
     clearCredentials: () => clearProfileCredentials(name),
-    eraseLegacyReplicas: async () => { await removeProfileReplicas(name); },
+    eraseLegacyReplicas: async ({ discardLocalChanges }) => {
+      await removeProfileReplicas(name, { discardLocalChanges });
+    },
   }), { requireProfile: true });
   if (report.failed.length || report.remaining) {
     throw new CLIError("REPLICA_PURGE_FAILED",

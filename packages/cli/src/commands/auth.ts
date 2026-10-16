@@ -210,6 +210,9 @@ async function revokeForLogout(ctx: CLIContext): Promise<CompletedOnlineLogout> 
       throw new CLIError("AUTH_REQUIRED", "Online revocation needs a stored owner session and delegation CID; no local files were deleted.", ExitCode.AUTH_REQUIRED);
     }
     const purge = profilePurge(ctx.profile);
+    // A malformed or unknown legacy layout must refuse before the durable
+    // denial and before any CID leaves this process.
+    await purge.preflightLogout({ principal: ownerDid });
     const gate = await readGateSnapshot(profilePath(ctx.profile));
     let token = await purge.deferredErase();
     if (token) {
@@ -277,6 +280,98 @@ async function revokeForLogout(ctx: CLIContext): Promise<CompletedOnlineLogout> 
       `Revocation failed before local logout: ${error instanceof Error ? error.message : String(error)}. Session, key, and replica files are retained for retry; local reads stay denied.`,
       ExitCode.ERROR, { hint: `Retry \`${CLI_NAME} auth logout --revoke\` when online authority is available.` });
   }
+}
+
+/** Complete the same durable local logout after plain logout or an exact-CID node receipt. */
+export async function finishProfileLogout(
+  ctx: CLIContext,
+  options: { keepReplicas?: boolean; discardLocalChanges?: boolean; online?: CompletedOnlineLogout; expectedSessionCid?: string } = {},
+): Promise<string[]> {
+  const { online } = options;
+  let replicasRemoved: string[] = [];
+  let cleanupError: unknown;
+  await ProfileManager.withLock(ctx.profile, async () => {
+    // Refuse a profile that does not exist rather than report it logged out.
+    const profile = await ProfileManager.getProfile(ctx.profile);
+    if (options.keepReplicas && await hasGatedReplicaState(profile, ctx.profile, ctx.replication)) {
+      throw new CLIError("INVALID_ARGUMENT",
+        "--keep-replicas is only available for legacy-only profiles without a replica gate or flag-owned state. Run plain `auth logout` to deny and erase local replicas.",
+        ExitCode.USAGE_ERROR);
+    }
+    const session = await ProfileManager.getSession(ctx.profile);
+    if (options.expectedSessionCid !== undefined &&
+        (!session || !("delegationCid" in session) || session.delegationCid !== options.expectedSessionCid)) {
+      throw new CLIError("PROFILE_CHANGED_DURING_REVOKE",
+        "The signed-in session changed during node revocation; the new local session and replica files were not erased.",
+        ExitCode.ERROR);
+    }
+    const sessionOwner = session && "ownerDid" in session && typeof session.ownerDid === "string"
+      ? session.ownerDid : undefined;
+    const principal = sessionOwner ?? profile.ownerDid ?? profile.did;
+    const purge = profilePurge(ctx.profile);
+    if (online) {
+      const currentToken = await purge.deferredErase();
+      const tokenUnchanged = online.token
+        ? currentToken?.deniedEpoch === online.token.deniedEpoch &&
+          currentToken.principalHash === online.token.principalHash
+        : currentToken === null &&
+          await readGateSnapshot(profilePath(ctx.profile)) === undefined &&
+          (await existingReplicaRoots(ctx.profile)).length === 0;
+      if (!session || JSON.stringify(session) !== online.sessionSnapshot ||
+          JSON.stringify(profile) !== online.profileSnapshot ||
+          await logoutInventorySnapshot(ctx.profile) !== online.inventorySnapshot ||
+          !tokenUnchanged) {
+        throw new CLIError("PROFILE_CHANGED_DURING_REVOKE",
+          "The profile session, stored grants, or denied gate changed during online revocation; the new session and local files were not erased.",
+          ExitCode.ERROR);
+      }
+    }
+    try {
+      if (options.keepReplicas) {
+        // Only legacy-only profiles reach this branch; the signed-out
+        // fence makes retained files inaccessible after credential shred.
+        await clearProfileCredentials(ctx.profile, true);
+      } else {
+        const roots = await existingReplicaRoots(ctx.profile);
+        // Always ask the facade, including when the gate is absent or
+        // corrupt. It owns v1 scoped, v2 orphan and v3 inactive fences.
+        const marker = await purge.prepareLogoutPending({
+          principal,
+          ...(options.discardLocalChanges ? { discardLocalChanges: true } : {}),
+        });
+        if (marker) {
+          const legacyRemoved: string[] = [];
+          const report = await purge.recoverLogoutPending({
+            signal: new AbortController().signal,
+            clearCredentials: () => clearProfileCredentials(ctx.profile),
+            eraseLegacyReplicas: async ({ discardLocalChanges }) => {
+              legacyRemoved.push(...await removeProfileReplicas(ctx.profile, { discardLocalChanges }));
+            },
+          });
+          if (report.failed.length || report.remaining) {
+            throw new CLIError("REPLICA_PURGE_FAILED",
+              `Logout is pending behind the durable marker (${report.failed.map(({ code }) => code).join(", ") || `${report.remaining} intents remaining`}); retry to finish credential and replica cleanup.`,
+              ExitCode.ERROR, { failed: report.failed, remaining: report.remaining });
+          }
+          replicasRemoved = marker.v === 2 ? roots : [...legacyRemoved, ...report.erased];
+        } else {
+          const gate = await readGateSnapshot(profilePath(ctx.profile));
+          if (roots.length || (gate && (gate.principalHash !== null || gate.intents.length))) {
+            throw new CLIError("REPLICA_GATED",
+              "Replica files or pending intents survived without a durable logout marker; credentials remain for retry.",
+              ExitCode.ERROR);
+          }
+          await clearProfileCredentials(ctx.profile, true);
+        }
+      }
+    } catch (error) {
+      cleanupError = error instanceof Error && "code" in error && error.code === "REPLICA_GATED"
+        ? new CLIError("REPLICA_GATED", error.message, ExitCode.ERROR)
+        : error;
+    }
+  });
+  if (cleanupError) throw cleanupError;
+  return replicasRemoved;
 }
 
 export function registerAuthCommand(program: Command, options?: { openKeyAcquisition?: OpenKeyAcquisition }): void {
@@ -431,89 +526,21 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
         if (options.revoke && options.keepReplicas) {
           throw new CLIError("INVALID_ARGUMENT", "--revoke cannot be combined with --keep-replicas.", ExitCode.USAGE_ERROR);
         }
-        if (options.discardLocalChanges && (options.keepReplicas || options.revoke)) {
+        if (options.discardLocalChanges && options.keepReplicas) {
           throw new CLIError("INVALID_ARGUMENT",
-            "--discard-local-changes is only available with plain logout, without --keep-replicas or --revoke.",
-            ExitCode.USAGE_ERROR);
+            "--discard-local-changes cannot be combined with --keep-replicas.", ExitCode.USAGE_ERROR);
+        }
+        if (options.discardLocalChanges) {
+          throw new CLIError("DISCARD_APPROVAL_UNAVAILABLE",
+            "Exact listed-path discard approval is not available; no node revoke, replica denial, or local deletion was attempted.",
+            ExitCode.ERROR);
         }
         const online = options.revoke ? await revokeForLogout(ctx) : undefined;
-        let replicasRemoved: string[] = [];
-        let cleanupError: unknown;
-        await ProfileManager.withLock(ctx.profile, async () => {
-          // Refuse a profile that does not exist rather than report it logged out.
-          const profile = await ProfileManager.getProfile(ctx.profile);
-          if (options.keepReplicas && await hasGatedReplicaState(profile, ctx.profile, ctx.replication)) {
-            throw new CLIError("INVALID_ARGUMENT",
-              "--keep-replicas is only available for legacy-only profiles without a replica gate or flag-owned state. Run plain `auth logout` to deny and erase local replicas.",
-              ExitCode.USAGE_ERROR);
-          }
-          const session = await ProfileManager.getSession(ctx.profile);
-          const sessionOwner = session && "ownerDid" in session && typeof session.ownerDid === "string"
-            ? session.ownerDid : undefined;
-          const principal = sessionOwner ?? profile.ownerDid ?? profile.did;
-          const purge = profilePurge(ctx.profile);
-          if (online) {
-            const currentToken = await purge.deferredErase();
-            const tokenUnchanged = online.token
-              ? currentToken?.deniedEpoch === online.token.deniedEpoch &&
-                currentToken.principalHash === online.token.principalHash
-              : currentToken === null &&
-                await readGateSnapshot(profilePath(ctx.profile)) === undefined &&
-                (await existingReplicaRoots(ctx.profile)).length === 0;
-            if (!session || JSON.stringify(session) !== online.sessionSnapshot ||
-                JSON.stringify(profile) !== online.profileSnapshot ||
-                await logoutInventorySnapshot(ctx.profile) !== online.inventorySnapshot ||
-                !tokenUnchanged) {
-              throw new CLIError("PROFILE_CHANGED_DURING_REVOKE",
-                "The profile session, stored grants, or denied gate changed during online revocation; the new session and local files were not erased.",
-                ExitCode.ERROR);
-            }
-          }
-          try {
-            if (options.keepReplicas) {
-              // Only legacy-only profiles reach this branch; the signed-out
-              // fence makes retained files inaccessible after credential shred.
-              await clearProfileCredentials(ctx.profile, true);
-            } else {
-              const roots = await existingReplicaRoots(ctx.profile);
-              // Always ask the facade, including when the gate is absent or
-              // corrupt. It owns v1 scoped, v2 orphan and v3 inactive fences.
-              const marker = await purge.prepareLogoutPending({
-                principal,
-                ...(options.discardLocalChanges ? { discardLocalChanges: true } : {}),
-              });
-              if (marker) {
-                const legacyRemoved: string[] = [];
-                const report = await purge.recoverLogoutPending({
-                  signal: new AbortController().signal,
-                  clearCredentials: () => clearProfileCredentials(ctx.profile),
-                  eraseLegacyReplicas: async () => {
-                    legacyRemoved.push(...await removeProfileReplicas(ctx.profile));
-                  },
-                });
-                if (report.failed.length || report.remaining) {
-                  throw new CLIError("REPLICA_PURGE_FAILED",
-                    `Logout is pending behind the durable marker (${report.failed.map(({ code }) => code).join(", ") || `${report.remaining} intents remaining`}); retry to finish credential and replica cleanup.`,
-                    ExitCode.ERROR, { failed: report.failed, remaining: report.remaining });
-                }
-                replicasRemoved = marker.v === 2 ? roots : [...legacyRemoved, ...report.erased];
-              } else {
-                const gate = await readGateSnapshot(profilePath(ctx.profile));
-                if (roots.length || (gate && (gate.principalHash !== null || gate.intents.length))) {
-                  throw new CLIError("REPLICA_GATED",
-                    "Replica files or pending intents survived without a durable logout marker; credentials remain for retry.",
-                    ExitCode.ERROR);
-                }
-                await clearProfileCredentials(ctx.profile, true);
-              }
-            }
-          } catch (error) {
-            cleanupError = error instanceof Error && "code" in error && error.code === "REPLICA_GATED"
-              ? new CLIError("REPLICA_GATED", error.message, ExitCode.ERROR)
-              : error;
-          }
+        const replicasRemoved = await finishProfileLogout(ctx, {
+          keepReplicas: options.keepReplicas,
+          discardLocalChanges: options.discardLocalChanges,
+          online,
         });
-        if (cleanupError) throw cleanupError;
         outputJson({
           profile: ctx.profile,
           authenticated: false,
@@ -1959,6 +1986,19 @@ async function persistCurrentLocalSession(
   if (!session) return;
 
   await ProfileManager.withLock(profileName, async () => {
+    if ((await ProfileManager.getProfile(profileName)).authSignedOut === true) {
+      throw new CLIError("PROFILE_CHANGED_DURING_LOGIN",
+        "The profile was signed out while the local grant was in flight; its session and key were not restored.",
+        ExitCode.ERROR);
+    }
+    try {
+      await lstat(join(profilePath(profileName), REPLICA_LOGOUT_PENDING_FILE));
+      throw new CLIError("PROFILE_CHANGED_DURING_LOGIN",
+        "A durable logout started while the local grant was in flight; its session and key were not restored.",
+        ExitCode.ERROR);
+    } catch (error) {
+      if (!(typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT")) throw error;
+    }
     await ProfileManager.setSession(profileName, {
       authMethod: "local",
       address: session.address,

@@ -48,6 +48,7 @@ type ProfileLike = {
   authMethod?: "openkey" | "local";
   privateKey?: string;
   address?: string;
+  authSignedOut?: boolean;
   replication?: { prefixes: string[]; allowSecrets?: boolean };
   openkeyHost?: string;
 };
@@ -128,6 +129,7 @@ let localSignInResult: LocalSignInResult;
 let authNodeHasRuntimePermissions: boolean;
 let authNodeRestorableSession: Record<string, unknown> | undefined;
 let authNodeGrantDelegations: Array<{ cid: string; expiry: Date }>;
+let onGrantRuntimePermissions: (() => void | Promise<void>) | null = null;
 let operationInvokeHook: (() => void) | null = null;
 
 function resetState(): void {
@@ -182,6 +184,7 @@ function resetState(): void {
   authNodeHasRuntimePermissions = true;
   authNodeRestorableSession = undefined;
   authNodeGrantDelegations = [];
+  onGrantRuntimePermissions = null;
   ensureAuthenticatedError = null;
   storedImportRequest = null;
   operationRecorded.calls.length = 0;
@@ -310,10 +313,11 @@ mock.module("../auth/local-key.js", () => ({
   keyToDID: (jwk: { did?: string }) => jwk.did ?? "did:key:from-key",
 }));
 
-const { TinyCloudNode } = await import("@tinycloud/node-sdk");
+const { TinyCloudNode, REPLICA_LOGOUT_PENDING_FILE } = await import("@tinycloud/node-sdk");
 
 mock.module("@tinycloud/node-sdk", () => ({
   TinyCloudNode,
+  REPLICA_LOGOUT_PENDING_FILE,
   grantAuthRequest: async (_node: unknown, request: Record<string, unknown>) => {
     recorded.grantedRequests.push(request);
     return {
@@ -378,7 +382,10 @@ let bootstrapDelegatedSessionError: Error | null = null;
 
 const importedNode = {
   hasRuntimePermissions: () => authNodeHasRuntimePermissions,
-  grantRuntimePermissions: async () => authNodeGrantDelegations,
+  grantRuntimePermissions: async () => {
+    await onGrantRuntimePermissions?.();
+    return authNodeGrantDelegations;
+  },
   get restorableSession() {
     return authNodeRestorableSession;
   },
@@ -1763,6 +1770,83 @@ describe("CLI auth request command", () => {
         expiry: "2099-01-01T00:00:00.000Z",
       }),
     ]);
+  });
+
+  test("does not restore a local session after a concurrent durable sign-out", async () => {
+    profiles.set("default", makeProfile({
+      did: "did:pkh:eip155:1:0xLocalOwner",
+      authMethod: "local",
+      posture: "local-owner-key",
+      privateKey: "0xowner-private",
+      address: "0xLocalOwner",
+    }));
+    sessions.set("default", { delegationCid: "bafy-old-session", spaceId: "space-local-old" });
+    authNodeHasRuntimePermissions = false;
+    authNodeGrantDelegations = [{ cid: "bafy-new-grant", expiry: new Date("2099-01-01T00:00:00.000Z") }];
+    authNodeRestorableSession = {
+      address: "0xLocalOwner",
+      chainId: 1,
+      spaceId: "space-local-new",
+      delegationHeader: { Authorization: "Bearer runtime-session" },
+      delegationCid: "bafy-runtime-session",
+      jwk: { kty: "OKP", crv: "Ed25519", x: "new-session", d: "private" },
+      verificationMethod: "did:key:new-session",
+      siwe: "runtime-siwe",
+      signature: "0xruntime",
+    };
+    onGrantRuntimePermissions = () => {
+      profiles.set("default", { ...profiles.get("default")!, authSignedOut: true });
+      sessions.delete("default");
+      keys.delete("default");
+    };
+
+    await runAuthCommand(["auth", "request", "--grant", "--yes", "--cap", "tinycloud.kv:default/:list"]);
+
+    expect(recorded.errors).toEqual([expect.objectContaining({ code: "PROFILE_CHANGED_DURING_LOGIN" })]);
+    expect(sessions.has("default")).toBe(false);
+    expect(keys.has("default")).toBe(false);
+    expect(profiles.get("default")?.authSignedOut).toBe(true);
+    expect(recorded.outputs).toEqual([]);
+  });
+
+  test("does not save a local grant session after a logout marker is committed", async () => {
+    profiles.set("default", makeProfile({
+      did: "did:pkh:eip155:1:0xLocalOwner",
+      authMethod: "local",
+      posture: "local-owner-key",
+      privateKey: "0xowner-private",
+      address: "0xLocalOwner",
+    }));
+    const priorSession = { delegationCid: "bafy-old-session", spaceId: "space-local-old" };
+    sessions.set("default", priorSession);
+    authNodeHasRuntimePermissions = false;
+    authNodeGrantDelegations = [{ cid: "bafy-new-grant", expiry: new Date("2099-01-01T00:00:00.000Z") }];
+    authNodeRestorableSession = {
+      address: "0xLocalOwner",
+      chainId: 1,
+      spaceId: "space-local-new",
+      delegationHeader: { Authorization: "Bearer runtime-session" },
+      delegationCid: "bafy-runtime-session",
+      jwk: { kty: "OKP", crv: "Ed25519", x: "new-session", d: "private" },
+      verificationMethod: "did:key:new-session",
+      siwe: "runtime-siwe",
+      signature: "0xruntime",
+    };
+    let markerPath: string | undefined;
+    onGrantRuntimePermissions = async () => {
+      markerPath = join(profilePath("default"), REPLICA_LOGOUT_PENDING_FILE);
+      await writeFile(markerPath, "{}");
+    };
+
+    try {
+      await runAuthCommand(["auth", "request", "--grant", "--yes", "--cap", "tinycloud.kv:default/:list"]);
+      expect(recorded.errors).toEqual([expect.objectContaining({ code: "PROFILE_CHANGED_DURING_LOGIN" })]);
+      expect(sessions.get("default")).toEqual(priorSession);
+      expect(recorded.setSessions).toEqual([]);
+      expect(recorded.outputs).toEqual([]);
+    } finally {
+      if (markerPath) await rm(markerPath, { force: true });
+    }
   });
 });
 

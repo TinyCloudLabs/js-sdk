@@ -200,6 +200,13 @@ intact for retry. `--keep-replicas` is available only for legacy-only profiles
 with no gate, flag-owned partition or pending purge; it retains those legacy
 files but still shreds credentials and blocks implicit reauthentication.
 
+`tc auth grants list` labels the signed-in delegation CID `(current session)`.
+`tc delegation revoke <cid>` still accepts any eligible exact CID, but when
+`<cid>` is the current session it requires `--yes` or an interactive confirmation
+before contacting the node. An exact-CID success then runs the same durable
+local sign-out and key shred as `auth logout`; revoking another CID leaves the
+session intact.
+
 B-int release acceptance must
 verify the OpenKey `tc auth request --grant` fallback against a real OpenKey
 using a test account and no production writes: approve the request, confirm the

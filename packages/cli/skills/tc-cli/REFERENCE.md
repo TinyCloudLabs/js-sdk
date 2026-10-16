@@ -92,6 +92,12 @@ No `del` anywhere and no `list` on the bearer prefix: no `tinycloud share` comma
 
 Actions are auto-prefixed with `tinycloud.` if not already.
 
+`delegation revoke <cid>` is a generic exact-CID operation. When `<cid>` is
+the current sign-in session, it requires `--yes` or an interactive confirmation
+warning that revocation signs you out. After the node confirms that exact CID,
+the CLI runs its normal durable logout, removes the restorable session and key,
+and blocks implicit reauthentication. Unrelated CIDs do not sign you out.
+
 `tinycloud auth import` stores delegations in `additional-delegations.json`. Every replay path installs only a grant with a locally verified proof and a binding containing its signed authority; unbound and proof-less grants never install, including while migration is deferred. [AUTH.md](AUTH.md#imported-delegations-and-their-request-bindings) covers migration and recovery.
 
 ### Stored grants
@@ -103,6 +109,10 @@ Actions are auto-prefixed with `tinycloud.` if not already.
 ```
 
 `list` is local and does not contact the node. Its JSON contains `profile`, `session` (`cid` recomputed from stored header and `expiresAt`, or `null`), `localVerification` (`available`, `session_missing`, `session_expired`, `session_invalid`), and `grants`. Each indexed grant row contains `cid` (CID-shaped or `null`), `expiry`, `expired`, `local` (`verified`, `refused`, `not_checked`, `for_another_key`), `reason` (fixed skip code or `null`), `node: "not_checked"`, `bound`, `proof` (`siwe`, `compact`, `missing`, or `null`), `source`, `scope`, and `scopeSource` (`signed` or `stored`). `for_another_key` means the stored audience names another key; its scope is unverified stored metadata and it cannot install in this session. Local verification checks signed scope and binding, not the node's delegation chain or revocation status. Human output shows `CID | LOCAL | EXPIRES | SOURCE | BOUND | SCOPE` and the session CID.
+
+The `session` JSON object has `label: "current session"` for the active CID;
+human output marks that CID `(current session)`. Do not treat the session CID
+as a disposable replica child grant.
 
 `for_another_key` is decided from a verified signed compact audience, CID, and matching transport DID, not an unsigned `delegateDID` alone. Tampered records retain their refusal reason, and proofless records retain `proof_missing`.
 

@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { createProfileReplicaPurge, NodeWasmBindings, PrivateKeySigner } from "@tinycloud/node-sdk";
 import { parseSignedCompactUcanAttenuation, parseSignedSiweCacao } from "@tinycloud/sdk-core";
 import { Replica, parseUcanGrant } from "@tinycloud/replica";
-import { SqliteReplicaStore } from "@tinycloud/replica/sqlite";
+import { SqliteReplicaStore, inspectSqliteReplicaLayout } from "@tinycloud/replica/sqlite";
 import { establishSessionStamp, restoreSessionStamp } from "@tinycloud/replica/profile-gate";
 import { REPLICA_GATE_FILE } from "@tinycloud/sdk-services/kv/replication/contractConstants";
 import {
@@ -215,6 +215,7 @@ async function server(mode: "fail" | "fail-after-first" | "hold" | "success", ci
               })();
           if (target.length === 0) return new Response("CID-bound signed revoke proof required", { status: 403 });
           revokedCids.push(target);
+          if (state === "fail") return new Response("node unavailable", { status: 503 });
           if (state === "fail-after-first" && requests.length === 2) {
             return new Response("node unavailable after first revoke", { status: 503 });
           }
@@ -781,6 +782,23 @@ describe("tc auth logout --revoke with durable replica denial", () => {
   }, 30_000);
 });
 
+test("plain logout removes a synced source-created legacy mirror after fresh verified local login", async () => {
+  const home = await mkdtemp(join(tmpdir(), "tc858-synced-legacy-logout-"));
+  homes.push(home);
+  let sessionCid = "";
+  const node = await server("success", () => sessionCid);
+  const paths = await seedWithPublicLogin(home, node.host);
+  sessionCid = paths.delegationCid;
+
+  expect(await inspectSqliteReplicaLayout(join(home, ".tinycloud", "profiles", PROFILE, "replicas", "notes")))
+    .toEqual({ unknownPaths: [] });
+  const logout = await run(home, ["auth", "logout"]);
+  expect({ exitCode: logout.exitCode, stderr: logout.stderr }).toEqual({ exitCode: 0, stderr: "" });
+  expect(await exists(paths.session)).toBe(false);
+  expect(await exists(paths.key)).toBe(false);
+  expect(await exists(paths.db)).toBe(false);
+}, 30_000);
+
 describe("explicit delegation revoke of the current sign-in CID", () => {
   test("noninteractive revoke requires --yes before any node request or local mutation", async () => {
     const home = await mkdtemp(join(tmpdir(), "tc858-current-session-confirm-"));
@@ -819,7 +837,7 @@ describe("explicit delegation revoke of the current sign-in CID", () => {
     }]);
 
     const revoked = await run(home, ["delegation", "revoke", sessionCid, "--yes"]);
-    expect(revoked.exitCode).toBe(0);
+    expect({ exitCode: revoked.exitCode, stderr: revoked.stderr }).toEqual({ exitCode: 0, stderr: "" });
     expect(node.revokedCids).toEqual([sessionCid]);
     expect(await exists(paths.session)).toBe(false);
     expect(await exists(paths.key)).toBe(false);
@@ -830,6 +848,44 @@ describe("explicit delegation revoke of the current sign-in CID", () => {
     const status = await run(home, ["auth", "status"]);
     expect(status.exitCode).toBe(0);
     expect(JSON.parse(status.stdout)).toMatchObject({ authenticated: false, hasKey: false });
+  }, 30_000);
+
+  test("node refusal of the current CID preserves credentials and replicas for retry", async () => {
+    const home = await mkdtemp(join(tmpdir(), "tc858-current-session-retry-"));
+    homes.push(home);
+    let sessionCid = "";
+    const node = await server("fail", () => sessionCid);
+    const paths = await seedWithPublicLogin(home, node.host);
+    sessionCid = paths.delegationCid;
+    node.setQueryRecords([{
+      cid: sessionCid, direction: "granted", delegatorDid: paths.ownerDid,
+      delegateDid: "did:key:z6MkSessionTc858",
+      resources: [{ resource: `${paths.spaceId}/kv/notes/`, actions: ["tinycloud.kv/get"], caveats: [] }],
+      parents: [], issuedAt: new Date(Date.now() - 60_000).toISOString(),
+      notBefore: null, expiresAt: new Date(Date.now() + 3_600_000).toISOString(), status: "active",
+    }]);
+    const session = await readFile(paths.session);
+    const key = await readFile(paths.key);
+    const db = await readFile(paths.db);
+
+    const refused = await run(home, ["delegation", "revoke", sessionCid, "--yes"]);
+    expect(refused.exitCode).toBeGreaterThan(0);
+    expect(node.revokedCids).toEqual([sessionCid]);
+    expect(await readFile(paths.session)).toEqual(session);
+    expect(await readFile(paths.key)).toEqual(key);
+    expect(await readFile(paths.db)).toEqual(db);
+    expect(JSON.parse(await withTinyCloudStateRoot(home, () =>
+      readFile(profileConfigPath(PROFILE), "utf8"))).authSignedOut).not.toBe(true);
+
+    node.setMode("success");
+    const retried = await run(home, ["delegation", "revoke", sessionCid, "--yes"]);
+    expect({ exitCode: retried.exitCode, stderr: retried.stderr }).toEqual({ exitCode: 0, stderr: "" });
+    expect(node.revokedCids).toEqual([sessionCid, sessionCid]);
+    expect(await exists(paths.session)).toBe(false);
+    expect(await exists(paths.key)).toBe(false);
+    expect(await exists(paths.db)).toBe(false);
+    expect(JSON.parse(await withTinyCloudStateRoot(home, () =>
+      readFile(profileConfigPath(PROFILE), "utf8"))).authSignedOut).toBe(true);
   }, 30_000);
 
   test("auth grants list labels the verified current session CID in machine output", async () => {

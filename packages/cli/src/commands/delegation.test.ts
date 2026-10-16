@@ -24,6 +24,7 @@ let artifactReadCalls: number;
 mock.module("../config/profiles.js", () => ({
   ProfileManager: {
     resolveContext: async () => ({ profile: "owner", host: "https://node.example.test" }),
+    getSession: async () => null,
     getProfile: async () => ({
       name: "owner",
       host: "https://node.example.test",

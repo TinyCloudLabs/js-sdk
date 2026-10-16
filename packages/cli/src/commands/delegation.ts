@@ -1,7 +1,8 @@
 import { Command } from "commander";
-import type { OpenKeyAcquisition } from "./auth.js";
+import { createInterface } from "node:readline";
+import { finishProfileLogout, type OpenKeyAcquisition } from "./auth.js";
 import { ProfileManager } from "../config/profiles.js";
-import { outputJson } from "../output/formatter.js";
+import { isInteractive, outputJson } from "../output/formatter.js";
 import { handleError, CLIError, cliErrorFromService } from "../output/errors.js";
 import { ExitCode } from "../config/constants.js";
 import { ensureAuthenticated } from "../lib/sdk.js";
@@ -16,6 +17,24 @@ function didMatches(actual: string | undefined, expected: string): boolean {
   if (!actual) return false;
   return normalizeDid(actual) === normalizeDid(expected);
 }
+async function confirmCurrentSessionRevoke(yes: boolean): Promise<void> {
+  if (yes) return;
+  const warning = "This is your current sign-in session; revoking it signs you out";
+  if (!isInteractive() || !process.stdin.isTTY) {
+    throw new CLIError("CONFIRMATION_REQUIRED", `${warning}. Re-run with --yes to confirm.`, ExitCode.USAGE_ERROR);
+  }
+  process.stderr.write(`${warning}.\n`);
+  const prompt = createInterface({ input: process.stdin, output: process.stderr });
+  try {
+    const answer = await new Promise<string>((resolve) => prompt.question("Revoke this session? [y/N] ", resolve));
+    if (!/^y(es)?$/i.test(answer.trim())) {
+      throw new CLIError("REQUEST_CANCELLED", "Current session revocation cancelled.", ExitCode.ERROR);
+    }
+  } finally {
+    prompt.close();
+  }
+}
+
 export function registerDelegationCommand(
   program: Command,
   configuration: { openKeyAcquisition?: OpenKeyAcquisition } = {},
@@ -131,17 +150,29 @@ export function registerDelegationCommand(
   delegation
     .command("revoke <cid>")
     .description("Revoke a delegation")
-    .option("--yes", "Skip local-key TTY confirmation", false)
+    .option("--yes", "Confirm revoking the current sign-in session or skip local-key TTY permission confirmation", false)
     .action(async (cid: string, options, cmd) => {
       try {
         const globalOpts = cmd.optsWithGlobals();
         const ctx = await ProfileManager.resolveContext(globalOpts);
-        const node = await ensureAuthenticated(ctx);
+        const session = await ProfileManager.getSession(ctx.profile);
+        const currentSession = session && "delegationCid" in session && session.delegationCid === cid;
+        if (currentSession) await confirmCurrentSessionRevoke(options.yes === true);
+        // This CID is about to end the session: do not open a replica runtime
+        // that could hold a lease across the post-receipt durable erase.
+        const node = await ensureAuthenticated(currentSession ? { ...ctx, replication: false } : ctx);
         const profile = await ProfileManager.getProfile(ctx.profile);
-        outputJson(await revokeDelegationOnNode({
-          ctx, node, profile, cid, yes: options.yes,
+        const revoked = await revokeDelegationOnNode({
+          ctx, node, profile, cid, yes: options.yes === true || Boolean(currentSession),
           openKeyAcquisition: configuration.openKeyAcquisition,
-        }));
+        });
+        const replicasRemoved = currentSession
+          ? await finishProfileLogout(ctx, { expectedSessionCid: cid })
+          : undefined;
+        outputJson({
+          ...revoked,
+          ...(replicasRemoved === undefined ? {} : { signedOut: true, replicasRemoved }),
+        });
       } catch (error) {
         return handleError(error);
       }
