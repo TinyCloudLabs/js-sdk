@@ -219,7 +219,6 @@ function denyFloor(gate: Gate | undefined, tombstone: Tombstone | null): { epoch
   };
 }
 
-
 function exclusive<T>(name: string, section: () => Promise<T>, signal?: AbortSignal): Promise<T> {
   if (typeof navigator === "undefined" || typeof navigator.locks?.request !== "function") {
     return Promise.reject(gatedError("gate_unavailable", "The origin Web Lock is unavailable."));
