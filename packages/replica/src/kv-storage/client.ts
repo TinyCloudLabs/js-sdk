@@ -67,7 +67,8 @@ export type IndexedDbReplicaStorageOptions = {
 function replyError(err: KvWireError): ReplicaError {
   const error = new ReplicaError(err.code as ReplicaErrorCode, err.message, err.detail);
   // Contract shape for gate refusals: `Error & { code: "REPLICA_GATED"; gate }`.
-  if (err.code === ReplicaErrorCode.GATED && typeof err.detail?.gate === "string") Object.assign(error, { gate: err.detail.gate });
+  if (err.code === ReplicaErrorCode.GATED && typeof err.detail?.gate === "string")
+    (error as ReplicaError & { gate: string }).gate = err.detail.gate;
   return error;
 }
 
@@ -308,8 +309,11 @@ class IndexedDbReplicaStorage implements ReplicaGatedStorage {
     this.lifecycle = options.lifecycle;
   }
 
-  /** The live worker, spawned on first use and again after it died. */
-  connection(): WorkerConnection {
+  /** A nonspawning probe lets the published testing helper terminate only an existing worker. */
+  connection(): WorkerConnection;
+  connection(peek: true): WorkerConnection | undefined;
+  connection(peek?: true): WorkerConnection | undefined {
+    if (peek) return this.#connection;
     if (this.#connection === undefined || this.#connection.dead) {
       const connection = new WorkerConnection(spawn(this.#options.worker), (event) => this.#event(event, connection));
       this.#connection = connection;
