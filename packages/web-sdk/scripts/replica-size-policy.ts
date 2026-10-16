@@ -228,5 +228,6 @@ export function isPolicyOnlySinceApprovedSource(root: string, approvedSource: st
     return false;
   }
   const changed = execFileSync("git", ["diff", "--no-renames", "--name-only", "-z", `${approvedSource}...HEAD`], { cwd: root });
-  return changed.toString("utf8").split("\0").filter(Boolean).every((path) => allowed.has(path));
+  return changed.toString("utf8").split("\0").filter(Boolean).every((path) =>
+    allowed.has(path) || /^\.changeset\/[^/]+\.md$/.test(path));
 }

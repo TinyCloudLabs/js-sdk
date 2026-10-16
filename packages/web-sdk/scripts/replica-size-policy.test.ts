@@ -208,4 +208,33 @@ describe("TC-858 policy-only source identity", () => {
       rmSync(root, { recursive: true, force: true });
     }
   });
+
+  it("allows Changesets Markdown but not executable files under .changeset", () => {
+    const { root, base } = fixture();
+    try {
+      mkdirSync(join(root, ".changeset"), { recursive: true });
+      writeFileSync(join(root, ".changeset", "replica-policy.md"), "---\n'@tinycloud/web-sdk': patch\n---\n\nRelease note.\n");
+      git(root, "add", ".");
+      git(root, "commit", "-qm", "release note");
+      expect(isPolicyOnlySinceApprovedSource(root, base, paths)).toBe(true);
+      writeFileSync(join(root, ".changeset", "source.ts"), "export const shipped = true;\n");
+      git(root, "add", ".");
+      git(root, "commit", "-qm", "executable file");
+      expect(isPolicyOnlySinceApprovedSource(root, base, paths)).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("refuses renaming shipped source to a Changesets Markdown file", () => {
+    const { root, base } = fixture();
+    try {
+      mkdirSync(join(root, ".changeset"), { recursive: true });
+      git(root, "mv", source, ".changeset/removed.md");
+      git(root, "commit", "-qm", "rename shipped source");
+      expect(isPolicyOnlySinceApprovedSource(root, base, paths)).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
 });
