@@ -756,11 +756,17 @@ match. This exception applies only to the recovery check, never the
 pre-action approval or an unknown path, changed database or changed root;
 the lease-fenced remover re-inspects under the profile lock and pins each
 sidecar's **current** identity immediately before nonrecursive unlink.
-For v1, complete opaque partition/pending intents and generation-fenced
-denial were committed before remote revoke; after credential shredding the
-facade clears only the exact matching deferred gate and replays those intents.
-For v3 it validates the already-denied epoch and invents no principal/intents.
-V2 invents no scoped gate/intents. All three pass
+For v1, a successful remote revoke already committed generation-fenced
+denial and complete opaque partition/pending intents before any node call.
+A plain logout, or a marker written just before an interrupted pre-remote
+denial, may instead reach cleanup with the original gate still active.
+`recoverLogoutPending` validates that gate against the marker and commits
+generation-fenced denial with the complete scoped intent inventory under
+the profile lock **before** erasing anything. If v1 is already deferred,
+it validates the exact denied epoch/hash and clears deferral for idempotent
+intent replay. For v3 it validates the already-denied epoch and invents no
+principal/intents. V2 validates the orphan marker and absence of a replacement
+gate; it invents no scoped gate/intents. All three pass
 `eraseLegacyReplicas({ discardLocalChanges, approvedUnknown, knownRoots,
 knownEntries, missingDatabases })` to the CLI after credential shredding
 and their version-specific gate or orphan fence. This callback deletes only
@@ -806,10 +812,14 @@ deliberately does not parse CLI `ProfileConfig`; the
 and crash-tested by the CLI. If it fails, the logout marker stays and
 network restore/replica delivery remain fenced.
 
-**Explicit plain logout after failed `--revoke`.** This is an override,
-not an online success. `remotePendingLogout({ principal })` validates the
-owner-bound marker and its v1 deferred, v2 orphan or v3 inactive fence. On
-the **first** plain-logout command the CLI
+**Explicit plain logout after pending or failed `--revoke`.** This is an
+override, not online success. For an already-deferred v1 marker,
+`remotePendingLogout({ principal })` validates its denied fence; an
+interrupted marker-before-deny v1 can still have an active gate, which
+`abandonRemoteLogout` validates under the profile lock without a remote call.
+V2 checks its pinned orphan marker and absence of a replacement gate; v3
+checks its exact inactive epoch and null principal. On the **first**
+plain-logout command the CLI
 obtains and displays a fresh read-only preflight, then calls
 `abandonRemoteLogout({ principal, approval, discardLocalChanges? })`
 under the profile lock. The facade compares the **original** durable
@@ -830,8 +840,11 @@ over UTF-8 `tc-logout-approve-v1\0` followed by the canonical JSON array
 `approvalSalt` is the random persisted marker field. `entries` contains
 the **full current** unknown and known entries `{path,kind,dev,ino}`,
 known roots represented as `kind: "directory"`, and missing databases
-represented as `{path,kind:"missing",dev:"",ino:""}`, sorted bytewise
-by path, kind, dev, then ino (no locale ordering). The refusal's typed
+represented as `{path,kind:"missing",dev:"",ino:""}`, sorted by JavaScript
+UTF-16 code-unit ordinal comparison (`<`/`>`), not locale or UTF-8 byte
+order, by path, kind, dev, then ino. For example, a path beginning U+10000
+sorts **before** one beginning U+E000, although their UTF-8 byte order is
+the reverse. The refusal's typed
 `inventoryApprovalEntries: ProfileReplicaApprovalEntry[]` and message
 display this same token-bound set from one locked preflight. Paths are
 bound by the hash but are not encoded in the visible token. The token is
@@ -843,8 +856,9 @@ Only a **separate invocation** with both `--discard-local-changes` and
 `approveChangedPlainLogout({ principal, approval,
 discardLocalChanges: true, inventoryApprovalToken })`. Under the lock it
 rechecks the remote-pending marker, original-X-to-current-Y mismatch,
-principal, denied epoch and exact current preflight, and recomputes the
-token. Missing, mismatched or reused tokens refuse without mutation and
+principal, the version-specific v1 active/deferred, v2 orphan or v3 inactive
+gate fence, and the exact current preflight, then recomputes the token.
+Missing, mismatched or reused tokens refuse without mutation and
 show a fresh listing/token on inventory change. A match atomically
 persists Y's approved inventory and `remoteAbandoned: true`, never a
 remote receipt. No expiration is imposed on the token; an epoch, marker
