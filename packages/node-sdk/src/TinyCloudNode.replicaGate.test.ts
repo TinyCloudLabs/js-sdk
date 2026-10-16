@@ -444,18 +444,40 @@ describe("browser replica gate without a profile directory", () => {
   test("OpenKey approval uses the original prepared SIWE before exposing a fresh replica stamp", async () => {
     await withBrowserOrigin(async (lifecycle) => {
       const signer = new PrivateKeySigner(PROOF_PRIVATE_KEY);
+      let ownerSignCalls = 0;
+      const identityOnlySigner = {
+        getAddress: () => signer.getAddress(),
+        getChainId: () => signer.getChainId(),
+        signMessage: async () => {
+          ownerSignCalls++;
+          throw new Error("Owner wallet signing requires a separate OpenKey approval.");
+        },
+      };
       const node = new TinyCloudNode({
         host: RESTORE_HOST,
-        signer,
+        signer: identityOnlySigner,
         wasmBindings: new NodeWasmBindings(),
         autoBootstrapAccount: false,
+        includeAccountRegistryPermissions: false,
+        capabilityRequest: {
+          manifests: [],
+          resources: [{
+            service: "tinycloud.kv",
+            space: "default",
+            path: "notes/",
+            actions: ["tinycloud.kv/get", "tinycloud.kv/sync"],
+          }],
+          delegationTargets: [],
+          registryRecords: [],
+          expiryMs: 86_400_000,
+          includePublicSpace: false,
+        },
         replication: {
           enabled: true,
           prefixes: ["notes/"],
           storage: { kind: "indexeddb", lifecycle, async open() { throw new Error("No partition open expected."); }, async purge() {} },
         },
       });
-      (node as any).bootstrapAccountIfNeeded = async () => true;
       const priorFetch = globalThis.fetch;
       globalThis.fetch = async (input, init) => {
         const url = String(input);
@@ -546,6 +568,8 @@ describe("browser replica gate without a profile directory", () => {
         expect(node.sessionDid).toBe(preparedDid);
         expect(node.replicaStamp).toBeDefined();
         expect(await inspectReplicaKeyPresence()).toEqual({ gateHmac: true, accountKey: true });
+        await node.waitForAccountRegistrySync();
+        expect(ownerSignCalls).toBe(0);
         const local = new TinyCloudNode({
           host: RESTORE_HOST,
           signer,
