@@ -833,7 +833,7 @@ describe.skipIf(!REAL_NODE_BIN)("node-sdk replication against a real node", () =
     }
   }, 120_000);
 
-  test("compact delegate restore works offline and serves its covered replica scope", async () => {
+  test("a compact leaf without owner proof cannot sync or serve another session's cached bytes offline", async () => {
     const replicaDir = await mkdtemp(join(tmpdir(), "tc858-delegate-offline-"));
     const storage = createSqliteReplicaStorage({ dir: replicaDir });
     const owner = new TinyCloudNode({
@@ -852,7 +852,7 @@ describe.skipIf(!REAL_NODE_BIN)("node-sdk replication against a real node", () =
     const compactSession = JSON.parse(manager.jwk(keyId)!);
     const verificationMethod = manager.getDID(keyId);
     const offlineEvents: import("@tinycloud/sdk-services").ReplicationEvent[] = [];
-    const offlineOptions = {
+    const offline = new TinyCloudNode({
       host,
       wasmBindings: new NodeWasmBindings(),
       autoBootstrapAccount: false,
@@ -861,12 +861,10 @@ describe.skipIf(!REAL_NODE_BIN)("node-sdk replication against a real node", () =
         enabled: true,
         prefixes: ["notes/"],
         storage,
-        mode: "foreground" as const,
+        mode: "foreground",
         onEvent: (event: import("@tinycloud/sdk-services").ReplicationEvent) => offlineEvents.push(event),
       },
-    };
-    const onlineDelegate = new TinyCloudNode(offlineOptions);
-    const offline = new TinyCloudNode(offlineOptions);
+    });
     const originalFetch = globalThis.fetch;
     try {
       await owner.signIn();
@@ -880,16 +878,6 @@ describe.skipIf(!REAL_NODE_BIN)("node-sdk replication against a real node", () =
         path: "notes/",
         actions: ["tinycloud.kv/get", "tinycloud.kv/sync"],
       }]);
-      await onlineDelegate.restoreSession({
-        delegationHeader: grant.delegation.delegationHeader,
-        delegationCid: grant.delegation.cid,
-        spaceId,
-        jwk: compactSession,
-        verificationMethod,
-        tinycloudHosts: [host],
-      });
-      await onlineDelegate.replication!.sync();
-      await onlineDelegate.replication!.close();
       let delegatePosts = 0;
       globalThis.fetch = (async (input: RequestInfo | URL) => {
         if (String(input).endsWith("/delegate")) delegatePosts++;
@@ -904,15 +892,22 @@ describe.skipIf(!REAL_NODE_BIN)("node-sdk replication against a real node", () =
         tinycloudHosts: [host],
       });
       expect(delegatePosts).toBe(0);
+      await expect(offline.replication!.sync()).rejects.toMatchObject({ code: "NOT_COVERED" });
       const read = await offline.kv.get("notes/covered");
-      expect(read.data?.data).toBe("cached");
+      expect(read.ok).toBe(false);
+      expect(read.data?.data).not.toBe("cached");
+      expect(offlineEvents.some((event) =>
+        event.type === "replication.read" && event.key === "notes/covered" &&
+        event.source === "network"
+      )).toBe(true);
       expect(offlineEvents.some((event) =>
         event.type === "replication.read" && event.key === "notes/covered" &&
         event.source === "replica" && event.reason === "hit"
-      )).toBe(true);
+      )).toBe(false);
     } finally {
       globalThis.fetch = originalFetch;
-      await Promise.all([owner.replication?.close(), onlineDelegate.replication?.close(), offline.replication?.close()]);
+      await Promise.all([owner.replication?.close(), offline.replication?.close()]);
+      await rm(replicaDir, { recursive: true, force: true });
     }
   }, 120_000);
 });
