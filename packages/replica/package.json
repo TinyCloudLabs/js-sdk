@@ -54,7 +54,7 @@
     "dist"
   ],
   "scripts": {
-    "build": "bun run clean && tsup",
+    "build": "bun run clean && tsup && bun scripts/hash-worker.ts",
     "clean": "rm -rf dist",
     "test": "bun test",
     "typecheck": "tsc --noEmit"

@@ -16,7 +16,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } fr
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
 import { TinyCloudNode } from "@tinycloud/node-sdk";
 import { spawn, type ChildProcess } from "node:child_process";
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { existsSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { createServer } from "node:net";
@@ -123,7 +123,10 @@ beforeAll(async () => {
       const file = Bun.file(join(FIXTURE_DIST, path));
       if (!(await file.exists())) return new Response("not found", { status: 404 });
       const type = path.endsWith(".html") ? "text/html" : path.endsWith(".js") ? "text/javascript" : "application/octet-stream";
-      return new Response(file, { headers: { "content-type": type } });
+      return new Response(file, { headers: {
+        "content-type": type,
+        ...(/\/kv-storage\.worker\.[0-9a-f]{64}(?:-[A-Za-z0-9_-]+)?\.js$/.test(path) ? { "cache-control": "public, max-age=31536000, immutable" } : {}),
+      } });
     },
   });
   origin = `http://127.0.0.1:${server.port}`;
@@ -638,9 +641,29 @@ describe.skipIf(!RUN)("kv-storage over a fake feed (Chromium)", () => {
     expect(await page.evaluate(() => window.__kv.get("h", "notes/a"))).toMatchObject({ ok: true, value: { status: "present", value: "two" } });
   }, 60_000);
 
+  test("default worker loads immutable content-hashed WASM asset", async () => {
+    const page = await kvPage();
+    await page.evaluate(() => window.__kv.createStorage("s", "default"));
+    const workerStarted = page.waitForEvent("worker");
+    const opened = await page.evaluate((input) => window.__kv.open("s", "h", input as never), specOf("default-asset"));
+    expect(opened).toMatchObject({ ok: true, value: { deviceDid: expect.stringContaining("did:key:") } });
+    const workerUrl = (await workerStarted).url();
+    // Vite rewrites the worker (and computes its own fingerprint). Its bytes
+    // are not the raw package worker bytes named by the embedded SHA-256.
+    const packageHash = /\/kv-storage\.worker\.([0-9a-f]{64})-[A-Za-z0-9_-]+\.js$/.exec(new URL(workerUrl).pathname)?.[1];
+    expect(packageHash).toBeDefined();
+    const canonical = Bun.file(resolve(import.meta.dir, `../dist/kv-storage.worker.${packageHash}.js`));
+    expect(createHash("sha256").update(Buffer.from(await canonical.arrayBuffer())).digest("hex")).toBe(packageHash);
+    const response = await fetch(workerUrl);
+    expect(response.status).toBe(200);
+    expect(response.headers.get("cache-control")).toBe("public, max-age=31536000, immutable");
+    expect((await response.arrayBuffer()).byteLength).toBeGreaterThan(0);
+  }, 60_000);
+
   test("published production worker refuses missing origin gate and opens after establishment", async () => {
     const page = await kvPage();
     await page.evaluate(() => window.__kv.createStorage("s", "published"));
+    const workerStarted = page.waitForEvent("worker");
     const spec = specOf("default-gate");
     const missing = await page.evaluate((input) => window.__kv.open("s", "missing", {
       ...input, stamp: { incarnation: "absent-gate", lifecycleEpoch: 0 },
@@ -648,6 +671,9 @@ describe.skipIf(!RUN)("kv-storage over a fake feed (Chromium)", () => {
     expect(missing).toMatchObject({ ok: false, code: "REPLICA_GATED", gate: "not_established" });
     const opened = await page.evaluate((input) => window.__kv.open("s", "h", input as never), spec);
     expect(opened).toMatchObject({ ok: true, value: { deviceDid: expect.stringContaining("did:key:") } });
+    const legacyWorkerUrl = (await workerStarted).url();
+    expect(new URL(legacyWorkerUrl).pathname).toMatch(/\/kv-storage\.worker\.js$/);
+    expect((await fetch(legacyWorkerUrl)).headers.get("cache-control") ?? "").not.toContain("immutable");
   }, 60_000);
 
   test("without a stamp, open fails closed", async () => {

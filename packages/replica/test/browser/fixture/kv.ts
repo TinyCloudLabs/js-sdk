@@ -52,18 +52,20 @@ function need<T>(map: Map<string, T>, name: string): T {
 }
 
 const api = {
-  createStorage(name: string, kind: "fake" | "real" | "published", quota?: ReplicaQuotaSpec): void {
+  createStorage(name: string, kind: "fake" | "real" | "published" | "default", quota?: ReplicaQuotaSpec): void {
     const worker =
-      kind === "fake"
-        ? () => {
-          const instance = new Worker(new URL("./kv-test-worker.ts", import.meta.url), { type: "module" });
-          fakeWorkers.set(name, instance);
-          if (fakeClocks.has(name)) instance.postMessage({ testOnly: "setClock", at: need(fakeClocks, name) });
-          return instance;
-        }
-        : kind === "real"
-          ? () => new Worker(new URL("./kv-real-worker.ts", import.meta.url), { type: "module" })
-          : new URL(publishedWorkerUrl, import.meta.url);
+      kind === "default"
+        ? undefined
+        : kind === "fake"
+          ? () => {
+            const instance = new Worker(new URL("./kv-test-worker.ts", import.meta.url), { type: "module" });
+            fakeWorkers.set(name, instance);
+            if (fakeClocks.has(name)) instance.postMessage({ testOnly: "setClock", at: need(fakeClocks, name) });
+            return instance;
+          }
+          : kind === "real"
+            ? () => new Worker(new URL("./kv-real-worker.ts", import.meta.url), { type: "module" })
+            : new URL(publishedWorkerUrl, import.meta.url);
     storages.set(name, indexedDbReplicaStorage({ worker, lifecycle, gateTx: gate, ...(quota === undefined ? {} : { ledger: ledgerFor(quota) }) }));
   },
   /** Test worker only: wait for the clock ACK before making the next guarded call. */

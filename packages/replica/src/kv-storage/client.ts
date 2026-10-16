@@ -48,7 +48,7 @@ import { ERASE_STORES, KV_STORE, kvPartitionEraser, openKvDatabase, partitionIdO
 
 export type IndexedDbReplicaStorageOptions = {
   /**
-   * Spawn this worker instead of the bundled `kv-storage.worker.js`
+   * Spawn this worker instead of the content-hashed default
    * (custom bundler layouts). A factory runs on first `open`.
    */
   worker?: Worker | URL | string | (() => Worker);
@@ -84,6 +84,8 @@ function spawn(source: IndexedDbReplicaStorageOptions["worker"]): Worker {
     if (source instanceof URL || typeof source === "string") return new Worker(source, { type: "module" });
     if (typeof source === "function") return source();
   }
+  // The package build replaces this literal with the worker's SHA-256 filename;
+  // leave the new URL shape intact for bundlers' static asset resolution.
   return new Worker(new URL("./kv-storage.worker.js", import.meta.url), { type: "module" });
 }
 

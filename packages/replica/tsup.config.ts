@@ -57,8 +57,8 @@ export default defineConfig([
   },
   {
     // The read-through `KVReplicaStorage` (TC-858 Phase 2) and its test-only
-    // fault seams. ESM only, like `browser`: the worker resolves through
-    // `new URL("./kv-storage.worker.js", import.meta.url)`.
+    // fault seams. ESM only, like `browser`: after tsup, hash-worker.ts
+    // replaces the literal worker URL with its SHA-256 filename.
     entry: { "kv-storage": "src/kv-storage/index.ts", "kv-storage-testing": "src/kv-storage/testing.ts" },
     format: ["esm"],
     platform: "browser",
