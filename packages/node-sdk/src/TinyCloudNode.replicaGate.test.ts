@@ -473,7 +473,10 @@ describe("browser replica gate without a profile directory", () => {
       };
       try {
         let approvedSiwe: string | undefined;
+        let preparedCalls = 0;
+        let retryCalls = 0;
         await node.signInWithOpenKey(async ({ siwe, jwk }) => {
+          preparedCalls++;
           expect(node.replicaStamp).toBeUndefined();
           expect(JSON.stringify(jwk)).toBeTruthy();
           approvedSiwe = siwe;
@@ -496,12 +499,45 @@ describe("browser replica gate without a profile directory", () => {
           return {
             protocolVersion: 1,
             address: await signer.getAddress(),
-            signature: await signer.signMessage(siwe),
+            signature: await signer.signMessage(`${siwe} rejected`),
             signedMessage: siwe,
             selectedActionKeys,
             permissions,
           };
+        }, {
+          retryResult: async (error, original, attempt) => {
+            retryCalls++;
+            expect(error.message).toContain("OpenKey signature verification failed");
+            expect(attempt).toBe(1);
+            expect(original.siwe).toBe(approvedSiwe);
+            const selectedActionKeys: string[] = [];
+            const permissions: Array<{ service: string; space: string; path: string; actions: string[] }> = [];
+            for (const [resource, actions] of Object.entries(extractRecapAttenuations(original.siwe))) {
+              const { space, path } = parseCanonicalRecapResource(resource);
+              const grouped = new Map<string, string[]>();
+              for (const ability of Object.keys(actions)) {
+                const service = ability.slice(0, ability.indexOf("/"));
+                if (ability !== "tinycloud.capabilities/read") {
+                  selectedActionKeys.push(`${service}\0${space}\0${path}\0${ability}`);
+                }
+                grouped.set(service, [...(grouped.get(service) ?? []), ability]);
+              }
+              for (const [service, granted] of grouped) {
+                permissions.push({ service, space, path, actions: granted });
+              }
+            }
+            return {
+              protocolVersion: 1,
+              address: await signer.getAddress(),
+              signature: await signer.signMessage(original.siwe),
+              signedMessage: original.siwe,
+              selectedActionKeys,
+              permissions,
+            };
+          },
         });
+        expect(preparedCalls).toBe(1);
+        expect(retryCalls).toBe(1);
         expect(node.session?.siwe).toBe(approvedSiwe);
         expect(node.replicaStamp).toBeDefined();
         expect(await inspectReplicaKeyPresence()).toEqual({ gateHmac: true, accountKey: true });

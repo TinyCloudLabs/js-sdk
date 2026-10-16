@@ -158,6 +158,8 @@ export { FileSessionStorage } from "./storage/FileSessionStorage";
 export {
   NodeUserAuthorization,
   type NodeUserAuthorizationConfig,
+  type OpenKeyAuthorizeInput,
+  type OpenKeyAuthorizationResultV1,
 } from "./authorization/NodeUserAuthorization";
 
 // OpenKey integration adapter — Sol continuation contract requires a

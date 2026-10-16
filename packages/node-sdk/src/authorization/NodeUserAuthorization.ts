@@ -62,6 +62,17 @@ import {
   defaultSignStrategy,
 } from "./strategies";
 import { MemorySessionStorage } from "../storage/MemorySessionStorage";
+import type { OpenKeyBridgeInput, NodeUserAuthorizationAuthorizeFn } from "./openKeyBridge";
+
+export type OpenKeyAuthorizeInput = OpenKeyBridgeInput;
+export type OpenKeyAuthorizationResultV1 = Awaited<ReturnType<NodeUserAuthorizationAuthorizeFn>>;
+
+type PreparedOpenKeySession = {
+  siwe: string;
+  jwk: Record<string, unknown>;
+  spaceId: string;
+  verificationMethod: string;
+};
 
 /**
  * A PKH space id with its EIP-155 address lowercased: the address is
@@ -1849,45 +1860,22 @@ export class NodeUserAuthorization implements IUserAuthorization {
    * @param options Optional overrides for the OpenKey request.
    */
   async signInWithOpenKey(
-    authorizeFn: (input: {
-      protocolVersion: 1;
-      siwe: string;
-      jwk: Record<string, unknown>;
-      host?: string;
-      /**
-       * Sol MAJOR-3: OpenKey key ID (managed or external key) to sign
-       * with. When omitted, the OpenKey SDK falls back to the last
-       * connected key. Callers who want to bind the flow to a specific
-       * OpenKey key can override via options.openkeyKeyId; otherwise the
-       * bridge relies on the SDK's connected-key state.
-       */
-      keyId?: string;
-      /**
-       * Optional presentation envelope forwarded to the OpenKey widget.
-       * Built from this instance's `_manifest` when set. Display-only —
-       * the widget/server MUST NOT let it expand authority. The envelope
-       * carries `manifests` payloads plus a stable SHA-256 digest so the
-       * OpenKey server can origin-bind the browser origin against the
-       * app's well-known manifest.
-       */
-      presentation?: CapabilityPresentationEnvelopeV1;
-    }) => Promise<{
-      protocolVersion: 1;
-      address: string;
-      signature: string;
-      signedMessage: string;
-      selectedActionKeys: string[];
-      permissions: Array<{ service: string; space: string; path: string; actions: string[] }>;
-    }>,
+    authorizeFn: NodeUserAuthorizationAuthorizeFn,
     options?: {
       host?: string;
       openkeyKeyId?: string;
-      /**
-       * Optional caller-supplied reason string forwarded in the
-       * presentation envelope. Rendered as caller-supplied (never
-       * verified) in the widget.
-       */
+      /** Caller-supplied display reason, not signed authority. */
       reason?: string;
+      /**
+       * Supply another candidate without regenerating the SIWE or session key.
+       * Called only after transport or pre-commit verification rejects a result.
+       * Return null to cancel; activation errors are never signing retries.
+       */
+      retryResult?: (
+        error: Error,
+        originalRequest: OpenKeyAuthorizeInput,
+        attempt: number,
+      ) => Promise<OpenKeyAuthorizationResultV1 | null>;
     },
   ): Promise<ClientSession> {
     // A per-call host override is the host this session will actually use,
@@ -1931,21 +1919,42 @@ export class NodeUserAuthorization implements IUserAuthorization {
     //    one so the widget/SDK routes to the specific OpenKey key rather
     //    than the SDK's connected-key default.
     const hostHint = this.primaryTinyCloudHost;
-    const result = await authorizeFn({
+    const originalRequest: OpenKeyAuthorizeInput = {
       protocolVersion: 1,
       siwe: prepared.siwe,
       jwk,
       host: hostHint,
       keyId: options?.openkeyKeyId,
       presentation,
-    });
-
-    // 4. Complete with the EXACT bytes OpenKey signed. Every subset
-    //    invariant (immutable fields preserved, capabilities ⊆ prepared,
-    //    selectedActionKeys grounded in signedMessage, permissions
-    //    consistent) is enforced by signInWithOpenKeyResult before any
-    //    session state is created.
-    return this.signInWithOpenKeyResult(result, prepared, keyId, jwk);
+    };
+    let attempt = 0;
+    const retry = async (error: unknown): Promise<OpenKeyAuthorizationResultV1> => {
+      if (!options?.retryResult) throw error;
+      const next = await options.retryResult(
+        error instanceof Error ? error : new Error(String(error)),
+        originalRequest,
+        ++attempt,
+      );
+      if (next === null) throw error;
+      return next;
+    };
+    let result: OpenKeyAuthorizationResultV1;
+    try {
+      result = await authorizeFn(originalRequest);
+    } catch (error) {
+      result = await retry(error);
+    }
+    for (;;) {
+      let signed: PreparedOpenKeySession;
+      try {
+        signed = await this.verifyOpenKeyResult(result, prepared);
+      } catch (error) {
+        result = await retry(error);
+        continue;
+      }
+      // Verification retries never repeat network activation or create a new SIWE.
+      return this.signInWithPreparedSession(signed, result.signature, keyId, jwk);
+    }
   }
 
   /**
@@ -2038,28 +2047,20 @@ export class NodeUserAuthorization implements IUserAuthorization {
    *    (resource, action) pair in the returned SIWE.
    */
   async signInWithOpenKeyResult(
-    result: {
-      protocolVersion: 1;
-      address: string;
-      signature: string;
-      signedMessage: string;
-      selectedActionKeys: string[];
-      permissions: Array<{ service: string; space: string; path: string; actions: string[] }>;
-    },
-    prepared: {
-      /**
-       * The ORIGINAL SIWE the SDK produced via {@link prepareSessionForSigning}.
-       * Used as the source-of-truth reference for immutable-header and
-       * capability-subset comparison against `result.signedMessage`.
-       */
-      siwe: string;
-      jwk: Record<string, unknown>;
-      spaceId: string;
-      verificationMethod: string;
-    },
+    result: OpenKeyAuthorizationResultV1,
+    prepared: PreparedOpenKeySession,
     keyId: string,
     jwk: Record<string, unknown>,
   ): Promise<ClientSession> {
+    const signed = await this.verifyOpenKeyResult(result, prepared);
+    return this.signInWithPreparedSession(signed, result.signature, keyId, jwk);
+  }
+
+  /** Validate a candidate without activating a network session, so paste retries reuse one preparation. */
+  private async verifyOpenKeyResult(
+    result: OpenKeyAuthorizationResultV1,
+    prepared: PreparedOpenKeySession,
+  ): Promise<PreparedOpenKeySession> {
     if (result.protocolVersion !== 1) {
       throw new Error(`Unsupported OpenKey protocol version ${result.protocolVersion}`);
     }
@@ -2506,17 +2507,12 @@ export class NodeUserAuthorization implements IUserAuthorization {
     // Retain nonRequiredGrantedPairs reference so tsc doesn't drop it.
     void nonRequiredGrantedPairs;
 
-    return this.signInWithPreparedSession(
-      {
-        siwe: result.signedMessage,
-        jwk: prepared.jwk,
-        spaceId: prepared.spaceId,
-        verificationMethod: prepared.verificationMethod,
-      },
-      result.signature,
-      keyId,
-      jwk,
-    );
+    return {
+      siwe: result.signedMessage,
+      jwk: prepared.jwk,
+      spaceId: prepared.spaceId,
+      verificationMethod: prepared.verificationMethod,
+    };
   }
 
   /**
