@@ -32,6 +32,87 @@ function context(host: string): ServiceContext {
 }
 
 describe("node ReplicationRuntime binding", () => {
+  test("a refused restore binds network-only reads with one gated event and no replica access", async () => {
+    let opens = 0;
+    let pending = 0;
+    const events: Array<{ type: string; op?: string; reason?: string; outcome?: string; code?: string }> = [];
+    const storage = {
+      kind: "indexeddb" as const,
+      async open() { opens++; throw new Error("Gated restore must not open a replica"); },
+      pendingWrites() { pending++; throw new Error("Gated restore must not access pending writes"); },
+      async purge() {},
+    } as KVReplicaStorage;
+    const runtime = new ReplicationRuntime({ enabled: true, prefixes: ["notes/"], storage, onEvent: (event) => events.push(event) }, clock);
+    let primary: KVReadThrough | null = null;
+    let secondary: KVReadThrough | null = null;
+    const scope = { context: context("https://node.example"), session, gate: "stamp_stale" as const,
+      primaryKV: [
+        { space: primarySpace, kv: { setReadThrough(value: KVReadThrough | null) { primary = value; } } },
+        { space: "tinycloud:pkh:eip155:1:0xabc:other", kv: { setReadThrough(value: KVReadThrough | null) { secondary = value; } } },
+      ],
+    };
+    await runtime.bindGatedNetworkOnly(scope);
+    expect(primary).not.toBeNull();
+    expect(secondary).toBeNull();
+    expect(await runtime.control.status()).toMatchObject([{ prefix: "notes/", state: "gated", gate: "stamp_stale" }]);
+    await expect(runtime.control.sync()).rejects.toMatchObject({ code: "REPLICA_GATED", gate: "stamp_stale" });
+    const offline = Object.assign(new Error("network offline"), { code: "NETWORK_ERROR" });
+    let networkCalls = 0;
+    const network = async (): Promise<never> => { networkCalls++; throw offline; };
+    const signal = new AbortController().signal;
+    const read = primary!;
+    await expect(read.get({ space: primarySpace, key: "notes/a", path: "notes/a", options: undefined, signal, network })).rejects.toBe(offline);
+    await expect(read.list({ space: primarySpace, listPath: "notes/", options: undefined, signal, network })).rejects.toBe(offline);
+    expect(networkCalls).toBe(2);
+    expect(events.filter((event) => event.type === "replication.read")).toMatchObject([
+      { op: "get", reason: "replica_gated", outcome: "error", code: "REPLICA_GATED" },
+      { op: "list", reason: "replica_gated", outcome: "error", code: "REPLICA_GATED" },
+    ]);
+    const networkValue = ok({ data: "network", headers: {} });
+    const requested = await read.get({ space: primarySpace, key: "different key", path: "notes/a",
+      options: { source: "network" }, signal, network: async () => { networkCalls++; return networkValue; } });
+    expect(requested).toBe(networkValue);
+    expect(events.at(-1)).toMatchObject({ reason: "NETWORK_REQUESTED", outcome: "found" });
+    const notCovered = await read.get({ space: primarySpace, key: "notes/a", path: "notesX",
+      options: undefined, signal, network: async () => { networkCalls++; return networkValue; } });
+    expect(notCovered).toBe(networkValue);
+    expect(events.at(-1)).toMatchObject({ reason: "not_covered", key: "notesX" });
+    const observedBeforeSecondary = events.length;
+    const secondaryValue = await read.get({ space: "tinycloud:pkh:eip155:1:0xabc:other", key: "notes/a", path: "notes/a",
+      options: undefined, signal, network: async () => { networkCalls++; return networkValue; } });
+    expect(secondaryValue).toBe(networkValue);
+    expect(events).toHaveLength(observedBeforeSecondary);
+    const cursor = await read.list({ space: primarySpace, listPath: "notes/", options: { cursor: "tcr1.not-a-cursor" },
+      signal, network });
+    expect(cursor).toMatchObject({ ok: false, error: { code: "INVALID_INPUT", meta: { replication: "cursor_restart" } } });
+    expect(networkCalls).toBe(5);
+    expect(events.at(-1)).toMatchObject({ reason: "cursor_restart", outcome: "error" });
+    await expect(read.list({ space: primarySpace, listPath: "notes/", options: { cursor: "foreign.cursor" },
+      signal, network })).rejects.toBe(offline);
+    expect(events.at(-1)).toMatchObject({ reason: "network_cursor", outcome: "error" });
+    await expect(read.list({ space: primarySpace, listPath: "notes/", options: { raw: true },
+      signal, network })).rejects.toBe(offline);
+    expect(events.at(-1)).toMatchObject({ reason: "unsupported_option", outcome: "error" });
+    const write = await read.write({ op: "put", space: primarySpace, entries: [{ path: "notes/a", body: "alpha" }], signal, network: async () => {
+      networkCalls++;
+      return ok("network");
+    } });
+    expect(write).toEqual(ok("network"));
+    expect(networkCalls).toBe(8);
+    expect(opens).toBe(0);
+    expect(pending).toBe(0);
+    expect(events.filter((event) => event.type === "replication.write")).toHaveLength(0);
+    const readCount = events.filter((event) => event.type === "replication.read").length;
+    const delayedNetwork = Promise.withResolvers<never>();
+    const delayed = read.get({ space: primarySpace, key: "notes/a", path: "notes/a", options: undefined, signal,
+      network: () => delayedNetwork.promise });
+    await runtime.unbind();
+    expect(primary).toBeNull();
+    delayedNetwork.reject(offline);
+    await expect(delayed).rejects.toBe(offline);
+    expect(events.filter((event) => event.type === "replication.read")).toHaveLength(readCount);
+  });
+
   test("binds by canonical host/session identity and shares pending state on session replacement", async () => {
     let pendingStores = 0;
     const storage = {

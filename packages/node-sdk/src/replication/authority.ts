@@ -26,14 +26,17 @@ import {
   type WasmRecapEntry,
   type TinyCloudSession,
   type KVReplicaStorage,
+  type ServiceContext,
+  type ReplicationOptions,
 } from "@tinycloud/sdk-core";
 import {
   type AuthorityRefusal,
   type ReplicaConsentAnchor,
   type ReplicaDevice,
   type ReplicationAuthority,
+  type ReplicationEvent,
 } from "@tinycloud/sdk-services";
-import type { ReplicaSessionStamp } from "@tinycloud/sdk-services/kv/replication";
+import type { ReplicaDenyInput, ReplicaSessionStamp } from "@tinycloud/sdk-services/kv/replication";
 import type { DelegateToOptions, DelegateToResult, TinyCloudNode } from "../TinyCloudNode";
 import type { ReplicaRuntime } from "./replica-contract";
 // @ts-ignore -- node-sdk builds before replica declarations; keep the literal import for bundlers.
@@ -41,6 +44,27 @@ import { parseUcanGrant as replicaParseUcanGrant } from "@tinycloud/replica";
 const parseUcanGrant = replicaParseUcanGrant as ReplicaRuntime["parseUcanGrant"];
 export { assertValidReplicationConfig } from "./config";
 export { augmentSignInEntriesWithReplication, hasUnrestrictedGetCoverage } from "./authority-sign-in";
+
+/** Report a completed deny from the lazy replica path; delivery was already revoked synchronously. */
+export function reportReplicaDenial(
+  result: { status: string; code?: string; intents?: number },
+  reason: ReplicaDenyInput["reason"],
+  onEvent: ReplicationOptions["onEvent"],
+  context?: ServiceContext,
+): void {
+  if (result.status !== "denied" && result.status !== "deleted" && result.status !== "marker") return;
+  const event: Extract<ReplicationEvent, { type: "replication.lifecycle" }> = {
+    type: "replication.lifecycle",
+    at: new Date().toISOString(),
+    reason,
+    action: result.status === "denied" ? "denied" : result.status === "deleted" ? "database_deleted" : "marker_set",
+    ...(result.status === "denied" ? { partitions: result.intents } : {}),
+    ...(result.status === "marker" ? { code: result.code } : {}),
+  };
+  try { onEvent?.(event); } catch { /* Observability cannot undo committed denial. */ }
+  const { type, ...data } = event;
+  try { context?.emit(type, data); } catch { /* Observability cannot undo committed denial. */ }
+}
 
 const KV_GET = KV.GET;
 const KV_SYNC = KV.SYNC;

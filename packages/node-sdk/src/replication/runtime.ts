@@ -1,5 +1,6 @@
 import { pkhDid } from "@tinycloud/sdk-core";
 import type { FetchFunction, ServiceContext, ServiceSession } from "@tinycloud/sdk-core";
+import { kvPrefixCovers } from "@tinycloud/sdk-services/kv/replication/prefix";
 import type {
   KVReadThrough,
   KVReplicaStorage,
@@ -11,8 +12,10 @@ import type {
   ReplicaSessionStamp,
   ReplicationIdentity,
   ReplicationOptions,
+  ReplicaGateReason,
   ReplicationScheduler,
 } from "@tinycloud/sdk-services";
+
 type ReplicationServices = typeof import("@tinycloud/sdk-services/kv/replication");
 
 export interface ReplicationRuntimeOptions extends ReplicationOptions {
@@ -31,6 +34,9 @@ export interface ReplicationRuntimeBinding {
   nodeFeatures?: readonly string[];
   primaryKV: Array<{ space: string; kv: { setReadThrough(readThrough: KVReadThrough | null): void } }>;
 }
+export type GatedReplicationRuntimeBinding = Pick<ReplicationRuntimeBinding, "context" | "session" | "primaryKV"> & {
+  gate: ReplicaGateReason;
+};
 
 const scheduler: ReplicationScheduler = {
   now: () => Date.now(),
@@ -61,6 +67,8 @@ export class ReplicationRuntime {
   private readonly pending = new Map<string, { stamp?: ReplicaSessionStamp; store: PendingWriteStore }>();
   private readonly attached = new Map<ReadThroughKV, string>();
   private current?: KVReplicationController;
+  private gated?: KVReadThrough;
+  private gatedReason?: ReplicaGateReason;
   private lastController?: KVReplicationController;
   private unsubscribeConsentExpired?: () => void;
   private previous: Promise<void> = Promise.resolve();
@@ -83,10 +91,17 @@ export class ReplicationRuntime {
     this.control = {
       status: async () => {
         await this.binding;
+        if (this.gatedReason) return this.options.prefixes.map((prefix) => ({
+          prefix, state: "gated" as const, gate: this.gatedReason, errorCode: "REPLICA_GATED",
+          pending: { inFlight: 0, committed: 0, ambiguous: 0 }, pinned: [], lagMs: null,
+        }));
         return this.current ? this.current.status() : [];
       },
       sync: async (input) => {
         await this.binding;
+        if (this.gatedReason) throw Object.assign(new Error("Replica restore is gated."), {
+          code: "REPLICA_GATED", gate: this.gatedReason,
+        });
         if (this.purgedGeneration === this.generation) return;
         if (this.current) await this.current.sync(input);
       },
@@ -138,8 +153,98 @@ export class ReplicationRuntime {
     this.attached.clear();
   }
 
+  /** Observe network fallbacks after a refused restore without opening any local replica state. */
+  bindGatedNetworkOnly(input: GatedReplicationRuntimeBinding): Promise<void> {
+    if (this.closed || !this.options.enabled) return Promise.resolve();
+    const generation = ++this.generation;
+    this.bindingActive = false;
+    this.purgedGeneration = undefined;
+    this.pendingPurgeSet = false;
+    this.pendingPurge = undefined;
+    this.pendingPurgeResult = undefined;
+    this.unsubscribeConsentExpired?.();
+    this.unsubscribeConsentExpired = undefined;
+    const previous = this.current;
+    this.current = undefined;
+    this.detachAll();
+    this.pending.clear();
+    this.lastController = undefined;
+    this.lastPending = undefined;
+    this.lastIdentity = undefined;
+    this.gatedReason = input.gate;
+    this.primarySpace = input.session.spaceId;
+    const close = previous ? previous.close().catch(() => undefined) : Promise.resolve();
+    this.previous = this.previous.then(() => close);
+    this.binding = this.previous;
+    const active = () => generation === this.generation && !this.closed && this.gated === networkOnly;
+    const emit = (event: ReplicationEvent) => {
+      if (!active()) return;
+      try { this.options.onEvent?.(event); } catch { /* Telemetry cannot change network results. */ }
+      const { type, ...data } = event;
+      try { input.context.emit(type, data); } catch { /* Telemetry cannot change network results. */ }
+    };
+    const report = (
+      op: "get" | "list", space: string, path: string, replica: string | null,
+      reason: "replica_gated" | "not_covered" | "unsupported_option" | "network_cursor" | "NETWORK_REQUESTED" | "cursor_restart",
+      outcome: "found" | "not_found" | "error", latencyMs: number,
+    ) => emit({
+      type: "replication.read", at: new Date(this.clock.now()).toISOString(), op, space, key: path,
+      replica, source: reason === "cursor_restart" ? "none" : "network", reason, outcome, latencyMs,
+      stalenessMs: null, coverage: null, authority: null,
+      ...(reason === "replica_gated" ? { code: "REPLICA_GATED" } : {}),
+    });
+    const readNetwork = async <T extends { ok: boolean }>(
+      r: { space: string; network: () => Promise<T> }, op: "get" | "list", path: string,
+      prefix: string | null, reason: "replica_gated" | "not_covered" | "unsupported_option" | "network_cursor" | "NETWORK_REQUESTED",
+    ): Promise<T> => {
+      const started = this.clock.now();
+      let outcome: "found" | "not_found" | "error" = "error";
+      try {
+        const result = await r.network();
+        outcome = result.ok ? "found" : op === "get" && reason === "not_covered" && "error" in result &&
+          (result.error as { code?: string }).code === "KV_NOT_FOUND" ? "not_found" : "error";
+        return result;
+      } finally {
+        report(op, r.space, path, prefix, reason, outcome, this.clock.now() - started);
+      }
+    };
+    const covered = (path: string) => this.options.prefixes.find((prefix) => kvPrefixCovers(prefix, path));
+    const networkOnly: KVReadThrough = {
+      get: (r) => {
+        if (r.space !== input.session.spaceId) return r.network();
+        if (r.options?.source === "network") return readNetwork(r, "get", r.path, null, "NETWORK_REQUESTED");
+        const prefix = covered(r.path);
+        return readNetwork(r, "get", r.path, prefix ?? null, prefix === undefined ? "not_covered" : "replica_gated");
+      },
+      list: (r) => {
+        if (r.space !== input.session.spaceId) return r.network();
+        if (r.options?.source === "network") return readNetwork(r, "list", r.listPath, null, "NETWORK_REQUESTED");
+        if (r.options?.cursor?.startsWith("tcr1.")) {
+          report("list", r.space, r.listPath, null, "cursor_restart", "error", 0);
+          return Promise.resolve({ ok: false, error: {
+            code: "INVALID_INPUT", message: "Local list cursor cannot be served; restart without the cursor",
+            service: "kv", meta: { replication: "cursor_restart" },
+          } });
+        }
+        if (r.options?.cursor) return readNetwork(r, "list", r.listPath, null, "network_cursor");
+        if (r.options?.raw) return readNetwork(r, "list", r.listPath, null, "unsupported_option");
+        const prefix = covered(r.listPath);
+        return readNetwork(r, "list", r.listPath, prefix ?? null, prefix === undefined ? "not_covered" : "replica_gated");
+      },
+      write: (r) => r.network(),
+      observeNetworkRequested: (r) => {
+        if (r.space === input.session.spaceId) report(r.op, r.space, r.path, null, r.reason, r.outcome, r.latencyMs);
+      },
+    };
+    this.gated = networkOnly;
+    for (const scoped of input.primaryKV) this.attach(scoped.space, scoped.kv);
+    return this.binding;
+  }
+
   bind(input: ReplicationRuntimeBinding): Promise<void> {
     if (this.closed || !this.options.enabled) return Promise.resolve();
+    this.gated = undefined;
+    this.gatedReason = undefined;
     this.bindingActive = true;
     const generation = ++this.generation;
     this.purgedGeneration = undefined;
@@ -226,9 +331,12 @@ export class ReplicationRuntime {
 
   attach(space: string, kv: ReadThroughKV): Promise<void> {
     this.attached.set(kv, space);
-    kv.setReadThrough(space === this.primarySpace ? this.current ?? null : null);
+    kv.setReadThrough(space === this.primarySpace ? this.current ?? this.gated ?? null : null);
+    const generation = this.generation;
     return this.binding.then(() => {
-      kv.setReadThrough(space === this.primarySpace ? this.current ?? null : null);
+      if (generation === this.generation && !this.closed && this.attached.get(kv) === space) {
+        kv.setReadThrough(space === this.primarySpace ? this.current ?? this.gated ?? null : null);
+      }
     });
   }
 
@@ -240,6 +348,8 @@ export class ReplicationRuntime {
     this.unsubscribeConsentExpired = undefined;
     const controller = this.current;
     this.current = undefined;
+    this.gated = undefined;
+    this.gatedReason = undefined;
     this.primarySpace = undefined;
     this.detachAll();
     const binding = this.binding;

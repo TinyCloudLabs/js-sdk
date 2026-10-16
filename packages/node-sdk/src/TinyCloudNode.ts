@@ -2136,13 +2136,14 @@ export class TinyCloudNode {
     const leavingPrincipal = this.replicaSessionPrincipal
       ?? (leavingAddress ? pkhDid(leavingAddress, leavingChainId) : undefined);
     const leavingAuth = this.auth;
+    const leavingContext = this._serviceContext;
     let denied: { status: string; code?: string } | undefined;
     try {
       this.teardownSession();
     } finally {
       // Invalidate this tab's delivery permission before any asynchronous cleanup.
       const denial = leavingPrincipal
-        ? this.denyReplicaGate({ reason: "sign_out", principal: leavingPrincipal })
+        ? this.denyReplicaGate({ reason: "sign_out", principal: leavingPrincipal }, leavingContext)
         : Promise.resolve(undefined);
       try {
         denied = await denial;
@@ -2168,18 +2169,27 @@ export class TinyCloudNode {
    * Step 1 of replica sign-out. Never rejects: failures come back as `unguarded` so the session
    * is still cleared. Returns `undefined` when replication is off.
    */
-  private async denyReplicaGate(input: ReplicaDenyInput): Promise<{ status: string; code?: string } | undefined> {
+  private async denyReplicaGate(
+    input: ReplicaDenyInput,
+    context = this._serviceContext,
+  ): Promise<{ status: string; code?: string } | undefined> {
     const replication = this.config.replication;
     if (!replication?.enabled) return undefined;
     try {
-      if (replication.storage.kind === "indexeddb") {
-        const lifecycle = replication.storage.lifecycle;
-        if (lifecycle?.kind !== "indexeddb") return { status: "unguarded", code: "gate_unavailable" };
-        return await lifecycle.deny(input);
-      }
       const lifecycle = replication.storage.lifecycle;
-      if (lifecycle?.kind !== "file") return { status: "unguarded", code: "gate_unavailable" };
-      return await lifecycle.deny(input);
+      if (lifecycle?.kind !== (replication.storage.kind === "indexeddb" ? "indexeddb" : "file")) {
+        return { status: "unguarded", code: "gate_unavailable" };
+      }
+      const result = await lifecycle.deny(input);
+      if (result.status === "denied" || result.status === "deleted" || result.status === "marker") {
+        // Notification follows durable denial; loader failure cannot undo that denial or change logout.
+        try {
+          (await getNodeReplicationLoaders().authority()).reportReplicaDenial(
+            result, input.reason, replication.onEvent, context,
+          );
+        } catch { /* Observability cannot undo committed denial. */ }
+      }
+      return result;
     } catch (error) {
       const code = typeof error === "object" && error !== null && "code" in error && typeof error.code === "string"
         ? error.code
@@ -7205,36 +7215,41 @@ export class TinyCloudNode {
     kv: KVService,
     principal?: string,
   ): Promise<void> {
-    if (this.replicaRestoreGate) return;
+    if (!this.replicationRuntime) return;
+    const gate = this.replicaRestoreGate;
+    const epoch = this.sessionEpoch;
+    const attempt = this.latestSessionAttempt;
     try {
-      await this.bindReplicationRuntime(context, session, kv, principal);
+      const runtime = await this.replicationRuntime;
+      if (epoch !== this.sessionEpoch || attempt !== this.latestSessionAttempt ||
+          this._kv !== kv || this._serviceContext !== context || gate !== this.replicaRestoreGate) return;
+      if (gate) {
+        await runtime.bindGatedNetworkOnly({
+          context, session, gate, primaryKV: [{ space: session.spaceId, kv }],
+        });
+        return;
+      }
+      const identityPrincipal = principal ??
+        (this._address === undefined ? undefined : pkhDid(this._address, this._chainId));
+      if (identityPrincipal === undefined) return;
+      const authority = await this.replicationAuthority();
+      if (epoch !== this.sessionEpoch || attempt !== this.latestSessionAttempt ||
+          this._kv !== kv || this._serviceContext !== context) return;
+      await runtime.bind({
+        context,
+        session,
+        principal: identityPrincipal,
+        stamp: this.replicaSessionStamp,
+        authority,
+        nodeFeatures: this.replicationNodeFeatures,
+        primaryKV: [{ space: session.spaceId, kv }],
+      });
     } catch {
+      if (epoch !== this.sessionEpoch || attempt !== this.latestSessionAttempt ||
+          this._kv !== kv || this._serviceContext !== context) return;
       this.replicaRestoreGate = "gate_unavailable";
       await this.quiesceReplicaRuntime();
     }
-  }
-
-  private async bindReplicationRuntime(
-    context: ServiceContext,
-    session: ServiceSession,
-    kv: KVService,
-    principal?: string,
-  ): Promise<void> {
-    if (!this.replicationRuntime) return;
-    const identityPrincipal = principal ??
-      (this._address === undefined ? undefined : pkhDid(this._address, this._chainId));
-    if (identityPrincipal === undefined) return;
-    const runtime = await this.replicationRuntime;
-    const authority = await this.replicationAuthority();
-    await runtime.bind({
-      context,
-      session,
-      principal: identityPrincipal,
-      stamp: this.replicaSessionStamp,
-      authority,
-      nodeFeatures: this.replicationNodeFeatures,
-      primaryKV: [{ space: session.spaceId, kv }],
-    });
   }
 
   /** Stable control facade for this node's optional replication runtime. */

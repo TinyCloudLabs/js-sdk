@@ -595,6 +595,74 @@ test("signOut() ends the session on the TinyCloudWeb instance", async () => {
   }
 });
 
+test("signOut then signIn uses a fresh wallet SIWE even if another tab restores the old persisted entry", async () => {
+  const signer = new PrivateKeySigner(PROOF_PRIVATE_KEY);
+  const address = await signer.getAddress();
+  const wasm = Object.assign(new NodeWasmBindings(), { ensureInitialized: async () => undefined });
+  const entries = new Map<string, string>();
+  const backend = {
+    get length() { return entries.size; },
+    key: (index: number) => [...entries.keys()][index] ?? null,
+    getItem: (key: string) => entries.get(key) ?? null,
+    setItem: (key: string, value: string) => { entries.set(key, value); },
+    removeItem: (key: string) => { entries.delete(key); },
+    clear: () => entries.clear(),
+  } satisfies Storage;
+  const sessionStorage = new BrowserSessionStorage({ storage: backend });
+  const signedMessages: string[] = [];
+  const provider = {
+    request: async ({ method, params }: { method: string; params?: unknown[] }) => {
+      if (method === "eth_requestAccounts" || method === "eth_accounts") return [address];
+      if (method === "eth_chainId") return "0x1";
+      if (method === "personal_sign") {
+        signedMessages.push(String(params?.[0]));
+        return signer.signMessage(Buffer.from(String(params?.[0]).slice(2), "hex").toString("utf8"));
+      }
+      throw new Error(`Unexpected wallet request: ${method}`);
+    },
+  };
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    if (url.endsWith("/info")) return Response.json({ protocol: 1, version: "1.0.0", features: [] });
+    if (url.endsWith("/delegate") && init?.method === "POST") {
+      return Response.json({ activated: ["space"], skipped: [] });
+    }
+    throw new Error(`Unexpected fetch: ${url}`);
+  }) as typeof fetch;
+  const web = new TinyCloudWeb({
+    provider, sessionStorage, tinycloudHosts: ["https://node.test.local"],
+    includeAccountRegistryPermissions: false, autoBootstrapAccount: false,
+  });
+  (web as any).wasmBindings = wasm;
+  try {
+    await web.signIn();
+    const original = await sessionStorage.load(address);
+    expect(original).not.toBeNull();
+    expect(signedMessages).toHaveLength(1);
+    await web.signOut();
+    expect(sessionStorage.exists(address)).toBe(false);
+    // Another tab can still have a copy; explicit logout must not restore it on this client.
+    await sessionStorage.save(address, original!);
+    const separatePage = new TinyCloudWeb({
+      provider, sessionStorage, tinycloudHosts: ["https://node.test.local"],
+      includeAccountRegistryPermissions: false, autoBootstrapAccount: false,
+    });
+    (separatePage as any).wasmBindings = wasm;
+    const restored = await separatePage.restoreSession(address);
+    if (restored.status !== "restored") throw restored.error ?? new Error(restored.status);
+    expect((await web.restoreSession(address)).status).toBe("restore-failed");
+    expect(signedMessages).toHaveLength(1);
+    const next = await web.signIn();
+    expect(next.address).toBe(address);
+    expect(signedMessages).toHaveLength(2);
+    expect(web.sessionRestoreStatus).toBe("logging-in");
+  } finally {
+    globalThis.fetch = originalFetch;
+    dispatchSDKEvent.cleanup();
+  }
+});
+
 test("signIn() does not sign in again after a sign-out during its restore", async () => {
   const tcw = new TinyCloudWeb({});
   await (tcw as any)._initPromise;
