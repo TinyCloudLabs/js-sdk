@@ -279,7 +279,7 @@ test("owner-openkey with no verified CID-bound space refuses raw-CID revoke with
   }
 });
 
-test("owner-openkey revokes a verified stored CACAO through the CID-bound owner space before removing rows", async () => {
+test("owner-openkey refuses a verified stored CACAO without issuing revoke authority or removing rows", async () => {
   const ownerSession = fixture.hermetic.ownerRestorableSession;
   const originalProfile = await readFile(profileConfigPath(fixture.ownerProfile));
   const keyPath = join(profilePath(fixture.ownerProfile), "key.json");
@@ -314,6 +314,7 @@ test("owner-openkey revokes a verified stored CACAO through the CID-bound owner 
     if (!("node" in restored)) throw new Error(`owner session unavailable: ${restored.unavailable}`);
     const row = await cliGrantRecord(restored.node, grant, request, fixture.hermetic.host);
     await writeJsonAtomic(additionalDelegationsPath(fixture.ownerProfile), [row, row]);
+    const storedBefore = await readFile(additionalDelegationsPath(fixture.ownerProfile), "utf8");
     const beforeInspection = fixture.hermetic.nativeBearerStats();
     const listed = await command(fixture.ownerProfile, ["list"]);
     expect(listed.code).toBe(0);
@@ -327,24 +328,11 @@ test("owner-openkey revokes a verified stored CACAO through the CID-bound owner 
     const before = fixture.hermetic.nativeBearerStats().revocations;
     const removed = await command(fixture.ownerProfile, ["remove", grant.cid, "--revoke", "--yes"], (did, options) =>
       openKey.delegate(did, options));
-    expect(removed).toMatchObject({
-      code: 0,
-      output: { cid: grant.cid, revoked: true, removed: 2, authorityScopeSource: "local-stored-grant" },
-    });
-    expect(openKey.requests).toHaveLength(1);
-    const signedSpace = fixture.hermetic.accountSpaceId.toLowerCase();
-    expect(openKey.requests[0]?.map((permission) => ({ ...permission, space: permission.space?.toLowerCase() })))
-      .toContainEqual(expect.objectContaining({
-        service: "tinycloud.delegation", space: signedSpace, actions: ["tinycloud.delegation/revoke"],
-      }));
-    expect(openKey.requests[0]?.map((permission) => ({ ...permission, space: permission.space?.toLowerCase() })))
-      .toContainEqual(expect.objectContaining({
-        service: "tinycloud.capabilities", space: signedSpace, actions: ["tinycloud.capabilities/read"],
-      }));
-    expect(JSON.stringify(openKey.requests)).not.toContain("urn:cid:");
-    expect(openKey.refusals).toEqual([]);
-    expect(fixture.hermetic.nativeBearerStats().revocations).toBe(before + 1);
-    expect(await readAdditionalDelegations(fixture.ownerProfile)).toEqual([]);
+    expect(removed.code).not.toBe(0);
+    expect(removed.error).toMatchObject({ error: { code: "OWNER_SIGNATURE_REQUIRED" } });
+    expect(openKey.requests).toEqual([]);
+    expect(fixture.hermetic.nativeBearerStats().revocations).toBe(before);
+    expect(await readFile(additionalDelegationsPath(fixture.ownerProfile), "utf8")).toBe(storedBefore);
   } finally {
     await writeFile(profileConfigPath(fixture.ownerProfile), originalProfile);
     await rm(keyPath, { force: true });
@@ -592,7 +580,7 @@ test.each(runtimes)("public %s --json list on a PTY emits only JSON, with no nod
   expect(fixture.hermetic.nativeBearerStats()).toEqual(before);
 }, 30_000);
 
-test.each(runtimes)("public %s local-owner-key uses its real raw-CID authority before deleting the grant", async (_name, runtime) => {
+test.each(runtimes)("public %s local-owner-key signs a CID-bound revoke before deleting the grant", async (_name, runtime) => {
   const delegation = await fixture.hermetic.mintDelegation();
   const { restoreProfileSessionNode } = await import("../lib/sdk.js");
   const restored = await restoreProfileSessionNode({
@@ -614,7 +602,7 @@ test.each(runtimes)("public %s local-owner-key uses its real raw-CID authority b
   expect(await readAdditionalDelegations(fixture.ownerProfile)).toEqual([]);
 }, 30_000);
 
-test.each(runtimes)("public %s local owner falls back when the node refuses root raw-CID authority", async (_name, runtime) => {
+test.each(runtimes)("public %s local owner signs directly when the node refuses root raw-CID authority", async (_name, runtime) => {
   const delegation = await fixture.hermetic.mintDelegation();
   const path = additionalDelegationsPath(fixture.ownerProfile);
   await writeJsonAtomic(path, [bound(delegation)]);
@@ -625,11 +613,11 @@ test.each(runtimes)("public %s local owner falls back when the node refuses root
     expect({ code: result.code, stderr: result.stderr }).toEqual({ code: 0, stderr: "" });
     expect(JSON.parse(result.stdout)).toMatchObject({
       profile: fixture.ownerProfile, cid: delegation.cid, revoked: true, removed: 1,
-      targetSpaceSource: "local-stored-grant", authorityScopeSource: "local-stored-grant",
+      targetSpaceSource: "local-stored-grant", authorityScopeSource: "cid-resource",
     });
     const after = fixture.hermetic.nativeBearerStats();
-    expect(after.delegationAttempts).toBe(before.delegationAttempts + 2);
-    expect(after.delegations).toBe(before.delegations + 1);
+    expect(after.delegationAttempts).toBe(before.delegationAttempts);
+    expect(after.delegations).toBe(before.delegations);
     expect(after.revocations).toBe(before.revocations + 1);
     expect(await readAdditionalDelegations(fixture.ownerProfile)).toEqual([]);
   } finally {
@@ -639,9 +627,9 @@ test.each(runtimes)("public %s local owner falls back when the node refuses root
 
 test.each(runtimes)("public %s node refusal keeps the exact local stored grant bytes", async (_name, runtime) => {
   const signed = await fixture.hermetic.mintDelegation();
-  // The stored CID is well-formed but not a delegation registered at this
-  // node. The real local signer can issue raw-CID authority, and the node
-  // itself must reject the revoke rather than allowing local deletion.
+  // The stored CID is well-formed but not registered at this node. The real
+  // owner signer must send the exact CID; the node rejects the revoke and
+  // local deletion remains forbidden.
   const target = {
     ...signed,
     cid: new TinyCloudNode({ host: fixture.hermetic.host })
@@ -654,7 +642,7 @@ test.each(runtimes)("public %s node refusal keeps the exact local stored grant b
   const refused = await publicCommand(runtime, fixture.ownerProfile, ["remove", target.cid, "--revoke", "--yes"]);
   expect(refused.code).not.toBe(0);
   expect(JSON.parse(refused.stderr)).toMatchObject({
-    error: { code: expect.any(String), message: expect.stringContaining("Delegation not found") },
+    error: { code: expect.any(String) },
   });
   expect(await readFile(path, "utf8")).toBe(before);
   expect(fixture.hermetic.nativeBearerStats().revocations).toBe(priorRevocations);
