@@ -381,6 +381,33 @@ describe("replica reset purge containment", () => {
     }
   });
 
+  test("report keeps local diagnostics scoped to the selected profile after a directory swap", async () => {
+    await createProfile("victim");
+    const partition = join(PROFILES_DIR, "victim", "replication", "a".repeat(26));
+    await mkdir(partition, { recursive: true });
+    await writeFile(join(partition, "identity.json"), JSON.stringify({ host: "victim.example", space: "victim-space" }));
+    const selected = join(PROFILES_DIR, PROFILE);
+    const originalResolve = ProfileManager.resolveContext;
+    let swapped = false;
+    ProfileManager.resolveContext = async function (globals) {
+      const context = await originalResolve.call(this, globals);
+      if (!swapped) {
+        swapped = true;
+        await rename(selected, `${selected}.moved`);
+        await symlink(join(PROFILES_DIR, "victim"), selected);
+      }
+      return context;
+    };
+    try {
+      const result = await readFromCli(PROFILE, ["replica", "report"]);
+      expect(swapped).toBe(true);
+      expect(result.stdout).not.toContain("victim.example");
+      expect(result.stdout).not.toContain("victim-space");
+    } finally {
+      ProfileManager.resolveContext = originalResolve;
+    }
+  });
+
   test("a symlinked replica.db cannot acquire a lease in the victim database", async () => {
     await createProfile("victim");
     const own = await createReplica(PROFILE, config);
