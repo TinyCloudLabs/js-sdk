@@ -358,7 +358,10 @@ if (prBaseSha) {
         console.log(`${format}: merge-base incremental=${baseOptionalSizes[format]} current=${optionalCurrent[format]} delta=${optionalDeltas[format]} gzip-bytes`);
       }
       try {
-        validateOptionalEntryTransition(baseOptional.entries, optionalLedger.entries, optionalDeltas);
+        validateOptionalEntryTransition(
+          baseOptional.entries, optionalLedger.entries, optionalDeltas,
+          process.env.REPLICA_BUDGET_PR_NUMBER ? `#${process.env.REPLICA_BUDGET_PR_NUMBER}` : "",
+        );
       } catch (error) {
         console.error(error instanceof Error ? error.message : "Invalid optional PR ledger transition");
         console.error(JSON.stringify({

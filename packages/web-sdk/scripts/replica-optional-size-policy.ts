@@ -96,13 +96,16 @@ export function validateOptionalEntryTransition(
   base: readonly OptionalEntry[],
   current: readonly OptionalEntry[],
   observed: LoadedSizes,
+  expectedPr: string,
 ): void {
   const prefixMatches = current.length === base.length + 1 && base.every((entry, index) => {
     const candidate = current[index];
     return candidate.pr === entry.pr && candidate.ticket === entry.ticket &&
       candidate.note === entry.note && optionalFormats.every((format) => candidate[format] === entry[format]);
   });
-  if (!prefixMatches || optionalFormats.some((format) => current[base.length][format] !== observed[format])) {
-    throw new Error("Merged optional ledger rows must stay unchanged; the unmerged PR's own row must equal observed first-import and activation gzip deltas.");
+  if (!/^#\d+$/.test(expectedPr) || base.some((entry) => entry.pr === expectedPr) ||
+      !prefixMatches || current[base.length].pr !== expectedPr ||
+      optionalFormats.some((format) => current[base.length][format] !== observed[format])) {
+    throw new Error("Merged optional rows must remain unchanged and must not repeat this PR; its one new row must have the requested PR number and exact observed gzip deltas.");
   }
 }

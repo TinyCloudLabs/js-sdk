@@ -52,20 +52,30 @@ describe("TC-858 merge-base optional ledger prefix", () => {
   const merged = { ...current.entries[0], pr: "#550", note: "Already merged and immutable" };
 
   it("accepts the exact observed #548 row following unchanged merged rows", () => {
-    expect(() => validateOptionalEntryTransition([merged], [merged, current.entries[0]], observed)).not.toThrow();
-    expect(() => validateOptionalEntryTransition([], [current.entries[0]], observed)).not.toThrow();
+    expect(() => validateOptionalEntryTransition([merged], [merged, current.entries[0]], observed, "#548")).not.toThrow();
+    expect(() => validateOptionalEntryTransition([], [current.entries[0]], observed, "#548")).not.toThrow();
   });
 
   it("rejects edits to a merged row's bytes or metadata", () => {
     const altered = { ...merged, "replica.mjs": merged["replica.mjs"] + 1 };
-    expect(() => validateOptionalEntryTransition([merged], [altered, current.entries[0]], observed)).toThrow();
-    expect(() => validateOptionalEntryTransition([merged], [{ ...merged, note: "Reclassified" }, current.entries[0]], observed)).toThrow();
+    expect(() => validateOptionalEntryTransition([merged], [altered, current.entries[0]], observed, "#548")).toThrow();
+    expect(() => validateOptionalEntryTransition([merged], [{ ...merged, note: "Reclassified" }, current.entries[0]], observed, "#548")).toThrow();
   });
 
   it("rejects a stale, missing or duplicate unmerged #548 measurement", () => {
     const stale = { ...current.entries[0], "activation.cjs": 24654 };
-    expect(() => validateOptionalEntryTransition([], [stale], observed)).toThrow();
-    expect(() => validateOptionalEntryTransition([], [], observed)).toThrow();
-    expect(() => validateOptionalEntryTransition([], [current.entries[0], current.entries[0]], observed)).toThrow();
+    expect(() => validateOptionalEntryTransition([], [stale], observed, "#548")).toThrow();
+    expect(() => validateOptionalEntryTransition([], [], observed, "#548")).toThrow();
+    expect(() => validateOptionalEntryTransition([], [current.entries[0], current.entries[0]], observed, "#548")).toThrow();
+  });
+  it("rejects a measured row assigned to another PR number", () => {
+    const wrongPr = { ...current.entries[0], pr: "#999" };
+    expect(() => validateOptionalEntryTransition([], [wrongPr], observed, "#548")).toThrow();
+  });
+
+  it("rejects appending a second #548 after a merged #548 prefix row", () => {
+    expect(() => validateOptionalEntryTransition(
+      [current.entries[0]], [current.entries[0], current.entries[0]], observed, "#548",
+    )).toThrow();
   });
 });
