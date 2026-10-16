@@ -1,18 +1,23 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
+import { Command } from "commander";
+import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { NodeWasmBindings, PrivateKeySigner } from "@tinycloud/node-sdk";
+import { createProfileReplicaPurge, NodeWasmBindings, PrivateKeySigner } from "@tinycloud/node-sdk";
 import { Replica, parseUcanGrant } from "@tinycloud/replica";
 import { SqliteReplicaStore } from "@tinycloud/replica/sqlite";
+import { establishSessionStamp } from "@tinycloud/replica/profile-gate";
+import { REPLICA_GATE_FILE } from "@tinycloud/sdk-services/kv/replication/contractConstants";
 import {
   profileConfigPath,
   profilePath,
   sessionPath,
+  withProfileLock,
   withTinyCloudStateRoot,
   writeJsonAtomic,
 } from "@tinycloud/operations/state";
 import { FakeNode, owner, signUcan } from "../../../replica/test/fixtures.js";
+import { registerReplicaCommand } from "./replica.js";
 
 const PROFILE = "owner";
 const OWNER_KEY = "4f3edf983ac636a65a842ce7c78d9aa706d3b113bce036f4d4b2c197a7e5e7b7";
@@ -55,10 +60,11 @@ async function seed(home: string, host: string): Promise<{ db: string; session: 
   const manager = wasm.createSessionManager();
   const jwk = JSON.parse(manager.jwk("default")!);
   const sessionDid = manager.getDID("default");
+  const issuedAt = new Date(Date.now() - 60_000).toISOString();
   const prepared = wasm.prepareSession({
     abilities: { capabilities: { "": ["tinycloud.capabilities/read"] } },
     address, chainId: 1, domain: "cli.example.test", spaceId, jwk,
-    issuedAt: new Date(Date.now() - 60_000).toISOString(),
+    issuedAt,
     expirationTime: new Date(Date.now() + 3_600_000).toISOString(),
   });
   const signature = await signer.signMessage(prepared.siwe);
@@ -74,7 +80,11 @@ async function seed(home: string, host: string): Promise<{ db: string; session: 
       sessionDid, ownerDid, spaceId, posture: "local-owner-key", authMethod: "local",
       privateKey: OWNER_KEY, operatorType: "human", createdAt: "2026-10-01T00:00:00.000Z",
     });
-    await writeJsonAtomic(sessionPath(PROFILE), session);
+    const replicaStamp = await withProfileLock(PROFILE,
+      () => establishSessionStamp(profilePath(PROFILE), ownerDid, { siweIssuedAt: Date.parse(issuedAt) }),
+      { requireProfile: true },
+    );
+    await writeJsonAtomic(sessionPath(PROFILE), { ...session, replicaStamp });
     const key = join(profilePath(PROFILE), "key.json");
     await writeJsonAtomic(key, jwk);
     const db = join(profilePath(PROFILE), "replicas", "notes", "replica.db");
@@ -161,6 +171,149 @@ async function expectDeniedButRetained(
   expect(await readFile(paths.session)).toEqual(sessionBefore);
   expect(await readFile(paths.key)).toEqual(keyBefore);
 }
+
+describe("legacy replica read gate", () => {
+  test("deferred denial blocks get, list, and status across fresh CLI processes without deleting the legacy database", async () => {
+    const home = await mkdtemp(join(tmpdir(), "tc841-legacy-denial-"));
+    homes.push(home);
+    const paths = await seed(home, "https://node.example.test");
+    const sessionBefore = await readFile(paths.session);
+    const keyBefore = await readFile(paths.key);
+    const commands = [
+      ["replica", "get", "notes/a", "--replica", "notes", "--raw"],
+      ["replica", "list", "--replica", "notes"],
+      ["replica", "status", "--replica", "notes"],
+      ["replica", "status"],
+    ];
+    for (const command of commands) {
+      expect((await run(home, command)).exitCode).toBe(0);
+    }
+
+    const profileDir = join(home, ".tinycloud", "profiles", PROFILE);
+    const guard = <T>(section: () => Promise<T>): Promise<T> =>
+      withTinyCloudStateRoot(home, () => withProfileLock(PROFILE, section, { requireProfile: true }));
+    const purge = createProfileReplicaPurge({ profileDir, guard });
+    const session = JSON.parse(sessionBefore.toString("utf8")) as { ownerDid: string };
+    const denied = await purge.deny({ reason: "sign_out", principal: session.ownerDid }, { deferErase: true });
+    expect(denied.status).toBe("denied");
+    if (denied.status !== "denied" || !denied.resumeToken) throw new Error("Missing durable denial token");
+    expect(await purge.deferredErase()).toEqual(denied.resumeToken);
+    expect(await exists(paths.db)).toBe(true);
+
+    for (const command of commands) {
+      const refused = await run(home, command);
+      expect(refused.exitCode).toBeGreaterThan(0);
+      expect(refused.stdout).not.toContain("private replica value");
+      expect(refused.stderr).toContain("REPLICA_GATED");
+      expect(await exists(paths.db)).toBe(true);
+    }
+    expect(await readFile(paths.session)).toEqual(sessionBefore);
+    expect(await readFile(paths.key)).toEqual(keyBefore);
+  });
+
+  test("a held legacy read delivers before a concurrent durable deny can commit", async () => {
+    const home = await mkdtemp(join(tmpdir(), "tc841-legacy-race-"));
+    homes.push(home);
+    const paths = await seed(home, "https://node.example.test");
+    const profileDir = join(home, ".tinycloud", "profiles", PROFILE);
+    const guard = <T>(section: () => Promise<T>): Promise<T> =>
+      withTinyCloudStateRoot(home, () => withProfileLock(PROFILE, section, { requireProfile: true }));
+    const entered = Promise.withResolvers<void>();
+    const releaseRead = Promise.withResolvers<void>();
+    const originalGet = SqliteReplicaStore.prototype.get;
+    const originalWrite = process.stdout.write;
+    const originalHome = process.env.TC_HOME;
+    const originalNodeEnv = process.env.NODE_ENV;
+    const originalSignal = process.env.TC_TEST_PROFILE_LOCK_CONTENTION_SIGNAL_PATH;
+    const signalPath = join(home, "read-contended");
+    const events: string[] = [];
+    process.env.TC_HOME = home;
+    process.env.NODE_ENV = "test";
+    process.env.TC_TEST_PROFILE_LOCK_CONTENTION_SIGNAL_PATH = signalPath;
+    SqliteReplicaStore.prototype.get = async function (key) {
+      const entry = await originalGet.call(this, key);
+      entered.resolve();
+      await releaseRead.promise;
+      return entry;
+    };
+    process.stdout.write = ((chunk: string | Uint8Array) => {
+      events.push("delivered");
+      expect(Buffer.from(chunk).toString("utf8")).toBe("private replica value");
+      return true;
+    }) as typeof process.stdout.write;
+    const program = new Command().option("-p, --profile <name>");
+    registerReplicaCommand(program);
+    let done = false;
+    try {
+      const reading = withTinyCloudStateRoot(home, () => program.parseAsync(
+        ["--profile", PROFILE, "replica", "get", "notes/a", "--replica", "notes", "--raw"],
+        { from: "user" },
+      ));
+      await entered.promise;
+      const purge = createProfileReplicaPurge({ profileDir, guard });
+      const session = JSON.parse((await readFile(paths.session)).toString("utf8")) as { ownerDid: string };
+      const denial = purge.deny({ reason: "sign_out", principal: session.ownerDid }, { deferErase: true });
+      const contention = (async () => {
+        while (!done) {
+          if (await exists(signalPath)) return "contended" as const;
+        }
+        return "stopped" as const;
+      })();
+      try {
+        expect(await Promise.race([contention, denial.then(() => "committed" as const)])).toBe("contended");
+        expect(await exists(paths.db)).toBe(true);
+      } finally {
+        done = true;
+        releaseRead.resolve();
+        await reading;
+      }
+      const outcome = await denial;
+      expect(outcome.status).toBe("denied");
+      events.push("denied");
+      expect(events).toEqual(["delivered", "denied"]);
+    } finally {
+      done = true;
+      releaseRead.resolve();
+      SqliteReplicaStore.prototype.get = originalGet;
+      process.stdout.write = originalWrite;
+      if (originalHome === undefined) delete process.env.TC_HOME;
+      else process.env.TC_HOME = originalHome;
+      if (originalNodeEnv === undefined) delete process.env.NODE_ENV;
+      else process.env.NODE_ENV = originalNodeEnv;
+      if (originalSignal === undefined) delete process.env.TC_TEST_PROFILE_LOCK_CONTENTION_SIGNAL_PATH;
+      else process.env.TC_TEST_PROFILE_LOCK_CONTENTION_SIGNAL_PATH = originalSignal;
+    }
+  });
+
+  test("a missing persisted stamp or missing/corrupt gate cannot authorize a legacy get", async () => {
+    const home = await mkdtemp(join(tmpdir(), "tc841-legacy-unstamped-"));
+    homes.push(home);
+    const paths = await seed(home, "https://node.example.test");
+    const stored = JSON.parse((await readFile(paths.session)).toString("utf8")) as Record<string, unknown>;
+    expect((await run(home, ["replica", "get", "notes/a", "--replica", "notes", "--raw"])).exitCode).toBe(0);
+    const stamp = stored.replicaStamp;
+    delete stored.replicaStamp;
+    await writeFile(paths.session, JSON.stringify(stored));
+    const unstamped = await run(home, ["replica", "get", "notes/a", "--replica", "notes", "--raw"]);
+    expect(unstamped.exitCode).toBeGreaterThan(0);
+    expect(unstamped.stdout).not.toContain("private replica value");
+    expect(unstamped.stderr).toContain("REPLICA_GATED");
+
+    const gatePath = join(home, ".tinycloud", "profiles", PROFILE, REPLICA_GATE_FILE);
+    await writeFile(paths.session, JSON.stringify({ ...stored, replicaStamp: stamp }));
+    await rm(gatePath);
+    const missing = await run(home, ["replica", "get", "notes/a", "--replica", "notes", "--raw"]);
+    expect(missing.exitCode).toBeGreaterThan(0);
+    expect(missing.stdout).not.toContain("private replica value");
+    expect(missing.stderr).toContain("REPLICA_GATED");
+    await writeFile(gatePath, "{invalid");
+    const corrupt = await run(home, ["replica", "get", "notes/a", "--replica", "notes", "--raw"]);
+    expect(corrupt.exitCode).toBeGreaterThan(0);
+    expect(corrupt.stdout).not.toContain("private replica value");
+    expect(corrupt.stderr).toContain("REPLICA_GATED");
+    expect(await exists(paths.db)).toBe(true);
+  });
+});
 
 describe("tc auth logout --revoke with durable replica denial", () => {
   test("failed node revoke blocks local reads without erasing the session, key, or replica across restart", async () => {

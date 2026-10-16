@@ -1,9 +1,10 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtemp, readdir, rm } from "node:fs/promises";
+import { mkdtemp, readdir, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createProfileReplicaPurge, sqliteReplicaStorage } from "@tinycloud/node-sdk";
 import { establishSessionStamp } from "@tinycloud/replica/profile-gate";
+import { SqliteReplicaStore } from "@tinycloud/replica/sqlite";
 import {
   profileConfigPath,
   profilePath,
@@ -11,6 +12,7 @@ import {
   withTinyCloudStateRoot,
   writeJsonAtomic,
 } from "@tinycloud/operations/state";
+import { removeProfileReplicasAndReplication } from "./profile-replicas.js";
 
 const PROFILE = "owner";
 const PRINCIPAL = "did:pkh:eip155:1:0x0000000000000000000000000000000000000001";
@@ -57,7 +59,7 @@ async function fixture() {
     .update((state) => { state.seq = 1; });
   const databases = await filesNamed(root, "replica.db");
   expect(databases).toHaveLength(1);
-  return { profileDir, root, guard, databases };
+  return { home, profileDir, root, guard, databases };
 }
 
 describe("TC-841 deferred profile purge under the real profile lock", () => {
@@ -99,5 +101,35 @@ describe("TC-841 deferred profile purge under the real profile lock", () => {
     expect(await restarted.deferredErase()).toBeNull();
     expect(await restarted.resumeDeferredErase(denied.resumeToken, { signal: signal() }))
       .toEqual({ erased: [], failed: [], remaining: 0 });
+  });
+  test("successful revoke resume or plain denial still removes the legacy replica root", async () => {
+    for (const deferred of [true, false]) {
+      const { home, profileDir, guard } = await fixture();
+      const legacyDir = join(profileDir, "replicas", "notes");
+      const legacyDb = join(legacyDir, "replica.db");
+      const legacy = await SqliteReplicaStore.open(legacyDir, { create: true });
+      await legacy.init({
+        name: "notes", replicaId: "r-test", host: "https://node.example.test",
+        space: SPACE, prefix: "notes/", deviceDid: "did:key:zTestReplicaDevice",
+        allowSecrets: false, localReadPolicy: "whileGrantValid", retentionGrantCid: null,
+      });
+      await legacy.close();
+      const purge = createProfileReplicaPurge({ profileDir, guard });
+      const denied = await purge.deny({ reason: "sign_out", principal: PRINCIPAL }, { deferErase: deferred });
+      expect(denied.status).toBe("denied");
+      expect(await stat(legacyDb)).toBeTruthy();
+      if (deferred) {
+        if (denied.status !== "denied" || !denied.resumeToken) throw new Error("Missing durable resume token");
+        expect(await purge.resumeDeferredErase(denied.resumeToken, { signal: signal() }))
+          .toMatchObject({ failed: [], remaining: 0 });
+      } else {
+        expect(await purge.erasePending({ signal: signal() })).toMatchObject({ failed: [], remaining: 0 });
+      }
+      // The S3 facade erases flag-owned partitions, not the older CLI replicas root.
+      expect(await stat(legacyDb)).toBeTruthy();
+      const removed = await withTinyCloudStateRoot(home, () => removeProfileReplicasAndReplication(PROFILE));
+      expect(removed).toContain("notes");
+      await expect(stat(legacyDb)).rejects.toMatchObject({ code: "ENOENT" });
+    }
   });
 });

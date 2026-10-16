@@ -16,6 +16,7 @@ import {
   withProfileLock,
 } from "@tinycloud/operations/state";
 import { ownerSessionLacksProof } from "@tinycloud/operations/profile";
+import { assertGateAccess, principalHashOf, readGateSnapshot, restoreSessionStamp } from "@tinycloud/replica/profile-gate";
 import type { ReplicationEvent, ReplicationControl } from "@tinycloud/node-sdk";
 import {
   assertFolderPrefix,
@@ -32,6 +33,7 @@ import {
   type KVSyncClient,
   type ParsedUcanGrant,
   type ReplicaConfig,
+  type ReplicaListResult,
   type ReplicaTransport,
   type ReplicaReadResult,
   type ReplicaStatus,
@@ -64,6 +66,7 @@ const EXIT_BY_CODE: Record<ReplicaErrorCode, number> = {
   [ReplicaErrorCode.GRANT_NOT_YET_VALID]: ExitCode.PERMISSION_DENIED,
   [ReplicaErrorCode.GRANT_EXPIRED]: ExitCode.PERMISSION_DENIED,
   [ReplicaErrorCode.GRANT_REVOKED]: ExitCode.PERMISSION_DENIED,
+  [ReplicaErrorCode.GATED]: ExitCode.PERMISSION_DENIED,
   [ReplicaErrorCode.GRANT_UNAUTHORIZED]: ExitCode.PERMISSION_DENIED,
   [ReplicaErrorCode.RETENTION_GRANT_REFUSED]: ExitCode.PERMISSION_DENIED,
   [ReplicaErrorCode.NETWORK_ERROR]: ExitCode.NETWORK_ERROR,
@@ -173,6 +176,41 @@ export function profileGuard(profile: string): MutationGuard {
 
 async function openReplica(profile: string, name: string): Promise<SqliteReplicaStore> {
   return SqliteReplicaStore.open(join(replicasRoot(profile), name), { create: false, guard: profileGuard(profile) });
+}
+
+/** Legacy stores predate the gated adapter; serialize their reads and delivery with denial. */
+async function withLegacyReplicaRead(
+  profile: string,
+  action: (checkDelivery: () => Promise<void>) => Promise<void>,
+): Promise<void> {
+  await withProfileLock(profile, async () => {
+    const dir = profilePath(profile);
+    const session = await readSession<{
+      ownerDid?: string;
+      replicaStamp?: { incarnation: string; lifecycleEpoch: number };
+    }>(profile);
+    if (typeof session?.ownerDid !== "string" || session.ownerDid.length === 0) {
+      throw new ReplicaError(ReplicaErrorCode.GATED, "The local replica needs an owner session.", { gate: "not_established" });
+    }
+    const stamp = await restoreSessionStamp(dir, session.ownerDid, session.replicaStamp);
+    const snapshot = await readGateSnapshot(dir);
+    if (snapshot === undefined) {
+      throw new ReplicaError(ReplicaErrorCode.GATED, "The local replica gate is unavailable.", { gate: "gate_unavailable" });
+    }
+    const access = {
+      stamp,
+      incarnation: snapshot.incarnation,
+      principalHash: await principalHashOf(snapshot.salt, session.ownerDid),
+    };
+    const checkDelivery = async () => { await assertGateAccess(dir, access, snapshot.salt); };
+    await checkDelivery();
+    await action(checkDelivery);
+  }, { requireProfile: true });
+}
+
+/** The outer read lock supplies the only guard: SQLite reads must not reacquire it. */
+function openReplicaForRead(profile: string, name: string): Promise<SqliteReplicaStore> {
+  return SqliteReplicaStore.open(join(replicasRoot(profile), name), { create: false });
 }
 
 /**
@@ -615,32 +653,35 @@ or coverage incomplete; 5 grant expired, revoked or not yet valid; 6 network;
     .action((key: string, options, cmd: Command) =>
       run(async () => {
         const profile = await profileName(cmd);
-        const store = await openReplica(profile, await existingReplicaName(profile, options.replica));
-        let result: ReplicaReadResult;
-        try {
-          result = await new Replica({ store }).get(key, { verify: options.verify !== false });
-        } finally {
-          await store.close();
-        }
-        if (result.status !== "present") {
-          const failure = READ_FAILURE[result.status];
-          throw new CLIError(failure.code, `Key ${JSON.stringify(key)} ${failure.what}.`, failure.exit);
-        }
-        if (options.output) {
-          await writeFileAtomic(options.output, result.value);
-          outputJson({ key, written: options.output, etag: result.etag, meta: result.meta });
-          return;
-        }
-        if (options.raw) {
+        await withLegacyReplicaRead(profile, async (checkDelivery) => {
+          const store = await openReplicaForRead(profile, await existingReplicaName(profile, options.replica));
+          let result: ReplicaReadResult;
+          try {
+            result = await new Replica({ store }).get(key, { verify: options.verify !== false });
+          } finally {
+            await store.close();
+          }
+          await checkDelivery();
+          if (result.status !== "present") {
+            const failure = READ_FAILURE[result.status];
+            throw new CLIError(failure.code, `Key ${JSON.stringify(key)} ${failure.what}.`, failure.exit);
+          }
+          if (options.output) {
+            await writeFileAtomic(options.output, result.value);
+            outputJson({ key, written: options.output, etag: result.etag, meta: result.meta });
+            return;
+          }
+          if (options.raw) {
+            process.stdout.write(result.value);
+            return;
+          }
+          if (shouldOutputJson()) {
+            outputJson({ key, status: result.status, ...jsonValue(result.value), etag: result.etag, metadata: result.metadata, meta: result.meta });
+            return;
+          }
           process.stdout.write(result.value);
-          return;
-        }
-        if (shouldOutputJson()) {
-          outputJson({ key, status: result.status, ...jsonValue(result.value), etag: result.etag, metadata: result.metadata, meta: result.meta });
-          return;
-        }
-        process.stdout.write(result.value);
-        process.stdout.write("\n");
+          process.stdout.write("\n");
+        });
       }),
     );
 
@@ -656,13 +697,20 @@ or coverage incomplete; 5 grant expired, revoked or not yet valid; 6 network;
           throw new CLIError("USAGE_ERROR", "--limit must be a positive integer.", ExitCode.USAGE_ERROR);
         }
         const profile = await profileName(cmd);
-        const store = await openReplica(profile, await existingReplicaName(profile, options.replica));
-        try {
-          const { entries, meta } = await new Replica({ store }).list({
-            ...(prefix === undefined ? {} : { prefix }),
-            ...(options.after === undefined ? {} : { after: options.after }),
-            ...(options.limit === undefined ? {} : { limit: options.limit }),
-          });
+        await withLegacyReplicaRead(profile, async (checkDelivery) => {
+          const store = await openReplicaForRead(profile, await existingReplicaName(profile, options.replica));
+          let result: ReplicaListResult;
+          try {
+            result = await new Replica({ store }).list({
+              ...(prefix === undefined ? {} : { prefix }),
+              ...(options.after === undefined ? {} : { after: options.after }),
+              ...(options.limit === undefined ? {} : { limit: options.limit }),
+            });
+          } finally {
+            await store.close();
+          }
+          await checkDelivery();
+          const { entries, meta } = result;
           if (shouldOutputJson()) {
             outputJson({ keys: entries, count: entries.length, prefix: prefix ?? null, meta });
           } else if (entries.length === 0) {
@@ -675,9 +723,7 @@ or coverage incomplete; 5 grant expired, revoked or not yet valid; 6 network;
               ) + "\n",
             );
           }
-        } finally {
-          await store.close();
-        }
+        });
       }),
     );
 
@@ -688,23 +734,26 @@ or coverage incomplete; 5 grant expired, revoked or not yet valid; 6 network;
     .action((options, cmd: Command) =>
       run(async () => {
         const profile = await profileName(cmd);
-        const names = options.replica === undefined ? await replicaNames(profile) : [assertName(options.replica)];
-        const statuses: ReplicaStatus[] = [];
-        for (const name of names) {
-          const store = await openReplica(profile, name);
-          try {
-            statuses.push(await new Replica({ store }).status());
-          } finally {
-            await store.close();
+        await withLegacyReplicaRead(profile, async (checkDelivery) => {
+          const names = options.replica === undefined ? await replicaNames(profile) : [assertName(options.replica)];
+          const statuses: ReplicaStatus[] = [];
+          for (const name of names) {
+            const store = await openReplicaForRead(profile, name);
+            try {
+              statuses.push(await new Replica({ store }).status());
+            } finally {
+              await store.close();
+            }
           }
-        }
-        if (shouldOutputJson()) {
-          outputJson(options.replica === undefined ? { replicas: statuses } : statuses[0]);
-        } else if (statuses.length === 0) {
-          process.stdout.write(theme.muted(`Profile "${profile}" has no replicas.`) + "\n");
-        } else {
-          process.stdout.write(statuses.map(describeStatus).join("\n\n") + "\n");
-        }
+          await checkDelivery();
+          if (shouldOutputJson()) {
+            outputJson(options.replica === undefined ? { replicas: statuses } : statuses[0]);
+          } else if (statuses.length === 0) {
+            process.stdout.write(theme.muted(`Profile "${profile}" has no replicas.`) + "\n");
+          } else {
+            process.stdout.write(statuses.map(describeStatus).join("\n\n") + "\n");
+          }
+        });
       }),
     );
 
