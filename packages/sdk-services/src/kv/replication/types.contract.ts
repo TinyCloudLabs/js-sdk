@@ -140,13 +140,15 @@ type _BrowserSnapshotFromGuard = Assert<
   >
 >;
 
-// A browser caller derives outside the transaction from a typed snapshot,
-// then passes only prehashed access to run.
+// sdk-services targets ES2020 without DOM; the browser adapter supplies IDBTransaction.
+// This structural surrogate checks snapshot → private HMAC → guarded run without
+// importing browser globals into the shared package's type-contract fixture.
+type GuardedTransaction = { readonly mode: "readonly" | "readwrite" };
 async function browserSnapshotThenRun(
-  gateTx: ReplicaBrowserGateTx<IDBTransaction>,
+  gateTx: ReplicaBrowserGateTx<GuardedTransaction>,
   stamp: ReplicaSessionStamp,
   privateHash: ReplicaPrivateGateHash,
-): Promise<IDBTransactionMode | undefined> {
+): Promise<GuardedTransaction["mode"] | undefined> {
   const snapshot = await gateTx.snapshot();
   if (!snapshot) return undefined;
   const principalHash = await privateHash(snapshot.gateHmac, "principal", "did:example:owner");
