@@ -73,6 +73,30 @@ test("legacy cleanup refuses a new root file without deleting it", async () => {
   }
 });
 
+test("interrupted legacy cleanup removes an empty child through direct and combined logout only after rejecting unknown siblings", async () => {
+  const root = join(profilePath("dogfood"), "replicas");
+  const empty = join(root, "notes");
+  const unknown = join(root, "unrecognized");
+  await mkdir(empty, { recursive: true });
+  await mkdir(unknown);
+  const foreign = join(unknown, "owner-data.bin");
+  const bytes = Buffer.from("not a replica database");
+  await writeFile(foreign, bytes);
+
+  await expect(removeProfileReplicas("dogfood")).rejects.toMatchObject({ code: "REPLICA_PURGE_FAILED" });
+  expect((await stat(empty)).isDirectory()).toBe(true);
+  expect(await readFile(foreign)).toEqual(bytes);
+
+  await rm(unknown, { recursive: true });
+  expect(await removeProfileReplicas("dogfood")).toEqual(["notes"]);
+  await expect(stat(empty)).rejects.toMatchObject({ code: "ENOENT" });
+  expect(await removeProfileReplicas("dogfood")).toEqual([]);
+  const interruptedAgain = join(root, "again");
+  await mkdir(interruptedAgain);
+  expect(await removeProfileReplicasAndReplication("dogfood")).toEqual(["again"]);
+  await expect(stat(interruptedAgain)).rejects.toMatchObject({ code: "ENOENT" });
+});
+
 test("local grant artifact reads refuse an alias instead of exposing another profile", async () => {
   await ProfileManager.setProfile("victim", {
     name: "victim", host: "https://node.example.test", did: "did:key:victim", chainId: 1,

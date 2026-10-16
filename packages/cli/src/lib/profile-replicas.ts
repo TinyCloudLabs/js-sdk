@@ -64,6 +64,29 @@ async function safeReplicaEntry(profile: string, root: string, entry: Dirent, op
   return { path: entryPath, identity: { dev: entryStats.dev, ino: entryStats.ino } };
 }
 
+/** Inspect a pinned legacy child before either lease acquisition or cleanup. */
+async function inspectLegacyReplica(profile: string, root: string, entry: Dirent): Promise<{
+  path: string;
+  identity: { dev: number; ino: number };
+  empty: boolean;
+}> {
+  const { path, identity } = await safeReplicaEntry(profile, root, entry);
+  const handle = await open(path, fsConstants.O_RDONLY | fsConstants.O_DIRECTORY | fsConstants.O_NOFOLLOW);
+  try {
+    const pinnedEntry = await handle.stat();
+    if (pinnedEntry.dev !== identity.dev || pinnedEntry.ino !== identity.ino) {
+      throw refuseUnsafeReplicaPath(profile, `replica entry "${entry.name}" changed during inspection`);
+    }
+    const children = await readdir(`/proc/self/fd/${handle.fd}`, { withFileTypes: true });
+    if (children.length > 0 && !children.some((child) => child.name === "replica.db" && child.isFile())) {
+      throw refuseUnsafeReplicaPath(profile, `replica entry "${entry.name}" has files but no regular replica database`);
+    }
+    return { path, identity, empty: children.length === 0 };
+  } finally {
+    await handle.close();
+  }
+}
+
 interface PinnedReplicaRoot {
   readonly path: string;
   assertNamed(): Promise<void>;
@@ -159,11 +182,41 @@ export async function removeProfileReplicas(profile: string, heldLeases?: Readon
         await removeEmptyRoot([]);
         return [];
       }
-      for (const entry of replicas) await safeReplicaEntry(profile, root, entry);
-      await loadSqlite();
+      // Preflight every entry before deleting even an empty interrupted store.
+      const checked = await Promise.all(replicas.map(async (entry) => ({
+        entry, ...await inspectLegacyReplica(profile, root, entry),
+      })));
+      const removed: string[] = [];
       const opened: Array<{ name: string; store: SqliteReplicaStore; lease: LeaseToken | null }> = [];
       try {
-        for (const entry of replicas) {
+        for (const { entry, identity, empty } of checked) {
+          if (!empty) continue;
+          await pinned.assertNamed();
+          const current = await safeReplicaEntry(profile, root, entry);
+          if (current.identity.dev !== identity.dev || current.identity.ino !== identity.ino) {
+            throw refuseUnsafeReplicaPath(profile, `empty replica entry "${entry.name}" changed during cleanup`);
+          }
+          const handle = await open(current.path, fsConstants.O_RDONLY | fsConstants.O_DIRECTORY | fsConstants.O_NOFOLLOW);
+          try {
+            const pinnedEntry = await handle.stat();
+            if (pinnedEntry.dev !== identity.dev || pinnedEntry.ino !== identity.ino ||
+                (await readdir(`/proc/self/fd/${handle.fd}`)).length !== 0) {
+              throw refuseUnsafeReplicaPath(profile, `empty replica entry "${entry.name}" changed during cleanup`);
+            }
+            await pinned.assertNamed();
+            await rmdir(current.path);
+          } finally {
+            await handle.close();
+          }
+          removed.push(entry.name);
+        }
+        if (removed.length === replicas.length) {
+          await removeEmptyRoot(removed);
+          return removed;
+        }
+        await loadSqlite();
+        for (const { entry, empty } of checked) {
+          if (empty) continue;
           const { path: entryPath, identity: expectedDirectory } = await safeReplicaEntry(profile, root, entry);
           const store = await SqliteReplicaStore.open(entryPath, {
             create: false,
@@ -192,7 +245,7 @@ export async function removeProfileReplicas(profile: string, heldLeases?: Readon
           }
           opened[opened.length - 1]!.lease = lease;
         }
-        const removed: string[] = [];
+        // Empty interrupted entries were already removed before SQLite opened.
         for (const replica of opened) {
           try {
             await replica.store.destroy(replica.lease!);
@@ -218,7 +271,7 @@ export async function removeProfileReplicas(profile: string, heldLeases?: Readon
         if (error instanceof CLIError) throw error;
         throw new CLIError(
           "REPLICA_PURGE_FAILED",
-          `Logout cleared the session, but replica cleanup could not start; no replicas were removed. ${error instanceof Error ? error.message : String(error)}`,
+          `Logout cleared the session, but replica cleanup could not finish. Removed: ${removed.length ? removed.join(", ") : "none"}. ${error instanceof Error ? error.message : String(error)}`,
           ExitCode.ERROR,
         );
       } finally {
@@ -418,7 +471,8 @@ async function acquireLogoutLeases(profile: string): Promise<{
         const legacyRoot = legacyPin.path;
         const entries = (await readdir(legacyRoot, { withFileTypes: true })).sort((a, b) => a.name.localeCompare(b.name));
         for (const entry of entries) {
-          const { path, identity: expectedDirectory } = await safeReplicaEntry(profile, legacyRoot, entry);
+          const { path, identity: expectedDirectory, empty } = await inspectLegacyReplica(profile, legacyRoot, entry);
+          if (empty) continue;
           if (!sqliteLoaded) {
             await loadSqlite();
             sqliteLoaded = true;
