@@ -587,6 +587,23 @@ describe("mandatory Node lifecycle gate", () => {
     await handle.close();
   });
 
+  test("a callback claiming success without deleting both credentials cannot clear the logout marker", async () => {
+    const dir = await makeDir();
+    const profileDir = dirname(dir);
+    await writeFile(join(profileDir, "session.json"), "{}");
+    await writeFile(join(profileDir, "key.json"), "{}");
+    const purge = createProfileReplicaPurge({ profileDir, guard: sharedGuard });
+    await purge.prepareLogoutPending({ principal: PRINCIPAL });
+    const result = await purge.recoverLogoutPending({
+      signal: new AbortController().signal,
+      clearCredentials: async () => { await rm(join(profileDir, "key.json")); },
+    });
+    expect(result).toMatchObject({ failed: [{ id: "logout", code: "REPLICA_GATED" }], remaining: 1 });
+    expect(existsSync(join(profileDir, "session.json"))).toBe(true);
+    expect(existsSync(join(profileDir, REPLICA_LOGOUT_PENDING_FILE))).toBe(true);
+    expect((await readGateSnapshot(profileDir))?.principalHash).not.toBeNull();
+  });
+
   test("busy profile lock cannot report a durable logout marker or erase credentials", async () => {
     const dir = await makeDir();
     const profileDir = dirname(dir);
