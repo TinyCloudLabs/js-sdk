@@ -28,6 +28,7 @@ import {
   createSqliteReplicaStorage,
   createProfileReplicaPurge,
   REPLICA_LOGOUT_PENDING_FILE,
+  assertProfileLogoutClear,
   type SqliteReplicaStorageOptions,
 } from "./sqlite";
 import { denyGate, establishSessionStamp, readGateSnapshot } from "@tinycloud/replica/profile-gate";
@@ -493,6 +494,235 @@ describe("mandatory Node lifecycle gate", () => {
     expect(await filesNamed(dir, "pending.json")).toEqual([]);
     expect(existsSync(session)).toBe(false);
     expect(existsSync(key)).toBe(false);
+  });
+
+  test("missing gate with profile replica files writes an orphan marker and recovers after a crash", async () => {
+    const profileDir = await mkdtemp(join(tmpdir(), "tc858-orphan-replica-"));
+    dirs.push(profileDir);
+    const replicaRoot = join(profileDir, "replication");
+    const legacyRoot = join(profileDir, "replicas");
+    const partition = join(replicaRoot, "a".repeat(26));
+    const replicaDir = join(partition, "replicas", "b".repeat(26));
+    await mkdir(replicaDir, { recursive: true });
+    await mkdir(join(legacyRoot, "notes"), { recursive: true });
+    await writeFile(join(partition, "identity.json"), JSON.stringify(identity()));
+    await writeFile(join(replicaDir, "replica.db"), "ciphertext");
+    await writeFile(join(legacyRoot, "notes", "replica.db"), "legacy");
+    const session = join(profileDir, "session.json");
+    const key = join(profileDir, "key.json");
+    await writeFile(session, "session private key");
+    await writeFile(key, "owner private key");
+    const purge = createProfileReplicaPurge({ profileDir, guard: sharedGuard });
+    const marker = await purge.prepareLogoutPending({ principal: PRINCIPAL });
+    expect(marker).toMatchObject({ v: 2, scope: "orphan_profile" });
+    expect(existsSync(join(profileDir, REPLICA_LOGOUT_PENDING_FILE))).toBe(true);
+    expect(existsSync(session)).toBe(true);
+    expect(() => assertProfileLogoutClear(profileDir)).toThrow();
+    const restarted = await createProfileReplicaPurge({ profileDir, guard: sharedGuard }).recoverLogoutPending({
+      signal: new AbortController().signal,
+      clearCredentials: async () => { await rm(session); await rm(key); },
+      eraseLegacyReplicas: async () => { throw new Error("orphan wipe owns both roots"); },
+    });
+    expect(restarted).toMatchObject({ failed: [], remaining: 0 });
+    expect(existsSync(session)).toBe(false);
+    expect(existsSync(key)).toBe(false);
+    expect(existsSync(replicaRoot)).toBe(false);
+    expect(existsSync(legacyRoot)).toBe(false);
+    expect(existsSync(join(profileDir, REPLICA_LOGOUT_PENDING_FILE))).toBe(false);
+    expect(await readGateSnapshot(profileDir)).toBeUndefined();
+  });
+
+  test("orphan wipe refuses unsynced pending records until explicit discard consent", async () => {
+    const profileDir = await mkdtemp(join(tmpdir(), "tc858-orphan-pending-"));
+    dirs.push(profileDir);
+    const replicaRoot = join(profileDir, "replication");
+    const partition = join(replicaRoot, "a".repeat(26));
+    await mkdir(partition, { recursive: true });
+    await writeFile(join(partition, "identity.json"), JSON.stringify(identity()));
+    await writeFile(join(partition, "pending.json"), JSON.stringify({
+      v: 2, identity: identity(), committedEpoch: 1, seq: 1,
+      records: [{ opId: "pending", seq: 1, key: "notes/a", op: "put", state: "committed", epoch: 1 }],
+    }));
+    const purge = createProfileReplicaPurge({ profileDir, guard: sharedGuard });
+    await expect(purge.prepareLogoutPending({ principal: PRINCIPAL }))
+      .rejects.toThrow(/sync first.*--discard-local-changes/i);
+    expect(existsSync(join(profileDir, REPLICA_LOGOUT_PENDING_FILE))).toBe(false);
+    expect(await purge.prepareLogoutPending({ principal: PRINCIPAL, discardLocalChanges: true }))
+      .toMatchObject({ v: 2, scope: "orphan_profile" });
+    const recovered = await purge.recoverLogoutPending({
+      signal: new AbortController().signal,
+      clearCredentials: async () => {},
+      eraseLegacyReplicas: async () => {},
+    });
+    expect(recovered).toMatchObject({ failed: [], remaining: 0 });
+    expect(existsSync(replicaRoot)).toBe(false);
+  });
+
+  test("an inspected empty pending file does not require discard consent", async () => {
+    const profileDir = await mkdtemp(join(tmpdir(), "tc858-orphan-synced-"));
+    dirs.push(profileDir);
+    const partition = join(profileDir, "replication", "a".repeat(26));
+    await mkdir(partition, { recursive: true });
+    await writeFile(join(partition, "identity.json"), JSON.stringify(identity()));
+    await writeFile(join(partition, "pending.json"), JSON.stringify({
+      v: 2, identity: identity(), committedEpoch: 1, seq: 1, records: [],
+    }));
+    const purge = createProfileReplicaPurge({ profileDir, guard: sharedGuard });
+    expect(await purge.prepareLogoutPending({ principal: PRINCIPAL }))
+      .toMatchObject({ v: 2, scope: "orphan_profile" });
+  });
+
+  test("unrecognized orphan-root files require explicit discard before any marker write", async () => {
+    const profileDir = await mkdtemp(join(tmpdir(), "tc858-orphan-unknown-"));
+    dirs.push(profileDir);
+    const root = join(profileDir, "replication");
+    await mkdir(root);
+    await writeFile(join(root, "pending.json"), "unknown layout");
+    const purge = createProfileReplicaPurge({ profileDir, guard: sharedGuard });
+    await expect(purge.prepareLogoutPending({ principal: PRINCIPAL }))
+      .rejects.toThrow(/sync first.*--discard-local-changes/i);
+    expect(existsSync(join(profileDir, REPLICA_LOGOUT_PENDING_FILE))).toBe(false);
+    expect(await purge.prepareLogoutPending({ principal: PRINCIPAL, discardLocalChanges: true }))
+      .toMatchObject({ v: 2, scope: "orphan_profile" });
+  });
+
+  test("corrupt gate requires explicit discard even when pending writes cannot be inspected", async () => {
+    const profileDir = await mkdtemp(join(tmpdir(), "tc858-corrupt-gate-"));
+    dirs.push(profileDir);
+    await mkdir(join(profileDir, "replication"));
+    await writeFile(join(profileDir, REPLICA_GATE_FILE), "{invalid");
+    const purge = createProfileReplicaPurge({ profileDir, guard: sharedGuard });
+    await expect(purge.prepareLogoutPending({ principal: PRINCIPAL }))
+      .rejects.toThrow(/sync first.*--discard-local-changes/i);
+    expect(await purge.prepareLogoutPending({ principal: PRINCIPAL, discardLocalChanges: true }))
+      .toMatchObject({ v: 2, scope: "orphan_profile" });
+    const result = await purge.recoverLogoutPending({
+      signal: new AbortController().signal,
+      clearCredentials: async () => {},
+      eraseLegacyReplicas: async () => {},
+    });
+    expect(result).toMatchObject({ failed: [], remaining: 0 });
+    expect(existsSync(join(profileDir, "replication"))).toBe(false);
+    await expect(readGateSnapshot(profileDir)).rejects.toMatchObject({ code: "REPLICA_GATED" });
+  });
+
+  test("orphan cleanup refuses a symlink root and retains its marker after a root swap", async () => {
+    const profileDir = await mkdtemp(join(tmpdir(), "tc858-orphan-symlink-"));
+    const outside = await mkdtemp(join(tmpdir(), "tc858-outside-"));
+    dirs.push(profileDir, outside);
+    await writeFile(join(outside, "keep.db"), "outside");
+    const root = join(profileDir, "replication");
+    await symlink(outside, root, "dir");
+    const purge = createProfileReplicaPurge({ profileDir, guard: sharedGuard });
+    await expect(purge.prepareLogoutPending({ principal: PRINCIPAL, discardLocalChanges: true }))
+      .rejects.toMatchObject({ code: "REPLICA_GATED", gate: "gate_unavailable" });
+    expect(existsSync(join(profileDir, REPLICA_LOGOUT_PENDING_FILE))).toBe(false);
+    await rm(root);
+    await mkdir(root);
+    await writeFile(join(root, "ciphertext.db"), "replica");
+    await purge.prepareLogoutPending({ principal: PRINCIPAL, discardLocalChanges: true });
+    await rm(root, { recursive: true });
+    await symlink(outside, root, "dir");
+    const failed = await purge.recoverLogoutPending({
+      signal: new AbortController().signal,
+      clearCredentials: async () => {},
+      eraseLegacyReplicas: async () => {},
+    });
+    expect(failed).toMatchObject({ failed: [{ id: "logout", code: "REPLICA_GATED" }] });
+    expect(existsSync(join(outside, "keep.db"))).toBe(true);
+    expect(existsSync(join(profileDir, REPLICA_LOGOUT_PENDING_FILE))).toBe(true);
+    await rm(root);
+    const resumed = await purge.recoverLogoutPending({
+      signal: new AbortController().signal,
+      clearCredentials: async () => {},
+      eraseLegacyReplicas: async () => {},
+    });
+    expect(resumed).toMatchObject({ failed: [], remaining: 0 });
+  });
+
+  test("orphan marker fsync failure leaves credentials and replica files intact", async () => {
+    const profileDir = await mkdtemp(join(tmpdir(), "tc858-orphan-fsync-"));
+    dirs.push(profileDir);
+    const root = join(profileDir, "replication");
+    await mkdir(root);
+    await writeFile(join(root, "replica.db"), "ciphertext");
+    const session = join(profileDir, "session.json");
+    const key = join(profileDir, "key.json");
+    await writeFile(session, "session");
+    await writeFile(key, "key");
+    const broken = createProfileReplicaPurge({
+      profileDir, guard: sharedGuard,
+      dirSync: async () => { throw Object.assign(new Error("marker fsync failed"), { code: "EIO" }); },
+    });
+    await expect(broken.prepareLogoutPending({ principal: PRINCIPAL, discardLocalChanges: true }))
+      .rejects.toMatchObject({ code: "STORAGE_ERROR" });
+    expect(existsSync(session)).toBe(true);
+    expect(existsSync(key)).toBe(true);
+    expect(existsSync(join(root, "replica.db"))).toBe(true);
+    // Rename may have reached disk, but without the directory fsync the caller must not
+    // claim a durable logout. A surviving marker remains independently resumable.
+    const marker = join(profileDir, REPLICA_LOGOUT_PENDING_FILE);
+    expect(existsSync(marker)).toBe(true);
+    const recovered = await createProfileReplicaPurge({ profileDir, guard: sharedGuard }).recoverLogoutPending({
+      signal: new AbortController().signal,
+      clearCredentials: async () => { await rm(session); await rm(key); },
+      eraseLegacyReplicas: async () => {},
+    });
+    expect(recovered).toMatchObject({ failed: [], remaining: 0 });
+    expect(existsSync(root)).toBe(false);
+  });
+
+  test("orphan recovery keeps the marker when credential cleanup is interrupted", async () => {
+    const profileDir = await mkdtemp(join(tmpdir(), "tc858-orphan-credentials-"));
+    dirs.push(profileDir);
+    const root = join(profileDir, "replication");
+    await mkdir(root);
+    await writeFile(join(root, "replica.db"), "ciphertext");
+    const session = join(profileDir, "session.json");
+    const key = join(profileDir, "key.json");
+    await writeFile(session, "session");
+    await writeFile(key, "key");
+    const purge = createProfileReplicaPurge({ profileDir, guard: sharedGuard });
+    await purge.prepareLogoutPending({ principal: PRINCIPAL, discardLocalChanges: true });
+    const marker = join(profileDir, REPLICA_LOGOUT_PENDING_FILE);
+    const interrupted = await purge.recoverLogoutPending({
+      signal: new AbortController().signal,
+      clearCredentials: async () => {
+        expect(existsSync(marker)).toBe(true);
+        await rm(key);
+        throw Object.assign(new Error("credential cleanup interrupted"), { code: "EIO" });
+      },
+      eraseLegacyReplicas: async () => {},
+    });
+    expect(interrupted).toMatchObject({ failed: [{ id: "logout", code: "EIO" }] });
+    expect(existsSync(marker)).toBe(true);
+    expect(existsSync(session)).toBe(true);
+    expect(existsSync(root)).toBe(true);
+    const recovered = await createProfileReplicaPurge({ profileDir, guard: sharedGuard }).recoverLogoutPending({
+      signal: new AbortController().signal,
+      clearCredentials: async () => { await rm(session, { force: true }); await rm(key, { force: true }); },
+      eraseLegacyReplicas: async () => {},
+    });
+    expect(recovered).toMatchObject({ failed: [], remaining: 0 });
+    expect(existsSync(marker)).toBe(false);
+    expect(existsSync(root)).toBe(false);
+  });
+
+  test("orphan marker blocks a fresh replica establish until the crash recovery finishes", async () => {
+    const profileDir = await mkdtemp(join(tmpdir(), "tc858-orphan-signin-"));
+    dirs.push(profileDir);
+    await mkdir(join(profileDir, "replication"));
+    await writeFile(join(profileDir, "replication", "ciphertext.db"), "replica");
+    const purge = createProfileReplicaPurge({ profileDir, guard: sharedGuard });
+    await purge.prepareLogoutPending({ principal: PRINCIPAL, discardLocalChanges: true });
+    const storage = createSqliteReplicaStorage({
+      ...storageOptions(), dir: join(profileDir, "replication"),
+      logoutPendingFile: join(profileDir, REPLICA_LOGOUT_PENDING_FILE),
+    });
+    await expect(storage.lifecycle!.establishSessionStamp(PRINCIPAL, {
+      consentAnchor: { at: Date.now(), source: "siwe" },
+    })).rejects.toMatchObject({ code: "REPLICA_GATED" });
+    expect(await readGateSnapshot(profileDir)).toBeUndefined();
   });
 
   test("active gate without a marker is a legitimate uncommitted sign-in, not an abandoned logout", async () => {
