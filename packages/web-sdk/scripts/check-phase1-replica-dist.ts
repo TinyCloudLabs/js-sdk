@@ -9,7 +9,7 @@ import {
   ciOptionalAllowance, fixRequiredOptionalAllowance, optionalFormats, priorOptionalAllowance,
   relocatedOptionalAllowance, relocationCommit, validateOptionalEntryTransition, validateOptionalLedger, type OptionalLedger,
 } from "./replica-optional-size-policy";
-import { assertCiSizeToolchain, approvedCiToolchainCorrection, approvedFixRequiredRatchet, approvedGatedOnlyRatchet, approvedPhase2, validateCiToolchainTransition, validateGatedOnlyRatchet, validateLedger, type GzipSizes, type Ledger, type LedgerEntry } from "./replica-size-policy";
+import { assertCiSizeToolchain, approvedCiToolchainCorrection, approvedFixRequiredRatchet, approvedGatedOnlyRatchet, approvedPhase2, isPolicyOnlySinceApprovedSource, validateCiToolchainTransition, validateGatedOnlyRatchet, validateLedger, type GzipSizes, type Ledger, type LedgerEntry } from "./replica-size-policy";
 type Baseline = {
   webSdkTestBaseline: { ref: string; unhandledErrors: number; failingNames: string[]; unhandledSignatures: string[] };
 };
@@ -255,10 +255,7 @@ if (prBaseSha) {
       "packages/web-sdk/scripts/replica-size-policy.test.ts",
       "packages/web-sdk/scripts/replica-size-policy.ts",
     ]);
-    const afterApprovedSource = command("git", ["diff", "--name-only", `${approvedCiToolchainCorrection.approvedSource}...HEAD`])
-      .split("\n").filter(Boolean);
-    if (spawnSync("git", ["merge-base", "--is-ancestor", approvedCiToolchainCorrection.approvedSource, "HEAD"],
-        { cwd: repoRoot }).status !== 0 || afterApprovedSource.some((path) => !policyOnly.has(path))) {
+    if (!isPolicyOnlySinceApprovedSource(repoRoot, approvedCiToolchainCorrection.approvedSource, policyOnly)) {
       console.error("CI toolchain size correction requires unchanged approved shipped sources since ddc032ca.");
       failed = true;
     }

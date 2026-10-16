@@ -1,3 +1,5 @@
+import { execFileSync, spawnSync } from "node:child_process";
+
 export type GzipSizes = { "index.mjs": number; "index.cjs": number };
 export type LedgerEntry = { pr: string; ticket: string; "index.mjs": number; "index.cjs": number; note: string };
 export type Phase2Ratchet = {
@@ -219,4 +221,12 @@ export function validateCiToolchainTransition(
       base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
     throw new Error("The CI Rust 1.99.0 size correction may be introduced once and must remain unchanged thereafter.");
   }
+}
+
+export function isPolicyOnlySinceApprovedSource(root: string, approvedSource: string, allowed: ReadonlySet<string>): boolean {
+  if (spawnSync("git", ["merge-base", "--is-ancestor", approvedSource, "HEAD"], { cwd: root }).status !== 0) {
+    return false;
+  }
+  const changed = execFileSync("git", ["diff", "--no-renames", "--name-only", "-z", `${approvedSource}...HEAD`], { cwd: root });
+  return changed.toString("utf8").split("\0").filter(Boolean).every((path) => allowed.has(path));
 }

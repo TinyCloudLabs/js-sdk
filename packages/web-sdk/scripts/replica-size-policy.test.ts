@@ -1,7 +1,9 @@
 import { describe, expect, it } from "bun:test";
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
-import { assertCiSizeToolchain, approvedFixRequiredRatchet, approvedGatedOnlyRatchet, validateCiToolchainTransition, validateGatedOnlyRatchet, validateLedger, type Ledger } from "./replica-size-policy";
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join, resolve } from "node:path";
+import { assertCiSizeToolchain, approvedFixRequiredRatchet, approvedGatedOnlyRatchet, isPolicyOnlySinceApprovedSource, validateCiToolchainTransition, validateGatedOnlyRatchet, validateLedger, type Ledger } from "./replica-size-policy";
 
 const current = JSON.parse(readFileSync(resolve(import.meta.dir, "replica-size-ledger.json"), "utf8")) as Ledger;
 const historical: Ledger = {
@@ -160,5 +162,50 @@ describe("TC-858 CI Rust toolchain measurement correction", () => {
     expect(() => validateCiToolchainTransition(undefined, extra)).toThrow();
     expect(() => validateCiToolchainTransition(corrected.canonicalToolchainCorrection, extra)).toThrow();
     expect(() => validateCiToolchainTransition(corrected.canonicalToolchainCorrection, undefined)).toThrow();
+  });
+});
+
+describe("TC-858 policy-only source identity", () => {
+  const source = "packages/web-sdk/src/removed.ts";
+  const allowed = "packages/web-sdk/scripts/replica-optional-size-policy.test.ts";
+  const paths = new Set([allowed]);
+  const git = (root: string, ...args: string[]) =>
+    execFileSync("git", ["-C", root, ...args], { encoding: "utf8" }).trim();
+
+  function fixture(): { root: string; base: string } {
+    const root = mkdtempSync(join(tmpdir(), "tc858-size-rename-"));
+    git(root, "init", "-q");
+    git(root, "config", "user.email", "policy@example.test");
+    git(root, "config", "user.name", "Policy Test");
+    mkdirSync(dirname(join(root, source)), { recursive: true });
+    mkdirSync(dirname(join(root, allowed)), { recursive: true });
+    writeFileSync(join(root, source), Array.from({ length: 20 }, (_, n) => `export const line${n} = ${n};`).join("\n"));
+    git(root, "add", ".");
+    git(root, "commit", "-qm", "approved source");
+    return { root, base: git(root, "rev-parse", "HEAD") };
+  }
+
+  it("allows an ordinary edit to an approved policy-only path", () => {
+    const { root, base } = fixture();
+    try {
+      writeFileSync(join(root, allowed), "export const policy = true;\n");
+      git(root, "add", ".");
+      git(root, "commit", "-qm", "policy test");
+      expect(isPolicyOnlySinceApprovedSource(root, base, paths)).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("refuses a real Git rename from shipped src into the approved policy path", () => {
+    const { root, base } = fixture();
+    try {
+      git(root, "mv", source, allowed);
+      git(root, "commit", "-qm", "move shipped source into policy test");
+      expect(git(root, "diff", "--name-only", `${base}...HEAD`)).toBe(allowed);
+      expect(isPolicyOnlySinceApprovedSource(root, base, paths)).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });
