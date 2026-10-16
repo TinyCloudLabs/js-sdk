@@ -420,10 +420,12 @@ export interface ProfileReplicaPurge extends Pick<ReplicaLifecycleGate, "recover
    * marker before credential unlink. A readable active gate uses scoped v1;
    * a missing gate with flag-owned files or a corrupt gate uses orphan v2;
    * an inactive readable gate with intents or legacy files uses epoch-bound
-   * v3, without fabricating a principal hash. Before v2, pending/unknown
-   * local writes or a corrupt gate refuse unless the user explicitly opts
-   * to `discardLocalChanges`; v3 treats any nonempty legacy child as unknown
-   * and requires the same consent. Null means no replica marker is needed,
+   * v3, without fabricating a principal hash. Before v2, only validated
+   * `identity.json` plus a parsed empty `pending.json` with no extra child
+   * proves a flag identity clean. A missing index, unknown child, nonempty
+   * pending state or corrupt gate requires `discardLocalChanges`; v3 treats
+   * any nonempty legacy child as unknown and requires the same consent.
+   * Null means no replica marker is needed,
    * not that logout completed: the CLI still durably writes authSignedOut
    * and unlinks/fsyncs both credentials under the profile lock, and on
    * startup finishes an interrupted unlink before network restore. No-marker

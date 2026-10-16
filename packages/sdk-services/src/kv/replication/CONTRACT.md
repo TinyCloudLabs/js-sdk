@@ -587,6 +587,17 @@ supplied **before** marker creation; `--keep-replicas` still rejects gated
 profiles and cannot override it. Neither path invents scoped intents,
 silently regenerates a gate or deletes outside this profile.
 
+For a flag-owned identity directory, only a validated `identity.json` and
+a regular `pending.json` whose parsed records are empty certify that local
+writes are absent. A missing/unreadable pending index, a replica database,
+`device.jwk`, `pending-v2.json` or **any** extra/unknown child is
+indeterminate and requires explicit discard consent; an empty old pending
+index does not excuse another child. No nonempty legacy child has a
+reviewed pending index. A Linux profile pin is accepted only at the exact
+kernel `/proc/self/fd/<n>` directory-descriptor path; an arbitrary alias or
+closed descriptor fails closed. The pin keeps cleanup on the original
+validated profile if its named path is renamed or replaced with a symlink.
+
 A readable gate that is **already denied** (`principalHash: null`,
 `eraseDeferred: false`) but still has intents or a legacy root uses
 `{ v: 3, scope: "inactive_gate", incarnation, lifecycleEpoch }`. It binds
