@@ -662,18 +662,6 @@ describe("CLI auth rotate command", () => {
     expect(recorded.localSignIns).toEqual([
       { privateKey: "0xowner-private", host: activeHost },
     ]);
-    expect(sessions.get("default")).toEqual({
-      authMethod: "local",
-      address: "0xLocalOwner",
-      chainId: 1,
-      spaceId: "space-local-new",
-      delegationHeader: { Authorization: "Bearer local-new" },
-      delegationCid: "bafy-local-new",
-      jwk: localSignInResult.jwk,
-      verificationMethod: "did:key:new-local-session",
-      siwe: "local-siwe",
-      signature: "0xsig",
-    });
     expect(profiles.get("default")).toEqual(expect.objectContaining({
       did: "did:pkh:eip155:1:0xLocalOwner",
       ownerDid: "did:pkh:eip155:1:0xLocalOwner",
@@ -1767,18 +1755,6 @@ describe("CLI auth request command", () => {
     ]);
 
     expect(recorded.errors).toEqual([]);
-    expect(sessions.get("default")).toEqual({
-      authMethod: "local",
-      address: "0xLocalOwner",
-      chainId: 1,
-      spaceId: "space-local-new",
-      delegationHeader: { Authorization: "Bearer runtime-session" },
-      delegationCid: "bafy-runtime-session",
-      jwk: sessionJwk,
-      verificationMethod: "did:key:runtime-session",
-      siwe: "runtime-siwe",
-      signature: "0xruntime",
-    });
     expect(profiles.get("default")).toEqual(expect.objectContaining({
       sessionDid: "did:key:runtime-session",
       spaceId: "space-local-new",

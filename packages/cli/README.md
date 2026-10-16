@@ -171,6 +171,12 @@ whole space. Whole-space replication requires `kv-sync-root` support and
 `--replication-allow-secrets`, because it includes `vault/`. Replication needs
 unrestricted `get` and explicit `sync` on that folder or broader; an exact-key
 grant never qualifies. Bare replica prefixes are rejected; use `notes/`.
+
+An explicit local-owner sign-in saves the verified replica lifecycle stamp with
+its session; later CLI processes validate that saved stamp before local reads.
+Without it, network sign-in still works but replica status is gated until a new
+verified sign-in. A gated root-prefix status does not imply `kv-sync-root` support.
+
 Use `tc replica report` for event aggregates and pinned keys; `--clear-pending`
 prints a warning because later commits can be read as stale until a subsequent
 sync. `auth logout` removes both legacy replicas and the flag-owned
