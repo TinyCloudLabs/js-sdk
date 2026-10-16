@@ -120,7 +120,7 @@ const optionalCurrent = await measureReplicaOptionalLoaded(distDir);
 for (const format of optionalFormats) {
   const total = optionalLedger.entries.reduce((sum, entry) => sum + entry[format], 0);
   console.log(`${format}: incremental loaded=${optionalCurrent[format]}; cumulative optional ledger=${total} / ${optionalLedger.allowance[format]} gzip-bytes`);
-  if (total > optionalLedger.allowance[format]) {
+  if (total > optionalLedger.allowance[format] || optionalCurrent[format] > optionalLedger.allowance[format]) {
     console.error(`${format}: optional no-growth allowance exceeded; changing this separate budget requires policy review.`);
     failed = true;
   }
