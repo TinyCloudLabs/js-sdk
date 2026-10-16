@@ -1,0 +1,15 @@
+{
+  "allowance": {
+    "replica.mjs": 45507,
+    "replica.cjs": 65006
+  },
+  "entries": [
+    {
+      "pr": "#548",
+      "ticket": "TC-858",
+      "replica.mjs": 45507,
+      "replica.cjs": 65006,
+      "note": "Bun 1.4.3 browser first-load graph: optional entry plus static chunks including external replica parser and noble; root external, deferred storage/worker excluded"
+    }
+  ]
+}

@@ -2,20 +2,25 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { cp, mkdtemp, readFile, rm } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
+import { measureReplicaOptionalLoaded, type LoadedSizes } from "./measure-replica-optional";
 
 type GzipSizes = { "index.mjs": number; "index.cjs": number };
 type LedgerEntry = { pr: string; ticket: string; "index.mjs": number; "index.cjs": number; note: string };
 type Ledger = { allowance: GzipSizes; entries: LedgerEntry[] };
+type OptionalEntry = LoadedSizes & { pr: string; ticket: string; note: string };
+type OptionalLedger = { allowance: LoadedSizes; entries: OptionalEntry[] };
 type Baseline = {
   webSdkTestBaseline: { ref: string; unhandledErrors: number; failingNames: string[]; unhandledSignatures: string[] };
 };
 
 /*
  * Rule:
- * - Structural: always reject replica references in either web bundle.
- * - Per-PR: replica-touching PRs compare gzip growth with their git merge base.
- * - Cumulative: replica PRs add one measured entry to the reviewed ledger; totals
- *   cannot exceed its allowance. Entries may record negative deltas when code shrinks.
+ * - Structural: reject replica references in the core ESM and CJS bundles.
+ * - Per-PR: replica-touching PRs compare core gzip and initial optional loaded
+ *   gzip (root external, external parser and static chunks included) against
+ *   their git merge base.
+ * - Cumulative: add one measured row to each separate ledger without raising
+ *   the existing core ceiling. Deferred storage/worker bytes are not core load.
  * - Non-replica PRs are never charged; they only validate the ledger shape.
  *
  * Replica-owned paths: packages/replica/**, packages/sdk-services/src/kv/replication/**,
@@ -51,7 +56,10 @@ const repoRoot = resolve(import.meta.dir, "../../..");
 const baseline = JSON.parse(await readFile(resolve(import.meta.dir, "phase1-replica-baseline.json"), "utf8")) as Baseline;
 const ledgerPath = resolve(import.meta.dir, "replica-size-ledger.json");
 const ledger = JSON.parse(await readFile(ledgerPath, "utf8")) as Ledger;
+const optionalLedgerPath = resolve(import.meta.dir, "replica-optional-size-ledger.json");
+const optionalLedger = JSON.parse(await readFile(optionalLedgerPath, "utf8")) as OptionalLedger;
 const formats = ["index.mjs", "index.cjs"] as const;
+const optionalFormats = ["replica.mjs", "replica.cjs"] as const;
 let failed = false;
 
 function validateLedger(value: Ledger): void {
@@ -76,6 +84,23 @@ function validateLedger(value: Ledger): void {
     }
   }
 }
+function validateOptionalLedger(value: OptionalLedger): void {
+  const path = "packages/web-sdk/scripts/replica-optional-size-ledger.json";
+  if (!value || !value.allowance || !Array.isArray(value.entries) ||
+      Object.keys(value).some((key) => key !== "allowance" && key !== "entries") ||
+      Object.keys(value.allowance).some((key) => !optionalFormats.includes(key as typeof optionalFormats[number])) ||
+      optionalFormats.some((format) => !Number.isSafeInteger(value.allowance[format]) || value.allowance[format] < 0)) {
+    throw new Error(`Invalid ${path} shape or allowance`);
+  }
+  for (const entry of value.entries) {
+    if (!entry || Object.keys(entry).some((key) =>
+      key !== "pr" && key !== "ticket" && key !== "note" && !optionalFormats.includes(key as typeof optionalFormats[number])) ||
+        typeof entry.pr !== "string" || typeof entry.ticket !== "string" || typeof entry.note !== "string" ||
+        optionalFormats.some((format) => !Number.isSafeInteger(entry[format]))) {
+      throw new Error(`Invalid ${path} entries[] item`);
+    }
+  }
+}
 
 function command(program: string, args: string[], cwd = repoRoot): string {
   return execFileSync(program, args, { cwd, encoding: "utf8" }).trim();
@@ -90,6 +115,16 @@ async function gzipSizes(directory: string): Promise<GzipSizes> {
 }
 
 validateLedger(ledger);
+validateOptionalLedger(optionalLedger);
+const optionalCurrent = await measureReplicaOptionalLoaded(distDir);
+for (const format of optionalFormats) {
+  const total = optionalLedger.entries.reduce((sum, entry) => sum + entry[format], 0);
+  console.log(`${format}: initial loaded=${optionalCurrent[format]}; cumulative optional ledger=${total} / ${optionalLedger.allowance[format]} gzip-bytes`);
+  if (total > optionalLedger.allowance[format]) {
+    console.error(`${format}: optional first-load allowance exceeded; changing this separate budget requires policy review.`);
+    failed = true;
+  }
+}
 const currentSizes = await gzipSizes(distDir);
 for (const format of formats) {
   const source = await readFile(resolve(distDir, format), "utf8");
@@ -123,6 +158,36 @@ if (prBaseSha) {
     throw new Error(`Unable to read base ${baseLedgerPath}: ${baseLedgerResult.stderr.trim()}`);
   }
   validateLedger(baseLedger);
+  const baseOptionalPath = "packages/web-sdk/scripts/replica-optional-size-ledger.json";
+  const optionalResult = spawnSync("git", ["show", `${mergeBase}:${baseOptionalPath}`], {
+    cwd: repoRoot, encoding: "utf8",
+  });
+  let baseOptional: OptionalLedger;
+  if (optionalResult.status === 0) {
+    baseOptional = JSON.parse(optionalResult.stdout) as OptionalLedger;
+  } else if (optionalResult.stderr.includes("does not exist in") ||
+      optionalResult.stderr.includes("exists on disk, but not in")) {
+    baseOptional = { allowance: optionalLedger.allowance, entries: [] };
+  } else {
+    throw new Error(`Unable to read base ${baseOptionalPath}: ${optionalResult.stderr.trim()}`);
+  }
+  validateOptionalLedger(baseOptional);
+  const optionalPrefixMatches = optionalLedger.entries.length >= baseOptional.entries.length &&
+    baseOptional.entries.every((entry, index) => {
+      const current = optionalLedger.entries[index];
+      return current.pr === entry.pr && current.ticket === entry.ticket &&
+        current["replica.mjs"] === entry["replica.mjs"] &&
+        current["replica.cjs"] === entry["replica.cjs"] && current.note === entry.note;
+    });
+  if (!optionalPrefixMatches) {
+    console.error(`${baseOptionalPath} entries[] must preserve the base ledger as an unchanged prefix.`);
+    failed = true;
+  }
+  if (optionalResult.status === 0 && optionalFormats.some((format) =>
+    optionalLedger.allowance[format] > baseOptional.allowance[format])) {
+    console.error(`${baseOptionalPath} must not raise its allowance without a separate policy decision.`);
+    failed = true;
+  }
   const replicaPaths = changedPaths.filter(replicaOwnedPath);
   const prefixMatches = ledger.entries.length >= baseLedger.entries.length &&
     baseLedger.entries.every((entry, index) => {
@@ -156,6 +221,10 @@ if (prBaseSha) {
       failed = true;
     }
     console.log("Replica size budget: non-replica PR; no ledger charge or merge-base rebuild.");
+    if (optionalLedger.entries.length !== baseOptional.entries.length || !optionalPrefixMatches) {
+      console.error("Non-replica PRs must not append to the optional loaded-byte ledger.");
+      failed = true;
+    }
   } else {
     const rustChanged = changedPaths.some((path) =>
       path.startsWith("packages/sdk-rs/") ||
@@ -200,6 +269,25 @@ if (prBaseSha) {
       const deltas = Object.fromEntries(formats.map((format) => [format, currentSizes[format] - baseSizes[format]])) as GzipSizes;
       for (const format of formats) {
         console.log(`${format}: merge-base=${baseSizes[format]} gzip-bytes current=${currentSizes[format]} delta=${deltas[format]} bytes`);
+      }
+      const baseOptionalSizes = await measureReplicaOptionalLoaded(resolve(worktree, "packages/web-sdk/dist"));
+      const optionalDeltas = Object.fromEntries(optionalFormats.map((format) =>
+        [format, optionalCurrent[format] - baseOptionalSizes[format]])) as LoadedSizes;
+      for (const format of optionalFormats) {
+        console.log(`${format}: merge-base initially loaded=${baseOptionalSizes[format]} current=${optionalCurrent[format]} delta=${optionalDeltas[format]} gzip-bytes`);
+      }
+      const optionalAppended = optionalLedger.entries.slice(baseOptional.entries.length);
+      if (!optionalPrefixMatches || optionalAppended.length !== 1) {
+        console.error(`Replica-touching PR must append exactly one measured row to ${baseOptionalPath}:`);
+        console.error(JSON.stringify({
+          pr: process.env.REPLICA_BUDGET_PR_NUMBER ? `#${process.env.REPLICA_BUDGET_PR_NUMBER}` : "#<PR>",
+          ticket: process.env.REPLICA_BUDGET_TICKET?.match(/\bTC-\d+\b/i)?.[0] ?? "TC-UNKNOWN",
+          ...optionalDeltas, note: "Initial optional loaded gzip delta against this PR's merge base",
+        }));
+        failed = true;
+      } else if (optionalFormats.some((format) => optionalAppended[0][format] !== optionalDeltas[format])) {
+        console.error(`${baseOptionalPath} appended row must record exact observed initial loaded gzip delta: ${JSON.stringify(optionalDeltas)}`);
+        failed = true;
       }
       const appended = ledger.entries.slice(baseLedger.entries.length);
       if (!prefixMatches || appended.length !== 1) {
