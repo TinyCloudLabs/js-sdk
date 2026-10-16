@@ -4,7 +4,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { mkdir, rmdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { pkhDid } from "@tinycloud/sdk-core";
+import { extractRecapAttenuations, parseCanonicalRecapResource, pkhDid } from "@tinycloud/sdk-core";
 import { registerReplicationLoaders } from "./core";
 import { NodeWasmBindings } from "./NodeWasmBindings";
 import { PrivateKeySigner } from "./signers/PrivateKeySigner";
@@ -144,6 +144,27 @@ describe("replica gate: restore", () => {
     expect(await node.replication!.status()).toEqual([]);
   });
 
+  test("exposes only the validated active replica stamp without sharing mutable state", async () => {
+    const dir = profileDir();
+    const proof = await signedRestorableSession();
+    const stamp = await replicaGate.establishSessionStamp(dir, pkhDid(proof.address, proof.chainId), {
+      siweIssuedAt: Date.now(),
+    });
+    const node = replicatedNode(dir);
+    expect(node.replicaStamp).toBeUndefined();
+    await node.restoreSession({ ...proof, replicaStamp: stamp });
+    expect(node.replicaStamp).toEqual(stamp);
+    const exposed = node.replicaStamp!;
+    (exposed as { lifecycleEpoch: number }).lifecycleEpoch++;
+    expect(node.replicaStamp).toEqual(stamp);
+    await node.signOut();
+    expect(node.replicaStamp).toBeUndefined();
+    const stale = replicatedNode(dir);
+    await stale.restoreSession({ ...proof, replicaStamp: stamp });
+    expect(stale.address).toBe(proof.address);
+    expect(stale.replicaStamp).toBeUndefined();
+  });
+
   test("keeps a verified network restore when replica runtime binding fails", async () => {
     class FailingRuntime extends StubRuntime {
       override async bind() { throw new Error("replica runtime unavailable"); }
@@ -162,6 +183,7 @@ describe("replica gate: restore", () => {
     await node.restoreSession({ ...proof, replicaStamp });
     expect(node.address).toBe(proof.address);
     expect(node.spaceId).toBe(proof.spaceId);
+    expect(node.replicaStamp).toBeUndefined();
     expect((await node.replication!.status())[0]).toMatchObject({
       state: "gated",
       gate: "gate_unavailable",
@@ -194,6 +216,7 @@ describe("replica gate: restore", () => {
     await node.restoreSession({ ...proof, replicaStamp: malformed });
 
     expect(node.spaceId).toBe(proof.spaceId);
+    expect(node.replicaStamp).toBeUndefined();
     expect((await node.replication!.status())[0]).toMatchObject({ state: "gated", gate: "stamp_stale" });
   });
 
@@ -404,6 +427,93 @@ describe("browser replica gate without a profile directory", () => {
       expect(stamp.lifecycleEpoch).toBe(0);
       expect(await lifecycle.restoreSessionStamp(pkhDid(proof.address, proof.chainId), stamp)).toEqual(stamp);
       expect(await inspectReplicaKeyPresence()).toEqual({ gateHmac: true, accountKey: true });
+    });
+  });
+
+  test("OpenKey approval uses the original prepared SIWE before exposing a fresh replica stamp", async () => {
+    await withBrowserOrigin(async (lifecycle) => {
+      const signer = new PrivateKeySigner(PROOF_PRIVATE_KEY);
+      const node = new TinyCloudNode({
+        host: RESTORE_HOST,
+        signer,
+        wasmBindings: new NodeWasmBindings(),
+        autoBootstrapAccount: false,
+        replication: {
+          enabled: true,
+          prefixes: ["notes/"],
+          storage: { kind: "indexeddb", lifecycle, async open() { throw new Error("No partition open expected."); }, async purge() {} },
+        },
+      });
+      (node as any).bootstrapAccountIfNeeded = async () => true;
+      const priorFetch = globalThis.fetch;
+      globalThis.fetch = async (input, init) => {
+        const url = String(input);
+        if (url.endsWith("/info")) {
+          return new Response(JSON.stringify({ protocol: 1, version: "1.0.0", features: [] }), {
+            headers: { "content-type": "application/json" },
+          });
+        }
+        if (url.endsWith("/delegate") && init?.method === "POST") {
+          return new Response(JSON.stringify({ activated: [], skipped: [] }), {
+            headers: { "content-type": "application/json" },
+          });
+        }
+        throw new Error(`Unexpected OpenKey test fetch: ${url}`);
+      };
+      try {
+        let approvedSiwe: string | undefined;
+        await node.signInWithOpenKey(async ({ siwe, jwk }) => {
+          expect(node.replicaStamp).toBeUndefined();
+          expect(JSON.stringify(jwk)).toBeTruthy();
+          approvedSiwe = siwe;
+          const selectedActionKeys: string[] = [];
+          const permissions: Array<{ service: string; space: string; path: string; actions: string[] }> = [];
+          for (const [resource, actions] of Object.entries(extractRecapAttenuations(siwe))) {
+            const { space, path } = parseCanonicalRecapResource(resource);
+            const grouped = new Map<string, string[]>();
+            for (const ability of Object.keys(actions)) {
+              const service = ability.slice(0, ability.indexOf("/"));
+              if (ability !== "tinycloud.capabilities/read") {
+                selectedActionKeys.push(`${service}\0${space}\0${path}\0${ability}`);
+              }
+              grouped.set(service, [...(grouped.get(service) ?? []), ability]);
+            }
+            for (const [service, granted] of grouped) {
+              permissions.push({ service, space, path, actions: granted });
+            }
+          }
+          return {
+            protocolVersion: 1,
+            address: await signer.getAddress(),
+            signature: await signer.signMessage(siwe),
+            signedMessage: siwe,
+            selectedActionKeys,
+            permissions,
+          };
+        });
+        expect(node.session?.siwe).toBe(approvedSiwe);
+        expect(node.replicaStamp).toBeDefined();
+        expect(await inspectReplicaKeyPresence()).toEqual({ gateHmac: true, accountKey: true });
+        const local = new TinyCloudNode({
+          host: RESTORE_HOST,
+          signer,
+          wasmBindings: new NodeWasmBindings(),
+          autoBootstrapAccount: false,
+          replication: {
+            enabled: true,
+            prefixes: ["notes/"],
+            storage: { kind: "indexeddb", lifecycle, async open() { throw new Error("No partition open expected."); }, async purge() {} },
+          },
+        });
+        (local as any).bootstrapAccountIfNeeded = async () => true;
+        await local.signIn();
+        expect(local.session?.siwe).not.toBe(approvedSiwe);
+        expect(local.replicaStamp).toEqual(node.replicaStamp);
+        await node.signOut();
+        expect(node.replicaStamp).toBeUndefined();
+      } finally {
+        globalThis.fetch = priorFetch;
+      }
     });
   });
 });
