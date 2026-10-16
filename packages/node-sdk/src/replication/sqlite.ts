@@ -49,6 +49,7 @@ import type {
   ReplicaGateAccess,
   ReplicaLifecycleGate,
   ReplicaConsentAnchor,
+  ReplicaPurgeIntent,
   ReplicaSessionStamp,
 } from "@tinycloud/sdk-services/kv/replication";
 import { CONSENT_WINDOW_MS, MAX_GRANT_TTL_MS, REPLICA_GATE_FILE } from "@tinycloud/sdk-services/kv/replication/contractConstants";
@@ -64,11 +65,27 @@ import type {
   SqliteRuntime,
 } from "./replica-contract";
 import { ucanAttUnconstrainedFor } from "./authority";
+/** Local profile fencing token, not a secret capability; the profile lock remains authoritative. */
+export interface ProfileReplicaDeferredToken {
+  deniedEpoch: number;
+  principalHash: string;
+}
+
+export interface ProfileReplicaPurge extends Pick<ReplicaLifecycleGate, "recover" | "erasePending" | "pendingPurge"> {
+  deny(input: ReplicaDenyInput, options?: { deferErase?: boolean }): Promise<ReplicaDenyOutcome & {
+    resumeToken?: ProfileReplicaDeferredToken;
+  }>;
+  deferredErase(): Promise<ProfileReplicaDeferredToken | null>;
+  resumeDeferredErase(token: ProfileReplicaDeferredToken, options: { signal: AbortSignal }): Promise<ReplicaEraseReport>;
+}
+
 
 type FileGateState = ReplicaAccountGate & {
   intents: ReplicaPurgeIntent[];
   pendingGenerations: Record<string, number>;
   firstInstall: Record<string, number>;
+  eraseDeferred: boolean;
+  deferredPrincipalHash: string | null;
 };
 
 type FileGate = {
@@ -85,7 +102,10 @@ type FileGate = {
     input: ReplicaDenyInput,
     collectIntents: (principalHash: string) => Promise<readonly ReplicaPurgeIntent[]>,
     precomputed?: { salt: string; principalHash: string },
+    options?: { deferErase?: boolean },
   ): Promise<ReplicaDenyOutcome>;
+  deferredGateToken(profileDir: string): Promise<ProfileReplicaDeferredToken | null>;
+  resumeDeferredGate(profileDir: string, token: ProfileReplicaDeferredToken): Promise<boolean>;
   clearGateIntent(profileDir: string, id: string): Promise<void>;
 };
 
@@ -648,6 +668,7 @@ function newestGrantInfo(
 class SqliteReplicaHandle implements KVReplicaHandle {
   readonly spec: KVReplicaSpec;
   readonly deviceDid: string;
+  readonly replicaId: string;
   readonly #device: ReplicaDevice;
   readonly #store: SqliteReplicaStore;
   readonly #replicaDir: string;
@@ -667,6 +688,7 @@ class SqliteReplicaHandle implements KVReplicaHandle {
 
   constructor(input: {
     spec: KVReplicaSpec;
+    replicaId: string;
     device: ReplicaDevice;
     store: SqliteReplicaStore;
     replicaDir: string;
@@ -680,6 +702,7 @@ class SqliteReplicaHandle implements KVReplicaHandle {
     ino: number | undefined;
   }) {
     this.spec = input.spec;
+    this.replicaId = input.replicaId;
     this.#device = input.device;
     this.deviceDid = input.device.did;
     this.#store = input.store;
@@ -1003,7 +1026,7 @@ class SqliteReplicaHandle implements KVReplicaHandle {
 
 export function createSqliteReplicaStorage(
   options: SqliteReplicaStorageOptions,
-): KVReplicaStorage {
+): KVReplicaStorage & { lifecycle: ReplicaLifecycleGate & ProfileReplicaPurge } {
   const root = options.dir;
   const profileDir = dirname(options.gateFile ?? join(dirname(root), REPLICA_GATE_FILE));
   const guard = options.guard;
@@ -1136,7 +1159,7 @@ export function createSqliteReplicaStorage(
     return intents;
   }
 
-  const lifecycle: ReplicaLifecycleGate = {
+  const lifecycle: ReplicaLifecycleGate & ProfileReplicaPurge = {
     kind: "file",
     async recover({ signal }) {
       return lifecycle.erasePending({ signal });
@@ -1171,7 +1194,7 @@ export function createSqliteReplicaStorage(
         const gate = await fileGate();
         return await profileSection(async () => {
           const state = await gate.readGateSnapshot(profileDir);
-          return state !== undefined && state.intents.length === 0 &&
+          return state !== undefined && !state.eraseDeferred && state.intents.length === 0 &&
             (state.principalHash === null || state.principalHash === await gate.principalHashOf(state.salt, next));
         });
       } catch {
@@ -1213,25 +1236,44 @@ export function createSqliteReplicaStorage(
     },
     consentDeadline() { return null; },
     deliverable(stamp) { return lifecycle.checkDelivery(stamp).status === "allow"; },
-    deny(input) {
+    deny(input: ReplicaDenyInput, options?: { deferErase?: boolean }) {
+      if (options?.deferErase === true && input.reason !== "sign_out") {
+        throw new TypeError("Deferred erase is only available for sign-out.");
+      }
       visibleStamp = undefined;
       visiblePrincipalHash = undefined;
       checkedGate = undefined;
-      return (async (): Promise<ReplicaDenyOutcome> => {
+      return (async (): Promise<ReplicaDenyOutcome & { resumeToken?: ProfileReplicaDeferredToken }> => {
         try {
           const gate = await fileGate();
           const snapshot = await gate.readGateSnapshot(profileDir);
           const precomputed = snapshot === undefined ? undefined : {
             salt: snapshot.salt, principalHash: await gate.principalHashOf(snapshot.salt, input.principal),
           };
-          return await profileSection(() => gate.denyGate(profileDir, input,
-            async (principalHash) => collectIntents(principalHash, precomputed?.salt ?? ""),
-            precomputed));
+          return await profileSection(async () => {
+            const result = await gate.denyGate(profileDir, input,
+              async (principalHash) => collectIntents(principalHash, precomputed?.salt ?? ""),
+              precomputed, options);
+            if (result.status !== "denied" || options?.deferErase !== true) return result;
+            const resumeToken = await gate.deferredGateToken(profileDir);
+            if (resumeToken === null || resumeToken.deniedEpoch !== result.lifecycleEpoch) {
+              return { status: "unguarded", code: "gate_unavailable" };
+            }
+            return { ...result, resumeToken };
+          });
         } catch (error) {
           return { status: "unguarded", code: typeof error === "object" && error !== null &&
             "code" in error && typeof error.code === "string" ? error.code : "gate_unavailable" };
         }
       })();
+    },
+    deferredErase() {
+      return profileSection(async () => (await fileGate()).deferredGateToken(profileDir));
+    },
+    async resumeDeferredErase(token, { signal }) {
+      signal.throwIfAborted();
+      await profileSection(async () => (await fileGate()).resumeDeferredGate(profileDir, token));
+      return lifecycle.erasePending({ signal });
     },
     async pendingPurge() {
       const gate = await fileGate();
@@ -1242,11 +1284,14 @@ export function createSqliteReplicaStorage(
       const erased: string[] = [];
       const failed: Array<{ id: string; code: string }> = [];
       const intents = await lifecycle.pendingPurge();
+      const held = await profileSection(() => gate.readGateSnapshot(profileDir));
+      if (held?.eraseDeferred) return { erased, failed, remaining: held.intents.length };
       for (const intent of intents) {
         signal.throwIfAborted();
         try {
           await profileSection(async () => {
             const state = await gate.readGateSnapshot(profileDir);
+            if (state?.eraseDeferred) return;
             if (!state?.intents.some((queued) => queued.id === intent.id)) return;
             let idDir: string | undefined;
             for (const dir of await identityDirs()) {
@@ -1459,6 +1504,7 @@ export function createSqliteReplicaStorage(
     }
     return new SqliteReplicaHandle({
       spec,
+      replicaId: replicaHash,
       device,
       store,
       replicaDir,
@@ -1638,6 +1684,17 @@ export function createSqliteReplicaStorage(
       );
     },
   };
+}
+
+/** CLI-facing profile lifecycle; callers supply their existing nonreentrant profile lock. */
+export function createProfileReplicaPurge(options: {
+  profileDir: string;
+  guard: MutationGuard;
+}): ProfileReplicaPurge {
+  return createSqliteReplicaStorage({
+    dir: join(options.profileDir, "replication"),
+    guard: options.guard,
+  }).lifecycle;
 }
 
 /**

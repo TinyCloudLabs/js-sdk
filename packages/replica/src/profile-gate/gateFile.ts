@@ -29,6 +29,12 @@ export interface NodeGateState extends ReplicaAccountGate {
   intents: ReplicaPurgeIntent[];
   /** Identity key hash to first-install time (ms). Cleared by every committed deny. */
   firstInstall: Record<string, number>;
+  /** Identity key hash to generation; advanced once with a newly queued pending intent. */
+  pendingGenerations: Record<string, number>;
+  /** Deferred revoke blocks recovery from erasing these already-durable intents. */
+  eraseDeferred: boolean;
+  /** Salted original principal, retained after resume to recognize idempotent retries. */
+  deferredPrincipalHash: string | null;
 }
 
 function gateRefusal(gate: ReplicaGateReason, message: string) {
@@ -109,6 +115,15 @@ function parseState(text: string): NodeGateState {
       throw gateRefusal("gate_unavailable", "The replica gate file has an invalid pending generation.");
     }
   }
+  const eraseDeferred = Object.prototype.hasOwnProperty.call(record, "eraseDeferred") ? record.eraseDeferred : false;
+  const deferredPrincipalHash = Object.prototype.hasOwnProperty.call(record, "deferredPrincipalHash")
+    ? record.deferredPrincipalHash : null;
+  if (typeof eraseDeferred !== "boolean" ||
+      (deferredPrincipalHash !== null && (typeof deferredPrincipalHash !== "string" ||
+        !/^[0-9a-f]{64}$/.test(deferredPrincipalHash))) ||
+      (eraseDeferred && (record.principalHash !== null || deferredPrincipalHash === null))) {
+    throw gateRefusal("gate_unavailable", "The replica gate has an invalid deferred erase state.");
+  }
   return {
     incarnation: record.incarnation,
     salt: record.salt,
@@ -118,6 +133,8 @@ function parseState(text: string): NodeGateState {
     intents: record.intents as ReplicaPurgeIntent[],
     firstInstall: firstInstall as Record<string, number>,
     pendingGenerations: pendingGenerations as Record<string, number>,
+    eraseDeferred,
+    deferredPrincipalHash,
   };
 }
 
@@ -173,6 +190,7 @@ export async function assertGateAccess(
 export async function clearGateIntent(profileDir: string, id: string): Promise<void> {
   const state = await readState(profileDir);
   if (state === undefined || !state.intents.some((intent) => intent.id === id)) return;
+  if (state.eraseDeferred) throw gateRefusal("purge_pending", "Deferred replica erase has not been resumed.");
   await writeState(profileDir, { ...state, intents: state.intents.filter((intent) => intent.id !== id) });
 }
 
@@ -189,6 +207,12 @@ async function writeState(profileDir: string, state: NodeGateState): Promise<voi
       await handle.close();
     }
     await rename(temp, target);
+    const directory = await open(profileDir, "r");
+    try {
+      await directory.sync();
+    } finally {
+      await directory.close();
+    }
   } catch (error) {
     await rm(temp, { force: true });
     throw error;
@@ -204,6 +228,9 @@ function freshState(): NodeGateState {
     deniedAt: null,
     intents: [],
     firstInstall: {},
+    pendingGenerations: {},
+    eraseDeferred: false,
+    deferredPrincipalHash: null,
   };
 }
 
@@ -219,6 +246,7 @@ export async function readGateState(profileDir: string): Promise<NodeGateState> 
 /** The device-level first-install anchor for one identity, or `undefined` when none is recorded. */
 export async function readFirstInstall(profileDir: string, identityKeyHash: string): Promise<number | undefined> {
   const state = await readState(profileDir);
+  if (state?.eraseDeferred) throw gateRefusal("purge_pending", "Deferred replica erase has not been resumed.");
   return state?.firstInstall[identityKeyHash];
 }
 
@@ -228,6 +256,7 @@ export async function recordFirstInstall(profileDir: string, identityKeyHash: st
     throw gateRefusal("gate_unavailable", "A salted identity hash and finite first-install time are required.");
   }
   const state = await readGateState(profileDir);
+  if (state.eraseDeferred) throw gateRefusal("purge_pending", "Deferred replica erase has not been resumed.");
   const existing = state.firstInstall[identityKeyHash];
   if (existing !== undefined) return existing;
   await writeState(profileDir, { ...state, firstInstall: { ...state.firstInstall, [identityKeyHash]: atMs } });
@@ -245,14 +274,18 @@ export async function establishSessionStamp(
   principal: string,
   o: { siweIssuedAt: number },
 ): Promise<ReplicaSessionStamp> {
+  if (!Number.isSafeInteger(o?.siweIssuedAt) || o.siweIssuedAt < 0) {
+    throw gateRefusal("not_established", "A finite signed SIWE issued-at time is required.");
+  }
+  const issuedAt = Math.min(o.siweIssuedAt, Date.now());
   const state = await readGateState(profileDir);
-  if (state.intents.length > 0) throw gateRefusal("purge_pending", "A purge is pending for this profile.");
-  if (state.deniedAt !== null && o.siweIssuedAt <= state.deniedAt) {
+  if (state.eraseDeferred || state.intents.length > 0) throw gateRefusal("purge_pending", "A purge is pending for this profile.");
+  if (state.deniedAt !== null && issuedAt <= state.deniedAt) {
     throw gateRefusal("stamp_stale", "The sign-in predates the last sign-out.");
   }
   const hash = await principalHashOf(state.salt, principal);
   if (state.principalHash === null) {
-    await writeState(profileDir, { ...state, principalHash: hash });
+    await writeState(profileDir, { ...state, principalHash: hash, deferredPrincipalHash: null });
   } else if (state.principalHash !== hash) {
     throw gateRefusal("principal_mismatch", "The profile belongs to another account.");
   }
@@ -269,7 +302,9 @@ export async function restoreSessionStamp(
   persisted: ReplicaSessionStamp | undefined,
 ): Promise<ReplicaSessionStamp> {
   const state = await readState(profileDir);
-  if (state !== undefined && state.intents.length > 0) throw gateRefusal("purge_pending", "A purge is pending for this profile.");
+  if (state !== undefined && (state.eraseDeferred || state.intents.length > 0)) {
+    throw gateRefusal("purge_pending", "A purge is pending for this profile.");
+  }
   if (persisted === undefined) throw gateRefusal("not_established", "The session has no replica stamp.");
   if (
     typeof persisted !== "object" || persisted === null || Array.isArray(persisted) ||
@@ -293,19 +328,22 @@ export async function restoreSessionStamp(
 
 /**
  * `deny` step 1. If `input.principal` does not match the gate, returns `stale` and writes nothing.
- * Otherwise one atomic rewrite: principal hash moves to `null` or `next`, the epoch goes up by one,
- * `deniedAt` is set, intents from `collectIntents(oldPrincipalHash)` are added (deduplicated by id),
- * and `firstInstall` is cleared. Never rejects on storage failure: a failed write returns `unguarded`.
- * `collectIntents` runs inside the caller's profile lock and must not take it.
+ * Otherwise one atomic rewrite clears the principal, increments epoch and pending generations
+ * for new pending intents, records the deduplicated intents and clears first-install anchors.
+ * A failed write returns `unguarded`. The caller holds the nonreentrant profile lock throughout.
  */
 export async function denyGate(
   profileDir: string,
   input: ReplicaDenyInput,
   collectIntents: (principalHash: string) => Promise<readonly ReplicaPurgeIntent[]>,
   precomputed?: { salt: string; principalHash: string },
+  options?: { deferErase?: boolean },
 ): Promise<ReplicaDenyOutcome> {
   if (input.reason === "account_switch" && input.next === undefined) {
     throw new TypeError("An account switch needs the incoming principal.");
+  }
+  if (options?.deferErase === true && input.reason !== "sign_out") {
+    throw new TypeError("Deferred erase is only available for sign-out.");
   }
   try {
     const state = await readState(profileDir);
@@ -318,15 +356,38 @@ export async function denyGate(
     }
     const intents = await collectIntents(state.principalHash);
     const known = new Set(state.intents.map((intent) => intent.id));
-    const merged = [...state.intents, ...intents.filter((intent) => !known.has(intent.id))];
-    const nextHash = input.reason === "account_switch" ? await principalHashOf(state.salt, input.next ?? "") : null;
+    const added: ReplicaPurgeIntent[] = [];
+    for (const intent of intents) {
+      if (known.has(intent.id)) continue;
+      known.add(intent.id);
+      added.push(intent);
+    }
+    const pendingGenerations = { ...state.pendingGenerations };
+    for (const intent of added) {
+      if (intent.kind !== "pending") continue;
+      const hash = intent.identityKeyHash;
+      if (!/^[0-9a-f]{64}$/.test(hash) || intent.id !== `pending:${hash}` ||
+          !Number.isSafeInteger((pendingGenerations[hash] ?? 0) + 1)) {
+        throw gateRefusal("gate_unavailable", "A pending purge intent has an invalid identity generation.");
+      }
+      pendingGenerations[hash] = (pendingGenerations[hash] ?? 0) + 1;
+    }
+    const merged = [...state.intents, ...added];
+    const lifecycleEpoch = state.lifecycleEpoch + 1;
+    const deniedAt = Math.max(Date.now(), (state.deniedAt ?? -1) + 1);
+    if (!Number.isSafeInteger(lifecycleEpoch) || !Number.isSafeInteger(deniedAt)) {
+      throw gateRefusal("gate_unavailable", "The replica deny floor cannot advance.");
+    }
     const next: NodeGateState = {
       ...state,
-      principalHash: nextHash,
-      lifecycleEpoch: state.lifecycleEpoch + 1,
-      deniedAt: Date.now(),
+      principalHash: null,
+      lifecycleEpoch,
+      deniedAt,
       intents: merged,
       firstInstall: {},
+      pendingGenerations,
+      eraseDeferred: options?.deferErase === true,
+      deferredPrincipalHash: options?.deferErase === true ? state.principalHash : null,
     };
     await writeState(profileDir, next);
     return { status: "denied", lifecycleEpoch: next.lifecycleEpoch, intents: merged.length };
@@ -336,4 +397,33 @@ export async function denyGate(
       : "STORAGE_ERROR";
     return { status: "unguarded", code };
   }
+}
+
+/** Local fencing token; not a bearer capability. Caller holds the profile lock. */
+export interface DeferredEraseToken {
+  deniedEpoch: number;
+  principalHash: string;
+}
+
+/** Read-only inspection of a deferred denial. A missing gate never creates one. */
+export async function deferredGateToken(profileDir: string): Promise<DeferredEraseToken | null> {
+  const state = await readState(profileDir);
+  return state?.eraseDeferred
+    ? { deniedEpoch: state.lifecycleEpoch, principalHash: state.deferredPrincipalHash! }
+    : null;
+}
+
+/** Resume only the denial identified by the same durable epoch and original principal. */
+export async function resumeDeferredGate(profileDir: string, token: DeferredEraseToken): Promise<boolean> {
+  const state = await readState(profileDir);
+  if (state === undefined) throw gateRefusal("gate_unavailable", "The replica gate no longer exists.");
+  if (!Number.isSafeInteger(token?.deniedEpoch) || token.deniedEpoch < 0 ||
+      typeof token.principalHash !== "string" || !/^[0-9a-f]{64}$/.test(token.principalHash) ||
+      state.lifecycleEpoch !== token.deniedEpoch || state.deferredPrincipalHash !== token.principalHash ||
+      state.principalHash !== null) {
+    throw gateRefusal("stamp_stale", "The deferred erase token is stale or belongs to another account.");
+  }
+  if (!state.eraseDeferred) return false;
+  await writeState(profileDir, { ...state, eraseDeferred: false });
+  return true;
 }

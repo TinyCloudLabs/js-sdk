@@ -21,7 +21,7 @@ import { getNodeReplicationLoaders } from "./module-registry";
 import { TinyCloudNode } from "../TinyCloudNode";
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { mkdtemp, readdir, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, rm, rmdir } from "node:fs/promises";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -37,6 +37,18 @@ const identity = canonicalReplicationIdentity({
 const now = 1_700_000_000_000;
 const REAL_NODE_BIN = process.env.TC_REPLICATION_E2E_NODE_BIN;
 const expiringAt = now + 240_000;
+function profileGuard(dir: string): <T>(section: () => Promise<T>) => Promise<T> {
+  const lock = join(dir, ".replica-test-profile-lock");
+  return async (section) => {
+    await mkdir(lock);
+    try {
+      return await section();
+    } finally {
+      await rmdir(lock);
+    }
+  };
+}
+
 const session = {
   delegationHeader: { Authorization: "Bearer session" },
   delegationCid: "bafy-session",
@@ -324,6 +336,10 @@ describe("node replication integration", () => {
     const replicaStamp = await gate.establishSessionStamp(profileDir, pkhDid(proof.address, proof.chainId), {
       siweIssuedAt: Date.parse(proof.siwe.match(/^Issued At: (.+)$/m)![1]!),
     });
+    const lifecycle = createSqliteReplicaStorage({
+      dir: join(profileDir, "replicas"),
+      guard: profileGuard(profileDir),
+    }).lifecycle;
     const originalFetch = globalThis.fetch;
     let delegatePosts = 0;
     let opened = 0;
@@ -358,6 +374,7 @@ describe("node replication integration", () => {
         };
         const storage: KVReplicaStorage = {
           kind: "sqlite",
+          lifecycle,
           async open(spec) {
             opened++;
             const handle: KVReplicaHandle = {
@@ -403,30 +420,32 @@ describe("node replication integration", () => {
     }
   });
   test("two hosts sharing one storage directory keep separate replica partitions", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "tc858-replication-e2e-"));
+    const profileDir = await mkdtemp(join(tmpdir(), "tc858-replication-e2e-"));
+    const root = join(profileDir, "replicas");
     const storage = createSqliteReplicaStorage({
-      dir,
+      dir: root,
+      guard: profileGuard(profileDir),
       createDevice: async () => ({ did: "did:key:replica-e2e", jwk: {} }),
     });
-    const first = await storage.open({
-      identity: canonicalReplicationIdentity({ ...identity, host: "https://one.example" }),
+    const anchor = { source: "siwe" as const, at: Date.now() };
+    const stamp = await storage.lifecycle!.establishSessionStamp(identity.principal, { consentAnchor: anchor });
+    const open = (host: string) => storage.open({
+      identity: canonicalReplicationIdentity({ ...identity, host }),
       space,
       prefix: "notes/",
       allowSecrets: false,
+      stamp,
+      grantPolicy: { grantTtlMs: 60_000, consentAnchor: anchor },
     });
-    const second = await storage.open({
-      identity: canonicalReplicationIdentity({ ...identity, host: "https://two.example" }),
-      space,
-      prefix: "notes/",
-      allowSecrets: false,
-    });
+    const first = await open("https://one.example");
+    const second = await open("https://two.example");
     try {
       expect(first.spec.identity.host).toBe("https://one.example");
       expect(second.spec.identity.host).toBe("https://two.example");
-      expect(await readdir(dir)).toHaveLength(2);
+      expect(await readdir(root)).toHaveLength(2);
     } finally {
       await Promise.all([first.close(), second.close()]);
-      await rm(dir, { recursive: true, force: true });
+      await rm(profileDir, { recursive: true, force: true });
     }
   });
   test("signed graph retirement unbinds before metadata-light compact delegate activation", async () => {
@@ -436,6 +455,10 @@ describe("node replication integration", () => {
     const replicaStamp = await gate.establishSessionStamp(profileDir, pkhDid(signed.address, signed.chainId), {
       siweIssuedAt: Date.parse(signed.proof.siwe.match(/^Issued At: (.+)$/m)![1]!),
     });
+    const lifecycle = createSqliteReplicaStorage({
+      dir: join(profileDir, "replicas"),
+      guard: profileGuard(profileDir),
+    }).lifecycle;
     const wasm = new NodeWasmBindings();
     const delegateManager = wasm.createSessionManager();
     const delegateKeyId = delegateManager.createSessionKey("delegate-session");
@@ -464,6 +487,7 @@ describe("node replication integration", () => {
     let persistedStatus: LocalReplicaStatus | undefined;
     const storage: KVReplicaStorage = {
       kind: "sqlite",
+      lifecycle,
       async open(spec) {
         const state: LocalReplicaStatus = {
           coverage: "complete",

@@ -2153,11 +2153,14 @@ export class TinyCloudNode {
       : Promise.resolve(undefined);
     let denied: { status: string; code?: string } | undefined;
     try {
-      await this.accountRegistryTail;
-      await this.quiesceReplicaRuntime();
-    } finally {
       denied = await denial;
-      if (leavingAddress) await this.clearPersistedSessionFor(leavingAddress);
+    } finally {
+      try {
+        await this.accountRegistryTail;
+        await this.quiesceReplicaRuntime();
+      } finally {
+        if (leavingAddress) await this.clearPersistedSessionFor(leavingAddress);
+      }
     }
     if (denied?.status === "unguarded") {
       throw new Error(`Replica gate was not denied (${denied.code ?? "unknown"}); the replica may still be restorable.`);
