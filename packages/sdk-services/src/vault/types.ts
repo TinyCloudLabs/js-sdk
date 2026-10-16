@@ -60,8 +60,12 @@ export interface VaultGetOptions<T = unknown> {
   raw?: boolean;
   /** Force the underlying KV read to bypass replica read-through. */
   source?: "network";
-  /** Delegated KV service for reading from the grantor's space (used by getShared) */
-  kv?: { get<V>(key: string, options?: { raw?: boolean; source?: "network" }): Promise<{ ok: boolean; data?: { data: V }; error?: { message: string } }> };
+  /** Delegated raw-envelope KV reader for the grantor's space (used by getShared). */
+  kv?: { get(key: string, options?: { raw?: boolean; source?: "network" }): Promise<{ ok: boolean; data?: { data: string }; error?: { message: string } }> };
+  /** Signed grantor network ID for a shared named secret; required with grantorSpaceId. */
+  grantorNetworkId?: string;
+  /** Space ID from the delegated KV authority, not from the envelope or recipient vault. */
+  grantorSpaceId?: string;
 }
 
 /**
@@ -121,6 +125,7 @@ export type VaultNetworkReadResult<T> =
   | { status: "permission_required"; hint: PermissionHint }
   | { status: "read_failed" }
   | { status: "corrupt_envelope" }
+  | { status: "scope_migration_required" }
   | { status: "decrypt_failed" }
   | { status: "invalid_payload" };
 

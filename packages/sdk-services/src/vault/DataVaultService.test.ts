@@ -6,8 +6,8 @@ import {
   VaultVersionConfig,
 } from "./types";
 
-const spaceId = "tinycloud:pkh:eip155:1:0xabc:default";
-const address = "0xabc";
+const address = "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266";
+const spaceId = `tinycloud:pkh:eip155:1:${address.toLowerCase()}:default`;
 const chainId = 1;
 
 function bytes(input: string, length = 32): Uint8Array {
@@ -86,7 +86,7 @@ function base64Decode(value: string): Uint8Array {
   return bytes;
 }
 
-const networkId = "urn:tinycloud:encryption:did:key:z6MkPrincipal:default";
+const networkId = `urn:tinycloud:encryption:did:pkh:eip155:1:${address}:default`;
 
 function createNetworkVault() {
   const store = new Map<string, string>();
@@ -161,7 +161,7 @@ function createNetworkVault() {
     encryptToNetwork: mock(async (
       targetNetworkId: string,
       plaintext: Uint8Array,
-      options?: { metadata?: Record<string, string>; aad?: Uint8Array },
+      options?: { metadata?: Record<string, string>; aad?: Uint8Array; scope?: { spaceId: string; path: string } },
     ) => ({
       ok: true as const,
       data: {
@@ -173,10 +173,15 @@ function createNetworkVault() {
         encryptedSymmetricKeyHash: "a".repeat(64),
         ciphertext: base64Encode(plaintext),
         ...(options?.aad ? { aad: base64Encode(options.aad) } : {}),
+        ...(options?.scope ? { scopeTag: "b".repeat(64) } : {}),
         ...(options?.metadata ? { metadata: options.metadata } : {}),
       },
     })),
-    decryptEnvelope: mock(async (envelope: { ciphertext: string }) => ({
+    decryptEnvelope: mock(async (
+      envelope: { ciphertext: string },
+      _proof?: unknown,
+      _scope?: { spaceId: string; path: string },
+    ) => ({
       ok: true as const,
       data: base64Decode(envelope.ciphertext),
     })),
@@ -282,6 +287,111 @@ describe("DataVaultService network envelopes", () => {
     expect(get.ok).toBe(true);
     expect(get.ok && get.data.value.value).toBe("secret");
     expect(encryption.decryptEnvelope).toHaveBeenCalledTimes(1);
+  });
+
+  test("binds a scoped secret and all three read paths to the exact stored key", async () => {
+    const { vault, encryption, kv } = createNetworkVault();
+    const canonicalSpaceId = `tinycloud:pkh:eip155:1:${address}:default`;
+    const key = "secrets/scoped/service/API_KEY";
+    const path = `vault/${key}`;
+    const value = { value: "secret" };
+    expect((await vault.put(key, value)).ok).toBe(true);
+    expect(encryption.encryptToNetwork.mock.calls[0]?.[0]).toBe(networkId);
+    expect(encryption.encryptToNetwork.mock.calls[0]?.[2]).toMatchObject({
+      scope: { spaceId: canonicalSpaceId, path },
+    });
+
+    expect((await vault.get(key)).ok).toBe(true);
+    expect((await vault.readNetworkEncrypted(key)).status).toBe("ok");
+    expect((await vault.getShared(`did:pkh:eip155:1:${address}`, key, {
+      kv,
+      grantorSpaceId: canonicalSpaceId,
+      grantorNetworkId: networkId,
+    })).ok).toBe(true);
+    expect(encryption.decryptEnvelope).toHaveBeenCalledTimes(3);
+    for (const call of encryption.decryptEnvelope.mock.calls) {
+      expect(call[2]).toMatchObject({ spaceId: canonicalSpaceId, path });
+    }
+  });
+
+  test("shared named-secret decrypt uses the grantor's alternate space, not the recipient vault", async () => {
+    const { vault, encryption, store } = createNetworkVault();
+    const key = "secrets/API_KEY";
+    const path = `vault/${key}`;
+    const grantorSpaceId = `tinycloud:pkh:eip155:1:${address}:secrets`;
+    const envelope = JSON.stringify({
+      networkId,
+      encryptedSymmetricKeyHash: "a".repeat(64),
+      ciphertext: base64Encode(new TextEncoder().encode(JSON.stringify({ value: "grantor-only" }))),
+    });
+    const grantorKv = {
+      get: mock(async () => ({ ok: true as const, data: { data: envelope } })),
+    };
+
+    const result = await vault.getShared(`did:pkh:eip155:1:${address}`, key, {
+      kv: grantorKv,
+      grantorSpaceId,
+      grantorNetworkId: networkId,
+    });
+    expect(result.ok).toBe(true);
+    expect(grantorKv.get).toHaveBeenCalledWith(path, { raw: true });
+    expect(store.has(path)).toBe(false);
+    expect(encryption.decryptEnvelope.mock.calls[0]?.[2]).toMatchObject({
+      spaceId: grantorSpaceId, path,
+    });
+  });
+
+  test("shared decrypt uses the grantor's network rather than the recipient's network", async () => {
+    const { vault, encryption } = createNetworkVault();
+    const grantorAddress = "0x0000000000000000000000000000000000000001";
+    const grantorDID = `did:pkh:eip155:1:${grantorAddress}`;
+    const grantorNetworkId = `urn:tinycloud:encryption:${grantorDID}:default`;
+    const grantorSpaceId = `tinycloud:pkh:eip155:1:${grantorAddress}:secrets`;
+    const key = "secrets/API_KEY";
+    const envelope = JSON.stringify({
+      networkId: grantorNetworkId,
+      encryptedSymmetricKeyHash: "a".repeat(64),
+      ciphertext: base64Encode(new TextEncoder().encode(JSON.stringify({ value: "grantor-only" }))),
+    });
+    const grantorKv = {
+      get: mock(async () => ({ ok: true as const, data: { data: envelope } })),
+    };
+
+    const result = await vault.getShared(grantorDID, key, {
+      kv: grantorKv,
+      grantorSpaceId,
+      grantorNetworkId,
+    });
+    expect(result.ok).toBe(true);
+    expect(encryption.decryptEnvelope.mock.calls[0]?.[0]).toMatchObject({
+      networkId: grantorNetworkId,
+    });
+    expect(encryption.decryptEnvelope.mock.calls[0]?.[2]).toMatchObject({
+      spaceId: grantorSpaceId,
+      path: `vault/${key}`,
+    });
+  });
+
+  test("rejects shared named-secret release without trusted grantor scope metadata", async () => {
+    const { vault, encryption, kv } = createNetworkVault();
+    const key = "secrets/API_KEY";
+    expect((await vault.put(key, { value: "secret" })).ok).toBe(true);
+
+    const missing = await vault.getShared(`did:pkh:eip155:1:${address}`, key, { kv });
+    const wrongOwner = await vault.getShared(
+      "did:pkh:eip155:1:0x0000000000000000000000000000000000000001",
+      key,
+      { kv, grantorSpaceId: spaceId, grantorNetworkId: networkId },
+    );
+    const wrongNetwork = await vault.getShared(`did:pkh:eip155:1:${address}`, key, {
+      kv,
+      grantorSpaceId: spaceId,
+      grantorNetworkId: networkId.replace(/:default$/, ":alternate"),
+    });
+    expect(missing.ok).toBe(false);
+    expect(wrongOwner.ok).toBe(false);
+    expect(wrongNetwork.ok).toBe(false);
+    expect(encryption.decryptEnvelope).not.toHaveBeenCalled();
   });
 
   test("keeps the storage-full code and byte counts when the KV write is rejected", async () => {

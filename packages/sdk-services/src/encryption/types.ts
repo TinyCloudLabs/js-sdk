@@ -65,6 +65,8 @@ export interface InlineEncryptedEnvelope {
   aad?: string;
   /** Caller-supplied metadata. Not authenticated against the node. */
   metadata?: Record<string, string>;
+  /** HMAC-SHA256 authenticating this named secret's exact KV locator and ciphertext. */
+  scopeTag?: string;
 }
 
 /**
@@ -107,6 +109,10 @@ export interface DecryptRequestBody {
   receiverPublicKey: string;
   /** Hash of the receiver public key. */
   receiverPublicKeyHash: string;
+  /** Canonical owner-owned space of an exact named-secret decrypt. */
+  spaceId?: string;
+  /** Exact stored KV key of an exact named-secret decrypt. */
+  path?: string;
 }
 
 /**

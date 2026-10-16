@@ -38,6 +38,19 @@ export {
 } from "./networkId";
 
 export {
+  canonicalScopedSpaceId,
+  canonicalScopedDecryptLocator,
+  buildScopedDecryptResource,
+  parseScopedDecryptResource,
+  decryptResourceContains,
+  computeScopeTag,
+  scopeTagMatches,
+  isNamedSecretPath,
+  type ScopedDecryptLocator,
+  type ParsedScopedDecryptResource,
+} from "./scope";
+
+export {
   canonicalize,
   canonicalHashHex,
   hexEncode,

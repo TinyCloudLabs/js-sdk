@@ -27,6 +27,8 @@ import {
 } from "../../../sdk-core/src/manifest.js";
 import { isCapabilitySubset } from "../../../sdk-core/src/capabilities.js";
 import {
+  buildScopedDecryptResource,
+  parseNetworkId,
   type AuthRequestArtifact,
   type PermissionEntry,
   type PortableDelegation,
@@ -545,14 +547,23 @@ async function secretPermissionsFromAppManifest(
     resource.path.startsWith("vault/secrets/")
   );
 
-  const needsDecrypt = permissions.some((permission) =>
-    permission.actions.includes("tinycloud.kv/get")
-  );
-  if (needsDecrypt) {
+  if (!permissions.some((permission) => permission.actions.includes("tinycloud.kv/get"))) {
+    return permissions;
+  }
+  const networkId = await defaultSecretsNetworkId(profile, requestedOwner);
+  const ownerDid = parseNetworkId(networkId).ownerDid;
+  const spaceId = `tinycloud:${ownerDid.slice(4)}:secrets`;
+  for (let index = 0, count = permissions.length; index < count; index++) {
+    const permission = permissions[index]!;
+    permission.space = spaceId;
+    if (!permission.actions.includes("tinycloud.kv/get")) continue;
     permissions.push({
       service: ENCRYPTION_PERMISSION_SERVICE,
       space: ENCRYPTION_MANIFEST_SPACE,
-      path: await defaultSecretsNetworkId(profile, requestedOwner),
+      path: buildScopedDecryptResource(networkId, {
+        spaceId,
+        path: permission.path,
+      }),
       actions: ["tinycloud.encryption/decrypt"],
     });
   }

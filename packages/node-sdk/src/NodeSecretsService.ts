@@ -1,5 +1,6 @@
 import {
   ErrorCodes,
+  buildScopedDecryptResource,
   resolveSecretListPrefix,
   resolveSecretPath,
   expandPermissionEntries,
@@ -63,6 +64,7 @@ function secretPermissionEntries(
   action: SecretAction,
   space: string,
   encryptionNetworkId?: string,
+  resolveSpace?: (space: string) => string,
 ): PermissionEntry[] {
   const entries: PermissionEntry[] = [];
   const path =
@@ -81,7 +83,10 @@ function secretPermissionEntries(
   if (action === "get" && encryptionNetworkId !== undefined) {
     entries.push({
       service: "tinycloud.encryption",
-      path: encryptionNetworkId,
+      path: buildScopedDecryptResource(encryptionNetworkId, {
+        spaceId: normalizeSpace(space, resolveSpace) ?? space,
+        path,
+      }),
       actions: ["decrypt"],
       skipPrefix: true,
     });
@@ -226,6 +231,7 @@ export class NodeSecretsService implements ISecretsService {
         action,
         this.space,
         action === "get" ? this.config.getEncryptionNetworkId?.() : undefined,
+        this.config.resolveSpace,
       );
     } catch (error) {
       return secretsError(

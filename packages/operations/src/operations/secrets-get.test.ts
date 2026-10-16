@@ -7,7 +7,7 @@ import {
   secretsGetOperationDefinition,
 } from "./secrets-get.js";
 
-const NETWORK_ID = "urn:tinycloud:encryption:did:key:z6MkOwner:default";
+const NETWORK_ID = "urn:tinycloud:encryption:did:pkh:eip155:1:0x1111111111111111111111111111111111111111:default";
 const TARGET_SPACE =
   "tinycloud:pkh:eip155:1:0x1111111111111111111111111111111111111111:custom";
 
@@ -22,6 +22,7 @@ function context(
       host: "https://node.tinycloud.test",
       posture: "delegate-session",
       sessionDid: "did:key:session",
+      space: "tinycloud:pkh:eip155:1:0x1111111111111111111111111111111111111111:default",
     },
     runtime: {
       node: {
@@ -61,13 +62,13 @@ describe("tinycloud.secrets.get", () => {
       },
       {
         service: "tinycloud.encryption",
-        path: NETWORK_ID,
+        path: `${NETWORK_ID}/kv/${Buffer.from(TARGET_SPACE).toString("base64url")}/${Buffer.from("vault/secrets/scoped/food-tracker/API_KEY").toString("base64url")}`,
         actions: ["tinycloud.encryption/decrypt"],
       },
     ]);
   });
 
-  test("uses the literal default secrets space and default network fallback", async () => {
+  test("resolves the default secret to its canonical owner space before requesting decrypt", async () => {
     const input = secretsGetOperationDefinition.input.parse({ name: "API_KEY" });
     const planned = await secretsGetOperationDefinition.authority(
       context(async () => ({ status: "not_found" }), {
@@ -80,37 +81,27 @@ describe("tinycloud.secrets.get", () => {
     expect(planned).toEqual([
       {
         service: "tinycloud.kv",
-        space: "secrets",
+        space: "tinycloud:pkh:eip155:1:0x1111111111111111111111111111111111111111:secrets",
         path: "vault/secrets/API_KEY",
         actions: ["tinycloud.kv/get"],
       },
       {
         service: "tinycloud.encryption",
-        path: NETWORK_ID,
+        path: `${NETWORK_ID}/kv/${Buffer.from("tinycloud:pkh:eip155:1:0x1111111111111111111111111111111111111111:secrets").toString("base64url")}/${Buffer.from("vault/secrets/API_KEY").toString("base64url")}`,
         actions: ["tinycloud.encryption/decrypt"],
       },
     ]);
   });
 
-  test("preserves arbitrary full TinyCloud DID space text during planning and execution", async () => {
-    const didSpace = "tinycloud:did:web:EXAMPLE.com:eip155:1:0xABCDEF:Vault";
+  test("refuses a foreign owner's space instead of granting its decrypt through the selected network", async () => {
     const input = secretsGetOperationDefinition.input.parse({
       name: "API_KEY",
-      space: didSpace,
+      space: "tinycloud:pkh:eip155:1:0x2222222222222222222222222222222222222222:other",
     });
-    const readSecret = async (readInput: Record<string, string>) => {
-      expect(readInput.space).toBe(didSpace);
-      return { status: "ok", value: "did-space-value" };
-    };
-    const planned = await secretsGetOperationDefinition.authority(
-      context(readSecret) as RuntimeOperationContext,
+    await expect(secretsGetOperationDefinition.authority(
+      context(async () => ({ status: "not_found" })) as RuntimeOperationContext,
       input,
-    );
-    expect(planned[0]).toMatchObject({ service: "tinycloud.kv", space: didSpace });
-    expect(await secretsGetOperationDefinition.execute(context(readSecret), input)).toMatchObject({
-      status: "ok",
-      output: { value: "did-space-value" },
-    });
+    )).rejects.toThrow();
   });
 
   test("isolates a throwing scoped network resolver before using a valid local default", async () => {
@@ -125,7 +116,7 @@ describe("tinycloud.secrets.get", () => {
       input,
     );
 
-    expect(planned[1]).toMatchObject({ path: NETWORK_ID });
+    expect(planned[1]).toMatchObject({ path: `${NETWORK_ID}/kv/${Buffer.from("tinycloud:pkh:eip155:1:0x1111111111111111111111111111111111111111:secrets").toString("base64url")}/${Buffer.from("vault/secrets/API_KEY").toString("base64url")}` });
   });
 
   test("fails closed when the encryption network cannot be resolved", async () => {
@@ -142,12 +133,24 @@ describe("tinycloud.secrets.get", () => {
     });
   });
 
+  test("reports untagged named records as owner rewrite required, not grant escalation", async () => {
+    const input = secretsGetOperationDefinition.input.parse({ name: "API_KEY" });
+    const result = await secretsGetOperationDefinition.execute(
+      context(async () => ({ status: "scope_migration_required" })),
+      input,
+    );
+    expect(result).toMatchObject({
+      status: "error",
+      error: { code: "SECRET_SCOPE_MIGRATION_REQUIRED" },
+    });
+  });
+
   test("returns the authorized value only from the successful result", async () => {
     const canary = "secret-value-canary";
     const input = secretsGetOperationDefinition.input.parse({ name: "API_KEY" });
     const result = await secretsGetOperationDefinition.execute(
       context(async (readInput) => {
-        expect(readInput).toEqual({ space: "secrets", name: "API_KEY" });
+        expect(readInput).toEqual({ space: "tinycloud:pkh:eip155:1:0x1111111111111111111111111111111111111111:secrets", name: "API_KEY" });
         return { status: "ok", value: canary };
       }),
       input,

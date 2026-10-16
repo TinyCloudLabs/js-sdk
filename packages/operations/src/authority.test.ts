@@ -1,6 +1,8 @@
 import { expect, test } from "bun:test";
+import { buildScopedDecryptResource } from "@tinycloud/node-sdk";
 
 import {
+  canonicalizeOperationCapabilities,
   canonicalizeCapabilities,
   evaluateAuthority,
   evaluateOperationAuthority,
@@ -84,6 +86,22 @@ test("keeps resource scopes in the exact canonical identity", () => {
   expect(permissionIdentity(keyGet)).not.toBe(permissionIdentity({ ...keyGet, space: "other-space" }));
   expect(permissionIdentity(keyGet)).not.toBe(permissionIdentity({ ...keyGet, path: "vault/secrets/" }));
   expect(permissionIdentity(keyGet)).not.toBe(permissionIdentity(keyPut));
+});
+
+test("operation authority preserves canonical exact-secret resources while accepting legacy root casing", () => {
+  const address = "0x71C7656EC7ab88b098defB751B7401B5f6d8976F";
+  const root = `urn:tinycloud:encryption:did:pkh:eip155:1:${address}:default`;
+  const scope = buildScopedDecryptResource(root, {
+    spaceId: `tinycloud:pkh:eip155:1:${address}:secrets`,
+    path: "vault/secrets/API_KEY",
+  });
+  const scopedGrant = { service: "tinycloud.encryption", path: scope, actions: ["tinycloud.encryption/decrypt"] };
+  const [canonical] = canonicalizeOperationCapabilities([scopedGrant]);
+  expect(canonical?.path).toBe(scope);
+  expect(evaluateOperationAuthority(
+    [{ ...scopedGrant, path: root.replace(address, address.toLowerCase()) }],
+    [scopedGrant],
+  )).toEqual({ satisfied: true, missing: [] });
 });
 
 test("rejects every planner requirement that v1 exact artifacts cannot preserve", () => {

@@ -56,7 +56,8 @@ isolatedTest("registered secret invocation preflights the exact KV/encryption un
     expect(requested).toEqual(missing.missing);
     expect(requested.some((permission) =>
       permission.service === "tinycloud.kv" &&
-      permission.space === missing.context.space?.toLowerCase(),
+      typeof permission.space === "string" &&
+      permission.space.toLowerCase() === missing.context.space?.toLowerCase(),
     )).toBe(true);
     expect(readSecret).not.toHaveBeenCalled();
   } finally {
@@ -128,10 +129,11 @@ isolatedTest("registered planning is owner-exact for full and explicit short spa
     const crossOwnerShort = await invokeSecret(fixture.profile, { space: "other" });
     expect(crossOwnerShort.status).toBe("authority_required");
     if (crossOwnerShort.status !== "authority_required") throw new Error("expected authority");
-    expect(crossOwnerShort.missing).toContainEqual(expect.objectContaining({
-      service: "tinycloud.kv",
-      space: `${missingOwnerSpace(fixture)}:other`,
-    }));
+    expect(crossOwnerShort.missing.some((permission) =>
+      permission.service === "tinycloud.kv" &&
+      typeof permission.space === "string" &&
+      permission.space.toLowerCase() === `${missingOwnerSpace(fixture)}:other`,
+    )).toBe(true);
 
     const explicitShort = await invokeSecret(fixture.profile, { space: "secrets" });
     expect(explicitShort.status).toBe("ok");
@@ -184,8 +186,7 @@ isolatedTest("registered runtime hints persist only the exact planned phase", as
   const full = await fixture.hermetic.mintDelegation();
   await persistRuntimeDelegations(fixture, [full]);
   const kv = fixture.hermetic.permissions.find((permission) => permission.service === "tinycloud.kv");
-  const decrypt = fixture.hermetic.permissions.find((permission) => permission.service === "tinycloud.encryption");
-  if (kv === undefined || decrypt === undefined) throw new Error("expected hermetic plan");
+  if (kv === undefined) throw new Error("expected hermetic KV plan");
   const readSecret = spyOn(TinyCloudNode.prototype, "readSecret");
   try {
     readSecret.mockResolvedValue({ status: "permission_required", hint: kv } as never);
@@ -204,25 +205,9 @@ isolatedTest("registered runtime hints persist only the exact planned phase", as
     expect(typeof kvSpace === "string" ? kvSpace.toLowerCase() : kvSpace)
       .toBe(typeof kv.space === "string" ? kv.space.toLowerCase() : kv.space);
 
-    readSecret.mockResolvedValue({ status: "permission_required", hint: decrypt } as never);
-    const decryptHint = await invokeSecret(fixture.profile, { name: "HERMETIC_DELEGATION_CANARY" });
-    expect(decryptHint.status).toBe("authority_required");
-    if (decryptHint.status !== "authority_required") throw new Error("expected decrypt authority");
-    const decryptRequested = decryptHint.request.requested as readonly Readonly<Record<string, unknown>>[];
-    expect(decryptHint.missing).toEqual(decryptRequested);
-    expect(decryptHint.missing).toHaveLength(1);
-    expect(decryptHint.missing[0]).toMatchObject({
-      service: decrypt.service,
-      actions: decrypt.actions,
-    });
-    const decryptPath = decryptHint.missing[0]?.path;
-    expect(typeof decryptPath === "string" ? decryptPath.toLowerCase() : decryptPath)
-      .toBe(typeof decrypt.path === "string" ? decrypt.path.toLowerCase() : decrypt.path);
-
     const requests = await listPermissionRequests(fixture.profile);
     expect(requests.map((request) => request.requested)).toEqual([
       Array.from(kvRequested),
-      Array.from(decryptRequested),
     ] as never);
   } finally {
     readSecret.mockRestore();
@@ -235,7 +220,8 @@ isolatedTest("registered runtime rejects wrong-owner, broad, and unknown hints w
   const full = await fixture.hermetic.mintDelegation();
   await persistRuntimeDelegations(fixture, [full]);
   const kv = fixture.hermetic.permissions.find((permission) => permission.service === "tinycloud.kv");
-  if (kv === undefined) throw new Error("expected hermetic KV plan");
+  const decrypt = fixture.hermetic.permissions.find((permission) => permission.service === "tinycloud.encryption");
+  if (kv === undefined || decrypt === undefined) throw new Error("expected hermetic KV and decrypt plans");
   const readSecret = spyOn(TinyCloudNode.prototype, "readSecret");
   try {
     const invalidHints = [
@@ -245,6 +231,7 @@ isolatedTest("registered runtime rejects wrong-owner, broad, and unknown hints w
       { ...kv, service: "tinycloud.unknown" },
       { ...kv, caveats: [{ tenant: "wrong" }] },
       [],
+      decrypt,
     ];
     for (const hint of invalidHints) {
       readSecret.mockResolvedValue({ status: "permission_required", hint } as never);

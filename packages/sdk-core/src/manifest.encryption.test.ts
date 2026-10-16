@@ -91,6 +91,22 @@ describe("expandPermissionEntries (encryption)", () => {
     expect(result).toHaveLength(1);
     expect(result[0].actions).toEqual(["tinycloud.encryption/decrypt"]);
   });
+
+  it("accepts exact named decrypt scope but never admin actions on it", () => {
+    const owner = "did:pkh:eip155:1:0x1111111111111111111111111111111111111111";
+    const networkId = `urn:tinycloud:encryption:${owner}:default`;
+    const space = "tinycloud:pkh:eip155:1:0x1111111111111111111111111111111111111111:other";
+    const path = "vault/secrets/scoped/service/API_KEY";
+    const resource = `${networkId}/kv/${Buffer.from(space).toString("base64url")}/${Buffer.from(path).toString("base64url")}`;
+    expect(expandPermissionEntries([{
+      service: ENCRYPTION_PERMISSION_SERVICE, path: resource, actions: ["decrypt"],
+    }])).toMatchObject([{ path: resource, actions: ["tinycloud.encryption/decrypt"] }]);
+    for (const action of ["network.create", "network.revoke"]) {
+      expect(() => expandPermissionEntries([{
+        service: ENCRYPTION_PERMISSION_SERVICE, path: resource, actions: [action],
+      }])).toThrow(ManifestValidationError);
+    }
+  });
 });
 
 describe("resolveManifest (encryption)", () => {

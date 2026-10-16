@@ -156,7 +156,9 @@ export function canonicalizeOperationCapabilities(
 }
 
 function canonicalizeOperationPath(permission: PermissionEntry): PermissionEntry {
-  if (permission.service !== "tinycloud.encryption") return permission;
+  // Exact scoped resources require canonical EIP-55 spelling on the wire;
+  // lowercase normalization is compatible only with legacy bare roots.
+  if (permission.service !== "tinycloud.encryption" || permission.path.includes("/kv/")) return permission;
   const match = permission.path.match(
     /^(urn:tinycloud:encryption:did:pkh:eip155:\d+:)(0x[0-9a-fA-F]{40})(:.*)$/,
   );

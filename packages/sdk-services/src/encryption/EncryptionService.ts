@@ -37,6 +37,7 @@ import {
   buildDecryptInvocation,
 } from "./invocation";
 import { generateRandomReceiverKey } from "./receiverKey";
+import { buildScopedDecryptResource, canonicalScopedDecryptLocator } from "./scope";
 import {
   openWrappedKey,
   verifyDecryptResponse,
@@ -82,6 +83,8 @@ export interface DecryptTransport {
   postDecrypt(input: {
     targetNode: string;
     networkId: string;
+    /** Exact signed ReCap resource; networkId remains the route identifier. */
+    resource?: string;
     authorization: string;
     canonicalBody: string;
     signal?: AbortSignal;
@@ -167,6 +170,7 @@ export class EncryptionService
         alg: options?.alg ?? descriptor.alg,
         keyVersion: options?.keyVersion ?? descriptor.keyVersion,
         ...(options?.metadata !== undefined ? { metadata: options.metadata } : {}),
+        ...(options?.scope !== undefined ? { scope: options.scope } : {}),
       });
       return encOk(result.envelope);
     } catch (error) {
@@ -200,6 +204,21 @@ export class EncryptionService
         );
       }
 
+      if ((options?.spaceId === undefined) !== (options?.path === undefined)) {
+        return encErr(encryptionError({
+          code: "INVALID_INPUT", message: "Scoped decrypt requires both spaceId and path",
+        }));
+      }
+      const scope = options?.spaceId === undefined ? undefined
+        : canonicalScopedDecryptLocator(envelope.networkId, {
+          spaceId: options.spaceId, path: options.path!,
+        });
+      if (scope !== undefined && envelope.scopeTag === undefined) {
+        return encErr(encryptionError({
+          code: "DECRYPT_DENIED",
+          message: "Named secret has no scopeTag; its owner must rewrite it before scoped decrypt",
+        }));
+      }
       let descriptor: NetworkDescriptor;
       if (options?.descriptor !== undefined) {
         descriptor = options.descriptor;
@@ -242,6 +261,7 @@ export class EncryptionService
         encryptedSymmetricKeyHash: envelope.encryptedSymmetricKeyHash,
         receiverPublicKey,
         receiverPublicKeyHash,
+        ...(scope === undefined ? {} : { spaceId: scope.spaceId, path: scope.path }),
       };
       const canonicalRequest = buildCanonicalDecryptRequest({
         crypto: this.crypto,
@@ -279,6 +299,7 @@ export class EncryptionService
         response = await this._config.transport.postDecrypt({
           targetNode,
           networkId: envelope.networkId,
+          ...(scope === undefined ? {} : { resource: buildScopedDecryptResource(envelope.networkId, scope) }),
           authorization: built.data.authorization,
           canonicalBody: built.data.canonicalBody,
           signal: this.abortSignal,
@@ -292,9 +313,9 @@ export class EncryptionService
                 ? {
                   code: "DECRYPT_DENIED",
                   message: "Node denied decrypt request",
-                  ...(error.permissionHint === undefined
-                    ? {}
-                    : { permissionHint: error.permissionHint }),
+                  // A scoped 401/403 can be an integrity or current-record denial.
+                  // Only the network-wide legacy path carries a consent hint.
+                  permissionHint: scope === undefined ? error.permissionHint : undefined,
                 }
                 : { code: "INVALID_RESPONSE", message: "Node decrypt request failed" },
             ),
@@ -327,6 +348,7 @@ export class EncryptionService
         this.crypto,
         envelope,
         symmetricKey,
+        scope,
       );
       return encOk(plaintext);
     } catch (error) {

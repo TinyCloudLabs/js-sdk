@@ -1,3 +1,4 @@
+import { parseNetworkId, parseScopedDecryptResource } from "@tinycloud/node-sdk";
 import { ensureEip55 } from "@tinycloud/node-sdk-wasm";
 import { ExitCode } from "../config/constants.js";
 import { CLIError } from "../output/errors.js";
@@ -16,16 +17,25 @@ export function canonicalOwnerDid(did: string, label = "--owner"): string {
  * invokes with; a grant for a differently cased URN is never selected.
  */
 export function canonicalNetworkUrn(path: string): string {
-  const match = /^urn:tinycloud:encryption:(did:pkh:eip155:[1-9]\d*:0x[0-9a-fA-F]{40}):([^:]*)$/.exec(path);
-  return match ? `urn:tinycloud:encryption:${canonicalOwnerDid(match[1]!)}:${match[2]}` : path;
+  try {
+    if (path.includes("/kv/")) {
+      parseScopedDecryptResource(path);
+      return path;
+    }
+    const network = parseNetworkId(path);
+    return `urn:tinycloud:encryption:${canonicalOwnerDid(network.ownerDid)}:${network.name}`;
+  } catch {
+    return path;
+  }
 }
 
 /** Only a network owned by the signer may appear as a raw decrypt grant. */
 export function rawEncryptionOwnerMatches(path: string, ownerDid: string): boolean {
-  const match = /^urn:tinycloud:encryption:(did:pkh:eip155:.+):([a-z0-9][a-z0-9-]*)$/.exec(path);
-  if (!match) return false;
   try {
-    return canonicalOwnerDid(match[1]!) === canonicalOwnerDid(ownerDid);
+    const networkId = path.includes("/kv/")
+      ? parseScopedDecryptResource(path).networkId
+      : parseNetworkId(path).networkId;
+    return canonicalOwnerDid(parseNetworkId(networkId).ownerDid) === canonicalOwnerDid(ownerDid);
   } catch {
     return false;
   }

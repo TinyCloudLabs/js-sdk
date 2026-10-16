@@ -147,7 +147,7 @@ function canonicalizeSpaceUri(space: string): string {
     /^tinycloud:pkh:eip155:(\d+):(0x[0-9a-fA-F]{40}):([^:]+)$/,
   );
   if (pkh !== null) {
-    return `tinycloud:pkh:eip155:${pkh[1]}:${nodeSdk.canonicalizeAddress(pkh[2]!).toLowerCase()}:${pkh[3]}`;
+    return nodeSdk.makePkhSpaceId(pkh[2]!, Number(pkh[1]), pkh[3]!);
   }
   return space;
 }

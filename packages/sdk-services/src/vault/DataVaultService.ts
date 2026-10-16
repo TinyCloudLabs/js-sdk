@@ -11,6 +11,7 @@
  * - Master key and encryption identity live in memory only (cleared on lock)
  */
 
+import { pkhDid } from "@tinycloud/bootstrap";
 import { BaseService } from "../base/BaseService";
 import {
   Result,
@@ -28,6 +29,12 @@ import type { KVService } from "../kv/KVService";
 import type {
   DecryptCapabilityProof,
   InlineEncryptedEnvelope,
+} from "../encryption";
+import {
+  canonicalScopedDecryptLocator,
+  parseNetworkId,
+  isNamedSecretPath,
+  type ParsedScopedDecryptResource,
 } from "../encryption";
 import type { IDataVaultService } from "./IDataVaultService";
 import {
@@ -606,6 +613,17 @@ export class DataVaultService extends BaseService implements IDataVaultService {
     super.onSignOut();
   }
 
+  private namedSecretLocator(
+    networkId: string,
+    key: string,
+    spaceId = this.vaultConfig.spaceId,
+  ): ParsedScopedDecryptResource | undefined {
+    const path = `vault/${key}`;
+    return isNamedSecretPath(path)
+      ? canonicalScopedDecryptLocator(networkId, { spaceId, path })
+      : undefined;
+  }
+
   private async putNetworkEncrypted(
     key: string,
     value: unknown,
@@ -633,11 +651,12 @@ export class DataVaultService extends BaseService implements IDataVaultService {
         [VaultHeaders.CONTENT_TYPE]: contentType,
         ...(options?.metadata ?? {}),
       };
-      const aad = toBytes(`tinycloud.vault:${this.vaultConfig.spaceId}:${key}`);
+      const scope = this.namedSecretLocator(config.networkId, key);
+      const aad = toBytes(`tinycloud.vault:${scope?.spaceId ?? this.vaultConfig.spaceId}:${key}`);
       const envelopeResult = await config.service.encryptToNetwork(
         config.networkId,
         plaintext,
-        { aad, metadata },
+        { aad, metadata, ...(scope === undefined ? {} : { scope }) },
       );
       if (!envelopeResult.ok) {
         return vaultError({
@@ -709,7 +728,8 @@ export class DataVaultService extends BaseService implements IDataVaultService {
         typeof rawEnvelope === "string" ? JSON.parse(rawEnvelope) : rawEnvelope
       ) as InlineEncryptedEnvelope;
       const proof = await this.decryptCapabilityProof();
-      const plaintextResult = await config.service.decryptEnvelope(envelope, proof);
+      const plaintextResult = await config.service.decryptEnvelope(envelope, proof,
+        this.namedSecretLocator(config.networkId, key));
       if (!plaintextResult.ok) {
         return vaultError({
           code: "DECRYPTION_FAILED",
@@ -794,11 +814,22 @@ export class DataVaultService extends BaseService implements IDataVaultService {
     } catch {
       return { status: "corrupt_envelope" };
     }
+    const scope = this.namedSecretLocator(config.networkId, key);
+    if (
+      scope !== undefined && envelope.scopeTag === undefined &&
+      envelope.v === 1 && typeof envelope.networkId === "string" &&
+      typeof envelope.alg === "string" && typeof envelope.keyVersion === "number" &&
+      typeof envelope.encryptedSymmetricKey === "string" &&
+      typeof envelope.encryptedSymmetricKeyHash === "string" &&
+      typeof envelope.ciphertext === "string"
+    ) {
+      return { status: "scope_migration_required" };
+    }
 
     let plaintextResult: Awaited<ReturnType<typeof config.service.decryptEnvelope>>;
     try {
       const proof = await this.decryptCapabilityProof();
-      plaintextResult = await config.service.decryptEnvelope(envelope, proof);
+      plaintextResult = await config.service.decryptEnvelope(envelope, proof, scope);
     } catch {
       return { status: "decrypt_failed" };
     }
@@ -1470,8 +1501,32 @@ export class DataVaultService extends BaseService implements IDataVaultService {
           });
         }
 
+        let sharedScope: ParsedScopedDecryptResource | undefined;
+        if (isNamedSecretPath(`vault/${key}`)) {
+          if (!options?.grantorNetworkId || !options.grantorSpaceId) {
+            return vaultError({
+              code: "DECRYPTION_FAILED",
+              message: "Shared named-secret decrypt requires the delegated grantor network and space.",
+            });
+          }
+          try {
+            const grantor = /^did:pkh:eip155:(\d+):(0x[0-9a-fA-F]{40})$/.exec(grantorDID);
+            sharedScope = this.namedSecretLocator(options.grantorNetworkId, key, options.grantorSpaceId);
+            if (grantor === null || sharedScope === undefined ||
+              sharedScope.networkId !== options.grantorNetworkId ||
+              parseNetworkId(sharedScope.networkId).ownerDid !== pkhDid(grantor[2]!, Number(grantor[1]))) {
+              throw new Error("Grantor identity does not match the delegated secret scope");
+            }
+          } catch {
+            return vaultError({
+              code: "DECRYPTION_FAILED",
+              message: "Shared named-secret grantor identity and scope do not match.",
+            });
+          }
+        }
+
         try {
-          const valueResult = await grantorKV.get<string>(`vault/${key}`, {
+          const valueResult = await grantorKV.get(`vault/${key}`, {
             raw: true,
           });
           if (!valueResult.ok) {
@@ -1481,10 +1536,17 @@ export class DataVaultService extends BaseService implements IDataVaultService {
           const envelope = (
             typeof rawEnvelope === "string" ? JSON.parse(rawEnvelope) : rawEnvelope
           ) as InlineEncryptedEnvelope;
+          if (sharedScope !== undefined && envelope.networkId !== sharedScope.networkId) {
+            return vaultError({
+              code: "DECRYPTION_FAILED",
+              message: "Shared named-secret envelope network differs from the delegated grantor network.",
+            });
+          }
           const proof = await this.decryptCapabilityProof();
           const plaintextResult = await config.service.decryptEnvelope(
             envelope,
             proof,
+            sharedScope,
           );
           if (!plaintextResult.ok) {
             return vaultError({
@@ -1504,7 +1566,6 @@ export class DataVaultService extends BaseService implements IDataVaultService {
             contentType,
             options,
           );
-          void grantorDID;
           return { ok: true, data: { value, metadata, keyId } };
         } catch (error) {
           return vaultError({
@@ -1547,7 +1608,7 @@ export class DataVaultService extends BaseService implements IDataVaultService {
         }
 
         // Step 1: Fetch grant from grantor's space via delegated KV
-        const grantResult = await grantorKV.get<string>(`grants/${myDID}/${key}`, {
+        const grantResult = await grantorKV.get(`grants/${myDID}/${key}`, {
           raw: true,
         });
         if (!grantResult.ok) {
@@ -1584,7 +1645,7 @@ export class DataVaultService extends BaseService implements IDataVaultService {
         const entryKey = this.crypto.decrypt(encryptionKey, encryptedGrant);
 
         // Step 6: Fetch encrypted value from grantor's space via delegated KV
-        const valueResult = await grantorKV.get<string>(`vault/${key}`, {
+        const valueResult = await grantorKV.get(`vault/${key}`, {
           raw: true,
         });
         if (!valueResult.ok) {

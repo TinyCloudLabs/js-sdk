@@ -14,6 +14,7 @@
  * - response signature verification
  */
 
+import { createHash, createHmac } from "node:crypto";
 import { describe, expect, it } from "bun:test";
 
 import {
@@ -61,6 +62,7 @@ import {
   type ReceiverKeyPair,
   type WellKnownDescriptorFetcher,
 } from "./index";
+import * as encryptionExports from "./index";
 
 // ---------------------------------------------------------------------------
 // Test fixtures
@@ -263,6 +265,7 @@ describe("envelope binding", () => {
     expect(envelope.alg).toBe(DEFAULT_ENCRYPTION_ALG);
     expect(envelope.keyVersion).toBe(DEFAULT_KEY_VERSION);
     expect(envelope.networkId).toBe(NETWORK_ID);
+    expect(envelope.scopeTag).toBeUndefined();
   });
 
   it("validateEnvelope rejects a tampered hash", () => {
@@ -286,6 +289,108 @@ describe("envelope binding", () => {
       expect(result.error.code).toBe("INVALID_ENVELOPE");
     }
   });
+
+  it("tags named network-vault ciphertext with an exact space and stored key", () => {
+    const crypto = makeCrypto({ sha256: (bytes) => createHash("sha256").update(bytes).digest() });
+    const spaceId = `tinycloud:pkh:eip155:1:${PKH_OWNER_DID.split(":").at(-1)}:secrets`;
+    const path = "vault/secrets/scoped/service/ACCESS_TOKEN";
+    const { envelope, symmetricKey } = encryptToNetwork(crypto, {
+      networkId: PKH_NETWORK_ID,
+      networkPublicKey: new Uint8Array(32).fill(7),
+      plaintext: utf8Encode("secret"),
+      scope: { spaceId, path },
+    });
+    const message = `tinycloud.decrypt-scope/v1\n${PKH_NETWORK_ID}\n${spaceId}\n${path}\n${envelope.alg}\n${envelope.keyVersion}\n${envelope.ciphertext}`;
+    expect(envelope.scopeTag).toBe(createHmac("sha256", symmetricKey).update(message).digest("hex"));
+    const siblingMessage = message.replace(path, "vault/secrets/scoped/service/OTHER_TOKEN");
+    expect(envelope.scopeTag).not.toBe(
+      createHmac("sha256", symmetricKey).update(siblingMessage).digest("hex"),
+    );
+  });
+
+  it("refuses a sibling transplant and untagged legacy envelope under a named scope", () => {
+    const crypto = makeCrypto({
+      authEncrypt: (key, plaintext) => xor(key, plaintext),
+      authDecrypt: (key, ciphertext) => xor(key, ciphertext),
+    });
+    const spaceId = `tinycloud:pkh:eip155:1:${PKH_OWNER_DID.split(":").at(-1)}:other`;
+    const sibling = "vault/secrets/OTHER_KEY";
+    const requested = "vault/secrets/API_KEY";
+    const { envelope, symmetricKey } = encryptToNetwork(crypto, {
+      networkId: PKH_NETWORK_ID,
+      networkPublicKey: new Uint8Array(32).fill(7),
+      plaintext: utf8Encode("sibling-secret"),
+      scope: { spaceId, path: sibling },
+    });
+    const transplanted = { ...envelope, aad: base64Encode(utf8Encode(`tinycloud.vault:${spaceId}:secrets/API_KEY`)) };
+    expect(() => decryptEnvelopeWithKey(crypto, transplanted, symmetricKey, {
+      spaceId, path: requested,
+    })).toThrow();
+    const { scopeTag: _scopeTag, ...legacy } = envelope;
+    expect(() => decryptEnvelopeWithKey(crypto, legacy, symmetricKey, {
+      spaceId, path: sibling,
+    })).toThrow();
+  });
+
+  it("uses exact scoped raw attenuation without changing the legacy network resource", () => {
+    const scope = {
+      spaceId: `tinycloud:pkh:eip155:1:${PKH_OWNER_DID.split(":").at(-1)}:secrets`,
+      path: "vault/secrets/API_KEY",
+    };
+    const resource = `${PKH_NETWORK_ID}/kv/${Buffer.from(scope.spaceId).toString("base64url")}/${Buffer.from(scope.path).toString("base64url")}`;
+    expect(buildDecryptAttenuation(PKH_NETWORK_ID, scope)).toEqual({
+      [resource]: { [DECRYPT_ACTION]: {} },
+    });
+    expect(buildDecryptAttenuation(PKH_NETWORK_ID)).toEqual({
+      [PKH_NETWORK_ID]: { [DECRYPT_ACTION]: {} },
+    });
+  });
+  it("strictly decodes canonical scoped raw resources and rejects foreign or ambiguous encodings", () => {
+    const parseScopedDecryptResource = Reflect.get(encryptionExports, "parseScopedDecryptResource") as (resource: string) => unknown;
+    const spaceId = `tinycloud:pkh:eip155:1:${PKH_OWNER_DID.split(":").at(-1)}:other`;
+    const path = "vault/secrets/API_KEY";
+    const resource = `${PKH_NETWORK_ID}/kv/${Buffer.from(spaceId).toString("base64url")}/${Buffer.from(path).toString("base64url")}`;
+    expect(parseScopedDecryptResource(resource)).toEqual({
+      networkId: PKH_NETWORK_ID, spaceId, path,
+    });
+    for (const invalid of [
+      `${resource}=`,
+      `${PKH_NETWORK_ID}/kv/${Buffer.from(spaceId).toString("base64url")}/${Buffer.from("vault/secrets/API_KEY\n").toString("base64url")}`,
+      `${PKH_NETWORK_ID}/kv/${Buffer.from(`${spaceId}/evil`).toString("base64url")}/${Buffer.from(path).toString("base64url")}`,
+    ]) {
+      expect(() => parseScopedDecryptResource(invalid)).toThrow();
+    }
+    expect(() => buildDecryptAttenuation(PKH_NETWORK_ID, {
+      spaceId: "tinycloud:pkh:eip155:1:0x1111111111111111111111111111111111111111:other", path,
+    })).toThrow();
+  });
+
+  it("encodes the EIP-55 owner space even when the caller uses a lowercase address", () => {
+    const checksummedAddress = "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266";
+    const owner = `did:pkh:eip155:31337:${checksummedAddress}`;
+    const networkId = `urn:tinycloud:encryption:${owner}:default`;
+    const lowercaseSpace = `tinycloud:pkh:eip155:31337:${checksummedAddress.toLowerCase()}:other`;
+    const canonicalSpace = `tinycloud:pkh:eip155:31337:${checksummedAddress}:other`;
+    const path = "vault/secrets/API_KEY";
+    const expected = `${networkId}/kv/${Buffer.from(canonicalSpace).toString("base64url")}/${Buffer.from(path).toString("base64url")}`;
+    expect(Object.keys(buildDecryptAttenuation(networkId, {
+      spaceId: lowercaseSpace, path,
+    }))).toEqual([expected]);
+    const noncanonical = `${networkId}/kv/${Buffer.from(lowercaseSpace).toString("base64url")}/${Buffer.from(path).toString("base64url")}`;
+    const parseScopedDecryptResource = Reflect.get(encryptionExports, "parseScopedDecryptResource") as (resource: string) => unknown;
+    expect(() => parseScopedDecryptResource(noncanonical)).toThrow();
+  });
+
+  it("binds the exact non-default network name without changing the owner space", () => {
+    const networkId = PKH_NETWORK_ID.replace(/:default$/, ":payments");
+    const spaceId = `tinycloud:pkh:eip155:1:${PKH_OWNER_DID.split(":").at(-1)}:secrets`;
+    const path = "vault/secrets/API_KEY";
+    const resource = `${networkId}/kv/${Buffer.from(spaceId).toString("base64url")}/${Buffer.from(path).toString("base64url")}`;
+    expect(buildDecryptAttenuation(networkId, { spaceId, path })).toEqual({
+      [resource]: { [DECRYPT_ACTION]: {} },
+    });
+  });
+
 });
 
 // ---------------------------------------------------------------------------
@@ -357,6 +462,19 @@ describe("canonical decrypt request", () => {
       expect(h).not.toBe(baseHash);
     }
   });
+  it("binds canonical spaceId and exact path into the signed body hash", () => {
+    const crypto = makeCrypto();
+    const spaceId = `tinycloud:pkh:eip155:1:${PKH_OWNER_DID.split(":").at(-1)}:secrets`;
+    const path = "vault/secrets/API_KEY";
+    const body = { ...makeBody(), networkId: PKH_NETWORK_ID, spaceId, path };
+    const hash = (candidate: DecryptRequestBody) => buildCanonicalDecryptRequest({
+      crypto, body: candidate, receiverPublicKey: new Uint8Array([4, 5, 6]),
+    }).bodyHash;
+    expect(hash(body)).not.toBe(hash({ ...body, path: "vault/secrets/OTHER_KEY" }));
+    expect(hash(body)).not.toBe(hash({ ...body, spaceId: spaceId.replace(":secrets", ":other") }));
+    expect(hash(body)).not.toBe(hash(makeBody()));
+  });
+
 });
 
 // ---------------------------------------------------------------------------
@@ -474,6 +592,35 @@ describe("decrypt invocation builder", () => {
     if (!result.ok) {
       expect(result.error.message).toMatch(/bodyHash/);
     }
+  });
+
+  it("binds a scoped locator in the body hash without extra invocation facts", () => {
+    const crypto = makeCrypto();
+    const body = {
+      ...buildBaseBody(crypto),
+      networkId: PKH_NETWORK_ID,
+      spaceId: `tinycloud:pkh:eip155:1:${PKH_OWNER_DID.split(":").at(-1)}:secrets`,
+      path: "vault/secrets/API_KEY",
+    };
+    const receiverPublicKey = new Uint8Array([4, 5, 6]);
+    const facts = buildDecryptFacts({
+      crypto, body, encryptedSymmetricKeyHash: body.encryptedSymmetricKeyHash, receiverPublicKey,
+    });
+    const base = {
+      targetNode: TARGET_NODE,
+      networkId: PKH_NETWORK_ID,
+      body,
+      proof: { proofs: ["bafy-proof"] },
+    };
+    expect(facts).not.toHaveProperty("spaceId");
+    expect(facts).not.toHaveProperty("path");
+    expect(checkDecryptInvocationInput(crypto, { ...base, facts })).toMatchObject({ ok: true });
+    expect(checkDecryptInvocationInput(crypto, {
+      ...base, facts, body: { ...body, path: undefined },
+    }).ok).toBe(false);
+    expect(checkDecryptInvocationInput(crypto, {
+      ...base, facts, body: { ...body, path: "vault/secrets/OTHER_KEY" },
+    }).ok).toBe(false);
   });
 
   it("buildDecryptInvocation delegates to the signer when input is well-formed", async () => {
@@ -992,6 +1139,29 @@ describe("EncryptionService one-of-one round trip", () => {
     const encrypted = await service.encryptToNetwork(requestedNetworkId, utf8Encode("canonical"));
     expect(encrypted.ok).toBe(true);
     if (encrypted.ok) expect(encrypted.data.networkId).toBe(canonicalNetworkId);
+  });
+
+  it("the public service returns an authenticated named envelope without exposing its key", async () => {
+    const crypto = makeCrypto({ sha256: (bytes) => createHash("sha256").update(bytes).digest() });
+    const descriptor = { ...makeDescriptor(), networkId: PKH_NETWORK_ID, ownerDid: PKH_OWNER_DID };
+    const service = new EncryptionService({
+      crypto,
+      signer: { signDecryptInvocation: async () => { throw new Error("unused"); } },
+      transport: { postDecrypt: async () => { throw new Error("unused"); } },
+      node: { fetchByNetworkId: async () => descriptor },
+    });
+    const spaceId = `tinycloud:pkh:eip155:1:${PKH_OWNER_DID.split(":").at(-1)}:other`;
+    const path = "vault/secrets/API_KEY";
+    const encrypted = await service.encryptToNetwork(PKH_NETWORK_ID, utf8Encode("secret"), {
+      scope: { spaceId, path },
+    });
+    expect(encrypted.ok).toBe(true);
+    if (!encrypted.ok) return;
+    const envelope = encrypted.data;
+    const symmetricKey = xor(base64Decode(descriptor.publicEncryptionKey), base64Decode(envelope.encryptedSymmetricKey));
+    const message = `tinycloud.decrypt-scope/v1\n${PKH_NETWORK_ID}\n${spaceId}\n${path}\n${envelope.alg}\n${envelope.keyVersion}\n${envelope.ciphertext}`;
+    expect(envelope.scopeTag).toBe(createHmac("sha256", symmetricKey).update(message).digest("hex"));
+    expect("symmetricKey" in envelope).toBe(false);
   });
 
   it("decrypt fails fast on a revoked network", async () => {

@@ -17,6 +17,7 @@ import type {
   InlineEncryptedEnvelope,
   NetworkDescriptor,
 } from "./types";
+import type { ScopedDecryptLocator } from "./scope";
 
 export interface EncryptToNetworkOptions {
   /** Optional associated authenticated data (bytes). */
@@ -27,6 +28,8 @@ export interface EncryptToNetworkOptions {
   keyVersion?: number;
   /** Caller-supplied envelope metadata. */
   metadata?: Record<string, string>;
+  /** Only named network-vault secrets may bind an exact stored locator. */
+  scope?: ScopedDecryptLocator;
 }
 
 export interface DecryptEnvelopeOptions {
@@ -39,6 +42,9 @@ export interface DecryptEnvelopeOptions {
   aad?: Uint8Array;
   /** Override the target node id when the descriptor advertises many. */
   targetNode?: string;
+  /** An exact named secret locator; both fields are required together. */
+  spaceId?: string;
+  path?: string;
 }
 
 export interface IEncryptionService extends IService {

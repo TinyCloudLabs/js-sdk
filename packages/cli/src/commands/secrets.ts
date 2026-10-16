@@ -4,6 +4,11 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { homedir, hostname, userInfo } from "node:os";
 import {
+  buildScopedDecryptResource,
+  canonicalScopedDecryptLocator,
+  makePkhSpaceId,
+  pkhDid,
+  parsePkhDid,
   type PermissionEntry,
   type PortableDelegation,
   type TinyCloudNode,
@@ -46,7 +51,7 @@ import { validatePrivateOutput, writePrivateOutput } from "../lib/private-output
 import { ensureAuthenticated } from "../lib/sdk.js";
 import { sessionExpiredError, withSignInHint } from "../auth/session-expired.js";
 import { sessionExpiresAt } from "../auth/scoped-login.js";
-import { resolveSpaceUri } from "../lib/space.js";
+import { normalizePkhIdentifier, resolveSpaceUri } from "../lib/space.js";
 import { tryOpenBrowser, warnBrowserNotOpened } from "../lib/browser.js";
 import { runProbeChild, type ProbeRequest } from "../lib/probe-child.js";
 import { abortableSleep, DEFAULT_WAIT_TIMEOUT, parseWaitTimeout, runSecretsWait } from "../lib/secrets-wait.js";
@@ -184,7 +189,10 @@ async function resolveSecretSpace(
   input: string | undefined,
   profileName: string,
 ): Promise<string | undefined> {
-  return resolveSpaceUri(input, profileName, { useProfileDefault: false });
+  const resolved = await resolveSpaceUri(input, profileName, { useProfileDefault: false });
+  if (resolved === undefined) return undefined;
+  const pkh = /^tinycloud:pkh:eip155:(\d+):(0x[0-9a-fA-F]{40}):([A-Za-z0-9_-]+)$/.exec(resolved);
+  return pkh === null ? resolved : makePkhSpaceId(pkh[2]!, Number(pkh[1]), pkh[3]!);
 }
 
 function secretsServiceForSpace(
@@ -658,36 +666,50 @@ function delegationCoversPath(
   permissions: PermissionEntry[],
   path: string,
   space: string = SECRETS_SPACE,
+  delegationSpace?: string,
 ): boolean {
   return permissions.some((permission) => {
     if (permission.service !== "tinycloud.kv") return false;
-    if (!permissionTargetsSpace(permission, space)) return false;
+    if (!permissionTargetsSpace(permission, space, delegationSpace)) return false;
     if (!hasPermissionAction(permission.actions, secretCapabilityAction("get"))) return false;
     return permission.path === path || (permission.path.endsWith("/") && path.startsWith(permission.path));
   });
 }
 
-function spaceMatches(granted: string, requested: string): boolean {
-  return granted === requested;
+function spaceMatches(granted: string, requested: string, delegationSpace?: string): boolean {
+  if (granted === requested) return true;
+  if (granted.startsWith("tinycloud:") && requested.startsWith("tinycloud:")) {
+    return normalizePkhIdentifier(granted) === normalizePkhIdentifier(requested);
+  }
+  if (delegationSpace === undefined) return false;
+  const canonicalDelegationSpace = normalizePkhIdentifier(delegationSpace);
+  if (!requested.startsWith("tinycloud:") &&
+    delegationSpace.split(":").at(-1) === requested &&
+    granted.startsWith("tinycloud:")) {
+    return normalizePkhIdentifier(granted) === canonicalDelegationSpace;
+  }
+  return requested.startsWith("tinycloud:") &&
+    normalizePkhIdentifier(requested) === canonicalDelegationSpace &&
+    granted === delegationSpace.split(":").at(-1);
 }
 
-function permissionTargetsSpace(permission: PermissionEntry, expectedSpace: string): boolean {
+function permissionTargetsSpace(permission: PermissionEntry, expectedSpace: string, delegationSpace?: string): boolean {
   if (permission.service !== "tinycloud.kv") return false;
   if (typeof permission.space !== "string") return false;
   const space = permission.space.trim();
   if (space === "") return false;
-  return spaceMatches(space, expectedSpace);
+  return spaceMatches(space, expectedSpace, delegationSpace);
 }
 
 function delegationCoversDecrypt(
   permissions: PermissionEntry[],
-  networkId: string,
+  resource: string,
 ): boolean {
-  return permissions.some((permission) => {
-    if (permission.service !== "tinycloud.encryption") return false;
-    if (!hasPermissionAction(permission.actions, SECRET_DECRYPT_CAPABILITY)) return false;
-    return permission.path === networkId;
-  });
+  return permissions.some((permission) =>
+    permission.service === "tinycloud.encryption" &&
+    hasPermissionAction(permission.actions, SECRET_DECRYPT_CAPABILITY) &&
+    permission.path === resource
+  );
 }
 
 function parseDelegationExpiry(expiry: unknown): Date {
@@ -870,7 +892,7 @@ function selectDelegationCandidate(
   }
 
   const secretsSpaceCandidates = liveCandidates.filter((candidate) =>
-    candidate.permissions.some((permission) => permissionTargetsSpace(permission, space))
+    candidate.permissions.some((permission) => permissionTargetsSpace(permission, space, candidate.delegation.spaceId))
   );
   if (secretsSpaceCandidates.length === 0) {
     throw new CLIError(
@@ -881,7 +903,7 @@ function selectDelegationCandidate(
   }
 
   const exact = secretsSpaceCandidates.find((candidate) =>
-    delegationCoversPath(candidate.permissions, secretPath, space)
+    delegationCoversPath(candidate.permissions, secretPath, space, candidate.delegation.spaceId)
   );
   if (exact) {
     return exact;
@@ -915,7 +937,7 @@ async function resolveDelegatedSecretSource(
 function mapEncryptionResultError(error: { code: string; message: string }): CLIError {
   const code = error.code || "DECRYPTION_FAILED";
   const exitCode =
-    code === "PERMISSION_DENIED" ? ExitCode.PERMISSION_DENIED :
+    code === "PERMISSION_DENIED" || code === "DECRYPT_DENIED" ? ExitCode.PERMISSION_DENIED :
     code === "NOT_FOUND" ? ExitCode.NOT_FOUND :
     code === "NETWORK_ERROR" || code === "TRANSPORT_ERROR" ? ExitCode.NETWORK_ERROR :
     ExitCode.ERROR;
@@ -962,7 +984,14 @@ async function readDelegatedSecretValue(params: {
   /** D4: computed before the node exists, from the profile and the explicit key. */
   local: boolean;
 }): Promise<string> {
-  if (!delegationCoversPath(params.permissions, params.secretPath, params.space ?? SECRETS_SPACE)) {
+  if (params.space?.startsWith("tinycloud:") === true
+    ? normalizePkhIdentifier(params.space) !== normalizePkhIdentifier(params.delegation.spaceId)
+    : params.delegation.spaceId.split(":").at(-1) !== (params.space ?? SECRETS_SPACE)) {
+    throw new CLIError("PERMISSION_DENIED",
+      "Delegation's KV space does not match the requested named-secret space.",
+      ExitCode.PERMISSION_DENIED);
+  }
+  if (!delegationCoversPath(params.permissions, params.secretPath, params.space ?? SECRETS_SPACE, params.delegation.spaceId)) {
     throw new CLIError(
       "PERMISSION_DENIED",
       `Delegation "${params.delegationCid}" does not cover secret "${params.secretPath}".`,
@@ -1057,10 +1086,24 @@ async function readDelegatedSecretValue(params: {
     );
   }
 
-  if (!delegationCoversDecrypt(params.permissions, networkId)) {
+  const locatorSpace = params.space?.startsWith("tinycloud:")
+    ? params.space : params.delegation.spaceId;
+  let locator: { spaceId: string; path: string };
+  let resource: string;
+  try {
+    locator = canonicalScopedDecryptLocator(networkId, {
+      spaceId: locatorSpace, path: params.secretPath,
+    });
+    resource = buildScopedDecryptResource(networkId, locator);
+  } catch {
+    throw new CLIError("PERMISSION_DENIED",
+      `Delegation "${params.delegationCid}" does not bind this named secret to its owner space.`,
+      ExitCode.PERMISSION_DENIED);
+  }
+  if (!delegationCoversDecrypt(params.permissions, resource)) {
     throw new CLIError(
       "PERMISSION_DENIED",
-      `Delegation "${params.delegationCid}" does not include ${SECRET_DECRYPT_CAPABILITY} for ${networkId}.`,
+      `Delegation "${params.delegationCid}" does not include ${SECRET_DECRYPT_CAPABILITY} for ${resource}.`,
       ExitCode.PERMISSION_DENIED,
     );
   }
@@ -1068,6 +1111,7 @@ async function readDelegatedSecretValue(params: {
   const decrypted = await params.node.encryption.decryptEnvelope(
     envelope as never,
     { proofs: [params.delegationCid] },
+    locator,
   );
   if (!decrypted.ok) {
     throw mapEncryptionResultError(decrypted.error);
@@ -1120,13 +1164,27 @@ function secretPermissionEntries(params: {
   }];
 
   if (params.action === "get") {
-    const networkId = "getEncryptionNetworkIdForSpace" in params.node &&
-      typeof params.node.getEncryptionNetworkIdForSpace === "function"
-      ? params.node.getEncryptionNetworkIdForSpace(params.space ?? SECRETS_SPACE)
-      : params.node.getDefaultEncryptionNetworkId();
+    const currentOwner = ownerOfSpace(params.node.spaceId) ??
+      (params.node.did.startsWith("did:pkh:") ? params.node.did : undefined);
+    const owner = currentOwner === undefined ? null : parsePkhDid(currentOwner);
+    if (owner === null) {
+      throw new CLIError("OWNER_DID_UNKNOWN",
+        "Cannot determine the owner of the named secret space.",
+        ExitCode.AUTH_REQUIRED);
+    }
+    const requestedSpace = params.space ?? SECRETS_SPACE;
+    const spaceId = requestedSpace.startsWith("tinycloud:")
+      ? requestedSpace
+      : makePkhSpaceId(owner.address, owner.chainId, requestedSpace);
+    if (ownerOfSpace(spaceId) !== pkhDid(owner.address, owner.chainId)) {
+      throw new CLIError("OWNER_MISMATCH",
+        "Named secret space is not owned by the active encryption network owner.",
+        ExitCode.PERMISSION_DENIED);
+    }
+    const networkId = params.node.getEncryptionNetworkIdForSpace(spaceId);
     permissions.push({
       service: "tinycloud.encryption",
-      path: networkId,
+      path: buildScopedDecryptResource(networkId, { spaceId, path }),
       actions: [SECRET_DECRYPT_CAPABILITY],
       skipPrefix: true,
     });
