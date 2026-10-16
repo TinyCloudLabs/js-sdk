@@ -151,10 +151,12 @@ describe("TinyCloudNode.restoreSession session-key lifecycle", () => {
     expect(authority.canRenew).toBe(true);
   });
 
-  test("owner proof requires uncaveated full-space KV get and sync", async () => {
+  test("owner consent needs uncaveated get and sync on one signed scope in the current space", async () => {
     const cases: Array<[Record<string, Record<string, string[]>>, boolean]> = [
       [{ kv: { "": ["tinycloud.kv/get", "tinycloud.kv/sync"] } }, true],
-      [{ kv: { "notes/": ["tinycloud.kv/get"], "notes/sub/": ["tinycloud.kv/sync"] } }, false],
+      [{ kv: { "notes/": ["tinycloud.kv/get", "tinycloud.kv/sync"] } }, true],
+      // Both actions overlap on notes/sub/, though that is not enough for notes/ reads.
+      [{ kv: { "notes/": ["tinycloud.kv/get"], "notes/sub/": ["tinycloud.kv/sync"] } }, true],
       [{ kv: { "notes/": ["tinycloud.kv/get"], "other/": ["tinycloud.kv/sync"] } }, false],
     ];
     for (const [abilities, anchored] of cases) {
@@ -164,6 +166,13 @@ describe("TinyCloudNode.restoreSession session-key lifecycle", () => {
       const authority = await replicationAuthorityForTest(node);
       expect(authority.consentAnchor?.() !== null).toBe(anchored);
     }
+    const caveated = await signedRestorableSession({
+      abilities: { kv: { "notes/": ["tinycloud.kv/get", "tinycloud.kv/sync"] } },
+      caveat: { maxValueSize: 1 },
+    });
+    const node = new TinyCloudNode({ host: RESTORE_HOST, wasmBindings: new NodeWasmBindings() });
+    await node.restoreSession(caveated);
+    expect((await replicationAuthorityForTest(node)).consentAnchor?.()).toBeNull();
   });
   test("a delegate-only signed leaf cannot stand in for current verified owner authority", async () => {
     const node = new TinyCloudNode({ host: RESTORE_HOST, wasmBindings: new NodeWasmBindings() });
@@ -187,18 +196,18 @@ describe("TinyCloudNode.restoreSession session-key lifecycle", () => {
     await expect(authority.mint(delegateDid, "notes/", new AbortController().signal))
       .rejects.toThrow(/compact|owner|consent/i);
   });
-  test("a current SIWE without verified root owner witness cannot grant, plan or mint replica authority", async () => {
+  test("a current scoped signed owner can plan its covered prefix but not a sibling", async () => {
     const proof = await signedRestorableSession({
       abilities: { kv: { "notes/": ["tinycloud.kv/get", "tinycloud.kv/sync"] } },
     });
     const node = new TinyCloudNode({ host: RESTORE_HOST, wasmBindings: new NodeWasmBindings() });
     await node.restoreSession(proof);
     const authority = await replicationAuthorityForTest(node);
-    expect(authority.consentAnchor?.()).toBeNull();
+    expect(authority.consentAnchor?.()?.source).toBe("siwe");
+    // The full SIWE parent is CACAO, not a compact UCAN that can directly back local bytes.
     expect(authority.sessionGrant("notes/")).toEqual({ refused: "NOT_COVERED" });
-    expect(authority.plan("notes/")).toEqual({ refused: "NOT_COVERED" });
-    await expect(authority.mint(proof.verificationMethod, "notes/", new AbortController().signal))
-      .rejects.toThrow(/owner|consent/i);
+    expect(authority.plan("notes/")).toMatchObject({ path: "session", parentCid: proof.delegationCid });
+    expect(authority.plan("other/")).toMatchObject({ refused: "NOT_COVERED" });
   });
   test("an old signed owner authority cannot follow a replacement session", async () => {
     const abilities = { kv: { "": ["tinycloud.kv/get", "tinycloud.kv/sync"] } };

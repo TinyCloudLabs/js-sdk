@@ -394,9 +394,19 @@ describe("browser replica gate without a profile directory", () => {
       expect(await establish(await signedRestorableSession({ expirationless: true }))).toBeUndefined();
       expect(await inspectReplicaKeyPresence()).toEqual({ gateHmac: false, accountKey: false });
       expect(await establish(await signedRestorableSession({
+        abilities: { kv: { "notes/": ["tinycloud.kv/get"], "other/": ["tinycloud.kv/sync"] } },
+      }))).toBeUndefined();
+      expect(await establish(await signedRestorableSession({
         abilities: { kv: { "notes/": ["tinycloud.kv/get", "tinycloud.kv/sync"] } },
+        caveat: { maxValueSize: 1 },
       }))).toBeUndefined();
       expect(await inspectReplicaKeyPresence()).toEqual({ gateHmac: false, accountKey: false });
+      const scopedProof = await signedRestorableSession({
+        abilities: { kv: { "notes/": ["tinycloud.kv/get", "tinycloud.kv/sync"] } },
+      });
+      const scopedStamp = await establish(scopedProof);
+      expect(scopedStamp).toMatchObject({ incarnation: expect.any(String), lifecycleEpoch: 0 });
+      expect(await inspectReplicaKeyPresence()).toEqual({ gateHmac: true, accountKey: true });
 
       const proof = await signedRestorableSession({ abilities: { kv: { "": ["tinycloud.kv/get", "tinycloud.kv/sync"] } } });
       const stamp = await establish(proof);

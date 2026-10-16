@@ -53,7 +53,7 @@ Object.defineProperty(globalThis, "indexedDB", { configurable: true, value: inde
   (typeof options === "function" ? options : section!)() } };
 
 const proof = await signedRestorableSession({ abilities: { kv: {
-  "": ["tinycloud.kv/get", "tinycloud.kv/sync"],
+  "notes/": ["tinycloud.kv/get", "tinycloud.kv/sync"],
 } } });
 const issuedAt = proof.siwe.match(/^Issued At: (.+)$/m)?.[1];
 assert(issuedAt);
@@ -110,6 +110,17 @@ assert.equal((await unknown.restoreSession(proof.address)).status, "restored",
   "an unavailable wallet must not invalidate signed network restoration");
 assert.equal((await unknown.replication.status())[0].gate, "gate_unavailable",
   "an unproven wallet must never unlock A's replica");
+const saved = await sessionStorage.load(proof.address);
+assert(saved, "signed browser session was not persisted");
+const staleStamp = { ...stamp, incarnation: crypto.randomUUID() };
+await sessionStorage.save(proof.address, { ...saved, replicaStamp: staleStamp });
+const stale = await root.TinyCloudWeb.create({ ...config, provider });
+assert.equal((await stale.restoreSession(proof.address)).status, "restored",
+  "stale replica stamp must not invalidate the verified network session");
+assert.equal((await stale.replication.status())[0].gate, "stamp_stale",
+  "persisted stale stamp must not allow any local replica read");
+assert.equal((await sessionStorage.load(proof.address))?.replicaStamp?.incarnation, staleStamp.incarnation,
+  "restore must not mint or silently repair a stale stamp");
 await web.signOut();
 assert("refused" in authority.plan("notes/"), "old authority survived sign-out and key rotation");
 console.log(`${format}: built core+optional signed owner restore, single registration and stale-session fence passed`);
