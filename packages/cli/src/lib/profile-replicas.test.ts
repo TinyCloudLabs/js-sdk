@@ -46,6 +46,33 @@ test("legacy-only logout cleanup is idempotent and leaves flag-owned replicas un
   expect(await readFile(flagDb)).toEqual(flagBefore);
 });
 
+test("legacy cleanup refuses a new root file without deleting it", async () => {
+  const root = join(profilePath("dogfood"), "replicas");
+  const entry = join(root, "notes");
+  const store = await SqliteReplicaStore.open(entry, { create: true });
+  await store.init({
+    name: "notes", replicaId: "notes", host: "https://node.example.test",
+    space: "tinycloud:pkh:eip155:1:0x0000000000000000000000000000000000000001:default",
+    prefix: "notes/", deviceDid: "did:key:device", allowSecrets: false,
+    localReadPolicy: "whileGrantValid", retentionGrantCid: null,
+  });
+  await store.close();
+  const originalDestroy = SqliteReplicaStore.prototype.destroy;
+  SqliteReplicaStore.prototype.destroy = async function (lease) {
+    await originalDestroy.call(this, lease);
+    await writeFile(join(root, "unexpected"), "keep");
+  };
+  try {
+    await expect(removeProfileReplicas("dogfood")).rejects.toMatchObject({
+      code: "REPLICA_PURGE_FAILED",
+      metadata: { replicasRemoved: ["notes"] },
+    });
+    expect(await readFile(join(root, "unexpected"), "utf8")).toBe("keep");
+  } finally {
+    SqliteReplicaStore.prototype.destroy = originalDestroy;
+  }
+});
+
 test("local grant artifact reads refuse an alias instead of exposing another profile", async () => {
   await ProfileManager.setProfile("victim", {
     name: "victim", host: "https://node.example.test", did: "did:key:victim", chainId: 1,

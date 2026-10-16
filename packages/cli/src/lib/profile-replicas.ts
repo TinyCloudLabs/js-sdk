@@ -137,10 +137,28 @@ export async function removeProfileReplicas(profile: string, heldLeases?: Readon
     const pinned = preflightRoot ?? await pinReplicaRoot(profile, namedRoot, "logout");
     if (!pinned) return [];
     if (preflightRoot) await pinned.assertNamed();
+    const removeEmptyRoot = async (removed: string[]) => {
+      try {
+        await pinned.assertNamed();
+        // The parent profile is pinned. rmdir removes only an empty entry here;
+        // it cannot follow a replacement symlink into another directory.
+        await rmdir(namedRoot);
+      } catch (error) {
+        throw new CLIError(
+          "REPLICA_PURGE_FAILED",
+          `Logout cleared the session, but the legacy replicas directory could not be removed after ${removed.length} replica(s) were erased. ${error instanceof Error ? error.message : String(error)}`,
+          ExitCode.ERROR,
+          { replicasRemoved: removed, replicasRemaining: [] },
+        );
+      }
+    };
     try {
       const root = pinned.path;
       const replicas = (await readdir(root, { withFileTypes: true })).sort((a, b) => a.name.localeCompare(b.name));
-      if (replicas.length === 0) return [];
+      if (replicas.length === 0) {
+        await removeEmptyRoot([]);
+        return [];
+      }
       for (const entry of replicas) await safeReplicaEntry(profile, root, entry);
       await loadSqlite();
       const opened: Array<{ name: string; store: SqliteReplicaStore; lease: LeaseToken | null }> = [];
@@ -194,6 +212,7 @@ export async function removeProfileReplicas(profile: string, heldLeases?: Readon
             );
           }
         }
+        await removeEmptyRoot(removed);
         return removed;
       } catch (error) {
         if (error instanceof CLIError) throw error;
