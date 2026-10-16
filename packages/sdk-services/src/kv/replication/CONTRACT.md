@@ -252,10 +252,17 @@ partition or identity with an outstanding intent is unreadable.
 
 | | Browser | Node/CLI |
 | -- | -- | -- |
-| Gate, index, intents | `gate` (key `"account"`), `partitions`, `purgeIntents` stores in `tinycloud-replica-kv`; gate carries opaque hashes/keyId and durable consent deadline, no raw principal | `replica-gate.json` (`REPLICA_GATE_FILE`): `{ v: 1, incarnation, salt, principalHash, lifecycleEpoch, deniedAt, intents, firstInstall, pendingGenerations }`, where `principalHash` is `SaltedHash` hex and `pendingGenerations: { [identityKeyHash]: non-negative integer }` persists pending-file tombstone generations. Written atomically (temp file + rename) under the profile lock. CLI: `<profile>/replica-gate.json`. The node-sdk `gateFile` option defaults next to `dir`, outside the replication data. The index may be derived from the on-disk layout |
+| Gate, index, intents | `gate` (key `"account"`), `partitions`, `purgeIntents` stores in `tinycloud-replica-kv`; gate carries opaque hashes/keyId and durable consent deadline, no raw principal | `replica-gate.json` (`REPLICA_GATE_FILE`): `{ v: 1, incarnation, salt, principalHash, lifecycleEpoch, deniedAt, intents, firstInstall, pendingGenerations, eraseDeferred, deferredPrincipalHash }`, where `principalHash` is `SaltedHash` hex and `pendingGenerations: { [identityKeyHash]: non-negative integer }` persists pending-file tombstone generations. Written atomically (temp file + rename) under the profile lock. CLI: `<profile>/replica-gate.json`. The node-sdk `gateFile` option defaults next to `dir`, outside the replication data. The index may be derived from the on-disk layout |
 | First-install anchors | `device` store, key `"firstInstall:" + identityKeyHash` | the gate file's `firstInstall: { [identityKeyHash]: ms }` |
 | Cross-tab/process signal | `localStorage` marker `REPLICA_LOGOUT_MARKER`; durable `REPLICA_DENY_TOMBSTONE`; BroadcastChannel `REPLICA_KV_CHANNEL`; the `storage` event | the gate file, checked by `run` |
 | Session stamp persisted in | sdk-core `PersistedSessionData.replicaStamp` (S3 adds it to the zod schema: `incarnation: string`, `lifecycleEpoch: non-negative int`), next to the SIWE | the profile's persisted session record |
+
+**Node/CLI deferred marker.** `eraseDeferred: boolean` and
+`deferredPrincipalHash: string | null` are gate-file fields; older v1 gate
+files without them read as `false` and `null`. A malformed combination fails
+closed. A deferred denial stores the original salted principal hash while
+clearing `principalHash`; after resume the deferred hash remains only to
+recognize an idempotent same-token retry. A new establishment clears it.
 
 **Browser deny floor.** `REPLICA_DENY_TOMBSTONE = "tinycloud-replica:deny-tombstone"` holds
 `{"epoch": <positive safe integer>, "deniedAt": <non-negative safe integer ms>}` in origin
@@ -470,6 +477,11 @@ a stamp is dropped. This includes get bytes, list keys and replica-derived diver
 
      The partition erase must be durable before the intent clears.
    - **Node pending identity order:** intent and generation bump in step 1's atomic gate-file rename → unlink `pending.json` and owner `device.jwk` and sync the directory under the profile lock → clear intent durably. Replay sees the already advanced generation, retries deletion, and does not advance it twice. A missing file is success, never permission to read before intent clear.
+   - **Node/CLI deferred revoke exception:** while `eraseDeferred` is true,
+     `erasePending()` and `recover()` report outstanding intents but MUST NOT
+     erase a partition, `pending.json` or `device.jwk`, or clear an intent.
+     The full intent set and generation fences still block every guarded read,
+     write and new establishment. Browser denial and erasure are unchanged.
 4. **Activate** (switch only). `activationAllowed(next)` requires a **non-null**
    gate principal hash computed under the **current** gate key matching `next`, no old
    intent and no marker. A null gate returns false; only `establishSessionStamp` on a
@@ -478,16 +490,394 @@ a stamp is dropped. This includes get bytes, list keys and replica-derived diver
 
 **`signOut` resolves** only after this tab's handles are cancelled and closed **and** step 1 has committed (or returned a fallback outcome). Erasure continues in the background.
 
-A transient `BUSY`, lock timeout or retryable I/O failure **before erase** does
-not end the user's network session; the deny/tombstone has already gated the
-replica. Erase is resumable and idempotent on the next command/load, and no
-failure after committed denial resurrects replica reads. An explicit plain
-logout always ends the network session, even while erase remains pending.
-**Exception:** `logout --revoke` aborts network logout when online revocation
-fails: it preserves the session/key so revocation can be retried, reports a
-non-zero result and instructs the user to retry. The replica remains denied
-immediately and cannot serve while the network session is retained. This
-exception does not reopen a TC-1208 sign-out path or weaken plain logout.
+A transient `BUSY`, lock timeout or I/O failure **after committed denial**
+does not resurrect replica reads; erase is resumable. An explicit plain
+logout (and a successful `logout --revoke`) removes and fsyncs **both**
+`session.json` (which may contain a private JWK) and `key.json`, then retires
+the network session even while erase remains pending. A later sign-in must
+rotate/re-establish its signer rather than reuse the deleted key. A failure
+before either a complete durable gate denial or the CLI logout marker commits
+cannot promise crash-safe logout: retire this process's session in memory,
+report nonzero and keep the replica gated in memory; do not claim durable
+completion if the profile lock or all writes are unavailable.
+**Exception:** failed, partial, timed-out or interrupted `logout --revoke`
+returns nonzero while retaining the network session, both key-bearing files
+and physical replica files for retry. The v1 deferred gate denial or v2/v3
+version-specific durable logout marker fences local reads. This does not
+reopen a TC-1208 sign-out path.
+
+**Node/CLI `logout --revoke` deferred erase.** The node-sdk root export
+`createProfileReplicaPurge({ profileDir, guard })` returns `ProfileReplicaPurge`
+for `<profileDir>/replication`; `guard` is the mandatory profile lock (the CLI
+lock is reentrant within one async call chain). This facade does not extend
+the browser lifecycle interface.
+
+Before **any** logout marker, deferred denial or remote revoke, the CLI calls
+`preflightLogout({ principal, discardLocalChanges? })` under the profile lock.
+The read-only `ProfileReplicaPreflight` reports `knownLegacyReplicas`,
+`unknownLegacyPaths`, all `unknownPaths`, their JSON-safe `unknownEntries:
+{ path, kind, dev, ino }[]`, and `knownRoots`, `knownEntries` and
+`missingDatabases`. Paths are profile-relative; `dev` and `ino` are decimal
+strings. The inventory covers both legacy and flag-owned replica files.
+The CLI visibly lists **every** path/type/identity proposed for discard
+before acting. Without explicit `--discard-local-changes`, unknown or
+indeterminate data refuses before any marker, credentials, gate or remote
+state changes. Explicit consent authorizes **only** that exact listed
+inventory, not a wildcard for later additions.
+
+The **legacy v1 mirror**, in v1, v2 or v3 profiles alike, recognizes only
+the source-created SQLite layout: required `replica.db`, optional
+`replica.db-wal`, `replica.db-shm` and `replica.db-journal`; optional
+`blobs/.tmp/<64 lowercase hex>.<12 lowercase hex>` and
+`blobs/<2 lowercase hex>/<matching 64 lowercase hex>`. A read-only
+SQLite schema query must independently verify the exact source-created
+v1 mirror schema or one of its two historical v2 mirror variants
+(grant-install or policy columns); none has a pending/outbox table.
+File names or a user-version number alone cannot prove that local writes
+are absent.
+Any other schema, extra file/directory, missing database, symlink
+or unreadable/changing layout is unknown and refuses before marker/denial/
+remote call absent explicit exact-inventory discard. The flag-owned
+`fence.json` and its atomic temp name are recognized **only** for adapter
+purge with `allowAdapterFence: true`, never for a legacy mirror. The
+lease-fenced legacy `destroy` rechecks the approved identities,
+unlinks only source-enumerated known files and explicitly approved unknown
+entries, then removes empty directories; it never recursively removes a
+tree or follows a symlink. A newly added/changed unknown path is not
+authorized, including after a crash: stop and require a fresh visible list
+and approval. The marker stores the approved inventory for that replay.
+
+For `logout --revoke`, the CLI first calls
+`prepareLogoutPending({ principal, approval, discardLocalChanges?,
+remotePending: true })`. It re-inspects and compares the exact approved
+path/type/dev/ino set under the profile lock, then fsyncs the inventory-bound
+`remotePending` marker **before** any remote request. Pre-action mismatch
+leaves all credentials and files intact with no marker or remote call.
+The required pre-remote fence depends on the durable marker:
+
+- **v1 active gate:** call
+  `deny({ reason: "sign_out", principal }, { deferErase: true })` before
+  online revoke. Any other reason with `deferErase: true` throws `TypeError`
+  before mutation. Every deny outcome fences this process in memory before
+  its first await; only a committed `denied` outcome carrying
+  `resumeToken: { deniedEpoch, principalHash }` proves durable deferral.
+- **v1 already deferred:** validate the existing marker's original
+  pre-denial epoch and principal against `deferredErase()` and the current
+  denied gate under the profile lock:
+  `token.deniedEpoch === marker.lifecycleEpoch + 1`,
+  `token.principalHash === marker.principalHash`, matching incarnation and
+  null gate principal. Reuse that token; never deny again or substitute a
+  marker with the denied epoch as its pre-denial epoch. A missing or
+  mismatched original marker refuses.
+- **v2 orphan:** validate the pinned, inventory-bound orphan marker and
+  absence of a replacement gate. No gate salt exists to construct scoped
+  intents, deny or produce a `resumeToken`; the fsynced marker and CLI read/
+  restore fence are authoritative.
+- **v3 inactive gate:** validate the marker's incarnation and exact current
+  lifecycle epoch with null principal and no `eraseDeferred`. Do not deny
+  again, invent a principal hash or require a `resumeToken`.
+
+If the applicable fence cannot be committed or validated, the
+`remotePending` marker remains; no remote request or credential/file cleanup
+proceeds. Stale/unguarded v1 denial outcomes and a missing v1 token do not
+authorize a retryable revoked session. A v2/v3 marker is not a v1 token.
+
+For v1 only, the profile-locked, fsynced atomic gate-file replacement commits the denied
+epoch/time, null principal, a **complete enumeration** of scoped opaque
+partition and pending intents, the pending identity generations, cleared
+first-install anchors, `eraseDeferred: true` and the original salted
+`deferredPrincipalHash` together. Enumeration may legitimately find **zero**
+files and produce zero intents; it may not be skipped as an empty-intent
+shortcut when files exist. An old handle cannot read despite retained physical
+files. `deferredErase()` returns the durable nonsecret fencing token after
+restart, including the zero-intent case. `pendingPurge()` lists outstanding
+intents, but `purgePending` is true whenever `eraseDeferred` is true **or**
+intents remain. Deferred `recover()`/`erasePending()` do not erase and may
+report `remaining: 0` when enumeration was empty; callers MUST inspect
+`deferredErase()` and never infer completion from that count. Establish/restore
+refuse while the marker or intents remain; `activationAllowed` additionally
+requires a non-null current principal (§2). A plain `deny` from the now-null
+principal is stale.
+
+The CLI permits `--discard-local-changes --revoke`. Only after the
+inventory-bound marker **and its version-specific pre-remote fence** are
+durable does it attempt each exact-CID remote revoke.
+`remotePendingLogout({ principal })` revalidates that same v1 denied
+epoch/hash/null principal, v2 absence of a replacement gate, or v3 exact
+inactive epoch/null principal; it returns false only when no pending remote
+step exists and never authorizes replica delivery.
+While `remotePending: true`,
+`recoverLogoutPending` MUST NOT unlink credentials or erase files; ordinary
+network restore and all replica reads remain fenced. A failed, partial,
+timed-out or interrupted remote sequence returns nonzero and leaves
+`session.json`, `key.json`, the network session, SQLite replicas,
+`pending.json`, owner `device.jwk` and approved unknown files physically
+present. An explicit revoke retry may use that retained session/key only
+for the remaining authoritative exact-CID revokes; already-revoked CIDs
+count as done. No local erase occurs until **all** remote revokes succeed.
+
+Then `completeRemoteLogout({ principal })` revalidates the marker's
+`principalDigest` and the same version-specific fence under the profile lock:
+v1 deferred epoch, salted principal hash and null principal; v2 the orphan
+marker and no replacement gate; v3 incarnation, exact inactive epoch, null
+principal and no `eraseDeferred`. It durably removes `remotePending` only
+after all authoritative remote revokes succeed. This transition means
+**online success**; an explicit plain logout instead uses
+`abandonRemoteLogout` below and never claims a remote receipt. Only a
+cleanup-ready marker permits `recoverLogoutPending` to shred credentials
+and resume erasure. For a v1 deferred gate, a wrong/old/successor token in
+`resumeDeferredErase(token, { signal })` throws `REPLICA_GATED`
+(`stamp_stale`) and erases nothing. Clearing `eraseDeferred` is durable
+**before** ordinary idempotent erasure: a crash before that write remains
+deferred; a crash after it replays by `recover()`. The same v1 token repeats
+safely only while the denied epoch/hash and null principal persist. A
+successor establishment or later denial fences it. The token is not a
+secret bearer credential; the profile lock and gate checks are authoritative.
+
+**CLI-only durable logout fence.** For plain logout, before unlinking either
+credential the CLI calls
+`prepareLogoutPending({ principal, approval?, discardLocalChanges? })`
+under the profile lock; verified successful revoke already has its
+cleanup-ready marker. The facade re-inspects **the exact approved inventory**
+and atomically writes and fsyncs `<profile>/replica-logout-pending.json`.
+With a readable active gate, the scoped v1 marker binds `{ v: 1,
+incarnation, lifecycleEpoch, principalHash }`. Every v1/v2/v3 marker also
+persists a domain-separated SHA-256 `principalDigest` (not secret or a
+replacement for the profile lock), a fresh random 16-byte
+`approvalSalt` as 32 lowercase hex characters, `approvedUnknown`,
+`knownRoots`, `knownEntries`, `missingDatabases` and optional explicit
+`discardLocalChanges: true`. `remotePending: true` and
+`remoteAbandoned: true` are mutually exclusive; absence of discard means
+no consent. The marker is a crash fence and exact inventory approval, not
+an empty list of purge intents or proof of completed denial. A prior
+complete gate denial also fences reads if marker preparation fails; without
+either durable fence credential deletion cannot be reported as safe
+completed logout.
+
+The marker is CLI-only: generic node SQLite storage does not infer a CLI
+session-file layout, while CLI-bound `sqliteReplicaStorage` receives its
+`logoutPendingFile` path. Every CLI-bound guarded read, list, status,
+pending-store operation and replica delivery, including already-open handles,
+checks it before serving; even ungated `inspectStatus` refuses the marker.
+CLI startup refuses network restore or a fresh sign-in while it exists.
+An active gate with a missing `session.json` **without** this marker is not
+logout evidence: fresh sign-in can establish the gate before persisting its
+network session. Never infer abandonment from that absence alone.
+
+With a missing gate and flag-owned files, or a corrupt gate even when its
+roots appear empty, scoped intents cannot be reconstructed without a
+verified gate salt. The CLI uses a **distinct** v2 orphan marker
+`{ v: 2, scope: "orphan_profile", nonce }` with fresh opaque nonce and
+the same approved inventory fields, fsynced before credential unlink.
+Before writing it, the facade validates both roots under the profile lock:
+each must be a real directory inside only the selected profile; a symlink
+or out-of-root path fails even with discard consent. Nonempty pending
+state, unknown layout or indeterminate corrupt gate requires an actionable
+sync-first refusal unless explicit `--discard-local-changes` is supplied
+**before** marker creation. Consent binds only the displayed path/type/
+dev/ino inventory; v2 never invents scoped intents, silently regenerates
+a gate or deletes outside the selected profile. `--keep-replicas` still
+rejects gated profiles and cannot override this boundary.
+
+For a flag-owned identity directory, only a validated `identity.json` and
+a regular `pending.json` whose parsed records are empty certify that local
+writes are absent. A missing/unreadable pending index, a replica database,
+`device.jwk`, `pending-v2.json` or **any** extra/unknown child is
+indeterminate and requires explicit discard consent; an empty old pending
+index does not excuse another child. No nonempty legacy child has a
+reviewed pending index. On Linux, destructive traversal uses only the
+exact kernel `/proc/self/fd/<n>` pinned directory-descriptor path; an
+arbitrary alias or closed descriptor fails closed. On non-Linux, where
+Node lacks equivalent `openat`, preflight `lstat`s **every** named path
+component and refuses symlinks, recording directory and enumerated
+file `dev`/`ino`; cleanup re-`lstat`s the components, directory and file
+identities immediately before **each** unlink. Any mismatch stops without
+following a symlink or deleting the new child. Only the enumerated,
+identity-matched files are unlinked, never a recursive tree; `rmdir` is
+allowed only on an empty approved directory. A hostile same-user rename
+in the narrow interval between final check and unlink remains an accepted
+bounded race under the CLI profile-key/session threat model, **not** a
+claim of equivalent Linux descriptor confinement.
+
+A readable gate that is **already denied** (`principalHash: null`,
+`eraseDeferred: false`) but still has intents or a legacy root uses
+`{ v: 3, scope: "inactive_gate", incarnation, lifecycleEpoch }` plus the
+common inventory fields. It binds the exact current epoch and null
+principal without inventing a principal hash or re-denying the account.
+A successor gate/epoch makes this marker stale before credential deletion.
+For **legacy** children, v1/v2/v3 share the verified read-only v1 mirror
+allowlist and schema check above; source-known children need no discard.
+Any other legacy child is unknown and requires explicit listed-inventory
+discard before v3 is written. Active flag-owned v2/v3 replica and pending
+rules are unchanged: the pending index and its empty-state proof remain
+mandatory. If there are neither intents nor replica roots,
+`prepareLogoutPending` returns null; the no-marker recovery report still
+reads the durable outstanding-intent count under the profile lock. An
+unreadable or corrupt gate instead reports
+`failed: [{ id: "logout", code: "gate_unavailable" }]` and conservative
+nonzero `remaining`, with callbacks/credentials untouched: never
+fabricate a successful zero.
+
+A `null` marker is **not** completed logout: with no replica-owned work
+pending, `recoverLogoutPending` does not call `clearCredentials`. The CLI
+still commits `profile.json.authSignedOut: true` atomically with file and
+directory fsync under the profile lock **before** unlinking and fsyncing
+both credentials, for plain logout and verified successful revoke. At
+startup `authSignedOut: true` itself forbids network restore or implicit
+profile-key sign-in; the CLI finishes any interrupted credential unlink
+and pinned legacy cleanup under the same lock before ordinary commands.
+If the signed-out write fails, retire the in-memory session, report nonzero
+and do not claim crash-safe completion or unlink credentials without
+durable signed-out provenance.
+
+At startup and after marker preparation, the CLI invokes
+`recoverLogoutPending({ signal, clearCredentials, eraseLegacyReplicas })`
+before ordinary network restore. `remotePending: true` is **not**
+cleanup-ready: recovery returns failure/remaining with **no**
+`clearCredentials`, legacy callback, intent replay or local erase.
+After `completeRemoteLogout`, recovery validates the marker (v1
+incarnation/epoch/hash; v2 orphan scope and absence of replacement gate;
+v3 incarnation/exact epoch/null principal), then awaits
+`clearCredentials` under the profile lock. That CLI callback first
+atomically writes and **file+directory fsyncs**
+`profile.json.authSignedOut: true` (absent means false); only then does it
+unlink and fsync **both** `session.json` and `key.json`. It throws on any
+write, fsync or unlink failure. The facade independently verifies both
+credentials absent and fsyncs the profile directory **before** erasing
+replica files.
+
+The facade re-inspects against durable `approvedUnknown`, `knownRoots`,
+`knownEntries` and `missingDatabases`; only previously approved identities
+may still be present on replay, except a source-known **regular**
+`replica.db-wal`, `replica.db-shm` or `replica.db-journal` in a legacy or
+flag-owned replica may be created or change inode during recovery if the
+approved child-directory identity and original `replica.db` dev/ino still
+match. This exception applies only to the recovery check, never the
+pre-action approval or an unknown path, changed database or changed root;
+the lease-fenced remover re-inspects under the profile lock and pins each
+sidecar's **current** identity immediately before nonrecursive unlink.
+For v1, a successful remote revoke already committed generation-fenced
+denial and complete opaque partition/pending intents before any node call.
+A plain logout, or a marker written just before an interrupted pre-remote
+denial, may instead reach cleanup with the original gate still active.
+`recoverLogoutPending` validates that gate against the marker and commits
+generation-fenced denial with the complete scoped intent inventory under
+the profile lock **before** erasing anything. If v1 is already deferred,
+it validates the exact denied epoch/hash and clears deferral for idempotent
+intent replay. For v3 it validates the already-denied epoch and invents no
+principal/intents. V2 validates the orphan marker and absence of a replacement
+gate; it invents no scoped gate/intents. All three pass
+`eraseLegacyReplicas({ discardLocalChanges, approvedUnknown, knownRoots,
+knownEntries, missingDatabases })` to the CLI after credential shredding
+and their version-specific gate or orphan fence. This callback deletes only
+the lease-fenced, identity-matched approved legacy inventory nonrecursively.
+The CLI passes
+only the `replicas`-namespace subset of those arrays to
+`removeProfileReplicas`; the facade retains and validates the **full**
+legacy-and-flag inventory. The facade then replays scoped flag-owned
+intents, erases only approved flag-owned unknowns and source-known control
+residue, verifies both roots absent and fsyncs before clearing the marker.
+A crash before marker clear retries against the same durable inventory.
+
+If a new/changed path is seen **before** marker/denial/remote call, all
+files and credentials remain and no marker or remote request is made.
+If a new/changed path appears **after verified full remote success**,
+cleanup stops with remaining files, the durable marker and
+`authSignedOut: true`; credentials remain shredded and MUST NOT be
+resurrected. Return nonzero with an actionable "cleanup incomplete;
+re-run to finish" outcome. The CLI lists the **fresh** inventory for
+explicit approval; `reapproveLogoutPending({ principal, approval })`
+validates the cleanup-ready marker under the profile lock and fsyncs
+only the new exact path/type/dev/ino approval. It MUST reject
+`remotePending: true`. Recovery then retries without repeating the
+already-completed remote revokes. Missing files from an interrupted
+approved erase are idempotent; new or changed identities are not.
+Any lock, credential deletion, gate write, root erase or marker removal
+failure returns `failed` or nonzero `remaining`; callers return nonzero.
+A stale v1/v3 marker never deletes a successor's credentials; v2 refuses
+a replacement gate.
+
+`authSignedOut` is distinct from transient `replica-logout-pending.json` and
+persists after that marker clears. Ordinary CLI commands and all
+authority-returning session/key readers MUST NOT implicitly sign in with
+the retained `profile.privateKey` or restore a session while it is true.
+An explicitly supplied `--private-key` is a separate headless identity,
+not a way to reuse the stored profile key or clear this flag. Only an
+explicit `auth login` may clear it in a profile-locked durable commit of a
+newly verified session/key; when replica consent is eligible, that commit
+also persists its fresh immutable `replicaStamp`. Replica-stamp refusal gates
+only the replica, never a network-valid explicit login (§1). The Node facade
+deliberately does not parse CLI `ProfileConfig`; the
+`clearCredentials` callback's durable signed-out postcondition is owned
+and crash-tested by the CLI. If it fails, the logout marker stays and
+network restore/replica delivery remain fenced.
+
+**Explicit plain logout after pending or failed `--revoke`.** This is an
+override, not online success. For an already-deferred v1 marker,
+`remotePendingLogout({ principal })` validates its denied fence; an
+interrupted marker-before-deny v1 can still have an active gate, which
+`abandonRemoteLogout` validates under the profile lock without a remote call.
+V2 checks its pinned orphan marker and absence of a replacement gate; v3
+checks its exact inactive epoch and null principal. On the **first**
+plain-logout command the CLI
+obtains and displays a fresh read-only preflight, then calls
+`abandonRemoteLogout({ principal, approval, discardLocalChanges? })`
+under the profile lock. The facade compares the **original** durable
+inventory X with the current inventory Y before considering the supplied
+approval. If X differs from Y, it refuses `REPLICA_GATED/gate_unavailable`
+with Y's paths/identities and an `inventoryApprovalToken`; it changes
+neither marker nor credentials/files, even if this command supplied
+`--discard-local-changes` and an approval for Y. It makes no node call.
+There is no same-command auto-chain to approval. With X unchanged, it
+validates the owner, fresh approval and marker's version-specific fence,
+then atomically replaces `remotePending` with `remoteAbandoned: true`.
+
+The displayed token is the first 16 bytes of SHA-256 in lowercase hex,
+over UTF-8 `tc-logout-approve-v1\0` followed by the canonical JSON array
+`[markerId, approvalSalt, principal, epoch, entries]`. `markerId` is
+`[v, incarnation, lifecycleEpoch, principalDigest]` for v1/v3 and
+`[v, nonce, principalDigest]` for v2; `epoch` is null for v2.
+`approvalSalt` is the random persisted marker field. `entries` contains
+the **full current** unknown and known entries `{path,kind,dev,ino}`,
+known roots represented as `kind: "directory"`, and missing databases
+represented as `{path,kind:"missing",dev:"",ino:""}`, sorted by JavaScript
+UTF-16 code-unit ordinal comparison (`<`/`>`), not locale or UTF-8 byte
+order, by path, kind, dev, then ino. For example, a path beginning U+10000
+sorts **before** one beginning U+E000, although their UTF-8 byte order is
+the reverse. The refusal's typed
+`inventoryApprovalEntries: ProfileReplicaApprovalEntry[]` and message
+display this same token-bound set from one locked preflight. Paths are
+bound by the hash but are not encoded in the visible token. The token is
+a nonsecret confirmation fence, not authority or a substitute for the
+profile lock.
+
+Only a **separate invocation** with both `--discard-local-changes` and
+`--approve-inventory <token>` calls
+`approveChangedPlainLogout({ principal, approval,
+discardLocalChanges: true, inventoryApprovalToken })`. Under the lock it
+rechecks the remote-pending marker, original-X-to-current-Y mismatch,
+principal, the version-specific v1 active/deferred, v2 orphan or v3 inactive
+gate fence, and the exact current preflight, then recomputes the token.
+Missing, mismatched or reused tokens refuse without mutation and
+show a fresh listing/token on inventory change. A match atomically
+persists Y's approved inventory and `remoteAbandoned: true`, never a
+remote receipt. No expiration is imposed on the token; an epoch, marker
+or inventory change invalidates it. TTY and non-TTY use the same two
+commands.
+
+The cleanup-ready marker permits `recoverLogoutPending` to fsync
+`authSignedOut`, shred both credentials and erase only approved inventory,
+with zero further node requests. A crash before marker transition retains
+credentials/files and the remote-pending retry fence; a crash after it
+resumes plain cleanup, not remote revoke. Wrong owner or stale gate
+refuses without erasure. Account switch and consent expiry keep activation
+gated until their prior deferred purge resumes.
+
+`auth logout --keep-replicas` is rejected **before** online work or mutation
+with `INVALID_ARGUMENT` when a read-only inventory finds any gate, partition,
+pending or flag-owned replication state, or cannot prove their absence. The
+legacy-only no-gate case retains its existing behavior; `deferErase` is never
+broadened to implement this flag. No browser gate path uses this exception.
 
 **Startup.** `recover()` runs before anything binds:
 1. browser retries a pending database delete if the marker is set;
@@ -499,7 +889,12 @@ exception does not reopen a TC-1208 sign-out path or weaken plain logout.
    deletes both encryption keys before any replica read/open, then schedules
    erase. `ReplicaEraseReport.consentExpired` is true only after that key-deletion
    commit; failures leave the gate closed;
-4. every outstanding intent is erased.
+4. CLI checks its durable logout marker **before** network restore or any
+   replica binding and completes credential shred/gate conversion/replay as
+   above. Otherwise every outstanding intent is erased, **except** Node/CLI
+   intents held by a durable `eraseDeferred` revoke. Those remain fenced and
+   physically intact until a validated resume or explicit plain-logout,
+   account-switch or expiry override.
 
 It never rejects; leftovers show as `purgePending`. A browser closed through the
 deadline cannot delete keys while closed; the next load checks before serving.

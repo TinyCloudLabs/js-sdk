@@ -634,8 +634,4 @@ export {
   createProfileReplicaPurge,
   REPLICA_LOGOUT_PENDING_FILE,
   assertProfileLogoutClear,
-  type ProfileReplicaLogoutPending,
-  type ProfileReplicaPurge,
-  type ProfileReplicaDeferredToken,
-  type ProfileReplicaApprovalEntry,
 } from "./replication/sqlite";

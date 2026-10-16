@@ -594,6 +594,9 @@ describe.skipIf(NODE_BIN === undefined)("browser replica against a real node", (
     // Session 2: signIn() rotates the session key — G2's issuer differs.
     const owner2 = new TinyCloudNode({ privateKey: OWNER_KEY, host, autoCreateSpace: true });
     await owner2.signIn();
+    // The pinned SQLite node predates TC-899; wait for sign-in's background
+    // registry writes before activating another delegation.
+    await owner2.waitForAccountRegistrySync();
     expect(owner2.did).toBe(owner.did); // the pkh identity is stable
     // Explicit-only abilities never enter the SIWE recap: session 2 must
     // mint its own runtime grant before delegateTo can derive under it.
