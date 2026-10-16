@@ -78,11 +78,12 @@ const provider = { request: async ({ method }: { method: string }) => {
   if (method === "eth_chainId") return "0x1";
   throw new Error("unexpected provider request " + method);
 } };
-const web = await root.TinyCloudWeb.create({
-  provider, sessionStorage, tinycloudHosts: ["https://offline.test"], tinycloudRegistryUrl: null,
+const config = {
+  sessionStorage, tinycloudHosts: ["https://offline.test"], tinycloudRegistryUrl: null,
   autoDiscoverLocalNode: false, includeAccountRegistryPermissions: false, autoBootstrapAccount: false,
   replication: { enabled: true, prefixes: ["notes/"], storage: replicaStorage },
-});
+};
+const web = await root.TinyCloudWeb.create({ ...config, provider });
 const restored = await web.restoreSession(proof.address);
 assert.equal(restored.status, "restored", JSON.stringify(restored));
 const node = (web as any)._node;
@@ -92,6 +93,23 @@ assert.equal(authority.consentAnchor()?.source, "siwe", "signed owner anchor una
 // A full SIWE has a CACAO header. Only compact UCAN grants can directly serve local bytes.
 assert.deepEqual(authority.sessionGrant("notes/"), { refused: "NOT_COVERED" });
 assert.equal(authority.plan("notes/").path, "session", "verified owner cannot plan session-parent mint");
+const otherWallet = { request: async ({ method }: { method: string }) => {
+  if (method === "eth_accounts") return ["0x0000000000000000000000000000000000000001"];
+  if (method === "eth_chainId") return "0x1";
+  throw new Error("unexpected provider request " + method);
+} };
+const mismatched = await root.TinyCloudWeb.create({ ...config, provider: otherWallet });
+assert.equal((await mismatched.restoreSession(proof.address)).status, "restored",
+  "a different connected wallet must not invalidate signed network restoration");
+assert.equal((await mismatched.replication.status())[0].gate, "principal_mismatch",
+  "wallet B must never unlock A's replica");
+const unknown = await root.TinyCloudWeb.create({ ...config, provider: {
+  request: async () => { throw new Error("provider unavailable"); },
+} });
+assert.equal((await unknown.restoreSession(proof.address)).status, "restored",
+  "an unavailable wallet must not invalidate signed network restoration");
+assert.equal((await unknown.replication.status())[0].gate, "gate_unavailable",
+  "an unproven wallet must never unlock A's replica");
 await web.signOut();
 assert("refused" in authority.plan("notes/"), "old authority survived sign-out and key rotation");
 console.log(`${format}: built core+optional signed owner restore, single registration and stale-session fence passed`);

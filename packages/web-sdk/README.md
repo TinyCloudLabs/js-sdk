@@ -82,6 +82,15 @@ wallet. An unknown, unavailable, or different provider account leaves network
 use intact and gates local reads; restoring never creates or repairs a replica
 stamp. Local reads recheck the connected account before returning replica data.
 
+Size accounting uses three separate no-growth ratchets under Bun 1.4.3:
+importing this opt-in entry loads 45,507 B ESM / 65,006 B CJS gzip
+(including the replica parser and noble dependencies); awaiting the IndexedDB
+factory adds 23,081 B / 24,886 B; opening a local replica loads the separately
+metered 818,196 B worker and WASM asset owned by `@tinycloud/replica`.
+The first local open therefore costs about 886,784 B ESM / 908,088 B CJS
+incremental gzip beyond the already-loaded web root; those assets can then be
+cached. The web root keeps its unchanged 388 B ESM / 861 B CJS replica budget.
+
 ## Basic Storage Operations
 
 ### Storing Data
