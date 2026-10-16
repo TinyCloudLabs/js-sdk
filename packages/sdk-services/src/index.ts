@@ -259,6 +259,7 @@ export type {
   ReplicaAccountGate,
   ReplicaBrowserGateAccess,
   ReplicaBrowserGateSnapshot,
+  ReplicaBrowserGateTx,
   ReplicaClock,
   ReplicaAdmitHook,
   ReplicaBrowserPageAdmission,

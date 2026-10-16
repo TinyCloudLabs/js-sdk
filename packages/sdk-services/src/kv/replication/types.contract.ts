@@ -22,6 +22,7 @@ import type {
   ReplicaAccountGate,
   ReplicaBrowserGateAccess,
   ReplicaBrowserGateSnapshot,
+  ReplicaBrowserGateTx,
   ReplicaClock,
   ReplicaDeliveryDecision,
   ReplicaDenyInput,
@@ -83,6 +84,10 @@ type _InspectMayRedact = Assert<
     LocalReplicaStatus | ReplicaInspectedStatus | undefined
   >
 >;
+declare const gatedStorage: ReplicaGatedStorage;
+declare const unstampedSpec: KVReplicaSpec;
+// @ts-expect-error A Phase 2 adapter cannot accept the unstamped Phase 1 spec.
+gatedStorage.open(unstampedSpec);
 type _RedactionIsDiscriminated = Assert<Equal<ReplicaInspectedStatus["redacted"], true>>;
 type _RedactionOmitsAuthority = Assert<
   Equal<"authority" extends keyof ReplicaInspectedStatus ? true : false, false>
@@ -128,6 +133,35 @@ type _PartitionIndexDistinguishesOwner = Assert<
 type _SnapshotShape = Assert<
   Equal<ReplicaGateTx<"tx">["snapshot"], () => Promise<ReplicaGateSnapshot | null>>
 >;
+type _BrowserSnapshotFromGuard = Assert<
+  Equal<
+    ReplicaGateTx<"tx", ReplicaBrowserGateAccess, ReplicaBrowserGateSnapshot>["snapshot"],
+    () => Promise<ReplicaBrowserGateSnapshot | null>
+  >
+>;
+
+// A browser caller derives outside the transaction from a typed snapshot,
+// then passes only prehashed access to run.
+async function browserSnapshotThenRun(
+  gateTx: ReplicaBrowserGateTx<IDBTransaction>,
+  stamp: ReplicaSessionStamp,
+  privateHash: ReplicaPrivateGateHash,
+): Promise<IDBTransactionMode | undefined> {
+  const snapshot = await gateTx.snapshot();
+  if (!snapshot) return undefined;
+  const principalHash = await privateHash(snapshot.gateHmac, "principal", "did:example:owner");
+  return gateTx.run(
+    { stores: ["meta"], mode: "readonly" },
+    {
+      stamp,
+      incarnation: snapshot.incarnation,
+      principalHash,
+      keyId: snapshot.keyId,
+      accountKeyId: snapshot.accountKeyId,
+    },
+    async (tx) => tx.mode,
+  );
+}
 type _NoPublicAssert = Assert<Equal<"assert" extends keyof ReplicaGateTx<"tx"> ? true : false, false>>;
 type _AccessStampRequired = Assert<HasRequiredKey<ReplicaGateAccess, "stamp">>;
 type _DeliverableStampRequired = Assert<
