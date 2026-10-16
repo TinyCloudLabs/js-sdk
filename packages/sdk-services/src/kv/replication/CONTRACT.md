@@ -647,6 +647,8 @@ node-enforced signed `exp` still bounds network use.
 | Installed grant reused at open | only if its stored effective authority is `valid`, it covers the prefix, its `effectiveExpiresAt` is ahead and `now <` the applicable consent deadline |
 | Restored from an older policy | recomputed at open; capped locally |
 
+For a compact delegate with no independently installed matching grant, `replication.sync` rejects with `GRANT_MISSING`; `get`/`list` are network-only; no local bytes are returned and no grant is minted.
+
 **Silent renewal.** `needsSilentRenewal(…)` is true when the remaining lifetime is **strictly** below `RENEW_BELOW_FRACTION × (effectiveExpiresAt − installedAt)` (exactly 25% remaining does not renew) and `now < consentDeadline`. It is false for non-finite inputs.
 - It is checked on a timer, before each sync, and at open.
 - `canRenew` is true **only** for independently verified owner session-key derivation via
