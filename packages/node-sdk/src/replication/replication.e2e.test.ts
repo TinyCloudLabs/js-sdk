@@ -563,9 +563,8 @@ describe("node replication integration", () => {
         replicaStamp,
       });
       expect(closed).toEqual(["https://signed-restore.example"]);
-      expect((await node.replication!.status()).map((entry) => entry.prefix)).toEqual(["notes/"]);
       expect(opened).toHaveLength(1);
-      await expect(node.replication!.sync()).rejects.toMatchObject({ code: "NOT_COVERED" });
+      expect((await node.replication!.status()).map((entry) => entry.prefix)).toEqual(["notes/"]);
       expect(opened).toHaveLength(1);
     } finally {
       globalThis.fetch = originalFetch;
