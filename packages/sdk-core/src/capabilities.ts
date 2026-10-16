@@ -77,6 +77,38 @@ export class CaveatedDelegationUnsupportedError extends Error {
   }
 }
 
+/** Refuses broad revocation authority when issuing a delegation to another signer. */
+export class RevokeGrantDisabledError extends Error {
+  readonly code = "REVOKE_GRANT_DISABLED" as const;
+
+  constructor() {
+    super("Space-root delegation revocation grants are disabled.");
+    this.name = "RevokeGrantDisabledError";
+  }
+}
+
+export function isRootRevocationGrant(
+  path: string,
+  actions: readonly string[],
+  resource?: string,
+  service?: string,
+): boolean {
+  return resource?.startsWith("urn:cid:") !== true &&
+    (path === "" || path === "/" || path === "*") &&
+    actions.some((action) =>
+      ((service === "delegation" || service === "tinycloud.delegation") && action === "revoke") ||
+      actionContains(action, "tinycloud.delegation/revoke"));
+}
+
+export function assertDelegationGrantEnabled(
+  path: string,
+  actions: readonly string[],
+  resource?: string,
+  service?: string,
+): void {
+  if (isRootRevocationGrant(path, actions, resource, service)) throw new RevokeGrantDisabledError();
+}
+
 // ---------------------------------------------------------------------------
 // Space normalization
 // ---------------------------------------------------------------------------

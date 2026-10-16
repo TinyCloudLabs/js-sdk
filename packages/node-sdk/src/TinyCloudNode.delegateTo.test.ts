@@ -294,6 +294,31 @@ describe("TinyCloudNode.delegateTo", () => {
     expect(prepareSessionSpy).not.toHaveBeenCalled();
   });
 
+  test("refuses a later root revoke entry before session-key signing", async () => {
+    const createDelegation = mock(() => ({
+      delegation: "fake-ucan-delegation",
+      cid: "bafyfakeucan",
+      delegateDid: BOB_DID,
+      expiry: Math.floor((Date.now() + 3600_000) / 1000),
+      resources: [{ service: "kv", space: "space://test", path: "items/", actions: ["tinycloud.kv/get"] }],
+    }));
+    const wasm = makeFakeWasmBindings({
+      parseRecapFromSiwe: mock(() => [
+        { service: "kv", space: "default", path: "items/", actions: ["tinycloud.kv/get"] },
+        { service: "delegation", space: "default", path: "", actions: ["tinycloud.delegation/revoke"] },
+      ]),
+      createDelegation,
+    });
+    const node = new TinyCloudNode({ wasmBindings: wasm });
+    installFakeSession(node, { siwe: buildSiwe(futureExpiry) });
+
+    await expect(node.delegateTo(BOB_DID, [
+      { service: "tinycloud.kv", space: "default", path: "items/", actions: ["tinycloud.kv/get"] },
+      { service: "tinycloud.delegation", space: "default", path: "", actions: ["tinycloud.delegation/revoke"] },
+    ])).rejects.toMatchObject({ code: "REVOKE_GRANT_DISABLED" });
+    expect(createDelegation).not.toHaveBeenCalled();
+  });
+
   test("missing caps → PermissionNotInManifestError, no WASM or wallet call", async () => {
     // Granted set covers kv/get only. Requesting kv/put should miss.
     const parseSpy = mock(() => [

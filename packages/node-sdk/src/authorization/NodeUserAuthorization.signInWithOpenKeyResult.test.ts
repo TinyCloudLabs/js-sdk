@@ -151,6 +151,34 @@ async function buildAuthWithPreparedSession() {
   return { auth, signer, wasm, preparation };
 }
 
+test("prepared sign-in refuses account-root revocation before presenting a message", async () => {
+  const signer = new PrivateKeySigner(PRIVATE_KEY);
+  const auth = new NodeUserAuthorization({
+    signer,
+    wasmBindings: new NodeWasmBindings(),
+    signStrategy: { type: "auto-sign" },
+    domain: "example.com",
+    tinycloudHosts: ["https://tinycloud.test"],
+    sessionStorage: new MemorySessionStorage(),
+    manifest: {
+      manifest_version: 1,
+      app_id: "xyz.tinycloud.account",
+      name: "Account",
+      defaults: false,
+      permissions: [{
+        service: "tinycloud.delegation",
+        space: "account",
+        path: "",
+        actions: ["revoke"],
+        skipPrefix: true,
+      }],
+    },
+  });
+  await expect(auth.prepareSessionForSigning()).rejects.toMatchObject({
+    code: "REVOKE_GRANT_DISABLED",
+  });
+});
+
 test("signInWithOpenKeyResult accepts an unmodified signed prepared SIWE", async () => {
   const { auth, signer, preparation } = await buildAuthWithPreparedSession();
   const signature = await signer.signMessage(preparation.prepared.siwe);

@@ -43,6 +43,8 @@ import { SERVICE_LONG_TO_SHORT, type PermissionEntry } from "../manifest";
 import { principalDid } from "../identity";
 import {
   actionContains,
+  isRootRevocationGrant,
+  RevokeGrantDisabledError,
   CaveatedDelegationUnsupportedError,
   recapCaveatsEqual,
 } from "../capabilities";
@@ -671,6 +673,12 @@ export class SharingService implements ISharingService {
     const fullPath = this.pathPrefix
       ? `${this.pathPrefix}/${params.path}`.replace(/\/+/g, "/") // Normalize slashes
       : params.path;
+    if (isRootRevocationGrant(fullPath, actions)) {
+      return {
+        ok: false,
+        error: createError(DelegationErrorCodes.REVOKE_GRANT_DISABLED, new RevokeGrantDisabledError().message),
+      };
+    }
 
     // Only base64 schema is implemented in v1
     if (schema !== "base64") {
@@ -1381,6 +1389,12 @@ export class SharingService implements ISharingService {
           DelegationErrorCodes.PERMISSION_DENIED,
           "Requested actions exceed the sharing-link capability"
         ),
+      };
+    }
+    if (isRootRevocationGrant(path, actions)) {
+      return {
+        ok: false,
+        error: createError(DelegationErrorCodes.REVOKE_GRANT_DISABLED, new RevokeGrantDisabledError().message),
       };
     }
 

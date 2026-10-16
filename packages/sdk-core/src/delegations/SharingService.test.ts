@@ -133,6 +133,22 @@ describe("SharingService authority space comparison", () => {
 });
 
 describe("SharingService.delegateReceivedShare", () => {
+  test("does not sign a root revocation child of a received share", async () => {
+    const { service, createDelegationWasm, fetch } = makeService();
+    const link = service.decodeLink(shareLink(service));
+    link.path = "/";
+    link.delegation.path = "/";
+    link.delegation.actions = ["tinycloud.delegation/revoke"];
+    const result = await service.delegateReceivedShare(service.encodeLink(link), {
+      delegateDID: "did:key:z6MkFeedHost",
+      path: "/",
+      actions: ["tinycloud.delegation/revoke"],
+    });
+    expect(result).toMatchObject({ ok: false, error: { code: "REVOKE_GRANT_DISABLED" } });
+    expect(createDelegationWasm).not.toHaveBeenCalled();
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
   test("creates and registers a strict child without returning parent key material", async () => {
     const { service, createDelegationWasm, fetch } = makeService();
     const result = await service.delegateReceivedShare(shareLink(service), {

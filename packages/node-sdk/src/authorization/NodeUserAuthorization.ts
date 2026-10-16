@@ -23,6 +23,7 @@ import {
   Manifest,
   ComposedManifestRequest,
   AbilitiesMap,
+  assertDelegationGrantEnabled,
   DEFAULT_MANIFEST_SPACE,
   ENCRYPTION_PERMISSION_SERVICE,
   composeManifestRequest,
@@ -978,6 +979,37 @@ export class NodeUserAuthorization implements IUserAuthorization {
     };
   }
 
+  private assertAbilitiesGrantEnabled(map: AbilitiesMap): void {
+    for (const service in map) {
+      if (!Object.prototype.hasOwnProperty.call(map, service)) continue;
+      const paths = map[service];
+      for (const path in paths) {
+        if (!Object.prototype.hasOwnProperty.call(paths, path)) continue;
+        assertDelegationGrantEnabled(path, paths[path], undefined, service);
+      }
+    }
+  }
+
+  private assertSessionGrantEnabled(
+    abilities: AbilitiesMap,
+    spaceAbilities: Record<string, AbilitiesMap> | undefined,
+    siwe: string,
+  ): void {
+    this.assertAbilitiesGrantEnabled(abilities);
+    if (spaceAbilities) {
+      for (const space in spaceAbilities) {
+        if (Object.prototype.hasOwnProperty.call(spaceAbilities, space) && spaceAbilities[space] !== abilities) {
+          this.assertAbilitiesGrantEnabled(spaceAbilities[space]);
+        }
+      }
+    }
+    if (siwe.includes("urn:recap:")) {
+      for (const entry of this.wasm.parseRecapFromSiwe(siwe)) {
+        assertDelegationGrantEnabled(entry.path, entry.actions, entry.space);
+      }
+    }
+  }
+
   /**
    * Build SIWE overrides from the top-level nonce and siweConfig.
    * - Top-level `nonce` is seeded first so `siweConfig.nonce` wins if both are set.
@@ -1360,6 +1392,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
       jwk,
       ...this.buildSiweOverrides(),
     });
+    this.assertSessionGrantEnabled(abilities, spaceAbilities, prepared.siwe);
     const signature = await this.requestSignature({
       address,
       chainId,
@@ -1450,6 +1483,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
       jwk,
       ...this.buildSiweOverrides(options),
     });
+    this.assertSessionGrantEnabled(capabilityPlan.abilities, capabilityPlan.spaceAbilities, prepared.siwe);
 
     // Sign the SIWE message from prepareSession (NOT a separately generated SIWE)
     const signature = await this.requestSignature({
@@ -1674,6 +1708,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
       jwk,
       ...this.buildSiweOverrides(),
     });
+    this.assertSessionGrantEnabled(capabilityPlan.abilities, capabilityPlan.spaceAbilities, prepared.siwe);
 
     return {
       prepared,

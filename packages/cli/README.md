@@ -102,6 +102,9 @@ tc space create
 tc delegation create --to did:pkh:eip155:1:0x...
 ```
 
+Delegation creation returns `REVOKE_GRANT_DISABLED` for restricted high-privilege
+abilities. `tc delegation revoke <cid>` still revokes an existing grant.
+
 ## Commands
 
 | Command | Description |

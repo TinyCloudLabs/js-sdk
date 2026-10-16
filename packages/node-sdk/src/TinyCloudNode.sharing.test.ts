@@ -450,6 +450,41 @@ describe("TinyCloudNode sharing", () => {
     expect(payload.prf).toEqual([session.delegationCid]);
   });
 
+  test("owner signing refuses root wildcard revoke authority in a later resource", async () => {
+    const wasmBindings = makeWasmBindings();
+    globalThis.fetch = mock(async () => new Response(JSON.stringify({
+      cid: "commit-event-cid",
+      activated: ["share-delegation-cid"],
+      skipped: [],
+    }), { status: 200, headers: { "content-type": "application/json" } }));
+    const signer = {
+      getAddress: async () => OWNER,
+      getChainId: async () => 1,
+      signMessage: mock(async () => "signature"),
+    };
+    const node = new TinyCloudNode({
+      host: "https://node.example",
+      signer,
+      wasmBindings,
+    });
+    Object.assign(node, {
+      _restoredTcSession: { address: OWNER, chainId: 1, spaceId: SPACE },
+    });
+    const expiresAt = new Date(Date.now() + 60 * 60 * 1000);
+
+    await expect(node.createOwnerDelegation({
+      delegateDid: "did:key:z6MkExternalCaller",
+      spaceId: SPACE,
+      permissions: [
+        { service: "tinycloud.kv", path: "shares/document", actions: ["tinycloud.kv/get"] },
+        { service: "tinycloud.delegation", path: "/", actions: ["tinycloud.delegation/*"] },
+      ],
+      expiresAt,
+    })).rejects.toMatchObject({ code: "REVOKE_GRANT_DISABLED" });
+    expect(signer.signMessage).not.toHaveBeenCalled();
+    expect(wasmBindings.prepareSession).not.toHaveBeenCalled();
+  });
+
   test("public owner delegation is wallet-rooted, caller-targeted, expiring, and returns raw receipt identities", async () => {
     const wasmBindings = makeWasmBindings();
     globalThis.fetch = mock(async () => ({

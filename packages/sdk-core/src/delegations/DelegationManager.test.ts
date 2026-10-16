@@ -2,6 +2,61 @@ import { describe, expect, mock, test } from "bun:test";
 import type { ServiceSession } from "@tinycloud/sdk-services";
 import { DelegationManager } from "./DelegationManager";
 
+describe("DelegationManager.create", () => {
+  test.each(["tinycloud.delegation/revoke", "tinycloud.delegation/*", "*"])(
+    "refuses a root grant containing %s before invoking the node",
+    async (action) => {
+      const invoke = mock(() => ({ Authorization: "unused" }));
+      const fetch = mock(async () => new Response(JSON.stringify({ cid: "bafy-created" }), { status: 200 }));
+      const manager = new DelegationManager({
+        hosts: ["https://node.tinycloud.xyz"],
+        session: { spaceId: "space" } as ServiceSession,
+        invoke,
+        fetch,
+      });
+
+      const result = await manager.create({
+        delegateDID: "did:key:z6MkRecipient",
+        path: "/",
+        actions: [action],
+      });
+
+      expect(result).toMatchObject({
+        ok: false,
+        error: { code: "REVOKE_GRANT_DISABLED" },
+      });
+      expect(invoke).not.toHaveBeenCalled();
+      expect(fetch).not.toHaveBeenCalled();
+    },
+  );
+
+  test("leaves path-scoped revoke and root read grants issuable", async () => {
+    const invoke = mock(() => ({ Authorization: "create" }));
+    const fetch = mock(async () => new Response(JSON.stringify({ cid: "bafy-created" }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    }));
+    const manager = new DelegationManager({
+      hosts: ["https://node.tinycloud.xyz"],
+      session: { spaceId: "space" } as ServiceSession,
+      invoke,
+      fetch,
+    });
+
+    expect((await manager.create({
+      delegateDID: "did:key:z6MkRecipient",
+      path: "documents/",
+      actions: ["tinycloud.delegation/revoke"],
+    })).ok).toBe(true);
+    expect((await manager.create({
+      delegateDID: "did:key:z6MkRecipient",
+      path: "/",
+      actions: ["tinycloud.kv/get"],
+    })).ok).toBe(true);
+    expect(fetch).toHaveBeenCalledTimes(2);
+  });
+});
+
 describe("DelegationManager.revoke", () => {
   test("cryptographically binds the target CID and uses the node revocation endpoint", async () => {
     const session = {

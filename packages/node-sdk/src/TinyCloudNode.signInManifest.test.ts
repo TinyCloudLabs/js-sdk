@@ -312,6 +312,60 @@ function stubAuthNetworkCalls(node: TinyCloudNode): void {
 // ---------------------------------------------------------------------------
 
 describe("TinyCloudNode.signIn — manifest-driven recap", () => {
+  test.each(["manifest", "capabilityRequest"] as const)(
+    "refuses account-root revoke in a custom %s before wallet signing",
+    async (source) => {
+      const signer = {
+        getAddress: async () => "0x0000000000000000000000000000000000000001",
+        getChainId: async () => 1,
+        signMessage: mock(async () => { throw new Error("SIGNER_REACHED"); }),
+      };
+      const permission = {
+        service: "tinycloud.delegation",
+        space: "account",
+        path: "",
+        actions: ["tinycloud.delegation/revoke"],
+        skipPrefix: true,
+      };
+      const config = source === "manifest"
+        ? { manifest: { app_id: "xyz.tinycloud.account", name: "Account", defaults: false, permissions: [permission] } }
+        : { capabilityRequest: {
+          manifests: [], resources: [permission], delegationTargets: [],
+          registryRecords: [], expiryMs: 60_000, includePublicSpace: false,
+        } };
+      const node = makeNodeWithSigner(makeFakeWasmBindings(), { ...config, signer });
+      await expect(node.signIn()).rejects.toMatchObject({ code: "REVOKE_GRANT_DISABLED" });
+      expect(signer.signMessage).not.toHaveBeenCalled();
+    },
+  );
+
+  test("refuses a short revoke action in a custom capability request", async () => {
+    const signer = {
+      getAddress: async () => "0x0000000000000000000000000000000000000001",
+      getChainId: async () => 1,
+      signMessage: mock(async () => { throw new Error("SIGNER_REACHED"); }),
+    };
+    const node = makeNodeWithSigner(makeFakeWasmBindings(), {
+      signer,
+      capabilityRequest: {
+        manifests: [],
+        resources: [{
+          service: "tinycloud.delegation",
+          space: "account",
+          path: "",
+          actions: ["revoke"],
+          skipPrefix: true,
+        }],
+        delegationTargets: [],
+        registryRecords: [],
+        expiryMs: 60_000,
+        includePublicSpace: false,
+      },
+    });
+    await expect(node.signIn()).rejects.toMatchObject({ code: "REVOKE_GRANT_DISABLED" });
+    expect(signer.signMessage).not.toHaveBeenCalled();
+  });
+
   test("sessionDid follows the active key across repeated signIn calls", async () => {
     const wasm = makeFakeWasmBindings();
     const node = makeNodeWithSigner(wasm, {

@@ -97,7 +97,7 @@ async function revoke(cid: string) {
   try {
     await program.parseAsync(["node", "tc", "--profile", profileName, "delegation", "revoke", cid, "--yes"], { from: "node" });
   } catch (error) {
-    if (!(error instanceof Error && "cliExitCode" in error && error.cliExitCode === 5)) throw error;
+    if (!(error instanceof Error && "cliExitCode" in error && [1, 3, 5].includes(error.cliExitCode as number))) throw error;
   } finally {
     stdout.mockRestore();
     stderr.mockRestore();
@@ -144,24 +144,34 @@ async function grantThroughCli() {
     await ProfileManager.setProfile(profileName, owner);
   }
   const artifacts = await loadLocalGrantArtifacts(profileName);
-  expect(artifacts).toHaveLength(1);
-  const delegation = artifacts[0]!.delegation;
+  const delegation = artifacts.at(-1)?.delegation;
+  if (!delegation) throw new Error("CLI did not persist the signed grant");
   await fixture.delegate.useRuntimeDelegation({ ...delegation, expiry: new Date(delegation.expiry) });
   return delegation;
 }
 
-test("owner OpenKey asks only for a signed CID-bound owner space, then revokes", async () => {
+test("session-only OpenKey profile refuses fallback without requesting a root grant", async () => {
   const delegation = await grantThroughCli();
   const before = fixture.nativeBearerStats().revocations;
   const response = await revoke(delegation.cid);
-  expect(response).toMatchObject({ cid: delegation.cid, revoked: true, authorityScopeSource: "local-signed-grant-artifact" });
-  expect(openKey.requests).toHaveLength(1);
-  expect(openKey.requests[0]).toEqual(expect.arrayContaining([
-    expect.objectContaining({ service: "tinycloud.delegation", space: delegation.spaceId, actions: ["tinycloud.delegation/revoke"] }),
-    expect.objectContaining({ service: "tinycloud.capabilities", space: delegation.spaceId, actions: ["tinycloud.capabilities/read"] }),
-  ]));
-  expect(openKey.requests[0]?.some((permission) => permission.space?.startsWith("urn:cid:"))).toBe(false);
-  expect(openKey.refusals).toEqual([]);
+  expect(response).toMatchObject({ error: { code: "OWNER_SIGNATURE_REQUIRED" } });
+  expect(openKey.requests).toEqual([]);
+  expect(fixture.nativeBearerStats().revocations).toBe(before);
+});
+
+test("local owner key directly revokes a CID-bound grant", async () => {
+  const delegation = await grantThroughCli();
+  const profile = await ProfileManager.getProfile(profileName);
+  await ProfileManager.setProfile(profileName, {
+    ...profile, authMethod: "local", posture: "local-owner-key", privateKey: fixture.ownerPrivateKey,
+  });
+  const before = fixture.nativeBearerStats().revocations;
+  const response = await revoke(delegation.cid);
+  expect(response).toMatchObject({
+    cid: delegation.cid, revoked: true, authorityScopeSource: "cid-resource",
+    authorityScopeReason: "The owner signed a revocation bound to the exact delegation CID.",
+  });
+  expect(openKey.requests).toEqual([]);
   expect(fixture.nativeBearerStats().revocations).toBe(before + 1);
 });
 

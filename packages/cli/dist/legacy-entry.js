@@ -21758,9 +21758,18 @@ async function revokeDelegationOnNode(params) {
       }
     }
   }
-  let authorityScopeSource = "cid-resource";
-  let authorityScopeReason = "The revoke authority is scoped to the exact delegation CID.";
-  let fallbackSpaceId;
+  if (profile.authMethod === "local" && profile.privateKey) {
+    await node.revokeDelegationAsOwner(cid);
+    return {
+      cid,
+      revoked: true,
+      targetSpaceSource,
+      authorityScopeSource: "cid-resource",
+      authorityScopeReason: "The owner signed a revocation bound to the exact delegation CID."
+    };
+  }
+  const authorityScopeSource = "cid-resource";
+  const authorityScopeReason = "The revoke authority is scoped to the exact delegation CID.";
   let commandAuthorityCid;
   if (!rawAuthorityCovered) {
     try {
@@ -21796,34 +21805,14 @@ async function revokeDelegationOnNode(params) {
           ExitCode.PERMISSION_DENIED
         );
       }
-      fallbackSpaceId = fallback.space;
-      authorityScopeSource = fallback.source;
-      authorityScopeReason = fallback.source === "local-signed-grant-artifact" ? "Raw-CID revoke authority could not be issued; the fallback space came from an owner-signed local grant whose Authorization recomputes to this CID." : "Raw-CID revoke authority could not be issued; the fallback space came from a locally verified owner-signed stored grant bound to this CID.";
-      targetSpaceSource = fallback.source;
-      const acquired = await ensureDelegationAuthority({
-        ctx,
-        profile,
-        node,
-        requested: [{
-          service: "tinycloud.delegation",
-          space: profile.authMethod !== "openkey" && fallback.space === node.accountSpaceId ? "default" : fallback.space,
-          path: "",
-          actions: ["tinycloud.delegation/revoke"]
-        }],
-        expiryOption: void 0,
-        reason: `Revoke delegation ${cid} using its CID-bound owner-signed grant ${fallback.source === "local-stored-grant" ? "record" : "artifact"}`,
-        yes: params.yes,
-        consentAlreadyGiven: true,
-        persist: false,
-        openKeyAcquisition: params.openKeyAcquisition
-      });
-      commandAuthorityCid = acquired?.cid;
+      throw new CLIError(
+        "OWNER_SIGNATURE_REQUIRED",
+        "This profile cannot sign a direct owner revocation. Revoke from account.tinycloud.xyz/delegations or with a local owner key.",
+        ExitCode.AUTH_REQUIRED
+      );
     }
   }
-  const result = fallbackSpaceId ? await node.delegationManager.revoke(cid, {
-    targetSpaceId: fallbackSpaceId,
-    ...commandAuthorityCid === void 0 ? {} : { authorityCid: commandAuthorityCid }
-  }) : commandAuthorityCid === void 0 ? await node.revokeDelegation(cid) : await node.delegationManager.revoke(cid, { authorityCid: commandAuthorityCid });
+  const result = commandAuthorityCid === void 0 ? await node.revokeDelegation(cid) : await node.delegationManager.revoke(cid, { authorityCid: commandAuthorityCid });
   if (!result.ok) {
     if (result.error.meta?.status === 403 && result.error.message === "Failed to revoke delegation: 403 - Unauthorized Revoker") {
       const profileDid = profile.ownerDid ?? ownerDidFromSpace(node.accountSpaceId) ?? ownerDidFromSpace(profile.spaceId) ?? "unknown";
@@ -23907,7 +23896,7 @@ function registerDelegationCommand(program, configuration = {}) {
       return handleError(error);
     }
   });
-  delegation.command("revoke <cid>").description("Revoke a delegation").option("--yes", "Skip local-key TTY confirmation", false).action(async (cid, options, cmd) => {
+  delegation.command("revoke <cid>").description("Revoke a delegation").addHelpText("after", "\n  If this profile cannot sign an owner revocation, use account.tinycloud.xyz/delegations or a local owner key.\n").option("--yes", "Skip local-key TTY confirmation", false).action(async (cid, options, cmd) => {
     try {
       const globalOpts = cmd.optsWithGlobals();
       const ctx = await ProfileManager.resolveContext(globalOpts);
