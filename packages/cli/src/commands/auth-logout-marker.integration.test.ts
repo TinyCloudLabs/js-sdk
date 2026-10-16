@@ -67,7 +67,7 @@ test("a crash immediately after durable marker write removes both credentials be
   expect((await readGateSnapshot(paths.dir))?.principalHash).toBeNull();
 }, 30_000);
 
-test("orphan v2 marker refuses a corrupt replacement gate before credential or legacy cleanup", async () => {
+async function v2OrphanFixture(remoteCompleted = false) {
   const home = await mkdtemp(join(tmpdir(), "tc858-orphan-replacement-cli-"));
   homes.push(home);
   const networkPaths: string[] = [];
@@ -105,6 +105,7 @@ test("orphan v2 marker refuses a corrupt replacement gate before credential or l
   } finally {
     await store.close();
   }
+  const originalGate = await readFile(paths.gate);
   await writeFile(paths.gate, "{original-corrupt");
   const purge = createProfileReplicaPurge({
     profileDir: paths.dir,
@@ -112,36 +113,107 @@ test("orphan v2 marker refuses a corrupt replacement gate before credential or l
       withTinyCloudStateRoot(home, () => withProfileLock(PROFILE, section, { requireProfile: true })),
   });
   const approval = await purge.preflightLogout({ principal: ownerDid, discardLocalChanges: true });
-  expect(await purge.prepareLogoutPending({ principal: ownerDid, approval, discardLocalChanges: true }))
-    .toMatchObject({ v: 2, scope: "orphan_profile" });
+  expect(await purge.prepareLogoutPending({
+    principal: ownerDid, approval, discardLocalChanges: true,
+    ...(remoteCompleted ? { remotePending: true as const } : {}),
+  })).toMatchObject({ v: 2, scope: "orphan_profile" });
+  if (remoteCompleted) {
+    expect(await purge.completeRemoteLogout({ principal: ownerDid }))
+      .toMatchObject({ v: 2, scope: "orphan_profile" });
+  }
   await expect(readFile(paths.gate)).rejects.toMatchObject({ code: "ENOENT" });
-  await writeFile(paths.gate, "{replacement-corrupt");
-  const marker = await readFile(paths.marker);
-  const sessionBefore = await readFile(paths.session);
-  const keyBefore = await readFile(paths.key);
-  const dbBefore = await readFile(paths.db);
-  const requestsBefore = networkPaths.length;
+  return { home, paths, networkPaths, originalGate };
+}
 
-  const refused = await run(home, ["auth", "status"]);
-  expect(refused.exitCode).toBeGreaterThan(0);
-  expect(refused.stderr).toMatch(/REPLICA_GATED|gate_unavailable/i);
-  expect(networkPaths).toHaveLength(requestsBefore);
-  expect(await readFile(paths.marker)).toEqual(marker);
-  expect(await readFile(paths.session)).toEqual(sessionBefore);
-  expect(await readFile(paths.key)).toEqual(keyBefore);
-  expect(await readFile(paths.db)).toEqual(dbBefore);
-  expect(await readFile(paths.gate, "utf8")).toBe("{replacement-corrupt");
-  expect(JSON.parse(await readFile(join(paths.dir, "profile.json"), "utf8")).authSignedOut).not.toBe(true);
-
-  await rm(paths.gate);
+test("orphan v2 without a replacement gate completes ordinary startup cleanup", async () => {
+  const { home, paths, networkPaths } = await v2OrphanFixture();
+  const before = networkPaths.length;
   const recovered = await run(home, ["auth", "status"]);
   expect(recovered.exitCode, recovered.stderr).toBe(0);
-  expect(networkPaths).toHaveLength(requestsBefore);
+  expect(networkPaths).toHaveLength(before);
   for (const path of [paths.marker, paths.session, paths.key, paths.db, paths.gate]) {
     await expect(readFile(path)).rejects.toMatchObject({ code: "ENOENT" });
   }
   expect(JSON.parse(await readFile(join(paths.dir, "profile.json"), "utf8")).authSignedOut).toBe(true);
 }, 30_000);
+
+for (const mode of ["plain", "remote-completed"] as const)
+  for (const replacement of ["corrupt", "unreadable"] as const)
+    test(`orphan v2 ${mode} startup refuses an early ${replacement} replacement before credential or legacy cleanup`, async () => {
+      const { home, paths, networkPaths } = await v2OrphanFixture(mode === "remote-completed");
+      if (replacement === "corrupt") await writeFile(paths.gate, "{replacement-corrupt");
+      else await mkdir(paths.gate);
+      const marker = await readFile(paths.marker);
+      const sessionBefore = await readFile(paths.session);
+      const keyBefore = await readFile(paths.key);
+      const dbBefore = await readFile(paths.db);
+      const requestsBefore = networkPaths.length;
+
+      const refused = await run(home, ["auth", "status"]);
+      expect(refused.exitCode).toBeGreaterThan(0);
+      expect(refused.stderr).toMatch(/REPLICA_PURGE_FAILED|gate_unavailable/i);
+      expect(networkPaths).toHaveLength(requestsBefore);
+      expect(await readFile(paths.marker)).toEqual(marker);
+      expect(await readFile(paths.session)).toEqual(sessionBefore);
+      expect(await readFile(paths.key)).toEqual(keyBefore);
+      expect(await readFile(paths.db)).toEqual(dbBefore);
+      if (replacement === "corrupt") expect(await readFile(paths.gate, "utf8")).toBe("{replacement-corrupt");
+      expect(JSON.parse(await readFile(join(paths.dir, "profile.json"), "utf8")).authSignedOut).not.toBe(true);
+
+      await rm(paths.gate, { recursive: true });
+      const recovered = await run(home, ["auth", "status"]);
+      expect(recovered.exitCode, recovered.stderr).toBe(0);
+      expect(networkPaths).toHaveLength(requestsBefore);
+      for (const path of [paths.marker, paths.session, paths.key, paths.db, paths.gate]) {
+        await expect(readFile(path)).rejects.toMatchObject({ code: "ENOENT" });
+      }
+      expect(JSON.parse(await readFile(join(paths.dir, "profile.json"), "utf8")).authSignedOut).toBe(true);
+    }, 30_000);
+
+for (const mode of ["plain", "remote-completed"] as const)
+  for (const replacement of ["corrupt", "valid"] as const)
+    test(`orphan v2 ${mode} retry refuses a late ${replacement} replacement after credential shred`, async () => {
+      const { home, paths, networkPaths, originalGate } = await v2OrphanFixture(mode === "remote-completed");
+      const store = await SqliteReplicaStore.open(join(paths.dir, "replicas", "notes"), { create: false });
+      await store.open();
+      const lease = await store.acquireSyncLease(60_000);
+      expect(lease).not.toBeNull();
+      try {
+        const busy = await run(home, ["auth", "status"]);
+        expect(busy.exitCode).toBeGreaterThan(0);
+        expect(busy.stderr).toContain("REPLICA_BUSY");
+        expect(await Bun.file(paths.marker).exists()).toBe(true);
+        await expect(readFile(paths.session)).rejects.toMatchObject({ code: "ENOENT" });
+        await expect(readFile(paths.key)).rejects.toMatchObject({ code: "ENOENT" });
+        expect(await Bun.file(paths.db).exists()).toBe(true);
+        expect(JSON.parse(await readFile(join(paths.dir, "profile.json"), "utf8")).authSignedOut).toBe(true);
+      } finally {
+        await store.releaseLease(lease!);
+        await store.close();
+      }
+      const marker = await readFile(paths.marker);
+      const replacementBytes = replacement === "corrupt" ? Buffer.from("{replacement-corrupt") : originalGate;
+      await writeFile(paths.gate, replacementBytes);
+      const requestsBefore = networkPaths.length;
+
+      const refused = await run(home, ["auth", "status"]);
+      expect(refused.exitCode).toBeGreaterThan(0);
+      expect(refused.stderr).toContain(replacement === "corrupt" ? "gate_unavailable" : "stamp_stale");
+      expect(networkPaths).toHaveLength(requestsBefore);
+      expect(await readFile(paths.marker)).toEqual(marker);
+      await expect(readFile(paths.session)).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(readFile(paths.key)).rejects.toMatchObject({ code: "ENOENT" });
+      expect(await Bun.file(paths.db).exists()).toBe(true);
+      expect(await readFile(paths.gate)).toEqual(replacementBytes);
+
+      await rm(paths.gate);
+      const recovered = await run(home, ["auth", "status"]);
+      expect(recovered.exitCode, recovered.stderr).toBe(0);
+      expect(networkPaths).toHaveLength(requestsBefore);
+      for (const path of [paths.marker, paths.session, paths.key, paths.db, paths.gate]) {
+        await expect(readFile(path)).rejects.toMatchObject({ code: "ENOENT" });
+      }
+    }, 30_000);
 
 for (const layout of ["unknown-child", "missing-pending"] as const) test(
   `orphan ${layout} refuses plain logout until explicit discard, then shreds both credentials and root`,
