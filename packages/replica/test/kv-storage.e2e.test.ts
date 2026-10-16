@@ -712,7 +712,7 @@ describe.skipIf(!RUN)("kv-storage over a fake feed (Chromium)", () => {
     expect(await other.evaluate(() => window.__kv.sync("h", 2))).toMatchObject({ ok: false, code: "REPLICA_GATED" });
     expect(await other.evaluate(([jwt]) => window.__kv.installGrant("h", jwt), [grantFor(deviceDid)] as const)).toMatchObject({ ok: false, code: "REPLICA_GATED" });
   }, 60_000);
-  test("production deny records both partition and pending intents before two-tab erase", async () => {
+  test("production deny leaves durable intents for fresh-tab recovery and gates the stale tab", async () => {
     feed("deny-erase").put("notes/a", "private");
     const current = await kvPage();
     await current.evaluate(() => window.__kv.createStorage("s", "fake"));
@@ -727,13 +727,19 @@ describe.skipIf(!RUN)("kv-storage over a fake feed (Chromium)", () => {
 
     expect(await current.evaluate((principal) => window.__kv.productionDeny(principal), PRINCIPAL))
       .toMatchObject({ status: "denied", intents: 2 });
-    expect((await current.evaluate(() => window.__kv.productionPending())).map((intent) => intent.kind).sort())
-      .toEqual(["partition", "pending"]);
+    const intents = await current.evaluate(() => window.__kv.productionPending());
+    expect(intents.map((intent) => intent.kind).sort()).toEqual(["partition", "pending"]);
     const beforeErase = await current.evaluate(() => window.__kv.dump());
     expect(Object.values(beforeErase.entries ?? {}).reduce((sum, count) => sum + count, 0)).toBeGreaterThan(0);
     expect(Object.values(beforeErase.pending ?? {}).reduce((sum, count) => sum + count, 0)).toBe(1);
 
-    expect(await current.evaluate(() => window.__kv.productionPurge())).toMatchObject({ failed: [], remaining: 0 });
+    const fresh = await kvPage();
+    const recovered = await fresh.evaluate(() => window.__kv.recoverAt(Date.now()));
+    expect(recovered).toMatchObject({
+      report: { failed: [], remaining: 0 },
+      keys: { gateHmac: false, accountKey: false },
+    });
+    expect(recovered.report.erased.sort()).toEqual(intents.map((intent) => intent.id).sort());
     const afterErase = await current.evaluate(() => window.__kv.dump());
     for (const store of ["entries", "blobs", "pending", "partitions", "purgeIntents"]) {
       expect(Object.values(afterErase[store] ?? {}).reduce((sum, count) => sum + count, 0)).toBe(0);

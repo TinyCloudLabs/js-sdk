@@ -103,9 +103,8 @@ const api = {
     const report = await createIndexedDbLifecycle({ now: () => at }).recover({ signal: new AbortController().signal });
     return { report, keys: await inspectReplicaKeyPresence() };
   },
-  /** Production deny/erase over the same test gate's real IndexedDB rows. */
+  /** Production deny and intent inspection over the test gate's real IndexedDB rows. */
   productionDeny: (principal: string) => createIndexedDbLifecycle().deny({ reason: "sign_out", principal }),
-  productionPurge: () => createIndexedDbLifecycle().erasePending({ signal: new AbortController().signal }),
   productionPending: () => createIndexedDbLifecycle().pendingPurge(),
   /** Open with `spec.stamp`, or a fresh stamp for the spec's principal; `stamp: null` opens without one. */
   open: (storage: string, name: string, spec: Omit<WireSpec, "stamp"> & { stamp?: ReplicaSessionStamp | null }) =>
