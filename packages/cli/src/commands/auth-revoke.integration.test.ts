@@ -209,6 +209,8 @@ async function server(mode: "fail" | "fail-after-first" | "hold" | "success", ci
           if (state === "fail-after-first" && requests.length === 2) {
             return new Response("node unavailable after first revoke", { status: 503 });
           }
+          const ownedRecord = queryRecords.find((record) => record.cid === target);
+          if (ownedRecord) ownedRecord.status = "revoked";
           return Response.json({ cid: target, revoked: true });
         }
         if (state === "fail") return new Response("node unavailable", { status: 503 });
@@ -686,10 +688,12 @@ describe("tc auth logout --revoke with durable replica denial", () => {
     node.setMode("success");
     const retried = await run(home, args);
     expect(retried.exitCode).toBe(0);
-    expect(node.requests).toHaveLength(4);
-    expect(node.revokedCids).toEqual([issuedCid, delegationCid, issuedCid, delegationCid]);
-    expect(node.snapshots).toEqual(Array.from({ length: 4 },
+    expect(node.requests).toHaveLength(3);
+    expect(node.revokedCids).toEqual([issuedCid, delegationCid, delegationCid]);
+    expect(node.snapshots).toEqual(Array.from({ length: 3 },
       () => ({ session: true, db: true, unknown: true })));
+    const report = JSON.parse(retried.stdout) as { revocationExcluded: Array<{ cid: string; reason: string }> };
+    expect(report.revocationExcluded).toContainEqual({ cid: issuedCid, reason: "already_revoked" });
     await expect(readFile(unknown)).rejects.toMatchObject({ code: "ENOENT" });
     expect(await exists(paths.db)).toBe(false);
     expect(await exists(paths.session)).toBe(false);
