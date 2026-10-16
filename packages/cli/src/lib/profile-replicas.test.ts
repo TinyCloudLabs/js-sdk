@@ -47,6 +47,42 @@ test("legacy-only logout cleanup is idempotent and leaves flag-owned replicas un
   expect(await readFile(flagDb)).toEqual(flagBefore);
 });
 
+test("a mixed marker passes only legacy paths to logout cleanup", async () => {
+  await initializedLegacy();
+  const flag = join(profilePath("dogfood"), "replication", "a".repeat(26));
+  await mkdir(flag, { recursive: true });
+  const flagFile = join(flag, "pending.json");
+  await writeFile(flagFile, "flag-owned");
+  const info = await lstat(flag, { bigint: true });
+  const fileInfo = await lstat(flagFile, { bigint: true });
+  const approved = await approvedLegacyInventory("notes", []);
+  const mixed = {
+    ...approved,
+    knownRoots: [...approved.knownRoots, { path: `replication/${"a".repeat(26)}`, dev: info.dev.toString(), ino: info.ino.toString() }],
+    approvedUnknown: [...approved.approvedUnknown, {
+      path: `replication/${"a".repeat(26)}/pending.json`, kind: "file" as const,
+      dev: fileInfo.dev.toString(), ino: fileInfo.ino.toString(),
+    }],
+    knownEntries: [...approved.knownEntries, {
+      path: `replication/${"a".repeat(26)}/identity.json`, kind: "file" as const,
+      dev: fileInfo.dev.toString(), ino: fileInfo.ino.toString(),
+    }],
+    missingDatabases: [...approved.missingDatabases, `replication/${"a".repeat(26)}/replica.db`],
+  };
+  await expect(removeProfileReplicas("dogfood", mixed)).rejects.toMatchObject({ code: "REPLICA_PURGE_FAILED" });
+  expect(await readFile(flagFile, "utf8")).toBe("flag-owned");
+  const legacyOnly = <T extends { path: string }>(entries: readonly T[]) =>
+    entries.filter((entry) => entry.path === "replicas" || entry.path.startsWith("replicas/"));
+  expect(await removeProfileReplicas("dogfood", {
+    ...mixed,
+    approvedUnknown: legacyOnly(mixed.approvedUnknown),
+    knownRoots: legacyOnly(mixed.knownRoots),
+    knownEntries: legacyOnly(mixed.knownEntries),
+    missingDatabases: mixed.missingDatabases.filter((path) => path.startsWith("replicas/")),
+  })).toEqual(["notes"]);
+  expect(await readFile(flagFile, "utf8")).toBe("flag-owned");
+});
+
 test("legacy adapter fence is retained without durable discard consent and removed only with it", async () => {
   const root = join(profilePath("dogfood"), "replicas");
   const entry = join(root, "notes");
