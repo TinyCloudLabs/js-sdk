@@ -1,7 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { validateLedger, type Ledger } from "./replica-size-policy";
+import { approvedGatedOnlyRatchet, validateGatedOnlyRatchet, validateLedger, type Ledger } from "./replica-size-policy";
 
 const current = JSON.parse(readFileSync(resolve(import.meta.dir, "replica-size-ledger.json"), "utf8")) as Ledger;
 const historical: Ledger = {
@@ -42,5 +42,31 @@ describe("TC-858 canonical size ratchet transition", () => {
       invalidAllowance.allowance["index.mjs"]++;
       expect(() => validateLedger(invalidAllowance, base === historical)).toThrow();
     }
+  });
+});
+
+describe("TC-858 deferred refused-admission artifact", () => {
+  it("allows only the exact first ratchet, with no base-row change", () => {
+    expect(() => validateGatedOnlyRatchet(approvedGatedOnlyRatchet)).not.toThrow();
+    expect(() => validateGatedOnlyRatchet(approvedGatedOnlyRatchet, approvedGatedOnlyRatchet)).not.toThrow();
+    expect(() => validateGatedOnlyRatchet(undefined, approvedGatedOnlyRatchet)).toThrow();
+  });
+
+  it("rejects later cap, trigger, source or toolchain changes", () => {
+    const changed = structuredClone(approvedGatedOnlyRatchet);
+    changed.ceiling["replica-gated.mjs"]++;
+    expect(() => validateGatedOnlyRatchet(changed, approvedGatedOnlyRatchet)).toThrow();
+    changed.ceiling["replica-gated.mjs"]--;
+    changed.ceiling["replica-gated.cjs"]++;
+    expect(() => validateGatedOnlyRatchet(changed)).toThrow();
+    changed.ceiling["replica-gated.cjs"]--;
+    changed.trigger = "Every opt-in client loads the observer";
+    expect(() => validateGatedOnlyRatchet(changed)).toThrow();
+    changed.trigger = approvedGatedOnlyRatchet.trigger;
+    changed.sourceCommit = "unreviewed source";
+    expect(() => validateGatedOnlyRatchet(changed)).toThrow();
+    changed.sourceCommit = approvedGatedOnlyRatchet.sourceCommit;
+    changed.toolchain = "Bun 1.4.3";
+    expect(() => validateGatedOnlyRatchet(changed)).toThrow();
   });
 });

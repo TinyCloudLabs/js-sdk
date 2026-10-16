@@ -101,6 +101,12 @@ A compliant first local open therefore costs at most 892,478 B ESM /
 assets can then be cached. These byte ceilings do not replace real-worker
 Chromium acceptance of local reads, denial, expiry, and sign-out.
 
+A refused replica admission (stale, missing, or malformed restore stamp, or
+failed fresh establishment) loads a separate network-only read observer capped
+at 926 B ESM / 1,014 B CJS gzip. Successful opt-ins and replica-off clients
+never fetch it; sign-out uses the already-loaded authority. If this observer
+cannot load, the signed network session remains usable and local reads stay gated.
+
 The first-import ceiling is a measurement correction, not allowance for new
 adapter code: exact `ce52494d` built with Bun 1.3.14 measured 51,201/66,132 B,
 versus 45,538/65,096 B with Bun 1.4.3 on the same built SDK. Both builds

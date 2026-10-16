@@ -1,12 +1,13 @@
 import { execFileSync, spawnSync } from "node:child_process";
+import { existsSync } from "node:fs";
 import { cp, mkdtemp, readFile, rm } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { measureReplicaOptionalLoaded, type LoadedSizes } from "./measure-replica-optional";
-import { approvedPhase2, validateLedger, type GzipSizes, type Ledger, type LedgerEntry } from "./replica-size-policy";
+import { approvedGatedOnlyRatchet, approvedPhase2, validateGatedOnlyRatchet, validateLedger, type GatedOnlyRatchet, type GzipSizes, type Ledger, type LedgerEntry } from "./replica-size-policy";
 
 type OptionalEntry = LoadedSizes & { pr: string; ticket: string; note: string };
-type OptionalLedger = { allowance: LoadedSizes; entries: OptionalEntry[]; relocations?: unknown; measurementCorrection?: unknown };
+type OptionalLedger = { allowance: LoadedSizes; entries: OptionalEntry[]; relocations?: unknown; measurementCorrection?: unknown; gatedOnlyRatchet?: GatedOnlyRatchet };
 type Baseline = {
   webSdkTestBaseline: { ref: string; unhandledErrors: number; failingNames: string[]; unhandledSignatures: string[] };
 };
@@ -20,6 +21,8 @@ type Baseline = {
  * - Cumulative: the historical core ledger stays unchanged for the approved
  *   Phase 2 absolute-root ratchet; the optional and #550 worker buckets are
  *   separately enforced. Other replica PRs append measured rows as before.
+ * - The refused-admission observer is a distinct, deferred artifact with its
+ *   own exact zero-headroom ESM/CJS ratchet; it never raises root or first-import caps.
  * - Non-replica PRs are never charged; they only validate the ledger shape.
  *
  * Replica-owned paths: packages/replica/**, packages/sdk-services/src/kv/replication/**,
@@ -60,6 +63,7 @@ const optionalLedgerPath = resolve(import.meta.dir, "replica-optional-size-ledge
 const optionalLedger = JSON.parse(await readFile(optionalLedgerPath, "utf8")) as OptionalLedger;
 const formats = ["index.mjs", "index.cjs"] as const;
 const optionalFormats = ["replica.mjs", "replica.cjs", "activation.mjs", "activation.cjs"] as const;
+const gatedFormats = ["replica-gated.mjs", "replica-gated.cjs"] as const;
 // Naomi-approved 2578c6a7 stamp-dispatch relocation. Both measured buckets
 // travel together; the root ceiling and the immutable #546 ledger row do not change.
 const relocationCommit = "2578c6a7624a3408b4584ed2331723694b8afb4b";
@@ -99,7 +103,7 @@ let failed = false;
 function validateOptionalLedger(value: OptionalLedger): void {
   const path = "packages/web-sdk/scripts/replica-optional-size-ledger.json";
   if (!value || !value.allowance || !Array.isArray(value.entries) ||
-      Object.keys(value).some((key) => key !== "allowance" && key !== "entries" && key !== "relocations" && key !== "measurementCorrection") ||
+      Object.keys(value).some((key) => key !== "allowance" && key !== "entries" && key !== "relocations" && key !== "measurementCorrection" && key !== "gatedOnlyRatchet") ||
       Object.keys(value.allowance).some((key) => !optionalFormats.includes(key as typeof optionalFormats[number])) ||
       optionalFormats.some((format) => !Number.isSafeInteger(value.allowance[format]) || value.allowance[format] < 0)) {
     throw new Error(`Invalid ${path} shape or allowance`);
@@ -120,6 +124,7 @@ function validateOptionalLedger(value: OptionalLedger): void {
       (corrected && (!relocated || JSON.stringify(value.measurementCorrection) !== JSON.stringify(approvedMeasurementCorrection)))) {
     throw new Error(`${path}: only the exact paired ${relocationCommit} relocation and ce52494d Bun correction are approved`);
   }
+  validateGatedOnlyRatchet(value.gatedOnlyRatchet);
   if (corrected) {
     try {
       execFileSync("git", ["merge-base", "--is-ancestor", approvedMeasurementCorrection.commit, "HEAD"], {
@@ -160,6 +165,28 @@ for (const format of optionalFormats) {
   console.log(`${format}: incremental loaded=${optionalCurrent[format]}; cumulative optional ledger=${total} / ${optionalLedger.allowance[format]} gzip-bytes`);
   if (total > optionalLedger.allowance[format] || optionalCurrent[format] > optionalLedger.allowance[format]) {
     console.error(`${format}: optional no-growth allowance exceeded; changing this separate budget requires policy review.`);
+    failed = true;
+  }
+}
+for (const format of gatedFormats) {
+  const artifact = resolve(distDir, format);
+  if (optionalLedger.gatedOnlyRatchet === undefined) {
+    if (existsSync(artifact)) {
+      console.error(`${format}: an emitted gated-only artifact requires its own reviewed size ratchet.`);
+      failed = true;
+    }
+    continue;
+  }
+  if (!existsSync(artifact)) {
+    console.error(`${format}: the approved gated-only artifact is missing.`);
+    failed = true;
+    continue;
+  }
+  const size = execFileSync("gzip", ["-9", "-c", artifact]).byteLength;
+  const ceiling = optionalLedger.gatedOnlyRatchet.ceiling[format];
+  console.log(`${format}: current=${size}; approved deferred-gate ceiling=${ceiling} gzip-bytes`);
+  if (size > ceiling) {
+    console.error(`${format}: refused-admission-only artifact grew above its zero-headroom cap.`);
     failed = true;
   }
 }
@@ -218,6 +245,14 @@ if (prBaseSha) {
     throw new Error(`Unable to read base ${baseOptionalPath}: ${optionalResult.stderr.trim()}`);
   }
   validateOptionalLedger(baseOptional);
+  validateGatedOnlyRatchet(optionalLedger.gatedOnlyRatchet, baseOptional.gatedOnlyRatchet);
+  if (optionalLedger.gatedOnlyRatchet !== undefined && baseOptional.gatedOnlyRatchet === undefined &&
+      spawnSync("git", ["merge-base", "--is-ancestor", approvedGatedOnlyRatchet.sourceCommit, "HEAD"], {
+        cwd: repoRoot,
+      }).status !== 0) {
+    console.error("The deferred-gate budget requires its measured source commit as an ancestor.");
+    failed = true;
+  }
   const optionalPrefixMatches = optionalLedger.entries.length >= baseOptional.entries.length &&
     baseOptional.entries.every((entry, index) => {
       const current = optionalLedger.entries[index];

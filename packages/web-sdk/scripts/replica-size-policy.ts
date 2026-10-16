@@ -21,6 +21,34 @@ export const approvedPhase2 = {
   delta: { "index.mjs": 1322, "index.cjs": 1205 },
   ceiling: { "index.mjs": 1461925, "index.cjs": 1391665 },
 } as const;
+
+export type GatedOnlyRatchet = {
+  label: string;
+  sourceCommit: string;
+  measuredAt: string;
+  toolchain: string;
+  trigger: string;
+  ceiling: { "replica-gated.mjs": number; "replica-gated.cjs": number };
+};
+
+export const approvedGatedOnlyRatchet: GatedOnlyRatchet = {
+  label: "TC-858 refused-replica-admission observer, approved by Naomi 2026-10-16",
+  sourceCommit: "212142ae1cf7ff8568d4172a2ca991a4d79364c7",
+  measuredAt: "ddc032caef81a2177e7f9c30a6a28a8f593a4580",
+  toolchain: "Bun 1.3.14; production webpack; gzip -9 -c",
+  trigger: "Refused replica admission only: stale/missing/malformed restore or failed fresh establishment; never successful opt-in, replica-off, or sign-out.",
+  ceiling: { "replica-gated.mjs": 926, "replica-gated.cjs": 1014 },
+};
+
+/** This is a distinct physical artifact; neither core nor first-import gains headroom. */
+export function validateGatedOnlyRatchet(row?: GatedOnlyRatchet, base?: GatedOnlyRatchet): void {
+  if (row !== undefined && JSON.stringify(row) !== JSON.stringify(approvedGatedOnlyRatchet)) {
+    throw new Error("Only Naomi's exact measured TC-858 gated-only artifact ratchet is approved.");
+  }
+  if (base !== undefined && JSON.stringify(row) !== JSON.stringify(base)) {
+    throw new Error("The gated-only artifact ratchet may not change after introduction.");
+  }
+}
 const historicalToolchain = "Bun 1.4.3; production webpack; gzip -9 -c";
 
 /** Only a git merge-base ledger may retain the pre-correction toolchain. */

@@ -30,6 +30,14 @@
     "canonicalFirstImport": { "replica.mjs": 51201, "replica.cjs": 66132 },
     "reason": "CI-pinned Bun.build emits a different minified graph from Bun 1.4.3 for the same 25 modules. This corrects the ce52494d first-import measurement with zero headroom; no new adapter bytes or activation/root allowance."
   },
+  "gatedOnlyRatchet": {
+    "label": "TC-858 refused-replica-admission observer, approved by Naomi 2026-10-16",
+    "sourceCommit": "212142ae1cf7ff8568d4172a2ca991a4d79364c7",
+    "measuredAt": "ddc032caef81a2177e7f9c30a6a28a8f593a4580",
+    "toolchain": "Bun 1.3.14; production webpack; gzip -9 -c",
+    "trigger": "Refused replica admission only: stale/missing/malformed restore or failed fresh establishment; never successful opt-in, replica-off, or sign-out.",
+    "ceiling": { "replica-gated.mjs": 926, "replica-gated.cjs": 1014 }
+  },
   "entries": [
     {
       "pr": "#548",
