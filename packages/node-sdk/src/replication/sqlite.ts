@@ -42,6 +42,13 @@ import type {
   ReplicationIdentity,
 } from "@tinycloud/sdk-services";
 import type {
+  ProfileReplicaApprovalEntry,
+  ProfileReplicaDeferredToken,
+  ProfileReplicaLogoutPending,
+  ProfileReplicaPreflight,
+  ProfileReplicaPurge,
+  ProfileReplicaRootIdentity,
+  ProfileReplicaUnknownEntry,
   ReplicaAccountGate,
   ReplicaDenyOutcome,
   ReplicaDenyInput,
@@ -65,104 +72,9 @@ import type {
   SqliteRuntime,
 } from "./replica-contract";
 import { ucanAttUnconstrainedFor } from "./authority";
-export interface ProfileReplicaUnknownEntry {
-  path: string;
-  kind: "file" | "directory" | "symlink";
-  dev: string;
-  ino: string;
-}
-export interface ProfileReplicaRootIdentity {
-  path: string;
-  dev: string;
-  ino: string;
-}
-/** Exact, nonsecret identity displayed with the token issued under the profile lock. */
-export interface ProfileReplicaApprovalEntry extends ProfileReplicaRootIdentity {
-  kind: ProfileReplicaUnknownEntry["kind"] | "missing";
-}
-export interface ProfileReplicaPreflight {
-  knownLegacyReplicas: number;
-  unknownLegacyPaths: string[];
-  unknownPaths: string[];
-  unknownEntries: ProfileReplicaUnknownEntry[];
-  knownRoots: ProfileReplicaRootIdentity[];
-  knownEntries: ProfileReplicaUnknownEntry[];
-  missingDatabases: string[];
-}
-export interface ProfileReplicaDeferredToken {
-  deniedEpoch: number;
-  principalHash: string;
-}
-
-export interface ProfileReplicaPurge extends Pick<ReplicaLifecycleGate, "recover" | "erasePending" | "pendingPurge"> {
-  deny(input: ReplicaDenyInput, options?: { deferErase?: boolean }): Promise<ReplicaDenyOutcome & {
-    resumeToken?: ProfileReplicaDeferredToken;
-  }>;
-  deferredErase(): Promise<ProfileReplicaDeferredToken | null>;
-  resumeDeferredErase(token: ProfileReplicaDeferredToken, options: { signal: AbortSignal }): Promise<ReplicaEraseReport>;
-  /** Read-only, profile-locked layout check before defer-deny or any remote revoke. */
-  preflightLogout(input: { principal: string; discardLocalChanges?: boolean }): Promise<ProfileReplicaPreflight>;
-  prepareLogoutPending(input: {
-    principal: string; approval?: ProfileReplicaPreflight; discardLocalChanges?: boolean; remotePending?: true;
-  }): Promise<ProfileReplicaLogoutPending | null>;
-  completeRemoteLogout(input: { principal: string }): Promise<ProfileReplicaLogoutPending>;
-  /** Validates a denied, pending marker for a selected network-only session retry; never permits replica delivery. */
-  remotePendingLogout(input: { principal: string }): Promise<boolean>;
-  /** First plain attempt refuses changed inventory and prints a nonsecret token without mutating the marker. */
-  abandonRemoteLogout(input: {
-    principal: string; approval: ProfileReplicaPreflight; discardLocalChanges?: boolean;
-  }): Promise<ProfileReplicaLogoutPending>;
-  /** Only a separate, user-confirmed CLI command may use the displayed token; rechecks all identities under lock. */
-  approveChangedPlainLogout(input: {
-    principal: string; approval: ProfileReplicaPreflight; discardLocalChanges: true;
-    inventoryApprovalToken: string;
-  }): Promise<ProfileReplicaLogoutPending>;
-  reapproveLogoutPending(input: {
-    principal: string; approval: ProfileReplicaPreflight;
-  }): Promise<ProfileReplicaLogoutPending>;
-  recoverLogoutPending(options: {
-    signal: AbortSignal;
-    /** CLI atomically fsyncs authSignedOut=true before unlinking+fsyncing session.json/key.json; a failure rejects. */
-    clearCredentials: () => Promise<void>;
-    /** Only the pinned legacy root, after durable deny. */
-    eraseLegacyReplicas: (options: {
-      discardLocalChanges: boolean; approvedUnknown: readonly ProfileReplicaUnknownEntry[];
-      knownRoots: readonly ProfileReplicaRootIdentity[];
-      knownEntries: readonly ProfileReplicaUnknownEntry[];
-      missingDatabases: readonly string[];
-    }) => Promise<void>;
-  }): Promise<ReplicaEraseReport>;
-}
 
 /** CLI-only crash fence; generic SQLite stores do not opt in to this path. */
 export const REPLICA_LOGOUT_PENDING_FILE = "replica-logout-pending.json";
-export type ProfileReplicaLogoutPending = ({
-  v: 1;
-  incarnation: string;
-  lifecycleEpoch: number;
-  principalHash: string;
-} | {
-  v: 2;
-  scope: "orphan_profile";
-  nonce: string;
-} | {
-  v: 3;
-  scope: "inactive_gate";
-  incarnation: string;
-  lifecycleEpoch: number;
-}) & {
-  /** Profile-local owner binding; v1 also retains its salted gate principalHash. */
-  principalDigest: string;
-  /** Random durable challenge salt, retained across a crash while this marker exists. */
-  approvalSalt: string;
-  discardLocalChanges?: true;
-  remotePending?: true;
-  remoteAbandoned?: true;
-  approvedUnknown: ProfileReplicaUnknownEntry[];
-  knownRoots: ProfileReplicaRootIdentity[];
-  knownEntries: ProfileReplicaUnknownEntry[];
-  missingDatabases: string[];
-};
 
 /** Every CLI read path, including legacy replica commands, checks this marker before delivery. */
 export function assertProfileLogoutClear(profileDir: string): void {
