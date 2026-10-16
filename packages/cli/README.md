@@ -171,6 +171,17 @@ whole space. Whole-space replication requires `kv-sync-root` support and
 `--replication-allow-secrets`, because it includes `vault/`. Replication needs
 unrestricted `get` and explicit `sync` on that folder or broader; an exact-key
 grant never qualifies. Bare replica prefixes are rejected; use `notes/`.
+
+Replica-enabled OpenKey login uses the SDK-prepared SIWE approval URL, not the
+older browser-created session. Specify `--owner did:pkh:eip155:CHAIN:ADDRESS`
+unless this profile already has a verified owner session. The CLI verifies the
+signed result before saving its new key, session and replica stamp. Safari may
+block the HTTPS page's plain-HTTP loopback callback: use an interactive CLI
+terminal and paste the same one-line code shown by OpenKey, or start with
+`tc auth login --method openkey --replication-prefix notes/ --owner DID --paste`
+for a headless terminal. Approval and paste expire after five minutes; retry
+starts a new session key and approval URL.
+
 Use `tc replica report` for event aggregates and pinned keys; `--clear-pending`
 prints a warning because later commits can be read as stale until a subsequent
 sync. `auth logout` durably fences replica reads, removes both legacy replicas

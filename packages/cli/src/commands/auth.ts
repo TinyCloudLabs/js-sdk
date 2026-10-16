@@ -7,7 +7,8 @@ import { lstat, mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { createInterface } from "node:readline";
 import type { IncomingMessage } from "node:http";
-import { grantAuthRequest, principalDidEquals, REPLICA_LOGOUT_PENDING_FILE, signedCompactUcanExpiry, type PermissionEntry, type PortableDelegation, type ProfileReplicaDeferredToken, type RuntimeDelegationActivator, type TinyCloudNode, type TinyCloudSession } from "@tinycloud/node-sdk";
+import { TinyCloudNode, grantAuthRequest, principalDidEquals, REPLICA_LOGOUT_PENDING_FILE, signedCompactUcanExpiry, type PermissionEntry, type PortableDelegation, type ProfileReplicaDeferredToken, type RuntimeDelegationActivator, type TinyCloudSession } from "@tinycloud/node-sdk";
+import { composeManifestRequest } from "@tinycloud/sdk-core";
 import { invokeOperation } from "@tinycloud/operations";
 import { profilePath } from "@tinycloud/operations/state";
 import { removeProfileReplicas } from "../lib/profile-replicas.js";
@@ -75,6 +76,7 @@ import {
 import { isRawEncryptionPermission, isVerifiedRawEncryptionPermission } from "../lib/raw-encryption.js";
 import { canonicalOwnerDid } from "../lib/owner-did.js";
 import { assertNotLocalOwner, assertSessionReplaceable, commitLogin, readProfileSnapshot } from "../auth/login-commit.js";
+import { ownerIdentitySigner, startPreparedOpenKeyHandoff, type PreparedOpenKeyHandoff } from "../auth/prepared-openkey.js";
 import { announceFirstOwner, openKeyPrimaryFlag, ownerLoginPermissions, warnIfNotPrimaryKey, withOwnerKeyPrimary } from "../auth/owner-key.js";
 import { SHARE_PUBLISHING_MANIFEST_REF } from "../share/publishing-manifest.js";
 import {
@@ -85,6 +87,7 @@ import {
   generateKey,
   keyToDID,
 } from "../auth/local-key.js";
+import { createCliReplicationConfig } from "../lib/replication-config.js";
 import { theme } from "../output/theme.js";
 import { registerAuthGrantsCommand } from "./auth-grants.js";
 import { bootstrapDelegatedSession, ensureAuthenticated, type DelegatedSessionBootstrap } from "../lib/sdk.js";
@@ -284,7 +287,7 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
     .command("login")
     .description("Authenticate with TinyCloud")
     .option("--device", "Approve on another device (e.g. a phone) through OpenKey device authorization; requires a KV-scoped --manifest (SQL and secret decrypt need browser or --paste login)")
-    .option("--paste", "Use manual paste mode instead of browser callback")
+    .option("--paste", "Wait up to 5 minutes for a signed code from OpenKey on stdin instead of a browser callback (Safari may require paste)")
     .option("--no-popup", "Print the OpenKey URL without opening a browser")
     .option("--method <method>", "Authentication method: local or openkey")
     .option("--manifest <fileOrBase64>", `Request only this manifest's permissions (one space, plus raw encryption network entries such as a secrets decrypt grant); ${SHARE_PUBLISHING_MANIFEST_REF} covers \`${CLI_NAME} share publish\``)
@@ -397,7 +400,7 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
           await persistReplicationLogin(ctx.profile, replicationOptions);
           if (replicationOptions.allowSecrets) writeReplicationSecretsWarning();
         } else {
-          await handleOpenKeyAuth(ctx.profile, ctx.host, {
+          const preparedCommitted = await handleOpenKeyAuth(ctx.profile, ctx.host, {
             paste: options.paste,
             noPopup: options.popup === false,
             permissions: loginPermissions,
@@ -407,7 +410,7 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
             replaceSession: options.replaceSession === true,
             persistHost,
           });
-          await persistReplicationLogin(ctx.profile, replicationOptions);
+          if (!preparedCommitted) await persistReplicationLogin(ctx.profile, replicationOptions);
           if (replicationOptions.allowSecrets) writeReplicationSecretsWarning();
         }
       } catch (error) {
@@ -2105,7 +2108,7 @@ async function handleOpenKeyAuth(
   profileName: string,
   host: string,
   options: OpenKeyLoginOptions = {},
-): Promise<void> {
+): Promise<boolean> {
   const { profile, delegationData, declined, legacyNested } = await refreshOpenKeySession(profileName, host, options);
 
   reportDeclined(declined, legacyNested);
@@ -2127,6 +2130,7 @@ async function handleOpenKeyAuth(
         }
       : {}),
   });
+  return (options.replication?.prefixes.length ?? 0) > 0;
 }
 
 /** Tell the operator which requested capabilities the owner unchecked or OpenKey signed incorrectly. */
@@ -2176,6 +2180,98 @@ interface OpenKeyLoginOptions {
   openKeyAcquisition?: OpenKeyAcquisition;
 }
 
+/** Only a fresh SDK-prepared, OpenKey-signed owner session may establish replica consent. */
+async function refreshPreparedOpenKeySession(params: {
+  profileName: string;
+  host: string;
+  profile: ProfileConfig;
+  snapshot: Awaited<ReturnType<typeof readProfileSnapshot>>;
+  options: OpenKeyLoginOptions;
+  replication: ReplicationLoginOptions;
+  permissions: PermissionEntry[] | undefined;
+  expectedOwner: string | undefined;
+  expiry: RequestedExpiry | undefined;
+}): Promise<{ profile: ProfileConfig; delegationData: Record<string, unknown>; declined: PermissionEntry[]; legacyNested: PermissionEntry[] }> {
+  const { profileName, host, profile, snapshot, options, replication, permissions, expectedOwner, expiry } = params;
+  const storedOwner = snapshot.session && snapshot.key && profile.sessionDid
+    ? verifySignedSession(snapshot.session, snapshot.key, profile.sessionDid).ownerDid
+    : undefined;
+  const owner = options.expectedOwner ? canonicalOwnerDid(options.expectedOwner) : storedOwner;
+  if (!owner || !permissions) {
+    throw new CLIError("V2_REQUIRED",
+      "Replica-enabled OpenKey login needs --owner did:pkh:eip155:CHAIN:ADDRESS or a verified existing owner session; a stored profile owner field alone is not proof. No approval was started.",
+      ExitCode.AUTH_REQUIRED);
+  }
+  if (expectedOwner && normalizePkhIdentifier(owner) !== normalizePkhIdentifier(expectedOwner)) {
+    throw new CLIError("OPENKEY_OWNER_MISMATCH", "The verified owner differs from this profile. No approval was started.", ExitCode.PERMISSION_DENIED);
+  }
+  const replicationConfig = createCliReplicationConfig(profileName, replication, { debug: false, quiet: true }, true);
+  if (!replicationConfig) throw new CLIError("V2_REQUIRED", "Replica configuration is unavailable; no approval was started.", ExitCode.AUTH_REQUIRED);
+  const space = permissions.find((permission) => permission.service === "tinycloud.kv")?.space ?? ownerSpaceId("default", owner);
+  const capabilityRequest = composeManifestRequest([{
+    app_id: "tc-cli", name: "TinyCloud CLI", space, prefix: "", defaults: false, includePublicSpace: false,
+    ...(expiry ? { expiry: `${expiry.durationMs}ms` } : {}),
+    permissions,
+  }], { includeAccountRegistryPermissions: false });
+  const node = new TinyCloudNode({
+    host, signer: ownerIdentitySigner(owner), capabilityRequest,
+    includeAccountRegistryPermissions: false, autoBootstrapAccount: false,
+    replication: replicationConfig,
+  });
+  let handoff: PreparedOpenKeyHandoff | undefined;
+  let preparedDid: string | undefined;
+  try {
+    await node.signInWithOpenKey(async (prepared) => {
+      preparedDid = prepared.verificationMethod;
+      handoff = await startPreparedOpenKeyHandoff({
+        prepared, openKeyHost: resolveOpenKeyHost(profile),
+        noPopup: options.noPopup, paste: options.paste,
+      });
+      return handoff.result;
+    });
+    const active = node.restorableSession;
+    if (!active || !preparedDid || node.sessionDid !== preparedDid || active.verificationMethod !== preparedDid) {
+      throw new CLIError("OPENKEY_SESSION_MISMATCH", "OpenKey signed a different SDK session key; no profile or session was saved.", ExitCode.PERMISSION_DENIED);
+    }
+    const key = active.jwk;
+    const verified = verifyScopedLogin({ ...active }, key, preparedDid, permissions, { expectedOwner: owner, expiry });
+    const session = {
+      ...verified.session,
+      ...(node.replicaStamp ? { replicaStamp: node.replicaStamp } : {}),
+      authMethod: "openkey",
+    };
+    const updatedProfile: ProfileConfig = {
+      ...profile,
+      host: options.persistHost === true || !profile.host ? host : profile.host,
+      did: preparedDid, sessionDid: preparedDid,
+      posture: profile.posture ?? "owner-openkey",
+      operatorType: profile.operatorType ?? "human",
+      authMethod: "openkey",
+      ownerDid: owner,
+      spaceId: active.spaceId,
+      replication: {
+        prefixes: [...replication.prefixes],
+        ...(replication.allowSecrets === true ? { allowSecrets: true } : {}),
+      },
+    };
+    await commitLogin(profileName, snapshot, {
+      key, session, profile: updatedProfile, durable: true,
+      approved: { scope: session.permissions as PermissionEntry[], ownerDid: owner, replaceSession: options.replaceSession === true },
+    });
+    await handoff?.complete(true);
+    announceFirstOwner(profileName, expectedOwner, owner);
+    return {
+      profile: updatedProfile, delegationData: session,
+      declined: declinedPermissions(permissions, session.permissions as PermissionEntry[], owner),
+      legacyNested: verified.legacyNested,
+    };
+  } catch (error) {
+    await handoff?.complete(false);
+    await node.signOut().catch(() => undefined);
+    throw error;
+  }
+}
+
 export async function refreshOpenKeySession(
   profileName: string,
   host: string,
@@ -2214,9 +2310,9 @@ export async function refreshOpenKeySession(
     assertSessionReplaceable(profileName, snapshot, expectedOwner, permissions, estimatedExpiry);
   }
   if (replication.prefixes.length > 0) {
-    throw new CLIError("V2_REQUIRED",
-      "Replica-enabled OpenKey login requires a verified owner and the SDK-prepared SIWE v2 handoff; this CLI cannot use the legacy approval flow for local replica authority. Specify --owner did:pkh:eip155:CHAIN:ADDRESS and retry with a v2-capable CLI/OpenKey.",
-      ExitCode.AUTH_REQUIRED);
+    return refreshPreparedOpenKeySession({
+      profileName, host, profile, snapshot, options, replication, permissions, expectedOwner, expiry,
+    });
   }
 
   // A logged-out nonreplica profile has no restorable signer. Keep the

@@ -2,10 +2,11 @@ import { randomBytes, timingSafeEqual } from "node:crypto";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { createInterface } from "node:readline";
 import open from "open";
-import type { TinyCloudNode } from "@tinycloud/node-sdk";
+import type { ISigner, TinyCloudNode } from "@tinycloud/node-sdk";
 import { DEFAULT_OPENKEY_DEVICE_API_HOST, DEFAULT_OPENKEY_HOST, ExitCode } from "../config/constants.js";
 import { CLIError } from "../output/errors.js";
 import { publicJwkForDelegation } from "./browser-auth.js";
+import { canonicalOwnerDid } from "../lib/owner-did.js";
 
 type Authorize = Parameters<TinyCloudNode["signInWithOpenKey"]>[0];
 type SignedResult = Awaited<ReturnType<Authorize>>;
@@ -13,6 +14,7 @@ type Prepared = Parameters<Authorize>[0] & { verificationMethod: string };
 
 export interface PreparedOpenKeyHandoff {
   readonly result: Promise<SignedResult>;
+  readonly url: string;
   /** Called only after the SDK verifies the result and CLI commits its session. */
   complete(accepted: boolean): Promise<void>;
 }
@@ -22,6 +24,25 @@ const RESULT_FIELDS = ["address", "permissions", "protocolVersion", "selectedAct
 
 function invalid(code: string, message: string): CLIError {
   return new CLIError(code, message, ExitCode.AUTH_REQUIRED);
+}
+
+/** An OpenKey owner identity is not a wallet signer; only OpenKey can sign its SIWE. */
+export function ownerIdentitySigner(ownerDid: string): ISigner {
+  const canonical = canonicalOwnerDid(ownerDid);
+  const parts = canonical.split(":");
+  const chainId = Number(parts[3]);
+  if (!Number.isSafeInteger(chainId) || chainId < 1) {
+    throw invalid("INVALID_ARGUMENT", "The OpenKey owner chain ID must be a positive safe integer.");
+  }
+  const address = parts[4]!;
+  return {
+    async getAddress() { return address; },
+    async getChainId() { return chainId; },
+    async signMessage() {
+      throw invalid("REVOCATION_AUTHORITY_UNAVAILABLE",
+        "OpenKey owner identity cannot sign wallet revocations; obtain verified signed authority from OpenKey instead.");
+    },
+  };
 }
 
 function signedEnvelope(value: unknown, state: Buffer, requestedKeyId?: string): SignedResult | null {
@@ -62,6 +83,7 @@ export async function startPreparedOpenKeyHandoff(options: {
   const origin = new URL(options.openKeyHost).origin;
   const state = randomBytes(32);
   const cancelSecret = randomBytes(32).toString("base64url");
+  const handoffId = randomBytes(32).toString("base64url");
   const path = `/callback/${randomBytes(16).toString("base64url")}`;
   let acceptResponse: ServerResponse | undefined;
   let resolveResult!: (result: SignedResult) => void;
@@ -72,7 +94,6 @@ export async function startPreparedOpenKeyHandoff(options: {
   });
   let delivered = false;
   let completed = false;
-  let ticket: string | undefined;
   let timeout: ReturnType<typeof setTimeout> | undefined;
   let rl: ReturnType<typeof createInterface> | undefined;
   const cors = { "Access-Control-Allow-Origin": origin, Vary: "Origin" };
@@ -92,7 +113,17 @@ export async function startPreparedOpenKeyHandoff(options: {
       return;
     }
     if (request.method === "OPTIONS") {
-      response.writeHead(204, { ...cors, "Access-Control-Allow-Methods": "POST, OPTIONS", "Access-Control-Allow-Headers": "Content-Type" });
+      if (request.headers["access-control-request-method"] !== "POST" ||
+          request.headers["access-control-request-headers"]?.toLowerCase() !== "content-type") {
+        response.writeHead(403);
+        response.end();
+        return;
+      }
+      response.writeHead(204, {
+        ...cors, "Access-Control-Allow-Methods": "POST", "Access-Control-Allow-Headers": "Content-Type",
+        ...(request.headers["access-control-request-private-network"] === "true"
+          ? { "Access-Control-Allow-Private-Network": "true" } : {}),
+      });
       response.end();
       return;
     }
@@ -137,11 +168,10 @@ export async function startPreparedOpenKeyHandoff(options: {
   const callback = address && typeof address !== "string" ? `http://127.0.0.1:${address.port}${path}` : undefined;
   const api = (options.apiHost ?? apiOrigin(options.openKeyHost)).replace(/\/$/, "");
   const cancel = async (): Promise<void> => {
-    if (!ticket) return;
     try {
       await fetch(`${api}/api/delegate/handoffs/cancel`, {
         method: "POST", redirect: "error", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ticket, cancelSecret }),
+        body: JSON.stringify({ ticket: handoffId, cancelSecret }), signal: AbortSignal.timeout(2_000),
       });
     } catch { /* The ticket expires server-side; local authority never depends on cancellation. */ }
   };
@@ -149,6 +179,7 @@ export async function startPreparedOpenKeyHandoff(options: {
     clearTimeout(timeout);
     rl?.close();
     server?.close();
+    state.fill(0);
   };
   try {
     const publicJwk = publicJwkForDelegation(options.prepared.jwk) as Record<string, unknown>;
@@ -161,26 +192,19 @@ export async function startPreparedOpenKeyHandoff(options: {
         ...(options.prepared.keyId ? { keyId: options.prepared.keyId } : {}),
         ...(options.prepared.presentation ? { presentation: options.prepared.presentation } : {}),
       },
-      delivery: { ...(callback ? { callback } : {}), state: state.toString("base64url"), cancelSecret },
+      delivery: { handoffId, ...(callback ? { callback } : {}), state: state.toString("base64url"), cancelSecret },
     };
-    if (Buffer.byteLength(JSON.stringify(payload)) > 64 * 1024) throw invalid("V2_INVALID_REQUEST", "Prepared OpenKey request exceeds 64 KiB.");
-    const response = await fetch(`${api}/api/delegate/handoffs`, {
-      method: "POST", redirect: "error", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload),
-    });
-    if (response.status !== 201) throw invalid("V2_REQUIRED", `Prepared OpenKey handoff unavailable (HTTP ${response.status}); no session was saved.`);
-    const created = await response.json() as { transportVersion?: unknown; ticket?: unknown; expiresAt?: unknown };
-    if (created.transportVersion !== 2 || typeof created.ticket !== "string" || !/^[A-Za-z0-9_-]{43}$/.test(created.ticket) ||
-        typeof created.expiresAt !== "string" || Date.parse(created.expiresAt) <= Date.now()) {
-      throw invalid("V2_INVALID_RESPONSE", "OpenKey returned an invalid prepared handoff; no session was saved.");
+    const url = `${origin}/delegate#tv2=${Buffer.from(JSON.stringify(payload), "utf8").toString("base64url")}`;
+    if (Buffer.byteLength(url, "utf8") > 8192) {
+      throw invalid("V2_URL_TOO_LONG", "The prepared OpenKey URL exceeds 8 KiB; reduce the requested scope and retry with a fresh session. Legacy approval cannot grant replica authority.");
     }
-    ticket = created.ticket;
-    const url = `${origin}/delegate?transportVersion=2&ticket=${encodeURIComponent(ticket)}`;
     console.error(`Open this URL in a browser to authenticate: ${url}`);
     if (!options.noPopup && !options.paste) {
       try { await open(url); }
       catch { console.error("Could not open browser. Use the printed URL or paste the signed code."); }
     }
     if (options.paste || process.stdin.isTTY) {
+      console.error("Waiting up to 5 minutes for OpenKey. Paste its one-line signed code here and press Enter if the callback is blocked (Safari may require this).");
       rl = createInterface({ input: process.stdin, output: process.stderr });
       rl.on("line", (input) => {
         if (delivered || completed || !input.trim()) return;
@@ -206,18 +230,19 @@ export async function startPreparedOpenKeyHandoff(options: {
     timeout = setTimeout(() => {
       if (!delivered && !completed) {
         rejectResult(invalid("V2_EXPIRED", "Prepared OpenKey handoff expired; restart login for a fresh SIWE."));
-        void cancel();
         close();
+        void cancel();
       }
     }, 300_000);
     return {
+      url,
       result,
       async complete(accepted) {
         if (completed) return;
         completed = true;
         if (acceptResponse) reply(acceptResponse, accepted ? 200 : 422, { accepted });
-        if (!accepted) await cancel();
         close();
+        if (!accepted) await cancel();
       },
     };
   } catch (error) {

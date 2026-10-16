@@ -118,6 +118,8 @@ export interface LoginCommit {
   readonly key: object;
   readonly session: Record<string, unknown>;
   readonly profile: ProfileConfig;
+  /** The signed browser callback is acknowledged only after all three files and the profile directory are synced. */
+  readonly durable?: boolean;
   /**
    * For scoped logins: the verified approved scope and its owner, checked
    * against the live session unless `replaceSession` is set.
@@ -198,7 +200,7 @@ export async function commitLogin(profileName: string, snapshot: ProfileSnapshot
     try {
       await ProfileManager.setKey(profileName, commit.key);
       await ProfileManager.setSession(profileName, commit.session);
-      if (current.profile?.authSignedOut === true) {
+      if (current.profile?.authSignedOut === true || commit.durable === true) {
         await syncAuthCredentialFiles(profilePath(profileName));
         await ProfileManager.setProfileDurable(profileName, { ...commit.profile, authSignedOut: false });
       } else {
