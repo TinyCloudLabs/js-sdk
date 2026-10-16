@@ -514,15 +514,21 @@ Stale/unguarded outcomes and a missing token are not permission to proceed
 as a retryable revoked session.
 
 The profile-locked, fsynced atomic gate-file replacement commits the denied
-epoch/time, null principal, **all** scoped opaque partition and pending intents,
-the pending identity generations, cleared first-install anchors,
-`eraseDeferred: true` and the original salted `deferredPrincipalHash` together.
-No empty-intent marker or unchecked flag is sufficient. An old handle cannot
-read despite retained physical files. `deferredErase()` returns the durable
-nonsecret fencing token after restart; `pendingPurge()` still lists the intents
-and `purgePending` stays true. While deferred, recovery reports the remaining
-count and does not erase. `activationAllowed`/establish/restore refuse until
-the intents are erased; a plain `deny` from the now-null principal is stale.
+epoch/time, null principal, a **complete enumeration** of scoped opaque
+partition and pending intents, the pending identity generations, cleared
+first-install anchors, `eraseDeferred: true` and the original salted
+`deferredPrincipalHash` together. Enumeration may legitimately find **zero**
+files and produce zero intents; it may not be skipped as an empty-intent
+shortcut when files exist. An old handle cannot read despite retained physical
+files. `deferredErase()` returns the durable nonsecret fencing token after
+restart, including the zero-intent case. `pendingPurge()` lists outstanding
+intents, but `purgePending` is true whenever `eraseDeferred` is true **or**
+intents remain. Deferred `recover()`/`erasePending()` do not erase and may
+report `remaining: 0` when enumeration was empty; callers MUST inspect
+`deferredErase()` and never infer completion from that count. Establish/restore
+refuse while the marker or intents remain; `activationAllowed` additionally
+requires a non-null current principal (§2). A plain `deny` from the now-null
+principal is stale.
 
 If remote revoke fails, times out or is interrupted, CLI returns nonzero and
 keeps the network session/key for retry; the SQLite replica, `pending.json`

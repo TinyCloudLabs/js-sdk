@@ -376,13 +376,16 @@ export interface ProfileReplicaDeferredToken {
 
 /**
  * Node/CLI-only lifecycle facade for a profile's replica root. The node-sdk exports
- * `createProfileReplicaPurge({ profileDir, guard })`; `guard` is the caller's mandatory,
- * nonreentrant profile lock. This does not widen the browser `ReplicaLifecycleGate`.
+ * `createProfileReplicaPurge({ profileDir, guard })`; `guard` is the caller's
+ * mandatory profile lock (the CLI's existing lock is reentrant within one async
+ * call chain). This does not widen the browser `ReplicaLifecycleGate`.
  *
- * While a durable deferred denial is active, `recover` and `erasePending` report the
- * outstanding intents without erasing them; `pendingPurge` still returns all intents.
- * All guarded reads and new establishment remain refused. CONTRACT.md §2 specifies
- * crash/retry ordering and the explicit plain-logout/account-switch/expiry override.
+ * While a durable deferred denial is active, `recover` and `erasePending`
+ * leave intents and physical files untouched; `pendingPurge` lists the intents.
+ * A complete enumeration may have zero intents, so `remaining: 0` does not
+ * prove completion: `deferredErase()` is the authoritative marker check and
+ * `purgePending` includes that marker. All guarded reads and new establishment
+ * remain refused. CONTRACT.md §2 specifies crash/retry and explicit overrides.
  */
 export interface ProfileReplicaPurge extends Pick<ReplicaLifecycleGate, "recover" | "erasePending" | "pendingPurge"> {
   /**
@@ -396,7 +399,7 @@ export interface ProfileReplicaPurge extends Pick<ReplicaLifecycleGate, "recover
   deny(input: ReplicaDenyInput, options?: { deferErase?: boolean }): Promise<ReplicaDenyOutcome & {
     resumeToken?: ProfileReplicaDeferredToken;
   }>;
-  /** Returns the persisted active token across restart, or null after the marker clears. */
+  /** Returns the persisted active token across restart, even with zero intents; null only after the marker clears. */
   deferredErase(): Promise<ProfileReplicaDeferredToken | null>;
   /**
    * Under the profile lock, require the exact denied epoch and principal hash and a
