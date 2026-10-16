@@ -720,73 +720,22 @@ describe("CLI auth login command", () => {
     resetState();
   });
 
-  test("non-interactive OpenKey login keeps the requested browser/paste flow instead of switching to device mode", async () => {
-    const key = { kty: "OKP", crv: "Ed25519", x: "key-public", d: "key-private" };
+  test.each([true, false])("replica-enabled OpenKey login never downgrades to v1 without a verified owner (key present: %s)", async (hasKey) => {
     profiles.set("default", makeProfile({
       did: "did:key:openkey-session",
       sessionDid: "did:key:openkey-session",
       authMethod: "openkey",
       replication: { prefixes: ["notes/"] },
     }));
-    keys.set("default", key);
-    openKeyDelegation = {
-      ...openKeyDelegation,
-      verificationMethod: "did:key:openkey-session",
-      spaceId: "tinycloud:pkh:eip155:1:0xowner:default",
-    };
+    if (hasKey) keys.set("default", { kty: "OKP", crv: "Ed25519", x: "key-public", d: "key-private" });
 
     await runAuthCommand(["auth", "login", "--method", "openkey", "--no-popup"]);
 
-    expect(recorded.errors).toEqual([]);
-    expect(recorded.startAuthFlows).toEqual([
-      { did: "did:key:openkey-session", options: expect.objectContaining({ noPopup: true, jwk: key }) },
-    ]);
-    expect(recorded.startAuthFlows[0]?.options.permissions).toContainEqual(expect.objectContaining({
-      service: "tinycloud.kv",
-      space: "default",
-      path: "",
-      actions: expect.arrayContaining(["tinycloud.kv/get", "tinycloud.kv/sync"]),
-    }));
-    expect(recorded.setProfiles.at(-1)?.data.replication).toEqual({ prefixes: ["notes/"] });
-    expect(recorded.outputs).toEqual([expect.not.objectContaining({ mode: "device" })]);
-  });
-
-  test("owner OpenKey manifest replication reuses whole-space get authority once", async () => {
-    const key = { kty: "OKP", crv: "Ed25519", x: "key-public", d: "key-private" };
-    profiles.set("default", makeProfile({
-      did: "did:key:openkey-session",
-      sessionDid: "did:key:openkey-session",
-      authMethod: "openkey",
-    }));
-    keys.set("default", key);
-    manifestPermissions = [
-      { service: "tinycloud.kv", space: "default", path: "", actions: ["tinycloud.kv/get"] },
-      { service: "tinycloud.capabilities", space: "default", path: "", actions: ["tinycloud.capabilities/read"] },
-    ];
-    openKeyDelegation = {
-      ...openKeyDelegation,
-      verificationMethod: "did:key:openkey-session",
-      spaceId: "tinycloud:pkh:eip155:1:0xowner:default",
-    };
-
-    await runAuthCommand([
-      "auth", "login", "--method", "openkey", "--no-popup", "--manifest", "root.json",
-      "--replication-prefix", "notes/", "--replication-prefix", "docs/",
-    ]);
-
-    expect(recorded.errors).toEqual([]);
-    const permissions = recorded.startAuthFlows[0]?.options.permissions as Array<{
-      service: string;
-      path: string;
-      actions: string[];
-    }>;
-    expect(permissions.filter((entry) => entry.actions.includes("tinycloud.kv/sync"))).toEqual([
-      expect.objectContaining({
-        service: "tinycloud.kv",
-        path: "",
-        actions: expect.arrayContaining(["tinycloud.kv/get", "tinycloud.kv/sync"]),
-      }),
-    ]);
+    expect((recorded.errors[0] as CLIErrorLike)?.code).toBe("V2_REQUIRED");
+    expect(recorded.startAuthFlows).toEqual([]);
+    expect(recorded.setSessions).toEqual([]);
+    expect(recorded.setKeys).toEqual([]);
+    expect(recorded.generateKeyCalls).toBe(0);
   });
 
   test("browser login remains available when only stdout is redirected", async () => {

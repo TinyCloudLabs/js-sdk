@@ -2169,6 +2169,11 @@ export async function refreshOpenKeySession(
     const estimatedExpiry = expiry === undefined ? undefined : new Date(Date.now() + expiry.durationMs).toISOString();
     assertSessionReplaceable(profileName, snapshot, expectedOwner, permissions, estimatedExpiry);
   }
+  if (replication.prefixes.length > 0) {
+    throw new CLIError("V2_REQUIRED",
+      "Replica-enabled OpenKey login requires a verified owner and the SDK-prepared SIWE v2 handoff; this CLI cannot use the legacy approval flow for local replica authority. Specify --owner did:pkh:eip155:CHAIN:ADDRESS and retry with a v2-capable CLI/OpenKey.",
+      ExitCode.AUTH_REQUIRED);
+  }
 
   // A logged-out nonreplica profile has no restorable signer. Keep the
   // candidate private key in memory until the signed OpenKey result verifies
