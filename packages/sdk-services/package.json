@@ -46,6 +46,16 @@
         "default": "./dist/kv/replication/contractConstants.cjs"
       }
     },
+    "./kv/replication/grantPolicyConstants": {
+      "import": {
+        "types": "./dist/kv/replication/grantPolicyConstants.d.ts",
+        "default": "./dist/kv/replication/grantPolicyConstants.js"
+      },
+      "require": {
+        "types": "./dist/kv/replication/grantPolicyConstants.d.cts",
+        "default": "./dist/kv/replication/grantPolicyConstants.cjs"
+      }
+    },
     "./kv/replication/grantPolicyTypes": {
       "import": {
         "types": "./dist/kv/replication/grantPolicyTypes.d.ts",
@@ -92,6 +102,9 @@
       ],
       "kv/replication/contractConstants": [
         "dist/kv/replication/contractConstants.d.ts"
+      ],
+      "kv/replication/grantPolicyConstants": [
+        "dist/kv/replication/grantPolicyConstants.d.ts"
       ],
       "kv/replication/grantPolicyTypes": [
         "dist/kv/replication/grantPolicyTypes.d.ts"
