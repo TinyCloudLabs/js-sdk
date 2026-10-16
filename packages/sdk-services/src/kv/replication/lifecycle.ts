@@ -479,6 +479,9 @@ export interface ProfileReplicaPurge extends Pick<ReplicaLifecycleGate, "recover
    * forbids credential cleanup or erasure until `completeRemoteLogout`
    * after all exact-CID revokes. Only approved path/type/dev/ino identities
    * and the explicit discard bit survive; changed paths refuse pre-action.
+   * V1 active remote logout additionally requires a committed deferred
+   * denial/token before online revoke; v2 orphan and v3 inactive markers
+   * instead use their version-specific gate-absence/epoch fences.
    *
    * A missing flag pending index, unrecognized child, nonempty pending state
    * or corrupt gate requires explicit discard. Null means no replica marker,
@@ -494,16 +497,19 @@ export interface ProfileReplicaPurge extends Pick<ReplicaLifecycleGate, "recover
     remotePending?: true;
   }): Promise<ProfileReplicaLogoutPending | null>;
   /**
-   * After every authoritative exact-CID revoke succeeds, validate the
-   * deferred gate's principal and epoch under the profile lock and durably
-   * remove `remotePending`. A failed/partial remote sequence never calls this.
+   * After every authoritative exact-CID revoke succeeds, revalidate the
+   * marker's principal and version-specific fence under the profile lock:
+   * v1 denied epoch/hash, v2 no replacement gate, or v3 exact inactive
+   * epoch/null principal. Then durably remove `remotePending`.
+   * A failed/partial remote sequence never calls this.
    */
   completeRemoteLogout(input: { principal: string }): Promise<ProfileReplicaLogoutPending>;
   /**
    * Under the profile lock, report whether this principal's marker is still
-   * remote-pending and the scoped gate is durably denied. False only when the
-   * marker is absent/completed; a mismatched principal or stale gate refuses.
-   * This permits an explicit network-only revoke retry, never replica delivery.
+   * remote-pending and its v1 deferred gate, v2 orphan or v3 inactive gate
+   * fence still matches. False only when the marker is absent/completed;
+   * a mismatched principal or stale gate refuses. This permits an explicit
+   * network-only revoke retry, never replica delivery.
    */
   remotePendingLogout(input: { principal: string }): Promise<boolean>;
   /**
@@ -515,8 +521,9 @@ export interface ProfileReplicaPurge extends Pick<ReplicaLifecycleGate, "recover
    * `error.inventoryApprovalEntries` plus a nonsecret 32-hex-character
    * `error.inventoryApprovalToken`, and mutates nothing even when `approval`
    * contains the new paths or `discardLocalChanges` is true. With the
-   * original inventory intact, validate the fresh approval and owner/epoch,
-   * then atomically replace `remotePending` with `remoteAbandoned: true`.
+   * original inventory intact, validate the fresh approval and the marker's
+   * version-specific owner/gate fence, then atomically replace `remotePending`
+   * with `remoteAbandoned: true`.
    * This is not an online-success receipt and makes no further node call.
    */
   abandonRemoteLogout(input: {
@@ -528,11 +535,11 @@ export interface ProfileReplicaPurge extends Pick<ReplicaLifecycleGate, "recover
    * Only a separate explicit CLI command with
    * `--discard-local-changes --approve-inventory <token>` may approve a
    * changed remote-pending inventory. Under the profile lock, require the
-   * same owner/epoch, original-to-current inventory mismatch, exact fresh
-   * preflight and matching displayed 32-hex-character token. Commit the
-   * newly approved identities with `remoteAbandoned: true`, never a remote
-   * receipt. Missing, stale or reused tokens fail without mutation; there
-   * is no same-command fallback from `abandonRemoteLogout`.
+   * same owner and version-specific gate fence, original-to-current inventory
+   * mismatch, exact fresh preflight and matching displayed 32-hex-character
+   * token. Commit the newly approved identities with `remoteAbandoned: true`,
+   * never a remote receipt. Missing, stale or reused tokens fail without
+   * mutation; there is no same-command fallback from `abandonRemoteLogout`.
    */
   approveChangedPlainLogout(input: {
     principal: string;
