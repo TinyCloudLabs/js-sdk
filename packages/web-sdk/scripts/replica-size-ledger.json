@@ -21,8 +21,8 @@
     {
       "pr": "#546",
       "ticket": "TC-858",
-      "index.mjs": 235,
-      "index.cjs": 180,
+      "index.mjs": 238,
+      "index.cjs": 183,
       "note": "Replica gzip growth measured against this PR's merge base"
     },
     {
