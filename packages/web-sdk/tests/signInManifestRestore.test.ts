@@ -5,6 +5,7 @@ import { indexedDbReplicaStorage } from "../../replica/src/kv-storage/client";
 import { TinyCloudNode as ReplicationNode, getNodeReplicationLoaders, registerReplicationLoaders } from "@tinycloud/node-sdk/core";
 import { PROOF_PRIVATE_KEY, signedRestorableSession } from "../../node-sdk/src/test-support/signed-restorable-session";
 import { pkhDid } from "@tinycloud/sdk-core";
+import { createMemoryPendingStore } from "../../sdk-services/src/kv/replication/memoryPendingStore";
 
 const { TextEncoder: TE, TextDecoder: TD } = require("util");
 
@@ -632,6 +633,190 @@ async function persistedRealSession(host: string) {
   };
   return { node, wasm, persisted, address: proof.address, signer };
 }
+test("implicit signIn ignores persisted wallet A after the connected provider switches to B", async () => {
+  const { persisted, address: walletA } = await persistedRealSession("https://wallet-switch.test");
+  const walletB = "0x1111111111111111111111111111111111111111";
+  const entries = new Map<string, string>();
+  const backend = {
+    get length() { return entries.size; },
+    key: (index: number) => [...entries.keys()][index] ?? null,
+    getItem: (key: string) => entries.get(key) ?? null,
+    setItem: (key: string, value: string) => { entries.set(key, value); },
+    removeItem: (key: string) => { entries.delete(key); },
+    clear: () => entries.clear(),
+  } satisfies Storage;
+  const storage = new BrowserSessionStorage({ storage: backend });
+  await storage.save(walletA, persisted);
+  let connected = walletA;
+  const provider = {
+    request: async ({ method }: { method: string }) => {
+      if (method === "eth_accounts") return [connected];
+      throw new Error(`Unexpected wallet request: ${method}`);
+    },
+  };
+  const web = new TinyCloudWeb({ provider, sessionStorage: storage, includeAccountRegistryPermissions: false });
+  await (web as any)._initPromise;
+  const freshSession = { address: walletB, chainId: 1, sessionKey: {}, siwe: "fresh-B", signature: "signed-B" };
+  const node = {
+    address: walletA,
+    hasRuntimePermissions: () => true,
+    restoreSession: mock(async () => undefined),
+    signIn: mock(async () => { node.session = freshSession; }),
+    session: undefined as typeof freshSession | undefined,
+  };
+  (web as any)._node = node;
+  expect(await (web as any).walletSigner.getConnectedAddress()).toBe(walletA);
+  connected = walletB;
+
+  const result = await web.signIn();
+
+  expect(result.address).toBe(walletB);
+  expect(node.restoreSession).not.toHaveBeenCalled();
+  expect(node.signIn).toHaveBeenCalledTimes(1);
+  expect(storage.exists(walletA)).toBe(true);
+});
+
+test.each([
+  { name: "a different connected wallet", accounts: ["0x1111111111111111111111111111111111111111"], gate: "principal_mismatch" },
+  { name: "an unknown wallet", accounts: [], gate: "gate_unavailable" },
+  { name: "an unavailable provider", accounts: "error", gate: "gate_unavailable" },
+  { name: "the matching wallet", accounts: null, gate: null },
+])("explicit restore preserves network authority and matches replica admission for $name", async ({ accounts, gate }) => {
+  const { persisted, address, wasm } = await persistedRealSession("https://wallet-restore.test");
+  const entries = new Map<string, string>();
+  const backend = {
+    get length() { return entries.size; },
+    key: (index: number) => [...entries.keys()][index] ?? null,
+    getItem: (key: string) => entries.get(key) ?? null,
+    setItem: (key: string, value: string) => { entries.set(key, value); },
+    removeItem: (key: string) => { entries.delete(key); },
+    clear: () => entries.clear(),
+  } satisfies Storage;
+  const storage = new BrowserSessionStorage({ storage: backend });
+  const stamp = { incarnation: "wallet-restore", lifecycleEpoch: 1 };
+  await storage.save(address, { ...persisted, replicaStamp: stamp });
+  let restoredStamps = 0;
+  let opened = 0;
+  const expiresAt = Date.now() + 60_000;
+  const lifecycle = {
+    kind: "indexeddb" as const,
+    recover: async () => ({ erased: [], failed: [], remaining: 0 }),
+    restoreSessionStamp: async () => { restoredStamps++; return stamp; },
+    checkDelivery: () => ({ status: "allow" as const }),
+    consentDeadline: () => expiresAt,
+  };
+  registerReplicationLoaders({
+    runtime: () => import("@tinycloud/node-sdk/replication/runtime"),
+    authority: () => import("@tinycloud/node-sdk/replication/authority"),
+    gate: () => import("@tinycloud/replica/profile-gate"),
+  });
+  const events: unknown[] = [];
+  let activeAccounts = accounts === "error" ? [] : accounts ?? [address];
+  let localReads = 0;
+  let localLists = 0;
+  const provider = { request: async ({ method }: { method: string }) => {
+    if (method === "eth_accounts") {
+      if (accounts === "error") throw new Error("Wallet unavailable");
+      return activeAccounts;
+    }
+    throw new Error(`Unexpected wallet request: ${method}`);
+  } };
+  const web = new TinyCloudWeb({
+    provider, sessionStorage: storage, tinycloudHosts: ["https://wallet-restore.test"],
+    includeAccountRegistryPermissions: false,
+    replication: { enabled: true, prefixes: ["notes/"], onEvent: (event: unknown) => events.push(event),
+      storage: {
+        kind: "indexeddb", lifecycle,
+        pendingWrites: () => createMemoryPendingStore({
+          host: "https://wallet-restore.test", space: persisted.tinycloudSession.spaceId,
+          principal: pkhDid(address, persisted.chainId),
+        }),
+        open: async (spec: { identity: { principal: string }; prefix: string }) => {
+          opened++;
+          const grant = {
+            cid: "installed-grant", parentCid: null, expiresAt, state: "active" as const,
+            unconstrained: true, installedAt: Date.now(), effectiveExpiresAt: expiresAt, consentDeadline: expiresAt,
+          };
+          const localStatus = {
+            coverage: "complete" as const, lastSyncAt: new Date().toISOString(), syncedThroughEpoch: 0,
+            authority: { state: "valid" as const, expiresAt },
+            grant, counts: { keys: 1, contentMissing: 0, tombstones: 0 }, bytes: 1, lastError: null,
+          };
+          return {
+            spec, deviceDid: spec.identity.principal, replicaId: "opaque-wallet-test",
+            grant: async () => grant, status: async () => localStatus,
+            sync: async ({ syncStartEpoch }: { syncStartEpoch: number }) => {
+              localStatus.syncedThroughEpoch = syncStartEpoch;
+              localStatus.lastSyncAt = new Date().toISOString();
+              return { status: "synced" as const, pages: 1, changes: 0, deleted: 0, fetched: 0,
+                contentMissing: 0, coverage: "complete" as const, syncedThroughEpoch: syncStartEpoch };
+            },
+            get: async (key: string) => {
+              localReads++;
+              return {
+                status: "present" as const, key, value: new TextEncoder().encode('"local"'),
+                etag: '"local"', metadata: { "content-type": "application/json" },
+                meta: { asOf: new Date().toISOString(), coverage: "complete" as const,
+                  authority: "valid" as const, syncedThroughEpoch: 0 },
+              };
+            },
+            list: async () => {
+              localLists++;
+              return { keys: ["notes/a"], meta: { asOf: new Date().toISOString(),
+                coverage: "complete" as const, authority: "valid" as const, syncedThroughEpoch: 0 } };
+            },
+            close: async () => undefined,
+          };
+        },
+      } as never },
+  });
+  (web as any).wasmBindings = wasm;
+  const originalFetch = globalThis.fetch;
+  let networkReads = 0;
+  let offline = false;
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    if (String(input).endsWith("/info")) return Response.json({ protocol: 1, version: "1.0.0", features: ["kv-sync-v1"] });
+    networkReads++;
+    if (offline) throw new Error("Network unavailable during local read");
+    return Response.json({ data: "network" });
+  }) as typeof fetch;
+  try {
+    const restored = await web.restoreSession(address);
+    expect(restored.status).toBe("restored");
+    expect(web.session()?.address).toBe(address);
+    expect(restoredStamps).toBe(gate ? 0 : 1);
+    const statuses = await web.replication?.status();
+    if (gate) expect(statuses).toEqual([expect.objectContaining({ state: "gated", gate, errorCode: "REPLICA_GATED" })]);
+    else expect(statuses?.[0]?.state).not.toBe("gated");
+    offline = !gate;
+    const result = await web.kv.get("notes/a");
+    if (gate) {
+      expect(networkReads).toBeGreaterThan(0);
+      expect(opened).toBe(0);
+      expect(events).not.toContainEqual(expect.objectContaining({ type: "replication.read", source: "replica" }));
+    } else {
+      expect(result.ok && result.data.data).toBe("local");
+      expect(opened).toBeGreaterThan(0);
+      expect(localReads).toBe(1);
+      const localList = await web.kv.list({ path: "notes/" });
+      expect(localList.ok && localList.data.keys).toContain("notes/a");
+      expect(localLists).toBe(1);
+      offline = false;
+      activeAccounts = ["0x1111111111111111111111111111111111111111"];
+      const before = networkReads;
+      await web.kv.get("notes/a");
+      expect(networkReads).toBeGreaterThan(before);
+      expect(localReads).toBe(1);
+      expect(events).toContainEqual(expect.objectContaining({ type: "replication.read", source: "network", reason: "replica_gated" }));
+      await web.kv.list({ path: "notes/" });
+      expect(localLists).toBe(1);
+      expect(events).toContainEqual(expect.objectContaining({ type: "replication.read", op: "list", source: "network", reason: "replica_gated" }));
+    }
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 
 test("signOut() clears an explicit pending restore address even without activeAddress()", async () => {
   const { node, persisted, address } = await persistedRealSession("https://restore-race.test");

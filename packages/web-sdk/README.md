@@ -76,6 +76,14 @@ Without registration, enabling replication throws at construction; leaving
 replication off requires no registration. A refused local replica does not end
 an otherwise valid network session.
 
+`signIn()` selects a persisted session for the currently connected wallet;
+switching wallets starts a fresh sign-in instead of reviving the prior wallet's
+session. Explicit `restoreSession(address)` can restore a valid network session,
+but local replication also requires that the provider currently reports that
+wallet. An unknown, unavailable, or different provider account leaves network
+use intact and gates local reads; restoring never creates or repairs a replica
+stamp. Local reads recheck the connected account before returning replica data.
+
 ## Basic Storage Operations
 
 ### Storing Data
