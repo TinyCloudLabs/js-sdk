@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { principalDidEquals, type TinyCloudNode } from "@tinycloud/node-sdk";
 import { additionalDelegationsPath, profilePath } from "@tinycloud/operations/state";
 import { withoutBearer } from "@tinycloud/operations/delegation-binding";
-import { parseSignedCompactUcanAttenuation } from "@tinycloud/sdk-core";
+import { parseSignedCompactUcanAttenuation, parseSignedSiweCacao } from "@tinycloud/sdk-core";
 import { ExitCode } from "../config/constants.js";
 import type { ProfileConfig } from "../config/types.js";
 import { CLIError } from "../output/errors.js";
@@ -37,10 +37,16 @@ function ownerSpaceResource(resource: string, ownerDid: string): boolean {
   return match !== null && principalDidEquals(ownerDid, `did:pkh:eip155:${match[1]}:${match[2]}`);
 }
 
-function signedOwnerGrant(cid: string, authorization: string, ownerDid: string, issuer?: string): boolean {
-  const signed = parseSignedCompactUcanAttenuation(withoutBearer(authorization), cid);
-  return (issuer === undefined || principalDidEquals(signed.payload.iss, issuer)) &&
-    Object.keys(signed.payload.att).some((resource) => ownerSpaceResource(resource, ownerDid));
+async function signedOwnerGrant(cid: string, authorization: string, ownerDid: string, issuer?: string): Promise<boolean> {
+  const token = withoutBearer(authorization);
+  if (token.split(".").length === 3) {
+    const signed = parseSignedCompactUcanAttenuation(token, cid);
+    return (issuer === undefined || principalDidEquals(signed.payload.iss, issuer)) &&
+      Object.keys(signed.payload.att).some((resource) => ownerSpaceResource(resource, ownerDid));
+  }
+  const signed = await parseSignedSiweCacao(token, cid);
+  return principalDidEquals(signed.issuer, ownerDid) &&
+    Object.keys(signed.attenuation).some((resource) => ownerSpaceResource(resource, ownerDid));
 }
 
 /** Fence local CID inventory across online work without holding a profile lock over node I/O. */
@@ -95,7 +101,7 @@ export async function planLogoutRevocations(input: {
       if (!cid || !delegation || typeof delegation !== "object" || !("cid" in delegation) || delegation.cid !== cid ||
           typeof authorization !== "string") throw inventoryError(cid, "the issued grant record is malformed");
       try {
-        if (signedOwnerGrant(cid, authorization, session.ownerDid)) included.add(cid);
+        if (await signedOwnerGrant(cid, authorization, session.ownerDid)) included.add(cid);
         else unresolved.add(cid);
       } catch {
         throw inventoryError(cid, "the purported issued grant has no verifiable exact-CID signature");
@@ -112,7 +118,7 @@ export async function planLogoutRevocations(input: {
       continue;
     }
     try {
-      if (signedOwnerGrant(cid, authorization, session.ownerDid, profile.sessionDid ?? profile.did)) included.add(cid);
+      if (await signedOwnerGrant(cid, authorization, session.ownerDid, profile.sessionDid ?? profile.did)) included.add(cid);
       else unresolved.add(cid);
     } catch {
       unresolved.add(cid);

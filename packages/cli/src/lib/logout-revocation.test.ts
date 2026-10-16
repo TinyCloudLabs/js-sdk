@@ -8,6 +8,7 @@ import type { TinyCloudNode } from "@tinycloud/node-sdk";
 import { profilePath, withTinyCloudStateRoot } from "@tinycloud/operations/state";
 import { planLogoutRevocations } from "./logout-revocation.js";
 import { owner, signUcan } from "../../../replica/test/fixtures.js";
+import cacaoFixture from "../../../sdk-core/test-fixtures/siwe-cacao/owner-share.json";
 
 const PROFILE = "owner";
 const OWNER_DID = "did:pkh:eip155:1:0x0000000000000000000000000000000000000001";
@@ -53,10 +54,10 @@ function record(cid: string, direction: "granted" | "received") {
   };
 }
 
-async function inventory(node: TinyCloudNode) {
+async function inventory(node: TinyCloudNode, ownerDid = OWNER_DID) {
   return planLogoutRevocations({
-    profileName: PROFILE, profile: { name: PROFILE, did: OWNER_DID, ownerDid: OWNER_DID, sessionDid: "did:key:z6MkSession" },
-    session: { ownerDid: OWNER_DID, delegationCid: "bafy-session" }, host: "https://node.example.test", node,
+    profileName: PROFILE, profile: { did: ownerDid, ownerDid, sessionDid: "did:key:z6MkSession" },
+    session: { ownerDid, delegationCid: "bafy-session" }, host: "https://node.example.test", node,
   });
 }
 
@@ -71,6 +72,23 @@ test("verified issued grant precedes the session CID even when history duplicate
   ].map((row) => JSON.stringify(row)).join("\n") + "\n");
   const result = await inventory(queryNode([]));
   expect(result.cids).toEqual([grant.cid, "bafy-session"]);
+}));
+
+test("wallet-signed CACAO issued grant is included before the active session", () => inHome(async () => {
+  const grant = cacaoFixture.delegation;
+  await writeFile(join(profilePath(PROFILE), "auth-grant-artifacts.json"), JSON.stringify([
+    { delegationCid: grant.cid, delegation: { cid: grant.cid, delegationHeader: { Authorization: grant.authorization } } },
+  ]));
+  const result = await inventory(queryNode([]), cacaoFixture.ownerDid);
+  expect(result.cids).toEqual([grant.cid, "bafy-session"]);
+}));
+
+test("valid wallet-signed foreign grant cannot be classified as this owner's issued grant", () => inHome(async () => {
+  const grant = cacaoFixture.delegation;
+  await writeFile(join(profilePath(PROFILE), "auth-grant-artifacts.json"), JSON.stringify([
+    { delegationCid: grant.cid, delegation: { cid: grant.cid, delegationHeader: { Authorization: grant.authorization } } },
+  ]));
+  await expect(inventory(queryNode([]))).rejects.toMatchObject({ code: "REVOKE_INVENTORY_UNVERIFIED" });
 }));
 
 test("history source cli is not ownership proof: granted target revokes, imported target is explicitly excluded", () => inHome(async () => {

@@ -219,6 +219,20 @@ async function revokeForLogout(ctx: CLIContext): Promise<CompletedOnlineLogout> 
       token,
     };
   });
+  if (selected.profile.authMethod !== "local" || !selected.profile.privateKey) {
+    throw new CLIError("REVOCATION_AUTHORITY_UNAVAILABLE",
+      "OpenKey owner CID revocation requires a verified signed revoke-control grant or wallet proof. No CID was revoked; session, key and replica files remain for retry, while local replica reads stay denied.",
+      ExitCode.AUTH_REQUIRED, { hint: "Obtain verified owner revoke authority before retrying `auth logout --revoke`, or use plain `auth logout` to end this local session without node revocation." });
+  }
+  const signerDid = addressToDID(
+    await deriveAddress(selected.profile.privateKey),
+    selected.profile.chainId ?? DEFAULT_CHAIN_ID,
+  );
+  if (!principalDidEquals(signerDid, selected.ownerDid)) {
+    throw new CLIError("REVOCATION_AUTHORITY_UNAVAILABLE",
+      "The local owner key does not match the signed session owner. No CID was revoked; session, key and replica files remain for retry, while local replica reads stay denied.",
+      ExitCode.AUTH_REQUIRED);
+  }
   try {
     // No profile lock spans an unbounded node request. The denied gate remains
     // durable across interruption; the exact session and epoch are rechecked before erasure.
