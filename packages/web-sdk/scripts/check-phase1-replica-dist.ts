@@ -7,7 +7,7 @@ import { measureReplicaOptionalLoaded, type LoadedSizes } from "./measure-replic
 import {
   approvedMeasurementCorrection, approvedRelocations, correctedOptionalAllowance,
   fixRequiredOptionalAllowance, optionalFormats, priorOptionalAllowance,
-  relocatedOptionalAllowance, relocationCommit, validateOptionalLedger, type OptionalLedger,
+  relocatedOptionalAllowance, relocationCommit, validateOptionalEntryTransition, validateOptionalLedger, type OptionalLedger,
 } from "./replica-optional-size-policy";
 import { approvedFixRequiredRatchet, approvedGatedOnlyRatchet, approvedPhase2, validateGatedOnlyRatchet, validateLedger, type GzipSizes, type Ledger, type LedgerEntry } from "./replica-size-policy";
 type Baseline = {
@@ -357,17 +357,15 @@ if (prBaseSha) {
       for (const format of optionalFormats) {
         console.log(`${format}: merge-base incremental=${baseOptionalSizes[format]} current=${optionalCurrent[format]} delta=${optionalDeltas[format]} gzip-bytes`);
       }
-      const optionalAppended = optionalLedger.entries.slice(baseOptional.entries.length);
-      if (!optionalPrefixMatches || optionalAppended.length !== 1) {
-        console.error(`Replica-touching PR must append exactly one measured row to ${baseOptionalPath}:`);
+      try {
+        validateOptionalEntryTransition(baseOptional.entries, optionalLedger.entries, optionalDeltas);
+      } catch (error) {
+        console.error(error instanceof Error ? error.message : "Invalid optional PR ledger transition");
         console.error(JSON.stringify({
           pr: process.env.REPLICA_BUDGET_PR_NUMBER ? `#${process.env.REPLICA_BUDGET_PR_NUMBER}` : "#<PR>",
           ticket: process.env.REPLICA_BUDGET_TICKET?.match(/\bTC-\d+\b/i)?.[0] ?? "TC-UNKNOWN",
           ...optionalDeltas, note: "Optional first-import and IDB activation gzip deltas against this PR's merge base",
         }));
-        failed = true;
-      } else if (optionalFormats.some((format) => optionalAppended[0][format] !== optionalDeltas[format])) {
-        console.error(`${baseOptionalPath} appended row must record exact observed first-import and IDB activation deltas: ${JSON.stringify(optionalDeltas)}`);
         failed = true;
       }
       const appended = ledger.entries.slice(baseLedger.entries.length);

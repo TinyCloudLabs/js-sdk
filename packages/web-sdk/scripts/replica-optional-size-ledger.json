@@ -42,11 +42,11 @@
     {
       "pr": "#548",
       "ticket": "TC-858",
-      "replica.mjs": 45538,
-      "replica.cjs": 65095,
-      "activation.mjs": 23063,
-      "activation.cjs": 24654,
-      "note": "Bun 1.4.3 after S1 222922c4+aed35eef and S4 gated-network event fix: observed loaded gzip; first import reuses root, deferred IDB activation and hashed worker are separate. Approved 2578c6a7 paired relocation and both optional ceilings remain unchanged."
+      "replica.mjs": 51785,
+      "replica.cjs": 66995,
+      "activation.mjs": 23071,
+      "activation.cjs": 24650,
+      "note": "Unmerged #548 Bun 1.3.14 observed incremental gzip against merge-base 8bfd6df4 (no optional entry): first import shares the root and includes the parser; activation adds the deferred IDB factory. The refused-admission-only observer is separately capped at 926/1014, and the hashed worker has its own ratchet."
     }
   ]
 }
