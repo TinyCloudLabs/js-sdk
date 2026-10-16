@@ -272,8 +272,10 @@ operational metadata, not values.
 partition files only. It renders read source/reason counts, hit ratio, latency
 and staleness percentiles, sync/write outcomes, and recent divergences; JSON
 marks live replica status unavailable. It never starts a replication runtime.
-`--purge` refuses; use `tinycloud replica reset --replica <name> --purge` for
-a named local replica. `--clear-pending` is temporarily unavailable (TC-1309).
+Report `--purge` and `--clear-pending` refuse with exit 2 `REPORT_READ_ONLY`.
+`tinycloud replica reset --replica <name> --purge` is a partial alternative
+for a named local replica only. Flag-owned purge and pending clearing have no
+equivalent yet (TC-1309).
 `auth logout` purges legacy and flag-owned replicas unless `--keep-replicas`
 is used.
 
