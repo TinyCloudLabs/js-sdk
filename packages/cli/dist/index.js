@@ -5787,7 +5787,14 @@ function createReplicationEventSink(profileRoot, options) {
 `);
       } else if (event.type === "replication.sync") {
         const pending = event.pendingCleared === void 0 ? "" : ` pendingCleared:${event.pendingCleared}`;
-        process.stderr.write(`[replication] sync ${event.replica} ${event.outcome}${event.code ? ` ${event.code}` : ""}${pending}
+        const origin = event.origin === void 0 ? "" : ` origin:${event.origin}`;
+        process.stderr.write(`[replication] sync ${event.replica} ${event.outcome}${event.code ? ` ${event.code}` : ""}${pending}${origin}
+`);
+      } else if (event.type === "replication.grant") {
+        process.stderr.write(`[replication] grant ${event.replicaId} ${event.action}${event.code ? ` ${event.code}` : ""}${event.effectiveExpiresAt ? ` effectiveExpiresAt:${event.effectiveExpiresAt}` : ""}
+`);
+      } else if (event.type === "replication.lifecycle") {
+        process.stderr.write(`[replication] lifecycle ${event.action}${event.reason ? ` ${event.reason}` : ""}${event.gate ? ` gate:${event.gate}` : ""}${event.code ? ` ${event.code}` : ""}${event.remaining === void 0 ? "" : ` remaining:${event.remaining}`}
 `);
       }
     }
