@@ -4,4 +4,4 @@
 "@tinycloud/replica": patch
 ---
 
-Pin profile and replica directories during reset and logout cleanup. Reject whole-profile and replica database symlinks, changed SQLite identities, and expired profile descriptors before access. Gate legacy replica reads on pending logout, including aliases and in-flight reads. Keep ordinary profile state access available on non-Linux platforms while unsafe replica purge refuses them.
+Pin profile and replica directories before SQLite opens during reset and sync, and through local report reads and logout cleanup. Reject whole-profile and replica database symlinks, changed SQLite identities, and expired profile descriptors before access. Gate legacy replica reads on pending logout, including aliases and in-flight reads. Keep ordinary profile state access available on non-Linux platforms while unsafe replica purge refuses them.

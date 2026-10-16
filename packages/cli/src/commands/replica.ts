@@ -15,6 +15,7 @@ import {
   readAdditionalDelegations,
   readSession,
   withProfileLock,
+  withPinnedProfileDirectory,
 } from "@tinycloud/operations/state";
 import { ownerSessionLacksProof } from "@tinycloud/operations/profile";
 import type { ReplicationEvent, ReplicationControl } from "@tinycloud/node-sdk";
@@ -468,45 +469,47 @@ or coverage incomplete; 5 grant expired, revoked or not yet valid; 6 network;
     .option("--clear-pending", "Clear ambiguous and likely orphaned in-flight writes")
     .action((options, cmd: Command) =>
       run(async () => {
-        const globals = cmd.optsWithGlobals();
-        const context = await ProfileManager.resolveContext(globals);
-        const node = context.replication ? await ensureAuthenticated(context) : undefined;
         const profile = await profileName(cmd);
-        let durationMs: number;
-        try {
-          durationMs = parseDuration(options.since);
-        } catch (error) {
-          throw new CLIError("USAGE_ERROR", error instanceof Error ? error.message : String(error), ExitCode.USAGE_ERROR);
-        }
-        const control: ReplicationControl | undefined = node?.replication ?? replicationForProfile(profile);
-        let cleared: number | undefined;
-        let purged: unknown;
-        let warning: string | undefined;
-        if (options.clearPending || options.purge) {
-          if (!control) throw new CLIError("REPLICATION_UNAVAILABLE", "No replication runtime is registered for this profile.", ExitCode.ERROR);
-          warning = CLEAR_PENDING_WARNING;
-          process.stderr.write(`Warning: ${warning}\n`);
-          if (options.clearPending) cleared = await control.clearPending();
-          if (options.purge) purged = await control.purge();
-        }
-        const sinceMs = Date.now() - durationMs;
-        const [events, partitions, replicas] = await Promise.all([
-          readReplicationEvents(profile, sinceMs),
-          replicationPartitions(profile),
-          node?.replication ? node.replication.status() : control ? control.status() : Promise.resolve([]),
-        ]);
-        const report = createReplicationReport(options.since, events, replicas, partitions, warning);
-        if (shouldOutputJson()) {
-          outputJson({
-            ...report,
-            ...(cleared === undefined ? {} : { cleared }),
-            ...(purged === undefined ? {} : { purged }),
-          });
-        } else {
-          process.stdout.write(`${renderReplicationReport(report)}\n`);
-          if (cleared !== undefined) process.stdout.write(`Cleared ${cleared} pending write record(s).\n`);
-          if (purged !== undefined) process.stdout.write(`Purge: ${JSON.stringify(purged)}\n`);
-        }
+        await withPinnedProfileDirectory(profile, async () => {
+          const globals = cmd.optsWithGlobals();
+          const context = await ProfileManager.resolveContext(globals);
+          const node = context.replication ? await ensureAuthenticated(context) : undefined;
+          let durationMs: number;
+          try {
+            durationMs = parseDuration(options.since);
+          } catch (error) {
+            throw new CLIError("USAGE_ERROR", error instanceof Error ? error.message : String(error), ExitCode.USAGE_ERROR);
+          }
+          const control: ReplicationControl | undefined = node?.replication ?? replicationForProfile(profile);
+          let cleared: number | undefined;
+          let purged: unknown;
+          let warning: string | undefined;
+          if (options.clearPending || options.purge) {
+            if (!control) throw new CLIError("REPLICATION_UNAVAILABLE", "No replication runtime is registered for this profile.", ExitCode.ERROR);
+            warning = CLEAR_PENDING_WARNING;
+            process.stderr.write(`Warning: ${warning}\n`);
+            if (options.clearPending) cleared = await control.clearPending();
+            if (options.purge) purged = await control.purge();
+          }
+          const sinceMs = Date.now() - durationMs;
+          const [events, partitions, replicas] = await Promise.all([
+            readReplicationEvents(profile, sinceMs),
+            replicationPartitions(profile),
+            node?.replication ? node.replication.status() : control ? control.status() : Promise.resolve([]),
+          ]);
+          const report = createReplicationReport(options.since, events, replicas, partitions, warning);
+          if (shouldOutputJson()) {
+            outputJson({
+              ...report,
+              ...(cleared === undefined ? {} : { cleared }),
+              ...(purged === undefined ? {} : { purged }),
+            });
+          } else {
+            process.stdout.write(`${renderReplicationReport(report)}\n`);
+            if (cleared !== undefined) process.stdout.write(`Cleared ${cleared} pending write record(s).\n`);
+            if (purged !== undefined) process.stdout.write(`Purge: ${JSON.stringify(purged)}\n`);
+          }
+        });
       }),
     );
 
@@ -522,110 +525,112 @@ or coverage incomplete; 5 grant expired, revoked or not yet valid; 6 network;
     .action((options, cmd: Command) =>
       run(async () => {
         const profile = await profileName(cmd);
-        if (options.prefix !== undefined) {
-          try {
-            assertFolderPrefix(options.prefix);
-          } catch (error) {
-            throw new CLIError("INVALID_REPLICATION_PREFIX", error instanceof Error ? error.message : String(error), ExitCode.USAGE_ERROR);
+        await withPinnedProfileDirectory(profile, async () => {
+          if (options.prefix !== undefined) {
+            try {
+              assertFolderPrefix(options.prefix);
+            } catch (error) {
+              throw new CLIError("INVALID_REPLICATION_PREFIX", error instanceof Error ? error.message : String(error), ExitCode.USAGE_ERROR);
+            }
           }
-        }
-        const globals = cmd.optsWithGlobals() as { host?: string };
-        const config = await ProfileManager.getProfile(profile);
-        const deviceDid = config.sessionDid ?? config.did;
-        const jwk = await ProfileManager.getKey(profile);
-        if (jwk === null) {
-          throw new CLIError("AUTH_REQUIRED", `Profile "${profile}" has no device key.`, ExitCode.AUTH_REQUIRED);
-        }
-        if (options.limit !== undefined && (!Number.isInteger(options.limit) || options.limit < 1 || options.limit > 1000)) {
-          throw new CLIError("USAGE_ERROR", "--limit must be an integer from 1 through 1000.", ExitCode.USAGE_ERROR);
-        }
-        const existing = await replicaNames(profile);
-        const name: string =
-          options.replica !== undefined
-            ? assertName(options.replica)
-            : options.prefix !== undefined
-              ? assertName(options.prefix.replace(/\/+$/, "").replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^[^A-Za-z0-9]+/, "") || "default")
-              : await existingReplicaName(profile, undefined);
-        const grants = await storedGrants(profile);
-        let store: SqliteReplicaStore;
+          const globals = cmd.optsWithGlobals() as { host?: string };
+          const config = await ProfileManager.getProfile(profile);
+          const deviceDid = config.sessionDid ?? config.did;
+          const jwk = await ProfileManager.getKey(profile);
+          if (jwk === null) {
+            throw new CLIError("AUTH_REQUIRED", `Profile "${profile}" has no device key.`, ExitCode.AUTH_REQUIRED);
+          }
+          if (options.limit !== undefined && (!Number.isInteger(options.limit) || options.limit < 1 || options.limit > 1000)) {
+            throw new CLIError("USAGE_ERROR", "--limit must be an integer from 1 through 1000.", ExitCode.USAGE_ERROR);
+          }
+          const existing = await replicaNames(profile);
+          const name: string =
+            options.replica !== undefined
+              ? assertName(options.replica)
+              : options.prefix !== undefined
+                ? assertName(options.prefix.replace(/\/+$/, "").replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^[^A-Za-z0-9]+/, "") || "default")
+                : await existingReplicaName(profile, undefined);
+          const grants = await storedGrants(profile);
+          let store: SqliteReplicaStore;
 
-        if (existing.includes(name)) {
-          store = await openReplica(profile, name);
-          const state = (await store.open())!;
-          const differs = syncOptionsDiffer(state.config, {
-            ...(options.space === undefined ? {} : { space: options.space }),
-            ...(options.prefix === undefined ? {} : { prefix: options.prefix }),
-            ...(globals.host === undefined ? {} : { host: globals.host }),
-          });
-          if (differs !== undefined) {
-            await store.close();
-            throw new ReplicaError(
-              ReplicaErrorCode.CONFIG_MISMATCH,
-              `Replica ${name} already follows ${differs}. Use another --replica name, or ${CLI_NAME} replica reset --replica ${name} --purge first.`,
-            );
-          }
-        } else {
-          const prefix: string | undefined = options.prefix;
-          if (prefix === undefined) {
-            throw new CLIError("USAGE_ERROR", "The first sync of a replica needs --prefix (and a device grant covering it).", ExitCode.USAGE_ERROR);
-          }
-          const space = resolveSpace(options.space, prefix, grants);
-          if (requiresSecretsOptIn(space, prefix) && options.allowSecrets !== true) {
-            throw new ReplicaError(
-              ReplicaErrorCode.SECRETS_OPT_IN_REQUIRED,
-              `Replicating ${space}/kv/${prefix} copies encrypted secret material to this disk; pass --allow-secrets to opt in.`,
-            );
-          }
-          const host = (globals.host ?? process.env.TC_HOST ?? config.host)?.replace(/\/+$/, "");
-          if (!host) throw new CLIError("USAGE_ERROR", "Pass --host: the profile has no host to pin.", ExitCode.USAGE_ERROR);
-          // Choose the grant before writing anything, so a missing grant leaves no replica behind.
-          chooseGrant(grants, deviceDid, space, prefix);
-          store = await createReplica(profile, {
-            name,
-            replicaId: randomBytes(16).toString("hex"),
-            host,
-            space,
-            prefix,
-            deviceDid,
-            allowSecrets: options.allowSecrets === true,
-            localReadPolicy: "whileGrantValid",
-            retentionGrantCid: null,
-          });
-        }
-
-        try {
-          const state = (await store.open())!;
-          const { space, prefix, host } = state.config;
-          if (requiresSecretsOptIn(space, prefix) && !state.config.allowSecrets && options.allowSecrets !== true) {
-            throw new ReplicaError(ReplicaErrorCode.SECRETS_OPT_IN_REQUIRED, `Replicating ${space}/kv/${prefix} needs --allow-secrets.`);
-          }
-          let grant: ParsedUcanGrant | undefined;
-          try {
-            grant = chooseGrant(grants, state.config.deviceDid, space, prefix);
-          } catch (error) {
-            // An expired stored grant is the engine's call (GRANT_EXPIRED), not a missing one.
-            if (!isReplicaError(error, ReplicaErrorCode.GRANT_MISSING) || (state.grant ?? state.pendingGrant) === null) throw error;
-          }
-          if (grant !== undefined) await store.installGrant(grant);
-          if (options.retentionGrant !== undefined && options.retentionGrant !== state.config.retentionGrantCid) {
-            await store.setRetentionGrant(options.retentionGrant === "" ? null : options.retentionGrant);
-          }
-          const current = (await store.open())!;
-          const transportFor = await grantTransports({ host, space, deviceDid: current.config.deviceDid, jwk });
-          const warning = replicaSecretsWarning(space, prefix, options.allowSecrets === true || state.config.allowSecrets);
-          if (warning !== undefined) process.stderr.write(`Warning: ${warning}\n`);
-          const report = await new Replica({ store, transportFor }).sync(options.limit === undefined ? {} : { limit: options.limit });
-          const status = await store.status();
-          if (shouldOutputJson()) {
-            outputJson({ replica: current.config.name, sync: report, status, ...(warning === undefined ? {} : { warning }) });
+          if (existing.includes(name)) {
+            store = await openReplica(profile, name);
+            const state = (await store.open())!;
+            const differs = syncOptionsDiffer(state.config, {
+              ...(options.space === undefined ? {} : { space: options.space }),
+              ...(options.prefix === undefined ? {} : { prefix: options.prefix }),
+              ...(globals.host === undefined ? {} : { host: globals.host }),
+            });
+            if (differs !== undefined) {
+              await store.close();
+              throw new ReplicaError(
+                ReplicaErrorCode.CONFIG_MISMATCH,
+                `Replica ${name} already follows ${differs}. Use another --replica name, or ${CLI_NAME} replica reset --replica ${name} --purge first.`,
+              );
+            }
           } else {
-            process.stdout.write(
-              `${theme.success("✓")} Synced ${report.changes} change(s) in ${report.pages} page(s), fetched ${report.fetched} value(s).\n${describeStatus(status)}\n`,
-            );
+            const prefix: string | undefined = options.prefix;
+            if (prefix === undefined) {
+              throw new CLIError("USAGE_ERROR", "The first sync of a replica needs --prefix (and a device grant covering it).", ExitCode.USAGE_ERROR);
+            }
+            const space = resolveSpace(options.space, prefix, grants);
+            if (requiresSecretsOptIn(space, prefix) && options.allowSecrets !== true) {
+              throw new ReplicaError(
+                ReplicaErrorCode.SECRETS_OPT_IN_REQUIRED,
+                `Replicating ${space}/kv/${prefix} copies encrypted secret material to this disk; pass --allow-secrets to opt in.`,
+              );
+            }
+            const host = (globals.host ?? process.env.TC_HOST ?? config.host)?.replace(/\/+$/, "");
+            if (!host) throw new CLIError("USAGE_ERROR", "Pass --host: the profile has no host to pin.", ExitCode.USAGE_ERROR);
+            // Choose the grant before writing anything, so a missing grant leaves no replica behind.
+            chooseGrant(grants, deviceDid, space, prefix);
+            store = await createReplica(profile, {
+              name,
+              replicaId: randomBytes(16).toString("hex"),
+              host,
+              space,
+              prefix,
+              deviceDid,
+              allowSecrets: options.allowSecrets === true,
+              localReadPolicy: "whileGrantValid",
+              retentionGrantCid: null,
+            });
           }
-        } finally {
-          await store.close();
-        }
+
+          try {
+            const state = (await store.open())!;
+            const { space, prefix, host } = state.config;
+            if (requiresSecretsOptIn(space, prefix) && !state.config.allowSecrets && options.allowSecrets !== true) {
+              throw new ReplicaError(ReplicaErrorCode.SECRETS_OPT_IN_REQUIRED, `Replicating ${space}/kv/${prefix} needs --allow-secrets.`);
+            }
+            let grant: ParsedUcanGrant | undefined;
+            try {
+              grant = chooseGrant(grants, state.config.deviceDid, space, prefix);
+            } catch (error) {
+              // An expired stored grant is the engine's call (GRANT_EXPIRED), not a missing one.
+              if (!isReplicaError(error, ReplicaErrorCode.GRANT_MISSING) || (state.grant ?? state.pendingGrant) === null) throw error;
+            }
+            if (grant !== undefined) await store.installGrant(grant);
+            if (options.retentionGrant !== undefined && options.retentionGrant !== state.config.retentionGrantCid) {
+              await store.setRetentionGrant(options.retentionGrant === "" ? null : options.retentionGrant);
+            }
+            const current = (await store.open())!;
+            const transportFor = await grantTransports({ host, space, deviceDid: current.config.deviceDid, jwk });
+            const warning = replicaSecretsWarning(space, prefix, options.allowSecrets === true || state.config.allowSecrets);
+            if (warning !== undefined) process.stderr.write(`Warning: ${warning}\n`);
+            const report = await new Replica({ store, transportFor }).sync(options.limit === undefined ? {} : { limit: options.limit });
+            const status = await store.status();
+            if (shouldOutputJson()) {
+              outputJson({ replica: current.config.name, sync: report, status, ...(warning === undefined ? {} : { warning }) });
+            } else {
+              process.stdout.write(
+                `${theme.success("✓")} Synced ${report.changes} change(s) in ${report.pages} page(s), fetched ${report.fetched} value(s).\n${describeStatus(status)}\n`,
+              );
+            }
+          } finally {
+            await store.close();
+          }
+        });
       }),
     );
 
@@ -749,36 +754,38 @@ or coverage incomplete; 5 grant expired, revoked or not yet valid; 6 network;
     .action((options, cmd: Command) =>
       run(async () => {
         const profile = await profileName(cmd);
-        const name = await existingReplicaName(profile, options.replica);
-        if (options.purge) {
-          await withPinnedReplicaForReset(profile, name, async (path, recheck, expectedDirectory) => {
-            const profileLock = profileGuard(profile);
-            const safeGuard: MutationGuard = (section) => profileLock(async () => {
-              await recheck();
-              return section();
+        await withProfileLock(profile, async () => {
+          const name = await existingReplicaName(profile, options.replica);
+          if (options.purge) {
+            await withPinnedReplicaForReset(profile, name, async (path, recheck, expectedDirectory) => {
+              const profileLock = profileGuard(profile);
+              const safeGuard: MutationGuard = (section) => profileLock(async () => {
+                await recheck();
+                return section();
+              });
+              const store = await SqliteReplicaStore.open(path, { create: false, guard: safeGuard, expectedDirectory });
+              try {
+                await recheck();
+                // The store fences the database identity and lease; the root fd
+                // keeps deletion in the selected directory if its name moves.
+                const lease = await store.acquireSyncLease(60_000);
+                if (lease === null) throw new ReplicaError(ReplicaErrorCode.BUSY, "Another process is syncing this replica.");
+                await recheck();
+                await store.destroy(lease);
+              } finally {
+                await store.close();
+              }
             });
-            const store = await SqliteReplicaStore.open(path, { create: false, guard: safeGuard, expectedDirectory });
+          } else {
+            const store = await openReplica(profile, name);
             try {
-              await recheck();
-              // The store fences the database identity and lease; the root fd
-              // keeps deletion in the selected directory if its name moves.
-              const lease = await store.acquireSyncLease(60_000);
-              if (lease === null) throw new ReplicaError(ReplicaErrorCode.BUSY, "Another process is syncing this replica.");
-              await recheck();
-              await store.destroy(lease);
+              await new Replica({ store }).reset("manual");
             } finally {
               await store.close();
             }
-          });
-        } else {
-          const store = await openReplica(profile, name);
-          try {
-            await new Replica({ store }).reset("manual");
-          } finally {
-            await store.close();
           }
-        }
-        outputJson({ replica: name, reset: true, purged: options.purge === true });
+          outputJson({ replica: name, reset: true, purged: options.purge === true });
+        }, { requireProfile: true });
       }),
     );
 }
