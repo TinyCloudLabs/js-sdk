@@ -72,15 +72,15 @@ const invocationStateRoot = processWideContext<string>("tinycloud.operations.inv
 /** Profile lock acquisitions held by the current async call chain (see withProfileLock). */
 const heldProfileLocks = processWideContext<readonly HeldProfileLock[]>("tinycloud.operations.heldProfileLocks.v2");
 /** Descriptors inherited by deferred async work are unusable after their owner's action returns. */
-interface PinnedDirectory {
+interface PinnedProfileDirectory {
   readonly path: string;
   readonly fd: number;
-  readonly dev: number;
-  readonly ino: number;
+  readonly dev: bigint;
+  readonly ino: bigint;
   active: boolean;
 }
-const pinnedProfiles = processWideContext<ReadonlyMap<string, PinnedDirectory>>("tinycloud.operations.pinnedProfiles.v2");
-const pinnedHomes = processWideContext<ReadonlyMap<string, PinnedDirectory>>("tinycloud.operations.pinnedHomes.v2");
+const pinnedProfiles = processWideContext<ReadonlyMap<string, PinnedProfileDirectory>>("tinycloud.operations.pinnedProfiles.v2");
+const pinnedHomes = processWideContext<ReadonlyMap<string, PinnedProfileDirectory>>("tinycloud.operations.pinnedHomes.v2");
 /** One ID across separately bundled ESM, CJS, CLI and MCP copies in this process. */
 const processInstanceId: string =
   (globalThis as unknown as Record<symbol, string | undefined>)[Symbol.for("tinycloud.operations.profileLockInstance.v1")] ??=
@@ -636,15 +636,19 @@ export class ProfileSymlinkError extends Error {
   }
 }
 
-function livePinnedPath(profile: string, pinned: PinnedDirectory): string {
-  if (!pinned.active) throw new ProfileSymlinkError(profile, "its pinned directory is no longer active");
+function isPinnedLive(pinned: PinnedProfileDirectory): boolean {
+  if (!pinned.active) return false;
   try {
-    const stats = fstatSync(pinned.fd);
-    if (stats.dev === pinned.dev && stats.ino === pinned.ino) return pinned.path;
+    const stats = fstatSync(pinned.fd, { bigint: true });
+    return stats.dev === pinned.dev && stats.ino === pinned.ino;
   } catch {
-    // A closed or reused descriptor must never supply another profile's path.
+    return false;
   }
-  throw new ProfileSymlinkError(profile, "its pinned directory changed during use");
+}
+
+function livePinnedPath(profile: string, pinned: PinnedProfileDirectory): string {
+  if (isPinnedLive(pinned)) return pinned.path;
+  throw new ProfileSymlinkError(profile, "its pinned directory is no longer active or changed during use");
 }
 
 /** Missing profiles remain missing; existing profiles are always opened without following aliases. */
@@ -673,14 +677,16 @@ export async function withPinnedProfileDirectory<T>(
   const flags = fsConstants.O_RDONLY | fsConstants.O_DIRECTORY | fsConstants.O_NOFOLLOW;
   try {
     if (options.create) await mkdir(tinycloudHomePath(), { recursive: true, mode: PRIVATE_DIR_MODE });
-    for (const segment of [tinycloudHomePath(), "profiles", validateProfileName(profile)]) {
-      const path = handles.length ? join(fdPath(handles[handles.length - 1]!.fd), segment) : segment;
+    const segments = [tinycloudHomePath(), "profiles", validateProfileName(profile)];
+    for (let index = 0; index < segments.length; index++) {
+      const path = handles.length ? join(fdPath(handles[handles.length - 1]!.fd), segments[index]!) : segments[index]!;
       if (options.create && handles.length) {
         await mkdir(path, { mode: PRIVATE_DIR_MODE }).catch((error: NodeJS.ErrnoException) => {
           if (error.code !== "EEXIST") throw error;
         });
       }
-      const handle = await open(path, flags).catch((error: NodeJS.ErrnoException) => {
+      // A profiles/ container may be shared by two homes; pin its target, but never follow an alias for the selected profile.
+      const handle = await open(path, index === 1 ? flags & ~fsConstants.O_NOFOLLOW : flags).catch((error: NodeJS.ErrnoException) => {
         if (error.code === "ENOENT" && !options.create) return null;
         if (error.code === "ELOOP" || error.code === "ENOTDIR") throw new ProfileSymlinkError(profile);
         throw error;
@@ -690,17 +696,17 @@ export async function withPinnedProfileDirectory<T>(
       if (options.create) await handle.chmod(PRIVATE_DIR_MODE);
     }
     const opened = handles[2]!;
-    const [actual, namedStats] = await Promise.all([opened.stat(), lstat(named)]);
+    const [actual, namedStats] = await Promise.all([opened.stat({ bigint: true }), lstat(named, { bigint: true })]);
     if (!namedStats.isDirectory() || namedStats.dev !== actual.dev || namedStats.ino !== actual.ino) {
       throw new ProfileSymlinkError(profile, "changed while opening its directory");
     }
     const directory = fdPath(opened.fd);
-    const pinned: PinnedDirectory = {
+    const pinned: PinnedProfileDirectory = {
       path: directory, fd: opened.fd, dev: actual.dev, ino: actual.ino, active: true,
     };
     const homeHandle = handles[0]!;
-    const homeStats = await homeHandle.stat();
-    const homePinned: PinnedDirectory = {
+    const homeStats = await homeHandle.stat({ bigint: true });
+    const homePinned: PinnedProfileDirectory = {
       path: fdPath(homeHandle.fd), fd: homeHandle.fd, dev: homeStats.dev, ino: homeStats.ino, active: true,
     };
     const context = new Map(pinnedProfiles.getStore());
@@ -758,6 +764,17 @@ export async function withProfileLock<T>(
     await assertRealProfileDirectory(normalizedProfile);
     return action();
   }
+  const named = namedProfilePath(normalizedProfile);
+  const inherited = pinnedProfiles.getStore()?.get(named);
+  if (inherited && !isPinnedLive(inherited)) {
+    // Deferred work may explicitly acquire a new lock, but never reuse its old fd.
+    const profiles = new Map(pinnedProfiles.getStore());
+    profiles.delete(named);
+    const homes = new Map(pinnedHomes.getStore());
+    homes.delete(tinycloudHomePath());
+    return pinnedHomes.run(homes, () =>
+      pinnedProfiles.run(profiles, () => withProfileLock(normalizedProfile, action, options)));
+  }
   return withPinnedProfileDirectory(normalizedProfile, async (directory) => {
     if (!directory) throw new ProfileDeletedError(normalizedProfile);
     const acquired = await acquireProfileLock(normalizedProfile, options);
@@ -773,8 +790,8 @@ export async function withProfileLock<T>(
       ownership.active = false;
       await acquired.release();
       if (ownership.deletedProfile || acquired.deletedWhileWaiting) {
-        const current = await lstat(namedProfilePath(normalizedProfile)).catch(() => null);
-        const original = await stat(directory).catch(() => null);
+        const current = await lstat(namedProfilePath(normalizedProfile), { bigint: true }).catch(() => null);
+        const original = await stat(directory, { bigint: true }).catch(() => null);
         if (current && original && current.dev === original.dev && current.ino === original.ino) {
           await rmdir(namedProfilePath(normalizedProfile)).catch(() => undefined);
         }
