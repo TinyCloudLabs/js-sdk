@@ -2319,9 +2319,7 @@ export function createSqliteReplicaStorage(
           signal.throwIfAborted();
           if (marker.remotePending) throw gated("gate_unavailable");
           const gate = await fileGate();
-          let state: FileGateState | undefined;
-          try { state = await gate.readGateSnapshot(profileDir); }
-          catch (error) { if (marker.v !== 2) throw error; }
+          const state = await gate.readGateSnapshot(profileDir);
           if (marker.v === 2) {
             if (state !== undefined) throw gated("stamp_stale");
           } else {
@@ -2381,9 +2379,8 @@ export function createSqliteReplicaStorage(
             throw gated("stamp_stale");
           }
           const gate = await fileGate();
-          let state: FileGateState | undefined;
-          try { state = await gate.readGateSnapshot(profileDir); }
-          catch (error) { if (marker.v !== 2) throw error; }
+          const state = await gate.readGateSnapshot(profileDir);
+          if (marker.v === 2 && state !== undefined) throw gated("stamp_stale");
           const report = await inspectProfileReplicaLayout(profileDir, state !== undefined, marker);
           assertApprovedInventory(report, { unknownEntries: marker.approvedUnknown,
             knownRoots: marker.knownRoots, knownEntries: marker.knownEntries,
