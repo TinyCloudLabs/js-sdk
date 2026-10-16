@@ -360,6 +360,7 @@ describe("denyGate", () => {
     });
     expect(seen).toBe(await principalHashOf(salt, ALICE));
   });
+
   test("account switch clears the old gate; only a fresh post-deny sign-in binds the successor", async () => {
     const first = await establishSessionStamp(dir, ALICE, { siweIssuedAt: 1 });
     const outcome = await denyGate(dir, { reason: "account_switch", principal: ALICE, next: BOB }, async () => []);

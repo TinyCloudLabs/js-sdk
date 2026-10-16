@@ -632,6 +632,34 @@ export class SqliteReplicaStore implements ReplicaStore {
     return this.#grantInstall(cid);
   }
 
+  /** Every installed CID, including superseded ones, for an origin-wide purge floor. */
+  async grantInstallTimes(): Promise<Array<{ cid: string; installedAt: number }>> {
+    const rows = this.#db.all<{ cid: string; installed_at: number }>(
+      "SELECT cid, installed_at FROM grant_install",
+    );
+    return rows.map((row) => {
+      if (typeof row.cid !== "string" || row.cid.length === 0 ||
+          !Number.isSafeInteger(row.installed_at) || row.installed_at < 0) {
+        throw new ReplicaError(ReplicaErrorCode.GRANT_EXPIRED, "The stored grant install time is invalid.");
+      }
+      return { cid: row.cid, installedAt: row.installed_at };
+    });
+  }
+
+  /** Phase 2 installed grants cannot commit a page after their shorter local TTL. */
+  #assertInstalledGrantTime(): void {
+    const row = this.#row();
+    const cid = row?.pending_grant_cid ?? row?.grant_cid;
+    if (cid === undefined || cid === null) return;
+    const installed = this.#grantInstall(cid);
+    // Standalone Phase 1 stores have no grant policy; the Node adapter
+    // separately refuses a missing install record before starting sync.
+    const now = this.#now();
+    if (installed !== null && (now >= installed.effectiveExpiresAt ||
+        now >= installed.consentDeadline)) {
+      throw new ReplicaError(ReplicaErrorCode.GRANT_EXPIRED, "The installed grant expired before this page committed.");
+    }
+  }
   #storeGrantPolicy(g: GrantRecord, policy: SqliteGrantPolicy, existing: SqliteGrantInstall | null): SqliteGrantInstall {
     const installedAt = existing?.installedAt ?? policy.at;
     const effectiveExpiresAt = Math.min(
@@ -847,6 +875,7 @@ export class SqliteReplicaStore implements ReplicaStore {
       // Fence before any content reaches the disk: a writer whose lease was
       // taken over, expired or revoked writes nothing.
       this.#checkLease(t);
+      this.#assertInstalledGrantTime();
       // Resolve every reused blob's size before any row changes: an earlier
       // row of this page may drop the last entry that references it.
       const reused = new Map<string, number>();
@@ -870,6 +899,7 @@ export class SqliteReplicaStore implements ReplicaStore {
       try {
         this.#write("Committing a sync page", () => {
           this.#checkLease(t);
+          this.#assertInstalledGrantTime();
           // Authority is judged now, at the commit, not when the page arrived.
           const now = this.#now();
           if (p.window.notBefore !== null && now < Date.parse(p.window.notBefore)) {

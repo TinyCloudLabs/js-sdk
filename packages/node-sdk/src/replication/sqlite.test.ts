@@ -15,6 +15,8 @@ import { dirname, join } from "node:path";
 
 import { ed25519 } from "@noble/curves/ed25519";
 import type { ReplicaTransport } from "@tinycloud/replica";
+import { SqliteReplicaStore } from "@tinycloud/replica/sqlite";
+import { device, FakeNode } from "../../../replica/test/fixtures";
 import type {
   KVReplicaSpec,
   PendingWriteState,
@@ -825,6 +827,81 @@ describe("sqlite replica handle", () => {
     }
   });
 
+  test("targeted purge cannot refresh a CID's original TTL or sync an expired grant", async () => {
+    await makeDir();
+    const now = Date.now();
+    const feed = new FakeNode();
+    feed.put("notes/a", "first");
+    const storage = createSqliteReplicaStorage(storageOptions({
+      createDevice: async () => ({ did: device.did, jwk: {} }),
+      transportFor: () => feed,
+    }));
+    const signedGrant = await mintUcan({ audience: device.did, exp: Math.floor(now / 1000) + 3_600 });
+    const boundedSpec = spec({
+      grantPolicy: { grantTtlMs: 1_000, consentAnchor: { source: "siwe", at: now } },
+    });
+    const first = await storage.open(boundedSpec);
+    try {
+      const installed = await first.installGrant(signedGrant);
+      await first.sync({ signal: new AbortController().signal, syncStartEpoch: 1 });
+      await first.close();
+      await storage.purge({ identity: identity(), space: SPACE_A, prefix: "notes/" });
+
+      setSystemTime(new Date(now + 500));
+      const next = await storage.open(boundedSpec);
+      try {
+        const reused = await next.installGrant(signedGrant);
+        expect(reused.installedAt).toBe(installed.installedAt);
+        expect(reused.effectiveExpiresAt).toBe(installed.effectiveExpiresAt);
+        await next.sync({ signal: new AbortController().signal, syncStartEpoch: 2 });
+        setSystemTime(new Date(now + 2_000));
+        const before = feed.syncCalls;
+        await expect(next.sync({ signal: new AbortController().signal, syncStartEpoch: 7 }))
+          .rejects.toMatchObject({ code: "GRANT_EXPIRED" });
+        expect(feed.syncCalls).toBe(before);
+        expect((await next.status()).syncedThroughEpoch).toBe(2);
+      } finally {
+        await next.close();
+      }
+      await storage.purge({ identity: identity(), space: SPACE_A, prefix: "notes/" });
+      const after = await storage.open(boundedSpec);
+      try {
+        await expect(after.installGrant(signedGrant)).rejects.toMatchObject({ code: "GRANT_EXPIRED" });
+      } finally {
+        await after.close();
+      }
+    } finally {
+      setSystemTime();
+      await first.close();
+    }
+  });
+
+  test("a grant expiring during a sync page commits no rows or success fence", async () => {
+    await makeDir();
+    const now = Date.now();
+    const feed = new FakeNode();
+    feed.put("notes/a", "never committed");
+    const storage = createSqliteReplicaStorage(storageOptions({
+      createDevice: async () => ({ did: device.did, jwk: {} }),
+      transportFor: () => feed,
+    }));
+    const handle = await storage.open(spec({
+      grantPolicy: { grantTtlMs: 1_000, consentAnchor: { source: "siwe", at: now } },
+    }));
+    try {
+      await handle.installGrant(await mintUcan({ audience: device.did, exp: Math.floor(now / 1000) + 3_600 }));
+      feed.onSyncPage = () => { setSystemTime(new Date(now + 2_000)); };
+      await expect(handle.sync({ signal: new AbortController().signal, syncStartEpoch: 7 }))
+        .rejects.toMatchObject({ code: "GRANT_EXPIRED" });
+      expect(feed.syncCalls).toBe(1);
+      setSystemTime();
+      expect((await handle.status()).syncedThroughEpoch).toBe(0);
+      expect((await handle.list({ prefix: "notes/" })).keys).toEqual([]);
+    } finally {
+      setSystemTime();
+      await handle.close();
+    }
+  });
   test("reopening recomputes expiry from the same persisted CID install time", async () => {
     await makeDir();
     const storage = createSqliteReplicaStorage(storageOptions());
@@ -902,6 +979,46 @@ describe("sqlite replica handle", () => {
     const reopened = await storage.open(spec());
     expect((await reopened.status()).syncedThroughEpoch).toBe(7);
     await reopened.close();
+  });
+
+  test("a paused SQLite list never labels its older rows with a later sync epoch", async () => {
+    await makeDir();
+    const feed = new FakeNode();
+    feed.put("notes/a", "old");
+    const storage = createSqliteReplicaStorage(storageOptions({
+      createDevice: async () => ({ did: device.did, jwk: {} }),
+      transportFor: () => feed,
+    }));
+    const handle = await storage.open(spec());
+    const originalList = SqliteReplicaStore.prototype.list;
+    const entered = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    let pause = true;
+    try {
+      await handle.installGrant(await mintUcan({ audience: device.did }));
+      await handle.sync({ signal: new AbortController().signal, syncStartEpoch: 1 });
+      SqliteReplicaStore.prototype.list = async function (options) {
+        if (pause) {
+          pause = false;
+          entered.resolve();
+          await release.promise;
+        }
+        return originalList.call(this, options);
+      };
+      const reading = handle.list({ prefix: "notes/" });
+      await entered.promise;
+      feed.put("notes/b", "new");
+      await handle.sync({ signal: new AbortController().signal, syncStartEpoch: 7 });
+      release.resolve();
+      const result = await reading;
+      expect(result.keys).toEqual(["notes/a"]);
+      expect(result.meta.syncedThroughEpoch).toBe(1);
+      expect((await handle.list({ prefix: "notes/" })).keys).toEqual(["notes/a", "notes/b"]);
+    } finally {
+      release.resolve();
+      SqliteReplicaStore.prototype.list = originalList;
+      await handle.close();
+    }
   });
 
   test("a failed sync leaves the prior fence unchanged", async () => {

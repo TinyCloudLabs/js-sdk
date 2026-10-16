@@ -100,6 +100,10 @@ jobs:
           bun run --cwd packages/node-sdk typecheck:replica-contract
           bun run --cwd packages/cli build
 
+      - name: Enforce hashed kv-storage worker gzip ratchet (TC-858)
+        if: success() || failure()
+        run: bun packages/replica/scripts/check-worker-size.ts
+
       - name: Build web-sdk for the Phase 1 dist acceptance
         run: bun run --cwd packages/web-sdk build
 

@@ -1,5 +1,13 @@
 # @tinycloud/replica
 
+## Unreleased
+
+### Patch Changes
+
+- Ship the KV storage worker and its inlined WASM under a SHA-256 content-hashed
+  filename for immutable caching; retain the stable worker export for explicit
+  custom-worker imports without immutable caching.
+
 ## 0.2.4-beta.0
 
 ### Patch Changes

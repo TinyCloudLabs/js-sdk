@@ -1066,7 +1066,7 @@ export class TinyCloudWeb {
   }
 
   /** Authorize a short-lived, one-use v3 delivery against the signed envelope and roots. */
-  async authorizeShareDeliveryV3(input: Parameters<TinyCloudNode["authorizeShareDeliveryV3"]>[0]): ReturnType<TinyCloudNode["authorizeShareDeliveryV3"]> {
+  async authorizeShareDeliveryV3(input: Parameters<TinyCloudNode["authorizeShareDeliveryV3"]>[0]): Promise<Awaited<ReturnType<TinyCloudNode["authorizeShareDeliveryV3"]>>> {
     const node = await this.ensureNode();
     return node.authorizeShareDeliveryV3(input);
   }
