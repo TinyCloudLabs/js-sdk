@@ -632,6 +632,9 @@ export {
 export {
   sqliteReplicaStorage,
   createProfileReplicaPurge,
+  REPLICA_LOGOUT_PENDING_FILE,
+  assertProfileLogoutClear,
+  type ProfileReplicaLogoutPending,
   type ProfileReplicaPurge,
   type ProfileReplicaDeferredToken,
 } from "./replication/sqlite";

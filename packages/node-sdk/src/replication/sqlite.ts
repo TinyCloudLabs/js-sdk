@@ -14,8 +14,8 @@
 
 import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash, randomBytes } from "node:crypto";
-import { readFileSync, statSync } from "node:fs";
-import { chmod, mkdir, open as openFile, readFile, readdir, realpath, rename, rm, stat, type FileHandle } from "node:fs/promises";
+import { lstatSync, readFileSync, statSync } from "node:fs";
+import { chmod, lstat, mkdir, open as openFile, readFile, readdir, realpath, rename, rm, stat, type FileHandle } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 
 
@@ -77,6 +77,53 @@ export interface ProfileReplicaPurge extends Pick<ReplicaLifecycleGate, "recover
   }>;
   deferredErase(): Promise<ProfileReplicaDeferredToken | null>;
   resumeDeferredErase(token: ProfileReplicaDeferredToken, options: { signal: AbortSignal }): Promise<ReplicaEraseReport>;
+  prepareLogoutPending(input: { principal: string }): Promise<ProfileReplicaLogoutPending | null>;
+  recoverLogoutPending(options: {
+    signal: AbortSignal;
+    /** Remove both session.json and key.json; the facade verifies absence and fsyncs the profile. */
+    clearCredentials: () => Promise<void>;
+  }): Promise<ReplicaEraseReport>;
+}
+
+/** CLI-only crash fence; generic SQLite stores do not opt in to this path. */
+export const REPLICA_LOGOUT_PENDING_FILE = "replica-logout-pending.json";
+export interface ProfileReplicaLogoutPending {
+  v: 1;
+  incarnation: string;
+  lifecycleEpoch: number;
+  principalHash: string;
+}
+
+/** Every CLI read path, including legacy replica commands, checks this marker before delivery. */
+export function assertProfileLogoutClear(profileDir: string): void {
+  assertLogoutClear(join(profileDir, REPLICA_LOGOUT_PENDING_FILE));
+}
+
+function assertLogoutClear(path: string | undefined): void {
+  if (path === undefined) return;
+  try {
+    lstatSync(path);
+  } catch (error) {
+    if (isNotFound(error)) return;
+  }
+  throw gated("gate_unavailable");
+}
+
+function logoutMarkerOf(value: unknown): ProfileReplicaLogoutPending {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) throw gated("gate_unavailable");
+  const row = value as Record<string, unknown>;
+  if (Object.keys(row).length !== 4 || row.v !== 1 ||
+      typeof row.incarnation !== "string" || row.incarnation.length === 0 ||
+      !Number.isSafeInteger(row.lifecycleEpoch) || (row.lifecycleEpoch as number) < 0 ||
+      typeof row.principalHash !== "string" || !/^[0-9a-f]{64}$/.test(row.principalHash)) {
+    throw gated("gate_unavailable");
+  }
+  return row as unknown as ProfileReplicaLogoutPending;
+}
+
+async function readLogoutMarker(path: string): Promise<ProfileReplicaLogoutPending | null> {
+  const value = await readJsonFile(path);
+  return value === undefined ? null : logoutMarkerOf(value);
 }
 
 
@@ -117,7 +164,7 @@ async function fileGate(): Promise<FileGate> {
   return import("@tinycloud/replica/profile-gate") as Promise<FileGate>;
 }
 
-function gated(reason: "gate_unavailable" | "not_established" | "stamp_stale" | "purge_pending"): Error & { code: "REPLICA_GATED"; gate: string } {
+function gated(reason: "gate_unavailable" | "not_established" | "stamp_stale" | "purge_pending" | "principal_mismatch"): Error & { code: "REPLICA_GATED"; gate: string } {
   return Object.assign(new Error(`Replica gate refused: ${reason}`), { code: "REPLICA_GATED" as const, gate: reason });
 }
 
@@ -446,6 +493,7 @@ export class FilePendingWriteStore implements PendingWriteStore {
   readonly #guard: MutationGuard | undefined;
   readonly #stamp: ReplicaSessionStamp | undefined;
   readonly #dirSync?: DirSync;
+  readonly #logoutPendingFile: string | undefined;
   #generation: number | undefined;
   #canonicalDir: string | undefined;
 
@@ -456,6 +504,7 @@ export class FilePendingWriteStore implements PendingWriteStore {
     guard: MutationGuard | undefined,
     stamp: ReplicaSessionStamp | undefined,
     dirSync?: DirSync,
+    logoutPendingFile?: string,
   ) {
     this.identity = identity;
     this.#dir = dir;
@@ -463,6 +512,7 @@ export class FilePendingWriteStore implements PendingWriteStore {
     this.#guard = guard;
     this.#stamp = stamp;
     this.#dirSync = dirSync;
+    this.#logoutPendingFile = logoutPendingFile;
   }
 
   async #withGate<T>(section: (file: string) => Promise<T>): Promise<T> {
@@ -489,6 +539,7 @@ export class FilePendingWriteStore implements PendingWriteStore {
     }
     const queueKey = join(canonicalRoot, basename(this.#dir), "pending.json");
     return serializePendingWrite(queueKey, () => requiredGuard(this.#guard, async () => {
+      assertLogoutClear(this.#logoutPendingFile);
       const before = await gate.assertGateAccess(this.#profileDir, access, snapshot.salt);
       const generation = before.pendingGenerations[identityKeyHash] ?? 0;
       if (this.#generation !== undefined && this.#generation !== generation) {
@@ -510,6 +561,7 @@ export class FilePendingWriteStore implements PendingWriteStore {
       }
       const result = await section(file);
       await gate.assertGateAccess(this.#profileDir, access, snapshot.salt);
+      assertLogoutClear(this.#logoutPendingFile);
       this.#generation = generation;
       if (await pathExists(this.#dir)) this.#canonicalDir = dirname(file);
       return result;
@@ -611,6 +663,8 @@ export interface SqliteReplicaStorageOptions {
   guard?: MutationGuard;
   /** Full path to replica-gate.json; defaults to the directory next to dir. */
   gateFile?: string;
+  /** CLI opt-in. Generic SQLite replica stores never infer a session-file layout. */
+  logoutPendingFile?: string;
   /**
    * Test seam: supply sync transports without WASM/KVService. Production
    * builds invoke through `kvSyncTransport` like the CLI's `grantTransports`.
@@ -1084,10 +1138,13 @@ export function createSqliteReplicaStorage(
       identity === undefined ? Promise.resolve(undefined) : gate.identityHashOf(snapshot.salt, replicationIdentityKey(identity)),
     ]);
     return profileSection(async () => {
+      assertLogoutClear(options.logoutPendingFile);
       await gate.assertGateAccess(profileDir, {
         stamp, incarnation: snapshot.incarnation, principalHash, identityKeyHash, partitionId,
       }, snapshot.salt);
-      return section();
+      const result = await section();
+      assertLogoutClear(options.logoutPendingFile);
+      return result;
     });
   }
 
@@ -1114,6 +1171,7 @@ export function createSqliteReplicaStorage(
     const path = options.gateFile ?? join(profileDir, REPLICA_GATE_FILE);
     let checked: { ino: bigint; size: bigint; mtimeNs: bigint } | undefined;
     const checkGate = async (): Promise<void> => {
+      assertLogoutClear(options.logoutPendingFile);
       let before;
       try {
         before = await stat(path, { bigint: true });
@@ -1226,8 +1284,10 @@ export function createSqliteReplicaStorage(
         throw gated("not_established");
       }
       const gate = await fileGate();
-      const stamp = await profileSection(() =>
-        gate.establishSessionStamp(profileDir, principal, { siweIssuedAt: consentAnchor.at }));
+      const stamp = await profileSection(async () => {
+        assertLogoutClear(options.logoutPendingFile);
+        return gate.establishSessionStamp(profileDir, principal, { siweIssuedAt: consentAnchor.at });
+      });
       const state = await gate.readGateSnapshot(profileDir);
       if (state === undefined) throw gated("gate_unavailable");
       visiblePrincipalHash = await gate.principalHashOf(state.salt, principal);
@@ -1237,7 +1297,10 @@ export function createSqliteReplicaStorage(
     },
     async restoreSessionStamp(principal, persisted) {
       const gate = await fileGate();
-      const stamp = await profileSection(() => gate.restoreSessionStamp(profileDir, principal, persisted));
+      const stamp = await profileSection(async () => {
+        assertLogoutClear(options.logoutPendingFile);
+        return gate.restoreSessionStamp(profileDir, principal, persisted);
+      });
       const state = await gate.readGateSnapshot(profileDir);
       if (state === undefined) throw gated("gate_unavailable");
       visiblePrincipalHash = await gate.principalHashOf(state.salt, principal);
@@ -1250,6 +1313,7 @@ export function createSqliteReplicaStorage(
       try {
         const gate = await fileGate();
         return await profileSection(async () => {
+          assertLogoutClear(options.logoutPendingFile);
           const state = await gate.readGateSnapshot(profileDir);
           return state !== undefined && !state.eraseDeferred && state.intents.length === 0 &&
             state.principalHash !== null && state.principalHash === await gate.principalHashOf(state.salt, next);
@@ -1260,6 +1324,11 @@ export function createSqliteReplicaStorage(
     },
     checkDelivery(stamp) {
       if (guard === undefined || visiblePrincipalHash === undefined) return { status: "gated", gate: "gate_unavailable" };
+      try {
+        assertLogoutClear(options.logoutPendingFile);
+      } catch {
+        return { status: "gated", gate: "gate_unavailable" };
+      }
       if (!stamp || visibleStamp?.incarnation !== stamp.incarnation ||
           visibleStamp.lifecycleEpoch !== stamp.lifecycleEpoch) {
         return { status: "gated", gate: "stamp_stale" };
@@ -1332,6 +1401,99 @@ export function createSqliteReplicaStorage(
       await profileSection(async () => (await fileGate()).resumeDeferredGate(profileDir, token));
       return lifecycle.erasePending({ signal });
     },
+    async prepareLogoutPending({ principal }) {
+      const gate = await fileGate();
+      return profileSection(async () => {
+        const state = await gate.readGateSnapshot(profileDir);
+        if (state === undefined) return null;
+        const principalHash = await gate.principalHashOf(state.salt, principal);
+        const path = join(profileDir, REPLICA_LOGOUT_PENDING_FILE);
+        const previous = await readLogoutMarker(path);
+        if (previous !== null) {
+          if (previous.incarnation !== state.incarnation ||
+              previous.principalHash !== principalHash ||
+              !(previous.lifecycleEpoch === state.lifecycleEpoch ||
+                (previous.lifecycleEpoch + 1 === state.lifecycleEpoch && state.principalHash === null))) {
+            throw gated("stamp_stale");
+          }
+          return previous;
+        }
+        if (state.principalHash !== principalHash &&
+            !(state.eraseDeferred && state.principalHash === null && state.deferredPrincipalHash === principalHash)) {
+          if (state.principalHash === null) return null;
+          throw gated("principal_mismatch");
+        }
+        const marker: ProfileReplicaLogoutPending = {
+          v: 1, incarnation: state.incarnation, lifecycleEpoch: state.lifecycleEpoch, principalHash,
+        };
+        await writeJsonAtomic(path, marker, options.dirSync);
+        visibleStamp = undefined;
+        visiblePrincipalHash = undefined;
+        checkedGate = undefined;
+        return marker;
+      });
+    },
+    async recoverLogoutPending({ signal, clearCredentials }) {
+      const path = join(profileDir, REPLICA_LOGOUT_PENDING_FILE);
+      const gate = await fileGate();
+      const marker = await readLogoutMarker(path);
+      if (marker === null) return { erased: [], failed: [], remaining: 0 };
+      signal.throwIfAborted();
+      const failure = (error: unknown): ReplicaEraseReport => ({
+        erased: [],
+        failed: [{ id: "logout", code: typeof error === "object" && error !== null &&
+          "code" in error && typeof error.code === "string" ? error.code : "STORAGE_ERROR" }],
+        remaining: 1,
+      });
+      try {
+        await profileSection(async () => {
+          const current = await readLogoutMarker(path);
+          if (current === null || current.incarnation !== marker.incarnation ||
+              current.lifecycleEpoch !== marker.lifecycleEpoch || current.principalHash !== marker.principalHash) {
+            throw gated("stamp_stale");
+          }
+          const state = await gate.readGateSnapshot(profileDir);
+          if (state === undefined || state.incarnation !== marker.incarnation ||
+              !(state.lifecycleEpoch === marker.lifecycleEpoch ||
+                (state.lifecycleEpoch === marker.lifecycleEpoch + 1 && state.principalHash === null))) {
+            throw gated("stamp_stale");
+          }
+          if (state.principalHash !== marker.principalHash &&
+              !(state.principalHash === null && (
+                state.deferredPrincipalHash === marker.principalHash ||
+                state.lifecycleEpoch === marker.lifecycleEpoch + 1
+              ))) throw gated("stamp_stale");
+          signal.throwIfAborted();
+          await clearCredentials();
+          for (const file of ["session.json", "key.json"]) {
+            try {
+              await lstat(join(profileDir, file));
+              throw gated("gate_unavailable");
+            } catch (error) {
+              if (!isNotFound(error)) throw error;
+            }
+          }
+          await fsyncDir(profileDir);
+          if (state.principalHash !== null) {
+            // A marker is an epoch/hash fence, not a raw principal. The precomputed hash
+            // is checked again by denyGate under this same profile lock.
+            const denied = await gate.denyGate(profileDir, { reason: "sign_out", principal: "" },
+              (principalHash) => collectIntents(principalHash, state.salt),
+              { salt: state.salt, principalHash: marker.principalHash });
+            if (denied.status !== "denied") throw gated("gate_unavailable");
+          } else if (state.eraseDeferred) {
+            await gate.resumeDeferredGate(profileDir, {
+              deniedEpoch: state.lifecycleEpoch, principalHash: marker.principalHash,
+            });
+          }
+          await rm(path);
+          await fsyncDir(profileDir);
+        });
+      } catch (error) {
+        return failure(error);
+      }
+      return lifecycle.erasePending({ signal });
+    },
     async pendingPurge() {
       const gate = await fileGate();
       return (await gate.readGateSnapshot(profileDir))?.intents ?? [];
@@ -1341,12 +1503,18 @@ export function createSqliteReplicaStorage(
       const erased: string[] = [];
       const failed: Array<{ id: string; code: string }> = [];
       const intents = await lifecycle.pendingPurge();
+      try {
+        assertLogoutClear(options.logoutPendingFile);
+      } catch {
+        return { erased, failed: [{ id: "logout", code: "REPLICA_GATED" }], remaining: Math.max(1, intents.length) };
+      }
       const held = await profileSection(() => gate.readGateSnapshot(profileDir));
       if (held?.eraseDeferred) return { erased, failed, remaining: held.intents.length };
       for (const intent of intents) {
         signal.throwIfAborted();
         try {
           await profileSection(async () => {
+            assertLogoutClear(options.logoutPendingFile);
             const state = await gate.readGateSnapshot(profileDir);
             if (state?.eraseDeferred) return;
             if (!state?.intents.some((queued) => queued.id === intent.id)) return;
@@ -1581,6 +1749,7 @@ export function createSqliteReplicaStorage(
   }
 
   async function inspectStatus(spec: KVReplicaSpec, { signal }: { signal: AbortSignal }): Promise<LocalReplicaStatus | undefined> {
+    assertLogoutClear(options.logoutPendingFile);
     const checkAbort = () => {
       if (signal.aborted) throw signal.reason ?? Object.assign(new Error("Replica status inspection was aborted"), { code: "ABORTED" });
     };
@@ -1623,6 +1792,7 @@ export function createSqliteReplicaStorage(
       throw new ReplicaStorageError("STORAGE_ERROR", `The replica at ${replicaDir} does not match the requested identity, space, prefix, or device.`);
     }
     checkAbort();
+    assertLogoutClear(options.logoutPendingFile);
     return {
       coverage: status.coverage,
       lastSyncAt: status.lastSyncAt,
@@ -1749,12 +1919,13 @@ export function createSqliteReplicaStorage(
         guard,
         opts?.stamp,
         options.dirSync,
+        options.logoutPendingFile,
       );
     },
   };
 }
 
-/** CLI-facing profile lifecycle; callers supply their existing nonreentrant profile lock. */
+/** CLI-facing profile lifecycle; use the same profile lock as CLI session/key writes. */
 export function createProfileReplicaPurge(options: {
   profileDir: string;
   guard: MutationGuard;
@@ -1762,6 +1933,7 @@ export function createProfileReplicaPurge(options: {
   return createSqliteReplicaStorage({
     dir: join(options.profileDir, "replication"),
     guard: options.guard,
+    logoutPendingFile: join(options.profileDir, REPLICA_LOGOUT_PENDING_FILE),
   }).lifecycle;
 }
 
@@ -1776,6 +1948,7 @@ export function sqliteReplicaStorage(options: {
   dir: string;
   guard?: MutationGuard;
   gateFile?: string;
+  logoutPendingFile?: string;
 }): KVReplicaStorage {
   return createSqliteReplicaStorage(options);
 }

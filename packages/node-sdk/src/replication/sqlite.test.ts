@@ -27,6 +27,7 @@ import type { ReplicaSessionStamp } from "@tinycloud/sdk-services/kv/replication
 import {
   createSqliteReplicaStorage,
   createProfileReplicaPurge,
+  REPLICA_LOGOUT_PENDING_FILE,
   type SqliteReplicaStorageOptions,
 } from "./sqlite";
 import { denyGate, establishSessionStamp, readGateSnapshot } from "@tinycloud/replica/profile-gate";
@@ -400,6 +401,255 @@ describe("mandatory Node lifecycle gate", () => {
     expect(await createSqliteReplicaStorage(storageOptions()).lifecycle!.activationAllowed("did:key:Bob")).toBe(true);
     await expect(purge.resumeDeferredErase(token, { signal: new AbortController().signal }))
       .rejects.toMatchObject({ code: "REPLICA_GATED", gate: "stamp_stale" });
+  });
+
+  test("a durable CLI logout marker fences a second opened handle before credentials are removed", async () => {
+    const dir = await makeDir();
+    const profileDir = dirname(dir);
+    const marker = join(profileDir, REPLICA_LOGOUT_PENDING_FILE);
+    const first = createSqliteReplicaStorage(storageOptions({ logoutPendingFile: marker }));
+    const second = createSqliteReplicaStorage(storageOptions({ logoutPendingFile: marker }));
+    const handle = await second.open(spec());
+    const pending = second.pendingWrites!(identity(), { stamp: stamps.get(profileDir)! });
+    await pending.update((state) => { state.seq = 1; });
+    const purge = createProfileReplicaPurge({ profileDir, guard: sharedGuard });
+    await purge.prepareLogoutPending({ principal: PRINCIPAL });
+    expect(existsSync(marker)).toBe(true);
+    await expect(handle.get("notes/a")).rejects.toMatchObject({ code: "REPLICA_GATED" });
+    await expect(handle.list({ prefix: "notes/" })).rejects.toMatchObject({ code: "REPLICA_GATED" });
+    await expect(handle.status()).rejects.toMatchObject({ code: "REPLICA_GATED" });
+    await expect(second.inspectStatus!(spec(), { signal: new AbortController().signal }))
+      .rejects.toMatchObject({ code: "REPLICA_GATED" });
+    await expect(pending.read()).rejects.toMatchObject({ code: "REPLICA_GATED" });
+    expect(second.lifecycle!.checkDelivery(stamps.get(profileDir)!)).toMatchObject({ status: "gated" });
+    await expect(first.lifecycle!.restoreSessionStamp(PRINCIPAL, stamps.get(profileDir)!))
+      .rejects.toMatchObject({ code: "REPLICA_GATED" });
+    await handle.close();
+  });
+
+  test("crash after marker fsync but before either unlink clears both credentials and the full inventory on restart", async () => {
+    const dir = await makeDir();
+    const profileDir = dirname(dir);
+    const session = join(profileDir, "session.json");
+    const key = join(profileDir, "key.json");
+    await writeFile(session, JSON.stringify({ jwk: { d: "private" } }));
+    await writeFile(key, JSON.stringify({ d: "private" }));
+    const storage = createSqliteReplicaStorage(storageOptions());
+    await storage.pendingWrites!(identity(), { stamp: stamps.get(profileDir)! })
+      .update((state) => { state.seq = 1; });
+    const before = await filesNamed(dir, "pending.json");
+    const purge = createProfileReplicaPurge({ profileDir, guard: sharedGuard });
+    await purge.prepareLogoutPending({ principal: PRINCIPAL });
+    expect(existsSync(session)).toBe(true);
+    expect(existsSync(key)).toBe(true);
+    expect(await filesNamed(dir, "pending.json")).toEqual(before);
+    const restarted = createProfileReplicaPurge({ profileDir, guard: sharedGuard });
+    let cleanupCalls = 0;
+    const report = await restarted.recoverLogoutPending({
+      signal: new AbortController().signal,
+      clearCredentials: async () => {
+        cleanupCalls++;
+        await rm(session, { force: true });
+        await rm(key, { force: true });
+      },
+    });
+    expect(report.failed).toEqual([]);
+    expect(report.remaining).toBe(0);
+    expect(cleanupCalls).toBe(1);
+    expect(existsSync(session)).toBe(false);
+    expect(existsSync(key)).toBe(false);
+    expect(existsSync(join(profileDir, REPLICA_LOGOUT_PENDING_FILE))).toBe(false);
+    expect(await filesNamed(dir, "pending.json")).toEqual([]);
+    expect((await readGateSnapshot(profileDir))?.principalHash).toBeNull();
+  });
+
+  test("crash after durable gate denial but before unlink retains marker until credential cleanup", async () => {
+    const dir = await makeDir();
+    const profileDir = dirname(dir);
+    const session = join(profileDir, "session.json");
+    const key = join(profileDir, "key.json");
+    await writeFile(session, "{}");
+    await writeFile(key, "{}");
+    const storage = createSqliteReplicaStorage(storageOptions());
+    await storage.pendingWrites!(identity(), { stamp: stamps.get(profileDir)! })
+      .update((state) => { state.seq = 1; });
+    const purge = createProfileReplicaPurge({ profileDir, guard: sharedGuard });
+    await purge.prepareLogoutPending({ principal: PRINCIPAL });
+    expect((await purge.deny({ reason: "sign_out", principal: PRINCIPAL })).status).toBe("denied");
+    expect((await purge.recover({ signal: new AbortController().signal })).failed)
+      .toEqual([{ id: "logout", code: "REPLICA_GATED" }]);
+    expect(await filesNamed(dir, "pending.json")).toHaveLength(1);
+    const report = await createProfileReplicaPurge({ profileDir, guard: sharedGuard }).recoverLogoutPending({
+      signal: new AbortController().signal,
+      clearCredentials: async () => { await rm(session); await rm(key); },
+    });
+    expect(report.failed).toEqual([]);
+    expect(await filesNamed(dir, "pending.json")).toEqual([]);
+    expect(existsSync(session)).toBe(false);
+    expect(existsSync(key)).toBe(false);
+  });
+
+  test("active gate without a marker is a legitimate uncommitted sign-in, not an abandoned logout", async () => {
+    const dir = await makeDir();
+    const profileDir = dirname(dir);
+    const purge = createProfileReplicaPurge({ profileDir, guard: sharedGuard });
+    let cleanupCalls = 0;
+    const result = await purge.recoverLogoutPending({
+      signal: new AbortController().signal,
+      clearCredentials: async () => { cleanupCalls++; },
+    });
+    expect(result).toEqual({ erased: [], failed: [], remaining: 0 });
+    expect(cleanupCalls).toBe(0);
+    expect((await readGateSnapshot(profileDir))?.principalHash).not.toBeNull();
+  });
+
+  test("zero-intent deferred logout still needs its durable marker to clear credentials", async () => {
+    const dir = await makeDir();
+    const profileDir = dirname(dir);
+    const purge = createProfileReplicaPurge({ profileDir, guard: sharedGuard });
+    const denied = await purge.deny({ reason: "sign_out", principal: PRINCIPAL }, { deferErase: true });
+    expect(denied).toMatchObject({ status: "denied", intents: 0 });
+    expect(await purge.pendingPurge()).toEqual([]);
+    expect(await purge.deferredErase()).not.toBeNull();
+    await purge.prepareLogoutPending({ principal: PRINCIPAL });
+    let cleanupCalls = 0;
+    const report = await createProfileReplicaPurge({ profileDir, guard: sharedGuard }).recoverLogoutPending({
+      signal: new AbortController().signal,
+      clearCredentials: async () => { cleanupCalls++; },
+    });
+    expect(report).toEqual({ erased: [], failed: [], remaining: 0 });
+    expect(cleanupCalls).toBe(1);
+    expect(await purge.deferredErase()).toBeNull();
+    expect(existsSync(join(profileDir, REPLICA_LOGOUT_PENDING_FILE))).toBe(false);
+  });
+
+  test("successful remote revoke converts deferred denial only after shredding both credentials", async () => {
+    const dir = await makeDir();
+    const profileDir = dirname(dir);
+    const session = join(profileDir, "session.json");
+    const key = join(profileDir, "key.json");
+    await writeFile(session, JSON.stringify({ jwk: { d: "private" } }));
+    await writeFile(key, JSON.stringify({ d: "private" }));
+    const storage = createSqliteReplicaStorage(storageOptions());
+    await storage.pendingWrites!(identity(), { stamp: stamps.get(profileDir)! })
+      .update((state) => { state.seq = 1; });
+    const pendingFiles = await filesNamed(dir, "pending.json");
+    const purge = createProfileReplicaPurge({ profileDir, guard: sharedGuard });
+    const denied = await purge.deny({ reason: "sign_out", principal: PRINCIPAL }, { deferErase: true });
+    expect(denied.status).toBe("denied");
+    expect((await purge.recover({ signal: new AbortController().signal })).remaining).toBeGreaterThan(0);
+    expect(await filesNamed(dir, "pending.json")).toEqual(pendingFiles);
+    expect(existsSync(session)).toBe(true);
+    expect(existsSync(key)).toBe(true);
+    // The caller invokes this seam only after verified remote revoke success.
+    await purge.prepareLogoutPending({ principal: PRINCIPAL });
+    const result = await purge.recoverLogoutPending({
+      signal: new AbortController().signal,
+      clearCredentials: async () => { await rm(session, { force: true }); await rm(key, { force: true }); },
+    });
+    expect(result.failed).toEqual([]);
+    expect(result.remaining).toBe(0);
+    expect(existsSync(session)).toBe(false);
+    expect(existsSync(key)).toBe(false);
+    expect(await filesNamed(dir, "pending.json")).toEqual([]);
+    expect(await purge.deferredErase()).toBeNull();
+  });
+
+  test("a failed credential unlink retains the marker and refuses every second-process read", async () => {
+    const dir = await makeDir();
+    const profileDir = dirname(dir);
+    const session = join(profileDir, "session.json");
+    const key = join(profileDir, "key.json");
+    await writeFile(session, "{}");
+    await writeFile(key, "{}");
+    const storage = createSqliteReplicaStorage(storageOptions({
+      logoutPendingFile: join(profileDir, REPLICA_LOGOUT_PENDING_FILE),
+    }));
+    const handle = await storage.open(spec());
+    const purge = createProfileReplicaPurge({ profileDir, guard: sharedGuard });
+    await purge.prepareLogoutPending({ principal: PRINCIPAL });
+    const failed = await purge.recoverLogoutPending({
+      signal: new AbortController().signal,
+      clearCredentials: async () => { await rm(key); throw Object.assign(new Error("session unlink failed"), { code: "EIO" }); },
+    });
+    expect(failed).toMatchObject({ failed: [{ id: "logout", code: "EIO" }], remaining: 1 });
+    expect(existsSync(session)).toBe(true);
+    expect(existsSync(key)).toBe(false);
+    await expect(handle.get("notes/a")).rejects.toMatchObject({ code: "REPLICA_GATED" });
+    expect(existsSync(join(profileDir, REPLICA_LOGOUT_PENDING_FILE))).toBe(true);
+    const resumed = await purge.recoverLogoutPending({
+      signal: new AbortController().signal,
+      clearCredentials: async () => { await rm(session, { force: true }); await rm(key, { force: true }); },
+    });
+    expect(resumed.failed).toEqual([]);
+    expect(existsSync(session)).toBe(false);
+    expect(existsSync(join(profileDir, REPLICA_LOGOUT_PENDING_FILE))).toBe(false);
+    await handle.close();
+  });
+
+  test("busy profile lock cannot report a durable logout marker or erase credentials", async () => {
+    const dir = await makeDir();
+    const profileDir = dirname(dir);
+    const busy = createProfileReplicaPurge({
+      profileDir,
+      guard: async () => { throw Object.assign(new Error("profile lock busy"), { code: "BUSY" }); },
+    });
+    await expect(busy.prepareLogoutPending({ principal: PRINCIPAL }))
+      .rejects.toMatchObject({ code: "REPLICA_GATED" });
+    expect(existsSync(join(profileDir, REPLICA_LOGOUT_PENDING_FILE))).toBe(false);
+    expect((await readGateSnapshot(profileDir))?.principalHash).not.toBeNull();
+  });
+
+  test("marker write failure cannot be reported as a durable logout", async () => {
+    const dir = await makeDir();
+    const profileDir = dirname(dir);
+    const marker = join(profileDir, REPLICA_LOGOUT_PENDING_FILE);
+    await mkdir(marker);
+    const purge = createProfileReplicaPurge({ profileDir, guard: sharedGuard });
+    await expect(purge.prepareLogoutPending({ principal: PRINCIPAL }))
+      .rejects.toMatchObject({ code: "STORAGE_ERROR" });
+    expect((await readGateSnapshot(profileDir))?.principalHash).not.toBeNull();
+    expect(await readdir(marker)).toEqual([]);
+  });
+
+  test("when both marker and deny cannot take the lock, no durable denial is claimed", async () => {
+    const dir = await makeDir();
+    const profileDir = dirname(dir);
+    const busy = createProfileReplicaPurge({
+      profileDir,
+      guard: async () => { throw Object.assign(new Error("profile lock busy"), { code: "BUSY" }); },
+    });
+    await expect(busy.prepareLogoutPending({ principal: PRINCIPAL }))
+      .rejects.toMatchObject({ code: "REPLICA_GATED" });
+    expect(await busy.deny({ reason: "sign_out", principal: PRINCIPAL }))
+      .toMatchObject({ status: "unguarded" });
+    expect(existsSync(join(profileDir, REPLICA_LOGOUT_PENDING_FILE))).toBe(false);
+    expect((await readGateSnapshot(profileDir))?.principalHash).not.toBeNull();
+  });
+
+  test("stale logout marker never deletes a successor account's credentials", async () => {
+    const dir = await makeDir();
+    const profileDir = dirname(dir);
+    const purge = createProfileReplicaPurge({ profileDir, guard: sharedGuard });
+    await purge.prepareLogoutPending({ principal: PRINCIPAL });
+    expect((await denyGate(profileDir, { reason: "sign_out", principal: PRINCIPAL }, async () => []))
+      .status).toBe("denied");
+    const deniedAt = (await readGateSnapshot(profileDir))!.deniedAt!;
+    const now = Date.now();
+    try {
+      setSystemTime(new Date(deniedAt + 2));
+      await establishSessionStamp(profileDir, "did:key:successor", { siweIssuedAt: deniedAt + 1 });
+    } finally {
+      setSystemTime(now);
+    }
+    let cleanupCalls = 0;
+    const failed = await purge.recoverLogoutPending({
+      signal: new AbortController().signal,
+      clearCredentials: async () => { cleanupCalls++; },
+    });
+    expect(failed.failed).toEqual([{ id: "logout", code: "REPLICA_GATED" }]);
+    expect(cleanupCalls).toBe(0);
+    expect(existsSync(join(profileDir, REPLICA_LOGOUT_PENDING_FILE))).toBe(true);
   });
 
   test("deny advances a pending generation once and fences a queued update", async () => {
