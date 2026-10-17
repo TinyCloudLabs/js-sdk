@@ -735,9 +735,17 @@ At startup and after marker preparation, the CLI invokes
 before ordinary network restore. `remotePending: true` is **not**
 cleanup-ready: recovery returns failure/remaining with **no**
 `clearCredentials`, legacy callback, intent replay or local erase.
-After `completeRemoteLogout`, recovery validates the marker (v1
-incarnation/epoch/hash; v2 orphan scope and absence of replacement gate;
-v3 incarnation/exact epoch/null principal), then awaits
+After `completeRemoteLogout` or a cleanup-ready plain-logout marker,
+recovery validates the marker (v1 incarnation/epoch/hash; v2 orphan scope
+and absence of a replacement gate; v3 incarnation/exact epoch/null
+principal). **Before `clearCredentials`**, an active-v1 gate is denied
+under the profile lock with the complete scoped partition/pending intents
+and generation fences committed durably together. If that denial fails,
+recovery reports nonzero failure and retains the marker, both credentials
+and all replica files; it does not call `clearCredentials` or erase. An
+already-deferred v1 instead validates its exact denied epoch/hash; v2/v3
+keep their existing orphan/inactive fences without a new scoped denial.
+Only after the applicable fence is durable does recovery await
 `clearCredentials` under the profile lock. That CLI callback first
 atomically writes and **file+directory fsyncs**
 `profile.json.authSignedOut: true` (absent means false); only then does it
@@ -759,14 +767,13 @@ sidecar's **current** identity immediately before nonrecursive unlink.
 For v1, a successful remote revoke already committed generation-fenced
 denial and complete opaque partition/pending intents before any node call.
 A plain logout, or a marker written just before an interrupted pre-remote
-denial, may instead reach cleanup with the original gate still active.
-`recoverLogoutPending` validates that gate against the marker and commits
-generation-fenced denial with the complete scoped intent inventory under
-the profile lock **before** erasing anything. If v1 is already deferred,
-it validates the exact denied epoch/hash and clears deferral for idempotent
-intent replay. For v3 it validates the already-denied epoch and invents no
-principal/intents. V2 validates the orphan marker and absence of a replacement
-gate; it invents no scoped gate/intents. All three pass
+denial, may instead reach cleanup with the original gate still active;
+the pre-credential denial above fences that state. After credential
+shredding, v1 clears only an exact matching deferred denial if present
+and replays the committed intents idempotently; it never first denies an
+active gate here. V3 retains its already-denied epoch without inventing
+principal/intents. V2 retains its orphan fence without inventing a scoped
+gate or intents. All three pass
 `eraseLegacyReplicas({ discardLocalChanges, approvedUnknown, knownRoots,
 knownEntries, missingDatabases })` to the CLI after credential shredding
 and their version-specific gate or orphan fence. This callback deletes only
