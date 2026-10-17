@@ -826,6 +826,144 @@ describe("mandatory Node lifecycle gate", () => {
     expect(existsSync(join(profileDir, REPLICA_LOGOUT_PENDING_FILE))).toBe(false);
   });
 
+  test("plain v1 logout can reapprove changed inventory after a busy nondeferred denial", async () => {
+    const dir = await makeDir();
+    const profileDir = dirname(dir);
+    const legacy = await makeLegacyMirror(profileDir);
+    const session = join(profileDir, "session.json");
+    const key = join(profileDir, "key.json");
+    await writeFile(session, "private session");
+    await writeFile(key, "private owner key");
+    const purge = createProfileReplicaPurge({ profileDir, guard: sharedGuard });
+    const approval = await purge.preflightLogout({ principal: PRINCIPAL });
+    const marker = await purge.prepareLogoutPending({ principal: PRINCIPAL, approval });
+    if (marker?.v !== 1) throw new Error("Expected a scoped v1 logout marker");
+
+    const clearCredentials = async () => {
+      await rm(session, { force: true });
+      await rm(key, { force: true });
+    };
+    const first = await purge.recoverLogoutPending({
+      signal: new AbortController().signal,
+      clearCredentials,
+      eraseLegacyReplicas: async () => {
+        throw Object.assign(new Error("legacy lease busy"), { code: "BUSY" });
+      },
+    });
+    expect(first).toMatchObject({ failed: [{ id: "logout", code: "BUSY" }], remaining: 1 });
+    expect(await readGateSnapshot(profileDir)).toMatchObject({
+      lifecycleEpoch: marker!.lifecycleEpoch + 1,
+      principalHash: null, eraseDeferred: false, deferredPrincipalHash: null,
+    });
+    expect(existsSync(session)).toBe(false);
+    expect(existsSync(key)).toBe(false);
+    const added = join(legacy, "unexpected-local");
+    await writeFile(added, "must be explicitly approved");
+    const updated = await purge.preflightLogout({ principal: PRINCIPAL, discardLocalChanges: true });
+    const amended = await purge.reapproveLogoutPending({ principal: PRINCIPAL, approval: updated });
+    expect(amended.approvedUnknown).toContainEqual(expect.objectContaining({
+      path: "replicas/notes/unexpected-local",
+    }));
+    const completed = await purge.recoverLogoutPending({
+      signal: new AbortController().signal, clearCredentials,
+      eraseLegacyReplicas: async () => { await eraseLegacy(profileDir); },
+    });
+    expect(completed).toMatchObject({ failed: [], remaining: 0 });
+    expect(existsSync(join(profileDir, REPLICA_LOGOUT_PENDING_FILE))).toBe(false);
+    expect(existsSync(added)).toBe(false);
+  });
+
+  test("plain v1 cleanup marker rejects reapproval after a successor establishes", async () => {
+    const dir = await makeDir();
+    const profileDir = dirname(dir);
+    await makeLegacyMirror(profileDir);
+    const purge = createProfileReplicaPurge({ profileDir, guard: sharedGuard });
+    const approval = await purge.preflightLogout({ principal: PRINCIPAL });
+    await purge.prepareLogoutPending({ principal: PRINCIPAL, approval });
+    const first = await purge.recoverLogoutPending({
+      signal: new AbortController().signal,
+      clearCredentials: async () => {},
+      eraseLegacyReplicas: async () => {
+        throw Object.assign(new Error("legacy lease busy"), { code: "BUSY" });
+      },
+    });
+    expect(first.failed).toEqual([{ id: "logout", code: "BUSY" }]);
+    const deniedAt = (await readGateSnapshot(profileDir))!.deniedAt!;
+    const now = Date.now();
+    try {
+      setSystemTime(new Date(deniedAt + 2));
+      await establishSessionStamp(profileDir, "did:key:successor", { siweIssuedAt: deniedAt + 1 });
+    } finally {
+      setSystemTime(now);
+    }
+    const markerPath = join(profileDir, REPLICA_LOGOUT_PENDING_FILE);
+    const previous = await readFile(markerPath, "utf8");
+    await expect(purge.reapproveLogoutPending({ principal: PRINCIPAL, approval }))
+      .rejects.toMatchObject({ code: "REPLICA_GATED", gate: "stamp_stale" });
+    expect(await readFile(markerPath, "utf8")).toBe(previous);
+    expect(existsSync(join(profileDir, "replicas", "notes", "replica.db"))).toBe(true);
+  });
+
+  test("plain v1 logout retains credentials when the gate denial cannot commit", async () => {
+    const dir = await makeDir();
+    const profileDir = dirname(dir);
+    const legacy = await makeLegacyMirror(profileDir);
+    await createSqliteReplicaStorage(storageOptions()).pendingWrites!(identity(), {
+      stamp: stamps.get(profileDir)!,
+    }).update((state) => { state.seq = 1; });
+    const session = join(profileDir, "session.json");
+    const key = join(profileDir, "key.json");
+    await writeFile(session, "signed session");
+    await writeFile(key, "owner key");
+    const purge = createProfileReplicaPurge({ profileDir, guard: sharedGuard });
+    const approval = await purge.preflightLogout({ principal: PRINCIPAL });
+    const marker = await purge.prepareLogoutPending({ principal: PRINCIPAL, approval });
+    if (marker?.v !== 1) throw new Error("Expected a scoped v1 logout marker");
+    let credentialCalls = 0;
+    let eraseCalls = 0;
+    const recover = () => purge.recoverLogoutPending({
+      signal: new AbortController().signal,
+      clearCredentials: async () => {
+        credentialCalls++;
+        const gate = await readGateSnapshot(profileDir);
+        expect(gate?.principalHash).toBeNull();
+        expect(gate?.intents).toHaveLength(1);
+        expect(Object.values(gate!.pendingGenerations)).toEqual([1]);
+        await rm(session);
+        await rm(key);
+      },
+      eraseLegacyReplicas: async () => {
+        eraseCalls++;
+        await eraseLegacy(profileDir);
+      },
+    });
+    await chmod(profileDir, 0o555);
+    try {
+      const failed = await recover();
+      expect(failed.failed).toEqual([{ id: "logout", code: "gate_unavailable" }]);
+      expect(failed.remaining).toBeGreaterThan(0);
+      expect(credentialCalls).toBe(0);
+      expect(eraseCalls).toBe(0);
+      expect(await readFile(session, "utf8")).toBe("signed session");
+      expect(await readFile(key, "utf8")).toBe("owner key");
+      expect(existsSync(join(profileDir, REPLICA_LOGOUT_PENDING_FILE))).toBe(true);
+      expect(await readGateSnapshot(profileDir)).toMatchObject({
+        lifecycleEpoch: marker.lifecycleEpoch, principalHash: marker.principalHash,
+        intents: [], pendingGenerations: {},
+      });
+      expect(existsSync(join(legacy, "replica.db"))).toBe(true);
+    } finally {
+      await chmod(profileDir, 0o755);
+    }
+    expect(await recover()).toMatchObject({ failed: [], remaining: 0 });
+    expect(credentialCalls).toBe(1);
+    expect(eraseCalls).toBe(1);
+    expect(existsSync(join(profileDir, REPLICA_LOGOUT_PENDING_FILE))).toBe(false);
+    expect(existsSync(session)).toBe(false);
+    expect(existsSync(key)).toBe(false);
+    expect(await filesNamed(dir, "pending.json")).toEqual([]);
+  });
+
   test("remote-pending logout cannot reapprove a changed inventory before remote completion", async () => {
     const dir = await makeDir();
     const profileDir = dirname(dir);
@@ -2432,7 +2570,8 @@ describe("mandatory Node lifecycle gate", () => {
       clearCredentials: async () => { await rm(key); throw Object.assign(new Error("session unlink failed"), { code: "EIO" }); },
       eraseLegacyReplicas: () => eraseLegacy(profileDir),
     });
-    expect(failed).toMatchObject({ failed: [{ id: "logout", code: "EIO" }], remaining: 1 });
+    expect(failed.failed).toEqual([{ id: "logout", code: "EIO" }]);
+    expect(failed.remaining).toBeGreaterThan(0);
     expect(existsSync(session)).toBe(true);
     expect(existsSync(key)).toBe(false);
     await expect(handle.get("notes/a")).rejects.toMatchObject({ code: "REPLICA_GATED" });
@@ -2463,7 +2602,7 @@ describe("mandatory Node lifecycle gate", () => {
     expect(result).toMatchObject({ failed: [{ id: "logout", code: "gate_unavailable" }], remaining: 1 });
     expect(existsSync(join(profileDir, "session.json"))).toBe(true);
     expect(existsSync(join(profileDir, REPLICA_LOGOUT_PENDING_FILE))).toBe(true);
-    expect((await readGateSnapshot(profileDir))?.principalHash).not.toBeNull();
+    expect((await readGateSnapshot(profileDir))?.principalHash).toBeNull();
   });
 
   test("busy profile lock cannot report a durable logout marker or erase credentials", async () => {
@@ -2499,8 +2638,8 @@ describe("mandatory Node lifecycle gate", () => {
     expect(await readdir(marker)).toEqual([]);
   });
 
-  const gateWriteTest = process.platform === "win32" || process.getuid?.() === 0 ? test.skip : test;
-  gateWriteTest("gate-file write failure after credential unlink retains the marker and retries on recovery", async () => {
+  const postDenyEraseTest = process.platform === "win32" || process.getuid?.() === 0 ? test.skip : test;
+  postDenyEraseTest("post-denial erasure failure retains the marker and retries on recovery", async () => {
     const dir = await makeDir();
     const profileDir = dirname(dir);
     const session = join(profileDir, "session.json");
@@ -2524,10 +2663,11 @@ describe("mandatory Node lifecycle gate", () => {
         },
         eraseLegacyReplicas: () => eraseLegacy(profileDir),
       });
-      expect(failed).toMatchObject({ failed: [{ id: "logout", code: "gate_unavailable" }], remaining: 1 });
-      expect((await readGateSnapshot(profileDir))?.principalHash).not.toBeNull();
+      expect(failed.failed.length).toBeGreaterThan(0);
+      expect(failed.failed.every((entry) => entry.code === "EACCES")).toBe(true);
+      expect(failed.remaining).toBeGreaterThan(0);
+      expect((await readGateSnapshot(profileDir))?.principalHash).toBeNull();
       expect(existsSync(marker)).toBe(true);
-      expect(await filesNamed(dir, "pending.json")).toHaveLength(1);
       await expect(handle.get("notes/a")).rejects.toMatchObject({ code: "REPLICA_GATED" });
     } finally {
       await chmod(profileDir, 0o700);

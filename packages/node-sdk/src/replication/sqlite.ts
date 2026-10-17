@@ -1824,8 +1824,11 @@ export function createSqliteReplicaStorage(
     if (marker.principalHash !== await gate.principalHashOf(state.salt, principal)) {
       throw gated("principal_mismatch");
     }
+    // Plain denial has no deferred hash; remote retries still require their durable token.
     const denied = state.lifecycleEpoch === marker.lifecycleEpoch + 1 &&
-      state.principalHash === null && state.deferredPrincipalHash === marker.principalHash;
+      state.principalHash === null && (
+        state.deferredPrincipalHash === marker.principalHash ||
+        (!marker.remotePending && !state.eraseDeferred && state.deferredPrincipalHash === null));
     const active = state.lifecycleEpoch === marker.lifecycleEpoch &&
       state.principalHash === marker.principalHash;
     if (!denied && !(allowActive && active)) throw gated("stamp_stale");
@@ -2243,6 +2246,12 @@ export function createSqliteReplicaStorage(
                            state.deferredPrincipalHash === marker.principalHash ||
                            state.lifecycleEpoch === marker.lifecycleEpoch + 1)))) throw gated("stamp_stale");
           }
+          if (marker.v === 1 && state !== undefined && state.principalHash !== null) {
+            const denied = await gate.denyGate(profileDir, { reason: "sign_out", principal: "" },
+              (principalHash) => collectIntents(principalHash, state.salt),
+              { salt: state.salt, principalHash: marker.principalHash });
+            if (denied.status !== "denied") throw gated("gate_unavailable");
+          }
           await clearCredentials();
           for (const file of ["session.json", "key.json"]) {
             try { await lstat(join(profileDir, file)); throw gated("gate_unavailable"); }
@@ -2256,17 +2265,10 @@ export function createSqliteReplicaStorage(
           if (!marker.discardLocalChanges && report.unknownEntries.length > 0) {
             throw localChangesRefusal(report.unknownPaths);
           }
-          if (marker.v === 1 && state !== undefined) {
-            if (state.principalHash !== null) {
-              const denied = await gate.denyGate(profileDir, { reason: "sign_out", principal: "" },
-                (principalHash) => collectIntents(principalHash, state.salt),
-                { salt: state.salt, principalHash: marker.principalHash });
-              if (denied.status !== "denied") throw gated("gate_unavailable");
-            } else if (state.eraseDeferred) {
-              await gate.resumeDeferredGate(profileDir, {
-                deniedEpoch: state.lifecycleEpoch, principalHash: marker.principalHash,
-              });
-            }
+          if (marker.v === 1 && state?.eraseDeferred) {
+            await gate.resumeDeferredGate(profileDir, {
+              deniedEpoch: state.lifecycleEpoch, principalHash: marker.principalHash,
+            });
           }
           await eraseLegacyReplicas({ discardLocalChanges: marker.discardLocalChanges === true,
             approvedUnknown: marker.approvedUnknown, knownRoots: marker.knownRoots,
