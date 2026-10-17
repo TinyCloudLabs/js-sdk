@@ -70,8 +70,8 @@
     {
       "pr": "#571",
       "ticket": "TC-841",
-      "index.mjs": 280,
-      "index.cjs": 221,
+      "index.mjs": 0,
+      "index.cjs": 0,
       "note": "Replica gzip growth measured against this PR's merge base"
     }
   ],
@@ -242,5 +242,31 @@
       "ceiling": 820108
     },
     "reason": "Security L1/L2/I1 and correctness P2 fixes required before stable, plus the round-2 correctness fix for a startup recovery that finishes after its bound. Cuts applied first: the worker start-up report uses reportError (local worker +34 to +7, no client or protocol change); the startup wait reuses the shared bounded helper (local -25/-24); the recovery re-check has no safe smaller bound. Root +20/+11 carries L2's frozen registration copy; first-import +134/+129 carries L2's frozen plugin, the bounded recovery re-check and the single-flight late-startup re-admission; activation +4/+5 is measured with no activation-source change after the cut and is not attributed to one commit. Both jobs of run 39023273615 measured identical absolute bytes in every bucket; the gated artifact is unchanged."
+  },
+  "logoutRatchet": {
+    "label": "TC-858 #571 sign-out contract (TC-721 owner revoke, prepared-login retry), exact canonical delta",
+    "ruling": "Naomi TC-858 size ruling for #571: cuts first, remainder by one reviewed exact-delta row at canonical CI bytes",
+    "base": "d2b54705ae644bb461231feaf46af74bda4b9206",
+    "sourceCommits": [
+      "4c4e3f202ec292d580c9591941feb300e446fdb0"
+    ],
+    "canonicalCI": {
+      "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39054822172",
+      "jobs": [
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39054822172/job/117460537751",
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39054822172/job/117460537489"
+      ]
+    },
+    "root": {
+      "delta": {
+        "index.mjs": 268,
+        "index.cjs": 193
+      },
+      "ceiling": {
+        "index.mjs": 1464390,
+        "index.cjs": 1395073
+      }
+    },
+    "reason": "Owner-signed direct revoke in DelegationManager (TC-721; +119/+100 locally) and the prepared-login retry in signInWithOpenKey (+115/+89 locally) are the feature. Cuts applied first: the retry loop is one loop and the signOwnerRevocation schema entry is z.custom, together -12/-28 against the first CI measurement of +280/+221; a shared revoke tail would change what the entry carries when authorityCid is undefined and was not taken. The registry-coverage guard and session-field resets are +23/+12 locally. Run 39054822172 measured identical absolute bytes in both jobs against merge base d2b54705. First-import, activation and worker are unchanged (replica.mjs -1 is a measured reduction, not a new allowance)."
   }
 }

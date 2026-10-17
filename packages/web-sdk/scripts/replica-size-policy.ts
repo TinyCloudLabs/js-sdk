@@ -86,6 +86,20 @@ export type HardeningRatchet = {
   worker: { delta: number; ceiling: number };
   reason: string;
 };
+/**
+ * One reviewed exact-delta admission of #571's sign-out contract (TC-841): the TC-721 owner revoke
+ * and the prepared-login retry. Only the root bundle grows; first-import, activation and worker
+ * ceilings stay those of the #565 hardening ratchet.
+ */
+export type LogoutRatchet = {
+  label: string;
+  ruling: string;
+  base: string;
+  sourceCommits: string[];
+  canonicalCI: { run: string; jobs: string[] };
+  root: { delta: GzipSizes; ceiling: GzipSizes };
+  reason: string;
+};
 export type Ledger = {
   allowance: GzipSizes;
   entries: LedgerEntry[];
@@ -94,6 +108,7 @@ export type Ledger = {
   canonicalToolchainCorrection?: CiToolchainCorrection;
   masterMergeResolution?: MasterMergeResolution;
   hardeningRatchet?: HardeningRatchet;
+  logoutRatchet?: LogoutRatchet;
 };
 
 const formats = ["index.mjs", "index.cjs"] as const;
@@ -236,6 +251,31 @@ export const approvedHardeningRatchet: HardeningRatchet = {
   reason: "Security L1/L2/I1 and correctness P2 fixes required before stable, plus the round-2 correctness fix for a startup recovery that finishes after its bound. Cuts applied first: the worker start-up report uses reportError (local worker +34 to +7, no client or protocol change); the startup wait reuses the shared bounded helper (local -25/-24); the recovery re-check has no safe smaller bound. Root +20/+11 carries L2's frozen registration copy; first-import +134/+129 carries L2's frozen plugin, the bounded recovery re-check and the single-flight late-startup re-admission; activation +4/+5 is measured with no activation-source change after the cut and is not attributed to one commit. Both jobs of run 39023273615 measured identical absolute bytes in every bucket; the gated artifact is unchanged.",
 };
 
+/**
+ * Naomi's TC-858 ruling for #571 (TC-841): the sign-out contract is admitted at exactly the bytes GitHub
+ * measured, after cuts, with no headroom. Only the root bundle grows; the other ceilings stay #565's.
+ */
+export const approvedLogoutRatchet: LogoutRatchet = {
+  label: "TC-858 #571 sign-out contract (TC-721 owner revoke, prepared-login retry), exact canonical delta",
+  ruling: "Naomi TC-858 size ruling for #571: cuts first, remainder by one reviewed exact-delta row at canonical CI bytes",
+  base: "d2b54705ae644bb461231feaf46af74bda4b9206",
+  sourceCommits: [
+    "4c4e3f202ec292d580c9591941feb300e446fdb0",
+  ],
+  canonicalCI: {
+    run: "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39054822172",
+    jobs: [
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39054822172/job/117460537751",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39054822172/job/117460537489",
+    ],
+  },
+  root: {
+    delta: { "index.mjs": 268, "index.cjs": 193 },
+    ceiling: { "index.mjs": 1464390, "index.cjs": 1395073 },
+  },
+  reason: "Owner-signed direct revoke in DelegationManager (TC-721; +119/+100 locally) and the prepared-login retry in signInWithOpenKey (+115/+89 locally) are the feature. Cuts applied first: the retry loop is one loop and the signOwnerRevocation schema entry is z.custom, together -12/-28 against the first CI measurement of +280/+221; a shared revoke tail would change what the entry carries when authorityCid is undefined and was not taken. The registry-coverage guard and session-field resets are +23/+12 locally. Run 39054822172 measured identical absolute bytes in both jobs against merge base d2b54705. First-import, activation and worker are unchanged (replica.mjs -1 is a measured reduction, not a new allowance).",
+};
+
 /** The reviewed #553 S3 entry's source commit, as master's checker pinned it. */
 export const preexistingS3EntryCommit = "0241ba9b";
 
@@ -282,6 +322,7 @@ export function ancestryPins(root: Ledger, hasGatedOnly: boolean): Array<{ row: 
   }
   if (root.masterMergeResolution !== undefined) pins.push({ row: "masterMergeResolution", pin: root.masterMergeResolution.mergedHead });
   if (root.hardeningRatchet !== undefined) pins.push({ row: "hardeningRatchet", pin: root.hardeningRatchet.sourceCommits.at(-1)! });
+  if (root.logoutRatchet !== undefined) pins.push({ row: "logoutRatchet", pin: root.logoutRatchet.sourceCommits.at(-1)! });
   if (hasGatedOnly) pins.push({ row: "gatedOnlyRatchet", pin: approvedGatedOnlyRatchet.sourceCommit });
   return pins;
 }
@@ -318,7 +359,7 @@ const historicalToolchain = "Bun 1.4.3; production webpack; gzip -9 -c";
 /** Only a git merge-base ledger may retain the pre-correction toolchain. */
 export function validateLedger(value: Ledger, historicalBase = false): void {
   if (!value || !value.allowance || !Array.isArray(value.entries) ||
-      Object.keys(value).some((key) => key !== "allowance" && key !== "entries" && key !== "phase2Ratchet" && key !== "fixRequiredRatchet" && key !== "canonicalToolchainCorrection" && key !== "masterMergeResolution" && key !== "hardeningRatchet")) {
+      Object.keys(value).some((key) => key !== "allowance" && key !== "entries" && key !== "phase2Ratchet" && key !== "fixRequiredRatchet" && key !== "canonicalToolchainCorrection" && key !== "masterMergeResolution" && key !== "hardeningRatchet" && key !== "logoutRatchet")) {
     throw new Error("Invalid packages/web-sdk/scripts/replica-size-ledger.json shape");
   }
   if (Object.keys(value.allowance).some((key) => !formats.includes(key as typeof formats[number]))) {
@@ -378,6 +419,10 @@ export function validateLedger(value: Ledger, historicalBase = false): void {
        JSON.stringify(value.hardeningRatchet) !== JSON.stringify(approvedHardeningRatchet))) {
     throw new Error("Only Naomi's exact canonical #565 fix-before-stable hardening ratchet is approved.");
   }
+  if (value.logoutRatchet !== undefined &&
+      (!value.hardeningRatchet || JSON.stringify(value.logoutRatchet) !== JSON.stringify(approvedLogoutRatchet))) {
+    throw new Error("Only Naomi's exact canonical #571 sign-out contract ratchet is approved.");
+  }
 }
 
 /** The resolved input blobs are introduced once and immutable in subsequent bases. */
@@ -395,6 +440,14 @@ export function validateHardeningRatchetTransition(base?: HardeningRatchet, curr
   if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedHardeningRatchet) ||
       base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
     throw new Error("The exact #565 hardening ratchet may be introduced once and cannot change later.");
+  }
+}
+
+/** The sign-out ratchet is introduced once at its exact canonical bytes and immutable afterwards. */
+export function validateLogoutRatchetTransition(base?: LogoutRatchet, current?: LogoutRatchet): void {
+  if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedLogoutRatchet) ||
+      base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
+    throw new Error("The exact #571 sign-out ratchet may be introduced once and cannot change later.");
   }
 }
 

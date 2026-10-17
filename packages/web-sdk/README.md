@@ -111,6 +111,14 @@ after size cuts: root to 1,464,122 / 1,394,880 B (+20 / +11), first import
 (+134 / +129), activation (+4 / +5) and the worker (+7). The ledger's
 `hardeningRatchet` row records them and cannot change later.
 
+The #571 sign-out contract (TC-841: the TC-721 owner revoke and the prepared-login
+retry) raised only the root ceilings once more, by the exact bytes GitHub run
+39054822172 measured after size cuts: to 1,464,390 / 1,395,073 B (+268 / +193).
+First import, activation and the worker keep #565's ceilings. The ledger's
+`logoutRatchet` row records them and cannot change later. Because the cumulative
+per-PR allowance (388 B for ESM) cannot absorb that growth, #571's `entries[]`
+row is zero and the row's absolute ceiling carries it, as for Phase 2.
+
 **Ancestry pins and squash merges.** A policy row records the PR-branch commit it
 was reviewed at, and its introduction check requires that literal commit in the
 PR head. js-sdk squash-merges, so that commit is unreachable from master

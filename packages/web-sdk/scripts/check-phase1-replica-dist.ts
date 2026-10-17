@@ -10,7 +10,7 @@ import {
   mergedPinsNotLandedOn, priorOptionalAllowance, relocatedOptionalAllowance, validateIntroducedOptionalSources,
   validateOptionalEntryTransition, validateOptionalLedger, type OptionalLedger,
 } from "./replica-optional-size-policy";
-import { assertCiSizeToolchain, approvedCiToolchainCorrection, approvedFixRequiredRatchet, approvedGatedOnlyRatchet, approvedPhase2, ciCorrectionPolicyOnlyPaths, hasAncestor, isPolicyOnlySinceApprovedSource, preexistingS3EntryCommit, validateCiToolchainTransition, validateGatedOnlyRatchet, validateHardeningRatchetTransition, validateLedger, validateMasterMergeResolutionTransition, type GzipSizes, type Ledger, type LedgerEntry } from "./replica-size-policy";
+import { assertCiSizeToolchain, approvedCiToolchainCorrection, approvedFixRequiredRatchet, approvedGatedOnlyRatchet, approvedPhase2, ciCorrectionPolicyOnlyPaths, hasAncestor, isPolicyOnlySinceApprovedSource, preexistingS3EntryCommit, validateCiToolchainTransition, validateGatedOnlyRatchet, validateHardeningRatchetTransition, validateLedger, validateLogoutRatchetTransition, validateMasterMergeResolutionTransition, type GzipSizes, type Ledger, type LedgerEntry } from "./replica-size-policy";
 import { collectMeasuredArtifactInputs } from "./replica-size-inputs";
 type Baseline = {
   webSdkTestBaseline: { ref: string; unhandledErrors: number; failingNames: string[]; unhandledSignatures: string[] };
@@ -142,7 +142,7 @@ for (const format of formats) {
     }
   }
   console.log(`${format}: current=${currentSizes[format]} gzip-bytes`);
-  const ceiling = ledger.hardeningRatchet?.root.ceiling[format] ?? ciCorrection?.measured.rootCeiling[format] ??
+  const ceiling = ledger.logoutRatchet?.root.ceiling[format] ?? ledger.hardeningRatchet?.root.ceiling[format] ?? ciCorrection?.measured.rootCeiling[format] ??
     ledger.fixRequiredRatchet?.rootCeiling[format] ?? ledger.phase2Ratchet?.ceiling[format];
   if (ceiling !== undefined) {
     console.log(`${format}: TC-858 Phase 2 absolute root ceiling=${ceiling} gzip-bytes`);
@@ -185,6 +185,13 @@ if (prBaseSha) {
   if (hardening !== undefined && baseLedger.hardeningRatchet === undefined &&
       (baseLedger.masterMergeResolution === undefined || !hasAncestor(repoRoot, hardening.sourceCommits.at(-1)!))) {
     console.error("The #565 hardening ratchet requires the merged #548 resolution and its measured source commits.");
+    failed = true;
+  }
+  validateLogoutRatchetTransition(baseLedger.logoutRatchet, ledger.logoutRatchet);
+  const logout = ledger.logoutRatchet;
+  const logoutIntroduced = logout !== undefined && baseLedger.logoutRatchet === undefined;
+  if (logoutIntroduced && (baseLedger.hardeningRatchet === undefined || !hasAncestor(repoRoot, logout.sourceCommits.at(-1)!))) {
+    console.error("The #571 sign-out ratchet requires the merged #565 hardening ratchet and its measured source commit.");
     failed = true;
   }
   const baseOptionalPath = "packages/web-sdk/scripts/replica-optional-size-ledger.json";
@@ -458,6 +465,17 @@ if (prBaseSha) {
         // remains its own unchanged upstream ledger entry.
         if (!prefixMatches) failed = true;
         console.log("TC-858 Phase 2 uses its exact absolute-root policy row, not additive old headroom.");
+      } else if (logoutIntroduced && prefixMatches && appended.length === 1) {
+        // The exact sign-out row carries the growth through its absolute root ceiling, as for Phase 2,
+        // so the cumulative old-headroom entry is zero. The measured growth may not exceed the row.
+        const entry = appended[0];
+        for (const format of formats) {
+          if (entry[format] !== 0 || deltas[format] > logout.root.delta[format]) {
+            console.error(`${format}: the #571 entry must be 0 and the measured growth ${deltas[format]} must not exceed the sign-out row's ${logout.root.delta[format]}.`);
+            failed = true;
+          }
+        }
+        console.log("TC-858 #571 uses its exact absolute-root sign-out row, not additive old headroom.");
       } else if (!prefixMatches || appended.length !== 1) {
         const pr = process.env.REPLICA_BUDGET_PR_NUMBER ? `#${process.env.REPLICA_BUDGET_PR_NUMBER}` : "#<PR>";
         const ticket = process.env.REPLICA_BUDGET_TICKET?.match(/\bTC-\d+\b/i)?.[0] ?? "TC-UNKNOWN";

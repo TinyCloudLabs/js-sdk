@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { MAX_WORKER_GZIP_BYTES } from "../../replica/scripts/check-worker-size";
 import { compactFixOptionalAllowance, mergedPinsNotLandedOn, optionalSourcePins, type OptionalLedger } from "./replica-optional-size-policy";
-import { ancestryPins, assertCiSizeToolchain, approvedCiToolchainCorrection, approvedFixRequiredRatchet, approvedGatedOnlyRatchet, approvedHardeningRatchet, ciCorrectionPolicyOnlyPaths, hasAncestor, isPolicyOnlySinceApprovedSource, landingCommit, pinLandedOn, validateCiToolchainTransition, validateGatedOnlyRatchet, validateHardeningRatchetTransition, validateLedger, validateMasterMergeResolutionTransition, type HardeningRatchet, type Ledger, type MasterMergeResolution } from "./replica-size-policy";
+import { ancestryPins, assertCiSizeToolchain, approvedCiToolchainCorrection, approvedFixRequiredRatchet, approvedGatedOnlyRatchet, approvedHardeningRatchet, approvedLogoutRatchet, ciCorrectionPolicyOnlyPaths, hasAncestor, isPolicyOnlySinceApprovedSource, landingCommit, pinLandedOn, validateCiToolchainTransition, validateGatedOnlyRatchet, validateHardeningRatchetTransition, validateLedger, validateLogoutRatchetTransition, validateMasterMergeResolutionTransition, type HardeningRatchet, type Ledger, type LogoutRatchet, type MasterMergeResolution } from "./replica-size-policy";
 
 const current = JSON.parse(readFileSync(resolve(import.meta.dir, "replica-size-ledger.json"), "utf8")) as Ledger;
 const historical: Ledger = {
@@ -13,6 +13,7 @@ const historical: Ledger = {
   canonicalToolchainCorrection: undefined,
   masterMergeResolution: undefined,
   hardeningRatchet: undefined,
+  logoutRatchet: undefined,
   phase2Ratchet: {
     ...current.phase2Ratchet!,
     toolchain: "Bun 1.4.3; production webpack; gzip -9 -c",
@@ -1040,6 +1041,50 @@ describe("TC-858 #565 hardening exact-delta ratchet", () => {
   });
 });
 
+describe("TC-858 #571 sign-out exact-delta ratchet", () => {
+  const row = () => structuredClone(approvedLogoutRatchet);
+
+  it("is in the ledger once, with root ceilings equal to #565's plus the canonical deltas and nothing else raised", () => {
+    expect(() => validateLedger(current)).not.toThrow();
+    expect(current.logoutRatchet).toEqual(approvedLogoutRatchet);
+    for (const format of ["index.mjs", "index.cjs"] as const) {
+      expect(approvedLogoutRatchet.root.ceiling[format])
+        .toBe(approvedHardeningRatchet.root.ceiling[format] + approvedLogoutRatchet.root.delta[format]);
+    }
+    expect(Object.keys(approvedLogoutRatchet)).not.toContain("firstImport");
+    expect(Object.keys(approvedLogoutRatchet)).not.toContain("worker");
+  });
+
+  it("refuses one extra byte, other CI provenance, a dropped source commit or a missing #565 ratchet", () => {
+    const mutations: Array<(changed: LogoutRatchet) => void> = [
+      (changed) => { changed.root.ceiling["index.mjs"]++; },
+      (changed) => { changed.root.delta["index.cjs"]++; },
+      (changed) => { changed.canonicalCI.run = "https://github.com/TinyCloudLabs/js-sdk/actions/runs/1"; },
+      (changed) => { changed.sourceCommits.pop(); },
+    ];
+    for (const mutate of mutations) {
+      const ledger = copy(current);
+      const changed = row();
+      mutate(changed);
+      ledger.logoutRatchet = changed;
+      expect(() => validateLedger(ledger)).toThrow();
+    }
+    const withoutHardening = copy(current);
+    delete withoutHardening.hardeningRatchet;
+    expect(() => validateLedger(withoutHardening)).toThrow();
+  });
+
+  it("may be introduced once and never changed or removed in a later base", () => {
+    expect(() => validateLogoutRatchetTransition(undefined, row())).not.toThrow();
+    expect(() => validateLogoutRatchetTransition(row(), row())).not.toThrow();
+    const changed = row();
+    changed.root.ceiling["index.cjs"]++;
+    expect(() => validateLogoutRatchetTransition(undefined, changed)).toThrow();
+    expect(() => validateLogoutRatchetTransition(row(), changed)).toThrow();
+    expect(() => validateLogoutRatchetTransition(row(), undefined)).toThrow();
+  });
+});
+
 describe("TC-858 squash-proof ancestry pins", () => {
   const git = (root: string, ...args: string[]) =>
     execFileSync("git", ["-C", root, ...args], { encoding: "utf8" }).trim();
@@ -1060,7 +1105,12 @@ describe("TC-858 squash-proof ancestry pins", () => {
   const repoRoot = resolve(import.meta.dir, "../../..");
   const squashOf548 = "94566db5fcc8831ad9913b593b1843b201ab0227";
   const squashOf565 = "86815bd81479a5ca6578d5cbef8fd9f5a42960c9";
-  const optional = JSON.parse(readFileSync(resolve(import.meta.dir, "replica-optional-size-ledger.json"), "utf8")) as OptionalLedger;
+  // Fixed refs read the ledgers as they were at #565's squash, so a later row (which has not landed
+  // there) cannot fail these tests; they need full history, which CI fetches.
+  const ledgerAt = <T>(file: string) =>
+    JSON.parse(git(repoRoot, "show", `${squashOf565}:packages/web-sdk/scripts/${file}`)) as T;
+  const ledger565 = ledgerAt<Ledger>("replica-size-ledger.json");
+  const optional = ledgerAt<OptionalLedger>("replica-optional-size-ledger.json");
 
   it("resolves a squash-merged row's branch pin to the master commit that landed it", () => {
     const root = initRepo();
@@ -1116,7 +1166,7 @@ describe("TC-858 squash-proof ancestry pins", () => {
 
   it("re-pins every merged #548 and #565 row to its master squash commit", () => {
     const pins = [
-      ...ancestryPins(current, optional.gatedOnlyRatchet !== undefined),
+      ...ancestryPins(ledger565, optional.gatedOnlyRatchet !== undefined),
       ...optionalSourcePins(optional),
     ];
     expect(Object.fromEntries(pins.map(({ row, pin }) => [row, landingCommit(repoRoot, pin, squashOf565)]))).toEqual({
@@ -1134,9 +1184,9 @@ describe("TC-858 squash-proof ancestry pins", () => {
   });
 
   it("check-phase1 refuses exactly the merged pins its base has not landed", () => {
-    expect(mergedPinsNotLandedOn(repoRoot, current, optional, squashOf565)).toEqual([]);
+    expect(mergedPinsNotLandedOn(repoRoot, ledger565, optional, squashOf565)).toEqual([]);
     // Just before #548 landed, only phase2's base (a master commit) is reachable.
-    expect(mergedPinsNotLandedOn(repoRoot, current, optional, `${squashOf548}^`).map(({ row }) => row)).toEqual([
+    expect(mergedPinsNotLandedOn(repoRoot, ledger565, optional, `${squashOf548}^`).map(({ row }) => row)).toEqual([
       "phase2Ratchet (#553 entry)", "fixRequiredRatchet", "canonicalToolchainCorrection", "masterMergeResolution",
       "hardeningRatchet", "gatedOnlyRatchet", "relocations", "measurementCorrection", "fixRequired",
     ]);
