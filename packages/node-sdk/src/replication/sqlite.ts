@@ -98,7 +98,8 @@ function safeInventoryPath(path: string): boolean {
      path === "replicas" || path.startsWith("replicas/"));
 }
 
-function logoutPrincipalDigest(principal: string): string {
+/** The domain-separated owner binding persisted as a logout marker's `principalDigest`. */
+export function logoutPrincipalDigest(principal: string): string {
   return createHash("sha256").update("tinycloud-replica-logout\0").update(principal, "utf8").digest("hex");
 }
 function compareInventoryString(left: string, right: string): number {

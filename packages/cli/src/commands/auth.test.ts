@@ -313,11 +313,12 @@ mock.module("../auth/local-key.js", () => ({
   keyToDID: (jwk: { did?: string }) => jwk.did ?? "did:key:from-key",
 }));
 
-const { TinyCloudNode, REPLICA_LOGOUT_PENDING_FILE } = await import("@tinycloud/node-sdk");
+const { TinyCloudNode, REPLICA_LOGOUT_PENDING_FILE, logoutPrincipalDigest } = await import("@tinycloud/node-sdk");
 
 mock.module("@tinycloud/node-sdk", () => ({
   TinyCloudNode,
   REPLICA_LOGOUT_PENDING_FILE,
+  logoutPrincipalDigest,
   grantAuthRequest: async (_node: unknown, request: Record<string, unknown>) => {
     recorded.grantedRequests.push(request);
     return {

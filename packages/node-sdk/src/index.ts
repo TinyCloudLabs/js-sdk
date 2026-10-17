@@ -634,4 +634,5 @@ export {
   createProfileReplicaPurge,
   REPLICA_LOGOUT_PENDING_FILE,
   assertProfileLogoutClear,
+  logoutPrincipalDigest,
 } from "./replication/sqlite";

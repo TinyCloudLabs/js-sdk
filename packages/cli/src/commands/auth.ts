@@ -7,7 +7,7 @@ import { lstat, mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { createInterface } from "node:readline";
 import type { IncomingMessage } from "node:http";
-import { TinyCloudNode, grantAuthRequest, principalDidEquals, REPLICA_LOGOUT_PENDING_FILE, signedCompactUcanExpiry, type PermissionEntry, type PortableDelegation, type RuntimeDelegationActivator, type TinyCloudSession } from "@tinycloud/node-sdk";
+import { TinyCloudNode, grantAuthRequest, logoutPrincipalDigest, principalDidEquals, REPLICA_LOGOUT_PENDING_FILE, signedCompactUcanExpiry, type PermissionEntry, type PortableDelegation, type RuntimeDelegationActivator, type TinyCloudSession } from "@tinycloud/node-sdk";
 import type { ProfileReplicaApprovalEntry, ProfileReplicaDeferredToken, ProfileReplicaLogoutPending } from "@tinycloud/sdk-services/kv/replication";
 import { composeManifestRequest } from "@tinycloud/sdk-core";
 import { invokeOperation } from "@tinycloud/operations";
@@ -428,9 +428,9 @@ export async function finishProfileLogout(
                 ExitCode.ERROR);
             }
           }
-          // A previously signed-out, cleanup-ready marker is already the
-          // durable approval. Retry its guarded recovery before preflighting
-          // an orphaned, denied gate as if this were a new logout.
+          // A remote-abandoned marker whose credentials survived is rechecked
+          // against its approved inventory before recovery shreds them; other
+          // committed local markers recover below without a new preflight.
           if (pendingMarker?.remoteAbandoned === true && !remotePending &&
               profile.authSignedOut !== true && options.approveInventory === undefined) {
             // A crash after the plain override leaves credentials intact. Recheck
@@ -450,8 +450,17 @@ export async function finishProfileLogout(
               options.approveInventory === undefined && options.discardLocalChanges !== true) {
             // A committed local marker is the durable approval whether or not
             // credential shred finished; strict preflight would mistake our own
-            // denied gate for orphaned data. Recovery revalidates the marker,
-            // as startup recovery does, and refuses a changed inventory.
+            // denied gate for orphaned data. Intended, as in startup recovery:
+            // recovery shreds credentials BEFORE its inventory check, so a
+            // changed inventory exits REPLICA_PURGE_FAILED signed out, with the
+            // marker still denying reads (CONTRACT §2), pending explicit
+            // reapproval. The remoteAbandoned branch above differs: it rechecks
+            // inventory first and keeps credentials on a mismatch.
+            if (session && pendingMarker.principalDigest !== logoutPrincipalDigest(principal)) {
+              throw new CLIError("REPLICA_GATED",
+                "The pending logout belongs to a different principal than the current session; credentials, replica files and the logout marker were left unchanged.",
+                ExitCode.ERROR);
+            }
             marker = pendingMarker;
           } else {
             // A changed pending inventory must issue its two-command challenge

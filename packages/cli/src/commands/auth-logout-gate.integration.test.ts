@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { profileConfigPath, profilePath, sessionPath, withProfileLock, withTinyCloudStateRoot, writeJsonAtomic } from "@tinycloud/operations/state";
@@ -9,6 +9,7 @@ import { createProfileReplicaPurge, REPLICA_LOGOUT_PENDING_FILE, sqliteReplicaSt
 
 const PROFILE = "owner";
 const PRINCIPAL = "did:pkh:eip155:1:0x0000000000000000000000000000000000000001";
+const OTHER_PRINCIPAL = "did:pkh:eip155:1:0x0000000000000000000000000000000000000002";
 const SPACE = "tinycloud:pkh:eip155:1:0x0000000000000000000000000000000000000001:default";
 const cliEntry = join(import.meta.dir, "../index.ts");
 const homes: string[] = [];
@@ -164,8 +165,13 @@ test("a pending flag-owned erase fences an open handle and is retried after its 
   });
 });
 
-/** Plain v1 logout committed its denial, then credential removal failed before `authSignedOut` was durable. */
-async function deniedBeforeSignOut(home: string) {
+type InterruptedLogout = "v1" | "v1-discard" | "v2" | "v3";
+
+/**
+ * A plain logout committed its marker (and, for v1, its gate denial), then
+ * credential removal failed before `authSignedOut` was durable.
+ */
+async function interruptedLogout(home: string, kind: InterruptedLogout) {
   return withTinyCloudStateRoot(home, async () => {
     await writeJsonAtomic(profileConfigPath(PROFILE), {
       name: PROFILE, host: "https://node.example.test", chainId: 1, spaceName: "default", did: PRINCIPAL,
@@ -174,65 +180,160 @@ async function deniedBeforeSignOut(home: string) {
     await writeJsonAtomic(sessionPath(PROFILE), { ownerDid: PRINCIPAL, spaceId: "default" });
     const directory = profilePath(PROFILE);
     await writeFile(join(directory, "key.json"), "private-session-key");
-    const stamp = await establishSessionStamp(directory, PRINCIPAL, { siweIssuedAt: 1 });
-    const replicationRoot = join(directory, "replication");
     const guard = <T>(section: () => Promise<T>) => withProfileLock(PROFILE, section, { requireProfile: true });
-    const handle = await sqliteReplicaStorage({ dir: replicationRoot, guard }).open({
-      identity: { host: "https://node.example.test", space: SPACE, principal: PRINCIPAL },
-      space: SPACE, prefix: "notes/", allowSecrets: false, stamp,
-      device: { did: "did:key:zTestDevice", jwk: { kty: "OKP" } },
-      grantPolicy: { grantTtlMs: 86_400_000, consentAnchor: { at: Date.now() - 1_000, source: "siwe" } },
-    });
-    await handle.close();
-    const replicaFile = (await readdir(replicationRoot, { recursive: true })).find((entry) => entry.endsWith("replica.db"));
-    expect(replicaFile).toBeDefined();
+    const purge = createProfileReplicaPurge({ profileDir: directory, guard });
+    const replicationRoot = join(directory, "replication");
+    let replica: string;
+    let approvedUnknown: string | undefined;
+    if (kind === "v1" || kind === "v1-discard") {
+      const stamp = await establishSessionStamp(directory, PRINCIPAL, { siweIssuedAt: 1 });
+      const handle = await sqliteReplicaStorage({ dir: replicationRoot, guard }).open({
+        identity: { host: "https://node.example.test", space: SPACE, principal: PRINCIPAL },
+        space: SPACE, prefix: "notes/", allowSecrets: false, stamp,
+        device: { did: "did:key:zTestDevice", jwk: { kty: "OKP" } },
+        grantPolicy: { grantTtlMs: 86_400_000, consentAnchor: { at: Date.now() - 1_000, source: "siwe" } },
+      });
+      await handle.close();
+      const replicaFile = (await readdir(replicationRoot, { recursive: true })).find((entry) => entry.endsWith("replica.db"));
+      expect(replicaFile).toBeDefined();
+      replica = join(replicationRoot, replicaFile!);
+      if (kind === "v1-discard") {
+        approvedUnknown = join(replicationRoot, "unapproved.bin");
+        await writeFile(approvedUnknown, "local-change");
+      }
+    } else {
+      // v2: legacy data without any gate. v3: legacy data behind an inactive gate.
+      if (kind === "v3") await establishSessionStamp(directory, PRINCIPAL, { siweIssuedAt: 1 });
+      const legacyDir = join(directory, "replicas", "notes");
+      const store = await SqliteReplicaStore.open(legacyDir, { create: true });
+      try {
+        await store.init({
+          name: "notes", replicaId: "r-test", host: "https://node.example.test", space: "default", prefix: "notes/",
+          deviceDid: "did:key:zTestDevice", allowSecrets: false, localReadPolicy: "whileGrantValid", retentionGrantCid: null,
+        });
+      } finally {
+        await store.close();
+      }
+      replica = join(legacyDir, "replica.db");
+      if (kind === "v3") expect((await purge.deny({ reason: "sign_out", principal: PRINCIPAL })).status).toBe("denied");
+    }
 
     // The same facade sequence plain `auth logout` runs, with the credential
-    // shred failing after the v1 denial commits.
-    const purge = createProfileReplicaPurge({ profileDir: directory, guard });
-    const approval = await purge.preflightLogout({ principal: PRINCIPAL });
-    expect((await purge.prepareLogoutPending({ principal: PRINCIPAL, approval }))?.v).toBe(1);
+    // shred failing after the marker (and any v1 denial) commits.
+    const discardLocalChanges = kind === "v1-discard";
+    const approval = await purge.preflightLogout({ principal: PRINCIPAL, discardLocalChanges });
+    const marker = await purge.prepareLogoutPending({ principal: PRINCIPAL, approval, discardLocalChanges });
+    expect(marker).toMatchObject({ v: kind === "v2" ? 2 : kind === "v3" ? 3 : 1 });
+    if (discardLocalChanges) {
+      expect(marker).toMatchObject({ discardLocalChanges: true });
+      expect(marker?.approvedUnknown.map(({ path }) => path)).toEqual(["replication/unapproved.bin"]);
+    }
     const report = await purge.recoverLogoutPending({
       signal: new AbortController().signal,
       clearCredentials: async () => { throw Object.assign(new Error("injected"), { code: "EIO" }); },
       eraseLegacyReplicas: async () => {},
     });
     expect(report.failed).toEqual([{ id: "logout", code: "EIO" }]);
-    expect((await readGateSnapshot(directory))?.principalHash).toBeNull();
+    if (kind !== "v2") expect((await readGateSnapshot(directory))?.principalHash).toBeNull();
     expect(JSON.parse(await readFile(profileConfigPath(PROFILE), "utf8")).authSignedOut).toBeUndefined();
     expect(await readFile(join(directory, "key.json"), "utf8")).toBe("private-session-key");
     return {
-      directory, replicationRoot, replica: join(replicationRoot, replicaFile!),
+      directory, replicationRoot, replica, approvedUnknown,
       marker: join(directory, REPLICA_LOGOUT_PENDING_FILE),
+      session: join(directory, "session.json"), key: join(directory, "key.json"),
     };
   });
 }
 
-test("plain logout retry completes a denied v1 logout whose credential shred failed before sign-out", async () => {
-  const home = await mkdtemp(join(tmpdir(), "tc841-cli-logout-denied-retry-"));
+async function signedOut(directory: string): Promise<unknown> {
+  return JSON.parse(await readFile(join(directory, "profile.json"), "utf8")).authSignedOut;
+}
+
+for (const kind of ["v1", "v2", "v3"] as const) {
+  test(`plain logout retry completes a ${kind} logout whose credential shred failed before sign-out`, async () => {
+    const home = await mkdtemp(join(tmpdir(), `tc841-cli-logout-retry-${kind}-`));
+    homes.push(home);
+    const paths = await interruptedLogout(home, kind);
+
+    const retried = await run(home);
+    expect(retried.exitCode, retried.stderr).toBe(0);
+    for (const path of [paths.replica, paths.marker, paths.session, paths.key]) {
+      await expect(stat(path)).rejects.toMatchObject({ code: "ENOENT" });
+    }
+    expect(await signedOut(paths.directory)).toBe(true);
+  });
+}
+
+test("plain logout retry honours the stored discard consent for the exact approved identity", async () => {
+  const home = await mkdtemp(join(tmpdir(), "tc841-cli-logout-retry-discard-"));
   homes.push(home);
-  const paths = await deniedBeforeSignOut(home);
+  const paths = await interruptedLogout(home, "v1-discard");
 
   const retried = await run(home);
   expect(retried.exitCode, retried.stderr).toBe(0);
-  await expect(stat(paths.replica)).rejects.toMatchObject({ code: "ENOENT" });
-  await expect(stat(paths.marker)).rejects.toMatchObject({ code: "ENOENT" });
-  await expect(stat(join(paths.directory, "session.json"))).rejects.toMatchObject({ code: "ENOENT" });
-  await expect(stat(join(paths.directory, "key.json"))).rejects.toMatchObject({ code: "ENOENT" });
-  expect(JSON.parse(await readFile(join(paths.directory, "profile.json"), "utf8")).authSignedOut).toBe(true);
+  for (const path of [paths.approvedUnknown!, paths.replica, paths.marker, paths.session, paths.key]) {
+    await expect(stat(path)).rejects.toMatchObject({ code: "ENOENT" });
+  }
+  expect(await signedOut(paths.directory)).toBe(true);
 });
 
-test("plain logout retry of a denied v1 logout still refuses an unapproved new replication path", async () => {
-  const home = await mkdtemp(join(tmpdir(), "tc841-cli-logout-denied-unknown-"));
+test("plain logout retry refuses an approved discard path replaced by a new identity", async () => {
+  const home = await mkdtemp(join(tmpdir(), "tc841-cli-logout-retry-replaced-"));
   homes.push(home);
-  const paths = await deniedBeforeSignOut(home);
+  const paths = await interruptedLogout(home, "v1-discard");
+  // Write first, then rename over, so the replacement cannot reuse the inode.
+  await writeFile(`${paths.approvedUnknown!}.new`, "replacement");
+  await rename(`${paths.approvedUnknown!}.new`, paths.approvedUnknown!);
+
+  const refused = await run(home);
+  expect(refused.exitCode).toBeGreaterThan(0);
+  expect(JSON.parse(refused.stderr).error).toMatchObject({
+    code: "REPLICA_PURGE_FAILED", message: expect.stringContaining("(gate_unavailable)"),
+  });
+  expect(await readFile(paths.approvedUnknown!, "utf8")).toBe("replacement");
+  expect(await stat(paths.replica)).toBeTruthy();
+  expect(await stat(paths.marker)).toBeTruthy();
+  await expect(stat(paths.session)).rejects.toMatchObject({ code: "ENOENT" });
+  await expect(stat(paths.key)).rejects.toMatchObject({ code: "ENOENT" });
+  expect(await signedOut(paths.directory)).toBe(true);
+});
+
+test("plain logout retry shreds credentials but refuses an unapproved new replication path", async () => {
+  const home = await mkdtemp(join(tmpdir(), "tc841-cli-logout-retry-unknown-"));
+  homes.push(home);
+  const paths = await interruptedLogout(home, "v1");
   const unknown = join(paths.replicationRoot, "unapproved.bin");
   await writeFile(unknown, "local-change");
 
   const refused = await run(home);
   expect(refused.exitCode).toBeGreaterThan(0);
+  expect(JSON.parse(refused.stderr).error).toMatchObject({
+    code: "REPLICA_PURGE_FAILED", message: expect.stringContaining("(gate_unavailable)"),
+  });
+  // The committed denial is the durable approval: credentials go, local data stays.
+  await expect(stat(paths.session)).rejects.toMatchObject({ code: "ENOENT" });
+  await expect(stat(paths.key)).rejects.toMatchObject({ code: "ENOENT" });
+  expect(await signedOut(paths.directory)).toBe(true);
   expect(await readFile(unknown, "utf8")).toBe("local-change");
   expect(await stat(paths.replica)).toBeTruthy();
   expect(await stat(paths.marker)).toBeTruthy();
   expect((await readGateSnapshot(paths.directory))?.principalHash).toBeNull();
+});
+
+test("plain logout retry refuses a marker owned by a different session principal without touching anything", async () => {
+  const home = await mkdtemp(join(tmpdir(), "tc841-cli-logout-retry-principal-"));
+  homes.push(home);
+  const paths = await interruptedLogout(home, "v1");
+  await writeFile(paths.session, JSON.stringify({ ownerDid: OTHER_PRINCIPAL, spaceId: "default" }));
+  const before = await Promise.all([paths.session, paths.key, paths.marker, paths.replica]
+    .map((path) => readFile(path)));
+  const gate = await readGateSnapshot(paths.directory);
+
+  const refused = await run(home);
+  expect(refused.exitCode).toBeGreaterThan(0);
+  expect(JSON.parse(refused.stderr).error).toMatchObject({ code: "REPLICA_GATED" });
+  expect(await Promise.all([paths.session, paths.key, paths.marker, paths.replica]
+    .map((path) => readFile(path)))).toEqual(before);
+  expect(await readGateSnapshot(paths.directory)).toEqual(gate);
+  expect(await signedOut(paths.directory)).toBeUndefined();
 });
