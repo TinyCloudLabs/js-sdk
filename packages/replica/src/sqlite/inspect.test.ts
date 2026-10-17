@@ -1,7 +1,7 @@
-import { linkSync, renameSync, symlinkSync } from "node:fs";
-import { chmod, mkdtemp, readdir, readlink, rm, stat, symlink } from "node:fs/promises";
+import { closeSync, constants as fsConstants, linkSync, openSync, renameSync, symlinkSync } from "node:fs";
+import { chmod, mkdtemp, readFile, readdir, readlink, rm, stat, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { afterEach, describe, expect, test } from "bun:test";
 
 import { FAULTS, SqliteReplicaStore } from "./store.js";
@@ -69,6 +69,123 @@ test("concurrent prefixes do not confuse SQLite descriptor identity", async () =
     for (const path of paths) expect((await stat(join(path, "replica.db"))).isFile()).toBe(true);
   } finally {
     await Promise.all(results.map((result) => result.status === "fulfilled" ? result.value.close() : undefined));
+  }
+});
+
+test("concurrent controllers can open one writable replica while another remains live", async () => {
+  const dir = await makeStore();
+  const first = await SqliteReplicaStore.open(dir, { create: false });
+  expect(await first.open()).not.toBeNull();
+  let firstClosed = false;
+  const results = await Promise.allSettled(Array.from({ length: 4 }, () =>
+    SqliteReplicaStore.open(dir, { create: true })));
+  try {
+    expect(results.filter((result) => result.status === "rejected")).toEqual([]);
+    const stores = results.flatMap((result) => result.status === "fulfilled" ? [result.value] : []);
+    expect(await stores[0]!.open()).not.toBeNull();
+    await first.close();
+    firstClosed = true;
+    await expect(first.open()).rejects.toMatchObject({ code: "REPLICA_CLOSED" });
+    expect((await stores[1]!.status()).coverage).toBe("empty");
+    const lease = await stores[0]!.acquireSyncLease(30_000);
+    expect(lease).not.toBeNull();
+    expect(await stores[1]!.acquireSyncLease(30_000)).toBeNull();
+    await stores[0]!.releaseLease(lease!);
+  } finally {
+    if (!firstClosed) await first.close();
+    await Promise.all(results.map((result) => result.status === "fulfilled" ? result.value.close() : undefined));
+  }
+  const reopened = await SqliteReplicaStore.open(dir, { create: false });
+  try {
+    expect(await reopened.open()).not.toBeNull();
+  } finally {
+    await reopened.close();
+  }
+  if (process.platform === "linux") expect(await databaseDescriptors()).toEqual([]);
+});
+
+for (const fails of [false, true]) {
+  test(`closing a controller during garbage collection ${fails ? "rolls back a failure" : "commits"} before a sibling writes`, async () => {
+    const dir = await makeStore();
+    let started!: () => void;
+    let resume!: () => void;
+    const inTransaction = new Promise<void>((resolve) => { started = resolve; });
+    const held = new Promise<void>((resolve) => { resume = resolve; });
+    const first = await SqliteReplicaStore.open(dir, {
+      create: false,
+      [FAULTS]: {
+        afterGarbageCollectionBegin: async () => {
+          started();
+          await held;
+          if (fails) throw new Error("Injected garbage collection failure");
+        },
+      },
+    });
+    const second = await SqliteReplicaStore.open(dir, { create: false });
+    const lease = await first.acquireSyncLease(30_000);
+    expect(lease).not.toBeNull();
+    const collecting = first.collectGarbage(lease!);
+    void collecting.catch(() => undefined);
+    let closing: Promise<void> | undefined;
+    try {
+      await inTransaction;
+      closing = first.close();
+      let closed = false;
+      void closing.then(() => { closed = true; });
+      await Promise.resolve();
+      const closedBeforeResume = closed;
+      await expect(first.get("notes/a")).rejects.toMatchObject({ code: "REPLICA_CLOSED" });
+      await expect(first.renewLease(lease!, 30_000)).rejects.toMatchObject({ code: "REPLICA_CLOSED" });
+      resume();
+      await second.renewLease(lease!, 30_000);
+      if (fails) await expect(collecting).rejects.toMatchObject({ code: "STORAGE_ERROR" });
+      else expect(await collecting).toBe(0);
+      await closing;
+      expect(closedBeforeResume).toBe(false);
+      await second.releaseLease(lease!);
+    } finally {
+      resume();
+      await Promise.allSettled([collecting, closing ?? Promise.resolve()]);
+      await first.close();
+      await second.close();
+    }
+  });
+}
+
+test.skipIf(process.platform !== "linux")("a sibling pinned path retains the same replica after its first controller closes", async () => {
+  const dir = await makeStore();
+  const first = await SqliteReplicaStore.open(dir, { create: false });
+  const parentFd = openSync(dirname(dir), fsConstants.O_RDONLY | fsConstants.O_DIRECTORY);
+  let firstClosed = false;
+  let sibling: SqliteReplicaStore | undefined;
+  try {
+    sibling = await SqliteReplicaStore.open(`/proc/self/fd/${parentFd}/${basename(dir)}`, { create: false });
+    await first.close();
+    firstClosed = true;
+    expect((await sibling.open())?.config.name).toBe("notes");
+  } finally {
+    await sibling?.close();
+    if (!firstClosed) await first.close();
+    closeSync(parentFd);
+  }
+});
+
+test("a live writable controller cannot authorize a replaced database", async () => {
+  const selected = await makeStore();
+  const victim = await makeStore();
+  const selectedDb = join(selected, "replica.db");
+  const victimDb = join(victim, "replica.db");
+  const victimBefore = await readFile(victimDb);
+  const first = await SqliteReplicaStore.open(selected, { create: false });
+  try {
+    renameSync(selectedDb, `${selectedDb}.original`);
+    linkSync(victimDb, selectedDb);
+    await expect(SqliteReplicaStore.open(selected, { create: false }).then(async (store) => {
+      await store.close();
+    })).rejects.toMatchObject({ code: "STORAGE_ERROR" });
+    expect(await readFile(victimDb)).toEqual(victimBefore);
+  } finally {
+    await first.close();
   }
 });
 
