@@ -846,6 +846,14 @@ accepted exception to "Logout by another account": a corrupt or missing gate
 cannot name its principal, so with explicit discard consent the orphan cleanup
 removes the approved flag-owned files whoever owned them (TC-1313).
 
+Directly under `replication/`, CLI-bound storage and purge name the CLI's
+exact diagnostics files (`events.jsonl` and its rotation `events.jsonl.1`).
+With a readable gate, only those names, and only while `lstat` shows a regular
+file, are known: the deny's partition scan skips them and logout erases them
+with the other source-owned residue. A symlink or any other type at those
+names stays unknown, a missing or corrupt gate keeps them indeterminate, and
+generic storage names no diagnostics file.
+
 For a flag-owned identity directory, only a validated `identity.json` and
 a regular `pending.json` whose parsed records are empty certify that local
 writes are absent. A missing/unreadable pending index, a replica database,

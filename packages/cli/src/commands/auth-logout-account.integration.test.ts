@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { profileConfigPath, profilePath, sessionPath, withProfileLock, withTinyCloudStateRoot, writeJsonAtomic } from "@tinycloud/operations/state";
@@ -36,10 +36,11 @@ async function run(home: string, args: string[] = []) {
 }
 
 /**
- * Account A owns the gate and one flag-owned partition (with a nonempty `pending.json`); the
- * profile also has a legacy `replicas/notes` mirror. The stored session belongs to `sessionOwner`.
+ * Account A owns the gate and one flag-owned partition (with a nonempty `pending.json` unless
+ * `unsynced` is false); the profile also has a legacy `replicas/notes` mirror. The stored
+ * session belongs to `sessionOwner`.
  */
-async function profileOwnedByA(home: string, sessionOwner: string) {
+async function profileOwnedByA(home: string, sessionOwner: string, unsynced = true) {
   return withTinyCloudStateRoot(home, async () => {
     await writeJsonAtomic(profileConfigPath(PROFILE), {
       name: PROFILE, host: HOST, chainId: 1, spaceName: "default", did: sessionOwner,
@@ -64,8 +65,10 @@ async function profileOwnedByA(home: string, sessionOwner: string) {
     await handle.close();
     // A's unsynced local write: a nonempty pending index in A's identity partition.
     const [identityDir] = (await readdir(replication)).filter((name) => /^[a-z2-7]{26}$/.test(name));
-    await writeFile(join(replication, identityDir!, "pending.json"),
-      JSON.stringify({ v: 2, identity, committedEpoch: 0, seq: 1, records: [{ state: "ambiguous" }] }));
+    if (unsynced) {
+      await writeFile(join(replication, identityDir!, "pending.json"),
+        JSON.stringify({ v: 2, identity, committedEpoch: 0, seq: 1, records: [{ state: "ambiguous" }] }));
+    }
     const legacy = join(directory, "replicas", "notes");
     const store = await SqliteReplicaStore.open(legacy, { create: true });
     await store.init({
@@ -197,4 +200,37 @@ test("a restored older gate under a bound logout marker refuses with the profile
   expect(refused.stderr).toContain("tc profile switch <other>");
   expect(refused.stderr).toContain("tc profile delete <name>");
   expect(JSON.parse(await readFile(join(paths.directory, REPLICA_LOGOUT_PENDING_FILE), "utf8"))).toEqual(marker);
+});
+
+test("a synced profile with the CLI's replication event logs signs out without --discard-local-changes", async () => {
+  const home = await mkdtemp(join(tmpdir(), "tc841-logout-diagnostics-"));
+  homes.push(home);
+  const paths = await profileOwnedByA(home, ACCOUNT_A, false);
+  await writeFile(join(paths.replication, "events.jsonl"), "{\"type\":\"replication.sync\"}\n");
+  await writeFile(join(paths.replication, "events.jsonl.1"), "{\"type\":\"replication.read\"}\n");
+
+  const loggedOut = await run(home);
+  expect(loggedOut.exitCode, loggedOut.stderr).toBe(0);
+  await expect(stat(paths.session)).rejects.toMatchObject({ code: "ENOENT" });
+  await expect(stat(paths.replication)).rejects.toMatchObject({ code: "ENOENT" });
+  await expect(stat(join(paths.directory, REPLICA_LOGOUT_PENDING_FILE))).rejects.toMatchObject({ code: "ENOENT" });
+});
+
+test("a symlinked events.jsonl stays unknown: plain logout refuses and touches nothing", async () => {
+  const home = await mkdtemp(join(tmpdir(), "tc841-logout-diagnostics-link-"));
+  homes.push(home);
+  const paths = await profileOwnedByA(home, ACCOUNT_A, false);
+  const outside = join(home, "outside.jsonl");
+  await writeFile(outside, "not the CLI's log");
+  await symlink(outside, join(paths.replication, "events.jsonl"));
+  const before = await readGateSnapshot(paths.directory);
+
+  const refused = await run(home);
+  expect(refused.exitCode).toBeGreaterThan(0);
+  expect(refused.stderr).toContain("\"code\": \"REPLICA_GATED\"");
+  expect(refused.stderr).toContain("replication/events.jsonl");
+  expect((await stat(paths.session)).isFile()).toBe(true);
+  expect(await readFile(outside, "utf8")).toBe("not the CLI's log");
+  expect(await readGateSnapshot(paths.directory)).toEqual(before);
+  await expect(stat(join(paths.directory, REPLICA_LOGOUT_PENDING_FILE))).rejects.toMatchObject({ code: "ENOENT" });
 });

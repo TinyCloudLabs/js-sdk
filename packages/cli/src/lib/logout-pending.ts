@@ -12,11 +12,13 @@ import { ProfileManager } from "../config/profiles.js";
 import { ExitCode } from "../config/constants.js";
 import { CLIError } from "../output/errors.js";
 import { removeProfileReplicas } from "./profile-replicas.js";
+import { REPLICATION_DIAGNOSTIC_FILES } from "./replication-log.js";
 
 export function profilePurge(name: string) {
   return createProfileReplicaPurge({
     profileDir: profilePath(name),
     guard: (section) => ProfileManager.withLock(name, section, { requireProfile: true }),
+    diagnosticFiles: REPLICATION_DIAGNOSTIC_FILES,
   });
 }
 

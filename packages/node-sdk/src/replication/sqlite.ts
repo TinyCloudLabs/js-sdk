@@ -331,10 +331,13 @@ async function inventoryUnknown(
 /**
  * Inventory all unknown descendants of both the CLI legacy and flag-owned roots. `legacyOnly`
  * (another account's logout) never opens, lists or reports the flag-owned `replication/`
- * root: its files are not the caller's to approve and stay byte-identical.
+ * root: its files are not the caller's to approve and stay byte-identical. `diagnosticFiles`
+ * are the CLI-supplied exact names directly under `replication/` that count as known, and
+ * only while they are regular files.
  */
 async function inspectProfileReplicaLayout(
   profileDir: string, gateReadable: boolean, approvedMarker?: ProfileReplicaLogoutPending, legacyOnly = false,
+  diagnosticFiles: readonly string[] = [],
 ): Promise<ProfileReplicaPreflight> {
   const report: ProfileReplicaPreflight = {
     knownLegacyReplicas: 0, unknownLegacyPaths: [], unknownPaths: [],
@@ -388,6 +391,13 @@ async function inspectProfileReplicaLayout(
       if (approvedMarker?.approvedUnknown.some((item) => item.path === relative)) {
         await inventoryUnknown(profileDir, relative, report.unknownEntries);
         continue;
+      }
+      if (gateReadable && diagnosticFiles.includes(entry.name)) {
+        const info = await lstat(dir, { bigint: true });
+        if (info.isFile()) {
+          report.knownEntries.push({ ...inventoryIdentity(relative, info.dev, info.ino), kind: "file" });
+          continue;
+        }
       }
       if ((!gateReadable && !cleanOrphan) || !entry.isDirectory() || !/^[a-z2-7]{26}$/.test(entry.name)) {
         await inventoryUnknown(profileDir, relative, report.unknownEntries);
@@ -566,10 +576,11 @@ async function assertApprovedParents(
 
 async function eraseApprovedUnknown(
   profileDir: string, marker: ProfileReplicaLogoutPending, prefix: "replication" | "replicas",
+  diagnosticFiles: readonly string[],
 ): Promise<void> {
   const entries = marker.approvedUnknown.filter((entry) => entry.path.startsWith(`${prefix}/`));
   for (const entry of entries.sort((a, b) => b.path.length - a.path.length)) {
-    assertApprovedInventory(await inspectProfileReplicaLayout(profileDir, marker.v !== 2, marker), {
+    assertApprovedInventory(await inspectProfileReplicaLayout(profileDir, marker.v !== 2, marker, false, diagnosticFiles), {
       unknownEntries: marker.approvedUnknown, knownRoots: marker.knownRoots,
       knownEntries: marker.knownEntries, missingDatabases: marker.missingDatabases,
     }, true);
@@ -588,11 +599,12 @@ async function eraseApprovedUnknown(
   }
 }
 
-/** Remove only source-owned control residue after every scoped intent has committed. */
+/** Remove only source-owned control residue and the named diagnostics after every scoped intent has committed. */
 async function eraseKnownFlagResidue(
-  profileDir: string, marker: ProfileReplicaLogoutPending,
+  profileDir: string, marker: ProfileReplicaLogoutPending, diagnosticFiles: readonly string[],
 ): Promise<void> {
-  for (const entry of marker.knownEntries.filter((item) =>
+  const diagnostics = new Set(diagnosticFiles.map((name) => `replication/${name}`));
+  for (const entry of marker.knownEntries.filter((item) => diagnostics.has(item.path) ||
     /^replication\/[a-z2-7]{26}\/(?:identity\.json|pending\.json|device\.jwk)$/.test(item.path))
     .sort((a, b) => Number(a.path.endsWith("/identity.json")) -
       Number(b.path.endsWith("/identity.json")))) {
@@ -1236,6 +1248,12 @@ export interface SqliteReplicaStorageOptions {
   /** CLI opt-in. Generic SQLite replica stores never infer a session-file layout. */
   logoutPendingFile?: string;
   /**
+   * CLI opt-in: exact names of regular diagnostics files directly under `dir` (for example
+   * `events.jsonl`). Logout inventory treats only those names, only as regular files (never
+   * symlinks), as known and erases them; generic storage infers none.
+   */
+  diagnosticFiles?: readonly string[];
+  /**
    * Test seam: supply sync transports without WASM/KVService. Production
    * builds invoke through `kvSyncTransport` like the CLI's `grantTransports`.
    * @internal
@@ -1679,6 +1697,16 @@ export function createSqliteReplicaStorage(
 ): KVReplicaStorage & { lifecycle: ReplicaLifecycleGate & ProfileReplicaPurge } {
   const root = options.dir;
   const profileDir = dirname(options.gateFile ?? join(dirname(root), REPLICA_GATE_FILE));
+  const diagnosticFiles = [...(options.diagnosticFiles ?? [])];
+  for (const name of diagnosticFiles) {
+    // A plain file name that can never be an identity directory or reach outside the root.
+    if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(name) || /^[a-z2-7]{26}$/.test(name)) {
+      throw new TypeError(`Invalid replication diagnostics file name ${JSON.stringify(name)}.`);
+    }
+  }
+  const inspectLayout = (
+    gateReadable: boolean, approvedMarker?: ProfileReplicaLogoutPending, legacyOnly = false,
+  ) => inspectProfileReplicaLayout(profileDir, gateReadable, approvedMarker, legacyOnly, diagnosticFiles);
   const guard = options.guard;
   const createDevice = options.createDevice ?? createDeviceKey;
   const heldLock = new AsyncLocalStorage<boolean>();
@@ -1777,7 +1805,7 @@ export function createSqliteReplicaStorage(
       const entries = await readdir(root, { withFileTypes: true });
       const marker = await readLogoutMarker(join(profileDir, REPLICA_LOGOUT_PENDING_FILE));
       if (marker !== null) {
-        const inventory = await inspectProfileReplicaLayout(profileDir, true);
+        const inventory = await inspectLayout(true);
         assertApprovedInventory(inventory, {
           unknownEntries: marker.approvedUnknown, knownRoots: marker.knownRoots,
           knownEntries: marker.knownEntries, missingDatabases: marker.missingDatabases,
@@ -1790,6 +1818,8 @@ export function createSqliteReplicaStorage(
               item.path === `replication/${entry.name}` &&
               (entry.isDirectory() ? item.kind === "directory" : entry.isSymbolicLink() ?
                 item.kind === "symlink" : item.kind === "file"))) continue;
+          // The CLI's named diagnostics log, only as a regular file, is not a partition.
+          if (diagnosticFiles.includes(entry.name) && (await lstat(join(root, entry.name))).isFile()) continue;
           throw new ReplicaStorageError("STORAGE_ERROR", `Unknown identity partition at ${root}.`);
         }
       }
@@ -1976,7 +2006,7 @@ export function createSqliteReplicaStorage(
   async function currentLayout(): Promise<ProfileReplicaPreflight> {
     const { read, corrupt } = await readLogoutState(await fileGate());
     if (corrupt) throw gated("gate_unavailable");
-    const report = await inspectProfileReplicaLayout(profileDir, read !== undefined);
+    const report = await inspectLayout(read !== undefined);
     assertSupportedProfileLayout(report);
     return report;
   }
@@ -2176,7 +2206,7 @@ export function createSqliteReplicaStorage(
           if (marker?.v === 1 && marker.principalHash !== hash) throw gated("principal_mismatch");
         }
         // Another account's gate: only the profile's legacy mirror is inspected, listed or approved.
-        const report = await inspectProfileReplicaLayout(profileDir, state !== undefined, undefined, otherAccount);
+        const report = await inspectLayout(state !== undefined, undefined, otherAccount);
         assertSupportedProfileLayout(report);
         if (!discardLocalChanges && (report.unknownPaths.length > 0 || (corrupt && !otherAccount) ||
             (!otherAccount && (state === undefined || (state.principalHash === null && !state.eraseDeferred)) &&
@@ -2195,7 +2225,7 @@ export function createSqliteReplicaStorage(
         let state = read?.state;
         const principalHash = state === undefined ? undefined : await gate.principalHashOf(state.salt, principal);
         const otherAccount = state !== undefined && gateOwnedByAnother(state, principalHash!);
-        let report = await inspectProfileReplicaLayout(profileDir, state !== undefined, undefined, otherAccount);
+        let report = await inspectLayout(state !== undefined, undefined, otherAccount);
         assertSupportedProfileLayout(report);
         // The approval is the inventory the caller displayed; it must match exactly.
         const assertApproved = (current: ProfileReplicaPreflight) => {
@@ -2259,7 +2289,7 @@ export function createSqliteReplicaStorage(
             if (denied.status !== "denied") throw gated("gate_unavailable");
             state = (await gate.readGateSnapshot(profileDir))!;
           }
-          report = await inspectProfileReplicaLayout(profileDir, true);
+          report = await inspectLayout(true);
           assertSupportedProfileLayout(report);
           assertApproved(report);
         }
@@ -2438,7 +2468,7 @@ export function createSqliteReplicaStorage(
             catch (error) { if (!isNotFound(error)) throw error; }
           }
           await (options.dirSync ?? fsyncDir)(profileDir);
-          const report = await inspectProfileReplicaLayout(profileDir, state !== undefined, marker);
+          const report = await inspectLayout(state !== undefined, marker);
           assertApprovedInventory(report, { unknownEntries: marker.approvedUnknown,
             knownRoots: marker.knownRoots, knownEntries: marker.knownEntries,
             missingDatabases: marker.missingDatabases }, true);
@@ -2472,13 +2502,13 @@ export function createSqliteReplicaStorage(
           const gate = await fileGate();
           const state = await gate.readGateSnapshot(profileDir);
           if (marker.v === 2 && state !== undefined) throw gated("stamp_stale");
-          const report = await inspectProfileReplicaLayout(profileDir, state !== undefined, marker);
+          const report = await inspectLayout(state !== undefined, marker);
           assertApprovedInventory(report, { unknownEntries: marker.approvedUnknown,
             knownRoots: marker.knownRoots, knownEntries: marker.knownEntries,
             missingDatabases: marker.missingDatabases }, true);
-          await eraseApprovedUnknown(profileDir, marker, "replication");
-          await eraseKnownFlagResidue(profileDir, marker);
-          const finalReport = await inspectProfileReplicaLayout(profileDir, state !== undefined, marker);
+          await eraseApprovedUnknown(profileDir, marker, "replication", diagnosticFiles);
+          await eraseKnownFlagResidue(profileDir, marker, diagnosticFiles);
+          const finalReport = await inspectLayout(state !== undefined, marker);
           assertApprovedInventory(finalReport, { unknownEntries: marker.approvedUnknown,
             knownRoots: marker.knownRoots, knownEntries: marker.knownEntries,
             missingDatabases: marker.missingDatabases }, true);
@@ -2529,7 +2559,7 @@ export function createSqliteReplicaStorage(
             if (pending === null || pending.remotePending || JSON.stringify(pending) !== JSON.stringify(marker)) {
               throw gated("gate_unavailable");
             }
-            assertApprovedInventory(await inspectProfileReplicaLayout(profileDir, true), {
+            assertApprovedInventory(await inspectLayout(true), {
               unknownEntries: marker.approvedUnknown, knownRoots: marker.knownRoots,
               knownEntries: marker.knownEntries, missingDatabases: marker.missingDatabases,
             }, true);
@@ -3032,6 +3062,8 @@ export function createSqliteReplicaStorage(
 export function createProfileReplicaPurge(options: {
   profileDir: string;
   guard: MutationGuard;
+  /** Exact regular diagnostics file names the CLI writes directly under `replication/`. */
+  diagnosticFiles?: readonly string[];
   /** Observe directory-fsync ordering in tests; production uses fsyncDir. @internal */
   dirSync?: DirSync;
 }): ProfileReplicaPurge {
@@ -3040,6 +3072,7 @@ export function createProfileReplicaPurge(options: {
     guard: options.guard,
     dirSync: options.dirSync,
     logoutPendingFile: join(options.profileDir, REPLICA_LOGOUT_PENDING_FILE),
+    diagnosticFiles: options.diagnosticFiles,
   }).lifecycle;
 }
 
@@ -3055,6 +3088,8 @@ export function sqliteReplicaStorage(options: {
   guard?: MutationGuard;
   gateFile?: string;
   logoutPendingFile?: string;
+  /** CLI opt-in; see `SqliteReplicaStorageOptions.diagnosticFiles`. */
+  diagnosticFiles?: readonly string[];
 }): KVReplicaStorage {
   return createSqliteReplicaStorage(options);
 }
