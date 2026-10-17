@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
+import { join } from "node:path";
 import { IDBKeyRange, indexedDB } from "fake-indexeddb";
 import { signedRestorableSession } from "../../node-sdk/src/test-support/signed-restorable-session";
 import { createIndexedDbLifecycle } from "../../replica/src/kv-storage/lifecycle";
@@ -8,6 +10,19 @@ import { pkhDid, type ReplicationEvent } from "@tinycloud/sdk-core";
 const format = process.argv[2];
 assert(format === "mjs" || format === "cjs", "pass mjs or cjs");
 const require = createRequire(import.meta.url);
+
+// Strict installs (for example pnpm) resolve only declared packages: every bare import in an
+// exported entry's published declarations must be a dependency or peer of this manifest.
+const manifest = require("../package.json");
+const declared = new Set(Object.keys({ ...manifest.dependencies, ...manifest.peerDependencies }));
+for (const entry of Object.values(manifest.exports)) {
+  if (typeof entry !== "object" || entry === null || !("types" in entry) || typeof entry.types !== "string") continue;
+  const declarations = readFileSync(join(import.meta.dir, "..", entry.types), "utf8");
+  for (const [, specifier] of declarations.matchAll(/(?:from|import\()\s*["']([^"'.][^"']*)["']/g)) {
+    const name = specifier.startsWith("@") ? specifier.split("/").slice(0, 2).join("/") : specifier.split("/")[0];
+    assert(declared.has(name), `${entry.types} imports undeclared package ${name}`);
+  }
+}
 (globalThis as any).HTMLElement = class { attachShadow() { return { innerHTML: "", querySelector: () => null }; } };
 (globalThis as any).customElements = { define() {}, get() {} };
 (globalThis as any).window = {

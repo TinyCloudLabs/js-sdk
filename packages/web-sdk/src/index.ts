@@ -42,6 +42,8 @@ export type {
 
 // The optional replica bundle imports shared SDK core and SIWE from this root
 // bundle, never from a separately instantiated registry or session cache.
+// sdk-core re-exports siwe's SiweMessage, so the published types need only
+// declared dependencies.
 export {
   actionContains as __replicaActionContains,
   KV as __replicaKV,
@@ -51,8 +53,8 @@ export {
   parseSpaceUri as __replicaParseSpaceUri,
   pkhDid as __replicaPkhDid,
   principalDid as __replicaPrincipalDid,
+  SiweMessage as __replicaSiweMessage,
 } from "@tinycloud/sdk-core";
-export { SiweMessage as __replicaSiweMessage } from "siwe";
 
 // Browser Adapters
 export {
