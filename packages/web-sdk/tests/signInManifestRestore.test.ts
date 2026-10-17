@@ -126,6 +126,24 @@ test("optional replica import is inert until one explicit root registration", ()
   } })).toThrow(TypeError);
 });
 
+// L2 (#548 security review): the static common gate cannot be swapped at runtime.
+test("the browser replica plugin and its registered loaders are immutable", () => {
+  const plugin = require("../src/replica").browserReplicaPlugin;
+  const originalRecover = plugin.recover;
+  const originalAuthority = plugin.loaders.authority;
+  const swap = async () => ({});
+  expect(Reflect.set(plugin, "recover", swap)).toBe(false);
+  expect(Reflect.set(plugin.loaders, "authority", swap)).toBe(false);
+  expect(Reflect.set(plugin, "loaders", {})).toBe(false);
+  expect(plugin.recover).toBe(originalRecover);
+  expect(plugin.loaders.authority).toBe(originalAuthority);
+
+  const registered = getNodeReplicationLoaders();
+  expect(registered.authority).toBe(originalAuthority);
+  expect(Reflect.set(registered, "authority", swap)).toBe(false);
+  expect(registered.authority).toBe(originalAuthority);
+});
+
 test("passes persisted additional spaces and expiry through browser restore data", () => {
   const address = "0x96F7fB7ed32640d9D3a982f67CD6c09fc53EBEF1";
   const expiresAt = "2099-01-01T00:00:00.000Z";

@@ -2,7 +2,8 @@ import { describe, expect, it } from "bun:test";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import {
-  correctedOptionalAllowance, validateOptionalEntryTransition, validateOptionalLedger, type OptionalLedger,
+  compactFixOptionalAllowance, correctedOptionalAllowance, hardeningOptionalAllowance, validateIntroducedOptionalSources,
+  validateOptionalEntryTransition, validateOptionalLedger, type OptionalLedger,
 } from "./replica-optional-size-policy";
 
 const current = JSON.parse(readFileSync(resolve(import.meta.dir, "replica-optional-size-ledger.json"), "utf8")) as OptionalLedger;
@@ -11,7 +12,7 @@ const observed = { "replica.mjs": 51791, "replica.cjs": 67009, "activation.mjs":
 
 describe("TC-858 optional loaded-byte policy", () => {
   it("accepts the exact approved first-import, activation and refused-admission ledger", () => {
-    expect(() => validateOptionalLedger(current, true, true)).not.toThrow();
+    expect(() => validateOptionalLedger(current, true, true, true)).not.toThrow();
     const beforeFix = copy();
     beforeFix.allowance = correctedOptionalAllowance;
     beforeFix.entries = [];
@@ -22,13 +23,13 @@ describe("TC-858 optional loaded-byte policy", () => {
   it("rejects one extra first-import ESM byte", () => {
     const changed = copy();
     changed.allowance["replica.mjs"]++;
-    expect(() => validateOptionalLedger(changed, true, true)).toThrow();
+    expect(() => validateOptionalLedger(changed, true, true, true)).toThrow();
   });
 
   it("rejects one extra deferred activation CJS byte", () => {
     const changed = copy();
     changed.allowance["activation.cjs"]++;
-    expect(() => validateOptionalLedger(changed, true, true)).toThrow();
+    expect(() => validateOptionalLedger(changed, true, true, true)).toThrow();
   });
 
   it("rejects the old local first-import and activation readings as canonical allowances", () => {
@@ -36,7 +37,7 @@ describe("TC-858 optional loaded-byte policy", () => {
     oldLocal.allowance["replica.mjs"] = 51786;
     oldLocal.allowance["activation.mjs"] = 23073;
     oldLocal.allowance["activation.cjs"] = 24653;
-    expect(() => validateOptionalLedger(oldLocal, true, true)).toThrow();
+    expect(() => validateOptionalLedger(oldLocal, true, true, true)).toThrow();
     expect(() => validateOptionalEntryTransition([], [{
       ...current.entries[0],
       "replica.mjs": 51786,
@@ -48,19 +49,19 @@ describe("TC-858 optional loaded-byte policy", () => {
   it("rejects a changed measurement correction witness", () => {
     const changed = copy();
     (changed.measurementCorrection as { ciJob: string }).ciJob = "unreviewed job";
-    expect(() => validateOptionalLedger(changed, true, true)).toThrow();
+    expect(() => validateOptionalLedger(changed, true, true, true)).toThrow();
   });
 
   it("rejects removing the canonical toolchain measurement correction", () => {
     const changed = copy();
     delete changed.measurementCorrection;
-    expect(() => validateOptionalLedger(changed, true, true)).toThrow();
+    expect(() => validateOptionalLedger(changed, true, true, true)).toThrow();
   });
 
   it("rejects a mutated paired root-to-optional relocation", () => {
     const changed = copy();
     (changed.relocations as Array<{ "replica.mjs"?: number }>)[1]["replica.mjs"]!++;
-    expect(() => validateOptionalLedger(changed, true, true)).toThrow();
+    expect(() => validateOptionalLedger(changed, true, true, true)).toThrow();
   });
 });
 
@@ -127,11 +128,12 @@ describe("TC-858 compact delegate installed-grant fix-required first import", ()
     },
     status: "final: GitHub CI canonical, zero headroom",
   };
+  // The ledger as it stood at the compact fix, before the #565 hardening ratchet.
   const fixed = () => {
     const ledger = copy() as OptionalLedger & { fixRequired?: unknown };
     ledger.fixRequired = [structuredClone(approved)];
-    ledger.allowance["replica.mjs"] = 51791;
-    ledger.allowance["replica.cjs"] = 67009;
+    ledger.allowance = { ...compactFixOptionalAllowance };
+    ledger.entries = ledger.entries.slice(0, 1);
     ledger.entries[0]["replica.mjs"] = 51791;
     ledger.entries[0]["replica.cjs"] = 67009;
     return ledger;
@@ -157,5 +159,51 @@ describe("TC-858 compact delegate installed-grant fix-required first import", ()
     const activation = fixed();
     activation.allowance["activation.cjs"]++;
     expect(() => validateOptionalLedger(activation, true, true)).toThrow();
+  });
+});
+
+describe("TC-858 #565 hardening optional allowance", () => {
+  it("accepts exactly the canonical hardening first-import and activation ceilings", () => {
+    expect(() => validateOptionalLedger(current, true, true, true)).not.toThrow();
+    expect(current.allowance).toEqual(hardeningOptionalAllowance);
+  });
+
+  it("refuses one extra byte in any optional bucket, or the hardening allowance without the compact fix row", () => {
+    for (const format of ["replica.mjs", "replica.cjs", "activation.mjs", "activation.cjs"] as const) {
+      const changed = copy();
+      changed.allowance[format]++;
+      expect(() => validateOptionalLedger(changed, true, true, true)).toThrow();
+    }
+    const withoutCompactFix = copy();
+    delete withoutCompactFix.fixRequired;
+    expect(() => validateOptionalLedger(withoutCompactFix, true, true, true)).toThrow();
+  });
+
+  it("keeps the pre-hardening allowance invalid once the ratchet is present", () => {
+    const stale = copy();
+    stale.allowance = compactFixOptionalAllowance;
+    expect(() => validateOptionalLedger(stale, true, true, true)).toThrow();
+  });
+});
+
+describe("TC-858 squash-merged source commits", () => {
+  // #548 was squash-merged, so its branch commits b796dc52, ce52494d and 2578c6a7 are not in master.
+  it("does not require branch source commits for rows already in the merge base", () => {
+    expect(() => validateIntroducedOptionalSources(current, current)).not.toThrow();
+  });
+
+  it("requires each newly introduced row's source commit in HEAD", () => {
+    const withoutCompactFix = copy();
+    delete withoutCompactFix.fixRequired;
+    expect(() => validateIntroducedOptionalSources(withoutCompactFix, current))
+      .toThrow("compact fix requires the integrated source commit");
+    const withoutCorrection = copy();
+    delete withoutCorrection.measurementCorrection;
+    expect(() => validateIntroducedOptionalSources(withoutCorrection, current))
+      .toThrow("ce52494d measurement correction requires its approved source ancestor");
+    const withoutRelocations = copy();
+    delete withoutRelocations.relocations;
+    expect(() => validateIntroducedOptionalSources(withoutRelocations, current))
+      .toThrow("approved relocation commit is not an ancestor of HEAD");
   });
 });

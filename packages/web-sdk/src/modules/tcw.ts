@@ -263,11 +263,15 @@ export interface BrowserReplicaPlugin {
 
 let registeredBrowserReplica: BrowserReplicaPlugin | undefined;
 
-/** Register in the root bundle so a separately built plugin shares its Node loader registry. */
+/**
+ * Register in the root bundle so a separately built plugin shares its Node loader registry. The
+ * registry keeps a frozen copy, so mutating the supplied plugin later changes nothing.
+ */
 export function registerBrowserReplica(plugin: BrowserReplicaPlugin): void {
   if (registeredBrowserReplica) throw new Error("Browser replica is already registered.");
-  registerNodeReplicationLoaders(plugin.loaders);
-  registeredBrowserReplica = plugin;
+  const loaders = Object.freeze({ ...plugin.loaders });
+  registerNodeReplicationLoaders(loaders);
+  registeredBrowserReplica = Object.freeze({ ...plugin, loaders });
 }
 
 
