@@ -1,4 +1,7 @@
 import { createOrReusePermissionRequest } from "../src/artifacts.js";
+import { exitWithParent } from "../src/test-support/parent-watch.js";
+
+exitWithParent();
 
 const [profile, requestId, isoNow] = process.argv.slice(2);
 if (!profile || !requestId || !isoNow) {

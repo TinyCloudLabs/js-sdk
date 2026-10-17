@@ -31,6 +31,12 @@ export const PROFILE_LOCK_HOLDER_RELEASE_TIMEOUT_MS =
   PROFILE_LOCK_PARENT_SIGNAL_TIMEOUT_MS + PROFILE_LOCK_HOLDER_RELEASE_MARGIN_MS;
 export const PROFILE_LOCK_PROTOCOL_RECHECK_INTERVAL_MS = 50;
 
+// A spawned helper ends itself at this deadline should its parent watch
+// (parent-watch.ts) fail. Five outer test bounds outlast the longest bound
+// a helper runs under: 120s for the contended no-hard-links cyclers, and
+// 200s for each of the three default stress rounds.
+export const PROFILE_LOCK_HELPER_DEADLINE_MS = 5 * PROFILE_LOCK_TEST_TIMEOUT_MS;
+
 export async function signalProfileLockProtocol(filePath: string): Promise<void> {
   await writeFile(filePath, "ready\n", { encoding: "utf8", flag: "wx" });
 }

@@ -10,6 +10,9 @@ import {
   signalProfileLockProtocol,
   waitForProfileLockProtocol,
 } from "../src/test-support/profile-lock-protocol.js";
+import { exitWithParent } from "../src/test-support/parent-watch.js";
+
+exitWithParent();
 
 const [profile, store, key, encodedRecord, readyPath, releasePath] = process.argv.slice(2);
 if (

@@ -3,6 +3,9 @@
 import { rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { withFixtureLock } from "./lock-protocol.js";
+import { exitWithParent } from "../src/test-support/parent-watch.js";
+
+exitWithParent();
 
 const [profile, holdersDir, iterations, staleAfterMs] = process.argv.slice(2);
 if (!profile || !holdersDir || !iterations || !staleAfterMs) {
