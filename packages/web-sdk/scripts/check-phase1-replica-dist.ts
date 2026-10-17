@@ -265,7 +265,7 @@ if (prBaseSha) {
        spawnSync("git", ["merge-base", "--is-ancestor", ledger.masterMergeResolution.mergedHead, "HEAD"], {
          cwd: repoRoot,
        }).status !== 0)) {
-    console.error("The reviewed master merge input blobs require the trusted e57a6fd6 base and resolved merged tree.");
+    console.error(`The reviewed master merge input blobs require trusted base ${ledger.masterMergeResolution.masterBase} and resolved merged tree ${ledger.masterMergeResolution.mergedHead}.`);
     failed = true;
   }
   if (ciCorrectionIntroduced) {

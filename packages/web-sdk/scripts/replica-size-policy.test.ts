@@ -220,25 +220,25 @@ describe("TC-858 CI Rust toolchain measurement correction", () => {
 
 describe("TC-858 reviewed master-merge input resolution", () => {
   const reviewed: MasterMergeResolution = {
-    label: "TC-858 #548 merged #551 containment and stamped replica inputs",
-    mergedHead: "e364e7a0109cf00cd4af7ebbc79154eb7cc1fe34",
-    masterBase: "e57a6fd646e26c56d3a02b2c08b1963179a52c67",
+    label: "TC-858 #548 merged #564 shared SQLite handle and stamped replica inputs",
+    mergedHead: "57b4a0d6a417cd3fbd439675ffbdf3f427545606",
+    masterBase: "6e42699b0b269eb45b7f022c0ecb1b2db3bcf882",
     rulings: [
-      "Naomi TC-858: store.ts merge of #551 containment and #548 stamped store",
-      "Naomi TC-858: derived lockfile for the #548 replica dependency over master 18f05ab9",
+      "Naomi TC-858: store.ts union of #564 shared verified SQLite handle and #548 stamped store with the S1 typed read-section guard from 8f123f98",
+      "Naomi TC-858: derived lockfile for the #548 replica dependency over master 6e42699b",
       "Naomi TC-858: approved #548 Node/replica manifests with master beta release versions",
     ],
-    regeneration: "Bun 1.3.14: start with master 18f05ab9 bun.lock, add @tinycloud/replica 0.2.4-beta.2 to the web-sdk manifest, run bun install and bun install --frozen-lockfile; the lock differs from master only by that dependency.",
+    regeneration: "Bun 1.3.14: start with master 6e42699b bun.lock, add @tinycloud/replica 0.2.4-beta.3 to the web-sdk manifest, run bun install and bun install --frozen-lockfile; the lock differs from master only by that dependency.",
     measuredPaths: {
-      "packages/replica/src/sqlite/store.ts": "0b695140525dfc09b0c4f2eb903ae8ab143d5331",
-      "packages/web-sdk/package.json": "4ef53d42a91619cfaa09f67011d2f745f11ff30e",
-      "bun.lock": "9da336ab01010726a77390e26ab9ed4e27738dc4",
-      "packages/node-sdk/package.json": "52f40d87c931e7570f4efac2da3e841ee90290d3",
-      "packages/replica/package.json": "54de14c3c93b34afffc4f974fcc97a8bb5e0db94",
+      "packages/replica/src/sqlite/store.ts": "cb52d5b6db9ae2beaa15eb8e4977c7d7f8ff4791",
+      "packages/web-sdk/package.json": "fc1a715e656d12f6684a6548ba7bba65157173cb",
+      "bun.lock": "f8458c1b94b27b851c85c4169df337bd7ff4c3a2",
+      "packages/node-sdk/package.json": "25f43cee5185b08b1454bc059a352e194f40edf7",
+      "packages/replica/package.json": "88c7e5ea075fc358214e5803831056cc58749a31",
     },
     attribution: {
-      "packages/node-sdk/package.json": "approved #548 content (ddc032ca) plus master release version strings only: Node 3.2.6-beta.4 to 3.2.6-beta.5 and @tinycloud/replica 0.2.4-beta.1 to 0.2.4-beta.2.",
-      "packages/replica/package.json": "approved #548 content (ddc032ca) plus master release version strings only: replica 0.2.4-beta.1 to 0.2.4-beta.2.",
+      "packages/node-sdk/package.json": "approved #548 content (ddc032ca) plus master release version strings only: Node 3.2.6-beta.4 to 3.2.6-beta.6 and @tinycloud/replica 0.2.4-beta.1 to 0.2.4-beta.3.",
+      "packages/replica/package.json": "approved #548 content (ddc032ca) plus master release version strings only: replica 0.2.4-beta.1 to 0.2.4-beta.3.",
     },
   };
   const withResolution = () => ({ ...copy(current), masterMergeResolution: structuredClone(reviewed) });
@@ -246,7 +246,28 @@ describe("TC-858 reviewed master-merge input resolution", () => {
   it("accepts only the five exact merged store, manifests, and derived lock blobs", () => {
     expect(() => validateLedger(withResolution())).not.toThrow();
     expect(current.masterMergeResolution).toEqual(reviewed);
-    expect(current.entries.map(({ pr }) => pr).slice(-3)).toEqual(["#551", "#563", "#553"]);
+    expect(current.entries.map(({ pr }) => pr)).toEqual(["#511", "#529", "#546", "#551", "#563", "#564", "#553"]);
+  });
+
+  it("refuses the superseded #551 resolution bound to e57a6fd6 and e364e7a0", () => {
+    const superseded = withResolution();
+    Object.assign(superseded.masterMergeResolution, {
+      mergedHead: "e364e7a0109cf00cd4af7ebbc79154eb7cc1fe34",
+      masterBase: "e57a6fd646e26c56d3a02b2c08b1963179a52c67",
+    });
+    expect(() => validateLedger(superseded)).toThrow();
+    const staleStore = withResolution();
+    staleStore.masterMergeResolution.measuredPaths["packages/replica/src/sqlite/store.ts"] =
+      "0b695140525dfc09b0c4f2eb903ae8ab143d5331";
+    expect(() => validateLedger(staleStore)).toThrow();
+  });
+
+  it("rejects each omitted blob independently", () => {
+    for (const path of Object.keys(reviewed.measuredPaths)) {
+      const omitted = withResolution();
+      delete omitted.masterMergeResolution.measuredPaths[path as keyof typeof reviewed.measuredPaths];
+      expect(() => validateLedger(omitted)).toThrow();
+    }
   });
 
   it("rejects each altered blob, extra measured path, and fabricated ruling independently", () => {
@@ -678,35 +699,105 @@ describe("TC-858 policy-only source identity", () => {
     });
   }
 
-  it("refuses another measured source change beside three exact approved blobs", () => {
-    const { root, base, blobs } = resolvedFixture();
-    try {
-      writeFileSync(join(root, source), "export const unreviewed = true;\n");
-      git(root, "add", ".");
-      git(root, "commit", "-qm", "unreviewed measured source");
-      expect(isPolicyOnlySinceApprovedSource(root, base, paths, undefined, blobs)).toBe(false);
-    } finally {
-      rmSync(root, { recursive: true, force: true });
+  it("refuses a wrong approved blob even when HEAD is otherwise unchanged", () => {
+    for (const path of resolvedPaths) {
+      const { root, base, blobs } = resolvedFixture();
+      try {
+        expect(isPolicyOnlySinceApprovedSource(root, base, paths, undefined, { ...blobs, [path]: "0".repeat(40) }))
+          .toBe(false);
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
     }
   });
 
-  it("refuses either endpoint of an exact-blob measured-source rename", () => {
-    for (const [from, to] of [
-      [resolvedPaths[0], "packages/cli/src/removed.ts"],
-      [source, resolvedPaths[0]],
-    ]) {
+  it("refuses each changed input omitted from the approved blob set", () => {
+    for (const path of resolvedPaths) {
       const { root, base, blobs } = resolvedFixture();
       try {
-        mkdirSync(dirname(join(root, to)), { recursive: true });
-        git(root, "mv", "-f", from, to);
-        git(root, "commit", "-qm", "rename across measured boundary");
+        const omitted: Record<string, string> = { ...blobs };
+        delete omitted[path];
+        expect(isPolicyOnlySinceApprovedSource(root, base, paths, {
+          bundleInputs: new Set(), sourceMapInputs: new Set(),
+        }, omitted)).toBe(false);
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    }
+  });
+
+  for (const unrelated of [
+    source,
+    "packages/replica/src/sqlite/inspect.ts",
+    "packages/web-sdk/webpack.config.js",
+    "packages/cli/package.json",
+    "package.json",
+  ]) {
+    it(`refuses unrelated measured input ${unrelated} beside the exact approved blobs`, () => {
+      const { root, base, blobs } = resolvedFixture();
+      try {
+        mkdirSync(dirname(join(root, unrelated)), { recursive: true });
+        writeFileSync(join(root, unrelated), "export const unreviewed = true;\n");
+        git(root, "add", ".");
+        git(root, "commit", "-qm", "unreviewed measured input");
         expect(isPolicyOnlySinceApprovedSource(root, base, paths, {
           bundleInputs: new Set(), sourceMapInputs: new Set(),
         }, blobs)).toBe(false);
       } finally {
         rmSync(root, { recursive: true, force: true });
       }
-    }
+    });
+  }
+
+  for (const path of resolvedPaths) {
+    it(`refuses either endpoint of an exact-blob rename involving ${path}`, () => {
+      for (const [from, to] of [
+        [path, "packages/cli/src/renamed-input.ts"],
+        [source, path],
+      ]) {
+        const { root, base, blobs } = resolvedFixture();
+        try {
+          mkdirSync(dirname(join(root, to)), { recursive: true });
+          git(root, "mv", "-f", from, to);
+          git(root, "commit", "-qm", "rename across measured boundary");
+          expect(isPolicyOnlySinceApprovedSource(root, base, paths, {
+            bundleInputs: new Set(), sourceMapInputs: new Set(),
+          }, blobs)).toBe(false);
+        } finally {
+          rmSync(root, { recursive: true, force: true });
+        }
+      }
+    });
+  }
+
+  it("keeps the separate S4 authority blob mandatory beside the five merge blobs", () => {
+    const authority = "packages/node-sdk/src/replication/authority.ts";
+    const run = (content: string, approved: (blobs: Record<string, string>, blob: string) => Record<string, string>) => {
+      const { root, base, blobs } = resolvedFixture();
+      try {
+        mkdirSync(dirname(join(root, authority)), { recursive: true });
+        writeFileSync(join(root, authority), "export const coveredCompactGrant = true;\n");
+        git(root, "add", ".");
+        git(root, "commit", "-qm", "approved S4 authority");
+        const blob = git(root, "rev-parse", `HEAD:${authority}`);
+        if (content !== "export const coveredCompactGrant = true;\n") {
+          writeFileSync(join(root, authority), content);
+          git(root, "add", ".");
+          git(root, "commit", "-qm", "unreviewed authority edit");
+        }
+        // Same composition as check-phase1-replica-dist.ts: S4 row first, merge row second.
+        return isPolicyOnlySinceApprovedSource(root, base, paths, {
+          bundleInputs: new Set(), sourceMapInputs: new Set(),
+        }, approved(blobs, blob));
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    };
+    const approved = "export const coveredCompactGrant = true;\n";
+    expect(run(approved, (blobs, blob) => ({ [authority]: blob, ...blobs }))).toBe(true);
+    expect(run(approved, (blobs) => blobs)).toBe(false);
+    expect(run("export const coveredCompactGrant = false;\n", (blobs, blob) => ({ [authority]: blob, ...blobs })))
+      .toBe(false);
   });
 });
 

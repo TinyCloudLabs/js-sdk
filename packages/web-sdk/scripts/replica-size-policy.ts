@@ -156,25 +156,25 @@ export const approvedCiToolchainCorrection: CiToolchainCorrection = {
 
 /** Only these five reviewed blobs may differ from the trusted master artifact inputs. */
 export const approvedMasterMergeResolution: MasterMergeResolution = {
-  label: "TC-858 #548 merged #551 containment and stamped replica inputs",
-  mergedHead: "e364e7a0109cf00cd4af7ebbc79154eb7cc1fe34",
-  masterBase: "e57a6fd646e26c56d3a02b2c08b1963179a52c67",
+  label: "TC-858 #548 merged #564 shared SQLite handle and stamped replica inputs",
+  mergedHead: "57b4a0d6a417cd3fbd439675ffbdf3f427545606",
+  masterBase: "6e42699b0b269eb45b7f022c0ecb1b2db3bcf882",
   rulings: [
-    "Naomi TC-858: store.ts merge of #551 containment and #548 stamped store",
-    "Naomi TC-858: derived lockfile for the #548 replica dependency over master 18f05ab9",
+    "Naomi TC-858: store.ts union of #564 shared verified SQLite handle and #548 stamped store with the S1 typed read-section guard from 8f123f98",
+    "Naomi TC-858: derived lockfile for the #548 replica dependency over master 6e42699b",
     "Naomi TC-858: approved #548 Node/replica manifests with master beta release versions",
   ],
-  regeneration: "Bun 1.3.14: start with master 18f05ab9 bun.lock, add @tinycloud/replica 0.2.4-beta.2 to the web-sdk manifest, run bun install and bun install --frozen-lockfile; the lock differs from master only by that dependency.",
+  regeneration: "Bun 1.3.14: start with master 6e42699b bun.lock, add @tinycloud/replica 0.2.4-beta.3 to the web-sdk manifest, run bun install and bun install --frozen-lockfile; the lock differs from master only by that dependency.",
   measuredPaths: {
-    "packages/replica/src/sqlite/store.ts": "0b695140525dfc09b0c4f2eb903ae8ab143d5331",
-    "packages/web-sdk/package.json": "4ef53d42a91619cfaa09f67011d2f745f11ff30e",
-    "bun.lock": "9da336ab01010726a77390e26ab9ed4e27738dc4",
-    "packages/node-sdk/package.json": "52f40d87c931e7570f4efac2da3e841ee90290d3",
-    "packages/replica/package.json": "54de14c3c93b34afffc4f974fcc97a8bb5e0db94",
+    "packages/replica/src/sqlite/store.ts": "cb52d5b6db9ae2beaa15eb8e4977c7d7f8ff4791",
+    "packages/web-sdk/package.json": "fc1a715e656d12f6684a6548ba7bba65157173cb",
+    "bun.lock": "f8458c1b94b27b851c85c4169df337bd7ff4c3a2",
+    "packages/node-sdk/package.json": "25f43cee5185b08b1454bc059a352e194f40edf7",
+    "packages/replica/package.json": "88c7e5ea075fc358214e5803831056cc58749a31",
   },
   attribution: {
-    "packages/node-sdk/package.json": "approved #548 content (ddc032ca) plus master release version strings only: Node 3.2.6-beta.4 to 3.2.6-beta.5 and @tinycloud/replica 0.2.4-beta.1 to 0.2.4-beta.2.",
-    "packages/replica/package.json": "approved #548 content (ddc032ca) plus master release version strings only: replica 0.2.4-beta.1 to 0.2.4-beta.2.",
+    "packages/node-sdk/package.json": "approved #548 content (ddc032ca) plus master release version strings only: Node 3.2.6-beta.4 to 3.2.6-beta.6 and @tinycloud/replica 0.2.4-beta.1 to 0.2.4-beta.3.",
+    "packages/replica/package.json": "approved #548 content (ddc032ca) plus master release version strings only: replica 0.2.4-beta.1 to 0.2.4-beta.3.",
   },
 };
 
@@ -263,7 +263,7 @@ export function validateLedger(value: Ledger, historicalBase = false): void {
   if (value.masterMergeResolution !== undefined &&
       (!value.canonicalToolchainCorrection ||
        JSON.stringify(value.masterMergeResolution) !== JSON.stringify(approvedMasterMergeResolution))) {
-    throw new Error("Only Naomi's exact reviewed #551/#548 merged store, manifest, and lock blobs are approved.");
+    throw new Error("Only Naomi's exact reviewed #564/#548 merged store, manifest, and lock blobs are approved.");
   }
 }
 
@@ -273,7 +273,7 @@ export function validateMasterMergeResolutionTransition(
 ): void {
   if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedMasterMergeResolution) ||
       base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
-    throw new Error("The exact #551/#548 merged-input resolution may be introduced once and cannot change later.");
+    throw new Error("The exact #564/#548 merged-input resolution may be introduced once and cannot change later.");
   }
 }
 
