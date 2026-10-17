@@ -300,7 +300,9 @@ anything else: it writes a new floor at `max(gate.lifecycleEpoch, floor.epoch) +
   the full scoped intents and generation fences. Deferral comes from the durable logout marker,
   never from the command's flags: a remote-pending v1 marker completes a deferred
   (`eraseDeferred`) deny; a plain v1 marker completes an ordinary deny; with **no** marker the
-  completion is an ordinary deny and logout continues on the inactive-gate (v3) path.
+  completion is an ordinary deny and logout continues on the inactive-gate (v3) path. Under
+  `--revoke` with no marker, that completion and the v3 `remotePending` marker are written in
+  **one** profile-locked section, so nothing can come between them.
 - **Null principal:** it only raises the epoch and `deniedAt`; principal, intents and deferral
   fields are kept, and logout continues on the inactive-gate (v3) path.
 - **A different active principal:** completion is refused (`stale`) and nothing is written to the
@@ -570,15 +572,27 @@ A. When B (the session owner) logs out of a gate whose active principal is A:
 3. it erases the legacy v1 mirror (below), which belongs to the profile and
    its device grant rather than to any account.
 
-`--revoke` derives its CID set only from B's own session and stored
-delegations and revokes only those. A's flag-owned replicas stay gated to A:
+In this path, preflight, the displayed listing, approval and
+`--discard-local-changes` cover **only** the legacy mirror. A's roots,
+partitions and pending state (even a nonempty `pending.json`) are never listed
+for B, never block B's logout and never reach an erase callback; B never has
+to approve A's files to sign out.
+
+`--revoke` derives its CID set only from B's own session and the delegations B
+is entitled to revoke, and revokes only those. It never includes A-issued
+grants (such as A's device grants), which the node would refuse and so would
+block B's `--revoke` forever. A's flag-owned replicas stay gated to A:
 every guarded read and establishment checks A's salted principal hash, so B
 (or any later account C) gets `principal_mismatch` and nothing of A's becomes
 readable; leaving them in place is therefore safe, and A's own later logout
 erases them. A floor-lagging gate with A's active principal is likewise never
 completed by B: completion is refused, but B's credentials are still cleared.
 A crash after step 2 is finished by startup (`authSignedOut` already forbids
-restore); the legacy-mirror replay follows the rules below. Example: A signs in
+restore); the legacy-mirror replay follows the rules below. The one accepted
+exception to "never clear A's state" is an unreadable or corrupt gate: its
+principal cannot be determined, so a logout with explicit discard consent takes
+the v2 orphan path, which removes that gate and the approved flag-owned files
+whoever owned them (TC-1313). Example: A signs in
 with replication; in a fresh process the profile signs in as B, whose
 replica establishment gets `principal_mismatch`. `tc auth logout` as B
 removes B's `session.json` and `key.json` and the legacy mirror, writes no
@@ -587,7 +601,10 @@ unchanged; no account but A can then read A's flag-owned replicas.
 **Exception:** failed, partial, timed-out or interrupted `logout --revoke`
 returns nonzero while retaining the network session, both key-bearing files
 and physical replica files for retry. The v1 deferred gate denial or v2/v3
-version-specific durable logout marker fences local reads. This does not
+version-specific durable logout marker fences local reads. "Logout by another
+account" needs no marker fence here: it erases nothing before its revokes
+succeed and touches no state of A's, so a failed revoke simply leaves B's
+credential files and the legacy mirror in place for the retry. This does not
 reopen a TC-1208 sign-out path.
 
 **Node/CLI `logout --revoke` deferred erase.** The node-sdk root export
@@ -826,7 +843,10 @@ sync-first refusal unless explicit `--discard-local-changes` is supplied
 **before** marker creation. Consent binds only the displayed path/type/
 dev/ino inventory; v2 never invents scoped intents, silently regenerates
 a gate or deletes outside the selected profile. `--keep-replicas` still
-rejects gated profiles and cannot override this boundary.
+rejects gated profiles and cannot override this boundary. This v2 path is the
+accepted exception to "Logout by another account": a corrupt or missing gate
+cannot name its principal, so with explicit discard consent the orphan cleanup
+removes the approved flag-owned files whoever owned them (TC-1313).
 
 For a flag-owned identity directory, only a validated `identity.json` and
 a regular `pending.json` whose parsed records are empty certify that local
@@ -1094,14 +1114,19 @@ implementation (S7) adds the rest and MUST also:
   `prepareLogoutPending`;
 - implement "Logout by another account": no marker, no deny or erase of
   another account's gate, `authSignedOut` then both credential files, then the
-  legacy mirror; `--revoke` only for the caller's own CIDs. Tests: B's
+  legacy mirror, with preflight, approval and discard covering only the legacy
+  mirror; `--revoke` only for CIDs the caller is entitled to revoke. Tests: B's
   credential files are gone, A's gate, floor and partitions are byte-identical,
-  and B cannot read A's flag-owned replicas;
+  and B cannot read A's flag-owned replicas; and with A holding a nonempty
+  `pending.json`, B logs out without `--discard-local-changes`, B's files are
+  gone and A's pending state is byte-identical;
 - erase the legacy v1 mirror on every logout of the profile (except
   `--keep-replicas` on a legacy-only profile), with a test that it is gone
   after another account's logout;
 - check the logout marker inside the same profile-locked section as
   `establishSessionStamp`;
+- under `--revoke`, write a no-marker floor-lagging completion and its v3
+  `remotePending` marker in one profile-locked section;
 - classify a remote-pending v1 marker for plain logout exactly once
   (`abandonRemoteLogout`), and make `completeRemoteLogout` refuse markers that
   are not remote-pending;
