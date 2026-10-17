@@ -553,10 +553,8 @@ failure **before** that fence commits leaves both credential files on disk for
 the retry and reports nonzero; the process retires its in-memory session and
 keeps the replica gated in memory, and never claims durable completion. A
 floor-lagging gate (§ State) is completed by that retry, not left blocking it.
-This replaces clearing the session in a `finally` on every failure path: the
-current CLI `auth logout` and its pending changeset
-`cli-logout-replica-order.md` still describe that behaviour, and the CLI
-logout implementation (S7) brings both in line with this contract.
+This replaces clearing the session in a `finally` on every failure path, which
+the CLI's `auth logout` no longer does.
 
 **Logout by another account.** Only the gate's own active principal creates a
 v1 marker for it or denies it; the facade never calls `deny` or erases a gate,
@@ -848,6 +846,14 @@ accepted exception to "Logout by another account": a corrupt or missing gate
 cannot name its principal, so with explicit discard consent the orphan cleanup
 removes the approved flag-owned files whoever owned them (TC-1313).
 
+Directly under `replication/`, CLI-bound storage and purge name the CLI's
+exact diagnostics files (`events.jsonl` and its rotation `events.jsonl.1`).
+With a readable gate, only those names, and only while `lstat` shows a regular
+file, are known: the deny's partition scan skips them and logout erases them
+with the other source-owned residue. A symlink or any other type at those
+names stays unknown, a missing or corrupt gate keeps them indeterminate, and
+generic storage names no diagnostics file.
+
 For a flag-owned identity directory, only a validated `identity.json` and
 a regular `pending.json` whose parsed records are empty certify that local
 writes are absent. A missing/unreadable pending index, a replica database,
@@ -1088,52 +1094,22 @@ pending or flag-owned replication state, or cannot prove their absence. The
 legacy-only no-gate case retains its existing behavior; `deferErase` is never
 broadened to implement this flag. No browser gate path uses this exception.
 
-**Implementation status (Node/CLI).** The released node-sdk implements the
-facade's `recover`, `erasePending`, `pendingPurge`, `deny`, `deferredErase` and
-`resumeDeferredErase`; its exported `ProfileReplicaPurge` is that subset of
-this contract's type (`Pick`, checked at compile time), and its
-`ProfileReplicaDeferredToken` is this contract's type. The CLI logout
-implementation (S7) adds the rest and MUST also:
-- export the full contract `ProfileReplicaPurge` from node-sdk, with no second
-  definition under that name (N1);
-- correct node-sdk's doc comment that calls the caller's lock nonreentrant:
-  `guard` MUST be reentrant within one async call chain, as stated above (N2);
-- tighten what the released implementation cannot yet meet (N3): `deny` with
-  `deferErase: true` typed to accept only `reason: "sign_out"` and to return a
-  deferred `denied` outcome with a required `resumeToken`, and a typed deferral
-  signal beside `ReplicaEraseReport.remaining` so a deferred `remaining: 0` cannot
-  be read as completion. The required `approval` argument and the exclusive
-  remote states are already typed here;
-- keep the logout-marker check on legacy v1 mirror reads named above; the
-  released CLI already makes it (N4);
-- bring the CLI's plain logout to deny-first (replacing its clear-in-finally),
-  bind v1 `deniedEpoch` in the deny's guard section (remote-pending markers
-  only to deferred denials), complete a floor-lagging gate on logout taking
-  deferral from the durable marker, always write a v1 marker for the logout
-  principal's own active gate, and never rewrite an existing marker in
-  `prepareLogoutPending`;
-- implement "Logout by another account": no marker, no deny or erase of
-  another account's gate, `authSignedOut` then both credential files, then the
-  legacy mirror, with preflight, approval and discard covering only the legacy
-  mirror; `--revoke` only for CIDs the caller is entitled to revoke. Tests: B's
-  credential files are gone, A's gate, floor and partitions are byte-identical,
-  and B cannot read A's flag-owned replicas; and with A holding a nonempty
-  `pending.json`, B logs out without `--discard-local-changes`, B's files are
-  gone and A's pending state is byte-identical;
-- erase the legacy v1 mirror on every logout of the profile (except
-  `--keep-replicas` on a legacy-only profile), with a test that it is gone
-  after another account's logout;
-- check the logout marker inside the same profile-locked section as
-  `establishSessionStamp`;
-- under `--revoke`, write a no-marker floor-lagging completion and its v3
-  `remotePending` marker in one profile-locked section;
-- classify a remote-pending v1 marker for plain logout exactly once
-  (`abandonRemoteLogout`), and make `completeRemoteLogout` refuse markers that
-  are not remote-pending;
-- refuse a restored older gate with the `tc profile delete` route;
-- produce `LocalReplicaStatus.purgePending` and
-  `ReplicaInspectedStatus.purgePending` from `eraseDeferred` or outstanding
-  intents.
+**Implementation status (Node/CLI).** node-sdk implements the whole facade and
+exports this contract's `ProfileReplicaPurge` and `ProfileReplicaDeferredToken`
+unchanged (checked at compile time by `profile-purge.contract.ts`). Its
+`createProfileReplicaPurge` documents the reentrant `guard`. `deny` is typed as
+above: `deferErase: true` only with `reason: "sign_out"`, returning a deferred
+`denied` outcome with a required `resumeToken`, and a pass held by a deferred
+denial reports `ReplicaEraseReport.deferred: true`. The CLI logout is deny-first,
+binds v1 `deniedEpoch` in the deny's guard section, completes a floor-lagging
+gate, implements "Logout by another account" and the legacy-mirror rules, keeps
+the logout-marker check on legacy mirror reads and inside the
+`establishSessionStamp` section, and refuses a restored older gate with the
+`tc profile delete` route. An interrupted legacy-mirror erase after another
+account's logout is recorded as `profile.json.legacyReplicaCleanup: true` in the
+same durable write as `authSignedOut`; startup replays it for source-known
+children only. Node `inspectStatus` reports `purgePending` from `eraseDeferred`
+or outstanding intents.
 
 **Startup.** `recover()` runs before anything binds:
 1. browser retries a pending database delete if the marker is set;

@@ -23,8 +23,8 @@ import type {
   VerifiedPage,
 } from "../types.js";
 import { loadSqlite, type SqliteDatabase, type SqliteOpener, type SqlValue } from "./driver.js";
-
-const SCHEMA_VERSION = 2;
+import { removeSqliteReplicaLayout, type SqliteLayoutEntry } from "./layout.js";
+import { SCHEMA, SCHEMA_VERSION } from "./schema.js";
 
 // Descriptor discovery below is process-wide. Keep native SQLite opens from
 // overlapping so another store's new descriptor cannot be mistaken for this one.
@@ -122,74 +122,6 @@ async function openVerifiedDatabase(
 }
 export const DURABILITY = "sqlite-wal-synchronous-full+fsynced-blobs";
 
-const SCHEMA = `
-CREATE TABLE IF NOT EXISTS replica (
-  id INTEGER PRIMARY KEY CHECK (id = 1),
-  name TEXT NOT NULL,
-  replica_id TEXT NOT NULL,
-  host TEXT NOT NULL,
-  space TEXT NOT NULL,
-  prefix TEXT NOT NULL,
-  device_did TEXT NOT NULL,
-  allow_secrets INTEGER NOT NULL CHECK (allow_secrets IN (0, 1)),
-  local_read_policy TEXT NOT NULL CHECK (local_read_policy IN ('whileGrantValid', 'retainAfterExpiry')),
-  retention_grant_cid TEXT,
-  grant_cid TEXT,
-  grant_bytes BLOB,
-  grant_audience TEXT,
-  grant_issuer TEXT,
-  grant_nbf INTEGER,
-  grant_exp INTEGER,
-  pending_grant_cid TEXT,
-  pending_grant_bytes BLOB,
-  pending_grant_audience TEXT,
-  pending_grant_issuer TEXT,
-  pending_grant_nbf INTEGER,
-  pending_grant_exp INTEGER,
-  node_did TEXT,
-  attested INTEGER NOT NULL DEFAULT 0 CHECK (attested IN (0, 1)),
-  not_before TEXT,
-  expires_at TEXT,
-  retain_until TEXT,
-  revoked_detail TEXT,
-  purge_pending INTEGER NOT NULL DEFAULT 0 CHECK (purge_pending IN (0, 1)),
-  retention_revoked TEXT,
-  pending_grant_error TEXT,
-  cursor TEXT,
-  coverage TEXT NOT NULL CHECK (coverage IN ('empty', 'bootstrapping', 'complete')),
-  generation INTEGER NOT NULL DEFAULT 0,
-  created_at TEXT NOT NULL,
-  last_sync_at TEXT,
-  last_complete_at TEXT,
-  last_error TEXT,
-  last_reset TEXT,
-  lease_token INTEGER NOT NULL DEFAULT 0,
-  lease_holder TEXT,
-  lease_expires_at INTEGER
-) STRICT;
-CREATE TABLE IF NOT EXISTS entry (
-  key TEXT PRIMARY KEY,
-  deleted INTEGER NOT NULL CHECK (deleted IN (0, 1)),
-  etag TEXT,
-  hash TEXT,
-  metadata TEXT NOT NULL,
-  content INTEGER NOT NULL CHECK (content IN (0, 1)),
-  size INTEGER,
-  CHECK (
-    (deleted = 1 AND etag IS NULL AND hash IS NULL AND content = 0 AND size IS NULL) OR
-    (deleted = 0 AND etag IS NOT NULL AND hash IS NOT NULL)
-  )
-) STRICT, WITHOUT ROWID;
-CREATE INDEX IF NOT EXISTS entry_hash ON entry (hash) WHERE hash IS NOT NULL;
-CREATE TABLE IF NOT EXISTS grant_install (
-  cid TEXT PRIMARY KEY,
-  installed_at INTEGER NOT NULL,
-  effective_expires_at INTEGER NOT NULL,
-  consent_deadline INTEGER NOT NULL,
-  consent_anchor_at INTEGER NOT NULL,
-  consent_anchor_source TEXT NOT NULL
-) STRICT, WITHOUT ROWID;
-`;
 
 type ReplicaRow = {
   name: string;
@@ -1421,13 +1353,16 @@ export class SqliteReplicaStore implements ReplicaStore {
   }
 
   /**
-   * Remove this replica's directory for good (`tc replica reset --purge`).
-   * Fenced like a commit: `t` must still be a live lease on the database this
-   * store opened, checked under the write lock, so a paused process can
-   * never remove a replica another process took over or recreated. Allowed
-   * on a revoked replica. The store is unusable afterwards; close it.
+   * Remove the source-created mirror layout under a live lease. Unknown files
+   * are removed only when their exact preflight identities were approved.
    */
-  async destroy(t: LeaseToken): Promise<void> {
+  async destroy(t: LeaseToken, options: {
+    approvedUnknown?: readonly SqliteLayoutEntry[];
+    expectedKnown?: readonly SqliteLayoutEntry[];
+    expectedRoot?: { dev: string; ino: string };
+    allowMissingDatabase?: boolean;
+    allowAdapterFence?: boolean;
+  } = {}): Promise<void> {
     await this.#mutate(async () => {
       const release = this.#shared ? await acquireWritableMutation(this.#shared) : undefined;
       try {
@@ -1450,87 +1385,26 @@ export class SqliteReplicaStore implements ReplicaStore {
           return current;
         };
         const pinned = await assertDirectory();
+        // A refused removal whose named path moved reports the move, as a changed directory does.
+        const assertNamedPath = async (): Promise<void> => {
+          for (const ancestor of this.#namedAncestors) {
+            const current = await lstat(ancestor.path, { bigint: true });
+            if (current.dev !== ancestor.dev || current.ino !== ancestor.ino) {
+              throw new ReplicaError(ReplicaErrorCode.NOT_FOUND, "The replica ancestry changed during removal.");
+            }
+          }
+          await assertDirectory();
+        };
         // Holding the write lock: no other lease holder can mutate this store.
         await this.#assertPresent();
-        if (process.platform === "linux") {
-          // The directory is pinned, but recursive rm does not pin each
-          // descendant against a noncooperating rename during traversal.
-          for (const entry of await readdir(this.#pinnedDir)) {
-            await rm(join(this.#pinnedDir, entry), { recursive: true, force: true });
-          }
-          await assertDirectory();
-          await rmdir(this.dir);
-        } else {
-          // Named-path removal cannot be atomic. Recheck captured ancestors
-          // and each enumerated layout entry before nonrecursive unlink/rmdir;
-          // initial aliases above this store belong to its caller's path policy.
-          const ancestors = this.#namedAncestors;
-          const checkAncestors = async (): Promise<void> => {
-            for (const expected of ancestors) {
-              const current = await lstat(expected.path, { bigint: true });
-              if (current.dev !== expected.dev || current.ino !== expected.ino) {
-                throw new ReplicaError(ReplicaErrorCode.NOT_FOUND, "The replica ancestry changed during removal.");
-              }
-            }
-          };
-          const directories = new Map<string, BigIntStats>([[this.dir, pinned]]);
-          const files = new Map<string, BigIntStats>();
-          const check = async (path: string, expected: BigIntStats, directory: boolean): Promise<void> => {
-            if (path !== this.dir) {
-              const parent = dirname(path);
-              await check(parent, directories.get(parent)!, true);
-            }
-            await checkAncestors();
-            const current = await lstat(path, { bigint: true });
-            if ((directory ? !current.isDirectory() : !current.isFile()) ||
-                current.dev !== expected.dev || current.ino !== expected.ino) {
-              throw new ReplicaError(ReplicaErrorCode.NOT_FOUND, "The replica layout changed during removal.");
-            }
-          };
-          const record = async (path: string, directory: boolean): Promise<void> => {
-            const parent = dirname(path);
-            await check(parent, directories.get(parent)!, true);
-            const current = await lstat(path, { bigint: true });
-            if (!(directory ? current.isDirectory() : current.isFile())) {
-              throw new ReplicaError(ReplicaErrorCode.STORAGE_ERROR, "Unexpected replica layout during removal.");
-            }
-            (directory ? directories : files).set(path, current);
-          };
-          const blobs = join(this.dir, "blobs");
-          for (const name of await readdir(this.dir)) {
-            if (name === "blobs") await record(blobs, true);
-            else if (["replica.db", "replica.db-wal", "replica.db-shm"].includes(name)) await record(join(this.dir, name), false);
-            else throw new ReplicaError(ReplicaErrorCode.STORAGE_ERROR, "Unexpected replica layout during removal.");
-          }
-          if (directories.has(blobs)) {
-            await check(blobs, directories.get(blobs)!, true);
-            for (const shard of await readdir(blobs)) {
-              if (shard !== ".tmp" && !/^[0-9a-f]{2}$/.test(shard)) {
-                throw new ReplicaError(ReplicaErrorCode.STORAGE_ERROR, "Unexpected replica blob shard during removal.");
-              }
-              const shardPath = join(blobs, shard);
-              await record(shardPath, true);
-              await check(shardPath, directories.get(shardPath)!, true);
-              for (const name of await readdir(shardPath)) {
-                if (shard === ".tmp" ? !/^[0-9a-f]{64}\.[0-9a-f]{12}$/.test(name) : !isHash(name) || !name.startsWith(shard)) {
-                  throw new ReplicaError(ReplicaErrorCode.STORAGE_ERROR, "Unexpected replica blob file during removal.");
-                }
-                await record(join(shardPath, name), false);
-              }
-            }
-          }
-          for (const [path, identity] of files) {
-            await check(path, identity, false);
-            await unlink(path);
-          }
-          for (const [path, identity] of [...directories].reverse()) {
-            if (path === this.dir) continue;
-            await check(path, identity, true);
-            await rmdir(path);
-          }
-          await assertDirectory();
-          await checkAncestors();
-          await rmdir(this.dir);
+        try {
+          await removeSqliteReplicaLayout(this.dir, {
+            ...options,
+            expectedRoot: options.expectedRoot ?? { dev: pinned.dev.toString(), ino: pinned.ino.toString() },
+          });
+        } catch (error) {
+          await assertNamedPath();
+          throw error;
         }
       } catch (error) {
         throw storageError(error, "Removing the replica");

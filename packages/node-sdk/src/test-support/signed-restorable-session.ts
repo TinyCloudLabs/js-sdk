@@ -9,6 +9,8 @@ export async function signedRestorableSession(options?: {
   spaces?: Record<string, string>;
   signedSpaces?: Record<string, string>;
   abilities?: Record<string, Record<string, string[]>>;
+  /** Abilities on other spaces owned by the signer, keyed by space name (e.g. `account`). */
+  ownedSpaceAbilities?: Record<string, Record<string, Record<string, string[]>>>;
   /** Signed onto every ReCap action before the owner signs. */
   caveat?: Record<string, unknown>;
 }) {
@@ -27,6 +29,8 @@ export async function signedRestorableSession(options?: {
     ? new Date(now.getTime() - 60 * 60_000)
     : new Date(now.getTime() + 60 * 60_000);
   const verificationMethod = manager.getDID("default");
+  const ownedSpaces = Object.fromEntries(Object.keys(options?.ownedSpaceAbilities ?? {})
+    .map((name) => [name, wasm.makeSpaceId(address, chainId, name)]));
   const prepared = options?.expirationless
     ? {
       jwk,
@@ -48,6 +52,14 @@ export async function signedRestorableSession(options?: {
       expirationTime: expirationTime.toISOString(),
       spaceId,
       additionalSpaces: options?.signedSpaces ?? options?.spaces,
+      // `spaceAbilities` replaces `abilities`, so it restates the primary space.
+      ...(options?.ownedSpaceAbilities
+        ? { spaceAbilities: {
+            [spaceId]: options.abilities ?? { kv: { "": ["tinycloud.kv/get"] } },
+            ...Object.fromEntries(Object.entries(options.ownedSpaceAbilities)
+              .map(([name, abilities]) => [ownedSpaces[name], abilities])),
+          } }
+        : {}),
       jwk,
     });
   if (options?.caveat) prepared.siwe = withRecapCaveat(prepared.siwe, options.caveat);
@@ -60,7 +72,8 @@ export async function signedRestorableSession(options?: {
     delegationHeader: session.delegationHeader,
     delegationCid: session.delegationCid,
     spaceId,
-    spaces: options?.spaces,
+    // Restore requires every signed ReCap space to be listed.
+    spaces: options?.ownedSpaceAbilities ? { ...options.spaces, ...ownedSpaces } : options?.spaces,
     jwk,
     verificationMethod,
     address,

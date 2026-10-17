@@ -1,5 +1,5 @@
 import { TCWSessionManager, importKey, initPanicHook } from "@tinycloud/node-sdk-wasm";
-import { PrivateKeySigner } from "@tinycloud/node-sdk";
+import { PrivateKeySigner, type TinyCloudNode } from "@tinycloud/node-sdk";
 import { randomBytes } from "node:crypto";
 import { createCliReplicationConfig, type ProfileReplicationSettings } from "../lib/replication-config.js";
 

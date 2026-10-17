@@ -14,6 +14,7 @@ import { KVService, type IServiceContext } from "@tinycloud/sdk-core";
 import {
   Replica,
   ReplicaErrorCode,
+  ReplicaError,
   contentHash,
   isReplicaError,
   kvSyncTransport,
@@ -21,6 +22,7 @@ import {
   type VerifiedPage,
 } from "@tinycloud/replica";
 import { SqliteReplicaStore, loadSqlite } from "@tinycloud/replica/sqlite";
+import { establishSessionStamp } from "@tinycloud/replica/profile-gate";
 
 // The profile store reads TC_HOME when it loads (and replica.js loads it), so import them afterwards.
 const home = await mkdtemp(join("/var/tmp", "tc-replica-guard-"));
@@ -61,6 +63,11 @@ async function createProfile(name = PROFILE): Promise<void> {
     createdAt: "2026-10-01T00:00:00.000Z",
   });
 }
+async function establishReadableSession(profile = PROFILE): Promise<void> {
+  const ownerDid = "did:pkh:eip155:1:0x0000000000000000000000000000000000000001";
+  const replicaStamp = await establishSessionStamp(join(PROFILES_DIR, profile), ownerDid, { siweIssuedAt: Date.now() });
+  await ProfileManager.setSession(profile, { ownerDid, replicaStamp });
+}
 
 async function resetFromCli(profile: string, name: string, purge = true): Promise<{ exited: boolean; stderr: string }> {
   const program = new Command();
@@ -89,7 +96,7 @@ async function resetFromCli(profile: string, name: string, purge = true): Promis
   }
 }
 
-async function readFromCli(profile: string, args: string[]): Promise<{ exited: boolean; stdout: string; stderr: string }> {
+async function readFromCli(profile: string, args: string[]): Promise<{ exited: boolean; exitCode: number | null; stdout: string; stderr: string }> {
   const program = new Command().option("--profile <name>").option("--json");
   registerReplicaCommand(program);
   const previousExit = process.exit;
@@ -98,7 +105,8 @@ async function readFromCli(profile: string, args: string[]): Promise<{ exited: b
   let stdout = "";
   let stderr = "";
   let exited = false;
-  process.exit = (() => { throw new Error("expected CLI exit"); }) as typeof process.exit;
+  let exitCode: number | null = null;
+  process.exit = ((code?: number) => { exitCode = code ?? 0; throw new Error("expected CLI exit"); }) as typeof process.exit;
   process.stdout.write = ((chunk: string | Uint8Array) => { stdout += Buffer.from(chunk).toString("utf8"); return true; }) as typeof process.stdout.write;
   process.stderr.write = ((chunk: string | Uint8Array) => { stderr += Buffer.from(chunk).toString("utf8"); return true; }) as typeof process.stderr.write;
   try {
@@ -111,7 +119,7 @@ async function readFromCli(profile: string, args: string[]): Promise<{ exited: b
     process.stdout.write = previousOutput;
     process.stderr.write = previousError;
   }
-  return { exited, stdout, stderr };
+  return { exited, exitCode, stdout, stderr };
 }
 
 function page(): VerifiedPage {
@@ -240,6 +248,49 @@ describe("profile replica removal", () => {
     expect((await readdir(join(PROFILES_DIR, PROFILE, "replicas"))).sort()).toEqual(["first", "second"]);
   });
 });
+test("replica budget and expired consent report distinct actionable exit codes", async () => {
+  const store = await createReplica(PROFILE, config);
+  await store.close();
+  await establishReadableSession();
+  for (const { code, message, exitCode, guidance } of [
+    { code: ReplicaErrorCode.STORAGE_BUDGET, message: "The replica page exceeds the origin's byte budget.", exitCode: 10, guidance: /byte budget/i },
+    { code: ReplicaErrorCode.CONSENT_EXPIRED, message: "The account consent has expired.", exitCode: 5, guidance: /sign in again.*renew consent/i },
+  ]) {
+    const get = spyOn(Replica.prototype, "get").mockRejectedValueOnce(new ReplicaError(code, message));
+    try {
+      const result = await readFromCli(PROFILE, ["replica", "get", "notes/a", "--replica", "notes"]);
+      expect(result.stdout).toBe("");
+      const displayed = JSON.parse(result.stderr) as { error: { code: string; message: string; hint?: string } };
+      expect(displayed.error.code).toBe(code);
+      expect(result.exitCode).toBe(exitCode);
+      expect(displayed.error.message).toContain(message);
+      expect(`${displayed.error.message} ${displayed.error.hint ?? ""}`).toMatch(guidance);
+    } finally {
+      get.mockRestore();
+    }
+  }
+}, 30_000);
+
+test("a delegate session reads a legacy replica only while the profile has no gate", async () => {
+  const store = await createReplica(PROFILE, config);
+  await store.close();
+  // An imported compact grant: a session with no owner DID.
+  await ProfileManager.setSession(PROFILE, { delegationCid: "bafy-delegate", spaceId: config.space });
+
+  const listed = await readFromCli(PROFILE, ["replica", "list", "--replica", "notes"]);
+  expect(listed.stderr).toBe("");
+  expect(listed.exited).toBe(false);
+
+  // Once a gate exists, only its owner's session can read; the delegate cannot be attributed.
+  await establishSessionStamp(join(PROFILES_DIR, PROFILE), "did:pkh:eip155:1:0x0000000000000000000000000000000000000001", {
+    siweIssuedAt: Date.now(),
+  });
+  const refused = await readFromCli(PROFILE, ["replica", "list", "--replica", "notes"]);
+  expect(refused.stdout).toBe("");
+  expect(refused.exitCode).toBe(5);
+  expect(JSON.parse(refused.stderr)).toMatchObject({ error: { code: "REPLICA_GATED" } });
+});
+
 describe("replica purge symlink safety", () => {
   test("refuses a symlinked replicas root and leaves the target profile untouched", async () => {
     await createProfile("victim");
@@ -383,6 +434,7 @@ describe("replica reset purge containment", () => {
   test.each(readCommands)("a symlinked replicas root refuses %s before opening a victim database", async (_command, args) => {
     const victim = await victimDatabaseAtOldVersion();
     await symlink(join(PROFILES_DIR, "victim", "replicas"), join(PROFILES_DIR, PROFILE, "replicas"));
+    await establishReadableSession();
 
     const result = await readFromCli(PROFILE, args);
     await expectVictimDatabaseUnchanged(victim.path, victim.before);
@@ -396,6 +448,7 @@ describe("replica reset purge containment", () => {
     const root = join(PROFILES_DIR, PROFILE, "replicas");
     await mkdir(root);
     await symlink(join(PROFILES_DIR, "victim", "replicas", "notes"), join(root, "notes"));
+    await establishReadableSession();
 
     const result = await readFromCli(PROFILE, args);
     await expectVictimDatabaseUnchanged(victim.path, victim.before);
@@ -411,6 +464,7 @@ describe("replica reset purge containment", () => {
     const selectedDb = join(PROFILES_DIR, PROFILE, "replicas", "notes", "replica.db");
     await unlink(selectedDb);
     await symlink(victim.path, selectedDb);
+    await establishReadableSession();
 
     const result = await readFromCli(PROFILE, args);
     await expectVictimDatabaseUnchanged(victim.path, victim.before);
@@ -445,6 +499,7 @@ describe("replica reset purge containment", () => {
   test.each(["darwin", "win32"])("named-path %s status still reads a real selected replica", async (platform) => {
     const store = await createReplica(PROFILE, config);
     await store.close();
+    await establishReadableSession();
     const originalPlatform = process.platform;
     Object.defineProperty(process, "platform", { value: platform });
     try {
@@ -860,6 +915,7 @@ describe("replica reset purge containment", () => {
     await store.applyPage(lease!, page());
     await store.releaseLease(lease!);
     await store.close();
+    await establishReadableSession();
     const commands = [
       ["replica", "get", "notes/a", "--replica", "notes", "--raw"],
       ["replica", "list", "--replica", "notes"],
@@ -888,6 +944,7 @@ describe("replica reset purge containment", () => {
     await store.applyPage(lease!, page());
     await store.releaseLease(lease!);
     await store.close();
+    await establishReadableSession();
     const originalGet = SqliteReplicaStore.prototype.get;
     const marker = join(PROFILES_DIR, PROFILE, "replica-logout-pending.json");
     let readCompleted = false;
@@ -917,6 +974,7 @@ describe("replica reset purge containment", () => {
     await store.applyPage(lease!, page());
     await store.releaseLease(lease!);
     await store.close();
+    await establishReadableSession("victim");
     expect((await readFromCli("victim", ["replica", "get", "notes/a", "--replica", "notes", "--raw"])).stdout).toContain("secret");
     await symlink(join(PROFILES_DIR, "victim"), join(PROFILES_DIR, "linked"));
 
@@ -1146,10 +1204,12 @@ async function logoutFromCli(profile: string): Promise<CliResult> {
   return { exited, stdout, stderr };
 }
 
-// CONTRACT.md:485-486: an explicit plain logout always ends the network session,
-// even while replica erase remains pending, and says so truthfully.
+// Deny-first (CONTRACT.md §2 "Sign-out and account switch"): the durable logout
+// fence commits before credentials go; a replica that cannot be erased stays
+// behind that fence and the error says so.
 describe("plain auth logout with real profile replicas", () => {
   const replicaDb = join(PROFILES_DIR, PROFILE, "replicas", "notes", "replica.db");
+  const sessionFile = join(PROFILES_DIR, PROFILE, "session.json");
 
   test("removes the replicas and clears the session", async () => {
     const store = await createReplica(PROFILE, config);
@@ -1159,12 +1219,12 @@ describe("plain auth logout with real profile replicas", () => {
     const result = await logoutFromCli(PROFILE);
 
     expect(result.exited).toBe(false);
-    expect(JSON.parse(result.stdout)).toMatchObject({ profile: PROFILE, authenticated: false, replicasRemoved: ["notes"] });
-    expect(await ProfileManager.getSession(PROFILE)).toBeNull();
+    expect(JSON.parse(result.stdout)).toMatchObject({ profile: PROFILE, authenticated: false });
+    expect(await exists(sessionFile)).toBe(false);
     expect(await exists(replicaDb)).toBe(false);
   });
 
-  test("clears the session and says so when a replica is still syncing", async () => {
+  test("a replica still syncing stays behind the committed fence and the error says so", async () => {
     const store = await createReplica(PROFILE, config);
     expect(await store.acquireSyncLease(60_000)).not.toBeNull();
     await store.close();
@@ -1174,14 +1234,14 @@ describe("plain auth logout with real profile replicas", () => {
 
     expect(result.exited).toBe(true);
     const { error } = JSON.parse(result.stderr) as { error: { code: string; message: string } };
-    expect(error.code).toBe("REPLICA_BUSY");
-    expect(error.message).toContain(`Logout cleared the session, but replica "notes" is syncing. No replicas were removed.`);
-    expect(error.message).not.toContain("kept");
-    expect(await ProfileManager.getSession(PROFILE)).toBeNull();
+    expect(error.code).toBe("REPLICA_PURGE_FAILED");
+    expect(error.message).toContain("the profile is signed out and the durable marker denies local reads");
+    expect(await exists(join(PROFILES_DIR, PROFILE, "replica-logout-pending.json"))).toBe(true);
+    expect(await exists(sessionFile)).toBe(false);
     expect(await exists(replicaDb)).toBe(true);
   });
 
-  test.each(["darwin", "win32"])("on %s clears the session and reports the untouched replicas truthfully", async (platform) => {
+  test.each(["darwin", "win32"])("on %s removes the legacy mirror through checked named paths", async (platform) => {
     const store = await createReplica(PROFILE, config);
     await store.close();
     await ProfileManager.setSession(PROFILE, { delegationCid: "doomed-session" });
@@ -1194,14 +1254,8 @@ describe("plain auth logout with real profile replicas", () => {
       Object.defineProperty(process, "platform", { value: originalPlatform });
     }
 
-    expect(result.exited).toBe(true);
-    expect(result.stdout).toBe("");
-    const { error } = JSON.parse(result.stderr) as { error: { code: string; message: string } };
-    expect(error.code).toBe("REPLICA_PURGE_FAILED");
-    expect(error.message).toContain("cleared the session");
-    expect(error.message).toContain("pinned replica removal is unavailable on this platform");
-    expect(error.message).not.toContain("kept");
-    expect(await ProfileManager.getSession(PROFILE)).toBeNull();
-    expect(await exists(replicaDb)).toBe(true);
+    expect(result.exited).toBe(false);
+    expect(await exists(sessionFile)).toBe(false);
+    expect(await exists(replicaDb)).toBe(false);
   });
 });

@@ -206,11 +206,21 @@ export type ReplicaDenyOutcome =
   /** Nothing could be written. Cross-tab denial NOT guaranteed; this tab serves nothing. */
   | { status: "unguarded"; code: string };
 
+/** A deferred sign-out denial: a committed `denied` always carries its resume token. */
+export type ProfileReplicaDeferredDenyOutcome =
+  | { status: "denied"; lifecycleEpoch: number; intents: number; resumeToken: ProfileReplicaDeferredToken }
+  | Exclude<ReplicaDenyOutcome, { status: "denied" }>;
+
 export interface ReplicaEraseReport {
   erased: string[];
   failed: Array<{ id: string; code: string }>;
   /** Intents still outstanding after this pass. */
   remaining: number;
+  /**
+   * Node/CLI: a durable deferred denial held this pass, so nothing was erased and
+   * `remaining` (possibly 0) is not completion; check `deferredErase()`.
+   */
+  deferred?: true;
   /** Browser startup discovered elapsed consent and durably crypto-shredded the account/gate keys. */
   consentExpired?: boolean;
 }
@@ -468,9 +478,8 @@ export interface ProfileReplicaPurge extends Pick<ReplicaLifecycleGate, "recover
    * pending generation, and persists the deferred marker. Physical files remain
    * until `resumeDeferredErase`, even across process restart.
    */
-  deny(input: ReplicaDenyInput, options?: { deferErase?: boolean }): Promise<ReplicaDenyOutcome & {
-    resumeToken?: ProfileReplicaDeferredToken;
-  }>;
+  deny(input: ReplicaDenyInput & { reason: "sign_out" }, options: { deferErase: true }): Promise<ProfileReplicaDeferredDenyOutcome>;
+  deny(input: ReplicaDenyInput, options?: { deferErase?: false }): Promise<ReplicaDenyOutcome>;
   /** Returns the persisted active token across restart, even with zero intents; null only after the marker clears. */
   deferredErase(): Promise<ProfileReplicaDeferredToken | null>;
   /**

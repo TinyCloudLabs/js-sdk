@@ -518,18 +518,40 @@ describe("browser replica gate without a profile directory", () => {
   test("OpenKey approval uses the original prepared SIWE before exposing a fresh replica stamp", async () => {
     await withBrowserOrigin(async (lifecycle) => {
       const signer = new PrivateKeySigner(PROOF_PRIVATE_KEY);
+      let ownerSignCalls = 0;
+      const identityOnlySigner = {
+        getAddress: () => signer.getAddress(),
+        getChainId: () => signer.getChainId(),
+        signMessage: async () => {
+          ownerSignCalls++;
+          throw new Error("Owner wallet signing requires a separate OpenKey approval.");
+        },
+      };
       const node = new TinyCloudNode({
         host: RESTORE_HOST,
-        signer,
+        signer: identityOnlySigner,
         wasmBindings: new NodeWasmBindings(),
         autoBootstrapAccount: false,
+        includeAccountRegistryPermissions: false,
+        capabilityRequest: {
+          manifests: [],
+          resources: [{
+            service: "tinycloud.kv",
+            space: "default",
+            path: "notes/",
+            actions: ["tinycloud.kv/get", "tinycloud.kv/sync"],
+          }],
+          delegationTargets: [],
+          registryRecords: [],
+          expiryMs: 86_400_000,
+          includePublicSpace: false,
+        },
         replication: {
           enabled: true,
           prefixes: ["notes/"],
           storage: { kind: "indexeddb", lifecycle, async open() { throw new Error("No partition open expected."); }, async purge() {} },
         },
       });
-      (node as any).bootstrapAccountIfNeeded = async () => true;
       const priorFetch = globalThis.fetch;
       globalThis.fetch = async (input, init) => {
         const url = String(input);
@@ -547,10 +569,16 @@ describe("browser replica gate without a profile directory", () => {
       };
       try {
         let approvedSiwe: string | undefined;
-        await node.signInWithOpenKey(async ({ siwe, jwk }) => {
+        let preparedDid: string | undefined;
+        let preparedCalls = 0;
+        let retryCalls = 0;
+        await node.signInWithOpenKey(async ({ siwe, jwk, verificationMethod }) => {
+          preparedCalls++;
           expect(node.replicaStamp).toBeUndefined();
           expect(JSON.stringify(jwk)).toBeTruthy();
           approvedSiwe = siwe;
+          preparedDid = verificationMethod;
+          expect(verificationMethod).toMatch(/^did:key:/);
           const selectedActionKeys: string[] = [];
           const permissions: Array<{ service: string; space: string; path: string; actions: string[] }> = [];
           for (const [resource, actions] of Object.entries(extractRecapAttenuations(siwe))) {
@@ -570,15 +598,52 @@ describe("browser replica gate without a profile directory", () => {
           return {
             protocolVersion: 1,
             address: await signer.getAddress(),
-            signature: await signer.signMessage(siwe),
+            signature: await signer.signMessage(`${siwe} rejected`),
             signedMessage: siwe,
             selectedActionKeys,
             permissions,
           };
+        }, {
+          retryResult: async (error, original, attempt) => {
+            retryCalls++;
+            expect(error.message).toContain("OpenKey signature verification failed");
+            expect(attempt).toBe(1);
+            expect(original.siwe).toBe(approvedSiwe);
+            expect(original.verificationMethod).toBe(preparedDid);
+            const selectedActionKeys: string[] = [];
+            const permissions: Array<{ service: string; space: string; path: string; actions: string[] }> = [];
+            for (const [resource, actions] of Object.entries(extractRecapAttenuations(original.siwe))) {
+              const { space, path } = parseCanonicalRecapResource(resource);
+              const grouped = new Map<string, string[]>();
+              for (const ability of Object.keys(actions)) {
+                const service = ability.slice(0, ability.indexOf("/"));
+                if (ability !== "tinycloud.capabilities/read") {
+                  selectedActionKeys.push(`${service}\0${space}\0${path}\0${ability}`);
+                }
+                grouped.set(service, [...(grouped.get(service) ?? []), ability]);
+              }
+              for (const [service, granted] of grouped) {
+                permissions.push({ service, space, path, actions: granted });
+              }
+            }
+            return {
+              protocolVersion: 1,
+              address: await signer.getAddress(),
+              signature: await signer.signMessage(original.siwe),
+              signedMessage: original.siwe,
+              selectedActionKeys,
+              permissions,
+            };
+          },
         });
+        expect(preparedCalls).toBe(1);
+        expect(retryCalls).toBe(1);
         expect(node.session?.siwe).toBe(approvedSiwe);
+        expect(node.sessionDid).toBe(preparedDid);
         expect(node.replicaStamp).toBeDefined();
         expect(await inspectReplicaKeyPresence()).toEqual({ gateHmac: true, accountKey: true });
+        await node.waitForAccountRegistrySync();
+        expect(ownerSignCalls).toBe(0);
         const local = new TinyCloudNode({
           host: RESTORE_HOST,
           signer,

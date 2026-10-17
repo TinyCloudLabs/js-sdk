@@ -178,6 +178,22 @@ it, network sign-in and KV reads still work, but local replica reads stay gated
 until a new verified sign-in. A gated root prefix does not imply `kv-sync-root`
 support.
 
+Replica-enabled OpenKey login uses the SDK-prepared SIWE approval URL, not the
+older browser-created session. Specify `--owner did:pkh:eip155:CHAIN:ADDRESS`
+unless this profile already has a verified owner session. The CLI verifies the
+signed result before saving its new key, session and replica stamp. Safari, and
+Chromium browsers that enforce Local Network Access without granting it (headless
+Chromium cannot show the prompt), may block the HTTPS page's plain-HTTP loopback
+callback: use an interactive CLI terminal and paste the same one-line code shown
+by OpenKey, or start with
+`tc auth login --method openkey --replication-prefix notes/ --owner DID --paste`
+for a headless terminal. Non-TTY `--no-popup` cannot accept a paste; if that
+callback fails, it exits nonzero at the five-minute expiry with a `--paste`
+retry hint and discards the candidate key. Restarting requires a new approval
+and cannot reuse the old signed code. Ctrl-C, SIGINT or SIGTERM before approval
+arrives cancels the OpenKey handoff (best effort) and exits 130 `CANCELLED`
+without saving a key or session.
+
 Use `tc replica report` for read-only aggregates of persisted replication events
 and identity partitions. Live replica status is unavailable there. Report
 `--purge` and `--clear-pending` refuse with exit 2 `REPORT_READ_ONLY`.
@@ -186,10 +202,56 @@ named local replica only. Flag-owned purge and pending clearing have no
 equivalent yet (TC-1309). On macOS and Windows, `replica reset --purge` and
 `auth logout` with a legacy `replicas/` tree refuse local removal rather than
 delete through an unpinned path; leave that tree intact and retry on a supported
-platform. `auth logout` removes both legacy replicas and the flag-owned
-`replication/` root; `auth logout --keep-replicas` keeps both. A plain
-`auth logout` always clears the session, even when a replica is syncing or
-cannot be removed; the error names what was left in place.
+platform.
+
+`auth logout` durably fences replica reads, removes both legacy replicas and the
+flag-owned `replication/` root, and shreds `session.json` and `key.json`. If
+erasure fails, the marker keeps reads denied and startup retries cleanup. An
+explicit logout also blocks implicit sign-in with the stored profile owner key;
+use `auth login` to establish a fresh session. Unknown legacy or flag-owned
+paths, an unverified legacy SQLite schema, or an unreadable gate refuse logout
+before a marker, credential deletion, or node revocation. Sync local writes or
+pass `--discard-local-changes` to approve the displayed paths, types and file
+identities; newly added or changed paths require fresh approval. With `auth
+logout --revoke --discard-local-changes`, physical files and credentials remain
+through partial or failed node revocation. Only after every exact-CID receipt
+does local cleanup begin. After a failed revoke, plain `auth logout` first
+compares the original approved inventory. If it changed, even
+`--discard-local-changes` refuses without deleting credentials or files and
+prints the changed identities and a 32-character approval token. Run a separate
+`auth logout --discard-local-changes --approve-inventory <token>` to approve
+that exact inventory; a new change invalidates the token. After successful
+remote revocation, a cleanup mismatch retains the marker and remaining files
+while the profile stays signed out; `auth logout --discard-local-changes`
+reapproves cleanup without repeating node revocations. OpenKey owner revocation
+fails closed with `REVOCATION_AUTHORITY_UNAVAILABLE`, retaining credentials and
+denied replica files until signed owner revoke authority is supported.
+`--keep-replicas` is available only for legacy-only profiles with no gate,
+flag-owned partition or pending purge; it retains those legacy files but still
+shreds credentials and blocks implicit reauthentication.
+When the profile's replica gate belongs to a different account than the
+signed-in session, `auth logout` signs that session out and removes the
+profile's legacy `replicas/` tree, but leaves the other account's gate and
+flag-owned replicas untouched; startup finishes the legacy removal if it is
+interrupted. If an earlier sign-out was interrupted, logout reports it and a
+second `auth logout` completes it. A gate that no longer matches its logout
+record (for example, restored from an older copy) refuses logout; switch the
+default profile if needed, then run `tc profile delete <name>` and sign in
+again.
+
+`tc auth grants list` labels the signed-in delegation CID `(current session)`.
+`tc delegation revoke <cid>` still accepts any eligible exact CID, but when
+`<cid>` is the current session it requires `--yes` or an interactive confirmation
+before contacting the node. An exact-CID success then runs the same durable
+local sign-out and key shred as `auth logout`; revoking another CID leaves the
+session intact.
+
+B-int release acceptance must
+verify the OpenKey `tc auth request --grant` fallback against a real OpenKey
+using a test account and no production writes: approve the request, confirm the
+grant is stored, start a fresh process, and verify the saved prefixes are
+replayed and the covered read is served locally. If OpenKey rejects explicit
+`kv/get` plus `sync`, stop before release and resolve the protocol contract.
 
 ## Output Modes
 

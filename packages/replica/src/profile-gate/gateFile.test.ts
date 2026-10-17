@@ -16,7 +16,7 @@ import {
   restoreSessionStamp,
   readGateSnapshot,
 } from "./gateFile";
-import { deferredGateToken, resumeDeferredGate } from "./gateFile";
+import { advanceInactiveGate, deferredGateToken, readLogoutGate, resumeDeferredGate } from "./gateFile";
 import type { ReplicaGateAccess } from "@tinycloud/sdk-services/kv/replication";
 
 const ALICE = "did:key:z6MkAlice";
@@ -497,5 +497,40 @@ describe("deny floor beside the gate file", () => {
     expect(floor).toHaveLength(1);
     await writeFile(join(dir, floor[0]!), "{\"epoch\":\"1\"}");
     await expectGated(readGateState(dir), "gate_unavailable");
+  });
+
+  test("an interrupted deny (floor written, gate not) is read for logout as floor-lagging and completed by the next deny", async () => {
+    await establishSessionStamp(dir, ALICE, { siweIssuedAt: 1 });
+    const before = await readGateState(dir);
+    await writeFile(join(dir, "replica-deny-floor.json"), JSON.stringify({ epoch: before.lifecycleEpoch + 1, deniedAt: Date.now() }));
+    await expect(readGateSnapshot(dir)).rejects.toMatchObject({
+      gate: "gate_unavailable", message: expect.stringContaining("re-running `tc auth logout` completes it"),
+    });
+    expect(await readLogoutGate(dir)).toEqual({ state: before, floorLagging: true });
+    const outcome = await denyGate(dir, { reason: "sign_out", principal: ALICE }, async () => []);
+    expect(outcome).toMatchObject({ status: "denied", lifecycleEpoch: before.lifecycleEpoch + 2 });
+    expect(await readLogoutGate(dir)).toMatchObject({ state: { principalHash: null }, floorLagging: false });
+    expect((await readGateSnapshot(dir))?.lifecycleEpoch).toBe(before.lifecycleEpoch + 2);
+  });
+
+  test("advanceInactiveGate moves only an inactive gate past its floor, floor first", async () => {
+    const { lifecycleEpoch } = await deniedProfile();
+    const denied = await readGateState(dir);
+    await writeFile(join(dir, "replica-deny-floor.json"), JSON.stringify({ epoch: lifecycleEpoch + 1, deniedAt: denied.deniedAt! + 1 }));
+    expect((await readLogoutGate(dir))?.floorLagging).toBe(true);
+    const advanced = await advanceInactiveGate(dir);
+    expect(advanced).toEqual({ ...denied, lifecycleEpoch: lifecycleEpoch + 2, deniedAt: advanced.deniedAt });
+    expect(advanced.deniedAt!).toBeGreaterThan(denied.deniedAt! + 1);
+    expect(await readLogoutGate(dir)).toEqual({ state: advanced, floorLagging: false });
+
+    const other = await mkdtemp("/var/tmp/tc858-gate-active-");
+    try {
+      await establishSessionStamp(other, ALICE, { siweIssuedAt: 1 });
+      const active = await Bun.file(join(other, REPLICA_GATE_FILE)).text();
+      await expectGated(advanceInactiveGate(other), "stamp_stale");
+      expect(await Bun.file(join(other, REPLICA_GATE_FILE)).text()).toBe(active);
+    } finally {
+      await rm(other, { recursive: true, force: true });
+    }
   });
 });

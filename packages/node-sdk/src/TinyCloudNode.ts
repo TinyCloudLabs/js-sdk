@@ -2141,7 +2141,8 @@ export class TinyCloudNode {
     try {
       this.teardownSession();
     } finally {
-      // Invalidate this tab's delivery permission before any asynchronous cleanup.
+      // Start durable denial before any registry or runtime cleanup awaits, even if
+      // session-key replacement fails after retiring the old graph.
       const denial = leavingPrincipal
         ? this.denyReplicaGate({ reason: "sign_out", principal: leavingPrincipal }, leavingContext)
         : Promise.resolve(undefined);
@@ -2256,6 +2257,9 @@ export class TinyCloudNode {
       sessionKey.keyId,
       this.explicitHost ? [this.explicitHost] : undefined,
     );
+    this.replicaSessionPrincipal = undefined;
+    this.replicaSessionStamp = undefined;
+    this.replicaRestoreGate = undefined;
     this._serviceGraph = this.createServiceGraphLifetime();
     this.auth = oldAuth;
     // A fresh core: the retired one must not be notified by a later sign-in.
@@ -3143,6 +3147,11 @@ export class TinyCloudNode {
     if (this.ownStorageFull) {
       return;
     }
+    // Every registry step reads or writes the owned account space; a session
+    // without that authority (a scoped CLI login) would only collect a 401.
+    if (!this.currentSessionCoversAccountRegistry()) {
+      return;
+    }
 
     const controller = new AbortController();
     const deadline = setTimeout(
@@ -3270,6 +3279,28 @@ export class TinyCloudNode {
         operation.service === "space" &&
         this.actionContains(operation.action, "tinycloud.space/list"),
     );
+  }
+
+  /**
+   * Whether the current primary session's recap covers the account index read
+   * (`tinycloud.sql/read` on the owned account space's `account` database),
+   * the first call of every registry sync. As in
+   * {@link currentSessionCanListSpaces}, a session with no parseable recap
+   * keeps today's behavior.
+   */
+  private currentSessionCoversAccountRegistry(): boolean {
+    const session = this.currentTinyCloudSession();
+    const operations = session ? this.recapOperationsFromSession(session) : [];
+    if (operations.length === 0) {
+      return true;
+    }
+    const indexRead: RuntimePermissionOperation = {
+      spaceId: this.ownedSpaceId(ACCOUNT_REGISTRY_SPACE),
+      service: "sql",
+      path: "account",
+      action: "tinycloud.sql/read",
+    };
+    return operations.some((granted) => this.operationCovers(granted, indexRead));
   }
 
   private async withAccountRegistryRetry(
@@ -4250,6 +4281,7 @@ export class TinyCloudNode {
       session: input.serviceSession,
       invoke: graph.invoke,
       invokeAny: graph.invokeAny,
+      signOwnerRevocation: this.signer ? (cid) => this.signOwnerRevocation(cid) : undefined,
       fetch: graph.fetch,
     });
     const keyProvider = new WasmKeyProvider({ sessionManager: input.manager });
@@ -5287,6 +5319,7 @@ export class TinyCloudNode {
       session: serviceSession,
       invoke: graph.invoke,
       invokeAny: graph.invokeAny,
+      signOwnerRevocation: this.signer ? (cid) => this.signOwnerRevocation(cid) : undefined,
       fetch: graph.fetch,
     });
 
@@ -6798,7 +6831,8 @@ export class TinyCloudNode {
   }
 
   /**
-   * Revoke a delegation using the v2 DelegationManager.
+   * Revoke a delegation with the owner wallet when available. Session-only
+   * clients continue to use their delegated revocation authority.
    *
    * @param cid - The CID of the delegation to revoke
    * @returns Result indicating success or failure

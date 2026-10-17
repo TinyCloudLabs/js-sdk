@@ -158,6 +158,8 @@ export { FileSessionStorage } from "./storage/FileSessionStorage";
 export {
   NodeUserAuthorization,
   type NodeUserAuthorizationConfig,
+  type OpenKeyAuthorizeInput,
+  type OpenKeyAuthorizationResultV1,
 } from "./authorization/NodeUserAuthorization";
 
 // OpenKey integration adapter — Sol continuation contract requires a
@@ -630,6 +632,10 @@ export {
 export {
   sqliteReplicaStorage,
   createProfileReplicaPurge,
+  REPLICA_LOGOUT_PENDING_FILE,
+  assertProfileLogoutClear,
+  logoutPrincipalDigest,
+  RESTORED_GATE_MESSAGE,
   type ProfileReplicaPurge,
   type ProfileReplicaDeferredToken,
 } from "./replication/sqlite";

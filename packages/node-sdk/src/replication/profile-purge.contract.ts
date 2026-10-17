@@ -16,10 +16,6 @@ type Equal<A, B> = (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ?
   ? true
   : false;
 
-/** Methods implemented here; the CLI logout implementation adds the logout-marker methods. */
-type Implemented = "recover" | "erasePending" | "pendingPurge" | "deny" | "deferredErase" | "resumeDeferredErase";
-
 type _TokenIsTheContractToken = Assert<Equal<ProfileReplicaDeferredToken, ContractDeferredToken>>;
-type _ExportIsTheContractSubset = Assert<Equal<ProfileReplicaPurge, Pick<ContractProfileReplicaPurge, Implemented>>>;
+type _ExportIsTheContract = Assert<Equal<ProfileReplicaPurge, ContractProfileReplicaPurge>>;
 type _FactoryReturnsTheExport = Assert<Equal<ReturnType<typeof createProfileReplicaPurge>, ProfileReplicaPurge>>;
-type _SubsetNamesExistInContract = Assert<Equal<Exclude<Implemented, keyof ContractProfileReplicaPurge>, never>>;

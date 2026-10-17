@@ -57,7 +57,7 @@ TC="${TC_BIN:-$HOME/.local/share/tinycloud/cli/node_modules/.bin/tinycloud}"   #
 | `--replication-prefix <prefix>` | Repeatable login request; adds `get` + `sync` only when an unrestricted covering `get` is already requested. Saves prefixes on the profile and reapplies them on later logins and rotation |
 | `--replication-allow-secrets` | Explicitly allow prefixes in the `secrets` space or `vault` tree; replication stores ciphertext only |
 | `--method openkey\|local` | Browser OpenKey flow or local Ethereum key |
-| `--paste`, `--no-popup` | Browser flow without a local callback / without opening a browser. `--paste` reads the owner's code from stdin (newline-terminated; a final unterminated line is accepted); stdin ending without a code fails with `PASTE_CODE_MISSING` (exit 3) naming the approval URL |
+| `--paste`, `--no-popup` | `--paste` waits up to five minutes for the one-line OpenKey signed code on stdin; `--no-popup` only prints the approval URL. An interactive CLI accepts paste if a browser callback is blocked. Safari, and Chromium browsers enforcing Local Network Access without granting it (including headless Chromium), may require paste for replica-enabled prepared-SIWE login because HTTPS-to-HTTP loopback is blocked. Non-TTY `--no-popup` cannot accept paste: if callback fails it expires nonzero with a `--paste` retry hint; the old signed code cannot be reused. An EOF in `--paste` mode returns `PASTE_CODE_MISSING` without saving a key or session. Ctrl-C, SIGINT or SIGTERM before the signed code arrives cancels the OpenKey handoff (best effort) and exits 130 `CANCELLED`. |
 
 Device login JSON lists the signed, approved `permissions`, owner-unchecked `declined` capabilities, `ownerDid`, `spaceId` and `expiresAt`. `tinycloud auth request --manifest FILE --grant --device` adds another space to a logged-in profile the same way (default lifetime 7d). `tinycloud enable share [--replace-session]` is shorthand for device login with `builtin:share-publishing`. OpenKey refuses `tinycloud.sql` and other abilities outside its device policy; use browser login (`--method openkey --manifest`) for those. Non-interactive browser login without `--paste` or `--no-popup` fails fast with `INTERACTIVE_LOGIN_REQUIRED`. Only an explicit `--host` is stored on the profile. Errors: `MANIFEST_REQUIRED`, `SCOPE_REJECTED` (OpenKey refused a capability; the message names it), `SESSION_IN_USE` (the request or the approved scope would narrow a live session; use a new profile or `--replace-session`), `PROFILE_CHANGED_DURING_LOGIN` (another login, key rotation or logout changed the profile while approval was pending; nothing saved), `PROFILE_STATE_INCONSISTENT` (profile, key and session disagree after an interrupted write; `--replace-session` or a new profile), `PROFILE_LOCK_TIMEOUT` (another process held the profile lock past 45 s), `LOCAL_OWNER_PROFILE` (scoped or device login on a local-owner-key profile; use a separate profile), `OPENKEY_UNREACHABLE`, `DEVICE_AUTH_DENIED`, `DEVICE_AUTH_EXPIRED`, `DEVICE_AUTH_BINDING_MISMATCH` (OpenKey's approval metadata disagrees with the signed grant), `OPENKEY_OWNER_MISMATCH`, `OPENKEY_GRANT_BROADENED`, `OPENKEY_EXPIRY_EXCEEDED` (the signed session outlives `--expiry`). Owner addresses compare case-insensitively (EIP-55 or lowercase); chain id and space name compare exactly. See [AUTH.md](AUTH.md).
 
@@ -92,6 +92,12 @@ No `del` anywhere and no `list` on the bearer prefix: no `tinycloud share` comma
 
 Actions are auto-prefixed with `tinycloud.` if not already.
 
+`delegation revoke <cid>` is a generic exact-CID operation. When `<cid>` is
+the current sign-in session, it requires `--yes` or an interactive confirmation
+warning that revocation signs you out. After the node confirms that exact CID,
+the CLI runs its normal durable logout, removes the restorable session and key,
+and blocks implicit reauthentication. Unrelated CIDs do not sign you out.
+
 `tinycloud auth import` stores delegations in `additional-delegations.json`. Every replay path installs only a grant with a locally verified proof and a binding containing its signed authority; unbound and proof-less grants never install, including while migration is deferred. [AUTH.md](AUTH.md#imported-delegations-and-their-request-bindings) covers migration and recovery.
 
 ### Stored grants
@@ -103,6 +109,10 @@ Actions are auto-prefixed with `tinycloud.` if not already.
 ```
 
 `list` is local and does not contact the node. Its JSON contains `profile`, `session` (`cid` recomputed from stored header and `expiresAt`, or `null`), `localVerification` (`available`, `session_missing`, `session_expired`, `session_invalid`), and `grants`. Each indexed grant row contains `cid` (CID-shaped or `null`), `expiry`, `expired`, `local` (`verified`, `refused`, `not_checked`, `for_another_key`), `reason` (fixed skip code or `null`), `node: "not_checked"`, `bound`, `proof` (`siwe`, `compact`, `missing`, or `null`), `source`, `scope`, and `scopeSource` (`signed` or `stored`). `for_another_key` means the stored audience names another key; its scope is unverified stored metadata and it cannot install in this session. Local verification checks signed scope and binding, not the node's delegation chain or revocation status. Human output shows `CID | LOCAL | EXPIRES | SOURCE | BOUND | SCOPE` and the session CID.
+
+The `session` JSON object has `label: "current session"` for the active CID;
+human output marks that CID `(current session)`. Do not treat the session CID
+as a disposable replica child grant.
 
 `for_another_key` is decided from a verified signed compact audience, CID, and matching transport DID, not an unsigned `delegateDID` alone. Tampered records retain their refusal reason, and proofless records retain `proof_missing`.
 
@@ -279,8 +289,40 @@ equivalent yet (TC-1309).
 On macOS and Windows, `replica reset --purge` and `auth logout` with a legacy
 `replicas/` tree refuse local removal rather than delete through an unpinned
 path. The existing files are retained.
-`auth logout` purges legacy and flag-owned replicas unless `--keep-replicas`
-is used.
+`auth logout` durably denies local replica reads, removes legacy and flag-owned
+files, and shreds both restorable session and key. A pending marker keeps reads
+denied while startup retries erasure. A signed-out profile cannot implicitly
+authenticate with its stored owner key; use explicit `auth login` for a new
+session. An unknown replica path, an unverified legacy SQLite schema, or an
+unreadable gate refuses logout before a marker, credential deletion or node
+request. Sync first, or pass `--discard-local-changes` to approve the displayed
+paths, types and file identities. New or changed entries need fresh approval.
+With a verified local-owner key, `auth logout --revoke --discard-local-changes`
+preserves session, key and physical replicas through every online exact-CID
+receipt; partial failure leaves them behind a durable denied marker for retry.
+After a failed revoke, plain logout compares the original approved inventory
+first. Changed paths refuse even with `--discard-local-changes`, retain all
+credentials and files, and print a 32-hex-character token. A separate
+`auth logout --discard-local-changes --approve-inventory <token>` approves
+only the newly displayed identities; further changes invalidate the token.
+After full remote success, cleanup shreds credentials and erases only approved
+entries. A later inventory mismatch retains the marker and remaining files;
+repeat `auth logout --discard-local-changes` for fresh approval without
+repeating node revocations. OpenKey
+owner revocation currently fails closed with `REVOCATION_AUTHORITY_UNAVAILABLE`,
+retaining credentials and denied replica files until signed owner revoke
+authority is supported.
+When the replica gate belongs to a different account than the signed-in
+session, logout signs that session out and removes only the profile's legacy
+`replicas/` tree; the other account's gate and flag-owned replicas stay. An
+interrupted earlier sign-out is reported, and a second `auth logout` completes
+it. A gate that no longer matches its logout record (for example, restored
+from an older copy) refuses logout; run `tc profile delete <name>` (after
+`tc profile switch <other>` if it is the default) and sign in again.
+
+`--keep-replicas` retains legacy files only when no replica gate, flag-owned
+partition or pending purge exists; gated profiles refuse before mutation and
+legacy-only keep still shreds credentials.
 
 B-int release acceptance: test `tinycloud auth request --grant` against a real
 OpenKey test account without production writes. Approve the request, confirm

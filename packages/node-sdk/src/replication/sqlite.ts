@@ -14,9 +14,9 @@
 
 import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash, randomBytes } from "node:crypto";
-import { readFileSync, statSync } from "node:fs";
-import { chmod, lstat, mkdir, open as openFile, readFile, readdir, realpath, rename, rm, rmdir, stat, unlink, type FileHandle } from "node:fs/promises";
-import { basename, dirname, join } from "node:path";
+import { lstatSync, readFileSync, statSync, type Dirent } from "node:fs";
+import { chmod, lstat, mkdir, open as openFile, readFile, readdir, realpath, rename, rm, rmdir, stat, type FileHandle } from "node:fs/promises";
+import { basename, dirname, join, parse, resolve, sep } from "node:path";
 
 
 import { KVService, ServiceContext, principalDid } from "@tinycloud/sdk-core";
@@ -42,8 +42,15 @@ import type {
   ReplicationIdentity,
 } from "@tinycloud/sdk-services";
 import type {
+  ProfileReplicaApprovalEntry,
+  ProfileReplicaDeferredDenyOutcome,
   ProfileReplicaDeferredToken,
-  ProfileReplicaPurge as ProfileReplicaPurgeContract,
+  ProfileReplicaLogoutPending,
+  ProfileReplicaPreflight,
+  ProfileReplicaPurge,
+  ProfileReplicaRemoteLogoutState,
+  ProfileReplicaRootIdentity,
+  ProfileReplicaUnknownEntry,
   ReplicaAccountGate,
   ReplicaDenyOutcome,
   ReplicaDenyInput,
@@ -67,18 +74,622 @@ import type {
   SqliteRuntime,
 } from "./replica-contract";
 import { ucanAttUnconstrainedFor } from "./authority";
-export type { ProfileReplicaDeferredToken };
+export type { ProfileReplicaDeferredToken, ProfileReplicaPurge };
+
+/** CLI-only crash fence; generic SQLite stores do not opt in to this path. */
+export const REPLICA_LOGOUT_PENDING_FILE = "replica-logout-pending.json";
+
+/** Every CLI read path, including legacy replica commands, checks this marker before delivery. */
+export function assertProfileLogoutClear(profileDir: string): void {
+  assertLogoutClear(join(profileDir, REPLICA_LOGOUT_PENDING_FILE));
+}
+
+function assertLogoutClear(path: string | undefined): void {
+  if (path === undefined) return;
+  try {
+    lstatSync(path);
+  } catch (error) {
+    if (isNotFound(error)) return;
+  }
+  throw gated("gate_unavailable");
+}
+
+function safeInventoryPath(path: string): boolean {
+  return path.length > 0 && path.split("/").every((part) =>
+    part.length > 0 && part !== "." && part !== ".." && !part.includes("\\") && !part.includes("\0")) &&
+    (path === "replication" || path.startsWith("replication/") ||
+     path === "replicas" || path.startsWith("replicas/"));
+}
+
+/** The domain-separated owner binding persisted as a logout marker's `principalDigest`. */
+export function logoutPrincipalDigest(principal: string): string {
+  return createHash("sha256").update("tinycloud-replica-logout\0").update(principal, "utf8").digest("hex");
+}
+function compareInventoryString(left: string, right: string): number {
+  return left < right ? -1 : left > right ? 1 : 0;
+}
+
+function approvalEntries(report: ProfileReplicaPreflight): ProfileReplicaApprovalEntry[] {
+  return [
+    ...report.unknownEntries,
+    ...report.knownEntries,
+    ...report.knownRoots.map((root) => ({ ...root, kind: "directory" as const })),
+    ...report.missingDatabases.map((path) => ({ path, kind: "missing" as const, dev: "", ino: "" })),
+  ].map(({ path, kind, dev, ino }) => ({ path, kind, dev, ino }))
+    .sort((a, b) => compareInventoryString(a.path, b.path) ||
+      compareInventoryString(a.kind, b.kind) ||
+      compareInventoryString(a.dev, b.dev) ||
+      compareInventoryString(a.ino, b.ino));
+}
+
+/** A visible confirmation fence, not authority: every field is rechecked under the profile lock. */
+function inventoryApprovalToken(
+  marker: ProfileReplicaLogoutPending, principal: string, entries: readonly ProfileReplicaApprovalEntry[],
+): string {
+  const markerId = marker.v === 2
+    ? [marker.v, marker.nonce, marker.principalDigest]
+    : [marker.v, marker.incarnation, marker.lifecycleEpoch, marker.principalDigest];
+  return createHash("sha256").update("tc-logout-approve-v1\0")
+    .update(JSON.stringify([markerId, marker.approvalSalt, principal,
+      marker.v === 2 ? null : marker.lifecycleEpoch, entries]))
+    .digest().subarray(0, 16).toString("hex");
+}
+
+function changedInventoryRefusal(
+  marker: ProfileReplicaLogoutPending, principal: string, report: ProfileReplicaPreflight,
+  entries = approvalEntries(report),
+): Error & { code: "REPLICA_GATED"; gate: string; inventoryApprovalToken: string;
+  inventoryApprovalEntries: ProfileReplicaApprovalEntry[] } {
+  const token = inventoryApprovalToken(marker, principal, entries);
+  const error = localChangesRefusal(report.unknownPaths);
+  error.message += ` Current token-bound inventory (path/kind/dev/ino): ${entries.length === 0 ?
+    "(empty)" : entries.map((entry) => JSON.stringify(entry)).join(", ")}.` +
+    ` To approve this exact changed inventory in a separate command, use --discard-local-changes --approve-inventory ${token}.`;
+  return Object.assign(error, { inventoryApprovalToken: token, inventoryApprovalEntries: entries });
+}
+function storedInventoryChanged(
+  marker: ProfileReplicaLogoutPending, report: ProfileReplicaPreflight,
+): boolean {
+  try {
+    assertApprovedInventory(report, {
+      unknownEntries: marker.approvedUnknown, knownRoots: marker.knownRoots,
+      knownEntries: marker.knownEntries, missingDatabases: marker.missingDatabases,
+    });
+    return false;
+  } catch (error) {
+    if (typeof error === "object" && error !== null && "code" in error &&
+        error.code === "REPLICA_GATED" && "gate" in error && error.gate === "gate_unavailable") {
+      return true;
+    }
+    throw error;
+  }
+}
+
+
+function decimalIdentity(value: unknown): value is string {
+  return typeof value === "string" && /^(0|[1-9][0-9]*)$/.test(value);
+}
+
+function logoutMarkerOf(value: unknown): ProfileReplicaLogoutPending {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) throw gated("gate_unavailable");
+  const row = value as Record<string, unknown>;
+  const entry = (item: unknown): item is ProfileReplicaUnknownEntry =>
+    item !== null && typeof item === "object" && !Array.isArray(item) &&
+    Object.keys(item).length === 4 && typeof (item as ProfileReplicaUnknownEntry).path === "string" &&
+    safeInventoryPath((item as ProfileReplicaUnknownEntry).path) &&
+    ["file", "directory", "symlink"].includes((item as ProfileReplicaUnknownEntry).kind) &&
+    decimalIdentity((item as ProfileReplicaUnknownEntry).dev) &&
+    decimalIdentity((item as ProfileReplicaUnknownEntry).ino);
+  const root = (item: unknown): item is ProfileReplicaRootIdentity =>
+    item !== null && typeof item === "object" && !Array.isArray(item) &&
+    Object.keys(item).length === 3 && typeof (item as ProfileReplicaRootIdentity).path === "string" &&
+    safeInventoryPath((item as ProfileReplicaRootIdentity).path) &&
+    decimalIdentity((item as ProfileReplicaRootIdentity).dev) &&
+    decimalIdentity((item as ProfileReplicaRootIdentity).ino);
+  if (typeof row.principalDigest !== "string" || !/^[0-9a-f]{64}$/.test(row.principalDigest) ||
+      typeof row.approvalSalt !== "string" || !/^[0-9a-f]{32}$/.test(row.approvalSalt) ||
+      !Array.isArray(row.approvedUnknown) || !row.approvedUnknown.every(entry) ||
+      !Array.isArray(row.knownRoots) || !row.knownRoots.every(root) ||
+      !Array.isArray(row.knownEntries) || !row.knownEntries.every(entry) ||
+      !Array.isArray(row.missingDatabases) || !row.missingDatabases.every(
+        (path: unknown) => typeof path === "string" && safeInventoryPath(path) && path.endsWith("/replica.db")) ||
+      (row.discardLocalChanges !== undefined && row.discardLocalChanges !== true) ||
+      (row.remotePending !== undefined && row.remotePending !== true) ||
+      (row.remoteAbandoned !== undefined && row.remoteAbandoned !== true) ||
+      (row.remotePending === true && row.remoteAbandoned === true)) throw gated("gate_unavailable");
+  const optional = Number(row.discardLocalChanges === true) + Number(row.remotePending === true) +
+    Number(row.remoteAbandoned === true);
+  if (row.v === 2 && Object.keys(row).length === 9 + optional &&
+      row.scope === "orphan_profile" && typeof row.nonce === "string" &&
+      /^[0-9a-f]{32}$/.test(row.nonce)) return row as ProfileReplicaLogoutPending;
+  if (row.v === 3 && Object.keys(row).length === 10 + optional &&
+      row.scope === "inactive_gate" &&
+      typeof row.incarnation === "string" && row.incarnation.length > 0 &&
+      Number.isSafeInteger(row.lifecycleEpoch) && (row.lifecycleEpoch as number) >= 0) {
+    return row as ProfileReplicaLogoutPending;
+  }
+  // A v1 marker may carry its bound denial epoch, always past the pre-denial epoch.
+  const bound = Number(row.deniedEpoch !== undefined);
+  if (Object.keys(row).length !== 10 + optional + bound || row.v !== 1 ||
+      typeof row.incarnation !== "string" || row.incarnation.length === 0 ||
+      !Number.isSafeInteger(row.lifecycleEpoch) || (row.lifecycleEpoch as number) < 0 ||
+      typeof row.principalHash !== "string" || !/^[0-9a-f]{64}$/.test(row.principalHash) ||
+      (bound === 1 && (!Number.isSafeInteger(row.deniedEpoch) ||
+        (row.deniedEpoch as number) <= (row.lifecycleEpoch as number)))) {
+    throw gated("gate_unavailable");
+  }
+  return row as ProfileReplicaLogoutPending;
+}
+
+async function readLogoutMarker(path: string): Promise<ProfileReplicaLogoutPending | null> {
+  const value = await readJsonFile(path);
+  return value === undefined ? null : logoutMarkerOf(value);
+}
+
+/** Only a real selected profile or its Linux directory-fd pin may own a wipe. */
+async function orphanRoot(profileDir: string, name: "replication" | "replicas"): Promise<string | null> {
+  let profile;
+  try {
+    profile = await lstat(profileDir);
+  } catch {
+    throw gated("gate_unavailable");
+  }
+  let pinned = false;
+  if (process.platform === "linux" && /^\/proc\/self\/fd\/[1-9]\d*$/.test(profileDir) &&
+      profile.isSymbolicLink()) {
+    try {
+      pinned = (await stat(profileDir)).isDirectory();
+    } catch {
+      throw gated("gate_unavailable");
+    }
+  }
+  if (!profile.isDirectory() && !pinned) throw gated("gate_unavailable");
+  const root = join(profileDir, name);
+  let entry;
+  try {
+    entry = await lstat(root);
+  } catch (error) {
+    if (isNotFound(error)) return null;
+    throw error;
+  }
+  if (!entry.isDirectory() ||
+      await realpath(root) !== join(await realpath(profileDir), name)) {
+    throw gated("gate_unavailable");
+  }
+  return root;
+}
+
+/** Without a readable gate, uncertain pending files are treated as local changes. */
+async function hasOrphanPending(profileDir: string): Promise<boolean> {
+  const root = await orphanRoot(profileDir, "replication");
+  if (root === null) return false;
+  let entries;
+  try {
+    entries = await readdir(root, { withFileTypes: true });
+  } catch {
+    return true;
+  }
+  for (const entry of entries) {
+    if (!entry.isDirectory()) return true;
+    const dir = join(root, entry.name);
+    try {
+      if (!(await lstat(dir)).isDirectory()) return true;
+    } catch {
+      return true;
+    }
+    if (!/^[a-z2-7]{26}$/.test(entry.name)) return true;
+    let children;
+    try {
+      children = await readdir(dir, { withFileTypes: true });
+    } catch {
+      return true;
+    }
+    // Only a verified empty pending index proves no unsynced writes. A missing
+    // index, a replica DB, device key, or any future child format is unknown.
+    if (children.length !== 2 || children.some((child) =>
+      !child.isFile() || (child.name !== "identity.json" && child.name !== "pending.json"))) return true;
+    const pendingFile = join(dir, "pending.json");
+    let text: string;
+    try {
+      const pending = await lstat(pendingFile);
+      if (!pending.isFile()) return true;
+      text = await readFile(pendingFile, "utf8");
+    } catch (error) {
+      if (isNotFound(error)) return true;
+      return true;
+    }
+    try {
+      const identityFile = join(dir, "identity.json");
+      if (!(await lstat(identityFile)).isFile()) return true;
+      const identity = identityRecordOf(await readJsonFile(identityFile));
+      if (identity === undefined || parsePendingState(text, pendingFile, identity).records.length !== 0) {
+        return true;
+      }
+    } catch {
+      return true;
+    }
+  }
+  return false;
+}
+
+function inventoryIdentity(path: string, dev: bigint, ino: bigint): ProfileReplicaRootIdentity {
+  return { path, dev: dev.toString(), ino: ino.toString() };
+}
+
+async function inventoryUnknown(
+  profileDir: string, relative: string, entries: ProfileReplicaUnknownEntry[],
+): Promise<void> {
+  const path = join(profileDir, relative);
+  const info = await lstat(path, { bigint: true });
+  const kind = info.isDirectory() ? "directory" : info.isSymbolicLink() ? "symlink" : "file";
+  entries.push({ ...inventoryIdentity(relative, info.dev, info.ino), kind });
+  if (kind === "directory") {
+    for (const child of await readdir(path)) await inventoryUnknown(profileDir, `${relative}/${child}`, entries);
+  }
+}
 
 /**
- * The methods of the contract's `ProfileReplicaPurge` (sdk-services, the single
- * source of truth) that this release implements. The logout-marker methods
- * arrive with the CLI logout implementation, which exports the full type.
+ * Inventory all unknown descendants of both the CLI legacy and flag-owned roots. `legacyOnly`
+ * (another account's logout) never opens, lists or reports the flag-owned `replication/`
+ * root: its files are not the caller's to approve and stay byte-identical. `diagnosticFiles`
+ * are the CLI-supplied exact names directly under `replication/` that count as known, and
+ * only while they are regular files.
  */
-export type ProfileReplicaPurge = Pick<
-  ProfileReplicaPurgeContract,
-  "recover" | "erasePending" | "pendingPurge" | "deny" | "deferredErase" | "resumeDeferredErase"
->;
+async function inspectProfileReplicaLayout(
+  profileDir: string, gateReadable: boolean, approvedMarker?: ProfileReplicaLogoutPending, legacyOnly = false,
+  diagnosticFiles: readonly string[] = [],
+): Promise<ProfileReplicaPreflight> {
+  const report: ProfileReplicaPreflight = {
+    knownLegacyReplicas: 0, unknownLegacyPaths: [], unknownPaths: [],
+    unknownEntries: [], knownRoots: [], knownEntries: [], missingDatabases: [],
+  };
+  const legacy = await orphanRoot(profileDir, "replicas");
+  const active = legacyOnly ? null : await orphanRoot(profileDir, "replication");
+  for (const [name, dir] of [["replicas", legacy], ["replication", active]] as const) {
+    if (dir === null) continue;
+    const info = await lstat(dir, { bigint: true });
+    report.knownRoots.push(inventoryIdentity(name, info.dev, info.ino));
+  }
+  if (legacy !== null) {
+    // @ts-ignore — optional replica dependency is checked by replica-contract.test.ts.
+    const sqlite = await import("@tinycloud/replica/sqlite") as SqliteRuntime;
+    for (const entry of await readdir(legacy, { withFileTypes: true })) {
+      const relative = `replicas/${entry.name}`;
+      const child = join(legacy, entry.name);
+      if (!entry.isDirectory()) {
+        await inventoryUnknown(profileDir, relative, report.unknownEntries);
+        continue;
+      }
+      try {
+        const layout = await sqlite.inspectSqliteReplicaLayout(child);
+        report.knownRoots.push({ path: relative, ...layout.rootIdentity });
+        report.unknownEntries.push(...layout.unknownEntries.map((item) => ({
+          ...item, path: `${relative}/${item.path}`,
+        })));
+        report.knownEntries.push(...layout.knownEntries.map((item) => ({
+          ...item, path: `${relative}/${item.path}`,
+        })));
+        if (layout.unknownPaths.length === 0) report.knownLegacyReplicas++;
+        if (layout.unknownPaths.includes("replica.db") &&
+            !layout.unknownEntries.some((item) => item.path === "replica.db")) {
+          report.missingDatabases.push(`${relative}/replica.db`);
+        }
+      } catch {
+        // Failed inspection cannot establish a source-owned layout.
+        await inventoryUnknown(profileDir, relative, report.unknownEntries);
+      }
+    }
+  }
+  if (active !== null) {
+    const cleanOrphan = !gateReadable &&
+      (approvedMarker?.v === 2 || !(await hasOrphanPending(profileDir)));
+    for (const entry of await readdir(active, { withFileTypes: true })) {
+      const relative = `replication/${entry.name}`;
+      const dir = join(active, entry.name);
+      // Explicitly approved opaque roots remain opaque through replay; a
+      // marker must not turn their children into newly trusted control files.
+      if (approvedMarker?.approvedUnknown.some((item) => item.path === relative)) {
+        await inventoryUnknown(profileDir, relative, report.unknownEntries);
+        continue;
+      }
+      if (gateReadable && diagnosticFiles.includes(entry.name)) {
+        const info = await lstat(dir, { bigint: true });
+        if (info.isFile()) {
+          report.knownEntries.push({ ...inventoryIdentity(relative, info.dev, info.ino), kind: "file" });
+          continue;
+        }
+      }
+      if ((!gateReadable && !cleanOrphan) || !entry.isDirectory() || !/^[a-z2-7]{26}$/.test(entry.name)) {
+        await inventoryUnknown(profileDir, relative, report.unknownEntries);
+        continue;
+      }
+      const info = await lstat(dir, { bigint: true });
+      report.knownRoots.push(inventoryIdentity(relative, info.dev, info.ino));
+      const identityPath = join(dir, "identity.json");
+      let identity: ReplicationIdentity | undefined;
+      try {
+        if ((await lstat(identityPath)).isFile()) identity = identityRecordOf(await readJsonFile(identityPath));
+      } catch { /* Conservatively inventory the whole identity directory below. */ }
+      if (identity === undefined) {
+        const approvedRoot = approvedMarker?.knownRoots.find((item) => item.path === relative);
+        if (approvedRoot?.dev === info.dev.toString() && approvedRoot.ino === info.ino.toString()) {
+          const children = await readdir(dir);
+          if (children.length === 0) continue; // Crash after the final source file was unlinked.
+          if (children.length === 1 && children[0] === "replicas") {
+            const replicasPath = `${relative}/replicas`;
+            const replicasDir = join(dir, "replicas");
+            const replicasInfo = await lstat(replicasDir, { bigint: true });
+            const approvedReplicas = approvedMarker!.knownRoots.find((item) => item.path === replicasPath);
+            if (replicasInfo.isDirectory() && !replicasInfo.isSymbolicLink() &&
+                approvedReplicas?.dev === replicasInfo.dev.toString() &&
+                approvedReplicas.ino === replicasInfo.ino.toString() &&
+                (await readdir(replicasDir)).length === 0) {
+              report.knownRoots.push(inventoryIdentity(replicasPath, replicasInfo.dev, replicasInfo.ino));
+              continue;
+            }
+          }
+        }
+        report.knownRoots.pop();
+        await inventoryUnknown(profileDir, relative, report.unknownEntries);
+        continue;
+      }
+      for (const child of await readdir(dir, { withFileTypes: true })) {
+        const childRelative = `${relative}/${child.name}`;
+        const childPath = join(dir, child.name);
+        if ((child.name === "identity.json" || child.name === "device.jwk") && child.isFile()) {
+          const childInfo = await lstat(childPath, { bigint: true });
+          report.knownEntries.push({ ...inventoryIdentity(childRelative, childInfo.dev, childInfo.ino), kind: "file" });
+          continue;
+        }
+        if (child.name === "pending.json" && child.isFile()) {
+          try {
+            if (parsePendingState(await readFile(childPath, "utf8"), childPath, identity).records.length === 0) {
+              const childInfo = await lstat(childPath, { bigint: true });
+              report.knownEntries.push({ ...inventoryIdentity(childRelative, childInfo.dev, childInfo.ino), kind: "file" });
+              continue;
+            }
+          } catch { /* An unreadable pending index is never known-safe. */ }
+        }
+        if (child.name === "replicas" && child.isDirectory()) {
+          const replicasInfo = await lstat(childPath, { bigint: true });
+          report.knownRoots.push(inventoryIdentity(childRelative, replicasInfo.dev, replicasInfo.ino));
+          for (const replicaChild of await readdir(childPath, { withFileTypes: true })) {
+            const replicaRelative = `${childRelative}/${replicaChild.name}`;
+            if (!replicaChild.isDirectory() || !/^[a-z2-7]{26}$/.test(replicaChild.name)) {
+              await inventoryUnknown(profileDir, replicaRelative, report.unknownEntries);
+              continue;
+            }
+            // @ts-ignore — optional replica dependency is checked by replica-contract.test.ts.
+            const sqlite = await import("@tinycloud/replica/sqlite") as SqliteRuntime;
+            try {
+              const layout = await sqlite.inspectSqliteReplicaLayout(join(childPath, replicaChild.name), {
+                allowAdapterFence: true,
+              });
+              report.knownRoots.push({ path: replicaRelative, ...layout.rootIdentity });
+              report.unknownEntries.push(...layout.unknownEntries.map((item) => ({
+                ...item, path: `${replicaRelative}/${item.path}`,
+              })));
+              report.knownEntries.push(...layout.knownEntries.map((item) => ({
+                ...item, path: `${replicaRelative}/${item.path}`,
+              })));
+              if (layout.unknownPaths.includes("replica.db") &&
+                  !layout.unknownEntries.some((item) => item.path === "replica.db")) {
+                report.missingDatabases.push(`${replicaRelative}/replica.db`);
+              }
+            } catch {
+              await inventoryUnknown(profileDir, replicaRelative, report.unknownEntries);
+            }
+          }
+          continue;
+        }
+        await inventoryUnknown(profileDir, childRelative, report.unknownEntries);
+      }
+    }
+  }
+  report.unknownEntries.sort((a, b) => a.path.localeCompare(b.path));
+  report.knownEntries.sort((a, b) => a.path.localeCompare(b.path));
+  report.knownRoots.sort((a, b) => a.path.localeCompare(b.path));
+  report.missingDatabases.sort();
+  report.unknownPaths = [...report.unknownEntries.map((entry) => entry.path), ...report.missingDatabases].sort();
+  report.unknownLegacyPaths = [...report.unknownPaths];
+  return report;
+}
 
+function assertApprovedInventory(
+  current: ProfileReplicaPreflight,
+  approval: Pick<ProfileReplicaPreflight, "unknownEntries" | "knownRoots" | "knownEntries" | "missingDatabases">,
+  allowRemoved = false,
+): void {
+  const approved = new Map(approval.unknownEntries.map((item) => [item.path, item]));
+  const known = new Map(approval.knownRoots.map((item) => [item.path, item]));
+  const knownFiles = new Map(approval.knownEntries.map((item) => [item.path, item]));
+  for (const entry of current.unknownEntries) {
+    const expected = approved.get(entry.path);
+    if (expected?.kind !== entry.kind || expected.dev !== entry.dev || expected.ino !== entry.ino) {
+      throw localChangesRefusal(current.unknownPaths);
+    }
+  }
+  for (const root of current.knownRoots) {
+    const expected = known.get(root.path);
+    if (expected?.dev !== root.dev || expected.ino !== root.ino) throw localChangesRefusal([root.path]);
+  }
+  for (const entry of current.knownEntries) {
+    if (allowRemoved && entry.kind === "file" &&
+        /^(?:replication\/[a-z2-7]{26}\/replicas\/[a-z2-7]{26}|replicas\/[^/]+)\/replica\.db-(?:wal|shm|journal)$/.test(entry.path)) {
+      const database = entry.path.replace(/-(?:wal|shm|journal)$/, "");
+      const original = knownFiles.get(database);
+      const present = current.knownEntries.find((item) => item.path === database);
+      // SQLite can create/recreate only these source-owned sidecars after
+      // approval. The database and replica root must retain their inode;
+      // the remover captures each sidecar's current inode before unlink.
+      if (!approved.has(entry.path) && original?.kind === "file" &&
+          present?.dev === original.dev && present.ino === original.ino) continue;
+    }
+    const expected = knownFiles.get(entry.path);
+    if (expected?.kind !== entry.kind || expected.dev !== entry.dev || expected.ino !== entry.ino) {
+      throw localChangesRefusal([entry.path]);
+    }
+  }
+  for (const path of current.missingDatabases) {
+    if (!approval.missingDatabases.includes(path) &&
+        !(allowRemoved && knownFiles.get(path)?.kind === "file")) throw localChangesRefusal([path]);
+  }
+  if (!allowRemoved &&
+      (current.unknownEntries.length !== approved.size || current.knownRoots.length !== known.size ||
+       current.knownEntries.length !== knownFiles.size ||
+       current.missingDatabases.length !== approval.missingDatabases.length)) {
+    throw localChangesRefusal(current.unknownPaths);
+  }
+}
+
+/** Recheck every named component and the approved parent inode immediately before unlink. */
+async function assertApprovedParents(
+  profileDir: string, marker: ProfileReplicaLogoutPending, path: string,
+): Promise<boolean> {
+  if (process.platform !== "linux") {
+    const absolute = resolve(profileDir);
+    let ancestor = parse(absolute).root;
+    for (const part of absolute.slice(ancestor.length).split(sep).filter(Boolean)) {
+      ancestor = join(ancestor, part);
+      const details = await lstat(ancestor, { bigint: true });
+      if (!details.isDirectory() || details.isSymbolicLink()) throw localChangesRefusal([path]);
+    }
+  }
+  let relativeParent = "";
+  for (const part of path.split("/").slice(0, -1)) {
+    relativeParent = relativeParent ? `${relativeParent}/${part}` : part;
+    let details;
+    try { details = await lstat(join(profileDir, relativeParent), { bigint: true }); }
+    catch (error) {
+      if (isNotFound(error)) return false; // already removed by an interrupted replay
+      throw error;
+    }
+    const expected = marker.knownRoots.find((root) => root.path === relativeParent) ??
+      marker.approvedUnknown.find((item) => item.path === relativeParent && item.kind === "directory");
+    if (!details.isDirectory() || details.isSymbolicLink() ||
+        expected?.dev !== details.dev.toString() || expected.ino !== details.ino.toString()) {
+      throw localChangesRefusal([relativeParent]);
+    }
+  }
+  return true;
+}
+
+async function eraseApprovedUnknown(
+  profileDir: string, marker: ProfileReplicaLogoutPending, prefix: "replication" | "replicas",
+  diagnosticFiles: readonly string[],
+): Promise<void> {
+  const entries = marker.approvedUnknown.filter((entry) => entry.path.startsWith(`${prefix}/`));
+  for (const entry of entries.sort((a, b) => b.path.length - a.path.length)) {
+    assertApprovedInventory(await inspectProfileReplicaLayout(profileDir, marker.v !== 2, marker, false, diagnosticFiles), {
+      unknownEntries: marker.approvedUnknown, knownRoots: marker.knownRoots,
+      knownEntries: marker.knownEntries, missingDatabases: marker.missingDatabases,
+    }, true);
+    if (!(await assertApprovedParents(profileDir, marker, entry.path))) continue;
+    const file = join(profileDir, entry.path);
+    let current;
+    try { current = await lstat(file, { bigint: true }); }
+    catch (error) { if (isNotFound(error)) continue; throw error; }
+    const kind = current.isDirectory() ? "directory" : current.isSymbolicLink() ? "symlink" : "file";
+    if (kind !== entry.kind || current.dev.toString() !== entry.dev ||
+        current.ino.toString() !== entry.ino) throw localChangesRefusal([entry.path]);
+    if (process.platform !== "linux" && kind === "symlink") throw localChangesRefusal([entry.path]);
+    // Nonrecursive directory removal leaves any unlisted new child untouched.
+    if (kind === "directory") await rmdir(file);
+    else await rm(file);
+  }
+}
+
+/** Remove only source-owned control residue and the named diagnostics after every scoped intent has committed. */
+async function eraseKnownFlagResidue(
+  profileDir: string, marker: ProfileReplicaLogoutPending, diagnosticFiles: readonly string[],
+): Promise<void> {
+  const diagnostics = new Set(diagnosticFiles.map((name) => `replication/${name}`));
+  for (const entry of marker.knownEntries.filter((item) => diagnostics.has(item.path) ||
+    /^replication\/[a-z2-7]{26}\/(?:identity\.json|pending\.json|device\.jwk)$/.test(item.path))
+    .sort((a, b) => Number(a.path.endsWith("/identity.json")) -
+      Number(b.path.endsWith("/identity.json")))) {
+    if (!(await assertApprovedParents(profileDir, marker, entry.path))) continue;
+    const file = join(profileDir, entry.path);
+    let details;
+    try { details = await lstat(file, { bigint: true }); }
+    catch (error) { if (isNotFound(error)) continue; throw error; }
+    if (!details.isFile() || details.dev.toString() !== entry.dev ||
+        details.ino.toString() !== entry.ino) throw localChangesRefusal([entry.path]);
+    await rm(file);
+  }
+  const roots = marker.knownRoots.filter((item) =>
+    item.path === "replication" || item.path.startsWith("replication/"));
+  roots.sort((a, b) => b.path.split("/").length - a.path.split("/").length);
+  for (const entry of roots) {
+    if (!(await assertApprovedParents(profileDir, marker, entry.path))) continue;
+    const path = join(profileDir, entry.path);
+    let details;
+    try { details = await lstat(path, { bigint: true }); }
+    catch (error) { if (isNotFound(error)) continue; throw error; }
+    if (!details.isDirectory() || details.isSymbolicLink() ||
+        details.dev.toString() !== entry.dev || details.ino.toString() !== entry.ino) {
+      throw localChangesRefusal([entry.path]);
+    }
+    await rmdir(path); // An unlisted child leaves the marker intact.
+  }
+}
+
+
+function localChangesRefusal(unknownPaths: readonly string[] = []): Error & { code: "REPLICA_GATED"; gate: string } {
+  const error = gated("gate_unavailable");
+  error.message = "Unknown or unsynced local replica data may be lost; sync first, or retry logout with --discard-local-changes." +
+    (unknownPaths.length === 0 ? "" : ` Unknown: ${unknownPaths.map((path) => JSON.stringify(path)).join(", ")}.`);
+  return error;
+}
+
+type V1Marker = Extract<ProfileReplicaLogoutPending, { v: 1 }>;
+type LogoutGateRead = { state: FileGateState; floorLagging: boolean } | undefined;
+
+/** Active (or deferred-denied) for a principal other than `principalHash`: never this caller's to deny. */
+function gateOwnedByAnother(state: FileGateState, principalHash: string): boolean {
+  return state.principalHash !== null
+    ? state.principalHash !== principalHash
+    : state.eraseDeferred && state.deferredPrincipalHash !== principalHash;
+}
+
+function isGateUnavailable(error: unknown): boolean {
+  return typeof error === "object" && error !== null && "code" in error && error.code === "REPLICA_GATED" &&
+    "gate" in error && error.gate === "gate_unavailable";
+}
+
+/**
+ * A v1 marker whose bound denial no longer matches the gate: no in-place exit (CONTRACT.md §2).
+ * Recovery reports it as `gate_restored` so the CLI can name the route.
+ */
+function restoredGate(): Error & { code: "REPLICA_GATED"; gate: string; reportCode: "gate_restored" } {
+  const error = gated("stamp_stale");
+  error.message = RESTORED_GATE_MESSAGE;
+  return Object.assign(error, { reportCode: "gate_restored" as const });
+}
+
+/** Exported for the CLI, which shows the same route for a recovery report's `gate_restored`. */
+export const RESTORED_GATE_MESSAGE =
+  "The replica gate does not match this logout's recorded sign-out; an older gate may have been restored. " +
+  "Local replicas stay disabled for this profile: switch the default profile first if needed " +
+  "(`tc profile switch <other>`), then run `tc profile delete <name>` and sign in again.";
+
+/** A floor-lagging gate this path may not complete. */
+function interruptedSignOut(): Error & { code: "REPLICA_GATED"; gate: string } {
+  const error = gated("gate_unavailable");
+  error.message = "A previous sign-out was interrupted; re-running `tc auth logout` completes it.";
+  return error;
+}
+
+
+/** Reject an approval that the named-path remover cannot safely replay. */
+function assertSupportedProfileLayout(report: ProfileReplicaPreflight): void {
+  if (process.platform === "linux") return;
+  const link = report.unknownEntries.find((entry) => entry.kind === "symlink");
+  if (link === undefined) return;
+  const error = gated("gate_unavailable");
+  error.message = `Replica symlink ${JSON.stringify(link.path)} cannot be removed safely on this platform.`;
+  throw error;
+}
 
 type FileGateState = ReplicaAccountGate & {
   intents: ReplicaPurgeIntent[];
@@ -91,6 +702,9 @@ type FileGateState = ReplicaAccountGate & {
 
 type FileGate = {
   readGateSnapshot(profileDir: string): Promise<FileGateState | undefined>;
+  /** Past the floor check: a gate whose deny was interrupted reads as `floorLagging`. */
+  readLogoutGate(profileDir: string): Promise<{ state: FileGateState; floorLagging: boolean } | undefined>;
+  advanceInactiveGate(profileDir: string): Promise<FileGateState>;
   identityHashOf(salt: string, identityKey: string): Promise<string>;
   principalHashOf(salt: string, principal: string): Promise<string>;
   grantInstallHashOf(salt: string, identityKeyHash: string, cid: string): Promise<string>;
@@ -117,7 +731,7 @@ async function fileGate(): Promise<FileGate> {
   return import("@tinycloud/replica/profile-gate") as Promise<FileGate>;
 }
 
-function gated(reason: "gate_unavailable" | "not_established" | "stamp_stale" | "purge_pending"): Error & { code: "REPLICA_GATED"; gate: string } {
+function gated(reason: "gate_unavailable" | "not_established" | "stamp_stale" | "purge_pending" | "principal_mismatch"): Error & { code: "REPLICA_GATED"; gate: string } {
   return Object.assign(new Error(`Replica gate refused: ${reason}`), { code: "REPLICA_GATED" as const, gate: reason });
 }
 
@@ -190,52 +804,6 @@ async function realDirectoryExists(path: string): Promise<boolean> {
     throw new ReplicaStorageError("STORAGE_ERROR", `Refusing the replaced replica path ${path}.`);
   }
   return true;
-}
-
-/**
- * Removes a replica directory that has no usable database without recursion: only the store's own
- * layout (database files, the sync fence and content-addressed blobs) is unlinked, and anything
- * else refuses. unlink/rmdir never follow a path swapped after inventory.
- */
-async function removeLeftoverReplicaDir(replicaDir: string): Promise<void> {
-  const refuse = (path: string) =>
-    new ReplicaStorageError("STORAGE_ERROR", `Refusing to remove unexpected replica path ${path}.`);
-  const assertLayout = async (path: string, directory: boolean) => {
-    const stats = await lstat(path);
-    if (stats.isSymbolicLink() || (directory ? !stats.isDirectory() : !stats.isFile())) throw refuse(path);
-  };
-  const files: string[] = [];
-  const directories: string[] = [];
-  for (const name of await readdir(replicaDir)) {
-    const path = join(replicaDir, name);
-    if (["replica.db", "replica.db-wal", "replica.db-shm", FENCE_FILE].includes(name) ||
-        /^fence\.json\.[0-9a-f]{12}\.tmp$/.test(name)) {
-      await assertLayout(path, false);
-      files.push(path);
-    } else if (name === "blobs") {
-      await assertLayout(path, true);
-      for (const shard of await readdir(path)) {
-        const shardPath = join(path, shard);
-        if (shard !== ".tmp" && !/^[0-9a-f]{2}$/.test(shard)) throw refuse(shardPath);
-        await assertLayout(shardPath, true);
-        for (const blob of await readdir(shardPath)) {
-          const blobPath = join(shardPath, blob);
-          if (shard === ".tmp" ? !/^[0-9a-f]{64}\.[0-9a-f]{12}$/.test(blob) : !/^[0-9a-f]{64}$/.test(blob) || !blob.startsWith(shard)) {
-            throw refuse(blobPath);
-          }
-          await assertLayout(blobPath, false);
-          files.push(blobPath);
-        }
-        directories.push(shardPath);
-      }
-      directories.push(path);
-    } else {
-      throw refuse(path);
-    }
-  }
-  for (const file of files) await unlink(file);
-  for (const directory of directories) await rmdir(directory);
-  await rmdir(replicaDir);
 }
 
 /** `did:key:…#fragment` → the bare principal DID (replica's principalOf). */
@@ -507,6 +1075,7 @@ export class FilePendingWriteStore implements PendingWriteStore {
   readonly #guard: MutationGuard | undefined;
   readonly #stamp: ReplicaSessionStamp | undefined;
   readonly #dirSync?: DirSync;
+  readonly #logoutPendingFile: string | undefined;
   #generation: number | undefined;
   #canonicalDir: string | undefined;
 
@@ -517,6 +1086,7 @@ export class FilePendingWriteStore implements PendingWriteStore {
     guard: MutationGuard | undefined,
     stamp: ReplicaSessionStamp | undefined,
     dirSync?: DirSync,
+    logoutPendingFile?: string,
   ) {
     this.identity = identity;
     this.#dir = dir;
@@ -524,6 +1094,7 @@ export class FilePendingWriteStore implements PendingWriteStore {
     this.#guard = guard;
     this.#stamp = stamp;
     this.#dirSync = dirSync;
+    this.#logoutPendingFile = logoutPendingFile;
   }
 
   async #withGate<T>(section: (file: string) => Promise<T>): Promise<T> {
@@ -550,6 +1121,7 @@ export class FilePendingWriteStore implements PendingWriteStore {
     }
     const queueKey = join(canonicalRoot, basename(this.#dir), "pending.json");
     return serializePendingWrite(queueKey, () => requiredGuard(this.#guard, async () => {
+      assertLogoutClear(this.#logoutPendingFile);
       const before = await gate.assertGateAccess(this.#profileDir, access, snapshot.salt);
       const generation = before.pendingGenerations[identityKeyHash] ?? 0;
       if (this.#generation !== undefined && this.#generation !== generation) {
@@ -571,6 +1143,7 @@ export class FilePendingWriteStore implements PendingWriteStore {
       }
       const result = await section(file);
       await gate.assertGateAccess(this.#profileDir, access, snapshot.salt);
+      assertLogoutClear(this.#logoutPendingFile);
       this.#generation = generation;
       if (await pathExists(this.#dir)) this.#canonicalDir = await realpath(this.#dir);
       return result;
@@ -672,6 +1245,14 @@ export interface SqliteReplicaStorageOptions {
   guard?: MutationGuard;
   /** Full path to replica-gate.json; defaults to the directory next to dir. */
   gateFile?: string;
+  /** CLI opt-in. Generic SQLite replica stores never infer a session-file layout. */
+  logoutPendingFile?: string;
+  /**
+   * CLI opt-in: exact names of regular diagnostics files directly under `dir` (for example
+   * `events.jsonl`). Logout inventory treats only those names, only as regular files (never
+   * symlinks), as known and erases them; generic storage infers none.
+   */
+  diagnosticFiles?: readonly string[];
   /**
    * Test seam: supply sync transports without WASM/KVService. Production
    * builds invoke through `kvSyncTransport` like the CLI's `grantTransports`.
@@ -1116,6 +1697,16 @@ export function createSqliteReplicaStorage(
 ): KVReplicaStorage & { lifecycle: ReplicaLifecycleGate & ProfileReplicaPurge } {
   const root = options.dir;
   const profileDir = dirname(options.gateFile ?? join(dirname(root), REPLICA_GATE_FILE));
+  const diagnosticFiles = [...(options.diagnosticFiles ?? [])];
+  for (const name of diagnosticFiles) {
+    // A plain file name that can never be an identity directory or reach outside the root.
+    if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(name) || /^[a-z2-7]{26}$/.test(name)) {
+      throw new TypeError(`Invalid replication diagnostics file name ${JSON.stringify(name)}.`);
+    }
+  }
+  const inspectLayout = (
+    gateReadable: boolean, approvedMarker?: ProfileReplicaLogoutPending, legacyOnly = false,
+  ) => inspectProfileReplicaLayout(profileDir, gateReadable, approvedMarker, legacyOnly, diagnosticFiles);
   const guard = options.guard;
   const createDevice = options.createDevice ?? createDeviceKey;
   const heldLock = new AsyncLocalStorage<boolean>();
@@ -1145,10 +1736,13 @@ export function createSqliteReplicaStorage(
       identity === undefined ? Promise.resolve(undefined) : gate.identityHashOf(snapshot.salt, replicationIdentityKey(identity)),
     ]);
     return profileSection(async () => {
+      assertLogoutClear(options.logoutPendingFile);
       await gate.assertGateAccess(profileDir, {
         stamp, incarnation: snapshot.incarnation, principalHash, identityKeyHash, partitionId,
       }, snapshot.salt);
-      return section();
+      const result = await section();
+      assertLogoutClear(options.logoutPendingFile);
+      return result;
     });
   }
 
@@ -1175,6 +1769,7 @@ export function createSqliteReplicaStorage(
     const path = options.gateFile ?? join(profileDir, REPLICA_GATE_FILE);
     let checked: { ino: bigint; size: bigint; mtimeNs: bigint } | undefined;
     const checkGate = async (): Promise<void> => {
+      assertLogoutClear(options.logoutPendingFile);
       let before;
       try {
         before = await stat(path, { bigint: true });
@@ -1206,16 +1801,48 @@ export function createSqliteReplicaStorage(
   }
 
   async function identityDirs(): Promise<string[]> {
+    let entries: Dirent[];
     try {
-      const entries = await readdir(root, { withFileTypes: true });
+      entries = await readdir(root, { withFileTypes: true });
+    } catch (error) {
+      // Only a missing root means no partitions; any later ENOENT is a concurrent change.
+      if (isNotFound(error)) return [];
+      throw storageError("STORAGE_ERROR", `Listing ${root}`, error);
+    }
+    try {
+      const marker = await readLogoutMarker(join(profileDir, REPLICA_LOGOUT_PENDING_FILE));
+      if (marker !== null) {
+        const inventory = await inspectLayout(true);
+        assertApprovedInventory(inventory, {
+          unknownEntries: marker.approvedUnknown, knownRoots: marker.knownRoots,
+          knownEntries: marker.knownEntries, missingDatabases: marker.missingDatabases,
+        }, true);
+      }
       for (const entry of entries) {
-        if (entry.isSymbolicLink() || (entry.isDirectory() && !/^[a-z2-7]{26}$/.test(entry.name))) {
+        if (entry.isSymbolicLink() || !entry.isDirectory() ||
+            !/^[a-z2-7]{26}$/.test(entry.name)) {
+          if (marker?.approvedUnknown.some((item) =>
+              item.path === `replication/${entry.name}` &&
+              (entry.isDirectory() ? item.kind === "directory" : entry.isSymbolicLink() ?
+                item.kind === "symlink" : item.kind === "file"))) continue;
+          // The CLI's named diagnostics log, only as a regular file, is not a partition. One the
+          // appender rotated away since the listing is gone, not a reason to list nothing.
+          if (diagnosticFiles.includes(entry.name)) {
+            const info = await lstat(join(root, entry.name)).catch((error: unknown) => {
+              if (isNotFound(error)) return null;
+              throw error;
+            });
+            if (info === null || info.isFile()) continue;
+          }
           throw new ReplicaStorageError("STORAGE_ERROR", `Unknown identity partition at ${root}.`);
         }
       }
-      return entries.filter((entry) => entry.isDirectory()).map((entry) => join(root, entry.name));
+      return entries.filter((entry) => entry.isDirectory() &&
+        /^[a-z2-7]{26}$/.test(entry.name) &&
+        !marker?.approvedUnknown.some((item) =>
+          item.path === `replication/${entry.name}` && item.kind === "directory"))
+        .map((entry) => join(root, entry.name));
     } catch (error) {
-      if (isNotFound(error)) return [];
       throw storageError("STORAGE_ERROR", `Listing ${root}`, error);
     }
   }
@@ -1264,18 +1891,238 @@ export function createSqliteReplicaStorage(
       await gate.recordGrantInstall(profileDir, key, installedAt);
     }
   }
+
+  /** A v2 marker must be durable before an unreadable old gate can be unlinked. */
+  async function removeCorruptOrphanGate(gate: FileGate): Promise<void> {
+    const path = join(profileDir, REPLICA_GATE_FILE);
+    const before = await lstat(path, { bigint: true });
+    if (!before.isFile() || before.isSymbolicLink()) throw gated("gate_unavailable");
+    let corrupt = false;
+    try {
+      await gate.readGateSnapshot(profileDir);
+    } catch (error) {
+      if (typeof error === "object" && error !== null && "code" in error &&
+          error.code === "REPLICA_GATED" && "gate" in error && error.gate === "gate_unavailable") {
+        corrupt = true;
+      } else throw error;
+    }
+    if (!corrupt) throw gated("stamp_stale");
+    const current = await lstat(path, { bigint: true });
+    if (current.dev !== before.dev || current.ino !== before.ino ||
+        current.mtimeNs !== before.mtimeNs || current.size !== before.size) throw gated("stamp_stale");
+    await rm(path);
+    await (options.dirSync ?? fsyncDir)(profileDir);
+    if (await gate.readGateSnapshot(profileDir) !== undefined) throw gated("stamp_stale");
+  }
+
+  /** Logout reads the gate past its floor; an unreadable or lost gate is `corrupt`. */
+  async function readLogoutState(gate: FileGate): Promise<{ read: LogoutGateRead; corrupt: boolean }> {
+    try {
+      return { read: await gate.readLogoutGate(profileDir), corrupt: false };
+    } catch (error) {
+      if (isGateUnavailable(error)) return { read: undefined, corrupt: true };
+      throw error;
+    }
+  }
+
+  /**
+   * Validate a v1 marker under the profile lock. Its bound denial is checked by equality with
+   * `deniedEpoch`, never `lifecycleEpoch + 1`. An unbound marker binds once to a denial that a
+   * crash left unrecorded; otherwise the gate must still be the one the marker was written for:
+   * active (when `active` allows it) or floor-lagging after an interrupted deny, which `deny`
+   * completes (`deferred` for a remote-pending marker) and then binds. The rebound marker and
+   * the current gate are returned; anything else refuses without mutation.
+   */
+  async function validateV1(
+    gate: FileGate, path: string, marker: V1Marker, read: LogoutGateRead,
+    mode: { active: boolean; deny?: "deferred" | "ordinary"; denyActive?: boolean; acceptLagging?: boolean },
+  ): Promise<{ marker: V1Marker; state: FileGateState; active: boolean }> {
+    if (read === undefined || read.state.incarnation !== marker.incarnation) throw gated("stamp_stale");
+    const { state, floorLagging } = read;
+    if (marker.deniedEpoch !== undefined) {
+      if (floorLagging || !v1Denied(marker, state, marker.deniedEpoch)) throw restoredGate();
+      return { marker, state, active: false };
+    }
+    if (!floorLagging && state.principalHash === null && state.lifecycleEpoch > marker.lifecycleEpoch &&
+        (marker.remotePending
+          ? state.eraseDeferred && state.deferredPrincipalHash === marker.principalHash
+          : !state.eraseDeferred && state.deferredPrincipalHash === null)) {
+      return { marker: await bindDeniedEpoch(path, marker, state.lifecycleEpoch), state, active: false };
+    }
+    if (state.principalHash !== marker.principalHash || state.lifecycleEpoch !== marker.lifecycleEpoch) {
+      throw gated("stamp_stale");
+    }
+    if (!floorLagging && !mode.denyActive) {
+      if (!mode.active) throw gated("stamp_stale");
+      return { marker, state, active: true };
+    }
+    // The marker's own interrupted deny: a caller that denies next may accept it as is.
+    if (mode.acceptLagging) return { marker, state, active: true };
+    if (mode.deny === undefined) throw interruptedSignOut();
+    const denied = await gate.denyGate(profileDir, { reason: "sign_out", principal: "" },
+      (principalHash) => collectIntents(principalHash, state.salt),
+      { salt: state.salt, principalHash: marker.principalHash },
+      { deferErase: mode.deny === "deferred" });
+    if (denied.status !== "denied") throw gated("gate_unavailable");
+    const after = await gate.readLogoutGate(profileDir);
+    if (after === undefined || after.floorLagging || !v1Denied(marker, after.state, denied.lifecycleEpoch)) {
+      throw gated("gate_unavailable");
+    }
+    return { marker: await bindDeniedEpoch(path, marker, denied.lifecycleEpoch), state: after.state, active: false };
+  }
+
+  /** The marker's own denial: null principal at `epoch`, by the marker's principal when deferred. */
+  function v1Denied(marker: V1Marker, state: FileGateState, epoch: number): boolean {
+    return state.incarnation === marker.incarnation && state.principalHash === null &&
+      state.lifecycleEpoch === epoch && (
+        state.deferredPrincipalHash === marker.principalHash ||
+        (!marker.remotePending && !state.eraseDeferred && state.deferredPrincipalHash === null));
+  }
+
+  /** The one-time v1 `deniedEpoch` rewrite; a bound marker is never rebound. */
+  async function bindDeniedEpoch(path: string, marker: V1Marker, deniedEpoch: number): Promise<V1Marker> {
+    if (marker.deniedEpoch !== undefined) throw gated("stamp_stale");
+    const bound: V1Marker = { ...marker, deniedEpoch };
+    await writeJsonAtomic(path, bound, options.dirSync);
+    return bound;
+  }
+
+  /**
+   * Remote markers: v2 needs no replacement gate, v3 its exact inactive epoch, v1 its bound
+   * (or once-bindable) denial; `mode` admits an active or interrupted v1 gate where allowed.
+   */
+  async function validatedRemoteMarker(
+    path: string, marker: ProfileReplicaLogoutPending, principal: string,
+    mode: { active: boolean; deny?: "deferred" | "ordinary" },
+  ): Promise<{ marker: ProfileReplicaLogoutPending; state: FileGateState | undefined }> {
+    if (marker.principalDigest !== logoutPrincipalDigest(principal)) throw gated("principal_mismatch");
+    const gate = await fileGate();
+    const { read, corrupt } = await readLogoutState(gate);
+    if (corrupt) throw gated("gate_unavailable");
+    if (marker.v === 2) {
+      if (read !== undefined) throw gated("stamp_stale");
+      return { marker, state: undefined };
+    }
+    if (read === undefined || read.state.incarnation !== marker.incarnation) throw gated("stamp_stale");
+    if (marker.v === 3) {
+      if (read.floorLagging || read.state.lifecycleEpoch !== marker.lifecycleEpoch ||
+          read.state.principalHash !== null || read.state.eraseDeferred) throw gated("stamp_stale");
+      return { marker, state: read.state };
+    }
+    if (marker.principalHash !== await gate.principalHashOf(read.state.salt, principal)) {
+      throw gated("principal_mismatch");
+    }
+    const checked = await validateV1(gate, path, marker, read, mode);
+    return { marker: checked.marker, state: checked.state };
+  }
+  /** Read-only inventory of the current layout; an unreadable gate refuses. */
+  async function currentLayout(): Promise<ProfileReplicaPreflight> {
+    const { read, corrupt } = await readLogoutState(await fileGate());
+    if (corrupt) throw gated("gate_unavailable");
+    const report = await inspectLayout(read !== undefined);
+    assertSupportedProfileLayout(report);
+    return report;
+  }
+
+  async function commitPlainAbandon(
+    path: string, marker: ProfileReplicaLogoutPending, report: ProfileReplicaPreflight,
+    discardLocalChanges: boolean,
+  ): Promise<ProfileReplicaLogoutPending> {
+    const { remotePending: _, discardLocalChanges: _oldDiscard, ...previous } = marker;
+    const abandoned: ProfileReplicaLogoutPending = {
+      ...previous, remoteAbandoned: true,
+      approvedUnknown: discardLocalChanges ? report.unknownEntries : [],
+      knownRoots: report.knownRoots, knownEntries: report.knownEntries,
+      missingDatabases: report.missingDatabases,
+      ...(discardLocalChanges ? { discardLocalChanges: true } : {}),
+    };
+    await writeJsonAtomic(path, abandoned, options.dirSync);
+    return abandoned;
+  }
+
+
+  /**
+   * Flips this process's view before its first await; deferral only for sign-out (N3). Reads
+   * past the deny floor, so an interrupted deny is completed. In the same guarded section a
+   * committed sign-out denial binds the logout principal's unbound v1 marker to its epoch:
+   * remote-pending markers only to a deferred denial, plain ones only to an ordinary one.
+   */
+  function deny(input: ReplicaDenyInput & { reason: "sign_out" }, options: { deferErase: true }): Promise<ProfileReplicaDeferredDenyOutcome>;
+  function deny(input: ReplicaDenyInput, options?: { deferErase?: false }): Promise<ReplicaDenyOutcome>;
+  function deny(
+    input: ReplicaDenyInput, denyOptions?: { deferErase?: boolean },
+  ): Promise<ReplicaDenyOutcome | ProfileReplicaDeferredDenyOutcome> {
+    const deferErase = denyOptions?.deferErase === true;
+    if (deferErase && input.reason !== "sign_out") {
+      throw new TypeError("Deferred erase is only available for sign-out.");
+    }
+    visibleStamp = undefined;
+    visiblePrincipalHash = undefined;
+    checkedGate = undefined;
+    return (async (): Promise<ReplicaDenyOutcome | ProfileReplicaDeferredDenyOutcome> => {
+      try {
+        const gate = await fileGate();
+        return await profileSection(async () => {
+          const snapshot = (await gate.readLogoutGate(profileDir))?.state;
+          const precomputed = snapshot === undefined ? undefined : {
+            salt: snapshot.salt, principalHash: await gate.principalHashOf(snapshot.salt, input.principal),
+          };
+          const result = await gate.denyGate(profileDir, input,
+            async (principalHash) => {
+              if (snapshot === undefined) throw gated("gate_unavailable");
+              return collectIntents(principalHash, snapshot.salt);
+            },
+            precomputed, { deferErase });
+          if (result.status !== "denied") return result;
+          if (input.reason === "sign_out" && snapshot !== undefined && precomputed !== undefined) {
+            const path = join(profileDir, REPLICA_LOGOUT_PENDING_FILE);
+            const marker = await readLogoutMarker(path);
+            if (marker?.v === 1 && marker.deniedEpoch === undefined &&
+                marker.incarnation === snapshot.incarnation && marker.principalHash === precomputed.principalHash &&
+                (marker.remotePending === true) === deferErase) {
+              await bindDeniedEpoch(path, marker, result.lifecycleEpoch);
+            }
+          }
+          if (!deferErase) return result;
+          const resumeToken = await gate.deferredGateToken(profileDir);
+          if (resumeToken === null || resumeToken.deniedEpoch !== result.lifecycleEpoch) {
+            return { status: "unguarded", code: "gate_unavailable" };
+          }
+          return { ...result, resumeToken };
+        });
+      } catch (error) {
+        return { status: "unguarded", code: typeof error === "object" && error !== null &&
+          "code" in error && typeof error.code === "string" ? error.code : "gate_unavailable" };
+      }
+    })();
+  }
+
   const lifecycle: ReplicaLifecycleGate & ProfileReplicaPurge = {
     kind: "file",
     async recover({ signal }) {
-      return lifecycle.erasePending({ signal });
+      try {
+        return await lifecycle.erasePending({ signal });
+      } catch (error) {
+        const code = typeof error === "object" && error !== null && "code" in error && typeof error.code === "string"
+          ? error.code : "STORAGE_ERROR";
+        let remaining = 0;
+        try {
+          remaining = (await (await fileGate()).readGateSnapshot(profileDir))?.intents.length ?? 0;
+        } catch {
+          // Failed inspection is already represented by the failed gate entry.
+        }
+        return { erased: [], failed: [{ id: "gate", code }], remaining };
+      }
     },
     async establishSessionStamp(principal, { consentAnchor }) {
       if (consentAnchor?.source === "first_install" || !Number.isSafeInteger(consentAnchor?.at) || consentAnchor.at < 0) {
         throw gated("not_established");
       }
       const gate = await fileGate();
-      const stamp = await profileSection(() =>
-        gate.establishSessionStamp(profileDir, principal, { siweIssuedAt: consentAnchor.at }));
+      const stamp = await profileSection(async () => {
+        assertLogoutClear(options.logoutPendingFile);
+        return gate.establishSessionStamp(profileDir, principal, { siweIssuedAt: consentAnchor.at });
+      });
       const state = await gate.readGateSnapshot(profileDir);
       if (state === undefined) throw gated("gate_unavailable");
       visiblePrincipalHash = await gate.principalHashOf(state.salt, principal);
@@ -1285,7 +2132,10 @@ export function createSqliteReplicaStorage(
     },
     async restoreSessionStamp(principal, persisted) {
       const gate = await fileGate();
-      const stamp = await profileSection(() => gate.restoreSessionStamp(profileDir, principal, persisted));
+      const stamp = await profileSection(async () => {
+        assertLogoutClear(options.logoutPendingFile);
+        return gate.restoreSessionStamp(profileDir, principal, persisted);
+      });
       const state = await gate.readGateSnapshot(profileDir);
       if (state === undefined) throw gated("gate_unavailable");
       visiblePrincipalHash = await gate.principalHashOf(state.salt, principal);
@@ -1298,9 +2148,10 @@ export function createSqliteReplicaStorage(
       try {
         const gate = await fileGate();
         return await profileSection(async () => {
+          assertLogoutClear(options.logoutPendingFile);
           const state = await gate.readGateSnapshot(profileDir);
           return state !== undefined && !state.eraseDeferred && state.intents.length === 0 &&
-            (state.principalHash === null || state.principalHash === await gate.principalHashOf(state.salt, next));
+            state.principalHash !== null && state.principalHash === await gate.principalHashOf(state.salt, next);
         });
       } catch {
         return false;
@@ -1308,6 +2159,11 @@ export function createSqliteReplicaStorage(
     },
     checkDelivery(stamp) {
       if (guard === undefined || visiblePrincipalHash === undefined) return { status: "gated", gate: "gate_unavailable" };
+      try {
+        assertLogoutClear(options.logoutPendingFile);
+      } catch {
+        return { status: "gated", gate: "gate_unavailable" };
+      }
       if (!stamp || visibleStamp?.incarnation !== stamp.incarnation ||
           visibleStamp.lifecycleEpoch !== stamp.lifecycleEpoch) {
         return { status: "gated", gate: "stamp_stale" };
@@ -1341,37 +2197,7 @@ export function createSqliteReplicaStorage(
     },
     consentDeadline() { return null; },
     deliverable(stamp) { return lifecycle.checkDelivery(stamp).status === "allow"; },
-    deny(input: ReplicaDenyInput, options?: { deferErase?: boolean }) {
-      if (options?.deferErase === true && input.reason !== "sign_out") {
-        throw new TypeError("Deferred erase is only available for sign-out.");
-      }
-      visibleStamp = undefined;
-      visiblePrincipalHash = undefined;
-      checkedGate = undefined;
-      return (async (): Promise<ReplicaDenyOutcome & { resumeToken?: ProfileReplicaDeferredToken }> => {
-        try {
-          const gate = await fileGate();
-          const snapshot = await gate.readGateSnapshot(profileDir);
-          const precomputed = snapshot === undefined ? undefined : {
-            salt: snapshot.salt, principalHash: await gate.principalHashOf(snapshot.salt, input.principal),
-          };
-          return await profileSection(async () => {
-            const result = await gate.denyGate(profileDir, input,
-              async (principalHash) => collectIntents(principalHash, precomputed?.salt ?? ""),
-              precomputed, options);
-            if (result.status !== "denied" || options?.deferErase !== true) return result;
-            const resumeToken = await gate.deferredGateToken(profileDir);
-            if (resumeToken === null || resumeToken.deniedEpoch !== result.lifecycleEpoch) {
-              return { status: "unguarded", code: "gate_unavailable" };
-            }
-            return { ...result, resumeToken };
-          });
-        } catch (error) {
-          return { status: "unguarded", code: typeof error === "object" && error !== null &&
-            "code" in error && typeof error.code === "string" ? error.code : "gate_unavailable" };
-        }
-      })();
-    },
+    deny,
     deferredErase() {
       return profileSection(async () => (await fileGate()).deferredGateToken(profileDir));
     },
@@ -1380,93 +2206,506 @@ export function createSqliteReplicaStorage(
       await profileSection(async () => (await fileGate()).resumeDeferredGate(profileDir, token));
       return lifecycle.erasePending({ signal });
     },
+    async preflightLogout({ principal, discardLocalChanges = false }) {
+      return profileSection(async () => {
+        const marker = await readLogoutMarker(join(profileDir, REPLICA_LOGOUT_PENDING_FILE));
+        const gate = await fileGate();
+        const { read, corrupt } = await readLogoutState(gate);
+        const state = read?.state;
+        let otherAccount = false;
+        if (state !== undefined) {
+          const hash = await gate.principalHashOf(state.salt, principal);
+          otherAccount = gateOwnedByAnother(state, hash);
+          if (marker?.v === 1 && marker.principalHash !== hash) throw gated("principal_mismatch");
+        }
+        // Another account's gate: only the profile's legacy mirror is inspected, listed or approved.
+        const report = await inspectLayout(state !== undefined, undefined, otherAccount);
+        assertSupportedProfileLayout(report);
+        if (!discardLocalChanges && (report.unknownPaths.length > 0 || (corrupt && !otherAccount) ||
+            (!otherAccount && (state === undefined || (state.principalHash === null && !state.eraseDeferred)) &&
+              await hasOrphanPending(profileDir)))) {
+          throw localChangesRefusal(report.unknownPaths);
+        }
+        return report;
+      });
+    },
+    async prepareLogoutPending({ principal, approval, discardLocalChanges = false, remotePending }) {
+      const gate = await fileGate();
+      return profileSection(async () => {
+        const path = join(profileDir, REPLICA_LOGOUT_PENDING_FILE);
+        const previous = await readLogoutMarker(path);
+        const { read, corrupt: corruptGate } = await readLogoutState(gate);
+        let state = read?.state;
+        const principalHash = state === undefined ? undefined : await gate.principalHashOf(state.salt, principal);
+        const otherAccount = state !== undefined && gateOwnedByAnother(state, principalHash!);
+        let report = await inspectLayout(state !== undefined, undefined, otherAccount);
+        assertSupportedProfileLayout(report);
+        // The approval is the inventory the caller displayed; it must match exactly.
+        const assertApproved = (current: ProfileReplicaPreflight) => {
+          assertApprovedInventory(current, approval);
+          if (approval.knownLegacyReplicas !== current.knownLegacyReplicas ||
+              JSON.stringify(approval.unknownPaths) !== JSON.stringify(current.unknownPaths) ||
+              JSON.stringify(approval.unknownLegacyPaths) !== JSON.stringify(current.unknownLegacyPaths)) {
+            throw localChangesRefusal(current.unknownPaths);
+          }
+        };
+        assertApproved(report);
+        if (otherAccount) {
+          // "Logout by another account": no marker and no denial of the active account's gate.
+          if (previous !== null) throw gated("principal_mismatch");
+          if (!discardLocalChanges && report.unknownPaths.length > 0) throw localChangesRefusal(report.unknownPaths);
+          return null;
+        }
+        if (!discardLocalChanges && (report.unknownPaths.length > 0 || corruptGate ||
+            ((state === undefined || (state.principalHash === null && !state.eraseDeferred)) &&
+              await hasOrphanPending(profileDir)))) {
+          throw localChangesRefusal(report.unknownPaths);
+        }
+        if (previous !== null) {
+          // An existing marker is returned unchanged (apart from the one-time v1 binding)
+          // or refused; prepareLogoutPending never rewrites it.
+          if (previous.principalDigest !== logoutPrincipalDigest(principal)) throw gated("principal_mismatch");
+          // The marker has no original corrupt-gate identity: never unlink a file
+          // first observed only after that marker was committed.
+          if (corruptGate) throw gated("gate_unavailable");
+          let current: ProfileReplicaLogoutPending = previous;
+          if (previous.v === 2) {
+            if (read !== undefined) throw gated("stamp_stale");
+          } else if (read === undefined || previous.incarnation !== read.state.incarnation) {
+            throw gated("stamp_stale");
+          } else if (previous.v === 3) {
+            if (read.floorLagging || read.state.lifecycleEpoch !== previous.lifecycleEpoch ||
+                read.state.principalHash !== null || read.state.eraseDeferred) throw gated("stamp_stale");
+          } else {
+            if (previous.principalHash !== principalHash) throw gated("principal_mismatch");
+            current = (await validateV1(gate, path, previous, read, { active: true, acceptLagging: true })).marker;
+          }
+          assertApprovedInventory(report, {
+            unknownEntries: current.approvedUnknown, knownRoots: current.knownRoots,
+            knownEntries: current.knownEntries, missingDatabases: current.missingDatabases,
+          });
+          if (current.remotePending !== remotePending || current.remoteAbandoned) {
+            throw gated("gate_unavailable");
+          }
+          return current;
+        }
+        if (state?.eraseDeferred) throw gated("stamp_stale");
+        if (read?.floorLagging) {
+          // An interrupted deny without a marker: complete it here as an ordinary deny (deferral
+          // comes only from a durable marker), re-inspect, then fence with a v3 marker below.
+          if (state!.principalHash === null) {
+            state = await gate.advanceInactiveGate(profileDir);
+          } else {
+            const salt = state!.salt;
+            const denied = await gate.denyGate(profileDir, { reason: "sign_out", principal },
+              (hash) => collectIntents(hash, salt), { salt, principalHash: principalHash! });
+            if (denied.status !== "denied") throw gated("gate_unavailable");
+            state = (await gate.readGateSnapshot(profileDir))!;
+          }
+          report = await inspectLayout(true);
+          assertSupportedProfileLayout(report);
+          assertApproved(report);
+        }
+        if (state === undefined && report.knownRoots.length === 0 && !corruptGate) return null;
+        if (state !== undefined && state.principalHash === null && !state.eraseDeferred &&
+            report.knownRoots.length === 0 && state.intents.length === 0) return null;
+        const remoteState: ProfileReplicaRemoteLogoutState = remotePending ? { remotePending: true } : {};
+        const approvalFields = {
+          principalDigest: logoutPrincipalDigest(principal),
+          approvalSalt: randomBytes(16).toString("hex"),
+          approvedUnknown: discardLocalChanges ? report.unknownEntries : [],
+          knownRoots: report.knownRoots, knownEntries: report.knownEntries,
+          missingDatabases: report.missingDatabases,
+          ...(discardLocalChanges ? { discardLocalChanges: true as const } : {}),
+          ...remoteState,
+        };
+        let marker: ProfileReplicaLogoutPending;
+        if (state === undefined) {
+          marker = { v: 2, scope: "orphan_profile", nonce: randomBytes(16).toString("hex"),
+            ...approvalFields };
+        } else if (state.principalHash === null) {
+          marker = { v: 3, scope: "inactive_gate", incarnation: state.incarnation,
+            lifecycleEpoch: state.lifecycleEpoch, ...approvalFields };
+        } else {
+          // The logout principal's own active gate always gets a v1 marker, even with no
+          // roots or intents: recovery denies it before credentials go.
+          marker = { v: 1, incarnation: state.incarnation,
+            lifecycleEpoch: state.lifecycleEpoch, principalHash: principalHash!, ...approvalFields };
+        }
+        await writeJsonAtomic(path, marker, options.dirSync);
+        visibleStamp = undefined;
+        visiblePrincipalHash = undefined;
+        checkedGate = undefined;
+        if (corruptGate) await removeCorruptOrphanGate(gate);
+        return marker;
+      });
+    },
+    async completeRemoteLogout({ principal }) {
+      return profileSection(async () => {
+        const path = join(profileDir, REPLICA_LOGOUT_PENDING_FILE);
+        const marker = await readLogoutMarker(path);
+        // Only a remote-pending marker transitions; abandoned or cleanup-ready refuses unchanged.
+        if (marker === null || marker.remotePending !== true) throw gated("gate_unavailable");
+        const checked = await validatedRemoteMarker(path, marker, principal, { active: false });
+        const { remotePending: _, ...complete } = checked.marker;
+        await writeJsonAtomic(path, complete, options.dirSync);
+        return complete;
+      });
+    },
+    async remotePendingLogout({ principal }) {
+      return profileSection(async () => {
+        const path = join(profileDir, REPLICA_LOGOUT_PENDING_FILE);
+        const marker = await readLogoutMarker(path);
+        if (marker === null || marker.remotePending !== true) return false;
+        await validatedRemoteMarker(path, marker, principal, { active: false });
+        return true;
+      });
+    },
+    async abandonRemoteLogout({ principal, approval, discardLocalChanges = false }) {
+      return profileSection(async () => {
+        const path = join(profileDir, REPLICA_LOGOUT_PENDING_FILE);
+        const marker = await readLogoutMarker(path);
+        if (marker === null || marker.remotePending !== true) throw gated("gate_unavailable");
+        if (marker.principalDigest !== logoutPrincipalDigest(principal)) throw gated("principal_mismatch");
+        // Inventory and approval are compared before any gate completion or marker rewrite.
+        const report = await currentLayout();
+        if (storedInventoryChanged(marker, report)) throw changedInventoryRefusal(marker, principal, report);
+        assertApprovedInventory(report, approval);
+        if (approval.knownLegacyReplicas !== report.knownLegacyReplicas ||
+            JSON.stringify(approval.unknownPaths) !== JSON.stringify(report.unknownPaths) ||
+            JSON.stringify(approval.unknownLegacyPaths) !== JSON.stringify(report.unknownLegacyPaths) ||
+            (!discardLocalChanges && report.unknownPaths.length > 0)) {
+          throw localChangesRefusal(report.unknownPaths);
+        }
+        // Exactly one v1 classification: deferred-denied (bound now if a crash left it
+        // unbound), active and never started (abandoned without a deny; recovery's ordinary
+        // deny fences it), or floor-lagging (completed as the deferred deny it was, then bound).
+        const checked = await validatedRemoteMarker(path, marker, principal, { active: true, deny: "deferred" });
+        return commitPlainAbandon(path, checked.marker, report, discardLocalChanges);
+      });
+    },
+    async approveChangedPlainLogout({ principal, approval, discardLocalChanges, inventoryApprovalToken: token }) {
+      return profileSection(async () => {
+        const path = join(profileDir, REPLICA_LOGOUT_PENDING_FILE);
+        const marker = await readLogoutMarker(path);
+        if (marker === null || marker.remotePending !== true) throw gated("gate_unavailable");
+        if (marker.principalDigest !== logoutPrincipalDigest(principal)) throw gated("principal_mismatch");
+        const report = await currentLayout();
+        if (!storedInventoryChanged(marker, report)) throw gated("gate_unavailable");
+        const entries = approvalEntries(report);
+        if (discardLocalChanges !== true || typeof token !== "string" ||
+            !/^[0-9a-f]{32}$/.test(token) || token !== inventoryApprovalToken(marker, principal, entries)) {
+          throw changedInventoryRefusal(marker, principal, report, entries);
+        }
+        assertApprovedInventory(report, approval);
+        if (approval.knownLegacyReplicas !== report.knownLegacyReplicas ||
+            JSON.stringify(approval.unknownPaths) !== JSON.stringify(report.unknownPaths) ||
+            JSON.stringify(approval.unknownLegacyPaths) !== JSON.stringify(report.unknownLegacyPaths)) {
+          throw changedInventoryRefusal(marker, principal, report, entries);
+        }
+        const checked = await validatedRemoteMarker(path, marker, principal, { active: true, deny: "deferred" });
+        return commitPlainAbandon(path, checked.marker, report, true);
+      });
+    },
+    async reapproveLogoutPending({ principal, approval }) {
+      return profileSection(async () => {
+        const path = join(profileDir, REPLICA_LOGOUT_PENDING_FILE);
+        const marker = await readLogoutMarker(path);
+        if (marker === null || marker.remotePending) throw gated("gate_unavailable");
+        if (marker.principalDigest !== logoutPrincipalDigest(principal)) throw gated("principal_mismatch");
+        const report = await currentLayout();
+        assertApprovedInventory(report, approval);
+        if (JSON.stringify(report.unknownPaths) !== JSON.stringify(approval.unknownPaths)) {
+          throw localChangesRefusal(report.unknownPaths);
+        }
+        const checked = await validatedRemoteMarker(path, marker, principal, { active: true });
+        // Previously approved paths may have been removed by interrupted cleanup;
+        // only the fresh list is authorized on this retry.
+        const amended: ProfileReplicaLogoutPending = {
+          ...checked.marker, approvedUnknown: report.unknownEntries,
+          knownRoots: report.knownRoots, knownEntries: report.knownEntries,
+          missingDatabases: report.missingDatabases,
+          ...(report.unknownPaths.length > 0 ? { discardLocalChanges: true as const } : {}),
+        };
+        await writeJsonAtomic(path, amended, options.dirSync);
+        return amended;
+      });
+    },
+    async recoverLogoutPending({ signal, clearCredentials, eraseLegacyReplicas }) {
+      const path = join(profileDir, REPLICA_LOGOUT_PENDING_FILE);
+      const failure = async (error: unknown): Promise<ReplicaEraseReport> => ({
+        erased: [],
+        failed: [{ id: "logout", code: typeof error === "object" && error !== null &&
+          "reportCode" in error && typeof error.reportCode === "string"
+          ? error.reportCode
+          : typeof error === "object" && error !== null && "code" in error && typeof error.code === "string"
+            ? error.code === "REPLICA_GATED" && "gate" in error && typeof error.gate === "string"
+              ? error.gate : error.code
+            : "STORAGE_ERROR" }],
+        remaining: Math.max(1, (await lifecycle.pendingPurge().catch(() => [])).length),
+      });
+      try {
+        const prepared = await profileSection(async (): Promise<
+          { marker: ProfileReplicaLogoutPending } | { report: ReplicaEraseReport }
+        > => {
+          const marker = await readLogoutMarker(path);
+          if (marker === null) {
+            const state = await (await fileGate()).readGateSnapshot(profileDir);
+            return { report: { erased: [], failed: [], remaining: state?.intents.length ?? 0 } };
+          }
+          signal.throwIfAborted();
+          if (marker.remotePending) throw gated("gate_unavailable");
+          const gate = await fileGate();
+          const { read, corrupt } = await readLogoutState(gate);
+          if (corrupt) throw gated("gate_unavailable");
+          let current: ProfileReplicaLogoutPending = marker;
+          let state = read?.state;
+          if (marker.v === 2) {
+            if (read !== undefined) throw gated("stamp_stale");
+          } else if (read === undefined || read.state.incarnation !== marker.incarnation) {
+            throw gated("stamp_stale");
+          } else if (marker.v === 3) {
+            if (read.floorLagging || read.state.principalHash !== null || read.state.eraseDeferred ||
+                read.state.lifecycleEpoch !== marker.lifecycleEpoch) throw gated("stamp_stale");
+          } else {
+            // Before credentials go, an active (or interrupted) v1 gate gets its full ordinary
+            // denial, bound in this section; an already-denied one is checked by `deniedEpoch`.
+            const checked = await validateV1(gate, path, marker, read,
+              { active: true, deny: "ordinary", denyActive: true });
+            current = checked.marker;
+            state = checked.state;
+          }
+          await clearCredentials();
+          for (const file of ["session.json", "key.json"]) {
+            try { await lstat(join(profileDir, file)); throw gated("gate_unavailable"); }
+            catch (error) { if (!isNotFound(error)) throw error; }
+          }
+          await (options.dirSync ?? fsyncDir)(profileDir);
+          const report = await inspectLayout(state !== undefined, marker);
+          assertApprovedInventory(report, { unknownEntries: marker.approvedUnknown,
+            knownRoots: marker.knownRoots, knownEntries: marker.knownEntries,
+            missingDatabases: marker.missingDatabases }, true);
+          if (!marker.discardLocalChanges && report.unknownEntries.length > 0) {
+            throw localChangesRefusal(report.unknownPaths);
+          }
+          if (current.v === 1 && state?.eraseDeferred) {
+            await gate.resumeDeferredGate(profileDir, {
+              deniedEpoch: current.deniedEpoch!, principalHash: current.principalHash,
+            });
+          }
+          await eraseLegacyReplicas({ discardLocalChanges: marker.discardLocalChanges === true,
+            approvedUnknown: marker.approvedUnknown, knownRoots: marker.knownRoots,
+            knownEntries: marker.knownEntries, missingDatabases: marker.missingDatabases });
+          try { await lstat(join(profileDir, "replicas")); throw gated("gate_unavailable"); }
+          catch (error) { if (!isNotFound(error)) throw error; }
+          return { marker: current };
+        });
+        if ("report" in prepared) return prepared.report;
+        const marker = prepared.marker;
+        let erased: ReplicaEraseReport = { erased: [], failed: [], remaining: 0 };
+        if (marker.v !== 2) {
+          erased = await eraseGateIntents({ signal }, marker);
+          if (erased.failed.length > 0 || erased.remaining > 0) return erased;
+        }
+        await profileSection(async () => {
+          const pending = await readLogoutMarker(path);
+          if (pending === null || pending.remotePending || JSON.stringify(pending) !== JSON.stringify(marker)) {
+            throw gated("stamp_stale");
+          }
+          const gate = await fileGate();
+          const state = await gate.readGateSnapshot(profileDir);
+          if (marker.v === 2 && state !== undefined) throw gated("stamp_stale");
+          const report = await inspectLayout(state !== undefined, marker);
+          assertApprovedInventory(report, { unknownEntries: marker.approvedUnknown,
+            knownRoots: marker.knownRoots, knownEntries: marker.knownEntries,
+            missingDatabases: marker.missingDatabases }, true);
+          await eraseApprovedUnknown(profileDir, marker, "replication", diagnosticFiles);
+          await eraseKnownFlagResidue(profileDir, marker, diagnosticFiles);
+          const finalReport = await inspectLayout(state !== undefined, marker);
+          assertApprovedInventory(finalReport, { unknownEntries: marker.approvedUnknown,
+            knownRoots: marker.knownRoots, knownEntries: marker.knownEntries,
+            missingDatabases: marker.missingDatabases }, true);
+          if (finalReport.unknownPaths.length > 0) throw localChangesRefusal(finalReport.unknownPaths);
+          if (finalReport.knownRoots.length > 0) throw gated("gate_unavailable");
+          await (options.dirSync ?? fsyncDir)(profileDir);
+          await rm(path);
+          await (options.dirSync ?? fsyncDir)(profileDir);
+        });
+        return erased;
+      } catch (error) {
+        return failure(error);
+      }
+    },
     async pendingPurge() {
       const gate = await fileGate();
       return (await gate.readGateSnapshot(profileDir))?.intents ?? [];
     },
-    async erasePending({ signal }): Promise<ReplicaEraseReport> {
-      const gate = await fileGate();
-      const erased: string[] = [];
-      const failed: Array<{ id: string; code: string }> = [];
-      const intents = await lifecycle.pendingPurge();
-      const held = await profileSection(() => gate.readGateSnapshot(profileDir));
-      if (held?.eraseDeferred) return { erased, failed, remaining: held.intents.length };
-      for (const intent of intents) {
-        signal.throwIfAborted();
-        try {
-          await profileSection(async () => {
-            const state = await gate.readGateSnapshot(profileDir);
-            if (state?.eraseDeferred) return;
-            if (!state?.intents.some((queued) => queued.id === intent.id)) return;
-            let idDir: string | undefined;
-            for (const dir of await identityDirs()) {
-              const identity = identityRecordOf(await readJsonFile(join(dir, "identity.json")));
-              if (identity === undefined) throw new ReplicaStorageError("STORAGE_ERROR", `Missing identity at ${dir}.`);
-              const hash = await gate.identityHashOf(state.salt, replicationIdentityKey(identity));
-              if (intent.kind === "pending" ? hash === intent.identityKeyHash : intent.partitionId.startsWith(`${hash}:`)) {
-                idDir = dir;
-                break;
-              }
+    erasePending({ signal }): Promise<ReplicaEraseReport> {
+      return eraseGateIntents({ signal });
+    },
+  };
+
+  async function eraseGateIntents(
+    { signal }: { signal: AbortSignal }, marker?: ProfileReplicaLogoutPending,
+  ): Promise<ReplicaEraseReport> {
+    const gate = await fileGate();
+    const erased: string[] = [];
+    const failed: Array<{ id: string; code: string }> = [];
+    const intents = await lifecycle.pendingPurge();
+    try {
+      if (marker === undefined) assertLogoutClear(options.logoutPendingFile);
+      else if (marker.remotePending || await readLogoutMarker(join(profileDir, REPLICA_LOGOUT_PENDING_FILE)) === null) {
+        throw gated("gate_unavailable");
+      }
+    } catch {
+      return { erased, failed: [{ id: "logout", code: "REPLICA_GATED" }], remaining: Math.max(1, intents.length) };
+    }
+    const held = await profileSection(() => gate.readGateSnapshot(profileDir));
+    if (held?.eraseDeferred) return { erased, failed, remaining: held.intents.length, deferred: true };
+    for (const intent of intents) {
+      signal.throwIfAborted();
+      try {
+        await profileSection(async () => {
+          if (marker === undefined) assertLogoutClear(options.logoutPendingFile);
+          else {
+            const pending = await readLogoutMarker(join(profileDir, REPLICA_LOGOUT_PENDING_FILE));
+            if (pending === null || pending.remotePending || JSON.stringify(pending) !== JSON.stringify(marker)) {
+              throw gated("gate_unavailable");
             }
-            if (intent.kind === "pending") {
-              if (intent.id !== `pending:${intent.identityKeyHash}`) throw gated("gate_unavailable");
-              if (idDir !== undefined) {
-                await rm(join(idDir, "pending.json"), { force: true });
-                await rm(join(idDir, "device.jwk"), { force: true });
-                await fsyncDir(idDir);
+            assertApprovedInventory(await inspectLayout(true), {
+              unknownEntries: marker.approvedUnknown, knownRoots: marker.knownRoots,
+              knownEntries: marker.knownEntries, missingDatabases: marker.missingDatabases,
+            }, true);
+          }
+          const state = await gate.readGateSnapshot(profileDir);
+          if (state?.eraseDeferred) return;
+          if (!state?.intents.some((queued) => queued.id === intent.id)) return;
+          let idDir: string | undefined;
+          for (const dir of await identityDirs()) {
+            const identity = identityRecordOf(await readJsonFile(join(dir, "identity.json")));
+            if (identity === undefined) throw new ReplicaStorageError("STORAGE_ERROR", `Missing identity at ${dir}.`);
+            const hash = await gate.identityHashOf(state.salt, replicationIdentityKey(identity));
+            if (intent.kind === "pending" ? hash === intent.identityKeyHash : intent.partitionId.startsWith(`${hash}:`)) {
+              idDir = dir;
+              break;
+            }
+          }
+          if (intent.kind === "pending") {
+            if (intent.id !== `pending:${intent.identityKeyHash}`) throw gated("gate_unavailable");
+            if (idDir !== undefined) {
+              for (const name of ["pending.json", "device.jwk"]) {
+                const file = join(idDir, name);
+                let info;
+                try { info = await lstat(file, { bigint: true }); }
+                catch (error) { if (isNotFound(error)) continue; throw error; }
+                if (!info.isFile()) throw gated("gate_unavailable");
+                if (marker !== undefined) {
+                  const relative = `replication/${basename(idDir)}/${name}`;
+                  const expected = [...marker.knownEntries, ...marker.approvedUnknown].find(
+                    (item) => item.path === relative);
+                  if (expected?.kind !== "file" || expected.dev !== info.dev.toString() ||
+                      expected.ino !== info.ino.toString()) throw localChangesRefusal([relative]);
+                }
+                await rm(file);
               }
-            } else {
-              if (!/^[0-9a-f]{64}:[a-z2-7]{26}$/.test(intent.partitionId) || intent.id !== intent.partitionId) {
-                throw gated("gate_unavailable");
+              await fsyncDir(idDir);
+            }
+          } else {
+            if (!/^[0-9a-f]{64}:[a-z2-7]{26}$/.test(intent.partitionId) || intent.id !== intent.partitionId) {
+              throw gated("gate_unavailable");
+            }
+            if (idDir !== undefined) {
+              const replicaDir = join(idDir, "replicas", intent.partitionId.slice(65));
+              // A replaced identity or replicas directory refuses; the intent stays queued.
+              let dirInfo;
+              if (await realDirectoryExists(join(idDir, "replicas"))) {
+                try { dirInfo = await lstat(replicaDir, { bigint: true }); }
+                catch (error) { if (!isNotFound(error)) throw error; }
               }
-              if (idDir !== undefined) {
-                const replicaDir = join(idDir, "replicas", intent.partitionId.slice(65));
-                // A replaced identity, replicas or replica directory refuses; the intent stays queued.
-                if (await realDirectoryExists(idDir) && await realDirectoryExists(join(idDir, "replicas")) &&
-                    await realDirectoryExists(replicaDir)) {
-                  const [replica, sqlite] = (await Promise.all([
-                    // @ts-ignore — replica dist may not exist during node-sdk DTS build.
-                    import("@tinycloud/replica"),
-                    // @ts-ignore — same as above.
-                    import("@tinycloud/replica/sqlite"),
-                  ])) as [ReplicaRuntime, SqliteRuntime];
+              if (dirInfo !== undefined) {
+                const relative = `replication/${basename(idDir)}/replicas/${basename(replicaDir)}`;
+                const expectedRoot = marker?.knownRoots.find((item) => item.path === relative);
+                if (!dirInfo.isDirectory() || (marker !== undefined &&
+                    (expectedRoot?.dev !== dirInfo.dev.toString() ||
+                     expectedRoot.ino !== dirInfo.ino.toString()))) throw localChangesRefusal([relative]);
+                const approvedUnknown = marker?.approvedUnknown.filter(
+                  (item) => item.path.startsWith(`${relative}/`)).map(
+                  (item) => ({ ...item, path: item.path.slice(relative.length + 1) }));
+                const expectedKnown = marker?.knownEntries.filter(
+                  (item) => item.path.startsWith(`${relative}/`)).map(
+                  (item) => ({ ...item, path: item.path.slice(relative.length + 1) }));
+                // @ts-ignore — optional replica dependency is checked by replica-contract.test.ts.
+                const sqlite = await import("@tinycloud/replica/sqlite") as SqliteRuntime;
+                if (!(await pathExists(join(replicaDir, "replica.db")))) {
+                  const layout = await sqlite.inspectSqliteReplicaLayout(replicaDir, { allowAdapterFence: true });
+                  if (!layout.unknownPaths.includes("replica.db") ||
+                      layout.unknownEntries.some((item) => item.path === "replica.db") ||
+                      layout.unknownPaths.some((path) =>
+                        path !== "replica.db" && !approvedUnknown?.some((item) => item.path === path))) {
+                    throw localChangesRefusal([relative]);
+                  }
+                  // A formerly approved database inode may already be gone after a crash.
+                  // Only the still-present, re-inventoried files are passed to exact removal.
+                  await sqlite.removeSqliteReplicaLayout(replicaDir, { approvedUnknown,
+                    expectedKnown: layout.knownEntries, expectedRoot, allowAdapterFence: true,
+                    allowMissingDatabase: true });
+                } else {
                   let store: SqliteReplicaStore | undefined;
                   try {
                     store = await sqlite.SqliteReplicaStore.open(replicaDir, { create: false, guard: profileSection });
                     const row = await store.open();
                     if (row !== null) {
                       const lease = await store.acquireSyncLease(SYNC_LEASE_TTL_MS);
-                      if (lease === null) throw new replica.ReplicaError(replica.ReplicaErrorCode.BUSY, "The partition is busy.");
+                      if (lease === null) throw gated("gate_unavailable");
                       try {
                         if (row.revoked === null) await store.reset(lease, "purged");
-                        await store.destroy(lease);
+                        let deletionKnown = expectedKnown;
+                        if (marker !== undefined) {
+                          // Opening/resetting SQLite may create its own WAL sidecars after
+                          // preflight. The database and every other known inode stay pinned.
+                          const current = await sqlite.inspectSqliteReplicaLayout(replicaDir, {
+                            allowAdapterFence: true,
+                          });
+                          if (current.rootIdentity.dev !== expectedRoot?.dev ||
+                              current.rootIdentity.ino !== expectedRoot.ino) throw localChangesRefusal([relative]);
+                          const approved = new Map(expectedKnown?.map((entry) => [entry.path, entry]));
+                          for (const entry of current.knownEntries) {
+                            const prior = approved.get(entry.path);
+                            if (prior?.kind === entry.kind && prior.dev === entry.dev && prior.ino === entry.ino) continue;
+                            if (entry.kind !== "file" ||
+                                !["replica.db-wal", "replica.db-shm", "replica.db-journal"].includes(entry.path)) {
+                              throw localChangesRefusal([`${relative}/${entry.path}`]);
+                            }
+                          }
+                          deletionKnown = current.knownEntries;
+                        }
+                        await store.destroy(lease, { approvedUnknown, expectedKnown: deletionKnown,
+                          expectedRoot, allowAdapterFence: true });
                       } finally {
                         await store.releaseLease(lease).catch(() => undefined);
                       }
                     } else {
-                      await removeLeftoverReplicaDir(replicaDir);
+                      await sqlite.removeSqliteReplicaLayout(replicaDir, { approvedUnknown,
+                        expectedKnown, expectedRoot, allowAdapterFence: true });
                     }
-                  } catch (error) {
-                    if (!replica.isReplicaError(error, replica.ReplicaErrorCode.NOT_FOUND)) throw error;
-                    await removeLeftoverReplicaDir(replicaDir);
                   } finally {
                     await store?.close().catch(() => undefined);
                   }
-                  await fsyncDir(join(idDir, "replicas"));
                 }
+                await fsyncDir(join(idDir, "replicas"));
               }
             }
-            await gate.clearGateIntent(profileDir, intent.id);
-            erased.push(intent.id);
-          });
-        } catch (error) {
-          failed.push({ id: intent.id, code: typeof error === "object" && error !== null &&
-            "code" in error && typeof error.code === "string" ? error.code : "STORAGE_ERROR" });
-        }
+          }
+          await gate.clearGateIntent(profileDir, intent.id);
+          erased.push(intent.id);
+        });
+      } catch (error) {
+        failed.push({ id: intent.id, code: typeof error === "object" && error !== null &&
+          "code" in error && typeof error.code === "string" ? error.code : "STORAGE_ERROR" });
       }
-      return { erased, failed, remaining: (await lifecycle.pendingPurge()).length };
-    },
-  };
+    }
+    return { erased, failed, remaining: (await lifecycle.pendingPurge()).length };
+  }
 
   async function openHandle(spec: KVReplicaSpec): Promise<KVReplicaHandle> {
     // Lazy by contract (§11.1): only the Node entry reaches this module,
@@ -1631,6 +2870,7 @@ export function createSqliteReplicaStorage(
   }
 
   async function inspectStatus(spec: KVReplicaSpec, { signal }: { signal: AbortSignal }): Promise<LocalReplicaStatus | undefined> {
+    assertLogoutClear(options.logoutPendingFile);
     const checkAbort = () => {
       if (signal.aborted) throw signal.reason ?? Object.assign(new Error("Replica status inspection was aborted"), { code: "ABORTED" });
     };
@@ -1673,7 +2913,12 @@ export function createSqliteReplicaStorage(
       throw new ReplicaStorageError("STORAGE_ERROR", `The replica at ${replicaDir} does not match the requested identity, space, prefix, or device.`);
     }
     checkAbort();
+    assertLogoutClear(options.logoutPendingFile);
+    // CONTRACT.md §2: pending while a deferred denial holds the profile or any intent remains.
+    const gateState = await (await fileGate()).readGateSnapshot(profileDir);
+    const purgePending = gateState !== undefined && (gateState.eraseDeferred || gateState.intents.length > 0);
     return {
+      purgePending,
       coverage: status.coverage,
       lastSyncAt: status.lastSyncAt,
       syncedThroughEpoch,
@@ -1720,6 +2965,23 @@ export function createSqliteReplicaStorage(
     if (target.sessionDeviceDid !== undefined) deviceDids.push(target.sessionDeviceDid);
     const devices = [...new Map(deviceDids.map((did) => [principalOf(did), did])).values()];
 
+    const removeLeftover = async (replicaDir: string): Promise<void> => {
+      const layout = await sqlite.inspectSqliteReplicaLayout(replicaDir, { allowAdapterFence: true });
+      const missingDatabase = !(await pathExists(join(replicaDir, "replica.db")));
+      const unexpected = layout.unknownPaths.filter((path) => path !== "replica.db");
+      if (unexpected.length !== 0 ||
+          layout.unknownPaths.includes("replica.db") !== missingDatabase ||
+          layout.unknownEntries.some((item) => item.path === "replica.db")) {
+        // Targeted purge has no discard approval: anything but the source layout stays.
+        throw new ReplicaStorageError("STORAGE_ERROR",
+          `Refusing to remove unexpected replica path ${join(replicaDir, unexpected[0] ?? "replica.db")}.`);
+      }
+      await sqlite.removeSqliteReplicaLayout(replicaDir, {
+        expectedRoot: layout.rootIdentity, expectedKnown: layout.knownEntries,
+        allowAdapterFence: true, allowMissingDatabase: missingDatabase,
+      });
+    };
+
     let firstError: unknown;
     for (const deviceDid of devices) {
       const replicaDir = join(idDir, "replicas", replicaHashOf(target.prefix, deviceDid));
@@ -1730,8 +2992,7 @@ export function createSqliteReplicaStorage(
           store = await sqlite.SqliteReplicaStore.open(replicaDir, { create: false, guard: profileSection });
         } catch (error) {
           if (replica.isReplicaError(error, replica.ReplicaErrorCode.NOT_FOUND)) {
-            // A leftover directory without a database is removed nonrecursively.
-            await profileSection(() => removeLeftoverReplicaDir(replicaDir));
+            await removeLeftover(replicaDir);
             continue;
           }
           throw error;
@@ -1740,7 +3001,7 @@ export function createSqliteReplicaStorage(
           const state = await store.open();
           if (state === null) {
             await store.close().catch(() => undefined);
-            await profileSection(() => removeLeftoverReplicaDir(replicaDir));
+            await removeLeftover(replicaDir);
             continue;
           }
           const lease = await store.acquireSyncLease(SYNC_LEASE_TTL_MS);
@@ -1769,7 +3030,7 @@ export function createSqliteReplicaStorage(
             if (state.revoked === null) {
               await store.reset(lease, "purged");
             }
-            await store.destroy(lease);
+            await store.destroy(lease, { allowAdapterFence: true });
           } finally {
             await store.releaseLease(lease).catch(() => undefined);
           }
@@ -1800,19 +3061,31 @@ export function createSqliteReplicaStorage(
         guard,
         opts?.stamp,
         options.dirSync,
+        options.logoutPendingFile,
       );
     },
   };
 }
 
-/** CLI-facing profile lifecycle; callers supply their existing nonreentrant profile lock. */
+/**
+ * CLI-facing profile lifecycle. `guard` is the same profile lock as CLI
+ * session/key writes and MUST be reentrant within one async call chain: the CLI
+ * calls this facade while it already holds that lock.
+ */
 export function createProfileReplicaPurge(options: {
   profileDir: string;
   guard: MutationGuard;
+  /** Exact regular diagnostics file names the CLI writes directly under `replication/`. */
+  diagnosticFiles?: readonly string[];
+  /** Observe directory-fsync ordering in tests; production uses fsyncDir. @internal */
+  dirSync?: DirSync;
 }): ProfileReplicaPurge {
   return createSqliteReplicaStorage({
     dir: join(options.profileDir, "replication"),
     guard: options.guard,
+    dirSync: options.dirSync,
+    logoutPendingFile: join(options.profileDir, REPLICA_LOGOUT_PENDING_FILE),
+    diagnosticFiles: options.diagnosticFiles,
   }).lifecycle;
 }
 
@@ -1827,6 +3100,9 @@ export function sqliteReplicaStorage(options: {
   dir: string;
   guard?: MutationGuard;
   gateFile?: string;
+  logoutPendingFile?: string;
+  /** CLI opt-in; see `SqliteReplicaStorageOptions.diagnosticFiles`. */
+  diagnosticFiles?: readonly string[];
 }): KVReplicaStorage {
   return createSqliteReplicaStorage(options);
 }

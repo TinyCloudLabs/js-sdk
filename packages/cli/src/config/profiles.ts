@@ -26,6 +26,7 @@ import {
 import {
   readJson,
   writeJson,
+  writeJsonDurable,
   fileExists,
   ensureDir,
   listDirs,
@@ -132,6 +133,14 @@ export class ProfileManager {
     });
   }
 
+  /** Publish explicit logout provenance (or its verified-login clear) durably under the profile lock. */
+  static async setProfileDurable(name: string, data: ProfileConfig): Promise<void> {
+    await ProfileManager.withLock(name, async () => {
+      await refuseWriteToDeletedProfile(name);
+      await writeJsonDurable(join(await ProfileManager.ensureProfileDir(name), "profile.json"), data);
+    });
+  }
+
   /** Removes profile.json under the profile lock (rollback of a profile a failed login created). */
   static async removeProfileConfig(name: string): Promise<void> {
     await ProfileManager.withLock(name, () => rm(join(profilePath(name), "profile.json"), { force: true }));
@@ -210,8 +219,13 @@ export class ProfileManager {
    * Returns the parsed JWK for a profile, or null if no key exists.
    */
   static async getKey(name: string): Promise<object | null> {
-    return withPinnedProfileDirectory(name, (directory) =>
-      directory ? readJson<object>(join(directory, "key.json")) : Promise.resolve(null));
+    return withPinnedProfileDirectory(name, async (directory) => {
+      if (!directory) return null;
+      const profileFile = join(directory, "profile.json");
+      if ((await readJson<ProfileConfig>(profileFile))?.authSignedOut === true) return null;
+      const key = await readJson<object>(join(directory, "key.json"));
+      return (await readJson<ProfileConfig>(profileFile))?.authSignedOut === true ? null : key;
+    });
   }
 
   /**
@@ -237,7 +251,13 @@ export class ProfileManager {
    * Returns the parsed session for a profile, or null if none exists.
    */
   static async getSession(name: string): Promise<object | null> {
-    return readSession<object>(name);
+    return withPinnedProfileDirectory(name, async (directory) => {
+      if (!directory) return null;
+      const profileFile = join(directory, "profile.json");
+      if ((await readJson<ProfileConfig>(profileFile))?.authSignedOut === true) return null;
+      const session = await readSession<object>(name);
+      return (await readJson<ProfileConfig>(profileFile))?.authSignedOut === true ? null : session;
+    });
   }
 
   /**

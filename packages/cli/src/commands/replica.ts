@@ -1,7 +1,7 @@
 import { Command } from "commander";
 import { CLI_NAME } from "@tinycloud/operations/cli-name";
 import { randomBytes } from "node:crypto";
-import { constants as fsConstants, lstatSync } from "node:fs";
+import { constants as fsConstants } from "node:fs";
 import { mkdir, open, readdir, rename, stat, unlink, lstat } from "node:fs/promises";
 import { basename, dirname, join, resolve } from "node:path";
 import { withPinnedReplicaForReset } from "../lib/profile-replicas.js";
@@ -17,7 +17,8 @@ import {
   withPinnedProfileDirectory,
 } from "@tinycloud/operations/state";
 import { ownerSessionLacksProof } from "@tinycloud/operations/profile";
-import type { ReplicationEvent } from "@tinycloud/node-sdk";
+import { assertGateAccess, principalHashOf, readGateSnapshot, restoreSessionStamp } from "@tinycloud/replica/profile-gate";
+import { assertProfileLogoutClear, type ReplicationEvent } from "@tinycloud/node-sdk";
 import {
   assertFolderPrefix,
   Replica,
@@ -40,19 +41,20 @@ import {
 import { SqliteReplicaStore, loadSqlite, type MutationGuard } from "@tinycloud/replica/sqlite";
 
 import { ProfileManager } from "../config/profiles.js";
-import { DEFAULT_PROFILE, ExitCode } from "../config/constants.js";
+import { DEFAULT_PROFILE, ExitCode, type ExitCode as ExitCodeValue } from "../config/constants.js";
 import { CLIError, handleError } from "../output/errors.js";
 import { formatBytes, formatField, formatTable, outputJson, shouldOutputJson } from "../output/formatter.js";
 import { theme } from "../output/theme.js";
 
 /** Replica error → exit code. Mirrors `ExitCode`; see `tc replica --help`. */
-const EXIT_BY_CODE: Record<ReplicaErrorCode, number> = {
+const EXIT_BY_CODE: Record<ReplicaErrorCode, ExitCodeValue> = {
   [ReplicaErrorCode.INVALID_ARGUMENT]: ExitCode.USAGE_ERROR,
   [ReplicaErrorCode.CLOSED]: ExitCode.ERROR,
   [ReplicaErrorCode.BUSY]: ExitCode.ERROR,
   [ReplicaErrorCode.RUNTIME_UNSUPPORTED]: ExitCode.ERROR,
   [ReplicaErrorCode.STORAGE_ERROR]: ExitCode.ERROR,
   [ReplicaErrorCode.STORAGE_FULL]: ExitCode.STORAGE_FULL,
+  [ReplicaErrorCode.STORAGE_BUDGET]: ExitCode.STORAGE_FULL,
   [ReplicaErrorCode.NOT_FOUND]: ExitCode.NOT_FOUND,
   [ReplicaErrorCode.CONFIG_MISMATCH]: ExitCode.USAGE_ERROR,
   [ReplicaErrorCode.NOT_COVERED]: ExitCode.USAGE_ERROR,
@@ -65,6 +67,8 @@ const EXIT_BY_CODE: Record<ReplicaErrorCode, number> = {
   [ReplicaErrorCode.GRANT_NOT_YET_VALID]: ExitCode.PERMISSION_DENIED,
   [ReplicaErrorCode.GRANT_EXPIRED]: ExitCode.PERMISSION_DENIED,
   [ReplicaErrorCode.GRANT_REVOKED]: ExitCode.PERMISSION_DENIED,
+  [ReplicaErrorCode.CONSENT_EXPIRED]: ExitCode.PERMISSION_DENIED,
+  [ReplicaErrorCode.GATED]: ExitCode.PERMISSION_DENIED,
   [ReplicaErrorCode.GRANT_UNAUTHORIZED]: ExitCode.PERMISSION_DENIED,
   [ReplicaErrorCode.RETENTION_GRANT_REFUSED]: ExitCode.PERMISSION_DENIED,
   [ReplicaErrorCode.NETWORK_ERROR]: ExitCode.NETWORK_ERROR,
@@ -96,7 +100,10 @@ const NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 function toCliError(error: unknown): unknown {
   if (!isReplicaError(error)) return error;
   const hint = error.code === ReplicaErrorCode.GRANT_MISSING && typeof error.detail?.hint === "string" ? error.detail.hint : undefined;
-  return new CLIError(error.code, error.message, EXIT_BY_CODE[error.code], hint === undefined ? undefined : { hint });
+  const message = error.code === ReplicaErrorCode.CONSENT_EXPIRED
+    ? `${error.message} Sign in again to renew consent.`
+    : error.message;
+  return new CLIError(error.code, message, EXIT_BY_CODE[error.code], hint === undefined ? undefined : { hint });
 }
 
 async function run(action: () => Promise<void>, needsSqlite = true): Promise<void> {
@@ -254,24 +261,66 @@ async function withOpenReplica<T>(
   });
 }
 
-/** The marker is durable until recovery finishes; local reads never infer clearance from session state. */
-function assertLegacyLogoutClear(profile: string): void {
+function assertLegacyLogoutClear(dir: string): void {
   try {
-    lstatSync(join(profilePath(profile), "replica-logout-pending.json"));
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException | null)?.code === "ENOENT") return;
+    assertProfileLogoutClear(dir);
+  } catch {
+    throw new CLIError(
+      "REPLICA_GATED",
+      "A logout is pending or its state cannot be checked for this profile.",
+      ExitCode.PERMISSION_DENIED,
+    );
   }
-  throw new CLIError(
-    "REPLICA_GATED",
-    "A logout is pending or its state cannot be checked for this profile.",
-    ExitCode.PERMISSION_DENIED,
-  );
 }
 
-/** Keep the selected profile pinned and its read and output serialized with logout. */
-async function withLegacyReplicaRead(profile: string, action: (checkDelivery: () => Promise<void>) => Promise<void>): Promise<void> {
+/**
+ * Legacy stores predate the gated adapter; serialize their reads and delivery with denial.
+ * An owner session reads only through its active gate. A profile with no owner session
+ * (a delegate's imported grant, or kept replicas after logout) has no principal to gate on:
+ * it reads only while no gate and no committed denial exist, with the logout-marker check.
+ */
+async function withLegacyReplicaRead(
+  profile: string,
+  action: (checkDelivery: () => Promise<void>) => Promise<void>,
+): Promise<void> {
   await withProfileLock(profile, async () => {
-    const checkDelivery = async () => { assertLegacyLogoutClear(profile); };
+    const dir = profilePath(profile);
+    assertLegacyLogoutClear(dir);
+    const session = await readSession<{
+      ownerDid?: string;
+      replicaStamp?: { incarnation: string; lifecycleEpoch: number };
+    }>(profile);
+    let checkDelivery: () => Promise<void>;
+    if (typeof session?.ownerDid !== "string" || session.ownerDid.length === 0) {
+      // No gate file and no deny floor: a missing gate after a deny or an unreadable one throws.
+      const noGate = async () => {
+        if (await readGateSnapshot(dir) !== undefined) {
+          throw new ReplicaError(ReplicaErrorCode.GATED, "The local replica needs an owner session.", { gate: "not_established" });
+        }
+      };
+      await noGate();
+      checkDelivery = async () => {
+        assertLegacyLogoutClear(dir);
+        await noGate();
+        assertLegacyLogoutClear(dir);
+      };
+    } else {
+      const stamp = await restoreSessionStamp(dir, session.ownerDid, session.replicaStamp);
+      const snapshot = await readGateSnapshot(dir);
+      if (snapshot === undefined) {
+        throw new ReplicaError(ReplicaErrorCode.GATED, "The local replica gate is unavailable.", { gate: "gate_unavailable" });
+      }
+      const access = {
+        stamp,
+        incarnation: snapshot.incarnation,
+        principalHash: await principalHashOf(snapshot.salt, session.ownerDid),
+      };
+      checkDelivery = async () => {
+        assertLegacyLogoutClear(dir);
+        await assertGateAccess(dir, access, snapshot.salt);
+        assertLegacyLogoutClear(dir);
+      };
+    }
     await checkDelivery();
     await action(checkDelivery);
   }, { requireProfile: true });

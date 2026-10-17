@@ -75,7 +75,19 @@ jobs:
           bun test tests/operations-mcp-conformance/conformance.test.ts
           bun test packages/operations/src/legacy-cli-concurrency.test.ts
           bun test packages/cli/src/commands/auth.test.ts
+          bun test packages/cli/src/auth/prepared-openkey.test.ts
           bun test packages/cli/src/commands/auth.portable-proof.test.ts
+          bun test packages/cli/src/commands/auth-logout-gate.integration.test.ts
+          bun test packages/cli/src/commands/auth-logout-account.integration.test.ts
+          bun test packages/cli/src/commands/auth-logout-legacy.integration.test.ts
+          bun test packages/cli/src/commands/auth-logout-marker.integration.test.ts
+          bun test packages/cli/src/commands/auth-null-marker.integration.test.ts
+          bun test packages/cli/src/commands/auth-prepared.integration.test.ts
+          bun test packages/cli/src/commands/auth-revoke.integration.test.ts
+          bun test packages/cli/src/commands/auth-signin-stamp.integration.test.ts
+          bun test packages/cli/src/lib/logout-revocation.test.ts
+          bun test packages/cli/src/lib/profile-replicas.test.ts
+          bun test packages/cli/src/lib/profile-replicas.defer.test.ts
           bun test packages/cli/src/commands/secrets.test.ts
           bun test packages/cli/src/commands/secrets-owner-retry.test.ts
           bun test packages/cli/src/commands/expired-session.test.ts

@@ -441,7 +441,13 @@ export interface SqliteReplicaStore extends ReplicaStore {
   grantInstallTimes(): Promise<Array<{ cid: string; installedAt: number }>>;
   installGatedGrant(g: GrantRecord, policy: SqliteGrantPolicy): Promise<SqliteGrantInstall>;
   recomputeGrantInstall(g: GrantRecord, policy: SqliteGrantPolicy): Promise<SqliteGrantInstall | null>;
-  destroy(t: LeaseToken): Promise<void>;
+  destroy(t: LeaseToken, options?: {
+    approvedUnknown?: readonly SqliteLayoutEntry[];
+    expectedKnown?: readonly SqliteLayoutEntry[];
+    allowMissingDatabase?: boolean;
+    expectedRoot?: { dev: string; ino: string };
+    allowAdapterFence?: boolean;
+  }): Promise<void>;
   readTransaction<T>(
     generation: number,
     checkGate: () => Promise<void>,
@@ -480,8 +486,29 @@ export interface ReplicaRuntime {
   kvSyncTransport(kv: KVSyncClient): ReplicaTransport;
 }
 
+/** JSON-safe identity of a source-unknown path approved before logout. */
+export type SqliteLayoutEntry = {
+  path: string;
+  kind: "file" | "directory" | "symlink";
+  dev: string;
+  ino: string;
+};
 /** The members of `@tinycloud/replica/sqlite` the adapter uses. */
+export type SqliteReplicaLayout = {
+  knownEntries: SqliteLayoutEntry[];
+  rootIdentity: { dev: string; ino: string };
+  unknownPaths: string[];
+  unknownEntries: SqliteLayoutEntry[];
+};
 export interface SqliteRuntime {
+  inspectSqliteReplicaLayout(dir: string, options?: { allowAdapterFence?: boolean }): Promise<SqliteReplicaLayout>;
+  removeSqliteReplicaLayout(dir: string, options?: {
+    approvedUnknown?: readonly SqliteLayoutEntry[];
+    expectedKnown?: readonly SqliteLayoutEntry[];
+    allowMissingDatabase?: boolean;
+    expectedRoot?: { dev: string; ino: string };
+    allowAdapterFence?: boolean;
+  }): Promise<void>;
   SqliteReplicaStore: {
     open(dir: string, options: SqliteReplicaStoreOptions): Promise<SqliteReplicaStore>;
     inspect(dir: string, options?: { now?: () => number; signal?: AbortSignal }): Promise<{
