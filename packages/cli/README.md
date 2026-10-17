@@ -175,14 +175,18 @@ grant never qualifies. Bare replica prefixes are rejected; use `notes/`.
 Replica-enabled OpenKey login uses the SDK-prepared SIWE approval URL, not the
 older browser-created session. Specify `--owner did:pkh:eip155:CHAIN:ADDRESS`
 unless this profile already has a verified owner session. The CLI verifies the
-signed result before saving its new key, session and replica stamp. Safari may
-block the HTTPS page's plain-HTTP loopback callback: use an interactive CLI
-terminal and paste the same one-line code shown by OpenKey, or start with
+signed result before saving its new key, session and replica stamp. Safari, and
+Chromium browsers that enforce Local Network Access without granting it (headless
+Chromium cannot show the prompt), may block the HTTPS page's plain-HTTP loopback
+callback: use an interactive CLI terminal and paste the same one-line code shown
+by OpenKey, or start with
 `tc auth login --method openkey --replication-prefix notes/ --owner DID --paste`
 for a headless terminal. Non-TTY `--no-popup` cannot accept a paste; if that
 callback fails, it exits nonzero at the five-minute expiry with a `--paste`
 retry hint and discards the candidate key. Restarting requires a new approval
-and cannot reuse the old signed code.
+and cannot reuse the old signed code. Ctrl-C, SIGINT or SIGTERM before approval
+arrives cancels the OpenKey handoff (best effort) and exits 130 `CANCELLED`
+without saving a key or session.
 
 Use `tc replica report` for event aggregates and pinned keys; `--clear-pending`
 prints a warning because later commits can be read as stale until a subsequent

@@ -102,6 +102,17 @@ export async function startPreparedOpenKeyHandoff(options: {
     response.writeHead(status, { ...cors, "Content-Type": "application/json", ...(close ? { Connection: "close" } : {}) });
     response.end(JSON.stringify(data));
   };
+  // Only a SIGINT/SIGTERM while waiting for delivery cancels; after delivery
+  // the default signal behaviour returns for verification and commit.
+  const cancelled = (): void => {
+    if (!delivered && !completed) {
+      rejectResult(new CLIError("CANCELLED", "Prepared OpenKey sign-in cancelled; no session was saved.", ExitCode.CANCELLED));
+    }
+  };
+  const stopSignals = (): void => {
+    process.off("SIGINT", cancelled);
+    process.off("SIGTERM", cancelled);
+  };
   const sockets = new Set<Socket>();
   const server = options.paste ? undefined : createServer({ connectionsCheckingInterval: 1000 }, (request: IncomingMessage, response: ServerResponse) => {
     if (request.headers.origin !== origin) {
@@ -154,6 +165,7 @@ export async function startPreparedOpenKeyHandoff(options: {
       const signed = signedEnvelope(envelope, state, options.prepared.keyId);
       if (!signed) { reply(response, 403, { accepted: false }); return; }
       delivered = true;
+      stopSignals();
       acceptResponse = response;
       resolveResult(signed);
     });
@@ -183,6 +195,7 @@ export async function startPreparedOpenKeyHandoff(options: {
   };
   const close = (): void => {
     clearTimeout(timeout);
+    stopSignals();
     rl?.close();
     server?.close();
     // `close()` stops the server's timeout sweep and keeps any connection that
@@ -215,6 +228,8 @@ export async function startPreparedOpenKeyHandoff(options: {
       try { await open(url); }
       catch { console.error("Could not open browser. Use the printed URL or paste the signed code."); }
     }
+    process.on("SIGINT", cancelled);
+    process.on("SIGTERM", cancelled);
     if (options.paste || process.stdin.isTTY) {
       console.error("Waiting up to 5 minutes for OpenKey. Paste its one-line signed code here and press Enter if the callback is blocked (Safari may require this).");
       rl = createInterface({ input: process.stdin, output: process.stderr });
@@ -230,14 +245,14 @@ export async function startPreparedOpenKeyHandoff(options: {
         const signed = signedEnvelope(envelope, state, options.prepared.keyId);
         if (!signed) { console.error("Prepared OpenKey code does not match this sign-in. Try again."); return; }
         delivered = true;
+        stopSignals();
         resolveResult(signed);
       });
       rl.on("close", () => {
         if (options.paste && !delivered && !completed) rejectResult(invalid("PASTE_CODE_MISSING", "Stdin ended before a prepared OpenKey code was pasted; no session was saved."));
       });
-      rl.on("SIGINT", () => {
-        if (!delivered && !completed) rejectResult(invalid("CANCELLED", "Prepared OpenKey sign-in cancelled; no session was saved."));
-      });
+      // On a terminal, readline takes Ctrl-C itself rather than signalling.
+      rl.on("SIGINT", cancelled);
     }
     if (!options.paste && !process.stdin.isTTY) {
       console.error("This CLI cannot read a paste from non-interactive stdin. If the callback fails, re-run with --paste (Safari may require it).");

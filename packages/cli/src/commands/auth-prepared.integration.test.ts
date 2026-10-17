@@ -17,7 +17,20 @@ afterEach(async () => {
   await Promise.all(homes.splice(0).map((home) => rm(home, { recursive: true, force: true })));
 });
 
-async function preparedLogin(transport: "callback" | "paste", behavior: "success" | "invalid-signature" | "cancel" | "paste-eof" = "success") {
+type Behavior = "success" | "invalid-signature" | "cancel" | "cancel-tty" | "paste-eof";
+
+/** A hang regression must fail, not stall the suite; the child is killed at the deadline. */
+async function exitWithin(child: { exited: Promise<number>; kill(signal?: number | NodeJS.Signals): void }, ms: number): Promise<number | "timeout"> {
+  // Real time is the subject here: the CLI must exit on its own.
+  const deadline = Promise.withResolvers<"timeout">();
+  const timer = setTimeout(() => deadline.resolve("timeout"), ms);
+  const exit = await Promise.race([child.exited, deadline.promise]);
+  clearTimeout(timer);
+  if (exit === "timeout") child.kill("SIGKILL");
+  return exit;
+}
+
+async function preparedLogin(transport: "callback" | "paste", behavior: Behavior = "success") {
   const home = await mkdtemp(join(tmpdir(), `tc858-prepared-${transport}-`));
   homes.push(home);
   const requests: string[] = [];
@@ -29,6 +42,16 @@ async function preparedLogin(transport: "callback" | "paste", behavior: "success
     return new Response(`Unexpected node request: ${path}`, { status: 404 });
   } });
   servers.push(node);
+  const cancels: unknown[] = [];
+  const openKeyApi = Bun.serve({ port: 0, async fetch(request) {
+    if (new URL(request.url).pathname === "/api/delegate/handoffs/cancel" && request.method === "POST") {
+      cancels.push(await request.json());
+      return Response.json({ cancelled: true });
+    }
+    return new Response("not found", { status: 404 });
+  } });
+  servers.push(openKeyApi);
+  const tty = behavior === "cancel-tty";
   const signer = new PrivateKeySigner(OWNER_KEY);
   const ownerDid = `did:pkh:eip155:1:${await signer.getAddress()}`;
   const directory = await withTinyCloudStateRoot(home, async () => {
@@ -39,20 +62,23 @@ async function preparedLogin(transport: "callback" | "paste", behavior: "success
     });
     return profilePath(PROFILE);
   });
-  const child = Bun.spawn([process.execPath, cliEntry, "--quiet", "--json", "--profile", PROFILE,
+  const argv = [process.execPath, cliEntry, "--quiet", "--json", "--profile", PROFILE,
     "auth", "login", "--method", "openkey", "--replication-prefix", "notes/", "--owner", ownerDid,
-    ...(transport === "paste" ? ["--paste"] : ["--no-popup"])], {
-    env: { ...process.env, HOME: home, TC_HOME: home, TC_OPENKEY_HOST: "https://openkey.test" },
+    ...(transport === "paste" ? ["--paste"] : ["--no-popup"])];
+  // `script` gives the CLI a real terminal, so Ctrl-C reaches readline as a keypress.
+  const child = Bun.spawn(tty ? ["script", "-qefc", argv.map((arg) => `'${arg}'`).join(" "), "/dev/null"] : argv, {
+    env: { ...process.env, HOME: home, TC_HOME: home, TC_OPENKEY_HOST: "https://openkey.test",
+      TC_OPENKEY_API_HOST: openKeyApi.url.origin },
     stdin: "pipe", stdout: "pipe", stderr: "pipe",
   });
-  const reader = child.stderr.getReader();
+  const reader = (tty ? child.stdout : child.stderr).getReader();
   let stderr = "";
   let url: string | undefined;
   while (true) {
     const { value, done } = await reader.read();
     if (done) break;
     stderr += new TextDecoder().decode(value);
-    url = /https:\/\/openkey\.test\/delegate#tv2=[A-Za-z0-9_-]+/.exec(stderr)?.[0];
+    url = /(https:\/\/openkey\.test\/delegate#tv2=[A-Za-z0-9_-]+)\r?\n/.exec(stderr)?.[1];
     if (url) break;
   }
   if (!url) {
@@ -89,9 +115,13 @@ async function preparedLogin(transport: "callback" | "paste", behavior: "success
       signature: await signer.signMessage(payload.request.siwe), signedMessage: payload.request.siwe,
       selectedActionKeys, permissions },
   };
-  if (behavior === "cancel") {
-    child.kill("SIGINT");
-    await child.exited;
+  if (behavior === "cancel" || behavior === "cancel-tty") {
+    if (tty) {
+      child.stdin.write("\x03");
+      child.stdin.flush();
+    } else child.kill("SIGINT");
+    expect(await exitWithin(child, 15_000)).toBe(130);
+    expect(cancels).toEqual([{ ticket: payload.delivery.handoffId, cancelSecret: payload.delivery.cancelSecret }]);
     expect(await Bun.file(join(directory, "key.json")).exists()).toBe(false);
     expect(await Bun.file(join(directory, "session.json")).exists()).toBe(false);
     await expect(fetch(payload.delivery.callback!, {
@@ -132,7 +162,7 @@ async function preparedLogin(transport: "callback" | "paste", behavior: "success
     child.stdin.write(Buffer.from(JSON.stringify(envelope)).toString("base64url") + "\n");
     child.stdin.end();
   }
-  const [stdout, exitCode] = await Promise.all([new Response(child.stdout).text(), child.exited]);
+  const [stdout, exitCode] = await Promise.all([new Response(child.stdout).text(), exitWithin(child, 15_000)]);
   await reader.cancel().catch(() => undefined);
   if (behavior === "invalid-signature") {
     expect(exitCode).not.toBe(0);
@@ -143,6 +173,7 @@ async function preparedLogin(transport: "callback" | "paste", behavior: "success
     return;
   }
   expect(exitCode).toBe(0);
+  expect(cancels).toEqual([]);
   if (transport === "callback") expect(accepted).toEqual({ accepted: true });
   if (transport === "callback") {
     await expect(fetch(payload.delivery.callback!, {
@@ -169,5 +200,6 @@ async function preparedLogin(transport: "callback" | "paste", behavior: "success
 test("prepared OpenKey callback ACK follows verified SDK sign-in and durable stamped CLI commit", () => preparedLogin("callback"), 30_000);
 test("prepared OpenKey paste accepts the same signed envelope and persists verified stamp", () => preparedLogin("paste"), 30_000);
 test("invalid signed callback receives no ACK and leaves the previous profile and key unchanged", () => preparedLogin("callback", "invalid-signature"), 30_000);
-test("preclaim cancellation removes the uncommitted key and rejects a late signed callback", () => preparedLogin("callback", "cancel"), 30_000);
+test("preclaim non-TTY SIGINT cancels the handoff, exits CANCELLED 130 and rejects a late signed callback", () => preparedLogin("callback", "cancel"), 30_000);
+test("preclaim terminal Ctrl-C takes the same cancellation path and exit code", () => preparedLogin("callback", "cancel-tty"), 30_000);
 test("preclaim paste cancellation by stdin EOF shreds the prepared key and preserves the prior profile", () => preparedLogin("paste", "paste-eof"), 30_000);
