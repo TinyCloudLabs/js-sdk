@@ -1282,3 +1282,89 @@ describe("grant reuse across restored invocations (§4.4 inputs)", () => {
     }
   });
 });
+
+// L1 (#548 security review): erase and purge refuse a replaced or symlinked root and never
+// remove recursively; a foreign tree behind a swapped path survives.
+describe("replica erase and purge refuse replaced roots", () => {
+  async function openedPartition(): Promise<{ dir: string; idDir: string; replicaName: string }> {
+    const dir = await makeDir();
+    const storage = createSqliteReplicaStorage(storageOptions());
+    const handle = await storage.open(spec());
+    await handle.close();
+    const [id] = await partitionDirs(dir);
+    const idDir = join(dir, id!);
+    const [replicaName] = await readdir(join(idDir, "replicas"));
+    return { dir, idDir, replicaName: replicaName! };
+  }
+
+  /** A victim tree shaped like a replica directory without a database. */
+  async function victimTree(replicaName: string): Promise<{ root: string; file: string }> {
+    const root = await mkdtemp(join(tmpdir(), "tc858-victim-"));
+    dirs.push(root);
+    await mkdir(join(root, replicaName));
+    const file = join(root, replicaName, "owner-data.bin");
+    await writeFile(file, "not replica data");
+    return { root, file };
+  }
+
+  async function swapReplicasRoot(idDir: string, target: string): Promise<void> {
+    await rename(join(idDir, "replicas"), join(idDir, "replicas.moved"));
+    await symlink(target, join(idDir, "replicas"), "dir");
+  }
+
+  test("erasePending refuses a symlinked replicas root and leaves the target intact", async () => {
+    const { idDir, replicaName } = await openedPartition();
+    const storage = createSqliteReplicaStorage(storageOptions());
+    expect((await storage.lifecycle!.deny({ reason: "sign_out", principal: PRINCIPAL })).status).toBe("denied");
+    const victim = await victimTree(replicaName);
+    await swapReplicasRoot(idDir, victim.root);
+
+    const report = await storage.lifecycle!.erasePending({ signal: new AbortController().signal });
+
+    expect(existsSync(victim.file)).toBe(true);
+    expect(report.failed.length).toBeGreaterThan(0);
+    expect(report.remaining).toBeGreaterThan(0);
+  });
+
+  test("purge refuses a symlinked replicas root and leaves the target intact", async () => {
+    const { idDir, replicaName } = await openedPartition();
+    const storage = createSqliteReplicaStorage(storageOptions());
+    const victim = await victimTree(replicaName);
+    await swapReplicasRoot(idDir, victim.root);
+
+    await expect(storage.purge({ identity: identity(), space: SPACE_A, prefix: "notes/" }))
+      .rejects.toMatchObject({ code: "STORAGE_ERROR" });
+    expect(existsSync(victim.file)).toBe(true);
+  });
+
+  test("purge refuses a replica directory replaced by a symlink", async () => {
+    const { idDir, replicaName } = await openedPartition();
+    const storage = createSqliteReplicaStorage(storageOptions());
+    const victim = await victimTree(replicaName);
+    const replicaDir = join(idDir, "replicas", replicaName);
+    await rename(replicaDir, `${replicaDir}.moved`);
+    await symlink(join(victim.root, replicaName), replicaDir, "dir");
+
+    await expect(storage.purge({ identity: identity(), space: SPACE_A, prefix: "notes/" }))
+      .rejects.toMatchObject({ code: "STORAGE_ERROR" });
+    expect(existsSync(victim.file)).toBe(true);
+  });
+
+  test("a leftover replica directory without a database is removed only when it holds replica files", async () => {
+    const { idDir, replicaName } = await openedPartition();
+    const storage = createSqliteReplicaStorage(storageOptions());
+    const replicaDir = join(idDir, "replicas", replicaName);
+    await rm(replicaDir, { recursive: true });
+    await mkdir(join(replicaDir, "blobs", ".tmp"), { recursive: true });
+    const foreign = join(replicaDir, "unrecognized.bin");
+    await writeFile(foreign, "foreign");
+
+    await expect(storage.purge({ identity: identity(), space: SPACE_A, prefix: "notes/" }))
+      .rejects.toMatchObject({ code: "STORAGE_ERROR" });
+    expect(existsSync(foreign)).toBe(true);
+
+    await rm(foreign);
+    await storage.purge({ identity: identity(), space: SPACE_A, prefix: "notes/" });
+    expect(existsSync(replicaDir)).toBe(false);
+  });
+});
