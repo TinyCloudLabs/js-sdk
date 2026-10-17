@@ -749,8 +749,9 @@ describe("TC-858 policy-only source identity", () => {
     });
   }
 
+  // Moving an approved path away or overwriting it is refused by the HEAD-blob preflight.
   for (const path of resolvedPaths) {
-    it(`refuses either endpoint of an exact-blob rename involving ${path}`, () => {
+    it(`refuses moving approved ${path} away or overwriting it with measured source`, () => {
       for (const [from, to] of [
         [path, "packages/cli/src/renamed-input.ts"],
         [source, path],
@@ -769,6 +770,23 @@ describe("TC-858 policy-only source identity", () => {
       }
     });
   }
+
+  it("refuses renaming unrelated measured source into CLI while all five approved blobs stay exact", () => {
+    // The preflight passes here; only the --no-renames source-side deletion refuses.
+    const { root, base, blobs } = resolvedFixture();
+    try {
+      const destination = "packages/cli/src/renamed-input.ts";
+      mkdirSync(dirname(join(root, destination)), { recursive: true });
+      git(root, "mv", source, destination);
+      git(root, "commit", "-qm", "rename unrelated measured source out of the graph");
+      expect(Object.entries(blobs).every(([path, blob]) => git(root, "rev-parse", `HEAD:${path}`) === blob)).toBe(true);
+      expect(isPolicyOnlySinceApprovedSource(root, base, paths, {
+        bundleInputs: new Set(), sourceMapInputs: new Set(),
+      }, blobs)).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
 
   it("keeps the separate S4 authority blob mandatory beside the five merge blobs", () => {
     const authority = "packages/node-sdk/src/replication/authority.ts";
