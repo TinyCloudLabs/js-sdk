@@ -7,8 +7,9 @@
  * faked through the internal seams — no WASM, no network.
  */
 
-import { afterEach, describe, expect, setSystemTime, test } from "bun:test";
+import { afterEach, describe, expect, setSystemTime, spyOn, test } from "bun:test";
 import { chmod, mkdir, mkdtemp, open as openFile, readFile, readdir, rename, rm, symlink, writeFile } from "node:fs/promises";
+import * as fsPromises from "node:fs/promises";
 import { constants as fsConstants, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -4031,5 +4032,35 @@ describe("logout fences across interrupted denials and other accounts", () => {
     const asOther = createSqliteReplicaStorage(storageOptions());
     await expect(asOther.lifecycle!.restoreSessionStamp(OTHER, stamps.get(profileDir)))
       .rejects.toMatchObject({ code: "REPLICA_GATED", gate: "principal_mismatch" });
+  });
+});
+
+describe("CLI diagnostics files under the replication root", () => {
+  test("a log rotated between the listing and its lstat never hides a partition from the deny's intents", async () => {
+    await makeDir();
+    const root = roots[roots.length - 1]!;
+    const storage = createSqliteReplicaStorage(storageOptions({ diagnosticFiles: ["events.jsonl", "events.jsonl.1"] }));
+    const handle = await storage.open(spec());
+    await handle.close();
+    const log = join(root, "events.jsonl");
+    await writeFile(log, "{}\n");
+    const realLstat = fsPromises.lstat;
+    let rotated = false;
+    const spy = spyOn(fsPromises, "lstat").mockImplementation(async (...args: Parameters<typeof realLstat>) => {
+      if (!rotated && args[0] === log) {
+        // The CLI's appender rotates the log after the deny listed the root.
+        rotated = true;
+        await rename(log, `${log}.1`);
+      }
+      return realLstat(...args);
+    });
+    try {
+      const denied = await storage.lifecycle!.deny({ reason: "sign_out", principal: PRINCIPAL });
+      expect(rotated).toBe(true);
+      expect(denied.status).toBe("denied");
+      expect((await readGateSnapshot(dirname(root)))?.intents.length).toBeGreaterThan(0);
+    } finally {
+      spy.mockRestore();
+    }
   });
 });

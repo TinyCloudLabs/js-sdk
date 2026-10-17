@@ -14,7 +14,7 @@
 
 import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash, randomBytes } from "node:crypto";
-import { lstatSync, readFileSync, statSync } from "node:fs";
+import { lstatSync, readFileSync, statSync, type Dirent } from "node:fs";
 import { chmod, lstat, mkdir, open as openFile, readFile, readdir, realpath, rename, rm, rmdir, stat, type FileHandle } from "node:fs/promises";
 import { basename, dirname, join, parse, resolve, sep } from "node:path";
 
@@ -1801,8 +1801,15 @@ export function createSqliteReplicaStorage(
   }
 
   async function identityDirs(): Promise<string[]> {
+    let entries: Dirent[];
     try {
-      const entries = await readdir(root, { withFileTypes: true });
+      entries = await readdir(root, { withFileTypes: true });
+    } catch (error) {
+      // Only a missing root means no partitions; any later ENOENT is a concurrent change.
+      if (isNotFound(error)) return [];
+      throw storageError("STORAGE_ERROR", `Listing ${root}`, error);
+    }
+    try {
       const marker = await readLogoutMarker(join(profileDir, REPLICA_LOGOUT_PENDING_FILE));
       if (marker !== null) {
         const inventory = await inspectLayout(true);
@@ -1818,8 +1825,15 @@ export function createSqliteReplicaStorage(
               item.path === `replication/${entry.name}` &&
               (entry.isDirectory() ? item.kind === "directory" : entry.isSymbolicLink() ?
                 item.kind === "symlink" : item.kind === "file"))) continue;
-          // The CLI's named diagnostics log, only as a regular file, is not a partition.
-          if (diagnosticFiles.includes(entry.name) && (await lstat(join(root, entry.name))).isFile()) continue;
+          // The CLI's named diagnostics log, only as a regular file, is not a partition. One the
+          // appender rotated away since the listing is gone, not a reason to list nothing.
+          if (diagnosticFiles.includes(entry.name)) {
+            const info = await lstat(join(root, entry.name)).catch((error: unknown) => {
+              if (isNotFound(error)) return null;
+              throw error;
+            });
+            if (info === null || info.isFile()) continue;
+          }
           throw new ReplicaStorageError("STORAGE_ERROR", `Unknown identity partition at ${root}.`);
         }
       }
@@ -1829,7 +1843,6 @@ export function createSqliteReplicaStorage(
           item.path === `replication/${entry.name}` && item.kind === "directory"))
         .map((entry) => join(root, entry.name));
     } catch (error) {
-      if (isNotFound(error)) return [];
       throw storageError("STORAGE_ERROR", `Listing ${root}`, error);
     }
   }
