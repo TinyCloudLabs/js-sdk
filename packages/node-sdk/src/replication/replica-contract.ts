@@ -1,3 +1,5 @@
+import type { ReplicaConsentAnchor } from "@tinycloud/sdk-services/kv/replication";
+
 /**
  * The structural contract for `@tinycloud/replica` and
  * `@tinycloud/replica/sqlite`, as the Node adapter (`./sqlite.ts`) uses it.
@@ -51,7 +53,10 @@ export type ReplicaErrorCode =
   | "SCOPE_VIOLATION"
   | "CONTENT_MISMATCH"
   | "INTEGRITY_ERROR"
-  | "REPLICA_CLOSED";
+  | "REPLICA_CLOSED"
+  | "REPLICA_GATED"
+  | "STORAGE_BUDGET"
+  | "CONSENT_EXPIRED";
 
 /** The instance shape of replica's `ReplicaError` class. */
 export interface ReplicaError extends Error {
@@ -412,13 +417,36 @@ export type SqliteReplicaStoreOptions = {
   guard?: MutationGuard;
 };
 
+export type SqliteGrantInstall = {
+  installedAt: number;
+  effectiveExpiresAt: number;
+  consentDeadline: number;
+  consentAnchor: ReplicaConsentAnchor;
+};
+
+export type SqliteGrantPolicy = {
+  at: number;
+  ttlMs: number;
+  consentDeadline: number;
+  consentAnchor: ReplicaConsentAnchor;
+};
+
 /**
  * The instance shape of replica's `SqliteReplicaStore` class: the full
  * `ReplicaStore` contract plus the class-only members the adapter calls
  * (`destroy` removes the replica directory under a live lease).
  */
 export interface SqliteReplicaStore extends ReplicaStore {
+  getGrantInstall(cid: string): Promise<SqliteGrantInstall | null>;
+  grantInstallTimes(): Promise<Array<{ cid: string; installedAt: number }>>;
+  installGatedGrant(g: GrantRecord, policy: SqliteGrantPolicy): Promise<SqliteGrantInstall>;
+  recomputeGrantInstall(g: GrantRecord, policy: SqliteGrantPolicy): Promise<SqliteGrantInstall | null>;
   destroy(t: LeaseToken): Promise<void>;
+  readTransaction<T>(
+    generation: number,
+    checkGate: () => Promise<void>,
+    section: (store: SqliteReplicaStore) => Promise<T>,
+  ): Promise<T>;
 }
 
 /* --------------------------------------------------------------------------
@@ -456,6 +484,11 @@ export interface ReplicaRuntime {
 export interface SqliteRuntime {
   SqliteReplicaStore: {
     open(dir: string, options: SqliteReplicaStoreOptions): Promise<SqliteReplicaStore>;
-    inspect(dir: string, options?: { now?: () => number; signal?: AbortSignal }): Promise<{ state: ReplicaState; status: ReplicaStatus } | null>;
+    inspect(dir: string, options?: { now?: () => number; signal?: AbortSignal }): Promise<{
+      state: ReplicaState;
+      status: ReplicaStatus;
+      grantInstall: SqliteGrantInstall | null;
+      activeGrantInstall: SqliteGrantInstall | null;
+    } | null>;
   };
 }

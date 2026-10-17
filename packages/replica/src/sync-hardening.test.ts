@@ -3,8 +3,9 @@
  * before the fix.
  */
 import { loadSqlite } from "./sqlite/driver.js";
-import { afterAll, describe, expect, test } from "bun:test";
-import { chmod, mkdir, readdir, rm, stat, writeFile } from "node:fs/promises";
+import { afterAll, describe, expect, spyOn, test } from "bun:test";
+import * as fsSync from "node:fs";
+import { chmod, lstat, mkdir, readdir, readFile, rename, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import { FakeNode, NODE_DID, SPACE, config, deviceGrant, etagOf, newStore, removeTempDirs, tempDir, type TestStoreOptions } from "../test/fixtures.js";
@@ -34,6 +35,16 @@ async function blobCount(dir: string): Promise<number> {
     count += (await readdir(join(dir, "blobs", shard))).length;
   }
   return count;
+}
+
+async function simulatedNonLinux<T>(action: () => Promise<T>, platformName: "darwin" | "win32" = "darwin"): Promise<T> {
+  const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
+  Object.defineProperty(process, "platform", { configurable: true, value: platformName });
+  try {
+    return await action();
+  } finally {
+    Object.defineProperty(process, "platform", platform);
+  }
 }
 
 describe("content reused within one page", () => {
@@ -538,6 +549,135 @@ describe("replica removal (reset --purge)", () => {
     await store.markRevoked("delegation-revoked: bafy");
     await store.destroy((await store.acquireSyncLease(60_000))!);
     expect(await stat(dir).then(() => "exists", () => "gone")).toBe("gone");
+  });
+
+  for (const platform of ["darwin", "win32"] as const) {
+    test(`${platform} removal unlinks only the enumerated SQLite and source-created blob layout`, async () => {
+      const dir = await tempDir();
+      const node = new FakeNode();
+      node.put("notes/a", "real blob");
+      const store = await simulatedNonLinux(() => newStore(dir), platform);
+      await new Replica({ store, transport: node }).sync();
+      const shards = (await readdir(join(dir, "blobs"))).filter((name) => name !== ".tmp");
+      expect(shards).toHaveLength(1);
+      const hash = (await readdir(join(dir, "blobs", shards[0]!)))[0]!;
+      expect(hash).toMatch(/^[0-9a-f]{64}$/);
+      expect((await readdir(dir)).every((entry) => ["replica.db", "replica.db-wal", "replica.db-shm", "blobs"].includes(entry))).toBe(true);
+      const lease = (await store.acquireSyncLease(60_000))!;
+      await simulatedNonLinux(() => store.destroy(lease), platform);
+      expect(await lstat(dir).then(() => "exists", () => "gone")).toBe("gone");
+      await store.close();
+    });
+  }
+
+  test("win32 path-based purge does not require an openable directory descriptor", async () => {
+    const dir = await tempDir();
+    const original = fsSync.openSync;
+    let directoryOpens = 0;
+    const intercepted = spyOn(fsSync, "openSync").mockImplementation((path, flags) => {
+      if (String(path) === dir) {
+        directoryOpens++;
+        throw Object.assign(new Error("directory descriptors unavailable"), { code: "EISDIR" });
+      }
+      return original(path, flags);
+    });
+    let store: SqliteReplicaStore | undefined;
+    try {
+      store = await simulatedNonLinux(() => newStore(dir), "win32");
+      const lease = (await store.acquireSyncLease(60_000))!;
+      await simulatedNonLinux(() => store!.destroy(lease), "win32");
+      expect(directoryOpens).toBe(0);
+      expect(await lstat(dir).then(() => "exists", () => "gone")).toBe("gone");
+    } finally {
+      intercepted.mockRestore();
+      await store?.close();
+    }
+  });
+
+  test("non-Linux removal rejects a symlinked shard without touching its victim or remaining replica", async () => {
+    const dir = await tempDir();
+    const victim = await tempDir();
+    const node = new FakeNode();
+    node.put("notes/a", "real blob");
+    const store = await simulatedNonLinux(() => newStore(dir));
+    await new Replica({ store, transport: node }).sync();
+    const shard = (await readdir(join(dir, "blobs"))).find((name) => name !== ".tmp")!;
+    const blob = (await readdir(join(dir, "blobs", shard)))[0]!;
+    await writeFile(join(victim, blob), "victim");
+    await rename(join(dir, "blobs", shard), join(dir, "blobs", `${shard}.original`));
+    await symlink(victim, join(dir, "blobs", shard));
+    const lease = (await store.acquireSyncLease(60_000))!;
+    expect(await simulatedNonLinux(() => codeOf(store.destroy(lease)))).toBe(ReplicaErrorCode.STORAGE_ERROR);
+    expect(await readFile(join(victim, blob), "utf8")).toBe("victim");
+    expect((await store.open())?.config.name).toBe("notes");
+    expect((await stat(join(dir, "blobs", `${shard}.original`, blob))).isFile()).toBe(true);
+    await store.close();
+  });
+
+  test("non-Linux removal rejects a swapped replica directory without deleting either directory", async () => {
+    const dir = await tempDir();
+    const store = await simulatedNonLinux(() => newStore(dir));
+    const lease = (await store.acquireSyncLease(60_000))!;
+    const moved = `${dir}.moved`;
+    await rename(dir, moved);
+    await mkdir(dir);
+    try {
+      await writeFile(join(dir, "keep"), "untouched");
+      expect(await simulatedNonLinux(() => codeOf(store.destroy(lease)))).toBe(ReplicaErrorCode.NOT_FOUND);
+      expect(await readFile(join(dir, "keep"), "utf8")).toBe("untouched");
+      expect((await stat(join(moved, "replica.db"))).isFile()).toBe(true);
+    } finally {
+      await store.close();
+      await rm(moved, { recursive: true, force: true });
+    }
+  });
+
+  test("non-Linux removal refuses a parent replaced by an alias to its original inode", async () => {
+    const parent = await tempDir();
+    const dir = join(parent, "replica");
+    const store = await simulatedNonLinux(() => newStore(dir));
+    const lease = (await store.acquireSyncLease(60_000))!;
+    const moved = `${parent}.moved`;
+    await rename(parent, moved);
+    await symlink(moved, parent, "dir");
+    try {
+      expect(await simulatedNonLinux(() => codeOf(store.destroy(lease)))).toBe(ReplicaErrorCode.NOT_FOUND);
+      expect((await stat(join(moved, "replica", "replica.db"))).isFile()).toBe(true);
+    } finally {
+      await store.close();
+      await rm(parent, { force: true });
+      await rm(moved, { recursive: true, force: true });
+    }
+  });
+
+  test("non-Linux final rmdir refuses a parent alias installed after the last file", async () => {
+    const parent = await tempDir();
+    const dir = join(parent, "replica");
+    const store = await simulatedNonLinux(() => newStore(dir));
+    const lease = (await store.acquireSyncLease(60_000))!;
+    const moved = `${parent}.moved`;
+    const filesystem = await import("node:fs/promises");
+    const original = filesystem.lstat;
+    let swapped = false;
+    const intercepted = spyOn(filesystem, "lstat").mockImplementation(async (...args) => {
+      const result = await original(...args);
+      if (!swapped && args[0] === dir && (await readdir(dir)).length === 0) {
+        await rename(parent, moved);
+        await symlink(moved, parent, "dir");
+        swapped = true;
+      }
+      return result;
+    });
+    try {
+      expect(await simulatedNonLinux(() => codeOf(store.destroy(lease)))).toBe(ReplicaErrorCode.NOT_FOUND);
+      expect(swapped).toBe(true);
+      expect((await stat(join(moved, "replica"))).isDirectory()).toBe(true);
+    } finally {
+      intercepted.mockRestore();
+      await store.close();
+      await rm(parent, { force: true });
+      await rm(moved, { recursive: true, force: true });
+    }
   });
 });
 

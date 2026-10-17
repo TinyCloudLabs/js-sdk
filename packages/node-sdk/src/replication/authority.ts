@@ -12,21 +12,32 @@
  * any reuse of an installed grant (the adapter marks every grant's
  * `unconstrained` flag; the controller enforces it on reuse).
  */
+import { SiweMessage } from "siwe";
 
 import {
   actionContains,
   KV,
   canonicalizeRecapCaveats,
   isCapabilitySubset,
+  principalDid,
   parseSpaceUri,
   type PermissionEntry,
+  type IWasmBindings,
+  type WasmRecapEntry,
   type TinyCloudSession,
+  type KVReplicaStorage,
+  type ServiceContext,
+  type ReplicationOptions,
 } from "@tinycloud/sdk-core";
 import {
   type AuthorityRefusal,
+  type ReplicaConsentAnchor,
   type ReplicaDevice,
   type ReplicationAuthority,
+  type ReplicationEvent,
 } from "@tinycloud/sdk-services";
+import type { ReplicaDenyInput, ReplicaSessionStamp } from "@tinycloud/sdk-services/kv/replication";
+import type { DelegateToOptions, DelegateToResult, TinyCloudNode } from "../TinyCloudNode";
 import type { ReplicaRuntime } from "./replica-contract";
 // @ts-ignore -- node-sdk builds before replica declarations; keep the literal import for bundlers.
 import { parseUcanGrant as replicaParseUcanGrant } from "@tinycloud/replica";
@@ -34,9 +45,103 @@ const parseUcanGrant = replicaParseUcanGrant as ReplicaRuntime["parseUcanGrant"]
 export { assertValidReplicationConfig } from "./config";
 export { augmentSignInEntriesWithReplication, hasUnrestrictedGetCoverage } from "./authority-sign-in";
 
+/** Report a completed deny from the already-loaded authority; delivery was revoked synchronously. */
+export function reportReplicaDenial(
+  result: { status: string; code?: string; intents?: number },
+  reason: ReplicaDenyInput["reason"],
+  onEvent: ReplicationOptions["onEvent"],
+  context?: ServiceContext,
+): void {
+  if (result.status !== "denied" && result.status !== "deleted" && result.status !== "marker") return;
+  const event: Extract<ReplicationEvent, { type: "replication.lifecycle" }> = {
+    type: "replication.lifecycle",
+    at: new Date().toISOString(),
+    reason,
+    action: result.status === "denied" ? "denied" : result.status === "deleted" ? "database_deleted" : "marker_set",
+    ...(result.status === "denied" ? { partitions: result.intents } : {}),
+    ...(result.status === "marker" ? { code: result.code } : {}),
+  };
+  try { onEvent?.(event); } catch { /* Observability cannot undo committed denial. */ }
+  const { type, ...data } = event;
+  try { context?.emit(type, data); } catch { /* Observability cannot undo committed denial. */ }
+}
+
 const KV_GET = KV.GET;
 const KV_SYNC = KV.SYNC;
 const KV_SERVICE = "tinycloud.kv";
+
+/** The verified owner proof is signed, finite, exact-space, and uncaveated on one get+sync scope. */
+export function verifiedOwnerConsentAnchor(
+  session: TinyCloudSession,
+  wasmBindings: Pick<IWasmBindings, "validatePersistedSession">,
+  exactVerifiedRecap: (verified: { verifiedRecap?: unknown }) => WasmRecapEntry[],
+): ReplicaConsentAnchor | null {
+  if (typeof session.siwe !== "string" || typeof session.signature !== "string" ||
+      typeof session.address !== "string" || typeof session.chainId !== "number") return null;
+  try {
+    const verified = wasmBindings.validatePersistedSession?.({
+      delegationHeader: session.delegationHeader,
+      delegationCid: session.delegationCid,
+      spaceId: session.spaceId,
+      jwk: session.jwk,
+      address: session.address,
+      chainId: session.chainId,
+      siwe: session.siwe,
+      signature: session.signature,
+    });
+    if (!verified || !Number.isSafeInteger(Date.parse(verified.expiresAt ?? ""))) return null;
+    const signedIssuedAt = new SiweMessage(session.siwe).issuedAt;
+    if (typeof signedIssuedAt !== "string") return null;
+    const issuedAt = Date.parse(signedIssuedAt);
+    if (!Number.isSafeInteger(issuedAt) || issuedAt < 0) return null;
+    const granted = exactVerifiedRecap(verified)
+      .filter((entry) => entry.space === session.spaceId && entry.service === "kv")
+      .map((entry) => ({ ...entry, service: "tinycloud.kv" }));
+    const coversGetAndSync = granted.some((entry) => isCapabilitySubset([{
+      service: "tinycloud.kv",
+      space: session.spaceId,
+      path: entry.path,
+      actions: [KV.GET, KV.SYNC],
+    }], granted).subset);
+    return coversGetAndSync ? { at: issuedAt, source: "siwe" } : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Fresh sign-in only: the lifecycle creates keys; restore never calls this. */
+export function establishReplicaSessionStamp(
+  storage: KVReplicaStorage,
+  principal: string,
+  anchor: ReplicaConsentAnchor,
+): Promise<ReplicaSessionStamp> {
+  if (storage.kind === "indexeddb" && storage.lifecycle?.kind === "indexeddb") {
+    return storage.lifecycle.establishSessionStamp(principal, { consentAnchor: anchor });
+  }
+  if (storage.kind === "sqlite" && storage.lifecycle?.kind === "file") {
+    return storage.lifecycle.establishSessionStamp(principal, { consentAnchor: anchor });
+  }
+  throw Object.assign(new Error("Replica sign-in requires its platform lifecycle gate."), {
+    code: "REPLICA_GATED" as const, gate: "gate_unavailable" as const,
+  });
+}
+
+/** Existing persisted stamp only: never manufactures an authority on restore. */
+export function restoreReplicaSessionStamp(
+  storage: KVReplicaStorage,
+  principal: string,
+  persisted: ReplicaSessionStamp | undefined,
+): Promise<ReplicaSessionStamp> {
+  if (storage.kind === "indexeddb" && storage.lifecycle?.kind === "indexeddb") {
+    return storage.lifecycle.restoreSessionStamp(principal, persisted);
+  }
+  if (storage.kind === "sqlite" && storage.lifecycle?.kind === "file") {
+    return storage.lifecycle.restoreSessionStamp(principal, persisted);
+  }
+  throw Object.assign(new Error("Replica restore requires its platform lifecycle gate."), {
+    code: "REPLICA_GATED" as const, gate: "gate_unavailable" as const,
+  });
+}
 
 /** The delegation the replication grant delegates: get + sync on one folder prefix. */
 function replicationEntries(spaceId: string, prefix: string): PermissionEntry[] {
@@ -135,10 +240,12 @@ export interface DelegationPlanResult {
 export type ReplicationAuthoritySession = Pick<
   TinyCloudSession,
   "delegationHeader" | "delegationCid" | "spaceId" | "verificationMethod" | "jwk"
-> & Partial<Pick<TinyCloudSession, "siwe">>;
+> & Partial<Pick<TinyCloudSession, "siwe" | "signature" | "address" | "chainId">>;
 
 export interface ReplicationAuthorityHost {
   replicationSession(): ReplicationAuthoritySession | undefined;
+  /** Validated owner proof only; never infer consent from a compact child UCAN. */
+  verifiedConsentAnchor?(session: ReplicationAuthoritySession): ReplicaConsentAnchor | null;
   /** The SIWE "Expiration Time" of the session — the delegateTo delegation cap. */
   siweExpiration(siwe: string): Date | undefined;
   planDelegation(
@@ -148,7 +255,30 @@ export interface ReplicationAuthorityHost {
   mintDelegation(
     deviceDid: string,
     entries: PermissionEntry[],
+    options?: { expiryMs?: number; renewalOnly?: boolean },
   ): Promise<{ ucan: string; expiresAt: number }>;
+}
+
+/** Delegate a replica grant only through the selected owner parent for silent renewal. */
+export async function mintNodeReplicationGrant(
+  deviceDid: string,
+  entries: PermissionEntry[],
+  options: { expiryMs?: number; renewalOnly?: boolean } | undefined,
+  renewalSession: ReplicationAuthoritySession | undefined,
+  node: Pick<TinyCloudNode, "delegateTo">,
+): Promise<{ ucan: string; expiresAt: number }> {
+  if (options?.renewalOnly && !renewalSession) throw new Error("replication renewal lost its owner session");
+  const delegateOptions: DelegateToOptions | undefined = options?.renewalOnly ? {
+    expiry: options.expiryMs,
+    onPrepared: async (prepared) => {
+      assertRenewalParent(prepared.delegationHeader.Authorization, renewalSession!);
+    },
+  } : options?.expiryMs === undefined ? undefined : { expiry: options.expiryMs };
+  const result: DelegateToResult = await node.delegateTo(principalDid(deviceDid), entries, delegateOptions);
+  return {
+    ucan: result.delegation.delegationHeader.Authorization,
+    expiresAt: result.delegation.expiry.getTime(),
+  };
 }
 
 /** Milliseconds of validity a session or parent must have left for authority reuse (delegateTo's margin). */
@@ -181,9 +311,35 @@ export function replicationScopeFromSignedSession(input: {
   }
   return undefined;
 }
+/** Runs before host activation; a replan cannot silently switch a renewal to a runtime parent. */
+export function assertRenewalParent(authorization: string, session: ReplicationAuthoritySession): void {
+  const grant = parseUcanGrant(authorization);
+  if (
+    grant.issuer !== session.verificationMethod.split("#", 1)[0] ||
+    grant.prf.length !== 1 ||
+    grant.prf[0] !== session.delegationCid
+  ) {
+    throw Object.assign(new Error("replication renewal requires the bound owner session parent"), { refused: "NOT_COVERED" as const });
+  }
+}
+
 export function createReplicationAuthority(host: ReplicationAuthorityHost): ReplicationAuthority {
-  const planOrRefusal = (entries: PermissionEntry[]): DelegationPlanResult | AuthorityRefusal => {
-    const plan = host.planDelegation(entries);
+  const boundSession = host.replicationSession();
+  let verifiedAnchor: ReplicaConsentAnchor | null = null;
+  try {
+    const candidate = boundSession && host.verifiedConsentAnchor?.(boundSession);
+    if (candidate && Number.isFinite(candidate.at) && candidate.source !== "first_install") {
+      verifiedAnchor = { at: candidate.at, source: candidate.source };
+    }
+  } catch {
+    // Network sessions remain usable when the optional replica proof cannot be verified.
+  }
+  const activeSession = (): ReplicationAuthoritySession | undefined => {
+    const session = host.replicationSession();
+    return session !== undefined && session === boundSession ? session : undefined;
+  };
+  const planOrRefusal = (entries: PermissionEntry[], expiryMs?: number): DelegationPlanResult | AuthorityRefusal => {
+    const plan = host.planDelegation(entries, expiryMs === undefined ? undefined : { expiry: expiryMs });
     if ("refused" in plan) return plan;
     return { path: plan.path, parentCid: plan.parentCid, expiresAt: plan.expiresAt };
   };
@@ -198,12 +354,21 @@ export function createReplicationAuthority(host: ReplicationAuthorityHost): Repl
   };
   const authority: ReplicationAuthority = {
     get sessionOnly() {
-      const session = host.replicationSession();
-      return session !== undefined && session.siwe === undefined;
+      const session = activeSession();
+      return session === undefined || session.siwe === undefined;
+    },
+    consentAnchor(): ReplicaConsentAnchor | null {
+      return activeSession() ? verifiedAnchor : null;
+    },
+    get canRenew() {
+      const session = activeSession();
+      return verifiedAnchor?.source === "siwe" && session !== undefined && session.siwe !== undefined;
     },
     sessionGrant(prefix: string): { ucan: string; device: ReplicaDevice } | AuthorityRefusal {
-      const session = host.replicationSession();
+      const session = activeSession();
       if (session === undefined) return { refused: "SESSION_EXPIRING" };
+      // A compact session proves current signed coverage, not consent to install or mint.
+      if (verifiedAnchor === null && session.siwe !== undefined) return { refused: "NOT_COVERED" };
       const siweExpiry = session.siwe ? host.siweExpiration(session.siwe)?.getTime() : undefined;
       if (siweExpiry !== undefined && siweExpiry <= Date.now() + AUTHORITY_EXPIRY_MARGIN_MS) {
         return { refused: "SESSION_EXPIRING" };
@@ -232,8 +397,9 @@ export function createReplicationAuthority(host: ReplicationAuthorityHost): Repl
       };
     },
     plan(prefix: string): DelegationPlanResult | AuthorityRefusal {
-      const session = host.replicationSession();
+      const session = activeSession();
       if (session === undefined) return { refused: "SESSION_EXPIRING" };
+      if (verifiedAnchor === null) return { refused: "NOT_COVERED" };
       const sessionGrant = this.sessionGrant(prefix);
       if (!("refused" in sessionGrant)) {
         const signed = signedSessionGrant(session);
@@ -251,23 +417,28 @@ export function createReplicationAuthority(host: ReplicationAuthorityHost): Repl
       deviceDid: string,
       prefix: string,
       signal: AbortSignal,
+      options?: { expiryMs?: number; renewalOnly?: boolean },
     ): Promise<{ ucan: string; parentCid: string; expiresAt: number }> {
-      if (authority.sessionOnly) throw new Error("compact delegate sessions cannot mint device grants");
-      const session = host.replicationSession();
-      if (session === undefined) throw new Error("replication mint without a session");
+      const session = activeSession();
+      if (session === undefined) throw new Error("replication mint without the bound session");
+      if (session.siwe === undefined) throw new Error("compact delegate sessions cannot mint device grants");
+      if (verifiedAnchor?.source !== "siwe") throw new Error("replication mint requires verified owner consent");
       const entries = replicationEntries(session.spaceId, prefix);
-      const plan = planOrRefusal(entries);
+      const plan = planOrRefusal(entries, options?.expiryMs);
       if ("refused" in plan) {
         throw Object.assign(
           new Error(`replication authority refused the mint: ${plan.refused}`),
           { refused: plan.refused },
         );
       }
+      if (options?.renewalOnly && plan.path !== "session") {
+        throw Object.assign(new Error("replication renewal requires a session parent"), { refused: "NOT_COVERED" as const });
+      }
       signal.throwIfAborted();
       const minted = await new Promise<{ ucan: string; expiresAt: number }>((resolve, reject) => {
         const onAbort = (): void => reject(signal.reason ?? new Error("replication mint aborted"));
         signal.addEventListener("abort", onAbort, { once: true });
-        host.mintDelegation(deviceDid, entries).then(
+        host.mintDelegation(deviceDid, entries, options).then(
           (result) => {
             signal.removeEventListener("abort", onAbort);
             resolve(result);

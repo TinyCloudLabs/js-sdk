@@ -1,5 +1,31 @@
 # @tinycloud/replica
 
+## Unreleased
+
+### Patch Changes
+
+- Ship the KV storage worker and its inlined WASM under a SHA-256 content-hashed
+  filename for immutable caching; retain the stable worker export for explicit
+  custom-worker imports without immutable caching.
+- Ratchet the content-hashed KV worker to its GitHub-measured Bun 1.3.14 /
+  Rust 1.99.0 gzip size, with zero headroom and a toolchain check.
+
+## 0.2.4-beta.3
+
+### Patch Changes
+
+- 5827d70: Share a verified writable SQLite handle across concurrent controllers for the same replica directory until the last controller closes. A changed database inode is refused while a controller remains open; independent processes continue to open the replica normally.
+
+## 0.2.4-beta.2
+
+### Patch Changes
+
+- baca422: Pin profile and replica directories before SQLite opens during reset and sync, and for local report reads and logout cleanup. Reject whole-profile aliases, symlinked replica roots, entries, database files and persisted report descendants, changed SQLite identities, and expired profile descriptors before access. Gate legacy replica reads on pending logout, including aliases and in-flight reads. Resume cleanup of verified empty legacy replica directories after an interrupted purge without deleting unknown files.
+
+  `@tinycloud/operations` resolves user-owned symlinked TinyCloud home directories to a pinned real directory while refusing aliases inside a profile; profile JSON reads verify leaf identity. `@tinycloud/replica` creates SQLite database files exclusively for concurrent openers and checks their identity before migration; on macOS and Windows, replica removal checks each known file and directory before nonrecursive deletion and stops on a changed or unknown entry.
+
+  Breaking change (beta feature): `tc replica report` now reads persisted events and identity partitions without starting a replication runtime. `--purge` and `--clear-pending` refuse with exit 2 `REPORT_READ_ONLY`. Use `tc replica reset --replica <name> --purge` only as a partial alternative for named local replicas. Flag-owned purge and pending clearing have no equivalent yet; TC-1309 tracks safe replacement commands.
+
 ## 0.2.4-beta.1
 
 ### Patch Changes

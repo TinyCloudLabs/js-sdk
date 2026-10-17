@@ -221,7 +221,10 @@ Bun.serve({
     if (!(await file.exists())) return new Response("not found", { status: 404 });
     const name = local ?? path;
     const type = CONTENT_TYPES[name.slice(name.lastIndexOf("."))] ?? "application/octet-stream";
-    return new Response(file, { headers: { "content-type": type } });
+    return new Response(file, { headers: {
+      "content-type": type,
+      ...(/\/kv-storage\.worker\.[0-9a-f]{64}(?:-[A-Za-z0-9_-]+)?\.js$/.test(path) ? { "cache-control": "public, max-age=31536000, immutable" } : {}),
+    } });
   },
 });
 

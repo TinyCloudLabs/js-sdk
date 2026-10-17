@@ -216,6 +216,7 @@ authority state.
 **Peer commits.** `spec.onPeerCommit` is called when **another** tab or process commits a sync for the partition (browser: the worker's `committed` message on `REPLICA_KV_CHANNEL`). It is never called for the handle's own commits, and it must not throw. The controller emits `replication.sync` with `trigger: "peer"` and `origin: "peer"`, and does not sync.
 
 **Error precedence:** `REPLICA_GATED` for an already denied/stale stamp; an active browser consent deadline reaches `CONSENT_EXPIRED` before `GRANT_EXPIRED`; then `RESET_REQUIRED` for erased handles, other `GRANT_*`, storage and network codes. The typed deadline transition (§2) is observable even if the timer denies before an adapter read.
+**Node/CLI root capability precedence:** locally decidable `/` configuration errors precede the replica gate, but `kv-sync-root` support requires the node's `/info` and MUST NOT be queried before a deliverable stamp; without an established stamp status is `gated`/`not_established`, and only after the gate permits network access may an unsupported node report `unavailable`/`REPLICATION_ROOT_UNSUPPORTED`.
 
 ## 2. Lifecycle and epoch gate
 
@@ -488,7 +489,7 @@ a stamp is dropped. This includes get bytes, list keys and replica-derived diver
    **fresh authenticated session** can set it after the old purge and mint new keys.
    Until then, B's KV goes to the network. Old-key `nextHash` is never reused.
 
-**`signOut` resolves** only after this tab's handles are cancelled and closed **and** step 1 has committed (or returned a fallback outcome). Erasure continues in the background.
+**`signOut` resolves** only after this tab's handles are cancelled and closed **and** step 1 has committed (or returned a fallback outcome). It does not wait for erasure: in the browser, the outstanding purge intents are erased on the next load or `recover()` (§ Startup step 4).
 
 A transient `BUSY`, lock timeout or I/O failure **after committed denial**
 does not resurrect replica reads; erase is resumable. An explicit plain
@@ -1048,6 +1049,8 @@ node-enforced signed `exp` still bounds network use.
 | Compact delegated / `sessionOnly` | no plan, mint or silent renewal. A matching restored stamp and an independently verified installed grant for the same identity/device/prefix are **necessary but not sufficient** for local serving. Every get/list also requires the **current session's own** uncaveated get authority for the requested key/list prefix, independently of that stored device grant. If `sessionGrant(prefix)` refuses `NOT_COVERED`, `CAVEATED_AUTHORITY` or `SESSION_EXPIRING`, or cannot establish current coverage, use the network even while the stored grant is active. Otherwise the effective expiry and durable browser consent deadline still apply |
 | Installed grant reused at open | only if its stored effective authority is `valid`, it covers the prefix, its `effectiveExpiresAt` is ahead and `now <` the applicable consent deadline |
 | Restored from an older policy | recomputed at open; capped locally |
+
+For a compact delegate with no independently installed matching grant, `replication.sync` rejects with `GRANT_MISSING`; `get`/`list` are network-only; no local bytes are returned and no grant is minted.
 
 **Silent renewal.** `needsSilentRenewal(…)` is true when the remaining lifetime is **strictly** below `RENEW_BELOW_FRACTION × (effectiveExpiresAt − installedAt)` (exactly 25% remaining does not renew) and `now < consentDeadline`. It is false for non-finite inputs.
 - It is checked on a timer, before each sync, and at open.

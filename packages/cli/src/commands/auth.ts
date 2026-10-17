@@ -294,10 +294,16 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
         const ctx = await ProfileManager.resolveContext(globalOpts, { storedSession: "unused" });
         // Refuse a profile that does not exist rather than report it logged out.
         await ProfileManager.getProfile(ctx.profile);
-        await ProfileManager.clearSession(ctx.profile);
-        const replicasRemoved = options.keepReplicas
-          ? []
-          : await removeProfileReplicasAndReplication(ctx.profile);
+        let replicasRemoved: string[];
+        try {
+          replicasRemoved = options.keepReplicas
+            ? []
+            : await removeProfileReplicasAndReplication(ctx.profile);
+        } finally {
+          // CONTRACT.md:485-486: plain logout always ends the network session, even
+          // when replica removal fails; logout commits no deny that could justify keeping it.
+          await ProfileManager.clearSession(ctx.profile);
+        }
         outputJson({
           profile: ctx.profile,
           authenticated: false,
@@ -539,7 +545,7 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
           requested,
           expiryOption !== undefined ? { expiry: expiryOption } : undefined,
         );
-        await persistCurrentLocalSession(ctx.profile, profile, node.restorableSession);
+        await persistCurrentLocalSession(ctx.profile, profile, node.restorableSession, node.replicaStamp);
         const delegationCids: string[] = [];
         let expiry: string | undefined;
         // Sol MAJOR-9: accumulate EFFECTIVE grants across every signed
@@ -1723,6 +1729,7 @@ async function persistCurrentLocalSession(
   profileName: string,
   profile: ProfileConfig,
   session: TinyCloudSession | undefined,
+  replicaStamp: TinyCloudNode["replicaStamp"],
 ): Promise<void> {
   if (!session) return;
 
@@ -1731,6 +1738,7 @@ async function persistCurrentLocalSession(
       authMethod: "local",
       address: session.address,
       chainId: session.chainId,
+      ownerDid: profile.ownerDid ?? profile.did,
       spaceId: session.spaceId,
       delegationHeader: session.delegationHeader,
       delegationCid: session.delegationCid,
@@ -1738,6 +1746,7 @@ async function persistCurrentLocalSession(
       verificationMethod: session.verificationMethod,
       siwe: session.siwe,
       signature: session.signature,
+      ...(replicaStamp === undefined ? {} : { replicaStamp }),
     });
     if (profile.sessionDid !== session.verificationMethod || profile.spaceId !== session.spaceId) {
       await ProfileManager.updateProfile(profileName, (current) => ({
@@ -1830,6 +1839,7 @@ async function handleLocalAuth(
     authMethod: "local",
     address,
     chainId: DEFAULT_CHAIN_ID,
+    ownerDid: did,
     spaceId: sessionResult.spaceId,
     delegationHeader: sessionResult.delegationHeader,
     delegationCid: sessionResult.delegationCid,
@@ -1837,6 +1847,7 @@ async function handleLocalAuth(
     verificationMethod: sessionResult.verificationMethod,
     siwe: sessionResult.siwe,
     signature: sessionResult.signature,
+    ...(sessionResult.replicaStamp === undefined ? {} : { replicaStamp: sessionResult.replicaStamp }),
   };
   sessionDid = sessionResult.verificationMethod;
 

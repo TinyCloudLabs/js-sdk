@@ -1,6 +1,8 @@
 // Main class and config
 export {
   TinyCloudWeb,
+  registerBrowserReplica,
+  type BrowserReplicaPlugin,
   type Config,
   type ShareReceiveResult,
   type SessionRestoreResult,
@@ -37,6 +39,20 @@ export type {
   RegisterOwnerSharePolicyParams,
   OwnerSharePolicyRegistrationReceipt,
 } from "@tinycloud/sdk-core";
+
+// The optional replica bundle imports shared SDK core and SIWE from this root
+// bundle, never from a separately instantiated registry or session cache.
+export {
+  actionContains as __replicaActionContains,
+  KV as __replicaKV,
+  canonicalizeRecapCaveats as __replicaCanonicalizeRecapCaveats,
+  isCapabilitySubset as __replicaIsCapabilitySubset,
+  parsePkhDid as __replicaParsePkhDid,
+  parseSpaceUri as __replicaParseSpaceUri,
+  pkhDid as __replicaPkhDid,
+  principalDid as __replicaPrincipalDid,
+} from "@tinycloud/sdk-core";
+export { SiweMessage as __replicaSiweMessage } from "siwe";
 
 // Browser Adapters
 export {

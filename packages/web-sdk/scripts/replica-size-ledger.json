@@ -26,11 +26,148 @@
       "note": "Replica gzip growth measured against this PR's merge base"
     },
     {
+      "pr": "#551",
+      "ticket": "TC-841",
+      "index.mjs": 0,
+      "index.cjs": 0,
+      "note": "Replica gzip growth measured against this PR's merge base"
+    },
+    {
+      "pr": "#563",
+      "ticket": "TC-858",
+      "index.mjs": 0,
+      "index.cjs": 0,
+      "note": "Replica gzip growth measured against this PR's merge base"
+    },
+    {
+      "pr": "#564",
+      "ticket": "TC-1312",
+      "index.mjs": 0,
+      "index.cjs": 0,
+      "note": "Replica gzip growth measured against this PR's merge base"
+    },
+    {
+      "pr": "#553",
+      "ticket": "TC-858",
+      "index.mjs": 52,
+      "index.cjs": 55,
+      "note": "Replica gzip growth measured against this PR's merge base 9516f840 (includes S1 #550 kv-storage code merged into this branch)"
+    },
+    {
       "pr": "#560",
       "ticket": "TC-858",
       "index.mjs": 0,
       "index.cjs": 0,
       "note": "Replica gzip growth measured against this PR's merge base"
     }
-  ]
+  ],
+  "phase2Ratchet": {
+    "label": "TC-858 Phase 2 (#548 stack): security fences + required sync paths, approved by Naomi 2026-10-16",
+    "base": "9891ed9dddc19a57198ed156804948e04d8ea025",
+    "toolchain": "Bun 1.3.14; replica-e2e Node size job Rust 1.99.0; production webpack; gzip -9 -c",
+    "baseline": { "index.mjs": 1460603, "index.cjs": 1390460 },
+    "delta": { "index.mjs": 1322, "index.cjs": 1205 },
+    "ceiling": { "index.mjs": 1461925, "index.cjs": 1391665 },
+    "rationale": [
+      {
+        "module": "packages/node-sdk/src/TinyCloudNode.ts",
+        "controlledMarginalBeforeSafeCuts": { "index.mjs": 1073, "index.cjs": 975 },
+        "requiredAtLoad": "The web root exports the Node class. Its synchronous sign-out delivery denial, TC-1208 epoch/attempt/signOutCount fences and independent non-replica OpenKey retry cannot move behind an asynchronous replica loader. The measured whole-file marginal includes OpenKey and gzip interactions; it is not a replica-only charge."
+      },
+      {
+        "module": "packages/web-sdk/src/index.ts + packages/web-sdk/src/modules/tcw.ts",
+        "controlledMarginalBeforeSafeCuts": { "index.mjs": 312, "index.cjs": 293 },
+        "requiredAtLoad": "The root owns the explicit enabled-constructor registration and synchronous invalid-config refusal; sign-in/restore and wallet selection retain the TC-1208 fences. The optional recovery, storage, authority and worker remain outside the root."
+      },
+      {
+        "module": "packages/web-sdk/src/index.ts shared root exports",
+        "controlledMarginalBeforeSafeCuts": { "index.mjs": 103, "index.cjs": 189 },
+        "requiredAtLoad": "The separately built optional entry calls the root's existing SDK parser and SIWE helpers through these exports, sharing one registry/session and avoiding a second copy of SDK code. This marginal overlaps the index.ts/tcw.ts row and must not be summed."
+      }
+    ],
+    "safeCuts": "Bun 1.4.3 controlled combined root reduction -385/-279 against the pre-cut S2 stack: optional-only pure scope predicate reuse -77/-36, then registered synchronous Node config validation -308/-243. S4 event correction changed root by 0. Marginals are nonadditive before-cut attribution, not fabricated exact post-cut per-file gzip; the absolute built combined root ceiling is binding. Base re-measured with the official recipe; earlier provisional base superseded."
+  },
+  "fixRequiredRatchet": {
+    "label": "TC-858 Phase 2 reviewed correctness fixes: copied-proof restore, gated observation, durable denial event, GRANT_REVOKED",
+    "measuredAt": "ddc032caef81a2177e7f9c30a6a28a8f593a4580",
+    "toolchain": "Bun 1.3.14; replica-e2e Node size job Rust 1.99.0; production webpack; gzip -9 -c",
+    "priorRoot": { "index.mjs": 1461925, "index.cjs": 1391665 },
+    "rootCeiling": { "index.mjs": 1462034, "index.cjs": 1391799 },
+    "priorFirstImport": { "replica.mjs": 51201, "replica.cjs": 66132 },
+    "firstImportCeiling": { "replica.mjs": 51785, "replica.cjs": 66995 },
+    "groupedMarginals": [
+      {
+        "from": "ce52494d0cb1ea236578bc6b709e9e6e016f8c78",
+        "to": "18e9f58983727c63c8ad1bab0378e6c3248bbfa3",
+        "root": { "index.mjs": 180, "index.cjs": 157 },
+        "firstImport": { "replica.mjs": 1155, "replica.cjs": 1197 },
+        "reason": "Copied-proof restore refusal, scoped gated network-read events, S3 durable-denial event; TC-1208 synchronous sign-out and session-attempt fences preserved."
+      },
+      {
+        "from": "18e9f58983727c63c8ad1bab0378e6c3248bbfa3",
+        "to": "ddc032caef81a2177e7f9c30a6a28a8f593a4580",
+        "root": { "index.mjs": -71, "index.cjs": -23 },
+        "firstImport": { "replica.mjs": -571, "replica.cjs": -334 },
+        "reason": "Refused-admission observer physically deferred, existing runtime unbind reused, S3 sign-out event kept in loaded authority; no security or network semantics removed."
+      }
+    ],
+    "s4Marginal": "S4 GRANT_REVOKED network-read projection from 28addd98 integrated as d3930dee; standalone gzip marginal was not isolated and grouped measurements are nonadditive."
+  },
+  "canonicalToolchainCorrection": {
+    "label": "TC-858 #548 canonical CI toolchain measurement correction, zero headroom",
+    "approvedSource": "ddc032caef81a2177e7f9c30a6a28a8f593a4580",
+    "policyOnlyThrough": "2acd4ac57697333ebe780bc69a54e9586e164998",
+    "ciRun": "38971529166",
+    "ciJob": "117210798521",
+    "ciSecondJob": "117210798348",
+    "ciRunUrl": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/38971529166",
+    "ciJobUrls": [
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/38971529166/job/117210798521",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/38971529166/job/117210798348"
+    ],
+    "toolchain": { "bun": "1.3.14", "rustc": "1.99.0" },
+    "historical": {
+      "master": { "index.mjs": 1460603, "index.cjs": 1390460 },
+      "approvedDelta": { "index.mjs": 1431, "index.cjs": 1339 },
+      "rootCeiling": { "index.mjs": 1462034, "index.cjs": 1391799 },
+      "firstImportCeiling": { "replica.mjs": 51785, "replica.cjs": 66995 },
+      "activation": { "activation.mjs": 23071, "activation.cjs": 24650 }
+    },
+    "priorNoncanonical": {
+      "master": { "index.mjs": 1462685, "index.cjs": 1393687 },
+      "rootCeiling": { "index.mjs": 1464189, "index.cjs": 1395035 },
+      "firstImportCeiling": { "replica.mjs": 51786, "replica.cjs": 66995 },
+      "activationCeiling": { "activation.mjs": 23073, "activation.cjs": 24653 }
+    },
+    "measured": {
+      "master": { "index.mjs": 1462590, "index.cjs": 1393500 },
+      "delta": { "index.mjs": 1512, "index.cjs": 1369 },
+      "rootCeiling": { "index.mjs": 1464102, "index.cjs": 1394869 },
+      "firstImportCeiling": { "replica.mjs": 51785, "replica.cjs": 66995 },
+      "activationCeiling": { "activation.mjs": 23071, "activation.cjs": 24650 }
+    },
+    "reason": "GitHub replica-e2e Node size jobs 117210798521 and 117210798348 in run 38971529166 independently measured the same master9891 and #548 e5b080d5 build under CI Bun 1.3.14 and rustc 1.99.0. Local rebuilds, including the previous 1462685/1393687 master baseline, are non-canonical smoke tests. The GitHub candidate sets stricter zero-headroom root and first-import ceilings without changing shipped source or historical rows."
+  },
+  "masterMergeResolution": {
+    "label": "TC-858 #548 merged #564 shared SQLite handle and stamped replica inputs",
+    "mergedHead": "57b4a0d6a417cd3fbd439675ffbdf3f427545606",
+    "masterBase": "6e42699b0b269eb45b7f022c0ecb1b2db3bcf882",
+    "rulings": [
+      "Naomi TC-858: store.ts union of #564 shared verified SQLite handle and #548 stamped store with the S1 typed read-section guard from 8f123f98",
+      "Naomi TC-858: derived lockfile for the #548 replica dependency over master 6e42699b",
+      "Naomi TC-858: approved #548 Node/replica manifests with master beta release versions"
+    ],
+    "regeneration": "Bun 1.3.14: start with master 6e42699b bun.lock, add @tinycloud/replica 0.2.4-beta.3 to the web-sdk manifest, run bun install and bun install --frozen-lockfile; the lock differs from master only by that dependency.",
+    "measuredPaths": {
+      "packages/replica/src/sqlite/store.ts": "cb52d5b6db9ae2beaa15eb8e4977c7d7f8ff4791",
+      "packages/web-sdk/package.json": "fc1a715e656d12f6684a6548ba7bba65157173cb",
+      "bun.lock": "f8458c1b94b27b851c85c4169df337bd7ff4c3a2",
+      "packages/node-sdk/package.json": "25f43cee5185b08b1454bc059a352e194f40edf7",
+      "packages/replica/package.json": "88c7e5ea075fc358214e5803831056cc58749a31"
+    },
+    "attribution": {
+      "packages/node-sdk/package.json": "approved #548 content (ddc032ca) plus master release version strings only: Node 3.2.6-beta.4 to 3.2.6-beta.6 and @tinycloud/replica 0.2.4-beta.1 to 0.2.4-beta.3.",
+      "packages/replica/package.json": "approved #548 content (ddc032ca) plus master release version strings only: replica 0.2.4-beta.1 to 0.2.4-beta.3."
+    }
+  }
 }

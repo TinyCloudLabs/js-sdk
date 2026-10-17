@@ -627,4 +627,9 @@ export {
 // Read-through replication storage (TC-858 §11.1): Node entry ONLY —
 // loading the adapter is lazy (replica/sqlite/wasm import at first use),
 // but the export itself must never reach `@tinycloud/node-sdk/core`.
-export { sqliteReplicaStorage } from "./replication/sqlite";
+export {
+  sqliteReplicaStorage,
+  createProfileReplicaPurge,
+  type ProfileReplicaPurge,
+  type ProfileReplicaDeferredToken,
+} from "./replication/sqlite";

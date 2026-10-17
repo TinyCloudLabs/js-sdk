@@ -80,7 +80,7 @@ export type {
   ReplicationScheduler,
   ResolvedReplicationOptions,
 } from "@tinycloud/sdk-core";
-export { registerReplicationLoaders } from "./replication/module-registry";
+export { getNodeReplicationLoaders, registerReplicationLoaders } from "./replication/module-registry";
 export type { ReplicationModuleLoaders } from "./replication/module-registry";
 
 // Re-export core values for extensibility
