@@ -174,7 +174,7 @@ describe("TinyCloudNode.restoreSession session-key lifecycle", () => {
     await node.restoreSession(caveated);
     expect((await replicationAuthorityForTest(node)).consentAnchor?.()).toBeNull();
   });
-  test("a delegate-only signed leaf cannot stand in for current verified owner authority", async () => {
+  test("a delegate-only signed leaf offers only its covered grant, never owner consent, plan or mint", async () => {
     const node = new TinyCloudNode({ host: RESTORE_HOST, wasmBindings: new NodeWasmBindings() });
     const delegateDid = node.did.split("#", 1)[0]!;
     const { delegation, spaceId } = await mintCompactDelegation({
@@ -191,10 +191,26 @@ describe("TinyCloudNode.restoreSession session-key lifecycle", () => {
     });
     const authority = await replicationAuthorityForTest(node);
     expect(authority.consentAnchor?.()).toBeNull();
-    expect(authority.sessionGrant("notes/")).toEqual({ refused: "NOT_COVERED" });
+    // CONTRACT.md:647 (b796dc52): covered signed compact coverage may back only an
+    // independently installed grant; it never anchors consent, plans, mints or installs.
+    expect(authority.sessionGrant("notes/")).toEqual({
+      ucan: delegation.delegationHeader.Authorization,
+      device: { did: node.did, jwk: {} },
+    });
+    expect(authority.sessionGrant("other/")).toEqual({ refused: "NOT_COVERED" });
+    const planDelegation = spyOn(node as unknown as { planDelegation: () => unknown }, "planDelegation");
     expect(authority.plan("notes/")).toEqual({ refused: "NOT_COVERED" });
-    await expect(authority.mint(delegateDid, "notes/", new AbortController().signal))
-      .rejects.toThrow(/compact|owner|consent/i);
+    const originalFetch = globalThis.fetch;
+    const fetchCalls = mock(async () => new Response(null, { status: 500 }));
+    globalThis.fetch = fetchCalls as unknown as typeof fetch;
+    try {
+      await expect(authority.mint(delegateDid, "notes/", new AbortController().signal))
+        .rejects.toThrow(/compact|owner|consent/i);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+    expect(planDelegation).not.toHaveBeenCalled();
+    expect(fetchCalls).not.toHaveBeenCalled();
   });
   test("a current scoped signed owner can plan its covered prefix but not a sibling", async () => {
     const proof = await signedRestorableSession({
