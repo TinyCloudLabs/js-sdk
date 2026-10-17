@@ -565,16 +565,21 @@ export interface ProfileReplicaPurge extends Pick<ReplicaLifecycleGate, "recover
   }): Promise<ProfileReplicaLogoutPending>;
   /**
    * CLI startup/logout recovery under the same profile lock. A `remotePending`
-   * marker returns failure with no credential or file deletion. Otherwise
-   * `clearCredentials` atomically fsyncs CLI authSignedOut before unlinking
-   * and fsyncing both session.json and key.json. Recheck durable approved
-   * identities before each unlink; mismatch stops with marker, remaining
-   * files and nonzero failure. Post-success credentials remain shredded.
-   * V1 resumes deferred or commits generation-fenced denial; v3 validates
-   * the already-denied epoch; v2 invents no scoped gate/intents. The callback
-   * erases only its approved inventory under the profile lock (never recursive
-   * legacy deletion). In-repo CLI code owns the signed-out postcondition;
-   * the facade verifies credential absence before erasure. A missing marker
+   * marker returns failure with no credential or file deletion. For a
+   * cleanup-ready active-v1 marker, validate the gate and durably commit
+   * generation-fenced denial with complete partition/pending intents
+   * BEFORE calling `clearCredentials`; denial failure leaves the marker,
+   * both credentials and replica files intact and reports nonzero failure.
+   * An already-deferred v1 validates its exact denial; v3 validates its
+   * inactive epoch and v2 its orphan/no-replacement-gate fence without
+   * inventing scoped intents. Only then does `clearCredentials` atomically
+   * fsync CLI authSignedOut before unlinking and fsyncing both session.json
+   * and key.json. Recheck durable approved identities before each unlink;
+   * mismatch stops with marker, remaining files and nonzero failure.
+   * Post-success credentials remain shredded. The callback erases only its
+   * approved inventory under the profile lock (never recursive legacy
+   * deletion). In-repo CLI code owns the signed-out postcondition; the
+   * facade verifies credential absence before erasure. A missing marker
    * with corrupt/unreadable gate reports failure and nonzero remaining,
    * without invoking callbacks or fabricating successful completion.
    */
