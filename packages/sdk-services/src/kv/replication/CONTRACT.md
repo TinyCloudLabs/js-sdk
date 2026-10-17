@@ -279,6 +279,10 @@ rename). Deny writes it **before** the gate-file rewrite and advances past both 
 floor. An absent floor is valid only before the first deny. After a deny, a missing gate file is
 never recreated, and a gate whose `lifecycleEpoch` or `deniedAt` is behind the floor (or a
 malformed floor) fails closed (`gate_unavailable`); a later deny may move such a gate forward.
+**Recovery:** network access is unaffected, but local replicas stay disabled for that profile.
+`tc replica reset --replica <name> --purge` removes only a named replica and does not rewrite the
+gate, so the route is a fresh profile: `tc profile delete <name>`, then sign in again. The
+refusal message names this route.
 
 **The gate is mandatory with replication on.**
 - `indexedDbReplicaStorage()` MUST expose `lifecycle`, and the web runtime refuses storage without it with `RUNTIME_UNSUPPORTED`.

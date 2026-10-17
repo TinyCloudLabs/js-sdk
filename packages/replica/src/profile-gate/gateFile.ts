@@ -199,6 +199,13 @@ async function readDenyFloor(profileDir: string): Promise<DenyFloor | undefined>
 }
 
 /**
+ * A lost or rolled-back gate after a deny stays closed. No replica reset rewrites the gate, so the
+ * recovery is a fresh profile; network access is unaffected.
+ */
+const LOST_GATE_RECOVERY =
+  "Local replicas stay disabled for this profile; to start over, delete it (`tc profile delete <name>`) and sign in again.";
+
+/**
  * The stored state, or `undefined` when no gate file exists and no deny ever committed. Never
  * creates the file. After a deny, a missing gate or one behind the floor fails closed.
  */
@@ -207,10 +214,10 @@ async function readState(profileDir: string): Promise<NodeGateState | undefined>
   const floor = await readDenyFloor(profileDir);
   if (floor === undefined) return state;
   if (state === undefined) {
-    throw gateRefusal("gate_unavailable", "The replica gate is missing after a sign-out.");
+    throw gateRefusal("gate_unavailable", `The replica gate is missing after a sign-out. ${LOST_GATE_RECOVERY}`);
   }
   if (state.lifecycleEpoch < floor.epoch || state.deniedAt === null || state.deniedAt < floor.deniedAt) {
-    throw gateRefusal("gate_unavailable", "The replica gate is behind its last sign-out.");
+    throw gateRefusal("gate_unavailable", `The replica gate is behind its last sign-out. ${LOST_GATE_RECOVERY}`);
   }
   return state;
 }
@@ -439,7 +446,7 @@ export async function denyGate(
     const state = await readStoredState(profileDir);
     const floor = await readDenyFloor(profileDir);
     if (state === undefined && floor !== undefined) {
-      throw gateRefusal("gate_unavailable", "The replica gate is missing after a sign-out.");
+      throw gateRefusal("gate_unavailable", `The replica gate is missing after a sign-out. ${LOST_GATE_RECOVERY}`);
     }
     if (state === undefined || state.principalHash === null) return { status: "stale" };
     if (precomputed !== undefined && state.salt !== precomputed.salt) {
