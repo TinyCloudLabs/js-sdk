@@ -57,6 +57,11 @@ async function createProfile(name = PROFILE): Promise<void> {
     createdAt: "2026-10-01T00:00:00.000Z",
   });
 }
+async function establishReadableSession(profile = PROFILE): Promise<void> {
+  const ownerDid = "did:pkh:eip155:1:0x0000000000000000000000000000000000000001";
+  const replicaStamp = await establishSessionStamp(join(PROFILES_DIR, profile), ownerDid, { siweIssuedAt: Date.now() });
+  await ProfileManager.setSession(profile, { ownerDid, replicaStamp });
+}
 
 async function resetFromCli(profile: string, name: string, purge = true): Promise<{ exited: boolean; stderr: string }> {
   const program = new Command();
@@ -240,9 +245,7 @@ describe("profile replica removal", () => {
 test("replica budget and expired consent report distinct actionable exit codes", async () => {
   const store = await createReplica(PROFILE, config);
   await store.close();
-  const ownerDid = "did:pkh:eip155:1:0x0000000000000000000000000000000000000001";
-  const replicaStamp = await establishSessionStamp(join(PROFILES_DIR, PROFILE), ownerDid, { siweIssuedAt: Date.now() });
-  await ProfileManager.setSession(PROFILE, { ownerDid, replicaStamp });
+  await establishReadableSession();
   for (const { code, message, exitCode, guidance } of [
     { code: ReplicaErrorCode.STORAGE_BUDGET, message: "The replica page exceeds the origin's byte budget.", exitCode: 10, guidance: /byte budget/i },
     { code: ReplicaErrorCode.CONSENT_EXPIRED, message: "The account consent has expired.", exitCode: 5, guidance: /sign in again.*renew consent/i },
@@ -538,6 +541,7 @@ describe("replica reset purge containment", () => {
     await store.applyPage(lease!, page());
     await store.releaseLease(lease!);
     await store.close();
+    await establishReadableSession();
     const commands = [
       ["replica", "get", "notes/a", "--replica", "notes", "--raw"],
       ["replica", "list", "--replica", "notes"],
@@ -566,6 +570,7 @@ describe("replica reset purge containment", () => {
     await store.applyPage(lease!, page());
     await store.releaseLease(lease!);
     await store.close();
+    await establishReadableSession();
     const originalGet = SqliteReplicaStore.prototype.get;
     const marker = join(PROFILES_DIR, PROFILE, "replica-logout-pending.json");
     let readCompleted = false;
@@ -595,6 +600,7 @@ describe("replica reset purge containment", () => {
     await store.applyPage(lease!, page());
     await store.releaseLease(lease!);
     await store.close();
+    await establishReadableSession("victim");
     expect((await readFromCli("victim", ["replica", "get", "notes/a", "--replica", "notes", "--raw"])).stdout).toContain("secret");
     await symlink(join(PROFILES_DIR, "victim"), join(PROFILES_DIR, "linked"));
 
