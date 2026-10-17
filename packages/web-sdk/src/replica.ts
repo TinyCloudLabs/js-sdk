@@ -164,16 +164,19 @@ async function recoveredBrowserReplication(
   return { ...replication, storage: guardedStorage };
 }
 
-/** Runtime loader callbacks let the root-owned registry activate replica only after opt-in. */
+/**
+ * Runtime loader callbacks let the root-owned registry activate replica only after opt-in. Frozen:
+ * a same-realm import cannot swap the recovery guard or a loader.
+ */
 const validateConfig = assertValidReplicationConfig;
-export const browserReplicaPlugin: BrowserReplicaPlugin = {
+export const browserReplicaPlugin: BrowserReplicaPlugin = Object.freeze({
   validateConfig,
-  loaders: {
+  loaders: Object.freeze({
     validateConfig,
     runtime: () => import("@tinycloud/node-sdk/replication/runtime"),
     authority: () => import("@tinycloud/node-sdk/replication/authority"),
     gatedNetwork: () => import("./replica-gated"),
     gate: () => import("@tinycloud/replica/profile-gate"),
-  },
+  }),
   recover: recoveredBrowserReplication,
-};
+});

@@ -45,14 +45,17 @@ assert.deepEqual(importTouches, { indexedDB: 0, worker: 0 });
 assert.throws(() => new root.TinyCloudWeb({ replication: {
   enabled: true, prefixes: ["notes/"], storage: { kind: "indexeddb" },
 } }), /registerBrowserReplica/);
-const actualGatedLoader = optional.browserReplicaPlugin.loaders.gatedNetwork;
+const plugin = optional.browserReplicaPlugin;
+assert.ok(Object.isFrozen(plugin) && Object.isFrozen(plugin.loaders), "the built replica plugin must be frozen");
+assert.equal(Reflect.set(plugin.loaders, "gatedNetwork", () => undefined), false);
+// Count gated-artifact loads through a registered wrapper; the exported plugin cannot be patched.
 let gatedLoads = 0;
-optional.browserReplicaPlugin.loaders.gatedNetwork = () => {
+let gatedNetwork = plugin.loaders.gatedNetwork;
+root.registerBrowserReplica({ ...plugin, loaders: { ...plugin.loaders, gatedNetwork: () => {
   gatedLoads++;
-  return actualGatedLoader();
-};
-root.registerBrowserReplica(optional.browserReplicaPlugin);
-assert.throws(() => root.registerBrowserReplica(optional.browserReplicaPlugin), /already registered/);
+  return gatedNetwork();
+} } });
+assert.throws(() => root.registerBrowserReplica(plugin), /already registered/);
 Object.defineProperty(globalThis, "indexedDB", { configurable: true, value: indexedDB });
 (globalThis as any).IDBKeyRange = IDBKeyRange;
 (globalThis as any).navigator = { locks: { request: async (_name: string, options: unknown, section?: () => Promise<unknown>) =>
@@ -151,8 +154,8 @@ assert.deepEqual(
   { source: "network", reason: "replica_gated", outcome: "error", code: "REPLICA_GATED" },
 );
 assert(gatedLoads > 0, "a refused restore must fetch the gated-only observer");
-const gatedLoader = optional.browserReplicaPlugin.loaders.gatedNetwork;
-optional.browserReplicaPlugin.loaders.gatedNetwork = async () => { throw new Error("gated chunk unavailable"); };
+const gatedLoader = gatedNetwork;
+gatedNetwork = async () => { throw new Error("gated chunk unavailable"); };
 try {
   const stillNetwork = await root.TinyCloudWeb.create({ ...config, provider });
   assert.equal((await stillNetwork.restoreSession(proof.address)).status, "restored",
@@ -164,7 +167,7 @@ try {
   assert.equal(result.error.message, "offline by fixture",
     "a missing optional observer must leave the real network KV path usable");
 } finally {
-  optional.browserReplicaPlugin.loaders.gatedNetwork = gatedLoader;
+  gatedNetwork = gatedLoader;
 }
 const beforeSignOut = gatedLoads;
 await web.signOut();
