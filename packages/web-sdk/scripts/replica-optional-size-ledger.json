@@ -78,10 +78,10 @@
     {
       "pr": "#565",
       "ticket": "TC-858",
-      "replica.mjs": -11,
-      "replica.cjs": -33,
-      "activation.mjs": -40,
-      "activation.cjs": -39,
+      "replica.mjs": 78,
+      "replica.cjs": 71,
+      "activation.mjs": 4,
+      "activation.cjs": 5,
       "note": "Optional first-import and IDB activation gzip deltas against this PR's merge base"
     }
   ]
