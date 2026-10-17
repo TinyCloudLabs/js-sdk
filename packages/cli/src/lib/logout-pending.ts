@@ -2,7 +2,7 @@ import { lstat, open, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { createProfileReplicaPurge, logoutPrincipalDigest, REPLICA_LOGOUT_PENDING_FILE } from "@tinycloud/node-sdk";
 import type { ProfileReplicaLogoutPending, ProfileReplicaPurge } from "@tinycloud/sdk-services/kv/replication";
-import { profilePath } from "@tinycloud/operations/state";
+import { namedProfilePath, profilePath } from "@tinycloud/operations/state";
 import { readGateSnapshot } from "@tinycloud/replica/profile-gate";
 import { REPLICA_GATE_FILE } from "@tinycloud/sdk-services/kv/replication/contractConstants";
 import { ProfileManager } from "../config/profiles.js";
@@ -40,7 +40,7 @@ export function assertPendingLogoutOwner(name: string, principalDigest: string, 
   throw new CLIError("REPLICA_GATED",
     `The pending logout on profile "${name}" belongs to a different principal than the current session; ` +
     "credentials, replica files and the logout marker were left unchanged, and local replica reads stay blocked. " +
-    "See the TinyCloud CLI documentation or contact support to finish it.",
+    "Contact support to finish it.",
     ExitCode.ERROR);
 }
 
@@ -179,11 +179,23 @@ export async function recoverPendingLogout(name: string): Promise<void> {
     return;
   }
   const report = await ProfileManager.withLock(name, async () => {
-    const session = await ProfileManager.getSession(name);
+    let session: object | null;
+    try {
+      session = await ProfileManager.getSession(name);
+    } catch {
+      // An unreadable session cannot be attributed to the marker's principal.
+      throw new CLIError("REPLICA_GATED",
+        `A logout is pending on profile "${name}", but its session file ${join(namedProfilePath(name), "session.json")} is unreadable; ` +
+        "credentials, replica files and the logout marker were left unchanged, and local replica reads stay blocked.",
+        ExitCode.ERROR);
+    }
     if (session) {
-      // An unreadable or malformed marker is left to the facade's own refusal.
+      // An unreadable or malformed marker skips this check; the facade then
+      // refuses it as a failed recovery without touching anything.
       const marker: unknown = await readFile(join(profilePath(name), REPLICA_LOGOUT_PENDING_FILE), "utf8")
-        .then((text) => JSON.parse(text), () => null);
+        .then((text): unknown => {
+          try { return JSON.parse(text); } catch { return null; }
+        }, () => null);
       if (typeof marker === "object" && marker !== null && "principalDigest" in marker &&
           typeof marker.principalDigest === "string") {
         const profile = await ProfileManager.getProfile(name);

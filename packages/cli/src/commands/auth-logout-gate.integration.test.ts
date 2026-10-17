@@ -339,3 +339,43 @@ for (const command of [["auth", "logout"], ["auth", "status"]]) {
     expect(await signedOut(paths.directory)).toBeUndefined();
   });
 }
+
+test("`auth status` with a live session reports a corrupt pending logout marker without touching anything", async () => {
+  const home = await mkdtemp(join(tmpdir(), "tc841-cli-status-corrupt-marker-"));
+  homes.push(home);
+  const paths = await interruptedLogout(home, "v1");
+  await writeFile(paths.marker, "{not json");
+  const before = await Promise.all([paths.session, paths.key, paths.marker, paths.replica]
+    .map((path) => readFile(path)));
+  const gate = await readGateSnapshot(paths.directory);
+
+  const refused = await run(home, [], true, ["auth", "status"]);
+  expect(refused.exitCode).toBeGreaterThan(0);
+  expect(JSON.parse(refused.stderr).error).toMatchObject({ code: "REPLICA_PURGE_FAILED" });
+  expect(refused.stderr + refused.stdout).not.toMatch(/SyntaxError|JSON Parse/);
+  expect(await Promise.all([paths.session, paths.key, paths.marker, paths.replica]
+    .map((path) => readFile(path)))).toEqual(before);
+  expect(await readGateSnapshot(paths.directory)).toEqual(gate);
+  expect(await signedOut(paths.directory)).toBeUndefined();
+});
+
+test("`auth status` refuses an unreadable session beside a pending logout marker without touching anything", async () => {
+  const home = await mkdtemp(join(tmpdir(), "tc841-cli-status-corrupt-session-"));
+  homes.push(home);
+  const paths = await interruptedLogout(home, "v1");
+  await writeFile(paths.session, "{not json");
+  const before = await Promise.all([paths.session, paths.key, paths.marker, paths.replica]
+    .map((path) => readFile(path)));
+  const gate = await readGateSnapshot(paths.directory);
+
+  const refused = await run(home, [], true, ["auth", "status"]);
+  expect(refused.exitCode).toBeGreaterThan(0);
+  const error = JSON.parse(refused.stderr).error;
+  expect(error).toMatchObject({ code: "REPLICA_GATED" });
+  expect(error.message).toContain(paths.session);
+  expect(refused.stderr + refused.stdout).not.toMatch(/SyntaxError|JSON Parse/);
+  expect(await Promise.all([paths.session, paths.key, paths.marker, paths.replica]
+    .map((path) => readFile(path)))).toEqual(before);
+  expect(await readGateSnapshot(paths.directory)).toEqual(gate);
+  expect(await signedOut(paths.directory)).toBeUndefined();
+});
