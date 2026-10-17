@@ -187,7 +187,9 @@ equivalent yet (TC-1309). On macOS and Windows, `replica reset --purge` and
 `auth logout` with a legacy `replicas/` tree refuse local removal rather than
 delete through an unpinned path; leave that tree intact and retry on a supported
 platform. `auth logout` removes both legacy replicas and the flag-owned
-`replication/` root; `auth logout --keep-replicas` keeps both.
+`replication/` root; `auth logout --keep-replicas` keeps both. A plain
+`auth logout` always clears the session, even when a replica is syncing or
+cannot be removed; the error names what was left in place.
 
 ## Output Modes
 

@@ -294,10 +294,16 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
         const ctx = await ProfileManager.resolveContext(globalOpts, { storedSession: "unused" });
         // Refuse a profile that does not exist rather than report it logged out.
         await ProfileManager.getProfile(ctx.profile);
-        const replicasRemoved = options.keepReplicas
-          ? []
-          : await removeProfileReplicasAndReplication(ctx.profile);
-        await ProfileManager.clearSession(ctx.profile);
+        let replicasRemoved: string[];
+        try {
+          replicasRemoved = options.keepReplicas
+            ? []
+            : await removeProfileReplicasAndReplication(ctx.profile);
+        } finally {
+          // CONTRACT.md:485-486: plain logout always ends the network session, even
+          // when replica removal fails; logout commits no deny that could justify keeping it.
+          await ProfileManager.clearSession(ctx.profile);
+        }
         outputJson({
           profile: ctx.profile,
           authenticated: false,

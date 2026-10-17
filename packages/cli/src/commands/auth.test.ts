@@ -888,17 +888,26 @@ describe("CLI auth commands on a missing profile (TC-682)", () => {
       warning: expect.stringContaining("tc delegation revoke <cid>"),
     })]);
   });
-  test("logout keeps the session when a replica is still syncing", async () => {
-    profiles.set("owner", makeProfile({ name: "owner" }));
-    sessions.set("owner", { delegationCid: "bafy-session" });
-    recorded.replicaRemovalError = Object.assign(new Error("Cannot log out: replica is syncing. The session was kept and no replicas were removed."), { code: "REPLICA_BUSY" });
+  // CONTRACT.md:485-486: an explicit plain logout always ends the network session,
+  // even while replica erase remains pending. CLI logout commits no deny, so no
+  // failure may keep the session.
+  for (const [code, message] of [
+    ["REPLICA_BUSY", `Logout cleared the session, but replica "notes" is syncing. No replicas were removed.`],
+    ["REPLICA_PURGE_FAILED", "Logout cleared the session, but replica cleanup failed. Removed: none. Not removed: notes."],
+  ] as const) {
+    test(`plain logout clears the session and reports ${code} when replica removal fails`, async () => {
+      profiles.set("owner", makeProfile({ name: "owner" }));
+      sessions.set("owner", { delegationCid: "bafy-session" });
+      recorded.replicaRemovalError = Object.assign(new Error(message), { code });
 
-    await runAuthCommand(["auth", "logout"]);
+      await runAuthCommand(["auth", "logout"]);
 
-    expect(recorded.clearSessions).toEqual([]);
-    expect(sessions.get("owner")).toEqual({ delegationCid: "bafy-session" });
-    expect(recorded.errors).toEqual([expect.objectContaining({ code: "REPLICA_BUSY" })]);
-  });
+      expect(recorded.clearSessions).toEqual(["owner"]);
+      expect(sessions.has("owner")).toBe(false);
+      expect(recorded.outputs).toEqual([]);
+      expect(recorded.errors).toEqual([expect.objectContaining({ code, message })]);
+    });
+  }
 
   test("OpenKey login reports PROFILE_NOT_FOUND, not NO_KEY, before any approval starts", async () => {
     await runAuthCommand(["auth", "login", "--method", "openkey", "--paste"]);
