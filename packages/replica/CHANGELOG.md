@@ -10,6 +10,12 @@
 - Ratchet the content-hashed KV worker to its GitHub-measured Bun 1.3.14 /
   Rust 1.99.0 gzip size, with zero headroom and a toolchain check.
 
+## 0.2.4-beta.3
+
+### Patch Changes
+
+- 5827d70: Share a verified writable SQLite handle across concurrent controllers for the same replica directory until the last controller closes. A changed database inode is refused while a controller remains open; independent processes continue to open the replica normally.
+
 ## 0.2.4-beta.2
 
 ### Patch Changes

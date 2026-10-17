@@ -994,6 +994,7 @@ describe("sqlite replica handle", () => {
     const entered = Promise.withResolvers<void>();
     const release = Promise.withResolvers<void>();
     let pause = true;
+    let syncing: ReturnType<typeof handle.sync> | undefined;
     try {
       await handle.installGrant(await mintUcan({ audience: device.did }));
       await handle.sync({ signal: new AbortController().signal, syncStartEpoch: 1 });
@@ -1008,14 +1009,19 @@ describe("sqlite replica handle", () => {
       const reading = handle.list({ prefix: "notes/" });
       await entered.promise;
       feed.put("notes/b", "new");
-      await handle.sync({ signal: new AbortController().signal, syncStartEpoch: 7 });
+      // The write waits behind the paused read on the shared SQLite handle.
+      syncing = handle.sync({ signal: new AbortController().signal, syncStartEpoch: 7 });
       release.resolve();
       const result = await reading;
       expect(result.keys).toEqual(["notes/a"]);
       expect(result.meta.syncedThroughEpoch).toBe(1);
-      expect((await handle.list({ prefix: "notes/" })).keys).toEqual(["notes/a", "notes/b"]);
+      expect((await syncing).status).toBe("synced");
+      const fresh = await handle.list({ prefix: "notes/" });
+      expect(fresh.keys).toEqual(["notes/a", "notes/b"]);
+      expect(fresh.meta.syncedThroughEpoch).toBe(7);
     } finally {
       release.resolve();
+      if (syncing !== undefined) await syncing.catch(() => undefined);
       SqliteReplicaStore.prototype.list = originalList;
       await handle.close();
     }

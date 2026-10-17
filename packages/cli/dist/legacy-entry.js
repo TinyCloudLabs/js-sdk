@@ -19234,9 +19234,44 @@ var pinnedDirectories = new FinalizationRegistry((fd) => {
   } catch {
   }
 });
+var writableStores = /* @__PURE__ */ new Map();
+function releaseWritable(shared) {
+  if (shared.references === 0 || --shared.references !== 0) return;
+  if (writableStores.get(shared.key) === shared) writableStores.delete(shared.key);
+  try {
+    shared.db.close();
+  } finally {
+    if (shared.directoryFd !== void 0) closeSync(shared.directoryFd);
+  }
+}
+var sharedStores = new FinalizationRegistry((shared) => {
+  try {
+    releaseWritable(shared);
+  } catch {
+  }
+});
+async function acquireWritableMutation(shared) {
+  const previous = shared.mutationTail;
+  let release;
+  shared.mutationTail = new Promise((resolve22) => {
+    release = resolve22;
+  });
+  await previous;
+  return release;
+}
 var SqliteReplicaStore = class _SqliteReplicaStore {
   dir;
-  #db;
+  #database;
+  get #db() {
+    if (this.#closed) throw new ReplicaError2(ReplicaErrorCode2.CLOSED, "The replica store is closed.");
+    return this.#database;
+  }
+  #closed = false;
+  #closing = false;
+  #closePromise;
+  #activeMutations = 0;
+  #drained;
+  #shared;
   #pinnedDir;
   #directoryFd;
   #holder = `${process.pid}-${randomBytes2(6).toString("hex")}`;
@@ -19247,12 +19282,18 @@ var SqliteReplicaStore = class _SqliteReplicaStore {
   #ino;
   #dev;
   #namedAncestors;
-  constructor(dir, db, identity, options, directoryFd, namedAncestors = []) {
+  constructor(dir, db, identity, options, directoryFd, namedAncestors = [], shared) {
     this.dir = dir;
-    this.#pinnedDir = directoryFd !== void 0 && process.platform === "linux" ? `/proc/self/fd/${directoryFd}` : dir;
+    this.#pinnedDir = shared?.pinnedDir ?? (directoryFd !== void 0 && process.platform === "linux" ? `/proc/self/fd/${directoryFd}` : dir);
     this.#directoryFd = directoryFd;
-    if (directoryFd !== void 0) pinnedDirectories.register(this, directoryFd, this);
-    this.#db = db;
+    this.#shared = shared;
+    if (shared) {
+      shared.references++;
+      sharedStores.register(this, shared, this);
+    } else if (directoryFd !== void 0) {
+      pinnedDirectories.register(this, directoryFd, this);
+    }
+    this.#database = db;
     this.#ino = identity.ino;
     this.#dev = identity.dev;
     this.#now = options.now ?? Date.now;
@@ -19322,7 +19363,6 @@ var SqliteReplicaStore = class _SqliteReplicaStore {
       );
       if (!exists) throw new ReplicaError2(ReplicaErrorCode2.NOT_FOUND, `No regular replica database at ${dir}.`);
     }
-    const opener = options.sqlite ?? await loadSqlite();
     const releaseOpen = await acquireSqliteOpen();
     let store;
     let directoryFd;
@@ -19364,63 +19404,99 @@ var SqliteReplicaStore = class _SqliteReplicaStore {
         if (!identity.isFile() || !named.isFile() || named.dev !== identity.dev || named.ino !== identity.ino) {
           throw new Error("The replica database changed before SQLite opened it.");
         }
-        const previousFds = process.platform === "linux" && !options.sqlite ? new Map(readdirSync2("/proc/self/fd").map((fd) => {
-          try {
-            return [fd, readlinkSync(`/proc/self/fd/${fd}`)];
-          } catch {
-            return [fd, ""];
+        const key = `${opened.dev}:${opened.ino}`;
+        const active = writableStores.get(key);
+        if (active && (active.dev !== identity.dev || active.ino !== identity.ino)) {
+          throw new Error("The replica database changed while another controller holds it open.");
+        }
+        if (active && !options.sqlite) {
+          const namedDirectory = lstatSync(dir, { bigint: true });
+          if (!namedDirectory.isDirectory() || namedDirectory.dev !== opened.dev || namedDirectory.ino !== opened.ino) {
+            throw new Error("The replica directory changed before its checked SQLite handle could be shared.");
           }
-        })) : null;
-        db = opener(dbPath);
-        const afterOpen = lstatSync(dbPath);
-        if (!afterOpen.isFile() || afterOpen.dev !== identity.dev || afterOpen.ino !== identity.ino) {
-          throw new Error("The replica database changed while SQLite opened it.");
-        }
-        if (previousFds) db.get("SELECT count(*) FROM sqlite_master");
-        if (previousFds) {
-          const databases = readdirSync2("/proc/self/fd").filter((fd) => {
-            try {
-              const target = readlinkSync(`/proc/self/fd/${fd}`);
-              return target.endsWith("/replica.db") && previousFds.get(fd) !== target;
-            } catch {
-              return false;
-            }
-          });
-          if (databases.length === 0 || databases.some((fd) => {
-            try {
-              const actual = fstatSync(Number(fd));
-              return actual.dev !== identity.dev || actual.ino !== identity.ino;
-            } catch {
-              return true;
-            }
-          })) {
-            throw new Error("SQLite opened a different replica database.");
+          const pinned = active.directoryFd === void 0 ? lstatSync(active.pinnedDir, { bigint: true }) : fstatSync(active.directoryFd, { bigint: true });
+          const activeLeaf = lstatSync(join7(active.pinnedDir, "replica.db"));
+          if (!pinned.isDirectory() || pinned.dev !== opened.dev || pinned.ino !== opened.ino || !activeLeaf.isFile() || activeLeaf.dev !== identity.dev || activeLeaf.ino !== identity.ino || active.directoryFd === void 0 && active.namedPath !== dir) {
+            throw new Error("The live replica changed before its checked SQLite handle could be shared.");
           }
+          if (directoryFd !== void 0) {
+            closeSync(directoryFd);
+            directoryFd = void 0;
+          }
+          store = new _SqliteReplicaStore(dir, active.db, identity, options, active.directoryFd, namedAncestors, active);
         }
-        const after = lstatSync(dbPath);
-        if (!after.isFile() || after.dev !== identity.dev || after.ino !== identity.ino) {
-          throw new Error("The replica database changed while SQLite opened it.");
+        if (!store) {
+          const opener = options.sqlite ?? await loadSqlite();
+          const previousFds = process.platform === "linux" && !options.sqlite ? new Map(readdirSync2("/proc/self/fd").map((fd) => {
+            try {
+              return [fd, readlinkSync(`/proc/self/fd/${fd}`)];
+            } catch {
+              return [fd, ""];
+            }
+          })) : null;
+          db = opener(dbPath);
+          const afterOpen = lstatSync(dbPath);
+          if (!afterOpen.isFile() || afterOpen.dev !== identity.dev || afterOpen.ino !== identity.ino) {
+            throw new Error("The replica database changed while SQLite opened it.");
+          }
+          if (previousFds) db.get("SELECT count(*) FROM sqlite_master");
+          if (previousFds) {
+            const databases = readdirSync2("/proc/self/fd").filter((fd) => {
+              try {
+                const target = readlinkSync(`/proc/self/fd/${fd}`);
+                return target.endsWith("/replica.db") && previousFds.get(fd) !== target;
+              } catch {
+                return false;
+              }
+            });
+            if (databases.length === 0 || databases.some((fd) => {
+              try {
+                const actual = fstatSync(Number(fd));
+                return actual.dev !== identity.dev || actual.ino !== identity.ino;
+              } catch {
+                return true;
+              }
+            })) {
+              throw new Error("SQLite opened a different replica database.");
+            }
+          }
+          const after = lstatSync(dbPath);
+          if (!after.isFile() || after.dev !== identity.dev || after.ino !== identity.ino) {
+            throw new Error("The replica database changed while SQLite opened it.");
+          }
+          db.exec("PRAGMA busy_timeout = 5000");
+          db.exec("PRAGMA journal_mode = WAL");
+          db.exec("PRAGMA synchronous = FULL");
+          db.exec("PRAGMA secure_delete = ON");
+          db.exec("PRAGMA foreign_keys = ON");
+          const version = db.get("PRAGMA user_version")?.user_version ?? 0;
+          if (version > SCHEMA_VERSION) {
+            throw new ReplicaError2(
+              ReplicaErrorCode2.STORAGE_ERROR,
+              `The replica at ${dir} was written by a newer tc (schema ${version}); upgrade tc to read it.`
+            );
+          }
+          if (version < SCHEMA_VERSION) {
+            db.exec("BEGIN IMMEDIATE");
+            db.exec(SCHEMA);
+            db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`);
+            db.exec("COMMIT");
+          }
+          const shared = options.sqlite ? void 0 : {
+            key,
+            db,
+            directoryFd,
+            pinnedDir,
+            namedPath: dir,
+            dev: identity.dev,
+            ino: identity.ino,
+            references: 0,
+            mutationTail: Promise.resolve()
+          };
+          store = new _SqliteReplicaStore(dir, db, identity, options, directoryFd, namedAncestors, shared);
+          if (shared) writableStores.set(key, shared);
+          db = void 0;
         }
-        db.exec("PRAGMA busy_timeout = 5000");
-        db.exec("PRAGMA journal_mode = WAL");
-        db.exec("PRAGMA synchronous = FULL");
-        db.exec("PRAGMA secure_delete = ON");
-        db.exec("PRAGMA foreign_keys = ON");
-        const version = db.get("PRAGMA user_version")?.user_version ?? 0;
-        if (version > SCHEMA_VERSION) {
-          throw new ReplicaError2(
-            ReplicaErrorCode2.STORAGE_ERROR,
-            `The replica at ${dir} was written by a newer tc (schema ${version}); upgrade tc to read it.`
-          );
-        }
-        if (version < SCHEMA_VERSION) {
-          db.exec("BEGIN IMMEDIATE");
-          db.exec(SCHEMA);
-          db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`);
-          db.exec("COMMIT");
-        }
-        store = new _SqliteReplicaStore(dir, db, identity, options, directoryFd, namedAncestors);
-        db = void 0;
       } finally {
         try {
           db?.close();
@@ -19459,30 +19535,53 @@ var SqliteReplicaStore = class _SqliteReplicaStore {
       );
     }
   }
+  /** New calls stop at close; accepted mutation sections may still finish their transactions. */
+  #assertAccepting() {
+    if (this.#closing || this.#closed) {
+      throw new ReplicaError2(ReplicaErrorCode2.CLOSED, "The replica store is closed.");
+    }
+  }
   /** A short mutation section: guarded (profile lock) and checked against the database this store opened. */
   #mutate(section) {
-    return this.#guard(async () => {
-      await this.#assertPresent();
-      return section();
-    });
+    this.#assertAccepting();
+    this.#activeMutations++;
+    return (async () => {
+      try {
+        return await this.#guard(async () => {
+          await this.#assertPresent();
+          return section();
+        });
+      } finally {
+        if (--this.#activeMutations === 0) {
+          const drained = this.#drained;
+          this.#drained = void 0;
+          drained?.();
+        }
+      }
+    })();
   }
   /** Run `body` in a write transaction (BEGIN IMMEDIATE). Callers outside a mutation section use `#guardedWrite`. */
-  #write(action, body) {
+  async #write(action, body) {
+    const release = this.#shared ? await acquireWritableMutation(this.#shared) : void 0;
     try {
-      this.#db.exec("BEGIN IMMEDIATE");
-    } catch (error) {
-      throw storageError(error, action);
-    }
-    try {
-      const result = body();
-      this.#db.exec("COMMIT");
-      return result;
-    } catch (error) {
       try {
-        this.#db.exec("ROLLBACK");
-      } catch {
+        this.#db.exec("BEGIN IMMEDIATE");
+      } catch (error) {
+        throw storageError(error, action);
       }
-      throw storageError(error, action);
+      try {
+        const result = body();
+        this.#db.exec("COMMIT");
+        return result;
+      } catch (error) {
+        try {
+          this.#db.exec("ROLLBACK");
+        } catch {
+        }
+        throw storageError(error, action);
+      }
+    } finally {
+      release?.();
     }
   }
   /** One write transaction as its own mutation section. */
@@ -19509,6 +19608,7 @@ var SqliteReplicaStore = class _SqliteReplicaStore {
     }
   }
   async open() {
+    this.#assertAccepting();
     let row;
     try {
       row = this.#row();
@@ -19670,6 +19770,7 @@ var SqliteReplicaStore = class _SqliteReplicaStore {
     });
   }
   async hasContent(hashes) {
+    this.#assertAccepting();
     const held = /* @__PURE__ */ new Set();
     for (let start = 0; start < hashes.length; start += 500) {
       const chunk = hashes.slice(start, start + 500);
@@ -19752,7 +19853,7 @@ var SqliteReplicaStore = class _SqliteReplicaStore {
       }
       await this.#faults.afterBlobs?.();
       try {
-        this.#write("Committing a sync page", () => {
+        await this.#write("Committing a sync page", () => {
           this.#checkLease(t);
           const now = this.#now();
           if (p.window.notBefore !== null && now < Date.parse(p.window.notBefore)) {
@@ -19860,13 +19961,16 @@ var SqliteReplicaStore = class _SqliteReplicaStore {
   }
   async collectGarbage(t) {
     return this.#mutate(async () => {
+      const release = this.#shared ? await acquireWritableMutation(this.#shared) : void 0;
       try {
         this.#db.exec("BEGIN IMMEDIATE");
       } catch (error) {
+        release?.();
         throw storageError(error, "Collecting unused content");
       }
       try {
         this.#checkLease(t);
+        await this.#faults.afterGarbageCollectionBegin?.();
         const keep = new Set(
           this.#db.all("SELECT DISTINCT hash FROM entry WHERE content = 1").map((row) => row.hash)
         );
@@ -19879,12 +19983,14 @@ var SqliteReplicaStore = class _SqliteReplicaStore {
         } catch {
         }
         throw storageError(error, "Collecting unused content");
+      } finally {
+        release?.();
       }
     });
   }
   async reset(t, reason, options = {}) {
     await this.#mutate(async () => {
-      this.#write("Resetting the replica", () => {
+      await this.#write("Resetting the replica", () => {
         this.#checkLease(t);
         this.#db.run("DELETE FROM entry");
         this.#db.run(
@@ -19911,9 +20017,11 @@ var SqliteReplicaStore = class _SqliteReplicaStore {
    */
   async destroy(t) {
     await this.#mutate(async () => {
+      const release = this.#shared ? await acquireWritableMutation(this.#shared) : void 0;
       try {
         this.#db.exec("BEGIN IMMEDIATE");
       } catch (error) {
+        release?.();
         throw storageError(error, "Removing the replica");
       }
       try {
@@ -20012,6 +20120,7 @@ var SqliteReplicaStore = class _SqliteReplicaStore {
           this.#db.exec("ROLLBACK");
         } catch {
         }
+        release?.();
       }
     });
   }
@@ -20055,7 +20164,7 @@ var SqliteReplicaStore = class _SqliteReplicaStore {
    * when both are done.
    */
   async #purgeContent() {
-    this.#write("Starting the revocation purge", () => {
+    await this.#write("Starting the revocation purge", () => {
       this.#db.run("UPDATE replica SET purge_pending = 1 WHERE id = 1 AND revoked_detail IS NOT NULL");
     });
     try {
@@ -20066,7 +20175,7 @@ var SqliteReplicaStore = class _SqliteReplicaStore {
     if (!this.#checkpoint()) {
       throw new ReplicaError2(ReplicaErrorCode2.BUSY, "A reader holds the replica's write-ahead log; the purge finishes on the next open.");
     }
-    this.#write("Finishing the revocation purge", () => {
+    await this.#write("Finishing the revocation purge", () => {
       this.#db.run("UPDATE replica SET purge_pending = 0 WHERE id = 1 AND revoked_detail IS NOT NULL");
     });
   }
@@ -20076,6 +20185,7 @@ var SqliteReplicaStore = class _SqliteReplicaStore {
     });
   }
   async get(key) {
+    this.#assertAccepting();
     try {
       const row = this.#db.get("SELECT key, deleted, etag, hash, metadata, content FROM entry WHERE key = ?", key);
       return row === void 0 ? void 0 : entryOf(row);
@@ -20084,6 +20194,7 @@ var SqliteReplicaStore = class _SqliteReplicaStore {
     }
   }
   async list(o) {
+    this.#assertAccepting();
     const where = ["deleted = 0"];
     const params = [];
     if (o.prefix !== void 0 && o.prefix !== "") {
@@ -20169,15 +20280,31 @@ var SqliteReplicaStore = class _SqliteReplicaStore {
       lastReset: state2.lastReset
     };
   }
-  async close() {
-    const fd = this.#directoryFd;
-    this.#directoryFd = void 0;
-    if (fd !== void 0) pinnedDirectories.unregister(this);
-    try {
-      this.#db.close();
-    } finally {
-      if (fd !== void 0) closeSync(fd);
-    }
+  close() {
+    if (this.#closePromise) return this.#closePromise;
+    this.#closing = true;
+    this.#closePromise = (async () => {
+      if (this.#activeMutations !== 0) {
+        await new Promise((resolve22) => {
+          this.#drained = resolve22;
+        });
+      }
+      this.#closed = true;
+      const fd = this.#directoryFd;
+      this.#directoryFd = void 0;
+      if (this.#shared) {
+        sharedStores.unregister(this);
+        releaseWritable(this.#shared);
+      } else {
+        if (fd !== void 0) pinnedDirectories.unregister(this);
+        try {
+          this.#database.close();
+        } finally {
+          if (fd !== void 0) closeSync(fd);
+        }
+      }
+    })();
+    return this.#closePromise;
   }
 };
 
