@@ -5,6 +5,15 @@ import { lstat, mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/pr
 import { dirname, join } from "node:path";
 import { once } from "node:events";
 import { profileLockMetadataPath, profileLockPath, profileTurnLockPath, withProfileLock } from "@tinycloud/operations/state";
+import { exitWithParent } from "../src/test-support/parent-watch.mjs";
+
+exitWithParent();
+// Listener processes still running: killed whenever this fixture exits, the
+// parent watch's exit included (a SIGKILL of this fixture skips this).
+const listeners = new Set();
+process.on("exit", () => {
+  for (const listening of listeners) listening.kill("SIGKILL");
+});
 
 const [mode, profile, output] = process.argv.slice(2);
 if (!mode || !profile || !output) throw new Error("Expected mode, profile and output path.");
@@ -42,6 +51,8 @@ const listener = async (name) => {
   const path = join(turnPath, name);
   // Bound relative to the turn directory: the full path can exceed sun_path.
   const child = spawn(process.execPath, ["-e", `require('node:net').createServer(c => c.destroy()).listen(${JSON.stringify(name)}, () => console.log('ready'))`], { cwd: turnPath, stdio: ["ignore", "pipe", "pipe"] });
+  listeners.add(child);
+  child.once("exit", () => listeners.delete(child));
   try {
     await Promise.race([once(child.stdout, "data"), once(child, "exit").then(() => { throw new Error("Listener exited before ready"); })]);
     const stats = await lstat(path, { bigint: true });

@@ -1,6 +1,7 @@
 import { watch } from "node:fs";
 import { access, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
+import { HELPER_DEADLINE_ENV } from "./parent-watch.mjs";
 
 // Each contention test has two sequential parent signal waits: holder-ready
 // and CLI-contention, followed by the holder and CLI completions. The 44s
@@ -32,10 +33,12 @@ export const PROFILE_LOCK_HOLDER_RELEASE_TIMEOUT_MS =
 export const PROFILE_LOCK_PROTOCOL_RECHECK_INTERVAL_MS = 50;
 
 // A spawned helper ends itself at this deadline should its parent watch
-// (parent-watch.ts) fail. Five outer test bounds outlast the longest bound
+// (parent-watch.mjs) fail. Five outer test bounds outlast the longest bound
 // a helper runs under: 120s for the contended no-hard-links cyclers, and
 // 200s for each of the three default stress rounds.
 export const PROFILE_LOCK_HELPER_DEADLINE_MS = 5 * PROFILE_LOCK_TEST_TIMEOUT_MS;
+/** Environment a Node helper needs: it reads its deadline from here. */
+export const PROFILE_LOCK_HELPER_ENV = { [HELPER_DEADLINE_ENV]: String(PROFILE_LOCK_HELPER_DEADLINE_MS) };
 
 export async function signalProfileLockProtocol(filePath: string): Promise<void> {
   await writeFile(filePath, "ready\n", { encoding: "utf8", flag: "wx" });

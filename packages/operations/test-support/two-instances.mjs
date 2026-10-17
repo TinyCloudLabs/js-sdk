@@ -6,6 +6,9 @@ import { readFile, readdir, stat, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { join } from "node:path";
 import * as esm from "@tinycloud/operations/state";
+import { exitWithParent } from "../src/test-support/parent-watch.mjs";
+
+exitWithParent();
 
 const cjs = createRequire(import.meta.url)("@tinycloud/operations/state");
 const [profile, out] = process.argv.slice(2);
