@@ -10,14 +10,17 @@ import { keccak_256 } from "@noble/hashes/sha3";
 import { bytesToHex, hexToBytes } from "@noble/hashes/utils";
 import { TinyCloudNode, registerReplicationLoaders } from "@tinycloud/node-sdk/core";
 import type { ISigner, ReplicationEvent } from "@tinycloud/node-sdk/core";
+import { assertValidReplicationConfig } from "@tinycloud/node-sdk/replication/authority";
 import { BrowserWasmBindings } from "@tinycloud/web-sdk";
 import { indexedDbReplicaStorage } from "@tinycloud/replica/kv-storage";
 // @ts-expect-error `?url` is a Vite module query.
 import workerUrl from "@tinycloud/replica/kv-storage/worker?url";
 
 registerReplicationLoaders({
+  validateConfig: assertValidReplicationConfig,
   runtime: () => import("@tinycloud/node-sdk/replication/runtime"),
   authority: () => import("@tinycloud/node-sdk/replication/authority"),
+  gatedNetwork: () => import("@tinycloud/node-sdk/replication/gated-network"),
   gate: () => import("@tinycloud/replica/profile-gate"),
 });
 

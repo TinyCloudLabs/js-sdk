@@ -39,6 +39,22 @@ async function freePort(): Promise<number> {
 
 const text = (bytes: Uint8Array) => new TextDecoder().decode(bytes);
 
+/**
+ * Re-evaluate an async page predicate until it resolves true, or fail at the
+ * deadline. `page.waitForFunction` cannot do this: a returned Promise is
+ * truthy, so it resolves once with that Promise's value and never re-polls.
+ */
+async function pollPage(page: Page, predicate: () => Promise<boolean>, timeoutMs = 30_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    if (await page.evaluate(predicate)) return;
+    if (Date.now() >= deadline) throw new Error(`Page condition not met within ${timeoutMs} ms: ${predicate}`);
+    // Real Chromium and a real node expose no completion signal for a dead
+    // tab's Web Lock release or service-worker claim, so poll the live clock.
+    await Bun.sleep(100);
+  }
+}
+
 const fixtures: Record<string, string> = {
   "notes/a": "alpha note",
   "notes/b": "beta note",
@@ -301,7 +317,7 @@ describe.skipIf(NODE_BIN === undefined)("browser replica against a real node", (
     //    below cannot spawn it.
     await page.goto(`${origin}/`);
     await page.waitForFunction(() => window.__replica !== undefined);
-    await page.waitForFunction(() => window.__replica.serviceWorkerReady());
+    await pollPage(page, () => window.__replica.serviceWorkerReady());
     const opened = await openReplicaOnPage(page, { principal: ownerPrincipal() });
     expect(opened.replicaId.length).toBeGreaterThan(0);
     const grantJwt = await grantOnPage(page);
@@ -322,10 +338,10 @@ describe.skipIf(NODE_BIN === undefined)("browser replica against a real node", (
 
     // 2. The service worker controls the page (its own first load was
     //    cache-miss); a warm reload caches every shell asset.
-    await page.waitForFunction(() => window.__replica.serviceWorkerReady());
+    await pollPage(page, () => window.__replica.serviceWorkerReady());
     await page.reload();
     await page.waitForFunction(() => window.__replica !== undefined);
-    await page.waitForFunction(() => window.__replica.serviceWorkerReady());
+    await pollPage(page, () => window.__replica.serviceWorkerReady());
 
     // 3. Stop the node; reload offline. get/list come from IndexedDB with
     //    zero requests to the node.
@@ -398,7 +414,7 @@ describe.skipIf(NODE_BIN === undefined)("browser replica against a real node", (
     const rootPage = await context.newPage();
     await rootPage.goto(`${origin}/`);
     await rootPage.waitForFunction(() => window.__replica !== undefined);
-    await rootPage.waitForFunction(() => window.__replica.serviceWorkerReady());
+    await pollPage(rootPage, () => window.__replica.serviceWorkerReady());
     await openReplicaOnPage(rootPage, { principal: ownerPrincipal(), prefix: "/", allowSecrets: true });
     await grantOnPage(rootPage, { path: "" });
     const sync = await rootPage.evaluate(() =>
@@ -475,7 +491,7 @@ describe.skipIf(NODE_BIN === undefined)("browser replica against a real node", (
     gate2.open();
     await context.unroute(`${host}/**`, gate2.handler);
     // The dead tab's lock release is async — poll until page2 becomes writer.
-    await page2.waitForFunction(async () => (await window.__replica.sync()).status === "synced");
+    await pollPage(page2, async () => (await window.__replica.sync()).status === "synced");
     await page2.close();
   }, 120_000);
 
@@ -505,7 +521,7 @@ describe.skipIf(NODE_BIN === undefined)("browser replica against a real node", (
     // principal = the owner pkh DID (revoker shares the key).
     await page.goto(`${origin}/`);
     await page.waitForFunction(() => window.__replica !== undefined);
-    await page.waitForFunction(() => window.__replica.serviceWorkerReady());
+    await pollPage(page, () => window.__replica.serviceWorkerReady());
 
     // Two principals ⇒ two replicaIds and two databases: A carries the 75 s
     // grant for expiry; B carries a long grant that is the ACTIVE grant of
@@ -594,9 +610,6 @@ describe.skipIf(NODE_BIN === undefined)("browser replica against a real node", (
     // Session 2: signIn() rotates the session key — G2's issuer differs.
     const owner2 = new TinyCloudNode({ privateKey: OWNER_KEY, host, autoCreateSpace: true });
     await owner2.signIn();
-    // The pinned SQLite node predates TC-899; wait for sign-in's background
-    // registry writes before activating another delegation.
-    await owner2.waitForAccountRegistrySync();
     expect(owner2.did).toBe(owner.did); // the pkh identity is stable
     // Explicit-only abilities never enter the SIWE recap: session 2 must
     // mint its own runtime grant before delegateTo can derive under it.

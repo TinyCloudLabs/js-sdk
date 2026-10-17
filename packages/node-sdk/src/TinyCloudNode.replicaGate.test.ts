@@ -12,6 +12,7 @@ import { TinyCloudNode } from "./TinyCloudNode";
 import { mintCompactDelegation } from "./test-support/compact-delegation";
 import { PROOF_PRIVATE_KEY, signedRestorableSession } from "./test-support/signed-restorable-session";
 import type { ReplicationModuleLoaders } from "./replication/module-registry";
+import { assertValidReplicationConfig } from "./replication/config";
 import { createSqliteReplicaStorage } from "./replication/sqlite";
 // @ts-ignore node-sdk moduleResolution "node" cannot read replica exports (see replica-contract.ts)
 import * as replicaGate from "@tinycloud/replica/profile-gate";
@@ -39,13 +40,16 @@ class StubRuntime {
   };
   constructor(_options: unknown) {}
   async bind() {}
+  async bindGatedNetworkOnly(_input: unknown) {}
   async unbind() {}
 }
 
 function loaders(): ReplicationModuleLoaders {
   return {
+    validateConfig: assertValidReplicationConfig,
     runtime: () => import("./replication/runtime"),
     authority: () => import("./replication/authority"),
+    gatedNetwork: () => import("./replication/gated-network"),
     gate: () => import("@tinycloud/replica/profile-gate"),
   };
 }
@@ -164,7 +168,6 @@ describe("replica gate: restore", () => {
     expect(stale.address).toBe(proof.address);
     expect(stale.replicaStamp).toBeUndefined();
   });
-
   test("keeps a verified network restore when replica runtime binding fails", async () => {
     class FailingRuntime extends StubRuntime {
       override async bind() { throw new Error("replica runtime unavailable"); }
@@ -266,6 +269,37 @@ describe("replica gate: restore", () => {
     expect((await node.replication!.status())[0]).toMatchObject({ state: "gated", gate: "principal_mismatch" });
   });
 
+  test("keeps a stamped network restore gated without the mandatory profile guard", async () => {
+    const dir = profileDir();
+    const proof = await signedRestorableSession({
+      abilities: { kv: { "notes/": ["tinycloud.kv/get", "tinycloud.kv/sync"] } },
+    });
+    const stamp = await replicaGate.establishSessionStamp(dir, pkhDid(proof.address, proof.chainId), {
+      siweIssuedAt: Date.parse(proof.siwe.match(/^Issued At: (.+)$/m)![1]!),
+    });
+    const node = new TinyCloudNode({
+      host: RESTORE_HOST,
+      signer: new PrivateKeySigner(PROOF_PRIVATE_KEY),
+      wasmBindings: new NodeWasmBindings(),
+      replication: {
+        enabled: true,
+        prefixes: ["notes/"],
+        profileDir: dir,
+        storage: createSqliteReplicaStorage({ dir: join(dir, "replicas") }),
+      },
+    });
+
+    await node.restoreSession({ ...proof, replicaStamp: stamp });
+    expect(node.address).toBe(proof.address);
+    expect(node.replicaStamp).toBeUndefined();
+    expect((await node.replication!.status())[0]).toMatchObject({
+      state: "gated", gate: "gate_unavailable", errorCode: "REPLICA_GATED",
+    });
+    await expect(node.replication!.sync()).rejects.toMatchObject({
+      code: "REPLICA_GATED", gate: "gate_unavailable",
+    });
+  });
+
   test("keeps the network session without a replica profile directory", async () => {
     const proof = await signedRestorableSession();
 
@@ -345,20 +379,60 @@ describe("browser replica gate without a profile directory", () => {
         async open() { throw new Error("Browser restore must not open a partition."); },
         async purge() {},
       };
+      const events: ReplicationEvent[] = [];
       const node = new TinyCloudNode({
         host: RESTORE_HOST,
         signer: new PrivateKeySigner(PROOF_PRIVATE_KEY),
         wasmBindings: new NodeWasmBindings(),
-        replication: { enabled: true, prefixes: ["notes/"], storage: browserStorage },
+        replication: { enabled: true, prefixes: ["notes/"], storage: browserStorage, onEvent: (event) => events.push(event) },
       });
 
       await node.restoreSession({ ...proof, replicaStamp: stamp });
       expect(boundStamp).toEqual(stamp);
       expect(await inspectReplicaKeyPresence()).toEqual({ gateHmac: true, accountKey: true });
       await node.signOut();
+      expect(events.filter((event) => event.type === "replication.lifecycle")).toEqual([
+        expect.objectContaining({ action: "denied", reason: "sign_out" }),
+      ]);
       expect(await inspectReplicaKeyPresence()).toEqual({ gateHmac: false, accountKey: false });
       expect(JSON.parse(entries.get("tinycloud-replica:deny-tombstone")!)).toMatchObject({ epoch: stamp.lifecycleEpoch + 1 });
       expect(node.address).toBeUndefined();
+    });
+  });
+
+  test("a stale browser stamp restores the network session and reports one gated offline read without opening storage", async () => {
+    await withBrowserOrigin(async (lifecycle) => {
+      const proof = await signedRestorableSession({
+        abilities: { kv: { "notes/": ["tinycloud.kv/get", "tinycloud.kv/sync"] } },
+      });
+      const principal = pkhDid(proof.address, proof.chainId);
+      const stamp = await lifecycle.establishSessionStamp(principal, {
+        consentAnchor: { source: "siwe", at: Date.parse(proof.siwe.match(/Issued At: (.+)/)![1]!) },
+      });
+      expect((await lifecycle.deny({ reason: "sign_out", principal })).status).toBe("denied");
+      registerReplicationLoaders(loaders());
+      const reads: Array<{ type: string; source?: string; reason?: string; outcome?: string; code?: string }> = [];
+      let opens = 0;
+      const node = new TinyCloudNode({
+        host: RESTORE_HOST,
+        signer: new PrivateKeySigner(PROOF_PRIVATE_KEY),
+        wasmBindings: new NodeWasmBindings(),
+        replication: {
+          enabled: true,
+          prefixes: ["notes/"],
+          onEvent: (event) => reads.push(event),
+          storage: { kind: "indexeddb", lifecycle, async open() { opens++; throw new Error("Gated restore cannot open storage"); }, async purge() {} },
+        },
+      });
+      await node.restoreSession({ ...proof, replicaStamp: stamp });
+      expect(node.address).toBe(proof.address);
+      expect((await node.replication!.status())[0]).toMatchObject({ state: "gated", gate: "stamp_stale" });
+      await node.kv.get("notes/a").catch(() => undefined);
+      expect(reads.filter((event) => event.type === "replication.read")).toMatchObject([
+        { source: "network", reason: "replica_gated", outcome: "error", code: "REPLICA_GATED" },
+      ]);
+      expect(opens).toBe(0);
+      expect(await inspectReplicaKeyPresence()).toEqual({ gateHmac: false, accountKey: false });
     });
   });
 
@@ -615,14 +689,14 @@ describe("replica gate: sign-out", () => {
     expect(after.lifecycleEpoch).toBe(before.lifecycleEpoch + 1);
   });
 
-  test("sign-out emits one committed lifecycle denial to the callback and retiring context", async () => {
+  test("sign-out reports a committed denial to the callback and retiring session context", async () => {
     const dir = profileDir();
     const proof = await signedRestorableSession();
     const principal = pkhDid(proof.address, proof.chainId);
     const stamp = await replicaGate.establishSessionStamp(dir, principal, { siweIssuedAt: Date.now() });
-    const emitted: ReplicationEvent[] = [];
+    const events: ReplicationEvent[] = [];
     const observed: unknown[] = [];
-    const node = replicatedNode(dir, (event) => emitted.push(event));
+    const node = replicatedNode(dir, (event) => events.push(event));
     await node.restoreSession({ ...proof, replicaStamp: stamp });
     const context = Reflect.get(node, "_serviceContext") as { on(name: string, listener: (data: unknown) => void): void };
     context.on("replication.lifecycle", (data) => observed.push(data));
@@ -630,21 +704,21 @@ describe("replica gate: sign-out", () => {
     await node.signOut();
 
     expect(readGateFile(dir).principalHash).toBeNull();
-    expect(emitted.filter((event) => event.type === "replication.lifecycle")).toEqual([
+    expect(events.filter((event) => event.type === "replication.lifecycle")).toEqual([
       expect.objectContaining({ type: "replication.lifecycle", action: "denied", reason: "sign_out" }),
     ]);
     expect(observed).toEqual([expect.objectContaining({ action: "denied", reason: "sign_out" })]);
-    expect(JSON.stringify(emitted)).not.toContain(principal);
-    expect(JSON.stringify(emitted)).not.toContain(proof.spaceId);
+    expect(JSON.stringify(events)).not.toContain(principal);
+    expect(JSON.stringify(events)).not.toContain(proof.spaceId);
   });
 
-  test("account-switch denial emits once and a stale retry cannot claim a second denial", async () => {
+  test("account-switch denial reports once; a stale retry cannot claim another denial", async () => {
     const dir = profileDir();
     const proof = await signedRestorableSession();
     const principal = pkhDid(proof.address, proof.chainId);
     const stamp = await replicaGate.establishSessionStamp(dir, principal, { siweIssuedAt: Date.now() });
-    const emitted: ReplicationEvent[] = [];
-    const node = replicatedNode(dir, (event) => emitted.push(event));
+    const events: ReplicationEvent[] = [];
+    const node = replicatedNode(dir, (event) => events.push(event));
     await node.restoreSession({ ...proof, replicaStamp: stamp });
     const deny = Reflect.get(node, "denyReplicaGate") as (input: {
       reason: "account_switch"; principal: string; next: string;
@@ -653,10 +727,10 @@ describe("replica gate: sign-out", () => {
 
     expect(await deny.call(node, input)).toMatchObject({ status: "denied" });
     expect(await deny.call(node, input)).toMatchObject({ status: "stale" });
-    expect(emitted.filter((event) => event.type === "replication.lifecycle")).toEqual([
+    expect(events.filter((event) => event.type === "replication.lifecycle")).toEqual([
       expect.objectContaining({ type: "replication.lifecycle", action: "denied", reason: "account_switch" }),
     ]);
-    expect(JSON.stringify(emitted)).not.toContain(principal);
+    expect(JSON.stringify(events)).not.toContain(principal);
   });
 
   test("durably denies before awaiting registry cleanup and refuses pending reads", async () => {

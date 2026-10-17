@@ -16,6 +16,7 @@ import publishedWorkerUrl from "@tinycloud/replica/kv-storage/worker?url";
 
 import { createTestGate, createTestLifecycle } from "../../test-gate.js";
 import { ledgerFor } from "../../../src/kv-storage/ledger.js";
+import { createIndexedDbLifecycle, inspectReplicaKeyPresence } from "../../../src/kv-storage/lifecycle.js";
 
 const gate = createTestGate();
 const lifecycle = createTestLifecycle(gate);
@@ -51,18 +52,20 @@ function need<T>(map: Map<string, T>, name: string): T {
 }
 
 const api = {
-  createStorage(name: string, kind: "fake" | "real" | "published", quota?: ReplicaQuotaSpec): void {
+  createStorage(name: string, kind: "fake" | "real" | "published" | "default", quota?: ReplicaQuotaSpec): void {
     const worker =
-      kind === "fake"
-        ? () => {
-          const instance = new Worker(new URL("./kv-test-worker.ts", import.meta.url), { type: "module" });
-          fakeWorkers.set(name, instance);
-          if (fakeClocks.has(name)) instance.postMessage({ testOnly: "setClock", at: need(fakeClocks, name) });
-          return instance;
-        }
-        : kind === "real"
-          ? () => new Worker(new URL("./kv-real-worker.ts", import.meta.url), { type: "module" })
-          : new URL(publishedWorkerUrl, import.meta.url);
+      kind === "default"
+        ? undefined
+        : kind === "fake"
+          ? () => {
+            const instance = new Worker(new URL("./kv-test-worker.ts", import.meta.url), { type: "module" });
+            fakeWorkers.set(name, instance);
+            if (fakeClocks.has(name)) instance.postMessage({ testOnly: "setClock", at: need(fakeClocks, name) });
+            return instance;
+          }
+          : kind === "real"
+            ? () => new Worker(new URL("./kv-real-worker.ts", import.meta.url), { type: "module" })
+            : new URL(publishedWorkerUrl, import.meta.url);
     storages.set(name, indexedDbReplicaStorage({ worker, lifecycle, gateTx: gate, ...(quota === undefined ? {} : { ledger: ledgerFor(quota) }) }));
   },
   /** Test worker only: wait for the clock ACK before making the next guarded call. */
@@ -94,6 +97,11 @@ const api = {
   deny: () => gate.deny(),
   /** Make this tab's view refuse delivery under `stamp` (the main-thread check). */
   revoke: (stamp: ReplicaSessionStamp) => lifecycle.revoke(stamp),
+  /** Test-only: recover at an injected lifecycle clock and inspect key presence, not key material. */
+  recoverAt: async (at: number) => {
+    const report = await createIndexedDbLifecycle({ now: () => at }).recover({ signal: new AbortController().signal });
+    return { report, keys: await inspectReplicaKeyPresence() };
+  },
   /** Open with `spec.stamp`, or a fresh stamp for the spec's principal; `stamp: null` opens without one. */
   open: (storage: string, name: string, spec: Omit<WireSpec, "stamp"> & { stamp?: ReplicaSessionStamp | null }) =>
     outcome(async () => {
@@ -155,7 +163,12 @@ const api = {
     }),
   pendingRead: (storage: string, identity: ReplicationIdentity) =>
     outcome(async () => need(storages, storage).pendingWrites!(identity, { stamp: await gate.establish(identity.principal) }).read()),
-  killWorker: (storage: string) => killReplicaWorker(need(storages, storage)),
+  fakeWorkerStarted: (storage: string) => fakeWorkers.has(storage),
+  killStorageWorker: (storage: string) => killReplicaWorker(need(storages, storage)),
+  crashWorker: (storage: string) => {
+    // Exercise the production Worker.onerror path, including rejection and respawn.
+    need(fakeWorkers, storage).dispatchEvent(new ErrorEvent("error", { message: "The replica worker was terminated." }));
+  },
   /** Row counts per object store of the origin database, by partition where keys carry one. */
   async dump(): Promise<Record<string, Record<string, number>>> {
     const settle = <T>(request: IDBRequest<T>): Promise<T> => {

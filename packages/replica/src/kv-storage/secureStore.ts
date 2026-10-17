@@ -277,7 +277,8 @@ export class SealedReplicaStore implements ReplicaStore {
     if (typeof gateDeadline !== "number" || !Number.isSafeInteger(gateDeadline) || gateDeadline < 0) {
       throw new ReplicaError(ReplicaErrorCode.STORAGE_ERROR, "The replica account consent deadline is invalid.");
     }
-    const consentDeadline = Math.min(anchor === null ? Number.NEGATIVE_INFINITY : consentDeadlineMs(anchor), gateDeadline);
+    const consentDeadline = gateDeadline;
+    const policyDeadline = anchor === null ? Number.NEGATIVE_INFINITY : consentDeadlineMs(anchor);
     const grants: GrantPolicyView["grants"] = {};
     for (const [index, record] of [state.grant, state.pendingGrant].entries()) {
       if (record === null || grants[record.cid] !== undefined) continue;
@@ -285,7 +286,7 @@ export class SealedReplicaStore implements ReplicaStore {
       grants[record.cid] = {
         installedAt,
         effectiveExpiresAt: effectiveGrantExpiry({ signedExpiresAt: record.expiresAt === null ? null : record.expiresAt * 1000,
-          installedAt: installedAt ?? Number.NEGATIVE_INFINITY, grantTtlMs: this.#policy.grantTtlMs, consentDeadline }),
+          installedAt: installedAt ?? Number.NEGATIVE_INFINITY, grantTtlMs: this.#policy.grantTtlMs, consentDeadline: Math.min(policyDeadline, consentDeadline) }),
       };
     }
     return { anchor, consentDeadline, grants };

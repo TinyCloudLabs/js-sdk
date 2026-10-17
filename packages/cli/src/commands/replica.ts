@@ -1,15 +1,14 @@
 import { Command } from "commander";
 import { CLI_NAME } from "@tinycloud/operations/cli-name";
 import { randomBytes } from "node:crypto";
-import { constants as fsConstants, lstatSync } from "node:fs";
-import { open, readdir, rename, stat, unlink, readFile, lstat } from "node:fs/promises";
+import { constants as fsConstants } from "node:fs";
+import { mkdir, open, readdir, rename, stat, unlink, lstat } from "node:fs/promises";
 import { basename, dirname, join, resolve } from "node:path";
-import { ensureAuthenticated } from "../lib/sdk.js";
-import { replicationForProfile } from "../lib/replication-registry.js";
 import { withPinnedReplicaForReset } from "../lib/profile-replicas.js";
-import { CLEAR_PENDING_WARNING, createReplicationReport, renderReplicationReport, type ReplicationPartitionSummary } from "../lib/replication-report.js";
+import { createReplicationReport, renderReplicationReport, type ReplicationPartitionSummary } from "../lib/replication-report.js";
 import { parseDuration } from "../lib/duration.js";
 import {
+  ProfileSymlinkError,
   ProfileDeletedError,
   profilePath,
   readAdditionalDelegations,
@@ -19,7 +18,7 @@ import {
 } from "@tinycloud/operations/state";
 import { ownerSessionLacksProof } from "@tinycloud/operations/profile";
 import { assertGateAccess, principalHashOf, readGateSnapshot, restoreSessionStamp } from "@tinycloud/replica/profile-gate";
-import { assertProfileLogoutClear, type ReplicationEvent, type ReplicationControl } from "@tinycloud/node-sdk";
+import { assertProfileLogoutClear, type ReplicationEvent } from "@tinycloud/node-sdk";
 import {
   assertFolderPrefix,
   Replica,
@@ -35,7 +34,6 @@ import {
   type KVSyncClient,
   type ParsedUcanGrant,
   type ReplicaConfig,
-  type ReplicaListResult,
   type ReplicaTransport,
   type ReplicaReadResult,
   type ReplicaStatus,
@@ -108,10 +106,9 @@ function toCliError(error: unknown): unknown {
   return new CLIError(error.code, message, EXIT_BY_CODE[error.code], hint === undefined ? undefined : { hint });
 }
 
-async function run(action: () => Promise<void>): Promise<void> {
+async function run(action: () => Promise<void>, needsSqlite = true): Promise<void> {
   try {
-    // Every replica command needs the runtime's built-in SQLite; fail the same way on all of them.
-    await loadSqlite();
+    if (needsSqlite) await loadSqlite();
     await action();
   } catch (error) {
     return handleError(toCliError(error));
@@ -127,21 +124,25 @@ async function profileName(cmd: Command): Promise<string> {
   return config?.defaultProfile ?? DEFAULT_PROFILE;
 }
 
-function replicasRoot(profile: string): string {
-  return join(profilePath(profile), "replicas");
-}
-
 async function replicaNames(profile: string): Promise<string[]> {
-  const names: string[] = [];
-  for (const name of await readdir(replicasRoot(profile)).catch(() => [] as string[])) {
-    if (!NAME.test(name)) continue;
-    const exists = await stat(join(replicasRoot(profile), name, "replica.db")).then(
-      () => true,
-      () => false,
-    );
-    if (exists) names.push(name);
-  }
-  return names.sort();
+  return await withReplicaRoot(profile, async (root) => {
+    const names: string[] = [];
+    for (const entry of await readdir(root, { withFileTypes: true })) {
+      if (entry.isSymbolicLink()) throw localPathChanged(profile);
+      if (!NAME.test(entry.name) || !entry.isDirectory()) continue;
+      const present = await withPinnedLocalDirectory(profile, root, entry.name, async (directory) => {
+        const database = await lstat(join(directory, "replica.db"), { bigint: true }).catch((error: NodeJS.ErrnoException) => {
+          if (error.code === "ENOENT") return null;
+          throw error;
+        });
+        if (database && (database.isSymbolicLink() || !database.isFile())) throw localPathChanged(profile);
+        return database !== null;
+      });
+      if (present === null) throw localPathChanged(profile);
+      if (present) names.push(entry.name);
+    }
+    return names.sort();
+  }) ?? [];
 }
 
 function assertName(name: string): string {
@@ -149,6 +150,69 @@ function assertName(name: string): string {
     throw new CLIError("USAGE_ERROR", `Replica names use letters, digits, '.', '_' and '-' (got ${JSON.stringify(name)}).`, ExitCode.USAGE_ERROR);
   }
   return name;
+}
+
+/** The profile pin is held by the caller's lock or command. Child pins outlive every SQLite use. */
+async function withReplicaRoot<T>(
+  profile: string,
+  action: (root: string, recheckRoot: () => Promise<void>, recheckProfile?: () => Promise<void>) => Promise<T>,
+  create = false,
+): Promise<T | null> {
+  const profileDirectory = profilePath(profile);
+  const readRoot = async (directory: string, recheckProfile?: () => Promise<void>): Promise<T | null> => {
+    if (create) {
+      if (recheckProfile) await recheckProfile();
+      await mkdir(join(directory, "replicas"), { mode: 0o700 }).catch((error: NodeJS.ErrnoException) => {
+        if (error.code !== "EEXIST") throw error;
+      });
+    }
+    return withPinnedLocalDirectory(profile, directory, "replicas",
+      (root, _named, _identity, recheckRoot) => action(root, recheckRoot, recheckProfile));
+  };
+  if (process.platform === "linux") return readRoot(profileDirectory);
+  const checked = await withPinnedLocalDirectory(profile, dirname(profileDirectory), basename(profileDirectory),
+    (directory, _named, _identity, recheckProfile) => readRoot(directory, recheckProfile));
+  if (checked === null) throw localPathChanged(profile);
+  return checked;
+}
+
+async function withReplicaDirectory<T>(
+  profile: string,
+  name: string,
+  action: (path: string, expectedDirectory: { dev: number; ino: number }) => Promise<T>,
+  create = false,
+): Promise<T> {
+  assertName(name);
+  const result = await withReplicaRoot(profile, async (root, recheckRoot, recheckProfile) => {
+    if (create) {
+      await recheckRoot();
+      await mkdir(join(root, name), { mode: 0o700 }).catch((error: NodeJS.ErrnoException) => {
+        if (error.code !== "EEXIST") throw error;
+      });
+    }
+    const opened = await withPinnedLocalDirectory(profile, root, name,
+      async (_directory, path, expectedDirectory, recheckChild) => {
+        await recheckRoot();
+        await recheckChild();
+        const database = await lstat(join(_directory, "replica.db"), { bigint: true }).catch((error: NodeJS.ErrnoException) => {
+          if (error.code === "ENOENT") return null;
+          throw error;
+        });
+        if (database && (database.isSymbolicLink() || !database.isFile())) throw localPathChanged(profile);
+        // Named-path platforms must recheck every ancestor after the leaf
+        // inspection and immediately before SQLite can open or migrate it.
+        if (recheckProfile) {
+          await recheckProfile();
+          await recheckRoot();
+          await recheckChild();
+        }
+        return action(path, expectedDirectory);
+      });
+    if (opened === null) throw new ReplicaError(ReplicaErrorCode.NOT_FOUND, `Replica "${name}" was not found.`);
+    return opened;
+  }, create);
+  if (result === null) throw new ReplicaError(ReplicaErrorCode.NOT_FOUND, `Profile "${profile}" has no replicas.`);
+  return result;
 }
 
 /** `--replica`, or the profile's only replica. */
@@ -181,8 +245,20 @@ export function profileGuard(profile: string): MutationGuard {
   };
 }
 
-async function openReplica(profile: string, name: string, guard: MutationGuard = profileGuard(profile)): Promise<SqliteReplicaStore> {
-  return SqliteReplicaStore.open(join(replicasRoot(profile), name), { create: false, guard });
+async function withOpenReplica<T>(
+  profile: string,
+  name: string,
+  action: (store: SqliteReplicaStore) => Promise<T>,
+  guard: MutationGuard = profileGuard(profile),
+): Promise<T> {
+  return withReplicaDirectory(profile, name, async (path, expectedDirectory) => {
+    const store = await SqliteReplicaStore.open(path, { create: false, guard, expectedDirectory });
+    try {
+      return await action(store);
+    } finally {
+      await store.close();
+    }
+  });
 }
 
 function assertLegacyLogoutClear(dir: string): void {
@@ -232,21 +308,23 @@ async function withLegacyReplicaRead(
   }, { requireProfile: true });
 }
 
-/** The outer read lock supplies the only guard: SQLite reads must not reacquire it. */
-function openReplicaForRead(profile: string, name: string): Promise<SqliteReplicaStore> {
-  return SqliteReplicaStore.open(join(replicasRoot(profile), name), { create: false });
-}
 /**
- * Create a replica (or open the one a concurrent sync just created) inside
- * the profile guard: a profile deleted before or during this gets nothing.
+ * Construct a test replica under the profile guard. Its descriptor-relative
+ * path expires when this helper returns; command handlers keep the store
+ * inside withReplicaDirectory for every SQLite use.
  */
 export async function createReplica(profile: string, config: ReplicaConfig): Promise<SqliteReplicaStore> {
   const guard = profileGuard(profile);
-  return guard(async () => {
-    const store = await SqliteReplicaStore.open(join(replicasRoot(profile), config.name), { create: true, guard });
-    if ((await store.open()) === null) await store.init(config);
-    return store;
-  });
+  return guard(() => withReplicaDirectory(profile, config.name, async (path, expectedDirectory) => {
+    const store = await SqliteReplicaStore.open(path, { create: true, guard, expectedDirectory });
+    try {
+      if ((await store.open()) === null) await store.init(config);
+      return store;
+    } catch (error) {
+      await store.close();
+      throw error;
+    }
+  }, true));
 }
 
 /**
@@ -432,14 +510,116 @@ export function replicaSecretsWarning(space: string, prefix: string, secretsAllo
   return `This replica stores the ciphertext of every secret under "${prefix}". A tinycloud.encryption/decrypt grant covers the whole encryption network, not one secret (TC-755), so whoever holds decrypt can open every replicated secret.`;
 }
 
-async function readReplicationEvents(profile: string, sinceMs: number): Promise<ReplicationEvent[]> {
-  const root = join(profilePath(profile), "replication");
-  const events: ReplicationEvent[] = [];
-  for (const name of ["events.jsonl.1", "events.jsonl"]) {
-    const data = await readFile(join(root, name), "utf8").catch((error: NodeJS.ErrnoException) => {
-      if (error.code === "ENOENT") return "";
+type LocalEntryIdentity = {
+  dev: number | bigint;
+  ino: number | bigint;
+  isDirectory(): boolean;
+  isFile(): boolean;
+  isSymbolicLink(): boolean;
+};
+
+function localFileId(value: number | bigint): bigint | null {
+  if (typeof value === "bigint") return value >= 0n ? value : null;
+  return Number.isSafeInteger(value) && value >= 0 ? BigInt(value) : null;
+}
+
+function sameLocalEntry(left: LocalEntryIdentity, right: LocalEntryIdentity): boolean {
+  const dev = localFileId(left.dev);
+  const ino = localFileId(left.ino);
+  return dev !== null && ino !== null && dev === localFileId(right.dev) && ino === localFileId(right.ino);
+}
+
+function localPathChanged(profile: string): ProfileSymlinkError {
+  return new ProfileSymlinkError(profile, "its local replica files contain a symlink or changed while reading");
+}
+
+async function assertNamedLocalEntry(
+  profile: string,
+  path: string,
+  expected: LocalEntryIdentity,
+  kind: "directory" | "file",
+): Promise<void> {
+  const current = await lstat(path, { bigint: true }).catch(() => null);
+  if (!current || current.isSymbolicLink() ||
+      (kind === "directory" ? !current.isDirectory() : !current.isFile()) ||
+      !sameLocalEntry(expected, current)) throw localPathChanged(profile);
+}
+
+/** Hold each directory descriptor until its callback finishes; no child follows a named parent alias. */
+async function withPinnedLocalDirectory<T>(
+  profile: string,
+  parent: string,
+  name: string,
+  action: (directory: string, named: string, identity: { dev: number; ino: number }, recheck: () => Promise<void>) => Promise<T>,
+): Promise<T | null> {
+  const path = join(parent, name);
+  const before = await lstat(path, { bigint: true }).catch((error: NodeJS.ErrnoException) => {
+    if (error.code === "ENOENT") return null;
+    throw error;
+  });
+  if (!before) return null;
+  if (before.isSymbolicLink() || !before.isDirectory()) throw localPathChanged(profile);
+  const handle = await open(path, fsConstants.O_RDONLY | fsConstants.O_DIRECTORY | fsConstants.O_NOFOLLOW)
+    .catch((error: NodeJS.ErrnoException) => {
+      if (error.code === "ELOOP" || error.code === "ENOTDIR" || error.code === "ENOENT") throw localPathChanged(profile);
       throw error;
     });
+  try {
+    const opened = await handle.stat({ bigint: true });
+    if (!opened.isDirectory() || !sameLocalEntry(before, opened)) throw localPathChanged(profile);
+    const dev = localFileId(opened.dev);
+    const ino = localFileId(opened.ino);
+    if (dev === null || ino === null || dev > BigInt(Number.MAX_SAFE_INTEGER) || ino > BigInt(Number.MAX_SAFE_INTEGER)) {
+      throw localPathChanged(profile);
+    }
+    const pinned = process.platform === "linux" ? `/proc/self/fd/${handle.fd}` : path;
+    const recheck = () => assertNamedLocalEntry(profile, path, opened, "directory");
+    const result = await action(pinned, path, { dev: Number(dev), ino: Number(ino) }, recheck);
+    await recheck();
+    return result;
+  } finally {
+    await handle.close();
+  }
+}
+
+async function readReportFile(profile: string, parent: string, name: string): Promise<string | null> {
+  const path = join(parent, name);
+  const before = await lstat(path, { bigint: true }).catch((error: NodeJS.ErrnoException) => {
+    if (error.code === "ENOENT") return null;
+    throw error;
+  });
+  if (!before) return null;
+  if (before.isSymbolicLink() || !before.isFile()) throw localPathChanged(profile);
+  const handle = await open(path, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW)
+    .catch((error: NodeJS.ErrnoException) => {
+      if (error.code === "ELOOP" || error.code === "ENOTDIR" || error.code === "ENOENT") throw localPathChanged(profile);
+      throw error;
+    });
+  try {
+    const opened = await handle.stat({ bigint: true });
+    if (!opened.isFile() || !sameLocalEntry(before, opened)) throw localPathChanged(profile);
+    const data = await handle.readFile("utf8");
+    await assertNamedLocalEntry(profile, path, opened, "file");
+    return data;
+  } finally {
+    await handle.close();
+  }
+}
+
+async function readReportJson<T>(profile: string, parent: string, name: string): Promise<T | null> {
+  const data = await readReportFile(profile, parent, name);
+  if (data === null) return null;
+  try {
+    return JSON.parse(data) as T;
+  } catch {
+    return null;
+  }
+}
+
+async function readReplicationEvents(profile: string, root: string, sinceMs: number): Promise<ReplicationEvent[]> {
+  const events: ReplicationEvent[] = [];
+  for (const name of ["events.jsonl.1", "events.jsonl"]) {
+    const data = await readReportFile(profile, root, name) ?? "";
     for (const line of data.split("\n")) {
       if (!line) continue;
       try {
@@ -453,32 +633,30 @@ async function readReplicationEvents(profile: string, sinceMs: number): Promise<
   return events;
 }
 
-async function replicationPartitions(profile: string): Promise<ReplicationPartitionSummary[]> {
-  const root = join(profilePath(profile), "replication");
-  const entries = await readdir(root, { withFileTypes: true }).catch((error: NodeJS.ErrnoException) => {
-    if (error.code === "ENOENT") return [];
-    throw error;
-  });
+async function replicationPartitions(profile: string, root: string): Promise<ReplicationPartitionSummary[]> {
+  const entries = await readdir(root, { withFileTypes: true });
   const partitions: ReplicationPartitionSummary[] = [];
   for (const entry of entries) {
-    if (!entry.isDirectory() || !/^[a-z2-7]{26}$/.test(entry.name)) continue;
-    const directory = join(root, entry.name);
-    const info = await lstat(directory);
-    if (info.isSymbolicLink() || !info.isDirectory()) continue;
-    const identity = await readFile(join(directory, "identity.json"), "utf8").then((value) => JSON.parse(value) as { host?: unknown; space?: unknown })
-      .catch(() => null);
-    const pending = await readFile(join(directory, "pending.json"), "utf8").then((value) => JSON.parse(value) as { records?: Array<{ state?: string }> })
-      .catch(() => null);
-    const pinned = pending?.records?.filter((record) => record.state === "in_flight" || record.state === "ambiguous").length ?? 0;
-    partitions.push({
-      idHash: entry.name,
-      host: typeof identity?.host === "string" ? identity.host : null,
-      space: typeof identity?.space === "string" ? identity.space : null,
-      pinned,
+    if (!/^[a-z2-7]{26}$/.test(entry.name)) continue;
+    if (entry.isSymbolicLink()) throw localPathChanged(profile);
+    if (!entry.isDirectory()) continue;
+    const partition = await withPinnedLocalDirectory(profile, root, entry.name, async (pinned) => {
+      const identity = await readReportJson<{ host?: unknown; space?: unknown }>(profile, pinned, "identity.json");
+      const pending = await readReportJson<{ records?: Array<{ state?: string }> }>(profile, pinned, "pending.json");
+      const pinnedCount = pending?.records?.filter((record) => record.state === "in_flight" || record.state === "ambiguous").length ?? 0;
+      return {
+        idHash: entry.name,
+        host: typeof identity?.host === "string" ? identity.host : null,
+        space: typeof identity?.space === "string" ? identity.space : null,
+        pinned: pinnedCount,
+      };
     });
+    if (!partition) throw localPathChanged(profile);
+    partitions.push(partition);
   }
   return partitions.sort((left, right) => left.idHash.localeCompare(right.idHash));
 }
+
 export function registerReplicaCommand(program: Command): void {
   const replica = program
     .command("replica")
@@ -499,55 +677,44 @@ or coverage incomplete; 5 grant expired, revoked or not yet valid; 6 network;
     );
   replica
     .command("report")
-    .description("Report replication reads, syncs, pending writes and local identity partitions")
+    .description("Read-only report of persisted replication events and identity partitions")
     .option("--since <duration>", "Include events from the last duration (default: 24h)", "24h")
-    .option("--purge", "Purge configured replicas for the current identity")
-    .option("--clear-pending", "Clear ambiguous and likely orphaned in-flight writes")
+    .option("--purge", "Refused: named replica reset --replica <name> --purge only; flag-owned purge unavailable (TC-1309)")
+    .option("--clear-pending", "Refused: no equivalent pending-clear command yet (TC-1309)")
     .action((options, cmd: Command) =>
       run(async () => {
         const profile = await profileName(cmd);
-        await withPinnedProfileDirectory(profile, async (directory) => {
+        if (options.purge) {
+          throw new CLIError("REPORT_READ_ONLY", `Replica report is read-only. To remove a named local replica, run ${CLI_NAME} replica reset --replica <name> --purge; flag-owned purge has no equivalent yet (TC-1309).`, ExitCode.USAGE_ERROR);
+        }
+        if (options.clearPending) {
+          throw new CLIError("REPORT_READ_ONLY", "Clearing pending replica writes has no equivalent yet; see TC-1309 for a safe replacement command.", ExitCode.USAGE_ERROR);
+        }
+        let durationMs: number;
+        try {
+          durationMs = parseDuration(options.since);
+        } catch (error) {
+          throw new CLIError("USAGE_ERROR", error instanceof Error ? error.message : String(error), ExitCode.USAGE_ERROR);
+        }
+        const report = await withPinnedProfileDirectory(profile, async (directory) => {
           if (directory === null) throw new CLIError("PROFILE_NOT_FOUND", `Profile "${profile}" does not exist.`, ExitCode.ERROR);
-          const globals = cmd.optsWithGlobals();
-          const context = await ProfileManager.resolveContext(globals);
-          const node = context.replication ? await ensureAuthenticated(context) : undefined;
-          let durationMs: number;
-          try {
-            durationMs = parseDuration(options.since);
-          } catch (error) {
-            throw new CLIError("USAGE_ERROR", error instanceof Error ? error.message : String(error), ExitCode.USAGE_ERROR);
-          }
-          const control: ReplicationControl | undefined = node?.replication ?? replicationForProfile(profile);
-          let cleared: number | undefined;
-          let purged: unknown;
-          let warning: string | undefined;
-          if (options.clearPending || options.purge) {
-            if (!control) throw new CLIError("REPLICATION_UNAVAILABLE", "No replication runtime is registered for this profile.", ExitCode.ERROR);
-            warning = CLEAR_PENDING_WARNING;
-            process.stderr.write(`Warning: ${warning}\n`);
-            if (options.clearPending) cleared = await control.clearPending();
-            if (options.purge) purged = await control.purge();
-          }
-          const sinceMs = Date.now() - durationMs;
-          const [events, partitions, replicas] = await Promise.all([
-            readReplicationEvents(profile, sinceMs),
-            replicationPartitions(profile),
-            node?.replication ? node.replication.status() : control ? control.status() : Promise.resolve([]),
-          ]);
-          const report = createReplicationReport(options.since, events, replicas, partitions, warning);
-          if (shouldOutputJson()) {
-            outputJson({
-              ...report,
-              ...(cleared === undefined ? {} : { cleared }),
-              ...(purged === undefined ? {} : { purged }),
-            });
-          } else {
-            process.stdout.write(`${renderReplicationReport(report)}\n`);
-            if (cleared !== undefined) process.stdout.write(`Cleared ${cleared} pending write record(s).\n`);
-            if (purged !== undefined) process.stdout.write(`Purge: ${JSON.stringify(purged)}\n`);
-          }
+          const readPersistedReport = async (root: string) => {
+            await replicaNames(profile);
+            const sinceMs = Date.now() - durationMs;
+            const persisted = await withPinnedLocalDirectory(profile, root, "replication", async (directory) => ({
+              events: await readReplicationEvents(profile, directory, sinceMs),
+              partitions: await replicationPartitions(profile, directory),
+            }));
+            return createReplicationReport(options.since, persisted?.events ?? [], persisted?.partitions ?? []);
+          };
+          if (process.platform === "linux") return readPersistedReport(directory);
+          const checked = await withPinnedLocalDirectory(profile, dirname(directory), basename(directory), readPersistedReport);
+          if (checked === null) throw localPathChanged(profile);
+          return checked;
         });
-      }),
+        if (shouldOutputJson()) outputJson(report);
+        else process.stdout.write(`${renderReplicationReport(report)}\n`);
+      }, false),
     );
 
   replica
@@ -562,15 +729,15 @@ or coverage incomplete; 5 grant expired, revoked or not yet valid; 6 network;
     .action((options, cmd: Command) =>
       run(async () => {
         const profile = await profileName(cmd);
+        if (options.prefix !== undefined) {
+          try {
+            assertFolderPrefix(options.prefix);
+          } catch (error) {
+            throw new CLIError("INVALID_REPLICATION_PREFIX", error instanceof Error ? error.message : String(error), ExitCode.USAGE_ERROR);
+          }
+        }
         await withPinnedProfileDirectory(profile, async (directory) => {
           if (directory === null) throw new CLIError("PROFILE_NOT_FOUND", `Profile "${profile}" does not exist.`, ExitCode.ERROR);
-          if (options.prefix !== undefined) {
-            try {
-              assertFolderPrefix(options.prefix);
-            } catch (error) {
-              throw new CLIError("INVALID_REPLICATION_PREFIX", error instanceof Error ? error.message : String(error), ExitCode.USAGE_ERROR);
-            }
-          }
           const globals = cmd.optsWithGlobals() as { host?: string };
           const config = await ProfileManager.getProfile(profile);
           const deviceDid = config.sessionDid ?? config.did;
@@ -589,24 +756,7 @@ or coverage incomplete; 5 grant expired, revoked or not yet valid; 6 network;
                 ? assertName(options.prefix.replace(/\/+$/, "").replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^[^A-Za-z0-9]+/, "") || "default")
                 : await existingReplicaName(profile, undefined);
           const grants = await storedGrants(profile);
-          let store: SqliteReplicaStore;
-
-          if (existing.includes(name)) {
-            store = await openReplica(profile, name);
-            const state = (await store.open())!;
-            const differs = syncOptionsDiffer(state.config, {
-              ...(options.space === undefined ? {} : { space: options.space }),
-              ...(options.prefix === undefined ? {} : { prefix: options.prefix }),
-              ...(globals.host === undefined ? {} : { host: globals.host }),
-            });
-            if (differs !== undefined) {
-              await store.close();
-              throw new ReplicaError(
-                ReplicaErrorCode.CONFIG_MISMATCH,
-                `Replica ${name} already follows ${differs}. Use another --replica name, or ${CLI_NAME} replica reset --replica ${name} --purge first.`,
-              );
-            }
-          } else {
+          const initialConfig: ReplicaConfig | null = existing.includes(name) ? null : (() => {
             const prefix: string | undefined = options.prefix;
             if (prefix === undefined) {
               throw new CLIError("USAGE_ERROR", "The first sync of a replica needs --prefix (and a device grant covering it).", ExitCode.USAGE_ERROR);
@@ -620,9 +770,9 @@ or coverage incomplete; 5 grant expired, revoked or not yet valid; 6 network;
             }
             const host = (globals.host ?? process.env.TC_HOST ?? config.host)?.replace(/\/+$/, "");
             if (!host) throw new CLIError("USAGE_ERROR", "Pass --host: the profile has no host to pin.", ExitCode.USAGE_ERROR);
-            // Choose the grant before writing anything, so a missing grant leaves no replica behind.
+            // Choose the grant before creating any directory or database.
             chooseGrant(grants, deviceDid, space, prefix);
-            store = await createReplica(profile, {
+            return {
               name,
               replicaId: randomBytes(16).toString("hex"),
               host,
@@ -632,41 +782,60 @@ or coverage incomplete; 5 grant expired, revoked or not yet valid; 6 network;
               allowSecrets: options.allowSecrets === true,
               localReadPolicy: "whileGrantValid",
               retentionGrantCid: null,
+            };
+          })();
+          const { replica, report, status, warning } = await withReplicaDirectory(profile, name, async (path, expectedDirectory) => {
+            const store = await SqliteReplicaStore.open(path, {
+              create: initialConfig !== null, guard: profileGuard(profile), expectedDirectory,
             });
-          }
-
-          try {
-            const state = (await store.open())!;
-            const { space, prefix, host } = state.config;
-            if (requiresSecretsOptIn(space, prefix) && !state.config.allowSecrets && options.allowSecrets !== true) {
-              throw new ReplicaError(ReplicaErrorCode.SECRETS_OPT_IN_REQUIRED, `Replicating ${space}/kv/${prefix} needs --allow-secrets.`);
-            }
-            let grant: ParsedUcanGrant | undefined;
             try {
-              grant = chooseGrant(grants, state.config.deviceDid, space, prefix);
-            } catch (error) {
-              // An expired stored grant is the engine's call (GRANT_EXPIRED), not a missing one.
-              if (!isReplicaError(error, ReplicaErrorCode.GRANT_MISSING) || (state.grant ?? state.pendingGrant) === null) throw error;
+              if (initialConfig !== null && (await store.open()) === null) await store.init(initialConfig);
+              const state = (await store.open())!;
+              if (initialConfig === null) {
+                const differs = syncOptionsDiffer(state.config, {
+                  ...(options.space === undefined ? {} : { space: options.space }),
+                  ...(options.prefix === undefined ? {} : { prefix: options.prefix }),
+                  ...(globals.host === undefined ? {} : { host: globals.host }),
+                });
+                if (differs !== undefined) {
+                  throw new ReplicaError(
+                    ReplicaErrorCode.CONFIG_MISMATCH,
+                    `Replica ${name} already follows ${differs}. Use another --replica name, or ${CLI_NAME} replica reset --replica ${name} --purge first.`,
+                  );
+                }
+              }
+              const { space, prefix, host } = state.config;
+              if (requiresSecretsOptIn(space, prefix) && !state.config.allowSecrets && options.allowSecrets !== true) {
+                throw new ReplicaError(ReplicaErrorCode.SECRETS_OPT_IN_REQUIRED, `Replicating ${space}/kv/${prefix} needs --allow-secrets.`);
+              }
+              let grant: ParsedUcanGrant | undefined;
+              try {
+                grant = chooseGrant(grants, state.config.deviceDid, space, prefix);
+              } catch (error) {
+                // An expired stored grant is the engine's call (GRANT_EXPIRED), not a missing one.
+                if (!isReplicaError(error, ReplicaErrorCode.GRANT_MISSING) || (state.grant ?? state.pendingGrant) === null) throw error;
+              }
+              if (grant !== undefined) await store.installGrant(grant);
+              if (options.retentionGrant !== undefined && options.retentionGrant !== state.config.retentionGrantCid) {
+                await store.setRetentionGrant(options.retentionGrant === "" ? null : options.retentionGrant);
+              }
+              const current = (await store.open())!;
+              const transportFor = await grantTransports({ host, space, deviceDid: current.config.deviceDid, jwk });
+              const warning = replicaSecretsWarning(space, prefix, options.allowSecrets === true || state.config.allowSecrets);
+              const report = await new Replica({ store, transportFor }).sync(options.limit === undefined ? {} : { limit: options.limit });
+              const status = await store.status();
+              return { replica: current.config.name, report, status, warning };
+            } finally {
+              await store.close();
             }
-            if (grant !== undefined) await store.installGrant(grant);
-            if (options.retentionGrant !== undefined && options.retentionGrant !== state.config.retentionGrantCid) {
-              await store.setRetentionGrant(options.retentionGrant === "" ? null : options.retentionGrant);
-            }
-            const current = (await store.open())!;
-            const transportFor = await grantTransports({ host, space, deviceDid: current.config.deviceDid, jwk });
-            const warning = replicaSecretsWarning(space, prefix, options.allowSecrets === true || state.config.allowSecrets);
-            if (warning !== undefined) process.stderr.write(`Warning: ${warning}\n`);
-            const report = await new Replica({ store, transportFor }).sync(options.limit === undefined ? {} : { limit: options.limit });
-            const status = await store.status();
-            if (shouldOutputJson()) {
-              outputJson({ replica: current.config.name, sync: report, status, ...(warning === undefined ? {} : { warning }) });
-            } else {
-              process.stdout.write(
-                `${theme.success("✓")} Synced ${report.changes} change(s) in ${report.pages} page(s), fetched ${report.fetched} value(s).\n${describeStatus(status)}\n`,
-              );
-            }
-          } finally {
-            await store.close();
+          }, initialConfig !== null);
+          if (warning !== undefined) process.stderr.write(`Warning: ${warning}\n`);
+          if (shouldOutputJson()) {
+            outputJson({ replica, sync: report, status, ...(warning === undefined ? {} : { warning }) });
+          } else {
+            process.stdout.write(
+              `${theme.success("✓")} Synced ${report.changes} change(s) in ${report.pages} page(s), fetched ${report.fetched} value(s).\n${describeStatus(status)}\n`,
+            );
           }
         });
       }),
@@ -683,13 +852,8 @@ or coverage incomplete; 5 grant expired, revoked or not yet valid; 6 network;
       run(async () => {
         const profile = await profileName(cmd);
         await withLegacyReplicaRead(profile, async (checkDelivery) => {
-          const store = await openReplicaForRead(profile, await existingReplicaName(profile, options.replica));
-          let result: ReplicaReadResult;
-          try {
-            result = await new Replica({ store }).get(key, { verify: options.verify !== false });
-          } finally {
-            await store.close();
-          }
+          const result = await withOpenReplica(profile, await existingReplicaName(profile, options.replica),
+            (store) => new Replica({ store }).get(key, { verify: options.verify !== false }));
           await checkDelivery();
           if (result.status !== "present") {
             const failure = READ_FAILURE[result.status];
@@ -727,19 +891,13 @@ or coverage incomplete; 5 grant expired, revoked or not yet valid; 6 network;
         }
         const profile = await profileName(cmd);
         await withLegacyReplicaRead(profile, async (checkDelivery) => {
-          const store = await openReplicaForRead(profile, await existingReplicaName(profile, options.replica));
-          let result: ReplicaListResult;
-          try {
-            result = await new Replica({ store }).list({
+          const { entries, meta } = await withOpenReplica(profile, await existingReplicaName(profile, options.replica),
+            (store) => new Replica({ store }).list({
               ...(prefix === undefined ? {} : { prefix }),
               ...(options.after === undefined ? {} : { after: options.after }),
               ...(options.limit === undefined ? {} : { limit: options.limit }),
-            });
-          } finally {
-            await store.close();
-          }
+            }));
           await checkDelivery();
-          const { entries, meta } = result;
           if (shouldOutputJson()) {
             outputJson({ keys: entries, count: entries.length, prefix: prefix ?? null, meta });
           } else if (entries.length === 0) {
@@ -767,12 +925,7 @@ or coverage incomplete; 5 grant expired, revoked or not yet valid; 6 network;
           const names = options.replica === undefined ? await replicaNames(profile) : [assertName(options.replica)];
           const statuses: ReplicaStatus[] = [];
           for (const name of names) {
-            const store = await openReplicaForRead(profile, name);
-            try {
-              statuses.push(await new Replica({ store }).status());
-            } finally {
-              await store.close();
-            }
+            statuses.push(await withOpenReplica(profile, name, (store) => new Replica({ store }).status()));
           }
           await checkDelivery();
           if (shouldOutputJson()) {
@@ -817,12 +970,7 @@ or coverage incomplete; 5 grant expired, revoked or not yet valid; 6 network;
               }
             });
           } else {
-            const store = await openReplica(profile, name);
-            try {
-              await new Replica({ store }).reset("manual");
-            } finally {
-              await store.close();
-            }
+            await withOpenReplica(profile, name, (store) => new Replica({ store }).reset("manual"));
           }
           outputJson({ replica: name, reset: true, purged: options.purge === true });
         }, { requireProfile: true });

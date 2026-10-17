@@ -278,11 +278,17 @@ and sync details to stderr. The event log is
 `profiles/<profile>/replication/events.jsonl` under `TC_HOME`; it records
 operational metadata, not values.
 
-`tinycloud replica report [--since 24h]` renders read source/reason counts, hit ratio,
-latency and staleness percentiles, sync/write outcomes, recent divergences,
-replica/grant status, and pinned keys. `--json` emits the aggregate as JSON.
-`--clear-pending` clears pending replica writes and prints a warning: commits
-that arrive later can be observed as stale until a subsequent sync.
+`tinycloud replica report [--since 24h]` reads persisted event and identity
+partition files only. It renders read source/reason counts, hit ratio, latency
+and staleness percentiles, sync/write outcomes, and recent divergences; JSON
+marks live replica status unavailable. It never starts a replication runtime.
+Report `--purge` and `--clear-pending` refuse with exit 2 `REPORT_READ_ONLY`.
+`tinycloud replica reset --replica <name> --purge` is a partial alternative
+for a named local replica only. Flag-owned purge and pending clearing have no
+equivalent yet (TC-1309).
+On macOS and Windows, `replica reset --purge` and `auth logout` with a legacy
+`replicas/` tree refuse local removal rather than delete through an unpinned
+path. The existing files are retained.
 `auth logout` durably denies local replica reads, removes legacy and flag-owned
 files, and shreds both restorable session and key. A pending marker keeps reads
 denied while startup retries erasure. A signed-out profile cannot implicitly

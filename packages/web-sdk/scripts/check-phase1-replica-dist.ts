@@ -1,42 +1,67 @@
 import { execFileSync, spawnSync } from "node:child_process";
+import { existsSync } from "node:fs";
 import { cp, mkdtemp, readFile, rm } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
-
-type GzipSizes = { "index.mjs": number; "index.cjs": number };
-type LedgerEntry = { pr: string; ticket: string; "index.mjs": number; "index.cjs": number; note: string };
-type Ledger = { allowance: GzipSizes; entries: LedgerEntry[] };
+import { measureReplicaOptionalLoaded, type LoadedSizes } from "./measure-replica-optional";
+import {
+  approvedCompactFixRequired, approvedMeasurementCorrection, approvedRelocations, compactFixOptionalAllowance,
+  correctedOptionalAllowance, ciOptionalAllowance, fixRequiredOptionalAllowance, hardeningOptionalAllowance, optionalFormats,
+  mergedPinsNotLandedOn, priorOptionalAllowance, relocatedOptionalAllowance, validateIntroducedOptionalSources,
+  validateOptionalEntryTransition, validateOptionalLedger, type OptionalLedger,
+} from "./replica-optional-size-policy";
+import { assertCiSizeToolchain, approvedCiToolchainCorrection, approvedFixRequiredRatchet, approvedGatedOnlyRatchet, approvedPhase2, ciCorrectionPolicyOnlyPaths, hasAncestor, isPolicyOnlySinceApprovedSource, preexistingS3EntryCommit, validateCiToolchainTransition, validateGatedOnlyRatchet, validateHardeningRatchetTransition, validateLedger, validateMasterMergeResolutionTransition, type GzipSizes, type Ledger, type LedgerEntry } from "./replica-size-policy";
+import { collectMeasuredArtifactInputs } from "./replica-size-inputs";
 type Baseline = {
   webSdkTestBaseline: { ref: string; unhandledErrors: number; failingNames: string[]; unhandledSignatures: string[] };
 };
 
 /*
  * Rule:
- * - Structural: always reject replica references in either web bundle.
- * - Per-PR: replica-touching PRs compare gzip growth with their git merge base.
- * - Cumulative: replica PRs add one measured entry to the reviewed ledger; totals
- *   cannot exceed its allowance. Entries may record negative deltas when code shrinks.
+ * - Structural: reject replica references in the core ESM and CJS bundles.
+ * - Per-PR: replica-touching PRs compare core gzip and two optional loaded
+ *   buckets (first import with parser/noble, then IDB factory activation) against
+ *   their git merge base. The already-loaded root is external and counted once.
+ * - Cumulative: the historical core ledger stays unchanged for the approved
+ *   Phase 2 absolute-root ratchet; the optional and #550 worker buckets are
+ *   separately enforced. Other replica PRs append measured rows as before.
+ * - The refused-admission observer is a distinct, deferred artifact with its
+ *   own exact zero-headroom ESM/CJS ratchet; it never raises root or first-import caps.
  * - Non-replica PRs are never charged; they only validate the ledger shape.
+ * - A reviewed row's source commit must be a HEAD ancestor in the PR that
+ *   introduces the row. Squash merges leave branch commits out of master, so
+ *   merged rows are pinned by exact equality to their approved values instead.
+ *   A consistency check also requires each merged pin to be on the PR base or
+ *   landed by it (pinLandedOn); it does not stop a new check that re-validates
+ *   merged pins against HEAD, which only review prevents.
  *
  * Replica-owned paths: packages/replica/**, packages/sdk-services/src/kv/replication/**,
  * packages/sdk-core/src/replication/** (when present), packages/node-sdk/src/replication/**,
  * and packages/web-sdk/src/** paths containing "replica" or "replication".
  * Test files (`*.test.*`) under those paths are not replica-owned: they never
  * reach a web bundle, so a test-only edit cannot grow it.
- * Build noise tolerance is 64 gzip bytes: an entry may be up to 64 bytes below
- * the measured positive delta; always record the exact observed delta when possible.
- *
- * The ledger allowance (388 B ESM / 861 B CJS) is the replica headroom left after
- * TC-858 Phase 1: Sam's 6,144 B gzip budget minus Phase 1's measured growth of
- * 5,756 B ESM / 5,283 B CJS against cbfe21ee (#484, #495). Raising it is a budget
- * decision, made by editing `allowance` in a reviewed PR.
+ * Ordinary per-PR core rows retain the existing 64 B build-noise tolerance.
+ * The original 388/861 allowance and historical entries remain immutable.
+ * TC-858 Phase 2 has a separately approved, exact master9891-relative
+ * absolute root ceiling. It replaces additive headroom for this stack, not
+ * the first-import/activation/worker ratchets. Later growth above that
+ * ceiling needs policy review; an exact controlled re-baseline lowers it.
+ * Phase 1's 388/861 allowance was Sam's 6,144 B gzip budget minus its
+ * measured growth of 5,756 B ESM / 5,283 B CJS against cbfe21ee.
  */
+// web-sdk files that wire replication into the client bundle; their bytes are replica-owned
+// even though the filenames do not match the regex below.
+const replicationWiringPaths = new Set([
+  "packages/web-sdk/src/index.ts",
+  "packages/web-sdk/src/modules/tcw.ts",
+]);
 const replicaOwnedPath = (path: string) =>
   !/\.test\.[cm]?[jt]sx?$/.test(path) && (
     path.startsWith("packages/replica/") ||
     path.startsWith("packages/sdk-services/src/kv/replication/") ||
     path.startsWith("packages/sdk-core/src/replication/") ||
     path.startsWith("packages/node-sdk/src/replication/") ||
+    replicationWiringPaths.has(path) ||
     (path.startsWith("packages/web-sdk/src/") && /replica|replication/i.test(path))
   );
 const distDir = resolve(import.meta.dir, "../dist");
@@ -44,31 +69,15 @@ const repoRoot = resolve(import.meta.dir, "../../..");
 const baseline = JSON.parse(await readFile(resolve(import.meta.dir, "phase1-replica-baseline.json"), "utf8")) as Baseline;
 const ledgerPath = resolve(import.meta.dir, "replica-size-ledger.json");
 const ledger = JSON.parse(await readFile(ledgerPath, "utf8")) as Ledger;
+const optionalLedgerPath = resolve(import.meta.dir, "replica-optional-size-ledger.json");
+const optionalLedger = JSON.parse(await readFile(optionalLedgerPath, "utf8")) as OptionalLedger;
 const formats = ["index.mjs", "index.cjs"] as const;
+const gatedFormats = ["replica-gated.mjs", "replica-gated.cjs"] as const;
+const preexistingS3Entry: LedgerEntry = {
+  pr: "#553", ticket: "TC-858", "index.mjs": 52, "index.cjs": 55,
+  note: "Replica gzip growth measured against this PR's merge base 9516f840 (includes S1 #550 kv-storage code merged into this branch)",
+};
 let failed = false;
-
-function validateLedger(value: Ledger): void {
-  if (!value || !value.allowance || !Array.isArray(value.entries) ||
-      Object.keys(value).some((key) => key !== "allowance" && key !== "entries")) {
-    throw new Error("Invalid packages/web-sdk/scripts/replica-size-ledger.json shape");
-  }
-  if (Object.keys(value.allowance).some((key) => !formats.includes(key as (typeof formats)[number]))) {
-    throw new Error("Invalid packages/web-sdk/scripts/replica-size-ledger.json allowance shape");
-  }
-  for (const format of formats) {
-    if (!Number.isFinite(value.allowance[format])) {
-      throw new Error(`Invalid packages/web-sdk/scripts/replica-size-ledger.json allowance for ${format}`);
-    }
-  }
-  for (const entry of value.entries) {
-    if (!entry || Object.keys(entry).some((key) =>
-      key !== "pr" && key !== "ticket" && key !== "note" && !formats.includes(key as (typeof formats)[number])) ||
-        typeof entry.pr !== "string" || typeof entry.ticket !== "string" || typeof entry.note !== "string" ||
-        formats.some((format) => !Number.isFinite(entry[format]))) {
-      throw new Error("Invalid packages/web-sdk/scripts/replica-size-ledger.json entries[] item");
-    }
-  }
-}
 
 function command(program: string, args: string[], cwd = repoRoot): string {
   return execFileSync(program, args, { cwd, encoding: "utf8" }).trim();
@@ -83,6 +92,46 @@ async function gzipSizes(directory: string): Promise<GzipSizes> {
 }
 
 validateLedger(ledger);
+const ciCorrection = ledger.canonicalToolchainCorrection;
+if (ciCorrection) {
+  const bun = command("bun", ["--version"]);
+  const rustc = command("rustc", ["--version"]);
+  assertCiSizeToolchain(bun, rustc, ciCorrection);
+  console.log(`Current size toolchain: Bun ${bun}; ${rustc}`);
+}
+validateOptionalLedger(optionalLedger, ledger.fixRequiredRatchet !== undefined, ciCorrection !== undefined,
+  ledger.hardeningRatchet !== undefined);
+const optionalCurrent = await measureReplicaOptionalLoaded(distDir);
+for (const format of optionalFormats) {
+  const total = optionalLedger.entries.reduce((sum, entry) => sum + entry[format], 0);
+  console.log(`${format}: incremental loaded=${optionalCurrent[format]}; cumulative optional ledger=${total} / ${optionalLedger.allowance[format]} gzip-bytes`);
+  if (total > optionalLedger.allowance[format] || optionalCurrent[format] > optionalLedger.allowance[format]) {
+    console.error(`${format}: optional no-growth allowance exceeded; changing this separate budget requires policy review.`);
+    failed = true;
+  }
+}
+for (const format of gatedFormats) {
+  const artifact = resolve(distDir, format);
+  if (optionalLedger.gatedOnlyRatchet === undefined) {
+    if (existsSync(artifact)) {
+      console.error(`${format}: an emitted gated-only artifact requires its own reviewed size ratchet.`);
+      failed = true;
+    }
+    continue;
+  }
+  if (!existsSync(artifact)) {
+    console.error(`${format}: the approved gated-only artifact is missing.`);
+    failed = true;
+    continue;
+  }
+  const size = execFileSync("gzip", ["-9", "-c", artifact]).byteLength;
+  const ceiling = optionalLedger.gatedOnlyRatchet.ceiling[format];
+  console.log(`${format}: current=${size}; approved deferred-gate ceiling=${ceiling} gzip-bytes`);
+  if (size > ceiling) {
+    console.error(`${format}: refused-admission-only artifact grew above its zero-headroom cap.`);
+    failed = true;
+  }
+}
 const currentSizes = await gzipSizes(distDir);
 for (const format of formats) {
   const source = await readFile(resolve(distDir, format), "utf8");
@@ -93,11 +142,24 @@ for (const format of formats) {
     }
   }
   console.log(`${format}: current=${currentSizes[format]} gzip-bytes`);
+  const ceiling = ledger.hardeningRatchet?.root.ceiling[format] ?? ciCorrection?.measured.rootCeiling[format] ??
+    ledger.fixRequiredRatchet?.rootCeiling[format] ?? ledger.phase2Ratchet?.ceiling[format];
+  if (ceiling !== undefined) {
+    console.log(`${format}: TC-858 Phase 2 absolute root ceiling=${ceiling} gzip-bytes`);
+    if (currentSizes[format] > ceiling) {
+      console.error(`${format}: TC-858 Phase 2 absolute root ceiling exceeded; later growth requires policy review.`);
+      failed = true;
+    }
+  }
 }
 
 const prBaseSha = process.env.REPLICA_BUDGET_PR_BASE_SHA;
 if (prBaseSha) {
   const baseRef = /^refs\/pull\/\d+\/merge$/.test(process.env.GITHUB_REF ?? "") ? "HEAD^1" : prBaseSha;
+  if (baseRef === "HEAD^1" && command("git", ["rev-parse", baseRef]) !== prBaseSha) {
+    console.error("The pull-request merge parent differs from GitHub's reported base SHA.");
+    failed = true;
+  }
   const mergeBase = command("git", ["merge-base", baseRef, "HEAD"]);
   const changedPaths = command("git", ["diff", "--name-only", "--no-renames", `${mergeBase}...HEAD`])
     .split("\n").filter(Boolean);
@@ -115,8 +177,168 @@ if (prBaseSha) {
   } else {
     throw new Error(`Unable to read base ${baseLedgerPath}: ${baseLedgerResult.stderr.trim()}`);
   }
-  validateLedger(baseLedger);
+  validateLedger(baseLedger, true);
+  validateCiToolchainTransition(baseLedger.canonicalToolchainCorrection, ciCorrection);
+  validateMasterMergeResolutionTransition(baseLedger.masterMergeResolution, ledger.masterMergeResolution);
+  validateHardeningRatchetTransition(baseLedger.hardeningRatchet, ledger.hardeningRatchet);
+  const hardening = ledger.hardeningRatchet;
+  if (hardening !== undefined && baseLedger.hardeningRatchet === undefined &&
+      (baseLedger.masterMergeResolution === undefined || !hasAncestor(repoRoot, hardening.sourceCommits.at(-1)!))) {
+    console.error("The #565 hardening ratchet requires the merged #548 resolution and its measured source commits.");
+    failed = true;
+  }
+  const baseOptionalPath = "packages/web-sdk/scripts/replica-optional-size-ledger.json";
+  const optionalResult = spawnSync("git", ["show", `${mergeBase}:${baseOptionalPath}`], {
+    cwd: repoRoot, encoding: "utf8",
+  });
+  let baseOptional: OptionalLedger;
+  if (optionalResult.status === 0) {
+    baseOptional = JSON.parse(optionalResult.stdout) as OptionalLedger;
+  } else if (optionalResult.stderr.includes("does not exist in") ||
+      optionalResult.stderr.includes("exists on disk, but not in")) {
+    baseOptional = { allowance: priorOptionalAllowance, entries: [] };
+  } else {
+    throw new Error(`Unable to read base ${baseOptionalPath}: ${optionalResult.stderr.trim()}`);
+  }
+  validateOptionalLedger(baseOptional, baseLedger.fixRequiredRatchet !== undefined,
+    baseLedger.canonicalToolchainCorrection !== undefined, baseLedger.hardeningRatchet !== undefined);
+  validateIntroducedOptionalSources(baseOptional, optionalLedger);
+  // Consistency check: each merged row's pin is on the base or was landed by it (see pinLandedOn).
+  for (const { row, pin } of mergedPinsNotLandedOn(repoRoot, baseLedger, baseOptional, prBaseSha)) {
+    console.error(`Merged size-policy row ${row} pins ${pin}, which master ${prBaseSha} neither contains nor landed through packages/web-sdk/scripts/.`);
+    failed = true;
+  }
+  validateGatedOnlyRatchet(optionalLedger.gatedOnlyRatchet, baseOptional.gatedOnlyRatchet);
+  if (baseOptional.fixRequired !== undefined &&
+      JSON.stringify(optionalLedger.fixRequired) !== JSON.stringify(baseOptional.fixRequired)) {
+    console.error("Merged fix-required measured-source rows must remain unchanged.");
+    failed = true;
+  }
+  if (optionalLedger.gatedOnlyRatchet !== undefined && baseOptional.gatedOnlyRatchet === undefined &&
+      !hasAncestor(repoRoot, approvedGatedOnlyRatchet.sourceCommit)) {
+    console.error("The deferred-gate budget requires its measured source commit as an ancestor.");
+    failed = true;
+  }
+  const optionalPrefixMatches = optionalLedger.entries.length >= baseOptional.entries.length &&
+    baseOptional.entries.every((entry, index) => {
+      const current = optionalLedger.entries[index];
+      return current.pr === entry.pr && current.ticket === entry.ticket &&
+        optionalFormats.every((format) => current[format] === entry[format]) &&
+        current.note === entry.note;
+    });
+  if (!optionalPrefixMatches) {
+    console.error(`${baseOptionalPath} entries[] must preserve the base ledger as an unchanged prefix.`);
+    failed = true;
+  }
+  if (optionalResult.status === 0 && optionalFormats.some((format) =>
+    optionalLedger.allowance[format] > baseOptional.allowance[format])) {
+    const ciAllowance = optionalLedger.fixRequired === undefined ? ciOptionalAllowance : compactFixOptionalAllowance;
+    const pairedTransition = baseOptional.relocations === undefined &&
+      JSON.stringify(optionalLedger.relocations) === JSON.stringify(approvedRelocations) &&
+      baseOptional.measurementCorrection === undefined &&
+      optionalFormats.every((format) =>
+        baseOptional.allowance[format] === priorOptionalAllowance[format] &&
+        optionalLedger.allowance[format] ===
+          (ciCorrection !== undefined ? ciAllowance[format]
+            : ledger.fixRequiredRatchet !== undefined ? fixRequiredOptionalAllowance[format]
+              : optionalLedger.measurementCorrection === undefined
+                ? relocatedOptionalAllowance[format] : correctedOptionalAllowance[format]));
+    const measurementCorrection = JSON.stringify(baseOptional.relocations) === JSON.stringify(approvedRelocations) &&
+      baseOptional.measurementCorrection === undefined &&
+      JSON.stringify(optionalLedger.measurementCorrection) === JSON.stringify(approvedMeasurementCorrection) &&
+      optionalFormats.every((format) =>
+        baseOptional.allowance[format] === relocatedOptionalAllowance[format] &&
+        optionalLedger.allowance[format] ===
+          (ledger.fixRequiredRatchet !== undefined ? fixRequiredOptionalAllowance[format] : correctedOptionalAllowance[format]));
+    const reviewedFixTransition = baseLedger.fixRequiredRatchet === undefined &&
+      ledger.fixRequiredRatchet !== undefined &&
+      JSON.stringify(baseOptional.measurementCorrection) === JSON.stringify(approvedMeasurementCorrection) &&
+      JSON.stringify(optionalLedger.measurementCorrection) === JSON.stringify(baseOptional.measurementCorrection) &&
+      JSON.stringify(optionalLedger.gatedOnlyRatchet) === JSON.stringify(baseOptional.gatedOnlyRatchet) &&
+      optionalFormats.every((format) =>
+        baseOptional.allowance[format] === correctedOptionalAllowance[format] &&
+        optionalLedger.allowance[format] === fixRequiredOptionalAllowance[format]);
+    const ciCorrectionTransition = baseLedger.canonicalToolchainCorrection === undefined &&
+      ciCorrection !== undefined &&
+      JSON.stringify(optionalLedger.relocations) === JSON.stringify(approvedRelocations) &&
+      JSON.stringify(optionalLedger.measurementCorrection) === JSON.stringify(approvedMeasurementCorrection) &&
+      optionalFormats.every((format) =>
+        baseOptional.allowance[format] === priorOptionalAllowance[format] &&
+        optionalLedger.allowance[format] === ciAllowance[format]);
+    const compactFixTransition = baseOptional.fixRequired === undefined &&
+      JSON.stringify(optionalLedger.fixRequired) === JSON.stringify([approvedCompactFixRequired]) &&
+      optionalFormats.every((format) =>
+        baseOptional.allowance[format] === ciOptionalAllowance[format] &&
+        optionalLedger.allowance[format] === compactFixOptionalAllowance[format]);
+    const hardeningTransition = baseLedger.hardeningRatchet === undefined && ledger.hardeningRatchet !== undefined &&
+      optionalFormats.every((format) =>
+        baseOptional.allowance[format] === compactFixOptionalAllowance[format] &&
+        optionalLedger.allowance[format] === hardeningOptionalAllowance[format]);
+    if (!pairedTransition && !measurementCorrection && !reviewedFixTransition && !ciCorrectionTransition &&
+        !compactFixTransition && !hardeningTransition) {
+      console.error(`${baseOptionalPath}: optional allowance may increase only with an exact reviewed relocation, toolchain correction, fix-required source row, or hardening ratchet.`);
+      failed = true;
+    }
+  }
   const replicaPaths = changedPaths.filter(replicaOwnedPath);
+  const phase2Introduced = ledger.phase2Ratchet !== undefined && baseLedger.phase2Ratchet === undefined;
+  const ciCorrectionIntroduced = ciCorrection !== undefined &&
+    baseLedger.canonicalToolchainCorrection === undefined;
+  if (ledger.masterMergeResolution !== undefined && baseLedger.masterMergeResolution === undefined &&
+      (ledger.masterMergeResolution.masterBase !== prBaseSha ||
+       !hasAncestor(repoRoot, ledger.masterMergeResolution.mergedHead))) {
+    console.error(`The reviewed master merge input blobs require trusted base ${ledger.masterMergeResolution.masterBase} and resolved merged tree ${ledger.masterMergeResolution.mergedHead}.`);
+    failed = true;
+  }
+  if (ciCorrectionIntroduced) {
+    const graph = await collectMeasuredArtifactInputs(repoRoot);
+    if (!isPolicyOnlySinceApprovedSource(
+      repoRoot, approvedCiToolchainCorrection.approvedSource, ciCorrectionPolicyOnlyPaths, graph,
+      {
+        ...optionalLedger.fixRequired?.[0]?.measuredPaths,
+        ...ledger.masterMergeResolution?.measuredPaths,
+      }, prBaseSha,
+    )) {
+      console.error("CI toolchain size correction requires unchanged measured inputs except exact ruled source blobs since ddc032ca.");
+      failed = true;
+    }
+  }
+  const reviewedFixIntroduced = ledger.fixRequiredRatchet !== undefined && baseLedger.fixRequiredRatchet === undefined;
+  if (baseLedger.fixRequiredRatchet !== undefined &&
+      JSON.stringify(ledger.fixRequiredRatchet) !== JSON.stringify(baseLedger.fixRequiredRatchet)) {
+    console.error("The exact ddc032ca fix-required ratchet cannot change after introduction.");
+    failed = true;
+  }
+  if (reviewedFixIntroduced &&
+      (optionalLedger.gatedOnlyRatchet === undefined || !hasAncestor(repoRoot, approvedFixRequiredRatchet.measuredAt))) {
+    console.error("The reviewed fix-required root/first-import transition requires the measured ddc032ca source and approved gated-only artifact.");
+    failed = true;
+  }
+  if (baseLedger.phase2Ratchet !== undefined &&
+      JSON.stringify(ledger.phase2Ratchet) !== JSON.stringify(baseLedger.phase2Ratchet)) {
+    const prior = baseLedger.phase2Ratchet;
+    const toolchainCorrection = prior.toolchain === "Bun 1.4.3; production webpack; gzip -9 -c" &&
+      baseOptional.measurementCorrection === undefined &&
+      JSON.stringify(optionalLedger.measurementCorrection) === JSON.stringify(approvedMeasurementCorrection) &&
+      JSON.stringify({ ...prior, toolchain: approvedPhase2.toolchain }) === JSON.stringify(ledger.phase2Ratchet);
+    if (!toolchainCorrection) {
+      console.error("The approved TC-858 Phase 2 ratchet must remain unchanged after its one canonical-toolchain correction.");
+      failed = true;
+    }
+  }
+  if (phase2Introduced) {
+    const oldEntriesAdded = ledger.entries.slice(baseLedger.entries.length);
+    const inheritedS3Only = oldEntriesAdded.length === 0 ||
+      (oldEntriesAdded.length === 1 &&
+        JSON.stringify(oldEntriesAdded[0]) === JSON.stringify(preexistingS3Entry) &&
+        hasAncestor(repoRoot, preexistingS3EntryCommit));
+    if (!inheritedS3Only || replicaPaths.length === 0 ||
+        formats.some((format) => baseLedger.allowance[format] !== ledger.allowance[format]) ||
+        !hasAncestor(repoRoot, approvedPhase2.base)) {
+      console.error("TC-858 Phase 2 may introduce only Naomi's exact master9891-relative root ratchet, preserving the old #546/#553 entries.");
+      failed = true;
+    }
+  }
   const prefixMatches = ledger.entries.length >= baseLedger.entries.length &&
     baseLedger.entries.every((entry, index) => {
       const current = ledger.entries[index];
@@ -149,6 +371,10 @@ if (prBaseSha) {
       failed = true;
     }
     console.log("Replica size budget: non-replica PR; no ledger charge or merge-base rebuild.");
+    if (optionalLedger.entries.length !== baseOptional.entries.length || !optionalPrefixMatches) {
+      console.error("Non-replica PRs must not append to the optional loaded-byte ledger.");
+      failed = true;
+    }
   } else {
     const rustChanged = changedPaths.some((path) =>
       path.startsWith("packages/sdk-rs/") ||
@@ -158,7 +384,10 @@ if (prBaseSha) {
     const tempDir = await mkdtemp(join(tmpdir(), "tc-web-sdk-merge-base-"));
     const worktree = join(tempDir, "worktree");
     try {
-      command("git", ["worktree", "add", "--detach", worktree, mergeBase]);
+      // A first Phase 2 row must compare to the approved master, even when
+      // #553 has already merged and is the PR's ordinary merge base.
+      const measuredRef = phase2Introduced ? approvedPhase2.base : mergeBase;
+      command("git", ["worktree", "add", "--detach", worktree, measuredRef]);
       execFileSync("bun", ["install", "--frozen-lockfile"], { cwd: worktree, stdio: "inherit" });
       if (!rustChanged) {
         for (const directory of ["web-sdk-wasm", "node-sdk-wasm"]) {
@@ -192,10 +421,44 @@ if (prBaseSha) {
       const baseSizes = await gzipSizes(resolve(worktree, "packages/web-sdk/dist"));
       const deltas = Object.fromEntries(formats.map((format) => [format, currentSizes[format] - baseSizes[format]])) as GzipSizes;
       for (const format of formats) {
-        console.log(`${format}: merge-base=${baseSizes[format]} gzip-bytes current=${currentSizes[format]} delta=${deltas[format]} bytes`);
+        console.log(`${phase2Introduced ? "approved master9891" : "merge-base"}=${baseSizes[format]} gzip-bytes current=${currentSizes[format]} delta=${deltas[format]} bytes`);
+      }
+      if (ciCorrection) {
+        console.log(`Controlled-master size toolchain: Bun ${ciCorrection.toolchain.bun}; rustc ${ciCorrection.toolchain.rustc} (same HEAD WASM)`);
+      }
+      if (phase2Introduced &&
+          formats.some((format) => Math.abs(baseSizes[format] -
+            (ciCorrection?.measured.master[format] ?? approvedPhase2.baseline[format])) > 2)) {
+        console.error("Official master9891 build differs by more than 2 B from the approved TC-858 Phase 2 baseline for this toolchain.");
+        failed = true;
+      }
+      const baseOptionalSizes = await measureReplicaOptionalLoaded(resolve(worktree, "packages/web-sdk/dist"));
+      const optionalDeltas = Object.fromEntries(optionalFormats.map((format) =>
+        [format, optionalCurrent[format] - baseOptionalSizes[format]])) as LoadedSizes;
+      for (const format of optionalFormats) {
+        console.log(`${format}: merge-base incremental=${baseOptionalSizes[format]} current=${optionalCurrent[format]} delta=${optionalDeltas[format]} gzip-bytes`);
+      }
+      try {
+        validateOptionalEntryTransition(
+          baseOptional.entries, optionalLedger.entries, optionalDeltas,
+          process.env.REPLICA_BUDGET_PR_NUMBER ? `#${process.env.REPLICA_BUDGET_PR_NUMBER}` : "",
+        );
+      } catch (error) {
+        console.error(error instanceof Error ? error.message : "Invalid optional PR ledger transition");
+        console.error(JSON.stringify({
+          pr: process.env.REPLICA_BUDGET_PR_NUMBER ? `#${process.env.REPLICA_BUDGET_PR_NUMBER}` : "#<PR>",
+          ticket: process.env.REPLICA_BUDGET_TICKET?.match(/\bTC-\d+\b/i)?.[0] ?? "TC-UNKNOWN",
+          ...optionalDeltas, note: "Optional first-import and IDB activation gzip deltas against this PR's merge base",
+        }));
+        failed = true;
       }
       const appended = ledger.entries.slice(baseLedger.entries.length);
-      if (!prefixMatches || appended.length !== 1) {
+      if (phase2Introduced) {
+        // The separately approved row replaces a cumulative #548 entry; #553
+        // remains its own unchanged upstream ledger entry.
+        if (!prefixMatches) failed = true;
+        console.log("TC-858 Phase 2 uses its exact absolute-root policy row, not additive old headroom.");
+      } else if (!prefixMatches || appended.length !== 1) {
         const pr = process.env.REPLICA_BUDGET_PR_NUMBER ? `#${process.env.REPLICA_BUDGET_PR_NUMBER}` : "#<PR>";
         const ticket = process.env.REPLICA_BUDGET_TICKET?.match(/\bTC-\d+\b/i)?.[0] ?? "TC-UNKNOWN";
         console.error("Replica-touching PR must append exactly one ledger entry to packages/web-sdk/scripts/replica-size-ledger.json entries[]. Add this entry:");
@@ -214,7 +477,7 @@ if (prBaseSha) {
           }
         }
       }
-      if (prefixMatches && appended.length !== 1) failed = true;
+      if (!phase2Introduced && prefixMatches && appended.length !== 1) failed = true;
       console.log(`Replica-owned changes: ${replicaPaths.join(", ")}`);
     } finally {
       try {
@@ -228,6 +491,8 @@ if (prBaseSha) {
   console.log("Replica size budget: no pull-request merge base; reporting only.");
 }
 
+// Keep structural/size inspection independent of the web test suite.
+if (process.argv.includes("--dist-only")) process.exit(failed ? 1 : 0);
 const reportDir = await mkdtemp(join(tmpdir(), "tc-web-sdk-junit-"));
 const report = join(reportDir, "web-sdk.xml");
 try {

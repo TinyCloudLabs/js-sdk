@@ -13,6 +13,7 @@ import { composeManifestRequest } from "@tinycloud/sdk-core";
 import { invokeOperation } from "@tinycloud/operations";
 import { namedProfilePath, profilePath } from "@tinycloud/operations/state";
 import { principalHashOf, readGateSnapshot } from "@tinycloud/replica/profile-gate";
+import { isReplicaError, ReplicaErrorCode } from "@tinycloud/replica";
 import { REPLICA_GATE_FILE } from "@tinycloud/sdk-services/kv/replication/contractConstants";
 import { ProfileManager } from "../config/profiles.js";
 import { logoutInventorySnapshot, planLogoutRevocations, type LogoutRevocationPlan } from "../lib/logout-revocation.js";
@@ -380,20 +381,29 @@ export async function finishProfileLogout(
     const principal = sessionOwner ?? profile.ownerDid ?? profile.did;
     const purge = profilePurge(ctx.profile);
     if (online) {
-      const currentToken = await purge.deferredErase();
-      const tokenUnchanged = online.token
-        ? currentToken?.deniedEpoch === online.token.deniedEpoch &&
-          currentToken.principalHash === online.token.principalHash
-        : currentToken === null && (online.marker !== null ||
-          (online.gateSnapshot !== undefined &&
-           await inactiveGateIdentity(ctx.profile, await readGateSnapshot(profilePath(ctx.profile))) === online.gateSnapshot &&
-           (await existingReplicaRoots(ctx.profile)).length === 0));
+      // A gate removed or rolled back behind its deny floor refuses to read; that is a change too.
+      let gateRefusal = "";
+      let tokenUnchanged: boolean;
+      try {
+        const currentToken = await purge.deferredErase();
+        tokenUnchanged = online.token
+          ? currentToken?.deniedEpoch === online.token.deniedEpoch &&
+            currentToken.principalHash === online.token.principalHash
+          : currentToken === null && (online.marker !== null ||
+            (online.gateSnapshot !== undefined &&
+             await inactiveGateIdentity(ctx.profile, await readGateSnapshot(profilePath(ctx.profile))) === online.gateSnapshot &&
+             (await existingReplicaRoots(ctx.profile)).length === 0));
+      } catch (error) {
+        if (!isReplicaError(error, ReplicaErrorCode.GATED)) throw error;
+        tokenUnchanged = false;
+        gateRefusal = ` ${error.message}`;
+      }
       if (!session || JSON.stringify(session) !== online.sessionSnapshot ||
           JSON.stringify(profile) !== online.profileSnapshot ||
           await logoutInventorySnapshot(ctx.profile) !== online.inventorySnapshot ||
           !tokenUnchanged) {
         throw new CLIError("PROFILE_CHANGED_DURING_REVOKE",
-          "The profile session, stored grants, or denied gate changed during online revocation; the new session and local files were not erased.",
+          `The profile session, stored grants, or denied gate changed during online revocation; the new session and local files were not erased.${gateRefusal}`,
           ExitCode.ERROR);
       }
     }

@@ -58,4 +58,6 @@ async function main(): Promise<void> {
   scope.postMessage({ event: { event: "ready" } });
 }
 
-void main();
+// A rejection inside a worker fires no `error` on the Worker object. reportError raises it as an
+// uncaught exception, which reaches the main thread's Worker.onerror and fails every call fast.
+main().catch(reportError);

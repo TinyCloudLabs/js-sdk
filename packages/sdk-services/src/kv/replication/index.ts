@@ -45,6 +45,7 @@ export type {
   ProfileReplicaPreflight,
   ProfileReplicaPurge,
   ProfileReplicaRootIdentity,
+  ProfileReplicaRemoteLogoutState,
   ProfileReplicaUnknownEntry,
   ReplicaAccountGate,
   ReplicaBrowserGateAccess,

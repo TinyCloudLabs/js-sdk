@@ -48,7 +48,7 @@ import { ERASE_STORES, KV_STORE, kvPartitionEraser, openKvDatabase, partitionIdO
 
 export type IndexedDbReplicaStorageOptions = {
   /**
-   * Spawn this worker instead of the bundled `kv-storage.worker.js`
+   * Spawn this worker instead of the content-hashed default
    * (custom bundler layouts). A factory runs on first `open`.
    */
   worker?: Worker | URL | string | (() => Worker);
@@ -64,13 +64,11 @@ export type IndexedDbReplicaStorageOptions = {
   ledger?: Pick<ReplicaQuotaLedger<IDBTransaction>, "accountErase">;
 };
 
-/** Test seam: `@tinycloud/replica/kv-storage/testing` terminates the storage's worker through it. */
-export const KILL_WORKER = Symbol.for("tinycloud.replica.kv-storage.killWorker");
-
 function replyError(err: KvWireError): ReplicaError {
   const error = new ReplicaError(err.code as ReplicaErrorCode, err.message, err.detail);
   // Contract shape for gate refusals: `Error & { code: "REPLICA_GATED"; gate }`.
-  if (err.code === ReplicaErrorCode.GATED && typeof err.detail?.gate === "string") Object.assign(error, { gate: err.detail.gate });
+  if (err.code === ReplicaErrorCode.GATED && typeof err.detail?.gate === "string")
+    (error as ReplicaError & { gate: string }).gate = err.detail.gate;
   return error;
 }
 
@@ -84,6 +82,8 @@ function spawn(source: IndexedDbReplicaStorageOptions["worker"]): Worker {
     if (source instanceof URL || typeof source === "string") return new Worker(source, { type: "module" });
     if (typeof source === "function") return source();
   }
+  // The package build replaces this literal with the worker's SHA-256 filename;
+  // leave the new URL shape intact for bundlers' static asset resolution.
   return new Worker(new URL("./kv-storage.worker.js", import.meta.url), { type: "module" });
 }
 
@@ -309,8 +309,11 @@ class IndexedDbReplicaStorage implements ReplicaGatedStorage {
     this.lifecycle = options.lifecycle;
   }
 
-  /** The live worker, spawned on first use and again after it died. */
-  connection(): WorkerConnection {
+  /** A nonspawning probe lets the published testing helper terminate only an existing worker. */
+  connection(): WorkerConnection;
+  connection(peek: true): WorkerConnection | undefined;
+  connection(peek?: true): WorkerConnection | undefined {
+    if (peek) return this.#connection;
     if (this.#connection === undefined || this.#connection.dead) {
       const connection = new WorkerConnection(spawn(this.#options.worker), (event) => this.#event(event, connection));
       this.#connection = connection;
@@ -582,10 +585,6 @@ class IndexedDbReplicaStorage implements ReplicaGatedStorage {
       ...(this.#options.gateTx === undefined ? {} : { gateTx: this.#options.gateTx }),
       ...(options.stamp === undefined ? {} : { stamp: options.stamp }),
     });
-  }
-
-  [KILL_WORKER](): void {
-    this.#connection?.kill(new ReplicaError(ReplicaErrorCode.STORAGE_ERROR, "The replica worker was terminated."));
   }
 }
 

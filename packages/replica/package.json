@@ -1,6 +1,6 @@
 {
   "name": "@tinycloud/replica",
-  "version": "0.2.4-beta.1",
+  "version": "0.2.4-beta.3",
   "description": "Durable, read-only local replicas of a TinyCloud KV prefix over the tinycloud.kv/sync change feed.",
   "author": "TinyCloud, Inc.",
   "license": "EGPL",
@@ -54,7 +54,7 @@
     "dist"
   ],
   "scripts": {
-    "build": "bun run clean && tsup",
+    "build": "bun run clean && tsup && bun scripts/hash-worker.ts",
     "clean": "rm -rf dist",
     "test": "bun test",
     "typecheck": "tsc --noEmit"

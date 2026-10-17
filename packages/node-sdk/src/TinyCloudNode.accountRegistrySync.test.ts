@@ -158,6 +158,8 @@ function makeNode(options: { hasSiwe?: boolean } = {}): {
   });
 
   (node as any).auth = {
+    // The real NodeUserAuthorization reports its signed-in address; sign-in reads it.
+    address: () => ADDRESS,
     tinyCloudSession: {
       address: ADDRESS,
       chainId: 1,

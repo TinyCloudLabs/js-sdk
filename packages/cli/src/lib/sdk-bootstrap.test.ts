@@ -1,5 +1,5 @@
 import { afterAll, beforeEach, describe, expect, mock, setSystemTime, test } from "bun:test";
-import { mkdtemp, rm, stat, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { CLIError as CLIErrorInstance } from "../output/errors.js";
@@ -22,11 +22,18 @@ mock.module("@tinycloud/node-sdk", () => ({
       if (restoreFailure) throw restoreFailure;
     }
   },
-  // sdk.ts's replication-config dependency resolves this export even when
-  // replication is disabled in these bootstrap tests.
+  // sdk.ts's replication-config and logout-recovery dependencies resolve these
+  // exports even when replication is disabled in these bootstrap tests.
   sqliteReplicaStorage: () => {
     throw new Error("sqliteReplicaStorage should not be used by bootstrap tests");
   },
+  createProfileReplicaPurge: () => {
+    throw new Error("createProfileReplicaPurge should not be used by bootstrap tests");
+  },
+  logoutPrincipalDigest: () => {
+    throw new Error("logoutPrincipalDigest should not be used by bootstrap tests");
+  },
+  REPLICA_LOGOUT_PENDING_FILE: "replica-logout-pending.json",
   signedCompactUcanExpiry: () => mockedSignedExpiry,
 }));
 mock.module("./permissions.js", () => ({
@@ -250,7 +257,9 @@ describe("bootstrapDelegatedSession under the profile lock", () => {
     expect(error).toMatchObject({ code: "DELEGATION_REJECTED", exitCode: 1 });
     expect(error.message).toContain("The delegation exceeds the stored authority request.");
     expect(error.message).toContain("could not run");
-    expect(await ProfileManager.getSession(PROFILE)).toEqual(provisional);
+    // Session readers refuse while profile.json (and so the signed-out fence) is
+    // unreadable; the retained session bytes are checked directly.
+    expect(JSON.parse(await readFile(join(PROFILES_DIR, PROFILE, "session.json"), "utf8"))).toEqual(provisional);
   });
 
   test("a session that cannot be restored is rolled back by the bootstrap itself", async () => {

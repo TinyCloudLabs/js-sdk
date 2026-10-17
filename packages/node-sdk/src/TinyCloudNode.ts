@@ -33,9 +33,8 @@ import { generateNonce, SiweMessage } from "siwe";
  * ```
  */
 
-import { assertValidReplicationConfig } from "./replication/config";
-import type { KVReplicaStorage, ReplicationAuthority, ReplicationControl, ReplicationEvent, ReplicationOptions } from "@tinycloud/sdk-core";
-import type { ReplicaConsentAnchor, ReplicaDenyInput, ReplicaGateReason, ReplicaSessionStamp } from "@tinycloud/sdk-services/kv/replication";
+import type { KVReplicaStorage, ReplicationAuthority, ReplicationControl, ReplicationOptions } from "@tinycloud/sdk-core";
+import type { ReplicaDenyInput, ReplicaGateReason, ReplicaSessionStamp } from "@tinycloud/sdk-services/kv/replication";
 import type { ReplicationRuntime } from "./replication/runtime";
 import { getNodeReplicationLoaders } from "./replication/module-registry";
 import {
@@ -144,7 +143,6 @@ import {
   verifyDidKeyEd25519Signature,
   canonicalizeAddress,
   pkhDid,
-  principalDid,
   parseSpaceUri,
   resolveTinyCloudHosts,
   publishLocationRecord,
@@ -1639,10 +1637,9 @@ export class TinyCloudNode {
    * ```
    */
   constructor(config: TinyCloudNodeConfig = {}) {
-    // Fail fast on a malformed replication config (TC-858 §3.1). Runs only
-    // when `enabled` is true so flag-off configs stay inert; the
-    // space-dependent secrets check runs at sign-in and open (§10.1).
-    assertValidReplicationConfig(config.replication);
+    // An enabled client must validate before scheduling any runtime work. The
+    // loader is registered synchronously; disabled clients do not load replica policy.
+    if (config.replication?.enabled) getNodeReplicationLoaders().validateConfig(config.replication);
     this.explicitHost = config.host;
 
     // Store config with default host
@@ -2135,10 +2132,10 @@ export class TinyCloudNode {
 
   private async endSession(): Promise<void> {
     const leavingAddress = this.address ?? this._restoredTcSession?.address;
-    const leavingAuth = this.auth;
     const leavingChainId = this._chainId;
     const leavingPrincipal = this.replicaSessionPrincipal
       ?? (leavingAddress ? pkhDid(leavingAddress, leavingChainId) : undefined);
+    const leavingAuth = this.auth;
     const leavingContext = this._serviceContext;
     let denied: { status: string; code?: string } | undefined;
     try {
@@ -2186,17 +2183,12 @@ export class TinyCloudNode {
       }
       const result = await lifecycle.deny(input);
       if (result.status === "denied" || result.status === "deleted" || result.status === "marker") {
-        const event: Extract<ReplicationEvent, { type: "replication.lifecycle" }> = {
-          type: "replication.lifecycle",
-          at: new Date().toISOString(),
-          reason: input.reason,
-          action: result.status === "denied" ? "denied" : result.status === "deleted" ? "database_deleted" : "marker_set",
-          ...(result.status === "denied" ? { partitions: result.intents } : {}),
-          ...(result.status === "marker" ? { code: result.code } : {}),
-        };
-        try { replication.onEvent?.(event); } catch { /* Observability cannot undo a committed denial. */ }
-        const { type, ...data } = event;
-        try { context?.emit(type, data); } catch { /* Observability cannot undo a committed denial. */ }
+        // Notification follows durable denial; loader failure cannot undo that denial or change logout.
+        try {
+          (await getNodeReplicationLoaders().authority()).reportReplicaDenial(
+            result, input.reason, replication.onEvent, context,
+          );
+        } catch { /* Observability cannot undo committed denial. */ }
       }
       return result;
     } catch (error) {
@@ -2226,15 +2218,9 @@ export class TinyCloudNode {
     this._activeServiceSession = undefined;
     oldGraph.retire();
     oldCore?.retireServices();
-    oldAuth?.resetSession(
-      this.sessionManager,
-      this.sessionKeyId,
-      this.explicitHost ? [this.explicitHost] : undefined,
-    );
     this.config.host = this.explicitHost ?? DEFAULT_HOST;
     this._chainId = 1;
     this._restoredNodeFeatures = undefined;
-    this._activeServiceSession = undefined;
     this._serviceContext = undefined;
     this._kv = undefined;
     this._sql = undefined;
@@ -2259,6 +2245,9 @@ export class TinyCloudNode {
     this._bootstrapStatus = { skipped: false };
     this.replicationDelegateSession = undefined;
     this.replicationScopeError = undefined;
+    this.replicaSessionPrincipal = undefined;
+    this.replicaSessionStamp = undefined;
+    this.replicaRestoreGate = undefined;
     const sessionKey = createDefaultSessionKey(this.wasmBindings);
     this.sessionManager = sessionKey.manager;
     this.sessionKeyId = sessionKey.keyId;
@@ -7223,8 +7212,8 @@ export class TinyCloudNode {
   }
 
   private async replicationAuthority(): Promise<ReplicationAuthority> {
-    const { createReplicationAuthority, verifiedOwnerConsentAnchor } = await getNodeReplicationLoaders().authority();
-    const host = {
+    const { createReplicationAuthority, mintNodeReplicationGrant, verifiedOwnerConsentAnchor } = await getNodeReplicationLoaders().authority();
+    return createReplicationAuthority({
       replicationSession: () => this.currentTinyCloudSession() ?? this.replicationDelegateSession,
       verifiedConsentAnchor: (session: unknown) => {
         const current = this.currentTinyCloudSession();
@@ -7234,17 +7223,15 @@ export class TinyCloudNode {
       },
       siweExpiration: (siwe) => extractSiweExpiration(siwe),
       planDelegation: (entries, options) => this.planDelegation(entries, options),
-      mintDelegation: async (deviceDid, entries) => {
-        const result = await this.delegateTo(principalDid(deviceDid), entries);
-        return {
-          ucan: result.delegation.delegationHeader.Authorization,
-          expiresAt: result.delegation.expiry.getTime(),
-        };
-      },
-    } satisfies Parameters<typeof createReplicationAuthority>[0] & {
-      verifiedConsentAnchor: (session: unknown) => ReplicaConsentAnchor | null;
-    };
-    return createReplicationAuthority(host);
+      mintDelegation: (deviceDid, entries, options) =>
+        mintNodeReplicationGrant(
+          deviceDid,
+          entries,
+          options,
+          options?.renewalOnly ? this.currentTinyCloudSession() : undefined,
+          this,
+        ),
+    });
   }
 
   private async quiesceReplicaRuntime(): Promise<void> {
@@ -7262,36 +7249,41 @@ export class TinyCloudNode {
     kv: KVService,
     principal?: string,
   ): Promise<void> {
-    if (this.replicaRestoreGate) return;
+    if (!this.replicationRuntime) return;
+    const gate = this.replicaRestoreGate;
+    const epoch = this.sessionEpoch;
+    const attempt = this.latestSessionAttempt;
     try {
-      await this.bindReplicationRuntime(context, session, kv, principal);
+      const runtime = await this.replicationRuntime;
+      if (epoch !== this.sessionEpoch || attempt !== this.latestSessionAttempt ||
+          this._kv !== kv || this._serviceContext !== context || gate !== this.replicaRestoreGate) return;
+      if (gate) {
+        await runtime.bindGatedNetworkOnly({
+          context, session, gate, primaryKV: [{ space: session.spaceId, kv }],
+        }, getNodeReplicationLoaders().gatedNetwork);
+        return;
+      }
+      const identityPrincipal = principal ??
+        (this._address === undefined ? undefined : pkhDid(this._address, this._chainId));
+      if (identityPrincipal === undefined) return;
+      const authority = await this.replicationAuthority();
+      if (epoch !== this.sessionEpoch || attempt !== this.latestSessionAttempt ||
+          this._kv !== kv || this._serviceContext !== context) return;
+      await runtime.bind({
+        context,
+        session,
+        principal: identityPrincipal,
+        stamp: this.replicaSessionStamp,
+        authority,
+        nodeFeatures: this.replicationNodeFeatures,
+        primaryKV: [{ space: session.spaceId, kv }],
+      });
     } catch {
+      if (epoch !== this.sessionEpoch || attempt !== this.latestSessionAttempt ||
+          this._kv !== kv || this._serviceContext !== context) return;
       this.replicaRestoreGate = "gate_unavailable";
       await this.quiesceReplicaRuntime();
     }
-  }
-
-  private async bindReplicationRuntime(
-    context: ServiceContext,
-    session: ServiceSession,
-    kv: KVService,
-    principal?: string,
-  ): Promise<void> {
-    if (!this.replicationRuntime) return;
-    const identityPrincipal = principal ??
-      (this._address === undefined ? undefined : pkhDid(this._address, this._chainId));
-    if (identityPrincipal === undefined) return;
-    const runtime = await this.replicationRuntime;
-    const authority = await this.replicationAuthority();
-    await runtime.bind({
-      context,
-      session,
-      principal: identityPrincipal,
-      stamp: this.replicaSessionStamp,
-      authority,
-      nodeFeatures: this.replicationNodeFeatures,
-      primaryKV: [{ space: session.spaceId, kv }],
-    });
   }
 
   /** Stable control facade for this node's optional replication runtime. */

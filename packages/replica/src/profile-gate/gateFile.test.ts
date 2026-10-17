@@ -238,6 +238,13 @@ describe("establishSessionStamp", () => {
   });
 
 
+  test("rejects a non-finite or missing SIWE anchor without creating a gate file", async () => {
+    for (const siweIssuedAt of [Number.NaN, Number.POSITIVE_INFINITY, -1, undefined]) {
+      await expectGated(establishSessionStamp(dir, ALICE, { siweIssuedAt: siweIssuedAt as number }), "not_established");
+    }
+    expect(await readdir(dir)).toEqual([]);
+  });
+
   test("rejects a sign-in issued at or before deniedAt with stamp_stale", async () => {
     await establishSessionStamp(dir, ALICE, { siweIssuedAt: 1 });
     const denied = await denyGate(dir, { reason: "sign_out", principal: ALICE }, async () => []);
@@ -435,5 +442,60 @@ describe("firstInstall anchors", () => {
     await denyGate(dir, { reason: "sign_out", principal: ALICE }, async () => []);
     expect(await readFirstInstall(dir, HASH_A)).toBeUndefined();
     expect(await recordFirstInstall(dir, HASH_A, 50)).toBe(50);
+  });
+});
+
+// I1 (#548 security review): the deny floor must survive loss of the gate file.
+describe("deny floor beside the gate file", () => {
+  async function deniedProfile(): Promise<{ deniedAt: number; lifecycleEpoch: number }> {
+    await establishSessionStamp(dir, ALICE, { siweIssuedAt: 1 });
+    const outcome = await denyGate(dir, { reason: "sign_out", principal: ALICE }, async (principalHash) => [
+      intent(`${HASH_A}:${"c".repeat(26)}`, principalHash),
+    ]);
+    expect(outcome.status).toBe("denied");
+    const { deniedAt, lifecycleEpoch } = await readGateState(dir);
+    return { deniedAt: deniedAt!, lifecycleEpoch };
+  }
+
+  test("a first-use profile with no deny still creates its gate", async () => {
+    const stamp = await establishSessionStamp(dir, ALICE, { siweIssuedAt: 1 });
+    expect(stamp.lifecycleEpoch).toBe(0);
+    expect((await readGateState(dir)).principalHash).toBe(await principalHashOf((await readGateState(dir)).salt, ALICE));
+  });
+
+  test("a missing gate after a deny fails closed and is never recreated", async () => {
+    const { deniedAt } = await deniedProfile();
+    await rm(join(dir, REPLICA_GATE_FILE));
+    const originalNow = Date.now();
+    try {
+      setSystemTime(new Date(deniedAt + 10));
+      await expectGated(establishSessionStamp(dir, ALICE, { siweIssuedAt: deniedAt + 5 }), "gate_unavailable");
+      await expectGated(readGateState(dir), "gate_unavailable");
+      await expectGated(recordFirstInstall(dir, HASH_A, deniedAt + 6), "gate_unavailable");
+      await expectGated(restoreSessionStamp(dir, ALICE, { incarnation: "x", lifecycleEpoch: 0 }), "gate_unavailable");
+      await expectGated(readGateSnapshot(dir), "gate_unavailable");
+      expect((await denyGate(dir, { reason: "sign_out", principal: ALICE }, async () => [])).status).toBe("unguarded");
+    } finally {
+      setSystemTime(originalNow);
+    }
+    await expect(stat(join(dir, REPLICA_GATE_FILE))).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  test("a gate restored from before the latest deny fails closed", async () => {
+    await establishSessionStamp(dir, ALICE, { siweIssuedAt: 1 });
+    const beforeDeny = await Bun.file(join(dir, REPLICA_GATE_FILE)).text();
+    await deniedProfile();
+    await writeFile(join(dir, REPLICA_GATE_FILE), beforeDeny);
+    await expectGated(readGateState(dir), "gate_unavailable");
+    await expectGated(establishSessionStamp(dir, ALICE, { siweIssuedAt: 1 }), "gate_unavailable");
+  });
+
+  test("a malformed deny floor fails closed", async () => {
+    const { lifecycleEpoch } = await deniedProfile();
+    expect(lifecycleEpoch).toBe(1);
+    const floor = (await readdir(dir)).filter((name) => name !== REPLICA_GATE_FILE);
+    expect(floor).toHaveLength(1);
+    await writeFile(join(dir, floor[0]!), "{\"epoch\":\"1\"}");
+    await expectGated(readGateState(dir), "gate_unavailable");
   });
 });

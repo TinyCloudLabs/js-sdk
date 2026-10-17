@@ -46,6 +46,7 @@ import type {
   ProfileReplicaLogoutPending,
   ProfileReplicaPreflight,
   ProfileReplicaPurge,
+  ProfileReplicaRemoteLogoutState,
   ProfileReplicaRootIdentity,
   ProfileReplicaUnknownEntry,
 } from "./index";
@@ -301,21 +302,27 @@ type ApprovedMarker = {
   principalDigest: string;
   approvalSalt: string;
   discardLocalChanges?: true;
-  remotePending?: true;
-  remoteAbandoned?: true;
   approvedUnknown: ProfileReplicaUnknownEntry[];
   knownRoots: ProfileReplicaRootIdentity[];
   knownEntries: ProfileReplicaUnknownEntry[];
   missingDatabases: string[];
 };
+type _RemoteStatesAreExclusive = Assert<
+  Equal<
+    ProfileReplicaRemoteLogoutState,
+    | { remotePending: true; remoteAbandoned?: never }
+    | { remoteAbandoned: true; remotePending?: never }
+    | { remotePending?: never; remoteAbandoned?: never }
+  >
+>;
 type _LogoutMarkerScopes = Assert<
   Equal<
     ProfileReplicaLogoutPending,
     (
-      | { v: 1; incarnation: string; lifecycleEpoch: number; principalHash: string }
+      | { v: 1; incarnation: string; lifecycleEpoch: number; principalHash: string; deniedEpoch?: number }
       | { v: 2; scope: "orphan_profile"; nonce: string }
       | { v: 3; scope: "inactive_gate"; incarnation: string; lifecycleEpoch: number }
-    ) & ApprovedMarker
+    ) & ProfileReplicaRemoteLogoutState & ApprovedMarker
   >
 >;
 type _PreflightLogoutIsReadOnly = Assert<
@@ -328,7 +335,7 @@ type _PrepareLogoutBindsApproval = Assert<
   Equal<
     ProfileReplicaPurge["prepareLogoutPending"],
     (input: {
-      principal: string; approval?: ProfileReplicaPreflight;
+      principal: string; approval: ProfileReplicaPreflight;
       discardLocalChanges?: boolean; remotePending?: true;
     }) => Promise<ProfileReplicaLogoutPending | null>
   >
@@ -406,3 +413,9 @@ profilePurge.prepareLogoutPending({ principal: "did:example:owner", discardLocal
 profilePurge.approveChangedPlainLogout({ principal: "did:example:owner", approval: {} });
 // @ts-expect-error A fresh approval is mandatory to change a persisted inventory after remote completion.
 profilePurge.reapproveLogoutPending({ principal: "did:example:owner" });
+// @ts-expect-error The CLI always passes its just-displayed approval, even when it lists no unknown paths.
+profilePurge.prepareLogoutPending({ principal: "did:example:owner" });
+declare const markerFields: Omit<Extract<ProfileReplicaLogoutPending, { v: 2 }>, "remotePending" | "remoteAbandoned">;
+// @ts-expect-error A marker is never remote-pending and remote-abandoned at once.
+const bothRemoteStates: ProfileReplicaLogoutPending = { ...markerFields, remotePending: true, remoteAbandoned: true };
+void bothRemoteStates;

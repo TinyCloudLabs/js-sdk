@@ -1,4 +1,5 @@
 import type { ReplicaDenyInput } from "@tinycloud/sdk-services/kv/replication";
+import type { ReplicationOptions } from "@tinycloud/sdk-core";
 
 /**
  * The `@tinycloud/replica/profile-gate` members the node adapter uses, typed structurally: node-sdk
@@ -23,8 +24,10 @@ export type ProfileGateModule = {
 };
 
 export type ReplicationModuleLoaders = {
+  validateConfig: (replication: ReplicationOptions & { storage?: unknown }) => void;
   runtime: () => Promise<typeof import("./runtime")>;
   authority: () => Promise<typeof import("./authority")>;
+  gatedNetwork: () => Promise<typeof import("./gated-network")>;
   gate: () => Promise<ProfileGateModule>;
 };
 

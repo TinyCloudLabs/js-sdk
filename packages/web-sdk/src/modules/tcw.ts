@@ -13,6 +13,8 @@
 import {
   activateCompactRuntimeDelegation as activateCompactRuntimeDelegationOnNode,
   TinyCloudNode,
+  registerReplicationLoaders as registerNodeReplicationLoaders,
+  type ReplicationModuleLoaders,
   TinyCloudNodeConfig,
   type BootstrapWarning,
   type DelegateToOptions,
@@ -128,6 +130,8 @@ export interface Config extends ClientConfig {
 
   /** Prefix for space names when creating spaces */
   spacePrefix?: string;
+  /** Local KV replication. Off unless set; node-sdk validates the config and owns the storage. */
+  replication?: TinyCloudNodeConfig["replication"];
 
   /** Explicit TinyCloud server hosts. When omitted, signIn resolves the user's host. */
   tinycloudHosts?: string[];
@@ -246,6 +250,30 @@ export interface SessionRestoreResult {
   session?: ClientSession;
   error?: Error;
 }
+
+/** Supplied by the optional web replica entry; importing that entry does not register it. */
+export interface BrowserReplicaPlugin {
+  readonly loaders: ReplicationModuleLoaders;
+  readonly validateConfig: (replication: NonNullable<TinyCloudNodeConfig["replication"]>) => void;
+  readonly recover: (
+    replication: NonNullable<TinyCloudNodeConfig["replication"]>,
+    signer?: BrowserWalletSigner,
+  ) => Promise<NonNullable<TinyCloudNodeConfig["replication"]>>;
+}
+
+let registeredBrowserReplica: BrowserReplicaPlugin | undefined;
+
+/**
+ * Register in the root bundle so a separately built plugin shares its Node loader registry. The
+ * registry keeps a frozen copy, so mutating the supplied plugin later changes nothing.
+ */
+export function registerBrowserReplica(plugin: BrowserReplicaPlugin): void {
+  if (registeredBrowserReplica) throw new Error("Browser replica is already registered.");
+  const loaders = Object.freeze({ ...plugin.loaders });
+  registerNodeReplicationLoaders(loaders);
+  registeredBrowserReplica = Object.freeze({ ...plugin, loaders });
+}
+
 
 // Share Link Utilities (static, no auth required)
 
@@ -380,6 +408,12 @@ export class TinyCloudWeb {
   };
 
   constructor(config: Config = {}) {
+    if (config.replication?.enabled) {
+      if (!registeredBrowserReplica) {
+        throw new Error("Call registerBrowserReplica from @tinycloud/web-sdk with the @tinycloud/web-sdk/replica plugin before constructing TinyCloudWeb with replication enabled.");
+      }
+      registeredBrowserReplica.validateConfig(config.replication);
+    }
     this.config = config;
     this._manifest = config.manifest;
     this._capabilityRequest = config.capabilityRequest;
@@ -450,6 +484,11 @@ export class TinyCloudWeb {
       autoBootstrapAccount: this.config.autoBootstrapAccount,
       telemetry: this.config.telemetry,
     };
+    if (this.config.replication) {
+      nodeConfig.replication = this.config.replication.enabled
+        ? await registeredBrowserReplica!.recover(this.config.replication, this.walletSigner)
+        : this.config.replication;
+    }
 
     // Wire up signer if available
     if (this.walletSigner) {
@@ -581,6 +620,8 @@ export class TinyCloudWeb {
   get accountSpaceId(): string | undefined { return this._node?.accountSpaceId; }
   get account(): AccountService { return this.node.account; }
   get hosts(): string[] { return this.node.hosts; }
+  /** Replication control for the local KV mirror; undefined unless `replication` is configured. */
+  get replication(): TinyCloudNode["replication"] { return this.node.replication; }
   /** Registry-resolved owner Node identity used to bind native share targets. */
   async activeNodeIdentity(): Promise<{ readonly origin: string; readonly nodeDid: string }> {
     return (await this.ensureNode()).activeNodeIdentity();
@@ -705,8 +746,19 @@ export class TinyCloudWeb {
       this._sessionRestoreStatus = "disabled";
       return { status: "disabled" };
     }
-    if (this.signOutInFlight > 0 || this.persistedRestoreBlocked) {
-      return { status: "restore-failed", error: new Error("Session restore was cancelled by sign-out.") };
+    const refused = () => ({ status: "restore-failed" as const, error: new Error("Session restore was cancelled by sign-out.") });
+    if (this.signOutInFlight > 0) return refused();
+    if (this.persistedRestoreBlocked) {
+      try {
+        const restoreAddress = await this.resolveRestoreAddress(address);
+        if (this.signOutCount !== signOuts || this.signOutInFlight > 0) return refused();
+        if (!restoreAddress || (await this.loadPersistedSession(restoreAddress)).status === "missing") {
+          if (this.signOutCount !== signOuts || this.signOutInFlight > 0) return refused();
+          this._sessionRestoreStatus = "missing";
+          return { status: "missing" };
+        }
+      } catch { /* Storage errors cannot release authority blocked by explicit logout. */ }
+      return refused();
     }
     // An explicit address is known before resolveRestoreAddress's first await.
     // Sign-out must see it even when storage has no activeAddress() hook.
@@ -715,7 +767,7 @@ export class TinyCloudWeb {
     const restoreAddress = await this.resolveRestoreAddress(address);
     if (this.signOutCount !== signOuts || this.signOutInFlight > 0) {
       if (address) this.untrackRestoreAddress(address);
-      return { status: "restore-failed", error: new Error("Session restore was cancelled by sign-out.") };
+      return refused();
     }
     if (!restoreAddress) {
       if (address) this.untrackRestoreAddress(address);
@@ -744,7 +796,7 @@ export class TinyCloudWeb {
       };
     } catch (err) {
       if (this.signOutCount !== signOuts || this.signOutInFlight > 0) {
-        return { status: "restore-failed", error: new Error("Session restore was cancelled by sign-out.") };
+        return refused();
       }
       // Restore rejection is intentionally transactional. Persisted storage
       // is user state, and attempting best-effort cleanup here can both mask
@@ -796,11 +848,6 @@ export class TinyCloudWeb {
     }));
   }
 
-  private restoredSessionCoversConfiguredManifest(node: TinyCloudNode): boolean {
-    const permissions = this.configuredManifestPermissions(node);
-    return permissions.length === 0 || node.hasRuntimePermissions(permissions);
-  }
-
   signIn = async (options?: SignInOptions): Promise<ClientSession> => {
     const signOuts = this.signOutCount;
     const assertNotSignedOut = (): void => {
@@ -809,12 +856,16 @@ export class TinyCloudWeb {
       }
     };
     assertNotSignedOut();
-    const restored = await this.restoreSession();
+    const connected = await this.walletSigner?.getConnectedAddress().catch(() => undefined);
+    assertNotSignedOut();
+    const restored = await this.restoreSession(connected);
     assertNotSignedOut();
     if (restored.status === "restored" && restored.session) {
       const node = await this.ensureNode();
       assertNotSignedOut();
-      if (this.restoredSessionCoversConfiguredManifest(node)) {
+      const permissions = this.configuredManifestPermissions(node);
+      if (permissions.length === 0 || node.hasRuntimePermissions(permissions)) {
+        assertNotSignedOut();
         return restored.session;
       }
       await this.clearPersistedSession(restored.session.address);
@@ -827,9 +878,12 @@ export class TinyCloudWeb {
     assertNotSignedOut();
     this._sessionRestoreStatus = "logging-in";
     await node.signIn(options);
+    assertNotSignedOut();
     this.resetSessionScopedCaches();
     const session = node.session;
     if (!session) throw new Error("Sign-in completed but no session available");
+    // Explicit logout never permits an older tab's persisted proof to satisfy the next sign-in.
+    if (!this.signOutCleanupFailed && this.signOutInFlight === 0) this.persistedRestoreBlocked = false;
     return {
       address: session.address,
       walletAddress: session.address,
@@ -842,8 +896,8 @@ export class TinyCloudWeb {
 
   /**
    * Sign out: end the session on this instance and clear the persisted
-   * session. Afterwards session accessors return `undefined` and service
-   * calls fail with "Not signed in" until the next sign-in or restore.
+   * session. Afterwards accessors return `undefined` and service calls remain
+   * unavailable until a fresh sign-in; prior persisted sessions cannot restore.
    */
   signOut = async (): Promise<void> => {
     // The persisted entry is keyed by the live session's address; read it
@@ -874,11 +928,6 @@ export class TinyCloudWeb {
       } finally {
         this.signOutInFlight--;
         if (!cleaned) this.signOutCleanupFailed = true;
-        // A successful overlapping sign-out must not release a failed one's
-        // persisted authority. Explicit fresh sign-in remains available.
-        if (this.signOutInFlight === 0 && !this.signOutCleanupFailed) {
-          this.persistedRestoreBlocked = false;
-        }
       }
     }
   };
@@ -1029,7 +1078,7 @@ export class TinyCloudWeb {
   }
 
   /** Authorize a short-lived, one-use v3 delivery against the signed envelope and roots. */
-  async authorizeShareDeliveryV3(input: Parameters<TinyCloudNode["authorizeShareDeliveryV3"]>[0]): ReturnType<TinyCloudNode["authorizeShareDeliveryV3"]> {
+  async authorizeShareDeliveryV3(input: Parameters<TinyCloudNode["authorizeShareDeliveryV3"]>[0]): Promise<Awaited<ReturnType<TinyCloudNode["authorizeShareDeliveryV3"]>>> {
     const node = await this.ensureNode();
     return node.authorizeShareDeliveryV3(input);
   }

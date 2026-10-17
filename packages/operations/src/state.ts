@@ -4,11 +4,12 @@ import { constants as fsConstants, fstatSync, readFileSync, readlinkSync } from 
 import {
   chmod,
   link,
-  lstat,
   mkdir,
+  lstat,
   open,
   readFile,
   readdir,
+  realpath,
   rename,
   rmdir,
   rm,
@@ -81,6 +82,9 @@ interface PinnedProfileDirectory {
 }
 const pinnedProfiles = processWideContext<ReadonlyMap<string, PinnedProfileDirectory>>("tinycloud.operations.pinnedProfiles.v2");
 const pinnedHomes = processWideContext<ReadonlyMap<string, PinnedProfileDirectory>>("tinycloud.operations.pinnedHomes.v2");
+/** One canonical target per configured home across ESM/CJS copies in this process. */
+const canonicalHomes: Map<string, string> =
+  (globalThis as unknown as Record<symbol, Map<string, string> | undefined>)[Symbol.for("tinycloud.operations.canonicalHomes.v1")] ??= new Map();
 /** One ID across separately bundled ESM, CJS, CLI and MCP copies in this process. */
 const processInstanceId: string =
   (globalThis as unknown as Record<symbol, string | undefined>)[Symbol.for("tinycloud.operations.profileLockInstance.v1")] ??=
@@ -519,6 +523,51 @@ export async function readJson<T>(filePath: string): Promise<T | null> {
   }
 }
 
+/** A profile's direct JSON files must not resolve through a child alias. */
+async function readProfileJson<T>(profile: string, filePath: string): Promise<T | null> {
+  // On platforms without descriptor-relative profile paths, check the named file on
+  // both sides of the read so a replacement cannot silently redirect it.
+  const before = process.platform !== "linux"
+    ? await lstat(filePath, { bigint: true }).catch((error: NodeJS.ErrnoException) => {
+      if (error.code === "ENOENT") return null;
+      throw error;
+    })
+    : null;
+  if (process.platform !== "linux" && !before) return null;
+  if (before && !before.isFile()) throw new ProfileSymlinkError(profile);
+  const dev = before && exactFileId(before.dev);
+  const ino = before && exactFileId(before.ino);
+  try {
+    const handle = await open(filePath, fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0));
+    try {
+      if (before) {
+        const opened = await handle.stat({ bigint: true });
+        if (!opened.isFile() || dev === null || ino === null ||
+            dev !== exactFileId(opened.dev) || ino !== exactFileId(opened.ino)) {
+          throw new ProfileSymlinkError(profile, "changed while opening its file");
+        }
+      }
+      const contents = await handle.readFile("utf8");
+      if (before) {
+        const named = await lstat(filePath, { bigint: true }).catch((error: NodeJS.ErrnoException) => {
+          if (error.code === "ENOENT") return null;
+          throw error;
+        });
+        if (!named?.isFile() || dev !== exactFileId(named.dev) || ino !== exactFileId(named.ino)) {
+          throw new ProfileSymlinkError(profile, "changed while reading its file");
+        }
+      }
+      return JSON.parse(contents) as T;
+    } finally {
+      await handle.close();
+    }
+  } catch (error) {
+    if (isErrno(error, "ENOENT")) return null;
+    if (isErrno(error, "ELOOP") || isErrno(error, "ENOTDIR")) throw new ProfileSymlinkError(profile);
+    throw error;
+  }
+}
+
 /**
  * Writes the same pretty-printed, trailing-newline JSON shape used by the CLI,
  * but publishes it with an atomic rename from the same directory.
@@ -568,7 +617,7 @@ export async function readProfile<T extends object = Record<string, unknown>>(
   profile: string,
 ): Promise<T | null> {
   return withPinnedProfileDirectory(profile, (directory) =>
-    directory ? readJson<T>(join(directory, "profile.json")) : Promise.resolve(null));
+    directory ? readProfileJson<T>(profile, join(directory, "profile.json")) : Promise.resolve(null));
 }
 
 export async function readSession<T extends object = Record<string, unknown>>(
@@ -577,7 +626,7 @@ export async function readSession<T extends object = Record<string, unknown>>(
   return withPinnedProfileDirectory(profile, async (directory) => {
     if (!directory) return null;
     await readStoreMetadata(profile, "session");
-    return readJson<T>(sessionPath(profile));
+    return readProfileJson<T>(profile, sessionPath(profile));
   });
 }
 
@@ -598,7 +647,7 @@ export async function readStoreMetadata(
   store: ProfileStoreName,
 ): Promise<StoreMetadata> {
   return withPinnedProfileDirectory(profile, async (directory) => {
-    const metadata = directory ? await readJson<StoreMetadata>(profileStoreMetadataPath(profile, store)) : null;
+    const metadata = directory ? await readProfileJson<StoreMetadata>(profile, profileStoreMetadataPath(profile, store)) : null;
     if (metadata === null) return { formatVersion: 1 };
     if (
       typeof metadata !== "object" ||
@@ -618,7 +667,7 @@ export async function readProfileStore<T>(
     if (!directory) return { formatVersion: 1, records: [] };
     const [metadata, raw] = await Promise.all([
       readStoreMetadata(profile, store),
-      readJson<unknown>(profileStorePath(profile, store)),
+      readProfileJson<unknown>(profile, profileStorePath(profile, store)),
     ]);
     return {
       formatVersion: metadata.formatVersion,
@@ -636,11 +685,17 @@ export class ProfileSymlinkError extends Error {
   }
 }
 
+/** Bun versions may return numeric FileHandle.stat IDs despite bigint: true. */
+function exactFileId(value: number | bigint): bigint | null {
+  if (typeof value === "bigint") return value >= 0n ? value : null;
+  return Number.isSafeInteger(value) && value >= 0 ? BigInt(value) : null;
+}
+
 function isPinnedLive(pinned: PinnedProfileDirectory): boolean {
   if (!pinned.active) return false;
   try {
     const stats = fstatSync(pinned.fd, { bigint: true });
-    return stats.dev === pinned.dev && stats.ino === pinned.ino;
+    return exactFileId(stats.dev) === pinned.dev && exactFileId(stats.ino) === pinned.ino;
   } catch {
     return false;
   }
@@ -672,12 +727,23 @@ export async function withPinnedProfileDirectory<T>(
     if (!stats.isDirectory() || stats.isSymbolicLink()) throw new ProfileSymlinkError(profile);
     return action(named);
   }
+  const home = tinycloudHomePath();
   const handles: FileHandle[] = [];
   const fdPath = (fd: number) => `/proc/self/fd/${fd}`;
   const flags = fsConstants.O_RDONLY | fsConstants.O_DIRECTORY | fsConstants.O_NOFOLLOW;
   try {
-    if (options.create) await mkdir(tinycloudHomePath(), { recursive: true, mode: PRIVATE_DIR_MODE });
-    const segments = [tinycloudHomePath(), "profiles", validateProfileName(profile)];
+    if (options.create) await mkdir(home, { recursive: true, mode: PRIVATE_DIR_MODE });
+    // User-owned home aliases are allowed, but each configured home resolves
+    // only once in this process. A later alias retarget cannot select another profile.
+    const resolved = canonicalHomes.get(home) ?? await realpath(home).catch((error: NodeJS.ErrnoException) => {
+      if (error.code === "ENOENT" && !options.create) return null;
+      if (error.code === "ELOOP" || error.code === "ENOTDIR") throw new ProfileSymlinkError(profile);
+      throw error;
+    });
+    if (!resolved) return await action(null);
+    const root = canonicalHomes.get(home) ?? resolved;
+    canonicalHomes.set(home, root);
+    const segments = [root, "profiles", validateProfileName(profile)];
     for (let index = 0; index < segments.length; index++) {
       const path = handles.length ? join(fdPath(handles[handles.length - 1]!.fd), segments[index]!) : segments[index]!;
       if (options.create && handles.length) {
@@ -697,22 +763,28 @@ export async function withPinnedProfileDirectory<T>(
     }
     const opened = handles[2]!;
     const [actual, namedStats] = await Promise.all([opened.stat({ bigint: true }), lstat(named, { bigint: true })]);
-    if (!namedStats.isDirectory() || namedStats.dev !== actual.dev || namedStats.ino !== actual.ino) {
+    const dev = exactFileId(actual.dev);
+    const ino = exactFileId(actual.ino);
+    if (!namedStats.isDirectory() || dev === null || ino === null ||
+        dev !== exactFileId(namedStats.dev) || ino !== exactFileId(namedStats.ino)) {
       throw new ProfileSymlinkError(profile, "changed while opening its directory");
     }
     const directory = fdPath(opened.fd);
     const pinned: PinnedProfileDirectory = {
-      path: directory, fd: opened.fd, dev: actual.dev, ino: actual.ino, active: true,
+      path: directory, fd: opened.fd, dev, ino, active: true,
     };
     const homeHandle = handles[0]!;
     const homeStats = await homeHandle.stat({ bigint: true });
+    const homeDev = exactFileId(homeStats.dev);
+    const homeIno = exactFileId(homeStats.ino);
+    if (homeDev === null || homeIno === null) throw new ProfileSymlinkError(profile, "has an unverified home directory identity");
     const homePinned: PinnedProfileDirectory = {
-      path: fdPath(homeHandle.fd), fd: homeHandle.fd, dev: homeStats.dev, ino: homeStats.ino, active: true,
+      path: fdPath(homeHandle.fd), fd: homeHandle.fd, dev: homeDev, ino: homeIno, active: true,
     };
     const context = new Map(pinnedProfiles.getStore());
     context.set(named, pinned);
     const homes = new Map(pinnedHomes.getStore());
-    homes.set(tinycloudHomePath(), homePinned);
+    homes.set(home, homePinned);
     try {
       return await pinnedHomes.run(homes, () => pinnedProfiles.run(context, () => action(directory)));
     } finally {
@@ -792,7 +864,10 @@ export async function withProfileLock<T>(
       if (ownership.deletedProfile || acquired.deletedWhileWaiting) {
         const current = await lstat(namedProfilePath(normalizedProfile), { bigint: true }).catch(() => null);
         const original = await stat(directory, { bigint: true }).catch(() => null);
-        if (current && original && current.dev === original.dev && current.ino === original.ino) {
+        const currentDev = current && exactFileId(current.dev);
+        const currentIno = current && exactFileId(current.ino);
+        if (currentDev !== null && currentIno !== null && original &&
+            currentDev === exactFileId(original.dev) && currentIno === exactFileId(original.ino)) {
           await rmdir(namedProfilePath(normalizedProfile)).catch(() => undefined);
         }
       }

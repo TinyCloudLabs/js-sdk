@@ -153,19 +153,21 @@ async function pinnedDirectory(path: string, parent?: Directory, relative = ""):
   }
 }
 
+// The leaf is checked before its ancestors, so a parent swapped while the leaf
+// is examined is still seen before the caller's unlink or rmdir.
 async function checkDirectory(directory: Directory): Promise<void> {
-  if (directory.parent) await checkDirectory(directory.parent);
-  else if (directory.components) {
-    for (const component of directory.components) {
-      const details = await lstat(component.path, { bigint: true });
-      if (details.isSymbolicLink() || !details.isDirectory() || !sameFile(component.identity, details)) {
-        throw new Error(`Replica path component changed: ${component.path}`);
-      }
-    }
-  }
   const details = await lstat(directory.name, { bigint: true });
   if (!details.isDirectory() || !sameFile(directory.identity, details)) {
     throw new Error(`Replica directory changed: ${directory.relative || directory.name}`);
+  }
+  if (directory.parent) await checkDirectory(directory.parent);
+  else if (directory.components) {
+    for (const component of directory.components) {
+      const current = await lstat(component.path, { bigint: true });
+      if (current.isSymbolicLink() || !current.isDirectory() || !sameFile(component.identity, current)) {
+        throw new Error(`Replica path component changed: ${component.path}`);
+      }
+    }
   }
 }
 

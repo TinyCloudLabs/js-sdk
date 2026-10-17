@@ -47,6 +47,7 @@ import type {
   ProfileReplicaLogoutPending,
   ProfileReplicaPreflight,
   ProfileReplicaPurge,
+  ProfileReplicaRemoteLogoutState,
   ProfileReplicaRootIdentity,
   ProfileReplicaUnknownEntry,
   ReplicaAccountGate,
@@ -72,6 +73,7 @@ import type {
   SqliteRuntime,
 } from "./replica-contract";
 import { ucanAttUnconstrainedFor } from "./authority";
+export type { ProfileReplicaDeferredToken, ProfileReplicaPurge };
 
 /** CLI-only crash fence; generic SQLite stores do not opt in to this path. */
 export const REPLICA_LOGOUT_PENDING_FILE = "replica-logout-pending.json";
@@ -727,6 +729,21 @@ async function pathExists(path: string): Promise<boolean> {
   }
 }
 
+/** True for a real directory, false when absent. A symlink or other file type is a replaced root. */
+async function realDirectoryExists(path: string): Promise<boolean> {
+  let stats;
+  try {
+    stats = await lstat(path);
+  } catch (error) {
+    if (isNotFound(error)) return false;
+    throw storageError("STORAGE_ERROR", `Reading ${path}`, error);
+  }
+  if (stats.isSymbolicLink() || !stats.isDirectory()) {
+    throw new ReplicaStorageError("STORAGE_ERROR", `Refusing the replaced replica path ${path}.`);
+  }
+  return true;
+}
+
 /** `did:key:…#fragment` → the bare principal DID (replica's principalOf). */
 function principalOf(did: string): string {
   return principalDid(did);
@@ -1066,7 +1083,7 @@ export class FilePendingWriteStore implements PendingWriteStore {
       await gate.assertGateAccess(this.#profileDir, access, snapshot.salt);
       assertLogoutClear(this.#logoutPendingFile);
       this.#generation = generation;
-      if (await pathExists(this.#dir)) this.#canonicalDir = dirname(file);
+      if (await pathExists(this.#dir)) this.#canonicalDir = await realpath(this.#dir);
       return result;
     }));
   }
@@ -2096,6 +2113,7 @@ export function createSqliteReplicaStorage(
               !(state.eraseDeferred && state.principalHash === null &&
                 state.deferredPrincipalHash === principalHash)) throw gated("principal_mismatch");
         }
+        const remoteState: ProfileReplicaRemoteLogoutState = remotePending ? { remotePending: true } : {};
         const approvalFields = {
           principalDigest: logoutPrincipalDigest(principal),
           approvalSalt: randomBytes(16).toString("hex"),
@@ -2103,7 +2121,7 @@ export function createSqliteReplicaStorage(
           knownRoots: report.knownRoots, knownEntries: report.knownEntries,
           missingDatabases: report.missingDatabases,
           ...(discardLocalChanges ? { discardLocalChanges: true as const } : {}),
-          ...(remotePending ? { remotePending: true as const } : {}),
+          ...remoteState,
         };
         let marker: ProfileReplicaLogoutPending;
         if (state === undefined) {
@@ -2397,9 +2415,12 @@ export function createSqliteReplicaStorage(
             }
             if (idDir !== undefined) {
               const replicaDir = join(idDir, "replicas", intent.partitionId.slice(65));
+              // A replaced identity or replicas directory refuses; the intent stays queued.
               let dirInfo;
-              try { dirInfo = await lstat(replicaDir, { bigint: true }); }
-              catch (error) { if (!isNotFound(error)) throw error; }
+              if (await realDirectoryExists(join(idDir, "replicas"))) {
+                try { dirInfo = await lstat(replicaDir, { bigint: true }); }
+                catch (error) { if (!isNotFound(error)) throw error; }
+              }
               if (dirInfo !== undefined) {
                 const relative = `replication/${basename(idDir)}/replicas/${basename(replicaDir)}`;
                 const expectedRoot = marker?.knownRoots.find((item) => item.path === relative);
@@ -2718,7 +2739,8 @@ export function createSqliteReplicaStorage(
     ])) as [ReplicaRuntime, SqliteRuntime];
     return profileSection(async () => {
     const idDir = partitionDirOf(root, target.identity);
-    if (!(await pathExists(idDir))) return;
+    if (!(await realDirectoryExists(idDir))) return;
+    const hasReplicas = await realDirectoryExists(join(idDir, "replicas"));
     // The deduplicated device union (§10.2): the partition's stored device
     // read ONLY (a missing file never creates one and never skips the
     // session device), plus the delegate-posture session device.
@@ -2741,10 +2763,13 @@ export function createSqliteReplicaStorage(
     const removeLeftover = async (replicaDir: string): Promise<void> => {
       const layout = await sqlite.inspectSqliteReplicaLayout(replicaDir, { allowAdapterFence: true });
       const missingDatabase = !(await pathExists(join(replicaDir, "replica.db")));
-      if (layout.unknownPaths.some((path) => path !== "replica.db") ||
+      const unexpected = layout.unknownPaths.filter((path) => path !== "replica.db");
+      if (unexpected.length !== 0 ||
           layout.unknownPaths.includes("replica.db") !== missingDatabase ||
           layout.unknownEntries.some((item) => item.path === "replica.db")) {
-        throw localChangesRefusal(layout.unknownPaths);
+        // Targeted purge has no discard approval: anything but the source layout stays.
+        throw new ReplicaStorageError("STORAGE_ERROR",
+          `Refusing to remove unexpected replica path ${join(replicaDir, unexpected[0] ?? "replica.db")}.`);
       }
       await sqlite.removeSqliteReplicaLayout(replicaDir, {
         expectedRoot: layout.rootIdentity, expectedKnown: layout.knownEntries,
@@ -2755,7 +2780,7 @@ export function createSqliteReplicaStorage(
     let firstError: unknown;
     for (const deviceDid of devices) {
       const replicaDir = join(idDir, "replicas", replicaHashOf(target.prefix, deviceDid));
-      if (!(await pathExists(replicaDir))) continue;
+      if (!hasReplicas || !(await realDirectoryExists(replicaDir))) continue;
       try {
         let store: SqliteReplicaStore;
         try {

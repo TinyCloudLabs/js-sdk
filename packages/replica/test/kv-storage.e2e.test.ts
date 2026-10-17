@@ -16,7 +16,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } fr
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
 import { TinyCloudNode } from "@tinycloud/node-sdk";
 import { spawn, type ChildProcess } from "node:child_process";
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { existsSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { createServer } from "node:net";
@@ -123,7 +123,10 @@ beforeAll(async () => {
       const file = Bun.file(join(FIXTURE_DIST, path));
       if (!(await file.exists())) return new Response("not found", { status: 404 });
       const type = path.endsWith(".html") ? "text/html" : path.endsWith(".js") ? "text/javascript" : "application/octet-stream";
-      return new Response(file, { headers: { "content-type": type } });
+      return new Response(file, { headers: {
+        "content-type": type,
+        ...(/\/kv-storage\.worker\.[0-9a-f]{64}(?:-[A-Za-z0-9_-]+)?\.js$/.test(path) ? { "cache-control": "public, max-age=31536000, immutable" } : {}),
+      } });
     },
   });
   origin = `http://127.0.0.1:${server.port}`;
@@ -159,9 +162,9 @@ describe.skipIf(!RUN)("kv-storage over a fake feed (Chromium)", () => {
     if (!opened.ok) return;
     const jwt = grantFor(opened.value.deviceDid);
     const installed = (await page.evaluate((grant) => window.__kv.installGrant("h", grant), jwt)) as Outcome<{
-      installedAt: number; effectiveExpiresAt: number; consentDeadline: number; consentAnchor: { at: number; source: string };
+      installedAt: number; effectiveExpiresAt: number; consentAnchor: { at: number; source: string };
     }>;
-    expect(installed).toMatchObject({ ok: true, value: { consentDeadline: anchor + 7 * 24 * 60 * 60 * 1000, consentAnchor: { at: anchor, source: "siwe" } } });
+    expect(installed).toMatchObject({ ok: true, value: { consentAnchor: { at: anchor, source: "siwe" } } });
     if (!installed.ok) return;
     expect(installed.value.effectiveExpiresAt).toBe(installed.value.installedAt + 5_000);
     expect(await page.evaluate((grant) => window.__kv.installGrant("h", grant), jwt)).toMatchObject({ ok: true, value: { installedAt: installed.value.installedAt } });
@@ -194,6 +197,42 @@ describe.skipIf(!RUN)("kv-storage over a fake feed (Chromium)", () => {
     expect(await page.evaluate(() => window.__kv.list("h", "notes/"))).toMatchObject({ ok: false, code: "GRANT_EXPIRED" });
     await page.evaluate((at) => window.__kv.setClock("s", at), grant.value.consentDeadline);
     expect(await page.evaluate(() => window.__kv.get("h", "notes/a"))).toMatchObject({ ok: false, code: "CONSENT_EXPIRED" });
+  }, 60_000);
+
+  test("an earlier policy anchor expires reads but retains the durable gate and account keys", async () => {
+    const day = 24 * 60 * 60_000;
+    const anchor = Date.now() - 6 * day;
+    const policyDeadline = anchor + 7 * day;
+    feed("policy-before-gate").put("notes/a", "private");
+    const page = await kvPage();
+    await page.evaluate(() => window.__kv.createStorage("s", "fake"));
+    const spec = specOf("policy-before-gate", {
+      grantPolicy: { grantTtlMs: 7 * day, consentAnchor: { at: anchor, source: "siwe" } },
+    });
+    const opened = (await page.evaluate((s) => window.__kv.open("s", "h", s as never), spec)) as Outcome<{ deviceDid: string }>;
+    expect(opened.ok).toBe(true);
+    if (!opened.ok) return;
+    const stamp = await page.evaluate((principal) => window.__kv.establish(principal), PRINCIPAL);
+    const jwt = deviceGrant({ aud: opened.value.deviceDid, exp: Math.floor(Date.now() / 1000) + 8 * 24 * 60 * 60 }).jwt;
+    const installed = (await page.evaluate((grant) => window.__kv.installGrant("h", grant), jwt)) as Outcome<{
+      effectiveExpiresAt: number; consentDeadline: number;
+    }>;
+    expect(installed).toMatchObject({ ok: true, value: { effectiveExpiresAt: policyDeadline } });
+    if (!installed.ok) return;
+    expect(await page.evaluate(() => window.__kv.sync("h", 1))).toMatchObject({ ok: true });
+    expect(await page.evaluate(() => window.__kv.get("h", "notes/a"))).toMatchObject({
+      ok: true, value: { status: "present", value: "private" },
+    });
+
+    await page.evaluate((at) => window.__kv.setClock("s", at), policyDeadline);
+    expect(await page.evaluate(() => window.__kv.get("h", "notes/a"))).toMatchObject({ ok: false, code: "GRANT_EXPIRED" });
+    expect(await page.evaluate(() => window.__kv.list("h", "notes/"))).toMatchObject({ ok: false, code: "GRANT_EXPIRED" });
+    expect(installed.value.consentDeadline).toBeGreaterThan(policyDeadline);
+    expect(await page.evaluate((at) => window.__kv.recoverAt(at), policyDeadline)).toEqual({
+      report: { erased: [], failed: [], remaining: 0, consentExpired: false },
+      keys: { gateHmac: true, accountKey: true },
+    });
+    expect(await page.evaluate((principal) => window.__kv.establish(principal), PRINCIPAL)).toEqual(stamp);
   }, 60_000);
 
   test("first-install consent and a CID install time survive partition purge and reinstall", async () => {
@@ -386,12 +425,12 @@ describe.skipIf(!RUN)("kv-storage over a fake feed (Chromium)", () => {
     expect(await page.evaluate(() => window.__kv.get("again", "notes/a"))).toMatchObject({ ok: true, value: { status: "coverage_incomplete", meta: { syncedThroughEpoch: 0 } } });
   }, 60_000);
 
-  test("close() while a sync reopens a killed worker waits and prevents that sync", async () => {
+  test("close() while a sync reopens a crashed worker waits and prevents that sync", async () => {
     feed("close-race").put("notes/a", "one");
     const page = await kvPage();
     await page.evaluate(() => window.__kv.createStorage("s", "fake"));
     await openGranted(page, "s", "h", "close-race");
-    await page.evaluate(() => window.__kv.killWorker("s"));
+    await page.evaluate(() => window.__kv.crashWorker("s"));
     await page.evaluate(() => {
       window.__kv.startSync("h", "queued", 5);
       window.__kv.startClose("h");
@@ -589,22 +628,48 @@ describe.skipIf(!RUN)("kv-storage over a fake feed (Chromium)", () => {
     expect(await reader.evaluate(() => window.__kv.peerCommits("r"))).toHaveLength(1);
   }, 60_000);
 
-  test("a killed worker restarts cleanly: the next call reopens and serves current data", async () => {
+  test("the testing helper and worker error both restart an open handle", async () => {
     const node = feed("kill");
     node.put("notes/a", "one");
     const page = await kvPage();
     await page.evaluate(() => window.__kv.createStorage("s", "fake"));
+    await page.evaluate(() => window.__kv.killStorageWorker("s"));
+    expect(await page.evaluate(() => window.__kv.fakeWorkerStarted("s"))).toBe(false);
     await openGranted(page, "s", "h", "kill");
     expect(await page.evaluate(() => window.__kv.sync("h", 1))).toMatchObject({ ok: true });
-    await page.evaluate(() => window.__kv.killWorker("s"));
+    await page.evaluate(() => window.__kv.killStorageWorker("s"));
     node.put("notes/a", "two");
     expect(await page.evaluate(() => window.__kv.sync("h", 2))).toMatchObject({ ok: true, value: { syncedThroughEpoch: 2 } });
     expect(await page.evaluate(() => window.__kv.get("h", "notes/a"))).toMatchObject({ ok: true, value: { status: "present", value: "two" } });
+    await page.evaluate(() => window.__kv.crashWorker("s"));
+    node.put("notes/a", "three");
+    expect(await page.evaluate(() => window.__kv.sync("h", 3))).toMatchObject({ ok: true, value: { syncedThroughEpoch: 3 } });
+    expect(await page.evaluate(() => window.__kv.get("h", "notes/a"))).toMatchObject({ ok: true, value: { status: "present", value: "three" } });
+  }, 60_000);
+
+  test("default worker loads immutable content-hashed WASM asset", async () => {
+    const page = await kvPage();
+    await page.evaluate(() => window.__kv.createStorage("s", "default"));
+    const workerStarted = page.waitForEvent("worker");
+    const opened = await page.evaluate((input) => window.__kv.open("s", "h", input as never), specOf("default-asset"));
+    expect(opened).toMatchObject({ ok: true, value: { deviceDid: expect.stringContaining("did:key:") } });
+    const workerUrl = (await workerStarted).url();
+    // Vite rewrites the worker (and computes its own fingerprint). Its bytes
+    // are not the raw package worker bytes named by the embedded SHA-256.
+    const packageHash = /\/kv-storage\.worker\.([0-9a-f]{64})-[A-Za-z0-9_-]+\.js$/.exec(new URL(workerUrl).pathname)?.[1];
+    expect(packageHash).toBeDefined();
+    const canonical = Bun.file(resolve(import.meta.dir, `../dist/kv-storage.worker.${packageHash}.js`));
+    expect(createHash("sha256").update(Buffer.from(await canonical.arrayBuffer())).digest("hex")).toBe(packageHash);
+    const response = await fetch(workerUrl);
+    expect(response.status).toBe(200);
+    expect(response.headers.get("cache-control")).toBe("public, max-age=31536000, immutable");
+    expect((await response.arrayBuffer()).byteLength).toBeGreaterThan(0);
   }, 60_000);
 
   test("published production worker refuses missing origin gate and opens after establishment", async () => {
     const page = await kvPage();
     await page.evaluate(() => window.__kv.createStorage("s", "published"));
+    const workerStarted = page.waitForEvent("worker");
     const spec = specOf("default-gate");
     const missing = await page.evaluate((input) => window.__kv.open("s", "missing", {
       ...input, stamp: { incarnation: "absent-gate", lifecycleEpoch: 0 },
@@ -612,6 +677,9 @@ describe.skipIf(!RUN)("kv-storage over a fake feed (Chromium)", () => {
     expect(missing).toMatchObject({ ok: false, code: "REPLICA_GATED", gate: "not_established" });
     const opened = await page.evaluate((input) => window.__kv.open("s", "h", input as never), spec);
     expect(opened).toMatchObject({ ok: true, value: { deviceDid: expect.stringContaining("did:key:") } });
+    const legacyWorkerUrl = (await workerStarted).url();
+    expect(new URL(legacyWorkerUrl).pathname).toMatch(/\/kv-storage\.worker\.js$/);
+    expect((await fetch(legacyWorkerUrl)).headers.get("cache-control") ?? "").not.toContain("immutable");
   }, 60_000);
 
   test("without a stamp, open fails closed", async () => {

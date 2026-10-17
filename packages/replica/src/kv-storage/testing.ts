@@ -5,7 +5,6 @@
 import type { KVReplicaStorage, ReplicaPartitionEraser } from "@tinycloud/sdk-services/kv/replication";
 
 import { ReplicaError, ReplicaErrorCode } from "../errors.js";
-import { KILL_WORKER } from "./client.js";
 import type { DenyFaultPoint } from "./lifecycle.js";
 import { denyFaults } from "./lifecycle.js";
 import { kvPartitionEraser } from "./schema.js";
@@ -20,9 +19,14 @@ export { measureSealedRow } from "./sealed.js";
  * and the next call on any handle respawns the worker and reopens its spec.
  */
 export function killReplicaWorker(storage: KVReplicaStorage): void {
-  const kill: unknown = Reflect.get(storage, KILL_WORKER);
+  const connection: unknown = Reflect.get(storage, "connection");
+  if (typeof connection !== "function") throw new TypeError("killReplicaWorker needs a storage from indexedDbReplicaStorage().");
+  const active: unknown = connection.call(storage, true);
+  if (active === undefined) return;
+  if (typeof active !== "object" || active === null) throw new TypeError("killReplicaWorker needs a storage from indexedDbReplicaStorage().");
+  const kill: unknown = Reflect.get(active, "kill");
   if (typeof kill !== "function") throw new TypeError("killReplicaWorker needs a storage from indexedDbReplicaStorage().");
-  kill.call(storage);
+  kill.call(active, new ReplicaError(ReplicaErrorCode.STORAGE_ERROR, "The replica worker was terminated."));
 }
 
 /**

@@ -1,5 +1,5 @@
 {
-  "//": "Typecheck ONLY the replica-contract drift test. `moduleResolution: bundler` is required so `@tinycloud/replica/sqlite` resolves through the exports map (the package's node10 resolution cannot). Run via `bun run typecheck:replica-contract`; requires packages/replica to be built.",
+  "//": "Typecheck the replica-contract drift test and the profile-facade contract tie (profile-purge.contract.ts). `moduleResolution: bundler` is required so `@tinycloud/replica/sqlite` resolves through the exports map (the package's node10 resolution cannot). Run via `bun run typecheck:replica-contract`; requires packages/replica and packages/sdk-services to be built.",
   "extends": "./tsconfig.json",
   "compilerOptions": {
     "noEmit": true,
@@ -8,6 +8,6 @@
     "typeRoots": ["../../node_modules/@types"],
     "types": ["bun", "node"]
   },
-  "include": ["src/replication/replica-contract.test.ts"],
+  "include": ["src/replication/replica-contract.test.ts", "src/replication/profile-purge.contract.ts"],
   "exclude": []
 }

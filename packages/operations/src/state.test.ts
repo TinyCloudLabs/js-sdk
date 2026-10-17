@@ -83,6 +83,60 @@ test("refuses writes through a whole-profile symlink without changing the target
   expect(await readSession("victim")).toEqual({ owner: "victim" });
 });
 
+for (const ancestor of ["TC_HOME", ".tinycloud"] as const) {
+  test(`allows a symlinked ${ancestor} ancestor without following selected profile aliases`, async () => {
+    const home = await isolatedHome();
+    if (ancestor === "TC_HOME") {
+      const alias = join(home, "home-alias");
+      await symlink(home, alias, "dir");
+      process.env.TC_HOME = alias;
+    } else {
+      const actualState = join(home, "actual-state");
+      await mkdir(actualState);
+      await symlink(actualState, join(home, ".tinycloud"), "dir");
+    }
+
+    expect(await readSession("selected")).toBeNull();
+    await writeSession("selected", { owner: "selected" });
+    expect(await readSession("selected")).toEqual({ owner: "selected" });
+    await symlink(profilePath("selected"), profilePath("linked"), "dir");
+    await expect(readSession("linked")).rejects.toMatchObject({ code: "PROFILE_SYMLINK" });
+    expect(await readSession("selected")).toEqual({ owner: "selected" });
+  });
+}
+
+test("a home alias retargeted after its first profile read cannot select a second home", async () => {
+  const home = await isolatedHome();
+  const first = join(home, "first");
+  const second = join(home, "second");
+  await mkdir(first);
+  await mkdir(second);
+  process.env.TC_HOME = first;
+  await writeSession("selected", { owner: "first" });
+  process.env.TC_HOME = second;
+  await writeSession("selected", { owner: "second" });
+  const alias = join(home, "alias");
+  await symlink(first, alias, "dir");
+  process.env.TC_HOME = alias;
+  expect(await readSession("selected")).toEqual({ owner: "first" });
+  await rm(alias);
+  await symlink(second, alias, "dir");
+  await expect(readSession("selected")).rejects.toMatchObject({ code: "PROFILE_SYMLINK" });
+  process.env.TC_HOME = second;
+  expect(await readSession("selected")).toEqual({ owner: "second" });
+});
+
+test("refuses a symlinked session file below the selected profile without reading its target", async () => {
+  await isolatedHome();
+  await writeSession("selected", { owner: "selected" });
+  await writeSession("victim", { owner: "victim" });
+  await rm(sessionPath("selected"));
+  await symlink(sessionPath("victim"), sessionPath("selected"));
+
+  await expect(readSession("selected")).rejects.toMatchObject({ code: "PROFILE_SYMLINK" });
+  expect(await readSession("victim")).toEqual({ owner: "victim" });
+});
+
 test("ordinary profile reads and writes remain available on darwin and win32", async () => {
   await isolatedHome();
   const originalPlatform = process.platform;
@@ -96,12 +150,128 @@ test("ordinary profile reads and writes remain available on darwin and win32", a
         await writeSession(platform, { owner: `${platform}-updated` });
         expect(await readSession(platform)).toEqual({ owner: `${platform}-updated` });
       });
+      await writeSession(`${platform}-victim`, { owner: "victim" });
+      await rm(sessionPath(platform));
+      await symlink(sessionPath(`${platform}-victim`), sessionPath(platform));
+      await expect(readSession(platform)).rejects.toMatchObject({ code: "PROFILE_SYMLINK" });
+      expect(await readSession(`${platform}-victim`)).toEqual({ owner: "victim" });
       await symlink(profilePath(platform), profilePath(`${platform}-linked`));
       await expect(readSession(`${platform}-linked`)).rejects.toMatchObject({ code: "PROFILE_SYMLINK" });
     }
   } finally {
     Object.defineProperty(process, "platform", { value: originalPlatform });
   }
+});
+
+test("a non-Linux profile read refuses a session file replaced during its read", async () => {
+  const home = await isolatedHome();
+  const stateUrl = new URL("./state.ts", import.meta.url).href;
+  const child = Bun.spawn([process.execPath, "-e", `
+    import * as fs from "node:fs/promises";
+    import * as fsSync from "node:fs";
+    // The child imports this test's exact module URL after isolated process startup.
+    const state = await import(${JSON.stringify(stateUrl)});
+    await state.writeSession("selected", { owner: "selected" });
+    await state.writeSession("victim", { owner: "victim" });
+    const selected = state.sessionPath("selected");
+    const victim = state.sessionPath("victim");
+    const handle = await fs.open(selected, "r");
+    const prototype = Object.getPrototypeOf(handle);
+    const originalRead = prototype.readFile;
+    await handle.close();
+    let swapped = false;
+    prototype.readFile = function (...args) {
+      if (!swapped && fsSync.readlinkSync("/proc/self/fd/" + this.fd) === selected) {
+        swapped = true;
+        fsSync.renameSync(selected, selected + ".moved");
+        fsSync.symlinkSync(victim, selected);
+      }
+      return originalRead.apply(this, args);
+    };
+    Object.defineProperty(process, "platform", { value: "darwin" });
+    const result = await state.readSession("selected").then(
+      () => ({ code: "READ_SUCCEEDED" }),
+      (error) => ({ code: error.code }),
+    );
+    console.log(JSON.stringify({ swapped, result, victim: await state.readSession("victim") }));
+  `], {
+    env: { ...process.env, TC_HOME: home },
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const [stdout, stderr, exit] = await Promise.all([
+    new Response(child.stdout).text(),
+    new Response(child.stderr).text(),
+    child.exited,
+  ]);
+  expect(exit).toBe(0);
+  expect(stderr).toBe("");
+  expect(JSON.parse(stdout)).toEqual({
+    swapped: true,
+    result: { code: "PROFILE_SYMLINK" },
+    victim: { owner: "victim" },
+  });
+});
+
+test("a numeric file-handle identity reopens the same profile but still refuses a real swap", async () => {
+  const home = await isolatedHome();
+  const stateUrl = new URL("./state.ts", import.meta.url).href;
+  const child = Bun.spawn([process.execPath, "-e", `
+    const fs = await import("node:fs/promises");
+    const fsSync = await import("node:fs");
+    const path = await import("node:path");
+    const state = await import(${JSON.stringify(stateUrl)});
+    await state.writeSession("selected", { owner: "selected" });
+    await state.writeSession("victim", { owner: "victim" });
+    const selected = state.profilePath("selected");
+    const victim = state.profilePath("victim");
+    const handle = await fs.open(selected, "r");
+    const prototype = Object.getPrototypeOf(handle);
+    const originalStat = prototype.stat;
+    await handle.close();
+    const numeric = (stats) => Object.assign(Object.create(stats), {
+      dev: Number(stats.dev), ino: Number(stats.ino),
+    });
+    prototype.stat = async function (options) {
+      const stats = await originalStat.call(this, options);
+      return options?.bigint ? numeric(stats) : stats;
+    };
+    const same = await state.readSession("selected").catch((error) => ({ code: error.code }));
+    let swapped = false;
+    prototype.stat = function (options) {
+      if (options?.bigint && !swapped &&
+          fsSync.readlinkSync("/proc/self/fd/" + this.fd) === selected) {
+        swapped = true;
+        fsSync.renameSync(selected, selected + ".moved");
+        fsSync.renameSync(victim, selected);
+      }
+      return originalStat.call(this, options).then((stats) =>
+        options?.bigint ? numeric(stats) : stats);
+    };
+    const replacement = await state.readSession("selected").then(
+      () => ({ code: "READ_SUCCEEDED" }),
+      (error) => ({ code: error.code }),
+    );
+    const victimSession = JSON.parse(await fs.readFile(path.join(selected, "session.json"), "utf8"));
+    console.log(JSON.stringify({ same, swapped, replacement, victimSession }));
+  `], {
+    env: { ...process.env, TC_HOME: home },
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const [stdout, stderr, exit] = await Promise.all([
+    new Response(child.stdout).text(),
+    new Response(child.stderr).text(),
+    child.exited,
+  ]);
+  expect(exit).toBe(0);
+  expect(stderr).toBe("");
+  expect(JSON.parse(stdout)).toEqual({
+    same: { owner: "selected" },
+    swapped: true,
+    replacement: { code: "PROFILE_SYMLINK" },
+    victimSession: { owner: "victim" },
+  });
 });
 
 test("a deferred profile read refuses its expired descriptor even when another profile reuses the fd", async () => {
