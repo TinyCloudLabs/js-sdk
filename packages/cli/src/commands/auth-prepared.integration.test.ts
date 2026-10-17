@@ -34,9 +34,18 @@ async function preparedLogin(transport: "callback" | "paste", behavior: Behavior
   const home = await mkdtemp(join(tmpdir(), `tc858-prepared-${transport}-`));
   homes.push(home);
   const requests: string[] = [];
+  const invokedResources: string[] = [];
   const node = Bun.serve({ port: 0, fetch(request) {
     const path = new URL(request.url).pathname;
     requests.push(path);
+    if (path === "/invoke") {
+      // The invocation's capability targets, e.g. `<space>/sql/account`.
+      const payload = (request.headers.get("authorization") ?? "").replace(/^Bearer /, "").split(".")[1] ?? "";
+      const claims: unknown = JSON.parse(Buffer.from(payload, "base64url").toString("utf8") || "{}");
+      if (typeof claims === "object" && claims !== null && "att" in claims && typeof claims.att === "object" && claims.att !== null) {
+        invokedResources.push(...Object.keys(claims.att));
+      }
+    }
     if (path === "/info") return Response.json({ protocol: 1, version: "1.0.0", features: [] });
     if (path === "/delegate" && request.method === "POST") return Response.json({ activated: [], skipped: [] });
     return new Response(`Unexpected node request: ${path}`, { status: 404 });
@@ -195,6 +204,9 @@ async function preparedLogin(transport: "callback" | "paste", behavior: Behavior
   expect(storedProfile.replication.prefixes).toEqual(["notes/"]);
   expect(JSON.parse(stdout).authenticated).toBe(true);
   expect(requests).toContain("/delegate");
+  // The prepared session holds no account-space authority, so registry sync
+  // must not even try it (TC-1287: a deterministic 401 per login).
+  expect(invokedResources.filter((resource) => resource.includes(":account/"))).toEqual([]);
 }
 
 test("prepared OpenKey callback ACK follows verified SDK sign-in and durable stamped CLI commit", () => preparedLogin("callback"), 30_000);

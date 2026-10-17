@@ -447,7 +447,10 @@ describe("TinyCloudNode.restoreSession session-key lifecycle", () => {
   });
 
   test("TC-998: a successful restore stops the replaced session's background registry sync; a rejected one leaves it", async () => {
-    const proof = await signedRestorableSession();
+    // Registry sync runs only for a session that can read the account index.
+    const proof = await signedRestorableSession({
+      ownedSpaceAbilities: { account: { sql: { account: ["tinycloud.sql/read", "tinycloud.sql/write"] } } },
+    });
     const node = new TinyCloudNode({
       signer: new PrivateKeySigner(PROOF_PRIVATE_KEY),
       wasmBindings: new NodeWasmBindings(),
