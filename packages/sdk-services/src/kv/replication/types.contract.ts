@@ -255,15 +255,6 @@ type _ProfilePurgeKeepsLifecycleRecovery = Assert<
   ProfileReplicaPurge extends Pick<ReplicaLifecycleGate, "recover" | "erasePending" | "pendingPurge">
     ? true : false
 >;
-type _ProfileDenyTakesOptionalDeferral = Assert<
-  Equal<Parameters<ProfileReplicaPurge["deny"]>[1], { deferErase?: boolean } | undefined>
->;
-type _DeferredDenyCarriesToken = Assert<
-  Equal<
-    ReturnType<ProfileReplicaPurge["deny"]>,
-    Promise<ReplicaDenyOutcome & { resumeToken?: ProfileReplicaDeferredToken }>
-  >
->;
 type _DeferredTokenSurvivesRestart = Assert<
   Equal<ReturnType<ProfileReplicaPurge["deferredErase"]>, Promise<ProfileReplicaDeferredToken | null>>
 >;
@@ -419,3 +410,13 @@ declare const markerFields: Omit<Extract<ProfileReplicaLogoutPending, { v: 2 }>,
 // @ts-expect-error A marker is never remote-pending and remote-abandoned at once.
 const bothRemoteStates: ProfileReplicaLogoutPending = { ...markerFields, remotePending: true, remoteAbandoned: true };
 void bothRemoteStates;
+// @ts-expect-error Deferred erase is sign-out only (N3).
+profilePurge.deny({ reason: "account_switch", principal: "did:example:owner", next: "did:example:next" }, { deferErase: true });
+async function deferredDenyCarriesToken(): Promise<void> {
+  const outcome = await profilePurge.deny({ reason: "sign_out", principal: "did:example:owner" }, { deferErase: true });
+  if (outcome.status !== "denied") return;
+  const token: ProfileReplicaDeferredToken = outcome.resumeToken;
+  void token;
+}
+void deferredDenyCarriesToken;
+type _EraseReportSignalsDeferral = Assert<Equal<ReplicaEraseReport["deferred"], true | undefined>>;

@@ -115,14 +115,15 @@ describe("TC-841 deferred profile purge under the real profile lock", () => {
       });
       await legacy.close();
       const purge = createProfileReplicaPurge({ profileDir, guard });
-      const denied = await purge.deny({ reason: "sign_out", principal: PRINCIPAL }, { deferErase: deferred });
-      expect(denied.status).toBe("denied");
-      expect(await stat(legacyDb)).toBeTruthy();
       if (deferred) {
-        if (denied.status !== "denied" || !denied.resumeToken) throw new Error("Missing durable resume token");
+        const denied = await purge.deny({ reason: "sign_out", principal: PRINCIPAL }, { deferErase: true });
+        if (denied.status !== "denied") throw new Error(`Expected a committed deferred denial, got ${denied.status}`);
+        expect(await stat(legacyDb)).toBeTruthy();
         expect(await purge.resumeDeferredErase(denied.resumeToken, { signal: signal() }))
           .toMatchObject({ failed: [], remaining: 0 });
       } else {
+        expect((await purge.deny({ reason: "sign_out", principal: PRINCIPAL })).status).toBe("denied");
+        expect(await stat(legacyDb)).toBeTruthy();
         expect(await purge.erasePending({ signal: signal() })).toMatchObject({ failed: [], remaining: 0 });
       }
       // The S3 facade erases flag-owned partitions, not the older CLI replicas root.

@@ -40,6 +40,7 @@ export type {
 } from "./types";
 export type {
   ProfileReplicaApprovalEntry,
+  ProfileReplicaDeferredDenyOutcome,
   ProfileReplicaDeferredToken,
   ProfileReplicaLogoutPending,
   ProfileReplicaPreflight,

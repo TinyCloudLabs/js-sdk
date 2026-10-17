@@ -358,6 +358,19 @@ describe("mandatory Node lifecycle gate", () => {
     expect(await filesNamed(dir, "pending.json")).toHaveLength(1);
   });
 
+  test("a deferred denial with no intents reports remaining 0 as deferred, never as completion", async () => {
+    const profileDir = dirname(await makeDir());
+    const purge = createProfileReplicaPurge({ profileDir, guard: sharedGuard });
+    const denied = await purge.deny({ reason: "sign_out", principal: PRINCIPAL }, { deferErase: true });
+    if (denied.status !== "denied") throw new Error(`Expected a committed deferred denial, got ${denied.status}`);
+    expect(denied.intents).toBe(0);
+    const signal = new AbortController().signal;
+    expect(await purge.erasePending({ signal })).toEqual({ erased: [], failed: [], remaining: 0, deferred: true });
+    expect(await purge.recover({ signal })).toEqual({ erased: [], failed: [], remaining: 0, deferred: true });
+    expect(await purge.resumeDeferredErase(denied.resumeToken, { signal }))
+      .toEqual({ erased: [], failed: [], remaining: 0 });
+  });
+
   test("deferred revoke survives restart without erasing files, then resumes the exact denial", async () => {
     const dir = await makeDir();
     const profileDir = dirname(dir);

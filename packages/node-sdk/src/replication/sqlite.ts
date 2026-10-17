@@ -43,6 +43,7 @@ import type {
 } from "@tinycloud/sdk-services";
 import type {
   ProfileReplicaApprovalEntry,
+  ProfileReplicaDeferredDenyOutcome,
   ProfileReplicaDeferredToken,
   ProfileReplicaLogoutPending,
   ProfileReplicaPreflight,
@@ -1869,6 +1870,46 @@ export function createSqliteReplicaStorage(
   }
 
 
+  /** Flips this process's view before its first await; deferral only for sign-out (N3). */
+  function deny(input: ReplicaDenyInput & { reason: "sign_out" }, options: { deferErase: true }): Promise<ProfileReplicaDeferredDenyOutcome>;
+  function deny(input: ReplicaDenyInput, options?: { deferErase?: false }): Promise<ReplicaDenyOutcome>;
+  function deny(
+    input: ReplicaDenyInput, options?: { deferErase?: boolean },
+  ): Promise<ReplicaDenyOutcome | ProfileReplicaDeferredDenyOutcome> {
+    if (options?.deferErase === true && input.reason !== "sign_out") {
+      throw new TypeError("Deferred erase is only available for sign-out.");
+    }
+    visibleStamp = undefined;
+    visiblePrincipalHash = undefined;
+    checkedGate = undefined;
+    return (async (): Promise<ReplicaDenyOutcome | ProfileReplicaDeferredDenyOutcome> => {
+      try {
+        const gate = await fileGate();
+        return await profileSection(async () => {
+          const snapshot = await gate.readGateSnapshot(profileDir);
+          const precomputed = snapshot === undefined ? undefined : {
+            salt: snapshot.salt, principalHash: await gate.principalHashOf(snapshot.salt, input.principal),
+          };
+          const result = await gate.denyGate(profileDir, input,
+            async (principalHash) => {
+              if (snapshot === undefined) throw gated("gate_unavailable");
+              return collectIntents(principalHash, snapshot.salt);
+            },
+            precomputed, options);
+          if (result.status !== "denied" || options?.deferErase !== true) return result;
+          const resumeToken = await gate.deferredGateToken(profileDir);
+          if (resumeToken === null || resumeToken.deniedEpoch !== result.lifecycleEpoch) {
+            return { status: "unguarded", code: "gate_unavailable" };
+          }
+          return { ...result, resumeToken };
+        });
+      } catch (error) {
+        return { status: "unguarded", code: typeof error === "object" && error !== null &&
+          "code" in error && typeof error.code === "string" ? error.code : "gate_unavailable" };
+      }
+    })();
+  }
+
   const lifecycle: ReplicaLifecycleGate & ProfileReplicaPurge = {
     kind: "file",
     async recover({ signal }) {
@@ -1969,40 +2010,7 @@ export function createSqliteReplicaStorage(
     },
     consentDeadline() { return null; },
     deliverable(stamp) { return lifecycle.checkDelivery(stamp).status === "allow"; },
-    deny(input: ReplicaDenyInput, options?: { deferErase?: boolean }) {
-      if (options?.deferErase === true && input.reason !== "sign_out") {
-        throw new TypeError("Deferred erase is only available for sign-out.");
-      }
-      visibleStamp = undefined;
-      visiblePrincipalHash = undefined;
-      checkedGate = undefined;
-      return (async (): Promise<ReplicaDenyOutcome & { resumeToken?: ProfileReplicaDeferredToken }> => {
-        try {
-          const gate = await fileGate();
-          return await profileSection(async () => {
-            const snapshot = await gate.readGateSnapshot(profileDir);
-            const precomputed = snapshot === undefined ? undefined : {
-              salt: snapshot.salt, principalHash: await gate.principalHashOf(snapshot.salt, input.principal),
-            };
-            const result = await gate.denyGate(profileDir, input,
-              async (principalHash) => {
-                if (snapshot === undefined) throw gated("gate_unavailable");
-                return collectIntents(principalHash, snapshot.salt);
-              },
-              precomputed, options);
-            if (result.status !== "denied" || options?.deferErase !== true) return result;
-            const resumeToken = await gate.deferredGateToken(profileDir);
-            if (resumeToken === null || resumeToken.deniedEpoch !== result.lifecycleEpoch) {
-              return { status: "unguarded", code: "gate_unavailable" };
-            }
-            return { ...result, resumeToken };
-          });
-        } catch (error) {
-          return { status: "unguarded", code: typeof error === "object" && error !== null &&
-            "code" in error && typeof error.code === "string" ? error.code : "gate_unavailable" };
-        }
-      })();
-    },
+    deny,
     deferredErase() {
       return profileSection(async () => (await fileGate()).deferredGateToken(profileDir));
     },
@@ -2357,7 +2365,7 @@ export function createSqliteReplicaStorage(
       return { erased, failed: [{ id: "logout", code: "REPLICA_GATED" }], remaining: Math.max(1, intents.length) };
     }
     const held = await profileSection(() => gate.readGateSnapshot(profileDir));
-    if (held?.eraseDeferred) return { erased, failed, remaining: held.intents.length };
+    if (held?.eraseDeferred) return { erased, failed, remaining: held.intents.length, deferred: true };
     for (const intent of intents) {
       signal.throwIfAborted();
       try {
