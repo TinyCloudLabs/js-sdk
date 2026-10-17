@@ -216,7 +216,7 @@ async function entriesOf(path: string): Promise<string[]> {
   }
 }
 
-/** Crash- and race-test seam: called at the durability boundaries of `applyPage`. */
+/** Crash- and race-test seam at SQLite durability boundaries. */
 export type StoreFaults = {
   /** Blobs are durable; no row references them yet. */
   afterBlobs?(): void | Promise<void>;
@@ -226,6 +226,8 @@ export type StoreFaults = {
   afterCommit?(): void;
   /** A revocation purge is committed; its blobs are not unlinked yet. */
   afterPurgeMark?(): void;
+  /** Garbage collection holds an open write transaction while asynchronous blob I/O runs. */
+  afterGarbageCollectionBegin?(): void | Promise<void>;
 };
 
 /**
@@ -303,6 +305,10 @@ export class SqliteReplicaStore implements ReplicaStore {
     return this.#database;
   }
   #closed = false;
+  #closing = false;
+  #closePromise?: Promise<void>;
+  #activeMutations = 0;
+  #drained?: () => void;
   readonly #shared?: SharedWritable;
   readonly #pinnedDir: string;
   #directoryFd?: number;
@@ -570,12 +576,31 @@ export class SqliteReplicaStore implements ReplicaStore {
     }
   }
 
+  /** New calls stop at close; accepted mutation sections may still finish their transactions. */
+  #assertAccepting(): void {
+    if (this.#closing || this.#closed) {
+      throw new ReplicaError(ReplicaErrorCode.CLOSED, "The replica store is closed.");
+    }
+  }
+
   /** A short mutation section: guarded (profile lock) and checked against the database this store opened. */
   #mutate<T>(section: () => Promise<T>): Promise<T> {
-    return this.#guard(async () => {
-      await this.#assertPresent();
-      return section();
-    });
+    this.#assertAccepting();
+    this.#activeMutations++;
+    return (async () => {
+      try {
+        return await this.#guard(async () => {
+          await this.#assertPresent();
+          return section();
+        });
+      } finally {
+        if (--this.#activeMutations === 0) {
+          const drained = this.#drained;
+          this.#drained = undefined;
+          drained?.();
+        }
+      }
+    })();
   }
 
   /** Run `body` in a write transaction (BEGIN IMMEDIATE). Callers outside a mutation section use `#guardedWrite`. */
@@ -630,6 +655,7 @@ export class SqliteReplicaStore implements ReplicaStore {
   }
 
   async open(): Promise<ReplicaState | null> {
+    this.#assertAccepting();
     let row: ReplicaRow | undefined;
     try {
       row = this.#row();
@@ -804,6 +830,7 @@ export class SqliteReplicaStore implements ReplicaStore {
   }
 
   async hasContent(hashes: string[]): Promise<Set<string>> {
+    this.#assertAccepting();
     const held = new Set<string>();
     for (let start = 0; start < hashes.length; start += 500) {
       const chunk = hashes.slice(start, start + 500);
@@ -1026,6 +1053,7 @@ export class SqliteReplicaStore implements ReplicaStore {
       }
       try {
         this.#checkLease(t);
+        await this.#faults.afterGarbageCollectionBegin?.();
         const keep = new Set(
           this.#db.all<{ hash: string }>("SELECT DISTINCT hash FROM entry WHERE content = 1").map((row) => row.hash),
         );
@@ -1258,6 +1286,7 @@ export class SqliteReplicaStore implements ReplicaStore {
   }
 
   async get(key: string): Promise<LocalEntry | undefined> {
+    this.#assertAccepting();
     try {
       const row = this.#db.get<EntryRow>("SELECT key, deleted, etag, hash, metadata, content FROM entry WHERE key = ?", key);
       return row === undefined ? undefined : entryOf(row);
@@ -1267,6 +1296,7 @@ export class SqliteReplicaStore implements ReplicaStore {
   }
 
   async list(o: ListOpts): Promise<LocalEntry[]> {
+    this.#assertAccepting();
     const where = ["deleted = 0"];
     const params: SqlValue[] = [];
     if (o.prefix !== undefined && o.prefix !== "") {
@@ -1360,17 +1390,24 @@ export class SqliteReplicaStore implements ReplicaStore {
     };
   }
 
-  async close(): Promise<void> {
-    if (this.#closed) return;
-    this.#closed = true;
-    const fd = this.#directoryFd;
-    this.#directoryFd = undefined;
-    if (this.#shared) {
-      sharedStores.unregister(this);
-      releaseWritable(this.#shared);
-    } else {
-      if (fd !== undefined) pinnedDirectories.unregister(this);
-      try { this.#database.close(); } finally { if (fd !== undefined) closeSync(fd); }
-    }
+  close(): Promise<void> {
+    if (this.#closePromise) return this.#closePromise;
+    this.#closing = true;
+    this.#closePromise = (async () => {
+      if (this.#activeMutations !== 0) {
+        await new Promise<void>((resolve) => { this.#drained = resolve; });
+      }
+      this.#closed = true;
+      const fd = this.#directoryFd;
+      this.#directoryFd = undefined;
+      if (this.#shared) {
+        sharedStores.unregister(this);
+        releaseWritable(this.#shared);
+      } else {
+        if (fd !== undefined) pinnedDirectories.unregister(this);
+        try { this.#database.close(); } finally { if (fd !== undefined) closeSync(fd); }
+      }
+    })();
+    return this.#closePromise;
   }
 }

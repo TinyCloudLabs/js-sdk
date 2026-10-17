@@ -104,6 +104,54 @@ test("concurrent controllers can open one writable replica while another remains
   if (process.platform === "linux") expect(await databaseDescriptors()).toEqual([]);
 });
 
+for (const fails of [false, true]) {
+  test(`closing a controller during garbage collection ${fails ? "rolls back a failure" : "commits"} before a sibling writes`, async () => {
+    const dir = await makeStore();
+    let started!: () => void;
+    let resume!: () => void;
+    const inTransaction = new Promise<void>((resolve) => { started = resolve; });
+    const held = new Promise<void>((resolve) => { resume = resolve; });
+    const first = await SqliteReplicaStore.open(dir, {
+      create: false,
+      [FAULTS]: {
+        afterGarbageCollectionBegin: async () => {
+          started();
+          await held;
+          if (fails) throw new Error("Injected garbage collection failure");
+        },
+      },
+    });
+    const second = await SqliteReplicaStore.open(dir, { create: false });
+    const lease = await first.acquireSyncLease(30_000);
+    expect(lease).not.toBeNull();
+    const collecting = first.collectGarbage(lease!);
+    void collecting.catch(() => undefined);
+    let closing: Promise<void> | undefined;
+    try {
+      await inTransaction;
+      closing = first.close();
+      let closed = false;
+      void closing.then(() => { closed = true; });
+      await Promise.resolve();
+      const closedBeforeResume = closed;
+      await expect(first.get("notes/a")).rejects.toMatchObject({ code: "REPLICA_CLOSED" });
+      await expect(first.renewLease(lease!, 30_000)).rejects.toMatchObject({ code: "REPLICA_CLOSED" });
+      resume();
+      await second.renewLease(lease!, 30_000);
+      if (fails) await expect(collecting).rejects.toMatchObject({ code: "STORAGE_ERROR" });
+      else expect(await collecting).toBe(0);
+      await closing;
+      expect(closedBeforeResume).toBe(false);
+      await second.releaseLease(lease!);
+    } finally {
+      resume();
+      await Promise.allSettled([collecting, closing ?? Promise.resolve()]);
+      await first.close();
+      await second.close();
+    }
+  });
+}
+
 test.skipIf(process.platform !== "linux")("a sibling pinned path retains the same replica after its first controller closes", async () => {
   const dir = await makeStore();
   const first = await SqliteReplicaStore.open(dir, { create: false });
