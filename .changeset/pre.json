@@ -34,6 +34,7 @@
     "persisted-restore-signout-race",
     "replica-shared-contract",
     "sign-out-ends-session",
+    "tc-1312-writable-handles",
     "tc-841-profile-containment"
   ]
 }

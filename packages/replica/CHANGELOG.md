@@ -1,5 +1,11 @@
 # @tinycloud/replica
 
+## 0.2.4-beta.3
+
+### Patch Changes
+
+- 5827d70: Share a verified writable SQLite handle across concurrent controllers for the same replica directory until the last controller closes. A changed database inode is refused while a controller remains open; independent processes continue to open the replica normally.
+
 ## 0.2.4-beta.2
 
 ### Patch Changes
