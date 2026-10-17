@@ -519,7 +519,7 @@ test("logout refuses a linked replica.db without advancing the victim lease", as
   await rm(join(selected, "replica.db"));
   await symlink(victimDb, join(selected, "replica.db"));
 
-  await expect(removeProfileReplicas("dogfood")).rejects.toBeDefined();
+  await expect(removeProfileReplicas("dogfood")).rejects.toMatchObject({ code: "REPLICA_PURGE_FAILED" });
   expect(token()).toBe(before);
   expect(await stat(victimDb)).toBeTruthy();
 });
@@ -583,7 +583,7 @@ test("logout preflight keeps its original root when another real directory repla
     return originalOpen.call(this, dir, options);
   };
   try {
-    await expect(removeProfileReplicas("dogfood")).rejects.toBeDefined();
+    await expect(removeProfileReplicas("dogfood")).rejects.toMatchObject({ code: "REPLICA_PURGE_FAILED" });
     expect(swapped).toBe(true);
     expect(token(join(selectedRoot, "notes", "replica.db"))).toBe(before);
     expect(await stat(join(selectedRoot, "notes", "replica.db"))).toBeTruthy();
@@ -623,7 +623,7 @@ test("logout refuses a real replica entry replaced before SQLite opens it", asyn
     });
   };
   try {
-    await expect(removeProfileReplicas("dogfood")).rejects.toBeDefined();
+    await expect(removeProfileReplicas("dogfood")).rejects.toMatchObject({ code: "REPLICA_PURGE_FAILED" });
     expect(sqliteCalled).toBe(false);
     expect(await stat(join(selected, "replica.db"))).toBeTruthy();
     expect(await stat(`${selected}.original/replica.db`)).toBeTruthy();
