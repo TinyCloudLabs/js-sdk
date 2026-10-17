@@ -4,7 +4,7 @@ import { restoreSessionStamp } from "@tinycloud/replica/profile-gate";
 import { NodeWasmBindings, TinyCloudNode } from "@tinycloud/node-sdk";
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -312,7 +312,7 @@ describe.skipIf(!NODE_BIN)(`replication flag against a real node (${DATABASE_URL
     } finally {
       await writeFile(sessionFile, persistedSession);
     }
-    // TC-721 expected-unsupported: exercise the real compact-delegate revocation endpoint.
+    // TC-721: the wallet owner revokes a compact delegate grant directly with a signed owner revocation.
     const manager = new NodeWasmBindings().createSessionManager();
     const recipientKey = manager.createSessionKey("tc-721-compact-delegate");
     const recipientDid = manager.getDID(recipientKey)!.split("#")[0]!;
@@ -326,9 +326,7 @@ describe.skipIf(!NODE_BIN)(`replication flag against a real node (${DATABASE_URL
         actions: ["tinycloud.kv/get"],
       }]);
       const revocation = await ownerSdk.revokeDelegation(compactGrant.delegation.cid);
-      expect(revocation.ok).toBe(false);
-      expect(JSON.stringify(revocation.error)).toMatch(/403|Unauthorized Revoker/i);
-      process.stderr.write("EXPECTED-UNSUPPORTED TC-721: compact delegate revoke is rejected; no revoked-sync result is simulated.\n");
+      expect(revocation).toEqual({ ok: true, data: { revoked: true, cid: compactGrant.delegation.cid } });
     } finally {
       await ownerSdk.replication?.close();
     }
@@ -669,7 +667,16 @@ describe.skipIf(!NODE_BIN)(`replication flag against a real node (${DATABASE_URL
       type: "replication.read", key: "notes/c", source: "network",
       reason: "pending_write", pendingState: "ambiguous",
     }));
-    await ok(["auth", "logout"], "owner");
+    // Ambiguous pending writes are unsynced local data: plain logout refuses before any
+    // mutation, and explicit discard consent removes them.
+    const ownerDir = join(home, ".tinycloud", "profiles", "owner");
+    const refusedLogout = await tc(["auth", "logout"], { profile: "owner" });
+    expect(refusedLogout.code).not.toBe(0);
+    expect(refusedLogout.stderr).toContain("REPLICA_GATED");
+    expect(refusedLogout.stderr).toContain("pending.json");
+    expect((await stat(join(ownerDir, "session.json"))).isFile()).toBe(true);
+    expect(await readdir(profileDir)).not.toHaveLength(0);
+    await ok(["auth", "logout", "--discard-local-changes"], "owner");
     await expect(readdir(profileDir)).rejects.toMatchObject({ code: "ENOENT" });
     expect(space).toMatch(/^tinycloud:/);
   }, 300_000);
