@@ -231,15 +231,23 @@ export async function recoverPendingLogout(name: string): Promise<void> {
     return;
   }
   const report = await ProfileManager.withLock(name, async () => {
+    // An unreadable session cannot be attributed to the marker's principal. The session
+    // reader also reads profile.json (its signed-out flag), so name whichever file failed.
+    const unreadable = (file: string) => new CLIError("REPLICA_GATED",
+      `A logout is pending on profile "${name}", but its ${file === "profile.json" ? "profile" : "session"} file ` +
+      `${join(namedProfilePath(name), file)} is unreadable; ` +
+      "credentials, replica files and the logout marker were left unchanged, and local replica reads stay blocked.",
+      ExitCode.ERROR);
+    try {
+      await ProfileManager.getProfile(name);
+    } catch {
+      throw unreadable("profile.json");
+    }
     let session: object | null;
     try {
       session = await ProfileManager.getSession(name);
     } catch {
-      // An unreadable session cannot be attributed to the marker's principal.
-      throw new CLIError("REPLICA_GATED",
-        `A logout is pending on profile "${name}", but its session file ${join(namedProfilePath(name), "session.json")} is unreadable; ` +
-        "credentials, replica files and the logout marker were left unchanged, and local replica reads stay blocked.",
-        ExitCode.ERROR);
+      throw unreadable("session.json");
     }
     if (session) {
       // An unreadable or malformed marker skips this check; the facade then

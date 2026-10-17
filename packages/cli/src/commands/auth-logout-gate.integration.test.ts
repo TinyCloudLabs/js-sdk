@@ -379,3 +379,22 @@ test("`auth status` refuses an unreadable session beside a pending logout marker
   expect(await readGateSnapshot(paths.directory)).toEqual(gate);
   expect(await signedOut(paths.directory)).toBeUndefined();
 });
+
+test("`auth status` names an unreadable profile.json, not session.json, beside a pending logout marker", async () => {
+  const home = await mkdtemp(join(tmpdir(), "tc841-cli-status-corrupt-profile-"));
+  homes.push(home);
+  const paths = await interruptedLogout(home, "v1");
+  const profileFile = join(paths.directory, "profile.json");
+  await writeFile(profileFile, "{not json");
+  const before = await Promise.all([paths.session, paths.key, paths.marker, paths.replica, profileFile]
+    .map((path) => readFile(path)));
+
+  const refused = await run(home, [], true, ["auth", "status"]);
+  expect(refused.exitCode).toBeGreaterThan(0);
+  const error = JSON.parse(refused.stderr).error;
+  expect(error).toMatchObject({ code: "REPLICA_GATED" });
+  expect(error.message).toContain(profileFile);
+  expect(error.message).not.toContain(paths.session);
+  expect(await Promise.all([paths.session, paths.key, paths.marker, paths.replica, profileFile]
+    .map((path) => readFile(path)))).toEqual(before);
+});
