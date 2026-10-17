@@ -1,7 +1,7 @@
 {
   "allowance": {
-    "replica.mjs": 51869,
-    "replica.cjs": 67080,
+    "replica.mjs": 51925,
+    "replica.cjs": 67138,
     "activation.mjs": 23075,
     "activation.cjs": 24655
   },
@@ -78,8 +78,8 @@
     {
       "pr": "#565",
       "ticket": "TC-858",
-      "replica.mjs": 78,
-      "replica.cjs": 71,
+      "replica.mjs": 134,
+      "replica.cjs": 129,
       "activation.mjs": 4,
       "activation.cjs": 5,
       "note": "Optional first-import and IDB activation gzip deltas against this PR's merge base"

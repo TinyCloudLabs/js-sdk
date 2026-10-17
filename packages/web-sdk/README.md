@@ -106,17 +106,17 @@ no shipped source or build input changed. The checker refuses mismatched local
 Bun/Rust versions and later changes to this corrected ratchet.
 
 The #565 fix-before-stable hardening (security L1/L2/I1 and correctness P2s)
-raised these ceilings once, by the exact bytes GitHub run 39005492877 measured
+raised these ceilings once, by the exact bytes GitHub run 39023273615 measured
 after size cuts: root to 1,464,122 / 1,394,880 B (+20 / +11), first import
-(+78 / +71), activation (+4 / +5) and the worker (+7). The ledger's
+(+134 / +129), activation (+4 / +5) and the worker (+7). The ledger's
 `hardeningRatchet` row records them and cannot change later.
 
-The opt-in first-import ceiling is 51,869 B ESM / 67,080 B CJS gzip
+The opt-in first-import ceiling is 51,925 B ESM / 67,138 B CJS gzip
 (including the replica parser and noble dependencies); awaiting the IndexedDB
 factory has a separate 23,075 B / 24,655 B ceiling. The content-hashed worker
 and WASM asset has an 820,108 B ceiling owned by `@tinycloud/replica`.
-A compliant first local open therefore costs at most 895,052 B ESM /
-911,843 B CJS incremental gzip beyond the already-loaded web root; those
+A compliant first local open therefore costs at most 895,108 B ESM /
+911,901 B CJS incremental gzip beyond the already-loaded web root; those
 assets can then be cached. These byte ceilings do not replace real-worker
 Chromium acceptance of local reads, denial, expiry, and sign-out.
 
