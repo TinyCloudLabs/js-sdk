@@ -19,9 +19,6 @@ async function recoveredBrowserReplication(
   const lifecycle = storage.kind === "indexeddb" ? storage.lifecycle : undefined;
   if (lifecycle?.kind !== "indexeddb") return replication;
 
-  const abort = new AbortController();
-  let timedOut = false;
-  let timeoutId: ReturnType<typeof setTimeout>;
   const unavailable = (code: string, remaining?: number): void => {
     try {
       const event: Extract<ReplicationEvent, { type: "replication.lifecycle" }> = {
@@ -32,11 +29,59 @@ async function recoveredBrowserReplication(
       replication.onEvent?.(event);
     } catch { /* Observability cannot prevent a network session. */ }
   };
-  const recovery = (async () => lifecycle.recover({ signal: abort.signal }))().catch(() => null);
-  void recovery.then((result) => {
-    if (timedOut && (!result || result.failed.length > 0 || result.remaining > 0)) {
-      unavailable(result?.failed[0]?.code ?? (result ? "RECOVERY_INCOMPLETE" : "STORAGE_ERROR"), result?.remaining);
+  type Report = Awaited<ReturnType<typeof lifecycle.recover>>;
+  const clean = (report: Report | null) => report !== null && report.failed.length === 0 && report.remaining === 0;
+  // Every recovery wait has the same 3 s bound. web-sdk's TypeScript lib predates Promise.withResolvers.
+  const bounded = (pending: Promise<unknown>, abort?: AbortController): Promise<void> => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    return Promise.race([
+      pending.then(() => undefined, () => undefined),
+      new Promise<void>((resolve) => { timer = setTimeout(() => { abort?.abort(); resolve(); }, 3_000); }),
+    ]).finally(() => clearTimeout(timer));
+  };
+
+  // Keep the real deny/erase/recovery methods: signOut must still shred keys.
+  // Only stamp admission and local delivery require a proven current wallet.
+  let admitted = false;
+  let walletPrincipal: string | undefined;
+  let walletSequence = 0;
+  let recoveryRetries = 0;
+  let walletGate: "gate_unavailable" | "principal_mismatch" = "gate_unavailable";
+  /** The only admit path: a fresh recovery report under the origin gate lock. */
+  const recoverAndAdmit = async (input: { signal: AbortSignal }): Promise<Report> => {
+    const result = await lifecycle.recover(input);
+    admitted = clean(result);
+    if (!admitted) {
+      walletPrincipal = undefined;
+      walletSequence++;
     }
+    return result;
+  };
+  const freshAdmission = (): Promise<void> => {
+    const abort = new AbortController();
+    return bounded(recoverAndAdmit({ signal: abort.signal }), abort);
+  };
+  // At most one recovery runs at a time; admission waits for it instead of racing it for the lock.
+  let pendingRecovery: Promise<unknown> | undefined;
+  const runRecovery = (work: () => Promise<unknown>): Promise<unknown> => {
+    const running: Promise<unknown> = work().catch(() => undefined).finally(() => {
+      if (pendingRecovery === running) pendingRecovery = undefined;
+    });
+    pendingRecovery = running;
+    return running;
+  };
+
+  const abort = new AbortController();
+  let timedOut = false;
+  let timeoutId: ReturnType<typeof setTimeout>;
+  const startup = (async () => lifecycle.recover({ signal: abort.signal }))().catch(() => null);
+  // A startup recovery that outlives its bound holds the gate lock. If it later finishes cleanly,
+  // one fresh gated recovery decides admission; the late report itself never admits.
+  void runRecovery(async () => {
+    const result = await startup;
+    if (!timedOut) return;
+    if (clean(result)) await freshAdmission();
+    else unavailable(result?.failed[0]?.code ?? (result ? "RECOVERY_INCOMPLETE" : "STORAGE_ERROR"), result?.remaining);
   });
   const timeout = new Promise<null>((resolve) => {
     timeoutId = setTimeout(() => {
@@ -45,17 +90,11 @@ async function recoveredBrowserReplication(
       resolve(null);
     }, 3_000);
   });
-  const report = await Promise.race([recovery, timeout]);
+  const report = await Promise.race([startup, timeout]);
   clearTimeout(timeoutId!);
-  let admitted = report !== null && report.failed.length === 0 && report.remaining === 0;
+  if (report !== null) admitted = clean(report);
   if (!admitted) unavailable(report?.failed[0]?.code ?? (timedOut ? "RECOVERY_TIMEOUT" : "STORAGE_ERROR"), report?.remaining);
 
-  // Keep the real deny/erase/recovery methods: signOut must still shred keys.
-  // Only stamp admission and local delivery require a proven current wallet.
-  let walletPrincipal: string | undefined;
-  let walletSequence = 0;
-  let recoveryRetries = 0;
-  let walletGate: "gate_unavailable" | "principal_mismatch" = "gate_unavailable";
   const gatedError = () => Object.assign(new Error("Replica wallet or startup recovery is unavailable."), {
     code: "REPLICA_GATED" as const, gate: admitted ? walletGate : "gate_unavailable" as const,
   });
@@ -79,16 +118,13 @@ async function recoveredBrowserReplication(
   const admitStamp = async <T>(principal: string, action: () => Promise<T>): Promise<T> => {
     const sequence = ++walletSequence;
     walletPrincipal = undefined;
-    // A failed startup recovery is re-checked here, at most twice per page and bounded like
-    // startup; the guarded recover() updates `admitted`, and failure still refuses below.
-    if (!admitted && recoveryRetries++ < 2) {
-      // web-sdk's TypeScript lib predates Promise.withResolvers; same bound shape as startup.
-      let timer: ReturnType<typeof setTimeout> | undefined;
-      await Promise.race([
-        guardedLifecycle.recover({ signal: AbortSignal.timeout(3_000) }),
-        new Promise((resolve) => { timer = setTimeout(resolve, 3_000); }),
-      ]).catch(() => undefined);
-      clearTimeout(timer);
+    // Waiting on a recovery that is still running (including a startup that outlived its bound)
+    // spends no retry. Otherwise a failed recovery is re-run, at most twice per page; only a clean
+    // fresh report admits, and failure still refuses below.
+    if (!admitted && pendingRecovery) await bounded(pendingRecovery);
+    if (!admitted && !pendingRecovery && recoveryRetries < 2) {
+      recoveryRetries++;
+      await runRecovery(freshAdmission);
     }
     if (!admitted || !(await matchesWallet(principal)) || sequence !== walletSequence) throw gatedError();
     const stamp = await action();
@@ -109,15 +145,7 @@ async function recoveredBrowserReplication(
   const lifecycleMethods = new Map<PropertyKey, unknown>();
   const guardedLifecycle = new Proxy(lifecycle, {
     get(target, property) {
-      if (property === "recover") return async (input: { signal: AbortSignal }) => {
-        const result = await target.recover(input);
-        admitted = result.failed.length === 0 && result.remaining === 0;
-        if (!admitted) {
-          walletPrincipal = undefined;
-          walletSequence++;
-        }
-        return result;
-      };
+      if (property === "recover") return recoverAndAdmit;
       if (property === "establishSessionStamp") return (...args: Parameters<typeof target.establishSessionStamp>) =>
         admitStamp(args[0], () => target.establishSessionStamp(...args));
       if (property === "restoreSessionStamp") return (...args: Parameters<typeof target.restoreSessionStamp>) =>
