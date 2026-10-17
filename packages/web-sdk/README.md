@@ -112,16 +112,15 @@ after size cuts: root to 1,464,122 / 1,394,880 B (+20 / +11), first import
 `hardeningRatchet` row records them and cannot change later.
 
 **Ancestry pins and squash merges.** A policy row records the PR-branch commit it
-was reviewed at, and its introduction check requires that commit in the PR head.
-js-sdk squash-merges, so that commit is unreachable from master afterwards. A
-row's ancestry is therefore checked only when a PR introduces it, never again.
-Each merged pin must resolve, directly or through `squashMergedPins` in
-`scripts/replica-size-policy.ts`, to the master commit carrying its code. A PR
-that introduces a row pins its own head; after that PR is squash-merged, the
-next policy change adds `<pinned head>: <squash commit>` to `squashMergedPins`.
-Until then the checker refuses PRs and names the missing entry. Content keys (blob
-hashes) were rejected: pinned files such as `authority.ts` legitimately change
-later, whereas the squash commit stays an ancestor for good.
+was reviewed at, and its introduction check requires that literal commit in the
+PR head. js-sdk squash-merges, so that commit is unreachable from master
+afterwards. Once merged, a pin is instead resolved to the commit that landed it:
+the first first-parent master commit that added the pin to `scripts/`, which is
+its squash commit (`landingCommit` in `scripts/replica-size-policy.ts`). Every PR
+asserts that each merged row's pin is on its base or was landed by it. After a
+squash merge, nothing needs editing. Content keys (blob hashes) were rejected:
+pinned files such as `authority.ts` legitimately change later, whereas the
+landing commit stays an ancestor for good.
 
 The opt-in first-import ceiling is 51,925 B ESM / 67,138 B CJS gzip
 (including the replica parser and noble dependencies); awaiting the IndexedDB

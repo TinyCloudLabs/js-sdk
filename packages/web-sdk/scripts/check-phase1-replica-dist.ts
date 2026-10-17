@@ -10,7 +10,7 @@ import {
   introducedOptionalAncestryPins, optionalFormats, priorOptionalAllowance, relocatedOptionalAllowance,
   validateOptionalEntryTransition, validateOptionalLedger, type OptionalLedger,
 } from "./replica-optional-size-policy";
-import { assertCiSizeToolchain, approvedCiToolchainCorrection, approvedFixRequiredRatchet, approvedGatedOnlyRatchet, approvedPhase2, ciCorrectionPolicyOnlyPaths, hasAncestor, isPolicyOnlySinceApprovedSource, validateCiToolchainTransition, validateGatedOnlyRatchet, validateHardeningRatchetTransition, validateLedger, validateMasterMergeResolutionTransition, type GzipSizes, type Ledger, type LedgerEntry } from "./replica-size-policy";
+import { ancestryPins, assertCiSizeToolchain, approvedCiToolchainCorrection, approvedFixRequiredRatchet, approvedGatedOnlyRatchet, approvedPhase2, ciCorrectionPolicyOnlyPaths, hasAncestor, isPolicyOnlySinceApprovedSource, pinLandedOn, preexistingS3EntryCommit, validateCiToolchainTransition, validateGatedOnlyRatchet, validateHardeningRatchetTransition, validateLedger, validateMasterMergeResolutionTransition, type GzipSizes, type Ledger, type LedgerEntry } from "./replica-size-policy";
 import { collectMeasuredArtifactInputs } from "./replica-size-inputs";
 type Baseline = {
   webSdkTestBaseline: { ref: string; unhandledErrors: number; failingNames: string[]; unhandledSignatures: string[] };
@@ -71,24 +71,7 @@ const preexistingS3Entry: LedgerEntry = {
   pr: "#553", ticket: "TC-858", "index.mjs": 52, "index.cjs": 55,
   note: "Replica gzip growth measured against this PR's merge base 9516f840 (includes S1 #550 kv-storage code merged into this branch)",
 };
-const preexistingS3EntryCommit = "0241ba9b8b2447b84ffaede4fff3272e2f2fdda5";
 const emptyOptional: OptionalLedger = { allowance: priorOptionalAllowance, entries: [] };
-
-/** The ancestry pins of each merged root row and the gated-only artifact, as their introduction checks use them. */
-function ancestryPins(root: Ledger, optional: OptionalLedger): Array<{ row: string; pin: string }> {
-  const pins: Array<{ row: string; pin: string }> = [];
-  if (root.phase2Ratchet !== undefined) {
-    pins.push({ row: "phase2Ratchet", pin: approvedPhase2.base }, { row: "phase2Ratchet (#553 entry)", pin: preexistingS3EntryCommit });
-  }
-  if (root.fixRequiredRatchet !== undefined) pins.push({ row: "fixRequiredRatchet", pin: approvedFixRequiredRatchet.measuredAt });
-  if (root.canonicalToolchainCorrection !== undefined) {
-    pins.push({ row: "canonicalToolchainCorrection", pin: approvedCiToolchainCorrection.approvedSource });
-  }
-  if (root.masterMergeResolution !== undefined) pins.push({ row: "masterMergeResolution", pin: root.masterMergeResolution.mergedHead });
-  if (root.hardeningRatchet !== undefined) pins.push({ row: "hardeningRatchet", pin: root.hardeningRatchet.sourceCommits.at(-1)! });
-  if (optional.gatedOnlyRatchet !== undefined) pins.push({ row: "gatedOnlyRatchet", pin: approvedGatedOnlyRatchet.sourceCommit });
-  return pins;
-}
 let failed = false;
 
 function command(program: string, args: string[], cwd = repoRoot): string {
@@ -214,11 +197,15 @@ if (prBaseSha) {
   }
   validateOptionalLedger(baseOptional, baseLedger.fixRequiredRatchet !== undefined,
     baseLedger.canonicalToolchainCorrection !== undefined, baseLedger.hardeningRatchet !== undefined);
-  // Policy rows may pin only commits reachable from master. A row already merged into the base
-  // must resolve, directly or through squashMergedPins, to an ancestor of the PR base.
-  for (const { row, pin } of [...ancestryPins(baseLedger, baseOptional), ...introducedOptionalAncestryPins(baseOptional, emptyOptional)]) {
-    if (!hasAncestor(repoRoot, pin, prBaseSha)) {
-      console.error(`Merged size-policy row ${row} pins ${pin}, which master ${prBaseSha} cannot reach (squash-merged PR branch?). Add "${pin}": "<its master squash commit>" to squashMergedPins in packages/web-sdk/scripts/replica-size-policy.ts.`);
+  // Policy rows may pin only master commits. A row already merged into the base must pin a commit
+  // the base contains or, after a squash merge, one the base landed (see landingCommit).
+  const mergedPins = [
+    ...ancestryPins(baseLedger, baseOptional.gatedOnlyRatchet !== undefined),
+    ...introducedOptionalAncestryPins(baseOptional, emptyOptional),
+  ];
+  for (const { row, pin } of mergedPins) {
+    if (!pinLandedOn(repoRoot, pin, prBaseSha)) {
+      console.error(`Merged size-policy row ${row} pins ${pin}, which master ${prBaseSha} neither contains nor landed through packages/web-sdk/scripts/.`);
       failed = true;
     }
   }
