@@ -1,9 +1,9 @@
 {
   "allowance": {
-    "replica.mjs": 51791,
-    "replica.cjs": 67009,
-    "activation.mjs": 23071,
-    "activation.cjs": 24650
+    "replica.mjs": 51869,
+    "replica.cjs": 67080,
+    "activation.mjs": 23075,
+    "activation.cjs": 24655
   },
   "relocations": [
     {
@@ -74,6 +74,15 @@
       "activation.mjs": 23071,
       "activation.cjs": 24650,
       "note": "Unmerged #548 first-import and activation gzip measured by GitHub replica-e2e SQLite job 117229580745 and Postgres job 117229580982 in run 38977256904 against merge-base 8bfd6df4 (no optional entry): first import shares the root and includes the parser; activation adds the deferred IDB factory. S4 a5b1ae1f compact installed-grant fix changed only the exact approved authority.ts blob; local same-worktree Bun 1.3.14 A/B was +7/+4 but canonical CI measured +6/+14 over prior 51785/66995, yielding final 51791/67009 with zero headroom. Activation 23071/24650, root, gated-only and hashed-worker ceilings remain unchanged."
+    },
+    {
+      "pr": "#565",
+      "ticket": "TC-858",
+      "replica.mjs": -11,
+      "replica.cjs": -33,
+      "activation.mjs": -40,
+      "activation.cjs": -39,
+      "note": "Optional first-import and IDB activation gzip deltas against this PR's merge base"
     }
   ]
 }

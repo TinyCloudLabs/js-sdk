@@ -72,6 +72,20 @@ export type MasterMergeResolution = {
   measuredPaths: Record<string, string>;
   attribution: Record<string, string>;
 };
+export type ActivationSizes = { "activation.mjs": number; "activation.cjs": number };
+/** One reviewed exact-delta admission for the TC-858 fix-before-stable hardening (#565). */
+export type HardeningRatchet = {
+  label: string;
+  ruling: string;
+  base: string;
+  sourceCommits: string[];
+  canonicalCI: { run: string; jobs: string[] };
+  root: { delta: GzipSizes; ceiling: GzipSizes };
+  firstImport: { delta: FirstImportSizes; ceiling: FirstImportSizes };
+  activation: { delta: ActivationSizes; ceiling: ActivationSizes };
+  worker: { delta: number; ceiling: number };
+  reason: string;
+};
 export type Ledger = {
   allowance: GzipSizes;
   entries: LedgerEntry[];
@@ -79,6 +93,7 @@ export type Ledger = {
   fixRequiredRatchet?: FixRequiredRatchet;
   canonicalToolchainCorrection?: CiToolchainCorrection;
   masterMergeResolution?: MasterMergeResolution;
+  hardeningRatchet?: HardeningRatchet;
 };
 
 const formats = ["index.mjs", "index.cjs"] as const;
@@ -178,6 +193,46 @@ export const approvedMasterMergeResolution: MasterMergeResolution = {
   },
 };
 
+/**
+ * Naomi's TC-858 ruling: the fix-before-stable hardening (#565) is admitted at exactly the bytes
+ * GitHub measured, after cuts, with no headroom. Every ceiling equals the canonical current value.
+ */
+export const approvedHardeningRatchet: HardeningRatchet = {
+  label: "TC-858 #565 fix-before-stable hardening (L1, L2, I1 and correctness P2s), exact canonical delta",
+  ruling: "Naomi TC-858 size ruling for skgbafa/tc-858-l1-l2-i1-hardening: cuts first, remainder by one reviewed exact-delta row at canonical CI bytes",
+  base: "31428720ce89be09cda7504f62709f6710e231b7",
+  sourceCommits: [
+    "afea5442a5d7bf99a447d44d027a5598795b5b4c",
+    "6a384842ffa00c05d4c735272946394687d00396",
+    "f5bbd4b905dc3984d5bb1075389976ddabdd541b",
+    "89b82fc2d016bd50e48c3a809258ee827f76788d",
+    "907e519acacdf4d2f263d50a69c8f8e0e8ff921d",
+    "ad08b6252847ef047cbe542d3e33108f55ad26dc",
+    "3bf25d63f11e75f243255c8c9c13f5df8a8a5a6d",
+  ],
+  canonicalCI: {
+    run: "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39005492877",
+    jobs: [
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39005492877/job/117316997311",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39005492877/job/117316997387",
+    ],
+  },
+  root: {
+    delta: { "index.mjs": 20, "index.cjs": 11 },
+    ceiling: { "index.mjs": 1464122, "index.cjs": 1394880 },
+  },
+  firstImport: {
+    delta: { "replica.mjs": 78, "replica.cjs": 71 },
+    ceiling: { "replica.mjs": 51869, "replica.cjs": 67080 },
+  },
+  activation: {
+    delta: { "activation.mjs": 4, "activation.cjs": 5 },
+    ceiling: { "activation.mjs": 23075, "activation.cjs": 24655 },
+  },
+  worker: { delta: 7, ceiling: 820108 },
+  reason: "Security L1/L2/I1 and correctness P2 fixes required before stable. Cuts applied first: the worker start-up report uses reportError (local worker +34 to +7, no client or protocol change); the recovery re-check has no safe smaller bound. Root +20/+11 carries L2's frozen registration copy; first-import +78/+71 carries L2's frozen plugin and the bounded recovery re-check; activation +4/+5 is measured with no activation-source change after the cut and is not attributed to one commit. Both jobs of run 39005492877 measured identical absolute bytes; the gated artifact is unchanged.",
+};
+
 export type GatedOnlyRatchet = {
   label: string;
   sourceCommit: string;
@@ -210,7 +265,7 @@ const historicalToolchain = "Bun 1.4.3; production webpack; gzip -9 -c";
 /** Only a git merge-base ledger may retain the pre-correction toolchain. */
 export function validateLedger(value: Ledger, historicalBase = false): void {
   if (!value || !value.allowance || !Array.isArray(value.entries) ||
-      Object.keys(value).some((key) => key !== "allowance" && key !== "entries" && key !== "phase2Ratchet" && key !== "fixRequiredRatchet" && key !== "canonicalToolchainCorrection" && key !== "masterMergeResolution")) {
+      Object.keys(value).some((key) => key !== "allowance" && key !== "entries" && key !== "phase2Ratchet" && key !== "fixRequiredRatchet" && key !== "canonicalToolchainCorrection" && key !== "masterMergeResolution" && key !== "hardeningRatchet")) {
     throw new Error("Invalid packages/web-sdk/scripts/replica-size-ledger.json shape");
   }
   if (Object.keys(value.allowance).some((key) => !formats.includes(key as typeof formats[number]))) {
@@ -265,6 +320,11 @@ export function validateLedger(value: Ledger, historicalBase = false): void {
        JSON.stringify(value.masterMergeResolution) !== JSON.stringify(approvedMasterMergeResolution))) {
     throw new Error("Only Naomi's exact reviewed #564/#548 merged store, manifest, and lock blobs are approved.");
   }
+  if (value.hardeningRatchet !== undefined &&
+      (!value.masterMergeResolution ||
+       JSON.stringify(value.hardeningRatchet) !== JSON.stringify(approvedHardeningRatchet))) {
+    throw new Error("Only Naomi's exact canonical #565 fix-before-stable hardening ratchet is approved.");
+  }
 }
 
 /** The resolved input blobs are introduced once and immutable in subsequent bases. */
@@ -274,6 +334,14 @@ export function validateMasterMergeResolutionTransition(
   if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedMasterMergeResolution) ||
       base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
     throw new Error("The exact #564/#548 merged-input resolution may be introduced once and cannot change later.");
+  }
+}
+
+/** The hardening row is introduced once at its exact canonical bytes and immutable afterwards. */
+export function validateHardeningRatchetTransition(base?: HardeningRatchet, current?: HardeningRatchet): void {
+  if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedHardeningRatchet) ||
+      base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
+    throw new Error("The exact #565 hardening ratchet may be introduced once and cannot change later.");
   }
 }
 
