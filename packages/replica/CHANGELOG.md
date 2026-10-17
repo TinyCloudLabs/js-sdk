@@ -1,5 +1,15 @@
 # @tinycloud/replica
 
+## Unreleased
+
+### Patch Changes
+
+- Ship the KV storage worker and its inlined WASM under a SHA-256 content-hashed
+  filename for immutable caching; retain the stable worker export for explicit
+  custom-worker imports without immutable caching.
+- Ratchet the content-hashed KV worker to its GitHub-measured Bun 1.3.14 /
+  Rust 1.99.0 gzip size, with zero headroom and a toolchain check.
+
 ## 0.2.4-beta.3
 
 ### Patch Changes

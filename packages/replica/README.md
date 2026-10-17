@@ -77,6 +77,35 @@ try {
 
 `get()` may return `present`, `content_missing`, `deleted`, `absent`, `coverage_incomplete`, or `not_covered`. Check its status before using a value. `sync()` returns `synced` with a report or `busy` when another tab holds the sync lock. Errors are `ReplicaError` instances with a stable `code`; browser exports `ReplicaError` and `ReplicaErrorCode` from its entry point. Local reads never make network requests, but they remain subject to grant and retention authority.
 
+### KV storage worker assets
+
+`@tinycloud/replica/kv-storage` starts its own module worker on first use unless
+`indexedDbReplicaStorage({ worker })` supplies a Worker, URL, string, or factory.
+The published ESM client uses a static `new URL("./kv-storage.worker.<sha256>.js", import.meta.url)`
+reference. The package build emits that SHA-256-named file alongside the client;
+it includes the inlined WASM and requires no separate network fetch or runtime
+manifest. Deploy the client and worker together, preserving their relative paths.
+Bundlers such as Vite resolve this literal URL into their own emitted worker
+asset and may transform its bytes and append a separate bundle fingerprint.
+
+The package also exports `@tinycloud/replica/kv-storage/worker` as the stable
+`kv-storage.worker.js` path for explicit `?url` imports/custom worker layouts.
+Its bytes match the SHA-256-named file, but its URL is **not** immutable. Hosts
+must serve the hashed worker with `Cache-Control: public, max-age=31536000, immutable`
+and must not apply that policy to `kv-storage.worker.js` or any other stable
+worker URL. Keep old hashed worker assets available while clients referencing
+them may still be cached.
+
+In the separate web SDK integration, the first local open loads the optional
+first-import chunk (51,791/67,009 gzip bytes ESM/CJS), deferred IndexedDB
+activation chunk (23,071/24,650), and worker budget (820,101). That is
+approximately 894,963/911,760 gzip bytes beyond the mandatory root on first
+use; subsequent opens reuse cacheable hashed assets when the host honors the
+immutable cache policy above. These optional costs do not waive the separate
+mandatory-root bundle budget. The worker ceiling has zero headroom against the
+GitHub Bun 1.3.14 / Rust 1.99.0 measurement; its checker rejects other
+toolchains before comparing bytes.
+
 ## Node and SQLite
 
 The SQLite store API is exported directly from `@tinycloud/replica/sqlite`:

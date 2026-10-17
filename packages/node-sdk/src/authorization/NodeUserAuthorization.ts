@@ -253,6 +253,11 @@ export interface NodeUserAuthorizationConfig {
    * scheduling never reach this layer.
    */
   replication?: Pick<ReplicationOptions, "enabled" | "prefixes" | "allowSecrets">;
+  /**
+   * Mints the replica session stamp on each fresh sign-in (TC-858 §4). Returns
+   * `undefined` when replication is off, so the persisted session carries no stamp.
+   */
+  establishReplicaStamp?: (session: TinyCloudSession) => Promise<PersistedSessionData["replicaStamp"]>;
 }
 
 export interface CreateBootstrapSessionOptions {
@@ -315,6 +320,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
   private readonly localNodeIdentityStore?: LocalNodeIdentityStore;
   private readonly enablePublicSpace: boolean;
   private readonly replication?: Pick<ReplicationOptions, "enabled" | "prefixes" | "allowSecrets">;
+  private readonly establishReplicaStamp?: NodeUserAuthorizationConfig["establishReplicaStamp"];
   private readonly nonce?: string;
   private readonly siweConfig?: SiweConfig;
   private readonly wasm: IWasmBindings;
@@ -409,6 +415,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
       config.includeAccountRegistryPermissions ?? true;
     this.replication =
       config.replication?.enabled === true ? config.replication : undefined;
+    this.establishReplicaStamp = config.establishReplicaStamp;
     this._manifest = config.manifest;
     this._capabilityRequest = config.capabilityRequest;
 
@@ -1386,6 +1393,33 @@ export class NodeUserAuthorization implements IUserAuthorization {
     };
   }
 
+  private persistedData(
+    session: TinyCloudSession,
+    expiresAt: string,
+    createdAt: string,
+    replicaStamp?: PersistedSessionData["replicaStamp"],
+  ): PersistedSessionData {
+    return {
+      address: session.address,
+      chainId: session.chainId,
+      sessionKey: JSON.stringify(session.jwk),
+      siwe: session.siwe,
+      signature: session.signature,
+      tinycloudSession: {
+        delegationHeader: session.delegationHeader,
+        delegationCid: session.delegationCid,
+        spaceId: session.spaceId,
+        spaces: session.spaces,
+        verificationMethod: session.verificationMethod,
+      },
+      expiresAt,
+      createdAt,
+      version: "1.0",
+      tinycloudHosts: this.tinycloudHosts,
+      ...(replicaStamp ? { replicaStamp } : {}),
+    };
+  }
+
   /**
    * Sign in and create a new session.
    *
@@ -1502,25 +1536,13 @@ export class NodeUserAuthorization implements IUserAuthorization {
       signature,
     };
 
-    // Persist session with TinyCloud-specific data
-    const persistedData: PersistedSessionData = {
-      address,
-      chainId,
-      sessionKey: JSON.stringify(jwk),
-      siwe: prepared.siwe,
-      signature,
-      tinycloudSession: {
-        delegationHeader: session.delegationHeader,
-        delegationCid: session.delegationCid,
-        spaceId,
-        spaces: spacesMetadata,
-        verificationMethod: this.sessionManager.getDID(keyId),
-      },
-      expiresAt: expirationTime.toISOString(),
-      createdAt: now.toISOString(),
-      version: "1.0",
-      tinycloudHosts: this.tinycloudHosts,
-    };
+    const replicaStamp = await this.establishReplicaStamp?.(tinyCloudSession);
+    const persistedData = this.persistedData(
+      tinyCloudSession,
+      expirationTime.toISOString(),
+      now.toISOString(),
+      replicaStamp,
+    );
     await this.enqueuePersistence(async () => {
       await this.sessionStorage.save(address, persistedData);
       // Signed out while saving: remove exactly the record this save wrote.
@@ -1753,32 +1775,15 @@ export class NodeUserAuthorization implements IUserAuthorization {
     };
 
     // Extract expiration from SIWE message (parse the string)
-    const expirationMatch = prepared.siwe.match(/Expiration Time: (.+)/);
-    const issuedAtMatch = prepared.siwe.match(/Issued At: (.+)/);
+    const expirationMatch = prepared.siwe?.match(/Expiration Time: (.+)/);
+    const issuedAtMatch = prepared.siwe?.match(/Issued At: (.+)/);
     const expiresAt =
       expirationMatch?.[1] ??
       new Date(Date.now() + this.sessionExpirationMs).toISOString();
     const createdAt = issuedAtMatch?.[1] ?? new Date().toISOString();
 
-    // Persist session with TinyCloud-specific data
-    const persistedData: PersistedSessionData = {
-      address,
-      chainId,
-      sessionKey: JSON.stringify(jwk),
-      siwe: prepared.siwe,
-      signature,
-      tinycloudSession: {
-        delegationHeader: session.delegationHeader,
-        delegationCid: session.delegationCid,
-        spaceId: prepared.spaceId,
-        spaces: spacesMetadata,
-        verificationMethod: this.sessionManager.getDID(keyId),
-      },
-      expiresAt,
-      createdAt,
-      version: "1.0",
-      tinycloudHosts: this.tinycloudHosts,
-    };
+    const replicaStamp = await this.establishReplicaStamp?.(tinyCloudSession);
+    const persistedData = this.persistedData(tinyCloudSession, expiresAt, createdAt, replicaStamp);
     await this.sessionStorage.save(address, persistedData);
 
     // Set current session

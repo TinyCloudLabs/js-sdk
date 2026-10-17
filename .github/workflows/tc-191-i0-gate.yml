@@ -81,9 +81,12 @@ jobs:
           bun run --cwd packages/sdk-rs build:wasm:web
           bun run --cwd packages/sdk-rs/packages/web build
 
+      # web-sdk's opt-in replica entries type-check against @tinycloud/replica's
+      # built declarations (kv-storage, profile-gate), so build replica first.
       - name: Build node and web SDK declarations
         run: |
           bun run --cwd packages/node-sdk build
+          bun run --cwd packages/replica build
           bun run --cwd packages/web-sdk build
 
       - name: Build operations package
@@ -91,7 +94,6 @@ jobs:
 
       - name: Build the packed CLI artifact
         run: |
-          bun run --cwd packages/replica build
           bun run --cwd packages/courier build
           bun run --cwd packages/cli build
 

@@ -46,6 +46,97 @@ const result = await storage.get('myKey');
 console.log(result.data); // { hello: 'world' }
 ```
 
+## Optional local KV replication
+
+Install `@tinycloud/replica`, then load and register the optional browser plugin
+**before** constructing a replication-enabled client:
+
+```typescript
+import { TinyCloudWeb, registerBrowserReplica } from '@tinycloud/web-sdk';
+import { browserReplicaPlugin, loadIndexedDbReplicaStorage } from '@tinycloud/web-sdk/replica';
+
+const indexedDbReplicaStorage = await loadIndexedDbReplicaStorage();
+registerBrowserReplica(browserReplicaPlugin);
+const tc = new TinyCloudWeb({
+  replication: {
+    enabled: true,
+    prefixes: ['notes/'],
+    storage: indexedDbReplicaStorage(),
+  },
+});
+```
+
+Importing the optional entry alone does not register loaders or touch IndexedDB.
+Duplicate registration throws immediately; enabling replication without
+registration throws at construction. Replication off requires no plugin, and a
+refused local replica does not end an otherwise valid network session.
+
+Use the same module format for registration and the client: importing both
+ESM and CJS root bundles in one process creates independent module registries.
+
+`signIn()` selects a persisted session for the currently connected wallet;
+switching wallets starts a fresh sign-in instead of reviving the prior wallet's
+session. Explicit `restoreSession(address)` can restore a valid network session,
+but local replication also requires that the provider currently reports that
+wallet. An unknown, unavailable, or different provider account leaves network
+use intact and gates local reads; restoring never creates or repairs a replica
+stamp. Local reads recheck the connected account before returning replica data.
+
+Size accounting uses the replica-e2e **Node size job** (Bun 1.3.14,
+Rust 1.99.0), an absolute web-root ceiling, and separate opt-in first-import,
+activation, and worker ceilings. The historical Phase 2 allowance of
+1,461,925 B ESM / 1,391,665 B CJS was measured against master `9891ed9d`
+at 1,460,603 / 1,390,460 B; the reviewed fix-required row at `ddc032ca`
+raised that historical ceiling to 1,462,034 / 1,391,799 B for copied-proof
+restore, gated read events, durable denial, and GRANT_REVOKED projection.
+The old 388 / 861 B allowance and #546/#553 ledger entries remain unchanged.
+The historical file marginals are nonadditive; no synchronous TC-1208 fence moved.
+
+GitHub's replica-e2e Node size jobs measured the **same approved shipped source**
+under Bun 1.3.14 / Rust 1.99.0: master `9891ed9d` at
+1,462,590 / 1,393,500 B and #548 `e5b080d5` at
+1,464,102 / 1,394,869 B. The zero-headroom root ceilings are
+1,464,102 / 1,394,869 B (+1,512 / +1,369 B against that CI baseline).
+The earlier local 1,462,685 / 1,393,687 B baseline and
+1,464,189 / 1,395,035 B candidate are recorded as **non-canonical smoke**
+measurements; the prior +1,431 / +1,339 B and root ceilings remain
+historical, not additive allowance. The diff from `ddc032ca` to
+`2acd4ac5` changes only web size scripts, ledgers, tests and this README;
+no shipped source or build input changed. The checker refuses mismatched local
+Bun/Rust versions and later changes to this corrected ratchet.
+
+The opt-in first-import ceiling is 51,791 B ESM / 67,009 B CJS gzip
+(including the replica parser and noble dependencies); awaiting the IndexedDB
+factory has a separate 23,071 B / 24,650 B ceiling. The content-hashed worker
+and WASM asset has an 820,101 B ceiling owned by `@tinycloud/replica`.
+A compliant first local open therefore costs at most 894,963 B ESM /
+911,760 B CJS incremental gzip beyond the already-loaded web root; those
+assets can then be cached. These byte ceilings do not replace real-worker
+Chromium acceptance of local reads, denial, expiry, and sign-out.
+
+A refused replica admission (stale, missing, or malformed restore stamp, or
+failed fresh establishment) loads a separate network-only read observer capped
+at 926 B ESM / 1,014 B CJS gzip. Successful opt-ins and replica-off clients
+never fetch it; sign-out uses the already-loaded authority. If this observer
+cannot load, the signed network session remains usable and local reads stay gated.
+
+The original 51,201/66,132 B first-import ceiling was a Bun toolchain
+measurement correction, not adapter allowance: exact `ce52494d` built with
+Bun 1.3.14 measured 51,201/66,132 B versus 45,538/65,096 B with Bun 1.4.3
+on the same SDK. The approved fix-required row added 584/863 B. Subsequent
+local Rust 1.99.0 rebuild measurements (+1 ESM first-import, +2/+3 B
+activation) were non-canonical; GitHub's [Postgres Node size job 117262499817](https://github.com/TinyCloudLabs/js-sdk/actions/runs/38987573493/job/117262499817)
+measured #548 `1873c27d` at 51,791/67,009 B first-import and
+23,071/24,650 B activation, at the exact ledger ceilings.
+The [replica-e2e Node size job 117166290134](https://github.com/TinyCloudLabs/js-sdk/actions/runs/38958197518/job/117166290134)
+ran rustc 1.99.0 for WASM and the Phase-1 size step; the separate
+[Chromium job 117166289795](https://github.com/TinyCloudLabs/js-sdk/actions/runs/38958197518/job/117166289795)
+ran rustc 1.99.1 and does not set the web-root size baseline.
+The [SQLite Node size job 117210798521](https://github.com/TinyCloudLabs/js-sdk/actions/runs/38971529166/job/117210798521)
+and [Postgres Node size job 117210798348](https://github.com/TinyCloudLabs/js-sdk/actions/runs/38971529166/job/117210798348)
+independently reported identical root and optional gzip bytes on `e5b080d5`;
+the historical local measurements cannot set ledger ceilings.
+
 ## Basic Storage Operations
 
 ### Storing Data

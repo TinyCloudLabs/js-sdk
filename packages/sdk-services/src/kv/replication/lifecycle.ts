@@ -47,7 +47,7 @@ export interface ReplicaAccountGate {
   /** Active account's principal hash; null after sign-out. */
   principalHash: string | null;
   lifecycleEpoch: number;
-  /** ms since epoch of the last deny (browser: preserved across database recreation). */
+  /** ms since epoch of the last committed deny (browser: preserved across database recreation). */
   deniedAt: number | null;
   /** Browser: finite ms, fixed from verified fresh consent at establish; mandatory while active. */
   consentDeadline?: number | null;
@@ -343,6 +343,12 @@ export interface ReplicaLifecycleGate {
    * return null when its gate has no persisted consent deadline.
    */
   consentDeadline(stamp: ReplicaSessionStamp): number | null;
+  /**
+   * Browser-only post-commit consent expiry observer. Fires only after deny/delete
+   * destroys the origin account keys; a subscriber failure cannot undo denial.
+   * Controllers register after binding so events use their opened opaque replica IDs.
+   */
+  subscribeConsentExpired?(listener: (stamp: ReplicaSessionStamp) => void): () => void;
   /**
    * Synchronous main-thread delivery check before replica-served values/list keys/event fields,
    * and before open, installGrant and sync. Browser checks marker, origin deny tombstone,

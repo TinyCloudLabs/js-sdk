@@ -28,6 +28,7 @@ process.env.TC_HOME = home;
 const { ProfileManager } = await import("../config/profiles.js");
 const { PROFILES_DIR } = await import("../config/constants.js");
 const { createReplica, profileGuard, registerReplicaCommand, replicaSecretsWarning } = await import("./replica.js");
+const { registerAuthCommand } = await import("./auth.js");
 const { removeProfileReplicas } = await import("../lib/profile-replicas.js");
 const { profilePath, withPinnedProfileDirectory } = await import("@tinycloud/operations/state");
 const { createReplicationEventSink } = await import("../lib/replication-log.js");
@@ -1115,5 +1116,92 @@ describe("a replica over the SDK's kv/sync", () => {
     const read = await replica.get(key);
     expect(read.status === "present" && new TextDecoder().decode(read.value)).toBe("kept");
     await store.close();
+  });
+});
+
+type CliResult = { exited: boolean; stdout: string; stderr: string };
+
+async function logoutFromCli(profile: string): Promise<CliResult> {
+  const program = new Command().option("--profile <name>").option("--json");
+  registerAuthCommand(program);
+  const previousExit = process.exit;
+  const previousOutput = process.stdout.write;
+  const previousError = process.stderr.write;
+  let stdout = "";
+  let stderr = "";
+  let exited = false;
+  process.exit = (() => { throw new Error("expected CLI exit"); }) as typeof process.exit;
+  process.stdout.write = ((chunk: string | Uint8Array) => { stdout += Buffer.from(chunk).toString("utf8"); return true; }) as typeof process.stdout.write;
+  process.stderr.write = ((chunk: string | Uint8Array) => { stderr += Buffer.from(chunk).toString("utf8"); return true; }) as typeof process.stderr.write;
+  try {
+    await program.parseAsync(["node", "tc", "--profile", profile, "--json", "auth", "logout"], { from: "node" });
+  } catch (error) {
+    if (!(error instanceof Error) || error.message !== "expected CLI exit") throw error;
+    exited = true;
+  } finally {
+    process.exit = previousExit;
+    process.stdout.write = previousOutput;
+    process.stderr.write = previousError;
+  }
+  return { exited, stdout, stderr };
+}
+
+// CONTRACT.md:485-486: an explicit plain logout always ends the network session,
+// even while replica erase remains pending, and says so truthfully.
+describe("plain auth logout with real profile replicas", () => {
+  const replicaDb = join(PROFILES_DIR, PROFILE, "replicas", "notes", "replica.db");
+
+  test("removes the replicas and clears the session", async () => {
+    const store = await createReplica(PROFILE, config);
+    await store.close();
+    await ProfileManager.setSession(PROFILE, { delegationCid: "doomed-session" });
+
+    const result = await logoutFromCli(PROFILE);
+
+    expect(result.exited).toBe(false);
+    expect(JSON.parse(result.stdout)).toMatchObject({ profile: PROFILE, authenticated: false, replicasRemoved: ["notes"] });
+    expect(await ProfileManager.getSession(PROFILE)).toBeNull();
+    expect(await exists(replicaDb)).toBe(false);
+  });
+
+  test("clears the session and says so when a replica is still syncing", async () => {
+    const store = await createReplica(PROFILE, config);
+    expect(await store.acquireSyncLease(60_000)).not.toBeNull();
+    await store.close();
+    await ProfileManager.setSession(PROFILE, { delegationCid: "doomed-session" });
+
+    const result = await logoutFromCli(PROFILE);
+
+    expect(result.exited).toBe(true);
+    const { error } = JSON.parse(result.stderr) as { error: { code: string; message: string } };
+    expect(error.code).toBe("REPLICA_BUSY");
+    expect(error.message).toContain(`Logout cleared the session, but replica "notes" is syncing. No replicas were removed.`);
+    expect(error.message).not.toContain("kept");
+    expect(await ProfileManager.getSession(PROFILE)).toBeNull();
+    expect(await exists(replicaDb)).toBe(true);
+  });
+
+  test.each(["darwin", "win32"])("on %s clears the session and reports the untouched replicas truthfully", async (platform) => {
+    const store = await createReplica(PROFILE, config);
+    await store.close();
+    await ProfileManager.setSession(PROFILE, { delegationCid: "doomed-session" });
+    const originalPlatform = process.platform;
+    Object.defineProperty(process, "platform", { value: platform });
+    let result: CliResult;
+    try {
+      result = await logoutFromCli(PROFILE);
+    } finally {
+      Object.defineProperty(process, "platform", { value: originalPlatform });
+    }
+
+    expect(result.exited).toBe(true);
+    expect(result.stdout).toBe("");
+    const { error } = JSON.parse(result.stderr) as { error: { code: string; message: string } };
+    expect(error.code).toBe("REPLICA_PURGE_FAILED");
+    expect(error.message).toContain("cleared the session");
+    expect(error.message).toContain("pinned replica removal is unavailable on this platform");
+    expect(error.message).not.toContain("kept");
+    expect(await ProfileManager.getSession(PROFILE)).toBeNull();
+    expect(await exists(replicaDb)).toBe(true);
   });
 });

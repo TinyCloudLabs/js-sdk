@@ -249,8 +249,15 @@ export class Replica {
    * active grant serves: a revoked pending grant is discarded, any other
    * refusal is recorded on it. A revocation of the grant serving the replica,
    * learned anywhere in the sync, purges the replica before this returns.
+   *
+   * `signal` cancels between commits: an aborted sync commits nothing past
+   * its last complete page. `finish` runs once every feed page, repair batch
+   * and the GC have committed, still under the sync lease — a sync that fails
+   * or aborts earlier never reaches it.
    */
-  async sync(options: { limit?: number; signal?: AbortSignal } = {}): Promise<SyncReport> {
+  async sync(
+    options: { limit?: number; signal?: AbortSignal; finish?: (lease: LeaseToken) => Promise<void> } = {},
+  ): Promise<SyncReport> {
     const transportFor = this.#transportFor;
     if (transportFor === undefined) throw new Error("Replica.sync needs a transport");
     const initial = await this.#state();
@@ -273,7 +280,12 @@ export class Replica {
           signal: options.signal,
         };
         try {
-          return await this.#syncUnder(attempt, options.limit ?? DEFAULT_PAGE_LIMIT);
+          const report = await this.#syncUnder(attempt, options.limit ?? DEFAULT_PAGE_LIMIT);
+          if (options.finish !== undefined) {
+            options.signal?.throwIfAborted();
+            await options.finish(lease);
+          }
+          return report;
         } catch (error) {
           const canFallBack = pending && attempt.promote !== null && index < candidates.length - 1;
           if (canFallBack && isReplicaError(error, ReplicaErrorCode.GRANT_REVOKED)) {
@@ -384,6 +396,7 @@ export class Replica {
       coverage = page.more ? (coverage === "complete" ? "complete" : "bootstrapping") : "complete";
       const at = new Date(this.#now()).toISOString();
       // The store checks `window` against its clock inside the commit transaction.
+      attempt.signal?.throwIfAborted();
       await this.#store.applyPage(attempt.lease, {
         changes: verified.changes,
         blobs: verified.blobs,
@@ -524,6 +537,7 @@ export class Replica {
       await this.#store.renewLease(attempt.lease, this.#leaseTtlMs);
       if (changes.length === 0) continue;
       const state = await this.#state();
+      attempt.signal?.throwIfAborted();
       await this.#store.applyPage(attempt.lease, {
         changes,
         blobs,

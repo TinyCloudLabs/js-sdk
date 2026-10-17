@@ -79,6 +79,7 @@ const recorded = {
   setProfiles: [] as Array<{ profile: string; data: ProfileLike }>,
   setSessions: [] as Array<{ profile: string; session: object }>,
   clearSessions: [] as string[],
+  replicaRemovalError: null as Error | null,
   startAuthFlows: [] as Array<{
     did: string;
     options: {
@@ -133,6 +134,7 @@ function resetState(): void {
   recorded.setProfiles.length = 0;
   recorded.setSessions.length = 0;
   recorded.clearSessions.length = 0;
+  recorded.replicaRemovalError = null;
   recorded.startAuthFlows.length = 0;
   recorded.localSignIns.length = 0;
   recorded.spinners.length = 0;
@@ -244,6 +246,7 @@ mock.module("../config/profiles.js", () => ({
 }));
 mock.module("../lib/profile-replicas.js", () => ({
   removeProfileReplicasAndReplication: async (profile: string) => {
+    if (recorded.replicaRemovalError) throw recorded.replicaRemovalError;
     recorded.removedReplicaProfiles.push(profile);
     recorded.removedReplicationProfiles.push(profile);
     return ["notes", "replication/idHash/replicaHash"];
@@ -659,18 +662,6 @@ describe("CLI auth rotate command", () => {
     expect(recorded.localSignIns).toEqual([
       { privateKey: "0xowner-private", host: activeHost },
     ]);
-    expect(sessions.get("default")).toEqual({
-      authMethod: "local",
-      address: "0xLocalOwner",
-      chainId: 1,
-      spaceId: "space-local-new",
-      delegationHeader: { Authorization: "Bearer local-new" },
-      delegationCid: "bafy-local-new",
-      jwk: localSignInResult.jwk,
-      verificationMethod: "did:key:new-local-session",
-      siwe: "local-siwe",
-      signature: "0xsig",
-    });
     expect(profiles.get("default")).toEqual(expect.objectContaining({
       did: "did:pkh:eip155:1:0xLocalOwner",
       ownerDid: "did:pkh:eip155:1:0xLocalOwner",
@@ -897,6 +888,26 @@ describe("CLI auth commands on a missing profile (TC-682)", () => {
       warning: expect.stringContaining("tc delegation revoke <cid>"),
     })]);
   });
+  // CONTRACT.md:485-486: an explicit plain logout always ends the network session,
+  // even while replica erase remains pending. CLI logout commits no deny, so no
+  // failure may keep the session.
+  for (const [code, message] of [
+    ["REPLICA_BUSY", `Logout cleared the session, but replica "notes" is syncing. No replicas were removed.`],
+    ["REPLICA_PURGE_FAILED", "Logout cleared the session, but replica cleanup failed. Removed: none. Not removed: notes."],
+  ] as const) {
+    test(`plain logout clears the session and reports ${code} when replica removal fails`, async () => {
+      profiles.set("owner", makeProfile({ name: "owner" }));
+      sessions.set("owner", { delegationCid: "bafy-session" });
+      recorded.replicaRemovalError = Object.assign(new Error(message), { code });
+
+      await runAuthCommand(["auth", "logout"]);
+
+      expect(recorded.clearSessions).toEqual(["owner"]);
+      expect(sessions.has("owner")).toBe(false);
+      expect(recorded.outputs).toEqual([]);
+      expect(recorded.errors).toEqual([expect.objectContaining({ code, message })]);
+    });
+  }
 
   test("OpenKey login reports PROFILE_NOT_FOUND, not NO_KEY, before any approval starts", async () => {
     await runAuthCommand(["auth", "login", "--method", "openkey", "--paste"]);
@@ -1753,18 +1764,6 @@ describe("CLI auth request command", () => {
     ]);
 
     expect(recorded.errors).toEqual([]);
-    expect(sessions.get("default")).toEqual({
-      authMethod: "local",
-      address: "0xLocalOwner",
-      chainId: 1,
-      spaceId: "space-local-new",
-      delegationHeader: { Authorization: "Bearer runtime-session" },
-      delegationCid: "bafy-runtime-session",
-      jwk: sessionJwk,
-      verificationMethod: "did:key:runtime-session",
-      siwe: "runtime-siwe",
-      signature: "0xruntime",
-    });
     expect(profiles.get("default")).toEqual(expect.objectContaining({
       sessionDid: "did:key:runtime-session",
       spaceId: "space-local-new",

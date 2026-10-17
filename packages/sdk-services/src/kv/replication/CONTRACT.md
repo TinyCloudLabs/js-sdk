@@ -216,6 +216,7 @@ authority state.
 **Peer commits.** `spec.onPeerCommit` is called when **another** tab or process commits a sync for the partition (browser: the worker's `committed` message on `REPLICA_KV_CHANNEL`). It is never called for the handle's own commits, and it must not throw. The controller emits `replication.sync` with `trigger: "peer"` and `origin: "peer"`, and does not sync.
 
 **Error precedence:** `REPLICA_GATED` for an already denied/stale stamp; an active browser consent deadline reaches `CONSENT_EXPIRED` before `GRANT_EXPIRED`; then `RESET_REQUIRED` for erased handles, other `GRANT_*`, storage and network codes. The typed deadline transition (§2) is observable even if the timer denies before an adapter read.
+**Node/CLI root capability precedence:** locally decidable `/` configuration errors precede the replica gate, but `kv-sync-root` support requires the node's `/info` and MUST NOT be queried before a deliverable stamp; without an established stamp status is `gated`/`not_established`, and only after the gate permits network access may an unsupported node report `unavailable`/`REPLICATION_ROOT_UNSUPPORTED`.
 
 ## 2. Lifecycle and epoch gate
 
@@ -476,7 +477,7 @@ a stamp is dropped. This includes get bytes, list keys and replica-derived diver
    **fresh authenticated session** can set it after the old purge and mint new keys.
    Until then, B's KV goes to the network. Old-key `nextHash` is never reused.
 
-**`signOut` resolves** only after this tab's handles are cancelled and closed **and** step 1 has committed (or returned a fallback outcome). Erasure continues in the background.
+**`signOut` resolves** only after this tab's handles are cancelled and closed **and** step 1 has committed (or returned a fallback outcome). It does not wait for erasure: in the browser, the outstanding purge intents are erased on the next load or `recover()` (§ Startup step 4).
 
 A transient `BUSY`, lock timeout or retryable I/O failure **before erase** does
 not end the user's network session; the deny/tombstone has already gated the

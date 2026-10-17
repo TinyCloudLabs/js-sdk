@@ -14,6 +14,16 @@
       "require": "./dist/index.cjs",
       "default": "./dist/index.mjs"
     },
+    "./replica": {
+      "types": "./dist/replica.d.ts",
+      "import": "./dist/replica.mjs",
+      "require": "./dist/replica.cjs"
+    },
+    "./replica-gated": {
+      "types": "./dist/replica-gated.d.ts",
+      "import": "./dist/replica-gated.mjs",
+      "require": "./dist/replica-gated.cjs"
+    },
     "./package.json": "./package.json"
   },
   "repository": {
@@ -44,6 +54,7 @@
     "@multiformats/multiaddr": "^13.0.1",
     "@multiformats/multiaddr-to-uri": "^12.0.0",
     "@tinycloud/node-sdk": "3.2.6-beta.6",
+    "@tinycloud/replica": "0.2.4-beta.3",
     "@tinycloud/sdk-core": "3.2.6-beta.4",
     "@tinycloud/share-envelope": "1.1.0",
     "@tinycloud/share-sdk": "1.1.1",
