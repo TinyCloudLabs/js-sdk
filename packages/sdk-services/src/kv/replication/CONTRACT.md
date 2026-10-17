@@ -281,8 +281,15 @@ never recreated, and a gate whose `lifecycleEpoch` or `deniedAt` is behind the f
 malformed floor) fails closed (`gate_unavailable`); a later deny may move such a gate forward.
 **Recovery:** network access is unaffected, but local replicas stay disabled for that profile.
 `tc replica reset --replica <name> --purge` removes only a named replica and does not rewrite the
-gate, so the route is a fresh profile: `tc profile delete <name>`, then sign in again. The
-refusal message names this route.
+gate, so the route is a fresh profile: `tc profile delete <name>`, then sign in again. The CLI
+refuses to delete the default profile, so switch the default first (`tc profile switch <other>`).
+The refusal message names this route.
+**Deleting both files:** if both `replica-gate.json` and `replica-deny-floor.json` are deleted, the
+profile is indistinguishable from first use and a new gate is created. Its fresh incarnation makes
+every older persisted stamp stale, and a new stamp still requires `establishSessionStamp` from a
+fresh interactive sign-in with an independently verified finite-expiration owner SIWE (§3); restore
+never establishes one. What is lost with the files is the `deniedAt` floor, the check that this
+SIWE was issued after the last sign-out.
 
 **The gate is mandatory with replication on.**
 - `indexedDbReplicaStorage()` MUST expose `lifecycle`, and the web runtime refuses storage without it with `RUNTIME_UNSUPPORTED`.

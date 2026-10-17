@@ -203,7 +203,8 @@ async function readDenyFloor(profileDir: string): Promise<DenyFloor | undefined>
  * recovery is a fresh profile; network access is unaffected.
  */
 const LOST_GATE_RECOVERY =
-  "Local replicas stay disabled for this profile; to start over, delete it (`tc profile delete <name>`) and sign in again.";
+  "Local replicas stay disabled for this profile; to start over, delete it (`tc profile delete <name>`; " +
+  "for the default profile, switch the default first with `tc profile switch <other>`) and sign in again.";
 
 /**
  * The stored state, or `undefined` when no gate file exists and no deny ever committed. Never
