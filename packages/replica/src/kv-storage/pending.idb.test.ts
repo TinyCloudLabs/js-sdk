@@ -54,6 +54,8 @@ let gate: TestGate;
 let stamp: ReplicaSessionStamp;
 
 beforeEach(async () => {
+  // Another IDB suite may have installed fake Web Locks on the shared global.
+  Object.defineProperty(globalThis, "navigator", { configurable: true, writable: true, value: { locks: undefined } });
   await requestAsPromise(indexedDB.deleteDatabase(KV_DATABASE));
   gate = createTestGate();
   stamp = await gate.establish(PRINCIPAL);

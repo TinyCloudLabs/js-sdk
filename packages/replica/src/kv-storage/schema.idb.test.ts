@@ -65,26 +65,40 @@ async function rowsOf(storeName: string, id: string): Promise<number> {
 
 describe("origin schema cutover", () => {
   test("read-only inspection does not upgrade plaintext v1; writable open atomically drops its rows", async () => {
-    const legacyRequest = fakeIndexedDB.open(KV_DATABASE, 1);
-    legacyRequest.onupgradeneeded = () => legacyRequest.result.createObjectStore(KV_STORE.blobs);
-    const legacy = await requestAsPromise(legacyRequest);
-    const write = legacy.transaction(KV_STORE.blobs, "readwrite");
-    const written = transactionDone(write);
-    write.objectStore(KV_STORE.blobs).put({ bytes: "legacy plaintext" }, ["partition", "hash"]);
-    await written;
-    legacy.close();
+    // A preceding v2 test must not prevent the v1 migration scenario.
+    const previous = (await openKvDatabase({ create: true }))!;
+    previous.close();
+    await requestAsPromise(fakeIndexedDB.deleteDatabase(KV_DATABASE));
 
-    expect(await openKvDatabase({ create: false })).toBeNull();
-    const untouched = await requestAsPromise(fakeIndexedDB.open(KV_DATABASE));
-    expect(untouched.version).toBe(1);
-    expect(await requestAsPromise(untouched.transaction(KV_STORE.blobs).objectStore(KV_STORE.blobs).count())).toBe(1);
-    untouched.close();
+    let legacy: IDBDatabase | undefined;
+    let untouched: IDBDatabase | undefined;
+    let upgraded: IDBDatabase | undefined;
+    try {
+      const legacyRequest = fakeIndexedDB.open(KV_DATABASE, 1);
+      legacyRequest.onupgradeneeded = () => legacyRequest.result.createObjectStore(KV_STORE.blobs);
+      legacy = await requestAsPromise(legacyRequest);
+      const write = legacy.transaction(KV_STORE.blobs, "readwrite");
+      const written = transactionDone(write);
+      write.objectStore(KV_STORE.blobs).put({ bytes: "legacy plaintext" }, ["partition", "hash"]);
+      await written;
+      legacy.close();
 
-    const upgraded = (await openKvDatabase({ create: true }))!;
-    expect(upgraded.version).toBe(2);
-    expect(await requestAsPromise(upgraded.transaction(KV_STORE.blobs).objectStore(KV_STORE.blobs).count())).toBe(0);
-    expect(upgraded.objectStoreNames.contains(KV_STORE.gate)).toBe(true);
-    upgraded.close();
+      expect(await openKvDatabase({ create: false })).toBeNull();
+      untouched = await requestAsPromise(fakeIndexedDB.open(KV_DATABASE));
+      expect(untouched.version).toBe(1);
+      expect(await requestAsPromise(untouched.transaction(KV_STORE.blobs).objectStore(KV_STORE.blobs).count())).toBe(1);
+      untouched.close();
+
+      upgraded = (await openKvDatabase({ create: true }))!;
+      expect(upgraded.version).toBe(2);
+      expect(await requestAsPromise(upgraded.transaction(KV_STORE.blobs).objectStore(KV_STORE.blobs).count())).toBe(0);
+      expect(upgraded.objectStoreNames.contains(KV_STORE.gate)).toBe(true);
+    } finally {
+      legacy?.close();
+      untouched?.close();
+      upgraded?.close();
+      await requestAsPromise(fakeIndexedDB.deleteDatabase(KV_DATABASE));
+    }
   });
 });
 

@@ -23,8 +23,8 @@ const storage = {
 };
 
 beforeAll(() => {
-  Object.defineProperty(globalThis, "indexedDB", { configurable: true, value: fakeIndexedDB });
-  Object.defineProperty(globalThis, "IDBKeyRange", { configurable: true, value: fakeIDBKeyRange });
+  Object.defineProperty(globalThis, "indexedDB", { configurable: true, writable: true, value: fakeIndexedDB });
+  Object.defineProperty(globalThis, "IDBKeyRange", { configurable: true, writable: true, value: fakeIDBKeyRange });
   Object.defineProperty(globalThis, "localStorage", { configurable: true, value: storage });
 });
 
