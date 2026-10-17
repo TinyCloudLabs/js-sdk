@@ -2,8 +2,8 @@ import { describe, expect, it } from "bun:test";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import {
-  compactFixOptionalAllowance, correctedOptionalAllowance, hardeningOptionalAllowance, validateOptionalEntryTransition,
-  validateOptionalLedger, type OptionalLedger,
+  compactFixOptionalAllowance, correctedOptionalAllowance, hardeningOptionalAllowance, validateIntroducedOptionalSources,
+  validateOptionalEntryTransition, validateOptionalLedger, type OptionalLedger,
 } from "./replica-optional-size-policy";
 
 const current = JSON.parse(readFileSync(resolve(import.meta.dir, "replica-optional-size-ledger.json"), "utf8")) as OptionalLedger;
@@ -183,5 +183,27 @@ describe("TC-858 #565 hardening optional allowance", () => {
     const stale = copy();
     stale.allowance = compactFixOptionalAllowance;
     expect(() => validateOptionalLedger(stale, true, true, true)).toThrow();
+  });
+});
+
+describe("TC-858 squash-merged source commits", () => {
+  // #548 was squash-merged, so its branch commits b796dc52, ce52494d and 2578c6a7 are not in master.
+  it("does not require branch source commits for rows already in the merge base", () => {
+    expect(() => validateIntroducedOptionalSources(current, current)).not.toThrow();
+  });
+
+  it("requires each newly introduced row's source commit in HEAD", () => {
+    const withoutCompactFix = copy();
+    delete withoutCompactFix.fixRequired;
+    expect(() => validateIntroducedOptionalSources(withoutCompactFix, current))
+      .toThrow("compact fix requires the integrated source commit");
+    const withoutCorrection = copy();
+    delete withoutCorrection.measurementCorrection;
+    expect(() => validateIntroducedOptionalSources(withoutCorrection, current))
+      .toThrow("ce52494d measurement correction requires its approved source ancestor");
+    const withoutRelocations = copy();
+    delete withoutRelocations.relocations;
+    expect(() => validateIntroducedOptionalSources(withoutRelocations, current))
+      .toThrow("approved relocation commit is not an ancestor of HEAD");
   });
 });

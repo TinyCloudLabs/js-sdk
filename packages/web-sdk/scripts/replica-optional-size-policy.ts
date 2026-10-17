@@ -133,33 +133,41 @@ export function validateOptionalLedger(
         JSON.stringify(value.fixRequired) !== JSON.stringify([approvedCompactFixRequired])))) {
     throw new Error(`${path}: only the exact paired relocation, canonical toolchain correction and reviewed fix-required first-import caps are approved`);
   }
-  if (hasCompactFix) {
+  validateGatedOnlyRatchet(value.gatedOnlyRatchet);
+}
+
+/**
+ * A pull request that introduces a source-backed row must contain that row's source commit. Squash
+ * merges leave branch commits out of master, so rows already in the merge base are not re-checked;
+ * validateOptionalLedger keeps them pinned to the exact approved values.
+ */
+export function validateIntroducedOptionalSources(base: OptionalLedger, current: OptionalLedger): void {
+  const path = "packages/web-sdk/scripts/replica-optional-size-ledger.json";
+  const sources = [
+    {
+      introduced: current.relocations !== undefined && base.relocations === undefined,
+      commit: relocationCommit,
+      error: "approved relocation commit is not an ancestor of HEAD",
+    },
+    {
+      introduced: current.measurementCorrection !== undefined && base.measurementCorrection === undefined,
+      commit: approvedMeasurementCorrection.commit,
+      error: "ce52494d measurement correction requires its approved source ancestor",
+    },
+    {
+      introduced: current.fixRequired !== undefined && base.fixRequired === undefined,
+      commit: approvedCompactFixRequired.integratedCommit,
+      error: "compact fix requires the integrated source commit",
+    },
+  ];
+  for (const { introduced, commit, error } of sources) {
+    if (!introduced) continue;
     try {
-      execFileSync("git", ["merge-base", "--is-ancestor", approvedCompactFixRequired.integratedCommit, "HEAD"], {
+      execFileSync("git", ["merge-base", "--is-ancestor", commit, "HEAD"], {
         cwd: resolve(import.meta.dir, "../../.."), stdio: "ignore",
       });
     } catch {
-      throw new Error(`${path}: compact fix requires the integrated source commit`);
-    }
-  }
-  validateGatedOnlyRatchet(value.gatedOnlyRatchet);
-  const repoRoot = resolve(import.meta.dir, "../../..");
-  if (corrected) {
-    try {
-      execFileSync("git", ["merge-base", "--is-ancestor", approvedMeasurementCorrection.commit, "HEAD"], {
-        cwd: repoRoot, stdio: "ignore",
-      });
-    } catch {
-      throw new Error(`${path}: ce52494d measurement correction requires its approved source ancestor`);
-    }
-  }
-  if (relocated) {
-    try {
-      execFileSync("git", ["merge-base", "--is-ancestor", relocationCommit, "HEAD"], {
-        cwd: repoRoot, stdio: "ignore",
-      });
-    } catch {
-      throw new Error(`${path}: approved relocation commit is not an ancestor of HEAD`);
+      throw new Error(`${path}: ${error}`);
     }
   }
 }
