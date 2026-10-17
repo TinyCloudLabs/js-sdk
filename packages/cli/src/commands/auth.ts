@@ -12,7 +12,7 @@ import type { ProfileReplicaApprovalEntry, ProfileReplicaDeferredToken, ProfileR
 import { composeManifestRequest } from "@tinycloud/sdk-core";
 import { invokeOperation } from "@tinycloud/operations";
 import { namedProfilePath, profilePath } from "@tinycloud/operations/state";
-import { readGateSnapshot, REPLICA_DENY_FLOOR_FILE } from "@tinycloud/replica/profile-gate";
+import { principalHashOf, readGateSnapshot, REPLICA_DENY_FLOOR_FILE } from "@tinycloud/replica/profile-gate";
 import { isReplicaError, ReplicaErrorCode } from "@tinycloud/replica";
 import { REPLICA_GATE_FILE } from "@tinycloud/sdk-services/kv/replication/contractConstants";
 import { ProfileManager } from "../config/profiles.js";
@@ -2487,6 +2487,9 @@ async function refreshPreparedOpenKeySession(params: {
   });
   let handoff: PreparedOpenKeyHandoff | undefined;
   let preparedDid: string | undefined;
+  // An unreadable gate counts as active: a failed attempt then never denies it.
+  const gateWasActive = await readGateSnapshot(profilePath(profileName))
+    .then((gate) => gate !== undefined && gate.principalHash !== null, () => true);
   try {
     await node.signInWithOpenKey(async (prepared) => {
       preparedDid = prepared.verificationMethod;
@@ -2534,9 +2537,32 @@ async function refreshPreparedOpenKeySession(params: {
     };
   } catch (error) {
     await handoff?.complete(false);
-    await node.signOut().catch(() => undefined);
+    await undoPreparedAttempt(profileName, node, owner, gateWasActive).catch(() => undefined);
     throw error;
   }
+}
+
+/**
+ * A failed prepared login undoes only what that attempt established. It never denies a gate that
+ * was already active: that is the session it meant to replace, and a deny there would let the next
+ * start erase its unsynced writes. Only when this attempt itself bound an inactive gate to the owner,
+ * and no committed session holds it, is that binding denied again. Otherwise it only stops its
+ * replica runtime; it saved no key or session.
+ */
+async function undoPreparedAttempt(
+  profileName: string, node: TinyCloudNode, owner: string, gateWasActive: boolean,
+): Promise<void> {
+  if (!gateWasActive) {
+    const undone = await ProfileManager.withLock(profileName, async () => {
+      const gate = await readGateSnapshot(profilePath(profileName));
+      if (gate === undefined || gate.principalHash !== await principalHashOf(gate.salt, owner)) return false;
+      if (await ProfileManager.getSession(profileName) !== null) return false;
+      await node.signOut();
+      return true;
+    }, { requireProfile: true });
+    if (undone) return;
+  }
+  await node.replication?.close();
 }
 
 export async function refreshOpenKeySession(

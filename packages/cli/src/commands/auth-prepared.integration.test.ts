@@ -1,11 +1,12 @@
 import { afterEach, expect, test } from "bun:test";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { PrivateKeySigner } from "@tinycloud/node-sdk";
+import { PrivateKeySigner, sqliteReplicaStorage } from "@tinycloud/node-sdk";
 import { extractRecapAttenuations, parseCanonicalRecapResource } from "@tinycloud/sdk-core";
-import { restoreSessionStamp } from "@tinycloud/replica/profile-gate";
-import { profileConfigPath, profilePath, withTinyCloudStateRoot, writeJsonAtomic } from "@tinycloud/operations/state";
+import { REPLICA_DENY_FLOOR_FILE, restoreSessionStamp } from "@tinycloud/replica/profile-gate";
+import { profileConfigPath, profilePath, withProfileLock, withTinyCloudStateRoot, writeJsonAtomic } from "@tinycloud/operations/state";
+import { REPLICA_GATE_FILE } from "@tinycloud/sdk-services/kv/replication/contractConstants";
 
 const PROFILE = "owner";
 const OWNER_KEY = "4f3edf983ac636a65a842ce7c78d9aa706d3b113bce036f4d4b2c197a7e5e7b7";
@@ -17,7 +18,15 @@ afterEach(async () => {
   await Promise.all(homes.splice(0).map((home) => rm(home, { recursive: true, force: true })));
 });
 
-type Behavior = "success" | "invalid-signature" | "cancel" | "cancel-tty" | "paste-eof";
+type Behavior = "success" | "invalid-signature" | "cancel" | "cancel-tty" | "paste-eof" | "expire" | "commit-failure";
+const FAST_EXPIRY = join(import.meta.dir, "../../test-support/fast-openkey-expiry.ts");
+
+async function readOptional(path: string): Promise<string | null> {
+  return readFile(path, "utf8").catch((error: NodeJS.ErrnoException) => {
+    if (error.code === "ENOENT") return null;
+    throw error;
+  });
+}
 
 /** A hang regression must fail, not stall the suite; the child is killed at the deadline. */
 async function exitWithin(child: { exited: Promise<number>; kill(signal?: number | NodeJS.Signals): void }, ms: number): Promise<number | "timeout"> {
@@ -30,9 +39,13 @@ async function exitWithin(child: { exited: Promise<number>; kill(signal?: number
   return exit;
 }
 
-async function preparedLogin(transport: "callback" | "paste", behavior: Behavior = "success") {
-  const home = await mkdtemp(join(tmpdir(), `tc858-prepared-${transport}-`));
-  homes.push(home);
+/**
+ * One prepared OpenKey login. With `priorHome`, it re-logs into that home's existing profile
+ * (and its live session) instead of a fresh one; a failed attempt must leave both unchanged.
+ */
+async function preparedLogin(transport: "callback" | "paste", behavior: Behavior = "success", priorHome?: string) {
+  const home = priorHome ?? await mkdtemp(join(tmpdir(), `tc858-prepared-${transport}-`));
+  if (!priorHome) homes.push(home);
   const requests: string[] = [];
   const invokedResources: string[] = [];
   const node = Bun.serve({ port: 0, fetch(request) {
@@ -64,15 +77,34 @@ async function preparedLogin(transport: "callback" | "paste", behavior: Behavior
   const signer = new PrivateKeySigner(OWNER_KEY);
   const ownerDid = `did:pkh:eip155:1:${await signer.getAddress()}`;
   const directory = await withTinyCloudStateRoot(home, async () => {
-    await writeJsonAtomic(profileConfigPath(PROFILE), {
-      name: PROFILE, host: node.url.origin, chainId: 1, spaceName: "default", did: "did:key:prior",
-      ownerDid, posture: "owner-openkey", authMethod: "openkey",
-      createdAt: "2026-10-01T00:00:00.000Z",
-    });
+    if (!priorHome) {
+      await writeJsonAtomic(profileConfigPath(PROFILE), {
+        name: PROFILE, host: node.url.origin, chainId: 1, spaceName: "default", did: "did:key:prior",
+        ownerDid, posture: "owner-openkey", authMethod: "openkey",
+        createdAt: "2026-10-01T00:00:00.000Z",
+      });
+    }
     return profilePath(PROFILE);
   });
-  const argv = [process.execPath, cliEntry, "--quiet", "--json", "--profile", PROFILE,
+  const prior = {
+    key: await readOptional(join(directory, "key.json")),
+    session: await readOptional(join(directory, "session.json")),
+    did: (JSON.parse(await readFile(join(directory, "profile.json"), "utf8")) as { did: string }).did,
+  };
+  const expectPriorKept = async () => {
+    expect(await readOptional(join(directory, "key.json"))).toBe(prior.key);
+    expect(await readOptional(join(directory, "session.json"))).toBe(prior.session);
+    expect(JSON.parse(await readFile(join(directory, "profile.json"), "utf8")).did).toBe(prior.did);
+    if (!priorHome) {
+      // A failed first login leaves no gate bound to its owner, so another account can still sign in.
+      const gate = await readOptional(join(directory, REPLICA_GATE_FILE));
+      expect(gate === null ? null : (JSON.parse(gate) as { principalHash: string | null }).principalHash).toBeNull();
+    }
+  };
+  const argv = [process.execPath, ...(behavior === "expire" ? ["--preload", FAST_EXPIRY] : []), cliEntry,
+    "--quiet", "--json", "--profile", PROFILE,
     "auth", "login", "--method", "openkey", "--replication-prefix", "notes/", "--owner", ownerDid,
+    ...(priorHome ? ["--replace-session"] : []),
     ...(transport === "paste" ? ["--paste"] : ["--no-popup"])];
   // `script` gives the CLI a real terminal, so Ctrl-C reaches readline as a keypress.
   const child = Bun.spawn(tty ? ["script", "-qefc", argv.map((arg) => `'${arg}'`).join(" "), "/dev/null"] : argv, {
@@ -137,31 +169,34 @@ async function preparedLogin(transport: "callback" | "paste", behavior: Behavior
     } else child.kill("SIGINT");
     expect(await exitWithin(child, 15_000)).toBe(130);
     expect(cancels).toEqual([{ ticket: payload.delivery.handoffId, cancelSecret: payload.delivery.cancelSecret }]);
-    expect(await Bun.file(join(directory, "key.json")).exists()).toBe(false);
-    expect(await Bun.file(join(directory, "session.json")).exists()).toBe(false);
+    await expectPriorKept();
     await expect(fetch(payload.delivery.callback!, {
       method: "POST", headers: { Origin: "https://openkey.test", "Content-Type": "application/json" },
       body: JSON.stringify(envelope),
     })).rejects.toThrow();
-    return;
+    return { home, directory, ownerDid };
   }
-  if (behavior === "paste-eof") {
-    child.stdin.end();
-    const exitCode = await child.exited;
+  if (behavior === "paste-eof" || behavior === "expire") {
+    if (behavior === "paste-eof") child.stdin.end();
+    const exitCode = await exitWithin(child, 15_000);
     expect(exitCode).not.toBe(0);
+    expect(exitCode).not.toBe("timeout");
     while (true) {
       const { value, done } = await reader.read();
       if (done) break;
       stderr += new TextDecoder().decode(value);
     }
-    expect(stderr).toContain("PASTE_CODE_MISSING");
-    expect(await Bun.file(join(directory, "key.json")).exists()).toBe(false);
-    expect(await Bun.file(join(directory, "session.json")).exists()).toBe(false);
-    expect(JSON.parse(await readFile(join(directory, "profile.json"), "utf8")).did).toBe("did:key:prior");
-    return;
+    expect(stderr).toContain(behavior === "paste-eof" ? "PASTE_CODE_MISSING" : "V2_EXPIRED");
+    await expectPriorKept();
+    return { home, directory, ownerDid };
   }
   if (behavior === "invalid-signature") {
     envelope.result.signature = await signer.signMessage(`${payload.request.siwe} rejected`);
+  }
+  if (behavior === "commit-failure") {
+    // A concurrent profile write after approval started: the compare-and-commit refuses.
+    const profileFile = join(directory, "profile.json");
+    await writeFile(profileFile, JSON.stringify({ ...JSON.parse(await readFile(profileFile, "utf8")), label: "changed" }));
   }
   let accepted: { accepted: boolean } | undefined;
   if (transport === "callback") {
@@ -171,7 +206,7 @@ async function preparedLogin(transport: "callback" | "paste", behavior: Behavior
       body: JSON.stringify(envelope),
     });
     accepted = await response.json() as { accepted: boolean };
-    expect(response.status).toBe(behavior === "invalid-signature" ? 422 : 200);
+    if (behavior !== "commit-failure") expect(response.status).toBe(behavior === "invalid-signature" ? 422 : 200);
   } else {
     expect(payload.delivery.callback).toBeUndefined();
     child.stdin.write(Buffer.from(JSON.stringify(envelope)).toString("base64url") + "\n");
@@ -179,13 +214,12 @@ async function preparedLogin(transport: "callback" | "paste", behavior: Behavior
   }
   const [stdout, exitCode] = await Promise.all([new Response(child.stdout).text(), exitWithin(child, 15_000)]);
   await reader.cancel().catch(() => undefined);
-  if (behavior === "invalid-signature") {
+  if (behavior === "invalid-signature" || behavior === "commit-failure") {
     expect(exitCode).not.toBe(0);
+    expect(exitCode).not.toBe("timeout");
     expect(accepted).toEqual({ accepted: false });
-    expect(await Bun.file(join(directory, "key.json")).exists()).toBe(false);
-    expect(await Bun.file(join(directory, "session.json")).exists()).toBe(false);
-    expect(JSON.parse(await readFile(join(directory, "profile.json"), "utf8")).did).toBe("did:key:prior");
-    return;
+    await expectPriorKept();
+    return { home, directory, ownerDid };
   }
   expect(exitCode).toBe(0);
   expect(cancels).toEqual([]);
@@ -213,6 +247,7 @@ async function preparedLogin(transport: "callback" | "paste", behavior: Behavior
   // The prepared session holds no account-space authority, so registry sync
   // must not even try it (TC-1287: a deterministic 401 per login).
   expect(invokedResources.filter((resource) => resource.includes(":account/"))).toEqual([]);
+  return { home, directory, ownerDid };
 }
 
 test("prepared OpenKey callback ACK follows verified SDK sign-in and durable stamped CLI commit", () => preparedLogin("callback"), 30_000);
@@ -221,3 +256,50 @@ test("invalid signed callback receives no ACK and leaves the previous profile an
 test("preclaim non-TTY SIGINT cancels the handoff, exits CANCELLED 130 and rejects a late signed callback", () => preparedLogin("callback", "cancel"), 30_000);
 test("preclaim terminal Ctrl-C takes the same cancellation path and exit code", () => preparedLogin("callback", "cancel-tty"), 30_000);
 test("preclaim paste cancellation by stdin EOF shreds the prepared key and preserves the prior profile", () => preparedLogin("paste", "paste-eof"), 30_000);
+test("an expired first login saves nothing and leaves no gate bound to its owner", () => preparedLogin("callback", "expire"), 30_000);
+test("a first login whose commit fails saves nothing and leaves no gate bound to its owner", () => preparedLogin("callback", "commit-failure"), 30_000);
+
+/** Every byte of the gate, the deny floor and the flag-owned replication tree. */
+async function replicaState(directory: string): Promise<Record<string, string | null>> {
+  const files: Record<string, string | null> = {};
+  for (const name of [REPLICA_GATE_FILE, REPLICA_DENY_FLOOR_FILE]) files[name] = await readOptional(join(directory, name));
+  const root = join(directory, "replication");
+  for (const entry of await readdir(root, { recursive: true, withFileTypes: true })) {
+    if (entry.isFile()) {
+      const path = join(entry.parentPath, entry.name);
+      files[path.slice(directory.length)] = (await readFile(path)).toString("base64");
+    }
+  }
+  return files;
+}
+
+test.each([
+  ["callback", "cancel"], ["callback", "expire"], ["callback", "invalid-signature"],
+  ["paste", "paste-eof"], ["callback", "commit-failure"],
+] as const)("a failed %s re-login (%s) never denies the live owner session's gate or touches its pending writes", async (transport, behavior) => {
+  const { home, directory, ownerDid } = await preparedLogin("callback");
+  // The live session's unsynced writes: a pending index in the owner's identity partition.
+  const session = JSON.parse(await readFile(join(directory, "session.json"), "utf8")) as {
+    spaceId: string; replicaStamp: Parameters<typeof restoreSessionStamp>[2];
+  };
+  const stamp = session.replicaStamp;
+  if (!stamp) throw new Error("The first login did not persist its replica stamp");
+  const host = (JSON.parse(await readFile(join(directory, "profile.json"), "utf8")) as { host: string }).host;
+  await withTinyCloudStateRoot(home, async () => {
+    const storage = sqliteReplicaStorage({
+      dir: join(directory, "replication"),
+      guard: (section) => withProfileLock(PROFILE, section, { requireProfile: true }),
+    });
+    await storage.pendingWrites!({ host, space: session.spaceId, principal: ownerDid }, { stamp })
+      .update((state) => { state.seq = 1; });
+  });
+  const before = await replicaState(directory);
+  expect(Object.keys(before).some((name) => name.endsWith("pending.json"))).toBe(true);
+  expect(before[REPLICA_DENY_FLOOR_FILE]).toBeNull();
+
+  await preparedLogin(transport, behavior, home);
+
+  expect(await replicaState(directory)).toEqual(before);
+  await expect(stat(join(directory, "replica-logout-pending.json"))).rejects.toMatchObject({ code: "ENOENT" });
+  expect(await restoreSessionStamp(directory, ownerDid, stamp)).toEqual(stamp);
+}, 60_000);
