@@ -7,8 +7,8 @@ import { measureReplicaOptionalLoaded, type LoadedSizes } from "./measure-replic
 import {
   approvedCompactFixRequired, approvedMeasurementCorrection, approvedRelocations, compactFixOptionalAllowance,
   correctedOptionalAllowance, ciOptionalAllowance, fixRequiredOptionalAllowance, hardeningOptionalAllowance, optionalFormats,
-  priorOptionalAllowance, relocatedOptionalAllowance, relocationCommit, validateOptionalEntryTransition, validateOptionalLedger,
-  type OptionalLedger,
+  priorOptionalAllowance, relocatedOptionalAllowance, relocationCommit, validateIntroducedOptionalSources,
+  validateOptionalEntryTransition, validateOptionalLedger, type OptionalLedger,
 } from "./replica-optional-size-policy";
 import { assertCiSizeToolchain, approvedCiToolchainCorrection, approvedFixRequiredRatchet, approvedGatedOnlyRatchet, approvedPhase2, ciCorrectionPolicyOnlyPaths, isPolicyOnlySinceApprovedSource, validateCiToolchainTransition, validateGatedOnlyRatchet, validateHardeningRatchetTransition, validateLedger, validateMasterMergeResolutionTransition, type GzipSizes, type Ledger, type LedgerEntry } from "./replica-size-policy";
 import { collectMeasuredArtifactInputs } from "./replica-size-inputs";
@@ -28,6 +28,9 @@ type Baseline = {
  * - The refused-admission observer is a distinct, deferred artifact with its
  *   own exact zero-headroom ESM/CJS ratchet; it never raises root or first-import caps.
  * - Non-replica PRs are never charged; they only validate the ledger shape.
+ * - A reviewed row's source commit must be a HEAD ancestor in the PR that
+ *   introduces the row. Squash merges leave branch commits out of master, so
+ *   merged rows are pinned by exact equality to their approved values instead.
  *
  * Replica-owned paths: packages/replica/**, packages/sdk-services/src/kv/replication/**,
  * packages/sdk-core/src/replication/** (when present), packages/node-sdk/src/replication/**,
@@ -199,6 +202,7 @@ if (prBaseSha) {
   }
   validateOptionalLedger(baseOptional, baseLedger.fixRequiredRatchet !== undefined,
     baseLedger.canonicalToolchainCorrection !== undefined, baseLedger.hardeningRatchet !== undefined);
+  validateIntroducedOptionalSources(baseOptional, optionalLedger);
   validateGatedOnlyRatchet(optionalLedger.gatedOnlyRatchet, baseOptional.gatedOnlyRatchet);
   if (baseOptional.fixRequired !== undefined &&
       JSON.stringify(optionalLedger.fixRequired) !== JSON.stringify(baseOptional.fixRequired)) {
