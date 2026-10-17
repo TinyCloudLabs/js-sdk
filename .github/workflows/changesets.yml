@@ -25,8 +25,7 @@ jobs:
     if: github.event_name == 'push' && !contains(github.event.head_commit.message, '[skip ci]')
     runs-on: ubuntu-latest
     permissions:
-      contents: write
-      id-token: write
+      contents: read
     steps:
       # The deploy key is not left in git config or ~/.ssh for install and
       # build steps; only the push step below uses it.
@@ -123,9 +122,11 @@ jobs:
               exit 1
             fi
           fi
+          # Pushed (or nothing to push): the key has no further use in this job.
+          rm -rf "$RUNNER_TEMP/release-ssh"
           echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
         env:
-          GIT_SSH_COMMAND: ssh -i ${{ runner.temp }}/release-ssh/id -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=${{ runner.temp }}/release-ssh/known_hosts -o GlobalKnownHostsFile=/dev/null
+          GIT_SSH_COMMAND: ssh -F /dev/null -i ${{ runner.temp }}/release-ssh/id -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=${{ runner.temp }}/release-ssh/known_hosts -o GlobalKnownHostsFile=/dev/null
 
       - name: Setup Node for npm publish
         if: steps.check.outputs.pending != '0'
@@ -205,7 +206,6 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
-      id-token: write
     steps:
       # The deploy key is not left in git config or ~/.ssh for install and
       # build steps; only the push step below uses it.
@@ -345,9 +345,11 @@ jobs:
             echo "::error title=Stable release not pushed::Could not push to master (it has probably moved). Nothing was published; dispatch the stable release again."
             exit 1
           fi
+          # Pushed: the key has no further use in this job.
+          rm -rf "$RUNNER_TEMP/release-ssh"
           git checkout --quiet --detach "$RELEASE_SHA"
         env:
-          GIT_SSH_COMMAND: ssh -i ${{ runner.temp }}/release-ssh/id -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=${{ runner.temp }}/release-ssh/known_hosts -o GlobalKnownHostsFile=/dev/null
+          GIT_SSH_COMMAND: ssh -F /dev/null -i ${{ runner.temp }}/release-ssh/id -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=${{ runner.temp }}/release-ssh/known_hosts -o GlobalKnownHostsFile=/dev/null
 
       - name: Setup Node for npm publish
         uses: actions/setup-node@v4
@@ -422,9 +424,11 @@ jobs:
               --target "$RELEASE_SHA"
           fi
         env:
-          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
           RELEASE_SHA: ${{ steps.release.outputs.sha || steps.unfinished.outputs.sha }}
 
       - name: Remove release deploy key
         if: always()
-        run: .github/scripts/release-deploy-key.sh remove
+        # Inline, not the checked-out script: recovery runs check out a release
+        # commit that may predate the script.
+        run: rm -rf "$RUNNER_TEMP/release-ssh"
