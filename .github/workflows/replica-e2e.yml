@@ -2,12 +2,19 @@ name: Replica e2e
 
 # `tc replica` (TC-18) against a real TinyCloud node through the public CLI:
 # device grant, sync, offline restart reads, catch-up, scope. The node binary
-# comes from the pinned GHCR image of the tinycloud-node commit that serves
-# `tinycloud.kv/sync` (TC-732, d7f511f on main). That commit (PR #247) also
-# registers `tinycloud.kv/retain` and attests `retainUntil`, which the
-# retention test needs. The image is public; the job still logs in with the
-# workflow token so the pull keeps working if the package becomes private
-# (the package must then grant this repository read access).
+# comes from the GHCR image of tinycloud-node v1.20.6 (revision e18578ff),
+# pinned by digest. It serves `tinycloud.kv/sync` (`kv-sync-v1`), supports the
+# `tinycloud.kv/retain` / `retainUntil` retention test, and includes the TC-899
+# "database is locked" first-write fix (37277f0, PR #268) that the earlier
+# d7f511f image lacked. QA vetted this digest on SQLite and Postgres 16 (TC-858).
+# It also advertises `kv-sync-root` (TC-908), so the CLI e2e suites exercise the
+# whole-space root sync. The REPLICATION_ROOT_UNSUPPORTED decision logic stays
+# covered without a real node (controller, transport and browser /info-mock
+# tests), but the CLI's handling of it (`sync --prefix /` exit 7, the persisted
+# lastError, the --replication `unavailable` event) has no CI coverage.
+# The image is public; the job still logs in with the workflow token so the pull
+# keeps working if the package becomes private (the package must then grant
+# this repository read access).
 
 on:
   pull_request:
@@ -31,7 +38,7 @@ on:
 
 env:
   TC858_MODEL_FULL: ${{ github.event_name == 'schedule' && '1' || '0' }}
-  TINYCLOUD_NODE_IMAGE: ghcr.io/tinycloudlabs/tinycloud-node:d7f511f
+  TINYCLOUD_NODE_IMAGE: ghcr.io/tinycloudlabs/tinycloud-node:1.20.6@sha256:41667d3d133aaa12290a2f3a744afacd838988327552d159c60f04466e66f86f
 
 jobs:
   replica-e2e:
