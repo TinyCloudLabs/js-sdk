@@ -3,7 +3,7 @@
  * `tc profile delete` (TC-18): a deleted profile is never recreated, and
  * nothing is written into it.
  */
-import { afterAll, beforeEach, describe, expect, test } from "bun:test";
+import { afterAll, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { mkdir, mkdtemp, readFile, readdir, rename, rm, stat, symlink, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -12,6 +12,7 @@ import { KVService, type IServiceContext } from "@tinycloud/sdk-core";
 import {
   Replica,
   ReplicaErrorCode,
+  ReplicaError,
   contentHash,
   isReplicaError,
   kvSyncTransport,
@@ -19,6 +20,7 @@ import {
   type VerifiedPage,
 } from "@tinycloud/replica";
 import { SqliteReplicaStore, loadSqlite } from "@tinycloud/replica/sqlite";
+import { establishSessionStamp } from "@tinycloud/replica/profile-gate";
 
 // The profile store reads TC_HOME when it loads (and replica.js loads it), so import them afterwards.
 const home = await mkdtemp(join("/var/tmp", "tc-replica-guard-"));
@@ -83,7 +85,7 @@ async function resetFromCli(profile: string, name: string, purge = true): Promis
   }
 }
 
-async function readFromCli(profile: string, args: string[]): Promise<{ exited: boolean; stdout: string; stderr: string }> {
+async function readFromCli(profile: string, args: string[]): Promise<{ exited: boolean; exitCode: number | null; stdout: string; stderr: string }> {
   const program = new Command().option("--profile <name>").option("--json");
   registerReplicaCommand(program);
   const previousExit = process.exit;
@@ -92,7 +94,8 @@ async function readFromCli(profile: string, args: string[]): Promise<{ exited: b
   let stdout = "";
   let stderr = "";
   let exited = false;
-  process.exit = (() => { throw new Error("expected CLI exit"); }) as typeof process.exit;
+  let exitCode: number | null = null;
+  process.exit = ((code?: number) => { exitCode = code ?? 0; throw new Error("expected CLI exit"); }) as typeof process.exit;
   process.stdout.write = ((chunk: string | Uint8Array) => { stdout += Buffer.from(chunk).toString("utf8"); return true; }) as typeof process.stdout.write;
   process.stderr.write = ((chunk: string | Uint8Array) => { stderr += Buffer.from(chunk).toString("utf8"); return true; }) as typeof process.stderr.write;
   try {
@@ -105,7 +108,7 @@ async function readFromCli(profile: string, args: string[]): Promise<{ exited: b
     process.stdout.write = previousOutput;
     process.stderr.write = previousError;
   }
-  return { exited, stdout, stderr };
+  return { exited, exitCode, stdout, stderr };
 }
 
 function page(): VerifiedPage {
@@ -234,6 +237,31 @@ describe("profile replica removal", () => {
     expect((await readdir(join(PROFILES_DIR, PROFILE, "replicas"))).sort()).toEqual(["first", "second"]);
   });
 });
+test("replica budget and expired consent report distinct actionable exit codes", async () => {
+  const store = await createReplica(PROFILE, config);
+  await store.close();
+  const ownerDid = "did:pkh:eip155:1:0x0000000000000000000000000000000000000001";
+  const replicaStamp = await establishSessionStamp(join(PROFILES_DIR, PROFILE), ownerDid, { siweIssuedAt: Date.now() });
+  await ProfileManager.setSession(PROFILE, { ownerDid, replicaStamp });
+  for (const { code, message, exitCode, guidance } of [
+    { code: ReplicaErrorCode.STORAGE_BUDGET, message: "The replica page exceeds the origin's byte budget.", exitCode: 10, guidance: /byte budget/i },
+    { code: ReplicaErrorCode.CONSENT_EXPIRED, message: "The account consent has expired.", exitCode: 5, guidance: /sign in again.*renew consent/i },
+  ]) {
+    const get = spyOn(Replica.prototype, "get").mockRejectedValueOnce(new ReplicaError(code, message));
+    try {
+      const result = await readFromCli(PROFILE, ["replica", "get", "notes/a", "--replica", "notes"]);
+      expect(result.stdout).toBe("");
+      const displayed = JSON.parse(result.stderr) as { error: { code: string; message: string; hint?: string } };
+      expect(displayed.error.code).toBe(code);
+      expect(result.exitCode).toBe(exitCode);
+      expect(displayed.error.message).toContain(message);
+      expect(`${displayed.error.message} ${displayed.error.hint ?? ""}`).toMatch(guidance);
+    } finally {
+      get.mockRestore();
+    }
+  }
+}, 30_000);
+
 describe("replica purge symlink safety", () => {
   test("refuses a symlinked replicas root and leaves the target profile untouched", async () => {
     await createProfile("victim");

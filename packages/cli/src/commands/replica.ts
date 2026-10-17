@@ -43,19 +43,20 @@ import {
 import { SqliteReplicaStore, loadSqlite, type MutationGuard } from "@tinycloud/replica/sqlite";
 
 import { ProfileManager } from "../config/profiles.js";
-import { DEFAULT_PROFILE, ExitCode } from "../config/constants.js";
+import { DEFAULT_PROFILE, ExitCode, type ExitCode as ExitCodeValue } from "../config/constants.js";
 import { CLIError, handleError } from "../output/errors.js";
 import { formatBytes, formatField, formatTable, outputJson, shouldOutputJson } from "../output/formatter.js";
 import { theme } from "../output/theme.js";
 
 /** Replica error → exit code. Mirrors `ExitCode`; see `tc replica --help`. */
-const EXIT_BY_CODE: Record<ReplicaErrorCode, number> = {
+const EXIT_BY_CODE: Record<ReplicaErrorCode, ExitCodeValue> = {
   [ReplicaErrorCode.INVALID_ARGUMENT]: ExitCode.USAGE_ERROR,
   [ReplicaErrorCode.CLOSED]: ExitCode.ERROR,
   [ReplicaErrorCode.BUSY]: ExitCode.ERROR,
   [ReplicaErrorCode.RUNTIME_UNSUPPORTED]: ExitCode.ERROR,
   [ReplicaErrorCode.STORAGE_ERROR]: ExitCode.ERROR,
   [ReplicaErrorCode.STORAGE_FULL]: ExitCode.STORAGE_FULL,
+  [ReplicaErrorCode.STORAGE_BUDGET]: ExitCode.STORAGE_FULL,
   [ReplicaErrorCode.NOT_FOUND]: ExitCode.NOT_FOUND,
   [ReplicaErrorCode.CONFIG_MISMATCH]: ExitCode.USAGE_ERROR,
   [ReplicaErrorCode.NOT_COVERED]: ExitCode.USAGE_ERROR,
@@ -68,6 +69,7 @@ const EXIT_BY_CODE: Record<ReplicaErrorCode, number> = {
   [ReplicaErrorCode.GRANT_NOT_YET_VALID]: ExitCode.PERMISSION_DENIED,
   [ReplicaErrorCode.GRANT_EXPIRED]: ExitCode.PERMISSION_DENIED,
   [ReplicaErrorCode.GRANT_REVOKED]: ExitCode.PERMISSION_DENIED,
+  [ReplicaErrorCode.CONSENT_EXPIRED]: ExitCode.PERMISSION_DENIED,
   [ReplicaErrorCode.GATED]: ExitCode.PERMISSION_DENIED,
   [ReplicaErrorCode.GRANT_UNAUTHORIZED]: ExitCode.PERMISSION_DENIED,
   [ReplicaErrorCode.RETENTION_GRANT_REFUSED]: ExitCode.PERMISSION_DENIED,
@@ -100,7 +102,10 @@ const NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 function toCliError(error: unknown): unknown {
   if (!isReplicaError(error)) return error;
   const hint = error.code === ReplicaErrorCode.GRANT_MISSING && typeof error.detail?.hint === "string" ? error.detail.hint : undefined;
-  return new CLIError(error.code, error.message, EXIT_BY_CODE[error.code], hint === undefined ? undefined : { hint });
+  const message = error.code === ReplicaErrorCode.CONSENT_EXPIRED
+    ? `${error.message} Sign in again to renew consent.`
+    : error.message;
+  return new CLIError(error.code, message, EXIT_BY_CODE[error.code], hint === undefined ? undefined : { hint });
 }
 
 async function run(action: () => Promise<void>): Promise<void> {
