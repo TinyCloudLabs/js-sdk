@@ -867,6 +867,10 @@ describe.skipIf(!REAL_NODE_BIN)("node-sdk replication against a real node", () =
       };
       await owner.replication!.close();
       await otherOwner.replication!.close();
+      // Isolate the /delegate counter: sign-in's background registry sync can still be
+      // hosting the account space (a /delegate POST) after the first writes.
+      await owner.waitForAccountRegistrySync();
+      await otherOwner.waitForAccountRegistrySync();
 
       globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
         if (String(input).endsWith("/delegate")) delegatePosts++;
@@ -972,6 +976,8 @@ describe.skipIf(!REAL_NODE_BIN)("node-sdk replication against a real node", () =
       });
       await expect(onlineDelegate.replication!.sync()).rejects.toMatchObject({ name: "ReplicaError", code: "GRANT_MISSING" });
       await onlineDelegate.replication!.close();
+      // Isolate the /delegate counter from sign-in's background registry sync (see above).
+      await owner.waitForAccountRegistrySync();
       let delegatePosts = 0;
       globalThis.fetch = (async (input: RequestInfo | URL) => {
         if (String(input).endsWith("/delegate")) delegatePosts++;
