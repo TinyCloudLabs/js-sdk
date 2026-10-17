@@ -1,13 +1,13 @@
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { Command } from "commander";
-import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { createProfileReplicaPurge, NodeWasmBindings, PrivateKeySigner } from "@tinycloud/node-sdk";
+import { createProfileReplicaPurge, NodeWasmBindings, PrivateKeySigner, sqliteReplicaStorage } from "@tinycloud/node-sdk";
 import { parseSignedCompactUcanAttenuation, parseSignedSiweCacao } from "@tinycloud/sdk-core";
 import { Replica, contentHash, parseUcanGrant, type FetchedContent, type ReplicaTransport } from "@tinycloud/replica";
 import { SqliteReplicaStore, inspectSqliteReplicaLayout } from "@tinycloud/replica/sqlite";
-import { establishSessionStamp, readGateSnapshot, restoreSessionStamp } from "@tinycloud/replica/profile-gate";
+import { establishSessionStamp, readGateSnapshot, REPLICA_DENY_FLOOR_FILE, restoreSessionStamp } from "@tinycloud/replica/profile-gate";
 import { REPLICA_GATE_FILE } from "@tinycloud/sdk-services/kv/replication/contractConstants";
 import {
   profileConfigPath,
@@ -94,7 +94,10 @@ async function seedLegacyReplica(home: string, host: string, spaceId: string, se
   }
 }
 
-async function seed(home: string, host: string, authMethod: "local" | "openkey" = "local"): Promise<{ db: string; session: string; key: string; delegationCid: string; ownerDid: string; spaceId: string }> {
+/** `gateOwner` binds the profile's replica gate to another account than the signed-in session's. */
+async function seed(
+  home: string, host: string, authMethod: "local" | "openkey" = "local", gateOwner?: string,
+): Promise<{ db: string; session: string; key: string; delegationCid: string; ownerDid: string; spaceId: string }> {
   const wasm = new NodeWasmBindings();
   const signer = new PrivateKeySigner(OWNER_KEY);
   const address = await signer.getAddress();
@@ -132,7 +135,7 @@ async function seed(home: string, host: string, authMethod: "local" | "openkey" 
       operatorType: "human", createdAt: "2026-10-01T00:00:00.000Z",
     });
     const replicaStamp = await withProfileLock(PROFILE,
-      () => establishSessionStamp(profilePath(PROFILE), ownerDid, { siweIssuedAt: Date.parse(issuedAt) }),
+      () => establishSessionStamp(profilePath(PROFILE), gateOwner ?? ownerDid, { siweIssuedAt: Date.parse(issuedAt) }),
       { requireProfile: true },
     );
     await writeJsonAtomic(sessionPath(PROFILE), { ...session, replicaStamp });
@@ -804,6 +807,77 @@ describe("tc auth logout --revoke with durable replica denial", () => {
     ]);
     expect(await exists(paths.session)).toBe(false);
     expect(await exists(paths.db)).toBe(false);
+  }, 30_000);
+
+  test("another account's logout --revoke revokes only its own grants and leaves the gate owner's replica state byte-identical", async () => {
+    const home = await mkdtemp(join(tmpdir(), "tc841-revoke-other-account-"));
+    homes.push(home);
+    const wasm = new NodeWasmBindings();
+    const gateOwnerAddress = "0x0000000000000000000000000000000000000001";
+    const gateOwner = `did:pkh:eip155:1:${gateOwnerAddress}`;
+    const gateOwnerSpace = wasm.makeSpaceId(gateOwnerAddress, 1, "default");
+    let sessionCid = "";
+    const node = await server("success", () => sessionCid);
+    // The signed-in session is this account's; the gate and its flag-owned partition belong to gateOwner.
+    const paths = await seed(home, node.host, "local", gateOwner);
+    sessionCid = paths.delegationCid;
+    node.setPaths(paths);
+    const directory = dirname(paths.session);
+    await withTinyCloudStateRoot(home, async () => {
+      const gate = await readGateSnapshot(directory);
+      if (!gate) throw new Error("The fixture gate is missing");
+      const storage = sqliteReplicaStorage({
+        dir: join(directory, "replication"),
+        guard: (section) => withProfileLock(PROFILE, section, { requireProfile: true }),
+      });
+      await storage.pendingWrites!({ host: node.host, space: gateOwnerSpace, principal: gateOwner }, {
+        stamp: { incarnation: gate.incarnation, lifecycleEpoch: gate.lifecycleEpoch },
+      }).update((state) => { state.seq = 1; });
+    });
+    const gateOwnerState = async () => {
+      const files: Record<string, string | null> = {};
+      for (const name of [REPLICA_GATE_FILE, REPLICA_DENY_FLOOR_FILE]) {
+        files[name] = await readFile(join(directory, name), "utf8").catch(() => null);
+      }
+      for (const entry of await readdir(join(directory, "replication"), { recursive: true, withFileTypes: true })) {
+        if (entry.isFile()) files[join(entry.parentPath, entry.name)] = (await readFile(join(entry.parentPath, entry.name))).toString("base64");
+      }
+      return files;
+    };
+    const before = await gateOwnerState();
+    expect(Object.keys(before).some((name) => name.endsWith("pending.json"))).toBe(true);
+
+    const cid = (name: string) => wasm.computeCid(new TextEncoder().encode(name), 0x55n);
+    const ownCid = cid("tc841-other-account-own-grant");
+    const crossCid = cid("tc841-other-account-grant-on-gate-owner-space");
+    const future = new Date(Date.now() + 3_600_000).toISOString();
+    await withTinyCloudStateRoot(home, () =>
+      writeFile(join(profilePath(PROFILE), "auth-grants.jsonl"), [ownCid, crossCid].map((delegationCid) => JSON.stringify({
+        ts: new Date().toISOString(), profile: PROFILE, source: "cli", delegationCid, expiry: future, addedCaps: [],
+      })).join("\n") + "\n", { mode: 0o600 }));
+    const record = (delegationCid: string, space: string) => ({
+      cid: delegationCid, direction: "granted", delegatorDid: paths.ownerDid,
+      delegateDid: "did:key:z6MkRecipientTc841",
+      resources: [{ resource: `${space}/kv/notes/`, actions: ["tinycloud.kv/get"], caveats: [] }],
+      parents: [], issuedAt: new Date(Date.now() - 60_000).toISOString(),
+      notBefore: null, expiresAt: future, status: "active",
+    });
+    node.setQueryRecords([record(ownCid, paths.spaceId), record(crossCid, gateOwnerSpace)]);
+
+    const logout = await run(home, ["auth", "logout", "--revoke"]);
+    expect(logout.exitCode, logout.stderr).toBe(0);
+    expect(node.revokedCids).toEqual([ownCid, sessionCid]);
+    const report = JSON.parse(logout.stdout) as { revocationExcluded: Array<{ cid: string; reason: string }> };
+    expect(report.revocationExcluded).toContainEqual({ cid: crossCid, reason: "non_owner" });
+    expect(await gateOwnerState()).toEqual(before);
+    expect(await exists(join(directory, "replica-logout-pending.json"))).toBe(false);
+    expect(await exists(paths.session)).toBe(false);
+    expect(await exists(paths.key)).toBe(false);
+    expect(await exists(paths.db)).toBe(false);
+    const profile = JSON.parse(await withTinyCloudStateRoot(home, () =>
+      readFile(profileConfigPath(PROFILE), "utf8"))) as { authSignedOut?: boolean; legacyReplicaCleanup?: boolean };
+    expect(profile).toMatchObject({ authSignedOut: true });
+    expect(profile.legacyReplicaCleanup).toBeUndefined();
   }, 30_000);
 });
 
