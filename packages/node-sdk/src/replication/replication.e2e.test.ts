@@ -674,9 +674,6 @@ describe.skipIf(!REAL_NODE_BIN)("node-sdk replication against a real node", () =
     try {
       await node.signIn();
       expect(node.replicaStamp).toMatchObject({ incarnation: expect.any(String), lifecycleEpoch: 0 });
-      // The pinned SQLite node (d7f511f) predates TC-899: a write overlapping the
-      // background registry writes can fail with 517. Let the registry settle.
-      await node.waitForAccountRegistrySync();
       const primarySpace = node.restorableSession!.spaceId;
       expect((await node.kv.put("notes/seed", "seed-v0")).ok).toBe(true);
       await node.replication!.sync();
@@ -747,7 +744,6 @@ describe.skipIf(!REAL_NODE_BIN)("node-sdk replication against a real node", () =
     try {
       await node.signIn();
       expect(node.replicaStamp).toMatchObject({ incarnation: expect.any(String), lifecycleEpoch: 0 });
-      await node.waitForAccountRegistrySync(); // TC-899 on the pinned SQLite node; see above.
       const write = await node.kv.put("notes/a", "descendant");
       expect(write.ok, JSON.stringify(write.ok ? undefined : write.error)).toBe(true);
       await node.replication!.sync();
@@ -842,7 +838,6 @@ describe.skipIf(!REAL_NODE_BIN)("node-sdk replication against a real node", () =
       await owner.signIn();
       const ownerStamp = owner.replicaStamp;
       if (!ownerStamp) throw new Error("Verified owner sign-in did not establish a replica stamp.");
-      await owner.waitForAccountRegistrySync(); // TC-899 on the pinned SQLite node.
       ownerSpace = owner.restorableSession!.spaceId;
       expect((await owner.kv.put("notes/secret", "owner-x")).ok).toBe(true);
       expect((await owner.kv.put("other/x", "owner-x-other")).ok).toBe(true);
@@ -850,7 +845,6 @@ describe.skipIf(!REAL_NODE_BIN)("node-sdk replication against a real node", () =
 
       await otherOwner.signIn();
       expect(otherOwner.replicaStamp).toMatchObject({ incarnation: expect.any(String), lifecycleEpoch: 0 });
-      await otherOwner.waitForAccountRegistrySync(); // TC-899 on the pinned SQLite node.
       otherSpace = otherOwner.restorableSession!.spaceId;
       expect(otherSpace).not.toBe(ownerSpace);
       expect((await otherOwner.kv.put("notes/secret", "owner-y")).ok).toBe(true);
@@ -951,7 +945,6 @@ describe.skipIf(!REAL_NODE_BIN)("node-sdk replication against a real node", () =
       await owner.signIn();
       const ownerStamp = owner.replicaStamp;
       if (!ownerStamp) throw new Error("Verified owner sign-in did not establish a replica stamp.");
-      await owner.waitForAccountRegistrySync(); // TC-899 on the pinned SQLite node.
       const signedOwner = owner.restorableSession!;
       if (typeof signedOwner.siwe !== "string" || typeof signedOwner.address !== "string" ||
           typeof signedOwner.chainId !== "number") throw new Error("Signed owner proof is required.");
