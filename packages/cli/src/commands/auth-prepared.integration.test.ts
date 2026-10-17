@@ -83,16 +83,21 @@ async function preparedLogin(transport: "callback" | "paste", behavior: Behavior
   const reader = (tty ? child.stdout : child.stderr).getReader();
   let stderr = "";
   let url: string | undefined;
+  // A CLI (or `script`) that never prints the URL must fail with its output, not stall the suite.
+  const stalled = Promise.withResolvers<"stalled">();
+  const stallTimer = setTimeout(() => stalled.resolve("stalled"), 15_000);
   while (true) {
-    const { value, done } = await reader.read();
-    if (done) break;
-    stderr += new TextDecoder().decode(value);
+    const next = await Promise.race([reader.read(), stalled.promise]);
+    if (next === "stalled" || next.done) break;
+    stderr += new TextDecoder().decode(next.value);
     url = /(https:\/\/openkey\.test\/delegate#tv2=[A-Za-z0-9_-]+)\r?\n/.exec(stderr)?.[1];
     if (url) break;
   }
+  clearTimeout(stallTimer);
   if (!url) {
-    child.kill();
-    throw new Error(`CLI did not issue SDK-prepared v2 URL: ${stderr}`);
+    child.kill("SIGKILL");
+    const rest = tty ? "" : await new Response(child.stdout).text();
+    throw new Error(`CLI did not issue SDK-prepared v2 URL (exit ${await child.exited}): ${stderr}${rest}`);
   }
   const encoded = new URL(url).hash.slice("#tv2=".length);
   const payload = JSON.parse(Buffer.from(encoded, "base64url").toString("utf8")) as {
