@@ -271,6 +271,26 @@ test("replica budget and expired consent report distinct actionable exit codes",
   }
 }, 30_000);
 
+test("a delegate session reads a legacy replica only while the profile has no gate", async () => {
+  const store = await createReplica(PROFILE, config);
+  await store.close();
+  // An imported compact grant: a session with no owner DID.
+  await ProfileManager.setSession(PROFILE, { delegationCid: "bafy-delegate", spaceId: config.space });
+
+  const listed = await readFromCli(PROFILE, ["replica", "list", "--replica", "notes"]);
+  expect(listed.stderr).toBe("");
+  expect(listed.exited).toBe(false);
+
+  // Once a gate exists, only its owner's session can read; the delegate cannot be attributed.
+  await establishSessionStamp(join(PROFILES_DIR, PROFILE), "did:pkh:eip155:1:0x0000000000000000000000000000000000000001", {
+    siweIssuedAt: Date.now(),
+  });
+  const refused = await readFromCli(PROFILE, ["replica", "list", "--replica", "notes"]);
+  expect(refused.stdout).toBe("");
+  expect(refused.exitCode).toBe(5);
+  expect(JSON.parse(refused.stderr)).toMatchObject({ error: { code: "REPLICA_GATED" } });
+});
+
 describe("replica purge symlink safety", () => {
   test("refuses a symlinked replicas root and leaves the target profile untouched", async () => {
     await createProfile("victim");

@@ -273,7 +273,12 @@ function assertLegacyLogoutClear(dir: string): void {
   }
 }
 
-/** Legacy stores predate the gated adapter; serialize their reads and delivery with denial. */
+/**
+ * Legacy stores predate the gated adapter; serialize their reads and delivery with denial.
+ * An owner session reads only through its active gate. A profile with no owner session
+ * (a delegate's imported grant, or kept replicas after logout) has no principal to gate on:
+ * it reads only while no gate and no committed denial exist, with the logout-marker check.
+ */
 async function withLegacyReplicaRead(
   profile: string,
   action: (checkDelivery: () => Promise<void>) => Promise<void>,
@@ -285,24 +290,37 @@ async function withLegacyReplicaRead(
       ownerDid?: string;
       replicaStamp?: { incarnation: string; lifecycleEpoch: number };
     }>(profile);
+    let checkDelivery: () => Promise<void>;
     if (typeof session?.ownerDid !== "string" || session.ownerDid.length === 0) {
-      throw new ReplicaError(ReplicaErrorCode.GATED, "The local replica needs an owner session.", { gate: "not_established" });
+      // No gate file and no deny floor: a missing gate after a deny or an unreadable one throws.
+      const noGate = async () => {
+        if (await readGateSnapshot(dir) !== undefined) {
+          throw new ReplicaError(ReplicaErrorCode.GATED, "The local replica needs an owner session.", { gate: "not_established" });
+        }
+      };
+      await noGate();
+      checkDelivery = async () => {
+        assertLegacyLogoutClear(dir);
+        await noGate();
+        assertLegacyLogoutClear(dir);
+      };
+    } else {
+      const stamp = await restoreSessionStamp(dir, session.ownerDid, session.replicaStamp);
+      const snapshot = await readGateSnapshot(dir);
+      if (snapshot === undefined) {
+        throw new ReplicaError(ReplicaErrorCode.GATED, "The local replica gate is unavailable.", { gate: "gate_unavailable" });
+      }
+      const access = {
+        stamp,
+        incarnation: snapshot.incarnation,
+        principalHash: await principalHashOf(snapshot.salt, session.ownerDid),
+      };
+      checkDelivery = async () => {
+        assertLegacyLogoutClear(dir);
+        await assertGateAccess(dir, access, snapshot.salt);
+        assertLegacyLogoutClear(dir);
+      };
     }
-    const stamp = await restoreSessionStamp(dir, session.ownerDid, session.replicaStamp);
-    const snapshot = await readGateSnapshot(dir);
-    if (snapshot === undefined) {
-      throw new ReplicaError(ReplicaErrorCode.GATED, "The local replica gate is unavailable.", { gate: "gate_unavailable" });
-    }
-    const access = {
-      stamp,
-      incarnation: snapshot.incarnation,
-      principalHash: await principalHashOf(snapshot.salt, session.ownerDid),
-    };
-    const checkDelivery = async () => {
-      assertLegacyLogoutClear(dir);
-      await assertGateAccess(dir, access, snapshot.salt);
-      assertLegacyLogoutClear(dir);
-    };
     await checkDelivery();
     await action(checkDelivery);
   }, { requireProfile: true });
