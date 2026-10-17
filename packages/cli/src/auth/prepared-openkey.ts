@@ -225,13 +225,14 @@ export async function startPreparedOpenKeyHandoff(options: {
     if (Buffer.byteLength(url, "utf8") > 8192) {
       throw invalid("V2_URL_TOO_LONG", "The prepared OpenKey URL exceeds 8 KiB; reduce the requested scope and retry with a fresh session. Legacy approval cannot grant replica authority.");
     }
+    // Before the URL is shown, so an interrupt at any point after it cancels.
+    process.on("SIGINT", cancelled);
+    process.on("SIGTERM", cancelled);
     console.error(`Open this URL in a browser to authenticate: ${url}`);
     if (!options.noPopup && !options.paste) {
       try { await open(url); }
       catch { console.error("Could not open browser. Use the printed URL or paste the signed code."); }
     }
-    process.on("SIGINT", cancelled);
-    process.on("SIGTERM", cancelled);
     if (options.paste || process.stdin.isTTY) {
       console.error("Waiting up to 5 minutes for OpenKey. Paste its one-line signed code here and press Enter if the callback is blocked (Safari may require this).");
       rl = createInterface({ input: process.stdin, output: process.stderr });
