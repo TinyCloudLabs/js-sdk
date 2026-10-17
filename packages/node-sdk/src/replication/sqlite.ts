@@ -1961,13 +1961,16 @@ export function createSqliteReplicaStorage(
       return (async (): Promise<ReplicaDenyOutcome & { resumeToken?: ProfileReplicaDeferredToken }> => {
         try {
           const gate = await fileGate();
-          const snapshot = await gate.readGateSnapshot(profileDir);
-          const precomputed = snapshot === undefined ? undefined : {
-            salt: snapshot.salt, principalHash: await gate.principalHashOf(snapshot.salt, input.principal),
-          };
           return await profileSection(async () => {
+            const snapshot = await gate.readGateSnapshot(profileDir);
+            const precomputed = snapshot === undefined ? undefined : {
+              salt: snapshot.salt, principalHash: await gate.principalHashOf(snapshot.salt, input.principal),
+            };
             const result = await gate.denyGate(profileDir, input,
-              async (principalHash) => collectIntents(principalHash, precomputed?.salt ?? ""),
+              async (principalHash) => {
+                if (snapshot === undefined) throw gated("gate_unavailable");
+                return collectIntents(principalHash, snapshot.salt);
+              },
               precomputed, options);
             if (result.status !== "denied" || options?.deferErase !== true) return result;
             const resumeToken = await gate.deferredGateToken(profileDir);

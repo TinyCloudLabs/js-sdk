@@ -301,6 +301,42 @@ describe("mandatory Node lifecycle gate", () => {
     expect(await filesNamed(dir, "device.jwk")).toEqual([]);
   });
 
+  test("denial inventories a gate and partition installed before its profile lock", async () => {
+    const profileDir = await mkdtemp(join(tmpdir(), "tc858-deny-lock-snapshot-"));
+    dirs.push(profileDir);
+    const dir = join(profileDir, "replication");
+    await mkdir(dir);
+    roots.push(dir);
+    const installing = createSqliteReplicaStorage(storageOptions({ dir }));
+    let lockCalls = 0;
+    const denying = createSqliteReplicaStorage(storageOptions({
+      dir,
+      guard: async (section) => {
+        if (lockCalls++ === 0) {
+          expect(existsSync(join(profileDir, REPLICA_GATE_FILE))).toBe(false);
+          const stamp = await establishSessionStamp(profileDir, PRINCIPAL, { siweIssuedAt: 1 });
+          stamps.set(profileDir, stamp);
+          await installing.pendingWrites!(identity(), { stamp }).update((state) => { state.seq = 1; });
+          const replica = await installing.open(spec({ stamp }));
+          await replica.close();
+        }
+        return sharedGuard(section);
+      },
+    }));
+    const denied = await denying.lifecycle!.deny({ reason: "sign_out", principal: PRINCIPAL });
+    expect(denied).toMatchObject({ status: "denied", intents: 2 });
+    const state = await readGateSnapshot(profileDir);
+    expect(state?.principalHash).toBeNull();
+    expect(state?.intents.map((intent) => intent.kind).sort()).toEqual(["partition", "pending"]);
+    expect(Object.values(state!.pendingGenerations)).toEqual([1]);
+    expect(await filesNamed(dir, "pending.json")).toHaveLength(1);
+    expect(await filesNamed(dir, "replica.db")).toHaveLength(1);
+    const erased = await denying.lifecycle!.erasePending({ signal: new AbortController().signal });
+    expect(erased).toMatchObject({ failed: [], remaining: 0 });
+    expect(await filesNamed(dir, "pending.json")).toEqual([]);
+    expect(await filesNamed(dir, "replica.db")).toEqual([]);
+  });
+
   test("recover reports a busy profile lock without erasing pending files", async () => {
     const dir = await makeDir();
     const active = createSqliteReplicaStorage(storageOptions());
