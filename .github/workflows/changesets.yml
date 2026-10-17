@@ -28,8 +28,8 @@ jobs:
       contents: write
       id-token: write
     steps:
-      # The release PAT is not left in git config for install and build
-      # steps; only the push step below uses it.
+      # The deploy key is not left in git config or ~/.ssh for install and
+      # build steps; only the push step below uses it.
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
@@ -55,6 +55,14 @@ jobs:
         run: |
           COUNT=$(find .changeset -name '*.md' ! -name 'README.md' | wc -l)
           echo "pending=$COUNT" >> "$GITHUB_OUTPUT"
+
+      # Fail before versioning if the deploy key is missing (no fallback to
+      # GH_TOKEN for the push).
+      - name: Install release deploy key
+        if: steps.check.outputs.pending != '0'
+        run: .github/scripts/release-deploy-key.sh install
+        env:
+          RELEASE_DEPLOY_KEY: ${{ secrets.RELEASE_DEPLOY_KEY }}
 
       # Majors are a human decision (TC-615): a new major changeset publishes
       # only after a maintainer's `approve-major-release:` sign-off commit.
@@ -110,16 +118,14 @@ jobs:
             echo "No changes to commit"
           else
             git commit -m "chore: beta version packages [skip ci]"
-            AUTH=$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)
-            echo "::add-mask::$AUTH"
-            if ! git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $AUTH" push origin master; then
+            if ! git push git@github.com:TinyCloudLabs/js-sdk.git master; then
               echo "::error title=Version commit not pushed::Could not push to master (it has probably moved past ${GITHUB_SHA}). Nothing was published; the run for the newer commit releases these changesets."
               exit 1
             fi
           fi
           echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
         env:
-          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+          GIT_SSH_COMMAND: ssh -i ${{ runner.temp }}/release-ssh/id -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=${{ runner.temp }}/release-ssh/known_hosts -o GlobalKnownHostsFile=/dev/null
 
       - name: Setup Node for npm publish
         if: steps.check.outputs.pending != '0'
@@ -188,6 +194,10 @@ jobs:
         if: steps.check.outputs.pending != '0'
         run: node .github/scripts/check-npm-release-provenance.mjs post-publish
 
+      - name: Remove release deploy key
+        if: always()
+        run: .github/scripts/release-deploy-key.sh remove
+
   # Manual trigger: graduate betas to stable release
   stable:
     name: Stable Release
@@ -197,8 +207,8 @@ jobs:
       contents: write
       id-token: write
     steps:
-      # The release PAT is not left in git config for install and build
-      # steps; only the push step below uses it.
+      # The deploy key is not left in git config or ~/.ssh for install and
+      # build steps; only the push step below uses it.
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
@@ -228,6 +238,14 @@ jobs:
       - name: Find an unfinished stable release
         id: unfinished
         run: node .github/scripts/check-npm-release-provenance.mjs unfinished-stable "$GITHUB_OUTPUT"
+
+      # Fail before versioning if the deploy key is missing (no fallback to
+      # GH_TOKEN for the push). Recovery runs do not push and need no key.
+      - name: Install release deploy key
+        if: steps.unfinished.outputs.sha == ''
+        run: .github/scripts/release-deploy-key.sh install
+        env:
+          RELEASE_DEPLOY_KEY: ${{ secrets.RELEASE_DEPLOY_KEY }}
 
       - name: Check out the unfinished stable release
         if: steps.unfinished.outputs.sha != ''
@@ -323,15 +341,13 @@ jobs:
           bun changeset pre enter beta
           git add .
           git commit -m "chore: enter beta pre-release mode [skip ci]"
-          AUTH=$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)
-          echo "::add-mask::$AUTH"
-          if ! git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $AUTH" push origin master; then
+          if ! git push git@github.com:TinyCloudLabs/js-sdk.git master; then
             echo "::error title=Stable release not pushed::Could not push to master (it has probably moved). Nothing was published; dispatch the stable release again."
             exit 1
           fi
           git checkout --quiet --detach "$RELEASE_SHA"
         env:
-          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+          GIT_SSH_COMMAND: ssh -i ${{ runner.temp }}/release-ssh/id -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=${{ runner.temp }}/release-ssh/known_hosts -o GlobalKnownHostsFile=/dev/null
 
       - name: Setup Node for npm publish
         uses: actions/setup-node@v4
@@ -408,3 +424,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
           RELEASE_SHA: ${{ steps.release.outputs.sha || steps.unfinished.outputs.sha }}
+
+      - name: Remove release deploy key
+        if: always()
+        run: .github/scripts/release-deploy-key.sh remove
