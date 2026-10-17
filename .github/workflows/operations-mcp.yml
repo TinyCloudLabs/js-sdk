@@ -75,6 +75,7 @@ jobs:
           bun test tests/operations-mcp-conformance/conformance.test.ts
           bun test packages/operations/src/legacy-cli-concurrency.test.ts
           bun test packages/cli/src/commands/auth.test.ts
+          bun test packages/cli/src/auth/prepared-openkey.test.ts
           bun test packages/cli/src/commands/auth.portable-proof.test.ts
           bun test packages/cli/src/commands/secrets.test.ts
           bun test packages/cli/src/commands/secrets-owner-retry.test.ts
