@@ -273,6 +273,13 @@ gate with a missing floor, or a gate behind the tombstone epoch fails closed
 When the tombstone advances, old in-memory stamps are not deliverable in any tab, even
 before IDB deletion completes.
 
+**Node deny floor.** `replica-deny-floor.json` beside the gate file holds
+`{"epoch": <positive safe integer>, "deniedAt": <non-negative safe integer ms>}` (0600, atomic
+rename). Deny writes it **before** the gate-file rewrite and advances past both the gate and the
+floor. An absent floor is valid only before the first deny. After a deny, a missing gate file is
+never recreated, and a gate whose `lifecycleEpoch` or `deniedAt` is behind the floor (or a
+malformed floor) fails closed (`gate_unavailable`); a later deny may move such a gate forward.
+
 **The gate is mandatory with replication on.**
 - `indexedDbReplicaStorage()` MUST expose `lifecycle`, and the web runtime refuses storage without it with `RUNTIME_UNSUPPORTED`.
 - `sqliteReplicaStorage()` exposes it by default.
