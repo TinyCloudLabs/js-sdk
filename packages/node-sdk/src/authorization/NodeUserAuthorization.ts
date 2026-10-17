@@ -1922,34 +1922,28 @@ export class NodeUserAuthorization implements IUserAuthorization {
       keyId: options?.openkeyKeyId,
       presentation,
     };
-    let attempt = 0;
-    const retry = async (error: unknown): Promise<OpenKeyAuthorizationResultV1> => {
-      if (!options?.retryResult) throw error;
-      const next = await options.retryResult(
-        error instanceof Error ? error : new Error(String(error)),
-        originalRequest,
-        ++attempt,
-      );
-      if (next === null) throw error;
-      return next;
-    };
-    let result: OpenKeyAuthorizationResultV1;
-    try {
-      result = await authorizeFn(originalRequest);
-    } catch (error) {
-      result = await retry(error);
-    }
-    for (;;) {
-      let signed: PreparedOpenKeySession;
+    let result: OpenKeyAuthorizationResultV1 | undefined;
+    let signed: PreparedOpenKeySession;
+    let signature: string;
+    for (let attempt = 0; ; ) {
       try {
+        result ??= await authorizeFn(originalRequest);
         signed = await this.verifyOpenKeyResult(result, prepared);
+        signature = result.signature;
+        break;
       } catch (error) {
-        result = await retry(error);
-        continue;
+        if (!options?.retryResult) throw error;
+        const next = await options.retryResult(
+          error instanceof Error ? error : new Error(String(error)),
+          originalRequest,
+          ++attempt,
+        );
+        if (next === null) throw error;
+        result = next;
       }
-      // Verification retries never repeat network activation or create a new SIWE.
-      return this.signInWithPreparedSession(signed, result.signature, keyId, jwk);
     }
+    // Verification retries never repeat network activation or create a new SIWE.
+    return this.signInWithPreparedSession(signed, signature, keyId, jwk);
   }
 
   /**
