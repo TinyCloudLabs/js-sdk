@@ -1,5 +1,6 @@
 import { randomBytes, timingSafeEqual } from "node:crypto";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import type { Socket } from "node:net";
 import { createInterface } from "node:readline";
 import open from "open";
 import type { ISigner, TinyCloudNode } from "@tinycloud/node-sdk";
@@ -97,10 +98,11 @@ export async function startPreparedOpenKeyHandoff(options: {
   let timeout: ReturnType<typeof setTimeout> | undefined;
   let rl: ReturnType<typeof createInterface> | undefined;
   const cors = { "Access-Control-Allow-Origin": origin, Vary: "Origin" };
-  const reply = (response: ServerResponse, status: number, data: object): void => {
-    response.writeHead(status, { ...cors, "Content-Type": "application/json" });
+  const reply = (response: ServerResponse, status: number, data: object, close = false): void => {
+    response.writeHead(status, { ...cors, "Content-Type": "application/json", ...(close ? { Connection: "close" } : {}) });
     response.end(JSON.stringify(data));
   };
+  const sockets = new Set<Socket>();
   const server = options.paste ? undefined : createServer({ connectionsCheckingInterval: 1000 }, (request: IncomingMessage, response: ServerResponse) => {
     if (request.headers.origin !== origin) {
       response.writeHead(403);
@@ -157,6 +159,10 @@ export async function startPreparedOpenKeyHandoff(options: {
     });
   });
   if (server) {
+    server.on("connection", (socket: Socket) => {
+      sockets.add(socket);
+      socket.once("close", () => sockets.delete(socket));
+    });
     server.headersTimeout = 10_000;
     server.requestTimeout = 10_000;
     await new Promise<void>((resolve, reject) => {
@@ -179,6 +185,12 @@ export async function startPreparedOpenKeyHandoff(options: {
     clearTimeout(timeout);
     rl?.close();
     server?.close();
+    // `close()` stops the server's timeout sweep and keeps any connection that
+    // never sent a request (a browser's refused loopback attempt), which would
+    // hold the process open. The ACK's own socket closes after its response.
+    for (const socket of sockets) {
+      if (socket !== acceptResponse?.socket) socket.destroy();
+    }
     state.fill(0);
   };
   try {
@@ -246,7 +258,7 @@ export async function startPreparedOpenKeyHandoff(options: {
       async complete(accepted) {
         if (completed) return;
         completed = true;
-        if (acceptResponse) reply(acceptResponse, accepted ? 200 : 422, { accepted });
+        if (acceptResponse) reply(acceptResponse, accepted ? 200 : 422, { accepted }, true);
         close();
         if (!accepted) await cancel();
       },

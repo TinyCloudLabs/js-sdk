@@ -1,4 +1,7 @@
 import { afterEach, expect, test, vi } from "bun:test";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { ownerIdentitySigner, startPreparedOpenKeyHandoff } from "./prepared-openkey.js";
 
 const servers: Array<{ stop(closeActiveConnections?: boolean): void }> = [];
@@ -48,6 +51,54 @@ test("the callback rejects wrong origin or state and ACKs only after SDK/session
   expect(receipt.status).toBe(200);
   expect(await receipt.json()).toEqual({ accepted: true });
 });
+
+// The shipped CLI runs on Node, whose HTTP server keeps a connection that
+// never sent a request alive after `close()`; Bun's does not, so this runs the
+// handoff in a Node subprocess and requires it to exit by itself.
+const NODE_HARNESS = `
+import { connect } from "node:net";
+const { startPreparedOpenKeyHandoff } = await import(process.argv[2]);
+const result = ${JSON.stringify(result)};
+const flow = await startPreparedOpenKeyHandoff({
+  prepared: { protocolVersion: 1, siwe: "original SDK SIWE", jwk: { kty: "OKP", crv: "Ed25519", x: "public", d: "private" },
+    host: "https://node.example", verificationMethod: "did:key:z6MkPrepared#z6MkPrepared" },
+  openKeyHost: "http://openkey.local", noPopup: true, paste: false,
+});
+const handoff = JSON.parse(Buffer.from(new URL(flow.url).hash.slice(5), "base64url").toString("utf8"));
+const callback = new URL(handoff.delivery.callback);
+// Chromium's Local Network Access refusal connects first, then never sends a request.
+const idle = connect(Number(callback.port), callback.hostname);
+await new Promise((resolve) => idle.once("connect", resolve));
+idle.on("error", () => {});
+const ack = fetch(callback, { method: "POST", headers: { Origin: "http://openkey.local", "Content-Type": "application/json" },
+  body: JSON.stringify({ transportVersion: 2, state: handoff.delivery.state, result }) });
+await flow.result;
+await flow.complete(true);
+const receipt = await ack;
+process.stdout.write(JSON.stringify({ status: receipt.status, body: await receipt.json() }));
+`;
+
+test("a completed handoff exits under Node even when a browser left an idle callback connection", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "tc1287-node-handoff-"));
+  try {
+    const built = await Bun.build({ entrypoints: [join(import.meta.dir, "prepared-openkey.ts")], target: "node", format: "esm",
+      outdir: directory, naming: "handoff.mjs" });
+    expect(built.success).toBe(true);
+    await writeFile(join(directory, "harness.mjs"), NODE_HARNESS);
+    const child = Bun.spawn(["node", join(directory, "harness.mjs"), join(directory, "handoff.mjs")],
+      { stdin: "ignore", stdout: "pipe", stderr: "pipe" });
+    // Real time is the subject: the process must exit on its own.
+    const deadline = Promise.withResolvers<"timeout">();
+    const timer = setTimeout(() => deadline.resolve("timeout"), 8_000);
+    const exit = await Promise.race([child.exited, deadline.promise]);
+    clearTimeout(timer);
+    if (exit === "timeout") child.kill("SIGKILL");
+    expect(JSON.parse(await new Response(child.stdout).text())).toEqual({ status: 200, body: { accepted: true } });
+    expect(exit).toBe(0);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+}, 20_000);
 
 test("a mismatched selected key never settles the handoff; failed SDK verification returns non-ACK", async () => {
   const api = Bun.serve({ port: 0, fetch: () => new Response(null, { status: 204 }) });
