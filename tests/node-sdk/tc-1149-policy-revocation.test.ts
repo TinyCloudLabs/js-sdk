@@ -706,6 +706,82 @@ describe("TC-1149 policy grant revocation over real node HTTP", () => {
     expect(await ownerRead(second)).toBe("second-after");
   }, 45_000);
 
+  test("a signed imported two-space descendant requires full scoped control for status and revoke", async () => {
+    const f = await twoSpaceFixture();
+    const target = createCompactPolicyDescendant({
+      parentAuthorization: f.session.authorization, parentCid: f.session.cid,
+      issuerDid: f.recipientDid, audienceDid: f.childDid,
+      attenuation: { [f.resource]: f.attenuation[f.resource], [f.secondResource]: f.attenuation[f.secondResource] },
+      privateKey: f.recipientKey,
+    });
+    await Bun.sleep(Math.max(0, target.payload.nbf * 1000 - Date.now() + 100));
+    await importDelegation(target);
+
+    const controllerKey = key(), controllerDid = did(controllerKey);
+    const firstSpace = f.resource.split("/kv/", 1)[0]!;
+    const scopedProof = await signCompactUcanAuthorization({
+      issuerDid: f.ownerDid, audienceDid: controllerDid,
+      attenuation: { [`${firstSpace}/delegation`]: {
+        "tinycloud.delegation/status": [{}], "tinycloud.delegation/revoke": [{}] } },
+      facts: [{}], proofs: [], notBefore: seconds() - 2, expiresAt: seconds() + 40,
+      nonce: nonce(), sign: signer(f.ownerKey),
+    });
+    await importDelegation(scopedProof);
+
+    const control = async (action: "tinycloud.delegation/status" | "tinycloud.delegation/revoke", proof: string) =>
+      signCompactUcanAuthorization({
+        issuerDid: controllerDid, audienceDid: controllerDid,
+        attenuation: { [`urn:cid:${target.cid}`]: { [action]: [{}] } },
+        facts: [{}], proofs: [proof], notBefore: seconds() - 2, expiresAt: seconds() + 30,
+        nonce: nonce(), sign: signer(controllerKey),
+      });
+    const status = async (proof: string) => {
+      const authorization = await control("tinycloud.delegation/status", proof);
+      return fetch(new URL("/delegation/status", origin), {
+        method: "POST", headers: { Authorization: authorization.authorization, "content-type": "application/json" },
+        body: JSON.stringify({ cid: target.cid }),
+      });
+    };
+    const read = async (resource: string) => {
+      const invocation = await signCompactUcanAuthorization({
+        issuerDid: f.childDid, audienceDid: f.nodeDid,
+        attenuation: { [resource]: { "tinycloud.kv/get": [
+          { type: "xyz.tinycloud.resource/selector", kind: "exact", value: resource }] } },
+        facts: [{ type: "tinycloud.policy.invocation/v1", policyCid: f.session.fact.policyCid, sessionCid: f.session.cid }],
+        proofs: [target.cid], notBefore: seconds(), expiresAt: Math.min(seconds() + 30, target.payload.exp),
+        nonce: nonce(), sign: signer(f.childKey),
+      });
+      return post("/invoke", invocation.authorization);
+    };
+    expect(await (await read(f.resource)).text()).toBe(f.first);
+    expect(await (await read(f.secondResource)).text()).toBe(f.second);
+    expect((await status(scopedProof.cid)).status).toBe(404);
+    expect((await post("/revoke", (await control("tinycloud.delegation/revoke", scopedProof.cid)).authorization)).status).toBe(403);
+
+    const fullProof = await signCompactUcanAuthorization({
+      issuerDid: f.ownerDid, audienceDid: controllerDid,
+      attenuation: { [`${firstSpace}/delegation`]: {
+        "tinycloud.delegation/status": [{}], "tinycloud.delegation/revoke": [{}] },
+      [`${f.secondSpace}/delegation`]: {
+        "tinycloud.delegation/status": [{}], "tinycloud.delegation/revoke": [{}] } },
+      facts: [{}], proofs: [], notBefore: seconds() - 2, expiresAt: seconds() + 30,
+      nonce: nonce(), sign: signer(f.ownerKey),
+    });
+    await importDelegation(fullProof);
+    const before = await status(fullProof.cid);
+    expect(before.status).toBe(200);
+    expect((await before.json() as { status: string }).status).toBe("active");
+    expect(await (await read(f.resource)).text()).toBe(f.first);
+    expect(await (await read(f.secondResource)).text()).toBe(f.second);
+
+    expect((await post("/revoke", (await control("tinycloud.delegation/revoke", fullProof.cid)).authorization)).status).toBe(200);
+    statusDenied((await read(f.resource)).status);
+    statusDenied((await read(f.secondResource)).status);
+    const after = await status(fullProof.cid);
+    expect(after.status).toBe(200);
+    expect((await after.json() as { status: string }).status).toBe("revoked");
+  }, 60_000);
+
   test("one multi-space policy keeps B-only access after an A-scoped recipient tombstone, but denies A and A+B", async () => {
     const f = await twoSpaceFixture();
     const spaceId = f.resource.split("/kv/", 1)[0]!;
