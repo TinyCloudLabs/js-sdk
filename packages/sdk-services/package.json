@@ -130,7 +130,8 @@
   "scripts": {
     "build": "tsup",
     "clean": "rm -rf dist",
-    "test": "bun test"
+    "test": "bun test",
+    "typecheck:contract": "tsc --noEmit -p tsconfig.contract.json"
   },
   "dependencies": {
     "@tinycloud/bootstrap": "2.8.0",

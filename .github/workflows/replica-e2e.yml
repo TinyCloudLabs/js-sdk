@@ -17,6 +17,7 @@ on:
       - "packages/node-sdk/**"
       - "packages/sdk-core/**"
       - "packages/sdk-services/src/**"
+      - "packages/sdk-services/tsconfig.contract.json"
       - "packages/operations/**"
       - "packages/web-sdk/**"
       - ".github/scripts/**"
@@ -97,6 +98,7 @@ jobs:
           bun run --cwd packages/operations build
           bun run --cwd packages/replica build
           bun run --cwd packages/courier build
+          bun run --cwd packages/sdk-services typecheck:contract
           bun run --cwd packages/node-sdk typecheck:replica-contract
           bun run --cwd packages/cli build
 
