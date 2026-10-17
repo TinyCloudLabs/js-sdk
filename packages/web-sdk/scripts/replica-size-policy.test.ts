@@ -4,7 +4,7 @@ import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { MAX_WORKER_GZIP_BYTES } from "../../replica/scripts/check-worker-size";
-import { compactFixOptionalAllowance, optionalSourcePins, type OptionalLedger } from "./replica-optional-size-policy";
+import { compactFixOptionalAllowance, mergedPinsNotLandedOn, optionalSourcePins, type OptionalLedger } from "./replica-optional-size-policy";
 import { ancestryPins, assertCiSizeToolchain, approvedCiToolchainCorrection, approvedFixRequiredRatchet, approvedGatedOnlyRatchet, approvedHardeningRatchet, ciCorrectionPolicyOnlyPaths, hasAncestor, isPolicyOnlySinceApprovedSource, landingCommit, pinLandedOn, validateCiToolchainTransition, validateGatedOnlyRatchet, validateHardeningRatchetTransition, validateLedger, validateMasterMergeResolutionTransition, type HardeningRatchet, type Ledger, type MasterMergeResolution } from "./replica-size-policy";
 
 const current = JSON.parse(readFileSync(resolve(import.meta.dir, "replica-size-ledger.json"), "utf8")) as Ledger;
@@ -1050,13 +1050,21 @@ describe("TC-858 squash-proof ancestry pins", () => {
     git(root, "commit", "-qm", message);
     return git(root, "rev-parse", "HEAD");
   };
+  const initRepo = () => {
+    const root = mkdtempSync(join(tmpdir(), "tc858-squash-"));
+    git(root, "init", "-q", "-b", "master");
+    git(root, "config", "user.email", "policy@example.test");
+    git(root, "config", "user.name", "Policy Test");
+    return root;
+  };
+  const repoRoot = resolve(import.meta.dir, "../../..");
+  const squashOf548 = "94566db5fcc8831ad9913b593b1843b201ab0227";
+  const squashOf565 = "86815bd81479a5ca6578d5cbef8fd9f5a42960c9";
+  const optional = JSON.parse(readFileSync(resolve(import.meta.dir, "replica-optional-size-ledger.json"), "utf8")) as OptionalLedger;
 
   it("resolves a squash-merged row's branch pin to the master commit that landed it", () => {
-    const root = mkdtempSync(join(tmpdir(), "tc858-squash-"));
+    const root = initRepo();
     try {
-      git(root, "init", "-q", "-b", "master");
-      git(root, "config", "user.email", "policy@example.test");
-      git(root, "config", "user.name", "Policy Test");
       commitFile(root, "packages/web-sdk/src/a.ts", "export const a = 1;\n", "base");
       git(root, "switch", "-qc", "abandoned");
       const neverLanded = commitFile(root, "packages/web-sdk/src/a.ts", "export const a = 3;\n", "abandoned source");
@@ -1084,16 +1092,34 @@ describe("TC-858 squash-proof ancestry pins", () => {
     }
   });
 
+  it("lands a pin on the earliest first-parent commit, not the branch commit or a later re-add", () => {
+    const root = initRepo();
+    try {
+      commitFile(root, "packages/web-sdk/src/a.ts", "export const a = 1;\n", "base");
+      git(root, "switch", "-qc", "feature");
+      const reviewed = commitFile(root, "packages/web-sdk/src/a.ts", "export const a = 2;\n", "reviewed source");
+      const branchRow = commitFile(root, "packages/web-sdk/scripts/ledger.json", `{"measuredAt":"${reviewed}"}\n`, "policy row");
+      git(root, "switch", "-q", "master");
+      git(root, "merge", "--no-ff", "-q", "-m", "merge feature", "feature");
+      const merge = git(root, "rev-parse", "HEAD");
+      commitFile(root, "packages/web-sdk/scripts/ledger.json", "{}\n", "drop row");
+      commitFile(root, "packages/web-sdk/scripts/ledger.json", `{"measuredAt":"${reviewed}"}\n`, "re-add row");
+
+      // --first-parent selects master's merge commit over the branch commit that wrote the row;
+      // --reverse selects it over the later drop and re-add, which also change the pin's count.
+      expect(branchRow).not.toBe(merge);
+      expect(landingCommit(root, reviewed, "master")).toBe(merge);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("re-pins every merged #548 and #565 row to its master squash commit", () => {
-    const root = resolve(import.meta.dir, "../../..");
-    const squashOf548 = "94566db5fcc8831ad9913b593b1843b201ab0227";
-    const squashOf565 = "86815bd81479a5ca6578d5cbef8fd9f5a42960c9";
-    const optional = JSON.parse(readFileSync(resolve(import.meta.dir, "replica-optional-size-ledger.json"), "utf8")) as OptionalLedger;
     const pins = [
       ...ancestryPins(current, optional.gatedOnlyRatchet !== undefined),
       ...optionalSourcePins(optional),
     ];
-    expect(Object.fromEntries(pins.map(({ row, pin }) => [row, landingCommit(root, pin, squashOf565)]))).toEqual({
+    expect(Object.fromEntries(pins.map(({ row, pin }) => [row, landingCommit(repoRoot, pin, squashOf565)]))).toEqual({
       phase2Ratchet: squashOf548,
       "phase2Ratchet (#553 entry)": squashOf548,
       fixRequiredRatchet: squashOf548,
@@ -1105,5 +1131,14 @@ describe("TC-858 squash-proof ancestry pins", () => {
       measurementCorrection: squashOf548,
       relocations: squashOf548,
     });
+  });
+
+  it("check-phase1 refuses exactly the merged pins its base has not landed", () => {
+    expect(mergedPinsNotLandedOn(repoRoot, current, optional, squashOf565)).toEqual([]);
+    // Just before #548 landed, only phase2's base (a master commit) is reachable.
+    expect(mergedPinsNotLandedOn(repoRoot, current, optional, `${squashOf548}^`).map(({ row }) => row)).toEqual([
+      "phase2Ratchet (#553 entry)", "fixRequiredRatchet", "canonicalToolchainCorrection", "masterMergeResolution",
+      "hardeningRatchet", "gatedOnlyRatchet", "relocations", "measurementCorrection", "fixRequired",
+    ]);
   });
 });

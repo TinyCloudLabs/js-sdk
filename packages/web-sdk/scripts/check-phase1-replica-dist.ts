@@ -7,10 +7,10 @@ import { measureReplicaOptionalLoaded, type LoadedSizes } from "./measure-replic
 import {
   approvedCompactFixRequired, approvedMeasurementCorrection, approvedRelocations, compactFixOptionalAllowance,
   correctedOptionalAllowance, ciOptionalAllowance, fixRequiredOptionalAllowance, hardeningOptionalAllowance, optionalFormats,
-  optionalSourcePins, priorOptionalAllowance, relocatedOptionalAllowance, validateIntroducedOptionalSources,
+  mergedPinsNotLandedOn, priorOptionalAllowance, relocatedOptionalAllowance, validateIntroducedOptionalSources,
   validateOptionalEntryTransition, validateOptionalLedger, type OptionalLedger,
 } from "./replica-optional-size-policy";
-import { ancestryPins, assertCiSizeToolchain, approvedCiToolchainCorrection, approvedFixRequiredRatchet, approvedGatedOnlyRatchet, approvedPhase2, ciCorrectionPolicyOnlyPaths, hasAncestor, isPolicyOnlySinceApprovedSource, pinLandedOn, preexistingS3EntryCommit, validateCiToolchainTransition, validateGatedOnlyRatchet, validateHardeningRatchetTransition, validateLedger, validateMasterMergeResolutionTransition, type GzipSizes, type Ledger, type LedgerEntry } from "./replica-size-policy";
+import { assertCiSizeToolchain, approvedCiToolchainCorrection, approvedFixRequiredRatchet, approvedGatedOnlyRatchet, approvedPhase2, ciCorrectionPolicyOnlyPaths, hasAncestor, isPolicyOnlySinceApprovedSource, preexistingS3EntryCommit, validateCiToolchainTransition, validateGatedOnlyRatchet, validateHardeningRatchetTransition, validateLedger, validateMasterMergeResolutionTransition, type GzipSizes, type Ledger, type LedgerEntry } from "./replica-size-policy";
 import { collectMeasuredArtifactInputs } from "./replica-size-inputs";
 type Baseline = {
   webSdkTestBaseline: { ref: string; unhandledErrors: number; failingNames: string[]; unhandledSignatures: string[] };
@@ -30,8 +30,10 @@ type Baseline = {
  * - Non-replica PRs are never charged; they only validate the ledger shape.
  * - A reviewed row's source commit must be a HEAD ancestor in the PR that
  *   introduces the row. Squash merges leave branch commits out of master, so
- *   merged rows are pinned by exact equality to their approved values instead,
- *   and their pins must be on the PR base or landed by it (landingCommit).
+ *   merged rows are pinned by exact equality to their approved values instead.
+ *   A consistency check also requires each merged pin to be on the PR base or
+ *   landed by it (pinLandedOn); it does not stop a new check that re-validates
+ *   merged pins against HEAD, which only review prevents.
  *
  * Replica-owned paths: packages/replica/**, packages/sdk-services/src/kv/replication/**,
  * packages/sdk-core/src/replication/** (when present), packages/node-sdk/src/replication/**,
@@ -201,17 +203,10 @@ if (prBaseSha) {
   validateOptionalLedger(baseOptional, baseLedger.fixRequiredRatchet !== undefined,
     baseLedger.canonicalToolchainCorrection !== undefined, baseLedger.hardeningRatchet !== undefined);
   validateIntroducedOptionalSources(baseOptional, optionalLedger);
-  // Policy rows may pin only master commits. A row already merged into the base must pin a commit
-  // the base contains or, after a squash merge, one the base landed (see landingCommit).
-  const mergedPins = [
-    ...ancestryPins(baseLedger, baseOptional.gatedOnlyRatchet !== undefined),
-    ...optionalSourcePins(baseOptional),
-  ];
-  for (const { row, pin } of mergedPins) {
-    if (!pinLandedOn(repoRoot, pin, prBaseSha)) {
-      console.error(`Merged size-policy row ${row} pins ${pin}, which master ${prBaseSha} neither contains nor landed through packages/web-sdk/scripts/.`);
-      failed = true;
-    }
+  // Consistency check: each merged row's pin is on the base or was landed by it (see pinLandedOn).
+  for (const { row, pin } of mergedPinsNotLandedOn(repoRoot, baseLedger, baseOptional, prBaseSha)) {
+    console.error(`Merged size-policy row ${row} pins ${pin}, which master ${prBaseSha} neither contains nor landed through packages/web-sdk/scripts/.`);
+    failed = true;
   }
   validateGatedOnlyRatchet(optionalLedger.gatedOnlyRatchet, baseOptional.gatedOnlyRatchet);
   if (baseOptional.fixRequired !== undefined &&
