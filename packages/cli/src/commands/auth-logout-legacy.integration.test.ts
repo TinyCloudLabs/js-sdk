@@ -1,4 +1,4 @@
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, expect, setSystemTime, test } from "bun:test";
 import { chmod, copyFile, lstat, mkdir, mkdtemp, open, readFile, readdir, rename, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { Database } from "bun:sqlite";
 import { tmpdir } from "node:os";
@@ -610,6 +610,30 @@ for (const changeGate of [false, true]) test(
   }, 30_000,
 );
 
+test("network-only revoke refuses a replaced inactive gate with identical contents", async () => {
+  const { home, paths, sessionCid, revokedCids, setOnRevocationReceipt } = await fixture(false);
+  const ownerDid = JSON.parse(await readFile(paths.session, "utf8")).ownerDid as string;
+  await establishSessionStamp(paths.directory, ownerDid, { siweIssuedAt: Date.now() - 60_000 });
+  await denyGate(paths.directory, { reason: "sign_out", principal: ownerDid }, async () => []);
+  const gatePath = join(paths.directory, REPLICA_GATE_FILE);
+  const gateBytes = await readFile(gatePath);
+  const oldInode = (await stat(gatePath, { bigint: true })).ino;
+  const session = await readFile(paths.session);
+  const key = await readFile(paths.key);
+  setOnRevocationReceipt(async () => {
+    await writeFile(`${gatePath}.replacement`, gateBytes);
+    await rename(`${gatePath}.replacement`, gatePath);
+  });
+  const refused = await run(home, ["auth", "logout", "--revoke"]);
+  expect(revokedCids).toEqual([sessionCid]);
+  expect((await stat(gatePath, { bigint: true })).ino).not.toBe(oldInode);
+  expect(await readFile(gatePath)).toEqual(gateBytes);
+  expect(refused.exitCode).toBeGreaterThan(0);
+  expect(refused.stderr).toContain("PROFILE_CHANGED_DURING_REVOKE");
+  expect(await readFile(paths.session)).toEqual(session);
+  expect(await readFile(paths.key)).toEqual(key);
+}, 30_000);
+
 for (const interruptDenial of [false, true]) test(
   `active-v1 marker ${interruptDenial ? "interrupted before denial" : "whose denial write fails"} resumes without early credential shred`,
   async () => {
@@ -693,6 +717,40 @@ test("ordinary active-v1 BUSY cleanup reapproves changed inventory without repla
   for (const file of [paths.db, paths.unknown, markerPath]) {
     await expect(readFile(file)).rejects.toMatchObject({ code: "ENOENT" });
   }
+}, 30_000);
+
+test("ordinary active-v1 BUSY cleanup refuses reapproval after a successor session establishes", async () => {
+  const { home, paths, networkPaths } = await fixture();
+  const markerPath = join(paths.directory, REPLICA_LOGOUT_PENDING_FILE);
+  const store = await SqliteReplicaStore.open(dirname(paths.db), { create: false });
+  await store.open();
+  const lease = await store.acquireSyncLease(60_000);
+  if (!lease) throw new Error("Expected a held SQLite lease before plain logout");
+  try {
+    const incomplete = await run(home, ["auth", "logout"]);
+    expect(incomplete.exitCode).toBeGreaterThan(0);
+    expect(await Bun.file(markerPath).exists()).toBe(true);
+  } finally {
+    await store.releaseLease(lease);
+    await store.close();
+  }
+  const marker = await readFile(markerPath);
+  const deniedAt = (await readGateSnapshot(paths.directory))?.deniedAt;
+  if (deniedAt === null || deniedAt === undefined) throw new Error("Expected a durable denied epoch");
+  const now = Date.now();
+  try {
+    setSystemTime(new Date(deniedAt + 2));
+    await establishSessionStamp(paths.directory, "did:key:successor", { siweIssuedAt: deniedAt + 1 });
+  } finally {
+    setSystemTime(now);
+  }
+  const before = networkPaths.length;
+  const refused = await run(home, ["auth", "logout", "--discard-local-changes"]);
+  expect(refused.exitCode).toBeGreaterThan(0);
+  expect(refused.stderr).toContain("REPLICA_GATED");
+  expect(networkPaths).toHaveLength(before);
+  expect(await readFile(markerPath)).toEqual(marker);
+  expect(await Bun.file(paths.db).exists()).toBe(true);
 }, 30_000);
 
 test("crash after v2 marker fsync keeps a corrupt gate and refuses a direct retry until repaired", async () => {

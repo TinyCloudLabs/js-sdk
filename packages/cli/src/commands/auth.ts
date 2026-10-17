@@ -212,6 +212,17 @@ async function preflightLogout(
   return approval;
 }
 
+async function inactiveGateIdentity(profile: string, gate: Awaited<ReturnType<typeof readGateSnapshot>>): Promise<string> {
+  if (!gate) return "null";
+  try {
+    const file = await lstat(join(profilePath(profile), REPLICA_GATE_FILE), { bigint: true });
+    return JSON.stringify({ gate, dev: String(file.dev), ino: String(file.ino) });
+  } catch (error) {
+    if (typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT") return "null";
+    throw error;
+  }
+}
+
 export interface PreparedRemoteLogout {
   readonly profile: ProfileConfig;
   readonly ownerDid: string;
@@ -279,7 +290,7 @@ export async function prepareProfileRemoteLogout(
       profileSnapshot: JSON.stringify(profile),
       inventorySnapshot: await logoutInventorySnapshot(ctx.profile),
       marker, token: token ?? undefined,
-      ...(marker === null && token == null ? { gateSnapshot: JSON.stringify(gate ?? null) } : {}),
+      ...(marker === null && token == null ? { gateSnapshot: await inactiveGateIdentity(ctx.profile, gate) } : {}),
     };
   });
   if (selected.profile.authMethod !== "local" || !selected.profile.privateKey) {
@@ -375,7 +386,7 @@ export async function finishProfileLogout(
           currentToken.principalHash === online.token.principalHash
         : currentToken === null && (online.marker !== null ||
           (online.gateSnapshot !== undefined &&
-           JSON.stringify((await readGateSnapshot(profilePath(ctx.profile))) ?? null) === online.gateSnapshot &&
+           await inactiveGateIdentity(ctx.profile, await readGateSnapshot(profilePath(ctx.profile))) === online.gateSnapshot &&
            (await existingReplicaRoots(ctx.profile)).length === 0));
       if (!session || JSON.stringify(session) !== online.sessionSnapshot ||
           JSON.stringify(profile) !== online.profileSnapshot ||
