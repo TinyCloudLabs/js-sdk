@@ -39,6 +39,14 @@ export type {
   ResolvedReplicationOptions,
 } from "./types";
 export type {
+  ProfileReplicaApprovalEntry,
+  ProfileReplicaDeferredToken,
+  ProfileReplicaLogoutPending,
+  ProfileReplicaPreflight,
+  ProfileReplicaPurge,
+  ProfileReplicaRootIdentity,
+  ProfileReplicaRemoteLogoutState,
+  ProfileReplicaUnknownEntry,
   ReplicaAccountGate,
   ReplicaBrowserGateAccess,
   ReplicaBrowserGateSnapshot,

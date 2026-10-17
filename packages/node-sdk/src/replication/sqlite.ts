@@ -42,6 +42,8 @@ import type {
   ReplicationIdentity,
 } from "@tinycloud/sdk-services";
 import type {
+  ProfileReplicaDeferredToken,
+  ProfileReplicaPurge as ProfileReplicaPurgeContract,
   ReplicaAccountGate,
   ReplicaDenyOutcome,
   ReplicaDenyInput,
@@ -65,19 +67,17 @@ import type {
   SqliteRuntime,
 } from "./replica-contract";
 import { ucanAttUnconstrainedFor } from "./authority";
-/** Local profile fencing token, not a secret capability; the profile lock remains authoritative. */
-export interface ProfileReplicaDeferredToken {
-  deniedEpoch: number;
-  principalHash: string;
-}
+export type { ProfileReplicaDeferredToken };
 
-export interface ProfileReplicaPurge extends Pick<ReplicaLifecycleGate, "recover" | "erasePending" | "pendingPurge"> {
-  deny(input: ReplicaDenyInput, options?: { deferErase?: boolean }): Promise<ReplicaDenyOutcome & {
-    resumeToken?: ProfileReplicaDeferredToken;
-  }>;
-  deferredErase(): Promise<ProfileReplicaDeferredToken | null>;
-  resumeDeferredErase(token: ProfileReplicaDeferredToken, options: { signal: AbortSignal }): Promise<ReplicaEraseReport>;
-}
+/**
+ * The methods of the contract's `ProfileReplicaPurge` (sdk-services, the single
+ * source of truth) that this release implements. The logout-marker methods
+ * arrive with the CLI logout implementation, which exports the full type.
+ */
+export type ProfileReplicaPurge = Pick<
+  ProfileReplicaPurgeContract,
+  "recover" | "erasePending" | "pendingPurge" | "deny" | "deferredErase" | "resumeDeferredErase"
+>;
 
 
 type FileGateState = ReplicaAccountGate & {

@@ -26,6 +26,7 @@ import type {
   ReplicaClock,
   ReplicaDeliveryDecision,
   ReplicaDenyInput,
+  ReplicaDenyOutcome,
   ReplicaEraseReport,
   ReplicaGateAccess,
   ReplicaGateSnapshot,
@@ -39,6 +40,16 @@ import type {
 import type { ReplicaAdmitHook, ReplicaBrowserPageAdmission, ReplicaPageAdmission, ReplicaQuotaLedger } from "./quota";
 import type { ReplicaConsentAnchor } from "./grantPolicyTypes";
 import type { REPLICA_DENY_TOMBSTONE, REPLICA_KV_SCHEMA_VERSION } from "./contractConstants";
+import type {
+  ProfileReplicaApprovalEntry,
+  ProfileReplicaDeferredToken,
+  ProfileReplicaLogoutPending,
+  ProfileReplicaPreflight,
+  ProfileReplicaPurge,
+  ProfileReplicaRemoteLogoutState,
+  ProfileReplicaRootIdentity,
+  ProfileReplicaUnknownEntry,
+} from "./index";
 
 type Assert<T extends true> = T;
 type Equal<A, B> = (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ? 1 : 2
@@ -235,3 +246,176 @@ type _PendingStoreTakesStamp = Assert<
     ReplicaSessionStamp | undefined
   >
 >;
+
+// Node/CLI-only deferred revoke: the common browser lifecycle never accepts deferErase.
+type _DeferredTokenIsOpaqueFence = Assert<
+  Equal<ProfileReplicaDeferredToken, { deniedEpoch: number; principalHash: string }>
+>;
+type _ProfilePurgeKeepsLifecycleRecovery = Assert<
+  ProfileReplicaPurge extends Pick<ReplicaLifecycleGate, "recover" | "erasePending" | "pendingPurge">
+    ? true : false
+>;
+type _ProfileDenyTakesOptionalDeferral = Assert<
+  Equal<Parameters<ProfileReplicaPurge["deny"]>[1], { deferErase?: boolean } | undefined>
+>;
+type _DeferredDenyCarriesToken = Assert<
+  Equal<
+    ReturnType<ProfileReplicaPurge["deny"]>,
+    Promise<ReplicaDenyOutcome & { resumeToken?: ProfileReplicaDeferredToken }>
+  >
+>;
+type _DeferredTokenSurvivesRestart = Assert<
+  Equal<ReturnType<ProfileReplicaPurge["deferredErase"]>, Promise<ProfileReplicaDeferredToken | null>>
+>;
+type _ResumeRequiresSignal = Assert<
+  Equal<
+    ProfileReplicaPurge["resumeDeferredErase"],
+    (token: ProfileReplicaDeferredToken, options: { signal: AbortSignal }) => Promise<ReplicaEraseReport>
+  >
+>;
+type _InventoryEntryIdentity = Assert<
+  Equal<ProfileReplicaUnknownEntry, {
+    path: string; kind: "file" | "directory" | "symlink"; dev: string; ino: string;
+  }>
+>;
+type _RootIdentity = Assert<
+  Equal<ProfileReplicaRootIdentity, { path: string; dev: string; ino: string }>
+>;
+type _ApprovalEntryDisplaysBoundIdentity = Assert<
+  Equal<ProfileReplicaApprovalEntry, {
+    path: string; kind: ProfileReplicaUnknownEntry["kind"] | "missing";
+    dev: string; ino: string;
+  }>
+>;
+type _PreflightInventoryIsComplete = Assert<
+  Equal<ProfileReplicaPreflight, {
+    knownLegacyReplicas: number;
+    unknownLegacyPaths: string[];
+    unknownPaths: string[];
+    unknownEntries: ProfileReplicaUnknownEntry[];
+    knownRoots: ProfileReplicaRootIdentity[];
+    knownEntries: ProfileReplicaUnknownEntry[];
+    missingDatabases: string[];
+  }>
+>;
+type ApprovedMarker = {
+  principalDigest: string;
+  approvalSalt: string;
+  discardLocalChanges?: true;
+  approvedUnknown: ProfileReplicaUnknownEntry[];
+  knownRoots: ProfileReplicaRootIdentity[];
+  knownEntries: ProfileReplicaUnknownEntry[];
+  missingDatabases: string[];
+};
+type _RemoteStatesAreExclusive = Assert<
+  Equal<
+    ProfileReplicaRemoteLogoutState,
+    | { remotePending: true; remoteAbandoned?: never }
+    | { remoteAbandoned: true; remotePending?: never }
+    | { remotePending?: never; remoteAbandoned?: never }
+  >
+>;
+type _LogoutMarkerScopes = Assert<
+  Equal<
+    ProfileReplicaLogoutPending,
+    (
+      | { v: 1; incarnation: string; lifecycleEpoch: number; principalHash: string; deniedEpoch?: number }
+      | { v: 2; scope: "orphan_profile"; nonce: string }
+      | { v: 3; scope: "inactive_gate"; incarnation: string; lifecycleEpoch: number }
+    ) & ProfileReplicaRemoteLogoutState & ApprovedMarker
+  >
+>;
+type _PreflightLogoutIsReadOnly = Assert<
+  Equal<
+    ProfileReplicaPurge["preflightLogout"],
+    (input: { principal: string; discardLocalChanges?: boolean }) => Promise<ProfileReplicaPreflight>
+  >
+>;
+type _PrepareLogoutBindsApproval = Assert<
+  Equal<
+    ProfileReplicaPurge["prepareLogoutPending"],
+    (input: {
+      principal: string; approval: ProfileReplicaPreflight;
+      discardLocalChanges?: boolean; remotePending?: true;
+    }) => Promise<ProfileReplicaLogoutPending | null>
+  >
+>;
+type _CompleteRequiresPrincipal = Assert<
+  Equal<
+    ProfileReplicaPurge["completeRemoteLogout"],
+    (input: { principal: string }) => Promise<ProfileReplicaLogoutPending>
+  >
+>;
+type _RemoteRetryRequiresPrincipal = Assert<
+  Equal<
+    ProfileReplicaPurge["remotePendingLogout"],
+    (input: { principal: string }) => Promise<boolean>
+  >
+>;
+type _PlainOverrideRequiresFreshApproval = Assert<
+  Equal<
+    ProfileReplicaPurge["abandonRemoteLogout"],
+    (input: {
+      principal: string; approval: ProfileReplicaPreflight; discardLocalChanges?: boolean;
+    }) => Promise<ProfileReplicaLogoutPending>
+  >
+>;
+type _ChangedPlainRequiresSeparateToken = Assert<
+  Equal<
+    ProfileReplicaPurge["approveChangedPlainLogout"],
+    (input: {
+      principal: string; approval: ProfileReplicaPreflight;
+      discardLocalChanges: true; inventoryApprovalToken: string;
+    }) => Promise<ProfileReplicaLogoutPending>
+  >
+>;
+type _ReapproveRequiresFreshInventory = Assert<
+  Equal<
+    ProfileReplicaPurge["reapproveLogoutPending"],
+    (input: { principal: string; approval: ProfileReplicaPreflight }) => Promise<ProfileReplicaLogoutPending>
+  >
+>;
+type _RecoverReceivesApprovedInventory = Assert<
+  Equal<
+    ProfileReplicaPurge["recoverLogoutPending"],
+    (options: {
+      signal: AbortSignal;
+      clearCredentials: () => Promise<void>;
+      eraseLegacyReplicas: (options: {
+        discardLocalChanges: boolean;
+        approvedUnknown: readonly ProfileReplicaUnknownEntry[];
+        knownRoots: readonly ProfileReplicaRootIdentity[];
+        knownEntries: readonly ProfileReplicaUnknownEntry[];
+        missingDatabases: readonly string[];
+      }) => Promise<void>;
+    }) => Promise<ReplicaEraseReport>
+  >
+>;
+type _CommonGateHasNoLogoutMarker = Assert<
+  Equal<
+    Extract<"prepareLogoutPending" | "recoverLogoutPending", keyof ReplicaLifecycleGate>,
+    never
+  >
+>;
+type _CommonGateHasNoDeferredErase = Assert<
+  Equal<"deferredErase" extends keyof ReplicaLifecycleGate ? true : false, false>
+>;
+type _CommonGateHasNoResume = Assert<
+  Equal<"resumeDeferredErase" extends keyof ReplicaLifecycleGate ? true : false, false>
+>;
+declare const commonLifecycle: ReplicaLifecycleGate;
+// @ts-expect-error Deferral is confined to the node/CLI profile facade.
+commonLifecycle.deny({ reason: "sign_out", principal: "did:example:owner" }, { deferErase: true });
+declare const profilePurge: ProfileReplicaPurge;
+// @ts-expect-error Names alone cannot authorize destructive cleanup without identity-bound inventory.
+profilePurge.prepareLogoutPending({ principal: "did:example:owner", discardLocalChanges: true, approval: { unknownPaths: ["replicas/new"] } });
+// @ts-expect-error Changed remote-pending inventory requires a separately displayed token.
+profilePurge.approveChangedPlainLogout({ principal: "did:example:owner", approval: {} });
+// @ts-expect-error A fresh approval is mandatory to change a persisted inventory after remote completion.
+profilePurge.reapproveLogoutPending({ principal: "did:example:owner" });
+// @ts-expect-error The CLI always passes its just-displayed approval, even when it lists no unknown paths.
+profilePurge.prepareLogoutPending({ principal: "did:example:owner" });
+declare const markerFields: Omit<Extract<ProfileReplicaLogoutPending, { v: 2 }>, "remotePending" | "remoteAbandoned">;
+// @ts-expect-error A marker is never remote-pending and remote-abandoned at once.
+const bothRemoteStates: ProfileReplicaLogoutPending = { ...markerFields, remotePending: true, remoteAbandoned: true };
+void bothRemoteStates;

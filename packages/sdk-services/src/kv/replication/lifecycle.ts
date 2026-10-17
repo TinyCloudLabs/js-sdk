@@ -192,8 +192,9 @@ export type ReplicaDenyOutcome =
   /**
    * Gate moved, intents recorded, first-install anchors cleared and pending generations advanced
    * in one commit. Browser: owner device deleted in that same IDB transaction. Node: the gate
-   * file cannot commit atomically with the device file, so the device is durably deleted by its
-   * identity's pending-intent erase before that intent clears (idempotent replay).
+   * file cannot commit atomically with the device file, so an ordinary denial deletes it
+   * through the identity's pending-intent erase before intent clear. Deferred node sign-out
+   * holds that intent and the device file until validated resume (CONTRACT.md §2).
    */
   | { status: "denied"; lifecycleEpoch: number; intents: number }
   /** The caller's principal didn't match the gate: disabled in memory only; gate untouched. */
@@ -298,6 +299,8 @@ export interface ReplicaLifecycleGate {
    * if expired, denies and crypto-shreds keys before any replica access; it also retries a
    * pending `deleteDatabase` marker and erases intents. Failures remain gated and visible via
    * `pendingPurge()` / `purgePending`; a browser closed at expiry catches it on its next load.
+   * Node/CLI recovery leaves durably deferred revoke intents and physical files untouched,
+   * reporting them as remaining until `ProfileReplicaPurge.resumeDeferredErase`.
    */
   recover(o: { signal: AbortSignal }): Promise<ReplicaEraseReport>;
   /**
@@ -369,6 +372,251 @@ export interface ReplicaLifecycleGate {
   erasePending(o: { signal: AbortSignal }): Promise<ReplicaEraseReport>;
   /** Outstanding intents; non-empty means status `purgePending: true`. */
   pendingPurge(): Promise<ReplicaPurgeIntent[]>;
+}
+
+/** Node/CLI profile-local fencing token, not a secret capability; the profile lock remains authoritative. */
+export interface ProfileReplicaDeferredToken {
+  deniedEpoch: number;
+  principalHash: string;
+}
+
+/** Profile-relative, JSON-safe identity of a path listed before destructive logout. */
+export interface ProfileReplicaUnknownEntry {
+  path: string;
+  kind: "file" | "directory" | "symlink";
+  dev: string;
+  ino: string;
+}
+
+/** Profile-relative directory identity; dev/ino are decimal strings for durable JSON. */
+export interface ProfileReplicaRootIdentity {
+  path: string;
+  dev: string;
+  ino: string;
+}
+/** Exact nonsecret path identity displayed with an inventory confirmation token. */
+export interface ProfileReplicaApprovalEntry extends ProfileReplicaRootIdentity {
+  kind: ProfileReplicaUnknownEntry["kind"] | "missing";
+}
+
+/** Read-only profile-locked inventory, including legacy mirrors and flag-owned roots. */
+export interface ProfileReplicaPreflight {
+  knownLegacyReplicas: number;
+  unknownLegacyPaths: string[];
+  unknownPaths: string[];
+  unknownEntries: ProfileReplicaUnknownEntry[];
+  knownRoots: ProfileReplicaRootIdentity[];
+  knownEntries: ProfileReplicaUnknownEntry[];
+  missingDatabases: string[];
+}
+
+/**
+ * CLI-only durable crash fence. `principalDigest` is a domain-separated
+ * SHA-256 owner binding, not a secret or a substitute for the profile lock;
+ * v2/v3 never fabricate a scoped gate principal hash. A v1 `lifecycleEpoch`
+ * is the pre-denial epoch; `deniedEpoch` is the epoch the v1 denial actually
+ * committed, bound once after that denial and compared for equality from then
+ * on (CONTRACT.md §2). Remote-pending and remote-abandoned are mutually
+ * exclusive durable states.
+ */
+export type ProfileReplicaLogoutPending = (
+  | { v: 1; incarnation: string; lifecycleEpoch: number; principalHash: string; deniedEpoch?: number }
+  | { v: 2; scope: "orphan_profile"; nonce: string }
+  | { v: 3; scope: "inactive_gate"; incarnation: string; lifecycleEpoch: number }
+) & ProfileReplicaRemoteLogoutState & {
+  principalDigest: string;
+  /** Random durable 16-byte challenge salt as 32 lowercase hex characters. */
+  approvalSalt: string;
+  discardLocalChanges?: true;
+  approvedUnknown: ProfileReplicaUnknownEntry[];
+  knownRoots: ProfileReplicaRootIdentity[];
+  knownEntries: ProfileReplicaUnknownEntry[];
+  missingDatabases: string[];
+};
+
+/** A logout marker is remote-pending, remote-abandoned or neither; never both. */
+export type ProfileReplicaRemoteLogoutState =
+  | { remotePending: true; remoteAbandoned?: never }
+  | { remoteAbandoned: true; remotePending?: never }
+  | { remotePending?: never; remoteAbandoned?: never };
+
+/**
+ * Node/CLI-only lifecycle facade for a profile's replica root. The node-sdk exports
+ * `createProfileReplicaPurge({ profileDir, guard })`; `guard` is the caller's
+ * mandatory profile lock and MUST be reentrant within one async call chain: the
+ * CLI calls the facade while already holding its (reentrant) profile lock. This
+ * does not widen the browser `ReplicaLifecycleGate`.
+ *
+ * While a durable deferred denial is active, `recover` and `erasePending`
+ * leave intents and physical files untouched; `pendingPurge` lists the intents.
+ * A complete enumeration may have zero intents, so `remaining: 0` does not
+ * prove completion: `deferredErase()` is the authoritative marker check, and
+ * `LocalReplicaStatus.purgePending` / `ReplicaInspectedStatus.purgePending`
+ * are true while the deferred marker or any intent remains. All guarded reads
+ * and new establishment remain refused. Deferred intents leave that state only
+ * through a validated resume (CONTRACT.md §2); there is no account-switch or
+ * consent-expiry override. The facade never denies or erases a gate,
+ * partition, pending state or device record whose active principal is not
+ * the caller's ("Logout by another account", CONTRACT.md §2).
+ */
+export interface ProfileReplicaPurge extends Pick<ReplicaLifecycleGate, "recover" | "erasePending" | "pendingPurge"> {
+  /**
+   * `deferErase: true` is valid only for `reason: "sign_out"`; other reasons throw
+   * TypeError before any mutation. A successful deferred `denied` outcome MUST carry
+   * `resumeToken`; stale or unguarded outcomes do not authorize a retryable revoke.
+   * Step 1 atomically denies, records every opaque partition/pending intent and
+   * pending generation, and persists the deferred marker. Physical files remain
+   * until `resumeDeferredErase`, even across process restart.
+   */
+  deny(input: ReplicaDenyInput, options?: { deferErase?: boolean }): Promise<ReplicaDenyOutcome & {
+    resumeToken?: ProfileReplicaDeferredToken;
+  }>;
+  /** Returns the persisted active token across restart, even with zero intents; null only after the marker clears. */
+  deferredErase(): Promise<ProfileReplicaDeferredToken | null>;
+  /**
+   * Under the profile lock, require the exact denied epoch and principal hash and a
+   * null gate principal; otherwise throw `REPLICA_GATED`/`stamp_stale` without erasure.
+   * Clear the deferred marker durably before idempotent erase. A crash after clearing
+   * is completed by ordinary recovery. Repeating the same token is safe only while
+   * the same denied epoch/hash persists; a successor establishment fences it.
+   */
+  resumeDeferredErase(token: ProfileReplicaDeferredToken, options: { signal: AbortSignal }): Promise<ReplicaEraseReport>;
+  /**
+   * Read-only profile-locked inventory BEFORE marker, denial or remote call.
+   * Report exact profile-relative unknown paths, kinds and dev/ino plus all
+   * known roots/entries. Unknown/indeterminate data refuses unless explicit
+   * discard consent was supplied; the CLI displays the inventory before acting.
+   * A prior inventory is not a wildcard authorization for later new paths.
+   */
+  preflightLogout(input: { principal: string; discardLocalChanges?: boolean }): Promise<ProfileReplicaPreflight>;
+  /**
+   * Re-inspect and compare the complete approved inventory under the profile
+   * lock, then atomically fsync a scoped v1, orphan v2 or inactive v3 marker.
+   * `approval` is required: the CLI passes its just-displayed preflight even
+   * when it contains no unknown paths. With `remotePending`, the marker fences
+   * replica reads but forbids credential cleanup or erasure until
+   * `completeRemoteLogout` after all exact-CID revokes. Only approved
+   * path/type/dev/ino identities and the explicit discard bit survive; changed
+   * paths refuse pre-action. V1 active remote logout additionally requires a
+   * committed deferred denial/token before online revoke; v2 orphan and v3
+   * inactive markers instead use their version-specific gate-absence/epoch
+   * fences.
+   *
+   * An existing marker is never rewritten here: the same owner, fence,
+   * `remotePending` state and approved inventory return it unchanged; anything
+   * else refuses without mutation. When the gate's active principal is the
+   * caller's, it always yields a v1 marker, even with no replica roots or
+   * intents; another account's active gate yields null and is never denied.
+   * Null otherwise means there is no active principal and no replica-owned
+   * work, not completed logout.
+   *
+   * A missing flag pending index, unrecognized child, nonempty pending state
+   * or corrupt gate requires explicit discard. The CLI still fsyncs
+   * authSignedOut then unlinks and fsyncs both credentials. CLI-bound reads
+   * and ordinary network restore refuse any marker; an explicit remote-revoke
+   * retry may use the retained key/session while `remotePending` without
+   * delivering replica data.
+   */
+  prepareLogoutPending(input: {
+    principal: string;
+    approval: ProfileReplicaPreflight;
+    discardLocalChanges?: boolean;
+    remotePending?: true;
+  }): Promise<ProfileReplicaLogoutPending | null>;
+  /**
+   * After every authoritative exact-CID revoke succeeds, revalidate the
+   * marker's principal and version-specific fence under the profile lock:
+   * v1 `deniedEpoch`/hash, v2 no replacement gate, or v3 exact inactive
+   * epoch/null principal. Then durably remove `remotePending`. A marker that is
+   * not remote-pending (remote-abandoned or already cleanup-ready) refuses
+   * without mutation. A failed/partial remote sequence never calls this.
+   */
+  completeRemoteLogout(input: { principal: string }): Promise<ProfileReplicaLogoutPending>;
+  /**
+   * Under the profile lock, report whether this principal's marker is still
+   * remote-pending and its v1 deferred gate, v2 orphan or v3 inactive gate
+   * fence still matches. False only when the marker is absent/completed;
+   * a mismatched principal or stale gate refuses. This permits an explicit
+   * network-only revoke retry, never replica delivery.
+   */
+  remotePendingLogout(input: { principal: string }): Promise<boolean>;
+  /**
+   * First explicit PLAIN logout attempt after unfinished remote revoke:
+   * compare the original durable approved inventory with the current
+   * path/type/dev/ino set under the profile lock. Any change refuses with
+   * `REPLICA_GATED`/`gate_unavailable`, prints every token-bound
+   * `ProfileReplicaApprovalEntry`, exposes the same complete set as
+   * `error.inventoryApprovalEntries` plus a nonsecret 32-hex-character
+   * `error.inventoryApprovalToken`, and mutates nothing even when `approval`
+   * contains the new paths or `discardLocalChanges` is true. With the
+   * original inventory intact, validate the fresh approval and the marker's
+   * version-specific owner/gate fence (a v1 marker is classified by its gate
+   * and checked exactly one way, CONTRACT.md §2), then atomically replace
+   * `remotePending` with `remoteAbandoned: true`.
+   * This is not an online-success receipt and makes no further node call.
+   */
+  abandonRemoteLogout(input: {
+    principal: string;
+    approval: ProfileReplicaPreflight;
+    discardLocalChanges?: boolean;
+  }): Promise<ProfileReplicaLogoutPending>;
+  /**
+   * Only a separate explicit CLI command with
+   * `--discard-local-changes --approve-inventory <token>` may approve a
+   * changed remote-pending inventory. Under the profile lock, require the
+   * same owner and version-specific gate fence, original-to-current inventory
+   * mismatch, exact fresh preflight and matching displayed 32-hex-character
+   * token. Commit the newly approved identities with `remoteAbandoned: true`,
+   * never a remote receipt. Missing, stale or reused tokens fail without
+   * mutation; there is no same-command fallback from `abandonRemoteLogout`.
+   */
+  approveChangedPlainLogout(input: {
+    principal: string;
+    approval: ProfileReplicaPreflight;
+    discardLocalChanges: true;
+    inventoryApprovalToken: string;
+  }): Promise<ProfileReplicaLogoutPending>;
+  /**
+   * After a completed remote sequence, an inventory mismatch leaves the
+   * marker and signed-out state in place. A fresh explicit listing/ack under
+   * the profile lock replaces only the approved inventory; remote revokes
+   * are not repeated, and a still-pending remote sequence cannot reapprove.
+   */
+  reapproveLogoutPending(input: {
+    principal: string;
+    approval: ProfileReplicaPreflight;
+  }): Promise<ProfileReplicaLogoutPending>;
+  /**
+   * CLI startup/logout recovery under the same profile lock. A `remotePending`
+   * marker returns failure with no credential or file deletion. For a
+   * cleanup-ready active-v1 marker, validate the gate and durably commit
+   * generation-fenced denial with complete partition/pending intents
+   * BEFORE calling `clearCredentials`; denial failure leaves the marker,
+   * both credentials and replica files intact and reports nonzero failure.
+   * An already-deferred v1 validates its exact denial; v3 validates its
+   * inactive epoch and v2 its orphan/no-replacement-gate fence without
+   * inventing scoped intents. Only then does `clearCredentials` atomically
+   * fsync CLI authSignedOut before unlinking and fsyncing both session.json
+   * and key.json. Recheck durable approved identities before each unlink;
+   * mismatch stops with marker, remaining files and nonzero failure.
+   * Post-success credentials remain shredded. The callback erases only its
+   * approved inventory under the profile lock (never recursive legacy
+   * deletion). In-repo CLI code owns the signed-out postcondition; the
+   * facade verifies credential absence before erasure. A missing marker
+   * with corrupt/unreadable gate reports failure and nonzero remaining,
+   * without invoking callbacks or fabricating successful completion.
+   */
+  recoverLogoutPending(options: {
+    signal: AbortSignal;
+    clearCredentials: () => Promise<void>;
+    eraseLegacyReplicas: (options: {
+      discardLocalChanges: boolean;
+      approvedUnknown: readonly ProfileReplicaUnknownEntry[];
+      knownRoots: readonly ProfileReplicaRootIdentity[];
+      knownEntries: readonly ProfileReplicaUnknownEntry[];
+      missingDatabases: readonly string[];
+    }) => Promise<void>;
+  }): Promise<ReplicaEraseReport>;
 }
 
 /** Worker replies that carry replica-served data are stamped; a reply without a stamp is dropped. */
