@@ -411,6 +411,26 @@ describe("TC-858 policy-only source identity", () => {
     }
   });
 
+  it("admits the I0 gate build-order workflow, but no other workflow", () => {
+    // tc-191-i0-gate.yml builds for packed CLI/MCP checks; it never feeds the replica-e2e size jobs.
+    for (const [workflow, admitted] of [
+      [".github/workflows/tc-191-i0-gate.yml", true],
+      [".github/workflows/replica-e2e.yml", false],
+      [".github/workflows/authority-tests.yml", false],
+    ] as const) {
+      const { root, base } = fixture();
+      try {
+        mkdirSync(dirname(join(root, workflow)), { recursive: true });
+        writeFileSync(join(root, workflow), "name: changed\n");
+        git(root, "add", ".");
+        git(root, "commit", "-qm", `change ${workflow}`);
+        expect(isPolicyOnlySinceApprovedSource(root, base, ciCorrectionPolicyOnlyPaths)).toBe(admitted);
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    }
+  });
+
   it("refuses a real Git rename of shipped source into an approved worker-policy script", () => {
     const { root, base } = fixture();
     try {

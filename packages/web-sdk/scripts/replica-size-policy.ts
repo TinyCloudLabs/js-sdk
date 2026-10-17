@@ -337,7 +337,9 @@ function isMeasuredArtifactInput(path: string): boolean {
 // A CLI implementation cannot enter either measured entry graph. Its manifest,
 // scripts and configs can influence the CI build and remain frozen. Unknown
 // paths fail closed, including executable files beside Changesets release notes.
+// The I0 gate workflow builds only for packed CLI/MCP checks, never the size jobs.
 export const ciCorrectionPolicyOnlyPaths: ReadonlySet<string> = new Set([
+  ".github/workflows/tc-191-i0-gate.yml",
   "packages/replica/CHANGELOG.md",
   "packages/replica/README.md",
   "packages/replica/scripts/check-worker-size.test.ts",
