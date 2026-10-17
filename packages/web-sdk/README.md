@@ -111,6 +111,17 @@ after size cuts: root to 1,464,122 / 1,394,880 B (+20 / +11), first import
 (+134 / +129), activation (+4 / +5) and the worker (+7). The ledger's
 `hardeningRatchet` row records them and cannot change later.
 
+**Ancestry pins and squash merges.** A policy row records the PR-branch commit it
+was reviewed at, and its introduction check requires that literal commit in the
+PR head. js-sdk squash-merges, so that commit is unreachable from master
+afterwards. Once merged, a pin is instead resolved to the commit that landed it:
+the first first-parent master commit that added the pin to `scripts/`, which is
+its squash commit (`landingCommit` in `scripts/replica-size-policy.ts`). Every PR
+asserts that each merged row's pin is on its base or was landed by it. After a
+squash merge, nothing needs editing. Content keys (blob hashes) were rejected:
+pinned files such as `authority.ts` legitimately change later, whereas the
+landing commit stays an ancestor for good.
+
 The opt-in first-import ceiling is 51,925 B ESM / 67,138 B CJS gzip
 (including the replica parser and noble dependencies); awaiting the IndexedDB
 factory has a separate 23,075 B / 24,655 B ceiling. The content-hashed worker
