@@ -6,10 +6,11 @@ import { tmpdir } from "node:os";
 import { measureReplicaOptionalLoaded, type LoadedSizes } from "./measure-replica-optional";
 import {
   approvedCompactFixRequired, approvedMeasurementCorrection, approvedRelocations, compactFixOptionalAllowance,
-  correctedOptionalAllowance, ciOptionalAllowance, fixRequiredOptionalAllowance, optionalFormats, priorOptionalAllowance,
-  relocatedOptionalAllowance, relocationCommit, validateOptionalEntryTransition, validateOptionalLedger, type OptionalLedger,
+  correctedOptionalAllowance, ciOptionalAllowance, fixRequiredOptionalAllowance, hardeningOptionalAllowance, optionalFormats,
+  priorOptionalAllowance, relocatedOptionalAllowance, relocationCommit, validateOptionalEntryTransition, validateOptionalLedger,
+  type OptionalLedger,
 } from "./replica-optional-size-policy";
-import { assertCiSizeToolchain, approvedCiToolchainCorrection, approvedFixRequiredRatchet, approvedGatedOnlyRatchet, approvedPhase2, ciCorrectionPolicyOnlyPaths, isPolicyOnlySinceApprovedSource, validateCiToolchainTransition, validateGatedOnlyRatchet, validateLedger, validateMasterMergeResolutionTransition, type GzipSizes, type Ledger, type LedgerEntry } from "./replica-size-policy";
+import { assertCiSizeToolchain, approvedCiToolchainCorrection, approvedFixRequiredRatchet, approvedGatedOnlyRatchet, approvedPhase2, ciCorrectionPolicyOnlyPaths, isPolicyOnlySinceApprovedSource, validateCiToolchainTransition, validateGatedOnlyRatchet, validateHardeningRatchetTransition, validateLedger, validateMasterMergeResolutionTransition, type GzipSizes, type Ledger, type LedgerEntry } from "./replica-size-policy";
 import { collectMeasuredArtifactInputs } from "./replica-size-inputs";
 type Baseline = {
   webSdkTestBaseline: { ref: string; unhandledErrors: number; failingNames: string[]; unhandledSignatures: string[] };
@@ -92,7 +93,8 @@ if (ciCorrection) {
   assertCiSizeToolchain(bun, rustc, ciCorrection);
   console.log(`Current size toolchain: Bun ${bun}; ${rustc}`);
 }
-validateOptionalLedger(optionalLedger, ledger.fixRequiredRatchet !== undefined, ciCorrection !== undefined);
+validateOptionalLedger(optionalLedger, ledger.fixRequiredRatchet !== undefined, ciCorrection !== undefined,
+  ledger.hardeningRatchet !== undefined);
 const optionalCurrent = await measureReplicaOptionalLoaded(distDir);
 for (const format of optionalFormats) {
   const total = optionalLedger.entries.reduce((sum, entry) => sum + entry[format], 0);
@@ -134,7 +136,7 @@ for (const format of formats) {
     }
   }
   console.log(`${format}: current=${currentSizes[format]} gzip-bytes`);
-  const ceiling = ciCorrection?.measured.rootCeiling[format] ??
+  const ceiling = ledger.hardeningRatchet?.root.ceiling[format] ?? ciCorrection?.measured.rootCeiling[format] ??
     ledger.fixRequiredRatchet?.rootCeiling[format] ?? ledger.phase2Ratchet?.ceiling[format];
   if (ceiling !== undefined) {
     console.log(`${format}: TC-858 Phase 2 absolute root ceiling=${ceiling} gzip-bytes`);
@@ -172,6 +174,16 @@ if (prBaseSha) {
   validateLedger(baseLedger, true);
   validateCiToolchainTransition(baseLedger.canonicalToolchainCorrection, ciCorrection);
   validateMasterMergeResolutionTransition(baseLedger.masterMergeResolution, ledger.masterMergeResolution);
+  validateHardeningRatchetTransition(baseLedger.hardeningRatchet, ledger.hardeningRatchet);
+  const hardening = ledger.hardeningRatchet;
+  if (hardening !== undefined && baseLedger.hardeningRatchet === undefined &&
+      (baseLedger.masterMergeResolution === undefined ||
+       spawnSync("git", ["merge-base", "--is-ancestor", hardening.sourceCommits.at(-1)!, "HEAD"], {
+         cwd: repoRoot,
+       }).status !== 0)) {
+    console.error("The #565 hardening ratchet requires the merged #548 resolution and its measured source commits.");
+    failed = true;
+  }
   const baseOptionalPath = "packages/web-sdk/scripts/replica-optional-size-ledger.json";
   const optionalResult = spawnSync("git", ["show", `${mergeBase}:${baseOptionalPath}`], {
     cwd: repoRoot, encoding: "utf8",
@@ -186,7 +198,7 @@ if (prBaseSha) {
     throw new Error(`Unable to read base ${baseOptionalPath}: ${optionalResult.stderr.trim()}`);
   }
   validateOptionalLedger(baseOptional, baseLedger.fixRequiredRatchet !== undefined,
-    baseLedger.canonicalToolchainCorrection !== undefined);
+    baseLedger.canonicalToolchainCorrection !== undefined, baseLedger.hardeningRatchet !== undefined);
   validateGatedOnlyRatchet(optionalLedger.gatedOnlyRatchet, baseOptional.gatedOnlyRatchet);
   if (baseOptional.fixRequired !== undefined &&
       JSON.stringify(optionalLedger.fixRequired) !== JSON.stringify(baseOptional.fixRequired)) {
@@ -251,8 +263,13 @@ if (prBaseSha) {
       optionalFormats.every((format) =>
         baseOptional.allowance[format] === ciOptionalAllowance[format] &&
         optionalLedger.allowance[format] === compactFixOptionalAllowance[format]);
-    if (!pairedTransition && !measurementCorrection && !reviewedFixTransition && !ciCorrectionTransition && !compactFixTransition) {
-      console.error(`${baseOptionalPath}: optional allowance may increase only with an exact reviewed relocation, toolchain correction, or fix-required source row.`);
+    const hardeningTransition = baseLedger.hardeningRatchet === undefined && ledger.hardeningRatchet !== undefined &&
+      optionalFormats.every((format) =>
+        baseOptional.allowance[format] === compactFixOptionalAllowance[format] &&
+        optionalLedger.allowance[format] === hardeningOptionalAllowance[format]);
+    if (!pairedTransition && !measurementCorrection && !reviewedFixTransition && !ciCorrectionTransition &&
+        !compactFixTransition && !hardeningTransition) {
+      console.error(`${baseOptionalPath}: optional allowance may increase only with an exact reviewed relocation, toolchain correction, fix-required source row, or hardening ratchet.`);
       failed = true;
     }
   }

@@ -3,13 +3,16 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { assertCiSizeToolchain, approvedCiToolchainCorrection, approvedFixRequiredRatchet, approvedGatedOnlyRatchet, ciCorrectionPolicyOnlyPaths, isPolicyOnlySinceApprovedSource, validateCiToolchainTransition, validateGatedOnlyRatchet, validateLedger, validateMasterMergeResolutionTransition, type Ledger, type MasterMergeResolution } from "./replica-size-policy";
+import { MAX_WORKER_GZIP_BYTES } from "../../replica/scripts/check-worker-size";
+import { compactFixOptionalAllowance } from "./replica-optional-size-policy";
+import { assertCiSizeToolchain, approvedCiToolchainCorrection, approvedFixRequiredRatchet, approvedGatedOnlyRatchet, approvedHardeningRatchet, ciCorrectionPolicyOnlyPaths, isPolicyOnlySinceApprovedSource, validateCiToolchainTransition, validateGatedOnlyRatchet, validateHardeningRatchetTransition, validateLedger, validateMasterMergeResolutionTransition, type HardeningRatchet, type Ledger, type MasterMergeResolution } from "./replica-size-policy";
 
 const current = JSON.parse(readFileSync(resolve(import.meta.dir, "replica-size-ledger.json"), "utf8")) as Ledger;
 const historical: Ledger = {
   ...current,
   canonicalToolchainCorrection: undefined,
   masterMergeResolution: undefined,
+  hardeningRatchet: undefined,
   phase2Ratchet: {
     ...current.phase2Ratchet!,
     toolchain: "Bun 1.4.3; production webpack; gzip -9 -c",
@@ -248,7 +251,7 @@ describe("TC-858 reviewed master-merge input resolution", () => {
     expect(current.masterMergeResolution).toEqual(reviewed);
     // The reviewed rows stay an unchanged prefix; each later replica PR must
     // append exactly one row of its own (check-phase1-replica-dist.ts).
-    expect(current.entries.slice(0, 7).map(({ pr }) => pr)).toEqual(["#511", "#529", "#546", "#551", "#563", "#564", "#553"]);
+    expect(current.entries.slice(0, 8).map(({ pr }) => pr)).toEqual(["#511", "#529", "#546", "#551", "#563", "#564", "#553", "#565"]);
   });
 
   it("refuses the superseded #551 resolution bound to e57a6fd6 and e364e7a0", () => {
@@ -979,5 +982,60 @@ describe("TC-858 exact-blob fix-required measured source exception", () => {
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
+  });
+});
+
+describe("TC-858 #565 hardening exact-delta ratchet", () => {
+  const row = () => structuredClone(approvedHardeningRatchet);
+
+  it("is in the ledger exactly once with ceilings equal to the prior caps plus the canonical deltas", () => {
+    expect(() => validateLedger(current)).not.toThrow();
+    expect(current.hardeningRatchet).toEqual(approvedHardeningRatchet);
+    const prior = approvedCiToolchainCorrection.measured;
+    for (const format of ["index.mjs", "index.cjs"] as const) {
+      expect(approvedHardeningRatchet.root.ceiling[format]).toBe(prior.rootCeiling[format] + approvedHardeningRatchet.root.delta[format]);
+    }
+    for (const format of ["replica.mjs", "replica.cjs"] as const) {
+      expect(approvedHardeningRatchet.firstImport.ceiling[format])
+        .toBe(compactFixOptionalAllowance[format] + approvedHardeningRatchet.firstImport.delta[format]);
+    }
+    for (const format of ["activation.mjs", "activation.cjs"] as const) {
+      expect(approvedHardeningRatchet.activation.ceiling[format])
+        .toBe(prior.activationCeiling[format] + approvedHardeningRatchet.activation.delta[format]);
+    }
+    expect(approvedHardeningRatchet.worker.ceiling).toBe(820_101 + approvedHardeningRatchet.worker.delta);
+    expect(MAX_WORKER_GZIP_BYTES).toBe(approvedHardeningRatchet.worker.ceiling);
+  });
+
+  it("refuses one extra byte in any bucket, other CI provenance, a dropped source commit or a missing #548 base", () => {
+    const mutations: Array<(changed: HardeningRatchet) => void> = [
+      (changed) => { changed.root.ceiling["index.mjs"]++; },
+      (changed) => { changed.root.delta["index.cjs"]++; },
+      (changed) => { changed.firstImport.ceiling["replica.cjs"]++; },
+      (changed) => { changed.activation.ceiling["activation.mjs"]++; },
+      (changed) => { changed.worker.ceiling++; },
+      (changed) => { changed.canonicalCI.run = "https://github.com/TinyCloudLabs/js-sdk/actions/runs/1"; },
+      (changed) => { changed.sourceCommits.pop(); },
+    ];
+    for (const mutate of mutations) {
+      const ledger = copy(current);
+      const changed = row();
+      mutate(changed);
+      ledger.hardeningRatchet = changed;
+      expect(() => validateLedger(ledger)).toThrow();
+    }
+    const withoutBase = copy(current);
+    delete withoutBase.masterMergeResolution;
+    expect(() => validateLedger(withoutBase)).toThrow();
+  });
+
+  it("may be introduced once and never changed or removed in a later base", () => {
+    expect(() => validateHardeningRatchetTransition(undefined, row())).not.toThrow();
+    expect(() => validateHardeningRatchetTransition(row(), row())).not.toThrow();
+    const changed = row();
+    changed.firstImport.ceiling["replica.mjs"]++;
+    expect(() => validateHardeningRatchetTransition(undefined, changed)).toThrow();
+    expect(() => validateHardeningRatchetTransition(row(), changed)).toThrow();
+    expect(() => validateHardeningRatchetTransition(row(), undefined)).toThrow();
   });
 });

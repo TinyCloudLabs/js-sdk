@@ -800,3 +800,28 @@ describe("origin deny tombstone", () => {
     expect((await lifecycle.recover({ signal: new AbortController().signal })).failed).toContainEqual({ id: "recover", code: "gate_unavailable" });
   });
 });
+
+// #548 correctness review P2: a worker that cannot start must fail its calls, not leave them hanging.
+describe("worker start-up failure", () => {
+  test("open rejects promptly when the worker reports that it could not start", async () => {
+    const lifecycle = createIndexedDbLifecycle();
+    const stamp = await lifecycle.establishSessionStamp(principal, { consentAnchor: { source: "siwe", at: Date.now() } });
+    let terminated = false;
+    // Like a real Worker whose start-up failed: reportError surfaces as an error event once the main thread listens.
+    const worker = {
+      onmessage: null as ((message: MessageEvent) => void) | null,
+      set onerror(listener: (event: ErrorEvent) => void) {
+        queueMicrotask(() => listener({ message: "Uncaught Error: WebAssembly is blocked by CSP" } as ErrorEvent));
+      },
+      postMessage() {},
+      terminate() { terminated = true; },
+    };
+    const adapter = indexedDbReplicaStorage({ lifecycle, worker: () => worker as unknown as Worker });
+    await expect(adapter.open({
+      identity: { host: "https://node.example", space: SPACE, principal },
+      space: SPACE, prefix: "notes/", allowSecrets: false, stamp,
+      grantPolicy: { grantTtlMs: 60_000, consentAnchor: null },
+    })).rejects.toMatchObject({ code: "STORAGE_ERROR", message: expect.stringContaining("WebAssembly is blocked by CSP") });
+    expect(terminated).toBe(true);
+  }, 5_000);
+});

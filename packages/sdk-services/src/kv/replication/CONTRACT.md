@@ -280,6 +280,24 @@ gate with a missing floor, or a gate behind the tombstone epoch fails closed
 When the tombstone advances, old in-memory stamps are not deliverable in any tab, even
 before IDB deletion completes.
 
+**Node deny floor.** `replica-deny-floor.json` beside the gate file holds
+`{"epoch": <positive safe integer>, "deniedAt": <non-negative safe integer ms>}` (0600, atomic
+rename). Deny writes it **before** the gate-file rewrite and advances past both the gate and the
+floor. An absent floor is valid only before the first deny. After a deny, a missing gate file is
+never recreated, and a gate whose `lifecycleEpoch` or `deniedAt` is behind the floor (or a
+malformed floor) fails closed (`gate_unavailable`); a later deny may move such a gate forward.
+**Recovery:** network access is unaffected, but local replicas stay disabled for that profile.
+`tc replica reset --replica <name> --purge` removes only a named replica and does not rewrite the
+gate, so the route is a fresh profile: `tc profile delete <name>`, then sign in again. The CLI
+refuses to delete the default profile, so switch the default first (`tc profile switch <other>`).
+The refusal message names this route.
+**Deleting both files:** if both `replica-gate.json` and `replica-deny-floor.json` are deleted, the
+profile is indistinguishable from first use and a new gate is created. Its fresh incarnation makes
+every older persisted stamp stale, and a new stamp still requires `establishSessionStamp` from a
+fresh interactive sign-in with an independently verified finite-expiration owner SIWE (§3); restore
+never establishes one. What is lost with the files is the `deniedAt` floor, the check that this
+SIWE was issued after the last sign-out.
+
 **The gate is mandatory with replication on.**
 - `indexedDbReplicaStorage()` MUST expose `lifecycle`, and the web runtime refuses storage without it with `RUNTIME_UNSUPPORTED`.
 - `sqliteReplicaStorage()` exposes it by default.
