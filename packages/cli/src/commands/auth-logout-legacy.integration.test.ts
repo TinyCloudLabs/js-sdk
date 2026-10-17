@@ -1,12 +1,12 @@
 import { afterEach, expect, test } from "bun:test";
-import { copyFile, lstat, mkdir, mkdtemp, open, readFile, readdir, rename, rm, stat, symlink, writeFile } from "node:fs/promises";
+import { chmod, copyFile, lstat, mkdir, mkdtemp, open, readFile, readdir, rename, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { Database } from "bun:sqlite";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { createProfileReplicaPurge, PrivateKeySigner, REPLICA_LOGOUT_PENDING_FILE } from "@tinycloud/node-sdk";
 import { REPLICA_GATE_FILE } from "@tinycloud/sdk-services/kv/replication/contractConstants";
 import { profileConfigPath, profilePath, sessionPath, withProfileLock, withTinyCloudStateRoot, writeJsonAtomic } from "@tinycloud/operations/state";
-import { readGateSnapshot } from "@tinycloud/replica/profile-gate";
+import { denyGate, establishSessionStamp, readGateSnapshot } from "@tinycloud/replica/profile-gate";
 import { SqliteReplicaStore } from "@tinycloud/replica/sqlite";
 import { parseSignedSiweCacao } from "@tinycloud/sdk-core";
 
@@ -30,7 +30,7 @@ async function run(home: string, args: string[]) {
   return { stdout, stderr, exitCode };
 }
 
-async function fixture() {
+async function fixture(withReplica = true) {
   const home = await mkdtemp(join(tmpdir(), "tc858-v1-legacy-cli-"));
   homes.push(home);
   let nodeMode: "success" | "fail" = "success";
@@ -75,21 +75,23 @@ async function fixture() {
       unknown: join(directory, "replicas", "notes", "future-write.pending"),
     };
   });
-  expect((await run(home, ["auth", "login", "--method", "local", "--replication-prefix", "notes/"])).exitCode).toBe(0);
+  expect((await run(home, ["auth", "login", "--method", "local", ...(withReplica ? ["--replication-prefix", "notes/"] : [])])).exitCode).toBe(0);
   const session = JSON.parse(await readFile(paths.session, "utf8")) as {
     delegationCid: string; spaceId: string; verificationMethod: string;
   };
-  const store = await SqliteReplicaStore.open(join(paths.directory, "replicas", "notes"), { create: true });
-  try {
-    await store.init({
-      name: "notes", replicaId: "r-test", host: node.url.origin, space: session.spaceId,
-      prefix: "notes/", deviceDid: session.verificationMethod, allowSecrets: false,
-      localReadPolicy: "whileGrantValid", retentionGrantCid: null,
-    });
-  } finally {
-    await store.close();
+  if (withReplica) {
+    const store = await SqliteReplicaStore.open(join(paths.directory, "replicas", "notes"), { create: true });
+    try {
+      await store.init({
+        name: "notes", replicaId: "r-test", host: node.url.origin, space: session.spaceId,
+        prefix: "notes/", deviceDid: session.verificationMethod, allowSecrets: false,
+        localReadPolicy: "whileGrantValid", retentionGrantCid: null,
+      });
+    } finally {
+      await store.close();
+    }
+    expect(await Bun.file(paths.db).exists()).toBe(true);
   }
-  expect(await Bun.file(paths.db).exists()).toBe(true);
   return {
     home, paths, sessionCid: session.delegationCid, networkPaths, revokedCids,
     setMode(value: "success" | "fail") { nodeMode = value; },
@@ -574,6 +576,125 @@ test("corrupt-gate orphan revoke failure keeps the remote-pending marker and all
   }
 }, 30_000);
 
+for (const changeGate of [false, true]) test(
+  `network-only session revocation ${changeGate ? "refuses removal of" : "accepts unchanged"} inactive replica gate`,
+  async () => {
+    const { home, paths, sessionCid, networkPaths, revokedCids, setOnRevocationReceipt } = await fixture(false);
+    const ownerDid = JSON.parse(await readFile(paths.session, "utf8")).ownerDid as string;
+    await establishSessionStamp(paths.directory, ownerDid, { siweIssuedAt: Date.now() - 60_000 });
+    await denyGate(paths.directory, { reason: "sign_out", principal: ownerDid }, async () => []);
+    const inactive = await readGateSnapshot(paths.directory);
+    expect(inactive).toMatchObject({ principalHash: null, eraseDeferred: false, intents: [] });
+    const gatePath = join(paths.directory, REPLICA_GATE_FILE);
+    const gateBefore = await readFile(gatePath);
+    const session = await readFile(paths.session);
+    const key = await readFile(paths.key);
+    if (changeGate) setOnRevocationReceipt(async () => { await rm(gatePath); });
+    const completed = await run(home, ["auth", "logout", "--revoke"]);
+    expect(revokedCids).toEqual([sessionCid]);
+    expect(networkPaths).toContain("/revoke");
+    if (changeGate) {
+      expect(completed.exitCode).toBeGreaterThan(0);
+      expect(completed.stderr).toContain("PROFILE_CHANGED_DURING_REVOKE");
+      expect(await readFile(paths.session)).toEqual(session);
+      expect(await readFile(paths.key)).toEqual(key);
+      await expect(readFile(gatePath)).rejects.toMatchObject({ code: "ENOENT" });
+    } else {
+      expect(completed.exitCode, completed.stderr).toBe(0);
+      for (const file of [paths.session, paths.key]) {
+        await expect(readFile(file)).rejects.toMatchObject({ code: "ENOENT" });
+      }
+      expect(await readFile(gatePath)).toEqual(gateBefore);
+      expect(JSON.parse(await readFile(join(paths.directory, "profile.json"), "utf8")).authSignedOut).toBe(true);
+    }
+  }, 30_000,
+);
+
+for (const interruptDenial of [false, true]) test(
+  `active-v1 marker ${interruptDenial ? "interrupted before denial" : "whose denial write fails"} resumes without early credential shred`,
+  async () => {
+    const { home, paths, networkPaths } = await fixture();
+    const principal = JSON.parse(await readFile(paths.session, "utf8")).ownerDid as string;
+    const session = await readFile(paths.session);
+    const key = await readFile(paths.key);
+    const markerPath = join(paths.directory, REPLICA_LOGOUT_PENDING_FILE);
+    const purge = createProfileReplicaPurge({
+      profileDir: paths.directory,
+      guard: <T>(section: () => Promise<T>): Promise<T> =>
+        withTinyCloudStateRoot(home, () => withProfileLock(PROFILE, section, { requireProfile: true })),
+    });
+    const approval = await purge.preflightLogout({ principal });
+    const marker = await purge.prepareLogoutPending({ principal, approval });
+    expect(marker?.v).toBe(1);
+    const gateBefore = await readGateSnapshot(paths.directory);
+    if (!interruptDenial) {
+      let clearCalls = 0;
+      let eraseCalls = 0;
+      const originalMode = (await stat(paths.directory)).mode & 0o777;
+      const failed = await withTinyCloudStateRoot(home, () => withProfileLock(PROFILE, async () => {
+        await chmod(paths.directory, 0o555);
+        try {
+          return await purge.recoverLogoutPending({
+            signal: new AbortController().signal,
+            clearCredentials: async () => { clearCalls++; },
+            eraseLegacyReplicas: async () => { eraseCalls++; },
+          });
+        } finally {
+          await chmod(paths.directory, originalMode);
+        }
+      }, { requireProfile: true }));
+      expect(failed.failed).toHaveLength(1);
+      expect(failed.remaining).toBeGreaterThan(0);
+      expect(clearCalls).toBe(0);
+      expect(eraseCalls).toBe(0);
+      expect(await readGateSnapshot(paths.directory)).toEqual(gateBefore);
+    }
+    expect(await Bun.file(markerPath).exists()).toBe(true);
+    expect(await readFile(paths.session)).toEqual(session);
+    expect(await readFile(paths.key)).toEqual(key);
+    expect(await Bun.file(paths.db).exists()).toBe(true);
+    const before = networkPaths.length;
+    const resumed = await run(home, ["auth", "logout"]);
+    expect(resumed.exitCode, resumed.stderr).toBe(0);
+    expect(networkPaths).toHaveLength(before);
+    for (const file of [markerPath, paths.session, paths.key, paths.db]) {
+      await expect(readFile(file)).rejects.toMatchObject({ code: "ENOENT" });
+    }
+    expect((await readGateSnapshot(paths.directory))?.principalHash).toBeNull();
+  }, 30_000,
+);
+
+test("ordinary active-v1 BUSY cleanup reapproves changed inventory without replaying network revocation", async () => {
+  const { home, paths, networkPaths } = await fixture();
+  const markerPath = join(paths.directory, REPLICA_LOGOUT_PENDING_FILE);
+  const before = networkPaths.length;
+  const store = await SqliteReplicaStore.open(dirname(paths.db), { create: false });
+  await store.open();
+  const lease = await store.acquireSyncLease(60_000);
+  if (!lease) throw new Error("Expected a held SQLite lease before plain logout");
+  try {
+    const incomplete = await run(home, ["auth", "logout"]);
+    expect(incomplete.exitCode).toBeGreaterThan(0);
+    expect(incomplete.stderr).toContain("REPLICA_PURGE_FAILED");
+    expect(await Bun.file(markerPath).exists()).toBe(true);
+    expect(await Bun.file(paths.db).exists()).toBe(true);
+    await expect(readFile(paths.session)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(readFile(paths.key)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(JSON.parse(await readFile(join(paths.directory, "profile.json"), "utf8")).authSignedOut).toBe(true);
+    expect((await readGateSnapshot(paths.directory))?.principalHash).toBeNull();
+  } finally {
+    await store.releaseLease(lease);
+    await store.close();
+  }
+  await addUnknown(paths.unknown);
+  const completed = await run(home, ["auth", "logout", "--discard-local-changes"]);
+  expect(completed.exitCode, completed.stderr).toBe(0);
+  expect(networkPaths).toHaveLength(before);
+  for (const file of [paths.db, paths.unknown, markerPath]) {
+    await expect(readFile(file)).rejects.toMatchObject({ code: "ENOENT" });
+  }
+}, 30_000);
+
 test("crash after v2 marker fsync keeps a corrupt gate and refuses a direct retry until repaired", async () => {
   const { home, paths, networkPaths } = await fixture();
   await addUnknown(paths.unknown);
@@ -607,6 +728,9 @@ test("crash after v2 marker fsync keeps a corrupt gate and refuses a direct retr
   expect(refused.exitCode).toBeGreaterThan(0);
   expect(refused.stderr).toContain("REPLICA_GATED");
   expect(refused.stderr).toMatch(/replica-gate\.json|corrupt gate.*(remove|resolve)/i);
+  expect(refused.stderr).toContain(gatePath);
+  expect(refused.stderr).toContain("damaged lock file from an interrupted logout; move it aside and re-run `tc auth logout`");
+  expect(refused.stderr).toMatch(/credentials.*data.*intact/i);
   expect(networkPaths).toHaveLength(before);
   expect(await readFile(markerPath)).toEqual(marker);
   expect(await readFile(gatePath)).toEqual(gateBytes);
