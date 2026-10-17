@@ -63,12 +63,22 @@ export type CiToolchainCorrection = {
   };
   reason: string;
 };
+export type MasterMergeResolution = {
+  label: string;
+  mergedHead: string;
+  masterBase: string;
+  rulings: [string, string, string];
+  regeneration: string;
+  measuredPaths: Record<string, string>;
+  attribution: Record<string, string>;
+};
 export type Ledger = {
   allowance: GzipSizes;
   entries: LedgerEntry[];
   phase2Ratchet?: Phase2Ratchet;
   fixRequiredRatchet?: FixRequiredRatchet;
   canonicalToolchainCorrection?: CiToolchainCorrection;
+  masterMergeResolution?: MasterMergeResolution;
 };
 
 const formats = ["index.mjs", "index.cjs"] as const;
@@ -144,6 +154,30 @@ export const approvedCiToolchainCorrection: CiToolchainCorrection = {
   reason: "GitHub replica-e2e Node size jobs 117210798521 and 117210798348 in run 38971529166 independently measured the same master9891 and #548 e5b080d5 build under CI Bun 1.3.14 and rustc 1.99.0. Local rebuilds, including the previous 1462685/1393687 master baseline, are non-canonical smoke tests. The GitHub candidate sets stricter zero-headroom root and first-import ceilings without changing shipped source or historical rows.",
 };
 
+/** Only these five reviewed blobs may differ from the trusted master artifact inputs. */
+export const approvedMasterMergeResolution: MasterMergeResolution = {
+  label: "TC-858 #548 merged #551 containment and stamped replica inputs",
+  mergedHead: "e364e7a0109cf00cd4af7ebbc79154eb7cc1fe34",
+  masterBase: "e57a6fd646e26c56d3a02b2c08b1963179a52c67",
+  rulings: [
+    "Naomi TC-858: store.ts merge of #551 containment and #548 stamped store",
+    "Naomi TC-858: derived lockfile for the #548 replica dependency over master 18f05ab9",
+    "Naomi TC-858: approved #548 Node/replica manifests with master beta release versions",
+  ],
+  regeneration: "Bun 1.3.14: start with master 18f05ab9 bun.lock, add @tinycloud/replica 0.2.4-beta.2 to the web-sdk manifest, run bun install and bun install --frozen-lockfile; the lock differs from master only by that dependency.",
+  measuredPaths: {
+    "packages/replica/src/sqlite/store.ts": "0b695140525dfc09b0c4f2eb903ae8ab143d5331",
+    "packages/web-sdk/package.json": "4ef53d42a91619cfaa09f67011d2f745f11ff30e",
+    "bun.lock": "9da336ab01010726a77390e26ab9ed4e27738dc4",
+    "packages/node-sdk/package.json": "52f40d87c931e7570f4efac2da3e841ee90290d3",
+    "packages/replica/package.json": "54de14c3c93b34afffc4f974fcc97a8bb5e0db94",
+  },
+  attribution: {
+    "packages/node-sdk/package.json": "approved #548 content (ddc032ca) plus master release version strings only: Node 3.2.6-beta.4 to 3.2.6-beta.5 and @tinycloud/replica 0.2.4-beta.1 to 0.2.4-beta.2.",
+    "packages/replica/package.json": "approved #548 content (ddc032ca) plus master release version strings only: replica 0.2.4-beta.1 to 0.2.4-beta.2.",
+  },
+};
+
 export type GatedOnlyRatchet = {
   label: string;
   sourceCommit: string;
@@ -176,7 +210,7 @@ const historicalToolchain = "Bun 1.4.3; production webpack; gzip -9 -c";
 /** Only a git merge-base ledger may retain the pre-correction toolchain. */
 export function validateLedger(value: Ledger, historicalBase = false): void {
   if (!value || !value.allowance || !Array.isArray(value.entries) ||
-      Object.keys(value).some((key) => key !== "allowance" && key !== "entries" && key !== "phase2Ratchet" && key !== "fixRequiredRatchet" && key !== "canonicalToolchainCorrection")) {
+      Object.keys(value).some((key) => key !== "allowance" && key !== "entries" && key !== "phase2Ratchet" && key !== "fixRequiredRatchet" && key !== "canonicalToolchainCorrection" && key !== "masterMergeResolution")) {
     throw new Error("Invalid packages/web-sdk/scripts/replica-size-ledger.json shape");
   }
   if (Object.keys(value.allowance).some((key) => !formats.includes(key as typeof formats[number]))) {
@@ -225,6 +259,21 @@ export function validateLedger(value: Ledger, historicalBase = false): void {
       (!value.fixRequiredRatchet || value.phase2Ratchet?.toolchain !== approvedPhase2.toolchain ||
        JSON.stringify(value.canonicalToolchainCorrection) !== JSON.stringify(approvedCiToolchainCorrection))) {
     throw new Error("Only the exact Rust 1.99.0 / Bun 1.3.14 CI measurement correction is approved.");
+  }
+  if (value.masterMergeResolution !== undefined &&
+      (!value.canonicalToolchainCorrection ||
+       JSON.stringify(value.masterMergeResolution) !== JSON.stringify(approvedMasterMergeResolution))) {
+    throw new Error("Only Naomi's exact reviewed #551/#548 merged store, manifest, and lock blobs are approved.");
+  }
+}
+
+/** The resolved input blobs are introduced once and immutable in subsequent bases. */
+export function validateMasterMergeResolutionTransition(
+  base?: MasterMergeResolution, current?: MasterMergeResolution,
+): void {
+  if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedMasterMergeResolution) ||
+      base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
+    throw new Error("The exact #551/#548 merged-input resolution may be introduced once and cannot change later.");
   }
 }
 
@@ -324,6 +373,11 @@ export function isPolicyOnlySinceApprovedSource(
   if (spawnSync("git", ["merge-base", "--is-ancestor", approvedSource, "HEAD"], { cwd: root }).status !== 0) {
     return false;
   }
+  // A path added and then renamed away may disappear from the source-to-HEAD
+  // diff entirely. Require every approved blob to remain at its exact path.
+  if (Object.entries(approvedMeasuredBlobs).some(([path, blob]) => blobAt(root, "HEAD", path) !== blob)) {
+    return false;
+  }
   let masterOrigin: ReadonlySet<string> = new Set();
   if (masterBase !== undefined) {
     if (spawnSync("git", ["merge-base", "--is-ancestor", masterBase, "HEAD"], { cwd: root }).status !== 0) {
@@ -335,9 +389,7 @@ export function isPolicyOnlySinceApprovedSource(
   }
   const changed = changedPaths(root, approvedSource, "HEAD");
   return [...changed].every((path) => {
-    if (Object.hasOwn(approvedMeasuredBlobs, path)) {
-      return blobAt(root, "HEAD", path) === approvedMeasuredBlobs[path];
-    }
+    if (Object.hasOwn(approvedMeasuredBlobs, path)) return true;
     if (masterOrigin.has(path) && blobAt(root, "HEAD", path) === blobAt(root, masterBase!, path)) {
       return true;
     }

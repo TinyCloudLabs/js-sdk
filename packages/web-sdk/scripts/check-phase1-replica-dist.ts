@@ -9,7 +9,7 @@ import {
   correctedOptionalAllowance, ciOptionalAllowance, fixRequiredOptionalAllowance, optionalFormats, priorOptionalAllowance,
   relocatedOptionalAllowance, relocationCommit, validateOptionalEntryTransition, validateOptionalLedger, type OptionalLedger,
 } from "./replica-optional-size-policy";
-import { assertCiSizeToolchain, approvedCiToolchainCorrection, approvedFixRequiredRatchet, approvedGatedOnlyRatchet, approvedPhase2, ciCorrectionPolicyOnlyPaths, isPolicyOnlySinceApprovedSource, validateCiToolchainTransition, validateGatedOnlyRatchet, validateLedger, type GzipSizes, type Ledger, type LedgerEntry } from "./replica-size-policy";
+import { assertCiSizeToolchain, approvedCiToolchainCorrection, approvedFixRequiredRatchet, approvedGatedOnlyRatchet, approvedPhase2, ciCorrectionPolicyOnlyPaths, isPolicyOnlySinceApprovedSource, validateCiToolchainTransition, validateGatedOnlyRatchet, validateLedger, validateMasterMergeResolutionTransition, type GzipSizes, type Ledger, type LedgerEntry } from "./replica-size-policy";
 import { collectMeasuredArtifactInputs } from "./replica-size-inputs";
 type Baseline = {
   webSdkTestBaseline: { ref: string; unhandledErrors: number; failingNames: string[]; unhandledSignatures: string[] };
@@ -171,6 +171,7 @@ if (prBaseSha) {
   }
   validateLedger(baseLedger, true);
   validateCiToolchainTransition(baseLedger.canonicalToolchainCorrection, ciCorrection);
+  validateMasterMergeResolutionTransition(baseLedger.masterMergeResolution, ledger.masterMergeResolution);
   const baseOptionalPath = "packages/web-sdk/scripts/replica-optional-size-ledger.json";
   const optionalResult = spawnSync("git", ["show", `${mergeBase}:${baseOptionalPath}`], {
     cwd: repoRoot, encoding: "utf8",
@@ -259,11 +260,22 @@ if (prBaseSha) {
   const phase2Introduced = ledger.phase2Ratchet !== undefined && baseLedger.phase2Ratchet === undefined;
   const ciCorrectionIntroduced = ciCorrection !== undefined &&
     baseLedger.canonicalToolchainCorrection === undefined;
+  if (ledger.masterMergeResolution !== undefined && baseLedger.masterMergeResolution === undefined &&
+      (ledger.masterMergeResolution.masterBase !== prBaseSha ||
+       spawnSync("git", ["merge-base", "--is-ancestor", ledger.masterMergeResolution.mergedHead, "HEAD"], {
+         cwd: repoRoot,
+       }).status !== 0)) {
+    console.error("The reviewed master merge input blobs require the trusted e57a6fd6 base and resolved merged tree.");
+    failed = true;
+  }
   if (ciCorrectionIntroduced) {
     const graph = await collectMeasuredArtifactInputs(repoRoot);
     if (!isPolicyOnlySinceApprovedSource(
       repoRoot, approvedCiToolchainCorrection.approvedSource, ciCorrectionPolicyOnlyPaths, graph,
-      optionalLedger.fixRequired?.[0]?.measuredPaths, prBaseSha,
+      {
+        ...optionalLedger.fixRequired?.[0]?.measuredPaths,
+        ...ledger.masterMergeResolution?.measuredPaths,
+      }, prBaseSha,
     )) {
       console.error("CI toolchain size correction requires unchanged measured inputs except exact ruled source blobs since ddc032ca.");
       failed = true;
