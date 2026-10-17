@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { profileConfigPath, profilePath, sessionPath, withProfileLock, withTinyCloudStateRoot, writeJsonAtomic } from "@tinycloud/operations/state";
 import { establishSessionStamp, readGateSnapshot } from "@tinycloud/replica/profile-gate";
 import { SqliteReplicaStore } from "@tinycloud/replica/sqlite";
-import { sqliteReplicaStorage } from "@tinycloud/node-sdk";
+import { createProfileReplicaPurge, REPLICA_LOGOUT_PENDING_FILE, sqliteReplicaStorage } from "@tinycloud/node-sdk";
 
 const PROFILE = "owner";
 const PRINCIPAL = "did:pkh:eip155:1:0x0000000000000000000000000000000000000001";
@@ -162,4 +162,77 @@ test("a pending flag-owned erase fences an open handle and is retried after its 
     expect(resumed.exitCode, resumed.stderr).toBe(0);
     await expect(stat(join(replicationRoot, replicaFile!))).rejects.toMatchObject({ code: "ENOENT" });
   });
+});
+
+/** Plain v1 logout committed its denial, then credential removal failed before `authSignedOut` was durable. */
+async function deniedBeforeSignOut(home: string) {
+  return withTinyCloudStateRoot(home, async () => {
+    await writeJsonAtomic(profileConfigPath(PROFILE), {
+      name: PROFILE, host: "https://node.example.test", chainId: 1, spaceName: "default", did: PRINCIPAL,
+      ownerDid: PRINCIPAL, createdAt: "2026-10-01T00:00:00.000Z",
+    });
+    await writeJsonAtomic(sessionPath(PROFILE), { ownerDid: PRINCIPAL, spaceId: "default" });
+    const directory = profilePath(PROFILE);
+    await writeFile(join(directory, "key.json"), "private-session-key");
+    const stamp = await establishSessionStamp(directory, PRINCIPAL, { siweIssuedAt: 1 });
+    const replicationRoot = join(directory, "replication");
+    const guard = <T>(section: () => Promise<T>) => withProfileLock(PROFILE, section, { requireProfile: true });
+    const handle = await sqliteReplicaStorage({ dir: replicationRoot, guard }).open({
+      identity: { host: "https://node.example.test", space: SPACE, principal: PRINCIPAL },
+      space: SPACE, prefix: "notes/", allowSecrets: false, stamp,
+      device: { did: "did:key:zTestDevice", jwk: { kty: "OKP" } },
+      grantPolicy: { grantTtlMs: 86_400_000, consentAnchor: { at: Date.now() - 1_000, source: "siwe" } },
+    });
+    await handle.close();
+    const replicaFile = (await readdir(replicationRoot, { recursive: true })).find((entry) => entry.endsWith("replica.db"));
+    expect(replicaFile).toBeDefined();
+
+    // The same facade sequence plain `auth logout` runs, with the credential
+    // shred failing after the v1 denial commits.
+    const purge = createProfileReplicaPurge({ profileDir: directory, guard });
+    const approval = await purge.preflightLogout({ principal: PRINCIPAL });
+    expect((await purge.prepareLogoutPending({ principal: PRINCIPAL, approval }))?.v).toBe(1);
+    const report = await purge.recoverLogoutPending({
+      signal: new AbortController().signal,
+      clearCredentials: async () => { throw Object.assign(new Error("injected"), { code: "EIO" }); },
+      eraseLegacyReplicas: async () => {},
+    });
+    expect(report.failed).toEqual([{ id: "logout", code: "EIO" }]);
+    expect((await readGateSnapshot(directory))?.principalHash).toBeNull();
+    expect(JSON.parse(await readFile(profileConfigPath(PROFILE), "utf8")).authSignedOut).toBeUndefined();
+    expect(await readFile(join(directory, "key.json"), "utf8")).toBe("private-session-key");
+    return {
+      directory, replicationRoot, replica: join(replicationRoot, replicaFile!),
+      marker: join(directory, REPLICA_LOGOUT_PENDING_FILE),
+    };
+  });
+}
+
+test("plain logout retry completes a denied v1 logout whose credential shred failed before sign-out", async () => {
+  const home = await mkdtemp(join(tmpdir(), "tc841-cli-logout-denied-retry-"));
+  homes.push(home);
+  const paths = await deniedBeforeSignOut(home);
+
+  const retried = await run(home);
+  expect(retried.exitCode, retried.stderr).toBe(0);
+  await expect(stat(paths.replica)).rejects.toMatchObject({ code: "ENOENT" });
+  await expect(stat(paths.marker)).rejects.toMatchObject({ code: "ENOENT" });
+  await expect(stat(join(paths.directory, "session.json"))).rejects.toMatchObject({ code: "ENOENT" });
+  await expect(stat(join(paths.directory, "key.json"))).rejects.toMatchObject({ code: "ENOENT" });
+  expect(JSON.parse(await readFile(join(paths.directory, "profile.json"), "utf8")).authSignedOut).toBe(true);
+});
+
+test("plain logout retry of a denied v1 logout still refuses an unapproved new replication path", async () => {
+  const home = await mkdtemp(join(tmpdir(), "tc841-cli-logout-denied-unknown-"));
+  homes.push(home);
+  const paths = await deniedBeforeSignOut(home);
+  const unknown = join(paths.replicationRoot, "unapproved.bin");
+  await writeFile(unknown, "local-change");
+
+  const refused = await run(home);
+  expect(refused.exitCode).toBeGreaterThan(0);
+  expect(await readFile(unknown, "utf8")).toBe("local-change");
+  expect(await stat(paths.replica)).toBeTruthy();
+  expect(await stat(paths.marker)).toBeTruthy();
+  expect((await readGateSnapshot(paths.directory))?.principalHash).toBeNull();
 });

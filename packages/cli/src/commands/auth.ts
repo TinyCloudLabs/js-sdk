@@ -446,8 +446,12 @@ export async function finishProfileLogout(
                 ExitCode.ERROR);
             }
             marker = pendingMarker;
-          } else if (pendingMarker && profile.authSignedOut === true && !remotePending &&
+          } else if (pendingMarker && !remotePending &&
               options.approveInventory === undefined && options.discardLocalChanges !== true) {
+            // A committed local marker is the durable approval whether or not
+            // credential shred finished; strict preflight would mistake our own
+            // denied gate for orphaned data. Recovery revalidates the marker,
+            // as startup recovery does, and refuses a changed inventory.
             marker = pendingMarker;
           } else {
             // A changed pending inventory must issue its two-command challenge
