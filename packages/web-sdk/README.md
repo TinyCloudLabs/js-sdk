@@ -114,10 +114,12 @@ after size cuts: root to 1,464,122 / 1,394,880 B (+20 / +11), first import
 **Ancestry pins and squash merges.** A policy row records the PR-branch commit it
 was reviewed at, and its introduction check requires that literal commit in the
 PR head. js-sdk squash-merges, so that commit is unreachable from master
-afterwards. Once merged, a pin is instead resolved to the commit that landed it:
-the first first-parent master commit that added the pin to `scripts/`, which is
-its squash commit (`landingCommit` in `scripts/replica-size-policy.ts`). Every PR
-asserts that each merged row's pin is on its base or was landed by it. After a
+afterwards; ancestry is therefore checked only when a PR introduces a row. Any
+new check that re-validates merged pins against HEAD would break master again
+after the next squash, and only review prevents that. As a consistency check,
+every PR also requires each merged row's pin to be on its base or landed by it:
+the first first-parent master commit that added the pin to `scripts/`, normally
+its squash commit (`landingCommit` in `scripts/replica-size-policy.ts`). After a
 squash merge, nothing needs editing. Content keys (blob hashes) were rejected:
 pinned files such as `authority.ts` legitimately change later, whereas the
 landing commit stays an ancestor for good.

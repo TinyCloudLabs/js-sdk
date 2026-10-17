@@ -247,10 +247,11 @@ export function hasAncestor(root: string, commit: string, ref = "HEAD"): boolean
 /**
  * Ancestry pins and squash merges. A row pins the PR-branch commit it was reviewed at, and its
  * introduction check requires that commit in the PR head. js-sdk squash-merges, so the commit is
- * unreachable from master afterwards. A row's ancestry is therefore checked against HEAD only
- * when a PR introduces it. Afterwards a pin resolves to the commit that landed it: the first
- * first-parent commit of `ref` that added the pin to the policy sources, i.e. its squash commit.
- * That needs no follow-up edit after a squash merge.
+ * unreachable from master afterwards; a row's ancestry is therefore checked against HEAD only when
+ * a PR introduces it. This returns the commit that landed a pin on `ref`: the earliest
+ * (`--reverse`) commit on `ref`'s first-parent line (`--first-parent`, so a squash or merge commit,
+ * not a merged branch's own commit) whose change under packages/web-sdk/scripts/ alters how often
+ * the pin string occurs.
  */
 export function landingCommit(root: string, pin: string, ref: string): string | undefined {
   const log = execFileSync("git", [
@@ -259,7 +260,12 @@ export function landingCommit(root: string, pin: string, ref: string): string | 
   return log.split("\n")[0] || undefined;
 }
 
-/** True when `ref` carries the pinned code: it contains the pin itself or the commit that landed it. */
+/**
+ * True when `ref` contains `pin` or landed it (landingCommit). This is a consistency check that a
+ * merged row reached `ref` through its first-parent history; it does not prove `ref` contains the
+ * pinned code. Any scripts/ file that mentions the pin string, or a shallow clone whose graft
+ * commit adds every file, satisfies it. It never relaxes a size ceiling or row check.
+ */
 export function pinLandedOn(root: string, pin: string, ref: string): boolean {
   return hasAncestor(root, pin, ref) || landingCommit(root, pin, ref) !== undefined;
 }
