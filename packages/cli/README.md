@@ -229,6 +229,15 @@ denied replica files until signed owner revoke authority is supported.
 `--keep-replicas` is available only for legacy-only profiles with no gate,
 flag-owned partition or pending purge; it retains those legacy files but still
 shreds credentials and blocks implicit reauthentication.
+When the profile's replica gate belongs to a different account than the
+signed-in session, `auth logout` signs that session out and removes the
+profile's legacy `replicas/` tree, but leaves the other account's gate and
+flag-owned replicas untouched; startup finishes the legacy removal if it is
+interrupted. If an earlier sign-out was interrupted, logout reports it and a
+second `auth logout` completes it. A gate that no longer matches its logout
+record (for example, restored from an older copy) refuses logout; switch the
+default profile if needed, then run `tc profile delete <name>` and sign in
+again.
 
 `tc auth grants list` labels the signed-in delegation CID `(current session)`.
 `tc delegation revoke <cid>` still accepts any eligible exact CID, but when

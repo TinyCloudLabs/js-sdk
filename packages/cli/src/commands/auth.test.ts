@@ -104,7 +104,6 @@ const recorded = {
   grantHistory: [] as Array<{ profile: string; entry: Record<string, unknown> }>,
   localGrantArtifacts: [] as Array<{ profile: string; delegation: Record<string, unknown> }>,
   removedReplicaProfiles: [] as string[],
-  removedReplicationProfiles: [] as string[],
 };
 
 const grantedDelegation = {
@@ -147,7 +146,6 @@ function resetState(): void {
   recorded.grantedRequests.length = 0;
   recorded.localGrantArtifacts.length = 0;
   recorded.removedReplicaProfiles.length = 0;
-  recorded.removedReplicationProfiles.length = 0;
   recorded.grantHistory.length = 0;
 
   activeProfile = "default";
@@ -260,12 +258,6 @@ mock.module("../lib/profile-replicas.js", () => ({
     if (recorded.replicaRemovalError) throw recorded.replicaRemovalError;
     recorded.removedReplicaProfiles.push(profile);
     return ["notes"];
-  },
-  removeProfileReplicasAndReplication: async (profile: string) => {
-    if (recorded.replicaRemovalError) throw recorded.replicaRemovalError;
-    recorded.removedReplicaProfiles.push(profile);
-    recorded.removedReplicationProfiles.push(profile);
-    return ["notes", "replication/idHash/replicaHash"];
   },
 }));
 
@@ -859,7 +851,6 @@ describe("CLI auth commands on a missing profile (TC-682)", () => {
     expect(recorded.errors).toEqual([]);
     expect(recorded.clearSessions).toEqual(["owner"]);
     expect(recorded.removedReplicaProfiles).toEqual([]);
-    expect(recorded.removedReplicationProfiles).toEqual([]);
     expect(recorded.outputs).toEqual([expect.objectContaining({
       replicasRemoved: [],
       replicasKept: true,

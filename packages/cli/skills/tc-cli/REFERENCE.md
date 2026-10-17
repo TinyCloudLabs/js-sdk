@@ -312,6 +312,13 @@ repeating node revocations. OpenKey
 owner revocation currently fails closed with `REVOCATION_AUTHORITY_UNAVAILABLE`,
 retaining credentials and denied replica files until signed owner revoke
 authority is supported.
+When the replica gate belongs to a different account than the signed-in
+session, logout signs that session out and removes only the profile's legacy
+`replicas/` tree; the other account's gate and flag-owned replicas stay. An
+interrupted earlier sign-out is reported, and a second `auth logout` completes
+it. A gate that no longer matches its logout record (for example, restored
+from an older copy) refuses logout; run `tc profile delete <name>` (after
+`tc profile switch <other>` if it is the default) and sign in again.
 
 `--keep-replicas` retains legacy files only when no replica gate, flag-owned
 partition or pending purge exists; gated profiles refuse before mutation and

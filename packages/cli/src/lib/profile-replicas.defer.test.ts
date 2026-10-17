@@ -12,7 +12,7 @@ import {
   withTinyCloudStateRoot,
   writeJsonAtomic,
 } from "@tinycloud/operations/state";
-import { removeProfileReplicasAndReplication } from "./profile-replicas.js";
+import { removeProfileReplicas } from "./profile-replicas.js";
 
 const PROFILE = "owner";
 const PRINCIPAL = "did:pkh:eip155:1:0x0000000000000000000000000000000000000001";
@@ -128,7 +128,7 @@ describe("TC-841 deferred profile purge under the real profile lock", () => {
       }
       // The S3 facade erases flag-owned partitions, not the older CLI replicas root.
       expect(await stat(legacyDb)).toBeTruthy();
-      const removed = await withTinyCloudStateRoot(home, () => removeProfileReplicasAndReplication(PROFILE));
+      const removed = await withTinyCloudStateRoot(home, () => removeProfileReplicas(PROFILE));
       expect(removed).toContain("notes");
       await expect(stat(legacyDb)).rejects.toMatchObject({ code: "ENOENT" });
     }

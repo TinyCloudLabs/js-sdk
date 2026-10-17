@@ -1,5 +1,5 @@
 import { SqliteReplicaStore, inspectSqliteReplicaLayout, loadSqlite } from "@tinycloud/replica/sqlite";
-import { afterAll, beforeEach, describe, expect, spyOn, test } from "bun:test";
+import { afterAll, beforeEach, expect, spyOn, test } from "bun:test";
 import { lstat, mkdir, mkdtemp, readFile, rename, rm, stat, symlink, unlink, writeFile } from "node:fs/promises";
 import * as fsPromises from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -9,7 +9,7 @@ const home = await mkdtemp(join("/var/tmp", "tc-replica-logout-"));
 process.env.TC_HOME = home;
 const { ProfileManager } = await import("../config/profiles.js");
 const { profilePath } = await import("@tinycloud/operations/state");
-const { removeProfileReplicas, removeProfileReplicasAndReplication, removeProfileReplication } = await import("./profile-replicas.js");
+const { removeProfileReplicas } = await import("./profile-replicas.js");
 const { appendGrantHistory, grantHistoryPath, loadLocalGrantArtifacts, localGrantArtifactsPath, readGrantHistory } = await import("./permissions.js");
 
 beforeEach(async () => {
@@ -404,7 +404,7 @@ test("legacy cleanup refuses a new root file without deleting it", async () => {
   }
 });
 
-test("interrupted legacy cleanup removes an empty child through direct and combined logout only after rejecting unknown siblings", async () => {
+test("interrupted legacy cleanup removes an empty child only after rejecting unknown siblings", async () => {
   const root = join(profilePath("dogfood"), "replicas");
   const empty = join(root, "notes");
   const unknown = join(root, "unrecognized");
@@ -422,10 +422,6 @@ test("interrupted legacy cleanup removes an empty child through direct and combi
   expect(await removeProfileReplicas("dogfood")).toEqual(["notes"]);
   await expect(stat(empty)).rejects.toMatchObject({ code: "ENOENT" });
   expect(await removeProfileReplicas("dogfood")).toEqual([]);
-  const interruptedAgain = join(root, "again");
-  await mkdir(interruptedAgain, { recursive: true });
-  expect(await removeProfileReplicasAndReplication("dogfood")).toEqual(["again"]);
-  await expect(stat(interruptedAgain)).rejects.toMatchObject({ code: "ENOENT" });
 });
 
 test("an empty child replaced by another real directory at final inspection is not removed", async () => {
@@ -491,7 +487,7 @@ test("logout cleanup refuses a linked profile instead of deleting the target pro
   await store.close();
   await symlink(profilePath("victim"), profilePath("linked"));
 
-  await expect(removeProfileReplicasAndReplication("linked")).rejects.toThrow("symlink");
+  await expect(removeProfileReplicas("linked")).rejects.toThrow("symlink");
   expect(await stat(join(replica, "replica.db"))).toBeTruthy();
 });
 
@@ -523,7 +519,7 @@ test("logout refuses a linked replica.db without advancing the victim lease", as
   await rm(join(selected, "replica.db"));
   await symlink(victimDb, join(selected, "replica.db"));
 
-  await expect(removeProfileReplicasAndReplication("dogfood")).rejects.toBeDefined();
+  await expect(removeProfileReplicas("dogfood")).rejects.toBeDefined();
   expect(token()).toBe(before);
   expect(await stat(victimDb)).toBeTruthy();
 });
@@ -546,7 +542,7 @@ test("logout refuses a replica swapped for a symlink after opening it", async ()
     return originalDestroy.call(this, lease);
   };
   try {
-    await expect(removeProfileReplicasAndReplication("dogfood")).rejects.toThrow("symlink");
+    await expect(removeProfileReplicas("dogfood")).rejects.toThrow("symlink");
     expect(await stat(join(outside, "replica.db"))).toBeTruthy();
   } finally {
     SqliteReplicaStore.prototype.destroy = originalDestroy;
@@ -587,7 +583,7 @@ test("logout preflight keeps its original root when another real directory repla
     return originalOpen.call(this, dir, options);
   };
   try {
-    await expect(removeProfileReplicasAndReplication("dogfood")).rejects.toBeDefined();
+    await expect(removeProfileReplicas("dogfood")).rejects.toBeDefined();
     expect(swapped).toBe(true);
     expect(token(join(selectedRoot, "notes", "replica.db"))).toBe(before);
     expect(await stat(join(selectedRoot, "notes", "replica.db"))).toBeTruthy();
@@ -627,227 +623,11 @@ test("logout refuses a real replica entry replaced before SQLite opens it", asyn
     });
   };
   try {
-    await expect(removeProfileReplicasAndReplication("dogfood")).rejects.toBeDefined();
+    await expect(removeProfileReplicas("dogfood")).rejects.toBeDefined();
     expect(sqliteCalled).toBe(false);
     expect(await stat(join(selected, "replica.db"))).toBeTruthy();
     expect(await stat(`${selected}.original/replica.db`)).toBeTruthy();
   } finally {
     SqliteReplicaStore.open = originalOpen;
   }
-});
-
-describe("flag-owned logout cleanup", () => {
-  test("destroys actual flag replica stores and removes every identity partition and event log", async () => {
-    const root = join(profilePath("dogfood"), "replication");
-    const idHash = "a".repeat(26);
-    const replicaHash = "b".repeat(26);
-    const partition = join(root, idHash);
-    const replicas = join(partition, "replicas");
-    const store = await SqliteReplicaStore.open(join(replicas, replicaHash), { create: true });
-    await store.init({
-      name: "notes",
-      replicaId: replicaHash,
-      host: "https://node.example.test",
-      space: "tinycloud:pkh:eip155:1:0x0000000000000000000000000000000000000001:default",
-      prefix: "notes/",
-      deviceDid: "did:key:device",
-      allowSecrets: false,
-      localReadPolicy: "whileGrantValid",
-      retentionGrantCid: null,
-    });
-    await store.close();
-    await writeFile(join(partition, "identity.json"), JSON.stringify({ host: "https://node.example.test", space: "default", principal: "did:pkh:eip155:1:0xabc" }));
-    await writeFile(join(partition, "pending.json"), JSON.stringify({ v: 2, epoch: 1, seq: 2, records: [{ state: "ambiguous" }] }));
-    await writeFile(join(root, "events.jsonl"), "{}\\n");
-
-    expect(await stat(join(replicas, replicaHash, "replica.db"))).toBeTruthy();
-    expect(await removeProfileReplication("dogfood")).toEqual([`replication/${idHash}/${replicaHash}`]);
-    await expect(stat(root)).rejects.toMatchObject({ code: "ENOENT" });
-  });
-  test("a real replication root swapped after the final store destroy is never recursively removed", async () => {
-    const root = join(profilePath("dogfood"), "replication");
-    const entry = join(root, "a".repeat(26), "replicas", "b".repeat(26));
-    const store = await SqliteReplicaStore.open(entry, { create: true });
-    await store.init({
-      name: "notes", replicaId: "b".repeat(26), host: "https://node.example.test",
-      space: "tinycloud:pkh:eip155:1:0x0000000000000000000000000000000000000001:default",
-      prefix: "notes/", deviceDid: "did:key:device", allowSecrets: false,
-      localReadPolicy: "whileGrantValid", retentionGrantCid: null,
-    });
-    await store.close();
-    const victim = join(home, "unselected-replication");
-    await mkdir(victim);
-    await writeFile(join(victim, "keep.txt"), "untouched");
-    const originalDestroy = SqliteReplicaStore.prototype.destroy;
-    SqliteReplicaStore.prototype.destroy = async function (lease) {
-      await originalDestroy.call(this, lease);
-      await rename(root, `${root}.moved`);
-      await rename(victim, root);
-    };
-    try {
-      await expect(removeProfileReplication("dogfood")).rejects.toMatchObject({ code: "REPLICA_PURGE_FAILED" });
-      expect(await readFile(join(root, "keep.txt"), "utf8")).toBe("untouched");
-    } finally {
-      SqliteReplicaStore.prototype.destroy = originalDestroy;
-    }
-  });
-
-  test("a lease guard failure closes the flag store before logout aborts", async () => {
-    const entry = join(profilePath("dogfood"), "replication", "a".repeat(26), "replicas", "b".repeat(26));
-    const store = await SqliteReplicaStore.open(entry, { create: true });
-    await store.init({
-      name: "notes", replicaId: "b".repeat(26), host: "https://node.example.test",
-      space: "tinycloud:pkh:eip155:1:0x0000000000000000000000000000000000000001:default",
-      prefix: "notes/", deviceDid: "did:key:device", allowSecrets: false,
-      localReadPolicy: "whileGrantValid", retentionGrantCid: null,
-    });
-    await store.close();
-    const originalLease = SqliteReplicaStore.prototype.acquireSyncLease;
-    const originalClose = SqliteReplicaStore.prototype.close;
-    let closed = 0;
-    SqliteReplicaStore.prototype.acquireSyncLease = async function () {
-      throw new Error("injected lease guard failure");
-    };
-    SqliteReplicaStore.prototype.close = async function () {
-      closed++;
-      return originalClose.call(this);
-    };
-    try {
-      await expect(removeProfileReplication("dogfood")).rejects.toMatchObject({ code: "REPLICA_PURGE_FAILED" });
-      expect(closed).toBe(1);
-      expect(await stat(join(entry, "replica.db"))).toBeTruthy();
-    } finally {
-      SqliteReplicaStore.prototype.acquireSyncLease = originalLease;
-      SqliteReplicaStore.prototype.close = originalClose;
-    }
-  });
-  test("refuses a flag replica whose ancestor is swapped for an outside symlink", async () => {
-    const replicas = join(profilePath("dogfood"), "replication", "a".repeat(26), "replicas");
-    const outside = join(home, "moved-flag-replicas");
-    const entry = join(replicas, "b".repeat(26));
-    const store = await SqliteReplicaStore.open(entry, { create: true });
-    await store.init({
-      name: "notes", replicaId: "b".repeat(26), host: "https://node.example.test",
-      space: "tinycloud:pkh:eip155:1:0x0000000000000000000000000000000000000001:default",
-      prefix: "notes/", deviceDid: "did:key:device", allowSecrets: false,
-      localReadPolicy: "whileGrantValid", retentionGrantCid: null,
-    });
-    await store.close();
-    const originalDestroy = SqliteReplicaStore.prototype.destroy;
-    SqliteReplicaStore.prototype.destroy = async function (lease) {
-      await rename(replicas, outside);
-      await symlink(outside, replicas);
-      return originalDestroy.call(this, lease);
-    };
-    try {
-      await expect(removeProfileReplication("dogfood")).rejects.toMatchObject({ code: "REPLICA_PURGE_FAILED" });
-      expect(await stat(join(outside, "b".repeat(26), "replica.db"))).toBeTruthy();
-    } finally {
-      SqliteReplicaStore.prototype.destroy = originalDestroy;
-    }
-  });
-
-  test("a busy flag-owned replica prevents deletion of legacy replicas", async () => {
-    const flagPath = join(profilePath("dogfood"), "replication", "a".repeat(26), "replicas", "b".repeat(26));
-    const legacyPath = join(profilePath("dogfood"), "replicas", "legacy");
-    const initialize = async (path: string, prefix: string) => {
-      const store = await SqliteReplicaStore.open(path, { create: true });
-      await store.init({
-        name: prefix,
-        replicaId: "b".repeat(26),
-        host: "https://node.example.test",
-        space: "tinycloud:pkh:eip155:1:0x0000000000000000000000000000000000000001:default",
-        prefix,
-        deviceDid: "did:key:device",
-        allowSecrets: false,
-        localReadPolicy: "whileGrantValid",
-        retentionGrantCid: null,
-      });
-      await store.close();
-    };
-    await initialize(legacyPath, "notes/");
-    await initialize(flagPath, "apps/");
-    const busy = await SqliteReplicaStore.open(flagPath, { create: false });
-    await busy.open();
-    const lease = await busy.acquireSyncLease(60_000);
-    expect(lease).not.toBeNull();
-    try {
-      await expect(removeProfileReplicasAndReplication("dogfood")).rejects.toMatchObject({
-        code: "REPLICA_BUSY",
-        message: expect.stringContaining("flag replica"),
-      });
-      expect(await stat(join(legacyPath, "replica.db"))).toBeTruthy();
-    } finally {
-      await busy.releaseLease(lease!);
-      await busy.close();
-    }
-  });
-  test("reports the surviving flag inventory after legacy deletion fails with EACCES", async () => {
-    const createStore = async (path: string, name: string) => {
-      const store = await SqliteReplicaStore.open(path, { create: true });
-      await store.init({
-        name,
-        replicaId: path.split("/").at(-1)!,
-        host: "https://node.example.test",
-        space: "tinycloud:pkh:eip155:1:0x0000000000000000000000000000000000000001:default",
-        prefix: "notes/",
-        deviceDid: "did:key:device",
-        allowSecrets: false,
-        localReadPolicy: "whileGrantValid",
-        retentionGrantCid: null,
-      });
-      await store.close();
-    };
-    const firstLegacy = join(profilePath("dogfood"), "replicas", "a-first");
-    const failingLegacy = join(profilePath("dogfood"), "replicas", "b-failing");
-    const flagReplica = join(profilePath("dogfood"), "replication", "c".repeat(26), "replicas", "d".repeat(26));
-    await createStore(firstLegacy, "a-first");
-    await createStore(failingLegacy, "b-failing");
-    await createStore(flagReplica, "flag");
-
-    const originalDestroy = SqliteReplicaStore.prototype.destroy;
-    let destroyCalls = 0;
-    SqliteReplicaStore.prototype.destroy = async function (lease) {
-      destroyCalls += 1;
-      if (destroyCalls === 2) throw Object.assign(new Error("permission denied"), { code: "EACCES" });
-      return originalDestroy.call(this, lease);
-    };
-    try {
-      await expect(removeProfileReplicasAndReplication("dogfood")).rejects.toMatchObject({
-        code: "REPLICA_PURGE_FAILED",
-        metadata: {
-          replicasRemoved: ["a-first"],
-          replicasRemaining: ["b-failing", `replication/${"c".repeat(26)}/${"d".repeat(26)}`],
-        },
-      });
-    } finally {
-      SqliteReplicaStore.prototype.destroy = originalDestroy;
-    }
-  });
-  test("a competing store writer waits for the complete logout lock turn", async () => {
-    const legacyPath = join(profilePath("dogfood"), "replicas", "legacy");
-    const initialize = async (path: string, name: string) => {
-      const store = await SqliteReplicaStore.open(path, { create: true });
-      await store.init({
-        name,
-        replicaId: "c".repeat(26),
-        host: "https://node.example.test",
-        space: "tinycloud:pkh:eip155:1:0x0000000000000000000000000000000000000001:default",
-        prefix: `${name}/`,
-        deviceDid: "did:key:device",
-        allowSecrets: false,
-        localReadPolicy: "whileGrantValid",
-        retentionGrantCid: null,
-      });
-      await store.close();
-    };
-    await initialize(legacyPath, "legacy");
-    const writerPath = join(profilePath("dogfood"), "replication", "d".repeat(26), "replicas", "e".repeat(26));
-    const writer = initialize(writerPath, "concurrent");
-    const logout = removeProfileReplicasAndReplication("dogfood");
-
-    const [removed] = await Promise.all([logout, writer]);
-    expect(removed).toContain("legacy");
-    await expect(stat(join(legacyPath, "replica.db"))).rejects.toMatchObject({ code: "ENOENT" });
-  });
 });
