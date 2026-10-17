@@ -155,6 +155,7 @@ async function preparedLogin(transport: "callback" | "paste", behavior: "success
   };
   expect(stored.ownerDid).toBe(ownerDid);
   expect(stored.verificationMethod).toBe(payload.request.sessionDid);
+  if (!stored.replicaStamp) throw new Error("Prepared sign-in did not persist its signed replica stamp");
   expect(await restoreSessionStamp(directory, ownerDid, stored.replicaStamp)).toEqual(stored.replicaStamp);
   const storedProfile = JSON.parse(await readFile(join(directory, "profile.json"), "utf8")) as {
     sessionDid: string; replication: { prefixes: string[] };

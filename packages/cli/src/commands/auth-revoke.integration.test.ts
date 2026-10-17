@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { createProfileReplicaPurge, NodeWasmBindings, PrivateKeySigner } from "@tinycloud/node-sdk";
 import { parseSignedCompactUcanAttenuation, parseSignedSiweCacao } from "@tinycloud/sdk-core";
-import { Replica, parseUcanGrant } from "@tinycloud/replica";
+import { Replica, contentHash, parseUcanGrant, type FetchedContent, type ReplicaTransport } from "@tinycloud/replica";
 import { SqliteReplicaStore, inspectSqliteReplicaLayout } from "@tinycloud/replica/sqlite";
 import { establishSessionStamp, readGateSnapshot, restoreSessionStamp } from "@tinycloud/replica/profile-gate";
 import { REPLICA_GATE_FILE } from "@tinycloud/sdk-services/kv/replication/contractConstants";
@@ -17,8 +17,8 @@ import {
   withTinyCloudStateRoot,
   writeJsonAtomic,
 } from "@tinycloud/operations/state";
-import { FakeNode, owner, signUcan } from "../../../replica/test/fixtures.js";
 import { registerReplicaCommand } from "./replica.js";
+import { createUcanIssuer, signUcan } from "../test-support/signed-ucan.js";
 
 const PROFILE = "owner";
 const OWNER_KEY = "4f3edf983ac636a65a842ce7c78d9aa706d3b113bce036f4d4b2c197a7e5e7b7";
@@ -52,6 +52,16 @@ async function exists(path: string): Promise<boolean> {
   return stat(path).then(() => true, () => false);
 }
 
+function signedReplicaGrant(spaceId: string, sessionDid: string) {
+  return parseUcanGrant(signUcan(createUcanIssuer(), {
+    aud: sessionDid.split("#", 1)[0], exp: Math.floor(Date.now() / 1000) + 3_600,
+    att: { [`${spaceId}/kv/notes/`]: {
+      "tinycloud.kv/get": [{}], "tinycloud.kv/list": [{}], "tinycloud.kv/sync": [{}],
+    } },
+    prf: ["bafyparent"],
+  }));
+}
+
 async function seedLegacyReplica(home: string, host: string, spaceId: string, sessionDid: string): Promise<void> {
   const replicaDir = join(home, ".tinycloud", "profiles", PROFILE, "replicas", "notes");
   const store = await SqliteReplicaStore.open(replicaDir, { create: true });
@@ -60,17 +70,25 @@ async function seedLegacyReplica(home: string, host: string, spaceId: string, se
       name: "notes", replicaId: "r-test", host, space: spaceId, prefix: "notes/",
       deviceDid: sessionDid, allowSecrets: false, localReadPolicy: "whileGrantValid", retentionGrantCid: null,
     });
-    await store.installGrant(parseUcanGrant(signUcan(owner, {
-      aud: sessionDid.split("#", 1)[0], exp: Math.floor(Date.now() / 1000) + 3_600,
-      att: { [`${spaceId}/kv/notes/`]: {
-        "tinycloud.kv/get": [{}], "tinycloud.kv/list": [{}], "tinycloud.kv/sync": [{}],
-      } },
-      prf: ["bafyparent"],
-    })));
-    const fake = new FakeNode();
-    fake.space = spaceId;
-    fake.put("notes/a", "private replica value");
-    await new Replica({ store, transport: fake }).sync();
+    await store.installGrant(signedReplicaGrant(spaceId, sessionDid));
+    const bytes = new TextEncoder().encode("private replica value");
+    const etag = `"blake3-${contentHash(bytes)}"`;
+    const transport: ReplicaTransport = {
+      async syncPage({ cursor }) {
+        return {
+          changes: cursor ? [] : [{ key: "notes/a", deleted: false, etag, metadata: {} }],
+          more: false, cursor: cursor ?? "1:1",
+          source: { nodeDid: "did:key:z6MkfhoxdzVTa6fLWMgEJNiRJomE5grMqkWyHiRbU9Tt7mAq", space: spaceId, prefix: "notes/" },
+          authority: { notBefore: null, expiresAt: new Date(Date.now() + 3_600_000).toISOString(), retainUntil: null },
+        };
+      },
+      async fetchContent(keys) {
+        const result = new Map<string, FetchedContent>();
+        for (const key of keys) result.set(key, key === "notes/a" ? { bytes, etag } : { missing: true });
+        return result;
+      },
+    };
+    await new Replica({ store, transport }).sync();
   } finally {
     await store.close();
   }
@@ -261,8 +279,8 @@ async function expectDeniedButRetained(
   sessionBefore: Buffer,
   keyBefore: Buffer,
 ): Promise<void> {
-  expect(await readFile(paths.session)).toEqual(sessionBefore);
-  expect(await readFile(paths.key)).toEqual(keyBefore);
+  expect(Buffer.compare(await readFile(paths.session), sessionBefore)).toBe(0);
+  expect(Buffer.compare(await readFile(paths.key), keyBefore)).toBe(0);
   expect(await exists(paths.db)).toBe(true);
   for (let attempt = 0; attempt < 2; attempt += 1) {
     const denied = await run(home, ["replica", "get", "notes/a", "--replica", "notes", "--raw"]);
@@ -271,8 +289,8 @@ async function expectDeniedButRetained(
     expect(denied.stderr).toContain("REPLICA_GATED");
     expect(await exists(paths.db)).toBe(true);
   }
-  expect(await readFile(paths.session)).toEqual(sessionBefore);
-  expect(await readFile(paths.key)).toEqual(keyBefore);
+  expect(Buffer.compare(await readFile(paths.session), sessionBefore)).toBe(0);
+  expect(Buffer.compare(await readFile(paths.key), keyBefore)).toBe(0);
 }
 
 describe("legacy replica read gate", () => {

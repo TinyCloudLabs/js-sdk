@@ -104,8 +104,8 @@ async function addUnknown(path: string) {
 }
 
 async function expectRetained(paths: { session: string; key: string; db: string; unknown: string }, session: Buffer, key: Buffer) {
-  expect(await readFile(paths.session)).toEqual(session);
-  expect(await readFile(paths.key)).toEqual(key);
+  expect(Buffer.compare(await readFile(paths.session), session)).toBe(0);
+  expect(Buffer.compare(await readFile(paths.key), key)).toBe(0);
   expect(await Bun.file(paths.db).exists()).toBe(true);
   expect(await readFile(paths.unknown, "utf8")).toBe("unsynced future bytes");
 }
@@ -350,7 +350,7 @@ test("inventory approval requires both a token and explicit discard consent", as
     [["auth", "logout", "--approve-inventory"], /--approve-inventory.*(requires|missing)/i],
     [["auth", "logout", "--approve-inventory", "0".repeat(32)], /--discard-local-changes/],
   ] as const) {
-    const refused = await run(home, args);
+    const refused = await run(home, [...args]);
     expect(refused.exitCode).toBeGreaterThan(0);
     expect(refused.stderr).toMatch(message);
     expect(await readFile(paths.session)).toEqual(session);
@@ -373,7 +373,7 @@ test("changed inventory after a failed revoke cannot send another CID", async ()
   const latePath = join(dirname(paths.unknown), "late-write.pending");
   await addUnknown(latePath);
   const before = networkPaths.length;
-  setMode("ok");
+  setMode("success");
 
   const refused = await run(home, ["auth", "logout", "--revoke", "--discard-local-changes"]);
   expect(refused.exitCode).toBeGreaterThan(0);

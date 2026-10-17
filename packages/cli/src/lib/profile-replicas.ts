@@ -216,7 +216,7 @@ function legacyInventory(profile: string, options: LegacyRemovalOptions) {
       const parts = entry.path.split("/");
       if (parts.length < minimumParts || parts[0] !== "replicas" ||
           !/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(parts[1]!) ||
-          parts.slice(2).some((part) => !part || part === "." || part === ".." || part.includes("\\")) ||
+          parts.slice(2).some((part: string) => !part || part === "." || part === ".." || part.includes("\\")) ||
           paths.has(entry.path)) {
         throw refuseUnsafeReplicaPath(profile, "the recorded legacy child path is invalid");
       }

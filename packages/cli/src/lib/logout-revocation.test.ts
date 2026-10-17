@@ -2,15 +2,15 @@ import { afterAll, afterEach, beforeEach, expect, test } from "bun:test";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { ed25519 } from "@noble/curves/ed25519";
 import { parseSignedCompactUcanAttenuation } from "@tinycloud/sdk-core";
 import type { TinyCloudNode } from "@tinycloud/node-sdk";
 import { profilePath, withTinyCloudStateRoot } from "@tinycloud/operations/state";
 import { planLogoutRevocations } from "./logout-revocation.js";
-import { owner, signUcan } from "../../../replica/test/fixtures.js";
+import { createUcanIssuer, signUcan } from "../test-support/signed-ucan.js";
 import cacaoFixture from "../../../sdk-core/test-fixtures/siwe-cacao/owner-share.json";
 
 const PROFILE = "owner";
+const owner = createUcanIssuer();
 const OWNER_DID = "did:pkh:eip155:1:0x0000000000000000000000000000000000000001";
 const SPACE = "tinycloud:pkh:eip155:1:0x0000000000000000000000000000000000000001:default";
 const home = await mkdtemp(join(tmpdir(), "tc858-revoke-inventory-"));
@@ -33,7 +33,7 @@ function signedGrant() {
     att: { [`${SPACE}/kv/notes/`]: { "tinycloud.kv/get": [{}] } }, prf: ["bafyparent"],
   }, {
     alg: "EdDSA", typ: "JWT", ucv: "0.10.0",
-    jwk: { kty: "OKP", crv: "Ed25519", x: Buffer.from(ed25519.getPublicKey(owner.secret)).toString("base64url") },
+    jwk: { kty: "OKP", crv: "Ed25519", x: Buffer.from(owner.publicBytes).toString("base64url") },
   });
   return { authorization, cid: parseSignedCompactUcanAttenuation(authorization).cid };
 }
