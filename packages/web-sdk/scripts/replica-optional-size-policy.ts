@@ -1,5 +1,3 @@
-import { execFileSync } from "node:child_process";
-import { resolve } from "node:path";
 import type { LoadedSizes } from "./measure-replica-optional";
 import { approvedCiToolchainCorrection, approvedFixRequiredRatchet, approvedHardeningRatchet, validateGatedOnlyRatchet, type GatedOnlyRatchet } from "./replica-size-policy";
 export type CompactFixRequired = {
@@ -133,35 +131,26 @@ export function validateOptionalLedger(
         JSON.stringify(value.fixRequired) !== JSON.stringify([approvedCompactFixRequired])))) {
     throw new Error(`${path}: only the exact paired relocation, canonical toolchain correction and reviewed fix-required first-import caps are approved`);
   }
-  if (hasCompactFix) {
-    try {
-      execFileSync("git", ["merge-base", "--is-ancestor", approvedCompactFixRequired.integratedCommit, "HEAD"], {
-        cwd: resolve(import.meta.dir, "../../.."), stdio: "ignore",
-      });
-    } catch {
-      throw new Error(`${path}: compact fix requires the integrated source commit`);
-    }
-  }
   validateGatedOnlyRatchet(value.gatedOnlyRatchet);
-  const repoRoot = resolve(import.meta.dir, "../../..");
-  if (corrected) {
-    try {
-      execFileSync("git", ["merge-base", "--is-ancestor", approvedMeasurementCorrection.commit, "HEAD"], {
-        cwd: repoRoot, stdio: "ignore",
-      });
-    } catch {
-      throw new Error(`${path}: ce52494d measurement correction requires its approved source ancestor`);
-    }
+}
+
+/**
+ * Ancestry pins of the optional rows a PR introduces (`base` lacks them). Rows already in the base
+ * ledger are not re-checked: after a squash merge their PR-branch pins are unreachable, and
+ * re-checking them is what turned master red after #548.
+ */
+export function introducedOptionalAncestryPins(value: OptionalLedger, base: OptionalLedger): Array<{ row: string; pin: string }> {
+  const pins: Array<{ row: string; pin: string }> = [];
+  if (value.fixRequired !== undefined && base.fixRequired === undefined) {
+    pins.push({ row: "fixRequired", pin: approvedCompactFixRequired.integratedCommit });
   }
-  if (relocated) {
-    try {
-      execFileSync("git", ["merge-base", "--is-ancestor", relocationCommit, "HEAD"], {
-        cwd: repoRoot, stdio: "ignore",
-      });
-    } catch {
-      throw new Error(`${path}: approved relocation commit is not an ancestor of HEAD`);
-    }
+  if (value.measurementCorrection !== undefined && base.measurementCorrection === undefined) {
+    pins.push({ row: "measurementCorrection", pin: approvedMeasurementCorrection.commit });
   }
+  if (value.relocations !== undefined && base.relocations === undefined) {
+    pins.push({ row: "relocations", pin: relocationCommit });
+  }
+  return pins;
 }
 
 /** Only rows already in the PR merge base are immutable; the PR's own last row is measured. */

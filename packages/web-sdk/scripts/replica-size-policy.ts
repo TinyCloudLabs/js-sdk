@@ -236,6 +236,45 @@ export const approvedHardeningRatchet: HardeningRatchet = {
   reason: "Security L1/L2/I1 and correctness P2 fixes required before stable, plus the round-2 correctness fix for a startup recovery that finishes after its bound. Cuts applied first: the worker start-up report uses reportError (local worker +34 to +7, no client or protocol change); the startup wait reuses the shared bounded helper (local -25/-24); the recovery re-check has no safe smaller bound. Root +20/+11 carries L2's frozen registration copy; first-import +134/+129 carries L2's frozen plugin, the bounded recovery re-check and the single-flight late-startup re-admission; activation +4/+5 is measured with no activation-source change after the cut and is not attributed to one commit. Both jobs of run 39023273615 measured identical absolute bytes in every bucket; the gated artifact is unchanged.",
 };
 
+const squashOf548 = "94566db5fcc8831ad9913b593b1843b201ab0227";
+const squashOf565 = "86815bd81479a5ca6578d5cbef8fd9f5a42960c9";
+
+/**
+ * Ancestry pins. Ledger rows keep the PR-branch commit they were reviewed at as immutable
+ * provenance, but js-sdk squash-merges, so that commit is unreachable from master afterwards.
+ * Each pinned commit an ancestry check uses resolves here to the master squash commit carrying
+ * its code. Ancestry is checked only when a PR introduces the row; a row already in the base ledger
+ * is never re-checked, so a squash merge cannot break master or unrelated PRs.
+ *
+ * A PR that introduces a row pins its own head. After it is squash-merged, the next policy change
+ * adds `<pinned head>: <squash commit>` here; check-phase1-replica-dist.ts refuses a PR whose base
+ * ledger still has an unreachable, unmapped pin and names the entry to add.
+ */
+export const squashMergedPins: Readonly<Record<string, string>> = {
+  // #548 (TC-858 S2 browser replica), squash-merged as 94566db5.
+  "0241ba9b8b2447b84ffaede4fff3272e2f2fdda5": squashOf548,
+  "212142ae1cf7ff8568d4172a2ca991a4d79364c7": squashOf548,
+  "2578c6a7624a3408b4584ed2331723694b8afb4b": squashOf548,
+  "57b4a0d6a417cd3fbd439675ffbdf3f427545606": squashOf548,
+  "b796dc52894524ee01a4458f640ecf45906b3040": squashOf548,
+  "ce52494d0cb1ea236578bc6b709e9e6e016f8c78": squashOf548,
+  "ddc032caef81a2177e7f9c30a6a28a8f593a4580": squashOf548,
+  // #565 (TC-858 fix-before-stable hardening), squash-merged as 86815bd8.
+  "3b0b360cd114ded742b890b7b111695fe7a81b0b": squashOf565,
+};
+
+/** The commit an ancestry check requires: the master squash commit for a squash-merged pin. */
+export function ancestryTarget(pin: string, pins: Readonly<Record<string, string>> = squashMergedPins): string {
+  return pins[pin] ?? pin;
+}
+
+/** True when `ref` contains the pinned code, resolving a squash-merged pin to its master commit. */
+export function hasAncestor(
+  root: string, pin: string, ref = "HEAD", pins: Readonly<Record<string, string>> = squashMergedPins,
+): boolean {
+  return spawnSync("git", ["merge-base", "--is-ancestor", ancestryTarget(pin, pins), ref], { cwd: root }).status === 0;
+}
+
 export type GatedOnlyRatchet = {
   label: string;
   sourceCommit: string;

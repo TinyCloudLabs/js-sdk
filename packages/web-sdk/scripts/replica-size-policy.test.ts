@@ -4,8 +4,8 @@ import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { MAX_WORKER_GZIP_BYTES } from "../../replica/scripts/check-worker-size";
-import { compactFixOptionalAllowance } from "./replica-optional-size-policy";
-import { assertCiSizeToolchain, approvedCiToolchainCorrection, approvedFixRequiredRatchet, approvedGatedOnlyRatchet, approvedHardeningRatchet, ciCorrectionPolicyOnlyPaths, isPolicyOnlySinceApprovedSource, validateCiToolchainTransition, validateGatedOnlyRatchet, validateHardeningRatchetTransition, validateLedger, validateMasterMergeResolutionTransition, type HardeningRatchet, type Ledger, type MasterMergeResolution } from "./replica-size-policy";
+import { compactFixOptionalAllowance, introducedOptionalAncestryPins, type OptionalLedger } from "./replica-optional-size-policy";
+import { ancestryTarget, assertCiSizeToolchain, approvedCiToolchainCorrection, approvedFixRequiredRatchet, approvedGatedOnlyRatchet, approvedHardeningRatchet, ciCorrectionPolicyOnlyPaths, hasAncestor, isPolicyOnlySinceApprovedSource, squashMergedPins, validateCiToolchainTransition, validateGatedOnlyRatchet, validateHardeningRatchetTransition, validateLedger, validateMasterMergeResolutionTransition, type HardeningRatchet, type Ledger, type MasterMergeResolution } from "./replica-size-policy";
 
 const current = JSON.parse(readFileSync(resolve(import.meta.dir, "replica-size-ledger.json"), "utf8")) as Ledger;
 const historical: Ledger = {
@@ -249,7 +249,9 @@ describe("TC-858 reviewed master-merge input resolution", () => {
   it("accepts only the five exact merged store, manifests, and derived lock blobs", () => {
     expect(() => validateLedger(withResolution())).not.toThrow();
     expect(current.masterMergeResolution).toEqual(reviewed);
-    expect(current.entries.map(({ pr }) => pr)).toEqual(["#511", "#529", "#546", "#551", "#563", "#564", "#553", "#565"]);
+    // The reviewed rows stay an unchanged prefix; each later replica PR must append exactly one
+    // row of its own (check-phase1-replica-dist.ts), so the whole list is not pinned.
+    expect(current.entries.slice(0, 8).map(({ pr }) => pr)).toEqual(["#511", "#529", "#546", "#551", "#563", "#564", "#553", "#565"]);
   });
 
   it("refuses the superseded #551 resolution bound to e57a6fd6 and e364e7a0", () => {
@@ -1035,5 +1037,62 @@ describe("TC-858 #565 hardening exact-delta ratchet", () => {
     expect(() => validateHardeningRatchetTransition(undefined, changed)).toThrow();
     expect(() => validateHardeningRatchetTransition(row(), changed)).toThrow();
     expect(() => validateHardeningRatchetTransition(row(), undefined)).toThrow();
+  });
+});
+
+describe("TC-858 squash-proof ancestry pins", () => {
+  const git = (root: string, ...args: string[]) =>
+    execFileSync("git", ["-C", root, ...args], { encoding: "utf8" }).trim();
+
+  it("resolves a squash-merged PR-branch pin to the master commit that carries its code", () => {
+    const root = mkdtempSync(join(tmpdir(), "tc858-squash-"));
+    try {
+      git(root, "init", "-q", "-b", "master");
+      git(root, "config", "user.email", "policy@example.test");
+      git(root, "config", "user.name", "Policy Test");
+      writeFileSync(join(root, "a.ts"), "export const a = 1;\n");
+      git(root, "add", ".");
+      git(root, "commit", "-qm", "base");
+      git(root, "switch", "-qc", "feature");
+      writeFileSync(join(root, "a.ts"), "export const a = 2;\n");
+      git(root, "commit", "-qam", "reviewed source");
+      const branchPin = git(root, "rev-parse", "HEAD");
+      git(root, "switch", "-q", "master");
+      git(root, "merge", "--squash", "-q", "feature");
+      git(root, "commit", "-qm", "squash merge");
+      const squash = git(root, "rev-parse", "HEAD");
+
+      // The failure mode that turned master red: the reviewed branch commit is unreachable.
+      expect(hasAncestor(root, branchPin, "master", {})).toBe(false);
+      expect(hasAncestor(root, branchPin, "master", { [branchPin]: squash })).toBe(true);
+      expect(ancestryTarget(branchPin, { [branchPin]: squash })).toBe(squash);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("every ancestry pin of the current ledgers reaches this master-based checkout", () => {
+    const root = resolve(import.meta.dir, "../../..");
+    const optional = JSON.parse(readFileSync(resolve(import.meta.dir, "replica-optional-size-ledger.json"), "utf8")) as OptionalLedger;
+    const pins = [
+      approvedCiToolchainCorrection.approvedSource,
+      approvedFixRequiredRatchet.measuredAt,
+      approvedGatedOnlyRatchet.sourceCommit,
+      current.masterMergeResolution!.mergedHead,
+      current.hardeningRatchet!.sourceCommits.at(-1)!,
+      "0241ba9b8b2447b84ffaede4fff3272e2f2fdda5",
+      ...introducedOptionalAncestryPins(optional, { allowance: optional.allowance, entries: [] }).map(({ pin }) => pin),
+    ];
+    for (const pin of pins) expect({ pin, reachable: hasAncestor(root, pin) }).toEqual({ pin, reachable: true });
+    for (const target of new Set(Object.values(squashMergedPins))) {
+      expect(hasAncestor(root, target, "HEAD", {})).toBe(true);
+    }
+  });
+
+  it("checks optional-row ancestry only for rows a PR introduces", () => {
+    const optional = JSON.parse(readFileSync(resolve(import.meta.dir, "replica-optional-size-ledger.json"), "utf8")) as OptionalLedger;
+    expect(introducedOptionalAncestryPins(optional, optional)).toEqual([]);
+    expect(introducedOptionalAncestryPins(optional, { allowance: optional.allowance, entries: [] }).map(({ row }) => row))
+      .toEqual(["fixRequired", "measurementCorrection", "relocations"]);
   });
 });
