@@ -11,7 +11,7 @@ import { TinyCloudNode, grantAuthRequest, principalDidEquals, REPLICA_LOGOUT_PEN
 import type { ProfileReplicaApprovalEntry, ProfileReplicaDeferredToken, ProfileReplicaLogoutPending } from "@tinycloud/sdk-services/kv/replication";
 import { composeManifestRequest } from "@tinycloud/sdk-core";
 import { invokeOperation } from "@tinycloud/operations";
-import { profilePath } from "@tinycloud/operations/state";
+import { namedProfilePath, profilePath } from "@tinycloud/operations/state";
 import { principalHashOf, readGateSnapshot } from "@tinycloud/replica/profile-gate";
 import { REPLICA_GATE_FILE } from "@tinycloud/sdk-services/kv/replication/contractConstants";
 import { ProfileManager } from "../config/profiles.js";
@@ -219,6 +219,7 @@ export interface PreparedRemoteLogout {
   readonly sessionSnapshot: string;
   readonly profileSnapshot: string;
   readonly inventorySnapshot: string;
+  readonly gateSnapshot?: string;
   readonly token?: ProfileReplicaDeferredToken;
   readonly marker: ProfileReplicaLogoutPending | null;
   readonly node: TinyCloudNode;
@@ -278,6 +279,7 @@ export async function prepareProfileRemoteLogout(
       profileSnapshot: JSON.stringify(profile),
       inventorySnapshot: await logoutInventorySnapshot(ctx.profile),
       marker, token: token ?? undefined,
+      ...(marker === null && token == null ? { gateSnapshot: JSON.stringify(gate ?? null) } : {}),
     };
   });
   if (selected.profile.authMethod !== "local" || !selected.profile.privateKey) {
@@ -372,7 +374,8 @@ export async function finishProfileLogout(
         ? currentToken?.deniedEpoch === online.token.deniedEpoch &&
           currentToken.principalHash === online.token.principalHash
         : currentToken === null && (online.marker !== null ||
-          (await readGateSnapshot(profilePath(ctx.profile)) === undefined &&
+          (online.gateSnapshot !== undefined &&
+           JSON.stringify((await readGateSnapshot(profilePath(ctx.profile))) ?? null) === online.gateSnapshot &&
            (await existingReplicaRoots(ctx.profile)).length === 0));
       if (!session || JSON.stringify(session) !== online.sessionSnapshot ||
           JSON.stringify(profile) !== online.profileSnapshot ||
@@ -480,10 +483,13 @@ export async function finishProfileLogout(
                 if (pendingMarker?.v === 2 && typeof error === "object" && error !== null &&
                     "code" in error && error.code === "REPLICA_GATED" &&
                     "gate" in error && error.gate === "gate_unavailable") {
+                  const gatePath = join(namedProfilePath(ctx.profile), REPLICA_GATE_FILE);
                   throw new CLIError("REPLICA_GATED",
-                    "The orphan replica gate cannot be validated after its durable logout marker. " +
-                    "Inspect replica-gate.json in this profile; resolve a corrupt file only after confirming it is not a valid replacement, " +
-                    "then retry `auth logout --discard-local-changes`. The marker remains and cleanup did not proceed.",
+                    `A damaged lock file from an interrupted logout; move it aside and re-run \`tc auth logout\`: ${gatePath}. ` +
+                    "Inspect it first to ensure it is not a valid replacement. " +
+                    (profile.authSignedOut === true
+                      ? "The profile is already signed out; credentials remain removed, while replica data and the marker stay intact."
+                      : "Credentials and data stay intact; the marker remains and cleanup did not proceed."),
                     ExitCode.ERROR);
                 }
                 throw error;

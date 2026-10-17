@@ -2,4 +2,4 @@
 "@tinycloud/cli": patch
 ---
 
-Purge replicas before clearing the session on `auth logout`. A replica that is still syncing keeps the session.
+Fence unchanged inactive replica gates across online logout, reject changed gates before local credential removal, and give an actionable retry path for an interrupted orphan logout marker.
