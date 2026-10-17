@@ -15,7 +15,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash, randomBytes } from "node:crypto";
 import { readFileSync, statSync } from "node:fs";
-import { chmod, mkdir, open as openFile, readFile, readdir, realpath, rename, rm, stat, type FileHandle } from "node:fs/promises";
+import { chmod, lstat, mkdir, open as openFile, readFile, readdir, realpath, rename, rm, rmdir, stat, unlink, type FileHandle } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 
 
@@ -175,6 +175,67 @@ async function pathExists(path: string): Promise<boolean> {
     if (isNotFound(error)) return false;
     throw storageError("STORAGE_ERROR", `Reading ${path}`, error);
   }
+}
+
+/** True for a real directory, false when absent. A symlink or other file type is a replaced root. */
+async function realDirectoryExists(path: string): Promise<boolean> {
+  let stats;
+  try {
+    stats = await lstat(path);
+  } catch (error) {
+    if (isNotFound(error)) return false;
+    throw storageError("STORAGE_ERROR", `Reading ${path}`, error);
+  }
+  if (stats.isSymbolicLink() || !stats.isDirectory()) {
+    throw new ReplicaStorageError("STORAGE_ERROR", `Refusing the replaced replica path ${path}.`);
+  }
+  return true;
+}
+
+/**
+ * Removes a replica directory that has no usable database without recursion: only the store's own
+ * layout (database files, the sync fence and content-addressed blobs) is unlinked, and anything
+ * else refuses. unlink/rmdir never follow a path swapped after inventory.
+ */
+async function removeLeftoverReplicaDir(replicaDir: string): Promise<void> {
+  const refuse = (path: string) =>
+    new ReplicaStorageError("STORAGE_ERROR", `Refusing to remove unexpected replica path ${path}.`);
+  const assertLayout = async (path: string, directory: boolean) => {
+    const stats = await lstat(path);
+    if (stats.isSymbolicLink() || (directory ? !stats.isDirectory() : !stats.isFile())) throw refuse(path);
+  };
+  const files: string[] = [];
+  const directories: string[] = [];
+  for (const name of await readdir(replicaDir)) {
+    const path = join(replicaDir, name);
+    if (["replica.db", "replica.db-wal", "replica.db-shm", FENCE_FILE].includes(name) ||
+        /^fence\.json\.[0-9a-f]{12}\.tmp$/.test(name)) {
+      await assertLayout(path, false);
+      files.push(path);
+    } else if (name === "blobs") {
+      await assertLayout(path, true);
+      for (const shard of await readdir(path)) {
+        const shardPath = join(path, shard);
+        if (shard !== ".tmp" && !/^[0-9a-f]{2}$/.test(shard)) throw refuse(shardPath);
+        await assertLayout(shardPath, true);
+        for (const blob of await readdir(shardPath)) {
+          const blobPath = join(shardPath, blob);
+          if (shard === ".tmp" ? !/^[0-9a-f]{64}\.[0-9a-f]{12}$/.test(blob) : !/^[0-9a-f]{64}$/.test(blob) || !blob.startsWith(shard)) {
+            throw refuse(blobPath);
+          }
+          await assertLayout(blobPath, false);
+          files.push(blobPath);
+        }
+        directories.push(shardPath);
+      }
+      directories.push(path);
+    } else {
+      throw refuse(path);
+    }
+  }
+  for (const file of files) await unlink(file);
+  for (const directory of directories) await rmdir(directory);
+  await rmdir(replicaDir);
 }
 
 /** `did:key:…#fragment` → the bare principal DID (replica's principalOf). */
@@ -1360,7 +1421,9 @@ export function createSqliteReplicaStorage(
               }
               if (idDir !== undefined) {
                 const replicaDir = join(idDir, "replicas", intent.partitionId.slice(65));
-                if (await pathExists(replicaDir)) {
+                // A replaced identity, replicas or replica directory refuses; the intent stays queued.
+                if (await realDirectoryExists(idDir) && await realDirectoryExists(join(idDir, "replicas")) &&
+                    await realDirectoryExists(replicaDir)) {
                   const [replica, sqlite] = (await Promise.all([
                     // @ts-ignore — replica dist may not exist during node-sdk DTS build.
                     import("@tinycloud/replica"),
@@ -1381,11 +1444,11 @@ export function createSqliteReplicaStorage(
                         await store.releaseLease(lease).catch(() => undefined);
                       }
                     } else {
-                      await rm(replicaDir, { recursive: true, force: true });
+                      await removeLeftoverReplicaDir(replicaDir);
                     }
                   } catch (error) {
                     if (!replica.isReplicaError(error, replica.ReplicaErrorCode.NOT_FOUND)) throw error;
-                    await rm(replicaDir, { recursive: true, force: true });
+                    await removeLeftoverReplicaDir(replicaDir);
                   } finally {
                     await store?.close().catch(() => undefined);
                   }
@@ -1636,7 +1699,8 @@ export function createSqliteReplicaStorage(
     ])) as [ReplicaRuntime, SqliteRuntime];
     return profileSection(async () => {
     const idDir = partitionDirOf(root, target.identity);
-    if (!(await pathExists(idDir))) return;
+    if (!(await realDirectoryExists(idDir))) return;
+    const hasReplicas = await realDirectoryExists(join(idDir, "replicas"));
     // The deduplicated device union (§10.2): the partition's stored device
     // read ONLY (a missing file never creates one and never skips the
     // session device), plus the delegate-posture session device.
@@ -1659,15 +1723,15 @@ export function createSqliteReplicaStorage(
     let firstError: unknown;
     for (const deviceDid of devices) {
       const replicaDir = join(idDir, "replicas", replicaHashOf(target.prefix, deviceDid));
-      if (!(await pathExists(replicaDir))) continue;
+      if (!hasReplicas || !(await realDirectoryExists(replicaDir))) continue;
       try {
         let store: SqliteReplicaStore;
         try {
           store = await sqlite.SqliteReplicaStore.open(replicaDir, { create: false, guard: profileSection });
         } catch (error) {
           if (replica.isReplicaError(error, replica.ReplicaErrorCode.NOT_FOUND)) {
-            // A leftover directory without a database still gets removed.
-            await profileSection(() => rm(replicaDir, { recursive: true, force: true }));
+            // A leftover directory without a database is removed nonrecursively.
+            await profileSection(() => removeLeftoverReplicaDir(replicaDir));
             continue;
           }
           throw error;
@@ -1676,7 +1740,7 @@ export function createSqliteReplicaStorage(
           const state = await store.open();
           if (state === null) {
             await store.close().catch(() => undefined);
-            await profileSection(() => rm(replicaDir, { recursive: true, force: true }));
+            await profileSection(() => removeLeftoverReplicaDir(replicaDir));
             continue;
           }
           const lease = await store.acquireSyncLease(SYNC_LEASE_TTL_MS);

@@ -24,6 +24,16 @@ import { gatedError } from "../errors";
 import { saltedHash } from "./saltedHash";
 
 const GATE_FILE_VERSION = 1;
+/**
+ * Durable deny floor beside the gate, written before each deny commits. It survives loss of the
+ * gate file: a missing gate, or a gate behind this floor, fails closed instead of being recreated.
+ */
+const DENY_FLOOR_FILE = "replica-deny-floor.json";
+
+interface DenyFloor {
+  epoch: number;
+  deniedAt: number;
+}
 
 export interface NodeGateState extends ReplicaAccountGate {
   intents: ReplicaPurgeIntent[];
@@ -154,16 +164,63 @@ function parseState(text: string): NodeGateState {
   };
 }
 
-/** The stored state, or `undefined` when no gate file exists. Never creates the file. */
-async function readState(profileDir: string): Promise<NodeGateState | undefined> {
+function isNotFound(error: unknown): boolean {
+  return typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT";
+}
+
+/** The gate file exactly as stored, without the deny-floor check. */
+async function readStoredState(profileDir: string): Promise<NodeGateState | undefined> {
   let text: string;
   try {
     text = await readFile(join(profileDir, REPLICA_GATE_FILE), "utf8");
   } catch (error) {
-    if (typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT") return undefined;
+    if (isNotFound(error)) return undefined;
     throw gateRefusal("gate_unavailable", "The replica gate file cannot be read.");
   }
   return parseState(text);
+}
+
+/** The last committed deny floor, or `undefined` before the first deny. Malformed fails closed. */
+async function readDenyFloor(profileDir: string): Promise<DenyFloor | undefined> {
+  let record: unknown;
+  try {
+    record = JSON.parse(await readFile(join(profileDir, DENY_FLOOR_FILE), "utf8"));
+  } catch (error) {
+    if (isNotFound(error)) return undefined;
+    throw gateRefusal("gate_unavailable", "The replica deny floor cannot be read.");
+  }
+  if (typeof record !== "object" || record === null || Array.isArray(record) || Object.keys(record).length !== 2 ||
+      !("epoch" in record) || !("deniedAt" in record) ||
+      !Number.isSafeInteger(record.epoch) || (record.epoch as number) < 1 ||
+      !Number.isSafeInteger(record.deniedAt) || (record.deniedAt as number) < 0) {
+    throw gateRefusal("gate_unavailable", "The replica deny floor is malformed.");
+  }
+  return { epoch: record.epoch as number, deniedAt: record.deniedAt as number };
+}
+
+/**
+ * A lost or rolled-back gate after a deny stays closed. No replica reset rewrites the gate, so the
+ * recovery is a fresh profile; network access is unaffected.
+ */
+const LOST_GATE_RECOVERY =
+  "Local replicas stay disabled for this profile; to start over, delete it (`tc profile delete <name>`; " +
+  "for the default profile, switch the default first with `tc profile switch <other>`) and sign in again.";
+
+/**
+ * The stored state, or `undefined` when no gate file exists and no deny ever committed. Never
+ * creates the file. After a deny, a missing gate or one behind the floor fails closed.
+ */
+async function readState(profileDir: string): Promise<NodeGateState | undefined> {
+  const state = await readStoredState(profileDir);
+  const floor = await readDenyFloor(profileDir);
+  if (floor === undefined) return state;
+  if (state === undefined) {
+    throw gateRefusal("gate_unavailable", `The replica gate is missing after a sign-out. ${LOST_GATE_RECOVERY}`);
+  }
+  if (state.lifecycleEpoch < floor.epoch || state.deniedAt === null || state.deniedAt < floor.deniedAt) {
+    throw gateRefusal("gate_unavailable", `The replica gate is behind its last sign-out. ${LOST_GATE_RECOVERY}`);
+  }
+  return state;
 }
 
 /** Control-only snapshot. In particular, a missing gate is never minted by a pending read. */
@@ -210,14 +267,15 @@ export async function clearGateIntent(profileDir: string, id: string): Promise<v
   await writeState(profileDir, { ...state, intents: state.intents.filter((intent) => intent.id !== id) });
 }
 
-async function writeState(profileDir: string, state: NodeGateState): Promise<void> {
+/** temp + fsync + rename + directory fsync: a crash leaves either the old or the new file. */
+async function writeAtomic(profileDir: string, name: string, body: string): Promise<void> {
   await mkdir(profileDir, { recursive: true });
-  const target = join(profileDir, REPLICA_GATE_FILE);
+  const target = join(profileDir, name);
   const temp = `${target}.${randomUUID()}.tmp`;
   try {
     const handle = await open(temp, "w", 0o600);
     try {
-      await handle.writeFile(JSON.stringify({ v: GATE_FILE_VERSION, ...state }));
+      await handle.writeFile(body);
       await handle.sync();
     } finally {
       await handle.close();
@@ -233,6 +291,10 @@ async function writeState(profileDir: string, state: NodeGateState): Promise<voi
     await rm(temp, { force: true });
     throw error;
   }
+}
+
+function writeState(profileDir: string, state: NodeGateState): Promise<void> {
+  return writeAtomic(profileDir, REPLICA_GATE_FILE, JSON.stringify({ v: GATE_FILE_VERSION, ...state }));
 }
 
 function freshState(): NodeGateState {
@@ -381,7 +443,12 @@ export async function denyGate(
     throw new TypeError("Deferred erase is only available for sign-out.");
   }
   try {
-    const state = await readState(profileDir);
+    // Read past the floor check: a deny may always move a gate that fell behind its floor forward.
+    const state = await readStoredState(profileDir);
+    const floor = await readDenyFloor(profileDir);
+    if (state === undefined && floor !== undefined) {
+      throw gateRefusal("gate_unavailable", `The replica gate is missing after a sign-out. ${LOST_GATE_RECOVERY}`);
+    }
     if (state === undefined || state.principalHash === null) return { status: "stale" };
     if (precomputed !== undefined && state.salt !== precomputed.salt) {
       throw gateRefusal("gate_unavailable", "The replica gate salt changed before denial.");
@@ -408,8 +475,8 @@ export async function denyGate(
       pendingGenerations[hash] = (pendingGenerations[hash] ?? 0) + 1;
     }
     const merged = [...state.intents, ...added];
-    const lifecycleEpoch = state.lifecycleEpoch + 1;
-    const deniedAt = Math.max(Date.now(), (state.deniedAt ?? -1) + 1);
+    const lifecycleEpoch = Math.max(state.lifecycleEpoch, floor?.epoch ?? 0) + 1;
+    const deniedAt = Math.max(Date.now(), (state.deniedAt ?? -1) + 1, (floor?.deniedAt ?? -1) + 1);
     if (!Number.isSafeInteger(lifecycleEpoch) || !Number.isSafeInteger(deniedAt)) {
       throw gateRefusal("gate_unavailable", "The replica deny floor cannot advance.");
     }
@@ -425,6 +492,8 @@ export async function denyGate(
       eraseDeferred: options?.deferErase === true,
       deferredPrincipalHash: options?.deferErase === true ? state.principalHash : null,
     };
+    // The floor commits first, so a crash between the two writes leaves the gate behind it: closed.
+    await writeAtomic(profileDir, DENY_FLOOR_FILE, JSON.stringify({ epoch: lifecycleEpoch, deniedAt }));
     await writeState(profileDir, next);
     return { status: "denied", lifecycleEpoch: next.lifecycleEpoch, intents: merged.length };
   } catch (error) {

@@ -6,8 +6,11 @@ import { join, resolve } from "node:path";
 // TC-858: GitHub #548 measured 820,101 gzip bytes with Bun 1.3.14 / Rust 1.99.0.
 // The old 818,196 cap used another toolchain: #550's same-toolchain worker is
 // 820,073, and the reviewed grant-policy import adds 29 bytes on the candidate.
+// The fix-before-stable worker start-up report (`main().catch(reportError)`, #565
+// commit 89b82fc2) measured 820,108 (+7) in GitHub run 39004961403 jobs
+// 117315431534 and 117315431611; the ledger's hardeningRatchet row records it.
 // Zero additional headroom; independent of the web-sdk ledger, including WASM.
-export const MAX_WORKER_GZIP_BYTES = 820_101;
+export const MAX_WORKER_GZIP_BYTES = 820_108;
 const canonicalName = /^kv-storage\.worker\.([0-9a-f]{64})\.js$/;
 
 export function assertWorkerSizeToolchain(bunVersion: string, rustcOutput: string): void {

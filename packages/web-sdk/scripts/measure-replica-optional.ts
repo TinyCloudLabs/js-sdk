@@ -27,9 +27,12 @@ export async function measureReplicaOptionalLoaded(dist: string): Promise<Loaded
       if (!existsSync(entry)) continue;
       const outputDir = join(temp, format);
       const metadataPath = join(temp, `${format}.json`);
+      // Bun emits cwd-relative module path comments. Build from the measured repository's own root
+      // (dist is <root>/packages/web-sdk/dist) so a merge-base worktree in a random temp directory
+      // measures exactly like HEAD.
       execFileSync("bun", ["build", entry, "--target=browser", `--outdir=${outputDir}`,
         "--external=@tinycloud/web-sdk", "--splitting", `--metafile=${metadataPath}`], {
-        cwd: resolve(import.meta.dir, "../../.."), stdio: "pipe",
+        cwd: resolve(dist, "../../.."), stdio: "pipe",
       });
       const metadata = JSON.parse(await readFile(metadataPath, "utf8")) as Metadata;
       if (Object.keys(metadata.inputs).some((input) => /(?:^|\/)web-sdk\/dist\/index\.(?:mjs|cjs)$/.test(input))) {
