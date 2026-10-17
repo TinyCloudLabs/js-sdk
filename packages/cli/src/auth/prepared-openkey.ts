@@ -80,6 +80,8 @@ export async function startPreparedOpenKeyHandoff(options: {
   apiHost?: string;
   noPopup?: boolean;
   paste?: boolean;
+  /** How long the approval stays open; tests shorten the five-minute default. */
+  expiryMs?: number;
 }): Promise<PreparedOpenKeyHandoff> {
   const origin = new URL(options.openKeyHost).origin;
   const state = randomBytes(32);
@@ -266,7 +268,7 @@ export async function startPreparedOpenKeyHandoff(options: {
         close();
         void cancel();
       }
-    }, 300_000);
+    }, options.expiryMs ?? 300_000);
     return {
       url,
       result,
