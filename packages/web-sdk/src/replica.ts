@@ -73,8 +73,9 @@ async function recoveredBrowserReplication(
 
   const abort = new AbortController();
   let timedOut = false;
-  let timeoutId: ReturnType<typeof setTimeout>;
-  const startup = (async () => lifecycle.recover({ signal: abort.signal }))().catch(() => null);
+  let report = undefined as Report | null | undefined;
+  const startup = (async () => lifecycle.recover({ signal: abort.signal }))().catch(() => null)
+    .then((result) => (report = result));
   // A startup recovery that outlives its bound holds the gate lock. If it later finishes cleanly,
   // one fresh gated recovery decides admission; the late report itself never admits.
   void runRecovery(async () => {
@@ -83,16 +84,9 @@ async function recoveredBrowserReplication(
     if (clean(result)) await freshAdmission();
     else unavailable(result?.failed[0]?.code ?? (result ? "RECOVERY_INCOMPLETE" : "STORAGE_ERROR"), result?.remaining);
   });
-  const timeout = new Promise<null>((resolve) => {
-    timeoutId = setTimeout(() => {
-      timedOut = true;
-      abort.abort();
-      resolve(null);
-    }, 3_000);
-  });
-  const report = await Promise.race([startup, timeout]);
-  clearTimeout(timeoutId!);
-  if (report !== null) admitted = clean(report);
+  await bounded(startup, abort);
+  timedOut = report === undefined;
+  if (report) admitted = clean(report);
   if (!admitted) unavailable(report?.failed[0]?.code ?? (timedOut ? "RECOVERY_TIMEOUT" : "STORAGE_ERROR"), report?.remaining);
 
   const gatedError = () => Object.assign(new Error("Replica wallet or startup recovery is unavailable."), {
