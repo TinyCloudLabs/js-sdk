@@ -8,8 +8,10 @@ name: Replica e2e
 # "database is locked" first-write fix (37277f0, PR #268) that the earlier
 # d7f511f image lacked. QA vetted this digest on SQLite and Postgres 16 (TC-858).
 # It also advertises `kv-sync-root` (TC-908), so the CLI e2e suites exercise the
-# whole-space root sync; the REPLICATION_ROOT_UNSUPPORTED path is covered only
-# without a real node (controller, transport and browser /info-mock tests).
+# whole-space root sync. The REPLICATION_ROOT_UNSUPPORTED decision logic stays
+# covered without a real node (controller, transport and browser /info-mock
+# tests), but the CLI's handling of it (`sync --prefix /` exit 7, the persisted
+# lastError, the --replication `unavailable` event) has no CI coverage.
 # The image is public; the job still logs in with the workflow token so the pull
 # keeps working if the package becomes private (the package must then grant
 # this repository read access).
