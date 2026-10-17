@@ -2046,6 +2046,22 @@ describe("OpenKey primary key (TC-705)", () => {
     expect(profiles.get("default")?.ownerKeyPrimary).toBe(false);
   });
 
+  test("a profile pinned to an owner sends that owner's space without --owner so OpenKey preselects its key (TC-1327)", async () => {
+    profiles.set("default", makeProfile({ did: sessionDid, sessionDid, authMethod: "openkey", posture: "owner-openkey", ownerDid: otherOwner }));
+    openKeyDelegation = signedBy(otherOwner, { primary: false });
+
+    await runAuthCommand(["auth", "login", "--method", "openkey", "--no-popup"]);
+
+    expect(recorded.errors).toEqual([]);
+    const requested = recorded.startAuthFlows[0]?.options.permissions as Array<{ service: string; space: string }>;
+    const space = `tinycloud:pkh:eip155:1:0x00000000000000000000000000000000000000bb:default`;
+    expect(requested?.map((entry) => [entry.service, entry.space])).toEqual([
+      ["tinycloud.kv", space],
+      ["tinycloud.sql", space],
+      ["tinycloud.capabilities", space],
+    ]);
+  });
+
   test("--owner refuses an approval by any other key and saves nothing", async () => {
     openKeyDelegation = signedBy(primaryOwner, { primary: true });
 
