@@ -982,7 +982,8 @@ test("startup completes a pinned empty legacy child left after the database was 
     guard: <T>(section: () => Promise<T>): Promise<T> =>
       withTinyCloudStateRoot(home, () => withProfileLock(PROFILE, section, { requireProfile: true })),
   });
-  expect(await purge.prepareLogoutPending({ principal: ownerDid })).toMatchObject({ v: 1 });
+  const approval = await purge.preflightLogout({ principal: ownerDid });
+  expect(await purge.prepareLogoutPending({ principal: ownerDid, approval })).toMatchObject({ v: 1 });
   const legacyDir = dirname(paths.db);
   for (const child of await readdir(legacyDir)) {
     await rm(join(legacyDir, child), { recursive: true, force: true });

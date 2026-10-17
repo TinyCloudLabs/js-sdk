@@ -451,7 +451,8 @@ describe("legacy replica read gate", () => {
     const guard = <T>(section: () => Promise<T>): Promise<T> =>
       withTinyCloudStateRoot(home, () => withProfileLock(PROFILE, section, { requireProfile: true }));
     const purge = createProfileReplicaPurge({ profileDir, guard });
-    expect(await purge.prepareLogoutPending({ principal: paths.ownerDid })).not.toBeNull();
+    const approval = await purge.preflightLogout({ principal: paths.ownerDid });
+    expect(await purge.prepareLogoutPending({ principal: paths.ownerDid, approval })).not.toBeNull();
 
     for (const command of commands) {
       const denied = await run(home, command);
@@ -484,7 +485,8 @@ describe("legacy replica read gate", () => {
     process.env.TC_HOME = home;
     SqliteReplicaStore.prototype.get = async function (key) {
       const entry = await originalGet.call(this, key);
-      expect(await markerWriter.prepareLogoutPending({ principal: paths.ownerDid })).not.toBeNull();
+      const approval = await markerWriter.preflightLogout({ principal: paths.ownerDid });
+      expect(await markerWriter.prepareLogoutPending({ principal: paths.ownerDid, approval })).not.toBeNull();
       markerWritten = true;
       return entry;
     };

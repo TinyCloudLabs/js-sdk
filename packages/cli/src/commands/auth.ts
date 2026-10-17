@@ -8,7 +8,7 @@ import { dirname, join } from "node:path";
 import { createInterface } from "node:readline";
 import type { IncomingMessage } from "node:http";
 import { TinyCloudNode, grantAuthRequest, principalDidEquals, REPLICA_LOGOUT_PENDING_FILE, signedCompactUcanExpiry, type PermissionEntry, type PortableDelegation, type RuntimeDelegationActivator, type TinyCloudSession } from "@tinycloud/node-sdk";
-import type { ProfileReplicaApprovalEntry, ProfileReplicaDeferredToken, ProfileReplicaLogoutPending } from "@tinycloud/sdk-services/kv/replication";
+import type { ProfileReplicaApprovalEntry, ProfileReplicaDeferredToken, ProfileReplicaLogoutPending, ProfileReplicaPreflight, ProfileReplicaPurge } from "@tinycloud/sdk-services/kv/replication";
 import { composeManifestRequest } from "@tinycloud/sdk-core";
 import { invokeOperation } from "@tinycloud/operations";
 import { namedProfilePath, profilePath } from "@tinycloud/operations/state";
@@ -189,9 +189,7 @@ async function existingReplicaRoots(profile: string): Promise<string[]> {
   return roots;
 }
 
-type LogoutApproval = Awaited<ReturnType<ReturnType<typeof profilePurge>["preflightLogout"]>>;
-
-function displayLogoutInventory(approval: LogoutApproval, discardLocalChanges: boolean): void {
+function displayLogoutInventory(approval: ProfileReplicaPreflight, discardLocalChanges: boolean): void {
   if (approval.unknownPaths.length === 0 && !discardLocalChanges) return;
   process.stderr.write(`Local replica paths requiring explicit discard approval: ${JSON.stringify({
     paths: approval.unknownPaths,
@@ -203,8 +201,8 @@ function displayLogoutInventory(approval: LogoutApproval, discardLocalChanges: b
 }
 
 async function preflightLogout(
-  purge: ReturnType<typeof profilePurge>, principal: string, discardLocalChanges: boolean,
-): Promise<LogoutApproval> {
+  purge: ProfileReplicaPurge, principal: string, discardLocalChanges: boolean,
+): Promise<ProfileReplicaPreflight> {
   // The permissive pass is only an inventory, never deletion authority. Show
   // identities before the strict check or a marker/online request.
   const approval = await purge.preflightLogout({ principal, discardLocalChanges: true });

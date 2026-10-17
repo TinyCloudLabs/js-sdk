@@ -427,7 +427,7 @@ export async function restoreSessionStamp(
  * `deny` step 1. If `input.principal` does not match the gate, returns `stale` and writes nothing.
  * Otherwise one atomic rewrite clears the principal, increments epoch and pending generations
  * for new pending intents, records the deduplicated intents and clears first-install anchors.
- * A failed write returns `unguarded`. The caller holds the nonreentrant profile lock throughout.
+ * A failed write returns `unguarded`. The caller holds the (reentrant) profile lock throughout.
  */
 export async function denyGate(
   profileDir: string,

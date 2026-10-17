@@ -2059,14 +2059,11 @@ export function createSqliteReplicaStorage(
         }
         const report = await inspectProfileReplicaLayout(profileDir, state !== undefined);
         assertSupportedProfileLayout(report);
-        if (approval !== undefined) {
-          assertApprovedInventory(report, approval);
-          if (approval.knownLegacyReplicas !== report.knownLegacyReplicas ||
-              JSON.stringify(approval.unknownPaths) !== JSON.stringify(report.unknownPaths) ||
-              JSON.stringify(approval.unknownLegacyPaths) !== JSON.stringify(report.unknownLegacyPaths)) {
-            throw localChangesRefusal(report.unknownPaths);
-          }
-        } else if (discardLocalChanges || report.unknownPaths.length !== 0) {
+        // The approval is the inventory the caller displayed; it must match exactly.
+        assertApprovedInventory(report, approval);
+        if (approval.knownLegacyReplicas !== report.knownLegacyReplicas ||
+            JSON.stringify(approval.unknownPaths) !== JSON.stringify(report.unknownPaths) ||
+            JSON.stringify(approval.unknownLegacyPaths) !== JSON.stringify(report.unknownLegacyPaths)) {
           throw localChangesRefusal(report.unknownPaths);
         }
         if (!discardLocalChanges && (report.unknownPaths.length > 0 || corruptGate ||
@@ -2862,7 +2859,11 @@ export function createSqliteReplicaStorage(
   };
 }
 
-/** CLI-facing profile lifecycle; use the same profile lock as CLI session/key writes. */
+/**
+ * CLI-facing profile lifecycle. `guard` is the same profile lock as CLI
+ * session/key writes and MUST be reentrant within one async call chain: the CLI
+ * calls this facade while it already holds that lock.
+ */
 export function createProfileReplicaPurge(options: {
   profileDir: string;
   guard: MutationGuard;

@@ -52,7 +52,9 @@ test("a crash immediately after durable marker write removes both credentials be
   const guard = <T>(section: () => Promise<T>): Promise<T> =>
     withTinyCloudStateRoot(home, () => withProfileLock(PROFILE, section, { requireProfile: true }));
   const purge = createProfileReplicaPurge({ profileDir: paths.dir, guard });
-  expect(await purge.prepareLogoutPending({ principal: ownerDid })).toMatchObject({ v: 1, principalHash: expect.any(String) });
+  const approval = await purge.preflightLogout({ principal: ownerDid });
+  expect(await purge.prepareLogoutPending({ principal: ownerDid, approval }))
+    .toMatchObject({ v: 1, principalHash: expect.any(String) });
   expect(await readFile(paths.session, "utf8")).toContain("delegationCid");
   expect(await readFile(key, "utf8")).toContain('"d"');
   expect(await readFile(marker, "utf8")).toContain("principalHash");
