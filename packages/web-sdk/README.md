@@ -105,12 +105,12 @@ historical, not additive allowance. The diff from `ddc032ca` to
 no shipped source or build input changed. The checker refuses mismatched local
 Bun/Rust versions and later changes to this corrected ratchet.
 
-The opt-in first-import ceiling is 51,785 B ESM / 66,995 B CJS gzip
+The opt-in first-import ceiling is 51,791 B ESM / 67,009 B CJS gzip
 (including the replica parser and noble dependencies); awaiting the IndexedDB
 factory has a separate 23,071 B / 24,650 B ceiling. The content-hashed worker
 and WASM asset has an 820,101 B ceiling owned by `@tinycloud/replica`.
-A compliant first local open therefore costs at most 894,957 B ESM /
-911,746 B CJS incremental gzip beyond the already-loaded web root; those
+A compliant first local open therefore costs at most 894,963 B ESM /
+911,760 B CJS incremental gzip beyond the already-loaded web root; those
 assets can then be cached. These byte ceilings do not replace real-worker
 Chromium acceptance of local reads, denial, expiry, and sign-out.
 
@@ -125,8 +125,9 @@ measurement correction, not adapter allowance: exact `ce52494d` built with
 Bun 1.3.14 measured 51,201/66,132 B versus 45,538/65,096 B with Bun 1.4.3
 on the same SDK. The approved fix-required row added 584/863 B. Subsequent
 local Rust 1.99.0 rebuild measurements (+1 ESM first-import, +2/+3 B
-activation) were non-canonical; GitHub's two Node jobs measured the unmerged
-#548 row at 51,785/66,995 B first-import and 23,071/24,650 B activation.
+activation) were non-canonical; GitHub's [Postgres Node size job 117262499817](https://github.com/TinyCloudLabs/js-sdk/actions/runs/38987573493/job/117262499817)
+measured #548 `1873c27d` at 51,791/67,009 B first-import and
+23,071/24,650 B activation, at the exact ledger ceilings.
 The [replica-e2e Node size job 117166290134](https://github.com/TinyCloudLabs/js-sdk/actions/runs/38958197518/job/117166290134)
 ran rustc 1.99.0 for WASM and the Phase-1 size step; the separate
 [Chromium job 117166289795](https://github.com/TinyCloudLabs/js-sdk/actions/runs/38958197518/job/117166289795)
