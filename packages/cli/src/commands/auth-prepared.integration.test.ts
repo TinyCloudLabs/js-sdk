@@ -90,7 +90,8 @@ async function preparedLogin(transport: "callback" | "paste", behavior: Behavior
     const next = await Promise.race([reader.read(), stalled.promise]);
     if (next === "stalled" || next.done) break;
     stderr += new TextDecoder().decode(next.value);
-    url = /(https:\/\/openkey\.test\/delegate#tv2=[A-Za-z0-9_-]+)\r?\n/.exec(stderr)?.[1];
+    // A terminal may colour the line, so an SGR reset can sit between the URL and its newline.
+    url = /(https:\/\/openkey\.test\/delegate#tv2=[A-Za-z0-9_-]+)(?:\x1b\[[0-9;]*m)*\r?\n/.exec(stderr)?.[1];
     if (url) break;
   }
   clearTimeout(stallTimer);
