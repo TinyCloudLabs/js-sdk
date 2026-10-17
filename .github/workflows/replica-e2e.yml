@@ -112,16 +112,16 @@ jobs:
           bun packages/web-sdk/scripts/check-replica-built-entry.ts mjs
           bun packages/web-sdk/scripts/check-replica-built-entry.ts cjs
 
-      - name: Size-policy unit tests
-        if: ${{ (success() || failure()) && matrix.database == 'sqlite' }}
-        run: bun test packages/web-sdk/scripts/
-
       - name: Check Phase 1 web-sdk dist and test baseline
         env:
           REPLICA_BUDGET_PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
           REPLICA_BUDGET_PR_NUMBER: ${{ github.event.pull_request.number }}
           REPLICA_BUDGET_TICKET: ${{ github.event.pull_request.title }}
         run: bun packages/web-sdk/scripts/check-phase1-replica-dist.ts
+
+      - name: Size-policy unit tests
+        if: ${{ (success() || failure()) && matrix.database == 'sqlite' }}
+        run: bun test packages/web-sdk/scripts/
 
       - name: Run replication model
         run: bun test packages/sdk-services/src/kv/replication/pendingWrites.model.test.ts

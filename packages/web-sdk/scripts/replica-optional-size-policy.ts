@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { resolve } from "node:path";
 import type { LoadedSizes } from "./measure-replica-optional";
-import { approvedCiToolchainCorrection, approvedFixRequiredRatchet, approvedHardeningRatchet, validateGatedOnlyRatchet, type GatedOnlyRatchet } from "./replica-size-policy";
+import { ancestryPins, approvedCiToolchainCorrection, approvedFixRequiredRatchet, approvedHardeningRatchet, pinLandedOn, validateGatedOnlyRatchet, type GatedOnlyRatchet, type Ledger } from "./replica-size-policy";
 export type CompactFixRequired = {
   sourceCommit: string;
   integratedCommit: string;
@@ -147,6 +147,17 @@ export function optionalSourcePins(ledger: OptionalLedger): Array<{ row: "reloca
   if (ledger.measurementCorrection !== undefined) pins.push({ row: "measurementCorrection", pin: approvedMeasurementCorrection.commit });
   if (ledger.fixRequired !== undefined) pins.push({ row: "fixRequired", pin: approvedCompactFixRequired.integratedCommit });
   return pins;
+}
+
+/**
+ * The pins of rows already merged into a base (root, gated-only and optional) for which `ref`
+ * fails pinLandedOn. check-phase1-replica-dist.ts refuses a PR whose base yields any.
+ */
+export function mergedPinsNotLandedOn(
+  root: string, base: Ledger, baseOptional: OptionalLedger, ref: string,
+): Array<{ row: string; pin: string }> {
+  return [...ancestryPins(base, baseOptional.gatedOnlyRatchet !== undefined), ...optionalSourcePins(baseOptional)]
+    .filter(({ pin }) => !pinLandedOn(root, pin, ref));
 }
 
 /**
