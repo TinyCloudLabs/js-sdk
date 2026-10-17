@@ -1,4 +1,5 @@
 export {
+  advanceInactiveGate,
   assertGateAccess,
   clearGateIntent,
   denyGate,
@@ -10,6 +11,8 @@ export {
   readFirstInstall,
   resumeDeferredGate,
   readGateSnapshot,
+  readLogoutGate,
+  REPLICA_DENY_FLOOR_FILE,
   recordFirstInstall,
   recordGrantInstall,
   restoreSessionStamp,

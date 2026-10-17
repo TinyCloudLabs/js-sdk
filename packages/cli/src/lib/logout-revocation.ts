@@ -37,16 +37,34 @@ function ownerSpaceResource(resource: string, ownerDid: string): boolean {
   return match !== null && principalDidEquals(ownerDid, `did:pkh:eip155:${match[1]}:${match[2]}`);
 }
 
-async function signedOwnerGrant(cid: string, authorization: string, ownerDid: string, issuer?: string): Promise<boolean> {
+/**
+ * A verified grant on this owner's space is "owner"; one whose every resource is another
+ * account's space is "other" (not ours to revoke, e.g. an earlier account's device grant on a
+ * shared profile); anything else needs the node's view. A bad signature throws.
+ */
+async function signedGrantOwner(
+  cid: string, authorization: string, ownerDid: string, issuer?: string,
+): Promise<"owner" | "other" | "unknown"> {
   const token = withoutBearer(authorization);
+  let signedBy: string;
+  let resources: string[];
   if (token.split(".").length === 3) {
     const signed = parseSignedCompactUcanAttenuation(token, cid);
-    return (issuer === undefined || principalDidEquals(signed.payload.iss, issuer)) &&
-      Object.keys(signed.payload.att).some((resource) => ownerSpaceResource(resource, ownerDid));
+    signedBy = signed.payload.iss;
+    resources = Object.keys(signed.payload.att);
+    if ((issuer === undefined || principalDidEquals(signedBy, issuer)) &&
+        resources.some((resource) => ownerSpaceResource(resource, ownerDid))) return "owner";
+  } else {
+    const signed = await parseSignedSiweCacao(token, cid);
+    signedBy = signed.issuer;
+    resources = Object.keys(signed.attenuation);
+    if (principalDidEquals(signedBy, ownerDid) &&
+        resources.some((resource) => ownerSpaceResource(resource, ownerDid))) return "owner";
   }
-  const signed = await parseSignedSiweCacao(token, cid);
-  return principalDidEquals(signed.issuer, ownerDid) &&
-    Object.keys(signed.attenuation).some((resource) => ownerSpaceResource(resource, ownerDid));
+  return resources.length > 0 && resources.every((resource) =>
+    /^tinycloud:pkh:eip155:[1-9]\d*:0x[0-9a-fA-F]{40}:[^/]+\//.test(resource) && !ownerSpaceResource(resource, ownerDid))
+    ? "other"
+    : "unknown";
 }
 
 /** Fence local CID inventory across online work without holding a profile lock over node I/O. */
@@ -85,6 +103,15 @@ export async function planLogoutRevocations(input: {
   const included = new Set<string>();
   const unresolved = new Set<string>();
   const excluded: LogoutRevocationPlan["excluded"] = [];
+  // Verified grants on another account's spaces: never ours to revoke, never a node lookup.
+  const foreign = new Set<string>();
+  const classify = (cid: string, owner: "owner" | "other" | "unknown") => {
+    if (owner === "owner") included.add(cid);
+    else if (owner === "other") {
+      if (!foreign.has(cid)) excluded.push({ cid, reason: "non_owner" });
+      foreign.add(cid);
+    } else unresolved.add(cid);
+  };
 
   const artifactText = await optionalFile(join(root, "auth-grant-artifacts.json"));
   if (artifactText !== null) {
@@ -100,26 +127,26 @@ export async function planLogoutRevocations(input: {
         "Authorization" in delegation.delegationHeader ? delegation.delegationHeader.Authorization : undefined;
       if (!cid || !delegation || typeof delegation !== "object" || !("cid" in delegation) || delegation.cid !== cid ||
           typeof authorization !== "string") throw inventoryError(cid, "the issued grant record is malformed");
+      let owner: "owner" | "other" | "unknown";
       try {
-        if (await signedOwnerGrant(cid, authorization, session.ownerDid)) included.add(cid);
-        else unresolved.add(cid);
+        owner = await signedGrantOwner(cid, authorization, session.ownerDid);
       } catch {
         throw inventoryError(cid, "the purported issued grant has no verifiable exact-CID signature");
       }
+      classify(cid, owner);
     }
   }
 
   for (const entry of await loadAdditionalDelegations(profileName)) {
     const cid = entry?.delegation?.cid;
-    if (typeof cid !== "string" || !cid || cid === sessionCid || included.has(cid)) continue;
+    if (typeof cid !== "string" || !cid || cid === sessionCid || included.has(cid) || foreign.has(cid)) continue;
     const authorization = entry.delegation.delegationHeader?.Authorization;
     if (typeof authorization !== "string") {
       unresolved.add(cid);
       continue;
     }
     try {
-      if (await signedOwnerGrant(cid, authorization, session.ownerDid, profile.sessionDid ?? profile.did)) included.add(cid);
-      else unresolved.add(cid);
+      classify(cid, await signedGrantOwner(cid, authorization, session.ownerDid, profile.sessionDid ?? profile.did));
     } catch {
       unresolved.add(cid);
     }
@@ -136,11 +163,11 @@ export async function planLogoutRevocations(input: {
       const cid = "delegationCid" in record ? record.delegationCid : undefined;
       if (cid === undefined) continue;
       if (typeof cid !== "string" || !cid) throw inventoryError("history file", "invalid CID");
-      if (cid !== sessionCid && !included.has(cid)) unresolved.add(cid);
+      if (cid !== sessionCid && !included.has(cid) && !foreign.has(cid)) unresolved.add(cid);
     }
   }
   unresolved.delete(sessionCid);
-  for (const cid of included) unresolved.delete(cid);
+  for (const cid of [...included, ...foreign]) unresolved.delete(cid);
 
   if (unresolved.size > 0) {
     const records = new Map<string, { direction: string; status: string; owner: "owner" | "other" | "unknown"; delegatorDid: string }>();

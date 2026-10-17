@@ -1,9 +1,12 @@
 import { lstat, open, readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { createProfileReplicaPurge, logoutPrincipalDigest, REPLICA_LOGOUT_PENDING_FILE } from "@tinycloud/node-sdk";
-import type { ProfileReplicaLogoutPending, ProfileReplicaPurge } from "@tinycloud/sdk-services/kv/replication";
+import { createProfileReplicaPurge, logoutPrincipalDigest, REPLICA_LOGOUT_PENDING_FILE, RESTORED_GATE_MESSAGE } from "@tinycloud/node-sdk";
+import type {
+  ProfileReplicaLogoutPending, ProfileReplicaPreflight, ProfileReplicaRootIdentity, ProfileReplicaUnknownEntry,
+  ReplicaEraseReport,
+} from "@tinycloud/sdk-services/kv/replication";
 import { namedProfilePath, profilePath } from "@tinycloud/operations/state";
-import { readGateSnapshot } from "@tinycloud/replica/profile-gate";
+import { principalHashOf, readGateSnapshot, readLogoutGate } from "@tinycloud/replica/profile-gate";
 import { REPLICA_GATE_FILE } from "@tinycloud/sdk-services/kv/replication/contractConstants";
 import { ProfileManager } from "../config/profiles.js";
 import { ExitCode } from "../config/constants.js";
@@ -17,7 +20,13 @@ export function profilePurge(name: string) {
   });
 }
 
-type LegacyEraseInventory = Parameters<Parameters<ProfileReplicaPurge["recoverLogoutPending"]>[0]["eraseLegacyReplicas"]>[0];
+type LegacyEraseInventory = {
+  discardLocalChanges: boolean;
+  approvedUnknown: readonly ProfileReplicaUnknownEntry[];
+  knownRoots: readonly ProfileReplicaRootIdentity[];
+  knownEntries: readonly ProfileReplicaUnknownEntry[];
+  missingDatabases: readonly string[];
+};
 
 /** The facade validates the full marker; only its legacy paths belong to the CLI remover. */
 export async function eraseApprovedLegacyReplicas(name: string, inventory: LegacyEraseInventory): Promise<string[]> {
@@ -29,6 +38,39 @@ export async function eraseApprovedLegacyReplicas(name: string, inventory: Legac
     knownEntries: inventory.knownEntries.filter((entry) => isLegacy(entry.path)),
     missingDatabases: inventory.missingDatabases.filter(isLegacy),
   });
+}
+
+/**
+ * The legacy mirror belongs to the profile, not an account, so another account's logout
+ * erases it after both credentials are gone. With the displayed approval it removes that
+ * exact inventory; a replay without one (startup) removes only source-known children. The
+ * durable reminder clears only after the erase.
+ */
+export async function finishLegacyReplicaCleanup(
+  name: string, approval?: ProfileReplicaPreflight, discardLocalChanges = false,
+): Promise<string[]> {
+  const removed = approval
+    ? await eraseApprovedLegacyReplicas(name, {
+        discardLocalChanges,
+        approvedUnknown: discardLocalChanges ? approval.unknownEntries : [],
+        knownRoots: approval.knownRoots, knownEntries: approval.knownEntries,
+        missingDatabases: approval.missingDatabases,
+      })
+    : await removeProfileReplicas(name);
+  const { legacyReplicaCleanup: _pending, ...profile } = await ProfileManager.getProfile(name);
+  await ProfileManager.setProfileDurable(name, profile);
+  return removed;
+}
+
+/** True when the gate's active (or deferred) account is not `principal`: "Logout by another account". */
+export async function gateHeldByAnotherAccount(name: string, principal: string): Promise<boolean> {
+  const read = await readLogoutGate(profilePath(name));
+  if (read === undefined) return false;
+  const { state } = read;
+  const hash = await principalHashOf(state.salt, principal);
+  return state.principalHash !== null
+    ? state.principalHash !== hash
+    : state.eraseDeferred && state.deferredPrincipalHash !== hash;
 }
 
 /**
@@ -87,9 +129,10 @@ export async function assertPendingRemoteLogoutSession(
 
 
 /** Attempt both unlinks independently; the durable marker remains until both are absent and fsynced. */
-export async function clearProfileCredentials(name: string, syncDirectory = false): Promise<void> {
+export async function clearProfileCredentials(name: string, syncDirectory = false, legacyCleanup = false): Promise<void> {
   const profile = await ProfileManager.getProfile(name);
-  await ProfileManager.setProfileDurable(name, { ...profile, authSignedOut: true });
+  // Another account's logout records, in the same durable write, that the legacy mirror still has to go.
+  await ProfileManager.setProfileDurable(name, { ...profile, authSignedOut: true, ...(legacyCleanup ? { legacyReplicaCleanup: true } : {}) });
   let failed = false;
   let error: unknown;
   try { await ProfileManager.removeKey(name); } catch (cause) { failed = true; error = cause; }
@@ -163,12 +206,21 @@ export async function recoverPendingLogout(name: string): Promise<void> {
       }
       return;
     }
+    if (profile.authSignedOut === true && profile.legacyReplicaCleanup === true) {
+      // Another account's logout cleared both credentials but was interrupted before the
+      // legacy mirror went: replay that erase for source-known children only.
+      await ProfileManager.withLock(name, async () => {
+        const current = await ProfileManager.getProfile(name);
+        if (current.authSignedOut === true && current.legacyReplicaCleanup === true) await finishLegacyReplicaCleanup(name);
+      }, { requireProfile: true });
+    }
     let remaining: number;
     try {
       remaining = (await readGateSnapshot(profilePath(name)))?.intents.length ?? 0;
-    } catch {
+    } catch (error) {
       throw new CLIError("REPLICA_PURGE_FAILED",
-        "The replica gate is unreadable without a logout marker; network restore and local replica reads remain blocked.",
+        `The replica gate is unreadable without a logout marker; network restore and local replica reads remain blocked.${
+          error instanceof Error ? ` ${error.message}` : ""}`,
         ExitCode.ERROR, { failed: [{ id: "logout", code: "gate_unavailable" }], remaining: 1 });
     }
     if (remaining) {
@@ -211,9 +263,17 @@ export async function recoverPendingLogout(name: string): Promise<void> {
       },
     });
   }, { requireProfile: true });
+  refuseRestoredGate(report);
   if (report.failed.length || report.remaining) {
     throw new CLIError("REPLICA_PURGE_FAILED",
       `A durable logout is pending (${report.failed.map(({ code }) => code).join(", ") || `${report.remaining} intents remaining`}). Network restore and replica reads remain blocked; retry this command to complete credential and replica cleanup.`,
       ExitCode.ERROR, { failed: report.failed, remaining: report.remaining });
+  }
+}
+
+/** A restored older gate cannot complete this logout in place (CONTRACT.md §2 "Restored older gate"). */
+export function refuseRestoredGate(report: ReplicaEraseReport): void {
+  if (report.failed.some(({ code }) => code === "gate_restored")) {
+    throw new CLIError("REPLICA_GATED", RESTORED_GATE_MESSAGE, ExitCode.ERROR, { failed: report.failed });
   }
 }

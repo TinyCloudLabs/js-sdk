@@ -12,12 +12,15 @@ import type { ProfileReplicaApprovalEntry, ProfileReplicaDeferredToken, ProfileR
 import { composeManifestRequest } from "@tinycloud/sdk-core";
 import { invokeOperation } from "@tinycloud/operations";
 import { namedProfilePath, profilePath } from "@tinycloud/operations/state";
-import { principalHashOf, readGateSnapshot } from "@tinycloud/replica/profile-gate";
+import { readGateSnapshot, REPLICA_DENY_FLOOR_FILE } from "@tinycloud/replica/profile-gate";
 import { isReplicaError, ReplicaErrorCode } from "@tinycloud/replica";
 import { REPLICA_GATE_FILE } from "@tinycloud/sdk-services/kv/replication/contractConstants";
 import { ProfileManager } from "../config/profiles.js";
 import { logoutInventorySnapshot, planLogoutRevocations, type LogoutRevocationPlan } from "../lib/logout-revocation.js";
-import { assertPendingLogoutOwner, assertPendingRemoteLogoutSession, clearProfileCredentials, eraseApprovedLegacyReplicas, profilePurge, recoverPendingLogout } from "../lib/logout-pending.js";
+import {
+  assertPendingLogoutOwner, assertPendingRemoteLogoutSession, clearProfileCredentials, eraseApprovedLegacyReplicas,
+  finishLegacyReplicaCleanup, gateHeldByAnotherAccount, profilePurge, recoverPendingLogout, refuseRestoredGate,
+} from "../lib/logout-pending.js";
 import {
   outputJson,
   outputWarnings,
@@ -211,15 +214,19 @@ async function preflightLogout(
   return approval;
 }
 
-async function inactiveGateIdentity(profile: string, gate: Awaited<ReturnType<typeof readGateSnapshot>>): Promise<string> {
-  if (!gate) return "null";
-  try {
-    const file = await lstat(join(profilePath(profile), REPLICA_GATE_FILE), { bigint: true });
-    return JSON.stringify({ gate, dev: String(file.dev), ino: String(file.ino) });
-  } catch (error) {
-    if (typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT") return "null";
-    throw error;
-  }
+/** Gate and deny-floor bytes and inodes plus the replica roots, read without interpreting them. */
+async function logoutGateSnapshot(profile: string): Promise<string> {
+  const files = await Promise.all([REPLICA_GATE_FILE, REPLICA_DENY_FLOOR_FILE].map(async (name) => {
+    const path = join(profilePath(profile), name);
+    try {
+      const file = await lstat(path, { bigint: true });
+      return { bytes: await readFile(path, "utf8"), dev: String(file.dev), ino: String(file.ino) };
+    } catch (error) {
+      if (typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT") return null;
+      throw error;
+    }
+  }));
+  return JSON.stringify({ files, roots: await existingReplicaRoots(profile) });
 }
 
 export interface PreparedRemoteLogout {
@@ -232,6 +239,8 @@ export interface PreparedRemoteLogout {
   readonly gateSnapshot?: string;
   readonly token?: ProfileReplicaDeferredToken;
   readonly marker: ProfileReplicaLogoutPending | null;
+  /** The inventory displayed before the online requests; another account's logout erases its legacy part. */
+  readonly approval: ProfileReplicaPreflight;
   readonly node: TinyCloudNode;
 }
 
@@ -260,36 +269,44 @@ export async function prepareProfileRemoteLogout(
     }
     const purge = profilePurge(ctx.profile);
     const approval = await preflightLogout(purge, ownerDid, discardLocalChanges);
-    const marker = await purge.prepareLogoutPending({
+    const prepare = () => purge.prepareLogoutPending({
       principal: ownerDid, approval, discardLocalChanges, remotePending: true,
     });
-    const gate = await readGateSnapshot(profilePath(ctx.profile));
-    let token = await purge.deferredErase();
-    if (token) {
-      if (!gate || gate.principalHash !== null ||
-          token.principalHash !== await principalHashOf(gate.salt, ownerDid)) {
-        throw new CLIError("REPLICA_GATED",
-          "The pending revocation belongs to a different session; no online revoke or local erase was attempted.",
-          ExitCode.ERROR);
+    let marker = await prepare();
+    let token: ProfileReplicaDeferredToken | undefined;
+    if (marker?.v === 1) {
+      // The v1 pre-remote fence is this marker's own deferred denial, bound to it by epoch.
+      if (marker.deniedEpoch === undefined) {
+        const denied = await purge.deny({ reason: "sign_out", principal: ownerDid }, { deferErase: true });
+        if (denied.status !== "denied") {
+          throw new CLIError("REPLICA_GATED",
+            `Durable deferred denial failed (${denied.status}); no online revoke or local erase was attempted.`,
+            ExitCode.ERROR);
+        }
+        marker = await prepare();
+        if (marker?.v !== 1 || marker.deniedEpoch !== denied.lifecycleEpoch) {
+          throw new CLIError("REPLICA_GATED",
+            "The deferred denial was not recorded on the logout marker; no online revoke or local erase was attempted.",
+            ExitCode.ERROR);
+        }
+        token = denied.resumeToken;
+      } else {
+        const current = await purge.deferredErase();
+        if (!current || current.deniedEpoch !== marker.deniedEpoch || current.principalHash !== marker.principalHash) {
+          throw new CLIError("REPLICA_GATED",
+            "The pending revocation belongs to a different session; no online revoke or local erase was attempted.",
+            ExitCode.ERROR);
+        }
+        token = current;
       }
-    } else if (gate?.principalHash !== null && gate !== undefined) {
-      const denied = await purge.deny({ reason: "sign_out", principal: ownerDid }, { deferErase: true });
-      if (denied.status !== "denied" || !denied.resumeToken) {
-        throw new CLIError("REPLICA_GATED",
-          `Durable deferred denial failed (${denied.status}); no online revoke or local erase was attempted.`,
-          ExitCode.ERROR);
-      }
-      token = denied.resumeToken;
-    } else if (gate?.eraseDeferred) {
-      throw new CLIError("REPLICA_GATED", "Deferred denial has no validated resume token.", ExitCode.ERROR);
     }
     return {
       profile, ownerDid, sessionCid,
       sessionSnapshot: JSON.stringify(session),
       profileSnapshot: JSON.stringify(profile),
       inventorySnapshot: await logoutInventorySnapshot(ctx.profile),
-      marker, token: token ?? undefined,
-      ...(marker === null && token == null ? { gateSnapshot: await inactiveGateIdentity(ctx.profile, gate) } : {}),
+      marker, token, approval,
+      ...(marker === null ? { gateSnapshot: await logoutGateSnapshot(ctx.profile) } : {}),
     };
   });
   if (selected.profile.authMethod !== "local" || !selected.profile.privateKey) {
@@ -383,14 +400,17 @@ export async function finishProfileLogout(
       let gateRefusal = "";
       let tokenUnchanged: boolean;
       try {
-        const currentToken = await purge.deferredErase();
-        tokenUnchanged = online.token
-          ? currentToken?.deniedEpoch === online.token.deniedEpoch &&
-            currentToken.principalHash === online.token.principalHash
-          : currentToken === null && (online.marker !== null ||
-            (online.gateSnapshot !== undefined &&
-             await inactiveGateIdentity(ctx.profile, await readGateSnapshot(profilePath(ctx.profile))) === online.gateSnapshot &&
-             (await existingReplicaRoots(ctx.profile)).length === 0));
+        if (online.marker === null) {
+          // No marker (nothing of ours to fence, or another account's gate): every gate,
+          // floor and replica root must be exactly as before the online requests.
+          tokenUnchanged = online.gateSnapshot === await logoutGateSnapshot(ctx.profile);
+        } else {
+          const currentToken = await purge.deferredErase();
+          tokenUnchanged = online.token
+            ? currentToken?.deniedEpoch === online.token.deniedEpoch &&
+              currentToken.principalHash === online.token.principalHash
+            : currentToken === null;
+        }
       } catch (error) {
         if (!isReplicaError(error, ReplicaErrorCode.GATED)) throw error;
         tokenUnchanged = false;
@@ -416,7 +436,9 @@ export async function finishProfileLogout(
         // hold; a changed local inventory then fails during recovery AFTER
         // credential shred, leaving the marker for explicit reapproval.
         let marker: ProfileReplicaLogoutPending | null;
+        let approval: ProfileReplicaPreflight | undefined;
         if (online) {
+          approval = online.approval;
           marker = online.marker ? await purge.completeRemoteLogout({ principal }) : null;
         } else {
           let pendingMarker: ProfileReplicaLogoutPending | null = null;
@@ -470,7 +492,7 @@ export async function finishProfileLogout(
             // A changed pending inventory must issue its two-command challenge
             // before an unapproved unknown path triggers the ordinary preflight
             // refusal. The facade still refuses any deletion without consent.
-            const approval = await preflightLogout(
+            approval = await preflightLogout(
               purge, principal, remotePending || options.discardLocalChanges === true,
             );
             if (options.approveInventory !== undefined && !remotePending) {
@@ -534,6 +556,7 @@ export async function finishProfileLogout(
               legacyRemoved.push(...await eraseApprovedLegacyReplicas(ctx.profile, inventory));
             },
           });
+          refuseRestoredGate(report);
           if (report.failed.length || report.remaining) {
             const signedOut = (await ProfileManager.getProfile(ctx.profile)).authSignedOut === true;
             throw new CLIError("REPLICA_PURGE_FAILED",
@@ -544,6 +567,14 @@ export async function finishProfileLogout(
               ExitCode.ERROR, { failed: report.failed, remaining: report.remaining });
           }
           replicasRemoved = marker.v === 2 ? roots : [...legacyRemoved, ...report.erased];
+        } else if (profile.legacyReplicaCleanup === true || await gateHeldByAnotherAccount(ctx.profile, principal)) {
+          // "Logout by another account": no marker, and the active account's gate, floor,
+          // partitions and pending state are untouched. The signed-out flag commits first,
+          // then both credential files go, then the profile's legacy mirror.
+          await clearProfileCredentials(ctx.profile, true, true);
+          replicasRemoved = await finishLegacyReplicaCleanup(
+            ctx.profile, approval, options.discardLocalChanges === true,
+          );
         } else {
           const gate = await readGateSnapshot(profilePath(ctx.profile));
           if (roots.length || (gate && (gate.principalHash !== null || gate.intents.length))) {

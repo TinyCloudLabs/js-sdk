@@ -635,6 +635,7 @@ export {
   REPLICA_LOGOUT_PENDING_FILE,
   assertProfileLogoutClear,
   logoutPrincipalDigest,
+  RESTORED_GATE_MESSAGE,
   type ProfileReplicaPurge,
   type ProfileReplicaDeferredToken,
 } from "./replication/sqlite";

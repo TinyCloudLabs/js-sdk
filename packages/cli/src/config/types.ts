@@ -70,6 +70,11 @@ export interface ProfileConfig {
   privateKey?: string;
   /** Explicit logout fences profile-key auto-login until a verified explicit login commits. */
   authSignedOut?: boolean;
+  /**
+   * Another account's logout removed both credentials but not yet the profile's legacy
+   * `replicas/` mirror; startup (or the next logout) finishes that erase.
+   */
+  legacyReplicaCleanup?: boolean;
   /** Ethereum address derived from privateKey (only present when authMethod is "local") */
   address?: string;
   /**

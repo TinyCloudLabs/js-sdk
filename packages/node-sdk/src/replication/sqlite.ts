@@ -208,10 +208,14 @@ function logoutMarkerOf(value: unknown): ProfileReplicaLogoutPending {
       Number.isSafeInteger(row.lifecycleEpoch) && (row.lifecycleEpoch as number) >= 0) {
     return row as ProfileReplicaLogoutPending;
   }
-  if (Object.keys(row).length !== 10 + optional || row.v !== 1 ||
+  // A v1 marker may carry its bound denial epoch, always past the pre-denial epoch.
+  const bound = Number(row.deniedEpoch !== undefined);
+  if (Object.keys(row).length !== 10 + optional + bound || row.v !== 1 ||
       typeof row.incarnation !== "string" || row.incarnation.length === 0 ||
       !Number.isSafeInteger(row.lifecycleEpoch) || (row.lifecycleEpoch as number) < 0 ||
-      typeof row.principalHash !== "string" || !/^[0-9a-f]{64}$/.test(row.principalHash)) {
+      typeof row.principalHash !== "string" || !/^[0-9a-f]{64}$/.test(row.principalHash) ||
+      (bound === 1 && (!Number.isSafeInteger(row.deniedEpoch) ||
+        (row.deniedEpoch as number) <= (row.lifecycleEpoch as number)))) {
     throw gated("gate_unavailable");
   }
   return row as ProfileReplicaLogoutPending;
@@ -324,16 +328,20 @@ async function inventoryUnknown(
   }
 }
 
-/** Inventory all unknown descendants, including both CLI legacy and flag-owned roots. */
+/**
+ * Inventory all unknown descendants of both the CLI legacy and flag-owned roots. `legacyOnly`
+ * (another account's logout) never opens, lists or reports the flag-owned `replication/`
+ * root: its files are not the caller's to approve and stay byte-identical.
+ */
 async function inspectProfileReplicaLayout(
-  profileDir: string, gateReadable: boolean, approvedMarker?: ProfileReplicaLogoutPending,
+  profileDir: string, gateReadable: boolean, approvedMarker?: ProfileReplicaLogoutPending, legacyOnly = false,
 ): Promise<ProfileReplicaPreflight> {
   const report: ProfileReplicaPreflight = {
     knownLegacyReplicas: 0, unknownLegacyPaths: [], unknownPaths: [],
     unknownEntries: [], knownRoots: [], knownEntries: [], missingDatabases: [],
   };
   const legacy = await orphanRoot(profileDir, "replicas");
-  const active = await orphanRoot(profileDir, "replication");
+  const active = legacyOnly ? null : await orphanRoot(profileDir, "replication");
   for (const [name, dir] of [["replicas", legacy], ["replication", active]] as const) {
     if (dir === null) continue;
     const info = await lstat(dir, { bigint: true });
@@ -622,6 +630,44 @@ function localChangesRefusal(unknownPaths: readonly string[] = []): Error & { co
   return error;
 }
 
+type V1Marker = Extract<ProfileReplicaLogoutPending, { v: 1 }>;
+type LogoutGateRead = { state: FileGateState; floorLagging: boolean } | undefined;
+
+/** Active (or deferred-denied) for a principal other than `principalHash`: never this caller's to deny. */
+function gateOwnedByAnother(state: FileGateState, principalHash: string): boolean {
+  return state.principalHash !== null
+    ? state.principalHash !== principalHash
+    : state.eraseDeferred && state.deferredPrincipalHash !== principalHash;
+}
+
+function isGateUnavailable(error: unknown): boolean {
+  return typeof error === "object" && error !== null && "code" in error && error.code === "REPLICA_GATED" &&
+    "gate" in error && error.gate === "gate_unavailable";
+}
+
+/**
+ * A v1 marker whose bound denial no longer matches the gate: no in-place exit (CONTRACT.md §2).
+ * Recovery reports it as `gate_restored` so the CLI can name the route.
+ */
+function restoredGate(): Error & { code: "REPLICA_GATED"; gate: string; reportCode: "gate_restored" } {
+  const error = gated("stamp_stale");
+  error.message = RESTORED_GATE_MESSAGE;
+  return Object.assign(error, { reportCode: "gate_restored" as const });
+}
+
+/** Exported for the CLI, which shows the same route for a recovery report's `gate_restored`. */
+export const RESTORED_GATE_MESSAGE =
+  "The replica gate does not match this logout's recorded sign-out; an older gate may have been restored. " +
+  "Local replicas stay disabled for this profile: switch the default profile first if needed " +
+  "(`tc profile switch <other>`), then run `tc profile delete <name>` and sign in again.";
+
+/** A floor-lagging gate this path may not complete. */
+function interruptedSignOut(): Error & { code: "REPLICA_GATED"; gate: string } {
+  const error = gated("gate_unavailable");
+  error.message = "A previous sign-out was interrupted; re-running `tc auth logout` completes it.";
+  return error;
+}
+
 
 /** Reject an approval that the named-path remover cannot safely replay. */
 function assertSupportedProfileLayout(report: ProfileReplicaPreflight): void {
@@ -644,6 +690,9 @@ type FileGateState = ReplicaAccountGate & {
 
 type FileGate = {
   readGateSnapshot(profileDir: string): Promise<FileGateState | undefined>;
+  /** Past the floor check: a gate whose deny was interrupted reads as `floorLagging`. */
+  readLogoutGate(profileDir: string): Promise<{ state: FileGateState; floorLagging: boolean } | undefined>;
+  advanceInactiveGate(profileDir: string): Promise<FileGateState>;
   identityHashOf(salt: string, identityKey: string): Promise<string>;
   principalHashOf(salt: string, principal: string): Promise<string>;
   grantInstallHashOf(salt: string, identityKeyHash: string, cid: string): Promise<string>;
@@ -1823,36 +1872,115 @@ export function createSqliteReplicaStorage(
     if (await gate.readGateSnapshot(profileDir) !== undefined) throw gated("stamp_stale");
   }
 
-  /** The marker is only a network-retry fence after the scoped gate is denied. */
-  async function validatedRemoteMarker(
-    marker: ProfileReplicaLogoutPending, principal: string, allowActive: boolean,
-  ): Promise<FileGateState | undefined> {
-    if (marker.principalDigest !== logoutPrincipalDigest(principal)) throw gated("principal_mismatch");
-    const gate = await fileGate();
-    const state = await gate.readGateSnapshot(profileDir);
-    if (marker.v === 2) {
-      if (state !== undefined) throw gated("stamp_stale");
-      return state;
+  /** Logout reads the gate past its floor; an unreadable or lost gate is `corrupt`. */
+  async function readLogoutState(gate: FileGate): Promise<{ read: LogoutGateRead; corrupt: boolean }> {
+    try {
+      return { read: await gate.readLogoutGate(profileDir), corrupt: false };
+    } catch (error) {
+      if (isGateUnavailable(error)) return { read: undefined, corrupt: true };
+      throw error;
     }
-    if (state === undefined || state.incarnation !== marker.incarnation) throw gated("stamp_stale");
-    if (marker.v === 3) {
-      if (state.lifecycleEpoch !== marker.lifecycleEpoch ||
-          state.principalHash !== null || state.eraseDeferred) throw gated("stamp_stale");
-      return state;
+  }
+
+  /**
+   * Validate a v1 marker under the profile lock. Its bound denial is checked by equality with
+   * `deniedEpoch`, never `lifecycleEpoch + 1`. An unbound marker binds once to a denial that a
+   * crash left unrecorded; otherwise the gate must still be the one the marker was written for:
+   * active (when `active` allows it) or floor-lagging after an interrupted deny, which `deny`
+   * completes (`deferred` for a remote-pending marker) and then binds. The rebound marker and
+   * the current gate are returned; anything else refuses without mutation.
+   */
+  async function validateV1(
+    gate: FileGate, path: string, marker: V1Marker, read: LogoutGateRead,
+    mode: { active: boolean; deny?: "deferred" | "ordinary"; denyActive?: boolean; acceptLagging?: boolean },
+  ): Promise<{ marker: V1Marker; state: FileGateState; active: boolean }> {
+    if (read === undefined || read.state.incarnation !== marker.incarnation) throw gated("stamp_stale");
+    const { state, floorLagging } = read;
+    if (marker.deniedEpoch !== undefined) {
+      if (floorLagging || !v1Denied(marker, state, marker.deniedEpoch)) throw restoredGate();
+      return { marker, state, active: false };
     }
-    if (marker.principalHash !== await gate.principalHashOf(state.salt, principal)) {
-      throw gated("principal_mismatch");
+    if (!floorLagging && state.principalHash === null && state.lifecycleEpoch > marker.lifecycleEpoch &&
+        (marker.remotePending
+          ? state.eraseDeferred && state.deferredPrincipalHash === marker.principalHash
+          : !state.eraseDeferred && state.deferredPrincipalHash === null)) {
+      return { marker: await bindDeniedEpoch(path, marker, state.lifecycleEpoch), state, active: false };
     }
-    // Plain denial has no deferred hash; remote retries still require their durable token.
-    const denied = state.lifecycleEpoch === marker.lifecycleEpoch + 1 &&
-      state.principalHash === null && (
+    if (state.principalHash !== marker.principalHash || state.lifecycleEpoch !== marker.lifecycleEpoch) {
+      throw gated("stamp_stale");
+    }
+    if (!floorLagging && !mode.denyActive) {
+      if (!mode.active) throw gated("stamp_stale");
+      return { marker, state, active: true };
+    }
+    // The marker's own interrupted deny: a caller that denies next may accept it as is.
+    if (mode.acceptLagging) return { marker, state, active: true };
+    if (mode.deny === undefined) throw interruptedSignOut();
+    const denied = await gate.denyGate(profileDir, { reason: "sign_out", principal: "" },
+      (principalHash) => collectIntents(principalHash, state.salt),
+      { salt: state.salt, principalHash: marker.principalHash },
+      { deferErase: mode.deny === "deferred" });
+    if (denied.status !== "denied") throw gated("gate_unavailable");
+    const after = await gate.readLogoutGate(profileDir);
+    if (after === undefined || after.floorLagging || !v1Denied(marker, after.state, denied.lifecycleEpoch)) {
+      throw gated("gate_unavailable");
+    }
+    return { marker: await bindDeniedEpoch(path, marker, denied.lifecycleEpoch), state: after.state, active: false };
+  }
+
+  /** The marker's own denial: null principal at `epoch`, by the marker's principal when deferred. */
+  function v1Denied(marker: V1Marker, state: FileGateState, epoch: number): boolean {
+    return state.incarnation === marker.incarnation && state.principalHash === null &&
+      state.lifecycleEpoch === epoch && (
         state.deferredPrincipalHash === marker.principalHash ||
         (!marker.remotePending && !state.eraseDeferred && state.deferredPrincipalHash === null));
-    const active = state.lifecycleEpoch === marker.lifecycleEpoch &&
-      state.principalHash === marker.principalHash;
-    if (!denied && !(allowActive && active)) throw gated("stamp_stale");
-    return state;
   }
+
+  /** The one-time v1 `deniedEpoch` rewrite; a bound marker is never rebound. */
+  async function bindDeniedEpoch(path: string, marker: V1Marker, deniedEpoch: number): Promise<V1Marker> {
+    if (marker.deniedEpoch !== undefined) throw gated("stamp_stale");
+    const bound: V1Marker = { ...marker, deniedEpoch };
+    await writeJsonAtomic(path, bound, options.dirSync);
+    return bound;
+  }
+
+  /**
+   * Remote markers: v2 needs no replacement gate, v3 its exact inactive epoch, v1 its bound
+   * (or once-bindable) denial; `mode` admits an active or interrupted v1 gate where allowed.
+   */
+  async function validatedRemoteMarker(
+    path: string, marker: ProfileReplicaLogoutPending, principal: string,
+    mode: { active: boolean; deny?: "deferred" | "ordinary" },
+  ): Promise<{ marker: ProfileReplicaLogoutPending; state: FileGateState | undefined }> {
+    if (marker.principalDigest !== logoutPrincipalDigest(principal)) throw gated("principal_mismatch");
+    const gate = await fileGate();
+    const { read, corrupt } = await readLogoutState(gate);
+    if (corrupt) throw gated("gate_unavailable");
+    if (marker.v === 2) {
+      if (read !== undefined) throw gated("stamp_stale");
+      return { marker, state: undefined };
+    }
+    if (read === undefined || read.state.incarnation !== marker.incarnation) throw gated("stamp_stale");
+    if (marker.v === 3) {
+      if (read.floorLagging || read.state.lifecycleEpoch !== marker.lifecycleEpoch ||
+          read.state.principalHash !== null || read.state.eraseDeferred) throw gated("stamp_stale");
+      return { marker, state: read.state };
+    }
+    if (marker.principalHash !== await gate.principalHashOf(read.state.salt, principal)) {
+      throw gated("principal_mismatch");
+    }
+    const checked = await validateV1(gate, path, marker, read, mode);
+    return { marker: checked.marker, state: checked.state };
+  }
+  /** Read-only inventory of the current layout; an unreadable gate refuses. */
+  async function currentLayout(): Promise<ProfileReplicaPreflight> {
+    const { read, corrupt } = await readLogoutState(await fileGate());
+    if (corrupt) throw gated("gate_unavailable");
+    const report = await inspectProfileReplicaLayout(profileDir, read !== undefined);
+    assertSupportedProfileLayout(report);
+    return report;
+  }
+
   async function commitPlainAbandon(
     path: string, marker: ProfileReplicaLogoutPending, report: ProfileReplicaPreflight,
     discardLocalChanges: boolean,
@@ -1870,13 +1998,19 @@ export function createSqliteReplicaStorage(
   }
 
 
-  /** Flips this process's view before its first await; deferral only for sign-out (N3). */
+  /**
+   * Flips this process's view before its first await; deferral only for sign-out (N3). Reads
+   * past the deny floor, so an interrupted deny is completed. In the same guarded section a
+   * committed sign-out denial binds the logout principal's unbound v1 marker to its epoch:
+   * remote-pending markers only to a deferred denial, plain ones only to an ordinary one.
+   */
   function deny(input: ReplicaDenyInput & { reason: "sign_out" }, options: { deferErase: true }): Promise<ProfileReplicaDeferredDenyOutcome>;
   function deny(input: ReplicaDenyInput, options?: { deferErase?: false }): Promise<ReplicaDenyOutcome>;
   function deny(
-    input: ReplicaDenyInput, options?: { deferErase?: boolean },
+    input: ReplicaDenyInput, denyOptions?: { deferErase?: boolean },
   ): Promise<ReplicaDenyOutcome | ProfileReplicaDeferredDenyOutcome> {
-    if (options?.deferErase === true && input.reason !== "sign_out") {
+    const deferErase = denyOptions?.deferErase === true;
+    if (deferErase && input.reason !== "sign_out") {
       throw new TypeError("Deferred erase is only available for sign-out.");
     }
     visibleStamp = undefined;
@@ -1886,7 +2020,7 @@ export function createSqliteReplicaStorage(
       try {
         const gate = await fileGate();
         return await profileSection(async () => {
-          const snapshot = await gate.readGateSnapshot(profileDir);
+          const snapshot = (await gate.readLogoutGate(profileDir))?.state;
           const precomputed = snapshot === undefined ? undefined : {
             salt: snapshot.salt, principalHash: await gate.principalHashOf(snapshot.salt, input.principal),
           };
@@ -1895,8 +2029,18 @@ export function createSqliteReplicaStorage(
               if (snapshot === undefined) throw gated("gate_unavailable");
               return collectIntents(principalHash, snapshot.salt);
             },
-            precomputed, options);
-          if (result.status !== "denied" || options?.deferErase !== true) return result;
+            precomputed, { deferErase });
+          if (result.status !== "denied") return result;
+          if (input.reason === "sign_out" && snapshot !== undefined && precomputed !== undefined) {
+            const path = join(profileDir, REPLICA_LOGOUT_PENDING_FILE);
+            const marker = await readLogoutMarker(path);
+            if (marker?.v === 1 && marker.deniedEpoch === undefined &&
+                marker.incarnation === snapshot.incarnation && marker.principalHash === precomputed.principalHash &&
+                (marker.remotePending === true) === deferErase) {
+              await bindDeniedEpoch(path, marker, result.lifecycleEpoch);
+            }
+          }
+          if (!deferErase) return result;
           const resumeToken = await gate.deferredGateToken(profileDir);
           if (resumeToken === null || resumeToken.deniedEpoch !== result.lifecycleEpoch) {
             return { status: "unguarded", code: "gate_unavailable" };
@@ -2023,27 +2167,19 @@ export function createSqliteReplicaStorage(
       return profileSection(async () => {
         const marker = await readLogoutMarker(join(profileDir, REPLICA_LOGOUT_PENDING_FILE));
         const gate = await fileGate();
-        let state: FileGateState | undefined;
-        let corruptGate = false;
-        try {
-          state = await gate.readGateSnapshot(profileDir);
-        } catch (error) {
-          if (typeof error === "object" && error !== null && "code" in error &&
-              error.code === "REPLICA_GATED" && "gate" in error && error.gate === "gate_unavailable") {
-            corruptGate = true;
-          } else throw error;
-        }
+        const { read, corrupt } = await readLogoutState(gate);
+        const state = read?.state;
+        let otherAccount = false;
         if (state !== undefined) {
           const hash = await gate.principalHashOf(state.salt, principal);
-          if (state.principalHash !== hash &&
-              !(state.eraseDeferred && state.principalHash === null && state.deferredPrincipalHash === hash) &&
-              !(state.principalHash === null && !state.eraseDeferred)) throw gated("principal_mismatch");
+          otherAccount = gateOwnedByAnother(state, hash);
           if (marker?.v === 1 && marker.principalHash !== hash) throw gated("principal_mismatch");
         }
-        const report = await inspectProfileReplicaLayout(profileDir, state !== undefined);
+        // Another account's gate: only the profile's legacy mirror is inspected, listed or approved.
+        const report = await inspectProfileReplicaLayout(profileDir, state !== undefined, undefined, otherAccount);
         assertSupportedProfileLayout(report);
-        if (!discardLocalChanges && (report.unknownPaths.length > 0 || corruptGate ||
-            ((state === undefined || (state.principalHash === null && !state.eraseDeferred)) &&
+        if (!discardLocalChanges && (report.unknownPaths.length > 0 || (corrupt && !otherAccount) ||
+            (!otherAccount && (state === undefined || (state.principalHash === null && !state.eraseDeferred)) &&
               await hasOrphanPending(profileDir)))) {
           throw localChangesRefusal(report.unknownPaths);
         }
@@ -2055,24 +2191,27 @@ export function createSqliteReplicaStorage(
       return profileSection(async () => {
         const path = join(profileDir, REPLICA_LOGOUT_PENDING_FILE);
         const previous = await readLogoutMarker(path);
-        let state: FileGateState | undefined;
-        let corruptGate = false;
-        try {
-          state = await gate.readGateSnapshot(profileDir);
-        } catch (error) {
-          if (typeof error === "object" && error !== null && "code" in error &&
-              error.code === "REPLICA_GATED" && "gate" in error && error.gate === "gate_unavailable") {
-            corruptGate = true;
-          } else throw error;
-        }
-        const report = await inspectProfileReplicaLayout(profileDir, state !== undefined);
+        const { read, corrupt: corruptGate } = await readLogoutState(gate);
+        let state = read?.state;
+        const principalHash = state === undefined ? undefined : await gate.principalHashOf(state.salt, principal);
+        const otherAccount = state !== undefined && gateOwnedByAnother(state, principalHash!);
+        let report = await inspectProfileReplicaLayout(profileDir, state !== undefined, undefined, otherAccount);
         assertSupportedProfileLayout(report);
         // The approval is the inventory the caller displayed; it must match exactly.
-        assertApprovedInventory(report, approval);
-        if (approval.knownLegacyReplicas !== report.knownLegacyReplicas ||
-            JSON.stringify(approval.unknownPaths) !== JSON.stringify(report.unknownPaths) ||
-            JSON.stringify(approval.unknownLegacyPaths) !== JSON.stringify(report.unknownLegacyPaths)) {
-          throw localChangesRefusal(report.unknownPaths);
+        const assertApproved = (current: ProfileReplicaPreflight) => {
+          assertApprovedInventory(current, approval);
+          if (approval.knownLegacyReplicas !== current.knownLegacyReplicas ||
+              JSON.stringify(approval.unknownPaths) !== JSON.stringify(current.unknownPaths) ||
+              JSON.stringify(approval.unknownLegacyPaths) !== JSON.stringify(current.unknownLegacyPaths)) {
+            throw localChangesRefusal(current.unknownPaths);
+          }
+        };
+        assertApproved(report);
+        if (otherAccount) {
+          // "Logout by another account": no marker and no denial of the active account's gate.
+          if (previous !== null) throw gated("principal_mismatch");
+          if (!discardLocalChanges && report.unknownPaths.length > 0) throw localChangesRefusal(report.unknownPaths);
+          return null;
         }
         if (!discardLocalChanges && (report.unknownPaths.length > 0 || corruptGate ||
             ((state === undefined || (state.principalHash === null && !state.eraseDeferred)) &&
@@ -2080,44 +2219,53 @@ export function createSqliteReplicaStorage(
           throw localChangesRefusal(report.unknownPaths);
         }
         if (previous !== null) {
+          // An existing marker is returned unchanged (apart from the one-time v1 binding)
+          // or refused; prepareLogoutPending never rewrites it.
           if (previous.principalDigest !== logoutPrincipalDigest(principal)) throw gated("principal_mismatch");
           // The marker has no original corrupt-gate identity: never unlink a file
           // first observed only after that marker was committed.
           if (corruptGate) throw gated("gate_unavailable");
-          if (state === undefined ? previous.v !== 2 :
-              previous.v === 2 || previous.incarnation !== state.incarnation ||
-              !(previous.lifecycleEpoch === state.lifecycleEpoch ||
-                (previous.v === 1 && previous.lifecycleEpoch + 1 === state.lifecycleEpoch &&
-                  state.principalHash === null))) throw gated("stamp_stale");
-          if (previous.v === 1 && state !== undefined &&
-              previous.principalHash !== await gate.principalHashOf(state.salt, principal)) {
-            throw gated("principal_mismatch");
-          }
-          if (previous.v === 1 && state?.eraseDeferred &&
-              (state.lifecycleEpoch !== previous.lifecycleEpoch + 1 ||
-               state.principalHash !== null || state.deferredPrincipalHash !== previous.principalHash)) {
+          let current: ProfileReplicaLogoutPending = previous;
+          if (previous.v === 2) {
+            if (read !== undefined) throw gated("stamp_stale");
+          } else if (read === undefined || previous.incarnation !== read.state.incarnation) {
             throw gated("stamp_stale");
+          } else if (previous.v === 3) {
+            if (read.floorLagging || read.state.lifecycleEpoch !== previous.lifecycleEpoch ||
+                read.state.principalHash !== null || read.state.eraseDeferred) throw gated("stamp_stale");
+          } else {
+            if (previous.principalHash !== principalHash) throw gated("principal_mismatch");
+            current = (await validateV1(gate, path, previous, read, { active: true, acceptLagging: true })).marker;
           }
           assertApprovedInventory(report, {
-            unknownEntries: previous.approvedUnknown, knownRoots: previous.knownRoots,
-            knownEntries: previous.knownEntries, missingDatabases: previous.missingDatabases,
+            unknownEntries: current.approvedUnknown, knownRoots: current.knownRoots,
+            knownEntries: current.knownEntries, missingDatabases: current.missingDatabases,
           });
-          if (previous.remotePending !== remotePending || previous.remoteAbandoned) {
+          if (current.remotePending !== remotePending || current.remoteAbandoned) {
             throw gated("gate_unavailable");
           }
-          return previous;
+          return current;
         }
         if (state?.eraseDeferred) throw gated("stamp_stale");
+        if (read?.floorLagging) {
+          // An interrupted deny without a marker: complete it here as an ordinary deny (deferral
+          // comes only from a durable marker), re-inspect, then fence with a v3 marker below.
+          if (state!.principalHash === null) {
+            state = await gate.advanceInactiveGate(profileDir);
+          } else {
+            const salt = state!.salt;
+            const denied = await gate.denyGate(profileDir, { reason: "sign_out", principal },
+              (hash) => collectIntents(hash, salt), { salt, principalHash: principalHash! });
+            if (denied.status !== "denied") throw gated("gate_unavailable");
+            state = (await gate.readGateSnapshot(profileDir))!;
+          }
+          report = await inspectProfileReplicaLayout(profileDir, true);
+          assertSupportedProfileLayout(report);
+          assertApproved(report);
+        }
         if (state === undefined && report.knownRoots.length === 0 && !corruptGate) return null;
         if (state !== undefined && state.principalHash === null && !state.eraseDeferred &&
             report.knownRoots.length === 0 && state.intents.length === 0) return null;
-        let principalHash: string | undefined;
-        if (state !== undefined && (state.principalHash !== null || state.eraseDeferred)) {
-          principalHash = await gate.principalHashOf(state.salt, principal);
-          if (state.principalHash !== principalHash &&
-              !(state.eraseDeferred && state.principalHash === null &&
-                state.deferredPrincipalHash === principalHash)) throw gated("principal_mismatch");
-        }
         const remoteState: ProfileReplicaRemoteLogoutState = remotePending ? { remotePending: true } : {};
         const approvalFields = {
           principalDigest: logoutPrincipalDigest(principal),
@@ -2132,10 +2280,12 @@ export function createSqliteReplicaStorage(
         if (state === undefined) {
           marker = { v: 2, scope: "orphan_profile", nonce: randomBytes(16).toString("hex"),
             ...approvalFields };
-        } else if (state.principalHash === null && !state.eraseDeferred) {
+        } else if (state.principalHash === null) {
           marker = { v: 3, scope: "inactive_gate", incarnation: state.incarnation,
             lifecycleEpoch: state.lifecycleEpoch, ...approvalFields };
         } else {
+          // The logout principal's own active gate always gets a v1 marker, even with no
+          // roots or intents: recovery denies it before credentials go.
           marker = { v: 1, incarnation: state.incarnation,
             lifecycleEpoch: state.lifecycleEpoch, principalHash: principalHash!, ...approvalFields };
         }
@@ -2151,18 +2301,20 @@ export function createSqliteReplicaStorage(
       return profileSection(async () => {
         const path = join(profileDir, REPLICA_LOGOUT_PENDING_FILE);
         const marker = await readLogoutMarker(path);
+        // Only a remote-pending marker transitions; abandoned or cleanup-ready refuses unchanged.
         if (marker === null || marker.remotePending !== true) throw gated("gate_unavailable");
-        await validatedRemoteMarker(marker, principal, false);
-        const { remotePending: _, ...complete } = marker;
+        const checked = await validatedRemoteMarker(path, marker, principal, { active: false });
+        const { remotePending: _, ...complete } = checked.marker;
         await writeJsonAtomic(path, complete, options.dirSync);
-        return complete as ProfileReplicaLogoutPending;
+        return complete;
       });
     },
     async remotePendingLogout({ principal }) {
       return profileSection(async () => {
-        const marker = await readLogoutMarker(join(profileDir, REPLICA_LOGOUT_PENDING_FILE));
+        const path = join(profileDir, REPLICA_LOGOUT_PENDING_FILE);
+        const marker = await readLogoutMarker(path);
         if (marker === null || marker.remotePending !== true) return false;
-        await validatedRemoteMarker(marker, principal, false);
+        await validatedRemoteMarker(path, marker, principal, { active: false });
         return true;
       });
     },
@@ -2171,10 +2323,9 @@ export function createSqliteReplicaStorage(
         const path = join(profileDir, REPLICA_LOGOUT_PENDING_FILE);
         const marker = await readLogoutMarker(path);
         if (marker === null || marker.remotePending !== true) throw gated("gate_unavailable");
-        await validatedRemoteMarker(marker, principal, true);
-        const state = await (await fileGate()).readGateSnapshot(profileDir);
-        const report = await inspectProfileReplicaLayout(profileDir, state !== undefined);
-        assertSupportedProfileLayout(report);
+        if (marker.principalDigest !== logoutPrincipalDigest(principal)) throw gated("principal_mismatch");
+        // Inventory and approval are compared before any gate completion or marker rewrite.
+        const report = await currentLayout();
         if (storedInventoryChanged(marker, report)) throw changedInventoryRefusal(marker, principal, report);
         assertApprovedInventory(report, approval);
         if (approval.knownLegacyReplicas !== report.knownLegacyReplicas ||
@@ -2183,7 +2334,11 @@ export function createSqliteReplicaStorage(
             (!discardLocalChanges && report.unknownPaths.length > 0)) {
           throw localChangesRefusal(report.unknownPaths);
         }
-        return commitPlainAbandon(path, marker, report, discardLocalChanges);
+        // Exactly one v1 classification: deferred-denied (bound now if a crash left it
+        // unbound), active and never started (abandoned without a deny; recovery's ordinary
+        // deny fences it), or floor-lagging (completed as the deferred deny it was, then bound).
+        const checked = await validatedRemoteMarker(path, marker, principal, { active: true, deny: "deferred" });
+        return commitPlainAbandon(path, checked.marker, report, discardLocalChanges);
       });
     },
     async approveChangedPlainLogout({ principal, approval, discardLocalChanges, inventoryApprovalToken: token }) {
@@ -2191,10 +2346,8 @@ export function createSqliteReplicaStorage(
         const path = join(profileDir, REPLICA_LOGOUT_PENDING_FILE);
         const marker = await readLogoutMarker(path);
         if (marker === null || marker.remotePending !== true) throw gated("gate_unavailable");
-        await validatedRemoteMarker(marker, principal, true);
-        const state = await (await fileGate()).readGateSnapshot(profileDir);
-        const report = await inspectProfileReplicaLayout(profileDir, state !== undefined);
-        assertSupportedProfileLayout(report);
+        if (marker.principalDigest !== logoutPrincipalDigest(principal)) throw gated("principal_mismatch");
+        const report = await currentLayout();
         if (!storedInventoryChanged(marker, report)) throw gated("gate_unavailable");
         const entries = approvalEntries(report);
         if (discardLocalChanges !== true || typeof token !== "string" ||
@@ -2207,7 +2360,8 @@ export function createSqliteReplicaStorage(
             JSON.stringify(approval.unknownLegacyPaths) !== JSON.stringify(report.unknownLegacyPaths)) {
           throw changedInventoryRefusal(marker, principal, report, entries);
         }
-        return commitPlainAbandon(path, marker, report, true);
+        const checked = await validatedRemoteMarker(path, marker, principal, { active: true, deny: "deferred" });
+        return commitPlainAbandon(path, checked.marker, report, true);
       });
     },
     async reapproveLogoutPending({ principal, approval }) {
@@ -2216,17 +2370,16 @@ export function createSqliteReplicaStorage(
         const marker = await readLogoutMarker(path);
         if (marker === null || marker.remotePending) throw gated("gate_unavailable");
         if (marker.principalDigest !== logoutPrincipalDigest(principal)) throw gated("principal_mismatch");
-        const state = await validatedRemoteMarker(marker, principal, true);
-        const report = await inspectProfileReplicaLayout(profileDir, state !== undefined);
-        assertSupportedProfileLayout(report);
+        const report = await currentLayout();
         assertApprovedInventory(report, approval);
         if (JSON.stringify(report.unknownPaths) !== JSON.stringify(approval.unknownPaths)) {
           throw localChangesRefusal(report.unknownPaths);
         }
+        const checked = await validatedRemoteMarker(path, marker, principal, { active: true });
         // Previously approved paths may have been removed by interrupted cleanup;
         // only the fresh list is authorized on this retry.
         const amended: ProfileReplicaLogoutPending = {
-          ...marker, approvedUnknown: report.unknownEntries,
+          ...checked.marker, approvedUnknown: report.unknownEntries,
           knownRoots: report.knownRoots, knownEntries: report.knownEntries,
           missingDatabases: report.missingDatabases,
           ...(report.unknownPaths.length > 0 ? { discardLocalChanges: true as const } : {}),
@@ -2240,10 +2393,12 @@ export function createSqliteReplicaStorage(
       const failure = async (error: unknown): Promise<ReplicaEraseReport> => ({
         erased: [],
         failed: [{ id: "logout", code: typeof error === "object" && error !== null &&
-          "code" in error && typeof error.code === "string"
-          ? error.code === "REPLICA_GATED" && "gate" in error && typeof error.gate === "string"
-            ? error.gate : error.code
-          : "STORAGE_ERROR" }],
+          "reportCode" in error && typeof error.reportCode === "string"
+          ? error.reportCode
+          : typeof error === "object" && error !== null && "code" in error && typeof error.code === "string"
+            ? error.code === "REPLICA_GATED" && "gate" in error && typeof error.gate === "string"
+              ? error.gate : error.code
+            : "STORAGE_ERROR" }],
         remaining: Math.max(1, (await lifecycle.pendingPurge().catch(() => [])).length),
       });
       try {
@@ -2258,26 +2413,24 @@ export function createSqliteReplicaStorage(
           signal.throwIfAborted();
           if (marker.remotePending) throw gated("gate_unavailable");
           const gate = await fileGate();
-          const state = await gate.readGateSnapshot(profileDir);
+          const { read, corrupt } = await readLogoutState(gate);
+          if (corrupt) throw gated("gate_unavailable");
+          let current: ProfileReplicaLogoutPending = marker;
+          let state = read?.state;
           if (marker.v === 2) {
-            if (state !== undefined) throw gated("stamp_stale");
+            if (read !== undefined) throw gated("stamp_stale");
+          } else if (read === undefined || read.state.incarnation !== marker.incarnation) {
+            throw gated("stamp_stale");
+          } else if (marker.v === 3) {
+            if (read.floorLagging || read.state.principalHash !== null || read.state.eraseDeferred ||
+                read.state.lifecycleEpoch !== marker.lifecycleEpoch) throw gated("stamp_stale");
           } else {
-            if (state === undefined || state.incarnation !== marker.incarnation) throw gated("stamp_stale");
-            if (marker.v === 3) {
-              if (state.principalHash !== null || state.eraseDeferred ||
-                  state.lifecycleEpoch !== marker.lifecycleEpoch) throw gated("stamp_stale");
-            } else if (!(state.lifecycleEpoch === marker.lifecycleEpoch ||
-                         (state.lifecycleEpoch === marker.lifecycleEpoch + 1 && state.principalHash === null)) ||
-                       (state.principalHash !== marker.principalHash &&
-                         !(state.principalHash === null && (
-                           state.deferredPrincipalHash === marker.principalHash ||
-                           state.lifecycleEpoch === marker.lifecycleEpoch + 1)))) throw gated("stamp_stale");
-          }
-          if (marker.v === 1 && state !== undefined && state.principalHash !== null) {
-            const denied = await gate.denyGate(profileDir, { reason: "sign_out", principal: "" },
-              (principalHash) => collectIntents(principalHash, state.salt),
-              { salt: state.salt, principalHash: marker.principalHash });
-            if (denied.status !== "denied") throw gated("gate_unavailable");
+            // Before credentials go, an active (or interrupted) v1 gate gets its full ordinary
+            // denial, bound in this section; an already-denied one is checked by `deniedEpoch`.
+            const checked = await validateV1(gate, path, marker, read,
+              { active: true, deny: "ordinary", denyActive: true });
+            current = checked.marker;
+            state = checked.state;
           }
           await clearCredentials();
           for (const file of ["session.json", "key.json"]) {
@@ -2292,9 +2445,9 @@ export function createSqliteReplicaStorage(
           if (!marker.discardLocalChanges && report.unknownEntries.length > 0) {
             throw localChangesRefusal(report.unknownPaths);
           }
-          if (marker.v === 1 && state?.eraseDeferred) {
+          if (current.v === 1 && state?.eraseDeferred) {
             await gate.resumeDeferredGate(profileDir, {
-              deniedEpoch: state.lifecycleEpoch, principalHash: marker.principalHash,
+              deniedEpoch: current.deniedEpoch!, principalHash: current.principalHash,
             });
           }
           await eraseLegacyReplicas({ discardLocalChanges: marker.discardLocalChanges === true,
@@ -2302,7 +2455,7 @@ export function createSqliteReplicaStorage(
             knownEntries: marker.knownEntries, missingDatabases: marker.missingDatabases });
           try { await lstat(join(profileDir, "replicas")); throw gated("gate_unavailable"); }
           catch (error) { if (!isNotFound(error)) throw error; }
-          return { marker };
+          return { marker: current };
         });
         if ("report" in prepared) return prepared.report;
         const marker = prepared.marker;
@@ -2718,7 +2871,11 @@ export function createSqliteReplicaStorage(
     }
     checkAbort();
     assertLogoutClear(options.logoutPendingFile);
+    // CONTRACT.md §2: pending while a deferred denial holds the profile or any intent remains.
+    const gateState = await (await fileGate()).readGateSnapshot(profileDir);
+    const purgePending = gateState !== undefined && (gateState.eraseDeferred || gateState.intents.length > 0);
     return {
+      purgePending,
       coverage: status.coverage,
       lastSyncAt: status.lastSyncAt,
       syncedThroughEpoch,

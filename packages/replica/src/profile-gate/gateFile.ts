@@ -28,7 +28,8 @@ const GATE_FILE_VERSION = 1;
  * Durable deny floor beside the gate, written before each deny commits. It survives loss of the
  * gate file: a missing gate, or a gate behind this floor, fails closed instead of being recreated.
  */
-const DENY_FLOOR_FILE = "replica-deny-floor.json";
+export const REPLICA_DENY_FLOOR_FILE = "replica-deny-floor.json";
+const DENY_FLOOR_FILE = REPLICA_DENY_FLOOR_FILE;
 
 interface DenyFloor {
   epoch: number;
@@ -206,6 +207,14 @@ const LOST_GATE_RECOVERY =
   "Local replicas stay disabled for this profile; to start over, delete it (`tc profile delete <name>`; " +
   "for the default profile, switch the default first with `tc profile switch <other>`) and sign in again.";
 
+/** An interrupted deny wrote its floor but not the gate; `tc auth logout` finishes it. */
+const INTERRUPTED_SIGN_OUT =
+  "A previous sign-out was interrupted; re-running `tc auth logout` completes it.";
+
+function behindFloor(state: NodeGateState, floor: DenyFloor): boolean {
+  return state.lifecycleEpoch < floor.epoch || state.deniedAt === null || state.deniedAt < floor.deniedAt;
+}
+
 /**
  * The stored state, or `undefined` when no gate file exists and no deny ever committed. Never
  * creates the file. After a deny, a missing gate or one behind the floor fails closed.
@@ -217,8 +226,8 @@ async function readState(profileDir: string): Promise<NodeGateState | undefined>
   if (state === undefined) {
     throw gateRefusal("gate_unavailable", `The replica gate is missing after a sign-out. ${LOST_GATE_RECOVERY}`);
   }
-  if (state.lifecycleEpoch < floor.epoch || state.deniedAt === null || state.deniedAt < floor.deniedAt) {
-    throw gateRefusal("gate_unavailable", `The replica gate is behind its last sign-out. ${LOST_GATE_RECOVERY}`);
+  if (behindFloor(state, floor)) {
+    throw gateRefusal("gate_unavailable", `The replica gate is behind its last sign-out. ${INTERRUPTED_SIGN_OUT}`);
   }
   return state;
 }
@@ -226,6 +235,46 @@ async function readState(profileDir: string): Promise<NodeGateState | undefined>
 /** Control-only snapshot. In particular, a missing gate is never minted by a pending read. */
 export function readGateSnapshot(profileDir: string): Promise<NodeGateState | undefined> {
   return readState(profileDir);
+}
+
+/**
+ * Logout's read: the stored gate past the floor check, and whether it lags that floor (an
+ * interrupted deny). A missing gate after a deny still fails closed. Never creates the file.
+ */
+export async function readLogoutGate(
+  profileDir: string,
+): Promise<{ state: NodeGateState; floorLagging: boolean } | undefined> {
+  const state = await readStoredState(profileDir);
+  const floor = await readDenyFloor(profileDir);
+  if (state === undefined) {
+    if (floor !== undefined) {
+      throw gateRefusal("gate_unavailable", `The replica gate is missing after a sign-out. ${LOST_GATE_RECOVERY}`);
+    }
+    return undefined;
+  }
+  return { state, floorLagging: floor !== undefined && behindFloor(state, floor) };
+}
+
+/**
+ * Complete an interrupted sign-out of an inactive gate: past both the gate and its floor, floor
+ * first, changing only the epoch and denial time. Anything but an inactive gate is `stamp_stale`.
+ * The caller holds the profile lock.
+ */
+export async function advanceInactiveGate(profileDir: string): Promise<NodeGateState> {
+  const state = await readStoredState(profileDir);
+  const floor = await readDenyFloor(profileDir);
+  if (state === undefined || state.principalHash !== null || state.eraseDeferred) {
+    throw gateRefusal("stamp_stale", "Only an inactive replica gate can be advanced past its floor.");
+  }
+  const lifecycleEpoch = Math.max(state.lifecycleEpoch, floor?.epoch ?? 0) + 1;
+  const deniedAt = Math.max(Date.now(), (state.deniedAt ?? -1) + 1, (floor?.deniedAt ?? -1) + 1);
+  if (!Number.isSafeInteger(lifecycleEpoch) || !Number.isSafeInteger(deniedAt)) {
+    throw gateRefusal("gate_unavailable", "The replica deny floor cannot advance.");
+  }
+  const next: NodeGateState = { ...state, lifecycleEpoch, deniedAt };
+  await writeAtomic(profileDir, DENY_FLOOR_FILE, JSON.stringify({ epoch: lifecycleEpoch, deniedAt }));
+  await writeState(profileDir, next);
+  return next;
 }
 
 /** Call under the profile lock; caller derives both hashes before entering its data section. */

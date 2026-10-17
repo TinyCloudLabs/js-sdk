@@ -34,6 +34,7 @@ mock.module("@tinycloud/node-sdk", () => ({
     throw new Error("logoutPrincipalDigest should not be used by bootstrap tests");
   },
   REPLICA_LOGOUT_PENDING_FILE: "replica-logout-pending.json",
+  RESTORED_GATE_MESSAGE: "restored gate",
   signedCompactUcanExpiry: () => mockedSignedExpiry,
 }));
 mock.module("./permissions.js", () => ({

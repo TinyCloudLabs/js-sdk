@@ -83,12 +83,17 @@ test("wallet-signed CACAO issued grant is included before the active session", (
   expect(result.cids).toEqual([grant.cid, "bafy-session"]);
 }));
 
-test("valid wallet-signed foreign grant cannot be classified as this owner's issued grant", () => inHome(async () => {
+test("a verified grant on another account's space is excluded without blocking or a node lookup", () => inHome(async () => {
+  // Another account (e.g. an earlier sign-in on this profile) issued it; this owner may not revoke it.
   const grant = cacaoFixture.delegation;
   await writeFile(join(profilePath(PROFILE), "auth-grant-artifacts.json"), JSON.stringify([
     { delegationCid: grant.cid, delegation: { cid: grant.cid, delegationHeader: { Authorization: grant.authorization } } },
   ]));
-  await expect(inventory(queryNode([]))).rejects.toMatchObject({ code: "REVOKE_INVENTORY_UNVERIFIED" });
+  await writeFile(join(profilePath(PROFILE), "auth-grants.jsonl"),
+    `${JSON.stringify({ source: "cli", delegationCid: grant.cid })}\n`);
+  const result = await inventory(queryNode([]));
+  expect(result.cids).toEqual(["bafy-session"]);
+  expect(result.excluded).toEqual([{ cid: grant.cid, reason: "non_owner" }]);
 }));
 
 test("history source cli is not ownership proof: granted target revokes, imported target is explicitly excluded", () => inHome(async () => {
