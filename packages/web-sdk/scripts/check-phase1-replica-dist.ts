@@ -7,10 +7,10 @@ import { measureReplicaOptionalLoaded, type LoadedSizes } from "./measure-replic
 import {
   approvedCompactFixRequired, approvedMeasurementCorrection, approvedRelocations, compactFixOptionalAllowance,
   correctedOptionalAllowance, ciOptionalAllowance, fixRequiredOptionalAllowance, hardeningOptionalAllowance, optionalFormats,
-  priorOptionalAllowance, relocatedOptionalAllowance, relocationCommit, validateOptionalEntryTransition, validateOptionalLedger,
-  type OptionalLedger,
+  optionalSourcePins, priorOptionalAllowance, relocatedOptionalAllowance, validateIntroducedOptionalSources,
+  validateOptionalEntryTransition, validateOptionalLedger, type OptionalLedger,
 } from "./replica-optional-size-policy";
-import { assertCiSizeToolchain, approvedCiToolchainCorrection, approvedFixRequiredRatchet, approvedGatedOnlyRatchet, approvedPhase2, ciCorrectionPolicyOnlyPaths, isPolicyOnlySinceApprovedSource, validateCiToolchainTransition, validateGatedOnlyRatchet, validateHardeningRatchetTransition, validateLedger, validateMasterMergeResolutionTransition, type GzipSizes, type Ledger, type LedgerEntry } from "./replica-size-policy";
+import { ancestryPins, assertCiSizeToolchain, approvedCiToolchainCorrection, approvedFixRequiredRatchet, approvedGatedOnlyRatchet, approvedPhase2, ciCorrectionPolicyOnlyPaths, hasAncestor, isPolicyOnlySinceApprovedSource, pinLandedOn, preexistingS3EntryCommit, validateCiToolchainTransition, validateGatedOnlyRatchet, validateHardeningRatchetTransition, validateLedger, validateMasterMergeResolutionTransition, type GzipSizes, type Ledger, type LedgerEntry } from "./replica-size-policy";
 import { collectMeasuredArtifactInputs } from "./replica-size-inputs";
 type Baseline = {
   webSdkTestBaseline: { ref: string; unhandledErrors: number; failingNames: string[]; unhandledSignatures: string[] };
@@ -28,6 +28,10 @@ type Baseline = {
  * - The refused-admission observer is a distinct, deferred artifact with its
  *   own exact zero-headroom ESM/CJS ratchet; it never raises root or first-import caps.
  * - Non-replica PRs are never charged; they only validate the ledger shape.
+ * - A reviewed row's source commit must be a HEAD ancestor in the PR that
+ *   introduces the row. Squash merges leave branch commits out of master, so
+ *   merged rows are pinned by exact equality to their approved values instead,
+ *   and their pins must be on the PR base or landed by it (landingCommit).
  *
  * Replica-owned paths: packages/replica/**, packages/sdk-services/src/kv/replication/**,
  * packages/sdk-core/src/replication/** (when present), packages/node-sdk/src/replication/**,
@@ -177,10 +181,7 @@ if (prBaseSha) {
   validateHardeningRatchetTransition(baseLedger.hardeningRatchet, ledger.hardeningRatchet);
   const hardening = ledger.hardeningRatchet;
   if (hardening !== undefined && baseLedger.hardeningRatchet === undefined &&
-      (baseLedger.masterMergeResolution === undefined ||
-       spawnSync("git", ["merge-base", "--is-ancestor", hardening.sourceCommits.at(-1)!, "HEAD"], {
-         cwd: repoRoot,
-       }).status !== 0)) {
+      (baseLedger.masterMergeResolution === undefined || !hasAncestor(repoRoot, hardening.sourceCommits.at(-1)!))) {
     console.error("The #565 hardening ratchet requires the merged #548 resolution and its measured source commits.");
     failed = true;
   }
@@ -199,6 +200,19 @@ if (prBaseSha) {
   }
   validateOptionalLedger(baseOptional, baseLedger.fixRequiredRatchet !== undefined,
     baseLedger.canonicalToolchainCorrection !== undefined, baseLedger.hardeningRatchet !== undefined);
+  validateIntroducedOptionalSources(baseOptional, optionalLedger);
+  // Policy rows may pin only master commits. A row already merged into the base must pin a commit
+  // the base contains or, after a squash merge, one the base landed (see landingCommit).
+  const mergedPins = [
+    ...ancestryPins(baseLedger, baseOptional.gatedOnlyRatchet !== undefined),
+    ...optionalSourcePins(baseOptional),
+  ];
+  for (const { row, pin } of mergedPins) {
+    if (!pinLandedOn(repoRoot, pin, prBaseSha)) {
+      console.error(`Merged size-policy row ${row} pins ${pin}, which master ${prBaseSha} neither contains nor landed through packages/web-sdk/scripts/.`);
+      failed = true;
+    }
+  }
   validateGatedOnlyRatchet(optionalLedger.gatedOnlyRatchet, baseOptional.gatedOnlyRatchet);
   if (baseOptional.fixRequired !== undefined &&
       JSON.stringify(optionalLedger.fixRequired) !== JSON.stringify(baseOptional.fixRequired)) {
@@ -206,9 +220,7 @@ if (prBaseSha) {
     failed = true;
   }
   if (optionalLedger.gatedOnlyRatchet !== undefined && baseOptional.gatedOnlyRatchet === undefined &&
-      spawnSync("git", ["merge-base", "--is-ancestor", approvedGatedOnlyRatchet.sourceCommit, "HEAD"], {
-        cwd: repoRoot,
-      }).status !== 0) {
+      !hasAncestor(repoRoot, approvedGatedOnlyRatchet.sourceCommit)) {
     console.error("The deferred-gate budget requires its measured source commit as an ancestor.");
     failed = true;
   }
@@ -279,9 +291,7 @@ if (prBaseSha) {
     baseLedger.canonicalToolchainCorrection === undefined;
   if (ledger.masterMergeResolution !== undefined && baseLedger.masterMergeResolution === undefined &&
       (ledger.masterMergeResolution.masterBase !== prBaseSha ||
-       spawnSync("git", ["merge-base", "--is-ancestor", ledger.masterMergeResolution.mergedHead, "HEAD"], {
-         cwd: repoRoot,
-       }).status !== 0)) {
+       !hasAncestor(repoRoot, ledger.masterMergeResolution.mergedHead))) {
     console.error(`The reviewed master merge input blobs require trusted base ${ledger.masterMergeResolution.masterBase} and resolved merged tree ${ledger.masterMergeResolution.mergedHead}.`);
     failed = true;
   }
@@ -305,10 +315,7 @@ if (prBaseSha) {
     failed = true;
   }
   if (reviewedFixIntroduced &&
-      (optionalLedger.gatedOnlyRatchet === undefined ||
-       spawnSync("git", ["merge-base", "--is-ancestor", approvedFixRequiredRatchet.measuredAt, "HEAD"], {
-         cwd: repoRoot,
-       }).status !== 0)) {
+      (optionalLedger.gatedOnlyRatchet === undefined || !hasAncestor(repoRoot, approvedFixRequiredRatchet.measuredAt))) {
     console.error("The reviewed fix-required root/first-import transition requires the measured ddc032ca source and approved gated-only artifact.");
     failed = true;
   }
@@ -329,10 +336,10 @@ if (prBaseSha) {
     const inheritedS3Only = oldEntriesAdded.length === 0 ||
       (oldEntriesAdded.length === 1 &&
         JSON.stringify(oldEntriesAdded[0]) === JSON.stringify(preexistingS3Entry) &&
-        spawnSync("git", ["merge-base", "--is-ancestor", "0241ba9b", "HEAD"], { cwd: repoRoot }).status === 0);
+        hasAncestor(repoRoot, preexistingS3EntryCommit));
     if (!inheritedS3Only || replicaPaths.length === 0 ||
         formats.some((format) => baseLedger.allowance[format] !== ledger.allowance[format]) ||
-        spawnSync("git", ["merge-base", "--is-ancestor", approvedPhase2.base, "HEAD"], { cwd: repoRoot }).status !== 0) {
+        !hasAncestor(repoRoot, approvedPhase2.base)) {
       console.error("TC-858 Phase 2 may introduce only Naomi's exact master9891-relative root ratchet, preserving the old #546/#553 entries.");
       failed = true;
     }

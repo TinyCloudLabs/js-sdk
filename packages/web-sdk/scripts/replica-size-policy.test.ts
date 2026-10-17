@@ -4,8 +4,8 @@ import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { MAX_WORKER_GZIP_BYTES } from "../../replica/scripts/check-worker-size";
-import { compactFixOptionalAllowance } from "./replica-optional-size-policy";
-import { assertCiSizeToolchain, approvedCiToolchainCorrection, approvedFixRequiredRatchet, approvedGatedOnlyRatchet, approvedHardeningRatchet, ciCorrectionPolicyOnlyPaths, isPolicyOnlySinceApprovedSource, validateCiToolchainTransition, validateGatedOnlyRatchet, validateHardeningRatchetTransition, validateLedger, validateMasterMergeResolutionTransition, type HardeningRatchet, type Ledger, type MasterMergeResolution } from "./replica-size-policy";
+import { compactFixOptionalAllowance, optionalSourcePins, type OptionalLedger } from "./replica-optional-size-policy";
+import { ancestryPins, assertCiSizeToolchain, approvedCiToolchainCorrection, approvedFixRequiredRatchet, approvedGatedOnlyRatchet, approvedHardeningRatchet, ciCorrectionPolicyOnlyPaths, hasAncestor, isPolicyOnlySinceApprovedSource, landingCommit, pinLandedOn, validateCiToolchainTransition, validateGatedOnlyRatchet, validateHardeningRatchetTransition, validateLedger, validateMasterMergeResolutionTransition, type HardeningRatchet, type Ledger, type MasterMergeResolution } from "./replica-size-policy";
 
 const current = JSON.parse(readFileSync(resolve(import.meta.dir, "replica-size-ledger.json"), "utf8")) as Ledger;
 const historical: Ledger = {
@@ -249,8 +249,8 @@ describe("TC-858 reviewed master-merge input resolution", () => {
   it("accepts only the five exact merged store, manifests, and derived lock blobs", () => {
     expect(() => validateLedger(withResolution())).not.toThrow();
     expect(current.masterMergeResolution).toEqual(reviewed);
-    // The reviewed rows stay an unchanged prefix; each later replica PR must
-    // append exactly one row of its own (check-phase1-replica-dist.ts).
+    // The reviewed rows stay an unchanged prefix; each later replica PR must append exactly one
+    // row of its own (check-phase1-replica-dist.ts), so the whole list is not pinned.
     expect(current.entries.slice(0, 8).map(({ pr }) => pr)).toEqual(["#511", "#529", "#546", "#551", "#563", "#564", "#553", "#565"]);
   });
 
@@ -1037,5 +1037,73 @@ describe("TC-858 #565 hardening exact-delta ratchet", () => {
     expect(() => validateHardeningRatchetTransition(undefined, changed)).toThrow();
     expect(() => validateHardeningRatchetTransition(row(), changed)).toThrow();
     expect(() => validateHardeningRatchetTransition(row(), undefined)).toThrow();
+  });
+});
+
+describe("TC-858 squash-proof ancestry pins", () => {
+  const git = (root: string, ...args: string[]) =>
+    execFileSync("git", ["-C", root, ...args], { encoding: "utf8" }).trim();
+  const commitFile = (root: string, path: string, content: string, message: string) => {
+    mkdirSync(dirname(join(root, path)), { recursive: true });
+    writeFileSync(join(root, path), content);
+    git(root, "add", ".");
+    git(root, "commit", "-qm", message);
+    return git(root, "rev-parse", "HEAD");
+  };
+
+  it("resolves a squash-merged row's branch pin to the master commit that landed it", () => {
+    const root = mkdtempSync(join(tmpdir(), "tc858-squash-"));
+    try {
+      git(root, "init", "-q", "-b", "master");
+      git(root, "config", "user.email", "policy@example.test");
+      git(root, "config", "user.name", "Policy Test");
+      commitFile(root, "packages/web-sdk/src/a.ts", "export const a = 1;\n", "base");
+      git(root, "switch", "-qc", "abandoned");
+      const neverLanded = commitFile(root, "packages/web-sdk/src/a.ts", "export const a = 3;\n", "abandoned source");
+      commitFile(root, "packages/web-sdk/scripts/ledger.json", `{"measuredAt":"${neverLanded}"}\n`, "abandoned row");
+      git(root, "switch", "-q", "master");
+      git(root, "switch", "-qc", "feature");
+      const reviewed = commitFile(root, "packages/web-sdk/src/a.ts", "export const a = 2;\n", "reviewed source");
+      commitFile(root, "packages/web-sdk/scripts/ledger.json", `{"measuredAt":"${reviewed}"}\n`, "policy row");
+      git(root, "switch", "-q", "master");
+      git(root, "merge", "--squash", "-q", "feature");
+      git(root, "commit", "-qm", "squash merge");
+      const squash = git(root, "rev-parse", "HEAD");
+      commitFile(root, "packages/web-sdk/scripts/ledger.json", `{"measuredAt":"${reviewed}","next":1}\n`, "later row");
+
+      // The introduction check still needs the literal pin, which the PR head has.
+      expect(hasAncestor(root, reviewed, "feature")).toBe(true);
+      // The incident: after the squash, master cannot reach the reviewed commit itself.
+      expect(hasAncestor(root, reviewed, "master")).toBe(false);
+      expect(landingCommit(root, reviewed, "master")).toBe(squash);
+      expect(pinLandedOn(root, reviewed, "master")).toBe(true);
+      expect(pinLandedOn(root, neverLanded, "master")).toBe(false);
+      expect(pinLandedOn(root, neverLanded, "abandoned")).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("re-pins every merged #548 and #565 row to its master squash commit", () => {
+    const root = resolve(import.meta.dir, "../../..");
+    const squashOf548 = "94566db5fcc8831ad9913b593b1843b201ab0227";
+    const squashOf565 = "86815bd81479a5ca6578d5cbef8fd9f5a42960c9";
+    const optional = JSON.parse(readFileSync(resolve(import.meta.dir, "replica-optional-size-ledger.json"), "utf8")) as OptionalLedger;
+    const pins = [
+      ...ancestryPins(current, optional.gatedOnlyRatchet !== undefined),
+      ...optionalSourcePins(optional),
+    ];
+    expect(Object.fromEntries(pins.map(({ row, pin }) => [row, landingCommit(root, pin, squashOf565)]))).toEqual({
+      phase2Ratchet: squashOf548,
+      "phase2Ratchet (#553 entry)": squashOf548,
+      fixRequiredRatchet: squashOf548,
+      canonicalToolchainCorrection: squashOf548,
+      masterMergeResolution: squashOf548,
+      hardeningRatchet: squashOf565,
+      gatedOnlyRatchet: squashOf548,
+      fixRequired: squashOf548,
+      measurementCorrection: squashOf548,
+      relocations: squashOf548,
+    });
   });
 });

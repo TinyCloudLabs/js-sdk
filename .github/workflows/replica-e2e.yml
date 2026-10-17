@@ -112,6 +112,10 @@ jobs:
           bun packages/web-sdk/scripts/check-replica-built-entry.ts mjs
           bun packages/web-sdk/scripts/check-replica-built-entry.ts cjs
 
+      - name: Size-policy unit tests
+        if: ${{ (success() || failure()) && matrix.database == 'sqlite' }}
+        run: bun test packages/web-sdk/scripts/
+
       - name: Check Phase 1 web-sdk dist and test baseline
         env:
           REPLICA_BUDGET_PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
@@ -123,7 +127,10 @@ jobs:
         run: bun test packages/sdk-services/src/kv/replication/pendingWrites.model.test.ts
 
 
+      # The real-node steps below run even when the size checks fail, so their setup must too;
+      # otherwise a size failure cascades into misleading ENOENT failures for the node binary.
       - name: Log in to GHCR
+        if: ${{ !cancelled() }}
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
@@ -131,6 +138,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Extract the pinned node binary
+        if: ${{ !cancelled() }}
         run: |
           docker pull "$TINYCLOUD_NODE_IMAGE"
           container="$(docker create "$TINYCLOUD_NODE_IMAGE")"
@@ -138,10 +146,11 @@ jobs:
           docker rm "$container"
           chmod +x "$RUNNER_TEMP/tinycloud"
       - name: Prepare JUnit reports
+        if: ${{ !cancelled() }}
         run: mkdir -p "$RUNNER_TEMP/replica-junit"
 
       - name: Start Postgres 16
-        if: matrix.database == 'postgres'
+        if: ${{ !cancelled() && matrix.database == 'postgres' }}
         run: |
           docker run -d --name replica-e2e-pg -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=replica_e2e -p 127.0.0.1:5432:5432 postgres:16
           for attempt in $(seq 1 30); do
@@ -152,14 +161,14 @@ jobs:
           exit 1
 
       - name: node-sdk replication against the SQLite node
-        if: always() && matrix.database == 'sqlite'
+        if: ${{ !cancelled() && matrix.database == 'sqlite' }}
         env:
           TC_REPLICATION_E2E_NODE_BIN: ${{ runner.temp }}/tinycloud
           TC_REPLICA_E2E_NODE_BIN: ${{ runner.temp }}/tinycloud
         run: bun test packages/node-sdk/src/replication/replication.e2e.test.ts --reporter=junit --reporter-outfile="$RUNNER_TEMP/replica-junit/node-sdk.xml"
 
       - name: node-sdk replication against the Postgres node
-        if: always() && matrix.database == 'postgres'
+        if: ${{ !cancelled() && matrix.database == 'postgres' }}
         env:
           TC_REPLICATION_E2E_NODE_BIN: ${{ runner.temp }}/tinycloud
           TC_REPLICA_E2E_NODE_BIN: ${{ runner.temp }}/tinycloud
@@ -170,20 +179,20 @@ jobs:
         if: matrix.database == 'sqlite'
         run: bun run --cwd packages/replica test
       - name: CLI profile-deletion safety
-        if: always() && matrix.database == 'sqlite'
+        if: ${{ !cancelled() && matrix.database == 'sqlite' }}
         run: |
           mkdir -p "$RUNNER_TEMP/replica-junit"
           bun test packages/cli/src/commands/replica.test.ts --reporter=junit --reporter-outfile="$RUNNER_TEMP/replica-junit/cli-replica-command.xml"
 
       - name: tc replica against the node
-        if: always()
+        if: ${{ !cancelled() }}
         env:
           TC_REPLICA_E2E_NODE_BIN: ${{ runner.temp }}/tinycloud
           TC_REPLICATION_E2E_NODE_BIN: ${{ runner.temp }}/tinycloud
           TC_REPLICA_E2E_DATABASE_URL: ${{ matrix.database == 'postgres' && 'postgres://postgres:postgres@127.0.0.1:5432/replica_e2e' || '' }}
         run: bun test packages/cli/test/replica.e2e.test.ts --reporter=junit --reporter-outfile="$RUNNER_TEMP/replica-junit/cli-replica-e2e.xml"
       - name: CLI replication flag against the node
-        if: always()
+        if: ${{ !cancelled() }}
         env:
           TC_REPLICA_E2E_NODE_BIN: ${{ runner.temp }}/tinycloud
           TC_REPLICATION_E2E_NODE_BIN: ${{ runner.temp }}/tinycloud

@@ -4,6 +4,9 @@
 import { rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { ProfileLockTimeoutError, withProfileLock } from "@tinycloud/operations/state";
+import { exitWithParent } from "../../src/test-support/parent-watch.mjs";
+
+exitWithParent();
 
 const [profile, holdersDir, iterations, staleAfterMs, timeoutMs] = process.argv.slice(2);
 if (!profile || !holdersDir || !iterations || !staleAfterMs || !timeoutMs) {

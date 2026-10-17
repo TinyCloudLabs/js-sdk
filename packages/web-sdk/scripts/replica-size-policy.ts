@@ -236,6 +236,50 @@ export const approvedHardeningRatchet: HardeningRatchet = {
   reason: "Security L1/L2/I1 and correctness P2 fixes required before stable, plus the round-2 correctness fix for a startup recovery that finishes after its bound. Cuts applied first: the worker start-up report uses reportError (local worker +34 to +7, no client or protocol change); the startup wait reuses the shared bounded helper (local -25/-24); the recovery re-check has no safe smaller bound. Root +20/+11 carries L2's frozen registration copy; first-import +134/+129 carries L2's frozen plugin, the bounded recovery re-check and the single-flight late-startup re-admission; activation +4/+5 is measured with no activation-source change after the cut and is not attributed to one commit. Both jobs of run 39023273615 measured identical absolute bytes in every bucket; the gated artifact is unchanged.",
 };
 
+/** The reviewed #553 S3 entry's source commit, as master's checker pinned it. */
+export const preexistingS3EntryCommit = "0241ba9b";
+
+/** True when `commit` is an ancestor of `ref`. Introduction checks use this on the PR head. */
+export function hasAncestor(root: string, commit: string, ref = "HEAD"): boolean {
+  return spawnSync("git", ["merge-base", "--is-ancestor", commit, ref], { cwd: root }).status === 0;
+}
+
+/**
+ * Ancestry pins and squash merges. A row pins the PR-branch commit it was reviewed at, and its
+ * introduction check requires that commit in the PR head. js-sdk squash-merges, so the commit is
+ * unreachable from master afterwards. A row's ancestry is therefore checked against HEAD only
+ * when a PR introduces it. Afterwards a pin resolves to the commit that landed it: the first
+ * first-parent commit of `ref` that added the pin to the policy sources, i.e. its squash commit.
+ * That needs no follow-up edit after a squash merge.
+ */
+export function landingCommit(root: string, pin: string, ref: string): string | undefined {
+  const log = execFileSync("git", [
+    "log", "--first-parent", "--reverse", "--format=%H", `-S${pin}`, ref, "--", "packages/web-sdk/scripts/",
+  ], { cwd: root, encoding: "utf8" });
+  return log.split("\n")[0] || undefined;
+}
+
+/** True when `ref` carries the pinned code: it contains the pin itself or the commit that landed it. */
+export function pinLandedOn(root: string, pin: string, ref: string): boolean {
+  return hasAncestor(root, pin, ref) || landingCommit(root, pin, ref) !== undefined;
+}
+
+/** The ancestry pin of each root row present in `root`, plus the gated-only artifact's when present. */
+export function ancestryPins(root: Ledger, hasGatedOnly: boolean): Array<{ row: string; pin: string }> {
+  const pins: Array<{ row: string; pin: string }> = [];
+  if (root.phase2Ratchet !== undefined) {
+    pins.push({ row: "phase2Ratchet", pin: approvedPhase2.base }, { row: "phase2Ratchet (#553 entry)", pin: preexistingS3EntryCommit });
+  }
+  if (root.fixRequiredRatchet !== undefined) pins.push({ row: "fixRequiredRatchet", pin: approvedFixRequiredRatchet.measuredAt });
+  if (root.canonicalToolchainCorrection !== undefined) {
+    pins.push({ row: "canonicalToolchainCorrection", pin: approvedCiToolchainCorrection.approvedSource });
+  }
+  if (root.masterMergeResolution !== undefined) pins.push({ row: "masterMergeResolution", pin: root.masterMergeResolution.mergedHead });
+  if (root.hardeningRatchet !== undefined) pins.push({ row: "hardeningRatchet", pin: root.hardeningRatchet.sourceCommits.at(-1)! });
+  if (hasGatedOnly) pins.push({ row: "gatedOnlyRatchet", pin: approvedGatedOnlyRatchet.sourceCommit });
+  return pins;
+}
+
 export type GatedOnlyRatchet = {
   label: string;
   sourceCommit: string;
