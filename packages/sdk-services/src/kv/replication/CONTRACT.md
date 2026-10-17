@@ -477,7 +477,7 @@ a stamp is dropped. This includes get bytes, list keys and replica-derived diver
    **fresh authenticated session** can set it after the old purge and mint new keys.
    Until then, B's KV goes to the network. Old-key `nextHash` is never reused.
 
-**`signOut` resolves** only after this tab's handles are cancelled and closed **and** step 1 has committed (or returned a fallback outcome). Erasure continues in the background.
+**`signOut` resolves** only after this tab's handles are cancelled and closed **and** step 1 has committed (or returned a fallback outcome). It does not wait for erasure: in the browser, the outstanding purge intents are erased on the next load or `recover()` (§ Startup step 4).
 
 A transient `BUSY`, lock timeout or retryable I/O failure **before erase** does
 not end the user's network session; the deny/tombstone has already gated the
