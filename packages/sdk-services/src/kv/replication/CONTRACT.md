@@ -297,10 +297,15 @@ it. Under the profile lock, the next `tc auth logout` (plain or `--revoke`) comp
 anything else: it writes a new floor at `max(gate.lifecycleEpoch, floor.epoch) + 1` (with
 `deniedAt` past both), then rewrites the gate at that epoch and `deniedAt`, in that order.
 - **Active principal** matching the logout principal: this is the interrupted deny itself, with
-  the full scoped intents and generation fences, and `eraseDeferred` for `--revoke`.
+  the full scoped intents and generation fences. Deferral comes from the durable logout marker,
+  never from the command's flags: a remote-pending v1 marker completes a deferred
+  (`eraseDeferred`) deny; a plain v1 marker completes an ordinary deny; with **no** marker the
+  completion is an ordinary deny and logout continues on the inactive-gate (v3) path.
 - **Null principal:** it only raises the epoch and `deniedAt`; principal, intents and deferral
   fields are kept, and logout continues on the inactive-gate (v3) path.
-- **A different active principal:** `stale`; nothing is written and logout refuses.
+- **A different active principal:** completion is refused (`stale`) and nothing is written to the
+  gate or floor. The logging-out account's own credentials are still cleared, as in "Logout
+  by another account" (§ Sign-out).
 
 A crash between the two writes leaves a floor-lagging gate again, and the next attempt repeats
 the completion; a gate that is no longer floor-lagging is never touched by it. The normal
@@ -550,6 +555,35 @@ This replaces clearing the session in a `finally` on every failure path: the
 current CLI `auth logout` and its pending changeset
 `cli-logout-replica-order.md` still describe that behaviour, and the CLI
 logout implementation (S7) brings both in line with this contract.
+
+**Logout by another account.** Only the gate's own active principal creates a
+v1 marker for it or denies it; the facade never calls `deny` or erases a gate,
+partition, pending state or device record whose active principal is not the
+caller's. This state is reachable: an account B signing in to a profile in a
+fresh process skips the account-switch deny, so the gate still holds account
+A. When B (the session owner) logs out of a gate whose active principal is A:
+1. no logout marker is written and A's gate, deny floor, partitions, pending
+   state and device record are untouched;
+2. under the profile lock the CLI durably writes `authSignedOut: true`
+   (file and directory fsync), then unlinks and fsyncs **both** of B's
+   credential files, `session.json` and `key.json`;
+3. it erases the legacy v1 mirror (below), which belongs to the profile and
+   its device grant rather than to any account.
+
+`--revoke` derives its CID set only from B's own session and stored
+delegations and revokes only those. A's flag-owned replicas stay gated to A:
+every guarded read and establishment checks A's salted principal hash, so B
+(or any later account C) gets `principal_mismatch` and nothing of A's becomes
+readable; leaving them in place is therefore safe, and A's own later logout
+erases them. A floor-lagging gate with A's active principal is likewise never
+completed by B: completion is refused, but B's credentials are still cleared.
+A crash after step 2 is finished by startup (`authSignedOut` already forbids
+restore); the legacy-mirror replay follows the rules below. Example: A signs in
+with replication; in a fresh process the profile signs in as B, whose
+replica establishment gets `principal_mismatch`. `tc auth logout` as B
+removes B's `session.json` and `key.json` and the legacy mirror, writes no
+marker, and leaves A's `replica-gate.json`, floor and partitions byte-for-byte
+unchanged; no account but A can then read A's flag-owned replicas.
 **Exception:** failed, partial, timed-out or interrupted `logout --revoke`
 returns nonzero while retaining the network session, both key-bearing files
 and physical replica files for retry. The v1 deferred gate denial or v2/v3
@@ -575,6 +609,16 @@ before acting. Without explicit `--discard-local-changes`, unknown or
 indeterminate data refuses before any marker, credentials, gate or remote
 state changes. Explicit consent authorizes **only** that exact listed
 inventory, not a wildcard for later additions.
+
+**The legacy v1 mirror (`<profile>/replicas`) belongs to the profile and its
+device grant, not to an account.** Its reads (`tc replica get/list`) check only
+the logout marker, so it is not account-bound. **Every** logout of the profile
+erases it, whichever account logs out (including "Logout by another account"
+above), except `--keep-replicas` on a legacy-only profile, the documented
+exception. The account loses only a cached copy that re-syncs from the network.
+Without a logout marker, a replay after a crash erases only source-known
+children; an unknown child is refused with a fresh listing, never deleted on a
+prior command's consent.
 
 The **legacy v1 mirror**, in v1, v2 or v3 profiles alike, recognizes only
 the source-created SQLite layout: required `replica.db`, optional
@@ -637,8 +681,11 @@ epoch. The epoch its denial commits is never computed from it: a Node deny
 advances past the deny floor, so an interrupted and then completed deny commits
 at `lifecycleEpoch + 2` or later. Right after its v1 denial commits (deferred
 for `--revoke`, ordinary in recovery), the facade atomically rewrites the marker
-once with `deniedEpoch` set to the committed gate epoch. Every later v1 check
-compares equality with `marker.deniedEpoch`, never `lifecycleEpoch + 1`. If a
+once with `deniedEpoch` set to the committed gate epoch, inside the **same
+guard section** as that deny. A remote-pending marker binds only to a
+**deferred** denial (`eraseDeferred`); a plain marker binds to an ordinary one.
+Every later v1 check compares equality with `marker.deniedEpoch`, never
+`lifecycleEpoch + 1`. If a
 crash falls between the denial and that rewrite, the next locked validation
 binds it once, and only when the incarnation matches, the gate principal is
 null, the gate epoch is greater than `marker.lifecycleEpoch`, and, for a
@@ -646,6 +693,14 @@ deferred denial, both `deferredPrincipalHash` and the token principal equal
 `marker.principalHash`. The CLI refuses establishment while any marker
 exists, so no successor epoch can come between. A marker that already has
 `deniedEpoch` is never rebound.
+
+**Restored older gate.** If an older gate file is restored under a marker
+that already has `deniedEpoch` (or a null-principal gate with `eraseDeferred`
+is restored), completing it commits a new epoch that cannot equal the bound
+one, so the check refuses on every retry. This fails closed with no in-place
+exit. The CLI refuses with `REPLICA_GATED` and names the route: switch the
+default profile first if needed (`tc profile switch <other>`), then
+`tc profile delete <name>` and sign in again.
 
 Example, an interrupted deny: the v1 marker records `lifecycleEpoch: 7`. The
 logout's deny writes floor 8, then the process dies before the gate write, so
@@ -694,7 +749,11 @@ Then `completeRemoteLogout({ principal })` revalidates the marker's
 v1 `marker.deniedEpoch`, salted principal hash and null principal; v2 the orphan
 marker and no replacement gate; v3 incarnation, exact inactive epoch, null
 principal and no `eraseDeferred`. It durably removes `remotePending` only
-after all authoritative remote revokes succeed. This transition means
+after all authoritative remote revokes succeed. It transitions **only** a
+`remotePending` marker: on a remote-abandoned or an already cleanup-ready
+marker it refuses `REPLICA_GATED`/`gate_unavailable` without mutation. The CLI
+calls it only right after its own revoke sequence; a crash after the
+transition resumes through `recoverLogoutPending`, not another completion. This transition means
 **online success**; an explicit plain logout instead uses
 `abandonRemoteLogout` below and never claims a remote receipt. Only a
 cleanup-ready marker permits `recoverLogoutPending` to shred credentials
@@ -745,7 +804,11 @@ session-file layout, while CLI-bound `sqliteReplicaStorage` receives its
 pending-store operation and replica delivery, including already-open handles
 and legacy v1 mirror reads under `<profile>/replicas` (the `tc replica`
 commands), checks it before serving; even ungated `inspectStatus` refuses the marker.
-CLI startup refuses network restore or a fresh sign-in while it exists.
+CLI startup refuses network restore or a fresh sign-in while it exists. The
+CLI's marker check runs inside the **same** profile-locked section as
+`establishSessionStamp`, not before it: after a zero-intent ordinary deny the
+gate itself admits a fresh establishment, so the marker is the only barrier
+and must be atomic with it.
 An active gate with a missing `session.json` **without** this marker is not
 logout evidence: fresh sign-in can establish the gate before persisting its
 network session. Never infer abandonment from that absence alone.
@@ -796,13 +859,15 @@ allowlist and schema check above; source-known children need no discard.
 Any other legacy child is unknown and requires explicit listed-inventory
 discard before v3 is written. Active flag-owned v2/v3 replica and pending
 rules are unchanged: the pending index and its empty-state proof remain
-mandatory. An **active** gate principal always yields a v1 marker, even
-with no intents and no replica roots: recovery then commits the denial (deny
-floor, then the gate with a null principal) before clearing credentials, so a
-later different account establishes on an inactive gate instead of meeting
-`principal_mismatch`. `prepareLogoutPending` returns null only when there is
-no active principal (no gate, or an inactive gate) and neither intents nor
-replica roots; the no-marker recovery report still reads the durable
+mandatory. When the gate's active principal **is the logout principal**,
+`prepareLogoutPending` always yields a v1 marker, even with no intents and no
+replica roots: recovery then commits the denial (deny floor, then the gate
+with a null principal) before clearing credentials, so a later different
+account establishes on an inactive gate instead of meeting
+`principal_mismatch`. When the active principal is **another account**, it
+returns null and denies nothing ("Logout by another account", § Sign-out). It
+otherwise returns null only when there is no active principal (no gate, or an
+inactive gate) and neither intents nor replica roots; the no-marker recovery report still reads the durable
 outstanding-intent count under the profile lock. An
 unreadable or corrupt gate instead reports
 `failed: [{ id: "logout", code: "gate_unavailable" }]` and conservative
@@ -912,12 +977,28 @@ and crash-tested by the CLI. If it fails, the logout marker stays and
 network restore/replica delivery remain fenced.
 
 **Explicit plain logout after pending or failed `--revoke`.** This is an
-override, not online success. For an already-deferred v1 marker,
-`remotePendingLogout({ principal })` validates its denied fence; an
-interrupted marker-before-deny v1 can still have an active gate, which
-`abandonRemoteLogout` validates under the profile lock without a remote call.
-V2 checks its pinned orphan marker and absence of a replacement gate; v3
-checks its exact inactive epoch and null principal. On the **first**
+override, not online success, and it always goes through
+`abandonRemoteLogout` (or, after an inventory change, the separate token
+command below); a plain logout never re-runs deny-first marker preparation on
+a remote-pending marker. Under the profile lock, with no remote call, a v1
+remote-pending marker is classified by its gate and checked in **exactly one**
+way:
+- **deferred-denied** (null principal, `eraseDeferred`,
+  `deferredPrincipalHash === marker.principalHash`): the "v1 already
+  deferred" checks against `marker.deniedEpoch` (binding it first if a crash
+  left it unbound);
+- **active, denial never started** (gate `principalHash ===
+  marker.principalHash`, `lifecycleEpoch === marker.lifecycleEpoch`, matching
+  incarnation, not floor-lagging): abandon without denying; recovery's
+  pre-credential ordinary denial then fences it, since the abandoned marker is
+  no longer remote-pending;
+- **floor-lagging with the marker's principal**: complete the interrupted deny
+  first as a **deferred** deny (the marker is still remote-pending), bind
+  `deniedEpoch`, then apply the deferred-denied check.
+
+Any other gate state refuses without mutation. V2 checks its pinned orphan
+marker and absence of a replacement gate; v3 checks its exact inactive epoch
+and null principal. On the **first**
 plain-logout command the CLI
 obtains and displays a fresh read-only preflight, then calls
 `abandonRemoteLogout({ principal, approval, discardLocalChanges? })`
@@ -1006,9 +1087,28 @@ implementation (S7) adds the rest and MUST also:
 - keep the logout-marker check on legacy v1 mirror reads named above; the
   released CLI already makes it (N4);
 - bring the CLI's plain logout to deny-first (replacing its clear-in-finally),
-  bind v1 `deniedEpoch`, complete a floor-lagging gate on logout, always write a
-  v1 marker for an active principal, and never rewrite an existing marker in
-  `prepareLogoutPending`.
+  bind v1 `deniedEpoch` in the deny's guard section (remote-pending markers
+  only to deferred denials), complete a floor-lagging gate on logout taking
+  deferral from the durable marker, always write a v1 marker for the logout
+  principal's own active gate, and never rewrite an existing marker in
+  `prepareLogoutPending`;
+- implement "Logout by another account": no marker, no deny or erase of
+  another account's gate, `authSignedOut` then both credential files, then the
+  legacy mirror; `--revoke` only for the caller's own CIDs. Tests: B's
+  credential files are gone, A's gate, floor and partitions are byte-identical,
+  and B cannot read A's flag-owned replicas;
+- erase the legacy v1 mirror on every logout of the profile (except
+  `--keep-replicas` on a legacy-only profile), with a test that it is gone
+  after another account's logout;
+- check the logout marker inside the same profile-locked section as
+  `establishSessionStamp`;
+- classify a remote-pending v1 marker for plain logout exactly once
+  (`abandonRemoteLogout`), and make `completeRemoteLogout` refuse markers that
+  are not remote-pending;
+- refuse a restored older gate with the `tc profile delete` route;
+- produce `LocalReplicaStatus.purgePending` and
+  `ReplicaInspectedStatus.purgePending` from `eraseDeferred` or outstanding
+  intents.
 
 **Startup.** `recover()` runs before anything binds:
 1. browser retries a pending database delete if the marker is set;

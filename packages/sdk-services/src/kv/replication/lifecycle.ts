@@ -455,7 +455,9 @@ export type ProfileReplicaRemoteLogoutState =
  * are true while the deferred marker or any intent remains. All guarded reads
  * and new establishment remain refused. Deferred intents leave that state only
  * through a validated resume (CONTRACT.md §2); there is no account-switch or
- * consent-expiry override.
+ * consent-expiry override. The facade never denies or erases a gate,
+ * partition, pending state or device record whose active principal is not
+ * the caller's ("Logout by another account", CONTRACT.md §2).
  */
 export interface ProfileReplicaPurge extends Pick<ReplicaLifecycleGate, "recover" | "erasePending" | "pendingPurge"> {
   /**
@@ -502,9 +504,11 @@ export interface ProfileReplicaPurge extends Pick<ReplicaLifecycleGate, "recover
    *
    * An existing marker is never rewritten here: the same owner, fence,
    * `remotePending` state and approved inventory return it unchanged; anything
-   * else refuses without mutation. An active gate principal always yields a v1
-   * marker, even with no replica roots or intents. Null means there is no
-   * active principal and no replica-owned work, not completed logout.
+   * else refuses without mutation. When the gate's active principal is the
+   * caller's, it always yields a v1 marker, even with no replica roots or
+   * intents; another account's active gate yields null and is never denied.
+   * Null otherwise means there is no active principal and no replica-owned
+   * work, not completed logout.
    *
    * A missing flag pending index, unrecognized child, nonempty pending state
    * or corrupt gate requires explicit discard. The CLI still fsyncs
@@ -522,9 +526,10 @@ export interface ProfileReplicaPurge extends Pick<ReplicaLifecycleGate, "recover
   /**
    * After every authoritative exact-CID revoke succeeds, revalidate the
    * marker's principal and version-specific fence under the profile lock:
-   * v1 denied epoch/hash, v2 no replacement gate, or v3 exact inactive
-   * epoch/null principal. Then durably remove `remotePending`.
-   * A failed/partial remote sequence never calls this.
+   * v1 `deniedEpoch`/hash, v2 no replacement gate, or v3 exact inactive
+   * epoch/null principal. Then durably remove `remotePending`. A marker that is
+   * not remote-pending (remote-abandoned or already cleanup-ready) refuses
+   * without mutation. A failed/partial remote sequence never calls this.
    */
   completeRemoteLogout(input: { principal: string }): Promise<ProfileReplicaLogoutPending>;
   /**
@@ -545,8 +550,9 @@ export interface ProfileReplicaPurge extends Pick<ReplicaLifecycleGate, "recover
    * `error.inventoryApprovalToken`, and mutates nothing even when `approval`
    * contains the new paths or `discardLocalChanges` is true. With the
    * original inventory intact, validate the fresh approval and the marker's
-   * version-specific owner/gate fence, then atomically replace `remotePending`
-   * with `remoteAbandoned: true`.
+   * version-specific owner/gate fence (a v1 marker is classified by its gate
+   * and checked exactly one way, CONTRACT.md §2), then atomically replace
+   * `remotePending` with `remoteAbandoned: true`.
    * This is not an online-success receipt and makes no further node call.
    */
   abandonRemoteLogout(input: {
