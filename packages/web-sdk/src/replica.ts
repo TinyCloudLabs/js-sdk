@@ -54,6 +54,7 @@ async function recoveredBrowserReplication(
   // Only stamp admission and local delivery require a proven current wallet.
   let walletPrincipal: string | undefined;
   let walletSequence = 0;
+  let recoveryRetries = 0;
   let walletGate: "gate_unavailable" | "principal_mismatch" = "gate_unavailable";
   const gatedError = () => Object.assign(new Error("Replica wallet or startup recovery is unavailable."), {
     code: "REPLICA_GATED" as const, gate: admitted ? walletGate : "gate_unavailable" as const,
@@ -78,6 +79,17 @@ async function recoveredBrowserReplication(
   const admitStamp = async <T>(principal: string, action: () => Promise<T>): Promise<T> => {
     const sequence = ++walletSequence;
     walletPrincipal = undefined;
+    // A failed startup recovery is re-checked here, at most twice per page and bounded like
+    // startup; the guarded recover() updates `admitted`, and failure still refuses below.
+    if (!admitted && recoveryRetries++ < 2) {
+      // web-sdk's TypeScript lib predates Promise.withResolvers; same bound shape as startup.
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      await Promise.race([
+        guardedLifecycle.recover({ signal: AbortSignal.timeout(3_000) }),
+        new Promise((resolve) => { timer = setTimeout(resolve, 3_000); }),
+      ]).catch(() => undefined);
+      clearTimeout(timer);
+    }
     if (!admitted || !(await matchesWallet(principal)) || sequence !== walletSequence) throw gatedError();
     const stamp = await action();
     if (sequence !== walletSequence) throw gatedError();
