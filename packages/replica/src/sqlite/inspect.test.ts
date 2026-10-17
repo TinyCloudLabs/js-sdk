@@ -1,7 +1,7 @@
-import { linkSync, renameSync, symlinkSync } from "node:fs";
+import { closeSync, constants as fsConstants, linkSync, openSync, renameSync, symlinkSync } from "node:fs";
 import { chmod, mkdtemp, readFile, readdir, readlink, rm, stat, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { afterEach, describe, expect, test } from "bun:test";
 
 import { FAULTS, SqliteReplicaStore } from "./store.js";
@@ -75,6 +75,7 @@ test("concurrent prefixes do not confuse SQLite descriptor identity", async () =
 test("concurrent controllers can open one writable replica while another remains live", async () => {
   const dir = await makeStore();
   const first = await SqliteReplicaStore.open(dir, { create: false });
+  expect(await first.open()).not.toBeNull();
   let firstClosed = false;
   const results = await Promise.allSettled(Array.from({ length: 4 }, () =>
     SqliteReplicaStore.open(dir, { create: true })));
@@ -84,10 +85,40 @@ test("concurrent controllers can open one writable replica while another remains
     expect(await stores[0]!.open()).not.toBeNull();
     await first.close();
     firstClosed = true;
+    await expect(first.open()).rejects.toMatchObject({ code: "REPLICA_CLOSED" });
     expect((await stores[1]!.status()).coverage).toBe("empty");
+    const lease = await stores[0]!.acquireSyncLease(30_000);
+    expect(lease).not.toBeNull();
+    expect(await stores[1]!.acquireSyncLease(30_000)).toBeNull();
+    await stores[0]!.releaseLease(lease!);
   } finally {
     if (!firstClosed) await first.close();
     await Promise.all(results.map((result) => result.status === "fulfilled" ? result.value.close() : undefined));
+  }
+  const reopened = await SqliteReplicaStore.open(dir, { create: false });
+  try {
+    expect(await reopened.open()).not.toBeNull();
+  } finally {
+    await reopened.close();
+  }
+  if (process.platform === "linux") expect(await databaseDescriptors()).toEqual([]);
+});
+
+test.skipIf(process.platform !== "linux")("a sibling pinned path retains the same replica after its first controller closes", async () => {
+  const dir = await makeStore();
+  const first = await SqliteReplicaStore.open(dir, { create: false });
+  const parentFd = openSync(dirname(dir), fsConstants.O_RDONLY | fsConstants.O_DIRECTORY);
+  let firstClosed = false;
+  let sibling: SqliteReplicaStore | undefined;
+  try {
+    sibling = await SqliteReplicaStore.open(`/proc/self/fd/${parentFd}/${basename(dir)}`, { create: false });
+    await first.close();
+    firstClosed = true;
+    expect((await sibling.open())?.config.name).toBe("notes");
+  } finally {
+    await sibling?.close();
+    if (!firstClosed) await first.close();
+    closeSync(parentFd);
   }
 });
 
