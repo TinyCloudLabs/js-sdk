@@ -7,7 +7,7 @@ import { lstat, mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { createInterface } from "node:readline";
 import type { IncomingMessage } from "node:http";
-import { TinyCloudNode, grantAuthRequest, logoutPrincipalDigest, principalDidEquals, REPLICA_LOGOUT_PENDING_FILE, signedCompactUcanExpiry, type PermissionEntry, type PortableDelegation, type RuntimeDelegationActivator, type TinyCloudSession } from "@tinycloud/node-sdk";
+import { TinyCloudNode, grantAuthRequest, principalDidEquals, REPLICA_LOGOUT_PENDING_FILE, signedCompactUcanExpiry, type PermissionEntry, type PortableDelegation, type RuntimeDelegationActivator, type TinyCloudSession } from "@tinycloud/node-sdk";
 import type { ProfileReplicaApprovalEntry, ProfileReplicaDeferredToken, ProfileReplicaLogoutPending } from "@tinycloud/sdk-services/kv/replication";
 import { composeManifestRequest } from "@tinycloud/sdk-core";
 import { invokeOperation } from "@tinycloud/operations";
@@ -16,7 +16,7 @@ import { principalHashOf, readGateSnapshot } from "@tinycloud/replica/profile-ga
 import { REPLICA_GATE_FILE } from "@tinycloud/sdk-services/kv/replication/contractConstants";
 import { ProfileManager } from "../config/profiles.js";
 import { logoutInventorySnapshot, planLogoutRevocations, type LogoutRevocationPlan } from "../lib/logout-revocation.js";
-import { assertPendingRemoteLogoutSession, clearProfileCredentials, eraseApprovedLegacyReplicas, profilePurge, recoverPendingLogout } from "../lib/logout-pending.js";
+import { assertPendingLogoutOwner, assertPendingRemoteLogoutSession, clearProfileCredentials, eraseApprovedLegacyReplicas, profilePurge, recoverPendingLogout } from "../lib/logout-pending.js";
 import {
   outputJson,
   outputWarnings,
@@ -428,9 +428,9 @@ export async function finishProfileLogout(
                 ExitCode.ERROR);
             }
           }
-          // A remote-abandoned marker whose credentials survived is rechecked
-          // against its approved inventory before recovery shreds them; other
-          // committed local markers recover below without a new preflight.
+          // Plain retries of a remote-abandoned marker whose credentials
+          // survived are rechecked against the approved inventory before
+          // recovery shreds them; other plain retries recover below.
           if (pendingMarker?.remoteAbandoned === true && !remotePending &&
               profile.authSignedOut !== true && options.approveInventory === undefined) {
             // A crash after the plain override leaves credentials intact. Recheck
@@ -456,11 +456,7 @@ export async function finishProfileLogout(
             // marker still denying reads (CONTRACT §2), pending explicit
             // reapproval. The remoteAbandoned branch above differs: it rechecks
             // inventory first and keeps credentials on a mismatch.
-            if (session && pendingMarker.principalDigest !== logoutPrincipalDigest(principal)) {
-              throw new CLIError("REPLICA_GATED",
-                "The pending logout belongs to a different principal than the current session; credentials, replica files and the logout marker were left unchanged.",
-                ExitCode.ERROR);
-            }
+            if (session) assertPendingLogoutOwner(ctx.profile, pendingMarker.principalDigest, principal);
             marker = pendingMarker;
           } else {
             // A changed pending inventory must issue its two-command challenge

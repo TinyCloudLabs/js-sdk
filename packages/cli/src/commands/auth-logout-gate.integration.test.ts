@@ -18,9 +18,9 @@ afterEach(async () => {
   await Promise.all(homes.splice(0).map((home) => rm(home, { recursive: true, force: true })));
 });
 
-async function run(home: string, args: string[] = [], replication = true) {
+async function run(home: string, args: string[] = [], replication = true, command = ["auth", "logout"]) {
   const child = Bun.spawn([process.execPath, cliEntry, "--quiet", "--json", "--profile", PROFILE,
-    ...(replication ? ["--replication"] : []), "auth", "logout", ...args], {
+    ...(replication ? ["--replication"] : []), ...command, ...args], {
     env: { ...process.env, HOME: home, TC_HOME: home }, stdin: "ignore", stdout: "pipe", stderr: "pipe",
   });
   const [stdout, stderr, exitCode] = await Promise.all([
@@ -320,20 +320,22 @@ test("plain logout retry shreds credentials but refuses an unapproved new replic
   expect((await readGateSnapshot(paths.directory))?.principalHash).toBeNull();
 });
 
-test("plain logout retry refuses a marker owned by a different session principal without touching anything", async () => {
-  const home = await mkdtemp(join(tmpdir(), "tc841-cli-logout-retry-principal-"));
-  homes.push(home);
-  const paths = await interruptedLogout(home, "v1");
-  await writeFile(paths.session, JSON.stringify({ ownerDid: OTHER_PRINCIPAL, spaceId: "default" }));
-  const before = await Promise.all([paths.session, paths.key, paths.marker, paths.replica]
-    .map((path) => readFile(path)));
-  const gate = await readGateSnapshot(paths.directory);
+for (const command of [["auth", "logout"], ["auth", "status"]]) {
+  test(`\`${command.join(" ")}\` refuses a pending logout owned by a different session principal without touching anything`, async () => {
+    const home = await mkdtemp(join(tmpdir(), "tc841-cli-logout-retry-principal-"));
+    homes.push(home);
+    const paths = await interruptedLogout(home, "v1");
+    await writeFile(paths.session, JSON.stringify({ ownerDid: OTHER_PRINCIPAL, spaceId: "default" }));
+    const before = await Promise.all([paths.session, paths.key, paths.marker, paths.replica]
+      .map((path) => readFile(path)));
+    const gate = await readGateSnapshot(paths.directory);
 
-  const refused = await run(home);
-  expect(refused.exitCode).toBeGreaterThan(0);
-  expect(JSON.parse(refused.stderr).error).toMatchObject({ code: "REPLICA_GATED" });
-  expect(await Promise.all([paths.session, paths.key, paths.marker, paths.replica]
-    .map((path) => readFile(path)))).toEqual(before);
-  expect(await readGateSnapshot(paths.directory)).toEqual(gate);
-  expect(await signedOut(paths.directory)).toBeUndefined();
-});
+    const refused = await run(home, [], true, command);
+    expect(refused.exitCode).toBeGreaterThan(0);
+    expect(JSON.parse(refused.stderr).error).toMatchObject({ code: "REPLICA_GATED" });
+    expect(await Promise.all([paths.session, paths.key, paths.marker, paths.replica]
+      .map((path) => readFile(path)))).toEqual(before);
+    expect(await readGateSnapshot(paths.directory)).toEqual(gate);
+    expect(await signedOut(paths.directory)).toBeUndefined();
+  });
+}

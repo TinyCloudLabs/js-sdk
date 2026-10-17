@@ -1,6 +1,6 @@
-import { lstat, open } from "node:fs/promises";
+import { lstat, open, readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { createProfileReplicaPurge, REPLICA_LOGOUT_PENDING_FILE } from "@tinycloud/node-sdk";
+import { createProfileReplicaPurge, logoutPrincipalDigest, REPLICA_LOGOUT_PENDING_FILE } from "@tinycloud/node-sdk";
 import type { ProfileReplicaLogoutPending, ProfileReplicaPurge } from "@tinycloud/sdk-services/kv/replication";
 import { profilePath } from "@tinycloud/operations/state";
 import { readGateSnapshot } from "@tinycloud/replica/profile-gate";
@@ -30,6 +30,20 @@ export async function eraseApprovedLegacyReplicas(name: string, inventory: Legac
     missingDatabases: inventory.missingDatabases.filter(isLegacy),
   });
 }
+
+/**
+ * A logout marker binds the principal that started it. Never let a different
+ * signed-in principal finish it: recovery would shred that principal's session.
+ */
+export function assertPendingLogoutOwner(name: string, principalDigest: string, principal: string): void {
+  if (principalDigest === logoutPrincipalDigest(principal)) return;
+  throw new CLIError("REPLICA_GATED",
+    `The pending logout on profile "${name}" belongs to a different principal than the current session; ` +
+    "credentials, replica files and the logout marker were left unchanged, and local replica reads stay blocked. " +
+    "See the TinyCloud CLI documentation or contact support to finish it.",
+    ExitCode.ERROR);
+}
+
 /**
  * A failed online revoke retains the original session for that retry alone.
  * Revalidate the persisted marker, inventory and exact session under the
@@ -164,13 +178,27 @@ export async function recoverPendingLogout(name: string): Promise<void> {
     }
     return;
   }
-  const report = await ProfileManager.withLock(name, () => profilePurge(name).recoverLogoutPending({
-    signal: new AbortController().signal,
-    clearCredentials: () => clearProfileCredentials(name),
-    eraseLegacyReplicas: async (inventory) => {
-      await eraseApprovedLegacyReplicas(name, inventory);
-    },
-  }), { requireProfile: true });
+  const report = await ProfileManager.withLock(name, async () => {
+    const session = await ProfileManager.getSession(name);
+    if (session) {
+      // An unreadable or malformed marker is left to the facade's own refusal.
+      const marker: unknown = await readFile(join(profilePath(name), REPLICA_LOGOUT_PENDING_FILE), "utf8")
+        .then((text) => JSON.parse(text), () => null);
+      if (typeof marker === "object" && marker !== null && "principalDigest" in marker &&
+          typeof marker.principalDigest === "string") {
+        const profile = await ProfileManager.getProfile(name);
+        const owner = "ownerDid" in session && typeof session.ownerDid === "string" ? session.ownerDid : undefined;
+        assertPendingLogoutOwner(name, marker.principalDigest, owner ?? profile.ownerDid ?? profile.did);
+      }
+    }
+    return profilePurge(name).recoverLogoutPending({
+      signal: new AbortController().signal,
+      clearCredentials: () => clearProfileCredentials(name),
+      eraseLegacyReplicas: async (inventory) => {
+        await eraseApprovedLegacyReplicas(name, inventory);
+      },
+    });
+  }, { requireProfile: true });
   if (report.failed.length || report.remaining) {
     throw new CLIError("REPLICA_PURGE_FAILED",
       `A durable logout is pending (${report.failed.map(({ code }) => code).join(", ") || `${report.remaining} intents remaining`}). Network restore and replica reads remain blocked; retry this command to complete credential and replica cleanup.`,
