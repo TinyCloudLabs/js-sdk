@@ -246,7 +246,9 @@ describe("TC-858 reviewed master-merge input resolution", () => {
   it("accepts only the five exact merged store, manifests, and derived lock blobs", () => {
     expect(() => validateLedger(withResolution())).not.toThrow();
     expect(current.masterMergeResolution).toEqual(reviewed);
-    expect(current.entries.map(({ pr }) => pr)).toEqual(["#511", "#529", "#546", "#551", "#563", "#564", "#553"]);
+    // The reviewed rows stay an unchanged prefix; each later replica PR must
+    // append exactly one row of its own (check-phase1-replica-dist.ts).
+    expect(current.entries.slice(0, 7).map(({ pr }) => pr)).toEqual(["#511", "#529", "#546", "#551", "#563", "#564", "#553"]);
   });
 
   it("refuses the superseded #551 resolution bound to e57a6fd6 and e364e7a0", () => {
