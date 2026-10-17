@@ -1,3 +1,5 @@
+import { execFileSync } from "node:child_process";
+import { resolve } from "node:path";
 import type { LoadedSizes } from "./measure-replica-optional";
 import { approvedCiToolchainCorrection, approvedFixRequiredRatchet, approvedHardeningRatchet, validateGatedOnlyRatchet, type GatedOnlyRatchet } from "./replica-size-policy";
 export type CompactFixRequired = {
@@ -135,22 +137,41 @@ export function validateOptionalLedger(
 }
 
 /**
- * Ancestry pins of the optional rows a PR introduces (`base` lacks them). Rows already in the base
- * ledger are not re-checked: after a squash merge their PR-branch pins are unreachable, and
- * re-checking them is what turned master red after #548.
+ * The source commit each source-backed optional row present in `ledger` pins, in check order. A
+ * PR that introduces the row must contain the literal commit; once merged, the row resolves through
+ * its squash commit instead (see landingCommit in replica-size-policy.ts).
  */
-export function introducedOptionalAncestryPins(value: OptionalLedger, base: OptionalLedger): Array<{ row: string; pin: string }> {
-  const pins: Array<{ row: string; pin: string }> = [];
-  if (value.fixRequired !== undefined && base.fixRequired === undefined) {
-    pins.push({ row: "fixRequired", pin: approvedCompactFixRequired.integratedCommit });
-  }
-  if (value.measurementCorrection !== undefined && base.measurementCorrection === undefined) {
-    pins.push({ row: "measurementCorrection", pin: approvedMeasurementCorrection.commit });
-  }
-  if (value.relocations !== undefined && base.relocations === undefined) {
-    pins.push({ row: "relocations", pin: relocationCommit });
-  }
+export function optionalSourcePins(ledger: OptionalLedger): Array<{ row: "relocations" | "measurementCorrection" | "fixRequired"; pin: string }> {
+  const pins: Array<{ row: "relocations" | "measurementCorrection" | "fixRequired"; pin: string }> = [];
+  if (ledger.relocations !== undefined) pins.push({ row: "relocations", pin: relocationCommit });
+  if (ledger.measurementCorrection !== undefined) pins.push({ row: "measurementCorrection", pin: approvedMeasurementCorrection.commit });
+  if (ledger.fixRequired !== undefined) pins.push({ row: "fixRequired", pin: approvedCompactFixRequired.integratedCommit });
   return pins;
+}
+
+/**
+ * A pull request that introduces a source-backed row must contain that row's source commit. Squash
+ * merges leave branch commits out of master, so rows already in the merge base are not re-checked;
+ * validateOptionalLedger keeps them pinned to the exact approved values.
+ */
+export function validateIntroducedOptionalSources(base: OptionalLedger, current: OptionalLedger): void {
+  const path = "packages/web-sdk/scripts/replica-optional-size-ledger.json";
+  const errors = {
+    relocations: "approved relocation commit is not an ancestor of HEAD",
+    measurementCorrection: "ce52494d measurement correction requires its approved source ancestor",
+    fixRequired: "compact fix requires the integrated source commit",
+  };
+  const merged = new Set(optionalSourcePins(base).map(({ row }) => row));
+  for (const { row, pin } of optionalSourcePins(current)) {
+    if (merged.has(row)) continue;
+    try {
+      execFileSync("git", ["merge-base", "--is-ancestor", pin, "HEAD"], {
+        cwd: resolve(import.meta.dir, "../../.."), stdio: "ignore",
+      });
+    } catch {
+      throw new Error(`${path}: ${errors[row]}`);
+    }
+  }
 }
 
 /** Only rows already in the PR merge base are immutable; the PR's own last row is measured. */

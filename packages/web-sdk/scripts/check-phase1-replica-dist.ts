@@ -6,8 +6,8 @@ import { tmpdir } from "node:os";
 import { measureReplicaOptionalLoaded, type LoadedSizes } from "./measure-replica-optional";
 import {
   approvedCompactFixRequired, approvedMeasurementCorrection, approvedRelocations, compactFixOptionalAllowance,
-  correctedOptionalAllowance, ciOptionalAllowance, fixRequiredOptionalAllowance, hardeningOptionalAllowance,
-  introducedOptionalAncestryPins, optionalFormats, priorOptionalAllowance, relocatedOptionalAllowance,
+  correctedOptionalAllowance, ciOptionalAllowance, fixRequiredOptionalAllowance, hardeningOptionalAllowance, optionalFormats,
+  optionalSourcePins, priorOptionalAllowance, relocatedOptionalAllowance, validateIntroducedOptionalSources,
   validateOptionalEntryTransition, validateOptionalLedger, type OptionalLedger,
 } from "./replica-optional-size-policy";
 import { ancestryPins, assertCiSizeToolchain, approvedCiToolchainCorrection, approvedFixRequiredRatchet, approvedGatedOnlyRatchet, approvedPhase2, ciCorrectionPolicyOnlyPaths, hasAncestor, isPolicyOnlySinceApprovedSource, pinLandedOn, preexistingS3EntryCommit, validateCiToolchainTransition, validateGatedOnlyRatchet, validateHardeningRatchetTransition, validateLedger, validateMasterMergeResolutionTransition, type GzipSizes, type Ledger, type LedgerEntry } from "./replica-size-policy";
@@ -28,6 +28,10 @@ type Baseline = {
  * - The refused-admission observer is a distinct, deferred artifact with its
  *   own exact zero-headroom ESM/CJS ratchet; it never raises root or first-import caps.
  * - Non-replica PRs are never charged; they only validate the ledger shape.
+ * - A reviewed row's source commit must be a HEAD ancestor in the PR that
+ *   introduces the row. Squash merges leave branch commits out of master, so
+ *   merged rows are pinned by exact equality to their approved values instead,
+ *   and their pins must be on the PR base or landed by it (landingCommit).
  *
  * Replica-owned paths: packages/replica/**, packages/sdk-services/src/kv/replication/**,
  * packages/sdk-core/src/replication/** (when present), packages/node-sdk/src/replication/**,
@@ -71,7 +75,6 @@ const preexistingS3Entry: LedgerEntry = {
   pr: "#553", ticket: "TC-858", "index.mjs": 52, "index.cjs": 55,
   note: "Replica gzip growth measured against this PR's merge base 9516f840 (includes S1 #550 kv-storage code merged into this branch)",
 };
-const emptyOptional: OptionalLedger = { allowance: priorOptionalAllowance, entries: [] };
 let failed = false;
 
 function command(program: string, args: string[], cwd = repoRoot): string {
@@ -197,22 +200,16 @@ if (prBaseSha) {
   }
   validateOptionalLedger(baseOptional, baseLedger.fixRequiredRatchet !== undefined,
     baseLedger.canonicalToolchainCorrection !== undefined, baseLedger.hardeningRatchet !== undefined);
+  validateIntroducedOptionalSources(baseOptional, optionalLedger);
   // Policy rows may pin only master commits. A row already merged into the base must pin a commit
   // the base contains or, after a squash merge, one the base landed (see landingCommit).
   const mergedPins = [
     ...ancestryPins(baseLedger, baseOptional.gatedOnlyRatchet !== undefined),
-    ...introducedOptionalAncestryPins(baseOptional, emptyOptional),
+    ...optionalSourcePins(baseOptional),
   ];
   for (const { row, pin } of mergedPins) {
     if (!pinLandedOn(repoRoot, pin, prBaseSha)) {
       console.error(`Merged size-policy row ${row} pins ${pin}, which master ${prBaseSha} neither contains nor landed through packages/web-sdk/scripts/.`);
-      failed = true;
-    }
-  }
-  // A row this PR introduces pins its own source commits, which HEAD must contain.
-  for (const { row, pin } of introducedOptionalAncestryPins(optionalLedger, baseOptional)) {
-    if (!hasAncestor(repoRoot, pin)) {
-      console.error(`${baseOptionalPath}: the introduced ${row} row requires its approved source commit ${pin} as an ancestor.`);
       failed = true;
     }
   }

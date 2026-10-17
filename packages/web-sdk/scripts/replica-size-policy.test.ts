@@ -4,7 +4,7 @@ import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { MAX_WORKER_GZIP_BYTES } from "../../replica/scripts/check-worker-size";
-import { compactFixOptionalAllowance, introducedOptionalAncestryPins, type OptionalLedger } from "./replica-optional-size-policy";
+import { compactFixOptionalAllowance, optionalSourcePins, type OptionalLedger } from "./replica-optional-size-policy";
 import { ancestryPins, assertCiSizeToolchain, approvedCiToolchainCorrection, approvedFixRequiredRatchet, approvedGatedOnlyRatchet, approvedHardeningRatchet, ciCorrectionPolicyOnlyPaths, hasAncestor, isPolicyOnlySinceApprovedSource, landingCommit, pinLandedOn, validateCiToolchainTransition, validateGatedOnlyRatchet, validateHardeningRatchetTransition, validateLedger, validateMasterMergeResolutionTransition, type HardeningRatchet, type Ledger, type MasterMergeResolution } from "./replica-size-policy";
 
 const current = JSON.parse(readFileSync(resolve(import.meta.dir, "replica-size-ledger.json"), "utf8")) as Ledger;
@@ -1091,7 +1091,7 @@ describe("TC-858 squash-proof ancestry pins", () => {
     const optional = JSON.parse(readFileSync(resolve(import.meta.dir, "replica-optional-size-ledger.json"), "utf8")) as OptionalLedger;
     const pins = [
       ...ancestryPins(current, optional.gatedOnlyRatchet !== undefined),
-      ...introducedOptionalAncestryPins(optional, { allowance: optional.allowance, entries: [] }),
+      ...optionalSourcePins(optional),
     ];
     expect(Object.fromEntries(pins.map(({ row, pin }) => [row, landingCommit(root, pin, squashOf565)]))).toEqual({
       phase2Ratchet: squashOf548,
@@ -1105,12 +1105,5 @@ describe("TC-858 squash-proof ancestry pins", () => {
       measurementCorrection: squashOf548,
       relocations: squashOf548,
     });
-  });
-
-  it("checks optional-row ancestry only for rows a PR introduces", () => {
-    const optional = JSON.parse(readFileSync(resolve(import.meta.dir, "replica-optional-size-ledger.json"), "utf8")) as OptionalLedger;
-    expect(introducedOptionalAncestryPins(optional, optional)).toEqual([]);
-    expect(introducedOptionalAncestryPins(optional, { allowance: optional.allowance, entries: [] }).map(({ row }) => row))
-      .toEqual(["fixRequired", "measurementCorrection", "relocations"]);
   });
 });
