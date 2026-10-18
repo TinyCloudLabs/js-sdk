@@ -123,7 +123,9 @@ export function assertArtifactBinding(view: ArtifactBindingView, expected: Expec
   const file = pin.files[0]!;
   const source = view.contentSource;
   if (
-    pin.artifactId !== parsed.artifactId
+    // The stored ciphertext of one file: bounded like content (100 MiB) plus the envelope's own framing.
+    file.bytes > 128 * 1024 * 1024
+    || pin.artifactId !== parsed.artifactId
     || pin.version !== parsed.version
     || file.path !== parsed.file
     || view.resource.kind !== "exact"

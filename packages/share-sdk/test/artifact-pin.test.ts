@@ -328,10 +328,13 @@ describe("artifact pin: shape bounds", () => {
     }
   });
 
-  it("bounds the pinned size", () => {
-    const pinWith = (bytes: number) => ({ v: 1, artifactId: "art_pin", version: 1, manifestSha256: "a".repeat(64), files: [{ path: "note.md", sha256: "b".repeat(64), bytes }] });
-    expect(artifactPinSchema.safeParse(pinWith(128 * 1024 * 1024)).success).toBe(true);
-    expect(artifactPinSchema.safeParse(pinWith(128 * 1024 * 1024 + 1)).success).toBe(false);
-    expect(artifactPinSchema.safeParse(pinWith(Number.MAX_SAFE_INTEGER)).success).toBe(false);
+  it("bounds the pinned size", async () => {
+    const { envelope } = await publishPinned();
+    const view = artifactBindingView(envelope);
+    const sized = (bytes: number) => ({ ...view, artifactPin: { ...view.artifactPin!, files: [{ ...view.artifactPin!.files[0]!, bytes }] } });
+    expect(() => assertArtifactBinding(sized(128 * 1024 * 1024))).not.toThrow();
+    expect(() => assertArtifactBinding(sized(128 * 1024 * 1024 + 1))).toThrow(ArtifactPinError);
+    expect(() => assertArtifactBinding(sized(Number.MAX_SAFE_INTEGER))).toThrow(ArtifactPinError);
   });
+
 });

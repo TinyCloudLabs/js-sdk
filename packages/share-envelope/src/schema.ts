@@ -515,8 +515,7 @@ export const artifactPinSchema = z.object({
   files: z.array(z.object({
     path: z.string().min(1).max(255),
     sha256: z.string().regex(/^[0-9a-f]{64}$/),
-    // The stored ciphertext of one file: bounded like content (100 MiB) plus the envelope's own framing.
-    bytes: z.number().int().nonnegative().max(128 * 1024 * 1024),
+    bytes: z.number().int().nonnegative(),
   }).strict()).length(1),
 }).strict();
 export type ArtifactPin = z.infer<typeof artifactPinSchema>;
