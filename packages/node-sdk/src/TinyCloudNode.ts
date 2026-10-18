@@ -5693,7 +5693,14 @@ export class TinyCloudNode {
     };
     const requestBodyDigest = base64UrlEncode(new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(canonicalizeEncryptionJson(body)))));
     const request = { ...body, requestBodyDigest };
-    const authorization = authorizationHeader(this.invokeAnyWithRuntimePermissions(serviceSession, [{ spaceId: session.spaceId, service: "kv", path: input.resourcePath, action: "tinycloud.kv/get" }]));
+    // The node records this invocation's signer as the admission's senderKeyDid,
+    // and the receipt below is bound to (and countersigned by) credentialHolderDid.
+    // Sign with the primary session key so both are the same key; a broader
+    // runtime grant held by a different key would make the receipt unusable.
+    // Accepted trade-off: if the primary recap lacks kv/get on the resource, the
+    // node now refuses this invocation, where a covering grant used to be tried.
+    // Same single-capability binding ordinary KV reads use; serviceSession.spaceId is session.spaceId.
+    const authorization = authorizationHeader(this.wasmBindings.invoke(serviceSession, "kv", input.resourcePath, "tinycloud.kv/get"));
     const response = await fetch(`${this.config.host!}/policy/v3/deliveries/authorize`, {
       method: "POST",
       headers: { accept: "application/json", "content-type": "application/json", authorization },
