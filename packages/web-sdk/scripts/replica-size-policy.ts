@@ -127,6 +127,11 @@ export type Tc1424Ratchet = LogoutRatchet;
  * grants. Only the root bundle grows, so the shape is the #571 root-only row.
  */
 export type Tc1448Ratchet = LogoutRatchet;
+/**
+ * One reviewed exact-delta admission of TC-1466 (js-sdk #595): the receiver-key clock race fix. Only the root
+ * bundle grows, so the shape is the #571 root-only row.
+ */
+export type Tc1466Ratchet = LogoutRatchet;
 export type Ledger = {
   allowance: GzipSizes;
   entries: LedgerEntry[];
@@ -141,6 +146,7 @@ export type Ledger = {
   tc1432Ratchet?: Tc1432Ratchet;
   tc1424Ratchet?: Tc1424Ratchet;
   tc1448Ratchet?: Tc1448Ratchet;
+  tc1466Ratchet?: Tc1466Ratchet;
 };
 
 const formats = ["index.mjs", "index.cjs"] as const;
@@ -463,6 +469,32 @@ export const approvedTc1448Ratchet: Tc1448Ratchet = {
   reason: "delegateTo, and so createDelegation and space.delegations.create, throw for disableSubDelegation: true with a did:pkh recipient, because the node refuses a wallet-mode useDelegation of a terminal parent. Shrink attempts first (same-toolchain local gzip, Bun 1.4.3, master 1d7b78fd): the first candidate added a separate 100-character error string, +74 / +55; reusing the existing TERMINAL_DELEGATION_REQUIRES_SESSION_KEY constant for the new refusal (its text now also names the did:key rule and keeps its old prefix) and one shared throw took it to +49 / +58 locally, +41 / +31 on canonical CI against the TC-1432 base. What remains is the did:pkh prefix check and the longer shared message. A lazy import would be inlined by the single-chunk root build, and the check has to run in the web root because TinyCloudWeb.createDelegation forwards to delegateTo. Re-measured after #583 (TC-1424) landed: canonical CI run 39159867318 (head b8d13379, the merge of master 1c89b697 into the PR branch; source unchanged since 18b6c9fa) measured identical absolute bytes in both jobs: root 1,468,625 / 1,397,910 B (+44 / +33 over the TC-1424 ceilings). Whichever PR lands after this one re-measures against the new base and updates its own row.",
 };
 
+/**
+ * TC-1466 (js-sdk #595): keeping a stored receiver key that a peer tab wrote after this tab read its clock is
+ * admitted at exactly the bytes GitHub measured, root only, after shrink attempts, with no headroom. The row
+ * sits on top of the TC-1448 root ceilings. Naomi approved the delta as +12 / +6 gzip bytes, +/- 10 B.
+ */
+export const approvedTc1466Ratchet: Tc1466Ratchet = {
+  label: "TC-1466 #595 receiver key kept across a clock race between tabs, exact canonical delta",
+  ruling: "Naomi size ruling: a real shrink attempt first, remainder by the PR's own exact-delta row at canonical CI bytes (approved as +12 / +6 gzip, +/- 10 B); rows chain after the latest on master",
+  base: "70304c3de12a8a3db323cf1271fc58698a9096b3",
+  sourceCommits: [
+    "d9a412e900435c4b3294c27da7f3f6af8185e3e9",
+  ],
+  canonicalCI: {
+    run: "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39168229435",
+    jobs: [
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39168229435/job/117795602437",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39168229435/job/117795602533",
+    ],
+  },
+  root: {
+    delta: { "index.mjs": 12, "index.cjs": 6 },
+    ceiling: { "index.mjs": 1468637, "index.cjs": 1397916 },
+  },
+  reason: "restorePersisted refused a stored receiver key whose createdAt was later than the caller's now, which was read when the tab started. A peer tab that started a moment later stores a record stamped with its own later clock, so this tab judged it future-dated, deleted it and generated a second key (flaky 'tabs opening at once share one stored key', master run 39162127319). Both restores now read the clock when they run. The fix cannot be free: it adds one clock read at each restore. Shrink attempts first (same-toolchain local gzip, Bun 1.4.3, master 1d7b78fd, base +0 / +0): reading the clock inside restorePersisted and compacting its comparison +15 / +13; additionally deduplicating the lifetime fields shared by the memory and persisted sessions +13 / +12 (gzip already shares them); a 2 s tolerance on the future-dated comparison using the existing storage timeout constant +8 / +5, rejected because it loosens the guard against future-dated records for 3 bytes; the chosen two inline fresh clock reads +11 / +5 locally and +12 / +6 on canonical CI, identical in both jobs of run 39168229435 on d9a412e9 merged into master 70304c3d.",
+};
+
 /** The reviewed #553 S3 entry's source commit, as master's checker pinned it. */
 export const preexistingS3EntryCommit = "0241ba9b";
 
@@ -515,6 +547,7 @@ export function ancestryPins(root: Ledger, hasGatedOnly: boolean): Array<{ row: 
   if (root.tc1432Ratchet !== undefined) pins.push({ row: "tc1432Ratchet", pin: root.tc1432Ratchet.sourceCommits.at(-1)! });
   if (root.tc1424Ratchet !== undefined) pins.push({ row: "tc1424Ratchet", pin: root.tc1424Ratchet.sourceCommits.at(-1)! });
   if (root.tc1448Ratchet !== undefined) pins.push({ row: "tc1448Ratchet", pin: root.tc1448Ratchet.sourceCommits.at(-1)! });
+  if (root.tc1466Ratchet !== undefined) pins.push({ row: "tc1466Ratchet", pin: root.tc1466Ratchet.sourceCommits.at(-1)! });
   if (hasGatedOnly) pins.push({ row: "gatedOnlyRatchet", pin: approvedGatedOnlyRatchet.sourceCommit });
   return pins;
 }
@@ -551,7 +584,7 @@ const historicalToolchain = "Bun 1.4.3; production webpack; gzip -9 -c";
 /** Only a git merge-base ledger may retain the pre-correction toolchain. */
 export function validateLedger(value: Ledger, historicalBase = false): void {
   if (!value || !value.allowance || !Array.isArray(value.entries) ||
-      Object.keys(value).some((key) => key !== "allowance" && key !== "entries" && key !== "phase2Ratchet" && key !== "fixRequiredRatchet" && key !== "canonicalToolchainCorrection" && key !== "masterMergeResolution" && key !== "hardeningRatchet" && key !== "logoutRatchet" && key !== "tc1413Ratchet" && key !== "tc1436Ratchet" && key !== "tc1432Ratchet" && key !== "tc1424Ratchet" && key !== "tc1448Ratchet")) {
+      Object.keys(value).some((key) => key !== "allowance" && key !== "entries" && key !== "phase2Ratchet" && key !== "fixRequiredRatchet" && key !== "canonicalToolchainCorrection" && key !== "masterMergeResolution" && key !== "hardeningRatchet" && key !== "logoutRatchet" && key !== "tc1413Ratchet" && key !== "tc1436Ratchet" && key !== "tc1432Ratchet" && key !== "tc1424Ratchet" && key !== "tc1448Ratchet" && key !== "tc1466Ratchet")) {
     throw new Error("Invalid packages/web-sdk/scripts/replica-size-ledger.json shape");
   }
   if (Object.keys(value.allowance).some((key) => !formats.includes(key as typeof formats[number]))) {
@@ -635,6 +668,10 @@ export function validateLedger(value: Ledger, historicalBase = false): void {
       (!value.tc1424Ratchet || JSON.stringify(value.tc1448Ratchet) !== JSON.stringify(approvedTc1448Ratchet))) {
     throw new Error("Only Naomi's exact canonical TC-1448 terminal-grant recipient guard ratchet is approved.");
   }
+  if (value.tc1466Ratchet !== undefined &&
+      (!value.tc1448Ratchet || JSON.stringify(value.tc1466Ratchet) !== JSON.stringify(approvedTc1466Ratchet))) {
+    throw new Error("Only Naomi's exact canonical TC-1466 receiver-key clock race ratchet is approved.");
+  }
 }
 
 /** The resolved input blobs are introduced once and immutable in subsequent bases. */
@@ -700,6 +737,14 @@ export function validateTc1448RatchetTransition(base?: Tc1448Ratchet, current?: 
   if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc1448Ratchet) ||
       base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
     throw new Error("The exact TC-1448 ratchet may be introduced once and cannot change later.");
+  }
+}
+
+/** The TC-1466 ratchet is introduced once at its exact canonical bytes and immutable afterwards. */
+export function validateTc1466RatchetTransition(base?: Tc1466Ratchet, current?: Tc1466Ratchet): void {
+  if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc1466Ratchet) ||
+      base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
+    throw new Error("The exact TC-1466 ratchet may be introduced once and cannot change later.");
   }
 }
 

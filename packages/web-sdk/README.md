@@ -167,6 +167,15 @@ measured on `b8d13379` (master merged into the PR branch, source unchanged since
 The ledger's `tc1448Ratchet` row records them and cannot change later; whichever PR lands
 after it re-measures against the new base and updates its own row.
 
+TC-1466 (a share receiver opened in several tabs at once could end up with different
+signing keys, #595) landed after #591, so it sits on top of TC-1448's root ceilings. It
+raised only the root ceilings once, after shrink attempts recorded in the row's `reason`,
+by the exact bytes GitHub run 39168229435 measured on `d9a412e9` merged into master
+`70304c3d`, identical in both jobs: 1,468,637 / 1,397,916 B (+12 / +6 over TC-1448's,
+inside the approved +12 / +6 ± 10 B). The ledger's `tc1466Ratchet` row records them and
+cannot change later; whichever PR lands after it re-measures against the new base and
+updates its own row.
+
 **Ancestry pins and squash merges.** A policy row records the PR-branch commit it
 was reviewed at, and its introduction check requires that literal commit in the
 PR head. js-sdk squash-merges, so that commit is unreachable from master
