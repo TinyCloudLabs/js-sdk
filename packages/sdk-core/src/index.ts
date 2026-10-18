@@ -1030,6 +1030,24 @@ export {
   type VerifyOwnerNodeBindingOptions,
 } from "./location";
 
+// Three-state registry verdict (TC-1443/TC-1444). Not used by host resolution yet.
+export {
+  REGISTRY_LOOKUP_MAX_BODY_BYTES,
+  REGISTRY_NOT_FOUND_ERROR,
+  classifyRegistryLookup,
+  type ClassifyRegistryLookupOptions,
+  type RegisteredRegistryVerdict,
+  type RegistryHost,
+  type RegistryHostSource,
+  type RegistryLookupResponse,
+  type RegistryUnavailableReason,
+  type RegistryVerdict,
+  type RegistryVerdictSource,
+  type RegistryVerdictStatus,
+  type UnavailableRegistryVerdict,
+  type UnregisteredRegistryVerdict,
+} from "./registry-verdict";
+
 // Capability subset checking and recap parsing
 export {
   // Errors

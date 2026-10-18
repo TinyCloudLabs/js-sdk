@@ -1,0 +1,1038 @@
+{
+  "format": "tinycloud/registry-verdict-vectors",
+  "version": 1,
+  "description": "Classification of one off-chain location registry v1 lookup (GET /v1/locations/:subject) into the three-state registry verdict (TC-1443, TC-1444). Every implementation must produce `expected` for each vector. Records are signed with fixed test keys (NOT for production); regenerate with generate.ts.",
+  "rules": [
+    "response.kind is http, network-error or timeout. For http, the body is `body` followed by `trailingSpaces` (default 0) ASCII spaces.",
+    "Checks in order, first failure wins: network-error, timeout; status not 200 or 404 -> http-status; body over 65536 UTF-8 bytes -> oversize-response.",
+    "404: the body must parse as a JSON object whose only key is `error` with value \"location record not found\", else malformed-response. Then, if rememberedSequence is not null -> not-found-after-registered, else unregistered.",
+    "200: the body must parse as a JSON object with a `record` that is a valid v1 location record, else malformed-response. record.subject must equal subject exactly -> subject-mismatch. The signature must verify (any signature decoding error counts) -> invalid-signature. record.sequence below rememberedSequence -> rollback; equal is accepted.",
+    "registered.hosts: one host per record multiaddr that maps to an http(s) URL, in record order, as {urls:[url], source:\"offchain\"}; other multiaddrs are omitted. A record with no multiaddrs is registered with hosts [].",
+    "Every verdict has source \"offchain\". unregistered and unavailable have hosts []."
+  ],
+  "subjects": {
+    "owner": "did:pkh:eip155:1:0xFCAd0B19bB29D4674531d6f115237E16AfCE377c",
+    "other": "did:pkh:eip155:1:0x1563915e194D8CfBA1943570603F7606A3115508",
+    "didKey": "did:key:z6MkwVDfCg9LbbY6xjH3EZk8YSFQZujV5Y4y1ZWeER9tDiN3"
+  },
+  "vectors": [
+    {
+      "name": "registered-pkh-two-hosts",
+      "subject": "did:pkh:eip155:1:0xFCAd0B19bB29D4674531d6f115237E16AfCE377c",
+      "rememberedSequence": null,
+      "response": {
+        "kind": "http",
+        "status": 200,
+        "body": "{\"record\":{\"version\":1,\"subject\":\"did:pkh:eip155:1:0xFCAd0B19bB29D4674531d6f115237E16AfCE377c\",\"updated_at\":\"2026-10-18T00:00:00.000Z\",\"multiaddrs\":[\"/dns/owner-node.example/tcp/443/tls/http\",\"/dns/backup-node.example/tcp/8443/tls/http\"],\"sequence\":5,\"signature\":\"0x1ecafb6043c5f463c3a098cabaaf6e095d6e28506aabefac31df9eac49a29e924934600b4da062caf01492adda93743afdcf5aa4837aeee2f47197704f09f51c1c\"}}"
+      },
+      "expected": {
+        "status": "registered",
+        "source": "offchain",
+        "sequence": 5,
+        "hosts": [
+          {
+            "urls": [
+              "https://owner-node.example"
+            ],
+            "source": "offchain"
+          },
+          {
+            "urls": [
+              "https://backup-node.example:8443"
+            ],
+            "source": "offchain"
+          }
+        ]
+      }
+    },
+    {
+      "name": "registered-did-key-loopback",
+      "subject": "did:key:z6MkwVDfCg9LbbY6xjH3EZk8YSFQZujV5Y4y1ZWeER9tDiN3",
+      "rememberedSequence": null,
+      "response": {
+        "kind": "http",
+        "status": 200,
+        "body": "{\"record\":{\"version\":1,\"subject\":\"did:key:z6MkwVDfCg9LbbY6xjH3EZk8YSFQZujV5Y4y1ZWeER9tDiN3\",\"multiaddrs\":[\"/ip4/127.0.0.1/tcp/8081/http\"],\"updated_at\":\"2026-10-18T00:00:00.000Z\",\"sequence\":3,\"signature\":\"429nEfvdSPXnQ7yVjNhK9MqaNA4SF02-MrIKMIq4ecdtuIxYKLCFU7c20IUEduBv7-oxHWCWy6XvppifM8yECA\"}}"
+      },
+      "expected": {
+        "status": "registered",
+        "source": "offchain",
+        "sequence": 3,
+        "hosts": [
+          {
+            "urls": [
+              "http://127.0.0.1:8081"
+            ],
+            "source": "offchain"
+          }
+        ]
+      }
+    },
+    {
+      "name": "registered-empty-hosts-tombstone",
+      "subject": "did:pkh:eip155:1:0xFCAd0B19bB29D4674531d6f115237E16AfCE377c",
+      "rememberedSequence": null,
+      "response": {
+        "kind": "http",
+        "status": 200,
+        "body": "{\"record\":{\"version\":1,\"subject\":\"did:pkh:eip155:1:0xFCAd0B19bB29D4674531d6f115237E16AfCE377c\",\"updated_at\":\"2026-10-18T00:00:00.000Z\",\"multiaddrs\":[],\"sequence\":6,\"signature\":\"0xc759ba647aee1380bacea3ca70e957e2b4e739a57aebcedde03679671a413c16024a08dc3c5eaab0d11c06c8870cbb181bf795aee8d071d9af98cfb826d0096c1c\"}}"
+      },
+      "expected": {
+        "status": "registered",
+        "source": "offchain",
+        "sequence": 6,
+        "hosts": []
+      }
+    },
+    {
+      "name": "registered-non-http-multiaddr-omitted",
+      "subject": "did:pkh:eip155:1:0xFCAd0B19bB29D4674531d6f115237E16AfCE377c",
+      "rememberedSequence": null,
+      "response": {
+        "kind": "http",
+        "status": 200,
+        "body": "{\"record\":{\"version\":1,\"subject\":\"did:pkh:eip155:1:0xFCAd0B19bB29D4674531d6f115237E16AfCE377c\",\"updated_at\":\"2026-10-18T00:00:00.000Z\",\"multiaddrs\":[\"/ip4/192.0.2.1/udp/4001/quic-v1\",\"/dns4/owner-node.example/tcp/443/https\"],\"sequence\":7,\"signature\":\"0x23f10be875da25bc41ffab733d142d17f72fbe577031adb7c1e4b9c177a59a5470e8bd2748e7a34534c33cb4b5701c725bc77baf4ead6fbe75ae358932c99d561b\"}}"
+      },
+      "expected": {
+        "status": "registered",
+        "source": "offchain",
+        "sequence": 7,
+        "hosts": [
+          {
+            "urls": [
+              "https://owner-node.example"
+            ],
+            "source": "offchain"
+          }
+        ]
+      }
+    },
+    {
+      "name": "registered-sequence-equal-to-remembered",
+      "subject": "did:pkh:eip155:1:0xFCAd0B19bB29D4674531d6f115237E16AfCE377c",
+      "rememberedSequence": 5,
+      "response": {
+        "kind": "http",
+        "status": 200,
+        "body": "{\"record\":{\"version\":1,\"subject\":\"did:pkh:eip155:1:0xFCAd0B19bB29D4674531d6f115237E16AfCE377c\",\"updated_at\":\"2026-10-18T00:00:00.000Z\",\"multiaddrs\":[\"/dns/owner-node.example/tcp/443/tls/http\",\"/dns/backup-node.example/tcp/8443/tls/http\"],\"sequence\":5,\"signature\":\"0x1ecafb6043c5f463c3a098cabaaf6e095d6e28506aabefac31df9eac49a29e924934600b4da062caf01492adda93743afdcf5aa4837aeee2f47197704f09f51c1c\"}}"
+      },
+      "expected": {
+        "status": "registered",
+        "source": "offchain",
+        "sequence": 5,
+        "hosts": [
+          {
+            "urls": [
+              "https://owner-node.example"
+            ],
+            "source": "offchain"
+          },
+          {
+            "urls": [
+              "https://backup-node.example:8443"
+            ],
+            "source": "offchain"
+          }
+        ]
+      }
+    },
+    {
+      "name": "registered-sequence-above-remembered",
+      "subject": "did:pkh:eip155:1:0xFCAd0B19bB29D4674531d6f115237E16AfCE377c",
+      "rememberedSequence": 4,
+      "response": {
+        "kind": "http",
+        "status": 200,
+        "body": "{\"record\":{\"version\":1,\"subject\":\"did:pkh:eip155:1:0xFCAd0B19bB29D4674531d6f115237E16AfCE377c\",\"updated_at\":\"2026-10-18T00:00:00.000Z\",\"multiaddrs\":[\"/dns/owner-node.example/tcp/443/tls/http\",\"/dns/backup-node.example/tcp/8443/tls/http\"],\"sequence\":5,\"signature\":\"0x1ecafb6043c5f463c3a098cabaaf6e095d6e28506aabefac31df9eac49a29e924934600b4da062caf01492adda93743afdcf5aa4837aeee2f47197704f09f51c1c\"}}"
+      },
+      "expected": {
+        "status": "registered",
+        "source": "offchain",
+        "sequence": 5,
+        "hosts": [
+          {
+            "urls": [
+              "https://owner-node.example"
+            ],
+            "source": "offchain"
+          },
+          {
+            "urls": [
+              "https://backup-node.example:8443"
+            ],
+            "source": "offchain"
+          }
+        ]
+      }
+    },
+    {
+      "name": "registered-extra-top-level-keys-ignored",
+      "subject": "did:pkh:eip155:1:0xFCAd0B19bB29D4674531d6f115237E16AfCE377c",
+      "rememberedSequence": null,
+      "response": {
+        "kind": "http",
+        "status": 200,
+        "body": "{\"record\":{\"version\":1,\"subject\":\"did:pkh:eip155:1:0xFCAd0B19bB29D4674531d6f115237E16AfCE377c\",\"updated_at\":\"2026-10-18T00:00:00.000Z\",\"multiaddrs\":[\"/dns/owner-node.example/tcp/443/tls/http\",\"/dns/backup-node.example/tcp/8443/tls/http\"],\"sequence\":5,\"signature\":\"0x1ecafb6043c5f463c3a098cabaaf6e095d6e28506aabefac31df9eac49a29e924934600b4da062caf01492adda93743afdcf5aa4837aeee2f47197704f09f51c1c\"},\"status\":\"updated\"}"
+      },
+      "expected": {
+        "status": "registered",
+        "source": "offchain",
+        "sequence": 5,
+        "hosts": [
+          {
+            "urls": [
+              "https://owner-node.example"
+            ],
+            "source": "offchain"
+          },
+          {
+            "urls": [
+              "https://backup-node.example:8443"
+            ],
+            "source": "offchain"
+          }
+        ]
+      }
+    },
+    {
+      "name": "registered-body-at-size-limit",
+      "subject": "did:pkh:eip155:1:0xFCAd0B19bB29D4674531d6f115237E16AfCE377c",
+      "rememberedSequence": null,
+      "response": {
+        "kind": "http",
+        "status": 200,
+        "body": "{\"record\":{\"version\":1,\"subject\":\"did:pkh:eip155:1:0xFCAd0B19bB29D4674531d6f115237E16AfCE377c\",\"updated_at\":\"2026-10-18T00:00:00.000Z\",\"multiaddrs\":[\"/dns/owner-node.example/tcp/443/tls/http\",\"/dns/backup-node.example/tcp/8443/tls/http\"],\"sequence\":5,\"signature\":\"0x1ecafb6043c5f463c3a098cabaaf6e095d6e28506aabefac31df9eac49a29e924934600b4da062caf01492adda93743afdcf5aa4837aeee2f47197704f09f51c1c\"}}",
+        "trailingSpaces": 65137
+      },
+      "expected": {
+        "status": "registered",
+        "source": "offchain",
+        "sequence": 5,
+        "hosts": [
+          {
+            "urls": [
+              "https://owner-node.example"
+            ],
+            "source": "offchain"
+          },
+          {
+            "urls": [
+              "https://backup-node.example:8443"
+            ],
+            "source": "offchain"
+          }
+        ]
+      }
+    },
+    {
+      "name": "unregistered-registry-not-found",
+      "subject": "did:pkh:eip155:1:0xFCAd0B19bB29D4674531d6f115237E16AfCE377c",
+      "rememberedSequence": null,
+      "response": {
+        "kind": "http",
+        "status": 404,
+        "body": "{\"error\":\"location record not found\"}"
+      },
+      "expected": {
+        "status": "unregistered",
+        "source": "offchain",
+        "hosts": []
+      }
+    },
+    {
+      "name": "unregistered-registry-not-found-whitespace",
+      "subject": "did:pkh:eip155:1:0xFCAd0B19bB29D4674531d6f115237E16AfCE377c",
+      "rememberedSequence": null,
+      "response": {
+        "kind": "http",
+        "status": 404,
+        "body": "{ \"error\" : \"location record not found\" }\n"
+      },
+      "expected": {
+        "status": "unregistered",
+        "source": "offchain",
+        "hosts": []
+      }
+    },
+    {
+      "name": "unavailable-not-found-after-registered",
+      "subject": "did:pkh:eip155:1:0xFCAd0B19bB29D4674531d6f115237E16AfCE377c",
+      "rememberedSequence": 0,
+      "response": {
+        "kind": "http",
+        "status": 404,
+        "body": "{\"error\":\"location record not found\"}"
+      },
+      "expected": {
+        "status": "unavailable",
+        "source": "offchain",
+        "reason": "not-found-after-registered",
+        "hosts": []
+      }
+    },
+    {
+      "name": "unavailable-not-found-html",
+      "subject": "did:pkh:eip155:1:0xFCAd0B19bB29D4674531d6f115237E16AfCE377c",
+      "rememberedSequence": null,
+      "response": {
+        "kind": "http",
+        "status": 404,
+        "body": "<html><body>404 Not Found</body></html>"
+      },
+      "expected": {
+        "status": "unavailable",
+        "source": "offchain",
+        "reason": "malformed-response",
+        "hosts": []
+      }
+    },
+    {
+      "name": "unavailable-not-found-plain-text",
+      "subject": "did:pkh:eip155:1:0xFCAd0B19bB29D4674531d6f115237E16AfCE377c",
+      "rememberedSequence": null,
+      "response": {
+        "kind": "http",
+        "status": 404,
+        "body": "404 Not Found"
+      },
+      "expected": {
+        "status": "unavailable",
+        "source": "offchain",
+        "reason": "malformed-response",
+        "hosts": []
+      }
+    },
+    {
+      "name": "unavailable-not-found-empty-body",
+      "subject": "did:pkh:eip155:1:0xFCAd0B19bB29D4674531d6f115237E16AfCE377c",
+      "rememberedSequence": null,
+      "response": {
+        "kind": "http",
+        "status": 404,
+        "body": ""
+      },
+      "expected": {
+        "status": "unavailable",
+        "source": "offchain",
+        "reason": "malformed-response",
+        "hosts": []
+      }
+    },
+    {
+      "name": "unavailable-not-found-other-error",
+      "subject": "did:pkh:eip155:1:0xFCAd0B19bB29D4674531d6f115237E16AfCE377c",
+      "rememberedSequence": null,
+      "response": {
+        "kind": "http",
+        "status": 404,
+        "body": "{\"error\":\"not found\"}"
+      },
+      "expected": {
+        "status": "unavailable",
+        "source": "offchain",
+        "reason": "malformed-response",
+        "hosts": []
+      }
+    },
+    {
+      "name": "unavailable-not-found-extra-key",
+      "subject": "did:pkh:eip155:1:0xFCAd0B19bB29D4674531d6f115237E16AfCE377c",
+      "rememberedSequence": null,
+      "response": {
+        "kind": "http",
+        "status": 404,
+        "body": "{\"error\":\"location record not found\",\"record\":null}"
+      },
+      "expected": {
+        "status": "unavailable",
+        "source": "offchain",
+        "reason": "malformed-response",
+        "hosts": []
+      }
+    },
+    {
+      "name": "unavailable-not-found-array",
+      "subject": "did:pkh:eip155:1:0xFCAd0B19bB29D4674531d6f115237E16AfCE377c",
+      "rememberedSequence": null,
+      "response": {
+        "kind": "http",
+        "status": 404,
+        "body": "[\"location record not found\"]"
+      },
+      "expected": {
+        "status": "unavailable",
+        "source": "offchain",
+        "reason": "malformed-response",
+        "hosts": []
+      }
+    },
+    {
+      "name": "unavailable-not-found-oversize",
+      "subject": "did:pkh:eip155:1:0xFCAd0B19bB29D4674531d6f115237E16AfCE377c",
+      "rememberedSequence": null,
+      "response": {
+        "kind": "http",
+        "status": 404,
+        "body": "{\"error\":\"location record not found\"}",
+        "trailingSpaces": 65500
+      },
+      "expected": {
+        "status": "unavailable",
+        "source": "offchain",
+        "reason": "oversize-response",
+        "hosts": []
+      }
+    },
+    {
+      "name": "unavailable-network-error",
+      "subject": "did:pkh:eip155:1:0xFCAd0B19bB29D4674531d6f115237E16AfCE377c",
+      "rememberedSequence": null,
+      "response": {
+        "kind": "network-error"
+      },
+      "expected": {
+        "status": "unavailable",
+        "source": "offchain",
+        "reason": "network-error",
+        "hosts": []
+      }
+    },
+    {
+      "name": "unavailable-timeout",
+      "subject": "did:pkh:eip155:1:0xFCAd0B19bB29D4674531d6f115237E16AfCE377c",
+      "rememberedSequence": null,
+      "response": {
+        "kind": "timeout"
+      },
+      "expected": {
+        "status": "unavailable",
+        "source": "offchain",
+        "reason": "timeout",
+        "hosts": []
+      }
+    },
+    {
+      "name": "unavailable-timeout-with-remembered",
+      "subject": "did:pkh:eip155:1:0xFCAd0B19bB29D4674531d6f115237E16AfCE377c",
+      "rememberedSequence": 5,
+      "response": {
+        "kind": "timeout"
+      },
+      "expected": {
+        "status": "unavailable",
+        "source": "offchain",
+        "reason": "timeout",
+        "hosts": []
+      }
+    },
+    {
+      "name": "unavailable-http-500",
+      "subject": "did:pkh:eip155:1:0xFCAd0B19bB29D4674531d6f115237E16AfCE377c",
+      "rememberedSequence": null,
+      "response": {
+        "kind": "http",
+        "status": 500,
+        "body": "{\"error\":\"internal\"}"
+      },
+      "expected": {
+        "status": "unavailable",
+        "source": "offchain",
+        "reason": "http-status",
+        "hosts": []
+      }
+    },
+    {
+      "name": "unavailable-http-502",
+      "subject": "did:pkh:eip155:1:0xFCAd0B19bB29D4674531d6f115237E16AfCE377c",
+      "rememberedSequence": null,
+      "response": {
+        "kind": "http",
+        "status": 502,
+        "body": "Bad Gateway"
+      },
+      "expected": {
+        "status": "unavailable",
+        "source": "offchain",
+        "reason": "http-status",
+        "hosts": []
+      }
+    },
+    {
+      "name": "unavailable-http-503",
+      "subject": "did:pkh:eip155:1:0xFCAd0B19bB29D4674531d6f115237E16AfCE377c",
+      "rememberedSequence": null,
+      "response": {
+        "kind": "http",
+        "status": 503,
+        "body": ""
+      },
+      "expected": {
+        "status": "unavailable",
+        "source": "offchain",
+        "reason": "http-status",
+        "hosts": []
+      }
+    },
+    {
+      "name": "unavailable-http-429",
+      "subject": "did:pkh:eip155:1:0xFCAd0B19bB29D4674531d6f115237E16AfCE377c",
+      "rememberedSequence": null,
+      "response": {
+        "kind": "http",
+        "status": 429,
+        "body": ""
+      },
+      "expected": {
+        "status": "unavailable",
+        "source": "offchain",
+        "reason": "http-status",
+        "hosts": []
+      }
+    },
+    {
+      "name": "unavailable-http-403",
+      "subject": "did:pkh:eip155:1:0xFCAd0B19bB29D4674531d6f115237E16AfCE377c",
+      "rememberedSequence": null,
+      "response": {
+        "kind": "http",
+        "status": 403,
+        "body": "{\"error\":\"location record not found\"}"
+      },
+      "expected": {
+        "status": "unavailable",
+        "source": "offchain",
+        "reason": "http-status",
+        "hosts": []
+      }
+    },
+    {
+      "name": "unavailable-http-410",
+      "subject": "did:pkh:eip155:1:0xFCAd0B19bB29D4674531d6f115237E16AfCE377c",
+      "rememberedSequence": null,
+      "response": {
+        "kind": "http",
+        "status": 410,
+        "body": "{\"error\":\"location record not found\"}"
+      },
+      "expected": {
+        "status": "unavailable",
+        "source": "offchain",
+        "reason": "http-status",
+        "hosts": []
+      }
+    },
+    {
+      "name": "unavailable-http-302",
+      "subject": "did:pkh:eip155:1:0xFCAd0B19bB29D4674531d6f115237E16AfCE377c",
+      "rememberedSequence": null,
+      "response": {
+        "kind": "http",
+        "status": 302,
+        "body": ""
+      },
+      "expected": {
+        "status": "unavailable",
+        "source": "offchain",
+        "reason": "http-status",
+        "hosts": []
+      }
+    },
+    {
+      "name": "unavailable-http-204",
+      "subject": "did:pkh:eip155:1:0xFCAd0B19bB29D4674531d6f115237E16AfCE377c",
+      "rememberedSequence": null,
+      "response": {
+        "kind": "http",
+        "status": 204,
+        "body": ""
+      },
+      "expected": {
+        "status": "unavailable",
+        "source": "offchain",
+        "reason": "http-status",
+        "hosts": []
+      }
+    },
+    {
+      "name": "unavailable-http-201-with-record",
+      "subject": "did:pkh:eip155:1:0xFCAd0B19bB29D4674531d6f115237E16AfCE377c",
+      "rememberedSequence": null,
+      "response": {
+        "kind": "http",
+        "status": 201,
+        "body": "{\"record\":{\"version\":1,\"subject\":\"did:pkh:eip155:1:0xFCAd0B19bB29D4674531d6f115237E16AfCE377c\",\"updated_at\":\"2026-10-18T00:00:00.000Z\",\"multiaddrs\":[\"/dns/owner-node.example/tcp/443/tls/http\",\"/dns/backup-node.example/tcp/8443/tls/http\"],\"sequence\":5,\"signature\":\"0x1ecafb6043c5f463c3a098cabaaf6e095d6e28506aabefac31df9eac49a29e924934600b4da062caf01492adda93743afdcf5aa4837aeee2f47197704f09f51c1c\"}}"
+      },
+      "expected": {
+        "status": "unavailable",
+        "source": "offchain",
+        "reason": "http-status",
+        "hosts": []
+      }
+    },
+    {
+      "name": "unavailable-ok-not-json",
+      "subject": "did:pkh:eip155:1:0xFCAd0B19bB29D4674531d6f115237E16AfCE377c",
+      "rememberedSequence": null,
+      "response": {
+        "kind": "http",
+        "status": 200,
+        "body": "<html></html>"
+      },
+      "expected": {
+        "status": "unavailable",
+        "source": "offchain",
+        "reason": "malformed-response",
+        "hosts": []
+      }
+    },
+    {
+      "name": "unavailable-ok-empty-body",
+      "subject": "did:pkh:eip155:1:0xFCAd0B19bB29D4674531d6f115237E16AfCE377c",
+      "rememberedSequence": null,
+      "response": {
+        "kind": "http",
+        "status": 200,
+        "body": ""
+      },
+      "expected": {
+        "status": "unavailable",
+        "source": "offchain",
+        "reason": "malformed-response",
+        "hosts": []
+      }
+    },
+    {
+      "name": "unavailable-ok-json-null",
+      "subject": "did:pkh:eip155:1:0xFCAd0B19bB29D4674531d6f115237E16AfCE377c",
+      "rememberedSequence": null,
+      "response": {
+        "kind": "http",
+        "status": 200,
+        "body": "null"
+      },
+      "expected": {
+        "status": "unavailable",
+        "source": "offchain",
+        "reason": "malformed-response",
+        "hosts": []
+      }
+    },
+    {
+      "name": "unavailable-ok-json-array",
+      "subject": "did:pkh:eip155:1:0xFCAd0B19bB29D4674531d6f115237E16AfCE377c",
+      "rememberedSequence": null,
+      "response": {
+        "kind": "http",
+        "status": 200,
+        "body": "[{\"version\":1,\"subject\":\"did:pkh:eip155:1:0xFCAd0B19bB29D4674531d6f115237E16AfCE377c\",\"updated_at\":\"2026-10-18T00:00:00.000Z\",\"multiaddrs\":[\"/dns/owner-node.example/tcp/443/tls/http\",\"/dns/backup-node.example/tcp/8443/tls/http\"],\"sequence\":5,\"signature\":\"0x1ecafb6043c5f463c3a098cabaaf6e095d6e28506aabefac31df9eac49a29e924934600b4da062caf01492adda93743afdcf5aa4837aeee2f47197704f09f51c1c\"}]"
+      },
+      "expected": {
+        "status": "unavailable",
+        "source": "offchain",
+        "reason": "malformed-response",
+        "hosts": []
+      }
+    },
+    {
+      "name": "unavailable-ok-missing-record",
+      "subject": "did:pkh:eip155:1:0xFCAd0B19bB29D4674531d6f115237E16AfCE377c",
+      "rememberedSequence": null,
+      "response": {
+        "kind": "http",
+        "status": 200,
+        "body": "{\"ok\":true}"
+      },
+      "expected": {
+        "status": "unavailable",
+        "source": "offchain",
+        "reason": "malformed-response",
+        "hosts": []
+      }
+    },
+    {
+      "name": "unavailable-ok-record-null",
+      "subject": "did:pkh:eip155:1:0xFCAd0B19bB29D4674531d6f115237E16AfCE377c",
+      "rememberedSequence": null,
+      "response": {
+        "kind": "http",
+        "status": 200,
+        "body": "{\"record\":null}"
+      },
+      "expected": {
+        "status": "unavailable",
+        "source": "offchain",
+        "reason": "malformed-response",
+        "hosts": []
+      }
+    },
+    {
+      "name": "unavailable-ok-bare-record",
+      "subject": "did:pkh:eip155:1:0xFCAd0B19bB29D4674531d6f115237E16AfCE377c",
+      "rememberedSequence": null,
+      "response": {
+        "kind": "http",
+        "status": 200,
+        "body": "{\"version\":1,\"subject\":\"did:pkh:eip155:1:0xFCAd0B19bB29D4674531d6f115237E16AfCE377c\",\"updated_at\":\"2026-10-18T00:00:00.000Z\",\"multiaddrs\":[\"/dns/owner-node.example/tcp/443/tls/http\",\"/dns/backup-node.example/tcp/8443/tls/http\"],\"sequence\":5,\"signature\":\"0x1ecafb6043c5f463c3a098cabaaf6e095d6e28506aabefac31df9eac49a29e924934600b4da062caf01492adda93743afdcf5aa4837aeee2f47197704f09f51c1c\"}"
+      },
+      "expected": {
+        "status": "unavailable",
+        "source": "offchain",
+        "reason": "malformed-response",
+        "hosts": []
+      }
+    },
+    {
+      "name": "unavailable-ok-version-2",
+      "subject": "did:pkh:eip155:1:0xFCAd0B19bB29D4674531d6f115237E16AfCE377c",
+      "rememberedSequence": null,
+      "response": {
+        "kind": "http",
+        "status": 200,
+        "body": "{\"record\":{\"version\":2,\"subject\":\"did:pkh:eip155:1:0xFCAd0B19bB29D4674531d6f115237E16AfCE377c\",\"updated_at\":\"2026-10-18T00:00:00.000Z\",\"multiaddrs\":[\"/dns/owner-node.example/tcp/443/tls/http\",\"/dns/backup-node.example/tcp/8443/tls/http\"],\"sequence\":5,\"signature\":\"0x1ecafb6043c5f463c3a098cabaaf6e095d6e28506aabefac31df9eac49a29e924934600b4da062caf01492adda93743afdcf5aa4837aeee2f47197704f09f51c1c\"}}"
+      },
+      "expected": {
+        "status": "unavailable",
+        "source": "offchain",
+        "reason": "malformed-response",
+        "hosts": []
+      }
+    },
+    {
+      "name": "unavailable-ok-negative-sequence",
+      "subject": "did:pkh:eip155:1:0xFCAd0B19bB29D4674531d6f115237E16AfCE377c",
+      "rememberedSequence": null,
+      "response": {
+        "kind": "http",
+        "status": 200,
+        "body": "{\"record\":{\"version\":1,\"subject\":\"did:pkh:eip155:1:0xFCAd0B19bB29D4674531d6f115237E16AfCE377c\",\"updated_at\":\"2026-10-18T00:00:00.000Z\",\"multiaddrs\":[\"/dns/owner-node.example/tcp/443/tls/http\",\"/dns/backup-node.example/tcp/8443/tls/http\"],\"sequence\":-1,\"signature\":\"0x1ecafb6043c5f463c3a098cabaaf6e095d6e28506aabefac31df9eac49a29e924934600b4da062caf01492adda93743afdcf5aa4837aeee2f47197704f09f51c1c\"}}"
+      },
+      "expected": {
+        "status": "unavailable",
+        "source": "offchain",
+        "reason": "malformed-response",
+        "hosts": []
+      }
+    },
+    {
+      "name": "unavailable-ok-fractional-sequence",
+      "subject": "did:pkh:eip155:1:0xFCAd0B19bB29D4674531d6f115237E16AfCE377c",
+      "rememberedSequence": null,
+      "response": {
+        "kind": "http",
+        "status": 200,
+        "body": "{\"record\":{\"version\":1,\"subject\":\"did:pkh:eip155:1:0xFCAd0B19bB29D4674531d6f115237E16AfCE377c\",\"updated_at\":\"2026-10-18T00:00:00.000Z\",\"multiaddrs\":[\"/dns/owner-node.example/tcp/443/tls/http\",\"/dns/backup-node.example/tcp/8443/tls/http\"],\"sequence\":5.5,\"signature\":\"0x1ecafb6043c5f463c3a098cabaaf6e095d6e28506aabefac31df9eac49a29e924934600b4da062caf01492adda93743afdcf5aa4837aeee2f47197704f09f51c1c\"}}"
+      },
+      "expected": {
+        "status": "unavailable",
+        "source": "offchain",
+        "reason": "malformed-response",
+        "hosts": []
+      }
+    },
+    {
+      "name": "unavailable-ok-missing-signature",
+      "subject": "did:pkh:eip155:1:0xFCAd0B19bB29D4674531d6f115237E16AfCE377c",
+      "rememberedSequence": null,
+      "response": {
+        "kind": "http",
+        "status": 200,
+        "body": "{\"record\":{\"version\":1,\"subject\":\"did:pkh:eip155:1:0xFCAd0B19bB29D4674531d6f115237E16AfCE377c\",\"updated_at\":\"2026-10-18T00:00:00.000Z\",\"multiaddrs\":[\"/dns/owner-node.example/tcp/443/tls/http\",\"/dns/backup-node.example/tcp/8443/tls/http\"],\"sequence\":5}}"
+      },
+      "expected": {
+        "status": "unavailable",
+        "source": "offchain",
+        "reason": "malformed-response",
+        "hosts": []
+      }
+    },
+    {
+      "name": "unavailable-ok-empty-signature",
+      "subject": "did:pkh:eip155:1:0xFCAd0B19bB29D4674531d6f115237E16AfCE377c",
+      "rememberedSequence": null,
+      "response": {
+        "kind": "http",
+        "status": 200,
+        "body": "{\"record\":{\"version\":1,\"subject\":\"did:pkh:eip155:1:0xFCAd0B19bB29D4674531d6f115237E16AfCE377c\",\"updated_at\":\"2026-10-18T00:00:00.000Z\",\"multiaddrs\":[\"/dns/owner-node.example/tcp/443/tls/http\",\"/dns/backup-node.example/tcp/8443/tls/http\"],\"sequence\":5,\"signature\":\"\"}}"
+      },
+      "expected": {
+        "status": "unavailable",
+        "source": "offchain",
+        "reason": "malformed-response",
+        "hosts": []
+      }
+    },
+    {
+      "name": "unavailable-ok-multiaddrs-not-array",
+      "subject": "did:pkh:eip155:1:0xFCAd0B19bB29D4674531d6f115237E16AfCE377c",
+      "rememberedSequence": null,
+      "response": {
+        "kind": "http",
+        "status": 200,
+        "body": "{\"record\":{\"version\":1,\"subject\":\"did:pkh:eip155:1:0xFCAd0B19bB29D4674531d6f115237E16AfCE377c\",\"updated_at\":\"2026-10-18T00:00:00.000Z\",\"multiaddrs\":\"https://owner-node.example\",\"sequence\":5,\"signature\":\"0x1ecafb6043c5f463c3a098cabaaf6e095d6e28506aabefac31df9eac49a29e924934600b4da062caf01492adda93743afdcf5aa4837aeee2f47197704f09f51c1c\"}}"
+      },
+      "expected": {
+        "status": "unavailable",
+        "source": "offchain",
+        "reason": "malformed-response",
+        "hosts": []
+      }
+    },
+    {
+      "name": "unavailable-ok-invalid-multiaddr",
+      "subject": "did:pkh:eip155:1:0xFCAd0B19bB29D4674531d6f115237E16AfCE377c",
+      "rememberedSequence": null,
+      "response": {
+        "kind": "http",
+        "status": 200,
+        "body": "{\"record\":{\"version\":1,\"subject\":\"did:pkh:eip155:1:0xFCAd0B19bB29D4674531d6f115237E16AfCE377c\",\"updated_at\":\"2026-10-18T00:00:00.000Z\",\"multiaddrs\":[\"not-a-multiaddr\"],\"sequence\":5,\"signature\":\"0x1ecafb6043c5f463c3a098cabaaf6e095d6e28506aabefac31df9eac49a29e924934600b4da062caf01492adda93743afdcf5aa4837aeee2f47197704f09f51c1c\"}}"
+      },
+      "expected": {
+        "status": "unavailable",
+        "source": "offchain",
+        "reason": "malformed-response",
+        "hosts": []
+      }
+    },
+    {
+      "name": "unavailable-ok-bad-updated-at",
+      "subject": "did:pkh:eip155:1:0xFCAd0B19bB29D4674531d6f115237E16AfCE377c",
+      "rememberedSequence": null,
+      "response": {
+        "kind": "http",
+        "status": 200,
+        "body": "{\"record\":{\"version\":1,\"subject\":\"did:pkh:eip155:1:0xFCAd0B19bB29D4674531d6f115237E16AfCE377c\",\"updated_at\":\"yesterday\",\"multiaddrs\":[\"/dns/owner-node.example/tcp/443/tls/http\",\"/dns/backup-node.example/tcp/8443/tls/http\"],\"sequence\":5,\"signature\":\"0x1ecafb6043c5f463c3a098cabaaf6e095d6e28506aabefac31df9eac49a29e924934600b4da062caf01492adda93743afdcf5aa4837aeee2f47197704f09f51c1c\"}}"
+      },
+      "expected": {
+        "status": "unavailable",
+        "source": "offchain",
+        "reason": "malformed-response",
+        "hosts": []
+      }
+    },
+    {
+      "name": "unavailable-ok-oversize",
+      "subject": "did:pkh:eip155:1:0xFCAd0B19bB29D4674531d6f115237E16AfCE377c",
+      "rememberedSequence": null,
+      "response": {
+        "kind": "http",
+        "status": 200,
+        "body": "{\"record\":{\"version\":1,\"subject\":\"did:pkh:eip155:1:0xFCAd0B19bB29D4674531d6f115237E16AfCE377c\",\"updated_at\":\"2026-10-18T00:00:00.000Z\",\"multiaddrs\":[\"/dns/owner-node.example/tcp/443/tls/http\",\"/dns/backup-node.example/tcp/8443/tls/http\"],\"sequence\":5,\"signature\":\"0x1ecafb6043c5f463c3a098cabaaf6e095d6e28506aabefac31df9eac49a29e924934600b4da062caf01492adda93743afdcf5aa4837aeee2f47197704f09f51c1c\"}}",
+        "trailingSpaces": 65138
+      },
+      "expected": {
+        "status": "unavailable",
+        "source": "offchain",
+        "reason": "oversize-response",
+        "hosts": []
+      }
+    },
+    {
+      "name": "unavailable-subject-mismatch-other-owner",
+      "subject": "did:pkh:eip155:1:0xFCAd0B19bB29D4674531d6f115237E16AfCE377c",
+      "rememberedSequence": null,
+      "response": {
+        "kind": "http",
+        "status": 200,
+        "body": "{\"record\":{\"version\":1,\"subject\":\"did:pkh:eip155:1:0x1563915e194D8CfBA1943570603F7606A3115508\",\"updated_at\":\"2026-10-18T00:00:00.000Z\",\"multiaddrs\":[\"/dns/attacker.example/tcp/443/tls/http\"],\"sequence\":9,\"signature\":\"0x8db45bac7ef03234c0fe3baf334ac911bd0d3e1a7b38fe63efe7e162f28061d72e468f025461a4d7f72d08f2e37ad5ad327688b635435d383c6eeb3acb4400271c\"}}"
+      },
+      "expected": {
+        "status": "unavailable",
+        "source": "offchain",
+        "reason": "subject-mismatch",
+        "hosts": []
+      }
+    },
+    {
+      "name": "unavailable-subject-mismatch-case",
+      "subject": "did:pkh:eip155:1:0xfcad0b19bb29d4674531d6f115237e16afce377c",
+      "rememberedSequence": null,
+      "response": {
+        "kind": "http",
+        "status": 200,
+        "body": "{\"record\":{\"version\":1,\"subject\":\"did:pkh:eip155:1:0xFCAd0B19bB29D4674531d6f115237E16AfCE377c\",\"updated_at\":\"2026-10-18T00:00:00.000Z\",\"multiaddrs\":[\"/dns/owner-node.example/tcp/443/tls/http\",\"/dns/backup-node.example/tcp/8443/tls/http\"],\"sequence\":5,\"signature\":\"0x1ecafb6043c5f463c3a098cabaaf6e095d6e28506aabefac31df9eac49a29e924934600b4da062caf01492adda93743afdcf5aa4837aeee2f47197704f09f51c1c\"}}"
+      },
+      "expected": {
+        "status": "unavailable",
+        "source": "offchain",
+        "reason": "subject-mismatch",
+        "hosts": []
+      }
+    },
+    {
+      "name": "unavailable-subject-mismatch-did-key",
+      "subject": "did:pkh:eip155:1:0xFCAd0B19bB29D4674531d6f115237E16AfCE377c",
+      "rememberedSequence": null,
+      "response": {
+        "kind": "http",
+        "status": 200,
+        "body": "{\"record\":{\"version\":1,\"subject\":\"did:key:z6MkwVDfCg9LbbY6xjH3EZk8YSFQZujV5Y4y1ZWeER9tDiN3\",\"multiaddrs\":[\"/ip4/127.0.0.1/tcp/8081/http\"],\"updated_at\":\"2026-10-18T00:00:00.000Z\",\"sequence\":3,\"signature\":\"429nEfvdSPXnQ7yVjNhK9MqaNA4SF02-MrIKMIq4ecdtuIxYKLCFU7c20IUEduBv7-oxHWCWy6XvppifM8yECA\"}}"
+      },
+      "expected": {
+        "status": "unavailable",
+        "source": "offchain",
+        "reason": "subject-mismatch",
+        "hosts": []
+      }
+    },
+    {
+      "name": "unavailable-signature-by-other-key",
+      "subject": "did:pkh:eip155:1:0xFCAd0B19bB29D4674531d6f115237E16AfCE377c",
+      "rememberedSequence": null,
+      "response": {
+        "kind": "http",
+        "status": 200,
+        "body": "{\"record\":{\"version\":1,\"subject\":\"did:pkh:eip155:1:0xFCAd0B19bB29D4674531d6f115237E16AfCE377c\",\"multiaddrs\":[\"/dns/attacker.example/tcp/443/tls/http\"],\"updated_at\":\"2026-10-18T00:00:00.000Z\",\"sequence\":9,\"signature\":\"0x5d000957998300682ede05dfb0a5ca988f23fcd12aa9a1dbf452dd88e6de5a884499aca4b0a3317a0c5f8e93dcbfafecc60cd96dbe3d31332eb95630211e513c1c\"}}"
+      },
+      "expected": {
+        "status": "unavailable",
+        "source": "offchain",
+        "reason": "invalid-signature",
+        "hosts": []
+      }
+    },
+    {
+      "name": "unavailable-signature-tampered-hosts",
+      "subject": "did:pkh:eip155:1:0xFCAd0B19bB29D4674531d6f115237E16AfCE377c",
+      "rememberedSequence": null,
+      "response": {
+        "kind": "http",
+        "status": 200,
+        "body": "{\"record\":{\"version\":1,\"subject\":\"did:pkh:eip155:1:0xFCAd0B19bB29D4674531d6f115237E16AfCE377c\",\"updated_at\":\"2026-10-18T00:00:00.000Z\",\"multiaddrs\":[\"/dns/attacker.example/tcp/443/tls/http\"],\"sequence\":5,\"signature\":\"0x1ecafb6043c5f463c3a098cabaaf6e095d6e28506aabefac31df9eac49a29e924934600b4da062caf01492adda93743afdcf5aa4837aeee2f47197704f09f51c1c\"}}"
+      },
+      "expected": {
+        "status": "unavailable",
+        "source": "offchain",
+        "reason": "invalid-signature",
+        "hosts": []
+      }
+    },
+    {
+      "name": "unavailable-signature-tampered-sequence",
+      "subject": "did:pkh:eip155:1:0xFCAd0B19bB29D4674531d6f115237E16AfCE377c",
+      "rememberedSequence": null,
+      "response": {
+        "kind": "http",
+        "status": 200,
+        "body": "{\"record\":{\"version\":1,\"subject\":\"did:pkh:eip155:1:0xFCAd0B19bB29D4674531d6f115237E16AfCE377c\",\"updated_at\":\"2026-10-18T00:00:00.000Z\",\"multiaddrs\":[\"/dns/owner-node.example/tcp/443/tls/http\",\"/dns/backup-node.example/tcp/8443/tls/http\"],\"sequence\":50,\"signature\":\"0x1ecafb6043c5f463c3a098cabaaf6e095d6e28506aabefac31df9eac49a29e924934600b4da062caf01492adda93743afdcf5aa4837aeee2f47197704f09f51c1c\"}}"
+      },
+      "expected": {
+        "status": "unavailable",
+        "source": "offchain",
+        "reason": "invalid-signature",
+        "hosts": []
+      }
+    },
+    {
+      "name": "unavailable-signature-tombstone-replayed-as-hosts",
+      "subject": "did:pkh:eip155:1:0xFCAd0B19bB29D4674531d6f115237E16AfCE377c",
+      "rememberedSequence": null,
+      "response": {
+        "kind": "http",
+        "status": 200,
+        "body": "{\"record\":{\"version\":1,\"subject\":\"did:pkh:eip155:1:0xFCAd0B19bB29D4674531d6f115237E16AfCE377c\",\"updated_at\":\"2026-10-18T00:00:00.000Z\",\"multiaddrs\":[\"/dns/owner-node.example/tcp/443/tls/http\",\"/dns/backup-node.example/tcp/8443/tls/http\"],\"sequence\":6,\"signature\":\"0xc759ba647aee1380bacea3ca70e957e2b4e739a57aebcedde03679671a413c16024a08dc3c5eaab0d11c06c8870cbb181bf795aee8d071d9af98cfb826d0096c1c\"}}"
+      },
+      "expected": {
+        "status": "unavailable",
+        "source": "offchain",
+        "reason": "invalid-signature",
+        "hosts": []
+      }
+    },
+    {
+      "name": "unavailable-signature-not-hex",
+      "subject": "did:pkh:eip155:1:0xFCAd0B19bB29D4674531d6f115237E16AfCE377c",
+      "rememberedSequence": null,
+      "response": {
+        "kind": "http",
+        "status": 200,
+        "body": "{\"record\":{\"version\":1,\"subject\":\"did:pkh:eip155:1:0xFCAd0B19bB29D4674531d6f115237E16AfCE377c\",\"updated_at\":\"2026-10-18T00:00:00.000Z\",\"multiaddrs\":[\"/dns/owner-node.example/tcp/443/tls/http\",\"/dns/backup-node.example/tcp/8443/tls/http\"],\"sequence\":5,\"signature\":\"not-hex\"}}"
+      },
+      "expected": {
+        "status": "unavailable",
+        "source": "offchain",
+        "reason": "invalid-signature",
+        "hosts": []
+      }
+    },
+    {
+      "name": "unavailable-signature-did-key-wrong-length",
+      "subject": "did:key:z6MkwVDfCg9LbbY6xjH3EZk8YSFQZujV5Y4y1ZWeER9tDiN3",
+      "rememberedSequence": null,
+      "response": {
+        "kind": "http",
+        "status": 200,
+        "body": "{\"record\":{\"version\":1,\"subject\":\"did:key:z6MkwVDfCg9LbbY6xjH3EZk8YSFQZujV5Y4y1ZWeER9tDiN3\",\"multiaddrs\":[\"/ip4/127.0.0.1/tcp/8081/http\"],\"updated_at\":\"2026-10-18T00:00:00.000Z\",\"sequence\":3,\"signature\":\"AAAA\"}}"
+      },
+      "expected": {
+        "status": "unavailable",
+        "source": "offchain",
+        "reason": "invalid-signature",
+        "hosts": []
+      }
+    },
+    {
+      "name": "unavailable-signature-did-key-tampered",
+      "subject": "did:key:z6MkwVDfCg9LbbY6xjH3EZk8YSFQZujV5Y4y1ZWeER9tDiN3",
+      "rememberedSequence": null,
+      "response": {
+        "kind": "http",
+        "status": 200,
+        "body": "{\"record\":{\"version\":1,\"subject\":\"did:key:z6MkwVDfCg9LbbY6xjH3EZk8YSFQZujV5Y4y1ZWeER9tDiN3\",\"multiaddrs\":[\"/ip4/127.0.0.1/tcp/8081/http\"],\"updated_at\":\"2026-10-18T00:00:00.000Z\",\"sequence\":4,\"signature\":\"429nEfvdSPXnQ7yVjNhK9MqaNA4SF02-MrIKMIq4ecdtuIxYKLCFU7c20IUEduBv7-oxHWCWy6XvppifM8yECA\"}}"
+      },
+      "expected": {
+        "status": "unavailable",
+        "source": "offchain",
+        "reason": "invalid-signature",
+        "hosts": []
+      }
+    },
+    {
+      "name": "unavailable-rollback-below-remembered",
+      "subject": "did:pkh:eip155:1:0xFCAd0B19bB29D4674531d6f115237E16AfCE377c",
+      "rememberedSequence": 6,
+      "response": {
+        "kind": "http",
+        "status": 200,
+        "body": "{\"record\":{\"version\":1,\"subject\":\"did:pkh:eip155:1:0xFCAd0B19bB29D4674531d6f115237E16AfCE377c\",\"updated_at\":\"2026-10-18T00:00:00.000Z\",\"multiaddrs\":[\"/dns/owner-node.example/tcp/443/tls/http\",\"/dns/backup-node.example/tcp/8443/tls/http\"],\"sequence\":5,\"signature\":\"0x1ecafb6043c5f463c3a098cabaaf6e095d6e28506aabefac31df9eac49a29e924934600b4da062caf01492adda93743afdcf5aa4837aeee2f47197704f09f51c1c\"}}"
+      },
+      "expected": {
+        "status": "unavailable",
+        "source": "offchain",
+        "reason": "rollback",
+        "hosts": []
+      }
+    },
+    {
+      "name": "unavailable-rollback-tombstone-below-remembered",
+      "subject": "did:pkh:eip155:1:0xFCAd0B19bB29D4674531d6f115237E16AfCE377c",
+      "rememberedSequence": 7,
+      "response": {
+        "kind": "http",
+        "status": 200,
+        "body": "{\"record\":{\"version\":1,\"subject\":\"did:pkh:eip155:1:0xFCAd0B19bB29D4674531d6f115237E16AfCE377c\",\"updated_at\":\"2026-10-18T00:00:00.000Z\",\"multiaddrs\":[],\"sequence\":6,\"signature\":\"0xc759ba647aee1380bacea3ca70e957e2b4e739a57aebcedde03679671a413c16024a08dc3c5eaab0d11c06c8870cbb181bf795aee8d071d9af98cfb826d0096c1c\"}}"
+      },
+      "expected": {
+        "status": "unavailable",
+        "source": "offchain",
+        "reason": "rollback",
+        "hosts": []
+      }
+    },
+    {
+      "name": "unavailable-forged-checked-before-rollback",
+      "subject": "did:pkh:eip155:1:0xFCAd0B19bB29D4674531d6f115237E16AfCE377c",
+      "rememberedSequence": 100,
+      "response": {
+        "kind": "http",
+        "status": 200,
+        "body": "{\"record\":{\"version\":1,\"subject\":\"did:pkh:eip155:1:0xFCAd0B19bB29D4674531d6f115237E16AfCE377c\",\"multiaddrs\":[\"/dns/attacker.example/tcp/443/tls/http\"],\"updated_at\":\"2026-10-18T00:00:00.000Z\",\"sequence\":9,\"signature\":\"0x5d000957998300682ede05dfb0a5ca988f23fcd12aa9a1dbf452dd88e6de5a884499aca4b0a3317a0c5f8e93dcbfafecc60cd96dbe3d31332eb95630211e513c1c\"}}"
+      },
+      "expected": {
+        "status": "unavailable",
+        "source": "offchain",
+        "reason": "invalid-signature",
+        "hosts": []
+      }
+    }
+  ]
+}
