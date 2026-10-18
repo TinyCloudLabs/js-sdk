@@ -29,6 +29,7 @@ import type {
   DecryptCapabilityProof,
   InlineEncryptedEnvelope,
 } from "../encryption";
+import { base64Decode as envelopeBase64Decode } from "../encryption/canonical";
 import type { IDataVaultService } from "./IDataVaultService";
 import {
   DataVaultConfig,
@@ -193,11 +194,11 @@ function defaultVaultMessage(input: VaultErrorInput): string {
     case "ALREADY_EXISTS": return input.message ?? `A value already exists at ${input.key}`;
     case "AUTH_UNAUTHORIZED": return input.message;
     case "PERMISSION_DENIED": return input.message;
-    case "AAD_MISMATCH": return input.message ?? `Envelope at ${input.key} is not bound to this space and key`;
-    case "ETAG_MISMATCH": return input.message ?? `The value at ${input.key} changed or no longer exists`;
-    case "INVALID_ETAG": return input.message ?? `ifMatch for ${input.key} is not a strong ETag`;
-    case "OUTCOME_UNKNOWN": return input.message;
-    case "NODE_BUSY": return input.message;
+    case "AAD_MISMATCH":
+    case "ETAG_MISMATCH":
+    case "INVALID_ETAG":
+    case "OUTCOME_UNKNOWN":
+    case "NODE_BUSY":
     case "STORAGE_QUOTA_EXCEEDED":
     case "STORAGE_LIMIT_REACHED":
       return input.message;
@@ -228,9 +229,6 @@ function typedKvCause(error: ServiceError): ServiceError & Error {
   });
 }
 
-/** Prefix of the AAD every network-encrypted vault envelope is written with. */
-const VAULT_AAD_PREFIX = "tinycloud.vault:";
-
 /**
  * Space ids spell their EVM address as lowercase or EIP-55 checksummed
  * depending on the capability boundary that produced them. The two spellings
@@ -241,61 +239,92 @@ function canonicalAadSpaceId(spaceId: string): string {
 }
 
 /**
- * Whether an envelope's AAD is `tinycloud.vault:<spaceId>:<key>` for this
- * vault's space (spelling-insensitive) and this exact key. The envelope's AAD
- * is authenticated by the cipher, so a tampered value fails decryption too;
- * this check rejects a genuine envelope that was written for another key.
+ * Check a parsed KV value for `expectAad`. `corrupt`: not an envelope (null, a
+ * number, a string, an array, or an object missing the fields every envelope
+ * carries), so it is reported exactly as without `expectAad`. `mismatch`: an
+ * envelope whose AAD is not `tinycloud.vault:<spaceId>:<key>` for this vault's
+ * space (spelling-insensitive) and this exact key, or has none.
+ *
+ * The AAD is authenticated by the cipher, so a tampered value fails decryption
+ * too; this rejects a genuine envelope written for another key. It is decoded
+ * with the decoder the decrypt itself uses.
  */
-function envelopeAadBoundTo(
-  envelope: InlineEncryptedEnvelope,
+function checkEnvelopeAad(
+  value: unknown,
   spaceId: string,
   key: string,
-): boolean {
-  if (typeof envelope.aad !== "string") return false;
-  let aad: string;
+): "ok" | "corrupt" | "mismatch" {
+  const e = value as Record<string, unknown> | null;
+  if (
+    typeof e !== "object" ||
+    e === null ||
+    Array.isArray(e) ||
+    !["networkId", "alg", "encryptedSymmetricKey", "encryptedSymmetricKeyHash", "ciphertext"].every(
+      (field) => typeof e[field] === "string" && e[field] !== "",
+    ) ||
+    !Number.isInteger(e.keyVersion) ||
+    (e.aad !== undefined && typeof e.aad !== "string")
+  ) {
+    return "corrupt";
+  }
+  let aad = "";
   try {
-    aad = fromBytes(base64Decode(envelope.aad));
+    if (typeof e.aad === "string") aad = fromBytes(envelopeBase64Decode(e.aad));
   } catch {
-    return false;
+    // Not decodable: no AAD to match.
   }
   const suffix = `:${key}`;
-  if (!aad.startsWith(VAULT_AAD_PREFIX) || !aad.endsWith(suffix)) return false;
-  if (aad.length < VAULT_AAD_PREFIX.length + suffix.length) return false;
-  const boundSpace = aad.slice(VAULT_AAD_PREFIX.length, aad.length - suffix.length);
-  return canonicalAadSpaceId(boundSpace) === canonicalAadSpaceId(spaceId);
+  return aad.endsWith(suffix) &&
+    canonicalAadSpaceId(aad.slice(0, -suffix.length)) === canonicalAadSpaceId(`tinycloud.vault:${spaceId}`)
+    ? "ok"
+    : "mismatch";
 }
+
+/**
+ * HTTP statuses after which a write may still have been applied. Same set as
+ * the account index's `AMBIGUOUS_WRITE_STATUSES` (sdk-core `AccountService`):
+ * a gateway or proxy can answer for a write the node committed.
+ */
+const AMBIGUOUS_WRITE_STATUSES = [500, 502, 503, 504, 520, 522, 524];
 
 /**
  * Classify a failed `ifMatch` write into a distinct vault code. Returns
  * `undefined` for anything else, which keeps its existing mapping.
  *
- * A connection that failed without an HTTP response is reported as
- * `OUTCOME_UNKNOWN` too: the request may have reached the node.
+ * `OUTCOME_UNKNOWN` covers the node's `outcome_unknown`, gateway answers that
+ * may follow a commit (502, 504, 52x, or a 503 without the node's busy body),
+ * and a connection that failed after the request may have been sent.
+ * `NODE_BUSY` is only the node's own busy/timeout body (nothing was written).
  */
 function ifMatchWriteError(
   key: string,
   error: ServiceError,
 ): Result<never, VaultError> | undefined {
-  const cause = typedKvCause(error);
-  const status = typeof error.meta?.status === "number" ? error.meta.status : undefined;
-  const meta = error.meta !== undefined ? { meta: error.meta } : {};
-  if (error.code === ErrorCodes.KV_PRECONDITION_FAILED) {
-    return vaultError({ code: "ETAG_MISMATCH", key, ...meta, cause });
-  }
-  if (error.code === ErrorCodes.KV_WRITE_FAILED && status === 400) {
-    return vaultError({ code: "INVALID_ETAG", key, message: error.message, ...meta, cause });
-  }
-  if (
-    error.code === ErrorCodes.OUTCOME_UNKNOWN ||
-    ((error.code === ErrorCodes.NETWORK_ERROR || error.code === ErrorCodes.TIMEOUT) &&
-      status === undefined)
-  ) {
-    return vaultError({ code: "OUTCOME_UNKNOWN", key, message: error.message, ...meta, cause });
-  }
-  if (error.code === ErrorCodes.NODE_BUSY || error.code === ErrorCodes.REQUEST_TIMEOUT) {
-    return vaultError({ code: "NODE_BUSY", key, message: error.message, ...meta, cause });
-  }
-  return undefined;
+  const status = error.meta?.status;
+  const code =
+    error.code === ErrorCodes.KV_PRECONDITION_FAILED
+      ? "ETAG_MISMATCH"
+      : error.code === ErrorCodes.KV_WRITE_FAILED && status === 400
+        ? "INVALID_ETAG"
+        : error.code === ErrorCodes.OUTCOME_UNKNOWN ||
+            (error.code === ErrorCodes.KV_WRITE_FAILED &&
+              typeof status === "number" &&
+              AMBIGUOUS_WRITE_STATUSES.includes(status)) ||
+            ((error.code === ErrorCodes.NETWORK_ERROR || error.code === ErrorCodes.TIMEOUT) &&
+              status === undefined &&
+              error.meta?.requestMayHaveDispatched !== false)
+          ? "OUTCOME_UNKNOWN"
+          : error.code === ErrorCodes.NODE_BUSY || error.code === ErrorCodes.REQUEST_TIMEOUT
+            ? "NODE_BUSY"
+            : undefined;
+  if (code === undefined) return undefined;
+  return vaultError({
+    code,
+    key,
+    message: error.message,
+    ...(error.meta !== undefined ? { meta: error.meta } : {}),
+    cause: typedKvCause(error),
+  });
 }
 
 /**
@@ -711,8 +740,9 @@ export class DataVaultService extends BaseService implements IDataVaultService {
         return vaultError({
           code: "INVALID_ETAG",
           key,
-          message:
-            "ifMatch must be the strong, quoted ETag returned by a network read (VaultEntry.etag), passed exactly as returned",
+          message: options.ifMatch.startsWith("W/")
+            ? "ifMatch is a weak etag (W/\"...\"): the node only issues strong etags, so the etag was weakened in transit (a proxy or CDN rewrote it). Read it from a connection that preserves strong ETags"
+            : "ifMatch must be the strong, quoted ETag returned by a network read (VaultEntry.etag), passed exactly as returned",
         });
       }
     }
@@ -809,11 +839,18 @@ export class DataVaultService extends BaseService implements IDataVaultService {
       const envelope = (
         typeof rawEnvelope === "string" ? JSON.parse(rawEnvelope) : rawEnvelope
       ) as InlineEncryptedEnvelope;
-      if (
-        options?.expectAad === true &&
-        !envelopeAadBoundTo(envelope, this.vaultConfig.spaceId, key)
-      ) {
-        return vaultError({ code: "AAD_MISMATCH", key });
+      if (options?.expectAad === true) {
+        const verdict = checkEnvelopeAad(envelope, this.vaultConfig.spaceId, key);
+        if (verdict === "corrupt") {
+          return vaultError({ code: "DECRYPTION_FAILED", message: "envelope is malformed" });
+        }
+        if (verdict === "mismatch") {
+          return vaultError({
+            code: "AAD_MISMATCH",
+            key,
+            message: `Envelope at ${key} is not bound to this space and key`,
+          });
+        }
       }
       const proof = await this.decryptCapabilityProof();
       const plaintextResult = await config.service.decryptEnvelope(envelope, proof);
@@ -907,11 +944,11 @@ export class DataVaultService extends BaseService implements IDataVaultService {
       return { status: "corrupt_envelope" };
     }
 
-    if (
-      options?.expectAad === true &&
-      !envelopeAadBoundTo(envelope, this.vaultConfig.spaceId, key)
-    ) {
-      return { status: "aad_mismatch" };
+    if (options?.expectAad === true) {
+      const verdict = checkEnvelopeAad(envelope, this.vaultConfig.spaceId, key);
+      if (verdict !== "ok") {
+        return { status: verdict === "corrupt" ? "corrupt_envelope" : "aad_mismatch" };
+      }
     }
 
     let plaintextResult: Awaited<ReturnType<typeof config.service.decryptEnvelope>>;
@@ -1137,6 +1174,13 @@ export class DataVaultService extends BaseService implements IDataVaultService {
     return this.withTelemetry("get", key, async () => {
       if (this.usesNetworkEncryption) {
         return this.getNetworkEncrypted<T>(key, options);
+      }
+
+      if (options?.expectAad === true) {
+        return vaultError({
+          code: "STORAGE_ERROR",
+          cause: new Error("expectAad is only supported by network-encrypted vaults"),
+        });
       }
 
       if (!this._isUnlocked || !this.masterKey) {
@@ -1577,6 +1621,14 @@ export class DataVaultService extends BaseService implements IDataVaultService {
     options?: VaultGetOptions<T>
   ): Promise<Result<VaultEntry<T>, VaultError>> {
     return this.withTelemetry("getShared", key, async () => {
+      if (options?.expectAad === true) {
+        return vaultError({
+          code: "STORAGE_ERROR",
+          cause: new Error(
+            "expectAad is not supported by getShared: the AAD binds the grantor's space, which this vault does not know",
+          ),
+        });
+      }
       if (this.usesNetworkEncryption) {
         const grantorKV = options?.kv;
         if (!grantorKV) {

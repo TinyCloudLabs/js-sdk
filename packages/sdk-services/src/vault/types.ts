@@ -56,8 +56,8 @@ export interface VaultPutOptions {
    *
    * Failures are distinct codes: `ETAG_MISMATCH` (the value changed or was
    * deleted: re-read, re-apply, retry), `INVALID_ETAG` (malformed; never
-   * retry), `OUTCOME_UNKNOWN` (the node may have applied the write: read it
-   * back before retrying, with a freshly signed request) and `NODE_BUSY`
+   * retry), `OUTCOME_UNKNOWN` (the node may have applied the write, or a gateway
+   * answered for it: read it back before retrying, with a freshly signed request) and `NODE_BUSY`
    * (nothing was written; retry).
    */
   ifMatch?: string;
@@ -85,7 +85,9 @@ export interface VaultGetOptions<T = unknown> {
    * or with a different one, fails with `AAD_MISMATCH` (`aad_mismatch` from
    * `readNetworkEncrypted`) instead of decrypting. This stops a ciphertext
    * copied to another key from being accepted; it does not stop a freshly
-   * encrypted forgery. Network-encrypted vaults only; ignored by `getShared`.
+   * encrypted forgery. A malformed stored value is a corrupt envelope, as without this
+   * option. Network-encrypted vaults only: a master-key vault and `getShared` refuse it with
+   * `STORAGE_ERROR` rather than skip the check.
    */
   expectAad?: boolean;
   /** Delegated KV service for reading from the grantor's space (used by getShared) */
@@ -202,13 +204,13 @@ export type VaultErrorInput =
       /** `expectAad` read: the envelope's AAD is missing or bound to another space/key. */
       code: "AAD_MISMATCH";
       key: string;
-      message?: string;
+      message: string;
     }
   | {
       /** `ifMatch` write refused (HTTP 412): the value changed or no longer exists. Re-read and retry. */
       code: "ETAG_MISMATCH";
       key: string;
-      message?: string;
+      message: string;
       meta?: Record<string, unknown>;
       cause: ServiceError & Error;
     }
@@ -216,12 +218,16 @@ export type VaultErrorInput =
       /** `ifMatch` is not a strong ETag (HTTP 400, or rejected before sending). Never retry. */
       code: "INVALID_ETAG";
       key: string;
-      message?: string;
+      message: string;
       meta?: Record<string, unknown>;
       cause?: ServiceError & Error;
     }
   | {
-      /** `ifMatch` write, HTTP 500 `outcome_unknown`: it may have been applied. Re-read before retrying. */
+      /**
+       * `ifMatch` write that may have been applied: the node's `outcome_unknown` (500), a gateway
+       * answer that can follow a commit (500, 502, 503 without the node's busy body, 504, 520,
+       * 522, 524) or a connection that failed after the request was sent. Re-read before retrying.
+       */
       code: "OUTCOME_UNKNOWN";
       key: string;
       message: string;
@@ -229,7 +235,7 @@ export type VaultErrorInput =
       cause: ServiceError & Error;
     }
   | {
-      /** `ifMatch` write, HTTP 503 busy/timeout: nothing was written. Safe to retry. */
+      /** `ifMatch` write, the node's own busy/timeout answer (503 with its busy body): nothing was written. Safe to retry. */
       code: "NODE_BUSY";
       key: string;
       message: string;
