@@ -495,13 +495,13 @@
     "ruling": "Naomi size ruling: a real shrink attempt first, remainder by the PR's own exact-delta row at canonical CI bytes (approved as +12 / +6 gzip, +/- 10 B); rows chain after the latest on master",
     "base": "28ca77a0ce019d53aa61a6c5c3b39c52889e420d",
     "sourceCommits": [
-      "d9a412e900435c4b3294c27da7f3f6af8185e3e9"
+      "b2725dd6129940bd78f0e2b2f3622a4017a7f8c3"
     ],
     "canonicalCI": {
-      "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39168229435",
+      "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39172186671",
       "jobs": [
-        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39168229435/job/117795602437",
-        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39168229435/job/117795602533"
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39172186671/job/117807385025",
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39172186671/job/117807385026"
       ]
     },
     "root": {
@@ -514,6 +514,6 @@
         "index.cjs": 1397987
       }
     },
-    "reason": "restorePersisted refused a stored receiver key whose createdAt was later than the caller's now, which was read when the tab started. A peer tab that started a moment later stores a record stamped with its own later clock, so this tab judged it future-dated, deleted it and generated a second key (flaky 'tabs opening at once share one stored key', master run 39162127319). Both restores now read the clock when they run. The fix cannot be free: it adds one clock read at each restore. Shrink attempts first (same-toolchain local gzip, Bun 1.4.3, master 1d7b78fd, base +0 / +0): reading the clock inside restorePersisted and compacting its comparison +15 / +13; additionally deduplicating the lifetime fields shared by the memory and persisted sessions +13 / +12 (gzip already shares them); a 2 s tolerance on the future-dated comparison using the existing storage timeout constant +8 / +5, rejected because it loosens the guard against future-dated records for 3 bytes; the chosen two inline fresh clock reads +11 / +5 locally and +12 / +6 on canonical CI, identical in both jobs of run 39168229435 on d9a412e9 merged into master 70304c3d."
+    "reason": "restorePersisted refused a stored receiver key whose createdAt was later than the caller's now, which was read when the tab started. A peer tab that started a moment later stores a record stamped with its own later clock, so this tab judged it future-dated, deleted it and generated a second key (flaky 'tabs opening at once share one stored key', master run 39162127319). Both restores now read the clock when they run. The fix cannot be free: it adds one clock read at each restore. Shrink attempts first (same-toolchain local gzip, Bun 1.4.3, master 1d7b78fd, base +0 / +0): reading the clock inside restorePersisted and compacting its comparison +15 / +13; additionally deduplicating the lifetime fields shared by the memory and persisted sessions +13 / +12 (gzip already shares them); a 2 s tolerance on the future-dated comparison using the existing storage timeout constant +8 / +5, rejected because it loosens the guard against future-dated records for 3 bytes; the chosen two inline fresh clock reads +11 / +5 locally and +12 / +6 on canonical CI, identical in both jobs of run 39172186671 on b2725dd6 (master 28ca77a0 merged into the PR branch), over TC-1443's ceilings."
   }
 }

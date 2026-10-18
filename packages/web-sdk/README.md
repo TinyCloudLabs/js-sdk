@@ -180,13 +180,13 @@ lands first, #586 re-measures against the new base and replaces its own row befo
 it merges.
 
 TC-1466 (a share receiver opened in several tabs at once could end up with different
-signing keys, #595) landed after #591, so it sits on top of TC-1448's root ceilings. It
+signing keys, #595) landed after #586, so it sits on top of TC-1443's root ceilings. It
 raised only the root ceilings once, after shrink attempts recorded in the row's `reason`,
-by the exact bytes GitHub run 39168229435 measured on `d9a412e9` merged into master
-`70304c3d`, identical in both jobs: 1,468,637 / 1,397,916 B (+12 / +6 over TC-1448's,
-inside the approved +12 / +6 ± 10 B). The ledger's `tc1466Ratchet` row records them and
-cannot change later; whichever PR lands after it re-measures against the new base and
-updates its own row.
+by the exact bytes GitHub run 39172186671 measured on `b2725dd6` (master `28ca77a0`
+merged into the PR branch), identical in both Node jobs: 1,471,007 / 1,397,987 B (+12 /
++6 over TC-1443's, inside the approved +12 / +6 ± 10 B). The ledger's `tc1466Ratchet` row
+records them and cannot change later; whichever PR lands after it re-measures against
+the new base and updates its own row.
 
 **Ancestry pins and squash merges.** A policy row records the PR-branch commit it
 was reviewed at, and its introduction check requires that literal commit in the
