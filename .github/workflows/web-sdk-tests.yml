@@ -46,6 +46,13 @@ jobs:
             echo "Running web-sdk tests (event: $EVENT)." >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
+          # The files API caps at 3000 entries; a larger PR may hide relevant files, so run.
+          changed="$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER" --jq .changed_files)"
+          if (( changed >= 3000 )); then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            echo "Running web-sdk tests: $changed changed files exceeds the file-list API cap." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
           files="$(gh api --paginate "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/files" --jq '.[] | .filename, (.previous_filename // empty)')"
           relevant=""
           while IFS= read -r f; do
