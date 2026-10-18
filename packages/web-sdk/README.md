@@ -138,6 +138,17 @@ and the worker keep TC-1413's ceilings. The ledger's `tc1436Ratchet` row records
 and cannot change later. If another root-growing PR lands first, #578 re-measures
 against the new base and replaces its own row before it merges.
 
+TC-1432 (vault `etag`, `ifMatch` and opt-in `expectAad` in sdk-services, #580) landed
+after #578, so it was re-measured against master `129c7935` and sits on top of TC-1436's
+root ceilings. It raised four buckets once, by the exact bytes GitHub run 39144311690
+measured on source `83c9d75a`, identical in both jobs: the root to 1,466,908 /
+1,396,591 B (+913 / +872 over TC-1436's), first import to 51,925 / 67,138 B (+1 / -1),
+activation to 23,106 / 24,685 B (+1 / +2) and the worker to 822,044 B (+1,109 over
+TC-1413's, also `MAX_WORKER_GZIP_BYTES`). It is #580's own row, taken after a documented
+shrink attempt (see the row's `reason`). The ledger's `tc1432Ratchet` row and the
+matching optional allowance record it and cannot change later; whichever PR lands after
+it re-measures against the new base and updates its own row.
+
 **Ancestry pins and squash merges.** A policy row records the PR-branch commit it
 was reviewed at, and its introduction check requires that literal commit in the
 PR head. js-sdk squash-merges, so that commit is unreachable from master
