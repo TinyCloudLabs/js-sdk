@@ -10,7 +10,7 @@ import {
 } from "./share-network.js";
 import {
   SHARE_ROOT_LINK_MAX_LIFETIME_MS, ShareRootError,
-  assertSpace, assertUsableKey, errorMessage, isExactKeyUnder, ownerPolicySigner, parseOwnerDid, readJsonCapped, requireNodeOrigin, sameOwner,
+  assertSpace, assertUsableKey, errorMessage, isExactKeyUnder, isRevokeReceiptFor, ownerPolicySigner, parseOwnerDid, requireNodeOrigin, sameOwner,
   validateSignedOwnerDelegation,
   type Owner, type SharePolicySigner, type ShareRootOwnerAuthority,
 } from "./share-root.js";
@@ -32,12 +32,15 @@ const defaultFetch: FetchFn = (url, init) => globalThis.fetch(url, init);
 
 /**
  * The share's one content key (I1): `xyz.tinycloud.share/shares/<shareId>/<file>`,
- * or a TC-1428 version file `xyz.tinycloud.share/artifacts/<aid>/versions/<n>/<file>`.
+ * or, for `view` only, a TC-1428 version file
+ * `xyz.tinycloud.share/artifacts/<aid>/versions/<n>/<file>` (versions are
+ * immutable, and that path is not bound to the shareId, so `edit` is refused).
  */
-export function assertShareGrantPath(path: string, shareId: string): void {
+export function assertShareGrantPath(path: string, shareId: string, access: ShareGrantAccess): void {
   const inShare = isExactKeyUnder(path, `${SHARE_KV_ROOT}shares/${shareId}/`) && !path.slice(`${SHARE_KV_ROOT}shares/${shareId}/`.length).includes("/");
   const inArtifact = isExactKeyUnder(path, `${SHARE_KV_ROOT}artifacts/`) && parseArtifactVersionPath(path.slice(SHARE_KV_ROOT.length)) !== undefined;
   if (!inShare && !inArtifact) throw new ShareRootError("invalid-request", "share grant path must be xyz.tinycloud.share/shares/<shareId>/<file> or an artifact version file");
+  if (inArtifact && access !== "view") throw new ShareRootError("invalid-request", "artifact versions are immutable: only view grants may name a version file");
 }
 
 /** Progress of one addressed share, for the consumer's history/index row (the SDK does not store rows). */
@@ -105,6 +108,14 @@ export interface ShareGrantRequest {
   readonly access: ShareGrantAccess;
   /** At most 30 days ahead. */
   readonly expiresAt: Date;
+  /**
+   * Key-gone recovery only: accept the share's network when it already
+   * exists and is `active` (a half-published share whose key was lost), and
+   * grant a new key on it. Without it, `prepare` refuses an existing network
+   * (`share-id-in-use`) before the prompt. A retired network is always
+   * refused.
+   */
+  readonly resumeExistingNetwork?: boolean;
   readonly keyFactory?: () => Promise<DelegatedShareKey>;
   readonly fetch?: FetchFn;
   readonly now?: () => number;
@@ -141,7 +152,8 @@ export interface PendingShareGrant {
  *
  * Publish order (the consumer stores the rows; see `ShareGrantRow`):
  * 0. `ShareGrant.prepare`: shareId rule, path, access, expiry, space and
- *    origin are checked; a typed error costs no approval.
+ *    origin are checked, and the network is looked up (an existing or
+ *    retired one is refused); a typed error costs no approval.
  * 1. Persist `pending.row` (state `pending`), and a CLI persists the key file.
  * 2. `pending.approve()`: one approval; row `granted` with `grantCid`.
  * 3. `grant.ensureNetwork()`: creates the network if absent, re-reads it after
@@ -202,8 +214,11 @@ export class ShareGrant {
 
   /**
    * Step 0: check everything that does not need the owner, and make the key.
-   * Throws `share-id-not-network-safe`, `invalid-request`, `lifetime-exceeds-cap`
-   * or `invalid-key` with no approval spent.
+   * Also looks the share's network up (no approval): a shareId whose network
+   * is retired (burned), or already exists from an earlier grant, is refused
+   * with `share-id-in-use` before the prompt (see `resumeExistingNetwork`).
+   * Throws `share-id-not-network-safe`, `invalid-request`, `lifetime-exceeds-cap`,
+   * `share-id-in-use`, `node-refused` or `invalid-key` with no approval spent.
    */
   static async prepare(input: ShareGrantRequest): Promise<PendingShareGrant> {
     const clock = input.now ?? Date.now;
@@ -212,11 +227,17 @@ export class ShareGrant {
     const networkId = perShareNetworkIdFor(input.owner.ownerDid, input.shareId);
     assertSpace(input.spaceId, owner, "share");
     const nodeOrigin = requireNodeOrigin(input.nodeOrigin);
-    assertShareGrantPath(input.path, input.shareId);
     if (input.access !== "view" && input.access !== "edit") throw new ShareRootError("invalid-request", "share grant access must be view or edit");
+    assertShareGrantPath(input.path, input.shareId, input.access);
     const expiry = input.expiresAt instanceof Date ? input.expiresAt.getTime() : Number.NaN;
     if (!Number.isFinite(expiry) || expiry <= now) throw new ShareRootError("invalid-request", "share grant expiry must be in the future");
     if (expiry - now > SHARE_ROOT_LINK_MAX_LIFETIME_MS) throw new ShareRootError("lifetime-exceeds-cap", "share grant lifetime exceeds 30 days");
+    const existing = await lookupShareNetwork(nodeOrigin, networkId, input.fetch ?? defaultFetch);
+    if (existing.state !== "absent") {
+      if (existing.state !== "active") throw new ShareRootError("share-id-in-use", `this shareId's network is ${existing.state}; a retired shareId is never reused`);
+      if (input.resumeExistingNetwork !== true) throw new ShareRootError("share-id-in-use", "this shareId already has an active network from an earlier grant");
+      assertActiveShareNetwork(existing, networkId);
+    }
     const key = await (input.keyFactory ?? (() => createDelegatedShareKey({ extractable: false })))();
     try {
       await assertUsableKey(key);
@@ -287,7 +308,7 @@ export class ShareGrant {
     if (!sameNetworkUrn(networkId, record.networkId)) throw new ShareRootError("malformed-root", "share grant record network does not match its shareId");
     assertSpace(record.spaceId, owner, "share");
     const nodeOrigin = requireNodeOrigin(record.nodeOrigin);
-    assertShareGrantPath(record.path, record.shareId);
+    assertShareGrantPath(record.path, record.shareId, record.access);
     await assertUsableKey(input.key);
     const spec: GrantSpec = { owner, ownerDid: record.ownerDid, spaceId: record.spaceId, nodeOrigin, shareId: record.shareId, networkId, path: record.path, access: record.access };
     let authorization: Uint8Array;
@@ -300,7 +321,11 @@ export class ShareGrant {
     return new ShareGrant({ spec, cid: decoded.cid, ...times, authorization, key: input.key, now: clock, fetch: input.fetch ?? defaultFetch });
   }
 
-  /** The `Authorization` value the Node knows this grant by (base64url CACAO). */
+  /**
+   * This grant's CACAO as base64url, UNPADDED (the record form). As a Node
+   * `Authorization` header it must be padded to a multiple of 4 characters:
+   * the Node refuses an unpadded value otherwise.
+   */
   get authorization(): string {
     return toBase64Url(this.#authorization);
   }
@@ -438,9 +463,8 @@ export async function revokeShareGrant(input: {
   const network = await input.grant.retireNetwork();
   try {
     const response = await fetchFn(new URL("/revoke", input.grant.nodeOrigin), { method: "POST", redirect: "error", headers: { Authorization: await input.owner.signOwnerRevocation(input.grant.cid) } });
-    if (!response.ok) throw new Error(`HTTP ${response.status} ${(await response.text()).slice(0, 120)}`);
-    const receipt = await readJsonCapped(response);
-    if (typeof receipt !== "object" || receipt === null || !("revoked" in receipt) || receipt.revoked !== true || !("cid" in receipt) || receipt.cid !== input.grant.cid) throw new Error("receipt does not confirm this grant");
+    const status = response.status;
+    if (!await isRevokeReceiptFor(response, input.grant.cid)) throw new Error(`HTTP ${status}: no receipt confirming this grant`);
   } catch (error) {
     throw new ShareRootError("grant-revoke-incomplete", `the share's network is retired (decrypt cut for everyone), but the grant revoke failed: ${errorMessage(error)}`, { rootCid: input.grant.cid });
   }
@@ -478,7 +502,7 @@ export async function openEditShare(input: {
   const networkId = perShareNetworkIdFor(input.record.ownerDid, input.record.shareId);
   if (!sameNetworkUrn(networkId, input.record.networkId)) throw new ShareRootError("invalid-request", "share network does not match its shareId");
   assertSpace(input.record.spaceId, owner, "share");
-  assertShareGrantPath(input.record.path, input.record.shareId);
+  assertShareGrantPath(input.record.path, input.record.shareId, "edit");
   const key = await createDelegatedShareKey({ extractable: false });
   const expiresAt = new Date(clock() + lifetime);
   let receipt: OwnerDelegationReceipt;
@@ -492,9 +516,15 @@ export async function openEditShare(input: {
         { service: "tinycloud.encryption", path: networkId, actions: [DECRYPT_ABILITY] },
       ],
     });
+  } catch (error) {
+    key.clear();
+    throw error;
+  }
+  try {
     const authorization = new Uint8Array(receipt.signedDagCbor);
     const signedCid = ownerRootCacaoCid(authorization);
     if (signedCid !== receipt.delegationCid) throw new ShareRootError("malformed-root", "signed reader grant bytes do not match the imported delegation CID", { rootCid: receipt.delegationCid, signedCid, mustRevoke: true });
+    // Any decode or validation failure that is not already typed is wrapped below with `mustRevoke`.
     validateSignedOwnerDelegation(decodeOwnerRootCacao(authorization), {
       label: "edit-share reader",
       owner,
@@ -506,7 +536,8 @@ export async function openEditShare(input: {
     });
   } catch (error) {
     key.clear();
-    throw error;
+    if (error instanceof ShareRootError) throw error;
+    throw new ShareRootError("malformed-root", errorMessage(error), { rootCid: receipt.delegationCid, mustRevoke: true });
   }
   let live: DelegatedShareKey | undefined = key;
   const clear = (): void => { live?.clear(); live = undefined; };

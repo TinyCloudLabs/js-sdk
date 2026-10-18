@@ -2,7 +2,7 @@
  * TC-1423 D3: per-share grants on per-share encryption networks against a
  * real local Node (PERSHARE-NETWORK design v2).
  *
- *   TC_TEST_SERVER=http://127.0.0.1:<port> [TC_NODE_LABEL=n1b|n4p] bun test share-grant-live.test.ts
+ *   TC_TEST_SERVER=http://127.0.0.1:<port> [TC_NODE_LABEL=n1b|n4p|v1206] bun test share-grant-live.test.ts
  *
  * Proves, with approvals counted:
  * - one approval per share; the per-share key creates `share-<shareId>` and
@@ -239,13 +239,14 @@ describe("per-share grants and networks", () => {
       decryptShareNetwork: await decryptWith(view.key, view.grant.cid, envShare),
       decryptDefault: await decryptWith(view.key, view.grant.cid, envDefault),
       createOtherNetwork: (await networkAdmin(view.key, view.grant.cid, otherNetwork, "network.create")).status,
+      createNearName: (await networkAdmin(view.key, view.grant.cid, `${view.grant.networkId}x`, "network.create")).status,
       recreateOwnNetwork: (await networkAdmin(view.key, view.grant.cid, view.grant.networkId, "network.create")).status,
       retireOtherShare: (await networkAdmin(view.key, view.grant.cid, edit.grant.networkId, "network.revoke")).status,
       editPut: (await invoke(edit.key, edit.grant.cid, edit.path, "tinycloud.kv/put", canonicalize(edit.env!))).status,
     };
     console.log("[pershare] scope", JSON.stringify(results));
     expect(results).toMatchObject({ get: 200, metadata: 200, put: 401, getEditShare: 401, decryptOwn: "secret view", recreateOwnNetwork: 409, editPut: 200 });
-    for (const status of [results.decryptOtherShare, results.decryptShareNetwork, results.decryptDefault, results.createOtherNetwork, results.retireOtherShare]) {
+    for (const status of [results.decryptOtherShare, results.decryptShareNetwork, results.decryptDefault, results.createOtherNetwork, results.createNearName, results.retireOtherShare]) {
       expect(status).toBeNumber();
       expect(Number(status)).toBeGreaterThanOrEqual(400);
     }
@@ -316,6 +317,11 @@ describe("per-share grants and networks", () => {
     } else {
       expect(raw.registered).toBeString();
     }
+    // The burned shareId is refused before any prompt.
+    const before = wallet.approvals;
+    await expect(ShareGrant.prepare({ owner: authority(), spaceId, nodeOrigin: SERVER_URL, shareId: retired.id, path: retired.path, access: "view", expiresAt: new Date(Date.now() + DAY) }))
+      .rejects.toMatchObject({ code: "share-id-in-use" });
+    expect(wallet.approvals).toBe(before);
   });
 
   test("a TC-1428 version path share; a shareId that is not network-safe costs no approval", async () => {
@@ -353,22 +359,29 @@ describe("owner kill-all controls", () => {
     expect(approvalsUsed["control-full"]).toBe(1);
   });
 
-  test("one control retires every network first, then revokes the grants (per-grant owner fallback where refused)", async () => {
-    const shares = [await liveShare("k1", "view"), await liveShare("k2", "view"), await liveShare("k3", "edit")];
+  test("two controls (space row in each) retire every network first, then revoke the grants through the control on v1.20.6 and N4'", async () => {
+    const shares = [await liveShare("k1", "view"), await liveShare("k2", "view"), await liveShare("k3", "edit"), await liveShare("k4", "view")];
     const signer = { ownerDid, domain: "share.test", signMessage: (message: string) => wallet.signMessage(message) };
-    const [batch, ...rest] = planShareControlBatches({ owner: signer, targets: shares.map((share) => ({ networkId: share.grant.networkId, grantCid: share.grant.cid })), spaceIds: [spaceId] });
-    expect(rest).toHaveLength(0);
-    const result = await counted("control-kill", () => runShareControlBatch({ owner: signer, nodeOrigin: SERVER_URL, batch: batch!, revokeFallback: { signOwnerRevocation: (cid) => owner.signOwnerRevocation(cid) } }));
+    const targets = shares.map((share) => ({ networkId: share.grant.networkId, grantCid: share.grant.cid }));
+    // Force two shares per control (all ids have the same length), so the second control's grants prove the per-control space row.
+    const budgetBytes = planShareControlBatches({ owner: signer, targets: targets.slice(0, 2), spaceIds: [spaceId] })[0]!.headerBytes;
+    const batches = planShareControlBatches({ owner: signer, targets, spaceIds: [spaceId], budgetBytes });
+    expect(batches.map((batch) => batch.targets.length)).toEqual([2, 2]);
+    expect(batches.every((batch) => batch.spaceDelegationResources.length === 1)).toBe(true);
+    const results = [];
+    for (const batch of batches) results.push(await counted("control-kill", () => runShareControlBatch({ owner: signer, nodeOrigin: SERVER_URL, batch, revokeFallback: { signOwnerRevocation: (cid) => owner.signOwnerRevocation(cid) } })));
     const after = await Promise.all(shares.map(async (share) => ({
       decrypt: await decryptWith(share.key, share.grant.cid, share.env!),
       get: (await invoke(share.key, share.grant.cid, share.path, "tinycloud.kv/get")).status,
     })));
-    const fallbacks = result.grants.filter((entry) => entry.result === "revoked-by-owner").length;
-    console.log("[pershare] kill-all", NODE_LABEL, JSON.stringify({ headerBytes: batch!.headerBytes, networks: result.networks.map((entry) => entry.result), grants: result.grants.map((entry) => [entry.result, entry.status]), approvals: approvalsUsed["control-kill"], after }));
-    expect(result.networks.map((entry) => entry.result)).toEqual(["retired", "retired", "retired"]);
-    expect(result.grants.every((entry) => entry.result !== "refused")).toBe(true);
-    if (NODE_LABEL === "n4p") expect(fallbacks).toBe(0);
-    expect(approvalsUsed["control-kill"]).toBe(1 + fallbacks);
+    const grants = results.flatMap((result) => result.grants);
+    const fallbacks = grants.filter((entry) => entry.result === "revoked-by-owner").length;
+    console.log("[pershare] kill-all", NODE_LABEL, JSON.stringify({ batches: batches.map((batch) => [batch.targets.length, batch.headerBytes]), networks: results.flatMap((result) => result.networks.map((entry) => entry.result)), grants: grants.map((entry) => [entry.result, entry.status]), approvals: approvalsUsed["control-kill"], after }));
+    expect(results.flatMap((result) => result.networks.map((entry) => entry.result))).toEqual(["retired", "retired", "retired", "retired"]);
+    expect(grants.every((entry) => entry.result !== "refused")).toBe(true);
+    // v1.20.6 and N4' revoke every grant through its control (batch 2 included); 1.21.0 and N1b need the owner fallback for each.
+    expect(fallbacks).toBe(NODE_LABEL === "n4p" || NODE_LABEL === "v1206" ? 0 : 4);
+    expect(approvalsUsed["control-kill"]).toBe(2 + fallbacks);
     for (const entry of after) {
       expect(Number(entry.decrypt)).toBeGreaterThanOrEqual(400);
       expect(entry.get).toBe(401);
