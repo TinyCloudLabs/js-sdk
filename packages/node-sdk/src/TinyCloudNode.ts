@@ -6042,6 +6042,8 @@ export class TinyCloudNode {
           },
         };
       }
+      // `aad_mismatch` needs `expectAad`, which this read never sets.
+      if (result.status === "aad_mismatch") return { status: "read_failed" };
       return { status: result.status };
     }
     if (!isSecretPayload(result.entry.value)) {

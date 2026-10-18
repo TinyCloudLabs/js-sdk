@@ -193,6 +193,11 @@ function defaultVaultMessage(input: VaultErrorInput): string {
     case "ALREADY_EXISTS": return input.message ?? `A value already exists at ${input.key}`;
     case "AUTH_UNAUTHORIZED": return input.message;
     case "PERMISSION_DENIED": return input.message;
+    case "AAD_MISMATCH": return input.message ?? `Envelope at ${input.key} is not bound to this space and key`;
+    case "ETAG_MISMATCH": return input.message ?? `The value at ${input.key} changed or no longer exists`;
+    case "INVALID_ETAG": return input.message ?? `ifMatch for ${input.key} is not a strong ETag`;
+    case "OUTCOME_UNKNOWN": return input.message;
+    case "NODE_BUSY": return input.message;
     case "STORAGE_QUOTA_EXCEEDED":
     case "STORAGE_LIMIT_REACHED":
       return input.message;
@@ -221,6 +226,76 @@ function typedKvCause(error: ServiceError): ServiceError & Error {
     ...(error.meta !== undefined ? { meta: error.meta } : {}),
     ...(error.cause !== undefined ? { cause: error.cause } : {}),
   });
+}
+
+/** Prefix of the AAD every network-encrypted vault envelope is written with. */
+const VAULT_AAD_PREFIX = "tinycloud.vault:";
+
+/**
+ * Space ids spell their EVM address as lowercase or EIP-55 checksummed
+ * depending on the capability boundary that produced them. The two spellings
+ * name the same space, so compare them with every `0x<40 hex>` lowercased.
+ */
+function canonicalAadSpaceId(spaceId: string): string {
+  return spaceId.replace(/0x[0-9a-fA-F]{40}/g, (address) => address.toLowerCase());
+}
+
+/**
+ * Whether an envelope's AAD is `tinycloud.vault:<spaceId>:<key>` for this
+ * vault's space (spelling-insensitive) and this exact key. The envelope's AAD
+ * is authenticated by the cipher, so a tampered value fails decryption too;
+ * this check rejects a genuine envelope that was written for another key.
+ */
+function envelopeAadBoundTo(
+  envelope: InlineEncryptedEnvelope,
+  spaceId: string,
+  key: string,
+): boolean {
+  if (typeof envelope.aad !== "string") return false;
+  let aad: string;
+  try {
+    aad = fromBytes(base64Decode(envelope.aad));
+  } catch {
+    return false;
+  }
+  const suffix = `:${key}`;
+  if (!aad.startsWith(VAULT_AAD_PREFIX) || !aad.endsWith(suffix)) return false;
+  if (aad.length < VAULT_AAD_PREFIX.length + suffix.length) return false;
+  const boundSpace = aad.slice(VAULT_AAD_PREFIX.length, aad.length - suffix.length);
+  return canonicalAadSpaceId(boundSpace) === canonicalAadSpaceId(spaceId);
+}
+
+/**
+ * Classify a failed `ifMatch` write into a distinct vault code. Returns
+ * `undefined` for anything else, which keeps its existing mapping.
+ *
+ * A connection that failed without an HTTP response is reported as
+ * `OUTCOME_UNKNOWN` too: the request may have reached the node.
+ */
+function ifMatchWriteError(
+  key: string,
+  error: ServiceError,
+): Result<never, VaultError> | undefined {
+  const cause = typedKvCause(error);
+  const status = typeof error.meta?.status === "number" ? error.meta.status : undefined;
+  const meta = error.meta !== undefined ? { meta: error.meta } : {};
+  if (error.code === ErrorCodes.KV_PRECONDITION_FAILED) {
+    return vaultError({ code: "ETAG_MISMATCH", key, ...meta, cause });
+  }
+  if (error.code === ErrorCodes.KV_WRITE_FAILED && status === 400) {
+    return vaultError({ code: "INVALID_ETAG", key, message: error.message, ...meta, cause });
+  }
+  if (
+    error.code === ErrorCodes.OUTCOME_UNKNOWN ||
+    ((error.code === ErrorCodes.NETWORK_ERROR || error.code === ErrorCodes.TIMEOUT) &&
+      status === undefined)
+  ) {
+    return vaultError({ code: "OUTCOME_UNKNOWN", key, message: error.message, ...meta, cause });
+  }
+  if (error.code === ErrorCodes.NODE_BUSY || error.code === ErrorCodes.REQUEST_TIMEOUT) {
+    return vaultError({ code: "NODE_BUSY", key, message: error.message, ...meta, cause });
+  }
+  return undefined;
 }
 
 /**
@@ -625,6 +700,23 @@ export class DataVaultService extends BaseService implements IDataVaultService {
       });
     }
 
+    if (options?.ifMatch !== undefined) {
+      if (options.ifNoneMatch !== undefined) {
+        return vaultError({
+          code: "STORAGE_ERROR",
+          cause: new Error("ifMatch cannot be combined with ifNoneMatch"),
+        });
+      }
+      if (!/^"[^"\s]+"$/.test(options.ifMatch)) {
+        return vaultError({
+          code: "INVALID_ETAG",
+          key,
+          message:
+            "ifMatch must be the strong, quoted ETag returned by a network read (VaultEntry.etag), passed exactly as returned",
+        });
+      }
+    }
+
     try {
       const { plaintext, contentType } = this.serializeValue(value, options);
       const metadata: Record<string, string> = {
@@ -648,8 +740,13 @@ export class DataVaultService extends BaseService implements IDataVaultService {
 
       const valuePath = `vault/${key}`;
       const valueBody = JSON.stringify(envelopeResult.data);
-      const valuePutResult = options?.ifNoneMatch !== undefined
-        ? await this.tc.kv.put(valuePath, valueBody, { ifNoneMatch: options.ifNoneMatch })
+      const putOptions = options?.ifMatch !== undefined
+        ? { ifMatch: options.ifMatch }
+        : options?.ifNoneMatch !== undefined
+          ? { ifNoneMatch: options.ifNoneMatch }
+          : undefined;
+      const valuePutResult = putOptions !== undefined
+        ? await this.tc.kv.put(valuePath, valueBody, putOptions)
         : await this.tc.kv.put(valuePath, valueBody);
       if (!valuePutResult.ok) {
         if (
@@ -664,6 +761,10 @@ export class DataVaultService extends BaseService implements IDataVaultService {
               : {}),
             cause: typedKvCause(valuePutResult.error),
           });
+        }
+        if (options?.ifMatch !== undefined) {
+          const classified = ifMatchWriteError(key, valuePutResult.error);
+          if (classified !== undefined) return classified;
         }
         return kvWriteError("Failed to store encrypted value", valuePutResult.error);
       }
@@ -708,6 +809,12 @@ export class DataVaultService extends BaseService implements IDataVaultService {
       const envelope = (
         typeof rawEnvelope === "string" ? JSON.parse(rawEnvelope) : rawEnvelope
       ) as InlineEncryptedEnvelope;
+      if (
+        options?.expectAad === true &&
+        !envelopeAadBoundTo(envelope, this.vaultConfig.spaceId, key)
+      ) {
+        return vaultError({ code: "AAD_MISMATCH", key });
+      }
       const proof = await this.decryptCapabilityProof();
       const plaintextResult = await config.service.decryptEnvelope(envelope, proof);
       if (!plaintextResult.ok) {
@@ -729,7 +836,12 @@ export class DataVaultService extends BaseService implements IDataVaultService {
         options,
       );
 
-      return { ok: true, data: { value, metadata, keyId } };
+      const etag =
+        options?.source === "network" ? valueResult.data.headers?.etag : undefined;
+      return {
+        ok: true,
+        data: { value, metadata, keyId, ...(etag === undefined ? {} : { etag }) },
+      };
     } catch (error) {
       return vaultError({
         code: "STORAGE_ERROR",
@@ -795,6 +907,13 @@ export class DataVaultService extends BaseService implements IDataVaultService {
       return { status: "corrupt_envelope" };
     }
 
+    if (
+      options?.expectAad === true &&
+      !envelopeAadBoundTo(envelope, this.vaultConfig.spaceId, key)
+    ) {
+      return { status: "aad_mismatch" };
+    }
+
     let plaintextResult: Awaited<ReturnType<typeof config.service.decryptEnvelope>>;
     try {
       const proof = await this.decryptCapabilityProof();
@@ -831,7 +950,11 @@ export class DataVaultService extends BaseService implements IDataVaultService {
         contentType,
         options,
       );
-      return { status: "ok", entry: { value, metadata, keyId } };
+      const etag = valueResult.data.headers?.etag;
+      return {
+        status: "ok",
+        entry: { value, metadata, keyId, ...(etag === undefined ? {} : { etag }) },
+      };
     } catch {
       return { status: "invalid_payload" };
     }
@@ -890,6 +1013,15 @@ export class DataVaultService extends BaseService implements IDataVaultService {
           code: "STORAGE_ERROR",
           cause: new Error(
             "ifNoneMatch is only supported by network-encrypted vaults",
+          ),
+        });
+      }
+
+      if (options?.ifMatch !== undefined) {
+        return vaultError({
+          code: "STORAGE_ERROR",
+          cause: new Error(
+            "ifMatch is only supported by network-encrypted vaults",
           ),
         });
       }

@@ -48,6 +48,19 @@ export interface VaultPutOptions {
    * fails with `ALREADY_EXISTS`; it is never overwritten.
    */
   ifNoneMatch?: "*";
+  /**
+   * Compare-and-swap: write only when the stored envelope still has this
+   * strong ETag, passed exactly as {@link VaultEntry.etag} returned it
+   * (including the quotes). Network-encrypted vaults only; cannot be combined
+   * with `ifNoneMatch`.
+   *
+   * Failures are distinct codes: `ETAG_MISMATCH` (the value changed or was
+   * deleted: re-read, re-apply, retry), `INVALID_ETAG` (malformed; never
+   * retry), `OUTCOME_UNKNOWN` (the node may have applied the write: read it
+   * back before retrying, with a freshly signed request) and `NODE_BUSY`
+   * (nothing was written; retry).
+   */
+  ifMatch?: string;
 }
 
 /**
@@ -58,8 +71,23 @@ export interface VaultGetOptions<T = unknown> {
   deserialize?: (data: Uint8Array) => T;
   /** Return raw decrypted bytes without deserialization */
   raw?: boolean;
-  /** Force the underlying KV read to bypass replica read-through. */
+  /**
+   * Force the underlying KV read to bypass replica read-through. Required for
+   * a usable {@link VaultEntry.etag}: only network reads return one, because
+   * a replica can serve a stale etag.
+   */
   source?: "network";
+  /**
+   * Opt-in (default off): refuse an envelope whose AAD is not bound to this
+   * vault's space and this key (`tinycloud.vault:<spaceId>:<key>`). The space
+   * id is compared after normalizing the spelling of its EVM addresses
+   * (checksummed and lowercase are the same space). An envelope with no AAD,
+   * or with a different one, fails with `AAD_MISMATCH` (`aad_mismatch` from
+   * `readNetworkEncrypted`) instead of decrypting. This stops a ciphertext
+   * copied to another key from being accepted; it does not stop a freshly
+   * encrypted forgery. Network-encrypted vaults only; ignored by `getShared`.
+   */
+  expectAad?: boolean;
   /** Delegated KV service for reading from the grantor's space (used by getShared) */
   kv?: { get<V>(key: string, options?: { raw?: boolean; source?: "network" }): Promise<{ ok: boolean; data?: { data: V }; error?: { message: string } }> };
 }
@@ -105,6 +133,12 @@ export interface VaultEntry<T> {
   metadata: Record<string, string>;
   /** Key ID used for encryption */
   keyId: string;
+  /**
+   * Strong ETag of the stored envelope, for {@link VaultPutOptions.ifMatch}.
+   * Present only for network-encrypted reads made with `source: "network"`
+   * (always for `readNetworkEncrypted`); never taken from a replica.
+   */
+  etag?: string;
 }
 
 /**
@@ -122,7 +156,9 @@ export type VaultNetworkReadResult<T> =
   | { status: "read_failed" }
   | { status: "corrupt_envelope" }
   | { status: "decrypt_failed" }
-  | { status: "invalid_payload" };
+  | { status: "invalid_payload" }
+  /** Only with `expectAad`: the envelope is not bound to this space and key. */
+  | { status: "aad_mismatch" };
 
 /**
  * Structured error codes for vault operations.
@@ -160,6 +196,44 @@ export type VaultErrorInput =
       message: string;
       meta?: Record<string, unknown>;
       /** The typed KV error that refused the write (an `Error` carrying its `code`, `service` and `meta`). */
+      cause: ServiceError & Error;
+    }
+  | {
+      /** `expectAad` read: the envelope's AAD is missing or bound to another space/key. */
+      code: "AAD_MISMATCH";
+      key: string;
+      message?: string;
+    }
+  | {
+      /** `ifMatch` write refused (HTTP 412): the value changed or no longer exists. Re-read and retry. */
+      code: "ETAG_MISMATCH";
+      key: string;
+      message?: string;
+      meta?: Record<string, unknown>;
+      cause: ServiceError & Error;
+    }
+  | {
+      /** `ifMatch` is not a strong ETag (HTTP 400, or rejected before sending). Never retry. */
+      code: "INVALID_ETAG";
+      key: string;
+      message?: string;
+      meta?: Record<string, unknown>;
+      cause?: ServiceError & Error;
+    }
+  | {
+      /** `ifMatch` write, HTTP 500 `outcome_unknown`: it may have been applied. Re-read before retrying. */
+      code: "OUTCOME_UNKNOWN";
+      key: string;
+      message: string;
+      meta?: Record<string, unknown>;
+      cause: ServiceError & Error;
+    }
+  | {
+      /** `ifMatch` write, HTTP 503 busy/timeout: nothing was written. Safe to retry. */
+      code: "NODE_BUSY";
+      key: string;
+      message: string;
+      meta?: Record<string, unknown>;
       cause: ServiceError & Error;
     }
   | {

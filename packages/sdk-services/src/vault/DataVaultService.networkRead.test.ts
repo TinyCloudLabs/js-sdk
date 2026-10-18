@@ -154,9 +154,12 @@ function transportHttpError(
 function createClassifiedVault(options?: {
   telemetry?: (event: string, data: unknown) => void;
   authorization?: string;
+  spaceId?: string;
 }) {
+  const spaceId = options?.spaceId ?? SPACE_ID;
   let localDecryptFails = false;
   let networkCalls = 0;
+  let lastHeaders: Record<string, string> = {};
   let kvResponse = async () => new Response("missing", { status: 404 });
   let decrypt = async (input: { canonicalBody: string }) =>
     decryptResponse(crypto, input);
@@ -177,8 +180,11 @@ function createClassifiedVault(options?: {
   const context = new ServiceContext({
     hosts: ["https://tinycloud.test"],
     invoke: () => ({ Authorization: authorization }),
-    fetch: async () => {
+    fetch: async (_url: unknown, init?: { headers?: HeadersInit }) => {
       networkCalls++;
+      lastHeaders = Object.fromEntries(
+        [...new Headers(init?.headers).entries()].map(([name, value]) => [name.toLowerCase(), value]),
+      );
       return kvResponse() as any;
     },
     ...(options?.telemetry
@@ -188,14 +194,14 @@ function createClassifiedVault(options?: {
   context.setSession({
     delegationHeader: { Authorization: authorization },
     delegationCid: "bafy-delegation",
-    spaceId: SPACE_ID,
+    spaceId,
     verificationMethod: "did:key:z6MkSession",
     jwk: {},
   });
   const kv = new KVService();
   kv.initialize(context);
   const vault = new DataVaultService({
-    spaceId: SPACE_ID,
+    spaceId,
     crypto: createVaultCrypto(),
     encryption: {
       networkId: NETWORK_ID,
@@ -207,7 +213,7 @@ function createClassifiedVault(options?: {
       ensurePublicSpace: async () => ({ ok: true as const, data: undefined }),
       publicKV: kv,
       readPublicSpace: async () => ({ ok: true as const, data: undefined }),
-      makePublicSpaceId: () => SPACE_ID,
+      makePublicSpaceId: () => spaceId,
       did: "did:key:z6MkPrincipal",
       address: "0xabc",
       chainId: 1,
@@ -229,11 +235,13 @@ function createClassifiedVault(options?: {
     setLocalDecryptFails: (value: boolean) => {
       localDecryptFails = value;
     },
-    async encrypt(value: unknown): Promise<string> {
+    crypto,
+    lastRequestHeaders: () => lastHeaders,
+    async encrypt(value: unknown, aad?: Uint8Array): Promise<string> {
       const result = await encryption.encryptToNetwork(
         NETWORK_ID,
         utf8Encode(JSON.stringify(value)),
-        { metadata: { "x-vault-content-type": "application/json" } },
+        { metadata: { "x-vault-content-type": "application/json" }, ...(aad === undefined ? {} : { aad }) },
       );
       if (!result.ok) throw new Error("test envelope encryption failed");
       return JSON.stringify(result.data);
@@ -411,5 +419,174 @@ describe("DataVaultService.readNetworkEncrypted", () => {
     } finally {
       disableTinyCloudDebug({ persist: false });
     }
+  });
+});
+
+const CAS_KEY = "sender-history/v2/records/_index/main";
+const CAS_ETAG = `"blake3-${"a".repeat(64)}"`;
+
+function kvEnvelopeResponse(envelope: string, etag?: string): Promise<Response> {
+  return Promise.resolve(
+    new Response(envelope, {
+      status: 200,
+      ...(etag === undefined ? {} : { headers: { etag } }),
+    }),
+  );
+}
+
+describe("DataVaultService network reads: etag", () => {
+  test("readNetworkEncrypted and a network get return the etag; a default get does not", async () => {
+    const fixture = createClassifiedVault();
+    const envelope = await fixture.encrypt({ v: 1 });
+    fixture.setKvResponse(() => kvEnvelopeResponse(envelope, CAS_ETAG));
+
+    const classified = await fixture.vault.readNetworkEncrypted<{ v: number }>(CAS_KEY);
+    expect(classified).toMatchObject({ status: "ok", entry: { value: { v: 1 }, etag: CAS_ETAG } });
+
+    const network = await fixture.vault.get<{ v: number }>(CAS_KEY, { source: "network" });
+    expect(network.ok && network.data.etag).toBe(CAS_ETAG);
+
+    const plain = await fixture.vault.get<{ v: number }>(CAS_KEY);
+    expect(plain.ok && plain.data.etag).toBeUndefined();
+  });
+
+  test("a response without an etag leaves it undefined", async () => {
+    const fixture = createClassifiedVault();
+    fixture.setKvResponse(async () => new Response(await fixture.encrypt({ v: 1 }), { status: 200 }));
+    const result = await fixture.vault.readNetworkEncrypted(CAS_KEY);
+    expect(result.status === "ok" && result.entry.etag).toBeUndefined();
+  });
+});
+
+describe("DataVaultService.put ifMatch", () => {
+  test("sends If-Match verbatim and succeeds", async () => {
+    const fixture = createClassifiedVault();
+    fixture.setKvResponse(() => Promise.resolve(new Response(null, { status: 200 })));
+    const result = await fixture.vault.put(CAS_KEY, { v: 2 }, { ifMatch: CAS_ETAG });
+    expect(result.ok).toBe(true);
+    expect(fixture.lastRequestHeaders()["if-match"]).toBe(CAS_ETAG);
+    expect(fixture.lastRequestHeaders()["if-none-match"]).toBeUndefined();
+  });
+
+  test.each([
+    ["412 precondition failed", () => new Response("precondition failed", { status: 412 }), "ETAG_MISMATCH"],
+    ["400 bad etag", () => new Response("If-Match must be a strong TinyCloud ETag", { status: 400 }), "INVALID_ETAG"],
+    [
+      "500 outcome_unknown",
+      () => new Response("outcome_unknown: the write may have been applied", { status: 500 }),
+      "OUTCOME_UNKNOWN",
+    ],
+    [
+      "503 unavailable_retryable",
+      () =>
+        new Response("unavailable_retryable: busy", {
+          status: 503,
+          headers: { "retry-after": "1" },
+        }),
+      "NODE_BUSY",
+    ],
+  ])("%s maps to its own code", async (_name, respond, code) => {
+    const fixture = createClassifiedVault();
+    fixture.setKvResponse(() => Promise.resolve(respond()));
+    const result = await fixture.vault.put(CAS_KEY, { v: 2 }, { ifMatch: CAS_ETAG });
+    expect(!result.ok && result.error.code).toBe(code);
+  });
+
+  test("a plain 500 stays a storage error, not outcome_unknown", async () => {
+    const fixture = createClassifiedVault();
+    fixture.setKvResponse(() => Promise.resolve(new Response("boom", { status: 500 })));
+    const result = await fixture.vault.put(CAS_KEY, { v: 2 }, { ifMatch: CAS_ETAG });
+    expect(!result.ok && result.error.code).toBe("STORAGE_ERROR");
+  });
+
+  test("a refused connection is reported as outcome unknown", async () => {
+    const fixture = createClassifiedVault();
+    fixture.setKvResponse(() => Promise.reject(new TypeError("fetch failed")));
+    const result = await fixture.vault.put(CAS_KEY, { v: 2 }, { ifMatch: CAS_ETAG });
+    expect(!result.ok && result.error.code).toBe("OUTCOME_UNKNOWN");
+  });
+
+  test.each([
+    ["weak", `W/${CAS_ETAG}`],
+    ["unquoted", CAS_ETAG.replaceAll('"', "")],
+    ["empty", ""],
+    ["half quoted", `"blake3-${"a".repeat(64)}`],
+  ])("%s etag is refused before any request", async (_name, etag) => {
+    const fixture = createClassifiedVault();
+    const result = await fixture.vault.put(CAS_KEY, { v: 2 }, { ifMatch: etag });
+    expect(!result.ok && result.error.code).toBe("INVALID_ETAG");
+    expect(fixture.getNetworkCalls()).toBe(0);
+  });
+
+  test("ifMatch with ifNoneMatch is refused before any request", async () => {
+    const fixture = createClassifiedVault();
+    const result = await fixture.vault.put(CAS_KEY, { v: 2 }, { ifMatch: CAS_ETAG, ifNoneMatch: "*" });
+    expect(!result.ok && result.error.code).toBe("STORAGE_ERROR");
+    expect(fixture.getNetworkCalls()).toBe(0);
+  });
+
+  test("ifNoneMatch keeps ALREADY_EXISTS on 412", async () => {
+    const fixture = createClassifiedVault();
+    fixture.setKvResponse(() => Promise.resolve(new Response("exists", { status: 412 })));
+    const result = await fixture.vault.put(CAS_KEY, { v: 2 }, { ifNoneMatch: "*" });
+    expect(!result.ok && result.error.code).toBe("ALREADY_EXISTS");
+  });
+});
+
+describe("DataVaultService expectAad (opt-in)", () => {
+  const bind = (spaceId: string, key: string) => utf8Encode(`tinycloud.vault:${spaceId}:${key}`);
+  const CHECKSUMMED = "0xAbCdEf0123456789aBcDeF0123456789AbCdEf01";
+  const checksummedSpace = `tinycloud:pkh:eip155:1:${CHECKSUMMED}:applications`;
+
+  test("default off: any envelope still reads, including one with no AAD", async () => {
+    const fixture = createClassifiedVault();
+    fixture.setKvResponse(async () => new Response(await fixture.encrypt({ v: 1 }), { status: 200 }));
+    expect((await fixture.vault.get(CAS_KEY)).ok).toBe(true);
+    expect((await fixture.vault.readNetworkEncrypted(CAS_KEY)).status).toBe("ok");
+  });
+
+  test("accepts an envelope bound to this space and key", async () => {
+    const fixture = createClassifiedVault();
+    const envelope = await fixture.encrypt({ v: 1 }, bind(SPACE_ID, CAS_KEY));
+    fixture.setKvResponse(() => kvEnvelopeResponse(envelope));
+    expect((await fixture.vault.get(CAS_KEY, { expectAad: true })).ok).toBe(true);
+    expect((await fixture.vault.readNetworkEncrypted(CAS_KEY, { expectAad: true })).status).toBe("ok");
+  });
+
+  test("treats checksummed and lowercase spellings of the space address as the same space", async () => {
+    const writtenChecksummed = createClassifiedVault({ spaceId: checksummedSpace });
+    const envelope = await writtenChecksummed.encrypt({ v: 1 }, bind(checksummedSpace, CAS_KEY));
+
+    const readLowercase = createClassifiedVault({ spaceId: checksummedSpace.toLowerCase() });
+    readLowercase.setKvResponse(() => kvEnvelopeResponse(envelope));
+    expect((await readLowercase.vault.get(CAS_KEY, { expectAad: true })).ok).toBe(true);
+    expect((await readLowercase.vault.readNetworkEncrypted(CAS_KEY, { expectAad: true })).status).toBe("ok");
+
+    const lowerEnvelope = await readLowercase.encrypt({ v: 1 }, bind(checksummedSpace.toLowerCase(), CAS_KEY));
+    writtenChecksummed.setKvResponse(() => kvEnvelopeResponse(lowerEnvelope));
+    expect((await writtenChecksummed.vault.get(CAS_KEY, { expectAad: true })).ok).toBe(true);
+  });
+
+  test.each([
+    ["legacy envelope without AAD", undefined],
+    ["envelope copied from another key", bind(SPACE_ID, "sender-history/v2/records/shareA")],
+    ["envelope from another space", bind("tinycloud:pkh:eip155:1:0xdef:applications", CAS_KEY)],
+    ["key that only shares a suffix", bind(SPACE_ID, `x${CAS_KEY}`)],
+    ["different address, same name", bind("tinycloud:pkh:eip155:1:0x1111111111111111111111111111111111111111:secrets", CAS_KEY)],
+  ])("%s fails with an explicit aad_mismatch and no decrypt request", async (_name, aad) => {
+    const fixture = createClassifiedVault();
+    const envelope = await fixture.encrypt({ v: 1 }, aad);
+    fixture.setKvResponse(() => kvEnvelopeResponse(envelope));
+    let decrypts = 0;
+    fixture.setDecrypt(async (input) => {
+      decrypts++;
+      return decryptResponse(fixture.crypto, input);
+    });
+
+    const classified = await fixture.vault.readNetworkEncrypted(CAS_KEY, { expectAad: true });
+    expect(classified).toEqual({ status: "aad_mismatch" });
+    const get = await fixture.vault.get(CAS_KEY, { expectAad: true });
+    expect(!get.ok && get.error.code).toBe("AAD_MISMATCH");
+    expect(decrypts).toBe(0);
   });
 });
