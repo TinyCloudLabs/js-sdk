@@ -31,6 +31,8 @@ export type NodeTarget = (typeof NODE_TARGETS)[number];
 
 /** Largest archive the CLI will download. Real archives are 9-11 MB. */
 export const NODE_ARTIFACT_MAX_BYTES = 64 * 1024 * 1024;
+/** Largest `tinycloud` executable a pin may describe. The real one is about 36 MB. */
+export const NODE_BINARY_MAX_BYTES = 256 * 1024 * 1024;
 
 /**
  * Port the node's local service binds by default (`node service install`
@@ -48,13 +50,23 @@ export const NODE_SERVICE_DEFAULT_HOST = "127.0.0.1";
 export const NODE_SERVICE_DEFAULT_PORT = 8081;
 export const NODE_SERVICE_LOCAL_URL = `http://${NODE_SERVICE_DEFAULT_HOST}:${NODE_SERVICE_DEFAULT_PORT}`;
 
-export interface NodeArtifact {
+/** The downloaded archive, as pinned. */
+export interface NodeArchivePin {
   target: NodeTarget;
   url: string;
   /** Lowercase hex SHA-256 of the archive. */
   sha256: string;
   /** Exact archive size in bytes. */
   size: number;
+}
+
+/** The archive pin plus the pin of the executable that must come out of it. */
+export interface NodeArtifact extends NodeArchivePin {
+  /**
+   * The extracted `tinycloud` executable. Pinned separately so the program that
+   * decompresses the archive is not part of what the pin has to trust.
+   */
+  binary: { sha256: string; size: number };
 }
 
 export interface NodeRelease {
@@ -89,7 +101,10 @@ export function nodeArchiveMember(target: NodeTarget): string {
 interface RawNodeRelease {
   schemaVersion?: unknown;
   recommended?: unknown;
-  targets?: Record<string, { url?: unknown; sha256?: unknown; size?: unknown } | null | undefined> | null;
+  targets?: Record<
+    string,
+    { url?: unknown; sha256?: unknown; size?: unknown; binary?: { sha256?: unknown; size?: unknown } | null } | null | undefined
+  > | null;
 }
 
 /** Validate an untrusted pin document. Throws on any deviation; never repairs. */
@@ -113,7 +128,7 @@ export function parseNodeRelease(raw: unknown): NodeRelease {
   for (const target of NODE_TARGETS) {
     const entry = rawTargets[target];
     if (typeof entry !== "object" || entry === null) throw nodeReleaseError(`node-release.json is missing target ${target}`);
-    const { url, sha256, size } = entry;
+    const { url, sha256, size, binary } = entry;
     if (url !== nodeArchiveUrl(recommended, target)) {
       throw nodeReleaseError(`node-release.json ${target} url must be ${nodeArchiveUrl(recommended, target)}`);
     }
@@ -123,7 +138,19 @@ export function parseNodeRelease(raw: unknown): NodeRelease {
     if (typeof size !== "number" || !Number.isSafeInteger(size) || size < 1 || size > NODE_ARTIFACT_MAX_BYTES) {
       throw nodeReleaseError(`node-release.json ${target} size must be an integer between 1 and ${NODE_ARTIFACT_MAX_BYTES}`);
     }
-    targets[target] = { target, url, sha256, size };
+    if (typeof binary !== "object" || binary === null) throw nodeReleaseError(`node-release.json ${target} has no binary pin`);
+    if (typeof binary.sha256 !== "string" || !SHA256_RE.test(binary.sha256)) {
+      throw nodeReleaseError(`node-release.json ${target} binary sha256 must be 64 lowercase hex characters`);
+    }
+    if (
+      typeof binary.size !== "number" ||
+      !Number.isSafeInteger(binary.size) ||
+      binary.size < 1 ||
+      binary.size > NODE_BINARY_MAX_BYTES
+    ) {
+      throw nodeReleaseError(`node-release.json ${target} binary size must be an integer between 1 and ${NODE_BINARY_MAX_BYTES}`);
+    }
+    targets[target] = { target, url, sha256, size, binary: { sha256: binary.sha256, size: binary.size } };
   }
   return { recommended, targets };
 }

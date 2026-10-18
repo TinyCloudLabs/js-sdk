@@ -6,23 +6,33 @@
 //      arrives, never reading past the pinned size.
 //   3. Compare size and SHA-256 with the pin. Nothing is decompressed before
 //      this passes.
-//   4. Read the archive with our own tar reader (the system `xz` only
-//      decompresses; it never writes files) and write exactly one member,
+//   4. Read the archive with our own tar reader and write exactly one member,
 //      `tinycloud-node-<target>/tinycloud`. Any entry that is a link, a device,
 //      an absolute or `..` path, or outside the archive root rejects the whole
-//      archive.
-//   5. chmod 0755 and rename onto the destination; a failed run leaves the
+//      archive. The system `xz` (found only at fixed absolute paths, never via
+//      PATH) only decompresses; it never writes files.
+//   5. Re-hash the staged executable from disk and compare it with the pinned
+//      executable hash, so the decompressor is not part of what is trusted.
+//   6. chmod 0755 and rename onto the destination; a failed run leaves the
 //      previous file untouched.
 import { createHash } from "node:crypto";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
-import { createReadStream } from "node:fs";
-import { chmod, mkdir, mkdtemp, open, rename, rm } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { accessSync, constants, createReadStream, statSync } from "node:fs";
+import { chmod, mkdir, mkdtemp, open, rename, rm, type FileHandle } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { dirname, isAbsolute, join } from "node:path";
 import { createGunzip } from "node:zlib";
 import { ExitCode } from "../config/constants.js";
 import { CLIError } from "../output/errors.js";
-import { NODE_ARTIFACT_MAX_BYTES, nodeArchiveMember, nodeArchiveRoot, type NodeArtifact } from "./node-release.js";
+import {
+  NODE_ARTIFACT_MAX_BYTES,
+  NODE_BINARY_MAX_BYTES,
+  nodeArchiveMember,
+  nodeArchiveRoot,
+  type NodeArchivePin,
+  type NodeArtifact,
+} from "./node-release.js";
 
 /**
  * The only hosts a download, or a redirect of one, may touch. github.com answers
@@ -40,24 +50,40 @@ const MAX_REDIRECTS = 5;
 const DEFAULT_IDLE_TIMEOUT_MS = 30_000;
 /** Decompressed tar bytes allowed. The real archive unpacks to about 47 MB. */
 const MAX_UNPACKED_BYTES = 512 * 1024 * 1024;
-const MAX_BINARY_BYTES = 256 * 1024 * 1024;
+const MAX_BINARY_BYTES = NODE_BINARY_MAX_BYTES;
 const MAX_METADATA_BYTES = 64 * 1024;
 const TAR_BLOCK = 512;
 const SHA256_RE = /^[0-9a-f]{64}$/;
 
 export type FetchLike = (url: string, init: RequestInit) => Promise<Response>;
 
-export interface FetchNodeBinaryOptions {
-  artifact: NodeArtifact;
-  /** Final path of the executable. Its directory is created if missing. */
-  destination: string;
+/**
+ * Fixed places `xz` is looked up. Never `PATH`: an empty or relative entry, a
+ * writable directory, or `node_modules/.bin` would let another program stand in
+ * for the decompressor.
+ */
+export const XZ_LOCATIONS: readonly string[] = ["/usr/bin/xz", "/bin/xz", "/usr/local/bin/xz", "/opt/homebrew/bin/xz"];
+
+interface TransferOptions {
   /** Transport. Defaults to the global `fetch`; the policy checks run on the URLs regardless. */
   fetchImpl?: FetchLike;
-  /** Decompressor for `.tar.xz` archives (a `xz` on PATH by default). */
+  /** Absolute path of the decompressor for `.tar.xz` archives. Defaults to the first of `xzCandidates` that exists. */
   xzBinary?: string;
+  /** Where to look for `xz` when `xzBinary` is unset. Absolute paths only; others are ignored. */
+  xzCandidates?: readonly string[];
   /** Abort if no bytes arrive for this long. */
   idleTimeoutMs?: number;
   signal?: AbortSignal;
+}
+
+export interface FetchNodeBinaryOptions extends TransferOptions {
+  artifact: NodeArtifact;
+  /** Final path of the executable. Its directory is created if missing. */
+  destination: string;
+}
+
+export interface MeasureNodeBinaryOptions extends TransferOptions {
+  artifact: NodeArchivePin;
 }
 
 export interface FetchedNodeBinary {
@@ -71,6 +97,55 @@ export interface FetchedNodeBinary {
 const downloadError = (code: string, message: string) => new CLIError(code, message, ExitCode.NETWORK_ERROR);
 const unsafeArchive = (message: string) => new CLIError("NODE_ARCHIVE_UNSAFE", `Refusing node archive: ${message}`, ExitCode.ERROR);
 const invalidArchive = (message: string) => new CLIError("NODE_ARCHIVE_INVALID", `Invalid node archive: ${message}`, ExitCode.ERROR);
+
+/** `FileHandle.write` can write fewer bytes than asked (disk full, quota, file-size limit); keep going until all are down. */
+export async function writeFully(handle: Pick<FileHandle, "write">, data: Uint8Array): Promise<void> {
+  let offset = 0;
+  while (offset < data.length) {
+    const { bytesWritten } = await handle.write(data, offset, data.length - offset);
+    if (bytesWritten <= 0) {
+      throw new CLIError("NODE_WRITE_FAILED", "Could not write the node download to disk: no progress (disk full?)", ExitCode.ERROR);
+    }
+    offset += bytesWritten;
+  }
+}
+
+async function sha256File(path: string): Promise<{ sha256: string; size: number }> {
+  const hash = createHash("sha256");
+  let size = 0;
+  for await (const chunk of createReadStream(path)) {
+    hash.update(chunk as Buffer);
+    size += (chunk as Buffer).length;
+  }
+  return { sha256: hash.digest("hex"), size };
+}
+
+/** Absolute path of a usable `xz`. An explicit path must be absolute; otherwise only the fixed candidates are tried. */
+function resolveXz(explicit: string | undefined, candidates: readonly string[] = XZ_LOCATIONS): string {
+  if (explicit !== undefined) {
+    if (!isAbsolute(explicit)) {
+      throw new CLIError("NODE_UNPACK_TOOL_REJECTED", "The xz path must be absolute; PATH is never searched", ExitCode.ERROR);
+    }
+    return explicit;
+  }
+  for (const candidate of candidates) {
+    if (!isAbsolute(candidate)) continue;
+    try {
+      const info = statSync(candidate);
+      // A world-writable file is not a place to trust a decompressor from.
+      if (!info.isFile() || (info.mode & 0o002) !== 0) continue;
+      accessSync(candidate, constants.X_OK);
+      return candidate;
+    } catch {
+      // Not here; try the next location.
+    }
+  }
+  throw new CLIError(
+    "NODE_UNPACK_TOOL_MISSING",
+    `Unpacking the node archive needs xz at one of ${candidates.join(", ")} (install xz-utils or xz)`,
+    ExitCode.ERROR,
+  );
+}
 
 /** Parse and vet a download URL. Only the host is ever shown: redirect targets carry signed query strings. */
 function checkDownloadUrl(raw: string): URL {
@@ -96,7 +171,7 @@ function checkDownloadUrl(raw: string): URL {
   return url;
 }
 
-function checkArtifact(artifact: NodeArtifact): "xz" | "gz" {
+function checkArtifact(artifact: NodeArchivePin): "xz" | "gz" {
   const { pathname } = checkDownloadUrl(artifact.url);
   if (!SHA256_RE.test(artifact.sha256)) {
     throw new CLIError("NODE_RELEASE_INVALID", "Node artifact sha256 must be 64 lowercase hex characters", ExitCode.ERROR);
@@ -114,7 +189,7 @@ function checkArtifact(artifact: NodeArtifact): "xz" | "gz" {
  * The file is only trustworthy if this resolves.
  */
 async function downloadArchive(
-  artifact: NodeArtifact,
+  artifact: NodeArchivePin,
   file: string,
   fetchImpl: FetchLike,
   idleTimeoutMs: number,
@@ -187,9 +262,12 @@ async function downloadArchive(
           throw downloadError("NODE_DOWNLOAD_TOO_LARGE", `Node download exceeds the pinned size of ${artifact.size} bytes`);
         }
         hash.update(value);
-        await out.write(value);
+        await writeFully(out, value);
       }
       await out.sync();
+      if ((await out.stat()).size !== received) {
+        throw new CLIError("NODE_WRITE_FAILED", "The node download was not written to disk completely", ExitCode.ERROR);
+      }
     } finally {
       await out.close();
     }
@@ -216,12 +294,12 @@ async function downloadArchive(
   }
 }
 
-/** Decompressed bytes of an `.tar.xz`, via `xz -dc` reading the verified file on stdin. */
-async function* xzChunks(file: string, xzBinary: string): AsyncGenerator<Buffer> {
-  // Scrubbed environment: XZ_OPT/XZ_DEFAULTS must not influence the decoder.
-  const child = spawn(xzBinary, ["-d", "-c"], {
+/** Decompressed bytes of a `.tar.xz`, via `xz -dc` (at an absolute path) reading the verified file on stdin. */
+async function* xzChunks(file: string, xzPath: string): AsyncGenerator<Buffer> {
+  // Scrubbed environment, no PATH: XZ_OPT/XZ_DEFAULTS must not influence the decoder.
+  const child = spawn(xzPath, ["-d", "-c"], {
     stdio: ["pipe", "pipe", "pipe"],
-    env: { PATH: process.env.PATH ?? "", LC_ALL: "C" },
+    env: { LC_ALL: "C" },
   });
   const closed = once(child, "close");
   closed.catch(() => {});
@@ -247,7 +325,7 @@ async function* xzChunks(file: string, xzBinary: string): AsyncGenerator<Buffer>
     if (error instanceof Error && "code" in error && error.code === "ENOENT") {
       throw new CLIError(
         "NODE_UNPACK_TOOL_MISSING",
-        `Unpacking the node archive needs \`${xzBinary}\` on PATH (install xz-utils or xz)`,
+        `Unpacking the node archive needs \`${xzPath}\` (install xz-utils or xz)`,
         ExitCode.ERROR,
       );
     }
@@ -407,7 +485,9 @@ async function extractMember(
     const type = String.fromCharCode(header[156]);
     let size = octal(header.subarray(124, 136), "size");
     let name = cString(header.subarray(0, 100));
-    if (header.toString("latin1", 257, 262) === "ustar") {
+    // POSIX ustar ("ustar\0" "00") keeps a path prefix at 345-500. GNU tar ("ustar  \0",
+    // what cargo-dist emits) uses those bytes for atime/ctime/offsets, not a path.
+    if (header.toString("latin1", 257, 265) === "ustar\u000000") {
       const prefix = cString(header.subarray(345, 500));
       if (prefix !== "") name = `${prefix}/${name}`;
     }
@@ -456,7 +536,7 @@ async function extractMember(
       try {
         for await (const piece of reader.stream(size)) {
           hash.update(piece);
-          await out.write(piece);
+          await writeFully(out, piece);
         }
         await out.sync();
       } finally {
@@ -474,42 +554,78 @@ async function extractMember(
   return found;
 }
 
+interface UnpackedBinary {
+  staged: string;
+  sha256: string;
+  size: number;
+}
+
+/** Download the archive into `staging`, verify it against its pin, and unpack the executable next to it. */
+async function downloadAndUnpack(artifact: NodeArchivePin, staging: string, options: TransferOptions): Promise<UnpackedBinary> {
+  const format = checkArtifact(artifact);
+  const xzPath = format === "xz" ? resolveXz(options.xzBinary, options.xzCandidates) : undefined;
+  const fetchImpl = options.fetchImpl ?? ((url, init) => fetch(url, init));
+
+  const archive = join(staging, "archive");
+  await downloadArchive(artifact, archive, fetchImpl, options.idleTimeoutMs ?? DEFAULT_IDLE_TIMEOUT_MS, options.signal);
+
+  const staged = join(staging, "tinycloud");
+  const chunks = xzPath ? xzChunks(archive, xzPath) : gzipChunks(archive);
+  let extracted: { sha256: string; size: number };
+  try {
+    extracted = await extractMember(chunks, nodeArchiveRoot(artifact.target), nodeArchiveMember(artifact.target), staged);
+  } finally {
+    // Stops the xz child if extraction gave up before reading everything.
+    await chunks.return(undefined);
+  }
+  // Measure what is on disk, not what was handed to write().
+  const onDisk = await sha256File(staged);
+  if (onDisk.sha256 !== extracted.sha256 || onDisk.size !== extracted.size) {
+    throw new CLIError("NODE_WRITE_FAILED", "The unpacked node executable on disk differs from what was extracted", ExitCode.ERROR);
+  }
+  return { staged, ...onDisk };
+}
+
+/**
+ * Download an archive (verified against its pin), unpack it, and return the
+ * hash and size of the executable inside. For pin generation; nothing is installed.
+ */
+export async function measureNodeBinary(options: MeasureNodeBinaryOptions): Promise<{ sha256: string; size: number }> {
+  const staging = await mkdtemp(join(tmpdir(), "tc-node-measure-"));
+  try {
+    const { sha256, size } = await downloadAndUnpack(options.artifact, staging, options);
+    return { sha256, size };
+  } finally {
+    await rm(staging, { recursive: true, force: true });
+  }
+}
+
 /**
  * Download, verify, unpack and place the node executable at `destination`.
  * On any failure `destination` is untouched and nothing is left behind.
  */
 export async function fetchNodeBinary(options: FetchNodeBinaryOptions): Promise<FetchedNodeBinary> {
   const { artifact, destination } = options;
-  const format = checkArtifact(artifact);
-  const fetchImpl = options.fetchImpl ?? ((url, init) => fetch(url, init));
+  if (!SHA256_RE.test(artifact.binary.sha256) || !Number.isSafeInteger(artifact.binary.size) || artifact.binary.size < 1 || artifact.binary.size > MAX_BINARY_BYTES) {
+    throw new CLIError("NODE_RELEASE_INVALID", "Node artifact has no valid pin for its executable", ExitCode.ERROR);
+  }
 
   const dir = dirname(destination);
   await mkdir(dir, { recursive: true });
   // Same directory as the destination so the final rename cannot cross a filesystem.
   const staging = await mkdtemp(join(dir, ".tinycloud-fetch-"));
   try {
-    const archive = join(staging, "archive");
-    await downloadArchive(artifact, archive, fetchImpl, options.idleTimeoutMs ?? DEFAULT_IDLE_TIMEOUT_MS, options.signal);
-
-    const staged = join(staging, "tinycloud");
-    const chunks = format === "xz" ? xzChunks(archive, options.xzBinary ?? "xz") : gzipChunks(archive);
-    let binary: { sha256: string; size: number };
-    try {
-      binary = await extractMember(chunks, nodeArchiveRoot(artifact.target), nodeArchiveMember(artifact.target), staged);
-    } finally {
-      // Stops the xz child if extraction gave up before reading everything.
-      await chunks.return(undefined);
+    const { staged, sha256, size } = await downloadAndUnpack(artifact, staging, options);
+    if (sha256 !== artifact.binary.sha256 || size !== artifact.binary.size) {
+      throw new CLIError(
+        "NODE_ARTIFACT_INTEGRITY",
+        `The unpacked node executable does not match the pin in this CLI (expected ${artifact.binary.sha256}, got ${sha256}); nothing was installed`,
+        ExitCode.ERROR,
+      );
     }
-
     await chmod(staged, 0o755);
     await rename(staged, destination);
-    return {
-      destination,
-      archiveSha256: artifact.sha256,
-      archiveSize: artifact.size,
-      binarySha256: binary.sha256,
-      binarySize: binary.size,
-    };
+    return { destination, archiveSha256: artifact.sha256, archiveSize: artifact.size, binarySha256: sha256, binarySize: size };
   } finally {
     await rm(staging, { recursive: true, force: true });
   }

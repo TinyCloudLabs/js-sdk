@@ -1,5 +1,7 @@
 // Regenerates src/lib/node-release.json, the SHA-256 pins for the node tarballs
-// the CLI installs, from an upstream tinycloud-node release.
+// (and for the executable inside each) the CLI installs, from an upstream
+// tinycloud-node release. It downloads and unpacks every archive, so it needs
+// `xz` at a fixed location (see XZ_LOCATIONS) and about 45 MB of bandwidth.
 //
 //   bun scripts/generate-node-release.ts                    # re-pin the current version
 //   bun scripts/generate-node-release.ts --version 1.22.0   # pin a new version
@@ -11,6 +13,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 
 import { NODE_RELEASE_REPO, parseNodeRelease } from "../src/lib/node-release.js";
+import { measureNodeBinary } from "../src/lib/node-fetch.js";
 import { buildNodeRelease, serializeNodeRelease, type UpstreamRelease } from "../src/lib/node-release-pin.js";
 
 const PIN_PATH = fileURLToPath(new URL("../src/lib/node-release.json", import.meta.url));
@@ -62,7 +65,9 @@ const release = JSON.parse(
   await getText(`https://api.github.com/repos/${NODE_RELEASE_REPO}/releases/tags/v${version}`, "application/vnd.github+json"),
 ) as UpstreamRelease;
 const sumText = await getText(`${base}/sha256.sum`, "text/plain");
-const expected = serializeNodeRelease(buildNodeRelease(version, release, sumText));
+const expected = serializeNodeRelease(
+  await buildNodeRelease(version, release, sumText, (archive) => measureNodeBinary({ artifact: archive })),
+);
 
 if (check) {
   if (current !== expected) {

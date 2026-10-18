@@ -1,14 +1,14 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
-import { chmod, mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile, type FileHandle } from "node:fs/promises";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { gzipSync } from "node:zlib";
 import { CLIError } from "../output/errors.js";
-import { NODE_DOWNLOAD_HOSTS, fetchNodeBinary, type FetchLike } from "./node-fetch.js";
+import { NODE_DOWNLOAD_HOSTS, fetchNodeBinary, writeFully, type FetchLike } from "./node-fetch.js";
 import { nodeArchiveMember, nodeArchiveRoot, nodeArchiveUrl, type NodeArtifact, type NodeTarget } from "./node-release.js";
 
 const TARGET: NodeTarget = "x86_64-unknown-linux-gnu";
@@ -24,6 +24,12 @@ interface TarEntry {
   /** Tar typeflag; defaults to a regular file. */
   type?: string;
   linkname?: string;
+  /** GNU tar header ("ustar  \0", what cargo-dist emits) instead of POSIX ustar. */
+  gnu?: boolean;
+  /** Seconds since epoch written where GNU headers keep atime and ctime (bytes 345-368). */
+  atime?: number;
+  /** POSIX ustar path prefix (bytes 345-500). */
+  prefix?: string;
 }
 
 function field(value: string, length: number): Buffer {
@@ -43,8 +49,16 @@ function header(entry: TarEntry): Buffer {
   block.write("        ", 148);
   block.write(entry.type ?? "0", 156);
   field(entry.linkname ?? "", 100).copy(block, 157);
-  block.write("ustar\0", 257);
-  block.write("00", 263);
+  if (entry.gnu) {
+    block.write("ustar  \0", 257);
+    const stamp = `${(entry.atime ?? 0).toString(8).padStart(11, "0")}\0`;
+    block.write(stamp, 345);
+    block.write(stamp, 357);
+  } else {
+    block.write("ustar\0", 257);
+    block.write("00", 263);
+    if (entry.prefix) block.write(entry.prefix, 345, 155, "utf8");
+  }
   const sum = block.reduce((total, byte) => total + byte, 0);
   block.write(`${sum.toString(8).padStart(6, "0")}\0 `, 148);
   return block;
@@ -77,12 +91,15 @@ const goodEntries = (): TarEntry[] => [
 
 const xz = (tar: Buffer) => execFileSync("xz", ["-c"], { input: tar, maxBuffer: 64 * 1024 * 1024 });
 
-function artifactFor(archive: Buffer, extension: "tar.xz" | "tar.gz" = "tar.xz"): NodeArtifact {
+const sha256Of = (bytes: Buffer) => createHash("sha256").update(bytes).digest("hex");
+
+function artifactFor(archive: Buffer, extension: "tar.xz" | "tar.gz" = "tar.xz", binary: Buffer = BINARY): NodeArtifact {
   return {
     target: TARGET,
     url: nodeArchiveUrl("1.21.0", TARGET).replace(/tar\.xz$/, extension),
-    sha256: createHash("sha256").update(archive).digest("hex"),
+    sha256: sha256Of(archive),
     size: archive.length,
+    binary: { sha256: sha256Of(binary), size: binary.length },
   };
 }
 
@@ -139,7 +156,7 @@ async function expectCode(promise: Promise<unknown>, code: string, messageHas?: 
   expect((error as CLIError).message).not.toContain("SECRETSIGNATURE");
 }
 
-const install = (artifact: NodeArtifact, extra: { xzBinary?: string; idleTimeoutMs?: number } = {}) =>
+const install = (artifact: NodeArtifact, extra: { xzBinary?: string; xzCandidates?: readonly string[]; idleTimeoutMs?: number } = {}) =>
   fetchNodeBinary({ artifact, destination, fetchImpl: fixtureFetch, ...extra });
 
 beforeEach(async () => {
@@ -230,6 +247,111 @@ describe("fetchNodeBinary", () => {
     expect(await readFile(destination)).toEqual(BINARY);
   });
 
+  describe("unpacking", () => {
+    test("accepts GNU-format headers with atime and ctime set, which is what cargo-dist's tar writes", async () => {
+      const archive = xz(buildTar(goodEntries().map((entry) => ({ ...entry, gnu: true, atime: 1_700_000_000 }))));
+      const artifact = artifactFor(archive);
+      serveRelease(artifact, sendBytes(archive));
+
+      await install(artifact);
+
+      expect(await readFile(destination)).toEqual(BINARY);
+    });
+
+    test("still honours the path prefix of POSIX ustar headers", async () => {
+      const archive = xz(buildTar([{ name: "tinycloud", prefix: ROOT, data: BINARY }]));
+      const artifact = artifactFor(archive);
+      serveRelease(artifact, sendBytes(archive));
+
+      await install(artifact);
+
+      expect(await readFile(destination)).toEqual(BINARY);
+    });
+
+    test("an executable that differs from its pin is refused even though the archive hash matches", async () => {
+      const archive = xz(buildTar([{ name: MEMBER, data: Buffer.from("not the pinned executable") }]));
+      const artifact = artifactFor(archive); // archive pin matches; executable pin is BINARY
+      serveRelease(artifact, sendBytes(archive));
+      const previous = await withPrevious();
+
+      await expectCode(install(artifact), "NODE_ARTIFACT_INTEGRITY", "executable");
+      await expectUntouched(previous);
+    });
+
+    describe("the decompressor", () => {
+      async function plantTrojan(dir: string, marker: string) {
+        await mkdir(dir, { recursive: true });
+        const file = join(dir, "xz");
+        await writeFile(file, `#!/bin/sh\ntouch '${marker}'\nexit 1\n`);
+        await chmod(file, 0o755);
+      }
+
+      // Needs a real xz at one of the fixed locations (/usr/bin/xz on CI runners).
+      test("is never found through PATH, an empty or relative PATH entry, or the working directory", async () => {
+        const archive = xz(buildTar(goodEntries()));
+        const artifact = artifactFor(archive);
+        serveRelease(artifact, sendBytes(archive));
+        const marker = join(work, "trojan-ran");
+        const hostile = join(work, "hostile-cwd");
+        await plantTrojan(hostile, marker);
+        await plantTrojan(join(hostile, "node_modules", ".bin"), marker);
+        const originalCwd = process.cwd();
+        const originalPath = process.env.PATH;
+        process.chdir(hostile);
+        process.env.PATH = ["", ".", "node_modules/.bin", join(hostile, "node_modules", ".bin"), hostile, originalPath].join(":");
+        try {
+          await install(artifact);
+        } finally {
+          process.chdir(originalCwd);
+          process.env.PATH = originalPath;
+        }
+
+        expect(await stat(marker).catch(() => null)).toBeNull();
+        expect(await readFile(destination)).toEqual(BINARY);
+      });
+
+      test("is not searched for on PATH when none exists at a fixed location", async () => {
+        const marker = join(work, "trojan-ran");
+        const hostile = join(work, "hostile-bin");
+        await plantTrojan(hostile, marker);
+        const archive = xz(buildTar(goodEntries()));
+        const artifact = artifactFor(archive);
+        const originalPath = process.env.PATH;
+        process.env.PATH = `${hostile}:${originalPath}`;
+        try {
+          await expectCode(install(artifact, { xzCandidates: [] }), "NODE_UNPACK_TOOL_MISSING");
+        } finally {
+          process.env.PATH = originalPath;
+        }
+
+        expect(await stat(marker).catch(() => null)).toBeNull();
+        await expectUntouched(undefined);
+      });
+
+      test("must be given as an absolute path", async () => {
+        const archive = xz(buildTar(goodEntries()));
+        await expectCode(install(artifactFor(archive), { xzBinary: "xz" }), "NODE_UNPACK_TOOL_REJECTED");
+        await expectCode(install(artifactFor(archive), { xzBinary: "./xz" }), "NODE_UNPACK_TOOL_REJECTED");
+        await expectUntouched(undefined);
+      });
+
+      test("cannot change what is installed: a stand-in decompressor's output fails the executable pin", async () => {
+        const archive = xz(buildTar(goodEntries()));
+        const artifact = artifactFor(archive);
+        serveRelease(artifact, sendBytes(archive));
+        const evilTar = join(work, "evil.tar");
+        await writeFile(evilTar, buildTar([{ name: `${ROOT}/`, type: "5" }, { name: MEMBER, data: Buffer.from("#!/bin/sh\necho TROJAN\n") }]));
+        const standIn = join(work, "xz-standin.sh");
+        await writeFile(standIn, `#!/bin/sh\ncat '${evilTar}'\n`);
+        await chmod(standIn, 0o755);
+        const previous = await withPrevious();
+
+        await expectCode(install(artifact, { xzBinary: standIn }), "NODE_ARTIFACT_INTEGRITY", "executable");
+        await expectUntouched(previous);
+      });
+    });
+  });
+
   describe("download integrity", () => {
     test("a connection cut mid-body fails and leaves the old executable", async () => {
       const archive = xz(buildTar(goodEntries()));
@@ -274,6 +396,7 @@ describe("fetchNodeBinary", () => {
       serveRelease(artifact, sendBytes(Buffer.concat([archive, Buffer.alloc(10)])));
 
       await expectCode(install(artifact), "NODE_DOWNLOAD_TOO_LARGE");
+      await expectUntouched(undefined);
     });
 
     // Real idle timer: the behaviour under test is the platform clock firing on a silent socket.
@@ -446,6 +569,25 @@ describe("fetchNodeBinary", () => {
       });
     }
 
+    test("rejects a GNU long name that escapes the root", async () => {
+      await expectRefused(
+        [
+          { name: "././@LongLink", type: "L", data: Buffer.from(`${ROOT}/../../evil\0`) },
+          { name: `${ROOT}/short`, data: Buffer.from("x") },
+          ...goodEntries(),
+        ],
+        "NODE_ARCHIVE_UNSAFE",
+        "'..'",
+      );
+    });
+
+    test("rejects a global pax header that would rewrite later entries", async () => {
+      await expectRefused(
+        [{ name: "pax_global_header", type: "g", data: paxRecord("path", "elsewhere") }, ...goodEntries()],
+        "NODE_ARCHIVE_UNSAFE",
+        "global pax",
+      );
+    });
     test("rejects a pax header that rewrites a path to escape the root", async () => {
       const archive = xz(
         Buffer.concat([
@@ -501,5 +643,37 @@ describe("fetchNodeBinary", () => {
       await expectCode(install(artifact, { xzBinary: join(work, "no-such-xz") }), "NODE_UNPACK_TOOL_MISSING");
       await expectUntouched(undefined);
     });
+  });
+});
+
+describe("writeFully", () => {
+  /** A file handle that accepts at most `limit` bytes per call, like a nearly full disk. */
+  function shortHandle(limit: number, sink: Buffer[]): Pick<FileHandle, "write"> {
+    const write = async (data: Uint8Array, offset: number, length: number) => {
+      const bytesWritten = Math.min(limit, length);
+      sink.push(Buffer.from(data.subarray(offset, offset + bytesWritten)));
+      return { bytesWritten, buffer: data };
+    };
+    return { write } as unknown as Pick<FileHandle, "write">;
+  }
+
+  test("keeps writing until every byte is down after short writes", async () => {
+    const sink: Buffer[] = [];
+    const data = Buffer.from(Array.from({ length: 1000 }, (_, index) => index % 251));
+
+    await writeFully(shortHandle(7, sink), data);
+
+    expect(Buffer.concat(sink)).toEqual(data);
+    expect(sink.length).toBe(Math.ceil(1000 / 7));
+  });
+
+  test("fails instead of reporting success when the disk accepts nothing", async () => {
+    const error = await writeFully(shortHandle(0, []), Buffer.alloc(10)).then(
+      () => undefined,
+      (caught: unknown) => caught,
+    );
+
+    expect(error).toBeInstanceOf(CLIError);
+    expect((error as CLIError).code).toBe("NODE_WRITE_FAILED");
   });
 });

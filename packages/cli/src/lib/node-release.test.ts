@@ -8,12 +8,15 @@ import {
   resolveNodeTarget,
 } from "./node-release.js";
 import { buildNodeRelease, parseSha256Sum, serializeNodeRelease, type UpstreamRelease } from "./node-release-pin.js";
+import type { NodeArchivePin } from "./node-release.js";
 
 const hash = (char: string) => char.repeat(64);
 
 function pinDocument() {
-  const targets: Record<string, { url: string; sha256: string; size: number }> = {};
-  for (const target of NODE_TARGETS) targets[target] = { url: nodeArchiveUrl("1.21.0", target), sha256: hash("a"), size: 1000 };
+  const targets: Record<string, { url: string; sha256: string; size: number; binary: { sha256: string; size: number } }> = {};
+  for (const target of NODE_TARGETS) {
+    targets[target] = { url: nodeArchiveUrl("1.21.0", target), sha256: hash("a"), size: 1000, binary: { sha256: hash("e"), size: 5000 } };
+  }
   return { schemaVersion: 1, recommended: "1.21.0", targets };
 }
 
@@ -64,6 +67,22 @@ describe("parseNodeRelease", () => {
     }
   });
 
+  test("rejects a missing or malformed executable pin", () => {
+    rejects((doc) => {
+      delete (doc.targets["x86_64-unknown-linux-gnu"] as { binary?: unknown }).binary;
+    }, "no binary pin");
+    for (const bad of ["", "E".repeat(64), "e".repeat(63)]) {
+      rejects((doc) => {
+        doc.targets["x86_64-unknown-linux-gnu"].binary.sha256 = bad;
+      }, "binary sha256");
+    }
+    for (const bad of [0, -1, 1.5, 257 * 1024 * 1024]) {
+      rejects((doc) => {
+        doc.targets["x86_64-unknown-linux-gnu"].binary.size = bad;
+      }, "binary size");
+    }
+  });
+
   test("rejects a missing or extra target and a bad version", () => {
     rejects((doc) => {
       delete (doc.targets as Record<string, unknown>)["aarch64-apple-darwin"];
@@ -108,33 +127,50 @@ describe("pin generation", () => {
     })),
   });
 
-  test("builds a pin from agreeing sources and round-trips through the canonical serialization", () => {
-    const pin = buildNodeRelease("1.21.0", upstream(), sums());
+  const measured = async (archive: NodeArchivePin) => ({ sha256: hash("e"), size: archive.size * 3 });
+
+  test("builds a pin from agreeing sources and round-trips through the canonical serialization", async () => {
+    const pin = await buildNodeRelease("1.21.0", upstream(), sums(), measured);
     expect(pin.targets["aarch64-apple-darwin"]).toEqual({
       target: "aarch64-apple-darwin",
       url: nodeArchiveUrl("1.21.0", "aarch64-apple-darwin"),
       sha256: hash("b"),
       size: 4242,
+      binary: { sha256: hash("e"), size: 4242 * 3 },
     });
     expect(parseNodeRelease(JSON.parse(serializeNodeRelease(pin)))).toEqual(pin);
   });
 
-  test("refuses when sha256.sum and the GitHub asset digest disagree", () => {
-    expect(() => buildNodeRelease("1.21.0", upstream({ "x86_64-apple-darwin": hash("d") }), sums())).toThrow("disagrees");
+  test("measures each archive only after its pin is built from agreeing sources", async () => {
+    const seen: string[] = [];
+    await buildNodeRelease("1.21.0", upstream(), sums(), async (archive) => {
+      seen.push(`${archive.target}:${archive.sha256}`);
+      return measured(archive);
+    });
+    expect(seen.sort()).toEqual(NODE_TARGETS.map((target) => `${target}:${hash("b")}`).sort());
+
+    let called = false;
+    await expect(
+      buildNodeRelease("1.21.0", upstream({ "x86_64-apple-darwin": hash("d") }), sums(), async (archive) => {
+        called = true;
+        return measured(archive);
+      }),
+    ).rejects.toThrow("disagrees");
+    expect(called).toBe(false);
   });
 
-  test("refuses an asset with no GitHub digest rather than pinning on one source", () => {
+  test("refuses an asset with no GitHub digest rather than pinning on one source", async () => {
     const release = upstream();
     release.assets[0].digest = null;
-    expect(() => buildNodeRelease("1.21.0", release, sums())).toThrow("absent");
+    await expect(buildNodeRelease("1.21.0", release, sums(), measured)).rejects.toThrow("absent");
   });
 
-  test("refuses a missing target, drafts, prereleases and a tag mismatch", () => {
+  test("refuses a missing target, drafts, prereleases and a tag mismatch", async () => {
     const lines = sums().split("\n").filter((line) => !line.includes("aarch64-apple-darwin")).join("\n");
-    expect(() => buildNodeRelease("1.21.0", upstream(), lines)).toThrow("no entry");
-    expect(() => buildNodeRelease("1.21.0", { ...upstream(), draft: true }, sums())).toThrow("draft");
-    expect(() => buildNodeRelease("1.21.0", { ...upstream(), prerelease: true }, sums())).toThrow("prerelease");
-    expect(() => buildNodeRelease("1.21.1", upstream(), sums())).toThrow("not v1.21.1");
+    await expect(buildNodeRelease("1.21.0", upstream(), lines, measured)).rejects.toThrow("no entry");
+    await expect(buildNodeRelease("1.21.0", { ...upstream(), draft: true }, sums(), measured)).rejects.toThrow("draft");
+    await expect(buildNodeRelease("1.21.0", { ...upstream(), prerelease: true }, sums(), measured)).rejects.toThrow("prerelease");
+    await expect(buildNodeRelease("1.21.1", upstream(), sums(), measured)).rejects.toThrow("not v1.21.1");
   });
 
   test("parseSha256Sum rejects garbage and duplicates", () => {

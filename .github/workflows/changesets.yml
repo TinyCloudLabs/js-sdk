@@ -108,6 +108,8 @@ jobs:
       - name: Verify node release pin
         if: steps.check.outputs.pending != '0'
         run: bun run --cwd packages/cli check:node-release
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
 
       # Push the version commit before publishing anything (TC-1095). If the
       # push fails because master moved, stop: nothing is published, and the
@@ -329,6 +331,8 @@ jobs:
 
       - name: Verify node release pin
         run: bun run --cwd packages/cli check:node-release
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
 
       # Push before publishing anything (TC-1095). One push carries two
       # commits: the stable release, then pre mode re-entered for the next
