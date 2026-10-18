@@ -12,7 +12,7 @@ export { createDelegatedShareKey, restoreDelegatedShareKey, createPolicyEnforcem
 export type { OwnerDelegationReceipt, OwnerDelegationPermission, CreateOwnerDelegationParams, OwnerShareAction, OwnerShareDecryption, OwnerShareMatcher, OwnerSharePolicyV2, DelegatedShareKey, SignedDelegation, RegisterOwnerSharePolicyParams, OwnerSharePolicyRegistration, OwnerSharePolicyRegistrationReceipt } from "./owner-policy.js";
 export { MemorySenderShareRecordStorage, MemorySenderShareKeyStorage, SenderShareStore, historyRecordForPublishedShare } from "./history.js";
 export { MemoryEncryptedShareHistoryStorage, EncryptedSenderShareHistory } from "./history.js";
-export type { SenderShareRecord, SenderShareRecordStorage, SenderShareKeyStorage, SenderShareRevocationScope, EncryptedShareHistoryStorage } from "./history.js";
+export type { SenderShareRecord, SenderShareRecordProofs, SenderShareRecordStorage, SenderShareKeyStorage, SenderShareRevocationScope, EncryptedShareHistoryStorage } from "./history.js";
 export { authorizeShare, authorizationMethodForTarget } from "./authorization.js";
 export type { ShareAuthorizationMethod, ShareAuthorizationRequired, ShareAuthorizationDenied, ShareAuthorizationReady, ShareAuthorizationResult, ShareAuthorizationAdapter, ShareAuthorizedContent } from "./authorization.js";
 export { notifyShare, recipientMatchesShareRecord, shareDeliveryWindowExpiresAt, ShareNotifyError } from "./notify.js";

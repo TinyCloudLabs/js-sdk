@@ -1,10 +1,16 @@
 import { defineConfig } from "tsup";
 
 export default defineConfig({
-  // `artifact` and `share-root` are their own entries: the layout helpers are CLI/agent tooling and the share root is
-  // sender-key tooling; keeping them out of the index barrel keeps them out of the browser bundles that import the index
-  // (the web-sdk size ceiling counts every byte).
-  entry: { index: "src/index.ts", artifact: "src/artifact.ts", "share-root": "src/share-root-entry.ts" },
+  // `artifact`, `share-root` and the share index are their own entries: the layout helpers are CLI/agent tooling, the
+  // share root is sender-key tooling, and consumers of the share index import `@tinycloud/share-sdk/share-index`;
+  // keeping them out of the index barrel keeps them out of the browser bundles that import the index (the web-sdk size
+  // ceiling counts every byte).
+  entry: {
+    index: "src/index.ts",
+    artifact: "src/artifact.ts",
+    "share-root": "src/share-root-entry.ts",
+    "share-index": "src/share-index/index.ts",
+  },
   format: ["esm", "cjs"],
   target: "es2022",
   dts: true,
