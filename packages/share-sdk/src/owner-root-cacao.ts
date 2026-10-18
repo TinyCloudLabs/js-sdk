@@ -120,6 +120,11 @@ function reCap(resource: string): { attenuation: DecodedOwnerRootCacao["attenuat
   return { attenuation, proofs };
 }
 
+/** CIDv1 (raw, BLAKE3) of exact CACAO bytes, as the Node computes a delegation CID. */
+export function ownerRootCacaoCid(bytes: Uint8Array): string {
+  return CID.createV1(0x55, createDigest(0x1e, blake3(bytes))).toString();
+}
+
 /**
  * Decode the exact bytes of an owner-signed SIWE CACAO. Checks size, CBOR
  * strictness, the envelope shape (eip4361 payload, 65-byte eip191 signature)
@@ -132,7 +137,7 @@ function reCap(resource: string): { attenuation: DecodedOwnerRootCacao["attenuat
  */
 export function decodeOwnerRootCacao(bytes: Uint8Array, expectedCid?: string): DecodedOwnerRootCacao {
   if (!(bytes instanceof Uint8Array) || bytes.length === 0 || bytes.length > MAX_CACAO_BYTES) throw new Error("CACAO size is invalid");
-  const cid = CID.createV1(0x55, createDigest(0x1e, blake3(bytes))).toString();
+  const cid = ownerRootCacaoCid(bytes);
   if (expectedCid !== undefined && cid !== expectedCid) throw new Error("CACAO bytes do not match the delegation CID");
   const envelope = map(decodeDagCbor(bytes), "envelope", ["h", "p", "s"]);
   if (map(envelope.h, "header", ["t"]).t !== "eip4361") throw new Error("CACAO header must be eip4361");

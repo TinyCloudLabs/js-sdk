@@ -46,6 +46,8 @@ export interface ShareKeyDelegationInput {
   /** Resource -> ability -> caveats; the caller bounds it (see `ShareRoot.signBearerLink`). */
   readonly attenuation: Readonly<Record<string, Readonly<Record<string, readonly Readonly<Record<string, unknown>>[]>>>>;
   readonly proofs: readonly string[];
+  /** Exactly one fact object, as the Node's compact UCAN requires; defaults to `{}`. */
+  readonly facts?: readonly [Readonly<Record<string, unknown>>];
   /** Unix seconds. */
   readonly notBefore: number;
   /** Unix seconds. */
@@ -65,13 +67,13 @@ export async function signShareKeyDelegation(input: ShareKeyDelegationInput): Pr
   }
   const principal = input.key.did.split("#", 1)[0]!;
   const publicKey = ed25519PublicKeyFromDidKey(principal);
-  ed25519PublicKeyFromDidKey(input.audienceDid.split("#", 1)[0]!);
+  if (typeof input.audienceDid !== "string" || input.audienceDid.length === 0) throw new TypeError("share key delegation audience is required");
   const header = { alg: "EdDSA", jwk: { alg: "EdDSA", crv: "Ed25519", kty: "OKP", x: toBase64Url(publicKey) }, typ: "JWT", ucv: "0.10.0" };
   const payload = {
     att: input.attenuation,
     aud: input.audienceDid,
     exp: input.expiresAt,
-    fct: [{}],
+    fct: input.facts ?? [{}],
     iss: `${principal}#${principal.slice("did:key:".length)}`,
     nbf: input.notBefore,
     nnc: input.nonce ?? `urn:uuid:${crypto.randomUUID()}`,
