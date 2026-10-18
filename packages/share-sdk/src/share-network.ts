@@ -4,7 +4,7 @@ import { decodeOwnerRootCacao, ownerRootCacaoCid, type DecodedOwnerRootCacao } f
 import { createDelegatedShareKey, type DelegatedShareKey } from "./owner-policy.js";
 import {
   ShareRootError,
-  assertSpace, assertUsableKey, errorMessage, isShareNetworkOf, parseOwnerDid, requireNodeOrigin, sameOwner, seconds,
+  assertSpace, assertUsableKey, errorMessage, isShareNetworkOf, parseOwnerDid, readJsonCapped, requireNodeOrigin, sameOwner, seconds,
   validateSignedOwnerDelegation,
   type ShareRootOwnerAuthority,
 } from "./share-root.js";
@@ -43,7 +43,8 @@ async function existingShareNetwork(nodeOrigin: string, networkId: string, owner
   const response = await fetchFn(new URL(`/encryption/networks/${encodeURIComponent(networkId)}`, nodeOrigin), { redirect: "error" });
   if (response.status === 404) return undefined;
   if (!response.ok) throw new ShareRootError("invalid-request", `share network lookup failed: HTTP ${response.status}`);
-  const body: unknown = await response.json();
+  let body: unknown;
+  try { body = await readJsonCapped(response); } catch (error) { throw new ShareRootError("invalid-request", `share network descriptor is unreadable: ${errorMessage(error)}`); }
   const descriptor = typeof body === "object" && body !== null && "descriptor" in body ? body.descriptor : body;
   if (typeof descriptor !== "object" || descriptor === null || !("networkId" in descriptor) || !("ownerDid" in descriptor) || !("state" in descriptor)) {
     throw new ShareRootError("invalid-request", "share network descriptor is malformed");
@@ -70,7 +71,9 @@ async function existingShareNetwork(nodeOrigin: string, networkId: string, owner
  * owner) granting only `network.create` on that URN to a throwaway
  * non-extractable key, which creates the network with the owner as
  * `ownerDid` and is then cleared. A 409 from a concurrent creator counts as
- * created. Share sources encrypt to it; vault and secrets stay on `:default`.
+ * created. Two first calls racing each prompt (2 approvals, one 409);
+ * callers that can race should serialize. Share sources encrypt to it;
+ * vault and secrets stay on `:default`.
  */
 export async function ensureShareNetwork(input: {
   readonly owner: ShareRootOwnerAuthority;
@@ -90,7 +93,8 @@ export async function ensureShareNetwork(input: {
   const existing = await existingShareNetwork(nodeOrigin, networkId, input.owner.ownerDid, fetchFn);
   if (existing !== undefined) return { networkId: existing, approvals: 0 };
 
-  const info: unknown = await (await fetchFn(new URL("/info", nodeOrigin), { redirect: "error" })).json();
+  let info: unknown;
+  try { info = await readJsonCapped(await fetchFn(new URL("/info", nodeOrigin), { redirect: "error" })); } catch (error) { throw new ShareRootError("invalid-request", `node identity is unavailable: ${errorMessage(error)}`); }
   const nodeDid = typeof info === "object" && info !== null && "nodeId" in info ? info.nodeId : undefined;
   if (typeof nodeDid !== "string" || !nodeDid.startsWith("did:key:")) throw new ShareRootError("invalid-request", "node identity is unavailable");
 

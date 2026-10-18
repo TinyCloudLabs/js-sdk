@@ -110,6 +110,17 @@ describe("ShareGrant.create", () => {
     await expect(keys[0]!.sign(new Uint8Array([1]))).rejects.toThrow("cleared");
   });
 
+  it("on a CID mismatch reports the imported CID and the signed bytes' CID, and asks for a revoke", async () => {
+    const imported = "bafkr4ibsw5yjl7ffzhpn53mf6h53yc7mozvvpifsg2jw7r4pzivjnrlrpa";
+    const { keys, promise } = await createGrant({ tamper: { cid: imported } });
+    const error = await rejects(promise, "malformed-root");
+    expect(error.rootCid).toBe(imported);
+    expect(error.signedCid).toBeString();
+    expect(error.signedCid).not.toBe(imported);
+    expect(error.mustRevoke).toBe(true);
+    await expect(keys[0]!.sign(new Uint8Array([1]))).rejects.toThrow("cleared");
+  });
+
   it("restore refuses a record whose access or path differs from what was signed", async () => {
     const { keys, promise } = await createGrant();
     const record = (await promise).toRecord();
@@ -147,6 +158,13 @@ describe("ShareGrant.policySigner", () => {
     }
     await rejects(signer.createOwnerRoot(rootInput(grant, { expiresAt: new Date(Date.now() + 8 * DAY) })), "lifetime-exceeds-cap");
     await rejects(signer.sign(new Uint8Array(33)), "invalid-request");
+  });
+
+  it("a policy root may expire exactly with the grant, not one second later", async () => {
+    const grant = await (await createGrant()).promise;
+    const signer = grant.policySigner();
+    await expect(signer.createOwnerRoot(rootInput(grant, { expiresAt: new Date(grant.expiresAt.getTime()) }))).resolves.toMatchObject({ cid: expect.any(String) });
+    await rejects(signer.createOwnerRoot(rootInput(grant, { expiresAt: new Date(grant.expiresAt.getTime() + 1000) })), "lifetime-exceeds-cap");
   });
 
   it("an edit grant admits put; the signer stops after clear() or expiry", async () => {

@@ -54,6 +54,16 @@ function wantedFor(spaceId: string, path: string, access: ShareGrantAccess, owne
  * signs its two policy roots (bounded by the grant's expiry and exact path)
  * and its 32-byte policy and envelope digests.
  *
+ * Decrypt breadth: the Node checks decrypt against the network, not against
+ * a content key, so this key can decrypt EVERY object on the owner's
+ * `:share` network whose ciphertext it can obtain, not only its own share.
+ * Its kv reach is one exact key, so on its own it reads only its share; but
+ * together with any other source of `:share` ciphertext (the device's
+ * kv-only share root, which reads the whole prefix; a former recipient's
+ * cached copy; a backup) it decrypts those objects too, for the grant's
+ * lifetime (≤30 days) or until the owner revokes it. Policy/v3 recipient
+ * sessions already have the same network-wide decrypt for their session.
+ *
  * Revoking the grant (one owner SIWE `POST /revoke` on `cid`) cuts the
  * per-share key's own reads and its decrypt, for this share only. Until the
  * Node binds policy registrations to the owner delegation (NODE-B2), an

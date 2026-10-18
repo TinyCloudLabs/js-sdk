@@ -423,10 +423,11 @@ export interface PolicyOwnerModeProbe {
   observe(nodeOrigin: string, features: readonly string[]): void;
 }
 
-async function readJsonCapped(response: Response): Promise<unknown> {
-  if (!/^application\/json\s*(;|$)/i.test(response.headers.get("content-type") ?? "")) throw new Error("node info is not JSON");
+/** Read a Node JSON answer: `application/json` only, at most 64 KiB. */
+export async function readJsonCapped(response: Response): Promise<unknown> {
+  if (!/^application\/json\s*(;|$)/i.test(response.headers.get("content-type") ?? "")) throw new Error("node answer is not JSON");
   const reader = response.body?.getReader();
-  if (reader === undefined) throw new Error("node info has no body");
+  if (reader === undefined) throw new Error("node answer has no body");
   const chunks: Uint8Array[] = [];
   let total = 0;
   for (;;) {
@@ -435,7 +436,7 @@ async function readJsonCapped(response: Response): Promise<unknown> {
     total += value.byteLength;
     if (total > MAX_INFO_BYTES) {
       await reader.cancel();
-      throw new Error("node info is too large");
+      throw new Error("node answer is too large");
     }
     chunks.push(value);
   }

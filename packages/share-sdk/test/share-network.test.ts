@@ -12,14 +12,14 @@ const json = (body: unknown, status = 200) => new Response(JSON.stringify(body),
 const descriptor = (overrides: Record<string, unknown> = {}) => ({ networkId: NETWORK, ownerDid: OWNER_DID, name: "share", state: "active", ...overrides });
 
 /** A fake Node: `/info`, network lookup and network creation, recording the create request. */
-function fakeNode(options: { exists?: boolean; createStatus?: number; lookup?: () => Response } = {}) {
+function fakeNode(options: { exists?: boolean; createStatus?: number; createPersists?: boolean; lookup?: () => Response } = {}) {
   let exists = options.exists ?? false;
   const creates: { authorization: string; body: string }[] = [];
   const fetch = async (input: URL, init?: RequestInit) => {
     if (input.pathname === "/info") return json({ protocol: 1, nodeId: NODE_DID, features: ["kv"] });
     if (input.pathname === "/encryption/networks" && init?.method === "POST") {
       creates.push({ authorization: new Headers(init.headers).get("authorization") ?? "", body: String(init.body) });
-      exists = true;
+      exists = options.createPersists ?? true;
       return options.createStatus === 409 ? json({ error: "exists" }, 409) : json({ descriptor: descriptor() }, 201);
     }
     if (input.pathname === `/encryption/networks/${encodeURIComponent(NETWORK)}`) return options.lookup?.() ?? (exists ? json({ descriptor: descriptor() }) : json({ error: "not found" }, 404));
@@ -63,6 +63,18 @@ describe("ensureShareNetwork", () => {
     expect(invocation.payload.fct[0]).toMatchObject({ type: "tinycloud.encryption.network-admin/v1", targetNode: NODE_DID, networkId: NETWORK, action: "tinycloud.encryption/network.create" });
     expect(JSON.parse(node.creates[0]!.body)).toEqual({ name: "share", ownerDid: OWNER_DID, threshold: { n: 1, t: 1 } });
     await expect(keys[0]!.sign(new Uint8Array([1]))).rejects.toThrow("cleared");
+  });
+
+  it("refuses a create the Node answers 200 to but cannot read back", async () => {
+    const { node, promise } = await ensure({ node: fakeNode({ createPersists: false }) });
+    expect((await promise.then(() => undefined, (error: Error) => error))?.message).toContain("share network was not created");
+    expect(node.creates).toHaveLength(1);
+  });
+
+  it("refuses a descriptor that is not JSON, without prompting", async () => {
+    const { owner, promise } = await ensure({ node: fakeNode({ lookup: () => new Response(JSON.stringify({ descriptor: descriptor() }), { headers: { "content-type": "text/html" } }) }) });
+    await rejects(promise, "invalid-request");
+    expect(owner.calls).toHaveLength(0);
   });
 
   it("treats a concurrent creator's 409 as created", async () => {
