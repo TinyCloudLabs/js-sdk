@@ -160,10 +160,10 @@ PR lands after it re-measures against the new base and updates its own row.
 
 The TC-1443 registry verdict classifier in sdk-core (#586) raised only the root
 ceilings once more, after removing a duplicate secp256k1 from the bundle. It landed
-after #583, so it was re-measured against master `26ac9771` (#584, #588 and #592
+after #583, so it was re-measured against master `21094959` (#584, #588, #592 and #593
 landed after #583 and are byte-neutral) and sits on top of TC-1424's root ceilings.
 Naomi approved the row as a delta over its base (+2,368 / +61 gzip, ±50 B); GitHub run
-39162102088 measured it on source `2b45211d`, identical in both Node jobs: 1,470,946 /
+39165100154 measured it on source `878e591f`, identical in both Node jobs: 1,470,946 /
 1,397,943 B, i.e. +2,365 / +66 over master's measured 1,468,581 / 1,397,877 B. The
 row's ceilings are those measured bytes. First import, activation, the gated artifact
 and the worker keep TC-1432's ceilings. The ledger's `tc1443Ratchet` row records them
