@@ -114,9 +114,14 @@ function isObject(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
-/** An RFC 3339 UTC time as the SDK and node write it: whole seconds or a fraction (`publishAddressedShare` omits it). */
+/**
+ * An RFC 3339 UTC time as the SDK and node write it: whole seconds or a fraction (`publishAddressedShare` omits it).
+ * It must round-trip: `Date.parse` rolls `2026-02-30`, a non-leap Feb 29 or `24:00:00` over to another instant.
+ */
 function isIsoTime(value: unknown): value is string {
-  return typeof value === "string" && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,9})?Z$/.test(value) && Number.isFinite(Date.parse(value));
+  const match = typeof value === "string" ? /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.(\d{1,9}))?Z$/.exec(value) : null;
+  const parsed = match === null ? NaN : Date.parse(value as string);
+  return Number.isFinite(parsed) && new Date(parsed).toISOString() === `${match![1]}.${(match![2] ?? "").padEnd(3, "0").slice(0, 3)}Z`;
 }
 
 function isRow(value: unknown): value is ShareIndexRow {

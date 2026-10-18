@@ -8,7 +8,7 @@ import { agentRecordBinding, openAgentRecordAsOwner, sealAgentRecord, type Store
 import { agentIdFromDid, agentRecordKey, INDEX_MAIN_KEY, SHARE_RECORDS_VAULT_PREFIX } from "../../src/share-index/ids.js";
 import { AgentShareRecordStore } from "../../src/share-index/record-store.js";
 import { headerBytes, MemoryShareIndexOutbox, SenderShareIndex, type ShareIndexLimits } from "../../src/share-index/sender-share-index.js";
-import { project, type ShareIndexDocument, type ShareIndexRow } from "../../src/share-index/schema.js";
+import { checkAgentRecordSchema, project, type ShareIndexDocument, type ShareIndexRow } from "../../src/share-index/schema.js";
 import { verifyAgentRecordChain } from "../../src/share-index/verify/chain.js";
 import { verifyEnvelopeV3At } from "../../src/share-index/verify/policy-v3.js";
 import type { ShareEnvelopeV3 } from "@tinycloud/share-envelope";
@@ -117,6 +117,21 @@ describe("M2 and the migrated ruling: only an owner import is exempt from the ±
     expect(rows.late).toMatchObject({ na: true });
     expect(rows.ontime).toMatchObject({ pv: "migrated", ps: "chained" });
     expect(rows.ontime!.na).toBeUndefined();
+  });
+});
+
+describe("record times are RFC 3339 UTC and must round-trip", () => {
+  const context = { recordV: 1, shareId: "t", accountOwnerDid: OWNER_DID, agentDid: "did:key:z6MkAgent", source: "agent" as const };
+  const accepts = (expiresAt: string) => {
+    try { checkAgentRecordSchema({ ...bearerFixture({ shareId: "t" }).record, registeredAt: "2026-01-01T00:00:00Z", expiresAt }, context); return true; } catch { return false; }
+  };
+
+  test("whole seconds and fractions (as the SDK and node write them) are accepted", () => {
+    for (const time of ["2028-02-29T12:00:00Z", "2027-03-01T00:00:00.000Z", "2027-03-01T00:00:00.5Z", "2027-03-01T00:00:00.310980722Z"]) expect([time, accepts(time)]).toEqual([time, true]);
+  });
+
+  test("a day or hour that Date.parse would roll over is refused: 2027-02-30, a non-leap Feb 29, 24:00:00", () => {
+    for (const time of ["2027-02-30T00:00:00Z", "2027-02-29T00:00:00.000Z", "2027-03-01T24:00:00Z"]) expect([time, accepts(time)]).toEqual([time, false]);
   });
 });
 
