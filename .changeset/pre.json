@@ -53,6 +53,7 @@
     "replica-sign-out-gate",
     "replica-worker-init-failure",
     "share-delivery-primary-session",
+    "share-index-slice2",
     "share-receiver-non-extractable-key",
     "sign-out-ends-session",
     "tc-1312-writable-handles",
