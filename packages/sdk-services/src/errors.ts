@@ -120,7 +120,7 @@ export function networkError(
  */
 export function nodeRetryError(
   service: string,
-  context: string,
+  message: string,
   response: { status: number; statusText: string; headers: { get(name: string): string | null } },
   errorText: string
 ): ServiceError | undefined {
@@ -138,7 +138,7 @@ export function nodeRetryError(
   }
   const retryable = code !== ErrorCodes.OUTCOME_UNKNOWN;
   const retryAfter = response.headers.get("retry-after")?.trim();
-  return serviceError(code, `${context}: ${response.status} - ${body}`, service, {
+  return serviceError(code, message, service, {
     meta: {
       ...responseErrorMeta(response.status, response.statusText, errorText),
       retryable,

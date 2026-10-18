@@ -968,11 +968,12 @@ export class KVService extends BaseService implements IKVService {
           { meta: { status: response.status, statusText: response.statusText } }
         ));
       }
-      const retryError = nodeRetryError("kv", `Failed to get key ${JSON.stringify(key)}`, response, errorText);
+      const message = `Failed to get key ${JSON.stringify(key)}: ${response.status} - ${errorText}`;
+      const retryError = nodeRetryError("kv", message, response, errorText);
       if (retryError) return err(retryError);
       return err(serviceError(
         ErrorCodes.NETWORK_ERROR,
-        `Failed to get key ${JSON.stringify(key)}: ${response.status} - ${errorText}`,
+        message,
         "kv",
         { meta: { status: response.status, statusText: response.statusText } }
       ));
@@ -1076,13 +1077,14 @@ export class KVService extends BaseService implements IKVService {
       }
       // A 503 is never a precondition failure (that is the 412 above): it is
       // the node's busy/timeout signal, or an unclassified outage.
-      const retryError = nodeRetryError("kv", `Failed to put key ${JSON.stringify(key)}`, response, errorText);
+      const message = `Failed to put key ${JSON.stringify(key)}: ${response.status} - ${errorText}`;
+      const retryError = nodeRetryError("kv", message, response, errorText);
       if (retryError) return err(retryError);
       const quotaError = this.handleQuotaErrorResponse(response, errorText, key);
       if (quotaError) return quotaError;
       return err(serviceError(
         ErrorCodes.KV_WRITE_FAILED,
-        `Failed to put key ${JSON.stringify(key)}: ${response.status} - ${errorText}`,
+        message,
         "kv",
         { meta: { status: response.status, statusText: response.statusText } }
       ));
@@ -1484,11 +1486,12 @@ export class KVService extends BaseService implements IKVService {
         );
       }
       const errorText = await response.text();
-      const retryError = nodeRetryError("kv", "Failed to list keys", response, errorText);
+      const message = `Failed to list keys: ${response.status} - ${errorText}`;
+      const retryError = nodeRetryError("kv", message, response, errorText);
       if (retryError) return err(retryError);
       return err(serviceError(
         ErrorCodes.NETWORK_ERROR,
-        `Failed to list keys: ${response.status} - ${errorText}`,
+        message,
         "kv",
         { meta: { status: response.status, statusText: response.statusText } }
       ));
@@ -1796,11 +1799,12 @@ export class KVService extends BaseService implements IKVService {
           { meta: { status: response.status, statusText: response.statusText } }
         ));
       }
-      const retryError = nodeRetryError("kv", `Failed to delete key ${JSON.stringify(key)}`, response, errorText);
+      const message = `Failed to delete key ${JSON.stringify(key)}: ${response.status} - ${errorText}`;
+      const retryError = nodeRetryError("kv", message, response, errorText);
       if (retryError) return err(retryError);
       return err(serviceError(
         ErrorCodes.NETWORK_ERROR,
-        `Failed to delete key ${JSON.stringify(key)}: ${response.status} - ${errorText}`,
+        message,
         "kv",
         { meta: { status: response.status, statusText: response.statusText } }
       ));
@@ -1850,12 +1854,13 @@ export class KVService extends BaseService implements IKVService {
           }
 
           const errorText = await response.text();
-          const retryError = nodeRetryError("kv", `Failed to get metadata for key ${JSON.stringify(key)}`, response, errorText);
+          const message = `Failed to get metadata for key ${JSON.stringify(key)}: ${response.status} - ${errorText}`;
+          const retryError = nodeRetryError("kv", message, response, errorText);
           if (retryError) return err(retryError);
           return err(
             serviceError(
               ErrorCodes.NETWORK_ERROR,
-              `Failed to get metadata for key ${JSON.stringify(key)}: ${response.status} - ${errorText}`,
+              message,
               "kv",
               { meta: { status: response.status, statusText: response.statusText } }
             )
