@@ -507,13 +507,13 @@ export const approvedTc1443Ratchet: Tc1443Ratchet = {
 /**
  * TC-1443 slice b (js-sdk #589): the opt-in fail-closed registry policy and space-creation guard,
  * admitted as an exact-delta row with no headroom. The ceilings are the CI-measured bytes of the PR
- * on master 28ca77a0; the delta over master's measured bytes awaits Naomi's approval. The row chains
+ * on master 28ca77a0; Naomi approved the delta over master's measured bytes (2026-10-18). The row chains
  * after the latest row on master (TC-1443, #586). If another root-growing PR lands first, #589
  * re-measures against the new base and replaces this row.
  */
 export const approvedTc1443bRatchet: Tc1443bRatchet = {
   label: "TC-1443 slice b #589 opt-in fail-closed registry policy, exact canonical delta",
-  ruling: "TC-1443 slice b size row; delta +2913/+4510 gzip over master 28ca77a0ce019d53aa61a6c5c3b39c52889e420d, awaiting Naomi's approval",
+  ruling: "TC-1443 slice b size row; approved by Naomi (2026-10-18), delta +2,913/+4,510 ±50 B gzip over master 28ca77a0ce019d53aa61a6c5c3b39c52889e420d",
   base: "28ca77a0ce019d53aa61a6c5c3b39c52889e420d",
   sourceCommits: [
     "87310cad5d6f6839828f6352fc66ae7e33d2bf01",
@@ -529,7 +529,7 @@ export const approvedTc1443bRatchet: Tc1443bRatchet = {
     delta: { "index.mjs": 2913, "index.cjs": 4510 },
     ceiling: { "index.mjs": 1473908, "index.cjs": 1402491 },
   },
-  reason: "sdk-core adds the opt-in fail-closed registry policy (registry-policy.ts: resolveOwnerHosts and the space-creation guard, plus location.ts hooks and the legacy-fallback deprecation warning); web-sdk sign-in (tcw.ts) threads registryPolicy, newUserHost, registryChainId, registrySequenceStore and onNodeNotFound through. Both root bundles grow. No shrink was attempted for this row. Base: master CI run 39171377880 at 116f30ed measured index.mjs 1,470,995 / index.cjs 1,397,981 in both Node jobs (28ca77a0 is a version commit on top). PR: run 39172113588 on merge commit 87310cad measured 1,473,908 / 1,402,491 in both Node jobs, i.e. +2,913 / +4,510. Delta awaiting Naomi's approval.",
+  reason: "sdk-core adds the opt-in fail-closed registry policy (registry-policy.ts: resolveOwnerHosts and the space-creation guard, plus location.ts hooks and the legacy-fallback deprecation warning); web-sdk sign-in (tcw.ts) threads registryPolicy, newUserHost, registryChainId, registrySequenceStore and onNodeNotFound through. Both root bundles grow. No shrink was attempted for this row. Base: master CI run 39171377880 at 116f30ed measured index.mjs 1,470,995 / index.cjs 1,397,981 in both Node jobs (28ca77a0 is a version commit on top). PR: run 39172113588 on merge commit 87310cad measured 1,473,908 / 1,402,491 in both Node jobs, i.e. +2,913 / +4,510. Delta approved by Naomi (2026-10-18): +2,913/+4,510 ±50 B, zero headroom.",
 };
 
 /** The reviewed #553 S3 entry's source commit, as master's checker pinned it. */

@@ -186,7 +186,8 @@ the merge of master `28ca77a0` into the PR branch: master CI run 39171377880 (at
 `116f30ed`, a version commit away from `28ca77a0`) measured 1,470,995 / 1,397,981 B,
 and GitHub run 39172113588 measured the PR on `87310cad`, identical in both Node jobs:
 1,473,908 / 1,402,491 B, i.e. +2,913 / +4,510 over master. The row's ceilings are
-those measured bytes. The delta is awaiting Naomi's approval. First import,
+those measured bytes. Naomi approved the delta (+2,913 / +4,510 gzip, ±50 B each,
+2026-10-18). First import,
 activation, the gated artifact and the worker keep TC-1432's ceilings. The ledger's
 `tc1443bRatchet` row records them and cannot change later. If another root-growing PR
 lands first, #589 re-measures against the new base and replaces its own row before it

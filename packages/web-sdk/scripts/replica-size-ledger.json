@@ -499,7 +499,7 @@
   },
   "tc1443bRatchet": {
     "label": "TC-1443 slice b #589 opt-in fail-closed registry policy, exact canonical delta",
-    "ruling": "TC-1443 slice b size row; delta +2913/+4510 gzip over master 28ca77a0ce019d53aa61a6c5c3b39c52889e420d, awaiting Naomi's approval",
+    "ruling": "TC-1443 slice b size row; approved by Naomi (2026-10-18), delta +2,913/+4,510 ±50 B gzip over master 28ca77a0ce019d53aa61a6c5c3b39c52889e420d",
     "base": "28ca77a0ce019d53aa61a6c5c3b39c52889e420d",
     "sourceCommits": [
       "87310cad5d6f6839828f6352fc66ae7e33d2bf01"
@@ -521,6 +521,6 @@
         "index.cjs": 1402491
       }
     },
-    "reason": "sdk-core adds the opt-in fail-closed registry policy (registry-policy.ts: resolveOwnerHosts and the space-creation guard, plus location.ts hooks and the legacy-fallback deprecation warning); web-sdk sign-in (tcw.ts) threads registryPolicy, newUserHost, registryChainId, registrySequenceStore and onNodeNotFound through. Both root bundles grow. No shrink was attempted for this row. Base: master CI run 39171377880 at 116f30ed measured index.mjs 1,470,995 / index.cjs 1,397,981 in both Node jobs (28ca77a0 is a version commit on top). PR: run 39172113588 on merge commit 87310cad measured 1,473,908 / 1,402,491 in both Node jobs, i.e. +2,913 / +4,510. Delta awaiting Naomi's approval."
+    "reason": "sdk-core adds the opt-in fail-closed registry policy (registry-policy.ts: resolveOwnerHosts and the space-creation guard, plus location.ts hooks and the legacy-fallback deprecation warning); web-sdk sign-in (tcw.ts) threads registryPolicy, newUserHost, registryChainId, registrySequenceStore and onNodeNotFound through. Both root bundles grow. No shrink was attempted for this row. Base: master CI run 39171377880 at 116f30ed measured index.mjs 1,470,995 / index.cjs 1,397,981 in both Node jobs (28ca77a0 is a version commit on top). PR: run 39172113588 on merge commit 87310cad measured 1,473,908 / 1,402,491 in both Node jobs, i.e. +2,913 / +4,510. Delta approved by Naomi (2026-10-18): +2,913/+4,510 ±50 B, zero headroom."
   }
 }
