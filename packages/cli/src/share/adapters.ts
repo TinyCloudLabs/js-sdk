@@ -51,10 +51,10 @@ import {
 } from "@tinycloud/sdk-core";
 import { extractSiweExpiration, InvalidRestoredSessionError, type TinyCloudNode } from "@tinycloud/node-sdk";
 
-function requiredKvAction(meta: unknown): "tinycloud.kv/put" | "tinycloud.kv/get" | undefined {
+function requiredKvAction(meta: unknown): "tinycloud.kv/put" | "tinycloud.kv/get" | "tinycloud.kv/list" | undefined {
   if (meta === null || typeof meta !== "object" || !("requiredAction" in meta)) return undefined;
   const action = meta.requiredAction;
-  return action === "tinycloud.kv/put" || action === "tinycloud.kv/get" ? action : undefined;
+  return action === "tinycloud.kv/put" || action === "tinycloud.kv/get" || action === "tinycloud.kv/list" ? action : undefined;
 }
 /** A storage refusal stays one with or without account totals; the Node's text never reaches output. */
 function throwKvUploadFailure(error: unknown): never {
@@ -113,7 +113,7 @@ function safeStorageFilename(filename: string): string {
 /** A denied KV call during an artifact operation, as the usual scope error (and its re-login hint). */
 function scopeDeniedFromArtifactError(
   error: unknown,
-  capability: string,
+  capability: "KV upload" | "artifact storage",
   authority: { readonly localKey: boolean; readonly profileName: string | undefined },
 ): SharePublishAuthorityError | undefined {
   const cause = error instanceof ArtifactError ? error.cause : undefined;

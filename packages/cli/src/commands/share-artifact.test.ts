@@ -203,5 +203,7 @@ describe("tc share versions", () => {
     const result = await refusal(["share", "versions", "art_report", "--json"]);
     expect(result.exitCode).toBe(5);
     expect(result.stderr).toContain("auth login --device --manifest builtin:share-publishing");
+    // The hint names the denied ability, so a profile without the `artifacts/` list grant knows what is missing.
+    expect(result.stderr).toContain("(tinycloud.kv/list)");
   });
 });
