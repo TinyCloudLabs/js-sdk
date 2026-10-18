@@ -153,13 +153,17 @@ for (const format of formats) {
   }
 }
 
-const prBaseSha = process.env.REPLICA_BUDGET_PR_BASE_SHA;
+const reportedBaseSha = process.env.REPLICA_BUDGET_PR_BASE_SHA;
+// On refs/pull/N/merge the tested tree is HEAD^1 + the PR head. GitHub regenerates that ref when the
+// base branch advances, while the event payload's base.sha stays frozen (and is reused verbatim by
+// re-runs). The merge parent is the base this tree was built on, so it is authoritative.
+const isMergeRef = /^refs\/pull\/\d+\/merge$/.test(process.env.GITHUB_REF ?? "");
+const prBaseSha = reportedBaseSha && isMergeRef ? command("git", ["rev-parse", "HEAD^1"]) : reportedBaseSha;
 if (prBaseSha) {
-  const baseRef = /^refs\/pull\/\d+\/merge$/.test(process.env.GITHUB_REF ?? "") ? "HEAD^1" : prBaseSha;
-  if (baseRef === "HEAD^1" && command("git", ["rev-parse", baseRef]) !== prBaseSha) {
-    console.error("The pull-request merge parent differs from GitHub's reported base SHA.");
-    failed = true;
+  if (prBaseSha !== reportedBaseSha) {
+    console.log(`Base branch advanced since the event (reported ${reportedBaseSha}); using merge parent ${prBaseSha}.`);
   }
+  const baseRef = prBaseSha;
   const mergeBase = command("git", ["merge-base", baseRef, "HEAD"]);
   const changedPaths = command("git", ["diff", "--name-only", "--no-renames", `${mergeBase}...HEAD`])
     .split("\n").filter(Boolean);

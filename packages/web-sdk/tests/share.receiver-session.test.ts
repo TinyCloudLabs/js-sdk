@@ -217,6 +217,16 @@ test("tabs opening at once share one stored key", async () => {
   expect(sessions.every((session) => session.custody === "persistent")).toBe(true);
 });
 
+test("a tab keeps the key a peer stored after the tab read its clock", async () => {
+  const factory = new IDBFactory();
+  const opened = new Date("2030-01-01T00:00:00.000Z");
+  const peer = await createOrRestoreShareReceiverSession(ORIGIN, memoryStorage(), { indexedDB: factory, now: () => new Date(opened.getTime() + 1) });
+  const reads = [opened, new Date(opened.getTime() + 2)];
+  const late = await createOrRestoreShareReceiverSession(ORIGIN, memoryStorage(), { indexedDB: factory, now: () => reads.shift() ?? new Date(opened.getTime() + 2) });
+  expect(late.holderDid).toBe(peer.holderDid);
+  expect(late.custody).toBe("persistent");
+});
+
 test("without usable IndexedDB the non-extractable key stays in memory and a reload forces a new key", async () => {
   for (const indexedDB of [null, brokenIndexedDB]) {
     const storage = memoryStorage();
