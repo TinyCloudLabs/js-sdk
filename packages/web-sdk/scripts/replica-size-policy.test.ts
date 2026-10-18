@@ -1190,7 +1190,7 @@ describe("TC-1432 vault etag/ifMatch/expectAad exact-delta ratchet", () => {
   const row = () => structuredClone(approvedTc1432Ratchet);
   // Buckets where the prior ceiling already sat above the merge-base measurement: that headroom absorbs
   // part of the measured delta, so the new ceiling is the measured value, not prior + delta.
-  const headroomAtBase = { "replica.mjs": 0, "replica.cjs": 0, "activation.mjs": 0, "activation.cjs": 0 };
+  const headroomAtBase = { "replica.mjs": 1, "replica.cjs": 0, "activation.mjs": 0, "activation.cjs": 0 };
 
   it("is in the ledger once, each ceiling on top of its prior cap (root: TC-1436's) plus the canonical delta", () => {
     expect(() => validateLedger(current)).not.toThrow();
