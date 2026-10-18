@@ -5,7 +5,7 @@ This release has **Commander coverage tracked, not complete parity**:
 
 - 2 migrated registration(s).
 - 1 partially migrated registration(s).
-- 128 legacy registration(s) remain Commander-owned.
+- 129 legacy registration(s) remain Commander-owned.
 
 - `auth import [source]` → `tinycloud.auth.import@1` (partial; legacy inputs: v1 delegation artifact, v1 permission artifact without command, bare portable delegation, stored delegation wrapper, cross-user delegation persisted with activated=false).
 - `secrets get <name>` → `tinycloud.secrets.get@1` (migrated).
@@ -71,6 +71,10 @@ Device login JSON lists the signed, approved `permissions`, owner-unchecked `dec
 | `shares/` | `kv/put` | store an addressed share's encrypted source; `--action edit` |
 | | `kv/get`, `kv/metadata` | back the Policy/v3 root that grants recipients read; `--notify` delivery authorization |
 | | `kv/list` | `--action list` on a `--prefix` share |
+| `artifacts/` | `kv/put` | `share publish --artifact`: write-once version files (`If-None-Match: *`) and their `manifest.json`. The node has no write-once ACL, so this `put` covers the whole `artifacts/` prefix: a session holding it could also overwrite an existing version file |
+| | `kv/get` | mint the pinned share's read-only child delegation |
+| | `kv/metadata` | back the Policy/v3 root of an addressed artifact share |
+| | `kv/list` | find the next version number; `share versions` |
 
 No `del` anywhere and no `list` on the bearer prefix: no `tinycloud share` command uses them. Inspect and receive use the link's own authority. Revoke signs `tinycloud.delegation/revoke` over the delegation's own CID and a Policy/v3 root revocation with the issuing session key, not a space capability. OpenKey shows the capability read as required (not uncheckable), so it is always in the signed grant and never in `declined`.
 
@@ -367,6 +371,16 @@ printf '%s' "$SHARE_URL" | "$TC" share receive - --output .
 "$TC" share notify <id> --to alice@example.com                        # retry email delivery within 5 minutes of publication
 "$TC" share revoke <id>                                               # bearer or addressed share this profile created
 ```
+
+**Artifact versions (pinned shares).** `--artifact <id|new>` stores the file as the next write-once version, `artifacts/<id>/versions/<n>/<file>` plus a `manifest.json` written last (file sha256 and size, parent, `--note`), in the owner's space. The share is pinned to that version: its delegation covers only that file and never carries `put`. Publishing the same bytes again to a bearer link returns the same version; changed content makes the next one; earlier versions are never overwritten. An addressed share stores ciphertext under a fresh random key each time, so every addressed publish is a new version, and `manifest.json` records only the sha256 of the stored ciphertext, never of the plaintext (an unsalted plaintext hash next to the ciphertext would let a reader of the space confirm a guess). `--artifact new` mints an id. JSON output adds `artifactId`, `version` and `mode` (`pinned`). `--action edit` on an artifact share is refused (a pinned version is read-only). An artifact share takes one file. Every artifact share pins one version; shares that follow later versions are not available yet. Profiles signed in before this feature need `auth login --device --manifest builtin:share-publishing` again, because the manifest now includes `artifacts/`.
+
+```bash
+"$TC" share publish ./report.md --artifact new --to email:alice@example.com --json   # v1, pinned
+cat report-v2.md | "$TC" share publish - --name report.md --artifact art_0123456789abcdef --to email:alice@example.com --note "second draft"
+"$TC" share versions art_0123456789abcdef --json                     # versions and the shares (from local history) pinned to each
+```
+
+Versions are kept by default and count against the owner's storage. The node does not reclaim overwritten or deleted values; byte reclamation depends on history GC (TC-1277).
 
 **Bearer vs addressed.** A bearer link (default, `--to anyone`) is `/viewer#tc1=<TinyCloud delegation>`: anyone holding the complete URL can read the file until it expires, and revocation cannot recall copies already received. Addressed links (`--to email:`, `--to did:`, `--to domain:`) are `/s/inline#v=2&p=<sealed Policy/v3 envelope>`: the content is encrypted and only the named recipient can open it after proving their email or DID in Share. `tinycloud share receive` returns the bytes of a bearer link; for an addressed link it exits 6 with `CLAIM_REQUIRED` because the recipient claims it in Share. `--notify` requires the `read` action: exact-email targets invite the matched mailbox; domain targets need `--notify-to` naming one canonical mailbox at that exact domain and a node reporting version 1.17.3 or later. The CLI refuses unsupported domain invitations before uploading or registering a share. A session-only publisher can deliver its own domain policy when the invoking DID matches its signed owner DID; a different sender DID cannot. `tinycloud share notify <id> --to <mailbox>` can address another mailbox in a domain share under the same node and sender-DID requirements; it refuses stored shares without `read` or on an unsupported node before sending.
 

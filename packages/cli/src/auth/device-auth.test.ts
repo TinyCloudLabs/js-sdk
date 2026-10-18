@@ -27,7 +27,7 @@ const spaceId = wasm.makeSpaceId(address, 1, "default");
 const key = JSON.parse(wasm.createSessionManager().jwk("default")!) as Record<string, string>;
 const sessionDid = keyToDID(key);
 const requested = sharePublishingPermissions();
-const [capabilityRead, bearerPrefix, addressedPrefix] = requested as [PermissionEntry, PermissionEntry, PermissionEntry];
+const [capabilityRead, bearerPrefix, addressedPrefix, artifactsPrefix] = requested as [PermissionEntry, PermissionEntry, PermissionEntry, PermissionEntry];
 // OpenKey's required capability read is always signed; the owner unchecked addressed shares.
 const bearerOnly = [capabilityRead, bearerPrefix];
 
@@ -209,12 +209,10 @@ describe("OpenKey device authorization", () => {
     const openkey = fakeOpenKey((start, id) => approved(start, id, { signed: bearerOnly }));
     const result = await acquire(openkey);
     expect(result.approved.map((p) => `${p.service}:${p.path}`)).toEqual(["tinycloud.capabilities:", "tinycloud.kv:xyz.tinycloud.share/shares/"]);
-    expect(result.declined).toEqual([{
-      service: "tinycloud.kv",
-      space: spaceId,
-      path: "shares/",
-      actions: addressedPrefix.actions,
-    }]);
+    expect(result.declined).toEqual([
+      { service: "tinycloud.kv", space: spaceId, path: "shares/", actions: addressedPrefix.actions },
+      { service: "tinycloud.kv", space: spaceId, path: "artifacts/", actions: artifactsPrefix.actions },
+    ]);
   });
 
   test("rejects a signed grant broader than the approved binding claims", async () => {
@@ -477,7 +475,7 @@ describe("device login persistence", () => {
     await ProfileManager.setProfile("agent", { name: "agent", host: NODE, chainId: 1, spaceName: "default", did: sessionDid, createdAt: "2026-10-01T00:00:00.000Z" });
     const openkey = fakeOpenKey((start, id) => approved(start, id, { signed: requested }));
 
-    const { result } = await loginWithDeviceAuthorization({ profileName: "agent", nodeOrigin: NODE, shareOrigin: SHARE, permissions: [bearerPrefix, addressedPrefix], fetchFn: openkey.fetchFn, emitInstructions: () => undefined, wait: async () => undefined });
+    const { result } = await loginWithDeviceAuthorization({ profileName: "agent", nodeOrigin: NODE, shareOrigin: SHARE, permissions: [bearerPrefix, addressedPrefix, artifactsPrefix], fetchFn: openkey.fetchFn, emitInstructions: () => undefined, wait: async () => undefined });
 
     expect(openkey.startBodies[0]!.permissions).toEqual(requested);
     expect(result.declined).toEqual([]);

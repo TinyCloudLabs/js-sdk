@@ -1,5 +1,32 @@
 # @tinycloudlabs/node-sdk
 
+## 3.3.0-beta.10
+
+### Patch Changes
+
+- @tinycloud/sdk-core@3.3.0-beta.10
+
+## 3.3.0-beta.9
+
+### Patch Changes
+
+- ef9653b: Sign the share delivery authorization with the primary session key. The node records the signer as the delivery's sender key, and the SDK binds and countersigns the receipt with the primary session key; when a runtime grant held by another key covered the shared file, `tc share publish --to <email> --notify` rejected its own receipt and the recipient was never emailed (exit 9, `partial-failure`).
+
+## 3.3.0-beta.8
+
+### Minor Changes
+
+- f97d73d: `disableSubDelegation: true` now sets the node's terminal marker (the UCAN fact `xyz.tinycloud.policy/delegationMode: "terminal"`), so the node refuses any delegation that cites the result as a parent. It applies to `createDelegation`, the `space.delegations.create` wiring, and the new `delegateTo` option of the same name; the returned delegation reports `disableSubDelegation: true`. sdk-core exports `TERMINAL_DELEGATION_FACT` and `markDelegationTerminal` (TC-1436).
+
+  Behaviour change, released as `minor` because the repository's versioning rule allows agents only `minor` or `patch` (a major needs a maintainer's sign-off). What breaks:
+  - `disableSubDelegation: true` now throws instead of issuing a wallet-signed delegation that can still be re-delegated: in `createSubDelegation`, in `delegateTo` with `forceWalletSign`, and in `createDelegation` when the requested capabilities are outside the current session.
+  - A terminal delegation still works for a delegate that uses it directly, but a wallet-mode `useDelegation`, which chains a new session from it, is refused by the node.
+
+### Patch Changes
+
+- Updated dependencies [f97d73d]
+  - @tinycloud/sdk-core@3.3.0-beta.8
+
 ## 3.3.0-beta.7
 
 ### Minor Changes

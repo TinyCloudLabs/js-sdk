@@ -1,5 +1,39 @@
 # @tinycloud/cli
 
+## 1.3.0-beta.10
+
+### Minor Changes
+
+- 116b214: Artifact versions for `share publish` (TC-1428). `share publish --artifact <id|new>` stores the file as a write-once version under `artifacts/<id>/versions/<n>/` (created with `If-None-Match: *`, `manifest.json` written last) in the owner's space and pins the share to that version: bearer and addressed shares read one version file and never carry `put`. Re-publishing the same bytes to a bearer link returns the same version and changed content makes the next, so an agent retry is safe. An addressed share is a fresh encryption each time, so each is its own version; the manifest records only the sha256 of the stored bytes, never of the plaintext. `share versions <id>` lists versions and the shares pinned to each. `--action edit` on an artifact share is refused; every artifact share pins one version. The layout helpers (`publishArtifactVersion`, `listArtifactVersions`, `parseArtifactManifest`, path helpers) are a new `@tinycloud/share-sdk/artifact` entry point, kept out of the main barrel so browser bundles do not carry them. No node change.
+
+  The built-in `builtin:share-publishing` manifest now also requests `artifacts/` (get, metadata, put, list). Profiles signed in before this version must sign in again to use `--artifact` (`auth login --device --manifest builtin:share-publishing`); other `share publish` use is unchanged. Versions are kept by default and count against the owner's storage; reclaiming bytes depends on history GC (TC-1277).
+
+### Patch Changes
+
+- Updated dependencies [116b214]
+  - @tinycloud/share-sdk@1.2.0-beta.0
+  - @tinycloud/sdk-core@3.3.0-beta.10
+  - @tinycloud/node-sdk@3.3.0-beta.10
+  - @tinycloud/operations@0.6.1-beta.10
+
+## 1.3.0-beta.9
+
+### Patch Changes
+
+- ef9653b: Sign the share delivery authorization with the primary session key. The node records the signer as the delivery's sender key, and the SDK binds and countersigns the receipt with the primary session key; when a runtime grant held by another key covered the shared file, `tc share publish --to <email> --notify` rejected its own receipt and the recipient was never emailed (exit 9, `partial-failure`).
+- Updated dependencies [ef9653b]
+  - @tinycloud/node-sdk@3.3.0-beta.9
+  - @tinycloud/operations@0.6.1-beta.9
+
+## 1.3.0-beta.8
+
+### Patch Changes
+
+- Updated dependencies [f97d73d]
+  - @tinycloud/sdk-core@3.3.0-beta.8
+  - @tinycloud/node-sdk@3.3.0-beta.8
+  - @tinycloud/operations@0.6.1-beta.8
+
 ## 1.3.0-beta.7
 
 ### Patch Changes
