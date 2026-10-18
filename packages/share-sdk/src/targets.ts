@@ -20,6 +20,8 @@ export interface TargetPublishInput {
   readonly resourceKind?: "exact" | "prefix";
   readonly actions?: readonly ("read" | "list" | "edit")[];
   readonly notify?: boolean;
+  /** Publish as the next write-once version of this artifact and pin the share to it (TC-1428). */
+  readonly artifact?: { readonly id: string; readonly note?: string };
 }
 
 export type TargetPublishOutcome = PublishedShare | ShareAuthorizationRequired;
@@ -93,6 +95,7 @@ export async function publishTargetShare(input: SharePublishOptions & {
   readonly files?: readonly { readonly bytes: Uint8Array; readonly filename: string; readonly mediaType?: string }[];
   readonly resourceKind?: "exact" | "prefix";
   readonly actions?: readonly ("read" | "list" | "edit")[];
+  readonly artifact?: { readonly id: string; readonly note?: string };
 }): Promise<TargetPublishOutcome> {
   const target = normalizeShareTarget(input.target);
   const filename = publishFilename(input.filename);
@@ -144,6 +147,7 @@ export async function publishTargetShare(input: SharePublishOptions & {
     ...(input.mediaType === undefined ? {} : { mediaType: input.mediaType }),
     ...(input.resourceKind === undefined ? {} : { resourceKind: input.resourceKind }),
     ...(input.actions === undefined ? {} : { actions: input.actions }),
+    ...(input.artifact === undefined ? {} : { artifact: input.artifact }),
     target,
     expiresAt,
     expiryWasExplicit: input.expiryWasExplicit ?? input.expiresAt !== undefined,

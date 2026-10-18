@@ -5,6 +5,12 @@ import {
   receiveShare,
   SharePublishError,
   ShareReceiveError,
+  ArtifactError,
+  assertArtifactId,
+  listArtifactVersions,
+  newArtifactId,
+  parseArtifactVersionPath,
+  type ArtifactStore,
   publishTargetShare,
   parseNativeShareUrl,
   listShares,
@@ -48,6 +54,37 @@ export interface ShareCommandServices {
   readonly assertDomainDelivery?: () => Promise<void>;
   readonly getRecord?: (shareId: string) => Promise<SenderShareRecord | undefined>;
   readonly linkFor?: (shareId: string) => Promise<string | undefined>;
+  /** The authenticated owner's artifact storage, for `tc share versions`. */
+  readonly artifactStore?: () => Promise<ArtifactStore>;
+}
+
+/** Validate the artifact flags once and name the pinned version request, if any. */
+function artifactRequest(
+  options: { readonly artifact?: string; readonly ongoing?: boolean; readonly note?: string },
+  target: ShareTarget,
+  actions: readonly ("read" | "list" | "edit")[],
+  inputCount: number,
+): { readonly id: string; readonly note?: string } | undefined {
+  if (options.artifact === undefined) {
+    if (options.ongoing === true) throw new CLIError("INVALID_ARGUMENT", "--ongoing requires --artifact", 2);
+    if (options.note !== undefined) throw new CLIError("INVALID_ARGUMENT", "--note requires --artifact", 2);
+    return undefined;
+  }
+  // A pinned path is immutable and never carries put: edit has to land on the mutable current copy.
+  if (actions.includes("edit") && options.ongoing !== true) {
+    throw new CLIError("INVALID_ARGUMENT", "--action edit needs --ongoing: a pinned artifact share is read-only", 2);
+  }
+  if (options.ongoing === true) {
+    if (target.kind === "bearer") throw new CLIError("INVALID_ARGUMENT", "--ongoing is not available for --to anyone; use an addressed target", 2);
+    // The recipient SDK refuses ciphertext whose wrapped-key hash differs from the one signed into the share, so a
+    // re-encrypted current copy cannot be followed by an existing envelope. Ongoing shares need the envelope to carry
+    // a follow marker first (TC-1428, later slice); refuse rather than mint a share that breaks on the first update.
+    throw new CLIError("UNSUPPORTED_TARGET", "ongoing artifact shares are not available yet; publish pinned (omit --ongoing)", 2);
+  }
+  if (inputCount !== 1) throw new CLIError("INVALID_ARGUMENT", "an artifact share takes exactly one file", 2);
+  const note = options.note;
+  if (note !== undefined && (note.length === 0 || note.length > 1024)) throw new CLIError("INVALID_ARGUMENT", "--note must be 1 to 1024 characters", 2);
+  return { id: options.artifact === "new" ? newArtifactId() : assertArtifactId(options.artifact), ...(note === undefined ? {} : { note }) };
 }
 
 let shareServices: ShareCommandServices = {};
@@ -77,6 +114,11 @@ function canonicalMailboxTarget(target: Extract<ShareTarget, { readonly kind: "e
 /** @internal Map share failures without echoing remote error text. */
 export function shareCliError(error: unknown, operation: "publish" | "notify" = "publish"): CLIError {
   if (error instanceof CLIError) return error;
+  if (error instanceof ArtifactError) {
+    if (error.code === "invalid-argument") return new CLIError("INVALID_ARGUMENT", error.message, 2);
+    if (error.code === "conflict") return new CLIError("ARTIFACT_CONFLICT", error.message, 1, { hint: "Another publisher is writing this artifact; retry." });
+    return new CLIError("UNAVAILABLE", error.message, 4);
+  }
   if (error instanceof ProfileLockTimeoutError) return wrapError(error);
   if (error instanceof ShareHistoryRetryError) {
     return new CLIError(
@@ -305,6 +347,9 @@ export function registerShareCommand(program: Command): void {
     .option("--action <actions...>", "Addressed permission: read, list, or edit")
     .option("--prefix", "Publish multiple inputs beneath one addressed prefix")
     .option("--binary", "Allow non-UTF-8 bearer content")
+    .option("--artifact <id>", "Publish as the next write-once version of an artifact (\"new\" starts one); the share is pinned to that version")
+    .option("--ongoing", "Follow the artifact's current copy instead of one version (not available yet)")
+    .option("--note <text>", "Note stored with the artifact version")
     .option("--json", "Print versioned redacted JSON")
     .option("--viewer-origin <origin>", "Canonical HTTPS viewer origin", SHARE_ORIGIN)
     .action(async (files: string[], options, command: Command) => {
@@ -321,6 +366,7 @@ export function registerShareCommand(program: Command): void {
         const actions = requestedActions(options.action);
         if (options.prefix && target.kind === "bearer") throw new CLIError("INVALID_ARGUMENT", "--prefix requires an addressed target", 2);
         if (inputs.length > 1 && target.kind === "bearer") throw new CLIError("UNSUPPORTED_LINK", "multiple files require an addressed target", 2);
+        const artifact = artifactRequest(options, target, actions, inputs.length);
         if (inputs.length > 1 && !options.prefix) throw new CLIError("INVALID_ARGUMENT", "multiple files require --prefix", 2);
         if (options.notify === true && !actions.includes("read")) throw new CLIError("INVALID_ARGUMENT", "--notify requires the read action; nothing was shared", 2);
         if (options.notifyTo !== undefined && (options.notify !== true || target.kind !== "emailDomain")) {
@@ -346,6 +392,7 @@ export function registerShareCommand(program: Command): void {
           target,
           resourceKind: options.prefix || inputs.length > 1 ? "prefix" : "exact",
           actions,
+          ...(artifact === undefined ? {} : { artifact }),
           expiresAt: expires(options.expires ?? "7d"),
           expiryWasExplicit: options.expires !== undefined,
           origin: options.viewerOrigin,
@@ -370,8 +417,11 @@ export function registerShareCommand(program: Command): void {
           if (notification.reason === "delivery-window-expired") process.stderr.write(NOTIFY_WINDOW_MESSAGE);
         }
         if (result.metadata.expiryClamped === true) process.stderr.write(`Share expiry clamped to session expiry (${result.metadata.expiresAt}).\n`);
-        if (json) writeJson({ ...redactPublishedShare(result), expiryClamped: result.metadata.expiryClamped === true, ...(notification === undefined ? {} : { notification }) });
-        else publishHuman(result);
+        if (json) writeJson({ ...redactPublishedShare(result), expiryClamped: result.metadata.expiryClamped === true, ...(artifact === undefined || result.metadata.artifact === undefined ? {} : { artifactId: result.metadata.artifact.id, version: result.metadata.artifact.version, mode: result.metadata.artifact.mode }), ...(notification === undefined ? {} : { notification }) });
+        else {
+          if (result.metadata.artifact !== undefined) process.stderr.write(`Artifact ${result.metadata.artifact.id} v${result.metadata.artifact.version} (${result.metadata.artifact.mode})\n`);
+          publishHuman(result);
+        }
       } catch (error) { return handleError(shareCliError(error)); }
     });
 
@@ -389,6 +439,43 @@ export function registerShareCommand(program: Command): void {
       } catch (error) {
         return handleError(shareCliError(error));
       }
+    });
+
+  share.command("versions <artifact-id>")
+    .description("List the write-once versions of an artifact, and the shares pinned to each")
+    .option("--json", "Print versioned JSON")
+    .action(async (artifactId: string, options, command: Command) => {
+      try {
+        const json = jsonOutput(options, command);
+        const id = assertArtifactId(artifactId);
+        if (shareServices.artifactStore === undefined) throw new CLIError("AUTH_REQUIRED", "artifact storage is not configured", 3);
+        const versions = await listArtifactVersions(await shareServices.artifactStore(), id);
+        // Pinned shares come from local sender history: the node keeps no per-share index.
+        const pinned = new Map<number, { shareId: string; target: string; expiresAt: string; revokedAt?: string }[]>();
+        for (const record of await shareServices.records?.list() ?? []) {
+          const path = parseArtifactVersionPath(record.resource.path);
+          if (path === undefined || path.artifactId !== id) continue;
+          const shares = pinned.get(path.version) ?? [];
+          shares.push({ shareId: record.shareId, target: record.targetKind ?? record.recipientMatcher.kind, expiresAt: record.expiresAt, ...(record.revokedAt === undefined ? {} : { revokedAt: record.revokedAt }) });
+          pinned.set(path.version, shares);
+        }
+        const view = versions.map((version) => ({
+          version: version.version,
+          complete: version.complete,
+          ...(version.manifest === undefined ? {} : {
+            createdAt: version.manifest.createdAt,
+            parent: version.manifest.parent,
+            ...(version.manifest.note === undefined ? {} : { note: version.manifest.note }),
+            files: version.manifest.files.map((file) => ({ path: file.path, sha256: file.sha256, bytes: file.bytes })),
+            manifestSha256: version.manifestSha256,
+          }),
+          pinnedShares: pinned.get(version.version) ?? [],
+        }));
+        if (json) writeJson({ protocol: "tinycloud-share", version: 1, artifactId: id, versions: view });
+        else {
+          process.stdout.write(view.map((entry) => `v${entry.version}\t${entry.complete ? (entry.createdAt ?? "") : "incomplete"}\t${entry.pinnedShares.length} pinned share${entry.pinnedShares.length === 1 ? "" : "s"}${entry.note === undefined ? "" : `\t${entry.note}`}`).join("\n") + (view.length ? "\n" : ""));
+        }
+      } catch (error) { return handleError(shareCliError(error)); }
     });
 
   share.command("receive [url]")

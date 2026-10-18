@@ -1,0 +1,139 @@
+import { describe, expect, test } from "bun:test";
+import { mkdtemp, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { MemorySenderShareRecordStorage, publishArtifactVersion, type ArtifactStore, type PublishedShare, type TargetPublishInput } from "@tinycloud/share-sdk";
+import { configureShareCommandServices } from "./share.js";
+import { runShareCaptured } from "./share.integration-harness.js";
+
+const viewerOrigin = "https://share-dev.tinycloud.link";
+const did = "did:key:z6MkggtHVWQUGJ3FVjJKXeb5oZThQvLmJVMV8hfNUz4ezcav";
+
+/** handleError ends the process; record its exit code and let the action return instead. */
+async function refusal(args: readonly string[]): Promise<{ exitCode: number | undefined; stderr: string; stdout: string }> {
+  const originalExit = process.exit;
+  let exitCode: number | undefined;
+  process.exit = ((code?: number) => { exitCode = code; }) as typeof process.exit;
+  try {
+    const { stderr, stdout } = await runShareCaptured(args);
+    return { exitCode, stderr, stdout };
+  } finally { process.exit = originalExit; }
+}
+
+async function input(content = "# report\n"): Promise<string> {
+  const root = await mkdtemp(join(tmpdir(), "tc-share-artifact-"));
+  const path = join(root, "report.md");
+  await writeFile(path, content, "utf8");
+  return path;
+}
+
+function publishedFor(request: TargetPublishInput): PublishedShare {
+  const artifact = request.artifact === undefined ? undefined : { id: request.artifact.id, version: 3, mode: "pinned" as const };
+  return {
+    protocol: "tinycloud-share", version: 1, url: `${viewerOrigin}/viewer#tc1=opaque`,
+    link: { kind: "native", cid: "bafy-native" },
+    metadata: {
+      protocol: "tinycloud-share", version: 1, shareId: "bafy-native", origin: viewerOrigin,
+      target: { kind: "bearer", origin: "https://node.example", nodeAudience: "did:web:node.example", spaceId: "owner-space" },
+      resource: { kind: "exact", path: `artifacts/${request.artifact?.id}/versions/3/${request.filename}` }, actions: ["read"],
+      expiresAt: request.expiresAt.toISOString(), display: { filename: request.filename }, recipientMatcher: { kind: "bearer" },
+      enforcementDelegationCid: "bafy-native", ...(artifact === undefined ? {} : { artifact }),
+    },
+  };
+}
+
+describe("tc share publish --artifact", () => {
+  test("passes the artifact id and note to the publisher and reports artifactId, version and mode in JSON", async () => {
+    const seen: TargetPublishInput[] = [];
+    configureShareCommandServices({ targetAdapter: { publish: async (request) => { seen.push(request); return publishedFor(request); } } });
+    const result = await runShareCaptured(["share", "publish", await input(), "--artifact", "art_report", "--note", "first cut", "--viewer-origin", viewerOrigin, "--json"]);
+    expect(seen[0]?.artifact).toEqual({ id: "art_report", note: "first cut" });
+    expect(JSON.parse(result.stdout)).toMatchObject({ artifactId: "art_report", version: 3, mode: "pinned", metadata: { artifact: { id: "art_report", version: 3, mode: "pinned" } } });
+    // The link never appears in machine output.
+    expect(result.stdout).not.toContain("tc1=");
+  });
+
+  test("`--artifact new` mints a fresh valid artifact id", async () => {
+    const seen: TargetPublishInput[] = [];
+    configureShareCommandServices({ targetAdapter: { publish: async (request) => { seen.push(request); return publishedFor(request); } } });
+    await runShareCaptured(["share", "publish", await input(), "--artifact", "new", "--viewer-origin", viewerOrigin, "--json"]);
+    await runShareCaptured(["share", "publish", await input(), "--artifact", "new", "--viewer-origin", viewerOrigin, "--json"]);
+    expect(seen.map((request) => request.artifact?.id)).toEqual([expect.stringMatching(/^art_[0-9a-f]{16}$/), expect.stringMatching(/^art_[0-9a-f]{16}$/)]);
+    expect(seen[0]?.artifact?.id).not.toBe(seen[1]?.artifact?.id);
+  });
+
+  test("refuses edit on a pinned share, ongoing without an artifact, and ongoing for anyone-with-link, before publishing", async () => {
+    let published = 0;
+    configureShareCommandServices({ targetAdapter: { publish: async (request) => { published += 1; return publishedFor(request); } } });
+    const file = await input();
+    const edit = await refusal(["share", "publish", file, "--to", did, "--artifact", "art_report", "--action", "edit", "--json"]);
+    expect(edit.exitCode).toBe(2);
+    expect(edit.stderr).toContain("needs --ongoing");
+    const orphan = await refusal(["share", "publish", file, "--ongoing", "--json"]);
+    expect(orphan.exitCode).toBe(2);
+    expect(orphan.stderr).toContain("--ongoing requires --artifact");
+    const anyone = await refusal(["share", "publish", file, "--artifact", "art_report", "--ongoing", "--json"]);
+    expect(anyone.exitCode).toBe(2);
+    expect(anyone.stderr).toContain("not available for --to anyone");
+    const note = await refusal(["share", "publish", file, "--note", "x", "--json"]);
+    expect(note.stderr).toContain("--note requires --artifact");
+    expect(published).toBe(0);
+  });
+
+  test("refuses an ongoing addressed share rather than minting one that breaks on the first update", async () => {
+    let published = 0;
+    configureShareCommandServices({ targetAdapter: { publish: async (request) => { published += 1; return publishedFor(request); } } });
+    const result = await refusal(["share", "publish", await input(), "--to", did, "--artifact", "art_report", "--ongoing", "--action", "edit", "--json"]);
+    expect(result.exitCode).toBe(2);
+    expect(result.stderr).toContain("not available yet");
+    expect(published).toBe(0);
+  });
+
+  test("refuses a malformed artifact id and more than one file", async () => {
+    let published = 0;
+    configureShareCommandServices({ targetAdapter: { publish: async (request) => { published += 1; return publishedFor(request); } } });
+    const file = await input();
+    for (const id of ["../x", "A", "ab", "a b"]) {
+      const result = await refusal(["share", "publish", file, "--artifact", id, "--json"]);
+      expect(result.exitCode).toBe(2);
+      expect(result.stderr).toContain("artifact id");
+    }
+    const many = await refusal(["share", "publish", file, await input(), "--to", did, "--prefix", "--artifact", "art_report", "--json"]);
+    expect(many.exitCode).toBe(2);
+    expect(many.stderr).toContain("exactly one file");
+    expect(published).toBe(0);
+  });
+});
+
+describe("tc share versions", () => {
+  function memory(): ArtifactStore {
+    const data = new Map<string, Uint8Array>();
+    return {
+      async put(key, bytes) { if (data.has(key)) return "exists"; data.set(key, bytes.slice()); return "created"; },
+      async get(key) { return data.get(key)?.slice(); },
+      async list(prefix) { return [...data.keys()].filter((key) => key.startsWith(prefix)); },
+    };
+  }
+
+  test("lists versions with the shares pinned to each, from local history", async () => {
+    const store = memory();
+    const enc = (value: string) => new TextEncoder().encode(value);
+    await publishArtifactVersion(store, { artifactId: "art_report", files: [{ filename: "report.md", bytes: enc("one") }], note: "first" });
+    await publishArtifactVersion(store, { artifactId: "art_report", files: [{ filename: "report.md", bytes: enc("two") }] });
+    const records = new MemorySenderShareRecordStorage();
+    const base = {
+      target: { origin: "https://node.example", nodeAudience: "did:web:node.example", spaceId: "owner-space" },
+      actions: ["tinycloud.kv/get"] as const, recipientMatcher: { kind: "bearer" as const }, targetKind: "bearer" as const,
+      registeredAt: "2026-10-18T00:00:00.000Z", expiresAt: "2026-10-25T00:00:00.000Z",
+    };
+    await records.put({ ...base, shareId: "share-on-v1", resource: { kind: "exact", path: "artifacts/art_report/versions/1/report.md" } });
+    await records.put({ ...base, shareId: "share-other-artifact", resource: { kind: "exact", path: "artifacts/art_other/versions/1/report.md" } });
+    await records.put({ ...base, shareId: "share-legacy", resource: { kind: "exact", path: "shares/abc/report.md" } });
+    configureShareCommandServices({ artifactStore: async () => store, records });
+    const result = await runShareCaptured(["share", "versions", "art_report", "--json"]);
+    const body = JSON.parse(result.stdout) as { artifactId: string; versions: { version: number; note?: string; parent: number | null; pinnedShares: { shareId: string }[] }[] };
+    expect(body.artifactId).toBe("art_report");
+    expect(body.versions.map((entry) => [entry.version, entry.parent, entry.pinnedShares.map((share) => share.shareId)])).toEqual([[1, null, ["share-on-v1"]], [2, 1, []]]);
+    expect(body.versions[0]?.note).toBe("first");
+  });
+});
