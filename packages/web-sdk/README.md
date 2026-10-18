@@ -160,15 +160,15 @@ PR lands after it re-measures against the new base and updates its own row.
 
 The TC-1443 registry verdict classifier in sdk-core (#586) raised only the root
 ceilings once more, after removing a duplicate secp256k1 from the bundle. It landed
-after #583, so it was re-measured against master `1c89b697` and sits on top of
-TC-1424's root ceilings. Naomi approved the row as a delta over its base (+2,368 / +61
-gzip, ±50 B); GitHub run 39159917336 measured it on source `241e7914`, identical in
-both Node jobs: 1,470,946 / 1,397,943 B, i.e. +2,365 / +66 over master's measured
-1,468,581 / 1,397,877 B. The row's ceilings are those measured bytes. First import,
-activation, the gated artifact and the worker keep TC-1432's ceilings. The ledger's
-`tc1443Ratchet` row records them and cannot change later. If another root-growing PR
-lands first, #586 re-measures against the new base and replaces its own row before
-it merges.
+after #583, so it was re-measured against master `26ac9771` (#584, #588 and #592
+landed after #583 and are byte-neutral) and sits on top of TC-1424's root ceilings.
+Naomi approved the row as a delta over its base (+2,368 / +61 gzip, ±50 B); GitHub run
+39162102088 measured it on source `2b45211d`, identical in both Node jobs: 1,470,946 /
+1,397,943 B, i.e. +2,365 / +66 over master's measured 1,468,581 / 1,397,877 B. The
+row's ceilings are those measured bytes. First import, activation, the gated artifact
+and the worker keep TC-1432's ceilings. The ledger's `tc1443Ratchet` row records them
+and cannot change later. If another root-growing PR lands first, #586 re-measures
+against the new base and replaces its own row before it merges.
 
 **Ancestry pins and squash merges.** A policy row records the PR-branch commit it
 was reviewed at, and its introduction check requires that literal commit in the
