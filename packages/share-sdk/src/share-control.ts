@@ -10,10 +10,12 @@ import { ShareRootError, errorMessage, isRevokeReceiptFor, parseOwnerDid, requir
  * production ingress (nginx 1.27.4, `large_client_header_buffers 4 32k`,
  * HTTP/1.1): 32,751 bytes pass, 32,752 bytes get `400 Request Header Or
  * Cookie Too Large`. A direct Node accepts ~483 KB and Cloudflare 128 KB.
- * 30,000 bytes leave 8.4% for header-name and proxy overhead. Each share
- * (network URN with `delegation/revoke` + `network.revoke`) costs ~845
- * bytes: 34 shares per control with the space rows (29,800 bytes measured
- * with the `applications` row, imported by the Node), 35 without.
+ * 30,000 bytes leave 8.4% for header-name and proxy overhead. A control's
+ * capacity depends on the shareId length; with the `applications` and
+ * `default` rows in every control: 33 shares for UUID shareIds, 34 for
+ * 32-hex ids, 37 for 16-character ids (34 UUID shares + the `applications`
+ * row alone measured 29,800 bytes, imported by the Node). L shares take
+ * ceil(L/n) controls, n from the plan.
  */
 export const SHARE_CONTROL_HEADER_BUDGET_BYTES = 30_000;
 /** A control lives ten minutes: long enough to retire and revoke one batch. */

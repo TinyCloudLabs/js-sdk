@@ -142,7 +142,12 @@ describe("ShareGrant.prepare and approve", () => {
       expect(owner.calls).toHaveLength(0);
       expect(keys).toHaveLength(0);
     }
-    node.networks.get(NETWORK)!.state = "active";
+    // Resuming checks the existing descriptor before the prompt too.
+    Object.assign(node.networks.get(NETWORK)!, { state: "active", alg: "x25519-chacha/v9" });
+    const mismatched = request({ fetch: node.fetch, resume: true });
+    await rejects(ShareGrant.prepare(mismatched.input), "network-not-active");
+    expect(mismatched.owner.calls).toHaveLength(0);
+    node.networks.get(NETWORK)!.alg = "x25519-aes256gcm/v1";
     const resumed = request({ fetch: node.fetch, resume: true });
     const grant = await ShareGrant.create(resumed.input);
     expect(resumed.owner.calls).toHaveLength(1);
@@ -354,6 +359,13 @@ describe("revokeShareGrant", () => {
 
   it("does not count a receipt for another CID", async () => {
     const node = fakeNode({ override: (entry) => entry.method === "POST" && entry.path === "/revoke" ? new Response(JSON.stringify({ revoked: true, cid: "bafkr4iother" }), { headers: { "content-type": "application/json" } }) : undefined });
+    const { grant } = await createGrant({ fetch: node.fetch });
+    await grant.ensureNetwork();
+    await rejects(revokeShareGrant({ grant, owner: { signOwnerRevocation: async (cid) => cid }, fetch: node.fetch }), "grant-revoke-incomplete");
+  });
+
+  it("does not count a receipt that says the grant is not revoked", async () => {
+    const node = fakeNode({ override: (entry) => entry.method === "POST" && entry.path === "/revoke" ? new Response(JSON.stringify({ revoked: false, cid: entry.authorization }), { headers: { "content-type": "application/json" } }) : undefined });
     const { grant } = await createGrant({ fetch: node.fetch });
     await grant.ensureNetwork();
     await rejects(revokeShareGrant({ grant, owner: { signOwnerRevocation: async (cid) => cid }, fetch: node.fetch }), "grant-revoke-incomplete");

@@ -113,7 +113,10 @@ export interface ShareGrantRequest {
    * exists and is `active` (a half-published share whose key was lost), and
    * grant a new key on it. Without it, `prepare` refuses an existing network
    * (`share-id-in-use`) before the prompt. A retired network is always
-   * refused.
+   * refused. After resuming, revoke the lost key's grant with an owner SIWE
+   * on its CID (`POST /revoke`; not a kill-all control, which would also
+   * retire this network): it stays live, with decrypt on this share, until
+   * revoked or expired.
    */
   readonly resumeExistingNetwork?: boolean;
   readonly keyFactory?: () => Promise<DelegatedShareKey>;

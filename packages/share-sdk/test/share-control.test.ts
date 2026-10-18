@@ -68,6 +68,9 @@ describe("planShareControlBatches", () => {
     expect(planShareControlBatches({ owner, targets: targets(35), spaceIds: [APPLICATIONS, DEFAULT_SPACE] })).toHaveLength(2);
     // Roots and links only: one control with the rows and no networks.
     expect(planShareControlBatches({ owner, targets: [], spaceIds: [APPLICATIONS] })).toEqual([{ targets: [], spaceDelegationResources: [`${APPLICATIONS}/delegation`], headerBytes: expect.any(Number) }]);
+    // UUID shareIds (what Share uses) are 4 characters longer than 32-hex ids: 33 per control with both rows.
+    const uuids = Array.from({ length: 100 }, (_, index) => ({ networkId: perShareNetworkIdFor(OWNER_DID, `${String(index).padStart(8, "0")}-0000-4000-8000-000000000000`) }));
+    expect(planShareControlBatches({ owner, targets: uuids, spaceIds: [APPLICATIONS, DEFAULT_SPACE] }).map((batch) => batch.targets.length)).toEqual([33, 33, 33, 1]);
   });
 
   it("honours a smaller budget and refuses a larger one, repeats, foreign spaces and bad domains", () => {
@@ -78,6 +81,7 @@ describe("planShareControlBatches", () => {
     expect(() => planShareControlBatches({ owner, targets: targets(1), budgetBytes: 30_001 })).toThrow("control budget");
     expect(() => planShareControlBatches({ owner, targets: [...targets(1), ...targets(1)] })).toThrow("repeat");
     expect(() => planShareControlBatches({ owner, targets: targets(1), spaceIds: ["tinycloud:pkh:eip155:1:0x0000000000000000000000000000000000000001:applications"] })).toThrow("space rows");
+    expect(() => planShareControlBatches({ owner, targets: targets(1), spaceIds: [APPLICATIONS, APPLICATIONS] })).toThrow("space rows must not repeat");
     expect(() => planShareControlBatches({ owner, targets: targets(1), budgetBytes: 500 })).toThrow("exceed the control budget");
     for (const domain of ["share.example\nURI: did:key:evil", "share example", "", "share.example/path", "-share.example"]) {
       expect(() => planShareControlBatches({ owner: { ...owner, domain }, targets: targets(1) })).toThrow("control domain");
@@ -150,6 +154,8 @@ describe("runShareControlBatch", () => {
     expect(result.grants).toEqual([{ grantCid: grantCid(0), result: "refused", status: 200 }]);
     const empty = fakeNode({ override: (entry) => entry.path === "/delegate" ? json({}) : entry.path === "/revoke" ? new Response("", { status: 200 }) : undefined });
     expect((await runShareControlBatch({ owner, nodeOrigin: NODE, batch: batch!, fetch: empty.fetch })).grants[0]!.result).toBe("refused");
+    const notRevoked = fakeNode({ override: (entry) => entry.path === "/delegate" ? json({}) : entry.path === "/revoke" ? json({ revoked: false, cid: revokedCid(entry) }) : undefined });
+    expect((await runShareControlBatch({ owner, nodeOrigin: NODE, batch: batch!, fetch: notRevoked.fetch })).grants[0]!.result).toBe("refused");
   });
 
   it.each(FORBIDDEN_NETWORKS)("refuses a hand-built batch naming %s, before any prompt or request", async (_case, networkId) => {
