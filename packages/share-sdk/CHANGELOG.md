@@ -1,5 +1,19 @@
 # @tinycloud/share-sdk
 
+## 1.2.0-beta.1
+
+### Minor Changes
+
+- c2fd94b: Add `ShareRoot` (TC-1423 D3, slice 1) under the new subpath `@tinycloud/share-sdk/share-root` (the main entry is unchanged, so its consumers' bundles do not grow): a wallet-signed, read-only root delegated to one non-extractable Ed25519 share key, so shares can outlive the owner's login session.
+  - `ShareRoot.create` asks the owner once through `createOwnerDelegation({ permissions })`. The scope is chosen at creation from the Node's advertised owner-authority mode: `kv` (get + metadata on `xyz.tinycloud.share/shares/` in `applications`) unless the `shareRootPolicyRoots` option is on and the Node's `GET /info` `features` list `policy-owner-authority-v1` + `policy-owner-authority-enforce`, in which case decrypt on the owner's `:share` network is added (`kv+share-decrypt`). Agent roots are always `kv`, in `default`. The scope and the Node origin are kept in the root record.
+  - The signed CACAO is decoded and anything else is rejected: other abilities or caveats, other resources, a parent, another audience or owner, a lifetime over 37 days (agents: 30; up to 5 minutes of signer clock skew on the issue time), or an expiry other than the one requested. The key is cleared, and the error carries the imported CID, the CID of the signed bytes when they differ, and `mustRevoke` when the imported root may grant more than requested.
+  - `create` generates the key itself and never exposes it; `clear()` drops the only handle. Browser persistence of a share key is not provided and needs the composer on its own origin first.
+  - `signBearerLink` signs a `kv/get` link on one exact key under the prefix, outside WASM; it never outlives the root or 30 days.
+  - `policyRootSigner` is the only ShareRoot API that signs Policy/v3 owner material. It needs a `kv+share-decrypt` root and the flag, and its `createOwnerRoot` / `sign` (32-byte digests only) re-check the flag, the root's expiry and the Node's advertised mode on every call. Policy roots are built by the signer and may not outlive the share root. A share key holder can still sign through other APIs; the Node refuses a policy registered by a `kv` root's key (`policy-owner-not-authorized`).
+  - `ensureShareRoot` re-roots (new key, one approval, the cap minus 10 minutes) only when the current root does not cover the requested expiry, or, for `purpose: "policy"`, when the Node enforces and the current root is `kv`. It never returns a `kv` root for policy use.
+  - `createPolicyOwnerModeProbe` caches each Node's answer for at most 5 minutes, probes only https (http on loopback), requires a JSON answer of at most 64 KiB, and accepts the features a sign-in already read (`observe`); any failure counts as not enforcing.
+  - `signShareKeyDelegation`, `assertNonExtractableShareKey`, `decodeOwnerRootCacao` and `ownerRootCacaoCid` are exported for these flows.
+
 ## 1.2.0-beta.0
 
 ### Minor Changes
