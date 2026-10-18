@@ -848,7 +848,7 @@ describe("TinyCloud share authority adapter", () => {
       listErrorCode = "AUTH_UNAUTHORIZED";
       const { artifactStore } = artifactAdapter();
       const store = await artifactStore();
-      await expect(store.list("artifacts/art_t/versions/")).rejects.toMatchObject({ failure: { kind: "scope-denied", capability: "artifact storage" } });
+      await expect(store.list("artifacts/art_t/versions/")).rejects.toMatchObject({ failure: { kind: "scope-denied", capability: "artifact storage", requiredAction: "tinycloud.kv/list" } });
     });
 
     it("refuses to grant edit on a pinned version before encrypting or uploading anything", async () => {
