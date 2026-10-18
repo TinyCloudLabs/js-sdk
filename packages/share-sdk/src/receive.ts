@@ -4,6 +4,7 @@ import {
   open,
   parseSealedInlineShareUrl,
   shareEnvelopeV3Schema,
+  verifyEnvelopeV3,
   type ShareEnvelopeV3,
 } from "@tinycloud/share-envelope";
 import { ArtifactPinError, verifyArtifactShare } from "./artifact-pin.js";
@@ -129,14 +130,18 @@ async function resolvePolicyShare(link: string, options: ShareFetchOptions): Pro
   } catch {
     throw new ShareReceiveError("envelope-invalid", "share envelope is invalid");
   }
-  // Signature, policy, roots and enforcer binding, then the owner-signed artifact pin against what the share reads.
   try {
-    await verifyArtifactShare(envelope, { expectedOwnerDid: envelope.policy.ownerDid });
-  } catch (error) {
-    if (error instanceof ArtifactPinError && error.code !== "wrong-signer" && error.code !== "bad-signature") {
-      throw new ShareReceiveError("envelope-invalid", `share artifact pin is invalid (${error.code})`);
-    }
+    if (!await verifyEnvelopeV3(envelope, { expectedSignerDid: envelope.policy.ownerDid })) throw new Error("signature");
+  } catch {
     throw new ShareReceiveError("signature-invalid", "share signature is invalid");
+  }
+  // The owner's signature (checked above) covers the artifact pin; the pin must also match what the share reads, and a
+  // share that reads an artifact without a pin is refused.
+  try {
+    verifyArtifactShare(envelope, { expectedOwnerDid: envelope.policy.ownerDid });
+  } catch (error) {
+    if (!(error instanceof ArtifactPinError)) throw error;
+    throw new ShareReceiveError("envelope-invalid", `share artifact pin is invalid (${error.code})`);
   }
   options.signal?.throwIfAborted();
   const expiry = Date.parse(envelope.expiry);
