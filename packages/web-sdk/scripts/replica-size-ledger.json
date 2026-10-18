@@ -466,28 +466,28 @@
   },
   "tc1443Ratchet": {
     "label": "TC-1443 #586 sdk-core registry verdict classifier, exact canonical delta",
-    "ruling": "TC-1443 size row for #586, approved by Naomi as a delta (+2,368/+61 gzip, ±50 B), 2026-10-18; PLACEHOLDER numbers pending the re-measure on 70304c3d",
+    "ruling": "TC-1443 size row for #586, approved by Naomi as a delta (+2,368/+61 gzip, ±50 B), 2026-10-18; re-measured on 70304c3d, following the TC-1436 (#578) size ruling pattern: a real shrink first, remainder by the PR's own exact-delta row at canonical CI bytes",
     "base": "70304c3de12a8a3db323cf1271fc58698a9096b3",
     "sourceCommits": [
-      "878e591f29ee04dad2ea9785121f609f3e0c81c2"
+      "72ba295cc0760e88a035f4d8fef488d8fb5c0556"
     ],
     "canonicalCI": {
-      "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39165100154",
+      "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39166751086",
       "jobs": [
-        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39165100154/job/117786272149",
-        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39165100154/job/117786272401"
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39166751086/job/117791176669",
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39166751086/job/117791176820"
       ]
     },
     "root": {
       "delta": {
-        "index.mjs": 2368,
-        "index.cjs": 61
+        "index.mjs": 2370,
+        "index.cjs": 71
       },
       "ceiling": {
-        "index.mjs": 1470993,
-        "index.cjs": 1397971
+        "index.mjs": 1470995,
+        "index.cjs": 1397981
       }
     },
-    "reason": "PLACEHOLDER row pending the canonical CI re-measure on top of TC-1448."
+    "reason": "sdk-core adds classifyRegistryLookup (registry-verdict.ts): a pure three-state classifier of one location registry response with its own strict JSON parser, RFC 3339 check, signature encoding rules and host-origin mapping. web-sdk does not export it; the index.mjs build still keeps the whole module, while index.cjs tree-shakes all but its module-level constants. Cut applied first: the module took secp256k1's group order from sdk-core's @noble/curves 1.9.7 while viem bundles its own 1.9.1, so the root carried a second secp256k1; a pinned literal replaced it, and CI went from +12398/+6881 on 8776001a (against 7e10709c) to +2423/+49 on 4a8ccb1a (against 129c7935). Not taken: a lazy import, because the web build pins LimitChunkCountPlugin({ maxChunks: 1 }) and would inline it; changing how the mjs build tree-shakes sdk-core, which is a web-sdk build change outside this PR. #583 (TC-1424), #584, #588, #592, #593 and #591 (TC-1448) landed first; this row was re-measured against master 70304c3d (CI-measured at 7539b854, run 39165869299: index.mjs 1,468,625 and index.cjs 1,397,910 B, equal to the TC-1448 ceilings) and chains after the TC-1448 row. Canonical CI run 39166751086 (head 72ba295c, the merge of that master into source 4a8ccb1a plus a policy row carrying placeholder numbers) measured identical absolute bytes in both Node jobs: index.mjs 1,470,995 and index.cjs 1,397,981 B, i.e. +2,370 / +71 over master's measured bytes, within the approved delta of +2,368 / +61 gzip (+/-50 B). The ceilings are these measured bytes, zero headroom. Whichever PR lands after this one re-measures against the new base and updates its own row."
   }
 }
