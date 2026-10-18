@@ -1,5 +1,14 @@
 # @tinycloud/cli
 
+## 1.3.0-beta.9
+
+### Patch Changes
+
+- ef9653b: Sign the share delivery authorization with the primary session key. The node records the signer as the delivery's sender key, and the SDK binds and countersigns the receipt with the primary session key; when a runtime grant held by another key covered the shared file, `tc share publish --to <email> --notify` rejected its own receipt and the recipient was never emailed (exit 9, `partial-failure`).
+- Updated dependencies [ef9653b]
+  - @tinycloud/node-sdk@3.3.0-beta.9
+  - @tinycloud/operations@0.6.1-beta.9
+
 ## 1.3.0-beta.8
 
 ### Patch Changes

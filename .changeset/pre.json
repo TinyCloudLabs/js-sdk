@@ -52,6 +52,7 @@
     "replica-shared-contract",
     "replica-sign-out-gate",
     "replica-worker-init-failure",
+    "share-delivery-primary-session",
     "sign-out-ends-session",
     "tc-1312-writable-handles",
     "tc-1413-node-retry-errors",
