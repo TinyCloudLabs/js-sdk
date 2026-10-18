@@ -61,6 +61,7 @@
     "tc-841-logout-contract",
     "tc-841-profile-containment",
     "terminal-delegation-marker",
+    "vault-etag-if-match-expect-aad",
     "web-replica-frozen-plugin",
     "web-replica-recovery-retry",
     "web-sdk-declared-siwe",
