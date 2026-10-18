@@ -19,10 +19,6 @@ export interface SignedSiweCacao {
   readonly attenuation: ReCapAttenuation;
   /** SIWE `Expiration Time` as signed. Reported only: the caller decides whether it matters. */
   readonly expiresAt?: string;
-  /** SIWE `Not Before` as signed. Reported only, like `expiresAt`. */
-  readonly notBefore?: string;
-  /** SIWE `Issued At` as signed. Reported only. */
-  readonly issuedAt: string;
 }
 
 /** Real CACAOs are a few KiB; a ReCap with many resources stays far below this. */
@@ -259,5 +255,5 @@ export async function parseSignedSiweCacao(authorization: string, expectedCid?: 
     ...(resources.length === 0 ? {} : { resources }),
   }).prepareMessage();
   if (!await verifyEip191MessageSignature(message, bytesToHex(signature.s), pkh[2]!)) throw new Error("CACAO signature is invalid");
-  return { cid, issuer, audience, attenuation, issuedAt: text(payload.iat, "iat"), ...(expiresAt === undefined ? {} : { expiresAt }), ...(notBefore === undefined ? {} : { notBefore }) };
+  return { cid, issuer, audience, attenuation, ...(expiresAt === undefined ? {} : { expiresAt }) };
 }

@@ -1,4 +1,5 @@
 import { canonicalAddressSpelling } from "../agent-record.js";
+import { cacaoTimes } from "./cacao-times.js";
 import { attenuationCovers, type Attenuation } from "./attenuation.js";
 import { principalOf } from "./ucan.js";
 
@@ -10,7 +11,8 @@ import { principalOf } from "./ucan.js";
  * (`cacao.ts:205-276`; share-sdk cannot depend on sdk-core, which depends on
  * share-sdk). That parser does not check validity times, so this module adds:
  * `Not Before`/`Expiration Time` against `now`, issuer == the account owner,
- * audience == the child's issuer, and child attenuation ⊆ the CACAO's.
+ * audience == the child's issuer, and child attenuation ⊆ the CACAO's. `Not
+ * Before` and `Issued At` are read from the verified bytes ({@link cacaoTimes}).
  */
 export interface ParsedSiweCacao {
   readonly cid: string;
@@ -20,9 +22,6 @@ export interface ParsedSiweCacao {
   readonly audience: string;
   readonly attenuation: Attenuation;
   readonly expiresAt?: string;
-  readonly notBefore?: string;
-  /** SIWE `Issued At` as signed. */
-  readonly issuedAt?: string;
 }
 
 /** Verifies signature, encoding and the exact-bytes CID; throws otherwise. */
@@ -67,11 +66,12 @@ export async function verifyOwnerSessionDelegation(input: OwnerSessionCheck): Pr
   if (canonicalAddressSpelling(cacao.issuer) !== canonicalAddressSpelling(input.accountOwnerDid)) throw new Error("SIWE issuer is not the account owner");
   if (principalOf(cacao.audience) !== principalOf(input.childIssuer)) throw new Error("SIWE audience is not the delegation issuer");
   if (!attenuationCovers(cacao.attenuation, input.childAttenuation)) throw new Error("delegation widens the SIWE attenuation");
-  const notBefore = timeOf(cacao.notBefore, "Not Before");
+  const times = cacaoTimes(input.authorization);
+  const notBefore = timeOf(times.notBefore, "Not Before");
   const expiresAt = timeOf(cacao.expiresAt, "Expiration Time");
   if (notBefore !== undefined && expiresAt !== undefined && notBefore >= expiresAt) throw new Error("SIWE validity window is empty");
   if (notBefore !== undefined && notBefore > input.now.getTime() + NOT_BEFORE_SKEW_MS) throw new Error("SIWE is not yet valid");
-  const issuedAt = timeOf(cacao.issuedAt, "Issued At");
+  const issuedAt = timeOf(times.issuedAt, "Issued At");
   return {
     cid: cacao.cid, sessionDid: principalOf(cacao.audience), time: expiresAt !== undefined && expiresAt <= input.now.getTime() ? "expired" : "current",
     ...(issuedAt === undefined ? {} : { issuedAt }),

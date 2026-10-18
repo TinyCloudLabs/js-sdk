@@ -9,6 +9,9 @@ import { AgentShareRecordStore } from "../../src/share-index/record-store.js";
 import { headerBytes, MemoryShareIndexOutbox, SenderShareIndex, type ShareIndexLimits } from "../../src/share-index/sender-share-index.js";
 import { project, type ShareIndexDocument, type ShareIndexRow } from "../../src/share-index/schema.js";
 import { verifyAgentRecordChain } from "../../src/share-index/verify/chain.js";
+import { verifyEnvelopeV3At } from "../../src/share-index/verify/policy-v3.js";
+import type { ShareEnvelopeV3 } from "@tinycloud/share-envelope";
+import { cacaoTimes } from "../../src/share-index/verify/cacao-times.js";
 import { parseSignedUcan } from "../../src/share-index/verify/ucan.js";
 import v3Fixture from "./fixtures/v3-envelope.json";
 import {
@@ -156,6 +159,16 @@ describe("m2: every fetch spends the agent's 50-per-pass allowance", () => {
   });
 });
 
+describe("CACAO times are read from the verified bytes", () => {
+  test("reads iat and nbf; refuses trailing bytes and a CACAO without a payload map", () => {
+    const siwe = fakeSiwe({ issuer: OWNER_DID, audience: "did:key:z", attenuation: {}, issuedAt: "2026-01-01T00:00:00.000Z", notBefore: "2026-01-02T00:00:00.000Z" });
+    expect(cacaoTimes(siwe.authorization)).toEqual({ issuedAt: "2026-01-01T00:00:00.000Z", notBefore: "2026-01-02T00:00:00.000Z" });
+    const bytes = fromBase64Url(siwe.authorization);
+    expect(() => cacaoTimes(toBase64Url(new Uint8Array([...bytes, 0])))).toThrow("trailing");
+    expect(() => cacaoTimes(toBase64Url(encoder.encode("not cbor")))).toThrow();
+  });
+});
+
 describe("guards the mutation run left uncovered", () => {
   test("share-sdk's own declared-AAD check refuses a foreign wrap even when the SDK would not", async () => {
     const network = new FakeOwnerNetwork();
@@ -265,6 +278,18 @@ describe("guards the mutation run left uncovered", () => {
     // The node-signed enforcer binding anchors registeredAt.
     const issuedAt = Date.parse(envelope.attestedEnforcerBinding.issuedAt);
     expect(await verifyAgentRecordChain(record, context(v3Fixture.agentDid))).toMatchObject({ issued: { earliest: issuedAt - DAY, latest: issuedAt + DAY } });
+  });
+
+  test("verifyEnvelopeV3At judges the enforcer binding at the given time and still refuses a tampered envelope", async () => {
+    const envelope = v3Fixture.v3.envelope as unknown as ShareEnvelopeV3;
+    const binding = (v3Fixture.v3.envelope as unknown as { attestedEnforcerBinding: { issuedAt: string; expiresAt: string } }).attestedEnforcerBinding;
+    const owner = v3Fixture.agentDid;
+    expect(await verifyEnvelopeV3At(envelope, owner, Date.parse(binding.issuedAt))).toBe(true);
+    expect(await verifyEnvelopeV3At(envelope, owner, Date.parse(binding.expiresAt))).toBe(false);
+    expect(await verifyEnvelopeV3At(envelope, newKey().did, Date.parse(binding.issuedAt))).toBe(false);
+    const tampered = structuredClone(v3Fixture.v3.envelope) as unknown as { policy: { createdAt: string } };
+    tampered.policy.createdAt = "2020-01-01T00:00:00Z";
+    expect(await verifyEnvelopeV3At(tampered as unknown as ShareEnvelopeV3, owner, Date.parse(binding.issuedAt))).toBe(false);
   });
 
   test("the TinyCloud adapter reports a 400 as a refused ETag only for an ifMatch write", async () => {

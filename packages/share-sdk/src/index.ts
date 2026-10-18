@@ -8,8 +8,8 @@ export { checkBearerDelegation, resourceUriCovers, requiredResourceUri, type Che
 export { canonicalize, fromBase64Url, toBase64Url } from "@tinycloud/share-envelope";
 export { MemoryShareCache } from "./cache.js";
 export type { ShareCache, ShareCacheEntry, ShareCacheKey, ShareCacheMetadata } from "./cache.js";
-export { createDelegatedShareKey, restoreDelegatedShareKey, createPolicyEnforcementDelegation, canonicalOwnerSharePolicy, computeOwnerShareRegistrationCid, checkOwnerSharePolicyRegistration, validateOwnerSharePolicyRegistration, validateOwnerSharePolicyRegistrationBytes, OWNER_SHARE_REGISTRATION_DOMAIN, MAX_CONTENT_BYTES } from "./owner-policy.js";
-export type { OwnerDelegationReceipt, OwnerDelegationPermission, CreateOwnerDelegationParams, OwnerShareAction, OwnerShareDecryption, OwnerShareMatcher, OwnerSharePolicyV2, DelegatedShareKey, SignedDelegation, RegisterOwnerSharePolicyParams, OwnerSharePolicyRegistration, OwnerSharePolicyRegistrationCheck, OwnerSharePolicyRegistrationReceipt } from "./owner-policy.js";
+export { createDelegatedShareKey, restoreDelegatedShareKey, createPolicyEnforcementDelegation, canonicalOwnerSharePolicy, computeOwnerShareRegistrationCid, validateOwnerSharePolicyRegistration, validateOwnerSharePolicyRegistrationBytes, OWNER_SHARE_REGISTRATION_DOMAIN, MAX_CONTENT_BYTES } from "./owner-policy.js";
+export type { OwnerDelegationReceipt, OwnerDelegationPermission, CreateOwnerDelegationParams, OwnerShareAction, OwnerShareDecryption, OwnerShareMatcher, OwnerSharePolicyV2, DelegatedShareKey, SignedDelegation, RegisterOwnerSharePolicyParams, OwnerSharePolicyRegistration, OwnerSharePolicyRegistrationReceipt } from "./owner-policy.js";
 export { MemorySenderShareRecordStorage, MemorySenderShareKeyStorage, SenderShareStore, historyRecordForPublishedShare } from "./history.js";
 export { MemoryEncryptedShareHistoryStorage, EncryptedSenderShareHistory } from "./history.js";
 export type { SenderShareRecord, SenderShareRecordProofs, SenderShareRecordStorage, SenderShareKeyStorage, SenderShareRevocationScope, EncryptedShareHistoryStorage } from "./history.js";

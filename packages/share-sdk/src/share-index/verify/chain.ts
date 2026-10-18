@@ -1,9 +1,10 @@
 import { blake3 } from "@noble/hashes/blake3";
-import { computeCid, fromBase64Url, shareEnvelopeV3Schema, verifyEnvelopeV3 } from "@tinycloud/share-envelope";
+import { computeCid, fromBase64Url, shareEnvelopeV3Schema } from "@tinycloud/share-envelope";
+import { verifyEnvelopeV3At } from "./policy-v3.js";
 import { CID } from "multiformats/cid";
 import { create as createDigest } from "multiformats/hashes/digest";
 import type { SenderShareRecord } from "../../history.js";
-import { checkOwnerSharePolicyRegistration, type OwnerSharePolicyRegistrationCheck, type RegisterOwnerSharePolicyParams } from "../../owner-policy.js";
+import { checkRegistrationReceipt, type CheckedRegistration } from "./registration.js";
 import { canonicalAddressSpelling } from "../agent-record.js";
 import { REGISTERED_AT_SKEW_MS, type ShareProofState } from "../schema.js";
 import type { Attenuation } from "./attenuation.js";
@@ -123,7 +124,7 @@ async function policyV3Chain(record: SenderShareRecord, envelopeValue: unknown, 
   const ownerDid = envelope.policy.ownerDid;
   const binding = envelope.attestedEnforcerBinding;
   // Validity apart from time, judged inside the binding's own window; expiry is reported below.
-  if (!await verifyEnvelopeV3(envelope, { expectedSignerDid: ownerDid, now: Date.parse(binding.issuedAt) })) fail("Policy/v3 chain does not verify");
+  if (!await verifyEnvelopeV3At(envelope, ownerDid, Date.parse(binding.issuedAt))) fail("Policy/v3 chain does not verify");
   if (envelope.policyCid !== record.policyCid || envelope.policyRoot.cid !== record.ownerDelegationCid || envelope.enforcementRoot.cid !== record.enforcementDelegationCid || envelope.shareId !== record.shareId
     || canonicalAddressSpelling(envelope.target.spaceId) !== canonicalAddressSpelling(record.target.spaceId) || envelope.resource.kind !== record.resource.kind || envelope.resource.path !== record.resource.path
     || (record.ownerDid !== undefined && record.ownerDid !== ownerDid)) fail("Policy/v3 chain is not this record's");
@@ -167,19 +168,17 @@ async function ownerPolicyV2Chain(record: SenderShareRecord, context: ChainConte
   let issued: { readonly earliest?: number; readonly latest?: number } = { latest: Date.parse(facts.expiresAt as string) };
   const key = context.registrationKey?.(record.target.nodeAudience);
   if (record.registrationCid !== undefined && proofs.registration !== undefined && key !== undefined) {
-    const expected = {
-      policy: { bytes: policyBytes, cid: record.policyCid, proof: "" },
-      ownerDelegation: { delegationCid: record.ownerDelegationCid, signedDagCbor: fromBase64Url(proofs.ownerDelegation.replace(/=+$/, "")) },
-      enforcementDelegation: enforcement,
-      contentSourceDigest: policy.contentSourceDigest,
-      nodeProof: key,
-    } as unknown as RegisterOwnerSharePolicyParams;
-    let checked: OwnerSharePolicyRegistrationCheck;
-    try { checked = checkOwnerSharePolicyRegistration(proofs.registration, expected, context.now); } catch { fail("registration receipt is invalid"); }
-    if (checked.receipt.registration.registrationCid !== record.registrationCid) fail("registration receipt is not this record's");
+    let checked: CheckedRegistration;
+    try {
+      checked = checkRegistrationReceipt(proofs.registration, { policyCid: record.policyCid, ownerDelegationCid: record.ownerDelegationCid, enforcementDelegationCid: record.enforcementDelegationCid, contentSourceDigest: policy.contentSourceDigest }, key, context.now);
+    } catch {
+      fail("registration receipt is invalid");
+    }
+    const registration = checked.registration;
+    if (registration.registrationCid !== record.registrationCid || registration.shareId !== record.shareId || registration.ownerDid !== policy.ownerDid || registration.shareKeyDid !== shareKeyDid || registration.enforcerDid !== enforcement.audienceDid) fail("registration receipt is not this record's");
     expired ||= checked.status === "expired";
     claims.push(record.registrationCid);
-    issued = around(Date.parse(checked.receipt.registration.registeredAt));
+    issued = around(Date.parse(registration.registeredAt));
   }
   return { ok: true, state: "chained", expired, claims, issued };
 }

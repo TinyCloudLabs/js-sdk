@@ -19,3 +19,5 @@ export { verifyPolicyEnforcementDelegation } from "./verify/enforcement-delegati
 export { attenuationCovers, type Attenuation } from "./verify/attenuation.js";
 export { DEFAULT_SHARE_INDEX_LIMITS, MemoryShareIndexOutbox, SenderShareIndex, headerBytes, type AgentRejectReason, type SenderShareIndexOptions, type ShareIndexFlushResult, type ShareIndexLimits, type ShareIndexLoad, type ShareIndexOp, type ShareIndexOutbox, type ShareIndexReconcileReport, type ShareIndexWriteOutcome, type ShareIndexWriteStatus, type ShareStatusPort } from "./sender-share-index.js";
 export type { SenderShareRecord, SenderShareRecordProofs } from "../history.js";
+export { checkRegistrationReceipt, type CheckedRegistration, type RegistrationKey } from "./verify/registration.js";
+export { verifyEnvelopeV3At } from "./verify/policy-v3.js";

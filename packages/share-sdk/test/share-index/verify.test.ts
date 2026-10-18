@@ -90,7 +90,7 @@ describe("bearer chain states (C2, C4)", () => {
     ["leaf.iss ≠ parent.aud", () => bearerFixture({ now, siwe: { audience: newKey().did } })],
     ["widened attenuation", () => bearerFixture({ now, siwe: { attenuation: { [`${SPACE_ID}/kv/other`]: { "tinycloud.kv/get": [{}] } } } })],
     ["SIWE not signed by the account owner", () => bearerFixture({ now, siwe: { issuer: "did:pkh:eip155:1:0x1111111111111111111111111111111111111111" } })],
-    ["SIWE signature invalid", () => bearerFixture({ now, siwe: { forged: true } as never })],
+    ["SIWE signature invalid", () => bearerFixture({ now, siwe: { forged: true } })],
     ["SIWE not yet valid", () => bearerFixture({ now, siwe: { notBefore: new Date(now.getTime() + 3600_000).toISOString() } })],
     ["leaf resource is not the record's", () => { const f = bearerFixture({ now }); return { ...f, record: { ...f.record, resource: { kind: "exact", path: "xyz.tinycloud.share/shares/other/x" } } }; }],
     ["leaf CID is not enforcementDelegationCid", () => { const f = bearerFixture({ now }); return { ...f, record: { ...f.record, enforcementDelegationCid: "bafkreiother" } }; }],

@@ -307,23 +307,7 @@ export function computeOwnerShareRegistrationCid(registration: Omit<OwnerSharePo
   return cid(new TextEncoder().encode(canonicalize(registration)));
 }
 
-/**
- * A receipt that verifies completely but whose `expiresAt` has passed is
- * `expired`; anything that does not verify throws (invalid).
- */
-export interface OwnerSharePolicyRegistrationCheck {
-  readonly status: "valid" | "expired";
-  readonly receipt: OwnerSharePolicyRegistrationReceipt;
-}
-
 export function validateOwnerSharePolicyRegistration(value: unknown, expected: RegisterOwnerSharePolicyParams): OwnerSharePolicyRegistrationReceipt {
-  const checked = checkOwnerSharePolicyRegistration(value, expected);
-  if (checked.status === "expired") throw new Error("owner-share registration is expired or non-canonical");
-  return checked.receipt;
-}
-
-/** Verify a registration receipt, reporting expiry separately from invalidity. */
-export function checkOwnerSharePolicyRegistration(value: unknown, expected: RegisterOwnerSharePolicyParams, now: Date = new Date()): OwnerSharePolicyRegistrationCheck {
   if (cid(expected.policy.bytes) !== expected.policy.cid) throw new Error("submitted owner-share policy bytes do not match its CID");
   const root = assertObject(value, ["registration", "proof"], "owner-share registration response");
   const registration = assertObject(root.registration, ["registrationCid", "policyCid", "ownerDelegationCid", "enforcementDelegationCid", "ownerDid", "shareKeyDid", "enforcerDid", "shareId", "recipientMatcher", "target", "resource", "actions", "contentSource", "contentSourceDigest", "registeredAt", "expiresAt"], "owner-share registration");
@@ -340,8 +324,7 @@ export function checkOwnerSharePolicyRegistration(value: unknown, expected: Regi
   const enforcementFacts = expected.enforcementDelegation.facts;
   if (typeof target?.origin !== "string" || typeof target.nodeAudience !== "string" || typeof target.enforcerDid !== "string" || typeof target.spaceId !== "string" || typeof resource?.kind !== "string" || !["exact", "prefix"].includes(resource.kind) || typeof resource?.path !== "string" || !Array.isArray(policy.actions) || policy.ownerDid !== registration.ownerDid || policy.shareKeyDid !== registration.shareKeyDid || policy.shareId !== registration.shareId || canonicalize(policy.recipientMatcher) !== canonicalize(registration.recipientMatcher) || target.origin !== registrationTarget.origin || target.nodeAudience !== registrationTarget.nodeAudience || target.enforcerDid !== registration.enforcerDid || target.spaceId !== registrationTarget.spaceId || resource.kind !== registrationResource.kind || resource.path !== registrationResource.path || canonicalize(policy.actions) !== canonicalize(registration.actions) || canonicalize(policy.contentSource) !== canonicalize(registration.contentSource) || policy.expiresAt !== registration.expiresAt || policy.contentSourceDigest !== registration.contentSourceDigest || enforcementFacts.ownerDelegationCid !== registration.ownerDelegationCid || enforcementFacts.policyCid !== registration.policyCid || enforcementFacts.shareKeyDid !== registration.shareKeyDid || enforcementFacts.enforcerDid !== registration.enforcerDid || enforcementFacts.nodeAudience !== registrationTarget.nodeAudience || enforcementFacts.spaceId !== registrationTarget.spaceId || enforcementFacts.path !== registrationResource.path || canonicalize(enforcementFacts.actions) !== canonicalize(registration.actions) || enforcementFacts.expiresAt !== registration.expiresAt) throw new Error("owner-share registration is not bound to the canonical policy");
   if (typeof registration.registrationCid !== "string" || typeof registration.expiresAt !== "string" || typeof registration.registeredAt !== "string") throw new Error("owner-share registration timestamps are invalid");
-  if (new Date(registration.expiresAt).toISOString() !== registration.expiresAt) throw new Error("owner-share registration is expired or non-canonical");
-  const expired = Date.parse(registration.expiresAt) <= now.getTime();
+  if (new Date(registration.expiresAt).toISOString() !== registration.expiresAt || Date.parse(registration.expiresAt) <= Date.now()) throw new Error("owner-share registration is expired or non-canonical");
   const { registrationCid: _registrationCid, ...registrationCore } = registration;
   if (computeOwnerShareRegistrationCid(registrationCore as unknown as Omit<OwnerSharePolicyRegistration, "registrationCid">) !== registration.registrationCid) throw new Error("owner-share registration CID does not match its canonical core");
   if (proof.alg !== "EdDSA" || typeof proof.kid !== "string" || typeof proof.signature !== "string") throw new Error("owner-share registration proof is invalid");
@@ -356,7 +339,7 @@ export function checkOwnerSharePolicyRegistration(value: unknown, expected: Regi
   const signatureBytes = fromB64(proof.signature);
   const signedBytes = new TextEncoder().encode(`${OWNER_SHARE_REGISTRATION_DOMAIN}${canonicalize(registrationCore)}`);
   if (signatureBytes.length !== 64 || !ed25519.verify(signatureBytes, signedBytes, publicKey)) throw new Error("owner-share registration proof signature is invalid");
-  return { status: expired ? "expired" : "valid", receipt: { registration: registration as unknown as OwnerSharePolicyRegistration, proof: proof as unknown as OwnerSharePolicyRegistrationReceipt["proof"] } };
+  return { registration: registration as unknown as OwnerSharePolicyRegistration, proof: proof as unknown as OwnerSharePolicyRegistrationReceipt["proof"] };
 }
 
 /** Validate the exact UTF-8 response bytes emitted by the registration route. */

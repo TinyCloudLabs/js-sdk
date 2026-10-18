@@ -7,6 +7,7 @@ import { OwnerUnwrapUnavailableError, type OwnerNetworkUnwrap, type OwnerNetwork
 import type { ShareDocumentRead, ShareIndexBackend, ShareListResult, ShareRawRead, ShareWriteCondition, ShareWriteResult } from "../../src/share-index/backend.js";
 import type { ParsedSiweCacao, SiweCacaoParser } from "../../src/share-index/verify/session.js";
 import type { SenderShareRecord } from "../../src/history.js";
+import { dagCborEncode } from "../../src/owner-policy.js";
 
 /** Test fixtures for the share index: the package's own primitives with throwaway keys. */
 
@@ -173,24 +174,42 @@ export function rawCid(bytes: Uint8Array): string {
   return CID.createV1(0x55, createDigest(0x1e, blake3(bytes))).toString();
 }
 
+/** Fields a test SIWE CACAO carries; `notBefore`/`issuedAt` are also written into the CBOR payload as `nbf`/`iat`. */
+export interface FakeSiweFields extends Omit<ParsedSiweCacao, "cid"> {
+  readonly notBefore?: string;
+  readonly issuedAt?: string;
+  readonly forged?: boolean;
+}
+
+const fakeSiweRegistry = new Map<string, FakeSiweFields>();
+
 /**
- * A SIWE CACAO stand-in. The real parser (sdk-core `parseSignedSiweCacao`)
- * verifies the EIP-191 signature; it is exercised with real CACAOs in the
- * live and sdk-core tests. Here the parser returns the encoded fields, with
- * the CID over the exact bytes, so the checks this package adds are tested.
+ * A SIWE CACAO stand-in: DAG-CBOR bytes shaped like a CACAO (`{h, p, s}`, with
+ * `p.iat`/`p.nbf` as signed), so share-sdk reads its times from the bytes as
+ * it does for real CACAOs. The real parser (sdk-core `parseSignedSiweCacao`)
+ * verifies the EIP-191 signature; it runs on real CACAOs in the sdk-core and
+ * live tests. Here the parser returns the registered fields, with the CID over
+ * the exact bytes, so the checks this package adds are tested.
  */
-export function fakeSiwe(fields: Omit<ParsedSiweCacao, "cid">): { readonly authorization: string; readonly cid: string } {
-  const bytes = encoder.encode(JSON.stringify(fields));
-  return { authorization: toBase64Url(bytes), cid: rawCid(bytes) };
+export function fakeSiwe(fields: FakeSiweFields): { readonly authorization: string; readonly cid: string } {
+  const payload = {
+    iss: fields.issuer, aud: fields.audience, nonce: toBase64Url(crypto.getRandomValues(new Uint8Array(8))),
+    iat: fields.issuedAt ?? new Date(0).toISOString(),
+    ...(fields.notBefore === undefined ? {} : { nbf: fields.notBefore }),
+    ...(fields.expiresAt === undefined ? {} : { exp: fields.expiresAt }),
+  };
+  const bytes = dagCborEncode({ h: { t: "eip4361" }, p: payload, s: { t: "eip191", s: "test" } });
+  const cid = rawCid(bytes);
+  fakeSiweRegistry.set(cid, fields);
+  return { authorization: toBase64Url(bytes), cid };
 }
 
 export const fakeSiweParser: SiweCacaoParser = async (authorization, expectedCid) => {
-  const bytes = fromBase64Url(authorization.replace(/=+$/, ""));
-  const cid = rawCid(bytes);
+  const cid = rawCid(fromBase64Url(authorization.replace(/=+$/, "")));
   if (cid !== expectedCid) throw new Error("CACAO CID does not match exact Authorization bytes");
-  const fields = JSON.parse(new TextDecoder().decode(bytes)) as Omit<ParsedSiweCacao, "cid">;
-  if ("forged" in fields && fields.forged === true) throw new Error("CACAO signature is invalid");
-  return { cid, ...fields };
+  const fields = fakeSiweRegistry.get(cid);
+  if (fields === undefined || fields.forged === true) throw new Error("CACAO signature is invalid");
+  return { cid, issuer: fields.issuer, audience: fields.audience, attenuation: fields.attenuation, ...(fields.expiresAt === undefined ? {} : { expiresAt: fields.expiresAt }) };
 };
 
 export const SESSION_ATTENUATION = { [`${SPACE_ID}/kv`]: { "tinycloud.kv/get": [{}], "tinycloud.kv/put": [{}], "tinycloud.kv/list": [{}] } };
@@ -210,7 +229,7 @@ export function bearerFixture(options: {
   readonly shareId?: string;
   readonly now?: Date;
   readonly expSeconds?: number;
-  readonly siwe?: Partial<Omit<ParsedSiweCacao, "cid">>;
+  readonly siwe?: Partial<FakeSiweFields>;
   readonly link?: Record<string, unknown>;
   readonly withSession?: boolean;
   readonly record?: Partial<SenderShareRecord>;
