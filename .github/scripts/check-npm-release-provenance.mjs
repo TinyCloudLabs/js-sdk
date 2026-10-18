@@ -44,21 +44,100 @@
 //                       if no single release commit explains them.
 //   pre-publish         Every version npm already has must pass the rule above.
 //                       Versions npm lacks are about to be published from HEAD.
-//   post-publish        Every version must now be on npm and pass the rule.
-//                       Retries while the registry catches up.
+//   post-publish [<publish-log>]
+//                       Every version must now be on npm and pass the rule.
+//                       Retries while the registry catches up. A version that
+//                       the changesets publish output in <publish-log> says npm
+//                       accepted, but that npm still does not show after the
+//                       whole budget, is pending, not a failure (TC-1457).
+//   record-accepted <publish-log>
+//                       Print one `tinycloud-npm-accepted: name@version` line
+//                       per version npm accepted in the changesets publish
+//                       output. Those lines in the run's log are the only
+//                       record of acceptance; no other state is kept.
+//
+// npm can accept a publish and show it only 17 minutes to 2.5 hours later
+// (@tinycloud/web-sdk, TC-1457). The next run's pre-publish would see "not on
+// npm" and publish the same number from newer code. So pre-publish also looks,
+// read-only through `gh`, at the Release runs since the version's commit: a
+// version npm lacks that one of them accepted is a hard stop, never published
+// again. A version no run accepted is published from HEAD as before.
 //
 // pre-publish and post-publish also require every exact internal dependency of
 // every current version (as published on npm, or as about to be published) to
 // be on npm, or in pre-publish, about to be published by this run.
 
 import { spawnSync } from "node:child_process";
-import { appendFileSync } from "node:fs";
+import { appendFileSync, existsSync, readFileSync } from "node:fs";
 import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 
 const RELEASE_COMMIT = /^chore: (beta version packages|release stable packages)\b/;
 const STABLE_RELEASE_COMMIT = /^chore: release stable packages\b/;
 const MODES = ["unpublished-stable", "unfinished-stable", "pre-publish", "post-publish"];
+const ACCEPTED_MARKER = "tinycloud-npm-accepted:";
+const ACCEPTED_LINE = new RegExp(`(?:^|\\s)${ACCEPTED_MARKER} (@?[^\\s@]+)@(\\S+)\\s*$`, "gm");
+const RELEASE_WORKFLOW = "changesets.yml";
+const RUN_LIST_LIMIT = 100;
+
+// Versions the changesets publish output says npm accepted: the list under
+// "packages published successfully:" and the "New tag:" lines.
+export function acceptedFromPublishLog(log) {
+  const accepted = new Set();
+  let listing = false;
+  for (const raw of log.split("\n")) {
+    const line = raw.replace(/\x1b\[[0-9;]*m/g, "").replace(/^\S+Z\s+/, "").replace(/^\u{1F98B}\s+/u, "").trim();
+    const entry = /^(?:New tag:\s+)?(@?[^\s@]+@\d\S*)$/.exec(line)?.[1];
+    if (/packages published successfully/i.test(line)) listing = true;
+    else if (entry && (listing || line.startsWith("New tag:"))) accepted.add(entry);
+    else if (!entry) listing = false;
+  }
+  return accepted;
+}
+
+// Versions a run's log records as accepted (see `record-accepted`).
+export function acceptedFromRunLog(log) {
+  return new Set([...log.matchAll(ACCEPTED_LINE)].map(([, name, version]) => `${name}@${version}`));
+}
+
+function gh(args) {
+  const result = spawnSync("gh", args, { encoding: "utf8", maxBuffer: 512 * 1024 * 1024 });
+  if (result.status !== 0) throw new Error(`gh ${args.join(" ")} failed: ${result.stderr.trim()}`);
+  return result.stdout;
+}
+
+// Did an earlier Release run get npm to accept this version? Looks at completed
+// runs created since the commit before the version commit (the run that made
+// the version commit started from there), other than this one, and reads their
+// logs through `gh` (needs `actions: read`). Fails closed: if the answer cannot
+// be found, pre-publish must not guess "never accepted".
+export function acceptedByEarlierRun({
+  pkg,
+  repo,
+  head,
+  listRuns = () =>
+    JSON.parse(
+      gh(["run", "list", "--workflow", RELEASE_WORKFLOW, "--limit", String(RUN_LIST_LIMIT), "--json", "databaseId,createdAt,status,url"]),
+    ),
+  runLog = (id) => gh(["run", "view", String(id), "--log"]),
+  currentRunId = process.env.GITHUB_RUN_ID,
+}) {
+  const version = versionCommit(repo, head, pkg);
+  const base = version && repo.parent(version);
+  if (!base) return undefined;
+  const since = Date.parse(repo.date(base));
+  const runs = listRuns();
+  if (runs.length >= RUN_LIST_LIMIT && Date.parse(runs[runs.length - 1].createdAt) >= since) {
+    throw new Error(`the last ${RUN_LIST_LIMIT} Release runs are all newer than ${base}; cannot tell whether ${pkg.name}@${pkg.version} was accepted by an earlier run`);
+  }
+  const id = `${pkg.name}@${pkg.version}`;
+  for (const run of runs) {
+    if (String(run.databaseId) === String(currentRunId) || run.status !== "completed") continue;
+    if (Date.parse(run.createdAt) < since) continue;
+    if (acceptedFromRunLog(runLog(run.databaseId)).has(id)) return { id: run.databaseId, url: run.url };
+  }
+  return undefined;
+}
 
 function parseJson(source) {
   if (source === undefined) return undefined;
@@ -88,6 +167,7 @@ export function gitRepo(cwd = process.cwd()) {
       return result.status === 0 ? result.stdout.trim() : undefined;
     },
     subject: (rev) => ok(["log", "-1", "--format=%s", rev]),
+    date: (rev) => ok(["log", "-1", "--format=%cI", rev]),
     show(rev, path) {
       const result = run(["show", `${rev}:${path}`]);
       return result.status === 0 ? result.stdout : undefined;
@@ -243,6 +323,10 @@ export async function check({
   view = npmView,
   packageExists = npmPackageExists,
   sleep = (ms) => delay(ms),
+  // Versions npm accepted in this run (post-publish) and how to find ones an earlier run accepted (pre-publish).
+  accepted = new Set(),
+  acceptedEarlier = (pkg) => acceptedByEarlierRun({ pkg, repo, head: repo.revParse("HEAD") }),
+  onPending = () => {},
   // npm's index can lag a successful publish by many minutes (web-sdk 3.2.5 showed up after ~17 min, TC-1155).
   // Poll with backoff (10 s doubling, capped at 2 min) within one 30-minute budget shared by every package.
   waitMs = 30 * 60_000,
@@ -269,6 +353,7 @@ export async function check({
     return registry.get(id);
   };
 
+  const pending = new Set();
   let waited = 0;
   for (const pkg of packages) {
     const id = `${pkg.name}@${pkg.version}`;
@@ -282,8 +367,19 @@ export async function check({
       registry.set(id, npm);
     }
     if (!npm.published) {
-      if (mode === "pre-publish") log(`${id}: not on npm; will publish from HEAD.`);
-      else fail(pkg, { reason: "not on npm after publish" });
+      if (mode === "pre-publish") {
+        const earlier = await acceptedEarlier(pkg);
+        if (earlier) {
+          fail(pkg, {
+            kind: "accepted-not-visible",
+            reason: `accepted by Release run ${earlier.id}${earlier.url ? ` (${earlier.url})` : ""} but not yet visible on npm`,
+          });
+        } else log(`${id}: not on npm; will publish from HEAD.`);
+      } else if (accepted.has(id)) {
+        pending.add(id);
+        log(`${id} was accepted by npm in this run but is not visible after ${waitMs / 1000}s; pending, not a failure.`);
+        onPending({ name: pkg.name, version: pkg.version });
+      } else fail(pkg, { reason: "not on npm after publish" });
       continue;
     }
 
@@ -300,7 +396,7 @@ export async function check({
     for (const [name, range] of npm.published ? npm.requires ?? [] : pkg.requires) {
       const dependency = workspace.get(name);
       const version = dependency && pinnedVersion(range, dependency.version);
-      if (!version || lookup(name, version).published) continue;
+      if (!version || pending.has(`${name}@${version}`) || lookup(name, version).published) continue;
       const publishing = mode === "pre-publish" && !dependency.private && dependency.version === version;
       if (publishing) continue;
       const where = mode === "pre-publish" ? "not on npm and not published by this run" : "not on npm";
@@ -328,6 +424,11 @@ const ADVICE = {
     "Check the publish log and `npm view <name>@<version> gitHead`.",
 };
 
+const ACCEPTED_ADVICE =
+  "npm accepted these versions in an earlier Release run but does not show them yet. Publishing them again from this\n" +
+  "commit would give the same version number different code, so nothing was published. Wait until\n" +
+  "`npm view <name>@<version> gitHead` answers, then push to master again; or bump the package with a changeset.";
+
 export function failureMessage(failures, mode, problems = []) {
   const missingOnly = mode === "unpublished-stable" || mode === "unfinished-stable";
   const lines = failures.map((failure) =>
@@ -339,7 +440,11 @@ export function failureMessage(failures, mode, problems = []) {
     ].join("\n"),
   );
   const why = problems.length ? `\nWhy: ${problems.join("; ")}.\n` : "";
-  return `Release provenance check failed (${mode}):\n\n${lines.join("\n")}\n${why}\n${ADVICE[mode]}`;
+  const advice = [
+    ...(failures.some((failure) => failure.kind === "accepted-not-visible") ? [ACCEPTED_ADVICE] : []),
+    ...(failures.some((failure) => failure.kind !== "accepted-not-visible") ? [ADVICE[mode]] : []),
+  ].join("\n\n");
+  return `Release provenance check failed (${mode}):\n\n${lines.join("\n")}\n${why}\n${advice}`;
 }
 
 function report(failures, mode, problems) {
@@ -356,6 +461,8 @@ function report(failures, mode, problems) {
   process.exitCode = 1;
 }
 
+const readLog = (path) => (existsSync(path) ? readFileSync(path, "utf8") : "");
+
 async function main([mode, output, ...rest]) {
   const repo = gitRepo();
   if (mode === "unfinished-stable" && rest.length === 0) {
@@ -370,8 +477,23 @@ async function main([mode, output, ...rest]) {
     if (output) appendFileSync(output, `sha=${releaseCommit}\n`);
     return;
   }
+  if (mode === "record-accepted" && output && rest.length === 0) {
+    for (const id of [...acceptedFromPublishLog(readLog(output))].sort()) console.log(`${ACCEPTED_MARKER} ${id}`);
+    return;
+  }
+  if (mode === "post-publish" && rest.length === 0) {
+    const onPending = ({ name, version }) => {
+      const message = `${name}@${version}: npm accepted this version but does not show it yet. Wait; do not re-run. The next run stops rather than publish it again.`;
+      if (process.env.GITHUB_ACTIONS === "true") console.log(`::warning title=post-publish: ${name}@${version} pending::${message}`);
+      if (process.env.GITHUB_STEP_SUMMARY) appendFileSync(process.env.GITHUB_STEP_SUMMARY, `- ${message}\n`);
+    };
+    const accepted = output ? acceptedFromPublishLog(readLog(output)) : new Set();
+    return report(await check({ mode, repo, accepted, onPending }), mode);
+  }
   if (MODES.includes(mode) && output === undefined) return report(await check({ mode, repo }), mode);
-  console.error(`usage: check-npm-release-provenance.mjs ${MODES.join("|")} (unfinished-stable takes an optional <output-file>)`);
+  console.error(
+    `usage: check-npm-release-provenance.mjs ${MODES.join("|")} (unfinished-stable takes an optional <output-file>, post-publish an optional <publish-log>) | record-accepted <publish-log>`,
+  );
   process.exitCode = 2;
 }
 

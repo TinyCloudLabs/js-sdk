@@ -24,7 +24,9 @@ jobs:
     name: Beta Release
     if: github.event_name == 'push' && !contains(github.event.head_commit.message, '[skip ci]')
     runs-on: ubuntu-latest
+    # actions: read lets pre-publish read earlier Release runs' logs (TC-1457).
     permissions:
+      actions: read
       contents: read
     steps:
       # The deploy key is not left in git config or ~/.ssh for install and
@@ -141,6 +143,9 @@ jobs:
       - name: Check npm before publishing
         if: steps.check.outputs.pending != '0'
         run: node .github/scripts/check-npm-release-provenance.mjs pre-publish
+        env:
+          # Read-only: lets the check see whether an earlier Release run already got npm to accept a version (TC-1457).
+          GH_TOKEN: ${{ github.token }}
 
       - name: Publish beta to npm
         if: steps.check.outputs.pending != '0'
@@ -186,14 +191,23 @@ jobs:
           # publishing) were attempted. The check above fails the run instead
           # when a version npm already has was published before its version
           # commit.
-          bunx changeset publish
+          # Keep the output: npm can accept a version and show it hours later
+          # (web-sdk, TC-1457). The accepted versions are recorded in this
+          # run's log, which the next run's pre-publish reads, so a version
+          # that is accepted but not yet visible is never published again.
+          set +e
+          bunx changeset publish 2>&1 | tee "$RUNNER_TEMP/changeset-publish.log"
+          status=${PIPESTATUS[0]}
+          set -e
+          node .github/scripts/check-npm-release-provenance.mjs record-accepted "$RUNNER_TEMP/changeset-publish.log"
+          exit "$status"
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           RELEASE_SHA: ${{ steps.release.outputs.sha }}
 
       - name: Confirm npm has every current version
         if: steps.check.outputs.pending != '0'
-        run: node .github/scripts/check-npm-release-provenance.mjs post-publish
+        run: node .github/scripts/check-npm-release-provenance.mjs post-publish "$RUNNER_TEMP/changeset-publish.log"
 
       - name: Remove release deploy key
         if: always()
@@ -205,6 +219,7 @@ jobs:
     if: github.event_name == 'workflow_dispatch' && github.event.inputs.confirm == 'release'
     runs-on: ubuntu-latest
     permissions:
+      actions: read
       contents: write
     steps:
       # The deploy key is not left in git config or ~/.ssh for install and
@@ -359,9 +374,14 @@ jobs:
 
       # `changeset publish` silently skips versions npm already has. Fail
       # instead when npm's copy of a current version was published before the
-      # commit that set it.
+      # commit that set it. Recovery runs execute the script from the release
+      # commit being finished, which may predate the accepted-version record
+      # (TC-1457); only beta runs record it, so stable publishing is unchanged.
       - name: Check npm before publishing
         run: node .github/scripts/check-npm-release-provenance.mjs pre-publish
+        env:
+          # Read-only: lets the check see whether an earlier Release run already got npm to accept a version (TC-1457).
+          GH_TOKEN: ${{ github.token }}
 
       - name: Publish stable to npm
         run: |

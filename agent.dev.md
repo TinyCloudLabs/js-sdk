@@ -110,6 +110,18 @@ package, so the next run bumps past the stale version. A beta run also refuses t
 `master` has stable versions npm lacks (a stable release that did not finish publishing). A
 maintainer then re-dispatches the Stable Release, which publishes exactly those versions from their
 release commit and graduates nothing else in that run.
+npm can accept a publish and show it only much later (`@tinycloud/web-sdk`: 17 min to 2 h 25 min,
+TC-1457). The beta publish step records the versions npm accepted as `tinycloud-npm-accepted:` lines in the
+run's log. After the 30-minute budget, `Confirm npm has every current version` treats an accepted version
+that is still not visible as a warning and a pending marker, not a failure. The next run's pre-publish
+reads earlier Release runs' logs (read-only, `actions: read`) and stops, rather than publish the same
+version number from newer code, when a version is missing from npm but an earlier run accepted it. It
+names that run; wait until `npm view <name>@<version>` answers, then push to `master` again, or bump the
+package with a changeset. A version no run accepted is published from HEAD as before.
+
+Runbook: **Confirm npm failed for web-sdk only → wait; never re-run; never use the `release` dispatch
+(that's STABLE).**
+
 Stable-release installs use the committed lockfile before selecting a release and during recovery.
 Only a newly versioned release may refresh it: an unfrozen recovery install can rewrite workspace
 version metadata and make the immutable release checkout fail the clean-tree publishing guard.

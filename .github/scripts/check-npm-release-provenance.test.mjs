@@ -6,7 +6,15 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 
-import { check, failureMessage, gitRepo, unfinishedStableRelease } from "./check-npm-release-provenance.mjs";
+import {
+  acceptedByEarlierRun,
+  acceptedFromPublishLog,
+  acceptedFromRunLog,
+  check,
+  failureMessage,
+  gitRepo,
+  unfinishedStableRelease,
+} from "./check-npm-release-provenance.mjs";
 
 // Real git in a temporary repository; npm is always the injected `view`.
 const script = fileURLToPath(new URL("./check-npm-release-provenance.mjs", import.meta.url));
@@ -83,7 +91,16 @@ const noSleep = () => {
   throw new Error("only post-publish waits");
 };
 const run = (r, mode, npm, options = {}) =>
-  check({ mode, repo: r.repo, view: npm.view, packageExists: npm.packageExists, sleep: noSleep, log: quiet, ...options });
+  check({
+    mode,
+    repo: r.repo,
+    view: npm.view,
+    packageExists: npm.packageExists,
+    sleep: noSleep,
+    log: quiet,
+    acceptedEarlier: async () => undefined,
+    ...options,
+  });
 
 test("pre-publish: checks every public workspace package, publishes what npm lacks", async (t) => {
   const r = repository(t);
@@ -450,8 +467,165 @@ test("post-publish: a version that never appears fails once the shared budget is
   assert.equal(failures[0].head, head);
 });
 
+const budget = { waitMs: 40, firstRetryMs: 10, maxRetryMs: 20 };
+
+test("post-publish: a version npm accepted in this run but still does not show is pending, not a failure", async (t) => {
+  const r = repository(t);
+  const head = r.commit(BETA, { ...a("1.0.1-beta.0"), ...b("2.0.1-beta.0") });
+  const npm = registry({ "@x/a@1.0.0": r.released, "@x/b@2.0.0": r.released, "@x/b@2.0.1-beta.0": head });
+  const waits = [];
+  const pending = [];
+  const failures = await run(r, "post-publish", npm, {
+    ...budget,
+    sleep: async (ms) => waits.push(ms),
+    accepted: new Set(["@x/a@1.0.1-beta.0", "@x/b@2.0.1-beta.0"]),
+    onPending: (pkg) => pending.push(`${pkg.name}@${pkg.version}`),
+  });
+  assert.deepEqual(failures, []);
+  assert.deepEqual(pending, ["@x/a@1.0.1-beta.0"]);
+  // It still gets the whole normal budget first.
+  assert.deepEqual(waits, [10, 20, 10]);
+});
+
+test("post-publish: a version npm never accepted still fails next to a pending one", async (t) => {
+  const r = repository(t);
+  r.commit(BETA, { ...a("1.0.1-beta.0"), ...b("2.0.1-beta.0") });
+  const npm = registry({ "@x/a@1.0.0": r.released, "@x/b@2.0.0": r.released });
+  const failures = await run(r, "post-publish", npm, {
+    ...budget,
+    sleep: async () => {},
+    accepted: new Set(["@x/a@1.0.1-beta.0"]),
+  });
+  assert.deepEqual(failures.map(({ name, reason }) => `${name}: ${reason}`), ["@x/b: not on npm after publish"]);
+});
+
+test("post-publish: a package that requires a pending version is not failed for it", async (t) => {
+  const r = repository(t);
+  const head = r.commit(BETA, { ...a("1.0.1-beta.0", { "@x/b": "2.0.1-beta.0" }), ...b("2.0.1-beta.0") });
+  const npm = registry({ "@x/a@1.0.1-beta.0": { gitHead: head, requires: [["@x/b", "2.0.1-beta.0"]] } });
+  const failures = await run(r, "post-publish", npm, { ...budget, sleep: async () => {}, accepted: new Set(["@x/b@2.0.1-beta.0"]) });
+  assert.deepEqual(failures, []);
+});
+
+test("pre-publish: a version an earlier run got npm to accept, but npm does not show, is a hard stop", async (t) => {
+  const r = repository(t);
+  r.commit(BETA, { ...a("1.0.1-beta.0"), ...b("2.0.0") });
+  const npm = registry({ "@x/a@1.0.0": r.released, "@x/b@2.0.0": r.released });
+  const asked = [];
+  const failures = await run(r, "pre-publish", npm, {
+    acceptedEarlier: async (pkg) => {
+      asked.push(`${pkg.name}@${pkg.version}`);
+      return pkg.name === "@x/a" ? { id: 123, url: "https://example.test/runs/123" } : undefined;
+    },
+  });
+  // Only versions npm lacks are asked about.
+  assert.deepEqual(asked, ["@x/a@1.0.1-beta.0"]);
+  assert.deepEqual(failures.map(({ name, kind, reason }) => ({ name, kind, reason })), [
+    {
+      name: "@x/a",
+      kind: "accepted-not-visible",
+      reason: "accepted by Release run 123 (https://example.test/runs/123) but not yet visible on npm",
+    },
+  ]);
+  const message = failureMessage(failures, "pre-publish");
+  assert.match(message, /accepted by Release run 123/);
+  assert.match(message, /Wait until/);
+  assert.match(message, /bump the package with a changeset/);
+  assert.doesNotMatch(message, /Add a changeset for each package so the next run bumps it past the stale version/);
+});
+
+test("pre-publish: a version no run accepted keeps today's behaviour (published from HEAD)", async (t) => {
+  const r = repository(t);
+  r.commit(BETA, a("1.0.1-beta.0"));
+  const npm = registry({ "@x/b@2.0.0": r.released });
+  const logged = [];
+  assert.deepEqual(await run(r, "pre-publish", npm, { log: (line) => logged.push(line) }), []);
+  assert.ok(logged.includes("@x/a@1.0.1-beta.0: not on npm; will publish from HEAD."));
+});
+
+test("pre-publish: a version that is on npm is not looked up in earlier runs", async (t) => {
+  const r = repository(t);
+  const head = r.commit(BETA, a("1.0.1-beta.0"));
+  const npm = registry({ "@x/a@1.0.1-beta.0": head, "@x/b@2.0.0": r.released });
+  const failures = await run(r, "pre-publish", npm, {
+    acceptedEarlier: async () => {
+      throw new Error("must not be asked");
+    },
+  });
+  assert.deepEqual(failures, []);
+});
+
+test("accepted run lookup: finds the acceptance in an earlier run's log, ignoring this run and unfinished runs", (t) => {
+  const r = repository(t);
+  const version = r.commit(BETA, a("1.0.1-beta.0"));
+  const pkg = { name: "@x/a", version: "1.0.1-beta.0", dir: "packages/a" };
+  const logs = {
+    1: "2026-10-18T15:43:51Z tinycloud-npm-accepted: @x/a@1.0.1-beta.0\n",
+    2: "tinycloud-npm-accepted: @x/a@1.0.1-beta.0\n",
+    3: "tinycloud-npm-accepted: @x/other@1.0.1-beta.0\n",
+    4: "echo tinycloud-npm-accepted: @x/a@1.0.1-beta.0 is mentioned mid-line\n",
+  };
+  const fetched = [];
+  const find = (runs, extra = {}) =>
+    acceptedByEarlierRun({
+      pkg,
+      repo: r.repo,
+      head: version,
+      currentRunId: "9",
+      listRuns: () => runs,
+      runLog: (id) => (fetched.push(id), logs[id] ?? ""),
+      ...extra,
+    });
+  const created = new Date(Date.now() + 60_000).toISOString();
+  const long = new Date(Date.now() - 365 * 864e5).toISOString();
+
+  // Runs that are the current run, unfinished, older than the version's base commit, or log other versions are no evidence.
+  assert.equal(
+    find([
+      { databaseId: 9, createdAt: created, status: "completed", url: "u9" },
+      { databaseId: 2, createdAt: created, status: "in_progress", url: "u2" },
+      { databaseId: 1, createdAt: long, status: "completed", url: "u1" },
+      { databaseId: 3, createdAt: created, status: "completed", url: "u3" },
+      { databaseId: 4, createdAt: created, status: "completed", url: "u4" },
+    ]),
+    undefined,
+  );
+  assert.deepEqual(fetched, [3, 4]);
+  assert.deepEqual(find([{ databaseId: 1, createdAt: created, status: "completed", url: "u1" }]), { id: 1, url: "u1" });
+  // A failed run counts: that is exactly the red run this exists for.
+  assert.deepEqual(find([{ databaseId: 2, createdAt: created, status: "completed", url: "u2" }]), { id: 2, url: "u2" });
+  // If the listing cannot reach back far enough, it fails rather than guess.
+  const full = Array.from({ length: 100 }, (_, i) => ({ databaseId: 100 + i, createdAt: created, status: "queued", url: "" }));
+  assert.throws(() => find(full), /cannot tell whether @x\/a@1\.0\.1-beta\.0 was accepted/);
+});
+
+test("changesets publish output: lists exactly what npm accepted", () => {
+  const log = [
+    "2026-10-18T15:40:00Z 🦋  info @x/c is not being published because version 1.0.0 is already published on npm",
+    "2026-10-18T15:43:50Z 🦋  success packages published successfully:",
+    "2026-10-18T15:43:51Z 🦋  @x/a@1.0.1-beta.0",
+    "2026-10-18T15:43:51Z 🦋  @tinycloud/web-sdk@3.3.0-beta.8",
+    "2026-10-18T15:43:52Z 🦋  Creating git tag...",
+    "2026-10-18T15:43:52Z 🦋  New tag:  @x/a@1.0.1-beta.0",
+    "2026-10-18T15:43:52Z 🦋  @x/not-listed@9.9.9",
+  ].join("\n");
+  assert.deepEqual([...acceptedFromPublishLog(log)].sort(), ["@tinycloud/web-sdk@3.3.0-beta.8", "@x/a@1.0.1-beta.0"]);
+  assert.deepEqual([...acceptedFromPublishLog("🦋  error packages failed to publish:\n🦋  @x/a@1.0.1-beta.0\n")], []);
+  assert.deepEqual([...acceptedFromRunLog("t tinycloud-npm-accepted: @tinycloud/web-sdk@3.3.0-beta.8\n")], ["@tinycloud/web-sdk@3.3.0-beta.8"]);
+});
+
+test("record-accepted: prints a marker per accepted version", (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "publish-log-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  writeFileSync(join(dir, "publish.log"), "🦋  success packages published successfully:\n🦋  @x/a@1.0.1-beta.0\n");
+  const result = spawnSync(process.execPath, [script, "record-accepted", join(dir, "publish.log")], { env, encoding: "utf8" });
+  assert.equal(result.status, 0);
+  assert.equal(result.stdout, "tinycloud-npm-accepted: @x/a@1.0.1-beta.0\n");
+  assert.deepEqual([...acceptedFromRunLog(result.stdout)], ["@x/a@1.0.1-beta.0"]);
+});
+
 test("cli: rejects an unknown mode or extra arguments", () => {
-  for (const args of [[], ["publish"], ["pre-publish", "HEAD"], ["unfinished-stable", "out", "extra"]]) {
+  for (const args of [[], ["publish"], ["pre-publish", "HEAD"], ["unfinished-stable", "out", "extra"], ["record-accepted"], ["post-publish", "log", "extra"]]) {
     const result = spawnSync(process.execPath, [script, ...args], { env, encoding: "utf8" });
     assert.equal(result.status, 2);
     assert.match(result.stderr, /usage: check-npm-release-provenance\.mjs unpublished-stable\|unfinished-stable\|pre-publish\|post-publish/);
