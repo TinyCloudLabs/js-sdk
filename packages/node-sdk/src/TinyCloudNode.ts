@@ -5679,8 +5679,10 @@ export class TinyCloudNode {
     // and the receipt below is bound to (and countersigned by) credentialHolderDid.
     // Sign with the primary session key so both are the same key; a broader
     // runtime grant held by a different key would make the receipt unusable.
-    if (!this.wasmBindings.invokeAny) throw new Error("WASM binding does not support invokeAny");
-    const authorization = authorizationHeader(this.wasmBindings.invokeAny(serviceSession, [{ spaceId: session.spaceId, service: "kv", path: input.resourcePath, action: "tinycloud.kv/get" }]));
+    // Accepted trade-off: if the primary recap lacks kv/get on the resource, the
+    // node now refuses this invocation, where a covering grant used to be tried.
+    // Same single-capability binding ordinary KV reads use; serviceSession.spaceId is session.spaceId.
+    const authorization = authorizationHeader(this.wasmBindings.invoke(serviceSession, "kv", input.resourcePath, "tinycloud.kv/get"));
     const response = await fetch(`${this.config.host!}/policy/v3/deliveries/authorize`, {
       method: "POST",
       headers: { accept: "application/json", "content-type": "application/json", authorization },

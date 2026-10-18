@@ -753,7 +753,7 @@ describe("TinyCloudNode sharing", () => {
     }) as unknown as typeof fetch;
     const wasmBindings = {
       ...makeWasmBindings(),
-      invokeAny: () => ({ Authorization: "delivery-invocation" }),
+      invoke: () => ({ Authorization: "delivery-invocation" }),
     } as unknown as IWasmBindings;
     const node = new TinyCloudNode({ host: "https://node.example", wasmBindings });
     (node as any)._restoredTcSession = { spaceId: SPACE };
@@ -811,7 +811,8 @@ describe("TinyCloudNode sharing", () => {
     const signedWith: unknown[] = [];
     const wasmBindings = {
       ...makeWasmBindings(),
-      invokeAny: (session: unknown) => { signedWith.push(session); return { Authorization: "delivery-invocation" }; },
+      invoke: (...args: unknown[]) => { signedWith.push(["invoke", ...args]); return { Authorization: "delivery-invocation" }; },
+      invokeAny: (session: unknown) => { signedWith.push(["invokeAny", session]); return { Authorization: "delivery-invocation" }; },
     } as unknown as IWasmBindings;
     const node = new TinyCloudNode({ host: "https://node.example", wasmBindings });
     const primarySession = { spaceId: SPACE, verificationMethod: "did:key:zPrimary#zPrimary" };
@@ -832,13 +833,13 @@ describe("TinyCloudNode sharing", () => {
       deliveryAudience: "https://witness.credentials.org",
       idempotencyKey: "stable-key",
     })).rejects.toThrow();
-    expect(signedWith).toEqual([primarySession]);
+    expect(signedWith).toEqual([["invoke", primarySession, "kv", "shares/test/readme.md", "tinycloud.kv/get"]]);
   });
 
   test("V3 delivery HTTP denial carries status and server body through the public method", async () => {
     const wasmBindings = {
       ...makeWasmBindings(),
-      invokeAny: () => ({ Authorization: "delivery-invocation" }),
+      invoke: () => ({ Authorization: "delivery-invocation" }),
     } as unknown as IWasmBindings;
     const node = new TinyCloudNode({ host: "https://node.example", wasmBindings });
     Reflect.set(node, "_restoredTcSession", { spaceId: SPACE });
