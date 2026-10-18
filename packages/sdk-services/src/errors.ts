@@ -103,22 +103,6 @@ export function networkError(
 }
 
 /**
- * Seconds or an HTTP date, as a delay in ms. Anything else, or a negative
- * delay, is not a usable hint.
- */
-function parseRetryAfterMs(value: string | null): number | undefined {
-  const text = value?.trim();
-  if (!text) return undefined;
-  if (/^\d+$/.test(text)) {
-    const seconds = Number(text);
-    return Number.isSafeInteger(seconds * 1000) ? seconds * 1000 : undefined;
-  }
-  if (!/[A-Za-z]/.test(text)) return undefined;
-  const at = Date.parse(text);
-  return Number.isNaN(at) ? undefined : Math.max(0, at - Date.now());
-}
-
-/**
  * Classify a node retry signal (tinycloud-node #347, TC-1054). The node's
  * bodies are plain text led by a stable token:
  * - `503 sql_busy: <stage>: ...` and `503 unavailable_retryable: ...` are
@@ -129,9 +113,10 @@ function parseRetryAfterMs(value: string | null): number | undefined {
  *   applied; read back before retrying a non-idempotent operation.
  *
  * `meta.retryable` is the safe-to-retry verdict and `meta.retryAfterMs` the
- * node's `Retry-After`. The SDK never retries on its own. Returns `undefined`
- * for any other response, including the bodyless 503/500 of nodes before
- * 1.21, which callers keep classifying as they always did.
+ * node's `Retry-After` (the node sends whole seconds; anything else is
+ * ignored). The SDK never retries on its own. Returns `undefined` for any
+ * other response, including the bodyless 503/500 of nodes before 1.21, which
+ * callers keep classifying as they always did.
  */
 export function nodeRetryError(
   service: string,
@@ -140,13 +125,9 @@ export function nodeRetryError(
   errorText: string
 ): ServiceError | undefined {
   const body = errorText.trim();
-  const token = /^([a-z_]+)(?::|\s|$)/.exec(body)?.[1];
+  const [, token, stage] = /^([a-z_]+)(?::\s*([a-z_]+):)?/.exec(body) ?? [];
   let code: string;
-  let stage: string | undefined;
-  if (response.status === 503 && token === "sql_busy") {
-    code = ErrorCodes.NODE_BUSY;
-    stage = /^sql_busy:\s*([a-z_]+):/.exec(body)?.[1];
-  } else if (response.status === 503 && token === "unavailable_retryable") {
+  if (response.status === 503 && (token === "sql_busy" || token === "unavailable_retryable")) {
     code = ErrorCodes.NODE_BUSY;
   } else if (response.status === 503 && token === "request_timeout") {
     code = ErrorCodes.REQUEST_TIMEOUT;
@@ -156,13 +137,13 @@ export function nodeRetryError(
     return undefined;
   }
   const retryable = code !== ErrorCodes.OUTCOME_UNKNOWN;
-  const retryAfterMs = retryable ? parseRetryAfterMs(response.headers.get("retry-after")) : undefined;
+  const retryAfter = response.headers.get("retry-after")?.trim();
   return serviceError(code, `${context}: ${response.status} - ${body}`, service, {
     meta: {
       ...responseErrorMeta(response.status, response.statusText, errorText),
       retryable,
-      ...(stage === undefined ? {} : { stage }),
-      ...(retryAfterMs === undefined ? {} : { retryAfterMs }),
+      ...(token === "sql_busy" && stage ? { stage } : {}),
+      ...(retryable && retryAfter && /^\d{1,9}$/.test(retryAfter) ? { retryAfterMs: Number(retryAfter) * 1000 } : {}),
     },
   });
 }

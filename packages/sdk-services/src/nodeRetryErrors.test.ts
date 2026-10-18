@@ -118,7 +118,7 @@ describe("SQL: typed node retry signals", () => {
     if (!result.ok) expect(result.error.meta).not.toHaveProperty("retryAfterMs");
   });
 
-  test("Retry-After is read as seconds or an HTTP date; garbage is ignored", async () => {
+  test("Retry-After is read as whole seconds; anything else is ignored", async () => {
     const run = async (value: string) => {
       const result = await sql(async () => nodeResponse(503, SQL_BUSY("lock_wait"), { "retry-after": value })).query(
         "SELECT 1",
@@ -128,10 +128,9 @@ describe("SQL: typed node retry signals", () => {
     expect(await run("7")).toBe(7000);
     expect(await run("soon")).toBeUndefined();
     expect(await run("-3")).toBeUndefined();
-    const date = (await run(new Date(Date.now() + 30_000).toUTCString())) as number;
-    expect(date).toBeGreaterThan(20_000);
-    expect(date).toBeLessThanOrEqual(30_000);
-    expect(await run(new Date(Date.now() - 60_000).toUTCString())).toBe(0);
+    expect(await run("")).toBeUndefined();
+    expect(await run("1.5")).toBeUndefined();
+    expect(await run("Wed, 21 Oct 2026 07:28:00 GMT")).toBeUndefined();
   });
 
   test("a bodyless 503 or 500 (node 1.20.6) keeps NETWORK_ERROR with its status", async () => {
