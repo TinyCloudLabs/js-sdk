@@ -1,5 +1,7 @@
 import { describe, expect, mock, test } from "bun:test";
 import { generateKeyPairSync } from "node:crypto";
+import { ed25519 } from "@noble/curves/ed25519";
+import { base58btc } from "multiformats/bases/base58";
 
 import {
   authorizationVerdictOf,
@@ -964,6 +966,83 @@ describe("TinyCloudNode runtime permission delegations", () => {
 
       expect(events).toEqual(["hook"]);
     });
+  });
+
+  test("disableSubDelegation marks a runtime-grant delegation terminal with the grant's session key", async () => {
+    const address = "0x71C7656EC7ab88b098defB751B7401B5f6d8976F";
+    const spaceId = `tinycloud:pkh:eip155:1:${address}:secrets`;
+    const permission: PermissionEntry = {
+      service: "tinycloud.kv",
+      space: "secrets",
+      path: "vault/secrets/ANTHROPIC_API_KEY",
+      actions: ["tinycloud.kv/put"],
+    };
+    const privateKey = ed25519.utils.randomPrivateKey();
+    const publicKey = ed25519.getPublicKey(privateKey);
+    const grantDid = `did:key:${base58btc.encode(Uint8Array.of(0xed, 0x01, ...publicKey))}`;
+    const b64u = (bytes: Uint8Array) => Buffer.from(bytes).toString("base64url");
+    const node = makeNode(mock(() => ({})));
+    // The WASM builder's token: signed by the runtime grant's session key, no facts.
+    const input = [
+      { alg: "EdDSA", typ: "JWT", ucv: "0.10.0" },
+      { iss: `${grantDid}#${grantDid.slice(8)}`, aud: "did:key:backend", exp: 1_900_000_000, prf: ["runtime-cid"], att: {} },
+    ].map((part) => b64u(Buffer.from(JSON.stringify(part)))).join(".");
+    const wasmToken = `${input}.${b64u(ed25519.sign(Buffer.from(input), privateKey))}`;
+    Object.assign(Reflect.get(node, "wasmBindings"), { createDelegation: mock((_session: unknown, delegateDid: string, space: string) => ({
+      delegation: wasmToken,
+      cid: "wasm-cid",
+      delegateDid,
+      expiry: 1_900_000_000,
+      resources: [{ service: "kv", space, path: permission.path, actions: permission.actions }],
+    })) });
+    Object.assign(node, {
+      runtimePermissionGrants: [{
+        session: {
+          delegationHeader: { Authorization: "runtime-token" },
+          delegationCid: "runtime-cid",
+          spaceId,
+          verificationMethod: `${grantDid}#${grantDid.slice(8)}`,
+          jwk: { kty: "OKP", crv: "Ed25519", x: b64u(publicKey), d: b64u(privateKey) },
+        },
+        delegation: {
+          cid: "runtime-cid",
+          delegationHeader: { Authorization: "runtime-token" },
+          spaceId,
+          path: permission.path,
+          actions: permission.actions,
+          expiry: new Date(Date.now() + 3_600_000),
+          delegateDID: grantDid,
+          ownerAddress: address,
+          chainId: 1,
+        },
+        operations: [{ spaceId, service: "kv", path: permission.path, action: "tinycloud.kv/put" }],
+        expiresAt: new Date(Date.now() + 3_600_000),
+        provenance: "delegated",
+      }],
+    });
+    const activated: string[] = [];
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      activated.push(new Headers(init?.headers).get("Authorization") ?? "");
+      return new Response(JSON.stringify({ activated: ["x"] }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }) as typeof fetch;
+    try {
+      const result = await node.delegateTo("did:key:backend", [permission], { disableSubDelegation: true });
+      const token = result.delegation.delegationHeader.Authorization;
+      const [header, payload, signature] = token.split(".");
+      expect(JSON.parse(Buffer.from(payload!, "base64url").toString()).fct).toEqual([
+        { "xyz.tinycloud.policy/delegationMode": "terminal" },
+      ]);
+      expect(ed25519.verify(Buffer.from(signature!, "base64url"), Buffer.from(`${header}.${payload}`), publicKey)).toBe(true);
+      expect(result.delegation.disableSubDelegation).toBe(true);
+      expect(result.delegation.cid).not.toBe("wasm-cid");
+      expect(activated).toEqual([token]);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
   });
 
   test("rejects an uncaveated public request selected against a caveated runtime grant", async () => {
