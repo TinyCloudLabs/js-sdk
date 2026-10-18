@@ -117,6 +117,11 @@ export type Tc1436Ratchet = LogoutRatchet;
  * activation and worker buckets.
  */
 export type Tc1432Ratchet = HardeningRatchet;
+/**
+ * One reviewed exact-delta admission of TC-1448 (js-sdk #591): the did:pkh recipient guard for terminal
+ * grants. Only the root bundle grows, so the shape is the #571 root-only row.
+ */
+export type Tc1448Ratchet = LogoutRatchet;
 export type Ledger = {
   allowance: GzipSizes;
   entries: LedgerEntry[];
@@ -129,6 +134,7 @@ export type Ledger = {
   tc1413Ratchet?: Tc1413Ratchet;
   tc1436Ratchet?: Tc1436Ratchet;
   tc1432Ratchet?: Tc1432Ratchet;
+  tc1448Ratchet?: Tc1448Ratchet;
 };
 
 const formats = ["index.mjs", "index.cjs"] as const;
@@ -396,6 +402,32 @@ export const approvedTc1432Ratchet: Tc1432Ratchet = {
   reason: "Vault compare-and-swap and opt-in address binding in sdk-services (DataVaultService, vault types; one node-sdk mapping line): VaultEntry.etag, VaultPutOptions.ifMatch with distinct ETAG_MISMATCH / INVALID_ETAG / OUTCOME_UNKNOWN / NODE_BUSY codes, and VaultGetOptions.expectAad. sdk-services is bundled whole into the root, the kv-storage worker and the optional buckets, and the worker keeps DataVaultService through the sdk-services barrel, so any vault code is charged there. Real shrink attempts first, same-toolchain local worker gzip (Bun 1.4.3), master 819,007: the first candidate was +870 (CI +851); the review fixes (shape check before the AAD check, explicit expectAad refusals, gateway statuses as OUTCOME_UNKNOWN, the weak-etag message) took it to +1,209; folding the new default messages into the existing message-required case changed nothing (+1,249, strings gzip away); merging the shape check and the AAD check into one helper with the decrypt's own base64 decoder cut it to +1,119 (CI +1,109); importing the worker's KVService through the /kv subpath instead measured 837,823 B against the 820,256 B candidate (+17,567, it duplicates KVService) and still contains DataVaultService, so it was reverted; the vault methods are synchronous parts of one service class, so a lazy import is not possible. #578 (TC-1436) landed first, so this row was re-measured against master 129c7935 and sits on top of the TC-1436 root ceilings. Canonical CI run 39144311690 (head 83c9d75a, the merge of that master into source 490cd947 plus a policy placeholder) measured identical absolute bytes in both jobs against merge base 129c7935: root 1,466,908 / 1,396,591 B (+913 / +872 over the TC-1436 ceilings), first import 51,925 / 67,138 B (+1 / -1), activation 23,106 / 24,685 B (+1 / +2) and the worker 822,044 B (+1,109 over the TC-1413 ceiling). Whichever PR lands after this one re-measures against the new base and updates its own row.",
 };
 
+/**
+ * TC-1448 (js-sdk #591): the guard that refuses `disableSubDelegation: true` for a `did:pkh` recipient is
+ * admitted at exactly the bytes GitHub measured, root only, after a real shrink attempt, with no headroom.
+ * The row sits on top of the TC-1432 root ceilings (#580 landed first).
+ */
+export const approvedTc1448Ratchet: Tc1448Ratchet = {
+  label: "TC-1448 #591 terminal-grant did:pkh recipient guard, exact canonical delta",
+  ruling: "Naomi size ruling: a real shrink first, remainder by the PR's own exact-delta row at canonical CI bytes; rows chain after the latest on master",
+  base: "1d7b78fd03b0634cba823babf6e5ac2a0fec1866",
+  sourceCommits: [
+    "18b6c9fa8c64beef0580f26d35443c29ba476d33",
+  ],
+  canonicalCI: {
+    run: "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39151721052",
+    jobs: [
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39151721052/job/117746562931",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39151721052/job/117746563175",
+    ],
+  },
+  root: {
+    delta: { "index.mjs": 41, "index.cjs": 31 },
+    ceiling: { "index.mjs": 1466949, "index.cjs": 1396622 },
+  },
+  reason: "delegateTo, and so createDelegation and space.delegations.create, throw for disableSubDelegation: true with a did:pkh recipient, because the node refuses a wallet-mode useDelegation of a terminal parent. Shrink attempts first (same-toolchain local gzip, Bun 1.4.3, master 1d7b78fd): the first candidate added a separate 100-character error string, +74 / +55; reusing the existing TERMINAL_DELEGATION_REQUIRES_SESSION_KEY constant for the new refusal (its text now also names the did:key rule and keeps its old prefix) and one shared throw took it to +49 / +58 locally, +41 / +31 on canonical CI. What remains is the did:pkh prefix check and the longer shared message. A lazy import would be inlined by the single-chunk root build, and the check has to run in the web root because TinyCloudWeb.createDelegation forwards to delegateTo. Canonical CI run 39151721052 (head 18b6c9fa, no merge) measured identical absolute bytes in both jobs against merge base 1d7b78fd: root 1,466,949 / 1,396,622 B (+41 / +31 over the TC-1432 ceilings). Whichever PR lands after this one re-measures against the new base and updates its own row.",
+};
+
 /** The reviewed #553 S3 entry's source commit, as master's checker pinned it. */
 export const preexistingS3EntryCommit = "0241ba9b";
 
@@ -446,6 +478,7 @@ export function ancestryPins(root: Ledger, hasGatedOnly: boolean): Array<{ row: 
   if (root.tc1413Ratchet !== undefined) pins.push({ row: "tc1413Ratchet", pin: root.tc1413Ratchet.sourceCommits.at(-1)! });
   if (root.tc1436Ratchet !== undefined) pins.push({ row: "tc1436Ratchet", pin: root.tc1436Ratchet.sourceCommits.at(-1)! });
   if (root.tc1432Ratchet !== undefined) pins.push({ row: "tc1432Ratchet", pin: root.tc1432Ratchet.sourceCommits.at(-1)! });
+  if (root.tc1448Ratchet !== undefined) pins.push({ row: "tc1448Ratchet", pin: root.tc1448Ratchet.sourceCommits.at(-1)! });
   if (hasGatedOnly) pins.push({ row: "gatedOnlyRatchet", pin: approvedGatedOnlyRatchet.sourceCommit });
   return pins;
 }
@@ -482,7 +515,7 @@ const historicalToolchain = "Bun 1.4.3; production webpack; gzip -9 -c";
 /** Only a git merge-base ledger may retain the pre-correction toolchain. */
 export function validateLedger(value: Ledger, historicalBase = false): void {
   if (!value || !value.allowance || !Array.isArray(value.entries) ||
-      Object.keys(value).some((key) => key !== "allowance" && key !== "entries" && key !== "phase2Ratchet" && key !== "fixRequiredRatchet" && key !== "canonicalToolchainCorrection" && key !== "masterMergeResolution" && key !== "hardeningRatchet" && key !== "logoutRatchet" && key !== "tc1413Ratchet" && key !== "tc1436Ratchet" && key !== "tc1432Ratchet")) {
+      Object.keys(value).some((key) => key !== "allowance" && key !== "entries" && key !== "phase2Ratchet" && key !== "fixRequiredRatchet" && key !== "canonicalToolchainCorrection" && key !== "masterMergeResolution" && key !== "hardeningRatchet" && key !== "logoutRatchet" && key !== "tc1413Ratchet" && key !== "tc1436Ratchet" && key !== "tc1432Ratchet" && key !== "tc1448Ratchet")) {
     throw new Error("Invalid packages/web-sdk/scripts/replica-size-ledger.json shape");
   }
   if (Object.keys(value.allowance).some((key) => !formats.includes(key as typeof formats[number]))) {
@@ -558,6 +591,10 @@ export function validateLedger(value: Ledger, historicalBase = false): void {
       (!value.tc1436Ratchet || JSON.stringify(value.tc1432Ratchet) !== JSON.stringify(approvedTc1432Ratchet))) {
     throw new Error("Only Naomi's exact canonical TC-1432 vault etag/ifMatch/expectAad ratchet is approved.");
   }
+  if (value.tc1448Ratchet !== undefined &&
+      (!value.tc1432Ratchet || JSON.stringify(value.tc1448Ratchet) !== JSON.stringify(approvedTc1448Ratchet))) {
+    throw new Error("Only Naomi's exact canonical TC-1448 terminal-grant recipient guard ratchet is approved.");
+  }
 }
 
 /** The resolved input blobs are introduced once and immutable in subsequent bases. */
@@ -607,6 +644,14 @@ export function validateTc1432RatchetTransition(base?: Tc1432Ratchet, current?: 
   if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc1432Ratchet) ||
       base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
     throw new Error("The exact TC-1432 ratchet may be introduced once and cannot change later.");
+  }
+}
+
+/** The TC-1448 ratchet is introduced once at its exact canonical bytes and immutable afterwards. */
+export function validateTc1448RatchetTransition(base?: Tc1448Ratchet, current?: Tc1448Ratchet): void {
+  if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc1448Ratchet) ||
+      base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
+    throw new Error("The exact TC-1448 ratchet may be introduced once and cannot change later.");
   }
 }
 
