@@ -1,4 +1,4 @@
-import type { DelegatedShareKey, OwnerShareAction, OwnerShareMatcher, OwnerSharePolicyRegistrationReceipt } from "./owner-policy";
+import type { DelegatedShareKey, OwnerShareAction, OwnerShareMatcher, OwnerSharePolicyRegistrationReceipt, SignedDelegation } from "./owner-policy";
 import { restoreDelegatedShareKey } from "./owner-policy";
 import type { PublishedShare, PublishedShareDeliveryMaterial } from "./publish.js";
 
@@ -48,6 +48,25 @@ export interface SenderShareRecord {
   readonly deliveryMaterial?: PublishedShareDeliveryMaterial;
   /** Canonical mailboxes whose invitation delivery was confirmed; history is encrypted at rest. */
   readonly deliveredRecipients?: readonly string[];
+  /**
+   * The signed chain behind every CID this record claims (TC-1432 C1), as
+   * exact bytes. Agent records carry it so the owner's browser can verify
+   * the chain without a node lookup. Policy/v3 records prove through
+   * `deliveryMaterial.envelope` plus `session`.
+   */
+  readonly proofs?: SenderShareRecordProofs;
+}
+
+export interface SenderShareRecordProofs {
+  /** Owner→session SIWE CACAO (base64url DAG-CBOR) of the issuing session; absent when it is gone. */
+  readonly session?: string;
+  /** Native bearer link delegation (compact UCAN); its CID is `enforcementDelegationCid`. */
+  readonly link?: string;
+  /** Policy/v2 owner-policy chain: policy bytes (base64url), owner→share-key SIWE CACAO (base64url), enforcement delegation and node registration receipt. */
+  readonly ownerPolicy?: string;
+  readonly ownerDelegation?: string;
+  readonly enforcementDelegation?: SignedDelegation;
+  readonly registration?: OwnerSharePolicyRegistrationReceipt;
 }
 
 /** Create the durable encrypted-history shape from canonical publication receipts. */

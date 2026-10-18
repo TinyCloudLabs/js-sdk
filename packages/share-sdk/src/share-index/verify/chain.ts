@@ -1,0 +1,169 @@
+import { blake3 } from "@noble/hashes/blake3";
+import { computeCid, fromBase64Url, shareEnvelopeV3Schema, verifyEnvelopeV3 } from "@tinycloud/share-envelope";
+import { CID } from "multiformats/cid";
+import { create as createDigest } from "multiformats/hashes/digest";
+import type { SenderShareRecord } from "../../history.js";
+import { checkOwnerSharePolicyRegistration, type OwnerSharePolicyRegistrationCheck, type RegisterOwnerSharePolicyParams } from "../../owner-policy.js";
+import { canonicalAddressSpelling } from "../agent-record.js";
+import type { ShareProofState } from "../schema.js";
+import type { Attenuation } from "./attenuation.js";
+import { verifyPolicyEnforcementDelegation } from "./enforcement-delegation.js";
+import { NOT_BEFORE_SKEW_MS, verifyOwnerSessionDelegation, type SiweCacaoParser } from "./session.js";
+import { parseSignedUcan, principalOf } from "./ucan.js";
+
+/**
+ * CID ownership by proof (design C §5 check 7, C1–C4). Everything is checked
+ * from the signed bytes the record carries; nothing is fetched.
+ *
+ * - `proven`: the full chain verifies to the account owner and the leaf
+ *   issuer (the policy owner for Policy/v3) is `hdr.agentDid`.
+ * - `chained`: the full chain verifies to the account owner through another key.
+ * - `unproven`: the leaf verifies but the owner→session CACAO is absent.
+ * - `expired` is reported next to the state: a chain that verifies but has
+ *   expired is admitted as Expired, not rejected.
+ * - anything else: `{ ok: false }` (reason `proof`).
+ *
+ * Supported chains: native bearer links (`proofs.link` + `proofs.session`),
+ * Policy/v3 addressed shares (`deliveryMaterial.envelope` + `proofs.session`)
+ * and Policy/v2 owner-policy shares (`proofs.ownerPolicy`, `ownerDelegation`,
+ * `enforcementDelegation`, optional `registration`).
+ */
+export type ChainVerdict =
+  | { readonly ok: true; readonly state: ShareProofState; readonly expired: boolean; readonly claims: readonly string[] }
+  | { readonly ok: false; readonly detail: string };
+
+/** The node registration key for a node audience, from the share public config. */
+export interface ShareRegistrationKey {
+  readonly kid: string;
+  /** Raw 32-byte Ed25519 key, or its 34-byte did:key multicodec form. */
+  readonly publicKey: Uint8Array;
+}
+
+export interface ChainContext {
+  readonly accountOwnerDid: string;
+  /** `hdr.agentDid`, already bound to the path by `derive(agentDid) == agentId`. */
+  readonly agentDid: string;
+  readonly now: Date;
+  readonly parseSiweCacao: SiweCacaoParser;
+  /** Registration key by `target.nodeAudience`; absent ⇒ `registrationCid` is not claimed. */
+  readonly registrationKey?: (nodeAudience: string) => ShareRegistrationKey | undefined;
+}
+
+class ProofFailure extends Error {}
+
+function fail(detail: string): never {
+  throw new ProofFailure(detail);
+}
+
+/** CID (raw, blake3) of a base64url DAG-CBOR CACAO's exact bytes. */
+function cacaoCid(authorization: string): string {
+  return CID.createV1(0x55, createDigest(0x1e, blake3(fromBase64Url(authorization.replace(/=+$/, ""))))).toString();
+}
+
+function kvResource(record: SenderShareRecord): string {
+  return `${record.target.spaceId}/kv/${record.resource.path}`;
+}
+
+function sameAttenuationResources(attenuation: Attenuation, resources: readonly string[]): boolean {
+  const keys = Object.keys(attenuation).map(canonicalAddressSpelling).sort();
+  const expected = resources.map(canonicalAddressSpelling).sort();
+  return keys.length === expected.length && keys.every((key, index) => key === expected[index]);
+}
+
+async function bearerChain(record: SenderShareRecord, link: string, context: ChainContext): Promise<ChainVerdict> {
+  if (record.enforcementDelegationCid === undefined) fail("bearer record names no link delegation");
+  const leaf = parseSignedUcan(link, record.enforcementDelegationCid);
+  const resource = kvResource(record);
+  if (!sameAttenuationResources(leaf.attenuation, [resource]) || !Object.keys(Object.values(leaf.attenuation)[0]!).every((ability) => record.actions.includes(ability as never))) fail("link delegation is not for the record's resource");
+  if (leaf.notBefore !== undefined && leaf.notBefore * 1000 > context.now.getTime() + NOT_BEFORE_SKEW_MS) fail("link delegation is not yet valid");
+  if (leaf.proofs.length !== 1) fail("link delegation must have exactly one parent");
+  const leafExpired = leaf.expiresAt * 1000 <= context.now.getTime();
+  const claims = [leaf.cid];
+  const session = record.proofs?.session;
+  if (session === undefined) return { ok: true, state: "unproven", expired: leafExpired, claims };
+  // prf ∋ parent CID: the CACAO must be exactly the leaf's parent.
+  const parent = await verifyOwnerSessionDelegation({ authorization: session, expectedCid: leaf.proofs[0]!, accountOwnerDid: context.accountOwnerDid, childIssuer: leaf.issuer, childAttenuation: leaf.attenuation, now: context.now, parse: context.parseSiweCacao });
+  return { ok: true, state: leaf.issuer === principalOf(context.agentDid) ? "proven" : "chained", expired: leafExpired || parent.time === "expired", claims };
+}
+
+async function policyV3Chain(record: SenderShareRecord, envelopeValue: unknown, context: ChainContext): Promise<ChainVerdict> {
+  const parsed = shareEnvelopeV3Schema.safeParse(envelopeValue);
+  if (!parsed.success) fail("Policy/v3 envelope is malformed");
+  const envelope = parsed.data;
+  const ownerDid = envelope.policy.ownerDid;
+  const binding = envelope.attestedEnforcerBinding;
+  // Validity apart from time, judged inside the binding's own window; expiry is reported below.
+  if (!await verifyEnvelopeV3(envelope, { expectedSignerDid: ownerDid, now: Date.parse(binding.issuedAt) })) fail("Policy/v3 chain does not verify");
+  if (envelope.policyCid !== record.policyCid || envelope.policyRoot.cid !== record.ownerDelegationCid || envelope.enforcementRoot.cid !== record.enforcementDelegationCid || envelope.shareId !== record.shareId
+    || canonicalAddressSpelling(envelope.target.spaceId) !== canonicalAddressSpelling(record.target.spaceId) || envelope.resource.kind !== record.resource.kind || envelope.resource.path !== record.resource.path
+    || (record.ownerDid !== undefined && record.ownerDid !== ownerDid)) fail("Policy/v3 chain is not this record's");
+  const root = parseSignedUcan(envelope.policyRoot.authorization, envelope.policyRoot.cid);
+  const expiry = Math.min(Date.parse(binding.expiresAt), root.expiresAt * 1000, Date.parse(envelope.expiry));
+  const expired = expiry <= context.now.getTime();
+  const claims = [envelope.policyCid, envelope.policyRoot.cid, envelope.enforcementRoot.cid];
+  const session = record.proofs?.session;
+  if (session === undefined) return { ok: true, state: "unproven", expired, claims };
+  // Roots are proofless (the node checks owner authority itself), so the CACAO is bound by audience, issuer and attenuation.
+  const parent = await verifyOwnerSessionDelegation({ authorization: session, expectedCid: cacaoCid(session), accountOwnerDid: context.accountOwnerDid, childIssuer: root.issuer, childAttenuation: root.attenuation, now: context.now, parse: context.parseSiweCacao });
+  return { ok: true, state: principalOf(ownerDid) === principalOf(context.agentDid) ? "proven" : "chained", expired: expired || parent.time === "expired", claims };
+}
+
+async function ownerPolicyV2Chain(record: SenderShareRecord, context: ChainContext): Promise<ChainVerdict> {
+  const proofs = record.proofs!;
+  if (proofs.ownerDelegation === undefined || proofs.enforcementDelegation === undefined || record.policyCid === undefined || record.ownerDelegationCid === undefined || record.enforcementDelegationCid === undefined) fail("Policy/v2 chain is incomplete");
+  const policyBytes = fromBase64Url(proofs.ownerPolicy!);
+  if (await computeCid(policyBytes) !== record.policyCid) fail("Policy/v2 policy bytes do not match policyCid");
+  let envelope: { readonly domain?: unknown; readonly policy?: Record<string, unknown> };
+  try { envelope = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(policyBytes)) as typeof envelope; } catch { fail("Policy/v2 policy is not JSON"); }
+  const policy = envelope.policy;
+  const target = policy?.target as Record<string, unknown> | undefined;
+  const resource = policy?.resource as Record<string, unknown> | undefined;
+  if (envelope.domain !== "xyz.tinycloud.share/policy/v2\0" || policy === undefined || typeof policy.shareKeyDid !== "string" || typeof policy.ownerDid !== "string" || typeof policy.contentSourceDigest !== "string"
+    || policy.shareId !== record.shareId || typeof target?.spaceId !== "string" || canonicalAddressSpelling(target.spaceId) !== canonicalAddressSpelling(record.target.spaceId)
+    || resource?.kind !== record.resource.kind || resource?.path !== record.resource.path
+    || canonicalAddressSpelling(policy.ownerDid) !== canonicalAddressSpelling(context.accountOwnerDid)) fail("Policy/v2 policy is not this record's");
+  const shareKeyDid = policy.shareKeyDid;
+  const enforcement = await verifyPolicyEnforcementDelegation(proofs.enforcementDelegation, record.enforcementDelegationCid);
+  const facts = enforcement.facts;
+  if (enforcement.issuerDid !== shareKeyDid || facts.policyCid !== record.policyCid || facts.ownerDelegationCid !== record.ownerDelegationCid || facts.shareId !== record.shareId
+    || typeof facts.spaceId !== "string" || canonicalAddressSpelling(facts.spaceId) !== canonicalAddressSpelling(record.target.spaceId) || facts.path !== record.resource.path || typeof facts.expiresAt !== "string") fail("enforcement delegation is not this record's");
+  const owner = await verifyOwnerSessionDelegation({
+    authorization: proofs.ownerDelegation, expectedCid: record.ownerDelegationCid, accountOwnerDid: context.accountOwnerDid, childIssuer: shareKeyDid,
+    childAttenuation: { [kvResource(record)]: Object.fromEntries(record.actions.map((action) => [action, [{}]])) }, now: context.now, parse: context.parseSiweCacao,
+  });
+  let expired = owner.time === "expired" || Date.parse(facts.expiresAt as string) <= context.now.getTime();
+  const claims = [record.policyCid, record.ownerDelegationCid, record.enforcementDelegationCid];
+  const key = context.registrationKey?.(record.target.nodeAudience);
+  if (record.registrationCid !== undefined && proofs.registration !== undefined && key !== undefined) {
+    const expected = {
+      policy: { bytes: policyBytes, cid: record.policyCid, proof: "" },
+      ownerDelegation: { delegationCid: record.ownerDelegationCid, signedDagCbor: fromBase64Url(proofs.ownerDelegation.replace(/=+$/, "")) },
+      enforcementDelegation: enforcement,
+      contentSourceDigest: policy.contentSourceDigest,
+      nodeProof: key,
+    } as unknown as RegisterOwnerSharePolicyParams;
+    let checked: OwnerSharePolicyRegistrationCheck;
+    try { checked = checkOwnerSharePolicyRegistration(proofs.registration, expected, context.now); } catch { fail("registration receipt is invalid"); }
+    if (checked.receipt.registration.registrationCid !== record.registrationCid) fail("registration receipt is not this record's");
+    expired ||= checked.status === "expired";
+    claims.push(record.registrationCid);
+  }
+  return { ok: true, state: "chained", expired, claims };
+}
+
+/** Verify the chain behind every CID an agent record claims. Never throws. */
+export async function verifyAgentRecordChain(record: SenderShareRecord, context: ChainContext): Promise<ChainVerdict> {
+  try {
+    const proofs = record.proofs;
+    if (proofs?.ownerPolicy !== undefined) return await ownerPolicyV2Chain(record, context);
+    if (record.targetKind !== undefined && record.targetKind !== "bearer") {
+      const envelope = record.deliveryMaterial?.envelope;
+      if (envelope === undefined) fail("Policy/v3 record carries no envelope");
+      return await policyV3Chain(record, envelope, context);
+    }
+    if (proofs?.link !== undefined) return await bearerChain(record, proofs.link, context);
+    return { ok: false, detail: "record carries no proof" };
+  } catch (error) {
+    return { ok: false, detail: error instanceof ProofFailure ? error.message : "proof does not verify" };
+  }
+}
