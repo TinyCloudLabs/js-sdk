@@ -354,7 +354,7 @@
   },
   "tc1443Ratchet": {
     "label": "TC-1443 #586 sdk-core registry verdict classifier, exact canonical delta",
-    "ruling": "Node lead instruction for #586, following the TC-1436 (#578) size ruling pattern: a real shrink first, remainder by the PR's own exact-delta row at canonical CI bytes; the size-policy owner signs off on this row in review",
+    "ruling": "TC-1443 size row for #586, approved by Naomi (2026-10-18), following the TC-1436 (#578) size ruling pattern: a real shrink first, remainder by the PR's own exact-delta row at canonical CI bytes",
     "base": "129c793544b69b3b956c1c3258e64d1e6efd45fa",
     "sourceCommits": [
       "4a8ccb1aa3399c1546e3065be4a398d1bc078373"
