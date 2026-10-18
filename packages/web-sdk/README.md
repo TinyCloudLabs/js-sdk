@@ -130,15 +130,33 @@ artifact. The ledger's `tc1413Ratchet` row and the matching optional allowance r
 them and cannot change later; the `entries[]` rows carry zero (root) and the measured
 optional deltas.
 
-The TC-1428 owner-signed artifact pin (the viewer's check that an addressed artifact share reads
-the version its owner signed, #582) raised only the root ceilings once more, after size cuts,
-by the exact bytes GitHub run 39147003338 measured on source `dbebc11e`, in both jobs,
-against master `7e10709c`: to 1,465,559 / 1,396,187 B (+891 / +812). First import,
-activation, the gated artifact and the worker keep TC-1413's ceilings. The ledger's
-`tc1428Ratchet` row records them and cannot change later. Rows are relative to the base each
-PR is measured on (#582 is stacked on #579, which is byte-neutral): if another root-growing PR
-(#578, #580) lands first, #582 re-measures against the new base and replaces its own row
-before it merges.
+The TC-1436 terminal marker for `disableSubDelegation` (#578) raised only the root
+ceilings once more, after size cuts, by the exact bytes GitHub run 39134326448
+measured on source `d8e72fb9`, in both jobs, against master `7e10709c`: to
+1,465,995 / 1,395,719 B (+1,327 / +344). First import, activation, the gated artifact
+and the worker keep TC-1413's ceilings. The ledger's `tc1436Ratchet` row records them
+and cannot change later. If another root-growing PR lands first, #578 re-measures
+against the new base and replaces its own row before it merges.
+
+TC-1432 (vault `etag`, `ifMatch` and opt-in `expectAad` in sdk-services, #580) landed
+after #578, so it was re-measured against master `129c7935` and sits on top of TC-1436's
+root ceilings. It raised four buckets once, by the exact bytes GitHub run 39144311690
+measured on source `83c9d75a`, identical in both jobs: the root to 1,466,908 /
+1,396,591 B (+913 / +872 over TC-1436's), first import to 51,925 / 67,138 B (+1 / -1),
+activation to 23,106 / 24,685 B (+1 / +2) and the worker to 822,044 B (+1,109 over
+TC-1413's, also `MAX_WORKER_GZIP_BYTES`). It is #580's own row, taken after a documented
+shrink attempt (see the row's `reason`). The ledger's `tc1432Ratchet` row and the
+matching optional allowance record it and cannot change later; whichever PR lands after
+it re-measures against the new base and updates its own row.
+
+TC-1424 (the share receiver's non-extractable signing key, #583) landed after #580, so
+it was re-measured against master `1d7b78fd` and sits on top of TC-1432's root ceilings.
+It raised only the root ceilings once, by the exact bytes GitHub run 39150995159
+measured on source `55145dbb`, identical in both jobs: 1,468,581 / 1,397,877 B (+1,673 /
++1,286 over TC-1432's). First import, activation, gated and the worker keep TC-1432's
+ceilings. It is #583's own row, taken after a documented shrink attempt (see the row's
+`reason`). The ledger's `tc1424Ratchet` row records it and cannot change later; whichever
+PR lands after it re-measures against the new base and updates its own row.
 
 **Ancestry pins and squash merges.** A policy row records the PR-branch commit it
 was reviewed at, and its introduction check requires that literal commit in the

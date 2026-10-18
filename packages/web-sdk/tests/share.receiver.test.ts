@@ -7,12 +7,12 @@ import {
   type CredentialFlowDescriptor,
   type VerifiedCredential,
 } from "@tinycloud/sdk-core";
-import { didKeyFromEd25519PublicKey, ed25519PublicKeyFromDidKey } from "@tinycloud/share-envelope";
+import { didKeyFromEd25519PublicKey } from "@tinycloud/share-envelope";
 import { interpretCredentialFlow } from "../src/credentials/interpreter";
 import { BrowserSessionStorage } from "../src/adapters/BrowserSessionStorage";
 import type { CredentialAcquisitionTransport, CredentialRequestState } from "../src/credentials/types";
 import { SessionReceiverCredentialCustody } from "../src/share/receiver-credentials";
-import { createOrRestoreShareReceiverSession, SHARE_RECEIVER_SESSION_STORAGE_KEY } from "../src/share/receiver-session";
+import { createOrRestoreShareReceiverSession } from "../src/share/receiver-session";
 import { ReceivedShareImpl, selectShareReceiverAccountSession, validateShareReceiverExpectedOrigin, validateShareReceiverServiceTrust } from "../src/share/service";
 import type { ShareReceivedContent } from "../src/share/types";
 
@@ -24,46 +24,6 @@ function memoryStorage() {
     removeItem: (key: string) => { values.delete(key); },
   };
 }
-
-test("receiver session strictly restores the same origin key and replaces corrupt material", async () => {
-  const storage = memoryStorage();
-  const first = await createOrRestoreShareReceiverSession("https://share.example", storage);
-  const restored = await createOrRestoreShareReceiverSession("https://share.example", storage);
-  expect(restored.holderDid).toBe(first.holderDid);
-  expect(Object.keys(first).sort()).toEqual(["createdAt", "holderDid", "origin", "sign"]);
-  const message = new TextEncoder().encode("tc-500");
-  expect(ed25519.verify(await restored.sign(message), message, ed25519PublicKeyFromDidKey(first.holderDid))).toBe(true);
-  const record = JSON.parse(storage.getItem(SHARE_RECEIVER_SESSION_STORAGE_KEY)!);
-  storage.setItem(SHARE_RECEIVER_SESSION_STORAGE_KEY, JSON.stringify({ ...record, account: "forbidden" }));
-  const replaced = await createOrRestoreShareReceiverSession("https://share.example", storage);
-  expect(replaced.holderDid).not.toBe(first.holderDid);
-  await expect(createOrRestoreShareReceiverSession("http://share.example", storage)).rejects.toThrow("loopback");
-  expect((await createOrRestoreShareReceiverSession("http://localhost:5173", storage)).origin).toBe("http://localhost:5173");
-  expect((await createOrRestoreShareReceiverSession("http://127.0.0.1:5173", storage)).origin).toBe("http://127.0.0.1:5173");
-});
-
-test("receiver session replaces mismatched private key material and non-canonical timestamps", async () => {
-  const storage = memoryStorage();
-  const otherStorage = memoryStorage();
-  const first = await createOrRestoreShareReceiverSession("https://share.example", storage);
-  await createOrRestoreShareReceiverSession("https://share.example", otherStorage);
-  const record = JSON.parse(storage.getItem(SHARE_RECEIVER_SESSION_STORAGE_KEY)!);
-  const other = JSON.parse(otherStorage.getItem(SHARE_RECEIVER_SESSION_STORAGE_KEY)!);
-  storage.setItem(SHARE_RECEIVER_SESSION_STORAGE_KEY, JSON.stringify({
-    ...record,
-    jwk: { ...record.jwk, d: other.jwk.d },
-  }));
-  const replacedMismatchedKey = await createOrRestoreShareReceiverSession("https://share.example", storage);
-  expect(replacedMismatchedKey.holderDid).not.toBe(first.holderDid);
-
-  const replacementRecord = JSON.parse(storage.getItem(SHARE_RECEIVER_SESSION_STORAGE_KEY)!);
-  storage.setItem(SHARE_RECEIVER_SESSION_STORAGE_KEY, JSON.stringify({
-    ...replacementRecord,
-    createdAt: replacementRecord.createdAt.replace(/\.\d{3}Z$/, "Z"),
-  }));
-  const replacedTimestamp = await createOrRestoreShareReceiverSession("https://share.example", storage);
-  expect(replacedTimestamp.holderDid).not.toBe(replacedMismatchedKey.holderDid);
-});
 
 test("share links are bound to the configured out-of-band Share origin and have no query", () => {
   const fragment = "#v=2&p=eyJ2IjoyLCJjIjoiQVEiLCJjaWQiOiJiYWZrcmVpZzJ6N21icDZ2N3FodHViUHhseWx6anRvdnV4c250NW5vcDcyeDVvcmhrZGEydWRnd2FydSIsImsiOiJBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBIn0";
@@ -191,7 +151,7 @@ test("receiver holder binding uses the receiver signer without an OpenKey approv
 
 function receivedShareForImport(onProgress?: (event: unknown) => void): ReceivedShareImpl {
   const received = new ReceivedShareImpl(
-    { kind: "receiver", holderDid: "did:key:z6MkReceiver", custody: "session", origin: "https://share.example" },
+    { kind: "receiver", holderDid: "did:key:z6MkReceiver", custody: "persistent", origin: "https://share.example" },
     {
       protocol: "tinycloud-share",
       version: 1,
@@ -320,7 +280,7 @@ test("the displayed recipient is the exact email the owner's signed policy commi
     policy: { schema: "xyz.tinycloud.policy/policy/v2", credentialRequirement: { requirementDigest: await canonicalDigest(committed), profile, credentialType } },
   }) as never;
   const requirement = await verifiedShareRequirement(await envelopeFor({ kind: "exactEmail", value: "Reader@example.com" }));
-  const received = new Received({ kind: "receiver", holderDid: "did:key:z6MkReceiver", custody: "session", origin: "https://share.example" }, {} as never, {} as never, requirement, {} as never, async () => new Uint8Array(64), { identity: "receiver", interaction: { kind: "inline", mountTarget: "#credentials" } }, fetch, "https://credentials.org/.well-known/opencredentials");
+  const received = new Received({ kind: "receiver", holderDid: "did:key:z6MkReceiver", custody: "persistent", origin: "https://share.example" }, {} as never, {} as never, requirement, {} as never, async () => new Uint8Array(64), { identity: "receiver", interaction: { kind: "inline", mountTarget: "#credentials" } }, fetch, "https://credentials.org/.well-known/opencredentials");
   expect(received.recipient).toEqual({ kind: "exactEmail", email: "Reader@example.com" });
   for (const substituted of ["reader@example.com", "Reader@example.co", "Reader@example.com.evil", "Reader@sub.example.com", "Reader@exa\u0301mple.com"]) {
     await expect(verifiedShareRequirement(await envelopeFor({ kind: "exactEmail", value: substituted }))).rejects.toThrow("does not match its policy commitment");
