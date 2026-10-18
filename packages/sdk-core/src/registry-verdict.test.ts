@@ -1,25 +1,28 @@
 import { describe, expect, it } from "bun:test";
 import {
+  RegistryLookupInputError,
   classifyRegistryLookup,
   type RegistryLookupResponse,
   type RegistryVerdict,
 } from "./registry-verdict";
 
+type BodyPart = string | { repeat: string; count: number };
+
 type VectorResponse =
-  | { kind: "http"; status: number; body: string; trailingSpaces?: number }
+  | { kind: "http"; status: number; body: string | BodyPart[] }
   | { kind: "network-error" }
   | { kind: "timeout" };
 
 interface Vector {
   name: string;
   subject: string;
+  /** Input-error vectors also carry non-numbers; they are passed through unchanged. */
   rememberedSequence: number | null;
   response: VectorResponse;
   expected: Record<string, unknown>;
 }
 
 interface VectorFile {
-  subjects: { owner: string };
   vectors: Vector[];
 }
 
@@ -27,14 +30,14 @@ interface VectorFile {
 const vectorFile = (await Bun.file(
   `${import.meta.dir}/../test-vectors/registry-verdict/registry-verdict-v1.json`,
 ).json()) as VectorFile;
-const vectors = vectorFile.vectors;
 
 function toResponse(response: VectorResponse): RegistryLookupResponse {
   if (response.kind !== "http") return response;
+  const parts = typeof response.body === "string" ? [response.body] : response.body;
   return {
     kind: "http",
     status: response.status,
-    body: response.body + " ".repeat(response.trailingSpaces ?? 0),
+    body: parts.map((part) => (typeof part === "string" ? part : part.repeat.repeat(part.count))).join(""),
   };
 }
 
@@ -51,34 +54,23 @@ function contractFields(verdict: RegistryVerdict): Record<string, unknown> {
 }
 
 describe("registry verdict vectors", () => {
-  it("covers all three states", () => {
-    const statuses = new Set(vectors.map((vector) => vector.expected.status));
-    expect([...statuses].sort()).toEqual(["registered", "unavailable", "unregistered"]);
-  });
-
-  for (const vector of vectors) {
+  for (const vector of vectorFile.vectors) {
     it(vector.name, async () => {
-      const verdict = await classifyRegistryLookup(vector.subject, toResponse(vector.response), {
+      const run = classifyRegistryLookup(vector.subject, toResponse(vector.response), {
         rememberedSequence: vector.rememberedSequence,
       });
+      if ("error" in vector.expected) {
+        const error = await run.then(
+          () => undefined,
+          (thrown: unknown) => thrown,
+        );
+        expect(error).toBeInstanceOf(RegistryLookupInputError);
+        expect((error as RegistryLookupInputError).code).toBe(vector.expected.error as RegistryLookupInputError["code"]);
+        return;
+      }
+      const verdict = await run;
       expect(verdict.subject).toBe(vector.subject);
       expect(contractFields(verdict)).toEqual(vector.expected);
     });
   }
-});
-
-describe("classifyRegistryLookup inputs", () => {
-  const owner = vectorFile.subjects.owner;
-  const notFound = { kind: "http", status: 404, body: '{"error":"location record not found"}' } as const;
-
-  it.each([-1, 1.5, Number.NaN, Number.MAX_SAFE_INTEGER + 1])(
-    "rejects rememberedSequence %p",
-    async (rememberedSequence) => {
-      await expect(classifyRegistryLookup(owner, notFound, { rememberedSequence })).rejects.toThrow(TypeError);
-    },
-  );
-
-  it.each(["", "did:web:example.com", "0xabc"])("rejects subject %p", async (subject) => {
-    await expect(classifyRegistryLookup(subject, notFound)).rejects.toThrow(TypeError);
-  });
 });

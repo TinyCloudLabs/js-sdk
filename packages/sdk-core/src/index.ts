@@ -1033,12 +1033,14 @@ export {
 // Three-state registry verdict (TC-1443/TC-1444). Not used by host resolution yet.
 export {
   REGISTRY_LOOKUP_MAX_BODY_BYTES,
-  REGISTRY_NOT_FOUND_ERROR,
+  REGISTRY_NOT_FOUND_BODY,
+  RegistryLookupInputError,
   classifyRegistryLookup,
   type ClassifyRegistryLookupOptions,
   type RegisteredRegistryVerdict,
   type RegistryHost,
   type RegistryHostSource,
+  type RegistryLookupInputErrorCode,
   type RegistryLookupResponse,
   type RegistryUnavailableReason,
   type RegistryVerdict,
