@@ -369,8 +369,7 @@ export async function createOrRestoreShareReceiverSession(
   let factory = options.indexedDB === undefined ? defaultIndexedDB() : options.indexedDB;
   if (subtle !== null && factory !== null) {
     try {
-      // A peer tab may have stored its key after `now` was read; judge it against a fresh clock.
-      const restored = await restorePersisted(factory, subtle, origin, options.now?.() ?? new Date(), storage);
+      const restored = await restorePersisted(factory, subtle, origin, now, storage);
       if (restored !== undefined) return restored;
     } catch {
       // Storage that cannot be read will not keep a key either.
@@ -391,7 +390,7 @@ export async function createOrRestoreShareReceiverSession(
       const record: PersistedReceiverKey = { type: "TinyCloudShareReceiverKey", version: KEY_RECORD_VERSION, ...fields, privateKey: generated.privateKey, publicKey: generated.publicKey };
       if (await persist(factory, subtle, record)) return webCryptoSession(subtle, generated.privateKey, { ...fields, custody: "persistent", credentialStorage: storage });
       // Another tab stored its key first; share it.
-      const raced = await restorePersisted(factory, subtle, origin, options.now?.() ?? new Date(), storage);
+      const raced = await restorePersisted(factory, subtle, origin, now, storage);
       if (raced !== undefined) return raced;
     } catch { /* the key stays in memory below */ }
   }
