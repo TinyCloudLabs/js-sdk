@@ -57,6 +57,8 @@
     "sign-out-ends-session",
     "tc-1312-writable-handles",
     "tc-1413-node-retry-errors",
+    "tc-1423-share-grants",
+    "tc-1423-share-root",
     "tc-1428-artifact-versions",
     "tc-841-legacy-read-gate",
     "tc-841-logout-contract",
