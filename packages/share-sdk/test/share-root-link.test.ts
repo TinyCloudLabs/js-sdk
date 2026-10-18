@@ -94,6 +94,10 @@ describe("revokeRootBearerLink", () => {
     expect(revocation.payload.exp - revocation.payload.nbf).toBe(60);
 
     await rejects(revokeRootBearerLink({ root, delegationCid: link.delegationCid, fetch: fakeNode({ receipt: () => ({ revoked: true, cid: "bafyother" }) }).fetch }), "invalid-request");
+    await rejects(revokeRootBearerLink({ root, delegationCid: link.delegationCid, fetch: fakeNode({ receipt: (cid) => ({ revoked: false, cid }) }).fetch }), "invalid-request");
     await rejects(revokeRootBearerLink({ root, delegationCid: root.cid, fetch: node.fetch }), "invalid-request");
+    for (const delegationCid of ["not-a-cid", `${link.delegationCid}\n`, link.delegationCid.toUpperCase()]) {
+      await rejects(root.signLinkRevocation({ delegationCid, nodeDid: NODE_DID }), "invalid-request");
+    }
   });
 });

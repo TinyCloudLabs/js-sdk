@@ -2,7 +2,7 @@ import { ed25519 } from "@noble/curves/ed25519";
 import { didKeyFromEd25519PublicKey, toBase64Url } from "@tinycloud/share-envelope";
 import { canonicalViewerUrl, NATIVE_SHARE_FRAGMENT_PARAMETER } from "./native.js";
 import { nodeDidOf } from "./share-network.js";
-import { ShareRootError, errorMessage, readJsonCapped, type ShareRoot } from "./share-root.js";
+import { ShareRootError, isRevokeReceiptFor, type ShareRoot } from "./share-root.js";
 
 type FetchFn = (input: URL, init?: RequestInit) => Promise<Response>;
 
@@ -90,10 +90,6 @@ export async function revokeRootBearerLink(input: { readonly root: ShareRoot; re
   const authorization = await input.root.signLinkRevocation({ delegationCid: input.delegationCid, nodeDid });
   const response = await fetchFn(new URL("/revoke", input.root.nodeOrigin), { method: "POST", redirect: "error", headers: { Authorization: authorization } });
   if (!response.ok) throw new ShareRootError("node-refused", `the Node refused the link revocation: HTTP ${response.status} ${(await response.text()).slice(0, 120)}`, { rootCid: input.root.cid });
-  let receipt: unknown;
-  try { receipt = await readJsonCapped(response); } catch (error) { throw new ShareRootError("invalid-request", `link revocation receipt is unreadable: ${errorMessage(error)}`); }
-  if (typeof receipt !== "object" || receipt === null || !("revoked" in receipt) || receipt.revoked !== true || !("cid" in receipt) || receipt.cid !== input.delegationCid) {
-    throw new ShareRootError("invalid-request", "link revocation receipt does not confirm this delegation");
-  }
+  if (!await isRevokeReceiptFor(response, input.delegationCid)) throw new ShareRootError("invalid-request", "link revocation receipt does not confirm this delegation");
   return { revoked: true, cid: input.delegationCid };
 }
