@@ -124,6 +124,19 @@ function route(host: string, path: string, handler: Handler) {
   routes.set(`/${host}${path}`, handler);
 }
 
+/**
+ * A chunked body with no Content-Length. A single `writeHead(200)` + `end(data)` is not enough:
+ * Bun 1.3.14's node:http adds a Content-Length there (Node and Bun 1.4 do not), which would make
+ * the declared-length check fire instead of the streaming check these tests are about.
+ */
+function sendChunked(...parts: Buffer[]): Handler {
+  return (_req, res) => {
+    res.writeHead(200, { "transfer-encoding": "chunked" });
+    for (const part of parts) res.write(part);
+    res.end();
+  };
+}
+
 function sendBytes(bytes: Buffer): Handler {
   return (_req, res) => {
     res.writeHead(200, { "content-length": bytes.length, "content-type": "application/octet-stream" });
@@ -386,10 +399,7 @@ describe("fetchNodeBinary", () => {
     test("a body that ends early without a declared length is caught by the pinned size", async () => {
       const archive = xz(buildTar(goodEntries()));
       const artifact = artifactFor(archive);
-      serveRelease(artifact, (_req, res) => {
-        res.writeHead(200);
-        res.end(archive.subarray(0, archive.length - 10));
-      });
+      serveRelease(artifact, sendChunked(archive.subarray(0, archive.length - 10)));
 
       await expectCode(install(artifact), "NODE_DOWNLOAD_FAILED", "truncated");
       await expectUntouched(undefined);
@@ -398,12 +408,10 @@ describe("fetchNodeBinary", () => {
     test("a body longer than the pin stops at the pinned size", async () => {
       const archive = xz(buildTar(goodEntries()));
       const artifact = artifactFor(archive);
-      serveRelease(artifact, (_req, res) => {
-        res.writeHead(200);
-        res.end(Buffer.concat([archive, Buffer.alloc(4096)]));
-      });
+      serveRelease(artifact, sendChunked(archive, Buffer.alloc(4096)));
 
-      await expectCode(install(artifact), "NODE_DOWNLOAD_TOO_LARGE");
+      // "exceeds" is the streaming cap; "declares" would be the Content-Length check.
+      await expectCode(install(artifact), "NODE_DOWNLOAD_TOO_LARGE", "exceeds");
       await expectUntouched(undefined);
     });
 
