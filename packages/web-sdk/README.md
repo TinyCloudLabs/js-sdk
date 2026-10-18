@@ -138,6 +138,47 @@ and the worker keep TC-1413's ceilings. The ledger's `tc1436Ratchet` row records
 and cannot change later. If another root-growing PR lands first, #578 re-measures
 against the new base and replaces its own row before it merges.
 
+TC-1432 (vault `etag`, `ifMatch` and opt-in `expectAad` in sdk-services, #580) landed
+after #578, so it was re-measured against master `129c7935` and sits on top of TC-1436's
+root ceilings. It raised four buckets once, by the exact bytes GitHub run 39144311690
+measured on source `83c9d75a`, identical in both jobs: the root to 1,466,908 /
+1,396,591 B (+913 / +872 over TC-1436's), first import to 51,925 / 67,138 B (+1 / -1),
+activation to 23,106 / 24,685 B (+1 / +2) and the worker to 822,044 B (+1,109 over
+TC-1413's, also `MAX_WORKER_GZIP_BYTES`). It is #580's own row, taken after a documented
+shrink attempt (see the row's `reason`). The ledger's `tc1432Ratchet` row and the
+matching optional allowance record it and cannot change later; whichever PR lands after
+it re-measures against the new base and updates its own row.
+
+TC-1424 (the share receiver's non-extractable signing key, #583) landed after #580, so
+it was re-measured against master `1d7b78fd` and sits on top of TC-1432's root ceilings.
+It raised only the root ceilings once, by the exact bytes GitHub run 39150995159
+measured on source `55145dbb`, identical in both jobs: 1,468,581 / 1,397,877 B (+1,673 /
++1,286 over TC-1432's). First import, activation, gated and the worker keep TC-1432's
+ceilings. It is #583's own row, taken after a documented shrink attempt (see the row's
+`reason`). The ledger's `tc1424Ratchet` row records it and cannot change later; whichever
+PR lands after it re-measures against the new base and updates its own row.
+
+TC-1448 (the `did:pkh` recipient guard for terminal grants in `TinyCloudNode.delegateTo`,
+#591) landed after #583, so it was re-measured against master `1c89b697` and sits on top of
+TC-1424's root ceilings. It raised only the root ceilings once, after a real shrink (it
+reuses the existing terminal-grant error string), by the exact bytes GitHub run 39159867318
+measured on `b8d13379` (master merged into the PR branch, source unchanged since
+`18b6c9fa`), identical in both jobs: 1,468,625 / 1,397,910 B (+44 / +33 over TC-1424's).
+The ledger's `tc1448Ratchet` row records them and cannot change later; whichever PR lands
+after it re-measures against the new base and updates its own row.
+
+The TC-1443 registry verdict classifier in sdk-core (#586) raised only the root
+ceilings once more, after removing a duplicate secp256k1 from the bundle. It landed
+after #591, so it was re-measured against master `70304c3d` and chains after
+TC-1448's root ceilings. Naomi approved the row as a delta over its base (+2,368 / +61
+gzip, ±50 B); GitHub run 39166751086 measured it on source `72ba295c`, identical in
+both Node jobs: 1,470,995 / 1,397,981 B, i.e. +2,370 / +71 over master's measured
+1,468,625 / 1,397,910 B. The row's ceilings are those measured bytes. First import,
+activation, the gated artifact and the worker keep TC-1432's ceilings. The ledger's
+`tc1443Ratchet` row records them and cannot change later. If another root-growing PR
+lands first, #586 re-measures against the new base and replaces its own row before
+it merges.
+
 **Ancestry pins and squash merges.** A policy row records the PR-branch commit it
 was reviewed at, and its introduction check requires that literal commit in the
 PR head. js-sdk squash-merges, so that commit is unreachable from master

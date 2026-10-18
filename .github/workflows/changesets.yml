@@ -24,7 +24,9 @@ jobs:
     name: Beta Release
     if: github.event_name == 'push' && !contains(github.event.head_commit.message, '[skip ci]')
     runs-on: ubuntu-latest
+    # actions: read lets pre-publish read earlier Release runs' logs (TC-1457).
     permissions:
+      actions: read
       contents: read
     steps:
       # The deploy key is not left in git config or ~/.ssh for install and
@@ -111,10 +113,10 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
 
-      # Push the version commit before publishing anything (TC-1095). If the
-      # push fails because master moved, stop: nothing is published, and the
-      # queued run for the newer master versions these changesets instead.
-      - name: Commit and push beta version bumps
+      # Commit the version bump locally; nothing leaves the runner until the
+      # npm check below has passed (TC-1457). The push still comes before any
+      # publish (TC-1095).
+      - name: Commit beta version bumps
         id: release
         if: steps.check.outputs.pending != '0'
         run: |
@@ -123,18 +125,12 @@ jobs:
           git add .
           if git diff --staged --quiet; then
             echo "No changes to commit"
+            echo "committed=false" >> "$GITHUB_OUTPUT"
           else
             git commit -m "chore: beta version packages [skip ci]"
-            if ! git push git@github.com:TinyCloudLabs/js-sdk.git master; then
-              echo "::error title=Version commit not pushed::Could not push to master (it has probably moved past ${GITHUB_SHA}). Nothing was published; the run for the newer commit releases these changesets."
-              exit 1
-            fi
+            echo "committed=true" >> "$GITHUB_OUTPUT"
           fi
-          # Pushed (or nothing to push): the key has no further use in this job.
-          rm -rf "$RUNNER_TEMP/release-ssh"
           echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
-        env:
-          GIT_SSH_COMMAND: ssh -F /dev/null -i ${{ runner.temp }}/release-ssh/id -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=${{ runner.temp }}/release-ssh/known_hosts -o GlobalKnownHostsFile=/dev/null
 
       - name: Setup Node for npm publish
         if: steps.check.outputs.pending != '0'
@@ -145,10 +141,33 @@ jobs:
 
       # `changeset publish` silently skips versions npm already has. Fail
       # instead when npm's copy of a current version was published before the
-      # commit that set it.
+      # commit that set it, or when an earlier run got npm to accept a version
+      # npm does not show yet (TC-1457). This runs before the push, so a stop
+      # leaves master and the pending changesets untouched.
       - name: Check npm before publishing
         if: steps.check.outputs.pending != '0'
         run: node .github/scripts/check-npm-release-provenance.mjs pre-publish
+        env:
+          # Read-only: lets the check see whether an earlier Release run already got npm to accept a version (TC-1457).
+          GH_TOKEN: ${{ github.token }}
+
+      # Push the version commit before publishing anything (TC-1095). If the
+      # push fails because master moved, stop: nothing is published, and the
+      # queued run for the newer master versions these changesets instead.
+      - name: Push beta version bumps
+        if: steps.check.outputs.pending != '0'
+        run: |
+          if [ "$COMMITTED" = true ]; then
+            if ! git push git@github.com:TinyCloudLabs/js-sdk.git master; then
+              echo "::error title=Version commit not pushed::Could not push to master (it has probably moved past ${GITHUB_SHA}). Nothing was published; the run for the newer commit releases these changesets."
+              exit 1
+            fi
+          fi
+          # Pushed (or nothing to push): the key has no further use in this job.
+          rm -rf "$RUNNER_TEMP/release-ssh"
+        env:
+          COMMITTED: ${{ steps.release.outputs.committed }}
+          GIT_SSH_COMMAND: ssh -F /dev/null -i ${{ runner.temp }}/release-ssh/id -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=${{ runner.temp }}/release-ssh/known_hosts -o GlobalKnownHostsFile=/dev/null
 
       - name: Publish beta to npm
         if: steps.check.outputs.pending != '0'
@@ -194,14 +213,23 @@ jobs:
           # publishing) were attempted. The check above fails the run instead
           # when a version npm already has was published before its version
           # commit.
-          bunx changeset publish
+          # Keep the output: npm can accept a version and show it hours later
+          # (web-sdk, TC-1457). The accepted versions are recorded in this
+          # run's log, which the next run's pre-publish reads, so a version
+          # that is accepted but not yet visible is never published again.
+          set +e
+          bunx changeset publish 2>&1 | tee "$RUNNER_TEMP/changeset-publish.log"
+          status=${PIPESTATUS[0]}
+          set -e
+          node .github/scripts/check-npm-release-provenance.mjs record-accepted "$RUNNER_TEMP/changeset-publish.log"
+          exit "$status"
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           RELEASE_SHA: ${{ steps.release.outputs.sha }}
 
       - name: Confirm npm has every current version
         if: steps.check.outputs.pending != '0'
-        run: node .github/scripts/check-npm-release-provenance.mjs post-publish
+        run: node .github/scripts/check-npm-release-provenance.mjs post-publish "$RUNNER_TEMP/changeset-publish.log"
 
       - name: Remove release deploy key
         if: always()
@@ -213,6 +241,7 @@ jobs:
     if: github.event_name == 'workflow_dispatch' && github.event.inputs.confirm == 'release'
     runs-on: ubuntu-latest
     permissions:
+      actions: read
       contents: write
     steps:
       # The deploy key is not left in git config or ~/.ssh for install and
@@ -372,9 +401,14 @@ jobs:
 
       # `changeset publish` silently skips versions npm already has. Fail
       # instead when npm's copy of a current version was published before the
-      # commit that set it.
+      # commit that set it. Recovery runs execute the script from the release
+      # commit being finished, which may predate the accepted-version record
+      # (TC-1457); only beta runs record it, so stable publishing is unchanged.
       - name: Check npm before publishing
         run: node .github/scripts/check-npm-release-provenance.mjs pre-publish
+        env:
+          # Read-only: lets the check see whether an earlier Release run already got npm to accept a version (TC-1457).
+          GH_TOKEN: ${{ github.token }}
 
       - name: Publish stable to npm
         run: |

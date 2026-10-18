@@ -176,7 +176,7 @@ describe("tc share command contract", () => {
     registerShareCommand(program);
     const share = program.commands.find((command) => command.name() === "share");
     expect(share?.commands.map((command) => command.name())).toEqual([
-      "publish", "inspect", "receive", "list", "show", "notify", "revoke",
+      "publish", "inspect", "versions", "receive", "list", "show", "notify", "revoke",
     ]);
   });
 

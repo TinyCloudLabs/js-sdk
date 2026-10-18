@@ -28,6 +28,10 @@ on:
       - "packages/sdk-services/tsconfig*.json"
       - "packages/operations/**"
       - "packages/web-sdk/**"
+      # web-sdk bundles share-sdk (and share-envelope through it), so their
+      # changes can move the web-sdk dist sizes this workflow checks.
+      - "packages/share-sdk/**"
+      - "packages/share-envelope/**"
       - ".github/scripts/**"
       - ".github/workflows/replica-e2e.yml"
       - "tests/replication-harness/**"
