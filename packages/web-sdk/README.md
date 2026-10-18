@@ -158,17 +158,14 @@ ceilings. It is #583's own row, taken after a documented shrink attempt (see the
 `reason`). The ledger's `tc1424Ratchet` row records it and cannot change later; whichever
 PR lands after it re-measures against the new base and updates its own row.
 
-The TC-1443 registry verdict classifier in sdk-core (#586) raised only the root
-ceilings once more, after removing a duplicate secp256k1 from the bundle. It landed
-after #583, so it was re-measured against master `21094959` (#584, #588, #592 and #593
-landed after #583 and are byte-neutral) and sits on top of TC-1424's root ceilings.
-Naomi approved the row as a delta over its base (+2,368 / +61 gzip, ±50 B); GitHub run
-39165100154 measured it on source `878e591f`, identical in both Node jobs: 1,470,946 /
-1,397,943 B, i.e. +2,365 / +66 over master's measured 1,468,581 / 1,397,877 B. The
-row's ceilings are those measured bytes. First import, activation, the gated artifact
-and the worker keep TC-1432's ceilings. The ledger's `tc1443Ratchet` row records them
-and cannot change later. If another root-growing PR lands first, #586 re-measures
-against the new base and replaces its own row before it merges.
+TC-1448 (the `did:pkh` recipient guard for terminal grants in `TinyCloudNode.delegateTo`,
+#591) landed after #583, so it was re-measured against master `1c89b697` and sits on top of
+TC-1424's root ceilings. It raised only the root ceilings once, after a real shrink (it
+reuses the existing terminal-grant error string), by the exact bytes GitHub run 39159867318
+measured on `b8d13379` (master merged into the PR branch, source unchanged since
+`18b6c9fa`), identical in both jobs: 1,468,625 / 1,397,910 B (+44 / +33 over TC-1424's).
+The ledger's `tc1448Ratchet` row records them and cannot change later; whichever PR lands
+after it re-measures against the new base and updates its own row.
 
 **Ancestry pins and squash merges.** A policy row records the PR-branch commit it
 was reviewed at, and its introduction check requires that literal commit in the

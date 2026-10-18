@@ -437,10 +437,37 @@
     },
     "reason": "Accountless share receivers sign with a non-extractable WebCrypto Ed25519 key whose handle is kept in IndexedDB: record validation, a multi-tab add race, compare-and-delete of stale records, removal of the earlier session-storage record, memory-only fallbacks with page-memory credentials, a page-memory fallback where session storage is blocked, sessions that stop signing at expiry or forget, and forget. The receiver is part of the web bundle, so it cannot leave the root. Ed25519 is not new bytes: @noble/curves/ed25519 was already bundled once through sdk-core and share-envelope and still is. Cuts applied first: no transaction timeout wrapper and no per-request promise helper (one transaction-completion promise instead); the local measurement went from +1499/+1265 to +1383/+1171, and CI measured +1382/+1225 on d1e4c3d3. The review fixes on 7672d834 (expiry and forget in sign, compare-and-delete, the blocked-storage fallback, credential storage chosen by the session) took CI to +1677/+1456 against 7e10709c, and +1677/+1444 against 129c7935 after #578. After #580 landed, the merge 55145dbb measured +1673/+1286 against 1d7b78fd in both Replica jobs, which this row admits; first import, activation, gated and the worker are unchanged. Not taken: a lazy import, because the web build pins LimitChunkCountPlugin({ maxChunks: 1 }) and would inline it; dropping forget, multi-tab handling, stored-record validation or the review fixes."
   },
+  "tc1448Ratchet": {
+    "label": "TC-1448 #591 terminal-grant did:pkh recipient guard, exact canonical delta",
+    "ruling": "Naomi size ruling: a real shrink first, remainder by the PR's own exact-delta row at canonical CI bytes; rows chain after the latest on master",
+    "base": "1c89b697bb37fdf5e318e533cfc96fe927b22997",
+    "sourceCommits": [
+      "18b6c9fa8c64beef0580f26d35443c29ba476d33",
+      "b8d133791ab508f9471e1510abc3055116cd933a"
+    ],
+    "canonicalCI": {
+      "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39159867318",
+      "jobs": [
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39159867318/job/117770714269",
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39159867318/job/117770714211"
+      ]
+    },
+    "root": {
+      "delta": {
+        "index.mjs": 44,
+        "index.cjs": 33
+      },
+      "ceiling": {
+        "index.mjs": 1468625,
+        "index.cjs": 1397910
+      }
+    },
+    "reason": "delegateTo, and so createDelegation and space.delegations.create, throw for disableSubDelegation: true with a did:pkh recipient, because the node refuses a wallet-mode useDelegation of a terminal parent. Shrink attempts first (same-toolchain local gzip, Bun 1.4.3, master 1d7b78fd): the first candidate added a separate 100-character error string, +74 / +55; reusing the existing TERMINAL_DELEGATION_REQUIRES_SESSION_KEY constant for the new refusal (its text now also names the did:key rule and keeps its old prefix) and one shared throw took it to +49 / +58 locally, +41 / +31 on canonical CI against the TC-1432 base. What remains is the did:pkh prefix check and the longer shared message. A lazy import would be inlined by the single-chunk root build, and the check has to run in the web root because TinyCloudWeb.createDelegation forwards to delegateTo. Re-measured after #583 (TC-1424) landed: canonical CI run 39159867318 (head b8d13379, the merge of master 1c89b697 into the PR branch; source unchanged since 18b6c9fa) measured identical absolute bytes in both jobs: root 1,468,625 / 1,397,910 B (+44 / +33 over the TC-1424 ceilings). Whichever PR lands after this one re-measures against the new base and updates its own row."
+  },
   "tc1443Ratchet": {
     "label": "TC-1443 #586 sdk-core registry verdict classifier, exact canonical delta",
-    "ruling": "TC-1443 size row for #586, approved by Naomi as a delta (+2,368/+61 gzip, ±50 B), 2026-10-18; re-measured on 21094959, following the TC-1436 (#578) size ruling pattern: a real shrink first, remainder by the PR's own exact-delta row at canonical CI bytes",
-    "base": "2109495904423052592ff0518e18cdb33786727b",
+    "ruling": "TC-1443 size row for #586, approved by Naomi as a delta (+2,368/+61 gzip, ±50 B), 2026-10-18; PLACEHOLDER numbers pending the re-measure on 70304c3d",
+    "base": "70304c3de12a8a3db323cf1271fc58698a9096b3",
     "sourceCommits": [
       "878e591f29ee04dad2ea9785121f609f3e0c81c2"
     ],
@@ -453,14 +480,14 @@
     },
     "root": {
       "delta": {
-        "index.mjs": 2365,
-        "index.cjs": 66
+        "index.mjs": 2368,
+        "index.cjs": 61
       },
       "ceiling": {
-        "index.mjs": 1470946,
-        "index.cjs": 1397943
+        "index.mjs": 1470993,
+        "index.cjs": 1397971
       }
     },
-    "reason": "sdk-core adds classifyRegistryLookup (registry-verdict.ts): a pure three-state classifier of one location registry response with its own strict JSON parser, RFC 3339 check, signature encoding rules and host-origin mapping. web-sdk does not export it; the index.mjs build still keeps the whole module, while index.cjs tree-shakes all but its module-level constants. Cut applied first: the module took secp256k1's group order from sdk-core's @noble/curves 1.9.7 while viem bundles its own 1.9.1, so the root carried a second secp256k1; a pinned literal replaced it, and CI went from +12398/+6881 on 8776001a (against 7e10709c) to +2423/+49 on 4a8ccb1a (against 129c7935). Not taken: a lazy import, because the web build pins LimitChunkCountPlugin({ maxChunks: 1 }) and would inline it; changing how the mjs build tree-shakes sdk-core, which is a web-sdk build change outside this PR. #583 (TC-1424) landed first, and #584, #588, #592 and #593 after it; this row was re-measured against master 21094959 (CI-measured at a24fc60b, run 39162127319: index.mjs 1,468,581 and index.cjs 1,397,877 B, equal to the TC-1424 ceilings) and sits on top of the TC-1424 root ceilings. Canonical CI run 39165100154 (head 878e591f, the merge of that master into source 4a8ccb1a plus this row) measured identical absolute bytes in both Node jobs: index.mjs 1,470,946 and index.cjs 1,397,943 B, i.e. +2,365 / +66 over master's measured bytes, within the approved delta of +2,368 / +61 gzip (+/-50 B). The ceilings are these measured bytes, zero headroom. Whichever PR lands after this one re-measures against the new base and updates its own row."
+    "reason": "PLACEHOLDER row pending the canonical CI re-measure on top of TC-1448."
   }
 }
