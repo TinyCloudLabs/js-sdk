@@ -199,7 +199,7 @@ describe("tc share versions", () => {
   });
 
   test("a denied listing gives the re-login hint publish gives", async () => {
-    configureShareCommandServices({ artifactStore: async () => { throw new SharePublishAuthorityError({ kind: "scope-denied", capability: "artifact storage", localKey: false, profileName: "publisher" }); } });
+    configureShareCommandServices({ artifactStore: async () => { throw new SharePublishAuthorityError({ kind: "scope-denied", capability: "artifact storage", requiredAction: "tinycloud.kv/list", localKey: false, profileName: "publisher" }); } });
     const result = await refusal(["share", "versions", "art_report", "--json"]);
     expect(result.exitCode).toBe(5);
     expect(result.stderr).toContain("auth login --device --manifest builtin:share-publishing");

@@ -503,7 +503,7 @@ const v3TargetSchema = z.object({
   nodeAudience: z.string().min(1),
   spaceId: z.string().refine(isCanonicalPathSegment, { message: "expected a canonical space id" }),
 }).strict();
-/** Artifact id as `share-sdk` mints and parses it (`assertArtifactId`); a test keeps the two in step. */
+/** Artifact id as `share-sdk` mints and parses it (`assertArtifactId`); `artifact-pin.test.ts` keeps the two in step. */
 const ARTIFACT_ID_PATTERN = /^[a-z0-9][a-z0-9_-]{2,62}$/;
 export const artifactPinSchema = z.object({
   v: z.literal(1),
@@ -515,7 +515,8 @@ export const artifactPinSchema = z.object({
   files: z.array(z.object({
     path: z.string().min(1).max(255),
     sha256: z.string().regex(/^[0-9a-f]{64}$/),
-    bytes: z.number().int().nonnegative(),
+    // The stored ciphertext of one file: bounded like content (100 MiB) plus the envelope's own framing.
+    bytes: z.number().int().nonnegative().max(128 * 1024 * 1024),
   }).strict()).length(1),
 }).strict();
 export type ArtifactPin = z.infer<typeof artifactPinSchema>;

@@ -2,7 +2,7 @@
  * Artifact pin verification (TC-1428). Small on purpose: this is the one place that decides whether an addressed
  * share that reads an artifact version may be trusted.
  *
- * What is signed. The owner signs the whole Policy/v3 envelope (Ed25519, `verifyEnvelopeV3SignatureOnly`). `artifactPin` is a
+ * What is signed. The owner signs the whole Policy/v3 envelope (Ed25519, `verifyEnvelopeV3`). `artifactPin` is a
  * field of that envelope, so the signature covers it: artifact id, version, the sha256 of the version's
  * `manifest.json`, and the sha256 and size of the one stored file the share reads. The manifest stays an owner-side
  * record; a recipient never needs to fetch it. Policy/v3 already binds the file's ciphertext digest
@@ -18,7 +18,7 @@
  * that source. A pin on any other path is refused. `artifacts/<id>/current/...` has no pin form in v1 and is refused.
  */
 import {
-  verifyEnvelopeV3SignatureOnly,
+  verifyEnvelopeV3,
   type ArtifactPin,
   type ShareEnvelopeV3,
   type UnsignedShareEnvelopeV3,
@@ -46,7 +46,12 @@ export class ArtifactPinError extends Error {
   }
 }
 
-/** What the caller already knows about the share it is opening, from outside the envelope. */
+/**
+ * What the caller already knows about the share it is opening, from outside the envelope. Optional: a v1 pinned share
+ * names its version in its own signed pin and nothing outside the link says which one to expect, so no production
+ * caller passes it. A caller that does learn a version out of band (a listing, a "newer version" link) uses it to
+ * refuse an older or different pin.
+ */
 export interface ExpectedArtifact {
   readonly artifactId?: string;
   readonly version?: number;
@@ -143,17 +148,17 @@ export function assertArtifactBinding(view: ArtifactBindingView, expected: Expec
 }
 
 /**
- * Check that the trusted owner signed this envelope (and so its pin), then the pin binding. Throws `ArtifactPinError`;
- * never returns a partial answer. Only the owner's Ed25519 signature over the envelope is checked here, because that
- * is what authenticates the pin. The rest of the envelope (policy signature, owner roots, enforcer binding) is
- * `verifyEnvelopeV3`'s job, and `resolvePolicyShare` runs both before it trusts a link.
+ * The one verification `resolvePolicyShare` runs on an addressed envelope: the trusted owner signed it (so its pin),
+ * the policy, owner roots and enforcer binding hold (`verifyEnvelopeV3`), and the pin matches what the share reads.
+ * Throws `ArtifactPinError`; never returns a partial answer. `wrong-signer` and `bad-signature` are the envelope
+ * failing, any other code is the pin.
  */
-export function verifyArtifactShare(envelope: ShareEnvelopeV3, options: VerifyArtifactShareOptions): ArtifactPin | undefined {
+export async function verifyArtifactShare(envelope: ShareEnvelopeV3, options: VerifyArtifactShareOptions): Promise<ArtifactPin | undefined> {
   if (envelope.signature.signerDid !== options.expectedOwnerDid) {
     throw new ArtifactPinError("wrong-signer");
   }
   let valid: boolean;
-  try { valid = verifyEnvelopeV3SignatureOnly(envelope) && envelope.policy.ownerDid === options.expectedOwnerDid; }
+  try { valid = await verifyEnvelopeV3(envelope, { expectedSignerDid: options.expectedOwnerDid }); }
   catch { valid = false; }
   if (!valid) throw new ArtifactPinError("bad-signature");
   return assertArtifactBinding(artifactBindingView(envelope), options.expected);
