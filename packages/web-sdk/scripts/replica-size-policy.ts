@@ -106,6 +106,12 @@ export type LogoutRatchet = {
  * worker buckets.
  */
 export type Tc1413Ratchet = HardeningRatchet;
+/**
+ * One reviewed exact-delta admission of TC-1432 (js-sdk #580): vault etag, ifMatch and expectAad in
+ * sdk-services. Same shape as the #565 hardening row, because the change moves the root, first-import,
+ * activation and worker buckets.
+ */
+export type Tc1432Ratchet = HardeningRatchet;
 export type Ledger = {
   allowance: GzipSizes;
   entries: LedgerEntry[];
@@ -116,6 +122,7 @@ export type Ledger = {
   hardeningRatchet?: HardeningRatchet;
   logoutRatchet?: LogoutRatchet;
   tc1413Ratchet?: Tc1413Ratchet;
+  tc1432Ratchet?: Tc1432Ratchet;
 };
 
 const formats = ["index.mjs", "index.cjs"] as const;
@@ -320,6 +327,40 @@ export const approvedTc1413Ratchet: Tc1413Ratchet = {
   reason: "One shared classifier (nodeRetryError in sdk-services/src/errors.ts) maps the node's 503 sql_busy / unavailable_retryable / request_timeout and 500 outcome_unknown to NODE_BUSY, REQUEST_TIMEOUT and OUTCOME_UNKNOWN for SQL, DuckDB and KV get/head/list/put/delete, replacing the 503-as-KV_CONFLICT mapping. Cuts applied first: Retry-After is read as whole seconds only (no HTTP-date parsing), one message string per error site is shared with the classifier, and the CLI messages live in the CLI only. The first CI measurement on 90bc0ae7 was worker +946, and the two cuts took it to +827. The review then required mapping the new codes in their consumers (ShareRecipientClient.redactedCode and the operations KV and personal-record failure mappers, which also dropped the dead KV_CONFLICT paths); that moved only the root, by +27/+28, so the final source is 20c29611 with root +278/+302. Run 39099093175 measured identical absolute bytes in both jobs against merge base 3ae17bfc; the worker's 820,935 and the optional deltas are unchanged from run 39095938793. No replica-owned file changed; the growth is sdk-services and sdk-core code bundled into each artifact.",
 };
 
+/**
+ * TC-1432 (js-sdk #580): the vault's `VaultEntry.etag`, `VaultPutOptions.ifMatch` and opt-in
+ * `VaultGetOptions.expectAad` are admitted at exactly the bytes GitHub measured, after a real shrink
+ * attempt, with no headroom. sdk-services is bundled into the root, the kv-storage worker and the
+ * optional first-import and activation buckets, so each moves by its measured delta from the TC-1413
+ * ceilings. Whichever of #578 / #580 lands second re-measures against the new base and updates its own row.
+ */
+export const approvedTc1432Ratchet: Tc1432Ratchet = {
+  label: "TC-1432 vault etag, ifMatch and opt-in expectAad, exact canonical delta",
+  ruling: "Naomi size ruling: after a real shrink attempt, one PR-owned exact-delta row at canonical CI bytes; worker, root, first-import and activation only, no unrelated loosening",
+  base: "7e10709c280596db0118a8fb04e7ffcd9bbe7212",
+  sourceCommits: [
+    "490cd9477da70413997bf6c6516e6123c4c7883b",
+  ],
+  canonicalCI: {
+    run: "pending",
+    jobs: [],
+  },
+  root: {
+    delta: { "index.mjs": 3000, "index.cjs": 3000 },
+    ceiling: { "index.mjs": 1467668, "index.cjs": 1398375 },
+  },
+  firstImport: {
+    delta: { "replica.mjs": 600, "replica.cjs": 600 },
+    ceiling: { "replica.mjs": 52525, "replica.cjs": 67739 },
+  },
+  activation: {
+    delta: { "activation.mjs": 600, "activation.cjs": 600 },
+    ceiling: { "activation.mjs": 23705, "activation.cjs": 25283 },
+  },
+  worker: { delta: 3000, ceiling: 823935 },
+  reason: "pending first canonical measurement",
+};
+
 /** The reviewed #553 S3 entry's source commit, as master's checker pinned it. */
 export const preexistingS3EntryCommit = "0241ba9b";
 
@@ -368,6 +409,7 @@ export function ancestryPins(root: Ledger, hasGatedOnly: boolean): Array<{ row: 
   if (root.hardeningRatchet !== undefined) pins.push({ row: "hardeningRatchet", pin: root.hardeningRatchet.sourceCommits.at(-1)! });
   if (root.logoutRatchet !== undefined) pins.push({ row: "logoutRatchet", pin: root.logoutRatchet.sourceCommits.at(-1)! });
   if (root.tc1413Ratchet !== undefined) pins.push({ row: "tc1413Ratchet", pin: root.tc1413Ratchet.sourceCommits.at(-1)! });
+  if (root.tc1432Ratchet !== undefined) pins.push({ row: "tc1432Ratchet", pin: root.tc1432Ratchet.sourceCommits.at(-1)! });
   if (hasGatedOnly) pins.push({ row: "gatedOnlyRatchet", pin: approvedGatedOnlyRatchet.sourceCommit });
   return pins;
 }
@@ -404,7 +446,7 @@ const historicalToolchain = "Bun 1.4.3; production webpack; gzip -9 -c";
 /** Only a git merge-base ledger may retain the pre-correction toolchain. */
 export function validateLedger(value: Ledger, historicalBase = false): void {
   if (!value || !value.allowance || !Array.isArray(value.entries) ||
-      Object.keys(value).some((key) => key !== "allowance" && key !== "entries" && key !== "phase2Ratchet" && key !== "fixRequiredRatchet" && key !== "canonicalToolchainCorrection" && key !== "masterMergeResolution" && key !== "hardeningRatchet" && key !== "logoutRatchet" && key !== "tc1413Ratchet")) {
+      Object.keys(value).some((key) => key !== "allowance" && key !== "entries" && key !== "phase2Ratchet" && key !== "fixRequiredRatchet" && key !== "canonicalToolchainCorrection" && key !== "masterMergeResolution" && key !== "hardeningRatchet" && key !== "logoutRatchet" && key !== "tc1413Ratchet" && key !== "tc1432Ratchet")) {
     throw new Error("Invalid packages/web-sdk/scripts/replica-size-ledger.json shape");
   }
   if (Object.keys(value.allowance).some((key) => !formats.includes(key as typeof formats[number]))) {
@@ -472,6 +514,10 @@ export function validateLedger(value: Ledger, historicalBase = false): void {
       (!value.logoutRatchet || JSON.stringify(value.tc1413Ratchet) !== JSON.stringify(approvedTc1413Ratchet))) {
     throw new Error("Only Naomi's exact canonical TC-1413 node-retry-errors ratchet is approved.");
   }
+  if (value.tc1432Ratchet !== undefined &&
+      (!value.tc1413Ratchet || JSON.stringify(value.tc1432Ratchet) !== JSON.stringify(approvedTc1432Ratchet))) {
+    throw new Error("Only Naomi's exact canonical TC-1432 vault etag/ifMatch/expectAad ratchet is approved.");
+  }
 }
 
 /** The resolved input blobs are introduced once and immutable in subsequent bases. */
@@ -505,6 +551,14 @@ export function validateTc1413RatchetTransition(base?: Tc1413Ratchet, current?: 
   if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc1413Ratchet) ||
       base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
     throw new Error("The exact TC-1413 ratchet may be introduced once and cannot change later.");
+  }
+}
+
+/** The TC-1432 ratchet is introduced once at its exact canonical bytes and immutable afterwards. */
+export function validateTc1432RatchetTransition(base?: Tc1432Ratchet, current?: Tc1432Ratchet): void {
+  if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc1432Ratchet) ||
+      base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
+    throw new Error("The exact TC-1432 ratchet may be introduced once and cannot change later.");
   }
 }
 
