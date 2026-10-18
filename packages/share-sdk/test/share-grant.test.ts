@@ -5,7 +5,7 @@ import { ADDRESS, APPLICATIONS, DAY, MINUTE, OWNER_DID, SHARE_NETWORK, fakeOwner
 import { NODE_DID, fakeNode } from "./support/fake-node.js";
 import { createDelegatedShareKey, type DelegatedShareKey } from "../src/index.js";
 import type { AddressedOwnerRootInput } from "../src/addressed-publish.js";
-import { ShareGrant, openEditShare, perShareNetworkIdFor, revokeShareGrant, type ShareGrantAccess, type ShareGrantRecord } from "../src/share-root-entry.js";
+import { ShareGrant, openEditShare, ownerRootCacaoCid, perShareNetworkIdFor, planShareControlBatches, revokeShareGrant, runShareControlBatch, type ShareGrantAccess, type ShareGrantRecord } from "../src/share-root-entry.js";
 
 const NODE = "https://node.example";
 const SHARE_ID = "0123456789abcdef0123456789abcdef";
@@ -26,6 +26,7 @@ interface GrantOptions {
   keyFactory?: () => Promise<DelegatedShareKey>;
   fetch?: (input: URL, init?: RequestInit) => Promise<Response>;
   now?: () => number;
+  resume?: boolean;
 }
 
 function request(options: GrantOptions = {}) {
@@ -43,7 +44,8 @@ function request(options: GrantOptions = {}) {
       access: options.access ?? "view",
       expiresAt: new Date((options.now ?? Date.now)() + (options.days ?? 7) * DAY),
       keyFactory: async () => { const key = await (options.keyFactory ?? (() => createDelegatedShareKey({ extractable: false })))(); keys.push(key); return key; },
-      ...(options.fetch === undefined ? {} : { fetch: options.fetch }),
+      fetch: options.fetch ?? fakeNode().fetch,
+      ...(options.resume === undefined ? {} : { resumeExistingNetwork: options.resume }),
       ...(options.now === undefined ? {} : { now: options.now }),
     },
   };
@@ -119,6 +121,7 @@ describe("ShareGrant.prepare and approve", () => {
       [{ path: `xyz.tinycloud.share/shares/${SHARE_ID}/sub/a.md` }, "invalid-request"],
       [{ path: `xyz.tinycloud.share/shares/${SHARE_ID}/` }, "invalid-request"],
       [{ path: "xyz.tinycloud.share/artifacts/abc123/versions/x/report.md" }, "invalid-request"],
+      [{ path: "xyz.tinycloud.share/artifacts/abc123/versions/2/report.md", access: "edit" }, "invalid-request"],
       [{ access: "admin" as ShareGrantAccess }, "invalid-request"],
       [{ days: 31 }, "lifetime-exceeds-cap"],
     ] as [GrantOptions, string][]) {
@@ -129,6 +132,24 @@ describe("ShareGrant.prepare and approve", () => {
     }
   });
 
+  it("refuses a reused or burned shareId before the prompt; key-gone recovery may resume an active network only", async () => {
+    const node = fakeNode();
+    node.networks.set(NETWORK, { networkId: NETWORK, name: `share-${SHARE_ID}`, ownerDid: OWNER_DID, alg: "x25519-aes256gcm/v1", keyVersion: 1, threshold: { n: 1, t: 1 }, state: "active" });
+    for (const [state, resume] of [["active", undefined], ["revoked", undefined], ["revoked", true]] as [string, boolean | undefined][]) {
+      node.networks.get(NETWORK)!.state = state;
+      const { owner, keys, input } = request({ fetch: node.fetch, ...(resume === undefined ? {} : { resume }) });
+      await rejects(ShareGrant.prepare(input), "share-id-in-use");
+      expect(owner.calls).toHaveLength(0);
+      expect(keys).toHaveLength(0);
+    }
+    node.networks.get(NETWORK)!.state = "active";
+    const resumed = request({ fetch: node.fetch, resume: true });
+    const grant = await ShareGrant.create(resumed.input);
+    expect(resumed.owner.calls).toHaveLength(1);
+    expect(await grant.ensureNetwork()).toBe(NETWORK);
+    expect(node.requests.filter((entry) => entry.method === "POST")).toHaveLength(0);
+  });
+
   it("discard clears the key without a prompt", async () => {
     const { owner, keys, input } = request();
     const pending = await ShareGrant.prepare(input);
@@ -136,6 +157,25 @@ describe("ShareGrant.prepare and approve", () => {
     await expect(keys[0]!.sign(new Uint8Array([1]))).rejects.toThrow("cleared");
     await rejects(pending.approve(), "invalid-request");
     expect(owner.calls).toHaveLength(0);
+  });
+
+  it("on a CID mismatch reports the imported CID and the signed bytes' CID, and asks for a revoke", async () => {
+    const imported = "bafkr4ibsw5yjl7ffzhpn53mf6h53yc7mozvvpifsg2jw7r4pzivjnrlrpa";
+    const { keys, input } = request({ tamper: { cid: imported } });
+    const error = await rejects(ShareGrant.create(input), "malformed-root");
+    expect(error.rootCid).toBe(imported);
+    expect(error.signedCid).toBeString();
+    expect(error.signedCid).not.toBe(imported);
+    expect(error.mustRevoke).toBe(true);
+    await expect(keys[0]!.sign(new Uint8Array([1]))).rejects.toThrow("cleared");
+  });
+
+  it("a policy root may expire exactly with the grant, not one second later", async () => {
+    const { grant } = await createGrant();
+    const signer = grant.policySigner();
+    const capabilities: AddressedOwnerRootInput["capabilities"] = [{ kind: "kv", resource: RESOURCE, selector: "exact", actions: VIEW }];
+    await expect(signer.createOwnerRoot({ ...policyRoot(grant, capabilities), expiresAt: new Date(grant.expiresAt.getTime()) })).resolves.toMatchObject({ cid: expect.any(String) });
+    await rejects(signer.createOwnerRoot({ ...policyRoot(grant, capabilities), expiresAt: new Date(grant.expiresAt.getTime() + 1000) }), "lifetime-exceeds-cap");
   });
 
   it.each([
@@ -200,6 +240,7 @@ describe("ShareGrant network lifecycle", () => {
     ["another key version", { keyVersion: 2 }],
     ["another owner", { ownerDid: "did:pkh:eip155:1:0x0000000000000000000000000000000000000001" }],
     ["another name", { name: `share-${OTHER_ID}` }],
+    ["another network id", { networkId: OTHER_NETWORK }],
   ] as [string, Record<string, unknown>][])("refuses a network that is %s, and never re-creates it", async (_case, patch) => {
     const node = fakeNode();
     const { grant } = await createGrant({ fetch: node.fetch });
@@ -229,6 +270,12 @@ describe("ShareGrant network lifecycle", () => {
     const node = fakeNode({ override: (entry) => entry.method === "POST" && entry.path.endsWith("/revoke") ? new Response("forbidden", { status: 403 }) : undefined });
     const { grant } = await createGrant({ fetch: node.fetch });
     await grant.ensureNetwork();
+    await rejects(grant.retireNetwork(), "node-refused");
+  });
+
+  it("retireNetwork does not count a refused retire of a never-created network as done", async () => {
+    const node = fakeNode({ override: (entry) => entry.method === "POST" && entry.path.endsWith("/revoke") ? new Response("forbidden", { status: 403 }) : undefined });
+    const { grant } = await createGrant({ fetch: node.fetch });
     await rejects(grant.retireNetwork(), "node-refused");
   });
 
@@ -304,6 +351,13 @@ describe("revokeShareGrant", () => {
     expect(error.message).toContain("decrypt cut");
     expect(node.networks.get(NETWORK)!.state).toBe("revoked");
   });
+
+  it("does not count a receipt for another CID", async () => {
+    const node = fakeNode({ override: (entry) => entry.method === "POST" && entry.path === "/revoke" ? new Response(JSON.stringify({ revoked: true, cid: "bafkr4iother" }), { headers: { "content-type": "application/json" } }) : undefined });
+    const { grant } = await createGrant({ fetch: node.fetch });
+    await grant.ensureNetwork();
+    await rejects(revokeShareGrant({ grant, owner: { signOwnerRevocation: async (cid) => cid }, fetch: node.fetch }), "grant-revoke-incomplete");
+  });
 });
 
 describe("openEditShare", () => {
@@ -324,5 +378,57 @@ describe("openEditShare", () => {
     await rejects(openEditShare({ owner, record, lifetimeMs: 61 * MINUTE }), "lifetime-exceeds-cap");
     await rejects(openEditShare({ owner, record: { ...record, networkId: OTHER_NETWORK } }), "invalid-request");
     expect(owner.calls).toHaveLength(1);
+  });
+
+  it("an undecodable reader grant is refused with the imported CID and a revoke prompt", async () => {
+    const bytes = new Uint8Array([0xa1, 0x61, 0x68, 0x01]);
+    const owner = { ownerDid: OWNER_DID, createOwnerDelegation: async () => ({ delegationCid: ownerRootCacaoCid(bytes), signedDagCbor: bytes, delegation: { delegateDID: "", spaceId: APPLICATIONS, path: "", actions: [], expiry: new Date() } }) };
+    const error = await rejects(openEditShare({ owner, record: { spaceId: APPLICATIONS, ownerDid: OWNER_DID, shareId: SHARE_ID, networkId: NETWORK, path: PATH } }), "malformed-root");
+    expect(error.rootCid).toBe(ownerRootCacaoCid(bytes));
+    expect(error.mustRevoke).toBe(true);
+  });
+});
+
+describe("crash, retry and key-gone recovery", () => {
+  const restoreAfterCrash = async (grant: ShareGrant, key: DelegatedShareKey, fetch: (input: URL, init?: RequestInit) => Promise<Response>) => ShareGrant.restore({ record: JSON.parse(JSON.stringify(grant.toRecord())) as ShareGrantRecord, key, fetch });
+
+  it("a CLI that crashed after the approval, or after the network, resumes with no approval and one network", async () => {
+    const node = fakeNode();
+    const { owner, keys, grant } = await createGrant({ fetch: node.fetch });
+    // Crash between steps 2 and 3: the record and key file were written; the network was never created.
+    const resumed = await restoreAfterCrash(grant, keys[0]!, node.fetch);
+    expect(await resumed.ensureNetwork()).toBe(NETWORK);
+    // Crash between steps 3 and 4: resume again; the network is reused, not re-created.
+    const again = await restoreAfterCrash(grant, keys[0]!, node.fetch);
+    expect(await again.ensureNetwork()).toBe(NETWORK);
+    expect(node.requests.filter((entry) => entry.method === "POST" && entry.path === "/encryption/networks")).toHaveLength(1);
+    expect(owner.calls).toHaveLength(1);
+    // Retrying from step 0 with the same shareId is refused before any prompt.
+    const retry = request({ fetch: node.fetch });
+    await rejects(ShareGrant.prepare(retry.input), "share-id-in-use");
+    expect(retry.owner.calls).toHaveLength(0);
+  });
+
+  it("with the key gone, a pending row is retired by network name, and a granted row's grant is revoked once its CID is known", async () => {
+    const receipts = (entry: { method: string; path: string; authorization?: string }) => entry.method === "POST" && entry.path === "/revoke"
+      ? new Response(JSON.stringify({ revoked: true, cid: Object.keys(verifyCompactUcanAuthorization(entry.authorization!).payload.att)[0]!.slice("urn:cid:".length) }), { headers: { "content-type": "application/json" } })
+      : entry.method === "POST" && entry.path === "/delegate" ? new Response("{}", { status: 200 }) : undefined;
+    const node = fakeNode({ override: receipts });
+    const wallet = { ownerDid: OWNER_DID, domain: "share.example", signMessage: async () => `0x${"11".repeat(65)}` };
+    // Browser: the pending row was written, the key died with the tab before the approval resolved.
+    const pending = await ShareGrant.prepare(request({ fetch: node.fetch }).input);
+    const pendingRow = pending.row;
+    pending.discard();
+    // Another share got as far as its network, then lost its key: its row has the grant CID.
+    const other = await createGrant({ fetch: node.fetch, shareId: OTHER_ID, path: `xyz.tinycloud.share/shares/${OTHER_ID}/a.md` });
+    await other.grant.ensureNetwork();
+    const grantedRow = other.grant.row("network");
+    other.grant.clear();
+
+    const targets = [pendingRow, grantedRow].map((row) => ({ networkId: row.networkId, ...(row.grantCid === undefined ? {} : { grantCid: row.grantCid }) }));
+    const [batch] = planShareControlBatches({ owner: wallet, targets, spaceIds: [APPLICATIONS] });
+    const result = await runShareControlBatch({ owner: wallet, nodeOrigin: NODE, batch: batch!, fetch: node.fetch });
+    expect(result.networks).toEqual([{ networkId: NETWORK, result: "absent" }, { networkId: OTHER_NETWORK, result: "retired" }]);
+    expect(result.grants).toEqual([{ grantCid: other.grant.cid, result: "revoked", status: 200 }]);
   });
 });

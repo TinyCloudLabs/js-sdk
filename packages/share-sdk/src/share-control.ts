@@ -2,8 +2,8 @@ import { signCompactUcanAuthorization, toBase64Url } from "@tinycloud/share-enve
 import { keccak_256 } from "@noble/hashes/sha3";
 import { ownerRootCacaoCid } from "./owner-root-cacao.js";
 import { createDelegatedShareKey, type DelegatedShareKey } from "./owner-policy.js";
-import { NETWORK_REVOKE_ABILITY, nodeDidOf, parseOwnerNetworkUrn, retireShareNetwork } from "./share-network.js";
-import { ShareRootError, errorMessage, parseOwnerDid, requireNodeOrigin, sameOwner, seconds, type Owner } from "./share-root.js";
+import { NETWORK_REVOKE_ABILITY, isPerShareNetworkOf, nodeDidOf, retireShareNetwork } from "./share-network.js";
+import { ShareRootError, errorMessage, isRevokeReceiptFor, parseOwnerDid, requireNodeOrigin, sameOwner, seconds, type Owner } from "./share-root.js";
 
 /**
  * Largest `Authorization` value an owner control may carry. Measured on the
@@ -186,43 +186,67 @@ function headerBytesOf(owner: Owner, domain: string, targets: readonly ShareCont
   return headerLength(signedControlBytes(payload, new Uint8Array(65)).length);
 }
 
+const CONTROL_DOMAIN = /^[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)*(?::\d{1,5})?$/;
+const CONTROL_SPACE_ROW = /^tinycloud:pkh:eip155:([1-9]\d*):(0x[0-9a-fA-F]{40}):([A-Za-z0-9_-]+)\/delegation$/;
+const GRANT_CID = /^b[a-z2-7]{20,}$/;
+
+/**
+ * Every string that reaches the wallet message or the Node, checked in plan
+ * AND run, before any key is made or the owner is asked. Targets must be
+ * this owner's per-share networks exactly (`share-<network-safe shareId>`,
+ * canonical lowercase): a control never names `:default` (vault and
+ * secrets), `:share`, `:vault` or any other network, because a retire is
+ * permanent.
+ */
+function assertControlInputs(ownerDid: string, owner: Owner, domain: string, targets: readonly ShareControlTarget[], spaceDelegationResources: readonly string[]): void {
+  if (typeof domain !== "string" || !CONTROL_DOMAIN.test(domain)) throw new ShareRootError("invalid-request", "control domain must be a host name, optionally with a port");
+  const seenRows = new Set<string>();
+  for (const row of spaceDelegationResources) {
+    const match = typeof row === "string" ? CONTROL_SPACE_ROW.exec(row) : null;
+    if (match === null || !sameOwner({ chainId: match[1]!, address: match[2]!.toLowerCase() }, owner)) throw new ShareRootError("control-target-invalid", "control space rows must be <owner space>/delegation");
+    if (seenRows.has(row)) throw new ShareRootError("control-target-invalid", "control space rows must not repeat");
+    seenRows.add(row);
+  }
+  const seen = new Set<string>();
+  for (const target of targets) {
+    if (!isPerShareNetworkOf(ownerDid, target.networkId)) throw new ShareRootError("control-target-invalid", "control targets must be this owner's per-share networks (share-<shareId>)");
+    if (target.grantCid !== undefined && (typeof target.grantCid !== "string" || !GRANT_CID.test(target.grantCid))) throw new ShareRootError("control-target-invalid", "control target grant CID is invalid");
+    if (seen.has(target.networkId)) throw new ShareRootError("control-target-invalid", "control targets must not repeat a network");
+    seen.add(target.networkId);
+  }
+}
+
 /**
  * Split a kill-all into owner controls (one approval each), sized by the
  * exact `Authorization` bytes of each signed control, never above
- * `budgetBytes` (default {@link SHARE_CONTROL_HEADER_BUDGET_BYTES}). The
- * first batch also carries `<space>/delegation` for each of `spaceIds`.
- * `createOwnerDelegation` cannot express these rows (and caps a delegation
- * at 16 permissions), so controls are built here.
+ * `budgetBytes` (default {@link SHARE_CONTROL_HEADER_BUDGET_BYTES}).
+ *
+ * EVERY control carries the same `<space>/delegation` row for each of
+ * `spaceIds`: a grant's kv row is revoked through the `applications` row,
+ * and Nodes that accept control revokes (v1.20.6, NODE-B2 N4') need it in
+ * the control that revokes that grant. The `default` row covers agent roots
+ * and their links. `createOwnerDelegation` cannot express these rows (and
+ * caps a delegation at 16 permissions), so controls are built here.
+ *
+ * Targets are restricted to this owner's per-share networks
+ * (`control-target-invalid` otherwise), checked before anything is signed.
  */
 export function planShareControlBatches(input: {
   readonly owner: Pick<ShareControlOwner, "ownerDid" | "domain">;
   readonly targets: readonly ShareControlTarget[];
-  /** Spaces whose delegations the first control may revoke (e.g. the owner's `applications` and `default`). */
+  /** Spaces whose delegations every control may revoke (e.g. the owner's `applications` and `default`). */
   readonly spaceIds?: readonly string[];
   readonly budgetBytes?: number;
 }): ShareControlBatch[] {
   const owner = parseOwnerDid(input.owner.ownerDid);
   const budget = input.budgetBytes ?? SHARE_CONTROL_HEADER_BUDGET_BYTES;
   if (!Number.isSafeInteger(budget) || budget <= 0 || budget > SHARE_CONTROL_HEADER_BUDGET_BYTES) throw new ShareRootError("invalid-request", `control budget must be 1..${SHARE_CONTROL_HEADER_BUDGET_BYTES} bytes`);
-  if (!/^[A-Za-z0-9.-]+(:\d+)?$/.test(input.owner.domain)) throw new ShareRootError("invalid-request", "control domain must be a host");
-  const spaceRows = (input.spaceIds ?? []).map((spaceId) => {
-    const match = /^tinycloud:pkh:eip155:([1-9]\d*):(0x[0-9a-fA-F]{40}):([A-Za-z0-9_-]+)$/.exec(spaceId);
-    if (match === null || !sameOwner({ chainId: match[1]!, address: match[2]!.toLowerCase() }, owner)) throw new ShareRootError("invalid-request", "control spaces must be the owner's");
-    return `${spaceId}/delegation`;
-  });
-  const seen = new Set<string>();
-  for (const target of input.targets) {
-    const network = parseOwnerNetworkUrn(target.networkId);
-    if (network === undefined || !sameOwner(network.owner, owner)) throw new ShareRootError("invalid-request", "control targets must be the owner's networks");
-    if (seen.has(target.networkId)) throw new ShareRootError("invalid-request", "control targets must not repeat a network");
-    seen.add(target.networkId);
-  }
+  const rows = (input.spaceIds ?? []).map((spaceId) => `${spaceId}/delegation`);
+  assertControlInputs(input.owner.ownerDid, owner, input.owner.domain, input.targets, rows);
 
   const batches: ShareControlBatch[] = [];
   let current: ShareControlTarget[] = [];
-  let rows = spaceRows;
-  let size = rows.length === 0 ? 0 : headerBytesOf(owner, input.owner.domain, [], rows);
-  if (size > budget) throw new ShareRootError("invalid-request", "the space rows alone exceed the control budget");
+  let size = 0;
   for (const target of input.targets) {
     const next = headerBytesOf(owner, input.owner.domain, [...current, target], rows);
     if (next <= budget) {
@@ -230,14 +254,19 @@ export function planShareControlBatches(input: {
       size = next;
       continue;
     }
-    if (current.length === 0 && rows.length === 0) throw new ShareRootError("invalid-request", "one target exceeds the control budget");
+    if (current.length === 0) throw new ShareRootError("invalid-request", "one target and the space rows exceed the control budget");
     batches.push({ targets: current, spaceDelegationResources: rows, headerBytes: size });
-    rows = [];
     current = [target];
     size = headerBytesOf(owner, input.owner.domain, current, rows);
-    if (size > budget) throw new ShareRootError("invalid-request", "one target exceeds the control budget");
+    if (size > budget) throw new ShareRootError("invalid-request", "one target and the space rows exceed the control budget");
   }
-  if (current.length > 0 || rows.length > 0) batches.push({ targets: current, spaceDelegationResources: rows, headerBytes: size });
+  if (current.length > 0) {
+    batches.push({ targets: current, spaceDelegationResources: rows, headerBytes: size });
+  } else if (rows.length > 0) {
+    size = headerBytesOf(owner, input.owner.domain, [], rows);
+    if (size > budget) throw new ShareRootError("invalid-request", "the space rows alone exceed the control budget");
+    batches.push({ targets: [], spaceDelegationResources: rows, headerBytes: size });
+  }
   return batches;
 }
 
@@ -261,12 +290,22 @@ export interface ShareControlResult {
 }
 
 /**
- * Run one planned control (one approval): sign it to a fresh throwaway key,
- * import it (`POST /delegate`), retire EVERY target network first (decrypt
- * is cut for everyone at the next request), then revoke each known grant
- * through the control. With `revokeFallback`, a grant the Node refuses to
- * revoke through the control is revoked by the owner directly (one approval
- * each). The throwaway key is cleared before returning.
+ * Run one control (one approval): sign it to a fresh throwaway key, import
+ * it (`POST /delegate`), retire EVERY target network first (decrypt is cut
+ * for everyone at the next request), then revoke each known grant through
+ * the control. A revoke counts only with a `{ revoked: true, cid }` receipt
+ * for that grant. With `revokeFallback`, a grant the Node refuses to revoke
+ * through the control (1.21.0 refuses it for decrypt-bearing grants) is
+ * revoked by the owner directly (one approval each). The throwaway key is
+ * cleared before returning.
+ *
+ * The batch is checked again here (targets, space rows, domain, and the
+ * byte budget on the real values) before the owner is asked, so a stored or
+ * hand-built batch gets the same checks as a planned one.
+ *
+ * A grant is revoked even if its network's retire failed: re-run (the same
+ * batch, or a new plan for the leftovers) until every network is `retired`
+ * or `absent`. Re-runs are idempotent.
  */
 export async function runShareControlBatch(input: {
   readonly owner: ShareControlOwner;
@@ -282,6 +321,8 @@ export async function runShareControlBatch(input: {
   const nodeOrigin = requireNodeOrigin(input.nodeOrigin);
   const owner = parseOwnerDid(input.owner.ownerDid);
   const { batch } = input;
+  assertControlInputs(input.owner.ownerDid, owner, input.owner.domain, batch.targets, batch.spaceDelegationResources);
+  if (batch.targets.length === 0 && batch.spaceDelegationResources.length === 0) throw new ShareRootError("invalid-request", "control batch is empty");
   const key = await (input.keyFactory ?? (() => createDelegatedShareKey({ extractable: false })))();
   try {
     const now = clock();
@@ -323,18 +364,18 @@ export async function runShareControlBatch(input: {
         sign: signer.sign,
       });
       const response = await fetchFn(new URL("/revoke", nodeOrigin), { method: "POST", redirect: "error", headers: { Authorization: invocation.authorization } });
-      await response.body?.cancel();
-      if (response.ok) {
-        grants.push({ grantCid: target.grantCid, result: "revoked", status: response.status });
+      const status = response.status;
+      if (await isRevokeReceiptFor(response, target.grantCid)) {
+        grants.push({ grantCid: target.grantCid, result: "revoked", status });
         continue;
       }
       if (input.revokeFallback === undefined) {
-        grants.push({ grantCid: target.grantCid, result: "refused", status: response.status });
+        grants.push({ grantCid: target.grantCid, result: "refused", status });
         continue;
       }
       const fallback = await fetchFn(new URL("/revoke", nodeOrigin), { method: "POST", redirect: "error", headers: { Authorization: await input.revokeFallback.signOwnerRevocation(target.grantCid) } });
-      await fallback.body?.cancel();
-      grants.push({ grantCid: target.grantCid, result: fallback.ok ? "revoked-by-owner" : "refused", status: fallback.status });
+      const fallbackStatus = fallback.status;
+      grants.push({ grantCid: target.grantCid, result: await isRevokeReceiptFor(fallback, target.grantCid) ? "revoked-by-owner" : "refused", status: fallbackStatus });
     }
     return { controlCid, networks, grants };
   } finally {

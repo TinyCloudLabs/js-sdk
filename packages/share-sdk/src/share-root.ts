@@ -52,7 +52,9 @@ export type ShareRootErrorCode =
   | "share-id-not-network-safe"
   | "network-not-active"
   | "node-refused"
-  | "grant-revoke-incomplete";
+  | "grant-revoke-incomplete"
+  | "share-id-in-use"
+  | "control-target-invalid";
 
 export interface ShareRootErrorDetails {
   /** The delegation CID the Node imported (the receipt's), when the owner already signed. */
@@ -102,7 +104,7 @@ export interface ShareRootRecord {
   /** The Node the root was created against. */
   readonly nodeOrigin: string;
   readonly cid: string;
-  /** Base64url of the exact owner-signed CACAO bytes. */
+  /** Base64url (unpadded) of the exact owner-signed CACAO bytes. */
   readonly authorization: string;
   readonly spaceId: string;
   readonly ownerDid: string;
@@ -310,6 +312,20 @@ export async function readJsonCapped(response: Response): Promise<unknown> {
   return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
 }
 
+/**
+ * True only for a `POST /revoke` answer that is OK and confirms exactly
+ * `cid` (`{ revoked: true, cid }`); an HTTP status alone never counts.
+ */
+export async function isRevokeReceiptFor(response: Response, cid: string): Promise<boolean> {
+  if (!response.ok) {
+    await response.body?.cancel();
+    return false;
+  }
+  let receipt: unknown;
+  try { receipt = await readJsonCapped(response); } catch { return false; }
+  return typeof receipt === "object" && receipt !== null && "revoked" in receipt && receipt.revoked === true && "cid" in receipt && receipt.cid === cid;
+}
+
 /** The facts and attenuation of a Policy/v3 owner root, identical to node-sdk `createUnifiedOwnerRoot`. */
 function policyRootContents(input: AddressedOwnerRootInput): { facts: Record<string, string>; attenuation: Record<string, Record<string, readonly Record<string, unknown>[]>> } {
   const facts: Record<string, string> = {
@@ -511,7 +527,11 @@ export class ShareRoot {
     return new ShareRoot({ kind: record.kind, nodeOrigin, cid: decoded.cid, ownerDid: record.ownerDid, spaceId: record.spaceId, ...times, authorization, key: input.key, options });
   }
 
-  /** The `Authorization` value the Node knows this root by (base64url CACAO). */
+  /**
+   * This root's CACAO as base64url, UNPADDED (the record form). As a Node
+   * `Authorization` header it must be padded to a multiple of 4 characters:
+   * the Node refuses an unpadded value otherwise.
+   */
   get authorization(): string {
     return toBase64Url(this.#authorization);
   }

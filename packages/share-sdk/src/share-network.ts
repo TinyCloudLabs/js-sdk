@@ -35,6 +35,20 @@ export function perShareNetworkIdFor(ownerDid: string, shareId: string): string 
   return `urn:tinycloud:encryption:did:pkh:eip155:${owner.chainId}:${owner.address}:${SHARE_NETWORK_NAME_PREFIX}${shareId}`;
 }
 
+/**
+ * True only when `networkId` is exactly `perShareNetworkIdFor(ownerDid, <a
+ * network-safe shareId>)`: the canonical lowercase spelling of one of this
+ * owner's per-share networks. `:default`, `:share`, `:vault` or any other
+ * name, another owner, mixed case or anything non-ASCII is false.
+ */
+export function isPerShareNetworkOf(ownerDid: string, networkId: string): boolean {
+  const parsed = typeof networkId === "string" ? parseOwnerNetworkUrn(networkId) : undefined;
+  if (parsed === undefined) return false;
+  const shareId = parsed.name.slice(SHARE_NETWORK_NAME_PREFIX.length);
+  if (!NETWORK_SAFE_SHARE_ID.test(shareId)) return false;
+  return networkId === perShareNetworkIdFor(ownerDid, shareId);
+}
+
 /** A did:pkh-owned network URN, parsed; `undefined` for anything else. */
 export function parseOwnerNetworkUrn(urn: string): { readonly owner: Owner; readonly name: string } | undefined {
   const match = typeof urn === "string" ? NETWORK_URN.exec(urn) : null;

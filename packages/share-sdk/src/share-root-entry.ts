@@ -10,20 +10,23 @@
 //   `share-<shareId>`. Creating that network (`ensureNetwork`), policy
 //   registration (`publishAuthority`) and retiring the network
 //   (`retireNetwork`) while the key is held: 0. A shareId that is not
-//   network-safe fails before the prompt: 0.
+//   network-safe, or whose network already exists or was retired, fails
+//   before the prompt: 0.
 // - Owner read-back of an edit share (`openEditShare`): 1, key lives <= 1 h.
 // - Revoke one share (`revokeShareGrant`): 0 to retire its network, then 1
 //   owner SIWE for the grant. One root or link: 1 owner SIWE each.
 // - Kill-all (`planShareControlBatches` + `runShareControlBatch`): 1 per
-//   control. Controls are sized by bytes: each signed `Authorization` value
-//   stays within SHARE_CONTROL_HEADER_BUDGET_BYTES (30,000; the production
-//   ingress refuses values above 32,751 bytes), which fits 34 shares per
-//   control (35 with no space rows). The first control also names the
-//   `applications`/`default` delegation rows (roots and links). Node 1.21.0
-//   refuses control revokes of decrypt-bearing grants (v1.20.6 and NODE-B2
-//   N4' accept them): each such grant then needs 1 owner SIWE
-//   (`revokeFallback`); the networks are retired first either way, so
-//   decrypt is cut before any grant revoke.
+//   control. Controls name only per-share networks (never `:default`,
+//   `:share` or any other network) and are sized by bytes: each signed
+//   `Authorization` value stays within SHARE_CONTROL_HEADER_BUDGET_BYTES
+//   (30,000; the production ingress refuses values above 32,751 bytes),
+//   which fits 34 shares per control with the `applications`/`default`
+//   delegation rows. Every control carries those rows, so on v1.20.6 and
+//   NODE-B2 N4' a kill-all of L shares costs ceil(L/34) approvals (measured
+//   live across two controls). Node 1.21.0 and N1b refuse control revokes of
+//   decrypt-bearing grants: each such grant then needs 1 more owner SIWE
+//   (`revokeFallback`), so L shares cost ceil(L/34) + L. The networks are
+//   retired first either way, so decrypt is cut before any grant revoke.
 export {
   AGENT_SHARE_ROOT_MAX_LIFETIME_MS, SHARE_ROOT_CLOCK_SKEW_MS, SHARE_ROOT_LINK_MAX_LIFETIME_MS, SHARE_ROOT_MAX_LIFETIME_MS, SHARE_ROOT_PREFIX,
   SHARE_ROOT_REQUEST_MARGIN_MS, ShareRoot, ShareRootError, ensureShareRoot,
