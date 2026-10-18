@@ -15,6 +15,13 @@
       "require": "./dist/index.cjs",
       "default": "./dist/index.js"
     },
+    "./share-root": {
+      "types": "./dist/share-root.d.ts",
+      "browser": "./dist/share-root.js",
+      "import": "./dist/share-root.js",
+      "require": "./dist/share-root.cjs",
+      "default": "./dist/share-root.js"
+    },
     "./package.json": "./package.json"
   },
   "sideEffects": false,
