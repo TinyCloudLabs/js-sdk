@@ -149,13 +149,14 @@ shrink attempt (see the row's `reason`). The ledger's `tc1432Ratchet` row and th
 matching optional allowance record it and cannot change later; whichever PR lands after
 it re-measures against the new base and updates its own row.
 
-TC-1448 (the `did:pkh` recipient guard for terminal grants in `TinyCloudNode.delegateTo`,
-#591) raised only the root ceilings, after a real shrink (it reuses the existing
-terminal-grant error string), by the exact bytes GitHub run 39151721052 measured on
-source `18b6c9fa`, in both jobs, against master `1d7b78fd`: to 1,466,949 / 1,396,622 B
-(+41 / +31 over TC-1432's). The ledger's `tc1448Ratchet` row records them and cannot
-change later; it sits on top of `tc1432Ratchet`, and whichever PR lands after it
-re-measures against the new base and updates its own row.
+TC-1424 (the share receiver's non-extractable signing key, #583) landed after #580, so
+it was re-measured against master `1d7b78fd` and sits on top of TC-1432's root ceilings.
+It raised only the root ceilings once, by the exact bytes GitHub run 39150995159
+measured on source `55145dbb`, identical in both jobs: 1,468,581 / 1,397,877 B (+1,673 /
++1,286 over TC-1432's). First import, activation, gated and the worker keep TC-1432's
+ceilings. It is #583's own row, taken after a documented shrink attempt (see the row's
+`reason`). The ledger's `tc1424Ratchet` row records it and cannot change later; whichever
+PR lands after it re-measures against the new base and updates its own row.
 
 **Ancestry pins and squash merges.** A policy row records the PR-branch commit it
 was reviewed at, and its introduction check requires that literal commit in the
