@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, mock } from "bun:test";
+import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -44,6 +45,7 @@ let historyMissingProfileName: string | undefined;
 let historyOnSign: (() => void) | undefined;
 let historyResolvedProfile: string | undefined;
 let uploadErrorCode: string | undefined;
+let listErrorCode: string | undefined;
 let uploadErrorMeta: Record<string, unknown> | undefined;
 let sessionExpiresAt = "2099-01-01T00:00:00.000Z";
 let authenticationError: unknown;
@@ -174,7 +176,9 @@ const node = {
         ? { ok: false as const, error: { code: "KV_NOT_FOUND", message: "missing", service: "kv" } }
         : { ok: true as const, data: { data: value.slice(), headers: {} } };
     },
-    list: async (options: { readonly prefix: string }) => ({ ok: true as const, data: { keys: [...ownerKv.keys()].filter((key) => key.startsWith(options.prefix)) } }),
+    list: async (options: { readonly prefix: string }) => listErrorCode === undefined
+      ? { ok: true as const, data: { keys: [...ownerKv.keys()].filter((key) => key.startsWith(options.prefix)) } }
+      : { ok: false as const, error: { code: listErrorCode, message: "denied", service: "kv", meta: { status: 401, requiredAction: "tinycloud.kv/list" } } },
   }),
   sharing: {
     generate: async ({ expiry }: { readonly expiry: Date }) => ({ ok: true, data: { token: "opaque-share-token", delegation: { cid: "bafy-native-share" }, expiresAt: expiry } }),
@@ -281,6 +285,7 @@ afterEach(() => {
   nodeInfoStatus = 200;
   nodeInfoRequests.length = 0;
   uploadErrorCode = undefined;
+  listErrorCode = undefined;
   uploadErrorMeta = undefined;
   uploadedSpaces.length = 0;
   historyCacheDir = undefined;
@@ -805,7 +810,7 @@ describe("TinyCloud share authority adapter", () => {
         .rejects.toMatchObject({ failure: { kind: "scope-denied", capability: "KV upload", requiredAction: "tinycloud.kv/put" } });
     });
 
-    it("pins an addressed share to the encrypted version file and reuses that ciphertext for unchanged content", async () => {
+    it("pins an addressed share to the encrypted version file; each encryption is its own version and no plaintext digest is stored", async () => {
       const adapter = addressedAdapter();
       const toOwner = (text: string, address: string): TargetPublishInput => ({ ...addressedInput({ kind: "email", address }), source: new TextEncoder().encode(text), artifact: { id: "art_t" } });
       const first = await adapter.publish(toOwner("only me", "a@example.com"));
@@ -814,25 +819,28 @@ describe("TinyCloud share authority adapter", () => {
       expect(first.metadata.artifact).toEqual({ id: "art_t", version: 1, mode: "pinned" });
       const stored = JSON.parse(decode("artifacts/art_t/versions/1/note.md"));
       expect(stored.encryptedSymmetricKeyHash).toBe((1).toString(16).padStart(64, "0"));
-      const manifest = JSON.parse(decode("artifacts/art_t/versions/1/manifest.json"));
-      expect(manifest.files[0].contentSha256).toMatch(/^[0-9a-f]{64}$/);
+      // The manifest holds the digest of the stored ciphertext only, never of the plaintext.
+      const manifestText = decode("artifacts/art_t/versions/1/manifest.json");
+      const manifest = JSON.parse(manifestText);
+      expect(manifest.files[0]).toEqual({ bytes: ownerKv.get("artifacts/art_t/versions/1/note.md")!.byteLength, path: "note.md", sha256: createHash("sha256").update(ownerKv.get("artifacts/art_t/versions/1/note.md")!).digest("hex") });
+      expect(manifestText).not.toContain(createHash("sha256").update("only me").digest("hex"));
 
-      // A second recipient of the same bytes shares the same version and the same wrapped key.
+      // The same plaintext again is a fresh encryption (fresh wrapped key), so a new version bound to its own key.
       const second = await adapter.publish(toOwner("only me", "b@example.com"));
       if ("state" in second) throw new Error("expected addressed publication");
-      expect(second.metadata.artifact?.version).toBe(1);
+      expect(second.metadata.artifact?.version).toBe(2);
       const bound = registeredPolicies.map((policy) => unifiedPolicyV2Schema.parse(policy).contentSource);
-      // The second share re-encrypted (wrapped key 2) but is bound to the stored version's wrapped key 1.
       expect(encryptions).toBe(2);
-      expect(bound.map((source) => source.encryptedSymmetricKeyDigestHex)).toEqual([(1).toString(16).padStart(64, "0"), (1).toString(16).padStart(64, "0")]);
-      expect(bound.every((source) => source.kvResource.endsWith("/kv/artifacts/art_t/versions/1/note.md"))).toBe(true);
-      expect([...ownerKv.keys()].filter((key) => key.includes("/versions/2/"))).toEqual([]);
+      expect(bound.map((source) => source.encryptedSymmetricKeyDigestHex)).toEqual([(1).toString(16).padStart(64, "0"), (2).toString(16).padStart(64, "0")]);
+      expect(bound.map((source) => source.kvResource.split("/kv/")[1])).toEqual(["artifacts/art_t/versions/1/note.md", "artifacts/art_t/versions/2/note.md"]);
+      expect(JSON.parse(decode("artifacts/art_t/versions/1/note.md")).encryptedSymmetricKeyHash).toBe((1).toString(16).padStart(64, "0"));
+    });
 
-      // Different plaintext is version 2, bound to its own wrapped key.
-      const third = await adapter.publish(toOwner("changed", "a@example.com"));
-      if ("state" in third) throw new Error("expected addressed publication");
-      expect(third.metadata.artifact?.version).toBe(2);
-      expect(unifiedPolicyV2Schema.parse(registeredPolicies[2]).contentSource.encryptedSymmetricKeyDigestHex).toBe((3).toString(16).padStart(64, "0"));
+    it("reports a denied artifact listing with the same re-login hint publish gives", async () => {
+      listErrorCode = "AUTH_UNAUTHORIZED";
+      const { artifactStore } = artifactAdapter();
+      const store = await artifactStore();
+      await expect(store.list("artifacts/art_t/versions/")).rejects.toMatchObject({ failure: { kind: "scope-denied", capability: "artifact storage" } });
     });
 
     it("refuses to grant edit on a pinned version before encrypting or uploading anything", async () => {

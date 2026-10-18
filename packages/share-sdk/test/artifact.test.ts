@@ -65,14 +65,29 @@ describe("artifact versions", () => {
     expect((await listArtifactVersions(store, "art_one")).map((v) => [v.version, v.complete])).toEqual([[1, true], [2, true]]);
   });
 
-  it("ciphertext republish of unchanged plaintext reuses the version via contentSha256", async () => {
-    const { store } = memoryStore();
-    const plain = sha256Hex(enc("secret"));
-    const first = await publishArtifactVersion(store, { artifactId: "art_enc", files: [{ filename: "a.md", bytes: enc("cipher-1"), contentSha256: plain }] });
-    const again = await publishArtifactVersion(store, { artifactId: "art_enc", files: [{ filename: "a.md", bytes: enc("cipher-2"), contentSha256: plain }] });
-    expect(again).toMatchObject({ version: first.version, created: false });
-    const changed = await publishArtifactVersion(store, { artifactId: "art_enc", files: [{ filename: "a.md", bytes: enc("cipher-3"), contentSha256: sha256Hex(enc("other")) }] });
-    expect(changed.version).toBe(2);
+  it("never records a plaintext digest, and compares stored bytes only", async () => {
+    const { store, data } = memoryStore();
+    const plaintext = "guessable plaintext";
+    // Stand-in ciphertext: two encryptions of one plaintext differ, so two publishes are two versions.
+    const first = await publishArtifactVersion(store, { artifactId: "art_enc", files: [{ filename: "a.md", bytes: enc("cipher-1") }] });
+    const second = await publishArtifactVersion(store, { artifactId: "art_enc", files: [{ filename: "a.md", bytes: enc("cipher-2") }] });
+    expect([first.version, second.version]).toEqual([1, 2]);
+    const stored = [...data.entries()].filter(([key]) => key.endsWith("manifest.json")).map(([, bytes]) => dec(bytes)).join("");
+    expect(stored).not.toContain(sha256Hex(enc(plaintext)));
+    expect(stored).not.toContain("contentSha256");
+    expect(Object.keys(first.manifest.files[0]!).sort()).toEqual(["bytes", "path", "sha256"]);
+  });
+
+  it("one corrupt manifest is reported and skipped; listing and publishing carry on", async () => {
+    const { store, data } = memoryStore();
+    await publishArtifactVersion(store, { artifactId: "art_one", files: [{ filename: "a.md", bytes: enc("one") }] });
+    await publishArtifactVersion(store, { artifactId: "art_one", files: [{ filename: "a.md", bytes: enc("two") }] });
+    data.set("artifacts/art_one/versions/1/manifest.json", enc("{not json"));
+    const listed = await listArtifactVersions(store, "art_one");
+    expect(listed.map((entry) => [entry.version, entry.complete, entry.corrupt === true])).toEqual([[1, false, true], [2, true, false]]);
+    const next = await publishArtifactVersion(store, { artifactId: "art_one", files: [{ filename: "a.md", bytes: enc("three") }] });
+    expect(next.version).toBe(3);
+    expect(next.manifest.parent).toBe(2);
   });
 
   it("a 412 on a file is success only when the stored sha256 equals ours", async () => {
@@ -144,6 +159,8 @@ describe("artifact manifest parsing", () => {
   it("rejects unknown fields, duplicate paths, bad digests and truncation", () => {
     const bad: unknown[] = [
       { ...valid, extra: 1 },
+      // No plaintext digest may ride in the manifest (it sits next to ciphertext in the owner's space).
+      { ...valid, files: [{ ...valid.files[0], contentSha256: "b".repeat(64) }] },
       { ...valid, v: 2 },
       { ...valid, files: [] },
       { ...valid, files: [valid.files[0], valid.files[0]] },

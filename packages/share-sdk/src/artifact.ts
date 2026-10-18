@@ -61,12 +61,8 @@ export interface ArtifactManifestFile {
   /** SHA-256 (lowercase hex) of the bytes stored at this key. */
   readonly sha256: string;
   readonly bytes: number;
-  /**
-   * SHA-256 of the plaintext when the stored bytes are ciphertext (addressed
-   * shares). Lets an unchanged republish reuse the stored version instead of
-   * minting an identical one.
-   */
-  readonly contentSha256?: string;
+  // Deliberately no plaintext digest: manifest.json sits in the owner's space next to the ciphertext of an encrypted
+  // share, and an unsalted hash of the plaintext would let anyone who can read the space confirm a guessed plaintext.
 }
 
 export interface ArtifactManifest {
@@ -83,7 +79,6 @@ export interface ArtifactVersionInput {
   readonly files: readonly {
     readonly filename: string;
     readonly bytes: Uint8Array;
-    readonly contentSha256?: string;
     readonly contentType?: string;
   }[];
   readonly note?: string;
@@ -102,8 +97,10 @@ export interface ArtifactVersionResult {
 
 export interface ArtifactVersionSummary {
   readonly version: number;
-  /** `false` while `manifest.json` is missing: an interrupted or lost-race attempt. */
+  /** `false` while `manifest.json` is missing (an interrupted or lost-race attempt) or unreadable (`corrupt`). */
   readonly complete: boolean;
+  /** `manifest.json` exists but does not parse: the version is listed, never trusted, never reused. */
+  readonly corrupt?: true;
   readonly manifest?: ArtifactManifest;
   readonly manifestSha256?: string;
 }
@@ -177,19 +174,13 @@ export function parseArtifactManifest(bytes: Uint8Array): ArtifactManifest {
   const files = record.files.map((entry): ArtifactManifestFile => {
     if (entry === null || typeof entry !== "object" || Array.isArray(entry)) return fail();
     const file = entry as Record<string, unknown>;
-    if (Object.keys(file).some((key) => !["path", "sha256", "bytes", "contentSha256"].includes(key))) return fail();
+    if (Object.keys(file).some((key) => !["path", "sha256", "bytes"].includes(key))) return fail();
     if (typeof file.path !== "string" || file.path === ARTIFACT_MANIFEST_NAME || seen.has(file.path)) return fail();
     try { canonicalShareFilename(file.path); } catch { return fail(); }
     seen.add(file.path);
     if (typeof file.sha256 !== "string" || !SHA256_HEX.test(file.sha256)) return fail();
     if (typeof file.bytes !== "number" || !Number.isSafeInteger(file.bytes) || file.bytes < 0) return fail();
-    if (file.contentSha256 !== undefined && (typeof file.contentSha256 !== "string" || !SHA256_HEX.test(file.contentSha256))) return fail();
-    return {
-      path: file.path,
-      sha256: file.sha256,
-      bytes: file.bytes,
-      ...(file.contentSha256 === undefined ? {} : { contentSha256: file.contentSha256 }),
-    };
+    return { path: file.path, sha256: file.sha256, bytes: file.bytes };
   });
   return {
     v: ARTIFACT_MANIFEST_VERSION,
@@ -216,20 +207,22 @@ export async function listArtifactVersions(store: ArtifactStore, artifactId: str
     if (numbers.get(version) !== true) { summaries.push({ version, complete: false }); continue; }
     const stored = await store.get(artifactVersionFilePath(artifactId, version, ARTIFACT_MANIFEST_NAME));
     if (stored === undefined) { summaries.push({ version, complete: false }); continue; }
-    summaries.push({ version, complete: true, manifest: parseArtifactManifest(stored), manifestSha256: sha256Hex(stored) });
+    // One unreadable manifest must not hide the other versions or block a publish: report it and move on. Its
+    // number stays taken, so the next publish never reuses it.
+    try {
+      summaries.push({ version, complete: true, manifest: parseArtifactManifest(stored), manifestSha256: sha256Hex(stored) });
+    } catch (error) {
+      if (!(error instanceof ArtifactError) || error.code !== "corrupt") throw error;
+      summaries.push({ version, complete: false, corrupt: true });
+    }
   }
   return summaries;
 }
 
+/** Same files with the same stored bytes. Stored bytes are all that is ever compared (never a plaintext digest). */
 function sameContent(manifest: ArtifactManifest, files: readonly ArtifactManifestFile[]): boolean {
   if (manifest.files.length !== files.length) return false;
-  return files.every((file) => {
-    const existing = manifest.files.find((candidate) => candidate.path === file.path);
-    if (existing === undefined) return false;
-    // Ciphertext differs on every encryption, so compare plaintext digests when both sides have one.
-    if (existing.contentSha256 !== undefined && file.contentSha256 !== undefined) return existing.contentSha256 === file.contentSha256;
-    return existing.sha256 === file.sha256 && existing.contentSha256 === undefined && file.contentSha256 === undefined;
-  });
+  return files.every((file) => manifest.files.some((candidate) => candidate.path === file.path && candidate.sha256 === file.sha256));
 }
 
 /**
@@ -255,8 +248,7 @@ export async function publishArtifactVersion(store: ArtifactStore, input: Artifa
     if (path === ARTIFACT_MANIFEST_NAME) throw new ArtifactError("invalid-argument", `${ARTIFACT_MANIFEST_NAME} is reserved`);
     if (seen.has(path)) throw new ArtifactError("invalid-argument", "artifact filenames must be unique");
     seen.add(path);
-    if (file.contentSha256 !== undefined && !SHA256_HEX.test(file.contentSha256)) throw new ArtifactError("invalid-argument", "contentSha256 must be lowercase hex SHA-256");
-    entries.push({ path, sha256: sha256Hex(file.bytes), bytes: file.bytes.byteLength, ...(file.contentSha256 === undefined ? {} : { contentSha256: file.contentSha256 }) });
+    entries.push({ path, sha256: sha256Hex(file.bytes), bytes: file.bytes.byteLength });
   }
   entries.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
   const bytesByPath = new Map(input.files.map((file, index) => [canonicalShareFilename(file.filename), index]));
@@ -294,7 +286,9 @@ export async function publishArtifactVersion(store: ArtifactStore, input: Artifa
     // Someone else completed this number first. Theirs is ours only if it vouches for the same stored bytes.
     const existing = await store.get(manifestKey);
     if (existing === undefined) continue;
-    const theirs = parseArtifactManifest(existing);
+    let theirs: ArtifactManifest;
+    try { theirs = parseArtifactManifest(existing); }
+    catch (error) { if (error instanceof ArtifactError && error.code === "corrupt") continue; throw error; }
     const identical = theirs.files.length === entries.length
       && entries.every((entry) => theirs.files.some((file) => file.path === entry.path && file.sha256 === entry.sha256));
     if (identical) return { artifactId, version, manifest: theirs, manifestSha256: sha256Hex(existing), created: false };

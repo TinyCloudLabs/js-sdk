@@ -71,6 +71,10 @@ Device login JSON lists the signed, approved `permissions`, owner-unchecked `dec
 | `shares/` | `kv/put` | store an addressed share's encrypted source; `--action edit` |
 | | `kv/get`, `kv/metadata` | back the Policy/v3 root that grants recipients read; `--notify` delivery authorization |
 | | `kv/list` | `--action list` on a `--prefix` share |
+| `artifacts/` | `kv/put` | `share publish --artifact`: write-once version files (`If-None-Match: *`) and their `manifest.json`. The node has no write-once ACL, so this `put` covers the whole `artifacts/` prefix: a session holding it could also overwrite an existing version file |
+| | `kv/get` | mint the pinned share's read-only child delegation |
+| | `kv/metadata` | back the Policy/v3 root of an addressed artifact share |
+| | `kv/list` | find the next version number; `share versions` |
 
 No `del` anywhere and no `list` on the bearer prefix: no `tinycloud share` command uses them. Inspect and receive use the link's own authority. Revoke signs `tinycloud.delegation/revoke` over the delegation's own CID and a Policy/v3 root revocation with the issuing session key, not a space capability. OpenKey shows the capability read as required (not uncheckable), so it is always in the signed grant and never in `declined`.
 
@@ -368,7 +372,7 @@ printf '%s' "$SHARE_URL" | "$TC" share receive - --output .
 "$TC" share revoke <id>                                               # bearer or addressed share this profile created
 ```
 
-**Artifact versions (pinned shares).** `--artifact <id|new>` stores the file as the next write-once version, `artifacts/<id>/versions/<n>/<file>` plus a `manifest.json` written last (file sha256 and size, parent, `--note`), in the owner's space. The share is pinned to that version: its delegation covers only that file and never carries `put`. Publishing the same content again returns the same version; changed content makes the next one; earlier versions are never overwritten. `--artifact new` mints an id. JSON output adds `artifactId`, `version` and `mode` (`pinned`). `--action edit` on an artifact share is refused (a pinned version is read-only). An artifact share takes one file. Every artifact share pins one version; shares that follow later versions are not available yet. Profiles signed in before this feature need `auth login --device --manifest builtin:share-publishing` again, because the manifest now includes `artifacts/`.
+**Artifact versions (pinned shares).** `--artifact <id|new>` stores the file as the next write-once version, `artifacts/<id>/versions/<n>/<file>` plus a `manifest.json` written last (file sha256 and size, parent, `--note`), in the owner's space. The share is pinned to that version: its delegation covers only that file and never carries `put`. Publishing the same bytes again to a bearer link returns the same version; changed content makes the next one; earlier versions are never overwritten. An addressed share stores ciphertext under a fresh random key each time, so every addressed publish is a new version, and `manifest.json` records only the sha256 of the stored ciphertext, never of the plaintext (an unsalted plaintext hash next to the ciphertext would let a reader of the space confirm a guess). `--artifact new` mints an id. JSON output adds `artifactId`, `version` and `mode` (`pinned`). `--action edit` on an artifact share is refused (a pinned version is read-only). An artifact share takes one file. Every artifact share pins one version; shares that follow later versions are not available yet. Profiles signed in before this feature need `auth login --device --manifest builtin:share-publishing` again, because the manifest now includes `artifacts/`.
 
 ```bash
 "$TC" share publish ./report.md --artifact new --to email:alice@example.com --json   # v1, pinned

@@ -61,16 +61,12 @@ export interface ShareCommandServices {
 /** `--ongoing` has no working implementation in v1: every artifact share pins one version. */
 const ONGOING_UNAVAILABLE = "Ongoing shares are not available yet; v1 shares pin a version";
 
-/** Validate the artifact flags once and name the pinned version request, if any. */
+/** Validate the artifact flags once and name the pinned version request, if any. `--ongoing` is refused earlier. */
 function artifactRequest(
-  options: { readonly artifact?: string; readonly ongoing?: boolean; readonly note?: string },
+  options: { readonly artifact?: string; readonly note?: string; readonly prefix?: boolean },
   actions: readonly ("read" | "list" | "edit")[],
   inputCount: number,
 ): { readonly id: string; readonly note?: string } | undefined {
-  // One refusal, before anything else is looked at. A share that follows a mutable copy cannot be minted today:
-  // the recipient SDK rejects ciphertext whose wrapped-key hash differs from the one signed into the share, so
-  // it would break on the first update. Ongoing shares come with link-as-delegation (TC-1428 ruling).
-  if (options.ongoing === true) throw new CLIError("UNSUPPORTED_TARGET", ONGOING_UNAVAILABLE, 2);
   if (options.artifact === undefined) {
     if (options.note !== undefined) throw new CLIError("INVALID_ARGUMENT", "--note requires --artifact", 2);
     return undefined;
@@ -79,6 +75,8 @@ function artifactRequest(
   if (actions.includes("edit")) {
     throw new CLIError("INVALID_ARGUMENT", "--action edit is not available for artifact shares: a pinned version is read-only", 2);
   }
+  // `--prefix` publishes a folder; an artifact share reads exactly one pinned file.
+  if (options.prefix === true) throw new CLIError("INVALID_ARGUMENT", "--artifact does not combine with --prefix: an artifact share pins one file", 2);
   if (inputCount !== 1) throw new CLIError("INVALID_ARGUMENT", "an artifact share takes exactly one file", 2);
   const note = options.note;
   if (note !== undefined && (note.length === 0 || note.length > 1024)) throw new CLIError("INVALID_ARGUMENT", "--note must be 1 to 1024 characters", 2);
@@ -354,6 +352,11 @@ export function registerShareCommand(program: Command): void {
     .action(async (files: string[], options, command: Command) => {
       try {
         const json = jsonOutput(options, command);
+        // Refused before anything is read or validated, so every combination gets this one message. A share that
+        // follows a mutable copy cannot be minted today: the recipient SDK rejects ciphertext whose wrapped-key hash
+        // differs from the one signed into the share, so it would break on the first update. Ongoing shares come
+        // with link-as-delegation (TC-1428 ruling).
+        if (options.ongoing === true) throw new CLIError("UNSUPPORTED_TARGET", ONGOING_UNAVAILABLE, 2);
         const maxBytes = byteLimit(options.maxBytes);
         if (files.length === 0 || (files.includes("-") && files.length > 1)) throw new CLIError("INVALID_ARGUMENT", "stdin must be the only publish input", 2);
         const name = files.length === 1 ? options.name : undefined;
@@ -461,6 +464,7 @@ export function registerShareCommand(program: Command): void {
         const view = versions.map((version) => ({
           version: version.version,
           complete: version.complete,
+          ...(version.corrupt === true ? { corrupt: true as const } : {}),
           ...(version.manifest === undefined ? {} : {
             createdAt: version.manifest.createdAt,
             parent: version.manifest.parent,
@@ -472,7 +476,7 @@ export function registerShareCommand(program: Command): void {
         }));
         if (json) writeJson({ protocol: "tinycloud-share", version: 1, artifactId: id, versions: view });
         else {
-          process.stdout.write(view.map((entry) => `v${entry.version}\t${entry.complete ? (entry.createdAt ?? "") : "incomplete"}\t${entry.pinnedShares.length} pinned share${entry.pinnedShares.length === 1 ? "" : "s"}${entry.note === undefined ? "" : `\t${entry.note}`}`).join("\n") + (view.length ? "\n" : ""));
+          process.stdout.write(view.map((entry) => `v${entry.version}\t${entry.complete ? (entry.createdAt ?? "") : entry.corrupt === true ? "corrupt" : "incomplete"}\t${entry.pinnedShares.length} pinned share${entry.pinnedShares.length === 1 ? "" : "s"}${entry.note === undefined ? "" : `\t${entry.note}`}`).join("\n") + (view.length ? "\n" : ""));
         }
       } catch (error) { return handleError(shareCliError(error)); }
     });

@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { MemorySenderShareRecordStorage, publishArtifactVersion, type ArtifactStore, type PublishedShare, type TargetPublishInput } from "@tinycloud/share-sdk";
 import { configureShareCommandServices, registerShareCommand } from "./share.js";
 import { runShareCaptured } from "./share.integration-harness.js";
+import { SharePublishAuthorityError } from "../share/errors.js";
 
 const viewerOrigin = "https://share-dev.tinycloud.link";
 const did = "did:key:z6MkggtHVWQUGJ3FVjJKXeb5oZThQvLmJVMV8hfNUz4ezcav";
@@ -86,13 +87,37 @@ describe("tc share publish --artifact", () => {
       ["--to", did, "--artifact", "art_report", "--ongoing"],
       ["--to", did, "--artifact", "art_report", "--ongoing", "--action", "edit"],
       ["--to", "alice@example.com", "--artifact", "art_report", "--ongoing", "--notify"],
+      // Combinations whose other flags would each fail first on their own.
+      ["--ongoing", "--to", "not a target"],
+      ["--ongoing", "--prefix"],
+      ["--ongoing", "--artifact", "art_report", "--prefix", "--to", did],
+      ["--ongoing", "--action", "bogus"],
+      ["--ongoing", "--max-bytes", "0"],
     ];
     for (const flags of combinations) {
       const result = await refusal(["share", "publish", file, ...flags, "--json"]);
       expect(result.exitCode).toBe(2);
       expect(result.stderr).toContain("Ongoing shares are not available yet; v1 shares pin a version");
     }
+    const multiple = await refusal(["share", "publish", file, await input(), "--ongoing", "--json"]);
+    expect(multiple.stderr).toContain("Ongoing shares are not available yet; v1 shares pin a version");
     expect(published).toBe(0);
+  });
+
+  test("--ongoing is refused before stdin or any file is read", async () => {
+    configureShareCommandServices({ targetAdapter: { publish: async () => { throw new Error("must not publish"); } } });
+    const stdin = process.stdin as unknown as { [Symbol.asyncIterator]: () => AsyncIterator<Buffer> };
+    const original = stdin[Symbol.asyncIterator];
+    let read = false;
+    stdin[Symbol.asyncIterator] = () => { read = true; throw new Error("stdin must not be read"); };
+    try {
+      const result = await refusal(["share", "publish", "-", "--name", "a.md", "--ongoing", "--json"]);
+      expect(result.exitCode).toBe(2);
+      expect(result.stderr).toContain("Ongoing shares are not available yet");
+      const missing = await refusal(["share", "publish", "/nonexistent/never-read.md", "--ongoing", "--json"]);
+      expect(missing.stderr).toContain("Ongoing shares are not available yet");
+    } finally { stdin[Symbol.asyncIterator] = original; }
+    expect(read).toBe(false);
   });
 
   test("--ongoing is not advertised in publish help", async () => {
@@ -112,8 +137,10 @@ describe("tc share publish --artifact", () => {
       expect(result.exitCode).toBe(2);
       expect(result.stderr).toContain("artifact id");
     }
-    const many = await refusal(["share", "publish", file, await input(), "--to", did, "--prefix", "--artifact", "art_report", "--json"]);
-    expect(many.exitCode).toBe(2);
+    const prefixed = await refusal(["share", "publish", file, "--to", did, "--prefix", "--artifact", "art_report", "--json"]);
+    expect(prefixed.exitCode).toBe(2);
+    expect(prefixed.stderr).toContain("does not combine with --prefix");
+    const many = await refusal(["share", "publish", file, await input(), "--to", did, "--artifact", "art_report", "--json"]);
     expect(many.stderr).toContain("exactly one file");
     expect(published).toBe(0);
   });
@@ -149,5 +176,31 @@ describe("tc share versions", () => {
     expect(body.artifactId).toBe("art_report");
     expect(body.versions.map((entry) => [entry.version, entry.parent, entry.pinnedShares.map((share) => share.shareId)])).toEqual([[1, null, ["share-on-v1"]], [2, 1, []]]);
     expect(body.versions[0]?.note).toBe("first");
+  });
+
+  test("a corrupt manifest is marked and does not hide the other versions", async () => {
+    const enc = (value: string) => new TextEncoder().encode(value);
+    const data = new Map<string, Uint8Array>();
+    const store: ArtifactStore = {
+      async put(key, bytes) { if (data.has(key)) return "exists"; data.set(key, bytes.slice()); return "created"; },
+      async get(key) { return data.get(key)?.slice(); },
+      async list(prefix) { return [...data.keys()].filter((key) => key.startsWith(prefix)); },
+    };
+    await publishArtifactVersion(store, { artifactId: "art_report", files: [{ filename: "report.md", bytes: enc("one") }] });
+    await publishArtifactVersion(store, { artifactId: "art_report", files: [{ filename: "report.md", bytes: enc("two") }] });
+    data.set("artifacts/art_report/versions/1/manifest.json", enc("{truncated"));
+    configureShareCommandServices({ artifactStore: async () => store });
+    const result = await runShareCaptured(["share", "versions", "art_report", "--json"]);
+    const body = JSON.parse(result.stdout) as { versions: { version: number; complete: boolean; corrupt?: boolean }[] };
+    expect(body.versions.map((entry) => [entry.version, entry.complete, entry.corrupt === true])).toEqual([[1, false, true], [2, true, false]]);
+    const human = await runShareCaptured(["share", "versions", "art_report"]);
+    expect(human.stdout).toContain("v1\tcorrupt");
+  });
+
+  test("a denied listing gives the re-login hint publish gives", async () => {
+    configureShareCommandServices({ artifactStore: async () => { throw new SharePublishAuthorityError({ kind: "scope-denied", capability: "artifact storage", requiredAction: "tinycloud.kv/list", localKey: false, profileName: "publisher" }); } });
+    const result = await refusal(["share", "versions", "art_report", "--json"]);
+    expect(result.exitCode).toBe(5);
+    expect(result.stderr).toContain("auth login --device --manifest builtin:share-publishing");
   });
 });

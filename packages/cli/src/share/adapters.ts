@@ -15,7 +15,6 @@ import {
   ArtifactError,
   artifactVersionFilePath,
   publishArtifactVersion,
-  sha256Hex,
   type ArtifactVersionInput,
   type ArtifactStore,
   type ArtifactVersionResult,
@@ -109,16 +108,24 @@ function safeStorageFilename(filename: string): string {
   return `${stem === "" ? "share" : stem}${extension === "" ? "" : `.${extension}`}`;
 }
 
-/** Wrapped-key facts a Policy/v3 content source binds, read back from the encrypted blob stored with a version. */
-function readStoredEncryption(bytes: Uint8Array): { networkId: string; encryptedSymmetricKeyHash: string; keyVersion: number } {
-  let value: unknown;
-  try { value = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)); } catch { throw new Error("stored artifact ciphertext is not valid JSON"); }
-  const record = typeof value === "object" && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
-  if (record === undefined || typeof record.networkId !== "string" || typeof record.encryptedSymmetricKeyHash !== "string"
-    || typeof record.keyVersion !== "number" || !Number.isSafeInteger(record.keyVersion) || record.keyVersion < 1) {
-    throw new Error("stored artifact ciphertext is not an encrypted content envelope");
-  }
-  return { networkId: record.networkId, encryptedSymmetricKeyHash: record.encryptedSymmetricKeyHash, keyVersion: record.keyVersion };
+/** A denied KV call during an artifact operation, as the usual scope error (and its re-login hint). */
+function scopeDeniedFromArtifactError(
+  error: unknown,
+  capability: string,
+  authority: { readonly localKey: boolean; readonly profileName: string | undefined },
+): SharePublishAuthorityError | undefined {
+  const cause = error instanceof ArtifactError ? error.cause : undefined;
+  const code = typeof cause === "object" && cause !== null && "code" in cause ? cause.code : undefined;
+  if (code !== "AUTH_UNAUTHORIZED" && code !== "PERMISSION_DENIED") return undefined;
+  const meta = typeof cause === "object" && cause !== null && "meta" in cause ? cause.meta : undefined;
+  const requiredAction = requiredKvAction(meta);
+  return new SharePublishAuthorityError({
+    kind: "scope-denied",
+    capability,
+    ...(requiredAction === undefined ? {} : { requiredAction }),
+    localKey: authority.localKey,
+    profileName: authority.profileName,
+  });
 }
 
 /** Claim the next artifact version, reporting a KV authority failure as the usual scope error. */
@@ -130,20 +137,7 @@ async function storeArtifactVersion(
   try {
     return await publishArtifactVersion(kvArtifactStore(kv), version);
   } catch (error) {
-    const cause = error instanceof ArtifactError ? error.cause : undefined;
-    const code = typeof cause === "object" && cause !== null && "code" in cause ? cause.code : undefined;
-    if (code === "AUTH_UNAUTHORIZED" || code === "PERMISSION_DENIED") {
-      const meta = typeof cause === "object" && cause !== null && "meta" in cause ? cause.meta : undefined;
-      const requiredAction = requiredKvAction(meta);
-      throw new SharePublishAuthorityError({
-        kind: "scope-denied",
-        capability: "KV upload",
-        ...(requiredAction === undefined ? {} : { requiredAction }),
-        localKey: authority.localKey,
-        profileName: authority.profileName,
-      });
-    }
-    throw error;
+    throw scopeDeniedFromArtifactError(error, "KV upload", authority) ?? error;
   }
 }
 
@@ -672,26 +666,18 @@ export function createShareAuthorityAdapters(input: {
     const encryptionNetwork = node.getEncryptionNetworkIdForSpace(ownerSpaceId);
     const encrypted = await node.encryption.encryptToNetwork(encryptionNetwork, file.bytes, { metadata: { contentType: mediaType } });
     if (!encrypted.ok) throw new Error("addressed source encryption was rejected");
-    let storedBytes: Uint8Array = new TextEncoder().encode(canonicalize(encrypted.data as unknown as Record<string, unknown>));
-    let sealed = { networkId: encrypted.data.networkId, encryptedSymmetricKeyHash: encrypted.data.encryptedSymmetricKeyHash, keyVersion: encrypted.data.keyVersion };
+    const storedBytes = new TextEncoder().encode(canonicalize(encrypted.data as unknown as Record<string, unknown>));
     let artifactVersion: ArtifactVersionResult | undefined;
     if (artifact !== undefined) {
-      const kv = node.kvForSpace(ownerSpaceId);
-      artifactVersion = await storeArtifactVersion(kv, {
+      // The manifest records the digest of these stored bytes (ciphertext) only: a hash of the plaintext would sit
+      // in the owner's space next to the ciphertext and let a reader confirm a guessed plaintext. Every encryption
+      // is a fresh random key, so each addressed publish is its own version.
+      artifactVersion = await storeArtifactVersion(node.kvForSpace(ownerSpaceId), {
         artifactId: artifact.id,
-        files: [{ filename: storageName, bytes: storedBytes, contentSha256: sha256Hex(file.bytes), contentType: "application/vnd.tinycloud.encrypted-envelope+json" }],
+        files: [{ filename: storageName, bytes: storedBytes, contentType: "application/vnd.tinycloud.encrypted-envelope+json" }],
         ...(artifact.note === undefined ? {} : { note: artifact.note }),
       }, { localKey, profileName: activeProfileName });
       resourcePath = artifactVersionFilePath(artifact.id, artifactVersion.version, storageName);
-      if (!artifactVersion.created) {
-        // Unchanged content resolves to its existing version. A policy binds one wrapped-key hash, so the
-        // ciphertext already stored there must be reused; a fresh encryption would not match it.
-        const existing = await kvArtifactStore(kv).get(resourcePath);
-        const entry = artifactVersion.manifest.files.find((candidate) => candidate.path === storageName);
-        if (existing === undefined || entry === undefined || sha256Hex(existing) !== entry.sha256) throw new Error("stored artifact version does not match its manifest");
-        storedBytes = existing;
-        sealed = readStoredEncryption(existing);
-      }
     } else {
       const stored = await node.kvForSpace(ownerSpaceId).put(resourcePath, storedBytes, { contentType: "application/vnd.tinycloud.encrypted-envelope+json" });
       if (!stored.ok) {
@@ -713,9 +699,9 @@ export function createShareAuthorityAdapters(input: {
       shareId,
       kvResource: `${ownerSpaceId}/kv/${resourcePath}`,
       selector: resourceKind,
-      encryptionNetwork: sealed.networkId,
-      encryptedSymmetricKeyDigestHex: sealed.encryptedSymmetricKeyHash,
-      keyVersion: sealed.keyVersion,
+      encryptionNetwork: encrypted.data.networkId,
+      encryptedSymmetricKeyDigestHex: encrypted.data.encryptedSymmetricKeyHash,
+      keyVersion: encrypted.data.keyVersion,
       mode: "immutable" as const,
       initialCiphertextDigestHex: createHash("sha256").update(storedBytes).digest("hex"),
     };
@@ -911,7 +897,18 @@ export function createShareAuthorityAdapters(input: {
     const node = await authenticatedNode();
     const spaceId = node.restorableSession?.spaceId;
     if (spaceId === undefined) throw new SharePublishAuthorityError({ kind: "owner-space-unresolved", localKey: !node.isSessionOnly, profileName: activeProfileName });
-    return kvArtifactStore(node.kvForSpace(spaceId));
+    const store = kvArtifactStore(node.kvForSpace(spaceId));
+    const authority = { localKey: !node.isSessionOnly, profileName: activeProfileName };
+    // A profile signed in before the `artifacts/` scope existed is refused by the node; say so the way publish does.
+    const mapped = async <T>(operation: () => Promise<T>): Promise<T> => {
+      try { return await operation(); }
+      catch (error) { throw scopeDeniedFromArtifactError(error, "artifact storage", authority) ?? error; }
+    };
+    return {
+      put: (key, bytes, options) => mapped(() => store.put(key, bytes, options)),
+      get: (key) => mapped(() => store.get(key)),
+      list: (prefix) => mapped(() => store.list(prefix)),
+    };
   };
   return {
     targetAdapter,
