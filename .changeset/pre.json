@@ -32,6 +32,7 @@
     "account-manifest-primary",
     "account-space-list-manifest",
     "cli-logout-replica-order",
+    "cli-node-release-fetch",
     "cli-openkey-pinned-owner-hint",
     "cli-prepared-login-cancel",
     "cli-prepared-login-exit",
