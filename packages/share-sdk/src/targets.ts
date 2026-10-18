@@ -20,6 +20,8 @@ export interface TargetPublishInput {
   readonly resourceKind?: "exact" | "prefix";
   readonly actions?: readonly ("read" | "list" | "edit")[];
   readonly notify?: boolean;
+  /** Publish as the next write-once version of this artifact and pin the share to it (TC-1428). */
+  readonly artifact?: { readonly id: string; readonly note?: string };
 }
 
 export type TargetPublishOutcome = PublishedShare | ShareAuthorizationRequired;

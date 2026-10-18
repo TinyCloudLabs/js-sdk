@@ -1,9 +1,10 @@
 import { defineConfig } from "tsup";
 
 export default defineConfig({
-  // The share index is its own entry: browser bundles that import the package root (web-sdk, whose size
-  // ceiling counts every byte) must not carry it. Consumers import `@tinycloud/share-sdk/share-index`.
-  entry: { index: "src/index.ts", "share-index": "src/share-index/index.ts" },
+  // `artifact` and the share index are their own entries: browser bundles that import the package root (web-sdk, whose
+  // size ceiling counts every byte) must not carry them. `artifact` holds CLI/agent layout helpers; consumers of the
+  // share index import `@tinycloud/share-sdk/share-index`.
+  entry: { index: "src/index.ts", artifact: "src/artifact.ts", "share-index": "src/share-index/index.ts" },
   format: ["esm", "cjs"],
   target: "es2022",
   dts: true,
