@@ -1,6 +1,8 @@
+import { secp256k1 } from "@noble/curves/secp256k1";
 import { describe, expect, it } from "bun:test";
 import {
   RegistryLookupInputError,
+  SECP256K1_N,
   classifyRegistryLookup,
   type RegistryLookupResponse,
   type RegistryVerdict,
@@ -86,4 +88,9 @@ describe("classifyRegistryLookup cost", () => {
     expect(performance.now() - started).toBeLessThan(250);
     expect(verdict.status).toBe("unavailable");
   });
+});
+
+// The low-s bound is n/2; a mistyped literal once made the high-s vectors vacuous.
+it("SECP256K1_N is the secp256k1 group order", () => {
+  expect(SECP256K1_N).toBe(secp256k1.CURVE.n);
 });

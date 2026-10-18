@@ -23,7 +23,6 @@
  */
 
 import { ed25519 } from "@noble/curves/ed25519";
-import { secp256k1 } from "@noble/curves/secp256k1";
 import { bases } from "multiformats/basics";
 import { verifyMessage } from "viem";
 import { pkhDid } from "./identity";
@@ -148,7 +147,12 @@ const MAX_JSON_DEPTH = 32;
 const JSON_SIMPLE_ESCAPES: Record<string, string> = {
   '"': '"', "\\": "\\", "/": "/", b: "\b", f: "\f", n: "\n", r: "\r", t: "\t",
 };
-const SECP256K1_N = secp256k1.CURVE.n;
+/**
+ * secp256k1 group order n. A literal, not noble's `secp256k1.CURVE.n`: viem
+ * bundles its own noble copy, so importing sdk-core's would add a second
+ * secp256k1 to the web bundle. The test pins it to noble's value.
+ */
+export const SECP256K1_N = 0xfffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141n;
 const BASE64URL = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
 const IPV4_OCTET = "(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])";
 const IPV4 = new RegExp(`^${IPV4_OCTET}(\\.${IPV4_OCTET}){3}$`);

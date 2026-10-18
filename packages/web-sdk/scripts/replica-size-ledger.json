@@ -325,5 +325,57 @@
       "ceiling": 820935
     },
     "reason": "One shared classifier (nodeRetryError in sdk-services/src/errors.ts) maps the node's 503 sql_busy / unavailable_retryable / request_timeout and 500 outcome_unknown to NODE_BUSY, REQUEST_TIMEOUT and OUTCOME_UNKNOWN for SQL, DuckDB and KV get/head/list/put/delete, replacing the 503-as-KV_CONFLICT mapping. Cuts applied first: Retry-After is read as whole seconds only (no HTTP-date parsing), one message string per error site is shared with the classifier, and the CLI messages live in the CLI only. The first CI measurement on 90bc0ae7 was worker +946, and the two cuts took it to +827. The review then required mapping the new codes in their consumers (ShareRecipientClient.redactedCode and the operations KV and personal-record failure mappers, which also dropped the dead KV_CONFLICT paths); that moved only the root, by +27/+28, so the final source is 20c29611 with root +278/+302. Run 39099093175 measured identical absolute bytes in both jobs against merge base 3ae17bfc; the worker's 820,935 and the optional deltas are unchanged from run 39095938793. No replica-owned file changed; the growth is sdk-services and sdk-core code bundled into each artifact."
+  },
+  "tc1436Ratchet": {
+    "label": "TC-1436 #578 terminal marker for disableSubDelegation, exact canonical delta",
+    "ruling": "Naomi TC-1436 size ruling for #578: a real shrink first, remainder by the PR's own exact-delta row at canonical CI bytes; whichever of #578 and #580 lands second re-measures against the new base and updates its own row",
+    "base": "7e10709c280596db0118a8fb04e7ffcd9bbe7212",
+    "sourceCommits": [
+      "d8e72fb90f2b8fd645fdcb24ac9249a9cb95f42d"
+    ],
+    "canonicalCI": {
+      "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39134326448",
+      "jobs": [
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39134326448/job/117695648893",
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39134326448/job/117695649068"
+      ]
+    },
+    "root": {
+      "delta": {
+        "index.mjs": 1327,
+        "index.cjs": 344
+      },
+      "ceiling": {
+        "index.mjs": 1465995,
+        "index.cjs": 1395719
+      }
+    },
+    "reason": "disableSubDelegation now emits the node's terminal UCAN fact: markDelegationTerminal in sdk-core re-signs the WASM-built session-key token with the fact after checking the key is its issuer, and TinyCloudNode wires it through the WASM wrapper and refuses the flag on wallet-signed paths. TinyCloudNode is part of the web bundle, so the feature cannot leave the root. Cuts applied first: one marker call inside createDelegationWrapper instead of one per path, a 54-character error string instead of 176, and the issuer check replacing a separate public-key check; CI went from +1349/+363 on f97d73d9 to +1327/+344 on d8e72fb9. Not taken: a lazy import, because the web build pins LimitChunkCountPlugin({ maxChunks: 1 }) and would inline it; a browser stub, because web-sdk callers would lose the marker. Local ablation (Bun 1.3.14, gzip -9): helper +225/+298, wiring +183/+114. Both jobs of run 39134326448 measured identical absolute bytes against merge base 7e10709c. First import, activation, gated and the worker are unchanged."
+  },
+  "tc1443Ratchet": {
+    "label": "TC-1443 #586 sdk-core registry verdict classifier, exact canonical delta",
+    "ruling": "TC-1443 size row for #586, approved by Naomi (2026-10-18), following the TC-1436 (#578) size ruling pattern: a real shrink first, remainder by the PR's own exact-delta row at canonical CI bytes",
+    "base": "129c793544b69b3b956c1c3258e64d1e6efd45fa",
+    "sourceCommits": [
+      "4a8ccb1aa3399c1546e3065be4a398d1bc078373"
+    ],
+    "canonicalCI": {
+      "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39142085209",
+      "jobs": [
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39142085209/job/117718397017",
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39142085209/job/117718397057"
+      ]
+    },
+    "root": {
+      "delta": {
+        "index.mjs": 2423,
+        "index.cjs": 49
+      },
+      "ceiling": {
+        "index.mjs": 1468418,
+        "index.cjs": 1395768
+      }
+    },
+    "reason": "sdk-core adds classifyRegistryLookup (registry-verdict.ts): a pure three-state classifier of one location registry response with its own strict JSON parser, RFC 3339 check, signature encoding rules and host-origin mapping. web-sdk does not export it; the index.mjs build still keeps the whole module, while index.cjs tree-shakes all but its module-level constants (+49). Cut applied first: the module took secp256k1's group order from sdk-core's @noble/curves 1.9.7 while viem bundles its own 1.9.1, so the root carried a second secp256k1; a pinned literal replaced it, and CI went from +12398/+6881 on 8776001a (against 7e10709c) to +2423/+49 on 4a8ccb1a. Not taken: a lazy import, because the web build pins LimitChunkCountPlugin({ maxChunks: 1 }) and would inline it; changing how the mjs build tree-shakes sdk-core, which is a web-sdk build change outside this PR. Both jobs of run 39142085209 measured identical absolute bytes; the base 129c7935 is a [skip ci] version-packages commit on 6bb86a1a, whose run 39141462754 measured 1465995/1395719, TC-1436's ceilings. First import, activation, gated and the worker are unchanged."
   }
 }
