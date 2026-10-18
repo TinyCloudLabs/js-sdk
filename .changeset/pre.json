@@ -45,6 +45,7 @@
     "node-sdk-sign-out-gate",
     "persisted-restore-signout-race",
     "profile-replica-deferred-revoke",
+    "receiver-key-clock-race",
     "replica-grant-policy",
     "replica-kv-storage",
     "replica-lifecycle-observer",
