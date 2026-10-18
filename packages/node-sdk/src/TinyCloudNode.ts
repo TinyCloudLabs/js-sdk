@@ -893,10 +893,13 @@ export interface TinyCloudNodeConfig {
 /**
  * The node's terminal marker is a UCAN fact; a wallet-signed SIWE (CACAO)
  * delegation cannot carry it, so such a delegation would stay re-delegatable.
- * Callers must request only capabilities the current session holds.
+ * Callers must request only capabilities the current session holds. A wallet
+ * (`did:pkh`) recipient chains its own session from a grant (`useDelegation`),
+ * which the node refuses for a terminal parent, so only a session-key
+ * `did:key` can use a terminal grant.
  */
 const TERMINAL_DELEGATION_REQUIRES_SESSION_KEY =
-  "disableSubDelegation requires a session-key delegation";
+  "disableSubDelegation requires a session-key delegation to a did:key (not did:pkh); use the session-key DID or drop the flag";
 
 /**
  * Options for {@link TinyCloudNode.delegateTo}.
@@ -932,7 +935,8 @@ export interface DelegateToOptions {
    * Mark the delegation terminal: the node refuses any delegation that cites
    * it as a parent (`terminal-parent-cannot-redelegate`). The delegate can
    * still use it directly. Only session-key UCAN delegations can carry the
-   * marker, so this throws with `forceWalletSign`. Default false.
+   * marker, so this throws with `forceWalletSign`, and with a `did:pkh`
+   * recipient (use its session-key DID). Default false.
    */
   disableSubDelegation?: boolean;
 }
@@ -6978,6 +6982,9 @@ export class TinyCloudNode {
           "handed to onPrepared.",
       );
     }
+    if (options?.disableSubDelegation && did.startsWith("did:pkh:")) {
+      throw new Error(TERMINAL_DELEGATION_REQUIRES_SESSION_KEY);
+    }
 
     // 1. Session validity check — fail fast with a clear error class so
     //    callers can catch and trigger a fresh sign-in.
@@ -8355,7 +8362,9 @@ export class TinyCloudNode {
      * Prevent the recipient from creating sub-delegations (default: false).
      * The delegation carries the node's terminal marker, so the node refuses
      * its children. Needs capabilities the current session holds; throws
-     * rather than fall back to a wallet-signed delegation.
+     * rather than fall back to a wallet-signed delegation, and throws for a
+     * `did:pkh` recipient (a wallet-mode `useDelegation` of it is refused);
+     * grant the recipient's session-key DID instead.
      */
     disableSubDelegation?: boolean;
     /** Expiration time in milliseconds from now (default: 1 hour) */

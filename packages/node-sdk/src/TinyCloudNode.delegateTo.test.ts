@@ -19,6 +19,9 @@ import {
   type ISessionManager,
 } from "@tinycloud/sdk-core";
 
+import { ed25519 } from "@noble/curves/ed25519";
+import { base58btc } from "multiformats/bases/base58";
+
 import { TinyCloudNode } from "./TinyCloudNode";
 
 // ---------------------------------------------------------------------------
@@ -789,5 +792,113 @@ describe("TinyCloudNode.delegateTo onPrepared (session-key path)", () => {
     expect(wasm.prepareSession).not.toHaveBeenCalled();
     expect(wasm.createDelegation).not.toHaveBeenCalled();
     expect(events).toEqual([]);
+  });
+});
+
+describe("TinyCloudNode.delegateTo terminal grants and recipient kind", () => {
+  const WALLET_DID = "did:pkh:eip155:1:0x00000000000000000000000000000000000000BB";
+  const permission: PermissionEntry = {
+    service: "tinycloud.kv",
+    space: "default",
+    path: "items/",
+    actions: ["tinycloud.kv/get"],
+  };
+  const b64u = (bytes: Uint8Array) => Buffer.from(bytes).toString("base64url");
+  let originalFetch: typeof globalThis.fetch;
+  beforeEach(() => {
+    originalFetch = globalThis.fetch;
+    globalThis.fetch = (async () =>
+      new Response(JSON.stringify({ activated: [], skipped: [] }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      })) as typeof fetch;
+  });
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  /** A session whose recap covers `permission`; the WASM builder signs with the session's real key. */
+  function makeNode(recipient: string) {
+    const privateKey = ed25519.utils.randomPrivateKey();
+    const publicKey = ed25519.getPublicKey(privateKey);
+    const sessionDid = `did:key:${base58btc.encode(Uint8Array.of(0xed, 0x01, ...publicKey))}`;
+    const input = [
+      { alg: "EdDSA", typ: "JWT", ucv: "0.10.0" },
+      { iss: `${sessionDid}#${sessionDid.slice(8)}`, aud: recipient, exp: 1_900_000_000, prf: ["bafyparent"], att: {} },
+    ].map((part) => b64u(Buffer.from(JSON.stringify(part)))).join(".");
+    const wasm = makeFakeWasmBindings({
+      parseRecapFromSiwe: mock(() => [
+        { service: "kv", space: "default", path: "/", actions: ["tinycloud.kv/get"] },
+      ]),
+      createDelegation: mock(() => ({
+        delegation: `${input}.${b64u(ed25519.sign(Buffer.from(input), privateKey))}`,
+        cid: "bafywasm",
+        delegateDid: recipient,
+        expiry: Math.floor(Date.now() / 1000) + 3600,
+        resources: [
+          { service: "kv", space: "space://test", path: "items/", actions: ["tinycloud.kv/get"] },
+        ],
+      })),
+    });
+    const node = new TinyCloudNode({ wasmBindings: wasm });
+    installFakeSession(node, {
+      siwe: buildSiwe(new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString()),
+      verificationMethod: `${sessionDid}#${sessionDid.slice(8)}`,
+    });
+    Object.assign((node as any).auth.tinyCloudSession, {
+      jwk: { kty: "OKP", crv: "Ed25519", x: b64u(publicKey), d: b64u(privateKey) },
+    });
+    return { node, wasm, sessionDid };
+  }
+
+  const guard = /to a did:key \(not did:pkh\); use the session-key DID or drop the flag/;
+
+  test("refuses a terminal grant to a did:pkh recipient before anything is signed", async () => {
+    const { node, wasm } = makeNode(WALLET_DID);
+    await expect(
+      node.delegateTo(WALLET_DID, [permission], { disableSubDelegation: true }),
+    ).rejects.toThrow(guard);
+    expect(wasm.createDelegation).not.toHaveBeenCalled();
+    expect(wasm.prepareSession).not.toHaveBeenCalled();
+  });
+
+  test("createDelegation refuses it too, without falling back to the wallet path", async () => {
+    const { node, wasm } = makeNode(WALLET_DID);
+    Object.assign(node, {
+      signer: {
+        signMessage: mock(async () => "0xfake"),
+        getAddress: async () => "0x0000000000000000000000000000000000000001",
+        getChainId: async () => 1,
+      },
+    });
+    await expect(
+      node.createDelegation({
+        path: "items/",
+        actions: ["tinycloud.kv/get"],
+        delegateDID: WALLET_DID,
+        disableSubDelegation: true,
+      }),
+    ).rejects.toThrow(guard);
+    expect(wasm.createDelegation).not.toHaveBeenCalled();
+    expect(wasm.prepareSession).not.toHaveBeenCalled();
+  });
+
+  test("a non-terminal grant to a did:pkh recipient is issued", async () => {
+    const { node, wasm } = makeNode(WALLET_DID);
+    const result = await node.delegateTo(WALLET_DID, [permission]);
+    expect(result.delegation.delegateDID).toBe(WALLET_DID);
+    expect(result.delegation.disableSubDelegation).toBe(false);
+    expect(wasm.createDelegation).toHaveBeenCalledTimes(1);
+  });
+
+  test("a terminal grant to a session-key did:key recipient is issued with the terminal marker", async () => {
+    const recipient = "did:key:z6MkRecipientSessionKey";
+    const { node } = makeNode(recipient);
+    const result = await node.delegateTo(recipient, [permission], { disableSubDelegation: true });
+    expect(result.delegation.disableSubDelegation).toBe(true);
+    const payload = result.delegation.delegationHeader.Authorization.split(".")[1]!;
+    expect(JSON.parse(Buffer.from(payload, "base64url").toString()).fct).toEqual([
+      { "xyz.tinycloud.policy/delegationMode": "terminal" },
+    ]);
   });
 });

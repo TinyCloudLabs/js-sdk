@@ -158,6 +158,15 @@ ceilings. It is #583's own row, taken after a documented shrink attempt (see the
 `reason`). The ledger's `tc1424Ratchet` row records it and cannot change later; whichever
 PR lands after it re-measures against the new base and updates its own row.
 
+TC-1448 (the `did:pkh` recipient guard for terminal grants in `TinyCloudNode.delegateTo`,
+#591) landed after #583, so it was re-measured against master `1c89b697` and sits on top of
+TC-1424's root ceilings. It raised only the root ceilings once, after a real shrink (it
+reuses the existing terminal-grant error string), by the exact bytes GitHub run 39159867318
+measured on `b8d13379` (master merged into the PR branch, source unchanged since
+`18b6c9fa`), identical in both jobs: 1,468,625 / 1,397,910 B (+44 / +33 over TC-1424's).
+The ledger's `tc1448Ratchet` row records them and cannot change later; whichever PR lands
+after it re-measures against the new base and updates its own row.
+
 **Ancestry pins and squash merges.** A policy row records the PR-branch commit it
 was reviewed at, and its introduction check requires that literal commit in the
 PR head. js-sdk squash-merges, so that commit is unreachable from master
