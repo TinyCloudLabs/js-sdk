@@ -529,6 +529,7 @@ test("pre-publish: a version an earlier run got npm to accept, but npm does not 
   ]);
   const message = failureMessage(failures, "pre-publish");
   assert.match(message, /accepted by Release run 123/);
+  assert.match(message, /nothing was pushed either/);
   assert.match(message, /Wait until/);
   assert.match(message, /bump the package with a changeset/);
   assert.doesNotMatch(message, /Add a changeset for each package so the next run bumps it past the stale version/);
@@ -573,7 +574,7 @@ test("accepted run lookup: finds the acceptance in an earlier run's log, ignorin
       head: version,
       currentRunId: "9",
       listRuns: () => runs,
-      runLog: (id) => (fetched.push(id), logs[id] ?? ""),
+      runLog: (id, attempt) => (fetched.push(id), attempt === 1 ? logs[id] ?? "" : ""),
       ...extra,
     });
   const created = new Date(Date.now() + 60_000).toISOString();
@@ -591,9 +592,22 @@ test("accepted run lookup: finds the acceptance in an earlier run's log, ignorin
     undefined,
   );
   assert.deepEqual(fetched, [3, 4]);
-  assert.deepEqual(find([{ databaseId: 1, createdAt: created, status: "completed", url: "u1" }]), { id: 1, url: "u1" });
+  assert.deepEqual(find([{ databaseId: 1, createdAt: created, status: "completed", url: "u1" }]), { id: 1, attempt: 1, url: "u1" });
   // A failed run counts: that is exactly the red run this exists for.
-  assert.deepEqual(find([{ databaseId: 2, createdAt: created, status: "completed", url: "u2" }]), { id: 2, url: "u2" });
+  assert.deepEqual(find([{ databaseId: 2, createdAt: created, status: "completed", url: "u2" }]), { id: 2, attempt: 1, url: "u2" });
+  // A re-run replaces a run's log: the acceptance is found in an earlier attempt, and in this run's own earlier attempts.
+  const attempts = { "5:1": logs[1], "5:2": "", "5:3": "" };
+  const reruns = (runs, extra) => find(runs, { runLog: (id, attempt) => attempts[`${id}:${attempt}`] ?? "", ...extra });
+  assert.deepEqual(reruns([{ databaseId: 5, createdAt: created, status: "completed", url: "u5", attempt: 3 }]), { id: 5, attempt: 1, url: "u5" });
+  assert.equal(reruns([{ databaseId: 6, createdAt: created, status: "completed", url: "u6", attempt: 3 }]), undefined);
+  assert.deepEqual(
+    reruns([{ databaseId: 5, createdAt: created, status: "in_progress", url: "u5", attempt: 2 }], { currentRunId: "5", currentAttempt: 2 }),
+    { id: 5, attempt: 1, url: "u5" },
+  );
+  assert.equal(
+    reruns([{ databaseId: 5, createdAt: created, status: "in_progress", url: "u5", attempt: 1 }], { currentRunId: "5", currentAttempt: 1 }),
+    undefined,
+  );
   // If the listing cannot reach back far enough, it fails rather than guess.
   const full = Array.from({ length: 100 }, (_, i) => ({ databaseId: 100 + i, createdAt: created, status: "queued", url: "" }));
   assert.throws(() => find(full), /cannot tell whether @x\/a@1\.0\.1-beta\.0 was accepted/);

@@ -119,8 +119,11 @@ version number from newer code, when a version is missing from npm but an earlie
 names that run; wait until `npm view <name>@<version>` answers, then push to `master` again, or bump the
 package with a changeset. A version no run accepted is published from HEAD as before.
 
-Runbook: **Confirm npm failed for web-sdk only → wait; never re-run; never use the `release` dispatch
-(that's STABLE).**
+Runbook: **`Confirm npm has every current version` warns "pending" for web-sdk → wait; never re-run;
+never use the `release` dispatch (that's STABLE).** If it fails for web-sdk only, the version was not
+recorded as accepted: check the publish step log and `npm view`, still never re-run or dispatch `release`.
+A beta run's pre-publish check runs before it pushes, so a stop there leaves `master` and the pending
+changesets untouched; push to `master` again once npm shows the version.
 
 Stable-release installs use the committed lockfile before selecting a release and during recovery.
 Only a newly versioned release may refresh it: an unfrozen recovery install can rewrite workspace

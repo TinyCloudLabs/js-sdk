@@ -117,10 +117,11 @@ export function acceptedByEarlierRun({
   head,
   listRuns = () =>
     JSON.parse(
-      gh(["run", "list", "--workflow", RELEASE_WORKFLOW, "--limit", String(RUN_LIST_LIMIT), "--json", "databaseId,createdAt,status,url"]),
+      gh(["run", "list", "--workflow", RELEASE_WORKFLOW, "--limit", String(RUN_LIST_LIMIT), "--json", "databaseId,createdAt,status,url,attempt"]),
     ),
-  runLog = (id) => gh(["run", "view", String(id), "--log"]),
+  runLog = (id, attempt) => gh(["run", "view", String(id), "--attempt", String(attempt), "--log"]),
   currentRunId = process.env.GITHUB_RUN_ID,
+  currentAttempt = Number(process.env.GITHUB_RUN_ATTEMPT || 1),
 }) {
   const version = versionCommit(repo, head, pkg);
   const base = version && repo.parent(version);
@@ -131,10 +132,15 @@ export function acceptedByEarlierRun({
     throw new Error(`the last ${RUN_LIST_LIMIT} Release runs are all newer than ${base}; cannot tell whether ${pkg.name}@${pkg.version} was accepted by an earlier run`);
   }
   const id = `${pkg.name}@${pkg.version}`;
+  // A re-run replaces a run's log, so every attempt is read; for this run, only its earlier attempts.
   for (const run of runs) {
-    if (String(run.databaseId) === String(currentRunId) || run.status !== "completed") continue;
     if (Date.parse(run.createdAt) < since) continue;
-    if (acceptedFromRunLog(runLog(run.databaseId)).has(id)) return { id: run.databaseId, url: run.url };
+    const current = String(run.databaseId) === String(currentRunId);
+    if (!current && run.status !== "completed") continue;
+    const attempts = current ? currentAttempt - 1 : run.attempt ?? 1;
+    for (let attempt = 1; attempt <= attempts; attempt++) {
+      if (acceptedFromRunLog(runLog(run.databaseId, attempt)).has(id)) return { id: run.databaseId, attempt, url: run.url };
+    }
   }
   return undefined;
 }
@@ -372,7 +378,7 @@ export async function check({
         if (earlier) {
           fail(pkg, {
             kind: "accepted-not-visible",
-            reason: `accepted by Release run ${earlier.id}${earlier.url ? ` (${earlier.url})` : ""} but not yet visible on npm`,
+            reason: `accepted by Release run ${earlier.id}${earlier.attempt > 1 ? ` (attempt ${earlier.attempt})` : ""}${earlier.url ? ` (${earlier.url})` : ""} but not yet visible on npm`,
           });
         } else log(`${id}: not on npm; will publish from HEAD.`);
       } else if (accepted.has(id)) {
@@ -426,8 +432,9 @@ const ADVICE = {
 
 const ACCEPTED_ADVICE =
   "npm accepted these versions in an earlier Release run but does not show them yet. Publishing them again from this\n" +
-  "commit would give the same version number different code, so nothing was published. Wait until\n" +
-  "`npm view <name>@<version> gitHead` answers, then push to master again; or bump the package with a changeset.";
+  "commit would give the same version number different code, so nothing was published. In a beta run\n" +
+  "nothing was pushed either: master and the pending changesets are untouched. Wait until `npm view <name>@<version> gitHead` answers,\n" +
+  "then push to master again (the run versions the changesets then); or bump the package with a changeset.";
 
 export function failureMessage(failures, mode, problems = []) {
   const missingOnly = mode === "unpublished-stable" || mode === "unfinished-stable";
@@ -489,6 +496,20 @@ async function main([mode, output, ...rest]) {
     };
     const accepted = output ? acceptedFromPublishLog(readLog(output)) : new Set();
     return report(await check({ mode, repo, accepted, onPending }), mode);
+  }
+  if (mode === "pre-publish" && output === undefined) {
+    let failures;
+    try {
+      failures = await check({ mode, repo });
+    } catch (error) {
+      // Fail closed, with a readable reason instead of a stack trace.
+      const message = `Could not tell whether an earlier Release run already got npm to accept a version that npm does not show: ${error.message}`;
+      if (process.env.GITHUB_ACTIONS === "true") console.log(`::error title=pre-publish: cannot check earlier Release runs::${message.replace(/\n/g, " ")}`);
+      console.error(`${message}\n\nNothing was published (in a beta run, nothing was pushed either). This needs the job's \`actions: read\` permission and GH_TOKEN, and \`gh\` able to reach GitHub. Re-run once that is fixed; do not publish by hand.`);
+      process.exitCode = 1;
+      return;
+    }
+    return report(failures, mode);
   }
   if (MODES.includes(mode) && output === undefined) return report(await check({ mode, repo }), mode);
   console.error(
