@@ -106,6 +106,11 @@ export type LogoutRatchet = {
  * worker buckets.
  */
 export type Tc1413Ratchet = HardeningRatchet;
+/**
+ * One reviewed exact-delta admission of js-sdk #582 (TC-1428): the owner-signed artifact pin the viewer
+ * verifies. Only the root bundle grows, so the shape is the #571 root-only row.
+ */
+export type Tc1428Ratchet = LogoutRatchet;
 export type Ledger = {
   allowance: GzipSizes;
   entries: LedgerEntry[];
@@ -116,6 +121,7 @@ export type Ledger = {
   hardeningRatchet?: HardeningRatchet;
   logoutRatchet?: LogoutRatchet;
   tc1413Ratchet?: Tc1413Ratchet;
+  tc1428Ratchet?: Tc1428Ratchet;
 };
 
 const formats = ["index.mjs", "index.cjs"] as const;
@@ -320,6 +326,32 @@ export const approvedTc1413Ratchet: Tc1413Ratchet = {
   reason: "One shared classifier (nodeRetryError in sdk-services/src/errors.ts) maps the node's 503 sql_busy / unavailable_retryable / request_timeout and 500 outcome_unknown to NODE_BUSY, REQUEST_TIMEOUT and OUTCOME_UNKNOWN for SQL, DuckDB and KV get/head/list/put/delete, replacing the 503-as-KV_CONFLICT mapping. Cuts applied first: Retry-After is read as whole seconds only (no HTTP-date parsing), one message string per error site is shared with the classifier, and the CLI messages live in the CLI only. The first CI measurement on 90bc0ae7 was worker +946, and the two cuts took it to +827. The review then required mapping the new codes in their consumers (ShareRecipientClient.redactedCode and the operations KV and personal-record failure mappers, which also dropped the dead KV_CONFLICT paths); that moved only the root, by +27/+28, so the final source is 20c29611 with root +278/+302. Run 39099093175 measured identical absolute bytes in both jobs against merge base 3ae17bfc; the worker's 820,935 and the optional deltas are unchanged from run 39095938793. No replica-owned file changed; the growth is sdk-services and sdk-core code bundled into each artifact.",
 };
 
+/**
+ * Naomi's ruling for TC-1428 (js-sdk #582): after a real shrink, the artifact pin check is admitted at exactly
+ * the bytes GitHub measured, root only, with no headroom. Rows are relative to the base each PR is measured on:
+ * whichever of #578, #580 and #582 lands later re-measures and replaces its own row before it merges.
+ */
+export const approvedTc1428Ratchet: Tc1428Ratchet = {
+  label: "TC-1428 #582 owner-signed artifact pin for addressed shares, exact canonical delta",
+  ruling: "Naomi TC-1428 size ruling for #582: a real shrink first, remainder by the PR's own exact-delta row at canonical CI bytes; rows are relative to the base each PR is measured on, so whichever of #578, #580 and #582 lands later re-measures against the new base and updates its own row",
+  base: "7e10709c280596db0118a8fb04e7ffcd9bbe7212",
+  sourceCommits: [
+    "94bc065a52ff8434dadbee6e73464c6c30eaf91e",
+  ],
+  canonicalCI: {
+    run: "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39138319985",
+    jobs: [
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39138319985/job/117707333896",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39138319985/job/117707333834",
+    ],
+  },
+  root: {
+    delta: { "index.mjs": 874, "index.cjs": 795 },
+    ceiling: { "index.mjs": 1465542, "index.cjs": 1396170 },
+  },
+  reason: "The viewer now checks the owner-signed artifactPin: assertArtifactBinding and verifyArtifactShare in share-sdk/src/artifact-pin.ts, the strict artifactPin field in the Policy/v3 envelope schema, and their call sites in resolvePolicyShare and ShareRecipientClient.decryptV3Content. Root only: the worker, first-import, activation and gated artifacts are unchanged. Cuts applied first: the layout helpers and the owner-side helpers (buildArtifactPin, verifyArtifactManifestBytes, verifyArtifactFileBytes) live in the separate @tinycloud/share-sdk/artifact entry and are not in the web bundle; pin errors use their code as the message (-159 gzip bytes in a share-sdk proxy build); the recipient no longer re-hashes the fetched bytes, because the binding already makes the pinned digest equal contentSource.initialCiphertextDigestHex, which decryptV3Content checks (-56). Reused: verifyEnvelopeV3SignatureOnly for the signature, the noble sha256 already bundled, and the existing ciphertext digest check; sdk-core and share-envelope hold no equivalent. Not taken: a lazy import, because the web build pins LimitChunkCountPlugin({ maxChunks: 1 }) and would inline it; a subpath for the verifier, because the viewer must run it; dropping the expected-artifact check or the edit refusal, each worth about 35 bytes. Local builds measured +1127/+993 before these cuts; run 39138319985 on source 94bc065a measured identical absolute bytes in both jobs against base 7e10709c (its PR base, #579, is byte-neutral).",
+};
+
 /** The reviewed #553 S3 entry's source commit, as master's checker pinned it. */
 export const preexistingS3EntryCommit = "0241ba9b";
 
@@ -368,6 +400,7 @@ export function ancestryPins(root: Ledger, hasGatedOnly: boolean): Array<{ row: 
   if (root.hardeningRatchet !== undefined) pins.push({ row: "hardeningRatchet", pin: root.hardeningRatchet.sourceCommits.at(-1)! });
   if (root.logoutRatchet !== undefined) pins.push({ row: "logoutRatchet", pin: root.logoutRatchet.sourceCommits.at(-1)! });
   if (root.tc1413Ratchet !== undefined) pins.push({ row: "tc1413Ratchet", pin: root.tc1413Ratchet.sourceCommits.at(-1)! });
+  if (root.tc1428Ratchet !== undefined) pins.push({ row: "tc1428Ratchet", pin: root.tc1428Ratchet.sourceCommits.at(-1)! });
   if (hasGatedOnly) pins.push({ row: "gatedOnlyRatchet", pin: approvedGatedOnlyRatchet.sourceCommit });
   return pins;
 }
@@ -404,7 +437,7 @@ const historicalToolchain = "Bun 1.4.3; production webpack; gzip -9 -c";
 /** Only a git merge-base ledger may retain the pre-correction toolchain. */
 export function validateLedger(value: Ledger, historicalBase = false): void {
   if (!value || !value.allowance || !Array.isArray(value.entries) ||
-      Object.keys(value).some((key) => key !== "allowance" && key !== "entries" && key !== "phase2Ratchet" && key !== "fixRequiredRatchet" && key !== "canonicalToolchainCorrection" && key !== "masterMergeResolution" && key !== "hardeningRatchet" && key !== "logoutRatchet" && key !== "tc1413Ratchet")) {
+      Object.keys(value).some((key) => key !== "allowance" && key !== "entries" && key !== "phase2Ratchet" && key !== "fixRequiredRatchet" && key !== "canonicalToolchainCorrection" && key !== "masterMergeResolution" && key !== "hardeningRatchet" && key !== "logoutRatchet" && key !== "tc1413Ratchet" && key !== "tc1428Ratchet")) {
     throw new Error("Invalid packages/web-sdk/scripts/replica-size-ledger.json shape");
   }
   if (Object.keys(value.allowance).some((key) => !formats.includes(key as typeof formats[number]))) {
@@ -472,6 +505,10 @@ export function validateLedger(value: Ledger, historicalBase = false): void {
       (!value.logoutRatchet || JSON.stringify(value.tc1413Ratchet) !== JSON.stringify(approvedTc1413Ratchet))) {
     throw new Error("Only Naomi's exact canonical TC-1413 node-retry-errors ratchet is approved.");
   }
+  if (value.tc1428Ratchet !== undefined &&
+      (!value.tc1413Ratchet || JSON.stringify(value.tc1428Ratchet) !== JSON.stringify(approvedTc1428Ratchet))) {
+    throw new Error("Only Naomi's exact canonical TC-1428 artifact-pin ratchet is approved.");
+  }
 }
 
 /** The resolved input blobs are introduced once and immutable in subsequent bases. */
@@ -505,6 +542,14 @@ export function validateTc1413RatchetTransition(base?: Tc1413Ratchet, current?: 
   if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc1413Ratchet) ||
       base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
     throw new Error("The exact TC-1413 ratchet may be introduced once and cannot change later.");
+  }
+}
+
+/** The TC-1428 ratchet is introduced once at its exact canonical bytes and immutable afterwards. */
+export function validateTc1428RatchetTransition(base?: Tc1428Ratchet, current?: Tc1428Ratchet): void {
+  if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc1428Ratchet) ||
+      base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
+    throw new Error("The exact TC-1428 ratchet may be introduced once and cannot change later.");
   }
 }
 

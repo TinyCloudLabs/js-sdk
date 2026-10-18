@@ -130,6 +130,16 @@ artifact. The ledger's `tc1413Ratchet` row and the matching optional allowance r
 them and cannot change later; the `entries[]` rows carry zero (root) and the measured
 optional deltas.
 
+The TC-1428 owner-signed artifact pin (the viewer's check that an addressed artifact share reads
+the version its owner signed, #582) raised only the root ceilings once more, after size cuts,
+by the exact bytes GitHub run 39138319985 measured on source `94bc065a`, in both jobs,
+against master `7e10709c`: to 1,465,542 / 1,396,170 B (+874 / +795). First import,
+activation, the gated artifact and the worker keep TC-1413's ceilings. The ledger's
+`tc1428Ratchet` row records them and cannot change later. Rows are relative to the base each
+PR is measured on (#582 is stacked on #579, which is byte-neutral): if another root-growing PR
+(#578, #580) lands first, #582 re-measures against the new base and replaces its own row
+before it merges.
+
 **Ancestry pins and squash merges.** A policy row records the PR-branch commit it
 was reviewed at, and its introduction check requires that literal commit in the
 PR head. js-sdk squash-merges, so that commit is unreachable from master
