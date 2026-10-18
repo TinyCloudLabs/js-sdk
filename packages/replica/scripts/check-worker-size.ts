@@ -9,8 +9,10 @@ import { join, resolve } from "node:path";
 // The fix-before-stable worker start-up report (`main().catch(reportError)`, #565
 // commit 89b82fc2) measured 820,108 (+7) in GitHub run 39004961403 jobs
 // 117315431534 and 117315431611; the ledger's hardeningRatchet row records it.
+// TC-1413 (typed node retry errors in sdk-services) measured 820,935 (+827) in
+// GitHub run 39095466871 on 50a9a83c; the ledger's tc1413Ratchet row records it.
 // Zero additional headroom; independent of the web-sdk ledger, including WASM.
-export const MAX_WORKER_GZIP_BYTES = 820_108;
+export const MAX_WORKER_GZIP_BYTES = 820_935;
 const canonicalName = /^kv-storage\.worker\.([0-9a-f]{64})\.js$/;
 
 export function assertWorkerSizeToolchain(bunVersion: string, rustcOutput: string): void {
