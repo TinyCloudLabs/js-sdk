@@ -893,11 +893,10 @@ export interface TinyCloudNodeConfig {
 /**
  * The node's terminal marker is a UCAN fact; a wallet-signed SIWE (CACAO)
  * delegation cannot carry it, so such a delegation would stay re-delegatable.
+ * Callers must request only capabilities the current session holds.
  */
 const TERMINAL_DELEGATION_REQUIRES_SESSION_KEY =
-  "disableSubDelegation requires a session-key delegation: a wallet-signed " +
-  "delegation cannot carry the node's terminal marker. Request only " +
-  "capabilities the current session holds.";
+  "disableSubDelegation requires a session-key delegation";
 
 /**
  * Options for {@link TinyCloudNode.delegateTo}.
@@ -5491,11 +5490,12 @@ export class TinyCloudNode {
    * Both SharingService (single-entry) and
    * {@link TinyCloudNode.delegateTo} (multi-entry) drive this through
    * the same code path so there's exactly one place that touches the
-   * WASM boundary.
+   * WASM boundary. `terminal` adds the node's terminal marker, which the
+   * WASM builder cannot emit.
    *
    * @internal
    */
-  private createDelegationWrapper(params: CreateDelegationWasmParams): CreateDelegationWasmResult {
+  private createDelegationWrapper(params: CreateDelegationWasmParams, terminal = false): CreateDelegationWasmResult {
     // Convert ServiceSession to the format WASM expects
     const wasmSession = {
       delegationHeader: params.session.delegationHeader,
@@ -5518,8 +5518,9 @@ export class TinyCloudNode {
     );
 
     return {
-      delegation: result.delegation,
-      cid: result.cid,
+      ...(terminal
+        ? markDelegationTerminal(result.delegation, params.session.jwk)
+        : { delegation: result.delegation, cid: result.cid }),
       // Rust serde `rename_all = "camelCase"` emits `delegateDid`
       // (lowercase d); the TypeScript interface uses `delegateDID`
       // (historical, matches Delegation.delegateDID). Normalize here.
@@ -7457,10 +7458,7 @@ export class TinyCloudNode {
       spaceId,
       abilities,
       expirationSecs,
-    });
-    const signed = disableSubDelegation
-      ? markDelegationTerminal(result.delegation, serviceSession.jwk)
-      : result;
+    }, disableSubDelegation);
 
     // Translate the WASM result into a PortableDelegation. We don't
     // have a structured delegation header from the WASM path, so we
@@ -7477,10 +7475,10 @@ export class TinyCloudNode {
     // expects a bare JWT string. The wallet-signed CACAO path also uses
     // raw base64 without any prefix. Adding "Bearer " causes a parse
     // failure that surfaces as a 401 from the host.
-    const delegationHeader = { Authorization: signed.delegation };
+    const delegationHeader = { Authorization: result.delegation };
 
     const delegation: PortableDelegation = {
-      cid: signed.cid,
+      cid: result.cid,
       delegationHeader,
       spaceId,
       path: primary.path,
@@ -7535,16 +7533,13 @@ export class TinyCloudNode {
       spaceId: grant.session.spaceId,
       abilities: this.permissionsToAbilities(entries),
       expirationSecs: Math.floor(expirationTime.getTime() / 1000),
-    });
-    const signed = disableSubDelegation
-      ? markDelegationTerminal(result.delegation, grant.session.jwk)
-      : result;
+    }, disableSubDelegation);
 
     const primary = result.resources[0];
-    const delegationHeader = { Authorization: signed.delegation };
+    const delegationHeader = { Authorization: result.delegation };
     const targetHost = grant.delegation.host ?? this.config.host!;
     const delegation: PortableDelegation = {
-      cid: signed.cid,
+      cid: result.cid,
       delegationHeader,
       spaceId: grant.session.spaceId,
       path: primary.path,
