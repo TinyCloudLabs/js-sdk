@@ -326,31 +326,30 @@
     },
     "reason": "One shared classifier (nodeRetryError in sdk-services/src/errors.ts) maps the node's 503 sql_busy / unavailable_retryable / request_timeout and 500 outcome_unknown to NODE_BUSY, REQUEST_TIMEOUT and OUTCOME_UNKNOWN for SQL, DuckDB and KV get/head/list/put/delete, replacing the 503-as-KV_CONFLICT mapping. Cuts applied first: Retry-After is read as whole seconds only (no HTTP-date parsing), one message string per error site is shared with the classifier, and the CLI messages live in the CLI only. The first CI measurement on 90bc0ae7 was worker +946, and the two cuts took it to +827. The review then required mapping the new codes in their consumers (ShareRecipientClient.redactedCode and the operations KV and personal-record failure mappers, which also dropped the dead KV_CONFLICT paths); that moved only the root, by +27/+28, so the final source is 20c29611 with root +278/+302. Run 39099093175 measured identical absolute bytes in both jobs against merge base 3ae17bfc; the worker's 820,935 and the optional deltas are unchanged from run 39095938793. No replica-owned file changed; the growth is sdk-services and sdk-core code bundled into each artifact."
   },
-  "tc1424Ratchet": {
-    "label": "TC-1424 #583 non-extractable share receiver key, exact canonical delta",
-    "ruling": "Naomi's standing size rule for TC-1424 #583: a real shrink first, remainder by the PR's own exact-delta row at canonical CI bytes; whichever of #578, #580 and #583 lands later re-measures against the new base and updates its own row",
+  "tc1436Ratchet": {
+    "label": "TC-1436 #578 terminal marker for disableSubDelegation, exact canonical delta",
+    "ruling": "Naomi TC-1436 size ruling for #578: a real shrink first, remainder by the PR's own exact-delta row at canonical CI bytes; whichever of #578 and #580 lands second re-measures against the new base and updates its own row",
     "base": "7e10709c280596db0118a8fb04e7ffcd9bbe7212",
     "sourceCommits": [
-      "d1e4c3d32112a0f49a005597be65a73f2694c5f6",
-      "7672d834cdd67722bf82aa7b48a0c4f6ddce1418"
+      "d8e72fb90f2b8fd645fdcb24ac9249a9cb95f42d"
     ],
     "canonicalCI": {
-      "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39140119870",
+      "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39134326448",
       "jobs": [
-        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39140119870/job/117712634007",
-        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39140119870/job/117712634205"
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39134326448/job/117695648893",
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39134326448/job/117695649068"
       ]
     },
     "root": {
       "delta": {
-        "index.mjs": 1677,
-        "index.cjs": 1456
+        "index.mjs": 1327,
+        "index.cjs": 344
       },
       "ceiling": {
-        "index.mjs": 1466345,
-        "index.cjs": 1396831
+        "index.mjs": 1465995,
+        "index.cjs": 1395719
       }
     },
-    "reason": "Accountless share receivers sign with a non-extractable WebCrypto Ed25519 key whose handle is kept in IndexedDB: record validation, a multi-tab add race, compare-and-delete of stale records, removal of the earlier session-storage record, memory-only fallbacks with page-memory credentials, a page-memory fallback where session storage is blocked, sessions that stop signing at expiry or forget, and forget. The receiver is part of the web bundle, so it cannot leave the root. Ed25519 is not new bytes: @noble/curves/ed25519 was already bundled once through sdk-core and share-envelope and still is. Cuts applied first: no transaction timeout wrapper and no per-request promise helper (one transaction-completion promise instead); the local measurement went from +1499/+1265 to +1383/+1171, and CI measured +1382/+1225 on d1e4c3d3. The review fixes on 7672d834 (expiry and forget in sign, compare-and-delete, the blocked-storage fallback, credential storage chosen by the session) took CI to +1677/+1456. Not taken: a lazy import, because the web build pins LimitChunkCountPlugin({ maxChunks: 1 }) and would inline it; dropping forget, multi-tab handling, stored-record validation or the review fixes."
+    "reason": "disableSubDelegation now emits the node's terminal UCAN fact: markDelegationTerminal in sdk-core re-signs the WASM-built session-key token with the fact after checking the key is its issuer, and TinyCloudNode wires it through the WASM wrapper and refuses the flag on wallet-signed paths. TinyCloudNode is part of the web bundle, so the feature cannot leave the root. Cuts applied first: one marker call inside createDelegationWrapper instead of one per path, a 54-character error string instead of 176, and the issuer check replacing a separate public-key check; CI went from +1349/+363 on f97d73d9 to +1327/+344 on d8e72fb9. Not taken: a lazy import, because the web build pins LimitChunkCountPlugin({ maxChunks: 1 }) and would inline it; a browser stub, because web-sdk callers would lose the marker. Local ablation (Bun 1.3.14, gzip -9): helper +225/+298, wiring +183/+114. Both jobs of run 39134326448 measured identical absolute bytes against merge base 7e10709c. First import, activation, gated and the worker are unchanged."
   }
 }
