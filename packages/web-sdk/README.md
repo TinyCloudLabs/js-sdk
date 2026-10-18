@@ -149,7 +149,7 @@ and replaces its own row before it merges.
 
 **Ancestry pins and squash merges.** A policy row records the PR-branch commit it
 was reviewed at, and its introduction check requires that literal commit in the
-PR head. js-sdk squash-merges, so that commit is unreachable from master
+PR head. js-sdk uses merge commits, so that commit is unreachable from master
 afterwards; ancestry is therefore checked only when a PR introduces a row. Any
 new check that re-validates merged pins against HEAD would break master again
 after the next squash, and only review prevents that. As a consistency check,
