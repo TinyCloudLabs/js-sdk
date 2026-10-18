@@ -111,6 +111,11 @@ export type Tc1413Ratchet = HardeningRatchet;
  * `disableSubDelegation`. Only the root bundle grows, so the shape is the #571 root-only row.
  */
 export type Tc1436Ratchet = LogoutRatchet;
+/**
+ * One reviewed exact-delta admission of js-sdk #583 (TC-1424): the share receiver's non-extractable
+ * signing key. Only the root bundle grows, so the shape is the #571 root-only row.
+ */
+export type Tc1424Ratchet = LogoutRatchet;
 export type Ledger = {
   allowance: GzipSizes;
   entries: LedgerEntry[];
@@ -122,6 +127,7 @@ export type Ledger = {
   logoutRatchet?: LogoutRatchet;
   tc1413Ratchet?: Tc1413Ratchet;
   tc1436Ratchet?: Tc1436Ratchet;
+  tc1424Ratchet?: Tc1424Ratchet;
 };
 
 const formats = ["index.mjs", "index.cjs"] as const;
@@ -352,6 +358,34 @@ export const approvedTc1436Ratchet: Tc1436Ratchet = {
   reason: "disableSubDelegation now emits the node's terminal UCAN fact: markDelegationTerminal in sdk-core re-signs the WASM-built session-key token with the fact after checking the key is its issuer, and TinyCloudNode wires it through the WASM wrapper and refuses the flag on wallet-signed paths. TinyCloudNode is part of the web bundle, so the feature cannot leave the root. Cuts applied first: one marker call inside createDelegationWrapper instead of one per path, a 54-character error string instead of 176, and the issuer check replacing a separate public-key check; CI went from +1349/+363 on f97d73d9 to +1327/+344 on d8e72fb9. Not taken: a lazy import, because the web build pins LimitChunkCountPlugin({ maxChunks: 1 }) and would inline it; a browser stub, because web-sdk callers would lose the marker. Local ablation (Bun 1.3.14, gzip -9): helper +225/+298, wiring +183/+114. Both jobs of run 39134326448 measured identical absolute bytes against merge base 7e10709c. First import, activation, gated and the worker are unchanged.",
 };
 
+/**
+ * Naomi's standing size rule applied to TC-1424 (js-sdk #583): after a real shrink, the receiver key
+ * custody is admitted at exactly the bytes GitHub measured, root only, with no headroom. #578 landed
+ * first, so this row is measured against the base that includes the TC-1436 row.
+ */
+export const approvedTc1424Ratchet: Tc1424Ratchet = {
+  label: "TC-1424 #583 non-extractable share receiver key, exact canonical delta",
+  ruling: "Naomi's standing size rule for TC-1424 #583: a real shrink first, remainder by the PR's own exact-delta row at canonical CI bytes; whichever of #578, #580 and #583 lands later re-measures against the new base and updates its own row",
+  base: "129c793544b69b3b956c1c3258e64d1e6efd45fa",
+  sourceCommits: [
+    "d1e4c3d32112a0f49a005597be65a73f2694c5f6",
+    "7672d834cdd67722bf82aa7b48a0c4f6ddce1418",
+    "27b8c35d083761bf85b9761a7f65beaeb1b0fefb",
+  ],
+  canonicalCI: {
+    run: "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39144364735",
+    jobs: [
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39144364735/job/117725078966",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39144364735/job/117725079225",
+    ],
+  },
+  root: {
+    delta: { "index.mjs": 1677, "index.cjs": 1444 },
+    ceiling: { "index.mjs": 1467672, "index.cjs": 1397163 },
+  },
+  reason: "Accountless share receivers sign with a non-extractable WebCrypto Ed25519 key whose handle is kept in IndexedDB: record validation, a multi-tab add race, compare-and-delete of stale records, removal of the earlier session-storage record, memory-only fallbacks with page-memory credentials, a page-memory fallback where session storage is blocked, sessions that stop signing at expiry or forget, and forget. The receiver is part of the web bundle, so it cannot leave the root. Ed25519 is not new bytes: @noble/curves/ed25519 was already bundled once through sdk-core and share-envelope and still is. Cuts applied first: no transaction timeout wrapper and no per-request promise helper (one transaction-completion promise instead); the local measurement went from +1499/+1265 to +1383/+1171, and CI measured +1382/+1225 on d1e4c3d3. The review fixes on 7672d834 (expiry and forget in sign, compare-and-delete, the blocked-storage fallback, credential storage chosen by the session) took CI to +1677/+1456 against 7e10709c. After #578 landed, the merge 27b8c35d measured +1677/+1444 against 129c7935, which this row admits. Not taken: a lazy import, because the web build pins LimitChunkCountPlugin({ maxChunks: 1 }) and would inline it; dropping forget, multi-tab handling, stored-record validation or the review fixes.",
+};
+
 /** The reviewed #553 S3 entry's source commit, as master's checker pinned it. */
 export const preexistingS3EntryCommit = "0241ba9b";
 
@@ -401,6 +435,7 @@ export function ancestryPins(root: Ledger, hasGatedOnly: boolean): Array<{ row: 
   if (root.logoutRatchet !== undefined) pins.push({ row: "logoutRatchet", pin: root.logoutRatchet.sourceCommits.at(-1)! });
   if (root.tc1413Ratchet !== undefined) pins.push({ row: "tc1413Ratchet", pin: root.tc1413Ratchet.sourceCommits.at(-1)! });
   if (root.tc1436Ratchet !== undefined) pins.push({ row: "tc1436Ratchet", pin: root.tc1436Ratchet.sourceCommits.at(-1)! });
+  if (root.tc1424Ratchet !== undefined) pins.push({ row: "tc1424Ratchet", pin: root.tc1424Ratchet.sourceCommits.at(-1)! });
   if (hasGatedOnly) pins.push({ row: "gatedOnlyRatchet", pin: approvedGatedOnlyRatchet.sourceCommit });
   return pins;
 }
@@ -437,7 +472,7 @@ const historicalToolchain = "Bun 1.4.3; production webpack; gzip -9 -c";
 /** Only a git merge-base ledger may retain the pre-correction toolchain. */
 export function validateLedger(value: Ledger, historicalBase = false): void {
   if (!value || !value.allowance || !Array.isArray(value.entries) ||
-      Object.keys(value).some((key) => key !== "allowance" && key !== "entries" && key !== "phase2Ratchet" && key !== "fixRequiredRatchet" && key !== "canonicalToolchainCorrection" && key !== "masterMergeResolution" && key !== "hardeningRatchet" && key !== "logoutRatchet" && key !== "tc1413Ratchet" && key !== "tc1436Ratchet")) {
+      Object.keys(value).some((key) => key !== "allowance" && key !== "entries" && key !== "phase2Ratchet" && key !== "fixRequiredRatchet" && key !== "canonicalToolchainCorrection" && key !== "masterMergeResolution" && key !== "hardeningRatchet" && key !== "logoutRatchet" && key !== "tc1413Ratchet" && key !== "tc1436Ratchet" && key !== "tc1424Ratchet")) {
     throw new Error("Invalid packages/web-sdk/scripts/replica-size-ledger.json shape");
   }
   if (Object.keys(value.allowance).some((key) => !formats.includes(key as typeof formats[number]))) {
@@ -509,6 +544,10 @@ export function validateLedger(value: Ledger, historicalBase = false): void {
       (!value.tc1413Ratchet || JSON.stringify(value.tc1436Ratchet) !== JSON.stringify(approvedTc1436Ratchet))) {
     throw new Error("Only Naomi's exact canonical TC-1436 terminal-marker ratchet is approved.");
   }
+  if (value.tc1424Ratchet !== undefined &&
+      (!value.tc1436Ratchet || JSON.stringify(value.tc1424Ratchet) !== JSON.stringify(approvedTc1424Ratchet))) {
+    throw new Error("Only Naomi's exact canonical TC-1424 receiver-key ratchet is approved.");
+  }
 }
 
 /** The resolved input blobs are introduced once and immutable in subsequent bases. */
@@ -550,6 +589,14 @@ export function validateTc1436RatchetTransition(base?: Tc1436Ratchet, current?: 
   if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc1436Ratchet) ||
       base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
     throw new Error("The exact TC-1436 ratchet may be introduced once and cannot change later.");
+  }
+}
+
+/** The TC-1424 ratchet is introduced once at its exact canonical bytes and immutable afterwards. */
+export function validateTc1424RatchetTransition(base?: Tc1424Ratchet, current?: Tc1424Ratchet): void {
+  if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc1424Ratchet) ||
+      base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
+    throw new Error("The exact TC-1424 ratchet may be introduced once and cannot change later.");
   }
 }
 
