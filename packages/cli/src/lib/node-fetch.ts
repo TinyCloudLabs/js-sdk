@@ -310,13 +310,18 @@ async function* xzChunks(file: string, xzPath: string): AsyncGenerator<Buffer> {
   });
   createReadStream(file).on("error", () => child.kill("SIGKILL")).pipe(child.stdin);
   let streamError: unknown;
+  let outputEnded = false;
   try {
     for await (const chunk of child.stdout) yield chunk as Buffer;
+    outputEnded = true;
   } catch (error) {
     // A failed spawn also breaks the pipe; the exit status below says why.
     streamError = error;
   } finally {
-    if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+    // Kill only if we are leaving early (the reader gave up, or the pipe broke). Once xz has
+    // closed its output it is finishing on its own; killing it here can race its exit and turn
+    // a valid archive into "exit null". The exit status is read from `closed` below.
+    if (!outputEnded && child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
   }
   let code: number | null;
   try {

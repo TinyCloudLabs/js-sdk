@@ -349,6 +349,23 @@ describe("fetchNodeBinary", () => {
         await expectCode(install(artifact, { xzBinary: standIn }), "NODE_ARTIFACT_INTEGRITY", "executable");
         await expectUntouched(previous);
       });
+
+      // The decompressor closes its output and only then exits, as a real xz can under load.
+      // The delay lives in the fixture script, so the order of events is fixed, not raced.
+      test("a decompressor that finished its output but has not exited yet is waited for, not killed", async () => {
+        const archive = xz(buildTar(goodEntries()));
+        const artifact = artifactFor(archive);
+        serveRelease(artifact, sendBytes(archive));
+        const tarFile = join(work, "good.tar");
+        await writeFile(tarFile, buildTar(goodEntries()));
+        const slowExit = join(work, "xz-slow-exit.sh");
+        await writeFile(slowExit, `#!/bin/sh\ncat '${tarFile}'\nexec 1>&-\nsleep 0.3\nexit 0\n`);
+        await chmod(slowExit, 0o755);
+
+        await install(artifact, { xzBinary: slowExit });
+
+        expect(await readFile(destination)).toEqual(BINARY);
+      });
     });
   });
 
