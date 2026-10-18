@@ -26,6 +26,8 @@
     "generate:reference": "bun scripts/generate-reference.ts",
     "check:generated": "bun scripts/generate-reference.ts --check",
     "check:coverage": "bun scripts/check-coverage.ts",
+    "generate:node-release": "bun scripts/generate-node-release.ts",
+    "check:node-release": "bun scripts/generate-node-release.ts --check",
     "smoke:delegated-secrets": "bun scripts/live-delegated-secrets-smoke.ts",
     "check:skill-pack": "node scripts/check-skill-pack.mjs",
     "sync:courier-skill": "rm -rf skills/courier && cp -R ../courier/skills/courier skills/courier"

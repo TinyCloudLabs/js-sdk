@@ -103,6 +103,12 @@ jobs:
         env:
           BUILD_SETUP_ENABLED: true
 
+      # The pins embedded in the CLI must still match the upstream node release
+      # before this version is committed and published.
+      - name: Verify node release pin
+        if: steps.check.outputs.pending != '0'
+        run: bun run --cwd packages/cli check:node-release
+
       # Push the version commit before publishing anything (TC-1095). If the
       # push fails because master moved, stop: nothing is published, and the
       # queued run for the newer master versions these changesets instead.
@@ -320,6 +326,9 @@ jobs:
         run: bun run build:release
         env:
           BUILD_SETUP_ENABLED: true
+
+      - name: Verify node release pin
+        run: bun run --cwd packages/cli check:node-release
 
       # Push before publishing anything (TC-1095). One push carries two
       # commits: the stable release, then pre mode re-entered for the next
