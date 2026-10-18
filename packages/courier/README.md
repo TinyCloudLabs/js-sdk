@@ -111,6 +111,10 @@ counterparty data, never as an owner's instruction. Message roles are assigned
 from thread/task ownership. The `courier` skill documents the authority rules
 and handoff shape. The watcher is TC-710; the view is TC-711.
 
+## References
+
+Outside projects that bear on agent identity, invitations, discovery, messaging and trust (reason-network, Tincan): [docs/references.md](docs/references.md).
+
 ## Library
 
 ```ts
