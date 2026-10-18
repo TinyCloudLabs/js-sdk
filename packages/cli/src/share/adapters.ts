@@ -643,7 +643,7 @@ export function createShareAuthorityAdapters(input: {
     const mediaType = targetInput.mediaType ?? file.mediaType ?? "application/octet-stream";
     const actions = targetInput.actions === undefined || targetInput.actions.length === 0 ? ["read"] as const : targetInput.actions;
     const policyActions = [...new Set(actions.flatMap((action) => action === "read" ? ["tinycloud.kv/get", "tinycloud.kv/metadata"] : action === "list" ? ["tinycloud.kv/list"] : ["tinycloud.kv/put"]))] as ("tinycloud.kv/get" | "tinycloud.kv/list" | "tinycloud.kv/metadata" | "tinycloud.kv/put")[];
-    // A pinned path is meant to be immutable: it never carries `put`. Edits belong on `current/` (ongoing shares).
+    // A pinned path is immutable: it never carries `put`. v1 artifact shares are pinned-only; ongoing shares wait for link-as-delegation.
     if (artifact !== undefined && policyActions.includes("tinycloud.kv/put")) {
       throw new SharePublishAuthorityError({ kind: "invalid-request", reason: "a pinned artifact share cannot grant edit" });
     }

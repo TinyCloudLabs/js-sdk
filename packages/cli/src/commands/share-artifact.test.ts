@@ -1,9 +1,10 @@
+import { Command } from "commander";
 import { describe, expect, test } from "bun:test";
 import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { MemorySenderShareRecordStorage, publishArtifactVersion, type ArtifactStore, type PublishedShare, type TargetPublishInput } from "@tinycloud/share-sdk";
-import { configureShareCommandServices } from "./share.js";
+import { configureShareCommandServices, registerShareCommand } from "./share.js";
 import { runShareCaptured } from "./share.integration-harness.js";
 
 const viewerOrigin = "https://share-dev.tinycloud.link";
@@ -62,31 +63,44 @@ describe("tc share publish --artifact", () => {
     expect(seen[0]?.artifact?.id).not.toBe(seen[1]?.artifact?.id);
   });
 
-  test("refuses edit on a pinned share, ongoing without an artifact, and ongoing for anyone-with-link, before publishing", async () => {
+  test("refuses edit on a pinned share and --note without an artifact, before publishing", async () => {
     let published = 0;
     configureShareCommandServices({ targetAdapter: { publish: async (request) => { published += 1; return publishedFor(request); } } });
     const file = await input();
     const edit = await refusal(["share", "publish", file, "--to", did, "--artifact", "art_report", "--action", "edit", "--json"]);
     expect(edit.exitCode).toBe(2);
-    expect(edit.stderr).toContain("needs --ongoing");
-    const orphan = await refusal(["share", "publish", file, "--ongoing", "--json"]);
-    expect(orphan.exitCode).toBe(2);
-    expect(orphan.stderr).toContain("--ongoing requires --artifact");
-    const anyone = await refusal(["share", "publish", file, "--artifact", "art_report", "--ongoing", "--json"]);
-    expect(anyone.exitCode).toBe(2);
-    expect(anyone.stderr).toContain("not available for --to anyone");
+    expect(edit.stderr).toContain("--action edit is not available for artifact shares");
     const note = await refusal(["share", "publish", file, "--note", "x", "--json"]);
     expect(note.stderr).toContain("--note requires --artifact");
     expect(published).toBe(0);
   });
 
-  test("refuses an ongoing addressed share rather than minting one that breaks on the first update", async () => {
+  test("--ongoing is refused with one message for every target and flag combination, and never reaches the publisher", async () => {
     let published = 0;
     configureShareCommandServices({ targetAdapter: { publish: async (request) => { published += 1; return publishedFor(request); } } });
-    const result = await refusal(["share", "publish", await input(), "--to", did, "--artifact", "art_report", "--ongoing", "--action", "edit", "--json"]);
-    expect(result.exitCode).toBe(2);
-    expect(result.stderr).toContain("not available yet");
+    const file = await input();
+    const combinations: readonly (readonly string[])[] = [
+      ["--ongoing"],
+      ["--artifact", "art_report", "--ongoing"],
+      ["--artifact", "new", "--ongoing"],
+      ["--to", did, "--artifact", "art_report", "--ongoing"],
+      ["--to", did, "--artifact", "art_report", "--ongoing", "--action", "edit"],
+      ["--to", "alice@example.com", "--artifact", "art_report", "--ongoing", "--notify"],
+    ];
+    for (const flags of combinations) {
+      const result = await refusal(["share", "publish", file, ...flags, "--json"]);
+      expect(result.exitCode).toBe(2);
+      expect(result.stderr).toContain("Ongoing shares are not available yet; v1 shares pin a version");
+    }
     expect(published).toBe(0);
+  });
+
+  test("--ongoing is not advertised in publish help", async () => {
+    const program = new Command();
+    registerShareCommand(program);
+    const publish = program.commands.find((command) => command.name() === "share")?.commands.find((command) => command.name() === "publish");
+    expect(publish?.helpInformation()).not.toContain("ongoing");
+    expect(publish?.helpInformation()).toContain("--artifact");
   });
 
   test("refuses a malformed artifact id and more than one file", async () => {

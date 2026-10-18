@@ -1,4 +1,4 @@
-import { Command } from "commander";
+import { Command, Option } from "commander";
 import { CLI_NAME } from "@tinycloud/operations/cli-name";
 import {
   inspectShare,
@@ -58,28 +58,26 @@ export interface ShareCommandServices {
   readonly artifactStore?: () => Promise<ArtifactStore>;
 }
 
+/** `--ongoing` has no working implementation in v1: every artifact share pins one version. */
+const ONGOING_UNAVAILABLE = "Ongoing shares are not available yet; v1 shares pin a version";
+
 /** Validate the artifact flags once and name the pinned version request, if any. */
 function artifactRequest(
   options: { readonly artifact?: string; readonly ongoing?: boolean; readonly note?: string },
-  target: ShareTarget,
   actions: readonly ("read" | "list" | "edit")[],
   inputCount: number,
 ): { readonly id: string; readonly note?: string } | undefined {
+  // One refusal, before anything else is looked at. A share that follows a mutable copy cannot be minted today:
+  // the recipient SDK rejects ciphertext whose wrapped-key hash differs from the one signed into the share, so
+  // it would break on the first update. Ongoing shares come with link-as-delegation (TC-1428 ruling).
+  if (options.ongoing === true) throw new CLIError("UNSUPPORTED_TARGET", ONGOING_UNAVAILABLE, 2);
   if (options.artifact === undefined) {
-    if (options.ongoing === true) throw new CLIError("INVALID_ARGUMENT", "--ongoing requires --artifact", 2);
     if (options.note !== undefined) throw new CLIError("INVALID_ARGUMENT", "--note requires --artifact", 2);
     return undefined;
   }
-  // A pinned path is immutable and never carries put: edit has to land on the mutable current copy.
-  if (actions.includes("edit") && options.ongoing !== true) {
-    throw new CLIError("INVALID_ARGUMENT", "--action edit needs --ongoing: a pinned artifact share is read-only", 2);
-  }
-  if (options.ongoing === true) {
-    if (target.kind === "bearer") throw new CLIError("INVALID_ARGUMENT", "--ongoing is not available for --to anyone; use an addressed target", 2);
-    // The recipient SDK refuses ciphertext whose wrapped-key hash differs from the one signed into the share, so a
-    // re-encrypted current copy cannot be followed by an existing envelope. Ongoing shares need the envelope to carry
-    // a follow marker first (TC-1428, later slice); refuse rather than mint a share that breaks on the first update.
-    throw new CLIError("UNSUPPORTED_TARGET", "ongoing artifact shares are not available yet; publish pinned (omit --ongoing)", 2);
+  // A pinned path is immutable and never carries put.
+  if (actions.includes("edit")) {
+    throw new CLIError("INVALID_ARGUMENT", "--action edit is not available for artifact shares: a pinned version is read-only", 2);
   }
   if (inputCount !== 1) throw new CLIError("INVALID_ARGUMENT", "an artifact share takes exactly one file", 2);
   const note = options.note;
@@ -348,7 +346,8 @@ export function registerShareCommand(program: Command): void {
     .option("--prefix", "Publish multiple inputs beneath one addressed prefix")
     .option("--binary", "Allow non-UTF-8 bearer content")
     .option("--artifact <id>", "Publish as the next write-once version of an artifact (\"new\" starts one); the share is pinned to that version")
-    .option("--ongoing", "Follow the artifact's current copy instead of one version (not available yet)")
+    // Hidden: accepted only so it fails with a clear message instead of "unknown option" (see ONGOING_UNAVAILABLE).
+    .addOption(new Option("--ongoing").hideHelp())
     .option("--note <text>", "Note stored with the artifact version")
     .option("--json", "Print versioned redacted JSON")
     .option("--viewer-origin <origin>", "Canonical HTTPS viewer origin", SHARE_ORIGIN)
@@ -366,7 +365,7 @@ export function registerShareCommand(program: Command): void {
         const actions = requestedActions(options.action);
         if (options.prefix && target.kind === "bearer") throw new CLIError("INVALID_ARGUMENT", "--prefix requires an addressed target", 2);
         if (inputs.length > 1 && target.kind === "bearer") throw new CLIError("UNSUPPORTED_LINK", "multiple files require an addressed target", 2);
-        const artifact = artifactRequest(options, target, actions, inputs.length);
+        const artifact = artifactRequest(options, actions, inputs.length);
         if (inputs.length > 1 && !options.prefix) throw new CLIError("INVALID_ARGUMENT", "multiple files require --prefix", 2);
         if (options.notify === true && !actions.includes("read")) throw new CLIError("INVALID_ARGUMENT", "--notify requires the read action; nothing was shared", 2);
         if (options.notifyTo !== undefined && (options.notify !== true || target.kind !== "emailDomain")) {
