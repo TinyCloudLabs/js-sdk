@@ -20,11 +20,14 @@
  * slash-stripped resource, so a trailing slash cannot list. The slashless
  * form stays path-segment bounded (`versions/1` does not cover `versions/10`).
  */
-import { sha256 } from "@noble/hashes/sha256";
 import { canonicalize } from "@tinycloud/share-envelope";
+import { ARTIFACT_ROOT, parseArtifactVersionPath, sha256Hex } from "./artifact-core.js";
 import { canonicalShareFilename } from "./filename-policy.js";
+import { ArtifactPinError } from "./artifact-pin.js";
+import type { ArtifactPin } from "@tinycloud/share-envelope";
 
-export const ARTIFACT_ROOT = "artifacts";
+// Shared with the pin verifier, which the browser bundles carry; defined in `artifact-core` so this module stays out of them.
+export { ARTIFACT_ROOT, parseArtifactVersionPath, sha256Hex };
 export const ARTIFACT_MANIFEST_NAME = "manifest.json";
 export const ARTIFACT_MANIFEST_VERSION = 1 as const;
 /** A lost create race bumps `n`; this bounds how many times one publish retries. */
@@ -105,10 +108,6 @@ export interface ArtifactVersionSummary {
   readonly manifestSha256?: string;
 }
 
-export function sha256Hex(bytes: Uint8Array): string {
-  return Array.from(sha256(bytes), (byte) => byte.toString(16).padStart(2, "0")).join("");
-}
-
 export function newArtifactId(random: (length: number) => Uint8Array = (length) => crypto.getRandomValues(new Uint8Array(length))): string {
   return `art_${Array.from(random(8), (byte) => byte.toString(16).padStart(2, "0")).join("")}`;
 }
@@ -136,13 +135,6 @@ export function artifactVersionResource(artifactId: string, version: number): st
 
 export function artifactVersionFilePath(artifactId: string, version: number, filename: string): string {
   return `${artifactVersionResource(artifactId, version)}/${filename}`;
-}
-
-/** The artifact and version a stored KV path belongs to, if it is under a version directory. */
-export function parseArtifactVersionPath(path: string): { readonly artifactId: string; readonly version: number; readonly file: string } | undefined {
-  const match = /^artifacts\/([a-z0-9][a-z0-9_-]{2,62})\/versions\/([1-9][0-9]{0,14})\/([^/]+)$/.exec(path);
-  if (match === null) return undefined;
-  return { artifactId: match[1]!, version: Number(match[2]), file: match[3]! };
 }
 
 export function manifestBytes(manifest: ArtifactManifest): Uint8Array {
@@ -294,4 +286,36 @@ export async function publishArtifactVersion(store: ArtifactStore, input: Artifa
     if (identical) return { artifactId, version, manifest: theirs, manifestSha256: sha256Hex(existing), created: false };
   }
   throw new ArtifactError("conflict", "could not claim an artifact version number after repeated races; retry");
+}
+
+/** The pin an owner signs for one stored file of a freshly published version. */
+export function buildArtifactPin(version: ArtifactVersionResult, filename: string): ArtifactPin {
+  const entry = version.manifest.files.find((candidate) => candidate.path === filename);
+  if (entry === undefined) throw new ArtifactError("invalid-argument", "artifact manifest does not list that file");
+  return {
+    v: 1,
+    artifactId: version.artifactId,
+    version: version.version,
+    manifestSha256: version.manifestSha256,
+    files: [{ path: entry.path, sha256: entry.sha256, bytes: entry.bytes }],
+  };
+}
+
+/**
+ * For a holder of `manifest.json` (the owner, or a tool auditing a version): the bytes must hash to the pinned
+ * digest, parse strictly, and list the pinned file with the same digest and size.
+ */
+export function verifyArtifactManifestBytes(pin: ArtifactPin, manifestBytes: Uint8Array): ArtifactManifest {
+  if (sha256Hex(manifestBytes) !== pin.manifestSha256) {
+    throw new ArtifactPinError("manifest-mismatch", "artifact manifest does not match the owner's pin");
+  }
+  let manifest: ArtifactManifest;
+  try { manifest = parseArtifactManifest(manifestBytes); }
+  catch { throw new ArtifactPinError("manifest-mismatch", "artifact manifest is malformed"); }
+  const file = pin.files[0]!;
+  const listed = manifest.files.find((candidate) => candidate.path === file.path);
+  if (listed === undefined || listed.sha256 !== file.sha256 || listed.bytes !== file.bytes) {
+    throw new ArtifactPinError("manifest-mismatch", "artifact manifest does not list the pinned file");
+  }
+  return manifest;
 }

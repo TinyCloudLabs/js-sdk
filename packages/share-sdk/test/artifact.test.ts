@@ -9,7 +9,7 @@ import {
   publishArtifactVersion,
   sha256Hex,
   type ArtifactStore,
-} from "../src/index.js";
+} from "../src/artifact.js";
 
 const enc = (value: string) => new TextEncoder().encode(value);
 const dec = (value: Uint8Array) => new TextDecoder().decode(value);

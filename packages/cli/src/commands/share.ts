@@ -1,16 +1,18 @@
 import { Command, Option } from "commander";
 import { CLI_NAME } from "@tinycloud/operations/cli-name";
 import {
-  inspectShare,
-  receiveShare,
-  SharePublishError,
-  ShareReceiveError,
   ArtifactError,
   assertArtifactId,
   listArtifactVersions,
   newArtifactId,
   parseArtifactVersionPath,
   type ArtifactStore,
+} from "@tinycloud/share-sdk/artifact";
+import {
+  inspectShare,
+  receiveShare,
+  SharePublishError,
+  ShareReceiveError,
   publishTargetShare,
   parseNativeShareUrl,
   listShares,
@@ -394,13 +396,16 @@ export function registerShareCommand(program: Command): void {
           target,
           resourceKind: options.prefix || inputs.length > 1 ? "prefix" : "exact",
           actions,
-          ...(artifact === undefined ? {} : { artifact }),
           expiresAt: expires(options.expires ?? "7d"),
           expiryWasExplicit: options.expires !== undefined,
           origin: options.viewerOrigin,
           ...(maxBytes === undefined ? {} : { maxBytes }),
           notify: options.notify === true,
-          targetAdapter: shareServices.targetAdapter,
+          // The artifact request rides on the adapter call rather than through `publishTargetShare`, whose code is part of
+          // the browser bundles (the web-sdk size ceiling counts every byte it carries).
+          targetAdapter: artifact === undefined || shareServices.targetAdapter === undefined
+            ? shareServices.targetAdapter
+            : { publish: (request) => shareServices.targetAdapter!.publish({ ...request, artifact }) },
         });
         if ("state" in result) {
           if (json) {

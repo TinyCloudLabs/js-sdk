@@ -23,15 +23,7 @@ import {
   type ShareEnvelopeV3,
   type UnsignedShareEnvelopeV3,
 } from "@tinycloud/share-envelope";
-import {
-  ARTIFACT_ROOT,
-  ArtifactError,
-  parseArtifactManifest,
-  parseArtifactVersionPath,
-  sha256Hex,
-  type ArtifactManifest,
-  type ArtifactVersionResult,
-} from "./artifact.js";
+import { ARTIFACT_ROOT, parseArtifactVersionPath, sha256Hex } from "./artifact-core.js";
 
 export type ArtifactPinErrorCode =
   | "missing-pin"
@@ -63,19 +55,6 @@ export interface VerifyArtifactShareOptions {
   /** The did:key the caller trusts as the sender. `signature.signerDid` is self-asserted and proves nothing alone. */
   readonly expectedOwnerDid: string;
   readonly expected?: ExpectedArtifact;
-}
-
-/** The pin an owner signs for one stored file of a freshly published version. */
-export function buildArtifactPin(version: ArtifactVersionResult, filename: string): ArtifactPin {
-  const entry = version.manifest.files.find((candidate) => candidate.path === filename);
-  if (entry === undefined) throw new ArtifactError("invalid-argument", "artifact manifest does not list that file");
-  return {
-    v: 1,
-    artifactId: version.artifactId,
-    version: version.version,
-    manifestSha256: version.manifestSha256,
-    files: [{ path: entry.path, sha256: entry.sha256, bytes: entry.bytes }],
-  };
 }
 
 /**
@@ -185,23 +164,4 @@ export function verifyArtifactFileBytes(pin: ArtifactPin, storedBytes: Uint8Arra
   if (storedBytes.byteLength !== file.bytes || sha256Hex(storedBytes) !== file.sha256) {
     throw new ArtifactPinError("file-digest-mismatch", "fetched artifact bytes do not match the owner's pin");
   }
-}
-
-/**
- * For a holder of `manifest.json` (the owner, or a tool auditing a version): the bytes must hash to the pinned
- * digest, parse strictly, and list the pinned file with the same digest and size.
- */
-export function verifyArtifactManifestBytes(pin: ArtifactPin, manifestBytes: Uint8Array): ArtifactManifest {
-  if (sha256Hex(manifestBytes) !== pin.manifestSha256) {
-    throw new ArtifactPinError("manifest-mismatch", "artifact manifest does not match the owner's pin");
-  }
-  let manifest: ArtifactManifest;
-  try { manifest = parseArtifactManifest(manifestBytes); }
-  catch { throw new ArtifactPinError("manifest-mismatch", "artifact manifest is malformed"); }
-  const file = pin.files[0]!;
-  const listed = manifest.files.find((candidate) => candidate.path === file.path);
-  if (listed === undefined || listed.sha256 !== file.sha256 || listed.bytes !== file.bytes) {
-    throw new ArtifactPinError("manifest-mismatch", "artifact manifest does not list the pinned file");
-  }
-  return manifest;
 }

@@ -8,17 +8,19 @@ import {
   addressedCredentialRequirement,
   artifactBindingView,
   assertArtifactBinding,
+  publishAddressedShare,
+  verifyArtifactFileBytes,
+  verifyArtifactShare,
+} from "../src/index.js";
+import {
   buildArtifactPin,
   manifestBytes,
-  publishAddressedShare,
   publishArtifactVersion,
   sha256Hex,
-  verifyArtifactFileBytes,
   verifyArtifactManifestBytes,
-  verifyArtifactShare,
   type ArtifactStore,
   type ArtifactVersionResult,
-} from "../src/index.js";
+} from "../src/artifact.js";
 
 const didFor = (seed: Uint8Array) => `did:key:${base58btc.encode(Uint8Array.from([0xed, 0x01, ...ed25519.getPublicKey(seed)]))}`;
 const ownerSeed = Uint8Array.from({ length: 32 }, (_, index) => index + 1);

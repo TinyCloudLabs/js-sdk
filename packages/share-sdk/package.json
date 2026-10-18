@@ -15,6 +15,12 @@
       "require": "./dist/index.cjs",
       "default": "./dist/index.js"
     },
+    "./artifact": {
+      "types": "./dist/artifact.d.ts",
+      "import": "./dist/artifact.js",
+      "require": "./dist/artifact.cjs",
+      "default": "./dist/artifact.js"
+    },
     "./package.json": "./package.json"
   },
   "sideEffects": false,

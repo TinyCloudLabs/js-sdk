@@ -1,4 +1,4 @@
-import { ArtifactError, type ArtifactStore } from "@tinycloud/share-sdk";
+import { ArtifactError, type ArtifactStore } from "@tinycloud/share-sdk/artifact";
 import type { IKVService } from "@tinycloud/node-sdk";
 
 const MAX_LIST_PAGES = 1000;

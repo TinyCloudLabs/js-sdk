@@ -93,7 +93,6 @@ export function redactPublishedShare(result: PublishedShare): Omit<PublishedShar
       ...(result.metadata.expiryClamped === undefined ? {} : { expiryClamped: result.metadata.expiryClamped }),
       expiresAt: result.metadata.expiresAt,
       display: { ...result.metadata.display },
-      ...(result.metadata.artifact === undefined ? {} : { artifact: { ...result.metadata.artifact } }),
     },
   };
 }

@@ -3,7 +3,8 @@ import { describe, expect, test } from "bun:test";
 import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { MemorySenderShareRecordStorage, publishArtifactVersion, type ArtifactStore, type PublishedShare, type TargetPublishInput } from "@tinycloud/share-sdk";
+import { MemorySenderShareRecordStorage, type PublishedShare, type TargetPublishInput } from "@tinycloud/share-sdk";
+import { publishArtifactVersion, type ArtifactStore } from "@tinycloud/share-sdk/artifact";
 import { configureShareCommandServices, registerShareCommand } from "./share.js";
 import { runShareCaptured } from "./share.integration-harness.js";
 import { SharePublishAuthorityError } from "../share/errors.js";
@@ -50,7 +51,7 @@ describe("tc share publish --artifact", () => {
     configureShareCommandServices({ targetAdapter: { publish: async (request) => { seen.push(request); return publishedFor(request); } } });
     const result = await runShareCaptured(["share", "publish", await input(), "--artifact", "art_report", "--note", "first cut", "--viewer-origin", viewerOrigin, "--json"]);
     expect(seen[0]?.artifact).toEqual({ id: "art_report", note: "first cut" });
-    expect(JSON.parse(result.stdout)).toMatchObject({ artifactId: "art_report", version: 3, mode: "pinned", metadata: { artifact: { id: "art_report", version: 3, mode: "pinned" } } });
+    expect(JSON.parse(result.stdout)).toMatchObject({ artifactId: "art_report", version: 3, mode: "pinned" });
     // The link never appears in machine output.
     expect(result.stdout).not.toContain("tc1=");
   });
