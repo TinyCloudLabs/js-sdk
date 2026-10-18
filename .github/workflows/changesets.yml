@@ -105,6 +105,14 @@ jobs:
         env:
           BUILD_SETUP_ENABLED: true
 
+      # The pins embedded in the CLI must still match the upstream node release
+      # before this version is committed and published.
+      - name: Verify node release pin
+        if: steps.check.outputs.pending != '0'
+        run: bun run --cwd packages/cli check:node-release
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+
       # Commit the version bump locally; nothing leaves the runner until the
       # npm check below has passed (TC-1457). The push still comes before any
       # publish (TC-1095).
@@ -349,6 +357,11 @@ jobs:
         run: bun run build:release
         env:
           BUILD_SETUP_ENABLED: true
+
+      - name: Verify node release pin
+        run: bun run --cwd packages/cli check:node-release
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
 
       # Push before publishing anything (TC-1095). One push carries two
       # commits: the stable release, then pre mode re-entered for the next
