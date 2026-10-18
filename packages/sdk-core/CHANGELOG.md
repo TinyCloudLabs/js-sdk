@@ -1,5 +1,18 @@
 # @tinycloudlabs/sdk-core
 
+## 3.3.0-beta.7
+
+### Patch Changes
+
+- 29440be: Wallet-backed `TinyCloudNode.revokeDelegation(cid)` now signs a direct owner revocation for the target CID. Session-only clients continue to use their delegated revocation authority; the node receipt must confirm the requested CID (TC-721, TC-821).
+- 94566db: Persist the replica session stamp with browser sessions and forward it on restore.
+- Updated dependencies [a7cdfe0]
+- Updated dependencies [94566db]
+- Updated dependencies [94566db]
+- Updated dependencies [90bc0ae]
+- Updated dependencies [0c4c6b2]
+  - @tinycloud/sdk-services@3.3.0-beta.7
+
 ## 3.2.6-beta.4
 
 ### Patch Changes

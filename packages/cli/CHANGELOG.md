@@ -1,5 +1,56 @@
 # @tinycloud/cli
 
+## 1.3.0-beta.7
+
+### Patch Changes
+
+- 94566db: `auth logout` denies the profile's replica gate durably before it removes `session.json` and `key.json`, then erases local replicas. If the gate cannot be denied, credentials and replicas stay in place and the command exits with a retryable error. Fence unchanged inactive replica gates across online logout, reject changed gates before local credential removal, and give an actionable retry path for an interrupted orphan logout marker. A plain `auth logout` retry now resumes a committed local logout whose credential removal failed, instead of asking to discard local changes. Logout and startup recovery refuse without changes when the pending logout belongs to a different principal than the current session.
+- b22a88d: A plain OpenKey `auth login` on a profile that already belongs to an owner now names that owner's space, so OpenKey preselects the owner's key without `--owner`. The signed owner is still verified after approval.
+- 3d24566: Cancelling a prepared OpenKey login before approval now takes one path whether it comes from terminal Ctrl-C or a SIGINT/SIGTERM sent to a non-interactive process: the CLI asks OpenKey to cancel the handoff (best effort, two-second timeout), saves nothing and exits 130 `CANCELLED`, as the exit-code table documents. Previously a non-interactive signal never reached OpenKey, and terminal Ctrl-C exited 3.
+- 1289240: A completed prepared OpenKey login now exits promptly under Node even when the browser opened a connection to the loopback callback and never sent a request, as Chromium does when Local Network Access refuses the callback. Closing the callback listener now also drops connections that never sent a request; the ACK's own connection closes after its response.
+- d2c1e10: A failed or cancelled replica-enabled OpenKey login (interrupt, expiry, invalid signature, paste EOF or a failed commit) no longer signs out the profile's existing session: it never denies an already-active replica gate, so the live session's unsynced writes are kept. Only a gate that the failed attempt itself bound, and that no saved session holds, is denied again.
+- 8332bc6: Classify replica storage-budget failures as storage-full exits and expired consent as permission-denied with sign-in renewal guidance.
+- 90bc0ae: Report the node's retry signals (tinycloud-node #347) as typed errors instead of `NETWORK_ERROR`, for SQL, DuckDB and KV get, head, list, put and delete.
+  - `NODE_BUSY`: `503 sql_busy:<stage>` or `unavailable_retryable`. Nothing was applied. `meta.stage` (`lock_wait`, `hydration`, `artifact_transfer` or `identity_resolution`) when the node names one.
+  - `REQUEST_TIMEOUT`: `503 request_timeout`. The node's deadline passed before any write began, so nothing was applied.
+  - `OUTCOME_UNKNOWN`: `500 outcome_unknown`. A write may have been applied; read it back before retrying a non-idempotent operation.
+
+  `meta.retryable` says whether a retry is safe and `meta.retryAfterMs` carries the node's `Retry-After`. The SDK still never retries by itself. A response without these bodies, such as a 503 or 500 from node 1.20.6, keeps its old code, and real transport failures stay `NETWORK_ERROR`. New export: `nodeRetryError`.
+
+  Fix: a conditional KV `put` or `delete` that got a 503 was reported as `KV_CONFLICT`. A 503 is never a conflict; the node's precondition failure is its 412, still `KV_PRECONDITION_FAILED`. The SDK no longer produces `KV_CONFLICT` itself (callers that handle it keep working). A conditional write's 503 is now `NODE_BUSY` or `REQUEST_TIMEOUT` with the typed body, otherwise `KV_WRITE_FAILED` (put) or `NETWORK_ERROR` (delete) with `meta.status` 503.
+
+  `tc` prints a plain message for the new codes ("The node is busy, try again in 5 s.", "Outcome unknown: the node may have applied the write. Check before retrying.") and exits 7.
+
+- c980014: Legacy local replica get, list, and status with an owner session require its persisted replica stamp and the active profile gate. A session without an owner DID (a delegate's imported grant) reads only while the profile has no gate and no committed sign-out. Serialize reads and output with sign-out denial, and refuse a pending logout marker before and after local reads so interrupted cleanup cannot serve retained replica data.
+
+  Legacy logout cleanup accepts only the approved path, type, and inode inventory recorded in the logout marker; an unlisted or replaced file leaves cleanup pending instead of broadening `--discard-local-changes`.
+
+- 0c4c6b2: `ProfileReplicaPurge.deny` with `{ deferErase: true }` now accepts only `reason: "sign_out"` and returns `ProfileReplicaDeferredDenyOutcome`, whose committed `denied` always carries `resumeToken`. `ReplicaEraseReport.deferred: true` marks a pass held by a deferred denial, so `remaining: 0` there is not completion. node-sdk exports the full contract `ProfileReplicaPurge`, requires the displayed `approval` in `prepareLogoutPending`, and reports `purgePending` from inspected status while a deferred denial or any intent remains.
+
+  A v1 logout marker records the epoch its denial actually committed (`deniedEpoch`) in the same locked section as the deny, and every later check compares with it. A sign-out interrupted between its deny floor and gate writes is completed by the next `auth logout` (`@tinycloud/replica/profile-gate` adds `readLogoutGate`, `advanceInactiveGate` and `REPLICA_DENY_FLOOR_FILE`); reads report "a previous sign-out was interrupted; re-running `tc auth logout` completes it". A restored older gate under a recorded denial refuses with the `tc profile delete` route.
+
+  `auth logout` by an account other than the one whose replicas the profile holds writes no marker and leaves that account's gate, floor and replicas untouched: it signs out, removes its own session and key, and erases the profile's legacy `replicas/` mirror (replayed at startup after a crash). `--revoke` there revokes only grants on the signed-in account's spaces.
+
+  When startup recovery refuses a pending logout because a credential file is unreadable, the message now names that file (`session.json` or `profile.json`).
+
+  CLI-bound storage and purge name the CLI's `replication/events.jsonl` and `events.jsonl.1` diagnostics logs (`diagnosticFiles`). With a readable gate, those exact names count as known only while they are regular files, so a fully synced profile signs out without `--discard-local-changes`; a symlink there stays unknown.
+
+- Updated dependencies [29440be]
+- Updated dependencies [86815bd]
+- Updated dependencies [e7f709d]
+- Updated dependencies [94566db]
+- Updated dependencies [38980b0]
+- Updated dependencies [a7cdfe0]
+- Updated dependencies [94566db]
+- Updated dependencies [94566db]
+- Updated dependencies [94566db]
+- Updated dependencies [90bc0ae]
+- Updated dependencies [0c4c6b2]
+  - @tinycloud/node-sdk@3.3.0-beta.7
+  - @tinycloud/sdk-core@3.3.0-beta.7
+  - @tinycloud/sdk-services@3.3.0-beta.7
+  - @tinycloud/operations@0.6.1-beta.7
+
 ## 1.3.0-beta.6
 
 ### Patch Changes

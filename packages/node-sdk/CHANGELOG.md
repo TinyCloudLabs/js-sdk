@@ -1,5 +1,80 @@
 # @tinycloudlabs/node-sdk
 
+## 3.3.0-beta.7
+
+### Minor Changes
+
+- 38980b0: Stamp replica sessions only from a fully verified owner SIWE with finite signed expiry and exact-space KV get+sync authority; missing proof refuses only the replica, not network sign-in. Restore validates the persisted stamp without repairing it. Browser IndexedDB sign-in, restore, and sign-out use its lifecycle without a Node profile directory; sign-out denies the gate and shreds replica keys. Replication-disabled sign-in does not inspect replica SIWE metadata.
+
+  Node exports `createProfileReplicaPurge({ profileDir, guard })` for profile-locked CLI cleanup. A failed online revoke can durably deny local reads with `deny({ reason: "sign_out", principal }, { deferErase: true })` while retaining the network session, key, and replica files. The returned epoch/principal token resumes erasure after remote success; recovery leaves deferred files untouched and retries ordinary erasure after resume. `TinyCloudNode.signOut()` awaits durable denial before registry cleanup.
+  `logoutPrincipalDigest(principal)` exposes the owner binding stored as a logout marker's `principalDigest` (advisory; not authority), so callers can check a marker against the current session before recovery.
+  Node denial reads the gate snapshot and hashes the principal under the same profile lock as `denyGate`; partition and pending intents use that snapshot's salt. A gate established while denial waits for the lock is included rather than producing an empty-salt intent inventory.
+  `ProfileReplica*` facade types now come from `@tinycloud/sdk-services/kv/replication`; Node SDK retains the runtime factory and marker exports without duplicate type declarations or aliases.
+  Node direct sign-out and account-switch denial emits one `replication.lifecycle` event after a committed `denied`, `database_deleted`, or `marker_set` outcome to both `replication.onEvent` and the leaving service context. Stale and unguarded outcomes cannot claim a committed denial; the event carries no raw principal or space.
+
+  CLI logout uses a profile-locked, fsynced opaque `replica-logout-pending.json` marker before deleting either `session.json` or `key.json`. CLI-bound replica reads, pending writes, restores, and already-open handles refuse while it exists. Startup recovery verifies the marker's gate incarnation/epoch/principal hash, commits full purge intents or resumes a deferred denial, removes and fsyncs both credentials, then removes the marker before retrying erase. Generic SQLite storage does not infer CLI session files; CLI callers opt in with `logoutPendingFile`. A successful remote revoke follows this same credential-shredding path; failed revoke keeps its deferred gate and credentials for retry. `recoverLogoutPending().remaining` counts durable intents only; `failed` or the marker indicates incomplete logout even when that count is zero. If writing the marker fails, an ordinary gate denial can still fence replica reads but cannot by itself recover a crash before credential unlink.
+  For an active v1 plain logout, recovery commits the full generation-fenced denial and opaque intent inventory under the profile lock before calling `clearCredentials`. A denied gate write leaves the marker, both credentials, and replica files intact for retry. After a BUSY plain cleanup, reapproval recognizes that marker's same incarnation and next denied epoch with a null `deferredPrincipalHash`; the existing deferred-owner path remains intact. Remote-pending, successor, and stale markers remain fenced.
+
+  `recoverLogoutPending` requires an idempotent `eraseLegacyReplicas` callback for the CLI's separate `<profile>/replicas` root. It runs only after the gate's full intent/generation commit, while the marker still blocks reads; the facade verifies the legacy root is gone and fsyncs the profile before clearing the marker. Failure or interruption retains the marker for retry. The callback must never delete S3's `<profile>/replication` root.
+  On retry after a busy legacy SQLite lease, only source-created `replica.db-wal`, `replica.db-shm`, and `replica.db-journal` sidecars may be regenerated. Recovery still requires the originally approved database and replica directory identities; a path approved as unknown never acquires the known-sidecar exception.
+
+  An inactive gate also gets an epoch-bound logout marker while opaque intents or legacy replicas remain. Recovery retains it until legacy-only cleanup completes; a successor gate cannot replay the old marker.
+
+  An already-deferred v1 gate cannot mint a missing pre-denial logout marker or authorize remote revoke from its later denied epoch. Explicitly approved corrupt gates use a v2 orphan marker: after that marker is durable, the still-corrupt gate file is removed and fsynced before remote work; remote completion still requires the gate to be absent. Because that marker has no original gate-file identity, a later retry or reapproval never unlinks an unreadable gate; it fails closed with the marker and any not-yet-erased credentials or replica files intact until the gate is absent. Orphan recovery also refuses a newly corrupt or valid replacement gate before credential cleanup and again before marker removal; failures retain the marker for retry. Failed initial removal retains the marker and credentials.
+
+  When the CLI profile's gate is missing or corrupt, scoped intents cannot be reconstructed. `prepareLogoutPending({ principal, discardLocalChanges? })` instead writes a distinct opaque orphan-profile marker before credential unlink. Without explicit `discardLocalChanges`, unsynced `pending.json` records, an unrecognized flag-owned layout, an unknown legacy child or SQLite schema, or a corrupt/unreadable gate refuse with sync-first/`--discard-local-changes` guidance. Recovery under the profile lock shreds and fsyncs both credentials, wipes only validated real `<profile>/replication` and `<profile>/replicas` roots, confirms absence and fsyncs the profile, then removes the marker. Root deletion failure leaves the marker; neither scoped intents nor a replacement gate are fabricated. CLI sign-in must check the marker before persisting a new session.
+
+  The orphan wipe accepts the CLI lock's exact Linux `/proc/self/fd/<n>` directory pin as well as a real profile directory. It validates each replica root against that pinned directory, refuses arbitrary profile symlinks and closed pins even when roots are absent, and never redirects a wipe to a replacement profile-name symlink. With a missing gate, only a validated identity record plus an inspected empty `pending.json` and no other identity children prove a flag-owned partition has no unsynced writes; a missing index, replica files, device key, or unknown child format requires explicit discard.
+
+  `TinyCloudNode.replicaStamp` exposes a defensive copy of the active verified stamp after sign-in or validated restore; sign-out clears it. `TinyCloudNode.signInWithOpenKey(authorizeFn, options?)` prepares the original SIWE before OpenKey approval and verifies the signed result through the existing authorization flow before committing the network session and replica stamp. The callback receives the SDK-prepared `verificationMethod` for local session-DID handoff, not as an OpenKey wire field. Optional `retryResult(error, originalRequest, attempt)` retries rejected callback transport or signed results against that same SIWE and key without retrying network activation.
+
+  Prefix-scoped, uncaveated signed KV get+sync authority now anchors replica consent as well as root authority. Node SQLite reads pair rows with a fence captured before their SQLite snapshot. A CID's original grant installation time survives targeted partition purge; an expired effective grant refuses synchronization before transport and refuses a page that expires before commit.
+
+- 0c4c6b2: `ProfileReplicaPurge.deny` with `{ deferErase: true }` now accepts only `reason: "sign_out"` and returns `ProfileReplicaDeferredDenyOutcome`, whose committed `denied` always carries `resumeToken`. `ReplicaEraseReport.deferred: true` marks a pass held by a deferred denial, so `remaining: 0` there is not completion. node-sdk exports the full contract `ProfileReplicaPurge`, requires the displayed `approval` in `prepareLogoutPending`, and reports `purgePending` from inspected status while a deferred denial or any intent remains.
+
+  A v1 logout marker records the epoch its denial actually committed (`deniedEpoch`) in the same locked section as the deny, and every later check compares with it. A sign-out interrupted between its deny floor and gate writes is completed by the next `auth logout` (`@tinycloud/replica/profile-gate` adds `readLogoutGate`, `advanceInactiveGate` and `REPLICA_DENY_FLOOR_FILE`); reads report "a previous sign-out was interrupted; re-running `tc auth logout` completes it". A restored older gate under a recorded denial refuses with the `tc profile delete` route.
+
+  `auth logout` by an account other than the one whose replicas the profile holds writes no marker and leaves that account's gate, floor and replicas untouched: it signs out, removes its own session and key, and erases the profile's legacy `replicas/` mirror (replayed at startup after a crash). `--revoke` there revokes only grants on the signed-in account's spaces.
+
+  When startup recovery refuses a pending logout because a credential file is unreadable, the message now names that file (`session.json` or `profile.json`).
+
+  CLI-bound storage and purge name the CLI's `replication/events.jsonl` and `events.jsonl.1` diagnostics logs (`diagnosticFiles`). With a readable gate, those exact names count as known only while they are regular files, so a fully synced profile signs out without `--discard-local-changes`; a symlink there stays unknown.
+
+### Patch Changes
+
+- 29440be: Wallet-backed `TinyCloudNode.revokeDelegation(cid)` now signs a direct owner revocation for the target CID. Session-only clients continue to use their delegated revocation authority; the node receipt must confirm the requested CID (TC-721, TC-821).
+- 86815bd: Replica erase and purge refuse a symlinked or replaced identity, `replicas/` or replica directory, leaving the purge intent queued, and remove a leftover replica directory without a database only when it holds the store's own files, without recursion.
+- e7f709d: Sign-in skips the background account registry sync when the session's signed ReCap does not cover the account index read (`tinycloud.sql/read` on the owner's `account` space, `account` database). A scoped session, such as a replica-enabled CLI OpenKey login, no longer sends a request that is always refused with 401 and logs an "account index initialization failed" warning. A session with no parseable ReCap still syncs as before.
+- 94566db: Replication: the structural replica contract recognises the `REPLICA_GATED`, `STORAGE_BUDGET` and `CONSENT_EXPIRED` error codes. Types only; behaviour is unchanged.
+- a7cdfe0: sdk-services adds the Node/CLI profile-facade contract types for deferred revoke and exact-inventory logout markers: `ProfileReplicaPurge`, `ProfileReplicaLogoutPending` (with a v1 `deniedEpoch`), `ProfileReplicaRemoteLogoutState`, `ProfileReplicaPreflight` and the inventory identity types. A new `typecheck:contract` script compiles their type assertions. CONTRACT.md specifies the logout behaviour the CLI logout implementation will deliver, including deny-first ordering, completion of an interrupted denial and the two-command inventory approval. This release ships types and specification only; no runtime behaviour changes, and browser lifecycle contracts are unchanged.
+
+  node-sdk's `ProfileReplicaPurge` and `ProfileReplicaDeferredToken` are now derived from those contract types (the subset node-sdk implements), with the same shape as before.
+
+- 94566db: Replication: enforce independently verified finite-expiration owner SIWE anchors with uncaveated KV get+sync coverage on the same verified scope in the exact space, bounded device-grant minting, and session-parent-only silent renewal. A `first_install` timestamp bounds expiry only; it cannot authorize minting. The controller uses the durable browser consent deadline for preflight, active timers, grant caps, and network fallback; compact restored sessions can only reuse a matching stamped, active installed grant with finite effective expiry while their current independently verified session still covers the requested prefix. A missing owner-backed compact proof fails closed, and session refusal never exposes installed local bytes or keys. Grant transitions use opaque replica IDs, including when a committed gate expiry beats the controller timer. The runtime subscribes only while its stamped controller is bound and detaches on rebind or close. Adds pure grant-lifetime policy helpers and validates `replication.grantTtlMs` (positive, at most 7 days).
+
+  Browser boot bounds replica recovery before constructing the node. Failed or timed-out recovery gates local admission without breaking the network session; explicit sign-out still reaches the real lifecycle denial. The root web bundle remains inert with replication off; `@tinycloud/web-sdk/replica` exports a pure optional plugin and async IndexedDB factory loader. Applications register that plugin once with root `registerBrowserReplica` before constructing an enabled client, so test fixtures can inject a scheduler into the same root-owned runtime registry without a public clock option.
+
+  Browser sign-in selects the connected wallet's persisted session. Explicit restore retains valid network authority for a different or unknown wallet, but refuses replica stamp admission; local reads recheck the provider account before returning cached bytes or keys.
+
+  The runtime binds pending writes to the supplied lifecycle stamp and creates a fresh pending store when the stamp changes; gated storage cannot fall back to volatile pending memory. Replica opens carry the configured quota alongside the stamped grant policy. When a shorter grant policy expires before the immutable seven-day gate, get/list use the network and report `GRANT_EXPIRED`; only gate expiry causes `CONSENT_EXPIRED` and scoped denial. Rejected offline network fallbacks retain their network error and emit one `replication.read` error with the gate or current-session refusal reason; no local bytes are returned.
+
+- 94566db: Expose a post-commit browser consent-expiry subscription for bound replication controllers. Recover expired origin keys before a direct replica open so a browser closed at the deadline cannot serve local data on return. Keep the web bundle replica-free by importing grant TTL policy from the narrow policy entry.
+- Updated dependencies [29440be]
+- Updated dependencies [38980b0]
+- Updated dependencies [a7cdfe0]
+- Updated dependencies [94566db]
+- Updated dependencies [94566db]
+- Updated dependencies [94566db]
+- Updated dependencies [86815bd]
+- Updated dependencies [94566db]
+- Updated dependencies [94566db]
+- Updated dependencies [86815bd]
+- Updated dependencies [90bc0ae]
+- Updated dependencies [0c4c6b2]
+  - @tinycloud/sdk-core@3.3.0-beta.7
+  - @tinycloud/replica@0.3.0-beta.4
+  - @tinycloud/sdk-services@3.3.0-beta.7
+
 ## 3.2.6-beta.6
 
 ### Patch Changes
