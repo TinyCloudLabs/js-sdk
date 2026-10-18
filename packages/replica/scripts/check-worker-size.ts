@@ -12,8 +12,11 @@ import { join, resolve } from "node:path";
 // TC-1413 (typed node retry errors in sdk-services) measured 820,935 (+827) in
 // GitHub run 39099093175 on 20c29611 (the same 820,935 as run 39095466871 on
 // 50a9a83c); the ledger's tc1413Ratchet row records it.
+// TC-1432 (vault etag, ifMatch and opt-in expectAad in sdk-services) measured 822,044 (+1,109) in
+// GitHub run 39144311690 (head 83c9d75a, against master 129c7935 after #578 landed; the same 822,044
+// as run 39134457380 on the earlier base); the ledger's tc1432Ratchet row records it.
 // Zero additional headroom; independent of the web-sdk ledger, including WASM.
-export const MAX_WORKER_GZIP_BYTES = 820_935;
+export const MAX_WORKER_GZIP_BYTES = 822_044;
 const canonicalName = /^kv-storage\.worker\.([0-9a-f]{64})\.js$/;
 
 export function assertWorkerSizeToolchain(bunVersion: string, rustcOutput: string): void {
