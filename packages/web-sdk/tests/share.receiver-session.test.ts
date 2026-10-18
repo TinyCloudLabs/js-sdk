@@ -1,6 +1,6 @@
-import { beforeEach, expect, test } from "bun:test";
+import { beforeEach, expect, spyOn, test } from "bun:test";
 import { ed25519 } from "@noble/curves/ed25519";
-import { IDBFactory } from "fake-indexeddb";
+import { IDBFactory, IDBObjectStore } from "fake-indexeddb";
 import { didKeyFromEd25519PublicKey, ed25519PublicKeyFromDidKey, toBase64Url } from "@tinycloud/share-envelope";
 import { SHARE_RECEIVER_CREDENTIALS_STORAGE_KEY } from "../src/share/receiver-credentials";
 import {
@@ -10,8 +10,22 @@ import {
   SHARE_RECEIVER_KEY_LIFETIME_MS,
   SHARE_RECEIVER_SESSION_STORAGE_KEY,
   ShareReceiverKeyUnavailableError,
+  ShareReceiverSessionEndedError,
   type ShareReceiverSession,
 } from "../src/share/receiver-session";
+
+/** Rewrites values on their way into IndexedDB, as a browser that cannot clone a CryptoKey back would. */
+async function withStoredValue<T>(rewrite: (value: Record<string, unknown>) => Record<string, unknown>, run: () => Promise<T>): Promise<T> {
+  const add = IDBObjectStore.prototype.add;
+  IDBObjectStore.prototype.add = function (this: IDBObjectStore, value: unknown, key?: IDBValidKey) {
+    return add.call(this, rewrite(value as Record<string, unknown>), key);
+  } as typeof add;
+  try { return await run(); } finally { IDBObjectStore.prototype.add = add; }
+}
+
+async function didOf(publicKey: CryptoKey): Promise<string> {
+  return didKeyFromEd25519PublicKey(new Uint8Array(await crypto.subtle.exportKey("raw", publicKey)));
+}
 
 const ORIGIN = "https://share.example";
 const message = new TextEncoder().encode("tc-1424");
@@ -90,7 +104,7 @@ test("the receiver key is a non-extractable handle in IndexedDB and is reused af
   const storage = memoryStorage();
   const first = await createOrRestoreShareReceiverSession(ORIGIN, storage, { indexedDB: factory });
   expect(first.custody).toBe("persistent");
-  expect(Object.keys(first).sort()).toEqual(["createdAt", "custody", "expiresAt", "holderDid", "origin", "sign"]);
+  expect(Object.keys(first).sort()).toEqual(["createdAt", "credentialStorage", "custody", "expiresAt", "holderDid", "origin", "sign"]);
   expect(Date.parse(first.expiresAt) - Date.parse(first.createdAt)).toBe(SHARE_RECEIVER_KEY_LIFETIME_MS);
   expect(await verifies(first)).toBe(true);
 
@@ -110,16 +124,33 @@ test("the receiver key is a non-extractable handle in IndexedDB and is reused af
   expect(storage.values.size).toBe(0);
 });
 
-test("session storage holds no private key material after a credential is stored", async () => {
-  for (const options of [{ indexedDB: new IDBFactory() }, { indexedDB: null }, { indexedDB: null, subtle: subtleWithoutEd25519 }]) {
+test("credentials stay in page memory exactly when the key does", async () => {
+  for (const [options, custody] of [[{ indexedDB: new IDBFactory() }, "persistent"], [{ indexedDB: null }, "memory"], [{ indexedDB: null, subtle: subtleWithoutEd25519 }, "memory"]] as const) {
     const storage = memoryStorage();
     const session = await createOrRestoreShareReceiverSession(ORIGIN, storage, options);
+    expect(session.custody).toBe(custody);
     // Every consumer signs through the handle: holder binding, presentation, invocation.
     expect(await verifies(session)).toBe(true);
-    storage.setItem(SHARE_RECEIVER_CREDENTIALS_STORAGE_KEY, JSON.stringify({ type: "TinyCloudShareReceiverCredentials", version: 1, entries: [] }));
-    expect([...storage.values.keys()]).toEqual([SHARE_RECEIVER_CREDENTIALS_STORAGE_KEY]);
+    session.credentialStorage.setItem(SHARE_RECEIVER_CREDENTIALS_STORAGE_KEY, JSON.stringify({ type: "TinyCloudShareReceiverCredentials", version: 1, entries: [] }));
+    expect([...storage.values.keys()]).toEqual(custody === "persistent" ? [SHARE_RECEIVER_CREDENTIALS_STORAGE_KEY] : []);
     for (const value of storage.values.values()) expect(value).not.toMatch(/"d"|jwk|privateKey|pkcs8/i);
     simulateReload();
+  }
+});
+
+test("blocked site storage falls back to page memory instead of stopping", async () => {
+  const descriptor = Object.getOwnPropertyDescriptor(globalThis, "sessionStorage");
+  Object.defineProperty(globalThis, "sessionStorage", { configurable: true, get: () => { throw new DOMException("The operation is insecure.", "SecurityError"); } });
+  try {
+    const session = await createOrRestoreShareReceiverSession(ORIGIN, undefined, { indexedDB: brokenIndexedDB });
+    expect(session.custody).toBe("memory");
+    expect(await verifies(session)).toBe(true);
+    session.credentialStorage.setItem(SHARE_RECEIVER_CREDENTIALS_STORAGE_KEY, "{}");
+    expect(session.credentialStorage.getItem(SHARE_RECEIVER_CREDENTIALS_STORAGE_KEY)).toBe("{}");
+    await forgetShareReceiverSession(ORIGIN, undefined, { indexedDB: null });
+  } finally {
+    if (descriptor === undefined) Reflect.deleteProperty(globalThis, "sessionStorage");
+    else Object.defineProperty(globalThis, "sessionStorage", descriptor);
   }
 });
 
@@ -158,6 +189,10 @@ test("an expired, over-long, foreign or tampered stored key is replaced", async 
     { ...record, expiresAt: new Date(now.getTime() + SHARE_RECEIVER_KEY_LIFETIME_MS + 1).toISOString() },
     { ...record, privateKey: other.privateKey },
     { ...record, privateKey: extractable.privateKey, publicKey: extractable.publicKey },
+    // Coherent and with its own DID, so only the extractability check can refuse it.
+    { ...record, privateKey: extractable.privateKey, publicKey: extractable.publicKey, holderDid: await didOf(extractable.publicKey) },
+    // A coherent pair under another key's DID, so only the DID check can refuse it.
+    { ...record, holderDid: await didOf(other.publicKey) },
     { ...record, origin: "https://elsewhere.example" },
     { ...record, createdAt: (record.createdAt as string).replace(/\.\d{3}Z$/, "Z") },
     { ...record, jwk: { kty: "OKP" } },
@@ -166,6 +201,7 @@ test("an expired, over-long, foreign or tampered stored key is replaced", async 
     await writeRecord(factory, mutated);
     const replaced = await createOrRestoreShareReceiverSession(ORIGIN, storage, { indexedDB: factory, now: () => new Date(now.getTime() + 1) });
     expect(replaced.holderDid).not.toBe(original.holderDid);
+    expect(replaced.holderDid).not.toBe(mutated.holderDid);
     expect(replaced.custody).toBe("persistent");
     expect(await verifies(replaced)).toBe(true);
     const stored = (await storedRecord(factory))!;
@@ -205,9 +241,89 @@ test("without WebCrypto Ed25519 the key lives only in memory and is zeroed when 
   expect(storage.values.size).toBe(0);
 
   simulateReload();
-  await expect(session.sign(message)).rejects.toBeInstanceOf(ShareReceiverKeyUnavailableError);
+  await expect(session.sign(message)).rejects.toBeInstanceOf(ShareReceiverSessionEndedError);
   const next = await createOrRestoreShareReceiverSession(ORIGIN, storage, { indexedDB: factory, subtle: subtleWithoutEd25519 });
   expect(next.holderDid).not.toBe(session.holderDid);
+});
+
+test("the fallback's seed buffer is overwritten with zeros on page hide and on forget", async () => {
+  for (const end of [() => simulateReload(), () => forgetShareReceiverSession(ORIGIN, memoryStorage(), { indexedDB: null })]) {
+    const seeds: Uint8Array[] = [];
+    const original = ed25519.utils.randomPrivateKey;
+    const spy = spyOn(ed25519.utils, "randomPrivateKey").mockImplementation((...args) => {
+      const seed = original(...args);
+      seeds.push(seed);
+      return seed;
+    });
+    try {
+      const session = await createOrRestoreShareReceiverSession(ORIGIN, memoryStorage(), { indexedDB: null, subtle: subtleWithoutEd25519 });
+      expect(seeds).toHaveLength(1);
+      expect(await verifies(session)).toBe(true);
+      expect(seeds[0]!.some((byte) => byte !== 0)).toBe(true);
+      await end();
+      expect(seeds[0]!.every((byte) => byte === 0)).toBe(true);
+      await expect(session.sign(message)).rejects.toBeInstanceOf(ShareReceiverSessionEndedError);
+    } finally {
+      spy.mockRestore();
+    }
+  }
+});
+
+test("a stored copy that cannot be read back, or does not sign, is never used", async () => {
+  const other = await crypto.subtle.generateKey({ name: "Ed25519" }, false, ["sign", "verify"]) as CryptoKeyPair;
+  const rewrites: Array<(value: Record<string, unknown>) => Record<string, unknown>> = [
+    (value) => ({ ...value, privateKey: {} }),
+    // Well shaped and non-extractable, but not the stored public key's pair.
+    (value) => ({ ...value, privateKey: other.privateKey }),
+  ];
+  for (const rewrite of rewrites) {
+    const factory = new IDBFactory();
+    const session = await withStoredValue(rewrite, () => createOrRestoreShareReceiverSession(ORIGIN, memoryStorage(), { indexedDB: factory }));
+    expect(session.custody).toBe("memory");
+    expect(await verifies(session)).toBe(true);
+    expect(await storedRecord(factory)).toBeUndefined();
+    simulateReload();
+  }
+});
+
+test("a session refuses to sign once it expired or was forgotten", async () => {
+  const twoHoursAgo = new Date(Date.now() - 2 * SHARE_RECEIVER_KEY_LIFETIME_MS);
+  for (const options of [{ indexedDB: new IDBFactory() }, { indexedDB: null }, { indexedDB: null, subtle: subtleWithoutEd25519 }]) {
+    const expired = await createOrRestoreShareReceiverSession(ORIGIN, memoryStorage(), { ...options, now: () => twoHoursAgo });
+    await expect(expired.sign(message)).rejects.toBeInstanceOf(ShareReceiverSessionEndedError);
+    simulateReload();
+
+    const factory = options.indexedDB;
+    const live = await createOrRestoreShareReceiverSession(ORIGIN, memoryStorage(), options);
+    expect(await verifies(live)).toBe(true);
+    await forgetShareReceiverSession(ORIGIN, memoryStorage(), { indexedDB: factory });
+    await expect(live.sign(message)).rejects.toBeInstanceOf(ShareReceiverSessionEndedError);
+    simulateReload();
+  }
+});
+
+test("a tab never deletes a key another tab stored after it last looked", async () => {
+  const factory = new IDBFactory();
+  const now = new Date();
+  const first = await createOrRestoreShareReceiverSession(ORIGIN, memoryStorage(), { indexedDB: factory, now: () => now });
+  const fresh = (await storedRecord(factory))!;
+  // This tab's read sees an expired copy, as if another tab replaced the key in between.
+  await writeRecord(factory, { ...fresh, createdAt: new Date(now.getTime() - SHARE_RECEIVER_KEY_LIFETIME_MS).toISOString(), expiresAt: now.toISOString() }, "stale");
+  const get = IDBObjectStore.prototype.get;
+  let redirected = false;
+  IDBObjectStore.prototype.get = function (this: IDBObjectStore, query: IDBValidKey | IDBKeyRange) {
+    if (!redirected && query === ORIGIN) { redirected = true; return get.call(this, "stale"); }
+    return get.call(this, query);
+  } as typeof get;
+  try {
+    simulateReload();
+    const next = await createOrRestoreShareReceiverSession(ORIGIN, memoryStorage(), { indexedDB: factory });
+    expect(next.holderDid).toBe(first.holderDid);
+    expect(next.custody).toBe("persistent");
+  } finally {
+    IDBObjectStore.prototype.get = get;
+  }
+  expect((await storedRecord(factory))?.holderDid).toBe(first.holderDid);
 });
 
 test("a browser that hands out an extractable private key is never trusted with persistence", async () => {
@@ -246,7 +362,7 @@ test("forgetting this browser removes the stored key, the memory key and receive
 
   const memory = await createOrRestoreShareReceiverSession(ORIGIN, storage, { indexedDB: null, subtle: subtleWithoutEd25519 });
   await forgetShareReceiverSession(ORIGIN, storage, { indexedDB: null });
-  await expect(memory.sign(message)).rejects.toBeInstanceOf(ShareReceiverKeyUnavailableError);
+  await expect(memory.sign(message)).rejects.toBeInstanceOf(ShareReceiverSessionEndedError);
 });
 
 test("receiver keys are bound to a canonical HTTPS or loopback origin", async () => {

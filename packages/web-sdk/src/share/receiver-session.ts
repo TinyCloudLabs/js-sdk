@@ -15,13 +15,13 @@ const KEY_DATABASE_VERSION = 1;
 const KEY_RECORD_VERSION = 2;
 
 /**
- * Upper bound on how long a persisted receiver key is reused. An emailed
- * credential lives for minutes, and the key alone authorizes nothing, so an
- * hour keeps reloads working without keeping a signer around for days.
+ * Upper bound on how long a receiver key signs. An emailed credential lives
+ * for minutes, and the key alone authorizes nothing, so an hour keeps
+ * reloads working without keeping a signer around for days.
  */
 export const SHARE_RECEIVER_KEY_LIFETIME_MS = 60 * 60 * 1000;
 
-const STORAGE_TIMEOUT_MS = 5_000;
+const STORAGE_TIMEOUT_MS = 2_000;
 const KEY_COHERENCE_PROBE = new TextEncoder().encode("tinycloud.share.receiver-session/v2");
 
 /**
@@ -45,6 +45,9 @@ export interface ShareReceiverSession {
   readonly createdAt: string;
   readonly expiresAt: string;
   readonly custody: ShareReceiverKeyCustody;
+  /** Where this key's credentials are kept; page memory when the key is. */
+  readonly credentialStorage: ReceiverSessionStorage;
+  /** Rejects with {@link ShareReceiverSessionEndedError} once the session expired, was forgotten or left with the page. */
   sign(bytes: Uint8Array): Promise<Uint8Array>;
 }
 
@@ -63,6 +66,15 @@ export class ShareReceiverKeyUnavailableError extends Error {
   constructor() {
     super("This browser cannot create a signing key for this page");
     this.name = "ShareReceiverKeyUnavailableError";
+  }
+}
+
+/** The receiver key expired, was forgotten, or was discarded with the page; the recipient verifies again. */
+export class ShareReceiverSessionEndedError extends Error {
+  readonly code = "receiver_session_ended";
+  constructor() {
+    super("This receiver session has ended");
+    this.name = "ShareReceiverSessionEndedError";
   }
 }
 
@@ -85,6 +97,8 @@ interface MemorySession {
 // Memory-custody keys for this page, by origin. Nothing here is ever written
 // anywhere; the entries die with the page.
 const memorySessions = new Map<string, MemorySession>();
+// Bumped by forget: sessions handed out before it stop signing.
+const generations = new Map<string, number>();
 let pageHideRegistered = false;
 
 function disposeMemorySessions(): void {
@@ -100,6 +114,20 @@ function rememberMemorySession(origin: string, entry: MemorySession): ShareRecei
     pageHideRegistered = true;
   }
   return entry.session;
+}
+
+function pageMemoryStorage(): ReceiverSessionStorage {
+  const values = new Map<string, string>();
+  return {
+    getItem: (key) => values.get(key) ?? null,
+    setItem: (key, value) => { values.set(key, value); },
+    removeItem: (key) => { values.delete(key); },
+  };
+}
+
+/** Session storage, or page memory where site storage is blocked and reading it throws. */
+function defaultSessionStorage(): ReceiverSessionStorage {
+  try { return globalThis.sessionStorage ?? pageMemoryStorage(); } catch { return pageMemoryStorage(); }
 }
 
 function canonicalReceiverOrigin(value: string): string {
@@ -161,6 +189,25 @@ async function withKeyStore<T>(factory: IDBFactory, mode: IDBTransactionMode, ru
   }
 }
 
+/** Identity of a stored record, for compare-and-delete; any non-string field counts by type. */
+function recordMark(value: unknown): string {
+  const record = (typeof value === "object" && value !== null ? value : {}) as Record<string, unknown>;
+  return [record.holderDid, record.createdAt].map((field) => typeof field === "string" ? field : typeof field).join("\n");
+}
+
+/**
+ * Deletes the origin's record only if it is still the one this tab looked at,
+ * in one transaction, so a tab never deletes another tab's newer key.
+ */
+function deleteIfUnchanged(factory: IDBFactory, origin: string, seen: unknown): Promise<unknown> {
+  const mark = recordMark(seen);
+  return withKeyStore(factory, "readwrite", (store) => {
+    const read = store.get(origin);
+    read.onsuccess = () => { if (read.result !== undefined && recordMark(read.result) === mark) store.delete(origin); };
+    return read;
+  });
+}
+
 /** A usable key handle never exposes its private half, whatever the browser claims elsewhere. */
 function isNonExtractableEd25519(key: unknown, type: KeyType, usage: KeyUsage): key is CryptoKey {
   if (typeof CryptoKey === "undefined" || !(key instanceof CryptoKey)) return false;
@@ -178,11 +225,22 @@ async function assertCoherent(subtle: SubtleCrypto, privateKey: CryptoKey, publi
   if (!await subtle.verify("Ed25519", publicKey, signature, KEY_COHERENCE_PROBE)) throw new Error("receiver Ed25519 key handle is inconsistent");
 }
 
-function webCryptoSession(subtle: SubtleCrypto, privateKey: CryptoKey, fields: Omit<ShareReceiverSession, "sign">): ShareReceiverSession {
+/** Builds a session whose signer stops at expiry, at forget, or when `signWith` reports the key gone. */
+function receiverSession(fields: Omit<ShareReceiverSession, "sign">, signWith: (bytes: Uint8Array) => Promise<Uint8Array> | Uint8Array | undefined): ShareReceiverSession {
+  const generation = generations.get(fields.origin) ?? 0;
+  const end = Date.parse(fields.expiresAt);
   return Object.freeze({
     ...fields,
-    sign: async (bytes: Uint8Array) => new Uint8Array(await subtle.sign("Ed25519", privateKey, bytes)),
+    sign: async (bytes: Uint8Array) => {
+      const signature = (generations.get(fields.origin) ?? 0) === generation && Date.now() < end ? await signWith(bytes) : undefined;
+      if (signature === undefined) throw new ShareReceiverSessionEndedError();
+      return signature;
+    },
   });
+}
+
+function webCryptoSession(subtle: SubtleCrypto, privateKey: CryptoKey, fields: Omit<ShareReceiverSession, "sign">): ShareReceiverSession {
+  return receiverSession(fields, async (bytes) => new Uint8Array(await subtle.sign("Ed25519", privateKey, bytes)));
 }
 
 /**
@@ -198,7 +256,7 @@ function purgeLegacySession(storage: ReceiverSessionStorage): void {
   } catch { /* storage is disabled, so it holds nothing to purge */ }
 }
 
-async function restorePersisted(factory: IDBFactory, subtle: SubtleCrypto, origin: string, now: Date): Promise<ShareReceiverSession | undefined> {
+async function restorePersisted(factory: IDBFactory, subtle: SubtleCrypto, origin: string, now: Date, storage: ReceiverSessionStorage): Promise<ShareReceiverSession | undefined> {
   const stored: unknown = await withKeyStore(factory, "readonly", (store) => store.get(origin));
   if (stored === undefined) return undefined;
   const record = typeof stored === "object" && stored !== null && !Array.isArray(stored) ? stored as Record<string, unknown> : undefined;
@@ -216,11 +274,12 @@ async function restorePersisted(factory: IDBFactory, subtle: SubtleCrypto, origi
       const publicKey = record.publicKey as CryptoKey;
       if (await holderDidFor(subtle, publicKey) === record.holderDid) {
         await assertCoherent(subtle, privateKey, publicKey);
-        return webCryptoSession(subtle, privateKey, { holderDid: record.holderDid as string, origin, createdAt: record.createdAt as string, expiresAt: record.expiresAt as string, custody: "persistent" });
+        return webCryptoSession(subtle, privateKey, { holderDid: record.holderDid as string, origin, createdAt: record.createdAt as string, expiresAt: record.expiresAt as string, custody: "persistent", credentialStorage: storage });
       }
     } catch { /* replaced below */ }
   }
-  await withKeyStore(factory, "readwrite", (store) => store.delete(origin));
+  // Expired, foreign or tampered: removed now, not left until it is next read.
+  await deleteIfUnchanged(factory, origin, stored);
   return undefined;
 }
 
@@ -233,7 +292,7 @@ async function persist(factory: IDBFactory, subtle: SubtleCrypto, record: Persis
   try {
     await withKeyStore(factory, "readwrite", (store) => store.add(record, record.origin));
   } catch (error) {
-    if ((error as { name?: unknown } | null)?.name === "ConstraintError") return false;
+    if (typeof error === "object" && error !== null && "name" in error && error.name === "ConstraintError") return false;
     throw error;
   }
   try {
@@ -243,7 +302,7 @@ async function persist(factory: IDBFactory, subtle: SubtleCrypto, record: Persis
     return true;
   } catch (error) {
     // This tab wrote the record and cannot use it; drop it so no tab restores it.
-    await withKeyStore(factory, "readwrite", (store) => store.delete(record.origin)).catch(() => undefined);
+    await deleteIfUnchanged(factory, record.origin, record).catch(() => undefined);
     throw error;
   }
 }
@@ -263,24 +322,22 @@ async function generateWebCryptoKey(subtle: SubtleCrypto): Promise<{ readonly pr
 
 /**
  * Last resort for browsers without WebCrypto Ed25519: the private key exists
- * only in this closure, is never serialized, and is zeroed when the page goes
- * away or the session is forgotten.
+ * only in this closure and is never serialized. When the page goes away or
+ * the session is forgotten, this seed buffer is overwritten with zeros;
+ * copies the signing library makes internally on each call cannot be
+ * reached and are left to garbage collection.
  */
 function memoryScalarSession(origin: string, now: Date): MemorySession {
   if (typeof globalThis.crypto?.getRandomValues !== "function") throw new ShareReceiverKeyUnavailableError();
   let secret: Uint8Array | undefined = ed25519.utils.randomPrivateKey();
-  const holderDid = didKeyFromEd25519PublicKey(ed25519.getPublicKey(secret));
-  const session: ShareReceiverSession = Object.freeze({
-    holderDid,
+  const session = receiverSession({
+    holderDid: didKeyFromEd25519PublicKey(ed25519.getPublicKey(secret)),
     origin,
     createdAt: now.toISOString(),
     expiresAt: new Date(now.getTime() + SHARE_RECEIVER_KEY_LIFETIME_MS).toISOString(),
     custody: "memory",
-    sign: async (bytes: Uint8Array) => {
-      if (secret === undefined) throw new ShareReceiverKeyUnavailableError();
-      return ed25519.sign(bytes, secret);
-    },
-  });
+    credentialStorage: pageMemoryStorage(),
+  }, (bytes) => secret && ed25519.sign(bytes, secret));
   return { session, dispose: () => { secret?.fill(0); secret = undefined; } };
 }
 
@@ -291,11 +348,12 @@ function memoryScalarSession(origin: string, now: Date): MemorySession {
  * is kept in IndexedDB, so no script can read the private key out. When the
  * handle cannot be kept, the same key stays in this page's memory only. A
  * browser without WebCrypto Ed25519 gets a key held in memory only. Private
- * key material is never written to any storage, URL, log or error.
+ * key material is never written to any storage, URL, log or error. Without
+ * `storage`, session storage is used, or page memory where it is blocked.
  */
 export async function createOrRestoreShareReceiverSession(
   originValue: string,
-  storage: ReceiverSessionStorage = window.sessionStorage,
+  storage: ReceiverSessionStorage = defaultSessionStorage(),
   options: ShareReceiverSessionOptions = {},
 ): Promise<ShareReceiverSession> {
   const origin = canonicalReceiverOrigin(originValue);
@@ -308,12 +366,15 @@ export async function createOrRestoreShareReceiverSession(
     memorySessions.delete(origin);
   }
   const subtle = options.subtle === undefined ? globalThis.crypto?.subtle ?? null : options.subtle;
-  const factory = options.indexedDB === undefined ? defaultIndexedDB() : options.indexedDB;
+  let factory = options.indexedDB === undefined ? defaultIndexedDB() : options.indexedDB;
   if (subtle !== null && factory !== null) {
     try {
-      const restored = await restorePersisted(factory, subtle, origin, now);
+      const restored = await restorePersisted(factory, subtle, origin, now, storage);
       if (restored !== undefined) return restored;
-    } catch { /* unusable storage: a new key follows */ }
+    } catch {
+      // Storage that cannot be read will not keep a key either.
+      factory = null;
+    }
   }
   const generated = subtle === null ? undefined : await generateWebCryptoKey(subtle);
   if (subtle === null || generated === undefined) return rememberMemorySession(origin, memoryScalarSession(origin, now));
@@ -327,28 +388,30 @@ export async function createOrRestoreShareReceiverSession(
   if (factory !== null) {
     try {
       const record: PersistedReceiverKey = { type: "TinyCloudShareReceiverKey", version: KEY_RECORD_VERSION, ...fields, privateKey: generated.privateKey, publicKey: generated.publicKey };
-      if (await persist(factory, subtle, record)) return webCryptoSession(subtle, generated.privateKey, { ...fields, custody: "persistent" });
+      if (await persist(factory, subtle, record)) return webCryptoSession(subtle, generated.privateKey, { ...fields, custody: "persistent", credentialStorage: storage });
       // Another tab stored its key first; share it.
-      const raced = await restorePersisted(factory, subtle, origin, now);
+      const raced = await restorePersisted(factory, subtle, origin, now, storage);
       if (raced !== undefined) return raced;
     } catch { /* the key stays in memory below */ }
   }
   return rememberMemorySession(origin, {
-    session: webCryptoSession(subtle, generated.privateKey, { ...fields, custody: "memory" }),
+    session: webCryptoSession(subtle, generated.privateKey, { ...fields, custody: "memory", credentialStorage: pageMemoryStorage() }),
     dispose: () => undefined,
   });
 }
 
 /**
  * "Forget this browser": drops this origin's receiver key from IndexedDB and
- * memory, and the credentials issued to it. The next open verifies again.
+ * memory, and the credentials issued to it. Sessions already handed out stop
+ * signing. The next open verifies again.
  */
 export async function forgetShareReceiverSession(
   originValue: string,
-  storage: ReceiverSessionStorage = window.sessionStorage,
+  storage: ReceiverSessionStorage = defaultSessionStorage(),
   options: Pick<ShareReceiverSessionOptions, "indexedDB"> = {},
 ): Promise<void> {
   const origin = canonicalReceiverOrigin(originValue);
+  generations.set(origin, (generations.get(origin) ?? 0) + 1);
   memorySessions.get(origin)?.dispose();
   memorySessions.delete(origin);
   try {

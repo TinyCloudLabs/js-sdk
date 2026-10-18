@@ -122,7 +122,7 @@ export async function verifiedShareRequirement(envelope: ShareEnvelopeV3): Promi
   return requirement;
 }
 
-function guestCredentialClient(session: ShareReceiverSession, storage: ReceiverSessionStorage): CredentialClient {
+function guestCredentialClient(session: ShareReceiverSession): CredentialClient {
   const unavailable = (): never => { throw new Error("account credential storage is unavailable to a receiver session"); };
   return {
     sessionDid: session.holderDid,
@@ -136,7 +136,7 @@ function guestCredentialClient(session: ShareReceiverSession, storage: ReceiverS
     credentialSpaceOwnerDid: unavailable,
     kvForSpace: unavailable,
     accountAuthorizationCid: unavailable,
-    receiverCredentialCustody: new SessionReceiverCredentialCustody(storage),
+    receiverCredentialCustody: new SessionReceiverCredentialCustody(session.credentialStorage),
   };
 }
 
@@ -442,23 +442,12 @@ export class ReceivedShareImpl implements ReceivedShare {
 
 export class ShareReceiverService {
   private readonly fetchFn: typeof fetch;
-  private readonly storage: ReceiverSessionStorage;
-  // A memory-custody key is gone after a reload, so its credentials stay in memory too.
-  private readonly memoryStorage: ReceiverSessionStorage = (() => {
-    const values = new Map<string, string>();
-    return {
-      getItem: (key: string) => values.get(key) ?? null,
-      setItem: (key: string, value: string) => { values.set(key, value); },
-      removeItem: (key: string) => { values.delete(key); },
-    };
-  })();
   private readonly config: ShareReceiverServiceOptions;
 
   constructor(private readonly client: ShareReceiverClient, config: ShareReceiverServiceOptions | undefined) {
     if (config === undefined) throw new Error("share receiver requires explicit deployment configuration");
     this.config = config;
     this.fetchFn = config.fetch ?? globalThis.fetch.bind(globalThis);
-    this.storage = config.sessionStorage ?? window.sessionStorage;
   }
 
   async receive(shareUrl: string, options: ShareReceiveOptions): Promise<ReceivedShare> {
@@ -497,9 +486,9 @@ export class ShareReceiverService {
     } else {
       if (options.identity === "account") throw new Error("an active or restored TinyCloud session is required");
       const origin = this.config.origin ?? window.location.origin;
-      const receiver = await createOrRestoreShareReceiverSession(origin, this.storage, this.config.indexedDB === undefined ? {} : { indexedDB: this.config.indexedDB });
+      const receiver = await createOrRestoreShareReceiverSession(origin, this.config.sessionStorage, this.config.indexedDB === undefined ? {} : { indexedDB: this.config.indexedDB });
       identity = Object.freeze({ kind: "receiver", holderDid: receiver.holderDid, custody: receiver.custody, origin: receiver.origin });
-      credentials = new CredentialsService(guestCredentialClient(receiver, receiver.custody === "memory" ? this.memoryStorage : this.storage));
+      credentials = new CredentialsService(guestCredentialClient(receiver));
       sign = (bytes) => receiver.sign(bytes);
     }
     options.onProgress?.({ state: "identity-selection", status: "completed", identity });
