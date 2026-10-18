@@ -82,6 +82,24 @@ export function storageFullOperationError(error: unknown): OperationError | unde
 }
 
 /**
+ * The SDK's node retry codes (`NODE_BUSY`, `REQUEST_TIMEOUT`, `OUTCOME_UNKNOWN`) as `NODE_ERROR` with the
+ * SDK's own verdict: a busy node or a deadline hit before any write began applied nothing, so a retry is
+ * safe; `OUTCOME_UNKNOWN` may have applied a write, so it is never retryable and says to read back first.
+ */
+export function nodeRetryOperationError(error: unknown): OperationError | undefined {
+  const code = typeof error === "object" && error !== null && "code" in error ? error.code : undefined;
+  if (code === "OUTCOME_UNKNOWN") {
+    return operationError(
+      "NODE_ERROR",
+      "The TinyCloud node may have applied the write; read the data back before retrying.",
+      { retryable: false },
+    );
+  }
+  if (code !== "NODE_BUSY" && code !== "REQUEST_TIMEOUT") return undefined;
+  return operationError("NODE_ERROR", "The TinyCloud node was busy and applied nothing; try again shortly.", { retryable: true });
+}
+
+/**
  * Internal operations and profile resolution use this for expected failures.
  * Generic exceptions are never exposed at the projection boundary.
  */

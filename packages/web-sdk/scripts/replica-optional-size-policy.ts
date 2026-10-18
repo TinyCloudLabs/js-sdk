@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { resolve } from "node:path";
 import type { LoadedSizes } from "./measure-replica-optional";
-import { ancestryPins, approvedCiToolchainCorrection, approvedFixRequiredRatchet, approvedHardeningRatchet, pinLandedOn, validateGatedOnlyRatchet, type GatedOnlyRatchet, type Ledger } from "./replica-size-policy";
+import { ancestryPins, approvedCiToolchainCorrection, approvedFixRequiredRatchet, approvedHardeningRatchet, approvedTc1413Ratchet, pinLandedOn, validateGatedOnlyRatchet, type GatedOnlyRatchet, type Ledger } from "./replica-size-policy";
 export type CompactFixRequired = {
   sourceCommit: string;
   integratedCommit: string;
@@ -84,6 +84,10 @@ export const compactFixOptionalAllowance: LoadedSizes = {
 export const hardeningOptionalAllowance: LoadedSizes = {
   ...approvedHardeningRatchet.firstImport.ceiling, ...approvedHardeningRatchet.activation.ceiling,
 };
+/** The TC-1413 ratchet's exact canonical first-import and activation ceilings. */
+export const tc1413OptionalAllowance: LoadedSizes = {
+  ...approvedTc1413Ratchet.firstImport.ceiling, ...approvedTc1413Ratchet.activation.ceiling,
+};
 export const approvedMeasurementCorrection = {
   commit: "ce52494d0cb1ea236578bc6b709e9e6e016f8c78",
   ciRun: "38958197518",
@@ -102,7 +106,7 @@ export const approvedRelocations = [
 
 /** Validate the actual ledger before comparing its immutable prefix or built artifacts. */
 export function validateOptionalLedger(
-  value: OptionalLedger, fixRequired = false, ciToolchainCorrection = false, hardening = false,
+  value: OptionalLedger, fixRequired = false, ciToolchainCorrection = false, hardening = false, tc1413 = false,
 ): void {
   const path = "packages/web-sdk/scripts/replica-optional-size-ledger.json";
   if (!value || !value.allowance || !Array.isArray(value.entries) ||
@@ -122,13 +126,13 @@ export function validateOptionalLedger(
   const relocated = value.relocations !== undefined;
   const corrected = value.measurementCorrection !== undefined;
   const hasCompactFix = value.fixRequired !== undefined;
-  const ceiling = hardening ? hardeningOptionalAllowance : hasCompactFix ? compactFixOptionalAllowance
+  const ceiling = tc1413 ? tc1413OptionalAllowance : hardening ? hardeningOptionalAllowance : hasCompactFix ? compactFixOptionalAllowance
     : ciToolchainCorrection ? ciOptionalAllowance : fixRequired ? fixRequiredOptionalAllowance
       : corrected ? correctedOptionalAllowance : relocated ? relocatedOptionalAllowance : priorOptionalAllowance;
   if (optionalFormats.some((format) => value.allowance[format] !== ceiling[format]) ||
       (relocated && JSON.stringify(value.relocations) !== JSON.stringify(approvedRelocations)) ||
       (corrected && (!relocated || JSON.stringify(value.measurementCorrection) !== JSON.stringify(approvedMeasurementCorrection))) ||
-      (fixRequired && !corrected) || (ciToolchainCorrection && !fixRequired) || (hardening && !hasCompactFix) ||
+      (fixRequired && !corrected) || (ciToolchainCorrection && !fixRequired) || (hardening && !hasCompactFix) || (tc1413 && !hardening) ||
       (hasCompactFix && (!ciToolchainCorrection ||
         JSON.stringify(value.fixRequired) !== JSON.stringify([approvedCompactFixRequired])))) {
     throw new Error(`${path}: only the exact paired relocation, canonical toolchain correction and reviewed fix-required first-import caps are approved`);

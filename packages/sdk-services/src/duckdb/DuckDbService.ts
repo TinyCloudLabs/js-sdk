@@ -20,6 +20,7 @@ import {
   parseAuthError,
   storageRejectionError,
   parseStorageRejection,
+  nodeRetryError,
 } from "../errors";
 import {
   formatServiceResponseError,
@@ -466,6 +467,8 @@ export class DuckDbService extends BaseService implements IDuckDbService {
     if (response.status === 413 && parseStorageRejection(errorText)) {
       return err(storageRejectionError("duckdb", 413, meta, errorText));
     }
+    const retryError = nodeRetryError("duckdb", `DuckDB ${operation} failed: ${response.status} - ${errorText}`, response, errorText);
+    if (retryError) return err(retryError);
 
     const errorBody = parseServiceErrorBody(errorText);
 

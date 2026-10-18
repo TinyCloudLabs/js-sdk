@@ -100,6 +100,12 @@ export type LogoutRatchet = {
   root: { delta: GzipSizes; ceiling: GzipSizes };
   reason: string;
 };
+/**
+ * One reviewed exact-delta admission of TC-1413 (js-sdk #574): typed node retry errors in sdk-services.
+ * Same shape as the #565 hardening row, because the change moves the root, first-import, activation and
+ * worker buckets.
+ */
+export type Tc1413Ratchet = HardeningRatchet;
 export type Ledger = {
   allowance: GzipSizes;
   entries: LedgerEntry[];
@@ -109,6 +115,7 @@ export type Ledger = {
   masterMergeResolution?: MasterMergeResolution;
   hardeningRatchet?: HardeningRatchet;
   logoutRatchet?: LogoutRatchet;
+  tc1413Ratchet?: Tc1413Ratchet;
 };
 
 const formats = ["index.mjs", "index.cjs"] as const;
@@ -276,6 +283,43 @@ export const approvedLogoutRatchet: LogoutRatchet = {
   reason: "Owner-signed direct revoke in DelegationManager (TC-721; +119/+100 locally) and the prepared-login retry in signInWithOpenKey (+115/+89 locally) are the feature. Cuts applied first: the retry loop is one loop and the signOwnerRevocation schema entry is z.custom, together -12/-28 against the first CI measurement of +280/+221; a shared revoke tail would change what the entry carries when authorityCid is undefined and was not taken. The registry-coverage guard and session-field resets are +23/+12 locally. Run 39054822172 measured identical absolute bytes in both jobs against merge base d2b54705. First-import, activation and worker are unchanged (replica.mjs -1 is a measured reduction, not a new allowance).",
 };
 
+/**
+ * Naomi's ruling for TC-1413 (js-sdk #574): the typed node retry errors in sdk-services are admitted at
+ * exactly the bytes GitHub measured, after cuts, with no headroom. sdk-services reaches the root bundle,
+ * the kv-storage worker and the optional first-import and activation buckets, so each moves by its
+ * measured delta from the #571 / #565 ceilings. Her scope: "no unrelated loosening", not a refusal of the
+ * bytes this change causes.
+ */
+export const approvedTc1413Ratchet: Tc1413Ratchet = {
+  label: "TC-1413 typed node retry errors (NODE_BUSY, REQUEST_TIMEOUT, OUTCOME_UNKNOWN), exact canonical delta",
+  ruling: "Naomi TC-1413 size ruling: one reviewed exact-delta row at canonical CI bytes; worker, root, first-import and activation only, no unrelated loosening",
+  base: "3ae17bfcd5ce61742ad120bcca906c63e10dff73",
+  sourceCommits: [
+    "20c29611404d3b9fdc90efcd18b0f1f40764d51d",
+  ],
+  canonicalCI: {
+    run: "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39099093175",
+    jobs: [
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39099093175/job/117591478490",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39099093175/job/117591478566",
+    ],
+  },
+  root: {
+    delta: { "index.mjs": 278, "index.cjs": 302 },
+    ceiling: { "index.mjs": 1464668, "index.cjs": 1395375 },
+  },
+  firstImport: {
+    delta: { "replica.mjs": 0, "replica.cjs": 1 },
+    ceiling: { "replica.mjs": 51925, "replica.cjs": 67139 },
+  },
+  activation: {
+    delta: { "activation.mjs": 30, "activation.cjs": 28 },
+    ceiling: { "activation.mjs": 23105, "activation.cjs": 24683 },
+  },
+  worker: { delta: 827, ceiling: 820935 },
+  reason: "One shared classifier (nodeRetryError in sdk-services/src/errors.ts) maps the node's 503 sql_busy / unavailable_retryable / request_timeout and 500 outcome_unknown to NODE_BUSY, REQUEST_TIMEOUT and OUTCOME_UNKNOWN for SQL, DuckDB and KV get/head/list/put/delete, replacing the 503-as-KV_CONFLICT mapping. Cuts applied first: Retry-After is read as whole seconds only (no HTTP-date parsing), one message string per error site is shared with the classifier, and the CLI messages live in the CLI only. The first CI measurement on 90bc0ae7 was worker +946, and the two cuts took it to +827. The review then required mapping the new codes in their consumers (ShareRecipientClient.redactedCode and the operations KV and personal-record failure mappers, which also dropped the dead KV_CONFLICT paths); that moved only the root, by +27/+28, so the final source is 20c29611 with root +278/+302. Run 39099093175 measured identical absolute bytes in both jobs against merge base 3ae17bfc; the worker's 820,935 and the optional deltas are unchanged from run 39095938793. No replica-owned file changed; the growth is sdk-services and sdk-core code bundled into each artifact.",
+};
+
 /** The reviewed #553 S3 entry's source commit, as master's checker pinned it. */
 export const preexistingS3EntryCommit = "0241ba9b";
 
@@ -323,6 +367,7 @@ export function ancestryPins(root: Ledger, hasGatedOnly: boolean): Array<{ row: 
   if (root.masterMergeResolution !== undefined) pins.push({ row: "masterMergeResolution", pin: root.masterMergeResolution.mergedHead });
   if (root.hardeningRatchet !== undefined) pins.push({ row: "hardeningRatchet", pin: root.hardeningRatchet.sourceCommits.at(-1)! });
   if (root.logoutRatchet !== undefined) pins.push({ row: "logoutRatchet", pin: root.logoutRatchet.sourceCommits.at(-1)! });
+  if (root.tc1413Ratchet !== undefined) pins.push({ row: "tc1413Ratchet", pin: root.tc1413Ratchet.sourceCommits.at(-1)! });
   if (hasGatedOnly) pins.push({ row: "gatedOnlyRatchet", pin: approvedGatedOnlyRatchet.sourceCommit });
   return pins;
 }
@@ -359,7 +404,7 @@ const historicalToolchain = "Bun 1.4.3; production webpack; gzip -9 -c";
 /** Only a git merge-base ledger may retain the pre-correction toolchain. */
 export function validateLedger(value: Ledger, historicalBase = false): void {
   if (!value || !value.allowance || !Array.isArray(value.entries) ||
-      Object.keys(value).some((key) => key !== "allowance" && key !== "entries" && key !== "phase2Ratchet" && key !== "fixRequiredRatchet" && key !== "canonicalToolchainCorrection" && key !== "masterMergeResolution" && key !== "hardeningRatchet" && key !== "logoutRatchet")) {
+      Object.keys(value).some((key) => key !== "allowance" && key !== "entries" && key !== "phase2Ratchet" && key !== "fixRequiredRatchet" && key !== "canonicalToolchainCorrection" && key !== "masterMergeResolution" && key !== "hardeningRatchet" && key !== "logoutRatchet" && key !== "tc1413Ratchet")) {
     throw new Error("Invalid packages/web-sdk/scripts/replica-size-ledger.json shape");
   }
   if (Object.keys(value.allowance).some((key) => !formats.includes(key as typeof formats[number]))) {
@@ -423,6 +468,10 @@ export function validateLedger(value: Ledger, historicalBase = false): void {
       (!value.hardeningRatchet || JSON.stringify(value.logoutRatchet) !== JSON.stringify(approvedLogoutRatchet))) {
     throw new Error("Only Naomi's exact canonical #571 sign-out contract ratchet is approved.");
   }
+  if (value.tc1413Ratchet !== undefined &&
+      (!value.logoutRatchet || JSON.stringify(value.tc1413Ratchet) !== JSON.stringify(approvedTc1413Ratchet))) {
+    throw new Error("Only Naomi's exact canonical TC-1413 node-retry-errors ratchet is approved.");
+  }
 }
 
 /** The resolved input blobs are introduced once and immutable in subsequent bases. */
@@ -448,6 +497,14 @@ export function validateLogoutRatchetTransition(base?: LogoutRatchet, current?: 
   if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedLogoutRatchet) ||
       base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
     throw new Error("The exact #571 sign-out ratchet may be introduced once and cannot change later.");
+  }
+}
+
+/** The TC-1413 ratchet is introduced once at its exact canonical bytes and immutable afterwards. */
+export function validateTc1413RatchetTransition(base?: Tc1413Ratchet, current?: Tc1413Ratchet): void {
+  if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc1413Ratchet) ||
+      base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
+    throw new Error("The exact TC-1413 ratchet may be introduced once and cannot change later.");
   }
 }
 

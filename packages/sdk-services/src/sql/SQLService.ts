@@ -22,6 +22,7 @@ import {
   parseAuthError,
   storageRejectionError,
   parseStorageRejection,
+  nodeRetryError,
 } from "../errors";
 import {
   formatServiceResponseError,
@@ -568,6 +569,8 @@ export class SQLService extends BaseService implements ISQLService {
     if (response.status === 413 && parseStorageRejection(errorText)) {
       return err(storageRejectionError("sql", 413, meta, errorText));
     }
+    const retryError = nodeRetryError("sql", `SQL ${operation} failed: ${response.status} - ${errorText}`, response, errorText);
+    if (retryError) return err(retryError);
 
     const errorBody = parseServiceErrorBody(errorText);
 

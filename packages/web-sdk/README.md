@@ -119,6 +119,17 @@ First import, activation and the worker keep #565's ceilings. The ledger's
 per-PR allowance (388 B for ESM) cannot absorb that growth, #571's `entries[]`
 row is zero and the row's absolute ceiling carries it, as for Phase 2.
 
+The TC-1413 typed node retry errors (`NODE_BUSY`, `REQUEST_TIMEOUT`, `OUTCOME_UNKNOWN`
+in sdk-services and their consumers, #574) raised four buckets once more, by the exact
+bytes GitHub run 39099093175 measured on source `20c29611`, in both jobs, against master
+`3ae17bfc`: the root to 1,464,668 / 1,395,375 B (+278 / +302), first import
+`replica.cjs` to 67,139 B (+1; `replica.mjs` +0), activation to 23,105 / 24,683 B
+(+30 / +28) and the worker to 820,935 B (+827, also `MAX_WORKER_GZIP_BYTES`). No
+replica-owned file changed; the sdk-services and sdk-core code is bundled into each
+artifact. The ledger's `tc1413Ratchet` row and the matching optional allowance record
+them and cannot change later; the `entries[]` rows carry zero (root) and the measured
+optional deltas.
+
 **Ancestry pins and squash merges.** A policy row records the PR-branch commit it
 was reviewed at, and its introduction check requires that literal commit in the
 PR head. js-sdk squash-merges, so that commit is unreachable from master

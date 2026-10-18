@@ -2,11 +2,13 @@ import { describe, expect, it } from "bun:test";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import {
-  compactFixOptionalAllowance, correctedOptionalAllowance, hardeningOptionalAllowance, validateIntroducedOptionalSources,
+  compactFixOptionalAllowance, correctedOptionalAllowance, hardeningOptionalAllowance, tc1413OptionalAllowance, validateIntroducedOptionalSources,
   validateOptionalEntryTransition, validateOptionalLedger, type OptionalLedger,
 } from "./replica-optional-size-policy";
 
-const current = JSON.parse(readFileSync(resolve(import.meta.dir, "replica-optional-size-ledger.json"), "utf8")) as OptionalLedger;
+const shipped = JSON.parse(readFileSync(resolve(import.meta.dir, "replica-optional-size-ledger.json"), "utf8")) as OptionalLedger;
+// The tests below cover the #565 hardening-era ledger; TC-1413's own allowance is tested at the end.
+const current: OptionalLedger = { ...structuredClone(shipped), allowance: { ...hardeningOptionalAllowance } };
 const copy = () => structuredClone(current);
 const observed = { "replica.mjs": 51791, "replica.cjs": 67009, "activation.mjs": 23071, "activation.cjs": 24650 };
 
@@ -205,5 +207,35 @@ describe("TC-858 squash-merged source commits", () => {
     delete withoutRelocations.relocations;
     expect(() => validateIntroducedOptionalSources(withoutRelocations, current))
       .toThrow("approved relocation commit is not an ancestor of HEAD");
+  });
+});
+
+describe("TC-1413 optional allowance", () => {
+  it("accepts exactly the canonical TC-1413 first-import and activation ceilings", () => {
+    expect(() => validateOptionalLedger(shipped, true, true, true, true)).not.toThrow();
+    expect(shipped.allowance).toEqual(tc1413OptionalAllowance);
+    for (const format of ["replica.mjs", "replica.cjs", "activation.mjs", "activation.cjs"] as const) {
+      expect(tc1413OptionalAllowance[format] - hardeningOptionalAllowance[format])
+        .toBe({ "replica.mjs": 0, "replica.cjs": 1, "activation.mjs": 30, "activation.cjs": 28 }[format]);
+    }
+  });
+
+  it("refuses one extra byte in any optional bucket, the TC-1413 allowance without #565's, or the old allowance after it", () => {
+    for (const format of ["replica.mjs", "replica.cjs", "activation.mjs", "activation.cjs"] as const) {
+      const changed = structuredClone(shipped);
+      changed.allowance[format]++;
+      expect(() => validateOptionalLedger(changed, true, true, true, true)).toThrow();
+    }
+    expect(() => validateOptionalLedger(shipped, true, true, false, true)).toThrow();
+    expect(() => validateOptionalLedger(shipped, true, true, true)).toThrow();
+  });
+
+  it("keeps the cumulative entries within the allowance, with this PR's row carrying the measured deltas", () => {
+    for (const format of ["replica.mjs", "replica.cjs", "activation.mjs", "activation.cjs"] as const) {
+      expect(shipped.entries.reduce((sum, entry) => sum + entry[format], 0)).toBeLessThanOrEqual(shipped.allowance[format]);
+    }
+    expect(shipped.entries.at(-1)).toMatchObject({
+      pr: "#574", ticket: "TC-1413", "replica.mjs": 0, "replica.cjs": 1, "activation.mjs": 30, "activation.cjs": 28,
+    });
   });
 });
