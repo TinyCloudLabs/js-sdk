@@ -337,19 +337,20 @@ export const approvedTc1424Ratchet: Tc1424Ratchet = {
   base: "7e10709c280596db0118a8fb04e7ffcd9bbe7212",
   sourceCommits: [
     "d1e4c3d32112a0f49a005597be65a73f2694c5f6",
+    "7672d834cdd67722bf82aa7b48a0c4f6ddce1418",
   ],
   canonicalCI: {
-    run: "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39134921085",
+    run: "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39140119870",
     jobs: [
-      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39134921085/job/117697376000",
-      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39134921085/job/117697376004",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39140119870/job/117712634007",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39140119870/job/117712634205",
     ],
   },
   root: {
-    delta: { "index.mjs": 1382, "index.cjs": 1225 },
-    ceiling: { "index.mjs": 1466050, "index.cjs": 1396600 },
+    delta: { "index.mjs": 1677, "index.cjs": 1456 },
+    ceiling: { "index.mjs": 1466345, "index.cjs": 1396831 },
   },
-  reason: "Accountless share receivers sign with a non-extractable WebCrypto Ed25519 key whose handle is kept in IndexedDB: record validation, a multi-tab add race, removal of the earlier session-storage record, memory-only fallbacks and forget. The receiver is part of the web bundle, so it cannot leave the root. Ed25519 is not new bytes: @noble/curves/ed25519 was already bundled once through sdk-core and share-envelope and still is. Cuts applied first: no transaction timeout wrapper and no per-request promise helper (one transaction-completion promise instead); the local measurement went from +1499/+1265 to +1383/+1171. Not taken: a lazy import, because the web build pins LimitChunkCountPlugin({ maxChunks: 1 }) and would inline it; dropping forget, multi-tab handling or stored-record validation, which the security review requires.",
+  reason: "Accountless share receivers sign with a non-extractable WebCrypto Ed25519 key whose handle is kept in IndexedDB: record validation, a multi-tab add race, compare-and-delete of stale records, removal of the earlier session-storage record, memory-only fallbacks with page-memory credentials, a page-memory fallback where session storage is blocked, sessions that stop signing at expiry or forget, and forget. The receiver is part of the web bundle, so it cannot leave the root. Ed25519 is not new bytes: @noble/curves/ed25519 was already bundled once through sdk-core and share-envelope and still is. Cuts applied first: no transaction timeout wrapper and no per-request promise helper (one transaction-completion promise instead); the local measurement went from +1499/+1265 to +1383/+1171, and CI measured +1382/+1225 on d1e4c3d3. The review fixes on 7672d834 (expiry and forget in sign, compare-and-delete, the blocked-storage fallback, credential storage chosen by the session) took CI to +1677/+1456. Not taken: a lazy import, because the web build pins LimitChunkCountPlugin({ maxChunks: 1 }) and would inline it; dropping forget, multi-tab handling, stored-record validation or the review fixes.",
 };
 
 /** The reviewed #553 S3 entry's source commit, as master's checker pinned it. */
