@@ -10,7 +10,8 @@ import { join, resolve } from "node:path";
 // commit 89b82fc2) measured 820,108 (+7) in GitHub run 39004961403 jobs
 // 117315431534 and 117315431611; the ledger's hardeningRatchet row records it.
 // TC-1413 (typed node retry errors in sdk-services) measured 820,935 (+827) in
-// GitHub run 39095466871 on 50a9a83c; the ledger's tc1413Ratchet row records it.
+// GitHub run 39099093175 on 20c29611 (the same 820,935 as run 39095466871 on
+// 50a9a83c); the ledger's tc1413Ratchet row records it.
 // Zero additional headroom; independent of the web-sdk ledger, including WASM.
 export const MAX_WORKER_GZIP_BYTES = 820_935;
 const canonicalName = /^kv-storage\.worker\.([0-9a-f]{64})\.js$/;
