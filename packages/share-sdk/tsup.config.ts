@@ -1,7 +1,7 @@
 import { defineConfig } from "tsup";
 
 export default defineConfig({
-  entry: ["src/index.ts"],
+  entry: { index: "src/index.ts", "share-root": "src/share-root-entry.ts" },
   format: ["esm", "cjs"],
   target: "es2022",
   dts: true,
