@@ -1150,9 +1150,11 @@ describe("TC-1432 vault etag/ifMatch/expectAad exact-delta ratchet", () => {
     for (const format of ["index.mjs", "index.cjs"] as const) {
       expect(row1432.root.ceiling[format]).toBe(approvedTc1413Ratchet.root.ceiling[format] + row1432.root.delta[format]);
     }
+    // TC-1413's replica.mjs ceiling sat 1 B above the merge-base measurement, so the measured +1 lands
+    // on the existing ceiling; every other bucket moves by its delta.
     for (const format of ["replica.mjs", "replica.cjs"] as const) {
       expect(row1432.firstImport.ceiling[format])
-        .toBe(approvedTc1413Ratchet.firstImport.ceiling[format] + row1432.firstImport.delta[format]);
+        .toBe(approvedTc1413Ratchet.firstImport.ceiling[format] + row1432.firstImport.delta[format] - (format === "replica.mjs" ? 1 : 0));
     }
     for (const format of ["activation.mjs", "activation.cjs"] as const) {
       expect(row1432.activation.ceiling[format])

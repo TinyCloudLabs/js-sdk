@@ -342,23 +342,26 @@ export const approvedTc1432Ratchet: Tc1432Ratchet = {
     "490cd9477da70413997bf6c6516e6123c4c7883b",
   ],
   canonicalCI: {
-    run: "pending",
-    jobs: [],
+    run: "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39134457380",
+    jobs: [
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39134457380/job/117696026281",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39134457380/job/117696026493",
+    ],
   },
   root: {
-    delta: { "index.mjs": 3000, "index.cjs": 3000 },
-    ceiling: { "index.mjs": 1467668, "index.cjs": 1398375 },
+    delta: { "index.mjs": 1808, "index.cjs": 896 },
+    ceiling: { "index.mjs": 1466476, "index.cjs": 1396271 },
   },
   firstImport: {
-    delta: { "replica.mjs": 600, "replica.cjs": 600 },
-    ceiling: { "replica.mjs": 52525, "replica.cjs": 67739 },
+    delta: { "replica.mjs": 1, "replica.cjs": -1 },
+    ceiling: { "replica.mjs": 51925, "replica.cjs": 67138 },
   },
   activation: {
-    delta: { "activation.mjs": 600, "activation.cjs": 600 },
-    ceiling: { "activation.mjs": 23705, "activation.cjs": 25283 },
+    delta: { "activation.mjs": 1, "activation.cjs": 2 },
+    ceiling: { "activation.mjs": 23106, "activation.cjs": 24685 },
   },
-  worker: { delta: 3000, ceiling: 823935 },
-  reason: "pending first canonical measurement",
+  worker: { delta: 1109, ceiling: 822044 },
+  reason: "Vault compare-and-swap and opt-in address binding in sdk-services (DataVaultService, vault types; one node-sdk mapping line): VaultEntry.etag, VaultPutOptions.ifMatch with distinct ETAG_MISMATCH / INVALID_ETAG / OUTCOME_UNKNOWN / NODE_BUSY codes, and VaultGetOptions.expectAad. sdk-services is bundled whole into the root, the kv-storage worker and the optional buckets, and the worker keeps DataVaultService through the sdk-services barrel, so any vault code is charged there. Real shrink attempts first, same-toolchain local worker gzip (Bun 1.4.3), master 819,007: the first candidate was +870 (CI +851); the review fixes (shape check before the AAD check, explicit expectAad refusals, gateway statuses as OUTCOME_UNKNOWN, the weak-etag message) took it to +1,209; folding the new default messages into the existing message-required case changed nothing (+1,249, strings gzip away); merging the shape check and the AAD check into one helper with the decrypt's own base64 decoder cut it to +1,119 (CI +1,109); importing the worker's KVService through the /kv subpath instead measured 837,823 B against the 820,256 B candidate (+17,567, it duplicates KVService) and still contains DataVaultService, so it was reverted; the vault methods are synchronous parts of one service class, so a lazy import is not possible. Canonical CI run 39134457380 (head 3db95116, a policy-only commit over source 490cd947) measured identical absolute bytes in both jobs against merge base 7e10709c: root 1,466,476 / 1,396,271 B (+1,808 / +896 over the TC-1413 ceilings), first import 51,925 / 67,138 B (+1 / -1), activation 23,106 / 24,685 B (+1 / +2) and the worker 822,044 B (+1,109). Whichever of #578 / #580 lands second re-measures against the new base and updates its own row.",
 };
 
 /** The reviewed #553 S3 entry's source commit, as master's checker pinned it. */

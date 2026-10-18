@@ -130,6 +130,17 @@ artifact. The ledger's `tc1413Ratchet` row and the matching optional allowance r
 them and cannot change later; the `entries[]` rows carry zero (root) and the measured
 optional deltas.
 
+TC-1432 (vault `etag`, `ifMatch` and opt-in `expectAad` in sdk-services, #580) raised
+the same four buckets once more, by the exact bytes GitHub run 39134457380 measured in
+both jobs (head `3db95116`, a policy-only commit over source `490cd947`) against master
+`7e10709c`: the root to 1,466,476 / 1,396,271 B (+1,808 / +896 over TC-1413's), first
+import to 51,925 / 67,138 B (+1 / -1), activation to 23,106 / 24,685 B (+1 / +2) and the
+worker to 822,044 B (+1,109, also `MAX_WORKER_GZIP_BYTES`). It is #580's own row, taken
+after a documented shrink attempt (see the row's `reason`). The ledger's `tc1432Ratchet`
+row and the matching optional allowance record it and cannot change later. Whichever of
+#578 (TC-1436) and #580 lands second re-measures against the new base and updates its
+own row.
+
 **Ancestry pins and squash merges.** A policy row records the PR-branch commit it
 was reviewed at, and its introduction check requires that literal commit in the
 PR head. js-sdk squash-merges, so that commit is unreachable from master

@@ -251,9 +251,12 @@ describe("TC-1432 optional allowance", () => {
   it("accepts exactly the canonical TC-1432 first-import and activation ceilings", () => {
     expect(() => validateOptionalLedger(shipped, true, true, true, true, true)).not.toThrow();
     expect(shipped.allowance).toEqual(tc1432OptionalAllowance);
+    // TC-1413's replica.mjs ceiling (51,925) sat 1 B above the merge-base measurement (51,924), so the
+    // measured +1 lands exactly on the existing ceiling; every other bucket moves by its delta.
+    const headroomAtBase = { "replica.mjs": 1, "replica.cjs": 0, "activation.mjs": 0, "activation.cjs": 0 };
     for (const format of ["replica.mjs", "replica.cjs", "activation.mjs", "activation.cjs"] as const) {
       expect(tc1432OptionalAllowance[format] - tc1413OptionalAllowance[format])
-        .toBe(approvedTc1432Ratchet[format.startsWith("replica") ? "firstImport" : "activation"].delta[format as never]);
+        .toBe({ ...approvedTc1432Ratchet.firstImport.delta, ...approvedTc1432Ratchet.activation.delta }[format] - headroomAtBase[format]);
     }
   });
 
