@@ -463,5 +463,31 @@
       }
     },
     "reason": "delegateTo, and so createDelegation and space.delegations.create, throw for disableSubDelegation: true with a did:pkh recipient, because the node refuses a wallet-mode useDelegation of a terminal parent. Shrink attempts first (same-toolchain local gzip, Bun 1.4.3, master 1d7b78fd): the first candidate added a separate 100-character error string, +74 / +55; reusing the existing TERMINAL_DELEGATION_REQUIRES_SESSION_KEY constant for the new refusal (its text now also names the did:key rule and keeps its old prefix) and one shared throw took it to +49 / +58 locally, +41 / +31 on canonical CI against the TC-1432 base. What remains is the did:pkh prefix check and the longer shared message. A lazy import would be inlined by the single-chunk root build, and the check has to run in the web root because TinyCloudWeb.createDelegation forwards to delegateTo. Re-measured after #583 (TC-1424) landed: canonical CI run 39159867318 (head b8d13379, the merge of master 1c89b697 into the PR branch; source unchanged since 18b6c9fa) measured identical absolute bytes in both jobs: root 1,468,625 / 1,397,910 B (+44 / +33 over the TC-1424 ceilings). Whichever PR lands after this one re-measures against the new base and updates its own row."
+  },
+  "tc1428Ratchet": {
+    "label": "TC-1428 #582 owner-signed artifact pin for addressed shares, exact canonical delta",
+    "ruling": "Naomi's standing size rule for TC-1428 #582: a real shrink first, remainder by the PR's own exact-delta row at canonical CI bytes; rows chain after the latest row on master, so whichever PR lands later re-measures against the new base and updates its own row",
+    "base": "7539b854c83f5f08568ca5f97882df5eabb27b93",
+    "sourceCommits": [
+      "3227e2f2ca896a93cff46a4ff2fdbbaa72ea5887"
+    ],
+    "canonicalCI": {
+      "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39166275491",
+      "jobs": [
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39166275491/job/117789755811",
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39166275491/job/117789756108"
+      ]
+    },
+    "root": {
+      "delta": {
+        "index.mjs": 914,
+        "index.cjs": 789
+      },
+      "ceiling": {
+        "index.mjs": 1469539,
+        "index.cjs": 1398699
+      }
+    },
+    "reason": "The viewer now checks the owner-signed artifactPin: assertArtifactBinding and verifyArtifactShare in share-sdk/src/artifact-pin.ts, the strict artifactPin field in the Policy/v3 envelope schema, and their call sites in resolvePolicyShare and ShareRecipientClient.decryptV3Content. Root only: the worker, first-import, activation and gated artifacts are unchanged. Cuts applied first: the layout helpers and the owner-side helpers (buildArtifactPin, verifyArtifactManifestBytes, verifyArtifactFileBytes) live in the separate @tinycloud/share-sdk/artifact entry and are not in the web bundle; pin errors use their code as the message (-159 gzip bytes in a share-sdk proxy build); the recipient no longer re-hashes the fetched bytes, because the binding already makes the pinned digest equal contentSource.initialCiphertextDigestHex, which decryptV3Content checks (-56). Reused: verifyEnvelopeV3SignatureOnly for the signature, the noble sha256 already bundled, and the existing ciphertext digest check; sdk-core and share-envelope hold no equivalent. Not taken: a lazy import, because the web build pins LimitChunkCountPlugin({ maxChunks: 1 }) and would inline it; a subpath for the verifier, because the viewer must run it; dropping the expected-artifact check or the edit refusal, each worth about 35 bytes. Local builds measured +1127/+993 before these cuts. Review changes then showed two canonical-CI surprises that local builds do not reproduce: a zod .max() on the pinned size moved the ESM root by +911..+924, so the bound lives in assertArtifactBinding instead (+17), and folding the two receive-path signature checks into one saved nothing. Re-measured after #579, #580, #583, #584, #588, #591, #592 and #593 landed: run 39166275491 on source 3227e2f2 (a merge of master 7539b854) measured identical absolute bytes in both jobs. An earlier run on 4a8a95b3 (merge of master 731dee3d, before #591 and #593) measured 1,469,494 / 1,398,664 against TC-1424's ceilings, and the master moves since then (#591, #593, version commits) added +45 / +35 in total: TC-1448's own +44 / +33 plus +1 / +2 from #593 and the version commits."
   }
 }
