@@ -38,6 +38,8 @@ const DEFAULT_CREDENTIAL_DISCOVERY = "https://credentials.org/.well-known/opencr
 export interface ShareReceiverServiceOptions {
   readonly origin?: string;
   readonly sessionStorage?: ReceiverSessionStorage;
+  /** Keeps the receiver key handle; `null` keeps the key in memory only. */
+  readonly indexedDB?: IDBFactory | null;
   readonly credentialDiscoveryUrl?: string;
   /** Out-of-band Share application origin allowed to supply invitation URLs. */
   readonly expectedShareOrigin: string;
@@ -441,6 +443,15 @@ export class ReceivedShareImpl implements ReceivedShare {
 export class ShareReceiverService {
   private readonly fetchFn: typeof fetch;
   private readonly storage: ReceiverSessionStorage;
+  // A memory-custody key is gone after a reload, so its credentials stay in memory too.
+  private readonly memoryStorage: ReceiverSessionStorage = (() => {
+    const values = new Map<string, string>();
+    return {
+      getItem: (key: string) => values.get(key) ?? null,
+      setItem: (key: string, value: string) => { values.set(key, value); },
+      removeItem: (key: string) => { values.delete(key); },
+    };
+  })();
   private readonly config: ShareReceiverServiceOptions;
 
   constructor(private readonly client: ShareReceiverClient, config: ShareReceiverServiceOptions | undefined) {
@@ -486,9 +497,9 @@ export class ShareReceiverService {
     } else {
       if (options.identity === "account") throw new Error("an active or restored TinyCloud session is required");
       const origin = this.config.origin ?? window.location.origin;
-      const receiver = await createOrRestoreShareReceiverSession(origin, this.storage);
-      identity = Object.freeze({ kind: "receiver", holderDid: receiver.holderDid, custody: "session", origin: receiver.origin });
-      credentials = new CredentialsService(guestCredentialClient(receiver, this.storage));
+      const receiver = await createOrRestoreShareReceiverSession(origin, this.storage, this.config.indexedDB === undefined ? {} : { indexedDB: this.config.indexedDB });
+      identity = Object.freeze({ kind: "receiver", holderDid: receiver.holderDid, custody: receiver.custody, origin: receiver.origin });
+      credentials = new CredentialsService(guestCredentialClient(receiver, receiver.custody === "memory" ? this.memoryStorage : this.storage));
       sign = (bytes) => receiver.sign(bytes);
     }
     options.onProgress?.({ state: "identity-selection", status: "completed", identity });
