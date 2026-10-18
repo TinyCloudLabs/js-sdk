@@ -16,8 +16,9 @@
  *   closed here.
  *
  * {@link classifyRegistryLookup} is a pure classifier over one registry
- * response. It performs no I/O and is not used by host resolution yet. Its
- * rules are written to be portable: the shared vectors in
+ * response. It performs no I/O; `resolveOwnerHosts` (`registry-policy.ts`)
+ * does the lookup for the opt-in `fail-closed` registry policy. The
+ * classifier's rules are written to be portable: the shared vectors in
  * `test-vectors/registry-verdict/` state them for other implementations.
  */
 
@@ -299,7 +300,8 @@ interface V1Record {
   signature: string;
 }
 
-function isCanonicalSubject(subject: unknown): subject is string {
+/** Canonical `did:pkh:eip155:<chainId>:<EIP-55 address>` or Ed25519 `did:key`. */
+export function isCanonicalSubject(subject: unknown): subject is string {
   if (typeof subject !== "string") return false;
   const pkh = /^did:pkh:eip155:([1-9][0-9]*):(0x[0-9a-fA-F]{40})$/.exec(subject);
   if (pkh !== null) {

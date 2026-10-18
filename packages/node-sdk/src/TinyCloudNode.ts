@@ -145,8 +145,13 @@ import {
   pkhDid,
   parseSpaceUri,
   resolveTinyCloudHosts,
+  resolveFailClosedTinyCloudHosts,
+  createInMemoryRegistrySequenceStore,
   publishLocationRecord,
   type LocalNodeIdentityStore,
+  type OnNodeNotFound,
+  type RegistryPolicy,
+  type RegistrySequenceStore,
   principalDidEquals,
   parseNetworkId,
   resolveSecretPath,
@@ -810,8 +815,33 @@ export interface TinyCloudNodeConfig {
   host?: string;
   /** TinyCloud location registry URL. Default: https://registry.tinycloud.xyz. */
   tinycloudRegistryUrl?: string | null;
-  /** Fallback TinyCloud hosts. Default: hosted TinyCloud node. */
+  /**
+   * Fallback TinyCloud hosts. Default: hosted TinyCloud node. Used only by the
+   * default `registryPolicy` ("legacy-fallback"), whose silent fallback is
+   * deprecated and will be removed in a future major release.
+   */
   tinycloudFallbackHosts?: string[] | null;
+  /**
+   * How sign-in uses the location registry when no `host` is configured.
+   * Default `"legacy-fallback"` (deprecated): a registry miss or failure
+   * silently uses `tinycloudFallbackHosts`, with a one-time warning.
+   * `"fail-closed"`: routing acts on the registry verdict for the signer
+   * address, an unavailable registry is `RegistryUnavailableError` (never a
+   * new account), and automatic space creation (sign-in, account bootstrap,
+   * owned-space hosting) is refused on a host the owner's registry record
+   * does not list (`NodeRegistryEntryExistsError`) or when the registry gives
+   * no verdict. Explicit `hostOwnedSpace()` and `ensurePublicSpace()` calls
+   * are not guarded.
+   */
+  registryPolicy?: RegistryPolicy;
+  /** `fail-closed` only: host for owners with no registry record. Default https://node.tinycloud.xyz; `null` refuses them with `NodeNotFoundError`. */
+  newUserHost?: string | null;
+  /** `fail-closed` only: chain ID of the v1 registry subject built from the signer address (never the session chain). Default 1. */
+  registryChainId?: number;
+  /** `fail-closed` only: highest registry sequence seen per owner. Default: in-memory for this client. */
+  registrySequenceStore?: RegistrySequenceStore;
+  /** `fail-closed` only: retry, use another host for this session, or abort when sign-in resolves no host. Without it, sign-in throws. */
+  onNodeNotFound?: OnNodeNotFound;
   /** Probe configured/registered local nodes before registry/fallback resolution. Default: true. */
   autoDiscoverLocalNode?: boolean;
   /** Local loopback node URL to probe. Omit to avoid probing loopback. */
@@ -1646,6 +1676,9 @@ export class TinyCloudNode {
     this.config = {
       ...config,
       host: config.host ?? DEFAULT_HOST,
+      // One store for every authorization this client creates.
+      registrySequenceStore:
+        config.registrySequenceStore ?? createInMemoryRegistrySequenceStore(),
     };
     if (this.config.replication?.enabled) {
       const runtime = getNodeReplicationLoaders()
@@ -1812,6 +1845,11 @@ export class TinyCloudNode {
       tinycloudHosts: this.explicitHost ? [this.explicitHost] : undefined,
       tinycloudRegistryUrl: config.tinycloudRegistryUrl,
       tinycloudFallbackHosts: config.tinycloudFallbackHosts,
+      registryPolicy: config.registryPolicy,
+      newUserHost: config.newUserHost,
+      registryChainId: config.registryChainId,
+      registrySequenceStore: this.config.registrySequenceStore,
+      onNodeNotFound: config.onNodeNotFound,
       autoDiscoverLocalNode: config.autoDiscoverLocalNode,
       localNodeUrl: config.localNodeUrl,
       localLinkName: config.localLinkName,
@@ -2712,6 +2750,11 @@ export class TinyCloudNode {
       primarySession?.spaceId === defaultSpaceId &&
       auth.capabilityRequest === BOOTSTRAP_SESSION_REQUESTS.default;
 
+    // Refuse before any bootstrap signature is requested.
+    if (steps.some((step) => step.kind === "host")) {
+      await this.assertMayCreateSpace();
+    }
+
     for (const step of steps) {
       if (step.kind !== "session") continue;
       graph.assertActive();
@@ -3466,6 +3509,8 @@ export class TinyCloudNode {
       );
     }
 
+    await this.assertMayCreateSpace();
+    if (signal?.aborted) throw signal.reason;
     const created = await this.hostOwnedSpaceOnce(spaceId, signal);
     if (!created.success) {
       throw Object.assign(
@@ -3599,6 +3644,12 @@ export class TinyCloudNode {
    * session's recap doesn't cover it and the registry has no record; the host
    * SIWE is idempotent server-side. Must be called after {@link signIn}.
    *
+   * Under `registryPolicy: "fail-closed"`, hosting is refused with
+   * `NodeRegistryEntryExistsError` when the owner's registry record does not
+   * list the host, or `RegistryUnavailableError` when the registry gives no
+   * verdict. {@link hostOwnedSpace} itself is an explicit action and is not
+   * guarded.
+   *
    * @param name - The owned space name (e.g. `"secrets"`).
    * @returns The hosted owned-space URI.
    */
@@ -3613,7 +3664,20 @@ export class TinyCloudNode {
       return spaceId;
     }
 
+    await this.assertMayCreateSpace();
     return this.hostOwnedSpace(name);
+  }
+
+  /**
+   * Space-creation guard (TC-1443) for the automatic hosting paths: sign-in's
+   * owned spaces, account bootstrap and {@link ensureOwnedSpaceHosted}. Only
+   * `registryPolicy: "fail-closed"` consults the registry
+   * ({@link NodeUserAuthorization.assertMayCreateSpace}); the default policy
+   * performs no lookup.
+   */
+  private async assertMayCreateSpace(): Promise<void> {
+    if (this.config.registryPolicy !== "fail-closed") return;
+    await (this.auth as NodeUserAuthorization).assertMayCreateSpace();
   }
 
   /**
@@ -4447,6 +4511,21 @@ export class TinyCloudNode {
     if (address === undefined || chainId === undefined) {
       return undefined;
     }
+    if (this.config.registryPolicy === "fail-closed") {
+      const resolved = await resolveFailClosedTinyCloudHosts(address, {
+        registryUrl: this.config.tinycloudRegistryUrl,
+        registryChainId: this.config.registryChainId,
+        newUserHost: this.config.newUserHost,
+        sequenceStore: this.config.registrySequenceStore,
+        onNodeNotFound: this.config.onNodeNotFound,
+        autoDiscoverLocalNode: this.config.autoDiscoverLocalNode,
+        localNodeUrl: this.config.localNodeUrl,
+        localLinkName: this.config.localLinkName,
+        expectedNodeDid: this.config.expectedNodeDid,
+        localNodeIdentityStore: this.config.localNodeIdentityStore,
+      });
+      return resolved.hosts[0];
+    }
     const resolved = await resolveTinyCloudHosts(pkhDid(address, chainId), {
       registryUrl: this.config.tinycloudRegistryUrl,
       fallbackHosts: this.config.tinycloudFallbackHosts,
@@ -4666,6 +4745,11 @@ export class TinyCloudNode {
       tinycloudHosts: this.explicitHost ? [this.explicitHost] : undefined,
       tinycloudRegistryUrl: this.config.tinycloudRegistryUrl,
       tinycloudFallbackHosts: this.config.tinycloudFallbackHosts,
+      registryPolicy: this.config.registryPolicy,
+      newUserHost: this.config.newUserHost,
+      registryChainId: this.config.registryChainId,
+      registrySequenceStore: this.config.registrySequenceStore,
+      onNodeNotFound: this.config.onNodeNotFound,
       autoDiscoverLocalNode: this.config.autoDiscoverLocalNode,
       localNodeUrl: this.config.localNodeUrl,
       localLinkName: this.config.localLinkName,
@@ -4743,6 +4827,11 @@ export class TinyCloudNode {
       tinycloudHosts: this.explicitHost ? [this.explicitHost] : undefined,
       tinycloudRegistryUrl: this.config.tinycloudRegistryUrl,
       tinycloudFallbackHosts: this.config.tinycloudFallbackHosts,
+      registryPolicy: this.config.registryPolicy,
+      newUserHost: this.config.newUserHost,
+      registryChainId: this.config.registryChainId,
+      registrySequenceStore: this.config.registrySequenceStore,
+      onNodeNotFound: this.config.onNodeNotFound,
       autoDiscoverLocalNode: this.config.autoDiscoverLocalNode,
       localNodeUrl: this.config.localNodeUrl,
       localLinkName: this.config.localLinkName,

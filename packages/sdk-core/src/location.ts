@@ -170,7 +170,8 @@ export interface WebStorageLike {
 /** Default namespaced key {@link createLocalStorageLocalNodeIdentityStore} stores its pins under. */
 export const DEFAULT_LOCAL_NODE_PIN_STORAGE_KEY = "tinycloud.localNodePins.v1";
 
-function defaultWebStorage(): WebStorageLike | undefined {
+/** `globalThis.localStorage`, or undefined where it is missing or throws on access. */
+export function defaultWebStorage(): WebStorageLike | undefined {
   try {
     return (globalThis as unknown as { localStorage?: WebStorageLike }).localStorage;
   } catch {
@@ -622,11 +623,19 @@ export async function resolveTinyCloudHosts(
     verifyRecords: options.verifyRecords,
   });
 
-  return {
-    hosts: location.multiaddrs.map((addr) => multiaddrToHttpUrl(addr)),
-    location,
-  };
+  const hosts = location.multiaddrs.map((addr) => multiaddrToHttpUrl(addr));
+  // The fallback stays the default; warn once per process when it is taken.
+  if (location.source === "fallback" && !fallbackDeprecationWarned) {
+    fallbackDeprecationWarned = true;
+    console.warn(
+      `[tinycloud:location] Deprecated: no registry host for this account, using fallback ${hosts[0]}. ` +
+        'The silent fallback will be removed in a future major; opt in to registryPolicy "fail-closed" now.',
+    );
+  }
+  return { hosts, location };
 }
+
+let fallbackDeprecationWarned = false;
 
 /**
  * Wrap a fetch implementation so identical (same-URL) requests within its
@@ -636,7 +645,7 @@ export async function resolveTinyCloudHosts(
  * request's `Response` body is cloned on the way out so every caller gets an
  * independently readable body regardless of read order.
  */
-function memoizeFetch(fetchFn: typeof fetch): typeof fetch {
+export function memoizeFetch(fetchFn: typeof fetch): typeof fetch {
   const cache = new Map<string, Promise<Response>>();
   return (async (input, init) => {
     const key = String(input);
@@ -907,7 +916,7 @@ export function multiaddrToHttpUrl(input: string): string {
   return uri;
 }
 
-function exactHttpOrigin(value: string, label: string): string {
+export function exactHttpOrigin(value: string, label: string): string {
   let url: URL;
   try {
     url = new URL(value);
@@ -942,11 +951,26 @@ async function boundedResponseText(
   label: string,
   maxBytes: number,
 ): Promise<string> {
-  const declaredLength = response.headers.get("content-length");
-  if (declaredLength !== null && (!/^\d+$/.test(declaredLength) || Number(declaredLength) > maxBytes)) {
+  const bytes = await boundedResponseBytes(response, maxBytes);
+  if (bytes === null) {
     throw new LocationRecordValidationError(`${label} response is too large`);
   }
-  if (response.body === null) return "";
+  return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+}
+
+/**
+ * The response body, or `null` when its declared or streamed length exceeds
+ * `maxBytes` (or the declared length is not a number). Reading stops there.
+ */
+export async function boundedResponseBytes(
+  response: Response,
+  maxBytes: number,
+): Promise<Uint8Array | null> {
+  const declaredLength = response.headers.get("content-length");
+  if (declaredLength !== null && (!/^\d+$/.test(declaredLength) || Number(declaredLength) > maxBytes)) {
+    return null;
+  }
+  if (response.body === null) return new Uint8Array();
   const reader = response.body.getReader();
   const chunks: Uint8Array[] = [];
   let total = 0;
@@ -958,7 +982,7 @@ async function boundedResponseText(
       total += value.byteLength;
       if (total > maxBytes) {
         await reader.cancel().catch(() => undefined);
-        throw new LocationRecordValidationError(`${label} response is too large`);
+        return null;
       }
       chunks.push(value);
     }
@@ -971,7 +995,7 @@ async function boundedResponseText(
     bytes.set(chunk, offset);
     offset += chunk.byteLength;
   }
-  return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  return bytes;
 }
 
 function boundedSignal(parent: AbortSignal | undefined, timeoutMs: number): { readonly signal: AbortSignal; dispose(): void } {
