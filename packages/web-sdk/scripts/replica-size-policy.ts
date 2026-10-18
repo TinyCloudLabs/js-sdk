@@ -112,6 +112,22 @@ export type Tc1413Ratchet = HardeningRatchet;
  */
 export type Tc1436Ratchet = LogoutRatchet;
 /**
+ * One reviewed exact-delta admission of TC-1432 (js-sdk #580): vault etag, ifMatch and expectAad in
+ * sdk-services. Same shape as the #565 hardening row, because the change moves the root, first-import,
+ * activation and worker buckets.
+ */
+export type Tc1432Ratchet = HardeningRatchet;
+/**
+ * One reviewed exact-delta admission of js-sdk #583 (TC-1424): the share receiver's non-extractable
+ * signing key. Only the root bundle grows, so the shape is the #571 root-only row.
+ */
+export type Tc1424Ratchet = LogoutRatchet;
+/**
+ * One reviewed exact-delta admission of TC-1448 (js-sdk #591): the did:pkh recipient guard for terminal
+ * grants. Only the root bundle grows, so the shape is the #571 root-only row.
+ */
+export type Tc1448Ratchet = LogoutRatchet;
+/**
  * One reviewed exact-delta admission of js-sdk #586 (TC-1443): the sdk-core registry verdict
  * classifier. Only the root bundle grows, so the shape is the #571 root-only row.
  */
@@ -127,6 +143,9 @@ export type Ledger = {
   logoutRatchet?: LogoutRatchet;
   tc1413Ratchet?: Tc1413Ratchet;
   tc1436Ratchet?: Tc1436Ratchet;
+  tc1432Ratchet?: Tc1432Ratchet;
+  tc1424Ratchet?: Tc1424Ratchet;
+  tc1448Ratchet?: Tc1448Ratchet;
   tc1443Ratchet?: Tc1443Ratchet;
 };
 
@@ -359,29 +378,124 @@ export const approvedTc1436Ratchet: Tc1436Ratchet = {
 };
 
 /**
- * TC-1443 (js-sdk #586), following #578's pattern: after a real shrink, the registry verdict
- * classifier is admitted at exactly the bytes GitHub measured, root only, with no headroom. If
- * another root-growing PR lands first, #586 re-measures against the new base and replaces this row.
+ * TC-1432 (js-sdk #580): the vault's `VaultEntry.etag`, `VaultPutOptions.ifMatch` and opt-in
+ * `VaultGetOptions.expectAad` are admitted at exactly the bytes GitHub measured, after a real shrink
+ * attempt, with no headroom. sdk-services is bundled into the root, the kv-storage worker and the
+ * optional first-import and activation buckets, so each moves by its measured delta. The row sits on
+ * top of the TC-1436 root ceilings (#578 landed first) and the TC-1413 caps for the other buckets.
  */
-export const approvedTc1443Ratchet: Tc1443Ratchet = {
-  label: "TC-1443 #586 sdk-core registry verdict classifier, exact canonical delta",
-  ruling: "TC-1443 size row for #586, approved by Naomi (2026-10-18), following the TC-1436 (#578) size ruling pattern: a real shrink first, remainder by the PR's own exact-delta row at canonical CI bytes",
+export const approvedTc1432Ratchet: Tc1432Ratchet = {
+  label: "TC-1432 vault etag, ifMatch and opt-in expectAad, exact canonical delta",
+  ruling: "Naomi size ruling: after a real shrink attempt, one PR-owned exact-delta row at canonical CI bytes; worker, root, first-import and activation only, no unrelated loosening",
   base: "129c793544b69b3b956c1c3258e64d1e6efd45fa",
   sourceCommits: [
-    "4a8ccb1aa3399c1546e3065be4a398d1bc078373",
+    "83c9d75abbd8910a9920fb3162872a78e5d3cbc8",
   ],
   canonicalCI: {
-    run: "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39142085209",
+    run: "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39144311690",
     jobs: [
-      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39142085209/job/117718397017",
-      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39142085209/job/117718397057",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39144311690/job/117724927147",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39144311690/job/117724927262",
     ],
   },
   root: {
-    delta: { "index.mjs": 2423, "index.cjs": 49 },
-    ceiling: { "index.mjs": 1468418, "index.cjs": 1395768 },
+    delta: { "index.mjs": 913, "index.cjs": 872 },
+    ceiling: { "index.mjs": 1466908, "index.cjs": 1396591 },
   },
-  reason: "sdk-core adds classifyRegistryLookup (registry-verdict.ts): a pure three-state classifier of one location registry response with its own strict JSON parser, RFC 3339 check, signature encoding rules and host-origin mapping. web-sdk does not export it; the index.mjs build still keeps the whole module, while index.cjs tree-shakes all but its module-level constants (+49). Cut applied first: the module took secp256k1's group order from sdk-core's @noble/curves 1.9.7 while viem bundles its own 1.9.1, so the root carried a second secp256k1; a pinned literal replaced it, and CI went from +12398/+6881 on 8776001a (against 7e10709c) to +2423/+49 on 4a8ccb1a. Not taken: a lazy import, because the web build pins LimitChunkCountPlugin({ maxChunks: 1 }) and would inline it; changing how the mjs build tree-shakes sdk-core, which is a web-sdk build change outside this PR. Both jobs of run 39142085209 measured identical absolute bytes; the base 129c7935 is a [skip ci] version-packages commit on 6bb86a1a, whose run 39141462754 measured 1465995/1395719, TC-1436's ceilings. First import, activation, gated and the worker are unchanged.",
+  firstImport: {
+    delta: { "replica.mjs": 1, "replica.cjs": -1 },
+    ceiling: { "replica.mjs": 51925, "replica.cjs": 67138 },
+  },
+  activation: {
+    delta: { "activation.mjs": 1, "activation.cjs": 2 },
+    ceiling: { "activation.mjs": 23106, "activation.cjs": 24685 },
+  },
+  worker: { delta: 1109, ceiling: 822044 },
+  reason: "Vault compare-and-swap and opt-in address binding in sdk-services (DataVaultService, vault types; one node-sdk mapping line): VaultEntry.etag, VaultPutOptions.ifMatch with distinct ETAG_MISMATCH / INVALID_ETAG / OUTCOME_UNKNOWN / NODE_BUSY codes, and VaultGetOptions.expectAad. sdk-services is bundled whole into the root, the kv-storage worker and the optional buckets, and the worker keeps DataVaultService through the sdk-services barrel, so any vault code is charged there. Real shrink attempts first, same-toolchain local worker gzip (Bun 1.4.3), master 819,007: the first candidate was +870 (CI +851); the review fixes (shape check before the AAD check, explicit expectAad refusals, gateway statuses as OUTCOME_UNKNOWN, the weak-etag message) took it to +1,209; folding the new default messages into the existing message-required case changed nothing (+1,249, strings gzip away); merging the shape check and the AAD check into one helper with the decrypt's own base64 decoder cut it to +1,119 (CI +1,109); importing the worker's KVService through the /kv subpath instead measured 837,823 B against the 820,256 B candidate (+17,567, it duplicates KVService) and still contains DataVaultService, so it was reverted; the vault methods are synchronous parts of one service class, so a lazy import is not possible. #578 (TC-1436) landed first, so this row was re-measured against master 129c7935 and sits on top of the TC-1436 root ceilings. Canonical CI run 39144311690 (head 83c9d75a, the merge of that master into source 490cd947 plus a policy placeholder) measured identical absolute bytes in both jobs against merge base 129c7935: root 1,466,908 / 1,396,591 B (+913 / +872 over the TC-1436 ceilings), first import 51,925 / 67,138 B (+1 / -1), activation 23,106 / 24,685 B (+1 / +2) and the worker 822,044 B (+1,109 over the TC-1413 ceiling). Whichever PR lands after this one re-measures against the new base and updates its own row.",
+};
+
+/**
+ * Naomi's standing size rule applied to TC-1424 (js-sdk #583): after a real shrink, the receiver key
+ * custody is admitted at exactly the bytes GitHub measured, root only, with no headroom. #578 and #580
+ * landed first, so this row is measured against the base that includes the TC-1432 row.
+ */
+export const approvedTc1424Ratchet: Tc1424Ratchet = {
+  label: "TC-1424 #583 non-extractable share receiver key, exact canonical delta",
+  ruling: "Naomi's standing size rule for TC-1424 #583: a real shrink first, remainder by the PR's own exact-delta row at canonical CI bytes; whichever of #578, #580 and #583 lands later re-measures against the new base and updates its own row",
+  base: "1d7b78fd03b0634cba823babf6e5ac2a0fec1866",
+  sourceCommits: [
+    "d1e4c3d32112a0f49a005597be65a73f2694c5f6",
+    "7672d834cdd67722bf82aa7b48a0c4f6ddce1418",
+    "55145dbb4583995fa8bc837a8bf1793b44751abb",
+  ],
+  canonicalCI: {
+    run: "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39150995159",
+    jobs: [
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39150995159/job/117744439615",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39150995159/job/117744439649",
+    ],
+  },
+  root: {
+    delta: { "index.mjs": 1673, "index.cjs": 1286 },
+    ceiling: { "index.mjs": 1468581, "index.cjs": 1397877 },
+  },
+  reason: "Accountless share receivers sign with a non-extractable WebCrypto Ed25519 key whose handle is kept in IndexedDB: record validation, a multi-tab add race, compare-and-delete of stale records, removal of the earlier session-storage record, memory-only fallbacks with page-memory credentials, a page-memory fallback where session storage is blocked, sessions that stop signing at expiry or forget, and forget. The receiver is part of the web bundle, so it cannot leave the root. Ed25519 is not new bytes: @noble/curves/ed25519 was already bundled once through sdk-core and share-envelope and still is. Cuts applied first: no transaction timeout wrapper and no per-request promise helper (one transaction-completion promise instead); the local measurement went from +1499/+1265 to +1383/+1171, and CI measured +1382/+1225 on d1e4c3d3. The review fixes on 7672d834 (expiry and forget in sign, compare-and-delete, the blocked-storage fallback, credential storage chosen by the session) took CI to +1677/+1456 against 7e10709c, and +1677/+1444 against 129c7935 after #578. After #580 landed, the merge 55145dbb measured +1673/+1286 against 1d7b78fd in both Replica jobs, which this row admits; first import, activation, gated and the worker are unchanged. Not taken: a lazy import, because the web build pins LimitChunkCountPlugin({ maxChunks: 1 }) and would inline it; dropping forget, multi-tab handling, stored-record validation or the review fixes.",
+};
+
+/**
+ * TC-1448 (js-sdk #591): the guard that refuses `disableSubDelegation: true` for a `did:pkh` recipient is
+ * admitted at exactly the bytes GitHub measured, root only, after a real shrink attempt, with no headroom.
+ * The row sits on top of the TC-1424 root ceilings (#583 landed first).
+ */
+export const approvedTc1448Ratchet: Tc1448Ratchet = {
+  label: "TC-1448 #591 terminal-grant did:pkh recipient guard, exact canonical delta",
+  ruling: "Naomi size ruling: a real shrink first, remainder by the PR's own exact-delta row at canonical CI bytes; rows chain after the latest on master",
+  base: "1c89b697bb37fdf5e318e533cfc96fe927b22997",
+  sourceCommits: [
+    "18b6c9fa8c64beef0580f26d35443c29ba476d33",
+    "b8d133791ab508f9471e1510abc3055116cd933a",
+  ],
+  canonicalCI: {
+    run: "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39159867318",
+    jobs: [
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39159867318/job/117770714269",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39159867318/job/117770714211",
+    ],
+  },
+  root: {
+    delta: { "index.mjs": 44, "index.cjs": 33 },
+    ceiling: { "index.mjs": 1468625, "index.cjs": 1397910 },
+  },
+  reason: "delegateTo, and so createDelegation and space.delegations.create, throw for disableSubDelegation: true with a did:pkh recipient, because the node refuses a wallet-mode useDelegation of a terminal parent. Shrink attempts first (same-toolchain local gzip, Bun 1.4.3, master 1d7b78fd): the first candidate added a separate 100-character error string, +74 / +55; reusing the existing TERMINAL_DELEGATION_REQUIRES_SESSION_KEY constant for the new refusal (its text now also names the did:key rule and keeps its old prefix) and one shared throw took it to +49 / +58 locally, +41 / +31 on canonical CI against the TC-1432 base. What remains is the did:pkh prefix check and the longer shared message. A lazy import would be inlined by the single-chunk root build, and the check has to run in the web root because TinyCloudWeb.createDelegation forwards to delegateTo. Re-measured after #583 (TC-1424) landed: canonical CI run 39159867318 (head b8d13379, the merge of master 1c89b697 into the PR branch; source unchanged since 18b6c9fa) measured identical absolute bytes in both jobs: root 1,468,625 / 1,397,910 B (+44 / +33 over the TC-1424 ceilings). Whichever PR lands after this one re-measures against the new base and updates its own row.",
+};
+
+/**
+ * TC-1443 (js-sdk #586), following #578's pattern: after a real shrink, the registry verdict
+ * classifier is admitted with no headroom. Naomi approved the row as a delta over whatever base it
+ * merges onto (+2,368 / +61 gzip, +/-50 B). The ceilings are the CI-measured bytes of the PR on its
+ * base, recorded once the measured delta is inside that band. The row chains after the latest row
+ * on master (TC-1448, #591). If another root-growing PR lands first, #586 re-measures against the
+ * new base and replaces this row.
+ */
+export const approvedTc1443Ratchet: Tc1443Ratchet = {
+  label: "TC-1443 #586 sdk-core registry verdict classifier, exact canonical delta",
+  ruling: "TC-1443 size row for #586, approved by Naomi as a delta (+2,368/+61 gzip, ±50 B), 2026-10-18; re-measured on 70304c3d, following the TC-1436 (#578) size ruling pattern: a real shrink first, remainder by the PR's own exact-delta row at canonical CI bytes",
+  base: "70304c3de12a8a3db323cf1271fc58698a9096b3",
+  sourceCommits: [
+    "72ba295cc0760e88a035f4d8fef488d8fb5c0556",
+  ],
+  canonicalCI: {
+    run: "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39166751086",
+    jobs: [
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39166751086/job/117791176669",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39166751086/job/117791176820",
+    ],
+  },
+  root: {
+    delta: { "index.mjs": 2370, "index.cjs": 71 },
+    ceiling: { "index.mjs": 1470995, "index.cjs": 1397981 },
+  },
+  reason: "sdk-core adds classifyRegistryLookup (registry-verdict.ts): a pure three-state classifier of one location registry response with its own strict JSON parser, RFC 3339 check, signature encoding rules and host-origin mapping. web-sdk does not export it; the index.mjs build still keeps the whole module, while index.cjs tree-shakes all but its module-level constants. Cut applied first: the module took secp256k1's group order from sdk-core's @noble/curves 1.9.7 while viem bundles its own 1.9.1, so the root carried a second secp256k1; a pinned literal replaced it, and CI went from +12398/+6881 on 8776001a (against 7e10709c) to +2423/+49 on 4a8ccb1a (against 129c7935). Not taken: a lazy import, because the web build pins LimitChunkCountPlugin({ maxChunks: 1 }) and would inline it; changing how the mjs build tree-shakes sdk-core, which is a web-sdk build change outside this PR. #583 (TC-1424), #584, #588, #592, #593 and #591 (TC-1448) landed first; this row was re-measured against master 70304c3d (CI-measured at 7539b854, run 39165869299: index.mjs 1,468,625 and index.cjs 1,397,910 B, equal to the TC-1448 ceilings) and chains after the TC-1448 row. Canonical CI run 39166751086 (head 72ba295c, the merge of that master into source 4a8ccb1a plus a policy row carrying placeholder numbers) measured identical absolute bytes in both Node jobs: index.mjs 1,470,995 and index.cjs 1,397,981 B, i.e. +2,370 / +71 over master's measured bytes, within the approved delta of +2,368 / +61 gzip (+/-50 B). The ceilings are these measured bytes, zero headroom. Whichever PR lands after this one re-measures against the new base and updates its own row.",
 };
 
 /** The reviewed #553 S3 entry's source commit, as master's checker pinned it. */
@@ -433,6 +547,9 @@ export function ancestryPins(root: Ledger, hasGatedOnly: boolean): Array<{ row: 
   if (root.logoutRatchet !== undefined) pins.push({ row: "logoutRatchet", pin: root.logoutRatchet.sourceCommits.at(-1)! });
   if (root.tc1413Ratchet !== undefined) pins.push({ row: "tc1413Ratchet", pin: root.tc1413Ratchet.sourceCommits.at(-1)! });
   if (root.tc1436Ratchet !== undefined) pins.push({ row: "tc1436Ratchet", pin: root.tc1436Ratchet.sourceCommits.at(-1)! });
+  if (root.tc1432Ratchet !== undefined) pins.push({ row: "tc1432Ratchet", pin: root.tc1432Ratchet.sourceCommits.at(-1)! });
+  if (root.tc1424Ratchet !== undefined) pins.push({ row: "tc1424Ratchet", pin: root.tc1424Ratchet.sourceCommits.at(-1)! });
+  if (root.tc1448Ratchet !== undefined) pins.push({ row: "tc1448Ratchet", pin: root.tc1448Ratchet.sourceCommits.at(-1)! });
   if (root.tc1443Ratchet !== undefined) pins.push({ row: "tc1443Ratchet", pin: root.tc1443Ratchet.sourceCommits.at(-1)! });
   if (hasGatedOnly) pins.push({ row: "gatedOnlyRatchet", pin: approvedGatedOnlyRatchet.sourceCommit });
   return pins;
@@ -470,7 +587,7 @@ const historicalToolchain = "Bun 1.4.3; production webpack; gzip -9 -c";
 /** Only a git merge-base ledger may retain the pre-correction toolchain. */
 export function validateLedger(value: Ledger, historicalBase = false): void {
   if (!value || !value.allowance || !Array.isArray(value.entries) ||
-      Object.keys(value).some((key) => key !== "allowance" && key !== "entries" && key !== "phase2Ratchet" && key !== "fixRequiredRatchet" && key !== "canonicalToolchainCorrection" && key !== "masterMergeResolution" && key !== "hardeningRatchet" && key !== "logoutRatchet" && key !== "tc1413Ratchet" && key !== "tc1436Ratchet" && key !== "tc1443Ratchet")) {
+      Object.keys(value).some((key) => key !== "allowance" && key !== "entries" && key !== "phase2Ratchet" && key !== "fixRequiredRatchet" && key !== "canonicalToolchainCorrection" && key !== "masterMergeResolution" && key !== "hardeningRatchet" && key !== "logoutRatchet" && key !== "tc1413Ratchet" && key !== "tc1436Ratchet" && key !== "tc1432Ratchet" && key !== "tc1424Ratchet" && key !== "tc1448Ratchet" && key !== "tc1443Ratchet")) {
     throw new Error("Invalid packages/web-sdk/scripts/replica-size-ledger.json shape");
   }
   if (Object.keys(value.allowance).some((key) => !formats.includes(key as typeof formats[number]))) {
@@ -542,8 +659,20 @@ export function validateLedger(value: Ledger, historicalBase = false): void {
       (!value.tc1413Ratchet || JSON.stringify(value.tc1436Ratchet) !== JSON.stringify(approvedTc1436Ratchet))) {
     throw new Error("Only Naomi's exact canonical TC-1436 terminal-marker ratchet is approved.");
   }
+  if (value.tc1432Ratchet !== undefined &&
+      (!value.tc1436Ratchet || JSON.stringify(value.tc1432Ratchet) !== JSON.stringify(approvedTc1432Ratchet))) {
+    throw new Error("Only Naomi's exact canonical TC-1432 vault etag/ifMatch/expectAad ratchet is approved.");
+  }
+  if (value.tc1424Ratchet !== undefined &&
+      (!value.tc1432Ratchet || JSON.stringify(value.tc1424Ratchet) !== JSON.stringify(approvedTc1424Ratchet))) {
+    throw new Error("Only Naomi's exact canonical TC-1424 receiver-key ratchet is approved.");
+  }
+  if (value.tc1448Ratchet !== undefined &&
+      (!value.tc1424Ratchet || JSON.stringify(value.tc1448Ratchet) !== JSON.stringify(approvedTc1448Ratchet))) {
+    throw new Error("Only Naomi's exact canonical TC-1448 terminal-grant recipient guard ratchet is approved.");
+  }
   if (value.tc1443Ratchet !== undefined &&
-      (!value.tc1436Ratchet || JSON.stringify(value.tc1443Ratchet) !== JSON.stringify(approvedTc1443Ratchet))) {
+      (!value.tc1448Ratchet || JSON.stringify(value.tc1443Ratchet) !== JSON.stringify(approvedTc1443Ratchet))) {
     throw new Error("Only the exact canonical TC-1443 registry-verdict ratchet is approved.");
   }
 }
@@ -587,6 +716,30 @@ export function validateTc1436RatchetTransition(base?: Tc1436Ratchet, current?: 
   if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc1436Ratchet) ||
       base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
     throw new Error("The exact TC-1436 ratchet may be introduced once and cannot change later.");
+  }
+}
+
+/** The TC-1432 ratchet is introduced once at its exact canonical bytes and immutable afterwards. */
+export function validateTc1432RatchetTransition(base?: Tc1432Ratchet, current?: Tc1432Ratchet): void {
+  if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc1432Ratchet) ||
+      base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
+    throw new Error("The exact TC-1432 ratchet may be introduced once and cannot change later.");
+  }
+}
+
+/** The TC-1424 ratchet is introduced once at its exact canonical bytes and immutable afterwards. */
+export function validateTc1424RatchetTransition(base?: Tc1424Ratchet, current?: Tc1424Ratchet): void {
+  if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc1424Ratchet) ||
+      base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
+    throw new Error("The exact TC-1424 ratchet may be introduced once and cannot change later.");
+  }
+}
+
+/** The TC-1448 ratchet is introduced once at its exact canonical bytes and immutable afterwards. */
+export function validateTc1448RatchetTransition(base?: Tc1448Ratchet, current?: Tc1448Ratchet): void {
+  if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc1448Ratchet) ||
+      base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
+    throw new Error("The exact TC-1448 ratchet may be introduced once and cannot change later.");
   }
 }
 

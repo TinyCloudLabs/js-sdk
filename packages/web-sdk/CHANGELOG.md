@@ -1,5 +1,96 @@
 # @tinycloudlabs/web-sdk
 
+## 3.3.0-beta.18
+
+### Patch Changes
+
+- Updated dependencies [eb9defd]
+  - @tinycloud/sdk-core@3.3.0-beta.18
+  - @tinycloud/node-sdk@3.3.0-beta.18
+
+## 3.3.0-beta.17
+
+### Patch Changes
+
+- Updated dependencies [daf8561]
+  - @tinycloud/share-sdk@1.2.0-beta.4
+  - @tinycloud/sdk-core@3.3.0-beta.17
+  - @tinycloud/node-sdk@3.3.0-beta.17
+
+## 3.3.0-beta.16
+
+### Patch Changes
+
+- Updated dependencies [18b6c9f]
+  - @tinycloud/node-sdk@3.3.0-beta.16
+
+## 3.3.0-beta.15
+
+### Patch Changes
+
+- Updated dependencies [e68e911]
+  - @tinycloud/share-sdk@1.2.0-beta.3
+  - @tinycloud/sdk-core@3.3.0-beta.15
+  - @tinycloud/node-sdk@3.3.0-beta.15
+
+## 3.3.0-beta.14
+
+### Patch Changes
+
+- Updated dependencies [d84e379]
+  - @tinycloud/share-sdk@1.2.0-beta.2
+  - @tinycloud/sdk-core@3.3.0-beta.14
+  - @tinycloud/node-sdk@3.3.0-beta.14
+
+## 3.3.0-beta.13
+
+### Patch Changes
+
+- Updated dependencies [c2fd94b]
+  - @tinycloud/share-sdk@1.2.0-beta.1
+  - @tinycloud/sdk-core@3.3.0-beta.13
+  - @tinycloud/node-sdk@3.3.0-beta.13
+
+## 3.3.0-beta.12
+
+### Minor Changes
+
+- d1e4c3d: Accountless share receivers use a non-extractable WebCrypto Ed25519 signing key. Its handle is kept in IndexedDB (database `tinycloud.share.receiver-keys`, one key per origin, usable for at most one hour), so a reload keeps working. Where the handle cannot be kept, or the browser lacks WebCrypto Ed25519, the key is held in page memory only, its credentials stay in page memory too, and a reload asks the recipient to verify their email again. On the path without WebCrypto Ed25519 the seed buffer is overwritten with zeros when the page goes away or the session is forgotten; copies the signing library makes internally cannot be reached and are left to garbage collection. Where reading session storage throws (site data blocked), page memory is used instead. Receiver sessions stored by earlier versions are removed together with their credentials, and the recipient verifies again. `forgetShareReceiverSession(origin)` removes the key and its credentials. A session refuses to sign after it expires, after it is forgotten, or after its memory-only key was discarded with the page, with `ShareReceiverSessionEndedError`.
+
+  Real Apple Safari/iOS (including private-mode IndexedDB persistence of the key) is not yet verified.
+
+  Breaking changes:
+  - Removed exported type `ShareReceiverSessionRecordV1` (consumers referencing it must drop the import).
+  - `ShareReceiverIdentity.custody` is now `"persistent" | "memory"` instead of `"session"`.
+  - `ShareReceiverSession` adds `custody`, `expiresAt` and `credentialStorage`.
+  - `createOrRestoreShareReceiverSession` takes an optional third `options` argument, and its `storage` argument may be omitted.
+  - `ShareReceiverServiceOptions` accepts `indexedDB`.
+
+## 3.3.0-beta.11
+
+### Patch Changes
+
+- Updated dependencies [2292db7]
+  - @tinycloud/node-sdk@3.3.0-beta.11
+  - @tinycloud/replica@0.3.0-beta.5
+  - @tinycloud/sdk-core@3.3.0-beta.11
+
+## 3.3.0-beta.10
+
+### Patch Changes
+
+- Updated dependencies [116b214]
+  - @tinycloud/share-sdk@1.2.0-beta.0
+  - @tinycloud/sdk-core@3.3.0-beta.10
+  - @tinycloud/node-sdk@3.3.0-beta.10
+
+## 3.3.0-beta.9
+
+### Patch Changes
+
+- Updated dependencies [ef9653b]
+  - @tinycloud/node-sdk@3.3.0-beta.9
+
 ## 3.3.0-beta.8
 
 ### Patch Changes

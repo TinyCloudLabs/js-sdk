@@ -1,5 +1,64 @@
 # @tinycloudlabs/sdk-core
 
+## 3.3.0-beta.18
+
+### Minor Changes
+
+- eb9defd: Add the three-state registry verdict (TC-1443, TC-1444): `registered`, `unregistered` or `unavailable`.
+
+  New export `classifyRegistryLookup(subject, response, { rememberedSequence })` classifies one location registry response without doing I/O:
+  - `unregistered` only for a 404 whose body, without surrounding whitespace, is exactly the registry's `{"error":"location record not found"}`, and only when no sequence is remembered for the subject.
+  - `registered` for a 200 with a valid v1 record for the exact subject, a verifying signature and a sequence not below the remembered one. Each host is an HTTP(S) origin from a plain host multiaddr; a record with no such entry is `registered` with `hosts: []`.
+  - `unavailable`, with a `reason`, for everything else: network error, timeout, other statuses, oversize or malformed bodies, subject mismatch, bad signature, an older sequence than remembered, or a not-found for a subject remembered as registered.
+
+  The subject must be a canonical `did:pkh:eip155:<chainId>:<EIP-55 address>` or an Ed25519 `did:key`; anything else throws `RegistryLookupInputError`.
+
+  Also exported: the verdict types, `RegistryLookupInputError`, `REGISTRY_LOOKUP_MAX_BODY_BYTES` and `REGISTRY_NOT_FOUND_BODY`. Shared test vectors and their rules are in `packages/sdk-core/test-vectors/registry-verdict/`.
+
+  Nothing changes in host resolution: `resolveTinyCloudHosts` and the hosted fallback behave as before.
+
+## 3.3.0-beta.17
+
+### Patch Changes
+
+- Updated dependencies [daf8561]
+  - @tinycloud/share-sdk@1.2.0-beta.4
+
+## 3.3.0-beta.15
+
+### Patch Changes
+
+- Updated dependencies [e68e911]
+  - @tinycloud/share-sdk@1.2.0-beta.3
+
+## 3.3.0-beta.14
+
+### Patch Changes
+
+- Updated dependencies [d84e379]
+  - @tinycloud/share-sdk@1.2.0-beta.2
+
+## 3.3.0-beta.13
+
+### Patch Changes
+
+- Updated dependencies [c2fd94b]
+  - @tinycloud/share-sdk@1.2.0-beta.1
+
+## 3.3.0-beta.11
+
+### Patch Changes
+
+- Updated dependencies [2292db7]
+  - @tinycloud/sdk-services@3.3.0-beta.11
+
+## 3.3.0-beta.10
+
+### Patch Changes
+
+- Updated dependencies [116b214]
+  - @tinycloud/share-sdk@1.2.0-beta.0
+
 ## 3.3.0-beta.8
 
 ### Minor Changes

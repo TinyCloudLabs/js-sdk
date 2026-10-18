@@ -1,5 +1,70 @@
 # @tinycloudlabs/node-sdk
 
+## 3.3.0-beta.18
+
+### Patch Changes
+
+- Updated dependencies [eb9defd]
+  - @tinycloud/sdk-core@3.3.0-beta.18
+
+## 3.3.0-beta.17
+
+### Patch Changes
+
+- @tinycloud/sdk-core@3.3.0-beta.17
+
+## 3.3.0-beta.16
+
+### Patch Changes
+
+- 18b6c9f: `delegateTo`, `createDelegation` and `space.delegations.create` now throw for `disableSubDelegation: true` addressed to a `did:pkh` recipient, before anything is signed. A wallet-mode `useDelegation` of a terminal grant is refused by the node (`terminal-parent-cannot-redelegate`), so the recipient could never use it. Grant the recipient's session-key DID instead, or drop the flag (TC-1448).
+
+  What breaks: calls that passed `disableSubDelegation: true` with a `did:pkh` delegate (including an ENS name that resolves to one) used to return a grant the wallet recipient could not activate; they now throw.
+
+## 3.3.0-beta.15
+
+### Patch Changes
+
+- @tinycloud/sdk-core@3.3.0-beta.15
+
+## 3.3.0-beta.14
+
+### Patch Changes
+
+- @tinycloud/sdk-core@3.3.0-beta.14
+
+## 3.3.0-beta.13
+
+### Patch Changes
+
+- @tinycloud/sdk-core@3.3.0-beta.13
+
+## 3.3.0-beta.11
+
+### Patch Changes
+
+- 2292db7: Vault compare-and-swap and opt-in address binding (TC-1432). Everything is additive; existing reads and writes behave as before.
+  - `VaultEntry.etag`: the node's strong ETag of the stored envelope. `readNetworkEncrypted` always returns it; `vault.get` returns it only with `source: "network"`, never from a replica (a replica can serve a stale etag). Network-encrypted vaults only.
+  - `VaultPutOptions.ifMatch`: write only while the stored envelope still has that etag, passed exactly as read (quotes included); it cannot be combined with `ifNoneMatch`. A failed `ifMatch` write has its own code instead of `STORAGE_ERROR`: `ETAG_MISMATCH` (412, including a deleted or never-written key; re-read and retry), `INVALID_ETAG` (a weak, unquoted or otherwise malformed etag, refused locally or by the node's 400; never retry), `OUTCOME_UNKNOWN` (500 `outcome_unknown`, or a connection that failed with no response: the write may have been applied, so re-read before retrying and sign a fresh request) and `NODE_BUSY` (503, nothing written). Writes without `ifMatch` keep their current error mapping. `readSecret` maps the new `aad_mismatch` status to `read_failed`.
+  - `VaultGetOptions.expectAad` (default off): refuse an envelope whose AAD is not `tinycloud.vault:<spaceId>:<key>` for the vault's own space and key. The space id is compared after lowercasing its EVM addresses, so a checksummed and a lowercase spelling are the same space. A mismatch, including an envelope written with no AAD, fails with `AAD_MISMATCH` (`get`) or `{ status: "aad_mismatch" }` (`readNetworkEncrypted`) before any decrypt request. This rejects a ciphertext copied to another key; it does not stop a freshly encrypted forgery. `getShared` is unchanged.
+
+- Updated dependencies [2292db7]
+  - @tinycloud/sdk-services@3.3.0-beta.11
+  - @tinycloud/replica@0.3.0-beta.5
+  - @tinycloud/sdk-core@3.3.0-beta.11
+
+## 3.3.0-beta.10
+
+### Patch Changes
+
+- @tinycloud/sdk-core@3.3.0-beta.10
+
+## 3.3.0-beta.9
+
+### Patch Changes
+
+- ef9653b: Sign the share delivery authorization with the primary session key. The node records the signer as the delivery's sender key, and the SDK binds and countersigns the receipt with the primary session key; when a runtime grant held by another key covered the shared file, `tc share publish --to <email> --notify` rejected its own receipt and the recipient was never emailed (exit 9, `partial-failure`).
+
 ## 3.3.0-beta.8
 
 ### Minor Changes

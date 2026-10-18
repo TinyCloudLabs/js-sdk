@@ -925,10 +925,13 @@ export interface TinyCloudNodeConfig {
 /**
  * The node's terminal marker is a UCAN fact; a wallet-signed SIWE (CACAO)
  * delegation cannot carry it, so such a delegation would stay re-delegatable.
- * Callers must request only capabilities the current session holds.
+ * Callers must request only capabilities the current session holds. A wallet
+ * (`did:pkh`) recipient chains its own session from a grant (`useDelegation`),
+ * which the node refuses for a terminal parent, so only a session-key
+ * `did:key` can use a terminal grant.
  */
 const TERMINAL_DELEGATION_REQUIRES_SESSION_KEY =
-  "disableSubDelegation requires a session-key delegation";
+  "disableSubDelegation requires a session-key delegation to a did:key (not did:pkh); use the session-key DID or drop the flag";
 
 /**
  * Options for {@link TinyCloudNode.delegateTo}.
@@ -964,7 +967,8 @@ export interface DelegateToOptions {
    * Mark the delegation terminal: the node refuses any delegation that cites
    * it as a parent (`terminal-parent-cannot-redelegate`). The delegate can
    * still use it directly. Only session-key UCAN delegations can carry the
-   * marker, so this throws with `forceWalletSign`. Default false.
+   * marker, so this throws with `forceWalletSign`, and with a `did:pkh`
+   * recipient (use its session-key DID). Default false.
    */
   disableSubDelegation?: boolean;
 }
@@ -5781,7 +5785,14 @@ export class TinyCloudNode {
     };
     const requestBodyDigest = base64UrlEncode(new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(canonicalizeEncryptionJson(body)))));
     const request = { ...body, requestBodyDigest };
-    const authorization = authorizationHeader(this.invokeAnyWithRuntimePermissions(serviceSession, [{ spaceId: session.spaceId, service: "kv", path: input.resourcePath, action: "tinycloud.kv/get" }]));
+    // The node records this invocation's signer as the admission's senderKeyDid,
+    // and the receipt below is bound to (and countersigned by) credentialHolderDid.
+    // Sign with the primary session key so both are the same key; a broader
+    // runtime grant held by a different key would make the receipt unusable.
+    // Accepted trade-off: if the primary recap lacks kv/get on the resource, the
+    // node now refuses this invocation, where a covering grant used to be tried.
+    // Same single-capability binding ordinary KV reads use; serviceSession.spaceId is session.spaceId.
+    const authorization = authorizationHeader(this.wasmBindings.invoke(serviceSession, "kv", input.resourcePath, "tinycloud.kv/get"));
     const response = await fetch(`${this.config.host!}/policy/v3/deliveries/authorize`, {
       method: "POST",
       headers: { accept: "application/json", "content-type": "application/json", authorization },
@@ -6148,6 +6159,8 @@ export class TinyCloudNode {
           },
         };
       }
+      // `aad_mismatch` needs `expectAad`, which this read never sets.
+      if (result.status === "aad_mismatch") return { status: "read_failed" };
       return { status: result.status };
     }
     if (!isSecretPayload(result.entry.value)) {
@@ -7059,6 +7072,9 @@ export class TinyCloudNode {
           "the wallet-signed path activates the delegation before it could be " +
           "handed to onPrepared.",
       );
+    }
+    if (options?.disableSubDelegation && did.startsWith("did:pkh:")) {
+      throw new Error(TERMINAL_DELEGATION_REQUIRES_SESSION_KEY);
     }
 
     // 1. Session validity check — fail fast with a clear error class so
@@ -8437,7 +8453,9 @@ export class TinyCloudNode {
      * Prevent the recipient from creating sub-delegations (default: false).
      * The delegation carries the node's terminal marker, so the node refuses
      * its children. Needs capabilities the current session holds; throws
-     * rather than fall back to a wallet-signed delegation.
+     * rather than fall back to a wallet-signed delegation, and throws for a
+     * `did:pkh` recipient (a wallet-mode `useDelegation` of it is refused);
+     * grant the recipient's session-key DID instead.
      */
     disableSubDelegation?: boolean;
     /** Expiration time in milliseconds from now (default: 1 hour) */
