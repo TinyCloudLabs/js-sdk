@@ -179,6 +179,14 @@ activation, the gated artifact and the worker keep TC-1432's ceilings. The ledge
 lands first, #586 re-measures against the new base and replaces its own row before
 it merges.
 
+TC-1428 (the owner-signed artifact pin the viewer verifies for addressed artifact shares, #582) was
+re-measured after #586 and #587 landed, against master `28ca77a0`, and sits on top of TC-1443's root
+ceilings. It raised only the root ceilings once, by the exact bytes GitHub run 39172089071 measured on
+source `ae2b05bc`, identical in both jobs: 1,471,906 / 1,398,748 B (+911 / +767 over TC-1443's). First
+import, activation, gated and the worker keep their ceilings. It is #582's own row, taken after a
+documented shrink attempt (see the row's `reason`). The ledger's `tc1428Ratchet` row records it and cannot
+change later; whichever PR lands after it re-measures against the new base and updates its own row.
+
 **Ancestry pins and squash merges.** A policy row records the PR-branch commit it
 was reviewed at, and its introduction check requires that literal commit in the
 PR head. js-sdk squash-merges, so that commit is unreachable from master
