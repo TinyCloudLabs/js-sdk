@@ -254,7 +254,8 @@ export interface NodeUserAuthorizationConfig {
   /**
    * `fail-closed` only: called when sign-in resolves no host
    * (`NodeNotFoundError` or `RegistryUnavailableError`) to retry, use another
-   * host for this session, or abort. Without it, sign-in throws the error.
+   * host (not identity-checked; it persists with the session), or abort.
+   * Without it, sign-in throws the error.
    */
   onNodeNotFound?: OnNodeNotFound;
   /** Probe configured/registered local nodes before registry/fallback resolution. Default: true. */

@@ -151,6 +151,7 @@ async function signedInOwner(policy: RegistryPolicy | undefined, registry: Regis
       chainId: 1,
       sessionKey: "session-key",
       spaceId: spaceId("default"),
+      spaces: { public: spaceId("public") },
       delegationCid: "bafy-restored",
       delegationHeader: { Authorization: "Bearer restored" },
       verificationMethod: "did:key:restored#restored",
@@ -181,6 +182,18 @@ const sites: Array<[string, (owner: Owner) => Promise<unknown>]> = [
     (owner) => Reflect.get(owner.node, "ensureOwnedSpaceHostedById").call(owner.node, owner.spaceId("secrets")),
   ],
   ["ensureOwnedSpaceHosted", (owner) => owner.node.ensureOwnedSpaceHosted("secrets")],
+  [
+    // The vault's unlock path. Only the host delegation is under test, not the
+    // session delegation for the public space that follows it.
+    "ensurePublicSpace",
+    async (owner) => {
+      try {
+        await owner.node.ensurePublicSpace();
+      } catch (error) {
+        if (error instanceof NodeRegistryEntryExistsError || error instanceof RegistryUnavailableError) throw error;
+      }
+    },
+  ],
 ];
 
 for (const [site, create] of sites) {

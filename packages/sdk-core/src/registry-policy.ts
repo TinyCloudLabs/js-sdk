@@ -22,7 +22,6 @@ import {
   defaultWebStorage,
   discoverLocalTinyCloudNode,
   exactHttpOrigin,
-  memoizeFetch,
   type LocalNodeIdentityStore,
   type WebStorageLike,
 } from "./location";
@@ -49,9 +48,6 @@ export const DEFAULT_REGISTRY_LOOKUP_TIMEOUT_MS = 3_000;
 /** Default key {@link createLocalStorageRegistrySequenceStore} stores its sequences under. */
 export const DEFAULT_REGISTRY_SEQUENCE_STORAGE_KEY = "tinycloud.registrySequences.v1";
 
-const DID_KEY_PREFIX = "did:key:";
-/** A canonical Ed25519 `did:key` identifier is 48 base58 characters. */
-const MAX_DID_KEY_IDENTIFIER_LENGTH = 48;
 /** `did:pkh:eip155:` + a 16-digit safe-integer chain ID + `:` + a 42-character address. */
 const MAX_SUBJECT_LENGTH = 74;
 
@@ -74,8 +70,11 @@ export function registryOwnerSubjectV1(
  * sequence marks the subject as registered: a later not-found or an older
  * record is `unavailable`, never `unregistered`.
  *
- * `set` is only called with a sequence above the remembered one. Errors from
- * either method fail the lookup closed.
+ * `set` is only called with a sequence above the remembered one. A `get`
+ * failure fails that lookup closed (`RegistryUnavailableError`, never
+ * "nothing remembered"). A `set` failure is logged once and the verdict in
+ * hand stands: failing to remember weakens later rollback detection but
+ * never turns a correct `registered` answer into a lockout.
  */
 export interface RegistrySequenceStore {
   get(subject: string): number | undefined | Promise<number | undefined>;
@@ -96,53 +95,53 @@ export function createInMemoryRegistrySequenceStore(): RegistrySequenceStore {
 /**
  * `localStorage`-backed {@link RegistrySequenceStore}, one JSON object under
  * `storageKey`. Falls back to an in-memory store when `localStorage` is
- * unavailable. A corrupt stored value throws instead of being reset:
- * forgetting a sequence would let a registry not-found read as `unregistered`.
+ * unavailable. Sequences are also kept in memory, so a failed write (full or
+ * read-only storage) is still remembered for this page. A storage read that
+ * throws, or a corrupt stored value, throws instead of being reset:
+ * forgetting a sequence would let a registry not-found read as
+ * `unregistered`. Remove `storageKey` to reset.
  */
 export function createLocalStorageRegistrySequenceStore(
   storage?: WebStorageLike,
   storageKey: string = DEFAULT_REGISTRY_SEQUENCE_STORAGE_KEY,
 ): RegistrySequenceStore {
   const backing = storage ?? defaultWebStorage();
+  const memory = createInMemoryRegistrySequenceStore();
   if (!backing) {
-    return createInMemoryRegistrySequenceStore();
+    return memory;
   }
 
-  const read = (): Record<string, number> => {
+  const read = (): Map<string, number> => {
+    const sequences = new Map<string, number>();
     const raw = backing.getItem(storageKey);
-    if (raw === null) return {};
+    if (raw === null) return sequences;
     let parsed: unknown;
     try {
       parsed = JSON.parse(raw);
     } catch {
       parsed = undefined;
     }
-    if (
-      parsed === null ||
-      typeof parsed !== "object" ||
-      Array.isArray(parsed) ||
-      !Object.values(parsed).every(isSequence)
-    ) {
-      throw new Error(`Corrupt registry sequence store "${storageKey}"`);
+    if (parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)) {
+      for (const [subject, sequence] of Object.entries(parsed)) {
+        if (!isSequence(sequence)) break;
+        sequences.set(subject, sequence);
+      }
+      if (sequences.size === Object.keys(parsed).length) return sequences;
     }
-    return parsed as Record<string, number>;
+    throw new Error(`Corrupt registry sequence store "${storageKey}"`);
   };
 
   return {
-    get: (subject) => {
-      const sequences = read();
-      return Object.prototype.hasOwnProperty.call(sequences, subject)
-        ? sequences[subject]
-        : undefined;
+    get: async (subject) => {
+      const sequence = Math.max(read().get(subject) ?? -1, (await memory.get(subject)) ?? -1);
+      return sequence < 0 ? undefined : sequence;
     },
-    set: (subject, sequence) => {
+    set: async (subject, sequence) => {
+      await memory.set(subject, sequence);
       const sequences = read();
-      const known = Object.prototype.hasOwnProperty.call(sequences, subject)
-        ? sequences[subject]!
-        : -1;
-      if (known >= sequence) return;
-      sequences[subject] = sequence;
-      backing.setItem(storageKey, JSON.stringify(sequences));
+      if ((sequences.get(subject) ?? -1) >= sequence) return;
+      sequences.set(subject, sequence);
+      backing.setItem(storageKey, JSON.stringify(Object.fromEntries(sequences)));
     },
   };
 }
@@ -179,9 +178,8 @@ export async function resolveOwnerHosts(
 ): Promise<RegistryVerdict> {
   if (
     typeof subject !== "string" ||
+    // Bounds the work below; covers any did:pkh with a safe-integer chain ID.
     subject.length > MAX_SUBJECT_LENGTH ||
-    (subject.startsWith(DID_KEY_PREFIX) &&
-      subject.length - DID_KEY_PREFIX.length > MAX_DID_KEY_IDENTIFIER_LENGTH) ||
     !isCanonicalSubject(subject)
   ) {
     throw new RegistryLookupInputError(
@@ -222,10 +220,19 @@ export async function resolveOwnerHosts(
     verdict.status === "registered" &&
     (remembered === undefined || verdict.sequence > remembered)
   ) {
-    await store.set(subject, verdict.sequence);
+    try {
+      await store.set(subject, verdict.sequence);
+    } catch (error) {
+      if (!sequenceWriteWarned) {
+        sequenceWriteWarned = true;
+        console.warn("[tinycloud:registry] could not remember the registry sequence:", error);
+      }
+    }
   }
   return verdict;
 }
+
+let sequenceWriteWarned = false;
 
 type RegistryObservation =
   | RegistryLookupResponse
@@ -333,7 +340,7 @@ export class RegistryUnavailableError extends Error {
 /** Space creation was refused: the owner's registry record does not list this host. */
 export class NodeRegistryEntryExistsError extends Error {
   readonly code = "node_registry_entry_exists" as const;
-  /** Origins the owner's record lists, in record order. */
+  /** HTTPS or loopback origins the owner's record lists, in record order. */
   readonly registeredHosts: string[];
 
   constructor(
@@ -343,7 +350,7 @@ export class NodeRegistryEntryExistsError extends Error {
   ) {
     super(`The registry entry for ${subject} does not list ${host}`);
     this.name = "NodeRegistryEntryExistsError";
-    this.registeredHosts = verdict.hosts.flatMap((host) => [...host.urls]);
+    this.registeredHosts = secureRecordHosts(verdict);
   }
 }
 
@@ -397,9 +404,10 @@ export type NodeNotFoundDecision =
 
 /**
  * Decides what sign-in does when no host can be resolved under `fail-closed`:
- * look up again, use a host for this session only (an HTTPS or loopback HTTP
- * origin; space creation there still goes through the creation guard), or
- * abort with the error.
+ * look up again, use another host, or abort with the error. A `use-host`
+ * host must be an HTTPS or loopback HTTP origin. The SDK does not verify its
+ * identity, and it persists with the session like any resolved host; space
+ * creation there still goes through the creation guard.
  */
 export type OnNodeNotFound = (
   context: NodeNotFoundContext,
@@ -416,7 +424,11 @@ export interface FailClosedHostOptions extends LookupOwnerRegistryVerdictOptions
   newUserHost?: string | null;
   /** Without a callback, resolution throws the error. */
   onNodeNotFound?: OnNodeNotFound;
-  /** Probe configured and registry-listed local nodes first, as the legacy policy does. Default true. */
+  /**
+   * Probe local nodes before routing on the verdict. Default true. Only
+   * configured candidates (`localNodeUrl`, `localLinkName`) and
+   * `*.local.tinycloud.link` hosts from a `registered` verdict are probed.
+   */
   autoDiscoverLocalNode?: boolean;
   localNodeUrl?: string;
   localLinkName?: string;
@@ -431,11 +443,13 @@ export interface FailClosedHosts {
 }
 
 /**
- * Resolve the hosts for `address` under the `fail-closed` policy: a verified
- * local node if one is configured or listed, else the registry verdict for
- * {@link registryOwnerSubjectV1}. `registered` routes to the record's hosts
- * (record order), `unregistered` to `newUserHost`, and `unavailable` or a
- * record without a usable host goes to `onNodeNotFound`, else throws.
+ * Resolve the hosts for `address` under the `fail-closed` policy. The
+ * registry verdict for {@link registryOwnerSubjectV1} comes first. Then a
+ * verified local node is used if one is configured or listed by a
+ * `registered` verdict. Otherwise `registered` routes to the record's hosts
+ * (record order, HTTPS or loopback only), `unregistered` to `newUserHost`,
+ * and `unavailable` or a record without a usable host goes to
+ * `onNodeNotFound`, else throws.
  */
 export async function resolveFailClosedTinyCloudHosts(
   address: string,
@@ -446,29 +460,43 @@ export async function resolveFailClosedTinyCloudHosts(
       ? null
       : exactHttpOrigin(options.newUserHost ?? DEFAULT_NEW_USER_HOST, "newUserHost");
   const subject = registryOwnerSubjectV1(address, options.registryChainId);
-  const rawFetch = options.fetch ?? globalThis.fetch;
-  // Local discovery and the first lookup share one registry request; a retry
-  // must ask the registry again.
-  let fetchFn = memoizeFetch(rawFetch);
 
-  if (options.autoDiscoverLocalNode ?? true) {
-    const local = await discoverLocalTinyCloudNode({
-      subject,
-      localNodeUrl: options.localNodeUrl,
-      localLinkName: options.localLinkName,
-      registryUrl: options.registryUrl,
-      expectedNodeDid: options.expectedNodeDid,
-      identityStore: options.localNodeIdentityStore,
-      fetch: fetchFn,
-    });
-    if (local) return { hosts: [local.url] };
-  }
+  const resolve = async (): Promise<FailClosedHosts> => {
+    let verdict: RegistryVerdict | undefined;
+    let unavailable: RegistryUnavailableError | undefined;
+    try {
+      verdict = await lookupOwnerRegistryVerdict(subject, options);
+    } catch (error) {
+      if (!(error instanceof RegistryUnavailableError)) throw error;
+      unavailable = error;
+    }
+    if (options.autoDiscoverLocalNode ?? true) {
+      // No `subject`: discovery never reads the registry itself, so an
+      // unclassified or rolled-back record cannot route.
+      const linkNames = verdict?.status === "registered"
+        ? secureRecordHosts(verdict).flatMap((host) => LOCAL_LINK_ORIGIN.exec(host)?.[1] ?? [])
+        : [];
+      for (const candidate of [
+        { localNodeUrl: options.localNodeUrl, localLinkName: options.localLinkName },
+        ...linkNames.map((localLinkName) => ({ localLinkName })),
+      ]) {
+        const local = await discoverLocalTinyCloudNode({
+          ...candidate,
+          expectedNodeDid: options.expectedNodeDid,
+          identityStore: options.localNodeIdentityStore,
+          fetch: options.fetch,
+        });
+        if (local) return { hosts: [local.url], ...(verdict === undefined ? {} : { verdict }) };
+      }
+    }
+    if (verdict === undefined) throw unavailable;
+    return { hosts: hostsForVerdict(verdict, newUserHost), verdict };
+  };
 
   for (let attempt = 1; ; attempt++) {
     let failure: NodeNotFoundError | RegistryUnavailableError;
     try {
-      const verdict = await lookupOwnerRegistryVerdict(subject, { ...options, fetch: fetchFn });
-      return { hosts: hostsForVerdict(verdict, newUserHost), verdict };
+      return await resolve();
     } catch (error) {
       if (!(error instanceof NodeNotFoundError) && !(error instanceof RegistryUnavailableError)) {
         throw error;
@@ -479,7 +507,6 @@ export async function resolveFailClosedTinyCloudHosts(
     const decision = await options.onNodeNotFound({ error: failure, attempt });
     switch (decision?.action) {
       case "retry":
-        fetchFn = rawFetch;
         continue;
       case "use-host":
         return {
@@ -494,10 +521,32 @@ export async function resolveFailClosedTinyCloudHosts(
   }
 }
 
+const LOCAL_LINK_ORIGIN = /^https:\/\/([a-z0-9-]+)\.local\.tinycloud\.link$/;
+
+/**
+ * The record's hosts that `fail-closed` routes to and creates spaces on:
+ * HTTPS or loopback HTTP origins (the rule `use-host` and `newUserHost`
+ * follow), deduplicated, in record order. Plaintext hosts on other addresses
+ * are never used, even though the owner signed them.
+ */
+function secureRecordHosts(verdict: RegisteredRegistryVerdict): string[] {
+  const hosts = new Set<string>();
+  for (const host of verdict.hosts) {
+    for (const url of host.urls) {
+      try {
+        hosts.add(exactHttpOrigin(url, "registry host"));
+      } catch {
+        // Plaintext HTTP to a non-loopback address.
+      }
+    }
+  }
+  return [...hosts];
+}
+
 function hostsForVerdict(verdict: RegistryVerdict, newUserHost: string | null): string[] {
   switch (verdict.status) {
     case "registered": {
-      const hosts = [...new Set(verdict.hosts.flatMap((host) => host.urls))];
+      const hosts = secureRecordHosts(verdict);
       if (hosts.length === 0) throw new NodeNotFoundError(verdict.subject, verdict);
       return hosts;
     }
@@ -512,10 +561,10 @@ function hostsForVerdict(verdict: RegistryVerdict, newUserHost: string | null): 
 /**
  * The space-creation guard under `fail-closed`: creating a space on `host` is
  * allowed for an `unregistered` owner, or for a `registered` owner whose
- * record lists `host`.
+ * record lists `host` as an HTTPS or loopback HTTP origin.
  *
  * @throws NodeRegistryEntryExistsError for a registered owner whose record
- * does not list `host` (including an empty record).
+ * does not list `host` that way (including an empty record).
  * @throws RegistryUnavailableError for an `unavailable` verdict.
  */
 export function assertSpaceCreationAllowed(verdict: RegistryVerdict, host: string): void {
@@ -526,7 +575,7 @@ export function assertSpaceCreationAllowed(verdict: RegistryVerdict, host: strin
       throw new RegistryUnavailableError(verdict.subject, verdict);
     case "registered": {
       const origin = httpOrigin(host);
-      if (origin !== undefined && verdict.hosts.some((listed) => listed.urls.includes(origin))) {
+      if (origin !== undefined && secureRecordHosts(verdict).includes(origin)) {
         return;
       }
       throw new NodeRegistryEntryExistsError(verdict.subject, host, verdict);

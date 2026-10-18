@@ -161,7 +161,7 @@ export interface Config extends ClientConfig {
   registryChainId?: number;
   /** `fail-closed` only: highest registry sequence seen per owner. Default: a `localStorage`-backed store. */
   registrySequenceStore?: RegistrySequenceStore;
-  /** `fail-closed` only: retry, use another host for this session, or abort when sign-in resolves no host. Without it, sign-in throws. */
+  /** `fail-closed` only: retry, use another host (not identity-checked; it persists with the session), or abort when sign-in resolves no host. Without it, sign-in throws. */
   onNodeNotFound?: OnNodeNotFound;
   /** Probe configured/registered local nodes before registry/fallback resolution. Default: true. */
   autoDiscoverLocalNode?: boolean;

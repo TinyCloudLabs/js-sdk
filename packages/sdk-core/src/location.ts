@@ -645,7 +645,7 @@ let fallbackDeprecationWarned = false;
  * request's `Response` body is cloned on the way out so every caller gets an
  * independently readable body regardless of read order.
  */
-export function memoizeFetch(fetchFn: typeof fetch): typeof fetch {
+function memoizeFetch(fetchFn: typeof fetch): typeof fetch {
   const cache = new Map<string, Promise<Response>>();
   return (async (input, init) => {
     const key = String(input);

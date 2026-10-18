@@ -828,11 +828,13 @@ export interface TinyCloudNodeConfig {
    * silently uses `tinycloudFallbackHosts`, with a one-time warning.
    * `"fail-closed"`: routing acts on the registry verdict for the signer
    * address, an unavailable registry is `RegistryUnavailableError` (never a
-   * new account), and automatic space creation (sign-in, account bootstrap,
-   * owned-space hosting) is refused on a host the owner's registry record
-   * does not list (`NodeRegistryEntryExistsError`) or when the registry gives
-   * no verdict. Explicit `hostOwnedSpace()` and `ensurePublicSpace()` calls
-   * are not guarded.
+   * new account), record hosts are used only if HTTPS or loopback, and
+   * automatic space creation (sign-in, account bootstrap, owned-space
+   * hosting, the public space the vault creates) is refused on a host the
+   * owner's registry record does not list (`NodeRegistryEntryExistsError`)
+   * or when the registry gives no verdict. An explicit `hostOwnedSpace()`
+   * call is not guarded. `newUserHost` governs routing only: a pinned host
+   * may still create spaces for an unregistered owner.
    */
   registryPolicy?: RegistryPolicy;
   /** `fail-closed` only: host for owners with no registry record. Default https://node.tinycloud.xyz; `null` refuses them with `NodeNotFoundError`. */
@@ -841,7 +843,7 @@ export interface TinyCloudNodeConfig {
   registryChainId?: number;
   /** `fail-closed` only: highest registry sequence seen per owner. Default: in-memory for this client. */
   registrySequenceStore?: RegistrySequenceStore;
-  /** `fail-closed` only: retry, use another host for this session, or abort when sign-in resolves no host. Without it, sign-in throws. */
+  /** `fail-closed` only: retry, use another host (not identity-checked; it persists with the session), or abort when sign-in resolves no host. Without it, sign-in throws. */
   onNodeNotFound?: OnNodeNotFound;
   /** Probe configured/registered local nodes before registry/fallback resolution. Default: true. */
   autoDiscoverLocalNode?: boolean;
@@ -1861,11 +1863,7 @@ export class TinyCloudNode {
       tinycloudHosts: this.explicitHost ? [this.explicitHost] : undefined,
       tinycloudRegistryUrl: config.tinycloudRegistryUrl,
       tinycloudFallbackHosts: config.tinycloudFallbackHosts,
-      registryPolicy: config.registryPolicy,
-      newUserHost: config.newUserHost,
-      registryChainId: config.registryChainId,
-      registrySequenceStore: this.config.registrySequenceStore,
-      onNodeNotFound: config.onNodeNotFound,
+      ...this.registryPolicyConfig(),
       autoDiscoverLocalNode: config.autoDiscoverLocalNode,
       localNodeUrl: config.localNodeUrl,
       localLinkName: config.localLinkName,
@@ -3686,14 +3684,23 @@ export class TinyCloudNode {
 
   /**
    * Space-creation guard (TC-1443) for the automatic hosting paths: sign-in's
-   * owned spaces, account bootstrap and {@link ensureOwnedSpaceHosted}. Only
-   * `registryPolicy: "fail-closed"` consults the registry
-   * ({@link NodeUserAuthorization.assertMayCreateSpace}); the default policy
-   * performs no lookup.
+   * owned spaces, account bootstrap, {@link ensureOwnedSpaceHosted} and
+   * {@link ensurePublicSpace}. Only `registryPolicy: "fail-closed"` consults
+   * the registry ({@link NodeUserAuthorization.assertMayCreateSpace}); the
+   * default policy performs no lookup.
    */
   private async assertMayCreateSpace(): Promise<void> {
     if (this.config.registryPolicy !== "fail-closed") return;
     await (this.auth as NodeUserAuthorization).assertMayCreateSpace();
+  }
+
+  /** Registry-policy settings shared by every authorization this client creates. */
+  private registryPolicyConfig(): Pick<
+    TinyCloudNodeConfig,
+    "registryPolicy" | "newUserHost" | "registryChainId" | "registrySequenceStore" | "onNodeNotFound"
+  > {
+    const { registryPolicy, newUserHost, registryChainId, registrySequenceStore, onNodeNotFound } = this.config;
+    return { registryPolicy, newUserHost, registryChainId, registrySequenceStore, onNodeNotFound };
   }
 
   /**
@@ -4761,11 +4768,7 @@ export class TinyCloudNode {
       tinycloudHosts: this.explicitHost ? [this.explicitHost] : undefined,
       tinycloudRegistryUrl: this.config.tinycloudRegistryUrl,
       tinycloudFallbackHosts: this.config.tinycloudFallbackHosts,
-      registryPolicy: this.config.registryPolicy,
-      newUserHost: this.config.newUserHost,
-      registryChainId: this.config.registryChainId,
-      registrySequenceStore: this.config.registrySequenceStore,
-      onNodeNotFound: this.config.onNodeNotFound,
+      ...this.registryPolicyConfig(),
       autoDiscoverLocalNode: this.config.autoDiscoverLocalNode,
       localNodeUrl: this.config.localNodeUrl,
       localLinkName: this.config.localLinkName,
@@ -4843,11 +4846,7 @@ export class TinyCloudNode {
       tinycloudHosts: this.explicitHost ? [this.explicitHost] : undefined,
       tinycloudRegistryUrl: this.config.tinycloudRegistryUrl,
       tinycloudFallbackHosts: this.config.tinycloudFallbackHosts,
-      registryPolicy: this.config.registryPolicy,
-      newUserHost: this.config.newUserHost,
-      registryChainId: this.config.registryChainId,
-      registrySequenceStore: this.config.registrySequenceStore,
-      onNodeNotFound: this.config.onNodeNotFound,
+      ...this.registryPolicyConfig(),
       autoDiscoverLocalNode: this.config.autoDiscoverLocalNode,
       localNodeUrl: this.config.localNodeUrl,
       localLinkName: this.config.localLinkName,
@@ -6790,7 +6789,9 @@ export class TinyCloudNode {
    * Ensure the user's public space exists and is accessible.
    * Creates the space and activates a session delegation for it.
    * This is the trigger for lazy public space creation — call it
-   * before writing to spaces.get('public').kv.
+   * before writing to spaces.get('public').kv. The vault calls it on unlock.
+   * Under `registryPolicy: "fail-closed"` creation goes through the
+   * space-creation guard.
    */
   async ensurePublicSpace() {
     if (!this.auth || !this.session || !this.signer) {
@@ -6802,6 +6803,7 @@ export class TinyCloudNode {
       throw new Error("Public space not enabled. Set enablePublicSpace: true in config.");
     }
 
+    await this.assertMayCreateSpace();
     // Create the public space on the server (host SIWE)
     await (this.auth as NodeUserAuthorization).hostPublicSpace(publicSpaceId);
 

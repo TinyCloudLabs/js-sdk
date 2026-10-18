@@ -279,6 +279,24 @@ test("fail-closed: a registered owner whose record lists no usable host gets Nod
   expect(owner.network.requests.every((url) => url.startsWith(`${REGISTRY}/`))).toBe(true);
 });
 
+test("fail-closed: a plaintext host from a signed record is used neither for routing nor for creation", async () => {
+  const plaintext = "/dns4/plain.example/tcp/80/http";
+  const routed = await restoredOwner({ policy: "fail-closed", registry: [{ multiaddrs: [plaintext] }] });
+
+  await expect(routed.auth.ensureSpaceExists()).rejects.toBeInstanceOf(NodeNotFoundError);
+  expect(routed.network.requests.every((url) => url.startsWith(`${REGISTRY}/`))).toBe(true);
+  restoreFetch?.();
+
+  const pinned = await restoredOwner({
+    policy: "fail-closed",
+    registry: [{ multiaddrs: [plaintext] }],
+    host: "http://plain.example",
+  });
+  await expect(pinned.auth.ensureSpaceExists()).rejects.toBeInstanceOf(NodeRegistryEntryExistsError);
+  expect(pinned.network.hostDelegations).toEqual([]);
+  expect(pinned.signatures).toEqual([]);
+});
+
 test("fail-closed: onNodeNotFound can retry the lookup", async () => {
   const attempts: number[] = [];
   const owner = await restoredOwner({

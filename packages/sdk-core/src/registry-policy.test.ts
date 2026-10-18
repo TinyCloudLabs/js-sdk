@@ -2,6 +2,7 @@ import { describe, expect, it, spyOn } from "bun:test";
 import { privateKeyToAccount } from "viem/accounts";
 
 import type * as LocationModule from "./location";
+import type * as PolicyModule from "./registry-policy";
 
 import {
   DEFAULT_TINYCLOUD_FALLBACK_HOST,
@@ -161,7 +162,7 @@ describe("resolveOwnerHosts", () => {
 
   it.each([
     ["a lowercase address", `did:pkh:eip155:1:${owner.address.toLowerCase()}`],
-    ["a did:key longer than an Ed25519 identifier", `did:key:z${"6".repeat(48)}`],
+    ["a did:key that is not an Ed25519 key", `did:key:z${"6".repeat(48)}`],
     ["an unbounded subject", `did:key:z${"1".repeat(32_000)}`],
   ])("rejects %s before any request", async (_label, subject) => {
     const requests: string[] = [];
@@ -198,6 +199,45 @@ describe("createLocalStorageRegistrySequenceStore", () => {
     const lookup = lookupOwnerRegistryVerdict(SUBJECT, {
       registryUrl: REGISTRY,
       sequenceStore: store,
+      fetch: registry([notFound], requests),
+    });
+    await expect(lookup).rejects.toBeInstanceOf(RegistryUnavailableError);
+    expect(requests).toEqual([]);
+  });
+
+  it("a failed write keeps a registered owner signed in and remembered for the page, warning once", async () => {
+    // Fresh module instance (a query makes Bun load it again): the warning is once per process.
+    const fresh = "write-failure";
+    const policy: typeof PolicyModule = await import(`./registry-policy.ts?${fresh}`);
+    const storage = memoryStorage();
+    storage.setItem = () => {
+      throw new Error("QuotaExceededError");
+    };
+    const sequenceStore = policy.createLocalStorageRegistrySequenceStore(storage);
+    const body = await recordBody(["/dns4/my.node.example/tcp/443/https"], 4);
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const fetchFn = registry([() => new Response(body), notFound, () => new Response(body)]);
+      const lookup = () => policy.resolveOwnerHosts(SUBJECT, { registryUrl: REGISTRY, sequenceStore, fetch: fetchFn });
+
+      expect((await lookup()).status).toBe("registered");
+      expect(unavailableReason(await lookup())).toBe("not-found-after-registered");
+      expect((await lookup()).status).toBe("registered");
+      expect(warn).toHaveBeenCalledTimes(1);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("a failed read fails the lookup closed, before any request", async () => {
+    const storage = memoryStorage();
+    storage.getItem = () => {
+      throw new Error("SecurityError");
+    };
+    const requests: string[] = [];
+    const lookup = lookupOwnerRegistryVerdict(SUBJECT, {
+      registryUrl: REGISTRY,
+      sequenceStore: createLocalStorageRegistrySequenceStore(storage),
       fetch: registry([notFound], requests),
     });
     await expect(lookup).rejects.toBeInstanceOf(RegistryUnavailableError);
@@ -324,6 +364,68 @@ describe("resolveFailClosedTinyCloudHosts", () => {
     expect(error).toBeInstanceOf(NodeNotFoundError);
     expect(error).toBe(reported);
   });
+
+  it("routes only to HTTPS or loopback hosts from a signed record", async () => {
+    const mixed = await recordBody(
+      ["/dns4/plain.example/tcp/80/http", "/ip4/127.0.0.1/tcp/8081/http", "/dns4/a.node.example/tcp/443/https"],
+      1,
+    );
+    const resolved = await resolveFailClosedTinyCloudHosts(owner.address, {
+      ...base,
+      fetch: registry([() => new Response(mixed)]),
+    });
+    expect(resolved.hosts).toEqual(["http://127.0.0.1:8081", "https://a.node.example"]);
+
+    const plaintextOnly = await recordBody(["/dns4/plain.example/tcp/80/http"], 1);
+    const refused = resolveFailClosedTinyCloudHosts(owner.address, {
+      ...base,
+      fetch: registry([() => new Response(plaintextOnly)]),
+    });
+    await expect(refused).rejects.toBeInstanceOf(NodeNotFoundError);
+  });
+
+  describe("local discovery", () => {
+    const LINK = "https://mynode.local.tinycloud.link";
+    const linkRecord = (sequence: number) =>
+      recordBody(["/dns4/mynode.local.tinycloud.link/tcp/443/https", "/dns4/a.node.example/tcp/443/https"], sequence);
+    /** The registry answers in order; LINK is a healthy local node. */
+    const network = (answers: Array<() => Response>, requests: string[]): typeof fetch =>
+      (async (input: string | URL | Request) => {
+        const url = String(input);
+        requests.push(url);
+        if (url === `${LINK}/healthz`) return new Response("ok");
+        if (url === `${LINK}/info`) return Response.json({ nodeId: "did:key:z6MkLocalNode" });
+        const next = answers.shift();
+        if (!url.startsWith(`${REGISTRY}/`) || !next) throw new TypeError(`unreachable: ${url}`);
+        return next();
+      }) as typeof fetch;
+
+    it("probes a local link listed by a registered verdict, reading the registry once", async () => {
+      const requests: string[] = [];
+      const body = await linkRecord(1);
+      const resolved = await resolveFailClosedTinyCloudHosts(owner.address, {
+        registryUrl: REGISTRY,
+        fetch: network([() => new Response(body)], requests),
+      });
+      expect(resolved.hosts).toEqual([LINK]);
+      expect(resolved.verdict?.status).toBe("registered");
+      expect(requests.filter((url) => url.startsWith(`${REGISTRY}/`))).toEqual([LOOKUP_URL]);
+    });
+
+    it("never routes to a local link from a record older than the remembered one", async () => {
+      const sequenceStore = createInMemoryRegistrySequenceStore();
+      await sequenceStore.set(SUBJECT, 5);
+      const requests: string[] = [];
+      const older = await linkRecord(3);
+      const resolving = resolveFailClosedTinyCloudHosts(owner.address, {
+        registryUrl: REGISTRY,
+        sequenceStore,
+        fetch: network([() => new Response(older)], requests),
+      });
+      await expect(resolving).rejects.toMatchObject({ code: "registry_unavailable", verdict: { reason: "rollback" } });
+      expect(requests.some((url) => url.startsWith(LINK))).toBe(false);
+    });
+  });
 });
 
 describe("assertSpaceCreationAllowed", () => {
@@ -361,6 +463,17 @@ describe("assertSpaceCreationAllowed", () => {
     expect(() =>
       assertSpaceCreationAllowed({ ...listed, hosts: [] }, "https://my.node.example"),
     ).toThrow(NodeRegistryEntryExistsError);
+  });
+
+  it("refuses creation on a plaintext host even when the record lists it", () => {
+    const plaintext: RegistryVerdict = {
+      ...listed,
+      hosts: [{ urls: ["http://plain.example", "http://127.0.0.1:8081"], source: "offchain" }],
+    };
+    expect(() => assertSpaceCreationAllowed(plaintext, "http://plain.example")).toThrow(
+      NodeRegistryEntryExistsError,
+    );
+    expect(() => assertSpaceCreationAllowed(plaintext, "http://127.0.0.1:8081")).not.toThrow();
   });
 
   it("refuses when the registry gave no verdict", () => {
