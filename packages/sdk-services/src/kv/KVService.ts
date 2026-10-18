@@ -26,6 +26,7 @@ import {
   authUnauthorizedError,
   validatedCapabilityOf,
   isRequestTimeoutError,
+  nodeRetryError,
 } from "../errors";
 import { IKVService } from "./IKVService";
 import { PrefixedKVService, IPrefixedKVService } from "./PrefixedKVService";
@@ -967,6 +968,8 @@ export class KVService extends BaseService implements IKVService {
           { meta: { status: response.status, statusText: response.statusText } }
         ));
       }
+      const retryError = nodeRetryError("kv", `Failed to get key ${JSON.stringify(key)}`, response, errorText);
+      if (retryError) return err(retryError);
       return err(serviceError(
         ErrorCodes.NETWORK_ERROR,
         `Failed to get key ${JSON.stringify(key)}: ${response.status} - ${errorText}`,
@@ -1071,14 +1074,10 @@ export class KVService extends BaseService implements IKVService {
           { meta: { status: response.status, statusText: response.statusText } }
         ));
       }
-      if (response.status === 503 && (options?.ifMatch !== undefined || options?.ifNoneMatch !== undefined)) {
-        return err(serviceError(
-          ErrorCodes.KV_CONFLICT,
-          `Concurrent KV update conflicted for key ${JSON.stringify(key)}`,
-          "kv",
-          { meta: { status: response.status, statusText: response.statusText } }
-        ));
-      }
+      // A 503 is never a precondition failure (that is the 412 above): it is
+      // the node's busy/timeout signal, or an unclassified outage.
+      const retryError = nodeRetryError("kv", `Failed to put key ${JSON.stringify(key)}`, response, errorText);
+      if (retryError) return err(retryError);
       const quotaError = this.handleQuotaErrorResponse(response, errorText, key);
       if (quotaError) return quotaError;
       return err(serviceError(
@@ -1485,6 +1484,8 @@ export class KVService extends BaseService implements IKVService {
         );
       }
       const errorText = await response.text();
+      const retryError = nodeRetryError("kv", "Failed to list keys", response, errorText);
+      if (retryError) return err(retryError);
       return err(serviceError(
         ErrorCodes.NETWORK_ERROR,
         `Failed to list keys: ${response.status} - ${errorText}`,
@@ -1795,14 +1796,8 @@ export class KVService extends BaseService implements IKVService {
           { meta: { status: response.status, statusText: response.statusText } }
         ));
       }
-      if (response.status === 503 && options?.ifMatch !== undefined) {
-        return err(serviceError(
-          ErrorCodes.KV_CONFLICT,
-          `Concurrent KV delete conflicted for key ${JSON.stringify(key)}`,
-          "kv",
-          { meta: { status: response.status, statusText: response.statusText } }
-        ));
-      }
+      const retryError = nodeRetryError("kv", `Failed to delete key ${JSON.stringify(key)}`, response, errorText);
+      if (retryError) return err(retryError);
       return err(serviceError(
         ErrorCodes.NETWORK_ERROR,
         `Failed to delete key ${JSON.stringify(key)}: ${response.status} - ${errorText}`,
@@ -1855,6 +1850,8 @@ export class KVService extends BaseService implements IKVService {
           }
 
           const errorText = await response.text();
+          const retryError = nodeRetryError("kv", `Failed to get metadata for key ${JSON.stringify(key)}`, response, errorText);
+          if (retryError) return err(retryError);
           return err(
             serviceError(
               ErrorCodes.NETWORK_ERROR,

@@ -154,6 +154,7 @@ export {
   storageQuotaExceededError,
   storageLimitReachedError,
   storageRejectionError,
+  nodeRetryError,
   parseStorageQuotaBytes,
   parseStorageRejection,
   type StorageAccountUsage,

@@ -88,6 +88,15 @@ export const ErrorCodes = {
   INVALID_INPUT: "INVALID_INPUT",
   PERMISSION_DENIED: "PERMISSION_DENIED",
 
+  // Node retry signals (tinycloud-node #347). `meta.retryable` says whether a
+  // retry is safe; `meta.retryAfterMs` carries the node's Retry-After.
+  /** HTTP 503 `sql_busy:<stage>` / `unavailable_retryable`: nothing was applied; retry after `meta.retryAfterMs`. */
+  NODE_BUSY: "NODE_BUSY",
+  /** HTTP 503 `request_timeout`: the node's deadline passed before any write began; nothing was applied. */
+  REQUEST_TIMEOUT: "REQUEST_TIMEOUT",
+  /** HTTP 500 `outcome_unknown`: a write may have been applied; read back before retrying a non-idempotent operation. */
+  OUTCOME_UNKNOWN: "OUTCOME_UNKNOWN",
+
   // KV-specific errors
   KV_NOT_FOUND: "KV_NOT_FOUND",
   KV_WRITE_FAILED: "KV_WRITE_FAILED",
