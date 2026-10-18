@@ -138,6 +138,15 @@ and the worker keep TC-1413's ceilings. The ledger's `tc1436Ratchet` row records
 and cannot change later. If another root-growing PR lands first, #578 re-measures
 against the new base and replaces its own row before it merges.
 
+The TC-1443 registry verdict classifier in sdk-core (#586) raised only the root
+ceilings once more, after removing a duplicate secp256k1 from the bundle, by the
+exact bytes GitHub run 39142085209 measured on source `4a8ccb1a`, in both jobs,
+against master `129c7935` (TC-1436's ceilings): to 1,468,418 / 1,395,768 B
+(+2,423 / +49). First import, activation, the gated artifact and the worker keep
+TC-1413's ceilings. The ledger's `tc1443Ratchet` row records them and cannot change
+later. If another root-growing PR lands first, #586 re-measures against the new base
+and replaces its own row before it merges.
+
 **Ancestry pins and squash merges.** A policy row records the PR-branch commit it
 was reviewed at, and its introduction check requires that literal commit in the
 PR head. js-sdk squash-merges, so that commit is unreachable from master
