@@ -549,20 +549,20 @@ export const approvedTc1443bRatchet: Tc1443bRatchet = {
   ruling: "TC-1443 slice b size row; approved by Naomi (2026-10-18), delta +2,913/+4,510 ±50 B gzip over master 4a717372457fa1deac30c7dca65ab0ed1e1787ab",
   base: "4a717372457fa1deac30c7dca65ab0ed1e1787ab",
   sourceCommits: [
-    "fc474b536d79c0d03e8884174611f96adf26e6e1",
+    "f65c2a0f2493a10adbe028f5f95f3372528bb017",
   ],
   canonicalCI: {
-    run: "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39172921591",
+    run: "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39176947473",
     jobs: [
-      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39172921591/job/117809557014",
-      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39172921591/job/117809557065",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39176947473/job/117821449012",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39176947473/job/117821449071",
     ],
   },
   root: {
     delta: { "index.mjs": 2913, "index.cjs": 4510 },
     ceiling: { "index.mjs": 1473920, "index.cjs": 1402497 },
   },
-  reason: "TENTATIVE: re-measured after master moved to 4a717372 (TC-1466 row); numbers pending the canonical CI measure.",
+  reason: "sdk-core adds the opt-in fail-closed registry policy (registry-policy.ts: resolveOwnerHosts and the space-creation guard, plus location.ts hooks and the legacy-fallback deprecation warning); web-sdk sign-in (tcw.ts) threads registryPolicy, newUserHost, registryChainId, registrySequenceStore and onNodeNotFound through. Both root bundles grow. No shrink was attempted for this row. Base: master CI run 39176239864 at f819c542 (4a717372 is a version commit on top) measured index.mjs 1,471,007 / index.cjs 1,397,987 in both Node jobs, equal to the TC-1466 ceilings. PR: run 39176947473 on merge commit f65c2a0f measured 1,473,920 / 1,402,497 in both Node jobs, i.e. +2,913 / +4,510, the same delta as on the earlier base 28ca77a0 (run 39172113588 on 87310cad: 1,473,908 / 1,402,491 over 1,470,995 / 1,397,981). Delta approved by Naomi (2026-10-18): +2,913/+4,510 ±50 B, zero headroom.",
 };
 
 /** The reviewed #553 S3 entry's source commit, as master's checker pinned it. */
