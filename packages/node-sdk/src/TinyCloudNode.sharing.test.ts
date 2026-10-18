@@ -803,6 +803,38 @@ describe("TinyCloudNode sharing", () => {
     expect(unsigned.jti).toMatch(/^[A-Za-z0-9_-]{22}$/);
   });
 
+  test("delivery authorization is signed by the primary session even when a broader runtime grant covers the resource", async () => {
+    // The node echoes the invocation signer as admission.senderKeyDid and the
+    // SDK binds the receipt to credentialHolderDid; a grant held by another key
+    // made `tc share publish --to <email> --notify` reject its own receipt.
+    globalThis.fetch = mock(async () => new Response("{}", { status: 200, headers: { "content-type": "application/json" } })) as unknown as typeof fetch;
+    const signedWith: unknown[] = [];
+    const wasmBindings = {
+      ...makeWasmBindings(),
+      invokeAny: (session: unknown) => { signedWith.push(session); return { Authorization: "delivery-invocation" }; },
+    } as unknown as IWasmBindings;
+    const node = new TinyCloudNode({ host: "https://node.example", wasmBindings });
+    const primarySession = { spaceId: SPACE, verificationMethod: "did:key:zPrimary#zPrimary" };
+    const grantSession = { spaceId: SPACE, verificationMethod: "did:key:zGrant#zGrant" };
+    Reflect.set(node, "_restoredTcSession", { spaceId: SPACE });
+    Reflect.set(node, "_serviceContext", { session: primarySession });
+    Reflect.set(node, "findGrantForOperations", () => ({ provenance: "delegated", session: grantSession, operations: [] }));
+    await expect(node.authorizeShareDeliveryV3({
+      envelope: { version: 3 },
+      sealedEnvelope: "AQ".repeat(20),
+      envelopeKey: "A".repeat(43),
+      shareCid: "cid",
+      resourcePath: "shares/test/readme.md",
+      recipientEmail: "recipient@example.test",
+      shareUrl: "https://share.tinycloud.xyz/s/inline#v=2&p=e30",
+      documentName: "readme.md",
+      expiresAt: new Date(Date.now() + 60_000).toISOString(),
+      deliveryAudience: "https://witness.credentials.org",
+      idempotencyKey: "stable-key",
+    })).rejects.toThrow();
+    expect(signedWith).toEqual([primarySession]);
+  });
+
   test("V3 delivery HTTP denial carries status and server body through the public method", async () => {
     const wasmBindings = {
       ...makeWasmBindings(),
