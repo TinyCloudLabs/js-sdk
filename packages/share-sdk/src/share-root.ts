@@ -12,41 +12,21 @@ export const SHARE_ROOT_PREFIX = "xyz.tinycloud.share/shares/";
 export const SHARE_ROOT_MAX_LIFETIME_MS = 37 * DAY_MS;
 /** Longest lifetime of an agent root (the OpenKey device-grant cap). */
 export const AGENT_SHARE_ROOT_MAX_LIFETIME_MS = 30 * DAY_MS;
-/** Product cap on a bearer link or policy root signed under a root. */
+/** Product cap on a bearer link, a per-share grant, or a policy root. */
 export const SHARE_ROOT_LINK_MAX_LIFETIME_MS = 30 * DAY_MS;
 /**
- * Signer clock skew tolerated on a signed root's `exp - iat` (only there:
- * `exp - now` stays strict), so an approval is not wasted when the signer
- * sets its own issue time.
+ * Signer clock skew tolerated on a signed delegation's `exp - iat` (only
+ * there: `exp - now` stays strict), so an approval is not wasted when the
+ * signer sets its own issue time.
  */
 export const SHARE_ROOT_CLOCK_SKEW_MS = 5 * 60_000;
 /** `ensureShareRoot` asks for the cap minus this margin, so a clamping or slow signer stays inside the cap. */
 export const SHARE_ROOT_REQUEST_MARGIN_MS = 10 * 60_000;
-/**
- * NODE-B2 (§9 "Advertised mode"): a Node lists these in the `features` of
- * its public `GET /info` (sdk-core `checkNodeInfo` → `NodeInfo.features`):
- * the capability marker plus exactly one active mode. Read in one place,
- * {@link readPolicyOwnerAuthorityMode}; the Node version is never consulted.
- */
-export const POLICY_OWNER_AUTHORITY_FEATURES = {
-  marker: "policy-owner-authority-v1",
-  record: "policy-owner-authority-record",
-  enforce: "policy-owner-authority-enforce",
-} as const;
-/** How long a known mode is trusted before the Node is asked again (NODE-B2: at most 5 minutes). */
-export const POLICY_OWNER_AUTHORITY_PROBE_TTL_MS = 5 * 60_000;
-const MAX_INFO_BYTES = 64 * 1024;
+const MAX_NODE_ANSWER_BYTES = 64 * 1024;
 const MAX_POLICY_ROOT_MS = 31 * DAY_MS;
 
-/** `share`: Share/CLI root in `applications`. `agent`: `default` space, bearer only. */
+/** `share`: Share/CLI root in `applications`. `agent`: `default` space. Both are kv/bearer only. */
 export type ShareRootKind = "share" | "agent";
-/**
- * What the owner signed. `kv`: get + metadata on the share prefix only.
- * `kv+share-decrypt`: also decrypt on the owner's `:share` network, which a
- * policy owner needs; minted only while the Node advertises `enforce` and
- * `shareRootPolicyRoots` is on.
- */
-export type ShareRootScope = "kv" | "kv+share-decrypt";
 
 const PROFILES = {
   share: { spaceName: "applications", maxLifetimeMs: SHARE_ROOT_MAX_LIFETIME_MS },
@@ -54,7 +34,6 @@ const PROFILES = {
 } as const;
 
 export const KV_ABILITIES = ["tinycloud.kv/get", "tinycloud.kv/metadata"] as const;
-export const DECRYPT_ABILITY = "tinycloud.encryption/decrypt";
 
 export type ShareRootErrorCode =
   | "invalid-request"
@@ -70,19 +49,21 @@ export type ShareRootErrorCode =
   | "expiry-mismatch"
   | "reroot-same-key"
   | "link-out-of-scope"
-  | "policy-roots-disabled"
-  | "policy-roots-not-enforced-by-node"
-  | "root-not-policy-capable";
+  | "share-id-not-network-safe"
+  | "network-not-active"
+  | "node-refused"
+  | "grant-revoke-incomplete";
 
 export interface ShareRootErrorDetails {
   /** The delegation CID the Node imported (the receipt's), when the owner already signed. */
   readonly rootCid?: string;
   /** CID of the signed bytes, when it differs from `rootCid`. */
   readonly signedCid?: string;
-  /** The imported root may grant more, or longer, than requested: the owner must revoke `rootCid`. */
+  /** The imported delegation may grant more, or longer, than requested: the owner must revoke `rootCid`. */
   readonly mustRevoke?: boolean;
 }
 
+/** The error every share-root, per-share grant and owner-control operation throws. */
 export class ShareRootError extends Error {
   readonly code: ShareRootErrorCode;
   readonly rootCid?: string;
@@ -91,7 +72,7 @@ export class ShareRootError extends Error {
 
   constructor(code: ShareRootErrorCode, message: string, details: ShareRootErrorDetails = {}) {
     super(details.mustRevoke === true && details.rootCid !== undefined
-      ? `${message}; the Node imported root ${details.rootCid}, which may grant more than requested: the owner must revoke it`
+      ? `${message}; the Node imported ${details.rootCid}, which may grant more than requested: the owner must revoke it`
       : message);
     this.name = "ShareRootError";
     this.code = code;
@@ -111,15 +92,6 @@ export interface ShareRootOwnerAuthority {
 
 export interface ShareRootOptions {
   readonly kind?: ShareRootKind;
-  /**
-   * Feature flag `shareRootPolicyRoots`, off by default. A root gains `:share`
-   * decrypt, and can sign policy roots through {@link ShareRoot.policyRootSigner},
-   * only while this is on and the root's Node advertises owner-authority
-   * mode `enforce`.
-   */
-  readonly shareRootPolicyRoots?: boolean;
-  /** Defaults to {@link defaultPolicyOwnerModeProbe}. */
-  readonly policyOwnerModeProbe?: PolicyOwnerModeProbe;
   readonly now?: () => number;
 }
 
@@ -127,8 +99,7 @@ export interface ShareRootOptions {
 export interface ShareRootRecord {
   readonly version: 1;
   readonly kind: ShareRootKind;
-  readonly scope: ShareRootScope;
-  /** The Node the root was created against; its advertised mode gates policy signing. */
+  /** The Node the root was created against. */
   readonly nodeOrigin: string;
   readonly cid: string;
   /** Base64url of the exact owner-signed CACAO bytes. */
@@ -149,16 +120,16 @@ export interface ShareRootLink {
 }
 
 /**
- * Policy/v3 owner signing for a `kv+share-decrypt` root. Shaped like
- * `AddressedPublishAuthority` without `registerPolicy`. Every call re-checks
- * the whole gate (flag, the Node's advertised mode within the probe TTL, root
- * live, key present), so a signer kept past a mode change stops working.
+ * Policy/v3 owner signing for one per-share grant. Shaped like
+ * `AddressedPublishAuthority` without `registerPolicy`. Every call checks the
+ * key is held and the grant is live.
  */
-export interface ShareRootPolicySigner {
-  /** The share key DID: the `ownerDid` of the policy roots. */
+export interface SharePolicySigner {
+  /** The per-share key DID: the `ownerDid` of the policy roots. */
   readonly ownerDid: string;
+  /** The owner delegation (grant) CID that authorizes the key. */
   readonly rootCid: string;
-  /** Interim rule: no policy root may outlive the share root. */
+  /** No policy root may outlive the grant. */
   readonly notAfter: Date;
   /** Build and sign one proofless policy root; its expiry must be within `notAfter` and 31 days. */
   createOwnerRoot(input: AddressedOwnerRootInput): Promise<AddressedOwnerRootReceipt>;
@@ -166,12 +137,12 @@ export interface ShareRootPolicySigner {
   sign(digest: Uint8Array): Promise<Uint8Array>;
 }
 
-/* Internal helpers below are exported for `share-grant.ts` and `share-network.ts`; the subpath entry does not re-export them. */
+/* Internal helpers below are exported for `share-grant.ts`, `share-network.ts` and `share-control.ts`; the subpath entry does not re-export them. */
 export interface Owner { readonly chainId: string; readonly address: string }
 
 export function parseOwnerDid(ownerDid: string): Owner {
   const match = /^did:pkh:eip155:([1-9]\d*):(0x[0-9a-fA-F]{40})$/.exec(ownerDid);
-  if (match === null) throw new ShareRootError("invalid-request", "share root owner must be did:pkh:eip155");
+  if (match === null) throw new ShareRootError("invalid-request", "share owner must be did:pkh:eip155");
   return { chainId: match[1]!, address: match[2]!.toLowerCase() };
 }
 
@@ -182,25 +153,14 @@ export function sameOwner(left: Owner, right: Owner): boolean {
 export function assertSpace(spaceId: string, owner: Owner, kind: ShareRootKind): void {
   const match = /^tinycloud:pkh:eip155:([1-9]\d*):(0x[0-9a-fA-F]{40}):([A-Za-z0-9_-]+)$/.exec(spaceId);
   if (match === null || !sameOwner({ chainId: match[1]!, address: match[2]!.toLowerCase() }, owner) || match[3] !== PROFILES[kind].spaceName) {
-    throw new ShareRootError("invalid-request", `${kind} root must target the owner's ${PROFILES[kind].spaceName} space`);
+    throw new ShareRootError("invalid-request", `${kind} delegations must target the owner's ${PROFILES[kind].spaceName} space`);
   }
-}
-
-export function shareNetworkId(owner: Owner): string {
-  return `urn:tinycloud:encryption:did:pkh:eip155:${owner.chainId}:${owner.address}:share`;
-}
-
-/** True for the owner's `:share` network in any address casing (the Node canonicalizes did:pkh addresses). */
-export function isShareNetworkOf(resource: string, owner: Owner): boolean {
-  const match = /^urn:tinycloud:encryption:did:pkh:eip155:([1-9]\d*):(0x[0-9a-fA-F]{40}):share$/.exec(resource);
-  return match !== null && sameOwner({ chainId: match[1]!, address: match[2]!.toLowerCase() }, owner);
 }
 
 /**
  * The origin a Node is known by, or `undefined`: `https:` only (plus `http:`
  * on loopback, for local nodes and tests). The scheme allowlist also refuses
- * opaque origins (`file:`, `data:`, all serialized as `"null"`), so they can
- * never share a cache entry.
+ * opaque origins (`file:`, `data:`, all serialized as `"null"`).
  */
 function nodeOriginOf(value: string): string | undefined {
   let url: URL;
@@ -221,7 +181,7 @@ export function seconds(ms: number): number {
 
 function parseTime(value: string | undefined, label: string, rootCid: string): number {
   const time = value === undefined ? Number.NaN : Date.parse(value);
-  if (!Number.isFinite(time)) throw new ShareRootError("malformed-root", `share root ${label} is missing or invalid`, { rootCid, mustRevoke: true });
+  if (!Number.isFinite(time)) throw new ShareRootError("malformed-root", `delegation ${label} is missing or invalid`, { rootCid, mustRevoke: true });
   return time;
 }
 
@@ -240,8 +200,13 @@ export interface ExpectedOwnerDelegation {
 
 /**
  * Check what the owner actually signed: the decoded ReCap must grant exactly
- * `wanted` to exactly the share key, with no other resource, no parent, and
- * a lifetime within the cap. Returns the signed times.
+ * `wanted` to exactly the key, with no other resource, no parent, and a
+ * lifetime within the cap. Returns the signed times.
+ *
+ * Anything wider (another resource or ability, caveats, another audience or
+ * owner, a parent, a longer lifetime) sets `mustRevoke`. A grant that is only
+ * NARROWER than requested (an ability or resource left out, e.g. unticked in
+ * a wallet) is refused without `mustRevoke`: it grants nothing extra.
  */
 export function validateSignedOwnerDelegation(decoded: DecodedOwnerRootCacao, expected: ExpectedOwnerDelegation): { issuedAt: Date; expiresAt: Date } {
   const { label } = expected;
@@ -254,18 +219,21 @@ export function validateSignedOwnerDelegation(decoded: DecodedOwnerRootCacao, ex
   if (decoded.reCapProofs.length !== 0) throw new ShareRootError("resource-mismatch", `${label} must not have parent capabilities`, wider);
 
   const { wanted } = expected;
-  for (const resource of Object.keys(decoded.attenuation)) if (wanted[resource] === undefined) throw new ShareRootError("resource-mismatch", `${label} grants a resource outside its scope`, wider);
-  for (const [resource, abilities] of Object.entries(wanted)) {
-    const granted = decoded.attenuation[resource];
-    if (granted === undefined) throw new ShareRootError("resource-mismatch", `${label} is missing one of its resources`, wider);
-    const names = Object.keys(granted);
-    if (names.length !== abilities.length || abilities.some((ability) => !names.includes(ability))) throw new ShareRootError("ability-mismatch", `${label} abilities differ from the request`, wider);
-    for (const ability of abilities) {
-      const caveats = granted[ability]!;
+  for (const [resource, granted] of Object.entries(decoded.attenuation)) {
+    const abilities = wanted[resource];
+    if (abilities === undefined) throw new ShareRootError("resource-mismatch", `${label} grants a resource outside its scope`, wider);
+    for (const [ability, caveats] of Object.entries(granted)) {
+      if (!abilities.includes(ability)) throw new ShareRootError("ability-mismatch", `${label} grants an ability it was not asked for`, wider);
       if (caveats.length !== 1 || typeof caveats[0] !== "object" || caveats[0] === null || Array.isArray(caveats[0]) || Object.keys(caveats[0]).length !== 0) {
         throw new ShareRootError("ability-mismatch", `${label} abilities carry unexpected caveats`, wider);
       }
     }
+  }
+  const narrower = { rootCid: decoded.cid };
+  for (const [resource, abilities] of Object.entries(wanted)) {
+    const granted = decoded.attenuation[resource];
+    if (granted === undefined) throw new ShareRootError("resource-mismatch", `${label} is narrower than requested: a resource is missing`, narrower);
+    if (abilities.some((ability) => granted[ability] === undefined)) throw new ShareRootError("ability-mismatch", `${label} is narrower than requested: an ability is missing`, narrower);
   }
 
   const issuedAt = parseTime(decoded.issuedAt, "issued-at time", decoded.cid);
@@ -280,30 +248,31 @@ export function validateSignedOwnerDelegation(decoded: DecodedOwnerRootCacao, ex
   return { issuedAt: new Date(issuedAt), expiresAt: new Date(expiresAt) };
 }
 
-function validateSignedRoot(decoded: DecodedOwnerRootCacao, expected: { kind: ShareRootKind; scope: ShareRootScope; owner: Owner; spaceId: string; keyDid: string; requestedExpiresAt?: Date; now: number }): { issuedAt: Date; expiresAt: Date } {
-  const wanted: Record<string, readonly string[]> = { [`${expected.spaceId}/kv/${SHARE_ROOT_PREFIX}`]: KV_ABILITIES };
-  if (expected.scope === "kv+share-decrypt") wanted[shareNetworkId(expected.owner)] = [DECRYPT_ABILITY];
+function validateSignedRoot(decoded: DecodedOwnerRootCacao, expected: { kind: ShareRootKind; owner: Owner; spaceId: string; keyDid: string; requestedExpiresAt?: Date; now: number }): { issuedAt: Date; expiresAt: Date } {
   return validateSignedOwnerDelegation(decoded, {
     label: `${expected.kind} root`,
     owner: expected.owner,
     keyDid: expected.keyDid,
-    wanted,
+    wanted: { [`${expected.spaceId}/kv/${SHARE_ROOT_PREFIX}`]: KV_ABILITIES },
     maxLifetimeMs: PROFILES[expected.kind].maxLifetimeMs,
     ...(expected.requestedExpiresAt === undefined ? {} : { requestedExpiresAt: expected.requestedExpiresAt }),
     now: expected.now,
   });
 }
 
+/** One exact KV key (no prefix, directory, wildcard or traversal) whose path starts with `prefix`. */
+export function isExactKeyUnder(path: string, prefix: string): boolean {
+  return typeof path === "string"
+    && path.startsWith(prefix)
+    && path.length > prefix.length
+    && !path.endsWith("/")
+    && !path.includes("//")
+    && !path.split("/").some((segment) => segment === "." || segment === "..")
+    && !/[\u0000-\u001f\u007f\\*?#]/.test(path);
+}
+
 export function assertLinkPath(path: string): void {
-  if (
-    typeof path !== "string"
-    || !path.startsWith(SHARE_ROOT_PREFIX)
-    || path.length === SHARE_ROOT_PREFIX.length
-    || path.endsWith("/")
-    || path.includes("//")
-    || path.split("/").some((segment) => segment === "." || segment === "..")
-    || /[\u0000-\u001f\u007f\\*?#]/.test(path)
-  ) throw new ShareRootError("link-out-of-scope", "link path must be one exact key under the share prefix");
+  if (!isExactKeyUnder(path, SHARE_ROOT_PREFIX)) throw new ShareRootError("link-out-of-scope", "link path must be one exact key under the share prefix");
 }
 
 export function errorMessage(error: unknown): string {
@@ -316,6 +285,29 @@ export async function assertUsableKey(key: DelegatedShareKey): Promise<void> {
   } catch (error) {
     throw new ShareRootError("invalid-key", errorMessage(error));
   }
+}
+
+/** Read a Node JSON answer: `application/json` only, at most 64 KiB. */
+export async function readJsonCapped(response: Response): Promise<unknown> {
+  if (!/^application\/json\s*(;|$)/i.test(response.headers.get("content-type") ?? "")) throw new Error("node answer is not JSON");
+  const reader = response.body?.getReader();
+  if (reader === undefined) throw new Error("node answer has no body");
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > MAX_NODE_ANSWER_BYTES) {
+      await reader.cancel();
+      throw new Error("node answer is too large");
+    }
+    chunks.push(value);
+  }
+  const bytes = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
+  return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
 }
 
 /** The facts and attenuation of a Policy/v3 owner root, identical to node-sdk `createUnifiedOwnerRoot`. */
@@ -344,11 +336,10 @@ function policyRootContents(input: AddressedOwnerRootInput): { facts: Record<str
 }
 
 /**
- * Policy/v3 owner signing for one owner delegation (a share root or a
- * per-share grant). `gate` runs before every signature and returns the key;
- * `createOwnerRoot` builds the proofless root itself, bounds its expiry by
- * `notAfter` and 31 days, and admits only capabilities `inScope` accepts;
- * `sign` takes 32-byte digests only.
+ * Policy/v3 owner signing for one owner delegation. `gate` runs before every
+ * signature and returns the key; `createOwnerRoot` builds the proofless root
+ * itself, bounds its expiry by `notAfter` and 31 days, and admits only
+ * capabilities `inScope` accepts; `sign` takes 32-byte digests only.
  */
 export function ownerPolicySigner(input: {
   readonly ownerDid: string;
@@ -357,7 +348,7 @@ export function ownerPolicySigner(input: {
   readonly gate: () => Promise<DelegatedShareKey>;
   readonly now: () => number;
   readonly inScope: (capability: AddressedOwnerRootInput["capabilities"][number]) => boolean;
-}): ShareRootPolicySigner {
+}): SharePolicySigner {
   const { ownerDid, authorityCid, notAfter, gate } = input;
   return {
     ownerDid,
@@ -396,106 +387,16 @@ export function ownerPolicySigner(input: {
 }
 
 /**
- * The single adapter over the Node's advertisement. Takes the `features`
- * list of `GET /info` and returns `"enforce"` only for the marker plus the
- * `-enforce` mode and no `-record`; `"record"` for the marker plus
- * `-record` only; `undefined` for anything else (no marker, as on every
- * Node up to 1.21.0, both modes, or a malformed list). Only `"enforce"`
- * enables policy-capable roots.
- */
-export function readPolicyOwnerAuthorityMode(features: unknown): "enforce" | "record" | undefined {
-  if (!Array.isArray(features) || !features.includes(POLICY_OWNER_AUTHORITY_FEATURES.marker)) return undefined;
-  const enforce = features.includes(POLICY_OWNER_AUTHORITY_FEATURES.enforce);
-  const record = features.includes(POLICY_OWNER_AUTHORITY_FEATURES.record);
-  if (enforce === record) return undefined;
-  return enforce ? "enforce" : "record";
-}
-
-/** Per-Node cache of "does this Node enforce owner-authority expiry". */
-export interface PolicyOwnerModeProbe {
-  /** True only when the Node currently advertises `enforce`. Never throws. */
-  isEnforced(nodeOrigin: string): Promise<boolean>;
-  /**
-   * Record the `features` a sign-in just read from `GET /info`
-   * (`NodeInfo.features`), so each sign-in refreshes the answer without a
-   * second fetch.
-   */
-  observe(nodeOrigin: string, features: readonly string[]): void;
-}
-
-async function readJsonCapped(response: Response): Promise<unknown> {
-  if (!/^application\/json\s*(;|$)/i.test(response.headers.get("content-type") ?? "")) throw new Error("node info is not JSON");
-  const reader = response.body?.getReader();
-  if (reader === undefined) throw new Error("node info has no body");
-  const chunks: Uint8Array[] = [];
-  let total = 0;
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    total += value.byteLength;
-    if (total > MAX_INFO_BYTES) {
-      await reader.cancel();
-      throw new Error("node info is too large");
-    }
-    chunks.push(value);
-  }
-  const bytes = new Uint8Array(total);
-  let offset = 0;
-  for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
-  return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
-}
-
-/**
- * Keep each Node's answer in memory for `ttlMs` (default and ceiling 5
- * minutes), then read `GET /info` again, so a Node that stops advertising
- * `enforce` turns the gate off within one TTL. Only `https:` origins (and
- * `http:` on loopback) are probed. A failure, a non-JSON or oversized
- * (64 KiB) answer, or a malformed list counts as not enforcing and is cached
- * for the same TTL.
- */
-export function createPolicyOwnerModeProbe(options: { readonly fetch?: (input: URL, init: RequestInit) => Promise<Response>; readonly ttlMs?: number; readonly now?: () => number } = {}): PolicyOwnerModeProbe {
-  const fetchFn = options.fetch ?? ((input: URL, init: RequestInit) => globalThis.fetch(input, init));
-  const ttlMs = Math.min(options.ttlMs ?? POLICY_OWNER_AUTHORITY_PROBE_TTL_MS, POLICY_OWNER_AUTHORITY_PROBE_TTL_MS);
-  const now = options.now ?? Date.now;
-  const cache = new Map<string, { readonly enforced: boolean; readonly checkedAt: number }>();
-  return {
-    async isEnforced(nodeOrigin) {
-      const origin = nodeOriginOf(nodeOrigin);
-      if (origin === undefined) return false;
-      const cached = cache.get(origin);
-      if (cached !== undefined && now() - cached.checkedAt < ttlMs) return cached.enforced;
-      let enforced = false;
-      try {
-        const response = await fetchFn(new URL("/info", origin), { redirect: "error", signal: AbortSignal.timeout(5000) });
-        const info = response.ok ? await readJsonCapped(response) : undefined;
-        enforced = typeof info === "object" && info !== null && "features" in info && readPolicyOwnerAuthorityMode(info.features) === "enforce";
-      } catch {
-        enforced = false;
-      }
-      cache.set(origin, { enforced, checkedAt: now() });
-      return enforced;
-    },
-    observe(nodeOrigin, features) {
-      const origin = nodeOriginOf(nodeOrigin);
-      if (origin !== undefined) cache.set(origin, { enforced: readPolicyOwnerAuthorityMode(features) === "enforce", checkedAt: now() });
-    },
-  };
-}
-
-/** Process-wide default; sign-in code should feed it `NodeInfo.features` through `observe`. */
-export const defaultPolicyOwnerModeProbe: PolicyOwnerModeProbe = createPolicyOwnerModeProbe();
-
-/**
  * A wallet-signed, read-only root delegated to one non-extractable share key,
- * so shares outlive the owner's login session (TC-1423 D3, option B').
+ * so bearer links outlive the owner's login session (TC-1423 D3, option B').
  *
- * - Scope: `kv/get` + `kv/metadata` on the share prefix. `:share` decrypt is
- *   added (scope `kv+share-decrypt`) only when the root is created while
- *   `shareRootPolicyRoots` is on and its Node advertises owner-authority mode
- *   `enforce`; a `kv` root holds no `:share` decrypt, so its key cannot own a
- *   policy over `:share`-encrypted content (the Node answers
- *   `policy-owner-not-authorized`). Never put, del, list, `capabilities/read`,
- *   `network.create` or `:default`.
+ * - Scope: `kv/get` + `kv/metadata` on the share prefix, and nothing else.
+ *   The root never decrypts, before or after the Node enforces owner-authority
+ *   binding: every addressed (email/domain) or edit share uses its own
+ *   per-share grant and network (`ShareGrant`). Without decrypt, the key
+ *   cannot own a policy over encrypted content (the Node answers
+ *   `policy-owner-not-authorized`). Never put, del, list,
+ *   `capabilities/read`, `network.create` or any encryption network.
  * - Created only through `createOwnerDelegation({ permissions })`; the signed
  *   bytes are decoded and checked here.
  * - Lifetime: at most 37 days (`agent`: 30). One key per root.
@@ -504,13 +405,9 @@ export const defaultPolicyOwnerModeProbe: PolicyOwnerModeProbe = createPolicyOwn
  *   share key requires the composer to be on its own origin first (REVIEW-D3
  *   V2-2); this package provides none. CLI profiles may keep a key in a 0600
  *   file and rebuild with `restore`.
- * - The client flag and `policyRootSigner` gate only this API: whoever holds
- *   the key can sign through other APIs. What bounds that is the scope of the
- *   root (no decrypt before `enforce`) and the Node.
  */
 export class ShareRoot {
   readonly kind: ShareRootKind;
-  readonly scope: ShareRootScope;
   readonly nodeOrigin: string;
   readonly cid: string;
   readonly ownerDid: string;
@@ -522,9 +419,8 @@ export class ShareRoot {
   #key: DelegatedShareKey | undefined;
   readonly #options: ShareRootOptions;
 
-  private constructor(input: { kind: ShareRootKind; scope: ShareRootScope; nodeOrigin: string; cid: string; ownerDid: string; spaceId: string; issuedAt: Date; expiresAt: Date; authorization: Uint8Array; key: DelegatedShareKey; options: ShareRootOptions }) {
+  private constructor(input: { kind: ShareRootKind; nodeOrigin: string; cid: string; ownerDid: string; spaceId: string; issuedAt: Date; expiresAt: Date; authorization: Uint8Array; key: DelegatedShareKey; options: ShareRootOptions }) {
     this.kind = input.kind;
-    this.scope = input.scope;
     this.nodeOrigin = input.nodeOrigin;
     this.cid = input.cid;
     this.ownerDid = input.ownerDid;
@@ -538,12 +434,10 @@ export class ShareRoot {
   }
 
   /**
-   * Ask the owner for a new root (one approval) for a fresh share key. The
-   * scope is chosen now: `kv+share-decrypt` only for a `share` root with the
-   * flag on and `nodeOrigin` advertising `enforce`, otherwise `kv`. All request
-   * checks run before anything is signed. If the signed result is rejected,
-   * the key is cleared and the error carries the imported `rootCid` (and
-   * `mustRevoke` when the root may be wider than requested).
+   * Ask the owner for a new root (one approval) for a fresh share key. All
+   * request checks run before anything is signed. If the signed result is
+   * rejected, the key is cleared and the error carries the imported `rootCid`
+   * (and `mustRevoke` when the root may be wider than requested).
    *
    * `keyFactory` defaults to a fresh non-extractable WebCrypto key that only
    * this root holds. A custom factory must not persist the key before
@@ -566,10 +460,6 @@ export class ShareRoot {
     const expiry = input.expiresAt instanceof Date ? input.expiresAt.getTime() : Number.NaN;
     if (!Number.isFinite(expiry) || expiry <= now) throw new ShareRootError("invalid-request", "share root expiry must be in the future");
     if (expiry - now > PROFILES[kind].maxLifetimeMs) throw new ShareRootError("lifetime-exceeds-cap", `${kind} root lifetime exceeds ${PROFILES[kind].maxLifetimeMs / DAY_MS} days`);
-    const scope: ShareRootScope = kind === "share" && options.shareRootPolicyRoots === true
-      && await (options.policyOwnerModeProbe ?? defaultPolicyOwnerModeProbe).isEnforced(nodeOrigin)
-      ? "kv+share-decrypt"
-      : "kv";
     const key = await (input.keyFactory ?? (() => createDelegatedShareKey({ extractable: false })))();
     try {
       await assertUsableKey(key);
@@ -579,7 +469,6 @@ export class ShareRoot {
     }
 
     const permissions: OwnerDelegationPermission[] = [{ service: "tinycloud.kv", path: SHARE_ROOT_PREFIX, actions: [...KV_ABILITIES] }];
-    if (scope === "kv+share-decrypt") permissions.push({ service: "tinycloud.encryption", path: shareNetworkId(owner), actions: [DECRYPT_ABILITY] });
     let receipt: OwnerDelegationReceipt;
     try {
       receipt = await input.owner.createOwnerDelegation({ delegateDid: key.did, spaceId: input.spaceId, expiresAt: input.expiresAt, permissions });
@@ -593,8 +482,8 @@ export class ShareRoot {
       if (signedCid !== receipt.delegationCid) throw new ShareRootError("malformed-root", "signed root bytes do not match the imported delegation CID", { rootCid: receipt.delegationCid, signedCid, mustRevoke: true });
       let decoded: DecodedOwnerRootCacao;
       try { decoded = decodeOwnerRootCacao(authorization); } catch (error) { throw new ShareRootError("malformed-root", errorMessage(error), { rootCid: receipt.delegationCid, mustRevoke: true }); }
-      const times = validateSignedRoot(decoded, { kind, scope, owner, spaceId: input.spaceId, keyDid: key.did, requestedExpiresAt: input.expiresAt, now: (options.now ?? Date.now)() });
-      return new ShareRoot({ kind, scope, nodeOrigin, cid: decoded.cid, ownerDid: input.owner.ownerDid, spaceId: input.spaceId, ...times, authorization, key, options });
+      const times = validateSignedRoot(decoded, { kind, owner, spaceId: input.spaceId, keyDid: key.did, requestedExpiresAt: input.expiresAt, now: (options.now ?? Date.now)() });
+      return new ShareRoot({ kind, nodeOrigin, cid: decoded.cid, ownerDid: input.owner.ownerDid, spaceId: input.spaceId, ...times, authorization, key, options });
     } catch (error) {
       key.clear();
       if (error instanceof ShareRootError) throw error;
@@ -606,9 +495,7 @@ export class ShareRoot {
   static async restore(input: { readonly record: ShareRootRecord; readonly key: DelegatedShareKey; readonly options?: ShareRootOptions }): Promise<ShareRoot> {
     const { record } = input;
     const options = { ...input.options, kind: record.kind };
-    if (record.version !== 1 || (record.kind !== "share" && record.kind !== "agent") || (record.scope !== "kv" && record.scope !== "kv+share-decrypt") || (record.kind === "agent" && record.scope !== "kv")) {
-      throw new ShareRootError("malformed-root", "share root record is not supported");
-    }
+    if (record.version !== 1 || (record.kind !== "share" && record.kind !== "agent")) throw new ShareRootError("malformed-root", "share root record is not supported");
     if (record.keyDid !== input.key.did) throw new ShareRootError("audience-mismatch", "share root record belongs to another key");
     const owner = parseOwnerDid(record.ownerDid);
     assertSpace(record.spaceId, owner, record.kind);
@@ -620,8 +507,8 @@ export class ShareRoot {
       authorization = fromBase64Url(record.authorization);
       decoded = decodeOwnerRootCacao(authorization, record.cid);
     } catch (error) { throw new ShareRootError("malformed-root", errorMessage(error), { rootCid: record.cid }); }
-    const times = validateSignedRoot(decoded, { kind: record.kind, scope: record.scope, owner, spaceId: record.spaceId, keyDid: input.key.did, now: (options.now ?? Date.now)() });
-    return new ShareRoot({ kind: record.kind, scope: record.scope, nodeOrigin, cid: decoded.cid, ownerDid: record.ownerDid, spaceId: record.spaceId, ...times, authorization, key: input.key, options });
+    const times = validateSignedRoot(decoded, { kind: record.kind, owner, spaceId: record.spaceId, keyDid: input.key.did, now: (options.now ?? Date.now)() });
+    return new ShareRoot({ kind: record.kind, nodeOrigin, cid: decoded.cid, ownerDid: record.ownerDid, spaceId: record.spaceId, ...times, authorization, key: input.key, options });
   }
 
   /** The `Authorization` value the Node knows this root by (base64url CACAO). */
@@ -629,13 +516,8 @@ export class ShareRoot {
     return toBase64Url(this.#authorization);
   }
 
-  /** True when the root holds `:share` decrypt and may act as a policy owner (still gated per call). */
-  get policyCapable(): boolean {
-    return this.scope === "kv+share-decrypt";
-  }
-
   toRecord(): ShareRootRecord {
-    return { version: 1, kind: this.kind, scope: this.scope, nodeOrigin: this.nodeOrigin, cid: this.cid, authorization: this.authorization, spaceId: this.spaceId, ownerDid: this.ownerDid, keyDid: this.keyDid, expiresAt: this.expiresAt.toISOString() };
+    return { version: 1, kind: this.kind, nodeOrigin: this.nodeOrigin, cid: this.cid, authorization: this.authorization, spaceId: this.spaceId, ownerDid: this.ownerDid, keyDid: this.keyDid, expiresAt: this.expiresAt.toISOString() };
   }
 
   /** True while the root is live, its key is held, and it lasts at least until `expiresAt`. Revocation is not visible here. */
@@ -671,28 +553,6 @@ export class ShareRoot {
     return { rootCid: this.cid, linkDid: input.linkDid, path: input.path, expiresAt: new Date(seconds(expiry) * 1000), delegation };
   }
 
-  /**
-   * The only ShareRoot API that signs Policy/v3 (email/domain) owner material.
-   * Needs a `kv+share-decrypt` root, the `shareRootPolicyRoots` flag, a live
-   * root and key, and the root's Node advertising `enforce`; the returned
-   * signer re-checks all of it on every call. Until then addressed shares use
-   * per-share owner grants. Agent roots are bearer-only.
-   */
-  async policyRootSigner(): Promise<ShareRootPolicySigner> {
-    await this.#assertPolicyGate();
-    const owner = parseOwnerDid(this.ownerDid);
-    return ownerPolicySigner({
-      ownerDid: this.keyDid,
-      authorityCid: this.cid,
-      notAfter: new Date(this.expiresAt),
-      gate: () => this.#assertPolicyGate(),
-      now: () => this.#now(),
-      inScope: (capability) => capability.kind === "encryption"
-        ? isShareNetworkOf(capability.resource, owner) && capability.action === DECRYPT_ABILITY
-        : capability.resource.startsWith(`${this.spaceId}/kv/${SHARE_ROOT_PREFIX}`) && capability.actions.every((action) => (KV_ABILITIES as readonly string[]).includes(action)),
-    });
-  }
-
   /** Drop this root's key handle. It does not revoke the root: only the owner does that. */
   clear(): void {
     this.#key?.clear();
@@ -704,33 +564,19 @@ export class ShareRoot {
     return this.#key;
   }
 
-  async #assertPolicyGate(): Promise<DelegatedShareKey> {
-    const key = this.#activeKey();
-    if (this.#options.shareRootPolicyRoots !== true) throw new ShareRootError("policy-roots-disabled", "share root policy roots are disabled (shareRootPolicyRoots is off)", { rootCid: this.cid });
-    if (this.kind !== "share") throw new ShareRootError("policy-roots-disabled", "agent roots are bearer-only", { rootCid: this.cid });
-    if (!this.policyCapable) throw new ShareRootError("root-not-policy-capable", "this share root holds no :share decrypt; re-root once the Node enforces", { rootCid: this.cid });
-    if (this.#now() >= this.expiresAt.getTime()) throw new ShareRootError("expired", "share root has expired", { rootCid: this.cid });
-    if (!await (this.#options.policyOwnerModeProbe ?? defaultPolicyOwnerModeProbe).isEnforced(this.nodeOrigin)) {
-      throw new ShareRootError("policy-roots-not-enforced-by-node", "the Node does not advertise owner-authority mode enforce", { rootCid: this.cid });
-    }
-    return key;
-  }
-
   #now(): number {
     return (this.#options.now ?? Date.now)();
   }
 }
 
 /**
- * Re-root only when needed. `purpose: "bearer"` (default) keeps any live root
- * of the same kind, space and Node that covers `expiresAt`. `purpose:
- * "policy"` additionally needs a `kv+share-decrypt` root: it throws unless the
- * flag is on and the Node enforces, and re-roots when the current root is
- * `kv`; it never hands back a `kv` root. A re-root costs one approval, uses a
- * new key and requests the kind's cap minus {@link SHARE_ROOT_REQUEST_MARGIN_MS}.
+ * Re-root only when needed: keep a live root of the same kind, space and
+ * Node that covers `expiresAt`; otherwise mint one new root (one approval)
+ * with a new key, requesting the kind's cap minus
+ * {@link SHARE_ROOT_REQUEST_MARGIN_MS}.
  *
- * - Links and policies signed under the old root stay valid until their own
- *   expiry; keep the old root (and its key) to revoke them (REVIEW-D3 V2-5).
+ * - Links signed under the old root stay valid until their own expiry; keep
+ *   the old root (and its key) to revoke them (REVIEW-D3 V2-5).
  * - Concurrent calls each re-root (two approvals, and one orphaned root if
  *   both write the same store slot): callers serialize, e.g. with a lock.
  * - A revoked root still "covers" here: re-root when `/delegate` answers
@@ -739,7 +585,6 @@ export class ShareRoot {
 export async function ensureShareRoot(input: {
   readonly current?: ShareRoot;
   readonly expiresAt: Date;
-  readonly purpose?: "bearer" | "policy";
   readonly owner: ShareRootOwnerAuthority;
   readonly spaceId: string;
   readonly nodeOrigin: string;
@@ -748,20 +593,14 @@ export async function ensureShareRoot(input: {
 }): Promise<{ readonly root: ShareRoot; readonly rerooted: boolean }> {
   const options = input.options ?? {};
   const kind = options.kind ?? "share";
-  const purpose = input.purpose ?? "bearer";
   const now = (options.now ?? Date.now)();
   const nodeOrigin = requireNodeOrigin(input.nodeOrigin);
   const lifetime = PROFILES[kind].maxLifetimeMs - SHARE_ROOT_REQUEST_MARGIN_MS;
   if (input.expiresAt.getTime() - now > Math.min(lifetime, SHARE_ROOT_LINK_MAX_LIFETIME_MS)) throw new ShareRootError("lifetime-exceeds-cap", "no share root can cover this expiry");
-  if (purpose === "policy") {
-    if (options.shareRootPolicyRoots !== true || kind !== "share") throw new ShareRootError("policy-roots-disabled", "share root policy roots are disabled");
-    if (!await (options.policyOwnerModeProbe ?? defaultPolicyOwnerModeProbe).isEnforced(nodeOrigin)) throw new ShareRootError("policy-roots-not-enforced-by-node", "the Node does not advertise owner-authority mode enforce");
-  }
   const { current } = input;
-  if (
-    current !== undefined && current.kind === kind && current.spaceId === input.spaceId && current.nodeOrigin === nodeOrigin
-    && current.covers(input.expiresAt, now) && (purpose === "bearer" || current.policyCapable)
-  ) return { root: current, rerooted: false };
+  if (current !== undefined && current.kind === kind && current.spaceId === input.spaceId && current.nodeOrigin === nodeOrigin && current.covers(input.expiresAt, now)) {
+    return { root: current, rerooted: false };
+  }
   const factory = input.keyFactory ?? (() => createDelegatedShareKey({ extractable: false }));
   const root = await ShareRoot.create({
     owner: input.owner,
@@ -775,8 +614,5 @@ export async function ensureShareRoot(input: {
     },
     options,
   });
-  if (purpose === "policy" && !root.policyCapable) {
-    throw new ShareRootError("policy-roots-not-enforced-by-node", "the Node stopped advertising enforce while re-rooting; the new root is kv-only", { rootCid: root.cid });
-  }
   return { root, rerooted: true };
 }

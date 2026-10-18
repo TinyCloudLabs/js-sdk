@@ -1,35 +1,48 @@
 /**
- * TC-1423 D3 slice 2: the owner's `:share` network and per-share grants
- * against a real local Node.
+ * TC-1423 D3: per-share grants on per-share encryption networks against a
+ * real local Node (PERSHARE-NETWORK design v2).
  *
- *   TC_TEST_SERVER=http://127.0.0.1:<port> bun test share-grant-live.test.ts
+ *   TC_TEST_SERVER=http://127.0.0.1:<port> [TC_NODE_LABEL=n1b|n4p] bun test share-grant-live.test.ts
  *
- * Proves, with approvals counted on the owner wallet:
- * - `ensureShareNetwork` creates the owner-owned `:share` network with one
- *   approval, then costs nothing;
- * - a view grant (one approval) lets its fresh per-share key read and decrypt
- *   exactly its key and nothing else, and refuses put; an edit grant adds put
- *   on its own key only;
- * - the per-share key registers its share's Policy/v3 policy through
- *   `publishAuthority` (no further approval);
- * - a `kv+share-decrypt` share root decrypts on the same network;
- * - an owner revoke of one grant (one approval) cuts that share's key only.
+ * Proves, with approvals counted:
+ * - one approval per share; the per-share key creates `share-<shareId>` and
+ *   registers the share's policy with no further approval;
+ * - the key decrypts its own share only: refused on another share's network,
+ *   on `:share` and on `:default`; it cannot create another network, and a
+ *   retired network cannot be re-created;
+ * - retiring the network (0 approvals) cuts decrypt at the next request, for
+ *   the key and for a recipient session delegated from it; kv stays; a
+ *   recipient cannot retire;
+ * - `publishAuthority` refuses registration on a retired network; the Node
+ *   itself refuses only with N1b (`content-source-network-invalid`);
+ * - revoke = retire + one owner SIWE; a TC-1428 version path; a shareId
+ *   that is not network-safe costs no approval; owner read-back of an edit
+ *   share is one approval;
+ * - owner kill-all controls: sized by bytes, imported by the Node at full
+ *   size, retire every network, then revoke grants (per-grant owner
+ *   fallback where the Node refuses the control).
  * No key material is logged.
  */
-import { beforeAll, describe, expect, test } from "bun:test";
-import { x25519 } from "@noble/curves/ed25519";
+import { beforeAll, describe, expect, setDefaultTimeout, test } from "bun:test";
+import { x25519, ed25519 } from "@noble/curves/ed25519";
 import { sha256 } from "@noble/hashes/sha256";
 import { PrivateKeySigner, TinyCloudNode, type TinyCloudNodeConfig } from "@tinycloud/node-sdk";
 import { base64Decode, base64Encode, canonicalHashHex, canonicalizeEncryptionJson, hexEncode, type InlineEncryptedEnvelope } from "@tinycloud/sdk-services";
-import { canonicalize, signCompactUcanAuthorization, toBase64Url } from "@tinycloud/share-envelope";
-import { createDelegatedShareKey, prepareAddressedShare, publishAddressedShare, type DelegatedShareKey } from "@tinycloud/share-sdk";
-import { ShareGrant, ShareRoot, ensureShareNetwork, type PolicyOwnerModeProbe, type ShareKeySigner } from "@tinycloud/share-sdk/share-root";
+import { canonicalize, didKeyFromEd25519PublicKey, signCompactUcanAuthorization } from "@tinycloud/share-envelope";
+import { createDelegatedShareKey, prepareAddressedShare, publishAddressedShare, type AddressedPublishAuthority, type DelegatedShareKey } from "@tinycloud/share-sdk";
+import {
+  SHARE_CONTROL_HEADER_BUDGET_BYTES, ShareGrant, openEditShare, perShareNetworkIdFor, planShareControlBatches, revokeShareGrant, runShareControlBatch,
+  signShareKeyDelegation, type ShareGrantAccess, type ShareKeySigner,
+} from "@tinycloud/share-sdk/share-root";
 import { Wallet } from "ethers";
 import { checkServerHealth, SERVER_URL } from "./setup";
 
 const DAY = 86_400_000;
 const PREFIX = "xyz.tinycloud.share/shares/";
+const NODE_LABEL = process.env.TC_NODE_LABEL ?? "release";
 const seconds = (ms: number) => Math.floor(ms / 1000);
+// Real Node (debug builds): a 34-network control is ~70 sequential requests, beyond bun's 5 s default.
+setDefaultTimeout(60_000);
 
 class CountingSigner extends PrivateKeySigner {
   approvals = 0;
@@ -40,15 +53,11 @@ class CountingSigner extends PrivateKeySigner {
 }
 
 const wallet = new CountingSigner(Wallet.createRandom().privateKey.slice(2));
-const owner = new TinyCloudNode({
+const nodeConfig = (extra: Partial<TinyCloudNodeConfig> = {}) => new TinyCloudNode({
   host: SERVER_URL, autoBootstrapAccount: false, tinycloudFallbackHosts: [SERVER_URL], autoDiscoverLocalNode: false,
-  enablePublicSpace: false, domain: "share.test", signer: wallet, prefix: "applications", autoCreateSpace: true,
-} satisfies Partial<TinyCloudNodeConfig>);
-const enforcingStub: PolicyOwnerModeProbe = { isEnforced: async () => true, observe: () => {} };
-const id = crypto.randomUUID();
-const VIEW_PATH = `${PREFIX}${id}/view.md`;
-const EDIT_PATH = `${PREFIX}${id}/edit.md`;
-const SIBLING = `${PREFIX}${id}/other.md`;
+  enablePublicSpace: false, domain: "share.test", signer: wallet, prefix: "applications", ...extra,
+});
+const owner = nodeConfig({ autoCreateSpace: true });
 let spaceId: string;
 let ownerDid: string;
 let nodeDid: string;
@@ -56,11 +65,11 @@ let shareNetwork: string;
 let defaultNetwork: string;
 let envShare: InlineEncryptedEnvelope;
 let envDefault: InlineEncryptedEnvelope;
-let viewGrant: ShareGrant;
-let viewKey: DelegatedShareKey;
-let editGrant: ShareGrant;
-let editKey: DelegatedShareKey;
 const approvalsUsed: Record<string, number> = {};
+
+interface LiveShare { id: string; path: string; grant: ShareGrant; key: DelegatedShareKey; env?: InlineEncryptedEnvelope }
+let view: LiveShare;
+let edit: LiveShare;
 
 async function counted<T>(label: string, run: () => Promise<T>): Promise<T> {
   const before = wallet.approvals;
@@ -68,6 +77,8 @@ async function counted<T>(label: string, run: () => Promise<T>): Promise<T> {
   approvalsUsed[label] = (approvalsUsed[label] ?? 0) + wallet.approvals - before;
   return result;
 }
+
+const newShareId = () => crypto.randomUUID();
 
 async function post(path: string, authorization: string, body?: string, contentType = "application/json") {
   const response = await fetch(`${SERVER_URL}${path}`, { method: "POST", headers: { Authorization: authorization, ...(body === undefined ? {} : { "content-type": contentType }) }, ...(body === undefined ? {} : { body }) });
@@ -81,6 +92,20 @@ async function invoke(signer: ShareKeySigner, proof: string, path: string, actio
     notBefore: now, expiresAt: now + 60, nonce: `urn:uuid:${crypto.randomUUID()}`, sign: signer.sign,
   });
   return post("/invoke", invocation.authorization, body, "text/markdown");
+}
+
+/** A network-admin invocation signed outside the SDK (what any key holder could send). */
+async function networkAdmin(signer: ShareKeySigner, proof: string, networkId: string, action: "network.create" | "network.revoke") {
+  const name = networkId.slice(networkId.lastIndexOf(":") + 1);
+  const owner = networkId.slice("urn:tinycloud:encryption:".length, networkId.lastIndexOf(":"));
+  const body = action === "network.create" ? canonicalize({ name, ownerDid: owner, threshold: { n: 1, t: 1 } }) : canonicalize({});
+  const now = seconds(Date.now());
+  const invocation = await signCompactUcanAuthorization({
+    issuerDid: signer.did, audienceDid: nodeDid, attenuation: { [networkId]: { [`tinycloud.encryption/${action}`]: [{}] } },
+    facts: [{ type: "tinycloud.encryption.network-admin/v1", targetNode: nodeDid, networkId, bodyHash: hexEncode(sha256(new TextEncoder().encode(body))), action: `tinycloud.encryption/${action}` }],
+    proofs: [proof], notBefore: now, expiresAt: now + 60, nonce: `urn:uuid:${crypto.randomUUID()}`, sign: signer.sign,
+  });
+  return action === "network.create" ? post("/encryption/networks", invocation.authorization, body) : post(`/encryption/networks/${encodeURIComponent(networkId)}/revoke`, invocation.authorization);
 }
 
 /** Decrypt with a key-signed invocation (as Share's recipient client does); plaintext or HTTP status. */
@@ -111,6 +136,62 @@ async function decryptWith(signer: ShareKeySigner, proof: string, envelope: Inli
 
 const authority = () => ({ ownerDid, createOwnerDelegation: (params: Parameters<TinyCloudNode["createOwnerDelegation"]>[0]) => owner.createOwnerDelegation(params) });
 
+async function encryptTo(network: string, text: string): Promise<InlineEncryptedEnvelope> {
+  const result = await owner.encryption.encryptToNetwork(network, new TextEncoder().encode(text), { metadata: { contentType: "text/markdown" } });
+  if (!result.ok) throw new Error(`encrypt failed on ${network.split(":").pop()}`);
+  return result.data;
+}
+
+/** prepare (0) -> approve (1) -> ensureNetwork (0) -> encrypt + store, as the publish order says. */
+async function liveShare(label: string, access: ShareGrantAccess, path?: (id: string) => string): Promise<LiveShare> {
+  const id = newShareId();
+  const sharePath = path?.(id) ?? `${PREFIX}${id}/${access}.md`;
+  let key: DelegatedShareKey | undefined;
+  const pending = await counted(`${label}-prepare`, () => ShareGrant.prepare({
+    owner: authority(), spaceId, nodeOrigin: SERVER_URL, shareId: id, path: sharePath, access, expiresAt: new Date(Date.now() + 7 * DAY),
+    keyFactory: async () => (key = await createDelegatedShareKey({ extractable: false })),
+  }));
+  expect(pending.row.state).toBe("pending");
+  const grant = await counted(`${label}-grant`, () => pending.approve());
+  expect(await counted(`${label}-network`, () => grant.ensureNetwork())).toBe(perShareNetworkIdFor(ownerDid, id));
+  const env = await encryptTo(grant.networkId, `secret ${label}`);
+  await owner.kv.put(sharePath, new TextEncoder().encode(canonicalize(env)), { contentType: "application/vnd.tinycloud.encrypted-envelope+json" });
+  return { id, path: sharePath, grant, key: key!, env };
+}
+
+/** Publish the addressed share through `authority`; reports whether the Node registered the policy. */
+async function register(share: LiveShare, authorityFor: (registerPolicy: AddressedPublishAuthority["registerPolicy"]) => AddressedPublishAuthority) {
+  const storedBytes = new TextEncoder().encode(canonicalize(share.env!));
+  const policyActions = ["tinycloud.kv/get", "tinycloud.kv/metadata"] as ("tinycloud.kv/get" | "tinycloud.kv/metadata")[];
+  const prepared = prepareAddressedShare({ target: { kind: "email", address: "alice@example.com" }, actions: ["read"], policyActions, filename: "view.md" });
+  const contentSource = {
+    shareId: share.id, kvResource: share.grant.resource, selector: "exact" as const, encryptionNetwork: share.env!.networkId,
+    encryptedSymmetricKeyDigestHex: share.env!.encryptedSymmetricKeyHash, keyVersion: share.env!.keyVersion, mode: "immutable" as const,
+    initialCiphertextDigestHex: hexEncode(sha256(storedBytes)),
+  };
+  share.grant.assertContentSource(contentSource);
+  let registered: string | undefined;
+  let error: string | undefined;
+  try {
+    await publishAddressedShare({
+      shareId: share.id, shareOrigin: "https://share.test", nodeOrigin: SERVER_URL, nodeAudience: nodeDid, enforcerDid: nodeDid, spaceId,
+      target: prepared.target, resource: { kind: "exact", path: share.path }, actions: ["read"], policyActions, contentSource,
+      ...(prepared.credentialRequirement === undefined ? {} : { credentialRequirement: prepared.credentialRequirement }),
+      filename: "view.md", mediaType: "text/markdown", byteLength: 10, expiresAt: new Date(Date.now() + 5 * DAY),
+      authority: authorityFor(async (request) => { const receipt = await owner.registerPolicy(request); registered = receipt.policyCid; return receipt; }),
+    });
+  } catch (caught) {
+    // A local Node is http, and the v3 envelope requires an https node origin; registration happens before that step.
+    error = String(caught instanceof Error ? caught.message : caught).slice(0, 160);
+  }
+  return { registered, error };
+}
+
+function childKey(): ShareKeySigner {
+  const secret = ed25519.utils.randomPrivateKey();
+  return { did: didKeyFromEd25519PublicKey(ed25519.getPublicKey(secret)), sign: async (bytes) => ed25519.sign(bytes, secret) };
+}
+
 beforeAll(async () => {
   await checkServerHealth();
   nodeDid = (await (await fetch(`${SERVER_URL}/info`)).json() as { nodeId: string }).nodeId;
@@ -118,137 +199,180 @@ beforeAll(async () => {
   const session = owner.restorableSession!;
   spaceId = session.spaceId;
   ownerDid = `did:pkh:eip155:${session.chainId}:${session.address}`;
-  defaultNetwork = `urn:tinycloud:encryption:${ownerDid}:default`;
+  const lower = session.address.toLowerCase();
+  shareNetwork = `urn:tinycloud:encryption:did:pkh:eip155:${session.chainId}:${lower}:share`;
+  defaultNetwork = `urn:tinycloud:encryption:did:pkh:eip155:${session.chainId}:${lower}:default`;
+  // Fixtures only: the old owner-wide `:share` network and `:default`, to prove a per-share key reaches neither.
+  const networkAdminNode = nodeConfig({
+    includeAccountRegistryPermissions: false,
+    manifest: { app_id: "xyz.tinycloud.share", name: "Owner network admin", space: "applications", defaults: false, includePublicSpace: false,
+      permissions: [{ service: "tinycloud.encryption", path: shareNetwork, actions: ["network.create"], skipPrefix: true }] },
+  });
+  await networkAdminNode.signIn();
+  await networkAdminNode.ensureEncryptionNetwork("share");
   await owner.ensureEncryptionNetwork("default");
-  for (const path of [VIEW_PATH, EDIT_PATH, SIBLING]) await owner.kv.put(path, `# ${path}`);
+  envShare = await encryptTo(shareNetwork, "secret on share");
+  envDefault = await encryptTo(defaultNetwork, "secret on default");
 }, 120_000);
 
-describe("the owner's :share network", () => {
-  test("is created once by the owner (one approval), then reused for free", async () => {
-    const first = await counted("network-create", () => ensureShareNetwork({ owner: authority(), spaceId, nodeOrigin: SERVER_URL }));
-    const second = await counted("network-reuse", () => ensureShareNetwork({ owner: authority(), spaceId, nodeOrigin: SERVER_URL }));
-    shareNetwork = first.networkId;
-    const descriptor = await (await fetch(`${SERVER_URL}/encryption/networks/${encodeURIComponent(shareNetwork)}`)).json() as { descriptor?: { ownerDid: string; state: string } };
-    console.log("[share-grant] network", JSON.stringify({ first: first.approvals, second: second.approvals, owner: descriptor.descriptor?.ownerDid === ownerDid, state: descriptor.descriptor?.state }));
-    expect([first.approvals, second.approvals]).toEqual([1, 0]);
-    expect(approvalsUsed).toMatchObject({ "network-create": 1, "network-reuse": 0 });
-    expect(descriptor.descriptor?.ownerDid.toLowerCase()).toBe(ownerDid.toLowerCase());
-    const encrypt = async (network: string) => {
-      const result = await owner.encryption.encryptToNetwork(network, new TextEncoder().encode(`secret on ${network.split(":").pop()}`));
-      if (!result.ok) throw new Error(`encrypt failed on ${network.split(":").pop()}`);
-      return result.data;
-    };
-    envShare = await encrypt(shareNetwork);
-    envDefault = await encrypt(defaultNetwork);
-  });
-});
-
-describe("per-share grants", () => {
-  test("each grant costs one approval and goes to a fresh non-extractable key", async () => {
-    viewGrant = await counted("view-grant", () => ShareGrant.create({
-      owner: authority(), spaceId, nodeOrigin: SERVER_URL, path: VIEW_PATH, access: "view", expiresAt: new Date(Date.now() + 7 * DAY),
-      keyFactory: async () => (viewKey = await createDelegatedShareKey({ extractable: false })),
-    }));
-    editGrant = await counted("edit-grant", () => ShareGrant.create({
-      owner: authority(), spaceId, nodeOrigin: SERVER_URL, path: EDIT_PATH, access: "edit", expiresAt: new Date(Date.now() + 7 * DAY),
-      keyFactory: async () => (editKey = await createDelegatedShareKey({ extractable: false })),
-    }));
-    expect(approvalsUsed).toMatchObject({ "view-grant": 1, "edit-grant": 1 });
-    expect(viewKey.cryptoKey.extractable).toBe(false);
-    expect(viewGrant.keyDid).not.toBe(editGrant.keyDid);
+describe("per-share grants and networks", () => {
+  test("one approval per share; the key creates its own network for free", async () => {
+    view = await liveShare("view", "view");
+    edit = await liveShare("edit", "edit");
+    const descriptor = await (await fetch(`${SERVER_URL}/encryption/networks/${encodeURIComponent(view.grant.networkId)}`)).json() as { descriptor?: Record<string, unknown> };
+    console.log("[pershare] create", JSON.stringify({ approvals: approvalsUsed, descriptor: { ...descriptor.descriptor, ownerMatches: String(descriptor.descriptor?.ownerDid).toLowerCase() === ownerDid.toLowerCase() } }));
+    expect(approvalsUsed).toMatchObject({ "view-prepare": 0, "view-grant": 1, "view-network": 0, "edit-prepare": 0, "edit-grant": 1, "edit-network": 0 });
+    expect(view.key.cryptoKey.extractable).toBe(false);
+    expect(view.grant.keyDid).not.toBe(edit.grant.keyDid);
+    expect(view.grant.networkId).not.toBe(edit.grant.networkId);
   });
 
-  test("the Node holds each per-share key to its exact key and access", async () => {
+  test("the key decrypts its own share only, on its exact key", async () => {
+    const otherNetwork = perShareNetworkIdFor(ownerDid, newShareId());
     const results = {
-      view: {
-        get: (await invoke(viewKey, viewGrant.cid, VIEW_PATH, "tinycloud.kv/get")).status,
-        metadata: (await invoke(viewKey, viewGrant.cid, VIEW_PATH, "tinycloud.kv/metadata")).status,
-        put: (await invoke(viewKey, viewGrant.cid, VIEW_PATH, "tinycloud.kv/put", "# overwritten")).status,
-        getSibling: (await invoke(viewKey, viewGrant.cid, SIBLING, "tinycloud.kv/get")).status,
-        getEditShare: (await invoke(viewKey, viewGrant.cid, EDIT_PATH, "tinycloud.kv/get")).status,
-        list: (await invoke(viewKey, viewGrant.cid, `${PREFIX}${id}`, "tinycloud.kv/list")).status,
-        decryptShare: await decryptWith(viewKey, viewGrant.cid, envShare),
-        decryptDefault: await decryptWith(viewKey, viewGrant.cid, envDefault),
-      },
-      edit: {
-        put: (await invoke(editKey, editGrant.cid, EDIT_PATH, "tinycloud.kv/put", "# edited")).status,
-        get: (await invoke(editKey, editGrant.cid, EDIT_PATH, "tinycloud.kv/get")).status,
-        putViewShare: (await invoke(editKey, editGrant.cid, VIEW_PATH, "tinycloud.kv/put", "# overwritten")).status,
-        putSibling: (await invoke(editKey, editGrant.cid, SIBLING, "tinycloud.kv/put", "# overwritten")).status,
-      },
+      get: (await invoke(view.key, view.grant.cid, view.path, "tinycloud.kv/get")).status,
+      metadata: (await invoke(view.key, view.grant.cid, view.path, "tinycloud.kv/metadata")).status,
+      put: (await invoke(view.key, view.grant.cid, view.path, "tinycloud.kv/put", "# overwritten")).status,
+      getEditShare: (await invoke(view.key, view.grant.cid, edit.path, "tinycloud.kv/get")).status,
+      decryptOwn: await decryptWith(view.key, view.grant.cid, view.env!),
+      decryptOtherShare: await decryptWith(view.key, view.grant.cid, edit.env!),
+      decryptShareNetwork: await decryptWith(view.key, view.grant.cid, envShare),
+      decryptDefault: await decryptWith(view.key, view.grant.cid, envDefault),
+      createOtherNetwork: (await networkAdmin(view.key, view.grant.cid, otherNetwork, "network.create")).status,
+      recreateOwnNetwork: (await networkAdmin(view.key, view.grant.cid, view.grant.networkId, "network.create")).status,
+      retireOtherShare: (await networkAdmin(view.key, view.grant.cid, edit.grant.networkId, "network.revoke")).status,
+      editPut: (await invoke(edit.key, edit.grant.cid, edit.path, "tinycloud.kv/put", canonicalize(edit.env!))).status,
     };
-    console.log("[share-grant] node scope", JSON.stringify(results));
-    expect(results).toEqual({
-      view: { get: 200, metadata: 200, put: 401, getSibling: 401, getEditShare: 401, list: 401, decryptShare: "secret on share", decryptDefault: expect.any(Number) },
-      edit: { put: 200, get: 200, putViewShare: 401, putSibling: 401 },
-    });
-    expect(results.view.decryptDefault).toBeGreaterThanOrEqual(400);
+    console.log("[pershare] scope", JSON.stringify(results));
+    expect(results).toMatchObject({ get: 200, metadata: 200, put: 401, getEditShare: 401, decryptOwn: "secret view", recreateOwnNetwork: 409, editPut: 200 });
+    for (const status of [results.decryptOtherShare, results.decryptShareNetwork, results.decryptDefault, results.createOtherNetwork, results.retireOtherShare]) {
+      expect(status).toBeNumber();
+      expect(Number(status)).toBeGreaterThanOrEqual(400);
+    }
   });
 
-  test("the per-share key registers its share's policy without another approval", async () => {
+  test("the per-share key registers its share's policy with no approval, after a fresh active check", async () => {
     const before = wallet.approvals;
-    const plaintext = new TextEncoder().encode("# addressed");
-    const encrypted = await owner.encryption.encryptToNetwork(shareNetwork, plaintext, { metadata: { contentType: "text/markdown" } });
-    if (!encrypted.ok) throw new Error("source encryption failed");
-    const storedBytes = new TextEncoder().encode(canonicalize(encrypted.data));
-    await owner.kv.put(VIEW_PATH, storedBytes, { contentType: "application/vnd.tinycloud.encrypted-envelope+json" });
-    const shareId = toBase64Url(crypto.getRandomValues(new Uint8Array(18)));
-    const policyActions = ["tinycloud.kv/get", "tinycloud.kv/metadata"] as ("tinycloud.kv/get" | "tinycloud.kv/metadata")[];
-    const prepared = prepareAddressedShare({ target: { kind: "email", address: "alice@example.com" }, actions: ["read"], policyActions, filename: "view.md" });
-    let registered: string | undefined;
-    let error: string | undefined;
-    try {
-      await publishAddressedShare({
-        shareId, shareOrigin: "https://share.test", nodeOrigin: SERVER_URL, nodeAudience: nodeDid, enforcerDid: nodeDid, spaceId,
-        target: prepared.target, resource: { kind: "exact", path: VIEW_PATH }, actions: ["read"], policyActions,
-        contentSource: {
-          shareId, kvResource: viewGrant.resource, selector: "exact", encryptionNetwork: encrypted.data.networkId,
-          encryptedSymmetricKeyDigestHex: encrypted.data.encryptedSymmetricKeyHash, keyVersion: encrypted.data.keyVersion, mode: "immutable",
-          initialCiphertextDigestHex: hexEncode(sha256(storedBytes)),
-        },
-        ...(prepared.credentialRequirement === undefined ? {} : { credentialRequirement: prepared.credentialRequirement }),
-        filename: "view.md", mediaType: "text/markdown", byteLength: plaintext.byteLength, expiresAt: new Date(Date.now() + 5 * DAY),
-        authority: viewGrant.publishAuthority(async (request) => { const receipt = await owner.registerPolicy(request); registered = receipt.policyCid; return receipt; }),
-      });
-    } catch (caught) {
-      // A local Node is http, and the v3 envelope requires an https node origin; registration happens before that step.
-      error = String(caught instanceof Error ? caught.message : caught).slice(0, 120);
-    }
-    console.log("[share-grant] policy registration", JSON.stringify({ registered: registered !== undefined, laterStep: error }));
-    expect(registered).toBeString();
+    const outcome = await register(view, (registerPolicy) => view.grant.publishAuthority(registerPolicy));
+    console.log("[pershare] policy registration", JSON.stringify({ registered: outcome.registered !== undefined, laterStep: outcome.error }));
+    expect(outcome.registered).toBeString();
     expect(wallet.approvals).toBe(before);
   });
 
-  test("a kv+share-decrypt share root decrypts on the same owner network", async () => {
-    let rootKey: DelegatedShareKey | undefined;
-    const root = await ShareRoot.create({
-      owner: authority(), spaceId, nodeOrigin: SERVER_URL, expiresAt: new Date(Date.now() + 7 * DAY),
-      keyFactory: async () => (rootKey = await createDelegatedShareKey({ extractable: false })),
-      options: { shareRootPolicyRoots: true, policyOwnerModeProbe: enforcingStub },
-    });
-    const decrypted = await decryptWith(rootKey!, root.cid, envShare);
-    console.log("[share-grant] share root on :share", JSON.stringify({ scope: root.scope, decrypted }));
-    expect(root.scope).toBe("kv+share-decrypt");
-    expect(decrypted).toBe("secret on share");
+  test("owner read-back of an edit share is one approval to a one-hour key", async () => {
+    const reader = await counted("edit-read-back", () => openEditShare({ owner: authority(), record: edit.grant.toRecord() }));
+    const results = {
+      get: (await invoke(reader.signer, reader.cid, edit.path, "tinycloud.kv/get")).status,
+      put: (await invoke(reader.signer, reader.cid, edit.path, "tinycloud.kv/put", "x")).status,
+      decrypt: await decryptWith(reader.signer, reader.cid, edit.env!),
+      decryptOther: await decryptWith(reader.signer, reader.cid, view.env!),
+    };
+    reader.clear();
+    console.log("[pershare] edit read-back", JSON.stringify(results));
+    expect(results).toMatchObject({ get: 200, put: 401, decrypt: "secret edit" });
+    expect(Number(results.decryptOther)).toBeGreaterThanOrEqual(400);
+    expect(approvalsUsed["edit-read-back"]).toBe(1);
   });
 
-  test("an owner revoke of one grant (one approval) cuts that share's key only", async () => {
-    const revoked = await counted("grant-revoke", async () => post("/revoke", await owner.signOwnerRevocation(viewGrant.cid)));
-    const view = await invoke(viewKey, viewGrant.cid, VIEW_PATH, "tinycloud.kv/get");
+  test("retiring the network (no approval) cuts decrypt at the next request, for the key and a recipient session; recipients cannot retire", async () => {
+    const recipient = childKey();
+    const delegated = await signShareKeyDelegation({
+      key: view.key, audienceDid: recipient.did, attenuation: { [view.grant.networkId]: { "tinycloud.encryption/decrypt": [{}] } },
+      proofs: [view.grant.cid], notBefore: seconds(Date.now()) - 5, expiresAt: seconds(Date.now() + DAY),
+    });
+    expect((await post("/delegate", delegated.authorization)).status).toBe(200);
+    const recipientBefore = await decryptWith(recipient, delegated.cid, view.env!);
+    const recipientRetire = (await networkAdmin(recipient, delegated.cid, view.grant.networkId, "network.revoke")).status;
+    const retired = await counted("view-retire", () => view.grant.retireNetwork());
     const results = {
-      revoke: revoked.status,
-      viewGet: [view.status, view.text.split(":")[0]],
-      viewDecrypt: await decryptWith(viewKey, viewGrant.cid, envShare),
-      editGet: (await invoke(editKey, editGrant.cid, EDIT_PATH, "tinycloud.kv/get")).status,
-      editDecrypt: await decryptWith(editKey, editGrant.cid, envShare),
+      recipientBefore, recipientRetire, retired,
+      ownDecryptAfter: await decryptWith(view.key, view.grant.cid, view.env!),
+      recipientDecryptAfter: await decryptWith(recipient, delegated.cid, view.env!),
+      kvGetAfter: (await invoke(view.key, view.grant.cid, view.path, "tinycloud.kv/get")).status,
+      recreate: (await networkAdmin(view.key, view.grant.cid, view.grant.networkId, "network.create")).status,
+      retireAgain: await view.grant.retireNetwork(),
     };
-    console.log("[share-grant] after revoking the view grant", JSON.stringify(results), "approvals", JSON.stringify(approvalsUsed));
-    expect(results.revoke).toBe(200);
-    expect(results.viewGet[0]).toBe(401);
-    expect(String(results.viewGet[1])).toContain("delegation-revoked");
-    expect(results.viewDecrypt).toBeGreaterThanOrEqual(400);
-    expect(results.editGet).toBe(200);
-    expect(results.editDecrypt).toBe("secret on share");
-    expect(approvalsUsed["grant-revoke"]).toBe(1);
+    console.log("[pershare] retire", JSON.stringify(results));
+    expect(results).toMatchObject({ recipientBefore: "secret view", retired: "retired", kvGetAfter: 200, recreate: 409, retireAgain: "retired" });
+    expect(recipientRetire).toBeGreaterThanOrEqual(400);
+    expect(Number(results.ownDecryptAfter)).toBeGreaterThanOrEqual(400);
+    expect(Number(results.recipientDecryptAfter)).toBeGreaterThanOrEqual(400);
+    expect(approvalsUsed["view-retire"]).toBe(0);
+    await expect(view.grant.ensureNetwork()).rejects.toMatchObject({ code: "network-not-active" });
+  });
+
+  test("registration on a retired network: the SDK refuses; the Node refuses only with N1b", async () => {
+    // A fresh share, never registered, so a Node-side refusal cannot be a duplicate-registration conflict.
+    const retired = await liveShare("retired", "view");
+    await retired.grant.retireNetwork();
+    const sdk = await register(retired, (registerPolicy) => retired.grant.publishAuthority(registerPolicy));
+    const raw = await register(retired, (registerPolicy) => ({ ...retired.grant.policySigner(), registerPolicy }));
+    console.log("[pershare] registration after retire", NODE_LABEL, JSON.stringify({ sdk, raw }));
+    expect(sdk.registered).toBeUndefined();
+    expect(sdk.error).toContain("share network is revoked");
+    if (NODE_LABEL === "n1b") {
+      expect(raw.registered).toBeUndefined();
+      expect(raw.error).toContain("content-source-network-invalid");
+    } else {
+      expect(raw.registered).toBeString();
+    }
+  });
+
+  test("a TC-1428 version path share; a shareId that is not network-safe costs no approval", async () => {
+    const versioned = await liveShare("version", "view", () => `xyz.tinycloud.share/artifacts/${newShareId().slice(0, 8)}/versions/1/report.md`);
+    expect((await invoke(versioned.key, versioned.grant.cid, versioned.path, "tinycloud.kv/get")).status).toBe(200);
+    expect(await decryptWith(versioned.key, versioned.grant.cid, versioned.env!)).toBe("secret version");
+    const before = wallet.approvals;
+    await expect(ShareGrant.prepare({ owner: authority(), spaceId, nodeOrigin: SERVER_URL, shareId: "Not_Network_Safe", path: `${PREFIX}Not_Network_Safe/a.md`, access: "view", expiresAt: new Date(Date.now() + DAY) }))
+      .rejects.toMatchObject({ code: "share-id-not-network-safe" });
+    expect(wallet.approvals).toBe(before);
+    expect(approvalsUsed).toMatchObject({ "version-grant": 1, "version-network": 0 });
+  });
+
+  test("revoke = retire (0 approvals) then one owner SIWE", async () => {
+    const result = await counted("edit-revoke", () => revokeShareGrant({ grant: edit.grant, owner: { signOwnerRevocation: (cid) => owner.signOwnerRevocation(cid) } }));
+    const get = await invoke(edit.key, edit.grant.cid, edit.path, "tinycloud.kv/get");
+    const results = { result, decrypt: await decryptWith(edit.key, edit.grant.cid, edit.env!), get: [get.status, get.text.split(":")[0]] };
+    console.log("[pershare] revoke", JSON.stringify(results));
+    expect(result).toEqual({ network: "retired", grant: "revoked" });
+    expect(Number(results.decrypt)).toBeGreaterThanOrEqual(400);
+    expect(results.get[0]).toBe(401);
+    expect(approvalsUsed["edit-revoke"]).toBe(1);
+  });
+});
+
+describe("owner kill-all controls", () => {
+  test("a full-size control (by bytes) is accepted by the Node", async () => {
+    const targets = Array.from({ length: 40 }, () => ({ networkId: perShareNetworkIdFor(ownerDid, newShareId()), grantCid: "bafkreihdwdcefgh4dqkjv67uzcmw7ojee6xedzdetojuzjevtenxquvyku" }));
+    const signer = { ownerDid, domain: "share.test", signMessage: (message: string) => wallet.signMessage(message) };
+    const batches = planShareControlBatches({ owner: signer, targets: targets.map(({ networkId }) => ({ networkId })), spaceIds: [spaceId] });
+    const result = await counted("control-full", () => runShareControlBatch({ owner: signer, nodeOrigin: SERVER_URL, batch: batches[0]! }));
+    console.log("[pershare] full control", JSON.stringify({ batches: batches.map((batch) => [batch.targets.length, batch.headerBytes]), budget: SHARE_CONTROL_HEADER_BUDGET_BYTES, networks: result.networks.length, absent: result.networks.filter((entry) => entry.result === "absent").length }));
+    expect(batches[0]!.headerBytes).toBeLessThanOrEqual(SHARE_CONTROL_HEADER_BUDGET_BYTES);
+    expect(result.networks.every((entry) => entry.result === "absent")).toBe(true);
+    expect(approvalsUsed["control-full"]).toBe(1);
+  });
+
+  test("one control retires every network first, then revokes the grants (per-grant owner fallback where refused)", async () => {
+    const shares = [await liveShare("k1", "view"), await liveShare("k2", "view"), await liveShare("k3", "edit")];
+    const signer = { ownerDid, domain: "share.test", signMessage: (message: string) => wallet.signMessage(message) };
+    const [batch, ...rest] = planShareControlBatches({ owner: signer, targets: shares.map((share) => ({ networkId: share.grant.networkId, grantCid: share.grant.cid })), spaceIds: [spaceId] });
+    expect(rest).toHaveLength(0);
+    const result = await counted("control-kill", () => runShareControlBatch({ owner: signer, nodeOrigin: SERVER_URL, batch: batch!, revokeFallback: { signOwnerRevocation: (cid) => owner.signOwnerRevocation(cid) } }));
+    const after = await Promise.all(shares.map(async (share) => ({
+      decrypt: await decryptWith(share.key, share.grant.cid, share.env!),
+      get: (await invoke(share.key, share.grant.cid, share.path, "tinycloud.kv/get")).status,
+    })));
+    const fallbacks = result.grants.filter((entry) => entry.result === "revoked-by-owner").length;
+    console.log("[pershare] kill-all", NODE_LABEL, JSON.stringify({ headerBytes: batch!.headerBytes, networks: result.networks.map((entry) => entry.result), grants: result.grants.map((entry) => [entry.result, entry.status]), approvals: approvalsUsed["control-kill"], after }));
+    expect(result.networks.map((entry) => entry.result)).toEqual(["retired", "retired", "retired"]);
+    expect(result.grants.every((entry) => entry.result !== "refused")).toBe(true);
+    if (NODE_LABEL === "n4p") expect(fallbacks).toBe(0);
+    expect(approvalsUsed["control-kill"]).toBe(1 + fallbacks);
+    for (const entry of after) {
+      expect(Number(entry.decrypt)).toBeGreaterThanOrEqual(400);
+      expect(entry.get).toBe(401);
+    }
+    console.log("[pershare] approvals", JSON.stringify(approvalsUsed));
   });
 });
