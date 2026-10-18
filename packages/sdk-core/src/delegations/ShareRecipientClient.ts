@@ -79,7 +79,11 @@ function redactedCode(error: unknown): string {
   if (error instanceof ShareConflict) return error.code;
   const code = error && typeof error === "object" && "code" in error ? (error as { readonly code?: unknown }).code : undefined;
   if (typeof code !== "string") return "SHARE_INVALID";
-  if (code === ErrorCodes.KV_PRECONDITION_FAILED || code === ErrorCodes.KV_CONFLICT || code === "412") return "SHARE_CONFLICT";
+  if (code === ErrorCodes.KV_PRECONDITION_FAILED || code === "412") return "SHARE_CONFLICT";
+  // The node's retry signals: a busy node or a deadline hit before any write applied nothing, so the share is
+  // offline for now; an unknown outcome is a write that may have applied, never an invalid share or a retry hint.
+  if (code === ErrorCodes.NODE_BUSY || code === ErrorCodes.REQUEST_TIMEOUT) return "SHARE_OFFLINE";
+  if (code === ErrorCodes.OUTCOME_UNKNOWN) return "SHARE_WRITE_FAILED";
   if (code === "KV_NOT_FOUND" || code === "NOT_FOUND" || code === "404") return "SHARE_NOT_FOUND";
   if (code.includes("EXPIRED") || code === "expired") return "SHARE_EXPIRED";
   if (code.includes("REVOK")) return "SHARE_REVOKED";
@@ -365,7 +369,7 @@ export class ShareRecipientClient {
           if (portableDelegation !== undefined && kv !== undefined) {
             const result = await kv.put(resolvedPath, bytes, { contentType: input.contentType ?? envelope.content.mimeType, ifMatch: input.etag });
             if (!result.ok) {
-              if (result.error.code === ErrorCodes.KV_PRECONDITION_FAILED || result.error.code === ErrorCodes.KV_CONFLICT) throw new ShareConflict(resolvedPath, result.error.meta?.etag as string | undefined);
+              if (result.error.code === ErrorCodes.KV_PRECONDITION_FAILED) throw new ShareConflict(resolvedPath, result.error.meta?.etag as string | undefined);
               throw result.error;
             }
             return { etag: result.data.headers.etag };
@@ -373,7 +377,7 @@ export class ShareRecipientClient {
           if (policySession !== undefined) return this.nativeSave(envelope, policySession, resolvedPath, bytes, input);
           const result = await kv!.put(resolvedPath, bytes, { contentType: input.contentType ?? envelope.content.mimeType, ifMatch: input.etag });
           if (!result.ok) {
-            if (result.error.code === ErrorCodes.KV_PRECONDITION_FAILED || result.error.code === ErrorCodes.KV_CONFLICT) throw new ShareConflict(resolvedPath, result.error.meta?.etag as string | undefined);
+            if (result.error.code === ErrorCodes.KV_PRECONDITION_FAILED) throw new ShareConflict(resolvedPath, result.error.meta?.etag as string | undefined);
             throw result.error;
           }
           return { etag: result.data.headers.etag };
