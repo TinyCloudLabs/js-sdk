@@ -4,7 +4,9 @@
 // Owner wallet approvals per action (TC-1423 D3):
 // - `:share` network (`ensureShareNetwork`): 1, once per owner; 0 when it exists.
 // - Share root (`ShareRoot.create` / a re-root in `ensureShareRoot`): 1.
-// - Bearer link under a root (`signBearerLink`): 0.
+// - Bearer link under a root (`publishRootBearerLink`): 0.
+// - Revoke of one bearer link by the share key (`revokeRootBearerLink`): 0;
+//   by the owner (owner SIWE `POST /revoke`): 1.
 // - Per-share grant (`ShareGrant.create`; every email/domain and edit share
 //   while the Node does not advertise `enforce`): 1 per share. Its policy
 //   registration through `publishAuthority`: 0.
@@ -29,3 +31,4 @@ export type { ShareKeyDelegationInput, ShareKeySigner } from "./share-key-signer
 export { decodeOwnerRootCacao, ownerRootCacaoCid, type DecodedOwnerRootCacao } from "./owner-root-cacao.js";
 export { ShareGrant, type ShareGrantAccess, type ShareGrantRecord } from "./share-grant.js";
 export { ensureShareNetwork, shareNetworkIdFor, type ShareNetworkResult } from "./share-network.js";
+export { publishRootBearerLink, revokeRootBearerLink, type RootBearerLink } from "./share-root-link.js";
