@@ -1,18 +1,15 @@
 /**
  * TC-1423 D3 slice 1: ShareRoot against a real local Node (REVIEW-D3 V2-3,
- * the H1 check on the build path, plus the kv-only-until-enforce rule).
+ * the H1 check on the build path). The root is kv/bearer only and never
+ * decrypts; addressed shares use per-share grants (share-grant-live).
  *
  *   TC_TEST_SERVER=http://127.0.0.1:<port> bun test share-root-live.test.ts
  *
  * Proves:
- * - one approval mints a root; on a Node that does not advertise
- *   owner-authority `enforce` (every Node today) it is kv-only, and the Node
- *   grants it exactly kv get + metadata on the share prefix;
- * - the Node refuses a Policy/v3 registration signed by a kv-only share key
- *   (signed outside ShareRoot, as anyone holding the key could), while the
- *   same publish under a `kv+share-decrypt` root is accepted (positive
- *   control; that root is forced here with a stub probe, since no local Node
- *   advertises `enforce`);
+ * - one approval mints a root, and the Node grants it exactly kv get +
+ *   metadata on the share prefix (no decrypt on `:share` or `:default`);
+ * - the Node refuses a Policy/v3 registration signed by the root's key
+ *   (signed outside ShareRoot, as anyone holding the key could);
  * - `capabilities/read` is refused to the root where a holder of it succeeds;
  * - a bearer link signed outside WASM by the non-extractable key works;
  * - revoking the login session leaves the root alive; an owner SIWE revoke of
@@ -27,7 +24,7 @@ import { signCompactUcanRootAuthorization } from "@tinycloud/sdk-core";
 import { base64Decode, base64Encode, canonicalHashHex, canonicalizeEncryptionJson, hexEncode, type InlineEncryptedEnvelope } from "@tinycloud/sdk-services";
 import { canonicalize, didKeyFromEd25519PublicKey, signCompactUcanAuthorization, toBase64Url } from "@tinycloud/share-envelope";
 import { createDelegatedShareKey, prepareAddressedShare, publishAddressedShare, type AddressedOwnerRootInput, type AddressedPublishAuthority, type DelegatedShareKey } from "@tinycloud/share-sdk";
-import { ShareRoot, signShareKeyDelegation, type PolicyOwnerModeProbe, type ShareKeySigner } from "@tinycloud/share-sdk/share-root";
+import { ShareRoot, signShareKeyDelegation, type ShareKeySigner } from "@tinycloud/share-sdk/share-root";
 import { Wallet } from "ethers";
 import { checkServerHealth, SERVER_URL } from "./setup";
 
@@ -58,8 +55,6 @@ const mkNode = (extra: Partial<TinyCloudNodeConfig> = {}) => new TinyCloudNode({
 });
 
 const owner = mkNode({ autoCreateSpace: true });
-/** Stands in for a Node advertising `enforce` (none does yet), to build the positive control. */
-const enforcingStub: PolicyOwnerModeProbe = { isEnforced: async () => true, observe: () => {} };
 let spaceId: string;
 let ownerDid: string;
 let nodeDid: string;
@@ -74,8 +69,6 @@ let envShare: InlineEncryptedEnvelope;
 let envDefault: InlineEncryptedEnvelope;
 let root: ShareRoot;
 let shareKey: DelegatedShareKey;
-let policyRoot: ShareRoot;
-let policyKey: DelegatedShareKey;
 
 /** A link key is bearer material by design (it travels in the link); generated per test. */
 function linkKey(): ShareKeySigner {
@@ -252,32 +245,22 @@ beforeAll(async () => {
 
   const authority = { ownerDid, createOwnerDelegation: (params: Parameters<TinyCloudNode["createOwnerDelegation"]>[0]) => owner.createOwnerDelegation(params) };
   const before = wallet.approvals;
-  // The real default probe: this Node advertises no `enforce`, so the root is kv-only.
   root = await ShareRoot.create({
     owner: authority, spaceId, nodeOrigin: SERVER_URL, expiresAt: new Date(Date.now() + 37 * DAY),
     keyFactory: async () => (shareKey = await createDelegatedShareKey({ extractable: false })),
-    options: { shareRootPolicyRoots: true },
   });
   expect(wallet.approvals - before).toBe(1);
-  policyRoot = await ShareRoot.create({
-    owner: authority, spaceId, nodeOrigin: SERVER_URL, expiresAt: new Date(Date.now() + 37 * DAY),
-    keyFactory: async () => (policyKey = await createDelegatedShareKey({ extractable: false })),
-    options: { shareRootPolicyRoots: true, policyOwnerModeProbe: enforcingStub },
-  });
-  console.log(`[share-root] node ${nodeDid.slice(0, 24)}… kv root ${root.cid} (${root.scope}), control root ${policyRoot.cid} (${policyRoot.scope})`);
+  console.log(`[share-root] node ${nodeDid.slice(0, 24)}… root ${root.cid}`);
 }, 120_000);
 
 describe("ShareRoot on a local Node", () => {
-  test("without an advertised enforce mode the root is kv-only, non-extractable and lasts 37 days", async () => {
-    expect(root.scope).toBe("kv");
-    expect(policyRoot.scope).toBe("kv+share-decrypt");
+  test("the root is non-extractable and lasts 37 days", async () => {
     expect(shareKey.cryptoKey.extractable).toBe(false);
     expect(root.keyDid).toBe(shareKey.did);
     expect(Math.round((root.expiresAt.getTime() - Date.now()) / DAY)).toBe(37);
-    await expect(root.policyRootSigner()).rejects.toMatchObject({ code: "root-not-policy-capable" });
   });
 
-  test("the Node grants the kv-only root exactly kv get/metadata in the prefix", async () => {
+  test("the Node grants the root exactly kv get/metadata in the prefix, and no decrypt", async () => {
     const results = {
       getIn: (await invoke(shareKey, root.cid, kv(P1), "tinycloud.kv/get")).status,
       metadataIn: (await invoke(shareKey, root.cid, kv(P1), "tinycloud.kv/metadata")).status,
@@ -287,16 +270,13 @@ describe("ShareRoot on a local Node", () => {
       listPrefix: (await invoke(shareKey, root.cid, kv(PREFIX), "tinycloud.kv/list")).status,
       decryptShare: await decryptWith(shareKey, root.cid, envShare),
       decryptDefault: await decryptWith(shareKey, root.cid, envDefault),
-      controlDecryptShare: await decryptWith(policyKey, policyRoot.cid, envShare),
-      controlDecryptDefault: await decryptWith(policyKey, policyRoot.cid, envDefault),
     };
     console.log("[share-root] root scope", JSON.stringify(results));
     expect(results).toEqual({
       getIn: 200, metadataIn: 200, getOutside: 401, putIn: 401, deleteIn: 401, listPrefix: 401,
       decryptShare: expect.any(Number), decryptDefault: expect.any(Number),
-      controlDecryptShare: "secret on share", controlDecryptDefault: expect.any(Number),
     });
-    for (const status of [results.decryptShare, results.decryptDefault, results.controlDecryptDefault]) expect(status).toBeGreaterThanOrEqual(400);
+    for (const status of [results.decryptShare, results.decryptDefault]) expect(status).toBeGreaterThanOrEqual(400);
   });
 
   test("capabilities/read: a holder gets 200 at <space>/capabilities/all, the share root 401", async () => {
@@ -314,14 +294,12 @@ describe("ShareRoot on a local Node", () => {
     expect(rootRead.text).toContain("Unauthorized Action");
   });
 
-  test("the Node refuses a policy registered by the kv-only share key, and accepts the same publish under the decrypt-bearing root", async () => {
+  test("the Node refuses a policy registered by the root's key", async () => {
     const before = wallet.approvals;
     const refused = await registerEmailShare(keyHolderAuthority(shareKey));
-    const accepted = await registerEmailShare({ ...(await policyRoot.policyRootSigner()), registerPolicy: (request) => owner.registerPolicy(request) });
-    console.log("[share-root] policy registration", JSON.stringify({ kvOnlyKey: refused, decryptRoot: { registered: accepted.registered !== undefined } }));
+    console.log("[share-root] policy registration", JSON.stringify({ rootKey: refused }));
     expect(refused.registered).toBeUndefined();
     expect(refused.error).toContain("HTTP 403 - policy-owner-not-authorized");
-    expect(accepted.registered).toBeString();
     expect(wallet.approvals).toBe(before);
   });
 
