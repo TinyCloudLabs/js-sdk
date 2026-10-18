@@ -74,3 +74,16 @@ describe("registry verdict vectors", () => {
     });
   }
 });
+
+describe("classifyRegistryLookup cost", () => {
+  // A backtracking trim took 4-7 s on this body; the linear trim takes well under 1 ms.
+  it("classifies a 64 KiB 404 with a long inner whitespace run in linear time", async () => {
+    const vector = vectorFile.vectors.find((entry) => entry.name === "unavailable-not-found-long-inner-whitespace");
+    if (vector === undefined) throw new Error("vector missing");
+    const response = toResponse(vector.response);
+    const started = performance.now();
+    const verdict = await classifyRegistryLookup(vector.subject, response);
+    expect(performance.now() - started).toBeLessThan(250);
+    expect(verdict.status).toBe("unavailable");
+  });
+});

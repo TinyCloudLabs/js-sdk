@@ -10,8 +10,10 @@
  */
 
 import { ed25519 } from "@noble/curves/ed25519";
+import { secp256k1 } from "@noble/curves/secp256k1";
 import { sha512 } from "@noble/hashes/sha512";
 import { bases } from "multiformats/basics";
+import { verifyMessage } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { canonicalLocationPayload, type LocationRecordPayload } from "../../src/location";
 import { REGISTRY_LOOKUP_MAX_BODY_BYTES, REGISTRY_NOT_FOUND_BODY } from "../../src/registry-verdict";
@@ -19,7 +21,7 @@ import { REGISTRY_LOOKUP_MAX_BODY_BYTES, REGISTRY_NOT_FOUND_BODY } from "../../s
 const OUT = new URL("./registry-verdict-v1.json", import.meta.url);
 const UPDATED_AT = "2026-10-18T00:00:00.000Z";
 const MAX = REGISTRY_LOOKUP_MAX_BODY_BYTES;
-const SECP256K1_N = 0xfffffffffffffffffffffffffffffffebaae6dedaf48a03bbfd25e8cd0364141n;
+const SECP256K1_N = secp256k1.CURVE.n;
 const ED25519_L = 2n ** 252n + 27742317777372353535851937790883648493n;
 
 // Test-only keys. The first and the seed match location.test.ts.
@@ -83,6 +85,11 @@ const v = sig.slice(130);
 const flippedV = v === "1b" ? "1c" : "1b";
 const highS = (SECP256K1_N - s).toString(16).padStart(64, "0");
 const yParity = v === "1b" ? "00" : "01";
+// The malleated (r, n - s, v ^ 1) signature still recovers the owner, so only
+// the low-s rule can reject it. Fail generation if that stops being true.
+if (!(await verifyMessage({ address: ADDRESS, message: canonicalLocationPayload(payload()), signature: `0x${r}${highS}${flippedV}` }))) {
+  throw new Error("high-s vector no longer verifies without the low-s rule");
+}
 
 // did:key signature variants of keyRecord.
 const keySig = keyRecord.signature;
@@ -215,6 +222,8 @@ for (const [name, updatedAt] of [
   ["offset-no-colon", "2026-10-18T00:00:00+0000"],
   ["no-zone", "2026-10-18T00:00:00"],
   ["lowercase-t-z", "2026-10-18t00:00:00z"],
+  ["lowercase-t-only", "2026-10-18t00:00:00Z"],
+  ["lowercase-z-only", "2026-10-18T00:00:00z"],
   ["space-separator", "2026-10-18 00:00:00Z"],
   ["date-only", "2026-10-18"],
   ["year-only", "2026"],
@@ -256,6 +265,18 @@ const hostCases: Array<[string, string, string | null]> = [
   ["ip4-leading-zero", "/ip4/01.2.3.4/tcp/80/http", null],
   ["ip4-octet-256", "/ip4/256.1.1.1/tcp/80/http", null],
   ["dns-numeric-last-label", "/dns4/1.2.3.4/tcp/443/https", null],
+  ["dns-hex-label", "/dns4/0x7f000001/tcp/80/http", null],
+  ["dns-hex-labels-dotted", "/dns4/0x7f.0x0.0x0.0x1/tcp/80/http", null],
+  ["dns-hex-last-label-empty-digits", "/dns4/node.0X/tcp/443/https", null],
+  ["dns-hex-like-last-label", "/dns4/node.0xg/tcp/443/https", "https://node.0xg"],
+  ["dns-hex-first-label", "/dns4/0x7f.example/tcp/443/https", "https://0x7f.example"],
+  ["dns-underscore", "/dns4/my_node.example/tcp/443/https", null],
+  [
+    "dns-253-chars",
+    `/dns4/${["a".repeat(63), "b".repeat(63), "c".repeat(63), "d".repeat(61)].join(".")}/tcp/443/https`,
+    `https://${["a".repeat(63), "b".repeat(63), "c".repeat(63), "d".repeat(61)].join(".")}`,
+  ],
+  ["dns-254-chars", `/dns4/${["a".repeat(63), "b".repeat(63), "c".repeat(63), "d".repeat(62)].join(".")}/tcp/443/https`, null],
   ["dns-trailing-dot", "/dns4/x.example./tcp/443/https", null],
   ["dns-leading-hyphen", "/dns4/-x.example/tcp/443/https", null],
   ["dns-non-ascii", "/dns4/bücher.example/tcp/443/https", null],
@@ -293,6 +314,14 @@ add(
 add("unregistered-registry-not-found", OWNER, null, NOT_FOUND, unregistered);
 add("unregistered-not-found-did-key", KEY_SUBJECT, null, NOT_FOUND, unregistered);
 add("unregistered-not-found-outer-whitespace", OWNER, null, http(404, ` \t\r\n${REGISTRY_NOT_FOUND_BODY}\r\n\t `), unregistered);
+add(
+  "unavailable-not-found-long-inner-whitespace",
+  OWNER,
+  null,
+  http(404, ["x", { repeat: " \t\r\n", count: 16250 }, "x"]),
+  unavailable("malformed-response"),
+);
+add("registered-escaped-solidus", OWNER, null, http(200, okBody.replaceAll("/", "\\/")), registered(5, ownerHosts));
 add("unavailable-not-found-after-registered", OWNER, 0, NOT_FOUND, unavailable("not-found-after-registered"));
 for (const [name, body] of [
   ["inner-whitespace", '{ "error": "location record not found" }'],
@@ -515,7 +544,7 @@ const file = {
     "record.subject must equal the input subject exactly, else subject-mismatch.",
     "Signed bytes: UTF-8 of JSON.stringify({version, subject, multiaddrs, updated_at, sequence}) in that key order (ECMAScript JSON serialization). did:pkh: EIP-191 personal_sign recovering the subject's address (EOA only); signature is 0x followed by 130 hex digits of either case encoding r || s || v with 1 <= r < n, 1 <= s <= n/2 (low-s), v in {0, 1, 27, 28}. did:key: Ed25519 per RFC 8032 with strict decoding (A and R canonical, y < p; S < L; A not of small order) and the cofactored group equation [8]SB = [8]R + [8]kA; signature is exactly 86 base64url characters, no padding, final 4 bits ignored. Any failure is invalid-signature.",
     "rememberedSequence not null and record.sequence < rememberedSequence -> rollback. Equal is accepted.",
-    "registered.hosts: one host {urls:[origin], source:\"offchain\"} per record multiaddr, in record order, no deduplication, for entries matching exactly /(ip4|ip6|dns|dns4|dns6)/<host>/tcp/<port>/(http|https|tls/http) with port 1-65535 without leading zeros. ip4 host: dotted quad, octets 0-255 without leading zeros. ip6 host: characters [0-9A-Fa-f:.] containing ':' that parse as an IPv6 address. dns hosts: ASCII LDH labels of 1-63 characters, no leading or trailing hyphen, total <= 253, no trailing dot, last label not all digits. Scheme: http for http, https for https and tls/http. origin is the WHATWG URL origin of scheme://host:port (lowercased host, compressed IPv6 in brackets, default port omitted). Other entries are omitted. No HTTPS, address-class or identity filtering.",
+    "registered.hosts: one host {urls:[origin], source:\"offchain\"} per record multiaddr, in record order, no deduplication, for entries matching exactly /(ip4|ip6|dns|dns4|dns6)/<host>/tcp/<port>/(http|https|tls/http) with port 1-65535 without leading zeros. ip4 host: dotted quad, octets 0-255 without leading zeros. ip6 host: characters [0-9A-Fa-f:.] containing ':' that parse as an IPv6 address. dns hosts: ASCII LDH labels (letters, digits, hyphen; no underscore) of 1-63 characters, no leading or trailing hyphen, total <= 253, no trailing dot, and a last label that is neither all decimal digits nor 0x/0X followed by zero or more hex digits (either would make a URL parser read the name as IPv4). Scheme: http for http, https for https and tls/http. origin is the WHATWG URL origin of scheme://host:port (lowercased host, compressed IPv6 in brackets, default port omitted). Other entries are omitted. No HTTPS, address-class or identity filtering.",
     "Every verdict has source \"offchain\". unregistered and unavailable have hosts [].",
   ],
   subjects: { owner: OWNER, ownerChain137: OWNER_137, other: OTHER, didKey: KEY_SUBJECT, legacyDidKey: LEGACY_KEY_SUBJECT },

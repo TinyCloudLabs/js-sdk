@@ -22,6 +22,7 @@
  */
 
 import { ed25519 } from "@noble/curves/ed25519";
+import { secp256k1 } from "@noble/curves/secp256k1";
 import { bases } from "multiformats/basics";
 import { verifyMessage } from "viem";
 import { pkhDid } from "./identity";
@@ -146,7 +147,7 @@ const MAX_JSON_DEPTH = 32;
 const JSON_SIMPLE_ESCAPES: Record<string, string> = {
   '"': '"', "\\": "\\", "/": "/", b: "\b", f: "\f", n: "\n", r: "\r", t: "\t",
 };
-const SECP256K1_N = 0xfffffffffffffffffffffffffffffffebaae6dedaf48a03bbfd25e8cd0364141n;
+const SECP256K1_N = secp256k1.CURVE.n;
 const BASE64URL = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
 const IPV4_OCTET = "(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])";
 const IPV4 = new RegExp(`^${IPV4_OCTET}(\\.${IPV4_OCTET}){3}$`);
@@ -230,7 +231,13 @@ export async function classifyRegistryLookup(
   }
 
   if (response.status === 404) {
-    if (response.body.replace(/^[ \t\n\r]+|[ \t\n\r]+$/g, "") !== REGISTRY_NOT_FOUND_BODY) {
+    // Linear-time trim: a regex anchored at `$` re-scans whitespace runs.
+    const body = response.body;
+    let start = 0;
+    let end = body.length;
+    while (start < end && " \t\n\r".includes(body[start])) start++;
+    while (end > start && " \t\n\r".includes(body[end - 1])) end--;
+    if (body.slice(start, end) !== REGISTRY_NOT_FOUND_BODY) {
       return unavailable(
         "malformed-response",
         "location registry 404 is not the registry's not-found response",
@@ -590,8 +597,13 @@ function multiaddrOrigin(address: string): string | null {
     if (!/^[0-9A-Fa-f:.]+$/.test(host) || !host.includes(":")) return null;
     authority = `[${host}]`;
   } else {
-    // A numeric last label would make a URL parser read the name as IPv4.
-    if (host.length > 253 || !DNS_NAME.test(host) || /^[0-9]+$/.test(host.slice(host.lastIndexOf(".") + 1))) {
+    // A last label that is a decimal or 0x-hex number makes a WHATWG URL
+    // parser read the whole name as IPv4.
+    if (
+      host.length > 253 ||
+      !DNS_NAME.test(host) ||
+      /^(0[xX][0-9a-fA-F]*|[0-9]+)$/.test(host.slice(host.lastIndexOf(".") + 1))
+    ) {
       return null;
     }
     authority = host;
