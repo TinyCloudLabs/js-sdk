@@ -6,7 +6,7 @@ export const SHARE_PUBLISHING_MANIFEST_REF = "builtin:share-publishing";
 /**
  * Exactly the owner-space authority `tc share` needs, in the app manifest
  * shape `tc auth login --manifest` accepts. One space (`default`), the
- * capability-read entry OpenKey requires, two KV prefixes, no delete:
+ * capability-read entry OpenKey requires, three KV prefixes, no delete:
  *
  * - `tinycloud.capabilities/read` on path `""`: required by OpenKey to sign
  *   any delegation (its consent page shows it as required, not uncheckable);
@@ -21,6 +21,12 @@ export const SHARE_PUBLISHING_MANIFEST_REF = "builtin:share-publishing";
  *   - `get` + `metadata` back the Policy/v3 root that grants recipients read,
  *     and `get` signs `--notify` delivery authorization;
  *   - `list` backs `--action list` (recipient listing of a `--prefix` share).
+ * - `artifacts/` (`--artifact`, TC-1428):
+ *   - `put` writes write-once `artifacts/<aid>/versions/<n>/` files (`If-None-Match: *`) and their manifest;
+ *   - `get` mints the pinned share's read-only child delegation and reads back a version on a 412;
+ *   - `metadata` backs the Policy/v3 root for addressed artifact shares;
+ *   - `list` finds the next version number and backs `share versions`.
+ *   Profiles signed in before this entry need `auth login --device --manifest builtin:share-publishing` again.
  *
  * Not requested:
  * - `del`: no `tc share` command deletes stored sources.
@@ -50,6 +56,12 @@ export const SHARE_PUBLISHING_MANIFEST = {
     {
       service: "tinycloud.kv",
       path: "shares/",
+      skipPrefix: true,
+      actions: ["tinycloud.kv/get", "tinycloud.kv/metadata", "tinycloud.kv/put", "tinycloud.kv/list"],
+    },
+    {
+      service: "tinycloud.kv",
+      path: "artifacts/",
       skipPrefix: true,
       actions: ["tinycloud.kv/get", "tinycloud.kv/metadata", "tinycloud.kv/put", "tinycloud.kv/list"],
     },
