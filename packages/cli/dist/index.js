@@ -231,11 +231,11 @@ function warningLine(warnings) {
   const subject = warnings.length === 1 ? "A stored grant was" : `${warnings.length} stored grants were`;
   return `${subject} not used (${which}). Approve access again when a command needs it; remove the old grant with ${CLI_NAME2} auth grants remove <cid>.`;
 }
-function outputError(code3, message, hint, details = {}) {
+function outputError(code4, message, hint, details = {}) {
   const { meta, warnings = [], setup, recovery, progress } = details;
   if (!shouldOutputJson()) {
     process.stderr.write(
-      `${theme.error("\u2717")} ${theme.label(code3)}: ${message}
+      `${theme.error("\u2717")} ${theme.label(code4)}: ${message}
 `
     );
     if (hint) {
@@ -248,7 +248,7 @@ function outputError(code3, message, hint, details = {}) {
 `);
   } else {
     const payload = {
-      error: { code: code3, message }
+      error: { code: code4, message }
     };
     if (hint) payload.error.hint = hint;
     if (recovery) payload.error.recovery = recovery;
@@ -270,11 +270,11 @@ function operationWarnings(value) {
   if (!Array.isArray(value)) return [];
   return value.flatMap((warning) => {
     if (warning === null || typeof warning !== "object") return [];
-    const { code: code3, reason, grantCid } = warning;
-    if (typeof code3 !== "string" || !WARNING_CODE.test(code3) || typeof reason !== "string" || !WARNING_REASON.test(reason)) {
+    const { code: code4, reason, grantCid } = warning;
+    if (typeof code4 !== "string" || !WARNING_CODE.test(code4) || typeof reason !== "string" || !WARNING_REASON.test(reason)) {
       return [];
     }
-    return [{ code: code3, reason, ...typeof grantCid === "string" && DELEGATION_CID.test(grantCid) ? { grantCid } : {} }];
+    return [{ code: code4, reason, ...typeof grantCid === "string" && DELEGATION_CID.test(grantCid) ? { grantCid } : {} }];
   });
 }
 function isInteractive() {
@@ -304,17 +304,17 @@ function storageRejection(error) {
   let node = error;
   for (let depth = 0; depth < MAX_CAUSE_DEPTH && typeof node === "object" && node !== null; depth += 1) {
     const record = node;
-    let code3;
+    let code4;
     if (record.code === "STORAGE_QUOTA_EXCEEDED" || record.code === "STORAGE_LIMIT_REACHED") {
-      code3 = record.code;
+      code4 = record.code;
     } else if (record.code !== void 0) {
       return void 0;
     } else if (isStorageStatus(record)) {
-      code3 = storageCodeFromText(record.message);
+      code4 = storageCodeFromText(record.message);
     }
-    if (code3) {
+    if (code4) {
       const account = accountTotals(record) ?? accountTotals(record.meta) ?? accountTotals(record.metadata);
-      return account ? { code: code3, account } : { code: code3 };
+      return account ? { code: code4, account } : { code: code4 };
     }
     node = record.cause;
   }
@@ -397,22 +397,22 @@ function setActiveProfileName(name) {
 }
 function nodeRetryError(error) {
   if (typeof error !== "object" || error === null) return void 0;
-  const { code: code3, meta, metadata } = error;
-  if (code3 !== "NODE_BUSY" && code3 !== "REQUEST_TIMEOUT" && code3 !== "OUTCOME_UNKNOWN") return void 0;
+  const { code: code4, meta, metadata } = error;
+  if (code4 !== "NODE_BUSY" && code4 !== "REQUEST_TIMEOUT" && code4 !== "OUTCOME_UNKNOWN") return void 0;
   const details = typeof meta === "object" && meta !== null ? meta : typeof metadata === "object" && metadata !== null ? metadata : {};
   const retryAfterMs = details.retryAfterMs;
   const wait = typeof retryAfterMs === "number" && Number.isFinite(retryAfterMs) && retryAfterMs >= 0 ? `in ${Math.max(1, Math.ceil(retryAfterMs / 1e3))} s` : "shortly";
-  if (code3 === "OUTCOME_UNKNOWN") {
+  if (code4 === "OUTCOME_UNKNOWN") {
     return new CLIError(
-      code3,
+      code4,
       "Outcome unknown: the node may have applied the write. Check before retrying.",
       ExitCode.NODE_ERROR,
       { ...details, hint: "Read the data back before running the command again; repeating a write that already applied can duplicate it." }
     );
   }
   return new CLIError(
-    code3,
-    code3 === "NODE_BUSY" ? `The node is busy, try again ${wait}.` : `The node timed out before applying anything, try again ${wait}.`,
+    code4,
+    code4 === "NODE_BUSY" ? `The node is busy, try again ${wait}.` : `The node timed out before applying anything, try again ${wait}.`,
     ExitCode.NODE_ERROR,
     details
   );
@@ -623,9 +623,9 @@ var init_errors = __esm({
     init_storage();
     init_warnings();
     CLIError = class extends Error {
-      constructor(code3, message, exitCode = ExitCode.ERROR, metadata) {
+      constructor(code4, message, exitCode = ExitCode.ERROR, metadata) {
         super(message);
-        this.code = code3;
+        this.code = code4;
         this.exitCode = exitCode;
         this.metadata = metadata;
         this.name = "CLIError";
@@ -2937,8 +2937,8 @@ function edwards(params, extraOpts = {}) {
       const y2 = modP(y * y);
       const u = modP(y2 - _1n4);
       const v = modP(d * y2 - a);
-      let { isValid: isValid3, value: x } = uvRatio2(u, v);
-      if (!isValid3)
+      let { isValid: isValid4, value: x } = uvRatio2(u, v);
+      if (!isValid4)
         throw new Error("bad point: invalid y coordinate");
       const isXOdd = (x & _1n4) === _1n4;
       const isLastByteOdd = (lastByte & 128) !== 0;
@@ -3551,7 +3551,7 @@ var init_ed25519 = __esm({
         const u1_2 = mod2(u1 * u1);
         const u2_2 = mod2(u2 * u2);
         const v = mod2(a * d * u1_2 - u2_2);
-        const { isValid: isValid3, value: I } = invertSqrt(mod2(v * u2_2));
+        const { isValid: isValid4, value: I } = invertSqrt(mod2(v * u2_2));
         const Dx = mod2(I * u2);
         const Dy = mod2(I * Dx * v);
         let x = mod2((s + s) * Dx);
@@ -3559,7 +3559,7 @@ var init_ed25519 = __esm({
           x = mod2(-x);
         const y = mod2(u1 * Dy);
         const t = mod2(x * y);
-        if (!isValid3 || isNegativeLE(t, P) || y === _0n5)
+        if (!isValid4 || isNegativeLE(t, P) || y === _0n5)
           throw new Error("invalid ristretto255 encoding 2");
         return new __RistrettoPoint(new ed25519.Point(x, y, _1n5, t));
       }
@@ -3723,10 +3723,10 @@ var init_dist = __esm({
       [REPLICA_ERROR] = true;
       code;
       detail;
-      constructor(code3, message, detail, options) {
+      constructor(code4, message, detail, options) {
         super(message, options);
         this.name = "ReplicaError";
-        this.code = code3;
+        this.code = code4;
         if (detail !== void 0) this.detail = detail;
       }
     };
@@ -3996,10 +3996,10 @@ var init_profile_gate = __esm({
       [REPLICA_ERROR2] = true;
       code;
       detail;
-      constructor(code3, message, detail, options) {
+      constructor(code4, message, detail, options) {
         super(message, options);
         this.name = "ReplicaError";
-        this.code = code3;
+        this.code = code4;
         if (detail !== void 0) this.detail = detail;
       }
     };
@@ -4020,8 +4020,8 @@ import { dirname as dirname3, join as join22, resolve as resolve2 } from "path";
 import { constants as fsConstants3 } from "fs";
 import { lstat, open as open3, readdir as readdir3, rmdir, unlink } from "fs/promises";
 import { join as join7, parse, resolve, sep } from "path";
-function isReplicaError(error, code3) {
-  return typeof error === "object" && error !== null && error[REPLICA_ERROR3] === true && (code3 === void 0 || error.code === code3);
+function isReplicaError(error, code4) {
+  return typeof error === "object" && error !== null && error[REPLICA_ERROR3] === true && (code4 === void 0 || error.code === code4);
 }
 function assertFolderPrefix3(prefix) {
   const validFolder = typeof prefix === "string" && prefix.length > 0 && !prefix.startsWith("/") && !prefix.includes("//") && prefix.endsWith("/");
@@ -4509,9 +4509,9 @@ function entryOf(row) {
 }
 function storageError(error, action) {
   if (isReplicaError(error)) return error;
-  const code3 = errnoOf(error);
+  const code4 = errnoOf(error);
   const message = error instanceof Error ? error.message : String(error);
-  if (code3 === "ENOSPC" || code3 === "EDQUOT" || /SQLITE_FULL|database or disk is full/i.test(`${String(code3)} ${message}`)) {
+  if (code4 === "ENOSPC" || code4 === "EDQUOT" || /SQLITE_FULL|database or disk is full/i.test(`${String(code4)} ${message}`)) {
     return new ReplicaError3(ReplicaErrorCode3.STORAGE_FULL, `${action}: the local disk is full.`, void 0, { cause: error });
   }
   return new ReplicaError3(ReplicaErrorCode3.STORAGE_ERROR, `${action}: ${message}`, void 0, { cause: error });
@@ -4617,10 +4617,10 @@ var init_sqlite = __esm({
       [REPLICA_ERROR3] = true;
       code;
       detail;
-      constructor(code3, message, detail, options) {
+      constructor(code4, message, detail, options) {
         super(message, options);
         this.name = "ReplicaError";
-        this.code = code3;
+        this.code = code4;
         if (detail !== void 0) this.detail = detail;
       }
     };
@@ -6605,14 +6605,14 @@ async function recoverPendingLogout(name) {
   if (report.failed.length || report.remaining) {
     throw new CLIError(
       "REPLICA_PURGE_FAILED",
-      `A durable logout is pending (${report.failed.map(({ code: code3 }) => code3).join(", ") || `${report.remaining} intents remaining`}). Network restore and replica reads remain blocked; retry this command to complete credential and replica cleanup.`,
+      `A durable logout is pending (${report.failed.map(({ code: code4 }) => code4).join(", ") || `${report.remaining} intents remaining`}). Network restore and replica reads remain blocked; retry this command to complete credential and replica cleanup.`,
       ExitCode.ERROR,
       { failed: report.failed, remaining: report.remaining }
     );
   }
 }
 function refuseRestoredGate(report) {
-  if (report.failed.some(({ code: code3 }) => code3 === "gate_restored")) {
+  if (report.failed.some(({ code: code4 }) => code4 === "gate_restored")) {
     throw new CLIError("REPLICA_GATED", RESTORED_GATE_MESSAGE, ExitCode.ERROR, { failed: report.failed });
   }
 }
@@ -7450,7 +7450,7 @@ var TC_OPTIONS_BEFORE_COURIER = `${CLI_NAME} courier takes no ${CLI_NAME} option
 init_errors();
 import { readFileSync as readFileSync2 } from "fs";
 import { CLI_NAME as CLI_NAME13 } from "@tinycloud/operations/cli-name";
-import { Command } from "commander";
+import { Command as Command2 } from "commander";
 
 // src/output/banner.ts
 init_formatter();
@@ -7555,31 +7555,16 @@ init_formatter();
 init_profiles();
 
 // src/commands/share.ts
+import { Option } from "commander";
 import { CLI_NAME as CLI_NAME12 } from "@tinycloud/operations/cli-name";
 
-// ../share-sdk/dist/index.js
-init_sha2();
-init_ed25519();
-init_blake3();
-init_ed25519();
-init_sha256();
+// ../share-sdk/dist/artifact.js
 init_sha256();
 var __defProp2 = Object.defineProperty;
 var __export2 = (target, all) => {
   for (var name in all)
     __defProp2(target, name, { get: all[name], enumerable: true });
 };
-var UNSAFE_FILENAME_CODE_POINT = /[\p{Cc}\p{Cf}\p{Cs}\u2028\u2029]/u;
-function hasUnsafeFilenameCodePoint(value) {
-  return UNSAFE_FILENAME_CODE_POINT.test(value);
-}
-function canonicalShareFilename(value) {
-  const canonical = value.normalize("NFC");
-  if (canonical.length === 0 || canonical === "." || canonical === ".." || canonical.includes("/") || canonical.includes("\\") || hasUnsafeFilenameCodePoint(canonical)) {
-    throw new TypeError("share filename is unsafe");
-  }
-  return canonical;
-}
 var external_exports = {};
 __export2(external_exports, {
   BRAND: () => BRAND,
@@ -7721,10 +7706,10 @@ var util;
       return obj[e];
     });
   };
-  util22.objectKeys = typeof Object.keys === "function" ? (obj) => Object.keys(obj) : (object4) => {
+  util22.objectKeys = typeof Object.keys === "function" ? (obj) => Object.keys(obj) : (object3) => {
     const keys = [];
-    for (const key in object4) {
-      if (Object.prototype.hasOwnProperty.call(object4, key)) {
+    for (const key in object3) {
+      if (Object.prototype.hasOwnProperty.call(object3, key)) {
         keys.push(key);
       }
     }
@@ -11214,23 +11199,23 @@ var ZodEffects = class extends ZodType {
     }
     if (effect.type === "transform") {
       if (ctx.common.async === false) {
-        const base33 = this._def.schema._parseSync({
+        const base23 = this._def.schema._parseSync({
           data: ctx.data,
           path: ctx.path,
           parent: ctx
         });
-        if (!isValid(base33))
+        if (!isValid(base23))
           return INVALID;
-        const result = effect.transform(base33.value, checkCtx);
+        const result = effect.transform(base23.value, checkCtx);
         if (result instanceof Promise) {
           throw new Error(`Asynchronous transform encountered during synchronous parse operation. Use .parseAsync instead.`);
         }
         return { status: status.value, value: result };
       } else {
-        return this._def.schema._parseAsync({ data: ctx.data, path: ctx.path, parent: ctx }).then((base33) => {
-          if (!isValid(base33))
+        return this._def.schema._parseAsync({ data: ctx.data, path: ctx.path, parent: ctx }).then((base23) => {
+          if (!isValid(base23))
             return INVALID;
-          return Promise.resolve(effect.transform(base33.value, checkCtx)).then((result) => ({
+          return Promise.resolve(effect.transform(base23.value, checkCtx)).then((result) => ({
             status: status.value,
             value: result
           }));
@@ -11652,7 +11637,7 @@ function base(ALPHABET, name) {
   var LEADER = ALPHABET.charAt(0);
   var FACTOR = Math.log(BASE) / Math.log(256);
   var iFACTOR = Math.log(256) / Math.log(BASE);
-  function encode32(source) {
+  function encode33(source) {
     if (source instanceof Uint8Array)
       ;
     else if (ArrayBuffer.isView(source)) {
@@ -11667,7 +11652,7 @@ function base(ALPHABET, name) {
       return "";
     }
     var zeroes = 0;
-    var length22 = 0;
+    var length23 = 0;
     var pbegin = 0;
     var pend = source.length;
     while (pbegin !== pend && source[pbegin] === 0) {
@@ -11679,7 +11664,7 @@ function base(ALPHABET, name) {
     while (pbegin !== pend) {
       var carry = source[pbegin];
       var i2 = 0;
-      for (var it1 = size - 1; (carry !== 0 || i2 < length22) && it1 !== -1; it1--, i2++) {
+      for (var it1 = size - 1; (carry !== 0 || i2 < length23) && it1 !== -1; it1--, i2++) {
         carry += 256 * b58[it1] >>> 0;
         b58[it1] = carry % BASE >>> 0;
         carry = carry / BASE >>> 0;
@@ -11687,10 +11672,10 @@ function base(ALPHABET, name) {
       if (carry !== 0) {
         throw new Error("Non-zero carry");
       }
-      length22 = i2;
+      length23 = i2;
       pbegin++;
     }
-    var it2 = size - length22;
+    var it2 = size - length23;
     while (it2 !== size && b58[it2] === 0) {
       it2++;
     }
@@ -11712,7 +11697,7 @@ function base(ALPHABET, name) {
       return;
     }
     var zeroes = 0;
-    var length22 = 0;
+    var length23 = 0;
     while (source[psz] === LEADER) {
       zeroes++;
       psz++;
@@ -11725,7 +11710,7 @@ function base(ALPHABET, name) {
         return;
       }
       var i2 = 0;
-      for (var it3 = size - 1; (carry !== 0 || i2 < length22) && it3 !== -1; it3--, i2++) {
+      for (var it3 = size - 1; (carry !== 0 || i2 < length23) && it3 !== -1; it3--, i2++) {
         carry += BASE * b256[it3] >>> 0;
         b256[it3] = carry % 256 >>> 0;
         carry = carry / 256 >>> 0;
@@ -11733,13 +11718,13 @@ function base(ALPHABET, name) {
       if (carry !== 0) {
         throw new Error("Non-zero carry");
       }
-      length22 = i2;
+      length23 = i2;
       psz++;
     }
     if (source[psz] === " ") {
       return;
     }
-    var it4 = size - length22;
+    var it4 = size - length23;
     while (it4 !== size && b256[it4] === 0) {
       it4++;
     }
@@ -11750,7 +11735,7 @@ function base(ALPHABET, name) {
     }
     return vch;
   }
-  function decode52(string) {
+  function decode53(string) {
     var buffer = decodeUnsafe(string);
     if (buffer) {
       return buffer;
@@ -11758,9 +11743,9 @@ function base(ALPHABET, name) {
     throw new Error(`Non-${name} character`);
   }
   return {
-    encode: encode32,
+    encode: encode33,
     decodeUnsafe,
-    decode: decode52
+    decode: decode53
   };
 }
 var src = base;
@@ -11775,9 +11760,9 @@ var Encoder = class {
     this.prefix = prefix;
     this.baseEncode = baseEncode;
   }
-  encode(bytes3) {
-    if (bytes3 instanceof Uint8Array) {
-      return `${this.prefix}${this.baseEncode(bytes3)}`;
+  encode(bytes) {
+    if (bytes instanceof Uint8Array) {
+      return `${this.prefix}${this.baseEncode(bytes)}`;
     } else {
       throw Error("Unknown type, must be binary type");
     }
@@ -11858,16 +11843,16 @@ var Codec = class {
     return this.decoder.decode(input);
   }
 };
-function from({ name, prefix, encode: encode32, decode: decode52 }) {
-  return new Codec(name, prefix, encode32, decode52);
+function from({ name, prefix, encode: encode33, decode: decode53 }) {
+  return new Codec(name, prefix, encode33, decode53);
 }
 function baseX({ name, prefix, alphabet }) {
-  const { encode: encode32, decode: decode52 } = base_x_default(alphabet, name);
+  const { encode: encode33, decode: decode53 } = base_x_default(alphabet, name);
   return from({
     prefix,
     name,
-    encode: encode32,
-    decode: (text) => coerce2(decode52(text))
+    encode: encode33,
+    decode: (text) => coerce2(decode53(text))
   });
 }
 function decode(string, alphabetIdx, bitsPerChar, name) {
@@ -12082,25 +12067,25 @@ function encodeTo(int, target, offset = 0) {
 function encodingLength(int) {
   return varint_default.encodingLength(int);
 }
-function create(code22, digest3) {
-  const size = digest3.byteLength;
+function create(code22, digest) {
+  const size = digest.byteLength;
   const sizeOffset = encodingLength(code22);
   const digestOffset = sizeOffset + encodingLength(size);
-  const bytes3 = new Uint8Array(digestOffset + size);
-  encodeTo(code22, bytes3, 0);
-  encodeTo(size, bytes3, sizeOffset);
-  bytes3.set(digest3, digestOffset);
-  return new Digest(code22, size, digest3, bytes3);
+  const bytes = new Uint8Array(digestOffset + size);
+  encodeTo(code22, bytes, 0);
+  encodeTo(size, bytes, sizeOffset);
+  bytes.set(digest, digestOffset);
+  return new Digest(code22, size, digest, bytes);
 }
 function decode4(multihash) {
-  const bytes3 = coerce2(multihash);
-  const [code22, sizeOffset] = decode3(bytes3);
-  const [size, digestOffset] = decode3(bytes3.subarray(sizeOffset));
-  const digest3 = bytes3.subarray(sizeOffset + digestOffset);
-  if (digest3.byteLength !== size) {
+  const bytes = coerce2(multihash);
+  const [code22, sizeOffset] = decode3(bytes);
+  const [size, digestOffset] = decode3(bytes.subarray(sizeOffset));
+  const digest = bytes.subarray(sizeOffset + digestOffset);
+  if (digest.byteLength !== size) {
     throw new Error("Incorrect length");
   }
-  return new Digest(code22, size, digest3, bytes3);
+  return new Digest(code22, size, digest, bytes);
 }
 function equals2(a, b) {
   if (a === b) {
@@ -12118,31 +12103,31 @@ var Digest = class {
   /**
    * Creates a multihash digest.
    */
-  constructor(code22, size, digest3, bytes3) {
+  constructor(code22, size, digest, bytes) {
     this.code = code22;
     this.size = size;
-    this.digest = digest3;
-    this.bytes = bytes3;
+    this.digest = digest;
+    this.bytes = bytes;
   }
 };
-function format(link3, base22) {
-  const { bytes: bytes3, version: version2 } = link3;
+function format(link3, base23) {
+  const { bytes, version: version2 } = link3;
   switch (version2) {
     case 0:
-      return toStringV0(bytes3, baseCache(link3), base22 ?? base58btc.encoder);
+      return toStringV0(bytes, baseCache(link3), base23 ?? base58btc.encoder);
     default:
-      return toStringV1(bytes3, baseCache(link3), base22 ?? base32.encoder);
+      return toStringV1(bytes, baseCache(link3), base23 ?? base32.encoder);
   }
 }
 var cache = /* @__PURE__ */ new WeakMap();
-function baseCache(cid2) {
-  const baseCache22 = cache.get(cid2);
-  if (baseCache22 == null) {
+function baseCache(cid) {
+  const baseCache23 = cache.get(cid);
+  if (baseCache23 == null) {
     const baseCache32 = /* @__PURE__ */ new Map();
-    cache.set(cid2, baseCache32);
+    cache.set(cid, baseCache32);
     return baseCache32;
   }
-  return baseCache22;
+  return baseCache23;
 }
 var CID = class _CID {
   code;
@@ -12155,12 +12140,12 @@ var CID = class _CID {
    * @param code - Code of the codec content is encoded in, see https://github.com/multiformats/multicodec/blob/master/table.csv
    * @param multihash - (Multi)hash of the of the content.
    */
-  constructor(version2, code22, multihash, bytes3) {
+  constructor(version2, code22, multihash, bytes) {
     this.code = code22;
     this.version = version2;
     this.multihash = multihash;
-    this.bytes = bytes3;
-    this["/"] = bytes3;
+    this.bytes = bytes;
+    this["/"] = bytes;
   }
   /**
    * Signalling `cid.asCID === cid` has been replaced with `cid['/'] === cid.bytes`
@@ -12202,8 +12187,8 @@ var CID = class _CID {
   toV1() {
     switch (this.version) {
       case 0: {
-        const { code: code22, digest: digest3 } = this.multihash;
-        const multihash = create(code22, digest3);
+        const { code: code22, digest } = this.multihash;
+        const multihash = create(code22, digest);
         return _CID.createV1(this.code, multihash);
       }
       case 1: {
@@ -12221,8 +12206,8 @@ var CID = class _CID {
     const unknown = other;
     return unknown != null && self.code === unknown.code && self.version === unknown.version && equals2(self.multihash, unknown.multihash);
   }
-  toString(base22) {
-    return format(this, base22);
+  toString(base23) {
+    return format(this, base23);
   }
   toJSON() {
     return { "/": format(this) };
@@ -12253,12 +12238,12 @@ var CID = class _CID {
     if (value instanceof _CID) {
       return value;
     } else if (value["/"] != null && value["/"] === value.bytes || value.asCID === value) {
-      const { version: version2, code: code22, multihash, bytes: bytes3 } = value;
-      return new _CID(version2, code22, multihash, bytes3 ?? encodeCID(version2, code22, multihash.bytes));
+      const { version: version2, code: code22, multihash, bytes } = value;
+      return new _CID(version2, code22, multihash, bytes ?? encodeCID(version2, code22, multihash.bytes));
     } else if (value[cidSymbol] === true) {
       const { version: version2, multihash, code: code22 } = value;
-      const digest3 = decode4(multihash);
-      return _CID.create(version2, code22, digest3);
+      const digest = decode4(multihash);
+      return _CID.create(version2, code22, digest);
     } else {
       return null;
     }
@@ -12268,11 +12253,11 @@ var CID = class _CID {
    * @param code - Code of the codec content is encoded in, see https://github.com/multiformats/multicodec/blob/master/table.csv
    * @param digest - (Multi)hash of the of the content.
    */
-  static create(version2, code22, digest3) {
+  static create(version2, code22, digest) {
     if (typeof code22 !== "number") {
       throw new Error("String codecs are no longer supported");
     }
-    if (!(digest3.bytes instanceof Uint8Array)) {
+    if (!(digest.bytes instanceof Uint8Array)) {
       throw new Error("Invalid digest");
     }
     switch (version2) {
@@ -12280,12 +12265,12 @@ var CID = class _CID {
         if (code22 !== DAG_PB_CODE) {
           throw new Error(`Version 0 CID must use dag-pb (code: ${DAG_PB_CODE}) block encoding`);
         } else {
-          return new _CID(version2, code22, digest3, digest3.bytes);
+          return new _CID(version2, code22, digest, digest.bytes);
         }
       }
       case 1: {
-        const bytes3 = encodeCID(version2, code22, digest3.bytes);
-        return new _CID(version2, code22, digest3, bytes3);
+        const bytes = encodeCID(version2, code22, digest.bytes);
+        return new _CID(version2, code22, digest, bytes);
       }
       default: {
         throw new Error("Invalid version");
@@ -12295,8 +12280,8 @@ var CID = class _CID {
   /**
    * Simplified version of `create` for CIDv0.
    */
-  static createV0(digest3) {
-    return _CID.create(0, DAG_PB_CODE, digest3);
+  static createV0(digest) {
+    return _CID.create(0, DAG_PB_CODE, digest);
   }
   /**
    * Simplified version of `create` for CIDv1.
@@ -12304,8 +12289,8 @@ var CID = class _CID {
    * @param code - Content encoding format code.
    * @param digest - Multihash of the content.
    */
-  static createV1(code22, digest3) {
-    return _CID.create(1, code22, digest3);
+  static createV1(code22, digest) {
+    return _CID.create(1, code22, digest);
   }
   /**
    * Decoded a CID from its binary representation. The byte array must contain
@@ -12314,12 +12299,12 @@ var CID = class _CID {
    * An error will be thrown if the bytes provided do not contain a valid
    * binary representation of a CID.
    */
-  static decode(bytes3) {
-    const [cid2, remainder] = _CID.decodeFirst(bytes3);
+  static decode(bytes) {
+    const [cid, remainder] = _CID.decodeFirst(bytes);
     if (remainder.length !== 0) {
       throw new Error("Incorrect length");
     }
-    return cid2;
+    return cid;
   }
   /**
    * Decoded a CID from its binary representation at the beginning of a byte
@@ -12330,17 +12315,17 @@ var CID = class _CID {
    * will be a zero-length byte array if the provided bytes only contained a
    * binary CID representation.
    */
-  static decodeFirst(bytes3) {
-    const specs = _CID.inspectBytes(bytes3);
+  static decodeFirst(bytes) {
+    const specs = _CID.inspectBytes(bytes);
     const prefixSize = specs.size - specs.multihashSize;
-    const multihashBytes = coerce2(bytes3.subarray(prefixSize, prefixSize + specs.multihashSize));
+    const multihashBytes = coerce2(bytes.subarray(prefixSize, prefixSize + specs.multihashSize));
     if (multihashBytes.byteLength !== specs.multihashSize) {
       throw new Error("Incorrect length");
     }
-    const digestBytes3 = multihashBytes.subarray(specs.multihashSize - specs.digestSize);
-    const digest3 = new Digest(specs.multihashCode, specs.digestSize, digestBytes3, multihashBytes);
-    const cid2 = specs.version === 0 ? _CID.createV0(digest3) : _CID.createV1(specs.codec, digest3);
-    return [cid2, bytes3.subarray(specs.size)];
+    const digestBytes = multihashBytes.subarray(specs.multihashSize - specs.digestSize);
+    const digest = new Digest(specs.multihashCode, specs.digestSize, digestBytes, multihashBytes);
+    const cid = specs.version === 0 ? _CID.createV0(digest) : _CID.createV1(specs.codec, digest);
+    return [cid, bytes.subarray(specs.size)];
   }
   /**
    * Inspect the initial bytes of a CID to determine its properties.
@@ -12354,8 +12339,8 @@ var CID = class _CID {
   static inspectBytes(initialBytes) {
     let offset = 0;
     const next = () => {
-      const [i, length22] = decode3(initialBytes.subarray(offset));
-      offset += length22;
+      const [i, length23] = decode3(initialBytes.subarray(offset));
+      offset += length23;
       return i;
     };
     let version2 = next();
@@ -12382,69 +12367,69 @@ var CID = class _CID {
    * throw an error if encoding of the CID is not compatible with supplied (or
    * a default decoder).
    */
-  static parse(source, base22) {
-    const [prefix, bytes3] = parseCIDtoBytes(source, base22);
-    const cid2 = _CID.decode(bytes3);
-    if (cid2.version === 0 && source[0] !== "Q") {
+  static parse(source, base23) {
+    const [prefix, bytes] = parseCIDtoBytes(source, base23);
+    const cid = _CID.decode(bytes);
+    if (cid.version === 0 && source[0] !== "Q") {
       throw Error("Version 0 CID string must not include multibase prefix");
     }
-    baseCache(cid2).set(prefix, source);
-    return cid2;
+    baseCache(cid).set(prefix, source);
+    return cid;
   }
 };
-function parseCIDtoBytes(source, base22) {
+function parseCIDtoBytes(source, base23) {
   switch (source[0]) {
     // CIDv0 is parsed differently
     case "Q": {
-      const decoder = base22 ?? base58btc;
+      const decoder = base23 ?? base58btc;
       return [
         base58btc.prefix,
         decoder.decode(`${base58btc.prefix}${source}`)
       ];
     }
     case base58btc.prefix: {
-      const decoder = base22 ?? base58btc;
+      const decoder = base23 ?? base58btc;
       return [base58btc.prefix, decoder.decode(source)];
     }
     case base32.prefix: {
-      const decoder = base22 ?? base32;
+      const decoder = base23 ?? base32;
       return [base32.prefix, decoder.decode(source)];
     }
     case base36.prefix: {
-      const decoder = base22 ?? base36;
+      const decoder = base23 ?? base36;
       return [base36.prefix, decoder.decode(source)];
     }
     default: {
-      if (base22 == null) {
+      if (base23 == null) {
         throw Error("To parse non base32, base36 or base58btc encoded CID multibase decoder must be provided");
       }
-      return [source[0], base22.decode(source)];
+      return [source[0], base23.decode(source)];
     }
   }
 }
-function toStringV0(bytes3, cache22, base22) {
-  const { prefix } = base22;
+function toStringV0(bytes, cache23, base23) {
+  const { prefix } = base23;
   if (prefix !== base58btc.prefix) {
-    throw Error(`Cannot string encode V0 in ${base22.name} encoding`);
+    throw Error(`Cannot string encode V0 in ${base23.name} encoding`);
   }
-  const cid2 = cache22.get(prefix);
-  if (cid2 == null) {
-    const cid22 = base22.encode(bytes3).slice(1);
-    cache22.set(prefix, cid22);
-    return cid22;
-  } else {
+  const cid = cache23.get(prefix);
+  if (cid == null) {
+    const cid2 = base23.encode(bytes).slice(1);
+    cache23.set(prefix, cid2);
     return cid2;
+  } else {
+    return cid;
   }
 }
-function toStringV1(bytes3, cache22, base22) {
-  const { prefix } = base22;
-  const cid2 = cache22.get(prefix);
-  if (cid2 == null) {
-    const cid22 = base22.encode(bytes3);
-    cache22.set(prefix, cid22);
-    return cid22;
-  } else {
+function toStringV1(bytes, cache23, base23) {
+  const { prefix } = base23;
+  const cid = cache23.get(prefix);
+  if (cid == null) {
+    const cid2 = base23.encode(bytes);
+    cache23.set(prefix, cid2);
     return cid2;
+  } else {
+    return cid;
   }
 }
 var DAG_PB_CODE = 112;
@@ -12452,27 +12437,23 @@ var SHA_256_CODE = 18;
 function encodeCID(version2, code22, multihash) {
   const codeOffset = encodingLength(version2);
   const hashOffset = codeOffset + encodingLength(code22);
-  const bytes3 = new Uint8Array(hashOffset + multihash.byteLength);
-  encodeTo(version2, bytes3, 0);
-  encodeTo(code22, bytes3, codeOffset);
-  bytes3.set(multihash, hashOffset);
-  return bytes3;
+  const bytes = new Uint8Array(hashOffset + multihash.byteLength);
+  encodeTo(version2, bytes, 0);
+  encodeTo(code22, bytes, codeOffset);
+  bytes.set(multihash, hashOffset);
+  return bytes;
 }
 var cidSymbol = /* @__PURE__ */ Symbol.for("@ipld/js-cid/CID");
 var code = 85;
 var SHA256_CODE = 18;
-async function computeCid(bytes3) {
-  const digest3 = create(SHA256_CODE, sha256(new Uint8Array(bytes3)));
-  return CID.create(1, code, digest3).toString();
-}
 function isCanonicalRawCid(cidString) {
-  let cid2;
+  let cid;
   try {
-    cid2 = CID.parse(cidString);
+    cid = CID.parse(cidString);
   } catch {
     return false;
   }
-  return cid2.version === 1 && cid2.code === code && cid2.multihash.code === SHA256_CODE && cid2.toString() === cidString;
+  return cid.version === 1 && cid.code === code && cid.multihash.code === SHA256_CODE && cid.toString() === cidString;
 }
 var base64 = rfc4648({
   prefix: "m",
@@ -12498,32 +12479,17 @@ var base64urlpad = rfc4648({
   alphabet: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_=",
   bitsPerChar: 6
 });
-function toBase64Url(bytes3) {
-  return base64url.baseEncode(bytes3);
-}
 function fromBase64Url(text) {
-  const bytes3 = base64url.baseDecode(text);
-  if (base64url.baseEncode(bytes3) !== text) {
+  const bytes = base64url.baseDecode(text);
+  if (base64url.baseEncode(bytes) !== text) {
     throw new TypeError("non-canonical base64url input");
   }
-  return bytes3;
+  return bytes;
 }
 function utf8Bytes(text) {
   return new TextEncoder().encode(text);
 }
 var ED25519_MULTICODEC_PREFIX = Uint8Array.of(237, 1);
-var PUBLIC_KEY_LENGTH = 32;
-function ed25519PublicKeyFromDidKey(did) {
-  if (!did.startsWith("did:key:")) {
-    throw new TypeError(`not a did:key: ${did}`);
-  }
-  const multibase = did.slice("did:key:".length);
-  const prefixed = base58btc.decode(multibase);
-  if (prefixed.length !== ED25519_MULTICODEC_PREFIX.length + PUBLIC_KEY_LENGTH || prefixed[0] !== ED25519_MULTICODEC_PREFIX[0] || prefixed[1] !== ED25519_MULTICODEC_PREFIX[1]) {
-    throw new TypeError("did:key does not encode an ed25519 public key");
-  }
-  return prefixed.slice(ED25519_MULTICODEC_PREFIX.length);
-}
 function decodeBase64UrlOrNull(value) {
   try {
     return fromBase64Url(value);
@@ -12716,9 +12682,6 @@ var contentMetadataSchema = external_exports.object({
   artifact: external_exports.literal("html").optional()
 }).strict();
 var deliveryEmailSchema = external_exports.string().email();
-function isEnvelopeDeliveryEmail(value) {
-  return deliveryEmailSchema.safeParse(value).success;
-}
 var unsignedShareEnvelopeV2BaseSchema = external_exports.object({
   version: external_exports.literal(2),
   shareId: external_exports.string().min(1),
@@ -12912,74 +12875,7 @@ function validateV3Invariants(value, ctx) {
 var unsignedShareEnvelopeV3Schema = unsignedShareEnvelopeV3BaseSchema.superRefine(validateV3Invariants);
 var shareEnvelopeV3Schema = unsignedShareEnvelopeV3BaseSchema.extend({ signature: signatureSchema }).strict().superRefine(validateV3Invariants);
 var ENVELOPE_AAD_LABEL = "tinycloud-share-envelope-v1";
-var SEALED_BLOB_VERSION = 1;
 var AAD = utf8Bytes(ENVELOPE_AAD_LABEL);
-var KEY_LENGTH = 32;
-var NONCE_LENGTH = 12;
-var TAG_LENGTH = 16;
-var HEADER_LENGTH = 1;
-function assertKey(key32) {
-  if (key32.length !== KEY_LENGTH) {
-    throw new TypeError(`key must be ${KEY_LENGTH} bytes, got ${key32.length}`);
-  }
-}
-async function importAesKey(key32, usage) {
-  assertKey(key32);
-  return globalThis.crypto.subtle.importKey(
-    "raw",
-    key32,
-    "AES-GCM",
-    false,
-    [usage]
-  );
-}
-function generateKey() {
-  return globalThis.crypto.getRandomValues(new Uint8Array(KEY_LENGTH));
-}
-async function seal(plaintextBytes, key32) {
-  const { nonce, ciphertext } = await encryptEnvelope(plaintextBytes, key32);
-  const blob = new Uint8Array(HEADER_LENGTH + nonce.length + ciphertext.length);
-  blob[0] = SEALED_BLOB_VERSION;
-  blob.set(nonce, HEADER_LENGTH);
-  blob.set(ciphertext, HEADER_LENGTH + nonce.length);
-  return { blob, cid: await computeCid(blob) };
-}
-async function open6(blob, key32) {
-  if (blob.length < HEADER_LENGTH + NONCE_LENGTH + TAG_LENGTH) {
-    throw new TypeError(`sealed blob too short: ${blob.length} bytes`);
-  }
-  if (blob[0] !== SEALED_BLOB_VERSION) {
-    throw new TypeError(`unknown sealed blob version: ${blob[0]}`);
-  }
-  const nonce = blob.subarray(HEADER_LENGTH, HEADER_LENGTH + NONCE_LENGTH);
-  const ciphertext = blob.subarray(HEADER_LENGTH + NONCE_LENGTH);
-  return decryptEnvelope(nonce, ciphertext, key32);
-}
-async function encryptEnvelope(plaintextBytes, key32) {
-  const key = await importAesKey(key32, "encrypt");
-  const nonce = globalThis.crypto.getRandomValues(new Uint8Array(NONCE_LENGTH));
-  const ciphertext = new Uint8Array(
-    await globalThis.crypto.subtle.encrypt(
-      { name: "AES-GCM", iv: nonce, additionalData: AAD },
-      key,
-      plaintextBytes
-    )
-  );
-  return { nonce, ciphertext };
-}
-async function decryptEnvelope(nonce, ciphertext, key32) {
-  if (nonce.length !== NONCE_LENGTH) {
-    throw new TypeError(`nonce must be ${NONCE_LENGTH} bytes, got ${nonce.length}`);
-  }
-  const key = await importAesKey(key32, "decrypt");
-  return new Uint8Array(
-    await globalThis.crypto.subtle.decrypt(
-      { name: "AES-GCM", iv: nonce, additionalData: AAD },
-      key,
-      ciphertext
-    )
-  );
-}
 function isPlainRecord(value) {
   const proto = Object.getPrototypeOf(value);
   return proto === Object.prototype || proto === null;
@@ -13042,1912 +12938,233 @@ function serialize(value) {
 function canonicalize(value) {
   return serialize(value);
 }
-var LABEL = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
-function isCanonicalEmailDomain(value) {
-  if (value.length === 0 || value.length > 253) return false;
-  const labels = value.split(".");
-  return labels.length >= 2 && labels.every((label) => LABEL.test(label)) && !/^[0-9]+$/.test(labels.at(-1));
+var MAX_INLINE_BYTES = 256 * 1024;
+var UNSAFE_FILENAME_CODE_POINT = /[\p{Cc}\p{Cf}\p{Cs}\u2028\u2029]/u;
+function hasUnsafeFilenameCodePoint(value) {
+  return UNSAFE_FILENAME_CODE_POINT.test(value);
 }
-function canonicalMailbox(value) {
-  const email = value.trim().toLowerCase();
-  const at = email.indexOf("@");
-  if (at <= 0 || at !== email.lastIndexOf("@")) return void 0;
-  const local = email.slice(0, at);
-  const domain = email.slice(at + 1);
-  if (local.length > 64 || !/^[a-z0-9#$&'*+/=?^_`{|}~-]+(?:\.[a-z0-9#$&'*+/=?^_`{|}~-]+)*$/.test(local) || !isCanonicalEmailDomain(domain)) return void 0;
-  return Object.freeze({ email, domain });
+function canonicalShareFilename(value) {
+  const canonical = value.normalize("NFC");
+  if (canonical.length === 0 || canonical === "." || canonical === ".." || canonical.includes("/") || canonical.includes("\\") || hasUnsafeFilenameCodePoint(canonical)) {
+    throw new TypeError("share filename is unsafe");
+  }
+  return canonical;
 }
-function verifyCompactUcanAuthorization(authorization, expectedCid) {
-  if (/\s/.test(authorization)) throw new TypeError("compact Authorization contains whitespace");
-  const segments = authorization.split(".");
-  if (segments.length !== 3 || segments.some((segment) => segment.length === 0)) throw new TypeError("compact Authorization must contain three segments");
-  const [headerSegment, payloadSegment, signatureSegment] = segments;
-  const headerBytes = fromBase64Url(headerSegment);
-  const payloadBytes = fromBase64Url(payloadSegment);
-  const signature = fromBase64Url(signatureSegment);
-  const decoder = new TextDecoder("utf-8", { fatal: true });
-  const header = JSON.parse(decoder.decode(headerBytes));
-  const payload = JSON.parse(decoder.decode(payloadBytes));
-  if (canonicalize(header) !== decoder.decode(headerBytes) || canonicalize(payload) !== decoder.decode(payloadBytes)) throw new TypeError("compact Authorization JSON is not canonical");
-  assertExactKeys(header, ["alg", "jwk", "typ", "ucv"], "protected header");
-  const jwk = object(header.jwk, "protected JWK");
-  assertExactKeys(jwk, ["alg", "crv", "kty", "x"], "protected JWK");
-  if (header.alg !== "EdDSA" || header.typ !== "JWT" || header.ucv !== "0.10.0" || jwk.alg !== "EdDSA" || jwk.crv !== "Ed25519" || jwk.kty !== "OKP" || typeof jwk.x !== "string") throw new TypeError("compact Authorization header is invalid");
-  assertExactKeys(payload, ["att", "aud", "exp", "fct", "iss", "nbf", "nnc", "prf"], "UCAN payload");
-  if (typeof payload.iss !== "string" || typeof payload.aud !== "string" || typeof payload.nnc !== "string" || !Number.isInteger(payload.nbf) || !Number.isInteger(payload.exp) || payload.nbf >= payload.exp || !Array.isArray(payload.prf) || payload.prf.some((proof) => typeof proof !== "string") || !Array.isArray(payload.fct) || payload.fct.length !== 1) throw new TypeError("compact Authorization payload is invalid");
-  const principal = payload.iss.split("#", 1)[0];
-  const publicKey = ed25519PublicKeyFromDidKey(principal);
-  if (!equal(publicKey, fromBase64Url(jwk.x))) throw new TypeError("compact Authorization JWK does not bind issuer");
-  if (!ed25519.verify(signature, new TextEncoder().encode(`${headerSegment}.${payloadSegment}`), publicKey, { zip215: false })) throw new TypeError("compact Authorization signature is invalid");
-  const cid2 = CID.createV1(85, create(30, blake3(new TextEncoder().encode(authorization)))).toString();
-  if (expectedCid !== void 0 && cid2 !== expectedCid) throw new TypeError("compact Authorization CID mismatch");
-  return { authorization, cid: cid2, header, payload };
+var ARTIFACT_ROOT = "artifacts";
+var ARTIFACT_MANIFEST_NAME = "manifest.json";
+var ARTIFACT_MANIFEST_VERSION = 1;
+var ARTIFACT_MAX_PUBLISH_ATTEMPTS = 16;
+var ARTIFACT_ID = /^[a-z0-9][a-z0-9_-]{2,62}$/;
+var SHA256_HEX = /^[0-9a-f]{64}$/;
+var ArtifactError = class extends Error {
+  code;
+  constructor(code22, message, options) {
+    super(message, options);
+    this.name = "ArtifactError";
+    this.code = code22;
+  }
+};
+function sha256Hex(bytes) {
+  return Array.from(sha2562(bytes), (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
-function object(value, label) {
-  if (value === null || typeof value !== "object" || Array.isArray(value)) throw new TypeError(`${label} must be an object`);
+function newArtifactId(random = (length23) => crypto.getRandomValues(new Uint8Array(length23))) {
+  return `art_${Array.from(random(8), (byte) => byte.toString(16).padStart(2, "0")).join("")}`;
+}
+function assertArtifactId(value) {
+  if (!ARTIFACT_ID.test(value)) {
+    throw new ArtifactError("invalid-argument", "artifact id must be 3-63 characters of a-z, 0-9, '_' or '-', starting with a letter or digit");
+  }
   return value;
 }
-function assertExactKeys(value, keys, label) {
-  if (Object.keys(value).length !== keys.length || Object.keys(value).some((key) => !keys.includes(key))) throw new TypeError(`${label} has unknown or missing fields`);
+function assertVersion(value) {
+  if (!Number.isSafeInteger(value) || value < 1) throw new ArtifactError("invalid-argument", "artifact version must be a positive integer");
+  return value;
 }
-function equal(left, right) {
-  return left.length === right.length && left.every((byte, index) => byte === right[index]);
+function artifactVersionsPrefix(artifactId) {
+  return `${ARTIFACT_ROOT}/${assertArtifactId(artifactId)}/versions/`;
 }
-var ED25519_VERIFY_OPTS2 = { zip215: false };
-var ENVELOPE_V3_SIGNATURE_DOMAIN = "xyz.tinycloud.share/envelope/v3\0";
-var POLICY_V1_SIGNATURE_DOMAIN = "xyz.tinycloud.policy/policy/v1\0";
-var POLICY_V2_SIGNATURE_DOMAIN = "xyz.tinycloud.policy/policy/v2\0";
-var CONTENT_SOURCE_V1_DOMAIN = "xyz.tinycloud.policy/ContentSource/v1\0";
-var POLICY_CAPABILITY_V1_DOMAIN = "xyz.tinycloud.policy/PolicyCapability/v1\0";
-var NATIVE_PROJECTION_V1_DOMAIN = "xyz.tinycloud.policy/NativeProjection/v1\0";
-var ATTESTED_ENFORCER_V2_DOMAIN = "xyz.tinycloud.policy/AttestedEnforcerBinding/v2\0";
-function signingBytesV3(unsigned) {
-  const domain = utf8Bytes(ENVELOPE_V3_SIGNATURE_DOMAIN);
-  const body = utf8Bytes(canonicalize(unsigned));
-  const bytes3 = new Uint8Array(domain.length + body.length);
-  bytes3.set(domain);
-  bytes3.set(body, domain.length);
-  return bytes3;
+function artifactVersionResource(artifactId, version2) {
+  return `${ARTIFACT_ROOT}/${assertArtifactId(artifactId)}/versions/${assertVersion(version2)}`;
 }
-function verifyEnvelopeV3SignatureOnly(envelope) {
-  const parsed = shareEnvelopeV3Schema.parse(envelope);
-  const { signature, ...unsigned } = parsed;
-  return ed25519.verify(fromBase64Url(signature.value), sha2562(signingBytesV3(unsigned)), ed25519PublicKeyFromDidKey(signature.signerDid), ED25519_VERIFY_OPTS2);
+function artifactVersionFilePath(artifactId, version2, filename) {
+  return `${artifactVersionResource(artifactId, version2)}/${filename}`;
 }
-async function verifyEnvelopeV3(envelope, options) {
-  const parsed = shareEnvelopeV3Schema.parse(envelope);
-  if (parsed.signature.signerDid !== options.expectedSignerDid || parsed.signature.signerDid !== parsed.policy.ownerDid || !verifyEnvelopeV3SignatureOnly(parsed)) return false;
-  const { policy } = parsed;
-  const unsignedPolicy = { ...policy };
-  delete unsignedPolicy.policyId;
-  delete unsignedPolicy.signature;
-  const policySignatureDomain = policy.schema === "xyz.tinycloud.policy/policy/v2" ? POLICY_V2_SIGNATURE_DOMAIN : POLICY_V1_SIGNATURE_DOMAIN;
-  const policyDigest = sha2562(new TextEncoder().encode(`${policySignatureDomain}${canonicalize(unsignedPolicy)}`));
-  const policySignature = policy.signature;
-  if (policySignature.suite !== "Ed25519" || policySignature.signerDid !== policy.ownerDid) return false;
-  let policyPublicKey;
-  let policySignatureBytes;
-  try {
-    policyPublicKey = ed25519PublicKeyFromDidKey(policy.ownerDid);
-    policySignatureBytes = fromBase64Url(policySignature.value);
-  } catch {
-    return false;
-  }
-  if (policySignatureBytes.length !== 64 || !ed25519.verify(policySignatureBytes, policyDigest, policyPublicKey, ED25519_VERIFY_OPTS2)) return false;
-  const policyIdDigest = policyDigest;
-  if (policy.policyId !== `pol_${base32Lower(policyIdDigest)}`) return false;
-  const policyBytes = new TextEncoder().encode(canonicalize(policy));
-  if (await computeCid(policyBytes) !== parsed.policyCid) return false;
-  const sourceDigest = sha2562(new TextEncoder().encode(`${CONTENT_SOURCE_V1_DOMAIN}${canonicalize(policy.contentSource)}`));
-  if (hex(sourceDigest) !== parsed.contentSourceDigestHex) return false;
-  const sortedCapabilities = [...policy.capabilityCeiling].sort((left, right) => canonicalize(left).localeCompare(canonicalize(right)));
-  const capabilityCeilingHashHex = hex(sha2562(new TextEncoder().encode(`${POLICY_CAPABILITY_V1_DOMAIN}${canonicalize(sortedCapabilities)}`)));
-  const nativeProjection2 = sortedCapabilities.map((capability) => capability.kind === "encryption" ? { service: "tinycloud.encryption", space: capability.resource, path: capability.resource, actions: [capability.action] } : { service: "tinycloud.kv", space: capability.resource.slice(0, capability.resource.indexOf("/kv/")), path: capability.resource.split("/kv/")[1], actions: [...capability.actions], caveat: { type: "xyz.tinycloud.resource/selector", kind: capability.selector, value: capability.resource } }).sort((left, right) => canonicalize(left).localeCompare(canonicalize(right)));
-  const nativeProjectionHashHex = hex(sha2562(new TextEncoder().encode(`${NATIVE_PROJECTION_V1_DOMAIN}${canonicalize(nativeProjection2)}`)));
-  const expectedAttenuation = Object.fromEntries(sortedCapabilities.map((capability) => capability.kind === "encryption" ? [capability.resource, { [capability.action]: [{}] }] : [capability.resource, Object.fromEntries(capability.actions.map((action) => [action, [{ kind: capability.selector, type: "xyz.tinycloud.resource/selector", value: capability.resource }]]))]));
-  const kv = policy.capabilityCeiling.find((capability) => capability.kind === "kv");
-  const expectedKvActions = parsed.actions.flatMap((action) => action === "read" ? ["tinycloud.kv/get", "tinycloud.kv/metadata"] : action === "list" ? ["tinycloud.kv/list"] : ["tinycloud.kv/put"]);
-  const marker = parsed.contentSource.kvResource.indexOf("/kv/");
-  const resourceSpace = marker < 1 ? "" : parsed.contentSource.kvResource.slice(0, marker);
-  const resourcePath = marker < 1 ? "" : parsed.contentSource.kvResource.slice(marker + 4);
-  if (parsed.shareId !== parsed.contentSource.shareId || resourceSpace !== parsed.target.spaceId || resourcePath !== parsed.resource.path.replace(/\/$/, "") || parsed.resource.kind !== parsed.contentSource.selector || kv?.kind !== "kv" || expectedKvActions.some((action) => !kv.actions.includes(action)) || parsed.encryptionNetwork !== parsed.contentSource.encryptionNetwork || parsed.contentSource.keyVersion <= 0 || policy.expiresAt !== void 0 && Date.parse(parsed.expiry) > Date.parse(policy.expiresAt)) return false;
-  const binding = parsed.attestedEnforcerBinding;
-  const { signature: bindingSignature, ...unsignedBinding } = binding;
-  const expectedBindingDigestHex = hex(sha2562(new TextEncoder().encode(canonicalize({ enforcerDid: binding.enforcerDid, nodeAudience: binding.nodeAudience }))));
-  if (binding.nodeAudience !== parsed.target.nodeAudience || binding.attestationBindingDigestHex !== expectedBindingDigestHex || bindingSignature.signerDid !== binding.nodeAudience || bindingSignature.suite !== "Ed25519" || Date.parse(binding.issuedAt) > Date.now() || Date.parse(binding.expiresAt) <= Date.now() || Date.parse(binding.expiresAt) < Date.parse(parsed.expiry)) return false;
-  try {
-    const digest3 = sha2562(new TextEncoder().encode(`${ATTESTED_ENFORCER_V2_DOMAIN}${canonicalize(unsignedBinding)}`));
-    if (!ed25519.verify(fromBase64Url(bindingSignature.value), digest3, ed25519PublicKeyFromDidKey(binding.nodeAudience), ED25519_VERIFY_OPTS2)) return false;
-  } catch {
-    return false;
-  }
-  if (parsed.policyRoot.role !== "policy-authority" || parsed.enforcementRoot.role !== "policy-enforcement" || parsed.policyRoot.cid === parsed.enforcementRoot.cid) return false;
-  try {
-    const policyRoot = verifyCompactUcanAuthorization(parsed.policyRoot.authorization, parsed.policyRoot.cid);
-    const enforcementRoot = verifyCompactUcanAuthorization(parsed.enforcementRoot.authorization, parsed.enforcementRoot.cid);
-    const policyFact = policyRoot.payload.fct[0];
-    const enforcementFact = enforcementRoot.payload.fct[0];
-    const common = ["ownerDid", "policyId", "policyDigestHex", "policyCid", "contentSourceDigestHex", "capabilityCeilingHashHex", "nativeProjectionHashHex", "nodeAudience"];
-    const policyKeys = [...common, "role", "mode"];
-    const enforcementKeys = [...policyKeys, "enforcerDid"];
-    if (Object.keys(policyFact).length !== policyKeys.length || policyKeys.some((key) => !(key in policyFact)) || Object.keys(enforcementFact).length !== enforcementKeys.length || enforcementKeys.some((key) => !(key in enforcementFact)) || policyRoot.payload.prf.length !== 0 || enforcementRoot.payload.prf.length !== 0 || policyRoot.payload.iss.split("#", 1)[0] !== policy.ownerDid || enforcementRoot.payload.iss.split("#", 1)[0] !== policy.ownerDid || policyRoot.payload.nbf !== enforcementRoot.payload.nbf || policyRoot.payload.exp !== enforcementRoot.payload.exp || canonicalize(policyRoot.payload.att) !== canonicalize(expectedAttenuation) || canonicalize(enforcementRoot.payload.att) !== canonicalize(expectedAttenuation) || policyFact.role !== "policy-authority" || policyFact.mode !== "policy-source" || "enforcerDid" in policyFact || enforcementFact.role !== "policy-enforcement" || enforcementFact.mode !== "conditional-mint" || policyRoot.payload.aud !== `did:tinycloud:policy:${hex(policyIdDigest)}` || enforcementRoot.payload.aud !== binding.enforcerDid || enforcementFact.enforcerDid !== binding.enforcerDid || common.some((key) => policyFact[key] !== enforcementFact[key]) || policyFact.ownerDid !== policy.ownerDid || policyFact.policyId !== policy.policyId || policyFact.policyDigestHex !== hex(policyIdDigest) || policyFact.policyCid !== parsed.policyCid || policyFact.contentSourceDigestHex !== parsed.contentSourceDigestHex || policyFact.capabilityCeilingHashHex !== capabilityCeilingHashHex || policyFact.nativeProjectionHashHex !== nativeProjectionHashHex || policyFact.nodeAudience !== binding.nodeAudience || policyRoot.payload.exp * 1e3 < Date.parse(parsed.expiry)) return false;
-  } catch {
-    return false;
-  }
-  return true;
+function parseArtifactVersionPath(path) {
+  const match = /^artifacts\/([a-z0-9][a-z0-9_-]{2,62})\/versions\/([1-9][0-9]{0,14})\/([^/]+)$/.exec(path);
+  if (match === null) return void 0;
+  return { artifactId: match[1], version: Number(match[2]), file: match[3] };
 }
-function hex(bytes3) {
-  return [...bytes3].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+function manifestBytes(manifest) {
+  return new TextEncoder().encode(canonicalize(manifest));
 }
-function base32Lower(bytes3) {
-  const alphabet = "abcdefghijklmnopqrstuvwxyz234567";
-  let output = "";
-  let buffer = 0;
-  let bits = 0;
-  for (const byte of bytes3) {
-    buffer = buffer << 8 | byte;
-    bits += 8;
-    while (bits >= 5) {
-      output += alphabet[buffer >>> bits - 5 & 31];
-      bits -= 5;
-    }
-  }
-  if (bits > 0) output += alphabet[buffer << 5 - bits & 31];
-  return output;
-}
-var KEY_LENGTH2 = 32;
-var MAX_INLINE_BYTES = 256 * 1024;
-function assertCanonicalCid(cidString) {
-  const cid2 = CID.parse(cidString);
-  if (cid2.version !== 1 || cid2.code !== code || cid2.multihash.code !== 18 || // sha2-256 (0x12) only, at the link layer too
-  cid2.toString() !== cidString) {
-    throw new TypeError(`not a canonical CIDv1 raw sha2-256 base32 CID: ${cidString}`);
-  }
-}
-async function encodeSealedInlineShareUrl(parts) {
-  if (!isCanonicalHttpsOrigin(parts.origin)) throw new TypeError("origin must be a canonical https origin");
-  if (parts.ciphertext.byteLength === 0 || parts.ciphertext.byteLength > MAX_INLINE_BYTES) throw new RangeError("inline ciphertext is outside the allowed size");
-  if (parts.key32.byteLength !== KEY_LENGTH2) throw new TypeError("inline key must be 32 bytes");
-  const ciphertextCid = await computeCid(parts.ciphertext);
-  const payload = canonicalize({
-    v: 2,
-    c: toBase64Url(parts.ciphertext),
-    cid: ciphertextCid,
-    k: toBase64Url(parts.key32)
-  });
-  const payloadBytes = new TextEncoder().encode(payload);
-  if (payloadBytes.byteLength > MAX_INLINE_BYTES * 2) throw new RangeError("inline URL is too large");
-  return `${parts.origin}/s/inline#v=2&p=${toBase64Url(payloadBytes)}`;
-}
-async function parseSealedInlineShareUrl(url, options = {}) {
-  const parsed = new URL(url);
-  if (parsed.protocol !== "https:" || parsed.username !== "" || parsed.password !== "") throw new TypeError("sealed inline share URL must be canonical HTTPS without userinfo");
-  if (!isCanonicalHttpsOrigin(parsed.origin) || options.expectedOrigin !== void 0 && parsed.origin !== options.expectedOrigin) throw new TypeError("sealed inline share URL origin is not trusted");
-  if (parsed.pathname !== "/s/inline" || parsed.search !== "") throw new TypeError("not a Node sealed-inline share URL");
-  if (url !== `${parsed.origin}/s/inline${parsed.hash}`) throw new TypeError("sealed inline share URL is not lexically canonical");
-  const prefix = "#v=2&p=";
-  if (!parsed.hash.startsWith(prefix)) throw new TypeError("sealed inline URL is missing its canonical fragment");
-  const encoded = parsed.hash.slice(prefix.length);
-  if (encoded.length === 0 || parsed.hash !== `${prefix}${encoded}`) throw new TypeError("sealed inline URL fragment is not canonical");
-  let payloadBytes;
-  try {
-    payloadBytes = fromBase64Url(encoded);
-  } catch {
-    throw new TypeError("sealed inline payload is not canonical base64url");
-  }
-  if (payloadBytes.byteLength === 0 || payloadBytes.byteLength > MAX_INLINE_BYTES * 2) throw new TypeError("sealed inline payload is too large");
-  const payloadText = new TextDecoder("utf-8", { fatal: true }).decode(payloadBytes);
+function parseArtifactManifest(bytes) {
   let value;
   try {
-    value = JSON.parse(payloadText);
+    value = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
   } catch {
-    throw new TypeError("sealed inline payload is not valid JSON");
+    throw new ArtifactError("corrupt", "artifact manifest is not valid JSON");
   }
-  if (typeof value !== "object" || value === null || Array.isArray(value) || canonicalize(value) !== payloadText) throw new TypeError("sealed inline payload is not canonical JSON");
+  const fail = () => {
+    throw new ArtifactError("corrupt", "artifact manifest is malformed");
+  };
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return fail();
   const record = value;
-  if (Object.keys(record).length !== 4 || record.v !== 2 || typeof record.c !== "string" || typeof record.cid !== "string" || typeof record.k !== "string") throw new TypeError("sealed inline payload has invalid fields");
-  let ciphertext;
-  let key32;
-  try {
-    ciphertext = fromBase64Url(record.c);
-    key32 = fromBase64Url(record.k);
-  } catch {
-    throw new TypeError("sealed inline payload has invalid base64url material");
-  }
-  if (ciphertext.byteLength === 0 || ciphertext.byteLength > MAX_INLINE_BYTES) throw new TypeError("sealed inline ciphertext is outside the allowed size");
-  if (key32.byteLength !== KEY_LENGTH2) throw new TypeError("sealed inline key must be 32 bytes");
-  assertCanonicalCid(record.cid);
-  if (await computeCid(ciphertext) !== record.cid) throw new TypeError("sealed inline ciphertext does not match its CID");
-  return { kind: "inline", ciphertextCid: record.cid, ciphertext, key32 };
-}
-var SHARE_RESULT_VERSION = 1;
-var DEFAULT_MAX_SEALED_BLOB_BYTES = 100 * 1024 * 1024 + 29;
-var ShareReceiveError = class extends Error {
-  code;
-  details;
-  constructor(code3, message, details) {
-    super(message);
-    this.name = "ShareReceiveError";
-    this.code = code3;
-    this.details = details;
-  }
-  toJSON() {
-    return { protocol: "tinycloud-share", version: SHARE_RESULT_VERSION, error: { code: this.code } };
-  }
-};
-function metadataFor(envelope, origin) {
-  const kind = envelope.recipientMatcher.kind === "recipientDid" ? "recipientDid" : envelope.recipientMatcher.kind === "exactEmail" ? "email" : "emailDomain";
-  return {
-    protocol: "tinycloud-share",
-    version: 1,
-    shareId: envelope.shareId,
-    origin,
-    target: { ...envelope.target, kind },
-    resource: { ...envelope.resource },
-    actions: [...envelope.actions],
-    expiresAt: envelope.expiry,
-    display: {
-      ...envelope.display.senderName === void 0 ? {} : { senderName: envelope.display.senderName },
-      ...envelope.display.filename === void 0 ? {} : { filename: envelope.display.filename },
-      ...envelope.display.mode === void 0 ? {} : { mode: envelope.display.mode }
-    }
-  };
-}
-async function resolvePolicyShare(link3, options) {
-  options.signal?.throwIfAborted();
-  let url;
-  let parsed;
-  try {
-    url = new URL(link3);
-    parsed = await parseSealedInlineShareUrl(link3, { ...options.expectedOrigin === void 0 ? {} : { expectedOrigin: options.expectedOrigin } });
-  } catch {
-    throw new ShareReceiveError("invalid-link", "share link format is invalid");
-  }
-  const limit = options.maxSealedBlobBytes ?? DEFAULT_MAX_SEALED_BLOB_BYTES;
-  if (!Number.isSafeInteger(limit) || limit <= 0 || parsed.ciphertext.byteLength > limit) throw new ShareReceiveError("max-bytes-exceeded", "sealed policy envelope exceeds the configured byte limit");
-  if (await computeCid(parsed.ciphertext) !== parsed.ciphertextCid) throw new ShareReceiveError("cid-mismatch", "sealed envelope bytes do not match the link CID");
-  options.signal?.throwIfAborted();
-  let envelope;
-  try {
-    const encoded = new TextDecoder("utf-8", { fatal: true }).decode(await open6(parsed.ciphertext, parsed.key32));
-    const value = JSON.parse(encoded);
-    if (canonicalize(value) !== encoded) throw new Error("non-canonical envelope");
-    envelope = shareEnvelopeV3Schema.parse(value);
-  } catch {
-    throw new ShareReceiveError("envelope-invalid", "share envelope is invalid");
-  }
-  try {
-    if (!await verifyEnvelopeV3(envelope, { expectedSignerDid: envelope.policy.ownerDid })) throw new Error("signature");
-  } catch {
-    throw new ShareReceiveError("signature-invalid", "share signature is invalid");
-  }
-  options.signal?.throwIfAborted();
-  const expiry = Date.parse(envelope.expiry);
-  if (!Number.isFinite(expiry)) throw new ShareReceiveError("envelope-invalid", "share expiry is invalid");
-  if (expiry <= (options.now?.() ?? Date.now())) throw new ShareReceiveError("expired", "share has expired", { expiresAt: envelope.expiry });
-  options.onResolvedAddressedEnvelope?.(envelope, parsed.ciphertextCid);
-  return { envelope, origin: url.origin, cid: parsed.ciphertextCid };
-}
-async function inspectShare(link3, options = {}) {
-  const resolved = await resolvePolicyShare(link3, options);
-  return { metadata: metadataFor(resolved.envelope, resolved.origin), link: { origin: resolved.origin, cid: resolved.cid, kind: "policy" } };
-}
-async function receiveShare(link3, options = {}) {
-  const resolved = await resolvePolicyShare(link3, options);
-  return { state: "authorization-required", method: resolved.envelope.recipientMatcher.kind === "recipientDid" ? "openkey-device" : "email-claim" };
-}
-var SHARE_CONTENT_LIMIT = 100 * 1024 * 1024;
-var SHARE_PUBLISH_RESULT_VERSION = 1;
-var DEFAULT_SHARE_LIFETIME_MS = 7 * 24 * 60 * 60 * 1e3;
-function redactPublishedShare(result) {
-  return {
-    protocol: "tinycloud-share",
-    version: SHARE_PUBLISH_RESULT_VERSION,
-    link: { ...result.link },
-    metadata: {
-      protocol: "tinycloud-share",
-      version: 1,
-      shareId: result.metadata.shareId,
-      origin: result.metadata.origin,
-      target: { ...result.metadata.target },
-      resource: { ...result.metadata.resource },
-      actions: [...result.metadata.actions],
-      ...result.metadata.expiryClamped === void 0 ? {} : { expiryClamped: result.metadata.expiryClamped },
-      expiresAt: result.metadata.expiresAt,
-      display: { ...result.metadata.display }
-    }
-  };
-}
-var SharePublishError = class extends Error {
-  code;
-  constructor(code3, message) {
-    super(message);
-    this.name = "SharePublishError";
-    this.code = code3;
-  }
-};
-function authorizationMethodForTarget(target) {
-  if (target.kind === "recipientDid") return "openkey-device";
-  if (target.kind === "email") return "email-claim";
-  if (target.kind === "emailDomain") return "email-claim";
-  return void 0;
-}
-var empty2 = new Uint8Array(0);
-function equals3(aa, bb) {
-  if (aa === bb) {
-    return true;
-  }
-  if (aa.byteLength !== bb.byteLength) {
-    return false;
-  }
-  for (let ii = 0; ii < aa.byteLength; ii++) {
-    if (aa[ii] !== bb[ii]) {
-      return false;
-    }
-  }
-  return true;
-}
-function coerce3(o) {
-  if (o instanceof Uint8Array && o.constructor.name === "Uint8Array") {
-    return o;
-  }
-  if (o instanceof ArrayBuffer) {
-    return new Uint8Array(o);
-  }
-  if (ArrayBuffer.isView(o)) {
-    return new Uint8Array(o.buffer, o.byteOffset, o.byteLength);
-  }
-  throw new Error("Unknown type, must be binary type");
-}
-function base2(ALPHABET, name) {
-  if (ALPHABET.length >= 255) {
-    throw new TypeError("Alphabet too long");
-  }
-  var BASE_MAP = new Uint8Array(256);
-  for (var j = 0; j < BASE_MAP.length; j++) {
-    BASE_MAP[j] = 255;
-  }
-  for (var i = 0; i < ALPHABET.length; i++) {
-    var x = ALPHABET.charAt(i);
-    var xc = x.charCodeAt(0);
-    if (BASE_MAP[xc] !== 255) {
-      throw new TypeError(x + " is ambiguous");
-    }
-    BASE_MAP[xc] = i;
-  }
-  var BASE = ALPHABET.length;
-  var LEADER = ALPHABET.charAt(0);
-  var FACTOR = Math.log(BASE) / Math.log(256);
-  var iFACTOR = Math.log(256) / Math.log(BASE);
-  function encode52(source) {
-    if (source instanceof Uint8Array)
-      ;
-    else if (ArrayBuffer.isView(source)) {
-      source = new Uint8Array(source.buffer, source.byteOffset, source.byteLength);
-    } else if (Array.isArray(source)) {
-      source = Uint8Array.from(source);
-    }
-    if (!(source instanceof Uint8Array)) {
-      throw new TypeError("Expected Uint8Array");
-    }
-    if (source.length === 0) {
-      return "";
-    }
-    var zeroes = 0;
-    var length32 = 0;
-    var pbegin = 0;
-    var pend = source.length;
-    while (pbegin !== pend && source[pbegin] === 0) {
-      pbegin++;
-      zeroes++;
-    }
-    var size = (pend - pbegin) * iFACTOR + 1 >>> 0;
-    var b58 = new Uint8Array(size);
-    while (pbegin !== pend) {
-      var carry = source[pbegin];
-      var i2 = 0;
-      for (var it1 = size - 1; (carry !== 0 || i2 < length32) && it1 !== -1; it1--, i2++) {
-        carry += 256 * b58[it1] >>> 0;
-        b58[it1] = carry % BASE >>> 0;
-        carry = carry / BASE >>> 0;
-      }
-      if (carry !== 0) {
-        throw new Error("Non-zero carry");
-      }
-      length32 = i2;
-      pbegin++;
-    }
-    var it2 = size - length32;
-    while (it2 !== size && b58[it2] === 0) {
-      it2++;
-    }
-    var str = LEADER.repeat(zeroes);
-    for (; it2 < size; ++it2) {
-      str += ALPHABET.charAt(b58[it2]);
-    }
-    return str;
-  }
-  function decodeUnsafe(source) {
-    if (typeof source !== "string") {
-      throw new TypeError("Expected String");
-    }
-    if (source.length === 0) {
-      return new Uint8Array();
-    }
-    var psz = 0;
-    if (source[psz] === " ") {
-      return;
-    }
-    var zeroes = 0;
-    var length32 = 0;
-    while (source[psz] === LEADER) {
-      zeroes++;
-      psz++;
-    }
-    var size = (source.length - psz) * FACTOR + 1 >>> 0;
-    var b256 = new Uint8Array(size);
-    while (source[psz]) {
-      var carry = BASE_MAP[source.charCodeAt(psz)];
-      if (carry === 255) {
-        return;
-      }
-      var i2 = 0;
-      for (var it3 = size - 1; (carry !== 0 || i2 < length32) && it3 !== -1; it3--, i2++) {
-        carry += BASE * b256[it3] >>> 0;
-        b256[it3] = carry % 256 >>> 0;
-        carry = carry / 256 >>> 0;
-      }
-      if (carry !== 0) {
-        throw new Error("Non-zero carry");
-      }
-      length32 = i2;
-      psz++;
-    }
-    if (source[psz] === " ") {
-      return;
-    }
-    var it4 = size - length32;
-    while (it4 !== size && b256[it4] === 0) {
-      it4++;
-    }
-    var vch = new Uint8Array(zeroes + (size - it4));
-    var j2 = zeroes;
-    while (it4 !== size) {
-      vch[j2++] = b256[it4++];
-    }
-    return vch;
-  }
-  function decode92(string) {
-    var buffer = decodeUnsafe(string);
-    if (buffer) {
-      return buffer;
-    }
-    throw new Error(`Non-${name} character`);
-  }
-  return {
-    encode: encode52,
-    decodeUnsafe,
-    decode: decode92
-  };
-}
-var src2 = base2;
-var _brrp__multiformats_scope_baseX2 = src2;
-var base_x_default2 = _brrp__multiformats_scope_baseX2;
-var Encoder2 = class {
-  name;
-  prefix;
-  baseEncode;
-  constructor(name, prefix, baseEncode) {
-    this.name = name;
-    this.prefix = prefix;
-    this.baseEncode = baseEncode;
-  }
-  encode(bytes3) {
-    if (bytes3 instanceof Uint8Array) {
-      return `${this.prefix}${this.baseEncode(bytes3)}`;
-    } else {
-      throw Error("Unknown type, must be binary type");
-    }
-  }
-};
-var Decoder2 = class {
-  name;
-  prefix;
-  baseDecode;
-  prefixCodePoint;
-  constructor(name, prefix, baseDecode) {
-    this.name = name;
-    this.prefix = prefix;
-    const prefixCodePoint = prefix.codePointAt(0);
-    if (prefixCodePoint === void 0) {
-      throw new Error("Invalid prefix character");
-    }
-    this.prefixCodePoint = prefixCodePoint;
-    this.baseDecode = baseDecode;
-  }
-  decode(text) {
-    if (typeof text === "string") {
-      if (text.codePointAt(0) !== this.prefixCodePoint) {
-        throw Error(`Unable to decode multibase string ${JSON.stringify(text)}, ${this.name} decoder only supports inputs prefixed with ${this.prefix}`);
-      }
-      return this.baseDecode(text.slice(this.prefix.length));
-    } else {
-      throw Error("Can only multibase decode strings");
-    }
-  }
-  or(decoder) {
-    return or2(this, decoder);
-  }
-};
-var ComposedDecoder2 = class {
-  decoders;
-  constructor(decoders) {
-    this.decoders = decoders;
-  }
-  or(decoder) {
-    return or2(this, decoder);
-  }
-  decode(input) {
-    const prefix = input[0];
-    const decoder = this.decoders[prefix];
-    if (decoder != null) {
-      return decoder.decode(input);
-    } else {
-      throw RangeError(`Unable to decode multibase string ${JSON.stringify(input)}, only inputs prefixed with ${Object.keys(this.decoders)} are supported`);
-    }
-  }
-};
-function or2(left, right) {
-  return new ComposedDecoder2({
-    ...left.decoders ?? { [left.prefix]: left },
-    ...right.decoders ?? { [right.prefix]: right }
-  });
-}
-var Codec2 = class {
-  name;
-  prefix;
-  baseEncode;
-  baseDecode;
-  encoder;
-  decoder;
-  constructor(name, prefix, baseEncode, baseDecode) {
-    this.name = name;
-    this.prefix = prefix;
-    this.baseEncode = baseEncode;
-    this.baseDecode = baseDecode;
-    this.encoder = new Encoder2(name, prefix, baseEncode);
-    this.decoder = new Decoder2(name, prefix, baseDecode);
-  }
-  encode(input) {
-    return this.encoder.encode(input);
-  }
-  decode(input) {
-    return this.decoder.decode(input);
-  }
-};
-function from2({ name, prefix, encode: encode52, decode: decode92 }) {
-  return new Codec2(name, prefix, encode52, decode92);
-}
-function baseX2({ name, prefix, alphabet }) {
-  const { encode: encode52, decode: decode92 } = base_x_default2(alphabet, name);
-  return from2({
-    prefix,
-    name,
-    encode: encode52,
-    decode: (text) => coerce3(decode92(text))
-  });
-}
-function decode5(string, alphabetIdx, bitsPerChar, name) {
-  let end = string.length;
-  while (string[end - 1] === "=") {
-    --end;
-  }
-  const out = new Uint8Array(end * bitsPerChar / 8 | 0);
-  let bits = 0;
-  let buffer = 0;
-  let written = 0;
-  for (let i = 0; i < end; ++i) {
-    const value = alphabetIdx[string[i]];
-    if (value === void 0) {
-      throw new SyntaxError(`Non-${name} character`);
-    }
-    buffer = buffer << bitsPerChar | value;
-    bits += bitsPerChar;
-    if (bits >= 8) {
-      bits -= 8;
-      out[written++] = 255 & buffer >> bits;
-    }
-  }
-  if (bits >= bitsPerChar || (255 & buffer << 8 - bits) !== 0) {
-    throw new SyntaxError("Unexpected end of data");
-  }
-  return out;
-}
-function encode3(data, alphabet, bitsPerChar) {
-  const pad = alphabet[alphabet.length - 1] === "=";
-  const mask = (1 << bitsPerChar) - 1;
-  let out = "";
-  let bits = 0;
-  let buffer = 0;
-  for (let i = 0; i < data.length; ++i) {
-    buffer = buffer << 8 | data[i];
-    bits += 8;
-    while (bits > bitsPerChar) {
-      bits -= bitsPerChar;
-      out += alphabet[mask & buffer >> bits];
-    }
-  }
-  if (bits !== 0) {
-    out += alphabet[mask & buffer << bitsPerChar - bits];
-  }
-  if (pad) {
-    while ((out.length * bitsPerChar & 7) !== 0) {
-      out += "=";
-    }
-  }
-  return out;
-}
-function createAlphabetIdx2(alphabet) {
-  const alphabetIdx = {};
-  for (let i = 0; i < alphabet.length; ++i) {
-    alphabetIdx[alphabet[i]] = i;
-  }
-  return alphabetIdx;
-}
-function rfc46482({ name, prefix, bitsPerChar, alphabet }) {
-  const alphabetIdx = createAlphabetIdx2(alphabet);
-  return from2({
-    prefix,
-    name,
-    encode(input) {
-      return encode3(input, alphabet, bitsPerChar);
-    },
-    decode(input) {
-      return decode5(input, alphabetIdx, bitsPerChar, name);
-    }
-  });
-}
-var base58btc2 = baseX2({
-  name: "base58btc",
-  prefix: "z",
-  alphabet: "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
-});
-var base58flickr2 = baseX2({
-  name: "base58flickr",
-  prefix: "Z",
-  alphabet: "123456789abcdefghijkmnopqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ"
-});
-function validRecipientDid(value) {
-  if (value.length === 0 || value.length > 2048 || /[\u0000-\u0020\u007f]/.test(value)) return false;
-  const parts = value.split(":");
-  if (parts.length < 3 || parts[0] !== "did" || !/^[a-z0-9]+$/.test(parts[1] ?? "")) return false;
-  const identifier = parts.slice(2);
-  if (identifier.some((part) => part.length === 0)) return false;
-  if (parts[1] === "web") {
-    const host = identifier[0] ?? "";
-    if (host.length > 253 || host.split(".").some((label) => !label || label.length > 63 || !/^[A-Za-z0-9-]+$/.test(label) || label.startsWith("-") || label.endsWith("-"))) return false;
-    return identifier.slice(1).every((part) => /^[A-Za-z0-9._%-]+$/.test(part));
-  }
-  if (parts[1] === "pkh") return identifier.length >= 3 && identifier.every((part) => /^[A-Za-z0-9._%-]+$/.test(part));
-  if (parts[1] === "key") {
+  const allowed = ["v", "files", "createdAt", "parent", "note"];
+  if (Object.keys(record).some((key) => !allowed.includes(key)) || record.v !== ARTIFACT_MANIFEST_VERSION) return fail();
+  if (!Array.isArray(record.files) || record.files.length === 0) return fail();
+  if (typeof record.createdAt !== "string" || Number.isNaN(Date.parse(record.createdAt))) return fail();
+  if (record.parent !== null && (typeof record.parent !== "number" || !Number.isSafeInteger(record.parent) || record.parent < 1)) return fail();
+  if (record.note !== void 0 && (typeof record.note !== "string" || record.note.length > 1024)) return fail();
+  const seen = /* @__PURE__ */ new Set();
+  const files = record.files.map((entry) => {
+    if (entry === null || typeof entry !== "object" || Array.isArray(entry)) return fail();
+    const file = entry;
+    if (Object.keys(file).some((key) => !["path", "sha256", "bytes"].includes(key))) return fail();
+    if (typeof file.path !== "string" || file.path === ARTIFACT_MANIFEST_NAME || seen.has(file.path)) return fail();
     try {
-      const bytes3 = base58btc2.decode(identifier.join(":"));
-      return bytes3.length === 34 && bytes3[0] === 237 && bytes3[1] === 1;
+      canonicalShareFilename(file.path);
     } catch {
-      return false;
+      return fail();
     }
-  }
-  return false;
-}
-function normalizeShareTarget(target) {
-  if (target.kind === "bearer") return target;
-  if (target.kind === "recipientDid") {
-    if (!validRecipientDid(target.did)) throw new TypeError("recipient DID is invalid");
-    return { kind: target.kind, did: target.did };
-  }
-  if (target.kind === "email") {
-    const mailbox = canonicalMailbox(target.address);
-    if (mailbox === void 0) throw new TypeError("recipient email is invalid");
-    return { kind: target.kind, address: mailbox.email };
-  }
-  const domain = target.domain.toLowerCase();
-  if (!isCanonicalEmailDomain(domain)) throw new TypeError("recipient email domain is invalid");
-  return { kind: target.kind, domain };
-}
-function targetAuthorizationMethod(target) {
-  return authorizationMethodForTarget(target);
-}
-function publishFilename(value) {
-  try {
-    return canonicalShareFilename(value);
-  } catch {
-    throw new SharePublishError("invalid-argument", hasUnsafeFilenameCodePoint(value) ? "filename contains control or invisible characters" : "filename must be one safe path segment");
-  }
-}
-async function publishTargetShare(input) {
-  const target = normalizeShareTarget(input.target);
-  const filename = publishFilename(input.filename);
-  const files = input.files?.map((file) => ({ ...file, filename: publishFilename(file.filename) }));
-  if (input.targetAdapter === void 0) {
-    if (target.kind === "bearer") throw new SharePublishError("authority-required", "native bearer publication requires an authenticated TinyCloud node");
-    return {
-      state: "authorization-required",
-      method: targetAuthorizationMethod(target)
-    };
-  }
-  const source = input.source instanceof Uint8Array ? input.source.slice() : await (async () => {
-    const chunks = [];
-    let size = 0;
-    for await (const chunk of input.source) {
-      if (!(chunk instanceof Uint8Array)) throw new TypeError("share publication source yielded invalid bytes");
-      size += chunk.byteLength;
-      if (size > (input.maxBytes ?? SHARE_CONTENT_LIMIT)) throw new SharePublishError("max-bytes-exceeded", "share publication exceeds maxBytes");
-      chunks.push(chunk.slice());
-    }
-    const bytes3 = new Uint8Array(size);
-    let offset = 0;
-    for (const chunk of chunks) {
-      bytes3.set(chunk, offset);
-      offset += chunk.byteLength;
-    }
-    return bytes3;
-  })();
-  if (source.byteLength === 0) throw new SharePublishError("invalid-argument", "share content is empty");
-  if (target.kind === "bearer" && input.allowBinary !== true) {
-    try {
-      new TextDecoder("utf-8", { fatal: true }).decode(source);
-    } catch {
-      throw new SharePublishError("invalid-argument", "Markdown input must be valid UTF-8");
-    }
-  }
-  const publishFiles = files === void 0 || files.length === 0 ? [{ bytes: source }] : files;
-  const limit = input.maxBytes ?? SHARE_CONTENT_LIMIT;
-  let totalBytes = 0;
-  for (const file of publishFiles) {
-    totalBytes += file.bytes.byteLength;
-    if (!Number.isSafeInteger(totalBytes) || totalBytes > limit) {
-      throw new SharePublishError("max-bytes-exceeded", "share publication exceeds the combined byte limit");
-    }
-  }
-  const nowMs = input.now?.() ?? Date.now();
-  const expiresAt = input.expiresAt ?? new Date(nowMs + DEFAULT_SHARE_LIFETIME_MS);
-  if (!Number.isFinite(expiresAt.getTime()) || expiresAt.getTime() <= nowMs) throw new SharePublishError("invalid-argument", "expiresAt must be a valid future time");
-  return input.targetAdapter.publish({
-    source,
-    filename,
-    ...files === void 0 ? {} : { files },
-    ...input.mediaType === void 0 ? {} : { mediaType: input.mediaType },
-    ...input.resourceKind === void 0 ? {} : { resourceKind: input.resourceKind },
-    ...input.actions === void 0 ? {} : { actions: input.actions },
-    target,
-    expiresAt,
-    expiryWasExplicit: input.expiryWasExplicit ?? input.expiresAt !== void 0,
-    origin: input.origin,
-    ...input.notify === void 0 ? {} : { notify: input.notify }
+    seen.add(file.path);
+    if (typeof file.sha256 !== "string" || !SHA256_HEX.test(file.sha256)) return fail();
+    if (typeof file.bytes !== "number" || !Number.isSafeInteger(file.bytes) || file.bytes < 0) return fail();
+    return { path: file.path, sha256: file.sha256, bytes: file.bytes };
   });
-}
-var POLICY_V1_DOMAIN = "xyz.tinycloud.policy/policy/v1\0";
-var POLICY_V2_DOMAIN = "xyz.tinycloud.policy/policy/v2\0";
-var POLICY_CAPABILITY_V1_DOMAIN2 = "xyz.tinycloud.policy/PolicyCapability/v1\0";
-var CONTENT_SOURCE_V1_DOMAIN2 = "xyz.tinycloud.policy/ContentSource/v1\0";
-var NATIVE_PROJECTION_V1_DOMAIN2 = "xyz.tinycloud.policy/NativeProjection/v1\0";
-var ENVELOPE_V3_DOMAIN = "xyz.tinycloud.share/envelope/v3\0";
-var textEncoder = new TextEncoder();
-function targetMatcher(target) {
-  if (target.kind === "recipientDid") return { kind: "recipientDid", value: target.did };
-  if (target.kind === "email") return { kind: "exactEmail", value: target.address };
-  return { kind: "emailDomain", value: target.domain };
-}
-function targetKind(target) {
-  return target.kind;
-}
-var OWNER_SHARE_ACTIONS = /* @__PURE__ */ new Set(["tinycloud.kv/get", "tinycloud.kv/list", "tinycloud.kv/metadata", "tinycloud.kv/put"]);
-function assertSafeInput(input) {
-  if (!/^[A-Za-z0-9_-]{16,128}$/.test(input.shareId)) throw new TypeError("addressed share id is invalid");
-  if (!Number.isSafeInteger(input.byteLength) || input.byteLength < 0 || input.byteLength > SHARE_CONTENT_LIMIT) throw new TypeError("addressed content length is invalid");
-  if (!Number.isFinite(input.expiresAt.getTime()) || input.expiresAt.getTime() <= Date.now()) throw new TypeError("addressed share expiry must be in the future");
-  if (input.artifact === "html" && (input.resource.kind !== "prefix" || !input.actions.includes("read") || !input.actions.includes("list"))) throw new TypeError("html artifacts require a readable prefix");
-  if (input.contentSource.shareId !== input.shareId || input.contentSource.selector !== input.resource.kind) throw new TypeError("addressed content source is not bound to the share");
-}
-function hex2(bytes3) {
-  return [...bytes3].map((byte) => byte.toString(16).padStart(2, "0")).join("");
-}
-function digestHex(value, domain) {
-  return hex2(sha2562(textEncoder.encode(`${domain}${canonicalize(value)}`)));
-}
-function sortCanonical(values) {
-  return [...values].sort((left, right) => canonicalize(left).localeCompare(canonicalize(right)));
-}
-function base32Lower2(bytes3) {
-  const alphabet = "abcdefghijklmnopqrstuvwxyz234567";
-  let output = "";
-  let buffer = 0;
-  let bits = 0;
-  for (const byte of bytes3) {
-    buffer = buffer << 8 | byte;
-    bits += 8;
-    while (bits >= 5) {
-      output += alphabet[buffer >>> bits - 5 & 31];
-      bits -= 5;
-    }
-  }
-  if (bits > 0) output += alphabet[buffer << 5 - bits & 31];
-  return output;
-}
-function rfc3339Seconds(value) {
-  return new Date(Math.floor(value.getTime() / 1e3) * 1e3).toISOString().replace(".000Z", "Z");
-}
-function nativeProjection(capabilities) {
-  return sortCanonical(capabilities.map((capability) => capability.kind === "encryption" ? { service: "tinycloud.encryption", space: capability.resource, path: capability.resource, actions: [capability.action] } : {
-    service: "tinycloud.kv",
-    space: capability.resource.slice(0, capability.resource.indexOf("/kv/")),
-    path: capability.resource.slice(capability.resource.indexOf("/kv/") + 4),
-    actions: [...capability.actions],
-    caveat: { type: "xyz.tinycloud.resource/selector", kind: capability.selector, value: capability.resource }
-  }));
-}
-async function createPolicy(options, capabilities) {
-  const fields = {
-    ownerDid: options.authority.ownerDid,
-    createdAt: rfc3339Seconds(/* @__PURE__ */ new Date()),
-    expiresAt: rfc3339Seconds(options.expiresAt),
-    contentSource: options.contentSource,
-    capabilityCeiling: [...capabilities]
-  };
-  const unsigned = options.credentialRequirement === void 0 ? { schema: "xyz.tinycloud.policy/policy/v1", ...fields } : { schema: "xyz.tinycloud.policy/policy/v2", ...fields, credentialRequirement: options.credentialRequirement };
-  const domain = options.credentialRequirement === void 0 ? POLICY_V1_DOMAIN : POLICY_V2_DOMAIN;
-  const policyDigestHex = digestHex(unsigned, domain);
-  const signature = await options.authority.sign(sha2562(textEncoder.encode(`${domain}${canonicalize(unsigned)}`)));
-  if (signature.byteLength !== 64) throw new TypeError("policy signature must be Ed25519");
-  const policy = {
-    ...unsigned,
-    policyId: `pol_${base32Lower2(Uint8Array.from(policyDigestHex.match(/../g), (byte) => Number.parseInt(byte, 16)))}`,
-    signature: { suite: "Ed25519", signerDid: options.authority.ownerDid, value: toBase64Url(signature) }
-  };
-  return { policy, policyCid: await computeCid(textEncoder.encode(canonicalize(policy))), policyDigestHex };
-}
-function publicationResult(input) {
-  const result = {
-    protocol: "tinycloud-share",
-    version: SHARE_PUBLISH_RESULT_VERSION,
-    url: input.url,
-    link: { kind: "policy", cid: input.envelopeCid },
-    metadata: {
-      protocol: "tinycloud-share",
-      version: 1,
-      shareId: input.options.shareId,
-      origin: input.options.shareOrigin,
-      target: { kind: targetKind(input.options.target), origin: input.options.nodeOrigin, nodeAudience: input.enforcerDid, spaceId: input.options.spaceId },
-      resource: { ...input.options.resource },
-      actions: [...input.options.actions],
-      expiresAt: input.expiry,
-      display: { filename: input.options.filename },
-      recipientMatcher: { ...input.matcher },
-      policyCid: input.policyCid,
-      ownerDelegationCid: input.policyRootCid,
-      enforcementDelegationCid: input.enforcementRootCid,
-      ownerDid: input.options.authority.ownerDid,
-      enforcerDid: input.enforcerDid,
-      envelopeCid: input.envelopeCid,
-      shareCid: input.envelopeCid
-    }
-  };
-  Object.defineProperty(result, "toJSON", { enumerable: false, value: () => redactPublishedShare(result) });
-  Object.defineProperty(result, "url", { enumerable: false, value: input.url });
-  Object.defineProperty(result, "deliveryMaterial", { enumerable: false, value: input.deliveryMaterial });
-  return result;
-}
-var EMAIL_PROFILE = { id: "tinycloud.email-proof/v1", version: 1 };
-var EMAIL_DOMAIN_PROFILE = { id: "tinycloud.email-domain-proof/v1", version: 1 };
-var EMAIL_CREDENTIAL_TYPE = { id: "opencredentials.email/v1", version: 1 };
-var EMAIL_DESCRIPTOR_DIGEST = "1tg-qphmKBVtNwzVg9xyz-xxqt_xtMXAsQyXw46m8S0";
-var EMAIL_DOMAIN_DESCRIPTOR_DIGEST = "33X5mAkZZgApdD3xh_T-3KS5moop0J2Nloi2nqWsdWY";
-var EMAIL_CREDENTIAL_ISSUER_DID = "did:web:issuer.credentials.org";
-var EMAIL_CREDENTIAL_ISSUER_KID = `${EMAIL_CREDENTIAL_ISSUER_DID}#controller`;
-function mailboxCredentialCommitment(target) {
-  const profile = target.kind === "email" ? EMAIL_PROFILE : EMAIL_DOMAIN_PROFILE;
-  const requirement = target.kind === "email" ? { type: "TinyCloudCredentialRequirement", version: 1, profile, credentialType: EMAIL_CREDENTIAL_TYPE, claims: { email: target.address }, maxAgeSeconds: 3600 } : { type: "TinyCloudCredentialRequirement", version: 1, profile, credentialType: EMAIL_CREDENTIAL_TYPE, claims: { emailDomain: target.domain }, maxAgeSeconds: 300 };
   return {
-    type: "TinyCloudPolicyCredentialRequirement",
-    version: 1,
-    requirementDigest: toBase64Url(sha2562(textEncoder.encode(canonicalize(requirement)))),
-    descriptorDigest: target.kind === "email" ? EMAIL_DESCRIPTOR_DIGEST : EMAIL_DOMAIN_DESCRIPTOR_DIGEST,
-    issuerDid: EMAIL_CREDENTIAL_ISSUER_DID,
-    issuerKid: EMAIL_CREDENTIAL_ISSUER_KID,
-    profile,
-    credentialType: EMAIL_CREDENTIAL_TYPE
+    v: ARTIFACT_MANIFEST_VERSION,
+    files,
+    createdAt: record.createdAt,
+    parent: record.parent,
+    ...record.note === void 0 ? {} : { note: record.note }
   };
 }
-function prepareAddressedShare(request) {
-  try {
-    canonicalShareFilename(request.filename);
-  } catch {
-    throw new TypeError("addressed filename is invalid");
+async function listArtifactVersions(store, artifactId) {
+  const prefix = artifactVersionsPrefix(artifactId);
+  const numbers = /* @__PURE__ */ new Map();
+  for (const key of await store.list(prefix)) {
+    if (!key.startsWith(prefix)) continue;
+    const [segment, ...rest] = key.slice(prefix.length).split("/");
+    if (!/^[1-9][0-9]{0,14}$/.test(segment ?? "") || rest.length === 0) continue;
+    const version2 = Number(segment);
+    numbers.set(version2, (numbers.get(version2) ?? false) || rest.join("/") === ARTIFACT_MANIFEST_NAME);
   }
-  if (request.actions.length === 0 || request.policyActions.length === 0) throw new TypeError("addressed share actions are empty");
-  if (request.policyActions.some((action) => !OWNER_SHARE_ACTIONS.has(action))) throw new TypeError("addressed share action is not supported");
-  if (request.deliveryEmail !== void 0 && !isEnvelopeDeliveryEmail(request.deliveryEmail)) throw new TypeError("delivery email is not a valid envelope address");
-  const target = normalizeShareTarget(request.target);
-  if (target.kind === "bearer") throw new TypeError("addressed target is required");
-  if (target.kind === "recipientDid") return { target };
-  if (target.kind === "emailDomain" && request.deliveryEmail !== void 0 && (request.deliveryEmail !== request.deliveryEmail.toLowerCase() || !request.deliveryEmail.endsWith(`@${target.domain}`))) {
-    throw new TypeError("email-domain delivery address must be a lowercase mailbox at the domain");
-  }
-  return { target, credentialRequirement: mailboxCredentialCommitment(target) };
-}
-function assertMailboxCommitment(commitment, target) {
-  const label = target.kind === "email" ? "email" : "email-domain";
-  if (commitment === void 0) throw new TypeError(`${label} shares require a credential requirement`);
-  const expected = mailboxCredentialCommitment(target);
-  if (canonicalize(commitment.profile) !== canonicalize(expected.profile) || canonicalize(commitment.credentialType) !== canonicalize(expected.credentialType) || commitment.descriptorDigest !== expected.descriptorDigest || commitment.issuerDid !== expected.issuerDid || commitment.issuerKid !== expected.issuerKid) throw new TypeError(`${label} shares require the ${label} credential profile`);
-  if (commitment.requirementDigest !== expected.requirementDigest) throw new TypeError(`credential requirement is not bound to the email ${target.kind === "email" ? "address" : "domain"}`);
-}
-async function publishAddressedShare(input) {
-  assertSafeInput(input);
-  const { target } = prepareAddressedShare(input);
-  const options = { ...input, filename: canonicalShareFilename(input.filename) };
-  if (target.kind !== "recipientDid") assertMailboxCommitment(options.credentialRequirement, target);
-  const expiry = rfc3339Seconds(options.expiresAt);
-  const matcher = targetMatcher(target);
-  const capabilities = sortCanonical([
-    { kind: "kv", resource: options.contentSource.kvResource, selector: options.resource.kind, actions: [...options.policyActions] },
-    { kind: "encryption", resource: options.contentSource.encryptionNetwork, action: "tinycloud.encryption/decrypt" }
-  ]);
-  const created = await createPolicy(options, capabilities);
-  const contentSourceDigestHex = digestHex(options.contentSource, CONTENT_SOURCE_V1_DOMAIN2);
-  const capabilityCeilingHashHex = digestHex(capabilities, POLICY_CAPABILITY_V1_DOMAIN2);
-  const nativeProjectionHashHex = digestHex(nativeProjection(capabilities), NATIVE_PROJECTION_V1_DOMAIN2);
-  const commonRoot = {
-    ownerDid: options.authority.ownerDid,
-    policyId: created.policy.policyId,
-    policyDigestHex: created.policyDigestHex,
-    policyCid: created.policyCid,
-    contentSourceDigestHex,
-    capabilityCeilingHashHex,
-    nativeProjectionHashHex,
-    notBefore: new Date(created.policy.createdAt),
-    expiresAt: new Date(expiry),
-    nodeAudience: options.nodeAudience,
-    capabilities
-  };
-  const policyRootReceipt = await options.authority.createOwnerRoot({ ...commonRoot, role: "policy-authority", audienceDid: `did:tinycloud:policy:${created.policyDigestHex}` });
-  const enforcementRootReceipt = await options.authority.createOwnerRoot({ ...commonRoot, role: "policy-enforcement", audienceDid: options.enforcerDid });
-  const policyRoot = { cid: policyRootReceipt.cid, authorization: policyRootReceipt.delegationHeader.Authorization.replace(/^Bearer\s+/i, ""), role: "policy-authority" };
-  const enforcementRoot = { cid: enforcementRootReceipt.cid, authorization: enforcementRootReceipt.delegationHeader.Authorization.replace(/^Bearer\s+/i, ""), role: "policy-enforcement" };
-  const registration = await options.authority.registerPolicy({
-    policyCid: created.policyCid,
-    policy: created.policy,
-    policyRoot,
-    enforcementRoot,
-    contentSourceDigestHex,
-    nativeProjectionHashHex,
-    rootExpiresAt: expiry,
-    enforcerDid: options.enforcerDid,
-    expectedNodeAudience: options.nodeAudience
-  });
-  if (registration.policyCid !== created.policyCid || registration.policyRootCid !== policyRoot.cid || registration.enforcementRootCid !== enforcementRoot.cid) throw new Error("Policy/v3 registration receipt is not bound to the published roots");
-  const unsigned = {
-    version: 3,
-    shareId: options.shareId,
-    recipientMatcher: matcher,
-    ...options.deliveryEmail === void 0 ? {} : { deliveryEmail: options.deliveryEmail },
-    actions: [...options.actions],
-    resource: { ...options.resource },
-    target: { origin: options.nodeOrigin, nodeAudience: registration.attestedEnforcerBinding.enforcerDid, spaceId: options.spaceId },
-    policy: created.policy,
-    policyCid: created.policyCid,
-    policyRoot,
-    enforcementRoot,
-    attestedEnforcerBinding: registration.attestedEnforcerBinding,
-    contentSource: options.contentSource,
-    contentSourceDigestHex,
-    encryptionNetwork: options.contentSource.encryptionNetwork,
-    expiry,
-    display: { filename: options.filename },
-    encrypted: true,
-    metadata: {
-      mediaType: options.mediaType,
-      byteLength: options.byteLength,
-      filename: options.filename,
-      ...options.mediaType.startsWith("text/") ? { encoding: "utf-8" } : {},
-      ...options.artifact === void 0 ? {} : { artifact: options.artifact }
+  const summaries = [];
+  for (const version2 of [...numbers.keys()].sort((a, b) => a - b)) {
+    if (numbers.get(version2) !== true) {
+      summaries.push({ version: version2, complete: false });
+      continue;
     }
-  };
-  unsignedShareEnvelopeV3Schema.parse(unsigned);
-  const envelopeSignature = await options.authority.sign(sha2562(textEncoder.encode(`${ENVELOPE_V3_DOMAIN}${canonicalize(unsigned)}`)));
-  if (envelopeSignature.byteLength !== 64) throw new TypeError("v3 envelope signature must be Ed25519");
-  const envelope = { ...unsigned, signature: { signerDid: options.authority.ownerDid, algorithm: "Ed25519", value: toBase64Url(envelopeSignature) } };
-  shareEnvelopeV3Schema.parse(envelope);
-  const envelopeBytes = textEncoder.encode(canonicalize(envelope));
-  const envelopeKeyBytes = generateKey();
-  const sealed = await seal(envelopeBytes, envelopeKeyBytes);
-  const envelopeKey = toBase64Url(envelopeKeyBytes);
-  const url = await encodeSealedInlineShareUrl({
-    origin: options.shareOrigin,
-    ciphertext: sealed.blob,
-    key32: envelopeKeyBytes
-  });
-  const deliveryMaterial = {
-    envelope,
-    shareCid: sealed.cid,
-    sealedEnvelope: toBase64Url(sealed.blob),
-    envelopeKey
-  };
-  options.onDeliveryMaterial?.(deliveryMaterial);
-  return publicationResult({
-    options,
-    url,
-    envelopeCid: sealed.cid,
-    matcher,
-    policyCid: created.policyCid,
-    policyRootCid: policyRoot.cid,
-    enforcementRootCid: enforcementRoot.cid,
-    enforcerDid: registration.attestedEnforcerBinding.enforcerDid,
-    expiry,
-    deliveryMaterial
-  });
-}
-var base322 = rfc46482({
-  prefix: "b",
-  name: "base32",
-  alphabet: "abcdefghijklmnopqrstuvwxyz234567",
-  bitsPerChar: 5
-});
-var base32upper2 = rfc46482({
-  prefix: "B",
-  name: "base32upper",
-  alphabet: "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567",
-  bitsPerChar: 5
-});
-var base32pad2 = rfc46482({
-  prefix: "c",
-  name: "base32pad",
-  alphabet: "abcdefghijklmnopqrstuvwxyz234567=",
-  bitsPerChar: 5
-});
-var base32padupper2 = rfc46482({
-  prefix: "C",
-  name: "base32padupper",
-  alphabet: "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567=",
-  bitsPerChar: 5
-});
-var base32hex2 = rfc46482({
-  prefix: "v",
-  name: "base32hex",
-  alphabet: "0123456789abcdefghijklmnopqrstuv",
-  bitsPerChar: 5
-});
-var base32hexupper2 = rfc46482({
-  prefix: "V",
-  name: "base32hexupper",
-  alphabet: "0123456789ABCDEFGHIJKLMNOPQRSTUV",
-  bitsPerChar: 5
-});
-var base32hexpad2 = rfc46482({
-  prefix: "t",
-  name: "base32hexpad",
-  alphabet: "0123456789abcdefghijklmnopqrstuv=",
-  bitsPerChar: 5
-});
-var base32hexpadupper2 = rfc46482({
-  prefix: "T",
-  name: "base32hexpadupper",
-  alphabet: "0123456789ABCDEFGHIJKLMNOPQRSTUV=",
-  bitsPerChar: 5
-});
-var base32z2 = rfc46482({
-  prefix: "h",
-  name: "base32z",
-  alphabet: "ybndrfg8ejkmcpqxot1uwisza345h769",
-  bitsPerChar: 5
-});
-var base362 = baseX2({
-  prefix: "k",
-  name: "base36",
-  alphabet: "0123456789abcdefghijklmnopqrstuvwxyz"
-});
-var base36upper2 = baseX2({
-  prefix: "K",
-  name: "base36upper",
-  alphabet: "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"
-});
-var encode_12 = encode4;
-var MSB2 = 128;
-var REST2 = 127;
-var MSBALL2 = ~REST2;
-var INT2 = Math.pow(2, 31);
-function encode4(num, out, offset) {
-  out = out || [];
-  offset = offset || 0;
-  var oldOffset = offset;
-  while (num >= INT2) {
-    out[offset++] = num & 255 | MSB2;
-    num /= 128;
-  }
-  while (num & MSBALL2) {
-    out[offset++] = num & 255 | MSB2;
-    num >>>= 7;
-  }
-  out[offset] = num | 0;
-  encode4.bytes = offset - oldOffset + 1;
-  return out;
-}
-var decode6 = read2;
-var MSB$12 = 128;
-var REST$12 = 127;
-function read2(buf, offset) {
-  var res = 0, offset = offset || 0, shift = 0, counter = offset, b, l = buf.length;
-  do {
-    if (counter >= l) {
-      read2.bytes = 0;
-      throw new RangeError("Could not decode varint");
+    const stored = await store.get(artifactVersionFilePath(artifactId, version2, ARTIFACT_MANIFEST_NAME));
+    if (stored === void 0) {
+      summaries.push({ version: version2, complete: false });
+      continue;
     }
-    b = buf[counter++];
-    res += shift < 28 ? (b & REST$12) << shift : (b & REST$12) * Math.pow(2, shift);
-    shift += 7;
-  } while (b >= MSB$12);
-  read2.bytes = counter - offset;
-  return res;
-}
-var N12 = Math.pow(2, 7);
-var N22 = Math.pow(2, 14);
-var N32 = Math.pow(2, 21);
-var N42 = Math.pow(2, 28);
-var N52 = Math.pow(2, 35);
-var N62 = Math.pow(2, 42);
-var N72 = Math.pow(2, 49);
-var N82 = Math.pow(2, 56);
-var N92 = Math.pow(2, 63);
-var length2 = function(value) {
-  return value < N12 ? 1 : value < N22 ? 2 : value < N32 ? 3 : value < N42 ? 4 : value < N52 ? 5 : value < N62 ? 6 : value < N72 ? 7 : value < N82 ? 8 : value < N92 ? 9 : 10;
-};
-var varint2 = {
-  encode: encode_12,
-  decode: decode6,
-  encodingLength: length2
-};
-var _brrp_varint2 = varint2;
-var varint_default2 = _brrp_varint2;
-function decode7(data, offset = 0) {
-  const code3 = varint_default2.decode(data, offset);
-  return [code3, varint_default2.decode.bytes];
-}
-function encodeTo2(int, target, offset = 0) {
-  varint_default2.encode(int, target, offset);
-  return target;
-}
-function encodingLength2(int) {
-  return varint_default2.encodingLength(int);
-}
-function create2(code3, digest3) {
-  const size = digest3.byteLength;
-  const sizeOffset = encodingLength2(code3);
-  const digestOffset = sizeOffset + encodingLength2(size);
-  const bytes3 = new Uint8Array(digestOffset + size);
-  encodeTo2(code3, bytes3, 0);
-  encodeTo2(size, bytes3, sizeOffset);
-  bytes3.set(digest3, digestOffset);
-  return new Digest2(code3, size, digest3, bytes3);
-}
-function decode8(multihash) {
-  const bytes3 = coerce3(multihash);
-  const [code3, sizeOffset] = decode7(bytes3);
-  const [size, digestOffset] = decode7(bytes3.subarray(sizeOffset));
-  const digest3 = bytes3.subarray(sizeOffset + digestOffset);
-  if (digest3.byteLength !== size) {
-    throw new Error("Incorrect length");
-  }
-  return new Digest2(code3, size, digest3, bytes3);
-}
-function equals4(a, b) {
-  if (a === b) {
-    return true;
-  } else {
-    const data = b;
-    return a.code === data.code && a.size === data.size && data.bytes instanceof Uint8Array && equals3(a.bytes, data.bytes);
-  }
-}
-var Digest2 = class {
-  code;
-  size;
-  digest;
-  bytes;
-  /**
-   * Creates a multihash digest.
-   */
-  constructor(code3, size, digest3, bytes3) {
-    this.code = code3;
-    this.size = size;
-    this.digest = digest3;
-    this.bytes = bytes3;
-  }
-};
-function format2(link3, base33) {
-  const { bytes: bytes3, version: version2 } = link3;
-  switch (version2) {
-    case 0:
-      return toStringV02(bytes3, baseCache2(link3), base33 ?? base58btc2.encoder);
-    default:
-      return toStringV12(bytes3, baseCache2(link3), base33 ?? base322.encoder);
-  }
-}
-var cache2 = /* @__PURE__ */ new WeakMap();
-function baseCache2(cid2) {
-  const baseCache32 = cache2.get(cid2);
-  if (baseCache32 == null) {
-    const baseCache4 = /* @__PURE__ */ new Map();
-    cache2.set(cid2, baseCache4);
-    return baseCache4;
-  }
-  return baseCache32;
-}
-var CID2 = class _CID2 {
-  code;
-  version;
-  multihash;
-  bytes;
-  "/";
-  /**
-   * @param version - Version of the CID
-   * @param code - Code of the codec content is encoded in, see https://github.com/multiformats/multicodec/blob/master/table.csv
-   * @param multihash - (Multi)hash of the of the content.
-   */
-  constructor(version2, code3, multihash, bytes3) {
-    this.code = code3;
-    this.version = version2;
-    this.multihash = multihash;
-    this.bytes = bytes3;
-    this["/"] = bytes3;
-  }
-  /**
-   * Signalling `cid.asCID === cid` has been replaced with `cid['/'] === cid.bytes`
-   * please either use `CID.asCID(cid)` or switch to new signalling mechanism
-   *
-   * @deprecated
-   */
-  get asCID() {
-    return this;
-  }
-  // ArrayBufferView
-  get byteOffset() {
-    return this.bytes.byteOffset;
-  }
-  // ArrayBufferView
-  get byteLength() {
-    return this.bytes.byteLength;
-  }
-  toV0() {
-    switch (this.version) {
-      case 0: {
-        return this;
-      }
-      case 1: {
-        const { code: code3, multihash } = this;
-        if (code3 !== DAG_PB_CODE2) {
-          throw new Error("Cannot convert a non dag-pb CID to CIDv0");
-        }
-        if (multihash.code !== SHA_256_CODE2) {
-          throw new Error("Cannot convert non sha2-256 multihash CID to CIDv0");
-        }
-        return _CID2.createV0(multihash);
-      }
-      default: {
-        throw Error(`Can not convert CID version ${this.version} to version 0. This is a bug please report`);
-      }
-    }
-  }
-  toV1() {
-    switch (this.version) {
-      case 0: {
-        const { code: code3, digest: digest3 } = this.multihash;
-        const multihash = create2(code3, digest3);
-        return _CID2.createV1(this.code, multihash);
-      }
-      case 1: {
-        return this;
-      }
-      default: {
-        throw Error(`Can not convert CID version ${this.version} to version 1. This is a bug please report`);
-      }
-    }
-  }
-  equals(other) {
-    return _CID2.equals(this, other);
-  }
-  static equals(self, other) {
-    const unknown = other;
-    return unknown != null && self.code === unknown.code && self.version === unknown.version && equals4(self.multihash, unknown.multihash);
-  }
-  toString(base33) {
-    return format2(this, base33);
-  }
-  toJSON() {
-    return { "/": format2(this) };
-  }
-  link() {
-    return this;
-  }
-  [Symbol.toStringTag] = "CID";
-  // Legacy
-  [/* @__PURE__ */ Symbol.for("nodejs.util.inspect.custom")]() {
-    return `CID(${this.toString()})`;
-  }
-  /**
-   * Takes any input `value` and returns a `CID` instance if it was
-   * a `CID` otherwise returns `null`. If `value` is instanceof `CID`
-   * it will return value back. If `value` is not instance of this CID
-   * class, but is compatible CID it will return new instance of this
-   * `CID` class. Otherwise returns null.
-   *
-   * This allows two different incompatible versions of CID library to
-   * co-exist and interop as long as binary interface is compatible.
-   */
-  static asCID(input) {
-    if (input == null) {
-      return null;
-    }
-    const value = input;
-    if (value instanceof _CID2) {
-      return value;
-    } else if (value["/"] != null && value["/"] === value.bytes || value.asCID === value) {
-      const { version: version2, code: code3, multihash, bytes: bytes3 } = value;
-      return new _CID2(version2, code3, multihash, bytes3 ?? encodeCID2(version2, code3, multihash.bytes));
-    } else if (value[cidSymbol2] === true) {
-      const { version: version2, multihash, code: code3 } = value;
-      const digest3 = decode8(multihash);
-      return _CID2.create(version2, code3, digest3);
-    } else {
-      return null;
-    }
-  }
-  /**
-   * @param version - Version of the CID
-   * @param code - Code of the codec content is encoded in, see https://github.com/multiformats/multicodec/blob/master/table.csv
-   * @param digest - (Multi)hash of the of the content.
-   */
-  static create(version2, code3, digest3) {
-    if (typeof code3 !== "number") {
-      throw new Error("String codecs are no longer supported");
-    }
-    if (!(digest3.bytes instanceof Uint8Array)) {
-      throw new Error("Invalid digest");
-    }
-    switch (version2) {
-      case 0: {
-        if (code3 !== DAG_PB_CODE2) {
-          throw new Error(`Version 0 CID must use dag-pb (code: ${DAG_PB_CODE2}) block encoding`);
-        } else {
-          return new _CID2(version2, code3, digest3, digest3.bytes);
-        }
-      }
-      case 1: {
-        const bytes3 = encodeCID2(version2, code3, digest3.bytes);
-        return new _CID2(version2, code3, digest3, bytes3);
-      }
-      default: {
-        throw new Error("Invalid version");
-      }
-    }
-  }
-  /**
-   * Simplified version of `create` for CIDv0.
-   */
-  static createV0(digest3) {
-    return _CID2.create(0, DAG_PB_CODE2, digest3);
-  }
-  /**
-   * Simplified version of `create` for CIDv1.
-   *
-   * @param code - Content encoding format code.
-   * @param digest - Multihash of the content.
-   */
-  static createV1(code3, digest3) {
-    return _CID2.create(1, code3, digest3);
-  }
-  /**
-   * Decoded a CID from its binary representation. The byte array must contain
-   * only the CID with no additional bytes.
-   *
-   * An error will be thrown if the bytes provided do not contain a valid
-   * binary representation of a CID.
-   */
-  static decode(bytes3) {
-    const [cid2, remainder] = _CID2.decodeFirst(bytes3);
-    if (remainder.length !== 0) {
-      throw new Error("Incorrect length");
-    }
-    return cid2;
-  }
-  /**
-   * Decoded a CID from its binary representation at the beginning of a byte
-   * array.
-   *
-   * Returns an array with the first element containing the CID and the second
-   * element containing the remainder of the original byte array. The remainder
-   * will be a zero-length byte array if the provided bytes only contained a
-   * binary CID representation.
-   */
-  static decodeFirst(bytes3) {
-    const specs = _CID2.inspectBytes(bytes3);
-    const prefixSize = specs.size - specs.multihashSize;
-    const multihashBytes = coerce3(bytes3.subarray(prefixSize, prefixSize + specs.multihashSize));
-    if (multihashBytes.byteLength !== specs.multihashSize) {
-      throw new Error("Incorrect length");
-    }
-    const digestBytes3 = multihashBytes.subarray(specs.multihashSize - specs.digestSize);
-    const digest3 = new Digest2(specs.multihashCode, specs.digestSize, digestBytes3, multihashBytes);
-    const cid2 = specs.version === 0 ? _CID2.createV0(digest3) : _CID2.createV1(specs.codec, digest3);
-    return [cid2, bytes3.subarray(specs.size)];
-  }
-  /**
-   * Inspect the initial bytes of a CID to determine its properties.
-   *
-   * Involves decoding up to 4 varints. Typically this will require only 4 to 6
-   * bytes but for larger multicodec code values and larger multihash digest
-   * lengths these varints can be quite large. It is recommended that at least
-   * 10 bytes be made available in the `initialBytes` argument for a complete
-   * inspection.
-   */
-  static inspectBytes(initialBytes) {
-    let offset = 0;
-    const next = () => {
-      const [i, length32] = decode7(initialBytes.subarray(offset));
-      offset += length32;
-      return i;
-    };
-    let version2 = next();
-    let codec = DAG_PB_CODE2;
-    if (version2 === 18) {
-      version2 = 0;
-      offset = 0;
-    } else {
-      codec = next();
-    }
-    if (version2 !== 0 && version2 !== 1) {
-      throw new RangeError(`Invalid CID version ${version2}`);
-    }
-    const prefixSize = offset;
-    const multihashCode = next();
-    const digestSize = next();
-    const size = offset + digestSize;
-    const multihashSize = size - prefixSize;
-    return { version: version2, codec, multihashCode, digestSize, multihashSize, size };
-  }
-  /**
-   * Takes cid in a string representation and creates an instance. If `base`
-   * decoder is not provided will use a default from the configuration. It will
-   * throw an error if encoding of the CID is not compatible with supplied (or
-   * a default decoder).
-   */
-  static parse(source, base33) {
-    const [prefix, bytes3] = parseCIDtoBytes2(source, base33);
-    const cid2 = _CID2.decode(bytes3);
-    if (cid2.version === 0 && source[0] !== "Q") {
-      throw Error("Version 0 CID string must not include multibase prefix");
-    }
-    baseCache2(cid2).set(prefix, source);
-    return cid2;
-  }
-};
-function parseCIDtoBytes2(source, base33) {
-  switch (source[0]) {
-    // CIDv0 is parsed differently
-    case "Q": {
-      const decoder = base33 ?? base58btc2;
-      return [
-        base58btc2.prefix,
-        decoder.decode(`${base58btc2.prefix}${source}`)
-      ];
-    }
-    case base58btc2.prefix: {
-      const decoder = base33 ?? base58btc2;
-      return [base58btc2.prefix, decoder.decode(source)];
-    }
-    case base322.prefix: {
-      const decoder = base33 ?? base322;
-      return [base322.prefix, decoder.decode(source)];
-    }
-    case base362.prefix: {
-      const decoder = base33 ?? base362;
-      return [base362.prefix, decoder.decode(source)];
-    }
-    default: {
-      if (base33 == null) {
-        throw Error("To parse non base32, base36 or base58btc encoded CID multibase decoder must be provided");
-      }
-      return [source[0], base33.decode(source)];
-    }
-  }
-}
-function toStringV02(bytes3, cache32, base33) {
-  const { prefix } = base33;
-  if (prefix !== base58btc2.prefix) {
-    throw Error(`Cannot string encode V0 in ${base33.name} encoding`);
-  }
-  const cid2 = cache32.get(prefix);
-  if (cid2 == null) {
-    const cid3 = base33.encode(bytes3).slice(1);
-    cache32.set(prefix, cid3);
-    return cid3;
-  } else {
-    return cid2;
-  }
-}
-function toStringV12(bytes3, cache32, base33) {
-  const { prefix } = base33;
-  const cid2 = cache32.get(prefix);
-  if (cid2 == null) {
-    const cid3 = base33.encode(bytes3);
-    cache32.set(prefix, cid3);
-    return cid3;
-  } else {
-    return cid2;
-  }
-}
-var DAG_PB_CODE2 = 112;
-var SHA_256_CODE2 = 18;
-function encodeCID2(version2, code3, multihash) {
-  const codeOffset = encodingLength2(version2);
-  const hashOffset = codeOffset + encodingLength2(code3);
-  const bytes3 = new Uint8Array(hashOffset + multihash.byteLength);
-  encodeTo2(version2, bytes3, 0);
-  encodeTo2(code3, bytes3, codeOffset);
-  bytes3.set(multihash, hashOffset);
-  return bytes3;
-}
-var cidSymbol2 = /* @__PURE__ */ Symbol.for("@ipld/js-cid/CID");
-var MAX_CONTENT_BYTES = 100 * 1024 * 1024;
-function historyRecordForPublishedShare(result, now = /* @__PURE__ */ new Date()) {
-  const target = result.metadata.target.kind;
-  const supplied = result.metadata.recipientMatcher;
-  let matcher;
-  if (supplied?.kind === "recipientDid" && typeof supplied.value === "string") matcher = { kind: "recipientDid", value: supplied.value };
-  else if (supplied?.kind === "exactEmail" && typeof supplied.value === "string") matcher = { kind: "exactEmail", value: supplied.value };
-  else if (supplied?.kind === "emailDomain" && typeof supplied.value === "string") matcher = { kind: "emailDomain", value: supplied.value };
-  else if (target !== "bearer") throw new TypeError("addressed publication is missing its recipient binding");
-  else matcher = { kind: "bearer" };
-  return {
-    shareId: result.metadata.shareId,
-    target: result.metadata.target,
-    resource: result.metadata.resource,
-    actions: result.metadata.actions.map(
-      (action) => action === "read" ? "tinycloud.kv/get" : action === "list" ? "tinycloud.kv/list" : action === "edit" ? "tinycloud.kv/put" : action
-    ),
-    recipientMatcher: matcher,
-    targetKind: target,
-    ...result.metadata.registrationCid === void 0 ? {} : { registrationCid: result.metadata.registrationCid },
-    ...result.metadata.policyCid === void 0 ? {} : { policyCid: result.metadata.policyCid },
-    ...result.metadata.ownerDelegationCid === void 0 ? {} : { ownerDelegationCid: result.metadata.ownerDelegationCid },
-    ...result.metadata.enforcementDelegationCid === void 0 ? {} : { enforcementDelegationCid: result.metadata.enforcementDelegationCid },
-    ...result.metadata.ownerDid === void 0 ? {} : { ownerDid: result.metadata.ownerDid },
-    ...result.metadata.shareKeyDid === void 0 ? {} : { shareKeyDid: result.metadata.shareKeyDid },
-    ...result.metadata.enforcerDid === void 0 ? {} : { enforcerDid: result.metadata.enforcerDid },
-    ...result.metadata.envelopeCid === void 0 ? {} : { envelopeCid: result.metadata.envelopeCid },
-    ...result.metadata.shareCid === void 0 ? {} : { shareCid: result.metadata.shareCid },
-    registeredAt: now.toISOString(),
-    expiresAt: result.metadata.expiresAt,
-    link: result.url,
-    ...result.deliveryMaterial === void 0 ? {} : { deliveryMaterial: result.deliveryMaterial },
-    ...result.metadata.display.filename === void 0 ? {} : { filename: result.metadata.display.filename }
-  };
-}
-var ShareNotifyError = class extends Error {
-  constructor(message = "share delivery did not complete", reason) {
-    super(message);
-    this.reason = reason;
-    this.name = "ShareNotifyError";
-  }
-  code = "delivery-failed";
-};
-function recipientMatchesShareRecord(record, recipient) {
-  const matcher = record.recipientMatcher;
-  const mailbox = canonicalMailbox(recipient);
-  if (mailbox === void 0) return false;
-  if (matcher.kind === "exactEmail") return canonicalMailbox(matcher.value)?.email === mailbox.email;
-  if (matcher.kind === "emailDomain") return mailbox.domain === matcher.value;
-  return false;
-}
-function shareDeliveryWindowExpiresAt(record) {
-  const expiresAt = Math.min(Date.parse(record.expiresAt), Date.parse(record.registeredAt) + 5 * 60 * 1e3);
-  if (!Number.isFinite(expiresAt)) throw new ShareNotifyError("share delivery history has invalid timestamps");
-  return expiresAt;
-}
-async function notifyShare(input) {
-  const mailbox = canonicalMailbox(input.recipient);
-  if (!input.shareId || mailbox === void 0) throw new ShareNotifyError("recipient is invalid");
-  const recipient = mailbox.email;
-  if (input.record !== void 0 && !recipientMatchesShareRecord(input.record, recipient)) {
-    throw new ShareNotifyError("recipient does not match the stored share target");
-  }
-  const idempotencyKey = input.idempotencyKey ?? await defaultIdempotencyKey(input.shareId, recipient);
-  const attemptsLimit = input.maxAttempts ?? 3;
-  if (!Number.isSafeInteger(attemptsLimit) || attemptsLimit < 1 || attemptsLimit > 8) throw new ShareNotifyError("maxAttempts is invalid");
-  if (input.signal?.aborted) throw new ShareNotifyError("share delivery was cancelled");
-  if (input.checkDeliveryWindow && input.record !== void 0 && shareDeliveryWindowExpiresAt(input.record) <= Date.now()) {
-    return {
-      protocol: "tinycloud-share",
-      version: 1,
-      shareId: input.shareId,
-      state: "partial-failure",
-      idempotencyKey,
-      attempts: 1,
-      retryable: false,
-      reason: "delivery-window-expired"
-    };
-  }
-  let attempts = 0;
-  while (attempts < attemptsLimit) {
-    if (input.signal?.aborted) throw new ShareNotifyError("share delivery was cancelled");
-    attempts += 1;
     try {
-      const state2 = await input.adapter.deliver({ shareId: input.shareId, recipient, idempotencyKey, ...input.record === void 0 ? {} : { record: input.record }, ...input.signal === void 0 ? {} : { signal: input.signal } });
-      return {
-        protocol: "tinycloud-share",
-        version: 1,
-        shareId: input.shareId,
-        state: state2 === "delivered" && input.record?.deliveredRecipients?.includes(recipient) ? "already-delivered" : state2,
-        idempotencyKey,
-        attempts
-      };
+      summaries.push({ version: version2, complete: true, manifest: parseArtifactManifest(stored), manifestSha256: sha256Hex(stored) });
     } catch (error) {
-      if (error instanceof ShareNotifyError && error.reason === "delivery-window-expired") {
-        return {
-          protocol: "tinycloud-share",
-          version: 1,
-          shareId: input.shareId,
-          state: "partial-failure",
-          idempotencyKey,
-          attempts,
-          retryable: false,
-          reason: "delivery-window-expired"
-        };
-      }
-      if (error !== null && typeof error === "object" && "status" in error && (error.status === 401 || error.status === 403)) {
-        return {
-          protocol: "tinycloud-share",
-          version: 1,
-          shareId: input.shareId,
-          state: "partial-failure",
-          idempotencyKey,
-          attempts,
-          retryable: false
-        };
-      }
+      if (!(error instanceof ArtifactError) || error.code !== "corrupt") throw error;
+      summaries.push({ version: version2, complete: false, corrupt: true });
     }
   }
-  return { protocol: "tinycloud-share", version: 1, shareId: input.shareId, state: "partial-failure", idempotencyKey, attempts, retryable: true };
+  return summaries;
 }
-async function defaultIdempotencyKey(shareId, recipient) {
-  const canonicalRecipient = canonicalize(recipient.trim().toLowerCase());
-  const digest3 = new Uint8Array(await crypto.subtle.digest(
-    "SHA-256",
-    new TextEncoder().encode(canonicalRecipient)
-  ));
-  return `tinycloud-share:${shareId}:${toBase64Url(digest3)}`;
+function sameContent(manifest, files) {
+  if (manifest.files.length !== files.length) return false;
+  return files.every((file) => manifest.files.some((candidate) => candidate.path === file.path && candidate.sha256 === file.sha256));
 }
-var CredentialInvitationError = class extends Error {
-  constructor(code3, message) {
-    super(message);
-    this.code = code3;
-    this.name = "CredentialInvitationError";
+async function publishArtifactVersion(store, input) {
+  const artifactId = assertArtifactId(input.artifactId);
+  if (input.files.length === 0) throw new ArtifactError("invalid-argument", "an artifact version needs at least one file");
+  const entries = [];
+  const seen = /* @__PURE__ */ new Set();
+  for (const file of input.files) {
+    let path;
+    try {
+      path = canonicalShareFilename(file.filename);
+    } catch {
+      throw new ArtifactError("invalid-argument", "artifact filename must be one safe path segment");
+    }
+    if (path === ARTIFACT_MANIFEST_NAME) throw new ArtifactError("invalid-argument", `${ARTIFACT_MANIFEST_NAME} is reserved`);
+    if (seen.has(path)) throw new ArtifactError("invalid-argument", "artifact filenames must be unique");
+    seen.add(path);
+    entries.push({ path, sha256: sha256Hex(file.bytes), bytes: file.bytes.byteLength });
   }
-};
-function canonicalOrigin(value) {
-  let url;
-  try {
-    url = new URL(value);
-  } catch {
-    throw new CredentialInvitationError(
-      "invalid-origin",
-      "credential invitation origin is invalid"
-    );
+  entries.sort((a, b) => a.path < b.path ? -1 : a.path > b.path ? 1 : 0);
+  const bytesByPath = new Map(input.files.map((file, index) => [canonicalShareFilename(file.filename), index]));
+  const now = input.now ?? Date.now;
+  for (let attempt = 0; attempt < ARTIFACT_MAX_PUBLISH_ATTEMPTS; attempt += 1) {
+    const versions = await listArtifactVersions(store, artifactId);
+    const latestComplete = [...versions].reverse().find((version22) => version22.complete);
+    if (latestComplete?.manifest !== void 0 && sameContent(latestComplete.manifest, entries)) {
+      return { artifactId, version: latestComplete.version, manifest: latestComplete.manifest, manifestSha256: latestComplete.manifestSha256, created: false };
+    }
+    const version2 = (versions.at(-1)?.version ?? 0) + 1;
+    let lost = false;
+    for (const entry of entries) {
+      const source = input.files[bytesByPath.get(entry.path)];
+      const key = artifactVersionFilePath(artifactId, version2, entry.path);
+      const written2 = await store.put(key, source.bytes, { ifNoneMatch: "*", ...source.contentType === void 0 ? {} : { contentType: source.contentType } });
+      if (written2 === "exists") {
+        const stored = await store.get(key);
+        if (stored === void 0 || sha256Hex(stored) !== entry.sha256) {
+          lost = true;
+          break;
+        }
+      }
+    }
+    if (lost) continue;
+    const manifest = {
+      v: ARTIFACT_MANIFEST_VERSION,
+      files: entries,
+      createdAt: new Date(now()).toISOString(),
+      parent: latestComplete?.version ?? null,
+      ...input.note === void 0 ? {} : { note: input.note }
+    };
+    const manifestKey = artifactVersionFilePath(artifactId, version2, ARTIFACT_MANIFEST_NAME);
+    const encoded = manifestBytes(manifest);
+    const written = await store.put(manifestKey, encoded, { ifNoneMatch: "*", contentType: "application/json" });
+    if (written === "created") return { artifactId, version: version2, manifest, manifestSha256: sha256Hex(encoded), created: true };
+    const existing = await store.get(manifestKey);
+    if (existing === void 0) continue;
+    let theirs;
+    try {
+      theirs = parseArtifactManifest(existing);
+    } catch (error) {
+      if (error instanceof ArtifactError && error.code === "corrupt") continue;
+      throw error;
+    }
+    const identical = theirs.files.length === entries.length && entries.every((entry) => theirs.files.some((file) => file.path === entry.path && file.sha256 === entry.sha256));
+    if (identical) return { artifactId, version: version2, manifest: theirs, manifestSha256: sha256Hex(existing), created: false };
   }
-  if (url.origin !== value || url.username !== "" || url.password !== "" || url.search !== "" || url.hash !== "" || url.protocol !== "https:")
-    throw new CredentialInvitationError(
-      "invalid-origin",
-      "credential invitation origin is invalid"
-    );
-  return url.origin;
-}
-function object2(value) {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-async function validateReceipt(receipt, shareUrl) {
-  if (!object2(receipt) || !object2(receipt.request) || !object2(receipt.admission) || !object2(receipt.proof)) {
-    throw new CredentialInvitationError(
-      "invalid-receipt",
-      "credential invitation receipt is invalid"
-    );
-  }
-  if (receipt.request.returnLink !== shareUrl) {
-    throw new CredentialInvitationError(
-      "invalid-receipt",
-      "credential invitation is not bound to the share link"
-    );
-  }
-  let link3;
-  try {
-    link3 = new URL(shareUrl);
-  } catch {
-    throw new CredentialInvitationError(
-      "invalid-receipt",
-      "credential invitation share link is invalid"
-    );
-  }
-  if (link3.search !== "" || link3.pathname !== "/s/inline") {
-    throw new CredentialInvitationError(
-      "invalid-receipt",
-      "credential invitation share link must be sealed inline"
-    );
-  }
-  try {
-    await parseSealedInlineShareUrl(shareUrl);
-  } catch {
-    throw new CredentialInvitationError(
-      "invalid-receipt",
-      "credential invitation share link is invalid"
-    );
-  }
-}
-async function deliverCredentialInvitation(input) {
-  const credentialsOrigin = canonicalOrigin(input.credentialsOrigin);
-  await validateReceipt(input.receipt, input.shareUrl);
-  const fetchFn = input.fetchFn ?? globalThis.fetch;
-  let response;
-  try {
-    response = await fetchFn(`${credentialsOrigin}/v1/credential-invitations`, {
-      method: "POST",
-      credentials: "omit",
-      redirect: "error",
-      referrerPolicy: "no-referrer",
-      headers: {
-        accept: "application/json",
-        "content-type": "application/json"
-      },
-      body: JSON.stringify(input.receipt),
-      ...input.signal === void 0 ? {} : { signal: input.signal }
-    });
-  } catch {
-    throw new CredentialInvitationError(
-      "transport",
-      "credential invitation delivery is unavailable"
-    );
-  }
-  if (response.status !== 202) {
-    throw new CredentialInvitationError(
-      "rejected",
-      "credential invitation delivery was not accepted"
-    );
-  }
-  let body;
-  try {
-    body = await response.json();
-  } catch {
-    throw new CredentialInvitationError(
-      "invalid-response",
-      "credential invitation response is invalid"
-    );
-  }
-  if (!object2(body) || Object.keys(body).length !== 1 || body.status !== "accepted") {
-    throw new CredentialInvitationError(
-      "invalid-response",
-      "credential invitation response is invalid"
-    );
-  }
-  return { status: "accepted" };
-}
-function targetKind2(record) {
-  if (record.targetKind !== void 0) return record.targetKind;
-  return record.recipientMatcher.kind === "exactEmail" ? "email" : record.recipientMatcher.kind === "emailDomain" ? "emailDomain" : record.recipientMatcher.kind === "recipientDid" ? "recipientDid" : "bearer";
-}
-function policyNodeAudience(record) {
-  const envelope = record.deliveryMaterial?.envelope;
-  if (typeof envelope !== "object" || envelope === null || Array.isArray(envelope)) return record.target.nodeAudience;
-  const binding = envelope.attestedEnforcerBinding;
-  if (typeof binding !== "object" || binding === null || Array.isArray(binding)) return record.target.nodeAudience;
-  const nodeAudience = binding.nodeAudience;
-  return typeof nodeAudience === "string" ? nodeAudience : record.target.nodeAudience;
-}
-async function revokeShare(input) {
-  const target = targetKind2(input.record);
-  if (input.adapter === void 0) return { state: "unsupported", target, reason: "node revocation authority is required", code: "unsupported-target" };
-  const scope = input.scope ?? "direct";
-  const delegationCid = scope === "ancestor" ? input.record.ownerDelegationCid : input.record.enforcementDelegationCid;
-  if (delegationCid === void 0) return { state: "unsupported", target, reason: "share has no node-enforced delegation receipt", code: "unsupported-target" };
-  if (target === "bearer") {
-    if (input.adapter.revokeDelegation === void 0) return { state: "unsupported", target, reason: "native delegation revocation authority is required", code: "unsupported-target" };
-    await input.adapter.revokeDelegation({ delegationCid, scope, record: input.record });
-  } else {
-    if (input.record.ownerDid === void 0) return { state: "unsupported", target, reason: "share has no Policy/v3 owner receipt", code: "unsupported-target" };
-    if (input.adapter.revokePolicyRoot === void 0) return { state: "unsupported", target, reason: "Policy/v3 root revocation authority is required", code: "unsupported-target" };
-    await input.adapter.revokePolicyRoot({
-      rootCid: delegationCid,
-      targetRole: scope === "ancestor" ? "policy-authority" : "policy-enforcement",
-      ownerDid: input.record.ownerDid,
-      nodeOrigin: input.record.target.origin,
-      nodeAudience: policyNodeAudience(input.record)
-    });
-  }
-  let revokedAt = input.record.revokedAt ?? (input.now?.() ?? /* @__PURE__ */ new Date()).toISOString();
-  if (input.records?.update !== void 0) {
-    const updated = await input.records.update(input.record.shareId, (record) => ({ ...record, revokedAt: record.revokedAt ?? revokedAt }));
-    revokedAt = updated?.revokedAt ?? revokedAt;
-  } else if (input.records !== void 0) {
-    const latest = await input.records.get(input.record.shareId);
-    revokedAt = latest?.revokedAt ?? revokedAt;
-    await input.records.put({ ...latest ?? input.record, revokedAt });
-  }
-  return { state: "revoked", target, delegationCid, revokedAt };
-}
-function redactRecord(record, revealLink, link3) {
-  const matcher = record.recipientMatcher;
-  const revealedLink = revealLink ? link3 ?? record.link : void 0;
-  return {
-    shareId: record.shareId,
-    target: matcher.kind === "exactEmail" ? "email" : matcher.kind === "emailDomain" ? "email-domain" : matcher.kind === "recipientDid" ? "recipient-did" : "bearer",
-    ...matcher.kind === "exactEmail" ? { recipient: matcher.value } : matcher.kind === "emailDomain" ? { recipient: `*@${matcher.value}` } : matcher.kind === "recipientDid" ? { recipient: matcher.value } : {},
-    expiresAt: record.expiresAt,
-    revoked: record.revokedAt !== void 0,
-    ...revealedLink === void 0 ? {} : { link: revealedLink }
-  };
-}
-async function listShares(storage) {
-  const records = await storage.list();
-  return records.map((record) => redactRecord(record, false));
-}
-async function showShare(input) {
-  const record = await input.storage.get(input.shareId);
-  if (record === void 0) throw new Error("share not found");
-  return redactRecord(record, input.revealLink === true, input.link);
-}
-var SHARE_V2_PROTOCOL = Object.freeze({
-  challengeDomain: "xyz.tinycloud.share/policy-challenge/v2\0",
-  sessionDomain: "xyz.tinycloud.share/policy-session/v2\0",
-  invocationDomain: "xyz.tinycloud.share/invocation/v2\0",
-  readResponseDomain: "xyz.tinycloud.share/read-response/v2\0",
-  holderBindingDomain: "xyz.tinycloud.share/email-claim-holder-binding/v1\0",
-  holderBindingName: "holderBinding",
-  holderBindingType: "TinyCloudEmailClaimHolderBinding",
-  holderBindingVersion: 1
-});
-var DOMAIN = SHARE_V2_PROTOCOL.challengeDomain;
-var PRESENTATION_DOMAIN = SHARE_V2_PROTOCOL.sessionDomain;
-var SESSION_DOMAIN = SHARE_V2_PROTOCOL.sessionDomain;
-var INVOCATION_DOMAIN = SHARE_V2_PROTOCOL.invocationDomain;
-var NATIVE_SHARE_FRAGMENT_PARAMETER = "tc1";
-function canonicalViewerUrl(viewerOrigin) {
-  const url = new URL(viewerOrigin);
-  if (url.protocol !== "https:" || url.origin !== viewerOrigin || url.pathname !== "/" || url.search || url.hash) throw new TypeError("viewer origin must be a canonical HTTPS origin");
-  url.pathname = "/viewer";
-  return url;
-}
-async function createNativeShare(sharing, input) {
-  if (!input.path || input.path.startsWith("/") || input.path.endsWith("/") || input.path.includes("..") || input.path.includes("//")) throw new TypeError("native share path must be one canonical TinyCloud KV key");
-  const generated = await sharing.generate({ path: input.path, actions: ["tinycloud.kv/get"], expiry: input.expiresAt });
-  if (generated.ok !== true) {
-    const error = new Error(typeof generated.error?.message === "string" ? generated.error.message : "TinyCloud sharing service rejected delegation generation");
-    if (typeof generated.error?.code === "string") Object.assign(error, { code: generated.error.code });
-    throw error;
-  }
-  if (typeof generated.data?.token !== "string" || typeof generated.data.delegation?.cid !== "string" || !(generated.data.expiresAt instanceof Date)) throw new Error("TinyCloud sharing service returned incomplete delegation metadata");
-  const delegation = sharing.decodeLink(generated.data.token);
-  if (typeof delegation.spaceId !== "string" || delegation.spaceId.length === 0 || typeof delegation.path !== "string" || delegation.path.length === 0) throw new Error("TinyCloud sharing service returned a non-canonical delegation authority");
-  const url = canonicalViewerUrl(input.viewerOrigin);
-  url.hash = `${NATIVE_SHARE_FRAGMENT_PARAMETER}=${encodeURIComponent(generated.data.token)}`;
-  return { url: url.toString(), delegationCid: generated.data.delegation.cid, expiresAt: generated.data.expiresAt, spaceId: delegation.spaceId };
-}
-function parseNativeShareUrl(value) {
-  const url = new URL(value);
-  if (url.search || url.pathname !== "/viewer") throw new TypeError("native shares must carry tc1 only in the /viewer URL fragment");
-  const fragment = new URLSearchParams(url.hash.slice(1));
-  const token = fragment.get(NATIVE_SHARE_FRAGMENT_PARAMETER);
-  if (!token || fragment.size !== 1) throw new TypeError("missing native share fragment");
-  return token;
+  throw new ArtifactError("conflict", "could not claim an artifact version number after repeated races; retry");
 }
 
-// ../../node_modules/zod/v3/external.js
+// ../share-sdk/dist/index.js
+init_sha2();
+init_ed25519();
+init_blake3();
+init_ed25519();
+init_sha256();
+init_sha256();
+var __defProp3 = Object.defineProperty;
+var __export3 = (target, all) => {
+  for (var name in all)
+    __defProp3(target, name, { get: all[name], enumerable: true });
+};
+var UNSAFE_FILENAME_CODE_POINT2 = /[\p{Cc}\p{Cf}\p{Cs}\u2028\u2029]/u;
+function hasUnsafeFilenameCodePoint2(value) {
+  return UNSAFE_FILENAME_CODE_POINT2.test(value);
+}
+function canonicalShareFilename2(value) {
+  const canonical = value.normalize("NFC");
+  if (canonical.length === 0 || canonical === "." || canonical === ".." || canonical.includes("/") || canonical.includes("\\") || hasUnsafeFilenameCodePoint2(canonical)) {
+    throw new TypeError("share filename is unsafe");
+  }
+  return canonical;
+}
 var external_exports2 = {};
-__export(external_exports2, {
+__export3(external_exports2, {
   BRAND: () => BRAND2,
   DIRTY: () => DIRTY2,
   EMPTY_PATH: () => EMPTY_PATH2,
@@ -15004,7 +13221,7 @@ __export(external_exports2, {
   array: () => arrayType2,
   bigint: () => bigIntType2,
   boolean: () => booleanType2,
-  coerce: () => coerce4,
+  coerce: () => coerce3,
   custom: () => custom2,
   date: () => dateType2,
   datetimeRegex: () => datetimeRegex2,
@@ -15056,61 +13273,59 @@ __export(external_exports2, {
   util: () => util2,
   void: () => voidType2
 });
-
-// ../../node_modules/zod/v3/helpers/util.js
 var util2;
-(function(util3) {
-  util3.assertEqual = (_) => {
+(function(util22) {
+  util22.assertEqual = (_) => {
   };
   function assertIs(_arg) {
   }
-  util3.assertIs = assertIs;
+  util22.assertIs = assertIs;
   function assertNever(_x) {
     throw new Error();
   }
-  util3.assertNever = assertNever;
-  util3.arrayToEnum = (items) => {
+  util22.assertNever = assertNever;
+  util22.arrayToEnum = (items) => {
     const obj = {};
     for (const item of items) {
       obj[item] = item;
     }
     return obj;
   };
-  util3.getValidEnumValues = (obj) => {
-    const validKeys = util3.objectKeys(obj).filter((k) => typeof obj[obj[k]] !== "number");
+  util22.getValidEnumValues = (obj) => {
+    const validKeys = util22.objectKeys(obj).filter((k) => typeof obj[obj[k]] !== "number");
     const filtered = {};
     for (const k of validKeys) {
       filtered[k] = obj[k];
     }
-    return util3.objectValues(filtered);
+    return util22.objectValues(filtered);
   };
-  util3.objectValues = (obj) => {
-    return util3.objectKeys(obj).map(function(e) {
+  util22.objectValues = (obj) => {
+    return util22.objectKeys(obj).map(function(e) {
       return obj[e];
     });
   };
-  util3.objectKeys = typeof Object.keys === "function" ? (obj) => Object.keys(obj) : (object3) => {
+  util22.objectKeys = typeof Object.keys === "function" ? (obj) => Object.keys(obj) : (object4) => {
     const keys = [];
-    for (const key in object3) {
-      if (Object.prototype.hasOwnProperty.call(object3, key)) {
+    for (const key in object4) {
+      if (Object.prototype.hasOwnProperty.call(object4, key)) {
         keys.push(key);
       }
     }
     return keys;
   };
-  util3.find = (arr, checker) => {
+  util22.find = (arr, checker) => {
     for (const item of arr) {
       if (checker(item))
         return item;
     }
     return void 0;
   };
-  util3.isInteger = typeof Number.isInteger === "function" ? (val) => Number.isInteger(val) : (val) => typeof val === "number" && Number.isFinite(val) && Math.floor(val) === val;
+  util22.isInteger = typeof Number.isInteger === "function" ? (val) => Number.isInteger(val) : (val) => typeof val === "number" && Number.isFinite(val) && Math.floor(val) === val;
   function joinValues(array, separator = " | ") {
     return array.map((val) => typeof val === "string" ? `'${val}'` : val).join(separator);
   }
-  util3.joinValues = joinValues;
-  util3.jsonStringifyReplacer = (_, value) => {
+  util22.joinValues = joinValues;
+  util22.jsonStringifyReplacer = (_, value) => {
     if (typeof value === "bigint") {
       return value.toString();
     }
@@ -15118,8 +13333,8 @@ var util2;
   };
 })(util2 || (util2 = {}));
 var objectUtil2;
-(function(objectUtil3) {
-  objectUtil3.mergeShapes = (first, second) => {
+(function(objectUtil22) {
+  objectUtil22.mergeShapes = (first, second) => {
     return {
       ...first,
       ...second
@@ -15190,8 +13405,6 @@ var getParsedType2 = (data) => {
       return ZodParsedType2.unknown;
   }
 };
-
-// ../../node_modules/zod/v3/ZodError.js
 var ZodIssueCode2 = util2.arrayToEnum([
   "invalid_type",
   "invalid_literal",
@@ -15308,8 +13521,6 @@ ZodError2.create = (issues) => {
   const error = new ZodError2(issues);
   return error;
 };
-
-// ../../node_modules/zod/v3/locales/en.js
 var errorMap2 = (issue, _ctx) => {
   let message;
   switch (issue.code) {
@@ -15411,8 +13622,6 @@ var errorMap2 = (issue, _ctx) => {
   return { message };
 };
 var en_default2 = errorMap2;
-
-// ../../node_modules/zod/v3/errors.js
 var overrideErrorMap2 = en_default2;
 function setErrorMap2(map) {
   overrideErrorMap2 = map;
@@ -15420,8 +13629,6 @@ function setErrorMap2(map) {
 function getErrorMap2() {
   return overrideErrorMap2;
 }
-
-// ../../node_modules/zod/v3/helpers/parseUtil.js
 var makeIssue2 = (params) => {
   const { data, path, errorMaps, issueData } = params;
   const fullPath = [...path, ...issueData.path || []];
@@ -15530,15 +13737,11 @@ var isAborted2 = (x) => x.status === "aborted";
 var isDirty2 = (x) => x.status === "dirty";
 var isValid2 = (x) => x.status === "valid";
 var isAsync2 = (x) => typeof Promise !== "undefined" && x instanceof Promise;
-
-// ../../node_modules/zod/v3/helpers/errorUtil.js
 var errorUtil2;
-(function(errorUtil3) {
-  errorUtil3.errToObj = (message) => typeof message === "string" ? { message } : message || {};
-  errorUtil3.toString = (message) => typeof message === "string" ? message : message?.message;
+(function(errorUtil22) {
+  errorUtil22.errToObj = (message) => typeof message === "string" ? { message } : message || {};
+  errorUtil22.toString = (message) => typeof message === "string" ? message : message?.message;
 })(errorUtil2 || (errorUtil2 = {}));
-
-// ../../node_modules/zod/v3/types.js
 var ParseInputLazyPath2 = class {
   constructor(parent, value, path, key) {
     this._cachedPath = [];
@@ -15580,12 +13783,12 @@ var handleResult2 = (ctx, result) => {
 function processCreateParams2(params) {
   if (!params)
     return {};
-  const { errorMap: errorMap3, invalid_type_error, required_error, description } = params;
-  if (errorMap3 && (invalid_type_error || required_error)) {
+  const { errorMap: errorMap22, invalid_type_error, required_error, description } = params;
+  if (errorMap22 && (invalid_type_error || required_error)) {
     throw new Error(`Can't use "invalid_type_error" or "required_error" in conjunction with custom error map.`);
   }
-  if (errorMap3)
-    return { errorMap: errorMap3, description };
+  if (errorMap22)
+    return { errorMap: errorMap22, description };
   const customMap = (iss, ctx) => {
     const { message } = params;
     if (iss.code === "invalid_enum_value") {
@@ -15939,8 +14142,8 @@ function isValidJWT2(jwt, alg) {
     const [header] = jwt.split(".");
     if (!header)
       return false;
-    const base643 = header.replace(/-/g, "+").replace(/_/g, "/").padEnd(header.length + (4 - header.length % 4) % 4, "=");
-    const decoded = JSON.parse(atob(base643));
+    const base6422 = header.replace(/-/g, "+").replace(/_/g, "/").padEnd(header.length + (4 - header.length % 4) % 4, "=");
+    const decoded = JSON.parse(atob(base6422));
     if (typeof decoded !== "object" || decoded === null)
       return false;
     if ("typ" in decoded && decoded?.typ !== "JWT")
@@ -18594,23 +16797,23 @@ var ZodEffects2 = class extends ZodType2 {
     }
     if (effect.type === "transform") {
       if (ctx.common.async === false) {
-        const base4 = this._def.schema._parseSync({
+        const base33 = this._def.schema._parseSync({
           data: ctx.data,
           path: ctx.path,
           parent: ctx
         });
-        if (!isValid2(base4))
+        if (!isValid2(base33))
           return INVALID2;
-        const result = effect.transform(base4.value, checkCtx);
+        const result = effect.transform(base33.value, checkCtx);
         if (result instanceof Promise) {
           throw new Error(`Asynchronous transform encountered during synchronous parse operation. Use .parseAsync instead.`);
         }
         return { status: status.value, value: result };
       } else {
-        return this._def.schema._parseAsync({ data: ctx.data, path: ctx.path, parent: ctx }).then((base4) => {
-          if (!isValid2(base4))
+        return this._def.schema._parseAsync({ data: ctx.data, path: ctx.path, parent: ctx }).then((base33) => {
+          if (!isValid2(base33))
             return INVALID2;
-          return Promise.resolve(effect.transform(base4.value, checkCtx)).then((result) => ({
+          return Promise.resolve(effect.transform(base33.value, checkCtx)).then((result) => ({
             status: status.value,
             value: result
           }));
@@ -18896,43 +17099,43 @@ var late2 = {
   object: ZodObject2.lazycreate
 };
 var ZodFirstPartyTypeKind2;
-(function(ZodFirstPartyTypeKind3) {
-  ZodFirstPartyTypeKind3["ZodString"] = "ZodString";
-  ZodFirstPartyTypeKind3["ZodNumber"] = "ZodNumber";
-  ZodFirstPartyTypeKind3["ZodNaN"] = "ZodNaN";
-  ZodFirstPartyTypeKind3["ZodBigInt"] = "ZodBigInt";
-  ZodFirstPartyTypeKind3["ZodBoolean"] = "ZodBoolean";
-  ZodFirstPartyTypeKind3["ZodDate"] = "ZodDate";
-  ZodFirstPartyTypeKind3["ZodSymbol"] = "ZodSymbol";
-  ZodFirstPartyTypeKind3["ZodUndefined"] = "ZodUndefined";
-  ZodFirstPartyTypeKind3["ZodNull"] = "ZodNull";
-  ZodFirstPartyTypeKind3["ZodAny"] = "ZodAny";
-  ZodFirstPartyTypeKind3["ZodUnknown"] = "ZodUnknown";
-  ZodFirstPartyTypeKind3["ZodNever"] = "ZodNever";
-  ZodFirstPartyTypeKind3["ZodVoid"] = "ZodVoid";
-  ZodFirstPartyTypeKind3["ZodArray"] = "ZodArray";
-  ZodFirstPartyTypeKind3["ZodObject"] = "ZodObject";
-  ZodFirstPartyTypeKind3["ZodUnion"] = "ZodUnion";
-  ZodFirstPartyTypeKind3["ZodDiscriminatedUnion"] = "ZodDiscriminatedUnion";
-  ZodFirstPartyTypeKind3["ZodIntersection"] = "ZodIntersection";
-  ZodFirstPartyTypeKind3["ZodTuple"] = "ZodTuple";
-  ZodFirstPartyTypeKind3["ZodRecord"] = "ZodRecord";
-  ZodFirstPartyTypeKind3["ZodMap"] = "ZodMap";
-  ZodFirstPartyTypeKind3["ZodSet"] = "ZodSet";
-  ZodFirstPartyTypeKind3["ZodFunction"] = "ZodFunction";
-  ZodFirstPartyTypeKind3["ZodLazy"] = "ZodLazy";
-  ZodFirstPartyTypeKind3["ZodLiteral"] = "ZodLiteral";
-  ZodFirstPartyTypeKind3["ZodEnum"] = "ZodEnum";
-  ZodFirstPartyTypeKind3["ZodEffects"] = "ZodEffects";
-  ZodFirstPartyTypeKind3["ZodNativeEnum"] = "ZodNativeEnum";
-  ZodFirstPartyTypeKind3["ZodOptional"] = "ZodOptional";
-  ZodFirstPartyTypeKind3["ZodNullable"] = "ZodNullable";
-  ZodFirstPartyTypeKind3["ZodDefault"] = "ZodDefault";
-  ZodFirstPartyTypeKind3["ZodCatch"] = "ZodCatch";
-  ZodFirstPartyTypeKind3["ZodPromise"] = "ZodPromise";
-  ZodFirstPartyTypeKind3["ZodBranded"] = "ZodBranded";
-  ZodFirstPartyTypeKind3["ZodPipeline"] = "ZodPipeline";
-  ZodFirstPartyTypeKind3["ZodReadonly"] = "ZodReadonly";
+(function(ZodFirstPartyTypeKind22) {
+  ZodFirstPartyTypeKind22["ZodString"] = "ZodString";
+  ZodFirstPartyTypeKind22["ZodNumber"] = "ZodNumber";
+  ZodFirstPartyTypeKind22["ZodNaN"] = "ZodNaN";
+  ZodFirstPartyTypeKind22["ZodBigInt"] = "ZodBigInt";
+  ZodFirstPartyTypeKind22["ZodBoolean"] = "ZodBoolean";
+  ZodFirstPartyTypeKind22["ZodDate"] = "ZodDate";
+  ZodFirstPartyTypeKind22["ZodSymbol"] = "ZodSymbol";
+  ZodFirstPartyTypeKind22["ZodUndefined"] = "ZodUndefined";
+  ZodFirstPartyTypeKind22["ZodNull"] = "ZodNull";
+  ZodFirstPartyTypeKind22["ZodAny"] = "ZodAny";
+  ZodFirstPartyTypeKind22["ZodUnknown"] = "ZodUnknown";
+  ZodFirstPartyTypeKind22["ZodNever"] = "ZodNever";
+  ZodFirstPartyTypeKind22["ZodVoid"] = "ZodVoid";
+  ZodFirstPartyTypeKind22["ZodArray"] = "ZodArray";
+  ZodFirstPartyTypeKind22["ZodObject"] = "ZodObject";
+  ZodFirstPartyTypeKind22["ZodUnion"] = "ZodUnion";
+  ZodFirstPartyTypeKind22["ZodDiscriminatedUnion"] = "ZodDiscriminatedUnion";
+  ZodFirstPartyTypeKind22["ZodIntersection"] = "ZodIntersection";
+  ZodFirstPartyTypeKind22["ZodTuple"] = "ZodTuple";
+  ZodFirstPartyTypeKind22["ZodRecord"] = "ZodRecord";
+  ZodFirstPartyTypeKind22["ZodMap"] = "ZodMap";
+  ZodFirstPartyTypeKind22["ZodSet"] = "ZodSet";
+  ZodFirstPartyTypeKind22["ZodFunction"] = "ZodFunction";
+  ZodFirstPartyTypeKind22["ZodLazy"] = "ZodLazy";
+  ZodFirstPartyTypeKind22["ZodLiteral"] = "ZodLiteral";
+  ZodFirstPartyTypeKind22["ZodEnum"] = "ZodEnum";
+  ZodFirstPartyTypeKind22["ZodEffects"] = "ZodEffects";
+  ZodFirstPartyTypeKind22["ZodNativeEnum"] = "ZodNativeEnum";
+  ZodFirstPartyTypeKind22["ZodOptional"] = "ZodOptional";
+  ZodFirstPartyTypeKind22["ZodNullable"] = "ZodNullable";
+  ZodFirstPartyTypeKind22["ZodDefault"] = "ZodDefault";
+  ZodFirstPartyTypeKind22["ZodCatch"] = "ZodCatch";
+  ZodFirstPartyTypeKind22["ZodPromise"] = "ZodPromise";
+  ZodFirstPartyTypeKind22["ZodBranded"] = "ZodBranded";
+  ZodFirstPartyTypeKind22["ZodPipeline"] = "ZodPipeline";
+  ZodFirstPartyTypeKind22["ZodReadonly"] = "ZodReadonly";
 })(ZodFirstPartyTypeKind2 || (ZodFirstPartyTypeKind2 = {}));
 var instanceOfType2 = (cls, params = {
   message: `Input not instance of ${cls.name}`
@@ -18974,7 +17177,7 @@ var pipelineType2 = ZodPipeline2.create;
 var ostring2 = () => stringType2().optional();
 var onumber2 = () => numberType2().optional();
 var oboolean2 = () => booleanType2().optional();
-var coerce4 = {
+var coerce3 = {
   string: ((arg) => ZodString2.create({ ...arg, coerce: true })),
   number: ((arg) => ZodNumber2.create({ ...arg, coerce: true })),
   boolean: ((arg) => ZodBoolean2.create({
@@ -18985,10 +17188,8 @@ var coerce4 = {
   date: ((arg) => ZodDate2.create({ ...arg, coerce: true }))
 };
 var NEVER2 = INVALID2;
-
-// ../share-envelope/dist/index.js
-var empty3 = new Uint8Array(0);
-function equals5(aa, bb) {
+var empty2 = new Uint8Array(0);
+function equals3(aa, bb) {
   if (aa === bb) {
     return true;
   }
@@ -19002,7 +17203,7 @@ function equals5(aa, bb) {
   }
   return true;
 }
-function coerce5(o) {
+function coerce22(o) {
   if (o instanceof Uint8Array && o.constructor.name === "Uint8Array") {
     return o;
   }
@@ -19014,7 +17215,7 @@ function coerce5(o) {
   }
   throw new Error("Unknown type, must be binary type");
 }
-function base3(ALPHABET, name) {
+function base2(ALPHABET, name) {
   if (ALPHABET.length >= 255) {
     throw new TypeError("Alphabet too long");
   }
@@ -19034,7 +17235,7 @@ function base3(ALPHABET, name) {
   var LEADER = ALPHABET.charAt(0);
   var FACTOR = Math.log(BASE) / Math.log(256);
   var iFACTOR = Math.log(256) / Math.log(BASE);
-  function encode32(source) {
+  function encode322(source) {
     if (source instanceof Uint8Array)
       ;
     else if (ArrayBuffer.isView(source)) {
@@ -19049,7 +17250,7 @@ function base3(ALPHABET, name) {
       return "";
     }
     var zeroes = 0;
-    var length22 = 0;
+    var length222 = 0;
     var pbegin = 0;
     var pend = source.length;
     while (pbegin !== pend && source[pbegin] === 0) {
@@ -19061,7 +17262,7 @@ function base3(ALPHABET, name) {
     while (pbegin !== pend) {
       var carry = source[pbegin];
       var i2 = 0;
-      for (var it1 = size - 1; (carry !== 0 || i2 < length22) && it1 !== -1; it1--, i2++) {
+      for (var it1 = size - 1; (carry !== 0 || i2 < length222) && it1 !== -1; it1--, i2++) {
         carry += 256 * b58[it1] >>> 0;
         b58[it1] = carry % BASE >>> 0;
         carry = carry / BASE >>> 0;
@@ -19069,10 +17270,10 @@ function base3(ALPHABET, name) {
       if (carry !== 0) {
         throw new Error("Non-zero carry");
       }
-      length22 = i2;
+      length222 = i2;
       pbegin++;
     }
-    var it2 = size - length22;
+    var it2 = size - length222;
     while (it2 !== size && b58[it2] === 0) {
       it2++;
     }
@@ -19094,7 +17295,7 @@ function base3(ALPHABET, name) {
       return;
     }
     var zeroes = 0;
-    var length22 = 0;
+    var length222 = 0;
     while (source[psz] === LEADER) {
       zeroes++;
       psz++;
@@ -19107,7 +17308,7 @@ function base3(ALPHABET, name) {
         return;
       }
       var i2 = 0;
-      for (var it3 = size - 1; (carry !== 0 || i2 < length22) && it3 !== -1; it3--, i2++) {
+      for (var it3 = size - 1; (carry !== 0 || i2 < length222) && it3 !== -1; it3--, i2++) {
         carry += BASE * b256[it3] >>> 0;
         b256[it3] = carry % 256 >>> 0;
         carry = carry / 256 >>> 0;
@@ -19115,13 +17316,13 @@ function base3(ALPHABET, name) {
       if (carry !== 0) {
         throw new Error("Non-zero carry");
       }
-      length22 = i2;
+      length222 = i2;
       psz++;
     }
     if (source[psz] === " ") {
       return;
     }
-    var it4 = size - length22;
+    var it4 = size - length222;
     while (it4 !== size && b256[it4] === 0) {
       it4++;
     }
@@ -19132,7 +17333,7 @@ function base3(ALPHABET, name) {
     }
     return vch;
   }
-  function decode52(string) {
+  function decode522(string) {
     var buffer = decodeUnsafe(string);
     if (buffer) {
       return buffer;
@@ -19140,15 +17341,15 @@ function base3(ALPHABET, name) {
     throw new Error(`Non-${name} character`);
   }
   return {
-    encode: encode32,
+    encode: encode322,
     decodeUnsafe,
-    decode: decode52
+    decode: decode522
   };
 }
-var src3 = base3;
-var _brrp__multiformats_scope_baseX3 = src3;
-var base_x_default3 = _brrp__multiformats_scope_baseX3;
-var Encoder3 = class {
+var src2 = base2;
+var _brrp__multiformats_scope_baseX2 = src2;
+var base_x_default2 = _brrp__multiformats_scope_baseX2;
+var Encoder2 = class {
   name;
   prefix;
   baseEncode;
@@ -19157,15 +17358,15 @@ var Encoder3 = class {
     this.prefix = prefix;
     this.baseEncode = baseEncode;
   }
-  encode(bytes) {
-    if (bytes instanceof Uint8Array) {
-      return `${this.prefix}${this.baseEncode(bytes)}`;
+  encode(bytes3) {
+    if (bytes3 instanceof Uint8Array) {
+      return `${this.prefix}${this.baseEncode(bytes3)}`;
     } else {
       throw Error("Unknown type, must be binary type");
     }
   }
 };
-var Decoder3 = class {
+var Decoder2 = class {
   name;
   prefix;
   baseDecode;
@@ -19191,16 +17392,16 @@ var Decoder3 = class {
     }
   }
   or(decoder) {
-    return or3(this, decoder);
+    return or2(this, decoder);
   }
 };
-var ComposedDecoder3 = class {
+var ComposedDecoder2 = class {
   decoders;
   constructor(decoders) {
     this.decoders = decoders;
   }
   or(decoder) {
-    return or3(this, decoder);
+    return or2(this, decoder);
   }
   decode(input) {
     const prefix = input[0];
@@ -19212,13 +17413,13 @@ var ComposedDecoder3 = class {
     }
   }
 };
-function or3(left, right) {
-  return new ComposedDecoder3({
+function or2(left, right) {
+  return new ComposedDecoder2({
     ...left.decoders ?? { [left.prefix]: left },
     ...right.decoders ?? { [right.prefix]: right }
   });
 }
-var Codec3 = class {
+var Codec2 = class {
   name;
   prefix;
   baseEncode;
@@ -19230,8 +17431,8 @@ var Codec3 = class {
     this.prefix = prefix;
     this.baseEncode = baseEncode;
     this.baseDecode = baseDecode;
-    this.encoder = new Encoder3(name, prefix, baseEncode);
-    this.decoder = new Decoder3(name, prefix, baseDecode);
+    this.encoder = new Encoder2(name, prefix, baseEncode);
+    this.decoder = new Decoder2(name, prefix, baseDecode);
   }
   encode(input) {
     return this.encoder.encode(input);
@@ -19240,19 +17441,19 @@ var Codec3 = class {
     return this.decoder.decode(input);
   }
 };
-function from3({ name, prefix, encode: encode32, decode: decode52 }) {
-  return new Codec3(name, prefix, encode32, decode52);
+function from2({ name, prefix, encode: encode322, decode: decode522 }) {
+  return new Codec2(name, prefix, encode322, decode522);
 }
-function baseX3({ name, prefix, alphabet }) {
-  const { encode: encode32, decode: decode52 } = base_x_default3(alphabet, name);
-  return from3({
+function baseX2({ name, prefix, alphabet }) {
+  const { encode: encode322, decode: decode522 } = base_x_default2(alphabet, name);
+  return from2({
     prefix,
     name,
-    encode: encode32,
-    decode: (text) => coerce5(decode52(text))
+    encode: encode322,
+    decode: (text) => coerce22(decode522(text))
   });
 }
-function decode9(string, alphabetIdx, bitsPerChar, name) {
+function decode5(string, alphabetIdx, bitsPerChar, name) {
   let end = string.length;
   while (string[end - 1] === "=") {
     --end;
@@ -19278,7 +17479,7 @@ function decode9(string, alphabetIdx, bitsPerChar, name) {
   }
   return out;
 }
-function encode5(data, alphabet, bitsPerChar) {
+function encode3(data, alphabet, bitsPerChar) {
   const pad = alphabet[alphabet.length - 1] === "=";
   const mask = (1 << bitsPerChar) - 1;
   let out = "";
@@ -19302,197 +17503,197 @@ function encode5(data, alphabet, bitsPerChar) {
   }
   return out;
 }
-function createAlphabetIdx3(alphabet) {
+function createAlphabetIdx2(alphabet) {
   const alphabetIdx = {};
   for (let i = 0; i < alphabet.length; ++i) {
     alphabetIdx[alphabet[i]] = i;
   }
   return alphabetIdx;
 }
-function rfc46483({ name, prefix, bitsPerChar, alphabet }) {
-  const alphabetIdx = createAlphabetIdx3(alphabet);
-  return from3({
+function rfc46482({ name, prefix, bitsPerChar, alphabet }) {
+  const alphabetIdx = createAlphabetIdx2(alphabet);
+  return from2({
     prefix,
     name,
     encode(input) {
-      return encode5(input, alphabet, bitsPerChar);
+      return encode3(input, alphabet, bitsPerChar);
     },
     decode(input) {
-      return decode9(input, alphabetIdx, bitsPerChar, name);
+      return decode5(input, alphabetIdx, bitsPerChar, name);
     }
   });
 }
-var base323 = rfc46483({
+var base322 = rfc46482({
   prefix: "b",
   name: "base32",
   alphabet: "abcdefghijklmnopqrstuvwxyz234567",
   bitsPerChar: 5
 });
-var base32upper3 = rfc46483({
+var base32upper2 = rfc46482({
   prefix: "B",
   name: "base32upper",
   alphabet: "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567",
   bitsPerChar: 5
 });
-var base32pad3 = rfc46483({
+var base32pad2 = rfc46482({
   prefix: "c",
   name: "base32pad",
   alphabet: "abcdefghijklmnopqrstuvwxyz234567=",
   bitsPerChar: 5
 });
-var base32padupper3 = rfc46483({
+var base32padupper2 = rfc46482({
   prefix: "C",
   name: "base32padupper",
   alphabet: "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567=",
   bitsPerChar: 5
 });
-var base32hex3 = rfc46483({
+var base32hex2 = rfc46482({
   prefix: "v",
   name: "base32hex",
   alphabet: "0123456789abcdefghijklmnopqrstuv",
   bitsPerChar: 5
 });
-var base32hexupper3 = rfc46483({
+var base32hexupper2 = rfc46482({
   prefix: "V",
   name: "base32hexupper",
   alphabet: "0123456789ABCDEFGHIJKLMNOPQRSTUV",
   bitsPerChar: 5
 });
-var base32hexpad3 = rfc46483({
+var base32hexpad2 = rfc46482({
   prefix: "t",
   name: "base32hexpad",
   alphabet: "0123456789abcdefghijklmnopqrstuv=",
   bitsPerChar: 5
 });
-var base32hexpadupper3 = rfc46483({
+var base32hexpadupper2 = rfc46482({
   prefix: "T",
   name: "base32hexpadupper",
   alphabet: "0123456789ABCDEFGHIJKLMNOPQRSTUV=",
   bitsPerChar: 5
 });
-var base32z3 = rfc46483({
+var base32z2 = rfc46482({
   prefix: "h",
   name: "base32z",
   alphabet: "ybndrfg8ejkmcpqxot1uwisza345h769",
   bitsPerChar: 5
 });
-var base363 = baseX3({
+var base362 = baseX2({
   prefix: "k",
   name: "base36",
   alphabet: "0123456789abcdefghijklmnopqrstuvwxyz"
 });
-var base36upper3 = baseX3({
+var base36upper2 = baseX2({
   prefix: "K",
   name: "base36upper",
   alphabet: "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"
 });
-var base58btc3 = baseX3({
+var base58btc2 = baseX2({
   name: "base58btc",
   prefix: "z",
   alphabet: "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
 });
-var base58flickr3 = baseX3({
+var base58flickr2 = baseX2({
   name: "base58flickr",
   prefix: "Z",
   alphabet: "123456789abcdefghijkmnopqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ"
 });
-var encode_13 = encode22;
-var MSB3 = 128;
-var REST3 = 127;
-var MSBALL3 = ~REST3;
-var INT3 = Math.pow(2, 31);
+var encode_12 = encode22;
+var MSB2 = 128;
+var REST2 = 127;
+var MSBALL2 = ~REST2;
+var INT2 = Math.pow(2, 31);
 function encode22(num, out, offset) {
   out = out || [];
   offset = offset || 0;
   var oldOffset = offset;
-  while (num >= INT3) {
-    out[offset++] = num & 255 | MSB3;
+  while (num >= INT2) {
+    out[offset++] = num & 255 | MSB2;
     num /= 128;
   }
-  while (num & MSBALL3) {
-    out[offset++] = num & 255 | MSB3;
+  while (num & MSBALL2) {
+    out[offset++] = num & 255 | MSB2;
     num >>>= 7;
   }
   out[offset] = num | 0;
   encode22.bytes = offset - oldOffset + 1;
   return out;
 }
-var decode22 = read3;
-var MSB$13 = 128;
-var REST$13 = 127;
-function read3(buf, offset) {
+var decode22 = read2;
+var MSB$12 = 128;
+var REST$12 = 127;
+function read2(buf, offset) {
   var res = 0, offset = offset || 0, shift = 0, counter = offset, b, l = buf.length;
   do {
     if (counter >= l) {
-      read3.bytes = 0;
+      read2.bytes = 0;
       throw new RangeError("Could not decode varint");
     }
     b = buf[counter++];
-    res += shift < 28 ? (b & REST$13) << shift : (b & REST$13) * Math.pow(2, shift);
+    res += shift < 28 ? (b & REST$12) << shift : (b & REST$12) * Math.pow(2, shift);
     shift += 7;
-  } while (b >= MSB$13);
-  read3.bytes = counter - offset;
+  } while (b >= MSB$12);
+  read2.bytes = counter - offset;
   return res;
 }
-var N13 = Math.pow(2, 7);
-var N23 = Math.pow(2, 14);
-var N33 = Math.pow(2, 21);
-var N43 = Math.pow(2, 28);
-var N53 = Math.pow(2, 35);
-var N63 = Math.pow(2, 42);
-var N73 = Math.pow(2, 49);
-var N83 = Math.pow(2, 56);
-var N93 = Math.pow(2, 63);
-var length3 = function(value) {
-  return value < N13 ? 1 : value < N23 ? 2 : value < N33 ? 3 : value < N43 ? 4 : value < N53 ? 5 : value < N63 ? 6 : value < N73 ? 7 : value < N83 ? 8 : value < N93 ? 9 : 10;
+var N12 = Math.pow(2, 7);
+var N22 = Math.pow(2, 14);
+var N32 = Math.pow(2, 21);
+var N42 = Math.pow(2, 28);
+var N52 = Math.pow(2, 35);
+var N62 = Math.pow(2, 42);
+var N72 = Math.pow(2, 49);
+var N82 = Math.pow(2, 56);
+var N92 = Math.pow(2, 63);
+var length2 = function(value) {
+  return value < N12 ? 1 : value < N22 ? 2 : value < N32 ? 3 : value < N42 ? 4 : value < N52 ? 5 : value < N62 ? 6 : value < N72 ? 7 : value < N82 ? 8 : value < N92 ? 9 : 10;
 };
-var varint3 = {
-  encode: encode_13,
+var varint2 = {
+  encode: encode_12,
   decode: decode22,
-  encodingLength: length3
+  encodingLength: length2
 };
-var _brrp_varint3 = varint3;
-var varint_default3 = _brrp_varint3;
+var _brrp_varint2 = varint2;
+var varint_default2 = _brrp_varint2;
 function decode32(data, offset = 0) {
-  const code22 = varint_default3.decode(data, offset);
-  return [code22, varint_default3.decode.bytes];
+  const code22 = varint_default2.decode(data, offset);
+  return [code22, varint_default2.decode.bytes];
 }
-function encodeTo3(int, target, offset = 0) {
-  varint_default3.encode(int, target, offset);
+function encodeTo2(int, target, offset = 0) {
+  varint_default2.encode(int, target, offset);
   return target;
 }
-function encodingLength3(int) {
-  return varint_default3.encodingLength(int);
+function encodingLength2(int) {
+  return varint_default2.encodingLength(int);
 }
-function create3(code22, digest) {
-  const size = digest.byteLength;
-  const sizeOffset = encodingLength3(code22);
-  const digestOffset = sizeOffset + encodingLength3(size);
-  const bytes = new Uint8Array(digestOffset + size);
-  encodeTo3(code22, bytes, 0);
-  encodeTo3(size, bytes, sizeOffset);
-  bytes.set(digest, digestOffset);
-  return new Digest3(code22, size, digest, bytes);
+function create2(code22, digest3) {
+  const size = digest3.byteLength;
+  const sizeOffset = encodingLength2(code22);
+  const digestOffset = sizeOffset + encodingLength2(size);
+  const bytes3 = new Uint8Array(digestOffset + size);
+  encodeTo2(code22, bytes3, 0);
+  encodeTo2(size, bytes3, sizeOffset);
+  bytes3.set(digest3, digestOffset);
+  return new Digest2(code22, size, digest3, bytes3);
 }
 function decode42(multihash) {
-  const bytes = coerce5(multihash);
-  const [code22, sizeOffset] = decode32(bytes);
-  const [size, digestOffset] = decode32(bytes.subarray(sizeOffset));
-  const digest = bytes.subarray(sizeOffset + digestOffset);
-  if (digest.byteLength !== size) {
+  const bytes3 = coerce22(multihash);
+  const [code22, sizeOffset] = decode32(bytes3);
+  const [size, digestOffset] = decode32(bytes3.subarray(sizeOffset));
+  const digest3 = bytes3.subarray(sizeOffset + digestOffset);
+  if (digest3.byteLength !== size) {
     throw new Error("Incorrect length");
   }
-  return new Digest3(code22, size, digest, bytes);
+  return new Digest2(code22, size, digest3, bytes3);
 }
 function equals22(a, b) {
   if (a === b) {
     return true;
   } else {
     const data = b;
-    return a.code === data.code && a.size === data.size && data.bytes instanceof Uint8Array && equals5(a.bytes, data.bytes);
+    return a.code === data.code && a.size === data.size && data.bytes instanceof Uint8Array && equals3(a.bytes, data.bytes);
   }
 }
-var Digest3 = class {
+var Digest2 = class {
   code;
   size;
   digest;
@@ -19500,33 +17701,33 @@ var Digest3 = class {
   /**
    * Creates a multihash digest.
    */
-  constructor(code22, size, digest, bytes) {
+  constructor(code22, size, digest3, bytes3) {
     this.code = code22;
     this.size = size;
-    this.digest = digest;
-    this.bytes = bytes;
+    this.digest = digest3;
+    this.bytes = bytes3;
   }
 };
-function format3(link3, base22) {
-  const { bytes, version: version2 } = link3;
+function format2(link3, base222) {
+  const { bytes: bytes3, version: version2 } = link3;
   switch (version2) {
     case 0:
-      return toStringV03(bytes, baseCache3(link3), base22 ?? base58btc3.encoder);
+      return toStringV02(bytes3, baseCache2(link3), base222 ?? base58btc2.encoder);
     default:
-      return toStringV13(bytes, baseCache3(link3), base22 ?? base323.encoder);
+      return toStringV12(bytes3, baseCache2(link3), base222 ?? base322.encoder);
   }
 }
-var cache3 = /* @__PURE__ */ new WeakMap();
-function baseCache3(cid) {
-  const baseCache22 = cache3.get(cid);
-  if (baseCache22 == null) {
+var cache2 = /* @__PURE__ */ new WeakMap();
+function baseCache2(cid2) {
+  const baseCache222 = cache2.get(cid2);
+  if (baseCache222 == null) {
     const baseCache32 = /* @__PURE__ */ new Map();
-    cache3.set(cid, baseCache32);
+    cache2.set(cid2, baseCache32);
     return baseCache32;
   }
-  return baseCache22;
+  return baseCache222;
 }
-var CID3 = class _CID3 {
+var CID2 = class _CID2 {
   code;
   version;
   multihash;
@@ -19537,12 +17738,12 @@ var CID3 = class _CID3 {
    * @param code - Code of the codec content is encoded in, see https://github.com/multiformats/multicodec/blob/master/table.csv
    * @param multihash - (Multi)hash of the of the content.
    */
-  constructor(version2, code22, multihash, bytes) {
+  constructor(version2, code22, multihash, bytes3) {
     this.code = code22;
     this.version = version2;
     this.multihash = multihash;
-    this.bytes = bytes;
-    this["/"] = bytes;
+    this.bytes = bytes3;
+    this["/"] = bytes3;
   }
   /**
    * Signalling `cid.asCID === cid` has been replaced with `cid['/'] === cid.bytes`
@@ -19568,13 +17769,13 @@ var CID3 = class _CID3 {
       }
       case 1: {
         const { code: code22, multihash } = this;
-        if (code22 !== DAG_PB_CODE3) {
+        if (code22 !== DAG_PB_CODE2) {
           throw new Error("Cannot convert a non dag-pb CID to CIDv0");
         }
-        if (multihash.code !== SHA_256_CODE3) {
+        if (multihash.code !== SHA_256_CODE2) {
           throw new Error("Cannot convert non sha2-256 multihash CID to CIDv0");
         }
-        return _CID3.createV0(multihash);
+        return _CID2.createV0(multihash);
       }
       default: {
         throw Error(`Can not convert CID version ${this.version} to version 0. This is a bug please report`);
@@ -19584,9 +17785,9 @@ var CID3 = class _CID3 {
   toV1() {
     switch (this.version) {
       case 0: {
-        const { code: code22, digest } = this.multihash;
-        const multihash = create3(code22, digest);
-        return _CID3.createV1(this.code, multihash);
+        const { code: code22, digest: digest3 } = this.multihash;
+        const multihash = create2(code22, digest3);
+        return _CID2.createV1(this.code, multihash);
       }
       case 1: {
         return this;
@@ -19597,17 +17798,17 @@ var CID3 = class _CID3 {
     }
   }
   equals(other) {
-    return _CID3.equals(this, other);
+    return _CID2.equals(this, other);
   }
   static equals(self, other) {
     const unknown = other;
     return unknown != null && self.code === unknown.code && self.version === unknown.version && equals22(self.multihash, unknown.multihash);
   }
-  toString(base22) {
-    return format3(this, base22);
+  toString(base222) {
+    return format2(this, base222);
   }
   toJSON() {
-    return { "/": format3(this) };
+    return { "/": format2(this) };
   }
   link() {
     return this;
@@ -19632,15 +17833,15 @@ var CID3 = class _CID3 {
       return null;
     }
     const value = input;
-    if (value instanceof _CID3) {
+    if (value instanceof _CID2) {
       return value;
     } else if (value["/"] != null && value["/"] === value.bytes || value.asCID === value) {
-      const { version: version2, code: code22, multihash, bytes } = value;
-      return new _CID3(version2, code22, multihash, bytes ?? encodeCID3(version2, code22, multihash.bytes));
-    } else if (value[cidSymbol3] === true) {
+      const { version: version2, code: code22, multihash, bytes: bytes3 } = value;
+      return new _CID2(version2, code22, multihash, bytes3 ?? encodeCID2(version2, code22, multihash.bytes));
+    } else if (value[cidSymbol2] === true) {
       const { version: version2, multihash, code: code22 } = value;
-      const digest = decode42(multihash);
-      return _CID3.create(version2, code22, digest);
+      const digest3 = decode42(multihash);
+      return _CID2.create(version2, code22, digest3);
     } else {
       return null;
     }
@@ -19650,24 +17851,24 @@ var CID3 = class _CID3 {
    * @param code - Code of the codec content is encoded in, see https://github.com/multiformats/multicodec/blob/master/table.csv
    * @param digest - (Multi)hash of the of the content.
    */
-  static create(version2, code22, digest) {
+  static create(version2, code22, digest3) {
     if (typeof code22 !== "number") {
       throw new Error("String codecs are no longer supported");
     }
-    if (!(digest.bytes instanceof Uint8Array)) {
+    if (!(digest3.bytes instanceof Uint8Array)) {
       throw new Error("Invalid digest");
     }
     switch (version2) {
       case 0: {
-        if (code22 !== DAG_PB_CODE3) {
-          throw new Error(`Version 0 CID must use dag-pb (code: ${DAG_PB_CODE3}) block encoding`);
+        if (code22 !== DAG_PB_CODE2) {
+          throw new Error(`Version 0 CID must use dag-pb (code: ${DAG_PB_CODE2}) block encoding`);
         } else {
-          return new _CID3(version2, code22, digest, digest.bytes);
+          return new _CID2(version2, code22, digest3, digest3.bytes);
         }
       }
       case 1: {
-        const bytes = encodeCID3(version2, code22, digest.bytes);
-        return new _CID3(version2, code22, digest, bytes);
+        const bytes3 = encodeCID2(version2, code22, digest3.bytes);
+        return new _CID2(version2, code22, digest3, bytes3);
       }
       default: {
         throw new Error("Invalid version");
@@ -19677,8 +17878,8 @@ var CID3 = class _CID3 {
   /**
    * Simplified version of `create` for CIDv0.
    */
-  static createV0(digest) {
-    return _CID3.create(0, DAG_PB_CODE3, digest);
+  static createV0(digest3) {
+    return _CID2.create(0, DAG_PB_CODE2, digest3);
   }
   /**
    * Simplified version of `create` for CIDv1.
@@ -19686,8 +17887,8 @@ var CID3 = class _CID3 {
    * @param code - Content encoding format code.
    * @param digest - Multihash of the content.
    */
-  static createV1(code22, digest) {
-    return _CID3.create(1, code22, digest);
+  static createV1(code22, digest3) {
+    return _CID2.create(1, code22, digest3);
   }
   /**
    * Decoded a CID from its binary representation. The byte array must contain
@@ -19696,12 +17897,12 @@ var CID3 = class _CID3 {
    * An error will be thrown if the bytes provided do not contain a valid
    * binary representation of a CID.
    */
-  static decode(bytes) {
-    const [cid, remainder] = _CID3.decodeFirst(bytes);
+  static decode(bytes3) {
+    const [cid2, remainder] = _CID2.decodeFirst(bytes3);
     if (remainder.length !== 0) {
       throw new Error("Incorrect length");
     }
-    return cid;
+    return cid2;
   }
   /**
    * Decoded a CID from its binary representation at the beginning of a byte
@@ -19712,17 +17913,17 @@ var CID3 = class _CID3 {
    * will be a zero-length byte array if the provided bytes only contained a
    * binary CID representation.
    */
-  static decodeFirst(bytes) {
-    const specs = _CID3.inspectBytes(bytes);
+  static decodeFirst(bytes3) {
+    const specs = _CID2.inspectBytes(bytes3);
     const prefixSize = specs.size - specs.multihashSize;
-    const multihashBytes = coerce5(bytes.subarray(prefixSize, prefixSize + specs.multihashSize));
+    const multihashBytes = coerce22(bytes3.subarray(prefixSize, prefixSize + specs.multihashSize));
     if (multihashBytes.byteLength !== specs.multihashSize) {
       throw new Error("Incorrect length");
     }
-    const digestBytes = multihashBytes.subarray(specs.multihashSize - specs.digestSize);
-    const digest = new Digest3(specs.multihashCode, specs.digestSize, digestBytes, multihashBytes);
-    const cid = specs.version === 0 ? _CID3.createV0(digest) : _CID3.createV1(specs.codec, digest);
-    return [cid, bytes.subarray(specs.size)];
+    const digestBytes3 = multihashBytes.subarray(specs.multihashSize - specs.digestSize);
+    const digest3 = new Digest2(specs.multihashCode, specs.digestSize, digestBytes3, multihashBytes);
+    const cid2 = specs.version === 0 ? _CID2.createV0(digest3) : _CID2.createV1(specs.codec, digest3);
+    return [cid2, bytes3.subarray(specs.size)];
   }
   /**
    * Inspect the initial bytes of a CID to determine its properties.
@@ -19736,12 +17937,12 @@ var CID3 = class _CID3 {
   static inspectBytes(initialBytes) {
     let offset = 0;
     const next = () => {
-      const [i, length22] = decode32(initialBytes.subarray(offset));
-      offset += length22;
+      const [i, length222] = decode32(initialBytes.subarray(offset));
+      offset += length222;
       return i;
     };
     let version2 = next();
-    let codec = DAG_PB_CODE3;
+    let codec = DAG_PB_CODE2;
     if (version2 === 18) {
       version2 = 0;
       offset = 0;
@@ -19764,129 +17965,148 @@ var CID3 = class _CID3 {
    * throw an error if encoding of the CID is not compatible with supplied (or
    * a default decoder).
    */
-  static parse(source, base22) {
-    const [prefix, bytes] = parseCIDtoBytes3(source, base22);
-    const cid = _CID3.decode(bytes);
-    if (cid.version === 0 && source[0] !== "Q") {
+  static parse(source, base222) {
+    const [prefix, bytes3] = parseCIDtoBytes2(source, base222);
+    const cid2 = _CID2.decode(bytes3);
+    if (cid2.version === 0 && source[0] !== "Q") {
       throw Error("Version 0 CID string must not include multibase prefix");
     }
-    baseCache3(cid).set(prefix, source);
-    return cid;
+    baseCache2(cid2).set(prefix, source);
+    return cid2;
   }
 };
-function parseCIDtoBytes3(source, base22) {
+function parseCIDtoBytes2(source, base222) {
   switch (source[0]) {
     // CIDv0 is parsed differently
     case "Q": {
-      const decoder = base22 ?? base58btc3;
+      const decoder = base222 ?? base58btc2;
       return [
-        base58btc3.prefix,
-        decoder.decode(`${base58btc3.prefix}${source}`)
+        base58btc2.prefix,
+        decoder.decode(`${base58btc2.prefix}${source}`)
       ];
     }
-    case base58btc3.prefix: {
-      const decoder = base22 ?? base58btc3;
-      return [base58btc3.prefix, decoder.decode(source)];
+    case base58btc2.prefix: {
+      const decoder = base222 ?? base58btc2;
+      return [base58btc2.prefix, decoder.decode(source)];
     }
-    case base323.prefix: {
-      const decoder = base22 ?? base323;
-      return [base323.prefix, decoder.decode(source)];
+    case base322.prefix: {
+      const decoder = base222 ?? base322;
+      return [base322.prefix, decoder.decode(source)];
     }
-    case base363.prefix: {
-      const decoder = base22 ?? base363;
-      return [base363.prefix, decoder.decode(source)];
+    case base362.prefix: {
+      const decoder = base222 ?? base362;
+      return [base362.prefix, decoder.decode(source)];
     }
     default: {
-      if (base22 == null) {
+      if (base222 == null) {
         throw Error("To parse non base32, base36 or base58btc encoded CID multibase decoder must be provided");
       }
-      return [source[0], base22.decode(source)];
+      return [source[0], base222.decode(source)];
     }
   }
 }
-function toStringV03(bytes, cache22, base22) {
-  const { prefix } = base22;
-  if (prefix !== base58btc3.prefix) {
-    throw Error(`Cannot string encode V0 in ${base22.name} encoding`);
+function toStringV02(bytes3, cache222, base222) {
+  const { prefix } = base222;
+  if (prefix !== base58btc2.prefix) {
+    throw Error(`Cannot string encode V0 in ${base222.name} encoding`);
   }
-  const cid = cache22.get(prefix);
-  if (cid == null) {
-    const cid2 = base22.encode(bytes).slice(1);
-    cache22.set(prefix, cid2);
-    return cid2;
+  const cid2 = cache222.get(prefix);
+  if (cid2 == null) {
+    const cid22 = base222.encode(bytes3).slice(1);
+    cache222.set(prefix, cid22);
+    return cid22;
   } else {
-    return cid;
-  }
-}
-function toStringV13(bytes, cache22, base22) {
-  const { prefix } = base22;
-  const cid = cache22.get(prefix);
-  if (cid == null) {
-    const cid2 = base22.encode(bytes);
-    cache22.set(prefix, cid2);
     return cid2;
-  } else {
-    return cid;
   }
 }
-var DAG_PB_CODE3 = 112;
-var SHA_256_CODE3 = 18;
-function encodeCID3(version2, code22, multihash) {
-  const codeOffset = encodingLength3(version2);
-  const hashOffset = codeOffset + encodingLength3(code22);
-  const bytes = new Uint8Array(hashOffset + multihash.byteLength);
-  encodeTo3(version2, bytes, 0);
-  encodeTo3(code22, bytes, codeOffset);
-  bytes.set(multihash, hashOffset);
-  return bytes;
+function toStringV12(bytes3, cache222, base222) {
+  const { prefix } = base222;
+  const cid2 = cache222.get(prefix);
+  if (cid2 == null) {
+    const cid22 = base222.encode(bytes3);
+    cache222.set(prefix, cid22);
+    return cid22;
+  } else {
+    return cid2;
+  }
 }
-var cidSymbol3 = /* @__PURE__ */ Symbol.for("@ipld/js-cid/CID");
+var DAG_PB_CODE2 = 112;
+var SHA_256_CODE2 = 18;
+function encodeCID2(version2, code22, multihash) {
+  const codeOffset = encodingLength2(version2);
+  const hashOffset = codeOffset + encodingLength2(code22);
+  const bytes3 = new Uint8Array(hashOffset + multihash.byteLength);
+  encodeTo2(version2, bytes3, 0);
+  encodeTo2(code22, bytes3, codeOffset);
+  bytes3.set(multihash, hashOffset);
+  return bytes3;
+}
+var cidSymbol2 = /* @__PURE__ */ Symbol.for("@ipld/js-cid/CID");
 var code2 = 85;
 var SHA256_CODE2 = 18;
+async function computeCid(bytes3) {
+  const digest3 = create2(SHA256_CODE2, sha256(new Uint8Array(bytes3)));
+  return CID2.create(1, code2, digest3).toString();
+}
 function isCanonicalRawCid2(cidString) {
-  let cid;
+  let cid2;
   try {
-    cid = CID3.parse(cidString);
+    cid2 = CID2.parse(cidString);
   } catch {
     return false;
   }
-  return cid.version === 1 && cid.code === code2 && cid.multihash.code === SHA256_CODE2 && cid.toString() === cidString;
+  return cid2.version === 1 && cid2.code === code2 && cid2.multihash.code === SHA256_CODE2 && cid2.toString() === cidString;
 }
-var base642 = rfc46483({
+var base642 = rfc46482({
   prefix: "m",
   name: "base64",
   alphabet: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/",
   bitsPerChar: 6
 });
-var base64pad2 = rfc46483({
+var base64pad2 = rfc46482({
   prefix: "M",
   name: "base64pad",
   alphabet: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=",
   bitsPerChar: 6
 });
-var base64url2 = rfc46483({
+var base64url2 = rfc46482({
   prefix: "u",
   name: "base64url",
   alphabet: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_",
   bitsPerChar: 6
 });
-var base64urlpad2 = rfc46483({
+var base64urlpad2 = rfc46482({
   prefix: "U",
   name: "base64urlpad",
   alphabet: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_=",
   bitsPerChar: 6
 });
+function toBase64Url(bytes3) {
+  return base64url2.baseEncode(bytes3);
+}
 function fromBase64Url2(text) {
-  const bytes = base64url2.baseDecode(text);
-  if (base64url2.baseEncode(bytes) !== text) {
+  const bytes3 = base64url2.baseDecode(text);
+  if (base64url2.baseEncode(bytes3) !== text) {
     throw new TypeError("non-canonical base64url input");
   }
-  return bytes;
+  return bytes3;
 }
 function utf8Bytes2(text) {
   return new TextEncoder().encode(text);
 }
 var ED25519_MULTICODEC_PREFIX2 = Uint8Array.of(237, 1);
+var PUBLIC_KEY_LENGTH = 32;
+function ed25519PublicKeyFromDidKey(did) {
+  if (!did.startsWith("did:key:")) {
+    throw new TypeError(`not a did:key: ${did}`);
+  }
+  const multibase = did.slice("did:key:".length);
+  const prefixed = base58btc2.decode(multibase);
+  if (prefixed.length !== ED25519_MULTICODEC_PREFIX2.length + PUBLIC_KEY_LENGTH || prefixed[0] !== ED25519_MULTICODEC_PREFIX2[0] || prefixed[1] !== ED25519_MULTICODEC_PREFIX2[1]) {
+    throw new TypeError("did:key does not encode an ed25519 public key");
+  }
+  return prefixed.slice(ED25519_MULTICODEC_PREFIX2.length);
+}
 function decodeBase64UrlOrNull2(value) {
   try {
     return fromBase64Url2(value);
@@ -20079,7 +18299,7 @@ var contentMetadataSchema2 = external_exports2.object({
   artifact: external_exports2.literal("html").optional()
 }).strict();
 var deliveryEmailSchema2 = external_exports2.string().email();
-function isEnvelopeDeliveryEmail2(value) {
+function isEnvelopeDeliveryEmail(value) {
   return deliveryEmailSchema2.safeParse(value).success;
 }
 var unsignedShareEnvelopeV2BaseSchema2 = external_exports2.object({
@@ -20275,7 +18495,74 @@ function validateV3Invariants2(value, ctx) {
 var unsignedShareEnvelopeV3Schema2 = unsignedShareEnvelopeV3BaseSchema2.superRefine(validateV3Invariants2);
 var shareEnvelopeV3Schema2 = unsignedShareEnvelopeV3BaseSchema2.extend({ signature: signatureSchema2 }).strict().superRefine(validateV3Invariants2);
 var ENVELOPE_AAD_LABEL2 = "tinycloud-share-envelope-v1";
+var SEALED_BLOB_VERSION = 1;
 var AAD2 = utf8Bytes2(ENVELOPE_AAD_LABEL2);
+var KEY_LENGTH = 32;
+var NONCE_LENGTH = 12;
+var TAG_LENGTH = 16;
+var HEADER_LENGTH = 1;
+function assertKey(key32) {
+  if (key32.length !== KEY_LENGTH) {
+    throw new TypeError(`key must be ${KEY_LENGTH} bytes, got ${key32.length}`);
+  }
+}
+async function importAesKey(key32, usage) {
+  assertKey(key32);
+  return globalThis.crypto.subtle.importKey(
+    "raw",
+    key32,
+    "AES-GCM",
+    false,
+    [usage]
+  );
+}
+function generateKey() {
+  return globalThis.crypto.getRandomValues(new Uint8Array(KEY_LENGTH));
+}
+async function seal(plaintextBytes, key32) {
+  const { nonce, ciphertext } = await encryptEnvelope(plaintextBytes, key32);
+  const blob = new Uint8Array(HEADER_LENGTH + nonce.length + ciphertext.length);
+  blob[0] = SEALED_BLOB_VERSION;
+  blob.set(nonce, HEADER_LENGTH);
+  blob.set(ciphertext, HEADER_LENGTH + nonce.length);
+  return { blob, cid: await computeCid(blob) };
+}
+async function open6(blob, key32) {
+  if (blob.length < HEADER_LENGTH + NONCE_LENGTH + TAG_LENGTH) {
+    throw new TypeError(`sealed blob too short: ${blob.length} bytes`);
+  }
+  if (blob[0] !== SEALED_BLOB_VERSION) {
+    throw new TypeError(`unknown sealed blob version: ${blob[0]}`);
+  }
+  const nonce = blob.subarray(HEADER_LENGTH, HEADER_LENGTH + NONCE_LENGTH);
+  const ciphertext = blob.subarray(HEADER_LENGTH + NONCE_LENGTH);
+  return decryptEnvelope(nonce, ciphertext, key32);
+}
+async function encryptEnvelope(plaintextBytes, key32) {
+  const key = await importAesKey(key32, "encrypt");
+  const nonce = globalThis.crypto.getRandomValues(new Uint8Array(NONCE_LENGTH));
+  const ciphertext = new Uint8Array(
+    await globalThis.crypto.subtle.encrypt(
+      { name: "AES-GCM", iv: nonce, additionalData: AAD2 },
+      key,
+      plaintextBytes
+    )
+  );
+  return { nonce, ciphertext };
+}
+async function decryptEnvelope(nonce, ciphertext, key32) {
+  if (nonce.length !== NONCE_LENGTH) {
+    throw new TypeError(`nonce must be ${NONCE_LENGTH} bytes, got ${nonce.length}`);
+  }
+  const key = await importAesKey(key32, "decrypt");
+  return new Uint8Array(
+    await globalThis.crypto.subtle.decrypt(
+      { name: "AES-GCM", iv: nonce, additionalData: AAD2 },
+      key,
+      ciphertext
+    )
+  );
+}
 function isPlainRecord2(value) {
   const proto = Object.getPrototypeOf(value);
   return proto === Object.prototype || proto === null;
@@ -20338,6 +18625,7302 @@ function serialize2(value) {
 function canonicalize2(value) {
   return serialize2(value);
 }
+var LABEL = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
+function isCanonicalEmailDomain(value) {
+  if (value.length === 0 || value.length > 253) return false;
+  const labels = value.split(".");
+  return labels.length >= 2 && labels.every((label) => LABEL.test(label)) && !/^[0-9]+$/.test(labels.at(-1));
+}
+function canonicalMailbox(value) {
+  const email = value.trim().toLowerCase();
+  const at = email.indexOf("@");
+  if (at <= 0 || at !== email.lastIndexOf("@")) return void 0;
+  const local = email.slice(0, at);
+  const domain = email.slice(at + 1);
+  if (local.length > 64 || !/^[a-z0-9#$&'*+/=?^_`{|}~-]+(?:\.[a-z0-9#$&'*+/=?^_`{|}~-]+)*$/.test(local) || !isCanonicalEmailDomain(domain)) return void 0;
+  return Object.freeze({ email, domain });
+}
+function verifyCompactUcanAuthorization(authorization, expectedCid) {
+  if (/\s/.test(authorization)) throw new TypeError("compact Authorization contains whitespace");
+  const segments = authorization.split(".");
+  if (segments.length !== 3 || segments.some((segment) => segment.length === 0)) throw new TypeError("compact Authorization must contain three segments");
+  const [headerSegment, payloadSegment, signatureSegment] = segments;
+  const headerBytes = fromBase64Url2(headerSegment);
+  const payloadBytes = fromBase64Url2(payloadSegment);
+  const signature = fromBase64Url2(signatureSegment);
+  const decoder = new TextDecoder("utf-8", { fatal: true });
+  const header = JSON.parse(decoder.decode(headerBytes));
+  const payload = JSON.parse(decoder.decode(payloadBytes));
+  if (canonicalize2(header) !== decoder.decode(headerBytes) || canonicalize2(payload) !== decoder.decode(payloadBytes)) throw new TypeError("compact Authorization JSON is not canonical");
+  assertExactKeys(header, ["alg", "jwk", "typ", "ucv"], "protected header");
+  const jwk = object(header.jwk, "protected JWK");
+  assertExactKeys(jwk, ["alg", "crv", "kty", "x"], "protected JWK");
+  if (header.alg !== "EdDSA" || header.typ !== "JWT" || header.ucv !== "0.10.0" || jwk.alg !== "EdDSA" || jwk.crv !== "Ed25519" || jwk.kty !== "OKP" || typeof jwk.x !== "string") throw new TypeError("compact Authorization header is invalid");
+  assertExactKeys(payload, ["att", "aud", "exp", "fct", "iss", "nbf", "nnc", "prf"], "UCAN payload");
+  if (typeof payload.iss !== "string" || typeof payload.aud !== "string" || typeof payload.nnc !== "string" || !Number.isInteger(payload.nbf) || !Number.isInteger(payload.exp) || payload.nbf >= payload.exp || !Array.isArray(payload.prf) || payload.prf.some((proof) => typeof proof !== "string") || !Array.isArray(payload.fct) || payload.fct.length !== 1) throw new TypeError("compact Authorization payload is invalid");
+  const principal = payload.iss.split("#", 1)[0];
+  const publicKey = ed25519PublicKeyFromDidKey(principal);
+  if (!equal(publicKey, fromBase64Url2(jwk.x))) throw new TypeError("compact Authorization JWK does not bind issuer");
+  if (!ed25519.verify(signature, new TextEncoder().encode(`${headerSegment}.${payloadSegment}`), publicKey, { zip215: false })) throw new TypeError("compact Authorization signature is invalid");
+  const cid2 = CID2.createV1(85, create2(30, blake3(new TextEncoder().encode(authorization)))).toString();
+  if (expectedCid !== void 0 && cid2 !== expectedCid) throw new TypeError("compact Authorization CID mismatch");
+  return { authorization, cid: cid2, header, payload };
+}
+function object(value, label) {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) throw new TypeError(`${label} must be an object`);
+  return value;
+}
+function assertExactKeys(value, keys, label) {
+  if (Object.keys(value).length !== keys.length || Object.keys(value).some((key) => !keys.includes(key))) throw new TypeError(`${label} has unknown or missing fields`);
+}
+function equal(left, right) {
+  return left.length === right.length && left.every((byte, index) => byte === right[index]);
+}
+var ED25519_VERIFY_OPTS2 = { zip215: false };
+var ENVELOPE_V3_SIGNATURE_DOMAIN = "xyz.tinycloud.share/envelope/v3\0";
+var POLICY_V1_SIGNATURE_DOMAIN = "xyz.tinycloud.policy/policy/v1\0";
+var POLICY_V2_SIGNATURE_DOMAIN = "xyz.tinycloud.policy/policy/v2\0";
+var CONTENT_SOURCE_V1_DOMAIN = "xyz.tinycloud.policy/ContentSource/v1\0";
+var POLICY_CAPABILITY_V1_DOMAIN = "xyz.tinycloud.policy/PolicyCapability/v1\0";
+var NATIVE_PROJECTION_V1_DOMAIN = "xyz.tinycloud.policy/NativeProjection/v1\0";
+var ATTESTED_ENFORCER_V2_DOMAIN = "xyz.tinycloud.policy/AttestedEnforcerBinding/v2\0";
+function signingBytesV3(unsigned) {
+  const domain = utf8Bytes2(ENVELOPE_V3_SIGNATURE_DOMAIN);
+  const body = utf8Bytes2(canonicalize2(unsigned));
+  const bytes3 = new Uint8Array(domain.length + body.length);
+  bytes3.set(domain);
+  bytes3.set(body, domain.length);
+  return bytes3;
+}
+function verifyEnvelopeV3SignatureOnly(envelope) {
+  const parsed = shareEnvelopeV3Schema2.parse(envelope);
+  const { signature, ...unsigned } = parsed;
+  return ed25519.verify(fromBase64Url2(signature.value), sha2562(signingBytesV3(unsigned)), ed25519PublicKeyFromDidKey(signature.signerDid), ED25519_VERIFY_OPTS2);
+}
+async function verifyEnvelopeV3(envelope, options) {
+  const parsed = shareEnvelopeV3Schema2.parse(envelope);
+  if (parsed.signature.signerDid !== options.expectedSignerDid || parsed.signature.signerDid !== parsed.policy.ownerDid || !verifyEnvelopeV3SignatureOnly(parsed)) return false;
+  const { policy } = parsed;
+  const unsignedPolicy = { ...policy };
+  delete unsignedPolicy.policyId;
+  delete unsignedPolicy.signature;
+  const policySignatureDomain = policy.schema === "xyz.tinycloud.policy/policy/v2" ? POLICY_V2_SIGNATURE_DOMAIN : POLICY_V1_SIGNATURE_DOMAIN;
+  const policyDigest = sha2562(new TextEncoder().encode(`${policySignatureDomain}${canonicalize2(unsignedPolicy)}`));
+  const policySignature = policy.signature;
+  if (policySignature.suite !== "Ed25519" || policySignature.signerDid !== policy.ownerDid) return false;
+  let policyPublicKey;
+  let policySignatureBytes;
+  try {
+    policyPublicKey = ed25519PublicKeyFromDidKey(policy.ownerDid);
+    policySignatureBytes = fromBase64Url2(policySignature.value);
+  } catch {
+    return false;
+  }
+  if (policySignatureBytes.length !== 64 || !ed25519.verify(policySignatureBytes, policyDigest, policyPublicKey, ED25519_VERIFY_OPTS2)) return false;
+  const policyIdDigest = policyDigest;
+  if (policy.policyId !== `pol_${base32Lower(policyIdDigest)}`) return false;
+  const policyBytes = new TextEncoder().encode(canonicalize2(policy));
+  if (await computeCid(policyBytes) !== parsed.policyCid) return false;
+  const sourceDigest = sha2562(new TextEncoder().encode(`${CONTENT_SOURCE_V1_DOMAIN}${canonicalize2(policy.contentSource)}`));
+  if (hex(sourceDigest) !== parsed.contentSourceDigestHex) return false;
+  const sortedCapabilities = [...policy.capabilityCeiling].sort((left, right) => canonicalize2(left).localeCompare(canonicalize2(right)));
+  const capabilityCeilingHashHex = hex(sha2562(new TextEncoder().encode(`${POLICY_CAPABILITY_V1_DOMAIN}${canonicalize2(sortedCapabilities)}`)));
+  const nativeProjection2 = sortedCapabilities.map((capability) => capability.kind === "encryption" ? { service: "tinycloud.encryption", space: capability.resource, path: capability.resource, actions: [capability.action] } : { service: "tinycloud.kv", space: capability.resource.slice(0, capability.resource.indexOf("/kv/")), path: capability.resource.split("/kv/")[1], actions: [...capability.actions], caveat: { type: "xyz.tinycloud.resource/selector", kind: capability.selector, value: capability.resource } }).sort((left, right) => canonicalize2(left).localeCompare(canonicalize2(right)));
+  const nativeProjectionHashHex = hex(sha2562(new TextEncoder().encode(`${NATIVE_PROJECTION_V1_DOMAIN}${canonicalize2(nativeProjection2)}`)));
+  const expectedAttenuation = Object.fromEntries(sortedCapabilities.map((capability) => capability.kind === "encryption" ? [capability.resource, { [capability.action]: [{}] }] : [capability.resource, Object.fromEntries(capability.actions.map((action) => [action, [{ kind: capability.selector, type: "xyz.tinycloud.resource/selector", value: capability.resource }]]))]));
+  const kv = policy.capabilityCeiling.find((capability) => capability.kind === "kv");
+  const expectedKvActions = parsed.actions.flatMap((action) => action === "read" ? ["tinycloud.kv/get", "tinycloud.kv/metadata"] : action === "list" ? ["tinycloud.kv/list"] : ["tinycloud.kv/put"]);
+  const marker = parsed.contentSource.kvResource.indexOf("/kv/");
+  const resourceSpace = marker < 1 ? "" : parsed.contentSource.kvResource.slice(0, marker);
+  const resourcePath = marker < 1 ? "" : parsed.contentSource.kvResource.slice(marker + 4);
+  if (parsed.shareId !== parsed.contentSource.shareId || resourceSpace !== parsed.target.spaceId || resourcePath !== parsed.resource.path.replace(/\/$/, "") || parsed.resource.kind !== parsed.contentSource.selector || kv?.kind !== "kv" || expectedKvActions.some((action) => !kv.actions.includes(action)) || parsed.encryptionNetwork !== parsed.contentSource.encryptionNetwork || parsed.contentSource.keyVersion <= 0 || policy.expiresAt !== void 0 && Date.parse(parsed.expiry) > Date.parse(policy.expiresAt)) return false;
+  const binding = parsed.attestedEnforcerBinding;
+  const { signature: bindingSignature, ...unsignedBinding } = binding;
+  const expectedBindingDigestHex = hex(sha2562(new TextEncoder().encode(canonicalize2({ enforcerDid: binding.enforcerDid, nodeAudience: binding.nodeAudience }))));
+  if (binding.nodeAudience !== parsed.target.nodeAudience || binding.attestationBindingDigestHex !== expectedBindingDigestHex || bindingSignature.signerDid !== binding.nodeAudience || bindingSignature.suite !== "Ed25519" || Date.parse(binding.issuedAt) > Date.now() || Date.parse(binding.expiresAt) <= Date.now() || Date.parse(binding.expiresAt) < Date.parse(parsed.expiry)) return false;
+  try {
+    const digest3 = sha2562(new TextEncoder().encode(`${ATTESTED_ENFORCER_V2_DOMAIN}${canonicalize2(unsignedBinding)}`));
+    if (!ed25519.verify(fromBase64Url2(bindingSignature.value), digest3, ed25519PublicKeyFromDidKey(binding.nodeAudience), ED25519_VERIFY_OPTS2)) return false;
+  } catch {
+    return false;
+  }
+  if (parsed.policyRoot.role !== "policy-authority" || parsed.enforcementRoot.role !== "policy-enforcement" || parsed.policyRoot.cid === parsed.enforcementRoot.cid) return false;
+  try {
+    const policyRoot = verifyCompactUcanAuthorization(parsed.policyRoot.authorization, parsed.policyRoot.cid);
+    const enforcementRoot = verifyCompactUcanAuthorization(parsed.enforcementRoot.authorization, parsed.enforcementRoot.cid);
+    const policyFact = policyRoot.payload.fct[0];
+    const enforcementFact = enforcementRoot.payload.fct[0];
+    const common = ["ownerDid", "policyId", "policyDigestHex", "policyCid", "contentSourceDigestHex", "capabilityCeilingHashHex", "nativeProjectionHashHex", "nodeAudience"];
+    const policyKeys = [...common, "role", "mode"];
+    const enforcementKeys = [...policyKeys, "enforcerDid"];
+    if (Object.keys(policyFact).length !== policyKeys.length || policyKeys.some((key) => !(key in policyFact)) || Object.keys(enforcementFact).length !== enforcementKeys.length || enforcementKeys.some((key) => !(key in enforcementFact)) || policyRoot.payload.prf.length !== 0 || enforcementRoot.payload.prf.length !== 0 || policyRoot.payload.iss.split("#", 1)[0] !== policy.ownerDid || enforcementRoot.payload.iss.split("#", 1)[0] !== policy.ownerDid || policyRoot.payload.nbf !== enforcementRoot.payload.nbf || policyRoot.payload.exp !== enforcementRoot.payload.exp || canonicalize2(policyRoot.payload.att) !== canonicalize2(expectedAttenuation) || canonicalize2(enforcementRoot.payload.att) !== canonicalize2(expectedAttenuation) || policyFact.role !== "policy-authority" || policyFact.mode !== "policy-source" || "enforcerDid" in policyFact || enforcementFact.role !== "policy-enforcement" || enforcementFact.mode !== "conditional-mint" || policyRoot.payload.aud !== `did:tinycloud:policy:${hex(policyIdDigest)}` || enforcementRoot.payload.aud !== binding.enforcerDid || enforcementFact.enforcerDid !== binding.enforcerDid || common.some((key) => policyFact[key] !== enforcementFact[key]) || policyFact.ownerDid !== policy.ownerDid || policyFact.policyId !== policy.policyId || policyFact.policyDigestHex !== hex(policyIdDigest) || policyFact.policyCid !== parsed.policyCid || policyFact.contentSourceDigestHex !== parsed.contentSourceDigestHex || policyFact.capabilityCeilingHashHex !== capabilityCeilingHashHex || policyFact.nativeProjectionHashHex !== nativeProjectionHashHex || policyFact.nodeAudience !== binding.nodeAudience || policyRoot.payload.exp * 1e3 < Date.parse(parsed.expiry)) return false;
+  } catch {
+    return false;
+  }
+  return true;
+}
+function hex(bytes3) {
+  return [...bytes3].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+function base32Lower(bytes3) {
+  const alphabet = "abcdefghijklmnopqrstuvwxyz234567";
+  let output = "";
+  let buffer = 0;
+  let bits = 0;
+  for (const byte of bytes3) {
+    buffer = buffer << 8 | byte;
+    bits += 8;
+    while (bits >= 5) {
+      output += alphabet[buffer >>> bits - 5 & 31];
+      bits -= 5;
+    }
+  }
+  if (bits > 0) output += alphabet[buffer << 5 - bits & 31];
+  return output;
+}
+var KEY_LENGTH2 = 32;
+var MAX_INLINE_BYTES2 = 256 * 1024;
+function assertCanonicalCid(cidString) {
+  const cid2 = CID2.parse(cidString);
+  if (cid2.version !== 1 || cid2.code !== code2 || cid2.multihash.code !== 18 || // sha2-256 (0x12) only, at the link layer too
+  cid2.toString() !== cidString) {
+    throw new TypeError(`not a canonical CIDv1 raw sha2-256 base32 CID: ${cidString}`);
+  }
+}
+async function encodeSealedInlineShareUrl(parts) {
+  if (!isCanonicalHttpsOrigin2(parts.origin)) throw new TypeError("origin must be a canonical https origin");
+  if (parts.ciphertext.byteLength === 0 || parts.ciphertext.byteLength > MAX_INLINE_BYTES2) throw new RangeError("inline ciphertext is outside the allowed size");
+  if (parts.key32.byteLength !== KEY_LENGTH2) throw new TypeError("inline key must be 32 bytes");
+  const ciphertextCid = await computeCid(parts.ciphertext);
+  const payload = canonicalize2({
+    v: 2,
+    c: toBase64Url(parts.ciphertext),
+    cid: ciphertextCid,
+    k: toBase64Url(parts.key32)
+  });
+  const payloadBytes = new TextEncoder().encode(payload);
+  if (payloadBytes.byteLength > MAX_INLINE_BYTES2 * 2) throw new RangeError("inline URL is too large");
+  return `${parts.origin}/s/inline#v=2&p=${toBase64Url(payloadBytes)}`;
+}
+async function parseSealedInlineShareUrl(url, options = {}) {
+  const parsed = new URL(url);
+  if (parsed.protocol !== "https:" || parsed.username !== "" || parsed.password !== "") throw new TypeError("sealed inline share URL must be canonical HTTPS without userinfo");
+  if (!isCanonicalHttpsOrigin2(parsed.origin) || options.expectedOrigin !== void 0 && parsed.origin !== options.expectedOrigin) throw new TypeError("sealed inline share URL origin is not trusted");
+  if (parsed.pathname !== "/s/inline" || parsed.search !== "") throw new TypeError("not a Node sealed-inline share URL");
+  if (url !== `${parsed.origin}/s/inline${parsed.hash}`) throw new TypeError("sealed inline share URL is not lexically canonical");
+  const prefix = "#v=2&p=";
+  if (!parsed.hash.startsWith(prefix)) throw new TypeError("sealed inline URL is missing its canonical fragment");
+  const encoded = parsed.hash.slice(prefix.length);
+  if (encoded.length === 0 || parsed.hash !== `${prefix}${encoded}`) throw new TypeError("sealed inline URL fragment is not canonical");
+  let payloadBytes;
+  try {
+    payloadBytes = fromBase64Url2(encoded);
+  } catch {
+    throw new TypeError("sealed inline payload is not canonical base64url");
+  }
+  if (payloadBytes.byteLength === 0 || payloadBytes.byteLength > MAX_INLINE_BYTES2 * 2) throw new TypeError("sealed inline payload is too large");
+  const payloadText = new TextDecoder("utf-8", { fatal: true }).decode(payloadBytes);
+  let value;
+  try {
+    value = JSON.parse(payloadText);
+  } catch {
+    throw new TypeError("sealed inline payload is not valid JSON");
+  }
+  if (typeof value !== "object" || value === null || Array.isArray(value) || canonicalize2(value) !== payloadText) throw new TypeError("sealed inline payload is not canonical JSON");
+  const record = value;
+  if (Object.keys(record).length !== 4 || record.v !== 2 || typeof record.c !== "string" || typeof record.cid !== "string" || typeof record.k !== "string") throw new TypeError("sealed inline payload has invalid fields");
+  let ciphertext;
+  let key32;
+  try {
+    ciphertext = fromBase64Url2(record.c);
+    key32 = fromBase64Url2(record.k);
+  } catch {
+    throw new TypeError("sealed inline payload has invalid base64url material");
+  }
+  if (ciphertext.byteLength === 0 || ciphertext.byteLength > MAX_INLINE_BYTES2) throw new TypeError("sealed inline ciphertext is outside the allowed size");
+  if (key32.byteLength !== KEY_LENGTH2) throw new TypeError("sealed inline key must be 32 bytes");
+  assertCanonicalCid(record.cid);
+  if (await computeCid(ciphertext) !== record.cid) throw new TypeError("sealed inline ciphertext does not match its CID");
+  return { kind: "inline", ciphertextCid: record.cid, ciphertext, key32 };
+}
+var SHARE_RESULT_VERSION = 1;
+var DEFAULT_MAX_SEALED_BLOB_BYTES = 100 * 1024 * 1024 + 29;
+var ShareReceiveError = class extends Error {
+  code;
+  details;
+  constructor(code32, message, details) {
+    super(message);
+    this.name = "ShareReceiveError";
+    this.code = code32;
+    this.details = details;
+  }
+  toJSON() {
+    return { protocol: "tinycloud-share", version: SHARE_RESULT_VERSION, error: { code: this.code } };
+  }
+};
+function metadataFor(envelope, origin) {
+  const kind = envelope.recipientMatcher.kind === "recipientDid" ? "recipientDid" : envelope.recipientMatcher.kind === "exactEmail" ? "email" : "emailDomain";
+  return {
+    protocol: "tinycloud-share",
+    version: 1,
+    shareId: envelope.shareId,
+    origin,
+    target: { ...envelope.target, kind },
+    resource: { ...envelope.resource },
+    actions: [...envelope.actions],
+    expiresAt: envelope.expiry,
+    display: {
+      ...envelope.display.senderName === void 0 ? {} : { senderName: envelope.display.senderName },
+      ...envelope.display.filename === void 0 ? {} : { filename: envelope.display.filename },
+      ...envelope.display.mode === void 0 ? {} : { mode: envelope.display.mode }
+    }
+  };
+}
+async function resolvePolicyShare(link3, options) {
+  options.signal?.throwIfAborted();
+  let url;
+  let parsed;
+  try {
+    url = new URL(link3);
+    parsed = await parseSealedInlineShareUrl(link3, { ...options.expectedOrigin === void 0 ? {} : { expectedOrigin: options.expectedOrigin } });
+  } catch {
+    throw new ShareReceiveError("invalid-link", "share link format is invalid");
+  }
+  const limit = options.maxSealedBlobBytes ?? DEFAULT_MAX_SEALED_BLOB_BYTES;
+  if (!Number.isSafeInteger(limit) || limit <= 0 || parsed.ciphertext.byteLength > limit) throw new ShareReceiveError("max-bytes-exceeded", "sealed policy envelope exceeds the configured byte limit");
+  if (await computeCid(parsed.ciphertext) !== parsed.ciphertextCid) throw new ShareReceiveError("cid-mismatch", "sealed envelope bytes do not match the link CID");
+  options.signal?.throwIfAborted();
+  let envelope;
+  try {
+    const encoded = new TextDecoder("utf-8", { fatal: true }).decode(await open6(parsed.ciphertext, parsed.key32));
+    const value = JSON.parse(encoded);
+    if (canonicalize2(value) !== encoded) throw new Error("non-canonical envelope");
+    envelope = shareEnvelopeV3Schema2.parse(value);
+  } catch {
+    throw new ShareReceiveError("envelope-invalid", "share envelope is invalid");
+  }
+  try {
+    if (!await verifyEnvelopeV3(envelope, { expectedSignerDid: envelope.policy.ownerDid })) throw new Error("signature");
+  } catch {
+    throw new ShareReceiveError("signature-invalid", "share signature is invalid");
+  }
+  options.signal?.throwIfAborted();
+  const expiry = Date.parse(envelope.expiry);
+  if (!Number.isFinite(expiry)) throw new ShareReceiveError("envelope-invalid", "share expiry is invalid");
+  if (expiry <= (options.now?.() ?? Date.now())) throw new ShareReceiveError("expired", "share has expired", { expiresAt: envelope.expiry });
+  options.onResolvedAddressedEnvelope?.(envelope, parsed.ciphertextCid);
+  return { envelope, origin: url.origin, cid: parsed.ciphertextCid };
+}
+async function inspectShare(link3, options = {}) {
+  const resolved = await resolvePolicyShare(link3, options);
+  return { metadata: metadataFor(resolved.envelope, resolved.origin), link: { origin: resolved.origin, cid: resolved.cid, kind: "policy" } };
+}
+async function receiveShare(link3, options = {}) {
+  const resolved = await resolvePolicyShare(link3, options);
+  return { state: "authorization-required", method: resolved.envelope.recipientMatcher.kind === "recipientDid" ? "openkey-device" : "email-claim" };
+}
+var SHARE_CONTENT_LIMIT = 100 * 1024 * 1024;
+var SHARE_PUBLISH_RESULT_VERSION = 1;
+var DEFAULT_SHARE_LIFETIME_MS = 7 * 24 * 60 * 60 * 1e3;
+function redactPublishedShare(result) {
+  return {
+    protocol: "tinycloud-share",
+    version: SHARE_PUBLISH_RESULT_VERSION,
+    link: { ...result.link },
+    metadata: {
+      protocol: "tinycloud-share",
+      version: 1,
+      shareId: result.metadata.shareId,
+      origin: result.metadata.origin,
+      target: { ...result.metadata.target },
+      resource: { ...result.metadata.resource },
+      actions: [...result.metadata.actions],
+      ...result.metadata.expiryClamped === void 0 ? {} : { expiryClamped: result.metadata.expiryClamped },
+      expiresAt: result.metadata.expiresAt,
+      display: { ...result.metadata.display }
+    }
+  };
+}
+var SharePublishError = class extends Error {
+  code;
+  constructor(code32, message) {
+    super(message);
+    this.name = "SharePublishError";
+    this.code = code32;
+  }
+};
+function authorizationMethodForTarget(target) {
+  if (target.kind === "recipientDid") return "openkey-device";
+  if (target.kind === "email") return "email-claim";
+  if (target.kind === "emailDomain") return "email-claim";
+  return void 0;
+}
+var empty22 = new Uint8Array(0);
+function equals32(aa, bb) {
+  if (aa === bb) {
+    return true;
+  }
+  if (aa.byteLength !== bb.byteLength) {
+    return false;
+  }
+  for (let ii = 0; ii < aa.byteLength; ii++) {
+    if (aa[ii] !== bb[ii]) {
+      return false;
+    }
+  }
+  return true;
+}
+function coerce32(o) {
+  if (o instanceof Uint8Array && o.constructor.name === "Uint8Array") {
+    return o;
+  }
+  if (o instanceof ArrayBuffer) {
+    return new Uint8Array(o);
+  }
+  if (ArrayBuffer.isView(o)) {
+    return new Uint8Array(o.buffer, o.byteOffset, o.byteLength);
+  }
+  throw new Error("Unknown type, must be binary type");
+}
+function base22(ALPHABET, name) {
+  if (ALPHABET.length >= 255) {
+    throw new TypeError("Alphabet too long");
+  }
+  var BASE_MAP = new Uint8Array(256);
+  for (var j = 0; j < BASE_MAP.length; j++) {
+    BASE_MAP[j] = 255;
+  }
+  for (var i = 0; i < ALPHABET.length; i++) {
+    var x = ALPHABET.charAt(i);
+    var xc = x.charCodeAt(0);
+    if (BASE_MAP[xc] !== 255) {
+      throw new TypeError(x + " is ambiguous");
+    }
+    BASE_MAP[xc] = i;
+  }
+  var BASE = ALPHABET.length;
+  var LEADER = ALPHABET.charAt(0);
+  var FACTOR = Math.log(BASE) / Math.log(256);
+  var iFACTOR = Math.log(256) / Math.log(BASE);
+  function encode52(source) {
+    if (source instanceof Uint8Array)
+      ;
+    else if (ArrayBuffer.isView(source)) {
+      source = new Uint8Array(source.buffer, source.byteOffset, source.byteLength);
+    } else if (Array.isArray(source)) {
+      source = Uint8Array.from(source);
+    }
+    if (!(source instanceof Uint8Array)) {
+      throw new TypeError("Expected Uint8Array");
+    }
+    if (source.length === 0) {
+      return "";
+    }
+    var zeroes = 0;
+    var length32 = 0;
+    var pbegin = 0;
+    var pend = source.length;
+    while (pbegin !== pend && source[pbegin] === 0) {
+      pbegin++;
+      zeroes++;
+    }
+    var size = (pend - pbegin) * iFACTOR + 1 >>> 0;
+    var b58 = new Uint8Array(size);
+    while (pbegin !== pend) {
+      var carry = source[pbegin];
+      var i2 = 0;
+      for (var it1 = size - 1; (carry !== 0 || i2 < length32) && it1 !== -1; it1--, i2++) {
+        carry += 256 * b58[it1] >>> 0;
+        b58[it1] = carry % BASE >>> 0;
+        carry = carry / BASE >>> 0;
+      }
+      if (carry !== 0) {
+        throw new Error("Non-zero carry");
+      }
+      length32 = i2;
+      pbegin++;
+    }
+    var it2 = size - length32;
+    while (it2 !== size && b58[it2] === 0) {
+      it2++;
+    }
+    var str = LEADER.repeat(zeroes);
+    for (; it2 < size; ++it2) {
+      str += ALPHABET.charAt(b58[it2]);
+    }
+    return str;
+  }
+  function decodeUnsafe(source) {
+    if (typeof source !== "string") {
+      throw new TypeError("Expected String");
+    }
+    if (source.length === 0) {
+      return new Uint8Array();
+    }
+    var psz = 0;
+    if (source[psz] === " ") {
+      return;
+    }
+    var zeroes = 0;
+    var length32 = 0;
+    while (source[psz] === LEADER) {
+      zeroes++;
+      psz++;
+    }
+    var size = (source.length - psz) * FACTOR + 1 >>> 0;
+    var b256 = new Uint8Array(size);
+    while (source[psz]) {
+      var carry = BASE_MAP[source.charCodeAt(psz)];
+      if (carry === 255) {
+        return;
+      }
+      var i2 = 0;
+      for (var it3 = size - 1; (carry !== 0 || i2 < length32) && it3 !== -1; it3--, i2++) {
+        carry += BASE * b256[it3] >>> 0;
+        b256[it3] = carry % 256 >>> 0;
+        carry = carry / 256 >>> 0;
+      }
+      if (carry !== 0) {
+        throw new Error("Non-zero carry");
+      }
+      length32 = i2;
+      psz++;
+    }
+    if (source[psz] === " ") {
+      return;
+    }
+    var it4 = size - length32;
+    while (it4 !== size && b256[it4] === 0) {
+      it4++;
+    }
+    var vch = new Uint8Array(zeroes + (size - it4));
+    var j2 = zeroes;
+    while (it4 !== size) {
+      vch[j2++] = b256[it4++];
+    }
+    return vch;
+  }
+  function decode92(string) {
+    var buffer = decodeUnsafe(string);
+    if (buffer) {
+      return buffer;
+    }
+    throw new Error(`Non-${name} character`);
+  }
+  return {
+    encode: encode52,
+    decodeUnsafe,
+    decode: decode92
+  };
+}
+var src22 = base22;
+var _brrp__multiformats_scope_baseX22 = src22;
+var base_x_default22 = _brrp__multiformats_scope_baseX22;
+var Encoder22 = class {
+  name;
+  prefix;
+  baseEncode;
+  constructor(name, prefix, baseEncode) {
+    this.name = name;
+    this.prefix = prefix;
+    this.baseEncode = baseEncode;
+  }
+  encode(bytes3) {
+    if (bytes3 instanceof Uint8Array) {
+      return `${this.prefix}${this.baseEncode(bytes3)}`;
+    } else {
+      throw Error("Unknown type, must be binary type");
+    }
+  }
+};
+var Decoder22 = class {
+  name;
+  prefix;
+  baseDecode;
+  prefixCodePoint;
+  constructor(name, prefix, baseDecode) {
+    this.name = name;
+    this.prefix = prefix;
+    const prefixCodePoint = prefix.codePointAt(0);
+    if (prefixCodePoint === void 0) {
+      throw new Error("Invalid prefix character");
+    }
+    this.prefixCodePoint = prefixCodePoint;
+    this.baseDecode = baseDecode;
+  }
+  decode(text) {
+    if (typeof text === "string") {
+      if (text.codePointAt(0) !== this.prefixCodePoint) {
+        throw Error(`Unable to decode multibase string ${JSON.stringify(text)}, ${this.name} decoder only supports inputs prefixed with ${this.prefix}`);
+      }
+      return this.baseDecode(text.slice(this.prefix.length));
+    } else {
+      throw Error("Can only multibase decode strings");
+    }
+  }
+  or(decoder) {
+    return or22(this, decoder);
+  }
+};
+var ComposedDecoder22 = class {
+  decoders;
+  constructor(decoders) {
+    this.decoders = decoders;
+  }
+  or(decoder) {
+    return or22(this, decoder);
+  }
+  decode(input) {
+    const prefix = input[0];
+    const decoder = this.decoders[prefix];
+    if (decoder != null) {
+      return decoder.decode(input);
+    } else {
+      throw RangeError(`Unable to decode multibase string ${JSON.stringify(input)}, only inputs prefixed with ${Object.keys(this.decoders)} are supported`);
+    }
+  }
+};
+function or22(left, right) {
+  return new ComposedDecoder22({
+    ...left.decoders ?? { [left.prefix]: left },
+    ...right.decoders ?? { [right.prefix]: right }
+  });
+}
+var Codec22 = class {
+  name;
+  prefix;
+  baseEncode;
+  baseDecode;
+  encoder;
+  decoder;
+  constructor(name, prefix, baseEncode, baseDecode) {
+    this.name = name;
+    this.prefix = prefix;
+    this.baseEncode = baseEncode;
+    this.baseDecode = baseDecode;
+    this.encoder = new Encoder22(name, prefix, baseEncode);
+    this.decoder = new Decoder22(name, prefix, baseDecode);
+  }
+  encode(input) {
+    return this.encoder.encode(input);
+  }
+  decode(input) {
+    return this.decoder.decode(input);
+  }
+};
+function from22({ name, prefix, encode: encode52, decode: decode92 }) {
+  return new Codec22(name, prefix, encode52, decode92);
+}
+function baseX22({ name, prefix, alphabet }) {
+  const { encode: encode52, decode: decode92 } = base_x_default22(alphabet, name);
+  return from22({
+    prefix,
+    name,
+    encode: encode52,
+    decode: (text) => coerce32(decode92(text))
+  });
+}
+function decode52(string, alphabetIdx, bitsPerChar, name) {
+  let end = string.length;
+  while (string[end - 1] === "=") {
+    --end;
+  }
+  const out = new Uint8Array(end * bitsPerChar / 8 | 0);
+  let bits = 0;
+  let buffer = 0;
+  let written = 0;
+  for (let i = 0; i < end; ++i) {
+    const value = alphabetIdx[string[i]];
+    if (value === void 0) {
+      throw new SyntaxError(`Non-${name} character`);
+    }
+    buffer = buffer << bitsPerChar | value;
+    bits += bitsPerChar;
+    if (bits >= 8) {
+      bits -= 8;
+      out[written++] = 255 & buffer >> bits;
+    }
+  }
+  if (bits >= bitsPerChar || (255 & buffer << 8 - bits) !== 0) {
+    throw new SyntaxError("Unexpected end of data");
+  }
+  return out;
+}
+function encode32(data, alphabet, bitsPerChar) {
+  const pad = alphabet[alphabet.length - 1] === "=";
+  const mask = (1 << bitsPerChar) - 1;
+  let out = "";
+  let bits = 0;
+  let buffer = 0;
+  for (let i = 0; i < data.length; ++i) {
+    buffer = buffer << 8 | data[i];
+    bits += 8;
+    while (bits > bitsPerChar) {
+      bits -= bitsPerChar;
+      out += alphabet[mask & buffer >> bits];
+    }
+  }
+  if (bits !== 0) {
+    out += alphabet[mask & buffer << bitsPerChar - bits];
+  }
+  if (pad) {
+    while ((out.length * bitsPerChar & 7) !== 0) {
+      out += "=";
+    }
+  }
+  return out;
+}
+function createAlphabetIdx22(alphabet) {
+  const alphabetIdx = {};
+  for (let i = 0; i < alphabet.length; ++i) {
+    alphabetIdx[alphabet[i]] = i;
+  }
+  return alphabetIdx;
+}
+function rfc464822({ name, prefix, bitsPerChar, alphabet }) {
+  const alphabetIdx = createAlphabetIdx22(alphabet);
+  return from22({
+    prefix,
+    name,
+    encode(input) {
+      return encode32(input, alphabet, bitsPerChar);
+    },
+    decode(input) {
+      return decode52(input, alphabetIdx, bitsPerChar, name);
+    }
+  });
+}
+var base58btc22 = baseX22({
+  name: "base58btc",
+  prefix: "z",
+  alphabet: "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
+});
+var base58flickr22 = baseX22({
+  name: "base58flickr",
+  prefix: "Z",
+  alphabet: "123456789abcdefghijkmnopqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ"
+});
+function validRecipientDid(value) {
+  if (value.length === 0 || value.length > 2048 || /[\u0000-\u0020\u007f]/.test(value)) return false;
+  const parts = value.split(":");
+  if (parts.length < 3 || parts[0] !== "did" || !/^[a-z0-9]+$/.test(parts[1] ?? "")) return false;
+  const identifier = parts.slice(2);
+  if (identifier.some((part) => part.length === 0)) return false;
+  if (parts[1] === "web") {
+    const host = identifier[0] ?? "";
+    if (host.length > 253 || host.split(".").some((label) => !label || label.length > 63 || !/^[A-Za-z0-9-]+$/.test(label) || label.startsWith("-") || label.endsWith("-"))) return false;
+    return identifier.slice(1).every((part) => /^[A-Za-z0-9._%-]+$/.test(part));
+  }
+  if (parts[1] === "pkh") return identifier.length >= 3 && identifier.every((part) => /^[A-Za-z0-9._%-]+$/.test(part));
+  if (parts[1] === "key") {
+    try {
+      const bytes3 = base58btc22.decode(identifier.join(":"));
+      return bytes3.length === 34 && bytes3[0] === 237 && bytes3[1] === 1;
+    } catch {
+      return false;
+    }
+  }
+  return false;
+}
+function normalizeShareTarget(target) {
+  if (target.kind === "bearer") return target;
+  if (target.kind === "recipientDid") {
+    if (!validRecipientDid(target.did)) throw new TypeError("recipient DID is invalid");
+    return { kind: target.kind, did: target.did };
+  }
+  if (target.kind === "email") {
+    const mailbox = canonicalMailbox(target.address);
+    if (mailbox === void 0) throw new TypeError("recipient email is invalid");
+    return { kind: target.kind, address: mailbox.email };
+  }
+  const domain = target.domain.toLowerCase();
+  if (!isCanonicalEmailDomain(domain)) throw new TypeError("recipient email domain is invalid");
+  return { kind: target.kind, domain };
+}
+function targetAuthorizationMethod(target) {
+  return authorizationMethodForTarget(target);
+}
+function publishFilename(value) {
+  try {
+    return canonicalShareFilename2(value);
+  } catch {
+    throw new SharePublishError("invalid-argument", hasUnsafeFilenameCodePoint2(value) ? "filename contains control or invisible characters" : "filename must be one safe path segment");
+  }
+}
+async function publishTargetShare(input) {
+  const target = normalizeShareTarget(input.target);
+  const filename = publishFilename(input.filename);
+  const files = input.files?.map((file) => ({ ...file, filename: publishFilename(file.filename) }));
+  if (input.targetAdapter === void 0) {
+    if (target.kind === "bearer") throw new SharePublishError("authority-required", "native bearer publication requires an authenticated TinyCloud node");
+    return {
+      state: "authorization-required",
+      method: targetAuthorizationMethod(target)
+    };
+  }
+  const source = input.source instanceof Uint8Array ? input.source.slice() : await (async () => {
+    const chunks = [];
+    let size = 0;
+    for await (const chunk of input.source) {
+      if (!(chunk instanceof Uint8Array)) throw new TypeError("share publication source yielded invalid bytes");
+      size += chunk.byteLength;
+      if (size > (input.maxBytes ?? SHARE_CONTENT_LIMIT)) throw new SharePublishError("max-bytes-exceeded", "share publication exceeds maxBytes");
+      chunks.push(chunk.slice());
+    }
+    const bytes3 = new Uint8Array(size);
+    let offset = 0;
+    for (const chunk of chunks) {
+      bytes3.set(chunk, offset);
+      offset += chunk.byteLength;
+    }
+    return bytes3;
+  })();
+  if (source.byteLength === 0) throw new SharePublishError("invalid-argument", "share content is empty");
+  if (target.kind === "bearer" && input.allowBinary !== true) {
+    try {
+      new TextDecoder("utf-8", { fatal: true }).decode(source);
+    } catch {
+      throw new SharePublishError("invalid-argument", "Markdown input must be valid UTF-8");
+    }
+  }
+  const publishFiles = files === void 0 || files.length === 0 ? [{ bytes: source }] : files;
+  const limit = input.maxBytes ?? SHARE_CONTENT_LIMIT;
+  let totalBytes = 0;
+  for (const file of publishFiles) {
+    totalBytes += file.bytes.byteLength;
+    if (!Number.isSafeInteger(totalBytes) || totalBytes > limit) {
+      throw new SharePublishError("max-bytes-exceeded", "share publication exceeds the combined byte limit");
+    }
+  }
+  const nowMs = input.now?.() ?? Date.now();
+  const expiresAt = input.expiresAt ?? new Date(nowMs + DEFAULT_SHARE_LIFETIME_MS);
+  if (!Number.isFinite(expiresAt.getTime()) || expiresAt.getTime() <= nowMs) throw new SharePublishError("invalid-argument", "expiresAt must be a valid future time");
+  return input.targetAdapter.publish({
+    source,
+    filename,
+    ...files === void 0 ? {} : { files },
+    ...input.mediaType === void 0 ? {} : { mediaType: input.mediaType },
+    ...input.resourceKind === void 0 ? {} : { resourceKind: input.resourceKind },
+    ...input.actions === void 0 ? {} : { actions: input.actions },
+    target,
+    expiresAt,
+    expiryWasExplicit: input.expiryWasExplicit ?? input.expiresAt !== void 0,
+    origin: input.origin,
+    ...input.notify === void 0 ? {} : { notify: input.notify }
+  });
+}
+var POLICY_V1_DOMAIN = "xyz.tinycloud.policy/policy/v1\0";
+var POLICY_V2_DOMAIN = "xyz.tinycloud.policy/policy/v2\0";
+var POLICY_CAPABILITY_V1_DOMAIN2 = "xyz.tinycloud.policy/PolicyCapability/v1\0";
+var CONTENT_SOURCE_V1_DOMAIN2 = "xyz.tinycloud.policy/ContentSource/v1\0";
+var NATIVE_PROJECTION_V1_DOMAIN2 = "xyz.tinycloud.policy/NativeProjection/v1\0";
+var ENVELOPE_V3_DOMAIN = "xyz.tinycloud.share/envelope/v3\0";
+var textEncoder = new TextEncoder();
+function targetMatcher(target) {
+  if (target.kind === "recipientDid") return { kind: "recipientDid", value: target.did };
+  if (target.kind === "email") return { kind: "exactEmail", value: target.address };
+  return { kind: "emailDomain", value: target.domain };
+}
+function targetKind(target) {
+  return target.kind;
+}
+var OWNER_SHARE_ACTIONS = /* @__PURE__ */ new Set(["tinycloud.kv/get", "tinycloud.kv/list", "tinycloud.kv/metadata", "tinycloud.kv/put"]);
+function assertSafeInput(input) {
+  if (!/^[A-Za-z0-9_-]{16,128}$/.test(input.shareId)) throw new TypeError("addressed share id is invalid");
+  if (!Number.isSafeInteger(input.byteLength) || input.byteLength < 0 || input.byteLength > SHARE_CONTENT_LIMIT) throw new TypeError("addressed content length is invalid");
+  if (!Number.isFinite(input.expiresAt.getTime()) || input.expiresAt.getTime() <= Date.now()) throw new TypeError("addressed share expiry must be in the future");
+  if (input.artifact === "html" && (input.resource.kind !== "prefix" || !input.actions.includes("read") || !input.actions.includes("list"))) throw new TypeError("html artifacts require a readable prefix");
+  if (input.contentSource.shareId !== input.shareId || input.contentSource.selector !== input.resource.kind) throw new TypeError("addressed content source is not bound to the share");
+}
+function hex2(bytes3) {
+  return [...bytes3].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+function digestHex(value, domain) {
+  return hex2(sha2562(textEncoder.encode(`${domain}${canonicalize2(value)}`)));
+}
+function sortCanonical(values) {
+  return [...values].sort((left, right) => canonicalize2(left).localeCompare(canonicalize2(right)));
+}
+function base32Lower2(bytes3) {
+  const alphabet = "abcdefghijklmnopqrstuvwxyz234567";
+  let output = "";
+  let buffer = 0;
+  let bits = 0;
+  for (const byte of bytes3) {
+    buffer = buffer << 8 | byte;
+    bits += 8;
+    while (bits >= 5) {
+      output += alphabet[buffer >>> bits - 5 & 31];
+      bits -= 5;
+    }
+  }
+  if (bits > 0) output += alphabet[buffer << 5 - bits & 31];
+  return output;
+}
+function rfc3339Seconds(value) {
+  return new Date(Math.floor(value.getTime() / 1e3) * 1e3).toISOString().replace(".000Z", "Z");
+}
+function nativeProjection(capabilities) {
+  return sortCanonical(capabilities.map((capability) => capability.kind === "encryption" ? { service: "tinycloud.encryption", space: capability.resource, path: capability.resource, actions: [capability.action] } : {
+    service: "tinycloud.kv",
+    space: capability.resource.slice(0, capability.resource.indexOf("/kv/")),
+    path: capability.resource.slice(capability.resource.indexOf("/kv/") + 4),
+    actions: [...capability.actions],
+    caveat: { type: "xyz.tinycloud.resource/selector", kind: capability.selector, value: capability.resource }
+  }));
+}
+async function createPolicy(options, capabilities) {
+  const fields = {
+    ownerDid: options.authority.ownerDid,
+    createdAt: rfc3339Seconds(/* @__PURE__ */ new Date()),
+    expiresAt: rfc3339Seconds(options.expiresAt),
+    contentSource: options.contentSource,
+    capabilityCeiling: [...capabilities]
+  };
+  const unsigned = options.credentialRequirement === void 0 ? { schema: "xyz.tinycloud.policy/policy/v1", ...fields } : { schema: "xyz.tinycloud.policy/policy/v2", ...fields, credentialRequirement: options.credentialRequirement };
+  const domain = options.credentialRequirement === void 0 ? POLICY_V1_DOMAIN : POLICY_V2_DOMAIN;
+  const policyDigestHex = digestHex(unsigned, domain);
+  const signature = await options.authority.sign(sha2562(textEncoder.encode(`${domain}${canonicalize2(unsigned)}`)));
+  if (signature.byteLength !== 64) throw new TypeError("policy signature must be Ed25519");
+  const policy = {
+    ...unsigned,
+    policyId: `pol_${base32Lower2(Uint8Array.from(policyDigestHex.match(/../g), (byte) => Number.parseInt(byte, 16)))}`,
+    signature: { suite: "Ed25519", signerDid: options.authority.ownerDid, value: toBase64Url(signature) }
+  };
+  return { policy, policyCid: await computeCid(textEncoder.encode(canonicalize2(policy))), policyDigestHex };
+}
+function publicationResult(input) {
+  const result = {
+    protocol: "tinycloud-share",
+    version: SHARE_PUBLISH_RESULT_VERSION,
+    url: input.url,
+    link: { kind: "policy", cid: input.envelopeCid },
+    metadata: {
+      protocol: "tinycloud-share",
+      version: 1,
+      shareId: input.options.shareId,
+      origin: input.options.shareOrigin,
+      target: { kind: targetKind(input.options.target), origin: input.options.nodeOrigin, nodeAudience: input.enforcerDid, spaceId: input.options.spaceId },
+      resource: { ...input.options.resource },
+      actions: [...input.options.actions],
+      expiresAt: input.expiry,
+      display: { filename: input.options.filename },
+      recipientMatcher: { ...input.matcher },
+      policyCid: input.policyCid,
+      ownerDelegationCid: input.policyRootCid,
+      enforcementDelegationCid: input.enforcementRootCid,
+      ownerDid: input.options.authority.ownerDid,
+      enforcerDid: input.enforcerDid,
+      envelopeCid: input.envelopeCid,
+      shareCid: input.envelopeCid
+    }
+  };
+  Object.defineProperty(result, "toJSON", { enumerable: false, value: () => redactPublishedShare(result) });
+  Object.defineProperty(result, "url", { enumerable: false, value: input.url });
+  Object.defineProperty(result, "deliveryMaterial", { enumerable: false, value: input.deliveryMaterial });
+  return result;
+}
+var EMAIL_PROFILE = { id: "tinycloud.email-proof/v1", version: 1 };
+var EMAIL_DOMAIN_PROFILE = { id: "tinycloud.email-domain-proof/v1", version: 1 };
+var EMAIL_CREDENTIAL_TYPE = { id: "opencredentials.email/v1", version: 1 };
+var EMAIL_DESCRIPTOR_DIGEST = "1tg-qphmKBVtNwzVg9xyz-xxqt_xtMXAsQyXw46m8S0";
+var EMAIL_DOMAIN_DESCRIPTOR_DIGEST = "33X5mAkZZgApdD3xh_T-3KS5moop0J2Nloi2nqWsdWY";
+var EMAIL_CREDENTIAL_ISSUER_DID = "did:web:issuer.credentials.org";
+var EMAIL_CREDENTIAL_ISSUER_KID = `${EMAIL_CREDENTIAL_ISSUER_DID}#controller`;
+function mailboxCredentialCommitment(target) {
+  const profile = target.kind === "email" ? EMAIL_PROFILE : EMAIL_DOMAIN_PROFILE;
+  const requirement = target.kind === "email" ? { type: "TinyCloudCredentialRequirement", version: 1, profile, credentialType: EMAIL_CREDENTIAL_TYPE, claims: { email: target.address }, maxAgeSeconds: 3600 } : { type: "TinyCloudCredentialRequirement", version: 1, profile, credentialType: EMAIL_CREDENTIAL_TYPE, claims: { emailDomain: target.domain }, maxAgeSeconds: 300 };
+  return {
+    type: "TinyCloudPolicyCredentialRequirement",
+    version: 1,
+    requirementDigest: toBase64Url(sha2562(textEncoder.encode(canonicalize2(requirement)))),
+    descriptorDigest: target.kind === "email" ? EMAIL_DESCRIPTOR_DIGEST : EMAIL_DOMAIN_DESCRIPTOR_DIGEST,
+    issuerDid: EMAIL_CREDENTIAL_ISSUER_DID,
+    issuerKid: EMAIL_CREDENTIAL_ISSUER_KID,
+    profile,
+    credentialType: EMAIL_CREDENTIAL_TYPE
+  };
+}
+function prepareAddressedShare(request) {
+  try {
+    canonicalShareFilename2(request.filename);
+  } catch {
+    throw new TypeError("addressed filename is invalid");
+  }
+  if (request.actions.length === 0 || request.policyActions.length === 0) throw new TypeError("addressed share actions are empty");
+  if (request.policyActions.some((action) => !OWNER_SHARE_ACTIONS.has(action))) throw new TypeError("addressed share action is not supported");
+  if (request.deliveryEmail !== void 0 && !isEnvelopeDeliveryEmail(request.deliveryEmail)) throw new TypeError("delivery email is not a valid envelope address");
+  const target = normalizeShareTarget(request.target);
+  if (target.kind === "bearer") throw new TypeError("addressed target is required");
+  if (target.kind === "recipientDid") return { target };
+  if (target.kind === "emailDomain" && request.deliveryEmail !== void 0 && (request.deliveryEmail !== request.deliveryEmail.toLowerCase() || !request.deliveryEmail.endsWith(`@${target.domain}`))) {
+    throw new TypeError("email-domain delivery address must be a lowercase mailbox at the domain");
+  }
+  return { target, credentialRequirement: mailboxCredentialCommitment(target) };
+}
+function assertMailboxCommitment(commitment, target) {
+  const label = target.kind === "email" ? "email" : "email-domain";
+  if (commitment === void 0) throw new TypeError(`${label} shares require a credential requirement`);
+  const expected = mailboxCredentialCommitment(target);
+  if (canonicalize2(commitment.profile) !== canonicalize2(expected.profile) || canonicalize2(commitment.credentialType) !== canonicalize2(expected.credentialType) || commitment.descriptorDigest !== expected.descriptorDigest || commitment.issuerDid !== expected.issuerDid || commitment.issuerKid !== expected.issuerKid) throw new TypeError(`${label} shares require the ${label} credential profile`);
+  if (commitment.requirementDigest !== expected.requirementDigest) throw new TypeError(`credential requirement is not bound to the email ${target.kind === "email" ? "address" : "domain"}`);
+}
+async function publishAddressedShare(input) {
+  assertSafeInput(input);
+  const { target } = prepareAddressedShare(input);
+  const options = { ...input, filename: canonicalShareFilename2(input.filename) };
+  if (target.kind !== "recipientDid") assertMailboxCommitment(options.credentialRequirement, target);
+  const expiry = rfc3339Seconds(options.expiresAt);
+  const matcher = targetMatcher(target);
+  const capabilities = sortCanonical([
+    { kind: "kv", resource: options.contentSource.kvResource, selector: options.resource.kind, actions: [...options.policyActions] },
+    { kind: "encryption", resource: options.contentSource.encryptionNetwork, action: "tinycloud.encryption/decrypt" }
+  ]);
+  const created = await createPolicy(options, capabilities);
+  const contentSourceDigestHex = digestHex(options.contentSource, CONTENT_SOURCE_V1_DOMAIN2);
+  const capabilityCeilingHashHex = digestHex(capabilities, POLICY_CAPABILITY_V1_DOMAIN2);
+  const nativeProjectionHashHex = digestHex(nativeProjection(capabilities), NATIVE_PROJECTION_V1_DOMAIN2);
+  const commonRoot = {
+    ownerDid: options.authority.ownerDid,
+    policyId: created.policy.policyId,
+    policyDigestHex: created.policyDigestHex,
+    policyCid: created.policyCid,
+    contentSourceDigestHex,
+    capabilityCeilingHashHex,
+    nativeProjectionHashHex,
+    notBefore: new Date(created.policy.createdAt),
+    expiresAt: new Date(expiry),
+    nodeAudience: options.nodeAudience,
+    capabilities
+  };
+  const policyRootReceipt = await options.authority.createOwnerRoot({ ...commonRoot, role: "policy-authority", audienceDid: `did:tinycloud:policy:${created.policyDigestHex}` });
+  const enforcementRootReceipt = await options.authority.createOwnerRoot({ ...commonRoot, role: "policy-enforcement", audienceDid: options.enforcerDid });
+  const policyRoot = { cid: policyRootReceipt.cid, authorization: policyRootReceipt.delegationHeader.Authorization.replace(/^Bearer\s+/i, ""), role: "policy-authority" };
+  const enforcementRoot = { cid: enforcementRootReceipt.cid, authorization: enforcementRootReceipt.delegationHeader.Authorization.replace(/^Bearer\s+/i, ""), role: "policy-enforcement" };
+  const registration = await options.authority.registerPolicy({
+    policyCid: created.policyCid,
+    policy: created.policy,
+    policyRoot,
+    enforcementRoot,
+    contentSourceDigestHex,
+    nativeProjectionHashHex,
+    rootExpiresAt: expiry,
+    enforcerDid: options.enforcerDid,
+    expectedNodeAudience: options.nodeAudience
+  });
+  if (registration.policyCid !== created.policyCid || registration.policyRootCid !== policyRoot.cid || registration.enforcementRootCid !== enforcementRoot.cid) throw new Error("Policy/v3 registration receipt is not bound to the published roots");
+  const unsigned = {
+    version: 3,
+    shareId: options.shareId,
+    recipientMatcher: matcher,
+    ...options.deliveryEmail === void 0 ? {} : { deliveryEmail: options.deliveryEmail },
+    actions: [...options.actions],
+    resource: { ...options.resource },
+    target: { origin: options.nodeOrigin, nodeAudience: registration.attestedEnforcerBinding.enforcerDid, spaceId: options.spaceId },
+    policy: created.policy,
+    policyCid: created.policyCid,
+    policyRoot,
+    enforcementRoot,
+    attestedEnforcerBinding: registration.attestedEnforcerBinding,
+    contentSource: options.contentSource,
+    contentSourceDigestHex,
+    encryptionNetwork: options.contentSource.encryptionNetwork,
+    expiry,
+    display: { filename: options.filename },
+    encrypted: true,
+    metadata: {
+      mediaType: options.mediaType,
+      byteLength: options.byteLength,
+      filename: options.filename,
+      ...options.mediaType.startsWith("text/") ? { encoding: "utf-8" } : {},
+      ...options.artifact === void 0 ? {} : { artifact: options.artifact }
+    }
+  };
+  unsignedShareEnvelopeV3Schema2.parse(unsigned);
+  const envelopeSignature = await options.authority.sign(sha2562(textEncoder.encode(`${ENVELOPE_V3_DOMAIN}${canonicalize2(unsigned)}`)));
+  if (envelopeSignature.byteLength !== 64) throw new TypeError("v3 envelope signature must be Ed25519");
+  const envelope = { ...unsigned, signature: { signerDid: options.authority.ownerDid, algorithm: "Ed25519", value: toBase64Url(envelopeSignature) } };
+  shareEnvelopeV3Schema2.parse(envelope);
+  const envelopeBytes = textEncoder.encode(canonicalize2(envelope));
+  const envelopeKeyBytes = generateKey();
+  const sealed = await seal(envelopeBytes, envelopeKeyBytes);
+  const envelopeKey = toBase64Url(envelopeKeyBytes);
+  const url = await encodeSealedInlineShareUrl({
+    origin: options.shareOrigin,
+    ciphertext: sealed.blob,
+    key32: envelopeKeyBytes
+  });
+  const deliveryMaterial = {
+    envelope,
+    shareCid: sealed.cid,
+    sealedEnvelope: toBase64Url(sealed.blob),
+    envelopeKey
+  };
+  options.onDeliveryMaterial?.(deliveryMaterial);
+  return publicationResult({
+    options,
+    url,
+    envelopeCid: sealed.cid,
+    matcher,
+    policyCid: created.policyCid,
+    policyRootCid: policyRoot.cid,
+    enforcementRootCid: enforcementRoot.cid,
+    enforcerDid: registration.attestedEnforcerBinding.enforcerDid,
+    expiry,
+    deliveryMaterial
+  });
+}
+var base3222 = rfc464822({
+  prefix: "b",
+  name: "base32",
+  alphabet: "abcdefghijklmnopqrstuvwxyz234567",
+  bitsPerChar: 5
+});
+var base32upper22 = rfc464822({
+  prefix: "B",
+  name: "base32upper",
+  alphabet: "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567",
+  bitsPerChar: 5
+});
+var base32pad22 = rfc464822({
+  prefix: "c",
+  name: "base32pad",
+  alphabet: "abcdefghijklmnopqrstuvwxyz234567=",
+  bitsPerChar: 5
+});
+var base32padupper22 = rfc464822({
+  prefix: "C",
+  name: "base32padupper",
+  alphabet: "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567=",
+  bitsPerChar: 5
+});
+var base32hex22 = rfc464822({
+  prefix: "v",
+  name: "base32hex",
+  alphabet: "0123456789abcdefghijklmnopqrstuv",
+  bitsPerChar: 5
+});
+var base32hexupper22 = rfc464822({
+  prefix: "V",
+  name: "base32hexupper",
+  alphabet: "0123456789ABCDEFGHIJKLMNOPQRSTUV",
+  bitsPerChar: 5
+});
+var base32hexpad22 = rfc464822({
+  prefix: "t",
+  name: "base32hexpad",
+  alphabet: "0123456789abcdefghijklmnopqrstuv=",
+  bitsPerChar: 5
+});
+var base32hexpadupper22 = rfc464822({
+  prefix: "T",
+  name: "base32hexpadupper",
+  alphabet: "0123456789ABCDEFGHIJKLMNOPQRSTUV=",
+  bitsPerChar: 5
+});
+var base32z22 = rfc464822({
+  prefix: "h",
+  name: "base32z",
+  alphabet: "ybndrfg8ejkmcpqxot1uwisza345h769",
+  bitsPerChar: 5
+});
+var base3622 = baseX22({
+  prefix: "k",
+  name: "base36",
+  alphabet: "0123456789abcdefghijklmnopqrstuvwxyz"
+});
+var base36upper22 = baseX22({
+  prefix: "K",
+  name: "base36upper",
+  alphabet: "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+});
+var encode_122 = encode4;
+var MSB22 = 128;
+var REST22 = 127;
+var MSBALL22 = ~REST22;
+var INT22 = Math.pow(2, 31);
+function encode4(num, out, offset) {
+  out = out || [];
+  offset = offset || 0;
+  var oldOffset = offset;
+  while (num >= INT22) {
+    out[offset++] = num & 255 | MSB22;
+    num /= 128;
+  }
+  while (num & MSBALL22) {
+    out[offset++] = num & 255 | MSB22;
+    num >>>= 7;
+  }
+  out[offset] = num | 0;
+  encode4.bytes = offset - oldOffset + 1;
+  return out;
+}
+var decode6 = read22;
+var MSB$122 = 128;
+var REST$122 = 127;
+function read22(buf, offset) {
+  var res = 0, offset = offset || 0, shift = 0, counter = offset, b, l = buf.length;
+  do {
+    if (counter >= l) {
+      read22.bytes = 0;
+      throw new RangeError("Could not decode varint");
+    }
+    b = buf[counter++];
+    res += shift < 28 ? (b & REST$122) << shift : (b & REST$122) * Math.pow(2, shift);
+    shift += 7;
+  } while (b >= MSB$122);
+  read22.bytes = counter - offset;
+  return res;
+}
+var N122 = Math.pow(2, 7);
+var N222 = Math.pow(2, 14);
+var N322 = Math.pow(2, 21);
+var N422 = Math.pow(2, 28);
+var N522 = Math.pow(2, 35);
+var N622 = Math.pow(2, 42);
+var N722 = Math.pow(2, 49);
+var N822 = Math.pow(2, 56);
+var N922 = Math.pow(2, 63);
+var length22 = function(value) {
+  return value < N122 ? 1 : value < N222 ? 2 : value < N322 ? 3 : value < N422 ? 4 : value < N522 ? 5 : value < N622 ? 6 : value < N722 ? 7 : value < N822 ? 8 : value < N922 ? 9 : 10;
+};
+var varint22 = {
+  encode: encode_122,
+  decode: decode6,
+  encodingLength: length22
+};
+var _brrp_varint22 = varint22;
+var varint_default22 = _brrp_varint22;
+function decode7(data, offset = 0) {
+  const code32 = varint_default22.decode(data, offset);
+  return [code32, varint_default22.decode.bytes];
+}
+function encodeTo22(int, target, offset = 0) {
+  varint_default22.encode(int, target, offset);
+  return target;
+}
+function encodingLength22(int) {
+  return varint_default22.encodingLength(int);
+}
+function create22(code32, digest3) {
+  const size = digest3.byteLength;
+  const sizeOffset = encodingLength22(code32);
+  const digestOffset = sizeOffset + encodingLength22(size);
+  const bytes3 = new Uint8Array(digestOffset + size);
+  encodeTo22(code32, bytes3, 0);
+  encodeTo22(size, bytes3, sizeOffset);
+  bytes3.set(digest3, digestOffset);
+  return new Digest22(code32, size, digest3, bytes3);
+}
+function decode8(multihash) {
+  const bytes3 = coerce32(multihash);
+  const [code32, sizeOffset] = decode7(bytes3);
+  const [size, digestOffset] = decode7(bytes3.subarray(sizeOffset));
+  const digest3 = bytes3.subarray(sizeOffset + digestOffset);
+  if (digest3.byteLength !== size) {
+    throw new Error("Incorrect length");
+  }
+  return new Digest22(code32, size, digest3, bytes3);
+}
+function equals4(a, b) {
+  if (a === b) {
+    return true;
+  } else {
+    const data = b;
+    return a.code === data.code && a.size === data.size && data.bytes instanceof Uint8Array && equals32(a.bytes, data.bytes);
+  }
+}
+var Digest22 = class {
+  code;
+  size;
+  digest;
+  bytes;
+  /**
+   * Creates a multihash digest.
+   */
+  constructor(code32, size, digest3, bytes3) {
+    this.code = code32;
+    this.size = size;
+    this.digest = digest3;
+    this.bytes = bytes3;
+  }
+};
+function format22(link3, base33) {
+  const { bytes: bytes3, version: version2 } = link3;
+  switch (version2) {
+    case 0:
+      return toStringV022(bytes3, baseCache22(link3), base33 ?? base58btc22.encoder);
+    default:
+      return toStringV122(bytes3, baseCache22(link3), base33 ?? base3222.encoder);
+  }
+}
+var cache22 = /* @__PURE__ */ new WeakMap();
+function baseCache22(cid2) {
+  const baseCache32 = cache22.get(cid2);
+  if (baseCache32 == null) {
+    const baseCache4 = /* @__PURE__ */ new Map();
+    cache22.set(cid2, baseCache4);
+    return baseCache4;
+  }
+  return baseCache32;
+}
+var CID22 = class _CID22 {
+  code;
+  version;
+  multihash;
+  bytes;
+  "/";
+  /**
+   * @param version - Version of the CID
+   * @param code - Code of the codec content is encoded in, see https://github.com/multiformats/multicodec/blob/master/table.csv
+   * @param multihash - (Multi)hash of the of the content.
+   */
+  constructor(version2, code32, multihash, bytes3) {
+    this.code = code32;
+    this.version = version2;
+    this.multihash = multihash;
+    this.bytes = bytes3;
+    this["/"] = bytes3;
+  }
+  /**
+   * Signalling `cid.asCID === cid` has been replaced with `cid['/'] === cid.bytes`
+   * please either use `CID.asCID(cid)` or switch to new signalling mechanism
+   *
+   * @deprecated
+   */
+  get asCID() {
+    return this;
+  }
+  // ArrayBufferView
+  get byteOffset() {
+    return this.bytes.byteOffset;
+  }
+  // ArrayBufferView
+  get byteLength() {
+    return this.bytes.byteLength;
+  }
+  toV0() {
+    switch (this.version) {
+      case 0: {
+        return this;
+      }
+      case 1: {
+        const { code: code32, multihash } = this;
+        if (code32 !== DAG_PB_CODE22) {
+          throw new Error("Cannot convert a non dag-pb CID to CIDv0");
+        }
+        if (multihash.code !== SHA_256_CODE22) {
+          throw new Error("Cannot convert non sha2-256 multihash CID to CIDv0");
+        }
+        return _CID22.createV0(multihash);
+      }
+      default: {
+        throw Error(`Can not convert CID version ${this.version} to version 0. This is a bug please report`);
+      }
+    }
+  }
+  toV1() {
+    switch (this.version) {
+      case 0: {
+        const { code: code32, digest: digest3 } = this.multihash;
+        const multihash = create22(code32, digest3);
+        return _CID22.createV1(this.code, multihash);
+      }
+      case 1: {
+        return this;
+      }
+      default: {
+        throw Error(`Can not convert CID version ${this.version} to version 1. This is a bug please report`);
+      }
+    }
+  }
+  equals(other) {
+    return _CID22.equals(this, other);
+  }
+  static equals(self, other) {
+    const unknown = other;
+    return unknown != null && self.code === unknown.code && self.version === unknown.version && equals4(self.multihash, unknown.multihash);
+  }
+  toString(base33) {
+    return format22(this, base33);
+  }
+  toJSON() {
+    return { "/": format22(this) };
+  }
+  link() {
+    return this;
+  }
+  [Symbol.toStringTag] = "CID";
+  // Legacy
+  [/* @__PURE__ */ Symbol.for("nodejs.util.inspect.custom")]() {
+    return `CID(${this.toString()})`;
+  }
+  /**
+   * Takes any input `value` and returns a `CID` instance if it was
+   * a `CID` otherwise returns `null`. If `value` is instanceof `CID`
+   * it will return value back. If `value` is not instance of this CID
+   * class, but is compatible CID it will return new instance of this
+   * `CID` class. Otherwise returns null.
+   *
+   * This allows two different incompatible versions of CID library to
+   * co-exist and interop as long as binary interface is compatible.
+   */
+  static asCID(input) {
+    if (input == null) {
+      return null;
+    }
+    const value = input;
+    if (value instanceof _CID22) {
+      return value;
+    } else if (value["/"] != null && value["/"] === value.bytes || value.asCID === value) {
+      const { version: version2, code: code32, multihash, bytes: bytes3 } = value;
+      return new _CID22(version2, code32, multihash, bytes3 ?? encodeCID22(version2, code32, multihash.bytes));
+    } else if (value[cidSymbol22] === true) {
+      const { version: version2, multihash, code: code32 } = value;
+      const digest3 = decode8(multihash);
+      return _CID22.create(version2, code32, digest3);
+    } else {
+      return null;
+    }
+  }
+  /**
+   * @param version - Version of the CID
+   * @param code - Code of the codec content is encoded in, see https://github.com/multiformats/multicodec/blob/master/table.csv
+   * @param digest - (Multi)hash of the of the content.
+   */
+  static create(version2, code32, digest3) {
+    if (typeof code32 !== "number") {
+      throw new Error("String codecs are no longer supported");
+    }
+    if (!(digest3.bytes instanceof Uint8Array)) {
+      throw new Error("Invalid digest");
+    }
+    switch (version2) {
+      case 0: {
+        if (code32 !== DAG_PB_CODE22) {
+          throw new Error(`Version 0 CID must use dag-pb (code: ${DAG_PB_CODE22}) block encoding`);
+        } else {
+          return new _CID22(version2, code32, digest3, digest3.bytes);
+        }
+      }
+      case 1: {
+        const bytes3 = encodeCID22(version2, code32, digest3.bytes);
+        return new _CID22(version2, code32, digest3, bytes3);
+      }
+      default: {
+        throw new Error("Invalid version");
+      }
+    }
+  }
+  /**
+   * Simplified version of `create` for CIDv0.
+   */
+  static createV0(digest3) {
+    return _CID22.create(0, DAG_PB_CODE22, digest3);
+  }
+  /**
+   * Simplified version of `create` for CIDv1.
+   *
+   * @param code - Content encoding format code.
+   * @param digest - Multihash of the content.
+   */
+  static createV1(code32, digest3) {
+    return _CID22.create(1, code32, digest3);
+  }
+  /**
+   * Decoded a CID from its binary representation. The byte array must contain
+   * only the CID with no additional bytes.
+   *
+   * An error will be thrown if the bytes provided do not contain a valid
+   * binary representation of a CID.
+   */
+  static decode(bytes3) {
+    const [cid2, remainder] = _CID22.decodeFirst(bytes3);
+    if (remainder.length !== 0) {
+      throw new Error("Incorrect length");
+    }
+    return cid2;
+  }
+  /**
+   * Decoded a CID from its binary representation at the beginning of a byte
+   * array.
+   *
+   * Returns an array with the first element containing the CID and the second
+   * element containing the remainder of the original byte array. The remainder
+   * will be a zero-length byte array if the provided bytes only contained a
+   * binary CID representation.
+   */
+  static decodeFirst(bytes3) {
+    const specs = _CID22.inspectBytes(bytes3);
+    const prefixSize = specs.size - specs.multihashSize;
+    const multihashBytes = coerce32(bytes3.subarray(prefixSize, prefixSize + specs.multihashSize));
+    if (multihashBytes.byteLength !== specs.multihashSize) {
+      throw new Error("Incorrect length");
+    }
+    const digestBytes3 = multihashBytes.subarray(specs.multihashSize - specs.digestSize);
+    const digest3 = new Digest22(specs.multihashCode, specs.digestSize, digestBytes3, multihashBytes);
+    const cid2 = specs.version === 0 ? _CID22.createV0(digest3) : _CID22.createV1(specs.codec, digest3);
+    return [cid2, bytes3.subarray(specs.size)];
+  }
+  /**
+   * Inspect the initial bytes of a CID to determine its properties.
+   *
+   * Involves decoding up to 4 varints. Typically this will require only 4 to 6
+   * bytes but for larger multicodec code values and larger multihash digest
+   * lengths these varints can be quite large. It is recommended that at least
+   * 10 bytes be made available in the `initialBytes` argument for a complete
+   * inspection.
+   */
+  static inspectBytes(initialBytes) {
+    let offset = 0;
+    const next = () => {
+      const [i, length32] = decode7(initialBytes.subarray(offset));
+      offset += length32;
+      return i;
+    };
+    let version2 = next();
+    let codec = DAG_PB_CODE22;
+    if (version2 === 18) {
+      version2 = 0;
+      offset = 0;
+    } else {
+      codec = next();
+    }
+    if (version2 !== 0 && version2 !== 1) {
+      throw new RangeError(`Invalid CID version ${version2}`);
+    }
+    const prefixSize = offset;
+    const multihashCode = next();
+    const digestSize = next();
+    const size = offset + digestSize;
+    const multihashSize = size - prefixSize;
+    return { version: version2, codec, multihashCode, digestSize, multihashSize, size };
+  }
+  /**
+   * Takes cid in a string representation and creates an instance. If `base`
+   * decoder is not provided will use a default from the configuration. It will
+   * throw an error if encoding of the CID is not compatible with supplied (or
+   * a default decoder).
+   */
+  static parse(source, base33) {
+    const [prefix, bytes3] = parseCIDtoBytes22(source, base33);
+    const cid2 = _CID22.decode(bytes3);
+    if (cid2.version === 0 && source[0] !== "Q") {
+      throw Error("Version 0 CID string must not include multibase prefix");
+    }
+    baseCache22(cid2).set(prefix, source);
+    return cid2;
+  }
+};
+function parseCIDtoBytes22(source, base33) {
+  switch (source[0]) {
+    // CIDv0 is parsed differently
+    case "Q": {
+      const decoder = base33 ?? base58btc22;
+      return [
+        base58btc22.prefix,
+        decoder.decode(`${base58btc22.prefix}${source}`)
+      ];
+    }
+    case base58btc22.prefix: {
+      const decoder = base33 ?? base58btc22;
+      return [base58btc22.prefix, decoder.decode(source)];
+    }
+    case base3222.prefix: {
+      const decoder = base33 ?? base3222;
+      return [base3222.prefix, decoder.decode(source)];
+    }
+    case base3622.prefix: {
+      const decoder = base33 ?? base3622;
+      return [base3622.prefix, decoder.decode(source)];
+    }
+    default: {
+      if (base33 == null) {
+        throw Error("To parse non base32, base36 or base58btc encoded CID multibase decoder must be provided");
+      }
+      return [source[0], base33.decode(source)];
+    }
+  }
+}
+function toStringV022(bytes3, cache32, base33) {
+  const { prefix } = base33;
+  if (prefix !== base58btc22.prefix) {
+    throw Error(`Cannot string encode V0 in ${base33.name} encoding`);
+  }
+  const cid2 = cache32.get(prefix);
+  if (cid2 == null) {
+    const cid3 = base33.encode(bytes3).slice(1);
+    cache32.set(prefix, cid3);
+    return cid3;
+  } else {
+    return cid2;
+  }
+}
+function toStringV122(bytes3, cache32, base33) {
+  const { prefix } = base33;
+  const cid2 = cache32.get(prefix);
+  if (cid2 == null) {
+    const cid3 = base33.encode(bytes3);
+    cache32.set(prefix, cid3);
+    return cid3;
+  } else {
+    return cid2;
+  }
+}
+var DAG_PB_CODE22 = 112;
+var SHA_256_CODE22 = 18;
+function encodeCID22(version2, code32, multihash) {
+  const codeOffset = encodingLength22(version2);
+  const hashOffset = codeOffset + encodingLength22(code32);
+  const bytes3 = new Uint8Array(hashOffset + multihash.byteLength);
+  encodeTo22(version2, bytes3, 0);
+  encodeTo22(code32, bytes3, codeOffset);
+  bytes3.set(multihash, hashOffset);
+  return bytes3;
+}
+var cidSymbol22 = /* @__PURE__ */ Symbol.for("@ipld/js-cid/CID");
+var MAX_CONTENT_BYTES = 100 * 1024 * 1024;
+function historyRecordForPublishedShare(result, now = /* @__PURE__ */ new Date()) {
+  const target = result.metadata.target.kind;
+  const supplied = result.metadata.recipientMatcher;
+  let matcher;
+  if (supplied?.kind === "recipientDid" && typeof supplied.value === "string") matcher = { kind: "recipientDid", value: supplied.value };
+  else if (supplied?.kind === "exactEmail" && typeof supplied.value === "string") matcher = { kind: "exactEmail", value: supplied.value };
+  else if (supplied?.kind === "emailDomain" && typeof supplied.value === "string") matcher = { kind: "emailDomain", value: supplied.value };
+  else if (target !== "bearer") throw new TypeError("addressed publication is missing its recipient binding");
+  else matcher = { kind: "bearer" };
+  return {
+    shareId: result.metadata.shareId,
+    target: result.metadata.target,
+    resource: result.metadata.resource,
+    actions: result.metadata.actions.map(
+      (action) => action === "read" ? "tinycloud.kv/get" : action === "list" ? "tinycloud.kv/list" : action === "edit" ? "tinycloud.kv/put" : action
+    ),
+    recipientMatcher: matcher,
+    targetKind: target,
+    ...result.metadata.registrationCid === void 0 ? {} : { registrationCid: result.metadata.registrationCid },
+    ...result.metadata.policyCid === void 0 ? {} : { policyCid: result.metadata.policyCid },
+    ...result.metadata.ownerDelegationCid === void 0 ? {} : { ownerDelegationCid: result.metadata.ownerDelegationCid },
+    ...result.metadata.enforcementDelegationCid === void 0 ? {} : { enforcementDelegationCid: result.metadata.enforcementDelegationCid },
+    ...result.metadata.ownerDid === void 0 ? {} : { ownerDid: result.metadata.ownerDid },
+    ...result.metadata.shareKeyDid === void 0 ? {} : { shareKeyDid: result.metadata.shareKeyDid },
+    ...result.metadata.enforcerDid === void 0 ? {} : { enforcerDid: result.metadata.enforcerDid },
+    ...result.metadata.envelopeCid === void 0 ? {} : { envelopeCid: result.metadata.envelopeCid },
+    ...result.metadata.shareCid === void 0 ? {} : { shareCid: result.metadata.shareCid },
+    registeredAt: now.toISOString(),
+    expiresAt: result.metadata.expiresAt,
+    link: result.url,
+    ...result.deliveryMaterial === void 0 ? {} : { deliveryMaterial: result.deliveryMaterial },
+    ...result.metadata.display.filename === void 0 ? {} : { filename: result.metadata.display.filename }
+  };
+}
+var ShareNotifyError = class extends Error {
+  constructor(message = "share delivery did not complete", reason) {
+    super(message);
+    this.reason = reason;
+    this.name = "ShareNotifyError";
+  }
+  code = "delivery-failed";
+};
+function recipientMatchesShareRecord(record, recipient) {
+  const matcher = record.recipientMatcher;
+  const mailbox = canonicalMailbox(recipient);
+  if (mailbox === void 0) return false;
+  if (matcher.kind === "exactEmail") return canonicalMailbox(matcher.value)?.email === mailbox.email;
+  if (matcher.kind === "emailDomain") return mailbox.domain === matcher.value;
+  return false;
+}
+function shareDeliveryWindowExpiresAt(record) {
+  const expiresAt = Math.min(Date.parse(record.expiresAt), Date.parse(record.registeredAt) + 5 * 60 * 1e3);
+  if (!Number.isFinite(expiresAt)) throw new ShareNotifyError("share delivery history has invalid timestamps");
+  return expiresAt;
+}
+async function notifyShare(input) {
+  const mailbox = canonicalMailbox(input.recipient);
+  if (!input.shareId || mailbox === void 0) throw new ShareNotifyError("recipient is invalid");
+  const recipient = mailbox.email;
+  if (input.record !== void 0 && !recipientMatchesShareRecord(input.record, recipient)) {
+    throw new ShareNotifyError("recipient does not match the stored share target");
+  }
+  const idempotencyKey = input.idempotencyKey ?? await defaultIdempotencyKey(input.shareId, recipient);
+  const attemptsLimit = input.maxAttempts ?? 3;
+  if (!Number.isSafeInteger(attemptsLimit) || attemptsLimit < 1 || attemptsLimit > 8) throw new ShareNotifyError("maxAttempts is invalid");
+  if (input.signal?.aborted) throw new ShareNotifyError("share delivery was cancelled");
+  if (input.checkDeliveryWindow && input.record !== void 0 && shareDeliveryWindowExpiresAt(input.record) <= Date.now()) {
+    return {
+      protocol: "tinycloud-share",
+      version: 1,
+      shareId: input.shareId,
+      state: "partial-failure",
+      idempotencyKey,
+      attempts: 1,
+      retryable: false,
+      reason: "delivery-window-expired"
+    };
+  }
+  let attempts = 0;
+  while (attempts < attemptsLimit) {
+    if (input.signal?.aborted) throw new ShareNotifyError("share delivery was cancelled");
+    attempts += 1;
+    try {
+      const state2 = await input.adapter.deliver({ shareId: input.shareId, recipient, idempotencyKey, ...input.record === void 0 ? {} : { record: input.record }, ...input.signal === void 0 ? {} : { signal: input.signal } });
+      return {
+        protocol: "tinycloud-share",
+        version: 1,
+        shareId: input.shareId,
+        state: state2 === "delivered" && input.record?.deliveredRecipients?.includes(recipient) ? "already-delivered" : state2,
+        idempotencyKey,
+        attempts
+      };
+    } catch (error) {
+      if (error instanceof ShareNotifyError && error.reason === "delivery-window-expired") {
+        return {
+          protocol: "tinycloud-share",
+          version: 1,
+          shareId: input.shareId,
+          state: "partial-failure",
+          idempotencyKey,
+          attempts,
+          retryable: false,
+          reason: "delivery-window-expired"
+        };
+      }
+      if (error !== null && typeof error === "object" && "status" in error && (error.status === 401 || error.status === 403)) {
+        return {
+          protocol: "tinycloud-share",
+          version: 1,
+          shareId: input.shareId,
+          state: "partial-failure",
+          idempotencyKey,
+          attempts,
+          retryable: false
+        };
+      }
+    }
+  }
+  return { protocol: "tinycloud-share", version: 1, shareId: input.shareId, state: "partial-failure", idempotencyKey, attempts, retryable: true };
+}
+async function defaultIdempotencyKey(shareId, recipient) {
+  const canonicalRecipient = canonicalize2(recipient.trim().toLowerCase());
+  const digest3 = new Uint8Array(await crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(canonicalRecipient)
+  ));
+  return `tinycloud-share:${shareId}:${toBase64Url(digest3)}`;
+}
+var CredentialInvitationError = class extends Error {
+  constructor(code32, message) {
+    super(message);
+    this.code = code32;
+    this.name = "CredentialInvitationError";
+  }
+};
+function canonicalOrigin(value) {
+  let url;
+  try {
+    url = new URL(value);
+  } catch {
+    throw new CredentialInvitationError(
+      "invalid-origin",
+      "credential invitation origin is invalid"
+    );
+  }
+  if (url.origin !== value || url.username !== "" || url.password !== "" || url.search !== "" || url.hash !== "" || url.protocol !== "https:")
+    throw new CredentialInvitationError(
+      "invalid-origin",
+      "credential invitation origin is invalid"
+    );
+  return url.origin;
+}
+function object2(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+async function validateReceipt(receipt, shareUrl) {
+  if (!object2(receipt) || !object2(receipt.request) || !object2(receipt.admission) || !object2(receipt.proof)) {
+    throw new CredentialInvitationError(
+      "invalid-receipt",
+      "credential invitation receipt is invalid"
+    );
+  }
+  if (receipt.request.returnLink !== shareUrl) {
+    throw new CredentialInvitationError(
+      "invalid-receipt",
+      "credential invitation is not bound to the share link"
+    );
+  }
+  let link3;
+  try {
+    link3 = new URL(shareUrl);
+  } catch {
+    throw new CredentialInvitationError(
+      "invalid-receipt",
+      "credential invitation share link is invalid"
+    );
+  }
+  if (link3.search !== "" || link3.pathname !== "/s/inline") {
+    throw new CredentialInvitationError(
+      "invalid-receipt",
+      "credential invitation share link must be sealed inline"
+    );
+  }
+  try {
+    await parseSealedInlineShareUrl(shareUrl);
+  } catch {
+    throw new CredentialInvitationError(
+      "invalid-receipt",
+      "credential invitation share link is invalid"
+    );
+  }
+}
+async function deliverCredentialInvitation(input) {
+  const credentialsOrigin = canonicalOrigin(input.credentialsOrigin);
+  await validateReceipt(input.receipt, input.shareUrl);
+  const fetchFn = input.fetchFn ?? globalThis.fetch;
+  let response;
+  try {
+    response = await fetchFn(`${credentialsOrigin}/v1/credential-invitations`, {
+      method: "POST",
+      credentials: "omit",
+      redirect: "error",
+      referrerPolicy: "no-referrer",
+      headers: {
+        accept: "application/json",
+        "content-type": "application/json"
+      },
+      body: JSON.stringify(input.receipt),
+      ...input.signal === void 0 ? {} : { signal: input.signal }
+    });
+  } catch {
+    throw new CredentialInvitationError(
+      "transport",
+      "credential invitation delivery is unavailable"
+    );
+  }
+  if (response.status !== 202) {
+    throw new CredentialInvitationError(
+      "rejected",
+      "credential invitation delivery was not accepted"
+    );
+  }
+  let body;
+  try {
+    body = await response.json();
+  } catch {
+    throw new CredentialInvitationError(
+      "invalid-response",
+      "credential invitation response is invalid"
+    );
+  }
+  if (!object2(body) || Object.keys(body).length !== 1 || body.status !== "accepted") {
+    throw new CredentialInvitationError(
+      "invalid-response",
+      "credential invitation response is invalid"
+    );
+  }
+  return { status: "accepted" };
+}
+function targetKind2(record) {
+  if (record.targetKind !== void 0) return record.targetKind;
+  return record.recipientMatcher.kind === "exactEmail" ? "email" : record.recipientMatcher.kind === "emailDomain" ? "emailDomain" : record.recipientMatcher.kind === "recipientDid" ? "recipientDid" : "bearer";
+}
+function policyNodeAudience(record) {
+  const envelope = record.deliveryMaterial?.envelope;
+  if (typeof envelope !== "object" || envelope === null || Array.isArray(envelope)) return record.target.nodeAudience;
+  const binding = envelope.attestedEnforcerBinding;
+  if (typeof binding !== "object" || binding === null || Array.isArray(binding)) return record.target.nodeAudience;
+  const nodeAudience = binding.nodeAudience;
+  return typeof nodeAudience === "string" ? nodeAudience : record.target.nodeAudience;
+}
+async function revokeShare(input) {
+  const target = targetKind2(input.record);
+  if (input.adapter === void 0) return { state: "unsupported", target, reason: "node revocation authority is required", code: "unsupported-target" };
+  const scope = input.scope ?? "direct";
+  const delegationCid = scope === "ancestor" ? input.record.ownerDelegationCid : input.record.enforcementDelegationCid;
+  if (delegationCid === void 0) return { state: "unsupported", target, reason: "share has no node-enforced delegation receipt", code: "unsupported-target" };
+  if (target === "bearer") {
+    if (input.adapter.revokeDelegation === void 0) return { state: "unsupported", target, reason: "native delegation revocation authority is required", code: "unsupported-target" };
+    await input.adapter.revokeDelegation({ delegationCid, scope, record: input.record });
+  } else {
+    if (input.record.ownerDid === void 0) return { state: "unsupported", target, reason: "share has no Policy/v3 owner receipt", code: "unsupported-target" };
+    if (input.adapter.revokePolicyRoot === void 0) return { state: "unsupported", target, reason: "Policy/v3 root revocation authority is required", code: "unsupported-target" };
+    await input.adapter.revokePolicyRoot({
+      rootCid: delegationCid,
+      targetRole: scope === "ancestor" ? "policy-authority" : "policy-enforcement",
+      ownerDid: input.record.ownerDid,
+      nodeOrigin: input.record.target.origin,
+      nodeAudience: policyNodeAudience(input.record)
+    });
+  }
+  let revokedAt = input.record.revokedAt ?? (input.now?.() ?? /* @__PURE__ */ new Date()).toISOString();
+  if (input.records?.update !== void 0) {
+    const updated = await input.records.update(input.record.shareId, (record) => ({ ...record, revokedAt: record.revokedAt ?? revokedAt }));
+    revokedAt = updated?.revokedAt ?? revokedAt;
+  } else if (input.records !== void 0) {
+    const latest = await input.records.get(input.record.shareId);
+    revokedAt = latest?.revokedAt ?? revokedAt;
+    await input.records.put({ ...latest ?? input.record, revokedAt });
+  }
+  return { state: "revoked", target, delegationCid, revokedAt };
+}
+function redactRecord(record, revealLink, link3) {
+  const matcher = record.recipientMatcher;
+  const revealedLink = revealLink ? link3 ?? record.link : void 0;
+  return {
+    shareId: record.shareId,
+    target: matcher.kind === "exactEmail" ? "email" : matcher.kind === "emailDomain" ? "email-domain" : matcher.kind === "recipientDid" ? "recipient-did" : "bearer",
+    ...matcher.kind === "exactEmail" ? { recipient: matcher.value } : matcher.kind === "emailDomain" ? { recipient: `*@${matcher.value}` } : matcher.kind === "recipientDid" ? { recipient: matcher.value } : {},
+    expiresAt: record.expiresAt,
+    revoked: record.revokedAt !== void 0,
+    ...revealedLink === void 0 ? {} : { link: revealedLink }
+  };
+}
+async function listShares(storage) {
+  const records = await storage.list();
+  return records.map((record) => redactRecord(record, false));
+}
+async function showShare(input) {
+  const record = await input.storage.get(input.shareId);
+  if (record === void 0) throw new Error("share not found");
+  return redactRecord(record, input.revealLink === true, input.link);
+}
+var SHARE_V2_PROTOCOL = Object.freeze({
+  challengeDomain: "xyz.tinycloud.share/policy-challenge/v2\0",
+  sessionDomain: "xyz.tinycloud.share/policy-session/v2\0",
+  invocationDomain: "xyz.tinycloud.share/invocation/v2\0",
+  readResponseDomain: "xyz.tinycloud.share/read-response/v2\0",
+  holderBindingDomain: "xyz.tinycloud.share/email-claim-holder-binding/v1\0",
+  holderBindingName: "holderBinding",
+  holderBindingType: "TinyCloudEmailClaimHolderBinding",
+  holderBindingVersion: 1
+});
+var DOMAIN = SHARE_V2_PROTOCOL.challengeDomain;
+var PRESENTATION_DOMAIN = SHARE_V2_PROTOCOL.sessionDomain;
+var SESSION_DOMAIN = SHARE_V2_PROTOCOL.sessionDomain;
+var INVOCATION_DOMAIN = SHARE_V2_PROTOCOL.invocationDomain;
+var NATIVE_SHARE_FRAGMENT_PARAMETER = "tc1";
+function canonicalViewerUrl(viewerOrigin) {
+  const url = new URL(viewerOrigin);
+  if (url.protocol !== "https:" || url.origin !== viewerOrigin || url.pathname !== "/" || url.search || url.hash) throw new TypeError("viewer origin must be a canonical HTTPS origin");
+  url.pathname = "/viewer";
+  return url;
+}
+async function createNativeShare(sharing, input) {
+  if (!input.path || input.path.startsWith("/") || input.path.endsWith("/") || input.path.includes("..") || input.path.includes("//")) throw new TypeError("native share path must be one canonical TinyCloud KV key");
+  const generated = await sharing.generate({ path: input.path, actions: ["tinycloud.kv/get"], expiry: input.expiresAt });
+  if (generated.ok !== true) {
+    const error = new Error(typeof generated.error?.message === "string" ? generated.error.message : "TinyCloud sharing service rejected delegation generation");
+    if (typeof generated.error?.code === "string") Object.assign(error, { code: generated.error.code });
+    throw error;
+  }
+  if (typeof generated.data?.token !== "string" || typeof generated.data.delegation?.cid !== "string" || !(generated.data.expiresAt instanceof Date)) throw new Error("TinyCloud sharing service returned incomplete delegation metadata");
+  const delegation = sharing.decodeLink(generated.data.token);
+  if (typeof delegation.spaceId !== "string" || delegation.spaceId.length === 0 || typeof delegation.path !== "string" || delegation.path.length === 0) throw new Error("TinyCloud sharing service returned a non-canonical delegation authority");
+  const url = canonicalViewerUrl(input.viewerOrigin);
+  url.hash = `${NATIVE_SHARE_FRAGMENT_PARAMETER}=${encodeURIComponent(generated.data.token)}`;
+  return { url: url.toString(), delegationCid: generated.data.delegation.cid, expiresAt: generated.data.expiresAt, spaceId: delegation.spaceId };
+}
+function parseNativeShareUrl(value) {
+  const url = new URL(value);
+  if (url.search || url.pathname !== "/viewer") throw new TypeError("native shares must carry tc1 only in the /viewer URL fragment");
+  const fragment = new URLSearchParams(url.hash.slice(1));
+  const token = fragment.get(NATIVE_SHARE_FRAGMENT_PARAMETER);
+  if (!token || fragment.size !== 1) throw new TypeError("missing native share fragment");
+  return token;
+}
+
+// ../../node_modules/zod/v3/external.js
+var external_exports3 = {};
+__export(external_exports3, {
+  BRAND: () => BRAND3,
+  DIRTY: () => DIRTY3,
+  EMPTY_PATH: () => EMPTY_PATH3,
+  INVALID: () => INVALID3,
+  NEVER: () => NEVER3,
+  OK: () => OK3,
+  ParseStatus: () => ParseStatus3,
+  Schema: () => ZodType3,
+  ZodAny: () => ZodAny3,
+  ZodArray: () => ZodArray3,
+  ZodBigInt: () => ZodBigInt3,
+  ZodBoolean: () => ZodBoolean3,
+  ZodBranded: () => ZodBranded3,
+  ZodCatch: () => ZodCatch3,
+  ZodDate: () => ZodDate3,
+  ZodDefault: () => ZodDefault3,
+  ZodDiscriminatedUnion: () => ZodDiscriminatedUnion3,
+  ZodEffects: () => ZodEffects3,
+  ZodEnum: () => ZodEnum3,
+  ZodError: () => ZodError3,
+  ZodFirstPartyTypeKind: () => ZodFirstPartyTypeKind3,
+  ZodFunction: () => ZodFunction3,
+  ZodIntersection: () => ZodIntersection3,
+  ZodIssueCode: () => ZodIssueCode3,
+  ZodLazy: () => ZodLazy3,
+  ZodLiteral: () => ZodLiteral3,
+  ZodMap: () => ZodMap3,
+  ZodNaN: () => ZodNaN3,
+  ZodNativeEnum: () => ZodNativeEnum3,
+  ZodNever: () => ZodNever3,
+  ZodNull: () => ZodNull3,
+  ZodNullable: () => ZodNullable3,
+  ZodNumber: () => ZodNumber3,
+  ZodObject: () => ZodObject3,
+  ZodOptional: () => ZodOptional3,
+  ZodParsedType: () => ZodParsedType3,
+  ZodPipeline: () => ZodPipeline3,
+  ZodPromise: () => ZodPromise3,
+  ZodReadonly: () => ZodReadonly3,
+  ZodRecord: () => ZodRecord3,
+  ZodSchema: () => ZodType3,
+  ZodSet: () => ZodSet3,
+  ZodString: () => ZodString3,
+  ZodSymbol: () => ZodSymbol3,
+  ZodTransformer: () => ZodEffects3,
+  ZodTuple: () => ZodTuple3,
+  ZodType: () => ZodType3,
+  ZodUndefined: () => ZodUndefined3,
+  ZodUnion: () => ZodUnion3,
+  ZodUnknown: () => ZodUnknown3,
+  ZodVoid: () => ZodVoid3,
+  addIssueToContext: () => addIssueToContext3,
+  any: () => anyType3,
+  array: () => arrayType3,
+  bigint: () => bigIntType3,
+  boolean: () => booleanType3,
+  coerce: () => coerce4,
+  custom: () => custom3,
+  date: () => dateType3,
+  datetimeRegex: () => datetimeRegex3,
+  defaultErrorMap: () => en_default3,
+  discriminatedUnion: () => discriminatedUnionType3,
+  effect: () => effectsType3,
+  enum: () => enumType3,
+  function: () => functionType3,
+  getErrorMap: () => getErrorMap3,
+  getParsedType: () => getParsedType3,
+  instanceof: () => instanceOfType3,
+  intersection: () => intersectionType3,
+  isAborted: () => isAborted3,
+  isAsync: () => isAsync3,
+  isDirty: () => isDirty3,
+  isValid: () => isValid3,
+  late: () => late3,
+  lazy: () => lazyType3,
+  literal: () => literalType3,
+  makeIssue: () => makeIssue3,
+  map: () => mapType3,
+  nan: () => nanType3,
+  nativeEnum: () => nativeEnumType3,
+  never: () => neverType3,
+  null: () => nullType3,
+  nullable: () => nullableType3,
+  number: () => numberType3,
+  object: () => objectType3,
+  objectUtil: () => objectUtil3,
+  oboolean: () => oboolean3,
+  onumber: () => onumber3,
+  optional: () => optionalType3,
+  ostring: () => ostring3,
+  pipeline: () => pipelineType3,
+  preprocess: () => preprocessType3,
+  promise: () => promiseType3,
+  quotelessJson: () => quotelessJson3,
+  record: () => recordType3,
+  set: () => setType3,
+  setErrorMap: () => setErrorMap3,
+  strictObject: () => strictObjectType3,
+  string: () => stringType3,
+  symbol: () => symbolType3,
+  transformer: () => effectsType3,
+  tuple: () => tupleType3,
+  undefined: () => undefinedType3,
+  union: () => unionType3,
+  unknown: () => unknownType3,
+  util: () => util3,
+  void: () => voidType3
+});
+
+// ../../node_modules/zod/v3/helpers/util.js
+var util3;
+(function(util4) {
+  util4.assertEqual = (_) => {
+  };
+  function assertIs(_arg) {
+  }
+  util4.assertIs = assertIs;
+  function assertNever(_x) {
+    throw new Error();
+  }
+  util4.assertNever = assertNever;
+  util4.arrayToEnum = (items) => {
+    const obj = {};
+    for (const item of items) {
+      obj[item] = item;
+    }
+    return obj;
+  };
+  util4.getValidEnumValues = (obj) => {
+    const validKeys = util4.objectKeys(obj).filter((k) => typeof obj[obj[k]] !== "number");
+    const filtered = {};
+    for (const k of validKeys) {
+      filtered[k] = obj[k];
+    }
+    return util4.objectValues(filtered);
+  };
+  util4.objectValues = (obj) => {
+    return util4.objectKeys(obj).map(function(e) {
+      return obj[e];
+    });
+  };
+  util4.objectKeys = typeof Object.keys === "function" ? (obj) => Object.keys(obj) : (object3) => {
+    const keys = [];
+    for (const key in object3) {
+      if (Object.prototype.hasOwnProperty.call(object3, key)) {
+        keys.push(key);
+      }
+    }
+    return keys;
+  };
+  util4.find = (arr, checker) => {
+    for (const item of arr) {
+      if (checker(item))
+        return item;
+    }
+    return void 0;
+  };
+  util4.isInteger = typeof Number.isInteger === "function" ? (val) => Number.isInteger(val) : (val) => typeof val === "number" && Number.isFinite(val) && Math.floor(val) === val;
+  function joinValues(array, separator = " | ") {
+    return array.map((val) => typeof val === "string" ? `'${val}'` : val).join(separator);
+  }
+  util4.joinValues = joinValues;
+  util4.jsonStringifyReplacer = (_, value) => {
+    if (typeof value === "bigint") {
+      return value.toString();
+    }
+    return value;
+  };
+})(util3 || (util3 = {}));
+var objectUtil3;
+(function(objectUtil4) {
+  objectUtil4.mergeShapes = (first, second) => {
+    return {
+      ...first,
+      ...second
+      // second overwrites first
+    };
+  };
+})(objectUtil3 || (objectUtil3 = {}));
+var ZodParsedType3 = util3.arrayToEnum([
+  "string",
+  "nan",
+  "number",
+  "integer",
+  "float",
+  "boolean",
+  "date",
+  "bigint",
+  "symbol",
+  "function",
+  "undefined",
+  "null",
+  "array",
+  "object",
+  "unknown",
+  "promise",
+  "void",
+  "never",
+  "map",
+  "set"
+]);
+var getParsedType3 = (data) => {
+  const t = typeof data;
+  switch (t) {
+    case "undefined":
+      return ZodParsedType3.undefined;
+    case "string":
+      return ZodParsedType3.string;
+    case "number":
+      return Number.isNaN(data) ? ZodParsedType3.nan : ZodParsedType3.number;
+    case "boolean":
+      return ZodParsedType3.boolean;
+    case "function":
+      return ZodParsedType3.function;
+    case "bigint":
+      return ZodParsedType3.bigint;
+    case "symbol":
+      return ZodParsedType3.symbol;
+    case "object":
+      if (Array.isArray(data)) {
+        return ZodParsedType3.array;
+      }
+      if (data === null) {
+        return ZodParsedType3.null;
+      }
+      if (data.then && typeof data.then === "function" && data.catch && typeof data.catch === "function") {
+        return ZodParsedType3.promise;
+      }
+      if (typeof Map !== "undefined" && data instanceof Map) {
+        return ZodParsedType3.map;
+      }
+      if (typeof Set !== "undefined" && data instanceof Set) {
+        return ZodParsedType3.set;
+      }
+      if (typeof Date !== "undefined" && data instanceof Date) {
+        return ZodParsedType3.date;
+      }
+      return ZodParsedType3.object;
+    default:
+      return ZodParsedType3.unknown;
+  }
+};
+
+// ../../node_modules/zod/v3/ZodError.js
+var ZodIssueCode3 = util3.arrayToEnum([
+  "invalid_type",
+  "invalid_literal",
+  "custom",
+  "invalid_union",
+  "invalid_union_discriminator",
+  "invalid_enum_value",
+  "unrecognized_keys",
+  "invalid_arguments",
+  "invalid_return_type",
+  "invalid_date",
+  "invalid_string",
+  "too_small",
+  "too_big",
+  "invalid_intersection_types",
+  "not_multiple_of",
+  "not_finite"
+]);
+var quotelessJson3 = (obj) => {
+  const json = JSON.stringify(obj, null, 2);
+  return json.replace(/"([^"]+)":/g, "$1:");
+};
+var ZodError3 = class _ZodError3 extends Error {
+  get errors() {
+    return this.issues;
+  }
+  constructor(issues) {
+    super();
+    this.issues = [];
+    this.addIssue = (sub) => {
+      this.issues = [...this.issues, sub];
+    };
+    this.addIssues = (subs = []) => {
+      this.issues = [...this.issues, ...subs];
+    };
+    const actualProto = new.target.prototype;
+    if (Object.setPrototypeOf) {
+      Object.setPrototypeOf(this, actualProto);
+    } else {
+      this.__proto__ = actualProto;
+    }
+    this.name = "ZodError";
+    this.issues = issues;
+  }
+  format(_mapper) {
+    const mapper = _mapper || function(issue) {
+      return issue.message;
+    };
+    const fieldErrors = { _errors: [] };
+    const processError = (error) => {
+      for (const issue of error.issues) {
+        if (issue.code === "invalid_union") {
+          issue.unionErrors.map(processError);
+        } else if (issue.code === "invalid_return_type") {
+          processError(issue.returnTypeError);
+        } else if (issue.code === "invalid_arguments") {
+          processError(issue.argumentsError);
+        } else if (issue.path.length === 0) {
+          fieldErrors._errors.push(mapper(issue));
+        } else {
+          let curr = fieldErrors;
+          let i = 0;
+          while (i < issue.path.length) {
+            const el = issue.path[i];
+            const terminal = i === issue.path.length - 1;
+            if (!terminal) {
+              curr[el] = curr[el] || { _errors: [] };
+            } else {
+              curr[el] = curr[el] || { _errors: [] };
+              curr[el]._errors.push(mapper(issue));
+            }
+            curr = curr[el];
+            i++;
+          }
+        }
+      }
+    };
+    processError(this);
+    return fieldErrors;
+  }
+  static assert(value) {
+    if (!(value instanceof _ZodError3)) {
+      throw new Error(`Not a ZodError: ${value}`);
+    }
+  }
+  toString() {
+    return this.message;
+  }
+  get message() {
+    return JSON.stringify(this.issues, util3.jsonStringifyReplacer, 2);
+  }
+  get isEmpty() {
+    return this.issues.length === 0;
+  }
+  flatten(mapper = (issue) => issue.message) {
+    const fieldErrors = {};
+    const formErrors = [];
+    for (const sub of this.issues) {
+      if (sub.path.length > 0) {
+        const firstEl = sub.path[0];
+        fieldErrors[firstEl] = fieldErrors[firstEl] || [];
+        fieldErrors[firstEl].push(mapper(sub));
+      } else {
+        formErrors.push(mapper(sub));
+      }
+    }
+    return { formErrors, fieldErrors };
+  }
+  get formErrors() {
+    return this.flatten();
+  }
+};
+ZodError3.create = (issues) => {
+  const error = new ZodError3(issues);
+  return error;
+};
+
+// ../../node_modules/zod/v3/locales/en.js
+var errorMap3 = (issue, _ctx) => {
+  let message;
+  switch (issue.code) {
+    case ZodIssueCode3.invalid_type:
+      if (issue.received === ZodParsedType3.undefined) {
+        message = "Required";
+      } else {
+        message = `Expected ${issue.expected}, received ${issue.received}`;
+      }
+      break;
+    case ZodIssueCode3.invalid_literal:
+      message = `Invalid literal value, expected ${JSON.stringify(issue.expected, util3.jsonStringifyReplacer)}`;
+      break;
+    case ZodIssueCode3.unrecognized_keys:
+      message = `Unrecognized key(s) in object: ${util3.joinValues(issue.keys, ", ")}`;
+      break;
+    case ZodIssueCode3.invalid_union:
+      message = `Invalid input`;
+      break;
+    case ZodIssueCode3.invalid_union_discriminator:
+      message = `Invalid discriminator value. Expected ${util3.joinValues(issue.options)}`;
+      break;
+    case ZodIssueCode3.invalid_enum_value:
+      message = `Invalid enum value. Expected ${util3.joinValues(issue.options)}, received '${issue.received}'`;
+      break;
+    case ZodIssueCode3.invalid_arguments:
+      message = `Invalid function arguments`;
+      break;
+    case ZodIssueCode3.invalid_return_type:
+      message = `Invalid function return type`;
+      break;
+    case ZodIssueCode3.invalid_date:
+      message = `Invalid date`;
+      break;
+    case ZodIssueCode3.invalid_string:
+      if (typeof issue.validation === "object") {
+        if ("includes" in issue.validation) {
+          message = `Invalid input: must include "${issue.validation.includes}"`;
+          if (typeof issue.validation.position === "number") {
+            message = `${message} at one or more positions greater than or equal to ${issue.validation.position}`;
+          }
+        } else if ("startsWith" in issue.validation) {
+          message = `Invalid input: must start with "${issue.validation.startsWith}"`;
+        } else if ("endsWith" in issue.validation) {
+          message = `Invalid input: must end with "${issue.validation.endsWith}"`;
+        } else {
+          util3.assertNever(issue.validation);
+        }
+      } else if (issue.validation !== "regex") {
+        message = `Invalid ${issue.validation}`;
+      } else {
+        message = "Invalid";
+      }
+      break;
+    case ZodIssueCode3.too_small:
+      if (issue.type === "array")
+        message = `Array must contain ${issue.exact ? "exactly" : issue.inclusive ? `at least` : `more than`} ${issue.minimum} element(s)`;
+      else if (issue.type === "string")
+        message = `String must contain ${issue.exact ? "exactly" : issue.inclusive ? `at least` : `over`} ${issue.minimum} character(s)`;
+      else if (issue.type === "number")
+        message = `Number must be ${issue.exact ? `exactly equal to ` : issue.inclusive ? `greater than or equal to ` : `greater than `}${issue.minimum}`;
+      else if (issue.type === "bigint")
+        message = `Number must be ${issue.exact ? `exactly equal to ` : issue.inclusive ? `greater than or equal to ` : `greater than `}${issue.minimum}`;
+      else if (issue.type === "date")
+        message = `Date must be ${issue.exact ? `exactly equal to ` : issue.inclusive ? `greater than or equal to ` : `greater than `}${new Date(Number(issue.minimum))}`;
+      else
+        message = "Invalid input";
+      break;
+    case ZodIssueCode3.too_big:
+      if (issue.type === "array")
+        message = `Array must contain ${issue.exact ? `exactly` : issue.inclusive ? `at most` : `less than`} ${issue.maximum} element(s)`;
+      else if (issue.type === "string")
+        message = `String must contain ${issue.exact ? `exactly` : issue.inclusive ? `at most` : `under`} ${issue.maximum} character(s)`;
+      else if (issue.type === "number")
+        message = `Number must be ${issue.exact ? `exactly` : issue.inclusive ? `less than or equal to` : `less than`} ${issue.maximum}`;
+      else if (issue.type === "bigint")
+        message = `BigInt must be ${issue.exact ? `exactly` : issue.inclusive ? `less than or equal to` : `less than`} ${issue.maximum}`;
+      else if (issue.type === "date")
+        message = `Date must be ${issue.exact ? `exactly` : issue.inclusive ? `smaller than or equal to` : `smaller than`} ${new Date(Number(issue.maximum))}`;
+      else
+        message = "Invalid input";
+      break;
+    case ZodIssueCode3.custom:
+      message = `Invalid input`;
+      break;
+    case ZodIssueCode3.invalid_intersection_types:
+      message = `Intersection results could not be merged`;
+      break;
+    case ZodIssueCode3.not_multiple_of:
+      message = `Number must be a multiple of ${issue.multipleOf}`;
+      break;
+    case ZodIssueCode3.not_finite:
+      message = "Number must be finite";
+      break;
+    default:
+      message = _ctx.defaultError;
+      util3.assertNever(issue);
+  }
+  return { message };
+};
+var en_default3 = errorMap3;
+
+// ../../node_modules/zod/v3/errors.js
+var overrideErrorMap3 = en_default3;
+function setErrorMap3(map) {
+  overrideErrorMap3 = map;
+}
+function getErrorMap3() {
+  return overrideErrorMap3;
+}
+
+// ../../node_modules/zod/v3/helpers/parseUtil.js
+var makeIssue3 = (params) => {
+  const { data, path, errorMaps, issueData } = params;
+  const fullPath = [...path, ...issueData.path || []];
+  const fullIssue = {
+    ...issueData,
+    path: fullPath
+  };
+  if (issueData.message !== void 0) {
+    return {
+      ...issueData,
+      path: fullPath,
+      message: issueData.message
+    };
+  }
+  let errorMessage = "";
+  const maps = errorMaps.filter((m) => !!m).slice().reverse();
+  for (const map of maps) {
+    errorMessage = map(fullIssue, { data, defaultError: errorMessage }).message;
+  }
+  return {
+    ...issueData,
+    path: fullPath,
+    message: errorMessage
+  };
+};
+var EMPTY_PATH3 = [];
+function addIssueToContext3(ctx, issueData) {
+  const overrideMap = getErrorMap3();
+  const issue = makeIssue3({
+    issueData,
+    data: ctx.data,
+    path: ctx.path,
+    errorMaps: [
+      ctx.common.contextualErrorMap,
+      // contextual error map is first priority
+      ctx.schemaErrorMap,
+      // then schema-bound map if available
+      overrideMap,
+      // then global override map
+      overrideMap === en_default3 ? void 0 : en_default3
+      // then global default map
+    ].filter((x) => !!x)
+  });
+  ctx.common.issues.push(issue);
+}
+var ParseStatus3 = class _ParseStatus3 {
+  constructor() {
+    this.value = "valid";
+  }
+  dirty() {
+    if (this.value === "valid")
+      this.value = "dirty";
+  }
+  abort() {
+    if (this.value !== "aborted")
+      this.value = "aborted";
+  }
+  static mergeArray(status, results) {
+    const arrayValue = [];
+    for (const s of results) {
+      if (s.status === "aborted")
+        return INVALID3;
+      if (s.status === "dirty")
+        status.dirty();
+      arrayValue.push(s.value);
+    }
+    return { status: status.value, value: arrayValue };
+  }
+  static async mergeObjectAsync(status, pairs) {
+    const syncPairs = [];
+    for (const pair of pairs) {
+      const key = await pair.key;
+      const value = await pair.value;
+      syncPairs.push({
+        key,
+        value
+      });
+    }
+    return _ParseStatus3.mergeObjectSync(status, syncPairs);
+  }
+  static mergeObjectSync(status, pairs) {
+    const finalObject = {};
+    for (const pair of pairs) {
+      const { key, value } = pair;
+      if (key.status === "aborted")
+        return INVALID3;
+      if (value.status === "aborted")
+        return INVALID3;
+      if (key.status === "dirty")
+        status.dirty();
+      if (value.status === "dirty")
+        status.dirty();
+      if (key.value !== "__proto__" && (typeof value.value !== "undefined" || pair.alwaysSet)) {
+        finalObject[key.value] = value.value;
+      }
+    }
+    return { status: status.value, value: finalObject };
+  }
+};
+var INVALID3 = Object.freeze({
+  status: "aborted"
+});
+var DIRTY3 = (value) => ({ status: "dirty", value });
+var OK3 = (value) => ({ status: "valid", value });
+var isAborted3 = (x) => x.status === "aborted";
+var isDirty3 = (x) => x.status === "dirty";
+var isValid3 = (x) => x.status === "valid";
+var isAsync3 = (x) => typeof Promise !== "undefined" && x instanceof Promise;
+
+// ../../node_modules/zod/v3/helpers/errorUtil.js
+var errorUtil3;
+(function(errorUtil4) {
+  errorUtil4.errToObj = (message) => typeof message === "string" ? { message } : message || {};
+  errorUtil4.toString = (message) => typeof message === "string" ? message : message?.message;
+})(errorUtil3 || (errorUtil3 = {}));
+
+// ../../node_modules/zod/v3/types.js
+var ParseInputLazyPath3 = class {
+  constructor(parent, value, path, key) {
+    this._cachedPath = [];
+    this.parent = parent;
+    this.data = value;
+    this._path = path;
+    this._key = key;
+  }
+  get path() {
+    if (!this._cachedPath.length) {
+      if (Array.isArray(this._key)) {
+        this._cachedPath.push(...this._path, ...this._key);
+      } else {
+        this._cachedPath.push(...this._path, this._key);
+      }
+    }
+    return this._cachedPath;
+  }
+};
+var handleResult3 = (ctx, result) => {
+  if (isValid3(result)) {
+    return { success: true, data: result.value };
+  } else {
+    if (!ctx.common.issues.length) {
+      throw new Error("Validation failed but no issues detected.");
+    }
+    return {
+      success: false,
+      get error() {
+        if (this._error)
+          return this._error;
+        const error = new ZodError3(ctx.common.issues);
+        this._error = error;
+        return this._error;
+      }
+    };
+  }
+};
+function processCreateParams3(params) {
+  if (!params)
+    return {};
+  const { errorMap: errorMap4, invalid_type_error, required_error, description } = params;
+  if (errorMap4 && (invalid_type_error || required_error)) {
+    throw new Error(`Can't use "invalid_type_error" or "required_error" in conjunction with custom error map.`);
+  }
+  if (errorMap4)
+    return { errorMap: errorMap4, description };
+  const customMap = (iss, ctx) => {
+    const { message } = params;
+    if (iss.code === "invalid_enum_value") {
+      return { message: message ?? ctx.defaultError };
+    }
+    if (typeof ctx.data === "undefined") {
+      return { message: message ?? required_error ?? ctx.defaultError };
+    }
+    if (iss.code !== "invalid_type")
+      return { message: ctx.defaultError };
+    return { message: message ?? invalid_type_error ?? ctx.defaultError };
+  };
+  return { errorMap: customMap, description };
+}
+var ZodType3 = class {
+  get description() {
+    return this._def.description;
+  }
+  _getType(input) {
+    return getParsedType3(input.data);
+  }
+  _getOrReturnCtx(input, ctx) {
+    return ctx || {
+      common: input.parent.common,
+      data: input.data,
+      parsedType: getParsedType3(input.data),
+      schemaErrorMap: this._def.errorMap,
+      path: input.path,
+      parent: input.parent
+    };
+  }
+  _processInputParams(input) {
+    return {
+      status: new ParseStatus3(),
+      ctx: {
+        common: input.parent.common,
+        data: input.data,
+        parsedType: getParsedType3(input.data),
+        schemaErrorMap: this._def.errorMap,
+        path: input.path,
+        parent: input.parent
+      }
+    };
+  }
+  _parseSync(input) {
+    const result = this._parse(input);
+    if (isAsync3(result)) {
+      throw new Error("Synchronous parse encountered promise.");
+    }
+    return result;
+  }
+  _parseAsync(input) {
+    const result = this._parse(input);
+    return Promise.resolve(result);
+  }
+  parse(data, params) {
+    const result = this.safeParse(data, params);
+    if (result.success)
+      return result.data;
+    throw result.error;
+  }
+  safeParse(data, params) {
+    const ctx = {
+      common: {
+        issues: [],
+        async: params?.async ?? false,
+        contextualErrorMap: params?.errorMap
+      },
+      path: params?.path || [],
+      schemaErrorMap: this._def.errorMap,
+      parent: null,
+      data,
+      parsedType: getParsedType3(data)
+    };
+    const result = this._parseSync({ data, path: ctx.path, parent: ctx });
+    return handleResult3(ctx, result);
+  }
+  "~validate"(data) {
+    const ctx = {
+      common: {
+        issues: [],
+        async: !!this["~standard"].async
+      },
+      path: [],
+      schemaErrorMap: this._def.errorMap,
+      parent: null,
+      data,
+      parsedType: getParsedType3(data)
+    };
+    if (!this["~standard"].async) {
+      try {
+        const result = this._parseSync({ data, path: [], parent: ctx });
+        return isValid3(result) ? {
+          value: result.value
+        } : {
+          issues: ctx.common.issues
+        };
+      } catch (err) {
+        if (err?.message?.toLowerCase()?.includes("encountered")) {
+          this["~standard"].async = true;
+        }
+        ctx.common = {
+          issues: [],
+          async: true
+        };
+      }
+    }
+    return this._parseAsync({ data, path: [], parent: ctx }).then((result) => isValid3(result) ? {
+      value: result.value
+    } : {
+      issues: ctx.common.issues
+    });
+  }
+  async parseAsync(data, params) {
+    const result = await this.safeParseAsync(data, params);
+    if (result.success)
+      return result.data;
+    throw result.error;
+  }
+  async safeParseAsync(data, params) {
+    const ctx = {
+      common: {
+        issues: [],
+        contextualErrorMap: params?.errorMap,
+        async: true
+      },
+      path: params?.path || [],
+      schemaErrorMap: this._def.errorMap,
+      parent: null,
+      data,
+      parsedType: getParsedType3(data)
+    };
+    const maybeAsyncResult = this._parse({ data, path: ctx.path, parent: ctx });
+    const result = await (isAsync3(maybeAsyncResult) ? maybeAsyncResult : Promise.resolve(maybeAsyncResult));
+    return handleResult3(ctx, result);
+  }
+  refine(check, message) {
+    const getIssueProperties = (val) => {
+      if (typeof message === "string" || typeof message === "undefined") {
+        return { message };
+      } else if (typeof message === "function") {
+        return message(val);
+      } else {
+        return message;
+      }
+    };
+    return this._refinement((val, ctx) => {
+      const result = check(val);
+      const setError = () => ctx.addIssue({
+        code: ZodIssueCode3.custom,
+        ...getIssueProperties(val)
+      });
+      if (typeof Promise !== "undefined" && result instanceof Promise) {
+        return result.then((data) => {
+          if (!data) {
+            setError();
+            return false;
+          } else {
+            return true;
+          }
+        });
+      }
+      if (!result) {
+        setError();
+        return false;
+      } else {
+        return true;
+      }
+    });
+  }
+  refinement(check, refinementData) {
+    return this._refinement((val, ctx) => {
+      if (!check(val)) {
+        ctx.addIssue(typeof refinementData === "function" ? refinementData(val, ctx) : refinementData);
+        return false;
+      } else {
+        return true;
+      }
+    });
+  }
+  _refinement(refinement) {
+    return new ZodEffects3({
+      schema: this,
+      typeName: ZodFirstPartyTypeKind3.ZodEffects,
+      effect: { type: "refinement", refinement }
+    });
+  }
+  superRefine(refinement) {
+    return this._refinement(refinement);
+  }
+  constructor(def) {
+    this.spa = this.safeParseAsync;
+    this._def = def;
+    this.parse = this.parse.bind(this);
+    this.safeParse = this.safeParse.bind(this);
+    this.parseAsync = this.parseAsync.bind(this);
+    this.safeParseAsync = this.safeParseAsync.bind(this);
+    this.spa = this.spa.bind(this);
+    this.refine = this.refine.bind(this);
+    this.refinement = this.refinement.bind(this);
+    this.superRefine = this.superRefine.bind(this);
+    this.optional = this.optional.bind(this);
+    this.nullable = this.nullable.bind(this);
+    this.nullish = this.nullish.bind(this);
+    this.array = this.array.bind(this);
+    this.promise = this.promise.bind(this);
+    this.or = this.or.bind(this);
+    this.and = this.and.bind(this);
+    this.transform = this.transform.bind(this);
+    this.brand = this.brand.bind(this);
+    this.default = this.default.bind(this);
+    this.catch = this.catch.bind(this);
+    this.describe = this.describe.bind(this);
+    this.pipe = this.pipe.bind(this);
+    this.readonly = this.readonly.bind(this);
+    this.isNullable = this.isNullable.bind(this);
+    this.isOptional = this.isOptional.bind(this);
+    this["~standard"] = {
+      version: 1,
+      vendor: "zod",
+      validate: (data) => this["~validate"](data)
+    };
+  }
+  optional() {
+    return ZodOptional3.create(this, this._def);
+  }
+  nullable() {
+    return ZodNullable3.create(this, this._def);
+  }
+  nullish() {
+    return this.nullable().optional();
+  }
+  array() {
+    return ZodArray3.create(this);
+  }
+  promise() {
+    return ZodPromise3.create(this, this._def);
+  }
+  or(option) {
+    return ZodUnion3.create([this, option], this._def);
+  }
+  and(incoming) {
+    return ZodIntersection3.create(this, incoming, this._def);
+  }
+  transform(transform) {
+    return new ZodEffects3({
+      ...processCreateParams3(this._def),
+      schema: this,
+      typeName: ZodFirstPartyTypeKind3.ZodEffects,
+      effect: { type: "transform", transform }
+    });
+  }
+  default(def) {
+    const defaultValueFunc = typeof def === "function" ? def : () => def;
+    return new ZodDefault3({
+      ...processCreateParams3(this._def),
+      innerType: this,
+      defaultValue: defaultValueFunc,
+      typeName: ZodFirstPartyTypeKind3.ZodDefault
+    });
+  }
+  brand() {
+    return new ZodBranded3({
+      typeName: ZodFirstPartyTypeKind3.ZodBranded,
+      type: this,
+      ...processCreateParams3(this._def)
+    });
+  }
+  catch(def) {
+    const catchValueFunc = typeof def === "function" ? def : () => def;
+    return new ZodCatch3({
+      ...processCreateParams3(this._def),
+      innerType: this,
+      catchValue: catchValueFunc,
+      typeName: ZodFirstPartyTypeKind3.ZodCatch
+    });
+  }
+  describe(description) {
+    const This = this.constructor;
+    return new This({
+      ...this._def,
+      description
+    });
+  }
+  pipe(target) {
+    return ZodPipeline3.create(this, target);
+  }
+  readonly() {
+    return ZodReadonly3.create(this);
+  }
+  isOptional() {
+    return this.safeParse(void 0).success;
+  }
+  isNullable() {
+    return this.safeParse(null).success;
+  }
+};
+var cuidRegex3 = /^c[^\s-]{8,}$/i;
+var cuid2Regex3 = /^[0-9a-z]+$/;
+var ulidRegex3 = /^[0-9A-HJKMNP-TV-Z]{26}$/i;
+var uuidRegex3 = /^[0-9a-fA-F]{8}\b-[0-9a-fA-F]{4}\b-[0-9a-fA-F]{4}\b-[0-9a-fA-F]{4}\b-[0-9a-fA-F]{12}$/i;
+var nanoidRegex3 = /^[a-z0-9_-]{21}$/i;
+var jwtRegex3 = /^[A-Za-z0-9-_]+\.[A-Za-z0-9-_]+\.[A-Za-z0-9-_]*$/;
+var durationRegex3 = /^[-+]?P(?!$)(?:(?:[-+]?\d+Y)|(?:[-+]?\d+[.,]\d+Y$))?(?:(?:[-+]?\d+M)|(?:[-+]?\d+[.,]\d+M$))?(?:(?:[-+]?\d+W)|(?:[-+]?\d+[.,]\d+W$))?(?:(?:[-+]?\d+D)|(?:[-+]?\d+[.,]\d+D$))?(?:T(?=[\d+-])(?:(?:[-+]?\d+H)|(?:[-+]?\d+[.,]\d+H$))?(?:(?:[-+]?\d+M)|(?:[-+]?\d+[.,]\d+M$))?(?:[-+]?\d+(?:[.,]\d+)?S)?)??$/;
+var emailRegex3 = /^(?!\.)(?!.*\.\.)([A-Z0-9_'+\-\.]*)[A-Z0-9_+-]@([A-Z0-9][A-Z0-9\-]*\.)+[A-Z]{2,}$/i;
+var _emojiRegex3 = `^(\\p{Extended_Pictographic}|\\p{Emoji_Component})+$`;
+var emojiRegex3;
+var ipv4Regex3 = /^(?:(?:25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9][0-9]|[0-9])\.){3}(?:25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9][0-9]|[0-9])$/;
+var ipv4CidrRegex3 = /^(?:(?:25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9][0-9]|[0-9])\.){3}(?:25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9][0-9]|[0-9])\/(3[0-2]|[12]?[0-9])$/;
+var ipv6Regex3 = /^(([0-9a-fA-F]{1,4}:){7,7}[0-9a-fA-F]{1,4}|([0-9a-fA-F]{1,4}:){1,7}:|([0-9a-fA-F]{1,4}:){1,6}:[0-9a-fA-F]{1,4}|([0-9a-fA-F]{1,4}:){1,5}(:[0-9a-fA-F]{1,4}){1,2}|([0-9a-fA-F]{1,4}:){1,4}(:[0-9a-fA-F]{1,4}){1,3}|([0-9a-fA-F]{1,4}:){1,3}(:[0-9a-fA-F]{1,4}){1,4}|([0-9a-fA-F]{1,4}:){1,2}(:[0-9a-fA-F]{1,4}){1,5}|[0-9a-fA-F]{1,4}:((:[0-9a-fA-F]{1,4}){1,6})|:((:[0-9a-fA-F]{1,4}){1,7}|:)|fe80:(:[0-9a-fA-F]{0,4}){0,4}%[0-9a-zA-Z]{1,}|::(ffff(:0{1,4}){0,1}:){0,1}((25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9])\.){3,3}(25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9])|([0-9a-fA-F]{1,4}:){1,4}:((25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9])\.){3,3}(25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9]))$/;
+var ipv6CidrRegex3 = /^(([0-9a-fA-F]{1,4}:){7,7}[0-9a-fA-F]{1,4}|([0-9a-fA-F]{1,4}:){1,7}:|([0-9a-fA-F]{1,4}:){1,6}:[0-9a-fA-F]{1,4}|([0-9a-fA-F]{1,4}:){1,5}(:[0-9a-fA-F]{1,4}){1,2}|([0-9a-fA-F]{1,4}:){1,4}(:[0-9a-fA-F]{1,4}){1,3}|([0-9a-fA-F]{1,4}:){1,3}(:[0-9a-fA-F]{1,4}){1,4}|([0-9a-fA-F]{1,4}:){1,2}(:[0-9a-fA-F]{1,4}){1,5}|[0-9a-fA-F]{1,4}:((:[0-9a-fA-F]{1,4}){1,6})|:((:[0-9a-fA-F]{1,4}){1,7}|:)|fe80:(:[0-9a-fA-F]{0,4}){0,4}%[0-9a-zA-Z]{1,}|::(ffff(:0{1,4}){0,1}:){0,1}((25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9])\.){3,3}(25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9])|([0-9a-fA-F]{1,4}:){1,4}:((25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9])\.){3,3}(25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9]))\/(12[0-8]|1[01][0-9]|[1-9]?[0-9])$/;
+var base64Regex3 = /^([0-9a-zA-Z+/]{4})*(([0-9a-zA-Z+/]{2}==)|([0-9a-zA-Z+/]{3}=))?$/;
+var base64urlRegex3 = /^([0-9a-zA-Z-_]{4})*(([0-9a-zA-Z-_]{2}(==)?)|([0-9a-zA-Z-_]{3}(=)?))?$/;
+var dateRegexSource3 = `((\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-((0[13578]|1[02])-(0[1-9]|[12]\\d|3[01])|(0[469]|11)-(0[1-9]|[12]\\d|30)|(02)-(0[1-9]|1\\d|2[0-8])))`;
+var dateRegex3 = new RegExp(`^${dateRegexSource3}$`);
+function timeRegexSource3(args) {
+  let secondsRegexSource = `[0-5]\\d`;
+  if (args.precision) {
+    secondsRegexSource = `${secondsRegexSource}\\.\\d{${args.precision}}`;
+  } else if (args.precision == null) {
+    secondsRegexSource = `${secondsRegexSource}(\\.\\d+)?`;
+  }
+  const secondsQuantifier = args.precision ? "+" : "?";
+  return `([01]\\d|2[0-3]):[0-5]\\d(:${secondsRegexSource})${secondsQuantifier}`;
+}
+function timeRegex3(args) {
+  return new RegExp(`^${timeRegexSource3(args)}$`);
+}
+function datetimeRegex3(args) {
+  let regex = `${dateRegexSource3}T${timeRegexSource3(args)}`;
+  const opts = [];
+  opts.push(args.local ? `Z?` : `Z`);
+  if (args.offset)
+    opts.push(`([+-]\\d{2}:?\\d{2})`);
+  regex = `${regex}(${opts.join("|")})`;
+  return new RegExp(`^${regex}$`);
+}
+function isValidIP3(ip, version2) {
+  if ((version2 === "v4" || !version2) && ipv4Regex3.test(ip)) {
+    return true;
+  }
+  if ((version2 === "v6" || !version2) && ipv6Regex3.test(ip)) {
+    return true;
+  }
+  return false;
+}
+function isValidJWT3(jwt, alg) {
+  if (!jwtRegex3.test(jwt))
+    return false;
+  try {
+    const [header] = jwt.split(".");
+    if (!header)
+      return false;
+    const base644 = header.replace(/-/g, "+").replace(/_/g, "/").padEnd(header.length + (4 - header.length % 4) % 4, "=");
+    const decoded = JSON.parse(atob(base644));
+    if (typeof decoded !== "object" || decoded === null)
+      return false;
+    if ("typ" in decoded && decoded?.typ !== "JWT")
+      return false;
+    if (!decoded.alg)
+      return false;
+    if (alg && decoded.alg !== alg)
+      return false;
+    return true;
+  } catch {
+    return false;
+  }
+}
+function isValidCidr3(ip, version2) {
+  if ((version2 === "v4" || !version2) && ipv4CidrRegex3.test(ip)) {
+    return true;
+  }
+  if ((version2 === "v6" || !version2) && ipv6CidrRegex3.test(ip)) {
+    return true;
+  }
+  return false;
+}
+var ZodString3 = class _ZodString3 extends ZodType3 {
+  _parse(input) {
+    if (this._def.coerce) {
+      input.data = String(input.data);
+    }
+    const parsedType = this._getType(input);
+    if (parsedType !== ZodParsedType3.string) {
+      const ctx2 = this._getOrReturnCtx(input);
+      addIssueToContext3(ctx2, {
+        code: ZodIssueCode3.invalid_type,
+        expected: ZodParsedType3.string,
+        received: ctx2.parsedType
+      });
+      return INVALID3;
+    }
+    const status = new ParseStatus3();
+    let ctx = void 0;
+    for (const check of this._def.checks) {
+      if (check.kind === "min") {
+        if (input.data.length < check.value) {
+          ctx = this._getOrReturnCtx(input, ctx);
+          addIssueToContext3(ctx, {
+            code: ZodIssueCode3.too_small,
+            minimum: check.value,
+            type: "string",
+            inclusive: true,
+            exact: false,
+            message: check.message
+          });
+          status.dirty();
+        }
+      } else if (check.kind === "max") {
+        if (input.data.length > check.value) {
+          ctx = this._getOrReturnCtx(input, ctx);
+          addIssueToContext3(ctx, {
+            code: ZodIssueCode3.too_big,
+            maximum: check.value,
+            type: "string",
+            inclusive: true,
+            exact: false,
+            message: check.message
+          });
+          status.dirty();
+        }
+      } else if (check.kind === "length") {
+        const tooBig = input.data.length > check.value;
+        const tooSmall = input.data.length < check.value;
+        if (tooBig || tooSmall) {
+          ctx = this._getOrReturnCtx(input, ctx);
+          if (tooBig) {
+            addIssueToContext3(ctx, {
+              code: ZodIssueCode3.too_big,
+              maximum: check.value,
+              type: "string",
+              inclusive: true,
+              exact: true,
+              message: check.message
+            });
+          } else if (tooSmall) {
+            addIssueToContext3(ctx, {
+              code: ZodIssueCode3.too_small,
+              minimum: check.value,
+              type: "string",
+              inclusive: true,
+              exact: true,
+              message: check.message
+            });
+          }
+          status.dirty();
+        }
+      } else if (check.kind === "email") {
+        if (!emailRegex3.test(input.data)) {
+          ctx = this._getOrReturnCtx(input, ctx);
+          addIssueToContext3(ctx, {
+            validation: "email",
+            code: ZodIssueCode3.invalid_string,
+            message: check.message
+          });
+          status.dirty();
+        }
+      } else if (check.kind === "emoji") {
+        if (!emojiRegex3) {
+          emojiRegex3 = new RegExp(_emojiRegex3, "u");
+        }
+        if (!emojiRegex3.test(input.data)) {
+          ctx = this._getOrReturnCtx(input, ctx);
+          addIssueToContext3(ctx, {
+            validation: "emoji",
+            code: ZodIssueCode3.invalid_string,
+            message: check.message
+          });
+          status.dirty();
+        }
+      } else if (check.kind === "uuid") {
+        if (!uuidRegex3.test(input.data)) {
+          ctx = this._getOrReturnCtx(input, ctx);
+          addIssueToContext3(ctx, {
+            validation: "uuid",
+            code: ZodIssueCode3.invalid_string,
+            message: check.message
+          });
+          status.dirty();
+        }
+      } else if (check.kind === "nanoid") {
+        if (!nanoidRegex3.test(input.data)) {
+          ctx = this._getOrReturnCtx(input, ctx);
+          addIssueToContext3(ctx, {
+            validation: "nanoid",
+            code: ZodIssueCode3.invalid_string,
+            message: check.message
+          });
+          status.dirty();
+        }
+      } else if (check.kind === "cuid") {
+        if (!cuidRegex3.test(input.data)) {
+          ctx = this._getOrReturnCtx(input, ctx);
+          addIssueToContext3(ctx, {
+            validation: "cuid",
+            code: ZodIssueCode3.invalid_string,
+            message: check.message
+          });
+          status.dirty();
+        }
+      } else if (check.kind === "cuid2") {
+        if (!cuid2Regex3.test(input.data)) {
+          ctx = this._getOrReturnCtx(input, ctx);
+          addIssueToContext3(ctx, {
+            validation: "cuid2",
+            code: ZodIssueCode3.invalid_string,
+            message: check.message
+          });
+          status.dirty();
+        }
+      } else if (check.kind === "ulid") {
+        if (!ulidRegex3.test(input.data)) {
+          ctx = this._getOrReturnCtx(input, ctx);
+          addIssueToContext3(ctx, {
+            validation: "ulid",
+            code: ZodIssueCode3.invalid_string,
+            message: check.message
+          });
+          status.dirty();
+        }
+      } else if (check.kind === "url") {
+        try {
+          new URL(input.data);
+        } catch {
+          ctx = this._getOrReturnCtx(input, ctx);
+          addIssueToContext3(ctx, {
+            validation: "url",
+            code: ZodIssueCode3.invalid_string,
+            message: check.message
+          });
+          status.dirty();
+        }
+      } else if (check.kind === "regex") {
+        check.regex.lastIndex = 0;
+        const testResult = check.regex.test(input.data);
+        if (!testResult) {
+          ctx = this._getOrReturnCtx(input, ctx);
+          addIssueToContext3(ctx, {
+            validation: "regex",
+            code: ZodIssueCode3.invalid_string,
+            message: check.message
+          });
+          status.dirty();
+        }
+      } else if (check.kind === "trim") {
+        input.data = input.data.trim();
+      } else if (check.kind === "includes") {
+        if (!input.data.includes(check.value, check.position)) {
+          ctx = this._getOrReturnCtx(input, ctx);
+          addIssueToContext3(ctx, {
+            code: ZodIssueCode3.invalid_string,
+            validation: { includes: check.value, position: check.position },
+            message: check.message
+          });
+          status.dirty();
+        }
+      } else if (check.kind === "toLowerCase") {
+        input.data = input.data.toLowerCase();
+      } else if (check.kind === "toUpperCase") {
+        input.data = input.data.toUpperCase();
+      } else if (check.kind === "startsWith") {
+        if (!input.data.startsWith(check.value)) {
+          ctx = this._getOrReturnCtx(input, ctx);
+          addIssueToContext3(ctx, {
+            code: ZodIssueCode3.invalid_string,
+            validation: { startsWith: check.value },
+            message: check.message
+          });
+          status.dirty();
+        }
+      } else if (check.kind === "endsWith") {
+        if (!input.data.endsWith(check.value)) {
+          ctx = this._getOrReturnCtx(input, ctx);
+          addIssueToContext3(ctx, {
+            code: ZodIssueCode3.invalid_string,
+            validation: { endsWith: check.value },
+            message: check.message
+          });
+          status.dirty();
+        }
+      } else if (check.kind === "datetime") {
+        const regex = datetimeRegex3(check);
+        if (!regex.test(input.data)) {
+          ctx = this._getOrReturnCtx(input, ctx);
+          addIssueToContext3(ctx, {
+            code: ZodIssueCode3.invalid_string,
+            validation: "datetime",
+            message: check.message
+          });
+          status.dirty();
+        }
+      } else if (check.kind === "date") {
+        const regex = dateRegex3;
+        if (!regex.test(input.data)) {
+          ctx = this._getOrReturnCtx(input, ctx);
+          addIssueToContext3(ctx, {
+            code: ZodIssueCode3.invalid_string,
+            validation: "date",
+            message: check.message
+          });
+          status.dirty();
+        }
+      } else if (check.kind === "time") {
+        const regex = timeRegex3(check);
+        if (!regex.test(input.data)) {
+          ctx = this._getOrReturnCtx(input, ctx);
+          addIssueToContext3(ctx, {
+            code: ZodIssueCode3.invalid_string,
+            validation: "time",
+            message: check.message
+          });
+          status.dirty();
+        }
+      } else if (check.kind === "duration") {
+        if (!durationRegex3.test(input.data)) {
+          ctx = this._getOrReturnCtx(input, ctx);
+          addIssueToContext3(ctx, {
+            validation: "duration",
+            code: ZodIssueCode3.invalid_string,
+            message: check.message
+          });
+          status.dirty();
+        }
+      } else if (check.kind === "ip") {
+        if (!isValidIP3(input.data, check.version)) {
+          ctx = this._getOrReturnCtx(input, ctx);
+          addIssueToContext3(ctx, {
+            validation: "ip",
+            code: ZodIssueCode3.invalid_string,
+            message: check.message
+          });
+          status.dirty();
+        }
+      } else if (check.kind === "jwt") {
+        if (!isValidJWT3(input.data, check.alg)) {
+          ctx = this._getOrReturnCtx(input, ctx);
+          addIssueToContext3(ctx, {
+            validation: "jwt",
+            code: ZodIssueCode3.invalid_string,
+            message: check.message
+          });
+          status.dirty();
+        }
+      } else if (check.kind === "cidr") {
+        if (!isValidCidr3(input.data, check.version)) {
+          ctx = this._getOrReturnCtx(input, ctx);
+          addIssueToContext3(ctx, {
+            validation: "cidr",
+            code: ZodIssueCode3.invalid_string,
+            message: check.message
+          });
+          status.dirty();
+        }
+      } else if (check.kind === "base64") {
+        if (!base64Regex3.test(input.data)) {
+          ctx = this._getOrReturnCtx(input, ctx);
+          addIssueToContext3(ctx, {
+            validation: "base64",
+            code: ZodIssueCode3.invalid_string,
+            message: check.message
+          });
+          status.dirty();
+        }
+      } else if (check.kind === "base64url") {
+        if (!base64urlRegex3.test(input.data)) {
+          ctx = this._getOrReturnCtx(input, ctx);
+          addIssueToContext3(ctx, {
+            validation: "base64url",
+            code: ZodIssueCode3.invalid_string,
+            message: check.message
+          });
+          status.dirty();
+        }
+      } else {
+        util3.assertNever(check);
+      }
+    }
+    return { status: status.value, value: input.data };
+  }
+  _regex(regex, validation, message) {
+    return this.refinement((data) => regex.test(data), {
+      validation,
+      code: ZodIssueCode3.invalid_string,
+      ...errorUtil3.errToObj(message)
+    });
+  }
+  _addCheck(check) {
+    return new _ZodString3({
+      ...this._def,
+      checks: [...this._def.checks, check]
+    });
+  }
+  email(message) {
+    return this._addCheck({ kind: "email", ...errorUtil3.errToObj(message) });
+  }
+  url(message) {
+    return this._addCheck({ kind: "url", ...errorUtil3.errToObj(message) });
+  }
+  emoji(message) {
+    return this._addCheck({ kind: "emoji", ...errorUtil3.errToObj(message) });
+  }
+  uuid(message) {
+    return this._addCheck({ kind: "uuid", ...errorUtil3.errToObj(message) });
+  }
+  nanoid(message) {
+    return this._addCheck({ kind: "nanoid", ...errorUtil3.errToObj(message) });
+  }
+  cuid(message) {
+    return this._addCheck({ kind: "cuid", ...errorUtil3.errToObj(message) });
+  }
+  cuid2(message) {
+    return this._addCheck({ kind: "cuid2", ...errorUtil3.errToObj(message) });
+  }
+  ulid(message) {
+    return this._addCheck({ kind: "ulid", ...errorUtil3.errToObj(message) });
+  }
+  base64(message) {
+    return this._addCheck({ kind: "base64", ...errorUtil3.errToObj(message) });
+  }
+  base64url(message) {
+    return this._addCheck({
+      kind: "base64url",
+      ...errorUtil3.errToObj(message)
+    });
+  }
+  jwt(options) {
+    return this._addCheck({ kind: "jwt", ...errorUtil3.errToObj(options) });
+  }
+  ip(options) {
+    return this._addCheck({ kind: "ip", ...errorUtil3.errToObj(options) });
+  }
+  cidr(options) {
+    return this._addCheck({ kind: "cidr", ...errorUtil3.errToObj(options) });
+  }
+  datetime(options) {
+    if (typeof options === "string") {
+      return this._addCheck({
+        kind: "datetime",
+        precision: null,
+        offset: false,
+        local: false,
+        message: options
+      });
+    }
+    return this._addCheck({
+      kind: "datetime",
+      precision: typeof options?.precision === "undefined" ? null : options?.precision,
+      offset: options?.offset ?? false,
+      local: options?.local ?? false,
+      ...errorUtil3.errToObj(options?.message)
+    });
+  }
+  date(message) {
+    return this._addCheck({ kind: "date", message });
+  }
+  time(options) {
+    if (typeof options === "string") {
+      return this._addCheck({
+        kind: "time",
+        precision: null,
+        message: options
+      });
+    }
+    return this._addCheck({
+      kind: "time",
+      precision: typeof options?.precision === "undefined" ? null : options?.precision,
+      ...errorUtil3.errToObj(options?.message)
+    });
+  }
+  duration(message) {
+    return this._addCheck({ kind: "duration", ...errorUtil3.errToObj(message) });
+  }
+  regex(regex, message) {
+    return this._addCheck({
+      kind: "regex",
+      regex,
+      ...errorUtil3.errToObj(message)
+    });
+  }
+  includes(value, options) {
+    return this._addCheck({
+      kind: "includes",
+      value,
+      position: options?.position,
+      ...errorUtil3.errToObj(options?.message)
+    });
+  }
+  startsWith(value, message) {
+    return this._addCheck({
+      kind: "startsWith",
+      value,
+      ...errorUtil3.errToObj(message)
+    });
+  }
+  endsWith(value, message) {
+    return this._addCheck({
+      kind: "endsWith",
+      value,
+      ...errorUtil3.errToObj(message)
+    });
+  }
+  min(minLength, message) {
+    return this._addCheck({
+      kind: "min",
+      value: minLength,
+      ...errorUtil3.errToObj(message)
+    });
+  }
+  max(maxLength, message) {
+    return this._addCheck({
+      kind: "max",
+      value: maxLength,
+      ...errorUtil3.errToObj(message)
+    });
+  }
+  length(len, message) {
+    return this._addCheck({
+      kind: "length",
+      value: len,
+      ...errorUtil3.errToObj(message)
+    });
+  }
+  /**
+   * Equivalent to `.min(1)`
+   */
+  nonempty(message) {
+    return this.min(1, errorUtil3.errToObj(message));
+  }
+  trim() {
+    return new _ZodString3({
+      ...this._def,
+      checks: [...this._def.checks, { kind: "trim" }]
+    });
+  }
+  toLowerCase() {
+    return new _ZodString3({
+      ...this._def,
+      checks: [...this._def.checks, { kind: "toLowerCase" }]
+    });
+  }
+  toUpperCase() {
+    return new _ZodString3({
+      ...this._def,
+      checks: [...this._def.checks, { kind: "toUpperCase" }]
+    });
+  }
+  get isDatetime() {
+    return !!this._def.checks.find((ch) => ch.kind === "datetime");
+  }
+  get isDate() {
+    return !!this._def.checks.find((ch) => ch.kind === "date");
+  }
+  get isTime() {
+    return !!this._def.checks.find((ch) => ch.kind === "time");
+  }
+  get isDuration() {
+    return !!this._def.checks.find((ch) => ch.kind === "duration");
+  }
+  get isEmail() {
+    return !!this._def.checks.find((ch) => ch.kind === "email");
+  }
+  get isURL() {
+    return !!this._def.checks.find((ch) => ch.kind === "url");
+  }
+  get isEmoji() {
+    return !!this._def.checks.find((ch) => ch.kind === "emoji");
+  }
+  get isUUID() {
+    return !!this._def.checks.find((ch) => ch.kind === "uuid");
+  }
+  get isNANOID() {
+    return !!this._def.checks.find((ch) => ch.kind === "nanoid");
+  }
+  get isCUID() {
+    return !!this._def.checks.find((ch) => ch.kind === "cuid");
+  }
+  get isCUID2() {
+    return !!this._def.checks.find((ch) => ch.kind === "cuid2");
+  }
+  get isULID() {
+    return !!this._def.checks.find((ch) => ch.kind === "ulid");
+  }
+  get isIP() {
+    return !!this._def.checks.find((ch) => ch.kind === "ip");
+  }
+  get isCIDR() {
+    return !!this._def.checks.find((ch) => ch.kind === "cidr");
+  }
+  get isBase64() {
+    return !!this._def.checks.find((ch) => ch.kind === "base64");
+  }
+  get isBase64url() {
+    return !!this._def.checks.find((ch) => ch.kind === "base64url");
+  }
+  get minLength() {
+    let min = null;
+    for (const ch of this._def.checks) {
+      if (ch.kind === "min") {
+        if (min === null || ch.value > min)
+          min = ch.value;
+      }
+    }
+    return min;
+  }
+  get maxLength() {
+    let max = null;
+    for (const ch of this._def.checks) {
+      if (ch.kind === "max") {
+        if (max === null || ch.value < max)
+          max = ch.value;
+      }
+    }
+    return max;
+  }
+};
+ZodString3.create = (params) => {
+  return new ZodString3({
+    checks: [],
+    typeName: ZodFirstPartyTypeKind3.ZodString,
+    coerce: params?.coerce ?? false,
+    ...processCreateParams3(params)
+  });
+};
+function floatSafeRemainder3(val, step) {
+  const valDecCount = (val.toString().split(".")[1] || "").length;
+  const stepDecCount = (step.toString().split(".")[1] || "").length;
+  const decCount = valDecCount > stepDecCount ? valDecCount : stepDecCount;
+  const valInt = Number.parseInt(val.toFixed(decCount).replace(".", ""));
+  const stepInt = Number.parseInt(step.toFixed(decCount).replace(".", ""));
+  return valInt % stepInt / 10 ** decCount;
+}
+var ZodNumber3 = class _ZodNumber3 extends ZodType3 {
+  constructor() {
+    super(...arguments);
+    this.min = this.gte;
+    this.max = this.lte;
+    this.step = this.multipleOf;
+  }
+  _parse(input) {
+    if (this._def.coerce) {
+      input.data = Number(input.data);
+    }
+    const parsedType = this._getType(input);
+    if (parsedType !== ZodParsedType3.number) {
+      const ctx2 = this._getOrReturnCtx(input);
+      addIssueToContext3(ctx2, {
+        code: ZodIssueCode3.invalid_type,
+        expected: ZodParsedType3.number,
+        received: ctx2.parsedType
+      });
+      return INVALID3;
+    }
+    let ctx = void 0;
+    const status = new ParseStatus3();
+    for (const check of this._def.checks) {
+      if (check.kind === "int") {
+        if (!util3.isInteger(input.data)) {
+          ctx = this._getOrReturnCtx(input, ctx);
+          addIssueToContext3(ctx, {
+            code: ZodIssueCode3.invalid_type,
+            expected: "integer",
+            received: "float",
+            message: check.message
+          });
+          status.dirty();
+        }
+      } else if (check.kind === "min") {
+        const tooSmall = check.inclusive ? input.data < check.value : input.data <= check.value;
+        if (tooSmall) {
+          ctx = this._getOrReturnCtx(input, ctx);
+          addIssueToContext3(ctx, {
+            code: ZodIssueCode3.too_small,
+            minimum: check.value,
+            type: "number",
+            inclusive: check.inclusive,
+            exact: false,
+            message: check.message
+          });
+          status.dirty();
+        }
+      } else if (check.kind === "max") {
+        const tooBig = check.inclusive ? input.data > check.value : input.data >= check.value;
+        if (tooBig) {
+          ctx = this._getOrReturnCtx(input, ctx);
+          addIssueToContext3(ctx, {
+            code: ZodIssueCode3.too_big,
+            maximum: check.value,
+            type: "number",
+            inclusive: check.inclusive,
+            exact: false,
+            message: check.message
+          });
+          status.dirty();
+        }
+      } else if (check.kind === "multipleOf") {
+        if (floatSafeRemainder3(input.data, check.value) !== 0) {
+          ctx = this._getOrReturnCtx(input, ctx);
+          addIssueToContext3(ctx, {
+            code: ZodIssueCode3.not_multiple_of,
+            multipleOf: check.value,
+            message: check.message
+          });
+          status.dirty();
+        }
+      } else if (check.kind === "finite") {
+        if (!Number.isFinite(input.data)) {
+          ctx = this._getOrReturnCtx(input, ctx);
+          addIssueToContext3(ctx, {
+            code: ZodIssueCode3.not_finite,
+            message: check.message
+          });
+          status.dirty();
+        }
+      } else {
+        util3.assertNever(check);
+      }
+    }
+    return { status: status.value, value: input.data };
+  }
+  gte(value, message) {
+    return this.setLimit("min", value, true, errorUtil3.toString(message));
+  }
+  gt(value, message) {
+    return this.setLimit("min", value, false, errorUtil3.toString(message));
+  }
+  lte(value, message) {
+    return this.setLimit("max", value, true, errorUtil3.toString(message));
+  }
+  lt(value, message) {
+    return this.setLimit("max", value, false, errorUtil3.toString(message));
+  }
+  setLimit(kind, value, inclusive, message) {
+    return new _ZodNumber3({
+      ...this._def,
+      checks: [
+        ...this._def.checks,
+        {
+          kind,
+          value,
+          inclusive,
+          message: errorUtil3.toString(message)
+        }
+      ]
+    });
+  }
+  _addCheck(check) {
+    return new _ZodNumber3({
+      ...this._def,
+      checks: [...this._def.checks, check]
+    });
+  }
+  int(message) {
+    return this._addCheck({
+      kind: "int",
+      message: errorUtil3.toString(message)
+    });
+  }
+  positive(message) {
+    return this._addCheck({
+      kind: "min",
+      value: 0,
+      inclusive: false,
+      message: errorUtil3.toString(message)
+    });
+  }
+  negative(message) {
+    return this._addCheck({
+      kind: "max",
+      value: 0,
+      inclusive: false,
+      message: errorUtil3.toString(message)
+    });
+  }
+  nonpositive(message) {
+    return this._addCheck({
+      kind: "max",
+      value: 0,
+      inclusive: true,
+      message: errorUtil3.toString(message)
+    });
+  }
+  nonnegative(message) {
+    return this._addCheck({
+      kind: "min",
+      value: 0,
+      inclusive: true,
+      message: errorUtil3.toString(message)
+    });
+  }
+  multipleOf(value, message) {
+    return this._addCheck({
+      kind: "multipleOf",
+      value,
+      message: errorUtil3.toString(message)
+    });
+  }
+  finite(message) {
+    return this._addCheck({
+      kind: "finite",
+      message: errorUtil3.toString(message)
+    });
+  }
+  safe(message) {
+    return this._addCheck({
+      kind: "min",
+      inclusive: true,
+      value: Number.MIN_SAFE_INTEGER,
+      message: errorUtil3.toString(message)
+    })._addCheck({
+      kind: "max",
+      inclusive: true,
+      value: Number.MAX_SAFE_INTEGER,
+      message: errorUtil3.toString(message)
+    });
+  }
+  get minValue() {
+    let min = null;
+    for (const ch of this._def.checks) {
+      if (ch.kind === "min") {
+        if (min === null || ch.value > min)
+          min = ch.value;
+      }
+    }
+    return min;
+  }
+  get maxValue() {
+    let max = null;
+    for (const ch of this._def.checks) {
+      if (ch.kind === "max") {
+        if (max === null || ch.value < max)
+          max = ch.value;
+      }
+    }
+    return max;
+  }
+  get isInt() {
+    return !!this._def.checks.find((ch) => ch.kind === "int" || ch.kind === "multipleOf" && util3.isInteger(ch.value));
+  }
+  get isFinite() {
+    let max = null;
+    let min = null;
+    for (const ch of this._def.checks) {
+      if (ch.kind === "finite" || ch.kind === "int" || ch.kind === "multipleOf") {
+        return true;
+      } else if (ch.kind === "min") {
+        if (min === null || ch.value > min)
+          min = ch.value;
+      } else if (ch.kind === "max") {
+        if (max === null || ch.value < max)
+          max = ch.value;
+      }
+    }
+    return Number.isFinite(min) && Number.isFinite(max);
+  }
+};
+ZodNumber3.create = (params) => {
+  return new ZodNumber3({
+    checks: [],
+    typeName: ZodFirstPartyTypeKind3.ZodNumber,
+    coerce: params?.coerce || false,
+    ...processCreateParams3(params)
+  });
+};
+var ZodBigInt3 = class _ZodBigInt3 extends ZodType3 {
+  constructor() {
+    super(...arguments);
+    this.min = this.gte;
+    this.max = this.lte;
+  }
+  _parse(input) {
+    if (this._def.coerce) {
+      try {
+        input.data = BigInt(input.data);
+      } catch {
+        return this._getInvalidInput(input);
+      }
+    }
+    const parsedType = this._getType(input);
+    if (parsedType !== ZodParsedType3.bigint) {
+      return this._getInvalidInput(input);
+    }
+    let ctx = void 0;
+    const status = new ParseStatus3();
+    for (const check of this._def.checks) {
+      if (check.kind === "min") {
+        const tooSmall = check.inclusive ? input.data < check.value : input.data <= check.value;
+        if (tooSmall) {
+          ctx = this._getOrReturnCtx(input, ctx);
+          addIssueToContext3(ctx, {
+            code: ZodIssueCode3.too_small,
+            type: "bigint",
+            minimum: check.value,
+            inclusive: check.inclusive,
+            message: check.message
+          });
+          status.dirty();
+        }
+      } else if (check.kind === "max") {
+        const tooBig = check.inclusive ? input.data > check.value : input.data >= check.value;
+        if (tooBig) {
+          ctx = this._getOrReturnCtx(input, ctx);
+          addIssueToContext3(ctx, {
+            code: ZodIssueCode3.too_big,
+            type: "bigint",
+            maximum: check.value,
+            inclusive: check.inclusive,
+            message: check.message
+          });
+          status.dirty();
+        }
+      } else if (check.kind === "multipleOf") {
+        if (input.data % check.value !== BigInt(0)) {
+          ctx = this._getOrReturnCtx(input, ctx);
+          addIssueToContext3(ctx, {
+            code: ZodIssueCode3.not_multiple_of,
+            multipleOf: check.value,
+            message: check.message
+          });
+          status.dirty();
+        }
+      } else {
+        util3.assertNever(check);
+      }
+    }
+    return { status: status.value, value: input.data };
+  }
+  _getInvalidInput(input) {
+    const ctx = this._getOrReturnCtx(input);
+    addIssueToContext3(ctx, {
+      code: ZodIssueCode3.invalid_type,
+      expected: ZodParsedType3.bigint,
+      received: ctx.parsedType
+    });
+    return INVALID3;
+  }
+  gte(value, message) {
+    return this.setLimit("min", value, true, errorUtil3.toString(message));
+  }
+  gt(value, message) {
+    return this.setLimit("min", value, false, errorUtil3.toString(message));
+  }
+  lte(value, message) {
+    return this.setLimit("max", value, true, errorUtil3.toString(message));
+  }
+  lt(value, message) {
+    return this.setLimit("max", value, false, errorUtil3.toString(message));
+  }
+  setLimit(kind, value, inclusive, message) {
+    return new _ZodBigInt3({
+      ...this._def,
+      checks: [
+        ...this._def.checks,
+        {
+          kind,
+          value,
+          inclusive,
+          message: errorUtil3.toString(message)
+        }
+      ]
+    });
+  }
+  _addCheck(check) {
+    return new _ZodBigInt3({
+      ...this._def,
+      checks: [...this._def.checks, check]
+    });
+  }
+  positive(message) {
+    return this._addCheck({
+      kind: "min",
+      value: BigInt(0),
+      inclusive: false,
+      message: errorUtil3.toString(message)
+    });
+  }
+  negative(message) {
+    return this._addCheck({
+      kind: "max",
+      value: BigInt(0),
+      inclusive: false,
+      message: errorUtil3.toString(message)
+    });
+  }
+  nonpositive(message) {
+    return this._addCheck({
+      kind: "max",
+      value: BigInt(0),
+      inclusive: true,
+      message: errorUtil3.toString(message)
+    });
+  }
+  nonnegative(message) {
+    return this._addCheck({
+      kind: "min",
+      value: BigInt(0),
+      inclusive: true,
+      message: errorUtil3.toString(message)
+    });
+  }
+  multipleOf(value, message) {
+    return this._addCheck({
+      kind: "multipleOf",
+      value,
+      message: errorUtil3.toString(message)
+    });
+  }
+  get minValue() {
+    let min = null;
+    for (const ch of this._def.checks) {
+      if (ch.kind === "min") {
+        if (min === null || ch.value > min)
+          min = ch.value;
+      }
+    }
+    return min;
+  }
+  get maxValue() {
+    let max = null;
+    for (const ch of this._def.checks) {
+      if (ch.kind === "max") {
+        if (max === null || ch.value < max)
+          max = ch.value;
+      }
+    }
+    return max;
+  }
+};
+ZodBigInt3.create = (params) => {
+  return new ZodBigInt3({
+    checks: [],
+    typeName: ZodFirstPartyTypeKind3.ZodBigInt,
+    coerce: params?.coerce ?? false,
+    ...processCreateParams3(params)
+  });
+};
+var ZodBoolean3 = class extends ZodType3 {
+  _parse(input) {
+    if (this._def.coerce) {
+      input.data = Boolean(input.data);
+    }
+    const parsedType = this._getType(input);
+    if (parsedType !== ZodParsedType3.boolean) {
+      const ctx = this._getOrReturnCtx(input);
+      addIssueToContext3(ctx, {
+        code: ZodIssueCode3.invalid_type,
+        expected: ZodParsedType3.boolean,
+        received: ctx.parsedType
+      });
+      return INVALID3;
+    }
+    return OK3(input.data);
+  }
+};
+ZodBoolean3.create = (params) => {
+  return new ZodBoolean3({
+    typeName: ZodFirstPartyTypeKind3.ZodBoolean,
+    coerce: params?.coerce || false,
+    ...processCreateParams3(params)
+  });
+};
+var ZodDate3 = class _ZodDate3 extends ZodType3 {
+  _parse(input) {
+    if (this._def.coerce) {
+      input.data = new Date(input.data);
+    }
+    const parsedType = this._getType(input);
+    if (parsedType !== ZodParsedType3.date) {
+      const ctx2 = this._getOrReturnCtx(input);
+      addIssueToContext3(ctx2, {
+        code: ZodIssueCode3.invalid_type,
+        expected: ZodParsedType3.date,
+        received: ctx2.parsedType
+      });
+      return INVALID3;
+    }
+    if (Number.isNaN(input.data.getTime())) {
+      const ctx2 = this._getOrReturnCtx(input);
+      addIssueToContext3(ctx2, {
+        code: ZodIssueCode3.invalid_date
+      });
+      return INVALID3;
+    }
+    const status = new ParseStatus3();
+    let ctx = void 0;
+    for (const check of this._def.checks) {
+      if (check.kind === "min") {
+        if (input.data.getTime() < check.value) {
+          ctx = this._getOrReturnCtx(input, ctx);
+          addIssueToContext3(ctx, {
+            code: ZodIssueCode3.too_small,
+            message: check.message,
+            inclusive: true,
+            exact: false,
+            minimum: check.value,
+            type: "date"
+          });
+          status.dirty();
+        }
+      } else if (check.kind === "max") {
+        if (input.data.getTime() > check.value) {
+          ctx = this._getOrReturnCtx(input, ctx);
+          addIssueToContext3(ctx, {
+            code: ZodIssueCode3.too_big,
+            message: check.message,
+            inclusive: true,
+            exact: false,
+            maximum: check.value,
+            type: "date"
+          });
+          status.dirty();
+        }
+      } else {
+        util3.assertNever(check);
+      }
+    }
+    return {
+      status: status.value,
+      value: new Date(input.data.getTime())
+    };
+  }
+  _addCheck(check) {
+    return new _ZodDate3({
+      ...this._def,
+      checks: [...this._def.checks, check]
+    });
+  }
+  min(minDate, message) {
+    return this._addCheck({
+      kind: "min",
+      value: minDate.getTime(),
+      message: errorUtil3.toString(message)
+    });
+  }
+  max(maxDate, message) {
+    return this._addCheck({
+      kind: "max",
+      value: maxDate.getTime(),
+      message: errorUtil3.toString(message)
+    });
+  }
+  get minDate() {
+    let min = null;
+    for (const ch of this._def.checks) {
+      if (ch.kind === "min") {
+        if (min === null || ch.value > min)
+          min = ch.value;
+      }
+    }
+    return min != null ? new Date(min) : null;
+  }
+  get maxDate() {
+    let max = null;
+    for (const ch of this._def.checks) {
+      if (ch.kind === "max") {
+        if (max === null || ch.value < max)
+          max = ch.value;
+      }
+    }
+    return max != null ? new Date(max) : null;
+  }
+};
+ZodDate3.create = (params) => {
+  return new ZodDate3({
+    checks: [],
+    coerce: params?.coerce || false,
+    typeName: ZodFirstPartyTypeKind3.ZodDate,
+    ...processCreateParams3(params)
+  });
+};
+var ZodSymbol3 = class extends ZodType3 {
+  _parse(input) {
+    const parsedType = this._getType(input);
+    if (parsedType !== ZodParsedType3.symbol) {
+      const ctx = this._getOrReturnCtx(input);
+      addIssueToContext3(ctx, {
+        code: ZodIssueCode3.invalid_type,
+        expected: ZodParsedType3.symbol,
+        received: ctx.parsedType
+      });
+      return INVALID3;
+    }
+    return OK3(input.data);
+  }
+};
+ZodSymbol3.create = (params) => {
+  return new ZodSymbol3({
+    typeName: ZodFirstPartyTypeKind3.ZodSymbol,
+    ...processCreateParams3(params)
+  });
+};
+var ZodUndefined3 = class extends ZodType3 {
+  _parse(input) {
+    const parsedType = this._getType(input);
+    if (parsedType !== ZodParsedType3.undefined) {
+      const ctx = this._getOrReturnCtx(input);
+      addIssueToContext3(ctx, {
+        code: ZodIssueCode3.invalid_type,
+        expected: ZodParsedType3.undefined,
+        received: ctx.parsedType
+      });
+      return INVALID3;
+    }
+    return OK3(input.data);
+  }
+};
+ZodUndefined3.create = (params) => {
+  return new ZodUndefined3({
+    typeName: ZodFirstPartyTypeKind3.ZodUndefined,
+    ...processCreateParams3(params)
+  });
+};
+var ZodNull3 = class extends ZodType3 {
+  _parse(input) {
+    const parsedType = this._getType(input);
+    if (parsedType !== ZodParsedType3.null) {
+      const ctx = this._getOrReturnCtx(input);
+      addIssueToContext3(ctx, {
+        code: ZodIssueCode3.invalid_type,
+        expected: ZodParsedType3.null,
+        received: ctx.parsedType
+      });
+      return INVALID3;
+    }
+    return OK3(input.data);
+  }
+};
+ZodNull3.create = (params) => {
+  return new ZodNull3({
+    typeName: ZodFirstPartyTypeKind3.ZodNull,
+    ...processCreateParams3(params)
+  });
+};
+var ZodAny3 = class extends ZodType3 {
+  constructor() {
+    super(...arguments);
+    this._any = true;
+  }
+  _parse(input) {
+    return OK3(input.data);
+  }
+};
+ZodAny3.create = (params) => {
+  return new ZodAny3({
+    typeName: ZodFirstPartyTypeKind3.ZodAny,
+    ...processCreateParams3(params)
+  });
+};
+var ZodUnknown3 = class extends ZodType3 {
+  constructor() {
+    super(...arguments);
+    this._unknown = true;
+  }
+  _parse(input) {
+    return OK3(input.data);
+  }
+};
+ZodUnknown3.create = (params) => {
+  return new ZodUnknown3({
+    typeName: ZodFirstPartyTypeKind3.ZodUnknown,
+    ...processCreateParams3(params)
+  });
+};
+var ZodNever3 = class extends ZodType3 {
+  _parse(input) {
+    const ctx = this._getOrReturnCtx(input);
+    addIssueToContext3(ctx, {
+      code: ZodIssueCode3.invalid_type,
+      expected: ZodParsedType3.never,
+      received: ctx.parsedType
+    });
+    return INVALID3;
+  }
+};
+ZodNever3.create = (params) => {
+  return new ZodNever3({
+    typeName: ZodFirstPartyTypeKind3.ZodNever,
+    ...processCreateParams3(params)
+  });
+};
+var ZodVoid3 = class extends ZodType3 {
+  _parse(input) {
+    const parsedType = this._getType(input);
+    if (parsedType !== ZodParsedType3.undefined) {
+      const ctx = this._getOrReturnCtx(input);
+      addIssueToContext3(ctx, {
+        code: ZodIssueCode3.invalid_type,
+        expected: ZodParsedType3.void,
+        received: ctx.parsedType
+      });
+      return INVALID3;
+    }
+    return OK3(input.data);
+  }
+};
+ZodVoid3.create = (params) => {
+  return new ZodVoid3({
+    typeName: ZodFirstPartyTypeKind3.ZodVoid,
+    ...processCreateParams3(params)
+  });
+};
+var ZodArray3 = class _ZodArray3 extends ZodType3 {
+  _parse(input) {
+    const { ctx, status } = this._processInputParams(input);
+    const def = this._def;
+    if (ctx.parsedType !== ZodParsedType3.array) {
+      addIssueToContext3(ctx, {
+        code: ZodIssueCode3.invalid_type,
+        expected: ZodParsedType3.array,
+        received: ctx.parsedType
+      });
+      return INVALID3;
+    }
+    if (def.exactLength !== null) {
+      const tooBig = ctx.data.length > def.exactLength.value;
+      const tooSmall = ctx.data.length < def.exactLength.value;
+      if (tooBig || tooSmall) {
+        addIssueToContext3(ctx, {
+          code: tooBig ? ZodIssueCode3.too_big : ZodIssueCode3.too_small,
+          minimum: tooSmall ? def.exactLength.value : void 0,
+          maximum: tooBig ? def.exactLength.value : void 0,
+          type: "array",
+          inclusive: true,
+          exact: true,
+          message: def.exactLength.message
+        });
+        status.dirty();
+      }
+    }
+    if (def.minLength !== null) {
+      if (ctx.data.length < def.minLength.value) {
+        addIssueToContext3(ctx, {
+          code: ZodIssueCode3.too_small,
+          minimum: def.minLength.value,
+          type: "array",
+          inclusive: true,
+          exact: false,
+          message: def.minLength.message
+        });
+        status.dirty();
+      }
+    }
+    if (def.maxLength !== null) {
+      if (ctx.data.length > def.maxLength.value) {
+        addIssueToContext3(ctx, {
+          code: ZodIssueCode3.too_big,
+          maximum: def.maxLength.value,
+          type: "array",
+          inclusive: true,
+          exact: false,
+          message: def.maxLength.message
+        });
+        status.dirty();
+      }
+    }
+    if (ctx.common.async) {
+      return Promise.all([...ctx.data].map((item, i) => {
+        return def.type._parseAsync(new ParseInputLazyPath3(ctx, item, ctx.path, i));
+      })).then((result2) => {
+        return ParseStatus3.mergeArray(status, result2);
+      });
+    }
+    const result = [...ctx.data].map((item, i) => {
+      return def.type._parseSync(new ParseInputLazyPath3(ctx, item, ctx.path, i));
+    });
+    return ParseStatus3.mergeArray(status, result);
+  }
+  get element() {
+    return this._def.type;
+  }
+  min(minLength, message) {
+    return new _ZodArray3({
+      ...this._def,
+      minLength: { value: minLength, message: errorUtil3.toString(message) }
+    });
+  }
+  max(maxLength, message) {
+    return new _ZodArray3({
+      ...this._def,
+      maxLength: { value: maxLength, message: errorUtil3.toString(message) }
+    });
+  }
+  length(len, message) {
+    return new _ZodArray3({
+      ...this._def,
+      exactLength: { value: len, message: errorUtil3.toString(message) }
+    });
+  }
+  nonempty(message) {
+    return this.min(1, message);
+  }
+};
+ZodArray3.create = (schema, params) => {
+  return new ZodArray3({
+    type: schema,
+    minLength: null,
+    maxLength: null,
+    exactLength: null,
+    typeName: ZodFirstPartyTypeKind3.ZodArray,
+    ...processCreateParams3(params)
+  });
+};
+function deepPartialify3(schema) {
+  if (schema instanceof ZodObject3) {
+    const newShape = {};
+    for (const key in schema.shape) {
+      const fieldSchema = schema.shape[key];
+      newShape[key] = ZodOptional3.create(deepPartialify3(fieldSchema));
+    }
+    return new ZodObject3({
+      ...schema._def,
+      shape: () => newShape
+    });
+  } else if (schema instanceof ZodArray3) {
+    return new ZodArray3({
+      ...schema._def,
+      type: deepPartialify3(schema.element)
+    });
+  } else if (schema instanceof ZodOptional3) {
+    return ZodOptional3.create(deepPartialify3(schema.unwrap()));
+  } else if (schema instanceof ZodNullable3) {
+    return ZodNullable3.create(deepPartialify3(schema.unwrap()));
+  } else if (schema instanceof ZodTuple3) {
+    return ZodTuple3.create(schema.items.map((item) => deepPartialify3(item)));
+  } else {
+    return schema;
+  }
+}
+var ZodObject3 = class _ZodObject3 extends ZodType3 {
+  constructor() {
+    super(...arguments);
+    this._cached = null;
+    this.nonstrict = this.passthrough;
+    this.augment = this.extend;
+  }
+  _getCached() {
+    if (this._cached !== null)
+      return this._cached;
+    const shape = this._def.shape();
+    const keys = util3.objectKeys(shape);
+    this._cached = { shape, keys };
+    return this._cached;
+  }
+  _parse(input) {
+    const parsedType = this._getType(input);
+    if (parsedType !== ZodParsedType3.object) {
+      const ctx2 = this._getOrReturnCtx(input);
+      addIssueToContext3(ctx2, {
+        code: ZodIssueCode3.invalid_type,
+        expected: ZodParsedType3.object,
+        received: ctx2.parsedType
+      });
+      return INVALID3;
+    }
+    const { status, ctx } = this._processInputParams(input);
+    const { shape, keys: shapeKeys } = this._getCached();
+    const extraKeys = [];
+    if (!(this._def.catchall instanceof ZodNever3 && this._def.unknownKeys === "strip")) {
+      for (const key in ctx.data) {
+        if (!shapeKeys.includes(key)) {
+          extraKeys.push(key);
+        }
+      }
+    }
+    const pairs = [];
+    for (const key of shapeKeys) {
+      const keyValidator = shape[key];
+      const value = ctx.data[key];
+      pairs.push({
+        key: { status: "valid", value: key },
+        value: keyValidator._parse(new ParseInputLazyPath3(ctx, value, ctx.path, key)),
+        alwaysSet: key in ctx.data
+      });
+    }
+    if (this._def.catchall instanceof ZodNever3) {
+      const unknownKeys = this._def.unknownKeys;
+      if (unknownKeys === "passthrough") {
+        for (const key of extraKeys) {
+          pairs.push({
+            key: { status: "valid", value: key },
+            value: { status: "valid", value: ctx.data[key] }
+          });
+        }
+      } else if (unknownKeys === "strict") {
+        if (extraKeys.length > 0) {
+          addIssueToContext3(ctx, {
+            code: ZodIssueCode3.unrecognized_keys,
+            keys: extraKeys
+          });
+          status.dirty();
+        }
+      } else if (unknownKeys === "strip") {
+      } else {
+        throw new Error(`Internal ZodObject error: invalid unknownKeys value.`);
+      }
+    } else {
+      const catchall = this._def.catchall;
+      for (const key of extraKeys) {
+        const value = ctx.data[key];
+        pairs.push({
+          key: { status: "valid", value: key },
+          value: catchall._parse(
+            new ParseInputLazyPath3(ctx, value, ctx.path, key)
+            //, ctx.child(key), value, getParsedType(value)
+          ),
+          alwaysSet: key in ctx.data
+        });
+      }
+    }
+    if (ctx.common.async) {
+      return Promise.resolve().then(async () => {
+        const syncPairs = [];
+        for (const pair of pairs) {
+          const key = await pair.key;
+          const value = await pair.value;
+          syncPairs.push({
+            key,
+            value,
+            alwaysSet: pair.alwaysSet
+          });
+        }
+        return syncPairs;
+      }).then((syncPairs) => {
+        return ParseStatus3.mergeObjectSync(status, syncPairs);
+      });
+    } else {
+      return ParseStatus3.mergeObjectSync(status, pairs);
+    }
+  }
+  get shape() {
+    return this._def.shape();
+  }
+  strict(message) {
+    errorUtil3.errToObj;
+    return new _ZodObject3({
+      ...this._def,
+      unknownKeys: "strict",
+      ...message !== void 0 ? {
+        errorMap: (issue, ctx) => {
+          const defaultError = this._def.errorMap?.(issue, ctx).message ?? ctx.defaultError;
+          if (issue.code === "unrecognized_keys")
+            return {
+              message: errorUtil3.errToObj(message).message ?? defaultError
+            };
+          return {
+            message: defaultError
+          };
+        }
+      } : {}
+    });
+  }
+  strip() {
+    return new _ZodObject3({
+      ...this._def,
+      unknownKeys: "strip"
+    });
+  }
+  passthrough() {
+    return new _ZodObject3({
+      ...this._def,
+      unknownKeys: "passthrough"
+    });
+  }
+  // const AugmentFactory =
+  //   <Def extends ZodObjectDef>(def: Def) =>
+  //   <Augmentation extends ZodRawShape>(
+  //     augmentation: Augmentation
+  //   ): ZodObject<
+  //     extendShape<ReturnType<Def["shape"]>, Augmentation>,
+  //     Def["unknownKeys"],
+  //     Def["catchall"]
+  //   > => {
+  //     return new ZodObject({
+  //       ...def,
+  //       shape: () => ({
+  //         ...def.shape(),
+  //         ...augmentation,
+  //       }),
+  //     }) as any;
+  //   };
+  extend(augmentation) {
+    return new _ZodObject3({
+      ...this._def,
+      shape: () => ({
+        ...this._def.shape(),
+        ...augmentation
+      })
+    });
+  }
+  /**
+   * Prior to zod@1.0.12 there was a bug in the
+   * inferred type of merged objects. Please
+   * upgrade if you are experiencing issues.
+   */
+  merge(merging) {
+    const merged = new _ZodObject3({
+      unknownKeys: merging._def.unknownKeys,
+      catchall: merging._def.catchall,
+      shape: () => ({
+        ...this._def.shape(),
+        ...merging._def.shape()
+      }),
+      typeName: ZodFirstPartyTypeKind3.ZodObject
+    });
+    return merged;
+  }
+  // merge<
+  //   Incoming extends AnyZodObject,
+  //   Augmentation extends Incoming["shape"],
+  //   NewOutput extends {
+  //     [k in keyof Augmentation | keyof Output]: k extends keyof Augmentation
+  //       ? Augmentation[k]["_output"]
+  //       : k extends keyof Output
+  //       ? Output[k]
+  //       : never;
+  //   },
+  //   NewInput extends {
+  //     [k in keyof Augmentation | keyof Input]: k extends keyof Augmentation
+  //       ? Augmentation[k]["_input"]
+  //       : k extends keyof Input
+  //       ? Input[k]
+  //       : never;
+  //   }
+  // >(
+  //   merging: Incoming
+  // ): ZodObject<
+  //   extendShape<T, ReturnType<Incoming["_def"]["shape"]>>,
+  //   Incoming["_def"]["unknownKeys"],
+  //   Incoming["_def"]["catchall"],
+  //   NewOutput,
+  //   NewInput
+  // > {
+  //   const merged: any = new ZodObject({
+  //     unknownKeys: merging._def.unknownKeys,
+  //     catchall: merging._def.catchall,
+  //     shape: () =>
+  //       objectUtil.mergeShapes(this._def.shape(), merging._def.shape()),
+  //     typeName: ZodFirstPartyTypeKind.ZodObject,
+  //   }) as any;
+  //   return merged;
+  // }
+  setKey(key, schema) {
+    return this.augment({ [key]: schema });
+  }
+  // merge<Incoming extends AnyZodObject>(
+  //   merging: Incoming
+  // ): //ZodObject<T & Incoming["_shape"], UnknownKeys, Catchall> = (merging) => {
+  // ZodObject<
+  //   extendShape<T, ReturnType<Incoming["_def"]["shape"]>>,
+  //   Incoming["_def"]["unknownKeys"],
+  //   Incoming["_def"]["catchall"]
+  // > {
+  //   // const mergedShape = objectUtil.mergeShapes(
+  //   //   this._def.shape(),
+  //   //   merging._def.shape()
+  //   // );
+  //   const merged: any = new ZodObject({
+  //     unknownKeys: merging._def.unknownKeys,
+  //     catchall: merging._def.catchall,
+  //     shape: () =>
+  //       objectUtil.mergeShapes(this._def.shape(), merging._def.shape()),
+  //     typeName: ZodFirstPartyTypeKind.ZodObject,
+  //   }) as any;
+  //   return merged;
+  // }
+  catchall(index) {
+    return new _ZodObject3({
+      ...this._def,
+      catchall: index
+    });
+  }
+  pick(mask) {
+    const shape = {};
+    for (const key of util3.objectKeys(mask)) {
+      if (mask[key] && this.shape[key]) {
+        shape[key] = this.shape[key];
+      }
+    }
+    return new _ZodObject3({
+      ...this._def,
+      shape: () => shape
+    });
+  }
+  omit(mask) {
+    const shape = {};
+    for (const key of util3.objectKeys(this.shape)) {
+      if (!mask[key]) {
+        shape[key] = this.shape[key];
+      }
+    }
+    return new _ZodObject3({
+      ...this._def,
+      shape: () => shape
+    });
+  }
+  /**
+   * @deprecated
+   */
+  deepPartial() {
+    return deepPartialify3(this);
+  }
+  partial(mask) {
+    const newShape = {};
+    for (const key of util3.objectKeys(this.shape)) {
+      const fieldSchema = this.shape[key];
+      if (mask && !mask[key]) {
+        newShape[key] = fieldSchema;
+      } else {
+        newShape[key] = fieldSchema.optional();
+      }
+    }
+    return new _ZodObject3({
+      ...this._def,
+      shape: () => newShape
+    });
+  }
+  required(mask) {
+    const newShape = {};
+    for (const key of util3.objectKeys(this.shape)) {
+      if (mask && !mask[key]) {
+        newShape[key] = this.shape[key];
+      } else {
+        const fieldSchema = this.shape[key];
+        let newField = fieldSchema;
+        while (newField instanceof ZodOptional3) {
+          newField = newField._def.innerType;
+        }
+        newShape[key] = newField;
+      }
+    }
+    return new _ZodObject3({
+      ...this._def,
+      shape: () => newShape
+    });
+  }
+  keyof() {
+    return createZodEnum3(util3.objectKeys(this.shape));
+  }
+};
+ZodObject3.create = (shape, params) => {
+  return new ZodObject3({
+    shape: () => shape,
+    unknownKeys: "strip",
+    catchall: ZodNever3.create(),
+    typeName: ZodFirstPartyTypeKind3.ZodObject,
+    ...processCreateParams3(params)
+  });
+};
+ZodObject3.strictCreate = (shape, params) => {
+  return new ZodObject3({
+    shape: () => shape,
+    unknownKeys: "strict",
+    catchall: ZodNever3.create(),
+    typeName: ZodFirstPartyTypeKind3.ZodObject,
+    ...processCreateParams3(params)
+  });
+};
+ZodObject3.lazycreate = (shape, params) => {
+  return new ZodObject3({
+    shape,
+    unknownKeys: "strip",
+    catchall: ZodNever3.create(),
+    typeName: ZodFirstPartyTypeKind3.ZodObject,
+    ...processCreateParams3(params)
+  });
+};
+var ZodUnion3 = class extends ZodType3 {
+  _parse(input) {
+    const { ctx } = this._processInputParams(input);
+    const options = this._def.options;
+    function handleResults(results) {
+      for (const result of results) {
+        if (result.result.status === "valid") {
+          return result.result;
+        }
+      }
+      for (const result of results) {
+        if (result.result.status === "dirty") {
+          ctx.common.issues.push(...result.ctx.common.issues);
+          return result.result;
+        }
+      }
+      const unionErrors = results.map((result) => new ZodError3(result.ctx.common.issues));
+      addIssueToContext3(ctx, {
+        code: ZodIssueCode3.invalid_union,
+        unionErrors
+      });
+      return INVALID3;
+    }
+    if (ctx.common.async) {
+      return Promise.all(options.map(async (option) => {
+        const childCtx = {
+          ...ctx,
+          common: {
+            ...ctx.common,
+            issues: []
+          },
+          parent: null
+        };
+        return {
+          result: await option._parseAsync({
+            data: ctx.data,
+            path: ctx.path,
+            parent: childCtx
+          }),
+          ctx: childCtx
+        };
+      })).then(handleResults);
+    } else {
+      let dirty = void 0;
+      const issues = [];
+      for (const option of options) {
+        const childCtx = {
+          ...ctx,
+          common: {
+            ...ctx.common,
+            issues: []
+          },
+          parent: null
+        };
+        const result = option._parseSync({
+          data: ctx.data,
+          path: ctx.path,
+          parent: childCtx
+        });
+        if (result.status === "valid") {
+          return result;
+        } else if (result.status === "dirty" && !dirty) {
+          dirty = { result, ctx: childCtx };
+        }
+        if (childCtx.common.issues.length) {
+          issues.push(childCtx.common.issues);
+        }
+      }
+      if (dirty) {
+        ctx.common.issues.push(...dirty.ctx.common.issues);
+        return dirty.result;
+      }
+      const unionErrors = issues.map((issues2) => new ZodError3(issues2));
+      addIssueToContext3(ctx, {
+        code: ZodIssueCode3.invalid_union,
+        unionErrors
+      });
+      return INVALID3;
+    }
+  }
+  get options() {
+    return this._def.options;
+  }
+};
+ZodUnion3.create = (types, params) => {
+  return new ZodUnion3({
+    options: types,
+    typeName: ZodFirstPartyTypeKind3.ZodUnion,
+    ...processCreateParams3(params)
+  });
+};
+var getDiscriminator3 = (type) => {
+  if (type instanceof ZodLazy3) {
+    return getDiscriminator3(type.schema);
+  } else if (type instanceof ZodEffects3) {
+    return getDiscriminator3(type.innerType());
+  } else if (type instanceof ZodLiteral3) {
+    return [type.value];
+  } else if (type instanceof ZodEnum3) {
+    return type.options;
+  } else if (type instanceof ZodNativeEnum3) {
+    return util3.objectValues(type.enum);
+  } else if (type instanceof ZodDefault3) {
+    return getDiscriminator3(type._def.innerType);
+  } else if (type instanceof ZodUndefined3) {
+    return [void 0];
+  } else if (type instanceof ZodNull3) {
+    return [null];
+  } else if (type instanceof ZodOptional3) {
+    return [void 0, ...getDiscriminator3(type.unwrap())];
+  } else if (type instanceof ZodNullable3) {
+    return [null, ...getDiscriminator3(type.unwrap())];
+  } else if (type instanceof ZodBranded3) {
+    return getDiscriminator3(type.unwrap());
+  } else if (type instanceof ZodReadonly3) {
+    return getDiscriminator3(type.unwrap());
+  } else if (type instanceof ZodCatch3) {
+    return getDiscriminator3(type._def.innerType);
+  } else {
+    return [];
+  }
+};
+var ZodDiscriminatedUnion3 = class _ZodDiscriminatedUnion3 extends ZodType3 {
+  _parse(input) {
+    const { ctx } = this._processInputParams(input);
+    if (ctx.parsedType !== ZodParsedType3.object) {
+      addIssueToContext3(ctx, {
+        code: ZodIssueCode3.invalid_type,
+        expected: ZodParsedType3.object,
+        received: ctx.parsedType
+      });
+      return INVALID3;
+    }
+    const discriminator = this.discriminator;
+    const discriminatorValue = ctx.data[discriminator];
+    const option = this.optionsMap.get(discriminatorValue);
+    if (!option) {
+      addIssueToContext3(ctx, {
+        code: ZodIssueCode3.invalid_union_discriminator,
+        options: Array.from(this.optionsMap.keys()),
+        path: [discriminator]
+      });
+      return INVALID3;
+    }
+    if (ctx.common.async) {
+      return option._parseAsync({
+        data: ctx.data,
+        path: ctx.path,
+        parent: ctx
+      });
+    } else {
+      return option._parseSync({
+        data: ctx.data,
+        path: ctx.path,
+        parent: ctx
+      });
+    }
+  }
+  get discriminator() {
+    return this._def.discriminator;
+  }
+  get options() {
+    return this._def.options;
+  }
+  get optionsMap() {
+    return this._def.optionsMap;
+  }
+  /**
+   * The constructor of the discriminated union schema. Its behaviour is very similar to that of the normal z.union() constructor.
+   * However, it only allows a union of objects, all of which need to share a discriminator property. This property must
+   * have a different value for each object in the union.
+   * @param discriminator the name of the discriminator property
+   * @param types an array of object schemas
+   * @param params
+   */
+  static create(discriminator, options, params) {
+    const optionsMap = /* @__PURE__ */ new Map();
+    for (const type of options) {
+      const discriminatorValues = getDiscriminator3(type.shape[discriminator]);
+      if (!discriminatorValues.length) {
+        throw new Error(`A discriminator value for key \`${discriminator}\` could not be extracted from all schema options`);
+      }
+      for (const value of discriminatorValues) {
+        if (optionsMap.has(value)) {
+          throw new Error(`Discriminator property ${String(discriminator)} has duplicate value ${String(value)}`);
+        }
+        optionsMap.set(value, type);
+      }
+    }
+    return new _ZodDiscriminatedUnion3({
+      typeName: ZodFirstPartyTypeKind3.ZodDiscriminatedUnion,
+      discriminator,
+      options,
+      optionsMap,
+      ...processCreateParams3(params)
+    });
+  }
+};
+function mergeValues3(a, b) {
+  const aType = getParsedType3(a);
+  const bType = getParsedType3(b);
+  if (a === b) {
+    return { valid: true, data: a };
+  } else if (aType === ZodParsedType3.object && bType === ZodParsedType3.object) {
+    const bKeys = util3.objectKeys(b);
+    const sharedKeys = util3.objectKeys(a).filter((key) => bKeys.indexOf(key) !== -1);
+    const newObj = { ...a, ...b };
+    for (const key of sharedKeys) {
+      const sharedValue = mergeValues3(a[key], b[key]);
+      if (!sharedValue.valid) {
+        return { valid: false };
+      }
+      newObj[key] = sharedValue.data;
+    }
+    return { valid: true, data: newObj };
+  } else if (aType === ZodParsedType3.array && bType === ZodParsedType3.array) {
+    if (a.length !== b.length) {
+      return { valid: false };
+    }
+    const newArray = [];
+    for (let index = 0; index < a.length; index++) {
+      const itemA = a[index];
+      const itemB = b[index];
+      const sharedValue = mergeValues3(itemA, itemB);
+      if (!sharedValue.valid) {
+        return { valid: false };
+      }
+      newArray.push(sharedValue.data);
+    }
+    return { valid: true, data: newArray };
+  } else if (aType === ZodParsedType3.date && bType === ZodParsedType3.date && +a === +b) {
+    return { valid: true, data: a };
+  } else {
+    return { valid: false };
+  }
+}
+var ZodIntersection3 = class extends ZodType3 {
+  _parse(input) {
+    const { status, ctx } = this._processInputParams(input);
+    const handleParsed = (parsedLeft, parsedRight) => {
+      if (isAborted3(parsedLeft) || isAborted3(parsedRight)) {
+        return INVALID3;
+      }
+      const merged = mergeValues3(parsedLeft.value, parsedRight.value);
+      if (!merged.valid) {
+        addIssueToContext3(ctx, {
+          code: ZodIssueCode3.invalid_intersection_types
+        });
+        return INVALID3;
+      }
+      if (isDirty3(parsedLeft) || isDirty3(parsedRight)) {
+        status.dirty();
+      }
+      return { status: status.value, value: merged.data };
+    };
+    if (ctx.common.async) {
+      return Promise.all([
+        this._def.left._parseAsync({
+          data: ctx.data,
+          path: ctx.path,
+          parent: ctx
+        }),
+        this._def.right._parseAsync({
+          data: ctx.data,
+          path: ctx.path,
+          parent: ctx
+        })
+      ]).then(([left, right]) => handleParsed(left, right));
+    } else {
+      return handleParsed(this._def.left._parseSync({
+        data: ctx.data,
+        path: ctx.path,
+        parent: ctx
+      }), this._def.right._parseSync({
+        data: ctx.data,
+        path: ctx.path,
+        parent: ctx
+      }));
+    }
+  }
+};
+ZodIntersection3.create = (left, right, params) => {
+  return new ZodIntersection3({
+    left,
+    right,
+    typeName: ZodFirstPartyTypeKind3.ZodIntersection,
+    ...processCreateParams3(params)
+  });
+};
+var ZodTuple3 = class _ZodTuple3 extends ZodType3 {
+  _parse(input) {
+    const { status, ctx } = this._processInputParams(input);
+    if (ctx.parsedType !== ZodParsedType3.array) {
+      addIssueToContext3(ctx, {
+        code: ZodIssueCode3.invalid_type,
+        expected: ZodParsedType3.array,
+        received: ctx.parsedType
+      });
+      return INVALID3;
+    }
+    if (ctx.data.length < this._def.items.length) {
+      addIssueToContext3(ctx, {
+        code: ZodIssueCode3.too_small,
+        minimum: this._def.items.length,
+        inclusive: true,
+        exact: false,
+        type: "array"
+      });
+      return INVALID3;
+    }
+    const rest = this._def.rest;
+    if (!rest && ctx.data.length > this._def.items.length) {
+      addIssueToContext3(ctx, {
+        code: ZodIssueCode3.too_big,
+        maximum: this._def.items.length,
+        inclusive: true,
+        exact: false,
+        type: "array"
+      });
+      status.dirty();
+    }
+    const items = [...ctx.data].map((item, itemIndex) => {
+      const schema = this._def.items[itemIndex] || this._def.rest;
+      if (!schema)
+        return null;
+      return schema._parse(new ParseInputLazyPath3(ctx, item, ctx.path, itemIndex));
+    }).filter((x) => !!x);
+    if (ctx.common.async) {
+      return Promise.all(items).then((results) => {
+        return ParseStatus3.mergeArray(status, results);
+      });
+    } else {
+      return ParseStatus3.mergeArray(status, items);
+    }
+  }
+  get items() {
+    return this._def.items;
+  }
+  rest(rest) {
+    return new _ZodTuple3({
+      ...this._def,
+      rest
+    });
+  }
+};
+ZodTuple3.create = (schemas, params) => {
+  if (!Array.isArray(schemas)) {
+    throw new Error("You must pass an array of schemas to z.tuple([ ... ])");
+  }
+  return new ZodTuple3({
+    items: schemas,
+    typeName: ZodFirstPartyTypeKind3.ZodTuple,
+    rest: null,
+    ...processCreateParams3(params)
+  });
+};
+var ZodRecord3 = class _ZodRecord3 extends ZodType3 {
+  get keySchema() {
+    return this._def.keyType;
+  }
+  get valueSchema() {
+    return this._def.valueType;
+  }
+  _parse(input) {
+    const { status, ctx } = this._processInputParams(input);
+    if (ctx.parsedType !== ZodParsedType3.object) {
+      addIssueToContext3(ctx, {
+        code: ZodIssueCode3.invalid_type,
+        expected: ZodParsedType3.object,
+        received: ctx.parsedType
+      });
+      return INVALID3;
+    }
+    const pairs = [];
+    const keyType = this._def.keyType;
+    const valueType = this._def.valueType;
+    for (const key in ctx.data) {
+      pairs.push({
+        key: keyType._parse(new ParseInputLazyPath3(ctx, key, ctx.path, key)),
+        value: valueType._parse(new ParseInputLazyPath3(ctx, ctx.data[key], ctx.path, key)),
+        alwaysSet: key in ctx.data
+      });
+    }
+    if (ctx.common.async) {
+      return ParseStatus3.mergeObjectAsync(status, pairs);
+    } else {
+      return ParseStatus3.mergeObjectSync(status, pairs);
+    }
+  }
+  get element() {
+    return this._def.valueType;
+  }
+  static create(first, second, third) {
+    if (second instanceof ZodType3) {
+      return new _ZodRecord3({
+        keyType: first,
+        valueType: second,
+        typeName: ZodFirstPartyTypeKind3.ZodRecord,
+        ...processCreateParams3(third)
+      });
+    }
+    return new _ZodRecord3({
+      keyType: ZodString3.create(),
+      valueType: first,
+      typeName: ZodFirstPartyTypeKind3.ZodRecord,
+      ...processCreateParams3(second)
+    });
+  }
+};
+var ZodMap3 = class extends ZodType3 {
+  get keySchema() {
+    return this._def.keyType;
+  }
+  get valueSchema() {
+    return this._def.valueType;
+  }
+  _parse(input) {
+    const { status, ctx } = this._processInputParams(input);
+    if (ctx.parsedType !== ZodParsedType3.map) {
+      addIssueToContext3(ctx, {
+        code: ZodIssueCode3.invalid_type,
+        expected: ZodParsedType3.map,
+        received: ctx.parsedType
+      });
+      return INVALID3;
+    }
+    const keyType = this._def.keyType;
+    const valueType = this._def.valueType;
+    const pairs = [...ctx.data.entries()].map(([key, value], index) => {
+      return {
+        key: keyType._parse(new ParseInputLazyPath3(ctx, key, ctx.path, [index, "key"])),
+        value: valueType._parse(new ParseInputLazyPath3(ctx, value, ctx.path, [index, "value"]))
+      };
+    });
+    if (ctx.common.async) {
+      const finalMap = /* @__PURE__ */ new Map();
+      return Promise.resolve().then(async () => {
+        for (const pair of pairs) {
+          const key = await pair.key;
+          const value = await pair.value;
+          if (key.status === "aborted" || value.status === "aborted") {
+            return INVALID3;
+          }
+          if (key.status === "dirty" || value.status === "dirty") {
+            status.dirty();
+          }
+          finalMap.set(key.value, value.value);
+        }
+        return { status: status.value, value: finalMap };
+      });
+    } else {
+      const finalMap = /* @__PURE__ */ new Map();
+      for (const pair of pairs) {
+        const key = pair.key;
+        const value = pair.value;
+        if (key.status === "aborted" || value.status === "aborted") {
+          return INVALID3;
+        }
+        if (key.status === "dirty" || value.status === "dirty") {
+          status.dirty();
+        }
+        finalMap.set(key.value, value.value);
+      }
+      return { status: status.value, value: finalMap };
+    }
+  }
+};
+ZodMap3.create = (keyType, valueType, params) => {
+  return new ZodMap3({
+    valueType,
+    keyType,
+    typeName: ZodFirstPartyTypeKind3.ZodMap,
+    ...processCreateParams3(params)
+  });
+};
+var ZodSet3 = class _ZodSet3 extends ZodType3 {
+  _parse(input) {
+    const { status, ctx } = this._processInputParams(input);
+    if (ctx.parsedType !== ZodParsedType3.set) {
+      addIssueToContext3(ctx, {
+        code: ZodIssueCode3.invalid_type,
+        expected: ZodParsedType3.set,
+        received: ctx.parsedType
+      });
+      return INVALID3;
+    }
+    const def = this._def;
+    if (def.minSize !== null) {
+      if (ctx.data.size < def.minSize.value) {
+        addIssueToContext3(ctx, {
+          code: ZodIssueCode3.too_small,
+          minimum: def.minSize.value,
+          type: "set",
+          inclusive: true,
+          exact: false,
+          message: def.minSize.message
+        });
+        status.dirty();
+      }
+    }
+    if (def.maxSize !== null) {
+      if (ctx.data.size > def.maxSize.value) {
+        addIssueToContext3(ctx, {
+          code: ZodIssueCode3.too_big,
+          maximum: def.maxSize.value,
+          type: "set",
+          inclusive: true,
+          exact: false,
+          message: def.maxSize.message
+        });
+        status.dirty();
+      }
+    }
+    const valueType = this._def.valueType;
+    function finalizeSet(elements2) {
+      const parsedSet = /* @__PURE__ */ new Set();
+      for (const element of elements2) {
+        if (element.status === "aborted")
+          return INVALID3;
+        if (element.status === "dirty")
+          status.dirty();
+        parsedSet.add(element.value);
+      }
+      return { status: status.value, value: parsedSet };
+    }
+    const elements = [...ctx.data.values()].map((item, i) => valueType._parse(new ParseInputLazyPath3(ctx, item, ctx.path, i)));
+    if (ctx.common.async) {
+      return Promise.all(elements).then((elements2) => finalizeSet(elements2));
+    } else {
+      return finalizeSet(elements);
+    }
+  }
+  min(minSize, message) {
+    return new _ZodSet3({
+      ...this._def,
+      minSize: { value: minSize, message: errorUtil3.toString(message) }
+    });
+  }
+  max(maxSize, message) {
+    return new _ZodSet3({
+      ...this._def,
+      maxSize: { value: maxSize, message: errorUtil3.toString(message) }
+    });
+  }
+  size(size, message) {
+    return this.min(size, message).max(size, message);
+  }
+  nonempty(message) {
+    return this.min(1, message);
+  }
+};
+ZodSet3.create = (valueType, params) => {
+  return new ZodSet3({
+    valueType,
+    minSize: null,
+    maxSize: null,
+    typeName: ZodFirstPartyTypeKind3.ZodSet,
+    ...processCreateParams3(params)
+  });
+};
+var ZodFunction3 = class _ZodFunction3 extends ZodType3 {
+  constructor() {
+    super(...arguments);
+    this.validate = this.implement;
+  }
+  _parse(input) {
+    const { ctx } = this._processInputParams(input);
+    if (ctx.parsedType !== ZodParsedType3.function) {
+      addIssueToContext3(ctx, {
+        code: ZodIssueCode3.invalid_type,
+        expected: ZodParsedType3.function,
+        received: ctx.parsedType
+      });
+      return INVALID3;
+    }
+    function makeArgsIssue(args, error) {
+      return makeIssue3({
+        data: args,
+        path: ctx.path,
+        errorMaps: [ctx.common.contextualErrorMap, ctx.schemaErrorMap, getErrorMap3(), en_default3].filter((x) => !!x),
+        issueData: {
+          code: ZodIssueCode3.invalid_arguments,
+          argumentsError: error
+        }
+      });
+    }
+    function makeReturnsIssue(returns, error) {
+      return makeIssue3({
+        data: returns,
+        path: ctx.path,
+        errorMaps: [ctx.common.contextualErrorMap, ctx.schemaErrorMap, getErrorMap3(), en_default3].filter((x) => !!x),
+        issueData: {
+          code: ZodIssueCode3.invalid_return_type,
+          returnTypeError: error
+        }
+      });
+    }
+    const params = { errorMap: ctx.common.contextualErrorMap };
+    const fn = ctx.data;
+    if (this._def.returns instanceof ZodPromise3) {
+      const me = this;
+      return OK3(async function(...args) {
+        const error = new ZodError3([]);
+        const parsedArgs = await me._def.args.parseAsync(args, params).catch((e) => {
+          error.addIssue(makeArgsIssue(args, e));
+          throw error;
+        });
+        const result = await Reflect.apply(fn, this, parsedArgs);
+        const parsedReturns = await me._def.returns._def.type.parseAsync(result, params).catch((e) => {
+          error.addIssue(makeReturnsIssue(result, e));
+          throw error;
+        });
+        return parsedReturns;
+      });
+    } else {
+      const me = this;
+      return OK3(function(...args) {
+        const parsedArgs = me._def.args.safeParse(args, params);
+        if (!parsedArgs.success) {
+          throw new ZodError3([makeArgsIssue(args, parsedArgs.error)]);
+        }
+        const result = Reflect.apply(fn, this, parsedArgs.data);
+        const parsedReturns = me._def.returns.safeParse(result, params);
+        if (!parsedReturns.success) {
+          throw new ZodError3([makeReturnsIssue(result, parsedReturns.error)]);
+        }
+        return parsedReturns.data;
+      });
+    }
+  }
+  parameters() {
+    return this._def.args;
+  }
+  returnType() {
+    return this._def.returns;
+  }
+  args(...items) {
+    return new _ZodFunction3({
+      ...this._def,
+      args: ZodTuple3.create(items).rest(ZodUnknown3.create())
+    });
+  }
+  returns(returnType) {
+    return new _ZodFunction3({
+      ...this._def,
+      returns: returnType
+    });
+  }
+  implement(func) {
+    const validatedFunc = this.parse(func);
+    return validatedFunc;
+  }
+  strictImplement(func) {
+    const validatedFunc = this.parse(func);
+    return validatedFunc;
+  }
+  static create(args, returns, params) {
+    return new _ZodFunction3({
+      args: args ? args : ZodTuple3.create([]).rest(ZodUnknown3.create()),
+      returns: returns || ZodUnknown3.create(),
+      typeName: ZodFirstPartyTypeKind3.ZodFunction,
+      ...processCreateParams3(params)
+    });
+  }
+};
+var ZodLazy3 = class extends ZodType3 {
+  get schema() {
+    return this._def.getter();
+  }
+  _parse(input) {
+    const { ctx } = this._processInputParams(input);
+    const lazySchema = this._def.getter();
+    return lazySchema._parse({ data: ctx.data, path: ctx.path, parent: ctx });
+  }
+};
+ZodLazy3.create = (getter, params) => {
+  return new ZodLazy3({
+    getter,
+    typeName: ZodFirstPartyTypeKind3.ZodLazy,
+    ...processCreateParams3(params)
+  });
+};
+var ZodLiteral3 = class extends ZodType3 {
+  _parse(input) {
+    if (input.data !== this._def.value) {
+      const ctx = this._getOrReturnCtx(input);
+      addIssueToContext3(ctx, {
+        received: ctx.data,
+        code: ZodIssueCode3.invalid_literal,
+        expected: this._def.value
+      });
+      return INVALID3;
+    }
+    return { status: "valid", value: input.data };
+  }
+  get value() {
+    return this._def.value;
+  }
+};
+ZodLiteral3.create = (value, params) => {
+  return new ZodLiteral3({
+    value,
+    typeName: ZodFirstPartyTypeKind3.ZodLiteral,
+    ...processCreateParams3(params)
+  });
+};
+function createZodEnum3(values, params) {
+  return new ZodEnum3({
+    values,
+    typeName: ZodFirstPartyTypeKind3.ZodEnum,
+    ...processCreateParams3(params)
+  });
+}
+var ZodEnum3 = class _ZodEnum3 extends ZodType3 {
+  _parse(input) {
+    if (typeof input.data !== "string") {
+      const ctx = this._getOrReturnCtx(input);
+      const expectedValues = this._def.values;
+      addIssueToContext3(ctx, {
+        expected: util3.joinValues(expectedValues),
+        received: ctx.parsedType,
+        code: ZodIssueCode3.invalid_type
+      });
+      return INVALID3;
+    }
+    if (!this._cache) {
+      this._cache = new Set(this._def.values);
+    }
+    if (!this._cache.has(input.data)) {
+      const ctx = this._getOrReturnCtx(input);
+      const expectedValues = this._def.values;
+      addIssueToContext3(ctx, {
+        received: ctx.data,
+        code: ZodIssueCode3.invalid_enum_value,
+        options: expectedValues
+      });
+      return INVALID3;
+    }
+    return OK3(input.data);
+  }
+  get options() {
+    return this._def.values;
+  }
+  get enum() {
+    const enumValues = {};
+    for (const val of this._def.values) {
+      enumValues[val] = val;
+    }
+    return enumValues;
+  }
+  get Values() {
+    const enumValues = {};
+    for (const val of this._def.values) {
+      enumValues[val] = val;
+    }
+    return enumValues;
+  }
+  get Enum() {
+    const enumValues = {};
+    for (const val of this._def.values) {
+      enumValues[val] = val;
+    }
+    return enumValues;
+  }
+  extract(values, newDef = this._def) {
+    return _ZodEnum3.create(values, {
+      ...this._def,
+      ...newDef
+    });
+  }
+  exclude(values, newDef = this._def) {
+    return _ZodEnum3.create(this.options.filter((opt) => !values.includes(opt)), {
+      ...this._def,
+      ...newDef
+    });
+  }
+};
+ZodEnum3.create = createZodEnum3;
+var ZodNativeEnum3 = class extends ZodType3 {
+  _parse(input) {
+    const nativeEnumValues = util3.getValidEnumValues(this._def.values);
+    const ctx = this._getOrReturnCtx(input);
+    if (ctx.parsedType !== ZodParsedType3.string && ctx.parsedType !== ZodParsedType3.number) {
+      const expectedValues = util3.objectValues(nativeEnumValues);
+      addIssueToContext3(ctx, {
+        expected: util3.joinValues(expectedValues),
+        received: ctx.parsedType,
+        code: ZodIssueCode3.invalid_type
+      });
+      return INVALID3;
+    }
+    if (!this._cache) {
+      this._cache = new Set(util3.getValidEnumValues(this._def.values));
+    }
+    if (!this._cache.has(input.data)) {
+      const expectedValues = util3.objectValues(nativeEnumValues);
+      addIssueToContext3(ctx, {
+        received: ctx.data,
+        code: ZodIssueCode3.invalid_enum_value,
+        options: expectedValues
+      });
+      return INVALID3;
+    }
+    return OK3(input.data);
+  }
+  get enum() {
+    return this._def.values;
+  }
+};
+ZodNativeEnum3.create = (values, params) => {
+  return new ZodNativeEnum3({
+    values,
+    typeName: ZodFirstPartyTypeKind3.ZodNativeEnum,
+    ...processCreateParams3(params)
+  });
+};
+var ZodPromise3 = class extends ZodType3 {
+  unwrap() {
+    return this._def.type;
+  }
+  _parse(input) {
+    const { ctx } = this._processInputParams(input);
+    if (ctx.parsedType !== ZodParsedType3.promise && ctx.common.async === false) {
+      addIssueToContext3(ctx, {
+        code: ZodIssueCode3.invalid_type,
+        expected: ZodParsedType3.promise,
+        received: ctx.parsedType
+      });
+      return INVALID3;
+    }
+    const promisified = ctx.parsedType === ZodParsedType3.promise ? ctx.data : Promise.resolve(ctx.data);
+    return OK3(promisified.then((data) => {
+      return this._def.type.parseAsync(data, {
+        path: ctx.path,
+        errorMap: ctx.common.contextualErrorMap
+      });
+    }));
+  }
+};
+ZodPromise3.create = (schema, params) => {
+  return new ZodPromise3({
+    type: schema,
+    typeName: ZodFirstPartyTypeKind3.ZodPromise,
+    ...processCreateParams3(params)
+  });
+};
+var ZodEffects3 = class extends ZodType3 {
+  innerType() {
+    return this._def.schema;
+  }
+  sourceType() {
+    return this._def.schema._def.typeName === ZodFirstPartyTypeKind3.ZodEffects ? this._def.schema.sourceType() : this._def.schema;
+  }
+  _parse(input) {
+    const { status, ctx } = this._processInputParams(input);
+    const effect = this._def.effect || null;
+    const checkCtx = {
+      addIssue: (arg) => {
+        addIssueToContext3(ctx, arg);
+        if (arg.fatal) {
+          status.abort();
+        } else {
+          status.dirty();
+        }
+      },
+      get path() {
+        return ctx.path;
+      }
+    };
+    checkCtx.addIssue = checkCtx.addIssue.bind(checkCtx);
+    if (effect.type === "preprocess") {
+      const processed = effect.transform(ctx.data, checkCtx);
+      if (ctx.common.async) {
+        return Promise.resolve(processed).then(async (processed2) => {
+          if (status.value === "aborted")
+            return INVALID3;
+          const result = await this._def.schema._parseAsync({
+            data: processed2,
+            path: ctx.path,
+            parent: ctx
+          });
+          if (result.status === "aborted")
+            return INVALID3;
+          if (result.status === "dirty")
+            return DIRTY3(result.value);
+          if (status.value === "dirty")
+            return DIRTY3(result.value);
+          return result;
+        });
+      } else {
+        if (status.value === "aborted")
+          return INVALID3;
+        const result = this._def.schema._parseSync({
+          data: processed,
+          path: ctx.path,
+          parent: ctx
+        });
+        if (result.status === "aborted")
+          return INVALID3;
+        if (result.status === "dirty")
+          return DIRTY3(result.value);
+        if (status.value === "dirty")
+          return DIRTY3(result.value);
+        return result;
+      }
+    }
+    if (effect.type === "refinement") {
+      const executeRefinement = (acc) => {
+        const result = effect.refinement(acc, checkCtx);
+        if (ctx.common.async) {
+          return Promise.resolve(result);
+        }
+        if (result instanceof Promise) {
+          throw new Error("Async refinement encountered during synchronous parse operation. Use .parseAsync instead.");
+        }
+        return acc;
+      };
+      if (ctx.common.async === false) {
+        const inner = this._def.schema._parseSync({
+          data: ctx.data,
+          path: ctx.path,
+          parent: ctx
+        });
+        if (inner.status === "aborted")
+          return INVALID3;
+        if (inner.status === "dirty")
+          status.dirty();
+        executeRefinement(inner.value);
+        return { status: status.value, value: inner.value };
+      } else {
+        return this._def.schema._parseAsync({ data: ctx.data, path: ctx.path, parent: ctx }).then((inner) => {
+          if (inner.status === "aborted")
+            return INVALID3;
+          if (inner.status === "dirty")
+            status.dirty();
+          return executeRefinement(inner.value).then(() => {
+            return { status: status.value, value: inner.value };
+          });
+        });
+      }
+    }
+    if (effect.type === "transform") {
+      if (ctx.common.async === false) {
+        const base4 = this._def.schema._parseSync({
+          data: ctx.data,
+          path: ctx.path,
+          parent: ctx
+        });
+        if (!isValid3(base4))
+          return INVALID3;
+        const result = effect.transform(base4.value, checkCtx);
+        if (result instanceof Promise) {
+          throw new Error(`Asynchronous transform encountered during synchronous parse operation. Use .parseAsync instead.`);
+        }
+        return { status: status.value, value: result };
+      } else {
+        return this._def.schema._parseAsync({ data: ctx.data, path: ctx.path, parent: ctx }).then((base4) => {
+          if (!isValid3(base4))
+            return INVALID3;
+          return Promise.resolve(effect.transform(base4.value, checkCtx)).then((result) => ({
+            status: status.value,
+            value: result
+          }));
+        });
+      }
+    }
+    util3.assertNever(effect);
+  }
+};
+ZodEffects3.create = (schema, effect, params) => {
+  return new ZodEffects3({
+    schema,
+    typeName: ZodFirstPartyTypeKind3.ZodEffects,
+    effect,
+    ...processCreateParams3(params)
+  });
+};
+ZodEffects3.createWithPreprocess = (preprocess, schema, params) => {
+  return new ZodEffects3({
+    schema,
+    effect: { type: "preprocess", transform: preprocess },
+    typeName: ZodFirstPartyTypeKind3.ZodEffects,
+    ...processCreateParams3(params)
+  });
+};
+var ZodOptional3 = class extends ZodType3 {
+  _parse(input) {
+    const parsedType = this._getType(input);
+    if (parsedType === ZodParsedType3.undefined) {
+      return OK3(void 0);
+    }
+    return this._def.innerType._parse(input);
+  }
+  unwrap() {
+    return this._def.innerType;
+  }
+};
+ZodOptional3.create = (type, params) => {
+  return new ZodOptional3({
+    innerType: type,
+    typeName: ZodFirstPartyTypeKind3.ZodOptional,
+    ...processCreateParams3(params)
+  });
+};
+var ZodNullable3 = class extends ZodType3 {
+  _parse(input) {
+    const parsedType = this._getType(input);
+    if (parsedType === ZodParsedType3.null) {
+      return OK3(null);
+    }
+    return this._def.innerType._parse(input);
+  }
+  unwrap() {
+    return this._def.innerType;
+  }
+};
+ZodNullable3.create = (type, params) => {
+  return new ZodNullable3({
+    innerType: type,
+    typeName: ZodFirstPartyTypeKind3.ZodNullable,
+    ...processCreateParams3(params)
+  });
+};
+var ZodDefault3 = class extends ZodType3 {
+  _parse(input) {
+    const { ctx } = this._processInputParams(input);
+    let data = ctx.data;
+    if (ctx.parsedType === ZodParsedType3.undefined) {
+      data = this._def.defaultValue();
+    }
+    return this._def.innerType._parse({
+      data,
+      path: ctx.path,
+      parent: ctx
+    });
+  }
+  removeDefault() {
+    return this._def.innerType;
+  }
+};
+ZodDefault3.create = (type, params) => {
+  return new ZodDefault3({
+    innerType: type,
+    typeName: ZodFirstPartyTypeKind3.ZodDefault,
+    defaultValue: typeof params.default === "function" ? params.default : () => params.default,
+    ...processCreateParams3(params)
+  });
+};
+var ZodCatch3 = class extends ZodType3 {
+  _parse(input) {
+    const { ctx } = this._processInputParams(input);
+    const newCtx = {
+      ...ctx,
+      common: {
+        ...ctx.common,
+        issues: []
+      }
+    };
+    const result = this._def.innerType._parse({
+      data: newCtx.data,
+      path: newCtx.path,
+      parent: {
+        ...newCtx
+      }
+    });
+    if (isAsync3(result)) {
+      return result.then((result2) => {
+        return {
+          status: "valid",
+          value: result2.status === "valid" ? result2.value : this._def.catchValue({
+            get error() {
+              return new ZodError3(newCtx.common.issues);
+            },
+            input: newCtx.data
+          })
+        };
+      });
+    } else {
+      return {
+        status: "valid",
+        value: result.status === "valid" ? result.value : this._def.catchValue({
+          get error() {
+            return new ZodError3(newCtx.common.issues);
+          },
+          input: newCtx.data
+        })
+      };
+    }
+  }
+  removeCatch() {
+    return this._def.innerType;
+  }
+};
+ZodCatch3.create = (type, params) => {
+  return new ZodCatch3({
+    innerType: type,
+    typeName: ZodFirstPartyTypeKind3.ZodCatch,
+    catchValue: typeof params.catch === "function" ? params.catch : () => params.catch,
+    ...processCreateParams3(params)
+  });
+};
+var ZodNaN3 = class extends ZodType3 {
+  _parse(input) {
+    const parsedType = this._getType(input);
+    if (parsedType !== ZodParsedType3.nan) {
+      const ctx = this._getOrReturnCtx(input);
+      addIssueToContext3(ctx, {
+        code: ZodIssueCode3.invalid_type,
+        expected: ZodParsedType3.nan,
+        received: ctx.parsedType
+      });
+      return INVALID3;
+    }
+    return { status: "valid", value: input.data };
+  }
+};
+ZodNaN3.create = (params) => {
+  return new ZodNaN3({
+    typeName: ZodFirstPartyTypeKind3.ZodNaN,
+    ...processCreateParams3(params)
+  });
+};
+var BRAND3 = /* @__PURE__ */ Symbol("zod_brand");
+var ZodBranded3 = class extends ZodType3 {
+  _parse(input) {
+    const { ctx } = this._processInputParams(input);
+    const data = ctx.data;
+    return this._def.type._parse({
+      data,
+      path: ctx.path,
+      parent: ctx
+    });
+  }
+  unwrap() {
+    return this._def.type;
+  }
+};
+var ZodPipeline3 = class _ZodPipeline3 extends ZodType3 {
+  _parse(input) {
+    const { status, ctx } = this._processInputParams(input);
+    if (ctx.common.async) {
+      const handleAsync = async () => {
+        const inResult = await this._def.in._parseAsync({
+          data: ctx.data,
+          path: ctx.path,
+          parent: ctx
+        });
+        if (inResult.status === "aborted")
+          return INVALID3;
+        if (inResult.status === "dirty") {
+          status.dirty();
+          return DIRTY3(inResult.value);
+        } else {
+          return this._def.out._parseAsync({
+            data: inResult.value,
+            path: ctx.path,
+            parent: ctx
+          });
+        }
+      };
+      return handleAsync();
+    } else {
+      const inResult = this._def.in._parseSync({
+        data: ctx.data,
+        path: ctx.path,
+        parent: ctx
+      });
+      if (inResult.status === "aborted")
+        return INVALID3;
+      if (inResult.status === "dirty") {
+        status.dirty();
+        return {
+          status: "dirty",
+          value: inResult.value
+        };
+      } else {
+        return this._def.out._parseSync({
+          data: inResult.value,
+          path: ctx.path,
+          parent: ctx
+        });
+      }
+    }
+  }
+  static create(a, b) {
+    return new _ZodPipeline3({
+      in: a,
+      out: b,
+      typeName: ZodFirstPartyTypeKind3.ZodPipeline
+    });
+  }
+};
+var ZodReadonly3 = class extends ZodType3 {
+  _parse(input) {
+    const result = this._def.innerType._parse(input);
+    const freeze = (data) => {
+      if (isValid3(data)) {
+        data.value = Object.freeze(data.value);
+      }
+      return data;
+    };
+    return isAsync3(result) ? result.then((data) => freeze(data)) : freeze(result);
+  }
+  unwrap() {
+    return this._def.innerType;
+  }
+};
+ZodReadonly3.create = (type, params) => {
+  return new ZodReadonly3({
+    innerType: type,
+    typeName: ZodFirstPartyTypeKind3.ZodReadonly,
+    ...processCreateParams3(params)
+  });
+};
+function cleanParams3(params, data) {
+  const p = typeof params === "function" ? params(data) : typeof params === "string" ? { message: params } : params;
+  const p2 = typeof p === "string" ? { message: p } : p;
+  return p2;
+}
+function custom3(check, _params = {}, fatal) {
+  if (check)
+    return ZodAny3.create().superRefine((data, ctx) => {
+      const r = check(data);
+      if (r instanceof Promise) {
+        return r.then((r2) => {
+          if (!r2) {
+            const params = cleanParams3(_params, data);
+            const _fatal = params.fatal ?? fatal ?? true;
+            ctx.addIssue({ code: "custom", ...params, fatal: _fatal });
+          }
+        });
+      }
+      if (!r) {
+        const params = cleanParams3(_params, data);
+        const _fatal = params.fatal ?? fatal ?? true;
+        ctx.addIssue({ code: "custom", ...params, fatal: _fatal });
+      }
+      return;
+    });
+  return ZodAny3.create();
+}
+var late3 = {
+  object: ZodObject3.lazycreate
+};
+var ZodFirstPartyTypeKind3;
+(function(ZodFirstPartyTypeKind4) {
+  ZodFirstPartyTypeKind4["ZodString"] = "ZodString";
+  ZodFirstPartyTypeKind4["ZodNumber"] = "ZodNumber";
+  ZodFirstPartyTypeKind4["ZodNaN"] = "ZodNaN";
+  ZodFirstPartyTypeKind4["ZodBigInt"] = "ZodBigInt";
+  ZodFirstPartyTypeKind4["ZodBoolean"] = "ZodBoolean";
+  ZodFirstPartyTypeKind4["ZodDate"] = "ZodDate";
+  ZodFirstPartyTypeKind4["ZodSymbol"] = "ZodSymbol";
+  ZodFirstPartyTypeKind4["ZodUndefined"] = "ZodUndefined";
+  ZodFirstPartyTypeKind4["ZodNull"] = "ZodNull";
+  ZodFirstPartyTypeKind4["ZodAny"] = "ZodAny";
+  ZodFirstPartyTypeKind4["ZodUnknown"] = "ZodUnknown";
+  ZodFirstPartyTypeKind4["ZodNever"] = "ZodNever";
+  ZodFirstPartyTypeKind4["ZodVoid"] = "ZodVoid";
+  ZodFirstPartyTypeKind4["ZodArray"] = "ZodArray";
+  ZodFirstPartyTypeKind4["ZodObject"] = "ZodObject";
+  ZodFirstPartyTypeKind4["ZodUnion"] = "ZodUnion";
+  ZodFirstPartyTypeKind4["ZodDiscriminatedUnion"] = "ZodDiscriminatedUnion";
+  ZodFirstPartyTypeKind4["ZodIntersection"] = "ZodIntersection";
+  ZodFirstPartyTypeKind4["ZodTuple"] = "ZodTuple";
+  ZodFirstPartyTypeKind4["ZodRecord"] = "ZodRecord";
+  ZodFirstPartyTypeKind4["ZodMap"] = "ZodMap";
+  ZodFirstPartyTypeKind4["ZodSet"] = "ZodSet";
+  ZodFirstPartyTypeKind4["ZodFunction"] = "ZodFunction";
+  ZodFirstPartyTypeKind4["ZodLazy"] = "ZodLazy";
+  ZodFirstPartyTypeKind4["ZodLiteral"] = "ZodLiteral";
+  ZodFirstPartyTypeKind4["ZodEnum"] = "ZodEnum";
+  ZodFirstPartyTypeKind4["ZodEffects"] = "ZodEffects";
+  ZodFirstPartyTypeKind4["ZodNativeEnum"] = "ZodNativeEnum";
+  ZodFirstPartyTypeKind4["ZodOptional"] = "ZodOptional";
+  ZodFirstPartyTypeKind4["ZodNullable"] = "ZodNullable";
+  ZodFirstPartyTypeKind4["ZodDefault"] = "ZodDefault";
+  ZodFirstPartyTypeKind4["ZodCatch"] = "ZodCatch";
+  ZodFirstPartyTypeKind4["ZodPromise"] = "ZodPromise";
+  ZodFirstPartyTypeKind4["ZodBranded"] = "ZodBranded";
+  ZodFirstPartyTypeKind4["ZodPipeline"] = "ZodPipeline";
+  ZodFirstPartyTypeKind4["ZodReadonly"] = "ZodReadonly";
+})(ZodFirstPartyTypeKind3 || (ZodFirstPartyTypeKind3 = {}));
+var instanceOfType3 = (cls, params = {
+  message: `Input not instance of ${cls.name}`
+}) => custom3((data) => data instanceof cls, params);
+var stringType3 = ZodString3.create;
+var numberType3 = ZodNumber3.create;
+var nanType3 = ZodNaN3.create;
+var bigIntType3 = ZodBigInt3.create;
+var booleanType3 = ZodBoolean3.create;
+var dateType3 = ZodDate3.create;
+var symbolType3 = ZodSymbol3.create;
+var undefinedType3 = ZodUndefined3.create;
+var nullType3 = ZodNull3.create;
+var anyType3 = ZodAny3.create;
+var unknownType3 = ZodUnknown3.create;
+var neverType3 = ZodNever3.create;
+var voidType3 = ZodVoid3.create;
+var arrayType3 = ZodArray3.create;
+var objectType3 = ZodObject3.create;
+var strictObjectType3 = ZodObject3.strictCreate;
+var unionType3 = ZodUnion3.create;
+var discriminatedUnionType3 = ZodDiscriminatedUnion3.create;
+var intersectionType3 = ZodIntersection3.create;
+var tupleType3 = ZodTuple3.create;
+var recordType3 = ZodRecord3.create;
+var mapType3 = ZodMap3.create;
+var setType3 = ZodSet3.create;
+var functionType3 = ZodFunction3.create;
+var lazyType3 = ZodLazy3.create;
+var literalType3 = ZodLiteral3.create;
+var enumType3 = ZodEnum3.create;
+var nativeEnumType3 = ZodNativeEnum3.create;
+var promiseType3 = ZodPromise3.create;
+var effectsType3 = ZodEffects3.create;
+var optionalType3 = ZodOptional3.create;
+var nullableType3 = ZodNullable3.create;
+var preprocessType3 = ZodEffects3.createWithPreprocess;
+var pipelineType3 = ZodPipeline3.create;
+var ostring3 = () => stringType3().optional();
+var onumber3 = () => numberType3().optional();
+var oboolean3 = () => booleanType3().optional();
+var coerce4 = {
+  string: ((arg) => ZodString3.create({ ...arg, coerce: true })),
+  number: ((arg) => ZodNumber3.create({ ...arg, coerce: true })),
+  boolean: ((arg) => ZodBoolean3.create({
+    ...arg,
+    coerce: true
+  })),
+  bigint: ((arg) => ZodBigInt3.create({ ...arg, coerce: true })),
+  date: ((arg) => ZodDate3.create({ ...arg, coerce: true }))
+};
+var NEVER3 = INVALID3;
+
+// ../share-envelope/dist/index.js
+var empty3 = new Uint8Array(0);
+function equals5(aa, bb) {
+  if (aa === bb) {
+    return true;
+  }
+  if (aa.byteLength !== bb.byteLength) {
+    return false;
+  }
+  for (let ii = 0; ii < aa.byteLength; ii++) {
+    if (aa[ii] !== bb[ii]) {
+      return false;
+    }
+  }
+  return true;
+}
+function coerce5(o) {
+  if (o instanceof Uint8Array && o.constructor.name === "Uint8Array") {
+    return o;
+  }
+  if (o instanceof ArrayBuffer) {
+    return new Uint8Array(o);
+  }
+  if (ArrayBuffer.isView(o)) {
+    return new Uint8Array(o.buffer, o.byteOffset, o.byteLength);
+  }
+  throw new Error("Unknown type, must be binary type");
+}
+function base3(ALPHABET, name) {
+  if (ALPHABET.length >= 255) {
+    throw new TypeError("Alphabet too long");
+  }
+  var BASE_MAP = new Uint8Array(256);
+  for (var j = 0; j < BASE_MAP.length; j++) {
+    BASE_MAP[j] = 255;
+  }
+  for (var i = 0; i < ALPHABET.length; i++) {
+    var x = ALPHABET.charAt(i);
+    var xc = x.charCodeAt(0);
+    if (BASE_MAP[xc] !== 255) {
+      throw new TypeError(x + " is ambiguous");
+    }
+    BASE_MAP[xc] = i;
+  }
+  var BASE = ALPHABET.length;
+  var LEADER = ALPHABET.charAt(0);
+  var FACTOR = Math.log(BASE) / Math.log(256);
+  var iFACTOR = Math.log(256) / Math.log(BASE);
+  function encode33(source) {
+    if (source instanceof Uint8Array)
+      ;
+    else if (ArrayBuffer.isView(source)) {
+      source = new Uint8Array(source.buffer, source.byteOffset, source.byteLength);
+    } else if (Array.isArray(source)) {
+      source = Uint8Array.from(source);
+    }
+    if (!(source instanceof Uint8Array)) {
+      throw new TypeError("Expected Uint8Array");
+    }
+    if (source.length === 0) {
+      return "";
+    }
+    var zeroes = 0;
+    var length23 = 0;
+    var pbegin = 0;
+    var pend = source.length;
+    while (pbegin !== pend && source[pbegin] === 0) {
+      pbegin++;
+      zeroes++;
+    }
+    var size = (pend - pbegin) * iFACTOR + 1 >>> 0;
+    var b58 = new Uint8Array(size);
+    while (pbegin !== pend) {
+      var carry = source[pbegin];
+      var i2 = 0;
+      for (var it1 = size - 1; (carry !== 0 || i2 < length23) && it1 !== -1; it1--, i2++) {
+        carry += 256 * b58[it1] >>> 0;
+        b58[it1] = carry % BASE >>> 0;
+        carry = carry / BASE >>> 0;
+      }
+      if (carry !== 0) {
+        throw new Error("Non-zero carry");
+      }
+      length23 = i2;
+      pbegin++;
+    }
+    var it2 = size - length23;
+    while (it2 !== size && b58[it2] === 0) {
+      it2++;
+    }
+    var str = LEADER.repeat(zeroes);
+    for (; it2 < size; ++it2) {
+      str += ALPHABET.charAt(b58[it2]);
+    }
+    return str;
+  }
+  function decodeUnsafe(source) {
+    if (typeof source !== "string") {
+      throw new TypeError("Expected String");
+    }
+    if (source.length === 0) {
+      return new Uint8Array();
+    }
+    var psz = 0;
+    if (source[psz] === " ") {
+      return;
+    }
+    var zeroes = 0;
+    var length23 = 0;
+    while (source[psz] === LEADER) {
+      zeroes++;
+      psz++;
+    }
+    var size = (source.length - psz) * FACTOR + 1 >>> 0;
+    var b256 = new Uint8Array(size);
+    while (source[psz]) {
+      var carry = BASE_MAP[source.charCodeAt(psz)];
+      if (carry === 255) {
+        return;
+      }
+      var i2 = 0;
+      for (var it3 = size - 1; (carry !== 0 || i2 < length23) && it3 !== -1; it3--, i2++) {
+        carry += BASE * b256[it3] >>> 0;
+        b256[it3] = carry % 256 >>> 0;
+        carry = carry / 256 >>> 0;
+      }
+      if (carry !== 0) {
+        throw new Error("Non-zero carry");
+      }
+      length23 = i2;
+      psz++;
+    }
+    if (source[psz] === " ") {
+      return;
+    }
+    var it4 = size - length23;
+    while (it4 !== size && b256[it4] === 0) {
+      it4++;
+    }
+    var vch = new Uint8Array(zeroes + (size - it4));
+    var j2 = zeroes;
+    while (it4 !== size) {
+      vch[j2++] = b256[it4++];
+    }
+    return vch;
+  }
+  function decode53(string) {
+    var buffer = decodeUnsafe(string);
+    if (buffer) {
+      return buffer;
+    }
+    throw new Error(`Non-${name} character`);
+  }
+  return {
+    encode: encode33,
+    decodeUnsafe,
+    decode: decode53
+  };
+}
+var src3 = base3;
+var _brrp__multiformats_scope_baseX3 = src3;
+var base_x_default3 = _brrp__multiformats_scope_baseX3;
+var Encoder3 = class {
+  name;
+  prefix;
+  baseEncode;
+  constructor(name, prefix, baseEncode) {
+    this.name = name;
+    this.prefix = prefix;
+    this.baseEncode = baseEncode;
+  }
+  encode(bytes) {
+    if (bytes instanceof Uint8Array) {
+      return `${this.prefix}${this.baseEncode(bytes)}`;
+    } else {
+      throw Error("Unknown type, must be binary type");
+    }
+  }
+};
+var Decoder3 = class {
+  name;
+  prefix;
+  baseDecode;
+  prefixCodePoint;
+  constructor(name, prefix, baseDecode) {
+    this.name = name;
+    this.prefix = prefix;
+    const prefixCodePoint = prefix.codePointAt(0);
+    if (prefixCodePoint === void 0) {
+      throw new Error("Invalid prefix character");
+    }
+    this.prefixCodePoint = prefixCodePoint;
+    this.baseDecode = baseDecode;
+  }
+  decode(text) {
+    if (typeof text === "string") {
+      if (text.codePointAt(0) !== this.prefixCodePoint) {
+        throw Error(`Unable to decode multibase string ${JSON.stringify(text)}, ${this.name} decoder only supports inputs prefixed with ${this.prefix}`);
+      }
+      return this.baseDecode(text.slice(this.prefix.length));
+    } else {
+      throw Error("Can only multibase decode strings");
+    }
+  }
+  or(decoder) {
+    return or3(this, decoder);
+  }
+};
+var ComposedDecoder3 = class {
+  decoders;
+  constructor(decoders) {
+    this.decoders = decoders;
+  }
+  or(decoder) {
+    return or3(this, decoder);
+  }
+  decode(input) {
+    const prefix = input[0];
+    const decoder = this.decoders[prefix];
+    if (decoder != null) {
+      return decoder.decode(input);
+    } else {
+      throw RangeError(`Unable to decode multibase string ${JSON.stringify(input)}, only inputs prefixed with ${Object.keys(this.decoders)} are supported`);
+    }
+  }
+};
+function or3(left, right) {
+  return new ComposedDecoder3({
+    ...left.decoders ?? { [left.prefix]: left },
+    ...right.decoders ?? { [right.prefix]: right }
+  });
+}
+var Codec3 = class {
+  name;
+  prefix;
+  baseEncode;
+  baseDecode;
+  encoder;
+  decoder;
+  constructor(name, prefix, baseEncode, baseDecode) {
+    this.name = name;
+    this.prefix = prefix;
+    this.baseEncode = baseEncode;
+    this.baseDecode = baseDecode;
+    this.encoder = new Encoder3(name, prefix, baseEncode);
+    this.decoder = new Decoder3(name, prefix, baseDecode);
+  }
+  encode(input) {
+    return this.encoder.encode(input);
+  }
+  decode(input) {
+    return this.decoder.decode(input);
+  }
+};
+function from3({ name, prefix, encode: encode33, decode: decode53 }) {
+  return new Codec3(name, prefix, encode33, decode53);
+}
+function baseX3({ name, prefix, alphabet }) {
+  const { encode: encode33, decode: decode53 } = base_x_default3(alphabet, name);
+  return from3({
+    prefix,
+    name,
+    encode: encode33,
+    decode: (text) => coerce5(decode53(text))
+  });
+}
+function decode9(string, alphabetIdx, bitsPerChar, name) {
+  let end = string.length;
+  while (string[end - 1] === "=") {
+    --end;
+  }
+  const out = new Uint8Array(end * bitsPerChar / 8 | 0);
+  let bits = 0;
+  let buffer = 0;
+  let written = 0;
+  for (let i = 0; i < end; ++i) {
+    const value = alphabetIdx[string[i]];
+    if (value === void 0) {
+      throw new SyntaxError(`Non-${name} character`);
+    }
+    buffer = buffer << bitsPerChar | value;
+    bits += bitsPerChar;
+    if (bits >= 8) {
+      bits -= 8;
+      out[written++] = 255 & buffer >> bits;
+    }
+  }
+  if (bits >= bitsPerChar || (255 & buffer << 8 - bits) !== 0) {
+    throw new SyntaxError("Unexpected end of data");
+  }
+  return out;
+}
+function encode5(data, alphabet, bitsPerChar) {
+  const pad = alphabet[alphabet.length - 1] === "=";
+  const mask = (1 << bitsPerChar) - 1;
+  let out = "";
+  let bits = 0;
+  let buffer = 0;
+  for (let i = 0; i < data.length; ++i) {
+    buffer = buffer << 8 | data[i];
+    bits += 8;
+    while (bits > bitsPerChar) {
+      bits -= bitsPerChar;
+      out += alphabet[mask & buffer >> bits];
+    }
+  }
+  if (bits !== 0) {
+    out += alphabet[mask & buffer << bitsPerChar - bits];
+  }
+  if (pad) {
+    while ((out.length * bitsPerChar & 7) !== 0) {
+      out += "=";
+    }
+  }
+  return out;
+}
+function createAlphabetIdx3(alphabet) {
+  const alphabetIdx = {};
+  for (let i = 0; i < alphabet.length; ++i) {
+    alphabetIdx[alphabet[i]] = i;
+  }
+  return alphabetIdx;
+}
+function rfc46483({ name, prefix, bitsPerChar, alphabet }) {
+  const alphabetIdx = createAlphabetIdx3(alphabet);
+  return from3({
+    prefix,
+    name,
+    encode(input) {
+      return encode5(input, alphabet, bitsPerChar);
+    },
+    decode(input) {
+      return decode9(input, alphabetIdx, bitsPerChar, name);
+    }
+  });
+}
+var base323 = rfc46483({
+  prefix: "b",
+  name: "base32",
+  alphabet: "abcdefghijklmnopqrstuvwxyz234567",
+  bitsPerChar: 5
+});
+var base32upper3 = rfc46483({
+  prefix: "B",
+  name: "base32upper",
+  alphabet: "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567",
+  bitsPerChar: 5
+});
+var base32pad3 = rfc46483({
+  prefix: "c",
+  name: "base32pad",
+  alphabet: "abcdefghijklmnopqrstuvwxyz234567=",
+  bitsPerChar: 5
+});
+var base32padupper3 = rfc46483({
+  prefix: "C",
+  name: "base32padupper",
+  alphabet: "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567=",
+  bitsPerChar: 5
+});
+var base32hex3 = rfc46483({
+  prefix: "v",
+  name: "base32hex",
+  alphabet: "0123456789abcdefghijklmnopqrstuv",
+  bitsPerChar: 5
+});
+var base32hexupper3 = rfc46483({
+  prefix: "V",
+  name: "base32hexupper",
+  alphabet: "0123456789ABCDEFGHIJKLMNOPQRSTUV",
+  bitsPerChar: 5
+});
+var base32hexpad3 = rfc46483({
+  prefix: "t",
+  name: "base32hexpad",
+  alphabet: "0123456789abcdefghijklmnopqrstuv=",
+  bitsPerChar: 5
+});
+var base32hexpadupper3 = rfc46483({
+  prefix: "T",
+  name: "base32hexpadupper",
+  alphabet: "0123456789ABCDEFGHIJKLMNOPQRSTUV=",
+  bitsPerChar: 5
+});
+var base32z3 = rfc46483({
+  prefix: "h",
+  name: "base32z",
+  alphabet: "ybndrfg8ejkmcpqxot1uwisza345h769",
+  bitsPerChar: 5
+});
+var base363 = baseX3({
+  prefix: "k",
+  name: "base36",
+  alphabet: "0123456789abcdefghijklmnopqrstuvwxyz"
+});
+var base36upper3 = baseX3({
+  prefix: "K",
+  name: "base36upper",
+  alphabet: "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+});
+var base58btc3 = baseX3({
+  name: "base58btc",
+  prefix: "z",
+  alphabet: "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
+});
+var base58flickr3 = baseX3({
+  name: "base58flickr",
+  prefix: "Z",
+  alphabet: "123456789abcdefghijkmnopqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ"
+});
+var encode_13 = encode23;
+var MSB3 = 128;
+var REST3 = 127;
+var MSBALL3 = ~REST3;
+var INT3 = Math.pow(2, 31);
+function encode23(num, out, offset) {
+  out = out || [];
+  offset = offset || 0;
+  var oldOffset = offset;
+  while (num >= INT3) {
+    out[offset++] = num & 255 | MSB3;
+    num /= 128;
+  }
+  while (num & MSBALL3) {
+    out[offset++] = num & 255 | MSB3;
+    num >>>= 7;
+  }
+  out[offset] = num | 0;
+  encode23.bytes = offset - oldOffset + 1;
+  return out;
+}
+var decode23 = read3;
+var MSB$13 = 128;
+var REST$13 = 127;
+function read3(buf, offset) {
+  var res = 0, offset = offset || 0, shift = 0, counter = offset, b, l = buf.length;
+  do {
+    if (counter >= l) {
+      read3.bytes = 0;
+      throw new RangeError("Could not decode varint");
+    }
+    b = buf[counter++];
+    res += shift < 28 ? (b & REST$13) << shift : (b & REST$13) * Math.pow(2, shift);
+    shift += 7;
+  } while (b >= MSB$13);
+  read3.bytes = counter - offset;
+  return res;
+}
+var N13 = Math.pow(2, 7);
+var N23 = Math.pow(2, 14);
+var N33 = Math.pow(2, 21);
+var N43 = Math.pow(2, 28);
+var N53 = Math.pow(2, 35);
+var N63 = Math.pow(2, 42);
+var N73 = Math.pow(2, 49);
+var N83 = Math.pow(2, 56);
+var N93 = Math.pow(2, 63);
+var length3 = function(value) {
+  return value < N13 ? 1 : value < N23 ? 2 : value < N33 ? 3 : value < N43 ? 4 : value < N53 ? 5 : value < N63 ? 6 : value < N73 ? 7 : value < N83 ? 8 : value < N93 ? 9 : 10;
+};
+var varint3 = {
+  encode: encode_13,
+  decode: decode23,
+  encodingLength: length3
+};
+var _brrp_varint3 = varint3;
+var varint_default3 = _brrp_varint3;
+function decode33(data, offset = 0) {
+  const code22 = varint_default3.decode(data, offset);
+  return [code22, varint_default3.decode.bytes];
+}
+function encodeTo3(int, target, offset = 0) {
+  varint_default3.encode(int, target, offset);
+  return target;
+}
+function encodingLength3(int) {
+  return varint_default3.encodingLength(int);
+}
+function create3(code22, digest) {
+  const size = digest.byteLength;
+  const sizeOffset = encodingLength3(code22);
+  const digestOffset = sizeOffset + encodingLength3(size);
+  const bytes = new Uint8Array(digestOffset + size);
+  encodeTo3(code22, bytes, 0);
+  encodeTo3(size, bytes, sizeOffset);
+  bytes.set(digest, digestOffset);
+  return new Digest3(code22, size, digest, bytes);
+}
+function decode43(multihash) {
+  const bytes = coerce5(multihash);
+  const [code22, sizeOffset] = decode33(bytes);
+  const [size, digestOffset] = decode33(bytes.subarray(sizeOffset));
+  const digest = bytes.subarray(sizeOffset + digestOffset);
+  if (digest.byteLength !== size) {
+    throw new Error("Incorrect length");
+  }
+  return new Digest3(code22, size, digest, bytes);
+}
+function equals23(a, b) {
+  if (a === b) {
+    return true;
+  } else {
+    const data = b;
+    return a.code === data.code && a.size === data.size && data.bytes instanceof Uint8Array && equals5(a.bytes, data.bytes);
+  }
+}
+var Digest3 = class {
+  code;
+  size;
+  digest;
+  bytes;
+  /**
+   * Creates a multihash digest.
+   */
+  constructor(code22, size, digest, bytes) {
+    this.code = code22;
+    this.size = size;
+    this.digest = digest;
+    this.bytes = bytes;
+  }
+};
+function format3(link3, base23) {
+  const { bytes, version: version2 } = link3;
+  switch (version2) {
+    case 0:
+      return toStringV03(bytes, baseCache3(link3), base23 ?? base58btc3.encoder);
+    default:
+      return toStringV13(bytes, baseCache3(link3), base23 ?? base323.encoder);
+  }
+}
+var cache3 = /* @__PURE__ */ new WeakMap();
+function baseCache3(cid) {
+  const baseCache23 = cache3.get(cid);
+  if (baseCache23 == null) {
+    const baseCache32 = /* @__PURE__ */ new Map();
+    cache3.set(cid, baseCache32);
+    return baseCache32;
+  }
+  return baseCache23;
+}
+var CID3 = class _CID3 {
+  code;
+  version;
+  multihash;
+  bytes;
+  "/";
+  /**
+   * @param version - Version of the CID
+   * @param code - Code of the codec content is encoded in, see https://github.com/multiformats/multicodec/blob/master/table.csv
+   * @param multihash - (Multi)hash of the of the content.
+   */
+  constructor(version2, code22, multihash, bytes) {
+    this.code = code22;
+    this.version = version2;
+    this.multihash = multihash;
+    this.bytes = bytes;
+    this["/"] = bytes;
+  }
+  /**
+   * Signalling `cid.asCID === cid` has been replaced with `cid['/'] === cid.bytes`
+   * please either use `CID.asCID(cid)` or switch to new signalling mechanism
+   *
+   * @deprecated
+   */
+  get asCID() {
+    return this;
+  }
+  // ArrayBufferView
+  get byteOffset() {
+    return this.bytes.byteOffset;
+  }
+  // ArrayBufferView
+  get byteLength() {
+    return this.bytes.byteLength;
+  }
+  toV0() {
+    switch (this.version) {
+      case 0: {
+        return this;
+      }
+      case 1: {
+        const { code: code22, multihash } = this;
+        if (code22 !== DAG_PB_CODE3) {
+          throw new Error("Cannot convert a non dag-pb CID to CIDv0");
+        }
+        if (multihash.code !== SHA_256_CODE3) {
+          throw new Error("Cannot convert non sha2-256 multihash CID to CIDv0");
+        }
+        return _CID3.createV0(multihash);
+      }
+      default: {
+        throw Error(`Can not convert CID version ${this.version} to version 0. This is a bug please report`);
+      }
+    }
+  }
+  toV1() {
+    switch (this.version) {
+      case 0: {
+        const { code: code22, digest } = this.multihash;
+        const multihash = create3(code22, digest);
+        return _CID3.createV1(this.code, multihash);
+      }
+      case 1: {
+        return this;
+      }
+      default: {
+        throw Error(`Can not convert CID version ${this.version} to version 1. This is a bug please report`);
+      }
+    }
+  }
+  equals(other) {
+    return _CID3.equals(this, other);
+  }
+  static equals(self, other) {
+    const unknown = other;
+    return unknown != null && self.code === unknown.code && self.version === unknown.version && equals23(self.multihash, unknown.multihash);
+  }
+  toString(base23) {
+    return format3(this, base23);
+  }
+  toJSON() {
+    return { "/": format3(this) };
+  }
+  link() {
+    return this;
+  }
+  [Symbol.toStringTag] = "CID";
+  // Legacy
+  [/* @__PURE__ */ Symbol.for("nodejs.util.inspect.custom")]() {
+    return `CID(${this.toString()})`;
+  }
+  /**
+   * Takes any input `value` and returns a `CID` instance if it was
+   * a `CID` otherwise returns `null`. If `value` is instanceof `CID`
+   * it will return value back. If `value` is not instance of this CID
+   * class, but is compatible CID it will return new instance of this
+   * `CID` class. Otherwise returns null.
+   *
+   * This allows two different incompatible versions of CID library to
+   * co-exist and interop as long as binary interface is compatible.
+   */
+  static asCID(input) {
+    if (input == null) {
+      return null;
+    }
+    const value = input;
+    if (value instanceof _CID3) {
+      return value;
+    } else if (value["/"] != null && value["/"] === value.bytes || value.asCID === value) {
+      const { version: version2, code: code22, multihash, bytes } = value;
+      return new _CID3(version2, code22, multihash, bytes ?? encodeCID3(version2, code22, multihash.bytes));
+    } else if (value[cidSymbol3] === true) {
+      const { version: version2, multihash, code: code22 } = value;
+      const digest = decode43(multihash);
+      return _CID3.create(version2, code22, digest);
+    } else {
+      return null;
+    }
+  }
+  /**
+   * @param version - Version of the CID
+   * @param code - Code of the codec content is encoded in, see https://github.com/multiformats/multicodec/blob/master/table.csv
+   * @param digest - (Multi)hash of the of the content.
+   */
+  static create(version2, code22, digest) {
+    if (typeof code22 !== "number") {
+      throw new Error("String codecs are no longer supported");
+    }
+    if (!(digest.bytes instanceof Uint8Array)) {
+      throw new Error("Invalid digest");
+    }
+    switch (version2) {
+      case 0: {
+        if (code22 !== DAG_PB_CODE3) {
+          throw new Error(`Version 0 CID must use dag-pb (code: ${DAG_PB_CODE3}) block encoding`);
+        } else {
+          return new _CID3(version2, code22, digest, digest.bytes);
+        }
+      }
+      case 1: {
+        const bytes = encodeCID3(version2, code22, digest.bytes);
+        return new _CID3(version2, code22, digest, bytes);
+      }
+      default: {
+        throw new Error("Invalid version");
+      }
+    }
+  }
+  /**
+   * Simplified version of `create` for CIDv0.
+   */
+  static createV0(digest) {
+    return _CID3.create(0, DAG_PB_CODE3, digest);
+  }
+  /**
+   * Simplified version of `create` for CIDv1.
+   *
+   * @param code - Content encoding format code.
+   * @param digest - Multihash of the content.
+   */
+  static createV1(code22, digest) {
+    return _CID3.create(1, code22, digest);
+  }
+  /**
+   * Decoded a CID from its binary representation. The byte array must contain
+   * only the CID with no additional bytes.
+   *
+   * An error will be thrown if the bytes provided do not contain a valid
+   * binary representation of a CID.
+   */
+  static decode(bytes) {
+    const [cid, remainder] = _CID3.decodeFirst(bytes);
+    if (remainder.length !== 0) {
+      throw new Error("Incorrect length");
+    }
+    return cid;
+  }
+  /**
+   * Decoded a CID from its binary representation at the beginning of a byte
+   * array.
+   *
+   * Returns an array with the first element containing the CID and the second
+   * element containing the remainder of the original byte array. The remainder
+   * will be a zero-length byte array if the provided bytes only contained a
+   * binary CID representation.
+   */
+  static decodeFirst(bytes) {
+    const specs = _CID3.inspectBytes(bytes);
+    const prefixSize = specs.size - specs.multihashSize;
+    const multihashBytes = coerce5(bytes.subarray(prefixSize, prefixSize + specs.multihashSize));
+    if (multihashBytes.byteLength !== specs.multihashSize) {
+      throw new Error("Incorrect length");
+    }
+    const digestBytes = multihashBytes.subarray(specs.multihashSize - specs.digestSize);
+    const digest = new Digest3(specs.multihashCode, specs.digestSize, digestBytes, multihashBytes);
+    const cid = specs.version === 0 ? _CID3.createV0(digest) : _CID3.createV1(specs.codec, digest);
+    return [cid, bytes.subarray(specs.size)];
+  }
+  /**
+   * Inspect the initial bytes of a CID to determine its properties.
+   *
+   * Involves decoding up to 4 varints. Typically this will require only 4 to 6
+   * bytes but for larger multicodec code values and larger multihash digest
+   * lengths these varints can be quite large. It is recommended that at least
+   * 10 bytes be made available in the `initialBytes` argument for a complete
+   * inspection.
+   */
+  static inspectBytes(initialBytes) {
+    let offset = 0;
+    const next = () => {
+      const [i, length23] = decode33(initialBytes.subarray(offset));
+      offset += length23;
+      return i;
+    };
+    let version2 = next();
+    let codec = DAG_PB_CODE3;
+    if (version2 === 18) {
+      version2 = 0;
+      offset = 0;
+    } else {
+      codec = next();
+    }
+    if (version2 !== 0 && version2 !== 1) {
+      throw new RangeError(`Invalid CID version ${version2}`);
+    }
+    const prefixSize = offset;
+    const multihashCode = next();
+    const digestSize = next();
+    const size = offset + digestSize;
+    const multihashSize = size - prefixSize;
+    return { version: version2, codec, multihashCode, digestSize, multihashSize, size };
+  }
+  /**
+   * Takes cid in a string representation and creates an instance. If `base`
+   * decoder is not provided will use a default from the configuration. It will
+   * throw an error if encoding of the CID is not compatible with supplied (or
+   * a default decoder).
+   */
+  static parse(source, base23) {
+    const [prefix, bytes] = parseCIDtoBytes3(source, base23);
+    const cid = _CID3.decode(bytes);
+    if (cid.version === 0 && source[0] !== "Q") {
+      throw Error("Version 0 CID string must not include multibase prefix");
+    }
+    baseCache3(cid).set(prefix, source);
+    return cid;
+  }
+};
+function parseCIDtoBytes3(source, base23) {
+  switch (source[0]) {
+    // CIDv0 is parsed differently
+    case "Q": {
+      const decoder = base23 ?? base58btc3;
+      return [
+        base58btc3.prefix,
+        decoder.decode(`${base58btc3.prefix}${source}`)
+      ];
+    }
+    case base58btc3.prefix: {
+      const decoder = base23 ?? base58btc3;
+      return [base58btc3.prefix, decoder.decode(source)];
+    }
+    case base323.prefix: {
+      const decoder = base23 ?? base323;
+      return [base323.prefix, decoder.decode(source)];
+    }
+    case base363.prefix: {
+      const decoder = base23 ?? base363;
+      return [base363.prefix, decoder.decode(source)];
+    }
+    default: {
+      if (base23 == null) {
+        throw Error("To parse non base32, base36 or base58btc encoded CID multibase decoder must be provided");
+      }
+      return [source[0], base23.decode(source)];
+    }
+  }
+}
+function toStringV03(bytes, cache23, base23) {
+  const { prefix } = base23;
+  if (prefix !== base58btc3.prefix) {
+    throw Error(`Cannot string encode V0 in ${base23.name} encoding`);
+  }
+  const cid = cache23.get(prefix);
+  if (cid == null) {
+    const cid2 = base23.encode(bytes).slice(1);
+    cache23.set(prefix, cid2);
+    return cid2;
+  } else {
+    return cid;
+  }
+}
+function toStringV13(bytes, cache23, base23) {
+  const { prefix } = base23;
+  const cid = cache23.get(prefix);
+  if (cid == null) {
+    const cid2 = base23.encode(bytes);
+    cache23.set(prefix, cid2);
+    return cid2;
+  } else {
+    return cid;
+  }
+}
+var DAG_PB_CODE3 = 112;
+var SHA_256_CODE3 = 18;
+function encodeCID3(version2, code22, multihash) {
+  const codeOffset = encodingLength3(version2);
+  const hashOffset = codeOffset + encodingLength3(code22);
+  const bytes = new Uint8Array(hashOffset + multihash.byteLength);
+  encodeTo3(version2, bytes, 0);
+  encodeTo3(code22, bytes, codeOffset);
+  bytes.set(multihash, hashOffset);
+  return bytes;
+}
+var cidSymbol3 = /* @__PURE__ */ Symbol.for("@ipld/js-cid/CID");
+var code3 = 85;
+var SHA256_CODE3 = 18;
+function isCanonicalRawCid3(cidString) {
+  let cid;
+  try {
+    cid = CID3.parse(cidString);
+  } catch {
+    return false;
+  }
+  return cid.version === 1 && cid.code === code3 && cid.multihash.code === SHA256_CODE3 && cid.toString() === cidString;
+}
+var base643 = rfc46483({
+  prefix: "m",
+  name: "base64",
+  alphabet: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/",
+  bitsPerChar: 6
+});
+var base64pad3 = rfc46483({
+  prefix: "M",
+  name: "base64pad",
+  alphabet: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=",
+  bitsPerChar: 6
+});
+var base64url3 = rfc46483({
+  prefix: "u",
+  name: "base64url",
+  alphabet: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_",
+  bitsPerChar: 6
+});
+var base64urlpad3 = rfc46483({
+  prefix: "U",
+  name: "base64urlpad",
+  alphabet: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_=",
+  bitsPerChar: 6
+});
+function fromBase64Url3(text) {
+  const bytes = base64url3.baseDecode(text);
+  if (base64url3.baseEncode(bytes) !== text) {
+    throw new TypeError("non-canonical base64url input");
+  }
+  return bytes;
+}
+function utf8Bytes3(text) {
+  return new TextEncoder().encode(text);
+}
+var ED25519_MULTICODEC_PREFIX3 = Uint8Array.of(237, 1);
+function decodeBase64UrlOrNull3(value) {
+  try {
+    return fromBase64Url3(value);
+  } catch {
+    return null;
+  }
+}
+var base64UrlString3 = () => external_exports3.string().refine((value) => decodeBase64UrlOrNull3(value) !== null, {
+  message: "expected strictly-decodable unpadded base64url"
+});
+function isCanonicalHttpsOrigin3(value) {
+  let url;
+  try {
+    url = new URL(value);
+  } catch {
+    return false;
+  }
+  return url.protocol === "https:" && url.origin === value;
+}
+var sessionJwkCommonFields3 = {
+  alg: external_exports3.string().min(1).optional(),
+  use: external_exports3.string().min(1).optional(),
+  key_ops: external_exports3.array(external_exports3.string().min(1)).optional(),
+  kid: external_exports3.string().min(1).optional(),
+  ext: external_exports3.boolean().optional()
+};
+var okpPrivateJwkSchema3 = external_exports3.object({
+  kty: external_exports3.literal("OKP"),
+  crv: external_exports3.string().min(1),
+  x: base64UrlString3(),
+  d: base64UrlString3(),
+  ...sessionJwkCommonFields3
+}).strict();
+var ecPrivateJwkSchema3 = external_exports3.object({
+  kty: external_exports3.literal("EC"),
+  crv: external_exports3.string().min(1),
+  x: base64UrlString3(),
+  y: base64UrlString3(),
+  d: base64UrlString3(),
+  ...sessionJwkCommonFields3
+}).strict();
+var sessionJwkSchema3 = external_exports3.discriminatedUnion("kty", [
+  okpPrivateJwkSchema3,
+  ecPrivateJwkSchema3
+]);
+var policyTargetSchema3 = external_exports3.object({
+  kind: external_exports3.literal("policy"),
+  policyCid: external_exports3.string().min(1),
+  /** Canonical policy bytes, base64url-encoded (bytes are not JSON). */
+  policyBytes: base64UrlString3()
+}).strict();
+var bearerKeyTargetSchema3 = external_exports3.object({
+  kind: external_exports3.literal("bearerKey"),
+  sessionJwk: sessionJwkSchema3
+}).strict();
+var recipientDidTargetSchema3 = external_exports3.object({
+  kind: external_exports3.literal("recipientDid"),
+  did: external_exports3.string().regex(/^did:[a-z0-9]+:.+$/, "expected a DID")
+}).strict();
+var authorizationTargetSchema3 = external_exports3.discriminatedUnion("kind", [
+  policyTargetSchema3,
+  bearerKeyTargetSchema3,
+  recipientDidTargetSchema3
+]);
+function isCanonicalResourcePath3(value) {
+  if (value.length === 0) return false;
+  if (/[\u0000-\u001f\u007f\\]/.test(value)) return false;
+  if (/%2f|%5c|%2e/i.test(value)) return false;
+  return value.split("/").every((segment) => segment.length > 0 && segment !== "." && segment !== "..");
+}
+function isCanonicalPathSegment3(value) {
+  return isCanonicalResourcePath3(value) && !value.includes("/");
+}
+var resourceSelectorSchema3 = external_exports3.object({
+  kind: external_exports3.union([external_exports3.literal("exact"), external_exports3.literal("prefix")]),
+  path: external_exports3.string().min(1)
+}).strict().superRefine((selector, ctx) => {
+  const body = selector.kind === "prefix" && selector.path.endsWith("/") ? selector.path.slice(0, -1) : selector.path;
+  if (!isCanonicalResourcePath3(body)) {
+    ctx.addIssue({
+      code: external_exports3.ZodIssueCode.custom,
+      path: ["path"],
+      message: "expected a canonical resource path (non-empty segments, no . or .. segments, no //, no backslash, no %2f/%5c/%2e, no control chars)"
+    });
+  }
+});
+var targetSchema3 = external_exports3.object({
+  origin: external_exports3.string().refine(isCanonicalHttpsOrigin3, {
+    message: "expected a canonical https origin (https://host[:port], nothing else)"
+  }),
+  nodeAudience: external_exports3.string().min(1),
+  spaceId: external_exports3.string().refine(isCanonicalPathSegment3, {
+    message: "expected a single canonical path segment (spaceId joins the resource URI; separators/traversal would alias grants)"
+  }),
+  resource: resourceSelectorSchema3
+}).strict();
+var displaySchema3 = external_exports3.object({
+  senderName: external_exports3.string().optional(),
+  filename: external_exports3.string().optional(),
+  recipientHint: external_exports3.string().optional(),
+  /**
+   * Presentation preference only (viewer spec §1): may narrow, never widen;
+   * capabilities always win.
+   */
+  mode: external_exports3.union([external_exports3.literal("document"), external_exports3.literal("source"), external_exports3.literal("folder")]).optional()
+}).strict();
+var contentPointerSchema3 = external_exports3.object({
+  cid: external_exports3.string().refine(isCanonicalRawCid3, {
+    message: "expected a canonical CIDv1 raw sha2-256 base32 CID"
+  }),
+  key: external_exports3.string().refine((value) => decodeBase64UrlOrNull3(value)?.length === 32, {
+    message: "expected base64url decoding to exactly 32 bytes"
+  })
+}).strict();
+var signatureSchema3 = external_exports3.object({
+  /** did:key of the sender's ed25519 signing key. */
+  signerDid: external_exports3.string().regex(/^did:key:z[1-9A-HJ-NP-Za-km-z]+$/, "expected a did:key"),
+  algorithm: external_exports3.literal("Ed25519"),
+  /** base64url-encoded ed25519 signature over the JCS bytes of all other fields. */
+  value: external_exports3.string().refine((value) => decodeBase64UrlOrNull3(value)?.length === 64, {
+    message: "expected base64url decoding to exactly 64 bytes"
+  })
+}).strict();
+var unsignedShareEnvelopeSchema3 = external_exports3.object({
+  version: external_exports3.literal(1),
+  shareId: external_exports3.string().min(1),
+  /** Full signed delegation chain, opaque serialized form. */
+  delegation: external_exports3.string().min(1),
+  authorizationTarget: authorizationTargetSchema3,
+  target: targetSchema3,
+  display: displaySchema3,
+  /** ISO 8601 UTC datetime. Advisory here; enforcement is the delegation's. */
+  expiry: external_exports3.string().datetime(),
+  /** Bearer-slice sealed-content pointer (see contentPointerSchema). */
+  content: contentPointerSchema3.optional()
+}).strict();
+var shareEnvelopeSchema3 = unsignedShareEnvelopeSchema3.extend({ signature: signatureSchema3 }).strict();
+var recipientMatcherSchema3 = external_exports3.discriminatedUnion("kind", [
+  external_exports3.object({ kind: external_exports3.literal("exactEmail"), value: external_exports3.string().min(3).regex(/^[^@\s]+@[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*$/) }).strict(),
+  external_exports3.object({ kind: external_exports3.literal("emailDomain"), value: external_exports3.string().regex(/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*$/) }).strict(),
+  external_exports3.object({ kind: external_exports3.literal("recipientDid"), value: external_exports3.string().regex(/^did:[a-z0-9]+:.+$/) }).strict(),
+  external_exports3.object({ kind: external_exports3.literal("policyDigest"), value: external_exports3.string().regex(/^[A-Za-z0-9_-]{43}$/) }).strict(),
+  external_exports3.object({ kind: external_exports3.literal("bearer") }).strict()
+]);
+var shareActionSchema3 = external_exports3.union([external_exports3.literal("read"), external_exports3.literal("list"), external_exports3.literal("edit")]);
+var kvContentSourceSchema3 = external_exports3.object({
+  kind: external_exports3.literal("kv"),
+  space: external_exports3.string().min(1),
+  path: external_exports3.string().min(1),
+  action: external_exports3.literal("tinycloud.kv/get")
+}).strict();
+var sqlContentSourceSchema3 = external_exports3.object({
+  kind: external_exports3.literal("sql"),
+  space: external_exports3.string().min(1),
+  database: external_exports3.string().min(1),
+  path: external_exports3.string().min(1),
+  statement: external_exports3.string().min(1),
+  arguments: external_exports3.record(external_exports3.string(), external_exports3.number().int()),
+  argumentsDigest: external_exports3.string().regex(/^[A-Za-z0-9_-]{43}$/),
+  action: external_exports3.literal("tinycloud.sql/read")
+}).strict();
+var contentSourceSchema3 = external_exports3.discriminatedUnion("kind", [kvContentSourceSchema3, sqlContentSourceSchema3]);
+var v2TargetSchema3 = external_exports3.object({
+  origin: external_exports3.string().refine(isCanonicalHttpsOrigin3, { message: "expected a canonical https origin" }),
+  nodeAudience: external_exports3.string().min(1),
+  spaceId: external_exports3.string().refine(isCanonicalPathSegment3, { message: "expected a canonical space id" })
+}).strict();
+var shareDecryptionSchema3 = external_exports3.object({
+  networkId: external_exports3.string().min(1),
+  action: external_exports3.literal("tinycloud.encryption/decrypt")
+}).strict();
+var ownerAuthoritySchema3 = external_exports3.object({
+  registrationCid: external_exports3.string().min(1),
+  shareCid: external_exports3.string().min(1),
+  envelopeCid: external_exports3.string().min(1),
+  enforcementDelegation: external_exports3.record(external_exports3.string(), external_exports3.unknown()),
+  outerEnvelope: external_exports3.record(external_exports3.string(), external_exports3.unknown()),
+  /** Node-signed registration evidence; required by trusted policy adapters. */
+  registrationReceipt: external_exports3.object({
+    registration: external_exports3.record(external_exports3.string(), external_exports3.unknown()),
+    proof: external_exports3.record(external_exports3.string(), external_exports3.unknown())
+  }).strict().optional()
+}).strict();
+var contentMetadataSchema3 = external_exports3.object({
+  mediaType: external_exports3.string().min(1).max(128).optional(),
+  byteLength: external_exports3.number().int().nonnegative().max(100 * 1024 * 1024).optional(),
+  filename: external_exports3.string().min(1).max(255).optional(),
+  encoding: external_exports3.literal("utf-8").optional(),
+  /** Encrypted presentation discriminator. The fixed entry point is index.html. */
+  artifact: external_exports3.literal("html").optional()
+}).strict();
+var deliveryEmailSchema3 = external_exports3.string().email();
+function isEnvelopeDeliveryEmail2(value) {
+  return deliveryEmailSchema3.safeParse(value).success;
+}
+var unsignedShareEnvelopeV2BaseSchema3 = external_exports3.object({
+  version: external_exports3.literal(2),
+  shareId: external_exports3.string().min(1),
+  recipientMatcher: recipientMatcherSchema3,
+  deliveryEmail: deliveryEmailSchema3.optional(),
+  actions: external_exports3.array(shareActionSchema3).min(1).max(3),
+  resource: resourceSelectorSchema3,
+  target: v2TargetSchema3,
+  delegationCid: external_exports3.string().min(1),
+  authorityMaterialHandle: external_exports3.string().min(1),
+  authorityMaterialDigest: external_exports3.string().regex(/^[A-Za-z0-9_-]{43}$/),
+  decryption: shareDecryptionSchema3.optional(),
+  contentSource: contentSourceSchema3,
+  contentSourceDigest: external_exports3.string().regex(/^[A-Za-z0-9_-]{43}$/),
+  authorizationTarget: authorizationTargetSchema3,
+  display: displaySchema3,
+  expiry: external_exports3.string().datetime(),
+  encrypted: external_exports3.boolean(),
+  content: contentPointerSchema3.optional(),
+  metadata: contentMetadataSchema3,
+  ownerAuthority: ownerAuthoritySchema3.optional()
+}).strict();
+function validateV2Invariants3(value, ctx) {
+  const actions = [...value.actions];
+  if (new Set(actions).size !== actions.length) ctx.addIssue({ code: external_exports3.ZodIssueCode.custom, path: ["actions"], message: "actions must be unique" });
+  if (actions.some((action, index) => action !== ["read", "list", "edit"].filter((candidate) => actions.includes(candidate))[index])) ctx.addIssue({ code: external_exports3.ZodIssueCode.custom, path: ["actions"], message: "actions must be canonically ordered" });
+  if (!value.encrypted && value.recipientMatcher.kind !== "policyDigest") ctx.addIssue({ code: external_exports3.ZodIssueCode.custom, path: ["recipientMatcher"], message: "safe plaintext must carry only a matcher digest" });
+  if (!value.encrypted && value.authorizationTarget.kind !== "policy") ctx.addIssue({ code: external_exports3.ZodIssueCode.custom, path: ["encrypted"], message: "unencrypted content requires a policy target" });
+  if (!value.encrypted && value.content !== void 0) ctx.addIssue({ code: external_exports3.ZodIssueCode.custom, path: ["content"], message: "policy-only plaintext cannot carry content" });
+  if (value.encrypted && (value.metadata.mediaType === void 0 || value.metadata.filename === void 0 || value.metadata.byteLength === void 0)) ctx.addIssue({ code: external_exports3.ZodIssueCode.custom, path: ["metadata"], message: "encrypted shares must describe their content" });
+  if (!value.encrypted && Object.keys(value.metadata).length !== 0) ctx.addIssue({ code: external_exports3.ZodIssueCode.custom, path: ["metadata"], message: "policy-only plaintext cannot describe content" });
+  if (!value.encrypted && value.metadata.encoding !== void 0) ctx.addIssue({ code: external_exports3.ZodIssueCode.custom, path: ["metadata", "encoding"], message: "policy-only plaintext cannot carry content encoding" });
+  if (value.metadata.artifact === "html" && (!value.encrypted || value.resource.kind !== "prefix" || !value.actions.includes("read") || !value.actions.includes("list"))) ctx.addIssue({ code: external_exports3.ZodIssueCode.custom, path: ["metadata", "artifact"], message: "html artifacts require an encrypted readable prefix" });
+  if (!value.encrypted && (value.display.senderName !== void 0 || value.display.filename !== void 0 || value.display.recipientHint !== void 0)) ctx.addIssue({ code: external_exports3.ZodIssueCode.custom, path: ["display"], message: "policy-only plaintext cannot carry display metadata" });
+  if (!value.encrypted && value.deliveryEmail !== void 0) ctx.addIssue({ code: external_exports3.ZodIssueCode.custom, path: ["deliveryEmail"], message: "policy-only plaintext cannot carry delivery metadata" });
+  if (value.recipientMatcher.kind === "exactEmail" && value.deliveryEmail !== void 0 && value.deliveryEmail !== value.recipientMatcher.value) ctx.addIssue({ code: external_exports3.ZodIssueCode.custom, path: ["deliveryEmail"], message: "delivery email must match the exact matcher" });
+  if (value.recipientMatcher.kind === "emailDomain" && value.deliveryEmail !== void 0 && value.deliveryEmail.toLowerCase().endsWith(`@${value.recipientMatcher.value}`) === false) ctx.addIssue({ code: external_exports3.ZodIssueCode.custom, path: ["deliveryEmail"], message: "delivery email must belong to the matcher domain" });
+  if (value.contentSource.kind === "kv" && value.contentSource.action !== "tinycloud.kv/get") ctx.addIssue({ code: external_exports3.ZodIssueCode.custom, path: ["contentSource"], message: "source action mismatch" });
+  if (value.contentSource.kind === "sql" && value.contentSource.action !== "tinycloud.sql/read") ctx.addIssue({ code: external_exports3.ZodIssueCode.custom, path: ["contentSource"], message: "source action mismatch" });
+}
+var unsignedShareEnvelopeV2Schema3 = unsignedShareEnvelopeV2BaseSchema3.superRefine(validateV2Invariants3);
+var shareEnvelopeV2Schema3 = unsignedShareEnvelopeV2BaseSchema3.extend({ signature: signatureSchema3 }).strict().superRefine(validateV2Invariants3);
+var unifiedResourceSchema3 = external_exports3.string().refine((value) => {
+  const marker = value.indexOf("/kv/");
+  if (marker < 1) return false;
+  const space = value.slice(0, marker);
+  const legacy = space.startsWith("tinycloud://");
+  if (legacy ? /[:/?#%]/.test(space.slice("tinycloud://".length)) : !space.startsWith("tinycloud:") || /[/?#%]/.test(space)) return false;
+  const path = value.slice(marker + 4);
+  return !path.startsWith("/") && !path.endsWith("/") && !path.includes("//") && path.split("/").every((segment) => segment.length > 0 && segment !== "." && segment !== "..");
+}, { message: "expected canonical TinyCloud KV resource" });
+var unifiedEncryptionNetworkSchema3 = external_exports3.string().refine((value) => {
+  if (!value.startsWith("urn:tinycloud:encryption:")) return false;
+  const rest = value.slice("urn:tinycloud:encryption:".length);
+  const separator = rest.lastIndexOf(":");
+  const owner = separator < 0 ? "" : rest.slice(0, separator);
+  const network = separator < 0 ? "" : rest.slice(separator + 1);
+  return owner.startsWith("did:") && owner.length > 4 && network.length > 0 && !/[:/%?#\s]/.test(network);
+}, { message: "expected canonical TinyCloud encryption network" });
+var unifiedKvCapabilitySchema3 = external_exports3.object({
+  kind: external_exports3.literal("kv"),
+  resource: unifiedResourceSchema3,
+  selector: external_exports3.union([external_exports3.literal("exact"), external_exports3.literal("prefix")]),
+  actions: external_exports3.array(external_exports3.union([
+    external_exports3.literal("tinycloud.kv/get"),
+    external_exports3.literal("tinycloud.kv/list"),
+    external_exports3.literal("tinycloud.kv/metadata"),
+    external_exports3.literal("tinycloud.kv/put")
+  ])).min(1)
+}).strict();
+var unifiedEncryptionCapabilitySchema3 = external_exports3.object({
+  kind: external_exports3.literal("encryption"),
+  resource: unifiedEncryptionNetworkSchema3,
+  action: external_exports3.literal("tinycloud.encryption/decrypt")
+}).strict();
+var unifiedCapabilitySchema3 = external_exports3.union([unifiedKvCapabilitySchema3, unifiedEncryptionCapabilitySchema3]);
+var unifiedContentSourceSchema3 = external_exports3.object({
+  shareId: external_exports3.string().min(1),
+  kvResource: unifiedResourceSchema3,
+  selector: external_exports3.union([external_exports3.literal("exact"), external_exports3.literal("prefix")]),
+  encryptionNetwork: unifiedEncryptionNetworkSchema3,
+  encryptedSymmetricKeyDigestHex: external_exports3.string().regex(/^[0-9a-f]{64}$/),
+  keyVersion: external_exports3.number().int().positive(),
+  mode: external_exports3.union([external_exports3.literal("mutable"), external_exports3.literal("immutable")]),
+  initialCiphertextDigestHex: external_exports3.string().regex(/^[0-9a-f]{64}$/).optional()
+}).strict();
+var unifiedPolicyV1Schema3 = external_exports3.object({
+  schema: external_exports3.literal("xyz.tinycloud.policy/policy/v1"),
+  policyId: external_exports3.string().regex(/^pol_[a-z2-7]+$/),
+  ownerDid: external_exports3.string().min(1),
+  createdAt: external_exports3.string().datetime({ offset: true }),
+  expiresAt: external_exports3.string().datetime({ offset: true }).optional(),
+  contentSource: unifiedContentSourceSchema3,
+  capabilityCeiling: external_exports3.array(unifiedCapabilitySchema3).min(2),
+  signature: external_exports3.object({ suite: external_exports3.string().min(1), signerDid: external_exports3.string().min(1), value: external_exports3.string().min(1) }).strict()
+}).strict();
+var policyCredentialRequirementV1Schema3 = external_exports3.object({
+  type: external_exports3.literal("TinyCloudPolicyCredentialRequirement"),
+  version: external_exports3.literal(1),
+  requirementDigest: external_exports3.string().regex(/^[A-Za-z0-9_-]{43}$/),
+  descriptorDigest: external_exports3.string().regex(/^[A-Za-z0-9_-]{43}$/),
+  issuerDid: external_exports3.string().min(1),
+  issuerKid: external_exports3.string().min(1),
+  profile: external_exports3.object({ id: external_exports3.string().min(1), version: external_exports3.literal(1) }).strict(),
+  credentialType: external_exports3.object({ id: external_exports3.string().min(1), version: external_exports3.literal(1) }).strict()
+}).strict();
+var unifiedPolicyV2Schema3 = external_exports3.object({
+  schema: external_exports3.literal("xyz.tinycloud.policy/policy/v2"),
+  policyId: external_exports3.string().regex(/^pol_[a-z2-7]+$/),
+  ownerDid: external_exports3.string().min(1),
+  createdAt: external_exports3.string().datetime({ offset: true }),
+  expiresAt: external_exports3.string().datetime({ offset: true }).optional(),
+  contentSource: unifiedContentSourceSchema3,
+  capabilityCeiling: external_exports3.array(unifiedCapabilitySchema3).min(2),
+  credentialRequirement: policyCredentialRequirementV1Schema3,
+  signature: external_exports3.object({ suite: external_exports3.literal("Ed25519"), signerDid: external_exports3.string().min(1), value: external_exports3.string().min(1) }).strict()
+}).strict();
+var unifiedPolicySchema3 = external_exports3.discriminatedUnion("schema", [
+  unifiedPolicyV1Schema3,
+  unifiedPolicyV2Schema3
+]);
+var unifiedRootSchema3 = external_exports3.object({
+  cid: external_exports3.string().min(1),
+  authorization: external_exports3.string().regex(/^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/),
+  role: external_exports3.union([external_exports3.literal("policy-authority"), external_exports3.literal("policy-enforcement")])
+}).strict();
+var attestedEnforcerBindingV2Schema3 = external_exports3.object({
+  schema: external_exports3.literal("xyz.tinycloud.policy/attested-enforcer/v2"),
+  enforcerDid: external_exports3.string().regex(/^did:key:z[1-9A-HJ-NP-Za-km-z]+$/),
+  nodeAudience: external_exports3.string().min(1),
+  attestationBindingDigestHex: external_exports3.string().regex(/^[0-9a-f]{64}$/),
+  issuedAt: external_exports3.string().datetime({ offset: true }),
+  expiresAt: external_exports3.string().datetime({ offset: true }),
+  signature: external_exports3.object({ suite: external_exports3.literal("Ed25519"), signerDid: external_exports3.string().min(1), value: base64UrlString3() }).strict()
+}).strict();
+var v3TargetSchema3 = external_exports3.object({
+  origin: external_exports3.string().refine(isCanonicalHttpsOrigin3, { message: "expected a canonical https origin" }),
+  nodeAudience: external_exports3.string().min(1),
+  spaceId: external_exports3.string().refine(isCanonicalPathSegment3, { message: "expected a canonical space id" })
+}).strict();
+var unsignedShareEnvelopeV3BaseSchema3 = external_exports3.object({
+  version: external_exports3.literal(3),
+  shareId: external_exports3.string().min(1),
+  recipientMatcher: recipientMatcherSchema3,
+  deliveryEmail: deliveryEmailSchema3.optional(),
+  actions: external_exports3.array(shareActionSchema3).min(1).max(3),
+  resource: resourceSelectorSchema3,
+  target: v3TargetSchema3,
+  policy: unifiedPolicySchema3,
+  policyCid: external_exports3.string().min(1),
+  policyRoot: unifiedRootSchema3,
+  enforcementRoot: unifiedRootSchema3,
+  attestedEnforcerBinding: attestedEnforcerBindingV2Schema3,
+  contentSource: unifiedContentSourceSchema3,
+  contentSourceDigestHex: external_exports3.string().regex(/^[0-9a-f]{64}$/),
+  encryptionNetwork: unifiedEncryptionNetworkSchema3,
+  expiry: external_exports3.string().datetime({ offset: true }),
+  display: displaySchema3,
+  encrypted: external_exports3.literal(true),
+  metadata: contentMetadataSchema3
+}).strict();
+function validateV3Invariants3(value, ctx) {
+  const actions = [...value.actions];
+  if (new Set(actions).size !== actions.length || actions.some((action, index) => action !== ["read", "list", "edit"].filter((candidate) => actions.includes(candidate))[index])) {
+    ctx.addIssue({ code: external_exports3.ZodIssueCode.custom, path: ["actions"], message: "actions must be unique and canonically ordered" });
+  }
+  if (value.policyRoot.role !== "policy-authority" || value.enforcementRoot.role !== "policy-enforcement") {
+    ctx.addIssue({ code: external_exports3.ZodIssueCode.custom, path: ["policyRoot", "role"], message: "root roles are fixed" });
+  }
+  if (value.policyCid.length === 0 || value.policyCid === value.policyRoot.cid || value.policyCid === value.enforcementRoot.cid) {
+    ctx.addIssue({ code: external_exports3.ZodIssueCode.custom, path: ["policyCid"], message: "policy CID must be distinct from both roots" });
+  }
+  if (value.contentSource.encryptionNetwork !== value.encryptionNetwork) {
+    ctx.addIssue({ code: external_exports3.ZodIssueCode.custom, path: ["encryptionNetwork"], message: "encryption network is not bound to the source" });
+  }
+  if (value.attestedEnforcerBinding.nodeAudience !== value.target.nodeAudience || value.attestedEnforcerBinding.signature.signerDid !== value.attestedEnforcerBinding.nodeAudience || Date.parse(value.attestedEnforcerBinding.expiresAt) < Date.parse(value.expiry)) {
+    ctx.addIssue({ code: external_exports3.ZodIssueCode.custom, path: ["attestedEnforcerBinding"], message: "enforcer binding does not cover the target and share lifetime" });
+  }
+  if (value.policy.contentSource.shareId !== value.contentSource.shareId || value.policy.contentSource.kvResource !== value.contentSource.kvResource || value.policy.contentSource.selector !== value.contentSource.selector || value.policy.contentSource.encryptionNetwork !== value.encryptionNetwork || value.policy.contentSource.encryptedSymmetricKeyDigestHex !== value.contentSource.encryptedSymmetricKeyDigestHex || value.policy.contentSource.keyVersion !== value.contentSource.keyVersion || value.policy.contentSource.mode !== value.contentSource.mode || value.policy.contentSource.initialCiphertextDigestHex !== value.contentSource.initialCiphertextDigestHex) {
+    ctx.addIssue({ code: external_exports3.ZodIssueCode.custom, path: ["contentSource"], message: "content source is not bound to policy" });
+  }
+  if (value.policy.signature.suite !== "Ed25519" || value.policy.signature.signerDid !== value.policy.ownerDid) {
+    ctx.addIssue({ code: external_exports3.ZodIssueCode.custom, path: ["policy", "signature"], message: "policy must be signed by its owner" });
+  }
+  const kvCapabilities = value.policy.capabilityCeiling.filter((capability) => capability.kind === "kv");
+  const decryptCapabilities = value.policy.capabilityCeiling.filter((capability) => capability.kind === "encryption" && capability.resource === value.encryptionNetwork && capability.action === "tinycloud.encryption/decrypt");
+  if (value.policy.capabilityCeiling.length !== 2 || kvCapabilities.length !== 1 || decryptCapabilities.length !== 1 || kvCapabilities[0]?.resource !== value.contentSource.kvResource || kvCapabilities[0]?.selector !== value.contentSource.selector) {
+    ctx.addIssue({ code: external_exports3.ZodIssueCode.custom, path: ["policy", "capabilityCeiling"], message: "policy ceiling must contain exact decrypt network" });
+  }
+}
+var unsignedShareEnvelopeV3Schema3 = unsignedShareEnvelopeV3BaseSchema3.superRefine(validateV3Invariants3);
+var shareEnvelopeV3Schema3 = unsignedShareEnvelopeV3BaseSchema3.extend({ signature: signatureSchema3 }).strict().superRefine(validateV3Invariants3);
+var ENVELOPE_AAD_LABEL3 = "tinycloud-share-envelope-v1";
+var AAD3 = utf8Bytes3(ENVELOPE_AAD_LABEL3);
+function isPlainRecord3(value) {
+  const proto = Object.getPrototypeOf(value);
+  return proto === Object.prototype || proto === null;
+}
+function assertNoLoneSurrogates3(text) {
+  for (let i = 0; i < text.length; i++) {
+    const unit = text.charCodeAt(i);
+    if (unit >= 56320 && unit <= 57343) {
+      throw new TypeError(
+        `cannot canonicalize string with unpaired low surrogate at index ${i}`
+      );
+    }
+    if (unit >= 55296 && unit <= 56319) {
+      const next = text.charCodeAt(i + 1);
+      if (!(next >= 56320 && next <= 57343)) {
+        throw new TypeError(
+          `cannot canonicalize string with unpaired high surrogate at index ${i}`
+        );
+      }
+      i++;
+    }
+  }
+}
+function serializeString3(text) {
+  assertNoLoneSurrogates3(text);
+  return JSON.stringify(text);
+}
+function serialize3(value) {
+  if (value === null) return "null";
+  switch (typeof value) {
+    case "boolean":
+      return JSON.stringify(value);
+    case "string":
+      return serializeString3(value);
+    case "number":
+      if (!Number.isFinite(value)) {
+        throw new TypeError(`cannot canonicalize non-finite number: ${value}`);
+      }
+      return JSON.stringify(value);
+    case "object":
+      break;
+    default:
+      throw new TypeError(`cannot canonicalize value of type ${typeof value}`);
+  }
+  if (Array.isArray(value)) {
+    return `[${value.map((item) => serialize3(item)).join(",")}]`;
+  }
+  if (!isPlainRecord3(value)) {
+    throw new TypeError("cannot canonicalize non-plain object");
+  }
+  const keys = Object.keys(value).sort();
+  const members = [];
+  for (const key of keys) {
+    const member = value[key];
+    if (member === void 0) continue;
+    members.push(`${serializeString3(key)}:${serialize3(member)}`);
+  }
+  return `{${members.join(",")}}`;
+}
+function canonicalize3(value) {
+  return serialize3(value);
+}
 var LABEL2 = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
 function isCanonicalEmailDomain2(value) {
   if (value.length === 0 || value.length > 253) return false;
@@ -20353,7 +25936,7 @@ function canonicalMailbox2(value) {
   if (local.length > 64 || !/^[a-z0-9#$&'*+/=?^_`{|}~-]+(?:\.[a-z0-9#$&'*+/=?^_`{|}~-]+)*$/.test(local) || !isCanonicalEmailDomain2(domain)) return void 0;
   return Object.freeze({ email, domain });
 }
-var MAX_INLINE_BYTES2 = 256 * 1024;
+var MAX_INLINE_BYTES3 = 256 * 1024;
 
 // src/commands/share.ts
 import { ProfileLockTimeoutError as ProfileLockTimeoutError2 } from "@tinycloud/operations/state";
@@ -20452,11 +26035,11 @@ function safeFilename(value) {
 }
 function shareFilename(value) {
   try {
-    return canonicalShareFilename(value);
+    return canonicalShareFilename2(value);
   } catch {
     throw new CLIError(
       "UNSAFE_FILENAME",
-      hasUnsafeFilenameCodePoint(value) ? "filename contains control or invisible characters" : "filename must be one safe path segment",
+      hasUnsafeFilenameCodePoint2(value) ? "filename contains control or invisible characters" : "filename must be one safe path segment",
       8
     );
   }
@@ -20571,6 +26154,21 @@ var ShareHistoryRetryError = class extends Error {
 // src/commands/share.ts
 var SHARE_ORIGIN = "https://share.tinycloud.xyz";
 var NOTIFY_WINDOW_MESSAGE = "Share notification authorization expired (at share expiry or 5 minutes after publication); publish a new share and invite the recipient then.\n";
+var ONGOING_UNAVAILABLE = "Ongoing shares are not available yet; v1 shares pin a version";
+function artifactRequest(options, actions, inputCount) {
+  if (options.artifact === void 0) {
+    if (options.note !== void 0) throw new CLIError("INVALID_ARGUMENT", "--note requires --artifact", 2);
+    return void 0;
+  }
+  if (actions.includes("edit")) {
+    throw new CLIError("INVALID_ARGUMENT", "--action edit is not available for artifact shares: a pinned version is read-only", 2);
+  }
+  if (options.prefix === true) throw new CLIError("INVALID_ARGUMENT", "--artifact does not combine with --prefix: an artifact share pins one file", 2);
+  if (inputCount !== 1) throw new CLIError("INVALID_ARGUMENT", "an artifact share takes exactly one file", 2);
+  const note = options.note;
+  if (note !== void 0 && (note.length === 0 || note.length > 1024)) throw new CLIError("INVALID_ARGUMENT", "--note must be 1 to 1024 characters", 2);
+  return { id: options.artifact === "new" ? newArtifactId() : assertArtifactId(options.artifact), ...note === void 0 ? {} : { note } };
+}
 var shareServices = {};
 function configureShareCommandServices(services) {
   shareServices = services;
@@ -20592,6 +26190,11 @@ function canonicalMailboxTarget(target) {
 }
 function shareCliError(error, operation = "publish") {
   if (error instanceof CLIError) return error;
+  if (error instanceof ArtifactError) {
+    if (error.code === "invalid-argument") return new CLIError("INVALID_ARGUMENT", error.message, 2);
+    if (error.code === "conflict") return new CLIError("ARTIFACT_CONFLICT", error.message, 1, { hint: "Another publisher is writing this artifact; retry." });
+    return new CLIError("UNAVAILABLE", error.message, 4);
+  }
   if (error instanceof ProfileLockTimeoutError2) return wrapError(error);
   if (error instanceof ShareHistoryRetryError) {
     return new CLIError(
@@ -20661,14 +26264,14 @@ function shareCliError(error, operation = "publish") {
   }
   if (error instanceof SharePublishError) {
     const exit = error.code === "authority-required" ? 3 : error.code === "max-bytes-exceeded" ? 7 : 2;
-    const code3 = error.code === "authority-required" ? "AUTH_REQUIRED" : error.code === "max-bytes-exceeded" ? "MAX_BYTES_EXCEEDED" : "INVALID_ARGUMENT";
-    return new CLIError(code3, error.message, exit);
+    const code4 = error.code === "authority-required" ? "AUTH_REQUIRED" : error.code === "max-bytes-exceeded" ? "MAX_BYTES_EXCEEDED" : "INVALID_ARGUMENT";
+    return new CLIError(code4, error.message, exit);
   }
   if (error instanceof ShareReceiveError) {
     const verification = /* @__PURE__ */ new Set(["cid-mismatch", "decrypt-failed", "envelope-invalid", "origin-mismatch", "signature-invalid", "capability-invalid", "content-integrity-failed"]);
     const exit = error.code === "max-bytes-exceeded" ? 7 : verification.has(error.code) ? 5 : error.code === "expired" || error.code === "fetch-failed" ? 4 : error.code === "invalid-link" || error.code === "unsupported-target" ? 2 : 2;
-    const code3 = error.code === "fetch-failed" ? "NOT_FOUND" : error.code.replaceAll("-", "_").toUpperCase();
-    return new CLIError(code3, error.message, exit);
+    const code4 = error.code === "fetch-failed" ? "NOT_FOUND" : error.code.replaceAll("-", "_").toUpperCase();
+    return new CLIError(code4, error.message, exit);
   }
   const storageFull = storageFullError(error);
   if (storageFull) return storageFull;
@@ -20768,9 +26371,10 @@ function assertAggregateInputLimit(inputs, maxBytes) {
 }
 function registerShareCommand(program2) {
   const share = program2.command("share").description("Publish and consume TinyCloud Share links");
-  share.command("publish <files...>").description("Publish one or more bounded files as a Share").option("--name <filename>", "Filename for stdin input").option("--to <target>", "Share target", "anyone").option("--notify", "Email an exact-email recipient, or a domain mailbox on node 1.17.3+").option("--notify-to <address>", "Mailbox to invite for --to domain:<name> --notify (node 1.17.3+)").option("--expires <duration>", "Share lifetime").option("--max-bytes <bytes>", "Bound input bytes").option("--media-type <type>", "Media type for a single input").option("--action <actions...>", "Addressed permission: read, list, or edit").option("--prefix", "Publish multiple inputs beneath one addressed prefix").option("--binary", "Allow non-UTF-8 bearer content").option("--json", "Print versioned redacted JSON").option("--viewer-origin <origin>", "Canonical HTTPS viewer origin", SHARE_ORIGIN).action(async (files, options, command) => {
+  share.command("publish <files...>").description("Publish one or more bounded files as a Share").option("--name <filename>", "Filename for stdin input").option("--to <target>", "Share target", "anyone").option("--notify", "Email an exact-email recipient, or a domain mailbox on node 1.17.3+").option("--notify-to <address>", "Mailbox to invite for --to domain:<name> --notify (node 1.17.3+)").option("--expires <duration>", "Share lifetime").option("--max-bytes <bytes>", "Bound input bytes").option("--media-type <type>", "Media type for a single input").option("--action <actions...>", "Addressed permission: read, list, or edit").option("--prefix", "Publish multiple inputs beneath one addressed prefix").option("--binary", "Allow non-UTF-8 bearer content").option("--artifact <id>", 'Publish as the next write-once version of an artifact ("new" starts one); the share is pinned to that version').addOption(new Option("--ongoing").hideHelp()).option("--note <text>", "Note stored with the artifact version").option("--json", "Print versioned redacted JSON").option("--viewer-origin <origin>", "Canonical HTTPS viewer origin", SHARE_ORIGIN).action(async (files, options, command) => {
     try {
       const json = jsonOutput(options, command);
+      if (options.ongoing === true) throw new CLIError("UNSUPPORTED_TARGET", ONGOING_UNAVAILABLE, 2);
       const maxBytes = byteLimit(options.maxBytes);
       if (files.length === 0 || files.includes("-") && files.length > 1) throw new CLIError("INVALID_ARGUMENT", "stdin must be the only publish input", 2);
       const name = files.length === 1 ? options.name : void 0;
@@ -20781,6 +26385,7 @@ function registerShareCommand(program2) {
       const actions = requestedActions(options.action);
       if (options.prefix && target.kind === "bearer") throw new CLIError("INVALID_ARGUMENT", "--prefix requires an addressed target", 2);
       if (inputs.length > 1 && target.kind === "bearer") throw new CLIError("UNSUPPORTED_LINK", "multiple files require an addressed target", 2);
+      const artifact = artifactRequest(options, actions, inputs.length);
       if (inputs.length > 1 && !options.prefix) throw new CLIError("INVALID_ARGUMENT", "multiple files require --prefix", 2);
       if (options.notify === true && !actions.includes("read")) throw new CLIError("INVALID_ARGUMENT", "--notify requires the read action; nothing was shared", 2);
       if (options.notifyTo !== void 0 && (options.notify !== true || target.kind !== "emailDomain")) {
@@ -20811,7 +26416,9 @@ function registerShareCommand(program2) {
         origin: options.viewerOrigin,
         ...maxBytes === void 0 ? {} : { maxBytes },
         notify: options.notify === true,
-        targetAdapter: shareServices.targetAdapter
+        // The artifact request rides on the adapter call rather than through `publishTargetShare`, whose code is part of
+        // the browser bundles (the web-sdk size ceiling counts every byte it carries).
+        targetAdapter: artifact === void 0 || shareServices.targetAdapter === void 0 ? shareServices.targetAdapter : { publish: (request) => shareServices.targetAdapter.publish({ ...request, artifact }) }
       });
       if ("state" in result) {
         if (json) {
@@ -20831,8 +26438,12 @@ function registerShareCommand(program2) {
       }
       if (result.metadata.expiryClamped === true) process.stderr.write(`Share expiry clamped to session expiry (${result.metadata.expiresAt}).
 `);
-      if (json) writeJson2({ ...redactPublishedShare(result), expiryClamped: result.metadata.expiryClamped === true, ...notification === void 0 ? {} : { notification } });
-      else publishHuman(result);
+      if (json) writeJson2({ ...redactPublishedShare(result), expiryClamped: result.metadata.expiryClamped === true, ...artifact === void 0 || result.metadata.artifact === void 0 ? {} : { artifactId: result.metadata.artifact.id, version: result.metadata.artifact.version, mode: result.metadata.artifact.mode }, ...notification === void 0 ? {} : { notification } });
+      else {
+        if (result.metadata.artifact !== void 0) process.stderr.write(`Artifact ${result.metadata.artifact.id} v${result.metadata.artifact.version} (${result.metadata.artifact.mode})
+`);
+        publishHuman(result);
+      }
     } catch (error) {
       return handleError(shareCliError(error));
     }
@@ -20843,6 +26454,41 @@ function registerShareCommand(program2) {
       const result = await inspectShareInputOnce(url, options.stdin === true, options.viewerOrigin);
       if (json) writeJson2(result);
       else inspectHuman(result);
+    } catch (error) {
+      return handleError(shareCliError(error));
+    }
+  });
+  share.command("versions <artifact-id>").description("List the write-once versions of an artifact, and the shares pinned to each").option("--json", "Print versioned JSON").action(async (artifactId, options, command) => {
+    try {
+      const json = jsonOutput(options, command);
+      const id = assertArtifactId(artifactId);
+      if (shareServices.artifactStore === void 0) throw new CLIError("AUTH_REQUIRED", "artifact storage is not configured", 3);
+      const versions = await listArtifactVersions(await shareServices.artifactStore(), id);
+      const pinned = /* @__PURE__ */ new Map();
+      for (const record of await shareServices.records?.list() ?? []) {
+        const path = parseArtifactVersionPath(record.resource.path);
+        if (path === void 0 || path.artifactId !== id) continue;
+        const shares = pinned.get(path.version) ?? [];
+        shares.push({ shareId: record.shareId, target: record.targetKind ?? record.recipientMatcher.kind, expiresAt: record.expiresAt, ...record.revokedAt === void 0 ? {} : { revokedAt: record.revokedAt } });
+        pinned.set(path.version, shares);
+      }
+      const view = versions.map((version2) => ({
+        version: version2.version,
+        complete: version2.complete,
+        ...version2.corrupt === true ? { corrupt: true } : {},
+        ...version2.manifest === void 0 ? {} : {
+          createdAt: version2.manifest.createdAt,
+          parent: version2.manifest.parent,
+          ...version2.manifest.note === void 0 ? {} : { note: version2.manifest.note },
+          files: version2.manifest.files.map((file) => ({ path: file.path, sha256: file.sha256, bytes: file.bytes })),
+          manifestSha256: version2.manifestSha256
+        },
+        pinnedShares: pinned.get(version2.version) ?? []
+      }));
+      if (json) writeJson2({ protocol: "tinycloud-share", version: 1, artifactId: id, versions: view });
+      else {
+        process.stdout.write(view.map((entry) => `v${entry.version}	${entry.complete ? entry.createdAt ?? "" : entry.corrupt === true ? "corrupt" : "incomplete"}	${entry.pinnedShares.length} pinned share${entry.pinnedShares.length === 1 ? "" : "s"}${entry.note === void 0 ? "" : `	${entry.note}`}`).join("\n") + (view.length ? "\n" : ""));
+      }
     } catch (error) {
       return handleError(shareCliError(error));
     }
@@ -20964,6 +26610,44 @@ function registerShareCommand(program2) {
   });
 }
 
+// src/share/artifact-store.ts
+var MAX_LIST_PAGES = 1e3;
+function errorCode(error) {
+  return typeof error === "object" && error !== null && "code" in error && typeof error.code === "string" ? error.code : void 0;
+}
+function kvArtifactStore(kv) {
+  return {
+    async put(key, bytes, options) {
+      const written = await kv.put(key, bytes.slice(), {
+        ifNoneMatch: options.ifNoneMatch,
+        contentType: options.contentType ?? "application/octet-stream"
+      });
+      if (written.ok) return "created";
+      if (errorCode(written.error) === "KV_PRECONDITION_FAILED") return "exists";
+      throw new ArtifactError("storage", `could not write ${key}: ${errorCode(written.error) ?? "unknown error"}`, { cause: written.error });
+    },
+    async get(key) {
+      const read4 = await kv.get(key, { binary: true });
+      if (read4.ok) return new Uint8Array(read4.data.data);
+      if (errorCode(read4.error) === "KV_NOT_FOUND") return void 0;
+      throw new ArtifactError("storage", `could not read ${key}: ${errorCode(read4.error) ?? "unknown error"}`, { cause: read4.error });
+    },
+    async list(prefix) {
+      const keys = [];
+      let cursor;
+      for (let page = 0; page < MAX_LIST_PAGES; page += 1) {
+        const listed = await kv.list({ prefix, ...cursor === void 0 ? {} : { cursor } });
+        if (!listed.ok) throw new ArtifactError("storage", `could not list ${prefix}: ${errorCode(listed.error) ?? "unknown error"}`, { cause: listed.error });
+        keys.push(...listed.data.keys);
+        if (listed.data.truncated !== true) return keys;
+        if (listed.data.nextCursor === void 0) throw new ArtifactError("storage", `listing ${prefix} was truncated without a cursor`);
+        cursor = listed.data.nextCursor;
+      }
+      throw new ArtifactError("storage", `listing ${prefix} exceeded ${MAX_LIST_PAGES} pages`);
+    }
+  };
+}
+
 // src/share/adapters.ts
 init_storage();
 init_profiles();
@@ -20987,7 +26671,7 @@ import { extractSiweExpiration, InvalidRestoredSessionError } from "@tinycloud/n
 function requiredKvAction(meta) {
   if (meta === null || typeof meta !== "object" || !("requiredAction" in meta)) return void 0;
   const action = meta.requiredAction;
-  return action === "tinycloud.kv/put" || action === "tinycloud.kv/get" ? action : void 0;
+  return action === "tinycloud.kv/put" || action === "tinycloud.kv/get" || action === "tinycloud.kv/list" ? action : void 0;
 }
 function throwKvUploadFailure(error) {
   const rejection = storageRejection(error);
@@ -21024,6 +26708,27 @@ function safeStorageFilename(filename) {
   const extension = dot >= 0 && /^[A-Za-z0-9]{1,16}$/.test(filename.slice(dot + 1)) ? filename.slice(dot + 1) : "";
   const stem = (extension === "" ? filename : filename.slice(0, dot)).normalize("NFKD").replace(/[\u0300-\u036f]/g, "").replace(extension === "" ? /[^A-Za-z0-9_-]+/g : /[^A-Za-z0-9._-]+/g, "-").replace(/\.{2,}/g, ".").replace(/-{2,}/g, "-").slice(0, 100).replace(/^[^A-Za-z0-9]+|[-.]+$/g, "");
   return `${stem === "" ? "share" : stem}${extension === "" ? "" : `.${extension}`}`;
+}
+function scopeDeniedFromArtifactError(error, capability, authority) {
+  const cause = error instanceof ArtifactError ? error.cause : void 0;
+  const code4 = typeof cause === "object" && cause !== null && "code" in cause ? cause.code : void 0;
+  if (code4 !== "AUTH_UNAUTHORIZED" && code4 !== "PERMISSION_DENIED") return void 0;
+  const meta = typeof cause === "object" && cause !== null && "meta" in cause ? cause.meta : void 0;
+  const requiredAction = requiredKvAction(meta);
+  return new SharePublishAuthorityError({
+    kind: "scope-denied",
+    capability,
+    ...requiredAction === void 0 ? {} : { requiredAction },
+    localKey: authority.localKey,
+    profileName: authority.profileName
+  });
+}
+async function storeArtifactVersion(kv, version2, authority) {
+  try {
+    return await publishArtifactVersion(kvArtifactStore(kv), version2);
+  } catch (error) {
+    throw scopeDeniedFromArtifactError(error, "KV upload", authority) ?? error;
+  }
 }
 function createEncryptedSessionHistory() {
   const records = /* @__PURE__ */ new Map();
@@ -21289,8 +26994,8 @@ function createShareAuthorityAdapters(input = {}) {
       return await ensureAuthenticated2(context);
     } catch (error) {
       const profileConfig = await ProfileManager.getProfile(profile).catch(() => void 0);
-      const code3 = typeof error === "object" && error !== null && "code" in error ? error.code : void 0;
-      if (error instanceof InvalidRestoredSessionError || code3 === "AUTH_EXPIRED" || isSessionExpiredError(error)) {
+      const code4 = typeof error === "object" && error !== null && "code" in error ? error.code : void 0;
+      if (error instanceof InvalidRestoredSessionError || code4 === "AUTH_EXPIRED" || isSessionExpiredError(error)) {
         throw new SharePublishAuthorityError({
           kind: "owner-space-unresolved",
           localKey: profileConfig?.authMethod === "local",
@@ -21391,7 +27096,9 @@ function createShareAuthorityAdapters(input = {}) {
     if (targetInput.target.kind === "bearer") {
       if (resourceKind !== "exact" || files.length !== 1) throw new Error("native bearer publication requires one exact source file");
       const file2 = files[0];
-      const resourcePath2 = `xyz.tinycloud.share/shares/${shareId}/${safeStorageFilename(targetInput.filename)}`;
+      const storageName2 = safeStorageFilename(targetInput.filename);
+      const artifact2 = targetInput.artifact;
+      let resourcePath2 = artifact2 === void 0 ? `xyz.tinycloud.share/shares/${shareId}/${storageName2}` : artifactVersionFilePath(artifact2.id, 1, storageName2);
       if (node.isSessionOnly) {
         const authority = node.sharing.preflightGenerate({ path: resourcePath2, actions: ["tinycloud.kv/get"], expiry: expiresAt });
         if (authority === "caveated") {
@@ -21401,22 +27108,32 @@ function createShareAuthorityAdapters(input = {}) {
           throw new SharePublishAuthorityError({ kind: "scope-denied", capability: "sharing delegation", localKey, profileName: activeProfileName2 });
         }
       }
-      const written = await node.kvForSpace(ownerSpaceId).put(resourcePath2, file2.bytes.slice(), {
-        contentType: targetInput.mediaType ?? file2.mediaType ?? "application/octet-stream"
-      });
-      if (!written.ok) {
-        const code3 = typeof written.error === "object" && written.error !== null && "code" in written.error ? written.error.code : void 0;
-        if (code3 === "AUTH_UNAUTHORIZED" || code3 === "PERMISSION_DENIED") {
-          const requiredAction = requiredKvAction(written.error.meta);
-          throw new SharePublishAuthorityError({
-            kind: "scope-denied",
-            capability: "KV upload",
-            ...requiredAction === void 0 ? {} : { requiredAction },
-            localKey,
-            profileName: activeProfileName2
-          });
+      let artifactVersion2;
+      if (artifact2 !== void 0) {
+        artifactVersion2 = await storeArtifactVersion(node.kvForSpace(ownerSpaceId), {
+          artifactId: artifact2.id,
+          files: [{ filename: storageName2, bytes: file2.bytes, contentType: targetInput.mediaType ?? file2.mediaType ?? "application/octet-stream" }],
+          ...artifact2.note === void 0 ? {} : { note: artifact2.note }
+        }, { localKey, profileName: activeProfileName2 });
+        resourcePath2 = artifactVersionFilePath(artifact2.id, artifactVersion2.version, storageName2);
+      } else {
+        const written = await node.kvForSpace(ownerSpaceId).put(resourcePath2, file2.bytes.slice(), {
+          contentType: targetInput.mediaType ?? file2.mediaType ?? "application/octet-stream"
+        });
+        if (!written.ok) {
+          const code4 = typeof written.error === "object" && written.error !== null && "code" in written.error ? written.error.code : void 0;
+          if (code4 === "AUTH_UNAUTHORIZED" || code4 === "PERMISSION_DENIED") {
+            const requiredAction = requiredKvAction(written.error.meta);
+            throw new SharePublishAuthorityError({
+              kind: "scope-denied",
+              capability: "KV upload",
+              ...requiredAction === void 0 ? {} : { requiredAction },
+              localKey,
+              profileName: activeProfileName2
+            });
+          }
+          throwKvUploadFailure(written.error);
         }
-        throwKvUploadFailure(written.error);
       }
       let native;
       try {
@@ -21426,8 +27143,8 @@ function createShareAuthorityAdapters(input = {}) {
           viewerOrigin: config.shareOrigin
         });
       } catch (error) {
-        const code3 = typeof error === "object" && error !== null && "code" in error ? error.code : void 0;
-        if (code3 === "AUTH_UNAUTHORIZED" || code3 === "PERMISSION_DENIED") {
+        const code4 = typeof error === "object" && error !== null && "code" in error ? error.code : void 0;
+        if (code4 === "AUTH_UNAUTHORIZED" || code4 === "PERMISSION_DENIED") {
           throw new SharePublishAuthorityError({
             kind: "scope-denied",
             capability: "sharing delegation",
@@ -21455,7 +27172,8 @@ function createShareAuthorityAdapters(input = {}) {
           expiresAt: native.expiresAt.toISOString(),
           display: { filename: targetInput.filename },
           recipientMatcher: { kind: "bearer" },
-          enforcementDelegationCid: native.delegationCid
+          enforcementDelegationCid: native.delegationCid,
+          ...artifact2 !== void 0 && artifactVersion2 !== void 0 ? { artifact: { id: artifact2.id, version: artifactVersion2.version, mode: "pinned" } } : {}
         }
       };
       Object.defineProperty(result, "toJSON", { enumerable: false, value: () => redactPublishedShare(result) });
@@ -21464,12 +27182,17 @@ function createShareAuthorityAdapters(input = {}) {
     }
     if (resourceKind !== "exact" || files.length !== 1) throw new Error("addressed publication requires a single exact source file");
     const file = files[0];
-    const resourcePath = `shares/${shareId}/${safeStorageFilename(targetInput.filename)}`;
+    const storageName = safeStorageFilename(targetInput.filename);
+    const artifact = targetInput.artifact;
+    let resourcePath = artifact === void 0 ? `shares/${shareId}/${storageName}` : artifactVersionFilePath(artifact.id, 1, storageName);
     const byteLength = file.bytes.byteLength;
     if (!Number.isSafeInteger(byteLength) || byteLength > 100 * 1024 * 1024) throw new Error("addressed publication exceeds the combined byte limit");
     const mediaType = targetInput.mediaType ?? file.mediaType ?? "application/octet-stream";
     const actions = targetInput.actions === void 0 || targetInput.actions.length === 0 ? ["read"] : targetInput.actions;
     const policyActions = [...new Set(actions.flatMap((action) => action === "read" ? ["tinycloud.kv/get", "tinycloud.kv/metadata"] : action === "list" ? ["tinycloud.kv/list"] : ["tinycloud.kv/put"]))];
+    if (artifact !== void 0 && policyActions.includes("tinycloud.kv/put")) {
+      throw new SharePublishAuthorityError({ kind: "invalid-request", reason: "a pinned artifact share cannot grant edit" });
+    }
     let prepared;
     try {
       prepared = prepareAddressedShare({ target: targetInput.target, actions, policyActions, filename: targetInput.filename });
@@ -21485,21 +27208,31 @@ function createShareAuthorityAdapters(input = {}) {
     const encryptionNetwork = node.getEncryptionNetworkIdForSpace(ownerSpaceId);
     const encrypted = await node.encryption.encryptToNetwork(encryptionNetwork, file.bytes, { metadata: { contentType: mediaType } });
     if (!encrypted.ok) throw new Error("addressed source encryption was rejected");
-    const storedBytes = new TextEncoder().encode(canonicalize2(encrypted.data));
-    const stored = await node.kvForSpace(ownerSpaceId).put(resourcePath, storedBytes, { contentType: "application/vnd.tinycloud.encrypted-envelope+json" });
-    if (!stored.ok) {
-      const code3 = typeof stored.error === "object" && stored.error !== null && "code" in stored.error ? stored.error.code : void 0;
-      if (code3 === "AUTH_UNAUTHORIZED" || code3 === "PERMISSION_DENIED") {
-        const requiredAction = requiredKvAction(stored.error.meta);
-        throw new SharePublishAuthorityError({
-          kind: "scope-denied",
-          capability: "KV upload",
-          ...requiredAction === void 0 ? {} : { requiredAction },
-          localKey,
-          profileName: activeProfileName2
-        });
+    const storedBytes = new TextEncoder().encode(canonicalize3(encrypted.data));
+    let artifactVersion;
+    if (artifact !== void 0) {
+      artifactVersion = await storeArtifactVersion(node.kvForSpace(ownerSpaceId), {
+        artifactId: artifact.id,
+        files: [{ filename: storageName, bytes: storedBytes, contentType: "application/vnd.tinycloud.encrypted-envelope+json" }],
+        ...artifact.note === void 0 ? {} : { note: artifact.note }
+      }, { localKey, profileName: activeProfileName2 });
+      resourcePath = artifactVersionFilePath(artifact.id, artifactVersion.version, storageName);
+    } else {
+      const stored = await node.kvForSpace(ownerSpaceId).put(resourcePath, storedBytes, { contentType: "application/vnd.tinycloud.encrypted-envelope+json" });
+      if (!stored.ok) {
+        const code4 = typeof stored.error === "object" && stored.error !== null && "code" in stored.error ? stored.error.code : void 0;
+        if (code4 === "AUTH_UNAUTHORIZED" || code4 === "PERMISSION_DENIED") {
+          const requiredAction = requiredKvAction(stored.error.meta);
+          throw new SharePublishAuthorityError({
+            kind: "scope-denied",
+            capability: "KV upload",
+            ...requiredAction === void 0 ? {} : { requiredAction },
+            localKey,
+            profileName: activeProfileName2
+          });
+        }
+        throwKvUploadFailure(stored.error);
       }
-      throwKvUploadFailure(stored.error);
     }
     const contentSource = {
       shareId,
@@ -21544,6 +27277,9 @@ function createShareAuthorityAdapters(input = {}) {
       }
     });
     if (expiryClamped) Object.defineProperty(published.metadata, "expiryClamped", { value: true, enumerable: true });
+    if (artifact !== void 0 && artifactVersion !== void 0) {
+      Object.defineProperty(published.metadata, "artifact", { value: { id: artifact.id, version: artifactVersion.version, mode: "pinned" }, enumerable: true });
+    }
     return published;
   } };
   const delivery = { deliver: input.deliver ?? (async (request) => {
@@ -21685,6 +27421,25 @@ function createShareAuthorityAdapters(input = {}) {
     if (value === void 0 || !value.ok || !(value.data.data instanceof Uint8Array)) throw new Error("native share content could not be read");
     return { bytes: value.data.data.slice(), filename: received.data.path.split("/").at(-1) || "share.md" };
   };
+  const artifactStore = async () => {
+    const node = await authenticatedNode();
+    const spaceId = node.restorableSession?.spaceId;
+    if (spaceId === void 0) throw new SharePublishAuthorityError({ kind: "owner-space-unresolved", localKey: !node.isSessionOnly, profileName: activeProfileName2 });
+    const store = kvArtifactStore(node.kvForSpace(spaceId));
+    const authority = { localKey: !node.isSessionOnly, profileName: activeProfileName2 };
+    const mapped = async (operation) => {
+      try {
+        return await operation();
+      } catch (error) {
+        throw scopeDeniedFromArtifactError(error, "artifact storage", authority) ?? error;
+      }
+    };
+    return {
+      put: (key, bytes, options) => mapped(() => store.put(key, bytes, options)),
+      get: (key) => mapped(() => store.get(key)),
+      list: (prefix) => mapped(() => store.list(prefix))
+    };
+  };
   return {
     targetAdapter,
     records: input.profileName === void 0 ? createEncryptedSessionHistory() : createEncryptedProfileHistory(profileName, async (bytes, profile) => {
@@ -21697,7 +27452,8 @@ function createShareAuthorityAdapters(input = {}) {
     delivery,
     revocation,
     assertDomainDelivery,
-    nativeReader
+    nativeReader,
+    artifactStore
   };
 }
 async function selectedProfileName() {
@@ -21715,7 +27471,7 @@ async function loadCourierEntry() {
 var { version } = JSON.parse(
   readFileSync2(new URL("../package.json", import.meta.url), "utf-8")
 );
-var program = new Command();
+var program = new Command2();
 var shareAuthority = createShareAuthorityAdapters({
   profileName: async () => selectedShareProfile() ?? (await ProfileManager.getConfig()).defaultProfile,
   fetchFn: globalThis.fetch
@@ -21768,7 +27524,8 @@ configureShareCommandServices({
   delivery: shareAuthority.delivery,
   assertDomainDelivery: shareAuthority.assertDomainDelivery,
   revocation: shareAuthority.revocation,
-  nativeReader: shareAuthority.nativeReader
+  nativeReader: shareAuthority.nativeReader,
+  artifactStore: shareAuthority.artifactStore
 });
 var argv = process.argv.slice(2);
 var globalLongOptionsWithValues = { "--profile": true, "--host": true };
@@ -21814,8 +27571,8 @@ ${theme.muted("Repo:")} ${theme.accent("https://github.com/tinycloudlabs/web-sdk
 });
 var commandToken = firstCommandToken(argv);
 if (argv[0] === "courier") {
-  const code3 = await (await loadCourierEntry()).runCourier(argv.slice(1));
-  if (code3 !== 0) process.exit(code3);
+  const code4 = await (await loadCourierEntry()).runCourier(argv.slice(1));
+  if (code4 !== 0) process.exit(code4);
 } else if (commandToken === "courier") {
   process.stderr.write(`${TC_OPTIONS_BEFORE_COURIER}
 `);

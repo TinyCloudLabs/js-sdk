@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, mock } from "bun:test";
+import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -18,6 +19,9 @@ let deliveryAuthorization: { readonly key: string; readonly body: string; readon
 let deliveryAuthorizationConflicts = 0;
 const publishEvents: string[] = [];
 const registeredPolicies: unknown[] = [];
+/** The owner's KV as the artifact layout sees it: write-once creates, reads and prefix lists. */
+const ownerKv = new Map<string, Uint8Array>();
+let encryptions = 0;
 
 let nodeSpaceId: string | undefined = "tinycloud:test-space";
 let restoredSpaceId: string | undefined = "tinycloud:test-space";
@@ -41,6 +45,7 @@ let historyMissingProfileName: string | undefined;
 let historyOnSign: (() => void) | undefined;
 let historyResolvedProfile: string | undefined;
 let uploadErrorCode: string | undefined;
+let listErrorCode: string | undefined;
 let uploadErrorMeta: Record<string, unknown> | undefined;
 let sessionExpiresAt = "2099-01-01T00:00:00.000Z";
 let authenticationError: unknown;
@@ -134,29 +139,46 @@ const node = {
     return `urn:tinycloud:encryption:${credentialHolderDid}:default`;
   },
   encryption: {
-    encryptToNetwork: async (networkId: string) => ({
-      ok: true as const,
-      data: {
-        v: 1,
-        networkId,
-        alg: "x25519-aes256gcm/v1",
-        keyVersion: 1,
-        encryptedSymmetricKey: "network-wrapped-key",
-        encryptedSymmetricKeyHash: "1".repeat(64),
-        ciphertext: "AQ",
-        metadata: { contentType: "text/plain" },
-      },
-    }),
+    encryptToNetwork: async (networkId: string) => {
+      encryptions += 1;
+      return {
+        ok: true as const,
+        data: {
+          v: 1,
+          networkId,
+          alg: "x25519-aes256gcm/v1",
+          keyVersion: 1,
+          encryptedSymmetricKey: "network-wrapped-key",
+          // A fresh wrapped key per encryption, so reuse of an earlier ciphertext is observable.
+          encryptedSymmetricKeyHash: encryptions.toString(16).padStart(64, "0"),
+          ciphertext: "AQ",
+          metadata: { contentType: "text/plain" },
+        },
+      };
+    },
   },
   kvForSpace: (spaceId: string) => ({
-    put: async (path: string) => {
+    put: async (path: string, bytes?: Uint8Array, options?: { readonly ifNoneMatch?: "*" }) => {
       publishEvents.push("upload");
       uploadedSpaces.push(spaceId);
       uploadedPaths.push(path);
+      if (uploadErrorCode === undefined && options?.ifNoneMatch === "*" && ownerKv.has(path)) {
+        return { ok: false as const, error: { code: "KV_PRECONDITION_FAILED", message: "exists", service: "kv", meta: { status: 412 } } };
+      }
+      if (uploadErrorCode === undefined && bytes !== undefined) ownerKv.set(path, bytes.slice());
       return uploadErrorCode === undefined
         ? { ok: true as const }
         : { ok: false as const, error: { code: uploadErrorCode, message: "secret server response", service: "kv", meta: uploadErrorMeta ?? { status: uploadErrorCode === "STORAGE_QUOTA_EXCEEDED" ? 402 : 503, usedBytes: 387_382_794, limitBytes: 8_119_195, requiredAction: "tinycloud.kv/put" } } };
     },
+    get: async (path: string) => {
+      const value = ownerKv.get(path);
+      return value === undefined
+        ? { ok: false as const, error: { code: "KV_NOT_FOUND", message: "missing", service: "kv" } }
+        : { ok: true as const, data: { data: value.slice(), headers: {} } };
+    },
+    list: async (options: { readonly prefix: string }) => listErrorCode === undefined
+      ? { ok: true as const, data: { keys: [...ownerKv.keys()].filter((key) => key.startsWith(options.prefix)) } }
+      : { ok: false as const, error: { code: listErrorCode, message: "denied", service: "kv", meta: { status: 401, requiredAction: "tinycloud.kv/list" } } },
   }),
   sharing: {
     generate: async ({ expiry }: { readonly expiry: Date }) => ({ ok: true, data: { token: "opaque-share-token", delegation: { cid: "bafy-native-share" }, expiresAt: expiry } }),
@@ -252,6 +274,8 @@ const { createEncryptedProfileHistory, createShareAuthorityAdapters } = await im
 const { SharePublishAuthorityError } = await import("./errors.js");
 
 afterEach(() => {
+  ownerKv.clear();
+  encryptions = 0;
   nodeSpaceId = "tinycloud:test-space";
   restoredSpaceId = "tinycloud:test-space";
   nativeSpaceId = "tinycloud:test-space";
@@ -261,6 +285,7 @@ afterEach(() => {
   nodeInfoStatus = 200;
   nodeInfoRequests.length = 0;
   uploadErrorCode = undefined;
+  listErrorCode = undefined;
   uploadErrorMeta = undefined;
   uploadedSpaces.length = 0;
   historyCacheDir = undefined;
@@ -726,6 +751,104 @@ describe("TinyCloud share authority adapter", () => {
     const requirement = createEmailDomainCredentialRequirement({ domain: "example.com", profile: commitment.profile, credentialType: commitment.credentialType });
     expect(await credentialRequirementDigest(requirement)).toBe(commitment.requirementDigest);
     expect(commitment.descriptorDigest).toBe(await goldenDescriptorDigest("email-domain-proof-v1"));
+  });
+
+  describe("artifact versions (TC-1428)", () => {
+    const decode = (path: string) => new TextDecoder().decode(ownerKv.get(path));
+    const bearerInput = (text: string, artifact: { id: string; note?: string }): TargetPublishInput => ({
+      source: new TextEncoder().encode(text),
+      filename: "report.md",
+      target: { kind: "bearer" },
+      expiresAt: new Date("2030-01-01T00:00:00.000Z"),
+      origin: "https://share.example",
+      artifact,
+    });
+    const artifactAdapter = () => createShareAuthorityAdapters({
+      origin: "https://share.example",
+      profileName: async () => "test",
+      fetchFn: (async () => Response.json({
+        version: "tinycloud.share/config-v2",
+        shareOrigin: "https://share.example",
+        registryOrigin: "https://registry.example",
+        credentialsOrigin: "https://credentials.example",
+      })) as unknown as typeof globalThis.fetch,
+    });
+
+    it("pins a bearer share to a write-once version file and writes the manifest last", async () => {
+      const { targetAdapter } = artifactAdapter();
+      const first = await targetAdapter.publish(bearerInput("v1 text", { id: "art_t", note: "first" }));
+      if ("state" in first) throw new Error("expected publish");
+      expect(first.metadata.resource).toEqual({ kind: "exact", path: "artifacts/art_t/versions/1/report.md" });
+      expect(first.metadata.artifact).toEqual({ id: "art_t", version: 1, mode: "pinned" });
+      expect(uploadedPaths).toEqual(["artifacts/art_t/versions/1/report.md", "artifacts/art_t/versions/1/manifest.json"]);
+      expect(decode("artifacts/art_t/versions/1/report.md")).toBe("v1 text");
+      expect(JSON.parse(decode("artifacts/art_t/versions/1/manifest.json"))).toMatchObject({ v: 1, parent: null, note: "first", files: [{ path: "report.md", bytes: 7 }] });
+
+      // Changed bytes make version 2; version 1 is untouched.
+      const second = await targetAdapter.publish(bearerInput("v2 text", { id: "art_t" }));
+      if ("state" in second) throw new Error("expected publish");
+      expect(second.metadata.artifact?.version).toBe(2);
+      expect(decode("artifacts/art_t/versions/1/report.md")).toBe("v1 text");
+
+      // The same bytes again are the same version: nothing is written and the new share points at v2.
+      uploadedPaths.length = 0;
+      const again = await targetAdapter.publish(bearerInput("v2 text", { id: "art_t" }));
+      if ("state" in again) throw new Error("expected publish");
+      expect(again.metadata.artifact?.version).toBe(2);
+      expect(uploadedPaths).toEqual([]);
+    });
+
+    it("does not touch the legacy shares/ path for artifact shares", async () => {
+      await artifactAdapter().targetAdapter.publish(bearerInput("x", { id: "art_t" }));
+      expect(uploadedPaths.some((path) => path.includes("shares/"))).toBe(false);
+    });
+
+    it("types a KV authority failure on an artifact write as scope-denied", async () => {
+      uploadErrorCode = "AUTH_UNAUTHORIZED";
+      uploadErrorMeta = { status: 401, requiredAction: "tinycloud.kv/put" };
+      await expect(artifactAdapter().targetAdapter.publish(bearerInput("x", { id: "art_t" })))
+        .rejects.toMatchObject({ failure: { kind: "scope-denied", capability: "KV upload", requiredAction: "tinycloud.kv/put" } });
+    });
+
+    it("pins an addressed share to the encrypted version file; each encryption is its own version and no plaintext digest is stored", async () => {
+      const adapter = addressedAdapter();
+      const toOwner = (text: string, address: string): TargetPublishInput => ({ ...addressedInput({ kind: "email", address }), source: new TextEncoder().encode(text), artifact: { id: "art_t" } });
+      const first = await adapter.publish(toOwner("only me", "a@example.com"));
+      if ("state" in first) throw new Error("expected addressed publication");
+      expect(first.metadata.resource).toEqual({ kind: "exact", path: "artifacts/art_t/versions/1/note.md" });
+      expect(first.metadata.artifact).toEqual({ id: "art_t", version: 1, mode: "pinned" });
+      const stored = JSON.parse(decode("artifacts/art_t/versions/1/note.md"));
+      expect(stored.encryptedSymmetricKeyHash).toBe((1).toString(16).padStart(64, "0"));
+      // The manifest holds the digest of the stored ciphertext only, never of the plaintext.
+      const manifestText = decode("artifacts/art_t/versions/1/manifest.json");
+      const manifest = JSON.parse(manifestText);
+      expect(manifest.files[0]).toEqual({ bytes: ownerKv.get("artifacts/art_t/versions/1/note.md")!.byteLength, path: "note.md", sha256: createHash("sha256").update(ownerKv.get("artifacts/art_t/versions/1/note.md")!).digest("hex") });
+      expect(manifestText).not.toContain(createHash("sha256").update("only me").digest("hex"));
+
+      // The same plaintext again is a fresh encryption (fresh wrapped key), so a new version bound to its own key.
+      const second = await adapter.publish(toOwner("only me", "b@example.com"));
+      if ("state" in second) throw new Error("expected addressed publication");
+      expect(second.metadata.artifact?.version).toBe(2);
+      const bound = registeredPolicies.map((policy) => unifiedPolicyV2Schema.parse(policy).contentSource);
+      expect(encryptions).toBe(2);
+      expect(bound.map((source) => source.encryptedSymmetricKeyDigestHex)).toEqual([(1).toString(16).padStart(64, "0"), (2).toString(16).padStart(64, "0")]);
+      expect(bound.map((source) => source.kvResource.split("/kv/")[1])).toEqual(["artifacts/art_t/versions/1/note.md", "artifacts/art_t/versions/2/note.md"]);
+      expect(JSON.parse(decode("artifacts/art_t/versions/1/note.md")).encryptedSymmetricKeyHash).toBe((1).toString(16).padStart(64, "0"));
+    });
+
+    it("reports a denied artifact listing with the same re-login hint publish gives", async () => {
+      listErrorCode = "AUTH_UNAUTHORIZED";
+      const { artifactStore } = artifactAdapter();
+      const store = await artifactStore();
+      await expect(store.list("artifacts/art_t/versions/")).rejects.toMatchObject({ failure: { kind: "scope-denied", capability: "artifact storage", requiredAction: "tinycloud.kv/list" } });
+    });
+
+    it("refuses to grant edit on a pinned version before encrypting or uploading anything", async () => {
+      await expect(addressedAdapter().publish({ ...addressedInput({ kind: "email", address: "a@example.com" }, ["read", "edit"]), artifact: { id: "art_t" } }))
+        .rejects.toMatchObject({ failure: { kind: "invalid-request", reason: "a pinned artifact share cannot grant edit" } });
+      expect(encryptions).toBe(0);
+      expect(ownerKv.size).toBe(0);
+    });
   });
 
   it("refuses invalid addressed recipients before publishing a location or uploading", async () => {
