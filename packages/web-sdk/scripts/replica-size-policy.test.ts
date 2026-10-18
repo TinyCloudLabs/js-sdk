@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { MAX_WORKER_GZIP_BYTES } from "../../replica/scripts/check-worker-size";
 import { compactFixOptionalAllowance, mergedPinsNotLandedOn, optionalSourcePins, type OptionalLedger } from "./replica-optional-size-policy";
-import { approvedTc1443Ratchet, approvedTc1443bRatchet, approvedTc1448Ratchet, validateTc1443RatchetTransition, validateTc1443bRatchetTransition, validateTc1448RatchetTransition, type Tc1443Ratchet, type Tc1443bRatchet, type Tc1448Ratchet } from "./replica-size-policy";
+import { approvedTc1443Ratchet, approvedTc1443bRatchet, approvedTc1448Ratchet, approvedTc1466Ratchet, validateTc1443RatchetTransition, validateTc1443bRatchetTransition, validateTc1448RatchetTransition, validateTc1466RatchetTransition, type Tc1443Ratchet, type Tc1443bRatchet, type Tc1448Ratchet, type Tc1466Ratchet } from "./replica-size-policy";
 import { ancestryPins, assertCiSizeToolchain, approvedCiToolchainCorrection, approvedFixRequiredRatchet, approvedGatedOnlyRatchet, approvedHardeningRatchet, approvedLogoutRatchet, approvedTc1413Ratchet, approvedTc1424Ratchet, approvedTc1432Ratchet, approvedTc1436Ratchet, ciCorrectionPolicyOnlyPaths, hasAncestor, isPolicyOnlySinceApprovedSource, landingCommit, pinLandedOn, validateCiToolchainTransition, validateGatedOnlyRatchet, validateHardeningRatchetTransition, validateLedger, validateLogoutRatchetTransition, validateMasterMergeResolutionTransition, validateTc1413RatchetTransition, validateTc1424RatchetTransition, validateTc1432RatchetTransition, validateTc1436RatchetTransition, type HardeningRatchet, type Ledger, type LogoutRatchet, type MasterMergeResolution, type Tc1413Ratchet, type Tc1424Ratchet, type Tc1432Ratchet, type Tc1436Ratchet } from "./replica-size-policy";
 
 const current = JSON.parse(readFileSync(resolve(import.meta.dir, "replica-size-ledger.json"), "utf8")) as Ledger;
@@ -20,6 +20,7 @@ const historical: Ledger = {
   tc1432Ratchet: undefined,
   tc1424Ratchet: undefined,
   tc1448Ratchet: undefined,
+  tc1466Ratchet: undefined,
   tc1443Ratchet: undefined,
   tc1443bRatchet: undefined,
   phase2Ratchet: {
@@ -1392,22 +1393,77 @@ describe("TC-1443 registry verdict exact-delta ratchet", () => {
   });
 });
 
+describe("TC-1466 receiver-key clock race exact-delta ratchet", () => {
+  const row = () => structuredClone(approvedTc1466Ratchet);
+
+  it("is in the ledger once, its root ceiling equal to TC-1443's plus the canonical delta", () => {
+    expect(() => validateLedger(current)).not.toThrow();
+    expect(current.tc1466Ratchet).toEqual(approvedTc1466Ratchet);
+    for (const format of ["index.mjs", "index.cjs"] as const) {
+      expect(approvedTc1466Ratchet.root.ceiling[format])
+        .toBe(approvedTc1443Ratchet.root.ceiling[format] + approvedTc1466Ratchet.root.delta[format]);
+    }
+    expect(ancestryPins(current, false)).toContainEqual({
+      row: "tc1466Ratchet", pin: approvedTc1466Ratchet.sourceCommits.at(-1)!,
+    });
+  });
+
+  it("stays within Naomi's approved delta of +12 / +6 gzip, +/-10 B", () => {
+    expect(Math.abs(approvedTc1466Ratchet.root.delta["index.mjs"] - 12)).toBeLessThanOrEqual(10);
+    expect(Math.abs(approvedTc1466Ratchet.root.delta["index.cjs"] - 6)).toBeLessThanOrEqual(10);
+  });
+
+  it("refuses one extra byte, other CI provenance, a dropped source commit or a missing TC-1443 row", () => {
+    const mutations: Array<(changed: Tc1466Ratchet) => void> = [
+      (changed) => { changed.root.ceiling["index.mjs"]++; },
+      (changed) => { changed.root.delta["index.cjs"]++; },
+      (changed) => { changed.canonicalCI.run = "https://github.com/TinyCloudLabs/js-sdk/actions/runs/1"; },
+      (changed) => { changed.sourceCommits.pop(); },
+    ];
+    for (const mutate of mutations) {
+      const ledger = copy(current);
+      const changed = row();
+      mutate(changed);
+      ledger.tc1466Ratchet = changed;
+      expect(() => validateLedger(ledger)).toThrow();
+    }
+    const withoutTc1443 = copy(current);
+    delete withoutTc1443.tc1443Ratchet;
+    expect(() => validateLedger(withoutTc1443)).toThrow();
+  });
+
+  it("may be introduced once and never changed or removed in a later base", () => {
+    expect(() => validateTc1466RatchetTransition(undefined, row())).not.toThrow();
+    expect(() => validateTc1466RatchetTransition(row(), row())).not.toThrow();
+    const changed = row();
+    changed.root.ceiling["index.cjs"]++;
+    expect(() => validateTc1466RatchetTransition(undefined, changed)).toThrow();
+    expect(() => validateTc1466RatchetTransition(row(), changed)).toThrow();
+    expect(() => validateTc1466RatchetTransition(row(), undefined)).toThrow();
+  });
+});
+
 describe("TC-1443 slice b registry policy exact-delta ratchet", () => {
   const row = () => structuredClone(approvedTc1443bRatchet);
 
-  it("is in the ledger once, its root ceiling equal to TC-1443's plus the measured delta", () => {
+  it("is in the ledger once, its root ceiling equal to TC-1466's plus the measured delta", () => {
     expect(() => validateLedger(current)).not.toThrow();
     expect(current.tc1443bRatchet).toEqual(approvedTc1443bRatchet);
     for (const format of ["index.mjs", "index.cjs"] as const) {
       expect(approvedTc1443bRatchet.root.ceiling[format])
-        .toBe(approvedTc1443Ratchet.root.ceiling[format] + approvedTc1443bRatchet.root.delta[format]);
+        .toBe(approvedTc1466Ratchet.root.ceiling[format] + approvedTc1443bRatchet.root.delta[format]);
     }
     expect(ancestryPins(current, false)).toContainEqual({
       row: "tc1443bRatchet", pin: approvedTc1443bRatchet.sourceCommits.at(-1)!,
     });
   });
 
-  it("refuses one extra byte, other CI provenance, a dropped source commit or a missing TC-1443 row", () => {
+  it("stays within Naomi's approved delta of +2,913 / +4,510 gzip, +/-50 B", () => {
+    expect(Math.abs(approvedTc1443bRatchet.root.delta["index.mjs"] - 2913)).toBeLessThanOrEqual(50);
+    expect(Math.abs(approvedTc1443bRatchet.root.delta["index.cjs"] - 4510)).toBeLessThanOrEqual(50);
+  });
+
+  it("refuses one extra byte, other CI provenance, a dropped source commit or a missing TC-1466 row", () => {
     const mutations: Array<(changed: Tc1443bRatchet) => void> = [
       (changed) => { changed.root.ceiling["index.mjs"]++; },
       (changed) => { changed.root.delta["index.cjs"]++; },
@@ -1421,9 +1477,9 @@ describe("TC-1443 slice b registry policy exact-delta ratchet", () => {
       ledger.tc1443bRatchet = changed;
       expect(() => validateLedger(ledger)).toThrow();
     }
-    const withoutTc1443 = copy(current);
-    delete withoutTc1443.tc1443Ratchet;
-    expect(() => validateLedger(withoutTc1443)).toThrow();
+    const withoutTc1466 = copy(current);
+    delete withoutTc1466.tc1466Ratchet;
+    expect(() => validateLedger(withoutTc1466)).toThrow();
   });
 
   it("may be introduced once and never changed or removed in a later base", () => {

@@ -179,30 +179,24 @@ activation, the gated artifact and the worker keep TC-1432's ceilings. The ledge
 lands first, #586 re-measures against the new base and replaces its own row before
 it merges.
 
-The TC-1443 slice b registry policy (#589: the opt-in fail-closed `registryPolicy` and
-its space-creation guard) raises the root ceilings once more, as an exact-delta row
-with zero headroom, `tc1443bRatchet`, chained after TC-1443's. It was re-measured on
-the merge of master `28ca77a0` into the PR branch: master CI run 39171377880 (at
-`116f30ed`, a version commit away from `28ca77a0`) measured 1,470,995 / 1,397,981 B,
-and GitHub run 39172113588 measured the PR on `87310cad`, identical in both Node jobs:
-1,473,908 / 1,402,491 B, i.e. +2,913 / +4,510 over master. The row's ceilings are
-those measured bytes. Naomi approved the delta (+2,913 / +4,510 gzip, ±50 B each,
-2026-10-18). First import,
-activation, the gated artifact and the worker keep TC-1432's ceilings. The ledger's
-`tc1443bRatchet` row records them and cannot change later. If another root-growing PR
-lands first, #589 re-measures against the new base and replaces its own row before it
-merges.
+TC-1466 (a share receiver opened in several tabs at once could end up with different
+signing keys, #595) landed after #586, so it sits on top of TC-1443's root ceilings. It
+raised only the root ceilings once, after shrink attempts recorded in the row's `reason`,
+by the exact bytes GitHub run 39172186671 measured on `b2725dd6` (master `28ca77a0`
+merged into the PR branch), identical in both Node jobs: 1,471,007 / 1,397,987 B (+12 /
++6 over TC-1443's, inside the approved +12 / +6 ± 10 B). The ledger's `tc1466Ratchet` row
+records them and cannot change later; whichever PR lands after it re-measures against
+the new base and updates its own row.
 
 **Ancestry pins and squash merges.** A policy row records the PR-branch commit it
 was reviewed at, and its introduction check requires that literal commit in the
-PR head. js-sdk uses merge commits, which keep that commit reachable, but squash
-merging is still enabled and a squash leaves it unreachable from master; ancestry
-is therefore checked only when a PR introduces a row. Any
+PR head. js-sdk squash-merges, so that commit is unreachable from master
+afterwards; ancestry is therefore checked only when a PR introduces a row. Any
 new check that re-validates merged pins against HEAD would break master again
 after the next squash, and only review prevents that. As a consistency check,
 every PR also requires each merged row's pin to be on its base or landed by it:
-the first first-parent master commit that added the pin to `scripts/`, the merge commit
-(`landingCommit` in `scripts/replica-size-policy.ts`). After a
+the first first-parent master commit that added the pin to `scripts/`, normally
+its squash commit (`landingCommit` in `scripts/replica-size-policy.ts`). After a
 squash merge, nothing needs editing. Content keys (blob hashes) were rejected:
 pinned files such as `authority.ts` legitimately change later, whereas the
 landing commit stays an ancestor for good.

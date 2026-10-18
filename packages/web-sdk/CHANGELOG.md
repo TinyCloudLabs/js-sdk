@@ -1,5 +1,11 @@
 # @tinycloudlabs/web-sdk
 
+## 3.3.0-beta.19
+
+### Patch Changes
+
+- d9a412e: Fix share receivers opened in several tabs at once ending up with different signing keys: a key stored by another tab a moment after this tab started is no longer discarded as future-dated.
+
 ## 3.3.0-beta.18
 
 ### Patch Changes

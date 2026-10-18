@@ -132,6 +132,12 @@ export type Tc1448Ratchet = LogoutRatchet;
  * classifier. Only the root bundle grows, so the shape is the #571 root-only row.
  */
 export type Tc1443Ratchet = LogoutRatchet;
+
+/**
+ * One reviewed exact-delta admission of TC-1466 (js-sdk #595): the receiver-key clock race fix. Only the root
+ * bundle grows, so the shape is the #571 root-only row.
+ */
+export type Tc1466Ratchet = LogoutRatchet;
 /**
  * One exact-delta admission of TC-1443 slice b (js-sdk #589): the opt-in fail-closed registry policy and
  * its space-creation guard. Only the root bundle grows, so the shape is the #571 root-only row.
@@ -152,6 +158,7 @@ export type Ledger = {
   tc1424Ratchet?: Tc1424Ratchet;
   tc1448Ratchet?: Tc1448Ratchet;
   tc1443Ratchet?: Tc1443Ratchet;
+  tc1466Ratchet?: Tc1466Ratchet;
   tc1443bRatchet?: Tc1443bRatchet;
 };
 
@@ -505,31 +512,57 @@ export const approvedTc1443Ratchet: Tc1443Ratchet = {
 };
 
 /**
+ * TC-1466 (js-sdk #595): keeping a stored receiver key that a peer tab wrote after this tab read its clock is
+ * admitted at exactly the bytes GitHub measured, root only, after shrink attempts, with no headroom. The row
+ * sits on top of the TC-1443 root ceilings. Naomi approved the delta over the new base as +12 / +6 gzip bytes, +/- 10 B.
+ */
+export const approvedTc1466Ratchet: Tc1466Ratchet = {
+  label: "TC-1466 #595 receiver key kept across a clock race between tabs, exact canonical delta",
+  ruling: "Naomi size ruling: a real shrink attempt first, remainder by the PR's own exact-delta row at canonical CI bytes (approved as +12 / +6 gzip, +/- 10 B); rows chain after the latest on master",
+  base: "28ca77a0ce019d53aa61a6c5c3b39c52889e420d",
+  sourceCommits: [
+    "b2725dd6129940bd78f0e2b2f3622a4017a7f8c3",
+  ],
+  canonicalCI: {
+    run: "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39172186671",
+    jobs: [
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39172186671/job/117807385025",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39172186671/job/117807385026",
+    ],
+  },
+  root: {
+    delta: { "index.mjs": 12, "index.cjs": 6 },
+    ceiling: { "index.mjs": 1471007, "index.cjs": 1397987 },
+  },
+  reason: "restorePersisted refused a stored receiver key whose createdAt was later than the caller's now, which was read when the tab started. A peer tab that started a moment later stores a record stamped with its own later clock, so this tab judged it future-dated, deleted it and generated a second key (flaky 'tabs opening at once share one stored key', master run 39162127319). Both restores now read the clock when they run. The fix cannot be free: it adds one clock read at each restore. Shrink attempts first (same-toolchain local gzip, Bun 1.4.3, master 1d7b78fd, base +0 / +0): reading the clock inside restorePersisted and compacting its comparison +15 / +13; additionally deduplicating the lifetime fields shared by the memory and persisted sessions +13 / +12 (gzip already shares them); a 2 s tolerance on the future-dated comparison using the existing storage timeout constant +8 / +5, rejected because it loosens the guard against future-dated records for 3 bytes; the chosen two inline fresh clock reads +11 / +5 locally and +12 / +6 on canonical CI, identical in both jobs of run 39172186671 on b2725dd6 (master 28ca77a0 merged into the PR branch), over TC-1443's ceilings.",
+};
+
+/**
  * TC-1443 slice b (js-sdk #589): the opt-in fail-closed registry policy and space-creation guard,
  * admitted as an exact-delta row with no headroom. The ceilings are the CI-measured bytes of the PR
- * on master 28ca77a0; Naomi approved the delta over master's measured bytes (2026-10-18). The row chains
- * after the latest row on master (TC-1443, #586). If another root-growing PR lands first, #589
+ * on its base; Naomi approved the delta over master's measured bytes (2026-10-18). The row chains
+ * after the latest row on master (TC-1466, #595). If another root-growing PR lands first, #589
  * re-measures against the new base and replaces this row.
  */
 export const approvedTc1443bRatchet: Tc1443bRatchet = {
   label: "TC-1443 slice b #589 opt-in fail-closed registry policy, exact canonical delta",
-  ruling: "TC-1443 slice b size row; approved by Naomi (2026-10-18), delta +2,913/+4,510 ±50 B gzip over master 28ca77a0ce019d53aa61a6c5c3b39c52889e420d",
-  base: "28ca77a0ce019d53aa61a6c5c3b39c52889e420d",
+  ruling: "TC-1443 slice b size row; approved by Naomi (2026-10-18), delta +2,913/+4,510 ±50 B gzip over master 4a717372457fa1deac30c7dca65ab0ed1e1787ab",
+  base: "4a717372457fa1deac30c7dca65ab0ed1e1787ab",
   sourceCommits: [
-    "87310cad5d6f6839828f6352fc66ae7e33d2bf01",
+    "fc474b536d79c0d03e8884174611f96adf26e6e1",
   ],
   canonicalCI: {
-    run: "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39172113588",
+    run: "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39172921591",
     jobs: [
-      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39172113588/job/117807174210",
-      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39172113588/job/117807174258",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39172921591/job/117809557014",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39172921591/job/117809557065",
     ],
   },
   root: {
     delta: { "index.mjs": 2913, "index.cjs": 4510 },
-    ceiling: { "index.mjs": 1473908, "index.cjs": 1402491 },
+    ceiling: { "index.mjs": 1473920, "index.cjs": 1402497 },
   },
-  reason: "sdk-core adds the opt-in fail-closed registry policy (registry-policy.ts: resolveOwnerHosts and the space-creation guard, plus location.ts hooks and the legacy-fallback deprecation warning); web-sdk sign-in (tcw.ts) threads registryPolicy, newUserHost, registryChainId, registrySequenceStore and onNodeNotFound through. Both root bundles grow. No shrink was attempted for this row. Base: master CI run 39171377880 at 116f30ed measured index.mjs 1,470,995 / index.cjs 1,397,981 in both Node jobs (28ca77a0 is a version commit on top). PR: run 39172113588 on merge commit 87310cad measured 1,473,908 / 1,402,491 in both Node jobs, i.e. +2,913 / +4,510. Delta approved by Naomi (2026-10-18): +2,913/+4,510 ±50 B, zero headroom.",
+  reason: "TENTATIVE: re-measured after master moved to 4a717372 (TC-1466 row); numbers pending the canonical CI measure.",
 };
 
 /** The reviewed #553 S3 entry's source commit, as master's checker pinned it. */
@@ -585,6 +618,7 @@ export function ancestryPins(root: Ledger, hasGatedOnly: boolean): Array<{ row: 
   if (root.tc1424Ratchet !== undefined) pins.push({ row: "tc1424Ratchet", pin: root.tc1424Ratchet.sourceCommits.at(-1)! });
   if (root.tc1448Ratchet !== undefined) pins.push({ row: "tc1448Ratchet", pin: root.tc1448Ratchet.sourceCommits.at(-1)! });
   if (root.tc1443Ratchet !== undefined) pins.push({ row: "tc1443Ratchet", pin: root.tc1443Ratchet.sourceCommits.at(-1)! });
+  if (root.tc1466Ratchet !== undefined) pins.push({ row: "tc1466Ratchet", pin: root.tc1466Ratchet.sourceCommits.at(-1)! });
   if (root.tc1443bRatchet !== undefined) pins.push({ row: "tc1443bRatchet", pin: root.tc1443bRatchet.sourceCommits.at(-1)! });
   if (hasGatedOnly) pins.push({ row: "gatedOnlyRatchet", pin: approvedGatedOnlyRatchet.sourceCommit });
   return pins;
@@ -622,7 +656,7 @@ const historicalToolchain = "Bun 1.4.3; production webpack; gzip -9 -c";
 /** Only a git merge-base ledger may retain the pre-correction toolchain. */
 export function validateLedger(value: Ledger, historicalBase = false): void {
   if (!value || !value.allowance || !Array.isArray(value.entries) ||
-      Object.keys(value).some((key) => key !== "allowance" && key !== "entries" && key !== "phase2Ratchet" && key !== "fixRequiredRatchet" && key !== "canonicalToolchainCorrection" && key !== "masterMergeResolution" && key !== "hardeningRatchet" && key !== "logoutRatchet" && key !== "tc1413Ratchet" && key !== "tc1436Ratchet" && key !== "tc1432Ratchet" && key !== "tc1424Ratchet" && key !== "tc1448Ratchet" && key !== "tc1443Ratchet" && key !== "tc1443bRatchet")) {
+      Object.keys(value).some((key) => key !== "allowance" && key !== "entries" && key !== "phase2Ratchet" && key !== "fixRequiredRatchet" && key !== "canonicalToolchainCorrection" && key !== "masterMergeResolution" && key !== "hardeningRatchet" && key !== "logoutRatchet" && key !== "tc1413Ratchet" && key !== "tc1436Ratchet" && key !== "tc1432Ratchet" && key !== "tc1424Ratchet" && key !== "tc1448Ratchet" && key !== "tc1443Ratchet" && key !== "tc1466Ratchet" && key !== "tc1443bRatchet")) {
     throw new Error("Invalid packages/web-sdk/scripts/replica-size-ledger.json shape");
   }
   if (Object.keys(value.allowance).some((key) => !formats.includes(key as typeof formats[number]))) {
@@ -710,8 +744,12 @@ export function validateLedger(value: Ledger, historicalBase = false): void {
       (!value.tc1448Ratchet || JSON.stringify(value.tc1443Ratchet) !== JSON.stringify(approvedTc1443Ratchet))) {
     throw new Error("Only the exact canonical TC-1443 registry-verdict ratchet is approved.");
   }
+  if (value.tc1466Ratchet !== undefined &&
+      (!value.tc1443Ratchet || JSON.stringify(value.tc1466Ratchet) !== JSON.stringify(approvedTc1466Ratchet))) {
+    throw new Error("Only Naomi's exact canonical TC-1466 receiver-key clock race ratchet is approved.");
+  }
   if (value.tc1443bRatchet !== undefined &&
-      (!value.tc1443Ratchet || JSON.stringify(value.tc1443bRatchet) !== JSON.stringify(approvedTc1443bRatchet))) {
+      (!value.tc1466Ratchet || JSON.stringify(value.tc1443bRatchet) !== JSON.stringify(approvedTc1443bRatchet))) {
     throw new Error("Only the exact canonical TC-1443 slice b registry-policy ratchet is approved.");
   }
 }
@@ -787,6 +825,14 @@ export function validateTc1443RatchetTransition(base?: Tc1443Ratchet, current?: 
   if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc1443Ratchet) ||
       base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
     throw new Error("The exact TC-1443 ratchet may be introduced once and cannot change later.");
+  }
+}
+
+/** The TC-1466 ratchet is introduced once at its exact canonical bytes and immutable afterwards. */
+export function validateTc1466RatchetTransition(base?: Tc1466Ratchet, current?: Tc1466Ratchet): void {
+  if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc1466Ratchet) ||
+      base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
+    throw new Error("The exact TC-1466 ratchet may be introduced once and cannot change later.");
   }
 }
 
