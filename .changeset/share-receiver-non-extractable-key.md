@@ -1,7 +1,15 @@
 ---
-"@tinycloud/web-sdk": patch
+"@tinycloud/web-sdk": minor
 ---
 
 Accountless share receivers use a non-extractable WebCrypto Ed25519 signing key. Its handle is kept in IndexedDB (database `tinycloud.share.receiver-keys`, one key per origin, usable for at most one hour), so a reload keeps working. Where the handle cannot be kept, or the browser lacks WebCrypto Ed25519, the key is held in page memory only, its credentials stay in page memory too, and a reload asks the recipient to verify their email again. On the path without WebCrypto Ed25519 the seed buffer is overwritten with zeros when the page goes away or the session is forgotten; copies the signing library makes internally cannot be reached and are left to garbage collection. Where reading session storage throws (site data blocked), page memory is used instead. Receiver sessions stored by earlier versions are removed together with their credentials, and the recipient verifies again. `forgetShareReceiverSession(origin)` removes the key and its credentials. A session refuses to sign after it expires, after it is forgotten, or after its memory-only key was discarded with the page, with `ShareReceiverSessionEndedError`.
 
-Changes for callers (released as a patch under the repository rule; this does break the share receiver types): `ShareReceiverIdentity.custody` is now `"persistent" | "memory"` instead of `"session"`; the exported type `ShareReceiverSessionRecordV1` is removed; `ShareReceiverSession` adds `custody`, `expiresAt` and `credentialStorage`; `createOrRestoreShareReceiverSession` takes an optional third `options` argument and its `storage` argument may be omitted; `ShareReceiverServiceOptions` accepts `indexedDB`.
+Real Apple Safari/iOS (including private-mode IndexedDB persistence of the key) is not yet verified.
+
+Breaking changes:
+
+- Removed exported type `ShareReceiverSessionRecordV1` (consumers referencing it must drop the import).
+- `ShareReceiverIdentity.custody` is now `"persistent" | "memory"` instead of `"session"`.
+- `ShareReceiverSession` adds `custody`, `expiresAt` and `credentialStorage`.
+- `createOrRestoreShareReceiverSession` takes an optional third `options` argument, and its `storage` argument may be omitted.
+- `ShareReceiverServiceOptions` accepts `indexedDB`.
