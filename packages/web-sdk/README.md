@@ -149,17 +149,14 @@ shrink attempt (see the row's `reason`). The ledger's `tc1432Ratchet` row and th
 matching optional allowance record it and cannot change later; whichever PR lands after
 it re-measures against the new base and updates its own row.
 
-The TC-1443 registry verdict classifier in sdk-core (#586) raised only the root
-ceilings once more, after removing a duplicate secp256k1 from the bundle. It landed
-after #580, so it was re-measured against master `1d7b78fd` and sits on top of
-TC-1432's root ceilings, at the exact bytes GitHub run 39151123106 measured on source
-`6205deec`, identical in both Node jobs: 1,469,273 / 1,396,647 B (+2,365 / +56 over
-TC-1432's). First import, activation, the gated artifact and the worker keep
-TC-1432's ceilings. The row's ruling text keeps the 2026-10-18 approval of the
-earlier numbers; the re-measured numbers still need re-confirmation by the size-policy
-owner. The ledger's `tc1443Ratchet` row records them and cannot change later. If
-another root-growing PR lands first, #586 re-measures against the new base and
-replaces its own row before it merges.
+TC-1424 (the share receiver's non-extractable signing key, #583) landed after #580, so
+it was re-measured against master `1d7b78fd` and sits on top of TC-1432's root ceilings.
+It raised only the root ceilings once, by the exact bytes GitHub run 39150995159
+measured on source `55145dbb`, identical in both jobs: 1,468,581 / 1,397,877 B (+1,673 /
++1,286 over TC-1432's). First import, activation, gated and the worker keep TC-1432's
+ceilings. It is #583's own row, taken after a documented shrink attempt (see the row's
+`reason`). The ledger's `tc1424Ratchet` row records it and cannot change later; whichever
+PR lands after it re-measures against the new base and updates its own row.
 
 **Ancestry pins and squash merges.** A policy row records the PR-branch commit it
 was reviewed at, and its introduction check requires that literal commit in the
