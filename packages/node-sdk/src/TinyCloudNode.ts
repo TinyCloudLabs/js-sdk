@@ -168,6 +168,7 @@ import {
   validateShareDeliveryAuthorizationV3Bytes,
   verifyEip191MessageSignature,
   signCompactUcanRootAuthorization,
+  markDelegationTerminal,
   type UnifiedPolicyCapability,
   isStorageFullError,
   STORAGE_FULL_MESSAGE,
@@ -890,6 +891,15 @@ export interface TinyCloudNodeConfig {
 }
 
 /**
+ * The node's terminal marker is a UCAN fact; a wallet-signed SIWE (CACAO)
+ * delegation cannot carry it, so such a delegation would stay re-delegatable.
+ */
+const TERMINAL_DELEGATION_REQUIRES_SESSION_KEY =
+  "disableSubDelegation requires a session-key delegation: a wallet-signed " +
+  "delegation cannot carry the node's terminal marker. Request only " +
+  "capabilities the current session holds.";
+
+/**
  * Options for {@link TinyCloudNode.delegateTo}.
  *
  * `expiry` accepts either an ms-format duration string (e.g. `"7d"`, `"1h"`)
@@ -919,6 +929,13 @@ export interface DelegateToOptions {
    * aborts activation and propagates from `delegateTo`.
    */
   onPrepared?: (prepared: PortableDelegation) => Promise<void>;
+  /**
+   * Mark the delegation terminal: the node refuses any delegation that cites
+   * it as a parent (`terminal-parent-cannot-redelegate`). The delegate can
+   * still use it directly. Only session-key UCAN delegations can carry the
+   * marker, so this throws with `forceWalletSign`. Default false.
+   */
+  disableSubDelegation?: boolean;
 }
 
 /**
@@ -7001,6 +7018,9 @@ export class TinyCloudNode {
     //    them via the legacy `createDelegation` which loops internally
     //    (or just not pass `forceWalletSign: true`).
     if (options?.forceWalletSign) {
+      if (options.disableSubDelegation) {
+        throw new Error(TERMINAL_DELEGATION_REQUIRES_SESSION_KEY);
+      }
       if (expandedEntries.length > 1) {
         throw new Error(
           "delegateTo with forceWalletSign=true supports at most one " +
@@ -7046,6 +7066,7 @@ export class TinyCloudNode {
         plan.grant,
         plan.operations,
         onPrepared,
+        options?.disableSubDelegation === true,
       );
       return { delegation, prompted: false };
     }
@@ -7062,6 +7083,7 @@ export class TinyCloudNode {
       effectiveExpiration,
       session,
       onPrepared,
+      options?.disableSubDelegation === true,
     );
     return { delegation, prompted: false };
   }
@@ -7355,6 +7377,7 @@ export class TinyCloudNode {
     expirationTime: Date,
     session: TinyCloudSession,
     onPrepared?: DelegateToOptions["onPrepared"],
+    disableSubDelegation = false,
   ): Promise<PortableDelegation> {
     if (entries.length === 0) {
       throw new Error(
@@ -7435,6 +7458,9 @@ export class TinyCloudNode {
       abilities,
       expirationSecs,
     });
+    const signed = disableSubDelegation
+      ? markDelegationTerminal(result.delegation, serviceSession.jwk)
+      : result;
 
     // Translate the WASM result into a PortableDelegation. We don't
     // have a structured delegation header from the WASM path, so we
@@ -7451,16 +7477,16 @@ export class TinyCloudNode {
     // expects a bare JWT string. The wallet-signed CACAO path also uses
     // raw base64 without any prefix. Adding "Bearer " causes a parse
     // failure that surfaces as a 401 from the host.
-    const delegationHeader = { Authorization: result.delegation };
+    const delegationHeader = { Authorization: signed.delegation };
 
     const delegation: PortableDelegation = {
-      cid: result.cid,
+      cid: signed.cid,
       delegationHeader,
       spaceId,
       path: primary.path,
       actions: primary.actions,
       resources: result.resources,
-      disableSubDelegation: false,
+      disableSubDelegation,
       expiry: result.expiry,
       delegateDID: did,
       ownerAddress: session.address,
@@ -7499,6 +7525,7 @@ export class TinyCloudNode {
     grant: RuntimePermissionGrant,
     requestedOperations: RuntimePermissionOperation[],
     onPrepared?: DelegateToOptions["onPrepared"],
+    disableSubDelegation = false,
   ): Promise<PortableDelegation> {
     this.assertRuntimeGrantCaveatsPreservable(entries, requestedOperations, grant);
     this.assertDelegationCaveatsPreservable(entries);
@@ -7509,18 +7536,21 @@ export class TinyCloudNode {
       abilities: this.permissionsToAbilities(entries),
       expirationSecs: Math.floor(expirationTime.getTime() / 1000),
     });
+    const signed = disableSubDelegation
+      ? markDelegationTerminal(result.delegation, grant.session.jwk)
+      : result;
 
     const primary = result.resources[0];
-    const delegationHeader = { Authorization: result.delegation };
+    const delegationHeader = { Authorization: signed.delegation };
     const targetHost = grant.delegation.host ?? this.config.host!;
     const delegation: PortableDelegation = {
-      cid: result.cid,
+      cid: signed.cid,
       delegationHeader,
       spaceId: grant.session.spaceId,
       path: primary.path,
       actions: primary.actions,
       resources: result.resources,
-      disableSubDelegation: false,
+      disableSubDelegation,
       expiry: result.expiry,
       delegateDID: did,
       ownerAddress: grant.delegation.ownerAddress,
@@ -8317,7 +8347,12 @@ export class TinyCloudNode {
     actions: string[];
     /** DID of the recipient (from their TinyCloudNode.did) */
     delegateDID: string;
-    /** Whether to prevent the recipient from creating sub-delegations (default: false) */
+    /**
+     * Prevent the recipient from creating sub-delegations (default: false).
+     * The delegation carries the node's terminal marker, so the node refuses
+     * its children. Needs capabilities the current session holds; throws
+     * rather than fall back to a wallet-signed delegation.
+     */
     disableSubDelegation?: boolean;
     /** Expiration time in milliseconds from now (default: 1 hour) */
     expiryMs?: number;
@@ -8369,11 +8404,10 @@ export class TinyCloudNode {
       params.spaceIdOverride,
     );
     try {
-      const result = await this.delegateTo(
-        resolvedDelegateDID,
-        entries,
-        params.expiryMs !== undefined ? { expiry: params.expiryMs } : undefined,
-      );
+      const result = await this.delegateTo(resolvedDelegateDID, entries, {
+        ...(params.expiryMs !== undefined ? { expiry: params.expiryMs } : {}),
+        disableSubDelegation: params.disableSubDelegation,
+      });
       return result.delegation;
     } catch (err) {
       if (err instanceof PermissionNotInManifestError) {
@@ -8413,6 +8447,9 @@ export class TinyCloudNode {
     spaceIdOverride?: string;
     includePublicSpace?: boolean;
   }): Promise<PortableDelegation> {
+    if (params.disableSubDelegation) {
+      throw new Error(TERMINAL_DELEGATION_REQUIRES_SESSION_KEY);
+    }
     if (!this.signer) {
       throw new Error("Cannot createDelegation() in session-only mode. Requires wallet mode.");
     }
@@ -8483,7 +8520,7 @@ export class TinyCloudNode {
       spaceId: params.spaceIdOverride ?? session.spaceId,
       path: params.path,
       actions: params.actions,
-      disableSubDelegation: params.disableSubDelegation ?? false,
+      disableSubDelegation: false,
       expiry: expirationTime,
       delegateDID: params.delegateDID,
       ownerAddress: session.address,
@@ -8529,7 +8566,7 @@ export class TinyCloudNode {
           spaceId: publicSpaceId,
           path: "",
           actions: [KV.GET, KV.PUT, KV.METADATA],
-          disableSubDelegation: params.disableSubDelegation ?? false,
+          disableSubDelegation: false,
           expiry: expirationTime,
           delegateDID: params.delegateDID,
           ownerAddress: session.address,
@@ -8742,7 +8779,10 @@ export class TinyCloudNode {
       actions: string[];
       /** DID of the recipient */
       delegateDID: string;
-      /** Whether to prevent the recipient from creating further sub-delegations */
+      /**
+       * Not supported: this method issues a wallet-signed delegation, which
+       * cannot carry the node's terminal marker, so `true` throws.
+       */
       disableSubDelegation?: boolean;
       /** Expiration in milliseconds from now; defaults to the parent's own expiry, the longest allowed. */
       expiryMs?: number;
@@ -8767,6 +8807,9 @@ export class TinyCloudNode {
     // Validate sub-delegation is allowed
     if (parentDelegation.disableSubDelegation) {
       throw new Error("Parent delegation does not allow sub-delegation");
+    }
+    if (params.disableSubDelegation) {
+      throw new Error(TERMINAL_DELEGATION_REQUIRES_SESSION_KEY);
     }
 
     const parentResources = parentDelegation.resources ?? [{
@@ -8865,7 +8908,7 @@ export class TinyCloudNode {
       spaceId: parentDelegation.spaceId,
       path: requestedResources[0]!.path,
       actions: requestedResources[0]!.actions,
-      disableSubDelegation: params.disableSubDelegation ?? false,
+      disableSubDelegation: false,
       expiry: actualExpiry,
       delegateDID: params.delegateDID,
       ownerAddress: parentDelegation.ownerAddress!,
