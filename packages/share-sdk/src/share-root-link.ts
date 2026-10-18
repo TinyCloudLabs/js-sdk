@@ -1,6 +1,7 @@
 import { ed25519 } from "@noble/curves/ed25519";
 import { didKeyFromEd25519PublicKey, toBase64Url } from "@tinycloud/share-envelope";
 import { canonicalViewerUrl, NATIVE_SHARE_FRAGMENT_PARAMETER } from "./native.js";
+import { nodeDidOf } from "./share-network.js";
 import { ShareRootError, errorMessage, readJsonCapped, type ShareRoot } from "./share-root.js";
 
 type FetchFn = (input: URL, init?: RequestInit) => Promise<Response>;
@@ -16,14 +17,6 @@ export interface RootBearerLink {
   readonly expiresAt: Date;
 }
 
-async function nodeDidOf(nodeOrigin: string, fetchFn: FetchFn): Promise<string> {
-  let info: unknown;
-  try { info = await readJsonCapped(await fetchFn(new URL("/info", nodeOrigin), { redirect: "error" })); } catch (error) { throw new ShareRootError("invalid-request", `node identity is unavailable: ${errorMessage(error)}`); }
-  const nodeDid = typeof info === "object" && info !== null && "nodeId" in info ? info.nodeId : undefined;
-  if (typeof nodeDid !== "string" || !nodeDid.startsWith("did:key:")) throw new ShareRootError("invalid-request", "node identity is unavailable");
-  return nodeDid;
-}
-
 /**
  * Mint a view-only bearer link under a share root (TC-1423 D3, slice 3).
  * Zero approvals: the share key signs `kv/get` on one exact key under the
@@ -34,7 +27,7 @@ async function nodeDidOf(nodeOrigin: string, fetchFn: FetchFn): Promise<string> 
  * the `/viewer` fragment, so viewers and `openNativeShare` read it unchanged.
  *
  * The per-link key travels in the fragment by design (anyone with the link
- * holds it). A `kv` root is enough: links need no decrypt. Use
+ * holds it). Links need no decrypt (share roots never have it). Use
  * `ensureShareRoot` first; a `delegation-revoked` or expired root fails here
  * and needs a re-root (one approval).
  */

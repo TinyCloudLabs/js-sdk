@@ -9,7 +9,6 @@ const NODE = "https://node.example";
 const NODE_DID = "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK";
 const VIEWER = "https://share.example";
 const PATH = "xyz.tinycloud.share/shares/s1/a.md";
-const notEnforcing = { isEnforced: async () => false, observe: () => {} };
 
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 
@@ -33,7 +32,7 @@ function fakeNode(options: { delegateStatus?: number; receipt?: (cid: string) =>
 
 async function kvRoot(days = 37) {
   const owner = fakeOwner();
-  const root = await ShareRoot.create({ owner, spaceId: APPLICATIONS, nodeOrigin: NODE, expiresAt: new Date(Date.now() + days * DAY), options: { policyOwnerModeProbe: notEnforcing } });
+  const root = await ShareRoot.create({ owner, spaceId: APPLICATIONS, nodeOrigin: NODE, expiresAt: new Date(Date.now() + days * DAY) });
   return { owner, root };
 }
 
@@ -43,7 +42,6 @@ describe("publishRootBearerLink", () => {
     const node = fakeNode();
     const link = await publishRootBearerLink({ root, path: PATH, expiresAt: new Date(Date.now() + 7 * DAY), viewerOrigin: VIEWER, fetch: node.fetch });
     expect(owner.calls).toHaveLength(1);
-    expect(root.scope).toBe("kv");
     expect(new URL(link.url).origin + new URL(link.url).pathname).toBe(`${VIEWER}/viewer`);
     const token = parseNativeShareUrl(link.url);
     expect(token.startsWith("tc1:")).toBe(true);

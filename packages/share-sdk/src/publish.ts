@@ -43,6 +43,8 @@ export interface PublishedShareMetadata {
   readonly enforcerDid?: string;
   readonly envelopeCid?: string;
   readonly shareCid?: string;
+  /** Set when the content is a numbered artifact version (TC-1428). Pinned: the share can only ever read this version. */
+  readonly artifact?: { readonly id: string; readonly version: number; readonly mode: "pinned" };
 }
 
 /** Sender-only Policy/v3 material retained in encrypted history for delivery retries. */

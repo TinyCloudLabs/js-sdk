@@ -41,7 +41,6 @@ class CountingSigner extends PrivateKeySigner {
 const wallet = new CountingSigner(Wallet.createRandom().privateKey.slice(2));
 const nodeConfig = { host: SERVER_URL, autoBootstrapAccount: false, tinycloudFallbackHosts: [SERVER_URL], autoDiscoverLocalNode: false, enablePublicSpace: false, domain: "share.test" } satisfies Partial<TinyCloudNodeConfig>;
 const owner = new TinyCloudNode({ ...nodeConfig, signer: wallet, prefix: "applications", autoCreateSpace: true });
-const notEnforcing = { isEnforced: async () => false, observe: () => {} };
 const id = crypto.randomUUID();
 const P1 = `${PREFIX}${id}/a.md`;
 const P2 = `${PREFIX}${id}/b.md`;
@@ -103,18 +102,17 @@ beforeAll(async () => {
   const ensured = await counted("root", () => ensureShareRoot({
     expiresAt: new Date(Date.now() + 7 * DAY), owner: { ownerDid, createOwnerDelegation: (params) => owner.createOwnerDelegation(params) }, spaceId, nodeOrigin: SERVER_URL,
     keyFactory: async () => (rootKey = await createDelegatedShareKey({ extractable: false })),
-    options: { policyOwnerModeProbe: notEnforcing },
   }));
   root = ensured.root;
 }, 120_000);
 
 describe("bearer links via the share root", () => {
-  test("the kv-only root costs one approval; each link none, in today's /viewer#tc1= shape, opened by the unchanged receive path", async () => {
+  test("the root costs one approval; each link none, in today's /viewer#tc1= shape, opened by the unchanged receive path", async () => {
     const a = await counted("links", () => publish(P1, new Date(Date.now() + 7 * DAY)));
     const b = await counted("links", () => publish(P2, new Date(Date.now() + 30 * DAY)));
-    const results = { scope: root.scope, url: new URL(a.url).pathname + new URL(a.url).hash.slice(0, 8), a: await openLink(a), b: await openLink(b), approvals: { ...approvalsUsed } };
+    const results = { url: new URL(a.url).pathname + new URL(a.url).hash.slice(0, 8), a: await openLink(a), b: await openLink(b), approvals: { ...approvalsUsed } };
     console.log("[root-link] publish", JSON.stringify(results));
-    expect(results).toMatchObject({ scope: "kv", url: "/viewer#tc1=tc1", a: "ok:# a.md", b: "ok:# b.md", approvals: { root: 1, links: 0 } });
+    expect(results).toMatchObject({ url: "/viewer#tc1=tc1", a: "ok:# a.md", b: "ok:# b.md", approvals: { root: 1, links: 0 } });
   });
 
   test("the link key reads only its exact key; the Node refuses wider or longer children of the root", async () => {
@@ -156,11 +154,11 @@ describe("bearer links via the share root", () => {
   test("a re-root costs one approval, only when the link needs more time than the root has left; old links keep working", async () => {
     const short = await counted("short-root", () => ShareRoot.create({
       owner: { ownerDid, createOwnerDelegation: (params) => owner.createOwnerDelegation(params) }, spaceId, nodeOrigin: SERVER_URL,
-      expiresAt: new Date(Date.now() + 2 * DAY), options: { policyOwnerModeProbe: notEnforcing },
+      expiresAt: new Date(Date.now() + 2 * DAY),
     }));
     const oldLink = await counted("links", () => publish(P1, new Date(Date.now() + DAY), short));
-    const kept = await counted("reroot", () => ensureShareRoot({ current: short, expiresAt: new Date(Date.now() + DAY), owner: { ownerDid, createOwnerDelegation: (params) => owner.createOwnerDelegation(params) }, spaceId, nodeOrigin: SERVER_URL, options: { policyOwnerModeProbe: notEnforcing } }));
-    const rerooted = await counted("reroot", () => ensureShareRoot({ current: short, expiresAt: new Date(Date.now() + 7 * DAY), owner: { ownerDid, createOwnerDelegation: (params) => owner.createOwnerDelegation(params) }, spaceId, nodeOrigin: SERVER_URL, options: { policyOwnerModeProbe: notEnforcing } }));
+    const kept = await counted("reroot", () => ensureShareRoot({ current: short, expiresAt: new Date(Date.now() + DAY), owner: { ownerDid, createOwnerDelegation: (params) => owner.createOwnerDelegation(params) }, spaceId, nodeOrigin: SERVER_URL }));
+    const rerooted = await counted("reroot", () => ensureShareRoot({ current: short, expiresAt: new Date(Date.now() + 7 * DAY), owner: { ownerDid, createOwnerDelegation: (params) => owner.createOwnerDelegation(params) }, spaceId, nodeOrigin: SERVER_URL }));
     const newLink = await counted("links", () => publish(P2, new Date(Date.now() + 7 * DAY), rerooted.root));
     const results = { kept: kept.rerooted, rerooted: rerooted.rerooted, newKey: rerooted.root.keyDid !== short.keyDid, oldLink: await openLink(oldLink), newLink: await openLink(newLink), approvals: { ...approvalsUsed } };
     console.log("[root-link] re-root", JSON.stringify(results));

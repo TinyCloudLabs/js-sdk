@@ -93,6 +93,7 @@ configureShareCommandServices({
   assertDomainDelivery: shareAuthority.assertDomainDelivery,
   revocation: shareAuthority.revocation,
   nativeReader: shareAuthority.nativeReader,
+  artifactStore: shareAuthority.artifactStore,
 });
 
 const argv = process.argv.slice(2);
