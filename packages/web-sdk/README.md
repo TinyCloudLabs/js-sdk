@@ -179,6 +179,19 @@ activation, the gated artifact and the worker keep TC-1432's ceilings. The ledge
 lands first, #586 re-measures against the new base and replaces its own row before
 it merges.
 
+The TC-1443 slice b registry policy (#589: the opt-in fail-closed `registryPolicy` and
+its space-creation guard) raises the root ceilings once more, as an exact-delta row
+with zero headroom, `tc1443bRatchet`, chained after TC-1443's. It was re-measured on
+the merge of master `28ca77a0` into the PR branch: master CI run 39171377880 (at
+`116f30ed`, a version commit away from `28ca77a0`) measured 1,470,995 / 1,397,981 B,
+and GitHub run 39172113588 measured the PR on `87310cad`, identical in both Node jobs:
+1,473,908 / 1,402,491 B, i.e. +2,913 / +4,510 over master. The row's ceilings are
+those measured bytes. The delta is awaiting Naomi's approval. First import,
+activation, the gated artifact and the worker keep TC-1432's ceilings. The ledger's
+`tc1443bRatchet` row records them and cannot change later. If another root-growing PR
+lands first, #589 re-measures against the new base and replaces its own row before it
+merges.
+
 **Ancestry pins and squash merges.** A policy row records the PR-branch commit it
 was reviewed at, and its introduction check requires that literal commit in the
 PR head. js-sdk uses merge commits, which keep that commit reachable, but squash
@@ -187,8 +200,8 @@ is therefore checked only when a PR introduces a row. Any
 new check that re-validates merged pins against HEAD would break master again
 after the next squash, and only review prevents that. As a consistency check,
 every PR also requires each merged row's pin to be on its base or landed by it:
-the first first-parent master commit that added the pin to `scripts/`, normally
-its squash commit (`landingCommit` in `scripts/replica-size-policy.ts`). After a
+the first first-parent master commit that added the pin to `scripts/`, the merge commit
+(`landingCommit` in `scripts/replica-size-policy.ts`). After a
 squash merge, nothing needs editing. Content keys (blob hashes) were rejected:
 pinned files such as `authority.ts` legitimately change later, whereas the
 landing commit stays an ancestor for good.
