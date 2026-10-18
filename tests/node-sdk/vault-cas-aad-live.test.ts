@@ -245,6 +245,22 @@ describe("vault etag / ifMatch / expectAad (live node)", () => {
       expect(read).toEqual({ status: "aad_mismatch" });
     });
 
+    test("a stored value that is not an envelope is corrupt_envelope with or without expectAad", async () => {
+      for (const [name, body] of [
+        ["null", "null"],
+        ["number", "42"],
+        ["string", '"text"'],
+        ["array", "[]"],
+        ["empty-object", "{}"],
+      ] as const) {
+        await must(await node.kv.put(`vault/${key(`malformed-${name}`)}`, body));
+        expect(await node.vault.readNetworkEncrypted(key(`malformed-${name}`))).toEqual({ status: "corrupt_envelope" });
+        expect(await node.vault.readNetworkEncrypted(key(`malformed-${name}`), { expectAad: true })).toEqual({
+          status: "corrupt_envelope",
+        });
+      }
+    });
+
     test("an envelope written without AAD is an explicit aad_mismatch, and reads by default", async () => {
       await putRawEnvelope("legacy", { legacy: true });
       expect((await must(await node.vault.get<Json>(key("legacy")))).value).toEqual({ legacy: true });

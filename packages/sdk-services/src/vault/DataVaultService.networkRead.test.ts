@@ -155,6 +155,8 @@ function createClassifiedVault(options?: {
   telemetry?: (event: string, data: unknown) => void;
   authorization?: string;
   spaceId?: string;
+  /** A master-key vault: no network encryption configured. */
+  masterKey?: boolean;
 }) {
   const spaceId = options?.spaceId ?? SPACE_ID;
   let localDecryptFails = false;
@@ -203,11 +205,15 @@ function createClassifiedVault(options?: {
   const vault = new DataVaultService({
     spaceId,
     crypto: createVaultCrypto(),
-    encryption: {
-      networkId: NETWORK_ID,
-      service: encryption,
-      decryptCapabilityProof: { proofs: ["bafy-delegation"] },
-    },
+    ...(options?.masterKey
+      ? {}
+      : {
+          encryption: {
+            networkId: NETWORK_ID,
+            service: encryption,
+            decryptCapabilityProof: { proofs: ["bafy-delegation"] },
+          },
+        }),
     tc: {
       kv,
       ensurePublicSpace: async () => ({ ok: true as const, data: undefined }),
@@ -492,11 +498,38 @@ describe("DataVaultService.put ifMatch", () => {
     expect(!result.ok && result.error.code).toBe(code);
   });
 
-  test("a plain 500 stays a storage error, not outcome_unknown", async () => {
+  test.each([
+    ["500 without the node's body", 500, "boom", "OUTCOME_UNKNOWN"],
+    ["502 bad gateway", 502, "bad gateway", "OUTCOME_UNKNOWN"],
+    ["503 with no body", 503, "", "OUTCOME_UNKNOWN"],
+    ["504 gateway timeout", 504, "", "OUTCOME_UNKNOWN"],
+    ["520 unknown origin error", 520, "", "OUTCOME_UNKNOWN"],
+    ["522 connection timed out", 522, "", "OUTCOME_UNKNOWN"],
+    ["524 a timeout occurred", 524, "", "OUTCOME_UNKNOWN"],
+    ["521 origin down (never reached)", 521, "", "STORAGE_ERROR"],
+    ["523 origin unreachable (never reached)", 523, "", "STORAGE_ERROR"],
+    ["404 space not found", 404, "Space not found", "STORAGE_ERROR"],
+  ])("%s", async (_name, status, body, code) => {
     const fixture = createClassifiedVault();
-    fixture.setKvResponse(() => Promise.resolve(new Response("boom", { status: 500 })));
+    fixture.setKvResponse(() => Promise.resolve(new Response(body, { status })));
     const result = await fixture.vault.put(CAS_KEY, { v: 2 }, { ifMatch: CAS_ETAG });
+    expect(!result.ok && result.error.code).toBe(code);
+  });
+
+  test("without ifMatch a gateway error keeps its existing storage error", async () => {
+    const fixture = createClassifiedVault();
+    fixture.setKvResponse(() => Promise.resolve(new Response("", { status: 502 })));
+    const result = await fixture.vault.put(CAS_KEY, { v: 2 });
     expect(!result.ok && result.error.code).toBe("STORAGE_ERROR");
+  });
+
+  test("a weak etag says it was weakened in transit", async () => {
+    const fixture = createClassifiedVault();
+    const result = await fixture.vault.put(CAS_KEY, { v: 2 }, { ifMatch: `W/${CAS_ETAG}` });
+    expect(!result.ok && result.error.code).toBe("INVALID_ETAG");
+    expect(!result.ok && result.error.message).toContain("weakened in transit");
+    const unquoted = await fixture.vault.put(CAS_KEY, { v: 2 }, { ifMatch: "abc" });
+    expect(!unquoted.ok && unquoted.error.message).not.toContain("weakened");
   });
 
   test("a refused connection is reported as outcome unknown", async () => {
@@ -588,5 +621,53 @@ describe("DataVaultService expectAad (opt-in)", () => {
     const get = await fixture.vault.get(CAS_KEY, { expectAad: true });
     expect(!get.ok && get.error.code).toBe("AAD_MISMATCH");
     expect(decrypts).toBe(0);
+  });
+
+  test.each([
+    ["JSON null", "null"],
+    ["a number", "42"],
+    ["a string", '"just text"'],
+    ["an array", "[]"],
+    ["an object without envelope fields", "{}"],
+    ["an object with only an aad", JSON.stringify({ aad: "dGlueQ==" })],
+    ["an object with a non-string aad", JSON.stringify({ aad: 7 })],
+  ])("%s is a corrupt envelope with or without expectAad", async (_name, body) => {
+    const fixture = createClassifiedVault();
+    fixture.setKvResponse(() => Promise.resolve(new Response(body, { status: 200 })));
+    expect(await fixture.vault.readNetworkEncrypted(CAS_KEY)).toEqual({ status: "corrupt_envelope" });
+    expect(await fixture.vault.readNetworkEncrypted(CAS_KEY, { expectAad: true })).toEqual({
+      status: "corrupt_envelope",
+    });
+    const plain = await fixture.vault.get(CAS_KEY);
+    const strict = await fixture.vault.get(CAS_KEY, { expectAad: true });
+    expect(!plain.ok && plain.error.code).toBe("DECRYPTION_FAILED");
+    expect(!strict.ok && strict.error.code).toBe("DECRYPTION_FAILED");
+  });
+
+  test("an AAD that is not base64 is a mismatch, never a throw", async () => {
+    const fixture = createClassifiedVault();
+    const envelope = JSON.parse(await fixture.encrypt({ v: 1 }, bind(SPACE_ID, CAS_KEY)));
+    fixture.setKvResponse(() => kvEnvelopeResponse(JSON.stringify({ ...envelope, aad: "***" })));
+    expect(await fixture.vault.readNetworkEncrypted(CAS_KEY, { expectAad: true })).toEqual({
+      status: "aad_mismatch",
+    });
+  });
+
+  test("a master-key vault and getShared refuse expectAad instead of skipping it", async () => {
+    const masterKey = createClassifiedVault({ masterKey: true });
+    const refused = await masterKey.vault.get(CAS_KEY, { expectAad: true });
+    expect(!refused.ok && refused.error.code).toBe("STORAGE_ERROR");
+    expect(!refused.ok && refused.error.message).toContain("expectAad is only supported by network-encrypted vaults");
+    expect(masterKey.getNetworkCalls()).toBe(0);
+
+    for (const fixture of [masterKey, createClassifiedVault()]) {
+      const shared = await fixture.vault.getShared("did:key:z6MkGrantor", CAS_KEY, {
+        expectAad: true,
+        kv: fixture.kv,
+      });
+      expect(!shared.ok && shared.error.code).toBe("STORAGE_ERROR");
+      expect(!shared.ok && shared.error.message).toContain("not supported by getShared");
+      expect(fixture.getNetworkCalls()).toBe(0);
+    }
   });
 });
