@@ -1,5 +1,6 @@
 import type { SenderShareRecord } from "../history.js";
 import { canonicalAddressSpelling } from "./agent-record.js";
+import { STORED_DELIVERY_MATERIAL_KEYS, type StoredShareRecord } from "./delivery.js";
 
 /**
  * Index document schema v1, rows, `project()`, and the versioned agent-record
@@ -113,10 +114,9 @@ function isObject(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
+/** An RFC 3339 UTC time as the SDK and node write it: whole seconds or a fraction (`publishAddressedShare` omits it). */
 function isIsoTime(value: unknown): value is string {
-  if (typeof value !== "string") return false;
-  const parsed = Date.parse(value);
-  return Number.isFinite(parsed) && new Date(parsed).toISOString() === value;
+  return typeof value === "string" && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,9})?Z$/.test(value) && Number.isFinite(Date.parse(value));
 }
 
 function isRow(value: unknown): value is ShareIndexRow {
@@ -196,7 +196,7 @@ export function recordCids(record: Pick<SenderShareRecord, "registrationCid" | "
     .filter((value, index, all): value is string => typeof value === "string" && value.length > 0 && all.indexOf(value) === index);
 }
 
-export function revokeKind(record: SenderShareRecord): ShareIndexRow["rk"] {
+export function revokeKind(record: StoredShareRecord): ShareIndexRow["rk"] {
   if (record.targetKind !== undefined && record.targetKind !== "bearer" && record.policyCid !== undefined && record.enforcementDelegationCid !== undefined) return "policy-v3";
   return record.enforcementDelegationCid === undefined ? "none" : "delegation";
 }
@@ -205,7 +205,7 @@ export function revokeKind(record: SenderShareRecord): ShareIndexRow["rk"] {
  * The display-only projection of a record. `claims` overrides the CIDs the
  * row may claim (agent rows claim only what their chain verified).
  */
-export function project(record: SenderShareRecord, input: { readonly key: string; readonly src: string; readonly claims?: readonly string[]; readonly proof?: { readonly state: ShareProofState; readonly expired: boolean } }): ShareIndexRow {
+export function project(record: StoredShareRecord, input: { readonly key: string; readonly src: string; readonly claims?: readonly string[]; readonly proof?: { readonly state: ShareProofState; readonly expired: boolean } }): ShareIndexRow {
   const basename = input.key.slice(input.key.lastIndexOf("/") + 1);
   const extension = /\.([a-z0-9]{1,10})$/i.exec(typeof record.filename === "string" ? record.filename : "")?.[1]?.toLowerCase();
   const claims = input.claims ?? recordCids(record);
@@ -302,7 +302,7 @@ export class ShareRecordSchemaError extends Error {
 }
 
 /** Throws {@link ShareRecordSchemaError} when the decrypted value fails the schema. */
-export function checkAgentRecordSchema(value: unknown, context: AgentRecordSchemaContext): SenderShareRecord {
+export function checkAgentRecordSchema(value: unknown, context: AgentRecordSchemaContext): StoredShareRecord {
   const fail = (): never => { throw new ShareRecordSchemaError("schema"); };
   const fields = FIELDS_BY_RECORD_V[context.recordV];
   if (fields === undefined || !isObject(value)) return fail();
@@ -340,11 +340,17 @@ export function checkAgentRecordSchema(value: unknown, context: AgentRecordSchem
   if (record.revokedAt !== undefined && !isIsoTime(record.revokedAt)) return fail();
   if (record.link !== undefined && typeof record.link !== "string") return fail();
   if (record.filename !== undefined && (typeof record.filename !== "string" || record.filename.length > 512)) return fail();
-  if (record.deliveryMaterial !== undefined && !isObject(record.deliveryMaterial)) return fail();
+  // Each blob once (stored form, `delivery.ts`): a Policy/v3 record keeps the sealed envelope and its key, never
+  // the envelope it decrypts to nor the `/s/inline` link that re-encodes it.
+  if (record.deliveryMaterial !== undefined) {
+    const material = record.deliveryMaterial;
+    if (!isObject(material) || Object.keys(material).length !== STORED_DELIVERY_MATERIAL_KEYS.length || !STORED_DELIVERY_MATERIAL_KEYS.every((key) => typeof material[key] === "string")) return fail();
+    if (record.link !== undefined) return fail();
+  }
   if (record.deliveredRecipients !== undefined && (!Array.isArray(record.deliveredRecipients) || !record.deliveredRecipients.every((item) => typeof item === "string"))) return fail();
   if (record.proofs !== undefined) {
     const proofs = record.proofs;
     if (!isObject(proofs) || !Object.keys(proofs).every((key) => PROOF_STRING_FIELDS.includes(key) ? typeof proofs[key] === "string" : PROOF_OBJECT_FIELDS.includes(key) && isObject(proofs[key]))) return fail();
   }
-  return record as unknown as SenderShareRecord;
+  return record as unknown as StoredShareRecord;
 }

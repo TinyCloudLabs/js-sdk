@@ -3,7 +3,7 @@ import { computeCid, fromBase64Url, shareEnvelopeV3Schema } from "@tinycloud/sha
 import { verifyEnvelopeV3At } from "./policy-v3.js";
 import { CID } from "multiformats/cid";
 import { create as createDigest } from "multiformats/hashes/digest";
-import type { SenderShareRecord } from "../../history.js";
+import { openDeliveryEnvelope, type StoredShareRecord } from "../delivery.js";
 import { checkRegistrationReceipt, type CheckedRegistration } from "./registration.js";
 import { canonicalAddressSpelling } from "../agent-record.js";
 import { REGISTERED_AT_SKEW_MS, type ShareProofState } from "../schema.js";
@@ -25,7 +25,8 @@ import { parseSignedUcan, principalOf } from "./ucan.js";
  * - anything else: `{ ok: false }` (reason `proof`).
  *
  * Supported chains: native bearer links (`proofs.link` + `proofs.session`),
- * Policy/v3 addressed shares (`deliveryMaterial.envelope` + `proofs.session`)
+ * Policy/v3 addressed shares (the envelope opened from
+ * `deliveryMaterial.sealedEnvelope`, bound to `shareCid`, + `proofs.session`)
  * and Policy/v2 owner-policy shares (`proofs.ownerPolicy`, `ownerDelegation`,
  * `enforcementDelegation`, optional `registration`).
  *
@@ -84,7 +85,7 @@ function cacaoCid(authorization: string): string {
   return CID.createV1(0x55, createDigest(0x1e, blake3(fromBase64Url(authorization.replace(/=+$/, ""))))).toString();
 }
 
-function kvResource(record: SenderShareRecord): string {
+function kvResource(record: StoredShareRecord): string {
   return `${record.target.spaceId}/kv/${record.resource.path}`;
 }
 
@@ -98,7 +99,7 @@ function around(signedMs: number): { readonly earliest: number; readonly latest:
   return { earliest: signedMs - REGISTERED_AT_SKEW_MS, latest: signedMs + REGISTERED_AT_SKEW_MS };
 }
 
-async function bearerChain(record: SenderShareRecord, link: string, context: ChainContext): Promise<ChainVerdict> {
+async function bearerChain(record: StoredShareRecord, link: string, context: ChainContext): Promise<ChainVerdict> {
   if (record.enforcementDelegationCid === undefined) fail("bearer record names no link delegation");
   const leaf = parseSignedUcan(link, record.enforcementDelegationCid);
   const resource = kvResource(record);
@@ -117,7 +118,7 @@ async function bearerChain(record: SenderShareRecord, link: string, context: Cha
   return { ok: true, state: leaf.issuer === principalOf(context.agentDid) ? "proven" : "chained", expired: leafExpired || parent.time === "expired", claims, issued };
 }
 
-async function policyV3Chain(record: SenderShareRecord, envelopeValue: unknown, context: ChainContext): Promise<ChainVerdict> {
+async function policyV3Chain(record: StoredShareRecord, envelopeValue: unknown, context: ChainContext): Promise<ChainVerdict> {
   const parsed = shareEnvelopeV3Schema.safeParse(envelopeValue);
   if (!parsed.success) fail("Policy/v3 envelope is malformed");
   const envelope = parsed.data;
@@ -140,7 +141,7 @@ async function policyV3Chain(record: SenderShareRecord, envelopeValue: unknown, 
   return { ok: true, state: principalOf(ownerDid) === principalOf(context.agentDid) ? "proven" : "chained", expired: expired || parent.time === "expired", claims, issued };
 }
 
-async function ownerPolicyV2Chain(record: SenderShareRecord, context: ChainContext): Promise<ChainVerdict> {
+async function ownerPolicyV2Chain(record: StoredShareRecord, context: ChainContext): Promise<ChainVerdict> {
   const proofs = record.proofs!;
   if (proofs.ownerDelegation === undefined || proofs.enforcementDelegation === undefined || record.policyCid === undefined || record.ownerDelegationCid === undefined || record.enforcementDelegationCid === undefined) fail("Policy/v2 chain is incomplete");
   const policyBytes = fromBase64Url(proofs.ownerPolicy!);
@@ -170,7 +171,7 @@ async function ownerPolicyV2Chain(record: SenderShareRecord, context: ChainConte
   if (record.registrationCid !== undefined && proofs.registration !== undefined && key !== undefined) {
     let checked: CheckedRegistration;
     try {
-      checked = checkRegistrationReceipt(proofs.registration, { policyCid: record.policyCid, ownerDelegationCid: record.ownerDelegationCid, enforcementDelegationCid: record.enforcementDelegationCid, contentSourceDigest: policy.contentSourceDigest }, key, context.now);
+      checked = checkRegistrationReceipt(proofs.registration, { policyCid: record.policyCid, ownerDelegationCid: record.ownerDelegationCid, enforcementDelegationCid: record.enforcementDelegationCid, policy, enforcementFacts: facts }, key, context.now);
     } catch {
       fail("registration receipt is invalid");
     }
@@ -183,14 +184,18 @@ async function ownerPolicyV2Chain(record: SenderShareRecord, context: ChainConte
   return { ok: true, state: "chained", expired, claims, issued };
 }
 
-/** Verify the chain behind every CID an agent record claims. Never throws. */
-export async function verifyAgentRecordChain(record: SenderShareRecord, context: ChainContext): Promise<ChainVerdict> {
+/** Verify the chain behind every CID a stored agent (or migrated) record claims. Never throws. */
+export async function verifyAgentRecordChain(record: StoredShareRecord, context: ChainContext): Promise<ChainVerdict> {
   try {
     const proofs = record.proofs;
     if (proofs?.ownerPolicy !== undefined) return await ownerPolicyV2Chain(record, context);
     if (record.targetKind !== undefined && record.targetKind !== "bearer") {
-      const envelope = record.deliveryMaterial?.envelope;
-      if (envelope === undefined) fail("Policy/v3 record carries no envelope");
+      const material = record.deliveryMaterial;
+      if (material === undefined) fail("Policy/v3 record carries no delivery material");
+      // The CIDs the record names for its sealed envelope are that envelope's.
+      if ((record.shareCid !== undefined && record.shareCid !== material.shareCid) || (record.envelopeCid !== undefined && record.envelopeCid !== material.shareCid)) fail("Policy/v3 record names another sealed envelope");
+      let envelope: unknown;
+      try { envelope = await openDeliveryEnvelope(material); } catch { fail("Policy/v3 delivery material does not open to its envelope"); }
       return await policyV3Chain(record, envelope, context);
     }
     if (proofs?.link !== undefined) return await bearerChain(record, proofs.link, context);

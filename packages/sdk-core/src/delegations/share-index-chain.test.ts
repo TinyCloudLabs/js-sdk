@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { verifyAgentRecordChain, type SenderShareRecord } from "@tinycloud/share-sdk/share-index";
+import { canonicalize, seal, toBase64Url } from "@tinycloud/share-envelope";
+import { verifyAgentRecordChain, type SenderShareRecord, type StoredShareRecord } from "@tinycloud/share-sdk/share-index";
 import { parseSignedSiweCacao } from "./cacao";
 import fixture from "./fixtures/share-index-chain.json";
 
@@ -55,7 +56,14 @@ describe("share index chain verifier on real delegations", () => {
   });
 });
 
-function v3Record(overrides: Partial<SenderShareRecord> = {}): SenderShareRecord {
+/** The record's delivery material as stored: the real envelope, sealed the way `publishAddressedShare` seals it. */
+async function sealed(envelope: unknown): Promise<NonNullable<StoredShareRecord["deliveryMaterial"]>> {
+  const key = crypto.getRandomValues(new Uint8Array(32));
+  const blob = await seal(new TextEncoder().encode(canonicalize(envelope)), key);
+  return { shareCid: blob.cid, sealedEnvelope: toBase64Url(blob.blob), envelopeKey: toBase64Url(key) };
+}
+
+async function v3Record(overrides: Partial<StoredShareRecord> = {}): Promise<StoredShareRecord> {
   const v3 = fixture.v3;
   return {
     shareId: v3.shareId,
@@ -70,8 +78,8 @@ function v3Record(overrides: Partial<SenderShareRecord> = {}): SenderShareRecord
     ownerDelegationCid: v3.policyRootCid,
     enforcementDelegationCid: v3.enforcementRootCid,
     ownerDid: fixture.agentDid,
-    // Only the signed envelope is needed to verify; the fixture carries no keys.
-    deliveryMaterial: { envelope: v3.envelope } as unknown as SenderShareRecord["deliveryMaterial"],
+    // Stored form: the verifier opens the envelope from the sealed material.
+    deliveryMaterial: await sealed(v3.envelope),
     proofs: { session: fixture.session.authorization },
     ...overrides,
   };
@@ -79,7 +87,7 @@ function v3Record(overrides: Partial<SenderShareRecord> = {}): SenderShareRecord
 
 describe("share index chain verifier on a real Policy/v3 share", () => {
   test("the session-owned policy verifies as proven, claiming the policy and both roots", async () => {
-    const result = await verifyAgentRecordChain(v3Record(), context(fixture.agentDid));
+    const result = await verifyAgentRecordChain(await v3Record(), context(fixture.agentDid));
     expect(result).toMatchObject({ ok: true, state: "proven", expired: false, claims: [fixture.v3.policyCid, fixture.v3.policyRootCid, fixture.v3.enforcementRootCid] });
     // The node-signed enforcer binding's issuedAt anchors registeredAt (±1 day).
     const issuedAt = Date.parse(fixture.v3.envelope.attestedEnforcerBinding.issuedAt);
@@ -87,17 +95,17 @@ describe("share index chain verifier on a real Policy/v3 share", () => {
   });
 
   test("chained under another agent, unproven without the CACAO, expired after the binding window", async () => {
-    const { ownerDid: _ownerDid, ...withoutOwner } = v3Record();
+    const { ownerDid: _ownerDid, ...withoutOwner } = await v3Record();
     expect(await verifyAgentRecordChain(withoutOwner, context("did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK"))).toMatchObject({ ok: true, state: "chained" });
-    expect(await verifyAgentRecordChain(v3Record({ proofs: {} }), context(fixture.agentDid))).toMatchObject({ ok: true, state: "unproven" });
-    expect(await verifyAgentRecordChain(v3Record(), context(fixture.agentDid, new Date(minted.getTime() + 2 * 3_600_000)))).toMatchObject({ ok: true, state: "proven", expired: true });
+    expect(await verifyAgentRecordChain(await v3Record({ proofs: {} }), context(fixture.agentDid))).toMatchObject({ ok: true, state: "unproven" });
+    expect(await verifyAgentRecordChain(await v3Record(), context(fixture.agentDid, new Date(minted.getTime() + 2 * 3_600_000)))).toMatchObject({ ok: true, state: "proven", expired: true });
   });
 
   test("an envelope bound to other CIDs, a tampered policy or another owner is rejected", async () => {
-    expect((await verifyAgentRecordChain(v3Record({ enforcementDelegationCid: fixture.v3.policyRootCid }), context(fixture.agentDid))).ok).toBe(false);
+    expect((await verifyAgentRecordChain(await v3Record({ enforcementDelegationCid: fixture.v3.policyRootCid }), context(fixture.agentDid))).ok).toBe(false);
     const envelope = structuredClone(fixture.v3.envelope);
     envelope.policy.createdAt = "2020-01-01T00:00:00Z";
-    expect((await verifyAgentRecordChain(v3Record({ deliveryMaterial: { envelope } as unknown as SenderShareRecord["deliveryMaterial"] }), context(fixture.agentDid))).ok).toBe(false);
-    expect((await verifyAgentRecordChain(v3Record(), context(fixture.agentDid, minted, "did:pkh:eip155:1:0x1111111111111111111111111111111111111111"))).ok).toBe(false);
+    expect((await verifyAgentRecordChain(await v3Record({ deliveryMaterial: await sealed(envelope) }), context(fixture.agentDid))).ok).toBe(false);
+    expect((await verifyAgentRecordChain(await v3Record(), context(fixture.agentDid, minted, "did:pkh:eip155:1:0x1111111111111111111111111111111111111111"))).ok).toBe(false);
   });
 });

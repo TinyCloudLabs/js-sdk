@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { fromBase64Url, toBase64Url } from "@tinycloud/share-envelope";
 import type { SenderShareRecord } from "../../src/history.js";
+import type { StoredShareRecord } from "../../src/share-index/delivery.js";
 import { createTinyCloudShareIndexBackend, type TinyCloudShareIndexClient } from "../../src/share-index/backend.js";
 import { deriveAgentKeyMaterial } from "../../src/share-index/agent-key.js";
 import { agentRecordBinding, openAgentRecordAsOwner, sealAgentRecord, type StoredAgentRecord } from "../../src/share-index/agent-record.js";
@@ -15,7 +16,7 @@ import { cacaoTimes } from "../../src/share-index/verify/cacao-times.js";
 import { parseSignedUcan } from "../../src/share-index/verify/ucan.js";
 import v3Fixture from "./fixtures/v3-envelope.json";
 import {
-  bearerFixture, CONTENT_SPACE_ID, fakeSiwe, fakeSiweParser, FakeOwnerNetwork, MemoryBackend, NETWORK_ID, newKey, OWNER_DID, SHARE_ORIGIN, signUcan, SPACE_ID, type TestKey,
+  bearerFixture, CONTENT_SPACE_ID, fakeSiwe, fakeSiweParser, FakeOwnerNetwork, MemoryBackend, NETWORK_ID, newKey, OWNER_DID, SHARE_ORIGIN, sealDeliveryMaterial, signUcan, SPACE_ID, type TestKey,
 } from "./helpers.js";
 
 /**
@@ -69,16 +70,17 @@ describe("M2: registeredAt is checked against signed times, not first sight", ()
     expect((await owner(backend).reconcile()).rejected).toEqual({ schema: 2 });
   });
 
-  test("with a signed link nbf, registeredAt must lie within a day of it", async () => {
+  test("with a signed link nbf, registeredAt must lie within a day of it (both bounds)", async () => {
     const backend = new MemoryBackend();
     const agent = newKey();
     const nbf = Math.floor((Date.now() - 5 * DAY) / 1000);
-    const near = bearerFixture({ session: agent, shareId: "near", now: new Date(nbf * 1000), expSeconds: 30 * 86_400, link: { nbf }, siwe: { expiresAt: new Date(Date.now() + DAY).toISOString() } });
-    const nearKey = await writeAgentRecord(backend, agent, near.record);
-    const far = bearerFixture({ session: agent, shareId: "far", now: new Date(nbf * 1000), expSeconds: 30 * 86_400, link: { nbf }, siwe: { expiresAt: new Date(Date.now() + DAY).toISOString() } });
-    await writeAgentRecord(backend, agent, { ...far.record, registeredAt: new Date(nbf * 1000 + 2 * DAY).toISOString() });
+    // The record's own expiry is far off, so only the window decides.
+    const make = (shareId: string) => bearerFixture({ session: agent, shareId, now: new Date(nbf * 1000), expSeconds: 30 * 86_400, link: { nbf }, siwe: { expiresAt: new Date(Date.now() + DAY).toISOString() }, record: { expiresAt: new Date(Date.now() + 20 * DAY).toISOString() } });
+    const nearKey = await writeAgentRecord(backend, agent, { ...make("near").record, registeredAt: new Date(nbf * 1000 + 12 * 3_600_000).toISOString() });
+    await writeAgentRecord(backend, agent, { ...make("far").record, registeredAt: new Date(nbf * 1000 + 2 * DAY).toISOString() });
+    await writeAgentRecord(backend, agent, { ...make("before").record, registeredAt: new Date(nbf * 1000 - 2 * DAY).toISOString() });
     const index = owner(backend);
-    expect((await index.reconcile()).rejected).toEqual({ schema: 1 });
+    expect((await index.reconcile()).rejected).toEqual({ schema: 2 });
     expect((await doc(index)).rows[nearKey]).toBeDefined();
   });
 });
@@ -99,6 +101,22 @@ describe("M2 and the migrated ruling: only an owner import is exempt from the ±
     await backend.writeVault("futureimport", { ...make("futureimport").record, registeredAt: new Date(Date.now() + DAY).toISOString(), provenance: "migrated" });
     await index.reconcile();
     expect((await doc(index)).rows.futureimport).toMatchObject({ na: true });
+  });
+
+  test("an owner import is still held to the chain's latest bound (a day after the link's signed nbf)", async () => {
+    const backend = new MemoryBackend();
+    const agent = newKey();
+    const nbf = Math.floor(Date.now() / 1000) - 10 * 86_400;
+    const make = (shareId: string) => bearerFixture({ session: agent, shareId, now: new Date(nbf * 1000), link: { nbf }, expSeconds: 30 * 86_400, siwe: { expiresAt: new Date(Date.now() + DAY).toISOString() }, record: { expiresAt: new Date(Date.now() + 20 * DAY).toISOString() } });
+    // Five days after the signed nbf, in the past: outside the window's latest bound, not in the future.
+    await backend.writeVault("late", { ...make("late").record, registeredAt: new Date(nbf * 1000 + 5 * DAY).toISOString(), provenance: "migrated" });
+    await backend.writeVault("ontime", { ...make("ontime").record, registeredAt: new Date(nbf * 1000 - 30 * DAY).toISOString(), provenance: "migrated" });
+    const index = owner(backend);
+    await index.reconcile();
+    const rows = (await doc(index)).rows;
+    expect(rows.late).toMatchObject({ na: true });
+    expect(rows.ontime).toMatchObject({ pv: "migrated", ps: "chained" });
+    expect(rows.ontime!.na).toBeUndefined();
   });
 });
 
@@ -143,6 +161,25 @@ describe("m1: a full header never blocks the owner's own updates and never evict
     await index.enqueue({ id: "own", type: "revoke", key: "web1", at: new Date().toISOString(), confirmed: true });
     expect((await index.flush()).status).toBe("written");
     expect((await doc(index)).rows.web1!.r).toMatchObject({ confirmed: true });
+  });
+
+  test("with the header already over its cap (for example after the cap is lowered), the owner's flush is still written", async () => {
+    const backend = new MemoryBackend();
+    for (let i = 0; i < 6; i++) {
+      const junk = newKey();
+      for (let j = 0; j < 5; j++) backend.putRawBytes(`agents/${agentIdFromDid(junk.did)}/x${j}/y`, encoder.encode("{}"));
+    }
+    await backend.writeVault("web1", bearerFixture({ shareId: "web1" }).record);
+    await owner(backend).reconcile();
+    const before = await doc(owner(backend));
+    const index = owner(backend, { headerBytes: Math.floor(headerBytes(before) / 2) });
+    expect(headerBytes(before)).toBeGreaterThan(Math.floor(headerBytes(before) / 2));
+    await index.enqueue({ id: "own", type: "revoke", key: "web1", at: new Date().toISOString(), confirmed: true });
+    expect((await index.flush()).status).toBe("written");
+    const after = await doc(index);
+    expect(after.rows.web1!.r).toMatchObject({ confirmed: true });
+    // Nothing was evicted to make room.
+    expect(Object.keys(after.agents)).toEqual(Object.keys(before.agents));
   });
 });
 
@@ -269,8 +306,8 @@ describe("guards the mutation run left uncovered", () => {
     const record = {
       shareId: v3.shareId, target: v3.target, resource: v3.resource, actions: ["tinycloud.kv/get"], recipientMatcher: v3.recipientMatcher, targetKind: "recipientDid",
       registeredAt: v3.registeredAt, expiresAt: v3.expiresAt, policyCid: v3.policyCid, ownerDelegationCid: v3.policyRootCid, enforcementDelegationCid: v3.enforcementRootCid,
-      deliveryMaterial: { envelope: v3.envelope }, proofs: { session: siwe.authorization },
-    } as unknown as SenderShareRecord;
+      deliveryMaterial: await sealDeliveryMaterial(v3.envelope), proofs: { session: siwe.authorization },
+    } as unknown as StoredShareRecord;
     const context = (agentDid: string) => ({ accountOwnerDid: v3Fixture.ownerDid, agentDid, now, parseSiweCacao: fakeSiweParser });
     expect(await verifyAgentRecordChain(record, context(v3Fixture.agentDid))).toMatchObject({ ok: true, state: "proven" });
     expect(await verifyAgentRecordChain(record, context(newKey().did))).toMatchObject({ ok: true, state: "chained" });

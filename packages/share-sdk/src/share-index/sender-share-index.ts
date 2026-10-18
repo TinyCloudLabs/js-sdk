@@ -4,6 +4,7 @@ import { AgentRecordError, OwnerUnwrapUnavailableError, openAgentRecordAsOwner, 
 import type { ShareIndexBackend } from "./backend.js";
 import { DEFAULT_CAS_POLICY, runCas, type CasPolicy } from "./cas.js";
 import { agentIdFromDid, agentRecordPrefix, classifyRecordKey, INDEX_MAIN_KEY, rejectedKeyEntry, SHARE_RECORDS_VAULT_PREFIX } from "./ids.js";
+import type { StoredShareRecord } from "./delivery.js";
 import { validateShareLink } from "./link.js";
 import { claimRank, decideClaim } from "./precedence.js";
 import {
@@ -421,9 +422,10 @@ export class SenderShareIndex {
   private async examineAgentRecord(key: string, agentId: string, shareId: string, archived: () => Promise<ReadonlyMap<string, number>>): Promise<Examined> {
     const unwrap = this.backend.ownerUnwrap;
     if (unwrap === undefined) return { kind: "skip" };
-    const raw = await this.backend.readRaw(key);
+    // 2. size: refused before the body is fetched when the adapter can learn it first, and from the body length otherwise.
+    const raw = await this.backend.readRaw(key, this.limits.maxAgentRecordBytes);
+    if (raw.status === "too_large") return { kind: "reject", reason: "size" };
     if (raw.status !== "ok") return { kind: "skip" };
-    // 2. size, from the body length, before any crypto.
     if (raw.bytes.byteLength > this.limits.maxAgentRecordBytes) return { kind: "reject", reason: "size" };
     // 3. header bound to the path.
     let stored;
@@ -457,7 +459,7 @@ export class SenderShareIndex {
     archived: () => Promise<ReadonlyMap<string, number>>,
   ): Promise<{ readonly kind: "admit"; readonly row: ShareIndexRow } | { readonly kind: "reject"; readonly reason: AgentRejectReason }> {
     // 5. schema, versioned.
-    let record: SenderShareRecord;
+    let record: StoredShareRecord;
     try {
       record = checkAgentRecordSchema(value, {
         recordV: input.recordV, shareId: input.shareId, accountOwnerDid: this.options.ownerDid, agentDid: input.agentDid, source: input.source,
@@ -465,7 +467,8 @@ export class SenderShareIndex {
     } catch (error) {
       return { kind: "reject", reason: error instanceof ShareRecordSchemaError && error.reason === "provenance" ? "provenance" : "schema" };
     }
-    // 6. link.
+    // 6. link. A bearer record's stored link; a Policy/v3 record stores no link (it is rebuilt at Open/Copy from the
+    // sealed material, which its chain check opens and binds to shareCid below).
     if (record.link !== undefined && !validateShareLink(record.link, this.options.shareOrigins).ok) return { kind: "reject", reason: "link" };
     // 7. CID ownership by proof. A migrated record has no agent binding, so it is never `proven`.
     const verdict = await verifyAgentRecordChain(record, {

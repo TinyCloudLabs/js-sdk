@@ -13,7 +13,10 @@ import {
  * of `Date.now()`, so a genuine but expired share can be reported as Expired
  * rather than invalid (design C4). It lives here, in the share-index entry,
  * so the package root (and the web-sdk bundle) does not change; keep it in
- * step with `verifyEnvelopeV3`.
+ * step with `verifyEnvelopeV3`. `test/share-index/policy-v3-parity.test.ts`
+ * runs both on a frozen clock over a genuine envelope and single-field
+ * tampers. Delete this copy once share-envelope's `verifyEnvelopeV3` takes a
+ * `now` option.
  */
 
 const ED25519_VERIFY_OPTS = { zip215: false } as const;

@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { ed25519 } from "@noble/curves/ed25519";
-import { canonicalize, toBase64Url } from "@tinycloud/share-envelope";
+import { canonicalize, fromBase64Url, toBase64Url } from "@tinycloud/share-envelope";
 import type { SenderShareRecord } from "../../src/history.js";
 import {
   canonicalOwnerSharePolicy, computeOwnerShareRegistrationCid, createDelegatedShareKey, createPolicyEnforcementDelegation,
@@ -10,6 +10,7 @@ import { attenuationCovers } from "../../src/share-index/verify/attenuation.js";
 import { verifyAgentRecordChain, type ChainContext } from "../../src/share-index/verify/chain.js";
 import { verifyPolicyEnforcementDelegation } from "../../src/share-index/verify/enforcement-delegation.js";
 import { parseSignedUcan } from "../../src/share-index/verify/ucan.js";
+import { checkRegistrationReceipt } from "../../src/share-index/verify/registration.js";
 import { decideClaim } from "../../src/share-index/precedence.js";
 import type { ShareIndexRow } from "../../src/share-index/schema.js";
 import { bearerFixture, fakeSiwe, fakeSiweParser, newKey, OWNER_DID, SESSION_ATTENUATION, signUcan, SPACE_ID } from "./helpers.js";
@@ -133,7 +134,7 @@ describe("Policy/v2 chain: registration key source and expired vs invalid (C4)",
   const nodeAudience = "did:key:z6MkNodeAudience";
   const kid = `${nodeAudience}#key-1`;
 
-  async function v2Record(options: { readonly expiresAt?: string; readonly tamperRegistration?: boolean } = {}) {
+  async function v2Record(options: { readonly expiresAt?: string; readonly tamperRegistration?: boolean; readonly coreOverride?: Record<string, unknown>; readonly registrationCid?: string; readonly policyActions?: readonly ("tinycloud.kv/get" | "tinycloud.kv/list")[] } = {}) {
     const shareKey = await createDelegatedShareKey({ extractable: false });
     const path = "shares/share-1/doc.txt";
     const actions = ["tinycloud.kv/get"] as const;
@@ -141,14 +142,15 @@ describe("Policy/v2 chain: registration key source and expired vs invalid (C4)",
     const siwe = fakeSiwe({ issuer: OWNER_DID, audience: shareKey.did, attenuation: { [`${SPACE_ID}/kv/${path}`]: { "tinycloud.kv/get": [{}] } }, expiresAt });
     const target = { origin: "https://node.test", nodeAudience, enforcerDid: "did:key:z6MkEnforcer", spaceId: SPACE_ID };
     const contentSource = { kind: "kv", space: SPACE_ID, path, action: "tinycloud.kv/get" } as const;
-    const policy = await canonicalOwnerSharePolicy({ type: "TinyCloudSharePolicy", version: 2, shareId: "share-1", ownerDid: OWNER_DID, shareKeyDid: shareKey.did, recipientMatcher: { kind: "emailDomain", value: "example.com" }, target, resource: { kind: "exact", path }, actions, contentSource, contentSourceDigest: "digest", ownerDelegationCid: siwe.cid, expiresAt });
+    const policy = await canonicalOwnerSharePolicy({ type: "TinyCloudSharePolicy", version: 2, shareId: "share-1", ownerDid: OWNER_DID, shareKeyDid: shareKey.did, recipientMatcher: { kind: "emailDomain", value: "example.com" }, target, resource: { kind: "exact", path }, actions: options.policyActions ?? actions, contentSource, contentSourceDigest: "digest", ownerDelegationCid: siwe.cid, expiresAt });
     const enforcement = await createPolicyEnforcementDelegation({ ownerDelegation: { delegationCid: siwe.cid } as OwnerDelegationReceipt, shareKey, enforcerDid: target.enforcerDid, policyCid: policy.cid, shareId: "share-1", spaceId: SPACE_ID, nodeAudience, path, actions, contentSourceDigest: "digest", expiresAt });
     const core = {
       policyCid: policy.cid, ownerDelegationCid: siwe.cid, enforcementDelegationCid: enforcement.cid, ownerDid: OWNER_DID, shareKeyDid: shareKey.did, enforcerDid: target.enforcerDid,
       shareId: "share-1", recipientMatcher: { kind: "emailDomain", value: "example.com" }, target, resource: { kind: "exact", path }, actions, contentSource, contentSourceDigest: "digest",
-      registeredAt: "2026-01-01T00:00:00.000Z", expiresAt,
+      registeredAt: "2026-01-01T00:00:00.000Z", expiresAt, ...options.coreOverride,
     };
-    const registration = { registrationCid: computeOwnerShareRegistrationCid(core as never), ...core };
+    // A node-signed core: an override is a genuine node signature over different fields.
+    const registration = { registrationCid: options.registrationCid ?? computeOwnerShareRegistrationCid(core as never), ...core };
     const signed = new TextEncoder().encode(`${OWNER_SHARE_REGISTRATION_DOMAIN}${canonicalize(core)}`);
     const signature = toBase64Url(ed25519.sign(signed, options.tamperRegistration === true ? ed25519.utils.randomPrivateKey() : nodeKey));
     const record: SenderShareRecord = {
@@ -182,6 +184,46 @@ describe("Policy/v2 chain: registration key source and expired vs invalid (C4)",
     expect(await verdict(expired, withKey(expired))).toMatchObject({ ok: true, expired: true });
     const invalid = await v2Record({ tamperRegistration: true });
     expect((await verdict(invalid, withKey(invalid))).ok).toBe(false);
+  });
+
+  test("registrationCid is bound only by the CID over the signed core: a genuine receipt cannot carry another CID", async () => {
+    // registrationCid sits outside the node-signed bytes; claiming a different one next to a genuine signature is refused.
+    const other = "bafkreihdwdcefgh4dqkjv67uzcmw7ojee6xedzdetojuzjevtenxquvyku";
+    const relabelled = await v2Record({ registrationCid: other });
+    expect(relabelled.registrationCid).toBe(other);
+    expect((await verdict(relabelled, withKey(relabelled))).ok).toBe(false);
+    // And the record must claim the receipt's own CID.
+    const record = await v2Record();
+    const mismatched = { ...record, registrationCid: other };
+    expect((await verdict(mismatched, withKey(mismatched))).ok).toBe(false);
+  });
+
+  test("a node-signed receipt restating a different matcher, target, resource or actions is refused (parity with validateOwnerSharePolicyRegistration)", async () => {
+    const overrides: Record<string, unknown>[] = [
+      { recipientMatcher: { kind: "emailDomain", value: "other.example" } },
+      { target: { origin: "https://other.test", nodeAudience, enforcerDid: "did:key:z6MkEnforcer", spaceId: SPACE_ID } },
+      { resource: { kind: "prefix", path: "shares/share-1/doc.txt" } },
+      { actions: ["tinycloud.kv/get", "tinycloud.kv/list"] },
+    ];
+    for (const coreOverride of overrides) {
+      const record = await v2Record({ coreOverride });
+      expect((await verdict(record, withKey(record))).ok).toBe(false);
+    }
+    // The receipt and the enforcement facts agree, but the signed policy names other actions: refused on the policy comparison alone.
+    const policyOnly = await v2Record({ policyActions: ["tinycloud.kv/get", "tinycloud.kv/list"] });
+    expect((await verdict(policyOnly, withKey(policyOnly))).ok).toBe(false);
+    expect((await verdict(policyOnly, context(newKey().did))).ok).toBe(true);
+  });
+
+  test("checkRegistrationReceipt reports a genuine receipt past its expiresAt as expired, not invalid", async () => {
+    const record = await v2Record({ expiresAt: "2026-06-01T00:00:00.000Z" });
+    const proofs = record.proofs!;
+    const policy = (JSON.parse(new TextDecoder().decode(fromBase64Url(proofs.ownerPolicy!))) as { policy: Record<string, unknown> }).policy;
+    const expected = { policyCid: record.policyCid!, ownerDelegationCid: record.ownerDelegationCid!, enforcementDelegationCid: record.enforcementDelegationCid!, policy, enforcementFacts: proofs.enforcementDelegation!.facts as Record<string, unknown> };
+    const key = { kid, publicKey: ed25519.getPublicKey(nodeKey) };
+    expect(checkRegistrationReceipt(proofs.registration, expected, key, new Date("2026-05-31T23:59:59.000Z")).status).toBe("valid");
+    expect(checkRegistrationReceipt(proofs.registration, expected, key, new Date("2026-06-01T00:00:00.000Z")).status).toBe("expired");
+    expect(() => checkRegistrationReceipt(proofs.registration, expected, { kid, publicKey: ed25519.getPublicKey(ed25519.utils.randomPrivateKey()) }, new Date("2026-05-01T00:00:00.000Z"))).toThrow("signature");
   });
 
   test("a forged enforcement-delegation signature or a policy not owned by the account is rejected", async () => {

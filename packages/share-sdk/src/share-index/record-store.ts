@@ -3,6 +3,7 @@ import type { AgentKeyMaterial } from "./agent-key.js";
 import { AgentRecordError, MAX_AGENT_RECORD_BYTES, openAgentRecordAsAgent, parseStoredAgentRecord, sealAgentRecord } from "./agent-record.js";
 import type { ShareIndexBackend } from "./backend.js";
 import { DEFAULT_CAS_POLICY, runCas, ShareIndexCasError, type CasPolicy } from "./cas.js";
+import { compactShareRecord, DeliveryMaterialError, expandShareRecord, type StoredShareRecord } from "./delivery.js";
 import { agentIdFromDid, agentRecordKey, agentRecordPrefix, classifyRecordKey, isShareId, SHARE_RECORDS_VAULT_PREFIX } from "./ids.js";
 
 /**
@@ -84,6 +85,12 @@ export interface AgentShareRecordStoreOptions {
   /** KEK_a from the same key; absent for a remote-signer-only profile (records are then owner-readable only). */
   readonly agentKey?: AgentKeyMaterial;
   readonly cas?: CasPolicy;
+  /**
+   * The share origin on which records read back get their Policy/v3
+   * `/s/inline` link rebuilt (the stored form keeps no link; see
+   * `delivery.ts`). Absent: records read back carry no v3 link.
+   */
+  readonly shareOrigin?: string;
 }
 
 export class AgentShareRecordStore implements SenderShareRecordStorage {
@@ -107,8 +114,11 @@ export class AgentShareRecordStore implements SenderShareRecordStorage {
   }
 
   private async seal(record: SenderShareRecord, location: { readonly spaceId: string; readonly vaultKey: string }): Promise<Readonly<Record<string, unknown>>> {
+    // Each blob once: a v3 record drops its envelope and inline link (checked to be rebuildable) before sealing.
+    let stored: StoredShareRecord;
+    try { stored = await compactShareRecord(record); } catch (error) { throw error instanceof DeliveryMaterialError ? new AgentRecordError("shape") : error; }
     const sealed = await sealAgentRecord({
-      plaintext: new TextEncoder().encode(JSON.stringify(record)),
+      plaintext: new TextEncoder().encode(JSON.stringify(stored)),
       spaceId: location.spaceId,
       vaultKey: location.vaultKey,
       agentDid: this.options.agentDid,
@@ -129,7 +139,8 @@ export class AgentShareRecordStore implements SenderShareRecordStorage {
     let value: unknown;
     try { value = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(plaintext)); } catch { throw new AgentRecordError("shape"); }
     if (!isRecordShape(value) || value.shareId !== shareId) throw new AgentRecordError("shape");
-    return value;
+    // The stored form back to the full record: the envelope reopened, the v3 link rebuilt on the configured origin.
+    try { return await expandShareRecord(value as StoredShareRecord, this.options.shareOrigin); } catch { throw new AgentRecordError("shape"); }
   }
 
   /** Create or replace; each write is a fresh seal under CAS (If-None-Match `*` for a new key). */

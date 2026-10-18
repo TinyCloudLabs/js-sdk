@@ -1,6 +1,6 @@
 import { ed25519 } from "@noble/curves/ed25519";
 import { blake3 } from "@noble/hashes/blake3";
-import { didKeyFromEd25519PublicKey, fromBase64Url, toBase64Url } from "@tinycloud/share-envelope";
+import { canonicalize, didKeyFromEd25519PublicKey, fromBase64Url, seal, toBase64Url } from "@tinycloud/share-envelope";
 import { CID } from "multiformats/cid";
 import { create as createDigest } from "multiformats/hashes/digest";
 import { OwnerUnwrapUnavailableError, type OwnerNetworkUnwrap, type OwnerNetworkWrap } from "../../src/share-index/agent-record.js";
@@ -15,6 +15,14 @@ export const OWNER_DID = "did:pkh:eip155:1:0xAbCdEf0123456789aBcDeF0123456789AbC
 export const SPACE_ID = "tinycloud:pkh:eip155:1:0xabcdef0123456789abcdef0123456789abcdef01:applications";
 export const NETWORK_ID = "urn:tinycloud:encryption:did:pkh:eip155:1:0xAbCdEf0123456789aBcDeF0123456789AbCdEf01:default";
 export const SHARE_ORIGIN = "https://share.test";
+
+/** Policy/v3 delivery material for `envelope`, sealed exactly as `publishAddressedShare` seals it. */
+export async function sealDeliveryMaterial(envelope: unknown): Promise<{ readonly shareCid: string; readonly sealedEnvelope: string; readonly envelopeKey: string }> {
+  const key = crypto.getRandomValues(new Uint8Array(32));
+  const sealed = await seal(new TextEncoder().encode(canonicalize(envelope)), key);
+  return { shareCid: sealed.cid, sealedEnvelope: toBase64Url(sealed.blob), envelopeKey: toBase64Url(key) };
+}
+
 const encoder = new TextEncoder();
 
 export function standardBase64(bytes: Uint8Array): string {

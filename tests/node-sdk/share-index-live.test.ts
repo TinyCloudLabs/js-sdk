@@ -4,7 +4,7 @@ import { Wallet } from "ethers";
 import { PrivateKeySigner, TinyCloudNode } from "@tinycloud/node-sdk";
 import { parseSignedSiweCacao } from "@tinycloud/sdk-core";
 import { ed25519 } from "@noble/curves/ed25519";
-import { canonicalize, didKeyFromEd25519PublicKey } from "@tinycloud/share-envelope";
+import { canonicalize, didKeyFromEd25519PublicKey, parseSealedInlineShareUrl } from "@tinycloud/share-envelope";
 import {
   SHARE_PUBLISH_RESULT_VERSION,
   createNativeShare,
@@ -24,10 +24,12 @@ import {
   agentIdFromDid,
   agentRecordBinding,
   agentRecordKey,
+  compactShareRecord,
   createTinyCloudShareIndexBackend,
   deriveAgentKeyMaterial,
   project,
   sealAgentRecord,
+  shareLinkForRecord,
   verifyAgentRecordChain,
   type SenderShareRecord,
   type ShareIndexBackend,
@@ -601,7 +603,12 @@ describe("share index on a live node (DESIGN-C §10)", () => {
     const siblingId = `${agentId.slice(0, 21)}${agentId.endsWith("X") ? "Y" : "X"}`;
     const own = `${RECORDS_KV}agents/${agentId}/`;
     await owner.node.kv.put(`${RECORDS_KV}agents/${otherId}/x`, { owner: true });
-    const grant = await owner.node.createDelegation({ path: own, actions: ["tinycloud.kv/put", "tinycloud.kv/get", "tinycloud.kv/list"], delegateDID: tier.did, includePublicSpace: false, disableSubDelegation: true });
+    // Not `disableSubDelegation: true`: that makes the grant terminal (TC-1436, #578), and wallet-mode `useDelegation`
+    // to a did:pkh recipient must sub-delegate to its session key, which the node refuses on a terminal grant (401
+    // `terminal-parent-cannot-redelegate`; #578's documented edge, not a product issue). Slice 4: the CLI activates its
+    // agent grant through runtime permissions (as test h does) or a grant to its session-key DID, never wallet-mode
+    // `useDelegation` on a terminal grant.
+    const grant = await owner.node.createDelegation({ path: own, actions: ["tinycloud.kv/put", "tinycloud.kv/get", "tinycloud.kv/list"], delegateDID: tier.did, includePublicSpace: false });
     const access = await tier.useDelegation(grant);
     const body = { forged: true };
     const code = (result: { ok: boolean; error?: { code: string } }) => (result.ok ? "OK" : result.error?.code ?? "error");
@@ -668,9 +675,23 @@ describe("share index on a live node (DESIGN-C §10)", () => {
     expect(JSON.stringify(readBack)).toBe(JSON.stringify(record));
   }, 180_000);
 
-  test("f0: a CLI-shaped bearer agent record with its link, and one built by historyRecordForPublishedShare, are admitted as proven; a record padded past 32 KiB is refused `size` by the agent store before writing, and by the reconciler when written raw", async () => {
+  test("f0: a CLI-shaped bearer agent record with its link, and one built by historyRecordForPublishedShare, are admitted as proven; a record padded past 32 KiB is refused `size` by the agent store before writing, and by the reconciler when written raw, with the node refusing to send its body", async () => {
     const owner = await newOwner();
-    const index = newIndex(owner, ownerBackend(owner), new MemoryShareIndexOutbox(), "web:f0");
+    // The owner's client, with every KV GET's limit and outcome recorded by key.
+    const gets: { key: string; maxResponseBytes?: number; outcome: string }[] = [];
+    const kv = owner.node.kv;
+    const countingKv = {
+      get: (async (key: string, options: { maxResponseBytes?: number }) => {
+        const result = await kv.get(key, options as never);
+        gets.push({ key, ...(options.maxResponseBytes === undefined ? {} : { maxResponseBytes: options.maxResponseBytes }), outcome: result.ok ? "OK" : result.error.code });
+        return result;
+      }) as typeof kv.get,
+      put: kv.put.bind(kv), list: kv.list.bind(kv),
+    };
+    const index = newIndex(owner, createTinyCloudShareIndexBackend({
+      client: { vault: owner.node.vault, kv: countingKv, encryption: owner.node.encryption },
+      spaceId: owner.spaceId, ownerNetworkId: owner.networkId, decryptProof: () => ({ proofs: [owner.node.session!.delegationCid] }),
+    }), new MemoryShareIndexOutbox(), "web:f0");
     const agent = await ownerWalletAgent(owner);
     const withLink = bearerAgentRecord(owner, await publishLink(agent.node, owner, "f0full"), agent.node);
     const fromHistory = historyBearerRecord(owner, await publishLink(agent.node, owner, "f0hist"), agent.node);
@@ -690,6 +711,7 @@ describe("share index on a live node (DESIGN-C §10)", () => {
       return raw.status === "ok" ? raw.bytes.byteLength : -1;
     };
     const pass = await index.reconcile();
+    const paddedGets = gets.filter((get) => get.key.endsWith(paddedKey));
     const doc = await loadDoc(index);
     const proofState = (record: SenderShareRecord) => doc.rows[agentRecordKey(agent.agentId, record.shareId)]?.ps ?? null;
     const readBack = async (record: SenderShareRecord) => agent.store.get(record.shareId).then(() => "OK", (error: unknown) => (error instanceof Error ? error.message : "rejected"));
@@ -697,6 +719,7 @@ describe("share index on a live node (DESIGN-C §10)", () => {
       plaintextBytes: { withLink: enc(JSON.stringify(withLink)).length, fromHistory: enc(JSON.stringify(fromHistory)).length, padded: enc(JSON.stringify(padded)).length },
       componentBytes: { link: withLink.link?.length ?? 0, sessionCacao: withLink.proofs?.session?.length ?? 0, linkUcan: withLink.proofs?.link?.length ?? 0 },
       storedBytes: { withLink: await storedSize(withLink), fromHistory: await storedSize(fromHistory), padded: await storedSize(padded), cap: 32 * 1024 },
+      paddedOwnerGets: paddedGets.map(({ maxResponseBytes, outcome }) => ({ maxResponseBytes, outcome })),
       historyTargetKeys: Object.keys(fromHistory.target).sort(),
       reconcile: pass,
       proofState: { withLink: proofState(withLink), fromHistory: proofState(fromHistory), padded: proofState(padded) },
@@ -706,6 +729,8 @@ describe("share index on a live node (DESIGN-C §10)", () => {
     expect(storePadded).toBe("agent record refused: size");
     expect(await storedSize(padded)).toBeGreaterThan(32 * 1024);
     expect(pass.rejected).toEqual({ size: 1 });
+    // The owner asked the node for at most the cap, and the node refused before sending the body.
+    expect(paddedGets.map(({ maxResponseBytes, outcome }) => ({ maxResponseBytes, outcome }))).toEqual([{ maxResponseBytes: 32 * 1024, outcome: "KV_RESPONSE_TOO_LARGE" }]);
     expect([proofState(withLink), proofState(fromHistory), proofState(padded)]).toEqual(["proven", "proven", null]);
     expect([await readBack(withLink), await readBack(fromHistory), await readBack(padded)]).toEqual(["OK", "OK", "agent record refused: size"]);
   }, 120_000);
@@ -829,7 +854,7 @@ describe("share index on a live node (DESIGN-C §10)", () => {
     }
   }, 900_000);
 
-  test("h: two-space layout: records in `applications`, content in the agent session's `default`; the bearer record is proven, the v3 chain is proven (its CLI-shaped record exceeds the 32 KiB cap: finding); another owner's space or a registeredAt before the session is refused `schema`", async () => {
+  test("h: two-space layout: records in `applications`, content in the agent session's `default`; the bearer and the real CLI v3 record (stored form, under the 32 KiB cap) are proven and read back whole; another owner's space or a registeredAt before the session is refused `schema`", async () => {
     const owner = await newOwner();
     const appsId = await owner.node.ensureOwnedSpaceHosted("applications");
     const recordsGrant = (path: string) => [{ service: "tinycloud.kv", space: appsId, path, skipPrefix: true, actions: ["tinycloud.kv/get", "tinycloud.kv/put", "tinycloud.kv/list", "tinycloud.kv/metadata", "tinycloud.kv/del"] }];
@@ -872,9 +897,14 @@ describe("share index on a live node (DESIGN-C §10)", () => {
     const pass = await index.reconcile();
     const doc = await loadDoc(index);
     const proofState = (record: SenderShareRecord) => doc.rows[agentRecordKey(agentId, record.shareId)]?.ps ?? null;
-    // The v3 record's chain judged directly, apart from the size cap.
-    const v3Verdict = await verifyAgentRecordChain(v3, { accountOwnerDid: owner.ownerDid, agentDid, now: new Date(), parseSiweCacao: parseSignedSiweCacao })
+    const stored = await compactShareRecord(v3);
+    // The v3 record's chain judged directly, apart from the store.
+    const v3Verdict = await verifyAgentRecordChain(stored, { accountOwnerDid: owner.ownerDid, agentDid, now: new Date(), parseSiweCacao: parseSignedSiweCacao })
       .then((verdict) => (verdict.ok ? verdict.state : `rejected: ${verdict.detail}`));
+    // Read back by the agent with its share origin: the envelope and the `/s/inline` link are rebuilt exactly.
+    const readBack = await new AgentShareRecordStore({ backend: agentBackend, agentDid, agentKey: await agentKeyFor(agentNode, agentDid), shareOrigin: SHARE_ORIGIN }).get(v3.shareId);
+    const rebuiltLink = await shareLinkForRecord(stored, SHARE_ORIGIN);
+    const parsedLink = await parseSealedInlineShareUrl(rebuiltLink!, { expectedOrigin: SHARE_ORIGIN });
     report.h = {
       recordsSpaceIsApplications: appsId.endsWith(":applications"),
       contentSpaceIsDefault: owner.spaceId.endsWith(":default"),
@@ -885,20 +915,30 @@ describe("share index on a live node (DESIGN-C §10)", () => {
       agentEntry: doc.agents[agentId] === undefined ? null : { rows: doc.agents[agentId]!.rows, rejected: doc.agents[agentId]!.rejected },
       v3ChainVerdict: v3Verdict,
       v3Bytes: {
-        plaintext: enc(JSON.stringify(v3)).length,
+        fullPlaintext: enc(JSON.stringify(v3)).length,
+        storedPlaintext: enc(JSON.stringify(stored)).length,
         envelope: enc(JSON.stringify(v3.deliveryMaterial?.envelope ?? {})).length,
+        link: v3.link?.length ?? 0,
         sealedEnvelope: v3.deliveryMaterial?.sealedEnvelope.length ?? 0,
         sessionCacao: v3.proofs?.session?.length ?? 0,
+        storedRecord: storedBytes.v3,
+        headroom: 32 * 1024 - storedBytes.v3!,
       },
+      v3ReadBackWhole: canonicalize(readBack) === canonicalize(v3),
+      v3LinkRebuilt: rebuiltLink === v3.link && parsedLink.ciphertextCid === v3.deliveryMaterial?.shareCid,
     };
     console.log(`SHARE-INDEX-H ${JSON.stringify(report.h)}`);
     leakChecked.push({ label: "h", index });
-    // Finding (reported on TC-1432): a CLI-shaped v3 record (envelope, sealedEnvelope, inline link, CACAO) is about 64 KB
-    // stored, over MAX_AGENT_RECORD_BYTES, so the agent store refuses to write it; its chain itself verifies as proven.
-    expect(puts).toEqual({ bearer: "OK", v3: "agent record refused: size", foreign: "OK", backdated: "OK" });
+    // The cap ruling: the stored v3 record keeps each blob once (no envelope, no inline link), fits under
+    // MAX_AGENT_RECORD_BYTES and is admitted proven.
+    expect(puts).toEqual({ bearer: "OK", v3: "OK", foreign: "OK", backdated: "OK" });
+    expect(storedBytes.v3).toBeLessThanOrEqual(32 * 1024);
     expect(v3Verdict).toBe("proven");
-    expect(records.map(([, record]) => proofState(record))).toEqual(["proven", null, null, null]);
+    expect(records.map(([, record]) => proofState(record))).toEqual(["proven", "proven", null, null]);
     expect(pass.rejected).toEqual({ schema: 2 });
+    expect(readBack).toEqual(v3);
+    expect(rebuiltLink).toBe(v3.link!);
+    expect(parsedLink.ciphertextCid).toBe(v3.deliveryMaterial!.shareCid);
   }, 180_000);
 
   test("e: no link, token, delivery material or full email in any decrypted index (after a, b, c, h)", async () => {

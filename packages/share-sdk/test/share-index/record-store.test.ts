@@ -40,7 +40,7 @@ describe("space record store (§1, §3)", () => {
     await expect(store.delete("s1")).rejects.toThrow("owner");
     // A record that would be stored over MAX_AGENT_RECORD_BYTES is refused before it is written.
     const writes = backend.counters.writes;
-    await expect(store.put({ ...fixture.record, shareId: "big", filename: "x", deliveryMaterial: { pad: "y".repeat(40_000) } as never })).rejects.toMatchObject({ reason: "size" });
+    await expect(store.put({ ...fixture.record, shareId: "big", filename: "x", deliveredRecipients: ["y".repeat(40_000)] })).rejects.toMatchObject({ reason: "size" });
     expect(backend.counters.writes).toBe(writes);
   });
 

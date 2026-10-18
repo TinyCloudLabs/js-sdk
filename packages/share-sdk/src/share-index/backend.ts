@@ -18,6 +18,8 @@ export type ShareDocumentRead =
 export type ShareRawRead =
   | { readonly status: "ok"; readonly bytes: Uint8Array; readonly etag: string }
   | { readonly status: "not_found" }
+  /** Larger than the `maxBytes` the caller passed: the node refused to send the body, or its length was over. */
+  | { readonly status: "too_large" }
   | { readonly status: "unavailable" };
 
 export type ShareWriteCondition = { readonly ifMatch: string } | { readonly ifNoneMatch: "*" };
@@ -43,8 +45,12 @@ export interface ShareIndexBackend {
   deleteRecord(key: string): Promise<ShareWriteResult>;
   /** One page of keys under `prefix` (relative, with its trailing slash, or "" for all records). */
   listKeys(prefix: string, cursor?: string): Promise<ShareListResult>;
-  /** Raw stored bytes and etag (agent records), from the network. */
-  readRaw(key: string): Promise<ShareRawRead>;
+  /**
+   * Raw stored bytes and etag (agent records), from the network. With
+   * `maxBytes`, a larger value is reported `too_large` and its body is not
+   * downloaded (see {@link createTinyCloudShareIndexBackend}).
+   */
+  readRaw(key: string, maxBytes?: number): Promise<ShareRawRead>;
   writeRaw(key: string, value: Readonly<Record<string, unknown>>, condition: ShareWriteCondition): Promise<ShareWriteResult>;
   readonly ownerWrap: OwnerNetworkWrap;
   /** Owner-network decrypt; absent for Tier W agents, which have no decrypt grant. */
@@ -67,7 +73,8 @@ export interface TinyCloudShareIndexClient {
     delete(key: string): Promise<SdkResult<unknown>>;
   };
   readonly kv: {
-    get(key: string, options: { readonly prefix: ""; readonly raw: true; readonly source: "network" }): Promise<SdkResult<{ readonly data: unknown; readonly headers: { readonly etag?: string } }>>;
+    /** `maxResponseBytes`: the node refuses (413, `KV_RESPONSE_TOO_LARGE`) a larger value before sending its body. */
+    get(key: string, options: { readonly prefix: ""; readonly raw: true; readonly source: "network"; readonly maxResponseBytes?: number }): Promise<SdkResult<{ readonly data: unknown; readonly headers: { readonly etag?: string } }>>;
     put(key: string, value: unknown, options: { readonly prefix: ""; readonly ifMatch?: string; readonly ifNoneMatch?: "*" }): Promise<SdkResult<unknown>>;
     list(options: { readonly prefix: string; readonly removePrefix: true; readonly limit: number; readonly cursor?: string; readonly source: "network" }): Promise<SdkResult<{ readonly keys: readonly string[]; readonly nextCursor?: string; readonly truncated?: boolean }>>;
   };
@@ -171,12 +178,19 @@ export function createTinyCloudShareIndexBackend(options: TinyCloudShareIndexBac
         return { status: "unavailable" };
       }
     },
-    async readRaw(key) {
+    async readRaw(key, maxBytes) {
       try {
-        const result = await client.kv.get(`${kvPrefix}${key}`, { prefix: "", raw: true, source: "network" });
-        if (!result.ok) return result.error.code === "KV_NOT_FOUND" || result.error.code === "NOT_FOUND" ? { status: "not_found" } : { status: "unavailable" };
+        // The node accepts values far larger than any record cap, and the SDK's get buffers the whole body. With a cap,
+        // the node is asked to refuse a larger value before it sends the body (`x-tinycloud-max-response-bytes`); the
+        // body length is checked again here.
+        const result = await client.kv.get(`${kvPrefix}${key}`, { prefix: "", raw: true, source: "network", ...(maxBytes === undefined ? {} : { maxResponseBytes: maxBytes }) });
+        if (!result.ok) {
+          if (result.error.code === "KV_NOT_FOUND" || result.error.code === "NOT_FOUND") return { status: "not_found" };
+          return maxBytes !== undefined && result.error.code === "KV_RESPONSE_TOO_LARGE" ? { status: "too_large" } : { status: "unavailable" };
+        }
         const bytes = bytesOf(result.data.data);
         const etag = result.data.headers.etag;
+        if (bytes !== undefined && maxBytes !== undefined && bytes.byteLength > maxBytes) return { status: "too_large" };
         return bytes === undefined || etag === undefined ? { status: "unavailable" } : { status: "ok", bytes, etag };
       } catch {
         return { status: "unavailable" };
