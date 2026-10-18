@@ -5,7 +5,7 @@ name: Web SDK tests
 
 # No `paths:` filter on the triggers: this check is required by the master
 # ruleset, and a required check that never reports blocks docs-only PRs.
-# The workflow always runs; the "Detect relevant changes" step decides whether
+# The workflow always runs; the "Decide whether to run" step decides whether
 # the real steps execute. The job name must not change (ruleset context).
 on:
   pull_request:
@@ -15,7 +15,7 @@ on:
 
 permissions:
   contents: read
-  pull-requests: read # dorny/paths-filter lists PR files via the API
+  pull-requests: read # the gate step lists PR files via the API
 
 concurrency:
   group: web-sdk-tests-${{ github.ref }}
@@ -31,43 +31,38 @@ jobs:
 
       # Only pull_request events can be skipped. push (master) and
       # workflow_dispatch always run the full suite.
-      - name: Detect relevant changes
-        id: changes
-        if: github.event_name == 'pull_request'
-        uses: dorny/paths-filter@de90cc6fb38fc0963ad72b210f1f284cd68cea36 # v3.0.2
-        with:
-          filters: |
-            relevant:
-              - "packages/web-sdk/**"
-              - "packages/bootstrap/**"
-              - "packages/node-sdk/**"
-              - "packages/replica/**"
-              - "packages/sdk-core/**"
-              - "packages/sdk-rs/**"
-              - "packages/sdk-services/**"
-              - "packages/share-envelope/**"
-              - "packages/share-sdk/**"
-              - "Cargo.toml"
-              - "Cargo.lock"
-              - "bun.lock"
-              - "package.json"
-              - "turbo.json"
-              - "tsconfig.base.json"
-              - "scripts/setup.sh"
-              - ".github/workflows/web-sdk-tests.yml"
+      # `dorny/paths-filter` is not in this repo's allowed-actions list, so the
+      # changed-file list comes from the GitHub API (same source it uses).
       - name: Decide whether to run
         id: gate
         env:
           EVENT: ${{ github.event_name }}
-          RELEVANT: ${{ steps.changes.outputs.relevant }}
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
-          if [[ "$EVENT" != "pull_request" || "$RELEVANT" == "true" ]]; then
+          set -euo pipefail
+          if [[ "$EVENT" != "pull_request" ]]; then
             echo "run=true" >> "$GITHUB_OUTPUT"
-            echo "Running web-sdk tests (event: $EVENT, relevant changes: ${RELEVANT:-n/a})." >> "$GITHUB_STEP_SUMMARY"
+            echo "Running web-sdk tests (event: $EVENT)." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          files="$(gh api --paginate "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/files" --jq '.[] | .filename, (.previous_filename // empty)')"
+          relevant=""
+          while IFS= read -r f; do
+            case "$f" in
+              packages/web-sdk/*|packages/bootstrap/*|packages/node-sdk/*|packages/replica/*|packages/sdk-core/*|packages/sdk-rs/*|packages/sdk-services/*|packages/share-envelope/*|packages/share-sdk/*|Cargo.toml|Cargo.lock|bun.lock|package.json|turbo.json|tsconfig.base.json|scripts/setup.sh|.github/workflows/web-sdk-tests.yml)
+                relevant="$f"; break ;;
+            esac
+          done <<< "$files"
+          if [[ -n "$relevant" ]]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            echo "Running web-sdk tests: relevant change in \`$relevant\`." >> "$GITHUB_STEP_SUMMARY"
           else
             echo "run=false" >> "$GITHUB_OUTPUT"
-            echo "### Run web-sdk test files: skipped" >> "$GITHUB_STEP_SUMMARY"
-            echo "No relevant changes: no files matching the web-sdk test path list changed in this pull request." >> "$GITHUB_STEP_SUMMARY"
+            {
+              echo "### Run web-sdk test files: skipped"
+              echo "Skipped: no relevant changes (no web-sdk or dependency paths changed in this pull request)."
+            } >> "$GITHUB_STEP_SUMMARY"
           fi
 
       - uses: oven-sh/setup-bun@v2
