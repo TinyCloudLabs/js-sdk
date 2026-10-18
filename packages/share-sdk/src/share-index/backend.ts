@@ -80,10 +80,11 @@ export interface TinyCloudShareIndexClient {
 /** Shown when the SDK reports `INVALID_ETAG` without a message of its own. */
 export const INVALID_ETAG_MESSAGE = "etag was weakened in transit; compare-and-swap unavailable through this path";
 
-function writeFailure(error: { readonly code: string; readonly message?: string; readonly meta?: Record<string, unknown> }): ShareWriteResult {
+/** Map an SDK write error. `invalid_etag` only applies to an `ifMatch` write: another 400 is a plain failure. */
+function writeFailure(error: { readonly code: string; readonly message?: string; readonly meta?: Record<string, unknown> }, condition: ShareWriteCondition | undefined): ShareWriteResult {
   const status = typeof error.meta?.status === "number" ? error.meta.status : undefined;
   if (error.code === "KV_PRECONDITION_FAILED" || error.code === "ETAG_MISMATCH" || error.code === "ALREADY_EXISTS") return { ok: false, code: "conflict" };
-  if (error.code === "INVALID_ETAG" || (error.code === "KV_WRITE_FAILED" && status === 400)) return { ok: false, code: "invalid_etag", message: error.message ?? INVALID_ETAG_MESSAGE };
+  if (condition !== undefined && "ifMatch" in condition && (error.code === "INVALID_ETAG" || (error.code === "KV_WRITE_FAILED" && status === 400))) return { ok: false, code: "invalid_etag", message: error.message ?? INVALID_ETAG_MESSAGE };
   if (error.code === "OUTCOME_UNKNOWN" || ((error.code === "NETWORK_ERROR" || error.code === "TIMEOUT") && status === undefined)) return { ok: false, code: "outcome_unknown" };
   if (error.code === "NODE_BUSY" || error.code === "REQUEST_TIMEOUT") return { ok: false, code: "busy" };
   if (error.code === "AUTH_UNAUTHORIZED" || error.code === "PERMISSION_DENIED") return { ok: false, code: "unauthorized" };
@@ -144,7 +145,7 @@ export function createTinyCloudShareIndexBackend(options: TinyCloudShareIndexBac
     async writeVault(key, value, condition) {
       try {
         const result = await client.vault.put(`${SHARE_RECORDS_VAULT_PREFIX}${key}`, value, condition ?? {});
-        return result.ok ? { ok: true } : writeFailure(result.error);
+        return result.ok ? { ok: true } : writeFailure(result.error, condition);
       } catch {
         return { ok: false, code: "outcome_unknown" };
       }
@@ -153,7 +154,7 @@ export function createTinyCloudShareIndexBackend(options: TinyCloudShareIndexBac
       try {
         const result = await client.vault.delete(`${SHARE_RECORDS_VAULT_PREFIX}${key}`);
         if (result.ok || result.error.code === "KEY_NOT_FOUND" || result.error.code === "KV_NOT_FOUND" || result.error.code === "NOT_FOUND") return { ok: true };
-        return writeFailure(result.error);
+        return writeFailure(result.error, undefined);
       } catch {
         return { ok: false, code: "outcome_unknown" };
       }
@@ -184,7 +185,7 @@ export function createTinyCloudShareIndexBackend(options: TinyCloudShareIndexBac
     async writeRaw(key, value, condition) {
       try {
         const result = await client.kv.put(`${kvPrefix}${key}`, value, { prefix: "", ...condition });
-        return result.ok ? { ok: true } : writeFailure(result.error);
+        return result.ok ? { ok: true } : writeFailure(result.error, condition);
       } catch {
         return { ok: false, code: "outcome_unknown" };
       }

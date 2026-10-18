@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { verifyAgentRecordChain, type SenderShareRecord } from "@tinycloud/share-sdk";
+import { verifyAgentRecordChain, type SenderShareRecord } from "@tinycloud/share-sdk/share-index";
 import { parseSignedSiweCacao } from "./cacao";
 import fixture from "./fixtures/share-index-chain.json";
 
@@ -30,7 +30,10 @@ const context = (agentDid: string, now = minted, accountOwnerDid = fixture.owner
 
 describe("share index chain verifier on real delegations", () => {
   test("the agent session's own link verifies as proven; the account owner matches in either address spelling", async () => {
-    expect(await verifyAgentRecordChain(bearerRecord(), context(fixture.agentDid))).toEqual({ ok: true, state: "proven", expired: false, claims: [fixture.link.cid] });
+    const result = await verifyAgentRecordChain(bearerRecord(), context(fixture.agentDid));
+    expect(result).toMatchObject({ ok: true, state: "proven", expired: false, claims: [fixture.link.cid] });
+    // WASM link delegations carry no `nbf`: the session's signed Issued At and the link's expiry bound registeredAt.
+    expect(result.ok && result.issued.earliest! < minted.getTime() && minted.getTime() < result.issued.latest!).toBe(true);
     expect(await verifyAgentRecordChain(bearerRecord(), context(fixture.agentDid, minted, fixture.ownerDid.toLowerCase()))).toMatchObject({ ok: true, state: "proven" });
   });
 
@@ -76,9 +79,11 @@ function v3Record(overrides: Partial<SenderShareRecord> = {}): SenderShareRecord
 
 describe("share index chain verifier on a real Policy/v3 share", () => {
   test("the session-owned policy verifies as proven, claiming the policy and both roots", async () => {
-    expect(await verifyAgentRecordChain(v3Record(), context(fixture.agentDid))).toEqual({
-      ok: true, state: "proven", expired: false, claims: [fixture.v3.policyCid, fixture.v3.policyRootCid, fixture.v3.enforcementRootCid],
-    });
+    const result = await verifyAgentRecordChain(v3Record(), context(fixture.agentDid));
+    expect(result).toMatchObject({ ok: true, state: "proven", expired: false, claims: [fixture.v3.policyCid, fixture.v3.policyRootCid, fixture.v3.enforcementRootCid] });
+    // The node-signed enforcer binding's issuedAt anchors registeredAt (±1 day).
+    const issuedAt = Date.parse(fixture.v3.envelope.attestedEnforcerBinding.issuedAt);
+    expect(result.ok && result.issued).toEqual({ earliest: issuedAt - 86_400_000, latest: issuedAt + 86_400_000 });
   });
 
   test("chained under another agent, unproven without the CACAO, expired after the binding window", async () => {

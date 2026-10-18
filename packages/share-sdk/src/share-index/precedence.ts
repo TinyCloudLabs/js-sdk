@@ -5,11 +5,19 @@ import type { ShareIndexRow } from "./schema.js";
  * unproven, whatever the arrival order. A later higher claim displaces every
  * admitted lower row it collides with, in the same CAS; a lower or equal
  * claim never displaces anything, and `unproven` never displaces anything.
+ *
+ * A `migrated` row (one-time owner import) sits at an owner-layout key but
+ * ranks by its verified proof state, never as a web row, and a migrated claim
+ * never displaces a row whose revocation the node confirmed.
  */
 const RANK: Readonly<Record<string, number>> = { unproven: 0, chained: 1, proven: 2, web: 3 };
 
-export function claimRank(row: Pick<ShareIndexRow, "src" | "ps">): number {
-  if (row.src === "web") return RANK.web!;
+function isWebRow(row: Pick<ShareIndexRow, "src" | "pv">): boolean {
+  return row.src === "web" && row.pv !== "migrated";
+}
+
+export function claimRank(row: Pick<ShareIndexRow, "src" | "ps" | "pv">): number {
+  if (isWebRow(row)) return RANK.web!;
   return RANK[row.ps ?? "unproven"] ?? 0;
 }
 
@@ -29,9 +37,8 @@ export function decideClaim(rows: Readonly<Record<string, ShareIndexRow>>, key: 
   const displaced: string[] = [];
   for (const [otherKey, other] of Object.entries(rows)) {
     if (otherKey === key || other.cc === undefined || !other.cc.some((cid) => claims.includes(cid))) continue;
-    const otherRank = claimRank(other);
-    if (row.src === "web" && other.src === "web") continue;
-    if (rank <= otherRank) return { admit: false, heldBy: otherKey };
+    if (isWebRow(row) && isWebRow(other)) continue;
+    if (rank <= claimRank(other) || (row.pv === "migrated" && other.r?.confirmed === true)) return { admit: false, heldBy: otherKey };
     displaced.push(otherKey);
   }
   return { admit: true, displaced };

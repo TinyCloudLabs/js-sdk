@@ -7,7 +7,7 @@ import { agentIdFromDid, agentRecordPrefix, classifyRecordKey, INDEX_MAIN_KEY, r
 import { validateShareLink } from "./link.js";
 import { claimRank, decideClaim } from "./precedence.js";
 import {
-  checkAgentRecordSchema, emptyIndexDocument, parseArchiveDocument, parseIndexDocument, project,
+  ShareRecordSchemaError, checkAgentRecordSchema, emptyIndexDocument, parseArchiveDocument, parseIndexDocument, project, registeredAtFits,
   type ShareIndexAgentEntry, type ShareIndexDocument, type ShareIndexRow,
 } from "./schema.js";
 import { verifyAgentRecordChain, type ShareRegistrationKey } from "./verify/chain.js";
@@ -108,7 +108,7 @@ export type ShareIndexLoad =
   /** Outage: never a reason to rebuild. */
   | { readonly status: "unavailable" };
 
-export type ShareIndexWriteStatus = "written" | "unchanged" | "read_only" | "unavailable" | "header_overflow";
+export type ShareIndexWriteStatus = "written" | "unchanged" | "read_only" | "unavailable";
 
 export interface ShareIndexWriteOutcome {
   readonly status: ShareIndexWriteStatus;
@@ -122,8 +122,11 @@ export interface ShareIndexFlushResult {
   readonly refused: readonly string[];
 }
 
-/** §5 rejection reasons; every check-4 failure (unwrap, DEK length, commit, GCM) is `decrypt`. */
-export type AgentRejectReason = "size" | "shape" | "header" | "decrypt" | "schema" | "link" | "proof";
+/**
+ * §5 rejection reasons; every check-4 failure (unwrap, DEK length, commit, GCM) is `decrypt`.
+ * `provenance`: an agent-subtree record claiming `migrated`, which only owner imports may carry.
+ */
+export type AgentRejectReason = "size" | "shape" | "header" | "decrypt" | "schema" | "provenance" | "link" | "proof";
 
 export interface ShareIndexReconcileReport {
   readonly status: ShareIndexWriteStatus;
@@ -134,6 +137,8 @@ export interface ShareIndexReconcileReport {
   readonly deferred: number;
   /** True when this pass reached the end of the key listing. */
   readonly cycleComplete: boolean;
+  /** The header reached its cap: new agent header state (entries, rejections) was not added. Show an alert; no row was evicted. */
+  readonly headerFull: boolean;
 }
 
 type Finding =
@@ -269,7 +274,8 @@ export class SenderShareIndex {
 
   /**
    * Read → mutate → If-Match write, per {@link runCas}. A no-op change is never
-   * written. A header over its cap stops the write; rows are never evicted for it.
+   * written. The header cap is enforced by the reconciler on agent-derived
+   * state only (see {@link reconcile}); the owner's own writes are never blocked by it.
    */
   private async update(mutate: (doc: WorkingDoc) => void | Promise<void>): Promise<ShareIndexWriteOutcome> {
     return runCas<ShareIndexWriteOutcome>(INDEX_MAIN_KEY, this.cas, async () => {
@@ -300,7 +306,6 @@ export class SenderShareIndex {
       if (existed && sameContent(before, next)) return { done: { status: "unchanged" as const, doc: before } };
       base.updatedAt = this.now().toISOString();
       base.updatedBy = this.options.writer;
-      if (headerBytes(next) > this.limits.headerBytes) return { done: { status: "header_overflow" as const } };
       return { write: await this.backend.writeVault(INDEX_MAIN_KEY, next, condition), onSuccess: () => ({ status: "written" as const, doc: next }) };
     });
   }
@@ -308,9 +313,12 @@ export class SenderShareIndex {
   // -------------------------------------------------------------------------
   // Shared mutation helpers
 
-  private ensureAgent(doc: WorkingDoc, agentId: string): WorkingAgent {
+  /** When false (header at its cap), no new agent header state is added: no new entries, rejections or newer keys. */
+  private growHeader = true;
+
+  private ensureAgent(doc: WorkingDoc, agentId: string): WorkingAgent | undefined {
     const existing = doc.agents[agentId];
-    if (existing !== undefined) return existing;
+    if (existing !== undefined || !this.growHeader) return existing;
     const created: WorkingAgent = { did: null, rows: 0, rejected: {}, rejectedKeys: [], paused: false, firstSeen: this.now().toISOString() };
     doc.agents[agentId] = created;
     return created;
@@ -320,7 +328,7 @@ export class SenderShareIndex {
   private recordRejection(doc: WorkingDoc, agentId: string, suffix: string, reason: string): void {
     const entry = this.ensureAgent(doc, agentId);
     const entryKey = rejectedKeyEntry(suffix);
-    if (entry.rejectedKeys.includes(entryKey)) return;
+    if (entry === undefined || !this.growHeader || entry.rejectedKeys.includes(entryKey)) return;
     entry.rejected[reason] = (entry.rejected[reason] ?? 0) + 1;
     if (entry.rejectedKeys.length < this.limits.rejectionsBeforePause) entry.rejectedKeys.push(entryKey);
     const total = Object.values(entry.rejected).reduce((sum, count) => sum + count, 0);
@@ -335,7 +343,7 @@ export class SenderShareIndex {
     const agentId = agentOf(row);
     if (agentId === undefined) return;
     const entry = this.ensureAgent(doc, agentId);
-    entry.rows = Math.max(0, entry.rows - 1);
+    if (entry !== undefined) entry.rows = Math.max(0, entry.rows - 1);
     this.recordRejection(doc, agentId, basename(key), "proof");
   }
 
@@ -436,29 +444,45 @@ export class SenderShareIndex {
       if (error instanceof OwnerUnwrapUnavailableError) return { kind: "skip" };
       return { kind: "reject", reason: "decrypt" };
     }
+    let value: unknown;
+    try { value = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(plaintext)); } catch { return { kind: "reject", reason: "schema" }; }
+    const checked = await this.checkRecord(value, { key, shareId, src: `agent:${agentId}`, source: "agent", agentDid: stored.hdr.agentDid, recordV: stored.hdr.recordV }, archived);
+    return checked.kind === "admit" ? { kind: "admit", did: stored.hdr.agentDid, row: checked.row } : checked;
+  }
+
+  /** §5 checks 5–7 for a decrypted record, shared by agent records and one-time owner imports. */
+  private async checkRecord(
+    value: unknown,
+    input: { readonly key: string; readonly shareId: string; readonly src: string; readonly source: "agent" | "migrated"; readonly agentDid: string; readonly recordV: number },
+    archived: () => Promise<ReadonlyMap<string, number>>,
+  ): Promise<{ readonly kind: "admit"; readonly row: ShareIndexRow } | { readonly kind: "reject"; readonly reason: AgentRejectReason }> {
     // 5. schema, versioned.
     let record: SenderShareRecord;
     try {
-      record = checkAgentRecordSchema(JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(plaintext)), {
-        recordV: stored.hdr.recordV, shareId, spaceId: this.backend.spaceId, accountOwnerDid: this.options.ownerDid, agentDid: stored.hdr.agentDid, firstSight: this.now(),
+      record = checkAgentRecordSchema(value, {
+        recordV: input.recordV, shareId: input.shareId, accountOwnerDid: this.options.ownerDid, agentDid: input.agentDid, source: input.source,
       });
-    } catch {
-      return { kind: "reject", reason: "schema" };
+    } catch (error) {
+      return { kind: "reject", reason: error instanceof ShareRecordSchemaError && error.reason === "provenance" ? "provenance" : "schema" };
     }
     // 6. link.
     if (record.link !== undefined && !validateShareLink(record.link, this.options.shareOrigins).ok) return { kind: "reject", reason: "link" };
-    // 7. CID ownership by proof.
+    // 7. CID ownership by proof. A migrated record has no agent binding, so it is never `proven`.
     const verdict = await verifyAgentRecordChain(record, {
-      accountOwnerDid: this.options.ownerDid, agentDid: stored.hdr.agentDid, now: this.now(), parseSiweCacao: this.options.parseSiweCacao,
+      accountOwnerDid: this.options.ownerDid, agentDid: input.agentDid, now: this.now(), parseSiweCacao: this.options.parseSiweCacao,
       ...(this.options.registrationKey === undefined ? {} : { registrationKey: this.options.registrationKey }),
     });
     if (!verdict.ok) return { kind: "reject", reason: "proof" };
-    const row = project(record, { key, src: `agent:${agentId}`, claims: verdict.claims, proof: { state: verdict.state, expired: verdict.expired } });
+    // registeredAt against signed times in the chain, never against when the owner happens to look. A one-time
+    // owner import keeps the ruled exemption from the ±1-day anchor; it still may not postdate the chain or the clock.
+    const window = input.source === "migrated" ? { ...(verdict.issued.latest === undefined ? {} : { latest: verdict.issued.latest }) } : verdict.issued;
+    if (!registeredAtFits(record.registeredAt, window, this.now())) return { kind: "reject", reason: "schema" };
+    const row = project(record, { key: input.key, src: input.src, claims: verdict.claims, proof: { state: verdict.state, expired: verdict.expired } });
     if (verdict.state !== "proven") {
       const archivedClaims = await archived();
       if (verdict.claims.some((cid) => (archivedClaims.get(cid) ?? -1) >= claimRank(row))) return { kind: "reject", reason: "proof" };
     }
-    return { kind: "admit", did: stored.hdr.agentDid, row };
+    return { kind: "admit", row };
   }
 
   private peekRecordV(bytes: Uint8Array): number {
@@ -488,18 +512,18 @@ export class SenderShareIndex {
    */
   async reconcile(): Promise<ShareIndexReconcileReport> {
     const loaded = await this.load();
-    if (loaded.status === "read_only" || loaded.status === "unavailable") return { status: loaded.status, pages: 0, fetches: 0, admitted: 0, rejected: {}, deferred: 0, cycleComplete: false };
+    if (loaded.status === "read_only" || loaded.status === "unavailable") return { status: loaded.status, pages: 0, fetches: 0, admitted: 0, rejected: {}, deferred: 0, cycleComplete: false, headerFull: false };
     const doc = loaded.status === "ok" ? loaded.doc : (this.emptyDoc() as unknown as ShareIndexDocument);
     const known = new Set<string>([...Object.keys(doc.rows), ...doc.tombstones.map((tombstone) => tombstone.key), ...doc.archives.flatMap((archive) => archive.ids)]);
     const findings: Finding[] = [];
-    const agentStates = new Map<string, { known: Set<string>; admitted: number; rejections: number; paused: boolean; rows: number }>();
-    const agentState = (agentId: string): { known: Set<string>; admitted: number; rejections: number; paused: boolean; rows: number } => {
+    const agentStates = new Map<string, { known: Set<string>; attempted: number; rejections: number; paused: boolean; rows: number }>();
+    const agentState = (agentId: string): { known: Set<string>; attempted: number; rejections: number; paused: boolean; rows: number } => {
       const entry: ShareIndexAgentEntry | undefined = doc.agents[agentId];
       let state = agentStates.get(agentId);
       if (state === undefined) {
         state = {
           known: new Set([...(entry?.rejectedKeys ?? []), ...(entry?.newerKeys ?? [])]),
-          admitted: 0,
+          attempted: 0,
           rejections: Object.values(entry?.rejected ?? {}).reduce((sum, count) => sum + count, 0),
           paused: entry !== undefined && entry.paused !== false,
           rows: entry?.rows ?? 0,
@@ -542,7 +566,7 @@ export class SenderShareIndex {
         if (classified.kind === "rejected") {
           if (classified.agentId === undefined || classified.suffix === undefined) continue; // owner-written: skip uncounted
           const state = agentState(classified.agentId);
-          if (state.paused || state.known.has(classified.suffix)) continue;
+          if (state.paused || state.known.has(rejectedKeyEntry(classified.suffix))) continue;
           reject(classified.agentId, classified.suffix, "shape");
           continue;
         }
@@ -551,7 +575,11 @@ export class SenderShareIndex {
         if (classified.kind === "web") {
           fetches++;
           const read = await this.backend.readVault(key);
-          if (read.status === "ok") {
+          if (read.status === "ok" && isObject(read.value) && read.value.provenance === "migrated") {
+            // One-time owner import: verified like an agent record; a failure needs attention.
+            const checked = await this.checkRecord(read.value, { key, shareId: classified.shareId, src: "web", source: "migrated", agentDid: "", recordV: SUPPORTED_AGENT_RECORD_V }, archivedOnce);
+            findings.push({ kind: "web", key, row: checked.kind === "admit" ? checked.row : { ...unreadableRow(this.now()), pv: "migrated" } });
+          } else if (read.status === "ok") {
             let row: ShareIndexRow;
             try { row = isWebRecord(read.value) ? project(read.value, { key, src: "web" }) : unreadableRow(this.now()); } catch { row = unreadableRow(this.now()); }
             findings.push({ kind: "web", key, row });
@@ -563,20 +591,18 @@ export class SenderShareIndex {
         // Agent record.
         const state = agentState(classified.agentId);
         if (state.paused || state.known.has(rejectedKeyEntry(classified.shareId))) continue;
-        if (state.admitted >= this.limits.newRowsPerAgentPerPass || state.rows + state.admitted >= this.limits.liveRowsPerAgent) { deferred++; continue; }
+        // Every fetch, whatever its verdict, spends the agent's per-pass allowance (≤50 GETs and decrypts per agent per pass).
+        if (state.attempted >= this.limits.newRowsPerAgentPerPass || state.rows + state.attempted >= this.limits.liveRowsPerAgent) { deferred++; continue; }
         fetches++;
+        state.attempted++;
         const examined = await this.examineAgentRecord(key, classified.agentId, classified.shareId, archivedOnce);
         if (examined.kind === "admit") {
-          state.admitted++;
           findings.push({ kind: "agent", key, agentId: classified.agentId, did: examined.did, row: examined.row });
         } else if (examined.kind === "reject") {
           reject(classified.agentId, classified.shareId, examined.reason);
         } else if (examined.kind === "newer") {
           state.known.add(rejectedKeyEntry(classified.shareId));
           findings.push({ kind: "newer", agentId: classified.agentId, suffix: classified.shareId, recordV: examined.recordV });
-        } else {
-          // An outage skip still spends this agent's per-pass allowance, so its keys cannot starve the pass.
-          state.admitted++;
         }
       }
       cursor = page.cursor;
@@ -587,20 +613,31 @@ export class SenderShareIndex {
     // Header GC (V3-8) and newer re-check.
     for (const [agentId, entry] of Object.entries(doc.agents)) {
       if (entry.newerKeys !== undefined && entry.newerV !== undefined && entry.newerV <= SUPPORTED_AGENT_RECORD_V) findings.push({ kind: "clear-newer", agentId });
-      if (entry.rows !== 0 || agentStates.get(agentId)?.admitted || pages >= this.limits.listPagesPerPass) continue;
+      if (entry.rows !== 0 || agentStates.get(agentId)?.attempted || pages >= this.limits.listPagesPerPass) continue;
       const prefixPage = await this.backend.listKeys(agentRecordPrefix(agentId));
       pages++;
       if (prefixPage.status === "ok" && prefixPage.keys.length === 0) findings.push({ kind: "gc", agentId });
     }
 
     let admitted = 0;
+    let headerFull = false;
     const result = await this.update((working) => {
+      // Header cap (§5, never evicts rows): if the findings would grow the header past its cap, apply them
+      // again without new agent header state. Rows still land; the caller shows `headerFull` as an alert.
+      const trial = structuredClone(working);
+      this.applyFindings(trial, findings, () => {});
+      headerFull = headerBytes(trial as unknown as ShareIndexDocument) > this.limits.headerBytes && headerBytes(trial as unknown as ShareIndexDocument) > headerBytes(working as unknown as ShareIndexDocument);
       admitted = 0;
-      this.applyFindings(working, findings, () => { admitted++; });
+      this.growHeader = !headerFull;
+      try {
+        this.applyFindings(working, findings, () => { admitted++; });
+      } finally {
+        this.growHeader = true;
+      }
       if (nextCursor === undefined) delete working.reconcile.cursor;
       else working.reconcile.cursor = nextCursor;
     });
-    return { status: result.status, pages, fetches, admitted, rejected: rejectedCounts, deferred, cycleComplete };
+    return { status: result.status, pages, fetches, admitted, rejected: rejectedCounts, deferred, cycleComplete, headerFull };
   }
 
   private applyFindings(doc: WorkingDoc, findings: readonly Finding[], onAdmit: () => void): void {
@@ -620,6 +657,7 @@ export class SenderShareIndex {
       }
       if (finding.kind === "newer") {
         const entry = this.ensureAgent(doc, finding.agentId);
+        if (entry === undefined || !this.growHeader) continue;
         const keys = entry.newerKeys ?? (entry.newerKeys = []);
         const suffix = rejectedKeyEntry(finding.suffix);
         if (keys.includes(suffix)) continue;
@@ -631,7 +669,7 @@ export class SenderShareIndex {
       if (doc.rows[finding.key] !== undefined || this.isRetired(doc, finding.key)) continue;
       if (finding.kind === "agent") {
         const entry = this.ensureAgent(doc, finding.agentId);
-        if (entry.paused !== false || entry.rejectedKeys.includes(rejectedKeyEntry(basename(finding.key)))) continue;
+        if (entry === undefined || entry.paused !== false || entry.rejectedKeys.includes(rejectedKeyEntry(basename(finding.key)))) continue;
         if (entry.rows >= this.limits.liveRowsPerAgent) { entry.paused = { reason: "row-cap", at: this.now().toISOString() }; continue; }
         const size = bytesOf(finding.row);
         if (agentBytes + size > agentBudget) continue; // deferred: agent rows may not crowd out web rows
@@ -647,7 +685,14 @@ export class SenderShareIndex {
         continue;
       }
       const decision = decideClaim(doc.rows, finding.key, finding.row);
-      if (!decision.admit) continue;
+      if (!decision.admit) {
+        // A migrated import that loses precedence stays visible as needs-attention with no claim, so it is not refetched.
+        if (finding.row.pv === "migrated") {
+          const { cid: _cid, cc: _cc, ...claimless } = finding.row;
+          doc.rows[finding.key] = { ...claimless, na: true };
+        }
+        continue;
+      }
       for (const key of decision.displaced) { agentBytes -= bytesOf(doc.rows[key]); this.displace(doc, key); }
       doc.rows[finding.key] = finding.row;
       onAdmit();

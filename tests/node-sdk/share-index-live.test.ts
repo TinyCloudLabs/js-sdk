@@ -1,32 +1,41 @@
 import { describe, expect, test } from "bun:test";
+import { createHash } from "node:crypto";
 import { Wallet } from "ethers";
 import { PrivateKeySigner, TinyCloudNode } from "@tinycloud/node-sdk";
 import { parseSignedSiweCacao } from "@tinycloud/sdk-core";
+import { ed25519 } from "@noble/curves/ed25519";
+import { canonicalize, didKeyFromEd25519PublicKey } from "@tinycloud/share-envelope";
+import {
+  SHARE_PUBLISH_RESULT_VERSION,
+  createNativeShare,
+  historyRecordForPublishedShare,
+  parseNativeShareUrl,
+  prepareAddressedShare,
+  publishAddressedShare,
+  type PublishedShare,
+} from "@tinycloud/share-sdk";
 import {
   AgentShareRecordStore,
   INDEX_MAIN_KEY,
   MemoryShareIndexOutbox,
-  SHARE_PUBLISH_RESULT_VERSION,
   SHARE_RECORDS_VAULT_PREFIX,
   SenderShareIndex,
   WebShareRecordStore,
   agentIdFromDid,
   agentRecordBinding,
   agentRecordKey,
-  createNativeShare,
   createTinyCloudShareIndexBackend,
   deriveAgentKeyMaterial,
-  historyRecordForPublishedShare,
-  parseNativeShareUrl,
   project,
-  type PublishedShare,
+  sealAgentRecord,
+  verifyAgentRecordChain,
+  type SenderShareRecord,
   type ShareIndexBackend,
   type ShareIndexDocument,
   type ShareIndexOp,
   type ShareIndexOutbox,
   type ShareIndexReconcileReport,
-  type SenderShareRecord,
-} from "@tinycloud/share-sdk";
+} from "@tinycloud/share-sdk/share-index";
 import { z } from "zod";
 import { checkServerHealth, SERVER_URL } from "./setup";
 
@@ -41,6 +50,8 @@ import { checkServerHealth, SERVER_URL } from "./setup";
  */
 
 const SHARE_ORIGIN = "https://share.c5.test";
+/** The signed v3 envelope admits only an https node origin; the local node is http (see the C5 file). */
+const ENVELOPE_NODE_ORIGIN = "https://node.c5.test";
 const RECORDS_KV = `vault/${SHARE_RECORDS_VAULT_PREFIX}`;
 const RUN = Date.now().toString(36);
 const LEAK_EMAIL = `leak.check.${RUN}@example.com`;
@@ -286,6 +297,62 @@ function historyBearerRecord(owner: Owner, link: PublishedLink, session: TinyClo
     },
   };
   return { ...historyRecordForPublishedShare(published), proofs: { session: session.session!.delegationHeader.Authorization.replace(/^Bearer\s+/i, ""), link: link.authorization } };
+}
+
+/**
+ * The CLI addressed branch (`adapters.ts`) for a recipient-DID target: the
+ * source is encrypted to the owner network and stored in the issuing
+ * session's `default` space, then published with that session's authority.
+ * Returns the sender record `historyRecordForPublishedShare` makes, with the
+ * session CACAO as its proof.
+ */
+async function publishAgentV3(issuer: TinyCloudNode, recipientDid: string): Promise<SenderShareRecord> {
+  const activeNode = await issuer.activeNodeIdentity();
+  const spaceId = issuer.session!.spaceId;
+  const shareId = crypto.randomUUID().replaceAll("-", "");
+  const filename = "doc.txt";
+  const resourcePath = `shares/${shareId}/${filename}`;
+  const policyActions: ("tinycloud.kv/get" | "tinycloud.kv/metadata")[] = ["tinycloud.kv/get", "tinycloud.kv/metadata"];
+  const prepared = prepareAddressedShare({ target: { kind: "recipientDid", did: recipientDid }, actions: ["read"], policyActions, filename });
+  const plaintext = enc(`share-index live v3 ${shareId}`);
+  const encrypted = await issuer.encryption.encryptToNetwork(issuer.getEncryptionNetworkIdForSpace(spaceId), plaintext, { metadata: { contentType: "text/plain" } });
+  if (!encrypted.ok) throw new Error(`encryptToNetwork: ${encrypted.error.code}`);
+  const storedBytes = enc(canonicalize(encrypted.data));
+  const stored = await issuer.kvForSpace(spaceId).put(resourcePath, storedBytes, { contentType: "application/vnd.tinycloud.encrypted-envelope+json" });
+  if (!stored.ok) throw new Error(`addressed source put: ${stored.error.code}`);
+  const published = await publishAddressedShare({
+    shareId,
+    shareOrigin: SHARE_ORIGIN,
+    nodeOrigin: ENVELOPE_NODE_ORIGIN,
+    nodeAudience: activeNode.nodeDid,
+    enforcerDid: activeNode.nodeDid,
+    spaceId,
+    target: prepared.target,
+    resource: { kind: "exact", path: resourcePath },
+    actions: ["read"],
+    policyActions,
+    contentSource: {
+      shareId,
+      kvResource: `${spaceId}/kv/${resourcePath}`,
+      selector: "exact",
+      encryptionNetwork: encrypted.data.networkId,
+      encryptedSymmetricKeyDigestHex: encrypted.data.encryptedSymmetricKeyHash,
+      keyVersion: encrypted.data.keyVersion,
+      mode: "immutable",
+      initialCiphertextDigestHex: createHash("sha256").update(storedBytes).digest("hex"),
+    },
+    filename,
+    mediaType: "text/plain",
+    byteLength: plaintext.byteLength,
+    expiresAt: new Date(Math.floor((Date.now() + 3_600_000) / 1000) * 1000),
+    authority: {
+      ownerDid: issuer.credentialHolderDid,
+      createOwnerRoot: (request) => issuer.createUnifiedOwnerRoot(request),
+      sign: (bytes) => issuer.signSessionBytes(bytes),
+      registerPolicy: (request) => issuer.registerPolicy(request),
+    },
+  });
+  return { ...historyRecordForPublishedShare(published), proofs: { session: issuer.session!.delegationHeader.Authorization.replace(/^Bearer\s+/i, "") } };
 }
 
 // ---------------------------------------------------------------------------
@@ -601,15 +668,23 @@ describe("share index on a live node (DESIGN-C §10)", () => {
     expect(JSON.stringify(readBack)).toBe(JSON.stringify(record));
   }, 180_000);
 
-  test("f0: a CLI-shaped bearer agent record with its link, and one built by historyRecordForPublishedShare, are admitted as proven; a record padded past 32 KiB is refused `size`", async () => {
+  test("f0: a CLI-shaped bearer agent record with its link, and one built by historyRecordForPublishedShare, are admitted as proven; a record padded past 32 KiB is refused `size` by the agent store before writing, and by the reconciler when written raw", async () => {
     const owner = await newOwner();
     const index = newIndex(owner, ownerBackend(owner), new MemoryShareIndexOutbox(), "web:f0");
     const agent = await ownerWalletAgent(owner);
     const withLink = bearerAgentRecord(owner, await publishLink(agent.node, owner, "f0full"), agent.node);
     const fromHistory = historyBearerRecord(owner, await publishLink(agent.node, owner, "f0hist"), agent.node);
     const padded: SenderShareRecord = { ...bearerAgentRecord(owner, await publishLink(agent.node, owner, "f0pad"), agent.node), deliveredRecipients: ["x".repeat(20_000)] };
-    for (const record of [withLink, fromHistory, padded]) await agent.store.put(record);
+    for (const record of [withLink, fromHistory]) await agent.store.put(record);
+    const storePadded = await agent.store.put(padded).then(() => "OK", (error: unknown) => (error instanceof Error ? error.message : "rejected"));
     const agentBackend = createTinyCloudShareIndexBackend({ client: agent.node, spaceId: owner.spaceId, ownerNetworkId: owner.networkId });
+    // An agent can still write raw bytes under its own prefix: seal the oversize record by hand and put it.
+    const paddedKey = agentRecordKey(agent.agentId, padded.shareId);
+    const sealed = await sealAgentRecord({
+      plaintext: enc(JSON.stringify(padded)), spaceId: owner.spaceId, vaultKey: `${SHARE_RECORDS_VAULT_PREFIX}${paddedKey}`, agentDid: agent.agentDid,
+      ownerNetworkId: owner.networkId, ownerWrap: agentBackend.ownerWrap, agentKey: await agentKeyFor(agent.node, agent.agentDid),
+    });
+    expect(await agentBackend.writeRaw(paddedKey, sealed as unknown as Record<string, unknown>, { ifNoneMatch: "*" })).toEqual({ ok: true });
     const storedSize = async (record: SenderShareRecord) => {
       const raw = await agentBackend.readRaw(agentRecordKey(agent.agentId, record.shareId));
       return raw.status === "ok" ? raw.bytes.byteLength : -1;
@@ -628,6 +703,7 @@ describe("share index on a live node (DESIGN-C §10)", () => {
       agentReadBack: { withLink: await readBack(withLink), fromHistory: await readBack(fromHistory), padded: await readBack(padded) },
     };
     expect(Object.keys(fromHistory.target)).toContain("kind");
+    expect(storePadded).toBe("agent record refused: size");
     expect(await storedSize(padded)).toBeGreaterThan(32 * 1024);
     expect(pass.rejected).toEqual({ size: 1 });
     expect([proofState(withLink), proofState(fromHistory), proofState(padded)]).toEqual(["proven", "proven", null]);
@@ -753,7 +829,79 @@ describe("share index on a live node (DESIGN-C §10)", () => {
     }
   }, 900_000);
 
-  test("e: no link, token, delivery material or full email in any decrypted index (after a, b, c)", async () => {
+  test("h: two-space layout: records in `applications`, content in the agent session's `default`; the bearer record is proven, the v3 chain is proven (its CLI-shaped record exceeds the 32 KiB cap: finding); another owner's space or a registeredAt before the session is refused `schema`", async () => {
+    const owner = await newOwner();
+    const appsId = await owner.node.ensureOwnedSpaceHosted("applications");
+    const recordsGrant = (path: string) => [{ service: "tinycloud.kv", space: appsId, path, skipPrefix: true, actions: ["tinycloud.kv/get", "tinycloud.kv/put", "tinycloud.kv/list", "tinycloud.kv/metadata", "tinycloud.kv/del"] }];
+    // The owner's own sign-in covers `default`; records live in `applications`.
+    await owner.node.grantRuntimePermissions(recordsGrant(RECORDS_KV));
+    const ownerApps = owner.node.space(appsId);
+    const index = newIndex(owner, createTinyCloudShareIndexBackend({
+      client: { vault: ownerApps.vault, kv: ownerApps.kv, encryption: owner.node.encryption },
+      spaceId: appsId,
+      ownerNetworkId: owner.networkId,
+      decryptProof: () => ({ proofs: [owner.node.session!.delegationCid] }),
+    }), new MemoryShareIndexOutbox(), "web:h");
+    // Agent A: a CLI sign-in of the owner wallet with the Tier W grant on its own record prefix.
+    const agentNode = await signedIn(owner.key);
+    const agentDid = agentNode.credentialHolderDid;
+    const agentId = agentIdFromDid(agentDid);
+    await agentNode.grantRuntimePermissions(recordsGrant(`${RECORDS_KV}agents/${agentId}/`));
+    const agentApps = agentNode.space(appsId);
+    const agentBackend = createTinyCloudShareIndexBackend({ client: { vault: agentApps.vault, kv: agentApps.kv, encryption: agentNode.encryption }, spaceId: appsId, ownerNetworkId: owner.networkId });
+    const store = new AgentShareRecordStore({ backend: agentBackend, agentDid, agentKey: await agentKeyFor(agentNode, agentDid) });
+    // Content in the agent session's `default` space (owner.spaceId is the same wallet's `default`).
+    const bearer = bearerAgentRecord(owner, await publishLink(agentNode, owner, "hbearer"), agentNode);
+    const v3 = await publishAgentV3(agentNode, didKeyFromEd25519PublicKey(ed25519.getPublicKey(ed25519.utils.randomPrivateKey())));
+    const foreignBase = bearerAgentRecord(owner, await publishLink(agentNode, owner, "hforeign"), agentNode);
+    const foreign: SenderShareRecord = { ...foreignBase, target: { ...foreignBase.target, spaceId: `tinycloud:pkh:eip155:1:${Wallet.createRandom().address}:default` } };
+    // A real record whose registeredAt is moved 3 days before the session's SIWE Issued At.
+    const issuedAt = Date.parse(/\nIssued At: (\S+)/.exec(agentNode.session!.siwe)?.[1] ?? "");
+    expect(Number.isFinite(issuedAt)).toBe(true);
+    const backdated: SenderShareRecord = { ...bearerAgentRecord(owner, await publishLink(agentNode, owner, "hbackdated"), agentNode), registeredAt: new Date(issuedAt - 3 * 86_400_000).toISOString() };
+    const records = [["bearer", bearer], ["v3", v3], ["foreign", foreign], ["backdated", backdated]] as const;
+    const puts: Record<string, string> = {};
+    for (const [label, record] of records) {
+      puts[label] = await store.put(record).then(() => "OK", (error: unknown) => (error instanceof Error ? error.message : "rejected"));
+    }
+    const storedBytes: Record<string, number> = {};
+    for (const [label, record] of records) {
+      const raw = await agentBackend.readRaw(agentRecordKey(agentId, record.shareId));
+      storedBytes[label] = raw.status === "ok" ? raw.bytes.byteLength : -1;
+    }
+    const pass = await index.reconcile();
+    const doc = await loadDoc(index);
+    const proofState = (record: SenderShareRecord) => doc.rows[agentRecordKey(agentId, record.shareId)]?.ps ?? null;
+    // The v3 record's chain judged directly, apart from the size cap.
+    const v3Verdict = await verifyAgentRecordChain(v3, { accountOwnerDid: owner.ownerDid, agentDid, now: new Date(), parseSiweCacao: parseSignedSiweCacao })
+      .then((verdict) => (verdict.ok ? verdict.state : `rejected: ${verdict.detail}`));
+    report.h = {
+      recordsSpaceIsApplications: appsId.endsWith(":applications"),
+      contentSpaceIsDefault: owner.spaceId.endsWith(":default"),
+      puts,
+      storedBytes: { ...storedBytes, cap: 32 * 1024 },
+      reconcile: pass,
+      proofState: Object.fromEntries(records.map(([label, record]) => [label, proofState(record)])),
+      agentEntry: doc.agents[agentId] === undefined ? null : { rows: doc.agents[agentId]!.rows, rejected: doc.agents[agentId]!.rejected },
+      v3ChainVerdict: v3Verdict,
+      v3Bytes: {
+        plaintext: enc(JSON.stringify(v3)).length,
+        envelope: enc(JSON.stringify(v3.deliveryMaterial?.envelope ?? {})).length,
+        sealedEnvelope: v3.deliveryMaterial?.sealedEnvelope.length ?? 0,
+        sessionCacao: v3.proofs?.session?.length ?? 0,
+      },
+    };
+    console.log(`SHARE-INDEX-H ${JSON.stringify(report.h)}`);
+    leakChecked.push({ label: "h", index });
+    // Finding (reported on TC-1432): a CLI-shaped v3 record (envelope, sealedEnvelope, inline link, CACAO) is about 64 KB
+    // stored, over MAX_AGENT_RECORD_BYTES, so the agent store refuses to write it; its chain itself verifies as proven.
+    expect(puts).toEqual({ bearer: "OK", v3: "agent record refused: size", foreign: "OK", backdated: "OK" });
+    expect(v3Verdict).toBe("proven");
+    expect(records.map(([, record]) => proofState(record))).toEqual(["proven", null, null, null]);
+    expect(pass.rejected).toEqual({ schema: 2 });
+  }, 180_000);
+
+  test("e: no link, token, delivery material or full email in any decrypted index (after a, b, c, h)", async () => {
     const findings: Record<string, unknown> = {};
     for (const { label, index } of leakChecked) {
       const text = JSON.stringify(await loadDoc(index));
@@ -768,7 +916,7 @@ describe("share index on a live node (DESIGN-C §10)", () => {
     }
     report.e = findings;
     console.log(`SHARE-INDEX-RESULTS ${JSON.stringify(report)}`);
-    expect(leakChecked.map((item) => item.label)).toEqual(expect.arrayContaining(["a", "b", "c-upsert", "c-revoke"]));
+    expect(leakChecked.map((item) => item.label)).toEqual(expect.arrayContaining(["a", "b", "c-upsert", "c-revoke", "h"]));
     for (const [label, finding] of Object.entries(findings)) {
       expect([label, finding]).toEqual([label, expect.objectContaining({ hashK: false, tc1: false, deliveryMaterial: false, linkKey: false, fullEmail: false })]);
     }

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { agentIdFromDid, classifyRecordKey, isShareId } from "../../src/share-index/ids.js";
+import { agentIdFromDid, classifyRecordKey, isShareId, rejectedKeyEntry } from "../../src/share-index/ids.js";
 import { validateShareLink } from "../../src/share-index/link.js";
 import { displayName } from "../../src/share-index/schema.js";
 
@@ -33,7 +33,14 @@ describe("key classifier (§1, test 5 keys)", () => {
     for (const suffix of ["..%2F..%2F_index/main", "/vault/x", "./x", "../x", "a\\b", "x//y", "deep/x", "_index"]) {
       expect(classifyRecordKey(`agents/${A}/${suffix}`)).toEqual({ kind: "rejected", agentId: A, suffix });
     }
-    expect(classifyRecordKey(`agents/${A}/${"z".repeat(100)}%`)).toEqual({ kind: "rejected", agentId: A, suffix: "z".repeat(64) });
+    expect(classifyRecordKey(`agents/${A}/${"z".repeat(100)}%`)).toEqual({ kind: "rejected", agentId: A, suffix: `${"z".repeat(100)}%` });
+  });
+
+  test("rejected-key entries are short hashes, never the agent-chosen text", () => {
+    const entry = rejectedKeyEntry("\u202Eevil-name-from-an-agent");
+    expect(entry).toMatch(/^[A-Za-z0-9_-]{16}$/);
+    expect(rejectedKeyEntry("\u202Eevil-name-from-an-agent")).toBe(entry);
+    expect(rejectedKeyEntry("other")).not.toBe(entry);
   });
 
   test("other odd keys are skipped without being attributed to anyone", () => {

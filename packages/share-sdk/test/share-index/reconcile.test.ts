@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { SenderShareRecord } from "../../src/history.js";
 import { deriveAgentKeyMaterial } from "../../src/share-index/agent-key.js";
-import { agentRecordBinding, sealAgentRecord, type StoredAgentRecord } from "../../src/share-index/agent-record.js";
+import { agentRecordBinding, MAX_AGENT_RECORD_BYTES, sealAgentRecord, type StoredAgentRecord } from "../../src/share-index/agent-record.js";
 import { agentIdFromDid, agentRecordKey, INDEX_MAIN_KEY, SHARE_RECORDS_VAULT_PREFIX } from "../../src/share-index/ids.js";
 import { project, type ShareIndexDocument } from "../../src/share-index/schema.js";
 import { headerBytes, MemoryShareIndexOutbox, SenderShareIndex, type ShareIndexLimits } from "../../src/share-index/sender-share-index.js";
@@ -81,7 +81,7 @@ describe("reconciler: every §5 check rejects, counts once, and is not refetched
     ["schema", "unknown field at a known recordV", (backend) => writeAgentRecord(backend, agent, { ...valid(), shareId: "unk", surprise: 1 })],
     ["schema", "shareId ≠ key basename", (backend) => writeAgentRecord(backend, agent, { ...valid(), shareId: "other" }, { shareId: "basename" })],
     ["schema", "another space", (backend) => writeAgentRecord(backend, agent, { ...valid(), shareId: "space", target: { origin: "https://node.test", nodeAudience: "did:key:z", spaceId: "tinycloud:other" } })],
-    ["schema", "registeredAt far from first sight", (backend) => writeAgentRecord(backend, agent, { ...valid(), shareId: "old", registeredAt: new Date(Date.now() - 3 * 86_400_000).toISOString() })],
+    ["schema", "registeredAt 3 days off the link's signed nbf", (backend) => writeAgentRecord(backend, agent, { ...bearerFixture({ session: agent, link: { nbf: Math.floor(Date.now() / 1000) - 60 } }).record, shareId: "old", registeredAt: new Date(Date.now() - 3 * 86_400_000).toISOString() })],
     ["schema", "an action outside the share actions", (backend) => writeAgentRecord(backend, agent, { ...valid(), shareId: "act", actions: ["tinycloud.kv/del"] })],
     ["schema", "a resource outside the share prefixes", (backend) => writeAgentRecord(backend, agent, { ...valid(), shareId: "res", resource: { kind: "exact", path: "secrets/x" } })],
     ["schema", "a foreign ownerDid", (backend) => writeAgentRecord(backend, agent, { ...valid(), shareId: "own", ownerDid: "did:pkh:eip155:1:0x1111111111111111111111111111111111111111" })],
@@ -363,5 +363,118 @@ describe("repair and rebuild (test 9)", () => {
     await fresh.reconcile();
     expect(Object.keys((await doc(fresh)).rows)).toEqual(["crash1"]);
     expect(await outbox.list()).toEqual([]);
+  });
+});
+
+describe("the agent-record size cap at the reconciler (TC-1432 ruling: 32 KiB)", () => {
+  test("a stored record of exactly MAX_AGENT_RECORD_BYTES is admitted; one byte more is rejected `size`", async () => {
+    const backend = new MemoryBackend();
+    const agent = newKey();
+    const padTo = (bytes: number) => (stored: StoredAgentRecord) => {
+      const base = encoder.encode(JSON.stringify({ ...stored, wrapOwner: { ...stored.wrapOwner, pad: "" } })).length;
+      return { ...stored, wrapOwner: { ...stored.wrapOwner, pad: "x".repeat(bytes - base) } };
+    };
+    const atCap = await writeAgentRecord(backend, agent, bearerFixture({ session: agent, shareId: "atcap" }).record, { mutate: padTo(MAX_AGENT_RECORD_BYTES) });
+    const overCap = await writeAgentRecord(backend, agent, bearerFixture({ session: agent, shareId: "overcap" }).record, { mutate: padTo(MAX_AGENT_RECORD_BYTES + 1) });
+    expect((await backend.readRaw(atCap) as { bytes: Uint8Array }).bytes.length).toBe(MAX_AGENT_RECORD_BYTES);
+    expect((await backend.readRaw(overCap) as { bytes: Uint8Array }).bytes.length).toBe(MAX_AGENT_RECORD_BYTES + 1);
+    const index = owner(backend);
+    const report = await index.reconcile();
+    expect(report).toMatchObject({ admitted: 1, rejected: { size: 1 } });
+    expect((await doc(index)).rows[atCap]).toMatchObject({ ps: "proven" });
+    expect((await doc(index)).rows[overCap]).toBeUndefined();
+  });
+});
+
+describe("migrated provenance: a one-time owner import path (TC-1432 ruling)", () => {
+  const old = () => new Date(Date.now() - 200 * 86_400_000).toISOString();
+  const migrated = (fixture: ReturnType<typeof bearerFixture>, extra: Partial<SenderShareRecord> = {}): SenderShareRecord => ({ ...fixture.record, registeredAt: old(), provenance: "migrated", ...extra });
+
+  test("an agent-subtree record claiming `migrated` is rejected and counted, never admitted, not refetched", async () => {
+    const backend = new MemoryBackend();
+    const agent = newKey();
+    const key = await writeAgentRecord(backend, agent, { ...bearerFixture({ session: agent }).record, provenance: "migrated" });
+    const index = owner(backend);
+    expect((await index.reconcile()).rejected).toEqual({ provenance: 1 });
+    const final = await doc(index);
+    expect(final.rows[key]).toBeUndefined();
+    expect(final.agents[agentIdFromDid(agent.did)]).toMatchObject({ rows: 0, rejected: { provenance: 1 } });
+    const reads = backend.counters.rawReads;
+    await index.reconcile();
+    expect(backend.counters.rawReads).toBe(reads);
+  });
+
+  test("an owner-written import is exempt from the first-sight window, ranks by its proof (never `proven`, never web)", async () => {
+    const backend = new MemoryBackend();
+    const withSession = bearerFixture();
+    const withoutSession = bearerFixture();
+    await backend.writeVault("imp1", migrated(withSession, { shareId: "imp1" }));
+    await backend.writeVault("imp2", migrated(withoutSession, { shareId: "imp2", proofs: { link: withoutSession.record.proofs!.link! } }));
+    const index = owner(backend);
+    await index.reconcile();
+    const rows = (await doc(index)).rows;
+    expect(rows.imp1).toMatchObject({ src: "web", pv: "migrated", ps: "chained", cid: withSession.linkCid });
+    expect(rows.imp2).toMatchObject({ src: "web", pv: "migrated", ps: "unproven" });
+    expect(rows.imp1!.na).toBeUndefined();
+  });
+
+  test("nothing else is relaxed: a bad link, a foreign action or a failed chain leaves only a claimless needs-attention row", async () => {
+    const backend = new MemoryBackend();
+    const cases: [string, SenderShareRecord][] = [
+      ["link", migrated(bearerFixture(), { shareId: "badlink", link: "https://evil.test/viewer#tc1=x" })],
+      ["action", migrated(bearerFixture(), { shareId: "badaction", actions: ["tinycloud.kv/del" as never] })],
+      ["proof", migrated(bearerFixture({ siwe: { issuer: "did:pkh:eip155:1:0x1111111111111111111111111111111111111111" } }), { shareId: "badproof" })],
+      ["future", migrated(bearerFixture(), { shareId: "future", registeredAt: new Date(Date.now() + 86_400_000).toISOString(), expiresAt: new Date(Date.now() + 60_000).toISOString() })],
+    ];
+    for (const [, record] of cases) await backend.writeVault(record.shareId, record);
+    const index = owner(backend);
+    await index.reconcile();
+    const rows = (await doc(index)).rows;
+    for (const [name, record] of cases) {
+      expect({ name, row: rows[record.shareId] }).toMatchObject({ name, row: { na: true, pv: "migrated" } });
+      expect(rows[record.shareId]!.cc).toBeUndefined();
+    }
+  });
+
+  test("`migrated` cannot override precedence: a proven agent row keeps the CID, and a web row displaces an import", async () => {
+    const backend = new MemoryBackend();
+    const agent = newKey();
+    const fixture = bearerFixture({ session: agent });
+    const agentKey = await writeAgentRecord(backend, agent, fixture.record);
+    const index = owner(backend);
+    await index.reconcile();
+    await backend.writeVault("imp", migrated(fixture, { shareId: "imp" }));
+    await index.reconcile();
+    let rows = (await doc(index)).rows;
+    expect(rows[agentKey]).toMatchObject({ ps: "proven", cid: fixture.linkCid });
+    expect(rows.imp).toMatchObject({ pv: "migrated", na: true });
+    expect(rows.imp!.cc).toBeUndefined();
+    // An import that holds a CID is displaced by a later web record for it.
+    const other = bearerFixture();
+    await backend.writeVault("imp2", migrated(other, { shareId: "imp2" }));
+    await index.reconcile();
+    await webRecord(backend, "webshare", { enforcementDelegationCid: other.linkCid, targetKind: "bearer" });
+    await index.reconcile();
+    rows = (await doc(index)).rows;
+    expect(rows.webshare).toBeDefined();
+    expect(rows.imp2).toBeUndefined();
+  });
+
+  test("`migrated` cannot override a node-confirmed revocation, even when it would outrank the row", async () => {
+    const backend = new MemoryBackend();
+    const issuer = newKey();
+    const fixture = bearerFixture({ session: issuer });
+    const unproven = { ...fixture.record, proofs: { link: fixture.record.proofs!.link! } };
+    const agentKey = await writeAgentRecord(backend, issuer, unproven);
+    const index = owner(backend);
+    await index.reconcile();
+    await index.enqueue({ id: "rv", type: "revoke", key: agentKey, at: new Date().toISOString(), confirmed: true });
+    await index.flush();
+    await backend.writeVault("imp", migrated(fixture, { shareId: "imp" }));
+    await index.reconcile();
+    const rows = (await doc(index)).rows;
+    expect(rows[agentKey]).toMatchObject({ ps: "unproven", r: { confirmed: true } });
+    expect(rows.imp).toMatchObject({ pv: "migrated", na: true });
+    expect(rows.imp!.cc).toBeUndefined();
   });
 });

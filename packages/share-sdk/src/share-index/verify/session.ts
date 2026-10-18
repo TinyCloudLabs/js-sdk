@@ -21,6 +21,8 @@ export interface ParsedSiweCacao {
   readonly attenuation: Attenuation;
   readonly expiresAt?: string;
   readonly notBefore?: string;
+  /** SIWE `Issued At` as signed. */
+  readonly issuedAt?: string;
 }
 
 /** Verifies signature, encoding and the exact-bytes CID; throws otherwise. */
@@ -47,6 +49,8 @@ export interface VerifiedOwnerSession {
   /** The session principal (audience without fragment). */
   readonly sessionDid: string;
   readonly time: DelegationTime;
+  /** The signed `Issued At` (epoch ms), when the parser reports it. */
+  readonly issuedAt?: number;
 }
 
 function timeOf(value: string | undefined, label: string): number | undefined {
@@ -67,5 +71,9 @@ export async function verifyOwnerSessionDelegation(input: OwnerSessionCheck): Pr
   const expiresAt = timeOf(cacao.expiresAt, "Expiration Time");
   if (notBefore !== undefined && expiresAt !== undefined && notBefore >= expiresAt) throw new Error("SIWE validity window is empty");
   if (notBefore !== undefined && notBefore > input.now.getTime() + NOT_BEFORE_SKEW_MS) throw new Error("SIWE is not yet valid");
-  return { cid: cacao.cid, sessionDid: principalOf(cacao.audience), time: expiresAt !== undefined && expiresAt <= input.now.getTime() ? "expired" : "current" };
+  const issuedAt = timeOf(cacao.issuedAt, "Issued At");
+  return {
+    cid: cacao.cid, sessionDid: principalOf(cacao.audience), time: expiresAt !== undefined && expiresAt <= input.now.getTime() ? "expired" : "current",
+    ...(issuedAt === undefined ? {} : { issuedAt }),
+  };
 }

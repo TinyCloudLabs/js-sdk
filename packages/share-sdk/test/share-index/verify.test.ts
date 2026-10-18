@@ -64,7 +64,7 @@ describe("attenuation containment (prefix rule)", () => {
 describe("bearer chain states (C2, C4)", () => {
   test("proven: full chain to the owner and the leaf issuer is hdr.agentDid", async () => {
     const fixture = bearerFixture({ now });
-    expect(await verdict(fixture.record, context(fixture.session.did))).toEqual({ ok: true, state: "proven", expired: false, claims: [fixture.linkCid] });
+    expect(await verdict(fixture.record, context(fixture.session.did))).toMatchObject({ ok: true, state: "proven", expired: false, claims: [fixture.linkCid] });
   });
 
   test("chained: the same chain under another agent's header (a copied proof)", async () => {
@@ -164,7 +164,10 @@ describe("Policy/v2 chain: registration key source and expired vs invalid (C4)",
 
   test("with the node key from the share config, every CID including registrationCid is claimed", async () => {
     const record = await v2Record();
-    expect(await verdict(record, withKey(record))).toEqual({ ok: true, state: "chained", expired: false, claims: [record.policyCid!, record.ownerDelegationCid!, record.enforcementDelegationCid!, record.registrationCid!] });
+    const result = await verdict(record, withKey(record));
+    expect(result).toMatchObject({ ok: true, state: "chained", expired: false, claims: [record.policyCid!, record.ownerDelegationCid!, record.enforcementDelegationCid!, record.registrationCid!] });
+    // The node-signed registration time anchors registeredAt (±1 day).
+    expect(result.ok && result.issued).toEqual({ earliest: Date.parse("2026-01-01T00:00:00.000Z") - 86_400_000, latest: Date.parse("2026-01-01T00:00:00.000Z") + 86_400_000 });
   });
 
   test("without a registration key, registrationCid is not claimed and the other CIDs still verify", async () => {

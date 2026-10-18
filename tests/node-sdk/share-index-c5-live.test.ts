@@ -276,6 +276,8 @@ const material: {
   control?: V3Share;
   holder?: Holder;
   holderSession?: PolicySession;
+  /** A second v3 share with an open recipient session, for the owner's generic root revocation (5f). */
+  ownerRevoked?: { share: V3Share; holder: Holder; session: PolicySession };
 } = {};
 
 /** The CLI's addressed branch (`adapters.ts` targetAdapter) for a recipient-DID target. */
@@ -393,6 +395,22 @@ async function rootState(rootCid: string): Promise<{ state: string; sdk: string;
   };
 }
 
+/** Owner client W's wallet-signed revocation of `cid` on the node's generic `POST /revoke` (the CLI owner-key path). */
+async function ownerGenericRevoke(cid: string): Promise<{ status: number; revoked: unknown; cidMatches: boolean; code?: string }> {
+  const authorization = await W.signOwnerRevocation(cid);
+  const response = await fetch(`${(await W.activeNodeIdentity()).origin}/revoke`, { method: "POST", headers: { Authorization: authorization } });
+  const body = await response.text();
+  let json: unknown;
+  try { json = JSON.parse(body); } catch { json = undefined; }
+  const receipt = RevokeReceipt.safeParse(json);
+  return {
+    status: response.status,
+    revoked: receipt.success ? receipt.data.revoked : undefined,
+    cidMatches: receipt.success && receipt.data.cid === cid,
+    ...(response.ok ? {} : { code: scrub(body) }),
+  };
+}
+
 describe("C5: owner revocation of an agent session (live node)", () => {
   beforeAll(async () => {
     await checkServerHealth();
@@ -461,6 +479,16 @@ describe("C5: owner revocation of an agent session (live node)", () => {
     expect(read.text).toBe(share.text);
   }, 120_000);
 
+  test("step 2b: agent A publishes a second v3 share whose recipient opens a policy session (for 5f)", async () => {
+    const holder = newHolder();
+    const share = await publishV3(`c5 v3 owner-revoked ${crypto.randomUUID()}`, holder.did);
+    const wire = await wireClaim(share.envelope, holder, (bytes) => A.signSessionBytes(bytes));
+    expect(wire.mint?.ok).toBe(true);
+    material.ownerRevoked = { share, holder, session: wire.session! };
+    const read = await readWithSession(share.envelope, holder, wire.session!);
+    expect(read.text).toBe(share.text);
+  }, 120_000);
+
   test("step 6 (control, before step 4): agent A revokes one of its own roots precisely", async () => {
     const holder = newHolder();
     const share = await publishV3(`c5 control ${crypto.randomUUID()}`, holder.did);
@@ -483,7 +511,10 @@ describe("C5: owner revocation of an agent session (live node)", () => {
     expect(state.state).toBe("revoked");
   }, 120_000);
 
-  test("step 3: owner client W cannot revoke agent A's v3 root (403 root-revocation-issuer-invalid)", async () => {
+  // Only the JSON root-revocation route (`revokePolicyRootV3`) checks the
+  // issuer against the root's ownerDid. The generic `/revoke` route accepts
+  // the owner wallet's CACAO over a root CID (5f).
+  test("step 3: the JSON root-revocation route refuses owner client W on agent A's v3 roots (403 root-revocation-issuer-invalid)", async () => {
     const { envelope } = material.v3!;
     const wSign: OwnerSign = (bytes) => W.signSessionBytes(bytes);
     const ownerPkh = `did:pkh:eip155:${W.session!.chainId}:${getAddress(W.session!.address)}`;
@@ -507,18 +538,9 @@ describe("C5: owner revocation of an agent session (live node)", () => {
   }, 60_000);
 
   test("step 4: owner client W revokes the owner->A session delegation with an owner-signed revocation", async () => {
-    const authorization = await W.signOwnerRevocation(agentSessionCid);
-    const response = await fetch(`${(await W.activeNodeIdentity()).origin}/revoke`, { method: "POST", headers: { Authorization: authorization } });
-    const body = await response.text();
-    let json: unknown;
-    try { json = JSON.parse(body); } catch { json = undefined; }
-    const receipt = RevokeReceipt.safeParse(json);
-    const revoked = receipt.success ? receipt.data.revoked : undefined;
-    const cidMatches = receipt.success && receipt.data.cid === agentSessionCid;
-    observed.step4 = { status: response.status, revoked, cidMatches, ...(response.ok ? {} : { code: scrub(body) }) };
-    expect(response.status).toBe(200);
-    expect(revoked).toBe(true);
-    expect(cidMatches).toBe(true);
+    const result = await ownerGenericRevoke(agentSessionCid);
+    observed.step4 = result;
+    expect(result).toMatchObject({ status: 200, revoked: true, cidMatches: true });
   }, 60_000);
 
   describe("step 5: after the session revocation (DESIGN-C §6 [INFERENCE] under test)", () => {
@@ -550,8 +572,10 @@ describe("C5: owner revocation of an agent session (live node)", () => {
     // Finding: DESIGN-C §6 assumed the owner->session cascade stops every v3
     // share of the agent session. It stops new claims (5b) but not a policy
     // session minted before it; that session reads until its own expiry
-    // (step2.recipientSessionLifetimeSeconds). Only a root revocation by the
-    // agent's key cuts it off (5e).
+    // (step2.recipientSessionLifetimeSeconds, ~3,598 s). The node liveness
+    // check (N3, test B-1) closes this. Today a root revocation ends it: by
+    // the agent's key on the JSON route (5e), or by the owner wallet on the
+    // generic /revoke route (5f).
     test("5c: an open v3 policy session SURVIVES the owner→session cascade until its own expiry (DESIGN-C §6 [INFERENCE] is false)", async () => {
       const { envelope, text } = material.v3!;
       const read = await readWithSession(envelope, material.holder!, material.holderSession!);
@@ -571,6 +595,26 @@ describe("C5: owner revocation of an agent session (live node)", () => {
         results[name] = result.ok ? { ok: true } : { ok: false, code: result.error.code, ...errorInfo(result.error) };
       }
       observed.step5d = results;
+    }, 60_000);
+
+    test("5f: the owner wallet revokes agent A's v3 roots through the generic /revoke route; the open recipient session then gets 403 root-revoked", async () => {
+      const { share, holder, session } = material.ownerRevoked!;
+      const before = await readWithSession(share.envelope, holder, session);
+      const policyRoot = await ownerGenericRevoke(share.envelope.policyRoot.cid);
+      const enforcementRoot = await ownerGenericRevoke(share.envelope.enforcementRoot.cid);
+      const states = { policyRoot: await rootState(share.envelope.policyRoot.cid), enforcementRoot: await rootState(share.envelope.enforcementRoot.cid) };
+      const after = await readWithSession(share.envelope, holder, session);
+      observed.step5f = {
+        openSessionBefore: { invoke: before.invoke, decrypt: before.decrypt },
+        policyRoot,
+        enforcementRoot,
+        rootStatesAfter: states,
+        openSessionAfter: { invoke: after.invoke, decrypt: after.decrypt, contentReturned: after.text !== undefined },
+      };
+      expect(before.text).toBe(share.text);
+      expect(policyRoot).toMatchObject({ status: 200, revoked: true, cidMatches: true });
+      expect(enforcementRoot).toMatchObject({ status: 200, revoked: true, cidMatches: true });
+      expect(after.invoke).toMatchObject({ ok: false, status: 403, code: "root-revoked" });
     }, 60_000);
 
     test("5e (control): agent A, its session delegation revoked, can still revoke its own v3 root, which ends the open recipient session", async () => {

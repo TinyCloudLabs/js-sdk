@@ -30,19 +30,3 @@ export { publishPolicyShare, claimShare, resumeShareAuthorization } from "./poli
 export type { SharePolicyPublishAdapter } from "./policy.js";
 export { NATIVE_SHARE_FRAGMENT_PARAMETER, createNativeShare, openNativeShare, parseNativeShareUrl } from "./native.js";
 export type { NativeShareResult, NativeSharingService } from "./native.js";
-// Shared share index (TC-1432 design C).
-export { AGENT_ID_LENGTH, INDEX_MAIN_KEY, SHARE_RECORDS_VAULT_PREFIX, agentIdFromDid, agentRecordKey, agentRecordPrefix, classifyRecordKey, isAgentId, isShareId, type ClassifiedRecordKey } from "./share-index/ids.js";
-export { validateShareLink, type ShareLinkCheck, type ShareLinkShape } from "./share-index/link.js";
-export { deriveAgentKeyMaterial, type AgentKeyMaterial } from "./share-index/agent-key.js";
-export { AGENT_RECORD_VERSION, MAX_AGENT_RECORD_BYTES, SUPPORTED_AGENT_RECORD_V, AgentRecordError, OwnerUnwrapUnavailableError, agentRecordBinding, openAgentRecordAsAgent, openAgentRecordAsOwner, parseStoredAgentRecord, sealAgentRecord, type AgentRecordFailure, type AgentRecordHeader, type OwnerNetworkUnwrap, type OwnerNetworkWrap, type StoredAgentRecord } from "./share-index/agent-record.js";
-export { INVALID_ETAG_MESSAGE, createTinyCloudShareIndexBackend, type ShareDocumentRead, type ShareIndexBackend, type ShareListResult, type ShareRawRead, type ShareWriteCondition, type ShareWriteResult, type TinyCloudShareIndexBackendOptions, type TinyCloudShareIndexClient, type VaultNetworkRead } from "./share-index/backend.js";
-export { DEFAULT_CAS_POLICY, ShareIndexCasError, type CasPolicy, type ShareIndexCasErrorCode } from "./share-index/cas.js";
-export { AgentShareRecordStore, WebShareRecordStore, type AgentShareRecordStoreOptions } from "./share-index/record-store.js";
-export { INDEX_SCHEMA_VERSION, displayName, parseIndexDocument, project, type ShareIndexAgentEntry, type ShareIndexArchiveDocument, type ShareIndexDocument, type ShareIndexRow, type ShareProofState } from "./share-index/schema.js";
-export { claimRank, decideClaim, type ClaimDecision } from "./share-index/precedence.js";
-export { verifyAgentRecordChain, type ChainContext, type ChainVerdict, type ShareRegistrationKey } from "./share-index/verify/chain.js";
-export { parseSignedUcan, type SignedUcanDelegation } from "./share-index/verify/ucan.js";
-export { verifyOwnerSessionDelegation, type ParsedSiweCacao, type SiweCacaoParser } from "./share-index/verify/session.js";
-export { verifyPolicyEnforcementDelegation } from "./share-index/verify/enforcement-delegation.js";
-export { attenuationCovers, type Attenuation } from "./share-index/verify/attenuation.js";
-export { DEFAULT_SHARE_INDEX_LIMITS, MemoryShareIndexOutbox, SenderShareIndex, headerBytes, type AgentRejectReason, type SenderShareIndexOptions, type ShareIndexFlushResult, type ShareIndexLimits, type ShareIndexLoad, type ShareIndexOp, type ShareIndexOutbox, type ShareIndexReconcileReport, type ShareIndexWriteOutcome, type ShareIndexWriteStatus, type ShareStatusPort } from "./share-index/sender-share-index.js";

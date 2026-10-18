@@ -32,6 +32,8 @@ export class FakeOwnerNetwork implements OwnerNetworkWrap, OwnerNetworkUnwrap {
   readonly returned: Uint8Array[] = [];
   override?: (bytes: Uint8Array) => Uint8Array;
   unavailable = false;
+  /** Set false to model an SDK that does not compare the declared AAD itself, isolating share-sdk's own pre-check. */
+  checksAad = true;
 
   async wrap(dek: Uint8Array, aad: Uint8Array): Promise<Record<string, unknown>> {
     const key = await crypto.subtle.importKey("raw", this.key, "AES-GCM", false, ["encrypt"]);
@@ -44,7 +46,7 @@ export class FakeOwnerNetwork implements OwnerNetworkWrap, OwnerNetworkUnwrap {
   }
 
   async unwrap(envelope: Readonly<Record<string, unknown>>, aad: Uint8Array): Promise<Uint8Array> {
-    if (envelope.aad !== standardBase64(aad)) throw new Error("INVALID_INPUT: aad does not match");
+    if (this.checksAad && envelope.aad !== standardBase64(aad)) throw new Error("INVALID_INPUT: aad does not match");
     this.unwrapCalls++;
     if (this.unavailable) {
       throw new OwnerUnwrapUnavailableError();
@@ -159,8 +161,8 @@ export function newKey(): TestKey {
 }
 
 /** Sign a WASM-style link UCAN (non-JCS JSON, no nbf/fct) or a root-style one. */
-export function signUcan(key: TestKey, payload: Record<string, unknown>, options: { readonly signWith?: Uint8Array } = {}): string {
-  const header = { alg: "EdDSA", typ: "JWT", ucv: "0.10.0", jwk: { kty: "OKP", crv: "Ed25519", x: toBase64Url(ed25519.getPublicKey(key.privateKey)) } };
+export function signUcan(key: TestKey, payload: Record<string, unknown>, options: { readonly signWith?: Uint8Array; readonly jwkOf?: TestKey } = {}): string {
+  const header = { alg: "EdDSA", typ: "JWT", ucv: "0.10.0", jwk: { kty: "OKP", crv: "Ed25519", x: toBase64Url(ed25519.getPublicKey((options.jwkOf ?? key).privateKey)) } };
   const h = toBase64Url(encoder.encode(JSON.stringify(header)));
   const p = toBase64Url(encoder.encode(JSON.stringify({ iss: key.did, ...payload })));
   const signature = ed25519.sign(encoder.encode(`${h}.${p}`), options.signWith ?? key.privateKey);
@@ -192,6 +194,8 @@ export const fakeSiweParser: SiweCacaoParser = async (authorization, expectedCid
 };
 
 export const SESSION_ATTENUATION = { [`${SPACE_ID}/kv`]: { "tinycloud.kv/get": [{}], "tinycloud.kv/put": [{}], "tinycloud.kv/list": [{}] } };
+/** The owner's `default` space: where the CLI keeps share content (records live in `applications`). */
+export const CONTENT_SPACE_ID = "tinycloud:pkh:eip155:1:0xabcdef0123456789abcdef0123456789abcdef01:default";
 
 export interface BearerFixture {
   readonly record: SenderShareRecord;
@@ -210,14 +214,17 @@ export function bearerFixture(options: {
   readonly link?: Record<string, unknown>;
   readonly withSession?: boolean;
   readonly record?: Partial<SenderShareRecord>;
+  /** Space holding the shared content (default: the records space). */
+  readonly contentSpace?: string;
 } = {}): BearerFixture {
   const now = options.now ?? new Date();
   const session = options.session ?? newKey();
-  const siwe = fakeSiwe({ issuer: OWNER_DID, audience: `${session.did}#${session.did.slice("did:key:".length)}`, attenuation: SESSION_ATTENUATION, expiresAt: new Date(now.getTime() + 3600_000).toISOString(), ...options.siwe });
+  const space = options.contentSpace ?? SPACE_ID;
+  const siwe = fakeSiwe({ issuer: OWNER_DID, audience: `${session.did}#${session.did.slice("did:key:".length)}`, attenuation: { [`${space}/kv`]: SESSION_ATTENUATION[`${SPACE_ID}/kv`]! }, expiresAt: new Date(now.getTime() + 3600_000).toISOString(), ...options.siwe });
   const path = `xyz.tinycloud.share/shares/${options.shareId ?? "s"}/note.txt`;
   const link = signUcan(session, {
     aud: newKey().did,
-    att: { [`${SPACE_ID}/kv/${path}`]: { "tinycloud.kv/get": [{}] } },
+    att: { [`${space}/kv/${path}`]: { "tinycloud.kv/get": [{}] } },
     exp: Math.floor(now.getTime() / 1000) + (options.expSeconds ?? 3600),
     nnc: "n",
     prf: [siwe.cid],
@@ -227,7 +234,7 @@ export function bearerFixture(options: {
   const shareId = options.shareId ?? linkCid;
   const record: SenderShareRecord = {
     shareId,
-    target: { origin: "https://node.test", nodeAudience: "did:key:z6MkNode", spaceId: SPACE_ID },
+    target: { origin: "https://node.test", nodeAudience: "did:key:z6MkNode", spaceId: space },
     resource: { kind: "exact", path: options.shareId === undefined ? path : path },
     actions: ["tinycloud.kv/get"],
     recipientMatcher: { kind: "bearer" },

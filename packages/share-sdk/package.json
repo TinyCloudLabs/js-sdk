@@ -15,6 +15,12 @@
       "require": "./dist/index.cjs",
       "default": "./dist/index.js"
     },
+    "./share-index": {
+      "types": "./dist/share-index.d.ts",
+      "import": "./dist/share-index.js",
+      "require": "./dist/share-index.cjs",
+      "default": "./dist/share-index.js"
+    },
     "./package.json": "./package.json"
   },
   "sideEffects": false,

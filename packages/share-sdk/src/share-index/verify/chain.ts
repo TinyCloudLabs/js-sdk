@@ -5,7 +5,7 @@ import { create as createDigest } from "multiformats/hashes/digest";
 import type { SenderShareRecord } from "../../history.js";
 import { checkOwnerSharePolicyRegistration, type OwnerSharePolicyRegistrationCheck, type RegisterOwnerSharePolicyParams } from "../../owner-policy.js";
 import { canonicalAddressSpelling } from "../agent-record.js";
-import type { ShareProofState } from "../schema.js";
+import { REGISTERED_AT_SKEW_MS, type ShareProofState } from "../schema.js";
 import type { Attenuation } from "./attenuation.js";
 import { verifyPolicyEnforcementDelegation } from "./enforcement-delegation.js";
 import { NOT_BEFORE_SKEW_MS, verifyOwnerSessionDelegation, type SiweCacaoParser } from "./session.js";
@@ -27,9 +27,32 @@ import { parseSignedUcan, principalOf } from "./ucan.js";
  * Policy/v3 addressed shares (`deliveryMaterial.envelope` + `proofs.session`)
  * and Policy/v2 owner-policy shares (`proofs.ownerPolicy`, `ownerDelegation`,
  * `enforcementDelegation`, optional `registration`).
+ *
+ * What revocation achieves today (local node, C5): the owner wallet's generic
+ * `/revoke` of a verified v3 root CID ends that share at once, open recipient
+ * sessions included (403 `root-revoked`); only the JSON root-revocation route
+ * refuses the owner (403 `root-revocation-issuer-invalid`). Revoking the
+ * verified session CACAO kills the session's bearer links and new v3 claims
+ * at once, but an already-open v3 recipient session keeps reading for its
+ * lifetime (3,598 s observed) until the node liveness check (N3, test B-1).
+ * Migrated records are verified with no agent binding, so they are never
+ * `proven`.
  */
 export type ChainVerdict =
-  | { readonly ok: true; readonly state: ShareProofState; readonly expired: boolean; readonly claims: readonly string[] }
+  | {
+    readonly ok: true;
+    readonly state: ShareProofState;
+    readonly expired: boolean;
+    readonly claims: readonly string[];
+    /**
+     * Where `registeredAt` may lie, from signed times in the chain (epoch ms):
+     * a signed issuance time ± {@link REGISTERED_AT_SKEW_MS} when the chain
+     * has one (link `nbf`, the v3 binding's `issuedAt`, the node's v2
+     * `registeredAt`); otherwise the session's signed `Issued At` as the
+     * earliest and the leaf's expiry as the latest.
+     */
+    readonly issued: { readonly earliest?: number; readonly latest?: number };
+  }
   | { readonly ok: false; readonly detail: string };
 
 /** The node registration key for a node audience, from the share public config. */
@@ -70,6 +93,10 @@ function sameAttenuationResources(attenuation: Attenuation, resources: readonly 
   return keys.length === expected.length && keys.every((key, index) => key === expected[index]);
 }
 
+function around(signedMs: number): { readonly earliest: number; readonly latest: number } {
+  return { earliest: signedMs - REGISTERED_AT_SKEW_MS, latest: signedMs + REGISTERED_AT_SKEW_MS };
+}
+
 async function bearerChain(record: SenderShareRecord, link: string, context: ChainContext): Promise<ChainVerdict> {
   if (record.enforcementDelegationCid === undefined) fail("bearer record names no link delegation");
   const leaf = parseSignedUcan(link, record.enforcementDelegationCid);
@@ -79,11 +106,14 @@ async function bearerChain(record: SenderShareRecord, link: string, context: Cha
   if (leaf.proofs.length !== 1) fail("link delegation must have exactly one parent");
   const leafExpired = leaf.expiresAt * 1000 <= context.now.getTime();
   const claims = [leaf.cid];
+  // WASM-issued link delegations carry no `nbf`; then the session's signed `Issued At` and the link's expiry bound it.
+  const signedIssue = leaf.notBefore === undefined ? undefined : around(leaf.notBefore * 1000);
   const session = record.proofs?.session;
-  if (session === undefined) return { ok: true, state: "unproven", expired: leafExpired, claims };
+  if (session === undefined) return { ok: true, state: "unproven", expired: leafExpired, claims, issued: signedIssue ?? { latest: leaf.expiresAt * 1000 } };
   // prf ∋ parent CID: the CACAO must be exactly the leaf's parent.
   const parent = await verifyOwnerSessionDelegation({ authorization: session, expectedCid: leaf.proofs[0]!, accountOwnerDid: context.accountOwnerDid, childIssuer: leaf.issuer, childAttenuation: leaf.attenuation, now: context.now, parse: context.parseSiweCacao });
-  return { ok: true, state: leaf.issuer === principalOf(context.agentDid) ? "proven" : "chained", expired: leafExpired || parent.time === "expired", claims };
+  const issued = signedIssue ?? { ...(parent.issuedAt === undefined ? {} : { earliest: parent.issuedAt - REGISTERED_AT_SKEW_MS }), latest: leaf.expiresAt * 1000 };
+  return { ok: true, state: leaf.issuer === principalOf(context.agentDid) ? "proven" : "chained", expired: leafExpired || parent.time === "expired", claims, issued };
 }
 
 async function policyV3Chain(record: SenderShareRecord, envelopeValue: unknown, context: ChainContext): Promise<ChainVerdict> {
@@ -102,10 +132,11 @@ async function policyV3Chain(record: SenderShareRecord, envelopeValue: unknown, 
   const expired = expiry <= context.now.getTime();
   const claims = [envelope.policyCid, envelope.policyRoot.cid, envelope.enforcementRoot.cid];
   const session = record.proofs?.session;
-  if (session === undefined) return { ok: true, state: "unproven", expired, claims };
+  const issued = around(Date.parse(binding.issuedAt));
+  if (session === undefined) return { ok: true, state: "unproven", expired, claims, issued };
   // Roots are proofless (the node checks owner authority itself), so the CACAO is bound by audience, issuer and attenuation.
   const parent = await verifyOwnerSessionDelegation({ authorization: session, expectedCid: cacaoCid(session), accountOwnerDid: context.accountOwnerDid, childIssuer: root.issuer, childAttenuation: root.attenuation, now: context.now, parse: context.parseSiweCacao });
-  return { ok: true, state: principalOf(ownerDid) === principalOf(context.agentDid) ? "proven" : "chained", expired: expired || parent.time === "expired", claims };
+  return { ok: true, state: principalOf(ownerDid) === principalOf(context.agentDid) ? "proven" : "chained", expired: expired || parent.time === "expired", claims, issued };
 }
 
 async function ownerPolicyV2Chain(record: SenderShareRecord, context: ChainContext): Promise<ChainVerdict> {
@@ -133,6 +164,7 @@ async function ownerPolicyV2Chain(record: SenderShareRecord, context: ChainConte
   });
   let expired = owner.time === "expired" || Date.parse(facts.expiresAt as string) <= context.now.getTime();
   const claims = [record.policyCid, record.ownerDelegationCid, record.enforcementDelegationCid];
+  let issued: { readonly earliest?: number; readonly latest?: number } = { latest: Date.parse(facts.expiresAt as string) };
   const key = context.registrationKey?.(record.target.nodeAudience);
   if (record.registrationCid !== undefined && proofs.registration !== undefined && key !== undefined) {
     const expected = {
@@ -147,8 +179,9 @@ async function ownerPolicyV2Chain(record: SenderShareRecord, context: ChainConte
     if (checked.receipt.registration.registrationCid !== record.registrationCid) fail("registration receipt is not this record's");
     expired ||= checked.status === "expired";
     claims.push(record.registrationCid);
+    issued = around(Date.parse(checked.receipt.registration.registeredAt));
   }
-  return { ok: true, state: "chained", expired, claims };
+  return { ok: true, state: "chained", expired, claims, issued };
 }
 
 /** Verify the chain behind every CID an agent record claims. Never throws. */

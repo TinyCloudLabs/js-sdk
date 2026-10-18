@@ -99,7 +99,8 @@ export interface AgentRecordBindingInput {
 
 /** Space ids and network ids spell EVM addresses either way; B uses lowercase. */
 export function canonicalAddressSpelling(value: string): string {
-  return value.replace(/0x[0-9a-fA-F]{40}/g, (address) => address.toLowerCase());
+  // Only the address segment of an `eip155:<chain>:` principal, never a path or name that merely looks like one.
+  return value.replace(/(?<=eip155:[1-9]\d*:)0x[0-9a-fA-F]{40}(?![0-9a-fA-F])/g, (address) => address.toLowerCase());
 }
 
 export function agentRecordBinding(input: AgentRecordBindingInput): Uint8Array {

@@ -1,6 +1,6 @@
 import type { SenderShareRecord, SenderShareRecordStorage } from "../history.js";
 import type { AgentKeyMaterial } from "./agent-key.js";
-import { AgentRecordError, openAgentRecordAsAgent, parseStoredAgentRecord, sealAgentRecord } from "./agent-record.js";
+import { AgentRecordError, MAX_AGENT_RECORD_BYTES, openAgentRecordAsAgent, parseStoredAgentRecord, sealAgentRecord } from "./agent-record.js";
 import type { ShareIndexBackend } from "./backend.js";
 import { DEFAULT_CAS_POLICY, runCas, ShareIndexCasError, type CasPolicy } from "./cas.js";
 import { agentIdFromDid, agentRecordKey, agentRecordPrefix, classifyRecordKey, isShareId, SHARE_RECORDS_VAULT_PREFIX } from "./ids.js";
@@ -116,6 +116,8 @@ export class AgentShareRecordStore implements SenderShareRecordStorage {
       ownerWrap: this.options.backend.ownerWrap,
       ...(this.options.agentKey === undefined ? {} : { agentKey: this.options.agentKey }),
     });
+    // The owner's reconciler refuses anything over the cap; refuse it here, before it is written.
+    if (new TextEncoder().encode(JSON.stringify(sealed)).byteLength > MAX_AGENT_RECORD_BYTES) throw new AgentRecordError("size");
     return sealed as unknown as Readonly<Record<string, unknown>>;
   }
 

@@ -27,6 +27,20 @@ export interface ShareIndexRow {
   readonly x: string;
   /** Revocation; only `confirmed` (node-confirmed) is sticky. */
   readonly r?: { readonly at: string; readonly confirmed: boolean };
+  /**
+   * Revoke kind. For agent rows the revoke action is decided at click time
+   * from the freshly verified record (§6). Observed on a local node (C5,
+   * TC-1432 slice 2):
+   * - per share: the owner wallet can revoke an agent's v3 root (`policyRoot`,
+   *   `enforcementRoot` CIDs from the signed envelope) through the generic
+   *   `/revoke` route: 200, and an open recipient session's next read gets 403
+   *   `root-revoked`. Only the JSON root-revocation route answers 403
+   *   `root-revocation-issuer-invalid` to the owner.
+   * - session-wide: revoking the agent's owner→session delegation kills its
+   *   bearer links and fails new v3 claims at once, but an already-open v3
+   *   recipient session keeps reading for its lifetime (3,598 s observed).
+   *   The node liveness check (N3, test B-1) closes that.
+   */
   readonly rk: "policy-v3" | "delegation" | "none";
   /** The share's revoke CID; unique across rows. */
   readonly cid?: string;
@@ -34,8 +48,10 @@ export interface ShareIndexRow {
   readonly cc?: readonly string[];
   /** Provenance, derived from the key path: `web` or `agent:<agentId>`. */
   readonly src: string;
-  /** Agent rows: the proof state of the verified chain. */
+  /** Agent and migrated rows: the proof state of the verified chain. */
   readonly ps?: ShareProofState;
+  /** `migrated`: a one-time owner import (shown as "imported"); ranks by `ps`, never as a web row. */
+  readonly pv?: "migrated";
   /** The verified chain has expired (shown as Expired, not rejected). */
   readonly pe?: true;
   /** Needs attention: unreadable record, or `shareId` ≠ key basename. */
@@ -207,6 +223,7 @@ export function project(record: SenderShareRecord, input: { readonly key: string
     ...(claims.length === 0 ? {} : { cc: [...claims] }),
     src: input.src,
     ...(input.proof === undefined ? {} : { ps: input.proof.state, ...(input.proof.expired ? { pe: true as const } : {}) }),
+    ...(record.provenance === "migrated" ? { pv: "migrated" as const } : {}),
     ...(record.shareId === basename ? {} : { na: true as const }),
   };
 }
@@ -217,10 +234,9 @@ export function project(record: SenderShareRecord, input: { readonly key: string
 export const SHARE_ACTIONS: readonly string[] = ["tinycloud.kv/get", "tinycloud.kv/list", "tinycloud.kv/metadata", "tinycloud.kv/put"];
 /** Share resource prefixes: native bearer sources and Policy/v3 addressed sources. */
 export const SHARE_RESOURCE_PREFIXES: readonly string[] = ["xyz.tinycloud.share/shares/", "shares/"];
-const MAX_FIRST_SIGHT_SKEW_MS = 24 * 60 * 60 * 1000;
 
 const REQUIRED_V1 = ["shareId", "target", "resource", "actions", "recipientMatcher", "registeredAt", "expiresAt"];
-const OPTIONAL_V1 = ["registrationCid", "policyCid", "ownerDelegationCid", "enforcementDelegationCid", "shareKeyDid", "ownerDid", "enforcerDid", "targetKind", "revokedAt", "envelopeCid", "shareCid", "link", "filename", "deliveryMaterial", "deliveredRecipients", "proofs"];
+const OPTIONAL_V1 = ["registrationCid", "policyCid", "ownerDelegationCid", "enforcementDelegationCid", "shareKeyDid", "ownerDid", "enforcerDid", "targetKind", "revokedAt", "envelopeCid", "shareCid", "link", "filename", "deliveryMaterial", "deliveredRecipients", "proofs", "provenance"];
 const PROOF_STRING_FIELDS = ["session", "link", "ownerPolicy", "ownerDelegation"];
 const PROOF_OBJECT_FIELDS = ["enforcementDelegation", "registration"];
 /** Allowed fields per `recordV`: an unknown field at a known `recordV` is rejected. */
@@ -238,43 +254,88 @@ export function isShareResourcePath(path: unknown): path is string {
 export interface AgentRecordSchemaContext {
   readonly recordV: number;
   readonly shareId: string;
-  readonly spaceId: string;
   readonly accountOwnerDid: string;
+  /** `hdr.agentDid` for agent records; "" for migrated records, which have no agent binding. */
   readonly agentDid: string;
-  /** When the reconciler first sees the record. */
-  readonly firstSight: Date;
+  /**
+   * `agent`: a record in `records/agents/<id>/`, which may never claim a
+   * provenance. `migrated`: an owner-layout record that must claim
+   * `provenance: "migrated"` (one-time owner import).
+   */
+  readonly source: "agent" | "migrated";
 }
 
-/** Throws a fixed-message error when the decrypted value fails the schema. */
+/**
+ * Whether `spaceId` (`tinycloud:pkh:eip155:<chain>:<address>:<name>`) is a
+ * space of the account `ownerDid` (`did:pkh:eip155:<chain>:<address>`),
+ * whatever its name: the CLI keeps share content in `default` while the
+ * records live in `applications`. Address spelling is ignored.
+ */
+export function isSpaceOwnedBy(spaceId: string, ownerDid: string): boolean {
+  const space = /^tinycloud:pkh:eip155:([1-9]\d*):(0x[0-9a-fA-F]{40}):[A-Za-z0-9_.-]+$/.exec(spaceId);
+  const owner = /^did:pkh:eip155:([1-9]\d*):(0x[0-9a-fA-F]{40})$/.exec(ownerDid);
+  return space !== null && owner !== null && space[1] === owner[1] && space[2]!.toLowerCase() === owner[2]!.toLowerCase();
+}
+
+/** `registeredAt` may sit at most this far from the chain's signed issuance time (M2). */
+export const REGISTERED_AT_SKEW_MS = 24 * 60 * 60 * 1000;
+/** Clock skew tolerated for a `registeredAt` slightly in the future. */
+export const FUTURE_SKEW_MS = 5 * 60 * 1000;
+
+/**
+ * `registeredAt` against signed times from the verified chain, never against
+ * when the owner happens to look: inside `[earliest, latest]` (already
+ * widened by {@link REGISTERED_AT_SKEW_MS} where the bound is an issuance
+ * time) and not in the future.
+ */
+export function registeredAtFits(registeredAt: string, window: { readonly earliest?: number; readonly latest?: number }, now: Date): boolean {
+  const at = Date.parse(registeredAt);
+  return Number.isFinite(at) && at <= now.getTime() + FUTURE_SKEW_MS && (window.earliest === undefined || at >= window.earliest) && (window.latest === undefined || at <= window.latest);
+}
+
+/** A record refused by the schema. `provenance`: an agent-subtree record claiming `migrated`. */
+export class ShareRecordSchemaError extends Error {
+  constructor(readonly reason: "schema" | "provenance") {
+    super(`share record schema: ${reason}`);
+    this.name = "ShareRecordSchemaError";
+  }
+}
+
+/** Throws {@link ShareRecordSchemaError} when the decrypted value fails the schema. */
 export function checkAgentRecordSchema(value: unknown, context: AgentRecordSchemaContext): SenderShareRecord {
-  const fail = (): never => { throw new Error("agent record schema"); };
+  const fail = (): never => { throw new ShareRecordSchemaError("schema"); };
   const fields = FIELDS_BY_RECORD_V[context.recordV];
   if (fields === undefined || !isObject(value)) return fail();
   const keys = Object.keys(value);
   if (!fields.required.every((key) => keys.includes(key)) || !keys.every((key) => fields.required.includes(key) || fields.optional.includes(key))) return fail();
   const record = value as Record<string, unknown>;
+  if (context.source === "agent" && record.provenance === "migrated") throw new ShareRecordSchemaError("provenance");
+  if (context.source === "agent" ? record.provenance !== undefined : record.provenance !== "migrated") return fail();
   if (record.shareId !== context.shareId) return fail();
   const target = record.target;
   // `historyRecordForPublishedShare` keeps the publication's `target.kind`.
   const targetKeys = Object.keys(target ?? {});
   if (!isObject(target) || !targetKeys.every((key) => ["origin", "nodeAudience", "spaceId", "kind"].includes(key)) || typeof target.origin !== "string" || typeof target.nodeAudience !== "string" || typeof target.spaceId !== "string"
     || (target.kind !== undefined && (typeof target.kind !== "string" || !["bearer", "recipientDid", "email", "emailDomain"].includes(target.kind)))) return fail();
-  if (canonicalAddressSpelling(target.spaceId as string) !== canonicalAddressSpelling(context.spaceId)) return fail();
+  // Content may sit in any space of the account owner (the CLI uses `default`, records live in `applications`).
+  if (!isSpaceOwnedBy(target.spaceId as string, context.accountOwnerDid)) return fail();
   const resource = record.resource;
   if (!isObject(resource) || Object.keys(resource).length !== 2 || (resource.kind !== "exact" && resource.kind !== "prefix") || !isShareResourcePath(resource.path)) return fail();
   if (!Array.isArray(record.actions) || record.actions.length === 0 || new Set(record.actions).size !== record.actions.length || !record.actions.every((action) => typeof action === "string" && SHARE_ACTIONS.includes(action))) return fail();
   const matcher = record.recipientMatcher;
   if (!isObject(matcher) || !(matcher.kind === "bearer" ? Object.keys(matcher).length === 1 : ["exactEmail", "emailDomain", "recipientDid"].includes(matcher.kind as string) && Object.keys(matcher).length === 2 && typeof matcher.value === "string")) return fail();
   if (!isIsoTime(record.registeredAt) || !isIsoTime(record.expiresAt) || Date.parse(record.registeredAt) >= Date.parse(record.expiresAt)) return fail();
-  if (Math.abs(Date.parse(record.registeredAt as string) - context.firstSight.getTime()) > MAX_FIRST_SIGHT_SKEW_MS) return fail();
   for (const key of ["registrationCid", "policyCid", "ownerDelegationCid", "enforcementDelegationCid", "envelopeCid", "shareCid"]) {
     if (record[key] !== undefined && (typeof record[key] !== "string" || !/^[a-z0-9]{8,128}$/.test(record[key] as string))) return fail();
   }
   for (const key of ["shareKeyDid", "enforcerDid", "ownerDid"]) {
     if (record[key] !== undefined && (typeof record[key] !== "string" || !(record[key] as string).startsWith("did:"))) return fail();
   }
-  // CLI Policy/v3 records name the policy owner, which is the agent session key.
-  if (record.ownerDid !== undefined && canonicalAddressSpelling(record.ownerDid as string) !== canonicalAddressSpelling(context.accountOwnerDid) && record.ownerDid !== context.agentDid) return fail();
+  // CLI Policy/v3 records name the policy owner, which is the agent session key. A
+  // migrated record's earlier session key is bound by its chain (the v3 verifier
+  // requires ownerDid == the signed policy owner).
+  if (record.ownerDid !== undefined && canonicalAddressSpelling(record.ownerDid as string) !== canonicalAddressSpelling(context.accountOwnerDid) && record.ownerDid !== context.agentDid
+    && !(context.source === "migrated" && (record.ownerDid as string).startsWith("did:key:"))) return fail();
   if (record.targetKind !== undefined && !["bearer", "recipientDid", "email", "emailDomain"].includes(record.targetKind as string)) return fail();
   if (record.revokedAt !== undefined && !isIsoTime(record.revokedAt)) return fail();
   if (record.link !== undefined && typeof record.link !== "string") return fail();

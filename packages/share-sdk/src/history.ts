@@ -49,6 +49,15 @@ export interface SenderShareRecord {
   /** Canonical mailboxes whose invitation delivery was confirmed; history is encrypted at rest. */
   readonly deliveredRecipients?: readonly string[];
   /**
+   * `migrated`: imported once from a CLI's local history by the OWNER's
+   * session (slice 5), at an owner-layout key `records/<shareId>`. Such a
+   * record is exempt from the ±1-day `registeredAt` window and nothing else:
+   * its chain is verified like an agent record's, it never ranks as a web
+   * row, and it cannot override a revocation. A record claiming `migrated`
+   * inside an agent subtree is rejected.
+   */
+  readonly provenance?: "migrated";
+  /**
    * The signed chain behind every CID this record claims (TC-1432 C1), as
    * exact bytes. Agent records carry it so the owner's browser can verify
    * the chain without a node lookup. Policy/v3 records prove through

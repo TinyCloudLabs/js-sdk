@@ -13,8 +13,8 @@ export const SHARE_RECORDS_VAULT_PREFIX = "sender-history/v2/records/";
 export const INDEX_MAIN_KEY = "_index/main";
 /** Length of a DID-derived agent id (132 bits of base64url). */
 export const AGENT_ID_LENGTH = 22;
-/** Raw key suffixes recorded in `rejectedKeys` are truncated to this length. */
-export const REJECTED_KEY_MAX_LENGTH = 64;
+/** Length of a `rejectedKeys`/`newerKeys` entry: base64url of SHA-256 of the key suffix, truncated (96 bits). */
+export const REJECTED_KEY_ENTRY_LENGTH = 16;
 
 const AGENT_ID_DOMAIN = "xyz.tinycloud.share/agent-id/v1|";
 const SHARE_ID = /^[A-Za-z0-9_-]{1,512}$/;
@@ -69,9 +69,13 @@ export type ClassifiedRecordKey =
    */
   | { readonly kind: "rejected"; readonly agentId?: string; readonly suffix?: string };
 
-/** The raw suffix recorded in `rejectedKeys`: at most 64 characters. */
+/**
+ * The `rejectedKeys`/`newerKeys` entry for a key suffix: a short hash, so an
+ * agent-chosen string never reaches the index and every entry is 16
+ * characters (≤100 per list keeps an agent's header state small).
+ */
 export function rejectedKeyEntry(suffix: string): string {
-  return suffix.slice(0, REJECTED_KEY_MAX_LENGTH);
+  return toBase64Url(sha256(new TextEncoder().encode(suffix))).slice(0, REJECTED_KEY_ENTRY_LENGTH);
 }
 
 function hasUnsafeShape(key: string): boolean {
@@ -87,7 +91,7 @@ function hasUnsafeShape(key: string): boolean {
 export function classifyRecordKey(key: string): ClassifiedRecordKey {
   if (typeof key !== "string") return { kind: "rejected" };
   const agentPrefix = /^agents\/([A-Za-z0-9_-]{22})\//.exec(key);
-  const owner = agentPrefix === null ? {} : { agentId: agentPrefix[1]!, suffix: rejectedKeyEntry(key.slice(agentPrefix[0].length)) };
+  const owner = agentPrefix === null ? {} : { agentId: agentPrefix[1]!, suffix: key.slice(agentPrefix[0].length) };
   if (hasUnsafeShape(key)) return { kind: "rejected", ...owner };
   const segments = key.split("/");
   if (segments.length === 1) return isShareId(key) ? { kind: "web", shareId: key } : { kind: "rejected" };

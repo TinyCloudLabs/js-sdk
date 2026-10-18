@@ -2,8 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { fromBase64Url, toBase64Url } from "@tinycloud/share-envelope";
 import { deriveAgentKeyMaterial } from "../../src/share-index/agent-key.js";
 import {
-  AgentRecordError, agentRecordBinding, openAgentRecordAsAgent, openAgentRecordAsOwner, parseStoredAgentRecord, sealAgentRecord,
-  type StoredAgentRecord,
+  AgentRecordError, MAX_AGENT_RECORD_BYTES, agentRecordBinding, openAgentRecordAsAgent, openAgentRecordAsOwner, parseStoredAgentRecord, sealAgentRecord,
 } from "../../src/share-index/agent-record.js";
 import { FakeOwnerNetwork, NETWORK_ID, SPACE_ID, newKey, standardBase64 } from "./helpers.js";
 
@@ -142,5 +141,17 @@ describe("agent record codec (design C §3)", () => {
     expect(parse({ ...stored, pad: "x".repeat(33 * 1024) })).toBe("size");
     // The owner network id is compared spelling-insensitively (checksummed vs lowercase address).
     expect(parse({ ...stored, hdr: { ...stored.hdr, ownerNetworkId: NETWORK_ID.toLowerCase() } })).toBe("ok");
+  });
+
+  test("the size cap is MAX_AGENT_RECORD_BYTES: exactly at the cap is accepted, one byte over is refused", async () => {
+    const { stored } = await seal();
+    const sized = (bytes: number) => {
+      const base = encoder.encode(JSON.stringify({ ...stored, wrapOwner: { ...stored.wrapOwner, pad: "" } })).length;
+      return encoder.encode(JSON.stringify({ ...stored, wrapOwner: { ...stored.wrapOwner, pad: "x".repeat(bytes - base) } }));
+    };
+    expect(MAX_AGENT_RECORD_BYTES).toBe(32 * 1024);
+    expect(sized(MAX_AGENT_RECORD_BYTES).length).toBe(MAX_AGENT_RECORD_BYTES);
+    expect(parseStoredAgentRecord(sized(MAX_AGENT_RECORD_BYTES), { ownerNetworkId: NETWORK_ID }).hdr.agentDid).toBe(agent.did);
+    expect(() => parseStoredAgentRecord(sized(MAX_AGENT_RECORD_BYTES + 1), { ownerNetworkId: NETWORK_ID })).toThrow(new AgentRecordError("size"));
   });
 });
