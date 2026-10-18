@@ -132,8 +132,8 @@ optional deltas.
 
 The TC-1428 owner-signed artifact pin (the viewer's check that an addressed artifact share reads
 the version its owner signed, #582) raised only the root ceilings once more, after size cuts,
-by the exact bytes GitHub run 39138319985 measured on source `94bc065a`, in both jobs,
-against master `7e10709c`: to 1,465,542 / 1,396,170 B (+874 / +795). First import,
+by the exact bytes GitHub run 39147003338 measured on source `dbebc11e`, in both jobs,
+against master `7e10709c`: to 1,465,559 / 1,396,187 B (+891 / +812). First import,
 activation, the gated artifact and the worker keep TC-1413's ceilings. The ledger's
 `tc1428Ratchet` row records them and cannot change later. Rows are relative to the base each
 PR is measured on (#582 is stacked on #579, which is byte-neutral): if another root-growing PR

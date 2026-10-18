@@ -331,25 +331,25 @@
     "ruling": "Naomi TC-1428 size ruling for #582: a real shrink first, remainder by the PR's own exact-delta row at canonical CI bytes; rows are relative to the base each PR is measured on, so whichever of #578, #580 and #582 lands later re-measures against the new base and updates its own row",
     "base": "7e10709c280596db0118a8fb04e7ffcd9bbe7212",
     "sourceCommits": [
-      "94bc065a52ff8434dadbee6e73464c6c30eaf91e"
+      "dbebc11e0f0bd23a33543be9c471da160d05602c"
     ],
     "canonicalCI": {
-      "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39138319985",
+      "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39147003338",
       "jobs": [
-        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39138319985/job/117707333896",
-        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39138319985/job/117707333834"
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39147003338/job/117732767205",
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39147003338/job/117732767257"
       ]
     },
     "root": {
       "delta": {
-        "index.mjs": 874,
-        "index.cjs": 795
+        "index.mjs": 891,
+        "index.cjs": 812
       },
       "ceiling": {
-        "index.mjs": 1465542,
-        "index.cjs": 1396170
+        "index.mjs": 1465559,
+        "index.cjs": 1396187
       }
     },
-    "reason": "The viewer now checks the owner-signed artifactPin: assertArtifactBinding and verifyArtifactShare in share-sdk/src/artifact-pin.ts, the strict artifactPin field in the Policy/v3 envelope schema, and their call sites in resolvePolicyShare and ShareRecipientClient.decryptV3Content. Root only: the worker, first-import, activation and gated artifacts are unchanged. Cuts applied first: the layout helpers and the owner-side helpers (buildArtifactPin, verifyArtifactManifestBytes, verifyArtifactFileBytes) live in the separate @tinycloud/share-sdk/artifact entry and are not in the web bundle; pin errors use their code as the message (-159 gzip bytes in a share-sdk proxy build); the recipient no longer re-hashes the fetched bytes, because the binding already makes the pinned digest equal contentSource.initialCiphertextDigestHex, which decryptV3Content checks (-56). Reused: verifyEnvelopeV3SignatureOnly for the signature, the noble sha256 already bundled, and the existing ciphertext digest check; sdk-core and share-envelope hold no equivalent. Not taken: a lazy import, because the web build pins LimitChunkCountPlugin({ maxChunks: 1 }) and would inline it; a subpath for the verifier, because the viewer must run it; dropping the expected-artifact check or the edit refusal, each worth about 35 bytes. Local builds measured +1127/+993 before these cuts; run 39138319985 on source 94bc065a measured identical absolute bytes in both jobs against base 7e10709c (its PR base, #579, is byte-neutral)."
+    "reason": "The viewer now checks the owner-signed artifactPin: assertArtifactBinding and verifyArtifactShare in share-sdk/src/artifact-pin.ts, the strict artifactPin field in the Policy/v3 envelope schema, and their call sites in resolvePolicyShare and ShareRecipientClient.decryptV3Content. Root only: the worker, first-import, activation and gated artifacts are unchanged. Cuts applied first: the layout helpers and the owner-side helpers (buildArtifactPin, verifyArtifactManifestBytes, verifyArtifactFileBytes) live in the separate @tinycloud/share-sdk/artifact entry and are not in the web bundle; pin errors use their code as the message (-159 gzip bytes in a share-sdk proxy build); the recipient no longer re-hashes the fetched bytes, because the binding already makes the pinned digest equal contentSource.initialCiphertextDigestHex, which decryptV3Content checks (-56). Reused: verifyEnvelopeV3SignatureOnly for the signature, the noble sha256 already bundled, and the existing ciphertext digest check; sdk-core and share-envelope hold no equivalent. Not taken: a lazy import, because the web build pins LimitChunkCountPlugin({ maxChunks: 1 }) and would inline it; a subpath for the verifier, because the viewer must run it; dropping the expected-artifact check or the edit refusal, each worth about 35 bytes. Local builds measured +1127/+993 before these cuts. Review changes then showed two canonical-CI surprises that local builds do not reproduce: a zod .max() on the pinned size moved the ESM root by +911..+924 (runs 39143268858, 39144852282), so the bound lives in assertArtifactBinding instead (+17), and folding the two receive-path signature checks into one saved nothing. Run 39147003338 on source dbebc11e measured identical absolute bytes in both jobs against base 7e10709c (its PR base, #579, is byte-neutral)."
   }
 }
