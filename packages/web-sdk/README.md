@@ -167,14 +167,17 @@ measured on `b8d13379` (master merged into the PR branch, source unchanged since
 The ledger's `tc1448Ratchet` row records them and cannot change later; whichever PR lands
 after it re-measures against the new base and updates its own row.
 
-TC-1428 (the owner-signed artifact pin the viewer verifies for addressed artifact shares, #582) was
-re-measured after #579, #580, #583, #584, #588, #591, #592 and #593 landed, against master `7539b854`,
-and sits on top of TC-1448's root ceilings. It raised only the root ceilings once, by the exact bytes
-GitHub run 39166275491 measured on source `3227e2f2`, identical in both jobs: 1,469,539 / 1,398,699 B
-(+914 / +789 over TC-1448's). First import, activation, gated and the worker keep TC-1424's ceilings.
-It is #582's own row, taken after a documented shrink attempt (see the row's `reason`). The ledger's
-`tc1428Ratchet` row records it and cannot change later; whichever PR lands after it re-measures against
-the new base and updates its own row.
+The TC-1443 registry verdict classifier in sdk-core (#586) raised only the root
+ceilings once more, after removing a duplicate secp256k1 from the bundle. It landed
+after #591, so it was re-measured against master `70304c3d` and chains after
+TC-1448's root ceilings. Naomi approved the row as a delta over its base (+2,368 / +61
+gzip, ±50 B); GitHub run 39166751086 measured it on source `72ba295c`, identical in
+both Node jobs: 1,470,995 / 1,397,981 B, i.e. +2,370 / +71 over master's measured
+1,468,625 / 1,397,910 B. The row's ceilings are those measured bytes. First import,
+activation, the gated artifact and the worker keep TC-1432's ceilings. The ledger's
+`tc1443Ratchet` row records them and cannot change later. If another root-growing PR
+lands first, #586 re-measures against the new base and replaces its own row before
+it merges.
 
 **Ancestry pins and squash merges.** A policy row records the PR-branch commit it
 was reviewed at, and its introduction check requires that literal commit in the

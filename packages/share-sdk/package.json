@@ -1,6 +1,6 @@
 {
   "name": "@tinycloud/share-sdk",
-  "version": "1.2.0-beta.3",
+  "version": "1.2.0-beta.4",
   "description": "Canonical headless TinyCloud Share operations for browser and Node.",
   "type": "module",
   "main": "./dist/index.cjs",
@@ -27,6 +27,12 @@
       "import": "./dist/share-root.js",
       "require": "./dist/share-root.cjs",
       "default": "./dist/share-root.js"
+    },
+    "./share-index": {
+      "types": "./dist/share-index.d.ts",
+      "import": "./dist/share-index.js",
+      "require": "./dist/share-index.cjs",
+      "default": "./dist/share-index.js"
     },
     "./package.json": "./package.json"
   },
