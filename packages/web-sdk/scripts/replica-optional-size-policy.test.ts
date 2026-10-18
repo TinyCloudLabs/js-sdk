@@ -215,7 +215,7 @@ describe("TC-858 squash-merged source commits", () => {
 const tc1413Ledger: OptionalLedger = {
   ...structuredClone(shipped),
   allowance: { ...tc1413OptionalAllowance },
-  entries: structuredClone(shipped.entries.slice(0, -1)),
+  entries: structuredClone(shipped.entries.slice(0, shipped.entries.findIndex((entry) => entry.pr === "#580"))),
 };
 
 describe("TC-1413 optional allowance", () => {
@@ -274,7 +274,7 @@ describe("TC-1432 optional allowance", () => {
     for (const format of ["replica.mjs", "replica.cjs", "activation.mjs", "activation.cjs"] as const) {
       expect(shipped.entries.reduce((sum, entry) => sum + entry[format], 0)).toBeLessThanOrEqual(shipped.allowance[format]);
     }
-    expect(shipped.entries.at(-1)).toMatchObject({
+    expect(shipped.entries.find((entry) => entry.pr === "#580")).toMatchObject({
       pr: "#580", ticket: "TC-1432",
       ...approvedTc1432Ratchet.firstImport.delta, ...approvedTc1432Ratchet.activation.delta,
     });

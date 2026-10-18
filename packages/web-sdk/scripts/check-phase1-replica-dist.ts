@@ -560,6 +560,17 @@ if (prBaseSha) {
           }
         }
         console.log("TC-1432 uses its exact absolute-root row, not additive old headroom.");
+      } else if (tc1443b !== undefined && baseLedger.tc1443bRatchet === undefined && prefixMatches && appended.length === 1) {
+        // As for TC-1432: the exact TC-1443 slice b row carries the growth through its absolute root ceiling,
+        // so the cumulative old-headroom entry is zero. The measured growth may not exceed the row.
+        const entry = appended[0];
+        for (const format of formats) {
+          if (entry[format] !== 0 || deltas[format] > tc1443b.root.delta[format]) {
+            console.error(`${format}: the TC-1443 slice b entry must be 0 and the measured growth ${deltas[format]} must not exceed the TC-1443 slice b row's ${tc1443b.root.delta[format]}.`);
+            failed = true;
+          }
+        }
+        console.log("TC-1443 slice b uses its exact absolute-root row, not additive old headroom.");
       } else if (!prefixMatches || appended.length !== 1) {
         const pr = process.env.REPLICA_BUDGET_PR_NUMBER ? `#${process.env.REPLICA_BUDGET_PR_NUMBER}` : "#<PR>";
         const ticket = process.env.REPLICA_BUDGET_TICKET?.match(/\bTC-\d+\b/i)?.[0] ?? "TC-UNKNOWN";
