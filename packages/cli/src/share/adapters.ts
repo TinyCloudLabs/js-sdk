@@ -18,6 +18,8 @@ import {
   type ArtifactVersionInput,
   type ArtifactStore,
   type ArtifactVersionResult,
+} from "@tinycloud/share-sdk/artifact";
+import {
   createNativeShare,
   parseNativeShareUrl,
   SHARE_PUBLISH_RESULT_VERSION,
