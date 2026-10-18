@@ -2,7 +2,7 @@ import type { StorageRejection } from "../output/storage.js";
 
 export type SharePublishFailure =
   | { readonly kind: "owner-space-unresolved"; readonly localKey?: boolean; readonly profileName?: string }
-  | { readonly kind: "scope-denied"; readonly capability: "KV upload" | "sharing delegation"; readonly requiredAction?: "tinycloud.kv/put" | "tinycloud.kv/get"; readonly localKey?: boolean; readonly profileName?: string }
+  | { readonly kind: "scope-denied"; readonly capability: "KV upload" | "sharing delegation" | "artifact storage"; readonly requiredAction?: "tinycloud.kv/put" | "tinycloud.kv/get"; readonly localKey?: boolean; readonly profileName?: string }
   | { readonly kind: "caveated-session"; readonly profileName?: string }
   | { readonly kind: "lifetime-exceeds-session"; readonly sessionExpiresAt: Date; readonly reason: "beyond-session" | "below-minimum" | "session-too-close"; readonly localKey?: boolean; readonly profileName?: string }
   | { readonly kind: "origin-mismatch" }

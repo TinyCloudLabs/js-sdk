@@ -32,3 +32,5 @@ export { NATIVE_SHARE_FRAGMENT_PARAMETER, createNativeShare, openNativeShare, pa
 export type { NativeShareResult, NativeSharingService } from "./native.js";
 export { ARTIFACT_MANIFEST_NAME, ARTIFACT_ROOT, ArtifactError, artifactVersionFilePath, artifactVersionResource, artifactVersionsPrefix, assertArtifactId, listArtifactVersions, manifestBytes, newArtifactId, parseArtifactManifest, parseArtifactVersionPath, publishArtifactVersion, sha256Hex } from "./artifact.js";
 export type { ArtifactErrorCode, ArtifactManifest, ArtifactManifestFile, ArtifactStore, ArtifactVersionInput, ArtifactVersionResult, ArtifactVersionSummary } from "./artifact.js";
+export { ArtifactPinError, artifactBindingView, assertArtifactBinding, buildArtifactPin, verifyArtifactFileBytes, verifyArtifactManifestBytes, verifyArtifactShare } from "./artifact-pin.js";
+export type { ArtifactBindingView, ArtifactPinErrorCode, ExpectedArtifact, VerifyArtifactShareOptions } from "./artifact-pin.js";

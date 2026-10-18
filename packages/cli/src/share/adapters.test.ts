@@ -824,6 +824,14 @@ describe("TinyCloud share authority adapter", () => {
       const manifest = JSON.parse(manifestText);
       expect(manifest.files[0]).toEqual({ bytes: ownerKv.get("artifacts/art_t/versions/1/note.md")!.byteLength, path: "note.md", sha256: createHash("sha256").update(ownerKv.get("artifacts/art_t/versions/1/note.md")!).digest("hex") });
       expect(manifestText).not.toContain(createHash("sha256").update("only me").digest("hex"));
+      // The envelope the owner signs carries the pin: ids, the manifest digest and the digest of that stored ciphertext.
+      const signedPin = first.deliveryMaterial?.envelope.artifactPin;
+      expect(signedPin).toEqual({
+        v: 1, artifactId: "art_t", version: 1,
+        manifestSha256: createHash("sha256").update(ownerKv.get("artifacts/art_t/versions/1/manifest.json")!).digest("hex"),
+        files: [manifest.files[0]],
+      });
+      expect(unifiedPolicyV2Schema.parse(registeredPolicies[0]).contentSource.initialCiphertextDigestHex).toBe(manifest.files[0].sha256);
 
       // The same plaintext again is a fresh encryption (fresh wrapped key), so a new version bound to its own key.
       const second = await adapter.publish(toOwner("only me", "b@example.com"));

@@ -503,6 +503,22 @@ const v3TargetSchema = z.object({
   nodeAudience: z.string().min(1),
   spaceId: z.string().refine(isCanonicalPathSegment, { message: "expected a canonical space id" }),
 }).strict();
+/** Artifact id as `share-sdk` mints and parses it (`assertArtifactId`); a test keeps the two in step. */
+const ARTIFACT_ID_PATTERN = /^[a-z0-9][a-z0-9_-]{2,62}$/;
+export const artifactPinSchema = z.object({
+  v: z.literal(1),
+  artifactId: z.string().regex(ARTIFACT_ID_PATTERN),
+  version: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER),
+  /** SHA-256 (lowercase hex) of the exact `manifest.json` bytes. The manifest itself stays an owner-side record. */
+  manifestSha256: z.string().regex(/^[0-9a-f]{64}$/),
+  /** An addressed share reads one exact file, so exactly one entry: the stored bytes (ciphertext) it will fetch. */
+  files: z.array(z.object({
+    path: z.string().min(1).max(255),
+    sha256: z.string().regex(/^[0-9a-f]{64}$/),
+    bytes: z.number().int().nonnegative(),
+  }).strict()).length(1),
+}).strict();
+export type ArtifactPin = z.infer<typeof artifactPinSchema>;
 const unsignedShareEnvelopeV3BaseSchema = z.object({
   version: z.literal(3),
   shareId: z.string().min(1),
@@ -523,6 +539,12 @@ const unsignedShareEnvelopeV3BaseSchema = z.object({
   display: displaySchema,
   encrypted: z.literal(true),
   metadata: contentMetadataSchema,
+  /**
+   * TC-1428: an owner-signed statement that this share reads one write-once artifact version. Additive: absent on
+   * every other share, and covered by the envelope signature because the signature spans the whole unsigned object.
+   * The shape is checked here; its binding to the content source is `verifyArtifactShare` in share-sdk.
+   */
+  artifactPin: artifactPinSchema.optional(),
 }).strict();
 
 function validateV3Invariants(value: z.infer<typeof unsignedShareEnvelopeV3BaseSchema>, ctx: z.RefinementCtx): void {
