@@ -9,7 +9,6 @@ import {
   artifactBindingView,
   assertArtifactBinding,
   publishAddressedShare,
-  verifyArtifactFileBytes,
   verifyArtifactShare,
 } from "../src/index.js";
 import {
@@ -17,6 +16,7 @@ import {
   manifestBytes,
   publishArtifactVersion,
   sha256Hex,
+  verifyArtifactFileBytes,
   verifyArtifactManifestBytes,
   type ArtifactStore,
   type ArtifactVersionResult,
@@ -262,7 +262,7 @@ describe("artifact pin: negative cases", () => {
     expect(() => assertArtifactBinding({ ...view, contentSource: { ...view.contentSource, initialCiphertextDigestHex: "d".repeat(64) } })).toThrow(ArtifactPinError);
   });
 
-  it("the recipient refuses to decrypt unpinned or altered bytes before it contacts the node", async () => {
+  it("the recipient refuses unpinned shares and altered bytes before it contacts the node", async () => {
     const { envelope, stored } = await publishPinned();
     let contacted = 0;
     const fetchFn: typeof fetch = async () => { contacted += 1; throw new Error("must not reach the node"); };
@@ -273,9 +273,9 @@ describe("artifact pin: negative cases", () => {
     };
     const altered = stored.slice();
     altered[0] = altered[0]! ^ 0x01;
-    await expect(clientFor(envelope).decryptV3Content(altered)).rejects.toThrow("fetched artifact bytes do not match");
+    await expect(clientFor(envelope).decryptV3Content(altered)).rejects.toThrow("ciphertext digest mismatch");
     const unpinned = resign(envelope, (unsigned) => { delete unsigned.artifactPin; });
-    await expect(clientFor(unpinned).decryptV3Content(stored)).rejects.toThrow("carries no pin");
+    await expect(clientFor(unpinned).decryptV3Content(stored)).rejects.toThrow("missing-pin");
     expect(contacted).toBe(0);
   });
 });

@@ -23,7 +23,7 @@ import {
   type ShareEnvelopeV3,
   type UnsignedShareEnvelopeV3,
 } from "@tinycloud/share-envelope";
-import { ARTIFACT_ROOT, parseArtifactVersionPath, sha256Hex } from "./artifact-core.js";
+import { ARTIFACT_ROOT, parseArtifactVersionPath } from "./artifact-core.js";
 
 export type ArtifactPinErrorCode =
   | "missing-pin"
@@ -38,8 +38,9 @@ export type ArtifactPinErrorCode =
 
 export class ArtifactPinError extends Error {
   readonly code: ArtifactPinErrorCode;
-  constructor(code: ArtifactPinErrorCode, message: string) {
-    super(message);
+  /** The code is the message: stable, short, and what callers and tests match on. */
+  constructor(code: ArtifactPinErrorCode) {
+    super(code);
     this.name = "ArtifactPinError";
     this.code = code;
   }
@@ -93,7 +94,7 @@ function sourcePath(view: ArtifactBindingView): string {
   const marker = "/kv/";
   const at = resource.indexOf(marker);
   if (at <= 0 || resource.slice(0, at) !== view.target.spaceId) {
-    throw new ArtifactPinError("pin-source-mismatch", "content source is not in the share's owner space");
+    throw new ArtifactPinError("pin-source-mismatch");
   }
   return resource.slice(at + marker.length);
 }
@@ -108,12 +109,12 @@ export function assertArtifactBinding(view: ArtifactBindingView, expected: Expec
   const path = sourcePath(view);
   const inArtifacts = path === ARTIFACT_ROOT || path.startsWith(`${ARTIFACT_ROOT}/`);
   if (!inArtifacts) {
-    if (pin !== undefined) throw new ArtifactPinError("pin-source-mismatch", "artifact pin on a share that does not read an artifact version");
+    if (pin !== undefined) throw new ArtifactPinError("pin-source-mismatch");
     return undefined;
   }
-  if (pin === undefined) throw new ArtifactPinError("missing-pin", "share reads an artifact but carries no pin");
+  if (pin === undefined) throw new ArtifactPinError("missing-pin");
   const parsed = parseArtifactVersionPath(path);
-  if (parsed === undefined) throw new ArtifactPinError("unsupported-artifact-path", "share reads an artifact path that cannot be pinned");
+  if (parsed === undefined) throw new ArtifactPinError("unsupported-artifact-path");
   const file = pin.files[0]!;
   const source = view.contentSource;
   if (
@@ -126,17 +127,17 @@ export function assertArtifactBinding(view: ArtifactBindingView, expected: Expec
     || source.mode !== "immutable"
     || source.initialCiphertextDigestHex !== file.sha256
   ) {
-    throw new ArtifactPinError("pin-source-mismatch", "artifact pin does not match the share's content source");
+    throw new ArtifactPinError("pin-source-mismatch");
   }
   // A pinned path is immutable: neither the envelope nor the signed policy may grant a write on it.
   if (view.actions.includes("edit") || view.policyKvActions.includes("tinycloud.kv/put")) {
-    throw new ArtifactPinError("pinned-share-writable", "a pinned artifact share cannot grant edit");
+    throw new ArtifactPinError("pinned-share-writable");
   }
   if (
     (expected.artifactId !== undefined && expected.artifactId !== pin.artifactId)
     || (expected.version !== undefined && expected.version !== pin.version)
   ) {
-    throw new ArtifactPinError("expectation-mismatch", "artifact pin is for a different artifact or version than expected");
+    throw new ArtifactPinError("expectation-mismatch");
   }
   return pin;
 }
@@ -149,19 +150,11 @@ export function assertArtifactBinding(view: ArtifactBindingView, expected: Expec
  */
 export function verifyArtifactShare(envelope: ShareEnvelopeV3, options: VerifyArtifactShareOptions): ArtifactPin | undefined {
   if (envelope.signature.signerDid !== options.expectedOwnerDid) {
-    throw new ArtifactPinError("wrong-signer", "envelope is not signed by the expected owner");
+    throw new ArtifactPinError("wrong-signer");
   }
   let valid: boolean;
   try { valid = verifyEnvelopeV3SignatureOnly(envelope) && envelope.policy.ownerDid === options.expectedOwnerDid; }
   catch { valid = false; }
-  if (!valid) throw new ArtifactPinError("bad-signature", "envelope signature is invalid");
+  if (!valid) throw new ArtifactPinError("bad-signature");
   return assertArtifactBinding(artifactBindingView(envelope), options.expected);
-}
-
-/** The bytes fetched from the owner's KV (ciphertext, for an addressed share) must be the bytes the owner pinned. */
-export function verifyArtifactFileBytes(pin: ArtifactPin, storedBytes: Uint8Array): void {
-  const file = pin.files[0]!;
-  if (storedBytes.byteLength !== file.bytes || sha256Hex(storedBytes) !== file.sha256) {
-    throw new ArtifactPinError("file-digest-mismatch", "fetched artifact bytes do not match the owner's pin");
-  }
 }

@@ -10,7 +10,7 @@ import {
   type ShareEnvelopeV2,
   type ShareEnvelopeV3,
 } from "@tinycloud/share-envelope";
-import { artifactBindingView, assertArtifactBinding, verifyArtifactFileBytes } from "./artifact-pin.js";
+import { artifactBindingView, assertArtifactBinding } from "./artifact-pin.js";
 import type { ShareAuthorizationAdapter, ShareAuthorizedContent, ShareAuthorizationResult } from "./authorization.js";
 import { SHARE_V2_PROTOCOL } from "./protocol.js";
 
@@ -552,9 +552,9 @@ export class ShareRecipientClient {
     const envelope = this.options.envelope;
     const signer = this.nativeSigner ?? this.signer;
     if (envelope.version !== 3 || this.session === undefined || this.v3Authorization === undefined || this.v3NodeAudience === undefined || signer === undefined) throw new Error("v3 policy session signer is required");
-    // An artifact share must carry a valid pin for its source, and the fetched bytes must be the bytes it pins.
-    const pin = assertArtifactBinding(artifactBindingView(envelope));
-    if (pin !== undefined) verifyArtifactFileBytes(pin, bytes);
+    // An artifact share must carry a valid pin for its source. The binding makes the pinned file digest equal to
+    // `initialCiphertextDigestHex`, which the next line already enforces on the fetched bytes.
+    assertArtifactBinding(artifactBindingView(envelope));
     if (!matchesInitialCiphertextDigest(bytes, envelope.contentSource.initialCiphertextDigestHex)) throw new Error("v3 owner KV ciphertext digest mismatch");
     const encrypted = parseV3InlineEncryptedEnvelope(bytes, envelope);
     const receiverPrivateKey = crypto.getRandomValues(new Uint8Array(32));

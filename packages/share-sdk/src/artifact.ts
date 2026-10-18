@@ -21,13 +21,18 @@
  * form stays path-segment bounded (`versions/1` does not cover `versions/10`).
  */
 import { canonicalize } from "@tinycloud/share-envelope";
-import { ARTIFACT_ROOT, parseArtifactVersionPath, sha256Hex } from "./artifact-core.js";
+import { sha256 } from "@noble/hashes/sha256";
+import { ARTIFACT_ROOT, parseArtifactVersionPath } from "./artifact-core.js";
 import { canonicalShareFilename } from "./filename-policy.js";
 import { ArtifactPinError } from "./artifact-pin.js";
 import type { ArtifactPin } from "@tinycloud/share-envelope";
 
 // Shared with the pin verifier, which the browser bundles carry; defined in `artifact-core` so this module stays out of them.
-export { ARTIFACT_ROOT, parseArtifactVersionPath, sha256Hex };
+export { ARTIFACT_ROOT, parseArtifactVersionPath };
+
+export function sha256Hex(bytes: Uint8Array): string {
+  return Array.from(sha256(bytes), (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
 export const ARTIFACT_MANIFEST_NAME = "manifest.json";
 export const ARTIFACT_MANIFEST_VERSION = 1 as const;
 /** A lost create race bumps `n`; this bounds how many times one publish retries. */
@@ -307,15 +312,27 @@ export function buildArtifactPin(version: ArtifactVersionResult, filename: strin
  */
 export function verifyArtifactManifestBytes(pin: ArtifactPin, manifestBytes: Uint8Array): ArtifactManifest {
   if (sha256Hex(manifestBytes) !== pin.manifestSha256) {
-    throw new ArtifactPinError("manifest-mismatch", "artifact manifest does not match the owner's pin");
+    throw new ArtifactPinError("manifest-mismatch");
   }
   let manifest: ArtifactManifest;
   try { manifest = parseArtifactManifest(manifestBytes); }
-  catch { throw new ArtifactPinError("manifest-mismatch", "artifact manifest is malformed"); }
+  catch { throw new ArtifactPinError("manifest-mismatch"); }
   const file = pin.files[0]!;
   const listed = manifest.files.find((candidate) => candidate.path === file.path);
   if (listed === undefined || listed.sha256 !== file.sha256 || listed.bytes !== file.bytes) {
-    throw new ArtifactPinError("manifest-mismatch", "artifact manifest does not list the pinned file");
+    throw new ArtifactPinError("manifest-mismatch");
   }
   return manifest;
+}
+
+/**
+ * The bytes fetched from the owner's KV (ciphertext, for an addressed share) must be the bytes the owner pinned.
+ * Audit and tooling check. The recipient does not call it: `assertArtifactBinding` ties the pin's digest to
+ * `contentSource.initialCiphertextDigestHex`, and `decryptV3Content` already refuses bytes that do not hash to that.
+ */
+export function verifyArtifactFileBytes(pin: ArtifactPin, storedBytes: Uint8Array): void {
+  const file = pin.files[0]!;
+  if (storedBytes.byteLength !== file.bytes || sha256Hex(storedBytes) !== file.sha256) {
+    throw new ArtifactPinError("file-digest-mismatch");
+  }
 }
