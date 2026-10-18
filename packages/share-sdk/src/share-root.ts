@@ -53,8 +53,8 @@ const PROFILES = {
   agent: { spaceName: "default", maxLifetimeMs: AGENT_SHARE_ROOT_MAX_LIFETIME_MS },
 } as const;
 
-const KV_ABILITIES = ["tinycloud.kv/get", "tinycloud.kv/metadata"] as const;
-const DECRYPT_ABILITY = "tinycloud.encryption/decrypt";
+export const KV_ABILITIES = ["tinycloud.kv/get", "tinycloud.kv/metadata"] as const;
+export const DECRYPT_ABILITY = "tinycloud.encryption/decrypt";
 
 export type ShareRootErrorCode =
   | "invalid-request"
@@ -166,31 +166,32 @@ export interface ShareRootPolicySigner {
   sign(digest: Uint8Array): Promise<Uint8Array>;
 }
 
-interface Owner { readonly chainId: string; readonly address: string }
+/* Internal helpers below are exported for `share-grant.ts` and `share-network.ts`; the subpath entry does not re-export them. */
+export interface Owner { readonly chainId: string; readonly address: string }
 
-function parseOwnerDid(ownerDid: string): Owner {
+export function parseOwnerDid(ownerDid: string): Owner {
   const match = /^did:pkh:eip155:([1-9]\d*):(0x[0-9a-fA-F]{40})$/.exec(ownerDid);
   if (match === null) throw new ShareRootError("invalid-request", "share root owner must be did:pkh:eip155");
   return { chainId: match[1]!, address: match[2]!.toLowerCase() };
 }
 
-function sameOwner(left: Owner, right: Owner): boolean {
+export function sameOwner(left: Owner, right: Owner): boolean {
   return left.chainId === right.chainId && left.address === right.address;
 }
 
-function assertSpace(spaceId: string, owner: Owner, kind: ShareRootKind): void {
+export function assertSpace(spaceId: string, owner: Owner, kind: ShareRootKind): void {
   const match = /^tinycloud:pkh:eip155:([1-9]\d*):(0x[0-9a-fA-F]{40}):([A-Za-z0-9_-]+)$/.exec(spaceId);
   if (match === null || !sameOwner({ chainId: match[1]!, address: match[2]!.toLowerCase() }, owner) || match[3] !== PROFILES[kind].spaceName) {
     throw new ShareRootError("invalid-request", `${kind} root must target the owner's ${PROFILES[kind].spaceName} space`);
   }
 }
 
-function shareNetworkId(owner: Owner): string {
+export function shareNetworkId(owner: Owner): string {
   return `urn:tinycloud:encryption:did:pkh:eip155:${owner.chainId}:${owner.address}:share`;
 }
 
 /** True for the owner's `:share` network in any address casing (the Node canonicalizes did:pkh addresses). */
-function isShareNetworkOf(resource: string, owner: Owner): boolean {
+export function isShareNetworkOf(resource: string, owner: Owner): boolean {
   const match = /^urn:tinycloud:encryption:did:pkh:eip155:([1-9]\d*):(0x[0-9a-fA-F]{40}):share$/.exec(resource);
   return match !== null && sameOwner({ chainId: match[1]!, address: match[2]!.toLowerCase() }, owner);
 }
@@ -208,13 +209,13 @@ function nodeOriginOf(value: string): string | undefined {
   return url.protocol === "https:" || (url.protocol === "http:" && loopback) ? url.origin : undefined;
 }
 
-function requireNodeOrigin(value: string): string {
+export function requireNodeOrigin(value: string): string {
   const origin = typeof value === "string" ? nodeOriginOf(value) : undefined;
   if (origin === undefined) throw new ShareRootError("invalid-request", "node origin must be https (http only on loopback)");
   return origin;
 }
 
-function seconds(ms: number): number {
+export function seconds(ms: number): number {
   return Math.floor(ms / 1000);
 }
 
@@ -224,59 +225,76 @@ function parseTime(value: string | undefined, label: string, rootCid: string): n
   return time;
 }
 
-interface ExpectedRoot {
-  readonly kind: ShareRootKind;
-  readonly scope: ShareRootScope;
+/** What an owner-signed delegation to a share key must say, exactly. */
+export interface ExpectedOwnerDelegation {
+  /** "share root", "per-share grant", …: used in error messages. */
+  readonly label: string;
   readonly owner: Owner;
-  readonly spaceId: string;
   readonly keyDid: string;
+  /** Resource -> the exact ability set; nothing else may be granted. */
+  readonly wanted: Readonly<Record<string, readonly string[]>>;
+  readonly maxLifetimeMs: number;
   readonly requestedExpiresAt?: Date;
   readonly now: number;
 }
 
 /**
  * Check what the owner actually signed: the decoded ReCap must grant exactly
- * the scope's abilities to exactly the share key, with no other resource, no
- * parent, and a lifetime within the cap. Returns the signed times.
+ * `wanted` to exactly the share key, with no other resource, no parent, and
+ * a lifetime within the cap. Returns the signed times.
  */
-function validateSignedRoot(decoded: DecodedOwnerRootCacao, expected: ExpectedRoot): { issuedAt: Date; expiresAt: Date } {
+export function validateSignedOwnerDelegation(decoded: DecodedOwnerRootCacao, expected: ExpectedOwnerDelegation): { issuedAt: Date; expiresAt: Date } {
+  const { label } = expected;
   const wider = { rootCid: decoded.cid, mustRevoke: true };
   let issuer: Owner;
-  try { issuer = parseOwnerDid(decoded.issuer); } catch { throw new ShareRootError("issuer-mismatch", "share root is not signed by a did:pkh owner", wider); }
-  if (!sameOwner(issuer, expected.owner)) throw new ShareRootError("issuer-mismatch", "share root is signed by another owner", wider);
-  if (decoded.audience !== expected.keyDid) throw new ShareRootError("audience-mismatch", "share root is not delegated to the share key", wider);
-  if (decoded.resources.length !== 1 || !decoded.resources[0]!.startsWith("urn:recap:")) throw new ShareRootError("resource-mismatch", "share root must carry exactly one ReCap resource", wider);
-  if (decoded.reCapProofs.length !== 0) throw new ShareRootError("resource-mismatch", "share root must not have parent capabilities", wider);
+  try { issuer = parseOwnerDid(decoded.issuer); } catch { throw new ShareRootError("issuer-mismatch", `${label} is not signed by a did:pkh owner`, wider); }
+  if (!sameOwner(issuer, expected.owner)) throw new ShareRootError("issuer-mismatch", `${label} is signed by another owner`, wider);
+  if (decoded.audience !== expected.keyDid) throw new ShareRootError("audience-mismatch", `${label} is not delegated to its key`, wider);
+  if (decoded.resources.length !== 1 || !decoded.resources[0]!.startsWith("urn:recap:")) throw new ShareRootError("resource-mismatch", `${label} must carry exactly one ReCap resource`, wider);
+  if (decoded.reCapProofs.length !== 0) throw new ShareRootError("resource-mismatch", `${label} must not have parent capabilities`, wider);
 
-  const wanted: Record<string, readonly string[]> = { [`${expected.spaceId}/kv/${SHARE_ROOT_PREFIX}`]: KV_ABILITIES };
-  if (expected.scope === "kv+share-decrypt") wanted[shareNetworkId(expected.owner)] = [DECRYPT_ABILITY];
-  for (const resource of Object.keys(decoded.attenuation)) if (wanted[resource] === undefined) throw new ShareRootError("resource-mismatch", "share root grants a resource outside its scope", wider);
+  const { wanted } = expected;
+  for (const resource of Object.keys(decoded.attenuation)) if (wanted[resource] === undefined) throw new ShareRootError("resource-mismatch", `${label} grants a resource outside its scope`, wider);
   for (const [resource, abilities] of Object.entries(wanted)) {
     const granted = decoded.attenuation[resource];
-    if (granted === undefined) throw new ShareRootError("resource-mismatch", "share root is missing one of its resources", wider);
+    if (granted === undefined) throw new ShareRootError("resource-mismatch", `${label} is missing one of its resources`, wider);
     const names = Object.keys(granted);
-    if (names.length !== abilities.length || abilities.some((ability) => !names.includes(ability))) throw new ShareRootError("ability-mismatch", "share root abilities differ from the request", wider);
+    if (names.length !== abilities.length || abilities.some((ability) => !names.includes(ability))) throw new ShareRootError("ability-mismatch", `${label} abilities differ from the request`, wider);
     for (const ability of abilities) {
       const caveats = granted[ability]!;
       if (caveats.length !== 1 || typeof caveats[0] !== "object" || caveats[0] === null || Array.isArray(caveats[0]) || Object.keys(caveats[0]).length !== 0) {
-        throw new ShareRootError("ability-mismatch", "share root abilities carry unexpected caveats", wider);
+        throw new ShareRootError("ability-mismatch", `${label} abilities carry unexpected caveats`, wider);
       }
     }
   }
 
   const issuedAt = parseTime(decoded.issuedAt, "issued-at time", decoded.cid);
   const expiresAt = parseTime(decoded.expiresAt, "expiration time", decoded.cid);
-  if (decoded.notBefore !== undefined && parseTime(decoded.notBefore, "not-before time", decoded.cid) > expected.now) throw new ShareRootError("malformed-root", "share root is not valid yet", { rootCid: decoded.cid });
-  const cap = PROFILES[expected.kind].maxLifetimeMs;
-  if (expiresAt - issuedAt > cap + SHARE_ROOT_CLOCK_SKEW_MS || expiresAt - expected.now > cap) throw new ShareRootError("lifetime-exceeds-cap", `${expected.kind} root lifetime exceeds ${cap / DAY_MS} days`, wider);
-  if (expiresAt <= expected.now) throw new ShareRootError("expired", "share root has expired", { rootCid: decoded.cid });
+  if (decoded.notBefore !== undefined && parseTime(decoded.notBefore, "not-before time", decoded.cid) > expected.now) throw new ShareRootError("malformed-root", `${label} is not valid yet`, { rootCid: decoded.cid });
+  const cap = expected.maxLifetimeMs;
+  if (expiresAt - issuedAt > cap + SHARE_ROOT_CLOCK_SKEW_MS || expiresAt - expected.now > cap) throw new ShareRootError("lifetime-exceeds-cap", `${label} lifetime exceeds its cap`, wider);
+  if (expiresAt <= expected.now) throw new ShareRootError("expired", `${label} has expired`, { rootCid: decoded.cid });
   if (expected.requestedExpiresAt !== undefined && seconds(expiresAt) !== seconds(expected.requestedExpiresAt.getTime())) {
-    throw new ShareRootError("expiry-mismatch", "share root was signed with a different expiry than requested", { rootCid: decoded.cid, mustRevoke: expiresAt > expected.requestedExpiresAt.getTime() });
+    throw new ShareRootError("expiry-mismatch", `${label} was signed with a different expiry than requested`, { rootCid: decoded.cid, mustRevoke: expiresAt > expected.requestedExpiresAt.getTime() });
   }
   return { issuedAt: new Date(issuedAt), expiresAt: new Date(expiresAt) };
 }
 
-function assertLinkPath(path: string): void {
+function validateSignedRoot(decoded: DecodedOwnerRootCacao, expected: { kind: ShareRootKind; scope: ShareRootScope; owner: Owner; spaceId: string; keyDid: string; requestedExpiresAt?: Date; now: number }): { issuedAt: Date; expiresAt: Date } {
+  const wanted: Record<string, readonly string[]> = { [`${expected.spaceId}/kv/${SHARE_ROOT_PREFIX}`]: KV_ABILITIES };
+  if (expected.scope === "kv+share-decrypt") wanted[shareNetworkId(expected.owner)] = [DECRYPT_ABILITY];
+  return validateSignedOwnerDelegation(decoded, {
+    label: `${expected.kind} root`,
+    owner: expected.owner,
+    keyDid: expected.keyDid,
+    wanted,
+    maxLifetimeMs: PROFILES[expected.kind].maxLifetimeMs,
+    ...(expected.requestedExpiresAt === undefined ? {} : { requestedExpiresAt: expected.requestedExpiresAt }),
+    now: expected.now,
+  });
+}
+
+export function assertLinkPath(path: string): void {
   if (
     typeof path !== "string"
     || !path.startsWith(SHARE_ROOT_PREFIX)
@@ -288,11 +306,11 @@ function assertLinkPath(path: string): void {
   ) throw new ShareRootError("link-out-of-scope", "link path must be one exact key under the share prefix");
 }
 
-function errorMessage(error: unknown): string {
+export function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-async function assertUsableKey(key: DelegatedShareKey): Promise<void> {
+export async function assertUsableKey(key: DelegatedShareKey): Promise<void> {
   try {
     await assertNonExtractableShareKey(key);
   } catch (error) {
@@ -323,6 +341,58 @@ function policyRootContents(input: AddressedOwnerRootInput): { facts: Record<str
       : Object.fromEntries(capability.actions.map((action) => [action, [{ type: "xyz.tinycloud.resource/selector", kind: capability.selector, value: capability.resource }]]));
   }
   return { facts, attenuation };
+}
+
+/**
+ * Policy/v3 owner signing for one owner delegation (a share root or a
+ * per-share grant). `gate` runs before every signature and returns the key;
+ * `createOwnerRoot` builds the proofless root itself, bounds its expiry by
+ * `notAfter` and 31 days, and admits only capabilities `inScope` accepts;
+ * `sign` takes 32-byte digests only.
+ */
+export function ownerPolicySigner(input: {
+  readonly ownerDid: string;
+  readonly authorityCid: string;
+  readonly notAfter: Date;
+  readonly gate: () => Promise<DelegatedShareKey>;
+  readonly now: () => number;
+  readonly inScope: (capability: AddressedOwnerRootInput["capabilities"][number]) => boolean;
+}): ShareRootPolicySigner {
+  const { ownerDid, authorityCid, notAfter, gate } = input;
+  return {
+    ownerDid,
+    rootCid: authorityCid,
+    notAfter,
+    createOwnerRoot: async (root) => {
+      const key = await gate();
+      const now = input.now();
+      const notBefore = root.notBefore instanceof Date ? root.notBefore.getTime() : Number.NaN;
+      const expiry = root.expiresAt instanceof Date ? root.expiresAt.getTime() : Number.NaN;
+      if (root.ownerDid !== ownerDid || (root.role !== "policy-authority" && root.role !== "policy-enforcement")) throw new ShareRootError("invalid-request", "policy root must be owned by this key");
+      if (!Number.isFinite(notBefore) || !Number.isFinite(expiry) || notBefore >= expiry || expiry <= now) throw new ShareRootError("invalid-request", "policy root validity is invalid");
+      if (expiry > notAfter.getTime() || expiry - notBefore > MAX_POLICY_ROOT_MS) throw new ShareRootError("lifetime-exceeds-cap", "policy root must not outlive its owner delegation or 31 days", { rootCid: authorityCid });
+      for (const capability of root.capabilities) {
+        if (!input.inScope(capability)) throw new ShareRootError("invalid-request", "policy root capability is outside the owner delegation");
+      }
+      const { facts, attenuation } = policyRootContents(root);
+      const signed = await signShareKeyDelegation({
+        key,
+        audienceDid: root.audienceDid,
+        attenuation,
+        facts: [facts],
+        proofs: [],
+        notBefore: seconds(notBefore),
+        expiresAt: seconds(expiry),
+        nonce: toBase64Url(crypto.getRandomValues(new Uint8Array(16))),
+      });
+      return { cid: signed.cid, delegationHeader: { Authorization: signed.authorization } };
+    },
+    sign: async (digest) => {
+      const key = await gate();
+      if (!(digest instanceof Uint8Array) || digest.length !== 32) throw new ShareRootError("invalid-request", "policy signer signs 32-byte digests only");
+      return key.sign(digest);
+    },
+  };
 }
 
 /**
@@ -422,8 +492,9 @@ export const defaultPolicyOwnerModeProbe: PolicyOwnerModeProbe = createPolicyOwn
  * - Scope: `kv/get` + `kv/metadata` on the share prefix. `:share` decrypt is
  *   added (scope `kv+share-decrypt`) only when the root is created while
  *   `shareRootPolicyRoots` is on and its Node advertises owner-authority mode
- *   `enforce`; a `kv` root holds no decrypt, so the Node refuses any Policy/v3
- *   registration it signs. Never put, del, list, `capabilities/read`,
+ *   `enforce`; a `kv` root holds no `:share` decrypt, so its key cannot own a
+ *   policy over `:share`-encrypted content (the Node answers
+ *   `policy-owner-not-authorized`). Never put, del, list, `capabilities/read`,
  *   `network.create` or `:default`.
  * - Created only through `createOwnerDelegation({ permissions })`; the signed
  *   bytes are decoded and checked here.
@@ -609,46 +680,17 @@ export class ShareRoot {
    */
   async policyRootSigner(): Promise<ShareRootPolicySigner> {
     await this.#assertPolicyGate();
-    const gate = () => this.#assertPolicyGate();
     const owner = parseOwnerDid(this.ownerDid);
-    const notAfter = new Date(this.expiresAt);
-    return {
+    return ownerPolicySigner({
       ownerDid: this.keyDid,
-      rootCid: this.cid,
-      notAfter,
-      createOwnerRoot: async (input) => {
-        const key = await gate();
-        const now = this.#now();
-        const notBefore = input.notBefore instanceof Date ? input.notBefore.getTime() : Number.NaN;
-        const expiry = input.expiresAt instanceof Date ? input.expiresAt.getTime() : Number.NaN;
-        if (input.ownerDid !== this.keyDid || (input.role !== "policy-authority" && input.role !== "policy-enforcement")) throw new ShareRootError("invalid-request", "policy root must be owned by this share key");
-        if (!Number.isFinite(notBefore) || !Number.isFinite(expiry) || notBefore >= expiry || expiry <= now) throw new ShareRootError("invalid-request", "policy root validity is invalid");
-        if (expiry > notAfter.getTime() || expiry - notBefore > MAX_POLICY_ROOT_MS) throw new ShareRootError("lifetime-exceeds-cap", "policy root must not outlive its share root or 31 days", { rootCid: this.cid });
-        for (const capability of input.capabilities) {
-          const inScope = capability.kind === "encryption"
-            ? isShareNetworkOf(capability.resource, owner) && capability.action === DECRYPT_ABILITY
-            : capability.resource.startsWith(`${this.spaceId}/kv/${SHARE_ROOT_PREFIX}`) && capability.actions.every((action) => (KV_ABILITIES as readonly string[]).includes(action));
-          if (!inScope) throw new ShareRootError("invalid-request", "policy root capability is outside the share root");
-        }
-        const { facts, attenuation } = policyRootContents(input);
-        const root = await signShareKeyDelegation({
-          key,
-          audienceDid: input.audienceDid,
-          attenuation,
-          facts: [facts],
-          proofs: [],
-          notBefore: seconds(notBefore),
-          expiresAt: seconds(expiry),
-          nonce: toBase64Url(crypto.getRandomValues(new Uint8Array(16))),
-        });
-        return { cid: root.cid, delegationHeader: { Authorization: root.authorization } };
-      },
-      sign: async (digest) => {
-        const key = await gate();
-        if (!(digest instanceof Uint8Array) || digest.length !== 32) throw new ShareRootError("invalid-request", "policy signer signs 32-byte digests only");
-        return key.sign(digest);
-      },
-    };
+      authorityCid: this.cid,
+      notAfter: new Date(this.expiresAt),
+      gate: () => this.#assertPolicyGate(),
+      now: () => this.#now(),
+      inScope: (capability) => capability.kind === "encryption"
+        ? isShareNetworkOf(capability.resource, owner) && capability.action === DECRYPT_ABILITY
+        : capability.resource.startsWith(`${this.spaceId}/kv/${SHARE_ROOT_PREFIX}`) && capability.actions.every((action) => (KV_ABILITIES as readonly string[]).includes(action)),
+    });
   }
 
   /** Drop this root's key handle. It does not revoke the root: only the owner does that. */
