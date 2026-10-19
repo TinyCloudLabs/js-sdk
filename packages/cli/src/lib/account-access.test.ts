@@ -48,17 +48,26 @@ describe("assertAccountAccess", () => {
     expect(String(error.metadata?.hint)).toMatch(/\nIf the browser cannot reach the CLI, re-run with --paste: tc --profile work auth request --grant .* --paste$/);
   });
 
-  test("a listed space without capabilities/read is named in the second-stage hint", async () => {
+  test("quotes a profile name that is not a plain word in the printed commands", async () => {
     profileWithOwner();
-    const photos = `${OWNER}:photos`;
-    const node = {
-      hasRuntimePermissions: (entries: { space: string }[]) => !entries.some((entry) => entry.space === photos),
-      spaces: { list: async () => ({ ok: true, data: [{ id: `${OWNER}:default` }, { id: photos }] }) },
-    };
-    const error = await assertAccountAccess(node as never, "work", "delegations").catch((e: unknown) => e) as CLIError;
-    expect(error.code).toBe("ACCOUNT_ACCESS_REQUIRED");
-    expect(String(error.metadata?.hint)).toContain(`--cap 'tinycloud.capabilities:${photos}::read'`);
-    expect(String(error.metadata?.hint)).toContain("--cap 'tinycloud.space:default::list'");
+    const error = await assertAccountAccess({ hasRuntimePermissions: () => false } as never, "my work's", "registry").catch((e: unknown) => e) as CLIError;
+    expect(String(error.metadata?.hint)).toContain("tc --profile 'my work'\\''s' auth request --grant");
+  });
+
+  test("revoke: a local-key profile passes without asking the session, an OpenKey one names `delegation revoke`", async () => {
+    const asked: unknown[] = [];
+    const node = { hasRuntimePermissions: (entries: unknown) => (asked.push(entries), false) } as never;
+    const getProfile = spyOn(ProfileManager, "getProfile");
+    getProfile.mockResolvedValue({ name: "work", authMethod: "local" } as never);
+    await assertAccountAccess(node, "work", "revoke", "bafycid");
+    expect(asked).toEqual([]);
+
+    getProfile.mockResolvedValue({ name: "work", authMethod: "openkey" } as never);
+    const error = await assertAccountAccess(node, "work", "revoke", "bafycid").catch((e: unknown) => e) as CLIError;
+    expect(error.code).toBe("ACCOUNT_REVOKE_UNSUPPORTED");
+    expect(error.exitCode).toBe(ExitCode.PERMISSION_DENIED);
+    expect(String(error.metadata?.hint)).toBe("Revoke it with: tc --profile work delegation revoke bafycid");
+    expect(asked).toEqual([]);
   });
 
   test.each(["registry", "remove", "spaces", "delegations"] as const)("every printed --cap for %s parses back to the permission it stands for", async (need) => {

@@ -22,18 +22,15 @@ function resetState(): void {
   recorded.removedSpaces = [];
   hasAccountAccess = true;
   accountCalls = 0;
-  listedSpaces = [];
+  profileAuthMethod = "openkey";
 }
 
 let hasAccountAccess = true;
 let accountCalls = 0;
-const UNGRANTED_SPACE = "tinycloud:pkh:eip155:1:0xabc:photos";
-let listedSpaces: { id: string }[] = [];
+let profileAuthMethod = "openkey";
 
 const node = {
-  hasRuntimePermissions: (entries: { space: string }[]) =>
-    hasAccountAccess && !entries.some((entry) => entry.space === UNGRANTED_SPACE),
-  spaces: { list: async () => ({ ok: true, data: listedSpaces }) },
+  hasRuntimePermissions: () => hasAccountAccess,
   account: {
     status: async () => ({
       ok: true,
@@ -284,6 +281,7 @@ const node = {
 mock.module("../config/profiles.js", () => ({
   ProfileManager: {
     resolveContext: async () => ({ profile: "cli-test", host: "https://node.tinycloud.xyz" }),
+    getProfile: async () => ({ authMethod: profileAuthMethod }),
   },
 }));
 
@@ -537,7 +535,8 @@ describe("tc account", () => {
     });
   });
 
-  test("revokes account delegations by space", async () => {
+  test("revokes account delegations by space (local-key profile, owner-signed)", async () => {
+    profileAuthMethod = "local";
     await runAccount(["delegations", "revoke", "bafy-granted", "--space", "applications"]);
 
     expect(recorded.errors).toEqual([]);
@@ -627,7 +626,6 @@ describe("tc account", () => {
     ["spaces", "sync"],
     ["spaces", "remove", "tinycloud:pkh:eip155:1:0xabc:indexed"],
     ["delegations", "list"],
-    ["delegations", "revoke", "bafycid", "--space", "default"],
     ["index", "ensure"],
     ["index", "status"],
     ["index", "rebuild"],
@@ -644,13 +642,21 @@ describe("tc account", () => {
     expect(recorded.errors[0]).toMatchObject({ code: "ACCOUNT_ACCESS_REQUIRED", exitCode: 5 });
   });
 
-  test("a space the command would list but lacks capabilities/read on is refused before any account call", async () => {
-    listedSpaces = [{ id: UNGRANTED_SPACE }];
-    await runAccount(["delegations", "list"]);
+  test("revoke on an OpenKey profile is refused with the working command, before any account call", async () => {
+    await runAccount(["delegations", "revoke", "bafycid", "--space", "default"]);
 
     expect(accountCalls).toBe(0);
     expect(recorded.outputs).toEqual([]);
-    expect(recorded.errors).toEqual([expect.objectContaining({ code: "ACCOUNT_ACCESS_REQUIRED", exitCode: 5 })]);
+    expect(recorded.errors).toEqual([expect.objectContaining({ code: "ACCOUNT_REVOKE_UNSUPPORTED", exitCode: 5 })]);
+  });
+
+  test("revoke on a local-key profile needs no session ability", async () => {
+    profileAuthMethod = "local";
+    hasAccountAccess = false;
+    await runAccount(["delegations", "revoke", "bafycid", "--space", "default"]);
+
+    expect(recorded.errors).toEqual([]);
+    expect(recorded.outputs).toEqual([{ cid: "bafycid", space: "default", revoked: true }]);
   });
 
   test("billing commands need no account access", async () => {

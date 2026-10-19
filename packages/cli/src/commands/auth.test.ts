@@ -1706,8 +1706,18 @@ describe("CLI auth request command", () => {
     recorded.errors.length = 0;
     await runAuthCommand(["auth", "request", "--paste", "--cap", "tinycloud.kv:default/:list"]);
     await runAuthCommand(["auth", "request", "--grant", "--paste", "--device", "--cap", "tinycloud.kv:default/:list"]);
+    // A local-key owner has no OpenKey flow to paste into.
+    profiles.set("default", makeProfile({
+      did: "did:pkh:eip155:1:0xLocalOwner",
+      authMethod: "local",
+      posture: "local-owner-key",
+      privateKey: "0xowner-private",
+      address: "0xLocalOwner",
+    }));
+    await runAuthCommand(["auth", "request", "--grant", "--paste", "--cap", "tinycloud.kv:default/:list"]);
     expect(recorded.startAuthFlows).toEqual([]);
     expect(recorded.errors).toEqual([
+      expect.objectContaining({ code: "INVALID_ARGUMENT" }),
       expect.objectContaining({ code: "INVALID_ARGUMENT" }),
       expect.objectContaining({ code: "INVALID_ARGUMENT" }),
     ]);

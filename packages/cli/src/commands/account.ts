@@ -272,7 +272,7 @@ export function registerAccountCommand(program: Command): void {
     .requiredOption("--space <space>", "Space name or ID containing the delegation")
     .action(async (cid: string, options, cmd) => {
       try {
-        const node = await authenticatedNode(cmd);
+        const node = await authenticatedNode(cmd, "revoke", cid);
         const result = await node.account.delegations.revoke({ cid, space: options.space });
         assertOk(result);
         outputJson({ cid, space: options.space, revoked: true });
@@ -361,11 +361,11 @@ export function registerAccountCommand(program: Command): void {
   }
 }
 
-async function authenticatedNode(cmd: Command, need: AccountNeed = "registry") {
+async function authenticatedNode(cmd: Command, need: AccountNeed = "registry", cid?: string) {
   const globalOpts = cmd.optsWithGlobals();
   const ctx = await ProfileManager.resolveContext(globalOpts);
   const node = await ensureAuthenticated(ctx);
-  await assertAccountAccess(node, ctx.profile, need);
+  await assertAccountAccess(node, ctx.profile, need, cid);
   return node;
 }
 
