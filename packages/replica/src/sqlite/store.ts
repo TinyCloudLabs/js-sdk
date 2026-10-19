@@ -1,7 +1,10 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { randomBytes } from "node:crypto";
-import { constants as fsConstants } from "node:fs";
-import { chmod, link, mkdir, open, readFile, readdir, rm, rmdir, stat, unlink } from "node:fs/promises";
-import { join } from "node:path";
+import { closeSync, constants as fsConstants, fstatSync, lstatSync, openSync, readdirSync, readlinkSync, type BigIntStats, type Stats } from "node:fs";
+import { chmod, link, lstat, mkdir, open, readFile, readdir, rm, rmdir, stat, unlink } from "node:fs/promises";
+import { dirname, join, resolve } from "node:path";
+import type { ReplicaConsentAnchor } from "@tinycloud/sdk-services/kv/replication";
+
 
 import { ReplicaError, ReplicaErrorCode, isReplicaError } from "../errors.js";
 import { assertFolderPrefix, effectiveAuthority } from "../scope.js";
@@ -20,70 +23,105 @@ import type {
   VerifiedPage,
 } from "../types.js";
 import { loadSqlite, type SqliteDatabase, type SqliteOpener, type SqlValue } from "./driver.js";
+import { removeSqliteReplicaLayout, type SqliteLayoutEntry } from "./layout.js";
+import { SCHEMA, SCHEMA_VERSION } from "./schema.js";
 
-const SCHEMA_VERSION = 1;
+// Descriptor discovery below is process-wide. Keep native SQLite opens from
+// overlapping so another store's new descriptor cannot be mistaken for this one.
+let sqliteOpenQueue: Promise<void> = Promise.resolve();
+async function acquireSqliteOpen(): Promise<() => void> {
+  const previous = sqliteOpenQueue;
+  let release!: () => void;
+  sqliteOpenQueue = new Promise<void>((resolve) => { release = resolve; });
+  await previous;
+  return release;
+}
+
+type NamedPathIdentity = { path: string; dev: bigint; ino: bigint };
+
+async function captureNamedPath(path: string): Promise<NamedPathIdentity[]> {
+  const names: string[] = [];
+  for (let current = resolve(path); ; current = dirname(current)) {
+    names.push(current);
+    if (dirname(current) === current) break;
+  }
+  const identities: NamedPathIdentity[] = [];
+  for (const name of names.reverse()) {
+    const stats = await lstat(name, { bigint: true });
+    identities.push({ path: name, dev: stats.dev, ino: stats.ino });
+  }
+  return identities;
+}
+
+/** Caller holds sqliteOpenQueue until native descriptor discovery completes. */
+async function openVerifiedDatabase(
+  path: string,
+  opener: SqliteOpener,
+  options: { readonly?: boolean; expected?: { dev: number; ino: number }; discoverDescriptors?: boolean } = {},
+): Promise<{ db: SqliteDatabase; identity: { dev: number; ino: number } }> {
+  const leaf = await open(path, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
+  let db: SqliteDatabase | undefined;
+  try {
+    const identity = await leaf.stat();
+    const named = await lstat(path);
+    if (!identity.isFile() || !named.isFile() || named.dev !== identity.dev || named.ino !== identity.ino ||
+        (options.expected !== undefined &&
+          (options.expected.dev !== identity.dev || options.expected.ino !== identity.ino))) {
+      throw new Error("The replica database changed before SQLite opened it.");
+    }
+    const previousFds = process.platform === "linux" && options.discoverDescriptors !== false
+      ? new Map(readdirSync("/proc/self/fd").map((fd) => {
+        try { return [fd, readlinkSync(`/proc/self/fd/${fd}`)] as const; } catch { return [fd, ""] as const; }
+      }))
+      : null;
+    db = options.readonly ? opener(path, { readonly: true }) : opener(path);
+    const afterOpen = lstatSync(path);
+    if (!afterOpen.isFile() || afterOpen.dev !== identity.dev || afterOpen.ino !== identity.ino) {
+      throw new Error("The replica database changed while SQLite opened it.");
+    }
+    // Bun opens the file lazily on its first read. Verify that descriptor
+    // before any mutating PRAGMA or schema upgrade.
+    if (previousFds) db.get("SELECT count(*) FROM sqlite_master");
+    if (previousFds) {
+      const databases = readdirSync("/proc/self/fd").filter((fd) => {
+        try {
+          const target = readlinkSync(`/proc/self/fd/${fd}`);
+          return target.endsWith("/replica.db") && previousFds.get(fd) !== target;
+        } catch { return false; }
+      });
+      // Bun can share an already-open pager for a second readonly connection:
+      // only its WAL descriptor is new. In that case the existing native DB
+      // descriptor (not our independent leaf) must match the pinned inode.
+      const sharedPager = options.readonly && databases.length === 0 &&
+        [...previousFds].some(([fd, target]) => {
+          if (Number(fd) === leaf.fd || !target.endsWith("/replica.db")) return false;
+          try {
+            const actual = fstatSync(Number(fd));
+            return actual.dev === identity.dev && actual.ino === identity.ino;
+          } catch { return false; }
+        });
+      if ((!databases.length && !sharedPager) || databases.some((fd) => {
+        try {
+          const actual = fstatSync(Number(fd));
+          return actual.dev !== identity.dev || actual.ino !== identity.ino;
+        } catch { return true; }
+      })) {
+        throw new Error("SQLite opened a different replica database.");
+      }
+    }
+    const after = lstatSync(path);
+    if (!after.isFile() || after.dev !== identity.dev || after.ino !== identity.ino) {
+      throw new Error("The replica database changed while SQLite opened it.");
+    }
+    const checked = db;
+    db = undefined;
+    return { db: checked, identity };
+  } finally {
+    try { db?.close(); } finally { await leaf.close(); }
+  }
+}
 export const DURABILITY = "sqlite-wal-synchronous-full+fsynced-blobs";
 
-const SCHEMA = `
-CREATE TABLE IF NOT EXISTS replica (
-  id INTEGER PRIMARY KEY CHECK (id = 1),
-  name TEXT NOT NULL,
-  replica_id TEXT NOT NULL,
-  host TEXT NOT NULL,
-  space TEXT NOT NULL,
-  prefix TEXT NOT NULL,
-  device_did TEXT NOT NULL,
-  allow_secrets INTEGER NOT NULL CHECK (allow_secrets IN (0, 1)),
-  local_read_policy TEXT NOT NULL CHECK (local_read_policy IN ('whileGrantValid', 'retainAfterExpiry')),
-  retention_grant_cid TEXT,
-  grant_cid TEXT,
-  grant_bytes BLOB,
-  grant_audience TEXT,
-  grant_issuer TEXT,
-  grant_nbf INTEGER,
-  grant_exp INTEGER,
-  pending_grant_cid TEXT,
-  pending_grant_bytes BLOB,
-  pending_grant_audience TEXT,
-  pending_grant_issuer TEXT,
-  pending_grant_nbf INTEGER,
-  pending_grant_exp INTEGER,
-  node_did TEXT,
-  attested INTEGER NOT NULL DEFAULT 0 CHECK (attested IN (0, 1)),
-  not_before TEXT,
-  expires_at TEXT,
-  retain_until TEXT,
-  revoked_detail TEXT,
-  purge_pending INTEGER NOT NULL DEFAULT 0 CHECK (purge_pending IN (0, 1)),
-  retention_revoked TEXT,
-  pending_grant_error TEXT,
-  cursor TEXT,
-  coverage TEXT NOT NULL CHECK (coverage IN ('empty', 'bootstrapping', 'complete')),
-  generation INTEGER NOT NULL DEFAULT 0,
-  created_at TEXT NOT NULL,
-  last_sync_at TEXT,
-  last_complete_at TEXT,
-  last_error TEXT,
-  last_reset TEXT,
-  lease_token INTEGER NOT NULL DEFAULT 0,
-  lease_holder TEXT,
-  lease_expires_at INTEGER
-) STRICT;
-CREATE TABLE IF NOT EXISTS entry (
-  key TEXT PRIMARY KEY,
-  deleted INTEGER NOT NULL CHECK (deleted IN (0, 1)),
-  etag TEXT,
-  hash TEXT,
-  metadata TEXT NOT NULL,
-  content INTEGER NOT NULL CHECK (content IN (0, 1)),
-  size INTEGER,
-  CHECK (
-    (deleted = 1 AND etag IS NULL AND hash IS NULL AND content = 0 AND size IS NULL) OR
-    (deleted = 0 AND etag IS NOT NULL AND hash IS NOT NULL)
-  )
-) STRICT, WITHOUT ROWID;
-CREATE INDEX IF NOT EXISTS entry_hash ON entry (hash) WHERE hash IS NOT NULL;
-`;
 
 type ReplicaRow = {
   name: string;
@@ -189,7 +227,21 @@ async function entriesOf(path: string): Promise<string[]> {
   }
 }
 
-/** Crash- and race-test seam: called at the durability boundaries of `applyPage`. */
+export type SqliteGrantInstall = {
+  installedAt: number;
+  effectiveExpiresAt: number;
+  consentDeadline: number;
+  consentAnchor: ReplicaConsentAnchor;
+};
+
+export type SqliteGrantPolicy = {
+  at: number;
+  ttlMs: number;
+  consentDeadline: number;
+  consentAnchor: ReplicaConsentAnchor;
+};
+
+/** Crash- and race-test seam at SQLite durability boundaries. */
 export type StoreFaults = {
   /** Blobs are durable; no row references them yet. */
   afterBlobs?(): void | Promise<void>;
@@ -199,6 +251,8 @@ export type StoreFaults = {
   afterCommit?(): void;
   /** A revocation purge is committed; its blobs are not unlinked yet. */
   afterPurgeMark?(): void;
+  /** Garbage collection holds an open write transaction while asynchronous blob I/O runs. */
+  afterGarbageCollectionBegin?(): void | Promise<void>;
 };
 
 /**
@@ -212,6 +266,8 @@ export type MutationGuard = <T>(section: () => Promise<T>) => Promise<T>;
 export type SqliteReplicaStoreOptions = {
   /** Create the replica directory and database if missing (else REPLICA_NOT_FOUND). */
   create: boolean;
+  /** A checked entry's inode: reject replacement before SQLite sees its path. */
+  expectedDirectory?: { dev: number; ino: number };
   sqlite?: SqliteOpener;
   /** Clock for leases and status (ms since epoch). */
   now?: () => number;
@@ -222,6 +278,47 @@ export type SqliteReplicaStoreOptions = {
 export const FAULTS = Symbol("tinycloud.replica.faults");
 type InternalOptions = SqliteReplicaStoreOptions & { [FAULTS]?: StoreFaults };
 
+/** Stores may be abandoned without close by callers; release their directory descriptor on collection. */
+const pinnedDirectories = new FinalizationRegistry<number>((fd) => {
+  try { closeSync(fd); } catch { /* The process may already be shutting down. */ }
+});
+
+/** A checked SQLite handle stays pinned until the last controller for its directory closes. */
+type SharedWritable = {
+  key: string;
+  db: SqliteDatabase;
+  directoryFd: number | undefined;
+  pinnedDir: string;
+  namedPath: string;
+  dev: number;
+  ino: number;
+  references: number;
+  mutationTail: Promise<void>;
+};
+
+const writableStores = new Map<string, SharedWritable>();
+
+function releaseWritable(shared: SharedWritable): void {
+  if (shared.references === 0 || --shared.references !== 0) return;
+  if (writableStores.get(shared.key) === shared) writableStores.delete(shared.key);
+  try { shared.db.close(); } finally { if (shared.directoryFd !== undefined) closeSync(shared.directoryFd); }
+}
+
+const sharedStores = new FinalizationRegistry<SharedWritable>((shared) => {
+  try { releaseWritable(shared); } catch { /* The process may already be shutting down. */ }
+});
+
+/** Serialize transactions, not pre-commit blob I/O: revocation must still fence an in-flight writer. */
+async function acquireWritableMutation(shared: SharedWritable): Promise<() => void> {
+  const previous = shared.mutationTail;
+  let release!: () => void;
+  shared.mutationTail = new Promise<void>((resolve) => { release = resolve; });
+  await previous;
+  return release;
+}
+
+const activeReadSection = new AsyncLocalStorage<{ controller: SqliteReplicaStore; active: boolean }>();
+
 /**
  * The CLI replica store: SQLite (WAL, synchronous=FULL) for entries, cursor
  * and authority, committed in one transaction per page; content-addressed
@@ -229,21 +326,48 @@ type InternalOptions = SqliteReplicaStoreOptions & { [FAULTS]?: StoreFaults };
  */
 export class SqliteReplicaStore implements ReplicaStore {
   readonly dir: string;
-  readonly #db: SqliteDatabase;
-  readonly #holder = `${process.pid}-${randomBytes(6).toString("hex")}`;
+  readonly #database: SqliteDatabase;
+  get #db(): SqliteDatabase {
+    if (this.#closed) throw new ReplicaError(ReplicaErrorCode.CLOSED, "The replica store is closed.");
+    return this.#database;
+  }
+  #closed = false;
+  #closing = false;
+  #closePromise?: Promise<void>;
+  #activeMutations = 0;
+  #drained?: () => void;
+  readonly #shared?: SharedWritable;
+  readonly #readonlySnapshot: boolean;
+  readonly #pinnedDir: string;
+  #directoryFd?: number;
+  #holder: string | undefined;
   readonly #now: () => number;
   readonly #faults: StoreFaults;
   readonly #guard: MutationGuard;
   /** Identity of the database file this store opened: a deleted-and-recreated replica is a different file. */
   readonly #ino: number;
+  readonly #dev: number;
+  readonly #namedAncestors: readonly NamedPathIdentity[];
 
-  private constructor(dir: string, db: SqliteDatabase, ino: number, options: SqliteReplicaStoreOptions) {
+  private constructor(dir: string, db: SqliteDatabase, identity: { dev: number; ino: number }, options: SqliteReplicaStoreOptions, directoryFd?: number, namedAncestors: readonly NamedPathIdentity[] = [], shared?: SharedWritable, readonlySnapshot = false) {
     this.dir = dir;
-    this.#db = db;
-    this.#ino = ino;
+    this.#pinnedDir = shared?.pinnedDir ?? (directoryFd !== undefined && process.platform === "linux" ? `/proc/self/fd/${directoryFd}` : dir);
+    this.#directoryFd = directoryFd;
+    this.#shared = shared;
+    this.#readonlySnapshot = readonlySnapshot;
+    if (shared) {
+      shared.references++;
+      sharedStores.register(this, shared, this);
+    } else if (directoryFd !== undefined) {
+      pinnedDirectories.register(this, directoryFd, this);
+    }
+    this.#database = db;
+    this.#ino = identity.ino;
+    this.#dev = identity.dev;
     this.#now = options.now ?? Date.now;
     this.#faults = (options as InternalOptions)[FAULTS] ?? {};
     this.#guard = options.guard ?? ((section) => section());
+    this.#namedAncestors = namedAncestors;
   }
 
   /**
@@ -255,15 +379,16 @@ export class SqliteReplicaStore implements ReplicaStore {
   static async inspect(
     dir: string,
     options: { now?: () => number; signal?: AbortSignal } = {},
-  ): Promise<{ state: ReplicaState; status: ReplicaStatus } | null> {
+  ): Promise<{ state: ReplicaState; status: ReplicaStatus; grantInstall: SqliteGrantInstall | null; activeGrantInstall: SqliteGrantInstall | null } | null> {
     const checkAbort = () => {
       if (options.signal?.aborted) throw options.signal.reason ?? new ReplicaError(ReplicaErrorCode.CLOSED, "Replica status inspection was cancelled.");
     };
     checkAbort();
     const dbPath = join(dir, "replica.db");
-    let ino: number;
+    let identity: Stats;
     try {
-      ino = (await stat(dbPath)).ino;
+      identity = await lstat(dbPath);
+      if (!identity.isFile()) return null;
     } catch (error) {
       if (errnoOf(error) === "ENOENT") return null;
       throw storageError(error, "Inspecting the replica");
@@ -272,21 +397,31 @@ export class SqliteReplicaStore implements ReplicaStore {
     const opener = await loadSqlite();
     checkAbort();
     let db: SqliteDatabase | undefined;
+    let releaseOpen: (() => void) | undefined;
     try {
-      db = opener(dbPath, { readonly: true });
+      releaseOpen = await acquireSqliteOpen();
+      const checked = await openVerifiedDatabase(dbPath, opener, { readonly: true, expected: identity });
+      db = checked.db;
+      releaseOpen();
+      releaseOpen = undefined;
       db.exec("PRAGMA busy_timeout = 0");
       checkAbort();
-      const store = new SqliteReplicaStore(dir, db, ino, { create: false, ...(options.now ? { now: options.now } : {}) });
+      const store = new SqliteReplicaStore(dir, db, checked.identity, { create: false, ...(options.now ? { now: options.now } : {}) });
       for (let attempt = 0; attempt < 2; attempt++) {
         const before = db.get<{ data_version: number }>("PRAGMA data_version")!.data_version;
         const state = await store.open();
         checkAbort();
         if (state === null) return null;
         const status = await store.status();
+        const latest = state.pendingGrant ?? state.grant;
+        const version = db.get<{ user_version: number }>("PRAGMA user_version")?.user_version ?? 0;
+        const grantInstall = latest === null || version < 2 ? null : await store.getGrantInstall(latest.cid);
+        const activeGrantInstall = state.grant === null || version < 2 ? null
+          : state.grant === latest ? grantInstall : await store.getGrantInstall(state.grant.cid);
         await new Promise<void>((resolve) => setImmediate(resolve));
         checkAbort();
         const after = db.get<{ data_version: number }>("PRAGMA data_version")!.data_version;
-        if (before === after) return { state, status };
+        if (before === after) return { state, status, grantInstall, activeGrantInstall };
       }
       throw new ReplicaError(ReplicaErrorCode.BUSY, "The replica changed during status inspection.");
     } catch (error) {
@@ -295,7 +430,11 @@ export class SqliteReplicaStore implements ReplicaStore {
       }
       throw storageError(error, "Inspecting the replica");
     } finally {
-      db?.close();
+      releaseOpen?.();
+      if (db) {
+        const releaseClose = await acquireSqliteOpen();
+        try { db.close(); } finally { releaseClose(); }
+      }
     }
   }
 
@@ -304,57 +443,249 @@ export class SqliteReplicaStore implements ReplicaStore {
    * REPLICA_NOT_FOUND and nothing is written to disk.
    */
   static async open(dir: string, options: SqliteReplicaStoreOptions): Promise<SqliteReplicaStore> {
-    const dbPath = join(dir, "replica.db");
+    const namedDbPath = join(dir, "replica.db");
     if (!options.create) {
-      const exists = await stat(dbPath).then(
-        () => true,
+      const exists = await lstat(namedDbPath).then(
+        (stats) => stats.isFile(),
         () => false,
       );
-      if (!exists) throw new ReplicaError(ReplicaErrorCode.NOT_FOUND, `No replica at ${dir}.`);
+      if (!exists) throw new ReplicaError(ReplicaErrorCode.NOT_FOUND, `No regular replica database at ${dir}.`);
     }
-    const opener = options.sqlite ?? (await loadSqlite());
-    let store: SqliteReplicaStore;
+    const releaseOpen = await acquireSqliteOpen();
+    let store: SqliteReplicaStore | undefined;
+    let directoryFd: number | undefined;
     try {
+      if (options.create) await mkdir(dir, { recursive: true, mode: 0o700 });
+      if (process.platform === "linux") {
+        directoryFd = openSync(dir, fsConstants.O_RDONLY | fsConstants.O_DIRECTORY | fsConstants.O_NOFOLLOW);
+      }
+      const opened = directoryFd === undefined ? lstatSync(dir, { bigint: true }) : fstatSync(directoryFd, { bigint: true });
+      if (!opened.isDirectory() || opened.isSymbolicLink() ||
+          (options.expectedDirectory &&
+            (opened.dev !== BigInt(options.expectedDirectory.dev) || opened.ino !== BigInt(options.expectedDirectory.ino)))) {
+        throw new Error("The replica directory changed before SQLite opened it.");
+      }
+      const namedAncestors = process.platform === "linux" ? [] : await captureNamedPath(dir);
+      if (namedAncestors.length &&
+          (namedAncestors[namedAncestors.length - 1]!.dev !== opened.dev || namedAncestors[namedAncestors.length - 1]!.ino !== opened.ino)) {
+        throw new Error("The replica directory changed while checking its ancestry.");
+      }
+      const pinnedDir = directoryFd === undefined ? dir : `/proc/self/fd/${directoryFd}`;
+      const dbPath = join(pinnedDir, "replica.db");
       if (options.create) {
-        await mkdir(join(dir, "blobs", ".tmp"), { recursive: true, mode: 0o700 });
-        await Promise.all([chmod(dir, 0o700), chmod(join(dir, "blobs"), 0o700), chmod(join(dir, "blobs", ".tmp"), 0o700)]);
+        await mkdir(join(pinnedDir, "blobs", ".tmp"), { recursive: true, mode: 0o700 });
+        await Promise.all([chmod(pinnedDir, 0o700), chmod(join(pinnedDir, "blobs"), 0o700), chmod(join(pinnedDir, "blobs", ".tmp"), 0o700)]);
         // SQLite gives -wal and -shm the database file's mode.
-        const handle = await open(dbPath, fsConstants.O_CREAT | fsConstants.O_RDWR, 0o600);
-        await handle.close();
-        await chmod(dbPath, 0o600);
+        // Only the winner creates/chmods the file; concurrent openers use the existing leaf.
+        const handle = await open(dbPath, fsConstants.O_CREAT | fsConstants.O_EXCL | fsConstants.O_RDWR | fsConstants.O_NOFOLLOW, 0o600).catch((error: unknown) => {
+          if (errnoOf(error) === "EEXIST") return null;
+          throw error;
+        });
+        if (handle) {
+          try { await handle.chmod(0o600); } finally { await handle.close(); }
+        }
       }
-      const ino = (await stat(dbPath)).ino;
-      const db = opener(dbPath);
-      db.exec("PRAGMA busy_timeout = 5000");
-      db.exec("PRAGMA journal_mode = WAL");
-      db.exec("PRAGMA synchronous = FULL");
-      db.exec("PRAGMA secure_delete = ON");
-      db.exec("PRAGMA foreign_keys = ON");
-      const version = db.get<{ user_version: number }>("PRAGMA user_version")?.user_version ?? 0;
-      if (version > SCHEMA_VERSION) {
-        db.close();
-        throw new ReplicaError(
-          ReplicaErrorCode.STORAGE_ERROR,
-          `The replica at ${dir} was written by a newer tc (schema ${version}); upgrade tc to read it.`,
-        );
+      const leaf = await open(dbPath, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
+      let db: SqliteDatabase | undefined;
+      try {
+        const identity = await leaf.stat();
+        const named = await lstat(dbPath);
+        if (!identity.isFile() || !named.isFile() || named.dev !== identity.dev || named.ino !== identity.ino) {
+          throw new Error("The replica database changed before SQLite opened it.");
+        }
+        const key = `${opened.dev}:${opened.ino}`;
+        const active = writableStores.get(key);
+        if (active && (active.dev !== identity.dev || active.ino !== identity.ino)) {
+          throw new Error("The replica database changed while another controller holds it open.");
+        }
+        if (active && !options.sqlite) {
+          const namedDirectory = lstatSync(dir, { bigint: true });
+          if (!namedDirectory.isDirectory() || namedDirectory.dev !== opened.dev || namedDirectory.ino !== opened.ino) {
+            throw new Error("The replica directory changed before its checked SQLite handle could be shared.");
+          }
+          const pinned = active.directoryFd === undefined
+            ? lstatSync(active.pinnedDir, { bigint: true })
+            : fstatSync(active.directoryFd, { bigint: true });
+          const activeLeaf = lstatSync(join(active.pinnedDir, "replica.db"));
+          if (!pinned.isDirectory() || pinned.dev !== opened.dev || pinned.ino !== opened.ino ||
+              !activeLeaf.isFile() || activeLeaf.dev !== identity.dev || activeLeaf.ino !== identity.ino ||
+              (active.directoryFd === undefined && active.namedPath !== dir)) {
+            throw new Error("The live replica changed before its checked SQLite handle could be shared.");
+          }
+          if (directoryFd !== undefined) {
+            closeSync(directoryFd);
+            directoryFd = undefined;
+          }
+          store = new SqliteReplicaStore(dir, active.db, identity, options, active.directoryFd, namedAncestors, active);
+        }
+        if (!store) {
+          const opener = options.sqlite ?? (await loadSqlite());
+          const previousFds = process.platform === "linux" && !options.sqlite
+            ? new Map(readdirSync("/proc/self/fd").map((fd) => {
+              try { return [fd, readlinkSync(`/proc/self/fd/${fd}`)] as const; } catch { return [fd, ""] as const; }
+            }))
+            : null;
+          db = opener(dbPath);
+          const afterOpen = lstatSync(dbPath);
+          if (!afterOpen.isFile() || afterOpen.dev !== identity.dev || afterOpen.ino !== identity.ino) {
+            throw new Error("The replica database changed while SQLite opened it.");
+          }
+          // Bun opens the file lazily on its first read. Verify that descriptor before any mutating PRAGMA.
+          // SQLite may resolve WAL/SHM sidecars by the database's named path;
+          // the pinned directory does not make a concurrent external rename atomic.
+          if (previousFds) db.get("SELECT count(*) FROM sqlite_master");
+          if (previousFds) {
+            const databases = readdirSync("/proc/self/fd").filter((fd) => {
+              try {
+                const target = readlinkSync(`/proc/self/fd/${fd}`);
+                return target.endsWith("/replica.db") && previousFds.get(fd) !== target;
+              } catch { return false; }
+            });
+            if (databases.length === 0 || databases.some((fd) => {
+              try {
+                const actual = fstatSync(Number(fd));
+                return actual.dev !== identity.dev || actual.ino !== identity.ino;
+              } catch { return true; }
+            })) {
+              throw new Error("SQLite opened a different replica database.");
+            }
+          }
+          const after = lstatSync(dbPath);
+          if (!after.isFile() || after.dev !== identity.dev || after.ino !== identity.ino) {
+            throw new Error("The replica database changed while SQLite opened it.");
+          }
+          db.exec("PRAGMA busy_timeout = 5000");
+          db.exec("PRAGMA journal_mode = WAL");
+          db.exec("PRAGMA synchronous = FULL");
+          db.exec("PRAGMA secure_delete = ON");
+          db.exec("PRAGMA foreign_keys = ON");
+          const version = db.get<{ user_version: number }>("PRAGMA user_version")?.user_version ?? 0;
+          if (version > SCHEMA_VERSION) {
+            throw new ReplicaError(
+              ReplicaErrorCode.STORAGE_ERROR,
+              `The replica at ${dir} was written by a newer tc (schema ${version}); upgrade tc to read it.`,
+            );
+          }
+          if (version < SCHEMA_VERSION) {
+            db.exec("BEGIN IMMEDIATE");
+            db.exec(SCHEMA);
+            db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`);
+            db.exec("COMMIT");
+          }
+          const shared: SharedWritable = {
+            key, db, directoryFd, pinnedDir, namedPath: dir, dev: identity.dev, ino: identity.ino,
+            references: 0, mutationTail: Promise.resolve(),
+          };
+          store = new SqliteReplicaStore(dir, db, identity, options, directoryFd, namedAncestors, shared);
+          if (!options.sqlite) writableStores.set(key, shared);
+          db = undefined;
+        }
+      } finally {
+        try { db?.close(); } finally { await leaf.close(); }
       }
-      if (version < SCHEMA_VERSION) {
-        db.exec("BEGIN IMMEDIATE");
-        db.exec(SCHEMA);
-        db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`);
-        db.exec("COMMIT");
-      }
-      store = new SqliteReplicaStore(dir, db, ino, options);
     } catch (error) {
+      if (store) await store.close().catch(() => undefined);
+      else if (directoryFd !== undefined) closeSync(directoryFd);
       throw storageError(error, `Opening the replica at ${dir}`);
+    } finally {
+      releaseOpen();
     }
     // A revocation purge interrupted by a crash (or by a writer that put
     // content back after it) finishes on the next open.
-    const row = store.#row();
-    if (row?.revoked_detail != null && (row.purge_pending === 1 || (await store.#holdsContentFiles().catch(() => true)))) {
-      await store.#finishRevocationPurge().catch(() => undefined);
+    try {
+      const row = store.#row();
+      if (row?.revoked_detail != null && (row.purge_pending === 1 || (await store.#holdsContentFiles().catch(() => true)))) {
+        await store.#finishRevocationPurge().catch(() => undefined);
+      }
+      return store;
+    } catch (error) {
+      await store.close().catch(() => undefined);
+      throw error;
     }
-    return store;
+  }
+
+
+  /**
+   * A gated read borrows this controller's already-verified writable handle.
+   * Borrow before the first await: the parent may close in the callback, but
+   * its pin and native handle remain live until the snapshot releases them.
+   * Serialize BEGIN through COMMIT/ROLLBACK with writes on the shared handle.
+   */
+  async readTransaction<T>(
+    generation: number,
+    checkGate: () => Promise<void>,
+    section: (store: SqliteReplicaStore) => Promise<T>,
+  ): Promise<T> {
+    this.#assertAccepting();
+    const shared = this.#shared;
+    if (!shared) throw new ReplicaError(ReplicaErrorCode.CLOSED, "The replica handle is closed.");
+    const snapshot = new SqliteReplicaStore(
+      this.dir, shared.db, { dev: this.#dev, ino: this.#ino },
+      { create: false, now: this.#now }, shared.directoryFd, this.#namedAncestors, shared, true,
+    );
+    let release: (() => void) | undefined;
+    let active = false;
+    let callbackFailed = false;
+    try {
+      release = await acquireWritableMutation(shared);
+      await snapshot.#assertReadIdentity();
+      snapshot.#db.exec("BEGIN");
+      active = true;
+      const tombstone = snapshot.#db.get<{ generation: number }>("SELECT generation FROM replica WHERE id = 1");
+      try { await checkGate(); } catch (error) { callbackFailed = true; throw error; }
+      if (tombstone === undefined || tombstone.generation !== generation) {
+        throw new ReplicaError(ReplicaErrorCode.RESET_REQUIRED, "The replica generation changed; reopen it to continue.");
+      }
+      let result: T;
+      const context = { controller: this, active: true };
+      try {
+        try { result = await activeReadSection.run(context, () => section(snapshot)); }
+        catch (error) { callbackFailed = true; throw error; }
+      } finally {
+        context.active = false;
+      }
+      try { await checkGate(); } catch (error) { callbackFailed = true; throw error; }
+      await snapshot.#assertReadIdentity();
+      snapshot.#db.exec("COMMIT");
+      active = false;
+      return result;
+    } catch (error) {
+      if (callbackFailed) throw error;
+      if (isReplicaError(error) || (typeof error === "object" && error !== null && "code" in error &&
+          error.code === "REPLICA_GATED")) throw error;
+      if (["ENOENT", "ELOOP", "ENOTDIR"].includes(String(errnoOf(error))) ||
+          /replica database changed|SQLite opened a different replica database/i.test(error instanceof Error ? error.message : String(error))) {
+        throw new ReplicaError(ReplicaErrorCode.RESET_REQUIRED, "The replica was replaced; reopen it to continue.", undefined, { cause: error });
+      }
+      throw storageError(error, "Reading the replica snapshot");
+    } finally {
+      if (active) {
+        try { snapshot.#db.exec("ROLLBACK"); } catch { /* Preserve the original error. */ }
+      }
+      try { await snapshot.close(); } finally { release?.(); }
+    }
+  }
+
+  async #assertReadIdentity(): Promise<void> {
+    const shared = this.#shared!;
+    const pinned = shared.directoryFd === undefined ? lstatSync(shared.pinnedDir) : fstatSync(shared.directoryFd);
+    const namedDir = lstatSync(this.dir);
+    const namedDb = lstatSync(join(this.dir, "replica.db"));
+    const pinnedDb = lstatSync(join(shared.pinnedDir, "replica.db"));
+    if (!pinned.isDirectory() || !namedDir.isDirectory() ||
+        pinned.dev !== namedDir.dev || pinned.ino !== namedDir.ino ||
+        !namedDb.isFile() || !pinnedDb.isFile() ||
+        namedDb.dev !== this.#dev || namedDb.ino !== this.#ino ||
+        pinnedDb.dev !== this.#dev || pinnedDb.ino !== this.#ino) {
+      throw new ReplicaError(ReplicaErrorCode.RESET_REQUIRED, "The replica was replaced during its read; reopen it to continue.");
+    }
+    if (this.#namedAncestors.length) {
+      const ancestors = await captureNamedPath(this.dir);
+      if (ancestors.length !== this.#namedAncestors.length ||
+          ancestors.some((entry, index) => entry.dev !== this.#namedAncestors[index]!.dev || entry.ino !== this.#namedAncestors[index]!.ino)) {
+        throw new ReplicaError(ReplicaErrorCode.RESET_REQUIRED, "The replica directory was replaced; reopen it to continue.");
+      }
+    }
   }
 
   #row(): ReplicaRow | undefined {
@@ -363,11 +694,8 @@ export class SqliteReplicaStore implements ReplicaStore {
 
   /** Refuse to touch the filesystem for a replica that was deleted (or replaced) under us. */
   async #assertPresent(): Promise<void> {
-    const ino = await stat(join(this.dir, "replica.db")).then(
-      (stats) => stats.ino,
-      () => undefined,
-    );
-    if (ino !== this.#ino) {
+    const identity = await lstat(join(this.#pinnedDir, "replica.db")).catch(() => null);
+    if (!identity?.isFile() || identity.dev !== this.#dev || identity.ino !== this.#ino) {
       throw new ReplicaError(
         ReplicaErrorCode.NOT_FOUND,
         `The replica at ${this.dir} was deleted while this command ran (its profile was deleted or the replica purged); nothing more was written.`,
@@ -375,32 +703,66 @@ export class SqliteReplicaStore implements ReplicaStore {
     }
   }
 
+  /** New calls stop at close; accepted mutation sections may still finish their transactions. */
+  #assertAccepting(): void {
+    if (this.#closing || this.#closed) {
+      throw new ReplicaError(ReplicaErrorCode.CLOSED, "The replica store is closed.");
+    }
+  }
+
   /** A short mutation section: guarded (profile lock) and checked against the database this store opened. */
   #mutate<T>(section: () => Promise<T>): Promise<T> {
-    return this.#guard(async () => {
-      await this.#assertPresent();
-      return section();
-    });
+    this.#assertAccepting();
+    if (this.#readonlySnapshot) {
+      throw new ReplicaError(ReplicaErrorCode.STORAGE_ERROR, "A read-only replica snapshot cannot mutate the shared database.");
+    }
+    const read = activeReadSection.getStore();
+    if (read?.active && read.controller === this) {
+      throw new ReplicaError(
+        ReplicaErrorCode.STORAGE_ERROR,
+        "mutation attempted on the same controller while its readTransaction section is active; this would deadlock",
+      );
+    }
+    this.#activeMutations++;
+    return (async () => {
+      try {
+        return await this.#guard(async () => {
+          await this.#assertPresent();
+          return section();
+        });
+      } finally {
+        if (--this.#activeMutations === 0) {
+          const drained = this.#drained;
+          this.#drained = undefined;
+          drained?.();
+        }
+      }
+    })();
   }
 
   /** Run `body` in a write transaction (BEGIN IMMEDIATE). Callers outside a mutation section use `#guardedWrite`. */
-  #write<T>(action: string, body: () => T): T {
+  async #write<T>(action: string, body: () => T): Promise<T> {
+    const release = this.#shared ? await acquireWritableMutation(this.#shared) : undefined;
     try {
-      this.#db.exec("BEGIN IMMEDIATE");
-    } catch (error) {
-      throw storageError(error, action);
-    }
-    try {
-      const result = body();
-      this.#db.exec("COMMIT");
-      return result;
-    } catch (error) {
       try {
-        this.#db.exec("ROLLBACK");
-      } catch {
-        // The transaction is already gone.
+        this.#db.exec("BEGIN IMMEDIATE");
+      } catch (error) {
+        throw storageError(error, action);
       }
-      throw storageError(error, action);
+      try {
+        const result = body();
+        this.#db.exec("COMMIT");
+        return result;
+      } catch (error) {
+        try {
+          this.#db.exec("ROLLBACK");
+        } catch {
+          // The transaction is already gone.
+        }
+        throw storageError(error, action);
+      }
+    } finally {
+      release?.();
     }
   }
 
@@ -430,6 +792,7 @@ export class SqliteReplicaStore implements ReplicaStore {
   }
 
   async open(): Promise<ReplicaState | null> {
+    this.#assertAccepting();
     let row: ReplicaRow | undefined;
     try {
       row = this.#row();
@@ -514,6 +877,124 @@ export class SqliteReplicaStore implements ReplicaStore {
     });
   }
 
+  /** Per-CID first-install anchor and policy bound share the pending-grant transaction. */
+  #grantInstall(cid: string): SqliteGrantInstall | null {
+    const row = this.#db.get<{
+      installed_at: number;
+      effective_expires_at: number;
+      consent_deadline: number;
+      consent_anchor_at: number;
+      consent_anchor_source: string;
+    }>(
+      "SELECT installed_at, effective_expires_at, consent_deadline, consent_anchor_at, consent_anchor_source FROM grant_install WHERE cid = ?",
+      cid,
+    );
+    if (row === undefined) return null;
+    if (!(row.consent_anchor_source === "siwe" || row.consent_anchor_source === "delegation_iat" ||
+          row.consent_anchor_source === "delegation_nbf" || row.consent_anchor_source === "first_install") ||
+        !Number.isSafeInteger(row.installed_at) || row.installed_at < 0 ||
+        !Number.isSafeInteger(row.effective_expires_at) || row.effective_expires_at < 0 ||
+        !Number.isSafeInteger(row.consent_deadline) || row.consent_deadline < 0 ||
+        !Number.isSafeInteger(row.consent_anchor_at) || row.consent_anchor_at < 0) {
+      throw new ReplicaError(ReplicaErrorCode.GRANT_EXPIRED, "The stored grant expiry or consent anchor is invalid.");
+    }
+    return {
+      installedAt: row.installed_at,
+      effectiveExpiresAt: row.effective_expires_at,
+      consentDeadline: row.consent_deadline,
+      consentAnchor: { at: row.consent_anchor_at, source: row.consent_anchor_source },
+    };
+  }
+
+  async getGrantInstall(cid: string): Promise<SqliteGrantInstall | null> {
+    return this.#grantInstall(cid);
+  }
+
+  /** Every installed CID, including superseded ones, for an origin-wide purge floor. */
+  async grantInstallTimes(): Promise<Array<{ cid: string; installedAt: number }>> {
+    const rows = this.#db.all<{ cid: string; installed_at: number }>(
+      "SELECT cid, installed_at FROM grant_install",
+    );
+    return rows.map((row) => {
+      if (typeof row.cid !== "string" || row.cid.length === 0 ||
+          !Number.isSafeInteger(row.installed_at) || row.installed_at < 0) {
+        throw new ReplicaError(ReplicaErrorCode.GRANT_EXPIRED, "The stored grant install time is invalid.");
+      }
+      return { cid: row.cid, installedAt: row.installed_at };
+    });
+  }
+
+  /** Phase 2 installed grants cannot commit a page after their shorter local TTL. */
+  #assertInstalledGrantTime(): void {
+    const row = this.#row();
+    const cid = row?.pending_grant_cid ?? row?.grant_cid;
+    if (cid === undefined || cid === null) return;
+    const installed = this.#grantInstall(cid);
+    // Standalone Phase 1 stores have no grant policy; the Node adapter
+    // separately refuses a missing install record before starting sync.
+    const now = this.#now();
+    if (installed !== null && (now >= installed.effectiveExpiresAt ||
+        now >= installed.consentDeadline)) {
+      throw new ReplicaError(ReplicaErrorCode.GRANT_EXPIRED, "The installed grant expired before this page committed.");
+    }
+  }
+
+  #storeGrantPolicy(g: GrantRecord, policy: SqliteGrantPolicy, existing: SqliteGrantInstall | null): SqliteGrantInstall {
+    const installedAt = existing?.installedAt ?? policy.at;
+    const effectiveExpiresAt = Math.min(
+      g.expiresAt === null ? Infinity : g.expiresAt * 1000,
+      installedAt + policy.ttlMs,
+      policy.consentDeadline,
+    );
+    if (!Number.isSafeInteger(installedAt) || installedAt < 0 ||
+        !Number.isSafeInteger(effectiveExpiresAt) || effectiveExpiresAt < 0 ||
+        !Number.isSafeInteger(policy.consentDeadline) || policy.consentDeadline < 0 ||
+        !Number.isSafeInteger(policy.consentAnchor.at) || policy.consentAnchor.at < 0 ||
+        !Number.isSafeInteger(policy.ttlMs) || policy.ttlMs <= 0) {
+      throw new ReplicaError(ReplicaErrorCode.GRANT_EXPIRED, "The replica grant has no finite effective expiry.");
+    }
+    this.#db.run(
+      `INSERT INTO grant_install (cid, installed_at, effective_expires_at, consent_deadline, consent_anchor_at, consent_anchor_source)
+       VALUES (?, ?, ?, ?, ?, ?)
+       ON CONFLICT (cid) DO UPDATE SET effective_expires_at = excluded.effective_expires_at,
+         consent_deadline = excluded.consent_deadline, consent_anchor_at = excluded.consent_anchor_at,
+         consent_anchor_source = excluded.consent_anchor_source`,
+      g.cid, installedAt, effectiveExpiresAt, policy.consentDeadline,
+      policy.consentAnchor.at, policy.consentAnchor.source,
+    );
+    return { installedAt, effectiveExpiresAt, consentDeadline: policy.consentDeadline, consentAnchor: policy.consentAnchor };
+  }
+
+  async installGatedGrant(g: GrantRecord, policy: SqliteGrantPolicy): Promise<SqliteGrantInstall> {
+    return this.#guardedWrite("Installing the gated grant", () => {
+      const row = this.#row();
+      if (row === undefined) throw new ReplicaError(ReplicaErrorCode.NOT_FOUND, "The replica has not been created.");
+      const previous = this.#grantInstall(g.cid);
+      if (previous === null && (row.grant_cid === g.cid || row.pending_grant_cid === g.cid)) {
+        throw new ReplicaError(ReplicaErrorCode.GRANT_EXPIRED, "The installed grant has no durable first-install time.");
+      }
+      const next = this.#storeGrantPolicy(g, policy, previous);
+      if (next.effectiveExpiresAt <= this.#now()) {
+        throw new ReplicaError(ReplicaErrorCode.GRANT_EXPIRED, "The replica grant expired under the current policy.");
+      }
+      if (row.grant_cid !== g.cid && row.pending_grant_cid !== g.cid) {
+        this.#db.run(
+          `UPDATE replica SET pending_grant_cid = ?, pending_grant_bytes = ?, pending_grant_audience = ?,
+             pending_grant_issuer = ?, pending_grant_nbf = ?, pending_grant_exp = ?, pending_grant_error = NULL WHERE id = 1`,
+          g.cid, g.bytes, g.audience, g.issuer, g.notBefore, g.expiresAt,
+        );
+      }
+      return next;
+    });
+  }
+
+  async recomputeGrantInstall(g: GrantRecord, policy: SqliteGrantPolicy): Promise<SqliteGrantInstall | null> {
+    return this.#guardedWrite("Recomputing the gated grant", () => {
+      const previous = this.#grantInstall(g.cid);
+      return previous === null ? null : this.#storeGrantPolicy(g, policy, previous);
+    });
+  }
+
   async installGrant(g: GrantRecord): Promise<void> {
     await this.#guardedWrite("Installing the grant", () => {
       const row = this.#row();
@@ -576,13 +1057,14 @@ export class SqliteReplicaStore implements ReplicaStore {
       const now = this.#now();
       if (row.lease_holder !== null && row.lease_expires_at !== null && row.lease_expires_at > now) return null;
       const token = row.lease_token + 1;
+      const holder = this.#holder ??= `${process.pid}-${randomBytes(6).toString("hex")}`;
       this.#db.run(
         "UPDATE replica SET lease_token = ?, lease_holder = ?, lease_expires_at = ? WHERE id = 1",
         token,
-        this.#holder,
+        holder,
         now + ttlMs,
       );
-      return { token, holder: this.#holder };
+      return { token, holder };
     });
   }
 
@@ -604,6 +1086,7 @@ export class SqliteReplicaStore implements ReplicaStore {
   }
 
   async hasContent(hashes: string[]): Promise<Set<string>> {
+    this.#assertAccepting();
     const held = new Set<string>();
     for (let start = 0; start < hashes.length; start += 500) {
       const chunk = hashes.slice(start, start + 500);
@@ -617,7 +1100,7 @@ export class SqliteReplicaStore implements ReplicaStore {
   }
 
   #blobPath(hash: string): string {
-    return join(this.dir, "blobs", hash.slice(0, 2), hash);
+    return join(this.#pinnedDir, "blobs", hash.slice(0, 2), hash);
   }
 
   /**
@@ -635,11 +1118,11 @@ export class SqliteReplicaStore implements ReplicaStore {
         () => false,
       );
       if (exists) continue;
-      const shard = join(this.dir, "blobs", hash.slice(0, 2));
+      const shard = join(this.#pinnedDir, "blobs", hash.slice(0, 2));
       await mkdir(shard, { mode: 0o700 }).catch((error: unknown) => {
         if (errnoOf(error) !== "EEXIST") throw error;
       });
-      const temp = join(this.dir, "blobs", ".tmp", `${hash}.${randomBytes(6).toString("hex")}`);
+      const temp = join(this.#pinnedDir, "blobs", ".tmp", `${hash}.${randomBytes(6).toString("hex")}`);
       const handle = await open(temp, fsConstants.O_CREAT | fsConstants.O_EXCL | fsConstants.O_WRONLY, 0o600);
       try {
         await handle.writeFile(bytes);
@@ -655,7 +1138,7 @@ export class SqliteReplicaStore implements ReplicaStore {
         await unlink(temp);
       }
       dirs.add(shard);
-      dirs.add(join(this.dir, "blobs"));
+      dirs.add(join(this.#pinnedDir, "blobs"));
     }
     for (const dir of dirs) {
       const handle = await open(dir, fsConstants.O_RDONLY);
@@ -672,6 +1155,7 @@ export class SqliteReplicaStore implements ReplicaStore {
       // Fence before any content reaches the disk: a writer whose lease was
       // taken over, expired or revoked writes nothing.
       this.#checkLease(t);
+      this.#assertInstalledGrantTime();
       // Resolve every reused blob's size before any row changes: an earlier
       // row of this page may drop the last entry that references it.
       const reused = new Map<string, number>();
@@ -693,8 +1177,9 @@ export class SqliteReplicaStore implements ReplicaStore {
       }
       await this.#faults.afterBlobs?.();
       try {
-        this.#write("Committing a sync page", () => {
+        await this.#write("Committing a sync page", () => {
           this.#checkLease(t);
+          this.#assertInstalledGrantTime();
           // Authority is judged now, at the commit, not when the page arrived.
           const now = this.#now();
           if (p.window.notBefore !== null && now < Date.parse(p.window.notBefore)) {
@@ -779,7 +1264,7 @@ export class SqliteReplicaStore implements ReplicaStore {
   /** Unlink every blob not in `keep`, and every temp file. Only a missing directory counts as empty. */
   async #unlinkBlobs(keep: Set<string>): Promise<number> {
     let removed = 0;
-    const root = join(this.dir, "blobs");
+    const root = join(this.#pinnedDir, "blobs");
     for (const shard of await entriesOf(root)) {
       const shardPath = join(root, shard);
       if (shard === ".tmp") {
@@ -805,7 +1290,7 @@ export class SqliteReplicaStore implements ReplicaStore {
 
   /** Whether any content file (a blob or a temp file) is on disk. */
   async #holdsContentFiles(): Promise<boolean> {
-    const root = join(this.dir, "blobs");
+    const root = join(this.#pinnedDir, "blobs");
     for (const shard of await entriesOf(root)) {
       if ((await entriesOf(join(root, shard))).length > 0) return true;
     }
@@ -814,16 +1299,19 @@ export class SqliteReplicaStore implements ReplicaStore {
 
   async collectGarbage(t: LeaseToken): Promise<number> {
     return this.#mutate(async () => {
+      const release = this.#shared ? await acquireWritableMutation(this.#shared) : undefined;
       // The write lock is held across the unlinks, and the lease token is
       // checked under it: a paused former holder can never unlink a blob the
       // current holder just committed a reference to.
       try {
         this.#db.exec("BEGIN IMMEDIATE");
       } catch (error) {
+        release?.();
         throw storageError(error, "Collecting unused content");
       }
       try {
         this.#checkLease(t);
+        await this.#faults.afterGarbageCollectionBegin?.();
         const keep = new Set(
           this.#db.all<{ hash: string }>("SELECT DISTINCT hash FROM entry WHERE content = 1").map((row) => row.hash),
         );
@@ -837,13 +1325,15 @@ export class SqliteReplicaStore implements ReplicaStore {
           // already rolled back
         }
         throw storageError(error, "Collecting unused content");
+      } finally {
+        release?.();
       }
     });
   }
 
   async reset(t: LeaseToken, reason: string, options: { keepSource?: boolean } = {}): Promise<void> {
     await this.#mutate(async () => {
-      this.#write("Resetting the replica", () => {
+      await this.#write("Resetting the replica", () => {
         this.#checkLease(t);
         this.#db.run("DELETE FROM entry");
         this.#db.run(
@@ -863,24 +1353,59 @@ export class SqliteReplicaStore implements ReplicaStore {
   }
 
   /**
-   * Remove this replica's directory for good (`tc replica reset --purge`).
-   * Fenced like a commit: `t` must still be a live lease on the database this
-   * store opened, checked under the write lock, so a paused process can
-   * never remove a replica another process took over or recreated. Allowed
-   * on a revoked replica. The store is unusable afterwards; close it.
+   * Remove the source-created mirror layout under a live lease. Unknown files
+   * are removed only when their exact preflight identities were approved.
    */
-  async destroy(t: LeaseToken): Promise<void> {
+  async destroy(t: LeaseToken, options: {
+    approvedUnknown?: readonly SqliteLayoutEntry[];
+    expectedKnown?: readonly SqliteLayoutEntry[];
+    expectedRoot?: { dev: string; ino: string };
+    allowMissingDatabase?: boolean;
+    allowAdapterFence?: boolean;
+  } = {}): Promise<void> {
     await this.#mutate(async () => {
+      const release = this.#shared ? await acquireWritableMutation(this.#shared) : undefined;
       try {
         this.#db.exec("BEGIN IMMEDIATE");
       } catch (error) {
+        release?.();
         throw storageError(error, "Removing the replica");
       }
       try {
         this.#checkLease(t, { allowRevoked: true });
-        // Holding the write lock: no one can take the lease until the directory is gone.
+        const expected = this.#directoryFd === undefined ? this.#namedAncestors.at(-1) : fstatSync(this.#directoryFd, { bigint: true });
+        if (!expected) {
+          throw new ReplicaError(ReplicaErrorCode.RUNTIME_UNSUPPORTED, "Replica removal requires an opened or identity-checked directory.");
+        }
+        const assertDirectory = async (): Promise<BigIntStats> => {
+          const current = await lstat(this.dir, { bigint: true });
+          if (!current.isDirectory() || current.dev !== expected.dev || current.ino !== expected.ino) {
+            throw new ReplicaError(ReplicaErrorCode.NOT_FOUND, "The replica directory changed during removal.");
+          }
+          return current;
+        };
+        const pinned = await assertDirectory();
+        // A refused removal whose named path moved reports the move, as a changed directory does.
+        const assertNamedPath = async (): Promise<void> => {
+          for (const ancestor of this.#namedAncestors) {
+            const current = await lstat(ancestor.path, { bigint: true });
+            if (current.dev !== ancestor.dev || current.ino !== ancestor.ino) {
+              throw new ReplicaError(ReplicaErrorCode.NOT_FOUND, "The replica ancestry changed during removal.");
+            }
+          }
+          await assertDirectory();
+        };
+        // Holding the write lock: no other lease holder can mutate this store.
         await this.#assertPresent();
-        await rm(this.dir, { recursive: true, force: true });
+        try {
+          await removeSqliteReplicaLayout(this.dir, {
+            ...options,
+            expectedRoot: options.expectedRoot ?? { dev: pinned.dev.toString(), ino: pinned.ino.toString() },
+          });
+        } catch (error) {
+          await assertNamedPath();
+          throw error;
+        }
       } catch (error) {
         throw storageError(error, "Removing the replica");
       } finally {
@@ -889,6 +1414,7 @@ export class SqliteReplicaStore implements ReplicaStore {
         } catch {
           // Nothing was written.
         }
+        release?.();
       }
     });
   }
@@ -937,7 +1463,7 @@ export class SqliteReplicaStore implements ReplicaStore {
    * when both are done.
    */
   async #purgeContent(): Promise<void> {
-    this.#write("Starting the revocation purge", () => {
+    await this.#write("Starting the revocation purge", () => {
       this.#db.run("UPDATE replica SET purge_pending = 1 WHERE id = 1 AND revoked_detail IS NOT NULL");
     });
     try {
@@ -948,7 +1474,7 @@ export class SqliteReplicaStore implements ReplicaStore {
     if (!this.#checkpoint()) {
       throw new ReplicaError(ReplicaErrorCode.BUSY, "A reader holds the replica's write-ahead log; the purge finishes on the next open.");
     }
-    this.#write("Finishing the revocation purge", () => {
+    await this.#write("Finishing the revocation purge", () => {
       this.#db.run("UPDATE replica SET purge_pending = 0 WHERE id = 1 AND revoked_detail IS NOT NULL");
     });
   }
@@ -960,6 +1486,7 @@ export class SqliteReplicaStore implements ReplicaStore {
   }
 
   async get(key: string): Promise<LocalEntry | undefined> {
+    this.#assertAccepting();
     try {
       const row = this.#db.get<EntryRow>("SELECT key, deleted, etag, hash, metadata, content FROM entry WHERE key = ?", key);
       return row === undefined ? undefined : entryOf(row);
@@ -969,6 +1496,7 @@ export class SqliteReplicaStore implements ReplicaStore {
   }
 
   async list(o: ListOpts): Promise<LocalEntry[]> {
+    this.#assertAccepting();
     const where = ["deleted = 0"];
     const params: SqlValue[] = [];
     if (o.prefix !== undefined && o.prefix !== "") {
@@ -1062,7 +1590,24 @@ export class SqliteReplicaStore implements ReplicaStore {
     };
   }
 
-  async close(): Promise<void> {
-    this.#db.close();
+  close(): Promise<void> {
+    if (this.#closePromise) return this.#closePromise;
+    this.#closing = true;
+    this.#closePromise = (async () => {
+      if (this.#activeMutations !== 0) {
+        await new Promise<void>((resolve) => { this.#drained = resolve; });
+      }
+      this.#closed = true;
+      const fd = this.#directoryFd;
+      this.#directoryFd = undefined;
+      if (this.#shared) {
+        sharedStores.unregister(this);
+        releaseWritable(this.#shared);
+      } else {
+        if (fd !== undefined) pinnedDirectories.unregister(this);
+        try { this.#database.close(); } finally { if (fd !== undefined) closeSync(fd); }
+      }
+    })();
+    return this.#closePromise;
   }
 }

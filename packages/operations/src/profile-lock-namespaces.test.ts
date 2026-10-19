@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, rename, rm, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { waitForProfileLockProtocol } from "./test-support/profile-lock-protocol.js";
+import { PROFILE_LOCK_HELPER_ENV, waitForProfileLockProtocol } from "./test-support/profile-lock-protocol.js";
 
 // Exercise separate PID namespaces with the built Node runtime. CI enables
 // unprivileged user namespaces and must run these scenarios; elsewhere they
@@ -58,7 +58,7 @@ async function home(long: boolean): Promise<string> {
 /** A PID-1 holder inside its critical section; ending its stdin releases it. */
 async function hold(tcHome: string) {
   const holder = Bun.spawn(container("abcdef012345", "hold"), {
-    env: { ...process.env, TC_HOME: tcHome }, stdin: "pipe", stdout: "pipe", stderr: "pipe",
+    env: { ...process.env, ...PROFILE_LOCK_HELPER_ENV, TC_HOME: tcHome }, stdin: "pipe", stdout: "pipe", stderr: "pipe",
   });
   const reader = holder.stdout.getReader();
   let seen = "";
@@ -73,7 +73,7 @@ async function hold(tcHome: string) {
 async function contend(tcHome: string, hostname: string, timeoutMs = 2000, wrapper: string[] = []) {
   const out = join(tcHome, "contender.json");
   const command = [...CONTAINER, "sh", "-c", 'hostname "$0" && exec "$@"', hostname, ...wrapper, node!, fixture, "contend", out, String(timeoutMs)];
-  const child = Bun.spawn(command, { env: { ...process.env, TC_HOME: tcHome }, stderr: "pipe" });
+  const child = Bun.spawn(command, { env: { ...process.env, ...PROFILE_LOCK_HELPER_ENV, TC_HOME: tcHome }, stderr: "pipe" });
   const exit = await child.exited;
   if (exit !== 0) throw new Error(await new Response(child.stderr).text());
   return JSON.parse(await readFile(out, "utf8"));
@@ -157,7 +157,7 @@ test.skipIf(!namespaces)("a live PID 1 sharing the holder's UTS namespace keeps 
       "nsenter", "-t", String(fixturePid), "--user", "--uts", "--preserve-credentials",
       "unshare", "--pid", "--fork", "--mount-proc", "--net", "--kill-child=SIGKILL",
       "sh", "-c", 'exec "$@"', "sh", node!, fixture, "contend", out, "2000",
-    ], { env: { ...process.env, TC_HOME: tcHome }, stderr: "pipe" });
+    ], { env: { ...process.env, ...PROFILE_LOCK_HELPER_ENV, TC_HOME: tcHome }, stderr: "pipe" });
     const exit = await child.exited;
     if (exit !== 0) throw new Error(await new Response(child.stderr).text());
     expect(JSON.parse(await readFile(out, "utf8"))).toMatchObject({
@@ -184,7 +184,7 @@ test.skipIf(!namespaces)("a reused PID in the same namespace reclaims its predec
     '"$1" "$2" contend "$3" 2000',
   ].join("\n");
   const shell = Bun.spawn([...CONTAINER, "sh", "-c", script, "sh", node!, fixture, out], {
-    env: { ...process.env, TC_HOME: tcHome }, stdin: "pipe", stdout: "pipe", stderr: "pipe",
+    env: { ...process.env, ...PROFILE_LOCK_HELPER_ENV, TC_HOME: tcHome }, stdin: "pipe", stdout: "pipe", stderr: "pipe",
   });
   const reader = shell.stdout.getReader();
   let seen = "";
@@ -209,6 +209,7 @@ test.skipIf(!namespaces)("a PID-1 crash during turn publication cleans its stage
   const holder = Bun.spawn(container("abcdef012345", "hold"), {
     env: {
       ...process.env,
+      ...PROFILE_LOCK_HELPER_ENV,
       TC_HOME: tcHome,
       NODE_ENV: "test",
       TC_TEST_PROFILE_LOCK_TURN_PUBLISH_BARRIER_DIR: barrier,

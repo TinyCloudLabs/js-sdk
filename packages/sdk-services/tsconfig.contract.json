@@ -1,0 +1,11 @@
+{
+  "//": "Typecheck the replication contract's type assertions (types.contract.ts) and everything they import. Run via `bun run typecheck:contract`; CI runs it on pull requests (replica-e2e).",
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "declaration": false,
+    "declarationMap": false
+  },
+  "include": ["src/kv/replication/types.contract.ts"],
+  "exclude": []
+}

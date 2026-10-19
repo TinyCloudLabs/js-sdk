@@ -1,6 +1,6 @@
 {
   "name": "@tinycloud/sdk-services",
-  "version": "3.2.6-beta.4",
+  "version": "3.3.0-beta.25",
   "description": "TinyCloud SDK Services - Platform-agnostic service implementations",
   "author": "TinyCloud, Inc.",
   "license": "EGPL",
@@ -66,6 +66,16 @@
         "default": "./dist/kv/replication/grantPolicyTypes.cjs"
       }
     },
+    "./kv/replication/grantPolicy": {
+      "import": {
+        "types": "./dist/kv/replication/grantPolicy.d.ts",
+        "default": "./dist/kv/replication/grantPolicy.js"
+      },
+      "require": {
+        "types": "./dist/kv/replication/grantPolicy.d.cts",
+        "default": "./dist/kv/replication/grantPolicy.cjs"
+      }
+    },
     "./kv/replication": {
       "import": {
         "types": "./dist/kv/replication/index.d.ts",
@@ -108,6 +118,9 @@
       ],
       "kv/replication/grantPolicyTypes": [
         "dist/kv/replication/grantPolicyTypes.d.ts"
+      ],
+      "kv/replication/grantPolicy": [
+        "dist/kv/replication/grantPolicy.d.ts"
       ]
     }
   },
@@ -117,7 +130,8 @@
   "scripts": {
     "build": "tsup",
     "clean": "rm -rf dist",
-    "test": "bun test"
+    "test": "bun test",
+    "typecheck:contract": "tsc --noEmit -p tsconfig.contract.json"
   },
   "dependencies": {
     "@tinycloud/bootstrap": "2.8.0",

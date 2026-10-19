@@ -2,7 +2,7 @@ import { closeReplication, registeredReplications } from "../lib/replication-reg
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { ExitCode, CONFIG_FILE, PROFILES_DIR, DEFAULT_PROFILE } from "../config/constants.js";
-import { ProfileDeletedError, ProfileLockTimeoutError } from "@tinycloud/operations/state";
+import { ProfileDeletedError, ProfileLockTimeoutError, ProfileSymlinkError } from "@tinycloud/operations/state";
 import { isSafeRecovery } from "@tinycloud/operations/recovery";
 import { CLI_NAME } from "@tinycloud/operations/cli-name";
 import {
@@ -51,6 +51,8 @@ export function cliErrorFromService(
   message = error.message,
 ): CLIError {
   if (error instanceof CLIError) return error;
+  const nodeRetry = nodeRetryError(error);
+  if (nodeRetry) return nodeRetry;
   const storageFull = storageFullError(error);
   if (storageFull) return storageFull;
   const meta = { ...error.meta };
@@ -75,7 +77,42 @@ export function cliErrorFromService(
   );
 }
 
+/**
+ * The SDK's node retry codes (`NODE_BUSY`, `REQUEST_TIMEOUT`, `OUTCOME_UNKNOWN`)
+ * as one plain message each. The SDK's `meta.retryAfterMs` (the node's
+ * Retry-After) names the wait; the CLI never retries by itself. Read from the
+ * SDK error's `meta` or a CLIError's `metadata`, so every command's shape maps
+ * the same way.
+ */
+function nodeRetryError(error: unknown): CLIError | undefined {
+  if (typeof error !== "object" || error === null) return undefined;
+  const { code, meta, metadata } = error as { code?: unknown; meta?: unknown; metadata?: unknown };
+  if (code !== "NODE_BUSY" && code !== "REQUEST_TIMEOUT" && code !== "OUTCOME_UNKNOWN") return undefined;
+  const details = (typeof meta === "object" && meta !== null ? meta : typeof metadata === "object" && metadata !== null ? metadata : {}) as Record<string, unknown>;
+  const retryAfterMs = details.retryAfterMs;
+  const wait = typeof retryAfterMs === "number" && Number.isFinite(retryAfterMs) && retryAfterMs >= 0
+    ? `in ${Math.max(1, Math.ceil(retryAfterMs / 1000))} s`
+    : "shortly";
+  if (code === "OUTCOME_UNKNOWN") {
+    return new CLIError(
+      code,
+      "Outcome unknown: the node may have applied the write. Check before retrying.",
+      ExitCode.NODE_ERROR,
+      { ...details, hint: "Read the data back before running the command again; repeating a write that already applied can duplicate it." },
+    );
+  }
+  return new CLIError(
+    code,
+    code === "NODE_BUSY" ? `The node is busy, try again ${wait}.` : `The node timed out before applying anything, try again ${wait}.`,
+    ExitCode.NODE_ERROR,
+    details,
+  );
+}
+
 export function wrapError(error: unknown): CLIError {
+  // A node retry signal (busy, deadline, unknown outcome) is not a network problem.
+  const nodeRetry = nodeRetryError(error);
+  if (nodeRetry) return nodeRetry;
   // A write refused for storage reads the same for every command: one exit
   // code, the account totals when known, and the manage link. It is never a
   // network problem, so it never gets the switch-hosts hint.
@@ -115,6 +152,9 @@ export function wrapError(error: unknown): CLIError {
   // A store write that waited out a `tc profile delete` of its profile.
   if (error instanceof ProfileDeletedError) {
     return new CLIError("PROFILE_NOT_FOUND", message);
+  }
+  if (error instanceof ProfileSymlinkError) {
+    return new CLIError("PROFILE_SYMLINK", message, ExitCode.ERROR);
   }
 
   // Map known error patterns to exit codes

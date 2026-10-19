@@ -217,6 +217,11 @@ export type {
   PortableDelegationImportReceipt,
 } from "./delegations";
 export { parseSignedSiweCacao, type SignedSiweCacao } from "./delegations/cacao";
+export {
+  TERMINAL_DELEGATION_FACT,
+  markDelegationTerminal,
+  type TerminalDelegationSigningKey,
+} from "./delegations/terminal";
 
 export {
   ATTESTED_ENFORCER_BINDING_V2_SCHEMA,
@@ -1029,6 +1034,53 @@ export {
   type VerifiedOwnerNodeBinding,
   type VerifyOwnerNodeBindingOptions,
 } from "./location";
+
+// Three-state registry verdict (TC-1443/TC-1444). Host resolution acts on it under registryPolicy "fail-closed".
+export {
+  REGISTRY_LOOKUP_MAX_BODY_BYTES,
+  REGISTRY_NOT_FOUND_BODY,
+  RegistryLookupInputError,
+  classifyRegistryLookup,
+  type ClassifyRegistryLookupOptions,
+  type RegisteredRegistryVerdict,
+  type RegistryHost,
+  type RegistryHostSource,
+  type RegistryLookupInputErrorCode,
+  type RegistryLookupResponse,
+  type RegistryUnavailableReason,
+  type RegistryVerdict,
+  type RegistryVerdictSource,
+  type RegistryVerdictStatus,
+  type UnavailableRegistryVerdict,
+  type UnregisteredRegistryVerdict,
+} from "./registry-verdict";
+
+// Registry policy: opt-in fail-closed host resolution and the space-creation guard (TC-1443).
+export {
+  DEFAULT_NEW_USER_HOST,
+  DEFAULT_REGISTRY_LOOKUP_TIMEOUT_MS,
+  DEFAULT_REGISTRY_OWNER_CHAIN_ID,
+  DEFAULT_REGISTRY_SEQUENCE_STORAGE_KEY,
+  NodeNotFoundError,
+  NodeRegistryEntryExistsError,
+  RegistryUnavailableError,
+  assertSpaceCreationAllowed,
+  createInMemoryRegistrySequenceStore,
+  createLocalStorageRegistrySequenceStore,
+  lookupOwnerRegistryVerdict,
+  registryOwnerSubjectV1,
+  resolveFailClosedTinyCloudHosts,
+  resolveOwnerHosts,
+  type FailClosedHostOptions,
+  type FailClosedHosts,
+  type LookupOwnerRegistryVerdictOptions,
+  type NodeNotFoundContext,
+  type NodeNotFoundDecision,
+  type OnNodeNotFound,
+  type RegistryPolicy,
+  type RegistrySequenceStore,
+  type ResolveOwnerHostsOptions,
+} from "./registry-policy";
 
 // Capability subset checking and recap parsing
 export {

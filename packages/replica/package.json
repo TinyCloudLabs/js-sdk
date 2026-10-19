@@ -1,6 +1,6 @@
 {
   "name": "@tinycloud/replica",
-  "version": "0.2.4-beta.1",
+  "version": "0.3.0-beta.6",
   "description": "Durable, read-only local replicas of a TinyCloud KV prefix over the tinycloud.kv/sync change feed.",
   "author": "TinyCloud, Inc.",
   "license": "EGPL",
@@ -23,9 +23,26 @@
       "types": "./dist/browser.d.ts",
       "import": "./dist/browser.js"
     },
+    "./profile-gate": {
+      "types": "./dist/profile-gate.d.ts",
+      "import": "./dist/profile-gate.js",
+      "require": "./dist/profile-gate.cjs"
+    },
     "./worker": {
       "types": "./dist/replica.worker.d.ts",
       "import": "./dist/replica.worker.js"
+    },
+    "./kv-storage": {
+      "types": "./dist/kv-storage.d.ts",
+      "import": "./dist/kv-storage.js"
+    },
+    "./kv-storage/worker": {
+      "types": "./dist/kv-storage.worker.d.ts",
+      "import": "./dist/kv-storage.worker.js"
+    },
+    "./kv-storage/testing": {
+      "types": "./dist/kv-storage-testing.d.ts",
+      "import": "./dist/kv-storage-testing.js"
     },
     "./package.json": "./package.json"
   },
@@ -37,7 +54,7 @@
     "dist"
   ],
   "scripts": {
-    "build": "tsup",
+    "build": "bun run clean && tsup && bun scripts/hash-worker.ts",
     "clean": "rm -rf dist",
     "test": "bun test",
     "typecheck": "tsc --noEmit"
@@ -45,7 +62,7 @@
   "dependencies": {
     "@noble/curves": "^1.9.2",
     "@noble/hashes": "^1.8.0",
-    "@tinycloud/sdk-services": "3.2.6-beta.4"
+    "@tinycloud/sdk-services": "3.3.0-beta.25"
   },
   "devDependencies": {
     "@tinycloud/web-sdk-wasm": "1.7.6",

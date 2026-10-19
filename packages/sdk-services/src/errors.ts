@@ -4,6 +4,7 @@
  * Utilities for creating and handling service errors.
  */
 
+import { responseErrorMeta } from "./responseErrors";
 import { CAPABILITY_REGISTRY } from "@tinycloud/bootstrap";
 import { parseNetworkId } from "./encryption/networkId";
 
@@ -99,6 +100,53 @@ export function networkError(
     service,
     cause,
   };
+}
+
+/**
+ * Classify a node retry signal (tinycloud-node #347, TC-1054). The node's
+ * bodies are plain text led by a stable token:
+ * - `503 sql_busy: <stage>: ...` and `503 unavailable_retryable: ...` (and
+ *   `read_audit_busy`) are `NODE_BUSY`: nothing was applied; retry after `meta.retryAfterMs`.
+ * - `503 request_timeout: ...` is `REQUEST_TIMEOUT`: the deadline passed before
+ *   any write began, so nothing was applied.
+ * - `500 outcome_unknown: ...` is `OUTCOME_UNKNOWN`: a write may have been
+ *   applied; read back before retrying a non-idempotent operation.
+ *
+ * `meta.retryable` is the safe-to-retry verdict and `meta.retryAfterMs` the
+ * node's `Retry-After` (the node sends whole seconds; anything else is
+ * ignored). `invokeWithRetry` retries `NODE_BUSY` and `REQUEST_TIMEOUT`;
+ * `OUTCOME_UNKNOWN` is never retried. Returns `undefined` for any
+ * other response, including the bodyless 503/500 of nodes before 1.21, which
+ * callers keep classifying as they always did.
+ */
+export function nodeRetryError(
+  service: string,
+  message: string,
+  response: { status: number; statusText: string; headers: { get(name: string): string | null } },
+  errorText: string
+): ServiceError | undefined {
+  const body = errorText.trim();
+  const [, token, stage] = /^([a-z_]+)(?::\s*([a-z_]+):)?/.exec(body) ?? [];
+  let code: string;
+  if (response.status === 503 && (token === "sql_busy" || token === "unavailable_retryable" || token === "read_audit_busy")) {
+    code = ErrorCodes.NODE_BUSY;
+  } else if (response.status === 503 && token === "request_timeout") {
+    code = ErrorCodes.REQUEST_TIMEOUT;
+  } else if (response.status === 500 && token === "outcome_unknown") {
+    code = ErrorCodes.OUTCOME_UNKNOWN;
+  } else {
+    return undefined;
+  }
+  const retryable = code !== ErrorCodes.OUTCOME_UNKNOWN;
+  const retryAfter = response.headers.get("retry-after")?.trim();
+  return serviceError(code, message, service, {
+    meta: {
+      ...responseErrorMeta(response.status, response.statusText, errorText),
+      retryable,
+      ...(token === "sql_busy" && stage ? { stage } : {}),
+      ...(retryable && retryAfter && /^\d{1,9}$/.test(retryAfter) ? { retryAfterMs: Number(retryAfter) * 1000 } : {}),
+    },
+  });
 }
 
 /**
