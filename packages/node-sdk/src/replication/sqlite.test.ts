@@ -9,7 +9,7 @@
 
 import { AsyncLocalStorage } from "node:async_hooks";
 import { afterEach, describe, expect, setSystemTime, spyOn, test } from "bun:test";
-import { chmod, mkdir, mkdtemp, open as openFile, readFile, readdir, rename, rm, symlink, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, open as openFile, readFile, readdir, rename, rm, stat, symlink, writeFile } from "node:fs/promises";
 import * as fsPromises from "node:fs/promises";
 import { constants as fsConstants, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -3790,7 +3790,105 @@ async function expectOneAdmitted(storage: KVReplicaStorage): Promise<void> {
   await docs.close();
 }
 
+/** A transport whose successive `syncPage` calls follow `script`; an `Error` entry throws. */
+function scriptedTransport(
+  script: Array<Array<[string, Uint8Array]> | Error>,
+  served: Map<string, { bytes: Uint8Array; etag: string }> = new Map(),
+): ReplicaTransport {
+  let call = 0;
+  return {
+    async syncPage({ prefix }) {
+      const step = script[call++];
+      if (step === undefined) throw new Error("script exhausted");
+      if (step instanceof Error) throw step;
+      const changes = step.map(([key, bytes]) => {
+        const etag = `"blake3-${contentHash(bytes)}"`;
+        served.set(key, { bytes, etag });
+        return { key, deleted: false as const, etag, metadata: {} };
+      });
+      return {
+        changes,
+        more: call < script.length && !(script[call] instanceof Error && false),
+        cursor: String(call),
+        source: { nodeDid: "did:key:zTestNode", space: SPACE_A, prefix },
+        authority: { notBefore: null, expiresAt: null, retainUntil: null },
+      };
+    },
+    async fetchContent(keys) {
+      return new Map(keys.map((key) => [key, served.get(key) ?? { missing: true as const }]));
+    },
+  };
+}
+
+/** One notes/ replica whose successive syncs follow `syncs` (each an array of pages). */
+async function scriptedReplica(
+  syncs: Array<Array<Array<[string, Uint8Array]> | Error>>,
+  quota: { options?: number; spec?: number },
+): Promise<{ handle: KVReplicaHandle; replicaDir: string }> {
+  const dir = await makeDir();
+  const served = new Map<string, { bytes: Uint8Array; etag: string }>();
+  let index = 0;
+  const storage = createSqliteReplicaStorage(
+    storageOptions({
+      dir,
+      guard: serialGuard(),
+      maxBytes: quota.options,
+      transportFor: () => scriptedTransport(syncs[index++]!, served),
+    }),
+  );
+  const handle = await storage.open(spec(quota.spec === undefined ? {} : { quota: { maxBytes: quota.spec } }));
+  await handle.installGrant(await mintUcan({ audience: DEVICE_DID, prefixes: ["notes", "notes/"] }));
+  const [partition] = await partitionDirs(dir);
+  const replicasDir = join(dir, partition!, "replicas");
+  const [replicaName] = await readdir(replicasDir);
+  return { handle, replicaDir: join(replicasDir, replicaName!) };
+}
+
+/** Bytes of every file under `<replica>/blobs`, measured independently of the store. */
+async function diskBlobBytes(replicaDir: string): Promise<number> {
+  let total = 0;
+  const root = join(replicaDir, "blobs");
+  for (const shard of await readdir(root).catch(() => [] as string[])) {
+    for (const name of await readdir(join(root, shard))) total += (await stat(join(root, shard, name))).size;
+  }
+  return total;
+}
+
+const bytesOf = (size: number, fill: number): Uint8Array => new Uint8Array(size).fill(fill);
+
 describe("quota admission (TC-858 S5)", () => {
+  test("replacing a value with one of equal size is a net-zero page and is admitted", async () => {
+    const { handle, replicaDir } = await scriptedReplica(
+      [[[["notes/a", bytesOf(SIX_KB, 1)]]], [[["notes/a", bytesOf(SIX_KB, 2)]]]],
+      { options: 10_000 },
+    );
+    await handle.sync({ signal: signal(), syncStartEpoch: 1 });
+    await handle.sync({ signal: signal(), syncStartEpoch: 1 });
+    expect((await handle.status()).bytes).toBe(SIX_KB);
+    expect(await diskBlobBytes(replicaDir)).toBe(SIX_KB);
+    await handle.close();
+  });
+
+  test("a sync that fails mid-way never leaves more than maxBytes of content on disk", async () => {
+    const { handle, replicaDir } = await scriptedReplica(
+      [
+        [[["notes/a", bytesOf(SIX_KB, 1)]]],
+        [[["notes/a", bytesOf(4_000, 2)]], [["notes/b", bytesOf(SIX_KB, 3)]], new Error("node went away")],
+      ],
+      { options: 10_000 },
+    );
+    await handle.sync({ signal: signal(), syncStartEpoch: 1 });
+    await expect(handle.sync({ signal: signal(), syncStartEpoch: 1 })).rejects.toBeDefined();
+    expect(await diskBlobBytes(replicaDir)).toBeLessThanOrEqual(10_000);
+    await handle.close();
+  });
+
+  test("spec.quota.maxBytes takes precedence over the storage option", async () => {
+    const { handle } = await scriptedReplica([[[["notes/a", bytesOf(SIX_KB, 1)]]]], { options: 100_000, spec: 1_000 });
+    await expect(handle.sync({ signal: signal(), syncStartEpoch: 1 })).rejects.toMatchObject({ code: "STORAGE_BUDGET" });
+    await handle.close();
+  });
+
   test("CLI shape: two replicas in one profile share one budget under the profile guard", async () => {
     await expectOneAdmitted(await pairStorage(serialGuard()));
   });

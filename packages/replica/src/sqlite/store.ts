@@ -448,32 +448,30 @@ export class SqliteReplicaStore implements ReplicaStore {
   }
 
   /**
-   * Distinct content bytes stored in the replica at `dir` (0 when absent). Read-only and outside
-   * the mutation guard, so quota admission can sum a profile's replicas under its own hold. Blobs
-   * are content-addressed per replica: a hash counts once within a replica.
+   * Content bytes on disk in the replica at `dir` (0 when absent): every file under `blobs/`,
+   * including temp files and blobs no entry references any more. This is what quota admission
+   * bounds, so garbage a failed sync left behind still counts. Filesystem-only: it opens no
+   * database, so it can sum a profile's replicas under the caller's own mutation hold.
    */
   static async contentBytes(dir: string): Promise<number> {
-    const dbPath = join(dir, "replica.db");
+    const root = join(dir, "blobs");
+    let bytes = 0;
     try {
-      await stat(dbPath);
+      for (const shard of await entriesOf(root)) {
+        const shardPath = join(root, shard);
+        for (const name of await entriesOf(shardPath)) {
+          const info = await lstat(join(shardPath, name)).catch((error: unknown) => {
+            if (errnoOf(error) === "ENOENT") return undefined;
+            throw error;
+          });
+          if (info?.isFile()) bytes += info.size;
+        }
+      }
     } catch (error) {
-      if (errnoOf(error) === "ENOENT") return 0;
+      if (errnoOf(error) === "ENOTDIR") return 0;
       throw storageError(error, "Measuring replica content");
     }
-    const opener = await loadSqlite();
-    let db: SqliteDatabase | undefined;
-    try {
-      db = opener(dbPath, { readonly: true });
-      db.exec("PRAGMA busy_timeout = 0");
-      const row = db.get<{ bytes: number | null }>(
-        "SELECT SUM(size) AS bytes FROM (SELECT DISTINCT hash, size FROM entry WHERE deleted = 0 AND content = 1)",
-      );
-      return row?.bytes ?? 0;
-    } catch (error) {
-      throw storageError(error, "Measuring replica content");
-    } finally {
-      db?.close();
-    }
+    return bytes;
   }
 
   /**
@@ -1208,10 +1206,16 @@ export class SqliteReplicaStore implements ReplicaStore {
         }
         reused.set(change.hash, size);
       }
-      // Quota admission (TC-858 S5): projected bytes are this page's blobs not
-      // already stored in this replica. Runs under the same guard as the write,
-      // before any blob or row changes; a refusal leaves the replica untouched.
+      // Quota admission (TC-858 S5). Runs under the same guard as the write, before any blob
+      // or row changes; a refusal leaves the replica untouched. Orphaned blobs (a failed sync,
+      // a crash after commit) are collected first so they are neither counted as free nor
+      // charged to this replica twice; the page is then charged its NET bytes: new blobs not
+      // already stored, minus blobs only the entries this page replaces or deletes reference.
       if (this.#admit) {
+        await this.#collectLocked(t);
+        const changed = new Set(p.changes.map((change) => change.key));
+        const kept = new Set<string>();
+        for (const change of p.changes) if (!change.deleted && change.content) kept.add(change.hash);
         let blobBytes = 0;
         for (const [hash, bytes] of p.blobs) {
           const stored = this.#db.get<{ hit: number }>(
@@ -1220,7 +1224,27 @@ export class SqliteReplicaStore implements ReplicaStore {
           );
           if (stored === undefined) blobBytes += bytes.byteLength;
         }
-        await this.#admit({ partitionId: this.#partitionId, blobBytes, entries: p.changes.length, freeBytes: null });
+        const released = new Map<string, number>();
+        for (const key of changed) {
+          const old = this.#db.get<{ hash: string; size: number }>(
+            "SELECT hash, size FROM entry WHERE key = ? AND deleted = 0 AND content = 1 AND hash IS NOT NULL AND size IS NOT NULL",
+            key,
+          );
+          if (old === undefined || kept.has(old.hash) || released.has(old.hash)) continue;
+          const holders = this.#db.all<{ key: string }>(
+            "SELECT key FROM entry WHERE hash = ? AND content = 1 AND deleted = 0",
+            old.hash,
+          );
+          if (holders.every((holder) => changed.has(holder.key))) released.set(old.hash, old.size);
+        }
+        let freed = 0;
+        for (const size of released.values()) freed += size;
+        await this.#admit({
+          partitionId: this.#partitionId,
+          blobBytes: blobBytes - freed,
+          entries: p.changes.length,
+          freeBytes: null,
+        });
       }
       try {
         await this.#writeBlobs(p.blobs);
@@ -1307,9 +1331,14 @@ export class SqliteReplicaStore implements ReplicaStore {
         // Revoked while this call wrote its blobs: the purge may already have
         // run, so remove them again (a failure leaves purge_pending for open).
         if (isReplicaError(error, ReplicaErrorCode.GRANT_REVOKED)) await this.#purgeContent().catch(() => undefined);
+        // A page that wrote blobs but did not commit leaves them unreferenced: drop them now
+        // when a quota is enforced, so on-disk bytes stay inside the budget.
+        else if (this.#admit) await this.#collectLocked(t).catch(() => undefined);
         throw error;
       }
       this.#faults.afterCommit?.();
+      // Blobs only the replaced or deleted entries referenced are free to go now.
+      if (this.#admit) await this.#collectLocked(t);
     });
   }
 
@@ -1350,37 +1379,40 @@ export class SqliteReplicaStore implements ReplicaStore {
   }
 
   async collectGarbage(t: LeaseToken): Promise<number> {
-    return this.#mutate(async () => {
-      const release = this.#shared ? await acquireWritableMutation(this.#shared) : undefined;
-      // The write lock is held across the unlinks, and the lease token is
-      // checked under it: a paused former holder can never unlink a blob the
-      // current holder just committed a reference to.
+    return this.#mutate(() => this.#collectLocked(t));
+  }
+
+  /** `collectGarbage` for callers already inside the mutation hold (it cannot re-enter `#mutate`). */
+  async #collectLocked(t: LeaseToken): Promise<number> {
+    const release = this.#shared ? await acquireWritableMutation(this.#shared) : undefined;
+    // The write lock is held across the unlinks, and the lease token is
+    // checked under it: a paused former holder can never unlink a blob the
+    // current holder just committed a reference to.
+    try {
+      this.#db.exec("BEGIN IMMEDIATE");
+    } catch (error) {
+      release?.();
+      throw storageError(error, "Collecting unused content");
+    }
+    try {
+      this.#checkLease(t);
+      await this.#faults.afterGarbageCollectionBegin?.();
+      const keep = new Set(
+        this.#db.all<{ hash: string }>("SELECT DISTINCT hash FROM entry WHERE content = 1").map((row) => row.hash),
+      );
+      const removed = await this.#unlinkBlobs(keep);
+      this.#db.exec("COMMIT");
+      return removed;
+    } catch (error) {
       try {
-        this.#db.exec("BEGIN IMMEDIATE");
-      } catch (error) {
-        release?.();
-        throw storageError(error, "Collecting unused content");
+        this.#db.exec("ROLLBACK");
+      } catch {
+        // already rolled back
       }
-      try {
-        this.#checkLease(t);
-        await this.#faults.afterGarbageCollectionBegin?.();
-        const keep = new Set(
-          this.#db.all<{ hash: string }>("SELECT DISTINCT hash FROM entry WHERE content = 1").map((row) => row.hash),
-        );
-        const removed = await this.#unlinkBlobs(keep);
-        this.#db.exec("COMMIT");
-        return removed;
-      } catch (error) {
-        try {
-          this.#db.exec("ROLLBACK");
-        } catch {
-          // already rolled back
-        }
-        throw storageError(error, "Collecting unused content");
-      } finally {
-        release?.();
-      }
-    });
+      throw storageError(error, "Collecting unused content");
+    } finally {
+      release?.();
+    }
   }
 
   async reset(t: LeaseToken, reason: string, options: { keepSource?: boolean } = {}): Promise<void> {

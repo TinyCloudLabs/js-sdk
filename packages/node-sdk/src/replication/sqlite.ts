@@ -2812,6 +2812,9 @@ export function createSqliteReplicaStorage(
     // before: no admit hook. Admission runs inside the store's guarded write,
     // which is already the profile section, so both share one hold.
     const quota = spec.quota?.maxBytes ?? options.maxBytes;
+    if (quota !== undefined && (!Number.isSafeInteger(quota) || quota < 0)) {
+      throw new TypeError(`maxBytes must be a non-negative safe integer, got ${quota}.`);
+    }
     const store = await sqlite.SqliteReplicaStore.open(
       replicaDir,
       quota === undefined
@@ -2822,7 +2825,9 @@ export function createSqliteReplicaStorage(
             partitionId: basename(idDir),
             admit: async (page) => {
               const used = await profileContentBytes(root, sqlite.SqliteReplicaStore.contentBytes);
-              if (used + page.blobBytes > quota) {
+              // `blobBytes` is the page's NET bytes (replaced or deleted content is credited), so a
+              // page that frees at least what it adds is always admitted.
+              if (page.blobBytes > 0 && used + page.blobBytes > quota) {
                 throw new replica.ReplicaError(
                   replica.ReplicaErrorCode.STORAGE_BUDGET,
                   `Profile storage holds ${used} bytes; this page adds ${page.blobBytes} against a ${quota}-byte quota. Nothing was committed.`,
