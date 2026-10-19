@@ -124,12 +124,12 @@ function harness(overrides: Partial<VerifyHeldPresentationOptions> = {}, entries
   const options: VerifyHeldPresentationOptions = {
     now: NOW, issuerSet: parseIssuerSet(setOf(...entries), { didMethods: METHODS }),
     acceptedIssuers: [{ issuerDid: ISSUER_A }], acceptedProfiles: [{ profile: PROFILE, profileVersion: 1 }],
-    didMethods: METHODS, audience: AUDIENCE, nonceStore: store, ...overrides,
+    didMethods: METHODS, audience: AUDIENCE, nonceStore: store, callerAccount: SUB, ...overrides,
   };
   return {
     options, store,
     present(cred, siwe, mint) {
-      const nonce = store.issue(options.audience, mint);
+      const nonce = store.issue(options.audience, mint ?? options.callerAccount);
       const { sdJwt } = makeCredential(cred);
       return { presentation: { sdJwt, siwe: makeSiwe(sdJwt, nonce, siwe) }, nonce };
     },
@@ -248,12 +248,13 @@ describe("header and signature", () => {
     const { presentation } = h.present();
     const [, payloadB64] = presentation.sdJwt.split("~")[0]!.split(".");
     const dupHeader = enc('{"alg":"EdDSA","typ":"vc+sd-jwt","kid":"' + KID_A + '","kid":"' + KID_A + '"}');
-    const sdJwt = `${dupHeader}.${payloadB64}.${encodeBase64Url(new Uint8Array(64))}~~`;
-    expect(await code(verifyHeldPresentation({ ...presentation, sdJwt }, h.options))).toBe("bad-presentation");
+    const sdJwt = `${dupHeader}.${payloadB64}.${encodeBase64Url(new Uint8Array(64))}~`;
+    expect(await code(verifyHeldPresentation({ sdJwt, siwe: makeSiwe(sdJwt, h.store.issue(AUDIENCE, SUB)) }, h.options))).toBe("bad-header");
     const dupPayload = '{"iss":"x","iss":"y"}';
     const input = `${enc({ alg: "EdDSA", typ: "vc+sd-jwt", kid: KID_A })}.${enc(dupPayload)}`;
     const jwt = `${input}.${encodeBase64Url(ed25519.sign(asciiBytes(input), SEED_A))}`;
-    expect(await code(verifyHeldPresentation({ ...presentation, sdJwt: `${jwt}~` }, h.options))).toBe("bad-payload");
+    const dupSdJwt = `${jwt}~`;
+    expect(await code(verifyHeldPresentation({ sdJwt: dupSdJwt, siwe: makeSiwe(dupSdJwt, h.store.issue(AUDIENCE, SUB)) }, h.options))).toBe("bad-payload");
   });
   test("non-canonical S and a tampered signature", async () => {
     const L = (1n << 252n) + 27742317777372353535851937790883648493n;
@@ -354,13 +355,13 @@ describe("SIWE presentation proof (R4-R8)", () => {
     await expectCode("bad-config", {}, undefined, { audience: "billing.tinycloud.xyz:443" });
     await expectCode("bad-config", {}, undefined, { audience: "https://billing.tinycloud.xyz" });
     const sdHash = (j: string) => `urn:tinycloud:sd-hash:${encodeBase64Url(sha256(asciiBytes(j)))}`;
-    const h = harness(); const { sdJwt } = makeCredential(); const nonce = h.store.issue(AUDIENCE);
-    expect(await code(verifyHeldPresentation({ sdJwt, siwe: makeSiwe(sdJwt, nonce, { resources: [sdHash(sdJwt), "urn:recap:eyJhdHQiOnt9fQ"] }) }, h.options))).toBe("bad-siwe");
-    expect(await code(verifyHeldPresentation({ sdJwt, siwe: makeSiwe(sdJwt, nonce, { resources: [] }) }, h.options))).toBe("bad-siwe");
-    expect(await code(verifyHeldPresentation({ sdJwt, siwe: makeSiwe(sdJwt, nonce, { resources: ["urn:recap:eyJhdHQiOnt9fQ"] }) }, h.options))).toBe("bad-siwe");
+    const h = harness(); const { sdJwt } = makeCredential(); const nonce = h.store.issue(AUDIENCE, SUB);
+    expect(await code(verifyHeldPresentation({ sdJwt, siwe: makeSiwe(sdJwt, h.store.issue(AUDIENCE, SUB), { resources: [sdHash(sdJwt), "urn:recap:eyJhdHQiOnt9fQ"] }) }, h.options))).toBe("bad-siwe");
+    expect(await code(verifyHeldPresentation({ sdJwt, siwe: makeSiwe(sdJwt, h.store.issue(AUDIENCE, SUB), { resources: [] }) }, h.options))).toBe("bad-siwe");
+    expect(await code(verifyHeldPresentation({ sdJwt, siwe: makeSiwe(sdJwt, h.store.issue(AUDIENCE, SUB), { resources: ["urn:recap:eyJhdHQiOnt9fQ"] }) }, h.options))).toBe("bad-siwe");
   });
   test("a nonce minted for another audience cannot be used here", async () => {
-    const h = harness(); const { sdJwt } = makeCredential(); const foreign = h.store.issue("exo.tinycloud.xyz");
+    const h = harness(); const { sdJwt } = makeCredential(); const foreign = h.store.issue("exo.tinycloud.xyz", SUB);
     expect(await code(verifyHeldPresentation({ sdJwt, siwe: makeSiwe(sdJwt, foreign) }, h.options))).toBe("nonce-replayed");
   });
   test("SIWE time fields are enforced when present and optional when absent", async () => {
@@ -375,12 +376,12 @@ describe("SIWE presentation proof (R4-R8)", () => {
     }
   });
   test("sd_hash: no trailing ~, padding, a different disclosure set, a KB-JWT suffix", async () => {
-    const h = harness(); const nonce = h.store.issue(AUDIENCE); const { sdJwt } = makeCredential();
+    const h = harness(); const nonce = h.store.issue(AUDIENCE, SUB); const { sdJwt } = makeCredential();
     const other = makeCredential({ disclosures: [["emailDomain", "example.com"]] }).sdJwt;
     const wrongHashes = [sdJwt.slice(0, -1), sdJwt + "=", other];
     for (const variant of wrongHashes) {
       const hash = encodeBase64Url(sha256(asciiBytes(variant)));
-      const siwe = makeSiwe(sdJwt, nonce, { resources: [`urn:tinycloud:sd-hash:${hash}`] });
+      const siwe = makeSiwe(sdJwt, h.store.issue(AUDIENCE, SUB), { resources: [`urn:tinycloud:sd-hash:${hash}`] });
       expect(await code(verifyHeldPresentation({ sdJwt, siwe }, h.options))).toBe("bad-siwe");
     }
     const withKb = `${sdJwt}${enc({ alg: "ES256K" })}.${enc({})}.${enc("sig")}`;
@@ -401,19 +402,44 @@ describe("nonce store (R3, R4)", () => {
     const results = await Promise.all([code(verifyHeldPresentation(presentation, h.options)), code(verifyHeldPresentation(presentation, h.options))]);
     expect(results.sort()).toEqual(["nonce-replayed", "ok"]);
   });
-  test("a presentation that fails verification leaves the nonce unconsumed", async () => {
-    const h = harness(); const nonce = h.store.issue(AUDIENCE); const { sdJwt } = makeCredential({ signature: () => new Uint8Array(64) });
-    expect(await code(verifyHeldPresentation({ sdJwt, siwe: makeSiwe(sdJwt, nonce) }, h.options))).toBe("bad-signature");
-    expect((await h.store.consume(AUDIENCE, nonce)).existed).toBe(true);
+  test("a refused presentation HAS spent its nonce (consume-first)", async () => {
+    const refusals: [string, CredentialSpec][] = [
+      ["bad-signature", { signature: () => new Uint8Array(64) }],
+      ["unknown-issuer", { kid: `${ISSUER_A}#nope` }],
+      ["expired", { payload: (p) => ({ ...p, exp: NOW_S - 10 }) }],
+      ["bad-subject", { payload: (p) => ({ ...p, sub: `did:pkh:eip155:137:${HOLDER}` }) }],
+    ];
+    for (const [expected, spec] of refusals) {
+      const h = harness(); const nonce = h.store.issue(AUDIENCE, SUB);
+      const bad = makeCredential(spec).sdJwt; const good = makeCredential().sdJwt;
+      expect(await code(verifyHeldPresentation({ sdJwt: bad, siwe: makeSiwe(bad, nonce) }, h.options))).toBe(expected);
+      expect(await code(verifyHeldPresentation({ sdJwt: good, siwe: makeSiwe(good, nonce) }, h.options))).toBe("nonce-replayed");
+    }
   });
-  test("a nonce bound to account A with subject B is refused and consumed", async () => {
+  test("a syntactically broken presentation spends nothing before the SIWE parse", async () => {
+    const h = harness(); const nonce = h.store.issue(AUDIENCE, SUB); const { sdJwt } = makeCredential();
+    expect(await code(verifyHeldPresentation({ sdJwt, siwe: { message: "not a siwe", signature: "0x00" } }, h.options))).toBe("bad-siwe");
+    expect(await code(verifyHeldPresentation({ sdJwt, siwe: makeSiwe(sdJwt, nonce) }, h.options))).toBe("ok");
+  });
+  test("caller B cannot spend or burn a nonce bound to caller A", async () => {
+    const h = harness(); const nonce = h.store.issue(AUDIENCE, SUB); const { sdJwt } = makeCredential();
+    const callerB = `did:pkh:eip155:1:${toChecksumAddress(addressOf(otherKey))}`;
+    expect(await code(verifyHeldPresentation({ sdJwt, siwe: makeSiwe(sdJwt, nonce) }, { ...h.options, callerAccount: callerB }))).toBe("nonce-replayed");
+    expect(await code(verifyHeldPresentation({ sdJwt, siwe: makeSiwe(sdJwt, nonce) }, h.options))).toBe("ok"); // A's nonce is intact
+  });
+  test("caller A's own refusal spends A's nonce; subject other than the caller is refused", async () => {
     const h = harness(); const other = `did:pkh:eip155:1:${toChecksumAddress(addressOf(otherKey))}`;
     const { presentation, nonce } = h.present(undefined, undefined, other);
-    expect(await code(verifyHeldPresentation(presentation, h.options))).toBe("nonce-account-mismatch");
-    expect((await h.store.consume(AUDIENCE, nonce)).existed).toBe(false);
+    expect(await code(verifyHeldPresentation(presentation, { ...h.options, callerAccount: other }))).toBe("nonce-account-mismatch");
+    expect((await h.store.consume(AUDIENCE, nonce, other)).existed).toBe(false);
+  });
+  test("an unbound nonce cannot be issued, and callerAccount is required", async () => {
+    expect(() => new InMemoryNonceStore().issue(AUDIENCE, "" as string)).toThrow(TypeError);
+    const h = harness(); const { presentation } = h.present();
+    expect(await code(verifyHeldPresentation(presentation, { ...h.options, callerAccount: "" }))).toBe("bad-config");
   });
   test("a nonce bound to the subject's own account passes (principal compare)", async () => {
-    const h = harness(); const { presentation } = h.present(undefined, undefined, `did:pkh:eip155:1:${HOLDER_LOWER}`);
+    const h = harness({ callerAccount: `did:pkh:eip155:1:${HOLDER_LOWER}` }); const { presentation } = h.present();
     expect(await code(verifyHeldPresentation(presentation, h.options))).toBe("ok");
   });
   test("the store interface has exactly one checking operation", () => {
