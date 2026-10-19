@@ -2,7 +2,7 @@ import { recoverEip191Address, sha256, verifyEd25519Strict } from "./crypto";
 import { canonicalPkhDid, parsePkhDid, pkhPrincipalsEqual, registryKey } from "./did";
 import { asciiBytes, decodeBase64Url, decodeUtf8, encodeBase64Url, hexToBytes, isAscii, isObject, parseStrictJson, type Json } from "./encoding";
 import { refuse } from "./errors";
-import { IssuerSet, didMethod, isWellFormedKid, type IssuerEntry } from "./issuer-set";
+import { IssuerSet, didMethod, lookupIssuerEntry, isWellFormedKid, type IssuerEntry } from "./issuer-set";
 import type { NonceStore } from "./nonce-store";
 import { DEFAULT_ROWS, findRow, type ProfileRow } from "./rows";
 import { PRESENTATION_STATEMENT, SD_HASH_RESOURCE_PREFIX, assertValidAudience, parseRfc3339, parseStrictSiwe } from "./siwe";
@@ -143,7 +143,7 @@ export async function verifyHeldPresentation(presentation: unknown, options: Ver
   if (!acceptedIssuers.some((a) => a.issuerDid === issuerDid && (a.kid === undefined || a.kid === kid))) refuse("issuer-not-accepted", "issuer is not accepted by this policy");
 
   // 4. entry lookup by the exact pair, then the checks that need only `now`
-  const entry: IssuerEntry | undefined = issuerSet.resolveIssuer(issuerDid, kid as string);
+  const entry: IssuerEntry | undefined = lookupIssuerEntry(issuerSet, issuerDid, kid as string);
   if (!entry) refuse("unknown-issuer", "no issuer-set entry for this kid");
   if (entry.issuerDid !== issuerDid || entry.kid !== kid) refuse("unknown-issuer", "resolved entry is not the requested (issuerDid, kid)");
   const nowMs = now.getTime();

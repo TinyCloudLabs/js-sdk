@@ -204,14 +204,10 @@ describe("issuer selection (R1, lookup, cross-org)", () => {
     const { presentation } = h.present({ signature: () => new Uint8Array(64) });
     expect(await code(verifyHeldPresentation(presentation, h.options))).toBe("issuer-stopped");
   });
-  test("unlisted DID method: refused with no lookup", async () => {
-    let lookups = 0;
+  test("unlisted DID method is refused before any issuer lookup", async () => {
     const real = harness();
-    const spy = parseIssuerSet(setOf(entryA()), { didMethods: METHODS });
-    spy.resolveIssuer = () => { lookups += 1; return undefined; };
     const { presentation } = real.present({ kid: "did:ethr:0xabc#k", iss: "did:ethr:0xabc" });
-    expect(await code(verifyHeldPresentation(presentation, { ...real.options, issuerSet: spy, acceptedIssuers: [{ issuerDid: "did:ethr:0xabc" }] }))).toBe("did-method-not-allowed");
-    expect(lookups).toBe(0);
+    expect(await code(verifyHeldPresentation(presentation, { ...real.options, acceptedIssuers: [{ issuerDid: "did:ethr:0xabc" }] }))).toBe("did-method-not-allowed");
   });
   test("did:key as an issuer is refused unless the caller enabled it", () => {
     const key = { ...entryA(), issuerDid: "did:key:z6MkTest", kid: "did:key:z6MkTest#z6MkTest" };
@@ -764,7 +760,7 @@ describe("TC-1540 Miller 7: exact RFC 3339 in SIWE", () => {
   });
 });
 
-describe("TC-1540 Miller 8: opaque IssuerSet", () => {
+describe("TC-1540 Miller 8 and F1: opaque, immutable IssuerSet", () => {
   test("only parseIssuerSet can create an IssuerSet", () => {
     expect(() => new IssuerSet(Symbol("x"), 1, new Map())).toThrow(TypeError);
     expect(() => (IssuerSet as unknown as () => unknown)()).toThrow();
@@ -779,13 +775,38 @@ describe("TC-1540 Miller 8: opaque IssuerSet", () => {
     expect(IssuerSet.is(real)).toBe(true);
     await expectCode("ok", {}, undefined, { issuerSet: real });
   });
-  test("verify re-checks that the resolved entry is the requested (issuerDid, kid)", async () => {
+  test("resolveIssuer cannot be overridden on the instance or the prototype: the override fails and verification is unchanged", async () => {
     const h = harness({}, [entryA(), entryB()]);
-    const set = h.options.issuerSet;
-    const other = set.resolveIssuer(ISSUER_B, KID_B)!;
-    (set as unknown as { resolveIssuer: unknown }).resolveIssuer = () => other;
-    const { presentation } = h.present();
-    expect(await code(verifyHeldPresentation(presentation, h.options))).toBe("unknown-issuer");
+    const set = h.options.issuerSet as unknown as { resolveIssuer: unknown };
+    const other = h.options.issuerSet.resolveIssuer(ISSUER_B, KID_B)!;
+    // test files are ES modules (strict mode), so assignment to a frozen object throws
+    expect(() => { set.resolveIssuer = () => other; }).toThrow(TypeError);
+    expect(() => Object.defineProperty(set, "resolveIssuer", { value: () => other })).toThrow(TypeError);
+    expect(() => { (IssuerSet.prototype as unknown as { resolveIssuer: unknown }).resolveIssuer = () => other; }).toThrow(TypeError);
+    expect(() => Object.defineProperty(IssuerSet.prototype, "resolveIssuer", { value: () => other })).toThrow(TypeError);
+    expect(() => Object.defineProperty(IssuerSet, "is", { value: () => true })).toThrow(TypeError);
+    expect(Object.isFrozen(set) && Object.isFrozen(IssuerSet.prototype) && Object.isFrozen(IssuerSet)).toBe(true);
+    // an attacker-signed credential (key B, claiming issuer A) still does not verify
+    const { presentation } = h.present({ seed: SEED_B });
+    expect(await code(verifyHeldPresentation(presentation, h.options))).toBe("bad-signature");
+  });
+  test("mutating a returned entry's publicKey bytes does not change a later verification", async () => {
+    const h = harness();
+    const entry = h.options.issuerSet.resolveIssuer(ISSUER_A, KID_A)!;
+    entry.publicKey.set(ed25519.getPublicKey(SEED_B)); // attacker swaps in their own key
+    expect(h.options.issuerSet.resolveIssuer(ISSUER_A, KID_A)!.publicKey).toEqual(ed25519.getPublicKey(SEED_A));
+    const forged = h.present({ seed: SEED_B });
+    expect(await code(verifyHeldPresentation(forged.presentation, h.options))).toBe("bad-signature");
+    const honest = h.present();
+    expect(await code(verifyHeldPresentation(honest.presentation, h.options))).toBe("ok");
+  });
+  test("returned entries are fresh copies, and vcts and profiles are frozen", () => {
+    const real = parseIssuerSet(setOf(entryA()), { didMethods: METHODS });
+    const first = real.resolveIssuer(ISSUER_A, KID_A)!;
+    expect(real.resolveIssuer(ISSUER_A, KID_A)).not.toBe(first);
+    expect(real.resolveIssuer(ISSUER_A, KID_A)!.publicKey).not.toBe(first.publicKey);
+    expect(Object.isFrozen(first.vcts) && Object.isFrozen(first.profiles)).toBe(true);
+    expect(() => (first.vcts as string[]).push("x")).toThrow(TypeError);
   });
   test("resolved entries are frozen", () => {
     const real = parseIssuerSet(setOf(entryA()), { didMethods: METHODS });

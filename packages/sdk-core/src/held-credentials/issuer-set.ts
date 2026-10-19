@@ -21,20 +21,38 @@ export interface IssuerEntry {
 
 const CONSTRUCT = Symbol("IssuerSet.construct");
 
+/** Module-private read of the private entry map; assigned once by the class's static block. */
+let readEntry: (set: IssuerSet, issuerDid: string, kid: string) => IssuerEntry | undefined;
+
+/** A fresh, frozen entry: the public key is a new copy every time, so a caller cannot alter the set. */
+function copyEntry(entry: IssuerEntry): IssuerEntry {
+  return Object.freeze({ ...entry, publicKey: entry.publicKey.slice() });
+}
+
 /**
  * An issuer set that has passed every rule of `parseIssuerSet`. It is opaque: the constructor
  * refuses any caller but `parseIssuerSet`, and the verifier accepts only a genuine instance
- * (`IssuerSet.is`), so a structural object can never stand in for a validated set.
+ * (`IssuerSet.is`), so a structural object can never stand in for a validated set. The instance,
+ * its prototype and the class are frozen, so `resolveIssuer` cannot be replaced, and the verifier
+ * reads entries through the module-private `lookupIssuerEntry`, never through a property.
  */
 export class IssuerSet {
   readonly version: number;
   readonly #entries: ReadonlyMap<string, IssuerEntry>;
+
+  static {
+    readEntry = (set, issuerDid, kid) => {
+      const entry = set.#entries.get(kid);
+      return entry && entry.issuerDid === issuerDid ? copyEntry(entry) : undefined;
+    };
+  }
 
   /** @internal Use `parseIssuerSet`. */
   constructor(token: symbol, version: number, entries: ReadonlyMap<string, IssuerEntry>) {
     if (token !== CONSTRUCT) throw new TypeError("IssuerSet can only be created by parseIssuerSet");
     this.version = version;
     this.#entries = entries;
+    Object.freeze(this);
   }
 
   /** True only for an instance built by `parseIssuerSet` (a real private-field brand check). */
@@ -45,12 +63,18 @@ export class IssuerSet {
   /**
    * The one lookup seam (TC-1132 would plug an allow-listed did:web resolver in here). Returns the
    * FULL entry, never just a key, so vct/profile admission and the validity window come from the
-   * same entry. Exact (issuerDid, kid) match only.
+   * same entry. Exact (issuerDid, kid) match only. Every call returns a copy.
    */
   resolveIssuer(issuerDid: string, kid: string): IssuerEntry | undefined {
-    const entry = this.#entries.get(kid);
-    return entry && entry.issuerDid === issuerDid ? entry : undefined;
+    return readEntry(this, issuerDid, kid);
   }
+}
+Object.freeze(IssuerSet.prototype);
+Object.freeze(IssuerSet);
+
+/** What `verifyHeldPresentation` calls. Not exported from the package index. */
+export function lookupIssuerEntry(set: IssuerSet, issuerDid: string, kid: string): IssuerEntry | undefined {
+  return readEntry(set, issuerDid, kid);
 }
 
 export interface IssuerSetOptions {
@@ -127,8 +151,8 @@ export function parseIssuerSet(raw: unknown, options: IssuerSetOptions): IssuerS
       kid: kid as string,
       alg: "EdDSA",
       publicKey,
-      vcts: stringList(item.vcts, "vcts"),
-      profiles: stringList(item.profiles, "profiles"),
+      vcts: Object.freeze([...stringList(item.vcts, "vcts")]),
+      profiles: Object.freeze([...stringList(item.profiles, "profiles")]),
       notBefore,
       retiredAt,
       notAfter,
