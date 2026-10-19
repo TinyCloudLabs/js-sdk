@@ -214,8 +214,8 @@ TC-1475 (automatic retry of node 503 busy and request_timeout responses in `Serv
 re-signs the invocation on every attempt, plus the web-sdk and node-sdk `retryPolicy` config, #599) was measured
 against master `c7a379c5` and sits on top of TC-1428's root ceilings and TC-1432's first-import, activation and
 worker ceilings. GitHub run 39261202208 on source `b83cf61a` measured the same bytes in both Node jobs: root
-1,475,110 / 1,403,543 B (+349 / +405 over the merge base; ceilings 1,475,184 / 1,403,714 = TC-1428's plus that growth, which keeps #598's 74 / 171 B of landed root headroom), first import 51,925 / 67,138 B (0 / 0), activation 23,114 /
-24,697 B (+8 / +12) and the kv-storage worker 822,620 B (+576). The first-import, activation and worker ceilings are exactly the measured values. The
+1,475,110 / 1,403,543 B (+349 / +405 over the merge base; ceilings exactly the measured values, so #598's freed 74 / 171 B are not handed on), first import 51,925 / 67,138 B (0 / 0), activation 23,114 /
+24,697 B (+8 / +12) and the kv-storage worker 822,620 B (+576). The
 shrink was real: one shared abortable sleep, one signed-request helper and single-line doc comments took the
 worker from 822,915 B (+871) to 822,620 B. The ledger's `tc1475Ratchet` row records it and cannot change later;
 whichever PR lands after it re-measures against the new base and updates its own row.

@@ -1548,7 +1548,9 @@ describe("TC-1475 ServiceContext retry exact-delta ratchet", () => {
     expect(current.tc1475Ratchet).toEqual(approvedTc1475Ratchet);
     const row1475 = approvedTc1475Ratchet;
     for (const format of ["index.mjs", "index.cjs"] as const) {
-      expect(row1475.root.ceiling[format]).toBe(approvedTc1428Ratchet.root.ceiling[format] + row1475.root.delta[format]);
+      // #598 landed -74 / -171 B without a ceiling row; its freed bytes are not handed on, so the ceiling is TC-1428's + delta - those.
+      const freedBy598 = { "index.mjs": 74, "index.cjs": 171 }[format];
+      expect(row1475.root.ceiling[format]).toBe(approvedTc1428Ratchet.root.ceiling[format] + row1475.root.delta[format] - freedBy598);
     }
     for (const format of ["replica.mjs", "replica.cjs"] as const) {
       expect(row1475.firstImport.ceiling[format])
