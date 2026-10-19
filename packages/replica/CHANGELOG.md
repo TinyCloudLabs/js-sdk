@@ -1,5 +1,12 @@
 # @tinycloud/replica
 
+## 0.3.0-beta.6
+
+### Patch Changes
+
+- Updated dependencies [87a137e]
+  - @tinycloud/sdk-services@3.3.0-beta.25
+
 ## 0.3.0-beta.5
 
 ### Patch Changes

@@ -58,6 +58,7 @@
     "replica-shared-contract",
     "replica-sign-out-gate",
     "replica-worker-init-failure",
+    "sdk-node-busy-retry",
     "share-delivery-primary-session",
     "share-index-slice2",
     "share-receiver-non-extractable-key",
