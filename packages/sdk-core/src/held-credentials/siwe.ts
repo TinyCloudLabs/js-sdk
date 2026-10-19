@@ -1,3 +1,4 @@
+import { toChecksumAddress } from "./did";
 import { refuse } from "./errors";
 
 export const PRESENTATION_STATEMENT = "Present a TinyCloud held credential";
@@ -36,6 +37,7 @@ export function parseStrictSiwe(message: string): StrictSiwe {
   if (!head) bad("header line");
   const address = lines[1] ?? "";
   if (!/^0x[0-9a-fA-F]{40}$/.test(address)) bad("address");
+  if (toChecksumAddress(address) !== address) bad("address must be EIP-55 checksummed");
   if (lines[2] !== "") bad("layout");
   const statement = lines[3];
   if (statement === undefined || statement === "") bad("statement");

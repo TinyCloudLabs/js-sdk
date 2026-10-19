@@ -166,8 +166,8 @@ describe("valid presentation", () => {
     const { presentation } = h.present({ disclosures: [["emailDomain", "example.com"]] });
     expect((await verifyHeldPresentation(presentation, h.options)).claims).toEqual({ emailDomain: "example.com" });
   });
-  test("a lowercase sub and a case-only SIWE address difference pass", async () => {
-    await expectCode("ok", { payload: (p) => ({ ...p, sub: `did:pkh:eip155:1:${HOLDER_LOWER}` }) }, { address: HOLDER_LOWER });
+  test("a lowercase sub passes against the checksummed SIWE address (the SIWE address itself must be EIP-55, TC-1540)", async () => {
+    await expectCode("ok", { payload: (p) => ({ ...p, sub: `did:pkh:eip155:1:${HOLDER_LOWER}` }) }, { address: HOLDER });
   });
 });
 
@@ -712,5 +712,28 @@ describe("TC-1540 Miller 5: strict Ed25519 (cofactorless, mixed-order R refused)
     const sig = ed25519.sign(message, SEED_A);
     expect(verifyEd25519Strict(sig, message, T.toRawBytes())).toBe(false);
     expect(verifyEd25519Strict(Uint8Array.from([...Point.ZERO.toRawBytes(), ...sig.subarray(32)]), message, ed25519.getPublicKey(SEED_A))).toBe(false);
+  });
+});
+
+describe("TC-1540 Miller 6: address case and canonical subject", () => {
+  const upper = `0x${HOLDER_LOWER.slice(2).toUpperCase()}`;
+  test("a SIWE address that is lowercase, all-uppercase or badly checksummed is refused; the EIP-55 form passes", async () => {
+    expect(upper).not.toBe(HOLDER_LOWER);
+    for (const address of [HOLDER_LOWER, upper, HOLDER.replace(/[a-f]/i, (c) => (c === c.toLowerCase() ? c.toUpperCase() : c.toLowerCase()))]) {
+      await expectCode("bad-siwe", {}, { address });
+    }
+    await expectCode("ok", {}, { address: HOLDER });
+  });
+  test("an all-uppercase did:pkh address is refused as sub", async () => {
+    expect(pkhPrincipalsEqual(`did:pkh:eip155:1:${upper}`, SUB)).toBe(false);
+    await expectCode("bad-subject", { payload: (p) => ({ ...p, sub: `did:pkh:eip155:1:${upper}`, holderBinding: { did: SUB, signingDomain: BINDING } }) });
+  });
+  test("result.subject is the canonical EIP-55 did:pkh even when the credential carries the lowercase form", async () => {
+    const lowerSub = `did:pkh:eip155:1:${HOLDER_LOWER}`;
+    const h = harness();
+    const { presentation } = h.present({ payload: (p) => ({ ...p, sub: lowerSub, holderBinding: { did: lowerSub, signingDomain: BINDING } }) });
+    const result = await verifyHeldPresentation(presentation, h.options);
+    expect(result.subject).toBe(SUB);
+    expect(result.subjectAddress).toBe(HOLDER_LOWER);
   });
 });

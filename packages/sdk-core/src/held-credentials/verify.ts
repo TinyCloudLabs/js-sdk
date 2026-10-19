@@ -1,5 +1,5 @@
 import { recoverEip191Address, sha256, verifyEd25519Strict } from "./crypto";
-import { parsePkhDid, pkhPrincipalsEqual, registryKey } from "./did";
+import { canonicalPkhDid, parsePkhDid, pkhPrincipalsEqual, registryKey } from "./did";
 import { asciiBytes, decodeBase64Url, decodeUtf8, encodeBase64Url, hexToBytes, isAscii, isObject, parseStrictJson, type Json } from "./encoding";
 import { refuse } from "./errors";
 import { didMethod, isWellFormedKid, type IssuerEntry, type IssuerSet } from "./issuer-set";
@@ -233,7 +233,7 @@ export async function verifyHeldPresentation(presentation: unknown, options: Ver
 
   return {
     issuer: issuerDid,
-    subject: subject as string,
+    subject: canonicalPkhDid(subject) as string,
     subjectAddress: registryKey(subject as string),
     expiresAt: new Date((exp as number) * 1000),
     credentialId: payload.jti as string,
