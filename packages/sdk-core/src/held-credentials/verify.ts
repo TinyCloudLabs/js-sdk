@@ -178,6 +178,7 @@ export async function verifyHeldPresentation(presentation: unknown, options: Ver
   }
   if (payload._sd_alg !== "sha-256") refuse("bad-payload", "_sd_alg must be sha-256");
   if (!Array.isArray(payload._sd) || payload._sd.some((d) => typeof d !== "string")) refuse("bad-payload", "_sd must be a list of digests");
+  if (new Set(payload._sd as string[]).size !== payload._sd.length) refuse("bad-payload", "_sd must not repeat a digest (RFC 9901 section 7.1)");
   const nowSeconds = nowMs / 1000;
   if (nowSeconds < (nbf as number)) refuse("not-yet-valid", "credential is not yet valid");
   if (nowSeconds >= (exp as number)) refuse("expired", "credential has expired");

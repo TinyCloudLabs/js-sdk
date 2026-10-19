@@ -614,3 +614,11 @@ describe("TC-1540 Miller 1: per-segment byte limits", () => {
     expect(await presentRaw(h, `${"a".repeat(HELD_LIMITS.headerSegmentChars)}.${payload}.${sig}~`)).not.toBe("bad-presentation");
   });
 });
+
+describe("TC-1540 Miller 2: duplicate _sd digests", () => {
+  test("a repeated digest in _sd is refused even when the disclosure is genuine", async () => {
+    await expectCode("bad-payload", { payload: (p) => ({ ...p, _sd: [...(p._sd as string[]), (p._sd as string[])[0]] }) });
+    await expectCode("bad-payload", { payload: (p) => ({ ...p, _sd: [...(p._sd as string[]), ...(p._sd as string[])] }) });
+    await expectCode("ok", {});
+  });
+});
