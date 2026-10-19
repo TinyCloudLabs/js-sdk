@@ -6679,16 +6679,8 @@ export class TinyCloudNode {
    * ```typescript
    * const delegations = alice.delegationManager;
    *
-   * // Create a delegation
-   * const result = await delegations.create({
-   *   delegateDID: bob.did,
-   *   path: "shared/",
-   *   actions: ["tinycloud.kv/get", "tinycloud.kv/put"],
-   *   expiry: new Date(Date.now() + 24 * 60 * 60 * 1000), // 24 hours
-   * });
-   *
-   * // List delegations
-   * const listResult = await delegations.list();
+   * // Query account delegations
+   * const page = await delegations.query();
    *
    * // Revoke a delegation
    * await delegations.revoke(delegationCid);
