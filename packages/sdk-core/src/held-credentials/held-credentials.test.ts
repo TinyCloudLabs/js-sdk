@@ -3,6 +3,7 @@ import { ed25519 } from "@noble/curves/ed25519";
 import { secp256k1 } from "@noble/curves/secp256k1";
 import { keccak_256 } from "@noble/hashes/sha3";
 import { sha256 } from "@noble/hashes/sha256";
+import { sha512 } from "@noble/hashes/sha512";
 import {
   HeldCredentialError,
   InMemoryNonceStore,
@@ -18,6 +19,7 @@ import {
 } from "./index";
 import { MAX_JSON_DEPTH, decodeUtf8, asciiBytes, bytesToHex, encodeBase64Url, parseStrictJson } from "./encoding";
 import { HELD_LIMITS } from "./verify";
+import { verifyEd25519Strict } from "./crypto";
 import { EMAIL_HELD_ROW } from "./rows";
 
 const enc = (value: unknown) => encodeBase64Url(new TextEncoder().encode(typeof value === "string" ? value : JSON.stringify(value)));
@@ -670,5 +672,45 @@ describe("TC-1540 Miller 4: integers only", () => {
   test("parseStrictJson number forms", () => {
     for (const bad of ["1.0", "1e3", "1E3", "1.5", "-0", "01", "-", "1.", "[1.0]"]) expect(() => parseStrictJson(bad, "bad-payload")).toThrow(HeldCredentialError);
     for (const good of ["0", "-1", "123456789", "[0,1,-2]"]) expect(() => parseStrictJson(good, "bad-payload")).not.toThrow();
+  });
+});
+
+describe("TC-1540 Miller 5: strict Ed25519 (cofactorless, mixed-order R refused)", () => {
+  const L = ed25519.CURVE.n;
+  const le = (n: bigint, len: number) => { const out = new Uint8Array(len); for (let i = 0; i < len; i += 1) { out[i] = Number(n & 0xffn); n >>= 8n; } return out; };
+  const leNum = (b: Uint8Array) => b.reduceRight((acc, byte) => (acc << 8n) | BigInt(byte), 0n);
+  const Point = ed25519.ExtendedPoint;
+  // an order-8 torsion point (y = c7176a70...037a)
+  const T = Point.fromHex("c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac037a");
+
+  test("the torsion vector is really order 8, and R + T is mixed-order, not small-order", () => {
+    expect(T.multiply(8n).is0()).toBe(true);
+    expect(T.multiply(4n).is0()).toBe(false);
+    expect(T.isSmallOrder()).toBe(true);
+  });
+  test("a signature whose R carries an order-8 component passes noble's cofactored verify but is refused", () => {
+    const seedBytes = seed(7);
+    const message = asciiBytes("mixed-order R");
+    const { scalar: a, pointBytes: A } = ed25519.utils.getExtendedPublicKey(seedBytes);
+    const r = 123456789123456789n;
+    const R = Point.BASE.multiply(r).add(T);
+    expect(R.isSmallOrder()).toBe(false);
+    const Rbytes = R.toRawBytes();
+    const k = leNum(sha512(Uint8Array.from([...Rbytes, ...A, ...message]))) % L;
+    const S = (r + k * a) % L;
+    const signature = Uint8Array.from([...Rbytes, ...le(S, 32)]);
+    expect(ed25519.verify(signature, message, A, { zip215: false })).toBe(true); // noble: cofactored, accepts
+    expect(verifyEd25519Strict(signature, message, A)).toBe(false);
+  });
+  test("an honest signature still verifies", () => {
+    const message = asciiBytes("honest");
+    const pub = ed25519.getPublicKey(SEED_A);
+    expect(verifyEd25519Strict(ed25519.sign(message, SEED_A), message, pub)).toBe(true);
+  });
+  test("a small-order public key and a small-order R are still refused", () => {
+    const message = asciiBytes("x");
+    const sig = ed25519.sign(message, SEED_A);
+    expect(verifyEd25519Strict(sig, message, T.toRawBytes())).toBe(false);
+    expect(verifyEd25519Strict(Uint8Array.from([...Point.ZERO.toRawBytes(), ...sig.subarray(32)]), message, ed25519.getPublicKey(SEED_A))).toBe(false);
   });
 });
