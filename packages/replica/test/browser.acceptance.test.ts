@@ -288,12 +288,28 @@ describe.skipIf(NODE_BIN === undefined)("TC-858 browser replication acceptance (
     if (dataDir !== "") await rm(dataDir, { recursive: true, force: true });
   });
 
+  /** Node requests issued by each page, counted from the page's own `request` events. */
+  const nodeRequestCounts = new WeakMap<Page, { count: number }>();
+  const nodeRequests = (page: Page): number => nodeRequestCounts.get(page)?.count ?? 0;
+
+  /**
+   * Waits until a page's own sign-in work (grant install, start-trigger sync) is over: the page has
+   * sent the node nothing for a quiet period.
+   */
+  async function quiesce(page: Page): Promise<void> {
+    for (let stable = 0; stable < 5;) {
+      const before = nodeRequests(page);
+      await page.waitForTimeout(300);
+      stable = nodeRequests(page) === before ? stable + 1 : 0;
+    }
+  }
+
   /** Opens the fixture in a new page of `context` and boots `TinyCloudWeb`. */
   async function bootPage(
     context: BrowserContext,
     options: {
       prefix?: string;
-      replication?: "on" | "unset" | "disabled";
+      replication?: "on" | "unset" | "disabled" | "registered-disabled";
       walletKey?: string;
       allowSecrets?: boolean;
       grantTtlMs?: number;
@@ -301,6 +317,11 @@ describe.skipIf(NODE_BIN === undefined)("TC-858 browser replication acceptance (
     } = {},
   ): Promise<Page> {
     const page = await context.newPage();
+    const counter = { count: 0 };
+    nodeRequestCounts.set(page, counter);
+    page.on("request", (request) => {
+      if (request.url().startsWith(host) && request.method() !== "OPTIONS") counter.count += 1;
+    });
     await page.goto(`${origin}/`);
     await page.waitForFunction(() => window.__tcw !== undefined);
     await page.evaluate((input) => window.__tcw.boot(input), {
@@ -322,7 +343,11 @@ describe.skipIf(NODE_BIN === undefined)("TC-858 browser replication acceptance (
       await page.evaluate(() => window.__tcw.signIn());
       const walletBefore = await page.evaluate(() => window.__tcw.walletRequests());
       await page.evaluate(() => window.__tcw.replicationSync());
-      await page.waitForTimeout(3_000);
+      // A 4 s grant renews itself well inside the test: wait for the renewal rather than a fixed sleep.
+      await page.waitForFunction(() => window.__tcw.replicationEvents().some((event) => {
+        const entry = event as { type?: string; action?: string };
+        return entry.type === "replication.grant" && entry.action === "renewed";
+      }), undefined, { timeout: 20_000 });
       const { grant } = await statusOf(page);
       expect(grant).not.toBeNull();
       expect(typeof grant?.effectiveExpiresAt).toBe("number");
@@ -330,7 +355,10 @@ describe.skipIf(NODE_BIN === undefined)("TC-858 browser replication acceptance (
       const minted = (await replicationEventsOf(page, "replication.grant")).filter((event) => event.action === "minted");
       expect(minted.length).toBeGreaterThan(0);
       for (const event of minted) expect(event.expiryMs).toBeLessThanOrEqual(4_000);
-      // Renewal comes from the stored session, never from the wallet.
+      const renewed = (await replicationEventsOf(page, "replication.grant")).filter((event) => event.action === "renewed");
+      expect(renewed.length).toBeGreaterThan(0);
+      for (const event of renewed) expect(event.expiryMs).toBeLessThanOrEqual(4_000);
+      // Renewal (a real `renewed` event above) comes from the stored session: zero wallet signatures.
       expect(await page.evaluate(() => window.__tcw.walletRequests())).toBe(walletBefore);
     } finally {
       await closeContext(context);
@@ -343,9 +371,12 @@ describe.skipIf(NODE_BIN === undefined)("TC-858 browser replication acceptance (
       const page = await bootPage(context);
       await page.evaluate(() => window.__tcw.signIn());
       await page.evaluate(() => window.__tcw.replicationSync());
+      const requestsBefore = nodeRequests(page);
       const read = await page.evaluate(() => window.__tcw.kvGet("notes/a"));
       expect(read).toMatchObject({ status: "present", value: "alpha note" });
-      expect(await lastRead(page)).toMatchObject({ source: "replica", outcome: "found" });
+      expect(await lastRead(page)).toMatchObject({ source: "replica", outcome: "found", syncedBeforeRead: false });
+      // Independent of the SDK's own event: the page sent the node no request for this read.
+      expect(nodeRequests(page)).toBe(requestsBefore);
     } finally {
       await closeContext(context);
     }
@@ -478,12 +509,20 @@ describe.skipIf(NODE_BIN === undefined)("TC-858 browser replication acceptance (
       await sibling.evaluate(() => window.__tcw.signIn());
       await page.evaluate(() => window.__tcw.injectDenyFailure({ stage: "deny_tx", once: true }));
       await page.evaluate(() => window.__tcw.signOut());
-      expect(await replicationEventsOf(page, "replication.lifecycle")).toContainEqual(
-        expect.objectContaining({ action: "database_deleted", reason: "sign_out" }),
-      );
-      // The whole replica database is gone, so no sealed row survives for any key.
-      expect(await page.evaluate(() => indexedDB.databases().then((all) => all.map((db) => db.name)))).not.toContain("tinycloud-replica-kv");
-      expect(await contentRows(page)).toBe(0);
+      // The fallback `deleteDatabase` races the sibling tab's open connections. It either completes
+      // (`database_deleted`) or is blocked by a sibling that has not yet released its connection, in
+      // which case the safe path is the marker (`marker_set`, `DELETE_BLOCKED`), the 8c outcome.
+      // Which one happens is timing in the product; either way the fallback ran and nothing is served.
+      const lifecycle = await replicationEventsOf(page, "replication.lifecycle");
+      const deleted = lifecycle.some((event) => event.action === "database_deleted" && event.reason === "sign_out");
+      const blocked = lifecycle.some((event) => event.action === "marker_set" && event.code === "DELETE_BLOCKED");
+      expect(deleted || blocked, JSON.stringify(lifecycle)).toBe(true);
+      if (deleted) {
+        // The whole replica database is gone, so no sealed row survives for any key.
+        expect(await page.evaluate(() => indexedDB.databases().then((all) => all.map((db) => db.name)))).not.toContain("tinycloud-replica-kv");
+        expect(await contentRows(page)).toBe(0);
+      }
+      expect(await page.evaluate(() => window.__tcw.replicationEvents())).not.toContainEqual(expect.objectContaining({ action: "deny_failed" }));
       await sibling.evaluate(() => window.__tcw.kvGet("notes/a"));
       expect(await lastRead(sibling)).toMatchObject({ source: "network", reason: "replica_gated" });
     } finally {
@@ -680,7 +719,7 @@ describe.skipIf(NODE_BIN === undefined)("TC-858 browser replication acceptance (
     }
   });
 
-  scenario("12 two tabs, one context: a commit synced by one tab is served by the other without it syncing", async () => {
+  scenario("12 two tabs, one context: a commit synced by one tab reaches the other, which serves it from its replica without a node request", async () => {
     const context = await newContext();
     try {
       const writer = await bootPage(context);
@@ -688,12 +727,40 @@ describe.skipIf(NODE_BIN === undefined)("TC-858 browser replication acceptance (
       await writer.evaluate(() => window.__tcw.replicationSync());
       const reader = await bootPage(context);
       await reader.evaluate(() => window.__tcw.signIn());
-      // Both tabs hold the same identity and partition. Only the writer syncs after the owner commits.
+      // Both tabs hold the same identity and partition. Only the writer ever syncs from here on,
+      // so first let each tab bind its replica (the first kv call opens it and installs its grant)
+      // and finish its own start work.
+      for (const tab of [writer, reader]) {
+        await tab.evaluate(() => window.__tcw.kvGet("notes/a"));
+        await quiesce(tab);
+      }
+      const peerSyncs = async () =>
+        (await replicationEventsOf(reader, "replication.sync")).filter((event) => event.trigger === "peer").length;
+      const peerBefore = await peerSyncs();
+
       await kvPut("notes/peer", "committed by a peer tab");
+      // Negative control: the commit is on the node but no tab has synced it. The reader's replica
+      // does not have it and the reader must not reach the node to find out.
+      const requestsBeforeControl = nodeRequests(reader);
+      const control = await reader.evaluate(() => window.__tcw.kvGet("notes/peer"));
+      expect(control).not.toHaveProperty("value");
+      expect(await lastRead(reader)).toMatchObject({ source: "replica", outcome: "not_found", syncedBeforeRead: false });
+      expect(nodeRequests(reader)).toBe(requestsBeforeControl);
+
       await writer.evaluate(() => window.__tcw.replicationSync());
+      // The writer's commit is announced to the reader as a peer commit; no work runs in the reader.
+      await reader.waitForFunction(() => window.__tcw.replicationEvents().some((event) => {
+        const entry = event as { type?: string; trigger?: string; origin?: string };
+        return entry.type === "replication.sync" && entry.trigger === "peer" && entry.origin === "peer";
+      }), undefined, { timeout: 15_000 });
+      expect(await peerSyncs()).toBeGreaterThan(peerBefore);
+
+      const requestsBefore = nodeRequests(reader);
       const read = await reader.evaluate(() => window.__tcw.kvGet("notes/peer"));
       expect(read).toMatchObject({ status: "present", value: "committed by a peer tab" });
-      expect(await lastRead(reader)).toMatchObject({ source: "replica", outcome: "found" });
+      expect(await lastRead(reader)).toMatchObject({ source: "replica", outcome: "found", syncedBeforeRead: false });
+      // The reader sent the node nothing (no kv-sync, no kv get) to serve the peer's commit.
+      expect(nodeRequests(reader)).toBe(requestsBefore);
     } finally {
       await closeContext(context);
     }
@@ -701,9 +768,13 @@ describe.skipIf(NODE_BIN === undefined)("TC-858 browser replication acceptance (
 
   scenario("14 flag off is byte-identical to a build without replica code: same requests, no replica chunk or worker", async () => {
     type Seen = { method: string; url: string; headers: string };
-    // Credentials and per-request randomness legitimately differ between any two runs.
+    // Ignored headers, and why: `authorization` is a per-request signed invocation; `tinycloud-*` and
+    // `x-tinycloud-*` carry per-request trace/session ids; `*nonce*`/`*trace*` are random per request;
+    // `date` and `content-length` follow the signed body. Every other header (accept, content-type,
+    // origin, referer, user-agent, sec-ch-ua*, ...) must be identical. The request bodies are signed
+    // per call and are not compared; the method/URL sequence and header set are.
     const volatile = /^(authorization|tinycloud-.*|x-tinycloud-.*|.*nonce.*|.*trace.*|date|content-length)$/i;
-    async function observe(variant: "baseline" | "unset" | "disabled"): Promise<{ signIn: string[]; kv: Seen[]; assets: string[]; workers: number }> {
+    async function observe(variant: "baseline" | "unset" | "disabled" | "registered-disabled"): Promise<{ signIn: string[]; kv: Seen[]; assets: string[]; workers: number }> {
       const context = await newContext();
       try {
         const page = await context.newPage();
@@ -751,6 +822,14 @@ describe.skipIf(NODE_BIN === undefined)("TC-858 browser replication acceptance (
             [apiName, method, arg] as const,
           );
         await run("signIn");
+        // Trailing sign-in requests can land after `signIn` resolves; let them finish so the sign-in
+        // and kv phases are split the same way in every variant.
+        for (let quiet = 0, last = -1; quiet < 4; ) {
+          const seen = signIn.length;
+          await page.waitForTimeout(300);
+          quiet = seen === signIn.length && seen === last ? quiet + 1 : 0;
+          last = signIn.length;
+        }
         phase = "kv";
         await run("kvGet", "notes/a");
         await run("kvGet", "notes/does-not-exist");
@@ -765,12 +844,15 @@ describe.skipIf(NODE_BIN === undefined)("TC-858 browser replication acceptance (
     await observe("baseline"); // warm-up: the first sign-in of a wallet creates its space
     const baseline = await observe("baseline");
     expect(baseline.kv.length).toBeGreaterThan(0);
-    for (const variant of ["unset", "disabled"] as const) {
+    for (const variant of ["unset", "disabled", "registered-disabled"] as const) {
       const flagOff = await observe(variant);
       expect(flagOff.kv).toEqual(baseline.kv);
       expect(flagOff.signIn).toEqual(baseline.signIn);
       expect(flagOff.workers).toBe(0);
-      expect(flagOff.assets.filter((path) => /replica|kv-storage|\.worker|sqlite/i.test(path))).toEqual([]);
+      // With the plugin registered its chunk is present, so only the storage and worker are excluded:
+      // flag off must never open the replica database or start a worker.
+      const forbidden = variant === "registered-disabled" ? /kv-storage|\.worker|sqlite/i : /replica|kv-storage|\.worker|sqlite/i;
+      expect(flagOff.assets.filter((path) => forbidden.test(path))).toEqual([]);
     }
   });
 

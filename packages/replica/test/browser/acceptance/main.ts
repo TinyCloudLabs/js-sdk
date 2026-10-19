@@ -19,9 +19,10 @@ type BootOptions = {
   /**
    * "on": replication enabled (the replica plugin is imported on demand).
    * "unset": no `replication` option at all. "disabled": `{ enabled: false }`.
-   * Neither off mode imports any replica code.
+   * Neither imports any replica code. "registered-disabled": the replica plugin is imported and
+   * registered, then `{ enabled: false }`: replica code is present but the flag is off.
    */
-  replication: "on" | "unset" | "disabled";
+  replication: "on" | "unset" | "disabled" | "registered-disabled";
   allowSecrets?: boolean;
   grantTtlMs?: number;
   maxStalenessMs?: number;
@@ -78,7 +79,14 @@ const api = {
     replicationEventLog.length = 0;
     walletAddress = privateKeyToAccount(options.walletKey as `0x${string}`).address;
     let replicationOptions: Record<string, unknown> = {};
-    if (options.replication === "on") {
+    if (options.replication === "registered-disabled") {
+      const { browserReplicaPlugin } = await import("@tinycloud/web-sdk/replica");
+      if (!pluginRegistered) {
+        registerBrowserReplica(browserReplicaPlugin);
+        pluginRegistered = true;
+      }
+      replicationOptions = { replication: { enabled: false, prefixes: [options.prefix] } };
+    } else if (options.replication === "on") {
       // Replica code is loaded only when replication is requested, so the off modes
       // fetch no replica chunk and register no plugin.
       const { browserReplicaPlugin } = await import("@tinycloud/web-sdk/replica");
