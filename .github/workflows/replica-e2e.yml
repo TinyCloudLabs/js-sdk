@@ -118,6 +118,9 @@ jobs:
         if: success() || failure()
         run: bun packages/replica/scripts/check-worker-size.ts
 
+      - name: Check every replica exports target is packed (TC-858)
+        run: bun packages/replica/scripts/check-pack-exports.ts
+
       - name: Build web-sdk for the Phase 1 dist acceptance
         run: bun run --cwd packages/web-sdk build
 
