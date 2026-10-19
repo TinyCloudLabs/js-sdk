@@ -14,7 +14,8 @@ export interface NativeSharingService {
   decodeLink(token: string): { readonly spaceId: string; readonly path: string };
 }
 
-function canonicalViewerUrl(viewerOrigin: string): URL {
+/** `https://<origin>/viewer` for a canonical HTTPS viewer origin. Also used by share-root bearer links. */
+export function canonicalViewerUrl(viewerOrigin: string): URL {
   const url = new URL(viewerOrigin);
   if (url.protocol !== "https:" || url.origin !== viewerOrigin || url.pathname !== "/" || url.search || url.hash) throw new TypeError("viewer origin must be a canonical HTTPS origin");
   url.pathname = "/viewer";

@@ -1,4 +1,4 @@
-import { ed25519PublicKeyFromDidKey, toBase64Url, fromBase64Url, type CompactUcanAuthorization } from "@tinycloud/share-envelope";
+import { ed25519PublicKeyFromDidKey, signCompactUcanAuthorization, toBase64Url, fromBase64Url, type CompactUcanAuthorization } from "@tinycloud/share-envelope";
 import type { AddressedOwnerRootInput, AddressedOwnerRootReceipt } from "./addressed-publish.js";
 import { decodeOwnerRootCacao, ownerRootCacaoCid, type DecodedOwnerRootCacao } from "./owner-root-cacao.js";
 import { createDelegatedShareKey, type CreateOwnerDelegationParams, type DelegatedShareKey, type OwnerDelegationPermission, type OwnerDelegationReceipt } from "./owner-policy.js";
@@ -543,6 +543,32 @@ export class ShareRoot {
   /** True while the root is live, its key is held, and it lasts at least until `expiresAt`. Revocation is not visible here. */
   covers(expiresAt: Date, now: number = this.#now()): boolean {
     return this.#key !== undefined && now < this.expiresAt.getTime() && expiresAt.getTime() <= this.expiresAt.getTime();
+  }
+
+  /**
+   * Sign a 60-second `POST /revoke` invocation, by the share key, for one
+   * delegation this root issued (a bearer link). Zero approvals. The Node
+   * authorizes it because the share key is that delegation's delegator. The
+   * root itself is never revoked this way: only the owner does that.
+   */
+  async signLinkRevocation(input: { readonly delegationCid: string; readonly nodeDid: string }): Promise<string> {
+    const key = this.#activeKey();
+    if (typeof input.delegationCid !== "string" || !/^b[a-z2-7]+$/.test(input.delegationCid)) throw new ShareRootError("invalid-request", "delegation CID is invalid");
+    if (input.delegationCid === this.cid) throw new ShareRootError("invalid-request", "the share key does not revoke its own root; the owner does");
+    try { ed25519PublicKeyFromDidKey(input.nodeDid); } catch { throw new ShareRootError("invalid-request", "node DID must be an Ed25519 did:key"); }
+    const now = seconds(this.#now());
+    const revocation = await signCompactUcanAuthorization({
+      issuerDid: key.did,
+      audienceDid: input.nodeDid,
+      attenuation: { [`urn:cid:${input.delegationCid}`]: { "tinycloud.delegation/revoke": [{}] } },
+      facts: [{}],
+      proofs: [],
+      notBefore: now,
+      expiresAt: now + 60,
+      nonce: `urn:uuid:${crypto.randomUUID()}`,
+      sign: (bytes) => key.sign(bytes),
+    });
+    return revocation.authorization;
   }
 
   /**

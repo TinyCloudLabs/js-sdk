@@ -4,7 +4,9 @@
 // Owner wallet approvals per action (TC-1423 D3, per-share networks):
 // - Share root (`ShareRoot.create` / a re-root in `ensureShareRoot`): 1. It is
 //   kv/bearer only and never decrypts.
-// - Bearer link under a root (`signBearerLink`): 0.
+// - Bearer link under a root (`publishRootBearerLink`): 0.
+// - Revoke of one bearer link by the share key (`revokeRootBearerLink`): 0;
+//   by the owner (owner SIWE `POST /revoke`): 1.
 // - Addressed (email/domain) or edit share (`ShareGrant.prepare` +
 //   `approve`): 1 per share, covering its exact KV key and its own network
 //   `share-<shareId>`. Creating that network (`ensureNetwork`), policy
@@ -20,13 +22,15 @@
 //   `:share` or any other network) and are sized by bytes: each signed
 //   `Authorization` value stays within SHARE_CONTROL_HEADER_BUDGET_BYTES
 //   (30,000; the production ingress refuses values above 32,751 bytes),
-//   which fits 34 shares per control with the `applications`/`default`
+//   which fits 33 to 37 shares per control depending on the shareId length
+//   (33 for UUIDs, 34 for 32-hex ids) with the `applications`/`default`
 //   delegation rows. Every control carries those rows, so on v1.20.6 and
-//   NODE-B2 N4' a kill-all of L shares costs ceil(L/34) approvals (measured
-//   live across two controls). Node 1.21.0 and N1b refuse control revokes of
-//   decrypt-bearing grants: each such grant then needs 1 more owner SIWE
-//   (`revokeFallback`), so L shares cost ceil(L/34) + L. The networks are
-//   retired first either way, so decrypt is cut before any grant revoke.
+//   NODE-B2 N4' a kill-all of L shares costs ceil(L/n) approvals, n from the
+//   plan (measured live across two controls). Node 1.21.0 and N1b refuse
+//   control revokes of decrypt-bearing grants: each such grant then needs 1
+//   more owner SIWE (`revokeFallback`), so L shares cost ceil(L/n) + L. The
+//   networks are retired first either way, so decrypt is cut before any
+//   grant revoke.
 export {
   AGENT_SHARE_ROOT_MAX_LIFETIME_MS, SHARE_ROOT_CLOCK_SKEW_MS, SHARE_ROOT_LINK_MAX_LIFETIME_MS, SHARE_ROOT_MAX_LIFETIME_MS, SHARE_ROOT_PREFIX,
   SHARE_ROOT_REQUEST_MARGIN_MS, ShareRoot, ShareRootError, ensureShareRoot,
@@ -42,3 +46,4 @@ export type { EditShareReader, PendingShareGrant, ShareGrantAccess, ShareGrantRe
 export { SHARE_NETWORK_NAME_PREFIX, assertNetworkSafeShareId, perShareNetworkIdFor } from "./share-network.js";
 export { SHARE_CONTROL_HEADER_BUDGET_BYTES, SHARE_CONTROL_LIFETIME_MS, planShareControlBatches, runShareControlBatch } from "./share-control.js";
 export type { ShareControlBatch, ShareControlOwner, ShareControlResult, ShareControlTarget } from "./share-control.js";
+export { publishRootBearerLink, revokeRootBearerLink, type RootBearerLink } from "./share-root-link.js";
