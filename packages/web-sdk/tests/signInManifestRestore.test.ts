@@ -1,11 +1,11 @@
-import { expect, mock, test } from "bun:test";
+import { describe, expect, mock, test } from "bun:test";
 import { IDBKeyRange as fakeIDBKeyRange, indexedDB as fakeIndexedDB } from "fake-indexeddb";
 import { createIndexedDbLifecycle, inspectReplicaKeyPresence } from "../../replica/src/kv-storage/lifecycle";
 import { indexedDbReplicaStorage } from "../../replica/src/kv-storage/client";
 import { TinyCloudNode as ReplicationNode, getNodeReplicationLoaders, registerReplicationLoaders } from "@tinycloud/node-sdk/core";
 import { assertValidReplicationConfig } from "@tinycloud/node-sdk/replication/authority";
 import { PROOF_PRIVATE_KEY, signedRestorableSession } from "../../node-sdk/src/test-support/signed-restorable-session";
-import { pkhDid } from "@tinycloud/sdk-core";
+import { pkhDid, signLocationRecord } from "@tinycloud/sdk-core";
 import { createMemoryPendingStore } from "../../sdk-services/src/kv/replication/memoryPendingStore";
 
 const { TextEncoder: TE, TextDecoder: TD } = require("util");
@@ -1348,4 +1348,80 @@ test("useDelegation() and useRuntimeDelegation() waiting for initialisation are 
   expect((runtimeError as Error).message).toContain("cancelled by sign-out");
   expect(node.useDelegation).not.toHaveBeenCalled();
   expect(node.useRuntimeDelegation).not.toHaveBeenCalled();
+});
+
+describe("registryPolicy fail-closed through TinyCloudWeb (TC-1443)", () => {
+  const REGISTRY = "https://registry.test";
+  const owner = new PrivateKeySigner(PROOF_PRIVATE_KEY);
+
+  /** A persisted walletless session with no hosts, so restore resolves one. */
+  async function restoreWithoutHosts(registry: () => Promise<Response>) {
+    const address = await owner.getAddress();
+    const storage = {
+      save: mock(async () => undefined),
+      load: mock(async () => ({
+        address,
+        chainId: 1,
+        sessionKey: JSON.stringify({ kty: "OKP", crv: "Ed25519", d: "private" }),
+        siwe: "siwe",
+        signature: "signature",
+        tinycloudSession: {
+          delegationHeader: { Authorization: "Bearer persisted" },
+          delegationCid: "bafy-restored-account",
+          spaceId: `tinycloud:pkh:eip155:1:${address}:default`,
+          verificationMethod: "did:key:default",
+        },
+        expiresAt: "2099-01-01T00:00:00.000Z",
+        createdAt: "2026-01-01T00:00:00.000Z",
+        version: "1.0",
+      })),
+      clear: mock(async () => undefined),
+    };
+    const requests: string[] = [];
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const url = String(input);
+      requests.push(url);
+      if (url.startsWith(`${REGISTRY}/`)) return registry();
+      throw new TypeError(`unreachable: ${url}`);
+    }) as typeof fetch;
+    try {
+      const tcw = new TinyCloudWeb({
+        sessionStorage: storage,
+        registryPolicy: "fail-closed",
+        tinycloudRegistryUrl: REGISTRY,
+        autoDiscoverLocalNode: false,
+      });
+      return { tcw, result: await tcw.restoreSession(address), requests };
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  }
+
+  test("an unavailable registry fails the restore instead of using the hosted node", async () => {
+    const { result, requests } = await restoreWithoutHosts(async () => new Response("down", { status: 503 }));
+
+    expect(result.status).toBe("restore-failed");
+    expect(result.error).toMatchObject({ code: "registry_unavailable" });
+    expect(requests.every((url) => url.startsWith(`${REGISTRY}/`))).toBe(true);
+  });
+
+  test("a registered owner is restored onto the record's host", async () => {
+    const { tcw, result } = await restoreWithoutHosts(async () => {
+      const record = await signLocationRecord(
+        {
+          version: 1,
+          subject: pkhDid(await owner.getAddress(), 1),
+          multiaddrs: ["/dns4/my.node.example/tcp/443/https"],
+          updated_at: "2026-10-18T00:00:00.000Z",
+          sequence: 1,
+        },
+        { type: "did:pkh", signMessage: (message: string) => owner.signMessage(message) },
+      );
+      return Response.json({ record });
+    });
+
+    expect(result.status).toBe("restored");
+    expect(tcw._node.hosts[0]).toBe("https://my.node.example");
+  });
 });
