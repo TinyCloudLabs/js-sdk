@@ -3,8 +3,6 @@
  * The transport and store interfaces are the frozen TC-18/TC-19 contract.
  */
 
-import type { ReplicaConsentSource } from "@tinycloud/sdk-services/kv/replication/grantPolicyTypes";
-
 /** One row of `tinycloud.kv/sync`: a key's latest state. */
 export type Change =
   | { key: string; deleted: false; etag: string; metadata: Record<string, string> }
@@ -59,18 +57,6 @@ export type ReplicaConfig = {
   retentionGrantCid: string | null;
 };
 
-/**
- * Grant lifetime policy persisted with an installed grant (CONTRACT.md §3). Instants are ms since
- * epoch. A null field means the stored value is missing or unusable, and the grant fails closed.
- */
-export type GrantPolicyRecord = {
-  installedAt: number | null;
-  effectiveExpiresAt: number | null;
-  consentDeadline: number | null;
-  consentAnchorAt: number | null;
-  consentAnchorSource: ReplicaConsentSource | null;
-};
-
 /** A signed grant as installed in the store. */
 export type GrantRecord = {
   cid: string;
@@ -81,8 +67,6 @@ export type GrantRecord = {
   /** Leaf window (seconds since epoch), an install check and upper bound only. */
   notBefore: number | null;
   expiresAt: number | null;
-  /** Present only when the controller set `grantPolicy`; absent means no policy (Phase 1). */
-  policy?: GrantPolicyRecord;
 };
 
 export type Coverage = "empty" | "bootstrapping" | "complete";

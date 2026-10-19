@@ -5,10 +5,8 @@ import { join } from "node:path";
 
 import { ReplicaError, ReplicaErrorCode, isReplicaError } from "../errors.js";
 import { assertFolderPrefix, effectiveAuthority } from "../scope.js";
-import type { ReplicaConsentSource } from "@tinycloud/sdk-services/kv/replication/grantPolicyTypes";
 import type {
   Coverage,
-  GrantPolicyRecord,
   GrantRecord,
   LeaseToken,
   ListOpts,
@@ -23,27 +21,8 @@ import type {
 } from "../types.js";
 import { loadSqlite, type SqliteDatabase, type SqliteOpener, type SqlValue } from "./driver.js";
 
-const SCHEMA_VERSION = 2;
+const SCHEMA_VERSION = 1;
 export const DURABILITY = "sqlite-wal-synchronous-full+fsynced-blobs";
-
-/**
- * Grant policy columns, added in schema 2. A fresh replica gets them from the migration in `open`,
- * and a v1 replica gets the missing ones the same way, so the migration is safe to repeat.
- * Millisecond bounds use REAL affinity: INTEGER affinity rejects `Infinity`, and a malformed
- * value must be stored and then refused on read (fail closed), not fail the write.
- */
-const POLICY_COLUMNS: Record<string, string> = {
-  grant_installed_at: "REAL",
-  grant_effective_expires_at: "REAL",
-  grant_consent_deadline: "REAL",
-  grant_consent_anchor_at: "REAL",
-  grant_consent_anchor_source: "TEXT",
-  pending_grant_installed_at: "REAL",
-  pending_grant_effective_expires_at: "REAL",
-  pending_grant_consent_deadline: "REAL",
-  pending_grant_consent_anchor_at: "REAL",
-  pending_grant_consent_anchor_source: "TEXT",
-};
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS replica (
@@ -128,16 +107,6 @@ type ReplicaRow = {
   pending_grant_issuer: string | null;
   pending_grant_nbf: number | null;
   pending_grant_exp: number | null;
-  grant_installed_at: number | null;
-  grant_effective_expires_at: number | null;
-  grant_consent_deadline: number | null;
-  grant_consent_anchor_at: number | null;
-  grant_consent_anchor_source: ReplicaConsentSource | null;
-  pending_grant_installed_at: number | null;
-  pending_grant_effective_expires_at: number | null;
-  pending_grant_consent_deadline: number | null;
-  pending_grant_consent_anchor_at: number | null;
-  pending_grant_consent_anchor_source: ReplicaConsentSource | null;
   node_did: string | null;
   attested: number;
   not_before: string | null;
@@ -169,10 +138,6 @@ type EntryRow = {
   content: number;
 };
 
-/**
- * Builds a grant from its columns. The policy is attached only when at least one policy column is
- * set, so a grant stored without one (Phase 1) reads back with no `policy` key at all.
- */
 function grantOf(
   cid: string | null,
   bytes: Uint8Array | null,
@@ -180,12 +145,9 @@ function grantOf(
   issuer: string | null,
   nbf: number | null,
   exp: number | null,
-  policy: GrantPolicyRecord,
 ): GrantRecord | null {
   if (cid === null || bytes === null || audience === null || issuer === null) return null;
-  const grant: GrantRecord = { cid, bytes: new Uint8Array(bytes), audience, issuer, notBefore: nbf, expiresAt: exp };
-  const hasPolicy = Object.values(policy).some((value) => value !== null);
-  return hasPolicy ? { ...grant, policy } : grant;
+  return { cid, bytes: new Uint8Array(bytes), audience, issuer, notBefore: nbf, expiresAt: exp };
 }
 
 function entryOf(row: EntryRow): LocalEntry {
@@ -379,10 +341,6 @@ export class SqliteReplicaStore implements ReplicaStore {
       if (version < SCHEMA_VERSION) {
         db.exec("BEGIN IMMEDIATE");
         db.exec(SCHEMA);
-        const present = new Set(db.all<{ name: string }>("PRAGMA table_info(replica)").map((c) => c.name));
-        for (const [column, type] of Object.entries(POLICY_COLUMNS)) {
-          if (!present.has(column)) db.exec(`ALTER TABLE replica ADD COLUMN ${column} ${type}`);
-        }
         db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`);
         db.exec("COMMIT");
       }
@@ -492,13 +450,7 @@ export class SqliteReplicaStore implements ReplicaStore {
         localReadPolicy: row.local_read_policy,
         retentionGrantCid: row.retention_grant_cid,
       },
-      grant: grantOf(row.grant_cid, row.grant_bytes, row.grant_audience, row.grant_issuer, row.grant_nbf, row.grant_exp, {
-        installedAt: row.grant_installed_at,
-        effectiveExpiresAt: row.grant_effective_expires_at,
-        consentDeadline: row.grant_consent_deadline,
-        consentAnchorAt: row.grant_consent_anchor_at,
-        consentAnchorSource: row.grant_consent_anchor_source,
-      }),
+      grant: grantOf(row.grant_cid, row.grant_bytes, row.grant_audience, row.grant_issuer, row.grant_nbf, row.grant_exp),
       pendingGrant: grantOf(
         row.pending_grant_cid,
         row.pending_grant_bytes,
@@ -506,13 +458,6 @@ export class SqliteReplicaStore implements ReplicaStore {
         row.pending_grant_issuer,
         row.pending_grant_nbf,
         row.pending_grant_exp,
-        {
-          installedAt: row.pending_grant_installed_at,
-          effectiveExpiresAt: row.pending_grant_effective_expires_at,
-          consentDeadline: row.pending_grant_consent_deadline,
-          consentAnchorAt: row.pending_grant_consent_anchor_at,
-          consentAnchorSource: row.pending_grant_consent_anchor_source,
-        },
       ),
       nodeDid: row.node_did,
       authority: row.attested === 1 ? { notBefore: row.not_before, expiresAt: row.expires_at, retainUntil: row.retain_until } : null,
@@ -574,23 +519,15 @@ export class SqliteReplicaStore implements ReplicaStore {
       const row = this.#row();
       if (row === undefined) throw new ReplicaError(ReplicaErrorCode.NOT_FOUND, "The replica has not been created.");
       if (row.grant_cid === g.cid || row.pending_grant_cid === g.cid) return;
-      const policy = g.policy;
       this.#db.run(
         `UPDATE replica SET pending_grant_cid = ?, pending_grant_bytes = ?, pending_grant_audience = ?,
-           pending_grant_issuer = ?, pending_grant_nbf = ?, pending_grant_exp = ?,
-           pending_grant_installed_at = ?, pending_grant_effective_expires_at = ?, pending_grant_consent_deadline = ?,
-           pending_grant_consent_anchor_at = ?, pending_grant_consent_anchor_source = ?, pending_grant_error = NULL WHERE id = 1`,
+           pending_grant_issuer = ?, pending_grant_nbf = ?, pending_grant_exp = ?, pending_grant_error = NULL WHERE id = 1`,
         g.cid,
         g.bytes,
         g.audience,
         g.issuer,
         g.notBefore,
         g.expiresAt,
-        policy?.installedAt ?? null,
-        policy?.effectiveExpiresAt ?? null,
-        policy?.consentDeadline ?? null,
-        policy?.consentAnchorAt ?? null,
-        policy?.consentAnchorSource ?? null,
       );
     });
   }
@@ -600,8 +537,6 @@ export class SqliteReplicaStore implements ReplicaStore {
       this.#db.run(
         `UPDATE replica SET pending_grant_cid = NULL, pending_grant_bytes = NULL, pending_grant_audience = NULL,
            pending_grant_issuer = NULL, pending_grant_nbf = NULL, pending_grant_exp = NULL, pending_grant_error = NULL,
-           pending_grant_installed_at = NULL, pending_grant_effective_expires_at = NULL, pending_grant_consent_deadline = NULL,
-           pending_grant_consent_anchor_at = NULL, pending_grant_consent_anchor_source = NULL,
            last_error = ? WHERE id = 1 AND pending_grant_cid = ?`,
         JSON.stringify({
           at: new Date(this.#now()).toISOString(),
@@ -815,20 +750,6 @@ export class SqliteReplicaStore implements ReplicaStore {
             const g = p.promoteGrant;
             sets.push("grant_cid = ?", "grant_bytes = ?", "grant_audience = ?", "grant_issuer = ?", "grant_nbf = ?", "grant_exp = ?");
             params.push(g.cid, g.bytes, g.audience, g.issuer, g.notBefore, g.expiresAt);
-            sets.push(
-              "grant_installed_at = ?",
-              "grant_effective_expires_at = ?",
-              "grant_consent_deadline = ?",
-              "grant_consent_anchor_at = ?",
-              "grant_consent_anchor_source = ?",
-            );
-            params.push(
-              g.policy?.installedAt ?? null,
-              g.policy?.effectiveExpiresAt ?? null,
-              g.policy?.consentDeadline ?? null,
-              g.policy?.consentAnchorAt ?? null,
-              g.policy?.consentAnchorSource ?? null,
-            );
             // Clear the pending slot only if it still holds the grant just validated.
             if (this.#row()!.pending_grant_cid === g.cid) {
               sets.push(
@@ -839,11 +760,6 @@ export class SqliteReplicaStore implements ReplicaStore {
                 "pending_grant_nbf = NULL",
                 "pending_grant_exp = NULL",
                 "pending_grant_error = NULL",
-                "pending_grant_installed_at = NULL",
-                "pending_grant_effective_expires_at = NULL",
-                "pending_grant_consent_deadline = NULL",
-                "pending_grant_consent_anchor_at = NULL",
-                "pending_grant_consent_anchor_source = NULL",
               );
             }
           }

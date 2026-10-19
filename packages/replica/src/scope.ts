@@ -1,5 +1,5 @@
 import { ReplicaError, ReplicaErrorCode } from "./errors.js";
-import type { AuthorityState, AuthorityWindow, GrantPolicyRecord, GrantRecord, LocalReadPolicy } from "./types.js";
+import type { AuthorityState, AuthorityWindow, GrantRecord, LocalReadPolicy } from "./types.js";
 import { assertFolderPrefix as assertPureFolderPrefix } from "@tinycloud/sdk-services/kv/replication/prefix";
 
 /** Replication prefixes are the whole space (`/`) or a slash-terminated folder. */
@@ -96,30 +96,12 @@ export function effectiveAuthority(input: {
 }): EffectiveAuthority {
   const notBefore = maxIso(input.window?.notBefore ?? null, input.grant?.notBefore ?? null);
   const expiresAt = minIso(input.window?.expiresAt ?? null, input.grant?.expiresAt ?? null);
-  const policyBound = policyBoundMs(input.grant?.policy);
-  const policyExpired = policyBound !== null && input.now >= policyBound;
-  // A policy expiry is not extended by node-attested retention, so it clears retainUntil.
-  const retainUntil = input.policy === "retainAfterExpiry" && !policyExpired ? input.window?.retainUntil ?? null : null;
+  const retainUntil = input.policy === "retainAfterExpiry" ? input.window?.retainUntil ?? null : null;
   let state: AuthorityState = "valid";
   if (input.revoked !== null) state = "revoked";
   else if (notBefore !== null && input.now < Date.parse(notBefore)) state = "not-yet-valid";
-  else if (policyExpired || (expiresAt !== null && input.now >= Date.parse(expiresAt))) state = "expired";
+  else if (expiresAt !== null && input.now >= Date.parse(expiresAt)) state = "expired";
   return { state, notBefore, expiresAt, retainUntil, retentionRevoked: (input.retentionRevoked ?? null) !== null };
-}
-
-/**
- * The instant at which the grant policy stops local reads: the earlier of the
- * effective expiry and the consent deadline. Returns `null` when the grant has
- * no policy (Phase 1, unchanged) and `-Infinity` when a bound is missing or
- * non-finite, so a malformed policy fails closed.
- */
-function policyBoundMs(policy: GrantPolicyRecord | undefined): number | null {
-  if (policy === undefined) return null;
-  const bounds = [policy.effectiveExpiresAt, policy.consentDeadline];
-  if (!bounds.every((bound): bound is number => typeof bound === "number" && Number.isFinite(bound))) {
-    return Number.NEGATIVE_INFINITY;
-  }
-  return Math.min(...bounds);
 }
 
 /**
