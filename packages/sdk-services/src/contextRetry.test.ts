@@ -67,6 +67,15 @@ describe("ServiceContext node retry", () => {
     expect(node.calls).toHaveLength(2);
   });
 
+  test("reports attempts and total backoff on the returned response", async () => {
+    const node = fakeNode([busy("1"), busy("2"), ok]);
+    const pending = contextFor(node.fetch).fetch("https://node/invoke");
+    await advance(3000);
+    expect((await pending).retry).toEqual({ attempts: 3, backoffMs: 3000 });
+    const first = await contextFor(fakeNode([ok]).fetch).fetch("https://node/invoke");
+    expect(first.retry).toEqual({ attempts: 1, backoffMs: 0 });
+  });
+
   test("honours Retry-After instead of the jittered backoff", async () => {
     const node = fakeNode([busy("2"), ok]);
     const pending = contextFor(node.fetch).fetch("https://node/invoke");

@@ -979,7 +979,7 @@ export class KVService extends BaseService implements IKVService {
       ));
     }
     const data = await this.parseResponse<T>(response, options?.raw, options?.binary);
-    return ok({ data: data as T, headers: this.createResponseHeaders(response.headers) });
+    return ok({ data: data as T, headers: this.createResponseHeaders(response.headers), ...(response.retry && { retry: response.retry }) });
   }
 
   async batchGet<T = unknown>(
@@ -1092,6 +1092,7 @@ export class KVService extends BaseService implements IKVService {
     return ok({
       data: undefined as void,
       headers: this.createResponseHeaders(response.headers),
+      ...(response.retry && { retry: response.retry }),
     });
   }
 
@@ -1812,6 +1813,7 @@ export class KVService extends BaseService implements IKVService {
     return ok({
       data: undefined as void,
       headers: this.createResponseHeaders(response.headers),
+      ...(response.retry && { retry: response.retry }),
     });
   }
 

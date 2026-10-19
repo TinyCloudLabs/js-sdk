@@ -45,6 +45,7 @@ export type {
   IService,
   ServiceSession,
   RetryPolicy,
+  RetryStats,
   InvokeFunction,
   InvokeAnyFunction,
   InvokeAnyEntry,

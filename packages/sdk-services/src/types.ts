@@ -256,6 +256,16 @@ export interface FetchResponse {
   blob(): Promise<Blob>;
   /** Present on standard Responses; the retry reads a clone so the caller's body stays intact. */
   clone?(): FetchResponse;
+  /** Set by `ServiceContext.fetch` on the response it returns: how many requests it took. */
+  retry?: RetryStats;
+}
+
+/** What automatic retry cost one request, so latency can be split from backoff. */
+export interface RetryStats {
+  /** Requests sent, including the first (1 means no retry). */
+  attempts: number;
+  /** Total milliseconds spent waiting between attempts. */
+  backoffMs: number;
 }
 
 /**

@@ -44,6 +44,7 @@ program
   .option("--no-cache", "Disable caching")
   .option("-q, --quiet", "Suppress non-essential output")
   .option("--json", "Force JSON output")
+  .option("--no-retry", "Do not retry node busy/timeout answers (monitors and probes); same as TINYCLOUD_RETRY=0")
   .option("--replication", "Enable read-through replication for this invocation")
   .option("--no-replication", "Disable read-through replication for this invocation")
   .option("--replication-debug", "Write replication diagnostics to stderr")
@@ -51,6 +52,7 @@ program
 program.hook("preAction", async (thisCommand) => {
   const opts = thisCommand.optsWithGlobals();
   setJsonOutputRequested(opts.json === true);
+  if (opts.retry === false) process.env.TINYCLOUD_RETRY = "0";
   const parentName = thisCommand.parent?.name();
   const isShareCommand = parentName === "share" || thisCommand.name() === "share";
   if (!opts.quiet && !isShareCommand) {

@@ -424,16 +424,21 @@ export class ServiceContext implements IServiceContext {
   ): Promise<FetchResponse> {
     const policy = this._retryPolicy;
     const startedAt = Date.now();
+    let backoffMs = 0;
     for (let attempt = 1; ; attempt++) {
       const response = await fetchFn(url, request);
-      if (attempt >= policy.maxAttempts || response.status !== 503 || !response.clone) return response;
+      const done = (): FetchResponse => {
+        try { response.retry = { attempts: attempt, backoffMs }; } catch { /* frozen custom response */ }
+        return response;
+      };
+      if (attempt >= policy.maxAttempts || response.status !== 503 || !response.clone) return done();
       const text = await response.clone().text().catch(() => "");
       const error = nodeRetryError("", "", response, text);
       if (!error || error.meta?.retryable !== true || !policy.retryableErrors.includes(error.code)) {
-        return response;
+        return done();
       }
       const remaining = (policy.maxTotalMs ?? Infinity) - (Date.now() - startedAt);
-      if (remaining <= 0) return response;
+      if (remaining <= 0) return done();
       const retryAfterMs = error.meta.retryAfterMs;
       const step = Math.min(
         policy.maxDelayMs,
@@ -448,6 +453,7 @@ export class ServiceContext implements IServiceContext {
         remaining,
       );
       await sleep(delay, request.signal);
+      backoffMs += delay;
     }
   }
 

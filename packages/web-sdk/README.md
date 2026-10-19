@@ -322,7 +322,10 @@ applied nothing, so the SDK retries on its own: up to 4 attempts in about 12 s, 
 `Retry-After` when sent, otherwise exponentially with full jitter (250 ms base, 4 s cap). It stops
 early on abort or the per-request `timeout`, and returns the last typed error once the budget is
 spent. `OUTCOME_UNKNOWN` is never retried. Tune or opt out with `retryPolicy`; `{ maxAttempts: 1 }`
-(or `retryableErrors: []`) disables it.
+(or `retryableErrors: []`) disables it. Monitors and probes should disable retries. A successful KV response carries
+`retry: { attempts, backoffMs }`, so latency can be split from backoff. The CLI disables retries
+with `--no-retry` or `TINYCLOUD_RETRY=0`, and its `kv get|put|delete --json` output reports
+`attempts` and `backoffMs`.
 
 ```typescript
 const tcw = new TinyCloudWeb({ retryPolicy: { maxAttempts: 1 } });
