@@ -17,6 +17,8 @@ async function nodeScenario(body: string, enable = true) {
     import {mkdir,rm,readFile,readdir,writeFile,lstat,symlink} from 'node:fs/promises';
     import {join} from 'node:path';
     import {setTimeout as sleep} from 'node:timers/promises';
+    import {once} from 'node:events';
+    import {Worker} from 'node:worker_threads';
     const {DiagnosticStore,createDiagnosticRuntime,makeDiagnosticContext,resolveDiagnosticTenant,reviewDiagnosticSnapshot,DIAGNOSTIC_LIMITS} = await import(pathToFileURL(process.env.DIAGNOSTIC_ENTRY).href);
     const root = join(process.env.HOME,'diagnostics');
     const store = new DiagnosticStore(root);
@@ -172,6 +174,102 @@ test("hosted producer discovery never creates tenant maps and honors explicit op
   expect(result.stale).toBe(false);
   expect(result.events).toEqual([9]);
 });
+
+test("bounded close preserves child-death observation after delayed delivery and admits the next root only after death", async () => {
+  // Real bridge/child timers run in separate Node isolates; fake test clocks cannot
+  // reproduce late close delivery. Admission is gated on the observed exit below.
+  const result = await nodeScenario(`
+    const original = Worker.prototype.postMessage;
+    const nextRoot = join(process.env.HOME,'next');
+    const nextPartition = await resolveDiagnosticTenant(nextRoot,'service',{create:true});
+    const nextStore = new DiagnosticStore(nextRoot,nextPartition);
+    await nextStore.control('enable',{scope:'tc-apps'});
+    const next = createDiagnosticRuntime({root:nextRoot,source:'mcp_http',hosted:true});
+    const {promise:released,resolve:release} = Promise.withResolvers();
+    let delivery;
+    let death;
+    let delayed;
+    Worker.prototype.postMessage = function(message,...rest) {
+      if (!delayed && message?.type === 'close') {
+        delayed = this;
+        // Model a long-lived host while observing its unreferenced helper exit.
+        this.ref();
+        death = once(this,'exit',{signal:AbortSignal.timeout(8000)});
+        delivery = Promise.all([sleep(2600),released]).then(() => original.call(this,message,...rest));
+        return;
+      }
+      return original.call(this,message,...rest);
+    };
+    try {
+      const accepted = runtime.emit({type:'operation.step',ordinal:17},context);
+      const started = performance.now();
+      await runtime.close();
+      const elapsed = performance.now()-started;
+      const observerAlive = delayed?.threadId !== -1;
+      const beforeDeath = await next.bindingForTenant('service');
+      release();
+      await delivery;
+      await death;
+      Worker.prototype.postMessage = original;
+      const admitted = await next.bindingForTenant('service');
+      if (!admitted) throw new Error('Completed shutdown poisoned the next root');
+      const nextAccepted = next.emit({type:'operation.step',ordinal:19},makeDiagnosticContext(admitted,'mcp_http'));
+      await next.close();
+      console.log(JSON.stringify({
+        accepted,elapsed,observerAlive,blocked:beforeDeath===undefined,nextAccepted,
+        first:(await store.snapshot({all:true})).events.filter(event=>event.type==='operation.step').map(event=>event.ordinal),
+        next:(await nextStore.snapshot({all:true})).events.filter(event=>event.type==='operation.step').map(event=>event.ordinal),
+      }));
+    } finally {
+      release();
+      Worker.prototype.postMessage = original;
+      await delivery;
+      delayed?.unref();
+      await next.close();
+    }
+  `);
+  expect(result.elapsed).toBeLessThan(4000);
+  expect(result.observerAlive).toBe(true);
+  expect(result.blocked).toBe(true);
+  expect(result.accepted).toBe(true);
+  expect(result.first).toEqual([17]);
+  expect(result.nextAccepted).toBe(true);
+  expect(result.next).toEqual([19]);
+}, 15_000);
+
+test("unknown bridge death never releases the native writer reservation on elapsed cleanup time", async () => {
+  // Elapse the real child-watchdog window without treating it as proof of death.
+  const result = await nodeScenario(`
+    const original = Worker.prototype.postMessage;
+    let bridge;
+    Worker.prototype.postMessage = function(message,...rest) {
+      if (!bridge && message?.type === 'close') { bridge = this; return; }
+      return original.call(this,message,...rest);
+    };
+    try {
+      runtime.drainSync(0);
+      if (!bridge) throw new Error('Synthetic bridge was not captured');
+      await bridge.terminate();
+    } finally { Worker.prototype.postMessage = original; }
+    const nextRoot = join(process.env.HOME,'unknown-child');
+    const nextStore = new DiagnosticStore(nextRoot);
+    await nextStore.control('enable',{scope:'tc-apps'});
+    const next = createDiagnosticRuntime({root:nextRoot,source:'cli'});
+    try {
+      const before = await next.binding();
+      await sleep(2600);
+      const after = await next.binding();
+      console.log(JSON.stringify({
+        before:before===undefined,after:after===undefined,health:next.health(),
+        events:(await nextStore.snapshot({all:true})).events,
+      }));
+    } finally { await next.close(); }
+  `);
+  expect(result.before).toBe(true);
+  expect(result.after).toBe(true);
+  expect(result.health).toMatchObject({ failure: "worker", ready: false, accepted: 0, pending: 0 });
+  expect(result.events).toEqual([]);
+}, 15_000);
 
 test.each(["TC_HOME", "TC_APPS_STATE"] as const)("packaged worker rejects protected roots through %s aliases", async (variable) => {
   const result = await nodeScenario(`

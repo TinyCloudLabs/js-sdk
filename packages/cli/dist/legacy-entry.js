@@ -161,7 +161,7 @@ async function activate(activity) {
     });
     const binding = await state2.runtime.binding();
     if (!binding) return void 0;
-    state2.context = makeDiagnosticContext(binding, "cli", links);
+    state2.context = makeDiagnosticContext(binding, "cli", { ...links, scope: "tc-apps" });
     state2.activity = activity;
     state2.runtime.emit({ type: "invocation.start", activity: activity ?? "unknown" }, state2.context);
     if (state2.imported) state2.runtime.emit({ type: "phase.finish", phase: "import" }, state2.context);
@@ -172,17 +172,25 @@ async function activate(activity) {
   }
 }
 async function cliDiagnosticScope(service, target) {
+  if (typeof target !== "string" || !(service === "kv" ? target.startsWith("xyz.tinycloud.agent-data/") : target === "xyz.tinycloud.agent-data.index")) return void 0;
   const state2 = globals[stateKey];
   const context = getDiagnosticContext() ?? state2?.context;
-  if (context) {
+  if (context?.scope === "tc-apps") {
     if (state2) state2.activity = service;
     return context;
   }
-  if (typeof target !== "string") return void 0;
-  if (service === "kv" ? target.startsWith("xyz.tinycloud.agent-data/") : target === "xyz.tinycloud.agent-data.index") {
-    return activate(service);
+  return activate(service);
+}
+async function cliDiagnosticPermissions(permissions) {
+  if (!permissions?.length) return void 0;
+  let activity;
+  for (const permission of permissions) {
+    if (permission.service === "tinycloud.capabilities" && permission.path === "" && permission.actions.every((action) => action === "tinycloud.capabilities/read")) continue;
+    if (permission.service === "tinycloud.kv" && permission.path?.startsWith("xyz.tinycloud.agent-data/")) activity = "kv";
+    else if (permission.service === "tinycloud.sql" && permission.path === "xyz.tinycloud.agent-data.index") activity = "sql";
+    else return void 0;
   }
-  return void 0;
+  return activity === void 0 ? void 0 : activate(activity);
 }
 async function withCliDiagnosticPhase(phase, fields, action, completed) {
   const current = getDiagnosticContext();
@@ -18106,7 +18114,7 @@ async function restoreProfileSessionNode(ctx) {
   const key = await ProfileManager.getKey(ctx.profile);
   try {
     const node = new TinyCloudNode({
-      telemetry: getDiagnosticContext2() ? diagnosticTelemetry : void 0,
+      telemetry: getDiagnosticContext2()?.scope === "tc-apps" ? diagnosticTelemetry : void 0,
       host: ctx.host,
       ...profile.authMethod === "local" && profile.privateKey ? { privateKey: profile.privateKey } : {}
     });
@@ -18128,7 +18136,7 @@ async function storedSessionVerifiesLocally(profileName2) {
     if (!session || typeof session.delegationCid !== "string" || typeof session.spaceId !== "string" || session.delegationHeader === null || typeof session.delegationHeader !== "object" || !("Authorization" in session.delegationHeader) || typeof session.delegationHeader.Authorization !== "string") return true;
     const key = await ProfileManager.getKey(profileName2);
     const node = new TinyCloudNode({
-      telemetry: getDiagnosticContext2() ? diagnosticTelemetry : void 0,
+      telemetry: getDiagnosticContext2()?.scope === "tc-apps" ? diagnosticTelemetry : void 0,
       host: profile.host ?? DEFAULT_HOST,
       ...local ? { privateKey: profile.privateKey } : {}
     });
@@ -18162,7 +18170,7 @@ async function createSDKInstance(ctx, options) {
         process.stderr.write("[replication] Enabled, but this profile has no configured prefixes; reads use the network.\n");
       }
       const node2 = new TinyCloudNode({
-        telemetry: getDiagnosticContext2() ? diagnosticTelemetry : void 0,
+        telemetry: getDiagnosticContext2()?.scope === "tc-apps" ? diagnosticTelemetry : void 0,
         host: ctx.host,
         privateKey: effectivePrivateKey,
         ...replication2 ? { replication: replication2 } : {}
@@ -18193,7 +18201,7 @@ async function createSDKInstance(ctx, options) {
       process.stderr.write("[replication] Enabled, but this profile has no configured prefixes; reads use the network.\n");
     }
     const node = new TinyCloudNode({
-      telemetry: getDiagnosticContext2() ? diagnosticTelemetry : void 0,
+      telemetry: getDiagnosticContext2()?.scope === "tc-apps" ? diagnosticTelemetry : void 0,
       host: ctx.host,
       privateKey: options?.privateKey,
       ...replication ? { replication } : {}
@@ -20942,7 +20950,7 @@ async function localKeySignIn(options) {
     options.replication !== void 0
   );
   const node = new TinyCloudNode3({
-    telemetry: getDiagnosticContext4() ? diagnosticTelemetry2 : void 0,
+    telemetry: getDiagnosticContext4()?.scope === "tc-apps" ? diagnosticTelemetry2 : void 0,
     privateKey: options.privateKey,
     host: options.host,
     autoCreateSpace: true,
@@ -21889,7 +21897,7 @@ init_raw_encryption();
 init_owner_did();
 init_publishing_manifest();
 init_diagnostics();
-import { beginDiagnosticPhase as beginDiagnosticPhase5, emitDiagnostic as emitDiagnostic7 } from "@tinycloud/operations/diagnostics";
+import { beginDiagnosticPhase as beginDiagnosticPhase5, emitDiagnostic as emitDiagnostic7, enterDiagnosticContext } from "@tinycloud/operations/diagnostics";
 init_theme();
 
 // src/commands/auth-grants.ts
@@ -22472,6 +22480,7 @@ function registerAuthCommand(program, options) {
         ...replicationOptions,
         ownerOpenKey: options2.device !== true && resolveProfilePosture(profileConfig ?? {}) === "owner-openkey"
       });
+      enterDiagnosticContext(await cliDiagnosticPermissions(loginPermissions));
       const persistHost = globalOpts.host !== void 0;
       if (options2.device) {
         const { profile, result } = await loginWithDeviceAuthorization({
@@ -22653,6 +22662,7 @@ ${signInAgainHint(ctx.profile, posture ?? void 0)}
         throw new CLIError("INVALID_ARGUMENT", "--device requires --grant on an OpenKey owner profile.", ExitCode.USAGE_ERROR);
       }
       const requested = await collectRequestedPermissions(options2, ctx.profile);
+      enterDiagnosticContext(await cliDiagnosticPermissions(requested));
       const expiryOption = parseExpiryOption(options2.expiry);
       if (requested.length === 0) {
         throw new CLIError(
@@ -22798,6 +22808,7 @@ ${signInAgainHint(ctx.profile, posture ?? void 0)}
       });
       const parsed = JSON.parse(raw);
       if (isCompatiblePermissionRequestArtifact(parsed)) {
+        enterDiagnosticContext(await cliDiagnosticPermissions(parsed.requested));
         await appendPermissionRequestArtifact(ctx.profile, parsed);
         outputJson({
           imported: true,
@@ -22947,6 +22958,7 @@ ${signInAgainHint(ctx.profile, posture ?? void 0)}
         );
       }
       const requested = await resolvePermissionSpaces(parsed.requested, ctx.profile);
+      enterDiagnosticContext(await cliDiagnosticPermissions(requested));
       const resolvedRequest = { ...parsed, requested };
       const node = await ensureAuthenticated(ctx);
       await ensureDelegationAuthority({
@@ -22983,6 +22995,7 @@ ${signInAgainHint(ctx.profile, posture ?? void 0)}
           ExitCode.NOT_FOUND
         );
       }
+      enterDiagnosticContext(await cliDiagnosticPermissions(artifact.requested));
       const node = await ensureAuthenticated(ctx);
       const covered = node.hasRuntimePermissions(artifact.requested);
       if (options2.exec) {
@@ -23236,6 +23249,14 @@ function isRequestBoundDelegationEnvelope(value) {
   return candidate.kind === "tinycloud.auth.delegation" && candidate.version === 1 && Object.hasOwn(candidate, "requestId");
 }
 async function importRequestBoundDelegationWithBootstrap(ctx, artifact) {
+  try {
+    if (typeof artifact === "object" && artifact !== null && "requestId" in artifact && typeof artifact.requestId === "string") {
+      const request = await getPermissionRequestArtifact(ctx.profile, artifact.requestId);
+      enterDiagnosticContext(await cliDiagnosticPermissions(request?.requested));
+    }
+  } catch {
+    enterDiagnosticContext(void 0);
+  }
   const session = await ProfileManager.getSession(ctx.profile);
   if (session !== null) {
     await importRequestBoundDelegation(ctx, artifact);
@@ -24967,7 +24988,7 @@ init_space();
 init_host();
 init_theme();
 init_diagnostics();
-import { emitDiagnostic as emitDiagnostic8, enterDiagnosticContext, getDiagnosticContext as getDiagnosticContext5 } from "@tinycloud/operations/diagnostics";
+import { emitDiagnostic as emitDiagnostic8, enterDiagnosticContext as enterDiagnosticContext2, getDiagnosticContext as getDiagnosticContext5 } from "@tinycloud/operations/diagnostics";
 async function throwKvError(error, spaceUri, profileName2) {
   const hosted = await unhostedSpaceError(error, spaceUri, profileName2);
   if (hosted) throw hosted;
@@ -24999,7 +25020,7 @@ function registerKvCommand(program) {
   kv.command("get <key>").description("Get a value by key").option("--raw", "Output raw value (no JSON wrapping)").option("-o, --output <file>", "Write value to file").option("--space <name|uri>", "Target a non-primary space (short name or full URI)").action(async (key, options, cmd) => {
     try {
       assertAddressableKey(key);
-      enterDiagnosticContext(await cliDiagnosticScope("kv", key));
+      enterDiagnosticContext2(await cliDiagnosticScope("kv", key));
       emitDiagnostic8({ type: "operation.step", service: "kv", action: "get", requested: 1 });
       const globalOpts = cmd.optsWithGlobals();
       const ctx = await withCliDiagnosticPhase("preparation", { service: "local" }, () => ProfileManager.resolveContext(globalOpts));
@@ -25050,7 +25071,7 @@ function registerKvCommand(program) {
   kv.command("put <key> [value]").description("Set a value").option("--file <path>", "Read value from file").option("--stdin", "Read value from stdin").option("--space <name|uri>", "Target a non-primary space (short name or full URI)").action(async (key, value, options, cmd) => {
     try {
       assertAddressableKey(key);
-      enterDiagnosticContext(await cliDiagnosticScope("kv", key));
+      enterDiagnosticContext2(await cliDiagnosticScope("kv", key));
       emitDiagnostic8({ type: "operation.step", service: "kv", action: "put", requested: 1, mutation: "not_dispatched" });
       const globalOpts = cmd.optsWithGlobals();
       const ctx = await withCliDiagnosticPhase("preparation", { service: "local" }, () => ProfileManager.resolveContext(globalOpts));
@@ -25092,7 +25113,7 @@ function registerKvCommand(program) {
   kv.command("delete <key>").description("Delete a key").option("--space <name|uri>", "Target a non-primary space (short name or full URI)").action(async (key, options, cmd) => {
     try {
       assertAddressableKey(key);
-      enterDiagnosticContext(await cliDiagnosticScope("kv", key));
+      enterDiagnosticContext2(await cliDiagnosticScope("kv", key));
       emitDiagnostic8({ type: "operation.step", service: "kv", action: "delete", requested: 1, mutation: "not_dispatched" });
       const globalOpts = cmd.optsWithGlobals();
       const ctx = await withCliDiagnosticPhase("preparation", { service: "local" }, () => ProfileManager.resolveContext(globalOpts));
@@ -25112,7 +25133,7 @@ function registerKvCommand(program) {
   kv.command("list").description("List keys").option("--prefix <prefix>", "Filter by key prefix").option("--space <name|uri>", "Target a non-primary space (short name or full URI)").option("--limit <n>", "Keys per page, 1-1000 (the node's default otherwise)").option("--cursor <cursor>", "Continue from a previous page's nextCursor").option("--all", "Follow nextCursor until the listing is complete").action(async (options, cmd) => {
     try {
       if (options.prefix) assertAddressableKey(options.prefix);
-      enterDiagnosticContext(await cliDiagnosticScope("kv", options.prefix));
+      enterDiagnosticContext2(await cliDiagnosticScope("kv", options.prefix));
       const limit = options.limit === void 0 ? void 0 : Number(options.limit);
       if (limit !== void 0 && (!Number.isInteger(limit) || limit < 1 || limit > 1e3)) {
         emitDiagnostic8({ type: "operation.step", phase: "input_validation", outcome: "fail", error_class: "input_invalid", mutation: "not_dispatched" });
@@ -25192,7 +25213,7 @@ function registerKvCommand(program) {
   kv.command("head <key>").description("Get metadata for a key (no body)").option("--space <name|uri>", "Target a non-primary space (short name or full URI)").action(async (key, options, cmd) => {
     try {
       assertAddressableKey(key);
-      enterDiagnosticContext(await cliDiagnosticScope("kv", key));
+      enterDiagnosticContext2(await cliDiagnosticScope("kv", key));
       const globalOpts = cmd.optsWithGlobals();
       const ctx = await withCliDiagnosticPhase("preparation", { service: "local" }, () => ProfileManager.resolveContext(globalOpts));
       const node = await ensureAuthenticated(ctx);
@@ -37028,7 +37049,7 @@ init_diagnostics();
 import { CLI_NAME as CLI_NAME27 } from "@tinycloud/operations/cli-name";
 import { writeFile as writeFile5 } from "fs/promises";
 import { resolve as resolve4 } from "path";
-import { emitDiagnostic as emitDiagnostic9, enterDiagnosticContext as enterDiagnosticContext2, getDiagnosticContext as getDiagnosticContext6 } from "@tinycloud/operations/diagnostics";
+import { emitDiagnostic as emitDiagnostic9, enterDiagnosticContext as enterDiagnosticContext3, getDiagnosticContext as getDiagnosticContext6 } from "@tinycloud/operations/diagnostics";
 async function dbHandle(node, dbName, spaceInput, profileName2) {
   const spaceUri = await resolveSpaceUri(spaceInput, profileName2);
   const sql = spaceUri ? node.sqlForSpace(spaceUri) : node.sql;
@@ -37082,7 +37103,7 @@ Output:
   { "columns": string[], "rows": unknown[][], "rowCount": number }.
 `).action(async (sqlStr, options, cmd) => {
     try {
-      enterDiagnosticContext2(await cliDiagnosticScope("sql", options.db));
+      enterDiagnosticContext3(await cliDiagnosticScope("sql", options.db));
       const globalOpts = cmd.optsWithGlobals();
       const ctx = await withCliDiagnosticPhase("preparation", { service: "local" }, () => ProfileManager.resolveContext(globalOpts));
       const node = await ensureAuthenticated(ctx);
@@ -37129,7 +37150,7 @@ Output:
   Returns JSON with the changed row count and last inserted row id when available.
 `).action(async (sqlStr, options, cmd) => {
     try {
-      enterDiagnosticContext2(await cliDiagnosticScope("sql", options.db));
+      enterDiagnosticContext3(await cliDiagnosticScope("sql", options.db));
       emitDiagnostic9({ type: "operation.step", service: "sql", action: "execute", mutation: "not_dispatched" });
       const globalOpts = cmd.optsWithGlobals();
       const ctx = await withCliDiagnosticPhase("preparation", { service: "local" }, () => ProfileManager.resolveContext(globalOpts));
@@ -37164,7 +37185,7 @@ Output:
   Writes the database file locally and returns JSON with the path and size.
 `).action(async (options, cmd) => {
     try {
-      enterDiagnosticContext2(await cliDiagnosticScope("sql", options.db));
+      enterDiagnosticContext3(await cliDiagnosticScope("sql", options.db));
       const globalOpts = cmd.optsWithGlobals();
       const ctx = await withCliDiagnosticPhase("preparation", { service: "local" }, () => ProfileManager.resolveContext(globalOpts));
       const node = await ensureAuthenticated(ctx);
@@ -37211,8 +37232,7 @@ Notes:
     AND sql/write on destination. Otherwise the relevant operation will fail.
 `).action(async (options, cmd) => {
     try {
-      enterDiagnosticContext2(await cliDiagnosticScope("sql", options.fromDb));
-      enterDiagnosticContext2(await cliDiagnosticScope("sql", options.toDb));
+      enterDiagnosticContext3(await cliDiagnosticScope("sql", options.fromDb === options.toDb ? options.fromDb : void 0));
       const globalOpts = cmd.optsWithGlobals();
       const ctx = await withCliDiagnosticPhase("preparation", { service: "local" }, () => ProfileManager.resolveContext(globalOpts));
       const node = await ensureAuthenticated(ctx);

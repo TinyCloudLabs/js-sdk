@@ -277,8 +277,7 @@ Notes:
 `)
     .action(async (options, cmd) => {
       try {
-        enterDiagnosticContext(await cliDiagnosticScope("sql", options.fromDb));
-        enterDiagnosticContext(await cliDiagnosticScope("sql", options.toDb));
+        enterDiagnosticContext(await cliDiagnosticScope("sql", options.fromDb === options.toDb ? options.fromDb : undefined));
         const globalOpts = cmd.optsWithGlobals();
         const ctx = await withCliDiagnosticPhase("preparation", { service: "local" }, () => ProfileManager.resolveContext(globalOpts));
         const node = await ensureAuthenticated(ctx);

@@ -19,16 +19,12 @@ const stateKey = Symbol.for("tinycloud.cli.diagnostics.v1");
 const globals = globalThis as typeof globalThis & { [stateKey]?: CliDiagnosticState };
 
 /** No argv, profile, input, output or resource values enter this state. */
-export async function initializeCliDiagnostics(): Promise<DiagnosticContext | undefined> {
+export function initializeCliDiagnostics(): void {
   try {
     globals[stateKey] = {
       started: performance.now(), finished: false, imported: false, parsed: false,
     };
     process.once("exit", finishCliDiagnostics);
-    const links = decodeDiagnosticContext(process.env.TC_DIAGNOSTICS_CONTEXT);
-    if (links?.scope === "tc-apps") {
-      return await activate();
-    }
   } catch { /* Capture cannot change business execution. */ }
 }
 
@@ -48,7 +44,7 @@ async function activate(activity?: "kv" | "sql"): Promise<DiagnosticContext | un
     });
     const binding = await state.runtime.binding();
     if (!binding) return undefined;
-    state.context = makeDiagnosticContext(binding, "cli", links);
+    state.context = makeDiagnosticContext(binding, "cli", { ...links, scope: "tc-apps" });
     state.activity = activity;
     // Do not install signal handlers: even a re-raising listener can turn an
     // otherwise fatal startup signal into a natural exit before its JS callback.
@@ -64,17 +60,31 @@ async function activate(activity?: "kv" | "sql"): Promise<DiagnosticContext | un
 
 /** Called only after the business parser has accepted the target. */
 export async function cliDiagnosticScope(service: "kv" | "sql", target: string | undefined): Promise<DiagnosticContext | undefined> {
+  if (typeof target !== "string"
+    || !(service === "kv" ? target.startsWith("xyz.tinycloud.agent-data/") : target === "xyz.tinycloud.agent-data.index")) return undefined;
   const state = globals[stateKey];
   const context = getDiagnosticContext() ?? state?.context;
-  if (context) {
+  if (context?.scope === "tc-apps") {
     if (state) state.activity = service;
     return context;
   }
-  if (typeof target !== "string") return undefined;
-  if (service === "kv" ? target.startsWith("xyz.tinycloud.agent-data/") : target === "xyz.tinycloud.agent-data.index") {
-    return activate(service);
+  return activate(service);
+}
+
+/** Approval work is scoped by its accepted request, never by a shared profile or launch marker. */
+export async function cliDiagnosticPermissions(
+  permissions: readonly { service: string; path?: string; actions: readonly string[] }[] | undefined,
+): Promise<DiagnosticContext | undefined> {
+  if (!permissions?.length) return undefined;
+  let activity: "kv" | "sql" | undefined;
+  for (const permission of permissions) {
+    if (permission.service === "tinycloud.capabilities" && permission.path === ""
+      && permission.actions.every((action) => action === "tinycloud.capabilities/read")) continue;
+    if (permission.service === "tinycloud.kv" && permission.path?.startsWith("xyz.tinycloud.agent-data/")) activity = "kv";
+    else if (permission.service === "tinycloud.sql" && permission.path === "xyz.tinycloud.agent-data.index") activity = "sql";
+    else return undefined;
   }
-  return undefined;
+  return activity === undefined ? undefined : activate(activity);
 }
 
 /** One immutable child scope for a CLI phase and its actual SDK dispatches. */

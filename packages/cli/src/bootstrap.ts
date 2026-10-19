@@ -1,4 +1,3 @@
-import { enterDiagnosticContext, emitDiagnostic } from "@tinycloud/operations/diagnostics";
 import { firstCommandIndex } from "./command-token.js";
 import { initializeCliDiagnostics } from "./lib/diagnostics.js";
 import type * as DiagnosticsEntry from "./diagnostics-entry.js";
@@ -11,10 +10,8 @@ if (args[commandIndex] === "diagnostics") {
   const entry = await load(new URL("./diagnostics-entry.js", import.meta.url).href) as typeof DiagnosticsEntry;
   await entry.runDiagnostics(args);
 } else {
-  const context = await initializeCliDiagnostics();
-  if (context) enterDiagnosticContext(context);
-  emitDiagnostic({ type: "phase.start", phase: "import" });
-  // Unhandled import errors retain Node's original reporting and exit status;
-  // the synchronous exit observer records whichever boundary was reached.
+  initializeCliDiagnostics();
+  // Startup retains native failures. Capture begins only after a command
+  // accepts a tc-apps target or approval request.
   await load(new URL("./index.js", import.meta.url).href);
 }

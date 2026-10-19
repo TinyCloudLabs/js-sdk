@@ -66,10 +66,7 @@ describe("built diagnostic CLI", () => {
         expect(result.stderr).toEqual(off.stderr);
       }
       const snapshot = await new DiagnosticStore(fixture.root).snapshot({ all: true });
-      expect(snapshot.events.filter((event) => event.type === "invocation.start")).toHaveLength(1);
-      expect(snapshot.events.filter((event) => event.type === "invocation.finish")).toHaveLength(1);
-      expect(snapshot.events.find((event) => event.type === "invocation.finish")?.exit_code).toBe(off.status!);
-      expect(snapshot.events.some((event) => event.activity === "parser" && event.outcome === "error")).toBe(true);
+      expect(snapshot.events).toEqual([]);
     } finally { fixture.cleanup(); }
   }, 30_000);
 
@@ -92,8 +89,7 @@ describe("built diagnostic CLI", () => {
           expect(result.stderr).toEqual(off.stderr);
         }
         const snapshot = await new DiagnosticStore(fixture.root).snapshot({ all: true });
-        expect(snapshot.events.filter((event) => event.type === "invocation.start")).toHaveLength(1);
-        expect(snapshot.events.filter((event) => event.type === "invocation.finish")).toHaveLength(1);
+        expect(snapshot.events).toEqual([]);
         expect(existsSync(fixture.env.TC_HOME)).toBe(false);
       } finally { fixture.cleanup(); }
     }, 30_000);
@@ -134,25 +130,19 @@ describe("built diagnostic CLI", () => {
           expect(result.stderr).toEqual(off.stderr);
         }
         const snapshot = await new DiagnosticStore(fixture.root).snapshot({ all: true });
-        if (fault === "signal") {
-          // Native signal death is not intercepted to fabricate a completed
-          // invocation; even the early evidence is best effort.
-          expect(snapshot.events.filter((event) => event.type === "invocation.finish")).toEqual([]);
-        } else {
-          expect(snapshot.events.filter((event) => event.type === "invocation.finish")).toHaveLength(1);
-          expect(snapshot.events.some((event) => event.phase === "import" && event.outcome === "error")).toBe(true);
-        }
+        // Import failure/signal happens before a target has been accepted.
+        expect(snapshot.events).toEqual([]);
         expect(JSON.stringify(snapshot)).not.toContain("synthetic_private_import_canary");
         expect(existsSync(fixture.env.TC_HOME)).toBe(false);
       } finally { fixture.cleanup(); }
     });
   }
 
-  test("run linkage alone and unrelated KV targets leave no history; validated app targets activate late", async () => {
+  test("shared launch scope and unrelated KV targets leave no history; validated app targets activate late", async () => {
     const fixture = sandbox();
     try {
       expect(fixture.cli(["diagnostics", "enable", "--scope", "tc-apps"]).status).toBe(0);
-      const linkage = JSON.stringify({ version: 1, run_id: randomUUID() });
+      const linkage = JSON.stringify({ version: 1, scope: "tc-apps", run_id: randomUUID() });
       fixture.cli(["--json", "kv", "get", "unrelated/synthetic"], { TC_DIAGNOSTICS_CONTEXT: linkage });
       fixture.cli(["--help"], { TC_DIAGNOSTICS_CONTEXT: linkage });
       fixture.cli(["--json", "kv", "get", "xyz.tinycloud.agent-data/invalid key"], { TC_DIAGNOSTICS_CONTEXT: linkage });
@@ -196,7 +186,7 @@ describe("built diagnostic CLI", () => {
       const block = `
         const {spawnSync}=require("node:child_process"),cli=process.argv[1];
         const context=JSON.parse(process.env.TC_DIAGNOSTICS_CONTEXT);
-        const failed=spawnSync(process.execPath,[cli,"kv","get"],{encoding:"utf8"});
+        const failed=spawnSync(process.execPath,[cli,"kv","get","xyz.tinycloud.agent-data/synthetic"],{encoding:"utf8"});
         const nested=spawnSync(process.execPath,[cli,"diagnostics","run","--scope","tc-apps","--",process.execPath,"-e","process.stdout.write(process.env.TC_DIAGNOSTICS_CONTEXT)"],{encoding:"utf8"});
         if(nested.status!==0)process.exit(98);
         process.stdout.write(JSON.stringify({context,nested:JSON.parse(nested.stdout),failure:failed.status}));
@@ -237,9 +227,18 @@ describe("built diagnostic CLI", () => {
       const guard = join(fixture.home, "deny-network.cjs");
       writeFileSync(guard, `function deny(){throw new Error("network_disabled_in_synthetic_paste_fixture");}globalThis.fetch=deny;for(const name of ["node:http","node:https"]){const module=require(name);module.request=deny;module.get=deny;}`, { mode: 0o600 });
       const context = { TC_DIAGNOSTICS_CONTEXT: JSON.stringify({ version: 1, scope: "tc-apps" }), NODE_OPTIONS: `--require=${guard}` };
-      const args = ["--json", "--profile", profile, "auth", "login", "--method", "openkey", "--paste"];
+      const manifest = join(fixture.home, "apps-manifest.json");
+      writeFileSync(manifest, JSON.stringify({
+        manifest_version: 1, app_id: "xyz.tinycloud.agent-data", name: "Synthetic apps",
+        space: "applications", defaults: false,
+        permissions: [{ service: "tinycloud.sql", path: "xyz.tinycloud.agent-data.index", skipPrefix: true, actions: ["read", "write"] }],
+      }), { mode: 0o600 });
+      const args = ["--json", "--profile", profile, "auth", "login", "--method", "openkey", "--paste", "--manifest", manifest];
       const off = fixture.cli(args, context);
       expect(fixture.cli(["diagnostics", "enable", "--scope", "tc-apps"]).status).toBe(0);
+      const unrelated = fixture.cli(["--json", "--profile", profile, "auth", "login", "--method", "openkey", "--paste"], context);
+      expect(unrelated.status).toBe(3);
+      expect((await new DiagnosticStore(fixture.root).snapshot({ all: true })).events).toEqual([]);
       const on = fixture.cli(args, context);
       const failed = join(fixture.home, "failed-sink");
       writeFileSync(failed, "synthetic", { mode: 0o600 });
@@ -267,6 +266,8 @@ describe("built diagnostic CLI", () => {
       expect(fixture.cli(["diagnostics", "enable", "--scope", "tc-apps"]).status).toBe(0);
       fixture.cli(["--json", "sql", "query", "SELECT 'xyz.tinycloud.agent-data.index'", "--db", "unrelated"]);
       fixture.cli(["--json", "sql", "query", "SELECT 1", "--db", "xyz.tinycloud.agent-data.index-sibling"]);
+      fixture.cli(["--json", "sql", "copy", "--from-db", "xyz.tinycloud.agent-data.index", "--to-db", "unrelated"]);
+      fixture.cli(["--json", "sql", "copy", "--from-db", "unrelated", "--to-db", "xyz.tinycloud.agent-data.index"]);
       const store = new DiagnosticStore(fixture.root);
       expect((await store.snapshot({ all: true })).events).toEqual([]);
       const result = fixture.cli(["--json", "sql", "query", "SELECT 1", "--db", "xyz.tinycloud.agent-data.index"]);
@@ -283,7 +284,7 @@ describe("built diagnostic CLI", () => {
     const recipient = sandbox();
     try {
       expect(fixture.cli(["diagnostics", "enable", "--scope", "tc-apps"]).status).toBe(0);
-      fixture.cli(["--help"], { TC_DIAGNOSTICS_CONTEXT: JSON.stringify({ version: 1, scope: "tc-apps" }) });
+      fixture.cli(["kv", "get", "xyz.tinycloud.agent-data/synthetic"], { TC_DIAGNOSTICS_CONTEXT: JSON.stringify({ version: 1, scope: "tc-apps" }) });
       expect(fixture.cli(["diagnostics", "pause"]).status).toBe(0);
       const selection = join(fixture.home, "selection.json");
       writeFileSync(selection, JSON.stringify({ all: true }), { mode: 0o600 });

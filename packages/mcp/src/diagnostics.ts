@@ -23,17 +23,36 @@ interface RequestObservation {
 }
 const requests = new AsyncLocalStorage<RequestObservation>();
 
+/** Only these business invocations admit capture; client/session attribution is not scope. */
+export function isAppsDiagnosticRequest(message: unknown): boolean {
+  if (typeof message !== "object" || message === null || !("method" in message)
+    || message.method !== "tools/call" || !("params" in message)) return false;
+  const params = message.params;
+  if (typeof params !== "object" || params === null || !("name" in params)) return false;
+  if (params.name === "tinycloud_apps_context" || params.name === "tinycloud_apps_read"
+    || params.name === "tinycloud_apps_write" || params.name === "tinycloud_apps_query") return true;
+  // Local stdio exposes the existing KV/SQL tools, not the hosted apps tools.
+  // Recognize their tc-apps targets without granting scope to unrelated calls.
+  if (!("arguments" in params) || typeof params.arguments !== "object" || params.arguments === null) return false;
+  const input = params.arguments;
+  if (params.name === "tinycloud_kv_list") {
+    return "prefix" in input && typeof input.prefix === "string" && input.prefix.startsWith("xyz.tinycloud.agent-data/");
+  }
+  if (params.name === "tinycloud_kv_get" || params.name === "tinycloud_kv_head"
+    || params.name === "tinycloud_kv_put" || params.name === "tinycloud_kv_delete") {
+    return "key" in input && typeof input.key === "string" && input.key.startsWith("xyz.tinycloud.agent-data/");
+  }
+  return (params.name === "tinycloud_sql_schema_inspect" || params.name === "tinycloud_sql_query"
+    || params.name === "tinycloud_sql_execute")
+    && "database" in input && input.database === "xyz.tinycloud.agent-data.index";
+}
+
 /** Only public SDK surfaces are composed. Inbound dispatch always remains synchronous. */
 export class DiagnosticMcpServer extends McpServer {
-  /** Stdio discovers once before connecting, then refreshes without delaying messages. */
+  /** Discover only for apps calls; refresh never delays synchronous dispatch. */
   stdioDiagnosticContext?: () => Promise<DiagnosticContext | undefined>;
   override async connect(transport: Transport): Promise<void> {
-    const discover = this.stdioDiagnosticContext;
-    let initial: DiagnosticContext | undefined;
-    if (discover !== undefined) {
-      try { initial = await discover(); } catch { /* Capture never prevents connection. */ }
-    }
-    return super.connect(new DiagnosticTransport(transport, discover, initial));
+    return super.connect(new DiagnosticTransport(transport, this.stdioDiagnosticContext));
   }
 }
 
@@ -48,11 +67,10 @@ class DiagnosticTransport implements Transport {
   #received = false;
   #trackingDisabled = false;
 
-  constructor(inner: Transport, discover?: () => Promise<DiagnosticContext | undefined>, initial?: DiagnosticContext) {
+  constructor(inner: Transport, discover?: () => Promise<DiagnosticContext | undefined>) {
     this.#inner = inner;
     this.#onmessage = inner.onmessage;
     this.#discover = discover;
-    this.#stdioContext = initial;
   }
 
   get onmessage(): Transport["onmessage"] { return this.#onmessage; }
@@ -71,8 +89,8 @@ class DiagnosticTransport implements Transport {
         callback(message, extra);
         return;
       }
-      if (parent === undefined || !("method" in message) || !("id" in message)) {
-        callback(message, extra);
+      if (parent === undefined || !isAppsDiagnosticRequest(message) || !("id" in message)) {
+        withDiagnosticContext(undefined, () => callback(message, extra));
         return;
       }
       if (this.#trackingDisabled || (typeof message.id !== "number" && typeof message.id !== "string")
@@ -97,8 +115,9 @@ class DiagnosticTransport implements Transport {
         return;
       }
       const context = parent.source === "mcp_http" && !this.#received
-        ? parent
+        ? { ...parent, scope: "tc-apps" as const }
         : makeDiagnosticContext(parent.binding, parent.source, {
+          scope: "tc-apps",
           parent_id: parent.parent_id, run_id: parent.run_id, turn_id: parent.turn_id,
           task_id: parent.task_id, workflow_id: parent.workflow_id, role: parent.role, role_provenance: parent.role_provenance,
         });
@@ -121,7 +140,7 @@ class DiagnosticTransport implements Transport {
         // can queue this payload or delay cancellation. A transition racing this
         // snapshot can lose evidence; only future invocations use the new binding.
         const parent = this.#stdioContext;
-        if ("method" in message && "id" in message && !this.#refreshing && !this.#closed) {
+        if (isAppsDiagnosticRequest(message) && "id" in message && !this.#refreshing && !this.#closed) {
           this.#refreshing = true;
           try {
             void discover().then(

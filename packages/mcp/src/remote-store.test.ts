@@ -372,6 +372,25 @@ test("protected approval capture links reused waiters without retaining signed s
   }
 }, 30_000);
 
+test("an unrelated connect approval stays unrecorded even when its verified tenant enables capture", async () => {
+  const fixture = await approvalCapture();
+  const subject = "PRIVATE_UNSCOPED_APPROVAL";
+  const owner = await ownerDid(REQUESTER_KEY);
+  const history = await fixture.enable(subject);
+  const status = await fixture.diagnostics.exchange(() => fixture.store.connectStatus(subject, [owner]));
+  const state = new URL(status.approvalUrl!).searchParams.get("state")!;
+  expect(await fixture.pending(subject, state)).not.toHaveProperty("diagnosticReference");
+  const stateRoot = fixture.store.tenantStateRoot(subject);
+  const foreign = await openKeyCallbackBody({
+    tenantStateRoot: stateRoot, privateKey: OTHER_OWNER_KEY, space: "account", abilities: BOOTSTRAP_ABILITIES,
+  });
+  await expect(fixture.diagnostics.exchange(() => fixture.store.completeApproval(state, callbackRequest(foreign))))
+    .rejects.toBeInstanceOf(ApprovalOwnerMismatchError);
+  expect(await exists(join(stateRoot, ".tinycloud/profiles/agent/session.json"))).toBe(false);
+  await fixture.diagnostics.close();
+  expect((await history.snapshot({ all: true })).events).toEqual([]);
+}, 30_000);
+
 test("callback denial and verified proof followed by failed commit remain distinct after restart", async () => {
   const fixture = await approvalCapture();
   const owner = await ownerDid(REQUESTER_KEY);
@@ -491,7 +510,7 @@ async function approvalCapture() {
     },
     connect(subject: string, owner: string) {
       return diagnostics.exchange(() => diagnostics.tenant(basename(store.tenantStateRoot(subject)),
-        () => store.connectStatus(subject, [owner])));
+        () => store.connectStatus(subject, [owner]), true));
     },
     async pending(subject: string, state: string): Promise<Record<string, unknown>> {
       const nonce = state.split(".")[1]!;

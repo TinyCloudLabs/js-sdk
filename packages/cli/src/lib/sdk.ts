@@ -141,7 +141,7 @@ export async function restoreProfileSessionNode(
   const key = await ProfileManager.getKey(ctx.profile);
   try {
     const node = new TinyCloudNode({
-      telemetry: getDiagnosticContext() ? diagnosticTelemetry : undefined,
+      telemetry: getDiagnosticContext()?.scope === "tc-apps" ? diagnosticTelemetry : undefined,
       host: ctx.host,
       ...(profile.authMethod === "local" && profile.privateKey ? { privateKey: profile.privateKey } : {}),
     });
@@ -172,7 +172,7 @@ export async function storedSessionVerifiesLocally(profileName: string): Promise
       typeof session.delegationHeader.Authorization !== "string") return true;
     const key = await ProfileManager.getKey(profileName);
     const node = new TinyCloudNode({
-      telemetry: getDiagnosticContext() ? diagnosticTelemetry : undefined,
+      telemetry: getDiagnosticContext()?.scope === "tc-apps" ? diagnosticTelemetry : undefined,
       host: profile.host ?? DEFAULT_HOST,
       ...(local ? { privateKey: profile.privateKey } : {}),
     });
@@ -228,7 +228,7 @@ export async function createSDKInstance(
       process.stderr.write("[replication] Enabled, but this profile has no configured prefixes; reads use the network.\n");
     }
     const node = new TinyCloudNode({
-      telemetry: getDiagnosticContext() ? diagnosticTelemetry : undefined,
+      telemetry: getDiagnosticContext()?.scope === "tc-apps" ? diagnosticTelemetry : undefined,
       host: ctx.host,
       privateKey: effectivePrivateKey,
       ...(replication ? { replication } : {}),
@@ -264,7 +264,7 @@ export async function createSDKInstance(
     process.stderr.write("[replication] Enabled, but this profile has no configured prefixes; reads use the network.\n");
   }
   const node = new TinyCloudNode({
-    telemetry: getDiagnosticContext() ? diagnosticTelemetry : undefined,
+    telemetry: getDiagnosticContext()?.scope === "tc-apps" ? diagnosticTelemetry : undefined,
     host: ctx.host,
     privateKey: options?.privateKey,
     ...(replication ? { replication } : {}),

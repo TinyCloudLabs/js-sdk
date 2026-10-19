@@ -107,7 +107,7 @@ export async function localKeySignIn(options: {
   );
 
   const node = new TinyCloudNode({
-    telemetry: getDiagnosticContext() ? diagnosticTelemetry : undefined,
+    telemetry: getDiagnosticContext()?.scope === "tc-apps" ? diagnosticTelemetry : undefined,
     privateKey: options.privateKey,
     host: options.host,
     autoCreateSpace: true,

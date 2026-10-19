@@ -1,9 +1,19 @@
 import { createHash } from "node:crypto";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 
 const origin = "https://agents.tinycloud.xyz";
+const args = process.argv.slice(2);
+if (args.length !== 0 && (args.length !== 4 || args[0] !== "--local-site"
+  || args[2] !== "--source-commit" || !/^[a-f0-9]{40}$/.test(args[3]!))) {
+  throw new Error("Usage: bun scripts/sync-tc-apps-rules.ts [--local-site SITE --source-commit SHA]");
+}
+const localSite = args.length === 0 ? undefined : pathToFileURL(`${resolve(args[1]!)}/`);
+const source = localSite === undefined ? origin : `https://github.com/TinyCloudLabs/prompts/tree/${args[3]}`;
 const vendor = new URL("../packages/operations/src/tc-apps/vendor/", import.meta.url);
 async function download(path: string): Promise<Buffer> {
+  if (localSite !== undefined) return readFile(new URL(`.${path}`, localSite));
   const response = await fetch(new URL(path, origin), { signal: AbortSignal.timeout(30_000) });
   if (!response.ok) throw new Error(`Download ${path}: HTTP ${response.status}`);
   return Buffer.from(await response.arrayBuffer());
@@ -30,7 +40,7 @@ const files = await Promise.all(["SKILL.md", "SQL.md"].map(async (name) => {
 await mkdir(vendor, { recursive: true });
 for (const file of files) await writeFile(new URL(file.name, vendor), file.bytes);
 await writeFile(new URL("version.json", vendor), JSON.stringify({
-  name: "tc-apps", version: skill.version, source: origin,
+  name: "tc-apps", version: skill.version, source,
   files: Object.fromEntries(files.map(({ name, sha256, size }) => [name, { sha256, size }])),
 }, null, 2) + "\n");
 console.log(`Pinned tc-apps ${skill.version}`);

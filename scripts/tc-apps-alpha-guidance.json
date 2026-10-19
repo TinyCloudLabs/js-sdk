@@ -1,0 +1,19 @@
+{
+  "sourceCommit": "d7d868cc9e18515ca1a72d9f93b8b47d972c342c",
+  "rulesVersion": "0.1.6",
+  "files": {
+    "setup/tc-apps.md": "6786442443708c2f4750e9b45830e2f8a8565e1453daaf862a3e317c6b61e3b9",
+    "skills/tc-apps/SKILL.md": "8728ffdce9231b95cc384a077236a89fce90f3bb6afa8aa38963f05f4c57960a",
+    "skills/tc-apps/SQL.md": "f9afdf2b262f40f332b2c1bb0ec57608dfb0280b040d8f00a106d47a594e09e4",
+    "skills/tc-apps/DIAGNOSTICS.md": "37a6ad2b179cc0eaf60a2eb0fbbc1d05a8941dee46ae10cbccd3145c5f53002d",
+    "skills/tc-apps/QUICKSTART.md": "0b082e02f3be24d1761d9d2bd4962719e888f13509e8c0f29da6b5a2b5f389af",
+    "skills/tc-apps/tc-wrapper.sh": "29badf3dfe52bf4da05f31399b6f82a690d9cc91e305b6e09cc54643bc1736d0",
+    "skills/tc-apps/diagnostics/contract.mjs": "5f0ba373454e6e56739c4463ffe9352d34951046cb3fe3905c88cb61db3d3a00",
+    "skills/tc-apps/diagnostics/opencode-v1.mjs": "c5d094ae7a75aa5fd03e97507aed5d2b287f5aaa3e4b14430763c517d9ffcfff",
+    "skills/tc-apps/diagnostics/opencode-config.mjs": "9f6dc13300219f2781f68cba5d7e22178f4d3e44c10d72deb17ee9d8099f45ff"
+  },
+  "rules": {
+    "SKILL.md": "skills/tc-apps/SKILL.md",
+    "SQL.md": "skills/tc-apps/SQL.md"
+  }
+}

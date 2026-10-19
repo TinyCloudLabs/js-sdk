@@ -68,11 +68,12 @@ export class HostedDiagnostics {
     }
     return exchanges.run(exchange, () => withDiagnosticContext(exchange.context, action));
   }
-  async tenant<T>(verifiedTenantId: string, action: () => Promise<T>): Promise<T> {
+  async tenant<T>(verifiedTenantId: string, action: () => Promise<T>, admitted = false): Promise<T> {
     const exchange = exchanges.getStore();
-    const binding = await this.#runtime.bindingForTenant(verifiedTenantId).catch(() => undefined);
+    const binding = admitted ? await this.#runtime.bindingForTenant(verifiedTenantId).catch(() => undefined) : undefined;
     const context = binding === undefined ? undefined : makeDiagnosticContext(binding, "mcp_http", {
       invocation_id: exchange?.invocationId,
+      scope: "tc-apps",
     });
     // Remove the service binding even if tenant capture is disabled: verified work
     // must never spill into a service or different tenant partition.

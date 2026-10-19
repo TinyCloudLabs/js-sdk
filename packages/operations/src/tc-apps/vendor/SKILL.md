@@ -2,7 +2,7 @@
 name: tc-apps
 description: Keep the owner's personal records (weight, workouts, goals, todos, anything they track) in their own TinyCloud storage, organised into apps you create and extend as they go. Use when the owner asks you to log, record, track, add, look up, list or sum up something about their life, even if they don't mention TinyCloud. The owner approves access once, on OpenKey, from a link and code you show them.
 metadata:
-  version: "0.1.5"
+  version: "0.1.6"
 ---
 
 # Personal apps in TinyCloud
@@ -20,6 +20,23 @@ How to run the blocks:
 - A command takes 4–10 s. A block that runs commands side by side (`xargs -P 8`) takes about as long as one. Wait up to 60 s. In Codex, pass `yield_time_ms: 30000` to `exec_command`. §4 is the exception: it waits for the owner.
 - Write files only through these blocks, never with a file-editing tool. Never install anything, and don't run `tc` commands that aren't here.
 - Run §1 and §3 once per conversation.
+
+### Optional local diagnostics
+
+Ordinary record work does not require diagnostics. Capture is default off; do not enable it, install a client plugin, inspect conversations or select excerpts as part of a record request. CLI 1.2.2+ is the **business-command** requirement, not a promise of diagnostics availability. The synthetic-only, metadata-only alpha is exactly `@tinycloud/telemetry-preview@0.1.0-alpha.0`, privately installed with `--ignore-scripts --save-exact`, never globally or through the normal installer. Its distinct executables are `tc-apps-alpha` and `tc-apps-alpha-mcp`; target Node 22.23.2 on Linux x64 glibc. Only after separate synthetic-task authorization follow the installed [DIAGNOSTICS.md](DIAGNOSTICS.md), check `--alpha-identity` against its `identity.json`, and inspect status. Preserve all operator overrides, profiles, grants and normal routing. Real-record capture and optional plugins remain off; this is not a publication or deployment claim.
+
+For an explicitly selected block, that guide's `diagnostics run --scope tc-apps` passes attribution to the shell and its actual children, including `xargs`, without changing the parent client's environment. An attribution-only whole-client launch must **not** have `--scope` or `--role`. Optional `--role` is a fixed hint on a selected block, never proof of a successful operation:
+
+| Selected work | Optional role |
+|---|---|
+| Catalog-only listing, reading or writing | `catalog` |
+| Record reads, writes, moves or deletes | `record` |
+| A separately selected read-back/check | `verification` |
+| Sign-in/approval (§4) | `approval` |
+| A separately selected context/profile check | `context` |
+| SQL-copy maintenance | See SQL.md's local hints |
+
+Keep mixed blocks intact; omit the hint when one role would misdescribe them. A `record` block containing its normal read-back is not evidence that verification succeeded. Keep literal paths, normal approvals and business commands unchanged. In alpha work, never replay an unknown-outcome write. Disable after the synthetic task, explicitly delete selected history when authorized, and retain the normal executable as independent fallback. Never add record values, keys, SQL, approval codes or secret material to diagnostic context.
 
 ## 1. Read the paths and the time
 

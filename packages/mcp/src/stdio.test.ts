@@ -782,7 +782,7 @@ test("`tc kv get` never activates a stored compact delegation broader than its r
       .filter((permission) => permission.service === "tinycloud.kv");
     // Signs KV get and network decrypt; the narrower binding covers only KV get.
     const delegation = await fixture.hermetic.mintDelegation();
-    const activationsDuring = (records: readonly unknown[]) => kvGetActivations(home, fixture, records);
+    const activationsDuring = async (records: readonly unknown[]) => (await kvGetActivations(home, fixture, records)).activations;
 
     // The first run also records the (empty) profile's binding migration.
     const baseline = await activationsDuring([]);
@@ -1004,15 +1004,19 @@ test("the CLI's replay skips stored elements that are not objects and still migr
     const malformed = [42, "not a record", null];
 
     // The first CLI run on this profile migrates it.
-    await kvGetActivations(home, fixture, [...malformed, { delegation, permissions: [] }]);
-    expect(JSON.parse(await readFile(join(profileDirectory, "delegation-binding-migration.json"), "utf8")))
-      .toMatchObject({ bound: [delegation.cid], unbound: [] });
+    const initial = await kvGetActivations(home, fixture, [...malformed, { delegation, permissions: [] }]);
+    const marker = await readFile(join(profileDirectory, "delegation-binding-migration.json"), "utf8").catch((cause) => {
+      throw new Error(`CLI migration marker missing; subprocess: ${JSON.stringify(initial)}`, { cause });
+    });
+    expect(JSON.parse(marker), JSON.stringify(initial)).toMatchObject({ bound: [delegation.cid], unbound: [] });
     const stored = JSON.parse(await readFile(join(profileDirectory, "additional-delegations.json"), "utf8")) as unknown[];
     expect(stored.slice(0, 3)).toEqual(malformed);
     expect(stored[3]).toMatchObject({ authorityRequest: { requestId: `migrated:${delegation.cid}` } });
 
     // The migrated record still installs next to the malformed elements.
-    expect(await kvGetActivations(home, fixture, stored)).toBe(await kvGetActivations(home, fixture, malformed) + 1);
+    const replay = await kvGetActivations(home, fixture, stored);
+    const baseline = await kvGetActivations(home, fixture, malformed);
+    expect(replay.activations, JSON.stringify({ replay, baseline })).toBe(baseline.activations + 1);
   } finally {
     fixture.hermetic.stop();
     if (previousTcHome === undefined) delete process.env.TC_HOME;
@@ -1027,16 +1031,20 @@ test("the CLI's replay skips stored elements that are not objects and still migr
  * are what shows which stored records the CLI installed; the command's own
  * result is not (a read through an installed login grant fails on this node).
  */
-async function kvGetActivations(home: string, fixture: any, records: readonly unknown[]): Promise<number> {
+async function kvGetActivations(
+  home: string,
+  fixture: { profile: string; hermetic: { nativeBearerStats(): { delegations: number } } },
+  records: readonly unknown[],
+): Promise<{ activations: number; exitCode: number; stdout: string; stderr: string }> {
   await writeFile(
     join(home, ".tinycloud/profiles", fixture.profile, "additional-delegations.json"),
     JSON.stringify(records),
   );
-  const before = fixture.hermetic.nativeBearerStats().delegations as number;
-  await runTinyCloudCliExit(home, [
+  const before = fixture.hermetic.nativeBearerStats().delegations;
+  const result = await runTinyCloudCliExit(home, [
     "--profile", fixture.profile, "kv", "get", "vault/secrets/HERMETIC_DELEGATION_CANARY",
   ]);
-  return (fixture.hermetic.nativeBearerStats().delegations as number) - before;
+  return { activations: fixture.hermetic.nativeBearerStats().delegations - before, ...result };
 }
 
 async function hermeticFixture(options?: Record<string, unknown>): Promise<any> {

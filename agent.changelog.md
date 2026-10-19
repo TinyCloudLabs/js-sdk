@@ -3,6 +3,18 @@
 Track changes to agent-facing development guidance for the TinyCloud JavaScript SDK. Add a concise
 entry when `agent.dev.md` or related agent workflow expectations change.
 
+## 2026-10-19
+
+- Added independent per-invocation diagnostic opt-in; generic telemetry and shared
+  client/session markers do not admit unrelated CLI/MCP calls. Kept synchronous
+  MCP dispatch/cancellation and explicit first-call coverage uncertainty.
+- Fixed shutdown observer lifetime without releasing uncertain writer ownership.
+  Preserved subprocess results for migration-marker failures; historical lock and
+  marker logs lack enough ownership/exit evidence to establish their original cause.
+- Replaced custom archive delivery with a standalone exact-version npm alpha,
+  pinned 0.1.6 guidance, offline installation/relocation checks and same-package
+  preview image. Normal releases, live routing and participant capture stay untouched.
+
 ## 2026-10-16
 
 - Added the default-off private tc-apps diagnostics contract: independent packaged

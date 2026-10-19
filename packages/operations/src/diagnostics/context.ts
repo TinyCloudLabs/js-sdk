@@ -26,6 +26,8 @@ export interface DiagnosticBinding {
   readonly descriptor_id?: string;
 }
 export interface DiagnosticContext extends Omit<DiagnosticLinks, "attempt_id" | "descriptor_id"> {
+  /** Invocation admission, never inferred from client attribution or tenant policy. */
+  readonly scope?: "tc-apps";
   readonly binding: DiagnosticBinding;
   readonly invocation_id: string;
   readonly role?: DiagnosticRole;
@@ -74,6 +76,7 @@ export function makeDiagnosticContext(
   source: DiagnosticSource,
   links: Omit<DiagnosticLinks, "attempt_id" | "descriptor_id"> & {
     readonly invocation_id?: string;
+    readonly scope?: "tc-apps";
     readonly role?: DiagnosticRole;
     readonly role_provenance?: DiagnosticFields["role_provenance"];
   } = {},
@@ -92,6 +95,7 @@ export function makeDiagnosticContext(
     ...projected,
     binding: Object.freeze({ ...binding }),
     source,
+    ...(links.scope === "tc-apps" ? { scope: "tc-apps" as const } : {}),
     invocation_id: projected.invocation_id ?? diagnosticId(),
     ...(links.role !== undefined && (DIAGNOSTIC_ROLES as readonly string[]).includes(links.role)
       ? { role: links.role, role_provenance: links.role_provenance ?? "client_reported" as const } : {}),
@@ -194,9 +198,9 @@ export function diagnosticClientProvenance(
 
 /** Only fixed physical observations, never the SDK's arbitrary event stream. */
 export const diagnosticTelemetry = Object.freeze({
-  enabled: true as const,
+  diagnostics: true as const,
   onEvent(name: string, payload: unknown): void {
-    if (!context.getStore()) return;
+    if (context.getStore()?.scope !== "tc-apps") return;
     try {
       let type: "attempt.start" | "attempt.finish" | "retry.scheduled";
       if (name === "diagnostic.attempt.start") type = "attempt.start";

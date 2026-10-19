@@ -1,7 +1,6 @@
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
-import { createServer } from "node:http";
+import { copyFile, mkdir, mkdtemp, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
 import { promisify } from "node:util";
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
@@ -11,19 +10,8 @@ import { verifyInstalledDiagnosticFailures } from "../tests/packed-runtime/diagn
 const exec = promisify(execFile);
 const root = resolve(process.cwd());
 const nodeBinary = process.env.NODE_BINARY ?? "node";
-const packages = [
-  { directory: "packages/bootstrap", name: "@tinycloud/bootstrap", required: [] },
-  { directory: "packages/node-sdk", name: "@tinycloud/node-sdk", required: ["package/dist/index.js", "package/dist/index.cjs"] },
-  { directory: "packages/sdk-rs/packages/node", name: "@tinycloud/node-sdk-wasm", required: [] },
-  { directory: "packages/sdk-core", name: "@tinycloud/sdk-core", required: ["package/dist/index.js", "package/dist/index.cjs"] },
-  { directory: "packages/sdk-services", name: "@tinycloud/sdk-services", required: ["package/dist/index.js", "package/dist/index.cjs"] },
-  { directory: "packages/share-envelope", name: "@tinycloud/share-envelope", required: ["package/dist/index.js", "package/dist/index.cjs"] },
-  { directory: "packages/share-sdk", name: "@tinycloud/share-sdk", required: ["package/dist/index.js", "package/dist/index.cjs"] },
-  { directory: "packages/operations", name: "@tinycloud/operations", required: ["package/dist/index.js", "package/dist/index.cjs", "package/dist/secret-capabilities.js", "package/dist/secret-request.js", "package/dist/recovery.js", "package/dist/diagnostics.js", "package/dist/diagnostics.cjs", "package/dist/diagnostics-worker.js", "package/dist/diagnostics-worker.cjs", "package/dist/diagnostics-reproduction.js", "package/dist/diagnostics-reproduction.cjs", "package/generated/operations.json", "package/coverage.json"] },
-  { directory: "packages/cli", name: "@tinycloud/cli", required: ["package/dist/bootstrap.js", "package/dist/diagnostics-entry.js", "package/dist/index.js", "package/bin/tc", "package/bin/tinycloud"] },
-  { directory: "packages/mcp", name: "@tinycloud/mcp", required: ["package/dist/index.js", "package/dist/index.cjs", "package/dist/http.js", "package/dist/http-cli.js", "package/dist/http-cli.cjs", "package/dist/http-server.js", "package/dist/http-server.cjs", "package/bin/tinycloud-mcp-http", "package/generated/mcp-facts.json", "package/skills/tinycloud-delegated-secrets/SKILL.md"] },
-  { directory: "packages/replica", name: "@tinycloud/replica", required: ["package/dist/index.js", "package/dist/index.cjs", "package/dist/sqlite.js", "package/dist/sqlite.cjs"] },
-] as const;
+import { alphaPackage, bundledManifest, installLockedGraph, packedPackages as packages, writeJson } from "./packed-packages.mjs";
+import { assertPackagePath, inventory, json } from "./preview-files.mjs";
 
 interface PublishedManifest {
   [key: string]: unknown;
@@ -33,7 +21,6 @@ interface PublishedManifest {
   optionalDependencies?: Record<string, string>;
   peerDependencies?: Record<string, string>;
 }
-type PublishedPackage = { manifest: PublishedManifest; bytes: Buffer; filename: string };
 
 function assertPublishedManifest(value: unknown): asserts value is PublishedManifest {
   if (value === null || typeof value !== "object" || Array.isArray(value)
@@ -50,44 +37,104 @@ function assertPublishedManifest(value: unknown): asserts value is PublishedMani
   }
 }
 
-async function startNpmRegistry(packagesToPublish: PublishedPackage[]): Promise<{ origin: string; close: () => Promise<void> }> {
-  const byName = new Map(packagesToPublish.map((package_) => [package_.manifest.name, package_]));
-  const server = createServer((request, response) => {
-    try {
-      const pathname = decodeURIComponent(new URL(request.url ?? "/", "http://127.0.0.1").pathname);
-      const separator = pathname.indexOf("/-/");
-      const name = separator < 0 ? pathname.slice(1) : pathname.slice(1, separator);
-      const package_ = byName.get(name);
-      if (!package_) { response.writeHead(404).end(); return; }
-      if (separator < 0) {
-        const integrity = `sha512-${createHash("sha512").update(package_.bytes).digest("base64")}`;
-        const body = JSON.stringify({
-          name,
-          "dist-tags": { latest: package_.manifest.version },
-          versions: {
-            [package_.manifest.version]: {
-              ...package_.manifest,
-              dist: { tarball: `${origin}/${encodeURIComponent(name)}/-/${package_.filename}`, integrity },
-            },
-          },
-        });
-        response.writeHead(200, { "content-type": "application/json", "content-length": String(Buffer.byteLength(body)) }).end(body);
-        return;
-      }
-      if (pathname !== `/${name}/-/${package_.filename}`) { response.writeHead(404).end(); return; }
-      response.writeHead(200, { "content-type": "application/octet-stream", "content-length": String(package_.bytes.length) }).end(package_.bytes);
-    } catch {
-      response.writeHead(400).end();
+
+// Exact release-candidate mode never repacks or resolves registry dependencies.
+if (process.argv.includes("--alpha-tarball")) {
+  if (process.argv.length !== 4 || process.argv[2] !== "--alpha-tarball") throw new Error("Usage: bun scripts/check-operations-mcp-pack.ts --alpha-tarball EXACT.tgz");
+  await verifyAlphaTarball(resolve(process.argv[3]!));
+  process.exit(0);
+}
+
+export async function verifyAlphaTarball(tarball: string): Promise<void> {
+  const working = await mkdtemp(join(tmpdir(), "tinycloud-alpha-acceptance-"));
+  const original = join(working, "installed");
+  const relocated = join(working, "relocated");
+  const home = join(working, "home");
+  const env = {
+    PATH: process.env.PATH, HOME: home, TC_HOME: join(home, "tc"),
+    TC_APPS_STATE: join(home, "apps"), TC_DIAGNOSTICS_HOME: join(home, "diagnostics"),
+    XDG_CONFIG_HOME: join(home, "config"), XDG_CACHE_HOME: join(home, "cache"), XDG_STATE_HOME: join(home, "state"),
+    npm_config_cache: join(working, "empty-cache"), npm_config_userconfig: join(working, "user.npmrc"),
+    npm_config_globalconfig: join(working, "global.npmrc"), NO_COLOR: "1",
+  };
+  try {
+    await Promise.all([original, home].map((path) => mkdir(path, { mode: 0o700 })));
+    await Promise.all([env.npm_config_userconfig, env.npm_config_globalconfig].map((path) => writeFile(path, "")));
+    const listing = (await exec("tar", ["-tzf", tarball])).stdout.trim().split("\n");
+    for (const path of listing) assertPackagePath(path);
+    await writeJson(join(original, "package.json"), { name: "alpha-private-consumer", private: true });
+    await exec("npm", ["install", "--offline", "--ignore-scripts", "--no-audit", "--no-fund", tarball], { cwd: original, env, maxBuffer: 32 * 1024 * 1024 });
+    await rename(original, relocated);
+    const fixture = join(relocated, "node_modules", alphaPackage.name);
+    await inventory(fixture);
+    const manifest = await json(join(fixture, "package.json"));
+    const identity = await json(join(fixture, "identity.json"));
+    if (manifest.name !== alphaPackage.name || manifest.version !== alphaPackage.version
+      || identity.name !== manifest.name || identity.version !== manifest.version) throw new Error("Installed alpha identity mismatch");
+    await exec(nodeBinary, ["--input-type=module", "-e", `import {assertPlatform} from './lib/preview-files.mjs'; assertPlatform(); await import('@tinycloud/operations'); await import('@tinycloud/mcp');`], { cwd: fixture, env });
+    for (const bin of ["tc-apps-alpha", "tc-apps-alpha-mcp"]) {
+      const result = await exec(nodeBinary, [join(fixture, "bin", bin), "--alpha-identity"], { cwd: home, env });
+      if (JSON.stringify(JSON.parse(result.stdout)) !== JSON.stringify(identity)) throw new Error(`${bin} identity mismatch after relocation`);
+      await exec(nodeBinary, [join(fixture, "bin", bin), "--help"], { cwd: home, env });
     }
-  });
-  await new Promise<void>((resolveListen, rejectListen) => {
-    server.once("error", rejectListen);
-    server.listen(0, "127.0.0.1", resolveListen);
-  });
-  const address = server.address();
-  if (address === null || typeof address === "string") throw new Error("hermetic npm registry did not bind");
-  const origin = `http://127.0.0.1:${address.port}`;
-  return { origin, close: () => new Promise<void>((resolveClose, rejectClose) => server.close((error) => error ? rejectClose(error) : resolveClose())) };
+    const smoke = join(fixture, "alpha-smoke.mjs");
+    await writeFile(smoke, `
+import assert from 'node:assert/strict';
+import {spawn,execFile as callbackExec} from 'node:child_process';
+import {promisify} from 'node:util';
+import {createInterface} from 'node:readline';
+import {access} from 'node:fs/promises';
+import {resolve} from 'node:path';
+const exec=promisify(callbackExec);
+const cli=resolve('bin/tc-apps-alpha'),mcp=resolve('bin/tc-apps-alpha-mcp');
+const status=await exec(process.execPath,[cli,'diagnostics','status','--json']);
+assert.equal(JSON.parse(status.stdout).enabled,false);
+const child=spawn(process.execPath,[mcp],{stdio:['pipe','pipe','pipe']});
+const pending=new Map();
+let stderr='';
+child.stderr.on('data',chunk=>stderr+=chunk);
+const {promise:exited,resolve:resolveExit,reject:rejectExit}=Promise.withResolvers();
+child.once('exit',(code,signal)=>resolveExit({code,signal}));
+child.once('error',rejectExit);
+const lines=createInterface({input:child.stdout});
+lines.on('line',line=>{
+  const message=JSON.parse(line);
+  const settle=pending.get(message.id);
+  if(settle){pending.delete(message.id);settle(message);}
+});
+const timeout=setTimeout(()=>child.kill('SIGKILL'),15000);
+const rpc=(id,method,params)=>{
+  const {promise,resolve:resolveReply}=Promise.withResolvers();
+  pending.set(id,resolveReply);
+  child.stdin.write(JSON.stringify({jsonrpc:'2.0',id,method,params})+'\\n');
+  return Promise.race([promise,exited.then(result=>{throw new Error('MCP exited before reply: '+JSON.stringify({result,stderr}));})]);
+};
+try{
+  const initialized=await rpc(1,'initialize',{protocolVersion:'2025-11-25',capabilities:{},clientInfo:{name:'alpha-synthetic-smoke',version:'0.0.0'}});
+  assert(initialized.result?.serverInfo);
+  child.stdin.write(JSON.stringify({jsonrpc:'2.0',method:'notifications/initialized'})+'\\n');
+  const listed=await rpc(2,'tools/list',{});
+  assert(listed.result.tools.some(tool=>tool.name==='tinycloud_kv_get'));
+  const called=await rpc(3,'tools/call',{name:'tinycloud_kv_get',arguments:{space:'default',key:'xyz.tinycloud.agent-data/synthetic/readback'}});
+  assert.equal(called.result.structuredContent.status,'error');
+  assert.equal(called.result.structuredContent.error.code,'PROFILE_NOT_FOUND');
+  child.stdin.end();
+  assert.deepEqual(await exited,{code:0,signal:null});
+  assert.equal(await access(process.env.TC_DIAGNOSTICS_HOME).then(()=>true,()=>false),false);
+  console.log('Relocated alpha CLI default-off status and real MCP initialize/list/KV refusal passed; no diagnostic root created.');
+}finally{
+  clearTimeout(timeout);lines.close();child.kill();
+}
+`, { mode: 0o600 });
+    console.log((await exec(nodeBinary, [smoke], { cwd: fixture, env, timeout: 25_000 })).stdout.trim());
+    await rm(smoke);
+    await verifyInstalledDiagnostics(fixture, nodeBinary);
+    await verifyInstalledDiagnosticReproduction(fixture, nodeBinary);
+    await verifyInstalledDiagnosticFailures(fixture, nodeBinary);
+    console.log(`Exact ${manifest.name}@${manifest.version} passed offline fresh install, relocation, CLI/MCP entrypoints and native packed diagnostics acceptance.`);
+  } finally {
+    await rm(working, { recursive: true, force: true });
+  }
 }
 
 const working = await mkdtemp(join(tmpdir(), "tinycloud-i5-pack-"));
@@ -163,25 +210,21 @@ try {
     }
   }
 
-  await writeFile(join(fixture, "package.json"), JSON.stringify({
-    name: "tinycloud-i5-node20-pack-consumer",
-    private: true,
-    type: "module",
-    engines: { node: ">=20" },
-  }));
-  const publishedPackages = await Promise.all([...tarballs.entries()].map(async ([name, tarball]) => ({
+  const internal = new Map([...tarballs].map(([name, tarball]) => [name, {
     manifest: manifests.get(name)!,
-    bytes: await readFile(tarball),
     filename: tarball.split("/").pop()!,
-  })));
-  const npmRegistry = await startNpmRegistry(publishedPackages);
-  try {
-    const cliVersion = manifests.get("@tinycloud/cli")!.version;
-    const mcpVersion = manifests.get("@tinycloud/mcp")!.version;
-    await exec("npm", ["install", "--ignore-scripts", "--no-audit", "--no-fund", "--package-lock=false", "--registry=https://registry.npmjs.org", `--@tinycloud:registry=${npmRegistry.origin}`, `@tinycloud/cli@${cliVersion}`, `@tinycloud/mcp@${mcpVersion}`], { cwd: fixture });
-  } finally {
-    await npmRegistry.close();
+    integrity: "",
+  }]));
+  await mkdir(join(fixture, "packs"), { mode: 0o700 });
+  for (const [name, tarball] of tarballs) {
+    internal.get(name)!.integrity = `sha512-${createHash("sha512").update(await readFile(tarball)).digest("base64")}`;
+    await copyFile(tarball, join(fixture, "packs", internal.get(name)!.filename));
   }
+  await writeJson(join(fixture, "package.json"), bundledManifest(internal, {
+    name: "tinycloud-i5-node20-pack-consumer", private: true, type: "module", engines: { node: ">=20" },
+  }));
+  const run = async (command: string, args: string[], cwd: string) => (await exec(command, args, { cwd, maxBuffer: 32 * 1024 * 1024 })).stdout.trim();
+  await installLockedGraph(fixture, internal, run);
   const nodeVersion = (await exec(nodeBinary, ["--version"])).stdout.trim();
   const nodeMajor = Number.parseInt(nodeVersion.replace(/^v/, "").split(".")[0]!, 10);
   if (!Number.isInteger(nodeMajor) || nodeMajor < 20) {

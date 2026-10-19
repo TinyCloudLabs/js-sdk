@@ -73,6 +73,7 @@ export class ServiceContext implements IServiceContext {
   private readonly _hosts: string[];
   private readonly _retryPolicy: RetryPolicy;
   private readonly _telemetryEnabled: boolean;
+  private readonly _diagnosticsEnabled: boolean;
   private readonly _telemetryHandler?: TelemetryEventHandler;
 
   constructor(config: ServiceContextConfig) {
@@ -91,6 +92,8 @@ export class ServiceContext implements IServiceContext {
       typeof config.telemetry === "boolean"
         ? config.telemetry
         : config.telemetry?.enabled === true;
+    this._diagnosticsEnabled =
+      typeof config.telemetry === "object" && config.telemetry.diagnostics === true;
     this._telemetryHandler =
       typeof config.telemetry === "object" ? config.telemetry.onEvent : undefined;
   }
@@ -203,7 +206,7 @@ export class ServiceContext implements IServiceContext {
   // ============================================================
 
   get diagnosticTelemetryEnabled(): boolean {
-    return this._telemetryEnabled && this._telemetryHandler !== undefined;
+    return this._diagnosticsEnabled && this._telemetryHandler !== undefined;
   }
 
   /**

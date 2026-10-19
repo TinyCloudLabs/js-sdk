@@ -8045,7 +8045,7 @@ async function restoreProfileSessionNode(ctx) {
   const key = await ProfileManager.getKey(ctx.profile);
   try {
     const node = new TinyCloudNode({
-      telemetry: getDiagnosticContext2() ? diagnosticTelemetry : void 0,
+      telemetry: getDiagnosticContext2()?.scope === "tc-apps" ? diagnosticTelemetry : void 0,
       host: ctx.host,
       ...profile.authMethod === "local" && profile.privateKey ? { privateKey: profile.privateKey } : {}
     });
@@ -8067,7 +8067,7 @@ async function storedSessionVerifiesLocally(profileName) {
     if (!session || typeof session.delegationCid !== "string" || typeof session.spaceId !== "string" || session.delegationHeader === null || typeof session.delegationHeader !== "object" || !("Authorization" in session.delegationHeader) || typeof session.delegationHeader.Authorization !== "string") return true;
     const key = await ProfileManager.getKey(profileName);
     const node = new TinyCloudNode({
-      telemetry: getDiagnosticContext2() ? diagnosticTelemetry : void 0,
+      telemetry: getDiagnosticContext2()?.scope === "tc-apps" ? diagnosticTelemetry : void 0,
       host: profile.host ?? DEFAULT_HOST,
       ...local ? { privateKey: profile.privateKey } : {}
     });
@@ -8101,7 +8101,7 @@ async function createSDKInstance(ctx, options) {
         process.stderr.write("[replication] Enabled, but this profile has no configured prefixes; reads use the network.\n");
       }
       const node2 = new TinyCloudNode({
-        telemetry: getDiagnosticContext2() ? diagnosticTelemetry : void 0,
+        telemetry: getDiagnosticContext2()?.scope === "tc-apps" ? diagnosticTelemetry : void 0,
         host: ctx.host,
         privateKey: effectivePrivateKey,
         ...replication2 ? { replication: replication2 } : {}
@@ -8132,7 +8132,7 @@ async function createSDKInstance(ctx, options) {
       process.stderr.write("[replication] Enabled, but this profile has no configured prefixes; reads use the network.\n");
     }
     const node = new TinyCloudNode({
-      telemetry: getDiagnosticContext2() ? diagnosticTelemetry : void 0,
+      telemetry: getDiagnosticContext2()?.scope === "tc-apps" ? diagnosticTelemetry : void 0,
       host: ctx.host,
       privateKey: options?.privateKey,
       ...replication ? { replication } : {}
@@ -18933,7 +18933,7 @@ function createShareAuthorityAdapters(input = {}) {
   };
   const nativeReader = async (link2) => {
     const { TinyCloudNode: TinyCloudNode2 } = await import("@tinycloud/node-sdk");
-    const sharing = input.nativeSharing ?? ((host) => new TinyCloudNode2({ ...host === void 0 ? {} : { host }, autoDiscoverLocalNode: false, telemetry: getDiagnosticContext3() ? diagnosticTelemetry2 : void 0 }).sharing);
+    const sharing = input.nativeSharing ?? ((host) => new TinyCloudNode2({ ...host === void 0 ? {} : { host }, autoDiscoverLocalNode: false, telemetry: getDiagnosticContext3()?.scope === "tc-apps" ? diagnosticTelemetry2 : void 0 }).sharing);
     const token = parseNativeShareUrl(link2);
     const decoded = sharing(void 0).decodeLink(token);
     if (typeof decoded.host !== "string") throw new Error("native share has no owner Node");

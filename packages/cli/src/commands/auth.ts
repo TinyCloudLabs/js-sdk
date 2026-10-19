@@ -72,8 +72,8 @@ import { canonicalOwnerDid } from "../lib/owner-did.js";
 import { assertNotLocalOwner, assertSessionReplaceable, commitLogin, readProfileSnapshot } from "../auth/login-commit.js";
 import { announceFirstOwner, openKeyPrimaryFlag, ownerLoginPermissions, warnIfNotPrimaryKey, withOwnerKeyPrimary } from "../auth/owner-key.js";
 import { SHARE_PUBLISHING_MANIFEST_REF } from "../share/publishing-manifest.js";
-import { beginDiagnosticPhase, emitDiagnostic } from "@tinycloud/operations/diagnostics";
-import { withCliDiagnosticPhase } from "../lib/diagnostics.js";
+import { beginDiagnosticPhase, emitDiagnostic, enterDiagnosticContext } from "@tinycloud/operations/diagnostics";
+import { cliDiagnosticPermissions, withCliDiagnosticPhase } from "../lib/diagnostics.js";
 import {
   generateLocalIdentity,
   deriveAddress,
@@ -202,6 +202,7 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
             ...replicationOptions,
             ownerOpenKey: options.device !== true && resolveProfilePosture(profileConfig ?? {}) === "owner-openkey",
           });
+        enterDiagnosticContext(await cliDiagnosticPermissions(loginPermissions));
 
         // Only an explicit --host becomes the profile's host; TC_HOST and a
         // discovered local node stay one-off.
@@ -424,6 +425,7 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
           throw new CLIError("INVALID_ARGUMENT", "--device requires --grant on an OpenKey owner profile.", ExitCode.USAGE_ERROR);
         }
         const requested = await collectRequestedPermissions(options, ctx.profile);
+        enterDiagnosticContext(await cliDiagnosticPermissions(requested));
         const expiryOption = parseExpiryOption(options.expiry);
 
         if (requested.length === 0) {
@@ -594,6 +596,7 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
         const parsed = JSON.parse(raw) as unknown;
 
         if (isCompatiblePermissionRequestArtifact(parsed)) {
+          enterDiagnosticContext(await cliDiagnosticPermissions(parsed.requested));
           await appendPermissionRequestArtifact(ctx.profile, parsed);
           outputJson({
             imported: true,
@@ -778,6 +781,7 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
         }
 
         const requested = await resolvePermissionSpaces(parsed.requested, ctx.profile);
+        enterDiagnosticContext(await cliDiagnosticPermissions(requested));
         const resolvedRequest = { ...parsed, requested };
         const node = await ensureAuthenticated(ctx);
         await ensureDelegationAuthority({
@@ -831,6 +835,7 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
             ExitCode.NOT_FOUND,
           );
         }
+        enterDiagnosticContext(await cliDiagnosticPermissions(artifact.requested));
 
         const node = await ensureAuthenticated(ctx);
         const covered = node.hasRuntimePermissions(artifact.requested);
@@ -1154,6 +1159,14 @@ async function importRequestBoundDelegationWithBootstrap(
   ctx: CLIContext,
   artifact: unknown,
 ): Promise<void> {
+  // Admission is best-effort attribution only. The canonical importer still
+  // independently verifies the request, session, host and signed grant.
+  try {
+    if (typeof artifact === "object" && artifact !== null && "requestId" in artifact && typeof artifact.requestId === "string") {
+      const request = await getPermissionRequestArtifact(ctx.profile, artifact.requestId);
+      enterDiagnosticContext(await cliDiagnosticPermissions(request?.requested));
+    }
+  } catch { enterDiagnosticContext(undefined); }
   const session = await ProfileManager.getSession(ctx.profile);
   if (session !== null) {
     await importRequestBoundDelegation(ctx, artifact);

@@ -142,6 +142,8 @@ version metadata and make the immutable release checkout fail the clean-tree pub
   `src/tc-apps/`. The published skill is pinned under `src/tc-apps/vendor/`;
   update it with `bun scripts/sync-tc-apps-rules.ts`, then
   `bun run generate:operations-mcp`. Generation/checking is offline thereafter.
+  An unpublished guidance checkpoint can be pinned with `--local-site SITE
+  --source-commit SHA`; alpha inputs are recorded in `scripts/tc-apps-alpha-guidance.json`.
 - Never add a response `deadlineMs` to personal-record writes: deadlines abandon
   work rather than cancel it. Preserve per-op outcomes after any committed write,
   including a partial move or failed derived-copy upkeep.
@@ -155,6 +157,9 @@ version metadata and make the immutable release checkout fail the clean-tree pub
   content-free; selected detail requires independent owner selection and policy.
   Main business processes perform no diagnostic filesystem I/O. Preserve unknown
   outcomes, lost coverage, and separate business/protocol/delivery evidence.
+  `telemetry.diagnostics` is independent of generic telemetry. Only recognized
+  tc-apps invocations may opt in; a shared launch marker is not admission.
+  Bounded close must not terminate the bridge that observes native child death.
 - MCP inbound dispatch and transport sends stay synchronous, including cancellation
   during stdio policy refresh. Admission contexts are immutable across generation
   changes; racing requests may lack evidence, never gain permission to replay.
@@ -181,3 +186,11 @@ version metadata and make the immutable release checkout fail the clean-tree pub
   published-package/container worker checks, hosted isolated-volume encryption,
   backup/deletion and restart/rollback acceptance are separate authorized gates.
   Keep public logs/sysinfo disabled and preserve the single-replica assumption.
+- The isolated npm alpha is built by `scripts/build-team-preview.mjs`, using
+  ordinary bundled dependencies and a locked staging install. Keep build-only npm
+  overrides out of the delivered manifest, and bundle SIWE's required ethers peer.
+  `operations-mcp.yml` publishes only the verified tarball on the diagnostics
+  feature branch with an explicit `[publish tc-apps alpha]` commit marker; its
+  separate preview image consumes the same tarball. Never invoke production
+  `mcp-image.yml` or normal release workflows for this alpha. Hosted access,
+  encryption/backup policy and browser/phone acceptance are separate gates.

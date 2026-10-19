@@ -9,7 +9,7 @@ import {
 import { ServiceContext } from "./context";
 import { KVService } from "./kv/KVService";
 import { SQLService } from "./sql/SQLService";
-import { projectAttemptDiagnostic } from "./diagnostics";
+import { dispatchDiagnosticFetch, projectAttemptDiagnostic } from "./diagnostics";
 
 function createContext(telemetry?: ConstructorParameters<typeof ServiceContext>[0]["telemetry"]) {
   return new ServiceContext({
@@ -250,7 +250,7 @@ describe("ServiceContext retirement", () => {
 });
 
 describe("physical diagnostic attempts", () => {
-  function fixture(options: { enabled?: boolean; preflight?: "auth" | "fetch"; reject?: boolean; sinkThrows?: boolean } = {}) {
+  function fixture(options: { enabled?: boolean; diagnostics?: boolean; preflight?: "auth" | "fetch"; reject?: boolean; sinkThrows?: boolean } = {}) {
     const events: Array<[string, Record<string, unknown>]> = [];
     let dispatched = 0;
     const context = new ServiceContext({
@@ -267,7 +267,8 @@ describe("physical diagnostic attempts", () => {
       },
       session: { delegationHeader: {}, delegationCid: "synthetic", spaceId: "synthetic", verificationMethod: "synthetic", jwk: {} },
       telemetry: {
-        enabled: options.enabled ?? true,
+        enabled: options.enabled,
+        diagnostics: options.diagnostics ?? true,
         onEvent: (name, data) => {
           // ServiceContext has already projected this local diagnostic callback.
           if (name.startsWith("diagnostic.")) events.push([name, data as Record<string, unknown>]);
@@ -336,12 +337,45 @@ describe("physical diagnostic attempts", () => {
   });
 
   test("disabled and throwing sinks preserve successful business behavior", async () => {
-    const disabled = fixture({ enabled: false });
+    const disabled = fixture({ diagnostics: false });
     expect((await disabled.kv.put("key", "value")).ok).toBe(true);
     expect(disabled.events).toEqual([]);
     const throwing = fixture({ sinkThrows: true });
     expect((await throwing.kv.put("key", "value")).ok).toBe(true);
     expect(throwing.events).toHaveLength(2);
+  });
+
+  test("generic telemetry alone keeps native dispatch identity and ordinary callbacks", async () => {
+    const events: Array<[string, unknown]> = [];
+    const context = createContext({ enabled: true, onEvent: (name, data) => events.push([name, data]) });
+    const response = new Response("synthetic");
+    const pending = Promise.resolve(response);
+    const init = { method: "POST" };
+    let passedInit: unknown;
+    const transport = (_url: string, value?: RequestInit) => { passedInit = value; return pending; };
+    expect(dispatchDiagnosticFetch(context, transport, "kv", "put", "http://synthetic", init)).toBe(pending);
+    expect(passedInit).toBe(init);
+    context.emit("diagnostic.attempt.start", { attempt_id: crypto.randomUUID(), service: "kv", action: "put" });
+    context.emit("service.response", { duration: 12 });
+    expect(events).toEqual([["service.response", { duration: 12 }]]);
+    expect(await pending).toBe(response);
+    const failure = new Error("synthetic synchronous failure");
+    expect(() => dispatchDiagnosticFetch(context, () => { throw failure; }, "kv", "put", "http://synthetic", init)).toThrow(failure);
+  });
+
+  test("concurrent opted-in and generic-only operations keep evidence isolated", async () => {
+    const scoped = fixture();
+    const unscoped = fixture({ enabled: true, diagnostics: false });
+    const [recorded, ordinary] = await Promise.all([
+      scoped.kv.put("synthetic", "value"),
+      unscoped.kv.put("synthetic", "value"),
+    ]);
+    expect(recorded.ok).toBe(true);
+    expect(ordinary.ok).toBe(true);
+    expect(scoped.dispatched()).toBe(1);
+    expect(unscoped.dispatched()).toBe(1);
+    expect(scoped.events.map(([name]) => name)).toEqual(["diagnostic.attempt.start", "diagnostic.attempt.finish"]);
+    expect(unscoped.events).toEqual([]);
   });
 
   test("retry projection preserves only explicit attempt linkage and rejects raw extras/getters", () => {

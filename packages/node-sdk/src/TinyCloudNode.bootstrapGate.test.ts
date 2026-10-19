@@ -512,7 +512,7 @@ describe("account bootstrap — sqlForSpace threads invokeAny (issue #300)", () 
 describe("scoped physical diagnostic attempts", () => {
   test("scoped KV and SQL emit once per dispatch through nested service contexts", async () => {
     const events: Array<[string, Record<string, unknown>]> = [];
-    const telemetry = { enabled: true, onEvent: (name: string, data: unknown) => {
+    const telemetry = { diagnostics: true, onEvent: (name: string, data: unknown) => {
       // Only ServiceContext's projected local diagnostic callback reaches this collector.
       if (name.startsWith("diagnostic.")) events.push([name, data as Record<string, unknown>]);
     } };

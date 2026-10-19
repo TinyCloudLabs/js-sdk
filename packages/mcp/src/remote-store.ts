@@ -582,7 +582,7 @@ export class RemoteTenantStore {
       ownerDids: ownerDids.map(normalizeDid),
       createdAt: new Date(created).toISOString(),
       expiresAt: new Date(created + this.#config.approvalTtlSeconds * 1000).toISOString(),
-      ...(getDiagnosticContext() === undefined ? {} : { diagnosticReference: diagnosticId() }),
+      ...(getDiagnosticContext()?.scope === "tc-apps" ? { diagnosticReference: diagnosticId() } : {}),
     };
     try {
       await secureWrite(this.#pendingPath(tenant.stateRoot, nonce), pending);
@@ -677,7 +677,7 @@ export class RemoteTenantStore {
         role: "approval",
         role_provenance: "observed",
       }, action);
-    });
+    }, isDiagnosticId(pending.diagnosticReference));
   }
 
   #connectUrl(pending: PendingApproval): string {

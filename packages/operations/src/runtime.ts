@@ -155,7 +155,7 @@ export async function createInvocationRuntime(
     }
     const node = new TinyCloudNodeConstructor({
       host: summary.host,
-      ...(getDiagnosticContext() === undefined ? {} : { telemetry: diagnosticTelemetry }),
+      ...(getDiagnosticContext()?.scope === "tc-apps" ? { telemetry: diagnosticTelemetry } : {}),
       ...(privateKey === undefined ? {} : { privateKey }),
     });
 
@@ -339,7 +339,7 @@ async function createRestoredRuntime(
     // Wallet-mode restore needs the profile's own key when it has one.
     const node = new TinyCloudNodeConstructor({
       host: summary.host,
-      ...(getDiagnosticContext() === undefined ? {} : { telemetry: diagnosticTelemetry }),
+      ...(getDiagnosticContext()?.scope === "tc-apps" ? { telemetry: diagnosticTelemetry } : {}),
       ...(typeof profile.privateKey === "string" ? { privateKey: profile.privateKey } : {}),
     });
     try {

@@ -307,9 +307,9 @@ export class DiagnosticRuntime {
       const complete = () => { clearTimeout(timer); worker.off("exit", complete); resolve(); };
       const timer = setTimeout(() => {
         this.fail("timeout");
-        // This terminates only the filesystem-free bridge. The child observes
-        // IPC loss and owns its bounded cleanup; unresolved work stays pending.
-        void worker.terminate().catch(() => this.fail("worker"));
+        // Bound the caller's wait, not the child-death observer's lifetime.
+        // The unreferenced bridge owns the child watchdog and must remain alive
+        // to settle reservations. Its exit handler alone releases writer ownership.
         complete();
       }, 2000);
       worker.once("exit", complete);

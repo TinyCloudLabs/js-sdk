@@ -1,0 +1,26 @@
+# Build context is the directory containing the already verified npm tarball.
+# docker build --platform linux/amd64 -f packages/mcp/Dockerfile.preview \
+#   --build-arg ALPHA_TARBALL=tinycloud-telemetry-preview-0.1.0-alpha.0.tgz \
+#   --build-arg ALPHA_SHA256=<verified-sha256> <artifact-directory>
+# This is a separate synthetic-only service, never the production MCP image.
+FROM --platform=linux/amd64 node:22.23.2-bookworm-slim
+ARG ALPHA_TARBALL
+ARG ALPHA_SHA256
+COPY ${ALPHA_TARBALL} /tmp/alpha.tgz
+WORKDIR /opt/tinycloud-alpha
+RUN test -n "$ALPHA_SHA256" \
+    && printf '%s  /tmp/alpha.tgz\n' "$ALPHA_SHA256" | sha256sum --check --strict \
+    && npm install --offline --ignore-scripts --no-audit --no-fund /tmp/alpha.tgz \
+    && node node_modules/@tinycloud/telemetry-preview/bin/tc-apps-alpha-mcp --alpha-identity \
+    && rm /tmp/alpha.tgz \
+    && mkdir -p /var/lib/tinycloud-alpha/mcp /var/lib/tinycloud-alpha/diagnostics \
+    && chmod 700 /var/lib/tinycloud-alpha /var/lib/tinycloud-alpha/mcp /var/lib/tinycloud-alpha/diagnostics \
+    && chown -R node:node /var/lib/tinycloud-alpha
+ENV NODE_ENV=production
+ENV TC_MCP_STATE_DIR=/var/lib/tinycloud-alpha/mcp
+ENV TC_DIAGNOSTICS_HOME=/var/lib/tinycloud-alpha/diagnostics
+USER node
+EXPOSE 3000
+HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
+  CMD node -e "fetch('http://127.0.0.1:3000/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+CMD ["/opt/tinycloud-alpha/node_modules/.bin/tc-apps-alpha-mcp", "--http"]

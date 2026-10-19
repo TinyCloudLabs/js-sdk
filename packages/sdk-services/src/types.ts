@@ -308,6 +308,8 @@ export type TelemetryConfig =
   | boolean
   | {
       enabled?: boolean;
+      /** Independently opt in to fixed transport diagnostics for this invocation. Default false. */
+      diagnostics?: boolean;
       onEvent?: TelemetryEventHandler;
     };
 
@@ -354,7 +356,7 @@ export interface IServiceContext {
   getService<T extends IService>(name: string): T | undefined;
 
   // Telemetry/Events
-  /** Whether fixed transport diagnostics have a configured sink. Default off. */
+  /** Whether this invocation explicitly enables fixed transport diagnostics with a sink. */
   readonly diagnosticTelemetryEnabled?: boolean;
   /** Emit a telemetry event */
   emit(event: string, data: unknown): void;

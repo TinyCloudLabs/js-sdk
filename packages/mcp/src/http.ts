@@ -16,7 +16,7 @@ import { beginDiagnosticPhase } from "@tinycloud/operations/diagnostics";
 
 import { createOpenKeyTokenVerifier } from "./oauth.js";
 import { logToolCall } from "./logging.js";
-import { DiagnosticMcpServer, diagnosticExecutor, diagnosticSchema } from "./diagnostics.js";
+import { DiagnosticMcpServer, diagnosticExecutor, diagnosticSchema, isAppsDiagnosticRequest } from "./diagnostics.js";
 import { HostedDiagnostics, type HostedDiagnosticConfig } from "./hosted-diagnostics.js";
 import {
   ApprovalOwnerMismatchError,
@@ -200,10 +200,14 @@ export function createHostedMcpApp(config: HostedMcpConfig): HostedMcpApp {
       if (diagnostics === undefined || typeof auth.extra?.subject !== "string") {
         return handler.fetch(request, { authInfo: auth });
       }
+      // Inspect a clone only for diagnostic admission; the protocol handler owns
+      // validation and consumes the original request exactly as without capture.
+      const scoped = request.method === "POST"
+        && await request.clone().json().then(isAppsDiagnosticRequest, () => false);
       // Only the verified OAuth subject is used by the existing HMAC tenant
       // mapping. Peer _meta, headers and diagnostic IDs never choose a partition.
       const tenantId = basename(store.tenantStateRoot(auth.extra.subject));
-      return diagnostics.tenant(tenantId, () => handler.fetch(request, { authInfo: auth }));
+      return diagnostics.tenant(tenantId, () => handler.fetch(request, { authInfo: auth }), scoped);
   };
   return {
     diagnostics,

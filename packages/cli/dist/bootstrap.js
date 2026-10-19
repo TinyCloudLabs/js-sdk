@@ -1,6 +1,3 @@
-// src/bootstrap.ts
-import { enterDiagnosticContext, emitDiagnostic as emitDiagnostic2 } from "@tinycloud/operations/diagnostics";
-
 // src/command-token.ts
 function firstCommandIndex(values) {
   for (let index = 0; index < values.length; index += 1) {
@@ -37,7 +34,7 @@ import {
 } from "@tinycloud/operations/diagnostics";
 var stateKey = /* @__PURE__ */ Symbol.for("tinycloud.cli.diagnostics.v1");
 var globals = globalThis;
-async function initializeCliDiagnostics() {
+function initializeCliDiagnostics() {
   try {
     globals[stateKey] = {
       started: performance.now(),
@@ -46,39 +43,7 @@ async function initializeCliDiagnostics() {
       parsed: false
     };
     process.once("exit", finishCliDiagnostics);
-    const links = decodeDiagnosticContext(process.env.TC_DIAGNOSTICS_CONTEXT);
-    if (links?.scope === "tc-apps") {
-      return await activate();
-    }
   } catch {
-  }
-}
-async function activate(activity) {
-  const state = globals[stateKey];
-  if (!state || state.finished) return getDiagnosticContext();
-  if (state.context) return state.context;
-  try {
-    const links = decodeDiagnosticContext(process.env.TC_DIAGNOSTICS_CONTEXT);
-    state.runtime ??= createDiagnosticRuntime({
-      source: "cli",
-      descriptor: {
-        descriptor_id: diagnosticId(),
-        source: "cli",
-        package: "@tinycloud/cli",
-        ...true ? { version: "1.2.6-beta.3" } : {},
-        ...diagnosticClientProvenance(links)
-      }
-    });
-    const binding = await state.runtime.binding();
-    if (!binding) return void 0;
-    state.context = makeDiagnosticContext(binding, "cli", links);
-    state.activity = activity;
-    state.runtime.emit({ type: "invocation.start", activity: activity ?? "unknown" }, state.context);
-    if (state.imported) state.runtime.emit({ type: "phase.finish", phase: "import" }, state.context);
-    if (state.parsed) state.runtime.emit({ type: "phase.finish", phase: "parse" }, state.context);
-    return state.context;
-  } catch {
-    return void 0;
   }
 }
 function finishCliDiagnostics(code = 0, signal) {
@@ -118,9 +83,7 @@ if (args[commandIndex] === "diagnostics") {
   const entry = await load(new URL("./diagnostics-entry.js", import.meta.url).href);
   await entry.runDiagnostics(args);
 } else {
-  const context = await initializeCliDiagnostics();
-  if (context) enterDiagnosticContext(context);
-  emitDiagnostic2({ type: "phase.start", phase: "import" });
+  initializeCliDiagnostics();
   await load(new URL("./index.js", import.meta.url).href);
 }
 //# sourceMappingURL=bootstrap.js.map

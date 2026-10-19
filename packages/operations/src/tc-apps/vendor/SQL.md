@@ -11,6 +11,10 @@ Run the blocks as `SKILL.md` says: literal `<TC_BIN>` and `<STATE>` from its §1
 
 **Never run two SQL writes at the same time.** That includes another block of yours, and `xargs`. Parallel writes to one database can fail, or half-apply. Writes in this file run one after another; only reads run side by side.
 
+### Optional local diagnostic hints
+
+The index works without diagnostics. Only for separately authorized, explicitly selected blocks, follow [DIAGNOSTICS.md](DIAGNOSTICS.md); never enable capture or select conversation content as a side effect of SQL work. With `diagnostics run --scope tc-apps`, optional `--role approval` describes §1, `--role copy` describes §2/§3/§6 copy setup and maintenance, and `--role verification` describes a separately selected §4 copy check. A §5 record-answer query can use `--role record`. Omit the hint for mixed work rather than splitting or changing the normal blocks. Hints do not prove copy freshness, complete coverage or mutation success, and must never contain SQL, parameters, keys, values or the owner's approval code.
+
 ## 1. Ask for the fast copy
 
 `SKILL.md` §7 sends you here when an answer needed many records and the index is missing or expired, or when the owner asks about it. It takes two steps: you ask in 1a, and finish in 1b once the owner sends the code.
