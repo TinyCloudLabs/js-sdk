@@ -1,3 +1,5 @@
+import type { IKVService } from "@tinycloud/node-sdk";
+import { kvArtifactStore } from "./artifact-store.js";
 import { ShareHistoryRetryError, SharePublishAuthorityError } from "./errors.js";
 import { storageRejection } from "../output/storage.js";
 import { readFile } from "node:fs/promises";
@@ -9,6 +11,15 @@ import { CLIError } from "../output/errors.js";
 import { isSessionExpiredError } from "../auth/session-expired.js";
 import { writeJsonAtomic } from "@tinycloud/operations/state";
 import { withoutBearer } from "@tinycloud/operations/delegation-binding";
+import {
+  ArtifactError,
+  artifactVersionFilePath,
+  buildArtifactPin,
+  publishArtifactVersion,
+  type ArtifactVersionInput,
+  type ArtifactStore,
+  type ArtifactVersionResult,
+} from "@tinycloud/share-sdk/artifact";
 import {
   createNativeShare,
   parseNativeShareUrl,
@@ -41,10 +52,10 @@ import {
 } from "@tinycloud/sdk-core";
 import { extractSiweExpiration, InvalidRestoredSessionError, type TinyCloudNode } from "@tinycloud/node-sdk";
 
-function requiredKvAction(meta: unknown): "tinycloud.kv/put" | "tinycloud.kv/get" | undefined {
+function requiredKvAction(meta: unknown): "tinycloud.kv/put" | "tinycloud.kv/get" | "tinycloud.kv/list" | undefined {
   if (meta === null || typeof meta !== "object" || !("requiredAction" in meta)) return undefined;
   const action = meta.requiredAction;
-  return action === "tinycloud.kv/put" || action === "tinycloud.kv/get" ? action : undefined;
+  return action === "tinycloud.kv/put" || action === "tinycloud.kv/get" || action === "tinycloud.kv/list" ? action : undefined;
 }
 /** A storage refusal stays one with or without account totals; the Node's text never reaches output. */
 function throwKvUploadFailure(error: unknown): never {
@@ -98,6 +109,39 @@ function safeStorageFilename(filename: string): string {
     .slice(0, 100)
     .replace(/^[^A-Za-z0-9]+|[-.]+$/g, "");
   return `${stem === "" ? "share" : stem}${extension === "" ? "" : `.${extension}`}`;
+}
+
+/** A denied KV call during an artifact operation, as the usual scope error (and its re-login hint). */
+function scopeDeniedFromArtifactError(
+  error: unknown,
+  capability: "KV upload" | "artifact storage",
+  authority: { readonly localKey: boolean; readonly profileName: string | undefined },
+): SharePublishAuthorityError | undefined {
+  const cause = error instanceof ArtifactError ? error.cause : undefined;
+  const code = typeof cause === "object" && cause !== null && "code" in cause ? cause.code : undefined;
+  if (code !== "AUTH_UNAUTHORIZED" && code !== "PERMISSION_DENIED") return undefined;
+  const meta = typeof cause === "object" && cause !== null && "meta" in cause ? cause.meta : undefined;
+  const requiredAction = requiredKvAction(meta);
+  return new SharePublishAuthorityError({
+    kind: "scope-denied",
+    capability,
+    ...(requiredAction === undefined ? {} : { requiredAction }),
+    localKey: authority.localKey,
+    profileName: authority.profileName,
+  });
+}
+
+/** Claim the next artifact version, reporting a KV authority failure as the usual scope error. */
+async function storeArtifactVersion(
+  kv: IKVService,
+  version: ArtifactVersionInput,
+  authority: { readonly localKey: boolean; readonly profileName: string | undefined },
+): Promise<ArtifactVersionResult> {
+  try {
+    return await publishArtifactVersion(kvArtifactStore(kv), version);
+  } catch (error) {
+    throw scopeDeniedFromArtifactError(error, "KV upload", authority) ?? error;
+  }
 }
 
 export class ShareAuthorityError extends Error {
@@ -340,6 +384,8 @@ export function createShareAuthorityAdapters(input: {
   readonly revocation: ShareRevocationAdapter;
   readonly assertDomainDelivery: () => Promise<void>;
   readonly nativeReader: (link: string) => Promise<{ readonly bytes: Uint8Array; readonly filename: string }>;
+  /** The authenticated owner's artifact storage (`tc share versions`). */
+  readonly artifactStore: () => Promise<ArtifactStore>;
 } {
   const origin = input.origin ?? DEFAULT_SHARE_ORIGIN;
   const fetchFn = input.fetchFn ?? globalThis.fetch;
@@ -488,7 +534,13 @@ export function createShareAuthorityAdapters(input: {
     if (targetInput.target.kind === "bearer") {
       if (resourceKind !== "exact" || files.length !== 1) throw new Error("native bearer publication requires one exact source file");
       const file = files[0]!;
-      const resourcePath = `xyz.tinycloud.share/shares/${shareId}/${safeStorageFilename(targetInput.filename)}`;
+      const storageName = safeStorageFilename(targetInput.filename);
+      const artifact = targetInput.artifact;
+      // An artifact share is pinned to a write-once version, so its path is only known after the version is
+      // claimed. The preflight below uses version 1 of the same artifact: every version shares one scope.
+      let resourcePath = artifact === undefined
+        ? `xyz.tinycloud.share/shares/${shareId}/${storageName}`
+        : artifactVersionFilePath(artifact.id, 1, storageName);
       // A session-only profile can mint the link's delegation only from its
       // own uncaveated authority (no signer to fall back on). Check before
       // storing, so a refusal leaves no orphaned file. The request matches
@@ -502,22 +554,32 @@ export function createShareAuthorityAdapters(input: {
           throw new SharePublishAuthorityError({ kind: "scope-denied", capability: "sharing delegation", localKey, profileName: activeProfileName });
         }
       }
-      const written = await node.kvForSpace(ownerSpaceId).put(resourcePath, file.bytes.slice(), {
-        contentType: targetInput.mediaType ?? file.mediaType ?? "application/octet-stream",
-      });
-      if (!written.ok) {
-        const code = typeof written.error === "object" && written.error !== null && "code" in written.error ? written.error.code : undefined;
-        if (code === "AUTH_UNAUTHORIZED" || code === "PERMISSION_DENIED") {
-          const requiredAction = requiredKvAction(written.error.meta);
-          throw new SharePublishAuthorityError({
-            kind: "scope-denied",
-            capability: "KV upload",
-            ...(requiredAction === undefined ? {} : { requiredAction }),
-            localKey,
-            profileName: activeProfileName,
-          });
+      let artifactVersion: ArtifactVersionResult | undefined;
+      if (artifact !== undefined) {
+        artifactVersion = await storeArtifactVersion(node.kvForSpace(ownerSpaceId), {
+          artifactId: artifact.id,
+          files: [{ filename: storageName, bytes: file.bytes, contentType: targetInput.mediaType ?? file.mediaType ?? "application/octet-stream" }],
+          ...(artifact.note === undefined ? {} : { note: artifact.note }),
+        }, { localKey, profileName: activeProfileName });
+        resourcePath = artifactVersionFilePath(artifact.id, artifactVersion.version, storageName);
+      } else {
+        const written = await node.kvForSpace(ownerSpaceId).put(resourcePath, file.bytes.slice(), {
+          contentType: targetInput.mediaType ?? file.mediaType ?? "application/octet-stream",
+        });
+        if (!written.ok) {
+          const code = typeof written.error === "object" && written.error !== null && "code" in written.error ? written.error.code : undefined;
+          if (code === "AUTH_UNAUTHORIZED" || code === "PERMISSION_DENIED") {
+            const requiredAction = requiredKvAction(written.error.meta);
+            throw new SharePublishAuthorityError({
+              kind: "scope-denied",
+              capability: "KV upload",
+              ...(requiredAction === undefined ? {} : { requiredAction }),
+              localKey,
+              profileName: activeProfileName,
+            });
+          }
+          throwKvUploadFailure(written.error);
         }
-        throwKvUploadFailure(written.error);
       }
       let native: NativeShareResult;
       try {
@@ -557,6 +619,7 @@ export function createShareAuthorityAdapters(input: {
           display: { filename: targetInput.filename },
           recipientMatcher: { kind: "bearer" as const },
           enforcementDelegationCid: native.delegationCid,
+          ...(artifact !== undefined && artifactVersion !== undefined ? { artifact: { id: artifact.id, version: artifactVersion.version, mode: "pinned" as const } } : {}),
         },
       } satisfies PublishedShare;
       Object.defineProperty(result, "toJSON", { enumerable: false, value: () => redactPublishedShare(result) });
@@ -568,12 +631,19 @@ export function createShareAuthorityAdapters(input: {
     // need a shared key the envelope does not carry.
     if (resourceKind !== "exact" || files.length !== 1) throw new Error("addressed publication requires a single exact source file");
     const file = files[0]!;
-    const resourcePath = `shares/${shareId}/${safeStorageFilename(targetInput.filename)}`;
+    const storageName = safeStorageFilename(targetInput.filename);
+    const artifact = targetInput.artifact;
+    // A pinned artifact share reads one write-once version file, so its path is only known after the version is claimed.
+    let resourcePath = artifact === undefined ? `shares/${shareId}/${storageName}` : artifactVersionFilePath(artifact.id, 1, storageName);
     const byteLength = file.bytes.byteLength;
     if (!Number.isSafeInteger(byteLength) || byteLength > 100 * 1024 * 1024) throw new Error("addressed publication exceeds the combined byte limit");
     const mediaType = targetInput.mediaType ?? file.mediaType ?? "application/octet-stream";
     const actions = targetInput.actions === undefined || targetInput.actions.length === 0 ? ["read"] as const : targetInput.actions;
     const policyActions = [...new Set(actions.flatMap((action) => action === "read" ? ["tinycloud.kv/get", "tinycloud.kv/metadata"] : action === "list" ? ["tinycloud.kv/list"] : ["tinycloud.kv/put"]))] as ("tinycloud.kv/get" | "tinycloud.kv/list" | "tinycloud.kv/metadata" | "tinycloud.kv/put")[];
+    // A pinned path is immutable: it never carries `put`. v1 artifact shares are pinned-only; ongoing shares wait for link-as-delegation.
+    if (artifact !== undefined && policyActions.includes("tinycloud.kv/put")) {
+      throw new SharePublishAuthorityError({ kind: "invalid-request", reason: "a pinned artifact share cannot grant edit" });
+    }
     // Refuse a bad target, recipient, filename or action set before anything
     // is published or uploaded. This also canonicalizes the recipient and
     // derives the credential commitment mailbox recipients open the share
@@ -600,20 +670,33 @@ export function createShareAuthorityAdapters(input: {
     const encrypted = await node.encryption.encryptToNetwork(encryptionNetwork, file.bytes, { metadata: { contentType: mediaType } });
     if (!encrypted.ok) throw new Error("addressed source encryption was rejected");
     const storedBytes = new TextEncoder().encode(canonicalize(encrypted.data as unknown as Record<string, unknown>));
-    const stored = await node.kvForSpace(ownerSpaceId).put(resourcePath, storedBytes, { contentType: "application/vnd.tinycloud.encrypted-envelope+json" });
-    if (!stored.ok) {
-      const code = typeof stored.error === "object" && stored.error !== null && "code" in stored.error ? stored.error.code : undefined;
-      if (code === "AUTH_UNAUTHORIZED" || code === "PERMISSION_DENIED") {
-        const requiredAction = requiredKvAction(stored.error.meta);
-        throw new SharePublishAuthorityError({
-          kind: "scope-denied",
-          capability: "KV upload",
-          ...(requiredAction === undefined ? {} : { requiredAction }),
-          localKey,
-          profileName: activeProfileName,
-        });
+    let artifactVersion: ArtifactVersionResult | undefined;
+    if (artifact !== undefined) {
+      // The manifest records the digest of these stored bytes (ciphertext) only: a hash of the plaintext would sit
+      // in the owner's space next to the ciphertext and let a reader confirm a guessed plaintext. Every encryption
+      // is a fresh random key, so each addressed publish is its own version.
+      artifactVersion = await storeArtifactVersion(node.kvForSpace(ownerSpaceId), {
+        artifactId: artifact.id,
+        files: [{ filename: storageName, bytes: storedBytes, contentType: "application/vnd.tinycloud.encrypted-envelope+json" }],
+        ...(artifact.note === undefined ? {} : { note: artifact.note }),
+      }, { localKey, profileName: activeProfileName });
+      resourcePath = artifactVersionFilePath(artifact.id, artifactVersion.version, storageName);
+    } else {
+      const stored = await node.kvForSpace(ownerSpaceId).put(resourcePath, storedBytes, { contentType: "application/vnd.tinycloud.encrypted-envelope+json" });
+      if (!stored.ok) {
+        const code = typeof stored.error === "object" && stored.error !== null && "code" in stored.error ? stored.error.code : undefined;
+        if (code === "AUTH_UNAUTHORIZED" || code === "PERMISSION_DENIED") {
+          const requiredAction = requiredKvAction(stored.error.meta);
+          throw new SharePublishAuthorityError({
+            kind: "scope-denied",
+            capability: "KV upload",
+            ...(requiredAction === undefined ? {} : { requiredAction }),
+            localKey,
+            profileName: activeProfileName,
+          });
+        }
+        throwKvUploadFailure(stored.error);
       }
-      throwKvUploadFailure(stored.error);
     }
     const contentSource = {
       shareId,
@@ -637,6 +720,8 @@ export function createShareAuthorityAdapters(input: {
       actions,
       policyActions,
       contentSource,
+      // The owner-signed pin: artifact id, version, manifest digest and the digest of the stored ciphertext this share reads.
+      ...(artifactVersion === undefined ? {} : { artifactPin: buildArtifactPin(artifactVersion, storageName) }),
       ...(prepared.credentialRequirement === undefined ? {} : { credentialRequirement: prepared.credentialRequirement }),
       // tinycloud-node 1.17.2 signs a delivery receipt only for the envelope's
       // own signed delivery address (1.17.3 accepts it and no longer requires
@@ -658,6 +743,9 @@ export function createShareAuthorityAdapters(input: {
       },
     });
     if (expiryClamped) Object.defineProperty(published.metadata, "expiryClamped", { value: true, enumerable: true });
+    if (artifact !== undefined && artifactVersion !== undefined) {
+      Object.defineProperty(published.metadata, "artifact", { value: { id: artifact.id, version: artifactVersion.version, mode: "pinned" as const }, enumerable: true });
+    }
     return published;
   } };
   const delivery: ShareDeliveryAdapter = { deliver: input.deliver ?? (async (request) => {
@@ -810,6 +898,23 @@ export function createShareAuthorityAdapters(input: {
     if (value === undefined || !value.ok || !(value.data.data instanceof Uint8Array)) throw new Error("native share content could not be read");
     return { bytes: value.data.data.slice(), filename: received.data.path.split("/").at(-1) || "share.md" };
   };
+  const artifactStore = async (): Promise<ArtifactStore> => {
+    const node = await authenticatedNode();
+    const spaceId = node.restorableSession?.spaceId;
+    if (spaceId === undefined) throw new SharePublishAuthorityError({ kind: "owner-space-unresolved", localKey: !node.isSessionOnly, profileName: activeProfileName });
+    const store = kvArtifactStore(node.kvForSpace(spaceId));
+    const authority = { localKey: !node.isSessionOnly, profileName: activeProfileName };
+    // A profile signed in before the `artifacts/` scope existed is refused by the node; say so the way publish does.
+    const mapped = async <T>(operation: () => Promise<T>): Promise<T> => {
+      try { return await operation(); }
+      catch (error) { throw scopeDeniedFromArtifactError(error, "artifact storage", authority) ?? error; }
+    };
+    return {
+      put: (key, bytes, options) => mapped(() => store.put(key, bytes, options)),
+      get: (key) => mapped(() => store.get(key)),
+      list: (prefix) => mapped(() => store.list(prefix)),
+    };
+  };
   return {
     targetAdapter,
     records: input.profileName === undefined ? createEncryptedSessionHistory() : createEncryptedProfileHistory(profileName, async (bytes, profile) => {
@@ -825,6 +930,7 @@ export function createShareAuthorityAdapters(input: {
     revocation,
     assertDomainDelivery,
     nativeReader,
+    artifactStore,
   };
 }
 

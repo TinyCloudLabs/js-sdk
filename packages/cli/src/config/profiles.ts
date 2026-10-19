@@ -1,7 +1,10 @@
-import { chmod, lstat, readdir, rm, rmdir } from "node:fs/promises";
+import { chmod, lstat, readdir, rm } from "node:fs/promises";
 import { CLI_NAME } from "@tinycloud/operations/cli-name";
 import { join } from "node:path";
 import {
+  assertRealProfileDirectory,
+  ProfileSymlinkError,
+  namedProfilePath,
   profilePath,
   readSession,
   recordProfileDeletion,
@@ -9,6 +12,7 @@ import {
   removeSession,
   withProfileLock,
   writeSession,
+  withPinnedProfileDirectory,
   type ProfileLockOptions,
 } from "@tinycloud/operations/state";
 import {
@@ -22,6 +26,7 @@ import {
 import {
   readJson,
   writeJson,
+  writeJsonDurable,
   fileExists,
   ensureDir,
   listDirs,
@@ -67,8 +72,13 @@ export class ProfileManager {
 
   /** Owner-only profile directory (0700), created or tightened before any write into it. */
   static async ensureProfileDir(name: string): Promise<string> {
+    const profileDir = profilePath(name);
+    if (profileDir !== join(PROFILES_DIR, name)) {
+      await chmod(profileDir, PRIVATE_DIR_MODE);
+      return profileDir;
+    }
     await ProfileManager.ensureConfigDir();
-    const profileDir = join(PROFILES_DIR, name);
+    await assertRealProfileDirectory(name);
     await ensureDir(profileDir);
     await chmod(profileDir, PRIVATE_DIR_MODE);
     return profileDir;
@@ -102,8 +112,8 @@ export class ProfileManager {
    * Throws CLIError if the profile doesn't exist.
    */
   static async getProfile(name: string): Promise<ProfileConfig> {
-    const profilePath = join(PROFILES_DIR, name, "profile.json");
-    const profile = await readJson<ProfileConfig>(profilePath);
+    const profile = await withPinnedProfileDirectory(name, (directory) =>
+      directory ? readJson<ProfileConfig>(join(directory, "profile.json")) : Promise.resolve(null));
     if (!profile) {
       throw new CLIError(
         "PROFILE_NOT_FOUND",
@@ -123,16 +133,25 @@ export class ProfileManager {
     });
   }
 
+  /** Publish explicit logout provenance (or its verified-login clear) durably under the profile lock. */
+  static async setProfileDurable(name: string, data: ProfileConfig): Promise<void> {
+    await ProfileManager.withLock(name, async () => {
+      await refuseWriteToDeletedProfile(name);
+      await writeJsonDurable(join(await ProfileManager.ensureProfileDir(name), "profile.json"), data);
+    });
+  }
+
   /** Removes profile.json under the profile lock (rollback of a profile a failed login created). */
   static async removeProfileConfig(name: string): Promise<void> {
-    await ProfileManager.withLock(name, () => rm(join(PROFILES_DIR, name, "profile.json"), { force: true }));
+    await ProfileManager.withLock(name, () => rm(join(profilePath(name), "profile.json"), { force: true }));
   }
 
   /**
    * Returns true if a profile directory exists.
    */
   static async profileExists(name: string): Promise<boolean> {
-    return fileExists(join(PROFILES_DIR, name, "profile.json"));
+    return withPinnedProfileDirectory(name, (directory) =>
+      directory ? fileExists(join(directory, "profile.json")) : Promise.resolve(false));
   }
 
   /**
@@ -158,7 +177,7 @@ export class ProfileManager {
   static async deleteProfile(name: string): Promise<void> {
     let profileDir: string;
     try {
-      profileDir = profilePath(name);
+      profileDir = namedProfilePath(name);
     } catch {
       throw new CLIError(
         "INVALID_PROFILE_NAME",
@@ -184,15 +203,13 @@ export class ProfileManager {
       return;
     }
     await ProfileManager.withLock(name, async () => {
-      for (const file of ["session.json", "key.json"]) await rm(join(profileDir, file), { force: true });
-      for (const entry of await readdir(profileDir)) {
-        if (entry !== ".lock" && entry !== "profile.json") await rm(join(profileDir, entry), { recursive: true, force: true });
+      const directory = profilePath(name);
+      for (const file of ["session.json", "key.json"]) await rm(join(directory, file), { force: true });
+      for (const entry of await readdir(directory)) {
+        if (entry !== ".lock" && entry !== "profile.json") await rm(join(directory, entry), { recursive: true, force: true });
       }
-      await rm(join(profileDir, "profile.json"), { force: true });
+      await rm(join(directory, "profile.json"), { force: true });
       await recordProfileDeletion(name);
-    });
-    await rmdir(profileDir).catch((error: NodeJS.ErrnoException) => {
-      if (error.code !== "ENOENT" && error.code !== "ENOTEMPTY" && error.code !== "EEXIST") throw error;
     });
   }
 
@@ -202,7 +219,13 @@ export class ProfileManager {
    * Returns the parsed JWK for a profile, or null if no key exists.
    */
   static async getKey(name: string): Promise<object | null> {
-    return readJson<object>(join(PROFILES_DIR, name, "key.json"));
+    return withPinnedProfileDirectory(name, async (directory) => {
+      if (!directory) return null;
+      const profileFile = join(directory, "profile.json");
+      if ((await readJson<ProfileConfig>(profileFile))?.authSignedOut === true) return null;
+      const key = await readJson<object>(join(directory, "key.json"));
+      return (await readJson<ProfileConfig>(profileFile))?.authSignedOut === true ? null : key;
+    });
   }
 
   /**
@@ -219,7 +242,7 @@ export class ProfileManager {
 
   /** Removes key.json under the profile lock (rollback of a key a failed login created). */
   static async removeKey(name: string): Promise<void> {
-    await ProfileManager.withLock(name, () => rm(join(PROFILES_DIR, name, "key.json"), { force: true }));
+    await ProfileManager.withLock(name, () => rm(join(profilePath(name), "key.json"), { force: true }));
   }
 
   // ── Session management ──────────────────────────────────────────────
@@ -228,7 +251,13 @@ export class ProfileManager {
    * Returns the parsed session for a profile, or null if none exists.
    */
   static async getSession(name: string): Promise<object | null> {
-    return readSession<object>(name);
+    return withPinnedProfileDirectory(name, async (directory) => {
+      if (!directory) return null;
+      const profileFile = join(directory, "profile.json");
+      if ((await readJson<ProfileConfig>(profileFile))?.authSignedOut === true) return null;
+      const session = await readSession<object>(name);
+      return (await readJson<ProfileConfig>(profileFile))?.authSignedOut === true ? null : session;
+    });
   }
 
   /**
@@ -252,10 +281,13 @@ export class ProfileManager {
    * created or tightened to 0700.
    */
   static async getCacheDir(name: string): Promise<string> {
-    const cacheDir = join(await ProfileManager.ensureProfileDir(name), "cache");
-    await ensureDir(cacheDir);
-    await chmod(cacheDir, PRIVATE_DIR_MODE);
-    return cacheDir;
+    const alreadyPinned = profilePath(name) !== namedProfilePath(name);
+    return ProfileManager.withLock(name, async () => {
+      const cacheDir = join(await ProfileManager.ensureProfileDir(name), "cache");
+      await ensureDir(cacheDir);
+      await chmod(cacheDir, PRIVATE_DIR_MODE);
+      return alreadyPinned ? cacheDir : join(namedProfilePath(name), "cache");
+    });
   }
 
   // ── Resolution helpers ──────────────────────────────────────────────
@@ -298,7 +330,8 @@ export class ProfileManager {
     try {
       profileConfig = await ProfileManager.getProfile(profile);
       profileHost = profileConfig.host;
-    } catch {
+    } catch (error) {
+      if (error instanceof ProfileSymlinkError) throw error;
       // Profile may not exist yet (e.g., during `tc init`)
     }
 

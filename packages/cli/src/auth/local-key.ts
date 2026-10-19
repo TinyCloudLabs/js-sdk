@@ -1,5 +1,5 @@
 import { TCWSessionManager, importKey, initPanicHook } from "@tinycloud/node-sdk-wasm";
-import { PrivateKeySigner } from "@tinycloud/node-sdk";
+import { PrivateKeySigner, type TinyCloudNode } from "@tinycloud/node-sdk";
 import { randomBytes } from "node:crypto";
 import { createCliReplicationConfig, type ProfileReplicationSettings } from "../lib/replication-config.js";
 
@@ -95,6 +95,7 @@ export async function localKeySignIn(options: {
   verificationMethod: string;
   siwe?: string;
   signature?: string;
+  replicaStamp?: NonNullable<TinyCloudNode["replicaStamp"]>;
 }> {
   const { TinyCloudNode } = await import("@tinycloud/node-sdk");
   const profile = options.profile ?? "default";
@@ -130,5 +131,6 @@ export async function localKeySignIn(options: {
     verificationMethod: session.verificationMethod,
     siwe: session.siwe,
     signature: session.signature,
+    ...(node.replicaStamp === undefined ? {} : { replicaStamp: node.replicaStamp }),
   };
 }

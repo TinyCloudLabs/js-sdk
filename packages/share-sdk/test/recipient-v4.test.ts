@@ -69,7 +69,7 @@ describe("TC-500 accountless v4 recipient", () => {
     const receiverDid = didKeyFromEd25519PublicKey(ed25519.getPublicKey(receiverKey));
     const nodeDid = didKeyFromEd25519PublicKey(ed25519.getPublicKey(nodeKey));
     const enforcerDid = didKeyFromEd25519PublicKey(ed25519.getPublicKey(enforcerKey));
-    const envelope = { version: 3, actions: ["read"], resource: { kind: "exact", path: "shares/file" }, target: { origin: "https://node.example", nodeAudience: enforcerDid }, attestedEnforcerBinding: { enforcerDid, nodeAudience: nodeDid }, policyCid: "policy", policy: { capabilityCeiling: [] }, policyRoot: { cid: "root" }, enforcementRoot: { cid: "enforcement" } } as any;
+    const envelope = { version: 3, actions: ["read"], resource: { kind: "exact", path: "shares/file" }, target: { origin: "https://node.example", nodeAudience: enforcerDid, spaceId: "space" }, attestedEnforcerBinding: { enforcerDid, nodeAudience: nodeDid }, policyCid: "policy", policy: { capabilityCeiling: [] }, policyRoot: { cid: "root" }, enforcementRoot: { cid: "enforcement" } } as any;
     let presentations = 0;
     const client = new ShareRecipientClient({
       nodeOrigin: "https://node.example",
@@ -91,7 +91,7 @@ describe("TC-500 accountless v4 recipient", () => {
       nodeOrigin: "https://node.example",
       holderDid: receiverDid,
       envelope: {
-        version: 3, target: { origin: "https://node.example", nodeAudience: enforcerDid },
+        version: 3, target: { origin: "https://node.example", nodeAudience: enforcerDid, spaceId: "space" },
         attestedEnforcerBinding: { enforcerDid, nodeAudience: nodeDid },
         policyCid: "policy", policy: { capabilityCeiling: [] },
       } as unknown as ShareEnvelopeV3,
@@ -168,7 +168,7 @@ describe("TC-500 accountless v4 recipient", () => {
       version: 3,
       actions: ["read"],
       resource: { kind: "exact", path: "shares/tc-500/document.txt" },
-      target: { origin: "https://node.example", nodeAudience: enforcerDid },
+      target: { origin: "https://node.example", nodeAudience: enforcerDid, spaceId: "space" },
       attestedEnforcerBinding: { enforcerDid, nodeAudience: nodeDid },
       policyCid,
       policy: { ownerDid: "did:key:z6MkOwner", policyId: "pol_tc500", capabilityCeiling: [capability, decryptCapability] },
@@ -176,7 +176,7 @@ describe("TC-500 accountless v4 recipient", () => {
       enforcementRoot: { cid: enforcementRoot },
       contentSourceDigestHex: "1".repeat(64),
       encryptionNetwork,
-      contentSource: { keyVersion: 1, encryptedSymmetricKeyDigestHex: "unused" },
+      contentSource: { kvResource: "space/kv/shares/tc-500/document.txt", keyVersion: 1, encryptedSymmetricKeyDigestHex: "unused" },
       metadata: { mediaType: "text/plain" },
       expiry: wholeSeconds(now + 3600),
     } as any;
@@ -280,7 +280,7 @@ describe("TC-500 accountless v4 recipient", () => {
       version: 3,
       actions: ["read"],
       resource: { kind: "exact", path: "shares/security/document.txt" },
-      target: { origin: "https://node.example", nodeAudience: enforcerDid },
+      target: { origin: "https://node.example", nodeAudience: enforcerDid, spaceId: "space" },
       attestedEnforcerBinding: { enforcerDid, nodeAudience: nodeDid },
       policyCid,
       policy: { ownerDid: "did:key:z6MkOwner", policyId: "pol_tc500", capabilityCeiling: [capability] },
@@ -372,7 +372,7 @@ describe("TC-500 accountless v4 recipient", () => {
       version: 3,
       actions: ["read"],
       resource: { kind: "exact", path: "shares/tc-531/document.txt" },
-      target: { origin: "https://node.example", nodeAudience: enforcerDid },
+      target: { origin: "https://node.example", nodeAudience: enforcerDid, spaceId: "space" },
       attestedEnforcerBinding: { enforcerDid, nodeAudience: nodeDid },
       policyCid,
       policy: { ownerDid: "did:key:z6MkOwner", policyId: "pol_tc500", capabilityCeiling: [{ kind: "kv", resource, selector: "exact", actions: ["tinycloud.kv/get"] }, { kind: "encryption", resource: network, action: "tinycloud.encryption/decrypt" }] },
@@ -464,7 +464,7 @@ describe("TC-500 accountless v4 recipient", () => {
       const encryptedSymmetricKey = "wrapped-key";
       const encryptedSymmetricKeyHash = [...sha256(new TextEncoder().encode(canonicalize(encryptedSymmetricKey)))].map((byte) => byte.toString(16).padStart(2, "0")).join("");
       const encrypted = new TextEncoder().encode(JSON.stringify({ v: 1, networkId: network, alg: "x25519-aes256gcm/v1", keyVersion: 1, encryptedSymmetricKey, encryptedSymmetricKeyHash, ciphertext: "AA" }));
-      envelope.contentSource = { keyVersion: 1, encryptedSymmetricKeyDigestHex: encryptedSymmetricKeyHash, initialCiphertextDigestHex: [...sha256(encrypted)].map((byte) => byte.toString(16).padStart(2, "0")).join("") };
+      envelope.contentSource = { kvResource: "space/kv/shares/tc-531/document.txt", keyVersion: 1, encryptedSymmetricKeyDigestHex: encryptedSymmetricKeyHash, initialCiphertextDigestHex: [...sha256(encrypted)].map((byte) => byte.toString(16).padStart(2, "0")).join("") };
       await expect(delegated.decryptV3Content(encrypted)).rejects.toThrow("decrypt invocation rejected");
       const invocation = verifyCompactUcanAuthorization(decryptAuthorization);
       expect(invocation.payload.iss.split("#", 1)[0]).toBe(delegateDid);

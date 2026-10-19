@@ -5,13 +5,25 @@ import { existsSync } from "node:fs";
 import { readdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { profileTurnLockPath, withProfileLock } from "@tinycloud/operations/state";
+import { exitHelper, exitWithParent } from "../src/test-support/parent-watch.mjs";
+
+exitWithParent();
 
 const [mode, out, timeoutMs = "2000"] = process.argv.slice(2);
 const marker = join(process.env.TC_HOME, "inside");
 if (mode === "hold") {
+  let held = false;
+  const released = new Promise((resolve) => process.stdin.once("end", resolve).resume());
+  // As PID 1 of a new PID namespace it cannot see its parent (ppid 0), but its
+  // stdin is its parent's pipe: closed before the lock is held, the parent is gone.
+  if (process.ppid === 0) {
+    void released.then(() => {
+      if (!held) exitHelper("its stdin closed before it held the lock");
+    });
+  }
   await withProfileLock("probe", async () => {
+    held = true;
     await writeFile(marker, String(process.pid));
-    const released = new Promise((resolve) => process.stdin.once("end", resolve).resume());
     process.stdout.write("ready\n");
     await released;
     await rm(marker, { force: true });

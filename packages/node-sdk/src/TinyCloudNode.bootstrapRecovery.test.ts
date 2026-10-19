@@ -197,6 +197,8 @@ function makeRecoveryHarness(fake: FakeCloud): TinyCloudNode {
     jwk: { kty: "OKP", crv: "Ed25519", x: spaceName(spaceId) },
   });
   const auth = {
+    // Like NodeUserAuthorization before its first sign-in; sign-in reads it.
+    address: (): string | undefined => undefined,
     tinyCloudSession: undefined,
     capabilityRequest: undefined,
     lastActivationSkippedSpaceIds: [] as string[],

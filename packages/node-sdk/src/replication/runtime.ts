@@ -8,10 +8,13 @@ import type {
   ReplicationAuthority,
   ReplicationControl,
   ReplicationEvent,
+  ReplicaSessionStamp,
   ReplicationIdentity,
   ReplicationOptions,
+  ReplicaGateReason,
   ReplicationScheduler,
 } from "@tinycloud/sdk-services";
+
 type ReplicationServices = typeof import("@tinycloud/sdk-services/kv/replication");
 
 export interface ReplicationRuntimeOptions extends ReplicationOptions {
@@ -25,10 +28,14 @@ export interface ReplicationRuntimeBinding {
   address?: string;
   chainId?: number;
   principal?: string;
+  stamp?: ReplicaSessionStamp;
   authority: ReplicationAuthority;
   nodeFeatures?: readonly string[];
   primaryKV: Array<{ space: string; kv: { setReadThrough(readThrough: KVReadThrough | null): void } }>;
 }
+export type GatedReplicationRuntimeBinding = Pick<ReplicationRuntimeBinding, "context" | "session" | "primaryKV"> & {
+  gate: ReplicaGateReason;
+};
 
 const scheduler: ReplicationScheduler = {
   now: () => Date.now(),
@@ -56,10 +63,13 @@ type ReadThroughKV = {
 
 export class ReplicationRuntime {
   readonly control: ReplicationControl;
-  private readonly pending = new Map<string, PendingWriteStore>();
+  private readonly pending = new Map<string, { stamp?: ReplicaSessionStamp; store: PendingWriteStore }>();
   private readonly attached = new Map<ReadThroughKV, string>();
   private current?: KVReplicationController;
+  private gated?: KVReadThrough;
+  private gatedReason?: ReplicaGateReason;
   private lastController?: KVReplicationController;
+  private unsubscribeConsentExpired?: () => void;
   private previous: Promise<void> = Promise.resolve();
   private binding: Promise<void> = Promise.resolve();
   private services?: Promise<ReplicationServices>;
@@ -80,10 +90,17 @@ export class ReplicationRuntime {
     this.control = {
       status: async () => {
         await this.binding;
+        if (this.gatedReason) return this.options.prefixes.map((prefix) => ({
+          prefix, state: "gated" as const, gate: this.gatedReason, errorCode: "REPLICA_GATED",
+          pending: { inFlight: 0, committed: 0, ambiguous: 0 }, pinned: [], lagMs: null,
+        }));
         return this.current ? this.current.status() : [];
       },
       sync: async (input) => {
         await this.binding;
+        if (this.gatedReason) throw Object.assign(new Error("Replica restore is gated."), {
+          code: "REPLICA_GATED", gate: this.gatedReason,
+        });
         if (this.purgedGeneration === this.generation) return;
         if (this.current) await this.current.sync(input);
       },
@@ -135,11 +152,58 @@ export class ReplicationRuntime {
     this.attached.clear();
   }
 
+  /** Observe a refused restore without opening replica state; loader failure leaves raw network KV usable. */
+  bindGatedNetworkOnly(
+    input: GatedReplicationRuntimeBinding,
+    loadGatedNetwork: () => Promise<typeof import("./gated-network")>,
+  ): Promise<void> {
+    if (this.closed || !this.options.enabled) return Promise.resolve();
+    const retired = this.unbind();
+    const generation = this.generation;
+    this.purgedGeneration = undefined;
+    this.pendingPurge = undefined;
+    this.pendingPurgeResult = undefined;
+    this.pending.clear();
+    this.lastController = undefined;
+    this.lastPending = undefined;
+    this.lastIdentity = undefined;
+    this.gatedReason = input.gate;
+    this.primarySpace = input.session.spaceId;
+    this.binding = retired.then(async () => {
+      let create: typeof import("./gated-network").createGatedNetworkReadThrough;
+      try {
+        ({ createGatedNetworkReadThrough: create } = await loadGatedNetwork());
+      } catch {
+        // Refusal already gates local delivery; a missing observer cannot end a network session.
+        return;
+      }
+      if (generation !== this.generation || this.closed || typeof create !== "function") return;
+      const networkOnly = create({
+        space: input.session.spaceId,
+        prefixes: this.options.prefixes,
+        now: () => this.clock.now(),
+        emit: (event) => {
+          if (generation !== this.generation || this.closed || this.gated !== networkOnly) return;
+          try { this.options.onEvent?.(event); } catch { /* Telemetry cannot change network results. */ }
+          const { type, ...data } = event;
+          try { input.context.emit(type, data); } catch { /* Telemetry cannot change network results. */ }
+        },
+      });
+      this.gated = networkOnly;
+      for (const scoped of input.primaryKV) this.attach(scoped.space, scoped.kv);
+    });
+    return this.binding;
+  }
+
   bind(input: ReplicationRuntimeBinding): Promise<void> {
     if (this.closed || !this.options.enabled) return Promise.resolve();
+    this.gated = undefined;
+    this.gatedReason = undefined;
     this.bindingActive = true;
     const generation = ++this.generation;
     this.purgedGeneration = undefined;
+    this.unsubscribeConsentExpired?.();
+    this.unsubscribeConsentExpired = undefined;
     const { context, session } = input;
     const emit = (event: ReplicationEvent): void => {
       try { this.options.onEvent?.(event); } catch { /* Observability must not affect KV behavior. */ }
@@ -169,11 +233,17 @@ export class ReplicationRuntime {
         return;
       }
       const key = services.replicationIdentityKey(identity);
-      let pending = this.pending.get(key);
-      if (!pending) {
-        pending = this.options.storage.pendingWrites?.(identity) ?? services.createMemoryPendingStore(identity);
-        this.pending.set(key, pending);
+      let cached = this.pending.get(key);
+      const stamp = input.stamp;
+      if (!cached || cached.stamp?.incarnation !== stamp?.incarnation || cached.stamp?.lifecycleEpoch !== stamp?.lifecycleEpoch) {
+        const store = this.options.storage.pendingWrites?.(identity, { stamp });
+        if (!store && this.options.storage.lifecycle) {
+          throw Object.assign(new Error("Gated replication requires a stamped pending store"), { code: "REPLICA_GATED", gate: "gate_unavailable" });
+        }
+        cached = { stamp, store: store ?? services.createMemoryPendingStore(identity) };
+        this.pending.set(key, cached);
       }
+      const pending = cached.store;
       this.lastPending = pending;
       const controller = services.createKVReplication({
         options: resolvedOptions(this.options),
@@ -181,6 +251,7 @@ export class ReplicationRuntime {
         storage: this.options.storage,
         identity,
         session: { id: session.delegationCid, did: session.verificationMethod, space: session.spaceId },
+        stamp: input.stamp,
         authority: input.authority,
         pending,
         scheduler: this.clock,
@@ -190,6 +261,9 @@ export class ReplicationRuntime {
         previous: previousClose,
       });
       this.current = controller;
+      this.unsubscribeConsentExpired = this.options.storage.lifecycle?.subscribeConsentExpired?.(
+        (stamp) => controller.observeConsentExpired(stamp),
+      );
       this.lastController = controller;
       this.lastIdentity = identity;
       for (const [kv, space] of this.attached) {
@@ -211,9 +285,12 @@ export class ReplicationRuntime {
 
   attach(space: string, kv: ReadThroughKV): Promise<void> {
     this.attached.set(kv, space);
-    kv.setReadThrough(space === this.primarySpace ? this.current ?? null : null);
+    kv.setReadThrough(space === this.primarySpace ? this.current ?? this.gated ?? null : null);
+    const generation = this.generation;
     return this.binding.then(() => {
-      kv.setReadThrough(space === this.primarySpace ? this.current ?? null : null);
+      if (generation === this.generation && !this.closed && this.attached.get(kv) === space) {
+        kv.setReadThrough(space === this.primarySpace ? this.current ?? this.gated ?? null : null);
+      }
     });
   }
 
@@ -221,8 +298,12 @@ export class ReplicationRuntime {
     this.generation++;
     this.bindingActive = false;
     this.pendingPurgeSet = false;
+    this.unsubscribeConsentExpired?.();
+    this.unsubscribeConsentExpired = undefined;
     const controller = this.current;
     this.current = undefined;
+    this.gated = undefined;
+    this.gatedReason = undefined;
     this.primarySpace = undefined;
     this.detachAll();
     const binding = this.binding;

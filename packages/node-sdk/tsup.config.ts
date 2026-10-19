@@ -6,6 +6,7 @@ export default defineConfig({
     core: 'src/core.ts',
     'replication/runtime': 'src/replication/runtime.ts',
     'replication/authority': 'src/replication/authority.ts',
+    'replication/gated-network': 'src/replication/gated-network.ts',
   },
   format: ['esm', 'cjs'],
   dts: true,
@@ -26,5 +27,6 @@ export default defineConfig({
     'path',
     './replication/runtime',
     './replication/authority',
+    './replication/gated-network',
   ],
 });

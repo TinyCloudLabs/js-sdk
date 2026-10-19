@@ -1,0 +1,42 @@
+{
+  "schemaVersion": 1,
+  "recommended": "1.21.0",
+  "targets": {
+    "aarch64-apple-darwin": {
+      "url": "https://github.com/TinyCloudLabs/tinycloud-node/releases/download/v1.21.0/tinycloud-node-aarch64-apple-darwin.tar.xz",
+      "sha256": "df349c93e1050c98c65c51e95908858c79b6ef876bb1e093483385da20a83a93",
+      "size": 9023152,
+      "binary": {
+        "sha256": "3b5c30c68907e94fb0c856cf3025c854c63ca9b624d2322fe4168c023a60f5c8",
+        "size": 30423952
+      }
+    },
+    "x86_64-apple-darwin": {
+      "url": "https://github.com/TinyCloudLabs/tinycloud-node/releases/download/v1.21.0/tinycloud-node-x86_64-apple-darwin.tar.xz",
+      "sha256": "57c6d9223a0d6dd9b2f890ab9e1288dcc461c62a8e1ce7e766348f8e4cb8368a",
+      "size": 10262644,
+      "binary": {
+        "sha256": "0395a8bee52323449573709cbe7715dfe6d0ced871f71838414cfafee46be1fe",
+        "size": 33072484
+      }
+    },
+    "aarch64-unknown-linux-gnu": {
+      "url": "https://github.com/TinyCloudLabs/tinycloud-node/releases/download/v1.21.0/tinycloud-node-aarch64-unknown-linux-gnu.tar.xz",
+      "sha256": "ffbb28699483ddcb2319014fe4624fa59f040b350d9858a1ee084b02d45377ce",
+      "size": 11214928,
+      "binary": {
+        "sha256": "a23660e8c3c0c962df8822aa77b5eb90658936e87e988e80bf6c5051b6c7ce09",
+        "size": 36411152
+      }
+    },
+    "x86_64-unknown-linux-gnu": {
+      "url": "https://github.com/TinyCloudLabs/tinycloud-node/releases/download/v1.21.0/tinycloud-node-x86_64-unknown-linux-gnu.tar.xz",
+      "sha256": "f3262ce59888bbbd104b4f46e46d6e6d282aa76bc3df20c5f202a4278756bac2",
+      "size": 10496080,
+      "binary": {
+        "sha256": "551d61a5aecce80c7f1f1df3c0973681b8b1ba1ff10fea2b987ce417af1d5455",
+        "size": 35672056
+      }
+    }
+  }
+}

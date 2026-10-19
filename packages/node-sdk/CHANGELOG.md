@@ -1,5 +1,263 @@
 # @tinycloudlabs/node-sdk
 
+## 3.3.0-beta.25
+
+### Minor Changes
+
+- 87a137e: Retry node `NODE_BUSY` and `REQUEST_TIMEOUT` answers automatically. Both mean nothing was applied, so the services now retry them under the existing `retryPolicy` through the new `ServiceContext.invokeWithRetry(url, build)`, which calls `build` once per attempt so every attempt carries a freshly signed invocation (the node answers a repeated invocation with 409, so re-sending one could never succeed). `ServiceContext.fetch` itself no longer retries. A context without `invokeWithRetry` sends once. The policy: at most 4 attempts in about 12 s, honouring the node's `Retry-After` (capped at the remaining budget) and otherwise backing off exponentially with full jitter (250 ms base, 4 s cap). Aborts and per-request timeouts end the wait at once, and `OUTCOME_UNKNOWN` is never retried. `defaultRetryPolicy` changes accordingly (its retryable codes are now `NODE_BUSY` and `REQUEST_TIMEOUT`; `NETWORK_ERROR` and `TIMEOUT` are no longer listed because no service read them), and `RetryPolicy` gains an optional `maxTotalMs`. Opt out with `retryPolicy: { maxAttempts: 1 }`.
+
+  The CLI gains `--no-retry` and `TINYCLOUD_RETRY=0` for monitors and probes that must see the node's honest `NODE_BUSY`. KV responses (and `tc kv get|put|delete --json`) report `attempts` and `backoffMs`.
+
+### Patch Changes
+
+- Updated dependencies [87a137e]
+  - @tinycloud/sdk-services@3.3.0-beta.25
+  - @tinycloud/replica@0.3.0-beta.6
+  - @tinycloud/sdk-core@3.3.0-beta.25
+
+## 3.3.0-beta.24
+
+### Patch Changes
+
+- b6d0b9f: `tc account` commands now exit with `ACCOUNT_ACCESS_REQUIRED` (exit 5) before calling the node when the session lacks the account-space abilities that command invokes, as with a plain OpenKey login. Each command checks its own set (registry reads and writes, `kv/del` for removals, `space/list` and `capabilities/read` on the primary space for the commands that list spaces or delegations). `account delegations revoke` needs no session ability on a local-key profile (it signs with the owner wallet) and is refused with the `tc delegation revoke` command on an OpenKey profile, which cannot carry the raw-CID revoke ability, and the error prints the `tc auth request --grant --cap ...` command that grants exactly those, with a `--paste` variant. `tc auth request --grant` gains `--paste` (OpenKey owner profiles) for browsers that cannot reach the CLI's loopback callback, and a grant that spans several spaces now says up front how many OpenKey approvals it takes (one per space) and numbers each prompt. The account registry sync skip is recorded once per process as a debug event only (`TinyCloud_debug=true`).
+
+## 3.3.0-beta.23
+
+### Minor Changes
+
+- d2ad845: `tc delegation create` now signs and activates the delegation through `delegateTo`, reads it back through the node's account delegation query, and prints its CID only once the node lists it as active (`DELEGATION_NOT_CONFIRMED` otherwise). `tc delegation list` and `tc delegation info` use that query (`POST /delegation/query`) via `account.delegations.query()`, which includes delegations signed by the session key; `list` gains `--space`, and `--to` accepts a `did:key` with a `#fragment`. Previously `create` and `list` sent `tinycloud.delegation/create` and `tinycloud.delegation/list` invocations that the node does not handle (it answered an empty 200, surfaced as a JSON parse error), and `info` called a method that did not exist.
+
+  A plain `tc auth login` now also requests `tinycloud.delegation/list` on the default space (OpenKey's default grant omits it). A session that lacks it, on the account space and its own space, gets a `PERMISSION_DENIED` error saying to run `tc auth login` again. `DelegationManager.query()` signs for the account space and falls back to the session's own space when the node refuses (403).
+
+  Breaking: removed `DelegationManager.create()` (use `TinyCloudNode.delegateTo()`), `DelegationManager.list()` (use `account.delegations.query()`), `TinyCloudNode.delegate()` (use `delegateTo()`), `TinyCloudNode.listDelegations()` (use `account.delegations.query()`), and the web-sdk `TinyCloudWeb.delegate()` (use `delegateTo()`) and `TinyCloudWeb.listDelegations()` (use `account.delegations.query()`). They sent invocations the node never handled, so they never worked. `account.delegations.list()` is not a replacement: it reads the SQL index and omits session-signed delegations. Also removed the `delegationManager` option from `SharingService` config; sharing uses `createDelegation` or `createDelegationWasm`.
+
+  `TinyCloudNode.delegateTo()` takes a new `requireActivation` option: when set, it throws when the node answers 200 but lists a target space under `skipped` (a space it does not host), naming that space; this used to look like success. It is off by default, since grants to a not-yet-hosted space (e.g. secrets) are valid. `tc delegation create` sets it. `DelegationManager.getChain()` and `checkPermission()` now return an `UNSUPPORTED_OPERATION` error when the node answers with an empty body.
+
+### Patch Changes
+
+- Updated dependencies [d2ad845]
+  - @tinycloud/sdk-core@3.3.0-beta.23
+
+## 3.3.0-beta.22
+
+### Patch Changes
+
+- @tinycloud/sdk-core@3.3.0-beta.22
+
+## 3.3.0-beta.21
+
+### Patch Changes
+
+- @tinycloud/sdk-core@3.3.0-beta.21
+
+## 3.3.0-beta.20
+
+### Minor Changes
+
+- cce8b26: Add an opt-in `registryPolicy: "fail-closed"` for host resolution and automatic space creation (TC-1443). The default does not change.
+
+  **Default (`"legacy-fallback"`, deprecated).** Sign-in resolves hosts exactly as before: when the location registry has no record or cannot be reached, the session silently uses the fallback host (`https://node.tinycloud.xyz` unless `tinycloudFallbackHosts` says otherwise). The first time a process takes that fallback it logs one `console.warn`; the fallback will be removed in a future major release. The default policy adds no registry request anywhere and no space-creation check.
+
+  **`registryPolicy: "fail-closed"`** (`TinyCloudNodeConfig`, `NodeUserAuthorizationConfig`, web `Config`):
+  - Sign-in without a configured host looks up the signer address in the registry first and acts on the three-state verdict. `registered`: the record's hosts, in record order. `unregistered`: `newUserHost` (default `https://node.tinycloud.xyz`; `null` refuses unregistered owners with `NodeNotFoundError`). `unavailable` (unreachable, timeout, bad status, oversize or malformed body, bad signature, a sequence below the remembered one, a not-found after a registration was seen, a failed read of the remembered sequence, or no registry configured): `RegistryUnavailableError`, never the new-user host. A record with no usable host is `NodeNotFoundError`. `newUserHost` governs routing only; a pinned host may still create spaces for an unregistered owner.
+  - One host-scheme rule: hosts from a signed record are used for routing and for space creation only if they are HTTPS or HTTP on loopback, the same rule as `newUserHost` and `use-host`. The default policy is unchanged.
+  - Local discovery probes the configured `localNodeUrl` / `localLinkName` and `*.local.tinycloud.link` hosts from a `registered` verdict; it no longer reads the registry itself, so an older or invalid record cannot route a session.
+  - The lookup key is the signer address, never the session chain. The v1 registry keys records on an exact `did:pkh:eip155:<chain>:<EIP-55 address>`, so v1 lookups use `registryOwnerSubjectV1(address, registryChainId)` (`registryChainId` default 1). Registry v2 will key on the address alone.
+  - `onNodeNotFound({ error, attempt })` decides what sign-in does instead of throwing: `{ action: "retry" }`, `{ action: "use-host", host }` (an HTTPS or loopback HTTP origin) or `{ action: "abort" }`. The SDK does not verify a `use-host` host's identity, and the choice persists with the session like any resolved host.
+  - Automatic space creation is guarded: `ensureSpaceExists` (before asking the creation handler), account bootstrap host steps, sign-in's owned-space hosting, `ensureOwnedSpaceHosted`, and `ensurePublicSpace` (which the vault calls on unlock). Creating a space is refused with `NodeRegistryEntryExistsError` when the owner's registry record does not list the host (including a record with no hosts), and with `RegistryUnavailableError` when the registry gives no verdict. The space-creation handler's `onSpaceCreationFailed` receives the error. Pinned-host apps look the verdict up once, at creation. An explicit `hostOwnedSpace()` call is not guarded.
+  - The highest record sequence seen per owner is remembered in `registrySequenceStore` (default in memory; web-sdk defaults to `localStorage` under `tinycloud.registrySequences.v1`). A failed write (full or read-only storage) logs one warning and keeps the verdict in hand, and the `localStorage` store still remembers the sequence for the page. A failed read or a corrupt stored value fails that lookup closed; remove the key to reset.
+
+  New sdk-core exports: `resolveOwnerHosts`, `lookupOwnerRegistryVerdict`, `resolveFailClosedTinyCloudHosts`, `assertSpaceCreationAllowed`, `registryOwnerSubjectV1`, `createInMemoryRegistrySequenceStore`, `createLocalStorageRegistrySequenceStore`, the errors `NodeNotFoundError` (`code: "node_not_found"`), `RegistryUnavailableError` (`"registry_unavailable"`) and `NodeRegistryEntryExistsError` (`"node_registry_entry_exists"`), their option and callback types, and `DEFAULT_NEW_USER_HOST`, `DEFAULT_REGISTRY_OWNER_CHAIN_ID`, `DEFAULT_REGISTRY_LOOKUP_TIMEOUT_MS` (3 s) and `DEFAULT_REGISTRY_SEQUENCE_STORAGE_KEY`. Match errors on `error.code`: web-sdk bundles its own sdk-core, so `instanceof` against an app's separate sdk-core copy does not hold.
+
+### Patch Changes
+
+- Updated dependencies [cce8b26]
+  - @tinycloud/sdk-core@3.3.0-beta.20
+
+## 3.3.0-beta.18
+
+### Patch Changes
+
+- Updated dependencies [eb9defd]
+  - @tinycloud/sdk-core@3.3.0-beta.18
+
+## 3.3.0-beta.17
+
+### Patch Changes
+
+- @tinycloud/sdk-core@3.3.0-beta.17
+
+## 3.3.0-beta.16
+
+### Patch Changes
+
+- 18b6c9f: `delegateTo`, `createDelegation` and `space.delegations.create` now throw for `disableSubDelegation: true` addressed to a `did:pkh` recipient, before anything is signed. A wallet-mode `useDelegation` of a terminal grant is refused by the node (`terminal-parent-cannot-redelegate`), so the recipient could never use it. Grant the recipient's session-key DID instead, or drop the flag (TC-1448).
+
+  What breaks: calls that passed `disableSubDelegation: true` with a `did:pkh` delegate (including an ENS name that resolves to one) used to return a grant the wallet recipient could not activate; they now throw.
+
+## 3.3.0-beta.15
+
+### Patch Changes
+
+- @tinycloud/sdk-core@3.3.0-beta.15
+
+## 3.3.0-beta.14
+
+### Patch Changes
+
+- @tinycloud/sdk-core@3.3.0-beta.14
+
+## 3.3.0-beta.13
+
+### Patch Changes
+
+- @tinycloud/sdk-core@3.3.0-beta.13
+
+## 3.3.0-beta.11
+
+### Patch Changes
+
+- 2292db7: Vault compare-and-swap and opt-in address binding (TC-1432). Everything is additive; existing reads and writes behave as before.
+  - `VaultEntry.etag`: the node's strong ETag of the stored envelope. `readNetworkEncrypted` always returns it; `vault.get` returns it only with `source: "network"`, never from a replica (a replica can serve a stale etag). Network-encrypted vaults only.
+  - `VaultPutOptions.ifMatch`: write only while the stored envelope still has that etag, passed exactly as read (quotes included); it cannot be combined with `ifNoneMatch`. A failed `ifMatch` write has its own code instead of `STORAGE_ERROR`: `ETAG_MISMATCH` (412, including a deleted or never-written key; re-read and retry), `INVALID_ETAG` (a weak, unquoted or otherwise malformed etag, refused locally or by the node's 400; never retry), `OUTCOME_UNKNOWN` (500 `outcome_unknown`, or a connection that failed with no response: the write may have been applied, so re-read before retrying and sign a fresh request) and `NODE_BUSY` (503, nothing written). Writes without `ifMatch` keep their current error mapping. `readSecret` maps the new `aad_mismatch` status to `read_failed`.
+  - `VaultGetOptions.expectAad` (default off): refuse an envelope whose AAD is not `tinycloud.vault:<spaceId>:<key>` for the vault's own space and key. The space id is compared after lowercasing its EVM addresses, so a checksummed and a lowercase spelling are the same space. A mismatch, including an envelope written with no AAD, fails with `AAD_MISMATCH` (`get`) or `{ status: "aad_mismatch" }` (`readNetworkEncrypted`) before any decrypt request. This rejects a ciphertext copied to another key; it does not stop a freshly encrypted forgery. `getShared` is unchanged.
+
+- Updated dependencies [2292db7]
+  - @tinycloud/sdk-services@3.3.0-beta.11
+  - @tinycloud/replica@0.3.0-beta.5
+  - @tinycloud/sdk-core@3.3.0-beta.11
+
+## 3.3.0-beta.10
+
+### Patch Changes
+
+- @tinycloud/sdk-core@3.3.0-beta.10
+
+## 3.3.0-beta.9
+
+### Patch Changes
+
+- ef9653b: Sign the share delivery authorization with the primary session key. The node records the signer as the delivery's sender key, and the SDK binds and countersigns the receipt with the primary session key; when a runtime grant held by another key covered the shared file, `tc share publish --to <email> --notify` rejected its own receipt and the recipient was never emailed (exit 9, `partial-failure`).
+
+## 3.3.0-beta.8
+
+### Minor Changes
+
+- f97d73d: `disableSubDelegation: true` now sets the node's terminal marker (the UCAN fact `xyz.tinycloud.policy/delegationMode: "terminal"`), so the node refuses any delegation that cites the result as a parent. It applies to `createDelegation`, the `space.delegations.create` wiring, and the new `delegateTo` option of the same name; the returned delegation reports `disableSubDelegation: true`. sdk-core exports `TERMINAL_DELEGATION_FACT` and `markDelegationTerminal` (TC-1436).
+
+  Behaviour change, released as `minor` because the repository's versioning rule allows agents only `minor` or `patch` (a major needs a maintainer's sign-off). What breaks:
+  - `disableSubDelegation: true` now throws instead of issuing a wallet-signed delegation that can still be re-delegated: in `createSubDelegation`, in `delegateTo` with `forceWalletSign`, and in `createDelegation` when the requested capabilities are outside the current session.
+  - A terminal delegation still works for a delegate that uses it directly, but a wallet-mode `useDelegation`, which chains a new session from it, is refused by the node.
+
+### Patch Changes
+
+- Updated dependencies [f97d73d]
+  - @tinycloud/sdk-core@3.3.0-beta.8
+
+## 3.3.0-beta.7
+
+### Minor Changes
+
+- 38980b0: Stamp replica sessions only from a fully verified owner SIWE with finite signed expiry and exact-space KV get+sync authority; missing proof refuses only the replica, not network sign-in. Restore validates the persisted stamp without repairing it. Browser IndexedDB sign-in, restore, and sign-out use its lifecycle without a Node profile directory; sign-out denies the gate and shreds replica keys. Replication-disabled sign-in does not inspect replica SIWE metadata.
+
+  Node exports `createProfileReplicaPurge({ profileDir, guard })` for profile-locked CLI cleanup. A failed online revoke can durably deny local reads with `deny({ reason: "sign_out", principal }, { deferErase: true })` while retaining the network session, key, and replica files. The returned epoch/principal token resumes erasure after remote success; recovery leaves deferred files untouched and retries ordinary erasure after resume. `TinyCloudNode.signOut()` awaits durable denial before registry cleanup.
+  `logoutPrincipalDigest(principal)` exposes the owner binding stored as a logout marker's `principalDigest` (advisory; not authority), so callers can check a marker against the current session before recovery.
+  Node denial reads the gate snapshot and hashes the principal under the same profile lock as `denyGate`; partition and pending intents use that snapshot's salt. A gate established while denial waits for the lock is included rather than producing an empty-salt intent inventory.
+  `ProfileReplica*` facade types now come from `@tinycloud/sdk-services/kv/replication`; Node SDK retains the runtime factory and marker exports without duplicate type declarations or aliases.
+  Node direct sign-out and account-switch denial emits one `replication.lifecycle` event after a committed `denied`, `database_deleted`, or `marker_set` outcome to both `replication.onEvent` and the leaving service context. Stale and unguarded outcomes cannot claim a committed denial; the event carries no raw principal or space.
+
+  CLI logout uses a profile-locked, fsynced opaque `replica-logout-pending.json` marker before deleting either `session.json` or `key.json`. CLI-bound replica reads, pending writes, restores, and already-open handles refuse while it exists. Startup recovery verifies the marker's gate incarnation/epoch/principal hash, commits full purge intents or resumes a deferred denial, removes and fsyncs both credentials, then removes the marker before retrying erase. Generic SQLite storage does not infer CLI session files; CLI callers opt in with `logoutPendingFile`. A successful remote revoke follows this same credential-shredding path; failed revoke keeps its deferred gate and credentials for retry. `recoverLogoutPending().remaining` counts durable intents only; `failed` or the marker indicates incomplete logout even when that count is zero. If writing the marker fails, an ordinary gate denial can still fence replica reads but cannot by itself recover a crash before credential unlink.
+  For an active v1 plain logout, recovery commits the full generation-fenced denial and opaque intent inventory under the profile lock before calling `clearCredentials`. A denied gate write leaves the marker, both credentials, and replica files intact for retry. After a BUSY plain cleanup, reapproval recognizes that marker's same incarnation and next denied epoch with a null `deferredPrincipalHash`; the existing deferred-owner path remains intact. Remote-pending, successor, and stale markers remain fenced.
+
+  `recoverLogoutPending` requires an idempotent `eraseLegacyReplicas` callback for the CLI's separate `<profile>/replicas` root. It runs only after the gate's full intent/generation commit, while the marker still blocks reads; the facade verifies the legacy root is gone and fsyncs the profile before clearing the marker. Failure or interruption retains the marker for retry. The callback must never delete S3's `<profile>/replication` root.
+  On retry after a busy legacy SQLite lease, only source-created `replica.db-wal`, `replica.db-shm`, and `replica.db-journal` sidecars may be regenerated. Recovery still requires the originally approved database and replica directory identities; a path approved as unknown never acquires the known-sidecar exception.
+
+  An inactive gate also gets an epoch-bound logout marker while opaque intents or legacy replicas remain. Recovery retains it until legacy-only cleanup completes; a successor gate cannot replay the old marker.
+
+  An already-deferred v1 gate cannot mint a missing pre-denial logout marker or authorize remote revoke from its later denied epoch. Explicitly approved corrupt gates use a v2 orphan marker: after that marker is durable, the still-corrupt gate file is removed and fsynced before remote work; remote completion still requires the gate to be absent. Because that marker has no original gate-file identity, a later retry or reapproval never unlinks an unreadable gate; it fails closed with the marker and any not-yet-erased credentials or replica files intact until the gate is absent. Orphan recovery also refuses a newly corrupt or valid replacement gate before credential cleanup and again before marker removal; failures retain the marker for retry. Failed initial removal retains the marker and credentials.
+
+  When the CLI profile's gate is missing or corrupt, scoped intents cannot be reconstructed. `prepareLogoutPending({ principal, discardLocalChanges? })` instead writes a distinct opaque orphan-profile marker before credential unlink. Without explicit `discardLocalChanges`, unsynced `pending.json` records, an unrecognized flag-owned layout, an unknown legacy child or SQLite schema, or a corrupt/unreadable gate refuse with sync-first/`--discard-local-changes` guidance. Recovery under the profile lock shreds and fsyncs both credentials, wipes only validated real `<profile>/replication` and `<profile>/replicas` roots, confirms absence and fsyncs the profile, then removes the marker. Root deletion failure leaves the marker; neither scoped intents nor a replacement gate are fabricated. CLI sign-in must check the marker before persisting a new session.
+
+  The orphan wipe accepts the CLI lock's exact Linux `/proc/self/fd/<n>` directory pin as well as a real profile directory. It validates each replica root against that pinned directory, refuses arbitrary profile symlinks and closed pins even when roots are absent, and never redirects a wipe to a replacement profile-name symlink. With a missing gate, only a validated identity record plus an inspected empty `pending.json` and no other identity children prove a flag-owned partition has no unsynced writes; a missing index, replica files, device key, or unknown child format requires explicit discard.
+
+  `TinyCloudNode.replicaStamp` exposes a defensive copy of the active verified stamp after sign-in or validated restore; sign-out clears it. `TinyCloudNode.signInWithOpenKey(authorizeFn, options?)` prepares the original SIWE before OpenKey approval and verifies the signed result through the existing authorization flow before committing the network session and replica stamp. The callback receives the SDK-prepared `verificationMethod` for local session-DID handoff, not as an OpenKey wire field. Optional `retryResult(error, originalRequest, attempt)` retries rejected callback transport or signed results against that same SIWE and key without retrying network activation.
+
+  Prefix-scoped, uncaveated signed KV get+sync authority now anchors replica consent as well as root authority. Node SQLite reads pair rows with a fence captured before their SQLite snapshot. A CID's original grant installation time survives targeted partition purge; an expired effective grant refuses synchronization before transport and refuses a page that expires before commit.
+
+- 0c4c6b2: `ProfileReplicaPurge.deny` with `{ deferErase: true }` now accepts only `reason: "sign_out"` and returns `ProfileReplicaDeferredDenyOutcome`, whose committed `denied` always carries `resumeToken`. `ReplicaEraseReport.deferred: true` marks a pass held by a deferred denial, so `remaining: 0` there is not completion. node-sdk exports the full contract `ProfileReplicaPurge`, requires the displayed `approval` in `prepareLogoutPending`, and reports `purgePending` from inspected status while a deferred denial or any intent remains.
+
+  A v1 logout marker records the epoch its denial actually committed (`deniedEpoch`) in the same locked section as the deny, and every later check compares with it. A sign-out interrupted between its deny floor and gate writes is completed by the next `auth logout` (`@tinycloud/replica/profile-gate` adds `readLogoutGate`, `advanceInactiveGate` and `REPLICA_DENY_FLOOR_FILE`); reads report "a previous sign-out was interrupted; re-running `tc auth logout` completes it". A restored older gate under a recorded denial refuses with the `tc profile delete` route.
+
+  `auth logout` by an account other than the one whose replicas the profile holds writes no marker and leaves that account's gate, floor and replicas untouched: it signs out, removes its own session and key, and erases the profile's legacy `replicas/` mirror (replayed at startup after a crash). `--revoke` there revokes only grants on the signed-in account's spaces.
+
+  When startup recovery refuses a pending logout because a credential file is unreadable, the message now names that file (`session.json` or `profile.json`).
+
+  CLI-bound storage and purge name the CLI's `replication/events.jsonl` and `events.jsonl.1` diagnostics logs (`diagnosticFiles`). With a readable gate, those exact names count as known only while they are regular files, so a fully synced profile signs out without `--discard-local-changes`; a symlink there stays unknown.
+
+### Patch Changes
+
+- 29440be: Wallet-backed `TinyCloudNode.revokeDelegation(cid)` now signs a direct owner revocation for the target CID. Session-only clients continue to use their delegated revocation authority; the node receipt must confirm the requested CID (TC-721, TC-821).
+- 86815bd: Replica erase and purge refuse a symlinked or replaced identity, `replicas/` or replica directory, leaving the purge intent queued, and remove a leftover replica directory without a database only when it holds the store's own files, without recursion.
+- e7f709d: Sign-in skips the background account registry sync when the session's signed ReCap does not cover the account index read (`tinycloud.sql/read` on the owner's `account` space, `account` database). A scoped session, such as a replica-enabled CLI OpenKey login, no longer sends a request that is always refused with 401 and logs an "account index initialization failed" warning. A session with no parseable ReCap still syncs as before.
+- 94566db: Replication: the structural replica contract recognises the `REPLICA_GATED`, `STORAGE_BUDGET` and `CONSENT_EXPIRED` error codes. Types only; behaviour is unchanged.
+- a7cdfe0: sdk-services adds the Node/CLI profile-facade contract types for deferred revoke and exact-inventory logout markers: `ProfileReplicaPurge`, `ProfileReplicaLogoutPending` (with a v1 `deniedEpoch`), `ProfileReplicaRemoteLogoutState`, `ProfileReplicaPreflight` and the inventory identity types. A new `typecheck:contract` script compiles their type assertions. CONTRACT.md specifies the logout behaviour the CLI logout implementation will deliver, including deny-first ordering, completion of an interrupted denial and the two-command inventory approval. This release ships types and specification only; no runtime behaviour changes, and browser lifecycle contracts are unchanged.
+
+  node-sdk's `ProfileReplicaPurge` and `ProfileReplicaDeferredToken` are now derived from those contract types (the subset node-sdk implements), with the same shape as before.
+
+- 94566db: Replication: enforce independently verified finite-expiration owner SIWE anchors with uncaveated KV get+sync coverage on the same verified scope in the exact space, bounded device-grant minting, and session-parent-only silent renewal. A `first_install` timestamp bounds expiry only; it cannot authorize minting. The controller uses the durable browser consent deadline for preflight, active timers, grant caps, and network fallback; compact restored sessions can only reuse a matching stamped, active installed grant with finite effective expiry while their current independently verified session still covers the requested prefix. A missing owner-backed compact proof fails closed, and session refusal never exposes installed local bytes or keys. Grant transitions use opaque replica IDs, including when a committed gate expiry beats the controller timer. The runtime subscribes only while its stamped controller is bound and detaches on rebind or close. Adds pure grant-lifetime policy helpers and validates `replication.grantTtlMs` (positive, at most 7 days).
+
+  Browser boot bounds replica recovery before constructing the node. Failed or timed-out recovery gates local admission without breaking the network session; explicit sign-out still reaches the real lifecycle denial. The root web bundle remains inert with replication off; `@tinycloud/web-sdk/replica` exports a pure optional plugin and async IndexedDB factory loader. Applications register that plugin once with root `registerBrowserReplica` before constructing an enabled client, so test fixtures can inject a scheduler into the same root-owned runtime registry without a public clock option.
+
+  Browser sign-in selects the connected wallet's persisted session. Explicit restore retains valid network authority for a different or unknown wallet, but refuses replica stamp admission; local reads recheck the provider account before returning cached bytes or keys.
+
+  The runtime binds pending writes to the supplied lifecycle stamp and creates a fresh pending store when the stamp changes; gated storage cannot fall back to volatile pending memory. Replica opens carry the configured quota alongside the stamped grant policy. When a shorter grant policy expires before the immutable seven-day gate, get/list use the network and report `GRANT_EXPIRED`; only gate expiry causes `CONSENT_EXPIRED` and scoped denial. Rejected offline network fallbacks retain their network error and emit one `replication.read` error with the gate or current-session refusal reason; no local bytes are returned.
+
+- 94566db: Expose a post-commit browser consent-expiry subscription for bound replication controllers. Recover expired origin keys before a direct replica open so a browser closed at the deadline cannot serve local data on return. Keep the web bundle replica-free by importing grant TTL policy from the narrow policy entry.
+- Updated dependencies [29440be]
+- Updated dependencies [38980b0]
+- Updated dependencies [a7cdfe0]
+- Updated dependencies [94566db]
+- Updated dependencies [94566db]
+- Updated dependencies [94566db]
+- Updated dependencies [86815bd]
+- Updated dependencies [94566db]
+- Updated dependencies [94566db]
+- Updated dependencies [86815bd]
+- Updated dependencies [90bc0ae]
+- Updated dependencies [0c4c6b2]
+  - @tinycloud/sdk-core@3.3.0-beta.7
+  - @tinycloud/replica@0.3.0-beta.4
+  - @tinycloud/sdk-services@3.3.0-beta.7
+
+## 3.2.6-beta.6
+
+### Patch Changes
+
+- Updated dependencies [5827d70]
+  - @tinycloud/replica@0.2.4-beta.3
+
+## 3.2.6-beta.5
+
+### Patch Changes
+
+- Updated dependencies [baca422]
+  - @tinycloud/replica@0.2.4-beta.2
+
+## 3.2.6-beta.4
+
+### Patch Changes
+
+- Updated dependencies [9891ed9]
+  - @tinycloud/sdk-services@3.2.6-beta.4
+  - @tinycloud/replica@0.2.4-beta.1
+  - @tinycloud/sdk-core@3.2.6-beta.4
+
+## 3.2.6-beta.3
+
+### Patch Changes
+
+- 41e5fca: A pending persisted-session restore or delegation activation no longer resumes after `signOut()` if it was waiting for storage or SDK initialization. The signed-out session stays inactive, and a later explicit sign-in can start a new session. If replacement session-key creation fails during sign-out, the node still retires the old authority and clears its persisted session.
+
 ## 3.2.6-beta.2
 
 ### Patch Changes

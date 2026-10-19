@@ -206,6 +206,37 @@ describe("ShareRecipientClient", () => {
     expect(putCalls).toBe(1);
   });
 
+  test("reports the node's retry signals as offline or a failed write, never an invalid share", async () => {
+    const created = createShareArtifact({
+      origin: ORIGIN,
+      spaceId: SPACE,
+      resource: { kind: "prefix", path: "docs/" },
+      actions: ["read", "list", "edit"],
+      mimeType: "text/markdown",
+      bytes: new TextEncoder().encode("# folder"),
+      expiresAt: new Date("2099-01-01T00:00:00.000Z"),
+      signerDid: "did:key:z6MkSigner",
+      signerPrivateKey: PRIVATE_KEY,
+    });
+    for (const [code, expected] of [
+      ["NODE_BUSY", "SHARE_OFFLINE"],
+      ["REQUEST_TIMEOUT", "SHARE_OFFLINE"],
+      ["OUTCOME_UNKNOWN", "SHARE_WRITE_FAILED"],
+    ] as const) {
+      const failure = { ok: false, error: { code, message: "node", service: "kv" } };
+      const kv = { get: async () => failure, list: async () => failure, put: async () => failure };
+      const access = await new ShareRecipientClient({
+        trustedOrigins: [ORIGIN],
+        fetch: mock(async () => new Response(created.bytes)) as never,
+        invoke: (() => ({})) as never,
+        bearerSession: { delegationHeader: { Authorization: "Bearer test" }, delegationCid: "cid", spaceId: SPACE, verificationMethod: "did:key:z6Mk", jwk: {} },
+        createKVService: (() => kv) as never,
+      }).open(encodeShareUrl({ origin: ORIGIN, cid: created.cid }));
+      await expect(access.get("docs/a.md")).rejects.toMatchObject({ code: expected });
+      await expect(access.save("docs/a.md", Uint8Array.from([2]), { etag: "etag-1" })).rejects.toMatchObject({ code: expected });
+    }
+  });
+
   test("routes addressed get/list/put through the native Node media type", async () => {
     const created = await (await import("./share-envelope")).createShareArtifactAsync({
       origin: ORIGIN,

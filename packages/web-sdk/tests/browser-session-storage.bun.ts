@@ -71,6 +71,66 @@ describe("BrowserSessionStorage", () => {
     });
   });
 
+  it("round-trips replicaStamp through save and loadWithStatus", async () => {
+    const storage = new BrowserSessionStorage({ storage: new MemoryStorage() });
+    const session = persistedSession({
+      replicaStamp: { incarnation: "inc-1", lifecycleEpoch: 3 },
+    });
+
+    await storage.save(ADDRESS, session);
+
+    await expect(storage.loadWithStatus(ADDRESS)).resolves.toEqual({
+      status: "loaded",
+      data: session,
+    });
+  });
+
+  it("forwards replicaStamp from persisted data into restore data", async () => {
+    const storage = new BrowserSessionStorage({ storage: new MemoryStorage() });
+    const session = persistedSession({
+      replicaStamp: { incarnation: "inc-1", lifecycleEpoch: 3 },
+    });
+
+    await storage.save(ADDRESS, session);
+    const loaded = await storage.loadWithStatus(ADDRESS);
+    if (loaded.status !== "loaded") throw new Error("expected a loaded session");
+
+    expect(restoreDataFromPersisted(loaded.data).replicaStamp).toEqual({
+      incarnation: "inc-1",
+      lifecycleEpoch: 3,
+    });
+  });
+  it("preserves network restoration when only the replica stamp is malformed", async () => {
+    const backend = new MemoryStorage();
+    const storage = new BrowserSessionStorage({ storage: backend });
+    const session = persistedSession({ replicaStamp: { incarnation: "inc-1", lifecycleEpoch: 3 } });
+    await storage.save(ADDRESS, session);
+    const malformed = { ...session, replicaStamp: { incarnation: 42, lifecycleEpoch: "bad" } };
+    backend.setItem(`tinycloud:session:${ADDRESS}`, JSON.stringify(malformed));
+
+    expect(storage.activeAddress()).toBe(ADDRESS);
+    expect(await storage.loadWithStatus(ADDRESS)).toEqual({
+      status: "loaded",
+      data: persistedSession({
+        createdAt: session.createdAt,
+        expiresAt: session.expiresAt,
+      }),
+    });
+    expect(JSON.parse(backend.getItem(`tinycloud:session:${ADDRESS}`)!)).toEqual(malformed);
+  });
+
+  it("does not salvage invalid network authority alongside a malformed replica stamp", async () => {
+    const backend = new MemoryStorage();
+    const storage = new BrowserSessionStorage({ storage: backend });
+    backend.setItem(`tinycloud:session:${ADDRESS}`, JSON.stringify({
+      ...persistedSession({ sessionKey: "not-json" }),
+      replicaStamp: { incarnation: 42, lifecycleEpoch: "bad" },
+    }));
+
+    await expect(storage.loadWithStatus(ADDRESS)).resolves.toEqual({ status: "corrupt", data: null });
+    expect(backend.length).toBe(0);
+  });
+
   it("rejects and removes expired sessions", async () => {
     const backend = new MemoryStorage();
     const storage = new BrowserSessionStorage({ storage: backend });

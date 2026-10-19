@@ -125,6 +125,22 @@ export interface LocalReplicaStatus {
   purgePending?: boolean;
 }
 
+/**
+ * Ungated browser inspection returns only opaque, unsealed numeric controls from the
+ * v2 meta row: coverageCode, syncedThroughEpoch, keys/contentMissing/tombstones and
+ * contentBytes. It must not acquire the account key or decrypt grant, authority, cursor,
+ * errors or KV payload. `redacted: true` distinguishes unknown from absent/revoked.
+ */
+export interface ReplicaInspectedStatus {
+  redacted: true;
+  coverage: ReplicaCoverage;
+  syncedThroughEpoch: number;
+  counts: LocalReplicaStatus["counts"];
+  bytes: number;
+  persisted?: boolean | null;
+  purgePending?: boolean;
+}
+
 export interface ReplicaDevice {
   did: string;
   jwk: object;
@@ -185,6 +201,12 @@ export interface KVReplicaHandle {
   /** Always equals `spec.device.did` when an explicit device was provided. */
   readonly deviceDid: string;
   /**
+   * Opaque partition id for events. Required on Phase 2 `ReplicaGatedHandle`; optional here
+   * only for Phase 1 adapters. Browser: private gate-HMAC partition id; node: replica hash.
+   * A controller MUST NOT derive one from raw prefix/space or emit a grant event without it.
+   */
+  readonly replicaId?: string;
+  /**
    * Guarded read. Adapters MUST NOT return value bytes unless the effective authority is `valid`
    * (signed exp, effective expiry, consent deadline, node-attested authority, revocation): they
    * throw GRANT_EXPIRED / GRANT_REVOKED / GRANT_NOT_YET_VALID / CONSENT_EXPIRED inside the read
@@ -223,6 +245,12 @@ export interface KVReplicaHandle {
   close(): Promise<void>;
 }
 
+/** Phase 2 opened handle: immutable stamp/policy and an opaque event identifier. */
+export type ReplicaGatedHandle = KVReplicaHandle & {
+  readonly spec: ReplicaGatedSpec;
+  readonly replicaId: string;
+};
+
 export interface PurgeTarget {
   identity: ReplicationIdentity;
   /** Verbatim session space id used by the corresponding replica handle. */
@@ -242,12 +270,12 @@ export interface KVReplicaStorage {
   readonly kind: "sqlite" | "indexeddb";
   open(spec: KVReplicaSpec): Promise<KVReplicaHandle>;
   /**
-   * Read an existing replica's durable status without creating or mutating storage or waiting
-   * for a mutation guard. Missing replicas return undefined. Implementations must honor abort.
-   * Ungated (it carries no stamp): a known metadata exposure (counts, bytes, grant CIDs, times),
-   * never values or keys.
+   * Read an existing replica's durable status without creating/mutating storage or waiting for a
+   * mutation guard. Missing replicas return undefined; abort is honored. Ungated (no stamp):
+   * browser returns a discriminated, redacted control-only status without acquiring the account
+   * key or decrypting data; node/CLI may expose existing grant CIDs/times. Known metadata exposure.
    */
-  inspectStatus?(spec: KVReplicaSpec, options: { signal: AbortSignal }): Promise<LocalReplicaStatus | undefined>;
+  inspectStatus?(spec: KVReplicaSpec, options: { signal: AbortSignal }): Promise<LocalReplicaStatus | ReplicaInspectedStatus | undefined>;
   /**
    * Erases replicas for the identity and prefix across the deduplicated union of the adapter's
    * stored device (if any) and `sessionDeviceDid`. A missing stored device never skips the
@@ -263,11 +291,16 @@ export interface KVReplicaStorage {
    *
    * With a `lifecycle` gate, the store is bound to `options.stamp` for its whole life (callers
    * cache stores per identity AND stamp). Every `read`, `readExisting` and `update` (append,
-   * settle, remove, clear, flush) runs through `ReplicaGateTx.run` with `{ stamp, principal:
-   * identity.principal, identityKeyHash }` before touching or initializing storage; a refusal
-   * rejects REPLICA_GATED and reads/writes nothing. A store obtained without a stamp rejects every
-   * call with REPLICA_GATED `not_established`. So after `deny`, a stale tab, worker or process can
-   * neither read nor refill the signed-out identity's pending state.
+   * settle, remove, clear, flush) checks stamp, principal, incarnation and identity intent
+   * (plus browser keyId) before touching storage; missing stamps refuse REPLICA_GATED
+   * `not_established`. Browser derives private gate-HMAC ids asynchronously from `snapshot()`
+   * before an IDB transaction, locks on that opaque identity id, then calls main-thread
+   * `ReplicaGateTx.run`, whose first control request verifies the snapshot/keyId. Node's
+   * identity-scoped `pending.json` is not SQLite: both reads and mutations take the mandatory
+   * profile lock across gate/generation check and file access; mutations durably rename
+   * before releasing it.
+   * The identity generation advances atomically with a deny intent, so stale stores cannot
+   * refill erased pending writes (CONTRACT.md §2). Missing locks fail closed.
    */
   pendingWrites?(
     identity: ReplicationIdentity,
@@ -283,8 +316,11 @@ export interface KVReplicaStorage {
   readonly lifecycle?: ReplicaLifecycleGate;
 }
 
-/** A Phase 2 adapter: the lifecycle gate is present. */
-export type ReplicaGatedStorage = KVReplicaStorage & { readonly lifecycle: ReplicaLifecycleGate };
+/** A Phase 2 adapter: the unstamped Phase 1 `open` overload is deliberately absent. */
+export type ReplicaGatedStorage = Omit<KVReplicaStorage, "open" | "lifecycle"> & {
+  readonly lifecycle: ReplicaLifecycleGate;
+  open(spec: ReplicaGatedSpec): Promise<ReplicaGatedHandle>;
+};
 
 export interface PendingWriteRecord {
   opId: string;
@@ -316,8 +352,8 @@ export interface PendingWriteStore {
   readonly durable: boolean;
   readonly identity: ReplicationIdentity;
   /**
-   * Consistent lock-free snapshot, e.g. a read of an atomic file replacement. Gated (see
-   * `KVReplicaStorage.pendingWrites`).
+   * Consistent gated snapshot. Browser: guarded IDB read; node/CLI: mandatory profile lock
+   * across gate check and pending.json read (not an unlocked atomic-file snapshot).
    */
   read(): Promise<PendingWriteState>;
   /**
@@ -337,8 +373,13 @@ export type AuthorityRefusal = {
 };
 export interface ReplicationAuthority {
   /**
-   * Restrict this authority to the current session's grant. When true, the controller MUST NOT
-   * consult the plan, mint a grant, or treat an installed storage grant as serving authority.
+   * Compact delegated/session-only authority: never consult `plan`, mint or silently renew.
+   * A matching persisted stamp and independently verified, active installed grant are not
+   * enough to serve locally: the CURRENT session must also have uncaveated get authority
+   * for each requested key/list prefix. If `sessionGrant(prefix)` refuses NOT_COVERED,
+   * CAVEATED_AUTHORITY or SESSION_EXPIRING, use network KV even while that stored grant
+   * remains active. A stored grant never establishes fresh consent or replaces the
+   * current session's own authority.
    */
   sessionOnly?: boolean;
   sessionGrant(
@@ -355,16 +396,24 @@ export interface ReplicationAuthority {
     signal: AbortSignal,
     /**
      * `expiryMs` is a DURATION from now (forwarded as `delegateTo(…, { expiry: expiryMs })`), from
-     * `mintRemainingMs`. Absent means Phase 1 behaviour (session-tier default).
+     * `mintRemainingMs`. Absent means Phase 1 behaviour (session-tier default). `renewalOnly`
+     * requires the authority to recheck a session-key parent at mint time; an initial runtime
+     * parent mint leaves it unset.
      */
-    options?: { expiryMs?: number },
+    options?: { expiryMs?: number; renewalOnly?: boolean },
   ): Promise<{ ucan: string; parentCid: string; expiresAt: number }>;
   /**
-   * Consent anchor of the session that granted replication: SIWE `issuedAt`, else the compact
-   * delegation's `iat`, else `nbf`; null when none (storage falls back to first install).
+   * Finite consent anchor from an independently validated signed owner SIWE `issuedAt`
+   * with finite signed `expirationTime` and an exact-full-space verified, uncaveated KV
+   * get+sync witness, or the independently verified **oldest owner-authorizing** compact
+   * proof's signed `iat`/`nbf` (never its child leaf). Null when owner proof bytes,
+   * KV witness, finite SIWE expiration or proof timestamp are unavailable: arbitrary
+   * did:key/empty-prf leaves and compact leaf CID/prf alone are insufficient even with
+   * finite leaf `iat`/`nbf`. Storage may use `first_install` only to bound expiry;
+   * null cannot establish a fresh session stamp.
    */
   consentAnchor?(): ReplicaConsentAnchor | null;
-  /** False for sessions that can't derive (compact delegated / sessionOnly): no silent renewal. */
+  /** True only for verified owner session-key derivation. Compact delegated / sessionOnly cannot silently renew. */
   readonly canRenew?: boolean;
 }
 
@@ -451,6 +500,12 @@ export interface KVReadThrough {
   }): void;
 }
 export interface KVReplicationController extends KVReadThrough {
+  /**
+   * Internal browser gate observer: invoked only after the stamped durable consent-expiry
+   * denial/deletion commits. Records opened opaque grant transitions even if the gate's own
+   * timer wins before this controller's timer; does not issue a second deny.
+   */
+  observeConsentExpired(stamp: ReplicaSessionStamp): void;
   status(): Promise<ReplicaStatusEntry[]>;
   sync(o?: { prefix?: string; signal?: AbortSignal }): Promise<void>;
   /** Not async: synchronously stops timers/syncs and blocks new local opens before returning its promise. */
@@ -524,6 +579,8 @@ export interface PinnedKey {
   likelyOrphaned: boolean;
 }
 export interface ReplicaStatusEntry extends Partial<LocalReplicaStatus> {
+  /** True when only opaque, ungated durable controls were inspected; no authority is known. */
+  redacted?: boolean;
   prefix: string;
   state: ReplicaState;
   reason?: ReplicationReason;
@@ -555,6 +612,7 @@ export type ReplicationReason =
   | "pending_write"
   | "grant_missing"
   | "grant_expired"
+  /** A revoked grant, including a stale-read sync refusal; read-through uses network with code GRANT_REVOKED. */
   | "grant_revoked"
   | "grant_not_yet_valid"
   | "stale"
@@ -651,12 +709,13 @@ export type ReplicationEvent =
     }
   | {
       /**
-       * Grant lifetime and renewal (CONTRACT.md §3). Carries no account identifiers: no `space`,
-       * no prefix, no principal.
+       * Grant lifetime and renewal (CONTRACT.md §3). Carries no raw account fields (`space`,
+       * prefix or principal). This does not claim confidentiality against a raw browser-profile
+       * reader who also has the persisted signed-in session.
        */
       type: "replication.grant";
       at: string;
-      /** Opaque replica id: browser salted partition id; node replica hash. */
+      /** Opaque id from an opened `ReplicaGatedHandle`, never inferred from raw space/prefix. */
       replicaId: string;
       action:
         | "minted"
@@ -677,10 +736,10 @@ export type ReplicationEvent =
       expiryMs?: number;
     }
   | {
-      /** Sign-out / account-switch lifecycle (CONTRACT.md §2). Carries no account identifiers. */
+      /** Sign-out / switch / consent-expiry lifecycle (CONTRACT.md §2). No raw account fields. */
       type: "replication.lifecycle";
       at: string;
-      /** Opaque replica id when the step concerns one partition (same scheme as `replication.grant`). */
+      /** Replica id when the step concerns one partition (same scheme as `replication.grant`). */
       replicaId?: string;
       action:
         | "denied"
@@ -697,7 +756,7 @@ export type ReplicationEvent =
         | "activation_blocked"
         | "activated"
         | "recovered";
-      reason?: "sign_out" | "account_switch" | "startup";
+      reason?: "sign_out" | "account_switch" | "consent_expired" | "startup";
       gate?: ReplicaGateReason;
       /** Partitions/intents affected by this step. */
       partitions?: number;

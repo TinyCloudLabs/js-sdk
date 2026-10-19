@@ -22,6 +22,7 @@ import {
   parseAuthError,
   storageRejectionError,
   parseStorageRejection,
+  nodeRetryError,
 } from "../errors";
 import {
   formatServiceResponseError,
@@ -493,22 +494,22 @@ export class SQLService extends BaseService implements ISQLService {
     body: Record<string, unknown>,
     signal: AbortSignal
   ): Promise<FetchResponse> {
-    const session = this.context.session!;
     const actionList = Array.isArray(actions) ? actions : [actions];
-    const headers =
-      actionList.length === 1
-        ? this.context.invoke(session, "sql", dbName, actionList[0]!)
-        : this.invokeSQLAny(session, dbName, actionList);
 
-    return this.context.fetch(`${this.host}/invoke`, {
-      method: "POST",
-      headers: {
-        ...(headers as Record<string, string>),
-        "Content-Type": "application/json",
+    return this.invokeWithRetry(
+      `${this.host}/invoke`,
+      () => {
+        const session = this.context.session!;
+        return actionList.length === 1
+          ? this.context.invoke(session, "sql", dbName, actionList[0]!)
+          : this.invokeSQLAny(session, dbName, actionList);
       },
-      body: JSON.stringify(body) as any,
-      signal,
-    });
+      {
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+        signal,
+      }
+    );
   }
 
   private actionForSql(sql: string, fallback: string): string {
@@ -568,6 +569,8 @@ export class SQLService extends BaseService implements ISQLService {
     if (response.status === 413 && parseStorageRejection(errorText)) {
       return err(storageRejectionError("sql", 413, meta, errorText));
     }
+    const retryError = nodeRetryError("sql", `SQL ${operation} failed: ${response.status} - ${errorText}`, response, errorText);
+    if (retryError) return err(retryError);
 
     const errorBody = parseServiceErrorBody(errorText);
 

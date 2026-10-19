@@ -504,3 +504,85 @@ describe("error.setup, error.recovery and error.progress", () => {
     }
   }, SPAWN_TEST_TIMEOUT_MS);
 });
+
+describe("node retry signals (TC-1413)", () => {
+  function render(error: unknown): { exitCode: number | undefined; error: Record<string, unknown> } {
+    const stderr = process.stderr as unknown as { write: (chunk: unknown) => boolean };
+    const originalWrite = stderr.write;
+    const originalExit = process.exit;
+    let output = "";
+    let exitCode: number | undefined;
+    stderr.write = (chunk: unknown) => {
+      output += String(chunk);
+      return true;
+    };
+    process.exit = ((code?: number): never => {
+      exitCode = code;
+      throw new Error("expected process exit");
+    }) as typeof process.exit;
+    try {
+      expect(() => handleError(error)).toThrow("expected process exit");
+    } finally {
+      stderr.write = originalWrite;
+      process.exit = originalExit;
+    }
+    return { exitCode, error: JSON.parse(output).error };
+  }
+
+  const busy = {
+    code: "NODE_BUSY",
+    message: "SQL query failed: 503 - sql_busy: lock_wait: the database is busy; retry the request",
+    service: "sql",
+    meta: { status: 503, stage: "lock_wait", retryable: true, retryAfterMs: 5000 },
+  };
+
+  test("a busy node says when to try again and exits 7", () => {
+    const { exitCode, error } = render(busy);
+    expect(exitCode).toBe(7);
+    expect(error).toEqual({ code: "NODE_BUSY", message: "The node is busy, try again in 5 s." });
+  });
+
+  test("a request timeout says nothing was applied", () => {
+    const { exitCode, error } = render({
+      code: "REQUEST_TIMEOUT",
+      message: "raw",
+      meta: { status: 503, retryable: true, retryAfterMs: 1000 },
+    });
+    expect(exitCode).toBe(7);
+    expect(error).toEqual({
+      code: "REQUEST_TIMEOUT",
+      message: "The node timed out before applying anything, try again in 1 s.",
+    });
+  });
+
+  test("an unknown outcome says to check before retrying", () => {
+    const { exitCode, error } = render({ code: "OUTCOME_UNKNOWN", message: "raw", meta: { status: 500, retryable: false } });
+    expect(exitCode).toBe(7);
+    expect(error.code).toBe("OUTCOME_UNKNOWN");
+    expect(error.message).toBe("Outcome unknown: the node may have applied the write. Check before retrying.");
+    expect(String(error.hint)).toContain("Read the data back");
+  });
+
+  test("without a Retry-After the message does not invent a delay, and a fraction rounds up", () => {
+    expect(cliErrorFromService({ code: "NODE_BUSY", message: "raw", meta: { status: 503 } }).message).toBe(
+      "The node is busy, try again shortly.",
+    );
+    expect(cliErrorFromService({ code: "NODE_BUSY", message: "raw", meta: { retryAfterMs: 1200 } }).message).toBe(
+      "The node is busy, try again in 2 s.",
+    );
+  });
+
+  test("maps every command's shape: service result, CLIError carrying SDK meta, wrapped cause", () => {
+    expect(cliErrorFromService(busy)).toMatchObject({ code: "NODE_BUSY", exitCode: 7 });
+    expect(wrapError(new CLIError("NODE_BUSY", "SQL failed", 1, busy.meta))).toMatchObject({
+      code: "NODE_BUSY",
+      exitCode: 7,
+      message: "The node is busy, try again in 5 s.",
+    });
+    expect(wrapError(busy)).toMatchObject({ code: "NODE_BUSY", exitCode: 7 });
+  });
+
+  test("a real transport failure keeps NETWORK_ERROR", () => {
+    expect(wrapError(new CLIError("NETWORK_ERROR", "fetch failed", 6))).toMatchObject({ code: "NETWORK_ERROR", exitCode: 6 });
+  });
+});

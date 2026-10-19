@@ -24,7 +24,7 @@ const SAFE_NUMBER_FIELDS = new Set([
 const SAFE_BOOLEAN_FIELDS = new Set(["authenticated", "ok", "persisted", "purgePending"]);
 const SAFE_REPLICATION_FIELDS: Record<string, readonly string[]> = {
   source: ["replica", "network", "none"],
-  reason: ["hit", "absent", "deleted", "content_missing", "coverage_incomplete", "not_covered", "pending_write", "grant_missing", "grant_expired", "grant_revoked", "grant_not_yet_valid", "stale", "replica_error", "runtime_unsupported", "replica_unavailable", "unsupported_option", "network_cursor", "cursor_restart", "aborted", "REPLICA_BEHIND_OWN_WRITES", "REPLICA_UNPROVEN_SINCE_START", "NETWORK_REQUESTED", "replica_gated", "sign_out", "account_switch", "startup"],
+  reason: ["hit", "absent", "deleted", "content_missing", "coverage_incomplete", "not_covered", "pending_write", "grant_missing", "grant_expired", "grant_revoked", "grant_not_yet_valid", "stale", "replica_error", "runtime_unsupported", "replica_unavailable", "unsupported_option", "network_cursor", "cursor_restart", "aborted", "REPLICA_BEHIND_OWN_WRITES", "REPLICA_UNPROVEN_SINCE_START", "NETWORK_REQUESTED", "replica_gated", "sign_out", "account_switch", "consent_expired", "startup"],
   op: ["get", "list", "put", "delete", "batchPut"],
   trigger: ["start", "interval", "stale_read", "manual", "peer"],
   origin: ["peer"],

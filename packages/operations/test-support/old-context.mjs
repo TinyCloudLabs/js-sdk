@@ -2,6 +2,9 @@
 // TC-633's turn slot. It must not make this version skip actual acquisition.
 import { AsyncLocalStorage } from "node:async_hooks";
 import { writeFile } from "node:fs/promises";
+import { exitWithParent } from "../src/test-support/parent-watch.mjs";
+
+exitWithParent();
 
 const [profile, output] = process.argv.slice(2);
 if (!profile || !output) throw new Error("Expected profile and output path.");

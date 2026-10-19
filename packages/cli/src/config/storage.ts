@@ -1,5 +1,6 @@
+import { constants as fsConstants } from "node:fs";
 import { randomUUID } from "node:crypto";
-import { readFile, writeFile, stat, mkdir, rm, readdir, rename } from "node:fs/promises";
+import { readFile, writeFile, stat, mkdir, rm, readdir, rename, open } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 
 /**
@@ -40,6 +41,43 @@ export async function writeJson(filePath: string, data: unknown): Promise<void> 
     await rm(tempPath, { force: true }).catch(() => undefined);
     throw err;
   }
+}
+
+/** Publish a profile authority fence only after its file and directory entry are durable. */
+export async function writeJsonDurable(filePath: string, data: unknown): Promise<void> {
+  const directory = dirname(filePath);
+  const tempPath = join(directory, `.${basename(filePath)}.${process.pid}.${randomUUID()}.tmp`);
+  await mkdir(directory, { recursive: true, mode: PRIVATE_DIR_MODE });
+  try {
+    const file = await open(tempPath, "wx", PRIVATE_FILE_MODE);
+    try {
+      await file.writeFile(JSON.stringify(data, null, 2) + "\n", "utf8");
+      await file.sync();
+    } finally {
+      await file.close();
+    }
+    await rename(tempPath, filePath);
+    const parent = await open(directory, "r");
+    try { await parent.sync(); } finally { await parent.close(); }
+  } catch (error) {
+    await rm(tempPath, { force: true }).catch(() => undefined);
+    throw error;
+  }
+}
+
+/** A cleared sign-out fence may only follow durable session and signer files. */
+export async function syncAuthCredentialFiles(directory: string): Promise<void> {
+  for (const name of ["key.json", "session.json"]) {
+    const handle = await open(join(directory, name), fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
+    try {
+      if (!(await handle.stat()).isFile()) throw new Error(`${name} is not a regular credential file.`);
+      await handle.sync();
+    } finally {
+      await handle.close();
+    }
+  }
+  const parent = await open(directory, "r");
+  try { await parent.sync(); } finally { await parent.close(); }
 }
 
 /**
