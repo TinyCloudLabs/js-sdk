@@ -41,6 +41,13 @@ export function hexToBytes(hex: string, code: HeldCredentialErrorCode = "bad-pre
   return bytes;
 }
 
+const STRICT_UTF8 = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
+
+/** Strict UTF-8: invalid bytes are refused (not replaced) and a leading BOM is kept, so JSON parsing refuses it. */
+export function decodeUtf8(bytes: Uint8Array, code: HeldCredentialErrorCode): string {
+  try { return STRICT_UTF8.decode(bytes); } catch { return refuse(code, "not valid UTF-8"); }
+}
+
 export type Json = null | boolean | number | string | Json[] | { [key: string]: Json };
 
 export function isObject(value: unknown): value is { [key: string]: Json } {

@@ -1,6 +1,6 @@
 import { recoverEip191Address, sha256, verifyEd25519Strict } from "./crypto";
 import { parsePkhDid, pkhPrincipalsEqual, registryKey } from "./did";
-import { asciiBytes, decodeBase64Url, encodeBase64Url, hexToBytes, isAscii, isObject, parseStrictJson, type Json } from "./encoding";
+import { asciiBytes, decodeBase64Url, decodeUtf8, encodeBase64Url, hexToBytes, isAscii, isObject, parseStrictJson, type Json } from "./encoding";
 import { refuse } from "./errors";
 import { didMethod, isWellFormedKid, type IssuerEntry, type IssuerSet } from "./issuer-set";
 import type { NonceStore } from "./nonce-store";
@@ -124,7 +124,7 @@ export async function verifyHeldPresentation(presentation: unknown, options: Ver
   if (headerB64.length > HELD_LIMITS.headerSegmentChars || payloadB64.length > HELD_LIMITS.payloadSegmentChars || signatureB64.length > HELD_LIMITS.signatureSegmentChars) refuse("bad-presentation", "JWT segment is too long");
 
   // 2. protected header only
-  const header = parseStrictJson(new TextDecoder().decode(decodeBase64Url(headerB64, "bad-header")), "bad-header");
+  const header = parseStrictJson(decodeUtf8(decodeBase64Url(headerB64, "bad-header"), "bad-header"), "bad-header");
   if (!isObject(header)) refuse("bad-header", "header must be an object");
   for (const member of Object.keys(header)) if (!HEADER_MEMBERS.has(member)) refuse("bad-header", `unexpected header member ${member}`);
   if (header.alg !== "EdDSA") refuse("bad-header", "alg must be EdDSA");
@@ -153,7 +153,7 @@ export async function verifyHeldPresentation(presentation: unknown, options: Ver
   if (!verifyEd25519Strict(signature, asciiBytes(`${headerB64}.${payloadB64}`), entry.publicKey)) refuse("bad-signature", "issuer signature did not verify");
 
   // 6. only now decode the payload
-  const payload = parseStrictJson(new TextDecoder().decode(decodeBase64Url(payloadB64, "bad-payload")), "bad-payload");
+  const payload = parseStrictJson(decodeUtf8(decodeBase64Url(payloadB64, "bad-payload"), "bad-payload"), "bad-payload");
   if (!isObject(payload)) refuse("bad-payload", "payload must be an object");
   if (payload.iss !== issuerDid) refuse("bad-payload", "iss must equal the DID part of kid");
   const { iat, nbf, exp } = payload;
@@ -202,7 +202,7 @@ export async function verifyHeldPresentation(presentation: unknown, options: Ver
     if (!digests.has(digest)) refuse("bad-disclosure", "disclosure digest is not in _sd");
     if (seen.has(digest)) refuse("bad-disclosure", "repeated disclosure");
     seen.add(digest);
-    const decoded = parseStrictJson(new TextDecoder().decode(decodeBase64Url(disclosure, "bad-disclosure")), "bad-disclosure");
+    const decoded = parseStrictJson(decodeUtf8(decodeBase64Url(disclosure, "bad-disclosure"), "bad-disclosure"), "bad-disclosure");
     if (!Array.isArray(decoded) || decoded.length !== 3 || typeof decoded[0] !== "string" || typeof decoded[1] !== "string") refuse("bad-disclosure", "disclosure must be [salt, name, value]");
     const [, name, value] = decoded as [string, string, Json];
     if (RESERVED_CLAIMS.has(name) || row.optionalSignedClaims.includes(name)) refuse("bad-disclosure", "claim name collides with a signed claim");

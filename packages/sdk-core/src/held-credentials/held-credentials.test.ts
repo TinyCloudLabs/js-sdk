@@ -16,7 +16,7 @@ import {
   type NonceStore,
   type VerifyHeldPresentationOptions,
 } from "./index";
-import { MAX_JSON_DEPTH, asciiBytes, bytesToHex, encodeBase64Url, parseStrictJson } from "./encoding";
+import { MAX_JSON_DEPTH, decodeUtf8, asciiBytes, bytesToHex, encodeBase64Url, parseStrictJson } from "./encoding";
 import { HELD_LIMITS } from "./verify";
 import { EMAIL_HELD_ROW } from "./rows";
 
@@ -620,5 +620,35 @@ describe("TC-1540 Miller 2: duplicate _sd digests", () => {
     await expectCode("bad-payload", { payload: (p) => ({ ...p, _sd: [...(p._sd as string[]), (p._sd as string[])[0]] }) });
     await expectCode("bad-payload", { payload: (p) => ({ ...p, _sd: [...(p._sd as string[]), ...(p._sd as string[])] }) });
     await expectCode("ok", {});
+  });
+});
+
+describe("TC-1540 Miller 3: strict UTF-8", () => {
+  const bytes = (...parts: (string | number[])[]) => Uint8Array.from(parts.flatMap((p) => (typeof p === "string" ? [...new TextEncoder().encode(p)] : p)));
+  const b64 = (u: Uint8Array) => encodeBase64Url(u);
+  test("decodeUtf8 refuses invalid bytes and keeps a BOM", () => {
+    expect(() => decodeUtf8(Uint8Array.from([0xff]), "bad-payload")).toThrow(HeldCredentialError);
+    expect(() => decodeUtf8(Uint8Array.from([0xc0, 0x80]), "bad-payload")).toThrow(HeldCredentialError);
+    expect(decodeUtf8(bytes([0xef, 0xbb, 0xbf], "{}"), "bad-payload").charCodeAt(0)).toBe(0xfeff);
+  });
+  test("a BOM before the header JSON is refused", async () => {
+    const h = harness();
+    const header = b64(bytes([0xef, 0xbb, 0xbf], JSON.stringify({ alg: "EdDSA", typ: "vc+sd-jwt", kid: KID_A })));
+    expect(await presentRaw(h, withHeaderSegment(header))).toBe("bad-header");
+  });
+  test("invalid UTF-8 in a signed payload string is refused, not replaced", async () => {
+    const h = harness();
+    const payload = b64(bytes('{"iss":"', [0xff], '"}'));
+    const input = `${enc({ alg: "EdDSA", typ: "vc+sd-jwt", kid: KID_A })}.${payload}`;
+    const sdJwt = `${input}.${encodeBase64Url(ed25519.sign(asciiBytes(input), SEED_A))}~`;
+    expect(await presentRaw(h, sdJwt)).toBe("bad-payload");
+  });
+  test("invalid UTF-8 and a BOM in a genuine disclosure are refused", async () => {
+    for (const raw of [bytes('["s","email","', [0xff], '"]'), bytes([0xef, 0xbb, 0xbf], '["s","email","a@example.com"]')]) {
+      const text = b64(raw);
+      const digest = encodeBase64Url(sha256(asciiBytes(text)));
+      const cred = makeCredential({ disclosures: [], rawDisclosures: [text], payload: (p) => ({ ...p, _sd: [digest] }) });
+      expect(await presentRaw(harness(), cred.sdJwt)).toBe("bad-disclosure");
+    }
   });
 });
