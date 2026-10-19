@@ -219,7 +219,64 @@ function errnoOf(error: unknown): unknown {
 
 
 /** A directory's entries; only a directory that does not exist is empty. */
-/** Unlink every blob under `root` not in `keep`, and every temp file. Only a missing directory counts as empty. */
+const isShard = (name: string) => /^[0-9a-f]{2}$/.test(name);
+const isTempName = (name: string) => /^[0-9a-f]{64}\.[0-9a-f]{12}$/.test(name);
+
+/**
+ * The files the writer itself creates under a replica's `blobs/`: `<2 hex>/<64 hex>` blobs (the
+ * shard is the hash's first two characters) and `.tmp/<64 hex>.<12 hex>` temp files. Only regular
+ * files inside real directories qualify; symlinks, stray files, unknown names and anything else
+ * are skipped, never followed, counted or deleted. A missing or non-directory `root` is empty.
+ */
+async function writerBlobFiles(root: string): Promise<Array<{ path: string; hash: string | null; size: number }>> {
+  const out: Array<{ path: string; hash: string | null; size: number }> = [];
+  let shards;
+  try {
+    shards = await readdir(root, { withFileTypes: true });
+  } catch (error) {
+    if (errnoOf(error) === "ENOENT" || errnoOf(error) === "ENOTDIR") return out;
+    throw error;
+  }
+  for (const shard of shards) {
+    const temp = shard.name === ".tmp";
+    if (!shard.isDirectory() || !(temp || isShard(shard.name))) continue;
+    const shardPath = join(root, shard.name);
+    let files;
+    try {
+      files = await readdir(shardPath, { withFileTypes: true });
+    } catch (error) {
+      if (errnoOf(error) === "ENOENT" || errnoOf(error) === "ENOTDIR") continue;
+      throw error;
+    }
+    for (const file of files) {
+      if (!file.isFile()) continue;
+      const ok = temp ? isTempName(file.name) : isHash(file.name) && file.name.startsWith(shard.name);
+      if (!ok) continue;
+      const path = join(shardPath, file.name);
+      const info = await lstat(path).catch(() => undefined);
+      if (!info?.isFile()) continue;
+      out.push({ path, hash: temp ? null : file.name, size: info.size });
+    }
+  }
+  return out;
+}
+
+/** Unlink every writer-created blob under `root` not in `keep`, and every writer temp file. Foreign entries are left alone. */
+async function unlinkWriterOrphans(root: string, keep: Set<string>): Promise<number> {
+  let removed = 0;
+  const touched = new Set<string>();
+  for (const file of await writerBlobFiles(root)) {
+    if (file.hash !== null && keep.has(file.hash)) continue;
+    await rm(file.path, { force: true });
+    touched.add(dirname(file.path));
+    removed += 1;
+  }
+  // Drop shard directories this sweep emptied; rmdir fails (and is ignored) when anything remains.
+  for (const dir of touched) if (!dir.endsWith(".tmp")) await rmdir(dir).catch(() => undefined);
+  return removed;
+}
+
+/** Unlink every blob under `root` not in `keep`, and every temp file. Only a missing directory counts as empty. Used by purge and the sync-time collector, which own the pinned replica directory and must leave nothing behind. */
 async function unlinkBlobsIn(root: string, keep: Set<string>): Promise<number> {
   let removed = 0;
   for (const shard of await entriesOf(root)) {
@@ -474,31 +531,21 @@ export class SqliteReplicaStore implements ReplicaStore {
   }
 
   /**
-   * Blob content bytes on disk in the replica at `dir` (0 when absent): every file under `blobs/`,
-   * including temp files and blobs no entry references any more, so garbage a failed sync left
-   * behind still counts. Only blob content is counted: not the database, its WAL, rows or the
+   * Blob content bytes on disk in the replica at `dir` (0 when absent): the writer's blob files under `blobs/`,
+   * including writer temp files and blobs no entry references any more, so garbage a failed sync
+   * left behind still counts. Counts exactly what `collectOrphans` may delete: foreign entries
+   * (stray files, symlinks, unknown names) are neither counted nor touched. Only blob content is counted: not the database, its WAL, rows or the
    * pending store. Filesystem-only: it opens no
    * database, so it can sum a profile's replicas under the caller's own mutation hold.
    */
   static async contentBytes(dir: string): Promise<number> {
-    const root = join(dir, "blobs");
-    let bytes = 0;
     try {
-      for (const shard of await entriesOf(root)) {
-        const shardPath = join(root, shard);
-        for (const name of await entriesOf(shardPath)) {
-          const info = await lstat(join(shardPath, name)).catch((error: unknown) => {
-            if (errnoOf(error) === "ENOENT") return undefined;
-            throw error;
-          });
-          if (info?.isFile()) bytes += info.size;
-        }
-      }
+      let bytes = 0;
+      for (const file of await writerBlobFiles(join(dir, "blobs"))) bytes += file.size;
+      return bytes;
     } catch (error) {
-      if (errnoOf(error) === "ENOTDIR") return 0;
       throw storageError(error, "Measuring replica content");
     }
-    return bytes;
   }
 
   /**
@@ -528,7 +575,7 @@ export class SqliteReplicaStore implements ReplicaStore {
       db?.close();
     }
     try {
-      return await unlinkBlobsIn(join(dir, "blobs"), keep);
+      return await unlinkWriterOrphans(join(dir, "blobs"), keep);
     } catch (error) {
       throw storageError(error, "Collecting orphaned content");
     }
