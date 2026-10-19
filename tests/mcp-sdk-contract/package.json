@@ -14,7 +14,7 @@
     "@modelcontextprotocol/client": "2.0.0-beta.4",
     "@modelcontextprotocol/server": "2.0.0-beta.4",
     "zod": "3.25.76",
-    "zod-to-json-schema": "3.25.1"
+    "zod-to-json-schema": "3.25.2"
   },
   "devDependencies": {
     "@types/bun": "latest",
