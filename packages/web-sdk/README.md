@@ -331,10 +331,13 @@ When you want "names starting with X" (UI type-ahead over a small folder), use t
 standalone `listMatching(kv, prefix, options?)` function. It lists the folder up to the
 last `/` with the normal `list`, reads **every** page, and filters client-side. It takes
 `tc.kv` or a prefixed view (`tc.kv.withPrefix('notes')`), and is not part of the KV
-service itself, so apps that don't import it don't ship it:
+service itself, so apps that don't import it don't ship it.
+
+**Browser apps import it from `@tinycloud/sdk-core`** (web-sdk already depends on it);
+`@tinycloud/web-sdk` does not re-export it, to keep its root bundle unchanged:
 
 ```typescript
-import { listMatching } from '@tinycloud/web-sdk';
+import { listMatching } from '@tinycloud/sdk-core';
 
 // Keys: qa/b00, qa/b01, qa/c00
 const result = await listMatching(tc.kv, 'qa/b');

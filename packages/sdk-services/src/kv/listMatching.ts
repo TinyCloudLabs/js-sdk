@@ -46,6 +46,11 @@ export type KVListMatchingOptions = Omit<
  * List the keys that start with a *partial* path segment, e.g. every key
  * beginning `qa/b`, including `qa/b00` and `qa/b01`.
  *
+ * **Where to import it:** from `@tinycloud/sdk-services` or `@tinycloud/sdk-core`;
+ * `@tinycloud/node-sdk` re-exports it too. Browser apps import it from
+ * `@tinycloud/sdk-core` (web-sdk already depends on it); `@tinycloud/web-sdk`
+ * deliberately does not re-export it, to keep its root bundle unchanged.
+ *
  * ## Why this is a helper and not a `list` option
  *
  * Since node 1.19.0 (TC-731) the node matches list prefixes on **whole path

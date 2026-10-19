@@ -209,12 +209,9 @@ export type {
 export {
   KVService,
   PrefixedKVService,
-  listMatching,
   type IKVService,
   type KVResponse,
   type IPrefixedKVService,
-  type KVListSource,
-  type KVListMatchingOptions,
 } from "@tinycloud/sdk-core";
 
 // Hooks service
