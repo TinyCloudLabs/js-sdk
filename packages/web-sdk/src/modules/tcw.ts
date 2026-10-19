@@ -1297,19 +1297,9 @@ export class TinyCloudWeb {
     return node.createSubDelegation(parentDelegation, params);
   }
 
-  async delegate(params: CreateDelegationParams): Promise<Result<Delegation, DelegationError>> {
-    const node = await this.ensureNode();
-    return node.delegate(params);
-  }
-
   async revokeDelegation(cid: string): Promise<Result<DelegationRevocationReceipt, DelegationError>> {
     const node = await this.ensureNode();
     return node.revokeDelegation(cid);
-  }
-
-  async listDelegations(): Promise<Result<Delegation[], DelegationError>> {
-    const node = await this.ensureNode();
-    return node.listDelegations();
   }
 
   async checkPermission(path: string, action: string): Promise<Result<boolean, DelegationError>> {

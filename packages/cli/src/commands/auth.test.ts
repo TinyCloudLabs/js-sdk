@@ -2032,6 +2032,7 @@ describe("OpenKey primary key (TC-705)", () => {
       ["tinycloud.kv", space],
       ["tinycloud.sql", space],
       ["tinycloud.capabilities", space],
+      ["tinycloud.delegation", space],
     ]);
     expect(profiles.get("default")?.ownerDid).toBe(otherOwner);
     expect(profiles.get("default")?.ownerKeyPrimary).toBe(false);
@@ -2050,6 +2051,7 @@ describe("OpenKey primary key (TC-705)", () => {
       ["tinycloud.kv", space],
       ["tinycloud.sql", space],
       ["tinycloud.capabilities", space],
+      ["tinycloud.delegation", space],
     ]);
   });
 
@@ -2063,12 +2065,19 @@ describe("OpenKey primary key (TC-705)", () => {
     expect(profiles.get("default")?.ownerDid).toBeUndefined();
   });
 
-  test("a plain login without --owner sends no request scope", async () => {
+  test("a plain login without --owner requests the default abilities plus delegation/list on the default space", async () => {
     openKeyDelegation = signedBy(primaryOwner, { primary: true });
 
     await runAuthCommand(["auth", "login", "--method", "openkey", "--no-popup"]);
 
-    expect(recorded.startAuthFlows[0]?.options.permissions).toBeUndefined();
+    const requested = recorded.startAuthFlows[0]?.options.permissions as Array<{ service: string; space: string; actions: string[] }>;
+    expect(requested.map((entry) => [entry.service, entry.space])).toEqual([
+      ["tinycloud.kv", "default"],
+      ["tinycloud.sql", "default"],
+      ["tinycloud.capabilities", "default"],
+      ["tinycloud.delegation", "default"],
+    ]);
+    expect(requested.find((entry) => entry.service === "tinycloud.delegation")?.actions).toEqual(["tinycloud.delegation/list"]);
   });
 
   test("auth status reports whether the owner key is primary", async () => {
