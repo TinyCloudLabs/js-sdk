@@ -608,7 +608,7 @@ describe("TinyCloudNode.restoreSession session-key lifecycle", () => {
       expect(captured.context.abortSignal.aborted).toBe(true);
       expect(() => captured.core.kv).toThrow("Services not initialized");
       await expect(captured.publicKV.get("after")).resolves.toMatchObject({ ok: false });
-      await expect(captured.delegations.list()).resolves.toMatchObject({ ok: false });
+      await expect(captured.delegations.query()).resolves.toMatchObject({ ok: false });
       await expect(captured.sharing.generate({ path: "after", actions: ["tinycloud.kv/get"] }))
         .resolves.toMatchObject({ ok: false });
       await expect((captured.encryption as any).config.node.fetchByNetworkId(

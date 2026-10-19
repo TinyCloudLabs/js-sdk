@@ -8,15 +8,53 @@ import { ExitCode } from "../config/constants.js";
 import { ensureAuthenticated } from "../lib/sdk.js";
 import { revokeDelegationOnNode } from "../lib/revoke-delegation.js";
 import { parseExpiry } from "../lib/duration.js";
-function normalizeDid(input: string): string {
-  const normalized = input.trim();
-  const fragmentIndex = normalized.indexOf("#");
-  return (fragmentIndex === -1 ? normalized : normalized.slice(0, fragmentIndex)).toLowerCase();
+import { CLI_NAME } from "@tinycloud/operations/cli-name";
+import { PermissionNotInManifestError, type AccountDelegationRecord, type TinyCloudNode } from "@tinycloud/node-sdk";
+
+type DelegationQueryOptions = { direction: "granted" | "received" | "all"; space?: string };
+
+/** Every page of the account delegation query, stopping early once `until` is seen. */
+async function queryDelegations(
+  node: TinyCloudNode,
+  options: DelegationQueryOptions,
+  until?: string,
+): Promise<AccountDelegationRecord[]> {
+  const found: AccountDelegationRecord[] = [];
+  let cursor: string | undefined;
+  do {
+    const page = await node.account.delegations.query({ ...options, limit: 100, cursor });
+    if (!page.ok) {
+      if (page.error.code === "PERMISSION_DENIED") {
+        throw new CLIError(
+          "PERMISSION_DENIED",
+          `This session cannot read delegations: it lacks tinycloud.delegation/list. Run \`${CLI_NAME} auth login\` again to grant it.`,
+          ExitCode.PERMISSION_DENIED,
+        );
+      }
+      throw cliErrorFromService(page.error);
+    }
+    found.push(...page.data.items);
+    cursor = page.data.nextCursor;
+  } while (cursor && !(until && found.some((d) => d.cid === until)));
+  return found;
 }
-function didMatches(actual: string | undefined, expected: string): boolean {
-  if (!actual) return false;
-  return normalizeDid(actual) === normalizeDid(expected);
+
+function listedDelegation(d: AccountDelegationRecord) {
+  const resources = d.resources.map((r) => {
+    const [space, service, ...path] = r.resource.split("/");
+    return { space, service, path: path.join("/"), actions: r.actions };
+  });
+  return {
+    cid: d.cid,
+    delegatee: d.delegateDid,
+    delegator: d.delegatorDid,
+    direction: d.direction,
+    status: d.status,
+    expiry: d.expiresAt?.toISOString() ?? null,
+    resources,
+  };
 }
+
 async function confirmCurrentSessionRevoke(yes: boolean): Promise<void> {
   if (yes) return;
   const warning = "This is your current sign-in session; revoking it signs you out";
@@ -54,30 +92,70 @@ export function registerDelegationCommand(
         const ctx = await ProfileManager.resolveContext(globalOpts);
         const node = await ensureAuthenticated(ctx);
 
-        const actions = options.actions.split(",").map((a: string) => {
+        const actions: string[] = options.actions.split(",").map((a: string) => {
           const trimmed = a.trim();
           return trimmed.startsWith("tinycloud.") ? trimmed : `tinycloud.${trimmed}`;
         });
+        const byService: Record<string, string[]> = {};
+        for (const action of actions) {
+          const slash = action.indexOf("/");
+          if (slash <= "tinycloud.".length || slash === action.length - 1) {
+            throw new CLIError("USAGE_ERROR", `Invalid action "${action}"; use service/action, e.g. kv/get`, ExitCode.USAGE_ERROR);
+          }
+          (byService[action.slice(0, slash)] ??= []).push(action);
+        }
 
         const expiry = parseExpiry(options.expiry);
+        // `tc profile show` prints a did:key with a #fragment; the node wants the bare DID.
+        const recipient = options.to.split("#")[0];
 
-        const result = await node.delegationManager.create({
-          delegateDID: options.to,
-          path: options.path,
-          actions,
-          expiry,
+        // delegateTo signs the delegation and activates it with the node
+        // (POST /delegate); the node does not serve tinycloud.delegation/create.
+        // The space must be explicit: an entry without one targets the
+        // "applications" space, not the session's default space.
+        const { delegation: created } = await node.delegateTo(
+          recipient,
+          Object.entries(byService).map(([service, serviceActions]) => ({
+            service,
+            space: "default",
+            path: options.path,
+            actions: serviceActions,
+          })),
+          { expiry: expiry.getTime() - Date.now(), requireActivation: true },
+        ).catch((error: unknown) => {
+          if (error instanceof PermissionNotInManifestError) {
+            const needed = error.missing
+              .map((m) => `${m.actions.join(", ")} on space "${m.space ?? "default"}" path "${m.path}"`)
+              .join("; ");
+            throw new CLIError(
+              "PERMISSION_DENIED",
+              `This session cannot delegate what was requested. Missing: ${needed}. Sign in again with these permissions.`,
+              ExitCode.PERMISSION_DENIED,
+            );
+          }
+          throw error;
         });
 
-        if (!result.ok) {
-          throw cliErrorFromService(result.error);
+        // Read back through the node before reporting success.
+        const confirmed = (await queryDelegations(node, { direction: "granted" }, created.cid)).find((d) => d.cid === created.cid);
+        if (confirmed?.status !== "active") {
+          throw new CLIError(
+            "DELEGATION_NOT_CONFIRMED",
+            confirmed
+              ? `The node lists delegation ${created.cid} as ${confirmed.status}, not active; treat it as not created.`
+              : `The node accepted delegation ${created.cid} but does not list it; treat it as not created.`,
+            ExitCode.ERROR,
+          );
         }
 
         outputJson({
-          cid: result.data.cid,
-          delegateDid: options.to,
+          cid: created.cid,
+          delegateDid: recipient,
+          delegatorDid: confirmed.delegatorDid,
           path: options.path,
           actions,
-          expiry: expiry.toISOString(),
+          expiry: created.expiry.toISOString(),
+          status: confirmed.status,
         });
       } catch (error) {
         return handleError(error);
@@ -89,37 +167,25 @@ export function registerDelegationCommand(
     .description("List delegations")
     .option("--granted", "Show only delegations I've granted")
     .option("--received", "Show only delegations I've received")
+    .option("--space <space>", "Filter by space name or ID")
     .action(async (options, cmd) => {
       try {
         const globalOpts = cmd.optsWithGlobals();
         const ctx = await ProfileManager.resolveContext(globalOpts);
         const node = await ensureAuthenticated(ctx);
 
-        const result = await node.delegationManager.list();
-        if (!result.ok) {
-          throw cliErrorFromService(result.error);
+        if (options.granted && options.received) {
+          throw new CLIError("USAGE_ERROR", "Use only one of --granted or --received.", ExitCode.USAGE_ERROR);
         }
-
-        let delegations: any[] = result.data;
-
-        // Filter if requested
-        if (options.granted) {
-          const myDid = node.did;
-          delegations = delegations.filter((d: any) => didMatches(d.delegatorDID, myDid));
-        } else if (options.received) {
-          const myDid = node.did;
-          delegations = delegations.filter((d: any) => didMatches(d.delegateDID, myDid));
-        }
+        // The node's account delegation query (POST /delegation/query). Unlike
+        // `account delegations list`, it includes delegations signed by a session key.
+        const delegations = await queryDelegations(node, {
+          direction: options.granted ? "granted" : options.received ? "received" : "all",
+          space: options.space,
+        });
 
         outputJson({
-          delegations: delegations.map((d: any) => ({
-            cid: d.cid,
-            delegatee: d.delegateDID,
-            delegator: d.delegatorDID,
-            path: d.path,
-            actions: d.actions,
-            expiry: d.expiry instanceof Date ? d.expiry.toISOString() : d.expiry,
-          })),
+          delegations: delegations.map(listedDelegation),
           count: delegations.length,
         });
       } catch (error) {
@@ -130,18 +196,20 @@ export function registerDelegationCommand(
   delegation
     .command("info <cid>")
     .description("Get delegation details")
-    .action(async (cid: string, _options, cmd) => {
+    .option("--space <space>", "Filter by space name or ID")
+    .action(async (cid: string, options, cmd) => {
       try {
         const globalOpts = cmd.optsWithGlobals();
         const ctx = await ProfileManager.resolveContext(globalOpts);
         const node = await ensureAuthenticated(ctx);
 
-        const result = await node.delegationManager.get(cid);
-        if (!result.ok) {
-          throw new CLIError("NOT_FOUND", `Delegation "${cid}" not found`, ExitCode.NOT_FOUND);
+        // The node has no per-CID read; look the CID up in the account delegation query.
+        const found = (await queryDelegations(node, { direction: "all", space: options.space })).find((d) => d.cid === cid);
+        if (!found) {
+          throw new CLIError("NOT_FOUND", `Delegation "${cid}" not found in this account's delegations`, ExitCode.NOT_FOUND);
         }
 
-        outputJson(result.data);
+        outputJson(listedDelegation(found));
       } catch (error) {
         return handleError(error);
       }
