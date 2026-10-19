@@ -469,7 +469,7 @@ describe("retiredAt and notAfter", () => {
   });
 });
 
-describe("normaliseEmail (G14 interim, same rules as billing)", () => {
+describe("normaliseEmail (alias rules confirmed by Sam 2026-10-19, same as billing)", () => {
   test("folds +tag, strips gmail dots, maps googlemail, rejects malformed", () => {
     expect(normaliseEmail("  A.B+x@Gmail.com ")).toBe("ab@gmail.com");
     expect(normaliseEmail("a.b+x@googlemail.com")).toBe("ab@gmail.com");

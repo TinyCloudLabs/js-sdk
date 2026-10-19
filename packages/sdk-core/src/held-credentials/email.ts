@@ -1,11 +1,15 @@
 /**
  * THE single shared email normalisation function (gap G14; the same rules as billing's
- * `src/email-normalise.ts`, TC-1439). Interim until Sam answers the alias question; if the rule
- * changes it changes only here.
+ * `src/email-normalise.ts`, TC-1439). The alias rules below are confirmed by Sam on 2026-10-19
+ * (card tc-1439-email-aliases); a change to them changes only here.
  *
  *   - trim and lowercase;
  *   - fold a `+tag` suffix of the local part, for every domain;
- *   - remove dots of the local part for gmail.com and googlemail.com only (googlemail.com maps to gmail.com).
+ *   - remove dots of the local part for gmail.com and googlemail.com only (googlemail.com maps to
+ *     gmail.com, as in billing's implementation).
+ *
+ * OPEN (G14): Unicode/IDNA handling is not defined. Addresses must stay ASCII until it is decided
+ * and frozen, which must happen before billing's first production write.
  *
  * Returns null for empty or malformed input: callers must fail closed.
  */
