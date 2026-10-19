@@ -105,8 +105,8 @@ export function networkError(
 /**
  * Classify a node retry signal (tinycloud-node #347, TC-1054). The node's
  * bodies are plain text led by a stable token:
- * - `503 sql_busy: <stage>: ...` and `503 unavailable_retryable: ...` are
- *   `NODE_BUSY`: nothing was applied; retry after `meta.retryAfterMs`.
+ * - `503 sql_busy: <stage>: ...` and `503 unavailable_retryable: ...` (and
+ *   `read_audit_busy`) are `NODE_BUSY`: nothing was applied; retry after `meta.retryAfterMs`.
  * - `503 request_timeout: ...` is `REQUEST_TIMEOUT`: the deadline passed before
  *   any write began, so nothing was applied.
  * - `500 outcome_unknown: ...` is `OUTCOME_UNKNOWN`: a write may have been
@@ -114,7 +114,8 @@ export function networkError(
  *
  * `meta.retryable` is the safe-to-retry verdict and `meta.retryAfterMs` the
  * node's `Retry-After` (the node sends whole seconds; anything else is
- * ignored). The SDK never retries on its own. Returns `undefined` for any
+ * ignored). `invokeWithRetry` retries `NODE_BUSY` and `REQUEST_TIMEOUT`;
+ * `OUTCOME_UNKNOWN` is never retried. Returns `undefined` for any
  * other response, including the bodyless 503/500 of nodes before 1.21, which
  * callers keep classifying as they always did.
  */
@@ -127,7 +128,7 @@ export function nodeRetryError(
   const body = errorText.trim();
   const [, token, stage] = /^([a-z_]+)(?::\s*([a-z_]+):)?/.exec(body) ?? [];
   let code: string;
-  if (response.status === 503 && (token === "sql_busy" || token === "unavailable_retryable")) {
+  if (response.status === 503 && (token === "sql_busy" || token === "unavailable_retryable" || token === "read_audit_busy")) {
     code = ErrorCodes.NODE_BUSY;
   } else if (response.status === 503 && token === "request_timeout") {
     code = ErrorCodes.REQUEST_TIMEOUT;

@@ -216,6 +216,15 @@ measured on canonical CI against master `c7a379c5`: master 1,474,761 / 1,403,138
 root ceilings to exactly those bytes. The ledger's `tc1476Ratchet` row records it and cannot change later;
 whichever PR lands after it re-measures against the new base and updates its own row.
 
+TC-1475 (automatic retry of node 503 busy and request_timeout responses in `ServiceContext.invokeWithRetry`, which
+re-signs the invocation on every attempt, plus the web-sdk and node-sdk `retryPolicy` config, #599) was measured
+against master `5317cc78` and sits on top of TC-1476's root ceilings and TC-1432's first-import, activation and
+worker ceilings. GitHub run 39292038037 on source `092144080` measured the same bytes in both Node jobs: root
+1,475,166 / 1,403,595 B (+358 / +404 over the merge base; ceilings exactly the measured values), first import 51,925 / 67,140 B (0 / +2),
+activation 23,117 / 24,699 B (+11 / +14) and the kv-storage worker 822,667 B (+623). The
+ledger's `tc1475Ratchet` row records it and cannot change later;
+whichever PR lands after it re-measures against the new base and updates its own row.
+
 **Ancestry pins and squash merges.** A policy row records the PR-branch commit it
 was reviewed at, and its introduction check requires that literal commit in the
 PR head. js-sdk uses merge commits, which keep that commit reachable, but squash
@@ -319,6 +328,22 @@ await storage.delete('messages/welcome');
 
 // Delete all data under a prefix
 await storage.deleteAll('user');
+```
+
+### Automatic retry
+
+When the node answers `503` busy (`NODE_BUSY`) or `503` request timeout (`REQUEST_TIMEOUT`), it
+applied nothing, so the SDK retries on its own: up to 4 attempts in about 12 s, waiting the node's
+`Retry-After` when sent, otherwise exponentially with full jitter (250 ms base, 4 s cap). It stops
+early on abort or the per-request `timeout`, and returns the last typed error once the budget is
+spent. `OUTCOME_UNKNOWN` is never retried. Tune or opt out with `retryPolicy`; `{ maxAttempts: 1 }`
+(or `retryableErrors: []`) disables it. Monitors and probes should disable retries. A successful KV response carries
+`retry: { attempts, backoffMs }`, so latency can be split from backoff. The CLI disables retries
+with `--no-retry` or `TINYCLOUD_RETRY=0`, and its `kv get|put|delete --json` output reports
+`attempts` and `backoffMs`.
+
+```typescript
+const tcw = new TinyCloudWeb({ retryPolicy: { maxAttempts: 1 } });
 ```
 
 ## Core Values

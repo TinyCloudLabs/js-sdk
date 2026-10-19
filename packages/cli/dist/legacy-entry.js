@@ -3052,6 +3052,16 @@ var init_delegation_expiry = __esm({
   }
 });
 
+// src/lib/retry-policy.ts
+function cliRetryPolicy() {
+  return process.env.TINYCLOUD_RETRY === "0" ? { retryPolicy: { maxAttempts: 1 } } : {};
+}
+var init_retry_policy = __esm({
+  "src/lib/retry-policy.ts"() {
+    "use strict";
+  }
+});
+
 // src/lib/replication-log.ts
 import { CLI_NAME as CLI_NAME5 } from "@tinycloud/operations/cli-name";
 import { appendFileSync, chmodSync, mkdirSync, renameSync, statSync, writeFileSync } from "fs";
@@ -9081,6 +9091,7 @@ async function storedSessionVerifiesLocally(profileName2) {
     if (!session || typeof session.delegationCid !== "string" || typeof session.spaceId !== "string" || session.delegationHeader === null || typeof session.delegationHeader !== "object" || !("Authorization" in session.delegationHeader) || typeof session.delegationHeader.Authorization !== "string") return true;
     const key = await ProfileManager.getKey(profileName2);
     const node = new TinyCloudNode({
+      ...cliRetryPolicy(),
       host: profile.host ?? DEFAULT_HOST,
       ...local ? { privateKey: profile.privateKey } : {}
     });
@@ -9126,6 +9137,7 @@ async function createSDKInstance(ctx, options) {
       process.stderr.write("[replication] Enabled, but this profile has no configured prefixes; reads use the network.\n");
     }
     const node2 = new TinyCloudNode({
+      ...cliRetryPolicy(),
       host: ctx.host,
       privateKey: effectivePrivateKey,
       ...replication2 ? { replication: replication2 } : {}
@@ -9166,6 +9178,7 @@ async function createSDKInstance(ctx, options) {
     process.stderr.write("[replication] Enabled, but this profile has no configured prefixes; reads use the network.\n");
   }
   const node = new TinyCloudNode({
+    ...cliRetryPolicy(),
     host: ctx.host,
     privateKey: options?.privateKey,
     ...replication ? { replication } : {}
@@ -9329,6 +9342,7 @@ var init_sdk = __esm({
     init_session_expired();
     init_warnings();
     init_delegation_expiry();
+    init_retry_policy();
     init_replication_config();
     init_replication_registry();
     init_logout_pending();
@@ -15450,6 +15464,9 @@ async function kvHandle(node, spaceInput, profileName2) {
   const kv = spaceUri ? node.kvForSpace(spaceUri) : node.kv;
   return { kv, spaceUri };
 }
+function retryFields(retry) {
+  return retry ? { attempts: retry.attempts, backoffMs: retry.backoffMs } : {};
+}
 function registerKvCommand(program) {
   const kv = program.command("kv").description("Key-value store operations");
   kv.command("get <key>").description("Get a value by key").option("--raw", "Output raw value (no JSON wrapping)").option("-o, --output <file>", "Write value to file").option("--space <name|uri>", "Target a non-primary space (short name or full URI)").action(async (key, options, cmd) => {
@@ -15487,7 +15504,8 @@ function registerKvCommand(program) {
         outputJson({
           key,
           data,
-          metadata
+          metadata,
+          ...retryFields(result.data.retry)
         });
       } else {
         const content = typeof data === "string" ? data : JSON.stringify(data);
@@ -15527,7 +15545,7 @@ function registerKvCommand(program) {
       if (!result.ok) {
         await throwKvError(result.error, spaceUri, ctx.profile);
       }
-      outputJson({ key, written: true });
+      outputJson({ key, written: true, ...retryFields(result.data?.retry) });
     } catch (error) {
       return handleError(error);
     }
@@ -15543,7 +15561,7 @@ function registerKvCommand(program) {
       if (!result.ok) {
         await throwKvError(result.error, spaceUri, ctx.profile);
       }
-      outputJson({ key, deleted: true });
+      outputJson({ key, deleted: true, ...retryFields(result.data?.retry) });
     } catch (error) {
       return handleError(error);
     }

@@ -1666,6 +1666,19 @@ var init_delegation_expiry = __esm({
   }
 });
 
+// src/lib/retry-policy.ts
+function cliRetryPolicy() {
+  return process.env.TINYCLOUD_RETRY === "0" ? { retryPolicy: { maxAttempts: 1 } } : {};
+}
+function applyNoRetryFlag(opts) {
+  if (opts.retry === false) process.env.TINYCLOUD_RETRY = "0";
+}
+var init_retry_policy = __esm({
+  "src/lib/retry-policy.ts"() {
+    "use strict";
+  }
+});
+
 // src/lib/replication-log.ts
 import { CLI_NAME as CLI_NAME7 } from "@tinycloud/operations/cli-name";
 import { appendFileSync, chmodSync, mkdirSync, renameSync, statSync, writeFileSync } from "fs";
@@ -6740,6 +6753,7 @@ async function storedSessionVerifiesLocally(profileName) {
     if (!session || typeof session.delegationCid !== "string" || typeof session.spaceId !== "string" || session.delegationHeader === null || typeof session.delegationHeader !== "object" || !("Authorization" in session.delegationHeader) || typeof session.delegationHeader.Authorization !== "string") return true;
     const key = await ProfileManager.getKey(profileName);
     const node = new TinyCloudNode({
+      ...cliRetryPolicy(),
       host: profile.host ?? DEFAULT_HOST,
       ...local ? { privateKey: profile.privateKey } : {}
     });
@@ -6785,6 +6799,7 @@ async function createSDKInstance(ctx, options) {
       process.stderr.write("[replication] Enabled, but this profile has no configured prefixes; reads use the network.\n");
     }
     const node2 = new TinyCloudNode({
+      ...cliRetryPolicy(),
       host: ctx.host,
       privateKey: effectivePrivateKey,
       ...replication2 ? { replication: replication2 } : {}
@@ -6825,6 +6840,7 @@ async function createSDKInstance(ctx, options) {
     process.stderr.write("[replication] Enabled, but this profile has no configured prefixes; reads use the network.\n");
   }
   const node = new TinyCloudNode({
+    ...cliRetryPolicy(),
     host: ctx.host,
     privateKey: options?.privateKey,
     ...replication ? { replication } : {}
@@ -6988,6 +7004,7 @@ var init_sdk = __esm({
     init_session_expired();
     init_warnings();
     init_delegation_expiry();
+    init_retry_policy();
     init_replication_config();
     init_replication_registry();
     init_logout_pending();
@@ -27631,6 +27648,7 @@ async function loadCourierEntry() {
 }
 
 // src/index.ts
+init_retry_policy();
 var { version } = JSON.parse(
   readFileSync2(new URL("../package.json", import.meta.url), "utf-8")
 );
@@ -27648,10 +27666,11 @@ function selectedShareProfile() {
   }
   return process.env.TC_PROFILE;
 }
-program.name(CLI_NAME13).description("TinyCloud CLI \u2014 self-sovereign storage from the terminal").version(version).option("-p, --profile <name>", "Profile to use").option("-H, --host <url>", "TinyCloud node URL").option("-v, --verbose", "Enable verbose output").option("--no-cache", "Disable caching").option("-q, --quiet", "Suppress non-essential output").option("--json", "Force JSON output").option("--replication", "Enable read-through replication for this invocation").option("--no-replication", "Disable read-through replication for this invocation").option("--replication-debug", "Write replication diagnostics to stderr");
+program.name(CLI_NAME13).description("TinyCloud CLI \u2014 self-sovereign storage from the terminal").version(version).option("-p, --profile <name>", "Profile to use").option("-H, --host <url>", "TinyCloud node URL").option("-v, --verbose", "Enable verbose output").option("--no-cache", "Disable caching").option("-q, --quiet", "Suppress non-essential output").option("--json", "Force JSON output").option("--no-retry", "Do not retry node busy/timeout answers (monitors and probes); same as TINYCLOUD_RETRY=0").option("--replication", "Enable read-through replication for this invocation").option("--no-replication", "Disable read-through replication for this invocation").option("--replication-debug", "Write replication diagnostics to stderr");
 program.hook("preAction", async (thisCommand) => {
   const opts = thisCommand.optsWithGlobals();
   setJsonOutputRequested(opts.json === true);
+  applyNoRetryFlag(opts);
   const parentName = thisCommand.parent?.name();
   const isShareCommand = parentName === "share" || thisCommand.name() === "share";
   if (!opts.quiet && !isShareCommand) {

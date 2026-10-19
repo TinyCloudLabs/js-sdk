@@ -7,6 +7,7 @@ import { MAX_WORKER_GZIP_BYTES } from "../../replica/scripts/check-worker-size";
 import { compactFixOptionalAllowance, mergedPinsNotLandedOn, optionalSourcePins, type OptionalLedger } from "./replica-optional-size-policy";
 import { approvedTc1428Ratchet, validateTc1428RatchetTransition, type Tc1428Ratchet } from "./replica-size-policy";
 import { approvedTc1476Ratchet, validateTc1476RatchetTransition, type Tc1476Ratchet } from "./replica-size-policy";
+import { approvedTc1475Ratchet, validateTc1475RatchetTransition, type Tc1475Ratchet } from "./replica-size-policy";
 import { approvedTc1443Ratchet, approvedTc1443bRatchet, approvedTc1448Ratchet, approvedTc1466Ratchet, validateTc1443RatchetTransition, validateTc1443bRatchetTransition, validateTc1448RatchetTransition, validateTc1466RatchetTransition, type Tc1443Ratchet, type Tc1443bRatchet, type Tc1448Ratchet, type Tc1466Ratchet } from "./replica-size-policy";
 import { ancestryPins, assertCiSizeToolchain, approvedCiToolchainCorrection, approvedFixRequiredRatchet, approvedGatedOnlyRatchet, approvedHardeningRatchet, approvedLogoutRatchet, approvedTc1413Ratchet, approvedTc1424Ratchet, approvedTc1432Ratchet, approvedTc1436Ratchet, ciCorrectionPolicyOnlyPaths, hasAncestor, isPolicyOnlySinceApprovedSource, landingCommit, pinLandedOn, validateCiToolchainTransition, validateGatedOnlyRatchet, validateHardeningRatchetTransition, validateLedger, validateLogoutRatchetTransition, validateMasterMergeResolutionTransition, validateTc1413RatchetTransition, validateTc1424RatchetTransition, validateTc1432RatchetTransition, validateTc1436RatchetTransition, type HardeningRatchet, type Ledger, type LogoutRatchet, type MasterMergeResolution, type Tc1413Ratchet, type Tc1424Ratchet, type Tc1432Ratchet, type Tc1436Ratchet } from "./replica-size-policy";
 
@@ -27,6 +28,7 @@ const historical: Ledger = {
   tc1443bRatchet: undefined,
   tc1428Ratchet: undefined,
   tc1476Ratchet: undefined,
+  tc1475Ratchet: undefined,
   phase2Ratchet: {
     ...current.phase2Ratchet!,
     toolchain: "Bun 1.4.3; production webpack; gzip -9 -c",
@@ -1218,7 +1220,6 @@ describe("TC-1432 vault etag/ifMatch/expectAad exact-delta ratchet", () => {
         .toBe(approvedTc1413Ratchet.activation.ceiling[format] + row1432.activation.delta[format] - headroomAtBase[format]);
     }
     expect(row1432.worker.ceiling).toBe(approvedTc1413Ratchet.worker.ceiling + row1432.worker.delta);
-    expect(MAX_WORKER_GZIP_BYTES).toBe(row1432.worker.ceiling);
     expect(ancestryPins(current, false)).toContainEqual({
       row: "tc1432Ratchet", pin: row1432.sourceCommits.at(-1)!,
     });
@@ -1584,6 +1585,65 @@ describe("TC-1476 registry-skip debug event exact-delta ratchet", () => {
     expect(() => validateTc1476RatchetTransition(undefined, changed)).toThrow();
     expect(() => validateTc1476RatchetTransition(row(), changed)).toThrow();
     expect(() => validateTc1476RatchetTransition(row(), undefined)).toThrow();
+  });
+});
+
+describe("TC-1475 ServiceContext retry exact-delta ratchet", () => {
+  const row = () => structuredClone(approvedTc1475Ratchet);
+
+  it("is in the ledger once; root sits on TC-1476's, every other bucket on TC-1432's, plus the canonical delta", () => {
+    expect(() => validateLedger(current)).not.toThrow();
+    expect(current.tc1475Ratchet).toEqual(approvedTc1475Ratchet);
+    const row1475 = approvedTc1475Ratchet;
+    for (const format of ["index.mjs", "index.cjs"] as const) {
+      // The row chains after TC-1476's: its ceiling is the measured base, so ours is that plus the delta.
+      expect(row1475.root.ceiling[format]).toBe(approvedTc1476Ratchet.root.ceiling[format] + row1475.root.delta[format]);
+    }
+    for (const format of ["replica.mjs", "replica.cjs"] as const) {
+      expect(row1475.firstImport.ceiling[format])
+        .toBe(approvedTc1432Ratchet.firstImport.ceiling[format] + row1475.firstImport.delta[format]);
+    }
+    for (const format of ["activation.mjs", "activation.cjs"] as const) {
+      expect(row1475.activation.ceiling[format])
+        .toBe(approvedTc1432Ratchet.activation.ceiling[format] + row1475.activation.delta[format]);
+    }
+    expect(row1475.worker.ceiling).toBe(approvedTc1432Ratchet.worker.ceiling + row1475.worker.delta);
+    expect(MAX_WORKER_GZIP_BYTES).toBe(row1475.worker.ceiling);
+    expect(ancestryPins(current, false)).toContainEqual({
+      row: "tc1475Ratchet", pin: row1475.sourceCommits.at(-1)!,
+    });
+  });
+
+  it("refuses one extra byte in any bucket, other CI provenance, a dropped source commit or a missing TC-1428 row", () => {
+    const mutations: Array<(changed: Tc1475Ratchet) => void> = [
+      (changed) => { changed.root.ceiling["index.mjs"]++; },
+      (changed) => { changed.root.delta["index.cjs"]++; },
+      (changed) => { changed.firstImport.ceiling["replica.cjs"]++; },
+      (changed) => { changed.activation.ceiling["activation.mjs"]++; },
+      (changed) => { changed.worker.ceiling++; },
+      (changed) => { changed.canonicalCI.run = "https://github.com/TinyCloudLabs/js-sdk/actions/runs/1"; },
+      (changed) => { changed.sourceCommits.pop(); },
+    ];
+    for (const mutate of mutations) {
+      const ledger = copy(current);
+      const changed = row();
+      mutate(changed);
+      ledger.tc1475Ratchet = changed;
+      expect(() => validateLedger(ledger)).toThrow();
+    }
+    const withoutTc1428 = copy(current);
+    delete withoutTc1428.tc1428Ratchet;
+    expect(() => validateLedger(withoutTc1428)).toThrow();
+  });
+
+  it("may be introduced once and never changed or removed in a later base", () => {
+    expect(() => validateTc1475RatchetTransition(undefined, row())).not.toThrow();
+    expect(() => validateTc1475RatchetTransition(row(), row())).not.toThrow();
+    const changed = row();
+    changed.worker.ceiling++;
+    expect(() => validateTc1475RatchetTransition(undefined, changed)).toThrow();
+    expect(() => validateTc1475RatchetTransition(row(), changed)).toThrow();
+    expect(() => validateTc1475RatchetTransition(row(), undefined)).toThrow();
   });
 });
 

@@ -54,6 +54,7 @@ import {
   ServiceContext,
   ServiceSession,
   type TelemetryConfig,
+  type RetryPolicy,
   ISpaceCreationHandler,
   type Manifest,
   type ComposedManifestRequest,
@@ -241,6 +242,8 @@ export interface Config extends ClientConfig {
   includeAccountRegistryPermissions?: boolean;
   /** Default-off service telemetry. */
   telemetry?: TelemetryConfig;
+  /** Retry of node busy/timeout answers; `{ maxAttempts: 1 }` disables it. See {@link RetryPolicy}. */
+  retryPolicy?: Partial<RetryPolicy>;
   /** Accountless share receiver transport and session-custody configuration. */
   shareReceiver?: ShareReceiverServiceOptions;
 }
@@ -514,6 +517,7 @@ export class TinyCloudWeb {
         this.config.includeAccountRegistryPermissions,
       autoBootstrapAccount: this.config.autoBootstrapAccount,
       telemetry: this.config.telemetry,
+      retryPolicy: this.config.retryPolicy,
     };
     if (this.config.replication) {
       nodeConfig.replication = this.config.replication.enabled

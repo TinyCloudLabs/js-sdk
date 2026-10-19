@@ -90,7 +90,7 @@ export const ErrorCodes = {
 
   // Node retry signals (tinycloud-node #347). `meta.retryable` says whether a
   // retry is safe; `meta.retryAfterMs` carries the node's Retry-After.
-  /** HTTP 503 `sql_busy:<stage>` / `unavailable_retryable`: nothing was applied; retry after `meta.retryAfterMs`. */
+  /** HTTP 503 `sql_busy:<stage>` / `unavailable_retryable`/`read_audit_busy`: nothing was applied; retry after `meta.retryAfterMs`. */
   NODE_BUSY: "NODE_BUSY",
   /** HTTP 503 `request_timeout`: the node's deadline passed before any write began; nothing was applied. */
   REQUEST_TIMEOUT: "REQUEST_TIMEOUT",
@@ -254,6 +254,18 @@ export interface FetchResponse {
   text(): Promise<string>;
   arrayBuffer(): Promise<ArrayBuffer>;
   blob(): Promise<Blob>;
+  /** Present on standard Responses; the retry reads a clone so the caller's body stays intact. */
+  clone?(): FetchResponse;
+  /** Set by `ServiceContext.invokeWithRetry` on the response it returns: how many requests it took. */
+  retry?: RetryStats;
+}
+
+/** What automatic retry cost one request, so latency can be split from backoff. */
+export interface RetryStats {
+  /** Requests sent, including the first (1 means no retry). */
+  attempts: number;
+  /** Total milliseconds spent waiting between attempts. */
+  backoffMs: number;
 }
 
 /**
@@ -270,7 +282,12 @@ export type FetchFunction = (
 // =============================================================================
 
 /**
- * Configuration for automatic retry of failed requests.
+ * Automatic retry of node responses that guarantee nothing was applied
+ * (`NODE_BUSY`, `REQUEST_TIMEOUT`). Applied once, in the service context's
+ * `invokeWithRetry`, which re-mints the signed invocation per attempt. Backoff
+ * is full-jitter: each delay is uniform in `[0, step]`, where
+ * `step` is the strategy's delay capped at `maxDelayMs`. A node `Retry-After`
+ * replaces the delay. Opt out with `{ maxAttempts: 1 }`.
  */
 export interface RetryPolicy {
   /** Maximum number of attempts (including initial) */
@@ -281,19 +298,22 @@ export interface RetryPolicy {
   baseDelayMs: number;
   /** Maximum delay in milliseconds between retries */
   maxDelayMs: number;
-  /** Error codes that should trigger a retry */
+  /** Node error codes that trigger a retry. `OUTCOME_UNKNOWN` is never retried. */
   retryableErrors: string[];
+  /** Total time budget for all attempts and waits, in milliseconds. Unset: no cap. */
+  maxTotalMs?: number;
 }
 
 /**
  * Default retry policy.
  */
 export const defaultRetryPolicy: RetryPolicy = {
-  maxAttempts: 3,
+  maxAttempts: 4,
   backoff: "exponential",
-  baseDelayMs: 1000,
-  maxDelayMs: 10000,
-  retryableErrors: [ErrorCodes.NETWORK_ERROR, ErrorCodes.TIMEOUT],
+  baseDelayMs: 250,
+  maxDelayMs: 4000,
+  retryableErrors: [ErrorCodes.NODE_BUSY, ErrorCodes.REQUEST_TIMEOUT],
+  maxTotalMs: 12000,
 };
 
 // =============================================================================
@@ -355,6 +375,11 @@ export interface IServiceContext {
   readonly invokeAny?: InvokeAnyFunction;
   /** Fetch function (defaults to globalThis.fetch) */
   readonly fetch: FetchFunction;
+  /** Send a signed invocation, retrying a busy node; `build` re-signs per attempt. Absent: sends once. */
+  invokeWithRetry?(
+    url: string,
+    build: () => FetchRequestInit | Promise<FetchRequestInit>,
+  ): Promise<FetchResponse>;
   /** Available TinyCloud host URLs */
   readonly hosts: string[];
 

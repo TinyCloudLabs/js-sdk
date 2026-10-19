@@ -11,6 +11,7 @@ import { ownerSessionLacksProof } from "@tinycloud/operations/profile";
 import { recordWarnings } from "../output/warnings.js";
 import { delegationExpiredError } from "../auth/delegation-expiry.js";
 
+import { cliRetryPolicy } from "./retry-policy.js";
 import { createCliReplicationConfig } from "./replication-config.js";
 import { registerReplication } from "./replication-registry.js";
 import { assertPendingRemoteLogoutSession, recoverPendingLogout } from "./logout-pending.js";
@@ -171,6 +172,7 @@ export async function storedSessionVerifiesLocally(profileName: string): Promise
       typeof session.delegationHeader.Authorization !== "string") return true;
     const key = await ProfileManager.getKey(profileName);
     const node = new TinyCloudNode({
+      ...cliRetryPolicy(),
       host: profile.host ?? DEFAULT_HOST,
       ...(local ? { privateKey: profile.privateKey } : {}),
     });
@@ -240,6 +242,7 @@ export async function createSDKInstance(
       process.stderr.write("[replication] Enabled, but this profile has no configured prefixes; reads use the network.\n");
     }
     const node = new TinyCloudNode({
+      ...cliRetryPolicy(),
       host: ctx.host,
       privateKey: effectivePrivateKey,
       ...(replication ? { replication } : {}),
@@ -283,6 +286,7 @@ export async function createSDKInstance(
     process.stderr.write("[replication] Enabled, but this profile has no configured prefixes; reads use the network.\n");
   }
   const node = new TinyCloudNode({
+    ...cliRetryPolicy(),
     host: ctx.host,
     privateKey: options?.privateKey,
     ...(replication ? { replication } : {}),

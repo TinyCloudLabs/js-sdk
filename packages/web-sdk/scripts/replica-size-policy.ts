@@ -153,6 +153,13 @@ export type Tc1428Ratchet = LogoutRatchet;
  * root bundle grows, so the shape is the #571 root-only row.
  */
 export type Tc1476Ratchet = LogoutRatchet;
+
+/**
+ * One reviewed exact-delta admission of js-sdk #599 (TC-1475): automatic retry of node busy and
+ * request-timeout responses in ServiceContext.fetch. Same shape as the #565 hardening row, because the
+ * change moves the root, first-import, activation and worker buckets.
+ */
+export type Tc1475Ratchet = HardeningRatchet;
 export type Ledger = {
   allowance: GzipSizes;
   entries: LedgerEntry[];
@@ -172,6 +179,7 @@ export type Ledger = {
   tc1443bRatchet?: Tc1443bRatchet;
   tc1428Ratchet?: Tc1428Ratchet;
   tc1476Ratchet?: Tc1476Ratchet;
+  tc1475Ratchet?: Tc1475Ratchet;
 };
 
 const formats = ["index.mjs", "index.cjs"] as const;
@@ -629,6 +637,41 @@ export const approvedTc1476Ratchet: Tc1476Ratchet = {
   reason: "node-sdk's TinyCloudNode (bundled into web-sdk) records one debug event, `registry.skip`, the first time an account registry sync is skipped for want of account access. Both root bundles grow. Shrink applied first: the first version carried a descriptive message and event name and measured +83 B locally (over the root ceiling by 7 B on CI); it is now one short event name with no message (+62 B local, same-toolchain gzip -9). Canonical CI: master c7a379c5 (probe run 39271316078, branch naomi/tc-1476-baseline-probe) measured index.mjs 1,474,761 / index.cjs 1,403,138 in both Node jobs; this PR's run 39266856585 on source bf9349ed measured 1,474,808 / 1,403,191 in both, i.e. +47 / +53 over master, inside the approved +62 +/-20. `delta` is relative to the TC-1428 ceilings this row chains after (1,474,835 / 1,403,309), which sat above master's measured bytes; the ceiling is exactly the measured bytes.",
 };
 
+/**
+ * Naomi's standing size rule applied to TC-1475 (js-sdk #599): the retry is admitted at exactly the bytes
+ * GitHub measured, with no headroom. The root ceilings sit on top of TC-1476's; the first-import,
+ * activation and worker ceilings are the measured values on top of TC-1432's (every row since is root only).
+ */
+export const approvedTc1475Ratchet: Tc1475Ratchet = {
+  label: "TC-1475 #599 automatic retry of node busy and request-timeout responses, exact canonical delta",
+  ruling: "Naomi's standing size rule for TC-1475 #599: a real shrink first, remainder by the PR's own exact-delta row at canonical CI bytes; rows chain after the latest row on master",
+  base: "5317cc7846a4d8c1701c506f3dffc909b030be2f",
+  sourceCommits: [
+    "092144080cb5f8e1c59286d603991f42121a6801",
+  ],
+  canonicalCI: {
+    run: "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39292038037",
+    jobs: [
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39292038037/job/118194900821",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39292038037/job/118194901026",
+    ],
+  },
+  root: {
+    delta: { "index.mjs": 358, "index.cjs": 404 },
+    ceiling: { "index.mjs": 1475166, "index.cjs": 1403595 },
+  },
+  firstImport: {
+    delta: { "replica.mjs": 0, "replica.cjs": 2 },
+    ceiling: { "replica.mjs": 51925, "replica.cjs": 67140 },
+  },
+  activation: {
+    delta: { "activation.mjs": 11, "activation.cjs": 14 },
+    ceiling: { "activation.mjs": 23117, "activation.cjs": 24699 },
+  },
+  worker: { delta: 623, ceiling: 822667 },
+  reason: "ServiceContext.invokeWithRetry(url, build) retries node 503 busy and request_timeout responses and calls build once per attempt, so every attempt carries a freshly signed invocation: the node records each invocation before its handler runs and answers a repeat with 409, so the first version, which re-sent the identical request, could never succeed. KV, SQL, DuckDB and the hooks webhook calls go through one BaseService.invokeWithRetry helper; the RetryPolicy defaults, the RetryStats on responses and KVResponse.retry, and the retryPolicy plumbing in web-sdk and node-sdk are unchanged. sdk-services is bundled into the root, the kv-storage worker and the optional first-import and activation buckets, so each moves by its measured delta. Real shrink first: the abortable sleep is shared with HooksService instead of a second copy, one helper builds every signed request, the debug timing reuses one meta object, and the new doc comments are single lines because the unminified worker bundle keeps JSDoc. The first fix of the re-mint (run 39257200762, source e8cd279a) measured the worker at 822,915 (+871 over TC-1432's); the shrink brought it to 822,620 (+576). Base: master 5317cc78 (it includes #598 and TC-1476, whose root ceilings are 1,474,808 / 1,403,191); PR: GitHub run 39292038037 on source 092144080 measured the same bytes in both Node jobs: root index.mjs 1,475,166 (+358 over the merge base's 1,474,808) and index.cjs 1,403,595 (+404 over the merge base's 1,403,191), first import replica.cjs 67,140 (+2; replica.mjs 51,925, +0), activation 23,117 / 24,699 (+11 / +14) and the kv-storage worker 822,667 (+623 over TC-1432's). Every ceiling is exactly the measured value. The PR's review round added the ref'd retry backoff, the once-per-call backoff signal and read_audit_busy as NODE_BUSY.",
+};
+
 /** The reviewed #553 S3 entry's source commit, as master's checker pinned it. */
 export const preexistingS3EntryCommit = "0241ba9b";
 
@@ -686,6 +729,7 @@ export function ancestryPins(root: Ledger, hasGatedOnly: boolean): Array<{ row: 
   if (root.tc1443bRatchet !== undefined) pins.push({ row: "tc1443bRatchet", pin: root.tc1443bRatchet.sourceCommits.at(-1)! });
   if (root.tc1428Ratchet !== undefined) pins.push({ row: "tc1428Ratchet", pin: root.tc1428Ratchet.sourceCommits.at(-1)! });
   if (root.tc1476Ratchet !== undefined) pins.push({ row: "tc1476Ratchet", pin: root.tc1476Ratchet.sourceCommits.at(-1)! });
+  if (root.tc1475Ratchet !== undefined) pins.push({ row: "tc1475Ratchet", pin: root.tc1475Ratchet.sourceCommits.at(-1)! });
   if (hasGatedOnly) pins.push({ row: "gatedOnlyRatchet", pin: approvedGatedOnlyRatchet.sourceCommit });
   return pins;
 }
@@ -722,7 +766,7 @@ const historicalToolchain = "Bun 1.4.3; production webpack; gzip -9 -c";
 /** Only a git merge-base ledger may retain the pre-correction toolchain. */
 export function validateLedger(value: Ledger, historicalBase = false): void {
   if (!value || !value.allowance || !Array.isArray(value.entries) ||
-      Object.keys(value).some((key) => key !== "allowance" && key !== "entries" && key !== "phase2Ratchet" && key !== "fixRequiredRatchet" && key !== "canonicalToolchainCorrection" && key !== "masterMergeResolution" && key !== "hardeningRatchet" && key !== "logoutRatchet" && key !== "tc1413Ratchet" && key !== "tc1436Ratchet" && key !== "tc1432Ratchet" && key !== "tc1424Ratchet" && key !== "tc1448Ratchet" && key !== "tc1443Ratchet" && key !== "tc1466Ratchet" && key !== "tc1443bRatchet" && key !== "tc1428Ratchet" && key !== "tc1476Ratchet")) {
+      Object.keys(value).some((key) => key !== "allowance" && key !== "entries" && key !== "phase2Ratchet" && key !== "fixRequiredRatchet" && key !== "canonicalToolchainCorrection" && key !== "masterMergeResolution" && key !== "hardeningRatchet" && key !== "logoutRatchet" && key !== "tc1413Ratchet" && key !== "tc1436Ratchet" && key !== "tc1432Ratchet" && key !== "tc1424Ratchet" && key !== "tc1448Ratchet" && key !== "tc1443Ratchet" && key !== "tc1466Ratchet" && key !== "tc1443bRatchet" && key !== "tc1428Ratchet" && key !== "tc1476Ratchet" && key !== "tc1475Ratchet")) {
     throw new Error("Invalid packages/web-sdk/scripts/replica-size-ledger.json shape");
   }
   if (Object.keys(value.allowance).some((key) => !formats.includes(key as typeof formats[number]))) {
@@ -825,6 +869,10 @@ export function validateLedger(value: Ledger, historicalBase = false): void {
   if (value.tc1476Ratchet !== undefined &&
       (!value.tc1428Ratchet || JSON.stringify(value.tc1476Ratchet) !== JSON.stringify(approvedTc1476Ratchet))) {
     throw new Error("Only Naomi's exact canonical TC-1476 registry-skip ratchet is approved.");
+  }
+  if (value.tc1475Ratchet !== undefined &&
+      (!value.tc1428Ratchet || JSON.stringify(value.tc1475Ratchet) !== JSON.stringify(approvedTc1475Ratchet))) {
+    throw new Error("Only Naomi's exact canonical TC-1475 retry ratchet is approved.");
   }
 }
 
@@ -931,6 +979,14 @@ export function validateTc1476RatchetTransition(base?: Tc1476Ratchet, current?: 
   if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc1476Ratchet) ||
       base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
     throw new Error("The exact TC-1476 ratchet may be introduced once and cannot change later.");
+  }
+}
+
+/** The TC-1475 ratchet is introduced once at its exact canonical bytes and immutable afterwards. */
+export function validateTc1475RatchetTransition(base?: Tc1475Ratchet, current?: Tc1475Ratchet): void {
+  if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc1475Ratchet) ||
+      base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
+    throw new Error("The exact TC-1475 ratchet may be introduced once and cannot change later.");
   }
 }
 
