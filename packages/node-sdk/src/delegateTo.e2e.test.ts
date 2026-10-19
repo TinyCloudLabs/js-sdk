@@ -97,7 +97,7 @@ describe.skipIf(!NODE_BIN)("delegateTo against a real node", () => {
     expect(ownerSigned.ok && ownerSigned.data.some((d) => d.cid === delegation.cid)).toBe(false);
   });
 
-  test("delegateTo rejects, naming the space, when the node answers 200 but skips the target space", async () => {
+  test("with requireActivation, delegateTo rejects naming the space when the node answers 200 but skips the target space", async () => {
     const node = await signedInNode();
     const spaceId = node.restorableSession!.spaceId;
     const realFetch = globalThis.fetch;
@@ -108,9 +108,11 @@ describe.skipIf(!NODE_BIN)("delegateTo against a real node", () => {
       return realFetch(input, init);
     }) as typeof fetch;
     try {
-      await expect(node.delegateTo(newRecipient(), [kvEntry], { expiry: "1h" })).rejects.toThrow(
+      await expect(node.delegateTo(newRecipient(), [kvEntry], { expiry: "1h", requireActivation: true })).rejects.toThrow(
         `the node skipped ${spaceId}`,
       );
+      // Off by default: grants to a not-yet-hosted space (e.g. secrets) are valid.
+      await expect(node.delegateTo(newRecipient(), [kvEntry], { expiry: "1h" })).resolves.toMatchObject({ prompted: false });
     } finally {
       globalThis.fetch = realFetch;
     }

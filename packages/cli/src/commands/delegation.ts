@@ -121,7 +121,7 @@ export function registerDelegationCommand(
             path: options.path,
             actions: serviceActions,
           })),
-          { expiry: expiry.getTime() - Date.now() },
+          { expiry: expiry.getTime() - Date.now(), requireActivation: true },
         ).catch((error: unknown) => {
           if (error instanceof PermissionNotInManifestError) {
             const needed = error.missing

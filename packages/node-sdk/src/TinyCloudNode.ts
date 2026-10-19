@@ -696,12 +696,13 @@ function describeHostFailure(result: SpaceHostResult): string {
 }
 
 /**
- * Throws if activation failed, or the node answered 200 but skipped a space the delegation targets
- * (a space it does not host): it registers the delegation without attaching it, which looks like success.
+ * Throws if activation failed. With `requireActivation`, also throws when the node answered 200 but
+ * skipped a space the delegation targets (it registers the delegation without attaching it).
  */
-function assertDelegationActivated(result: SpaceHostResult, delegation: PortableDelegation): void {
-  const skipped = (delegation.resources?.map((r) => r.space) ?? [delegation.spaceId])
-    .filter((space) => result.skipped?.includes(space));
+function assertDelegationActivated(result: SpaceHostResult, delegation: PortableDelegation, requireActivation: boolean): void {
+  const skipped = requireActivation
+    ? (delegation.resources?.map((r) => r.space) ?? [delegation.spaceId]).filter((space) => result.skipped?.includes(space))
+    : [];
   if (result.success && skipped.length === 0) return;
   const detail = result.success
     ? `the node skipped ${[...new Set(skipped)].join(", ")} (space not hosted on the node)`
@@ -985,6 +986,12 @@ export interface DelegateToOptions {
    * recipient (use its session-key DID). Default false.
    */
   disableSubDelegation?: boolean;
+  /**
+   * Throw when the node answers 200 but skips a space the delegation targets (a space it does not
+   * host): it registers the delegation without attaching it, which otherwise looks like success.
+   * Off by default because grants to a not-yet-hosted space (e.g. secrets) are valid. Default false.
+   */
+  requireActivation?: boolean;
 }
 
 /**
@@ -7142,6 +7149,7 @@ export class TinyCloudNode {
         plan.operations,
         onPrepared,
         options?.disableSubDelegation === true,
+        options?.requireActivation === true,
       );
       return { delegation, prompted: false };
     }
@@ -7159,6 +7167,7 @@ export class TinyCloudNode {
       session,
       onPrepared,
       options?.disableSubDelegation === true,
+      options?.requireActivation === true,
     );
     return { delegation, prompted: false };
   }
@@ -7453,6 +7462,7 @@ export class TinyCloudNode {
     session: TinyCloudSession,
     onPrepared?: DelegateToOptions["onPrepared"],
     disableSubDelegation = false,
+    requireActivation = false,
   ): Promise<PortableDelegation> {
     if (entries.length === 0) {
       throw new Error(
@@ -7580,7 +7590,7 @@ export class TinyCloudNode {
       this.config.host!,
       delegationHeader,
     );
-    assertDelegationActivated(activateResult, delegation);
+    assertDelegationActivated(activateResult, delegation, requireActivation);
 
     return delegation;
   }
@@ -7593,6 +7603,7 @@ export class TinyCloudNode {
     requestedOperations: RuntimePermissionOperation[],
     onPrepared?: DelegateToOptions["onPrepared"],
     disableSubDelegation = false,
+    requireActivation = false,
   ): Promise<PortableDelegation> {
     this.assertRuntimeGrantCaveatsPreservable(entries, requestedOperations, grant);
     this.assertDelegationCaveatsPreservable(entries);
@@ -7630,7 +7641,7 @@ export class TinyCloudNode {
       targetHost,
       delegationHeader,
     );
-    assertDelegationActivated(activateResult, delegation);
+    assertDelegationActivated(activateResult, delegation, requireActivation);
 
     return delegation;
   }
