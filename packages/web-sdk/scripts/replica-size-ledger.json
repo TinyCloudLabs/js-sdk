@@ -634,8 +634,8 @@
       }
     },
     "worker": {
-      "delta": 576,
-      "ceiling": 822620
+      "delta": 623,
+      "ceiling": 822667
     },
     "reason": "ServiceContext.invokeWithRetry(url, build) retries node 503 busy and request_timeout responses and calls build once per attempt, so every attempt carries a freshly signed invocation: the node records each invocation before its handler runs and answers a repeat with 409, so the first version, which re-sent the identical request, could never succeed. KV, SQL, DuckDB and the hooks webhook calls go through one BaseService.invokeWithRetry helper; the RetryPolicy defaults, the RetryStats on responses and KVResponse.retry, and the retryPolicy plumbing in web-sdk and node-sdk are unchanged. sdk-services is bundled into the root, the kv-storage worker and the optional first-import and activation buckets, so each moves by its measured delta. Real shrink first: the abortable sleep is shared with HooksService instead of a second copy, one helper builds every signed request, the debug timing reuses one meta object, and the new doc comments are single lines because the unminified worker bundle keeps JSDoc. The first fix of the re-mint (run 39257200762, source e8cd279a) measured the worker at 822,915 (+871 over TC-1432's); the shrink brought it to 822,620 (+576). Base: master c7a379c5 (it includes #598, whose root rows are -74 / -171 and set no ceiling); PR: GitHub run 39261202208 on source b83cf61a measured the same bytes in both Node jobs: root index.mjs 1,475,110 (+349 over the merge base's 1,474,761) and index.cjs 1,403,543 (+405 over the merge base's 1,403,138); the row's root delta is that growth over the merge base and its ceiling is the exact measured value, TC-1428's plus that growth minus #598's already-landed -74 / -171 B, so #598's freed bytes are not handed to a later PR, first-import replica.mjs 51,925 / replica.cjs 67,138 (0 / 0), activation activation.mjs 23,114 / activation.cjs 24,697 (+8 / +12 over TC-1432's) and the kv-storage worker 822,620 (+576). Every ceiling is exactly the measured value."
   }
