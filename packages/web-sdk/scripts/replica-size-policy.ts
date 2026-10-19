@@ -160,6 +160,25 @@ export type Tc1476Ratchet = LogoutRatchet;
  * change moves the root, first-import, activation and worker buckets.
  */
 export type Tc1475Ratchet = HardeningRatchet;
+/**
+ * One reviewed worker-only ceiling raise: js-sdk #606 (security dependency updates) grew the kv-storage
+ * worker by 86 B, which turned the TC-858 gzip ratchet red on master.
+ */
+export type WorkerRatchet = {
+  label: string;
+  ruling: string;
+  base: string;
+  sourceCommits: string[];
+  canonicalCI: { run: string; jobs: string[] };
+  worker: { delta: number; ceiling: number };
+  reason: string;
+};
+/**
+ * One cumulative reviewed exact-delta admission of the master drift since 75eb5304 (the last green
+ * Replica Node run, #557). Same shape as the #565 hardening row: root and activation.cjs grew without a
+ * ledger row because the kv-storage worker step aborted first and hid the Phase 1 dist step.
+ */
+export type MasterDriftRatchet = HardeningRatchet;
 export type Ledger = {
   allowance: GzipSizes;
   entries: LedgerEntry[];
@@ -180,6 +199,8 @@ export type Ledger = {
   tc1428Ratchet?: Tc1428Ratchet;
   tc1476Ratchet?: Tc1476Ratchet;
   tc1475Ratchet?: Tc1475Ratchet;
+  tc606WorkerRatchet?: WorkerRatchet;
+  masterDriftRatchet?: MasterDriftRatchet;
 };
 
 const formats = ["index.mjs", "index.cjs"] as const;
@@ -730,9 +751,68 @@ export function ancestryPins(root: Ledger, hasGatedOnly: boolean): Array<{ row: 
   if (root.tc1428Ratchet !== undefined) pins.push({ row: "tc1428Ratchet", pin: root.tc1428Ratchet.sourceCommits.at(-1)! });
   if (root.tc1476Ratchet !== undefined) pins.push({ row: "tc1476Ratchet", pin: root.tc1476Ratchet.sourceCommits.at(-1)! });
   if (root.tc1475Ratchet !== undefined) pins.push({ row: "tc1475Ratchet", pin: root.tc1475Ratchet.sourceCommits.at(-1)! });
+  if (root.tc606WorkerRatchet !== undefined) pins.push({ row: "tc606WorkerRatchet", pin: root.tc606WorkerRatchet.sourceCommits.at(-1)! });
+  if (root.masterDriftRatchet !== undefined) pins.push({ row: "masterDriftRatchet", pin: root.masterDriftRatchet.sourceCommits.at(-1)! });
   if (hasGatedOnly) pins.push({ row: "gatedOnlyRatchet", pin: approvedGatedOnlyRatchet.sourceCommit });
   return pins;
 }
+
+/**
+ * #606 (security dependency updates), approved by Naomi, 2026-10-19: the kv-storage worker is admitted at exactly the 822,753 B
+ * GitHub measured on master 54a2408d (+86 over TC-1475's 822,667). Worker only; nothing else moves.
+ */
+export const approvedTc606WorkerRatchet: WorkerRatchet = {
+  label: "#606 security dependency updates, kv-storage worker exact canonical delta",
+  ruling: "#606 (security dependency updates), approved by Naomi, 2026-10-19: raise the kv-storage worker gzip ceiling by exactly 86 B to the canonical CI measurement; no other allowance changes",
+  base: "75eb5304",
+  sourceCommits: [
+    "78aec0e0996a24ff1a06cbcd719728e2342ba5f9",
+  ],
+  canonicalCI: {
+    run: "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39326132925",
+    jobs: [
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39326132925/job/118312339066",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39326132925/job/118312339183",
+    ],
+  },
+  worker: { delta: 86, ceiling: 822753 },
+  reason: "#606 (security dependency updates, merge 78aec0e0) grew the kv-storage worker by 86 B; #605, #552 and #549 inherited the failure. Its Cargo.lock bumps (serde_with/darling, bs58, tinyvec, rustls, openssl) are the likely cause [inferred from the lockfile diff, not bisected]. The Enforce hashed kv-storage worker gzip ratchet step measured 822,753 gzip -9 bytes against the 822,667 ceiling (headroom -86). Last green master: 75eb5304 (#557).",
+};
+
+/**
+ * Master drift since 75eb5304, approved by Naomi, 2026-10-19: root index.mjs +405, index.cjs +329 and
+ * activation.cjs +1 at the bytes canonical CI printed on the #608 head, on top of TC-1475's ceilings (the
+ * +86 worker is the separate tc606WorkerRatchet). Candidates: #606, #605, #552; attribution not bisected.
+ */
+export const approvedMasterDriftRatchet: MasterDriftRatchet = {
+  label: "master drift since 75eb5304 (candidates #606 / #605 / #552, attribution not bisected), exact canonical delta",
+  ruling: "Naomi, 2026-10-19 (option A on #608): one cumulative reviewed row for the master drift since 75eb5304, at the bytes canonical CI prints; approved by Naomi, 2026-10-19",
+  base: "75eb5304",
+  sourceCommits: [
+    "78aec0e0996a24ff1a06cbcd719728e2342ba5f9",
+  ],
+  canonicalCI: {
+    run: "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39327730885",
+    jobs: [
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39327730885/job/118317792683",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39327730885/job/118317792664",
+    ],
+  },
+  root: {
+    delta: { "index.mjs": 405, "index.cjs": 329 },
+    ceiling: { "index.mjs": 1475571, "index.cjs": 1403924 },
+  },
+  firstImport: {
+    delta: { "replica.mjs": 0, "replica.cjs": 0 },
+    ceiling: { "replica.mjs": 51925, "replica.cjs": 67140 },
+  },
+  activation: {
+    delta: { "activation.mjs": 0, "activation.cjs": 1 },
+    ceiling: { "activation.mjs": 23117, "activation.cjs": 24700 },
+  },
+  worker: { delta: 0, ceiling: 822753 },
+  reason: "The Phase 1 dist step had not run on master since the kv-storage worker step began aborting first at #606 (78aec0e0); when it ran on #608 it measured root index.mjs 1,475,571 and index.cjs 1,403,924 against the TC-1475 ceilings 1,475,166 and 1,403,595 (+405/+329) and activation.cjs 24,700 against 24,699 (+1). Candidates #606 (security dependency updates), #605, #552; attribution not bisected. The worker is already admitted by tc606WorkerRatchet.",
+};
 
 export type GatedOnlyRatchet = {
   label: string;
@@ -766,7 +846,7 @@ const historicalToolchain = "Bun 1.4.3; production webpack; gzip -9 -c";
 /** Only a git merge-base ledger may retain the pre-correction toolchain. */
 export function validateLedger(value: Ledger, historicalBase = false): void {
   if (!value || !value.allowance || !Array.isArray(value.entries) ||
-      Object.keys(value).some((key) => key !== "allowance" && key !== "entries" && key !== "phase2Ratchet" && key !== "fixRequiredRatchet" && key !== "canonicalToolchainCorrection" && key !== "masterMergeResolution" && key !== "hardeningRatchet" && key !== "logoutRatchet" && key !== "tc1413Ratchet" && key !== "tc1436Ratchet" && key !== "tc1432Ratchet" && key !== "tc1424Ratchet" && key !== "tc1448Ratchet" && key !== "tc1443Ratchet" && key !== "tc1466Ratchet" && key !== "tc1443bRatchet" && key !== "tc1428Ratchet" && key !== "tc1476Ratchet" && key !== "tc1475Ratchet")) {
+      Object.keys(value).some((key) => key !== "allowance" && key !== "entries" && key !== "phase2Ratchet" && key !== "fixRequiredRatchet" && key !== "canonicalToolchainCorrection" && key !== "masterMergeResolution" && key !== "hardeningRatchet" && key !== "logoutRatchet" && key !== "tc1413Ratchet" && key !== "tc1436Ratchet" && key !== "tc1432Ratchet" && key !== "tc1424Ratchet" && key !== "tc1448Ratchet" && key !== "tc1443Ratchet" && key !== "tc1466Ratchet" && key !== "tc1443bRatchet" && key !== "tc1428Ratchet" && key !== "tc1476Ratchet" && key !== "tc1475Ratchet" && key !== "tc606WorkerRatchet" && key !== "masterDriftRatchet")) {
     throw new Error("Invalid packages/web-sdk/scripts/replica-size-ledger.json shape");
   }
   if (Object.keys(value.allowance).some((key) => !formats.includes(key as typeof formats[number]))) {
@@ -873,6 +953,30 @@ export function validateLedger(value: Ledger, historicalBase = false): void {
   if (value.tc1475Ratchet !== undefined &&
       (!value.tc1428Ratchet || JSON.stringify(value.tc1475Ratchet) !== JSON.stringify(approvedTc1475Ratchet))) {
     throw new Error("Only Naomi's exact canonical TC-1475 retry ratchet is approved.");
+  }
+  if (value.tc606WorkerRatchet !== undefined &&
+      (!value.tc1475Ratchet || JSON.stringify(value.tc606WorkerRatchet) !== JSON.stringify(approvedTc606WorkerRatchet))) {
+    throw new Error("Only Naomi's exact canonical #606 worker ratchet is approved.");
+  }
+  if (value.masterDriftRatchet !== undefined &&
+      (!value.tc606WorkerRatchet || JSON.stringify(value.masterDriftRatchet) !== JSON.stringify(approvedMasterDriftRatchet))) {
+    throw new Error("Only Naomi's exact canonical master-drift ratchet is approved.");
+  }
+}
+
+/** The #606 worker ratchet is introduced once at its exact canonical bytes and immutable afterwards. */
+export function validateTc606WorkerRatchetTransition(base?: WorkerRatchet, current?: WorkerRatchet): void {
+  if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc606WorkerRatchet) ||
+      base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
+    throw new Error("The exact #606 worker ratchet may be introduced once and cannot change later.");
+  }
+}
+
+/** The master-drift ratchet is introduced once at its exact canonical bytes and immutable afterwards. */
+export function validateMasterDriftRatchetTransition(base?: MasterDriftRatchet, current?: MasterDriftRatchet): void {
+  if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedMasterDriftRatchet) ||
+      base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
+    throw new Error("The exact master-drift ratchet may be introduced once and cannot change later.");
   }
 }
 
