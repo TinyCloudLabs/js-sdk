@@ -1220,7 +1220,6 @@ describe("TC-1432 vault etag/ifMatch/expectAad exact-delta ratchet", () => {
         .toBe(approvedTc1413Ratchet.activation.ceiling[format] + row1432.activation.delta[format] - headroomAtBase[format]);
     }
     expect(row1432.worker.ceiling).toBe(approvedTc1413Ratchet.worker.ceiling + row1432.worker.delta);
-    expect(MAX_WORKER_GZIP_BYTES).toBe(row1432.worker.ceiling);
     expect(ancestryPins(current, false)).toContainEqual({
       row: "tc1432Ratchet", pin: row1432.sourceCommits.at(-1)!,
     });

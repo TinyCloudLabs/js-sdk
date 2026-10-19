@@ -618,7 +618,7 @@
   "tc1475Ratchet": {
     "label": "TC-1475 #599 automatic retry of node busy and request-timeout responses, exact canonical delta",
     "ruling": "Naomi's standing size rule for TC-1475 #599: a real shrink first, remainder by the PR's own exact-delta row at canonical CI bytes; rows chain after the latest row on master",
-    "base": "c7a379c5f78450e93bc5bcca3d262eebb1130aff",
+    "base": "5317cc7846a4d8c1701c506f3dffc909b030be2f",
     "sourceCommits": [
       "b83cf61a19fa8d0e412d31927206c0803ec5be9c"
     ],
