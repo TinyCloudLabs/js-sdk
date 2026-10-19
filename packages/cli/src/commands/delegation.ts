@@ -138,10 +138,12 @@ export function registerDelegationCommand(
 
         // Read back through the node before reporting success.
         const confirmed = (await queryDelegations(node, { direction: "granted" }, created.cid)).find((d) => d.cid === created.cid);
-        if (!confirmed) {
+        if (confirmed?.status !== "active") {
           throw new CLIError(
             "DELEGATION_NOT_CONFIRMED",
-            `The node accepted delegation ${created.cid} but does not list it; treat it as not created.`,
+            confirmed
+              ? `The node lists delegation ${created.cid} as ${confirmed.status}, not active; treat it as not created.`
+              : `The node accepted delegation ${created.cid} but does not list it; treat it as not created.`,
             ExitCode.ERROR,
           );
         }

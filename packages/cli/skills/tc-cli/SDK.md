@@ -40,11 +40,12 @@ await tc.sharing.revoke(token);
 ```typescript
 // Mint and activate a delegation (signs with the session, POST /delegate)
 const { delegation } = await tc.delegateTo("did:pkh:eip155:1:0x...", [
-  { service: "tinycloud.kv", path: "kv/shared", actions: ["tinycloud.kv/get"] },
+  { service: "tinycloud.kv", space: "default", path: "kv/shared", actions: ["tinycloud.kv/get"] },
 ], { expiry: "1h" });
 
-// Account-wide listing (what `tc delegation list` uses)
-await tc.account.delegations.list({ direction: "all" });
+// Account delegation query, POST /delegation/query (what `tc delegation list` uses). It includes
+// delegations signed by the session key; account.delegations.list() reads the SQL index and does not.
+await tc.account.delegations.query({ direction: "all" });
 await tc.delegationManager.revoke(cid);
 ```
 

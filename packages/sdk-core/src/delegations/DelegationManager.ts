@@ -418,17 +418,13 @@ export class DelegationManager {
       // session's own space (a plain OpenKey login grants only that one).
       let response: FetchResponse | undefined;
       for (const spaceId of new Set([accountSpaceId, this.session.spaceId])) {
-        let headers: Record<string, string>;
-        try {
-          headers = Object.fromEntries(new Headers(this.invokeAny(this.session, [{
-            spaceId,
-            service: "delegation",
-            path: "",
-            action: DelegationAction.LIST,
-          }])).entries());
-        } catch {
-          continue;
-        }
+        // A signing failure is not a permission refusal: it propagates as a typed error below.
+        const headers = Object.fromEntries(new Headers(this.invokeAny(this.session, [{
+          spaceId,
+          service: "delegation",
+          path: "",
+          action: DelegationAction.LIST,
+        }])).entries());
         headers["content-type"] = "application/json";
         response = await this.fetchFn(`${this.host}/delegation/query`, {
           method: "POST",

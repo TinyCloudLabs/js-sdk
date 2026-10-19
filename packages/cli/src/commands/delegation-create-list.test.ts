@@ -16,6 +16,7 @@ const spaceUri = "tinycloud:pkh:eip155:1:0x1111111111111111111111111111111111111
 let store: any[];
 let queryHidesNewDelegations = false;
 let sessionCanQuery = true;
+let newDelegationStatus = "active";
 const sessionServices = new Set(["tinycloud.kv", "tinycloud.sql"]);
 const delegateToCalls: any[] = [];
 const queryCalls: any[] = [];
@@ -39,7 +40,7 @@ const fakeNode = {
         issuedAt: new Date(),
         notBefore: null,
         expiresAt: expiry,
-        status: "active",
+        status: newDelegationStatus,
       });
     }
     return { delegation: { cid, expiry, delegateDID: did }, prompted: false };
@@ -96,6 +97,7 @@ beforeEach(() => {
   store = [];
   queryHidesNewDelegations = false;
   sessionCanQuery = true;
+  newDelegationStatus = "active";
   outputs.length = 0;
   errors.length = 0;
   delegateToCalls.length = 0;
@@ -142,6 +144,14 @@ describe("tc delegation create / list / info", () => {
     expect(outputs).toEqual([]);
     expect(errors[0]).toMatchObject({ code: "DELEGATION_NOT_CONFIRMED" });
     expect(errors[0].message).toContain("bafy-created-1");
+  });
+
+  test("create fails when the node lists the new delegation as anything but active", async () => {
+    newDelegationStatus = "pending";
+    await run("create", "--to", recipient, "--path", "qa-seed/", "--actions", "kv/get");
+    expect(outputs).toEqual([]);
+    expect(errors[0]).toMatchObject({ code: "DELEGATION_NOT_CONFIRMED" });
+    expect(errors[0].message).toContain("pending");
   });
 
   test("a did:key with a #fragment, as `tc profile show` prints it, is accepted", async () => {
