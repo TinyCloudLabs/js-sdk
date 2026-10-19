@@ -54,6 +54,8 @@ export interface VerifiedHeldCredential {
 const SHARED_SIGNED = new Set(["iss", "sub", "iat", "nbf", "exp", "jti", "vct", "profile", "profileVersion", "holderBinding", "status", "_sd_alg", "_sd"]);
 const RESERVED_CLAIMS = new Set([...SHARED_SIGNED, "...", "cnf"]);
 
+const JTI_UUID_V4 = /^urn:uuid:[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+
 function sdHash(sdJwt: string): string {
   return encodeBase64Url(sha256(asciiBytes(sdJwt)));
 }
@@ -160,7 +162,7 @@ export async function verifyHeldPresentation(presentation: unknown, options: Ver
   if (nowSeconds >= (exp as number)) refuse("expired", "credential has expired");
   const lifetime = (exp as number) - (iat as number);
   if (!Number.isSafeInteger(lifetime) || lifetime <= 0 || lifetime > row.maxLifetimeSeconds) refuse("bad-lifetime", "exp - iat is outside the row's lifetime");
-  if (typeof payload.jti !== "string" || payload.jti === "") refuse("bad-payload", "jti is required");
+  if (typeof payload.jti !== "string" || !JTI_UUID_V4.test(payload.jti)) refuse("bad-payload", "jti must be a urn:uuid v4");
   const status = payload.status;
   if (!isObject(status) || Object.keys(status).join() !== "method" || typeof status.method !== "string" || !row.statusMethods.includes(status.method)) refuse("bad-status", "status method is not accepted");
   const subject = payload.sub;

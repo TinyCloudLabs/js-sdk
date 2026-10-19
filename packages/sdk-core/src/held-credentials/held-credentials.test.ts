@@ -497,3 +497,19 @@ test("the module has no Node-only imports (Worker-safe)", async () => {
     expect(text).not.toMatch(/from "node:|require\(|Buffer\b|from "crypto"|process\./);
   }
 });
+
+describe("TC-1540 N1: jti", () => {
+  test("jti must be a lowercase urn:uuid v4", async () => {
+    const ok = "urn:uuid:11111111-1111-4111-8111-111111111111";
+    await expectCode("ok", { payload: (p) => ({ ...p, jti: ok }) });
+    for (const jti of [
+      "11111111-1111-4111-8111-111111111111", "urn:uuid:11111111-1111-1111-8111-111111111111", "urn:uuid:11111111-1111-5111-8111-111111111111",
+      "urn:uuid:11111111-1111-4111-c111-111111111111", "urn:uuid:11111111-1111-4111-7111-111111111111", "urn:uuid:AAAAAAAA-1111-4111-8111-111111111111",
+      "urn:uuid:11111111-1111-4111-8111-11111111111", "urn:uuid:11111111-1111-4111-8111-1111111111111", `${ok} `, "x", "",
+    ]) {
+      await expectCode("bad-payload", { payload: (p) => ({ ...p, jti }) });
+    }
+    for (const jti of [7, null, [ok]]) await expectCode("bad-payload", { payload: (p) => ({ ...p, jti }) });
+    for (const variant of ["8", "9", "a", "b"]) await expectCode("ok", { payload: (p) => ({ ...p, jti: `urn:uuid:11111111-1111-4111-${variant}111-111111111111` }) });
+  });
+});
