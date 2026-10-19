@@ -122,6 +122,13 @@
       "index.mjs": 0,
       "index.cjs": 0,
       "note": "Replica gzip growth measured against this PR's merge base"
+    },
+    {
+      "pr": "#608",
+      "ticket": "TC-858",
+      "index.mjs": 0,
+      "index.cjs": 0,
+      "note": "Replica gzip growth measured against this PR's merge base"
     }
   ],
   "phase2Ratchet": {
@@ -679,12 +686,12 @@
     },
     "reason": "ServiceContext.invokeWithRetry(url, build) retries node 503 busy and request_timeout responses and calls build once per attempt, so every attempt carries a freshly signed invocation: the node records each invocation before its handler runs and answers a repeat with 409, so the first version, which re-sent the identical request, could never succeed. KV, SQL, DuckDB and the hooks webhook calls go through one BaseService.invokeWithRetry helper; the RetryPolicy defaults, the RetryStats on responses and KVResponse.retry, and the retryPolicy plumbing in web-sdk and node-sdk are unchanged. sdk-services is bundled into the root, the kv-storage worker and the optional first-import and activation buckets, so each moves by its measured delta. Real shrink first: the abortable sleep is shared with HooksService instead of a second copy, one helper builds every signed request, the debug timing reuses one meta object, and the new doc comments are single lines because the unminified worker bundle keeps JSDoc. The first fix of the re-mint (run 39257200762, source e8cd279a) measured the worker at 822,915 (+871 over TC-1432's); the shrink brought it to 822,620 (+576). Base: master 5317cc78 (it includes #598 and TC-1476, whose root ceilings are 1,474,808 / 1,403,191); PR: GitHub run 39292038037 on source 092144080 measured the same bytes in both Node jobs: root index.mjs 1,475,166 (+358 over the merge base's 1,474,808) and index.cjs 1,403,595 (+404 over the merge base's 1,403,191), first import replica.cjs 67,140 (+2; replica.mjs 51,925, +0), activation 23,117 / 24,699 (+11 / +14) and the kv-storage worker 822,667 (+623 over TC-1432's). Every ceiling is exactly the measured value. The PR's review round added the ref'd retry backoff, the once-per-call backoff signal and read_audit_busy as NODE_BUSY."
   },
-  "tc721WorkerRatchet": {
-    "label": "TC-721 #552 direct owner revocation, kv-storage worker exact canonical delta",
-    "ruling": "#552 (TC-721), approved by Naomi, 2026-10-19: raise the kv-storage worker gzip ceiling by exactly 86 B to the canonical CI measurement; no other allowance changes",
-    "base": "91531d66",
+  "tc606WorkerRatchet": {
+    "label": "#606 security dependency updates, kv-storage worker exact canonical delta",
+    "ruling": "#606 (security dependency updates), approved by Naomi, 2026-10-19: raise the kv-storage worker gzip ceiling by exactly 86 B to the canonical CI measurement; no other allowance changes",
+    "base": "75eb5304",
     "sourceCommits": [
-      "e6150a83848888681305dc629892ca39df61024d"
+      "78aec0e0996a24ff1a06cbcd719728e2342ba5f9"
     ],
     "canonicalCI": {
       "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39326132925",
@@ -697,6 +704,56 @@
       "delta": 86,
       "ceiling": 822753
     },
-    "reason": "TC-721 (#552) added owner-signed direct revocation, which the kv-storage worker bundles. #552 merged without re-measuring against master, so the Enforce hashed kv-storage worker gzip ratchet step measured 822,753 gzip -9 bytes against the 822,667 ceiling (headroom -86)."
+    "reason": "#606 (security dependency updates, merge 78aec0e0) grew the kv-storage worker by 86 B; #605, #552 and #549 inherited the failure. Its Cargo.lock bumps (serde_with/darling, bs58, tinyvec, rustls, openssl) are the likely cause [inferred from the lockfile diff, not bisected]. The Enforce hashed kv-storage worker gzip ratchet step measured 822,753 gzip -9 bytes against the 822,667 ceiling (headroom -86). Last green master: 75eb5304 (#557)."
+  },
+  "masterDriftRatchet": {
+    "label": "master drift since 75eb5304 (candidates #606 / #605 / #552, attribution not bisected), exact canonical delta",
+    "ruling": "Naomi, 2026-10-19 (option A on #608): one cumulative reviewed row for the master drift since 75eb5304, at the bytes canonical CI prints; approved by Naomi, 2026-10-19",
+    "base": "75eb5304",
+    "sourceCommits": [
+      "78aec0e0996a24ff1a06cbcd719728e2342ba5f9"
+    ],
+    "canonicalCI": {
+      "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39327730885",
+      "jobs": [
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39327730885/job/118317792683",
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39327730885/job/118317792664"
+      ]
+    },
+    "root": {
+      "delta": {
+        "index.mjs": 405,
+        "index.cjs": 329
+      },
+      "ceiling": {
+        "index.mjs": 1475571,
+        "index.cjs": 1403924
+      }
+    },
+    "firstImport": {
+      "delta": {
+        "replica.mjs": 0,
+        "replica.cjs": 0
+      },
+      "ceiling": {
+        "replica.mjs": 51925,
+        "replica.cjs": 67140
+      }
+    },
+    "activation": {
+      "delta": {
+        "activation.mjs": 0,
+        "activation.cjs": 1
+      },
+      "ceiling": {
+        "activation.mjs": 23117,
+        "activation.cjs": 24700
+      }
+    },
+    "worker": {
+      "delta": 0,
+      "ceiling": 822753
+    },
+    "reason": "The Phase 1 dist step had not run on master since the kv-storage worker step began aborting first at #606 (78aec0e0); when it ran on #608 it measured root index.mjs 1,475,571 and index.cjs 1,403,924 against the TC-1475 ceilings 1,475,166 and 1,403,595 (+405/+329) and activation.cjs 24,700 against 24,699 (+1). Candidates #606 (security dependency updates), #605, #552; attribution not bisected. The worker is already admitted by tc606WorkerRatchet."
   }
 }

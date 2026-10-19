@@ -17,8 +17,8 @@ import { join, resolve } from "node:path";
 // as run 39134457380 on the earlier base); the ledger's tc1432Ratchet row records it.
 // TC-1475 (automatic retry of NODE_BUSY / REQUEST_TIMEOUT in sdk-services, re-signing each attempt) measured 822,667 (+623) in
 // GitHub run 39292038037 (source 09214408, against master 5317cc78; unchanged by the master merge); the ledger's tc1475Ratchet row records it.
-// #552 (TC-721 direct owner revocation) measured 822,753 (+86) in GitHub run 39326132925 (master 54a2408d), which
-// merged without re-measuring; approved by Naomi, 2026-10-19; the ledger's tc721WorkerRatchet row records it.
+// #606 (security dependency updates) measured 822,753 (+86) in GitHub run 39326132925 (master 54a2408d; #552 inherited it);
+// approved by Naomi, 2026-10-19; the ledger's tc606WorkerRatchet row records it.
 // Zero additional headroom; independent of the web-sdk ledger, including WASM.
 export const MAX_WORKER_GZIP_BYTES = 822_753;
 const canonicalName = /^kv-storage\.worker\.([0-9a-f]{64})\.js$/;
