@@ -695,6 +695,20 @@ function describeHostFailure(result: SpaceHostResult): string {
   return text ? `${result.status} - ${text}` : `${result.status}`;
 }
 
+/**
+ * Throws if activation failed, or the node answered 200 but skipped a space the delegation targets
+ * (a space it does not host): it registers the delegation without attaching it, which looks like success.
+ */
+function assertDelegationActivated(result: SpaceHostResult, delegation: PortableDelegation): void {
+  const skipped = (delegation.resources?.map((r) => r.space) ?? [delegation.spaceId])
+    .filter((space) => result.skipped?.includes(space));
+  if (result.success && skipped.length === 0) return;
+  const detail = result.success
+    ? `the node skipped ${[...new Set(skipped)].join(", ")} (space not hosted on the node)`
+    : describeHostFailure(result);
+  throw Object.assign(new Error(`Failed to activate delegation with host: ${detail}`), { cause: result });
+}
+
 function ownerDelegationPermissions(
   params: CreateOwnerDelegationParams,
 ): OwnerDelegationPermission[] {
@@ -7566,12 +7580,7 @@ export class TinyCloudNode {
       this.config.host!,
       delegationHeader,
     );
-    if (!activateResult.success) {
-      throw Object.assign(
-        new Error(`Failed to activate delegation with host: ${describeHostFailure(activateResult)}`),
-        { cause: activateResult },
-      );
-    }
+    assertDelegationActivated(activateResult, delegation);
 
     return delegation;
   }
@@ -7621,12 +7630,7 @@ export class TinyCloudNode {
       targetHost,
       delegationHeader,
     );
-    if (!activateResult.success) {
-      throw Object.assign(
-        new Error(`Failed to activate delegation with host: ${describeHostFailure(activateResult)}`),
-        { cause: activateResult },
-      );
-    }
+    assertDelegationActivated(activateResult, delegation);
 
     return delegation;
   }
