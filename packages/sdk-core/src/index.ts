@@ -453,6 +453,7 @@ export {
   type KVGetOptions,
   type KVPutOptions,
   type KVListOptions,
+  type KVListMatchingOptions,
   type KVDeleteOptions,
   type KVHeadOptions,
   type KVCreateSignedReadUrlOptions,

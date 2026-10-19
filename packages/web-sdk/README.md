@@ -320,6 +320,28 @@ const userKeys = userKeysResponse.data;
 console.log('User keys:', userKeys); // ['profile', ...]
 ```
 
+### Listing Keys That Start With a Partial Name
+
+The node matches list prefixes on **whole path segments** (node 1.19.0, TC-731):
+`list({ prefix: 'qa/b' })` returns `qa/b` and `qa/b/...`, never `qa/b00`. This is
+deliberate: a list is the authorization scope, so a grant on `docs` cannot be used to
+enumerate `docsecret/...`.
+
+When you want "names starting with X" (UI type-ahead over a small folder), use
+`kv.listMatching`. It lists the folder up to the last `/` with the normal `list`, reads
+**every** page, and filters client-side:
+
+```typescript
+// Keys: qa/b00, qa/b01, qa/c00
+const result = await tc.kv.listMatching('qa/b');
+if (result.ok) console.log(result.data.keys); // ['qa/b00', 'qa/b01']
+```
+
+It never lists more than the folder, so a delegated session sees only what its grant
+allows, and a folder outside the grant fails exactly as `list` would. The cost is the
+size of the **folder**, not the number of matches, so it is slow for large folders. For
+those, give the data a real folder structure (`users/<id>/...`) and use `list`.
+
 ### Deleting Data
 
 ```typescript

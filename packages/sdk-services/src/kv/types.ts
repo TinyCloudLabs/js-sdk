@@ -244,6 +244,26 @@ export interface KVListOptions {
 }
 
 /**
+ * Options for {@link IKVService.listMatching}.
+ *
+ * These are the {@link KVListOptions} that still make sense once the helper
+ * owns the prefix and the paging:
+ *
+ * - `prefix` and `path` are omitted: the first argument of `listMatching` is
+ *   the prefix, and the helper derives the folder it lists from it.
+ * - `cursor` is omitted: the helper starts at the first page and follows the
+ *   node's cursors itself, so a caller cannot resume or skip pages.
+ * - `raw` is omitted: the helper has to read the key array to filter it.
+ *
+ * `limit` is kept and means **page size**, not a cap on the result: the helper
+ * still reads every page. `removePrefix` strips the *folder* (not the partial)
+ * from the returned keys, so `qa/b00` matched by `qa/b` comes back as `b00`.
+ * `signal`, `timeout` and `source` apply to every page request (`timeout` is
+ * per request, not for the whole walk).
+ */
+export type KVListMatchingOptions = Omit<KVListOptions, "prefix" | "path" | "cursor" | "raw">;
+
+/**
  * Options for KV delete operations.
  */
 export interface KVDeleteOptions {

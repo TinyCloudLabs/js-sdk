@@ -200,6 +200,7 @@ export type {
   KVBatchPutResponse,
   KVBatchReadResponse,
   KVListOptions,
+  KVListMatchingOptions,
   KVDeleteOptions,
   KVHeadOptions,
   KVCreateSignedReadUrlOptions,

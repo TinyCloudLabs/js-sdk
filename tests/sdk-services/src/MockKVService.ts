@@ -18,6 +18,7 @@ import type {
   KVBatchPutResponse,
   KVBatchReadResponse,
   KVListOptions,
+  KVListMatchingOptions,
   KVChangesOptions,
   KVChangesResponse,
   KVDeleteOptions,
@@ -428,6 +429,24 @@ export class MockKVService implements IKVService {
 
     return ok({ keys });
   }
+
+  async listMatching(
+    prefix: string,
+    options?: KVListMatchingOptions
+  ): Promise<Result<KVListResponse>> {
+    // Same contract as KVService.listMatching: list the folder (up to and
+    // including the last "/"), keep the keys that start with the prefix.
+    // The mock has no pages, so there is no cursor to follow.
+    const folder = prefix.slice(0, prefix.lastIndexOf("/") + 1);
+    const { removePrefix, ...rest } = options ?? {};
+    const page = await this.list({ ...rest, prefix: folder });
+    if (!page.ok) return page;
+    const keys = page.data.keys.filter((key) => key.startsWith(prefix));
+    return ok({
+      keys: removePrefix ? keys.map((key) => key.slice(folder.length)) : keys,
+    });
+  }
+
 
   async delete(
     key: string,

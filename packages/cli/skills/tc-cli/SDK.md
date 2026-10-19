@@ -15,6 +15,10 @@ await tc.connectWallet(signer);
 await tc.kv.put("key", "value");
 const entry = await tc.kv.get("key");     // { key, data, metadata }
 const keys = await tc.kv.list();           // string[]
+// Names starting with a partial segment: list() only matches whole segments
+// (node >= 1.19.0), so this lists the folder and filters client-side. Reads the
+// whole folder: use for type-ahead over small folders, not large ones.
+const starting = await tc.kv.listMatching("qa/b");  // Result: keys qa/b00, qa/b01, ...
 const meta = await tc.kv.head("key");      // metadata only
 await tc.kv.delete("key");
 ```

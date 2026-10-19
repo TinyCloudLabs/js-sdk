@@ -24,6 +24,7 @@ export {
   KVBatchPutResponse,
   KVBatchReadResponse,
   KVListOptions,
+  KVListMatchingOptions,
   KVDeleteOptions,
   KVHeadOptions,
   KVCreateSignedReadUrlOptions,
