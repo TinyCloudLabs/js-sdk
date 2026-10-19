@@ -16,7 +16,8 @@ import {
   type NonceStore,
   type VerifyHeldPresentationOptions,
 } from "./index";
-import { asciiBytes, bytesToHex, encodeBase64Url } from "./encoding";
+import { MAX_JSON_DEPTH, asciiBytes, bytesToHex, encodeBase64Url, parseStrictJson } from "./encoding";
+import { HELD_LIMITS } from "./verify";
 import { EMAIL_HELD_ROW } from "./rows";
 
 const enc = (value: unknown) => encodeBase64Url(new TextEncoder().encode(typeof value === "string" ? value : JSON.stringify(value)));
@@ -524,5 +525,70 @@ describe("TC-1540 N2: header members and descriptorDigest", () => {
   test("descriptorDigest is not a signed claim of the email row (spec 3.2 does not list it)", async () => {
     expect(EMAIL_HELD_ROW.optionalSignedClaims).toEqual([]);
     await expectCode("bad-payload", { payload: (p) => ({ ...p, descriptorDigest: "sha256:abc" }) });
+  });
+});
+
+/** Presents a hand-built `sdJwt` with a SIWE that signs it, so the refusal under test is the only fault. */
+async function presentRaw(h: Harness, sdJwt: string) {
+  return code(verifyHeldPresentation({ sdJwt, siwe: makeSiwe(sdJwt, h.store.issue(AUDIENCE, SUB)) }, h.options));
+}
+const withHeaderSegment = (segment: string) => {
+  const [, payloadB64, sig] = makeCredential().jwt.split(".");
+  return `${segment}.${payloadB64}.${sig}~`;
+};
+
+describe("TC-1540 N3: bounded parsing", () => {
+  test("a 200k '[' and a 200k '{' header are refused with the verifier's code, before any signature work", async () => {
+    const h = harness();
+    for (const open of ["[", '{"a":']) {
+      expect(await presentRaw(h, withHeaderSegment(enc(open.repeat(200_000))))).toBe("bad-presentation");
+    }
+  });
+  test("a header inside the size limits but deeply nested is refused by the depth cap, not a RangeError", async () => {
+    const h = harness();
+    for (const text of ["[".repeat(700), '{"a":'.repeat(150)]) {
+      expect(await presentRaw(h, withHeaderSegment(enc(text)))).toBe("bad-header");
+    }
+  });
+  test("parseStrictJson is depth-capped with the caller's code, and the cap is exact", () => {
+    const thrown = (text: string) => { try { parseStrictJson(text, "bad-payload"); return "ok"; } catch (e) { return e instanceof HeldCredentialError ? e.code : `escaped ${(e as Error).name}`; } };
+    for (const open of ["[", '{"a":']) {
+      const close = open === "[" ? "]" : "}";
+      const nest = (n: number) => open.repeat(n) + "1" + close.repeat(n);
+      expect(thrown(nest(MAX_JSON_DEPTH))).toBe("ok");
+      expect(thrown(nest(MAX_JSON_DEPTH + 1))).toBe("bad-payload");
+      expect(thrown(open.repeat(200_000))).toBe("bad-payload");
+    }
+  });
+  test("oversized sdJwt, siwe message and siwe signature are refused", async () => {
+    const h = harness();
+    const good = makeCredential().sdJwt;
+    expect(await code(verifyHeldPresentation({ sdJwt: "a".repeat(HELD_LIMITS.sdJwtChars + 1), siwe: makeSiwe(good, h.store.issue(AUDIENCE, SUB)) }, h.options))).toBe("bad-presentation");
+    const siwe = makeSiwe(good, h.store.issue(AUDIENCE, SUB));
+    expect(await code(verifyHeldPresentation({ sdJwt: good, siwe: { ...siwe, message: siwe.message + "x".repeat(HELD_LIMITS.siweMessageChars) } }, h.options))).toBe("bad-presentation");
+    expect(await code(verifyHeldPresentation({ sdJwt: good, siwe: { ...siwe, signature: siwe.signature + "00" } }, h.options))).toBe("bad-presentation");
+  });
+  test("a near-limit valid credential still verifies (319-char email)", async () => {
+    const email = `${"a".repeat(307)}@example.com`;
+    expect(email.length).toBe(319);
+    const h = harness();
+    const { presentation } = h.present({ disclosures: [["email", email], ["emailDomain", "example.com"]] });
+    expect(presentation.sdJwt.length).toBeLessThan(HELD_LIMITS.sdJwtChars);
+    expect((await verifyHeldPresentation(presentation, h.options)).claims.email).toBe(email);
+  });
+  test("duplicate keys in a disclosure are refused; __proto__ keys are inert", async () => {
+    const h = harness();
+    const dup = enc('["s","email","a@example.com","x"]');
+    const digest = encodeBase64Url(sha256(asciiBytes(dup)));
+    const cred = makeCredential({ disclosures: [], rawDisclosures: [dup], payload: (p) => ({ ...p, _sd: [digest] }) });
+    expect(await presentRaw(h, cred.sdJwt)).toBe("bad-disclosure");
+    expect(() => parseStrictJson('{"a":1,"a":2}', "bad-payload")).toThrow(HeldCredentialError);
+    expect(() => parseStrictJson('{"__proto__":1,"__proto__":2}', "bad-payload")).toThrow(HeldCredentialError);
+    const parsed = parseStrictJson('{"__proto__":{"polluted":true}}', "bad-payload") as Record<string, unknown>;
+    expect(Object.keys(parsed)).toEqual(["__proto__"]);
+    expect(Object.getPrototypeOf(parsed)).toBeNull();
+    expect(({} as Record<string, unknown>).polluted).toBeUndefined();
+    await expectCode("bad-header", { header: (hd) => JSON.parse(`{"__proto__":{"alg":"x"},"alg":"EdDSA","typ":"${hd.typ}","kid":"${hd.kid}"}`) });
+    await expectCode("bad-payload", { payload: (p) => JSON.parse(`{"__proto__":{"x":1},${JSON.stringify(p).slice(1)}`) });
   });
 });

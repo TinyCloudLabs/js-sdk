@@ -47,12 +47,19 @@ export function isObject(value: unknown): value is { [key: string]: Json } {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+/** Deepest nesting `parseStrictJson` accepts. Held credentials are at most three levels deep. */
+export const MAX_JSON_DEPTH = 8;
+
+const JSON_LITERAL = /true|false|null|-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?/y;
+
 /**
  * JSON parser that refuses duplicate object keys anywhere (JSON.parse silently keeps the last).
- * Objects have a null prototype, so a `__proto__` key is an ordinary key.
+ * Objects have a null prototype, so a `__proto__` key is an ordinary key. Nesting deeper than
+ * MAX_JSON_DEPTH is refused with `code`, so the recursion is bounded and no RangeError escapes.
  */
 export function parseStrictJson(text: string, code: HeldCredentialErrorCode): Json {
   let i = 0;
+  let depth = 0;
   const fail = (what: string): never => refuse(code, `invalid JSON: ${what}`);
   const ws = () => { while (i < text.length && " \t\n\r".includes(text[i]!)) i += 1; };
   const string = (): string => {
@@ -66,11 +73,12 @@ export function parseStrictJson(text: string, code: HeldCredentialErrorCode): Js
   const value = (): Json => {
     ws();
     const c = text[i];
+    if ((c === "{" || c === "[") && (depth += 1) > MAX_JSON_DEPTH) fail("nesting too deep");
     if (c === "{") {
       i += 1;
       const out: { [key: string]: Json } = Object.create(null);
       ws();
-      if (text[i] === "}") { i += 1; return out; }
+      if (text[i] === "}") { i += 1; depth -= 1; return out; }
       for (;;) {
         ws();
         if (text[i] !== '"') fail("expected key");
@@ -82,7 +90,7 @@ export function parseStrictJson(text: string, code: HeldCredentialErrorCode): Js
         out[key] = value();
         ws();
         if (text[i] === ",") { i += 1; continue; }
-        if (text[i] === "}") { i += 1; return out; }
+        if (text[i] === "}") { i += 1; depth -= 1; return out; }
         fail("expected , or }");
       }
     }
@@ -90,17 +98,18 @@ export function parseStrictJson(text: string, code: HeldCredentialErrorCode): Js
       i += 1;
       const out: Json[] = [];
       ws();
-      if (text[i] === "]") { i += 1; return out; }
+      if (text[i] === "]") { i += 1; depth -= 1; return out; }
       for (;;) {
         out.push(value());
         ws();
         if (text[i] === ",") { i += 1; continue; }
-        if (text[i] === "]") { i += 1; return out; }
+        if (text[i] === "]") { i += 1; depth -= 1; return out; }
         fail("expected , or ]");
       }
     }
     if (c === '"') return string();
-    const literal = /^(?:true|false|null|-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?)/.exec(text.slice(i));
+    JSON_LITERAL.lastIndex = i;
+    const literal = JSON_LITERAL.exec(text);
     if (!literal) return fail("unexpected token");
     i += literal[0].length;
     return JSON.parse(literal[0]) as Json;

@@ -54,6 +54,13 @@ export interface VerifiedHeldCredential {
 const SHARED_SIGNED = new Set(["iss", "sub", "iat", "nbf", "exp", "jti", "vct", "profile", "profileVersion", "holderBinding", "status", "_sd_alg", "_sd"]);
 const RESERVED_CLAIMS = new Set([...SHARED_SIGNED, "...", "cnf"]);
 
+/** Size limits, enforced on the raw strings before any decoding or parsing (TC-1540). */
+export const HELD_LIMITS = {
+  sdJwtChars: 16384,
+  siweMessageChars: 2048,
+  siweSignatureChars: 132,
+} as const;
+
 const HEADER_MEMBERS = new Set(["alg", "typ", "kid"]);
 const JTI_UUID_V4 = /^urn:uuid:[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
@@ -86,6 +93,10 @@ export async function verifyHeldPresentation(presentation: unknown, options: Ver
   const sdJwtText = sdJwt as string;
   const siweMessage = siwe.message as string;
   const siweSignature = siwe.signature as string;
+  // bounded before anything is split, decoded or parsed (a refusal here spends no nonce)
+  if (sdJwtText.length > HELD_LIMITS.sdJwtChars) refuse("bad-presentation", "sdJwt is too long");
+  if (siweMessage.length > HELD_LIMITS.siweMessageChars) refuse("bad-presentation", "siwe message is too long");
+  if (siweSignature.length > HELD_LIMITS.siweSignatureChars) refuse("bad-presentation", "siwe signature is too long");
 
   // 2. SIWE fields and the nonce. The nonce is spent FIRST, on any outcome, by one atomic
   // compare-and-delete that includes the authenticated caller's account. A forger can only spend a
