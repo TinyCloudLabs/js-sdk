@@ -18,6 +18,12 @@ export interface ProfileReplicationSettings {
   allowSecrets?: boolean;
 }
 
+/**
+ * Plain decimal positive integers only. This must stay a subset of what node storage accepts, so a
+ * value the CLI takes never throws later in storage: grantTtlMs is a safe integer in (0, 7 d]
+ * (sqlite.ts resolvePolicy) and maxBytes a non-negative safe integer (sqlite.ts, quota check).
+ * The CLI is deliberately stricter for maxBytes: 0 is rejected here although storage accepts it.
+ */
 function readPositiveIntegerEnv(name: string, max: number): number | undefined {
   const raw = process.env[name];
   if (raw === undefined) return undefined;
