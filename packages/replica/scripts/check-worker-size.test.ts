@@ -28,7 +28,7 @@ test("measures the canonical worker exactly once at gzip level 9", () => {
   expect(checkWorkerSize(dir, measured)).toEqual({ bytes: measured, headroom: 0 });
 });
 test("uses the reviewed GitHub worker ceiling without additional headroom", () => {
-  expect(MAX_WORKER_GZIP_BYTES).toBe(822_703);
+  expect(MAX_WORKER_GZIP_BYTES).toBe(822_620);
 });
 
 test("refuses worker size measurements from a different Bun or Rust toolchain", () => {

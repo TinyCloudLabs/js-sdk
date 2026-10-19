@@ -293,7 +293,7 @@ describe("TC-1475 optional allowance", () => {
     expect(() => validateOptionalLedger(shipped, true, true, true, true, true, true)).not.toThrow();
     expect(shipped.allowance).toEqual(tc1475OptionalAllowance);
     // The prior ceilings equal the merge-base measurements, so each bucket moves by exactly its delta.
-    const fromPrior = { "replica.mjs": -1, "replica.cjs": 1, "activation.mjs": 11, "activation.cjs": 13 };
+    const fromPrior = { "replica.mjs": 0, "replica.cjs": 0, "activation.mjs": 8, "activation.cjs": 12 };
     for (const format of ["replica.mjs", "replica.cjs", "activation.mjs", "activation.cjs"] as const) {
       expect(tc1475OptionalAllowance[format] - tc1432OptionalAllowance[format]).toBe(fromPrior[format]);
     }

@@ -210,15 +210,15 @@ activation, gated and the worker keep their ceilings. It is #582's own row, take
 shrink attempt (see the row's `reason`). The ledger's `tc1428Ratchet` row records it and cannot change
 later; whichever PR lands after it re-measures against the new base and updates its own row.
 
-TC-1475 (automatic retry of node 503 busy and request_timeout responses in `ServiceContext.invokeWithRetry`, which re-mints the signed invocation per attempt, plus
-the web-sdk and node-sdk `retryPolicy` config, #599) was measured against master `57b3ae7e` and sits on top
-of TC-1428's root ceilings and TC-1432's first-import, activation and worker ceilings. GitHub run
-39247773614 on source `15d77f3e` measured the same bytes in both Node jobs: root 1,475,210 / 1,403,734 B
-(+375 / +425 over TC-1428's), first import 51,924 / 67,139 B (-1 / +1), activation 23,117 / 24,698 B
-(+11 / +13) and the kv-storage worker 822,703 B (+659). Each ceiling is exactly the measured value. No
-size shrink was attempted beyond keeping the retry in one function (see the row's `reason`). The ledger's
-`tc1475Ratchet` row records it and cannot change later; whichever PR lands after it re-measures against
-the new base and updates its own row.
+TC-1475 (automatic retry of node 503 busy and request_timeout responses in `ServiceContext.invokeWithRetry`, which
+re-signs the invocation on every attempt, plus the web-sdk and node-sdk `retryPolicy` config, #599) was measured
+against master `c7a379c5` and sits on top of TC-1428's root ceilings and TC-1432's first-import, activation and
+worker ceilings. GitHub run 39261202208 on source `b83cf61a` measured the same bytes in both Node jobs: root
+1,475,110 / 1,403,543 B (+275 / +234 over TC-1428's), first import 51,925 / 67,138 B (0 / 0), activation 23,114 /
+24,697 B (+8 / +12) and the kv-storage worker 822,620 B (+576). Each ceiling is exactly the measured value. The
+shrink was real: one shared abortable sleep, one signed-request helper and single-line doc comments took the
+worker from 822,915 B (+871) to 822,620 B. The ledger's `tc1475Ratchet` row records it and cannot change later;
+whichever PR lands after it re-measures against the new base and updates its own row.
 
 **Ancestry pins and squash merges.** A policy row records the PR-branch commit it
 was reviewed at, and its introduction check requires that literal commit in the
