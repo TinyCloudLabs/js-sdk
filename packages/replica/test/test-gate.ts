@@ -19,6 +19,7 @@ import {
   type BrowserGate,
   type GateHmacRecord,
 } from "../src/kv-storage/gateKeys.js";
+import { ledgerFor } from "../src/kv-storage/ledger.js";
 import { createIndexedDbLifecycle } from "../src/kv-storage/lifecycle.js";
 import { KV_STORE, openKvDatabase } from "../src/kv-storage/schema.js";
 const CONSENT_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
@@ -138,7 +139,7 @@ export function createTestGate(): TestGate {
  */
 export function createTestLifecycle(gate: TestGate): ReplicaLifecycleGate & { revoke(stamp: ReplicaSessionStamp): void } {
   const revoked = new Set<string>();
-  const recovery = createIndexedDbLifecycle();
+  const recovery = createIndexedDbLifecycle({ ledger: ledgerFor() });
   const unsupported = (name: string) => () => Promise.reject(new Error(`${name} is not part of the adapter's test lifecycle.`));
   return {
     kind: "indexeddb",
