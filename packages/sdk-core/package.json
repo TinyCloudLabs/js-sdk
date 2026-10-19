@@ -42,6 +42,11 @@
       "types": "./dist/held-credentials/index.d.ts",
       "import": "./dist/held-credentials/index.js",
       "require": "./dist/held-credentials/index.cjs"
+    },
+    "./kv-list-matching": {
+      "types": "./dist/kv-list-matching/index.d.ts",
+      "import": "./dist/kv-list-matching/index.js",
+      "require": "./dist/kv-list-matching/index.cjs"
     }
   },
   "files": [

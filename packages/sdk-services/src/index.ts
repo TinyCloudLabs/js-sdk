@@ -188,13 +188,10 @@ export {
   KVService,
   PrefixedKVService,
   IKVService,
-  listMatching,
   KVAction,
 } from "./kv";
 export type {
   IPrefixedKVService,
-  KVListSource,
-  KVListMatchingOptions,
   KVServiceConfig,
   KVGetOptions,
   KVPutOptions,

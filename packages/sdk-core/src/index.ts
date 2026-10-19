@@ -447,11 +447,8 @@ export {
   // KV Service
   KVService,
   PrefixedKVService,
-  listMatching,
   type IKVService,
   type IPrefixedKVService,
-  type KVListSource,
-  type KVListMatchingOptions,
   type KVServiceConfig,
   type KVGetOptions,
   type KVPutOptions,

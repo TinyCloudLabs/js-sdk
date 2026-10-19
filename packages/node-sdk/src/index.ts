@@ -312,7 +312,6 @@ export {
   DEFAULT_SIGNED_READ_URL_EXPIRY_MS,
   KVService,
   PrefixedKVService,
-  listMatching,
 } from "@tinycloud/sdk-core";
 
 // Re-export KV service types
@@ -324,9 +323,15 @@ export type {
   KVBatchReadResponse,
   KVSignedReadUrlResponse,
   IPrefixedKVService,
+} from "@tinycloud/sdk-core";
+
+// Re-export the partial-segment list helper (a separate sdk-core entry, so
+// sdk-core's own root bundle stays unchanged; node-sdk has no browser ratchet)
+export { listMatching } from "@tinycloud/sdk-core/kv-list-matching";
+export type {
   KVListSource,
   KVListMatchingOptions,
-} from "@tinycloud/sdk-core";
+} from "@tinycloud/sdk-core/kv-list-matching";
 
 // Re-export SQL service values
 export { SQLService, SQLAction, DatabaseHandle } from "@tinycloud/sdk-core";

@@ -1,14 +1,19 @@
 /**
  * listMatching - client-side "keys starting with a partial segment" listing.
  *
- * A standalone function rather than a method on the KV service so that it is
- * tree-shaken out of every bundle that does not import it (it is not part of
- * `IKVService`, `KVService`, or the replica kv-storage worker).
+ * A standalone function on its own subpath entry
+ * (`@tinycloud/sdk-core/kv-list-matching`), like `held-credentials`: it is not
+ * part of `IKVService`, `KVService`, the sdk-core or sdk-services root
+ * barrels, or the replica kv-storage worker, so no bundle that doesn't import
+ * this entry carries it.
  */
 
-import { ErrorCodes, err, ok, serviceError } from "../types";
-import type { Result } from "../types";
-import type { KVListOptions, KVListResponse } from "./types";
+import { ErrorCodes, err, ok, serviceError } from "@tinycloud/sdk-services";
+import type {
+  KVListOptions,
+  KVListResponse,
+  Result,
+} from "@tinycloud/sdk-services";
 
 /**
  * Anything with a `list` that accepts the non-prefix list options: an
@@ -46,10 +51,11 @@ export type KVListMatchingOptions = Omit<
  * List the keys that start with a *partial* path segment, e.g. every key
  * beginning `qa/b`, including `qa/b00` and `qa/b01`.
  *
- * **Where to import it:** from `@tinycloud/sdk-services` or `@tinycloud/sdk-core`;
- * `@tinycloud/node-sdk` re-exports it too. Browser apps import it from
- * `@tinycloud/sdk-core` (web-sdk already depends on it); `@tinycloud/web-sdk`
- * deliberately does not re-export it, to keep its root bundle unchanged.
+ * **Where to import it:** `import { listMatching } from
+ * '@tinycloud/sdk-core/kv-list-matching'`. This is the import for browser
+ * apps too (web-sdk already depends on sdk-core). It is deliberately not
+ * exported from the sdk-core, sdk-services or web-sdk roots, to keep their
+ * bundles unchanged; `@tinycloud/node-sdk` re-exports it from its root.
  *
  * ## Why this is a helper and not a `list` option
  *

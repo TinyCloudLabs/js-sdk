@@ -333,11 +333,12 @@ last `/` with the normal `list`, reads **every** page, and filters client-side. 
 `tc.kv` or a prefixed view (`tc.kv.withPrefix('notes')`), and is not part of the KV
 service itself, so apps that don't import it don't ship it.
 
-**Browser apps import it from `@tinycloud/sdk-core`** (web-sdk already depends on it);
-`@tinycloud/web-sdk` does not re-export it, to keep its root bundle unchanged:
+**Browser apps import it from `@tinycloud/sdk-core/kv-list-matching`** (web-sdk already
+depends on sdk-core). It is a separate entry, not in any package root, so
+`@tinycloud/web-sdk` and `@tinycloud/sdk-core` root bundles are unchanged:
 
 ```typescript
-import { listMatching } from '@tinycloud/sdk-core';
+import { listMatching } from '@tinycloud/sdk-core/kv-list-matching';
 
 // Keys: qa/b00, qa/b01, qa/c00
 const result = await listMatching(tc.kv, 'qa/b');
