@@ -3237,11 +3237,9 @@ export class TinyCloudNode {
     if (!this.currentSessionCoversAccountRegistry()) {
       if (!TinyCloudNode.accountRegistrySkipLogged) {
         TinyCloudNode.accountRegistrySkipLogged = true;
-        tinyCloudDebugLogger.log(
-          "account-registry.sync.skipped",
-          undefined,
-          "account registry sync skipped: this session lacks account-space access",
-        );
+        // Registry sync skipped: the session lacks account-space access. Event name and
+        // message stay short because web-sdk bundles this file under a zero-headroom size ceiling.
+        tinyCloudDebugLogger.log("registry.skip");
       }
       return;
     }

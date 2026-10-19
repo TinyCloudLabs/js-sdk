@@ -883,7 +883,7 @@ describe("TC-1287: scheduleAccountRegistrySync account-space authority gate", ()
         ]);
         await scheduleAndSettle(node);
       }
-      const skips = tinyCloudDebugLogger.getLogs().filter((e) => e.event === "account-registry.sync.skipped");
+      const skips = tinyCloudDebugLogger.getLogs().filter((e) => e.event === "registry.skip");
       expect(skips).toHaveLength(1);
       expect(warn).not.toHaveBeenCalled();
       expect(info).not.toHaveBeenCalled();
