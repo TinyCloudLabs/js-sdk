@@ -7657,12 +7657,15 @@ CREATE TABLE IF NOT EXISTS grant_install (
       }
       #storeGrantPolicy(g, policy, existing) {
         const installedAt = existing?.installedAt ?? policy.at;
+        const keepExisting = existing !== null && existing.consentDeadline < policy.consentDeadline;
+        const consentDeadline = keepExisting ? existing.consentDeadline : policy.consentDeadline;
+        const consentAnchor = keepExisting ? existing.consentAnchor : policy.consentAnchor;
         const effectiveExpiresAt = Math.min(
           g.expiresAt === null ? Infinity : g.expiresAt * 1e3,
           installedAt + policy.ttlMs,
-          policy.consentDeadline
+          consentDeadline
         );
-        if (!Number.isSafeInteger(installedAt) || installedAt < 0 || !Number.isSafeInteger(effectiveExpiresAt) || effectiveExpiresAt < 0 || !Number.isSafeInteger(policy.consentDeadline) || policy.consentDeadline < 0 || !Number.isSafeInteger(policy.consentAnchor.at) || policy.consentAnchor.at < 0 || !Number.isSafeInteger(policy.ttlMs) || policy.ttlMs <= 0) {
+        if (!Number.isSafeInteger(installedAt) || installedAt < 0 || !Number.isSafeInteger(effectiveExpiresAt) || effectiveExpiresAt < 0 || !Number.isSafeInteger(consentDeadline) || consentDeadline < 0 || !Number.isSafeInteger(consentAnchor.at) || consentAnchor.at < 0 || !Number.isSafeInteger(policy.ttlMs) || policy.ttlMs <= 0) {
           throw new ReplicaError3(ReplicaErrorCode3.GRANT_EXPIRED, "The replica grant has no finite effective expiry.");
         }
         this.#db.run(
@@ -7674,11 +7677,11 @@ CREATE TABLE IF NOT EXISTS grant_install (
           g.cid,
           installedAt,
           effectiveExpiresAt,
-          policy.consentDeadline,
-          policy.consentAnchor.at,
-          policy.consentAnchor.source
+          consentDeadline,
+          consentAnchor.at,
+          consentAnchor.source
         );
-        return { installedAt, effectiveExpiresAt, consentDeadline: policy.consentDeadline, consentAnchor: policy.consentAnchor };
+        return { installedAt, effectiveExpiresAt, consentDeadline, consentAnchor };
       }
       async installGatedGrant(g, policy) {
         return this.#guardedWrite("Installing the gated grant", () => {
