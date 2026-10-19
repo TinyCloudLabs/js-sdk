@@ -9,12 +9,12 @@ import { PrivateKeySigner } from "./signers/PrivateKeySigner";
 import "./replication/node-loader";
 import { TinyCloudNode } from "./TinyCloudNode";
 
-const nodeBinary = process.env.TC_OWNER_REVOKE_E2E_NODE_BIN;
+const nodeBinary = process.env.TC_REPLICATION_E2E_NODE_BIN;
 const ownerKey =
   "4f3edf983ac636a65a842ce7c78d9aa706d3b113bce036f4d4b2c197a7e5e7b7";
 const otherKey =
   "ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80";
-// Set TC_OWNER_REVOKE_E2E_NODE_BIN to a local tinycloud-node executable.
+// Reuse the pinned executable from the node-sdk real-node CI job.
 describe.skipIf(!nodeBinary)(
   "owner revokes delegateTo grants on a real node",
   () => {
