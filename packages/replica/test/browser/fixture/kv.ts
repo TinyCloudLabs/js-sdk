@@ -99,7 +99,7 @@ const api = {
   revoke: (stamp: ReplicaSessionStamp) => lifecycle.revoke(stamp),
   /** Test-only: recover at an injected lifecycle clock and inspect key presence, not key material. */
   recoverAt: async (at: number) => {
-    const report = await createIndexedDbLifecycle({ now: () => at }).recover({ signal: new AbortController().signal });
+    const report = await createIndexedDbLifecycle({ now: () => at, ledger: ledgerFor() }).recover({ signal: new AbortController().signal });
     return { report, keys: await inspectReplicaKeyPresence() };
   },
   /** Open with `spec.stamp`, or a fresh stamp for the spec's principal; `stamp: null` opens without one. */
