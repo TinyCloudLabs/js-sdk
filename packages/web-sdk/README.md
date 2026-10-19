@@ -213,9 +213,9 @@ later; whichever PR lands after it re-measures against the new base and updates 
 TC-1475 (automatic retry of node 503 busy and request_timeout responses in `ServiceContext.invokeWithRetry`, which
 re-signs the invocation on every attempt, plus the web-sdk and node-sdk `retryPolicy` config, #599) was measured
 against master `c7a379c5` and sits on top of TC-1428's root ceilings and TC-1432's first-import, activation and
-worker ceilings. GitHub run 39261202208 on source `b83cf61a` measured the same bytes in both Node jobs: root
-1,475,110 / 1,403,543 B (+349 / +405 over the merge base; ceilings exactly the measured values, so #598's freed 74 / 171 B are not handed on), first import 51,925 / 67,138 B (0 / 0), activation 23,114 /
-24,697 B (+8 / +12) and the kv-storage worker 822,667 B (+623; GitHub run 39278654976 on `1c73f16c`, after the B2 ref'd-backoff, N3 `read_audit_busy` and N2 fixes). The
+worker ceilings. GitHub run 39283793472 on source `8bfda761` (after the B2 ref'd-backoff, N2 and N3 fixes) measured the same bytes in both Node jobs: root
+1,475,117 / 1,403,551 B (+356 / +413 over the merge base; ceilings exactly the measured values, so #598's freed 74 / 171 B are not handed on), first import 51,925 / 67,140 B (0 / +2), activation 23,117 /
+24,699 B (+11 / +14) and the kv-storage worker 822,667 B (+623). The
 shrink was real: one shared abortable sleep, one signed-request helper and single-line doc comments took the
 worker from 822,915 B (+871) to 822,620 B. The ledger's `tc1475Ratchet` row records it and cannot change later;
 whichever PR lands after it re-measures against the new base and updates its own row.

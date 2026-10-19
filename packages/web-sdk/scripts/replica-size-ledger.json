@@ -605,32 +605,32 @@
     },
     "root": {
       "delta": {
-        "index.mjs": 349,
-        "index.cjs": 405
+        "index.mjs": 356,
+        "index.cjs": 413
       },
       "ceiling": {
-        "index.mjs": 1475110,
-        "index.cjs": 1403543
+        "index.mjs": 1475117,
+        "index.cjs": 1403551
       }
     },
     "firstImport": {
       "delta": {
         "replica.mjs": 0,
-        "replica.cjs": 0
+        "replica.cjs": 2
       },
       "ceiling": {
         "replica.mjs": 51925,
-        "replica.cjs": 67138
+        "replica.cjs": 67140
       }
     },
     "activation": {
       "delta": {
-        "activation.mjs": 8,
-        "activation.cjs": 12
+        "activation.mjs": 11,
+        "activation.cjs": 14
       },
       "ceiling": {
-        "activation.mjs": 23114,
-        "activation.cjs": 24697
+        "activation.mjs": 23117,
+        "activation.cjs": 24699
       }
     },
     "worker": {

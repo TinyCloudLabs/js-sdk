@@ -16,7 +16,7 @@ import { join, resolve } from "node:path";
 // GitHub run 39144311690 (head 83c9d75a, against master 129c7935 after #578 landed; the same 822,044
 // as run 39134457380 on the earlier base); the ledger's tc1432Ratchet row records it.
 // TC-1475 (automatic retry of NODE_BUSY / REQUEST_TIMEOUT in sdk-services, re-signing each attempt) measured 822,667 (+623) in
-// GitHub run 39278654976 (head 1c73f16c, against master c7a379c5; B2/N2/N3 fixes added 47 B); the ledger's tc1475Ratchet row records it.
+// GitHub run 39283793472 (head 8bfda761, against master c7a379c5; the B2/N2/N3 fixes added 47 B); the ledger's tc1475Ratchet row records it.
 // Zero additional headroom; independent of the web-sdk ledger, including WASM.
 export const MAX_WORKER_GZIP_BYTES = 822_667;
 const canonicalName = /^kv-storage\.worker\.([0-9a-f]{64})\.js$/;
