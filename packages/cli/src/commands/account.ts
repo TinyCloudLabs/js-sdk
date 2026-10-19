@@ -4,6 +4,7 @@ import { readFile } from "node:fs/promises";
 import type { AccountDelegation, AccountSpace, Manifest, SqlValue } from "@tinycloud/node-sdk";
 import { ProfileManager } from "../config/profiles.js";
 import { ExitCode } from "../config/constants.js";
+import { assertAccountAccess } from "../lib/account-access.js";
 import { ensureAuthenticated } from "../lib/sdk.js";
 import { CLIError, handleError, cliErrorFromService } from "../output/errors.js";
 import { formatTable, outputJson, shouldOutputJson } from "../output/formatter.js";
@@ -363,7 +364,9 @@ export function registerAccountCommand(program: Command): void {
 async function authenticatedNode(cmd: Command) {
   const globalOpts = cmd.optsWithGlobals();
   const ctx = await ProfileManager.resolveContext(globalOpts);
-  return ensureAuthenticated(ctx);
+  const node = await ensureAuthenticated(ctx);
+  await assertAccountAccess(node, ctx.profile);
+  return node;
 }
 
 function assertOk<T>(result: { ok: true; data: T } | { ok: false; error: { code: string; message: string } }): asserts result is { ok: true; data: T } {

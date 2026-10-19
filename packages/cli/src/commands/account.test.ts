@@ -20,9 +20,15 @@ function resetState(): void {
   recorded.revoked = [];
   recorded.registeredSpaces = [];
   recorded.removedSpaces = [];
+  hasAccountAccess = true;
+  accountCalls = 0;
 }
 
+let hasAccountAccess = true;
+let accountCalls = 0;
+
 const node = {
+  hasRuntimePermissions: () => hasAccountAccess,
   account: {
     status: async () => ({
       ok: true,
@@ -276,6 +282,11 @@ mock.module("../config/profiles.js", () => ({
   },
 }));
 
+// Space resolution reads the profile store; the gate only needs it to be a pass-through.
+mock.module("../lib/permissions.js", () => ({
+  resolvePermissionSpaces: async (entries: unknown[]) => entries,
+}));
+
 mock.module("../lib/sdk.js", () => ({
   ensureAuthenticated: async () => node,
 }));
@@ -349,6 +360,24 @@ mock.module("open", () => ({
     recorded.opened.push(url);
   },
 }));
+
+// Count every account service call, however deeply nested, so a gated command
+// can be shown to have made none.
+function countCalls<T extends object>(target: T): T {
+  return new Proxy(target, {
+    get(obj, key, receiver) {
+      const value = Reflect.get(obj, key, receiver);
+      if (typeof value === "function") {
+        return (...args: unknown[]) => {
+          accountCalls += 1;
+          return value.apply(obj, args);
+        };
+      }
+      return value !== null && typeof value === "object" ? countCalls(value) : value;
+    },
+  });
+}
+node.account = countCalls(node.account);
 
 const { registerAccountCommand } = await import("./account.js");
 
@@ -578,5 +607,43 @@ describe("tc account", () => {
       url: "https://account.tinycloud.xyz/billing",
       opened: true,
     });
+  });
+
+  const accountCommands: string[][] = [
+    ["status"],
+    ["apps", "list"],
+    ["apps", "list", "--live"],
+    ["apps", "info", "com.notes.app"],
+    ["apps", "register", "manifest.json"],
+    ["apps", "remove", "com.notes.app"],
+    ["spaces", "list"],
+    ["spaces", "info", "tinycloud:pkh:eip155:1:0xabc:indexed"],
+    ["spaces", "register", "tinycloud:pkh:eip155:1:0xabc:indexed", "--name", "indexed", "--owner", "did:pkh:eip155:1:0xabc"],
+    ["spaces", "sync"],
+    ["spaces", "remove", "tinycloud:pkh:eip155:1:0xabc:indexed"],
+    ["delegations", "list"],
+    ["delegations", "revoke", "bafycid", "--space", "default"],
+    ["index", "ensure"],
+    ["index", "status"],
+    ["index", "rebuild"],
+    ["index", "query", "select 1"],
+  ];
+
+  test.each(accountCommands)("%s fails with ACCOUNT_ACCESS_REQUIRED before any account call when the session lacks account access", async (...args) => {
+    hasAccountAccess = false;
+    await runAccount(args);
+
+    expect(accountCalls).toBe(0);
+    expect(recorded.outputs).toEqual([]);
+    expect(recorded.errors).toHaveLength(1);
+    expect(recorded.errors[0]).toMatchObject({ code: "ACCOUNT_ACCESS_REQUIRED", exitCode: 5 });
+  });
+
+  test("billing commands need no account access", async () => {
+    hasAccountAccess = false;
+    await runAccount(["billing", "status"]);
+
+    expect(recorded.errors).toEqual([]);
+    expect(recorded.outputs).toHaveLength(1);
   });
 });

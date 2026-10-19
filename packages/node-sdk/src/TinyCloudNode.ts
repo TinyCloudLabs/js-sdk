@@ -3198,6 +3198,9 @@ export class TinyCloudNode {
     };
   }
 
+  /** Set once per process: the registry sync was skipped for want of account access. */
+  private static accountRegistrySkipLogged = false;
+
   private scheduleAccountRegistrySync(): void {
     const session = this.currentTinyCloudSession();
     if (!session || this.pendingAccountRegistrySync?.session === session) {
@@ -3211,6 +3214,12 @@ export class TinyCloudNode {
     // Every registry step reads or writes the owned account space; a session
     // without that authority (a scoped CLI login) would only collect a 401.
     if (!this.currentSessionCoversAccountRegistry()) {
+      if (!TinyCloudNode.accountRegistrySkipLogged) {
+        TinyCloudNode.accountRegistrySkipLogged = true;
+        console.info(
+          "TinyCloud account registry sync skipped: this session lacks account-space access",
+        );
+      }
       return;
     }
 
