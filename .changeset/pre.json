@@ -38,6 +38,7 @@
     "cli-prepared-login-exit",
     "cli-prepared-login-failure-gate",
     "cli-replica-error-exits",
+    "cli-share-fragment-wording",
     "direct-owner-revoke",
     "node-replica-erase-replaced-roots",
     "node-sdk-registry-sync-authority",

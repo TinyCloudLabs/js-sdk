@@ -1,5 +1,11 @@
 # @tinycloud/cli
 
+## 1.3.0-beta.22
+
+### Patch Changes
+
+- 270c284: Clarify the share link fragment wording in the tc-cli skill reference.
+
 ## 1.3.0-beta.21
 
 ### Patch Changes
