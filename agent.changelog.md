@@ -24,6 +24,10 @@ entry when `agent.dev.md` or related agent workflow expectations change.
   than Bun's HTTP shim; retained finish/aborted-stream/error and privacy assertions.
 - Distinguished package state roots from source directories in the alpha audit;
   cache middleware is code, while hidden configuration and data/key files remain blocked.
+- Kept full archive auditing with a bounded 32 MiB listing buffer and distinguished
+  PEM parser delimiters from embedded private-key payloads without dropping credential checks.
+- Kept synthetic installed-state ancestors private under group-writable npm umasks.
+  Installed help/parser checks now require no helper; native writer-failure cases remain separate.
 
 ## 2026-10-16
 

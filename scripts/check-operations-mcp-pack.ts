@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
-import { copyFile, mkdir, mkdtemp, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
+import { chmod, copyFile, mkdir, mkdtemp, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
 import { promisify } from "node:util";
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
@@ -60,12 +60,14 @@ export async function verifyAlphaTarball(tarball: string): Promise<void> {
   try {
     await Promise.all([original, home].map((path) => mkdir(path, { mode: 0o700 })));
     await Promise.all([env.npm_config_userconfig, env.npm_config_globalconfig].map((path) => writeFile(path, "")));
-    const listing = (await exec("tar", ["-tzf", tarball])).stdout.trim().split("\n");
+    const listing = (await exec("tar", ["-tzf", tarball], { maxBuffer: 32 * 1024 * 1024 })).stdout.trim().split("\n");
     for (const path of listing) assertPackagePath(path);
     await writeJson(join(original, "package.json"), { name: "alpha-private-consumer", private: true });
     await exec("npm", ["install", "--offline", "--ignore-scripts", "--no-audit", "--no-fund", tarball], { cwd: original, env, maxBuffer: 32 * 1024 * 1024 });
     await rename(original, relocated);
     const fixture = join(relocated, "node_modules", alphaPackage.name);
+    // npm inherits the caller's umask; diagnostic homes require non-writable ancestors.
+    await Promise.all([join(relocated, "node_modules"), join(relocated, "node_modules/@tinycloud"), fixture].map((path) => chmod(path, 0o700)));
     await inventory(fixture);
     const manifest = await json(join(fixture, "package.json"));
     const identity = await json(join(fixture, "identity.json"));

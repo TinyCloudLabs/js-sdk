@@ -307,7 +307,7 @@ if(mode==='enable'){
       const baseline = await execute([cli, ...args], offRoot, true);
       assert.equal(baseline.code, args[0] === "--help" ? 0 : 1);
       await assert.rejects(readFile(offRoot), (error: NodeJS.ErrnoException) => error.code === "ENOENT");
-      await assertChildStopped(false);
+      await assert.rejects(readFile(childPath), (error: NodeJS.ErrnoException) => error.code === "ENOENT");
       for (const mode of ["enospc", "death", "hung", "denied"]) {
         activeRoot = join(home, `cli-${mode}-${args[0]}`);
         await configure(mode);
@@ -325,14 +325,14 @@ if(mode==='enable'){
           }
           const fault = await execute([cli, ...args], activeRoot, true);
           assert.deepEqual(fault, baseline, `CLI stdout/stderr/exit parity: ${mode} ${args.join(" ")}`);
-          await assertChildStopped(mode !== "denied");
+          await assert.rejects(readFile(childPath), (error: NodeJS.ErrnoException) => error.code === "ENOENT");
         } finally {
           if (mode === "denied") await chmod(activeRoot, 0o700);
         }
       }
     }
     await assert.rejects(readFile(profileRoot), (error: NodeJS.ErrnoException) => error.code === "ENOENT");
-    console.log("Installed CLI off/ENOSPC/child-death/native-FIFO-hang/native-denial parity: exact stdout, stderr and exits for help/parser; network and synthetic profile access guarded. ENOSPC is controlled FileHandle.write injection, not deployment full-disk proof.");
+    console.log("Installed unrelated CLI help/parser: exact stdout, stderr and exit parity with no diagnostic worker under off and configured fault modes; network and synthetic profile access guarded. Native ENOSPC/death/FIFO/denial boundaries are exercised separately above, not inferred from unrelated commands.");
   } finally {
     // Restore the caller's installed package even when an assertion fails.
     await writeFile(manifestPath, manifest);
