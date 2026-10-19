@@ -490,22 +490,14 @@ export class ServiceContext implements IServiceContext {
 
   /** Idempotent: a signal this method produced is returned as is, so `invokeWithRetry` and `wrapFetch` add one listener pair per attempt. */
   private combineSignals(signal?: AbortSignal): AbortSignal {
-    if (!signal || this._combined.has(signal)) return signal ?? this._abortController.signal;
+    const own = this._abortController.signal;
+    if (!signal || this._combined.has(signal)) return signal ?? own;
     const combined = new AbortController();
-    const abort = (source: AbortSignal) => combined.abort(source.reason);
-    if (signal.aborted) {
-      abort(signal);
-    } else if (this._abortController.signal.aborted) {
-      abort(this._abortController.signal);
-    } else {
-      signal.addEventListener("abort", () => abort(signal), { once: true });
-      this._abortController.signal.addEventListener(
-        "abort",
-        () => abort(this._abortController.signal),
-        { once: true },
-      );
-    }
     this._combined.add(combined.signal);
+    for (const source of [signal, own]) {
+      if (source.aborted) return combined.abort(source.reason), combined.signal;
+      source.addEventListener("abort", () => combined.abort(source.reason), { once: true });
+    }
     return combined.signal;
   }
 }
