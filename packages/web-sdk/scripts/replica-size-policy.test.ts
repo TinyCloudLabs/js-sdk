@@ -1591,14 +1591,13 @@ describe("TC-1476 registry-skip debug event exact-delta ratchet", () => {
 describe("TC-1475 ServiceContext retry exact-delta ratchet", () => {
   const row = () => structuredClone(approvedTc1475Ratchet);
 
-  it("is in the ledger once; root sits on TC-1428's, every other bucket on TC-1432's, plus the canonical delta", () => {
+  it("is in the ledger once; root sits on TC-1476's, every other bucket on TC-1432's, plus the canonical delta", () => {
     expect(() => validateLedger(current)).not.toThrow();
     expect(current.tc1475Ratchet).toEqual(approvedTc1475Ratchet);
     const row1475 = approvedTc1475Ratchet;
     for (const format of ["index.mjs", "index.cjs"] as const) {
-      // #598 landed -74 / -171 B without a ceiling row; its freed bytes are not handed on, so the ceiling is TC-1428's + delta - those.
-      const freedBy598 = { "index.mjs": 74, "index.cjs": 171 }[format];
-      expect(row1475.root.ceiling[format]).toBe(approvedTc1428Ratchet.root.ceiling[format] + row1475.root.delta[format] - freedBy598);
+      // The row chains after TC-1476's: its ceiling is the measured base, so ours is that plus the delta.
+      expect(row1475.root.ceiling[format]).toBe(approvedTc1476Ratchet.root.ceiling[format] + row1475.root.delta[format]);
     }
     for (const format of ["replica.mjs", "replica.cjs"] as const) {
       expect(row1475.firstImport.ceiling[format])

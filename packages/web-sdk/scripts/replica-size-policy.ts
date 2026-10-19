@@ -639,7 +639,7 @@ export const approvedTc1476Ratchet: Tc1476Ratchet = {
 
 /**
  * Naomi's standing size rule applied to TC-1475 (js-sdk #599): the retry is admitted at exactly the bytes
- * GitHub measured, with no headroom. The root ceilings sit on top of TC-1428's; the first-import,
+ * GitHub measured, with no headroom. The root ceilings sit on top of TC-1476's; the first-import,
  * activation and worker ceilings are the measured values on top of TC-1432's (every row since is root only).
  */
 export const approvedTc1475Ratchet: Tc1475Ratchet = {
@@ -647,18 +647,18 @@ export const approvedTc1475Ratchet: Tc1475Ratchet = {
   ruling: "Naomi's standing size rule for TC-1475 #599: a real shrink first, remainder by the PR's own exact-delta row at canonical CI bytes; rows chain after the latest row on master",
   base: "5317cc7846a4d8c1701c506f3dffc909b030be2f",
   sourceCommits: [
-    "b83cf61a19fa8d0e412d31927206c0803ec5be9c",
+    "092144080cb5f8e1c59286d603991f42121a6801",
   ],
   canonicalCI: {
-    run: "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39261202208",
+    run: "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39292038037",
     jobs: [
-      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39261202208/job/118088994957",
-      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39261202208/job/118088994820",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39292038037/job/118194900821",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39292038037/job/118194901026",
     ],
   },
   root: {
-    delta: { "index.mjs": 356, "index.cjs": 413 },
-    ceiling: { "index.mjs": 1475117, "index.cjs": 1403551 },
+    delta: { "index.mjs": 358, "index.cjs": 404 },
+    ceiling: { "index.mjs": 1475166, "index.cjs": 1403595 },
   },
   firstImport: {
     delta: { "replica.mjs": 0, "replica.cjs": 2 },
@@ -669,7 +669,7 @@ export const approvedTc1475Ratchet: Tc1475Ratchet = {
     ceiling: { "activation.mjs": 23117, "activation.cjs": 24699 },
   },
   worker: { delta: 623, ceiling: 822667 },
-  reason: "ServiceContext.invokeWithRetry(url, build) retries node 503 busy and request_timeout responses and calls build once per attempt, so every attempt carries a freshly signed invocation: the node records each invocation before its handler runs and answers a repeat with 409, so the first version, which re-sent the identical request, could never succeed. KV, SQL, DuckDB and the hooks webhook calls go through one BaseService.invokeWithRetry helper; the RetryPolicy defaults, the RetryStats on responses and KVResponse.retry, and the retryPolicy plumbing in web-sdk and node-sdk are unchanged. sdk-services is bundled into the root, the kv-storage worker and the optional first-import and activation buckets, so each moves by its measured delta. Real shrink first: the abortable sleep is shared with HooksService instead of a second copy, one helper builds every signed request, the debug timing reuses one meta object, and the new doc comments are single lines because the unminified worker bundle keeps JSDoc. The first fix of the re-mint (run 39257200762, source e8cd279a) measured the worker at 822,915 (+871 over TC-1432's); the shrink brought it to 822,620 (+576). Base: master c7a379c5 (it includes #598, whose root rows are -74 / -171 and set no ceiling); PR: GitHub run 39261202208 on source b83cf61a measured the same bytes in both Node jobs: root index.mjs 1,475,110 (+349 over the merge base's 1,474,761) and index.cjs 1,403,543 (+405 over the merge base's 1,403,138); the row's root delta is that growth over the merge base and its ceiling is the exact measured value, TC-1428's plus that growth minus #598's already-landed -74 / -171 B, so #598's freed bytes are not handed to a later PR, first-import replica.mjs 51,925 / replica.cjs 67,138 (0 / 0), activation activation.mjs 23,114 / activation.cjs 24,697 (+8 / +12 over TC-1432's) and the kv-storage worker 822,620 (+576). Every ceiling is exactly the measured value.",
+  reason: "ServiceContext.invokeWithRetry(url, build) retries node 503 busy and request_timeout responses and calls build once per attempt, so every attempt carries a freshly signed invocation: the node records each invocation before its handler runs and answers a repeat with 409, so the first version, which re-sent the identical request, could never succeed. KV, SQL, DuckDB and the hooks webhook calls go through one BaseService.invokeWithRetry helper; the RetryPolicy defaults, the RetryStats on responses and KVResponse.retry, and the retryPolicy plumbing in web-sdk and node-sdk are unchanged. sdk-services is bundled into the root, the kv-storage worker and the optional first-import and activation buckets, so each moves by its measured delta. Real shrink first: the abortable sleep is shared with HooksService instead of a second copy, one helper builds every signed request, the debug timing reuses one meta object, and the new doc comments are single lines because the unminified worker bundle keeps JSDoc. The first fix of the re-mint (run 39257200762, source e8cd279a) measured the worker at 822,915 (+871 over TC-1432's); the shrink brought it to 822,620 (+576). Base: master 5317cc78 (it includes #598 and TC-1476, whose root ceilings are 1,474,808 / 1,403,191); PR: GitHub run 39292038037 on source 092144080 measured the same bytes in both Node jobs: root index.mjs 1,475,166 (+358 over the merge base's 1,474,808) and index.cjs 1,403,595 (+404 over the merge base's 1,403,191), first import replica.cjs 67,140 (+2; replica.mjs 51,925, +0), activation 23,117 / 24,699 (+11 / +14) and the kv-storage worker 822,667 (+623 over TC-1432's). Every ceiling is exactly the measured value. The PR's review round added the ref'd retry backoff, the once-per-call backoff signal and read_audit_busy as NODE_BUSY.",
 };
 
 /** The reviewed #553 S3 entry's source commit, as master's checker pinned it. */
