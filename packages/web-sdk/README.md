@@ -210,7 +210,7 @@ activation, gated and the worker keep their ceilings. It is #582's own row, take
 shrink attempt (see the row's `reason`). The ledger's `tc1428Ratchet` row records it and cannot change
 later; whichever PR lands after it re-measures against the new base and updates its own row.
 
-TC-1475 (automatic retry of node 503 busy and request_timeout responses in `ServiceContext.fetch`, plus
+TC-1475 (automatic retry of node 503 busy and request_timeout responses in `ServiceContext.invokeWithRetry`, which re-mints the signed invocation per attempt, plus
 the web-sdk and node-sdk `retryPolicy` config, #599) was measured against master `57b3ae7e` and sits on top
 of TC-1428's root ceilings and TC-1432's first-import, activation and worker ceilings. GitHub run
 39247773614 on source `15d77f3e` measured the same bytes in both Node jobs: root 1,475,210 / 1,403,734 B

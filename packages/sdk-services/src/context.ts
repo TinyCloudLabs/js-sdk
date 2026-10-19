@@ -20,6 +20,7 @@ import {
 } from "./types";
 import { tinyCloudDebugLogger } from "./debug";
 import { nodeRetryError } from "./errors";
+import { abortableSleep } from "./sleep";
 import { projectDiagnosticData } from "./diagnostics";
 
 /**
@@ -72,6 +73,7 @@ export class ServiceContext implements IServiceContext {
   private _retired = false;
   private readonly _invoke: InvokeFunction;
   private readonly _invokeAny?: InvokeAnyFunction;
+  private readonly _rawFetch: FetchFunction;
   private readonly _fetch: FetchFunction;
   private readonly _hosts: string[];
   private readonly _retryPolicy: RetryPolicy;
@@ -83,7 +85,8 @@ export class ServiceContext implements IServiceContext {
     this._invokeAny = config.invokeAny
       ? this.wrapInvokeAny(config.invokeAny)
       : undefined;
-    this._fetch = this.wrapFetch(config.fetch ?? globalThis.fetch.bind(globalThis));
+    this._rawFetch = config.fetch ?? globalThis.fetch.bind(globalThis);
+    this._fetch = this.wrapFetch(this._rawFetch);
     this._hosts = config.hosts;
     this._session = config.session ?? null;
     this._retryPolicy = {
@@ -411,22 +414,28 @@ export class ServiceContext implements IServiceContext {
   }
 
   /**
-   * Retry the node's own "nothing was applied" answers (`NODE_BUSY`,
-   * `REQUEST_TIMEOUT`) under the retry policy. The final response, retried or
-   * not, is returned untouched for the services to classify. Waits end at once
-   * when the request signal aborts (caller abort, per-request timeout,
-   * sign-out).
+   * Send a signed invocation, retrying the node's own "nothing was applied"
+   * answers (`NODE_BUSY`, `REQUEST_TIMEOUT`) under the retry policy.
+   *
+   * `build` runs once per attempt and must mint a fresh invocation each time:
+   * the node records every invocation before it runs the handler and answers a
+   * repeat of the same signed request with 409, so re-sending one can never
+   * succeed. The final response, retried or not, is returned untouched for the
+   * services to classify, with `retry` stats. Waits end at once when the
+   * request signal aborts (caller abort, per-request timeout, sign-out).
    */
-  private async fetchWithRetry(
-    fetchFn: FetchFunction,
+  async invokeWithRetry(
     url: string,
-    request: FetchRequestInit & { signal: AbortSignal },
+    build: () => FetchRequestInit | Promise<FetchRequestInit>,
   ): Promise<FetchResponse> {
+    this.assertActive();
     const policy = this._retryPolicy;
     const startedAt = Date.now();
     let backoffMs = 0;
     for (let attempt = 1; ; attempt++) {
-      const response = await fetchFn(url, request);
+      const init = await build();
+      const request = { ...init, signal: this.combineSignals(init.signal) };
+      const response = await this.send(this._rawFetch, url, request);
       const done = (): FetchResponse => {
         try { response.retry = { attempts: attempt, backoffMs }; } catch { /* frozen custom response */ }
         return response;
@@ -452,47 +461,57 @@ export class ServiceContext implements IServiceContext {
         typeof retryAfterMs === "number" ? retryAfterMs : Math.random() * step,
         remaining,
       );
-      await sleep(delay, request.signal);
+      // The 503 is being replaced; release its body instead of leaving it buffered.
+      try { void Promise.resolve((response.body as { cancel?(): unknown } | undefined)?.cancel?.()).catch(() => {}); } catch { /* not a stream */ }
+      await abortableSleep(delay, request.signal);
+      if (request.signal.aborted) throw request.signal.reason;
       backoffMs += delay;
+    }
+  }
+
+  private async send(
+    fetchFn: FetchFunction,
+    url: string,
+    request: FetchRequestInit & { signal: AbortSignal },
+  ): Promise<FetchResponse> {
+    if (!tinyCloudDebugLogger.isEnabled()) {
+      return fetchFn(url, request);
+    }
+
+    const timer = tinyCloudDebugLogger.startTimer("sdk.fetch", {
+      url,
+      method: request.method ?? "GET",
+      init: request,
+    });
+
+    try {
+      const response = await fetchFn(url, request);
+      timer.stop({
+        ok: response.ok,
+        url,
+        method: request.method ?? "GET",
+        status: response.status,
+        statusText: response.statusText,
+      });
+      return response;
+    } catch (error) {
+      timer.stop({
+        ok: false,
+        url,
+        method: request.method ?? "GET",
+        error,
+      });
+      throw error;
     }
   }
 
   private wrapFetch(fetchFn: FetchFunction): FetchFunction {
     return async (url, init) => {
       this.assertActive();
-      const request = {
+      return this.send(fetchFn, url, {
         ...init,
         signal: this.combineSignals(init?.signal),
-      };
-      if (!tinyCloudDebugLogger.isEnabled()) {
-        return this.fetchWithRetry(fetchFn, url, request);
-      }
-
-      const timer = tinyCloudDebugLogger.startTimer("sdk.fetch", {
-        url,
-        method: request.method ?? "GET",
-        init: request,
       });
-
-      try {
-        const response = await this.fetchWithRetry(fetchFn, url, request);
-        timer.stop({
-          ok: response.ok,
-          url,
-          method: request.method ?? "GET",
-          status: response.status,
-          statusText: response.statusText,
-        });
-        return response;
-      } catch (error) {
-        timer.stop({
-          ok: false,
-          url,
-          method: request.method ?? "GET",
-          error,
-        });
-        throw error;
-      }
     };
   }
 
@@ -516,18 +535,3 @@ export class ServiceContext implements IServiceContext {
   }
 }
 
-/** Resolve after `ms`; reject with the signal's reason as soon as it aborts. */
-function sleep(ms: number, signal: AbortSignal): Promise<void> {
-  return new Promise((resolve, reject) => {
-    if (signal.aborted) return reject(signal.reason);
-    const onAbort = () => {
-      clearTimeout(timer);
-      reject(signal.reason);
-    };
-    const timer = setTimeout(() => {
-      signal.removeEventListener("abort", onAbort);
-      resolve();
-    }, ms);
-    signal.addEventListener("abort", onAbort, { once: true });
-  });
-}

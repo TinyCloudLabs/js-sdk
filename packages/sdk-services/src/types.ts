@@ -256,7 +256,7 @@ export interface FetchResponse {
   blob(): Promise<Blob>;
   /** Present on standard Responses; the retry reads a clone so the caller's body stays intact. */
   clone?(): FetchResponse;
-  /** Set by `ServiceContext.fetch` on the response it returns: how many requests it took. */
+  /** Set by `ServiceContext.invokeWithRetry` on the response it returns: how many requests it took. */
   retry?: RetryStats;
 }
 
@@ -284,7 +284,8 @@ export type FetchFunction = (
 /**
  * Automatic retry of node responses that guarantee nothing was applied
  * (`NODE_BUSY`, `REQUEST_TIMEOUT`). Applied once, in the service context's
- * `fetch`. Backoff is full-jitter: each delay is uniform in `[0, step]`, where
+ * `invokeWithRetry`, which re-mints the signed invocation per attempt. Backoff
+ * is full-jitter: each delay is uniform in `[0, step]`, where
  * `step` is the strategy's delay capped at `maxDelayMs`. A node `Retry-After`
  * replaces the delay. Opt out with `{ maxAttempts: 1 }`.
  */
@@ -374,6 +375,16 @@ export interface IServiceContext {
   readonly invokeAny?: InvokeAnyFunction;
   /** Fetch function (defaults to globalThis.fetch) */
   readonly fetch: FetchFunction;
+  /**
+   * Send a signed invocation with automatic retry of `NODE_BUSY` /
+   * `REQUEST_TIMEOUT`. `build` is called once per attempt and must mint a
+   * fresh invocation each time (the node answers a repeated one with 409).
+   * Contexts without it send once.
+   */
+  invokeWithRetry?(
+    url: string,
+    build: () => FetchRequestInit | Promise<FetchRequestInit>,
+  ): Promise<FetchResponse>;
   /** Available TinyCloud host URLs */
   readonly hosts: string[];
 

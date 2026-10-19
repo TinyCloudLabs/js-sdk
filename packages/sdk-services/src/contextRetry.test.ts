@@ -43,10 +43,11 @@ async function advance(ms: number) {
   }
 }
 
+const mint = () => ({ method: "POST" });
 const busy = (retryAfter?: string) => () => reply(503, BUSY, retryAfter);
 const ok = () => reply(200, "ok");
 
-describe("ServiceContext node retry", () => {
+describe("ServiceContext.invokeWithRetry", () => {
   beforeEach(() => {
     jest.useFakeTimers();
     spyOn(Math, "random").mockReturnValue(0.5);
@@ -58,7 +59,7 @@ describe("ServiceContext node retry", () => {
 
   test("busy then OK succeeds after one jittered backoff", async () => {
     const node = fakeNode([busy(), ok]);
-    const pending = contextFor(node.fetch).fetch("https://node/invoke");
+    const pending = contextFor(node.fetch).invokeWithRetry("https://node/invoke", mint);
     await advance(124); // 0.5 * 250ms base: not yet
     expect(node.calls).toHaveLength(1);
     await advance(1);
@@ -69,16 +70,16 @@ describe("ServiceContext node retry", () => {
 
   test("reports attempts and total backoff on the returned response", async () => {
     const node = fakeNode([busy("1"), busy("2"), ok]);
-    const pending = contextFor(node.fetch).fetch("https://node/invoke");
+    const pending = contextFor(node.fetch).invokeWithRetry("https://node/invoke", mint);
     await advance(3000);
     expect((await pending).retry).toEqual({ attempts: 3, backoffMs: 3000 });
-    const first = await contextFor(fakeNode([ok]).fetch).fetch("https://node/invoke");
+    const first = await contextFor(fakeNode([ok]).fetch).invokeWithRetry("https://node/invoke", mint);
     expect(first.retry).toEqual({ attempts: 1, backoffMs: 0 });
   });
 
   test("honours Retry-After instead of the jittered backoff", async () => {
     const node = fakeNode([busy("2"), ok]);
-    const pending = contextFor(node.fetch).fetch("https://node/invoke");
+    const pending = contextFor(node.fetch).invokeWithRetry("https://node/invoke", mint);
     await advance(1999);
     expect(node.calls).toHaveLength(1);
     await advance(1);
@@ -88,7 +89,7 @@ describe("ServiceContext node retry", () => {
 
   test("caps Retry-After at the remaining total budget", async () => {
     const node = fakeNode([busy("60"), ok]);
-    const pending = contextFor(node.fetch).fetch("https://node/invoke");
+    const pending = contextFor(node.fetch).invokeWithRetry("https://node/invoke", mint);
     await advance(12000);
     expect((await pending).status).toBe(200);
     expect(node.calls[1] - node.calls[0]).toBe(12000);
@@ -96,7 +97,7 @@ describe("ServiceContext node retry", () => {
 
   test("stops at 4 attempts and returns the final busy response", async () => {
     const node = fakeNode([busy()]);
-    const pending = contextFor(node.fetch).fetch("https://node/invoke");
+    const pending = contextFor(node.fetch).invokeWithRetry("https://node/invoke", mint);
     await advance(12000);
     const response = await pending;
     expect(node.calls).toHaveLength(4);
@@ -107,7 +108,7 @@ describe("ServiceContext node retry", () => {
 
   test("Retry-After waits are cut to the remaining budget across attempts", async () => {
     const node = fakeNode([busy("5")]);
-    const pending = contextFor(node.fetch).fetch("https://node/invoke");
+    const pending = contextFor(node.fetch).invokeWithRetry("https://node/invoke", mint);
     await advance(12000);
     const response = await pending;
     // 0s, 5s, 10s, then the last wait is cut to the 2s left: attempt 4 lands at the 12s budget.
@@ -118,7 +119,7 @@ describe("ServiceContext node retry", () => {
   test("abort mid-backoff rejects at once with the abort reason", async () => {
     const node = fakeNode([busy("10"), ok]);
     const controller = new AbortController();
-    const pending = contextFor(node.fetch).fetch("https://node/invoke", { signal: controller.signal });
+    const pending = contextFor(node.fetch).invokeWithRetry("https://node/invoke", () => ({ signal: controller.signal }));
     const outcome = pending.then(() => "resolved", (e) => e);
     await advance(100);
     const reason = new Error("caller gave up");
@@ -130,14 +131,14 @@ describe("ServiceContext node retry", () => {
 
   test("never retries OUTCOME_UNKNOWN", async () => {
     const node = fakeNode([() => reply(500, "outcome_unknown: commit may have applied"), ok]);
-    const response = await contextFor(node.fetch).fetch("https://node/invoke");
+    const response = await contextFor(node.fetch).invokeWithRetry("https://node/invoke", mint);
     expect(response.status).toBe(500);
     expect(node.calls).toHaveLength(1);
   });
 
   test("retries REQUEST_TIMEOUT", async () => {
     const node = fakeNode([() => reply(503, "request_timeout: deadline passed"), ok]);
-    const pending = contextFor(node.fetch).fetch("https://node/invoke");
+    const pending = contextFor(node.fetch).invokeWithRetry("https://node/invoke", mint);
     await advance(250);
     expect((await pending).status).toBe(200);
   });
@@ -145,21 +146,21 @@ describe("ServiceContext node retry", () => {
   test("does not retry a bodyless 503 or other errors", async () => {
     for (const r of [() => reply(503, ""), () => reply(500, BUSY), () => reply(404, "nope")]) {
       const node = fakeNode([r, ok]);
-      await contextFor(node.fetch).fetch("https://node/invoke");
+      await contextFor(node.fetch).invokeWithRetry("https://node/invoke", mint);
       expect(node.calls).toHaveLength(1);
     }
   });
 
   test("maxAttempts: 1 opts out", async () => {
     const node = fakeNode([busy(), ok]);
-    const response = await contextFor(node.fetch, { maxAttempts: 1 }).fetch("https://node/invoke");
+    const response = await contextFor(node.fetch, { maxAttempts: 1 }).invokeWithRetry("https://node/invoke", mint);
     expect(response.status).toBe(503);
     expect(node.calls).toHaveLength(1);
   });
 
   test("an empty retryableErrors list opts out", async () => {
     const node = fakeNode([busy(), ok]);
-    const response = await contextFor(node.fetch, { retryableErrors: [] }).fetch("https://node/invoke");
+    const response = await contextFor(node.fetch, { retryableErrors: [] }).invokeWithRetry("https://node/invoke", mint);
     expect(response.status).toBe(503);
     expect(node.calls).toHaveLength(1);
   });

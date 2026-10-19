@@ -16,6 +16,8 @@ import {
   TelemetryEvents,
   err,
   Result,
+  FetchRequestInit,
+  FetchResponse,
 } from "../types";
 import { authRequiredError, wrapError, RequestTimeoutError } from "../errors";
 import type { RequestSignal } from "./types";
@@ -261,6 +263,20 @@ export abstract class BaseService implements IService {
     }
 
     return controller.signal;
+  }
+
+  /**
+   * POST a signed invocation, retrying a busy node under the context's retry
+   * policy. `build` mints the invocation and runs once per attempt.
+   */
+  protected async invokeWithRetry(
+    url: string,
+    build: () => FetchRequestInit | Promise<FetchRequestInit>
+  ): Promise<FetchResponse> {
+    if (this.context.invokeWithRetry) {
+      return this.context.invokeWithRetry(url, build);
+    }
+    return this.context.fetch(url, await build());
   }
 
   /**

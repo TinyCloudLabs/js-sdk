@@ -396,23 +396,20 @@ export class DuckDbService extends BaseService implements IDuckDbService {
 
       const request = this.createRequestSignal(options?.signal);
       try {
-        const session = this.context.session!;
-        const headers = this.context.invoke(
-          session,
-          "duckdb",
-          dbName,
-          DuckDbAction.IMPORT
-        );
-
-        const response = await this.context.fetch(`${this.host}/invoke`, {
+        const response = await this.invokeWithRetry(`${this.host}/invoke`, () => ({
           method: "POST",
           headers: {
-            ...(headers as Record<string, string>),
+            ...(this.context.invoke(
+              this.context.session!,
+              "duckdb",
+              dbName,
+              DuckDbAction.IMPORT
+            ) as Record<string, string>),
             "Content-Type": "application/x-duckdb",
           },
           body: new Blob([data]),
           signal: request.signal,
-        });
+        }));
 
         if (!response.ok) {
           return await this.handleErrorResponse(response, "import");
@@ -436,19 +433,23 @@ export class DuckDbService extends BaseService implements IDuckDbService {
     signal: AbortSignal,
     extraHeaders?: Record<string, string>
   ): Promise<FetchResponse> {
-    const session = this.context.session!;
-    const headers = this.context.invoke(session, "duckdb", dbName, action);
+    const payload = JSON.stringify(body);
 
-    return this.context.fetch(`${this.host}/invoke`, {
+    return this.invokeWithRetry(`${this.host}/invoke`, () => ({
       method: "POST",
       headers: {
-        ...(headers as Record<string, string>),
+        ...(this.context.invoke(
+          this.context.session!,
+          "duckdb",
+          dbName,
+          action
+        ) as Record<string, string>),
         "Content-Type": "application/json",
         ...extraHeaders,
       },
-      body: JSON.stringify(body),
+      body: payload,
       signal,
-    });
+    }));
   }
 
   private async handleErrorResponse(
