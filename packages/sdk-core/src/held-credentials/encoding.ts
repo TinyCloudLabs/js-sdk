@@ -57,7 +57,8 @@ export function isObject(value: unknown): value is { [key: string]: Json } {
 /** Deepest nesting `parseStrictJson` accepts. Held credentials are at most three levels deep. */
 export const MAX_JSON_DEPTH = 8;
 
-const JSON_LITERAL = /true|false|null|-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?/y;
+/** Numbers are integers in plain form only: no fraction (`1.0`), no exponent (`1e3`), no `-0`. */
+const JSON_LITERAL = /true|false|null|-?(?:0|[1-9]\d*)(?![\d.eE])/y;
 
 /**
  * JSON parser that refuses duplicate object keys anywhere (JSON.parse silently keeps the last).
@@ -118,6 +119,7 @@ export function parseStrictJson(text: string, code: HeldCredentialErrorCode): Js
     JSON_LITERAL.lastIndex = i;
     const literal = JSON_LITERAL.exec(text);
     if (!literal) return fail("unexpected token");
+    if (literal[0] === "-0") fail("-0 is not accepted");
     i += literal[0].length;
     return JSON.parse(literal[0]) as Json;
   };

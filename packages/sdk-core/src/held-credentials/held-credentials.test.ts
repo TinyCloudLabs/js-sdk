@@ -652,3 +652,23 @@ describe("TC-1540 Miller 3: strict UTF-8", () => {
     }
   });
 });
+
+describe("TC-1540 Miller 4: integers only", () => {
+  const signedRaw = async (rewrite: (json: string) => string) => {
+    const h = harness();
+    const input = `${enc({ alg: "EdDSA", typ: "vc+sd-jwt", kid: KID_A })}.${enc(rewrite(JSON.stringify(makeCredential().payload)))}`;
+    return presentRaw(h, `${input}.${encodeBase64Url(ed25519.sign(asciiBytes(input), SEED_A))}~${makeCredential().sdJwt.split("~").slice(1).join("~")}`);
+  };
+  test("1.0, 1e3 and -0 are refused as numbers; plain integers still verify", async () => {
+    const iat = (makeCredential().payload.iat as number);
+    expect(await signedRaw((j) => j.replace(`"iat":${iat}`, `"iat":${iat}.0`))).toBe("bad-payload");
+    expect(await signedRaw((j) => j.replace(/"exp":(\d+)/, (_, n) => `"exp":${n}.0`))).toBe("bad-payload");
+    expect(await signedRaw((j) => j.replace(/"nbf":(\d+)/, (_, n) => `"nbf":${n}e0`))).toBe("bad-payload");
+    expect(await signedRaw((j) => j.replace('"profileVersion":1', '"profileVersion":-0'))).toBe("bad-payload");
+    expect(await signedRaw((j) => j)).toBe("ok");
+  });
+  test("parseStrictJson number forms", () => {
+    for (const bad of ["1.0", "1e3", "1E3", "1.5", "-0", "01", "-", "1.", "[1.0]"]) expect(() => parseStrictJson(bad, "bad-payload")).toThrow(HeldCredentialError);
+    for (const good of ["0", "-1", "123456789", "[0,1,-2]"]) expect(() => parseStrictJson(good, "bad-payload")).not.toThrow();
+  });
+});
