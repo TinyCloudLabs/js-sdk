@@ -1,5 +1,11 @@
 # @tinycloud/mcp
 
+## 0.6.1-beta.27
+
+### Patch Changes
+
+- 4dd842f: Update jose to 6.2.4.
+
 ## 0.6.1-beta.26
 
 ### Patch Changes
