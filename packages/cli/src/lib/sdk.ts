@@ -11,14 +11,7 @@ import { ownerSessionLacksProof } from "@tinycloud/operations/profile";
 import { recordWarnings } from "../output/warnings.js";
 import { delegationExpiredError } from "../auth/delegation-expiry.js";
 
-/**
- * Retry policy override for monitors and probes: `--no-retry` (which sets it) or
- * `TINYCLOUD_RETRY=0` makes every request single-attempt, so the node's honest
- * `NODE_BUSY` is seen instead of a slow success.
- */
-export function cliRetryPolicy(): { retryPolicy?: { maxAttempts: number } } {
-  return process.env.TINYCLOUD_RETRY === "0" ? { retryPolicy: { maxAttempts: 1 } } : {};
-}
+import { cliRetryPolicy } from "./retry-policy.js";
 import { createCliReplicationConfig } from "./replication-config.js";
 import { registerReplication } from "./replication-registry.js";
 import { assertPendingRemoteLogoutSession, recoverPendingLogout } from "./logout-pending.js";

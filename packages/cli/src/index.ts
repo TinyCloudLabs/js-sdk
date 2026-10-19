@@ -15,6 +15,7 @@ import { ProfileManager } from "./config/profiles.js";
 import { configureShareCommandServices, registerShareCommand } from "./commands/share.js";
 import { createShareAuthorityAdapters } from "./share/adapters.js";
 import { loadCourierEntry } from "./lib/courier-loader.js";
+import { applyNoRetryFlag } from "./lib/retry-policy.js";
 
 const program = new Command();
 const shareAuthority = createShareAuthorityAdapters({
@@ -52,7 +53,7 @@ program
 program.hook("preAction", async (thisCommand) => {
   const opts = thisCommand.optsWithGlobals();
   setJsonOutputRequested(opts.json === true);
-  if (opts.retry === false) process.env.TINYCLOUD_RETRY = "0";
+  applyNoRetryFlag(opts);
   const parentName = thisCommand.parent?.name();
   const isShareCommand = parentName === "share" || thisCommand.name() === "share";
   if (!opts.quiet && !isShareCommand) {
