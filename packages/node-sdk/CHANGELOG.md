@@ -1,5 +1,11 @@
 # @tinycloudlabs/node-sdk
 
+## 3.3.0-beta.21
+
+### Patch Changes
+
+- @tinycloud/sdk-core@3.3.0-beta.21
+
 ## 3.3.0-beta.20
 
 ### Minor Changes

@@ -23736,6 +23736,20 @@ var v3TargetSchema = external_exports.object({
   nodeAudience: external_exports.string().min(1),
   spaceId: external_exports.string().refine(isCanonicalPathSegment, { message: "expected a canonical space id" })
 }).strict();
+var ARTIFACT_ID_PATTERN = /^[a-z0-9][a-z0-9_-]{2,62}$/;
+var artifactPinSchema = external_exports.object({
+  v: external_exports.literal(1),
+  artifactId: external_exports.string().regex(ARTIFACT_ID_PATTERN),
+  version: external_exports.number().int().min(1).max(Number.MAX_SAFE_INTEGER),
+  /** SHA-256 (lowercase hex) of the exact `manifest.json` bytes. The manifest itself stays an owner-side record. */
+  manifestSha256: external_exports.string().regex(/^[0-9a-f]{64}$/),
+  /** An addressed share reads one exact file, so exactly one entry: the stored bytes (ciphertext) it will fetch. */
+  files: external_exports.array(external_exports.object({
+    path: external_exports.string().min(1).max(255),
+    sha256: external_exports.string().regex(/^[0-9a-f]{64}$/),
+    bytes: external_exports.number().int().nonnegative()
+  }).strict()).length(1)
+}).strict();
 var unsignedShareEnvelopeV3BaseSchema = external_exports.object({
   version: external_exports.literal(3),
   shareId: external_exports.string().min(1),
@@ -23755,7 +23769,13 @@ var unsignedShareEnvelopeV3BaseSchema = external_exports.object({
   expiry: external_exports.string().datetime({ offset: true }),
   display: displaySchema,
   encrypted: external_exports.literal(true),
-  metadata: contentMetadataSchema
+  metadata: contentMetadataSchema,
+  /**
+   * TC-1428: an owner-signed statement that this share reads one write-once artifact version. Additive: absent on
+   * every other share, and covered by the envelope signature because the signature spans the whole unsigned object.
+   * The shape is checked here; its binding to the content source is `verifyArtifactShare` in share-sdk.
+   */
+  artifactPin: artifactPinSchema.optional()
 }).strict();
 function validateV3Invariants(value, ctx) {
   const actions = [...value.actions];
@@ -23791,6 +23811,12 @@ var shareEnvelopeV3Schema = unsignedShareEnvelopeV3BaseSchema.extend({ signature
 var ENVELOPE_AAD_LABEL = "tinycloud-share-envelope-v1";
 var AAD = utf8Bytes(ENVELOPE_AAD_LABEL);
 var MAX_INLINE_BYTES = 256 * 1024;
+var ARTIFACT_ROOT = "artifacts";
+function parseArtifactVersionPath(path) {
+  const match = /^artifacts\/([a-z0-9][a-z0-9_-]{2,62})\/versions\/([1-9][0-9]{0,14})\/([^/]+)$/.exec(path);
+  if (match === null) return void 0;
+  return { artifactId: match[1], version: Number(match[2]), file: match[3] };
+}
 var UNSAFE_FILENAME_CODE_POINT = /[\p{Cc}\p{Cf}\p{Cs}\u2028\u2029]/u;
 function hasUnsafeFilenameCodePoint(value) {
   return UNSAFE_FILENAME_CODE_POINT.test(value);
@@ -23802,7 +23828,9 @@ function canonicalShareFilename(value) {
   }
   return canonical;
 }
-var ARTIFACT_ROOT = "artifacts";
+function sha256Hex(bytes) {
+  return Array.from(sha2562(bytes), (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
 var ARTIFACT_MANIFEST_NAME = "manifest.json";
 var ARTIFACT_MANIFEST_VERSION = 1;
 var ARTIFACT_ID = /^[a-z0-9][a-z0-9_-]{2,62}$/;
@@ -23815,9 +23843,6 @@ var ArtifactError = class extends Error {
     this.code = code22;
   }
 };
-function sha256Hex(bytes) {
-  return Array.from(sha2562(bytes), (byte) => byte.toString(16).padStart(2, "0")).join("");
-}
 function newArtifactId(random = (length23) => crypto.getRandomValues(new Uint8Array(length23))) {
   return `art_${Array.from(random(8), (byte) => byte.toString(16).padStart(2, "0")).join("")}`;
 }
@@ -23839,11 +23864,6 @@ function artifactVersionResource(artifactId, version) {
 }
 function artifactVersionFilePath(artifactId, version, filename) {
   return `${artifactVersionResource(artifactId, version)}/${filename}`;
-}
-function parseArtifactVersionPath(path) {
-  const match = /^artifacts\/([a-z0-9][a-z0-9_-]{2,62})\/versions\/([1-9][0-9]{0,14})\/([^/]+)$/.exec(path);
-  if (match === null) return void 0;
-  return { artifactId: match[1], version: Number(match[2]), file: match[3] };
 }
 function parseArtifactManifest(bytes) {
   let value;
@@ -29216,6 +29236,20 @@ var v3TargetSchema2 = external_exports2.object({
   nodeAudience: external_exports2.string().min(1),
   spaceId: external_exports2.string().refine(isCanonicalPathSegment2, { message: "expected a canonical space id" })
 }).strict();
+var ARTIFACT_ID_PATTERN2 = /^[a-z0-9][a-z0-9_-]{2,62}$/;
+var artifactPinSchema2 = external_exports2.object({
+  v: external_exports2.literal(1),
+  artifactId: external_exports2.string().regex(ARTIFACT_ID_PATTERN2),
+  version: external_exports2.number().int().min(1).max(Number.MAX_SAFE_INTEGER),
+  /** SHA-256 (lowercase hex) of the exact `manifest.json` bytes. The manifest itself stays an owner-side record. */
+  manifestSha256: external_exports2.string().regex(/^[0-9a-f]{64}$/),
+  /** An addressed share reads one exact file, so exactly one entry: the stored bytes (ciphertext) it will fetch. */
+  files: external_exports2.array(external_exports2.object({
+    path: external_exports2.string().min(1).max(255),
+    sha256: external_exports2.string().regex(/^[0-9a-f]{64}$/),
+    bytes: external_exports2.number().int().nonnegative()
+  }).strict()).length(1)
+}).strict();
 var unsignedShareEnvelopeV3BaseSchema2 = external_exports2.object({
   version: external_exports2.literal(3),
   shareId: external_exports2.string().min(1),
@@ -29235,7 +29269,13 @@ var unsignedShareEnvelopeV3BaseSchema2 = external_exports2.object({
   expiry: external_exports2.string().datetime({ offset: true }),
   display: displaySchema2,
   encrypted: external_exports2.literal(true),
-  metadata: contentMetadataSchema2
+  metadata: contentMetadataSchema2,
+  /**
+   * TC-1428: an owner-signed statement that this share reads one write-once artifact version. Additive: absent on
+   * every other share, and covered by the envelope signature because the signature spans the whole unsigned object.
+   * The shape is checked here; its binding to the content source is `verifyArtifactShare` in share-sdk.
+   */
+  artifactPin: artifactPinSchema2.optional()
 }).strict();
 function validateV3Invariants2(value, ctx) {
   const actions = [...value.actions];
@@ -29579,6 +29619,80 @@ async function parseSealedInlineShareUrl(url, options = {}) {
   if (await computeCid(ciphertext) !== record2.cid) throw new TypeError("sealed inline ciphertext does not match its CID");
   return { kind: "inline", ciphertextCid: record2.cid, ciphertext, key32 };
 }
+var ARTIFACT_ROOT2 = "artifacts";
+function parseArtifactVersionPath2(path) {
+  const match = /^artifacts\/([a-z0-9][a-z0-9_-]{2,62})\/versions\/([1-9][0-9]{0,14})\/([^/]+)$/.exec(path);
+  if (match === null) return void 0;
+  return { artifactId: match[1], version: Number(match[2]), file: match[3] };
+}
+var ArtifactPinError = class extends Error {
+  code;
+  /** The code is the message: stable, short, and what callers and tests match on. */
+  constructor(code32) {
+    super(code32);
+    this.name = "ArtifactPinError";
+    this.code = code32;
+  }
+};
+function artifactBindingView(envelope) {
+  return {
+    ...envelope.artifactPin === void 0 ? {} : { artifactPin: envelope.artifactPin },
+    target: envelope.target,
+    contentSource: envelope.contentSource,
+    resource: envelope.resource,
+    actions: envelope.actions,
+    policyKvActions: envelope.policy.capabilityCeiling.flatMap((capability) => capability.kind === "kv" ? capability.actions : [])
+  };
+}
+function sourcePath(view) {
+  const resource = view.contentSource.kvResource;
+  const marker = "/kv/";
+  const at = resource.indexOf(marker);
+  if (at <= 0 || resource.slice(0, at) !== view.target.spaceId) {
+    throw new ArtifactPinError("pin-source-mismatch");
+  }
+  return resource.slice(at + marker.length);
+}
+function assertArtifactBinding(view, expected = {}) {
+  const pin = view.artifactPin;
+  const path = sourcePath(view);
+  const inArtifacts = path === ARTIFACT_ROOT2 || path.startsWith(`${ARTIFACT_ROOT2}/`);
+  if (!inArtifacts) {
+    if (pin !== void 0) throw new ArtifactPinError("pin-source-mismatch");
+    return void 0;
+  }
+  if (pin === void 0) throw new ArtifactPinError("missing-pin");
+  const parsed = parseArtifactVersionPath2(path);
+  if (parsed === void 0) throw new ArtifactPinError("unsupported-artifact-path");
+  const file = pin.files[0];
+  const source = view.contentSource;
+  if (
+    // The stored ciphertext of one file: bounded like content (100 MiB) plus the envelope's own framing.
+    file.bytes > 128 * 1024 * 1024 || pin.artifactId !== parsed.artifactId || pin.version !== parsed.version || file.path !== parsed.file || view.resource.kind !== "exact" || view.resource.path !== path || source.selector !== "exact" || source.mode !== "immutable" || source.initialCiphertextDigestHex !== file.sha256
+  ) {
+    throw new ArtifactPinError("pin-source-mismatch");
+  }
+  if (view.actions.includes("edit") || view.policyKvActions.includes("tinycloud.kv/put")) {
+    throw new ArtifactPinError("pinned-share-writable");
+  }
+  if (expected.artifactId !== void 0 && expected.artifactId !== pin.artifactId || expected.version !== void 0 && expected.version !== pin.version) {
+    throw new ArtifactPinError("expectation-mismatch");
+  }
+  return pin;
+}
+function verifyArtifactShare(envelope, options) {
+  if (envelope.signature.signerDid !== options.expectedOwnerDid) {
+    throw new ArtifactPinError("wrong-signer");
+  }
+  let valid;
+  try {
+    valid = verifyEnvelopeV3SignatureOnly(envelope) && envelope.policy.ownerDid === options.expectedOwnerDid;
+  } catch {
+    valid = false;
+  }
+  if (!valid) throw new ArtifactPinError("bad-signature");
+  return assertArtifactBinding(artifactBindingView(envelope), options.expected);
+}
 var SHARE_RESULT_VERSION = 1;
 var DEFAULT_MAX_SEALED_BLOB_BYTES = 100 * 1024 * 1024 + 29;
 var ShareReceiveError = class extends Error {
@@ -29609,7 +29723,8 @@ function metadataFor(envelope, origin) {
       ...envelope.display.senderName === void 0 ? {} : { senderName: envelope.display.senderName },
       ...envelope.display.filename === void 0 ? {} : { filename: envelope.display.filename },
       ...envelope.display.mode === void 0 ? {} : { mode: envelope.display.mode }
-    }
+    },
+    ...envelope.artifactPin === void 0 ? {} : { artifact: { id: envelope.artifactPin.artifactId, version: envelope.artifactPin.version } }
   };
 }
 async function resolvePolicyShare(link3, options) {
@@ -29639,6 +29754,12 @@ async function resolvePolicyShare(link3, options) {
     if (!await verifyEnvelopeV3(envelope, { expectedSignerDid: envelope.policy.ownerDid })) throw new Error("signature");
   } catch {
     throw new ShareReceiveError("signature-invalid", "share signature is invalid");
+  }
+  try {
+    verifyArtifactShare(envelope, { expectedOwnerDid: envelope.policy.ownerDid });
+  } catch (error) {
+    if (!(error instanceof ArtifactPinError)) throw error;
+    throw new ShareReceiveError("envelope-invalid", `share artifact pin is invalid (${error.code})`);
   }
   options.signal?.throwIfAborted();
   const expiry = Date.parse(envelope.expiry);
@@ -36148,6 +36269,20 @@ var v3TargetSchema3 = external_exports3.object({
   nodeAudience: external_exports3.string().min(1),
   spaceId: external_exports3.string().refine(isCanonicalPathSegment3, { message: "expected a canonical space id" })
 }).strict();
+var ARTIFACT_ID_PATTERN3 = /^[a-z0-9][a-z0-9_-]{2,62}$/;
+var artifactPinSchema3 = external_exports3.object({
+  v: external_exports3.literal(1),
+  artifactId: external_exports3.string().regex(ARTIFACT_ID_PATTERN3),
+  version: external_exports3.number().int().min(1).max(Number.MAX_SAFE_INTEGER),
+  /** SHA-256 (lowercase hex) of the exact `manifest.json` bytes. The manifest itself stays an owner-side record. */
+  manifestSha256: external_exports3.string().regex(/^[0-9a-f]{64}$/),
+  /** An addressed share reads one exact file, so exactly one entry: the stored bytes (ciphertext) it will fetch. */
+  files: external_exports3.array(external_exports3.object({
+    path: external_exports3.string().min(1).max(255),
+    sha256: external_exports3.string().regex(/^[0-9a-f]{64}$/),
+    bytes: external_exports3.number().int().nonnegative()
+  }).strict()).length(1)
+}).strict();
 var unsignedShareEnvelopeV3BaseSchema3 = external_exports3.object({
   version: external_exports3.literal(3),
   shareId: external_exports3.string().min(1),
@@ -36167,7 +36302,13 @@ var unsignedShareEnvelopeV3BaseSchema3 = external_exports3.object({
   expiry: external_exports3.string().datetime({ offset: true }),
   display: displaySchema3,
   encrypted: external_exports3.literal(true),
-  metadata: contentMetadataSchema3
+  metadata: contentMetadataSchema3,
+  /**
+   * TC-1428: an owner-signed statement that this share reads one write-once artifact version. Additive: absent on
+   * every other share, and covered by the envelope signature because the signature spans the whole unsigned object.
+   * The shape is checked here; its binding to the content source is `verifyArtifactShare` in share-sdk.
+   */
+  artifactPin: artifactPinSchema3.optional()
 }).strict();
 function validateV3Invariants3(value, ctx) {
   const actions = [...value.actions];
