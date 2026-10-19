@@ -696,6 +696,21 @@ function describeHostFailure(result: SpaceHostResult): string {
   return text ? `${result.status} - ${text}` : `${result.status}`;
 }
 
+/**
+ * Throws if activation failed. With `requireActivation`, also throws when the node answered 200 but
+ * skipped a space the delegation targets (it registers the delegation without attaching it).
+ */
+function assertDelegationActivated(result: SpaceHostResult, delegation: PortableDelegation, requireActivation: boolean): void {
+  const skipped = requireActivation
+    ? (delegation.resources?.map((r) => r.space) ?? [delegation.spaceId]).filter((space) => result.skipped?.includes(space))
+    : [];
+  if (result.success && skipped.length === 0) return;
+  const detail = result.success
+    ? `the node skipped ${[...new Set(skipped)].join(", ")} (space not hosted on the node)`
+    : describeHostFailure(result);
+  throw Object.assign(new Error(`Failed to activate delegation with host: ${detail}`), { cause: result });
+}
+
 function ownerDelegationPermissions(
   params: CreateOwnerDelegationParams,
 ): OwnerDelegationPermission[] {
@@ -972,6 +987,12 @@ export interface DelegateToOptions {
    * recipient (use its session-key DID). Default false.
    */
   disableSubDelegation?: boolean;
+  /**
+   * Throw when the node answers 200 but skips a space the delegation targets (a space it does not
+   * host): it registers the delegation without attaching it, which otherwise looks like success.
+   * Off by default because grants to a not-yet-hosted space (e.g. secrets) are valid. Default false.
+   */
+  requireActivation?: boolean;
 }
 
 /**
@@ -1829,7 +1850,6 @@ export class TinyCloudNode {
         if (!this.wasmBindings.computeCid) throw new Error("computeCid is unavailable");
         return this.wasmBindings.computeCid(data, codec);
       },
-      // delegationManager: undefined - not needed for receive()
       createKVService: (config) => {
         // Use pathPrefix as the KV service prefix for sharing links
         // Strip trailing slash to match DelegatedAccess behavior
@@ -4416,7 +4436,6 @@ export class TinyCloudNode {
     });
     sharingService.updateConfig({
       session: input.serviceSession,
-      delegationManager,
       sessionExpiry: input.sessionExpiry,
       createDelegationWasm: (params) => {
         graph.assertActive();
@@ -5528,7 +5547,6 @@ export class TinyCloudNode {
       assertActive: () => graph.assertActive(),
       keyProvider: this._keyProvider,
       registry: this._capabilityRegistry,
-      delegationManager: this._delegationManager,
       sessionExpiry: this.getSessionExpiry(),
       createDelegationWasm: (params) => {
         graph.assertActive();
@@ -6694,16 +6712,8 @@ export class TinyCloudNode {
    * ```typescript
    * const delegations = alice.delegationManager;
    *
-   * // Create a delegation
-   * const result = await delegations.create({
-   *   delegateDID: bob.did,
-   *   path: "shared/",
-   *   actions: ["tinycloud.kv/get", "tinycloud.kv/put"],
-   *   expiry: new Date(Date.now() + 24 * 60 * 60 * 1000), // 24 hours
-   * });
-   *
-   * // List delegations
-   * const listResult = await delegations.list();
+   * // Query account delegations
+   * const page = await delegations.query();
    *
    * // Revoke a delegation
    * await delegations.revoke(delegationCid);
@@ -6938,33 +6948,6 @@ export class TinyCloudNode {
   // ===========================================================================
 
   /**
-   * Create a delegation using the v2 DelegationManager.
-   *
-   * This is a convenience method that wraps DelegationManager.create().
-   * For more control, use `this.delegationManager` directly.
-   *
-   * @param params - Delegation parameters
-   * @returns Result containing the created Delegation
-   *
-   * @example
-   * ```typescript
-   * const result = await alice.delegate({
-   *   delegateDID: bob.did,
-   *   path: "shared/",
-   *   actions: ["tinycloud.kv/get", "tinycloud.kv/put"],
-   *   expiry: new Date(Date.now() + 24 * 60 * 60 * 1000),
-   * });
-   *
-   * if (result.ok) {
-   *   console.log("Delegation created:", result.data.cid);
-   * }
-   * ```
-   */
-  async delegate(params: CreateDelegationParams): Promise<DelegationResult<Delegation>> {
-    return this.delegationManager.create(params);
-  }
-
-  /**
    * Revoke a delegation with the owner wallet when available. Session-only
    * clients continue to use their delegated revocation authority.
    *
@@ -6992,15 +6975,6 @@ export class TinyCloudNode {
         : decodeAuthorizationBytes(authorization),
       0x55n,
     );
-  }
-
-  /**
-   * List all delegations for the current session's space.
-   *
-   * @returns Result containing an array of Delegations
-   */
-  async listDelegations(): Promise<DelegationResult<Delegation[]>> {
-    return this.delegationManager.list();
   }
 
   /**
@@ -7187,6 +7161,7 @@ export class TinyCloudNode {
         plan.operations,
         onPrepared,
         options?.disableSubDelegation === true,
+        options?.requireActivation === true,
       );
       return { delegation, prompted: false };
     }
@@ -7204,6 +7179,7 @@ export class TinyCloudNode {
       session,
       onPrepared,
       options?.disableSubDelegation === true,
+      options?.requireActivation === true,
     );
     return { delegation, prompted: false };
   }
@@ -7498,6 +7474,7 @@ export class TinyCloudNode {
     session: TinyCloudSession,
     onPrepared?: DelegateToOptions["onPrepared"],
     disableSubDelegation = false,
+    requireActivation = false,
   ): Promise<PortableDelegation> {
     if (entries.length === 0) {
       throw new Error(
@@ -7625,12 +7602,7 @@ export class TinyCloudNode {
       this.config.host!,
       delegationHeader,
     );
-    if (!activateResult.success) {
-      throw Object.assign(
-        new Error(`Failed to activate delegation with host: ${describeHostFailure(activateResult)}`),
-        { cause: activateResult },
-      );
-    }
+    assertDelegationActivated(activateResult, delegation, requireActivation);
 
     return delegation;
   }
@@ -7643,6 +7615,7 @@ export class TinyCloudNode {
     requestedOperations: RuntimePermissionOperation[],
     onPrepared?: DelegateToOptions["onPrepared"],
     disableSubDelegation = false,
+    requireActivation = false,
   ): Promise<PortableDelegation> {
     this.assertRuntimeGrantCaveatsPreservable(entries, requestedOperations, grant);
     this.assertDelegationCaveatsPreservable(entries);
@@ -7680,12 +7653,7 @@ export class TinyCloudNode {
       targetHost,
       delegationHeader,
     );
-    if (!activateResult.success) {
-      throw Object.assign(
-        new Error(`Failed to activate delegation with host: ${describeHostFailure(activateResult)}`),
-        { cause: activateResult },
-      );
-    }
+    assertDelegationActivated(activateResult, delegation, requireActivation);
 
     return delegation;
   }

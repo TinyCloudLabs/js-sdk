@@ -1,7 +1,7 @@
 /**
  * DelegationManager - Handles delegation CRUD operations.
  *
- * This class manages the creation, revocation, listing, and querying
+ * This class manages the revocation, status, and querying
  * of delegations within TinyCloud. It extracts and improves upon the
  * delegation functionality previously in ITinyCloudStorage.
  *
@@ -29,18 +29,14 @@ import {
   AccountDelegationPageSchema,
   AccountDelegationQueryOptionsSchema,
   AccountDelegationQueryOptions,
-  CreateDelegationParams,
   DelegationChain,
   DelegationManagerConfig,
-  DelegationApiResponse,
 } from "./types";
-import { EXPIRY } from "../expiry";
 
 /**
  * Delegation action constants.
  */
 const DelegationAction = {
-  CREATE: "tinycloud.delegation/create",
   REVOKE: "tinycloud.delegation/revoke",
   STATUS: "tinycloud.delegation/status",
   LIST: "tinycloud.delegation/list",
@@ -67,6 +63,27 @@ function createError(
 }
 
 /**
+ * Parses the JSON body of an `/invoke` response. The node answers an
+ * invocation it has no handler for with an empty 2xx body; report that as an
+ * unsupported operation rather than letting JSON.parse throw.
+ */
+async function readInvokedJson<T>(response: FetchResponse, action: string): Promise<Result<T>> {
+  const text = await response.text();
+  if (text.trim() === "") {
+    return {
+      ok: false,
+      error: createError(
+        DelegationErrorCodes.UNSUPPORTED_OPERATION,
+        `The node answered ${action} with an empty ${response.status} response; it does not support this operation`,
+        undefined,
+        { status: response.status, action },
+      ),
+    };
+  }
+  return { ok: true, data: JSON.parse(text) as T };
+}
+
+/**
  * DelegationManager handles all delegation-related operations.
  *
  * @example
@@ -79,16 +96,11 @@ function createError(
  *   invoke,
  * });
  *
- * // Create a delegation
- * const result = await delegations.create({
- *   delegateDID: "did:pkh:eip155:1:0x...",
- *   path: "shared/",
- *   actions: ["tinycloud.kv/get", "tinycloud.kv/list"],
- *   expiry: new Date(Date.now() + 24 * 60 * 60 * 1000), // 24 hours
- * });
+ * // Revoke a delegation
+ * const result = await delegations.revoke("bafy...");
  *
  * if (result.ok) {
- *   console.log("Created delegation:", result.data.cid);
+ *   console.log("Revoked");
  * }
  * ```
  */
@@ -147,124 +159,6 @@ export class DelegationManager {
       headers,
       body,
     });
-  }
-
-  /**
-   * Creates a new delegation.
-   *
-   * Delegates specific permissions to another DID for a given path.
-   * The delegatee can then use these permissions to access resources
-   * within the specified scope.
-   *
-   * @param params - Parameters for the delegation
-   * @returns Result containing the created Delegation or an error
-   *
-   * @example
-   * ```typescript
-   * const result = await manager.create({
-   *   delegateDID: bob.did,
-   *   path: "documents/shared/",
-   *   actions: ["tinycloud.kv/get", "tinycloud.kv/put"],
-   *   expiry: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000), // 7 days
-   * });
-   * ```
-   */
-  async create(params: CreateDelegationParams): Promise<Result<Delegation>> {
-    // Validate inputs
-    if (!params.delegateDID) {
-      return {
-        ok: false,
-        error: createError(
-          DelegationErrorCodes.INVALID_INPUT,
-          "delegateDID is required"
-        ),
-      };
-    }
-
-    if (!params.path) {
-      return {
-        ok: false,
-        error: createError(
-          DelegationErrorCodes.INVALID_INPUT,
-          "path is required"
-        ),
-      };
-    }
-
-    if (!params.actions || params.actions.length === 0) {
-      return {
-        ok: false,
-        error: createError(
-          DelegationErrorCodes.INVALID_INPUT,
-          "at least one action is required"
-        ),
-      };
-    }
-
-    try {
-      const body = JSON.stringify({
-        delegateDID: params.delegateDID,
-        path: params.path,
-        actions: params.actions,
-        expiry: params.expiry?.toISOString(),
-        disableSubDelegation: params.disableSubDelegation ?? false,
-        statement: params.statement,
-      });
-
-      const response = await this.invokeOperation(
-        params.path,
-        DelegationAction.CREATE,
-        body
-      );
-
-      if (!response.ok) {
-        const errorText = await response.text();
-        return {
-          ok: false,
-          error: createError(
-            DelegationErrorCodes.CREATION_FAILED,
-            `Failed to create delegation: ${response.status} - ${errorText}`,
-            undefined,
-            { status: response.status, path: params.path }
-          ),
-        };
-      }
-
-      const apiResponse = (await response.json()) as DelegationApiResponse;
-
-      const delegation: Delegation = {
-        cid: apiResponse.cid ?? "",
-        delegateDID: params.delegateDID,
-        spaceId: this.session.spaceId,
-        path: params.path,
-        actions: params.actions,
-        expiry: params.expiry ?? new Date(Date.now() + EXPIRY.SHARE_MS),
-        isRevoked: false,
-        allowSubDelegation: !(params.disableSubDelegation ?? false),
-        createdAt: new Date(),
-      };
-
-      return { ok: true, data: delegation };
-    } catch (error) {
-      if (error instanceof Error && error.name === "AbortError") {
-        return {
-          ok: false,
-          error: createError(
-            DelegationErrorCodes.ABORTED,
-            "Request aborted",
-            error
-          ),
-        };
-      }
-      return {
-        ok: false,
-        error: createError(
-          DelegationErrorCodes.NETWORK_ERROR,
-          `Network error during delegation creation: ${String(error)}`,
-          error instanceof Error ? error : undefined
-        ),
-      };
-    }
   }
 
   /**
@@ -519,19 +413,37 @@ export class DelegationManager {
       };
     }
     try {
-      const invocationHeaders = this.invokeAny(this.session, [{
-        spaceId: accountSpaceId,
-        service: "delegation",
-        path: "",
-        action: DelegationAction.LIST,
-      }]);
-      const headers = Object.fromEntries(new Headers(invocationHeaders).entries());
-      headers["content-type"] = "application/json";
-      const response = await this.fetchFn(`${this.host}/delegation/query`, {
-        method: "POST",
-        headers,
-        body: JSON.stringify(validated.data),
-      });
+      // The node reads the account from the space's owner DID only, so delegation/list on any of the
+      // owner's spaces works. Sign for the account space if the session holds it there, else for the
+      // session's own space (a plain OpenKey login grants only that one).
+      let response: FetchResponse | undefined;
+      for (const spaceId of new Set([accountSpaceId, this.session.spaceId])) {
+        // A signing failure is not a permission refusal: it propagates as a typed error below.
+        const headers = Object.fromEntries(new Headers(this.invokeAny(this.session, [{
+          spaceId,
+          service: "delegation",
+          path: "",
+          action: DelegationAction.LIST,
+        }])).entries());
+        headers["content-type"] = "application/json";
+        response = await this.fetchFn(`${this.host}/delegation/query`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify(validated.data),
+        });
+        if (response.status !== 403) break;
+      }
+      if (!response || response.status === 403) {
+        return {
+          ok: false,
+          error: createError(
+            DelegationErrorCodes.PERMISSION_DENIED,
+            "This session does not hold tinycloud.delegation/list on the account space or its own space",
+            undefined,
+            { status: 403 },
+          ),
+        };
+      }
       if (!response.ok) {
         const errorText = await response.text();
         return {
@@ -562,92 +474,6 @@ export class DelegationManager {
           DelegationErrorCodes.NETWORK_ERROR,
           `Network error during delegation query: ${String(error)}`,
           error instanceof Error ? error : undefined,
-        ),
-      };
-    }
-  }
-
-  /**
-   * Lists all delegations for the current session's space.
-   *
-   * Returns both delegations created by the current user (as delegator)
-   * and delegations granted to the current user (as delegatee).
-   *
-   * @returns Result containing an array of Delegations or an error
-   *
-   * @example
-   * ```typescript
-   * const result = await manager.list();
-   * if (result.ok) {
-   *   for (const delegation of result.data) {
-   *     console.log(`${delegation.cid}: ${delegation.path} -> ${delegation.delegateDID}`);
-   *   }
-   * }
-   * ```
-   */
-  async list(): Promise<Result<Delegation[]>> {
-    try {
-      const response = await this.invokeOperation("", DelegationAction.LIST);
-
-      if (!response.ok) {
-        const errorText = await response.text();
-        return {
-          ok: false,
-          error: createError(
-            DelegationErrorCodes.NETWORK_ERROR,
-            `Failed to list delegations: ${response.status} - ${errorText}`,
-            undefined,
-            { status: response.status }
-          ),
-        };
-      }
-
-      const data = (await response.json()) as Array<{
-        cid: string;
-        delegateDID: string;
-        delegatorDID?: string;
-        spaceId: string;
-        path: string;
-        actions: string[];
-        expiry: string;
-        isRevoked: boolean;
-        createdAt?: string;
-        parentCid?: string;
-        allowSubDelegation?: boolean;
-      }>;
-
-      const delegations: Delegation[] = data.map((item) => ({
-        cid: item.cid,
-        delegateDID: item.delegateDID,
-        delegatorDID: item.delegatorDID,
-        spaceId: item.spaceId,
-        path: item.path,
-        actions: item.actions,
-        expiry: new Date(item.expiry),
-        isRevoked: item.isRevoked,
-        createdAt: item.createdAt ? new Date(item.createdAt) : undefined,
-        parentCid: item.parentCid,
-        allowSubDelegation: item.allowSubDelegation,
-      }));
-
-      return { ok: true, data: delegations };
-    } catch (error) {
-      if (error instanceof Error && error.name === "AbortError") {
-        return {
-          ok: false,
-          error: createError(
-            DelegationErrorCodes.ABORTED,
-            "Request aborted",
-            error
-          ),
-        };
-      }
-      return {
-        ok: false,
-        error: createError(
-          DelegationErrorCodes.NETWORK_ERROR,
-          `Network error during delegation list: ${String(error)}`,
-          error instanceof Error ? error : undefined
         ),
       };
     }
@@ -717,7 +543,7 @@ export class DelegationManager {
         };
       }
 
-      const data = (await response.json()) as {
+      const parsed = await readInvokedJson<{
         chain: Array<{
           cid: string;
           delegateDID: string;
@@ -731,7 +557,9 @@ export class DelegationManager {
           parentCid?: string;
           allowSubDelegation?: boolean;
         }>;
-      };
+      }>(response, DelegationAction.GET);
+      if (!parsed.ok) return parsed;
+      const data = parsed.data;
 
       const chain: DelegationChain = data.chain.map((item) => ({
         cid: item.cid,
@@ -838,8 +666,9 @@ export class DelegationManager {
         };
       }
 
-      const data = (await response.json()) as { allowed: boolean };
-      return { ok: true, data: data.allowed };
+      const body2 = await readInvokedJson<{ allowed: boolean }>(response, DelegationAction.CHECK);
+      if (!body2.ok) return body2;
+      return { ok: true, data: body2.data.allowed };
     } catch (error) {
       if (error instanceof Error && error.name === "AbortError") {
         return {

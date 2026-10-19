@@ -2624,9 +2624,10 @@ export async function refreshOpenKeySession(
     jwk: key,
     host,
     openkeyHost: resolveOpenKeyHost(profile),
-    // A plain login for a pinned owner (or --owner) names that owner's space,
-    // so OpenKey preselects its key; the signed owner is verified below.
-    permissions: permissions ?? (expectedOwner === undefined ? undefined : ownerLoginPermissions(expectedOwner)),
+    // A plain login sends the default abilities plus delegation/list explicitly. With a pinned
+    // owner (or --owner) the space is that owner's, so OpenKey preselects its key; the signed
+    // owner is verified below.
+    permissions: permissions ?? ownerLoginPermissions(expectedOwner),
     expiry: openKeyExpiry,
     ...(permissions ? { reason: "Allow this TinyCloud CLI profile to use the permissions in the requested manifest." } : {}),
   });

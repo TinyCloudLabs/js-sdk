@@ -11231,11 +11231,12 @@ function announceFirstOwner(profileName2, expectedOwner, ownerDid) {
 `);
 }
 function ownerLoginPermissions(owner) {
-  const space = ownerSpaceId("default", owner);
+  const space = owner === void 0 ? "default" : ownerSpaceId("default", owner);
   return [
     { service: "tinycloud.kv", space, path: "", actions: ["tinycloud.kv/put", "tinycloud.kv/get", "tinycloud.kv/del", "tinycloud.kv/list", "tinycloud.kv/metadata"] },
     { service: "tinycloud.sql", space, path: "", actions: ["tinycloud.sql/read", "tinycloud.sql/write", "tinycloud.sql/admin"] },
-    { service: "tinycloud.capabilities", space, path: "", actions: ["tinycloud.capabilities/read"] }
+    { service: "tinycloud.capabilities", space, path: "", actions: ["tinycloud.capabilities/read"] },
+    { service: "tinycloud.delegation", space, path: "", actions: ["tinycloud.delegation/list"] }
   ];
 }
 
@@ -14452,9 +14453,10 @@ async function refreshOpenKeySession(profileName2, host, options = {}) {
     jwk: key,
     host,
     openkeyHost: resolveOpenKeyHost(profile),
-    // A plain login for a pinned owner (or --owner) names that owner's space,
-    // so OpenKey preselects its key; the signed owner is verified below.
-    permissions: permissions ?? (expectedOwner === void 0 ? void 0 : ownerLoginPermissions(expectedOwner)),
+    // A plain login sends the default abilities plus delegation/list explicitly. With a pinned
+    // owner (or --owner) the space is that owner's, so OpenKey preselects its key; the signed
+    // owner is verified below.
+    permissions: permissions ?? ownerLoginPermissions(expectedOwner),
     expiry: openKeyExpiry,
     ...permissions ? { reason: "Allow this TinyCloud CLI profile to use the permissions in the requested manifest." } : {}
   });
@@ -14686,14 +14688,42 @@ init_formatter();
 init_errors();
 init_constants();
 init_sdk();
-function normalizeDid2(input) {
-  const normalized = input.trim();
-  const fragmentIndex = normalized.indexOf("#");
-  return (fragmentIndex === -1 ? normalized : normalized.slice(0, fragmentIndex)).toLowerCase();
+import { CLI_NAME as CLI_NAME17 } from "@tinycloud/operations/cli-name";
+import { PermissionNotInManifestError } from "@tinycloud/node-sdk";
+async function queryDelegations(node, options, until) {
+  const found = [];
+  let cursor;
+  do {
+    const page = await node.account.delegations.query({ ...options, limit: 100, cursor });
+    if (!page.ok) {
+      if (page.error.code === "PERMISSION_DENIED") {
+        throw new CLIError(
+          "PERMISSION_DENIED",
+          `This session cannot read delegations: it lacks tinycloud.delegation/list. Run \`${CLI_NAME17} auth login\` again to grant it.`,
+          ExitCode.PERMISSION_DENIED
+        );
+      }
+      throw cliErrorFromService(page.error);
+    }
+    found.push(...page.data.items);
+    cursor = page.data.nextCursor;
+  } while (cursor && !(until && found.some((d) => d.cid === until)));
+  return found;
 }
-function didMatches(actual, expected) {
-  if (!actual) return false;
-  return normalizeDid2(actual) === normalizeDid2(expected);
+function listedDelegation(d) {
+  const resources = d.resources.map((r) => {
+    const [space, service, ...path] = r.resource.split("/");
+    return { space, service, path: path.join("/"), actions: r.actions };
+  });
+  return {
+    cid: d.cid,
+    delegatee: d.delegateDid,
+    delegator: d.delegatorDid,
+    direction: d.direction,
+    status: d.status,
+    expiry: d.expiresAt?.toISOString() ?? null,
+    resources
+  };
 }
 async function confirmCurrentSessionRevoke(yes) {
   if (yes) return;
@@ -14724,69 +14754,87 @@ function registerDelegationCommand(program, configuration = {}) {
         const trimmed = a.trim();
         return trimmed.startsWith("tinycloud.") ? trimmed : `tinycloud.${trimmed}`;
       });
+      const byService = {};
+      for (const action of actions) {
+        const slash = action.indexOf("/");
+        if (slash <= "tinycloud.".length || slash === action.length - 1) {
+          throw new CLIError("USAGE_ERROR", `Invalid action "${action}"; use service/action, e.g. kv/get`, ExitCode.USAGE_ERROR);
+        }
+        (byService[action.slice(0, slash)] ??= []).push(action);
+      }
       const expiry = parseExpiry2(options.expiry);
-      const result = await node.delegationManager.create({
-        delegateDID: options.to,
-        path: options.path,
-        actions,
-        expiry
+      const recipient = options.to.split("#")[0];
+      const { delegation: created } = await node.delegateTo(
+        recipient,
+        Object.entries(byService).map(([service, serviceActions]) => ({
+          service,
+          space: "default",
+          path: options.path,
+          actions: serviceActions
+        })),
+        { expiry: expiry.getTime() - Date.now(), requireActivation: true }
+      ).catch((error) => {
+        if (error instanceof PermissionNotInManifestError) {
+          const needed = error.missing.map((m) => `${m.actions.join(", ")} on space "${m.space ?? "default"}" path "${m.path}"`).join("; ");
+          throw new CLIError(
+            "PERMISSION_DENIED",
+            `This session cannot delegate what was requested. Missing: ${needed}. Sign in again with these permissions.`,
+            ExitCode.PERMISSION_DENIED
+          );
+        }
+        throw error;
       });
-      if (!result.ok) {
-        throw cliErrorFromService(result.error);
+      const confirmed = (await queryDelegations(node, { direction: "granted" }, created.cid)).find((d) => d.cid === created.cid);
+      if (confirmed?.status !== "active") {
+        throw new CLIError(
+          "DELEGATION_NOT_CONFIRMED",
+          confirmed ? `The node lists delegation ${created.cid} as ${confirmed.status}, not active; treat it as not created.` : `The node accepted delegation ${created.cid} but does not list it; treat it as not created.`,
+          ExitCode.ERROR
+        );
       }
       outputJson({
-        cid: result.data.cid,
-        delegateDid: options.to,
+        cid: created.cid,
+        delegateDid: recipient,
+        delegatorDid: confirmed.delegatorDid,
         path: options.path,
         actions,
-        expiry: expiry.toISOString()
+        expiry: created.expiry.toISOString(),
+        status: confirmed.status
       });
     } catch (error) {
       return handleError(error);
     }
   });
-  delegation.command("list").description("List delegations").option("--granted", "Show only delegations I've granted").option("--received", "Show only delegations I've received").action(async (options, cmd) => {
+  delegation.command("list").description("List delegations").option("--granted", "Show only delegations I've granted").option("--received", "Show only delegations I've received").option("--space <space>", "Filter by space name or ID").action(async (options, cmd) => {
     try {
       const globalOpts = cmd.optsWithGlobals();
       const ctx = await ProfileManager.resolveContext(globalOpts);
       const node = await ensureAuthenticated(ctx);
-      const result = await node.delegationManager.list();
-      if (!result.ok) {
-        throw cliErrorFromService(result.error);
+      if (options.granted && options.received) {
+        throw new CLIError("USAGE_ERROR", "Use only one of --granted or --received.", ExitCode.USAGE_ERROR);
       }
-      let delegations = result.data;
-      if (options.granted) {
-        const myDid = node.did;
-        delegations = delegations.filter((d) => didMatches(d.delegatorDID, myDid));
-      } else if (options.received) {
-        const myDid = node.did;
-        delegations = delegations.filter((d) => didMatches(d.delegateDID, myDid));
-      }
+      const delegations = await queryDelegations(node, {
+        direction: options.granted ? "granted" : options.received ? "received" : "all",
+        space: options.space
+      });
       outputJson({
-        delegations: delegations.map((d) => ({
-          cid: d.cid,
-          delegatee: d.delegateDID,
-          delegator: d.delegatorDID,
-          path: d.path,
-          actions: d.actions,
-          expiry: d.expiry instanceof Date ? d.expiry.toISOString() : d.expiry
-        })),
+        delegations: delegations.map(listedDelegation),
         count: delegations.length
       });
     } catch (error) {
       return handleError(error);
     }
   });
-  delegation.command("info <cid>").description("Get delegation details").action(async (cid, _options, cmd) => {
+  delegation.command("info <cid>").description("Get delegation details").option("--space <space>", "Filter by space name or ID").action(async (cid, options, cmd) => {
     try {
       const globalOpts = cmd.optsWithGlobals();
       const ctx = await ProfileManager.resolveContext(globalOpts);
       const node = await ensureAuthenticated(ctx);
-      const result = await node.delegationManager.get(cid);
-      if (!result.ok) {
-        throw new CLIError("NOT_FOUND", `Delegation "${cid}" not found`, ExitCode.NOT_FOUND);
+      const found = (await queryDelegations(node, { direction: "all", space: options.space })).find((d) => d.cid === cid);
+      if (!found) {
+        throw new CLIError("NOT_FOUND", `Delegation "${cid}" not found in this account's delegations`, ExitCode.NOT_FOUND);
       }
-      outputJson(result.data);
+      outputJson(listedDelegation(found));
     } catch (error) {
       return handleError(error);
     }
@@ -14826,7 +14874,7 @@ init_constants();
 init_formatter();
 init_theme();
 init_errors();
-import { CLI_NAME as CLI_NAME17 } from "@tinycloud/operations/cli-name";
+import { CLI_NAME as CLI_NAME18 } from "@tinycloud/operations/cli-name";
 init_session_expired();
 init_types();
 function registerDoctorCommand(program) {
@@ -14860,7 +14908,7 @@ function registerDoctorCommand(program) {
             const profile = await ProfileManager.getProfile(profileName2);
             keyDetail = profile.did ? `${profile.did.slice(0, 20)}...` : "key found";
           } else {
-            keyDetail = `no key \u2014 run ${CLI_NAME17} init`;
+            keyDetail = `no key \u2014 run ${CLI_NAME18} init`;
           }
         } catch {
           keyDetail = "error reading key";
@@ -14882,7 +14930,7 @@ function registerDoctorCommand(program) {
           } else if (state2 === "unverified") {
             sessionDetail = `not usable (no signed OpenKey proof) \u2014 ${signInAgainHint(profileName2, resolveProfilePosture(profile))}`;
           } else {
-            sessionDetail = sessionOk ? "active" : `no session \u2014 run ${CLI_NAME17} auth login`;
+            sessionDetail = sessionOk ? "active" : `no session \u2014 run ${CLI_NAME18} auth login`;
           }
         } catch {
           sessionDetail = "error reading session";
@@ -14910,7 +14958,7 @@ function registerDoctorCommand(program) {
         try {
           const profile = await ProfileManager.getProfile(profileName2);
           spaceOk = Boolean(profile.spaceId);
-          spaceDetail = spaceOk ? `${profile.spaceId.slice(0, 16)}...` : `no space \u2014 run ${CLI_NAME17} space create`;
+          spaceDetail = spaceOk ? `${profile.spaceId.slice(0, 16)}...` : `no space \u2014 run ${CLI_NAME18} space create`;
         } catch {
           spaceDetail = "error checking space";
         }
@@ -15100,7 +15148,7 @@ ${rowCount} row${rowCount === 1 ? "" : "s"} returned`) + "\n");
 }
 
 // src/commands/enable.ts
-import { CLI_NAME as CLI_NAME18 } from "@tinycloud/operations/cli-name";
+import { CLI_NAME as CLI_NAME19 } from "@tinycloud/operations/cli-name";
 init_constants();
 init_profiles();
 init_errors();
@@ -15108,7 +15156,7 @@ init_formatter();
 init_publishing_manifest();
 function registerEnableCommand(program) {
   const enable = program.command("enable").description("Enable a narrowly scoped TinyCloud service");
-  enable.command("share").description(`Approve Share publishing scope through OpenKey device authorization (same as \`${CLI_NAME18} auth login --device --manifest builtin:share-publishing\`). Use a dedicated profile, e.g. \`${CLI_NAME18} init --name publisher --key-only && ${CLI_NAME18} --profile publisher enable share\`; keep existing profiles for their apps.`).option("--replace-session", "Replace this profile's live session even though the new scope would narrow, change or shorten it (prefer a new profile)").action(async (options, command) => {
+  enable.command("share").description(`Approve Share publishing scope through OpenKey device authorization (same as \`${CLI_NAME19} auth login --device --manifest builtin:share-publishing\`). Use a dedicated profile, e.g. \`${CLI_NAME19} init --name publisher --key-only && ${CLI_NAME19} --profile publisher enable share\`; keep existing profiles for their apps.`).option("--replace-session", "Replace this profile's live session even though the new scope would narrow, change or shorten it (prefer a new profile)").action(async (options, command) => {
     try {
       const globalOptions = command.optsWithGlobals();
       const context = await ProfileManager.resolveContext(globalOptions, { storedSession: "unused" });
@@ -15144,7 +15192,7 @@ init_profiles();
 init_formatter();
 init_errors();
 init_constants();
-import { CLI_NAME as CLI_NAME19 } from "@tinycloud/operations/cli-name";
+import { CLI_NAME as CLI_NAME20 } from "@tinycloud/operations/cli-name";
 function registerInitCommand(program) {
   program.command("init").description("Initialize a new TinyCloud profile").option("--name <profile>", "Profile name", "default").option("--key-only", "Only generate key, skip authentication").option("--host <url>", "TinyCloud node URL").option("--paste", "Use manual paste mode for authentication").option("--no-popup", "Print the OpenKey URL without opening a browser").option("--default-space <name>", "Default space used when --space is omitted (e.g. applications)").action(async (options, cmd) => {
     try {
@@ -15162,7 +15210,7 @@ function registerInitCommand(program) {
       if (await ProfileManager.profileExists(profileName2)) {
         throw new CLIError(
           "PROFILE_EXISTS",
-          `Profile "${profileName2}" already exists. Use \`${CLI_NAME19} profile delete ${profileName2}\` first or choose a different name.`,
+          `Profile "${profileName2}" already exists. Use \`${CLI_NAME20} profile delete ${profileName2}\` first or choose a different name.`,
           ExitCode.ERROR
         );
       }
@@ -15512,7 +15560,7 @@ init_errors();
 init_constants();
 init_theme();
 import { resolveManifestKnowledgeRoot as resolveManifestKnowledgeRoot2 } from "@tinycloud/sdk-core";
-import { CLI_NAME as CLI_NAME20 } from "@tinycloud/operations/cli-name";
+import { CLI_NAME as CLI_NAME21 } from "@tinycloud/operations/cli-name";
 import { readFile as readFile11 } from "fs/promises";
 var DEFAULT_APP_SPACE = "applications";
 function registerManifestCommand(program) {
@@ -15520,8 +15568,8 @@ function registerManifestCommand(program) {
   manifest.command("resolve <source>").description("Resolve a manifest file or URL to its effective space, paths, and DB basenames").addHelpText("after", `
 
 Examples:
-  $ ${CLI_NAME20} manifest resolve ./manifest.json
-  $ ${CLI_NAME20} manifest resolve https://app.example.com/manifest.json --json
+  $ ${CLI_NAME21} manifest resolve ./manifest.json
+  $ ${CLI_NAME21} manifest resolve https://app.example.com/manifest.json --json
 
 What it shows:
   - app_id, name, manifest_version
@@ -15531,7 +15579,7 @@ What it shows:
 
 This command is read-only and does NOT contact the node \u2014 it just resolves
 the manifest against the active profile's address/chain so you know which
-\`--space\` and \`--db\` values to pass to other ${CLI_NAME20} commands.
+\`--space\` and \`--db\` values to pass to other ${CLI_NAME21} commands.
 `).action(async (source, _options, cmd) => {
     try {
       const globalOpts = cmd.optsWithGlobals();
@@ -15600,7 +15648,7 @@ ${theme.heading("SQL databases")}
 `);
         }
         process.stdout.write(theme.muted(`
-Use with: ${CLI_NAME20} sql query --space ${spaceName} --db <db> "..."
+Use with: ${CLI_NAME21} sql query --space ${spaceName} --db <db> "..."
 `));
       }
       if (permissions.length > 0) {
@@ -15720,7 +15768,7 @@ init_profiles();
 init_formatter();
 init_errors();
 init_constants();
-import { CLI_NAME as CLI_NAME21 } from "@tinycloud/operations/cli-name";
+import { CLI_NAME as CLI_NAME22 } from "@tinycloud/operations/cli-name";
 import { createInterface as createInterface5 } from "readline";
 init_theme();
 init_types();
@@ -15866,9 +15914,9 @@ profile at command time. Precedence for every kv/sql command:
   explicit --space flag  >  profile defaultSpace  >  primary space.
 
 Examples:
-  $ ${CLI_NAME21} profile set-default-space applications
-  $ ${CLI_NAME21} profile set-default-space applications --profile cli-test
-  $ ${CLI_NAME21} profile set-default-space --unset
+  $ ${CLI_NAME22} profile set-default-space applications
+  $ ${CLI_NAME22} profile set-default-space applications --profile cli-test
+  $ ${CLI_NAME22} profile set-default-space --unset
 `).action(async (name, options, cmd) => {
     try {
       const globalOpts = cmd.optsWithGlobals();
@@ -15880,7 +15928,7 @@ Examples:
       if (!options.unset && (name === void 0 || name === "")) {
         throw new CLIError(
           "USAGE_ERROR",
-          `Provide a space name (e.g. \`${CLI_NAME21} profile set-default-space applications\`) or pass --unset.`,
+          `Provide a space name (e.g. \`${CLI_NAME22} profile set-default-space applications\`) or pass --unset.`,
           ExitCode.USAGE_ERROR
         );
       }
@@ -15939,7 +15987,7 @@ function parseOperatorType(raw) {
 
 // src/commands/replica.ts
 init_profile_replicas();
-import { CLI_NAME as CLI_NAME22 } from "@tinycloud/operations/cli-name";
+import { CLI_NAME as CLI_NAME23 } from "@tinycloud/operations/cli-name";
 import { randomBytes as randomBytes7 } from "crypto";
 import { constants as fsConstants5 } from "fs";
 import { mkdir as mkdir5, open as open9, readdir as readdir6, rename as rename4, unlink as unlink4, lstat as lstat9 } from "fs/promises";
@@ -16080,11 +16128,11 @@ var EXIT_BY_CODE = {
 var READ_FAILURE = {
   absent: { code: "KEY_ABSENT", exit: ExitCode.NOT_FOUND, what: "is not in the replica (the replica covers its whole prefix)" },
   deleted: { code: "KEY_DELETED", exit: ExitCode.NOT_FOUND, what: "was deleted at the source" },
-  content_missing: { code: "CONTENT_MISSING", exit: ExitCode.NOT_FOUND, what: `is known but its content has not been fetched yet; run ${CLI_NAME22} replica sync` },
+  content_missing: { code: "CONTENT_MISSING", exit: ExitCode.NOT_FOUND, what: `is known but its content has not been fetched yet; run ${CLI_NAME23} replica sync` },
   coverage_incomplete: {
     code: "COVERAGE_INCOMPLETE",
     exit: ExitCode.NOT_FOUND,
-    what: `is not in the replica, which has not finished its first sync; run ${CLI_NAME22} replica sync`
+    what: `is not in the replica, which has not finished its first sync; run ${CLI_NAME23} replica sync`
   },
   not_covered: { code: "NOT_COVERED", exit: ExitCode.USAGE_ERROR, what: "is outside the replica's prefix" }
 };
@@ -16202,7 +16250,7 @@ async function existingReplicaName(profile, option) {
   const names = await replicaNames(profile);
   if (names.length === 1) return names[0];
   if (names.length === 0) {
-    throw new ReplicaError(ReplicaErrorCode.NOT_FOUND, `Profile "${profile}" has no replicas. Create one with: ${CLI_NAME22} replica sync --prefix <prefix>`);
+    throw new ReplicaError(ReplicaErrorCode.NOT_FOUND, `Profile "${profile}" has no replicas. Create one with: ${CLI_NAME23} replica sync --prefix <prefix>`);
   }
   throw new CLIError("USAGE_ERROR", `Profile "${profile}" has several replicas (${names.join(", ")}); pass --replica <name>.`, ExitCode.USAGE_ERROR);
 }
@@ -16310,9 +16358,9 @@ async function storedGrants(profile) {
 function grantHint(space, prefix) {
   return [
     "A replica needs a device grant with get and sync on its prefix:",
-    `  device: ${CLI_NAME22} auth request --cap tinycloud.kv:${space}:${prefix}:get,list,metadata,sync --expiry 30d --emit req.json`,
-    `  owner:  ${CLI_NAME22} auth grant req.json > grant.json`,
-    `  device: ${CLI_NAME22} auth import grant.json`
+    `  device: ${CLI_NAME23} auth request --cap tinycloud.kv:${space}:${prefix}:get,list,metadata,sync --expiry 30d --emit req.json`,
+    `  owner:  ${CLI_NAME23} auth grant req.json > grant.json`,
+    `  device: ${CLI_NAME23} auth import grant.json`
   ].join("\n");
 }
 function resolveSpace(input, prefix, grants) {
@@ -16403,7 +16451,7 @@ function describeStatus(status) {
     formatField("Size", formatBytes(status.bytes)),
     formatField("Grant", status.device.delegationCid),
     formatField("Last error", status.lastError ? `${status.lastError.code}: ${status.lastError.message}` : null),
-    formatField("Purge", status.purgePending ? `incomplete: content files remain; the next ${CLI_NAME22} replica command retries` : null)
+    formatField("Purge", status.purgePending ? `incomplete: content files remain; the next ${CLI_NAME23} replica command retries` : null)
   ].join("\n");
 }
 async function writeFileAtomic(path, bytes) {
@@ -16567,7 +16615,7 @@ or coverage incomplete; 5 grant expired, revoked or not yet valid; 6 network;
     (options, cmd) => run(async () => {
       const profile = await profileName(cmd);
       if (options.purge) {
-        throw new CLIError("REPORT_READ_ONLY", `Replica report is read-only. To remove a named local replica, run ${CLI_NAME22} replica reset --replica <name> --purge; flag-owned purge has no equivalent yet (TC-1309).`, ExitCode.USAGE_ERROR);
+        throw new CLIError("REPORT_READ_ONLY", `Replica report is read-only. To remove a named local replica, run ${CLI_NAME23} replica reset --replica <name> --purge; flag-owned purge has no equivalent yet (TC-1309).`, ExitCode.USAGE_ERROR);
       }
       if (options.clearPending) {
         throw new CLIError("REPORT_READ_ONLY", "Clearing pending replica writes has no equivalent yet; see TC-1309 for a safe replacement command.", ExitCode.USAGE_ERROR);
@@ -16669,7 +16717,7 @@ or coverage incomplete; 5 grant expired, revoked or not yet valid; 6 network;
               if (differs !== void 0) {
                 throw new ReplicaError(
                   ReplicaErrorCode.CONFIG_MISMATCH,
-                  `Replica ${name} already follows ${differs}. Use another --replica name, or ${CLI_NAME22} replica reset --replica ${name} --purge first.`
+                  `Replica ${name} already follows ${differs}. Use another --replica name, or ${CLI_NAME23} replica reset --replica ${name} --purge first.`
                 );
               }
             }
@@ -16834,7 +16882,7 @@ init_theme();
 init_errors();
 init_warnings();
 init_constants();
-import { CLI_NAME as CLI_NAME24 } from "@tinycloud/operations/cli-name";
+import { CLI_NAME as CLI_NAME25 } from "@tinycloud/operations/cli-name";
 import { readFile as readFile12 } from "fs/promises";
 import { join as join16 } from "path";
 import { homedir, hostname, userInfo } from "os";
@@ -17045,7 +17093,7 @@ function parseStatusEnvelope(line) {
 // src/lib/secrets-wait.ts
 init_constants();
 init_errors();
-import { CLI_NAME as CLI_NAME23 } from "@tinycloud/operations/cli-name";
+import { CLI_NAME as CLI_NAME24 } from "@tinycloud/operations/cli-name";
 var WAIT_BACKOFF_MS = [3e3, 4500, 6750, 10125];
 var WAIT_STEADY_INTERVAL_MS = 15e3;
 var DEFAULT_WAIT_TIMEOUT = "5m";
@@ -17053,7 +17101,7 @@ var MAX_WAIT_TIMEOUT_MS = 9 * 6e4;
 var MAX_CONSECUTIVE_FAILURES = 5;
 var TIMEOUT_RE = /^(0|\d+s|\d+m)$/;
 var RETRYABLE_STATUS_ERRORS = { NODE_UNREACHABLE: true, NODE_ERROR: true };
-var EXPLICIT_KEY_HINT = `${CLI_NAME23} secrets wait never signs in, and an explicit private key has no stored session. Use a local profile signed in once with ${CLI_NAME23} --profile <profile> auth login --method local, without TC_PRIVATE_KEY.`;
+var EXPLICIT_KEY_HINT = `${CLI_NAME24} secrets wait never signs in, and an explicit private key has no stored session. Use a local profile signed in once with ${CLI_NAME24} --profile <profile> auth login --method local, without TC_PRIVATE_KEY.`;
 function abortableSleep(ms2, signal) {
   return new Promise((resolve8) => {
     if (signal.aborted) {
@@ -17089,7 +17137,7 @@ async function runSecretsWait(request, deps) {
   let step = 0;
   const cancelled = () => new CLIError(
     "CANCELLED",
-    `Interrupted: ${CLI_NAME23} secrets wait stopped before the secrets were ready.`,
+    `Interrupted: ${CLI_NAME24} secrets wait stopped before the secrets were ready.`,
     ExitCode.CANCELLED,
     progress === void 0 ? {} : { progress }
   );
@@ -17233,13 +17281,13 @@ function statusError(error, profile, warnings) {
   if (error.code === "AUTH_REQUIRED" || error.code === "SESSION_NOT_FOUND") {
     const recovery = recoveryOf(error, "sign_in");
     if (recovery !== void 0) {
-      const hint = recovery.command !== void 0 ? `Sign in once with: ${recovery.command}, then retry.` : `Sign in to profile "${profile}" once with ${CLI_NAME23} auth login, then retry.`;
+      const hint = recovery.command !== void 0 ? `Sign in once with: ${recovery.command}, then retry.` : `Sign in to profile "${profile}" once with ${CLI_NAME24} auth login, then retry.`;
       return new CLIError("AUTH_REQUIRED", error.message, ExitCode.AUTH_REQUIRED, { hint, recovery, ...extra });
     }
   }
   if (error.code === "PROFILE_MIGRATION_REQUIRED") {
     const recovery = recoveryOf(error, "complete_migration");
-    const hint = recovery?.command !== void 0 ? `Run ${recovery.command} once to finish this profile's one-time upgrade, then retry wait.` : `Run ${CLI_NAME23} auth caps once with profile "${profile}" to finish its one-time upgrade, then retry wait.`;
+    const hint = recovery?.command !== void 0 ? `Run ${recovery.command} once to finish this profile's one-time upgrade, then retry wait.` : `Run ${CLI_NAME24} auth caps once with profile "${profile}" to finish its one-time upgrade, then retry wait.`;
     return new CLIError("PROFILE_MIGRATION_REQUIRED", error.message, ExitCode.ERROR, {
       hint,
       ...recovery === void 0 ? {} : { recovery },
@@ -17431,11 +17479,11 @@ async function runSecretOperation(params) {
 }
 function secretPermissionReason(action, name) {
   const target = name ? ` secret "${name}"` : " secrets";
-  return `Allow \`${CLI_NAME24} secrets ${action}${name ? ` ${name}` : ""}\` to access${target} with the required TinyCloud permissions.`;
+  return `Allow \`${CLI_NAME25} secrets ${action}${name ? ` ${name}` : ""}\` to access${target} with the required TinyCloud permissions.`;
 }
 function assertOwnerApprovalPossible(profileName2, profile, action, name, missing = []) {
   if (profile.authMethod !== "openkey" || process.stdin.isTTY || process.stderr.isTTY) return;
-  const command = `${CLI_NAME24} secrets ${action === "del" ? "delete" : action}${name ? ` ${name}` : ""}`;
+  const command = `${CLI_NAME25} secrets ${action === "del" ? "delete" : action}${name ? ` ${name}` : ""}`;
   throw new CLIError(
     "PERMISSION_DENIED",
     action === "get" ? missing.length > 0 && missing.every((permission) => permission.service === "tinycloud.encryption" && Array.isArray(permission.actions) && permission.actions.length > 0 && permission.actions.every((capability) => capability === SECRET_DECRYPT_CAPABILITY)) ? `Profile "${profileName2}" lacks the scoped decrypt authority (${SECRET_DECRYPT_CAPABILITY}) needed to read secret "${name}", and requesting it needs an interactive browser approval.` : `Profile "${profileName2}" lacks a scoped read or decrypt grant needed to read secret "${name}", and requesting it needs an interactive browser approval.` : `Profile "${profileName2}" holds no grant for \`${command}\`, and requesting one needs an interactive browser approval.`,
@@ -17446,7 +17494,7 @@ function assertOwnerApprovalPossible(profileName2, profile, action, name, missin
   );
 }
 function scopedSecretLoginHint(profileName2) {
-  return `Have the owner approve a scoped login whose manifest names the secret: ${CLI_NAME24} --profile ${profileName2} auth login --method openkey --paste --manifest <manifest.json>. Pass the owner's code on stdin, newline-terminated.`;
+  return `Have the owner approve a scoped login whose manifest names the secret: ${CLI_NAME25} --profile ${profileName2} auth login --method openkey --paste --manifest <manifest.json>. Pass the owner's code on stdin, newline-terminated.`;
 }
 async function runSecretOperationAttempt(label, operation) {
   try {
@@ -17580,7 +17628,7 @@ ${message}`,
           "AUTH_REQUIRED",
           "Not signed in to TinyCloud.",
           ExitCode.AUTH_REQUIRED,
-          { hint: `Sign in with: ${CLI_NAME24} --profile ${result.context.profile} auth login` }
+          { hint: `Sign in with: ${CLI_NAME25} --profile ${result.context.profile} auth login` }
         );
       }
       if (result.error.code === "NODE_UNREACHABLE") {
@@ -18057,7 +18105,7 @@ function registerSecretsCommand(program, openKeyAcquisition) {
           name: "Encryption network",
           ok: false,
           detail: `${networkName} not found`,
-          hint: `${CLI_NAME24} secrets network init ${networkName}`
+          hint: `${CLI_NAME25} secrets network init ${networkName}`
         }
       ];
       let secret;
@@ -18103,7 +18151,7 @@ function registerSecretsCommand(program, openKeyAcquisition) {
             name: "Secret access",
             ok: false,
             detail: notFound ? `${resolved.permissionPaths.vault} not found` : result.error.message,
-            hint: notFound ? local ? `${CLI_NAME24} secrets put ${resolved.name}${formatSecretScopeFlag(scopeOptions)} --stdin` : `${CLI_NAME24} secrets request ${resolved.name}${formatSecretScopeFlag(scopeOptions)}` : `Ask the owner profile to grant ${secretCapabilityAction("get")} and ${SECRET_DECRYPT_CAPABILITY}.`
+            hint: notFound ? local ? `${CLI_NAME25} secrets put ${resolved.name}${formatSecretScopeFlag(scopeOptions)} --stdin` : `${CLI_NAME25} secrets request ${resolved.name}${formatSecretScopeFlag(scopeOptions)}` : `Ask the owner profile to grant ${secretCapabilityAction("get")} and ${SECRET_DECRYPT_CAPABILITY}.`
           });
         }
       } else {
@@ -18347,7 +18395,7 @@ function registerSecretsCommand(program, openKeyAcquisition) {
       if (effectiveLocal(profile, options)) {
         throw new CLIError(
           "LOCAL_OWNER_PROFILE",
-          `Profile "${ctx.profile}" uses a local key, which owns its secrets: store them with ${CLI_NAME24} secrets put NAME --stdin instead of requesting them.`,
+          `Profile "${ctx.profile}" uses a local key, which owns its secrets: store them with ${CLI_NAME25} secrets put NAME --stdin instead of requesting them.`,
           ExitCode.USAGE_ERROR
         );
       }
@@ -18470,7 +18518,7 @@ function registerSecretsCommand(program, openKeyAcquisition) {
 
 // src/commands/share.ts
 import { Option } from "commander";
-import { CLI_NAME as CLI_NAME25 } from "@tinycloud/operations/cli-name";
+import { CLI_NAME as CLI_NAME26 } from "@tinycloud/operations/cli-name";
 
 // ../share-sdk/dist/artifact.js
 init_sha256();
@@ -36601,12 +36649,12 @@ function shareCliError(error, operation = "publish") {
     const profileName2 = "profileName" in failure ? failure.profileName : void 0;
     const localKey = "localKey" in failure && failure.localKey === true;
     const profileHint = profileName2 === void 0 ? "" : `--profile ${profileName2} `;
-    const loginHint = localKey ? `\`${CLI_NAME25} ${profileHint}auth login --method local\`` : `\`${CLI_NAME25} ${profileHint}auth login --device --manifest builtin:share-publishing\` (or \`${CLI_NAME25} ${profileHint}enable share\`)`;
+    const loginHint = localKey ? `\`${CLI_NAME26} ${profileHint}auth login --method local\`` : `\`${CLI_NAME26} ${profileHint}auth login --device --manifest builtin:share-publishing\` (or \`${CLI_NAME26} ${profileHint}enable share\`)`;
     if (failure.kind === "caveated-session") {
       const holder = profileName2 === void 0 ? "this session" : `profile ${profileName2}'s session`;
       return new CLIError(
         "PERMISSION_DENIED",
-        `${holder} carries signed restrictions (caveats) on the authority an anyone-with-link share needs, so it cannot create the share link; nothing was shared. Approve Share publishing without restrictions on a new, dedicated profile (any unused name): \`${CLI_NAME25} init --name publisher --key-only && ${CLI_NAME25} --profile publisher enable share\``,
+        `${holder} carries signed restrictions (caveats) on the authority an anyone-with-link share needs, so it cannot create the share link; nothing was shared. Approve Share publishing without restrictions on a new, dedicated profile (any unused name): \`${CLI_NAME26} init --name publisher --key-only && ${CLI_NAME26} --profile publisher enable share\``,
         5
       );
     }
@@ -37011,7 +37059,7 @@ init_constants();
 init_sdk();
 init_host();
 init_theme();
-import { CLI_NAME as CLI_NAME26 } from "@tinycloud/operations/cli-name";
+import { CLI_NAME as CLI_NAME27 } from "@tinycloud/operations/cli-name";
 import { ACCOUNT_REGISTRY_SPACE } from "@tinycloud/node-sdk";
 import { randomBytes as randomBytes9 } from "crypto";
 import { mkdir as mkdir7, writeFile as writeFile4 } from "fs/promises";
@@ -37058,7 +37106,7 @@ function registerSpaceCommand(program) {
       } else {
         const profile = await ProfileManager.getProfile(ctx.profile);
         const cap = "tinycloud.kv:account:spaces/:get,list";
-        const hint = resolveProfilePosture(profile) === "delegate-session" ? `Ask the space owner to grant it. Create the request with: ${CLI_NAME26} --profile ${ctx.profile} auth request --cap ${cap} --emit` : `Grant it to this session with: ${CLI_NAME26} --profile ${ctx.profile} auth request --grant --cap ${cap}. The default OpenKey owner sign-in covers only the default space, so it includes neither.`;
+        const hint = resolveProfilePosture(profile) === "delegate-session" ? `Ask the space owner to grant it. Create the request with: ${CLI_NAME27} --profile ${ctx.profile} auth request --cap ${cap} --emit` : `Grant it to this session with: ${CLI_NAME27} --profile ${ctx.profile} auth request --grant --cap ${cap}. The default OpenKey owner sign-in covers only the default space, so it includes neither.`;
         throw new CLIError(
           "PERMISSION_DENIED",
           `Listing spaces needs tinycloud.kv/get and tinycloud.kv/list on the account space's spaces/ registry (${accountSpaceId ?? ACCOUNT_REGISTRY_SPACE}), or tinycloud.space/list. This session holds neither.`,
@@ -37095,10 +37143,10 @@ function registerSpaceCommand(program) {
 
 A delegate cannot host a space \u2014 only its owner (root authority) can. This
 emits a tinycloud.host.request artifact naming the space and its owner so you
-can hand it to the owner; they run \`${CLI_NAME26} space host <name>\` and confirm.
+can hand it to the owner; they run \`${CLI_NAME27} space host <name>\` and confirm.
 
 If you ARE the owner of the resolved space, this refuses and tells you to host
-it directly with \`${CLI_NAME26} space host <name>\` (no request needed).
+it directly with \`${CLI_NAME27} space host <name>\` (no request needed).
 `).action(async (name, options, cmd) => {
     try {
       const globalOpts = cmd.optsWithGlobals();
@@ -37109,7 +37157,7 @@ it directly with \`${CLI_NAME26} space host <name>\` (no request needed).
       if (await isRootAuthority(spaceId, ctx.profile)) {
         throw new CLIError(
           "ALREADY_ROOT_AUTHORITY",
-          `You are the owner of ${spaceId}. Host it directly: ${CLI_NAME26} space host ${spaceName}`,
+          `You are the owner of ${spaceId}. Host it directly: ${CLI_NAME27} space host ${spaceName}`,
           ExitCode.USAGE_ERROR
         );
       }
@@ -37195,7 +37243,7 @@ init_sdk();
 init_space();
 init_host();
 init_theme();
-import { CLI_NAME as CLI_NAME27 } from "@tinycloud/operations/cli-name";
+import { CLI_NAME as CLI_NAME28 } from "@tinycloud/operations/cli-name";
 import { writeFile as writeFile5 } from "fs/promises";
 import { resolve as resolve7 } from "path";
 async function dbHandle(node, dbName, spaceInput, profileName2) {
@@ -37219,12 +37267,12 @@ database for simple apps, or pass --db to target a named database. Pass
 --space to target a non-primary space (e.g. the manifest "applications" space).
 
 Common workflows:
-  $ ${CLI_NAME27} sql execute "CREATE TABLE IF NOT EXISTS notes (id INTEGER PRIMARY KEY, body TEXT)"
-  $ ${CLI_NAME27} sql execute "INSERT INTO notes (body) VALUES (?)" --params '["ship docs"]'
-  $ ${CLI_NAME27} sql query "SELECT id, body FROM notes ORDER BY id"
-  $ ${CLI_NAME27} sql query "SELECT * FROM events WHERE type = ?" --db analytics --params '["signup"]'
-  $ ${CLI_NAME27} sql query "SELECT count(*) FROM conversation" --space applications --db xyz.tinycloud.listen/conversations
-  $ ${CLI_NAME27} sql export --db analytics --output analytics.db
+  $ ${CLI_NAME28} sql execute "CREATE TABLE IF NOT EXISTS notes (id INTEGER PRIMARY KEY, body TEXT)"
+  $ ${CLI_NAME28} sql execute "INSERT INTO notes (body) VALUES (?)" --params '["ship docs"]'
+  $ ${CLI_NAME28} sql query "SELECT id, body FROM notes ORDER BY id"
+  $ ${CLI_NAME28} sql query "SELECT * FROM events WHERE type = ?" --db analytics --params '["signup"]'
+  $ ${CLI_NAME28} sql query "SELECT count(*) FROM conversation" --space applications --db xyz.tinycloud.listen/conversations
+  $ ${CLI_NAME28} sql export --db analytics --output analytics.db
 
 Commands:
   query     Read rows with SELECT statements
@@ -37241,10 +37289,10 @@ Tips:
   sql.command("query <sql>").description("Run a read-only SELECT query").option("--db <name>", "SQLite database name within the current space", "default").option("--space <name|uri>", "Target a non-primary space (short name or full URI)").option("--params <json>", "Bind parameters as a JSON array for ? placeholders").addHelpText("after", `
 
 Examples:
-  $ ${CLI_NAME27} sql query "SELECT * FROM notes ORDER BY id"
-  $ ${CLI_NAME27} sql query "SELECT * FROM notes WHERE id = ?" --params '[42]'
-  $ ${CLI_NAME27} sql query "SELECT count(*) AS total FROM events" --db analytics --json
-  $ ${CLI_NAME27} sql query "SELECT count(*) FROM conversation" --space applications --db xyz.tinycloud.listen/conversations
+  $ ${CLI_NAME28} sql query "SELECT * FROM notes ORDER BY id"
+  $ ${CLI_NAME28} sql query "SELECT * FROM notes WHERE id = ?" --params '[42]'
+  $ ${CLI_NAME28} sql query "SELECT count(*) AS total FROM events" --db analytics --json
+  $ ${CLI_NAME28} sql query "SELECT count(*) FROM conversation" --space applications --db xyz.tinycloud.listen/conversations
 
 Output:
   Human output is formatted as a table. Piped output or --json returns
@@ -37285,11 +37333,11 @@ ${rowCount} row${rowCount === 1 ? "" : "s"} returned`) + "\n");
   sql.command("execute <sql>").description("Run a write or schema statement").option("--db <name>", "SQLite database name within the current space", "default").option("--space <name|uri>", "Target a non-primary space (short name or full URI)").option("--params <json>", "Bind parameters as a JSON array for ? placeholders").addHelpText("after", `
 
 Examples:
-  $ ${CLI_NAME27} sql execute "CREATE TABLE IF NOT EXISTS notes (id INTEGER PRIMARY KEY, body TEXT)"
-  $ ${CLI_NAME27} sql execute "INSERT INTO notes (body) VALUES (?)" --params '["first note"]'
-  $ ${CLI_NAME27} sql execute "UPDATE notes SET body = ? WHERE id = ?" --params '["edited", 1]'
-  $ ${CLI_NAME27} sql execute "DROP TABLE old_notes" --db archive
-  $ ${CLI_NAME27} sql execute "DELETE FROM conversation WHERE id = ?" --space applications --db xyz.tinycloud.listen/conversations --params '["abc"]'
+  $ ${CLI_NAME28} sql execute "CREATE TABLE IF NOT EXISTS notes (id INTEGER PRIMARY KEY, body TEXT)"
+  $ ${CLI_NAME28} sql execute "INSERT INTO notes (body) VALUES (?)" --params '["first note"]'
+  $ ${CLI_NAME28} sql execute "UPDATE notes SET body = ? WHERE id = ?" --params '["edited", 1]'
+  $ ${CLI_NAME28} sql execute "DROP TABLE old_notes" --db archive
+  $ ${CLI_NAME28} sql execute "DELETE FROM conversation WHERE id = ?" --space applications --db xyz.tinycloud.listen/conversations --params '["abc"]'
 
 Output:
   Returns JSON with the changed row count and last inserted row id when available.
@@ -37318,9 +37366,9 @@ Output:
   sql.command("export").description("Export a SQLite database as a binary .db file").option("--db <name>", "SQLite database name within the current space", "default").option("--space <name|uri>", "Target a non-primary space (short name or full URI)").option("-o, --output <file>", "Output file path", "export.db").addHelpText("after", `
 
 Examples:
-  $ ${CLI_NAME27} sql export
-  $ ${CLI_NAME27} sql export --db analytics --output analytics.db
-  $ ${CLI_NAME27} sql export --space applications --db xyz.tinycloud.listen/conversations --output listen.db
+  $ ${CLI_NAME28} sql export
+  $ ${CLI_NAME28} sql export --db analytics --output analytics.db
+  $ ${CLI_NAME28} sql export --space applications --db xyz.tinycloud.listen/conversations --output listen.db
 
 Output:
   Writes the database file locally and returns JSON with the path and size.
@@ -37353,19 +37401,19 @@ Output:
   sql.command("copy").description("Copy rows between SQL databases (optionally across spaces)").requiredOption("--from-db <name>", "Source database name").requiredOption("--to-db <name>", "Destination database name").option("--from-space <name|uri>", "Source space (defaults to primary)").option("--to-space <name|uri>", "Destination space (defaults to primary)").option("--table <name...>", "Restrict copy to specific tables (repeat or comma-separated)").option("--dry-run", "Print the plan without writing", false).addHelpText("after", `
 
 Examples:
-  $ ${CLI_NAME27} sql copy --from-db com.tinycloud.conversation-sync/conversations \\
+  $ ${CLI_NAME28} sql copy --from-db com.tinycloud.conversation-sync/conversations \\
                 --to-db xyz.tinycloud.listen/conversations \\
                 --space applications --dry-run
-  $ ${CLI_NAME27} sql copy --from-space applications --from-db com.foo/data \\
+  $ ${CLI_NAME28} sql copy --from-space applications --from-db com.foo/data \\
                 --to-space applications --to-db com.bar/data \\
                 --table conversation --table participant
 
 Notes:
   - Refuses to run when (resolved space, db) is identical for source and destination.
-  - Does NOT create destination tables. Run the target app once (or use \`${CLI_NAME27} sql execute\`)
+  - Does NOT create destination tables. Run the target app once (or use \`${CLI_NAME28} sql execute\`)
     to materialize the schema before copying.
   - One row at a time; suitable for small/medium datasets. Large copies should
-    use \`${CLI_NAME27} sql export\` + bulk import.
+    use \`${CLI_NAME28} sql export\` + bulk import.
   - Authorization: the active session/delegation must cover sql/read on source
     AND sql/write on destination. Otherwise the relevant operation will fail.
 `).action(async (options, cmd) => {
@@ -37465,7 +37513,7 @@ init_errors();
 init_formatter();
 init_theme();
 init_permissions();
-import { CLI_NAME as CLI_NAME28 } from "@tinycloud/operations/cli-name";
+import { CLI_NAME as CLI_NAME29 } from "@tinycloud/operations/cli-name";
 import {
   NodeWasmBindings as NodeWasmBindings2
 } from "@tinycloud/node-sdk";
@@ -37739,7 +37787,7 @@ function formatStatus(summary) {
   lines.push(`Default profile: ${theme.value(summary.defaultProfile)}`);
   lines.push("");
   if (summary.profiles.length === 0) {
-    lines.push(theme.muted(`No profiles configured. Run: ${CLI_NAME28} init`));
+    lines.push(theme.muted(`No profiles configured. Run: ${CLI_NAME29} init`));
     return `${lines.join("\n")}
 `;
   }
