@@ -16,6 +16,7 @@ import { assertValidReplicationConfig } from "./replication/config";
 import { createSqliteReplicaStorage } from "./replication/sqlite";
 // @ts-ignore node-sdk moduleResolution "node" cannot read replica exports (see replica-contract.ts)
 import * as replicaGate from "@tinycloud/replica/profile-gate";
+import { ledgerFor } from "../../replica/src/kv-storage/ledger";
 import { createIndexedDbLifecycle, inspectReplicaKeyPresence } from "../../replica/src/kv-storage/lifecycle";
 import { KV_DATABASE } from "../../replica/src/kv-storage/schema";
 import { requestAsPromise } from "../../replica/src/browser/idb";
@@ -121,7 +122,7 @@ async function withBrowserOrigin<T>(run: (
   });
   try {
     await requestAsPromise(indexedDB.deleteDatabase(KV_DATABASE));
-    return await run(createIndexedDbLifecycle(), entries);
+    return await run(createIndexedDbLifecycle({ ledger: ledgerFor() }), entries);
   } finally {
     await requestAsPromise(indexedDB.deleteDatabase(KV_DATABASE));
     for (let i = 0; i < names.length; i++) {

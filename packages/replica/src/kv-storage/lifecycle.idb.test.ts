@@ -9,6 +9,7 @@ import { gateHash } from "./gateKeys.js";
 import { createIndexedDbGateTx } from "./gateTx.js";
 import { createIndexedDbLifecycle, inspectReplicaKeyPresence } from "./lifecycle.js";
 import { indexedDbReplicaStorage } from "./client.js";
+import { DEVICE_QUOTA_PARTITION_ID, ledgerFor } from "./ledger.js";
 import { KV_DATABASE, KV_STORE, openKvDatabase } from "./schema.js";
 import { injectDenyFailure } from "./testing.js";
 
@@ -182,6 +183,38 @@ describe("origin deny tombstone", () => {
     expect(await requestAsPromise(device.get("accountKey"))).toBeUndefined();
     expect(await requestAsPromise(afterTx.objectStore(KV_STORE.gate).get("account")))
       .toMatchObject({ principalHash: null, consentDeadline: null });
+    after.close();
+  });
+
+  test("denial releases charged owner and install rows from the device bucket atomically", async () => {
+    const ledger = ledgerFor();
+    const lifecycle = createIndexedDbLifecycle({ ledger });
+    await lifecycle.establishSessionStamp(principal, { consentAnchor: { source: "siwe", at: Date.now() } });
+    const db = (await openKvDatabase({ create: false }))!;
+    const write = db.transaction([KV_STORE.device, KV_STORE.quota], "readwrite");
+    const done = transactionDone(write);
+    const device = write.objectStore(KV_STORE.device);
+    device.put({ size: 13 }, "device");
+    device.put({ size: 7 }, "firstInstall:opaque");
+    device.put({ size: 11 }, "grantInstall:opaque:cid");
+    await ledger.accountRows(write, {
+      partitionId: "a".repeat(64),
+      partitionDeltaBytes: 0,
+      deviceDeltaBytes: 31,
+    });
+    await done;
+    db.close();
+
+    expect((await lifecycle.deny({ reason: "sign_out", principal })).status).toBe("denied");
+    const after = (await openKvDatabase({ create: false }))!;
+    const read = after.transaction([KV_STORE.device, KV_STORE.quota]);
+    const readDone = transactionDone(read);
+    expect(await requestAsPromise(read.objectStore(KV_STORE.quota).get("total"))).toEqual({ bytes: 0 });
+    expect(await requestAsPromise(read.objectStore(KV_STORE.quota).get(`partition:${DEVICE_QUOTA_PARTITION_ID}`))).toBeUndefined();
+    expect(await requestAsPromise(read.objectStore(KV_STORE.device).get("device"))).toBeUndefined();
+    expect(await requestAsPromise(read.objectStore(KV_STORE.device).get("firstInstall:opaque"))).toBeUndefined();
+    expect(await requestAsPromise(read.objectStore(KV_STORE.device).get("grantInstall:opaque:cid"))).toBeUndefined();
+    await readDone;
     after.close();
   });
 
