@@ -148,6 +148,11 @@ export type Tc1443bRatchet = LogoutRatchet;
  * verifies. Only the root bundle grows, so the shape is the #571 root-only row.
  */
 export type Tc1428Ratchet = LogoutRatchet;
+/**
+ * One reviewed exact-delta admission of js-sdk #600 (TC-1476): the registry-sync skip debug event. Only the
+ * root bundle grows, so the shape is the #571 root-only row.
+ */
+export type Tc1476Ratchet = LogoutRatchet;
 export type Ledger = {
   allowance: GzipSizes;
   entries: LedgerEntry[];
@@ -166,6 +171,7 @@ export type Ledger = {
   tc1466Ratchet?: Tc1466Ratchet;
   tc1443bRatchet?: Tc1443bRatchet;
   tc1428Ratchet?: Tc1428Ratchet;
+  tc1476Ratchet?: Tc1476Ratchet;
 };
 
 const formats = ["index.mjs", "index.cjs"] as const;
@@ -597,6 +603,32 @@ export const approvedTc1428Ratchet: Tc1428Ratchet = {
   reason: "The viewer now checks the owner-signed artifactPin: assertArtifactBinding and verifyArtifactShare in share-sdk/src/artifact-pin.ts, the strict artifactPin field in the Policy/v3 envelope schema, and their call sites in resolvePolicyShare and ShareRecipientClient.decryptV3Content. Root only: the worker, first-import, activation and gated artifacts are unchanged. Cuts applied first: the layout helpers and the owner-side helpers (buildArtifactPin, verifyArtifactManifestBytes, verifyArtifactFileBytes) live in the separate @tinycloud/share-sdk/artifact entry and are not in the web bundle; pin errors use their code as the message (-159 gzip bytes in a share-sdk proxy build); the recipient no longer re-hashes the fetched bytes, because the binding already makes the pinned digest equal contentSource.initialCiphertextDigestHex, which decryptV3Content checks (-56). Reused: verifyEnvelopeV3SignatureOnly for the signature, the noble sha256 already bundled, and the existing ciphertext digest check; sdk-core and share-envelope hold no equivalent. Not taken: a lazy import, because the web build pins LimitChunkCountPlugin({ maxChunks: 1 }) and would inline it; a subpath for the verifier, because the viewer must run it; dropping the expected-artifact check or the edit refusal, each worth about 35 bytes. Local builds measured +1127/+993 before these cuts. Review changes then showed two canonical-CI surprises that local builds do not reproduce: a zod .max() on the pinned size moved the ESM root by +911..+924, so the bound lives in assertArtifactBinding instead (+17), and folding the two receive-path signature checks into one saved nothing. Re-measured after #579, #580, #583, #584, #585, #586, #587, #588, #589, #591, #592, #593 and #595 landed: run 39181586326 on source 90f21ae6 (a merge of master 42b08909) measured identical absolute bytes in both jobs, +915 / +812 over TC-1443b's ceilings. The earlier run on ae2b05bc (master 28ca77a0) measured +911 / +767 over TC-1443's, so the moves in between add +4 / +45 to this PR's own cost.",
 };
 
+/**
+ * Naomi's size ruling applied to TC-1476 (js-sdk #600): the registry-sync skip debug event is admitted at
+ * exactly the bytes GitHub measured, root only, with no headroom. The row sits on top of the TC-1428 root
+ * ceilings.
+ */
+export const approvedTc1476Ratchet: Tc1476Ratchet = {
+  label: "TC-1476 #600 registry-sync skip debug event, exact canonical delta",
+  ruling: "Naomi's size ruling for TC-1476 #600 (2026-10-19): root +62 B +/-20 gzip, exact row at canonical CI bytes; rows chain after the latest row on master, so whichever PR lands later re-measures against the new base and updates its own row",
+  base: "c7a379c5f78450e93bc5bcca3d262eebb1130aff",
+  sourceCommits: [
+    "bf9349ed5230a4f3c899f80073156ef6046128e8",
+  ],
+  canonicalCI: {
+    run: "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39266856585",
+    jobs: [
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39266856585/job/118108567663",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39266856585/job/118108568002",
+    ],
+  },
+  root: {
+    delta: { "index.mjs": -27, "index.cjs": -118 },
+    ceiling: { "index.mjs": 1474808, "index.cjs": 1403191 },
+  },
+  reason: "node-sdk's TinyCloudNode (bundled into web-sdk) records one debug event, `registry.skip`, the first time an account registry sync is skipped for want of account access. Both root bundles grow. Shrink applied first: the first version carried a descriptive message and event name and measured +83 B locally (over the root ceiling by 7 B on CI); it is now one short event name with no message (+62 B local, same-toolchain gzip -9). Canonical CI: master c7a379c5 (probe run 39271316078, branch naomi/tc-1476-baseline-probe) measured index.mjs 1,474,761 / index.cjs 1,403,138 in both Node jobs; this PR's run 39266856585 on source bf9349ed measured 1,474,808 / 1,403,191 in both, i.e. +47 / +53 over master, inside the approved +62 +/-20. `delta` is relative to the TC-1428 ceilings this row chains after (1,474,835 / 1,403,309), which sat above master's measured bytes; the ceiling is exactly the measured bytes.",
+};
+
 /** The reviewed #553 S3 entry's source commit, as master's checker pinned it. */
 export const preexistingS3EntryCommit = "0241ba9b";
 
@@ -653,6 +685,7 @@ export function ancestryPins(root: Ledger, hasGatedOnly: boolean): Array<{ row: 
   if (root.tc1466Ratchet !== undefined) pins.push({ row: "tc1466Ratchet", pin: root.tc1466Ratchet.sourceCommits.at(-1)! });
   if (root.tc1443bRatchet !== undefined) pins.push({ row: "tc1443bRatchet", pin: root.tc1443bRatchet.sourceCommits.at(-1)! });
   if (root.tc1428Ratchet !== undefined) pins.push({ row: "tc1428Ratchet", pin: root.tc1428Ratchet.sourceCommits.at(-1)! });
+  if (root.tc1476Ratchet !== undefined) pins.push({ row: "tc1476Ratchet", pin: root.tc1476Ratchet.sourceCommits.at(-1)! });
   if (hasGatedOnly) pins.push({ row: "gatedOnlyRatchet", pin: approvedGatedOnlyRatchet.sourceCommit });
   return pins;
 }
@@ -689,7 +722,7 @@ const historicalToolchain = "Bun 1.4.3; production webpack; gzip -9 -c";
 /** Only a git merge-base ledger may retain the pre-correction toolchain. */
 export function validateLedger(value: Ledger, historicalBase = false): void {
   if (!value || !value.allowance || !Array.isArray(value.entries) ||
-      Object.keys(value).some((key) => key !== "allowance" && key !== "entries" && key !== "phase2Ratchet" && key !== "fixRequiredRatchet" && key !== "canonicalToolchainCorrection" && key !== "masterMergeResolution" && key !== "hardeningRatchet" && key !== "logoutRatchet" && key !== "tc1413Ratchet" && key !== "tc1436Ratchet" && key !== "tc1432Ratchet" && key !== "tc1424Ratchet" && key !== "tc1448Ratchet" && key !== "tc1443Ratchet" && key !== "tc1466Ratchet" && key !== "tc1443bRatchet" && key !== "tc1428Ratchet")) {
+      Object.keys(value).some((key) => key !== "allowance" && key !== "entries" && key !== "phase2Ratchet" && key !== "fixRequiredRatchet" && key !== "canonicalToolchainCorrection" && key !== "masterMergeResolution" && key !== "hardeningRatchet" && key !== "logoutRatchet" && key !== "tc1413Ratchet" && key !== "tc1436Ratchet" && key !== "tc1432Ratchet" && key !== "tc1424Ratchet" && key !== "tc1448Ratchet" && key !== "tc1443Ratchet" && key !== "tc1466Ratchet" && key !== "tc1443bRatchet" && key !== "tc1428Ratchet" && key !== "tc1476Ratchet")) {
     throw new Error("Invalid packages/web-sdk/scripts/replica-size-ledger.json shape");
   }
   if (Object.keys(value.allowance).some((key) => !formats.includes(key as typeof formats[number]))) {
@@ -789,6 +822,10 @@ export function validateLedger(value: Ledger, historicalBase = false): void {
       (!value.tc1443bRatchet || JSON.stringify(value.tc1428Ratchet) !== JSON.stringify(approvedTc1428Ratchet))) {
     throw new Error("Only Naomi's exact canonical TC-1428 artifact-pin ratchet is approved.");
   }
+  if (value.tc1476Ratchet !== undefined &&
+      (!value.tc1428Ratchet || JSON.stringify(value.tc1476Ratchet) !== JSON.stringify(approvedTc1476Ratchet))) {
+    throw new Error("Only Naomi's exact canonical TC-1476 registry-skip ratchet is approved.");
+  }
 }
 
 /** The resolved input blobs are introduced once and immutable in subsequent bases. */
@@ -886,6 +923,14 @@ export function validateTc1428RatchetTransition(base?: Tc1428Ratchet, current?: 
   if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc1428Ratchet) ||
       base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
     throw new Error("The exact TC-1428 ratchet may be introduced once and cannot change later.");
+  }
+}
+
+/** The TC-1476 ratchet is introduced once at its exact canonical bytes and immutable afterwards. */
+export function validateTc1476RatchetTransition(base?: Tc1476Ratchet, current?: Tc1476Ratchet): void {
+  if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc1476Ratchet) ||
+      base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
+    throw new Error("The exact TC-1476 ratchet may be introduced once and cannot change later.");
   }
 }
 
