@@ -64,6 +64,7 @@
     "tc-1423-share-grants",
     "tc-1423-share-root",
     "tc-1428-artifact-versions",
+    "tc-1443-registry-policy",
     "tc-1443-registry-verdict",
     "tc-841-legacy-read-gate",
     "tc-841-logout-contract",
