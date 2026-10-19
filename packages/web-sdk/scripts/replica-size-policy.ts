@@ -160,6 +160,19 @@ export type Tc1476Ratchet = LogoutRatchet;
  * change moves the root, first-import, activation and worker buckets.
  */
 export type Tc1475Ratchet = HardeningRatchet;
+/**
+ * One reviewed worker-only ceiling raise: js-sdk #552 (TC-721 direct owner revocation) merged without
+ * re-measuring the kv-storage worker against the new master, so the TC-858 gzip ratchet went red by 86 B.
+ */
+export type WorkerRatchet = {
+  label: string;
+  ruling: string;
+  base: string;
+  sourceCommits: string[];
+  canonicalCI: { run: string; jobs: string[] };
+  worker: { delta: number; ceiling: number };
+  reason: string;
+};
 export type Ledger = {
   allowance: GzipSizes;
   entries: LedgerEntry[];
@@ -180,6 +193,7 @@ export type Ledger = {
   tc1428Ratchet?: Tc1428Ratchet;
   tc1476Ratchet?: Tc1476Ratchet;
   tc1475Ratchet?: Tc1475Ratchet;
+  tc721WorkerRatchet?: WorkerRatchet;
 };
 
 const formats = ["index.mjs", "index.cjs"] as const;
@@ -730,9 +744,32 @@ export function ancestryPins(root: Ledger, hasGatedOnly: boolean): Array<{ row: 
   if (root.tc1428Ratchet !== undefined) pins.push({ row: "tc1428Ratchet", pin: root.tc1428Ratchet.sourceCommits.at(-1)! });
   if (root.tc1476Ratchet !== undefined) pins.push({ row: "tc1476Ratchet", pin: root.tc1476Ratchet.sourceCommits.at(-1)! });
   if (root.tc1475Ratchet !== undefined) pins.push({ row: "tc1475Ratchet", pin: root.tc1475Ratchet.sourceCommits.at(-1)! });
+  if (root.tc721WorkerRatchet !== undefined) pins.push({ row: "tc721WorkerRatchet", pin: root.tc721WorkerRatchet.sourceCommits.at(-1)! });
   if (hasGatedOnly) pins.push({ row: "gatedOnlyRatchet", pin: approvedGatedOnlyRatchet.sourceCommit });
   return pins;
 }
+
+/**
+ * #552 (TC-721), approved by Naomi, 2026-10-19: the kv-storage worker is admitted at exactly the 822,753 B
+ * GitHub measured on master 54a2408d (+86 over TC-1475's 822,667). Worker only; nothing else moves.
+ */
+export const approvedTc721WorkerRatchet: WorkerRatchet = {
+  label: "TC-721 #552 direct owner revocation, kv-storage worker exact canonical delta",
+  ruling: "#552 (TC-721), approved by Naomi, 2026-10-19: raise the kv-storage worker gzip ceiling by exactly 86 B to the canonical CI measurement; no other allowance changes",
+  base: "91531d66",
+  sourceCommits: [
+    "e6150a83848888681305dc629892ca39df61024d",
+  ],
+  canonicalCI: {
+    run: "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39326132925",
+    jobs: [
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39326132925/job/118312339066",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39326132925/job/118312339183",
+    ],
+  },
+  worker: { delta: 86, ceiling: 822753 },
+  reason: "TC-721 (#552) added owner-signed direct revocation, which the kv-storage worker bundles. #552 merged without re-measuring against master, so the Enforce hashed kv-storage worker gzip ratchet step measured 822,753 gzip -9 bytes against the 822,667 ceiling (headroom -86).",
+};
 
 export type GatedOnlyRatchet = {
   label: string;
@@ -766,7 +803,7 @@ const historicalToolchain = "Bun 1.4.3; production webpack; gzip -9 -c";
 /** Only a git merge-base ledger may retain the pre-correction toolchain. */
 export function validateLedger(value: Ledger, historicalBase = false): void {
   if (!value || !value.allowance || !Array.isArray(value.entries) ||
-      Object.keys(value).some((key) => key !== "allowance" && key !== "entries" && key !== "phase2Ratchet" && key !== "fixRequiredRatchet" && key !== "canonicalToolchainCorrection" && key !== "masterMergeResolution" && key !== "hardeningRatchet" && key !== "logoutRatchet" && key !== "tc1413Ratchet" && key !== "tc1436Ratchet" && key !== "tc1432Ratchet" && key !== "tc1424Ratchet" && key !== "tc1448Ratchet" && key !== "tc1443Ratchet" && key !== "tc1466Ratchet" && key !== "tc1443bRatchet" && key !== "tc1428Ratchet" && key !== "tc1476Ratchet" && key !== "tc1475Ratchet")) {
+      Object.keys(value).some((key) => key !== "allowance" && key !== "entries" && key !== "phase2Ratchet" && key !== "fixRequiredRatchet" && key !== "canonicalToolchainCorrection" && key !== "masterMergeResolution" && key !== "hardeningRatchet" && key !== "logoutRatchet" && key !== "tc1413Ratchet" && key !== "tc1436Ratchet" && key !== "tc1432Ratchet" && key !== "tc1424Ratchet" && key !== "tc1448Ratchet" && key !== "tc1443Ratchet" && key !== "tc1466Ratchet" && key !== "tc1443bRatchet" && key !== "tc1428Ratchet" && key !== "tc1476Ratchet" && key !== "tc1475Ratchet" && key !== "tc721WorkerRatchet")) {
     throw new Error("Invalid packages/web-sdk/scripts/replica-size-ledger.json shape");
   }
   if (Object.keys(value.allowance).some((key) => !formats.includes(key as typeof formats[number]))) {
@@ -873,6 +910,18 @@ export function validateLedger(value: Ledger, historicalBase = false): void {
   if (value.tc1475Ratchet !== undefined &&
       (!value.tc1428Ratchet || JSON.stringify(value.tc1475Ratchet) !== JSON.stringify(approvedTc1475Ratchet))) {
     throw new Error("Only Naomi's exact canonical TC-1475 retry ratchet is approved.");
+  }
+  if (value.tc721WorkerRatchet !== undefined &&
+      (!value.tc1475Ratchet || JSON.stringify(value.tc721WorkerRatchet) !== JSON.stringify(approvedTc721WorkerRatchet))) {
+    throw new Error("Only Naomi's exact canonical TC-721 worker ratchet is approved.");
+  }
+}
+
+/** The TC-721 worker ratchet is introduced once at its exact canonical bytes and immutable afterwards. */
+export function validateTc721WorkerRatchetTransition(base?: WorkerRatchet, current?: WorkerRatchet): void {
+  if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc721WorkerRatchet) ||
+      base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
+    throw new Error("The exact TC-721 worker ratchet may be introduced once and cannot change later.");
   }
 }
 
