@@ -1687,6 +1687,32 @@ describe("CLI auth request command", () => {
     resetState();
   });
 
+  test("--paste reaches the OpenKey flow for an owner grant, and is refused anywhere it cannot apply", async () => {
+    profiles.set("default", makeProfile({
+      did: "did:key:openkey-session",
+      sessionDid: "did:key:openkey-session",
+      authMethod: "openkey",
+      posture: "owner-openkey",
+    }));
+    sessions.set("default", { authMethod: "openkey", spaceId: "tinycloud:pkh:eip155:1:0xowner:default" });
+    keys.set("default", { kty: "OKP", crv: "Ed25519", x: "k", d: "private" });
+    authNodeHasRuntimePermissions = false;
+
+    await runAuthCommand(["auth", "request", "--grant", "--paste", "--cap", "tinycloud.kv:default/:list"]);
+    expect(recorded.startAuthFlows).toHaveLength(1);
+    expect(recorded.startAuthFlows[0]?.options.paste).toBe(true);
+
+    recorded.startAuthFlows.length = 0;
+    recorded.errors.length = 0;
+    await runAuthCommand(["auth", "request", "--paste", "--cap", "tinycloud.kv:default/:list"]);
+    await runAuthCommand(["auth", "request", "--grant", "--paste", "--device", "--cap", "tinycloud.kv:default/:list"]);
+    expect(recorded.startAuthFlows).toEqual([]);
+    expect(recorded.errors).toEqual([
+      expect.objectContaining({ code: "INVALID_ARGUMENT" }),
+      expect.objectContaining({ code: "INVALID_ARGUMENT" }),
+    ]);
+  });
+
   test("persists the active local session after granting runtime permissions", async () => {
     const sessionJwk = {
       kty: "OKP",

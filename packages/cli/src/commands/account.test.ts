@@ -22,13 +22,18 @@ function resetState(): void {
   recorded.removedSpaces = [];
   hasAccountAccess = true;
   accountCalls = 0;
+  listedSpaces = [];
 }
 
 let hasAccountAccess = true;
 let accountCalls = 0;
+const UNGRANTED_SPACE = "tinycloud:pkh:eip155:1:0xabc:photos";
+let listedSpaces: { id: string }[] = [];
 
 const node = {
-  hasRuntimePermissions: () => hasAccountAccess,
+  hasRuntimePermissions: (entries: { space: string }[]) =>
+    hasAccountAccess && !entries.some((entry) => entry.space === UNGRANTED_SPACE),
+  spaces: { list: async () => ({ ok: true, data: listedSpaces }) },
   account: {
     status: async () => ({
       ok: true,
@@ -637,6 +642,15 @@ describe("tc account", () => {
     expect(recorded.outputs).toEqual([]);
     expect(recorded.errors).toHaveLength(1);
     expect(recorded.errors[0]).toMatchObject({ code: "ACCOUNT_ACCESS_REQUIRED", exitCode: 5 });
+  });
+
+  test("a space the command would list but lacks capabilities/read on is refused before any account call", async () => {
+    listedSpaces = [{ id: UNGRANTED_SPACE }];
+    await runAccount(["delegations", "list"]);
+
+    expect(accountCalls).toBe(0);
+    expect(recorded.outputs).toEqual([]);
+    expect(recorded.errors).toEqual([expect.objectContaining({ code: "ACCOUNT_ACCESS_REQUIRED", exitCode: 5 })]);
   });
 
   test("billing commands need no account access", async () => {
