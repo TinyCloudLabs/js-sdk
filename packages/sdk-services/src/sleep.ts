@@ -1,17 +1,12 @@
-/** An abortable wait: resolves after `delayMs` or at once when `signal` aborts. Ref'd by default so a one-shot process (`tc`) stays alive through a retry backoff; `unref` lets a long-lived poller not hold the process open. */
-export function abortableSleep(delayMs: number, signal: AbortSignal, unref = false): Promise<void> {
-  return new Promise((resolve) => {
-    const finish = (): void => {
+/** Abortable wait; ref'd unless `unref`. */
+export const abortableSleep = (ms: number, signal: AbortSignal, unref = false): Promise<void> =>
+  new Promise((resolve) => {
+    const done = (): void => {
       clearTimeout(timer);
-      signal.removeEventListener("abort", finish);
+      signal.removeEventListener("abort", done);
       resolve();
     };
-    const timer = setTimeout(finish, delayMs);
+    const timer = setTimeout(done, ms);
     if (unref) timer.unref?.();
-    if (signal.aborted) {
-      finish();
-    } else {
-      signal.addEventListener("abort", finish, { once: true });
-    }
+    signal.aborted ? done() : signal.addEventListener("abort", done);
   });
-}

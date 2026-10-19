@@ -420,10 +420,11 @@ export class ServiceContext implements IServiceContext {
     const policy = this._retryPolicy;
     const startedAt = Date.now();
     let backoffMs = 0;
+    let signal: AbortSignal | undefined;
     for (let attempt = 1; ; attempt++) {
       const init = await build();
-      const signal = this.combineSignals(init.signal);
-      const response = await this._fetch(url, { ...init, signal });
+      signal ??= this.combineSignals(init.signal);
+      const response = await this._fetch(url, init);
       const done = (): FetchResponse => {
         try { response.retry = { attempts: attempt, backoffMs }; } catch { /* frozen custom response */ }
         return response;
@@ -449,7 +450,7 @@ export class ServiceContext implements IServiceContext {
         typeof retryAfterMs === "number" ? retryAfterMs : Math.random() * step,
         remaining,
       );
-      void Promise.resolve((response.body as { cancel?(): unknown } | undefined)?.cancel?.()).catch(() => {});
+      (response.body as { cancel?(): Promise<unknown> } | undefined)?.cancel?.()?.catch?.(() => {});
       await abortableSleep(delay, signal);
       if (signal.aborted) throw signal.reason;
       backoffMs += delay;
@@ -486,17 +487,21 @@ export class ServiceContext implements IServiceContext {
     };
   }
 
-  private readonly _combined = new WeakSet<AbortSignal>();
-
-  /** Idempotent: a signal this method produced is returned as is, so `invokeWithRetry` and `wrapFetch` add one listener pair per attempt. */
   private combineSignals(signal?: AbortSignal): AbortSignal {
-    const own = this._abortController.signal;
-    if (!signal || this._combined.has(signal)) return signal ?? own;
+    if (!signal) return this._abortController.signal;
     const combined = new AbortController();
-    this._combined.add(combined.signal);
-    for (const source of [signal, own]) {
-      if (source.aborted) return combined.abort(source.reason), combined.signal;
-      source.addEventListener("abort", () => combined.abort(source.reason), { once: true });
+    const abort = (source: AbortSignal) => combined.abort(source.reason);
+    if (signal.aborted) {
+      abort(signal);
+    } else if (this._abortController.signal.aborted) {
+      abort(this._abortController.signal);
+    } else {
+      signal.addEventListener("abort", () => abort(signal), { once: true });
+      this._abortController.signal.addEventListener(
+        "abort",
+        () => abort(this._abortController.signal),
+        { once: true },
+      );
     }
     return combined.signal;
   }
