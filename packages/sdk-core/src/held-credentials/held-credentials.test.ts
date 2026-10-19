@@ -592,3 +592,25 @@ describe("TC-1540 N3: bounded parsing", () => {
     await expectCode("bad-payload", { payload: (p) => JSON.parse(`{"__proto__":{"x":1},${JSON.stringify(p).slice(1)}`) });
   });
 });
+
+describe("TC-1540 Miller 1: per-segment byte limits", () => {
+  test("a 3.5 MB header is refused by the verifier's code (total cap) and an oversized header segment under the total cap too", async () => {
+    const h = harness();
+    expect(await presentRaw(h, withHeaderSegment("a".repeat(3_500_000)))).toBe("bad-presentation");
+    const [header, payload, sig] = makeCredential().jwt.split(".");
+    expect(await presentRaw(h, `${"a".repeat(HELD_LIMITS.headerSegmentChars + 1)}.${payload}.${sig}~`)).toBe("bad-presentation");
+    expect(await presentRaw(h, `${header}.${"a".repeat(HELD_LIMITS.payloadSegmentChars + 1)}.${sig}~`)).toBe("bad-presentation");
+    expect(await presentRaw(h, `${header}.${payload}.${"a".repeat(HELD_LIMITS.signatureSegmentChars + 1)}~`)).toBe("bad-presentation");
+  });
+  test("too many or oversized disclosures are refused before they are decoded", async () => {
+    const h = harness();
+    expect(await presentRaw(h, makeCredential({ rawDisclosures: Array.from({ length: HELD_LIMITS.disclosures }, (_, i) => enc(`d${i}`)) }).sdJwt)).toBe("bad-presentation");
+    expect(await presentRaw(h, makeCredential({ rawDisclosures: ["a".repeat(HELD_LIMITS.disclosureChars + 1)] }).sdJwt)).toBe("bad-presentation");
+  });
+  test("segments at exactly the limit are not refused for size", async () => {
+    const h = harness();
+    const [, payload, sig] = makeCredential().jwt.split(".");
+    // exactly at the cap: refused later (bad signature/header content), not for size
+    expect(await presentRaw(h, `${"a".repeat(HELD_LIMITS.headerSegmentChars)}.${payload}.${sig}~`)).not.toBe("bad-presentation");
+  });
+});

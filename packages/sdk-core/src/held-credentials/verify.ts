@@ -59,6 +59,11 @@ export const HELD_LIMITS = {
   sdJwtChars: 16384,
   siweMessageChars: 2048,
   siweSignatureChars: 132,
+  disclosures: 8,
+  disclosureChars: 1024,
+  headerSegmentChars: 1024,
+  payloadSegmentChars: 4096,
+  signatureSegmentChars: 128,
 } as const;
 
 const HEADER_MEMBERS = new Set(["alg", "typ", "kid"]);
@@ -111,9 +116,12 @@ export async function verifyHeldPresentation(presentation: unknown, options: Ver
   if (parts.length < 2 || parts[parts.length - 1] !== "") refuse("bad-presentation", "sdJwt must end with ~ and carry no key-binding JWT");
   const [jwt, ...disclosureParts] = parts.slice(0, -1) as [string, ...string[]];
   if (disclosureParts.some((d) => d === "")) refuse("bad-presentation", "empty disclosure");
+  if (disclosureParts.length > HELD_LIMITS.disclosures) refuse("bad-presentation", "too many disclosures");
+  if (disclosureParts.some((d) => d.length > HELD_LIMITS.disclosureChars)) refuse("bad-presentation", "disclosure is too long");
   const segments = jwt.split(".");
   if (segments.length !== 3 || segments.some((s) => s === "")) refuse("bad-presentation", "JWT must have three segments");
   const [headerB64, payloadB64, signatureB64] = segments as [string, string, string];
+  if (headerB64.length > HELD_LIMITS.headerSegmentChars || payloadB64.length > HELD_LIMITS.payloadSegmentChars || signatureB64.length > HELD_LIMITS.signatureSegmentChars) refuse("bad-presentation", "JWT segment is too long");
 
   // 2. protected header only
   const header = parseStrictJson(new TextDecoder().decode(decodeBase64Url(headerB64, "bad-header")), "bad-header");
