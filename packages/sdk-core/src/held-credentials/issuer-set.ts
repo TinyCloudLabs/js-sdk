@@ -35,6 +35,9 @@ function copyEntry(entry: IssuerEntry): IssuerEntry {
  * (`IssuerSet.is`), so a structural object can never stand in for a validated set. The instance,
  * its prototype and the class are frozen, so `resolveIssuer` cannot be replaced, and the verifier
  * reads entries through the module-private `lookupIssuerEntry`, never through a property.
+ *
+ * Do not mix the CJS and ESM builds of this package in one process: an `IssuerSet` made by the
+ * other build is a different class and is refused as `bad-config`. Import one build only.
  */
 export class IssuerSet {
   readonly version: number;
