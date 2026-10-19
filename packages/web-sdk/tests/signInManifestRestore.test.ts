@@ -1,5 +1,6 @@
 import { describe, expect, mock, test } from "bun:test";
 import { IDBKeyRange as fakeIDBKeyRange, indexedDB as fakeIndexedDB } from "fake-indexeddb";
+import { ledgerFor } from "../../replica/src/kv-storage/ledger";
 import { createIndexedDbLifecycle, inspectReplicaKeyPresence } from "../../replica/src/kv-storage/lifecycle";
 import { indexedDbReplicaStorage } from "../../replica/src/kv-storage/client";
 import { TinyCloudNode as ReplicationNode, getNodeReplicationLoaders, registerReplicationLoaders } from "@tinycloud/node-sdk/core";
@@ -1212,7 +1213,7 @@ test("signOut during real browser gate restore and awaited storage clear cannot 
     }
     const storage = new PausedStorage({ storage: backend });
     await storage.save(address, persisted);
-    const realGate = createIndexedDbLifecycle();
+    const realGate = createIndexedDbLifecycle({ ledger: ledgerFor() });
     let pauseRestore = false;
     const lifecycle = {
       ...realGate,
