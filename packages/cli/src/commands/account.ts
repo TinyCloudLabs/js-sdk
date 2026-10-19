@@ -4,6 +4,7 @@ import { readFile } from "node:fs/promises";
 import type { AccountDelegation, AccountSpace, Manifest, SqlValue } from "@tinycloud/node-sdk";
 import { ProfileManager } from "../config/profiles.js";
 import { ExitCode } from "../config/constants.js";
+import { assertAccountAccess, type AccountNeed } from "../lib/account-access.js";
 import { ensureAuthenticated } from "../lib/sdk.js";
 import { CLIError, handleError, cliErrorFromService } from "../output/errors.js";
 import { formatTable, outputJson, shouldOutputJson } from "../output/formatter.js";
@@ -19,7 +20,7 @@ export function registerAccountCommand(program: Command): void {
     .description("Show account status")
     .action(async (_options, cmd) => {
       try {
-        const node = await authenticatedNode(cmd);
+        const node = await authenticatedNode(cmd, "delegations");
         const status = await node.account.status();
         assertOk(status);
         outputJson(status.data);
@@ -75,7 +76,7 @@ export function registerAccountCommand(program: Command): void {
     .option("--live", "Read canonical account KV records instead of the SQLite index")
     .action(async (options, cmd) => {
       try {
-        const node = await authenticatedNode(cmd);
+        const node = await authenticatedNode(cmd, "spaces");
         const result = options.live
           ? await node.account.spaces.list()
           : await node.account.spaces.list({ preferIndex: true });
@@ -150,7 +151,7 @@ export function registerAccountCommand(program: Command): void {
     .description("Register currently accessible spaces into account/spaces")
     .action(async (_options, cmd) => {
       try {
-        const node = await authenticatedNode(cmd);
+        const node = await authenticatedNode(cmd, "spaces");
         const result = await node.account.spaces.syncAccessible();
         assertOk(result);
         outputJson({ spaces: result.data.map(formatSpace), count: result.data.length, synced: true });
@@ -165,7 +166,7 @@ export function registerAccountCommand(program: Command): void {
     .description("Remove a space registry entry")
     .action(async (spaceId: string, _options, cmd) => {
       try {
-        const node = await authenticatedNode(cmd);
+        const node = await authenticatedNode(cmd, "remove");
         const result = await node.account.spaces.remove(spaceId);
         assertOk(result);
         outputJson({ spaceId, removed: true });
@@ -209,7 +210,7 @@ export function registerAccountCommand(program: Command): void {
     .description("Remove an application registry entry")
     .action(async (appId: string, _options, cmd) => {
       try {
-        const node = await authenticatedNode(cmd);
+        const node = await authenticatedNode(cmd, "remove");
         const result = await node.account.applications.remove(appId);
         assertOk(result);
         outputJson({ appId, removed: true });
@@ -232,7 +233,7 @@ export function registerAccountCommand(program: Command): void {
         if (options.granted && options.received) {
           throw new CLIError("USAGE_ERROR", "Use only one of --granted or --received.", ExitCode.USAGE_ERROR);
         }
-        const node = await authenticatedNode(cmd);
+        const node = await authenticatedNode(cmd, "delegations");
         const direction = options.granted ? "granted" : options.received ? "received" : "all";
         const result = options.live
           ? await node.account.delegations.list({ direction, space: options.space })
@@ -271,7 +272,7 @@ export function registerAccountCommand(program: Command): void {
     .requiredOption("--space <space>", "Space name or ID containing the delegation")
     .action(async (cid: string, options, cmd) => {
       try {
-        const node = await authenticatedNode(cmd);
+        const node = await authenticatedNode(cmd, "revoke", cid);
         const result = await node.account.delegations.revoke({ cid, space: options.space });
         assertOk(result);
         outputJson({ cid, space: options.space, revoked: true });
@@ -315,7 +316,7 @@ export function registerAccountCommand(program: Command): void {
     .description("Rebuild account SQLite index from canonical account data")
     .action(async (_options, cmd) => {
       try {
-        const node = await authenticatedNode(cmd);
+        const node = await authenticatedNode(cmd, "delegations");
         const result = await node.account.index.rebuild();
         assertOk(result);
         outputJson(result.data);
@@ -360,10 +361,12 @@ export function registerAccountCommand(program: Command): void {
   }
 }
 
-async function authenticatedNode(cmd: Command) {
+async function authenticatedNode(cmd: Command, need: AccountNeed = "registry", cid?: string) {
   const globalOpts = cmd.optsWithGlobals();
   const ctx = await ProfileManager.resolveContext(globalOpts);
-  return ensureAuthenticated(ctx);
+  const node = await ensureAuthenticated(ctx);
+  await assertAccountAccess(node, ctx.profile, need, cid);
+  return node;
 }
 
 function assertOk<T>(result: { ok: true; data: T } | { ok: false; error: { code: string; message: string } }): asserts result is { ok: true; data: T } {

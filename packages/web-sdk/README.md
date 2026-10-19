@@ -210,6 +210,12 @@ activation, gated and the worker keep their ceilings. It is #582's own row, take
 shrink attempt (see the row's `reason`). The ledger's `tc1428Ratchet` row records it and cannot change
 later; whichever PR lands after it re-measures against the new base and updates its own row.
 
+TC-1476 (the debug event recorded when the account registry sync is skipped for want of account access, #600) was
+measured on canonical CI against master `c7a379c5`: master 1,474,761 / 1,403,138 B, the PR on source `bf9349ed`
+1,474,808 / 1,403,191 B, identical in both jobs, i.e. +47 / +53, inside Naomi's +62 B +/-20 ruling. It lowers the
+root ceilings to exactly those bytes. The ledger's `tc1476Ratchet` row records it and cannot change later;
+whichever PR lands after it re-measures against the new base and updates its own row.
+
 **Ancestry pins and squash merges.** A policy row records the PR-branch commit it
 was reviewed at, and its introduction check requires that literal commit in the
 PR head. js-sdk uses merge commits, which keep that commit reachable, but squash

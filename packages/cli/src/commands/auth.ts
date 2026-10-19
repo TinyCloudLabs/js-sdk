@@ -122,6 +122,7 @@ import {
   storedAdditionalDelegation,
   type PermissionRequestArtifact,
 } from "../lib/permissions.js";
+import { approvalNotices } from "../lib/approval-notices.js";
 import { buildReplicationLoginRequest, type ReplicationLoginOptions } from "../auth/replication-login.js";
 
 /** The one function dependency used by owner OpenKey permission acquisition. */
@@ -891,12 +892,16 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
     .option("--yes", "Skip local-key TTY confirmation", false)
     .option("--no-popup", "Print the OpenKey URL without opening a browser when granting with OpenKey")
     .option("--device", "With --grant: approve on another device (e.g. a phone) through OpenKey device authorization (KV-scoped; SQL needs browser login)")
+    .option("--paste", "With --grant on an OpenKey profile: wait up to 5 minutes for a signed code from OpenKey on stdin instead of a browser callback (use when the browser cannot reach this CLI)")
     .action(async (options, cmd) => {
       try {
         const globalOpts = cmd.optsWithGlobals();
         // Without --grant, the request records the host it is for and no session is restored.
         const ctx = await ProfileManager.resolveContext(globalOpts, options.grant ? {} : { storedSession: "unused" });
         const profile = await ProfileManager.getProfile(ctx.profile);
+        if (options.paste && (!options.grant || options.device || resolveProfilePosture(profile) !== "owner-openkey")) {
+          throw new CLIError("INVALID_ARGUMENT", "--paste requires --grant on an OpenKey owner profile and cannot be combined with --device.", ExitCode.USAGE_ERROR);
+        }
         if (options.device && (!options.grant || resolveProfilePosture(profile) !== "owner-openkey")) {
           throw new CLIError("INVALID_ARGUMENT", "--device requires --grant on an OpenKey owner profile.", ExitCode.USAGE_ERROR);
         }
@@ -949,7 +954,12 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
             expiry: expiryCap,
           };
           const declined: PermissionEntry[] = [];
-          for (const group of groupPermissionsBySpace(requested)) {
+          const groups = groupPermissionsBySpace(requested);
+          // OpenKey signs one space per approval; say so before the prompts stall a user at the second.
+          const notices = approvalNotices(groups);
+          if (notices) process.stderr.write(`${notices.intro}\n`);
+          for (const [index, group] of groups.entries()) {
+            if (notices) process.stderr.write(`${notices.prompts[index]}\n`);
             const reason = permissionGrantReason(
               `Grant requested TinyCloud permissions from \`${CLI_NAME} auth request --grant\`.`,
               group,
@@ -979,6 +989,7 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
                 openkeyHost,
                 expiry: expiryCap === undefined ? undefined : openKeyExpiryParam(expiryCap),
                 noPopup: options.popup === false,
+                paste: options.paste,
               });
             }
             const delegation = portableFromOpenKeyDelegation(delegationData, request, ctx.host, proof);
