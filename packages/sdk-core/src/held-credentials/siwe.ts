@@ -18,7 +18,30 @@ export interface StrictSiwe {
   resources: string[];
 }
 
-const RFC3339 = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/;
+const RFC3339 = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,9}))?(?:Z|([+-])(\d{2}):(\d{2}))$/;
+
+/**
+ * Exact RFC 3339 `date-time` to epoch milliseconds, or null. Every field is range-checked and the
+ * date must be real (no Feb 31, hour 24 or second 60), so `Date.parse`'s leniency never decides.
+ */
+export function parseRfc3339(value: string): number | null {
+  const m = RFC3339.exec(value);
+  if (!m) return null;
+  const [year, month, day, hour, minute, second] = [m[1], m[2], m[3], m[4], m[5], m[6]].map(Number) as [number, number, number, number, number, number];
+  if (month < 1 || month > 12 || hour > 23 || minute > 59 || second > 59) return null;
+  const date = new Date(0);
+  date.setUTCFullYear(year, month - 1, day); // unlike Date.UTC, years 0-99 are not remapped to 19xx
+  if (date.getUTCFullYear() !== year || date.getUTCMonth() !== month - 1 || date.getUTCDate() !== day) return null;
+  let offsetMinutes = 0;
+  if (m[8] !== undefined) {
+    const oh = Number(m[9]), om = Number(m[10]);
+    if (oh > 23 || om > 59) return null;
+    offsetMinutes = (m[8] === "-" ? -1 : 1) * (oh * 60 + om);
+  }
+  const millis = m[7] === undefined ? 0 : Number(m[7].padEnd(3, "0").slice(0, 3));
+  date.setUTCHours(hour, minute, second, millis);
+  return date.getTime() - offsetMinutes * 60_000;
+}
 const AUDIENCE = /^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?(?::([1-9][0-9]{0,4}))?$/;
 
 /** An audience is a bare RFC 3986 authority: lowercase host[:port], no scheme, userinfo, path, or default port 443. */
@@ -72,7 +95,7 @@ export function parseStrictSiwe(message: string): StrictSiwe {
   if (!/^[0-9]+$/.test(chainId)) bad("chain id");
   if (!/^[A-Za-z0-9]{8,}$/.test(nonce)) bad("nonce must be alphanumeric");
   for (const [name, value] of [["Issued At", issuedAt], ["Expiration Time", expirationTime], ["Not Before", notBefore]] as const) {
-    if (value !== undefined && (!RFC3339.test(value) || Number.isNaN(Date.parse(value)))) bad(`${name} is not RFC 3339`);
+    if (value !== undefined && parseRfc3339(value) === null) bad(`${name} is not RFC 3339`);
   }
   return { domain: head![1]!, address, statement, uri, version, chainId, nonce, issuedAt, expirationTime, notBefore, resources };
 }

@@ -20,6 +20,7 @@ import {
 import { MAX_JSON_DEPTH, decodeUtf8, asciiBytes, bytesToHex, encodeBase64Url, parseStrictJson } from "./encoding";
 import { HELD_LIMITS } from "./verify";
 import { verifyEd25519Strict } from "./crypto";
+import { parseRfc3339 } from "./siwe";
 import { EMAIL_HELD_ROW } from "./rows";
 
 const enc = (value: unknown) => encodeBase64Url(new TextEncoder().encode(typeof value === "string" ? value : JSON.stringify(value)));
@@ -735,5 +736,28 @@ describe("TC-1540 Miller 6: address case and canonical subject", () => {
     const result = await verifyHeldPresentation(presentation, h.options);
     expect(result.subject).toBe(SUB);
     expect(result.subjectAddress).toBe(HOLDER_LOWER);
+  });
+});
+
+describe("TC-1540 Miller 7: exact RFC 3339 in SIWE", () => {
+  test("parseRfc3339 refuses impossible dates and times", () => {
+    for (const bad of [
+      "2026-02-31T00:00:00Z", "2026-02-29T00:00:00Z", "2026-13-01T00:00:00Z", "2026-00-10T00:00:00Z", "2026-04-31T00:00:00Z", "2026-10-19T24:00:00Z",
+      "2026-10-19T23:60:00Z", "2026-10-19T23:59:60Z", "2026-10-19T00:00:00", "2026-10-19 00:00:00Z", "2026-10-19T00:00:00+24:00", "2026-10-19T00:00:00+01:60",
+      "2026-10-19T00:00:00.Z", "2026-10-19T00:00:00z", "", "2026-10-19",
+    ]) expect(parseRfc3339(bad)).toBeNull();
+  });
+  test("parseRfc3339 values", () => {
+    expect(parseRfc3339("2026-10-19T00:00:00Z")).toBe(Date.UTC(2026, 9, 19));
+    expect(parseRfc3339("2028-02-29T12:00:00.5Z")).toBe(Date.UTC(2028, 1, 29, 12, 0, 0, 500));
+    expect(parseRfc3339("2026-10-19T02:00:00+02:00")).toBe(Date.UTC(2026, 9, 19));
+    expect(parseRfc3339("2026-10-18T19:30:00-04:30")).toBe(Date.UTC(2026, 9, 19));
+  });
+  test("a SIWE with an impossible Expiration Time, Not Before or Issued At is refused; real ones pass", async () => {
+    await expectCode("bad-siwe", {}, { expirationTime: "2026-02-31T00:00:00Z" });
+    await expectCode("bad-siwe", {}, { expirationTime: "2026-10-21T24:00:00Z" });
+    await expectCode("bad-siwe", {}, { notBefore: "2026-10-19T00:00:00+25:00" });
+    await expectCode("ok", {}, { expirationTime: "2026-10-21T00:00:00Z", notBefore: "2026-10-19T00:00:00Z" });
+    await expectCode("bad-siwe", {}, { expirationTime: "2026-10-19T00:00:00Z" });
   });
 });

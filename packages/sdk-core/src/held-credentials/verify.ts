@@ -5,7 +5,7 @@ import { refuse } from "./errors";
 import { didMethod, isWellFormedKid, type IssuerEntry, type IssuerSet } from "./issuer-set";
 import type { NonceStore } from "./nonce-store";
 import { DEFAULT_ROWS, findRow, type ProfileRow } from "./rows";
-import { PRESENTATION_STATEMENT, SD_HASH_RESOURCE_PREFIX, assertValidAudience, parseStrictSiwe } from "./siwe";
+import { PRESENTATION_STATEMENT, SD_HASH_RESOURCE_PREFIX, assertValidAudience, parseRfc3339, parseStrictSiwe } from "./siwe";
 
 
 export interface HeldPresentation {
@@ -222,8 +222,8 @@ export async function verifyHeldPresentation(presentation: unknown, options: Ver
   if (message.chainId !== subjectPkh.chainId) refuse("bad-siwe", "chain id must equal the credential subject's");
   if (!pkhPrincipalsEqual(`did:pkh:eip155:${message.chainId}:${message.address}`, subject)) refuse("bad-siwe", "address is not the credential subject");
   if (message.resources.length !== 1 || message.resources.some((r) => r.toLowerCase().startsWith("urn:recap:")) || message.resources[0] !== `${SD_HASH_RESOURCE_PREFIX}${sdHash(sdJwtText)}`) refuse("bad-siwe", "resources must be exactly the sd_hash of this presentation");
-  if (message.expirationTime !== undefined && nowMs >= Date.parse(message.expirationTime)) refuse("bad-siwe", "SIWE has expired");
-  if (message.notBefore !== undefined && nowMs < Date.parse(message.notBefore)) refuse("bad-siwe", "SIWE is not yet valid");
+  if (message.expirationTime !== undefined && nowMs >= (parseRfc3339(message.expirationTime) as number)) refuse("bad-siwe", "SIWE has expired");
+  if (message.notBefore !== undefined && nowMs < (parseRfc3339(message.notBefore) as number)) refuse("bad-siwe", "SIWE is not yet valid");
   const signatureBytes = hexToBytes(siweSignature.startsWith("0x") ? siweSignature.slice(2) : "zz", "bad-siwe-signature");
   const recovered = recoverEip191Address(siweMessage, signatureBytes);
   if (recovered === null || recovered !== subjectPkh.address) refuse("bad-siwe-signature", "signature does not recover the credential subject");
