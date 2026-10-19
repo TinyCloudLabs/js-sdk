@@ -639,3 +639,5 @@ export {
   type ProfileReplicaPurge,
   type ProfileReplicaDeferredToken,
 } from "./replication/sqlite";
+
+// probe: measures master root size on CI; no code change
