@@ -15,10 +15,10 @@ import { join, resolve } from "node:path";
 // TC-1432 (vault etag, ifMatch and opt-in expectAad in sdk-services) measured 822,044 (+1,109) in
 // GitHub run 39144311690 (head 83c9d75a, against master 129c7935 after #578 landed; the same 822,044
 // as run 39134457380 on the earlier base); the ledger's tc1432Ratchet row records it.
-// TC-1475 (automatic retry of NODE_BUSY / REQUEST_TIMEOUT in ServiceContext.fetch) measured 822,617 (+573) in
-// GitHub run 39244120582 (head f2a54130, against master 57b3ae7e); the ledger's tc1475Ratchet row records it.
+// TC-1475 (automatic retry of NODE_BUSY / REQUEST_TIMEOUT in ServiceContext.fetch) measured 822,703 (+659) in
+// GitHub run 39246795862 (head 15d77f3e, against master 57b3ae7e); the ledger's tc1475Ratchet row records it.
 // Zero additional headroom; independent of the web-sdk ledger, including WASM.
-export const MAX_WORKER_GZIP_BYTES = 822_617;
+export const MAX_WORKER_GZIP_BYTES = 822_703;
 const canonicalName = /^kv-storage\.worker\.([0-9a-f]{64})\.js$/;
 
 export function assertWorkerSizeToolchain(bunVersion: string, rustcOutput: string): void {
