@@ -8,7 +8,7 @@ import { ExitCode } from "../config/constants.js";
 import { ensureAuthenticated } from "../lib/sdk.js";
 import { revokeDelegationOnNode } from "../lib/revoke-delegation.js";
 import { parseExpiry } from "../lib/duration.js";
-import type { AccountDelegation } from "@tinycloud/node-sdk";
+import { PermissionNotInManifestError, type AccountDelegation } from "@tinycloud/node-sdk";
 
 function listedDelegation(d: AccountDelegation) {
   return {
@@ -78,11 +78,30 @@ export function registerDelegationCommand(
 
         // delegateTo signs the delegation and activates it with the node
         // (POST /delegate); the node does not serve tinycloud.delegation/create.
+        // The space must be explicit: an entry without one targets the
+        // "applications" space, not the session's default space.
         const { delegation: created } = await node.delegateTo(
           options.to,
-          Object.entries(byService).map(([service, serviceActions]) => ({ service, path: options.path, actions: serviceActions })),
+          Object.entries(byService).map(([service, serviceActions]) => ({
+            service,
+            space: "default",
+            path: options.path,
+            actions: serviceActions,
+          })),
           { expiry: expiry.getTime() - Date.now() },
-        );
+        ).catch((error: unknown) => {
+          if (error instanceof PermissionNotInManifestError) {
+            const needed = error.missing
+              .map((m) => `${m.actions.join(", ")} on space "${m.space ?? "default"}" path "${m.path}"`)
+              .join("; ");
+            throw new CLIError(
+              "PERMISSION_DENIED",
+              `This session cannot delegate what was requested. Missing: ${needed}. Sign in again with these permissions.`,
+              ExitCode.PERMISSION_DENIED,
+            );
+          }
+          throw error;
+        });
 
         outputJson({
           cid: created.cid,

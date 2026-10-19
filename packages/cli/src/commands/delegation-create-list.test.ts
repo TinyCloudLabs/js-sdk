@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, mock, test } from "bun:test";
 import { Command } from "commander";
+import { PermissionNotInManifestError } from "@tinycloud/node-sdk";
 
 const outputs: any[] = [];
 const errors: any[] = [];
@@ -11,11 +12,16 @@ const spaceId = `tinycloud:pkh:eip155:1:0x11111111111111111111111111111111111111
 // tinycloud.delegation/create|list invocation, so this fake exposes no
 // delegationManager: reaching for one fails the command.
 let store: any[];
+const sessionServices = new Set(["tinycloud.kv", "tinycloud.sql"]);
 const delegateToCalls: any[] = [];
 const listCalls: any[] = [];
 const fakeNode = {
   delegateTo: async (did: string, permissions: any[], options: { expiry: number }) => {
     delegateToCalls.push({ did, permissions, options });
+    // Like the real planDerivation: an entry is covered only if the session holds its
+    // service in exactly that space; an entry with no space means "applications".
+    const missing = permissions.filter((p) => (p.space ?? "applications") !== "default" || !sessionServices.has(p.service));
+    if (missing.length > 0) throw new PermissionNotInManifestError(missing, []);
     const expiry = new Date(Date.now() + options.expiry);
     const delegation = {
       cid: `bafy-created-${store.length + 1}`,
@@ -86,6 +92,7 @@ beforeEach(() => {
   errors.length = 0;
   delegateToCalls.length = 0;
   listCalls.length = 0;
+  sessionServices.add("tinycloud.sql");
 });
 
 describe("tc delegation create / list", () => {
@@ -121,9 +128,18 @@ describe("tc delegation create / list", () => {
     expect(errors).toEqual([]);
     expect(delegateToCalls).toHaveLength(1);
     expect(delegateToCalls[0].permissions).toEqual([
-      { service: "tinycloud.kv", path: "data/", actions: ["tinycloud.kv/get"] },
-      { service: "tinycloud.sql", path: "data/", actions: ["tinycloud.sql/read"] },
+      { service: "tinycloud.kv", space: "default", path: "data/", actions: ["tinycloud.kv/get"] },
+      { service: "tinycloud.sql", space: "default", path: "data/", actions: ["tinycloud.sql/read"] },
     ]);
+  });
+
+  test("a session that lacks a requested service is refused naming the missing ability and path", async () => {
+    sessionServices.delete("tinycloud.sql");
+    await run("create", "--to", recipient, "--path", "data/", "--actions", "kv/get,sql/read");
+    expect(outputs).toEqual([]);
+    expect(errors[0]).toMatchObject({ code: "PERMISSION_DENIED", exitCode: 5 });
+    expect(errors[0].message).toContain('tinycloud.sql/read on space "default" path "data/"');
+    expect(errors[0].message).not.toContain("tinycloud.kv/get");
   });
 
   test("an action without a service is refused before anything is signed", async () => {
