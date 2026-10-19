@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { MAX_WORKER_GZIP_BYTES } from "../../replica/scripts/check-worker-size";
 import { compactFixOptionalAllowance, mergedPinsNotLandedOn, optionalSourcePins, type OptionalLedger } from "./replica-optional-size-policy";
+import { approvedTc1428Ratchet, validateTc1428RatchetTransition, type Tc1428Ratchet } from "./replica-size-policy";
 import { approvedTc1443Ratchet, approvedTc1443bRatchet, approvedTc1448Ratchet, approvedTc1466Ratchet, validateTc1443RatchetTransition, validateTc1443bRatchetTransition, validateTc1448RatchetTransition, validateTc1466RatchetTransition, type Tc1443Ratchet, type Tc1443bRatchet, type Tc1448Ratchet, type Tc1466Ratchet } from "./replica-size-policy";
 import { ancestryPins, assertCiSizeToolchain, approvedCiToolchainCorrection, approvedFixRequiredRatchet, approvedGatedOnlyRatchet, approvedHardeningRatchet, approvedLogoutRatchet, approvedTc1413Ratchet, approvedTc1424Ratchet, approvedTc1432Ratchet, approvedTc1436Ratchet, ciCorrectionPolicyOnlyPaths, hasAncestor, isPolicyOnlySinceApprovedSource, landingCommit, pinLandedOn, validateCiToolchainTransition, validateGatedOnlyRatchet, validateHardeningRatchetTransition, validateLedger, validateLogoutRatchetTransition, validateMasterMergeResolutionTransition, validateTc1413RatchetTransition, validateTc1424RatchetTransition, validateTc1432RatchetTransition, validateTc1436RatchetTransition, type HardeningRatchet, type Ledger, type LogoutRatchet, type MasterMergeResolution, type Tc1413Ratchet, type Tc1424Ratchet, type Tc1432Ratchet, type Tc1436Ratchet } from "./replica-size-policy";
 
@@ -23,6 +24,7 @@ const historical: Ledger = {
   tc1466Ratchet: undefined,
   tc1443Ratchet: undefined,
   tc1443bRatchet: undefined,
+  tc1428Ratchet: undefined,
   phase2Ratchet: {
     ...current.phase2Ratchet!,
     toolchain: "Bun 1.4.3; production webpack; gzip -9 -c",
@@ -1490,6 +1492,51 @@ describe("TC-1443 slice b registry policy exact-delta ratchet", () => {
     expect(() => validateTc1443bRatchetTransition(undefined, changed)).toThrow();
     expect(() => validateTc1443bRatchetTransition(row(), changed)).toThrow();
     expect(() => validateTc1443bRatchetTransition(row(), undefined)).toThrow();
+  });
+});
+
+describe("TC-1428 artifact pin exact-delta ratchet", () => {
+  const row = () => structuredClone(approvedTc1428Ratchet);
+
+  it("is in the ledger once, its root ceiling equal to TC-1443b's plus the measured delta", () => {
+    expect(() => validateLedger(current)).not.toThrow();
+    expect(current.tc1428Ratchet).toEqual(approvedTc1428Ratchet);
+    for (const format of ["index.mjs", "index.cjs"] as const) {
+      expect(approvedTc1428Ratchet.root.ceiling[format])
+        .toBe(approvedTc1443bRatchet.root.ceiling[format] + approvedTc1428Ratchet.root.delta[format]);
+    }
+    expect(ancestryPins(current, false)).toContainEqual({
+      row: "tc1428Ratchet", pin: approvedTc1428Ratchet.sourceCommits.at(-1)!,
+    });
+  });
+
+  it("refuses one extra byte, other CI provenance, a dropped source commit or a missing TC-1443b row", () => {
+    const mutations: Array<(changed: Tc1428Ratchet) => void> = [
+      (changed) => { changed.root.ceiling["index.mjs"]++; },
+      (changed) => { changed.root.delta["index.cjs"]++; },
+      (changed) => { changed.canonicalCI.run = "https://github.com/TinyCloudLabs/js-sdk/actions/runs/1"; },
+      (changed) => { changed.sourceCommits.pop(); },
+    ];
+    for (const mutate of mutations) {
+      const ledger = copy(current);
+      const changed = row();
+      mutate(changed);
+      ledger.tc1428Ratchet = changed;
+      expect(() => validateLedger(ledger)).toThrow();
+    }
+    const withoutTc1443b = copy(current);
+    delete withoutTc1443b.tc1443bRatchet;
+    expect(() => validateLedger(withoutTc1443b)).toThrow();
+  });
+
+  it("may be introduced once and never changed or removed in a later base", () => {
+    expect(() => validateTc1428RatchetTransition(undefined, row())).not.toThrow();
+    expect(() => validateTc1428RatchetTransition(row(), row())).not.toThrow();
+    const changed = row();
+    changed.root.ceiling["index.cjs"]++;
+    expect(() => validateTc1428RatchetTransition(undefined, changed)).toThrow();
+    expect(() => validateTc1428RatchetTransition(row(), changed)).toThrow();
+    expect(() => validateTc1428RatchetTransition(row(), undefined)).toThrow();
   });
 });
 

@@ -548,5 +548,31 @@
       }
     },
     "reason": "sdk-core adds the opt-in fail-closed registry policy (registry-policy.ts: resolveOwnerHosts and the space-creation guard, plus location.ts hooks and the legacy-fallback deprecation warning); web-sdk sign-in (tcw.ts) threads registryPolicy, newUserHost, registryChainId, registrySequenceStore and onNodeNotFound through. Both root bundles grow. No shrink was attempted for this row. Base: master CI run 39176239864 at f819c542 (4a717372 is a version commit on top) measured index.mjs 1,471,007 / index.cjs 1,397,987 in both Node jobs, equal to the TC-1466 ceilings. PR: run 39176947473 on merge commit f65c2a0f measured 1,473,920 / 1,402,497 in both Node jobs, i.e. +2,913 / +4,510, the same delta as on the earlier base 28ca77a0 (run 39172113588 on 87310cad: 1,473,908 / 1,402,491 over 1,470,995 / 1,397,981). Delta approved by Naomi (2026-10-18): +2,913/+4,510 ±50 B, zero headroom."
+  },
+  "tc1428Ratchet": {
+    "label": "TC-1428 #582 owner-signed artifact pin for addressed shares, exact canonical delta",
+    "ruling": "Naomi's standing size rule for TC-1428 #582: a real shrink first, remainder by the PR's own exact-delta row at canonical CI bytes; rows chain after the latest row on master, so whichever PR lands later re-measures against the new base and updates its own row",
+    "base": "42b089099ba989f4a2986a7aa5cb6127d3d97d0f",
+    "sourceCommits": [
+      "90f21ae6a137c3c4a44d2b2a2c0310ba8be28808"
+    ],
+    "canonicalCI": {
+      "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39181586326",
+      "jobs": [
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39181586326/job/117835278702",
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39181586326/job/117835278999"
+      ]
+    },
+    "root": {
+      "delta": {
+        "index.mjs": 915,
+        "index.cjs": 812
+      },
+      "ceiling": {
+        "index.mjs": 1474835,
+        "index.cjs": 1403309
+      }
+    },
+    "reason": "The viewer now checks the owner-signed artifactPin: assertArtifactBinding and verifyArtifactShare in share-sdk/src/artifact-pin.ts, the strict artifactPin field in the Policy/v3 envelope schema, and their call sites in resolvePolicyShare and ShareRecipientClient.decryptV3Content. Root only: the worker, first-import, activation and gated artifacts are unchanged. Cuts applied first: the layout helpers and the owner-side helpers (buildArtifactPin, verifyArtifactManifestBytes, verifyArtifactFileBytes) live in the separate @tinycloud/share-sdk/artifact entry and are not in the web bundle; pin errors use their code as the message (-159 gzip bytes in a share-sdk proxy build); the recipient no longer re-hashes the fetched bytes, because the binding already makes the pinned digest equal contentSource.initialCiphertextDigestHex, which decryptV3Content checks (-56). Reused: verifyEnvelopeV3SignatureOnly for the signature, the noble sha256 already bundled, and the existing ciphertext digest check; sdk-core and share-envelope hold no equivalent. Not taken: a lazy import, because the web build pins LimitChunkCountPlugin({ maxChunks: 1 }) and would inline it; a subpath for the verifier, because the viewer must run it; dropping the expected-artifact check or the edit refusal, each worth about 35 bytes. Local builds measured +1127/+993 before these cuts. Review changes then showed two canonical-CI surprises that local builds do not reproduce: a zod .max() on the pinned size moved the ESM root by +911..+924, so the bound lives in assertArtifactBinding instead (+17), and folding the two receive-path signature checks into one saved nothing. Re-measured after #579, #580, #583, #584, #585, #586, #587, #588, #589, #591, #592, #593 and #595 landed: run 39181586326 on source 90f21ae6 (a merge of master 42b08909) measured identical absolute bytes in both jobs, +915 / +812 over TC-1443b's ceilings. The earlier run on ae2b05bc (master 28ca77a0) measured +911 / +767 over TC-1443's, so the moves in between add +4 / +45 to this PR's own cost."
   }
 }
