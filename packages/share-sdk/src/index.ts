@@ -12,7 +12,7 @@ export { createDelegatedShareKey, restoreDelegatedShareKey, createPolicyEnforcem
 export type { OwnerDelegationReceipt, OwnerDelegationPermission, CreateOwnerDelegationParams, OwnerShareAction, OwnerShareDecryption, OwnerShareMatcher, OwnerSharePolicyV2, DelegatedShareKey, SignedDelegation, RegisterOwnerSharePolicyParams, OwnerSharePolicyRegistration, OwnerSharePolicyRegistrationReceipt } from "./owner-policy.js";
 export { MemorySenderShareRecordStorage, MemorySenderShareKeyStorage, SenderShareStore, historyRecordForPublishedShare } from "./history.js";
 export { MemoryEncryptedShareHistoryStorage, EncryptedSenderShareHistory } from "./history.js";
-export type { SenderShareRecord, SenderShareRecordStorage, SenderShareKeyStorage, SenderShareRevocationScope, EncryptedShareHistoryStorage } from "./history.js";
+export type { SenderShareRecord, SenderShareRecordProofs, SenderShareRecordStorage, SenderShareKeyStorage, SenderShareRevocationScope, EncryptedShareHistoryStorage } from "./history.js";
 export { authorizeShare, authorizationMethodForTarget } from "./authorization.js";
 export type { ShareAuthorizationMethod, ShareAuthorizationRequired, ShareAuthorizationDenied, ShareAuthorizationReady, ShareAuthorizationResult, ShareAuthorizationAdapter, ShareAuthorizedContent } from "./authorization.js";
 export { notifyShare, recipientMatchesShareRecord, shareDeliveryWindowExpiresAt, ShareNotifyError } from "./notify.js";
@@ -30,3 +30,5 @@ export { publishPolicyShare, claimShare, resumeShareAuthorization } from "./poli
 export type { SharePolicyPublishAdapter } from "./policy.js";
 export { NATIVE_SHARE_FRAGMENT_PARAMETER, createNativeShare, openNativeShare, parseNativeShareUrl } from "./native.js";
 export type { NativeShareResult, NativeSharingService } from "./native.js";
+export { ArtifactPinError, artifactBindingView, assertArtifactBinding, verifyArtifactShare } from "./artifact-pin.js";
+export type { ArtifactBindingView, ArtifactPinErrorCode, ExpectedArtifact, VerifyArtifactShareOptions } from "./artifact-pin.js";

@@ -146,6 +146,7 @@ export const DelegationErrorCodes = {
   KV_SERVICE_UNAVAILABLE: "KV_SERVICE_UNAVAILABLE",
   DATA_FETCH_FAILED: "DATA_FETCH_FAILED",
   VALIDATION_ERROR: "VALIDATION_ERROR",
+  UNSUPPORTED_OPERATION: "UNSUPPORTED_OPERATION",
 } as const;
 
 export type DelegationErrorCode =
@@ -558,6 +559,8 @@ export const DelegationManagerConfigSchema = z.object({
     (val): val is InvokeAnyFunction => val === undefined || typeof val === "function",
     { message: "Expected an invokeAny function or undefined" }
   ).optional(),
+  /** Optional owner-signed authorization for direct CID revocation */
+  signOwnerRevocation: z.custom<(cid: string) => Promise<string>>().optional(),
   /** Optional custom fetch implementation */
   fetch: z.unknown().refine(
     (val): val is FetchFunction => val === undefined || typeof val === "function",

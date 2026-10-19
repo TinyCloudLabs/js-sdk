@@ -349,3 +349,80 @@ describe("DelegationManager.status", () => {
     expect((await manager.status("bafy-child")).ok).toBe(false);
   });
 });
+
+describe("DelegationManager invoke paths", () => {
+  const emptyOk = () => new Response("", { status: 200 });
+  const make = (fetch: () => Promise<Response>) =>
+    new DelegationManager({
+      hosts: ["https://node.tinycloud.xyz"],
+      session: { spaceId: "space" } as ServiceSession,
+      invoke: mock(() => ({ Authorization: "TinyCloudInvocation fixture" })),
+      fetch,
+    });
+
+  test("an empty 200 from getChain is an unsupported operation, not a parse failure", async () => {
+    const result = await make(async () => emptyOk()).getChain("bafy-child");
+    expect(result).toEqual({
+      ok: false,
+      error: expect.objectContaining({ code: "UNSUPPORTED_OPERATION", meta: expect.objectContaining({ status: 200 }) }),
+    });
+  });
+
+  test("an empty 200 from checkPermission is an unsupported operation, not a parse failure", async () => {
+    const result = await make(async () => emptyOk()).checkPermission("a/", "tinycloud.kv/get");
+    expect(result).toEqual({
+      ok: false,
+      error: expect.objectContaining({ code: "UNSUPPORTED_OPERATION" }),
+    });
+  });
+
+  test("a populated checkPermission body is still read", async () => {
+    const result = await make(async () => new Response(JSON.stringify({ allowed: true }), { status: 200 }))
+      .checkPermission("a/", "tinycloud.kv/get");
+    expect(result).toEqual({ ok: true, data: true });
+  });
+});
+
+describe("DelegationManager.query space choice", () => {
+  const accountSpaceId = "tinycloud:pkh:eip155:1:owner:account";
+  const defaultSpaceId = "tinycloud:pkh:eip155:1:owner:default";
+  const page = () => new Response(JSON.stringify({ schemaVersion: 2, items: [] }), { status: 200 });
+  const forbidden = () => new Response("Delegation query proof is not authorized", { status: 403 });
+  const make = (responses: Array<() => Response>) => {
+    const invokeAny = mock((_session: ServiceSession, _requests: Array<{ spaceId?: string }>) => ({ Authorization: "query" }));
+    const queue = [...responses];
+    const fetch = mock(async () => queue.shift()!());
+    const manager = new DelegationManager({
+      hosts: ["https://node.tinycloud.xyz"],
+      accountSpaceId,
+      session: { spaceId: defaultSpaceId } as ServiceSession,
+      invoke: mock(() => ({ Authorization: "unused" })),
+      invokeAny,
+      fetch,
+    });
+    return { manager, invokeAny, fetch };
+  };
+
+  test("signs for the account space when the session holds delegation/list there", async () => {
+    const { manager, invokeAny, fetch } = make([page]);
+    expect((await manager.query()).ok).toBe(true);
+    expect(invokeAny.mock.calls.map(([, requests]) => requests[0]?.spaceId)).toEqual([accountSpaceId]);
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
+  test("falls back to the session's own space when the account space is refused", async () => {
+    const { manager, invokeAny, fetch } = make([forbidden, page]);
+    expect((await manager.query()).ok).toBe(true);
+    expect(invokeAny.mock.calls.map(([, requests]) => requests[0]?.spaceId)).toEqual([accountSpaceId, defaultSpaceId]);
+    expect(fetch).toHaveBeenCalledTimes(2);
+  });
+
+  test("a session that holds delegation/list nowhere gets a typed permission error", async () => {
+    const { manager, fetch } = make([forbidden, forbidden]);
+    expect(await manager.query()).toEqual({
+      ok: false,
+      error: expect.objectContaining({ code: "PERMISSION_DENIED", meta: { status: 403 } }),
+    });
+    expect(fetch).toHaveBeenCalledTimes(2);
+  });
+});

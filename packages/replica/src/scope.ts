@@ -44,6 +44,16 @@ export function requiresSecretsOptIn(space: string, prefix: string): boolean {
   return firstSegment === "vault";
 }
 
+/** Browser read-through replicas never retain secrets or vault data, even with legacy opt-in. */
+export function assertBrowserReadThroughScope(space: string, prefix: string, allowSecrets: boolean): void {
+  if (allowSecrets || requiresSecretsOptIn(space, prefix) || prefix.split("/", 1)[0] === "secrets") {
+    throw new ReplicaError(
+      ReplicaErrorCode.INVALID_ARGUMENT,
+      "Browser read-through replicas require allowSecrets=false and exclude the whole space, secrets and vault prefixes.",
+    );
+  }
+}
+
 /** `"blake3-<hex>"` (quoted or not) → the 64-hex hash, or undefined. */
 export function hashFromEtag(etag: string): string | undefined {
   const match = /^"?blake3-([0-9a-f]{64})"?$/.exec(etag);

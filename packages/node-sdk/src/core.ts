@@ -65,6 +65,8 @@ export type {
   ReplicaAuthorityState,
   ReplicaCoverage,
   ReplicaDevice,
+  ReplicaGatedHandle,
+  ReplicaInspectedStatus,
   ReplicaGrantInfo,
   ReplicaState,
   ReplicaStatusEntry,
@@ -78,7 +80,7 @@ export type {
   ReplicationScheduler,
   ResolvedReplicationOptions,
 } from "@tinycloud/sdk-core";
-export { registerReplicationLoaders } from "./replication/module-registry";
+export { getNodeReplicationLoaders, registerReplicationLoaders } from "./replication/module-registry";
 export type { ReplicationModuleLoaders } from "./replication/module-registry";
 
 // Re-export core values for extensibility

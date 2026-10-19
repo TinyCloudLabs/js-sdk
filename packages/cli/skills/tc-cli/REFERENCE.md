@@ -5,7 +5,7 @@ This release has **Commander coverage tracked, not complete parity**:
 
 - 2 migrated registration(s).
 - 1 partially migrated registration(s).
-- 128 legacy registration(s) remain Commander-owned.
+- 129 legacy registration(s) remain Commander-owned.
 
 - `auth import [source]` → `tinycloud.auth.import@1` (partial; legacy inputs: v1 delegation artifact, v1 permission artifact without command, bare portable delegation, stored delegation wrapper, cross-user delegation persisted with activated=false).
 - `secrets get <name>` → `tinycloud.secrets.get@1` (migrated).
@@ -57,7 +57,7 @@ TC="${TC_BIN:-$HOME/.local/share/tinycloud/cli/node_modules/.bin/tinycloud}"   #
 | `--replication-prefix <prefix>` | Repeatable login request; adds `get` + `sync` only when an unrestricted covering `get` is already requested. Saves prefixes on the profile and reapplies them on later logins and rotation |
 | `--replication-allow-secrets` | Explicitly allow prefixes in the `secrets` space or `vault` tree; replication stores ciphertext only |
 | `--method openkey\|local` | Browser OpenKey flow or local Ethereum key |
-| `--paste`, `--no-popup` | Browser flow without a local callback / without opening a browser. `--paste` reads the owner's code from stdin (newline-terminated; a final unterminated line is accepted); stdin ending without a code fails with `PASTE_CODE_MISSING` (exit 3) naming the approval URL |
+| `--paste`, `--no-popup` | `--paste` waits up to five minutes for the one-line OpenKey signed code on stdin; `--no-popup` only prints the approval URL. An interactive CLI accepts paste if a browser callback is blocked. Safari, and Chromium browsers enforcing Local Network Access without granting it (including headless Chromium), may require paste for replica-enabled prepared-SIWE login because HTTPS-to-HTTP loopback is blocked. Non-TTY `--no-popup` cannot accept paste: if callback fails it expires nonzero with a `--paste` retry hint; the old signed code cannot be reused. An EOF in `--paste` mode returns `PASTE_CODE_MISSING` without saving a key or session. Ctrl-C, SIGINT or SIGTERM before the signed code arrives cancels the OpenKey handoff (best effort) and exits 130 `CANCELLED`. |
 
 Device login JSON lists the signed, approved `permissions`, owner-unchecked `declined` capabilities, `ownerDid`, `spaceId` and `expiresAt`. `tinycloud auth request --manifest FILE --grant --device` adds another space to a logged-in profile the same way (default lifetime 7d). `tinycloud enable share [--replace-session]` is shorthand for device login with `builtin:share-publishing`. OpenKey refuses `tinycloud.sql` and other abilities outside its device policy; use browser login (`--method openkey --manifest`) for those. Non-interactive browser login without `--paste` or `--no-popup` fails fast with `INTERACTIVE_LOGIN_REQUIRED`. Only an explicit `--host` is stored on the profile. Errors: `MANIFEST_REQUIRED`, `SCOPE_REJECTED` (OpenKey refused a capability; the message names it), `SESSION_IN_USE` (the request or the approved scope would narrow a live session; use a new profile or `--replace-session`), `PROFILE_CHANGED_DURING_LOGIN` (another login, key rotation or logout changed the profile while approval was pending; nothing saved), `PROFILE_STATE_INCONSISTENT` (profile, key and session disagree after an interrupted write; `--replace-session` or a new profile), `PROFILE_LOCK_TIMEOUT` (another process held the profile lock past 45 s), `LOCAL_OWNER_PROFILE` (scoped or device login on a local-owner-key profile; use a separate profile), `OPENKEY_UNREACHABLE`, `DEVICE_AUTH_DENIED`, `DEVICE_AUTH_EXPIRED`, `DEVICE_AUTH_BINDING_MISMATCH` (OpenKey's approval metadata disagrees with the signed grant), `OPENKEY_OWNER_MISMATCH`, `OPENKEY_GRANT_BROADENED`, `OPENKEY_EXPIRY_EXCEEDED` (the signed session outlives `--expiry`). Owner addresses compare case-insensitively (EIP-55 or lowercase); chain id and space name compare exactly. See [AUTH.md](AUTH.md).
 
@@ -71,6 +71,10 @@ Device login JSON lists the signed, approved `permissions`, owner-unchecked `dec
 | `shares/` | `kv/put` | store an addressed share's encrypted source; `--action edit` |
 | | `kv/get`, `kv/metadata` | back the Policy/v3 root that grants recipients read; `--notify` delivery authorization |
 | | `kv/list` | `--action list` on a `--prefix` share |
+| `artifacts/` | `kv/put` | `share publish --artifact`: write-once version files (`If-None-Match: *`) and their `manifest.json`. The node has no write-once ACL, so this `put` covers the whole `artifacts/` prefix: a session holding it could also overwrite an existing version file |
+| | `kv/get` | mint the pinned share's read-only child delegation |
+| | `kv/metadata` | back the Policy/v3 root of an addressed artifact share |
+| | `kv/list` | find the next version number; `share versions` |
 
 No `del` anywhere and no `list` on the bearer prefix: no `tinycloud share` command uses them. Inspect and receive use the link's own authority. Revoke signs `tinycloud.delegation/revoke` over the delegation's own CID and a Policy/v3 root revocation with the issuing session key, not a space capability. OpenKey shows the capability read as required (not uncheckable), so it is always in the signed grant and never in `declined`.
 
@@ -92,6 +96,12 @@ No `del` anywhere and no `list` on the bearer prefix: no `tinycloud share` comma
 
 Actions are auto-prefixed with `tinycloud.` if not already.
 
+`delegation revoke <cid>` is a generic exact-CID operation. When `<cid>` is
+the current sign-in session, it requires `--yes` or an interactive confirmation
+warning that revocation signs you out. After the node confirms that exact CID,
+the CLI runs its normal durable logout, removes the restorable session and key,
+and blocks implicit reauthentication. Unrelated CIDs do not sign you out.
+
 `tinycloud auth import` stores delegations in `additional-delegations.json`. Every replay path installs only a grant with a locally verified proof and a binding containing its signed authority; unbound and proof-less grants never install, including while migration is deferred. [AUTH.md](AUTH.md#imported-delegations-and-their-request-bindings) covers migration and recovery.
 
 ### Stored grants
@@ -103,6 +113,10 @@ Actions are auto-prefixed with `tinycloud.` if not already.
 ```
 
 `list` is local and does not contact the node. Its JSON contains `profile`, `session` (`cid` recomputed from stored header and `expiresAt`, or `null`), `localVerification` (`available`, `session_missing`, `session_expired`, `session_invalid`), and `grants`. Each indexed grant row contains `cid` (CID-shaped or `null`), `expiry`, `expired`, `local` (`verified`, `refused`, `not_checked`, `for_another_key`), `reason` (fixed skip code or `null`), `node: "not_checked"`, `bound`, `proof` (`siwe`, `compact`, `missing`, or `null`), `source`, `scope`, and `scopeSource` (`signed` or `stored`). `for_another_key` means the stored audience names another key; its scope is unverified stored metadata and it cannot install in this session. Local verification checks signed scope and binding, not the node's delegation chain or revocation status. Human output shows `CID | LOCAL | EXPIRES | SOURCE | BOUND | SCOPE` and the session CID.
+
+The `session` JSON object has `label: "current session"` for the active CID;
+human output marks that CID `(current session)`. Do not treat the session CID
+as a disposable replica child grant.
 
 `for_another_key` is decided from a verified signed compact audience, CID, and matching transport DID, not an unsigned `delegateDID` alone. Tampered records retain their refusal reason, and proofless records retain `proof_missing`.
 
@@ -268,13 +282,51 @@ and sync details to stderr. The event log is
 `profiles/<profile>/replication/events.jsonl` under `TC_HOME`; it records
 operational metadata, not values.
 
-`tinycloud replica report [--since 24h]` renders read source/reason counts, hit ratio,
-latency and staleness percentiles, sync/write outcomes, recent divergences,
-replica/grant status, and pinned keys. `--json` emits the aggregate as JSON.
-`--clear-pending` clears pending replica writes and prints a warning: commits
-that arrive later can be observed as stale until a subsequent sync.
-`auth logout` purges legacy and flag-owned replicas unless `--keep-replicas`
-is used.
+`tinycloud replica report [--since 24h]` reads persisted event and identity
+partition files only. It renders read source/reason counts, hit ratio, latency
+and staleness percentiles, sync/write outcomes, and recent divergences; JSON
+marks live replica status unavailable. It never starts a replication runtime.
+Report `--purge` and `--clear-pending` refuse with exit 2 `REPORT_READ_ONLY`.
+`tinycloud replica reset --replica <name> --purge` is a partial alternative
+for a named local replica only. Flag-owned purge and pending clearing have no
+equivalent yet (TC-1309).
+On macOS and Windows, `replica reset --purge` and `auth logout` with a legacy
+`replicas/` tree refuse local removal rather than delete through an unpinned
+path. The existing files are retained.
+`auth logout` durably denies local replica reads, removes legacy and flag-owned
+files, and shreds both restorable session and key. A pending marker keeps reads
+denied while startup retries erasure. A signed-out profile cannot implicitly
+authenticate with its stored owner key; use explicit `auth login` for a new
+session. An unknown replica path, an unverified legacy SQLite schema, or an
+unreadable gate refuses logout before a marker, credential deletion or node
+request. Sync first, or pass `--discard-local-changes` to approve the displayed
+paths, types and file identities. New or changed entries need fresh approval.
+With a verified local-owner key, `auth logout --revoke --discard-local-changes`
+preserves session, key and physical replicas through every online exact-CID
+receipt; partial failure leaves them behind a durable denied marker for retry.
+After a failed revoke, plain logout compares the original approved inventory
+first. Changed paths refuse even with `--discard-local-changes`, retain all
+credentials and files, and print a 32-hex-character token. A separate
+`auth logout --discard-local-changes --approve-inventory <token>` approves
+only the newly displayed identities; further changes invalidate the token.
+After full remote success, cleanup shreds credentials and erases only approved
+entries. A later inventory mismatch retains the marker and remaining files;
+repeat `auth logout --discard-local-changes` for fresh approval without
+repeating node revocations. OpenKey
+owner revocation currently fails closed with `REVOCATION_AUTHORITY_UNAVAILABLE`,
+retaining credentials and denied replica files until signed owner revoke
+authority is supported.
+When the replica gate belongs to a different account than the signed-in
+session, logout signs that session out and removes only the profile's legacy
+`replicas/` tree; the other account's gate and flag-owned replicas stay. An
+interrupted earlier sign-out is reported, and a second `auth logout` completes
+it. A gate that no longer matches its logout record (for example, restored
+from an older copy) refuses logout; run `tc profile delete <name>` (after
+`tc profile switch <other>` if it is the default) and sign in again.
+
+`--keep-replicas` retains legacy files only when no replica gate, flag-owned
+partition or pending purge exists; gated profiles refuse before mutation and
+legacy-only keep still shreds credentials.
 
 B-int release acceptance: test `tinycloud auth request --grant` against a real
 OpenKey test account without production writes. Approve the request, confirm
@@ -320,9 +372,21 @@ printf '%s' "$SHARE_URL" | "$TC" share receive - --output .
 "$TC" share revoke <id>                                               # bearer or addressed share this profile created
 ```
 
+**Artifact versions (pinned shares).** `--artifact <id|new>` stores the file as the next write-once version, `artifacts/<id>/versions/<n>/<file>` plus a `manifest.json` written last (file sha256 and size, parent, `--note`), in the owner's space. The share is pinned to that version: its delegation covers only that file and never carries `put`. Publishing the same bytes again to a bearer link returns the same version; changed content makes the next one. Publishing never overwrites an earlier version, but the node has no write-once ACL for the owner, so the owner (or anyone holding the owner's session) can overwrite a version file afterwards; the CLI will not, and the writes it makes use `If-None-Match: *`. Only addressed artifact shares detect such an overwrite (see Pin below); a bearer artifact share carries no digest and would deliver the new bytes. An addressed share stores ciphertext under a fresh random key each time, so every addressed publish is a new version, and `manifest.json` records only the sha256 of the stored ciphertext, never of the plaintext (an unsalted plaintext hash next to the ciphertext would let a reader of the space confirm a guess). `--artifact new` mints an id. JSON output adds `artifactId`, `version` and `mode` (`pinned`). `--action edit` on an artifact share is refused (a pinned version is read-only). An artifact share takes one file. Every artifact share pins one version; shares that follow later versions are not available yet. Profiles signed in before this feature need `auth login --device --manifest builtin:share-publishing` again, because the manifest now includes `artifacts/`.
+
+```bash
+"$TC" share publish ./report.md --artifact new --to email:alice@example.com --json   # v1, pinned
+cat report-v2.md | "$TC" share publish - --name report.md --artifact art_0123456789abcdef --to email:alice@example.com --note "second draft"
+"$TC" share versions art_0123456789abcdef --json                     # versions and the shares (from local history) pinned to each
+```
+
+Versions are kept by default and count against the owner's storage. The node does not reclaim overwritten or deleted values; byte reclamation depends on history GC (TC-1277).
+
+**Pin (addressed artifact shares).** The signed envelope of an addressed artifact share carries `artifactPin`: artifact id, version, the sha256 of that version's `manifest.json`, and the sha256 and size of the one stored (encrypted) file the share reads. The owner's signature covers it. The recipient refuses the share unless the pin matches what the share reads, and refuses the fetched bytes unless they hash to the pinned digest. A share that reads `artifacts/` without a valid pin is refused, and a pinned share never carries `put`. The owner is the trusted signer: the node has no write-once ACL, so the owner (or anyone holding the owner's session) can still overwrite a version file afterwards. Recipients then fail closed on the digest mismatch; they cannot tell that apart from a node serving altered bytes. Bearer artifact shares carry no envelope, so they have no pin and no digest yet: they are limited to the one version file by their delegation only, and an owner overwrite of that file reaches bearer recipients undetected. A viewer built before this field exists rejects the envelope (its schema is strict) instead of showing unverified content.
+
 **Bearer vs addressed.** A bearer link (default, `--to anyone`) is `/viewer#tc1=<TinyCloud delegation>`: anyone holding the complete URL can read the file until it expires, and revocation cannot recall copies already received. Addressed links (`--to email:`, `--to did:`, `--to domain:`) are `/s/inline#v=2&p=<sealed Policy/v3 envelope>`: the content is encrypted and only the named recipient can open it after proving their email or DID in Share. `tinycloud share receive` returns the bytes of a bearer link; for an addressed link it exits 6 with `CLAIM_REQUIRED` because the recipient claims it in Share. `--notify` requires the `read` action: exact-email targets invite the matched mailbox; domain targets need `--notify-to` naming one canonical mailbox at that exact domain and a node reporting version 1.17.3 or later. The CLI refuses unsupported domain invitations before uploading or registering a share. A session-only publisher can deliver its own domain policy when the invoking DID matches its signed owner DID; a different sender DID cannot. `tinycloud share notify <id> --to <mailbox>` can address another mailbox in a domain share under the same node and sender-DID requirements; it refuses stored shares without `read` or on an unsupported node before sending.
 
-The fragment after `#` is the read authority. It never reaches a server in a query string or HTTP request; keep complete URLs out of logs. Human publish output is exactly one URL. JSON publish output never contains the link: it retains the redacted publication fields (including the share id) and adds `notification` (the `ShareNotifyResult`, including `state`, `attempts`, and optional failure `reason`) when `--notify` was requested. To get the complete link after a `--json` publish, run `tinycloud share show <id> --reveal-link`, ideally writing it straight to a private file. Inspect never prints plaintext or secret-bearing fields. Receive uses a sanitized single-segment filename and refuses overwrite unless `--force`. `revoke` asks the owner node to revoke the share (an addressed share's Policy/v3 root, or a bearer link's delegation) and reports `revoked` only when the node confirms it; receiving the link then fails; for a bearer link, `tinycloud share receive` reports `SHARE_REVOKED` (exit 4, "This share link has been revoked by its sender."). Revoking an already revoked share keeps its original `revokedAt`. A bearer revoke that cannot proceed revokes nothing: `SHARE_ISSUER_KEY_UNAVAILABLE` (exit 5) when this profile cannot sign for the link, `SHARE_LINK_UNAVAILABLE` (exit 4) when the stored link is missing or does not match the record, and `SHARE_REVOKE_REJECTED` (exit 4, with the node's reason) when the node refuses. `SHARE_REVOKE_UNCONFIRMED` (exit 1) means the node answered without confirming: the link may already be revoked, history is not marked revoked, and you should check whether the link still opens before retrying. Pre-cutover blob-backed and plaintext `?tc2` links are not accepted.
+The fragment after `#` is the read key. Browsers never send it to a server; `--notify` gives the link to TinyCloud only to email your recipients. Keep complete URLs out of logs. Human publish output is exactly one URL. JSON publish output never contains the link: it retains the redacted publication fields (including the share id) and adds `notification` (the `ShareNotifyResult`, including `state`, `attempts`, and optional failure `reason`) when `--notify` was requested. To get the complete link after a `--json` publish, run `tinycloud share show <id> --reveal-link`, ideally writing it straight to a private file. Inspect never prints plaintext or secret-bearing fields. Receive uses a sanitized single-segment filename and refuses overwrite unless `--force`. `revoke` asks the owner node to revoke the share (an addressed share's Policy/v3 root, or a bearer link's delegation) and reports `revoked` only when the node confirms it; receiving the link then fails; for a bearer link, `tinycloud share receive` reports `SHARE_REVOKED` (exit 4, "This share link has been revoked by its sender."). Revoking an already revoked share keeps its original `revokedAt`. A bearer revoke that cannot proceed revokes nothing: `SHARE_ISSUER_KEY_UNAVAILABLE` (exit 5) when this profile cannot sign for the link, `SHARE_LINK_UNAVAILABLE` (exit 4) when the stored link is missing or does not match the record, and `SHARE_REVOKE_REJECTED` (exit 4, with the node's reason) when the node refuses. `SHARE_REVOKE_UNCONFIRMED` (exit 1) means the node answered without confirming: the link may already be revoked, history is not marked revoked, and you should check whether the link still opens before retrying. Pre-cutover blob-backed and plaintext `?tc2` links are not accepted.
 
 **Notification window.** The CLI requests a stable signed delivery authorization until the earlier of share expiry and 5 minutes after its sender-history `registeredAt` timestamp. The node allows an authorization no more than 5 minutes in the future; keeping the expiry stable also makes idempotent retries use the same request. After the window, `tinycloud share notify` prints `partial-failure` (exit 9; JSON `retryable: false`, `reason: "delivery-window-expired"`) and explains that the sender must publish a new share and invite the recipient then. `share publish --notify --json` includes the same failure under `notification`. A confirmed repeat within the window prints `already-delivered`; an unconfirmed failed attempt remains retryable until the window closes. If the sender history cannot record a successful delivery confirmation, the CLI warns on stderr but preserves the successful publish/notify result; a later repeat can report `delivered` again.
 

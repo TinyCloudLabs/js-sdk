@@ -12,7 +12,7 @@ import type {
   RuntimeOperationContext,
   TinyCloudPosture,
 } from "../contract.js";
-import { OperationInvocationError, operationError, storageFullOperationError } from "../errors.js";
+import { OperationInvocationError, nodeRetryOperationError, operationError, storageFullOperationError } from "../errors.js";
 import { operationSpaceResolver } from "../secrets.js";
 
 type EmptyInput = Record<never, never>;
@@ -928,16 +928,8 @@ function kvFailure(
   if (error.code === "KV_PRECONDITION_FAILED") {
     return { status: "error", error: operationError("KV_PRECONDITION_FAILED", "The TinyCloud KV object changed or already exists.") };
   }
-  if (error.code === "KV_CONFLICT") {
-    return {
-      status: "error",
-      error: operationError(
-        "KV_CONFLICT",
-        "A database serialization conflict prevented the conditional KV mutation; re-read the key state, which may still be absent, before deciding whether to retry.",
-        { retryable: true },
-      ),
-    };
-  }
+  const nodeRetry = nodeRetryOperationError(error);
+  if (nodeRetry) return { status: "error", error: nodeRetry };
   if (error.code === "KV_RESPONSE_TOO_LARGE") {
     return { status: "error", error: operationError("KV_RESPONSE_TOO_LARGE", `The TinyCloud KV value exceeds ${MAX_KV_VALUE_BYTES} bytes.`) };
   }

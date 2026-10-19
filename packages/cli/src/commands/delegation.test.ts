@@ -24,6 +24,7 @@ let artifactReadCalls: number;
 mock.module("../config/profiles.js", () => ({
   ProfileManager: {
     resolveContext: async () => ({ profile: "owner", host: "https://node.example.test" }),
+    getSession: async () => null,
     getProfile: async () => ({
       name: "owner",
       host: "https://node.example.test",
@@ -81,10 +82,17 @@ mock.module("./auth.js", () => ({
     return { cid: "bafy-command-authority" };
   },
   requirePermissionConsent: async () => {},
+  prepareProfileRemoteLogout: async () => {
+    throw new Error("Unrelated-CID tests must not prepare the current-session logout gate");
+  },
+  finishProfileLogout: async () => {
+    throw new Error("Unrelated-CID tests must not complete current-session logout");
+  },
 }));
 
 mock.module("../output/formatter.js", () => ({
   outputJson: (value: unknown) => outputs.push(value),
+  isInteractive: () => false,
 }));
 
 mock.module("../output/errors.js", () => ({
