@@ -41,6 +41,7 @@
     "cli-replica-error-exits",
     "cli-share-fragment-wording",
     "delegation-create-list-node-paths",
+    "deps-refresh-jose",
     "direct-owner-revoke",
     "held-credentials-verifier",
     "node-replica-erase-replaced-roots",
