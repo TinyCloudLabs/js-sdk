@@ -37,6 +37,11 @@
       "types": "./dist/delegations/index.d.ts",
       "import": "./dist/delegations/index.js",
       "require": "./dist/delegations/index.cjs"
+    },
+    "./held-credentials": {
+      "types": "./dist/held-credentials/index.d.ts",
+      "import": "./dist/held-credentials/index.js",
+      "require": "./dist/held-credentials/index.cjs"
     }
   },
   "files": [
