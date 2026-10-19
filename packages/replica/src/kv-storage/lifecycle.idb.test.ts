@@ -187,10 +187,10 @@ describe("origin deny tombstone", () => {
   });
 
   test("denial releases charged owner and install rows from the device bucket atomically", async () => {
-    const lifecycle = createIndexedDbLifecycle();
+    const ledger = ledgerFor();
+    const lifecycle = createIndexedDbLifecycle({ ledger });
     await lifecycle.establishSessionStamp(principal, { consentAnchor: { source: "siwe", at: Date.now() } });
     const db = (await openKvDatabase({ create: false }))!;
-    const ledger = ledgerFor();
     const write = db.transaction([KV_STORE.device, KV_STORE.quota], "readwrite");
     const done = transactionDone(write);
     const device = write.objectStore(KV_STORE.device);
