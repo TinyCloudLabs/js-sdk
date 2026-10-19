@@ -1,9 +1,10 @@
 import { canonicalShareFilename } from "./filename-policy.js";
 import { sha256 } from "@noble/hashes/sha256";
+import { assertArtifactBinding } from "./artifact-pin.js";
 import {
   canonicalize, computeCid, encodeSealedInlineShareUrl, generateKey, isEnvelopeDeliveryEmail, seal,
   shareEnvelopeV3Schema, toBase64Url, unsignedShareEnvelopeV3Schema,
-  type PolicyCredentialRequirementV1, type ShareAction, type UnifiedContentSource,
+  type ArtifactPin, type PolicyCredentialRequirementV1, type ShareAction, type UnifiedContentSource,
   type UnifiedPolicy, type UnifiedPolicyCapability, type UnifiedRoot,
 } from "@tinycloud/share-envelope";
 import {
@@ -94,6 +95,8 @@ export interface AddressedSharePublishOptions {
   readonly mediaType: string;
   readonly byteLength: number;
   readonly artifact?: "html";
+  /** TC-1428: pins the share to one write-once artifact version; signed with the envelope. Required when the content source is under `artifacts/`. */
+  readonly artifactPin?: ArtifactPin;
   readonly deliveryEmail?: string;
   readonly expiresAt: Date;
   /** Sender-history material required by Node's Policy/v3 delivery authorization. */
@@ -325,6 +328,15 @@ function assertMailboxCommitment(commitment: PolicyCredentialRequirementV1 | und
 export async function publishAddressedShare(input: AddressedSharePublishOptions): Promise<PublishedShare> {
   assertSafeInput(input);
   const { target } = prepareAddressedShare(input);
+  // Refuse a share whose pin and source disagree (or an artifact source with no pin) before anything is registered.
+  assertArtifactBinding({
+    ...(input.artifactPin === undefined ? {} : { artifactPin: input.artifactPin }),
+    target: { spaceId: input.spaceId },
+    contentSource: input.contentSource,
+    resource: input.resource,
+    actions: input.actions,
+    policyKvActions: input.policyActions,
+  });
   // Envelope, result metadata and history all carry the viewer's NFC form.
   const options = { ...input, filename: canonicalShareFilename(input.filename) };
   if (target.kind !== "recipientDid") assertMailboxCommitment(options.credentialRequirement, target);
@@ -367,6 +379,7 @@ export async function publishAddressedShare(input: AddressedSharePublishOptions)
       ...(options.mediaType.startsWith("text/") ? { encoding: "utf-8" as const } : {}),
       ...(options.artifact === undefined ? {} : { artifact: options.artifact }),
     },
+    ...(options.artifactPin === undefined ? {} : { artifactPin: options.artifactPin }),
   };
   unsignedShareEnvelopeV3Schema.parse(unsigned);
   const envelopeSignature = await options.authority.sign(sha256(textEncoder.encode(`${ENVELOPE_V3_DOMAIN}${canonicalize(unsigned)}`)));

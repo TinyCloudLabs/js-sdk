@@ -30,3 +30,5 @@ export { publishPolicyShare, claimShare, resumeShareAuthorization } from "./poli
 export type { SharePolicyPublishAdapter } from "./policy.js";
 export { NATIVE_SHARE_FRAGMENT_PARAMETER, createNativeShare, openNativeShare, parseNativeShareUrl } from "./native.js";
 export type { NativeShareResult, NativeSharingService } from "./native.js";
+export { ArtifactPinError, artifactBindingView, assertArtifactBinding, verifyArtifactShare } from "./artifact-pin.js";
+export type { ArtifactBindingView, ArtifactPinErrorCode, ExpectedArtifact, VerifyArtifactShareOptions } from "./artifact-pin.js";

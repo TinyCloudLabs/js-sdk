@@ -14,6 +14,7 @@ import { withoutBearer } from "@tinycloud/operations/delegation-binding";
 import {
   ArtifactError,
   artifactVersionFilePath,
+  buildArtifactPin,
   publishArtifactVersion,
   type ArtifactVersionInput,
   type ArtifactStore,
@@ -719,6 +720,8 @@ export function createShareAuthorityAdapters(input: {
       actions,
       policyActions,
       contentSource,
+      // The owner-signed pin: artifact id, version, manifest digest and the digest of the stored ciphertext this share reads.
+      ...(artifactVersion === undefined ? {} : { artifactPin: buildArtifactPin(artifactVersion, storageName) }),
       ...(prepared.credentialRequirement === undefined ? {} : { credentialRequirement: prepared.credentialRequirement }),
       // tinycloud-node 1.17.2 signs a delivery receipt only for the envelope's
       // own signed delivery address (1.17.3 accepts it and no longer requires

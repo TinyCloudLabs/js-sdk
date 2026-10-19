@@ -47,9 +47,13 @@ describe("v3 recipient content", () => {
     };
     const envelope = {
       version: 3,
-      target: { nodeAudience: nodeDid },
+      target: { nodeAudience: nodeDid, spaceId: "space" },
+      actions: ["read"],
+      resource: { kind: "exact", path: "shares/file.txt" },
+      policy: { capabilityCeiling: [] },
       encryptionNetwork: networkId,
       contentSource: {
+        kvResource: "space/kv/shares/file.txt",
         keyVersion: 1,
         encryptedSymmetricKeyDigestHex: encryptedSymmetricKeyHash,
         initialCiphertextDigestHex: hex(sha256(stored)),

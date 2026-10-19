@@ -202,6 +202,14 @@ ceilings. The ledger's `tc1443bRatchet` row records them and cannot change later
 another root-growing PR lands first, #589 re-measures against the new base and replaces
 its own row before it merges.
 
+TC-1428 (the owner-signed artifact pin the viewer verifies for addressed artifact shares, #582) was
+re-measured after #589 landed, against master `42b08909`, and sits on top of TC-1443b's root ceilings.
+It raised only the root ceilings once, by the exact bytes GitHub run 39181586326 measured on source
+`90f21ae6`, identical in both jobs: 1,474,835 / 1,403,309 B (+915 / +812 over TC-1443b's). First import,
+activation, gated and the worker keep their ceilings. It is #582's own row, taken after a documented
+shrink attempt (see the row's `reason`). The ledger's `tc1428Ratchet` row records it and cannot change
+later; whichever PR lands after it re-measures against the new base and updates its own row.
+
 **Ancestry pins and squash merges.** A policy row records the PR-branch commit it
 was reviewed at, and its introduction check requires that literal commit in the
 PR head. js-sdk uses merge commits, which keep that commit reachable, but squash
