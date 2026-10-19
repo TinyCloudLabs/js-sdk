@@ -312,6 +312,40 @@ function stubAuthNetworkCalls(node: TinyCloudNode): void {
 // ---------------------------------------------------------------------------
 
 describe("TinyCloudNode.signIn — manifest-driven recap", () => {
+  test("network sign-in without replication does not inspect absent replica SIWE metadata", async () => {
+    const wasm = makeFakeWasmBindings({
+      prepareSession: mock((params: Record<string, unknown>) => ({
+        jwk: params.jwk,
+        spaceId: params.spaceId,
+        verificationMethod: "did:key:z6MkTestSession",
+      })) as never,
+    });
+    const node = makeNodeWithSigner(wasm, {
+      autoBootstrapAccount: false,
+      includeAccountRegistryPermissions: false,
+      manifest: {
+        app_id: "xyz.tinycloud.feed.host",
+        name: "Feed Host",
+        defaults: false,
+        permissions: [],
+      },
+    });
+    await withFetchResponses(
+      [
+        new Response(JSON.stringify({ protocol: 1, version: "test", features: [], nodeId: "did:key:z6MkNode" }), {
+          status: 200, headers: { "Content-Type": "application/json" },
+        }),
+        new Response(JSON.stringify({ activated: ["space://test"], skipped: [] }), {
+          status: 200, headers: { "Content-Type": "application/json" },
+        }),
+      ],
+      async () => { await node.signIn(); },
+      expectedActivationAuthorizationFor(wasm),
+    );
+    expect(node.address).toBe("0x0000000000000000000000000000000000000001");
+    expect(node.replication).toBeUndefined();
+  });
+
   test("sessionDid follows the active key across repeated signIn calls", async () => {
     const wasm = makeFakeWasmBindings();
     const node = makeNodeWithSigner(wasm, {

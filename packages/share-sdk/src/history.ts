@@ -1,4 +1,4 @@
-import type { DelegatedShareKey, OwnerShareAction, OwnerShareMatcher, OwnerSharePolicyRegistrationReceipt } from "./owner-policy";
+import type { DelegatedShareKey, OwnerShareAction, OwnerShareMatcher, OwnerSharePolicyRegistrationReceipt, SignedDelegation } from "./owner-policy";
 import { restoreDelegatedShareKey } from "./owner-policy";
 import type { PublishedShare, PublishedShareDeliveryMaterial } from "./publish.js";
 
@@ -48,6 +48,34 @@ export interface SenderShareRecord {
   readonly deliveryMaterial?: PublishedShareDeliveryMaterial;
   /** Canonical mailboxes whose invitation delivery was confirmed; history is encrypted at rest. */
   readonly deliveredRecipients?: readonly string[];
+  /**
+   * `migrated`: imported once from a CLI's local history by the OWNER's
+   * session (slice 5), at an owner-layout key `records/<shareId>`. Such a
+   * record is exempt from the ±1-day `registeredAt` window and nothing else:
+   * its chain is verified like an agent record's, it never ranks as a web
+   * row, and it cannot override a revocation. A record claiming `migrated`
+   * inside an agent subtree is rejected.
+   */
+  readonly provenance?: "migrated";
+  /**
+   * The signed chain behind every CID this record claims (TC-1432 C1), as
+   * exact bytes. Agent records carry it so the owner's browser can verify
+   * the chain without a node lookup. Policy/v3 records prove through
+   * `deliveryMaterial.envelope` plus `session`.
+   */
+  readonly proofs?: SenderShareRecordProofs;
+}
+
+export interface SenderShareRecordProofs {
+  /** Owner→session SIWE CACAO (base64url DAG-CBOR) of the issuing session; absent when it is gone. */
+  readonly session?: string;
+  /** Native bearer link delegation (compact UCAN); its CID is `enforcementDelegationCid`. */
+  readonly link?: string;
+  /** Policy/v2 owner-policy chain: policy bytes (base64url), owner→share-key SIWE CACAO (base64url), enforcement delegation and node registration receipt. */
+  readonly ownerPolicy?: string;
+  readonly ownerDelegation?: string;
+  readonly enforcementDelegation?: SignedDelegation;
+  readonly registration?: OwnerSharePolicyRegistrationReceipt;
 }
 
 /** Create the durable encrypted-history shape from canonical publication receipts. */

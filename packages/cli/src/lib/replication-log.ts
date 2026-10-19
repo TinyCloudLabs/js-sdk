@@ -6,12 +6,16 @@ import type { ReplicationEvent } from "@tinycloud/node-sdk";
 const MAX_LOG_BYTES = 5 * 1024 * 1024;
 const LOG_MODE = 0o600;
 const DIR_MODE = 0o700;
+const LOG_FILE = "events.jsonl";
+const ROTATED_LOG_FILE = "events.jsonl.1";
+/** The only files this module writes directly under `<profile>/replication`. */
+export const REPLICATION_DIAGNOSTIC_FILES: readonly string[] = [LOG_FILE, ROTATED_LOG_FILE];
 
 /** Append a single private JSONL event, rotating the previous file at 5 MiB. */
 export function appendReplicationEvent(root: string, event: ReplicationEvent): void {
   mkdirSync(root, { recursive: true, mode: DIR_MODE });
   chmodSync(root, DIR_MODE);
-  const path = join(root, "events.jsonl");
+  const path = join(root, LOG_FILE);
   let size = 0;
   try {
     size = statSync(path).size;
@@ -20,7 +24,7 @@ export function appendReplicationEvent(root: string, event: ReplicationEvent): v
   }
   const line = `${JSON.stringify(event)}\n`;
   if (size + Buffer.byteLength(line) > MAX_LOG_BYTES) {
-    const rotated = join(root, "events.jsonl.1");
+    const rotated = join(root, ROTATED_LOG_FILE);
     try { renameSync(path, rotated); } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
     }
@@ -32,7 +36,7 @@ export function appendReplicationEvent(root: string, event: ReplicationEvent): v
 }
 
 export function replicationLogPath(profileRoot: string): string {
-  return join(profileRoot, "replication", "events.jsonl");
+  return join(profileRoot, "replication", LOG_FILE);
 }
 
 
@@ -63,7 +67,12 @@ export function createReplicationEventSink(
         process.stderr.write(`[replication] ${event.op} ${event.keys.join(",")} ${event.outcome}${event.code ? ` ${event.code}` : ""}\n`);
       } else if (event.type === "replication.sync") {
         const pending = event.pendingCleared === undefined ? "" : ` pendingCleared:${event.pendingCleared}`;
-        process.stderr.write(`[replication] sync ${event.replica} ${event.outcome}${event.code ? ` ${event.code}` : ""}${pending}\n`);
+        const origin = event.origin === undefined ? "" : ` origin:${event.origin}`;
+        process.stderr.write(`[replication] sync ${event.replica} ${event.outcome}${event.code ? ` ${event.code}` : ""}${pending}${origin}\n`);
+      } else if (event.type === "replication.grant") {
+        process.stderr.write(`[replication] grant ${event.replicaId} ${event.action}${event.code ? ` ${event.code}` : ""}${event.effectiveExpiresAt ? ` effectiveExpiresAt:${event.effectiveExpiresAt}` : ""}\n`);
+      } else if (event.type === "replication.lifecycle") {
+        process.stderr.write(`[replication] lifecycle ${event.action}${event.reason ? ` ${event.reason}` : ""}${event.gate ? ` gate:${event.gate}` : ""}${event.code ? ` ${event.code}` : ""}${event.remaining === undefined ? "" : ` remaining:${event.remaining}`}\n`);
       }
     }
     if (event.type === "replication.read" && (event.pendingState === "in_flight" || event.pendingState === "ambiguous") && !options.quiet && !pinnedNotices.has(event.key)) {

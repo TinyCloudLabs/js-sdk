@@ -15,6 +15,7 @@ import { ProfileManager } from "./config/profiles.js";
 import { configureShareCommandServices, registerShareCommand } from "./commands/share.js";
 import { createShareAuthorityAdapters } from "./share/adapters.js";
 import { loadCourierEntry } from "./lib/courier-loader.js";
+import { applyNoRetryFlag } from "./lib/retry-policy.js";
 
 const program = new Command();
 const shareAuthority = createShareAuthorityAdapters({
@@ -44,6 +45,7 @@ program
   .option("--no-cache", "Disable caching")
   .option("-q, --quiet", "Suppress non-essential output")
   .option("--json", "Force JSON output")
+  .option("--no-retry", "Do not retry node busy/timeout answers (monitors and probes); same as TINYCLOUD_RETRY=0")
   .option("--replication", "Enable read-through replication for this invocation")
   .option("--no-replication", "Disable read-through replication for this invocation")
   .option("--replication-debug", "Write replication diagnostics to stderr")
@@ -51,6 +53,7 @@ program
 program.hook("preAction", async (thisCommand) => {
   const opts = thisCommand.optsWithGlobals();
   setJsonOutputRequested(opts.json === true);
+  applyNoRetryFlag(opts);
   const parentName = thisCommand.parent?.name();
   const isShareCommand = parentName === "share" || thisCommand.name() === "share";
   if (!opts.quiet && !isShareCommand) {
@@ -93,6 +96,7 @@ configureShareCommandServices({
   assertDomainDelivery: shareAuthority.assertDomainDelivery,
   revocation: shareAuthority.revocation,
   nativeReader: shareAuthority.nativeReader,
+  artifactStore: shareAuthority.artifactStore,
 });
 
 const argv = process.argv.slice(2);

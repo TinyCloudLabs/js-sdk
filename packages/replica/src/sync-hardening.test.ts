@@ -3,14 +3,16 @@
  * before the fix.
  */
 import { loadSqlite } from "./sqlite/driver.js";
-import { afterAll, describe, expect, test } from "bun:test";
-import { chmod, mkdir, readdir, rm, stat, writeFile } from "node:fs/promises";
+import { afterAll, describe, expect, spyOn, test } from "bun:test";
+import * as fsSync from "node:fs";
+import { chmod, lstat, mkdir, readdir, readFile, rename, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import { FakeNode, NODE_DID, SPACE, config, deviceGrant, etagOf, newStore, removeTempDirs, tempDir, type TestStoreOptions } from "../test/fixtures.js";
 import { Replica, contentHash } from "./engine.js";
 import { ReplicaError, ReplicaErrorCode, isReplicaError } from "./errors.js";
 import { FAULTS, SqliteReplicaStore } from "./sqlite/store.js";
+import { inspectSqliteReplicaLayout, removeSqliteReplicaLayout } from "./sqlite/layout.js";
 import { kvSyncTransport, type KVSyncClient } from "./transport.js";
 import type { GrantRecord, ReplicaStore, VerifiedChange } from "./types.js";
 
@@ -34,6 +36,16 @@ async function blobCount(dir: string): Promise<number> {
     count += (await readdir(join(dir, "blobs", shard))).length;
   }
   return count;
+}
+
+async function simulatedNonLinux<T>(action: () => Promise<T>, platformName: "darwin" | "win32" = "darwin"): Promise<T> {
+  const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
+  Object.defineProperty(process, "platform", { configurable: true, value: platformName });
+  try {
+    return await action();
+  } finally {
+    Object.defineProperty(process, "platform", platform);
+  }
 }
 
 describe("content reused within one page", () => {
@@ -538,6 +550,404 @@ describe("replica removal (reset --purge)", () => {
     await store.markRevoked("delegation-revoked: bafy");
     await store.destroy((await store.acquireSyncLease(60_000))!);
     expect(await stat(dir).then(() => "exists", () => "gone")).toBe("gone");
+  });
+
+  test("source-created hash-sharded blob files erase without discard", async () => {
+    const dir = await tempDir();
+    const store = await newStore(dir);
+    const node = new FakeNode();
+    node.put("notes/a", "mirror content");
+    await new Replica({ store, transport: node }).sync();
+    expect(await blobCount(dir)).toBe(1);
+    await store.destroy((await store.acquireSyncLease(60_000))!);
+    expect(await stat(dir).then(() => "exists", () => "gone")).toBe("gone");
+  });
+
+  test("unknown child refuses ordinary destruction without deleting its mirror", async () => {
+    const dir = await tempDir();
+    const store = await newStore(dir);
+    const lease = (await store.acquireSyncLease(60_000))!;
+    await writeFile(join(dir, "pending-v2.json"), "unreviewed local changes");
+    expect(await codeOf(store.destroy(lease))).toBe(ReplicaErrorCode.STORAGE_ERROR);
+    expect((await store.open())?.config.name).toBe("notes");
+    expect(await readdir(dir)).toContain("pending-v2.json");
+    await rm(join(dir, "pending-v2.json"));
+    await store.destroy(lease);
+    expect(await stat(dir).then(() => "exists", () => "gone")).toBe("gone");
+  });
+
+  test("adapter fence files are known only with the explicit adapter option", async () => {
+    const dir = await tempDir();
+    const store = await newStore(dir);
+    await store.close();
+    await writeFile(join(dir, "fence.json"), "{}");
+    expect((await inspectSqliteReplicaLayout(dir)).unknownPaths).toContain("fence.json");
+    expect((await inspectSqliteReplicaLayout(dir, { allowAdapterFence: true })).unknownPaths).toEqual([]);
+    await removeSqliteReplicaLayout(dir, { allowAdapterFence: true });
+    expect(await stat(dir).then(() => "exists", () => "gone")).toBe("gone");
+  });
+
+  test("explicit approval lists every unknown nested entry and does not traverse a symlink", async () => {
+    const dir = await tempDir();
+    const outside = await tempDir();
+    const store = await newStore(dir);
+    await writeFile(join(outside, "keep"), "outside");
+    await mkdir(join(dir, "future"));
+    await writeFile(join(dir, "future", "pending-v2.json"), "unreviewed");
+    await symlink(outside, join(dir, "future", "outside"), "dir");
+    const report = await inspectSqliteReplicaLayout(dir);
+    expect(report.unknownEntries.map(({ path, kind }) => [path, kind])).toEqual([
+      ["future", "directory"],
+      ["future/outside", "symlink"],
+      ["future/pending-v2.json", "file"],
+    ]);
+    expect(report.unknownEntries.every(({ dev, ino }) => /^[0-9]+$/.test(dev) && /^[0-9]+$/.test(ino))).toBe(true);
+    await store.destroy((await store.acquireSyncLease(60_000))!, {
+      approvedUnknown: report.unknownEntries, expectedRoot: report.rootIdentity,
+    });
+    expect(await stat(dir).then(() => "exists", () => "gone")).toBe("gone");
+    expect(await stat(join(outside, "keep")).then(() => "exists", () => "gone")).toBe("exists");
+  });
+
+  test("an unknown added after approval refuses removal before touching the database", async () => {
+    const dir = await tempDir();
+    const store = await newStore(dir);
+    await store.close();
+    await writeFile(join(dir, "approved"), "approved");
+    const { unknownEntries } = await inspectSqliteReplicaLayout(dir);
+    await writeFile(join(dir, "later"), "later");
+    await expect(removeSqliteReplicaLayout(dir, { approvedUnknown: unknownEntries })).rejects.toThrow(/unknown|approval/i);
+    expect(await stat(join(dir, "replica.db")).then(() => "exists", () => "gone")).toBe("exists");
+    expect(await readdir(dir)).toContain("approved");
+  });
+
+  test("new allowlisted files after approval cannot be silently deleted", async () => {
+    const dir = await tempDir();
+    const store = await newStore(dir);
+    await store.close();
+    const report = await inspectSqliteReplicaLayout(dir);
+    await writeFile(join(dir, "replica.db-journal"), "new known file");
+    await expect(removeSqliteReplicaLayout(dir, {
+      expectedKnown: report.knownEntries, expectedRoot: report.rootIdentity,
+    })).rejects.toThrow(/known|identity|approval/i);
+    expect(await stat(join(dir, "replica.db-journal")).then(() => "exists", () => "gone")).toBe("exists");
+    expect(await stat(join(dir, "replica.db")).then(() => "exists", () => "gone")).toBe("exists");
+  });
+
+  test("a replaced known file or directory fails before deletion", async () => {
+    for (const name of ["replica.db-journal", "blobs"]) {
+      const dir = await tempDir();
+      const outside = await tempDir();
+      const store = await newStore(dir);
+      await store.close();
+      if (name === "replica.db-journal") await writeFile(join(dir, name), "original");
+      const report = await inspectSqliteReplicaLayout(dir);
+      expect(report.knownEntries).toContainEqual(expect.objectContaining({ path: name }));
+      await rename(join(dir, name), join(outside, name));
+      if (name === "blobs") await mkdir(join(dir, name));
+      else await writeFile(join(dir, name), "replacement");
+      await expect(removeSqliteReplicaLayout(dir, {
+        expectedKnown: report.knownEntries, expectedRoot: report.rootIdentity,
+      })).rejects.toThrow(/known|identity|approval/i);
+      expect(await stat(join(dir, "replica.db")).then(() => "exists", () => "gone")).toBe("exists");
+    }
+  });
+
+  test("recovery accepts previously approved known files already deleted", async () => {
+    const dir = await tempDir();
+    const store = await newStore(dir);
+    await store.close();
+    const blob = join(dir, "blobs", "aa", `aa${"b".repeat(62)}`);
+    await mkdir(join(dir, "blobs", "aa"));
+    await writeFile(blob, "previously approved");
+    const report = await inspectSqliteReplicaLayout(dir);
+    await rm(blob);
+    await removeSqliteReplicaLayout(dir, {
+      expectedKnown: report.knownEntries, expectedRoot: report.rootIdentity,
+    });
+    expect(await stat(dir).then(() => "exists", () => "gone")).toBe("gone");
+  });
+
+  test("missing database needs exact approval before removing an unknown child", async () => {
+    const dir = await tempDir();
+    const store = await newStore(dir);
+    await store.close();
+    await rm(join(dir, "replica.db"));
+    await writeFile(join(dir, "pending-v2.json"), "unsynced");
+    const report = await inspectSqliteReplicaLayout(dir);
+    expect(report.unknownPaths).toContain("replica.db");
+    await expect(removeSqliteReplicaLayout(dir, {
+      approvedUnknown: report.unknownEntries, expectedKnown: report.knownEntries,
+      expectedRoot: report.rootIdentity,
+    })).rejects.toThrow(/database.*missing/i);
+    await writeFile(join(dir, "later"), "new unsynced data");
+    await expect(removeSqliteReplicaLayout(dir, {
+      approvedUnknown: report.unknownEntries, expectedKnown: report.knownEntries,
+      expectedRoot: report.rootIdentity, allowMissingDatabase: true,
+    })).rejects.toThrow(/later/);
+    expect(await stat(join(dir, "pending-v2.json")).then(() => "exists", () => "gone")).toBe("exists");
+    await rm(join(dir, "later"));
+    await removeSqliteReplicaLayout(dir, {
+      approvedUnknown: report.unknownEntries, expectedKnown: report.knownEntries,
+      expectedRoot: report.rootIdentity, allowMissingDatabase: true,
+    });
+    expect(await stat(dir).then(() => "exists", () => "gone")).toBe("gone");
+  });
+
+  test("approval of a directory does not approve files later added inside it", async () => {
+    const dir = await tempDir();
+    const store = await newStore(dir);
+    await store.close();
+    await mkdir(join(dir, "future"));
+    await writeFile(join(dir, "future", "approved"), "approved");
+    const report = await inspectSqliteReplicaLayout(dir);
+    await writeFile(join(dir, "future", "later"), "later");
+    await expect(removeSqliteReplicaLayout(dir, {
+      approvedUnknown: report.unknownEntries, expectedRoot: report.rootIdentity,
+    })).rejects.toThrow(/unknown|approval/i);
+    expect(await stat(join(dir, "future", "approved")).then(() => "exists", () => "gone")).toBe("exists");
+    expect(await stat(join(dir, "replica.db")).then(() => "exists", () => "gone")).toBe("exists");
+  });
+
+  test("retry accepts only already-approved unknown entries that are now absent", async () => {
+    const dir = await tempDir();
+    const store = await newStore(dir);
+    await store.close();
+    await writeFile(join(dir, "first"), "first");
+    await writeFile(join(dir, "second"), "second");
+    const report = await inspectSqliteReplicaLayout(dir);
+    await rm(join(dir, "first"));
+    await removeSqliteReplicaLayout(dir, {
+      approvedUnknown: report.unknownEntries, expectedRoot: report.rootIdentity,
+    });
+    expect(await stat(dir).then(() => "exists", () => "gone")).toBe("gone");
+  });
+
+  test("a retry re-inspects and rejects a replaced approved inode", async () => {
+    const dir = await tempDir();
+    const store = await newStore(dir);
+    await store.close();
+    await writeFile(join(dir, "approved"), "original");
+    const report = await inspectSqliteReplicaLayout(dir);
+    await rm(join(dir, "approved"));
+    await writeFile(join(dir, "replacement"), "new");
+    await writeFile(join(dir, "approved"), "replacement");
+    await rm(join(dir, "replacement"));
+    await expect(removeSqliteReplicaLayout(dir, {
+      approvedUnknown: report.unknownEntries, expectedRoot: report.rootIdentity,
+    })).rejects.toThrow(/identity|approval/i);
+    expect(await stat(join(dir, "replica.db")).then(() => "exists", () => "gone")).toBe("exists");
+    const refreshed = await inspectSqliteReplicaLayout(dir);
+    await removeSqliteReplicaLayout(dir, {
+      approvedUnknown: refreshed.unknownEntries, expectedRoot: refreshed.rootIdentity,
+    });
+    expect(await stat(dir).then(() => "exists", () => "gone")).toBe("gone");
+  });
+
+  test("a forged approval path never authorizes an uninspected entry", async () => {
+    const dir = await tempDir();
+    const store = await newStore(dir);
+    await store.close();
+    await writeFile(join(dir, "approved"), "original");
+    const { unknownEntries } = await inspectSqliteReplicaLayout(dir);
+    await expect(removeSqliteReplicaLayout(dir, {
+      approvedUnknown: [{ ...unknownEntries[0]!, path: "../outside" }],
+    })).rejects.toThrow(/approval|unknown/i);
+    expect(await stat(join(dir, "replica.db")).then(() => "exists", () => "gone")).toBe("exists");
+  });
+
+  test("non-Linux refuses a replacement root between approval and removal", async () => {
+    if (process.platform !== "linux") return;
+    const dir = await tempDir();
+    const original = await tempDir();
+    await rm(original, { recursive: true });
+    const store = await newStore(dir);
+    await store.close();
+    const report = await inspectSqliteReplicaLayout(dir);
+    await rename(dir, original);
+    await mkdir(dir);
+    await writeFile(join(dir, "replica.db"), "replacement");
+    // Child scripts load layout only after changing platform; static imports run too early.
+    const script = `Object.defineProperty(process, "platform", { value: "darwin" });
+      const { removeSqliteReplicaLayout } = await import(${JSON.stringify(join(import.meta.dir, "sqlite/layout.ts"))});
+      try {
+        await removeSqliteReplicaLayout(${JSON.stringify(dir)}, { expectedRoot: ${JSON.stringify(report.rootIdentity)} });
+        throw Error("removed replacement root");
+      } catch (error) { if (!/root identity changed/i.test(error.message)) throw error; }`;
+    const child = Bun.spawn(["bun", "-e", script], { stdout: "pipe", stderr: "pipe" });
+    const stderr = new Response(child.stderr).text();
+    expect(await child.exited, await stderr).toBe(0);
+    expect(await stat(join(dir, "replica.db")).then(() => "exists", () => "gone")).toBe("exists");
+    expect(await stat(join(original, "replica.db")).then(() => "exists", () => "gone")).toBe("exists");
+  });
+
+  test("non-Linux named paths reject a symlink in a component and at the leaf", async () => {
+    if (process.platform !== "linux") return;
+    const dir = await tempDir();
+    const outside = await tempDir();
+    const store = await newStore(dir);
+    await store.close();
+    await writeFile(join(outside, "keep"), "outside");
+    await symlink(outside, join(dir, "outside"), "dir");
+    // Child scripts load layout only after changing platform; static imports run too early.
+    const script = `Object.defineProperty(process, "platform", { value: "darwin" });
+      const { inspectSqliteReplicaLayout, removeSqliteReplicaLayout } = await import(${JSON.stringify(join(import.meta.dir, "sqlite/layout.ts"))});
+      for (const op of [inspectSqliteReplicaLayout, removeSqliteReplicaLayout]) {
+        try { await op(${JSON.stringify(dir)}); throw Error("followed symlink"); }
+        catch (error) { if (!/symlink/i.test(error.message)) throw error; }
+      }
+      try { await inspectSqliteReplicaLayout(${JSON.stringify(join(dir, "outside", "keep"))}); throw Error("followed component"); }
+      catch (error) { if (!/symlink/i.test(error.message)) throw error; }`;
+    const child = Bun.spawn(["bun", "-e", script], { stdout: "pipe", stderr: "pipe" });
+    const stderr = new Response(child.stderr).text();
+    expect(await child.exited, await stderr).toBe(0);
+    expect(await stat(join(dir, "replica.db")).then(() => "exists", () => "gone")).toBe("exists");
+    expect(await stat(join(outside, "keep")).then(() => "exists", () => "gone")).toBe("exists");
+  });
+
+  test("non-Linux named-path deletion removes an allowlisted mirror", async () => {
+    if (process.platform !== "linux") return;
+    const dir = await tempDir();
+    const store = await newStore(dir);
+    await store.close();
+    // Loading after changing process.platform confines the simulated platform to the child.
+    const script = `Object.defineProperty(process, "platform", { value: "darwin" });
+      const { removeSqliteReplicaLayout } = await import(${JSON.stringify(join(import.meta.dir, "sqlite/layout.ts"))});
+      await removeSqliteReplicaLayout(${JSON.stringify(dir)});`;
+    const child = Bun.spawn(["bun", "-e", script], { stdout: "pipe", stderr: "pipe" });
+    const stderr = new Response(child.stderr).text();
+    expect(await child.exited, await stderr).toBe(0);
+    expect(await stat(dir).then(() => "exists", () => "gone")).toBe("gone");
+  });
+
+
+  for (const platform of ["darwin", "win32"] as const) {
+    test(`${platform} removal unlinks only the enumerated SQLite and source-created blob layout`, async () => {
+      const dir = await tempDir();
+      const node = new FakeNode();
+      node.put("notes/a", "real blob");
+      const store = await simulatedNonLinux(() => newStore(dir), platform);
+      await new Replica({ store, transport: node }).sync();
+      const shards = (await readdir(join(dir, "blobs"))).filter((name) => name !== ".tmp");
+      expect(shards).toHaveLength(1);
+      const hash = (await readdir(join(dir, "blobs", shards[0]!)))[0]!;
+      expect(hash).toMatch(/^[0-9a-f]{64}$/);
+      expect((await readdir(dir)).every((entry) => ["replica.db", "replica.db-wal", "replica.db-shm", "blobs"].includes(entry))).toBe(true);
+      const lease = (await store.acquireSyncLease(60_000))!;
+      await simulatedNonLinux(() => store.destroy(lease), platform);
+      expect(await lstat(dir).then(() => "exists", () => "gone")).toBe("gone");
+      await store.close();
+    });
+  }
+
+  test("win32 path-based purge does not require an openable directory descriptor", async () => {
+    const dir = await tempDir();
+    const original = fsSync.openSync;
+    let directoryOpens = 0;
+    const intercepted = spyOn(fsSync, "openSync").mockImplementation((path, flags) => {
+      if (String(path) === dir) {
+        directoryOpens++;
+        throw Object.assign(new Error("directory descriptors unavailable"), { code: "EISDIR" });
+      }
+      return original(path, flags);
+    });
+    let store: SqliteReplicaStore | undefined;
+    try {
+      store = await simulatedNonLinux(() => newStore(dir), "win32");
+      const lease = (await store.acquireSyncLease(60_000))!;
+      await simulatedNonLinux(() => store!.destroy(lease), "win32");
+      expect(directoryOpens).toBe(0);
+      expect(await lstat(dir).then(() => "exists", () => "gone")).toBe("gone");
+    } finally {
+      intercepted.mockRestore();
+      await store?.close();
+    }
+  });
+
+  test("non-Linux removal rejects a symlinked shard without touching its victim or remaining replica", async () => {
+    const dir = await tempDir();
+    const victim = await tempDir();
+    const node = new FakeNode();
+    node.put("notes/a", "real blob");
+    const store = await simulatedNonLinux(() => newStore(dir));
+    await new Replica({ store, transport: node }).sync();
+    const shard = (await readdir(join(dir, "blobs"))).find((name) => name !== ".tmp")!;
+    const blob = (await readdir(join(dir, "blobs", shard)))[0]!;
+    await writeFile(join(victim, blob), "victim");
+    await rename(join(dir, "blobs", shard), join(dir, "blobs", `${shard}.original`));
+    await symlink(victim, join(dir, "blobs", shard));
+    const lease = (await store.acquireSyncLease(60_000))!;
+    expect(await simulatedNonLinux(() => codeOf(store.destroy(lease)))).toBe(ReplicaErrorCode.STORAGE_ERROR);
+    expect(await readFile(join(victim, blob), "utf8")).toBe("victim");
+    expect((await store.open())?.config.name).toBe("notes");
+    expect((await stat(join(dir, "blobs", `${shard}.original`, blob))).isFile()).toBe(true);
+    await store.close();
+  });
+
+  test("non-Linux removal rejects a swapped replica directory without deleting either directory", async () => {
+    const dir = await tempDir();
+    const store = await simulatedNonLinux(() => newStore(dir));
+    const lease = (await store.acquireSyncLease(60_000))!;
+    const moved = `${dir}.moved`;
+    await rename(dir, moved);
+    await mkdir(dir);
+    try {
+      await writeFile(join(dir, "keep"), "untouched");
+      expect(await simulatedNonLinux(() => codeOf(store.destroy(lease)))).toBe(ReplicaErrorCode.NOT_FOUND);
+      expect(await readFile(join(dir, "keep"), "utf8")).toBe("untouched");
+      expect((await stat(join(moved, "replica.db"))).isFile()).toBe(true);
+    } finally {
+      await store.close();
+      await rm(moved, { recursive: true, force: true });
+    }
+  });
+
+  test("non-Linux removal refuses a parent replaced by an alias to its original inode", async () => {
+    const parent = await tempDir();
+    const dir = join(parent, "replica");
+    const store = await simulatedNonLinux(() => newStore(dir));
+    const lease = (await store.acquireSyncLease(60_000))!;
+    const moved = `${parent}.moved`;
+    await rename(parent, moved);
+    await symlink(moved, parent, "dir");
+    try {
+      expect(await simulatedNonLinux(() => codeOf(store.destroy(lease)))).toBe(ReplicaErrorCode.NOT_FOUND);
+      expect((await stat(join(moved, "replica", "replica.db"))).isFile()).toBe(true);
+    } finally {
+      await store.close();
+      await rm(parent, { force: true });
+      await rm(moved, { recursive: true, force: true });
+    }
+  });
+
+  test("non-Linux final rmdir refuses a parent alias installed after the last file", async () => {
+    const parent = await tempDir();
+    const dir = join(parent, "replica");
+    const store = await simulatedNonLinux(() => newStore(dir));
+    const lease = (await store.acquireSyncLease(60_000))!;
+    const moved = `${parent}.moved`;
+    const filesystem = await import("node:fs/promises");
+    const original = filesystem.lstat;
+    let swapped = false;
+    const intercepted = spyOn(filesystem, "lstat").mockImplementation(async (...args) => {
+      const result = await original(...args);
+      if (!swapped && args[0] === dir && (await readdir(dir)).length === 0) {
+        await rename(parent, moved);
+        await symlink(moved, parent, "dir");
+        swapped = true;
+      }
+      return result;
+    });
+    try {
+      expect(await simulatedNonLinux(() => codeOf(store.destroy(lease)))).toBe(ReplicaErrorCode.NOT_FOUND);
+      expect(swapped).toBe(true);
+      expect((await stat(join(moved, "replica"))).isDirectory()).toBe(true);
+    } finally {
+      intercepted.mockRestore();
+      await store.close();
+      await rm(parent, { force: true });
+      await rm(moved, { recursive: true, force: true });
+    }
   });
 });
 

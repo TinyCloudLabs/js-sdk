@@ -1,5 +1,315 @@
 # @tinycloud/cli
 
+## 1.3.0-beta.26
+
+### Minor Changes
+
+- 87a137e: Retry node `NODE_BUSY` and `REQUEST_TIMEOUT` answers automatically. Both mean nothing was applied, so the services now retry them under the existing `retryPolicy` through the new `ServiceContext.invokeWithRetry(url, build)`, which calls `build` once per attempt so every attempt carries a freshly signed invocation (the node answers a repeated invocation with 409, so re-sending one could never succeed). `ServiceContext.fetch` itself no longer retries. A context without `invokeWithRetry` sends once. The policy: at most 4 attempts in about 12 s, honouring the node's `Retry-After` (capped at the remaining budget) and otherwise backing off exponentially with full jitter (250 ms base, 4 s cap). Aborts and per-request timeouts end the wait at once, and `OUTCOME_UNKNOWN` is never retried. `defaultRetryPolicy` changes accordingly (its retryable codes are now `NODE_BUSY` and `REQUEST_TIMEOUT`; `NETWORK_ERROR` and `TIMEOUT` are no longer listed because no service read them), and `RetryPolicy` gains an optional `maxTotalMs`. Opt out with `retryPolicy: { maxAttempts: 1 }`.
+
+  The CLI gains `--no-retry` and `TINYCLOUD_RETRY=0` for monitors and probes that must see the node's honest `NODE_BUSY`. KV responses (and `tc kv get|put|delete --json`) report `attempts` and `backoffMs`.
+
+### Patch Changes
+
+- Updated dependencies [87a137e]
+  - @tinycloud/node-sdk@3.3.0-beta.25
+  - @tinycloud/sdk-services@3.3.0-beta.25
+  - @tinycloud/operations@0.6.1-beta.23
+  - @tinycloud/sdk-core@3.3.0-beta.25
+
+## 1.3.0-beta.25
+
+### Patch Changes
+
+- b6d0b9f: `tc account` commands now exit with `ACCOUNT_ACCESS_REQUIRED` (exit 5) before calling the node when the session lacks the account-space abilities that command invokes, as with a plain OpenKey login. Each command checks its own set (registry reads and writes, `kv/del` for removals, `space/list` and `capabilities/read` on the primary space for the commands that list spaces or delegations). `account delegations revoke` needs no session ability on a local-key profile (it signs with the owner wallet) and is refused with the `tc delegation revoke` command on an OpenKey profile, which cannot carry the raw-CID revoke ability, and the error prints the `tc auth request --grant --cap ...` command that grants exactly those, with a `--paste` variant. `tc auth request --grant` gains `--paste` (OpenKey owner profiles) for browsers that cannot reach the CLI's loopback callback, and a grant that spans several spaces now says up front how many OpenKey approvals it takes (one per space) and numbers each prompt. The account registry sync skip is recorded once per process as a debug event only (`TinyCloud_debug=true`).
+- Updated dependencies [b6d0b9f]
+  - @tinycloud/node-sdk@3.3.0-beta.24
+  - @tinycloud/operations@0.6.1-beta.22
+
+## 1.3.0-beta.24
+
+### Minor Changes
+
+- d2ad845: `tc delegation create` now signs and activates the delegation through `delegateTo`, reads it back through the node's account delegation query, and prints its CID only once the node lists it as active (`DELEGATION_NOT_CONFIRMED` otherwise). `tc delegation list` and `tc delegation info` use that query (`POST /delegation/query`) via `account.delegations.query()`, which includes delegations signed by the session key; `list` gains `--space`, and `--to` accepts a `did:key` with a `#fragment`. Previously `create` and `list` sent `tinycloud.delegation/create` and `tinycloud.delegation/list` invocations that the node does not handle (it answered an empty 200, surfaced as a JSON parse error), and `info` called a method that did not exist.
+
+  A plain `tc auth login` now also requests `tinycloud.delegation/list` on the default space (OpenKey's default grant omits it). A session that lacks it, on the account space and its own space, gets a `PERMISSION_DENIED` error saying to run `tc auth login` again. `DelegationManager.query()` signs for the account space and falls back to the session's own space when the node refuses (403).
+
+  Breaking: removed `DelegationManager.create()` (use `TinyCloudNode.delegateTo()`), `DelegationManager.list()` (use `account.delegations.query()`), `TinyCloudNode.delegate()` (use `delegateTo()`), `TinyCloudNode.listDelegations()` (use `account.delegations.query()`), and the web-sdk `TinyCloudWeb.delegate()` (use `delegateTo()`) and `TinyCloudWeb.listDelegations()` (use `account.delegations.query()`). They sent invocations the node never handled, so they never worked. `account.delegations.list()` is not a replacement: it reads the SQL index and omits session-signed delegations. Also removed the `delegationManager` option from `SharingService` config; sharing uses `createDelegation` or `createDelegationWasm`.
+
+  `TinyCloudNode.delegateTo()` takes a new `requireActivation` option: when set, it throws when the node answers 200 but lists a target space under `skipped` (a space it does not host), naming that space; this used to look like success. It is off by default, since grants to a not-yet-hosted space (e.g. secrets) are valid. `tc delegation create` sets it. `DelegationManager.getChain()` and `checkPermission()` now return an `UNSUPPORTED_OPERATION` error when the node answers with an empty body.
+
+### Patch Changes
+
+- Updated dependencies [d2ad845]
+  - @tinycloud/sdk-core@3.3.0-beta.23
+  - @tinycloud/node-sdk@3.3.0-beta.23
+  - @tinycloud/operations@0.6.1-beta.21
+
+## 1.3.0-beta.23
+
+### Patch Changes
+
+- dc67c26: Breaking change to `tc replica report --json` (beta feature, from #551 / TC-841): the report is now read-only and never starts a replication runtime, so `replicas` is always `[]` and `replicasUnavailable` is always `true`. Per-partition pinned counts moved from `replicas[].pinned` to `partitions[].pinned` (each partition has `idHash`, `host`, `space`, `pinned`). Scripts reading `.replicas[].pinned` should read `.partitions[].pinned` instead. Live replica status returns with TC-1309.
+
+## 1.3.0-beta.22
+
+### Patch Changes
+
+- 270c284: Clarify the share link fragment wording in the tc-cli skill reference.
+
+## 1.3.0-beta.21
+
+### Patch Changes
+
+- Updated dependencies [6e7ad8f]
+  - @tinycloud/share-sdk@1.2.0-beta.6
+  - @tinycloud/sdk-core@3.3.0-beta.22
+  - @tinycloud/node-sdk@3.3.0-beta.22
+  - @tinycloud/operations@0.6.1-beta.20
+
+## 1.3.0-beta.20
+
+### Minor Changes
+
+- 02c0a44: Owner-signed artifact pin for addressed shares (TC-1428). The Policy/v3 envelope gains an optional `artifactPin` field (artifact id, version, sha256 of the version's `manifest.json`, and the sha256 and size of the stored ciphertext file the share reads). It is covered by the envelope signature, so the existing envelope version and the node are unchanged (the node reads the envelope as opaque JSON). `share-sdk` adds a small verification module (`verifyArtifactShare`, `assertArtifactBinding`, `verifyArtifactFileBytes`, `verifyArtifactManifestBytes`, `buildArtifactPin`): a share that reads `artifacts/` without a pin that matches its content source is refused, a pinned share cannot grant edit, and fetched bytes that do not hash to the pinned digest are refused before any decrypt request. `inspectShare` reports `artifact: { id, version }`. `share publish --artifact` signs the pin for addressed shares.
+
+  Breaking for old viewers: the envelope schema is strict, so a viewer that predates this release rejects an envelope with `artifactPin` rather than showing it. Update the viewer's `@tinycloud/share-sdk` before publishing pinned addressed shares. The owner is the trusted signer; the node has no write-once ACL, so an owner can still overwrite a version file and recipients then fail closed. Bearer artifact shares have no envelope and carry no pin yet.
+
+### Patch Changes
+
+- Updated dependencies [02c0a44]
+  - @tinycloud/share-envelope@1.2.0-beta.0
+  - @tinycloud/share-sdk@1.2.0-beta.5
+  - @tinycloud/sdk-core@3.3.0-beta.21
+  - @tinycloud/node-sdk@3.3.0-beta.21
+  - @tinycloud/operations@0.6.1-beta.19
+
+## 1.3.0-beta.19
+
+### Patch Changes
+
+- Updated dependencies [cce8b26]
+  - @tinycloud/sdk-core@3.3.0-beta.20
+  - @tinycloud/node-sdk@3.3.0-beta.20
+  - @tinycloud/operations@0.6.1-beta.18
+
+## 1.3.0-beta.18
+
+### Patch Changes
+
+- fff4c72: Add the node release pin and verified downloader that `tc node install` will use. The CLI embeds SHA-256 pins for the TinyCloud node tarballs and checks the download against them before unpacking. No command uses them yet.
+
+## 1.3.0-beta.17
+
+### Patch Changes
+
+- Updated dependencies [eb9defd]
+  - @tinycloud/sdk-core@3.3.0-beta.18
+  - @tinycloud/node-sdk@3.3.0-beta.18
+  - @tinycloud/operations@0.6.1-beta.17
+
+## 1.3.0-beta.16
+
+### Patch Changes
+
+- Updated dependencies [daf8561]
+  - @tinycloud/share-sdk@1.2.0-beta.4
+  - @tinycloud/sdk-core@3.3.0-beta.17
+  - @tinycloud/node-sdk@3.3.0-beta.17
+  - @tinycloud/operations@0.6.1-beta.16
+
+## 1.3.0-beta.15
+
+### Patch Changes
+
+- Updated dependencies [18b6c9f]
+  - @tinycloud/node-sdk@3.3.0-beta.16
+  - @tinycloud/operations@0.6.1-beta.15
+
+## 1.3.0-beta.14
+
+### Patch Changes
+
+- Updated dependencies [e68e911]
+  - @tinycloud/share-sdk@1.2.0-beta.3
+  - @tinycloud/sdk-core@3.3.0-beta.15
+  - @tinycloud/node-sdk@3.3.0-beta.15
+  - @tinycloud/operations@0.6.1-beta.14
+
+## 1.3.0-beta.13
+
+### Patch Changes
+
+- Updated dependencies [d84e379]
+  - @tinycloud/share-sdk@1.2.0-beta.2
+  - @tinycloud/sdk-core@3.3.0-beta.14
+  - @tinycloud/node-sdk@3.3.0-beta.14
+  - @tinycloud/operations@0.6.1-beta.13
+
+## 1.3.0-beta.12
+
+### Patch Changes
+
+- Updated dependencies [c2fd94b]
+  - @tinycloud/share-sdk@1.2.0-beta.1
+  - @tinycloud/sdk-core@3.3.0-beta.13
+  - @tinycloud/node-sdk@3.3.0-beta.13
+  - @tinycloud/operations@0.6.1-beta.12
+
+## 1.3.0-beta.11
+
+### Patch Changes
+
+- Updated dependencies [2292db7]
+  - @tinycloud/sdk-services@3.3.0-beta.11
+  - @tinycloud/node-sdk@3.3.0-beta.11
+  - @tinycloud/operations@0.6.1-beta.11
+  - @tinycloud/sdk-core@3.3.0-beta.11
+
+## 1.3.0-beta.10
+
+### Minor Changes
+
+- 116b214: Artifact versions for `share publish` (TC-1428). `share publish --artifact <id|new>` stores the file as a write-once version under `artifacts/<id>/versions/<n>/` (created with `If-None-Match: *`, `manifest.json` written last) in the owner's space and pins the share to that version: bearer and addressed shares read one version file and never carry `put`. Re-publishing the same bytes to a bearer link returns the same version and changed content makes the next, so an agent retry is safe. An addressed share is a fresh encryption each time, so each is its own version; the manifest records only the sha256 of the stored bytes, never of the plaintext. `share versions <id>` lists versions and the shares pinned to each. `--action edit` on an artifact share is refused; every artifact share pins one version. The layout helpers (`publishArtifactVersion`, `listArtifactVersions`, `parseArtifactManifest`, path helpers) are a new `@tinycloud/share-sdk/artifact` entry point, kept out of the main barrel so browser bundles do not carry them. No node change.
+
+  The built-in `builtin:share-publishing` manifest now also requests `artifacts/` (get, metadata, put, list). Profiles signed in before this version must sign in again to use `--artifact` (`auth login --device --manifest builtin:share-publishing`); other `share publish` use is unchanged. Versions are kept by default and count against the owner's storage; reclaiming bytes depends on history GC (TC-1277).
+
+### Patch Changes
+
+- Updated dependencies [116b214]
+  - @tinycloud/share-sdk@1.2.0-beta.0
+  - @tinycloud/sdk-core@3.3.0-beta.10
+  - @tinycloud/node-sdk@3.3.0-beta.10
+  - @tinycloud/operations@0.6.1-beta.10
+
+## 1.3.0-beta.9
+
+### Patch Changes
+
+- ef9653b: Sign the share delivery authorization with the primary session key. The node records the signer as the delivery's sender key, and the SDK binds and countersigns the receipt with the primary session key; when a runtime grant held by another key covered the shared file, `tc share publish --to <email> --notify` rejected its own receipt and the recipient was never emailed (exit 9, `partial-failure`).
+- Updated dependencies [ef9653b]
+  - @tinycloud/node-sdk@3.3.0-beta.9
+  - @tinycloud/operations@0.6.1-beta.9
+
+## 1.3.0-beta.8
+
+### Patch Changes
+
+- Updated dependencies [f97d73d]
+  - @tinycloud/sdk-core@3.3.0-beta.8
+  - @tinycloud/node-sdk@3.3.0-beta.8
+  - @tinycloud/operations@0.6.1-beta.8
+
+## 1.3.0-beta.7
+
+### Patch Changes
+
+- 94566db: `auth logout` denies the profile's replica gate durably before it removes `session.json` and `key.json`, then erases local replicas. If the gate cannot be denied, credentials and replicas stay in place and the command exits with a retryable error. Fence unchanged inactive replica gates across online logout, reject changed gates before local credential removal, and give an actionable retry path for an interrupted orphan logout marker. A plain `auth logout` retry now resumes a committed local logout whose credential removal failed, instead of asking to discard local changes. Logout and startup recovery refuse without changes when the pending logout belongs to a different principal than the current session.
+- b22a88d: A plain OpenKey `auth login` on a profile that already belongs to an owner now names that owner's space, so OpenKey preselects the owner's key without `--owner`. The signed owner is still verified after approval.
+- 3d24566: Cancelling a prepared OpenKey login before approval now takes one path whether it comes from terminal Ctrl-C or a SIGINT/SIGTERM sent to a non-interactive process: the CLI asks OpenKey to cancel the handoff (best effort, two-second timeout), saves nothing and exits 130 `CANCELLED`, as the exit-code table documents. Previously a non-interactive signal never reached OpenKey, and terminal Ctrl-C exited 3.
+- 1289240: A completed prepared OpenKey login now exits promptly under Node even when the browser opened a connection to the loopback callback and never sent a request, as Chromium does when Local Network Access refuses the callback. Closing the callback listener now also drops connections that never sent a request; the ACK's own connection closes after its response.
+- d2c1e10: A failed or cancelled replica-enabled OpenKey login (interrupt, expiry, invalid signature, paste EOF or a failed commit) no longer signs out the profile's existing session: it never denies an already-active replica gate, so the live session's unsynced writes are kept. Only a gate that the failed attempt itself bound, and that no saved session holds, is denied again.
+- 8332bc6: Classify replica storage-budget failures as storage-full exits and expired consent as permission-denied with sign-in renewal guidance.
+- 90bc0ae: Report the node's retry signals (tinycloud-node #347) as typed errors instead of `NETWORK_ERROR`, for SQL, DuckDB and KV get, head, list, put and delete.
+  - `NODE_BUSY`: `503 sql_busy:<stage>` or `unavailable_retryable`. Nothing was applied. `meta.stage` (`lock_wait`, `hydration`, `artifact_transfer` or `identity_resolution`) when the node names one.
+  - `REQUEST_TIMEOUT`: `503 request_timeout`. The node's deadline passed before any write began, so nothing was applied.
+  - `OUTCOME_UNKNOWN`: `500 outcome_unknown`. A write may have been applied; read it back before retrying a non-idempotent operation.
+
+  `meta.retryable` says whether a retry is safe and `meta.retryAfterMs` carries the node's `Retry-After`. The SDK still never retries by itself. A response without these bodies, such as a 503 or 500 from node 1.20.6, keeps its old code, and real transport failures stay `NETWORK_ERROR`. New export: `nodeRetryError`.
+
+  Fix: a conditional KV `put` or `delete` that got a 503 was reported as `KV_CONFLICT`. A 503 is never a conflict; the node's precondition failure is its 412, still `KV_PRECONDITION_FAILED`. The SDK no longer produces `KV_CONFLICT` itself (callers that handle it keep working). A conditional write's 503 is now `NODE_BUSY` or `REQUEST_TIMEOUT` with the typed body, otherwise `KV_WRITE_FAILED` (put) or `NETWORK_ERROR` (delete) with `meta.status` 503.
+
+  `tc` prints a plain message for the new codes ("The node is busy, try again in 5 s.", "Outcome unknown: the node may have applied the write. Check before retrying.") and exits 7.
+
+- c980014: Legacy local replica get, list, and status with an owner session require its persisted replica stamp and the active profile gate. A session without an owner DID (a delegate's imported grant) reads only while the profile has no gate and no committed sign-out. Serialize reads and output with sign-out denial, and refuse a pending logout marker before and after local reads so interrupted cleanup cannot serve retained replica data.
+
+  Legacy logout cleanup accepts only the approved path, type, and inode inventory recorded in the logout marker; an unlisted or replaced file leaves cleanup pending instead of broadening `--discard-local-changes`.
+
+- 0c4c6b2: `ProfileReplicaPurge.deny` with `{ deferErase: true }` now accepts only `reason: "sign_out"` and returns `ProfileReplicaDeferredDenyOutcome`, whose committed `denied` always carries `resumeToken`. `ReplicaEraseReport.deferred: true` marks a pass held by a deferred denial, so `remaining: 0` there is not completion. node-sdk exports the full contract `ProfileReplicaPurge`, requires the displayed `approval` in `prepareLogoutPending`, and reports `purgePending` from inspected status while a deferred denial or any intent remains.
+
+  A v1 logout marker records the epoch its denial actually committed (`deniedEpoch`) in the same locked section as the deny, and every later check compares with it. A sign-out interrupted between its deny floor and gate writes is completed by the next `auth logout` (`@tinycloud/replica/profile-gate` adds `readLogoutGate`, `advanceInactiveGate` and `REPLICA_DENY_FLOOR_FILE`); reads report "a previous sign-out was interrupted; re-running `tc auth logout` completes it". A restored older gate under a recorded denial refuses with the `tc profile delete` route.
+
+  `auth logout` by an account other than the one whose replicas the profile holds writes no marker and leaves that account's gate, floor and replicas untouched: it signs out, removes its own session and key, and erases the profile's legacy `replicas/` mirror (replayed at startup after a crash). `--revoke` there revokes only grants on the signed-in account's spaces.
+
+  When startup recovery refuses a pending logout because a credential file is unreadable, the message now names that file (`session.json` or `profile.json`).
+
+  CLI-bound storage and purge name the CLI's `replication/events.jsonl` and `events.jsonl.1` diagnostics logs (`diagnosticFiles`). With a readable gate, those exact names count as known only while they are regular files, so a fully synced profile signs out without `--discard-local-changes`; a symlink there stays unknown.
+
+- Updated dependencies [29440be]
+- Updated dependencies [86815bd]
+- Updated dependencies [e7f709d]
+- Updated dependencies [94566db]
+- Updated dependencies [38980b0]
+- Updated dependencies [a7cdfe0]
+- Updated dependencies [94566db]
+- Updated dependencies [94566db]
+- Updated dependencies [94566db]
+- Updated dependencies [90bc0ae]
+- Updated dependencies [0c4c6b2]
+  - @tinycloud/node-sdk@3.3.0-beta.7
+  - @tinycloud/sdk-core@3.3.0-beta.7
+  - @tinycloud/sdk-services@3.3.0-beta.7
+  - @tinycloud/operations@0.6.1-beta.7
+
+## 1.3.0-beta.6
+
+### Patch Changes
+
+- @tinycloud/node-sdk@3.2.6-beta.6
+- @tinycloud/operations@0.6.1-beta.6
+
+## 1.3.0-beta.5
+
+### Minor Changes
+
+- baca422: Pin profile and replica directories before SQLite opens during reset and sync, and for local report reads and logout cleanup. Reject whole-profile aliases, symlinked replica roots, entries, database files and persisted report descendants, changed SQLite identities, and expired profile descriptors before access. Gate legacy replica reads on pending logout, including aliases and in-flight reads. Resume cleanup of verified empty legacy replica directories after an interrupted purge without deleting unknown files.
+
+  `@tinycloud/operations` resolves user-owned symlinked TinyCloud home directories to a pinned real directory while refusing aliases inside a profile; profile JSON reads verify leaf identity. `@tinycloud/replica` creates SQLite database files exclusively for concurrent openers and checks their identity before migration; on macOS and Windows, replica removal checks each known file and directory before nonrecursive deletion and stops on a changed or unknown entry.
+
+  Breaking change (beta feature): `tc replica report` now reads persisted events and identity partitions without starting a replication runtime. `--purge` and `--clear-pending` refuse with exit 2 `REPORT_READ_ONLY`. Use `tc replica reset --replica <name> --purge` only as a partial alternative for named local replicas. Flag-owned purge and pending clearing have no equivalent yet; TC-1309 tracks safe replacement commands.
+
+### Patch Changes
+
+- Updated dependencies [baca422]
+  - @tinycloud/operations@0.6.1-beta.5
+  - @tinycloud/node-sdk@3.2.6-beta.5
+
+## 1.2.6-beta.4
+
+### Patch Changes
+
+- 9891ed9: Replication: add the shared replica contract for browser and node/CLI storage adapters: the lifecycle gate (`ReplicaGateTx.run`, session stamps, scoped deny), the grant-lifetime policy, the quota seams, the options `grantTtlMs`, `maxBytes` and `minFreeBytes`, and new status fields and events. It adds `@tinycloud/sdk-services/kv/replication/contractConstants`, `/grantPolicyConstants` (numeric policy constants only, with the original names re-exported from `/contractConstants`) and `/grantPolicyTypes`. Diagnostics allowlists, `TelemetryEvents` and CLI debug output cover the new values.
+
+  Source-breaking for exhaustive consumers (replication is beta): switches over these types must now handle `ReplicaState` `gated`, `ReplicationReason` `replica_gated`, the `replication.grant` and `replication.lifecycle` events, sync `trigger: "peer"` and sync `class: "lifecycle"`. Browser ungated `inspectStatus` now returns a discriminated `ReplicaInspectedStatus { redacted: true }` branch without grant, authority or errors; consumers must narrow before reading those fields. Browser `admitPage` takes the exact signed ciphertext-row `deltaBytes` instead of plaintext `blobBytes`/entry count; node's admission hook retains its existing shape.
+
+  `ReplicaGateAccess` now carries a prederived `principalHash` instead of a raw principal; browser `run` requires gate/account key IDs and derives hashes outside IDB transactions. `ReplicaBrowserGateTx` returns a typed private-key snapshot for this derivation, and `ReplicaGatedStorage.open` no longer inherits the unstamped Phase 1 overload. Browser partition-index entries add private-HMAC `lookupId` and nonsecret `ownerDevice` for owner status and scoped purge without decrypting the sealed owner device.
+
+  Phase 2 `ReplicaGatedHandle` requires the opaque `replicaId` supplied by the adapter. Consent-deadline grant events are emitted only for already opened handles with that id; pre-open expiry is reported by lifecycle/recovery, never a raw-prefix or unsalted identifier. `ReplicaLifecycleGate.consentDeadline(stamp)` exposes only the immutable persisted deadline to the main-thread timer, including compact session restore without a fresh anchor; it never derives one from first install.
+
+  The browser contract also defines the origin-wide deny tombstone outside the deletable IndexedDB database, its fail-closed gate semantics, and the lock requirement across lifecycle mutations.
+
+  Browser schema v2 destructively replaces legacy plaintext replica-owned v1 stores only after preserving the origin denial floor; pre-v2 persisted stamps cannot restore. The RC1 per-partition databases remain untouched.
+
+  Establishment takes `{ consentAnchor }`, not `{ siweIssuedAt }`: validated signed SIWE or an independently verified **owner-authorizing** delegation proof supplies finite recency, never a new child minted from old consent. With only a compact leaf or no owner proof timestamp, establishment refuses `not_established` and KV uses the network; matching persisted stamps may restore. Node `pending.json` operations require the profile lock across gate check and file access; deny records a durable identity generation with the pending intent. `activationAllowed` returns false for a null gate principal. Browser replica identifiers use private nonextractable gate-HMAC keys, and account KV metadata/content is sealed with separate account keys; denial or seven-day consent expiry shreds both key records before purge. This limits replica-owned storage plaintext but does not claim confidentiality against a raw browser-profile reader with a valid signed-in session (CONTRACT.md).
+
+  Replica consent from full SIWE requires verified signed `issuedAt`, finite signed `expirationTime` and an exact-space uncaveated KV get+sync witness. Expirationless or otherwise unanchored SIWE can remain network-valid but cannot establish, mint or renew a replica; refused stamps never fail network sign-in/restore, and restore never establishes. A same-principal fresh SIWE does not extend the persisted deadline: controller mint and adapter effective expiry are capped by the gate's durable deadline.
+
+  The browser origin-wide encoded-row budget includes a reserved device bucket for sealed owner-device and grant/first-install rows, admitted with partition rows before any put and released on deny. Native CryptoKey serialization and IndexedDB allocation remain unobservable; node admission is unchanged.
+
+  Compact `sessionOnly` restore requires both a matching stamp/active installed grant **and the current session's own uncaveated get authority** for the requested key or list prefix. A `sessionGrant` refusal cannot be overridden by a stored device grant; compact sessions never mint or renew. Plain logout still ends the network session, while `logout --revoke` keeps it if online revocation fails and leaves the replica denied for retry.
+
+  Browser erase retains a keyless opaque/numeric `purged: true` meta tombstone to fence stale handles. Its measured bytes remain charged until deletion or same-partition replacement; replay releases zero and cannot double-subtract quota.
+  - @tinycloud/node-sdk@3.2.6-beta.4
+  - @tinycloud/operations@0.6.1-beta.4
+  - @tinycloud/sdk-core@3.2.6-beta.4
+
+## 1.2.6-beta.3
+
+### Patch Changes
+
+- Updated dependencies [41e5fca]
+  - @tinycloud/node-sdk@3.2.6-beta.3
+  - @tinycloud/operations@0.6.1-beta.3
+
 ## 1.2.6-beta.2
 
 ### Patch Changes

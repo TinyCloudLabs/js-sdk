@@ -1,5 +1,6 @@
 import { BaseService } from "../base/BaseService";
 import type { RequestSignal } from "../base/types";
+import { abortableSleep } from "../sleep";
 import type {
   FetchResponse,
   InvokeAnyEntry,
@@ -225,26 +226,25 @@ export class HooksService extends BaseService implements IHooksService {
     }
 
     try {
-      const response = await this.context.fetch(`${this.host}/hooks/webhooks`, {
-        method: "POST",
-        headers: {
-          ...serviceHeadersToRecord(
-            this.createHookHeaders(
-              "tinycloud.hooks/register",
-              buildScopePath(webhook.service, webhook.pathPrefix),
-            ),
+      const response = await this.invokeWithRetry(
+        `${this.host}/hooks/webhooks`,
+        () =>
+          this.createHookHeaders(
+            "tinycloud.hooks/register",
+            buildScopePath(webhook.service, webhook.pathPrefix),
           ),
-          "content-type": "application/json",
+        {
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            space: webhook.space,
+            service: webhook.service,
+            pathPrefix: normalizePathPrefix(webhook.pathPrefix),
+            abilities: webhook.abilities ?? [],
+            callbackUrl: webhook.callbackUrl,
+            secret: webhook.secret,
+          }),
         },
-        body: JSON.stringify({
-          space: webhook.space,
-          service: webhook.service,
-          pathPrefix: normalizePathPrefix(webhook.pathPrefix),
-          abilities: webhook.abilities ?? [],
-          callbackUrl: webhook.callbackUrl,
-          secret: webhook.secret,
-        }),
-      });
+      );
 
       if (!response.ok) {
         return err(
@@ -290,19 +290,16 @@ export class HooksService extends BaseService implements IHooksService {
         }
       }
 
-      const response = await this.context.fetch(
+      const response = await this.invokeWithRetry(
         `${this.host}/hooks/webhooks${query.size > 0 ? `?${query.toString()}` : ""}`,
-        {
-          method: "GET",
-          headers: serviceHeadersToRecord(
-            this.createHookHeaders(
-              "tinycloud.hooks/list",
-              options.service
-                ? buildScopePath(options.service, options.pathPrefix)
-                : "webhooks",
-            ),
+        () =>
+          this.createHookHeaders(
+            "tinycloud.hooks/list",
+            options.service
+              ? buildScopePath(options.service, options.pathPrefix)
+              : "webhooks",
           ),
-        },
+        { method: "GET" },
       );
 
       if (!response.ok) {
@@ -337,22 +334,19 @@ export class HooksService extends BaseService implements IHooksService {
     }
 
     try {
-      const response = await this.context.fetch(
+      const response = await this.invokeWithRetry(
         `${this.host}/hooks/webhooks/${encodeURIComponent(id)}`,
-        {
-          method: "DELETE",
-          headers: serviceHeadersToRecord(
-            this.createHookHeaders(
-              "tinycloud.hooks/unregister",
-              options.target
-                ? buildScopePath(
-                    options.target.service,
-                    options.target.pathPrefix,
-                  )
-                : `webhooks/${id}`,
-            ),
+        () =>
+          this.createHookHeaders(
+            "tinycloud.hooks/unregister",
+            options.target
+              ? buildScopePath(
+                  options.target.service,
+                  options.target.pathPrefix,
+                )
+              : `webhooks/${id}`,
           ),
-        },
+        { method: "DELETE" },
       );
 
       if (!response.ok) {
@@ -891,24 +885,9 @@ function readProperty(value: unknown, key: string): unknown {
   }
 }
 
-/** The default retry clock: abortable and unref'd, so a parked backoff never keeps the process alive. */
-function sleep(delayMs: number, _attempt: number, signal: AbortSignal): Promise<void> {
-  return new Promise((resolve) => {
-    const finish = (): void => {
-      clearTimeout(timer);
-      signal.removeEventListener("abort", stop);
-      resolve();
-    };
-    const timer = setTimeout(finish, delayMs);
-    timer.unref?.();
-    const stop = (): void => finish();
-    if (signal.aborted) {
-      finish();
-    } else {
-      signal.addEventListener("abort", stop, { once: true });
-    }
-  });
-}
+/** The default retry clock. */
+const sleep = (delayMs: number, _attempt: number, signal: AbortSignal): Promise<void> =>
+  abortableSleep(delayMs, signal, true);
 
 function abortPromise(signal: AbortSignal): {
   promise: Promise<void>;

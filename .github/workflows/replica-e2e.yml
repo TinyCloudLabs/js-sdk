@@ -2,12 +2,19 @@ name: Replica e2e
 
 # `tc replica` (TC-18) against a real TinyCloud node through the public CLI:
 # device grant, sync, offline restart reads, catch-up, scope. The node binary
-# comes from the pinned GHCR image of the tinycloud-node commit that serves
-# `tinycloud.kv/sync` (TC-732, d7f511f on main). That commit (PR #247) also
-# registers `tinycloud.kv/retain` and attests `retainUntil`, which the
-# retention test needs. The image is public; the job still logs in with the
-# workflow token so the pull keeps working if the package becomes private
-# (the package must then grant this repository read access).
+# comes from the GHCR image of tinycloud-node v1.20.6 (revision e18578ff),
+# pinned by digest. It serves `tinycloud.kv/sync` (`kv-sync-v1`), supports the
+# `tinycloud.kv/retain` / `retainUntil` retention test, and includes the TC-899
+# "database is locked" first-write fix (37277f0, PR #268) that the earlier
+# d7f511f image lacked. QA vetted this digest on SQLite and Postgres 16 (TC-858).
+# It also advertises `kv-sync-root` (TC-908), so the CLI e2e suites exercise the
+# whole-space root sync. The REPLICATION_ROOT_UNSUPPORTED decision logic stays
+# covered without a real node (controller, transport and browser /info-mock
+# tests), but the CLI's handling of it (`sync --prefix /` exit 7, the persisted
+# lastError, the --replication `unavailable` event) has no CI coverage.
+# The image is public; the job still logs in with the workflow token so the pull
+# keeps working if the package becomes private (the package must then grant
+# this repository read access).
 
 on:
   pull_request:
@@ -17,8 +24,14 @@ on:
       - "packages/node-sdk/**"
       - "packages/sdk-core/**"
       - "packages/sdk-services/src/**"
+      - "packages/sdk-services/package.json"
+      - "packages/sdk-services/tsconfig*.json"
       - "packages/operations/**"
       - "packages/web-sdk/**"
+      # web-sdk bundles share-sdk (and share-envelope through it), so their
+      # changes can move the web-sdk dist sizes this workflow checks.
+      - "packages/share-sdk/**"
+      - "packages/share-envelope/**"
       - ".github/scripts/**"
       - ".github/workflows/replica-e2e.yml"
       - "tests/replication-harness/**"
@@ -31,7 +44,7 @@ on:
 
 env:
   TC858_MODEL_FULL: ${{ github.event_name == 'schedule' && '1' || '0' }}
-  TINYCLOUD_NODE_IMAGE: ghcr.io/tinycloudlabs/tinycloud-node:d7f511f
+  TINYCLOUD_NODE_IMAGE: ghcr.io/tinycloudlabs/tinycloud-node:1.20.6@sha256:41667d3d133aaa12290a2f3a744afacd838988327552d159c60f04466e66f86f
 
 jobs:
   replica-e2e:
@@ -97,11 +110,21 @@ jobs:
           bun run --cwd packages/operations build
           bun run --cwd packages/replica build
           bun run --cwd packages/courier build
+          bun run --cwd packages/sdk-services typecheck:contract
           bun run --cwd packages/node-sdk typecheck:replica-contract
           bun run --cwd packages/cli build
 
+      - name: Enforce hashed kv-storage worker gzip ratchet (TC-858)
+        if: success() || failure()
+        run: bun packages/replica/scripts/check-worker-size.ts
+
       - name: Build web-sdk for the Phase 1 dist acceptance
         run: bun run --cwd packages/web-sdk build
+
+      - name: Prove built web core and opt-in replica share signed-session authority
+        run: |
+          bun packages/web-sdk/scripts/check-replica-built-entry.ts mjs
+          bun packages/web-sdk/scripts/check-replica-built-entry.ts cjs
 
       - name: Check Phase 1 web-sdk dist and test baseline
         env:
@@ -110,11 +133,18 @@ jobs:
           REPLICA_BUDGET_TICKET: ${{ github.event.pull_request.title }}
         run: bun packages/web-sdk/scripts/check-phase1-replica-dist.ts
 
+      - name: Size-policy unit tests
+        if: ${{ (success() || failure()) && matrix.database == 'sqlite' }}
+        run: bun test packages/web-sdk/scripts/
+
       - name: Run replication model
         run: bun test packages/sdk-services/src/kv/replication/pendingWrites.model.test.ts
 
 
+      # The real-node steps below run even when the size checks fail, so their setup must too;
+      # otherwise a size failure cascades into misleading ENOENT failures for the node binary.
       - name: Log in to GHCR
+        if: ${{ !cancelled() }}
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
@@ -122,6 +152,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Extract the pinned node binary
+        if: ${{ !cancelled() }}
         run: |
           docker pull "$TINYCLOUD_NODE_IMAGE"
           container="$(docker create "$TINYCLOUD_NODE_IMAGE")"
@@ -129,10 +160,11 @@ jobs:
           docker rm "$container"
           chmod +x "$RUNNER_TEMP/tinycloud"
       - name: Prepare JUnit reports
+        if: ${{ !cancelled() }}
         run: mkdir -p "$RUNNER_TEMP/replica-junit"
 
       - name: Start Postgres 16
-        if: matrix.database == 'postgres'
+        if: ${{ !cancelled() && matrix.database == 'postgres' }}
         run: |
           docker run -d --name replica-e2e-pg -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=replica_e2e -p 127.0.0.1:5432:5432 postgres:16
           for attempt in $(seq 1 30); do
@@ -143,14 +175,14 @@ jobs:
           exit 1
 
       - name: node-sdk replication against the SQLite node
-        if: always() && matrix.database == 'sqlite'
+        if: ${{ !cancelled() && matrix.database == 'sqlite' }}
         env:
           TC_REPLICATION_E2E_NODE_BIN: ${{ runner.temp }}/tinycloud
           TC_REPLICA_E2E_NODE_BIN: ${{ runner.temp }}/tinycloud
         run: bun test packages/node-sdk/src/replication/replication.e2e.test.ts --reporter=junit --reporter-outfile="$RUNNER_TEMP/replica-junit/node-sdk.xml"
 
       - name: node-sdk replication against the Postgres node
-        if: always() && matrix.database == 'postgres'
+        if: ${{ !cancelled() && matrix.database == 'postgres' }}
         env:
           TC_REPLICATION_E2E_NODE_BIN: ${{ runner.temp }}/tinycloud
           TC_REPLICA_E2E_NODE_BIN: ${{ runner.temp }}/tinycloud
@@ -161,20 +193,20 @@ jobs:
         if: matrix.database == 'sqlite'
         run: bun run --cwd packages/replica test
       - name: CLI profile-deletion safety
-        if: always() && matrix.database == 'sqlite'
+        if: ${{ !cancelled() && matrix.database == 'sqlite' }}
         run: |
           mkdir -p "$RUNNER_TEMP/replica-junit"
           bun test packages/cli/src/commands/replica.test.ts --reporter=junit --reporter-outfile="$RUNNER_TEMP/replica-junit/cli-replica-command.xml"
 
       - name: tc replica against the node
-        if: always()
+        if: ${{ !cancelled() }}
         env:
           TC_REPLICA_E2E_NODE_BIN: ${{ runner.temp }}/tinycloud
           TC_REPLICATION_E2E_NODE_BIN: ${{ runner.temp }}/tinycloud
           TC_REPLICA_E2E_DATABASE_URL: ${{ matrix.database == 'postgres' && 'postgres://postgres:postgres@127.0.0.1:5432/replica_e2e' || '' }}
         run: bun test packages/cli/test/replica.e2e.test.ts --reporter=junit --reporter-outfile="$RUNNER_TEMP/replica-junit/cli-replica-e2e.xml"
       - name: CLI replication flag against the node
-        if: always()
+        if: ${{ !cancelled() }}
         env:
           TC_REPLICA_E2E_NODE_BIN: ${{ runner.temp }}/tinycloud
           TC_REPLICATION_E2E_NODE_BIN: ${{ runner.temp }}/tinycloud
@@ -269,6 +301,8 @@ jobs:
           bun run --cwd packages/sdk-core build
           bun run --cwd packages/node-sdk build
           bun run --cwd packages/replica build
+          # The read-through fixture page (node.html) uses web-sdk's browser WASM bindings.
+          bun run --cwd packages/web-sdk build
 
       - name: Install Chromium
         run: bunx playwright install chromium
@@ -289,6 +323,13 @@ jobs:
         env:
           TC_REPLICA_E2E_NODE_BIN: ${{ runner.temp }}/tinycloud
         run: bun test packages/replica/test/browser.e2e.test.ts
+
+      - name: kv-storage adapter in Chromium (fake feed and the node)
+        if: always()
+        env:
+          TC_REPLICA_E2E_NODE_BIN: ${{ runner.temp }}/tinycloud
+          TC_KV_STORAGE_E2E: "1"
+        run: bun test packages/replica/test/kv-storage.e2e.test.ts
 
       - name: Save Rust/Cargo cache
         if: github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/')

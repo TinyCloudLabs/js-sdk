@@ -20,6 +20,7 @@ import {
   parseAuthError,
   storageRejectionError,
   parseStorageRejection,
+  nodeRetryError,
 } from "../errors";
 import {
   formatServiceResponseError,
@@ -395,23 +396,21 @@ export class DuckDbService extends BaseService implements IDuckDbService {
 
       const request = this.createRequestSignal(options?.signal);
       try {
-        const session = this.context.session!;
-        const headers = this.context.invoke(
-          session,
-          "duckdb",
-          dbName,
-          DuckDbAction.IMPORT
+        const response = await this.invokeWithRetry(
+          `${this.host}/invoke`,
+          () =>
+            this.context.invoke(
+              this.context.session!,
+              "duckdb",
+              dbName,
+              DuckDbAction.IMPORT
+            ),
+          {
+            headers: { "Content-Type": "application/x-duckdb" },
+            body: new Blob([data]),
+            signal: request.signal,
+          }
         );
-
-        const response = await this.context.fetch(`${this.host}/invoke`, {
-          method: "POST",
-          headers: {
-            ...(headers as Record<string, string>),
-            "Content-Type": "application/x-duckdb",
-          },
-          body: new Blob([data]),
-          signal: request.signal,
-        });
 
         if (!response.ok) {
           return await this.handleErrorResponse(response, "import");
@@ -435,19 +434,15 @@ export class DuckDbService extends BaseService implements IDuckDbService {
     signal: AbortSignal,
     extraHeaders?: Record<string, string>
   ): Promise<FetchResponse> {
-    const session = this.context.session!;
-    const headers = this.context.invoke(session, "duckdb", dbName, action);
-
-    return this.context.fetch(`${this.host}/invoke`, {
-      method: "POST",
-      headers: {
-        ...(headers as Record<string, string>),
-        "Content-Type": "application/json",
-        ...extraHeaders,
-      },
-      body: JSON.stringify(body),
-      signal,
-    });
+    return this.invokeWithRetry(
+      `${this.host}/invoke`,
+      () => this.context.invoke(this.context.session!, "duckdb", dbName, action),
+      {
+        headers: { "Content-Type": "application/json", ...extraHeaders },
+        body: JSON.stringify(body),
+        signal,
+      }
+    );
   }
 
   private async handleErrorResponse(
@@ -466,6 +461,8 @@ export class DuckDbService extends BaseService implements IDuckDbService {
     if (response.status === 413 && parseStorageRejection(errorText)) {
       return err(storageRejectionError("duckdb", 413, meta, errorText));
     }
+    const retryError = nodeRetryError("duckdb", `DuckDB ${operation} failed: ${response.status} - ${errorText}`, response, errorText);
+    if (retryError) return err(retryError);
 
     const errorBody = parseServiceErrorBody(errorText);
 

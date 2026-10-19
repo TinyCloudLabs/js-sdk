@@ -6,10 +6,14 @@ import {
   writeJsonAtomic,
 } from "../src/state.js";
 import {
+  PROFILE_LOCK_HELPER_DEADLINE_MS,
   PROFILE_LOCK_HOLDER_RELEASE_TIMEOUT_MS,
   signalProfileLockProtocol,
   waitForProfileLockProtocol,
 } from "../src/test-support/profile-lock-protocol.js";
+import { exitWithParent } from "../src/test-support/parent-watch.mjs";
+
+exitWithParent(PROFILE_LOCK_HELPER_DEADLINE_MS);
 
 const [profile, store, key, encodedRecord, readyPath, releasePath] = process.argv.slice(2);
 if (
