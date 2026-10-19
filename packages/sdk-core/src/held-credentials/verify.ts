@@ -54,6 +54,7 @@ export interface VerifiedHeldCredential {
 const SHARED_SIGNED = new Set(["iss", "sub", "iat", "nbf", "exp", "jti", "vct", "profile", "profileVersion", "holderBinding", "status", "_sd_alg", "_sd"]);
 const RESERVED_CLAIMS = new Set([...SHARED_SIGNED, "...", "cnf"]);
 
+const HEADER_MEMBERS = new Set(["alg", "typ", "kid"]);
 const JTI_UUID_V4 = /^urn:uuid:[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
 function sdHash(sdJwt: string): string {
@@ -106,6 +107,7 @@ export async function verifyHeldPresentation(presentation: unknown, options: Ver
   // 2. protected header only
   const header = parseStrictJson(new TextDecoder().decode(decodeBase64Url(headerB64, "bad-header")), "bad-header");
   if (!isObject(header)) refuse("bad-header", "header must be an object");
+  for (const member of Object.keys(header)) if (!HEADER_MEMBERS.has(member)) refuse("bad-header", `unexpected header member ${member}`);
   if (header.alg !== "EdDSA") refuse("bad-header", "alg must be EdDSA");
   if (header.typ !== "vc+sd-jwt") refuse("bad-header", "typ must be vc+sd-jwt");
   const kid = header.kid;

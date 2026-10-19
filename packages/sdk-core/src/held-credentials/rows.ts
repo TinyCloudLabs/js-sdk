@@ -33,7 +33,7 @@ export const EMAIL_HELD_ROW: ProfileRow = {
   holder: { kind: "account-pkh", chainId: "1" },
   bindingDomain: ACCOUNT_BINDING_DOMAIN,
   disclosable: ["email", "emailDomain"],
-  optionalSignedClaims: ["descriptorDigest"],
+  optionalSignedClaims: [],
   maxLifetimeSeconds: HELD_EMAIL_TTL_SECONDS,
   statusMethods: ["none"],
   validateDisclosed(claims) {

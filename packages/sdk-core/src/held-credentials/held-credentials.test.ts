@@ -513,3 +513,16 @@ describe("TC-1540 N1: jti", () => {
     for (const variant of ["8", "9", "a", "b"]) await expectCode("ok", { payload: (p) => ({ ...p, jti: `urn:uuid:11111111-1111-4111-${variant}111-111111111111` }) });
   });
 });
+
+describe("TC-1540 N2: header members and descriptorDigest", () => {
+  test("crit and any unknown header member are refused; only alg, typ and kid are allowed", async () => {
+    for (const extra of [{ crit: ["exp"] }, { crit: [] }, { jku: "https://x" }, { jwk: {} }, { x5u: "https://x" }, { cty: "x" }, { zip: "DEF" }, { b64: false }, { foo: 1 }]) {
+      await expectCode("bad-header", { header: (h) => ({ ...h, ...extra }) });
+    }
+    await expectCode("ok", { header: (h) => ({ kid: h.kid, typ: h.typ, alg: h.alg }) });
+  });
+  test("descriptorDigest is not a signed claim of the email row (spec 3.2 does not list it)", async () => {
+    expect(EMAIL_HELD_ROW.optionalSignedClaims).toEqual([]);
+    await expectCode("bad-payload", { payload: (p) => ({ ...p, descriptorDigest: "sha256:abc" }) });
+  });
+});
