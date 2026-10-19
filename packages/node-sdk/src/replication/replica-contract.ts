@@ -533,5 +533,7 @@ export interface SqliteRuntime {
     } | null>;
     /** Distinct content blob bytes stored in one replica directory (read-only; 0 when absent). */
     contentBytes(dir: string): Promise<number>;
+    /** Remove unreferenced blobs and temp files in one replica directory. Caller must hold the profile guard. */
+    collectOrphans(dir: string): Promise<number>;
   };
 }

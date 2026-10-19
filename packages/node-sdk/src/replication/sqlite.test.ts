@@ -3883,6 +3883,46 @@ describe("quota admission (TC-858 S5)", () => {
     await handle.close();
   });
 
+  test("crash orphans are counted, and collected on reopen so a profile at the cap recovers", async () => {
+    const dir = await makeDir();
+    const make = (maxBytes: number) => createSqliteReplicaStorage(
+      storageOptions({
+        dir,
+        guard: serialGuard(),
+        maxBytes,
+        transportFor: (_grant, replicaSpec) =>
+          replicaSpec.prefix === "notes/"
+            ? contentTransport([["notes/a", bytesOf(SIX_KB, 1)]])
+            : contentTransport([["docs/a", bytesOf(3_000, 2)]]),
+      }),
+    );
+    const first = make(10_000);
+    const { notes, docs } = await openPair(first);
+    await notes.sync({ signal: signal(), syncStartEpoch: 1 });
+    await notes.close();
+    await docs.close();
+    // A crash between the blob write and the commit leaves an unreferenced blob behind.
+    const [partition] = await partitionDirs(dir);
+    const replicasDir = join(dir, partition!, "replicas");
+    let firstReplica: string | undefined;
+    for (const name of await readdir(replicasDir)) {
+      if ((await diskBlobBytes(join(replicasDir, name))) > 0) firstReplica = name;
+    }
+    const orphanDir = join(replicasDir, firstReplica!, "blobs", "ff");
+    await mkdir(orphanDir, { recursive: true });
+    await writeFile(join(orphanDir, "f".repeat(64)), bytesOf(SIX_KB, 9));
+
+    // Reopening collects it: with the orphan still counted (6 + 6 KB) the docs replica's 3 KB
+    // page would be refused; collected, 6 + 3 <= 10 admits it.
+    const reopened = make(10_000);
+    const again = await openPair(reopened);
+    expect(await diskBlobBytes(join(replicasDir, firstReplica!))).toBe(SIX_KB);
+    await expect(again.docs.sync({ signal: signal(), syncStartEpoch: 1 })).resolves.toBeDefined();
+    expect((await again.docs.status()).bytes).toBe(3_000);
+    await again.notes.close();
+    await again.docs.close();
+  });
+
   test("spec.quota.maxBytes takes precedence over the storage option", async () => {
     const { handle } = await scriptedReplica([[[["notes/a", bytesOf(SIX_KB, 1)]]]], { options: 100_000, spec: 1_000 });
     await expect(handle.sync({ signal: signal(), syncStartEpoch: 1 })).rejects.toMatchObject({ code: "STORAGE_BUDGET" });
