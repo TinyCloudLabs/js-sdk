@@ -869,11 +869,11 @@ describe("TC-1287: scheduleAccountRegistrySync account-space authority gate", ()
     expect(syncAccessible).not.toHaveBeenCalled();
   });
 
-  test("logs the skip once, at info level, however many sessions skip", async () => {
+  test("logs the skip once (stderr, never stdout), however many sessions skip", async () => {
     Reflect.set(TinyCloudNode, "accountRegistrySkipLogged", false);
     const info = mock((..._args: unknown[]) => {});
-    const original = console.info;
-    console.info = info as any;
+    const original = console.warn;
+    console.warn = info as any;
     try {
       for (let i = 0; i < 2; i += 1) {
         const { node, wasm } = makeNode();
@@ -883,7 +883,7 @@ describe("TC-1287: scheduleAccountRegistrySync account-space authority gate", ()
         await scheduleAndSettle(node);
       }
     } finally {
-      console.info = original;
+      console.warn = original;
     }
     expect(info).toHaveBeenCalledTimes(1);
     expect(String(info.mock.calls[0]?.[0])).toContain("lacks account-space access");

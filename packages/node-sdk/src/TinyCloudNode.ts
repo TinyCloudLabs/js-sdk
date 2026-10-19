@@ -3216,7 +3216,8 @@ export class TinyCloudNode {
     if (!this.currentSessionCoversAccountRegistry()) {
       if (!TinyCloudNode.accountRegistrySkipLogged) {
         TinyCloudNode.accountRegistrySkipLogged = true;
-        console.info(
+        // stderr: console.info writes stdout, which would corrupt CLI JSON output.
+        console.warn(
           "TinyCloud account registry sync skipped: this session lacks account-space access",
         );
       }
