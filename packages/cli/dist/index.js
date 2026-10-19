@@ -3757,6 +3757,20 @@ import { join as join5 } from "path";
 import { CLI_NAME as CLI_NAME8 } from "@tinycloud/operations/cli-name";
 import { profilePath as profilePath2, withProfileLock as withProfileLock2 } from "@tinycloud/operations/state";
 import { REPLICA_LOGOUT_PENDING_FILE, sqliteReplicaStorage } from "@tinycloud/node-sdk";
+import { DEFAULT_GRANT_TTL_MS, MAX_GRANT_TTL_MS } from "@tinycloud/sdk-services/kv/replication/contractConstants";
+function readPositiveIntegerEnv(name, max) {
+  const raw = process.env[name];
+  if (raw === void 0) return void 0;
+  const value = /^[1-9][0-9]*$/.test(raw) ? Number(raw) : Number.NaN;
+  if (!Number.isSafeInteger(value) || value > max) {
+    throw new CLIError(
+      "INVALID_REPLICATION_ENV",
+      `${name} must be a positive integer no greater than ${max}, got ${JSON.stringify(raw)}`,
+      ExitCode.USAGE_ERROR
+    );
+  }
+  return value;
+}
 function createCliReplicationConfig(profile, settings, output, enabled) {
   if (!enabled || !settings || settings.prefixes.length === 0) return void 0;
   for (const prefix of settings.prefixes) {
@@ -3782,6 +3796,8 @@ function createCliReplicationConfig(profile, settings, output, enabled) {
     verify: process.env.TC_REPLICATION_VERIFY === "1",
     maxStalenessMs: Number(process.env.TC_REPLICATION_MAX_STALENESS_MS ?? 6e4),
     staleSyncTimeoutMs: Number(process.env.TC_REPLICATION_SYNC_TIMEOUT_MS ?? 1e4),
+    grantTtlMs: readPositiveIntegerEnv("TC_REPLICATION_GRANT_TTL_MS", MAX_GRANT_TTL_MS) ?? DEFAULT_GRANT_TTL_MS,
+    maxBytes: readPositiveIntegerEnv("TC_REPLICATION_MAX_BYTES", Number.MAX_SAFE_INTEGER),
     storage: sqliteReplicaStorage({
       dir: join5(root, "replication"),
       logoutPendingFile: join5(root, REPLICA_LOGOUT_PENDING_FILE),
@@ -3931,13 +3947,13 @@ async function readState(profileDir) {
 function readGateSnapshot(profileDir) {
   return readState(profileDir);
 }
-var HOUR_MS, DAY_MS, MAX_GRANT_TTL_MS, CONSENT_WINDOW_MS, DEFAULT_MIN_FREE_BYTES, REPLICA_GATE_FILE, ReplicaErrorCode2, REPLICA_ERROR2, ReplicaError2, GATE_FILE_VERSION, REPLICA_DENY_FLOOR_FILE, DENY_FLOOR_FILE, LOST_GATE_RECOVERY, INTERRUPTED_SIGN_OUT;
+var HOUR_MS, DAY_MS, MAX_GRANT_TTL_MS2, CONSENT_WINDOW_MS, DEFAULT_MIN_FREE_BYTES, REPLICA_GATE_FILE, ReplicaErrorCode2, REPLICA_ERROR2, ReplicaError2, GATE_FILE_VERSION, REPLICA_DENY_FLOOR_FILE, DENY_FLOOR_FILE, LOST_GATE_RECOVERY, INTERRUPTED_SIGN_OUT;
 var init_profile_gate = __esm({
   "../replica/dist/profile-gate.js"() {
     "use strict";
     HOUR_MS = 60 * 60 * 1e3;
     DAY_MS = 24 * HOUR_MS;
-    MAX_GRANT_TTL_MS = 7 * DAY_MS;
+    MAX_GRANT_TTL_MS2 = 7 * DAY_MS;
     CONSENT_WINDOW_MS = 7 * DAY_MS;
     DEFAULT_MIN_FREE_BYTES = 64 * 1024 * 1024;
     REPLICA_GATE_FILE = "replica-gate.json";

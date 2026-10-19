@@ -1,5 +1,11 @@
 # @tinycloud/cli
 
+## 1.3.0-beta.29
+
+### Patch Changes
+
+- b2b3b97: Replication: read `TC_REPLICATION_GRANT_TTL_MS` and `TC_REPLICATION_MAX_BYTES` in the CLI; both must be plain decimal integers (grant TTL at most 7 days), otherwise the command fails with a usage error naming the variable.
+
 ## 1.3.0-beta.28
 
 ### Patch Changes
