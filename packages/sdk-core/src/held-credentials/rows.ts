@@ -42,6 +42,9 @@ export const EMAIL_HELD_ROW: ProfileRow = {
       refuse("bad-disclosure", "non-ASCII email is refused until G14 (Unicode/IDNA) is decided");
     }
     if (email !== undefined) {
+      if (typeof email === "string" && (email.indexOf("@") < 1 || email.indexOf("@") === email.length - 1)) {
+        refuse("bad-disclosure", "email needs a non-empty local part and domain");
+      }
       if (typeof email !== "string" || email !== email.toLowerCase() || email.split("@").length !== 2 || email.length < 3 || email.length > 320 || /[\s\u0000-\u001f]/.test(email)) {
         refuse("bad-disclosure", "email is not a canonical lowercase address");
       }

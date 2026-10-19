@@ -792,3 +792,16 @@ describe("TC-1540 Miller 8: opaque IssuerSet", () => {
     expect(Object.isFrozen(real.resolveIssuer(ISSUER_A, KID_A))).toBe(true);
   });
 });
+
+describe("TC-1540 Miller 9: email shape", () => {
+  test("normaliseEmail refuses an empty local part or domain", () => {
+    for (const bad of ["@ab", "ab@", "@", "+tag@example.com", "a@@b.com", "@example.com", "ab@.com"]) expect(normaliseEmail(bad)).toBeNull();
+    expect(normaliseEmail("ab@example.com")).toBe("ab@example.com");
+  });
+  test("a disclosed email with an empty local part or domain is refused", async () => {
+    for (const email of ["@ab", "ab@", "@a.b", "a@"]) {
+      await expectCode("bad-disclosure", { disclosures: [["email", email]] });
+    }
+    await expectCode("ok", { disclosures: [["email", "ab@example.com"]] });
+  });
+});
