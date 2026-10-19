@@ -497,6 +497,7 @@ export class TinyCloudWeb {
         this.config.localNodeIdentityStore ??
         createLocalStorageLocalNodeIdentityStore(),
       domain: this.config.domain ?? (typeof window !== 'undefined' ? window.location.host : 'app.tinycloud.xyz'),
+      uri: this.config.domain === undefined && typeof window !== 'undefined' ? window.location.origin : undefined,
       prefix: this.config.spacePrefix,
       autoCreateSpace: this.config.autoCreateSpace ?? true,
       sessionExpirationMs: this.config.sessionExpirationMs,
