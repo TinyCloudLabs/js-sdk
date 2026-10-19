@@ -4,6 +4,7 @@ import { createRequire } from "node:module";
 import { join } from "node:path";
 import { IDBKeyRange, indexedDB } from "fake-indexeddb";
 import { signedRestorableSession } from "../../node-sdk/src/test-support/signed-restorable-session";
+import { ledgerFor } from "../../replica/src/kv-storage/ledger";
 import { createIndexedDbLifecycle } from "../../replica/src/kv-storage/lifecycle";
 import { pkhDid, type ReplicationEvent } from "@tinycloud/sdk-core";
 
@@ -81,7 +82,7 @@ const proof = await signedRestorableSession({ abilities: { kv: {
 } } });
 const issuedAt = proof.siwe.match(/^Issued At: (.+)$/m)?.[1];
 assert(issuedAt);
-const lifecycle = createIndexedDbLifecycle();
+const lifecycle = createIndexedDbLifecycle({ ledger: ledgerFor() });
 const stamp = await lifecycle.establishSessionStamp(pkhDid(proof.address, proof.chainId), {
   consentAnchor: { source: "siwe", at: Date.parse(issuedAt) },
 });
