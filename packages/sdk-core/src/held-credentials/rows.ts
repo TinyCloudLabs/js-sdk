@@ -38,6 +38,9 @@ export const EMAIL_HELD_ROW: ProfileRow = {
   statusMethods: ["none"],
   validateDisclosed(claims) {
     const { email, emailDomain } = claims;
+    if ((typeof email === "string" && /[^\x00-\x7F]/.test(email)) || (typeof emailDomain === "string" && /[^\x00-\x7F]/.test(emailDomain))) {
+      refuse("bad-disclosure", "non-ASCII email is refused until G14 (Unicode/IDNA) is decided");
+    }
     if (email !== undefined) {
       if (typeof email !== "string" || email !== email.toLowerCase() || email.split("@").length !== 2 || email.length < 3 || email.length > 320 || /[\s\u0000-\u001f]/.test(email)) {
         refuse("bad-disclosure", "email is not a canonical lowercase address");

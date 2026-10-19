@@ -23,7 +23,10 @@ export function randomNonce(): string {
   return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
 }
 
-/** In-memory store for tests and single-process tools. Not for production Workers (no cross-isolate atomicity). */
+/**
+ * In-memory store for tests and single-process tools: single process only; not safe across
+ * instances/isolates/replicas (no cross-isolate atomicity). Never use it in production Workers.
+ */
 export class InMemoryNonceStore implements NonceStore {
   private readonly nonces = new Map<string, string>();
 

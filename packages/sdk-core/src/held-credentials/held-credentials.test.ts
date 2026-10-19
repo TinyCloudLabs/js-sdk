@@ -17,6 +17,7 @@ import {
   type VerifyHeldPresentationOptions,
 } from "./index";
 import { asciiBytes, bytesToHex, encodeBase64Url } from "./encoding";
+import { EMAIL_HELD_ROW } from "./rows";
 
 const enc = (value: unknown) => encodeBase64Url(new TextEncoder().encode(typeof value === "string" ? value : JSON.stringify(value)));
 const seed = (n: number) => Uint8Array.from({ length: 32 }, (_, i) => (i + n) & 0xff);
@@ -474,7 +475,19 @@ describe("normaliseEmail (alias rules confirmed by Sam 2026-10-19, same as billi
     expect(normaliseEmail("  A.B+x@Gmail.com ")).toBe("ab@gmail.com");
     expect(normaliseEmail("a.b+x@googlemail.com")).toBe("ab@gmail.com");
     expect(normaliseEmail("a.b+x@example.com")).toBe("a.b@example.com");
-    for (const bad of ["", "a b@x.com", "a@@x.com", "a@x", "+x@gmail.com", "a@.com", "a@x..com"]) expect(normaliseEmail(bad)).toBeNull();
+    for (const bad of ["", "   ", "a b@x.com", "a@@x.com", "a@x", "+x@gmail.com", "a@.com", "a@x..com"]) expect(normaliseEmail(bad)).toBeNull();
+  });
+  test("refuses any non-ASCII input before trim/lowercase (G14 open)", () => {
+    for (const bad of ["jos\u00e9@example.com", "a@b\u00fccher.de", "\u0430lice@example.com", "alice@\u0435xample.com", " a@x.com\u00a0", "A@X.COM\u0130"]) expect(normaliseEmail(bad)).toBeNull();
+  });
+  test("a punycode-looking ASCII address is still accepted", () => {
+    expect(normaliseEmail("Alice@xn--bcher-kva.example")).toBe("alice@xn--bcher-kva.example");
+  });
+  test("validateDisclosed refuses non-ASCII email and emailDomain, accepts ASCII punycode", () => {
+    const row = EMAIL_HELD_ROW;
+    expect(() => row.validateDisclosed({ email: "\u0430lice@example.com" })).toThrow(HeldCredentialError);
+    expect(() => row.validateDisclosed({ emailDomain: "b\u00fccher.de" })).toThrow(HeldCredentialError);
+    expect(() => row.validateDisclosed({ email: "a@xn--bcher-kva.example", emailDomain: "xn--bcher-kva.example" })).not.toThrow();
   });
 });
 
