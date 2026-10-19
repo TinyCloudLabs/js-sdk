@@ -43,9 +43,17 @@ describe("assertAccountAccess", () => {
     const error = thrown as CLIError;
     expect(error.code).toBe("ACCOUNT_ACCESS_REQUIRED");
     expect(error.exitCode).toBe(ExitCode.PERMISSION_DENIED);
-    expect(String(error.metadata?.hint)).toStartWith("Grant account access, then retry: tc --profile work auth request --grant --cap ");
+    expect(String(error.metadata?.hint)).toStartWith("Grant account access (1 OpenKey approval), then retry: tc --profile work auth request --grant --cap ");
     // The headless / blocked-loopback fallback is the same command plus --paste.
     expect(String(error.metadata?.hint)).toMatch(/\nIf the browser cannot reach the CLI, re-run with --paste: tc --profile work auth request --grant .* --paste$/);
+  });
+
+  test("the hint counts one OpenKey approval per space the command needs", async () => {
+    profileWithOwner();
+    const hint = async (need: "registry" | "delegations") =>
+      String(((await assertAccountAccess({ hasRuntimePermissions: () => false } as never, "work", need).catch((e: unknown) => e)) as CLIError).metadata?.hint);
+    expect(await hint("registry")).toStartWith("Grant account access (1 OpenKey approval),");
+    expect(await hint("delegations")).toStartWith("Grant account access (2 OpenKey approvals),");
   });
 
   test("quotes a profile name that is not a plain word in the printed commands", async () => {

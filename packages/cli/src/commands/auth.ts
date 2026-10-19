@@ -122,6 +122,7 @@ import {
   storedAdditionalDelegation,
   type PermissionRequestArtifact,
 } from "../lib/permissions.js";
+import { approvalNotices } from "../lib/approval-notices.js";
 import { buildReplicationLoginRequest, type ReplicationLoginOptions } from "../auth/replication-login.js";
 
 /** The one function dependency used by owner OpenKey permission acquisition. */
@@ -953,7 +954,12 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
             expiry: expiryCap,
           };
           const declined: PermissionEntry[] = [];
-          for (const group of groupPermissionsBySpace(requested)) {
+          const groups = groupPermissionsBySpace(requested);
+          // OpenKey signs one space per approval; say so before the prompts stall a user at the second.
+          const notices = approvalNotices(groups);
+          if (notices) process.stderr.write(`${notices.intro}\n`);
+          for (const [index, group] of groups.entries()) {
+            if (notices) process.stderr.write(`${notices.prompts[index]}\n`);
             const reason = permissionGrantReason(
               `Grant requested TinyCloud permissions from \`${CLI_NAME} auth request --grant\`.`,
               group,

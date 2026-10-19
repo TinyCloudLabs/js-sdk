@@ -72,13 +72,15 @@ function shellWord(value: string): string {
 function accessRequired(profile: string, entries: PermissionEntry[], what: string): CLIError {
   const grant = `${CLI_NAME} --profile ${shellWord(profile)} auth request --grant ` +
     capSpecs(entries).map((spec) => `--cap '${spec}'`).join(" ");
+  // OpenKey signs one space per approval.
+  const approvals = new Set(entries.map((entry) => entry.space)).size;
   return new CLIError(
     "ACCOUNT_ACCESS_REQUIRED",
     `This session lacks account permissions this command needs (${what}). ` +
       "A plain OpenKey login grants only the `default` space.",
     ExitCode.PERMISSION_DENIED,
     {
-      hint: `Grant account access, then retry: ${grant}\n` +
+      hint: `Grant account access (${approvals} OpenKey approval${approvals === 1 ? "" : "s"}), then retry: ${grant}\n` +
         `If the browser cannot reach the CLI, re-run with --paste: ${grant} --paste`,
     },
   );
