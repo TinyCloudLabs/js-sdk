@@ -90,7 +90,7 @@ export const ErrorCodes = {
 
   // Node retry signals (tinycloud-node #347). `meta.retryable` says whether a
   // retry is safe; `meta.retryAfterMs` carries the node's Retry-After.
-  /** HTTP 503 `sql_busy:<stage>` / `unavailable_retryable`: nothing was applied; retry after `meta.retryAfterMs`. */
+  /** HTTP 503 `sql_busy:<stage>` / `unavailable_retryable` / `read_audit_busy`: nothing was applied; retry after `meta.retryAfterMs`. */
   NODE_BUSY: "NODE_BUSY",
   /** HTTP 503 `request_timeout`: the node's deadline passed before any write began; nothing was applied. */
   REQUEST_TIMEOUT: "REQUEST_TIMEOUT",

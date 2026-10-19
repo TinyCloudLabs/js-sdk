@@ -887,7 +887,7 @@ function readProperty(value: unknown, key: string): unknown {
 
 /** The default retry clock. */
 const sleep = (delayMs: number, _attempt: number, signal: AbortSignal): Promise<void> =>
-  abortableSleep(delayMs, signal);
+  abortableSleep(delayMs, signal, true);
 
 function abortPromise(signal: AbortSignal): {
   promise: Promise<void>;

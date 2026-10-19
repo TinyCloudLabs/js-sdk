@@ -486,8 +486,11 @@ export class ServiceContext implements IServiceContext {
     };
   }
 
+  private readonly _combined = new WeakSet<AbortSignal>();
+
+  /** Idempotent: a signal this method produced is returned as is, so `invokeWithRetry` and `wrapFetch` add one listener pair per attempt. */
   private combineSignals(signal?: AbortSignal): AbortSignal {
-    if (!signal) return this._abortController.signal;
+    if (!signal || this._combined.has(signal)) return signal ?? this._abortController.signal;
     const combined = new AbortController();
     const abort = (source: AbortSignal) => combined.abort(source.reason);
     if (signal.aborted) {
@@ -502,6 +505,7 @@ export class ServiceContext implements IServiceContext {
         { once: true },
       );
     }
+    this._combined.add(combined.signal);
     return combined.signal;
   }
 }

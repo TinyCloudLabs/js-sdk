@@ -109,6 +109,16 @@ describe("SQL: typed node retry signals", () => {
     if (!result.ok) expect(result.error.meta).not.toHaveProperty("stage");
   });
 
+  test("503 read_audit_busy (no data returned) is NODE_BUSY with Retry-After", async () => {
+    const result = await sql(async () =>
+      nodeResponse(503, "read_audit_busy: the read audit is backlogged; retry the request", { "retry-after": "5" }),
+    ).query("SELECT 1");
+    expect(result).toMatchObject({
+      ok: false,
+      error: { code: ErrorCodes.NODE_BUSY, meta: { retryAfterMs: 5000, retryable: true } },
+    });
+  });
+
   test("500 outcome_unknown is OUTCOME_UNKNOWN, not safely retryable, with no retryAfterMs", async () => {
     const result = await sql(async () => nodeResponse(500, OUTCOME_UNKNOWN)).execute("INSERT INTO t VALUES (1)");
     expect(result).toMatchObject({
