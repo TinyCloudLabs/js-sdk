@@ -191,6 +191,7 @@ import {
 } from "@tinycloud/sdk-core";
 import {
   parsePermissionHint,
+  tinyCloudDebugLogger,
 } from "@tinycloud/sdk-services";
 import { NodeUserAuthorization } from "./authorization/NodeUserAuthorization";
 import type { SignStrategy } from "./authorization/strategies";
@@ -3216,9 +3217,10 @@ export class TinyCloudNode {
     if (!this.currentSessionCoversAccountRegistry()) {
       if (!TinyCloudNode.accountRegistrySkipLogged) {
         TinyCloudNode.accountRegistrySkipLogged = true;
-        // stderr: console.info writes stdout, which would corrupt CLI JSON output.
-        console.warn(
-          "TinyCloud account registry sync skipped: this session lacks account-space access",
+        tinyCloudDebugLogger.log(
+          "account-registry.sync.skipped",
+          undefined,
+          "account registry sync skipped: this session lacks account-space access",
         );
       }
       return;
