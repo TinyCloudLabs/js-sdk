@@ -8,6 +8,22 @@ import { ExitCode } from "../config/constants.js";
 import { ensureAuthenticated } from "../lib/sdk.js";
 import { revokeDelegationOnNode } from "../lib/revoke-delegation.js";
 import { parseExpiry } from "../lib/duration.js";
+import type { AccountDelegation } from "@tinycloud/node-sdk";
+
+function listedDelegation(d: AccountDelegation) {
+  return {
+    cid: d.cid,
+    delegatee: d.delegateDid,
+    delegator: d.delegatorDid,
+    direction: d.direction,
+    spaceId: d.spaceId,
+    path: d.path,
+    actions: d.actions,
+    expiry: d.expiry.toISOString(),
+    status: d.status,
+  };
+}
+
 async function confirmCurrentSessionRevoke(yes: boolean): Promise<void> {
   if (yes) return;
   const warning = "This is your current sign-in session; revoking it signs you out";
@@ -105,17 +121,7 @@ export function registerDelegationCommand(
         }
 
         outputJson({
-          delegations: result.data.map((d) => ({
-            cid: d.cid,
-            delegatee: d.delegateDid,
-            delegator: d.delegatorDid,
-            direction: d.direction,
-            spaceId: d.spaceId,
-            path: d.path,
-            actions: d.actions,
-            expiry: d.expiry.toISOString(),
-            status: d.status,
-          })),
+          delegations: result.data.map(listedDelegation),
           count: result.data.length,
         });
       } catch (error) {
@@ -126,18 +132,24 @@ export function registerDelegationCommand(
   delegation
     .command("info <cid>")
     .description("Get delegation details")
-    .action(async (cid: string, _options, cmd) => {
+    .option("--space <space>", "Filter by space name or ID")
+    .action(async (cid: string, options, cmd) => {
       try {
         const globalOpts = cmd.optsWithGlobals();
         const ctx = await ProfileManager.resolveContext(globalOpts);
         const node = await ensureAuthenticated(ctx);
 
-        const result = await node.delegationManager.get(cid);
+        // The node has no per-CID read; look the CID up in the account-wide listing.
+        const result = await node.account.delegations.list({ direction: "all", space: options.space });
         if (!result.ok) {
-          throw new CLIError("NOT_FOUND", `Delegation "${cid}" not found`, ExitCode.NOT_FOUND);
+          throw cliErrorFromService(result.error);
+        }
+        const found = result.data.find((d) => d.cid === cid);
+        if (!found) {
+          throw new CLIError("NOT_FOUND", `Delegation "${cid}" not found in this account's delegations`, ExitCode.NOT_FOUND);
         }
 
-        outputJson(result.data);
+        outputJson(listedDelegation(found));
       } catch (error) {
         return handleError(error);
       }

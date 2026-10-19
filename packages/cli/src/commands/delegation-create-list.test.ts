@@ -153,4 +153,18 @@ describe("tc delegation create / list", () => {
     expect(listCalls).toEqual([{ direction: "all" }, { direction: "all", space: "default" }]);
     expect(listCalls.every((call) => call.preferIndex === undefined)).toBe(true);
   });
+
+  test("info returns the details of a delegation that create just made", async () => {
+    await run("create", "--to", recipient, "--path", "qa-seed/", "--actions", "kv/get", "--expiry", "1h");
+    const { cid } = outputs[0];
+    await run("info", cid);
+    expect(errors).toEqual([]);
+    expect(outputs[1]).toMatchObject({ cid, delegatee: recipient, delegator: ownerDid, path: "qa-seed/", status: "active" });
+  });
+
+  test("info for an unknown CID exits not-found instead of crashing", async () => {
+    await run("info", "bafy-unknown");
+    expect(outputs).toEqual([]);
+    expect(errors[0]).toMatchObject({ code: "NOT_FOUND" });
+  });
 });
