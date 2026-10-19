@@ -19,7 +19,7 @@
 
 import { afterEach, describe, expect, jest, mock, spyOn, test, type Mock } from "bun:test";
 import { inspect } from "node:util";
-import { SQLMigrations } from "@tinycloud/sdk-services";
+import { SQLMigrations, tinyCloudDebugLogger } from "@tinycloud/sdk-services";
 
 import {
   AccountService,
@@ -867,6 +867,32 @@ describe("TC-1287: scheduleAccountRegistrySync account-space authority gate", ()
 
     expect(ensure).not.toHaveBeenCalled();
     expect(syncAccessible).not.toHaveBeenCalled();
+  });
+
+  test("records the skip once, only as a debug event, however many sessions skip", async () => {
+    Reflect.set(TinyCloudNode, "accountRegistrySkipLogged", false);
+    const warn = spyOn(console, "warn");
+    const info = spyOn(console, "info");
+    tinyCloudDebugLogger.enable({ persist: false });
+    tinyCloudDebugLogger.clear();
+    try {
+      for (let i = 0; i < 2; i += 1) {
+        const { node, wasm } = makeNode();
+        recap(wasm, [
+          { service: "kv", space: SPACE_URI, path: "", actions: ["tinycloud.kv/get"] },
+        ]);
+        await scheduleAndSettle(node);
+      }
+      const skips = tinyCloudDebugLogger.getLogs().filter((e) => e.event === "registry.skip");
+      expect(skips).toHaveLength(1);
+      expect(warn).not.toHaveBeenCalled();
+      expect(info).not.toHaveBeenCalled();
+    } finally {
+      tinyCloudDebugLogger.disable({ persist: false });
+      tinyCloudDebugLogger.clear();
+      warn.mockRestore();
+      info.mockRestore();
+    }
   });
 
   test("a session holding account-space SQL authority still syncs the registry", async () => {

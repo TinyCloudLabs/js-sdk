@@ -1,5 +1,14 @@
 # @tinycloud/cli
 
+## 1.3.0-beta.25
+
+### Patch Changes
+
+- b6d0b9f: `tc account` commands now exit with `ACCOUNT_ACCESS_REQUIRED` (exit 5) before calling the node when the session lacks the account-space abilities that command invokes, as with a plain OpenKey login. Each command checks its own set (registry reads and writes, `kv/del` for removals, `space/list` and `capabilities/read` on the primary space for the commands that list spaces or delegations). `account delegations revoke` needs no session ability on a local-key profile (it signs with the owner wallet) and is refused with the `tc delegation revoke` command on an OpenKey profile, which cannot carry the raw-CID revoke ability, and the error prints the `tc auth request --grant --cap ...` command that grants exactly those, with a `--paste` variant. `tc auth request --grant` gains `--paste` (OpenKey owner profiles) for browsers that cannot reach the CLI's loopback callback, and a grant that spans several spaces now says up front how many OpenKey approvals it takes (one per space) and numbers each prompt. The account registry sync skip is recorded once per process as a debug event only (`TinyCloud_debug=true`).
+- Updated dependencies [b6d0b9f]
+  - @tinycloud/node-sdk@3.3.0-beta.24
+  - @tinycloud/operations@0.6.1-beta.22
+
 ## 1.3.0-beta.24
 
 ### Minor Changes

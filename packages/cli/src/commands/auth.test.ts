@@ -1,4 +1,4 @@
-import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import { afterAll, afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 import { Command } from "commander";
 import { createServer } from "node:http";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
@@ -451,12 +451,14 @@ mock.module("../lib/permissions.js", () => ({
   loadAdditionalDelegations: async () => [],
   loadManifestPermissions: async () => manifestPermissions as never,
   loadPermissionRequest: async () => [],
-  parseCapSpec: async () => ({
-    service: "tinycloud.kv",
-    space: "default",
-    path: "",
-    actions: ["list"],
-  }),
+  parseCapSpec: async (spec: string) => spec.includes(":account:")
+    ? { service: "tinycloud.kv", space: "account", path: "applications/", actions: ["get"] }
+    : {
+      service: "tinycloud.kv",
+      space: "default",
+      path: "",
+      actions: ["list"],
+    },
   permissionsFromDelegation: () => [],
   readGrantHistory: async () => [],
   resolvePermissionSpaces: async (permissions: unknown[]) => permissions,
@@ -1685,6 +1687,100 @@ describe("CLI auth artifact sources", () => {
 describe("CLI auth request command", () => {
   beforeEach(() => {
     resetState();
+  });
+
+  test("a grant spanning two spaces says up front that OpenKey needs two approvals, and numbers each prompt", async () => {
+    profiles.set("default", makeProfile({
+      did: "did:key:openkey-session",
+      sessionDid: "did:key:openkey-session",
+      authMethod: "openkey",
+      posture: "owner-openkey",
+    }));
+    sessions.set("default", { authMethod: "openkey", spaceId: "tinycloud:pkh:eip155:1:0xowner:default" });
+    keys.set("default", { kty: "OKP", crv: "Ed25519", x: "k", d: "private" });
+    authNodeHasRuntimePermissions = false;
+    const written: string[] = [];
+    const stderr = spyOn(process.stderr, "write").mockImplementation(((chunk: string | Uint8Array) => {
+      written.push(String(chunk));
+      return true;
+    }) as never);
+    try {
+      await runAuthCommand([
+        "auth", "request", "--grant", "--paste",
+        "--cap", "tinycloud.kv:account:applications/:get",
+        "--cap", "tinycloud.space:default::list",
+      ]);
+    } finally {
+      stderr.mockRestore();
+    }
+
+    // The mocked OpenKey reply carries no verifiable proof, so the grant stops after the first approval;
+    // the notices precede that prompt (the full numbering is unit-tested in approval-notices.test.ts).
+    const lines = written.join("").split("\n");
+    expect(lines.slice(0, 2)).toEqual([
+      "This needs 2 approvals in OpenKey (account space, then default space).",
+      "Approval 1 of 2: account space...",
+    ]);
+    expect(recorded.startAuthFlows).toHaveLength(1);
+  });
+
+  test("a single-space grant prints no approval counts", async () => {
+    profiles.set("default", makeProfile({
+      did: "did:key:openkey-session",
+      sessionDid: "did:key:openkey-session",
+      authMethod: "openkey",
+      posture: "owner-openkey",
+    }));
+    sessions.set("default", { authMethod: "openkey", spaceId: "tinycloud:pkh:eip155:1:0xowner:default" });
+    keys.set("default", { kty: "OKP", crv: "Ed25519", x: "k", d: "private" });
+    authNodeHasRuntimePermissions = false;
+    const written: string[] = [];
+    const stderr = spyOn(process.stderr, "write").mockImplementation(((chunk: string | Uint8Array) => {
+      written.push(String(chunk));
+      return true;
+    }) as never);
+    try {
+      await runAuthCommand(["auth", "request", "--grant", "--paste", "--cap", "tinycloud.kv:default/:list"]);
+    } finally {
+      stderr.mockRestore();
+    }
+    expect(written.join("")).not.toContain("approval");
+  });
+
+  test("--paste reaches the OpenKey flow for an owner grant, and is refused anywhere it cannot apply", async () => {
+    profiles.set("default", makeProfile({
+      did: "did:key:openkey-session",
+      sessionDid: "did:key:openkey-session",
+      authMethod: "openkey",
+      posture: "owner-openkey",
+    }));
+    sessions.set("default", { authMethod: "openkey", spaceId: "tinycloud:pkh:eip155:1:0xowner:default" });
+    keys.set("default", { kty: "OKP", crv: "Ed25519", x: "k", d: "private" });
+    authNodeHasRuntimePermissions = false;
+
+    await runAuthCommand(["auth", "request", "--grant", "--paste", "--cap", "tinycloud.kv:default/:list"]);
+    expect(recorded.startAuthFlows).toHaveLength(1);
+    expect(recorded.startAuthFlows[0]?.options.paste).toBe(true);
+
+    recorded.startAuthFlows.length = 0;
+    recorded.errors.length = 0;
+    await runAuthCommand(["auth", "request", "--paste", "--cap", "tinycloud.kv:default/:list"]);
+    await runAuthCommand(["auth", "request", "--grant", "--paste", "--device", "--cap", "tinycloud.kv:default/:list"]);
+    // A local-key owner has no OpenKey flow to paste into.
+    profiles.set("default", makeProfile({
+      did: "did:pkh:eip155:1:0xLocalOwner",
+      authMethod: "local",
+      posture: "local-owner-key",
+      privateKey: "0xowner-private",
+      address: "0xLocalOwner",
+    }));
+    await runAuthCommand(["auth", "request", "--grant", "--paste", "--cap", "tinycloud.kv:default/:list"]);
+    expect(recorded.startAuthFlows).toEqual([]);
+    expect(recorded.errors).toEqual([
+      expect.objectContaining({ code: "INVALID_ARGUMENT" }),
+      expect.objectContaining({ code: "INVALID_ARGUMENT" }),
+      expect.objectContaining({ code: "INVALID_ARGUMENT" }),
+    ]);
   });
 
   test("persists the active local session after granting runtime permissions", async () => {
