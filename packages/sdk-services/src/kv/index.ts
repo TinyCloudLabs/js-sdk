@@ -13,6 +13,10 @@ export { PrefixedKVService, IPrefixedKVService } from "./PrefixedKVService";
 // Interface
 export { IKVService } from "./IKVService";
 
+// Standalone helpers (kept out of IKVService/KVService so unused code is tree-shaken)
+export { listMatching } from "./listMatching";
+export type { KVListSource, KVListMatchingOptions } from "./listMatching";
+
 // Types
 export {
   DEFAULT_SIGNED_READ_URL_EXPIRY_MS,
@@ -24,7 +28,6 @@ export {
   KVBatchPutResponse,
   KVBatchReadResponse,
   KVListOptions,
-  KVListMatchingOptions,
   KVDeleteOptions,
   KVHeadOptions,
   KVCreateSignedReadUrlOptions,

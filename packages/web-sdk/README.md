@@ -327,13 +327,17 @@ The node matches list prefixes on **whole path segments** (node 1.19.0, TC-731):
 deliberate: a list is the authorization scope, so a grant on `docs` cannot be used to
 enumerate `docsecret/...`.
 
-When you want "names starting with X" (UI type-ahead over a small folder), use
-`kv.listMatching`. It lists the folder up to the last `/` with the normal `list`, reads
-**every** page, and filters client-side:
+When you want "names starting with X" (UI type-ahead over a small folder), use the
+standalone `listMatching(kv, prefix, options?)` function. It lists the folder up to the
+last `/` with the normal `list`, reads **every** page, and filters client-side. It takes
+`tc.kv` or a prefixed view (`tc.kv.withPrefix('notes')`), and is not part of the KV
+service itself, so apps that don't import it don't ship it:
 
 ```typescript
+import { listMatching } from '@tinycloud/web-sdk';
+
 // Keys: qa/b00, qa/b01, qa/c00
-const result = await tc.kv.listMatching('qa/b');
+const result = await listMatching(tc.kv, 'qa/b');
 if (result.ok) console.log(result.data.keys); // ['qa/b00', 'qa/b01']
 ```
 

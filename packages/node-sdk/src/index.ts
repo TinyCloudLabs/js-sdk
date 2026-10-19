@@ -312,6 +312,7 @@ export {
   DEFAULT_SIGNED_READ_URL_EXPIRY_MS,
   KVService,
   PrefixedKVService,
+  listMatching,
 } from "@tinycloud/sdk-core";
 
 // Re-export KV service types
@@ -323,6 +324,8 @@ export type {
   KVBatchReadResponse,
   KVSignedReadUrlResponse,
   IPrefixedKVService,
+  KVListSource,
+  KVListMatchingOptions,
 } from "@tinycloud/sdk-core";
 
 // Re-export SQL service values

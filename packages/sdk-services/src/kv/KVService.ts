@@ -40,7 +40,6 @@ import {
   KVBatchPutResponse,
   KVBatchReadResponse,
   KVListOptions,
-  KVListMatchingOptions,
   KVChange,
   KVChangesOptions,
   KVChangesResponse,
@@ -1429,69 +1428,6 @@ export class KVService extends BaseService implements IKVService {
       }
     });
   }
-
-  /**
-   * List keys starting with a partial path segment. See
-   * {@link IKVService.listMatching} for the full contract, including why the
-   * node cannot do this itself (list prefix = authorization scope, TC-731) and
-   * what it costs.
-   */
-  async listMatching(
-    prefix: string,
-    options?: KVListMatchingOptions
-  ): Promise<Result<KVListResponse>> {
-    // Split at the last "/": the folder keeps its trailing slash, so it is a
-    // whole-segment prefix the node accepts as is ("qa/b" -> "qa/"). With no
-    // "/" the folder is "" (the space root); an explicit "" is deliberate,
-    // because `list` only falls back to the configured prefix when `prefix`
-    // is undefined, so this matches `list({ prefix: "" })`.
-    const folder = prefix.slice(0, prefix.lastIndexOf("/") + 1);
-
-    // `removePrefix` is applied here, after filtering. If it were forwarded to
-    // `list`, keys would come back folder-relative and could no longer be
-    // compared against the full `prefix`.
-    const { removePrefix, ...pageOptions } = options ?? {};
-
-    const keys: string[] = [];
-    let cursor: string | undefined;
-    for (;;) {
-      // Only the ordinary `list`, only on the folder: the node authorizes
-      // each page exactly as it would for a caller using `list` directly, so
-      // a delegated session sees no more than its grant allows, and a folder
-      // outside the grant fails with the error `list` produces. We never
-      // list anything wider or different from `folder`.
-      const page = await this.list({ ...pageOptions, prefix: folder, cursor });
-      // A failure on any page discards what was gathered: a silently
-      // truncated match list would look like "no more matches".
-      if (!page.ok) return page;
-
-      for (const key of page.data.keys) {
-        // Keys come back as full keys, and the node's list is recursive, so
-        // `startsWith(prefix)` is "the segment after the folder starts with
-        // the partial". A match that also has children returns the key and
-        // its descendants, exactly as `list` reports them.
-        if (key.startsWith(prefix)) keys.push(key);
-      }
-
-      const next = page.data.nextCursor;
-      if (next === undefined) break;
-      // A node that echoes the cursor we just sent would make this loop
-      // forever (pre-1.19 nodes ignored cursors on list-only requests).
-      if (next === cursor) {
-        return err(serviceError(
-          ErrorCodes.NETWORK_ERROR,
-          `KV listMatching: the node returned the same cursor twice while listing "${folder}"; stopping instead of looping`,
-          "kv"
-        ));
-      }
-      cursor = next;
-    }
-
-    return ok({
-      keys: removePrefix ? keys.map((key) => key.slice(folder.length)) : keys,
-    });
-  }
-
   private async listFromNetwork(
     listPath: string,
     options: KVListOptions | undefined,

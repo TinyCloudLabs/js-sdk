@@ -12,6 +12,7 @@ import type {
 import { ErrorCodes } from "../types";
 import { authorizationVerdictOf, validatedCapabilityOf } from "../errors";
 import { KVService } from "./KVService";
+import { listMatching } from "./listMatching";
 import {
   DEFAULT_SIGNED_READ_URL_EXPIRY_MS,
   KVAction,
@@ -2048,7 +2049,7 @@ describe("KVService stalled response bodies over loopback HTTP (TC-834)", () => 
   });
 });
 
-describe("KVService.listMatching (partial-segment listing, client-side)", () => {
+describe("listMatching (partial-segment listing, client-side)", () => {
   // A stand-in for node >= 1.19.0 list semantics (TC-731):
   //  - the prefix matches WHOLE segments only: `qa/b` lists `qa/b` and
   //    `qa/b/...`, never `qa/b00`; a trailing slash lists that folder;
@@ -2103,43 +2104,43 @@ describe("KVService.listMatching (partial-segment listing, client-side)", () => 
     // The helper finds the siblings by listing the folder, and drops `qa/c00`.
     // `qa/b` is a name that also has children, so the key AND its descendants
     // come back, exactly as `list` reports them.
-    expect(keysOf(await service.listMatching("qa/b"))).toEqual([
+    expect(keysOf(await listMatching(service, "qa/b"))).toEqual([
       "qa/b/deep/three", "qa/b/one", "qa/b/two", "qa/b00", "qa/b01",
     ]);
-    expect(keysOf(await service.listMatching("qa/b0"))).toEqual(["qa/b00", "qa/b01"]);
+    expect(keysOf(await listMatching(service, "qa/b0"))).toEqual(["qa/b00", "qa/b01"]);
   });
 
   test("an exact folder (trailing slash) returns its contents, recursively", async () => {
     const service = serviceOver(nodeListing(KEYS));
-    expect(keysOf(await service.listMatching("qa/b/"))).toEqual([
+    expect(keysOf(await listMatching(service, "qa/b/"))).toEqual([
       "qa/b/deep/three", "qa/b/one", "qa/b/two",
     ]);
   });
 
   test("no match returns an empty list, not an error", async () => {
     const service = serviceOver(nodeListing(KEYS));
-    expect(await service.listMatching("qa/zzz")).toEqual({ ok: true, data: { keys: [] } });
-    expect(await service.listMatching("nope/")).toEqual({ ok: true, data: { keys: [] } });
+    expect(await listMatching(service, "qa/zzz")).toEqual({ ok: true, data: { keys: [] } });
+    expect(await listMatching(service, "nope/")).toEqual({ ok: true, data: { keys: [] } });
   });
 
   test("a partial at depth 2+ lists only the deepest folder", async () => {
     const listedPrefixes: string[] = [];
     const service = serviceOver(nodeListing(KEYS, { listedPrefixes }));
-    expect(keysOf(await service.listMatching("qa/b/t"))).toEqual(["qa/b/two"]);
-    expect(keysOf(await service.listMatching("qa/b/deep/th"))).toEqual(["qa/b/deep/three"]);
+    expect(keysOf(await listMatching(service, "qa/b/t"))).toEqual(["qa/b/two"]);
+    expect(keysOf(await listMatching(service, "qa/b/deep/th"))).toEqual(["qa/b/deep/three"]);
     expect(listedPrefixes).toEqual(["qa/b/", "qa/b/deep/"]);
   });
 
   test("an empty partial is just the folder; an empty prefix is the whole space", async () => {
     const service = serviceOver(nodeListing(KEYS));
-    expect(keysOf(await service.listMatching("qa/b/deep/"))).toEqual(["qa/b/deep/three"]);
-    expect(keysOf(await service.listMatching(""))).toEqual([...KEYS].sort());
+    expect(keysOf(await listMatching(service, "qa/b/deep/"))).toEqual(["qa/b/deep/three"]);
+    expect(keysOf(await listMatching(service, ""))).toEqual([...KEYS].sort());
   });
 
   test("a root-level partial (no slash) lists the space root", async () => {
     const listedPrefixes: string[] = [];
     const service = serviceOver(nodeListing(KEYS, { listedPrefixes }));
-    expect(keysOf(await service.listMatching("root"))).toEqual(["root", "rootbeer"]);
+    expect(keysOf(await listMatching(service, "root"))).toEqual(["root", "rootbeer"]);
     expect(listedPrefixes).toEqual([""]);
   });
 
@@ -2152,7 +2153,7 @@ describe("KVService.listMatching (partial-segment listing, client-side)", () => 
       requests += 1;
       return inner(url, init);
     });
-    const keys = keysOf(await service.listMatching("qa/b", { limit: 4 }));
+    const keys = keysOf(await listMatching(service, "qa/b", { limit: 4 }));
     expect(keys).toEqual(stored.filter((key) => key.startsWith("qa/b")).sort());
     expect(keys).toHaveLength(25);
     // 35 keys in the folder at 4 per page: the whole folder is read (9 pages),
@@ -2162,8 +2163,8 @@ describe("KVService.listMatching (partial-segment listing, client-side)", () => 
 
   test("removePrefix strips the folder, not the partial", async () => {
     const service = serviceOver(nodeListing(KEYS));
-    expect(keysOf(await service.listMatching("qa/b0", { removePrefix: true }))).toEqual(["b00", "b01"]);
-    expect(keysOf(await service.listMatching("root", { removePrefix: true }))).toEqual(["root", "rootbeer"]);
+    expect(keysOf(await listMatching(service, "qa/b0", { removePrefix: true }))).toEqual(["b00", "b01"]);
+    expect(keysOf(await listMatching(service, "root", { removePrefix: true }))).toEqual(["root", "rootbeer"]);
   });
 
   test("never widens scope: only the folder is listed, and an ungranted folder surfaces list's error", async () => {
@@ -2171,15 +2172,15 @@ describe("KVService.listMatching (partial-segment listing, client-side)", () => 
     const service = serviceOver(nodeListing(KEYS, { grant: "qa/b", listedPrefixes }));
 
     // Inside the grant: works, and the only thing requested is the folder.
-    expect(keysOf(await service.listMatching("qa/b/t"))).toEqual(["qa/b/two"]);
+    expect(keysOf(await listMatching(service, "qa/b/t"))).toEqual(["qa/b/two"]);
     expect(listedPrefixes).toEqual(["qa/b/"]);
 
     // The folder `qa/` is outside a grant on `qa/b`: the helper fails with the
     // same error `list` gives for that folder, and does not retry anything
     // narrower or wider.
     listedPrefixes.length = 0;
-    const viaHelper = await service.listMatching("qa/b0");
-    const viaList = await service.list({ prefix: "qa/" });
+    const viaHelper = await listMatching(service, "qa/b0");
+    const viaList = await service.list({ path: "qa/" });
     expect(viaHelper.ok).toBe(false);
     expect(viaHelper).toEqual(viaList);
     expect(listedPrefixes).toEqual(["qa/", "qa/"]);
@@ -2191,7 +2192,7 @@ describe("KVService.listMatching (partial-segment listing, client-side)", () => 
     const service = serviceOver(async (url, init) =>
       ++calls === 3 ? response(false, 500, "boom") : inner(url, init)
     );
-    const result = await service.listMatching("qa/b");
+    const result = await listMatching(service, "qa/b");
     expect(result.ok).toBe(false);
   });
 
@@ -2202,7 +2203,22 @@ describe("KVService.listMatching (partial-segment listing, client-side)", () => 
         name.toLowerCase() === "x-tinycloud-next-cursor" ? "same" : null;
       return stuck;
     });
-    const result = await service.listMatching("qa/b");
+    const result = await listMatching(service, "qa/b");
     expect(result).toMatchObject({ ok: false, error: { code: ErrorCodes.NETWORK_ERROR } });
+  });
+
+  test("works on a prefixed view: the folder is resolved under the view's prefix", async () => {
+    const listedPrefixes: string[] = [];
+    const service = serviceOver(
+      nodeListing(["notes/qa/b00", "notes/qa/b01", "notes/qa/c00", "notes/qa/b/x", "other/qa/b99"], { pageSize: 2, listedPrefixes })
+    );
+    const notes = service.withPrefix("notes");
+    // Keys come back relative to the view, as `notes.list()` returns them.
+    expect(keysOf(await listMatching(notes, "qa/b"))).toEqual(["qa/b/x", "qa/b00", "qa/b01"]);
+    expect(keysOf(await listMatching(notes, "qa/b", { removePrefix: true }))).toEqual(["b/x", "b00", "b01"]);
+    // Only ever `notes/qa/`: never the view's siblings.
+    expect([...new Set(listedPrefixes)]).toEqual(["notes/qa/"]);
+    // A root-level partial lists the view's own root.
+    expect(keysOf(await listMatching(notes, "qa"))).toEqual(["qa/b/x", "qa/b00", "qa/b01", "qa/c00"]);
   });
 });

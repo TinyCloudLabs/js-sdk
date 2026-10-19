@@ -16,7 +16,6 @@ import {
   KVBatchPutResponse,
   KVBatchReadResponse,
   KVListOptions,
-  KVListMatchingOptions,
   KVChangesOptions,
   KVChangesResponse,
   KVDeleteOptions,
@@ -130,101 +129,6 @@ export interface IKVService extends IService {
    * ```
    */
   list(options?: KVListOptions): Promise<Result<KVListResponse>>;
-
-  /**
-   * List the keys that start with a *partial* path segment, e.g. every key
-   * beginning `qa/b` including `qa/b00` and `qa/b01`.
-   *
-   * ## Why this is a helper and not a `list` option
-   *
-   * Since node 1.19.0 (TC-731) the node matches list prefixes on **whole path
-   * segments**: `list({ prefix: 'qa/b' })` returns the key `qa/b` and
-   * everything under `qa/b/`, and does **not** return `qa/b00`. This is
-   * deliberate. A list *is* the authorization scope: a grant on `docs` must
-   * not let its holder enumerate `docsecret/...`, and a partial-segment match
-   * would disclose key names across exactly that grant boundary. (Matching is
-   * also case-exact.) So the node will never do "starts with" for you, and a
-   * caller that wants "names starting with X" has to do it client-side. This
-   * is that client-side helper.
-   *
-   * ## What it does
-   *
-   * 1. Splits `prefix` at its last `/`. The *folder* is everything up to and
-   *    including that `/` (the space root, `""`, if there is no `/`); the
-   *    *partial* is the rest.
-   * 2. Calls the ordinary {@link IKVService.list} on the folder, following
-   *    every `nextCursor` until the node reports no more pages.
-   * 3. Keeps the keys that start with `prefix` (that is, whose segment after
-   *    the folder starts with the partial) and returns them as
-   *    `{ keys }`, the same shape as `list`. `truncated` and `nextCursor` are
-   *    never set: the result is complete, not a page.
-   *
-   * | `prefix`    | folder listed | partial | matches                         |
-   * | ----------- | ------------- | ------- | ------------------------------- |
-   * | `qa/b`      | `qa/`         | `b`     | `qa/b`, `qa/b/x`, `qa/b00`      |
-   * | `qa/b/`     | `qa/b/`       | (empty) | everything under `qa/b/`        |
-   * | `qa/b/c`    | `qa/b/`       | `c`     | `qa/b/c`, `qa/b/cat`, `qa/b/c/x`|
-   * | `b`         | `""` (root)   | `b`     | `b`, `b/x`, `b00`               |
-   * | `""`        | `""` (root)   | (empty) | every key in the space          |
-   *
-   * A name that matches *and* has children returns the name **and** its
-   * descendants (`qa/b` and `qa/b/x` above). That is not extra logic: `list`
-   * is recursive, so the folder listing already contains the descendants, and
-   * the filter only looks at the prefix. Callers that want one entry per
-   * name must collapse on the first segment after the folder themselves.
-   *
-   * ## Authorization
-   *
-   * The helper never widens scope. It issues only normal `list` calls on the
-   * folder, so a delegated session sees exactly what its grant allows for
-   * that folder. If the folder itself is outside the grant, the result is the
-   * same error `list` returns for it (nothing is retried against a narrower
-   * or wider prefix). Consequently a grant on `qa/b00` alone cannot use
-   * `listMatching('qa/b')`: listing `qa/` is outside that grant. List the
-   * folder the grant covers instead.
-   *
-   * ## Cost
-   *
-   * **It fetches every key in the folder**, page after page, then discards
-   * the ones that don't match. The work is proportional to the size of the
-   * *folder*, not the number of matches, and a folder with 100 000 keys takes
-   * hundreds of requests even if one key matches. Page size (`limit`) tunes
-   * the number of requests, not the amount of data read.
-   *
-   * ## When to use it
-   *
-   * - UI type-ahead / autocomplete over a folder of modest size.
-   * - Small folders, one-off lookups, scripts and debugging.
-   *
-   * ## When not to
-   *
-   * - Large or unbounded folders, or anything on a hot path. Give the data a
-   *   real folder structure instead (`users/<id>/...`, one folder per
-   *   bucket/day/shard) so the thing you look up is a whole segment and a
-   *   plain `list({ prefix })` answers it in one request, within the grant.
-   *
-   * A failed page returns that page's error and discards what was gathered so
-   * far; there is no partial result. Pass `signal` to abort a long walk.
-   *
-   * @param prefix - Absolute key prefix, possibly ending mid-segment. Like
-   *   `list({ prefix })`, it replaces the service's configured prefix rather
-   *   than being appended to it.
-   * @param options - Optional per-page list configuration
-   * @returns Result with every key starting with `prefix`
-   *
-   * @example
-   * ```typescript
-   * // Keys: qa/b00, qa/b01, qa/c00
-   * const result = await kv.listMatching('qa/b');
-   * if (result.ok) {
-   *   console.log(result.data.keys); // ['qa/b00', 'qa/b01']
-   * }
-   * ```
-   */
-  listMatching(
-    prefix: string,
-    options?: KVListMatchingOptions
-  ): Promise<Result<KVListResponse>>;
 
   /**
    * Delete a key.
