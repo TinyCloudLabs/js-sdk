@@ -7,7 +7,7 @@ import { MAX_WORKER_GZIP_BYTES } from "../../replica/scripts/check-worker-size";
 import { compactFixOptionalAllowance, mergedPinsNotLandedOn, optionalSourcePins, type OptionalLedger } from "./replica-optional-size-policy";
 import { approvedTc1428Ratchet, validateTc1428RatchetTransition, type Tc1428Ratchet } from "./replica-size-policy";
 import { approvedTc1476Ratchet, validateTc1476RatchetTransition, type Tc1476Ratchet } from "./replica-size-policy";
-import { approvedTc1475Ratchet, approvedTc721WorkerRatchet, validateTc721WorkerRatchetTransition, validateTc1475RatchetTransition, type Tc1475Ratchet } from "./replica-size-policy";
+import { approvedTc1475Ratchet, approvedTc606WorkerRatchet, validateTc606WorkerRatchetTransition, validateTc1475RatchetTransition, type Tc1475Ratchet } from "./replica-size-policy";
 import { approvedTc1443Ratchet, approvedTc1443bRatchet, approvedTc1448Ratchet, approvedTc1466Ratchet, validateTc1443RatchetTransition, validateTc1443bRatchetTransition, validateTc1448RatchetTransition, validateTc1466RatchetTransition, type Tc1443Ratchet, type Tc1443bRatchet, type Tc1448Ratchet, type Tc1466Ratchet } from "./replica-size-policy";
 import { ancestryPins, assertCiSizeToolchain, approvedCiToolchainCorrection, approvedFixRequiredRatchet, approvedGatedOnlyRatchet, approvedHardeningRatchet, approvedLogoutRatchet, approvedTc1413Ratchet, approvedTc1424Ratchet, approvedTc1432Ratchet, approvedTc1436Ratchet, ciCorrectionPolicyOnlyPaths, hasAncestor, isPolicyOnlySinceApprovedSource, landingCommit, pinLandedOn, validateCiToolchainTransition, validateGatedOnlyRatchet, validateHardeningRatchetTransition, validateLedger, validateLogoutRatchetTransition, validateMasterMergeResolutionTransition, validateTc1413RatchetTransition, validateTc1424RatchetTransition, validateTc1432RatchetTransition, validateTc1436RatchetTransition, type HardeningRatchet, type Ledger, type LogoutRatchet, type MasterMergeResolution, type Tc1413Ratchet, type Tc1424Ratchet, type Tc1432Ratchet, type Tc1436Ratchet } from "./replica-size-policy";
 
@@ -29,7 +29,7 @@ const historical: Ledger = {
   tc1428Ratchet: undefined,
   tc1476Ratchet: undefined,
   tc1475Ratchet: undefined,
-  tc721WorkerRatchet: undefined,
+  tc606WorkerRatchet: undefined,
   phase2Ratchet: {
     ...current.phase2Ratchet!,
     toolchain: "Bun 1.4.3; production webpack; gzip -9 -c",
@@ -1647,12 +1647,12 @@ describe("TC-1475 ServiceContext retry exact-delta ratchet", () => {
   });
 });
 
-describe("TC-721 worker exact-delta ratchet", () => {
-  const row = () => structuredClone(approvedTc721WorkerRatchet);
+describe("#606 worker exact-delta ratchet", () => {
+  const row = () => structuredClone(approvedTc606WorkerRatchet);
 
   it("sits 86 B above TC-1475's worker ceiling and is the checker's ceiling", () => {
     expect(() => validateLedger(current)).not.toThrow();
-    expect(current.tc721WorkerRatchet).toEqual(approvedTc721WorkerRatchet);
+    expect(current.tc606WorkerRatchet).toEqual(approvedTc606WorkerRatchet);
     expect(row().worker.ceiling).toBe(approvedTc1475Ratchet.worker.ceiling + row().worker.delta);
     expect(MAX_WORKER_GZIP_BYTES).toBe(row().worker.ceiling);
   });
@@ -1667,7 +1667,7 @@ describe("TC-721 worker exact-delta ratchet", () => {
       const ledger = copy(current);
       const changed = row();
       mutate(changed);
-      ledger.tc721WorkerRatchet = changed;
+      ledger.tc606WorkerRatchet = changed;
       expect(() => validateLedger(ledger)).toThrow();
     }
     const without1475 = copy(current);
@@ -1676,12 +1676,12 @@ describe("TC-721 worker exact-delta ratchet", () => {
   });
 
   it("may be introduced once and never changed or removed in a later base", () => {
-    expect(() => validateTc721WorkerRatchetTransition(undefined, row())).not.toThrow();
-    expect(() => validateTc721WorkerRatchetTransition(row(), row())).not.toThrow();
+    expect(() => validateTc606WorkerRatchetTransition(undefined, row())).not.toThrow();
+    expect(() => validateTc606WorkerRatchetTransition(row(), row())).not.toThrow();
     const changed = row();
     changed.worker.ceiling++;
-    expect(() => validateTc721WorkerRatchetTransition(undefined, changed)).toThrow();
-    expect(() => validateTc721WorkerRatchetTransition(row(), undefined)).toThrow();
+    expect(() => validateTc606WorkerRatchetTransition(undefined, changed)).toThrow();
+    expect(() => validateTc606WorkerRatchetTransition(row(), undefined)).toThrow();
   });
 });
 

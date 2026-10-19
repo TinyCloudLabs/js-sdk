@@ -10,7 +10,7 @@ import {
   mergedPinsNotLandedOn, priorOptionalAllowance, relocatedOptionalAllowance, validateIntroducedOptionalSources,
   validateOptionalEntryTransition, validateOptionalLedger, type OptionalLedger,
 } from "./replica-optional-size-policy";
-import { assertCiSizeToolchain, approvedCiToolchainCorrection, approvedFixRequiredRatchet, approvedGatedOnlyRatchet, approvedPhase2, ciCorrectionPolicyOnlyPaths, hasAncestor, isPolicyOnlySinceApprovedSource, preexistingS3EntryCommit, validateCiToolchainTransition, validateGatedOnlyRatchet, validateHardeningRatchetTransition, validateLedger, validateLogoutRatchetTransition, validateMasterMergeResolutionTransition, validateTc1413RatchetTransition, validateTc1424RatchetTransition, validateTc1448RatchetTransition, validateTc1432RatchetTransition, validateTc1436RatchetTransition, validateTc1443RatchetTransition, validateTc1443bRatchetTransition, validateTc1428RatchetTransition, validateTc1475RatchetTransition, validateTc721WorkerRatchetTransition, validateTc1476RatchetTransition, validateTc1466RatchetTransition, type GzipSizes, type Ledger, type LedgerEntry } from "./replica-size-policy";
+import { assertCiSizeToolchain, approvedCiToolchainCorrection, approvedFixRequiredRatchet, approvedGatedOnlyRatchet, approvedPhase2, ciCorrectionPolicyOnlyPaths, hasAncestor, isPolicyOnlySinceApprovedSource, preexistingS3EntryCommit, validateCiToolchainTransition, validateGatedOnlyRatchet, validateHardeningRatchetTransition, validateLedger, validateLogoutRatchetTransition, validateMasterMergeResolutionTransition, validateTc1413RatchetTransition, validateTc1424RatchetTransition, validateTc1448RatchetTransition, validateTc1432RatchetTransition, validateTc1436RatchetTransition, validateTc1443RatchetTransition, validateTc1443bRatchetTransition, validateTc1428RatchetTransition, validateTc1475RatchetTransition, validateTc606WorkerRatchetTransition, validateTc1476RatchetTransition, validateTc1466RatchetTransition, type GzipSizes, type Ledger, type LedgerEntry } from "./replica-size-policy";
 import { collectMeasuredArtifactInputs } from "./replica-size-inputs";
 type Baseline = {
   webSdkTestBaseline: { ref: string; unhandledErrors: number; failingNames: string[]; unhandledSignatures: string[] };
@@ -275,11 +275,11 @@ if (prBaseSha) {
     console.error("The TC-1475 ratchet requires the merged TC-1428 ratchet and its measured source commit.");
     failed = true;
   }
-  validateTc721WorkerRatchetTransition(baseLedger.tc721WorkerRatchet, ledger.tc721WorkerRatchet);
-  const tc721 = ledger.tc721WorkerRatchet;
-  if (tc721 !== undefined && baseLedger.tc721WorkerRatchet === undefined &&
-      (baseLedger.tc1475Ratchet === undefined || !hasAncestor(repoRoot, tc721.sourceCommits.at(-1)!))) {
-    console.error("The TC-721 worker ratchet requires the merged TC-1475 ratchet and its measured source commit.");
+  validateTc606WorkerRatchetTransition(baseLedger.tc606WorkerRatchet, ledger.tc606WorkerRatchet);
+  const tc606 = ledger.tc606WorkerRatchet;
+  if (tc606 !== undefined && baseLedger.tc606WorkerRatchet === undefined &&
+      (baseLedger.tc1475Ratchet === undefined || !hasAncestor(repoRoot, tc606.sourceCommits.at(-1)!))) {
+    console.error("The TC-606 worker ratchet requires the merged TC-1475 ratchet and its measured source commit.");
     failed = true;
   }
   const baseOptionalPath = "packages/web-sdk/scripts/replica-optional-size-ledger.json";
