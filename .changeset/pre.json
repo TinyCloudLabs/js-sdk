@@ -42,6 +42,7 @@
     "cli-share-fragment-wording",
     "delegation-create-list-node-paths",
     "direct-owner-revoke",
+    "held-credentials-verifier",
     "node-replica-erase-replaced-roots",
     "node-sdk-registry-sync-authority",
     "node-sdk-replica-codes",
