@@ -51,6 +51,7 @@
     "replica-kv-storage",
     "replica-lifecycle-observer",
     "replica-node-deny-floor",
+    "replica-report-json-shape",
     "replica-session-stamp",
     "replica-shared-contract",
     "replica-sign-out-gate",

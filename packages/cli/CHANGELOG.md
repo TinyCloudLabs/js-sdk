@@ -1,5 +1,11 @@
 # @tinycloud/cli
 
+## 1.3.0-beta.23
+
+### Patch Changes
+
+- dc67c26: Breaking change to `tc replica report --json` (beta feature, from #551 / TC-841): the report is now read-only and never starts a replication runtime, so `replicas` is always `[]` and `replicasUnavailable` is always `true`. Per-partition pinned counts moved from `replicas[].pinned` to `partitions[].pinned` (each partition has `idHash`, `host`, `space`, `pinned`). Scripts reading `.replicas[].pinned` should read `.partitions[].pinned` instead. Live replica status returns with TC-1309.
+
 ## 1.3.0-beta.22
 
 ### Patch Changes
