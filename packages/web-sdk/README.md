@@ -315,6 +315,19 @@ await storage.delete('messages/welcome');
 await storage.deleteAll('user');
 ```
 
+### Automatic retry
+
+When the node answers `503` busy (`NODE_BUSY`) or `503` request timeout (`REQUEST_TIMEOUT`), it
+applied nothing, so the SDK retries on its own: up to 4 attempts in about 12 s, waiting the node's
+`Retry-After` when sent, otherwise exponentially with full jitter (250 ms base, 4 s cap). It stops
+early on abort or the per-request `timeout`, and returns the last typed error once the budget is
+spent. `OUTCOME_UNKNOWN` is never retried. Tune or opt out with `retryPolicy`; `{ maxAttempts: 1 }`
+(or `retryableErrors: []`) disables it.
+
+```typescript
+const tcw = new TinyCloudWeb({ retryPolicy: { maxAttempts: 1 } });
+```
+
 ## Core Values
 
 TinyCloud is built on these fundamental principles:

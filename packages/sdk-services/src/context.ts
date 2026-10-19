@@ -11,12 +11,15 @@ import {
   InvokeFunction,
   InvokeAnyFunction,
   FetchFunction,
+  FetchRequestInit,
+  FetchResponse,
   defaultRetryPolicy,
   EventHandler,
   TelemetryEventHandler,
   TelemetryConfig,
 } from "./types";
 import { tinyCloudDebugLogger } from "./debug";
+import { nodeRetryError } from "./errors";
 import { projectDiagnosticData } from "./diagnostics";
 
 /**
@@ -407,6 +410,47 @@ export class ServiceContext implements IServiceContext {
     };
   }
 
+  /**
+   * Retry the node's own "nothing was applied" answers (`NODE_BUSY`,
+   * `REQUEST_TIMEOUT`) under the retry policy. The final response, retried or
+   * not, is returned untouched for the services to classify. Waits end at once
+   * when the request signal aborts (caller abort, per-request timeout,
+   * sign-out).
+   */
+  private async fetchWithRetry(
+    fetchFn: FetchFunction,
+    url: string,
+    request: FetchRequestInit & { signal: AbortSignal },
+  ): Promise<FetchResponse> {
+    const policy = this._retryPolicy;
+    const startedAt = Date.now();
+    for (let attempt = 1; ; attempt++) {
+      const response = await fetchFn(url, request);
+      if (attempt >= policy.maxAttempts || response.status !== 503 || !response.clone) return response;
+      const text = await response.clone().text().catch(() => "");
+      const error = nodeRetryError("", "", response, text);
+      if (!error || error.meta?.retryable !== true || !policy.retryableErrors.includes(error.code)) {
+        return response;
+      }
+      const remaining = (policy.maxTotalMs ?? Infinity) - (Date.now() - startedAt);
+      if (remaining <= 0) return response;
+      const retryAfterMs = error.meta.retryAfterMs;
+      const step = Math.min(
+        policy.maxDelayMs,
+        policy.backoff === "exponential"
+          ? policy.baseDelayMs * 2 ** (attempt - 1)
+          : policy.backoff === "linear"
+            ? policy.baseDelayMs * attempt
+            : 0,
+      );
+      const delay = Math.min(
+        typeof retryAfterMs === "number" ? retryAfterMs : Math.random() * step,
+        remaining,
+      );
+      await sleep(delay, request.signal);
+    }
+  }
+
   private wrapFetch(fetchFn: FetchFunction): FetchFunction {
     return async (url, init) => {
       this.assertActive();
@@ -415,7 +459,7 @@ export class ServiceContext implements IServiceContext {
         signal: this.combineSignals(init?.signal),
       };
       if (!tinyCloudDebugLogger.isEnabled()) {
-        return fetchFn(url, request);
+        return this.fetchWithRetry(fetchFn, url, request);
       }
 
       const timer = tinyCloudDebugLogger.startTimer("sdk.fetch", {
@@ -425,7 +469,7 @@ export class ServiceContext implements IServiceContext {
       });
 
       try {
-        const response = await fetchFn(url, request);
+        const response = await this.fetchWithRetry(fetchFn, url, request);
         timer.stop({
           ok: response.ok,
           url,
@@ -464,4 +508,20 @@ export class ServiceContext implements IServiceContext {
     }
     return combined.signal;
   }
+}
+
+/** Resolve after `ms`; reject with the signal's reason as soon as it aborts. */
+function sleep(ms: number, signal: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal.aborted) return reject(signal.reason);
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(signal.reason);
+    };
+    const timer = setTimeout(() => {
+      signal.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
 }

@@ -114,7 +114,9 @@ export function networkError(
  *
  * `meta.retryable` is the safe-to-retry verdict and `meta.retryAfterMs` the
  * node's `Retry-After` (the node sends whole seconds; anything else is
- * ignored). The SDK never retries on its own. Returns `undefined` for any
+ * ignored). `ServiceContext.fetch` retries `NODE_BUSY` and `REQUEST_TIMEOUT` on
+ * its own under the `RetryPolicy` (they apply nothing); `OUTCOME_UNKNOWN` is
+ * never retried. Returns `undefined` for any
  * other response, including the bodyless 503/500 of nodes before 1.21, which
  * callers keep classifying as they always did.
  */
