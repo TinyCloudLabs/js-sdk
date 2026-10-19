@@ -10,7 +10,7 @@ function diagnosticCapture() {
   const context = makeDiagnosticContext({
     source_id: diagnosticId(), partition_id: diagnosticId(), generation: 1,
     runtime: { emit(event: DiagnosticObservation) { events.push(event); return true; } } as DiagnosticBinding["runtime"],
-  }, "cli");
+  }, "cli", { scope: "tc-apps" });
   return { events, context };
 }
 
@@ -449,11 +449,11 @@ describe("CLI kv list paging (TC-982)", () => {
     };
 
     const { events, context } = diagnosticCapture();
-    await withDiagnosticContext(context, () => runKv(["list", "--all", "--limit", "2"]));
+    await withDiagnosticContext(context, () => runKv(["list", "--prefix", "xyz.tinycloud.agent-data/", "--all", "--limit", "2"]));
     expect(events).toContainEqual(expect.objectContaining({ action: "list", business: "complete", pages: 3, returned: 5, truncated: false }));
 
     expect(recorded.lists.map((options) => options.cursor)).toEqual([undefined, "c1", "c2"]);
-    expect(recorded.outputs).toEqual([{ keys: ["a", "b", "c", "d", "e"], count: 5, prefix: null, truncated: false, nextCursor: null }]);
+    expect(recorded.outputs).toEqual([{ keys: ["a", "b", "c", "d", "e"], count: 5, prefix: "xyz.tinycloud.agent-data/", truncated: false, nextCursor: null }]);
   });
 
   test("--all stops with an error when the node repeats a cursor", async () => {
@@ -463,7 +463,7 @@ describe("CLI kv list paging (TC-982)", () => {
     };
 
     const { events, context } = diagnosticCapture();
-    await withDiagnosticContext(context, () => runKv(["list", "--all"]));
+    await withDiagnosticContext(context, () => runKv(["list", "--prefix", "xyz.tinycloud.agent-data/", "--all"]));
     expect(events).toContainEqual(expect.objectContaining({ warning: "pagination_incomplete", pages: 2, returned: 2, business: "partial" }));
 
     expect(recorded.outputs).toEqual([]);
@@ -513,8 +513,8 @@ test("a put with a lost acknowledgment is not replayed or reported as confirmed"
   resetState();
   lostAcknowledgment = true;
   const { events, context } = diagnosticCapture();
-  await withDiagnosticContext(context, () => runKv(["put", "synthetic-key", "synthetic-value"]));
-  expect(recorded.puts).toEqual([{ handle: "primary", key: "synthetic-key", value: "synthetic-value" }]);
+  await withDiagnosticContext(context, () => runKv(["put", "xyz.tinycloud.agent-data/synthetic-key", "synthetic-value"]));
+  expect(recorded.puts).toEqual([{ handle: "primary", key: "xyz.tinycloud.agent-data/synthetic-key", value: "synthetic-value" }]);
   expect(recorded.outputs).toEqual([]);
   expect(recorded.errors).toEqual([expect.objectContaining({ message: "synthetic lost acknowledgment" })]);
   expect(events).toContainEqual(expect.objectContaining({ type: "phase.finish", action: "put", outcome: "error", mutation: "unknown" }));

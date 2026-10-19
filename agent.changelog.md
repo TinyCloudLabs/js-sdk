@@ -14,6 +14,8 @@ entry when `agent.dev.md` or related agent workflow expectations change.
 - Replaced custom archive delivery with a standalone exact-version npm alpha,
   pinned 0.1.6 guidance, offline installation/relocation checks and same-package
   preview image. Normal releases, live routing and participant capture stay untouched.
+- Updated pagination and lost-acknowledgment fixtures to use admitted tc-apps
+  resources and scoped bindings; retained their completeness/no-replay assertions.
 
 ## 2026-10-16
 
