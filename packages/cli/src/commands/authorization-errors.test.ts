@@ -212,14 +212,14 @@ test("SQL lost write acknowledgment preserves the failure and never retries or c
   const context = makeDiagnosticContext({
     source_id: diagnosticId(), partition_id: diagnosticId(), generation: 1,
     runtime: { emit(event: DiagnosticObservation) { events.push(event); return true; } } as DiagnosticBinding["runtime"],
-  }, "cli");
+  }, "cli", { scope: "tc-apps" });
   node = { sql: { db: () => ({
     execute: async () => {
       stored += 1;
       throw new Error("synthetic lost acknowledgment");
     },
   }) } };
-  const result = await withDiagnosticContext(context, () => captureCommand("sql", ["execute", "INSERT INTO synthetic VALUES (1)"]));
+  const result = await withDiagnosticContext(context, () => captureCommand("sql", ["execute", "INSERT INTO synthetic VALUES (1)", "--db", "xyz.tinycloud.agent-data.index"]));
   expect(stored).toBe(1);
   expect(result.exitCode).toBe(1);
   expect(result.error.code).toBe("ERROR");
