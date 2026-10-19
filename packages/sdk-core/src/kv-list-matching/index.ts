@@ -54,8 +54,10 @@ export type KVListMatchingOptions = Omit<
  * **Where to import it:** `import { listMatching } from
  * '@tinycloud/sdk-core/kv-list-matching'`. This is the import for browser
  * apps too (web-sdk already depends on sdk-core). It is deliberately not
- * exported from the sdk-core, sdk-services or web-sdk roots, to keep their
- * bundles unchanged; `@tinycloud/node-sdk` re-exports it from its root.
+ * exported from any package root (sdk-core, sdk-services, web-sdk, node-sdk),
+ * to keep their bundles unchanged. node-sdk builds with `moduleResolution:
+ * "node"`, which cannot resolve package subpaths, so it has no re-export;
+ * import this entry directly.
  *
  * ## Why this is a helper and not a `list` option
  *
