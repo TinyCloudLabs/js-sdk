@@ -495,24 +495,21 @@ export class SQLService extends BaseService implements ISQLService {
     signal: AbortSignal
   ): Promise<FetchResponse> {
     const actionList = Array.isArray(actions) ? actions : [actions];
-    const payload = JSON.stringify(body);
 
-    return this.invokeWithRetry(`${this.host}/invoke`, () => {
-      const session = this.context.session!;
-      const headers =
-        actionList.length === 1
+    return this.invokeWithRetry(
+      `${this.host}/invoke`,
+      () => {
+        const session = this.context.session!;
+        return actionList.length === 1
           ? this.context.invoke(session, "sql", dbName, actionList[0]!)
           : this.invokeSQLAny(session, dbName, actionList);
-      return {
-        method: "POST",
-        headers: {
-          ...(headers as Record<string, string>),
-          "Content-Type": "application/json",
-        },
-        body: payload,
+      },
+      {
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
         signal,
-      };
-    });
+      }
+    );
   }
 
   private actionForSql(sql: string, fallback: string): string {

@@ -261,17 +261,6 @@ export class KVService extends BaseService implements IKVService {
     return this.context.hosts[0];
   }
 
-  private withJsonContentType(headers: ServiceHeaders): ServiceHeaders {
-    if (Array.isArray(headers)) {
-      return [...headers, ["content-type", "application/json"]];
-    }
-
-    return {
-      ...headers,
-      "content-type": "application/json",
-    };
-  }
-
   /**
    * Execute an invoke operation.
    *
@@ -288,18 +277,11 @@ export class KVService extends BaseService implements IKVService {
     signal: AbortSignal,
     extraHeaders?: Readonly<Record<string, string>>
   ): Promise<FetchResponse> {
-    return this.invokeWithRetry(`${this.host}/invoke`, () => {
-      const headers = this.context.invoke(
-        this.context.session!,
-        "kv",
-        path,
-        action
-      );
-      const requestHeaders: ServiceHeaders = Array.isArray(headers)
-        ? [...headers, ...Object.entries(extraHeaders ?? {})]
-        : { ...headers, ...extraHeaders };
-      return { method: "POST", headers: requestHeaders, body, signal };
-    });
+    return this.invokeWithRetry(
+      `${this.host}/invoke`,
+      () => this.context.invoke(this.context.session!, "kv", path, action),
+      { headers: extraHeaders, body, signal }
+    );
   }
 
   /**
@@ -592,22 +574,22 @@ export class KVService extends BaseService implements IKVService {
           getOptions.maxResponseBytes
         );
       }
-      const response = await this.invokeWithRetry(`${this.host}/invoke`, () => {
-        const session = this.context.session!;
-        const invocationHeaders = this.context.invokeAny!(
-          session,
-          paths.map((path) => ({
-            spaceId: session.spaceId,
-            service: "kv",
-            path,
-            action,
-          }))
-        );
-        const headers: ServiceHeaders = Array.isArray(invocationHeaders)
-          ? [...invocationHeaders, ...Object.entries(limitHeaders)]
-          : { ...invocationHeaders, ...limitHeaders };
-        return { method: "POST", headers, signal: request.signal };
-      });
+      const response = await this.invokeWithRetry(
+        `${this.host}/invoke`,
+        () => {
+          const session = this.context.session!;
+          return this.context.invokeAny!(
+            session,
+            paths.map((path) => ({
+              spaceId: session.spaceId,
+              service: "kv",
+              path,
+              action,
+            }))
+          );
+        },
+        { headers: limitHeaders, signal: request.signal }
+      );
 
       if (!response.ok) {
         const errorText = response.status === 401 || response.status === 403
@@ -1182,19 +1164,23 @@ export class KVService extends BaseService implements IKVService {
         // one with 409). The flag flips only after minting succeeded and the
         // context accepted the call: a throw before that never reached a
         // transport, so it must not be labeled "may have dispatched" (Sol B2).
-        const response = await this.invokeWithRetry(`${this.host}/invoke`, () => {
-          const headers = this.context.invokeAny!(
-            session,
-            paths.map((path) => ({
-              spaceId: session.spaceId,
-              service: "kv",
-              path,
-              action: KVAction.PUT,
-            }))
-          );
-          requestMayHaveDispatched = true;
-          return { method: "POST", headers, body, signal };
-        });
+        const response = await this.invokeWithRetry(
+          `${this.host}/invoke`,
+          () => {
+            const headers = this.context.invokeAny!(
+              session,
+              paths.map((path) => ({
+                spaceId: session.spaceId,
+                service: "kv",
+                path,
+                action: KVAction.PUT,
+              }))
+            );
+            requestMayHaveDispatched = true;
+            return headers;
+          },
+          { body, signal }
+        );
 
         if (!response.ok) {
           let errorText: string;
@@ -1910,14 +1896,15 @@ export class KVService extends BaseService implements IKVService {
 
       const request = this.createRequestSignal(options?.signal, options?.timeout);
       try {
-        const response = await this.invokeWithRetry(`${this.host}/signed/kv`, () => ({
-          method: "POST",
-          headers: this.withJsonContentType(
-            this.context.invoke(session, "kv", path, KVAction.GET)
-          ),
-          body: JSON.stringify(body),
-          signal: request.signal,
-        }));
+        const response = await this.invokeWithRetry(
+          `${this.host}/signed/kv`,
+          () => this.context.invoke(session, "kv", path, KVAction.GET),
+          {
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify(body),
+            signal: request.signal,
+          }
+        );
 
         if (!response.ok) {
           return await this.createSignedReadUrlError(response, key, path);

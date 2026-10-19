@@ -164,4 +164,21 @@ describe("ServiceContext.invokeWithRetry", () => {
     expect(response.status).toBe(503);
     expect(node.calls).toHaveLength(1);
   });
+
+  test("calls build once per attempt and releases the discarded 503 body", async () => {
+    let cancelled = 0;
+    const discarded = reply(503, BUSY, "0");
+    discarded.body = { cancel: async () => { cancelled++; } };
+    const node = fakeNode([() => discarded, ok]);
+    let builds = 0;
+    const pending = contextFor(node.fetch).invokeWithRetry("https://node/invoke", () => {
+      builds++;
+      return { method: "POST" };
+    });
+    await advance(1);
+    const response = await pending;
+    expect(response.status).toBe(200);
+    expect(builds).toBe(2);
+    expect(cancelled).toBe(1);
+  });
 });

@@ -73,7 +73,6 @@ export class ServiceContext implements IServiceContext {
   private _retired = false;
   private readonly _invoke: InvokeFunction;
   private readonly _invokeAny?: InvokeAnyFunction;
-  private readonly _rawFetch: FetchFunction;
   private readonly _fetch: FetchFunction;
   private readonly _hosts: string[];
   private readonly _retryPolicy: RetryPolicy;
@@ -85,8 +84,7 @@ export class ServiceContext implements IServiceContext {
     this._invokeAny = config.invokeAny
       ? this.wrapInvokeAny(config.invokeAny)
       : undefined;
-    this._rawFetch = config.fetch ?? globalThis.fetch.bind(globalThis);
-    this._fetch = this.wrapFetch(this._rawFetch);
+    this._fetch = this.wrapFetch(config.fetch ?? globalThis.fetch.bind(globalThis));
     this._hosts = config.hosts;
     this._session = config.session ?? null;
     this._retryPolicy = {
@@ -413,17 +411,7 @@ export class ServiceContext implements IServiceContext {
     };
   }
 
-  /**
-   * Send a signed invocation, retrying the node's own "nothing was applied"
-   * answers (`NODE_BUSY`, `REQUEST_TIMEOUT`) under the retry policy.
-   *
-   * `build` runs once per attempt and must mint a fresh invocation each time:
-   * the node records every invocation before it runs the handler and answers a
-   * repeat of the same signed request with 409, so re-sending one can never
-   * succeed. The final response, retried or not, is returned untouched for the
-   * services to classify, with `retry` stats. Waits end at once when the
-   * request signal aborts (caller abort, per-request timeout, sign-out).
-   */
+  /** Retry `NODE_BUSY` / `REQUEST_TIMEOUT`; `build` must re-sign per attempt (the node 409s a repeated invocation). */
   async invokeWithRetry(
     url: string,
     build: () => FetchRequestInit | Promise<FetchRequestInit>,
@@ -434,8 +422,8 @@ export class ServiceContext implements IServiceContext {
     let backoffMs = 0;
     for (let attempt = 1; ; attempt++) {
       const init = await build();
-      const request = { ...init, signal: this.combineSignals(init.signal) };
-      const response = await this.send(this._rawFetch, url, request);
+      const signal = this.combineSignals(init.signal);
+      const response = await this._fetch(url, { ...init, signal });
       const done = (): FetchResponse => {
         try { response.retry = { attempts: attempt, backoffMs }; } catch { /* frozen custom response */ }
         return response;
@@ -461,57 +449,40 @@ export class ServiceContext implements IServiceContext {
         typeof retryAfterMs === "number" ? retryAfterMs : Math.random() * step,
         remaining,
       );
-      // The 503 is being replaced; release its body instead of leaving it buffered.
-      try { void Promise.resolve((response.body as { cancel?(): unknown } | undefined)?.cancel?.()).catch(() => {}); } catch { /* not a stream */ }
-      await abortableSleep(delay, request.signal);
-      if (request.signal.aborted) throw request.signal.reason;
+      void Promise.resolve((response.body as { cancel?(): unknown } | undefined)?.cancel?.()).catch(() => {});
+      await abortableSleep(delay, signal);
+      if (signal.aborted) throw signal.reason;
       backoffMs += delay;
-    }
-  }
-
-  private async send(
-    fetchFn: FetchFunction,
-    url: string,
-    request: FetchRequestInit & { signal: AbortSignal },
-  ): Promise<FetchResponse> {
-    if (!tinyCloudDebugLogger.isEnabled()) {
-      return fetchFn(url, request);
-    }
-
-    const timer = tinyCloudDebugLogger.startTimer("sdk.fetch", {
-      url,
-      method: request.method ?? "GET",
-      init: request,
-    });
-
-    try {
-      const response = await fetchFn(url, request);
-      timer.stop({
-        ok: response.ok,
-        url,
-        method: request.method ?? "GET",
-        status: response.status,
-        statusText: response.statusText,
-      });
-      return response;
-    } catch (error) {
-      timer.stop({
-        ok: false,
-        url,
-        method: request.method ?? "GET",
-        error,
-      });
-      throw error;
     }
   }
 
   private wrapFetch(fetchFn: FetchFunction): FetchFunction {
     return async (url, init) => {
       this.assertActive();
-      return this.send(fetchFn, url, {
+      const request = {
         ...init,
         signal: this.combineSignals(init?.signal),
-      });
+      };
+      if (!tinyCloudDebugLogger.isEnabled()) {
+        return fetchFn(url, request);
+      }
+
+      const meta = { url, method: request.method ?? "GET" };
+      const timer = tinyCloudDebugLogger.startTimer("sdk.fetch", { ...meta, init: request });
+
+      try {
+        const response = await fetchFn(url, request);
+        timer.stop({
+          ...meta,
+          ok: response.ok,
+          status: response.status,
+          statusText: response.statusText,
+        });
+        return response;
+      } catch (error) {
+        timer.stop({ ...meta, ok: false, error });
+        throw error;
+      }
     };
   }
 

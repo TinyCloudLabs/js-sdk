@@ -375,12 +375,7 @@ export interface IServiceContext {
   readonly invokeAny?: InvokeAnyFunction;
   /** Fetch function (defaults to globalThis.fetch) */
   readonly fetch: FetchFunction;
-  /**
-   * Send a signed invocation with automatic retry of `NODE_BUSY` /
-   * `REQUEST_TIMEOUT`. `build` is called once per attempt and must mint a
-   * fresh invocation each time (the node answers a repeated one with 409).
-   * Contexts without it send once.
-   */
+  /** Send a signed invocation, retrying a busy node; `build` re-signs per attempt. Absent: sends once. */
   invokeWithRetry?(
     url: string,
     build: () => FetchRequestInit | Promise<FetchRequestInit>,

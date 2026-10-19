@@ -18,6 +18,7 @@ import {
   Result,
   FetchRequestInit,
   FetchResponse,
+  ServiceHeaders,
 } from "../types";
 import { authRequiredError, wrapError, RequestTimeoutError } from "../errors";
 import type { RequestSignal } from "./types";
@@ -265,18 +266,27 @@ export abstract class BaseService implements IService {
     return controller.signal;
   }
 
-  /**
-   * POST a signed invocation, retrying a busy node under the context's retry
-   * policy. `build` mints the invocation and runs once per attempt.
-   */
-  protected async invokeWithRetry(
+  /** POST a signed invocation with retry; `mint` re-signs per attempt, `init.headers` add to the signed ones. */
+  protected invokeWithRetry(
     url: string,
-    build: () => FetchRequestInit | Promise<FetchRequestInit>
+    mint: () => ServiceHeaders,
+    { headers: extra, ...init }: Omit<FetchRequestInit, "headers"> & {
+      headers?: Record<string, string>;
+    } = {}
   ): Promise<FetchResponse> {
-    if (this.context.invokeWithRetry) {
-      return this.context.invokeWithRetry(url, build);
-    }
-    return this.context.fetch(url, await build());
+    const build = (): FetchRequestInit => {
+      const signed = mint();
+      return {
+        method: "POST",
+        ...init,
+        headers: Array.isArray(signed)
+          ? [...signed, ...Object.entries(extra ?? {})]
+          : { ...signed, ...extra },
+      };
+    };
+    return this.context.invokeWithRetry
+      ? this.context.invokeWithRetry(url, build)
+      : this.context.fetch(url, build());
   }
 
   /**

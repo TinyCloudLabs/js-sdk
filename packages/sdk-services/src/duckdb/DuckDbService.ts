@@ -396,20 +396,21 @@ export class DuckDbService extends BaseService implements IDuckDbService {
 
       const request = this.createRequestSignal(options?.signal);
       try {
-        const response = await this.invokeWithRetry(`${this.host}/invoke`, () => ({
-          method: "POST",
-          headers: {
-            ...(this.context.invoke(
+        const response = await this.invokeWithRetry(
+          `${this.host}/invoke`,
+          () =>
+            this.context.invoke(
               this.context.session!,
               "duckdb",
               dbName,
               DuckDbAction.IMPORT
-            ) as Record<string, string>),
-            "Content-Type": "application/x-duckdb",
-          },
-          body: new Blob([data]),
-          signal: request.signal,
-        }));
+            ),
+          {
+            headers: { "Content-Type": "application/x-duckdb" },
+            body: new Blob([data]),
+            signal: request.signal,
+          }
+        );
 
         if (!response.ok) {
           return await this.handleErrorResponse(response, "import");
@@ -433,23 +434,15 @@ export class DuckDbService extends BaseService implements IDuckDbService {
     signal: AbortSignal,
     extraHeaders?: Record<string, string>
   ): Promise<FetchResponse> {
-    const payload = JSON.stringify(body);
-
-    return this.invokeWithRetry(`${this.host}/invoke`, () => ({
-      method: "POST",
-      headers: {
-        ...(this.context.invoke(
-          this.context.session!,
-          "duckdb",
-          dbName,
-          action
-        ) as Record<string, string>),
-        "Content-Type": "application/json",
-        ...extraHeaders,
-      },
-      body: payload,
-      signal,
-    }));
+    return this.invokeWithRetry(
+      `${this.host}/invoke`,
+      () => this.context.invoke(this.context.session!, "duckdb", dbName, action),
+      {
+        headers: { "Content-Type": "application/json", ...extraHeaders },
+        body: JSON.stringify(body),
+        signal,
+      }
+    );
   }
 
   private async handleErrorResponse(
