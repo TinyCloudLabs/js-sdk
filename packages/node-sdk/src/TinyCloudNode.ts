@@ -65,6 +65,7 @@ import {
   ServiceSession,
   ServiceContext,
   type TelemetryConfig,
+  type RetryPolicy,
   ISessionStorage,
   ISigner,
   type InvokeAnyFunction,
@@ -908,6 +909,8 @@ export interface TinyCloudNodeConfig {
   autoBootstrapAccount?: boolean;
   /** Default-off service telemetry. */
   telemetry?: TelemetryConfig;
+  /** Retry of node busy/timeout answers; `{ maxAttempts: 1 }` disables it. See {@link RetryPolicy}. */
+  retryPolicy?: Partial<RetryPolicy>;
   /**
    * Optional read-through replica configuration; disabled unless explicitly enabled.
    * Node profile mutations require `profileDir` and a caller-supplied `profileGuard` holding
@@ -1840,6 +1843,7 @@ export class TinyCloudNode {
           fetch: config.fetch ?? globalThis.fetch.bind(globalThis),
           hosts: config.hosts,
           telemetry: this.config.telemetry,
+          retryPolicy: this.config.retryPolicy,
         }));
         kvContext.setSession(config.session);
         kvService.initialize(kvContext);
@@ -1903,6 +1907,7 @@ export class TinyCloudNode {
     this.tc = new TinyCloud(this.auth, {
       invokeAny: this.invokeAnyWithRuntimePermissions,
       telemetry: config.telemetry,
+      retryPolicy: config.retryPolicy,
     });
   }
 
@@ -2323,6 +2328,7 @@ export class TinyCloudNode {
       ? new TinyCloud(this.auth, {
         invokeAny: this.invokeAnyWithRuntimePermissions,
         telemetry: this.config.telemetry,
+        retryPolicy: this.config.retryPolicy,
       })
       : null;
     // Receiving shared links keeps working without a session, as before sign-in.
@@ -3154,6 +3160,7 @@ export class TinyCloudNode {
         fetch: context.fetch,
         hosts: context.hosts,
         telemetry: this.config.telemetry,
+        retryPolicy: this.config.retryPolicy,
       }));
       scoped.setOperationAbortSignal(signal);
       scoped.setSession({ ...session, spaceId });
@@ -3228,6 +3235,7 @@ export class TinyCloudNode {
         fetch: sharedContext.fetch,
         hosts: sharedContext.hosts,
         telemetry: this.config.telemetry,
+        retryPolicy: this.config.retryPolicy,
       }));
       context.setOperationAbortSignal(controller.signal);
       const current = this.currentTinyCloudSession();
@@ -4292,6 +4300,7 @@ export class TinyCloudNode {
       ? new TinyCloud(this.auth, {
         invokeAny: graph.invokeAny,
         telemetry: this.config.telemetry,
+        retryPolicy: this.config.retryPolicy,
       })
       : null;
     if (core) {
@@ -4305,6 +4314,7 @@ export class TinyCloudNode {
       fetch: graph.fetch,
       hosts: [input.host],
       telemetry: this.config.telemetry,
+      retryPolicy: this.config.retryPolicy,
     }));
     const kv = new KVService({});
     kv.initialize(serviceContext);
@@ -4395,6 +4405,7 @@ export class TinyCloudNode {
           fetch: config.fetch ?? globalThis.fetch.bind(globalThis),
           hosts: config.hosts,
           telemetry: this.config.telemetry,
+          retryPolicy: this.config.retryPolicy,
         }));
         context.setSession(config.session);
         service.initialize(context);
@@ -4436,6 +4447,7 @@ export class TinyCloudNode {
           fetch: graph.fetch,
           hosts: [input.host],
           telemetry: this.config.telemetry,
+          retryPolicy: this.config.retryPolicy,
         }));
         context.setSession({ ...input.serviceSession, spaceId });
         scopedKv.initialize(context);
@@ -4451,6 +4463,7 @@ export class TinyCloudNode {
           fetch: graph.fetch,
           hosts: [input.host],
           telemetry: this.config.telemetry,
+          retryPolicy: this.config.retryPolicy,
         }));
         context.setSession({ ...input.serviceSession, spaceId });
         scopedKv.initialize(context);
@@ -4807,6 +4820,7 @@ export class TinyCloudNode {
     this.tc = new TinyCloud(this.auth, {
       invokeAny: this.invokeAnyWithRuntimePermissions,
       telemetry: this.config.telemetry,
+      retryPolicy: this.config.retryPolicy,
     });
 
     // Update config with prefix
@@ -4884,6 +4898,7 @@ export class TinyCloudNode {
     this.tc = new TinyCloud(this.auth, {
       invokeAny: this.invokeAnyWithRuntimePermissions,
       telemetry: this.config.telemetry,
+      retryPolicy: this.config.retryPolicy,
     });
     this.config.prefix = prefix;
   }
@@ -4913,6 +4928,7 @@ export class TinyCloudNode {
       fetch: this._serviceGraph.fetch,
       hosts: [this.config.host!],
       telemetry: this.config.telemetry,
+      retryPolicy: this.config.retryPolicy,
     }));
 
     // Create and register KV service
@@ -4975,6 +4991,7 @@ export class TinyCloudNode {
         fetch: this._serviceContext.fetch,
         hosts: this._serviceContext.hosts,
         telemetry: this.config.telemetry,
+        retryPolicy: this.config.retryPolicy,
       }));
       const session = this._serviceContext.session;
       if (session) {
@@ -5534,6 +5551,7 @@ export class TinyCloudNode {
           fetch: config.fetch ?? graph.fetch,
           hosts: config.hosts,
           telemetry: this.config.telemetry,
+          retryPolicy: this.config.retryPolicy,
         }));
         context.setSession(config.session);
         service.initialize(context);
@@ -5921,6 +5939,7 @@ export class TinyCloudNode {
       fetch: this._serviceContext.fetch,
       hosts: this._serviceContext.hosts,
       telemetry: this.config.telemetry,
+      retryPolicy: this.config.retryPolicy,
     }));
     spaceScopedContext.setSession({ ...this._serviceContext.session, spaceId });
     sql.initialize(spaceScopedContext);
@@ -6894,6 +6913,7 @@ export class TinyCloudNode {
         fetch: this._serviceGraph.fetch,
         hosts: this._serviceContext.hosts,
         telemetry: this.config.telemetry,
+        retryPolicy: this.config.retryPolicy,
       }));
       publicContext.setSession({
         delegationHeader: delegationSession.delegationHeader,
