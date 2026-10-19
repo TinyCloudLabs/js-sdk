@@ -4064,3 +4064,33 @@ describe("CLI diagnostics files under the replication root", () => {
     }
   });
 });
+
+test("a null-anchor reopen never raises a grant's verified consent deadline", async () => {
+  const DAY = 86_400_000;
+  const t0 = Date.now();
+  await makeDir();
+  const storage = createSqliteReplicaStorage(storageOptions());
+  const owner = { grantTtlMs: 7 * DAY, consentAnchor: { at: t0, source: "siwe" as const } };
+  const delegate = { did: DELEGATE_DID, jwk: {} };
+  try {
+    setSystemTime(new Date(t0 + 5 * DAY)); // first_install is recorded here, after the SIWE anchor
+    const first = await storage.open(spec({ grantPolicy: owner }));
+    await first.installGrant(await mintUcan({ audience: DEVICE_DID, exp: Math.floor((t0 + 30 * DAY) / 1000) }));
+    await first.close();
+    setSystemTime(new Date(t0 + 6 * DAY));
+    const provisioned = await storage.open(spec({ device: delegate, grantPolicy: owner }));
+    await provisioned.installGrant(await mintUcan({ audience: DELEGATE_DID, exp: Math.floor((t0 + 30 * DAY) / 1000) }));
+    await provisioned.sync({ signal: new AbortController().signal, syncStartEpoch: 1 });
+    await provisioned.close();
+    setSystemTime(new Date(t0 + 8 * DAY)); // past the owner deadline t0 + 7d
+    const compact = await storage.open(spec({ device: delegate, grantPolicy: { grantTtlMs: 7 * DAY, consentAnchor: null } }));
+    try {
+      expect((await compact.grant())?.consentDeadline).toBe(t0 + 7 * DAY);
+      await expect(compact.get("notes/a")).rejects.toMatchObject({ code: "GRANT_EXPIRED" });
+    } finally {
+      await compact.close();
+    }
+  } finally {
+    setSystemTime();
+  }
+});
