@@ -122,6 +122,13 @@
       "index.mjs": 0,
       "index.cjs": 0,
       "note": "Replica gzip growth measured against this PR's merge base"
+    },
+    {
+      "pr": "#608",
+      "ticket": "TC-858",
+      "index.mjs": 0,
+      "index.cjs": 0,
+      "note": "Replica gzip growth measured against this PR's merge base"
     }
   ],
   "phase2Ratchet": {
@@ -698,5 +705,55 @@
       "ceiling": 822753
     },
     "reason": "#606 (security dependency updates, merge 78aec0e0) grew the kv-storage worker by 86 B; #605, #552 and #549 inherited the failure. Its Cargo.lock bumps (serde_with/darling, bs58, tinyvec, rustls, openssl) are the likely cause [inferred from the lockfile diff, not bisected]. The Enforce hashed kv-storage worker gzip ratchet step measured 822,753 gzip -9 bytes against the 822,667 ceiling (headroom -86). Last green master: 75eb5304 (#557)."
+  },
+  "masterDriftRatchet": {
+    "label": "master drift since 75eb5304 (candidates #606 / #605 / #552, attribution not bisected), exact canonical delta",
+    "ruling": "Naomi, 2026-10-19 (option A on #608): one cumulative reviewed row for the master drift since 75eb5304, at the bytes canonical CI prints; approved by Naomi, 2026-10-19",
+    "base": "75eb5304",
+    "sourceCommits": [
+      "78aec0e0996a24ff1a06cbcd719728e2342ba5f9"
+    ],
+    "canonicalCI": {
+      "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39327730885",
+      "jobs": [
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39327730885/job/118317792683",
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39327730885/job/118317792664"
+      ]
+    },
+    "root": {
+      "delta": {
+        "index.mjs": 405,
+        "index.cjs": 329
+      },
+      "ceiling": {
+        "index.mjs": 1475571,
+        "index.cjs": 1403924
+      }
+    },
+    "firstImport": {
+      "delta": {
+        "replica.mjs": 0,
+        "replica.cjs": 0
+      },
+      "ceiling": {
+        "replica.mjs": 51925,
+        "replica.cjs": 67140
+      }
+    },
+    "activation": {
+      "delta": {
+        "activation.mjs": 0,
+        "activation.cjs": 1
+      },
+      "ceiling": {
+        "activation.mjs": 23117,
+        "activation.cjs": 24700
+      }
+    },
+    "worker": {
+      "delta": 0,
+      "ceiling": 822753
+    },
+    "reason": "The Phase 1 dist step had not run on master since the kv-storage worker step began aborting first at #606 (78aec0e0); when it ran on #608 it measured root index.mjs 1,475,571 and index.cjs 1,403,924 against the TC-1475 ceilings 1,475,166 and 1,403,595 (+405/+329) and activation.cjs 24,700 against 24,699 (+1). Candidates #606 (security dependency updates), #605, #552; attribution not bisected. The worker is already admitted by tc606WorkerRatchet."
   }
 }
