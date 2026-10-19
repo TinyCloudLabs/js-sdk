@@ -1,6 +1,34 @@
+import type { ReplicaDenyInput } from "@tinycloud/sdk-services/kv/replication";
+import type { ReplicationOptions } from "@tinycloud/sdk-core";
+
+/**
+ * The `@tinycloud/replica/profile-gate` members the node adapter uses, typed structurally: node-sdk
+ * compiles under `moduleResolution: node` and cannot read replica's `exports` map (see replica-contract.ts).
+ */
+export type ProfileGateModule = {
+  establishSessionStamp(
+    profileDir: string,
+    principal: string,
+    options: { siweIssuedAt: number },
+  ): Promise<{ incarnation: string; lifecycleEpoch: number }>;
+  restoreSessionStamp(
+    profileDir: string,
+    principal: string,
+    persisted: { incarnation: string; lifecycleEpoch: number } | undefined,
+  ): Promise<{ incarnation: string; lifecycleEpoch: number }>;
+  denyGate(
+    profileDir: string,
+    input: ReplicaDenyInput,
+    collectIntents: (principalHash: string) => Promise<readonly unknown[]>,
+  ): Promise<{ status: string; code?: string }>;
+};
+
 export type ReplicationModuleLoaders = {
+  validateConfig: (replication: ReplicationOptions & { storage?: unknown }) => void;
   runtime: () => Promise<typeof import("./runtime")>;
   authority: () => Promise<typeof import("./authority")>;
+  gatedNetwork: () => Promise<typeof import("./gated-network")>;
+  gate: () => Promise<ProfileGateModule>;
 };
 
 let nodeLoaders: ReplicationModuleLoaders | undefined;

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { ok, type Result } from "../../types";
+import { err, ok, type Result } from "../../types";
 import { begin, settle } from "./pendingWrites";
 import type { KVListOptions, KVResponse } from "../types";
 import { canonicalReplicationIdentity } from "./identity";
@@ -21,13 +21,14 @@ function lastEvent(events: readonly ReplicationEvent[], matches: (event: Replica
 }
 
 
-function setup({ durable = true, pendingStore, initialEpoch = 0, onSync, statusOverrides = {}, localGetStatus = "present", localGetErrorCode = "INTEGRITY_ERROR", beforeLocalGet, syncOutcome = "synced", mode = "foreground", purgeImpl, verify = false, openError, runtimeMint, sessionOnly = false, sessionRefused = false, sessionRefusal, canRenew = false, planPath = "runtime", setTimeoutImpl = () => () => undefined, beforePendingRead, afterPendingRead, statusImpl, inspectStatus, prefixes = options.prefixes, nodeFeatures, allowSecrets = false, delivery, onDeny, consentAnchor, durableDeadline, anchorError = false }: {
+function setup({ durable = true, pendingStore, initialEpoch = 0, onSync, statusOverrides = {}, localGetStatus = "present", localListKeys = ["notes/a"], localGetErrorCode = "INTEGRITY_ERROR", beforeLocalGet, syncOutcome = "synced", mode = "foreground", purgeImpl, verify = false, openError, runtimeMint, sessionOnly = false, sessionRefused = false, sessionRefusal, canRenew = false, planPath = "runtime", setTimeoutImpl = () => () => undefined, beforePendingRead, afterPendingRead, statusImpl, inspectStatus, prefixes = options.prefixes, nodeFeatures, allowSecrets = false, delivery, onDeny, consentAnchor, durableDeadline, anchorError = false }: {
   durable?: boolean;
   pendingStore?: PendingWriteStore;
   initialEpoch?: number;
   onSync?: (epoch: number, signal: AbortSignal) => Promise<void> | void;
   statusOverrides?: Partial<LocalReplicaStatus>;
   localGetStatus?: "present" | "absent" | "deleted" | "content_missing" | "throw";
+  localListKeys?: string[];
   localGetErrorCode?: string;
   beforeLocalGet?: () => void;
   syncOutcome?: "synced" | "busy" | "network_error" | "node_error";
@@ -69,6 +70,7 @@ function setup({ durable = true, pendingStore, initialEpoch = 0, onSync, statusO
   let statusCalls = 0;
   let networkCalls = 0;
   const events: ReplicationEvent[] = [];
+  let openedSpec: KVReplicaSpec | undefined;
   const memory = createMemoryPendingStore(identity);
   const pending = pendingStore ?? (durable ? ({ ...memory, durable: true } as PendingWriteStore) : memory);
   const pendingRead = pending.read.bind(pending);
@@ -90,7 +92,11 @@ function setup({ durable = true, pendingStore, initialEpoch = 0, onSync, statusO
       if (localGetStatus !== "present") return { status: localGetStatus, key, meta };
       return { status: "present" as const, key, value: new TextEncoder().encode('"local"'), etag: '"blake3-local"', metadata: { "content-type": "application/json" }, meta };
     },
-    async list() { listReads++; return { keys: ["notes/a"], meta: { asOf: new Date(now).toISOString(), coverage: localStatus.coverage, authority: localStatus.authority.state, syncedThroughEpoch: localStatus.syncedThroughEpoch } }; },
+    async list({ prefix, after, limit }: { prefix: string; after?: string; limit?: number }) {
+      listReads++;
+      const keys = localListKeys.filter((key) => key.startsWith(prefix) && (after === undefined || key > after));
+      return { keys: limit === undefined ? keys : keys.slice(0, limit), meta: { asOf: new Date(now).toISOString(), coverage: localStatus.coverage, authority: localStatus.authority.state, syncedThroughEpoch: localStatus.syncedThroughEpoch } };
+    },
     async grant() { return localStatus.grant; }, async installGrant() { installs++; return localStatus.grant!; },
     async sync({ signal, syncStartEpoch }: { signal: AbortSignal; syncStartEpoch: number }) {
       syncs++;
@@ -110,7 +116,7 @@ function setup({ durable = true, pendingStore, initialEpoch = 0, onSync, statusO
       checkDelivery: delivery,
       async deny(input: { reason: string; principal: string }) { await onDeny?.(input); return { status: "denied" as const, lifecycleEpoch: 1, intents: 1 }; },
     } as unknown as NonNullable<KVReplicaStorage["lifecycle"]> } : {}),
-    async open() { opens++; if (openError) throw Object.assign(new Error("open failed"), { code: openError }); return handle; },
+    async open(spec) { opens++; openedSpec = spec; if (openError) throw Object.assign(new Error("open failed"), { code: openError }); return handle; },
     ...(inspectStatus ? { inspectStatus: async (_spec: KVReplicaSpec, { signal }: { signal: AbortSignal }) => inspectStatus(signal) } : {}),
     async purge(target) { await purgeImpl?.(target); },
     pendingWrites() { return pending; },
@@ -136,11 +142,207 @@ function setup({ durable = true, pendingStore, initialEpoch = 0, onSync, statusO
   const scheduler = { now: () => now, setTimeout: setTimeoutImpl };
   const createController = () => createKVReplication({ options: { ...options, prefixes, verify, allowSecrets }, mode, storage, identity, session: { id: "session", did: identity.principal, space: identity.space }, authority, pending, scheduler, emit: (event) => events.push(event), nodeFeatures, ...(delivery ? { stamp: { incarnation: "test-incarnation", lifecycleEpoch: 0 } } : {}) });
   const controller = createController();
-  return { controller, createController, storage, pending, events, counters: () => ({ localReads, syncs, opens, installs, networkCalls }), listReads: () => listReads, network: async (): Promise<Result<KVResponse<unknown>>> => { networkCalls++; return ok({ data: "network", headers: { get: () => null } }); }, setNow: (value: number) => { now = value; }, setStatus: (value: LocalReplicaStatus) => { localStatus = value; } };
+  return { controller, createController, storage, pending, events, peerCommit: (info: { at: number; syncedThroughEpoch: number; changes: number; coverage: "complete" }) => openedSpec?.onPeerCommit?.(info), counters: () => ({ localReads, syncs, opens, installs, networkCalls }), listReads: () => listReads, network: async (): Promise<Result<KVResponse<unknown>>> => { networkCalls++; return ok({ data: "network", headers: { get: () => null } }); }, setNow: (value: number) => { now = value; }, setStatus: (value: LocalReplicaStatus) => { localStatus = value; } };
 }
 
 const readRequest = (network: () => Promise<Result<KVResponse<unknown>>>) => ({ space: identity.space, key: "notes/a", path: "notes/a", options: undefined, signal: new AbortController().signal, network });
 const listRequest = (options: KVListOptions | undefined, network: () => Promise<Result<KVListPage>>) => ({ space: identity.space, listPath: "notes/", options, signal: new AbortController().signal, network });
+
+describe("rejected network read-through events", () => {
+  test("a stale gate reports one failed network event per get/list without opening", async () => {
+    const env = setup({ delivery: () => ({ status: "gated", gate: "stamp_stale" }) });
+    const offline = Object.assign(new Error("offline by fixture"), { code: "NETWORK_ERROR" });
+    let requests = 0;
+    const network = async (): Promise<never> => { requests++; throw offline; };
+    await expect(env.controller.get(readRequest(network))).rejects.toBe(offline);
+    await expect(env.controller.list(listRequest(undefined, network))).rejects.toBe(offline);
+    expect(requests).toBe(2);
+    expect(env.counters()).toMatchObject({ opens: 0, localReads: 0, installs: 0 });
+    expect(env.listReads()).toBe(0);
+    expect(env.events.filter((event) => event.type === "replication.read")).toEqual([
+      expect.objectContaining({ op: "get", source: "network", reason: "replica_gated", code: "REPLICA_GATED", outcome: "error" }),
+      expect.objectContaining({ op: "list", source: "network", reason: "replica_gated", code: "REPLICA_GATED", outcome: "error" }),
+    ]);
+  });
+
+  test("a gate refusal at open retains the failed-network event and never reads local bytes", async () => {
+    const env = setup({ delivery: () => ({ status: "allow" }), openError: "REPLICA_GATED", consentAnchor: { at: 1_000_000, source: "siwe" } });
+    const offline = Object.assign(new Error("offline by fixture"), { code: "NETWORK_ERROR" });
+    let requests = 0;
+    const network = async (): Promise<never> => { requests++; throw offline; };
+    await expect(env.controller.get(readRequest(network))).rejects.toBe(offline);
+    await expect(env.controller.list(listRequest(undefined, network))).rejects.toBe(offline);
+    expect(requests).toBe(2);
+    expect(env.counters()).toMatchObject({ opens: 2, localReads: 0, installs: 0 });
+    expect(env.listReads()).toBe(0);
+    expect(env.events.filter((event) => event.type === "replication.read")).toEqual([
+      expect.objectContaining({ op: "get", source: "network", reason: "replica_gated", code: "REPLICA_GATED", outcome: "error" }),
+      expect.objectContaining({ op: "list", source: "network", reason: "replica_gated", code: "REPLICA_GATED", outcome: "error" }),
+    ]);
+  });
+
+  test("a compact current-session refusal reports its own code when network rejects", async () => {
+    const env = setup({ sessionOnly: true, sessionRefusal: () => "NOT_COVERED", delivery: () => ({ status: "allow" }) });
+    const offline = Object.assign(new Error("offline by fixture"), { code: "NETWORK_ERROR" });
+    const network = async (): Promise<never> => { throw offline; };
+    await expect(env.controller.get(readRequest(network))).rejects.toBe(offline);
+    await expect(env.controller.list(listRequest(undefined, network))).rejects.toBe(offline);
+    expect(env.counters()).toMatchObject({ opens: 0, localReads: 0, installs: 0 });
+    expect(env.events.filter((event) => event.type === "replication.read")).toEqual([
+      expect.objectContaining({ op: "get", source: "network", reason: "grant_missing", code: "NOT_COVERED", outcome: "error" }),
+      expect.objectContaining({ op: "list", source: "network", reason: "grant_missing", code: "NOT_COVERED", outcome: "error" }),
+    ]);
+  });
+  test("a compact refusal discovered after local get never retries a rejected network fallback", async () => {
+    let refused: AuthorityRefusal["refused"] | null = null;
+    const env = setup({
+      sessionOnly: true,
+      sessionRefusal: () => refused,
+      delivery: () => ({ status: "allow" }),
+      beforeLocalGet: () => { refused = "SESSION_EXPIRING"; },
+    });
+    const offline = Object.assign(new Error("offline by fixture"), { code: "NETWORK_ERROR" });
+    let requests = 0;
+    const network = async (): Promise<never> => { requests++; throw offline; };
+    await expect(env.controller.get(readRequest(network))).rejects.toBe(offline);
+    expect(requests).toBe(1);
+    expect(env.counters()).toMatchObject({ localReads: 1 });
+    expect(env.events.filter((event) => event.type === "replication.read")).toEqual([
+      expect.objectContaining({ op: "get", source: "network", reason: "grant_missing", code: "SESSION_EXPIRING", outcome: "error" }),
+    ]);
+  });
+
+  test("a compact refusal discovered after local list never retries a rejected network fallback", async () => {
+    let refused: AuthorityRefusal["refused"] | null = null;
+    const env = setup({
+      sessionOnly: true,
+      sessionRefusal: () => refused,
+      delivery: () => ({ status: "allow" }),
+      statusImpl: async () => { refused = "CAVEATED_AUTHORITY"; return status(); },
+    });
+    const offline = Object.assign(new Error("offline by fixture"), { code: "NETWORK_ERROR" });
+    let requests = 0;
+    const network = async (): Promise<never> => { requests++; throw offline; };
+    await expect(env.controller.list(listRequest(undefined, network))).rejects.toBe(offline);
+    expect(requests).toBe(1);
+    expect(env.listReads()).toBe(1);
+    expect(env.events.filter((event) => event.type === "replication.read")).toEqual([
+      expect.objectContaining({ op: "list", source: "network", reason: "grant_missing", code: "CAVEATED_AUTHORITY", outcome: "error" }),
+    ]);
+  });
+
+  for (const [code, reason] of [["REPLICA_GATED", "replica_gated"], ["GRANT_EXPIRED", "grant_expired"]] as const) {
+    test(`an opened replica ${code} refusal reports failed get/list network reads`, async () => {
+      const env = setup({
+        delivery: () => ({ status: "allow" }),
+        consentAnchor: { at: 1_000_000, source: "siwe" },
+        statusImpl: async () => { throw Object.assign(new Error("local status gated"), { code }); },
+      });
+      const offline = Object.assign(new Error("offline by fixture"), { code: "NETWORK_ERROR" });
+      let requests = 0;
+      const network = async (): Promise<never> => { requests++; throw offline; };
+      await expect(env.controller.get(readRequest(network))).rejects.toBe(offline);
+      await expect(env.controller.list(listRequest(undefined, network))).rejects.toBe(offline);
+      expect(requests).toBe(2);
+      expect(env.counters()).toMatchObject({ opens: 1, localReads: 0 });
+      expect(env.listReads()).toBe(0);
+      expect(env.events.filter((event) => event.type === "replication.read")).toEqual([
+        expect.objectContaining({ op: "get", source: "network", reason, code, outcome: "error" }),
+        expect.objectContaining({ op: "list", source: "network", reason, code, outcome: "error" }),
+      ]);
+    });
+  }
+
+  test("revoked stale-sync grants report their refusal while get/list stay network-only", async () => {
+    const env = setup({
+      onSync: () => { throw Object.assign(new Error("grant revoked by owner"), { code: "GRANT_REVOKED" }); },
+    });
+    env.setNow(1_300_000);
+    let requests = 0;
+    const get = await env.controller.get(readRequest(async () => {
+      requests++;
+      return ok({ data: "network", headers: { get: () => null } });
+    }));
+    const offline = Object.assign(new Error("offline"), { code: "NETWORK_ERROR" });
+    await expect(env.controller.list(listRequest(undefined, async () => {
+      requests++;
+      throw offline;
+    }))).rejects.toBe(offline);
+
+    expect(get.ok && get.data.data).toBe("network");
+    expect(requests).toBe(2);
+    expect(env.counters()).toMatchObject({ localReads: 0, syncs: 2 });
+    expect(env.listReads()).toBe(0);
+    expect(env.events.filter((event) => event.type === "replication.read")).toEqual([
+      expect.objectContaining({ op: "get", source: "network", reason: "grant_revoked", code: "GRANT_REVOKED", syncedBeforeRead: false, outcome: "found" }),
+      expect.objectContaining({ op: "list", source: "network", reason: "grant_revoked", code: "GRANT_REVOKED", outcome: "error" }),
+    ]);
+  });
+
+  test("a gate revoked during pending-state read keeps the gated reason on offline get/list", async () => {
+    const env = setup({
+      delivery: () => ({ status: "allow" }),
+      consentAnchor: { at: 1_000_000, source: "siwe" },
+      beforePendingRead: () => { throw Object.assign(new Error("pending gate stale"), { code: "REPLICA_GATED" }); },
+    });
+    const offline = Object.assign(new Error("offline by fixture"), { code: "NETWORK_ERROR" });
+    let requests = 0;
+    const network = async (): Promise<never> => { requests++; throw offline; };
+    await expect(env.controller.get(readRequest(network))).rejects.toBe(offline);
+    await expect(env.controller.list(listRequest(undefined, network))).rejects.toBe(offline);
+    expect(requests).toBe(2);
+    expect(env.counters()).toMatchObject({ localReads: 0 });
+    expect(env.listReads()).toBe(0);
+    expect(env.events.filter((event) => event.type === "replication.read")).toEqual([
+      expect.objectContaining({ op: "get", source: "network", reason: "replica_gated", code: "REPLICA_GATED", outcome: "error" }),
+      expect.objectContaining({ op: "list", source: "network", reason: "replica_gated", code: "REPLICA_GATED", outcome: "error" }),
+    ]);
+  });
+  test("a pending write discovered after local list reports one network error without retry", async () => {
+    const offline = Object.assign(new Error("offline by fixture"), { code: "NETWORK_ERROR" });
+    let requests = 0;
+    const env = setup({
+      beforePendingRead: async () => {
+        if (env.listReads() !== 1) return;
+        await env.pending.update((state) => { begin(state, "late", [{ key: "notes/a", op: "put" }], new Date(1_000_000).toISOString()); });
+      },
+    });
+    const network = async (): Promise<never> => { requests++; throw offline; };
+    await expect(env.controller.list(listRequest(undefined, network))).rejects.toBe(offline);
+    expect(requests).toBe(1);
+    expect(env.events.filter((event) => event.type === "replication.read")).toEqual([
+      expect.objectContaining({ op: "list", source: "network", reason: "pending_write", outcome: "error", pendingState: "in_flight" }),
+    ]);
+  });
+
+  test("a pending get fallback reports a thrown network error once", async () => {
+    const env = setup();
+    await env.pending.update((state) => { begin(state, "pending", [{ key: "notes/a", op: "put" }], new Date(1_000_000).toISOString()); });
+    const offline = Object.assign(new Error("offline by fixture"), { code: "NETWORK_ERROR" });
+    let requests = 0;
+    const network = async (): Promise<never> => { requests++; throw offline; };
+    await expect(env.controller.get(readRequest(network))).rejects.toBe(offline);
+    expect(requests).toBe(1);
+    expect(env.events.filter((event) => event.type === "replication.read")).toEqual([
+      expect.objectContaining({ op: "get", source: "network", reason: "pending_write", outcome: "error", pendingState: "in_flight" }),
+    ]);
+  });
+
+  test("a gated read-through reports an error Result once for get and list", async () => {
+    const env = setup({ delivery: () => ({ status: "gated", gate: "stamp_stale" }) });
+    const failure = err(wrapError("kv", Object.assign(new Error("offline"), { code: "NETWORK_ERROR" })));
+    let requests = 0;
+    const network = async () => { requests++; return failure; };
+    expect(await env.controller.get(readRequest(network))).toBe(failure);
+    expect(await env.controller.list(listRequest(undefined, network))).toBe(failure);
+    expect(requests).toBe(2);
+    expect(env.events.filter((event) => event.type === "replication.read")).toEqual([
+      expect.objectContaining({ op: "get", source: "network", reason: "replica_gated", code: "REPLICA_GATED", outcome: "error" }),
+      expect.objectContaining({ op: "list", source: "network", reason: "replica_gated", code: "REPLICA_GATED", outcome: "error" }),
+    ]);
+  });
+
+});
 
 describe("consent deadline delivery", () => {
   test("an expired unopened session never opens a replica or fabricates a grant event", async () => {
@@ -291,6 +493,67 @@ describe("consent deadline delivery", () => {
     expect(result.ok && result.data.data).toBe("local");
     expect(timers).toContain(earlier);
     expect(timers).not.toContain(CONSENT_WINDOW_MS);
+  });
+  test("policy-only expiry before open falls through as GRANT_EXPIRED until the durable gate deadline", async () => {
+    const policyDeadline = 1_001_000;
+    const gateDeadline = 1_000_000 + CONSENT_WINDOW_MS;
+    let gateExpired = false;
+    let denials = 0;
+    const env = setup({
+      consentAnchor: { at: policyDeadline - CONSENT_WINDOW_MS, source: "siwe" },
+      durableDeadline: gateDeadline,
+      delivery: () => gateExpired ? { status: "consent_expired", code: "CONSENT_EXPIRED" } : { status: "allow" },
+      onDeny: () => { denials++; },
+      openError: "GRANT_EXPIRED",
+      sessionOnly: true,
+    });
+
+    env.setNow(policyDeadline + 1);
+    expect((await env.controller.get(readRequest(env.network))).ok).toBe(true);
+    expect(lastEvent(env.events, (event) => event.type === "replication.read")).toMatchObject({
+      type: "replication.read", source: "network", reason: "grant_expired", code: "GRANT_EXPIRED",
+    });
+    expect(await env.controller.list(listRequest(undefined, async () => ok({ keys: ["network/a"] }))))
+      .toMatchObject({ ok: true, data: { keys: ["network/a"] } });
+    expect(lastEvent(env.events, (event) => event.type === "replication.read")).toMatchObject({
+      type: "replication.read", op: "list", source: "network", reason: "grant_expired", code: "GRANT_EXPIRED",
+    });
+    expect(denials).toBe(0);
+    expect(env.events.filter((event) => event.type === "replication.grant" && event.action === "consent_deadline_reached")).toEqual([]);
+
+    env.setNow(gateDeadline);
+    gateExpired = true;
+    expect((await env.controller.get(readRequest(env.network))).ok).toBe(true);
+    expect(lastEvent(env.events, (event) => event.type === "replication.read")).toMatchObject({
+      type: "replication.read", source: "network", reason: "grant_expired", code: "CONSENT_EXPIRED",
+    });
+    expect(denials).toBe(1);
+  });
+  test("an opened policy-expired grant reports expiry without denying the still-valid gate", async () => {
+    const policyDeadline = 1_001_000;
+    let denials = 0;
+    const env = setup({
+      consentAnchor: { at: policyDeadline - CONSENT_WINDOW_MS, source: "siwe" },
+      durableDeadline: 1_000_000 + CONSENT_WINDOW_MS,
+      delivery: () => ({ status: "allow" }),
+      onDeny: () => { denials++; },
+      sessionOnly: true,
+      statusOverrides: {
+        grant: { ...status().grant!, installedAt: 1_000_000, effectiveExpiresAt: policyDeadline, consentDeadline: policyDeadline },
+      },
+    });
+    expect((await env.controller.get(readRequest(env.network))).ok).toBe(true);
+    env.setStatus({ ...status(), authority: { state: "expired", expiresAt: policyDeadline } });
+    env.setNow(policyDeadline + 1);
+    expect((await env.controller.get(readRequest(env.network))).ok).toBe(true);
+    expect(lastEvent(env.events, (event) => event.type === "replication.read")).toMatchObject({
+      type: "replication.read", source: "network", reason: "grant_expired",
+    });
+    expect(env.events.filter((event) => event.type === "replication.grant" && event.action === "expired")).toEqual([
+      expect.objectContaining({ replicaId: "opaque-partition", code: "GRANT_EXPIRED" }),
+    ]);
+    expect(denials).toBe(0);
+    expect(env.events.filter((event) => event.type === "replication.grant" && event.action === "consent_deadline_reached")).toEqual([]);
   });
   test("the durable deadline timer denies an unopened session without a grant event", async () => {
     const timers: Array<{ run: () => void; ms: number }> = [];
@@ -489,6 +752,32 @@ describe("consent deadline delivery", () => {
     expect(result.ok && result.data.data).toBe("local");
     expect(env.counters()).toMatchObject({ installs: 0, networkCalls: 0 });
   });
+
+  test("compact signed coverage without an installed device grant stays network-only", async () => {
+    const env = setup({
+      sessionOnly: true,
+      statusOverrides: { grant: null },
+      delivery: () => ({ status: "allow" }),
+    });
+    const result = await env.controller.get(readRequest(env.network));
+    expect(result.ok && result.data.data).toBe("network");
+    expect(env.counters()).toMatchObject({ installs: 0, localReads: 0, networkCalls: 1 });
+  });
+  test("a compact delegate's missing installed grant refusal stays on the network", async () => {
+    const env = setup({
+      sessionOnly: true,
+      statusOverrides: { grant: null },
+      openError: "GRANT_MISSING",
+      delivery: () => ({ status: "allow" }),
+    });
+    const result = await env.controller.get(readRequest(env.network));
+    expect(result.ok && result.data.data).toBe("network");
+    expect(env.counters()).toMatchObject({ opens: 1, installs: 0, localReads: 0, networkCalls: 1 });
+    expect(env.events.filter((event) => event.type === "replication.read")).toEqual([
+      expect.objectContaining({ op: "get", source: "network", reason: "replica_unavailable", code: "GRANT_MISSING" }),
+    ]);
+  });
+
   test("a valid installed compact grant never overrides a current-session refusal", async () => {
     for (const refused of ["NOT_COVERED", "CAVEATED_AUTHORITY", "SESSION_EXPIRING"] as const) {
       const env = setup({
@@ -638,6 +927,21 @@ describe("consent deadline delivery", () => {
     expect(env.events).toContainEqual(expect.objectContaining({ type: "replication.grant", replicaId: "opaque-partition", action: "expired", code: "GRANT_EXPIRED" }));
     expect(await env.controller.status()).toMatchObject([{ prefix: "notes/", state: "unavailable", reason: "grant_expired", errorCode: "GRANT_EXPIRED" }]);
   });
+});
+
+test("peer commits emit an onEvent sync without running a local sync, then stop after close", async () => {
+  const env = setup();
+  await env.controller.get(readRequest(env.network));
+  env.peerCommit({ at: 999_990, syncedThroughEpoch: 8, changes: 2, coverage: "complete" });
+  expect(env.events.filter((event) => event.type === "replication.sync")).toEqual([{
+    type: "replication.sync", at: new Date(1_000_000).toISOString(),
+    space: identity.space, replica: "notes/", trigger: "peer", origin: "peer",
+    outcome: "ok", durationMs: 0, lagMs: null, changes: 2, coverage: "complete",
+  }]);
+  expect(env.counters().syncs).toBe(0);
+  await env.controller.close();
+  env.peerCommit({ at: 1_000_010, syncedThroughEpoch: 9, changes: 1, coverage: "complete" });
+  expect(env.events.filter((event) => event.type === "replication.sync")).toHaveLength(1);
 });
 
 describe("whole-space replication", () => {
@@ -886,6 +1190,93 @@ describe("KVReplication list parity and cursor rules", () => {
     expect(result.ok && result.data.keys).toEqual(["notes/a"]);
     expect(env.listReads()).toBe(1);
     expect(env.counters().networkCalls).toBe(0);
+  });
+
+  test("pending creates and deletes in the LIST range use the network on the first page", async () => {
+    for (const op of ["put", "delete"] as const) {
+      for (const pendingState of ["in_flight", "ambiguous", "committed"] as const) {
+        const env = setup({ initialEpoch: pendingState === "committed" ? 1 : 0 });
+        await env.pending.update((state) => {
+          begin(state, "write", [{ key: op === "put" ? "notes/b" : "notes/a", op }], new Date(1_000_000).toISOString());
+          if (pendingState !== "in_flight") settle(state, "write", pendingState, new Date(1_000_000).toISOString());
+        });
+        let networkCalls = 0;
+        const result = await env.controller.list(listRequest(undefined, async () => {
+          networkCalls++;
+          return ok({ keys: op === "put" ? ["notes/a", "notes/b"] : [], truncated: false });
+        }));
+        expect(result.ok && result.data.keys).toEqual(op === "put" ? ["notes/a", "notes/b"] : []);
+        expect(networkCalls).toBe(1);
+        expect(env.listReads()).toBe(0);
+        expect(env.events.findLast((event) => event.type === "replication.read")).toMatchObject({
+          source: "network", reason: "pending_write", pendingState,
+        });
+      }
+    }
+  });
+
+  test("a paginated local LIST restarts if a pending mutation affects any key in the range", async () => {
+    for (const op of ["put", "delete"] as const) {
+      for (const pendingState of ["in_flight", "ambiguous", "committed"] as const) {
+        for (const key of ["notes/a", "notes/b"]) {
+          const env = setup({ localListKeys: ["notes/a", "notes/b"] });
+          let networkCalls = 0;
+          const network = async () => { networkCalls++; return ok({ keys: ["notes/server"], truncated: false }); };
+          const first = await env.controller.list(listRequest({ limit: 1 }, network));
+          expect(first.ok && first.data).toMatchObject({ keys: ["notes/a"], truncated: true });
+          const cursor = first.ok ? first.data.nextCursor : undefined;
+          expect(cursor?.startsWith("tcr1.")).toBe(true);
+          await env.pending.update((state) => {
+            begin(state, "write", [{ key, op }], new Date(1_000_000).toISOString());
+            if (pendingState !== "in_flight") settle(state, "write", pendingState, new Date(1_000_000).toISOString());
+          });
+          if (pendingState === "committed") env.setStatus(status(1));
+          const continuation = await env.controller.list(listRequest({ cursor, limit: 1 }, network));
+          expect(continuation.ok).toBe(false);
+          expect(!continuation.ok && continuation.error.meta?.replication).toBe("cursor_restart");
+          expect(networkCalls).toBe(0);
+          expect(env.listReads()).toBe(1);
+        }
+      }
+    }
+  });
+
+  test("a pending create or delete arriving after LIST admission cannot return a stale local page", async () => {
+    for (const op of ["put", "delete"] as const) {
+      for (const cursorMode of ["first", "continuation"] as const) {
+        let reads = 0;
+        let armed = cursorMode === "first";
+        let pending!: PendingWriteStore;
+        const env = setup({
+          localListKeys: ["notes/a", "notes/b"],
+          afterPendingRead: async () => {
+            if (!armed || ++reads !== (cursorMode === "first" ? 3 : 2)) return;
+            await pending.update((state) => begin(state, "interleaved", [{ key: "notes/b", op }], new Date(1_000_000).toISOString()));
+          },
+        });
+        pending = env.pending;
+        let networkCalls = 0;
+        const network = async () => { networkCalls++; return ok({ keys: ["notes/server"], truncated: false }); };
+        let cursor: string | undefined;
+        if (cursorMode === "continuation") {
+          const first = await env.controller.list(listRequest({ limit: 1 }, network));
+          expect(first.ok && first.data.keys).toEqual(["notes/a"]);
+          cursor = first.ok ? first.data.nextCursor : undefined;
+          expect(cursor?.startsWith("tcr1.")).toBe(true);
+          armed = true;
+        }
+        const result = await env.controller.list(listRequest(cursor ? { cursor, limit: 1 } : undefined, network));
+        if (cursorMode === "continuation") {
+          expect(result.ok).toBe(false);
+          expect(!result.ok && result.error.meta?.replication).toBe("cursor_restart");
+          expect(networkCalls).toBe(0);
+        } else {
+          expect(result.ok && result.data.keys).toEqual(["notes/server"]);
+          expect(networkCalls).toBe(1);
+        }
+        expect((await env.pending.read()).records).toMatchObject([{ key: "notes/b", state: "in_flight", op }]);
+      }
+    }
   });
 
   const networkCases = [

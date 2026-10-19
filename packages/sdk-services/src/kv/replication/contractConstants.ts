@@ -2,11 +2,15 @@
  * Frozen constants of the shared replica contract (TC-858 Phase 2, see CONTRACT.md).
  *
  * Exported via `@tinycloud/sdk-services/kv/replication/contractConstants`, never from the
- * package root, so web bundles without replication do not import this module.
+ * package root. Runtime grant policy imports the numeric-only `grantPolicyConstants` subpath
+ * instead, so the default web bundle does not carry browser storage identifiers.
  */
-
-const HOUR_MS = 60 * 60 * 1000;
-const DAY_MS = 24 * HOUR_MS;
+export {
+  DEFAULT_GRANT_TTL_MS,
+  MAX_GRANT_TTL_MS,
+  CONSENT_WINDOW_MS,
+  RENEW_BELOW_FRACTION,
+} from "./grantPolicyConstants";
 
 /** Error codes the contract adds or gives new meaning. Values equal keys. */
 export const ReplicaContractCode = {
@@ -32,14 +36,6 @@ export const ReplicaContractCode = {
 } as const;
 export type ReplicaContractCode = (typeof ReplicaContractCode)[keyof typeof ReplicaContractCode];
 
-/** Default device-grant lifetime from install (24 h). All durations are milliseconds. */
-export const DEFAULT_GRANT_TTL_MS = DAY_MS;
-/** `grantTtlMs` above this (7 d) is a config error: TypeError at construction. */
-export const MAX_GRANT_TTL_MS = 7 * DAY_MS;
-/** Consent deadline = consent anchor + this window (7 d). */
-export const CONSENT_WINDOW_MS = 7 * DAY_MS;
-/** Silent renewal starts when remaining effective lifetime < this fraction of the effective lifetime. */
-export const RENEW_BELOW_FRACTION = 0.25;
 /** Browser free-space floor in bytes (64 MiB, `navigator.storage.estimate()`); not applied on node/CLI. */
 export const DEFAULT_MIN_FREE_BYTES = 64 * 1024 * 1024;
 

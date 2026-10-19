@@ -366,27 +366,27 @@ describe("generic KV exploration operations", () => {
     }
   });
 
-  test("surfaces conditional write conflicts as retryable ETag refreshes", async () => {
-    const operation = definition("tinycloud.kv.put");
-    const input = operation.input.parse({
-      space: "applications",
-      key: "documents/one",
-      mode: "create",
-      content: { encoding: "utf8", value: "hello" },
-    });
-    const result = await operation.execute(context({
-      kvForSpace() {
-        return {
-          async put() {
-            return { ok: false, error: { code: "KV_CONFLICT", meta: { status: 503 } } };
-          },
-        };
-      },
-    }), input);
-    expect(result).toMatchObject({
-      status: "error",
-      error: { code: "KV_CONFLICT", retryable: true },
-    });
+  test("maps the SDK's node retry codes to the SDK's own retry verdict on KV writes and deletes", async () => {
+    for (const [code, retryable] of [
+      ["NODE_BUSY", true],
+      ["REQUEST_TIMEOUT", true],
+      ["OUTCOME_UNKNOWN", false],
+    ] as const) {
+      const failure = { ok: false, error: { code, meta: { status: code === "OUTCOME_UNKNOWN" ? 500 : 503 } } };
+      const failing = context({
+        kvForSpace() {
+          return { async put() { return failure; }, async delete() { return failure; } };
+        },
+      });
+      const put = definition("tinycloud.kv.put");
+      const putResult = await put.execute(failing, put.input.parse({
+        space: "applications", key: "documents/one", mode: "create", content: { encoding: "utf8", value: "hello" },
+      }));
+      expect(putResult).toMatchObject({ status: "error", error: { code: "NODE_ERROR", retryable } });
+      const del = definition("tinycloud.kv.delete");
+      const delResult = await del.execute(failing, del.input.parse({ space: "applications", key: "documents/one" }));
+      expect(delResult).toMatchObject({ status: "error", error: { code: "NODE_ERROR", retryable } });
+    }
   });
 
   test("classifies actual KV HTTP failures for every MCP-exposed method without leaking server text", async () => {

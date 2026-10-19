@@ -351,11 +351,6 @@ export interface SharingServiceConfig {
   keyProvider: KeyProvider;
   /** Capability key registry for key/delegation management */
   registry: ICapabilityKeyRegistry;
-  /**
-   * Delegation manager for creating delegations (used if createDelegation not provided).
-   * Required for generate(), optional for receive().
-   */
-  delegationManager?: DelegationManager;
   /** Factory for creating KV service instances */
   createKVService: (config: {
     hosts: string[];
@@ -367,8 +362,8 @@ export interface SharingServiceConfig {
   /** Base URL for sharing links (e.g., "https://share.myapp.com") */
   baseUrl?: string;
   /**
-   * Custom delegation creation function. When provided, this is used instead
-   * of delegationManager.create(). This allows platforms to use their own
+   * Custom delegation creation function. Used when no WASM creation function is
+   * available. This allows platforms to use their own
    * delegation creation logic (e.g., SIWE-based /delegate endpoint).
    */
   createDelegation?: (params: CreateDelegationParams) => Promise<Result<Delegation, DelegationError>>;
@@ -505,7 +500,6 @@ export interface ISharingService {
  *   invoke,
  *   keyProvider,
  *   registry,
- *   delegationManager,
  *   createKVService,
  *   baseUrl: "https://share.myapp.com"
  * });
@@ -536,7 +530,6 @@ export class SharingService implements ISharingService {
   private fetchFn: FetchFunction;
   private keyProvider: KeyProvider;
   private registry: ICapabilityKeyRegistry;
-  private delegationManager?: DelegationManager;
   private createKVService: SharingServiceConfig["createKVService"];
   private baseUrl: string;
   private createDelegationFn?: SharingServiceConfig["createDelegation"];
@@ -557,7 +550,6 @@ export class SharingService implements ISharingService {
     this.fetchFn = config.fetch ?? globalThis.fetch.bind(globalThis);
     this.keyProvider = config.keyProvider;
     this.registry = config.registry;
-    this.delegationManager = config.delegationManager;
     this.createKVService = config.createKVService;
     this.baseUrl = (config.baseUrl ?? "").replace(/\/$/, ""); // Remove trailing slash
     this.createDelegationFn = config.createDelegation;
@@ -586,15 +578,12 @@ export class SharingService implements ISharingService {
 
   /**
    * Updates the service configuration.
-   * Used to add full capabilities (session, delegationManager, createDelegation, createDelegationWasm) after signIn.
+   * Used to add full capabilities (session, createDelegation, createDelegationWasm) after signIn.
    */
-  public updateConfig(config: Partial<Pick<SharingServiceConfig, "session" | "delegationManager" | "createDelegation" | "createDelegationWasm" | "sessionExpiry" | "onRootDelegationNeeded" | "assertActive">>): void {
+  public updateConfig(config: Partial<Pick<SharingServiceConfig, "session" | "createDelegation" | "createDelegationWasm" | "sessionExpiry" | "onRootDelegationNeeded" | "assertActive">>): void {
     this.assertActiveFn?.();
     if (config.session !== undefined) {
       this.session = config.session;
-    }
-    if (config.delegationManager !== undefined) {
-      this.delegationManager = config.delegationManager;
     }
     if (config.createDelegation !== undefined) {
       this.createDelegationFn = config.createDelegation;
@@ -639,12 +628,12 @@ export class SharingService implements ISharingService {
     }
 
     // Require delegation capability
-    if (!this.createDelegationWasmFn && !this.createDelegationFn && !this.delegationManager) {
+    if (!this.createDelegationWasmFn && !this.createDelegationFn) {
       return {
         ok: false,
         error: createError(
           DelegationErrorCodes.NOT_INITIALIZED,
-          "DelegationManager, createDelegation, or createDelegationWasm function required for generating sharing links."
+          "createDelegation or createDelegationWasm function required for generating sharing links."
         ),
       };
     }
@@ -1101,9 +1090,7 @@ export class SharingService implements ISharingService {
         disableSubDelegation: false,
       };
 
-      const delegationResult = this.createDelegationFn
-        ? await this.createDelegationFn(delegationParams)
-        : await this.delegationManager!.create(delegationParams);
+      const delegationResult = await this.createDelegationFn!(delegationParams);
       const delegationCreationActiveError = this.retiredGraphError();
       if (delegationCreationActiveError) return { ok: false, error: delegationCreationActiveError };
 

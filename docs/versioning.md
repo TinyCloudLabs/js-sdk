@@ -64,6 +64,17 @@ This path only works while `.changeset/pre.json` is present. Do not run `bun cha
 
 If you are cutting a stable, expect to manually update `pre.json`'s `initialVersions` afterwards. If you don't, the next beta cycle's computed versions will be based on a stale baseline.
 
+### How releases push
+
+`changesets.yml` pushes its release commits (`chore: beta version packages`, `chore: release stable packages`, `chore: enter beta pre-release mode`) to `master` over SSH with a **deploy key**, not a personal access token.
+
+- **Secret:** `RELEASE_DEPLOY_KEY` (repository secret) holds the private half of the key. The public half is a deploy key on `TinyCloudLabs/js-sdk` with **write access**.
+- **Ruleset bypass:** when `master` is protected, the deploy key is the only actor allowed to bypass the ruleset, so it is the only way for the workflow to push straight to `master`. Everything else goes through pull requests.
+- **How it is used:** `.github/scripts/release-deploy-key.sh install` writes the key to a `0600` file under `$RUNNER_TEMP` and pins GitHub's published host keys; the push steps run `git push git@github.com:TinyCloudLabs/js-sdk.git master` with `GIT_SSH_COMMAND` set to `-o IdentitiesOnly=yes -o StrictHostKeyChecking=yes` against that file. The key is never printed and is removed when the job ends.
+- **Fails closed:** if `RELEASE_DEPLOY_KEY` is missing or unreadable, the job fails before `changeset version` runs. There is no fallback to `GH_TOKEN` for pushes.
+- **Key lifetime:** each job deletes the key right after its master push succeeds, and again in an `always()` cleanup step. Pushes use `ssh -F /dev/null`, so no ssh config on the runner applies.
+- **Release calls use the job token:** `gh release create` / `gh release view` in the stable job use `github.token` (the stable job alone has `contents: write`; the beta job has `contents: read`). Neither job needs `id-token`: publishing uses `NPM_TOKEN`, with no provenance.
+
 ## Practical guidance
 
 **When adding a changeset via `bun changeset add`:**

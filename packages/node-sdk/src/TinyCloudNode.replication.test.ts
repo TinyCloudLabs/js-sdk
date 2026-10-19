@@ -25,6 +25,8 @@ import {
   type ReplicationAuthority,
 } from "@tinycloud/sdk-core";
 import "./replication/node-loader";
+import { NodeWasmBindings } from "./NodeWasmBindings";
+import { signedRestorableSession } from "./test-support/signed-restorable-session";
 import { TinyCloudNode } from "./TinyCloudNode";
 import { NodeUserAuthorization } from "./authorization/NodeUserAuthorization";
 import { MemorySessionStorage } from "./storage/MemorySessionStorage";
@@ -432,6 +434,41 @@ describe("replicationAuthority (§4.2)", () => {
     expect(authority.plan("notes/")).toEqual({ refused: "SESSION_EXPIRING" });
   });
 
+  const planResult = () => ({
+    path: "runtime" as const,
+    parentCid: "bafyP",
+    expiresAt: 1_700_000_000_000,
+    effectiveExpiration: new Date(1_700_000_000_000),
+  });
+
+  test("an unverified owner session cannot plan and never reaches planDelegation", async () => {
+    const node = sessionOnlyNode(makeFakeWasmBindings(), fakeSession());
+    const planDelegationSpy = mock(planResult);
+    Reflect.set(node, "planDelegation", planDelegationSpy);
+    const authority = await replicationAuthorityForTest(node);
+    expect(authority.plan("notes/")).toEqual({ refused: "NOT_COVERED" });
+    expect(planDelegationSpy).not.toHaveBeenCalled();
+  });
+
+  test("a verified signed owner plan routes through planDelegation with one get+sync folder entry", async () => {
+    const proof = await signedRestorableSession({
+      abilities: { kv: { "": ["tinycloud.kv/get", "tinycloud.kv/sync"] } },
+    });
+    const node = new TinyCloudNode({ host: "http://127.0.0.1:1", wasmBindings: new NodeWasmBindings() });
+    await node.restoreSession(proof);
+    const planDelegationSpy = mock(planResult);
+    Reflect.set(node, "planDelegation", planDelegationSpy);
+    const authority = await replicationAuthorityForTest(node);
+    expect(authority.plan("notes/")).toEqual({
+      path: "runtime",
+      parentCid: "bafyP",
+      expiresAt: 1_700_000_000_000,
+    });
+    const entries = planDelegationSpy.mock.calls[0]![0] as PermissionEntry[];
+    expect(entries).toEqual([
+      { service: "tinycloud.kv", space: proof.spaceId, path: "notes/", actions: ["tinycloud.kv/get", "tinycloud.kv/sync"] },
+    ]);
+  });
 });
 
 // ---------------------------------------------------------------------------

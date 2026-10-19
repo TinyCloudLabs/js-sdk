@@ -54,7 +54,8 @@ describe("write outcome classifier", () => {
     ["definitive error code", "put", failure(ErrorCodes.KV_PRECONDITION_FAILED), "failed"],
     ["unconfirmed batch", "batchPut", failure(ErrorCodes.NETWORK_ERROR, { outcome: "batch-unconfirmed", status: 200 }), "ambiguous"],
     ["other 4xx", "put", failure(ErrorCodes.NETWORK_ERROR, { status: 422 }), "failed"],
-    ["5xx", "put", failure(ErrorCodes.KV_CONFLICT, { status: 503 }), "ambiguous"],
+    ["5xx", "put", failure(ErrorCodes.NODE_BUSY, { status: 503 }), "ambiguous"],
+    ["unknown outcome", "put", failure(ErrorCodes.OUTCOME_UNKNOWN, { status: 500 }), "ambiguous"],
     ["timeout without status", "put", failure(ErrorCodes.TIMEOUT), "ambiguous"],
   ];
   for (const [name, op, result, expected, conditional] of rows) {

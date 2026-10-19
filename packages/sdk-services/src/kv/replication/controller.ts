@@ -5,11 +5,11 @@ import { kvPrefixCovers, listRangeCovers, requiresSecretsOptIn } from "./scope";
 import { classifyWriteOutcome } from "./outcome";
 import { afterSync, begin, clearPending as clearPendingRecords, clearPrefix, emptyPendingState, pinnedKeys, settle } from "./pendingWrites";
 import { localGet, type LocalGetResponse } from "./localResponse";
-import { cursorRestart, decodeTcr1, listPathCovered, localList, utf8Compare } from "./listLocal";
+import { cursorRestart, decodeTcr1, listPathCovered, localList } from "./listLocal";
 import { emitEvent, type ReplicationEventInput } from "./events";
-import type { KVListPage, KVReplicaHandle, KVReplicationController, LocalGetResult, LocalReadMeta, LocalReplicaStatus, ReplicaInspectedStatus, ReplicaGrantInfo, PendingWriteState, ReplicaDevice, ReplicationEvent, ReplicationReason, ReplicaStatusEntry, KVReplicationDeps, LocalSyncResult } from "./types";
+import type { KVListPage, KVReplicaHandle, KVReplicationController, LocalGetResult, LocalReadMeta, LocalReplicaStatus, ReplicaInspectedStatus, ReplicaGrantInfo, PendingWriteState, ReplicaDevice, ReplicaPeerCommit, ReplicationEvent, ReplicationReason, ReplicaStatusEntry, KVReplicationDeps, LocalSyncResult } from "./types";
 import type { ReplicaDeliveryDecision, ReplicaSessionStamp } from "./lifecycle";
-import { DEFAULT_GRANT_TTL_MS, RENEW_BELOW_FRACTION } from "./contractConstants";
+import { DEFAULT_GRANT_TTL_MS, RENEW_BELOW_FRACTION } from "./grantPolicyConstants";
 import { clampConsentAnchor, consentDeadlineMs, mintRemainingMs, needsSilentRenewal } from "./grantPolicy";
 import type { ReplicaConsentAnchor } from "./grantPolicyTypes";
 
@@ -74,6 +74,8 @@ export function createKVReplication(deps: KVReplicationDeps): KVReplicationContr
     anchorUnavailable = true;
   }
   const grantPolicy = { grantTtlMs: options.grantTtlMs ?? DEFAULT_GRANT_TTL_MS, consentAnchor };
+  const quota = options.maxBytes === undefined && options.minFreeBytes === undefined
+    ? undefined : { maxBytes: options.maxBytes, minFreeBytes: options.minFreeBytes };
   const policyDeadline = consentAnchor === null ? null : consentDeadlineMs(consentAnchor);
   let scheduledConsentDeadline: number | null = null;
   let cancelConsentTimer: (() => void) | undefined;
@@ -276,7 +278,22 @@ export function createKVReplication(deps: KVReplicationDeps): KVReplicationContr
       if (deps.stamp && consentAnchor === null && !sessionOnly) refusalCode = "REPLICA_GATED";
       let device: ReplicaDevice | undefined;
       if (delegated) { device = delegated.device; state!.strategy = "session"; }
-      const spec = { identity, space: session.space, prefix, allowSecrets: options.allowSecrets, grantPolicy, ...(deps.stamp ? { stamp: deps.stamp } : {}), ...(device ? { device } : {}), ...(deps.fetch ? { fetch: deps.fetch } : {}) };
+      const spec = {
+        identity, space: session.space, prefix, allowSecrets: options.allowSecrets, grantPolicy,
+        ...(quota ? { quota } : {}),
+        ...(deps.stamp ? { stamp: deps.stamp } : {}),
+        ...(device ? { device } : {}),
+        ...(deps.fetch ? { fetch: deps.fetch } : {}),
+        onPeerCommit: (info: ReplicaPeerCommit) => {
+          if (isClosed || purgeStarted || state!.handle === undefined) return;
+          emit({
+            type: "replication.sync", space: session.space, replica: prefix,
+            trigger: "peer", origin: "peer", outcome: "ok", durationMs: 0, lagMs: null,
+            ...(info.changes === undefined ? {} : { changes: info.changes }),
+            ...(info.coverage === undefined ? {} : { coverage: info.coverage }),
+          });
+        },
+      };
       if (prefix === "/" && deps.nodeFeatures !== undefined && !deps.nodeFeatures.includes("kv-sync-root")) {
         throw unsupportedRoot(prefix);
       }
@@ -658,6 +675,20 @@ export function createKVReplication(deps: KVReplicationDeps): KVReplicationContr
     if (prefix !== null && reason === "grant_expired" && extra.code !== "CONSENT_EXPIRED") reportGrantExpiry(prefix);
     emit({ type: "replication.read", op, space: session.space, key: path, replica: prefix, source, reason, outcome, latencyMs: scheduler.now() - started, stalenessMs: null, coverage: null, authority: null, ...extra });
   }
+  async function networkRead<T>(
+    network: () => Promise<Result<T>>, op: "get" | "list", path: string, prefix: string | null,
+    reason: ReplicationReason, started: number,
+    extra: Partial<Extract<ReplicationEvent, { type: "replication.read" }>> = {},
+  ): Promise<Result<T>> {
+    let outcome: "found" | "not_found" | "error" = "error";
+    try {
+      const result = await network();
+      outcome = result.ok ? "found" : op === "get" && (reason === "pending_write" || reason === "not_covered") && result.error.code === ErrorCodes.KV_NOT_FOUND ? "not_found" : "error";
+      return result;
+    } finally {
+      readEvent(op, path, prefix, "network", reason, outcome, started, extra);
+    }
+  }
   async function verifyGet<T>(
     r: { space: string; path: string; signal: AbortSignal; network: () => Promise<Result<KVResponse<T>>> },
     local: Result<KVResponse<T>>,
@@ -819,19 +850,22 @@ export function createKVReplication(deps: KVReplicationDeps): KVReplicationContr
         observeNetworkRequested({ op: "get", space: r.space, path: r.path, reason: "NETWORK_REQUESTED", outcome, latencyMs: scheduler.now() - started });
       }
     }
-    if (prefix === undefined) { const value = await r.network(); readEvent("get", r.path, null, "network", "not_covered", value.ok ? "found" : value.error.code === ErrorCodes.KV_NOT_FOUND ? "not_found" : "error", started); return value; }
+    let networkRejected = false;
+    const fallback = async (
+      replica: string, reason: ReplicationReason,
+      extra: Partial<Extract<ReplicationEvent, { type: "replication.read" }>> = {},
+    ) => {
+      try { return await networkRead(r.network, "get", r.path, replica, reason, started, extra); }
+      catch (error) { networkRejected = true; throw error; }
+    };
+    if (prefix === undefined) return networkRead(r.network, "get", r.path, null, "not_covered", started);
     const delivery = checkDelivery();
     if (delivery.status !== "allow") {
-      const value = await r.network();
-      readEvent("get", r.path, prefix, "network", delivery.status === "consent_expired" ? "grant_expired" : "replica_gated", value.ok ? "found" : "error", started, { code: delivery.status === "consent_expired" ? delivery.code : "REPLICA_GATED" });
-      return value;
+      return fallback(prefix, delivery.status === "consent_expired" ? "grant_expired" : "replica_gated",
+        { code: delivery.status === "consent_expired" ? delivery.code : "REPLICA_GATED" });
     }
     const refusal = sessionRefusal(prefix);
-    if (refusal) {
-      const value = await r.network();
-      readEvent("get", r.path, prefix, "network", "grant_missing", value.ok ? "found" : "error", started, { code: refusal });
-      return value;
-    }
+    if (refusal) return fallback(prefix, "grant_missing", { code: refusal });
     try { await raceSignal(reportExistingPins(), r.signal); } catch { if (r.signal.aborted) return abortedResult(r.signal); }
     let handle: KVReplicaHandle;
     try { handle = await raceSignal(open(prefix), r.signal); }
@@ -839,13 +873,11 @@ export function createKVReplication(deps: KVReplicationDeps): KVReplicationContr
       if (r.signal.aborted) return abortedResult(r.signal);
       if (errorCode(error) === "CONSENT_EXPIRED") startConsentDenial();
       const code = errorCode(error);
-      const value = await r.network(); readEvent("get", r.path, prefix, "network", code === "RUNTIME_UNSUPPORTED" ? "runtime_unsupported" : code === "CONSENT_EXPIRED" || code === "REPLICA_GATED" ? deliveryReason(code) : "replica_unavailable", value.ok ? "found" : "error", started, { code }); return value;
+      return fallback(prefix, code === "RUNTIME_UNSUPPORTED" ? "runtime_unsupported" : code === "CONSENT_EXPIRED" || code === "REPLICA_GATED" || code === "GRANT_EXPIRED" ? deliveryReason(code) : "replica_unavailable", { code });
     }
     if (replicas.get(prefix)?.reason === "grant_missing") {
       const code = replicas.get(prefix)?.lastError;
-      const value = await r.network();
-      readEvent("get", r.path, prefix, "network", code === "GRANT_EXPIRED" ? "grant_expired" : code === "REPLICA_GATED" ? "replica_gated" : "grant_missing", value.ok ? "found" : "error", started, { code });
-      return value;
+      return fallback(prefix, code === "GRANT_EXPIRED" ? "grant_expired" : code === "REPLICA_GATED" ? "replica_gated" : "grant_missing", { code });
     }
 
     let fresh: Awaited<ReturnType<typeof freshness>>;
@@ -855,49 +887,42 @@ export function createKVReplication(deps: KVReplicationDeps): KVReplicationContr
       if (errorCode(error) === "CONSENT_EXPIRED") startConsentDenial();
       if (r.signal.aborted) return abortedResult(r.signal);
       const code = errorCode(error);
-      const value = await r.network();
-      readEvent("get", r.path, prefix, "network", code === "CONSENT_EXPIRED" || code === "REPLICA_GATED" || code === "GRANT_EXPIRED" ? deliveryReason(code) : "replica_error", value.ok ? "found" : "error", started, { code });
-      return value;
+      return fallback(prefix, code === "CONSENT_EXPIRED" || code === "REPLICA_GATED" || code === "GRANT_EXPIRED" ? deliveryReason(code) : "replica_error", { code });
     }
     if (r.signal.aborted) return abortedResult(r.signal);
-    if (fresh.failure) { const value = await r.network(); readEvent("get", r.path, prefix, "network", fresh.failure === "busy" ? "stale" : "stale", value.ok ? "found" : "error", started, { code: fresh.failure === "busy" ? "REPLICA_BUSY" : fresh.syncError, syncedBeforeRead: fresh.syncedBeforeRead }); return value; }
+    if (fresh.failure) {
+      const code = fresh.failure === "busy" ? "REPLICA_BUSY" : fresh.syncError;
+      return fallback(prefix, code === "GRANT_REVOKED" ? "grant_revoked" : code === "REPLICA_GATED" || code === "CONSENT_EXPIRED" || code === "GRANT_EXPIRED" ? deliveryReason(code) : "stale",
+        { code, syncedBeforeRead: fresh.syncedBeforeRead });
+    }
     let pendingState: PendingWriteState;
     try { pendingState = await raceSignal(pending.read(), r.signal); }
     catch (error) {
       if (r.signal.aborted) return abortedResult(r.signal);
-      const value = await r.network();
-      readEvent("get", r.path, prefix, "network", "replica_unavailable", value.ok ? "found" : "error", started, { code: errorCode(error) });
-      return value;
+      const code = errorCode(error);
+      return fallback(prefix, code === "REPLICA_GATED" || code === "CONSENT_EXPIRED" || code === "GRANT_EXPIRED" ? deliveryReason(code) : "replica_unavailable", { code });
     }
     const record = pendingState.records.find((x) => x.key === r.path);
-    if (record) { const value = await r.network(); readEvent("get", r.path, prefix, "network", "pending_write", value.ok ? "found" : value.error.code === ErrorCodes.KV_NOT_FOUND ? "not_found" : "error", started, { pendingState: record.state, syncedBeforeRead: fresh.syncedBeforeRead }); return value; }
-    if (!pending.durable && !inProcessProof.has(prefix)) { const value = await r.network(); readEvent("get", r.path, prefix, "network", "REPLICA_UNPROVEN_SINCE_START", value.ok ? "found" : "error", started); return value; }
-    if (fresh.status.syncedThroughEpoch < pendingState.committedEpoch) { const value = await r.network(); readEvent("get", r.path, prefix, "network", "REPLICA_BEHIND_OWN_WRITES", value.ok ? "found" : "error", started); return value; }
-    if (fresh.status.authority.state !== "valid") { const value = await r.network(); readEvent("get", r.path, prefix, "network", fresh.status.authority.state === "expired" ? "grant_expired" : fresh.status.authority.state === "revoked" ? "grant_revoked" : "grant_not_yet_valid", value.ok ? "found" : "error", started); return value; }
-    if (fresh.status.coverage !== "complete") { const value = await r.network(); readEvent("get", r.path, prefix, "network", "coverage_incomplete", value.ok ? "found" : "error", started); return value; }
+    if (record) return fallback(prefix, "pending_write", { pendingState: record.state, syncedBeforeRead: fresh.syncedBeforeRead });
+    if (!pending.durable && !inProcessProof.has(prefix)) return fallback(prefix, "REPLICA_UNPROVEN_SINCE_START");
+    if (fresh.status.syncedThroughEpoch < pendingState.committedEpoch) return fallback(prefix, "REPLICA_BEHIND_OWN_WRITES");
+    if (fresh.status.authority.state !== "valid") return fallback(prefix, fresh.status.authority.state === "expired" ? "grant_expired" : fresh.status.authority.state === "revoked" ? "grant_revoked" : "grant_not_yet_valid");
+    if (fresh.status.coverage !== "complete") return fallback(prefix, "coverage_incomplete");
     try {
       const local = await raceSignal(handle.get(r.path), r.signal);
       const delivery = checkDelivery();
       if (delivery.status !== "allow") throw deliveryError(delivery);
       const refusal = sessionRefusal(prefix);
-      if (refusal) {
-        const value = await r.network();
-        readEvent("get", r.path, prefix, "network", "grant_missing", value.ok ? "found" : "error", started, { code: refusal });
-        return value;
-      }
+      if (refusal) return await fallback(prefix, "grant_missing", { code: refusal });
       try { validateReadMeta(local.meta); }
       catch (error) {
         const code = errorCode(error);
         recordRevocation(prefix, error);
-        const value = await r.network();
-        readEvent("get", r.path, prefix, "network", reasonForReadMetaCode(code), value.ok ? "found" : "error", started, { code });
-        return value;
+        return await fallback(prefix, reasonForReadMetaCode(code), { code });
       }
-      if (local.status === "coverage_incomplete" || local.status === "not_covered" || local.status === "content_missing") { const value = await r.network(); readEvent("get", r.path, prefix, "network", local.status === "content_missing" ? "content_missing" : local.status === "coverage_incomplete" ? "coverage_incomplete" : "not_covered", value.ok ? "found" : "error", started); return value; }
+      if (local.status === "coverage_incomplete" || local.status === "not_covered" || local.status === "content_missing") return await fallback(prefix, local.status === "content_missing" ? "content_missing" : local.status === "coverage_incomplete" ? "coverage_incomplete" : "not_covered");
       if (local.status === "present" && r.options?.maxResponseBytes !== undefined && local.value.byteLength > r.options.maxResponseBytes) {
-        const value = await r.network();
-        readEvent("get", r.path, prefix, "network", "unsupported_option", value.ok ? "found" : "error", started);
-        return value;
+        return await fallback(prefix, "unsupported_option");
       }
       const result = localGet<T>(local as LocalGetResult, r.path, r.options ?? {});
       const reason = local.status === "present" ? "hit" : local.status;
@@ -913,12 +938,11 @@ export function createKVReplication(deps: KVReplicationDeps): KVReplicationContr
       readEvent("get", r.path, prefix, "replica", reason, result.ok ? "found" : result.error.code === ErrorCodes.KV_NOT_FOUND ? "not_found" : "error", started, event);
       return result as LocalGetResponse<T>;
     } catch (error) {
+      if (networkRejected) throw error;
       recordRevocation(prefix, error);
       if (errorCode(error) === "CONSENT_EXPIRED") startConsentDenial();
       if (r.signal.aborted) return abortedResult(r.signal);
-      const value = await r.network();
-      readEvent("get", r.path, prefix, "network", deliveryReason(errorCode(error)), value.ok ? "found" : "error", started, { code: errorCode(error) });
-      return value;
+      return fallback(prefix, deliveryReason(errorCode(error)), { code: errorCode(error) });
     }
   }
 
@@ -937,47 +961,48 @@ export function createKVReplication(deps: KVReplicationDeps): KVReplicationContr
     const cursor = r.options?.cursor;
     const decoded = cursor?.startsWith("tcr1.") ? decodeTcr1(cursor) : null;
     if (cursor && cursor.startsWith("tcr1.") && !decoded) { readEvent("list", r.listPath, null, "none", "cursor_restart", "error", started); return cursorRestart(); }
-    if (cursor && !cursor.startsWith("tcr1.")) { const result = await r.network(); readEvent("list", r.listPath, null, "network", "network_cursor", result.ok ? "found" : "error", started); return result; }
+    if (cursor && !cursor.startsWith("tcr1.")) return networkRead(r.network, "list", r.listPath, null, "network_cursor", started);
     const prefix = listPathCovered(options.prefixes, r.listPath);
+    let networkRejected = false;
+    const fallback = async (
+      replica: string, reason: ReplicationReason,
+      extra: Partial<Extract<ReplicationEvent, { type: "replication.read" }>> = {},
+    ) => {
+      try { return await networkRead(r.network, "list", r.listPath, replica, reason, started, extra); }
+      catch (error) { networkRejected = true; throw error; }
+    };
     if (prefix !== undefined && !r.options?.raw) {
       const delivery = checkDelivery();
       if (delivery.status !== "allow") {
         if (decoded) { readEvent("list", r.listPath, prefix, "none", "cursor_restart", "error", started); return cursorRestart(); }
-        const result = await r.network();
-        readEvent("list", r.listPath, prefix, "network", delivery.status === "consent_expired" ? "grant_expired" : "replica_gated", result.ok ? "found" : "error", started, { code: delivery.status === "consent_expired" ? delivery.code : "REPLICA_GATED" });
-        return result;
+        return fallback(prefix, delivery.status === "consent_expired" ? "grant_expired" : "replica_gated",
+          { code: delivery.status === "consent_expired" ? delivery.code : "REPLICA_GATED" });
       }
     }
     if (prefix !== undefined && !r.options?.raw) {
       const refusal = sessionRefusal(prefix);
       if (refusal) {
         if (decoded) { readEvent("list", r.listPath, prefix, "none", "cursor_restart", "error", started); return cursorRestart(); }
-        const result = await r.network();
-        readEvent("list", r.listPath, prefix, "network", "grant_missing", result.ok ? "found" : "error", started, { code: refusal });
-        return result;
+        return fallback(prefix, "grant_missing", { code: refusal });
       }
     }
     try { await raceSignal(reportExistingPins(), r.signal); } catch { if (r.signal.aborted) return abortedResult(r.signal); }
     const restart = () => { readEvent("list", r.listPath, prefix ?? null, "none", "cursor_restart", "error", started); return cursorRestart(); };
     if (cursor && decoded && (decoded.space !== r.space || decoded.path !== r.listPath)) return restart();
-    if (prefix === undefined || r.options?.raw) { if (cursor && decoded) return restart(); const result = await r.network(); readEvent("list", r.listPath, prefix ?? null, "network", prefix !== undefined ? "unsupported_option" : "not_covered", result.ok ? "found" : "error", started); return result; }
+    if (prefix === undefined || r.options?.raw) { if (cursor && decoded) return restart(); return networkRead(r.network, "list", r.listPath, prefix ?? null, prefix !== undefined ? "unsupported_option" : "not_covered", started); }
     let handle: KVReplicaHandle;
     try { handle = await raceSignal(open(prefix), r.signal); }
     catch (error) {
       if (r.signal.aborted) return abortedResult(r.signal);
       if (errorCode(error) === "CONSENT_EXPIRED") startConsentDenial();
       if (cursor && decoded) return restart();
-      const result = await r.network();
       const code = errorCode(error);
-      readEvent("list", r.listPath, prefix, "network", code === "RUNTIME_UNSUPPORTED" ? "runtime_unsupported" : code === "CONSENT_EXPIRED" || code === "REPLICA_GATED" ? deliveryReason(code) : "replica_unavailable", result.ok ? "found" : "error", started, { code });
-      return result;
+      return fallback(prefix, code === "RUNTIME_UNSUPPORTED" ? "runtime_unsupported" : code === "CONSENT_EXPIRED" || code === "REPLICA_GATED" || code === "GRANT_EXPIRED" ? deliveryReason(code) : "replica_unavailable", { code });
     }
     if (replicas.get(prefix)?.reason === "grant_missing") {
       if (cursor && decoded) return restart();
       const code = replicas.get(prefix)?.lastError;
-      const result = await r.network();
-      readEvent("list", r.listPath, prefix, "network", code === "GRANT_EXPIRED" ? "grant_expired" : code === "REPLICA_GATED" ? "replica_gated" : "grant_missing", result.ok ? "found" : "error", started, { code });
-      return result;
+      return fallback(prefix, code === "GRANT_EXPIRED" ? "grant_expired" : code === "REPLICA_GATED" ? "replica_gated" : "grant_missing", { code });
     }
     let fresh: Awaited<ReturnType<typeof freshness>>;
     try { fresh = await freshness(prefix, handle, r.signal); }
@@ -987,9 +1012,7 @@ export function createKVReplication(deps: KVReplicationDeps): KVReplicationContr
       if (r.signal.aborted) return abortedResult(r.signal);
       if (cursor && decoded) return restart();
       const code = errorCode(error);
-      const result = await r.network();
-      readEvent("list", r.listPath, prefix, "network", code === "CONSENT_EXPIRED" || code === "REPLICA_GATED" || code === "GRANT_EXPIRED" ? deliveryReason(code) : "replica_error", result.ok ? "found" : "error", started, { code });
-      return result;
+      return fallback(prefix, code === "CONSENT_EXPIRED" || code === "REPLICA_GATED" || code === "GRANT_EXPIRED" ? deliveryReason(code) : "replica_error", { code });
     }
     if (r.signal.aborted) return abortedResult(r.signal);
     let state: PendingWriteState;
@@ -997,29 +1020,34 @@ export function createKVReplication(deps: KVReplicationDeps): KVReplicationContr
     catch (error) {
       if (r.signal.aborted) return abortedResult(r.signal);
       if (cursor && decoded) return restart();
-      const result = await r.network();
-      readEvent("list", r.listPath, prefix, "network", "replica_unavailable", result.ok ? "found" : "error", started, { code: errorCode(error) });
-      return result;
+      const code = errorCode(error);
+      return fallback(prefix, code === "REPLICA_GATED" || code === "CONSENT_EXPIRED" || code === "GRANT_EXPIRED" ? deliveryReason(code) : "replica_unavailable", { code });
     }
-    const pendingRange = state.records.find((record) => listRangeCovers(r.listPath, record.key) && (!decoded || utf8Compare(record.key, decoded.last) > 0));
+    const pendingRange = state.records.find((record) => listRangeCovers(r.listPath, record.key));
     const behind = fresh.status.syncedThroughEpoch < state.committedEpoch;
     if (cursor && decoded && (fresh.failure || pendingRange || behind || fresh.status.coverage !== "complete" || fresh.status.authority.state !== "valid" || (!pending.durable && !inProcessProof.has(prefix)))) return restart();
-    if (behind) { const result = await r.network(); readEvent("list", r.listPath, prefix, "network", "REPLICA_BEHIND_OWN_WRITES", result.ok ? "found" : "error", started); return result; }
-    if (fresh.failure) { const result = await r.network(); readEvent("list", r.listPath, prefix, "network", "stale", result.ok ? "found" : "error", started, { code: fresh.failure === "busy" ? "REPLICA_BUSY" : fresh.syncError }); return result; }
-    if (pendingRange) { const result = await r.network(); readEvent("list", r.listPath, prefix, "network", "pending_write", result.ok ? "found" : "error", started, { pendingState: pendingRange.state }); return result; }
-    if (!pending.durable && !inProcessProof.has(prefix)) { const result = await r.network(); readEvent("list", r.listPath, prefix, "network", "REPLICA_UNPROVEN_SINCE_START", result.ok ? "found" : "error", started); return result; }
-    if (fresh.status.coverage !== "complete" || fresh.status.authority.state !== "valid") { const result = await r.network(); readEvent("list", r.listPath, prefix, "network", fresh.status.coverage !== "complete" ? "coverage_incomplete" : fresh.status.authority.state === "expired" ? "grant_expired" : fresh.status.authority.state === "revoked" ? "grant_revoked" : "grant_not_yet_valid", result.ok ? "found" : "error", started); return result; }
+    if (behind) return fallback(prefix, "REPLICA_BEHIND_OWN_WRITES");
+    if (fresh.failure) {
+      const code = fresh.failure === "busy" ? "REPLICA_BUSY" : fresh.syncError;
+      return fallback(prefix, code === "GRANT_REVOKED" ? "grant_revoked" : code === "REPLICA_GATED" || code === "CONSENT_EXPIRED" || code === "GRANT_EXPIRED" ? deliveryReason(code) : "stale", { code });
+    }
+    if (pendingRange) return fallback(prefix, "pending_write", { pendingState: pendingRange.state });
+    if (!pending.durable && !inProcessProof.has(prefix)) return fallback(prefix, "REPLICA_UNPROVEN_SINCE_START");
+    if (fresh.status.coverage !== "complete" || fresh.status.authority.state !== "valid") return fallback(prefix, fresh.status.coverage !== "complete" ? "coverage_incomplete" : fresh.status.authority.state === "expired" ? "grant_expired" : fresh.status.authority.state === "revoked" ? "grant_revoked" : "grant_not_yet_valid");
     try {
       const signalHandle = { list: (o: { prefix: string; after?: string; limit?: number }) => raceSignal(handle.list(o), r.signal) };
       const page = await raceSignal(localList(signalHandle, r.space, r.listPath, r.options?.limit, cursor, validateReadMeta), r.signal);
+      const latest = await raceSignal(pending.read(), r.signal);
+      const laterPending = latest.records.find((record) => listRangeCovers(r.listPath, record.key));
+      if (cursor && decoded && (laterPending || fresh.status.syncedThroughEpoch < latest.committedEpoch)) return restart();
+      if (fresh.status.syncedThroughEpoch < latest.committedEpoch) return await fallback(prefix, "REPLICA_BEHIND_OWN_WRITES");
+      if (laterPending) return await fallback(prefix, "pending_write", { pendingState: laterPending.state });
       const delivery = checkDelivery();
       if (delivery.status !== "allow") throw deliveryError(delivery);
       const refusal = sessionRefusal(prefix);
       if (refusal) {
         if (decoded) return restart();
-        const result = await r.network();
-        readEvent("list", r.listPath, prefix, "network", "grant_missing", result.ok ? "found" : "error", started, { code: refusal });
-        return result;
+        return await fallback(prefix, "grant_missing", { code: refusal });
       }
       const event = {
         count: page.keys.length,
@@ -1031,15 +1059,14 @@ export function createKVReplication(deps: KVReplicationDeps): KVReplicationContr
       readEvent("list", r.listPath, prefix, "replica", "hit", "found", started, event);
       return ok(page);
     } catch (error) {
+      if (networkRejected) throw error;
       if (r.signal.aborted) return abortedResult(r.signal);
       const code = errorCode(error);
       if (code === "CONSENT_EXPIRED") startConsentDenial();
       recordRevocation(prefix, error);
       if (cursor && decoded) return restart();
       const reason = code === "CONSENT_EXPIRED" || code === "REPLICA_GATED" || code === "GRANT_EXPIRED" ? deliveryReason(code) : reasonForReadMetaCode(code);
-      const result = await r.network();
-      readEvent("list", r.listPath, prefix, "network", reason, result.ok ? "found" : "error", started, { code });
-      return result;
+      return fallback(prefix, reason, { code });
     }
   }
 

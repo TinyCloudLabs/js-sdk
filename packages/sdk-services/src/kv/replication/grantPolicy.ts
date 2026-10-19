@@ -5,7 +5,8 @@
  * Every function fails closed: a non-finite input yields a value that refuses the mint, renewal or
  * read, never a permissive one.
  */
-import { CONSENT_WINDOW_MS, MAX_GRANT_TTL_MS, RENEW_BELOW_FRACTION } from "./contractConstants";
+import { CONSENT_WINDOW_MS, MAX_GRANT_TTL_MS, RENEW_BELOW_FRACTION } from "./grantPolicyConstants";
+export { MAX_GRANT_TTL_MS } from "./grantPolicyConstants";
 import type {
   ConsentDeadlineMs,
   EffectiveGrantExpiry,

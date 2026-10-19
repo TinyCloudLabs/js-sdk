@@ -12,22 +12,32 @@
  * any reuse of an installed grant (the adapter marks every grant's
  * `unconstrained` flag; the controller enforces it on reuse).
  */
+import { SiweMessage } from "siwe";
 
 import {
   actionContains,
   KV,
   canonicalizeRecapCaveats,
   isCapabilitySubset,
+  principalDid,
   parseSpaceUri,
   type PermissionEntry,
+  type IWasmBindings,
+  type WasmRecapEntry,
   type TinyCloudSession,
+  type KVReplicaStorage,
+  type ServiceContext,
+  type ReplicationOptions,
 } from "@tinycloud/sdk-core";
 import {
   type AuthorityRefusal,
   type ReplicaConsentAnchor,
   type ReplicaDevice,
   type ReplicationAuthority,
+  type ReplicationEvent,
 } from "@tinycloud/sdk-services";
+import type { ReplicaDenyInput, ReplicaSessionStamp } from "@tinycloud/sdk-services/kv/replication";
+import type { DelegateToOptions, DelegateToResult, TinyCloudNode } from "../TinyCloudNode";
 import type { ReplicaRuntime } from "./replica-contract";
 // @ts-ignore -- node-sdk builds before replica declarations; keep the literal import for bundlers.
 import { parseUcanGrant as replicaParseUcanGrant } from "@tinycloud/replica";
@@ -35,9 +45,103 @@ const parseUcanGrant = replicaParseUcanGrant as ReplicaRuntime["parseUcanGrant"]
 export { assertValidReplicationConfig } from "./config";
 export { augmentSignInEntriesWithReplication, hasUnrestrictedGetCoverage } from "./authority-sign-in";
 
+/** Report a completed deny from the already-loaded authority; delivery was revoked synchronously. */
+export function reportReplicaDenial(
+  result: { status: string; code?: string; intents?: number },
+  reason: ReplicaDenyInput["reason"],
+  onEvent: ReplicationOptions["onEvent"],
+  context?: ServiceContext,
+): void {
+  if (result.status !== "denied" && result.status !== "deleted" && result.status !== "marker") return;
+  const event: Extract<ReplicationEvent, { type: "replication.lifecycle" }> = {
+    type: "replication.lifecycle",
+    at: new Date().toISOString(),
+    reason,
+    action: result.status === "denied" ? "denied" : result.status === "deleted" ? "database_deleted" : "marker_set",
+    ...(result.status === "denied" ? { partitions: result.intents } : {}),
+    ...(result.status === "marker" ? { code: result.code } : {}),
+  };
+  try { onEvent?.(event); } catch { /* Observability cannot undo committed denial. */ }
+  const { type, ...data } = event;
+  try { context?.emit(type, data); } catch { /* Observability cannot undo committed denial. */ }
+}
+
 const KV_GET = KV.GET;
 const KV_SYNC = KV.SYNC;
 const KV_SERVICE = "tinycloud.kv";
+
+/** The verified owner proof is signed, finite, exact-space, and uncaveated on one get+sync scope. */
+export function verifiedOwnerConsentAnchor(
+  session: TinyCloudSession,
+  wasmBindings: Pick<IWasmBindings, "validatePersistedSession">,
+  exactVerifiedRecap: (verified: { verifiedRecap?: unknown }) => WasmRecapEntry[],
+): ReplicaConsentAnchor | null {
+  if (typeof session.siwe !== "string" || typeof session.signature !== "string" ||
+      typeof session.address !== "string" || typeof session.chainId !== "number") return null;
+  try {
+    const verified = wasmBindings.validatePersistedSession?.({
+      delegationHeader: session.delegationHeader,
+      delegationCid: session.delegationCid,
+      spaceId: session.spaceId,
+      jwk: session.jwk,
+      address: session.address,
+      chainId: session.chainId,
+      siwe: session.siwe,
+      signature: session.signature,
+    });
+    if (!verified || !Number.isSafeInteger(Date.parse(verified.expiresAt ?? ""))) return null;
+    const signedIssuedAt = new SiweMessage(session.siwe).issuedAt;
+    if (typeof signedIssuedAt !== "string") return null;
+    const issuedAt = Date.parse(signedIssuedAt);
+    if (!Number.isSafeInteger(issuedAt) || issuedAt < 0) return null;
+    const granted = exactVerifiedRecap(verified)
+      .filter((entry) => entry.space === session.spaceId && entry.service === "kv")
+      .map((entry) => ({ ...entry, service: "tinycloud.kv" }));
+    const coversGetAndSync = granted.some((entry) => isCapabilitySubset([{
+      service: "tinycloud.kv",
+      space: session.spaceId,
+      path: entry.path,
+      actions: [KV.GET, KV.SYNC],
+    }], granted).subset);
+    return coversGetAndSync ? { at: issuedAt, source: "siwe" } : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Fresh sign-in only: the lifecycle creates keys; restore never calls this. */
+export function establishReplicaSessionStamp(
+  storage: KVReplicaStorage,
+  principal: string,
+  anchor: ReplicaConsentAnchor,
+): Promise<ReplicaSessionStamp> {
+  if (storage.kind === "indexeddb" && storage.lifecycle?.kind === "indexeddb") {
+    return storage.lifecycle.establishSessionStamp(principal, { consentAnchor: anchor });
+  }
+  if (storage.kind === "sqlite" && storage.lifecycle?.kind === "file") {
+    return storage.lifecycle.establishSessionStamp(principal, { consentAnchor: anchor });
+  }
+  throw Object.assign(new Error("Replica sign-in requires its platform lifecycle gate."), {
+    code: "REPLICA_GATED" as const, gate: "gate_unavailable" as const,
+  });
+}
+
+/** Existing persisted stamp only: never manufactures an authority on restore. */
+export function restoreReplicaSessionStamp(
+  storage: KVReplicaStorage,
+  principal: string,
+  persisted: ReplicaSessionStamp | undefined,
+): Promise<ReplicaSessionStamp> {
+  if (storage.kind === "indexeddb" && storage.lifecycle?.kind === "indexeddb") {
+    return storage.lifecycle.restoreSessionStamp(principal, persisted);
+  }
+  if (storage.kind === "sqlite" && storage.lifecycle?.kind === "file") {
+    return storage.lifecycle.restoreSessionStamp(principal, persisted);
+  }
+  throw Object.assign(new Error("Replica restore requires its platform lifecycle gate."), {
+    code: "REPLICA_GATED" as const, gate: "gate_unavailable" as const,
+  });
+}
 
 /** The delegation the replication grant delegates: get + sync on one folder prefix. */
 function replicationEntries(spaceId: string, prefix: string): PermissionEntry[] {
@@ -155,6 +259,28 @@ export interface ReplicationAuthorityHost {
   ): Promise<{ ucan: string; expiresAt: number }>;
 }
 
+/** Delegate a replica grant only through the selected owner parent for silent renewal. */
+export async function mintNodeReplicationGrant(
+  deviceDid: string,
+  entries: PermissionEntry[],
+  options: { expiryMs?: number; renewalOnly?: boolean } | undefined,
+  renewalSession: ReplicationAuthoritySession | undefined,
+  node: Pick<TinyCloudNode, "delegateTo">,
+): Promise<{ ucan: string; expiresAt: number }> {
+  if (options?.renewalOnly && !renewalSession) throw new Error("replication renewal lost its owner session");
+  const delegateOptions: DelegateToOptions | undefined = options?.renewalOnly ? {
+    expiry: options.expiryMs,
+    onPrepared: async (prepared) => {
+      assertRenewalParent(prepared.delegationHeader.Authorization, renewalSession!);
+    },
+  } : options?.expiryMs === undefined ? undefined : { expiry: options.expiryMs };
+  const result: DelegateToResult = await node.delegateTo(principalDid(deviceDid), entries, delegateOptions);
+  return {
+    ucan: result.delegation.delegationHeader.Authorization,
+    expiresAt: result.delegation.expiry.getTime(),
+  };
+}
+
 /** Milliseconds of validity a session or parent must have left for authority reuse (delegateTo's margin). */
 export const AUTHORITY_EXPIRY_MARGIN_MS = 60_000;
 
@@ -241,7 +367,8 @@ export function createReplicationAuthority(host: ReplicationAuthorityHost): Repl
     sessionGrant(prefix: string): { ucan: string; device: ReplicaDevice } | AuthorityRefusal {
       const session = activeSession();
       if (session === undefined) return { refused: "SESSION_EXPIRING" };
-      if (verifiedAnchor === null) return { refused: "NOT_COVERED" };
+      // A compact session proves current signed coverage, not consent to install or mint.
+      if (verifiedAnchor === null && session.siwe !== undefined) return { refused: "NOT_COVERED" };
       const siweExpiry = session.siwe ? host.siweExpiration(session.siwe)?.getTime() : undefined;
       if (siweExpiry !== undefined && siweExpiry <= Date.now() + AUTHORITY_EXPIRY_MARGIN_MS) {
         return { refused: "SESSION_EXPIRING" };

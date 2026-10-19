@@ -18,88 +18,9 @@ import "./replication/node-loader";
 import { TinyCloudNode } from "./TinyCloudNode";
 import { mintCompactDelegation } from "./test-support/compact-delegation";
 import { createHermeticEncryptedNode } from "./test-support/hermetic-encrypted-node";
+import { PROOF_PRIVATE_KEY, signedRestorableSession, withRecapCaveat } from "./test-support/signed-restorable-session";
 
 const RESTORE_HOST = "http://127.0.0.1:1";
-const PROOF_PRIVATE_KEY = "4f3edf983ac636a65a842ce7c78d9aa706d3b113bce036f4d9c5c1b5605dce6f";
-
-async function signedRestorableSession(options?: {
-  expirationless?: boolean;
-  expired?: boolean;
-  spaces?: Record<string, string>;
-  signedSpaces?: Record<string, string>;
-  abilities?: Record<string, Record<string, string[]>>;
-  /** Signed onto every ReCap action before the owner signs. */
-  caveat?: Record<string, unknown>;
-}) {
-  const wasm = new NodeWasmBindings();
-  const signer = new PrivateKeySigner(PROOF_PRIVATE_KEY);
-  const manager = wasm.createSessionManager();
-  const jwk = JSON.parse(manager.jwk("default")!);
-  const address = await signer.getAddress();
-  const chainId = await signer.getChainId();
-  const spaceId = wasm.makeSpaceId(address, chainId, "default");
-  const now = new Date();
-  const issuedAt = options?.expired
-    ? new Date(now.getTime() - 2 * 60 * 60_000)
-    : now;
-  const expirationTime = options?.expired
-    ? new Date(now.getTime() - 60 * 60_000)
-    : new Date(now.getTime() + 60 * 60_000);
-  const verificationMethod = manager.getDID("default");
-  const prepared = options?.expirationless
-    ? {
-      jwk,
-      spaceId,
-      verificationMethod,
-      siwe: (manager as any).build({
-        address,
-        chainId,
-        domain: "restore.test",
-        issuedAt: issuedAt.toISOString(),
-      }, "default"),
-    }
-    : wasm.prepareSession({
-      abilities: options?.abilities ?? { kv: { "": ["tinycloud.kv/get"] } },
-      address,
-      chainId,
-      domain: "restore.test",
-      issuedAt: issuedAt.toISOString(),
-      expirationTime: expirationTime.toISOString(),
-      spaceId,
-      additionalSpaces: options?.signedSpaces ?? options?.spaces,
-      jwk,
-    });
-  if (options?.caveat) prepared.siwe = withRecapCaveat(prepared.siwe, options.caveat);
-  const signature = await signer.signMessage(prepared.siwe);
-  const session = wasm.completeSessionSetup({ ...prepared, signature });
-  const expiresAt = options?.expirationless
-    ? new Date(now.getTime() + 30 * 60_000).toISOString()
-    : expirationTime.toISOString();
-  return {
-    delegationHeader: session.delegationHeader,
-    delegationCid: session.delegationCid,
-    spaceId,
-    spaces: options?.spaces,
-    jwk,
-    verificationMethod,
-    address,
-    chainId,
-    siwe: prepared.siwe,
-    signature,
-    expiresAt,
-  };
-}
-
-/** The SIWE with `caveat` as the note-bene of every ReCap action (prepareSession signs only `[{}]`). */
-function withRecapCaveat(siwe: string, caveat: Record<string, unknown>): string {
-  const encoded = siwe.match(/urn:recap:([A-Za-z0-9_-]+)/)?.[1];
-  if (encoded === undefined) throw new Error("SIWE has no ReCap resource");
-  const recap = JSON.parse(Buffer.from(encoded, "base64url").toString("utf8")) as { att: Record<string, Record<string, unknown[]>> };
-  for (const abilities of Object.values(recap.att)) {
-    for (const action of Object.keys(abilities)) abilities[action] = [caveat];
-  }
-  return siwe.replace(encoded, Buffer.from(JSON.stringify(recap)).toString("base64url"));
-}
 
 function restorableData(jwk: object, verificationMethod: string) {
   return {
@@ -230,11 +151,12 @@ describe("TinyCloudNode.restoreSession session-key lifecycle", () => {
     expect(authority.canRenew).toBe(true);
   });
 
-  test("owner proof requires uncaveated root KV get and sync for the exact full space", async () => {
+  test("owner consent needs uncaveated get and sync on one signed scope in the current space", async () => {
     const cases: Array<[Record<string, Record<string, string[]>>, boolean]> = [
       [{ kv: { "": ["tinycloud.kv/get", "tinycloud.kv/sync"] } }, true],
-      [{ kv: { "notes/": ["tinycloud.kv/get", "tinycloud.kv/sync"] } }, false],
-      [{ kv: { "notes/": ["tinycloud.kv/get"], "notes/sub/": ["tinycloud.kv/sync"] } }, false],
+      [{ kv: { "notes/": ["tinycloud.kv/get", "tinycloud.kv/sync"] } }, true],
+      // Both actions overlap on notes/sub/, though that is not enough for notes/ reads.
+      [{ kv: { "notes/": ["tinycloud.kv/get"], "notes/sub/": ["tinycloud.kv/sync"] } }, true],
       [{ kv: { "notes/": ["tinycloud.kv/get"], "other/": ["tinycloud.kv/sync"] } }, false],
     ];
     for (const [abilities, anchored] of cases) {
@@ -244,8 +166,15 @@ describe("TinyCloudNode.restoreSession session-key lifecycle", () => {
       const authority = await replicationAuthorityForTest(node);
       expect(authority.consentAnchor?.() !== null).toBe(anchored);
     }
+    const caveated = await signedRestorableSession({
+      abilities: { kv: { "notes/": ["tinycloud.kv/get", "tinycloud.kv/sync"] } },
+      caveat: { maxValueSize: 1 },
+    });
+    const node = new TinyCloudNode({ host: RESTORE_HOST, wasmBindings: new NodeWasmBindings() });
+    await node.restoreSession(caveated);
+    expect((await replicationAuthorityForTest(node)).consentAnchor?.()).toBeNull();
   });
-  test("a delegate-only signed leaf cannot stand in for current verified owner authority", async () => {
+  test("a delegate-only signed leaf offers only its covered grant, never owner consent, plan or mint", async () => {
     const node = new TinyCloudNode({ host: RESTORE_HOST, wasmBindings: new NodeWasmBindings() });
     const delegateDid = node.did.split("#", 1)[0]!;
     const { delegation, spaceId } = await mintCompactDelegation({
@@ -262,23 +191,39 @@ describe("TinyCloudNode.restoreSession session-key lifecycle", () => {
     });
     const authority = await replicationAuthorityForTest(node);
     expect(authority.consentAnchor?.()).toBeNull();
-    expect(authority.sessionGrant("notes/")).toEqual({ refused: "NOT_COVERED" });
+    // CONTRACT.md:647 (b796dc52): covered signed compact coverage may back only an
+    // independently installed grant; it never anchors consent, plans, mints or installs.
+    expect(authority.sessionGrant("notes/")).toEqual({
+      ucan: delegation.delegationHeader.Authorization,
+      device: { did: node.did, jwk: {} },
+    });
+    expect(authority.sessionGrant("other/")).toEqual({ refused: "NOT_COVERED" });
+    const planDelegation = spyOn(node as unknown as { planDelegation: () => unknown }, "planDelegation");
     expect(authority.plan("notes/")).toEqual({ refused: "NOT_COVERED" });
-    await expect(authority.mint(delegateDid, "notes/", new AbortController().signal))
-      .rejects.toThrow(/compact|owner|consent/i);
+    const originalFetch = globalThis.fetch;
+    const fetchCalls = mock(async () => new Response(null, { status: 500 }));
+    globalThis.fetch = fetchCalls as unknown as typeof fetch;
+    try {
+      await expect(authority.mint(delegateDid, "notes/", new AbortController().signal))
+        .rejects.toThrow(/compact|owner|consent/i);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+    expect(planDelegation).not.toHaveBeenCalled();
+    expect(fetchCalls).not.toHaveBeenCalled();
   });
-  test("a current SIWE without verified root owner witness cannot grant, plan or mint replica authority", async () => {
+  test("a current scoped signed owner can plan its covered prefix but not a sibling", async () => {
     const proof = await signedRestorableSession({
       abilities: { kv: { "notes/": ["tinycloud.kv/get", "tinycloud.kv/sync"] } },
     });
     const node = new TinyCloudNode({ host: RESTORE_HOST, wasmBindings: new NodeWasmBindings() });
     await node.restoreSession(proof);
     const authority = await replicationAuthorityForTest(node);
-    expect(authority.consentAnchor?.()).toBeNull();
+    expect(authority.consentAnchor?.()?.source).toBe("siwe");
+    // The full SIWE parent is CACAO, not a compact UCAN that can directly back local bytes.
     expect(authority.sessionGrant("notes/")).toEqual({ refused: "NOT_COVERED" });
-    expect(authority.plan("notes/")).toEqual({ refused: "NOT_COVERED" });
-    await expect(authority.mint(proof.verificationMethod, "notes/", new AbortController().signal))
-      .rejects.toThrow(/owner|consent/i);
+    expect(authority.plan("notes/")).toMatchObject({ path: "session", parentCid: proof.delegationCid });
+    expect(authority.plan("other/")).toMatchObject({ refused: "NOT_COVERED" });
   });
   test("an old signed owner authority cannot follow a replacement session", async () => {
     const abilities = { kv: { "": ["tinycloud.kv/get", "tinycloud.kv/sync"] } };
@@ -334,7 +279,7 @@ describe("TinyCloudNode.restoreSession session-key lifecycle", () => {
 
   test("a verified owner SIWE with KV get+sync but no signed expiration cannot anchor consent", async () => {
     const signed = await signedRestorableSession({
-      abilities: { kv: { "notes/": ["tinycloud.kv/get", "tinycloud.kv/sync"] } },
+      abilities: { kv: { "": ["tinycloud.kv/get", "tinycloud.kv/sync"] } },
     });
     const siwe = signed.siwe.replace(/\nExpiration Time: [^\n]+/, "");
     expect(siwe).not.toBe(signed.siwe);
@@ -663,7 +608,7 @@ describe("TinyCloudNode.restoreSession session-key lifecycle", () => {
       expect(captured.context.abortSignal.aborted).toBe(true);
       expect(() => captured.core.kv).toThrow("Services not initialized");
       await expect(captured.publicKV.get("after")).resolves.toMatchObject({ ok: false });
-      await expect(captured.delegations.list()).resolves.toMatchObject({ ok: false });
+      await expect(captured.delegations.query()).resolves.toMatchObject({ ok: false });
       await expect(captured.sharing.generate({ path: "after", actions: ["tinycloud.kv/get"] }))
         .resolves.toMatchObject({ ok: false });
       await expect((captured.encryption as any).config.node.fetchByNetworkId(
@@ -685,7 +630,10 @@ describe("TinyCloudNode.restoreSession session-key lifecycle", () => {
   });
 
   test("TC-998: a successful restore stops the replaced session's background registry sync; a rejected one leaves it", async () => {
-    const proof = await signedRestorableSession();
+    // Registry sync runs only for a session that can read the account index.
+    const proof = await signedRestorableSession({
+      ownedSpaceAbilities: { account: { sql: { account: ["tinycloud.sql/read", "tinycloud.sql/write"] } } },
+    });
     const node = new TinyCloudNode({
       signer: new PrivateKeySigner(PROOF_PRIVATE_KEY),
       wasmBindings: new NodeWasmBindings(),

@@ -6,12 +6,16 @@ import type { ReplicationEvent } from "@tinycloud/node-sdk";
 const MAX_LOG_BYTES = 5 * 1024 * 1024;
 const LOG_MODE = 0o600;
 const DIR_MODE = 0o700;
+const LOG_FILE = "events.jsonl";
+const ROTATED_LOG_FILE = "events.jsonl.1";
+/** The only files this module writes directly under `<profile>/replication`. */
+export const REPLICATION_DIAGNOSTIC_FILES: readonly string[] = [LOG_FILE, ROTATED_LOG_FILE];
 
 /** Append a single private JSONL event, rotating the previous file at 5 MiB. */
 export function appendReplicationEvent(root: string, event: ReplicationEvent): void {
   mkdirSync(root, { recursive: true, mode: DIR_MODE });
   chmodSync(root, DIR_MODE);
-  const path = join(root, "events.jsonl");
+  const path = join(root, LOG_FILE);
   let size = 0;
   try {
     size = statSync(path).size;
@@ -20,7 +24,7 @@ export function appendReplicationEvent(root: string, event: ReplicationEvent): v
   }
   const line = `${JSON.stringify(event)}\n`;
   if (size + Buffer.byteLength(line) > MAX_LOG_BYTES) {
-    const rotated = join(root, "events.jsonl.1");
+    const rotated = join(root, ROTATED_LOG_FILE);
     try { renameSync(path, rotated); } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
     }
@@ -32,7 +36,7 @@ export function appendReplicationEvent(root: string, event: ReplicationEvent): v
 }
 
 export function replicationLogPath(profileRoot: string): string {
-  return join(profileRoot, "replication", "events.jsonl");
+  return join(profileRoot, "replication", LOG_FILE);
 }
 
 

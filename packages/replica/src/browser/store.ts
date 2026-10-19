@@ -21,7 +21,8 @@
  * holder's state.
  */
 import { ReplicaError, ReplicaErrorCode, isReplicaError } from "../errors.js";
-import { assertFolderPrefix, effectiveAuthority, isInstant } from "../scope.js";
+import { assertFolderPrefix, assertReadable, effectiveAuthority, isInstant } from "../scope.js";
+import { parseUcanGrant } from "../grant.js";
 import type {
   GrantRecord,
   LeaseToken,
@@ -36,6 +37,8 @@ import type {
 } from "../types.js";
 import { compareKeyBytes, idbError, openDatabase, requestAsPromise, transactionDone } from "./idb.js";
 import { principalOf } from "../did.js";
+import type { ReplicaConsentAnchor, ReplicaGrantPolicy, ReplicaPageAdmission, ReplicaQuotaLedger } from "@tinycloud/sdk-services/kv/replication";
+import { clampConsentAnchor, consentDeadlineMs, effectiveGrantExpiry } from "@tinycloud/sdk-services/kv/replication/grantPolicy";
 
 export const DURABILITY = "indexeddb-strict";
 
@@ -48,6 +51,13 @@ export const DEVICE_DATABASE = "tinycloud-replica-device";
 
 /** The browser device identity: one Ed25519 session key per origin profile. */
 export type DeviceIdentity = { jwk: object; did: string };
+
+/** Storage-owned grant policy metadata is returned on open, not stored as a fresh TTL. */
+export type GrantPolicyView = {
+  anchor: ReplicaConsentAnchor | null;
+  consentDeadline: number;
+  grants: Record<string, { installedAt: number | undefined; effectiveExpiresAt: number }>;
+};
 
 /** The `meta` record: `ReplicaState` plus writer/lease fencing fields. */
 type LiveMetaState = ReplicaState & {
@@ -62,6 +72,13 @@ type LiveMetaState = ReplicaState & {
   purgePending: boolean;
   /** Live rows always carry `purged: false`. */
   purged: false;
+  /**
+   * The caller's epoch persisted by the last completed sync
+   * (`completeSync`); absent on rows written before it existed.
+   */
+  syncedThroughEpoch?: number;
+  /** When `completeSync` last committed. */
+  syncCompletedAt?: string | null;
 };
 
 /**
@@ -96,6 +113,77 @@ type EntryRecord =
 
 type BlobRecord = { hash: string; bytes: Uint8Array; size: number };
 
+/**
+ * Where one replica's rows live. The RC1 layout is a database per replica
+ * (`tinycloud-replica/<id>`): `meta` holds one `state` row, `entries` and
+ * `blobs` are keyed by key and hash alone. The read-through layout
+ * (`@tinycloud/replica/kv-storage`) keeps every partition in one origin
+ * database: `meta` is keyed by partition id, `entries` by `[pid, key]`,
+ * `blobs` by `[pid, hash]`, and every transaction also spans the origin's
+ * control stores so lifecycle and quota checks commit with it.
+ */
+export type ReplicaStoreLayout = {
+  /** The partition id (the RC1 layout uses its replica id). */
+  readonly partitionId: string;
+  /** Extra stores every read transaction spans (the lifecycle gate). */
+  readonly readScope: readonly string[];
+  /** Extra stores every write transaction spans (gate, partition index, purge intents, quota ledger). */
+  readonly writeScope: readonly string[];
+  readonly metaKey: IDBValidKey;
+  /** True when `entries`/`blobs` take out-of-line keys (`put(record, key)`); RC1 keys inline. */
+  readonly outOfLineKeys: boolean;
+  entryKey(key: string): IDBValidKey;
+  blobKey(hash: string): IDBValidKey;
+  /** The hash a `blobs` primary key names. */
+  blobHashOf(key: IDBValidKey): string | undefined;
+  /** Every row of this replica in `entries`, `blobs` and their indexes; null = the whole store. */
+  readonly range: IDBKeyRange | null;
+  /** Fields stamped on every `entries`/`blobs` record (the partition id, for the indexes). */
+  readonly tag: Readonly<Record<string, string>>;
+  /** The `blobs` index keyed by `[…, size]`, when the layout keeps one (byte accounting). */
+  readonly blobSizeIndex: string | null;
+};
+
+/** The RC1 layout: one database per replica, inline keys, no control stores. */
+export function rc1Layout(replicaId: string): ReplicaStoreLayout {
+  return {
+    partitionId: replicaId,
+    readScope: [],
+    writeScope: [],
+    metaKey: "state",
+    outOfLineKeys: false,
+    entryKey: (key) => key,
+    blobKey: (hash) => hash,
+    blobHashOf: (key) => (typeof key === "string" ? key : undefined),
+    range: null,
+    tag: {},
+    blobSizeIndex: null,
+  };
+}
+
+/**
+ * Seams other layers plug into this store's transactions: the quota ledger
+ * (`ReplicaQuotaLedger`) and the lifecycle gate (`ReplicaGateTx.run`), bound
+ * to one handle. Every hook runs inside the transaction it is given and may
+ * await only IndexedDB requests issued on it — any other await lets it
+ * auto-commit.
+ */
+export type ReplicaStoreHooks = Omit<Partial<ReplicaQuotaLedger<IDBTransaction>>, "admitPage"> & {
+  /** RC1's original blob/count admission shape; the origin-wide sealed store uses deltaBytes. */
+  admitPage?(tx: IDBTransaction, page: ReplicaPageAdmission): Promise<void>;
+  /**
+   * Open every transaction through the gate: it opens `stores` plus its
+   * control stores in `mode`, asserts the handle's access first, then runs
+   * `fn`, aborting the transaction on any rejection. Without it the store
+   * opens its own transactions over the layout's scope.
+   */
+  run?<T>(stores: readonly string[], mode: IDBTransactionMode, fn: (tx: IDBTransaction) => Promise<T>): Promise<T>;
+  /** In the transaction that creates the replica's state row. */
+  indexPartition?(tx: IDBTransaction): Promise<void>;
+  /** Present only for the Phase 2, gated, origin-wide database. */
+  grantPolicy?: { policy: ReplicaGrantPolicy; firstInstallKey: string; installedAtKey(cid: string): string };
+};
+
 export function replicaDatabaseName(replicaId: string): string {
   return `tinycloud-replica/${replicaId}`;
 }
@@ -105,6 +193,70 @@ function createStores(db: IDBDatabase): void {
   const entries = db.createObjectStore(STORE_ENTRIES, { keyPath: "key" });
   entries.createIndex("byHash", "hash", { unique: false });
   db.createObjectStore(STORE_BLOBS, { keyPath: "hash" });
+}
+
+/** Remove every `entries`/`blobs` row of the layout's replica, inside `tx`. */
+function clearReplicaRows(tx: IDBTransaction, layout: ReplicaStoreLayout): void {
+  for (const name of [STORE_ENTRIES, STORE_BLOBS]) {
+    const store = tx.objectStore(name);
+    if (layout.range === null) store.clear();
+    else store.delete(layout.range);
+  }
+}
+
+/**
+ * The replica's blobs as hash → size, read from the size index's keys so no
+ * blob bytes load. Layouts without that index report no sizes.
+ */
+async function blobSizes(tx: IDBTransaction, layout: ReplicaStoreLayout): Promise<Map<string, number>> {
+  const sizes = new Map<string, number>();
+  if (layout.blobSizeIndex === null) return sizes;
+  const { promise, resolve, reject } = Promise.withResolvers<void>();
+  const request = tx.objectStore(STORE_BLOBS).index(layout.blobSizeIndex).openKeyCursor(layout.range);
+  request.onsuccess = () => {
+    const cursor = request.result;
+    if (cursor === null) {
+      resolve();
+      return;
+    }
+    const hash = layout.blobHashOf(cursor.primaryKey);
+    const key = cursor.key;
+    const size = Array.isArray(key) ? key[key.length - 1] : undefined;
+    if (hash !== undefined && typeof size === "number") sizes.set(hash, size);
+    cursor.continue();
+  };
+  request.onerror = () => reject(request.error);
+  await promise;
+  return sizes;
+}
+
+function sumSizes(sizes: Map<string, number>): number {
+  let total = 0;
+  for (const size of sizes.values()) total += size;
+  return total;
+}
+
+/**
+ * Erase one replica inside `tx` (which must span `meta`, `entries`, `blobs`):
+ * entries and blobs go, and the state row — config, grant, authority,
+ * cursor — becomes a contentless tombstone at `generation + 1`, which every
+ * handle opened before it refuses with RESET_REQUIRED. Returns the blob
+ * bytes removed. No lease: the caller has already fenced writers.
+ */
+export async function eraseReplicaRows(tx: IDBTransaction, layout: ReplicaStoreLayout): Promise<{ blobBytes: number }> {
+  const state = await requestAsPromise<MetaState | undefined>(tx.objectStore(STORE_META).get(layout.metaKey));
+  const blobBytes = sumSizes(await blobSizes(tx, layout));
+  clearReplicaRows(tx, layout);
+  if (state !== undefined && state.purged !== true) {
+    const tombstone: TombstoneMeta = {
+      purged: true,
+      generation: state.generation + 1,
+      writerEpoch: state.writerEpoch + 1,
+      purgePending: false,
+    };
+    tx.objectStore(STORE_META).put(tombstone, layout.metaKey);
+  }
+  return { blobBytes };
 }
 
 
@@ -160,7 +312,10 @@ export class IndexedDbReplicaStore implements ReplicaStore {
   readonly #db: IDBDatabase;
   readonly #holder: string;
   readonly #now: () => number;
-  readonly #replicaId: string;
+  readonly #layout: ReplicaStoreLayout;
+  readonly #hooks: ReplicaStoreHooks;
+  /** False when the connection is shared (the origin database): close() leaves it open. */
+  readonly #ownsDb: boolean;
   #closed = false;
   /**
    * The generation this connection opened under, read from `meta` at open.
@@ -170,11 +325,16 @@ export class IndexedDbReplicaStore implements ReplicaStore {
    */
   #generation = 0;
 
-  private constructor(db: IDBDatabase, holder: string, now: () => number, replicaId: string) {
+  private constructor(
+    db: IDBDatabase,
+    options: { holder: string; now: () => number; layout: ReplicaStoreLayout; hooks: ReplicaStoreHooks; ownsDb: boolean },
+  ) {
     this.#db = db;
-    this.#holder = holder;
-    this.#now = now;
-    this.#replicaId = replicaId;
+    this.#holder = options.holder;
+    this.#now = options.now;
+    this.#layout = options.layout;
+    this.#hooks = options.hooks;
+    this.#ownsDb = options.ownsDb;
   }
 
   static async open(
@@ -188,21 +348,59 @@ export class IndexedDbReplicaStore implements ReplicaStore {
       if (isReplicaError(error)) throw error;
       throw idbError(error, "Opening the replica");
     }
-    const store = new IndexedDbReplicaStore(db, options.holder, options.now ?? Date.now, replicaId);
+    const store = new IndexedDbReplicaStore(db, {
+      holder: options.holder,
+      now: options.now ?? Date.now,
+      layout: rc1Layout(replicaId),
+      hooks: {},
+      ownsDb: true,
+    });
+    await store.#start({ finishPurge: true });
+    return store;
+  }
+
+  /**
+   * One replica inside an already-open shared database (the origin
+   * database of `@tinycloud/replica/kv-storage`). `ownsDb` hands the
+   * connection to the store, which then closes it on `close()`. With
+   * `inspect` the store never writes: a torn revocation purge is left for
+   * the next writable open.
+   */
+  static async openIn(
+    db: IDBDatabase,
+    options: {
+      holder: string;
+      layout: ReplicaStoreLayout;
+      hooks?: ReplicaStoreHooks;
+      now?: () => number;
+      ownsDb?: boolean;
+      inspect?: boolean;
+    },
+  ): Promise<IndexedDbReplicaStore> {
+    const store = new IndexedDbReplicaStore(db, {
+      holder: options.holder,
+      now: options.now ?? Date.now,
+      layout: options.layout,
+      hooks: options.hooks ?? {},
+      ownsDb: options.ownsDb === true,
+    });
+    await store.#start({ finishPurge: options.inspect !== true });
+    return store;
+  }
+
+  async #start(options: { finishPurge: boolean }): Promise<void> {
     try {
       // Record the durable generation first — it is the fence every later
       // transaction runs against — then finish a torn revocation purge.
-      // Any failure closes this connection: an open error never leaks a db.
-      const state = await store.#rawMeta();
-      store.#generation = state?.generation ?? 0;
-      await store.finishPurgeIfPending();
+      const state = await this.#transact("readonly", [], "Opening the replica", async (_tx, row) => row, { skipFence: true });
+      this.#generation = state?.generation ?? 0;
+      if (options.finishPurge) await this.finishPurgeIfPending();
     } catch (error) {
-      // Any failure closes this connection — an open error never leaks a db —
-      // and surfaces as STORAGE_ERROR like every other IndexedDB failure.
-      db.close();
-      throw idbError(error, "Opening the replica");
+      // Any failure closes an owned connection — an open error never leaks
+      // a db. #transact already mapped it (gate refusals keep their code).
+      if (this.#ownsDb) this.#db.close();
+      throw error;
     }
-    return store;
   }
 
   /**
@@ -221,75 +419,137 @@ export class IndexedDbReplicaStore implements ReplicaStore {
       throw new ReplicaError(ReplicaErrorCode.RESET_REQUIRED, "The replica was purged or reopened; open it again to continue.");
     }
   }
-
   /**
-   * A read transaction. `meta` is always in scope and its row is checked
-   * against this store's generation inside the transaction before `body`
-   * (which receives the already-read meta row) runs.
+   * Reads the durable CID timestamp and identity anchor inside the caller's
+   * guarded transaction. Never uses the current time as a substitute for a
+   * missing/corrupt install timestamp: reopening cannot renew a grant.
    */
-  async #readTx<T>(stores: readonly string[], body: (tx: IDBTransaction, state: MetaState | undefined) => Promise<T>): Promise<T> {
-    if (this.#closed) throw new ReplicaError(ReplicaErrorCode.STORAGE_ERROR, "The replica store is closed.");
-    const all = stores.includes(STORE_META) ? [...stores] : [STORE_META, ...stores];
-    let tx: IDBTransaction;
-    try {
-      tx = this.#db.transaction(all, "readonly");
-    } catch (error) {
-      throw idbError(error, "Reading the replica");
+  async #policyView(tx: IDBTransaction, state: LiveMetaState): Promise<GrantPolicyView | undefined> {
+    const binding = this.#hooks.grantPolicy;
+    if (binding === undefined) return undefined;
+    const device = tx.objectStore("device");
+    const stored = await requestAsPromise<{ at: number } | undefined>(device.get(binding.firstInstallKey));
+    const now = this.#now();
+    const anchor = clampConsentAnchor(binding.policy.consentAnchor, now)
+      ?? (stored === undefined ? null : clampConsentAnchor({ at: stored.at, source: "first_install" }, now));
+    const consentDeadline = anchor === null ? Number.NEGATIVE_INFINITY : consentDeadlineMs(anchor);
+    const grants: GrantPolicyView["grants"] = {};
+    for (const record of [state.grant, state.pendingGrant]) {
+      if (record === null || grants[record.cid] !== undefined) continue;
+      const installed = await requestAsPromise<{ at: number } | undefined>(device.get(binding.installedAtKey(record.cid)));
+      const installedAt = installed?.at;
+      grants[record.cid] = {
+        installedAt,
+        effectiveExpiresAt: effectiveGrantExpiry({
+          signedExpiresAt: record.expiresAt === null ? null : record.expiresAt * 1000,
+          installedAt: installedAt ?? Number.NEGATIVE_INFINITY,
+          grantTtlMs: binding.policy.grantTtlMs,
+          consentDeadline,
+        }),
+      };
     }
-    const state = await this.#meta(tx);
-    this.#assertLive(state);
-    return body(tx, state);
+    return { anchor, consentDeadline, grants };
   }
 
+  #cappedGrant(record: GrantRecord | null, view: GrantPolicyView | undefined): GrantRecord | null {
+    if (record === null || view === undefined) return record;
+    const expiry = view.grants[record.cid]?.effectiveExpiresAt;
+    return { ...record, expiresAt: expiry !== undefined && Number.isFinite(expiry) ? expiry / 1000 : 0 };
+  }
+
+  async #assertServing(tx: IDBTransaction, state: LiveMetaState): Promise<void> {
+    const view = await this.#policyView(tx, state);
+    if (view === undefined) return;
+    const now = this.#now();
+    if (!Number.isFinite(view.consentDeadline) || !Number.isFinite(now) || now >= view.consentDeadline) {
+      throw new ReplicaError(ReplicaErrorCode.CONSENT_EXPIRED, "The replica consent window ended; local reads are blocked.");
+    }
+    const grant = this.#cappedGrant(state.grant, view);
+    if (grant !== null && (!Number.isFinite(view.grants[grant.cid]?.effectiveExpiresAt) || now >= view.grants[grant.cid]!.effectiveExpiresAt)) {
+      throw new ReplicaError(ReplicaErrorCode.GRANT_EXPIRED, "The effective grant expired; local reads are blocked.");
+    }
+    assertReadable(effectiveAuthority({
+      window: state.authority, grant, revoked: state.revoked, retentionRevoked: state.retentionRevoked,
+      policy: "whileGrantValid", now,
+    }), now);
+  }
+
+
   /**
-   * A write transaction with `strict` durability — `meta` first, the
-   * generation fence inside the transaction, then `body` (which receives
-   * the already-read meta row). `body` may only await IDB requests issued
-   * on `tx`; the returned promise settles after the writes, and
-   * `transactionDone` settles after the commit. `skipFence` is for `init`:
-   * it checks the marker and generation itself because a purge marker
-   * belonging to this store's generation is the reinitialize-in-place case.
+   * One transaction over `stores` plus `meta`. With a gate (`hooks.run`) the
+   * gate opens it — adding its control stores and asserting the handle's
+   * access before anything else; otherwise this store opens it over the
+   * layout's scope. Inside, the state row is read and, unless `skipFence`,
+   * fenced against this store's generation before `body` runs. `body` may
+   * only await IDB requests issued on `tx`. Write transactions use `strict`
+   * durability and settle after the commit; any failure aborts them.
+   * `skipFence` is for `init` and the open-time reads, which handle the
+   * tombstone and generation themselves.
    */
-  async #writeTx<T>(
+  async #transact<T>(
+    mode: IDBTransactionMode,
+    stores: readonly string[],
+    action: string,
+    body: (tx: IDBTransaction, state: MetaState | undefined) => Promise<T>,
+    options: { skipFence?: boolean; serving?: boolean } = {},
+  ): Promise<T> {
+    if (this.#closed) throw new ReplicaError(ReplicaErrorCode.STORAGE_ERROR, "The replica store is closed.");
+    // Errors that already carry a contract code (gate refusals, quota) pass through unchanged.
+    const mapped = (error: unknown): unknown =>
+      typeof error === "object" && error !== null && "code" in error && typeof error.code === "string" ? error : idbError(error, action);
+    const data = [...new Set([STORE_META, ...stores])];
+    const execute = async (tx: IDBTransaction): Promise<T> => {
+      const done = mode === "readwrite" ? transactionDone(tx) : undefined;
+      try {
+        const state = await requestAsPromise<MetaState | undefined>(tx.objectStore(STORE_META).get(this.#layout.metaKey));
+        if (options.skipFence !== true) this.#assertLive(state);
+        if (options.serving === true) await this.#assertServing(tx, this.#requireMeta(state));
+        const result = await body(tx, state);
+        await done;
+        return result;
+      } catch (error) {
+        if (done !== undefined) {
+          try {
+            tx.abort();
+          } catch {
+            // already finished
+          }
+          await done.catch(() => undefined);
+        }
+        throw mapped(error);
+      }
+    };
+    const run = this.#hooks.run;
+    if (run !== undefined) {
+      try {
+        return await run(data, mode, execute);
+      } catch (error) {
+        throw mapped(error);
+      }
+    }
+    let tx: IDBTransaction;
+    try {
+      const scope = [...new Set([...data, ...(mode === "readonly" ? this.#layout.readScope : this.#layout.writeScope)])];
+      tx = mode === "readonly" ? this.#db.transaction(scope, mode) : this.#db.transaction(scope, mode, { durability: "strict" });
+    } catch (error) {
+      throw idbError(error, action);
+    }
+    return execute(tx);
+  }
+
+  /** A fenced read transaction; serving reads assert grant policy before entries or bytes. */
+  #readTx<T>(stores: readonly string[], body: (tx: IDBTransaction, state: MetaState | undefined) => Promise<T>, options: { serving?: boolean } = {}): Promise<T> {
+    return this.#transact("readonly", options.serving && this.#hooks.grantPolicy ? [...stores, "device"] : stores, "Reading the replica", body, options);
+  }
+
+  /** A fenced write transaction (`skipFence` for `init`); `body` receives the already-read state row. */
+  #writeTx<T>(
     stores: readonly string[],
     action: string,
     body: (tx: IDBTransaction, state: MetaState | undefined) => Promise<T>,
     options: { skipFence?: boolean } = {},
   ): Promise<T> {
-    if (this.#closed) throw new ReplicaError(ReplicaErrorCode.STORAGE_ERROR, "The replica store is closed.");
-    const all = stores.includes(STORE_META) ? [...stores] : [STORE_META, ...stores];
-    let tx: IDBTransaction;
-    try {
-      tx = this.#db.transaction(all, "readwrite", { durability: "strict" });
-    } catch (error) {
-      throw idbError(error, action);
-    }
-    const done = transactionDone(tx);
-    try {
-      const state = await this.#meta(tx);
-      if (options.skipFence !== true) this.#assertLive(state);
-      const result = await body(tx, state);
-      await done;
-      return result;
-    } catch (error) {
-      try {
-        tx.abort();
-      } catch {
-        // already finished
-      }
-      await done.catch(() => undefined);
-      throw idbError(error, action);
-    }
-  }
-
-  /** The raw `meta` row — used at open time, before the generation is set. */
-  async #rawMeta(): Promise<MetaState | undefined> {
-    const tx = this.#db.transaction(STORE_META, "readonly");
-    return requestAsPromise<MetaState | undefined>(tx.objectStore(STORE_META).get("state"));
-  }
-
-  async #meta(tx: IDBTransaction): Promise<MetaState | undefined> {
-    return requestAsPromise<MetaState | undefined>(tx.objectStore(STORE_META).get("state"));
+    return this.#transact("readwrite", stores, action, body, options);
   }
 
   #requireMeta(state: MetaState | undefined): LiveMetaState {
@@ -306,22 +566,17 @@ export class IndexedDbReplicaStore implements ReplicaStore {
 
 
   #putMeta(tx: IDBTransaction, state: MetaState): IDBRequest<IDBValidKey> {
-    return tx.objectStore(STORE_META).put(state, "state");
+    return tx.objectStore(STORE_META).put(state, this.#layout.metaKey);
   }
 
-  async open(): Promise<ReplicaState | null> {
+  async open(): Promise<(ReplicaState & { grantPolicyView?: GrantPolicyView }) | null> {
     // The generation fence still runs inside the transaction: a purge or a
     // reopen that moved the generation on is RESET_REQUIRED — but the
     // tombstone itself is read rather than fenced, because open()'s null is
     // the not-created signal init needs to reinitialize the database.
-    if (this.#closed) throw new ReplicaError(ReplicaErrorCode.STORAGE_ERROR, "The replica store is closed.");
-    let tx: IDBTransaction;
-    try {
-      tx = this.#db.transaction([STORE_META], "readonly");
-    } catch (error) {
-      throw idbError(error, "Reading the replica");
-    }
-    const state = await this.#meta(tx);
+    const { state, view } = await this.#transact("readonly", this.#hooks.grantPolicy ? ["device"] : [], "Reading the replica", async (tx, row) => ({
+      state: row, view: row !== undefined && row.purged === false ? await this.#policyView(tx, row) : undefined,
+    }), { skipFence: true });
     if (state !== undefined && state.generation !== this.#generation) {
       throw new ReplicaError(ReplicaErrorCode.RESET_REQUIRED, "The replica was purged or reopened; open it again to continue.");
     }
@@ -329,8 +584,9 @@ export class IndexedDbReplicaStore implements ReplicaStore {
     assertFolderPrefix(state.config.prefix);
     return {
       config: state.config,
-      grant: state.grant,
-      pendingGrant: state.pendingGrant,
+      grant: this.#cappedGrant(state.grant, view),
+      pendingGrant: this.#cappedGrant(state.pendingGrant, view),
+      ...(view === undefined ? {} : { grantPolicyView: view }),
       nodeDid: state.nodeDid,
       authority: state.authority,
       revoked: state.revoked,
@@ -366,6 +622,7 @@ export class IndexedDbReplicaStore implements ReplicaStore {
               );
             }
             const next = existing.generation + 1;
+            await this.#hooks.indexPartition?.(tx);
             this.#putMeta(tx, this.#freshMeta(c, next));
             return next;
           }
@@ -395,6 +652,7 @@ export class IndexedDbReplicaStore implements ReplicaStore {
           if (same) return existing.generation;
           throw new ReplicaError(ReplicaErrorCode.CONFIG_MISMATCH, `Replica ${c.name} already exists.`);
         }
+        await this.#hooks.indexPartition?.(tx);
         this.#putMeta(tx, this.#freshMeta(c, 0));
         return 0;
       },
@@ -452,8 +710,23 @@ export class IndexedDbReplicaStore implements ReplicaStore {
   }
 
   async installGrant(g: GrantRecord): Promise<void> {
-    await this.#writeTx([STORE_META], "Installing the grant", async (tx, meta) => {
+    await this.#writeTx(this.#hooks.grantPolicy ? [STORE_META, "device"] : [STORE_META], "Installing the grant", async (tx, meta) => {
       const state = this.#requireMeta(meta);
+      const binding = this.#hooks.grantPolicy;
+      if (binding !== undefined) {
+        const device = tx.objectStore("device");
+        const timestampKey = binding.installedAtKey(g.cid);
+        const existing = await requestAsPromise<{ at: number } | undefined>(device.get(timestampKey));
+        const now = this.#now();
+        if (existing === undefined) {
+          if (state.grant?.cid === g.cid || state.pendingGrant?.cid === g.cid) {
+            throw new ReplicaError(ReplicaErrorCode.GRANT_EXPIRED, "The original install time for this grant is missing.");
+          }
+          device.put({ at: now }, timestampKey);
+        }
+        const anchor = await requestAsPromise<{ at: number } | undefined>(device.get(binding.firstInstallKey));
+        if (anchor === undefined) device.put({ at: now }, binding.firstInstallKey);
+      }
       // The grant installs as pending regardless of issuer: `principal`
       // already partitions this database, and the node judges a pending
       // grant when it first signs a page under it (promotion is CID-bound).
@@ -548,7 +821,7 @@ export class IndexedDbReplicaStore implements ReplicaStore {
   async #hashesWithEntries(tx: IDBTransaction, wanted: Set<string> | null): Promise<Set<string>> {
     const found = new Set<string>();
     const { promise, resolve, reject } = Promise.withResolvers<void>();
-    const request = tx.objectStore(STORE_ENTRIES).index("byHash").openCursor();
+    const request = tx.objectStore(STORE_ENTRIES).index("byHash").openCursor(this.#layout.range);
     request.onsuccess = () => {
       const cursor = request.result;
       if (cursor === null) {
@@ -575,6 +848,9 @@ export class IndexedDbReplicaStore implements ReplicaStore {
     // Blob writes share the commit transaction, so unlike the file store a
     // fenced writer cannot leave orphans: the check below fences the whole
     // commit atomically.
+    const layout = this.#layout;
+    const freeBytes = (await this.#hooks.freeBytes?.()) ?? null;
+    const signedPromotion = this.#hooks.grantPolicy && p.promoteGrant !== null ? parseUcanGrant(p.promoteGrant.bytes) : p.promoteGrant;
     await this.#writeTx(ALL_STORES, "Committing a sync page", async (tx, meta) => {
       const state = this.#requireMeta(meta);
       this.#checkFence(state, t);
@@ -615,12 +891,12 @@ export class IndexedDbReplicaStore implements ReplicaStore {
           sizes.set(change.hash, bytes.length);
           continue;
         }
-        const previous = await requestAsPromise<EntryRecord | undefined>(entries.get(change.key));
+        const previous = await requestAsPromise<EntryRecord | undefined>(entries.get(layout.entryKey(change.key)));
         if (previous !== undefined && !previous.deleted && previous.content && previous.hash === change.hash && previous.size !== null) {
           sizes.set(change.hash, previous.size);
           continue;
         }
-        const held = await requestAsPromise<BlobRecord | undefined>(blobs.get(change.hash));
+        const held = await requestAsPromise<BlobRecord | undefined>(blobs.get(layout.blobKey(change.hash)));
         if (held !== undefined) sizes.set(change.hash, held.size);
       }
       for (const change of p.changes) {
@@ -630,24 +906,38 @@ export class IndexedDbReplicaStore implements ReplicaStore {
         }
       }
 
+      // Bytes this page adds: a blob already stored under the same key is
+      // rewritten in place and counts nothing.
+      let blobBytes = 0;
+      if (this.#hooks.admitPage !== undefined || this.#hooks.accountCommit !== undefined) {
+        for (const [hash, bytes] of p.blobs) {
+          if ((await requestAsPromise(blobs.count(layout.blobKey(hash)))) === 0) blobBytes += bytes.length;
+        }
+      }
+      await this.#hooks.admitPage?.(tx, { partitionId: layout.partitionId, blobBytes, entries: p.changes.length, freeBytes });
+
       for (const [hash, bytes] of p.blobs) {
-        blobs.put({ hash, bytes, size: bytes.length } satisfies BlobRecord);
+        const record = { ...layout.tag, hash, bytes, size: bytes.length } satisfies BlobRecord;
+        if (layout.outOfLineKeys) blobs.put(record, layout.blobKey(hash));
+        else blobs.put(record);
       }
       for (const change of p.changes) {
-        if (change.deleted) {
-          entries.put({ key: change.key, deleted: true } satisfies EntryRecord);
-          continue;
-        }
-        entries.put({
-          key: change.key,
-          deleted: false,
-          etag: change.etag,
-          hash: change.hash,
-          metadata: change.metadata,
-          content: change.content,
-          size: change.content ? (sizes.get(change.hash) ?? null) : null,
-        } satisfies EntryRecord);
+        const record: EntryRecord = change.deleted
+          ? { ...layout.tag, key: change.key, deleted: true }
+          : {
+              ...layout.tag,
+              key: change.key,
+              deleted: false,
+              etag: change.etag,
+              hash: change.hash,
+              metadata: change.metadata,
+              content: change.content,
+              size: change.content ? (sizes.get(change.hash) ?? null) : null,
+            };
+        if (layout.outOfLineKeys) entries.put(record, layout.entryKey(change.key));
+        else entries.put(record);
       }
+      await this.#hooks.accountCommit?.(tx, { partitionId: layout.partitionId, deltaBytes: blobBytes });
       state.cursor = p.cursor;
       state.coverage = p.coverage;
       state.serial += 1;
@@ -673,9 +963,13 @@ export class IndexedDbReplicaStore implements ReplicaStore {
       // Promotion is bound to the grant the node just validated for this
       // page: it becomes active from the record carried on the page. A
       // different grant installed as pending meanwhile stays pending.
-      if (p.promoteGrant !== null) {
-        state.grant = p.promoteGrant;
-        if (state.pendingGrant?.cid === p.promoteGrant.cid) {
+      if (signedPromotion !== null) {
+        // The engine may have capped its in-memory grant at open. Persist the
+        // original signed window, not that handle's policy-specific cap.
+        state.grant = state.pendingGrant?.cid === signedPromotion.cid
+          ? state.pendingGrant
+          : state.grant?.cid === signedPromotion.cid ? state.grant : signedPromotion;
+        if (state.pendingGrant?.cid === signedPromotion.cid) {
           state.pendingGrant = null;
           state.pendingGrantError = null;
         }
@@ -693,28 +987,47 @@ export class IndexedDbReplicaStore implements ReplicaStore {
   }
 
   async collectGarbage(t: LeaseToken): Promise<number> {
+    const layout = this.#layout;
     return this.#writeTx(ALL_STORES, "Collecting unused content", async (tx, meta) => {
       const state = this.#requireMeta(meta);
       this.#checkFence(state, t);
       const keep = await this.#hashesWithEntries(tx, null);
-      const hashes = await requestAsPromise<IDBValidKey[]>(tx.objectStore(STORE_BLOBS).getAllKeys());
+      // Layouts with a size index learn each blob's size from its key alone;
+      // the RC1 layout has none and walks the primary keys.
+      const sizes =
+        layout.blobSizeIndex === null
+          ? new Map(
+              (await requestAsPromise<IDBValidKey[]>(tx.objectStore(STORE_BLOBS).getAllKeys(layout.range))).flatMap((key) => {
+                const hash = layout.blobHashOf(key);
+                return hash === undefined ? [] : [[hash, 0] as const];
+              }),
+            )
+          : await blobSizes(tx, layout);
       let removed = 0;
-      for (const hash of hashes) {
-        if (typeof hash === "string" && !keep.has(hash)) {
-          tx.objectStore(STORE_BLOBS).delete(hash);
-          removed += 1;
-        }
+      let bytes = 0;
+      for (const [hash, size] of sizes) {
+        if (keep.has(hash)) continue;
+        tx.objectStore(STORE_BLOBS).delete(layout.blobKey(hash));
+        removed += 1;
+        bytes += size;
       }
+      if (removed > 0) await this.#hooks.accountErase?.(tx, { partitionId: layout.partitionId, bytes });
       return removed;
     });
+  }
+
+  /** Clear this replica's entries and blobs inside `tx`, accounting the erased bytes. */
+  async #clearRows(tx: IDBTransaction): Promise<void> {
+    const bytes = this.#hooks.accountErase === undefined ? 0 : sumSizes(await blobSizes(tx, this.#layout));
+    clearReplicaRows(tx, this.#layout);
+    await this.#hooks.accountErase?.(tx, { partitionId: this.#layout.partitionId, bytes });
   }
 
   async reset(t: LeaseToken, reason: string, options?: { keepSource?: boolean }): Promise<void> {
     const generation = await this.#writeTx<number>(ALL_STORES, "Resetting the replica", async (tx, meta) => {
       const state = this.#requireMeta(meta);
       this.#checkFence(state, t);
-      tx.objectStore(STORE_ENTRIES).clear();
-      tx.objectStore(STORE_BLOBS).clear();
+      await this.#clearRows(tx);
       state.cursor = null;
       // An automatic 410 reset keeps the source pin; a manual reset drops it.
       if (options?.keepSource !== true) state.nodeDid = null;
@@ -756,7 +1069,7 @@ export class IndexedDbReplicaStore implements ReplicaStore {
       }
       if (state.purged === true) return; // already wiped at this generation
       this.#checkFence(state, t, { allowRevoked: true });
-      this.#eraseContents(tx, state);
+      await this.#eraseContents(tx, state);
       // The tombstone is minimal on purpose: config, grant, authority,
       // timestamps and error text are user data and must not survive the
       // purge. `generation + 1` fences every connection that opened under
@@ -784,9 +1097,8 @@ export class IndexedDbReplicaStore implements ReplicaStore {
    * the lease and the epoch bump kills the writer identity, so an in-flight
    * commit, GC or reset aborts before touching a row.
    */
-  #eraseContents(tx: IDBTransaction, state: LiveMetaState): void {
-    tx.objectStore(STORE_ENTRIES).clear();
-    tx.objectStore(STORE_BLOBS).clear();
+  async #eraseContents(tx: IDBTransaction, state: LiveMetaState): Promise<void> {
+    await this.#clearRows(tx);
     state.cursor = null;
     state.coverage = "empty";
     state.lastSyncAt = null;
@@ -804,8 +1116,7 @@ export class IndexedDbReplicaStore implements ReplicaStore {
       if (meta === undefined) {
         // No replica row yet: purge the content anyway so a torn create
         // can't serve bytes whose grant was revoked.
-        tx.objectStore(STORE_ENTRIES).clear();
-        tx.objectStore(STORE_BLOBS).clear();
+        await this.#clearRows(tx);
         return;
       }
       // A tombstone is fenced like any mutation: the replica is already
@@ -814,7 +1125,7 @@ export class IndexedDbReplicaStore implements ReplicaStore {
       // The shared erase clears entries/blobs and resets cursor, coverage,
       // sync timestamps, writer epoch and lease — then the durable
       // revocation fields land in the same commit.
-      this.#eraseContents(tx, state);
+      await this.#eraseContents(tx, state);
       state.revoked = detail;
       state.lastError = { at: new Date(this.#now()).toISOString(), code: ReplicaErrorCode.GRANT_REVOKED, message: detail };
       // `purgePending` makes the intent durable so a torn open re-purges on
@@ -899,8 +1210,7 @@ export class IndexedDbReplicaStore implements ReplicaStore {
         }
         if (state === undefined || state.purged === true) return;
         if (state.purgePending !== true) return;
-        tx.objectStore(STORE_ENTRIES).clear();
-        tx.objectStore(STORE_BLOBS).clear();
+        await this.#clearRows(tx);
         state.purgePending = false;
         this.#putMeta(tx, state);
       },
@@ -917,12 +1227,35 @@ export class IndexedDbReplicaStore implements ReplicaStore {
     });
   }
 
+  /**
+   * Finish a sync under its live lease: persist the epoch the caller
+   * captured before the sync began (`syncedThroughEpoch`) together with the
+   * completion marker, in one transaction. Call it only after the feed's
+   * last page, repairs and GC have all committed — a sync that fails
+   * earlier never reaches it, so its fence stays where it was.
+   */
+  async completeSync(t: LeaseToken, syncStartEpoch: number): Promise<void> {
+    await this.#writeTx([STORE_META], "Finishing the sync", async (tx, meta) => {
+      const state = this.#requireMeta(meta);
+      this.#checkFence(state, t);
+      state.syncedThroughEpoch = syncStartEpoch;
+      state.syncCompletedAt = new Date(this.#now()).toISOString();
+      this.#putMeta(tx, state);
+    });
+  }
+
+  /** The epoch persisted by the last completed sync (0 before the first). */
+  async syncFence(): Promise<{ syncedThroughEpoch: number; syncCompletedAt: string | null }> {
+    const state = await this.#readTx([], async (_tx, meta) => this.#requireMeta(meta));
+    return { syncedThroughEpoch: state.syncedThroughEpoch ?? 0, syncCompletedAt: state.syncCompletedAt ?? null };
+  }
+
   async get(key: string): Promise<LocalEntry | undefined> {
     try {
       return await this.#readTx([STORE_ENTRIES], async (tx) => {
-        const record = await requestAsPromise<EntryRecord | undefined>(tx.objectStore(STORE_ENTRIES).get(key));
+        const record = await requestAsPromise<EntryRecord | undefined>(tx.objectStore(STORE_ENTRIES).get(this.#layout.entryKey(key)));
         return record === undefined ? undefined : entryOf(record);
-      });
+      }, { serving: true });
     } catch (error) {
       throw idbError(error, "Reading the replica");
     }
@@ -931,8 +1264,8 @@ export class IndexedDbReplicaStore implements ReplicaStore {
   async list(o: ListOpts): Promise<LocalEntry[]> {
     try {
       const records = await this.#readTx([STORE_ENTRIES], (tx) =>
-        requestAsPromise<EntryRecord[]>(tx.objectStore(STORE_ENTRIES).getAll()),
-      );
+        requestAsPromise<EntryRecord[]>(tx.objectStore(STORE_ENTRIES).getAll(this.#layout.range)),
+      { serving: true });
       let rows = records.filter((record) => !record.deleted);
       if (o.prefix !== undefined && o.prefix !== "") rows = rows.filter((record) => record.key.startsWith(o.prefix!));
       if (o.after !== undefined) rows = rows.filter((record) => compareKeyBytes(record.key, o.after!) > 0);
@@ -947,7 +1280,7 @@ export class IndexedDbReplicaStore implements ReplicaStore {
   async pendingRepairs(limit: number): Promise<Array<Extract<LocalEntry, { deleted: false }>>> {
     try {
       const records = await this.#readTx([STORE_ENTRIES], (tx) =>
-        requestAsPromise<EntryRecord[]>(tx.objectStore(STORE_ENTRIES).getAll()),
+        requestAsPromise<EntryRecord[]>(tx.objectStore(STORE_ENTRIES).getAll(this.#layout.range)),
       );
       return records
         .filter((record) => !record.deleted && !record.content)
@@ -965,9 +1298,9 @@ export class IndexedDbReplicaStore implements ReplicaStore {
       // refuses with RESET_REQUIRED for every call, including trivial ones.
       return await this.#readTx([STORE_BLOBS], async (tx) => {
         if (!isHash(hash)) return undefined;
-        const record = await requestAsPromise<BlobRecord | undefined>(tx.objectStore(STORE_BLOBS).get(hash));
+        const record = await requestAsPromise<BlobRecord | undefined>(tx.objectStore(STORE_BLOBS).get(this.#layout.blobKey(hash)));
         return record?.bytes;
-      });
+      }, { serving: true });
     } catch (error) {
       throw idbError(error, "Reading replica content");
     }
@@ -976,11 +1309,12 @@ export class IndexedDbReplicaStore implements ReplicaStore {
   async status(now = this.#now()): Promise<ReplicaStatus> {
     let state: MetaState;
     let records: EntryRecord[];
+    let view: GrantPolicyView | undefined;
     try {
-      ({ state, records } = await this.#readTx([STORE_ENTRIES], async (tx, meta) => {
+      ({ state, records, view } = await this.#readTx(this.#hooks.grantPolicy ? [STORE_ENTRIES, "device"] : [STORE_ENTRIES], async (tx, meta) => {
         const s = this.#requireMeta(meta);
-        const rs = await requestAsPromise<EntryRecord[]>(tx.objectStore(STORE_ENTRIES).getAll());
-        return { state: s, records: rs };
+        const rs = await requestAsPromise<EntryRecord[]>(tx.objectStore(STORE_ENTRIES).getAll(this.#layout.range));
+        return { state: s, records: rs, view: await this.#policyView(tx, s) };
       }));
     } catch (error) {
       throw idbError(error, "Reading the replica");
@@ -1000,7 +1334,7 @@ export class IndexedDbReplicaStore implements ReplicaStore {
     }
     const { retentionRevoked: _retentionRevoked, ...authority } = effectiveAuthority({
       window: state.authority,
-      grant: state.grant,
+      grant: this.#cappedGrant(state.grant, view),
       revoked: state.revoked,
       retentionRevoked: state.retentionRevoked,
       policy: state.config.localReadPolicy,
@@ -1039,6 +1373,6 @@ export class IndexedDbReplicaStore implements ReplicaStore {
 
   async close(): Promise<void> {
     this.#closed = true;
-    this.#db.close();
+    if (this.#ownsDb) this.#db.close();
   }
 }

@@ -1,0 +1,151 @@
+{
+  "allowance": {
+    "replica.mjs": 51925,
+    "replica.cjs": 67140,
+    "activation.mjs": 23117,
+    "activation.cjs": 24699
+  },
+  "relocations": [
+    {
+      "commit": "2578c6a7624a3408b4584ed2331723694b8afb4b",
+      "bucket": "web-core",
+      "index.mjs": -143,
+      "index.cjs": -130
+    },
+    {
+      "commit": "2578c6a7624a3408b4584ed2331723694b8afb4b",
+      "bucket": "web-optional:first-import",
+      "replica.mjs": 150,
+      "replica.cjs": 170
+    }
+  ],
+  "measurementCorrection": {
+    "commit": "ce52494d0cb1ea236578bc6b709e9e6e016f8c78",
+    "ciRun": "38958197518",
+    "ciJob": "117166290134",
+    "reproduce": "At detached ce52494d, PATH=<Bun-1.3.14-bin>:$PATH bun install --frozen-lockfile && PATH=<Bun-1.3.14-bin>:$PATH bunx turbo build --filter=@tinycloud/web-sdk... --force && PATH=<Bun-1.3.14-bin>:$PATH bun packages/web-sdk/scripts/measure-replica-optional.ts; repeat the measurement with Bun 1.4.3 on the same built dist.",
+    "previousToolchain": "Bun 1.4.3",
+    "canonicalToolchain": "Bun 1.3.14",
+    "previousFirstImport": { "replica.mjs": 45538, "replica.cjs": 65096 },
+    "canonicalFirstImport": { "replica.mjs": 51201, "replica.cjs": 66132 },
+    "reason": "CI-pinned Bun.build emits a different minified graph from Bun 1.4.3 for the same 25 modules. This corrects the ce52494d first-import measurement with zero headroom; no new adapter bytes or activation/root allowance."
+  },
+  "gatedOnlyRatchet": {
+    "label": "TC-858 refused-replica-admission observer, approved by Naomi 2026-10-16",
+    "sourceCommit": "212142ae1cf7ff8568d4172a2ca991a4d79364c7",
+    "measuredAt": "ddc032caef81a2177e7f9c30a6a28a8f593a4580",
+    "toolchain": "Bun 1.3.14; production webpack; gzip -9 -c",
+    "trigger": "Refused replica admission only: stale/missing/malformed restore or failed fresh establishment; never successful opt-in, replica-off, or sign-out.",
+    "ceiling": { "replica-gated.mjs": 926, "replica-gated.cjs": 1014 }
+  },
+  "fixRequired": [
+    {
+      "sourceCommit": "a5b1ae1fc61ff352d6ea6940a1791d6cf01f1492",
+      "integratedCommit": "b796dc52894524ee01a4458f640ecf45906b3040",
+      "ruling": "Naomi TC-858 compact delegate §3:646, 2026-10-16",
+      "controlledAB": {
+        "before": { "replica.mjs": 52355, "replica.cjs": 67328 },
+        "after": { "replica.mjs": 52362, "replica.cjs": 67332 },
+        "delta": { "replica.mjs": 7, "replica.cjs": 4 }
+      },
+      "measuredPaths": {
+        "packages/node-sdk/src/replication/authority.ts": "0990eecad96ebaa25a615fafe7558ec124b62c7f"
+      },
+      "canonicalCI": {
+        "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/38977256904",
+        "jobs": [
+          "https://github.com/TinyCloudLabs/js-sdk/actions/runs/38977256904/job/117229580745",
+          "https://github.com/TinyCloudLabs/js-sdk/actions/runs/38977256904/job/117229580982"
+        ],
+        "before": { "replica.mjs": 51785, "replica.cjs": 66995 },
+        "after": { "replica.mjs": 51791, "replica.cjs": 67009 },
+        "delta": { "replica.mjs": 6, "replica.cjs": 14 },
+        "source": "Only measured-input change: approved authority.ts blob 0990eecad96ebaa25a615fafe7558ec124b62c7f"
+      },
+      "status": "final: GitHub CI canonical, zero headroom"
+    }
+  ],
+  "entries": [
+    {
+      "pr": "#548",
+      "ticket": "TC-858",
+      "replica.mjs": 51791,
+      "replica.cjs": 67009,
+      "activation.mjs": 23071,
+      "activation.cjs": 24650,
+      "note": "Unmerged #548 first-import and activation gzip measured by GitHub replica-e2e SQLite job 117229580745 and Postgres job 117229580982 in run 38977256904 against merge-base 8bfd6df4 (no optional entry): first import shares the root and includes the parser; activation adds the deferred IDB factory. S4 a5b1ae1f compact installed-grant fix changed only the exact approved authority.ts blob; local same-worktree Bun 1.3.14 A/B was +7/+4 but canonical CI measured +6/+14 over prior 51785/66995, yielding final 51791/67009 with zero headroom. Activation 23071/24650, root, gated-only and hashed-worker ceilings remain unchanged."
+    },
+    {
+      "pr": "#565",
+      "ticket": "TC-858",
+      "replica.mjs": 134,
+      "replica.cjs": 129,
+      "activation.mjs": 4,
+      "activation.cjs": 5,
+      "note": "Optional first-import and IDB activation gzip deltas against this PR's merge base"
+    },
+    {
+      "pr": "#560",
+      "ticket": "TC-858",
+      "replica.mjs": 0,
+      "replica.cjs": 0,
+      "activation.mjs": 0,
+      "activation.cjs": 0,
+      "note": "Optional first-import and IDB activation gzip deltas against this PR's merge base"
+    },
+    {
+      "pr": "#571",
+      "ticket": "TC-841",
+      "replica.mjs": -1,
+      "replica.cjs": 0,
+      "activation.mjs": 0,
+      "activation.cjs": 0,
+      "note": "Optional first-import and IDB activation gzip deltas against this PR's merge base"
+    },
+    {
+      "pr": "#574",
+      "ticket": "TC-1413",
+      "replica.mjs": 0,
+      "replica.cjs": 1,
+      "activation.mjs": 30,
+      "activation.cjs": 28,
+      "note": "Optional first-import and IDB activation gzip deltas against this PR's merge base"
+    },
+    {
+      "pr": "#580",
+      "ticket": "TC-1432",
+      "replica.mjs": 1,
+      "replica.cjs": -1,
+      "activation.mjs": 1,
+      "activation.cjs": 2,
+      "note": "Optional first-import and IDB activation gzip deltas against this PR's merge base"
+    },
+    {
+      "pr": "#589",
+      "ticket": "TC-1443",
+      "replica.mjs": 0,
+      "replica.cjs": 0,
+      "activation.mjs": 0,
+      "activation.cjs": 0,
+      "note": "Optional first-import and IDB activation gzip deltas against this PR's merge base"
+    },
+    {
+      "pr": "#598",
+      "ticket": "TC-1211",
+      "replica.mjs": 0,
+      "replica.cjs": 0,
+      "activation.mjs": 0,
+      "activation.cjs": 0,
+      "note": "Optional first-import and IDB activation gzip deltas against this PR's merge base"
+    },
+    {
+      "pr": "#599",
+      "ticket": "TC-1475",
+      "replica.mjs": 0,
+      "replica.cjs": 2,
+      "activation.mjs": 11,
+      "activation.cjs": 14,
+      "note": "Optional first-import and IDB activation gzip deltas against this PR's merge base"
+    }
+  ]
+}

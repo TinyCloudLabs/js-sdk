@@ -119,7 +119,7 @@ function localSessionCid(session: Record<string, unknown>, host: string): string
 
 function renderList(result: {
   profile: string;
-  session: { cid: string | null; expiresAt: string | null } | null;
+  session: { cid: string | null; expiresAt: string | null; label: "current session" | null } | null;
   localVerification: "available" | "session_missing" | "session_expired" | "session_invalid";
   grants: ListedGrant[];
 }): void {
@@ -129,7 +129,7 @@ function renderList(result: {
   }
   process.stdout.write(`Profile: ${result.profile}\n`);
   process.stdout.write(`Session CID: ${result.session?.cid ?? "unavailable"}` +
-    (result.session?.cid ? ` (revoke with ${CLI_NAME} delegation revoke ${result.session.cid})\n` : "\n"));
+    (result.session?.cid ? ` (current session; revoke with ${CLI_NAME} delegation revoke ${result.session.cid})\n` : "\n"));
   process.stdout.write(`Local verification: ${result.localVerification}; node validation and revocation are not checked.\n`);
   process.stdout.write(formatTable(
     ["CID", "LOCAL", "EXPIRES", "SOURCE", "BOUND", "SCOPE"],
@@ -166,10 +166,12 @@ export function registerAuthGrantsCommand(
           host: ctx.host,
           ...(node ? { resolveSpace: operationSpaceResolver(node, profile.spaceId) } : {}),
         })));
+        const sessionCid = session === undefined ? null : localSessionCid(session, ctx.host);
         renderList({
           profile: ctx.profile,
           session: session === undefined ? null : {
-            cid: localSessionCid(session, ctx.host),
+            cid: sessionCid,
+            label: sessionCid === null ? null : "current session",
             expiresAt: isoDate(session.expiresAt ?? session.expiry),
           },
           localVerification: "node" in restored ? "available" : restored.unavailable,

@@ -70,6 +70,11 @@ async function kvHandle(
   return { kv, spaceUri };
 }
 
+/** `attempts` and `backoffMs` for `--json`, so latency can be split from retry backoff. */
+function retryFields(retry?: { attempts: number; backoffMs: number }) {
+  return retry ? { attempts: retry.attempts, backoffMs: retry.backoffMs } : {};
+}
+
 export function registerKvCommand(program: Command): void {
   const kv = program.command("kv").description("Key-value store operations");
 
@@ -130,6 +135,7 @@ export function registerKvCommand(program: Command): void {
             key,
             data,
             metadata,
+            ...retryFields(result.data.retry),
           });
         } else {
           // Just output the raw value for get - useful for piping
@@ -186,7 +192,7 @@ export function registerKvCommand(program: Command): void {
           await throwKvError(result.error, spaceUri, ctx.profile);
         }
 
-        outputJson({ key, written: true });
+        outputJson({ key, written: true, ...retryFields(result.data?.retry) });
       } catch (error) {
         return handleError(error);
       }
@@ -211,7 +217,7 @@ export function registerKvCommand(program: Command): void {
           await throwKvError(result.error, spaceUri, ctx.profile);
         }
 
-        outputJson({ key, deleted: true });
+        outputJson({ key, deleted: true, ...retryFields(result.data?.retry) });
       } catch (error) {
         return handleError(error);
       }

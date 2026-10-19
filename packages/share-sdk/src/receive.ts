@@ -7,6 +7,7 @@ import {
   verifyEnvelopeV3,
   type ShareEnvelopeV3,
 } from "@tinycloud/share-envelope";
+import { ArtifactPinError, verifyArtifactShare } from "./artifact-pin.js";
 import type { ShareAuthorizationMethod } from "./authorization.js";
 
 export type ShareErrorCode = "invalid-link" | "fetch-failed" | "max-bytes-exceeded" | "cid-mismatch" | "decrypt-failed" | "envelope-invalid" | "origin-mismatch" | "signature-invalid" | "capability-invalid" | "expired" | "unsupported-target" | "authorization-denied" | "content-integrity-failed";
@@ -58,6 +59,8 @@ export interface ShareMetadata {
   readonly actions: readonly string[];
   readonly expiresAt: string;
   readonly display: { readonly senderName?: string; readonly filename?: string; readonly mode?: string };
+  /** Set when the share is pinned to one artifact version; the owner's signature covers it (TC-1428). */
+  readonly artifact?: { readonly id: string; readonly version: number };
 }
 
 export interface ShareInspection {
@@ -100,6 +103,7 @@ function metadataFor(envelope: ShareEnvelopeV3, origin: string): ShareMetadata {
       ...(envelope.display.filename === undefined ? {} : { filename: envelope.display.filename }),
       ...(envelope.display.mode === undefined ? {} : { mode: envelope.display.mode }),
     },
+    ...(envelope.artifactPin === undefined ? {} : { artifact: { id: envelope.artifactPin.artifactId, version: envelope.artifactPin.version } }),
   };
 }
 
@@ -130,6 +134,14 @@ async function resolvePolicyShare(link: string, options: ShareFetchOptions): Pro
     if (!await verifyEnvelopeV3(envelope, { expectedSignerDid: envelope.policy.ownerDid })) throw new Error("signature");
   } catch {
     throw new ShareReceiveError("signature-invalid", "share signature is invalid");
+  }
+  // The owner's signature (checked above) covers the artifact pin; the pin must also match what the share reads, and a
+  // share that reads an artifact without a pin is refused.
+  try {
+    verifyArtifactShare(envelope, { expectedOwnerDid: envelope.policy.ownerDid });
+  } catch (error) {
+    if (!(error instanceof ArtifactPinError)) throw error;
+    throw new ShareReceiveError("envelope-invalid", `share artifact pin is invalid (${error.code})`);
   }
   options.signal?.throwIfAborted();
   const expiry = Date.parse(envelope.expiry);

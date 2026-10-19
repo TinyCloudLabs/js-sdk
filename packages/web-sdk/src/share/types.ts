@@ -1,10 +1,11 @@
 import type { ClientSession, IKVService } from "@tinycloud/sdk-core";
 import type { ShareMetadata } from "@tinycloud/share-sdk";
 import type { CredentialsService } from "../credentials";
+import type { ShareReceiverKeyCustody } from "./receiver-session";
 
 export type ShareReceiverIdentity =
   | { readonly kind: "account"; readonly holderDid: string }
-  | { readonly kind: "receiver"; readonly holderDid: string; readonly custody: "session"; readonly origin: string };
+  | { readonly kind: "receiver"; readonly holderDid: string; readonly custody: ShareReceiverKeyCustody; readonly origin: string };
 
 export type ShareReceiveProgress =
   | { readonly state: "identity-selection"; readonly status: "started" | "completed"; readonly identity?: ShareReceiverIdentity }

@@ -1,4 +1,4 @@
-import { MAX_GRANT_TTL_MS } from "@tinycloud/sdk-services/kv/replication/contractConstants";
+import { MAX_GRANT_TTL_MS } from "@tinycloud/sdk-services/kv/replication/grantPolicyConstants";
 import { assertFolderPrefix as assertPureFolderPrefix, kvPrefixCovers } from "@tinycloud/sdk-services/kv/replication/prefix";
 import type { ReplicationOptions } from "@tinycloud/sdk-core";
 
