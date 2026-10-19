@@ -349,3 +349,36 @@ describe("DelegationManager.status", () => {
     expect((await manager.status("bafy-child")).ok).toBe(false);
   });
 });
+
+describe("DelegationManager invoke paths", () => {
+  const emptyOk = () => new Response("", { status: 200 });
+  const make = (fetch: () => Promise<Response>) =>
+    new DelegationManager({
+      hosts: ["https://node.tinycloud.xyz"],
+      session: { spaceId: "space" } as ServiceSession,
+      invoke: mock(() => ({ Authorization: "TinyCloudInvocation fixture" })),
+      fetch,
+    });
+
+  test("an empty 200 from getChain is an unsupported operation, not a parse failure", async () => {
+    const result = await make(async () => emptyOk()).getChain("bafy-child");
+    expect(result).toEqual({
+      ok: false,
+      error: expect.objectContaining({ code: "UNSUPPORTED_OPERATION", meta: expect.objectContaining({ status: 200 }) }),
+    });
+  });
+
+  test("an empty 200 from checkPermission is an unsupported operation, not a parse failure", async () => {
+    const result = await make(async () => emptyOk()).checkPermission("a/", "tinycloud.kv/get");
+    expect(result).toEqual({
+      ok: false,
+      error: expect.objectContaining({ code: "UNSUPPORTED_OPERATION" }),
+    });
+  });
+
+  test("a populated checkPermission body is still read", async () => {
+    const result = await make(async () => new Response(JSON.stringify({ allowed: true }), { status: 200 }))
+      .checkPermission("a/", "tinycloud.kv/get");
+    expect(result).toEqual({ ok: true, data: true });
+  });
+});

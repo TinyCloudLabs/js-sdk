@@ -8,15 +8,6 @@ import { ExitCode } from "../config/constants.js";
 import { ensureAuthenticated } from "../lib/sdk.js";
 import { revokeDelegationOnNode } from "../lib/revoke-delegation.js";
 import { parseExpiry } from "../lib/duration.js";
-function normalizeDid(input: string): string {
-  const normalized = input.trim();
-  const fragmentIndex = normalized.indexOf("#");
-  return (fragmentIndex === -1 ? normalized : normalized.slice(0, fragmentIndex)).toLowerCase();
-}
-function didMatches(actual: string | undefined, expected: string): boolean {
-  if (!actual) return false;
-  return normalizeDid(actual) === normalizeDid(expected);
-}
 async function confirmCurrentSessionRevoke(yes: boolean): Promise<void> {
   if (yes) return;
   const warning = "This is your current sign-in session; revoking it signs you out";
@@ -54,30 +45,35 @@ export function registerDelegationCommand(
         const ctx = await ProfileManager.resolveContext(globalOpts);
         const node = await ensureAuthenticated(ctx);
 
-        const actions = options.actions.split(",").map((a: string) => {
+        const actions: string[] = options.actions.split(",").map((a: string) => {
           const trimmed = a.trim();
           return trimmed.startsWith("tinycloud.") ? trimmed : `tinycloud.${trimmed}`;
         });
+        const byService: Record<string, string[]> = {};
+        for (const action of actions) {
+          const slash = action.indexOf("/");
+          if (slash <= "tinycloud.".length || slash === action.length - 1) {
+            throw new CLIError("USAGE_ERROR", `Invalid action "${action}"; use service/action, e.g. kv/get`, ExitCode.USAGE_ERROR);
+          }
+          (byService[action.slice(0, slash)] ??= []).push(action);
+        }
 
         const expiry = parseExpiry(options.expiry);
 
-        const result = await node.delegationManager.create({
-          delegateDID: options.to,
-          path: options.path,
-          actions,
-          expiry,
-        });
-
-        if (!result.ok) {
-          throw cliErrorFromService(result.error);
-        }
+        // delegateTo signs the delegation and activates it with the node
+        // (POST /delegate); the node does not serve tinycloud.delegation/create.
+        const { delegation: created } = await node.delegateTo(
+          options.to,
+          Object.entries(byService).map(([service, serviceActions]) => ({ service, path: options.path, actions: serviceActions })),
+          { expiry: expiry.getTime() - Date.now() },
+        );
 
         outputJson({
-          cid: result.data.cid,
+          cid: created.cid,
           delegateDid: options.to,
           path: options.path,
           actions,
-          expiry: expiry.toISOString(),
+          expiry: created.expiry.toISOString(),
         });
       } catch (error) {
         return handleError(error);
@@ -89,38 +85,38 @@ export function registerDelegationCommand(
     .description("List delegations")
     .option("--granted", "Show only delegations I've granted")
     .option("--received", "Show only delegations I've received")
+    .option("--space <space>", "Filter by space name or ID")
     .action(async (options, cmd) => {
       try {
         const globalOpts = cmd.optsWithGlobals();
         const ctx = await ProfileManager.resolveContext(globalOpts);
         const node = await ensureAuthenticated(ctx);
 
-        const result = await node.delegationManager.list();
+        if (options.granted && options.received) {
+          throw new CLIError("USAGE_ERROR", "Use only one of --granted or --received.", ExitCode.USAGE_ERROR);
+        }
+        // Account-wide listing, the same node query as `account delegations list`.
+        const result = await node.account.delegations.list({
+          direction: options.granted ? "granted" : options.received ? "received" : "all",
+          space: options.space,
+        });
         if (!result.ok) {
           throw cliErrorFromService(result.error);
         }
 
-        let delegations: any[] = result.data;
-
-        // Filter if requested
-        if (options.granted) {
-          const myDid = node.did;
-          delegations = delegations.filter((d: any) => didMatches(d.delegatorDID, myDid));
-        } else if (options.received) {
-          const myDid = node.did;
-          delegations = delegations.filter((d: any) => didMatches(d.delegateDID, myDid));
-        }
-
         outputJson({
-          delegations: delegations.map((d: any) => ({
+          delegations: result.data.map((d) => ({
             cid: d.cid,
-            delegatee: d.delegateDID,
-            delegator: d.delegatorDID,
+            delegatee: d.delegateDid,
+            delegator: d.delegatorDid,
+            direction: d.direction,
+            spaceId: d.spaceId,
             path: d.path,
             actions: d.actions,
-            expiry: d.expiry instanceof Date ? d.expiry.toISOString() : d.expiry,
+            expiry: d.expiry.toISOString(),
+            status: d.status,
           })),
-          count: delegations.length,
+          count: result.data.length,
         });
       } catch (error) {
         return handleError(error);

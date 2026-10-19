@@ -1828,7 +1828,6 @@ export class TinyCloudNode {
         if (!this.wasmBindings.computeCid) throw new Error("computeCid is unavailable");
         return this.wasmBindings.computeCid(data, codec);
       },
-      // delegationManager: undefined - not needed for receive()
       createKVService: (config) => {
         // Use pathPrefix as the KV service prefix for sharing links
         // Strip trailing slash to match DelegatedAccess behavior
@@ -4404,7 +4403,6 @@ export class TinyCloudNode {
     });
     sharingService.updateConfig({
       session: input.serviceSession,
-      delegationManager,
       sessionExpiry: input.sessionExpiry,
       createDelegationWasm: (params) => {
         graph.assertActive();
@@ -5516,7 +5514,6 @@ export class TinyCloudNode {
       assertActive: () => graph.assertActive(),
       keyProvider: this._keyProvider,
       registry: this._capabilityRegistry,
-      delegationManager: this._delegationManager,
       sessionExpiry: this.getSessionExpiry(),
       createDelegationWasm: (params) => {
         graph.assertActive();
@@ -6926,33 +6923,6 @@ export class TinyCloudNode {
   // ===========================================================================
 
   /**
-   * Create a delegation using the v2 DelegationManager.
-   *
-   * This is a convenience method that wraps DelegationManager.create().
-   * For more control, use `this.delegationManager` directly.
-   *
-   * @param params - Delegation parameters
-   * @returns Result containing the created Delegation
-   *
-   * @example
-   * ```typescript
-   * const result = await alice.delegate({
-   *   delegateDID: bob.did,
-   *   path: "shared/",
-   *   actions: ["tinycloud.kv/get", "tinycloud.kv/put"],
-   *   expiry: new Date(Date.now() + 24 * 60 * 60 * 1000),
-   * });
-   *
-   * if (result.ok) {
-   *   console.log("Delegation created:", result.data.cid);
-   * }
-   * ```
-   */
-  async delegate(params: CreateDelegationParams): Promise<DelegationResult<Delegation>> {
-    return this.delegationManager.create(params);
-  }
-
-  /**
    * Revoke a delegation with the owner wallet when available. Session-only
    * clients continue to use their delegated revocation authority.
    *
@@ -6980,15 +6950,6 @@ export class TinyCloudNode {
         : decodeAuthorizationBytes(authorization),
       0x55n,
     );
-  }
-
-  /**
-   * List all delegations for the current session's space.
-   *
-   * @returns Result containing an array of Delegations
-   */
-  async listDelegations(): Promise<DelegationResult<Delegation[]>> {
-    return this.delegationManager.list();
   }
 
   /**
