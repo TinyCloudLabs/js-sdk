@@ -65,10 +65,14 @@ import {
   type CreateOwnerDelegationParams,
   type OwnerDelegationReceipt,
   type LocalNodeIdentityStore,
+  type OnNodeNotFound,
+  type RegistryPolicy,
+  type RegistrySequenceStore,
   SignInOptions,
   ACCOUNT_MANIFEST_PERMISSIONS,
   composeManifestRequest,
   createLocalStorageLocalNodeIdentityStore,
+  createLocalStorageRegistrySequenceStore,
   type StorageFullEvent,
   type IStorageService,
 } from "@tinycloud/sdk-core";
@@ -137,8 +141,28 @@ export interface Config extends ClientConfig {
   tinycloudHosts?: string[];
   /** TinyCloud location registry URL. Default: https://registry.tinycloud.xyz. */
   tinycloudRegistryUrl?: string | null;
-  /** Fallback TinyCloud hosts. Default: hosted TinyCloud node. */
+  /**
+   * Fallback TinyCloud hosts. Default: hosted TinyCloud node. Used only by the
+   * default `registryPolicy` ("legacy-fallback"), whose silent fallback is
+   * deprecated and will be removed in a future major release.
+   */
   tinycloudFallbackHosts?: string[] | null;
+  /**
+   * How sign-in uses the location registry when no `tinycloudHosts` are set.
+   * Default `"legacy-fallback"` (deprecated). `"fail-closed"` routes on the
+   * registry verdict for the wallet address and refuses automatic space
+   * creation on a host the owner's registry record does not list, or when
+   * the registry gives no verdict. See `TinyCloudNodeConfig.registryPolicy`.
+   */
+  registryPolicy?: RegistryPolicy;
+  /** `fail-closed` only: host for owners with no registry record. Default https://node.tinycloud.xyz; `null` refuses them. */
+  newUserHost?: string | null;
+  /** `fail-closed` only: chain ID of the v1 registry subject built from the wallet address. Default 1. */
+  registryChainId?: number;
+  /** `fail-closed` only: highest registry sequence seen per owner. Default: a `localStorage`-backed store. */
+  registrySequenceStore?: RegistrySequenceStore;
+  /** `fail-closed` only: retry, use another host (not identity-checked; it persists with the session), or abort when sign-in resolves no host. Without it, sign-in throws. */
+  onNodeNotFound?: OnNodeNotFound;
   /** Probe configured/registered local nodes before registry/fallback resolution. Default: true. */
   autoDiscoverLocalNode?: boolean;
   /** Local loopback node URL to probe. Omit to avoid probing loopback. */
@@ -455,6 +479,13 @@ export class TinyCloudWeb {
       host: this.config.tinycloudHosts?.[0],
       tinycloudRegistryUrl: this.config.tinycloudRegistryUrl,
       tinycloudFallbackHosts: this.config.tinycloudFallbackHosts,
+      registryPolicy: this.config.registryPolicy,
+      newUserHost: this.config.newUserHost,
+      registryChainId: this.config.registryChainId,
+      registrySequenceStore:
+        this.config.registrySequenceStore ??
+        createLocalStorageRegistrySequenceStore(),
+      onNodeNotFound: this.config.onNodeNotFound,
       autoDiscoverLocalNode: this.config.autoDiscoverLocalNode,
       localNodeUrl: this.config.localNodeUrl,
       localLinkName: this.config.localLinkName,

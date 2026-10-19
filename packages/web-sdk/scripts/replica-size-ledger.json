@@ -87,6 +87,13 @@
       "index.mjs": 0,
       "index.cjs": 0,
       "note": "Replica gzip growth measured against this PR's merge base"
+    },
+    {
+      "pr": "#589",
+      "ticket": "TC-1443",
+      "index.mjs": 0,
+      "index.cjs": 0,
+      "note": "Replica gzip growth measured against this PR's merge base"
     }
   ],
   "phase2Ratchet": {
@@ -515,5 +522,31 @@
       }
     },
     "reason": "restorePersisted refused a stored receiver key whose createdAt was later than the caller's now, which was read when the tab started. A peer tab that started a moment later stores a record stamped with its own later clock, so this tab judged it future-dated, deleted it and generated a second key (flaky 'tabs opening at once share one stored key', master run 39162127319). Both restores now read the clock when they run. The fix cannot be free: it adds one clock read at each restore. Shrink attempts first (same-toolchain local gzip, Bun 1.4.3, master 1d7b78fd, base +0 / +0): reading the clock inside restorePersisted and compacting its comparison +15 / +13; additionally deduplicating the lifetime fields shared by the memory and persisted sessions +13 / +12 (gzip already shares them); a 2 s tolerance on the future-dated comparison using the existing storage timeout constant +8 / +5, rejected because it loosens the guard against future-dated records for 3 bytes; the chosen two inline fresh clock reads +11 / +5 locally and +12 / +6 on canonical CI, identical in both jobs of run 39172186671 on b2725dd6 (master 28ca77a0 merged into the PR branch), over TC-1443's ceilings."
+  },
+  "tc1443bRatchet": {
+    "label": "TC-1443 slice b #589 opt-in fail-closed registry policy, exact canonical delta",
+    "ruling": "TC-1443 slice b size row; approved by Naomi (2026-10-18), delta +2,913/+4,510 ±50 B gzip over master 4a717372457fa1deac30c7dca65ab0ed1e1787ab",
+    "base": "4a717372457fa1deac30c7dca65ab0ed1e1787ab",
+    "sourceCommits": [
+      "f65c2a0f2493a10adbe028f5f95f3372528bb017"
+    ],
+    "canonicalCI": {
+      "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39176947473",
+      "jobs": [
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39176947473/job/117821449012",
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39176947473/job/117821449071"
+      ]
+    },
+    "root": {
+      "delta": {
+        "index.mjs": 2913,
+        "index.cjs": 4510
+      },
+      "ceiling": {
+        "index.mjs": 1473920,
+        "index.cjs": 1402497
+      }
+    },
+    "reason": "sdk-core adds the opt-in fail-closed registry policy (registry-policy.ts: resolveOwnerHosts and the space-creation guard, plus location.ts hooks and the legacy-fallback deprecation warning); web-sdk sign-in (tcw.ts) threads registryPolicy, newUserHost, registryChainId, registrySequenceStore and onNodeNotFound through. Both root bundles grow. No shrink was attempted for this row. Base: master CI run 39176239864 at f819c542 (4a717372 is a version commit on top) measured index.mjs 1,471,007 / index.cjs 1,397,987 in both Node jobs, equal to the TC-1466 ceilings. PR: run 39176947473 on merge commit f65c2a0f measured 1,473,920 / 1,402,497 in both Node jobs, i.e. +2,913 / +4,510, the same delta as on the earlier base 28ca77a0 (run 39172113588 on 87310cad: 1,473,908 / 1,402,491 over 1,470,995 / 1,397,981). Delta approved by Naomi (2026-10-18): +2,913/+4,510 ±50 B, zero headroom."
   }
 }

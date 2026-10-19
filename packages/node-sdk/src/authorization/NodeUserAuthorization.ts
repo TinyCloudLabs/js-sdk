@@ -32,7 +32,17 @@ import {
   resourceCapabilitiesToSpaceAbilitiesMap,
   type ResourceCapability,
   resolveTinyCloudHosts,
+  resolveFailClosedTinyCloudHosts,
+  lookupOwnerRegistryVerdict,
+  assertSpaceCreationAllowed,
+  createInMemoryRegistrySequenceStore,
+  registryOwnerSubjectV1,
   type LocalNodeIdentityStore,
+  type OnNodeNotFound,
+  type RegistryPolicy,
+  type RegistrySequenceStore,
+  type RegistryVerdict,
+  type SpaceCreationContext,
   EXPIRY,
   canonicalizeAddress,
   makePkhSpaceId,
@@ -208,8 +218,46 @@ export interface NodeUserAuthorizationConfig {
   tinycloudHosts?: string[];
   /** TinyCloud location registry URL. Default: https://registry.tinycloud.xyz. */
   tinycloudRegistryUrl?: string | null;
-  /** Fallback TinyCloud hosts. Default: hosted TinyCloud node. */
+  /**
+   * Fallback TinyCloud hosts. Default: hosted TinyCloud node. Used only by the
+   * default `registryPolicy` ("legacy-fallback"), whose silent fallback is
+   * deprecated and will be removed in a future major release.
+   */
   tinycloudFallbackHosts?: string[] | null;
+  /**
+   * How sign-in uses the location registry when no host is configured.
+   *
+   * - `"legacy-fallback"` (default, deprecated): a registry miss or failure
+   *   silently uses `tinycloudFallbackHosts`, with a one-time warning.
+   * - `"fail-closed"`: sign-in acts on the registry verdict for the signer
+   *   address. Registered owners go to their listed hosts, unregistered owners
+   *   to `newUserHost`, and an unavailable registry is
+   *   `RegistryUnavailableError`, never a new account. Automatic space
+   *   creation is refused on a host the owner's record does not list
+   *   (`NodeRegistryEntryExistsError`) or when the registry gives no verdict
+   *   (`RegistryUnavailableError`).
+   */
+  registryPolicy?: RegistryPolicy;
+  /**
+   * `fail-closed` only: host for owners with no registry record (and only
+   * them). Default https://node.tinycloud.xyz. `null` refuses them with
+   * `NodeNotFoundError`.
+   */
+  newUserHost?: string | null;
+  /**
+   * `fail-closed` only: chain ID of the v1 registry subject, which is built
+   * from the signer address, never the session chain. Default 1.
+   */
+  registryChainId?: number;
+  /** `fail-closed` only: highest registry sequence seen per owner. Default: in-memory. */
+  registrySequenceStore?: RegistrySequenceStore;
+  /**
+   * `fail-closed` only: called when sign-in resolves no host
+   * (`NodeNotFoundError` or `RegistryUnavailableError`) to retry, use another
+   * host (not identity-checked; it persists with the session), or abort.
+   * Without it, sign-in throws the error.
+   */
+  onNodeNotFound?: OnNodeNotFound;
   /** Probe configured/registered local nodes before registry/fallback resolution. Default: true. */
   autoDiscoverLocalNode?: boolean;
   /** Local loopback node URL to probe. Omit to avoid probing loopback. */
@@ -324,6 +372,13 @@ export class NodeUserAuthorization implements IUserAuthorization {
   private tinycloudHosts?: string[];
   private readonly tinycloudRegistryUrl?: string | null;
   private readonly tinycloudFallbackHosts?: string[] | null;
+  private readonly registryPolicy?: RegistryPolicy;
+  private readonly newUserHost?: string | null;
+  private readonly registryChainId?: number;
+  private readonly registrySequenceStore: RegistrySequenceStore;
+  private readonly onNodeNotFound?: OnNodeNotFound;
+  /** Verdict from the last `fail-closed` host resolution, reused by {@link assertMayCreateSpace}. */
+  private registryVerdict?: RegistryVerdict;
   private readonly autoDiscoverLocalNode?: boolean;
   private readonly localNodeUrl?: string;
   private readonly localLinkName?: string;
@@ -414,6 +469,12 @@ export class NodeUserAuthorization implements IUserAuthorization {
     this.tinycloudHosts = config.tinycloudHosts;
     this.tinycloudRegistryUrl = config.tinycloudRegistryUrl;
     this.tinycloudFallbackHosts = config.tinycloudFallbackHosts;
+    this.registryPolicy = config.registryPolicy;
+    this.newUserHost = config.newUserHost;
+    this.registryChainId = config.registryChainId;
+    this.registrySequenceStore =
+      config.registrySequenceStore ?? createInMemoryRegistrySequenceStore();
+    this.onNodeNotFound = config.onNodeNotFound;
     this.autoDiscoverLocalNode = config.autoDiscoverLocalNode;
     this.localNodeUrl = config.localNodeUrl;
     this.localLinkName = config.localLinkName;
@@ -560,6 +621,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
     // particular, a second restore may target a different host and must not
     // retain skip decisions from the previous activation.
     this.tinycloudHosts = hosts && hosts.length > 0 ? [...hosts] : undefined;
+    this.registryVerdict = undefined;
     this._lastActivationSkippedSpaceIds = [];
     this._lastActivationActivatedSpaceIds = [];
     if (!session) {
@@ -617,6 +679,24 @@ export class NodeUserAuthorization implements IUserAuthorization {
       return;
     }
 
+    if (this.registryPolicy === "fail-closed") {
+      const resolved = await resolveFailClosedTinyCloudHosts(address, {
+        registryUrl: this.tinycloudRegistryUrl,
+        registryChainId: this.registryChainId,
+        newUserHost: this.newUserHost,
+        sequenceStore: this.registrySequenceStore,
+        onNodeNotFound: this.onNodeNotFound,
+        autoDiscoverLocalNode: this.autoDiscoverLocalNode,
+        localNodeUrl: this.localNodeUrl,
+        localLinkName: this.localLinkName,
+        expectedNodeDid: this.expectedNodeDid,
+        localNodeIdentityStore: this.localNodeIdentityStore,
+      });
+      this.tinycloudHosts = resolved.hosts;
+      this.registryVerdict = resolved.verdict;
+      return;
+    }
+
     const subject = pkhDid(address, chainId);
     const resolved = await resolveTinyCloudHosts(subject, {
       registryUrl: this.tinycloudRegistryUrl,
@@ -628,6 +708,33 @@ export class NodeUserAuthorization implements IUserAuthorization {
       localNodeIdentityStore: this.localNodeIdentityStore,
     });
     this.tinycloudHosts = resolved.hosts;
+  }
+
+  /**
+   * Space-creation guard (TC-1443). Under `registryPolicy: "fail-closed"`,
+   * throws unless the owner's registry verdict allows a space on the primary
+   * host: `NodeRegistryEntryExistsError` when the owner's record does not
+   * list it, `RegistryUnavailableError` when the registry gives no
+   * verdict. Reuses this session's sign-in verdict unless it was
+   * `unavailable`, else looks it up now (explicit-host apps). Under the
+   * default policy it returns at once and performs no lookup.
+   */
+  async assertMayCreateSpace(): Promise<void> {
+    if (this.registryPolicy !== "fail-closed") return;
+    if (this._address === undefined) {
+      throw new Error("Must be signed in to create a space");
+    }
+    await this.ensureTinyCloudHosts();
+    const subject = registryOwnerSubjectV1(this._address, this.registryChainId);
+    let verdict = this.registryVerdict;
+    if (verdict?.subject !== subject || verdict.status === "unavailable") {
+      verdict = await lookupOwnerRegistryVerdict(subject, {
+        registryUrl: this.tinycloudRegistryUrl,
+        sequenceStore: this.registrySequenceStore,
+      });
+      this.registryVerdict = verdict;
+    }
+    assertSpaceCreationAllowed(verdict, this.primaryTinyCloudHost);
   }
 
   private requireTinyCloudHosts(): string[] {
@@ -1202,6 +1309,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
         return;
       }
 
+      await this.guardSpaceCreation(handler, creationContext);
       const confirmed = await handler.confirmSpaceCreation(creationContext);
       if (!confirmed) {
         return;
@@ -1253,6 +1361,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
         return;
       }
 
+      await this.guardSpaceCreation(handler, creationContext);
       const confirmed = await handler.confirmSpaceCreation(creationContext);
       if (!confirmed) {
         return;
@@ -1299,6 +1408,20 @@ export class NodeUserAuthorization implements IUserAuthorization {
       new Error(`Failed to activate session: ${describeHostFailure(result)}`),
       { cause: result },
     );
+  }
+
+  /** {@link assertMayCreateSpace}, reporting a refusal to the creation handler before rethrowing it. */
+  private async guardSpaceCreation(
+    handler: ISpaceCreationHandler,
+    context: SpaceCreationContext,
+  ): Promise<void> {
+    try {
+      await this.assertMayCreateSpace();
+    } catch (error) {
+      const failure = error instanceof Error ? error : new Error(String(error));
+      handler.onSpaceCreationFailed?.(context, failure);
+      throw failure;
+    }
   }
 
   private recordActivationSkippedSpaces(
