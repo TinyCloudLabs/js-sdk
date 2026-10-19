@@ -382,3 +382,47 @@ describe("DelegationManager invoke paths", () => {
     expect(result).toEqual({ ok: true, data: true });
   });
 });
+
+describe("DelegationManager.query space choice", () => {
+  const accountSpaceId = "tinycloud:pkh:eip155:1:owner:account";
+  const defaultSpaceId = "tinycloud:pkh:eip155:1:owner:default";
+  const page = () => new Response(JSON.stringify({ schemaVersion: 2, items: [] }), { status: 200 });
+  const forbidden = () => new Response("Delegation query proof is not authorized", { status: 403 });
+  const make = (responses: Array<() => Response>) => {
+    const invokeAny = mock((_session: ServiceSession, _requests: Array<{ spaceId?: string }>) => ({ Authorization: "query" }));
+    const queue = [...responses];
+    const fetch = mock(async () => queue.shift()!());
+    const manager = new DelegationManager({
+      hosts: ["https://node.tinycloud.xyz"],
+      accountSpaceId,
+      session: { spaceId: defaultSpaceId } as ServiceSession,
+      invoke: mock(() => ({ Authorization: "unused" })),
+      invokeAny,
+      fetch,
+    });
+    return { manager, invokeAny, fetch };
+  };
+
+  test("signs for the account space when the session holds delegation/list there", async () => {
+    const { manager, invokeAny, fetch } = make([page]);
+    expect((await manager.query()).ok).toBe(true);
+    expect(invokeAny.mock.calls.map(([, requests]) => requests[0]?.spaceId)).toEqual([accountSpaceId]);
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
+  test("falls back to the session's own space when the account space is refused", async () => {
+    const { manager, invokeAny, fetch } = make([forbidden, page]);
+    expect((await manager.query()).ok).toBe(true);
+    expect(invokeAny.mock.calls.map(([, requests]) => requests[0]?.spaceId)).toEqual([accountSpaceId, defaultSpaceId]);
+    expect(fetch).toHaveBeenCalledTimes(2);
+  });
+
+  test("a session that holds delegation/list nowhere gets a typed permission error", async () => {
+    const { manager, fetch } = make([forbidden, forbidden]);
+    expect(await manager.query()).toEqual({
+      ok: false,
+      error: expect.objectContaining({ code: "PERMISSION_DENIED", meta: { status: 403 } }),
+    });
+    expect(fetch).toHaveBeenCalledTimes(2);
+  });
+});

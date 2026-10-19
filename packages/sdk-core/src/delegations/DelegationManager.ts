@@ -413,19 +413,41 @@ export class DelegationManager {
       };
     }
     try {
-      const invocationHeaders = this.invokeAny(this.session, [{
-        spaceId: accountSpaceId,
-        service: "delegation",
-        path: "",
-        action: DelegationAction.LIST,
-      }]);
-      const headers = Object.fromEntries(new Headers(invocationHeaders).entries());
-      headers["content-type"] = "application/json";
-      const response = await this.fetchFn(`${this.host}/delegation/query`, {
-        method: "POST",
-        headers,
-        body: JSON.stringify(validated.data),
-      });
+      // The node reads the account from the space's owner DID only, so delegation/list on any of the
+      // owner's spaces works. Sign for the account space if the session holds it there, else for the
+      // session's own space (a plain OpenKey login grants only that one).
+      let response: FetchResponse | undefined;
+      for (const spaceId of new Set([accountSpaceId, this.session.spaceId])) {
+        let headers: Record<string, string>;
+        try {
+          headers = Object.fromEntries(new Headers(this.invokeAny(this.session, [{
+            spaceId,
+            service: "delegation",
+            path: "",
+            action: DelegationAction.LIST,
+          }])).entries());
+        } catch {
+          continue;
+        }
+        headers["content-type"] = "application/json";
+        response = await this.fetchFn(`${this.host}/delegation/query`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify(validated.data),
+        });
+        if (response.status !== 403) break;
+      }
+      if (!response || response.status === 403) {
+        return {
+          ok: false,
+          error: createError(
+            DelegationErrorCodes.PERMISSION_DENIED,
+            "This session does not hold tinycloud.delegation/list on the account space or its own space",
+            undefined,
+            { status: 403 },
+          ),
+        };
+      }
       if (!response.ok) {
         const errorText = await response.text();
         return {

@@ -15,6 +15,7 @@ const spaceUri = "tinycloud:pkh:eip155:1:0x1111111111111111111111111111111111111
 // exposes only `query`: reaching for `list` or a delegationManager fails the command.
 let store: any[];
 let queryHidesNewDelegations = false;
+let sessionCanQuery = true;
 const sessionServices = new Set(["tinycloud.kv", "tinycloud.sql"]);
 const delegateToCalls: any[] = [];
 const queryCalls: any[] = [];
@@ -47,6 +48,7 @@ const fakeNode = {
     delegations: {
       query: async (options: { direction?: string; space?: string; limit?: number; cursor?: string }) => {
         queryCalls.push(options);
+        if (!sessionCanQuery) return { ok: false, error: { code: "PERMISSION_DENIED", message: "403" } };
         const direction = options.direction ?? "all";
         const matching = store.filter((d) => direction === "all" || d.direction === direction);
         const start = options.cursor ? Number(options.cursor) : 0;
@@ -93,6 +95,7 @@ const recipient = "did:key:z6MkrecipientRecipientRecipientRecipientRecipient";
 beforeEach(() => {
   store = [];
   queryHidesNewDelegations = false;
+  sessionCanQuery = true;
   outputs.length = 0;
   errors.length = 0;
   delegateToCalls.length = 0;
@@ -179,6 +182,20 @@ describe("tc delegation create / list / info", () => {
     expect(delegateToCalls).toEqual([]);
     expect(errors[0]).toMatchObject({ code: "USAGE_ERROR" });
     expect(outputs).toEqual([]);
+  });
+
+  test("a session without delegation/list gets a typed error that says to log in again, from list, info and create's read-back", async () => {
+    sessionCanQuery = false;
+    await run("list");
+    await run("info", "bafy-any");
+    await run("create", "--to", recipient, "--path", "qa-seed/", "--actions", "kv/get");
+    expect(outputs).toEqual([]);
+    expect(errors).toHaveLength(3);
+    for (const error of errors) {
+      expect(error).toMatchObject({ code: "PERMISSION_DENIED", exitCode: 5 });
+      expect(error.message).toContain("tinycloud.delegation/list");
+      expect(error.message).toMatch(/auth login/);
+    }
   });
 
   test("list --granted and --received filter by direction, and both together are refused", async () => {

@@ -8,6 +8,7 @@ import { ExitCode } from "../config/constants.js";
 import { ensureAuthenticated } from "../lib/sdk.js";
 import { revokeDelegationOnNode } from "../lib/revoke-delegation.js";
 import { parseExpiry } from "../lib/duration.js";
+import { CLI_NAME } from "@tinycloud/operations/cli-name";
 import { PermissionNotInManifestError, type AccountDelegationRecord, type TinyCloudNode } from "@tinycloud/node-sdk";
 
 type DelegationQueryOptions = { direction: "granted" | "received" | "all"; space?: string };
@@ -22,7 +23,16 @@ async function queryDelegations(
   let cursor: string | undefined;
   do {
     const page = await node.account.delegations.query({ ...options, limit: 100, cursor });
-    if (!page.ok) throw cliErrorFromService(page.error);
+    if (!page.ok) {
+      if (page.error.code === "PERMISSION_DENIED") {
+        throw new CLIError(
+          "PERMISSION_DENIED",
+          `This session cannot read delegations: it lacks tinycloud.delegation/list. Run \`${CLI_NAME} auth login\` again to grant it.`,
+          ExitCode.PERMISSION_DENIED,
+        );
+      }
+      throw cliErrorFromService(page.error);
+    }
     found.push(...page.data.items);
     cursor = page.data.nextCursor;
   } while (cursor && !(until && found.some((d) => d.cid === until)));
