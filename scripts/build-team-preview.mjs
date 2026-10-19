@@ -129,7 +129,8 @@ try {
     if (entry.target || !/\.(?:json|js|cjs|mjs|map|md|sh)$/.test(path)) continue;
     const text = await readFile(join(staging, path), "utf8");
     if ([root, scratch, guidanceRoot].some((local) => text.includes(local))) throw new Error(`Machine-local path leaked into ${path}`);
-    if (/\b(?:npm_[A-Za-z0-9]{36,}|gh[pousr]_[A-Za-z0-9]{36,})\b|-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----/.test(text)) {
+    // PEM parsers contain armor delimiters; reject key payloads, not a delimiter alone.
+    if (/\b(?:npm_[A-Za-z0-9]{36,}|gh[pousr]_[A-Za-z0-9]{36,})\b|-----BEGIN (?:(?:RSA|EC|OPENSSH|ENCRYPTED) )?PRIVATE KEY-----(?:\s|\\+[rn])*[A-Za-z0-9+/]{32,}={0,2}/.test(text)) {
       throw new Error(`Credential material in ${path}`);
     }
   }
