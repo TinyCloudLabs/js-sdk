@@ -158,15 +158,68 @@ ceilings. It is #583's own row, taken after a documented shrink attempt (see the
 `reason`). The ledger's `tc1424Ratchet` row records it and cannot change later; whichever
 PR lands after it re-measures against the new base and updates its own row.
 
+TC-1448 (the `did:pkh` recipient guard for terminal grants in `TinyCloudNode.delegateTo`,
+#591) landed after #583, so it was re-measured against master `1c89b697` and sits on top of
+TC-1424's root ceilings. It raised only the root ceilings once, after a real shrink (it
+reuses the existing terminal-grant error string), by the exact bytes GitHub run 39159867318
+measured on `b8d13379` (master merged into the PR branch, source unchanged since
+`18b6c9fa`), identical in both jobs: 1,468,625 / 1,397,910 B (+44 / +33 over TC-1424's).
+The ledger's `tc1448Ratchet` row records them and cannot change later; whichever PR lands
+after it re-measures against the new base and updates its own row.
+
+The TC-1443 registry verdict classifier in sdk-core (#586) raised only the root
+ceilings once more, after removing a duplicate secp256k1 from the bundle. It landed
+after #591, so it was re-measured against master `70304c3d` and chains after
+TC-1448's root ceilings. Naomi approved the row as a delta over its base (+2,368 / +61
+gzip, ±50 B); GitHub run 39166751086 measured it on source `72ba295c`, identical in
+both Node jobs: 1,470,995 / 1,397,981 B, i.e. +2,370 / +71 over master's measured
+1,468,625 / 1,397,910 B. The row's ceilings are those measured bytes. First import,
+activation, the gated artifact and the worker keep TC-1432's ceilings. The ledger's
+`tc1443Ratchet` row records them and cannot change later. If another root-growing PR
+lands first, #586 re-measures against the new base and replaces its own row before
+it merges.
+
+TC-1466 (a share receiver opened in several tabs at once could end up with different
+signing keys, #595) landed after #586, so it sits on top of TC-1443's root ceilings. It
+raised only the root ceilings once, after shrink attempts recorded in the row's `reason`,
+by the exact bytes GitHub run 39172186671 measured on `b2725dd6` (master `28ca77a0`
+merged into the PR branch), identical in both Node jobs: 1,471,007 / 1,397,987 B (+12 /
++6 over TC-1443's, inside the approved +12 / +6 ± 10 B). The ledger's `tc1466Ratchet` row
+records them and cannot change later; whichever PR lands after it re-measures against
+the new base and updates its own row.
+
+The TC-1443 slice b registry policy (#589: the opt-in fail-closed `registryPolicy` and
+its space-creation guard) raises the root ceilings once more, as an exact-delta row with
+zero headroom, `tc1443bRatchet`, chained after TC-1466's. It landed after #595, so it was
+re-measured on master `4a717372` (CI-measured at `f819c542`, a version commit away):
+1,471,007 / 1,397,987 B, equal to TC-1466's ceilings. GitHub run 39176947473 measured the
+PR on its merge commit `f65c2a0f`, identical in both Node jobs: 1,473,920 / 1,402,497 B,
+i.e. +2,913 / +4,510 over master, the same delta as on the earlier base `28ca77a0`
+(1,473,908 / 1,402,491 B over 1,470,995 / 1,397,981 B). Naomi approved the delta
+(+2,913 / +4,510 gzip, ±50 B each, 2026-10-18). The row's ceilings are those measured
+bytes. First import, activation, the gated artifact and the worker keep TC-1432's
+ceilings. The ledger's `tc1443bRatchet` row records them and cannot change later. If
+another root-growing PR lands first, #589 re-measures against the new base and replaces
+its own row before it merges.
+
+TC-1428 (the owner-signed artifact pin the viewer verifies for addressed artifact shares, #582) was
+re-measured after #589 landed, against master `42b08909`, and sits on top of TC-1443b's root ceilings.
+It raised only the root ceilings once, by the exact bytes GitHub run 39181586326 measured on source
+`90f21ae6`, identical in both jobs: 1,474,835 / 1,403,309 B (+915 / +812 over TC-1443b's). First import,
+activation, gated and the worker keep their ceilings. It is #582's own row, taken after a documented
+shrink attempt (see the row's `reason`). The ledger's `tc1428Ratchet` row records it and cannot change
+later; whichever PR lands after it re-measures against the new base and updates its own row.
+
 **Ancestry pins and squash merges.** A policy row records the PR-branch commit it
 was reviewed at, and its introduction check requires that literal commit in the
-PR head. js-sdk squash-merges, so that commit is unreachable from master
-afterwards; ancestry is therefore checked only when a PR introduces a row. Any
+PR head. js-sdk uses merge commits, which keep that commit reachable, but squash
+merging is still enabled and a squash leaves it unreachable from master; ancestry
+is therefore checked only when a PR introduces a row. Any
 new check that re-validates merged pins against HEAD would break master again
 after the next squash, and only review prevents that. As a consistency check,
 every PR also requires each merged row's pin to be on its base or landed by it:
-the first first-parent master commit that added the pin to `scripts/`, normally
-its squash commit (`landingCommit` in `scripts/replica-size-policy.ts`). After a
+the first first-parent master commit that added the pin to `scripts/`, the merge commit
+(`landingCommit` in `scripts/replica-size-policy.ts`). After a
 squash merge, nothing needs editing. Content keys (blob hashes) were rejected:
 pinned files such as `authority.ts` legitimately change later, whereas the
 landing commit stays an ancestor for good.

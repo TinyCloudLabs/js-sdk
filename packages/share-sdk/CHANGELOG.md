@@ -1,5 +1,56 @@
 # @tinycloud/share-sdk
 
+## 1.2.0-beta.5
+
+### Minor Changes
+
+- 02c0a44: Owner-signed artifact pin for addressed shares (TC-1428). The Policy/v3 envelope gains an optional `artifactPin` field (artifact id, version, sha256 of the version's `manifest.json`, and the sha256 and size of the stored ciphertext file the share reads). It is covered by the envelope signature, so the existing envelope version and the node are unchanged (the node reads the envelope as opaque JSON). `share-sdk` adds a small verification module (`verifyArtifactShare`, `assertArtifactBinding`, `verifyArtifactFileBytes`, `verifyArtifactManifestBytes`, `buildArtifactPin`): a share that reads `artifacts/` without a pin that matches its content source is refused, a pinned share cannot grant edit, and fetched bytes that do not hash to the pinned digest are refused before any decrypt request. `inspectShare` reports `artifact: { id, version }`. `share publish --artifact` signs the pin for addressed shares.
+
+  Breaking for old viewers: the envelope schema is strict, so a viewer that predates this release rejects an envelope with `artifactPin` rather than showing it. Update the viewer's `@tinycloud/share-sdk` before publishing pinned addressed shares. The owner is the trusted signer; the node has no write-once ACL, so an owner can still overwrite a version file and recipients then fail closed. Bearer artifact shares have no envelope and carry no pin yet.
+
+### Patch Changes
+
+- Updated dependencies [02c0a44]
+  - @tinycloud/share-envelope@1.2.0-beta.0
+
+## 1.2.0-beta.4
+
+### Minor Changes
+
+- daf8561: Shared share index, SDK layer (TC-1432 design C, slice 2), published as the new subpath `@tinycloud/share-sdk/share-index`. Additive: the package root's runtime code is unchanged and does not re-export it, so browser bundles that import the root do not grow.
+  - Record store: `WebShareRecordStore` (`records/<shareId>`, owner-network vault) and `AgentShareRecordStore` (`records/agents/<agentId>/<shareId>`), both `SenderShareRecordStorage`. `isShareId` is enforced on every operation; agent lists use the explicit prefix with its trailing slash.
+  - Key classifier `classifyRecordKey`: rejects `%`, `\`, `.`/`..` and empty segments and a leading `/` before anything else; a rejected key inside an agent prefix is charged to that agent once (as a 16-character hash, never the agent's text).
+  - Agent record codec: a fresh 32-byte data key and fresh nonces on every write, HKDF subkeys bound to the record location, a key commitment checked in constant time, and two wraps of the data key (`wrapAgent` under a key derived from the agent's signing key, `wrapOwner` to the owner network). The owner path refuses an owner wrap whose declared AAD is not the record's binding before any decrypt request, and zeroes the data key on every path. Records larger than `MAX_AGENT_RECORD_BYTES` (32 KiB) are refused.
+  - Stored form, each blob once: `AgentShareRecordStore.put` stores a Policy/v3 record without `deliveryMaterial.envelope` and its `/s/inline` link (`compactShareRecord`, after checking both are exactly what the sealed material rebuilds), and the reconciler refuses an agent record that stores either again. `openDeliveryEnvelope` (the verifier opens the envelope from `sealedEnvelope`, bound to `shareCid`), `shareLinkForRecord` (the link rebuilt at Open/Copy) and `expandShareRecord` (the full record back). A real CLI v3 record is about 29.5 KB stored, under the 32 KiB cap.
+  - The adapter sends the record cap as the KV `maxResponseBytes`, so the node refuses an oversize agent value (413) before sending its body; `readRaw(key, maxBytes)` reports it `too_large` and the reconciler rejects it `size`.
+  - Record times are RFC 3339 UTC with or without a fraction, as `publishAddressedShare` writes them.
+  - Chain verifier `verifyAgentRecordChain` (bearer link delegations, Policy/v3 envelopes, Policy/v2 owner policies) with proof states `proven` / `chained` / `unproven`, a separate `expired` flag, and the signed issuance window `registeredAt` is checked against (link `nbf`, the session's `Issued At`, the v3 binding's `issuedAt`, the node's v2 `registeredAt`). Precedence web > proven > chained > unproven in any arrival order (`decideClaim`). New verifiers: signed UCAN parsing with `prf`/`nbf`/`exp`, attenuation containment, owner→session SIWE checks (time window, issuer = account owner, audience = delegation issuer), a Policy/v2 enforcement-delegation signature verifier, `checkRegistrationReceipt` (a Policy/v2 node registration with expired reported apart from invalid), and `verifyEnvelopeV3At` (Policy/v3 verification at an explicit time, so an expired share is reported as Expired).
+  - A record's content may live in any space of the account owner (`isSpaceOwnedBy`); the records stay in `applications`.
+  - `provenance: "migrated"` (one-time owner import, row `pv: "migrated"`) is accepted only at owner-layout keys: it is exempt from the ±1-day `registeredAt` anchor and nothing else, ranks by its proof state, and never displaces a node-confirmed revocation. A record in `records/agents/<id>/` claiming it is rejected (`provenance`).
+  - `SenderShareIndex`: the encrypted display-only index at `records/_index/main` with compare-and-swap writes, an outbox interface, the budgeted reconciler with the §5 checks (every agent fetch spends its 50-per-pass allowance), per-agent rejected lists, caps and pause, status sync, compaction into `records/_index/archive-<yyyy>` and header garbage collection. A full header stops new agent state (`headerFull`) but never blocks the owner's own ops or evicts rows. A refused ETag (`INVALID_ETAG`, for example one weakened in transit) throws `ShareIndexCasError` on its first occurrence and is never retried.
+  - Reference: `docs/share-index.md`, including what revocation does today: the owner wallet's generic `/revoke` of a v3 root ends that share at once (open recipient sessions included); revoking an agent's session kills its bearer links and new v3 claims, while an already-open v3 recipient session keeps reading for its lifetime until the node liveness check (N3).
+  - SIWE `Not Before` and `Issued At` are read from the CACAO bytes the injected parser (sdk-core `parseSignedSiweCacao`) has verified; sdk-core and share-envelope are unchanged.
+
+## 1.2.0-beta.3
+
+### Minor Changes
+
+- e68e911: Per-share encryption networks in `@tinycloud/share-sdk/share-root` (TC-1423 D3). Every addressed (email/domain) or edit share now has its own network, `urn:tinycloud:encryption:<owner did:pkh, lowercase>:share-<shareId>`, so a key or recipient holding decrypt reaches that one share only. The main entry is unchanged.
+
+  Removed (allowed between betas; these shipped only in prereleases):
+  - `ShareRoot` no longer has a decrypt scope: `ShareRootScope`, `root.scope`, `root.policyCapable`, `root.policyRootSigner()`, the `shareRootPolicyRoots` and `policyOwnerModeProbe` options, `ensureShareRoot`'s `purpose`, and the owner-authority probe (`POLICY_OWNER_AUTHORITY_FEATURES`, `POLICY_OWNER_AUTHORITY_PROBE_TTL_MS`, `readPolicyOwnerAuthorityMode`, `PolicyOwnerModeProbe`, `createPolicyOwnerModeProbe`, `defaultPolicyOwnerModeProbe`) are removed, with the error codes `policy-roots-disabled`, `policy-roots-not-enforced-by-node` and `root-not-policy-capable`. A share root is kv/bearer only, before and after the Node enforces owner-authority binding; the root record no longer has `scope`.
+  - The owner-wide `:share` network is gone from the SDK: `ensureShareNetwork`, `shareNetworkIdFor` and `ShareNetworkResult` are removed.
+  - `ShareRootPolicySigner` is renamed `SharePolicySigner`.
+  - `ShareGrantRecord` is now version 2 (`shareId`, `networkId`); version 1 records are refused by `ShareGrant.restore`.
+
+  Added:
+  - `perShareNetworkIdFor(ownerDid, shareId)` and `assertNetworkSafeShareId`: a shareId must match `^[a-z0-9][a-z0-9-]{15,35}$` (UUIDs and 32-hex ids do), checked before any prompt (`share-id-not-network-safe`).
+  - `ShareGrant.prepare(...)` (all checks, a network lookup, the key, and a `pending` row to persist before the prompt) then `pending.approve()`: one approval for kv `get` + `metadata` (+ `put` for `edit`) on the share's one key (`xyz.tinycloud.share/shares/<shareId>/<file>`, or for `view` only a TC-1428 version file) and `network.create`, `network.revoke`, `decrypt` on the share's network only. A shareId whose network already exists or was retired is refused before the prompt (`share-id-in-use`; `resumeExistingNetwork` accepts an active one for key-gone recovery). `ShareGrant.create` does both. A signed grant that is only narrower than requested is refused without `mustRevoke`.
+  - `grant.ensureNetwork()` creates the network with the per-share key (no approval) and accepts it only after a fresh lookup shows it `active` with the expected owner, name, algorithm, key version 1 and threshold 1/1; a retired network is never re-created. `grant.publishAuthority(registerPolicy)` re-reads the network as `active` before every registration; `grant.assertContentSource` checks the stored object is this share's. `grant.row(state)` gives the history row for each publish step.
+  - `grant.retireNetwork()` retires the network (permanent; every holder of decrypt is refused at the next request; idempotent; no approval). `revokeShareGrant` retires first, then revokes the grant with one owner SIWE; if that fails the error `grant-revoke-incomplete` says decrypt is already cut.
+  - `openEditShare`: the owner reads back an edit share with one approval, to an in-memory key that lives at most one hour.
+  - Owner kill-all: `planShareControlBatches` splits shares into owner controls sized by the exact `Authorization` bytes, at most `SHARE_CONTROL_HEADER_BUDGET_BYTES` (30,000; the production ingress refuses values above 32,751 bytes): 34 shares per control with the `applications`/`default` delegation rows, which every control carries. Targets must be the owner's per-share networks (`share-<shareId>`); `:default`, `:share` or any other network is refused (`control-target-invalid`) before anything is signed, in planning and again in `runShareControlBatch`, which also re-checks the domain, space rows and byte budget of the batch it is given. `runShareControlBatch` signs one control (one approval), retires every network first, then revokes each grant through the control, counting only a `{ revoked: true, cid }` receipt. A kill-all of L shares costs ceil(L/34) approvals on v1.20.6 and NODE-B2 N4' (measured live across two controls); 1.21.0 and N1b refuse control revokes of decrypt-bearing grants, so with `revokeFallback` each grant costs one more owner SIWE (ceil(L/34) + L).
+
 ## 1.2.0-beta.2
 
 ### Minor Changes

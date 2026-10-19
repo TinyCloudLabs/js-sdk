@@ -145,8 +145,13 @@ import {
   pkhDid,
   parseSpaceUri,
   resolveTinyCloudHosts,
+  resolveFailClosedTinyCloudHosts,
+  createInMemoryRegistrySequenceStore,
   publishLocationRecord,
   type LocalNodeIdentityStore,
+  type OnNodeNotFound,
+  type RegistryPolicy,
+  type RegistrySequenceStore,
   principalDidEquals,
   parseNetworkId,
   resolveSecretPath,
@@ -811,8 +816,35 @@ export interface TinyCloudNodeConfig {
   host?: string;
   /** TinyCloud location registry URL. Default: https://registry.tinycloud.xyz. */
   tinycloudRegistryUrl?: string | null;
-  /** Fallback TinyCloud hosts. Default: hosted TinyCloud node. */
+  /**
+   * Fallback TinyCloud hosts. Default: hosted TinyCloud node. Used only by the
+   * default `registryPolicy` ("legacy-fallback"), whose silent fallback is
+   * deprecated and will be removed in a future major release.
+   */
   tinycloudFallbackHosts?: string[] | null;
+  /**
+   * How sign-in uses the location registry when no `host` is configured.
+   * Default `"legacy-fallback"` (deprecated): a registry miss or failure
+   * silently uses `tinycloudFallbackHosts`, with a one-time warning.
+   * `"fail-closed"`: routing acts on the registry verdict for the signer
+   * address, an unavailable registry is `RegistryUnavailableError` (never a
+   * new account), record hosts are used only if HTTPS or loopback, and
+   * automatic space creation (sign-in, account bootstrap, owned-space
+   * hosting, the public space the vault creates) is refused on a host the
+   * owner's registry record does not list (`NodeRegistryEntryExistsError`)
+   * or when the registry gives no verdict. An explicit `hostOwnedSpace()`
+   * call is not guarded. `newUserHost` governs routing only: a pinned host
+   * may still create spaces for an unregistered owner.
+   */
+  registryPolicy?: RegistryPolicy;
+  /** `fail-closed` only: host for owners with no registry record. Default https://node.tinycloud.xyz; `null` refuses them with `NodeNotFoundError`. */
+  newUserHost?: string | null;
+  /** `fail-closed` only: chain ID of the v1 registry subject built from the signer address (never the session chain). Default 1. */
+  registryChainId?: number;
+  /** `fail-closed` only: highest registry sequence seen per owner. Default: in-memory for this client. */
+  registrySequenceStore?: RegistrySequenceStore;
+  /** `fail-closed` only: retry, use another host (not identity-checked; it persists with the session), or abort when sign-in resolves no host. Without it, sign-in throws. */
+  onNodeNotFound?: OnNodeNotFound;
   /** Probe configured/registered local nodes before registry/fallback resolution. Default: true. */
   autoDiscoverLocalNode?: boolean;
   /** Local loopback node URL to probe. Omit to avoid probing loopback. */
@@ -893,10 +925,13 @@ export interface TinyCloudNodeConfig {
 /**
  * The node's terminal marker is a UCAN fact; a wallet-signed SIWE (CACAO)
  * delegation cannot carry it, so such a delegation would stay re-delegatable.
- * Callers must request only capabilities the current session holds.
+ * Callers must request only capabilities the current session holds. A wallet
+ * (`did:pkh`) recipient chains its own session from a grant (`useDelegation`),
+ * which the node refuses for a terminal parent, so only a session-key
+ * `did:key` can use a terminal grant.
  */
 const TERMINAL_DELEGATION_REQUIRES_SESSION_KEY =
-  "disableSubDelegation requires a session-key delegation";
+  "disableSubDelegation requires a session-key delegation to a did:key (not did:pkh); use the session-key DID or drop the flag";
 
 /**
  * Options for {@link TinyCloudNode.delegateTo}.
@@ -932,7 +967,8 @@ export interface DelegateToOptions {
    * Mark the delegation terminal: the node refuses any delegation that cites
    * it as a parent (`terminal-parent-cannot-redelegate`). The delegate can
    * still use it directly. Only session-key UCAN delegations can carry the
-   * marker, so this throws with `forceWalletSign`. Default false.
+   * marker, so this throws with `forceWalletSign`, and with a `did:pkh`
+   * recipient (use its session-key DID). Default false.
    */
   disableSubDelegation?: boolean;
 }
@@ -1662,6 +1698,9 @@ export class TinyCloudNode {
     this.config = {
       ...config,
       host: config.host ?? DEFAULT_HOST,
+      // One store for every authorization this client creates.
+      registrySequenceStore:
+        config.registrySequenceStore ?? createInMemoryRegistrySequenceStore(),
     };
     if (this.config.replication?.enabled) {
       const runtime = getNodeReplicationLoaders()
@@ -1828,6 +1867,7 @@ export class TinyCloudNode {
       tinycloudHosts: this.explicitHost ? [this.explicitHost] : undefined,
       tinycloudRegistryUrl: config.tinycloudRegistryUrl,
       tinycloudFallbackHosts: config.tinycloudFallbackHosts,
+      ...this.registryPolicyConfig(),
       autoDiscoverLocalNode: config.autoDiscoverLocalNode,
       localNodeUrl: config.localNodeUrl,
       localLinkName: config.localLinkName,
@@ -2728,6 +2768,11 @@ export class TinyCloudNode {
       primarySession?.spaceId === defaultSpaceId &&
       auth.capabilityRequest === BOOTSTRAP_SESSION_REQUESTS.default;
 
+    // Refuse before any bootstrap signature is requested.
+    if (steps.some((step) => step.kind === "host")) {
+      await this.assertMayCreateSpace();
+    }
+
     for (const step of steps) {
       if (step.kind !== "session") continue;
       graph.assertActive();
@@ -3482,6 +3527,8 @@ export class TinyCloudNode {
       );
     }
 
+    await this.assertMayCreateSpace();
+    if (signal?.aborted) throw signal.reason;
     const created = await this.hostOwnedSpaceOnce(spaceId, signal);
     if (!created.success) {
       throw Object.assign(
@@ -3615,6 +3662,12 @@ export class TinyCloudNode {
    * session's recap doesn't cover it and the registry has no record; the host
    * SIWE is idempotent server-side. Must be called after {@link signIn}.
    *
+   * Under `registryPolicy: "fail-closed"`, hosting is refused with
+   * `NodeRegistryEntryExistsError` when the owner's registry record does not
+   * list the host, or `RegistryUnavailableError` when the registry gives no
+   * verdict. {@link hostOwnedSpace} itself is an explicit action and is not
+   * guarded.
+   *
    * @param name - The owned space name (e.g. `"secrets"`).
    * @returns The hosted owned-space URI.
    */
@@ -3629,7 +3682,29 @@ export class TinyCloudNode {
       return spaceId;
     }
 
+    await this.assertMayCreateSpace();
     return this.hostOwnedSpace(name);
+  }
+
+  /**
+   * Space-creation guard (TC-1443) for the automatic hosting paths: sign-in's
+   * owned spaces, account bootstrap, {@link ensureOwnedSpaceHosted} and
+   * {@link ensurePublicSpace}. Only `registryPolicy: "fail-closed"` consults
+   * the registry ({@link NodeUserAuthorization.assertMayCreateSpace}); the
+   * default policy performs no lookup.
+   */
+  private async assertMayCreateSpace(): Promise<void> {
+    if (this.config.registryPolicy !== "fail-closed") return;
+    await (this.auth as NodeUserAuthorization).assertMayCreateSpace();
+  }
+
+  /** Registry-policy settings shared by every authorization this client creates. */
+  private registryPolicyConfig(): Pick<
+    TinyCloudNodeConfig,
+    "registryPolicy" | "newUserHost" | "registryChainId" | "registrySequenceStore" | "onNodeNotFound"
+  > {
+    const { registryPolicy, newUserHost, registryChainId, registrySequenceStore, onNodeNotFound } = this.config;
+    return { registryPolicy, newUserHost, registryChainId, registrySequenceStore, onNodeNotFound };
   }
 
   /**
@@ -4463,6 +4538,21 @@ export class TinyCloudNode {
     if (address === undefined || chainId === undefined) {
       return undefined;
     }
+    if (this.config.registryPolicy === "fail-closed") {
+      const resolved = await resolveFailClosedTinyCloudHosts(address, {
+        registryUrl: this.config.tinycloudRegistryUrl,
+        registryChainId: this.config.registryChainId,
+        newUserHost: this.config.newUserHost,
+        sequenceStore: this.config.registrySequenceStore,
+        onNodeNotFound: this.config.onNodeNotFound,
+        autoDiscoverLocalNode: this.config.autoDiscoverLocalNode,
+        localNodeUrl: this.config.localNodeUrl,
+        localLinkName: this.config.localLinkName,
+        expectedNodeDid: this.config.expectedNodeDid,
+        localNodeIdentityStore: this.config.localNodeIdentityStore,
+      });
+      return resolved.hosts[0];
+    }
     const resolved = await resolveTinyCloudHosts(pkhDid(address, chainId), {
       registryUrl: this.config.tinycloudRegistryUrl,
       fallbackHosts: this.config.tinycloudFallbackHosts,
@@ -4682,6 +4772,7 @@ export class TinyCloudNode {
       tinycloudHosts: this.explicitHost ? [this.explicitHost] : undefined,
       tinycloudRegistryUrl: this.config.tinycloudRegistryUrl,
       tinycloudFallbackHosts: this.config.tinycloudFallbackHosts,
+      ...this.registryPolicyConfig(),
       autoDiscoverLocalNode: this.config.autoDiscoverLocalNode,
       localNodeUrl: this.config.localNodeUrl,
       localLinkName: this.config.localLinkName,
@@ -4759,6 +4850,7 @@ export class TinyCloudNode {
       tinycloudHosts: this.explicitHost ? [this.explicitHost] : undefined,
       tinycloudRegistryUrl: this.config.tinycloudRegistryUrl,
       tinycloudFallbackHosts: this.config.tinycloudFallbackHosts,
+      ...this.registryPolicyConfig(),
       autoDiscoverLocalNode: this.config.autoDiscoverLocalNode,
       localNodeUrl: this.config.localNodeUrl,
       localLinkName: this.config.localLinkName,
@@ -6710,7 +6802,9 @@ export class TinyCloudNode {
    * Ensure the user's public space exists and is accessible.
    * Creates the space and activates a session delegation for it.
    * This is the trigger for lazy public space creation — call it
-   * before writing to spaces.get('public').kv.
+   * before writing to spaces.get('public').kv. The vault calls it on unlock.
+   * Under `registryPolicy: "fail-closed"` creation goes through the
+   * space-creation guard.
    */
   async ensurePublicSpace() {
     if (!this.auth || !this.session || !this.signer) {
@@ -6722,6 +6816,7 @@ export class TinyCloudNode {
       throw new Error("Public space not enabled. Set enablePublicSpace: true in config.");
     }
 
+    await this.assertMayCreateSpace();
     // Create the public space on the server (host SIWE)
     await (this.auth as NodeUserAuthorization).hostPublicSpace(publicSpaceId);
 
@@ -6977,6 +7072,9 @@ export class TinyCloudNode {
           "the wallet-signed path activates the delegation before it could be " +
           "handed to onPrepared.",
       );
+    }
+    if (options?.disableSubDelegation && did.startsWith("did:pkh:")) {
+      throw new Error(TERMINAL_DELEGATION_REQUIRES_SESSION_KEY);
     }
 
     // 1. Session validity check — fail fast with a clear error class so
@@ -8355,7 +8453,9 @@ export class TinyCloudNode {
      * Prevent the recipient from creating sub-delegations (default: false).
      * The delegation carries the node's terminal marker, so the node refuses
      * its children. Needs capabilities the current session holds; throws
-     * rather than fall back to a wallet-signed delegation.
+     * rather than fall back to a wallet-signed delegation, and throws for a
+     * `did:pkh` recipient (a wallet-mode `useDelegation` of it is refused);
+     * grant the recipient's session-key DID instead.
      */
     disableSubDelegation?: boolean;
     /** Expiration time in milliseconds from now (default: 1 hour) */

@@ -10,7 +10,7 @@ import {
   mergedPinsNotLandedOn, priorOptionalAllowance, relocatedOptionalAllowance, validateIntroducedOptionalSources,
   validateOptionalEntryTransition, validateOptionalLedger, type OptionalLedger,
 } from "./replica-optional-size-policy";
-import { assertCiSizeToolchain, approvedCiToolchainCorrection, approvedFixRequiredRatchet, approvedGatedOnlyRatchet, approvedPhase2, ciCorrectionPolicyOnlyPaths, hasAncestor, isPolicyOnlySinceApprovedSource, preexistingS3EntryCommit, validateCiToolchainTransition, validateGatedOnlyRatchet, validateHardeningRatchetTransition, validateLedger, validateLogoutRatchetTransition, validateMasterMergeResolutionTransition, validateTc1413RatchetTransition, validateTc1424RatchetTransition, validateTc1432RatchetTransition, validateTc1436RatchetTransition, type GzipSizes, type Ledger, type LedgerEntry } from "./replica-size-policy";
+import { assertCiSizeToolchain, approvedCiToolchainCorrection, approvedFixRequiredRatchet, approvedGatedOnlyRatchet, approvedPhase2, ciCorrectionPolicyOnlyPaths, hasAncestor, isPolicyOnlySinceApprovedSource, preexistingS3EntryCommit, validateCiToolchainTransition, validateGatedOnlyRatchet, validateHardeningRatchetTransition, validateLedger, validateLogoutRatchetTransition, validateMasterMergeResolutionTransition, validateTc1413RatchetTransition, validateTc1424RatchetTransition, validateTc1448RatchetTransition, validateTc1432RatchetTransition, validateTc1436RatchetTransition, validateTc1443RatchetTransition, validateTc1443bRatchetTransition, validateTc1428RatchetTransition, validateTc1466RatchetTransition, type GzipSizes, type Ledger, type LedgerEntry } from "./replica-size-policy";
 import { collectMeasuredArtifactInputs } from "./replica-size-inputs";
 type Baseline = {
   webSdkTestBaseline: { ref: string; unhandledErrors: number; failingNames: string[]; unhandledSignatures: string[] };
@@ -142,7 +142,7 @@ for (const format of formats) {
     }
   }
   console.log(`${format}: current=${currentSizes[format]} gzip-bytes`);
-  const ceiling = ledger.tc1424Ratchet?.root.ceiling[format] ?? ledger.tc1432Ratchet?.root.ceiling[format] ?? ledger.tc1436Ratchet?.root.ceiling[format] ?? ledger.tc1413Ratchet?.root.ceiling[format] ?? ledger.logoutRatchet?.root.ceiling[format] ?? ledger.hardeningRatchet?.root.ceiling[format] ?? ciCorrection?.measured.rootCeiling[format] ??
+  const ceiling = ledger.tc1428Ratchet?.root.ceiling[format] ?? ledger.tc1443bRatchet?.root.ceiling[format] ?? ledger.tc1466Ratchet?.root.ceiling[format] ?? ledger.tc1443Ratchet?.root.ceiling[format] ?? ledger.tc1448Ratchet?.root.ceiling[format] ?? ledger.tc1424Ratchet?.root.ceiling[format] ?? ledger.tc1432Ratchet?.root.ceiling[format] ?? ledger.tc1436Ratchet?.root.ceiling[format] ?? ledger.tc1413Ratchet?.root.ceiling[format] ?? ledger.logoutRatchet?.root.ceiling[format] ?? ledger.hardeningRatchet?.root.ceiling[format] ?? ciCorrection?.measured.rootCeiling[format] ??
     ledger.fixRequiredRatchet?.rootCeiling[format] ?? ledger.phase2Ratchet?.ceiling[format];
   if (ceiling !== undefined) {
     console.log(`${format}: TC-858 Phase 2 absolute root ceiling=${ceiling} gzip-bytes`);
@@ -153,13 +153,17 @@ for (const format of formats) {
   }
 }
 
-const prBaseSha = process.env.REPLICA_BUDGET_PR_BASE_SHA;
+const reportedBaseSha = process.env.REPLICA_BUDGET_PR_BASE_SHA;
+// On refs/pull/N/merge the tested tree is HEAD^1 + the PR head. GitHub regenerates that ref when the
+// base branch advances, while the event payload's base.sha stays frozen (and is reused verbatim by
+// re-runs). The merge parent is the base this tree was built on, so it is authoritative.
+const isMergeRef = /^refs\/pull\/\d+\/merge$/.test(process.env.GITHUB_REF ?? "");
+const prBaseSha = reportedBaseSha && isMergeRef ? command("git", ["rev-parse", "HEAD^1"]) : reportedBaseSha;
 if (prBaseSha) {
-  const baseRef = /^refs\/pull\/\d+\/merge$/.test(process.env.GITHUB_REF ?? "") ? "HEAD^1" : prBaseSha;
-  if (baseRef === "HEAD^1" && command("git", ["rev-parse", baseRef]) !== prBaseSha) {
-    console.error("The pull-request merge parent differs from GitHub's reported base SHA.");
-    failed = true;
+  if (prBaseSha !== reportedBaseSha) {
+    console.log(`Base branch advanced since the event (reported ${reportedBaseSha}); using merge parent ${prBaseSha}.`);
   }
+  const baseRef = prBaseSha;
   const mergeBase = command("git", ["merge-base", baseRef, "HEAD"]);
   const changedPaths = command("git", ["diff", "--name-only", "--no-renames", `${mergeBase}...HEAD`])
     .split("\n").filter(Boolean);
@@ -220,6 +224,41 @@ if (prBaseSha) {
   if (tc1424 !== undefined && baseLedger.tc1424Ratchet === undefined &&
       (baseLedger.tc1432Ratchet === undefined || !hasAncestor(repoRoot, tc1424.sourceCommits.at(-1)!))) {
     console.error("The TC-1424 ratchet requires the merged TC-1432 ratchet and its measured source commit.");
+    failed = true;
+  }
+  validateTc1448RatchetTransition(baseLedger.tc1448Ratchet, ledger.tc1448Ratchet);
+  const tc1448 = ledger.tc1448Ratchet;
+  if (tc1448 !== undefined && baseLedger.tc1448Ratchet === undefined &&
+      (baseLedger.tc1424Ratchet === undefined || !hasAncestor(repoRoot, tc1448.sourceCommits.at(-1)!))) {
+    console.error("The TC-1448 ratchet requires the merged TC-1424 ratchet and its measured source commit.");
+    failed = true;
+  }
+  validateTc1443RatchetTransition(baseLedger.tc1443Ratchet, ledger.tc1443Ratchet);
+  const tc1443 = ledger.tc1443Ratchet;
+  if (tc1443 !== undefined && baseLedger.tc1443Ratchet === undefined &&
+      (baseLedger.tc1448Ratchet === undefined || !hasAncestor(repoRoot, tc1443.sourceCommits.at(-1)!))) {
+    console.error("The TC-1443 ratchet requires the merged TC-1448 ratchet and its measured source commit.");
+    failed = true;
+  }
+  validateTc1466RatchetTransition(baseLedger.tc1466Ratchet, ledger.tc1466Ratchet);
+  const tc1466 = ledger.tc1466Ratchet;
+  if (tc1466 !== undefined && baseLedger.tc1466Ratchet === undefined &&
+      (baseLedger.tc1443Ratchet === undefined || !hasAncestor(repoRoot, tc1466.sourceCommits.at(-1)!))) {
+    console.error("The TC-1466 ratchet requires the merged TC-1443 ratchet and its measured source commit.");
+    failed = true;
+  }
+  validateTc1443bRatchetTransition(baseLedger.tc1443bRatchet, ledger.tc1443bRatchet);
+  const tc1443b = ledger.tc1443bRatchet;
+  if (tc1443b !== undefined && baseLedger.tc1443bRatchet === undefined &&
+      (baseLedger.tc1466Ratchet === undefined || !hasAncestor(repoRoot, tc1443b.sourceCommits.at(-1)!))) {
+    console.error("The TC-1443 slice b ratchet requires the merged TC-1466 ratchet and its measured source commit.");
+    failed = true;
+  }
+  validateTc1428RatchetTransition(baseLedger.tc1428Ratchet, ledger.tc1428Ratchet);
+  const tc1428 = ledger.tc1428Ratchet;
+  if (tc1428 !== undefined && baseLedger.tc1428Ratchet === undefined &&
+      (baseLedger.tc1443bRatchet === undefined || !hasAncestor(repoRoot, tc1428.sourceCommits.at(-1)!))) {
+    console.error("The TC-1428 ratchet requires the merged TC-1443 slice b ratchet and its measured source commit.");
     failed = true;
   }
   const baseOptionalPath = "packages/web-sdk/scripts/replica-optional-size-ledger.json";
@@ -535,6 +574,17 @@ if (prBaseSha) {
           }
         }
         console.log("TC-1432 uses its exact absolute-root row, not additive old headroom.");
+      } else if (tc1443b !== undefined && baseLedger.tc1443bRatchet === undefined && prefixMatches && appended.length === 1) {
+        // As for TC-1432: the exact TC-1443 slice b row carries the growth through its absolute root ceiling,
+        // so the cumulative old-headroom entry is zero. The measured growth may not exceed the row.
+        const entry = appended[0];
+        for (const format of formats) {
+          if (entry[format] !== 0 || deltas[format] > tc1443b.root.delta[format]) {
+            console.error(`${format}: the TC-1443 slice b entry must be 0 and the measured growth ${deltas[format]} must not exceed the TC-1443 slice b row's ${tc1443b.root.delta[format]}.`);
+            failed = true;
+          }
+        }
+        console.log("TC-1443 slice b uses its exact absolute-root row, not additive old headroom.");
       } else if (!prefixMatches || appended.length !== 1) {
         const pr = process.env.REPLICA_BUDGET_PR_NUMBER ? `#${process.env.REPLICA_BUDGET_PR_NUMBER}` : "#<PR>";
         const ticket = process.env.REPLICA_BUDGET_TICKET?.match(/\bTC-\d+\b/i)?.[0] ?? "TC-UNKNOWN";

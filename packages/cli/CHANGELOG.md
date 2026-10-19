@@ -1,5 +1,74 @@
 # @tinycloud/cli
 
+## 1.3.0-beta.20
+
+### Minor Changes
+
+- 02c0a44: Owner-signed artifact pin for addressed shares (TC-1428). The Policy/v3 envelope gains an optional `artifactPin` field (artifact id, version, sha256 of the version's `manifest.json`, and the sha256 and size of the stored ciphertext file the share reads). It is covered by the envelope signature, so the existing envelope version and the node are unchanged (the node reads the envelope as opaque JSON). `share-sdk` adds a small verification module (`verifyArtifactShare`, `assertArtifactBinding`, `verifyArtifactFileBytes`, `verifyArtifactManifestBytes`, `buildArtifactPin`): a share that reads `artifacts/` without a pin that matches its content source is refused, a pinned share cannot grant edit, and fetched bytes that do not hash to the pinned digest are refused before any decrypt request. `inspectShare` reports `artifact: { id, version }`. `share publish --artifact` signs the pin for addressed shares.
+
+  Breaking for old viewers: the envelope schema is strict, so a viewer that predates this release rejects an envelope with `artifactPin` rather than showing it. Update the viewer's `@tinycloud/share-sdk` before publishing pinned addressed shares. The owner is the trusted signer; the node has no write-once ACL, so an owner can still overwrite a version file and recipients then fail closed. Bearer artifact shares have no envelope and carry no pin yet.
+
+### Patch Changes
+
+- Updated dependencies [02c0a44]
+  - @tinycloud/share-envelope@1.2.0-beta.0
+  - @tinycloud/share-sdk@1.2.0-beta.5
+  - @tinycloud/sdk-core@3.3.0-beta.21
+  - @tinycloud/node-sdk@3.3.0-beta.21
+  - @tinycloud/operations@0.6.1-beta.19
+
+## 1.3.0-beta.19
+
+### Patch Changes
+
+- Updated dependencies [cce8b26]
+  - @tinycloud/sdk-core@3.3.0-beta.20
+  - @tinycloud/node-sdk@3.3.0-beta.20
+  - @tinycloud/operations@0.6.1-beta.18
+
+## 1.3.0-beta.18
+
+### Patch Changes
+
+- fff4c72: Add the node release pin and verified downloader that `tc node install` will use. The CLI embeds SHA-256 pins for the TinyCloud node tarballs and checks the download against them before unpacking. No command uses them yet.
+
+## 1.3.0-beta.17
+
+### Patch Changes
+
+- Updated dependencies [eb9defd]
+  - @tinycloud/sdk-core@3.3.0-beta.18
+  - @tinycloud/node-sdk@3.3.0-beta.18
+  - @tinycloud/operations@0.6.1-beta.17
+
+## 1.3.0-beta.16
+
+### Patch Changes
+
+- Updated dependencies [daf8561]
+  - @tinycloud/share-sdk@1.2.0-beta.4
+  - @tinycloud/sdk-core@3.3.0-beta.17
+  - @tinycloud/node-sdk@3.3.0-beta.17
+  - @tinycloud/operations@0.6.1-beta.16
+
+## 1.3.0-beta.15
+
+### Patch Changes
+
+- Updated dependencies [18b6c9f]
+  - @tinycloud/node-sdk@3.3.0-beta.16
+  - @tinycloud/operations@0.6.1-beta.15
+
+## 1.3.0-beta.14
+
+### Patch Changes
+
+- Updated dependencies [e68e911]
+  - @tinycloud/share-sdk@1.2.0-beta.3
+  - @tinycloud/sdk-core@3.3.0-beta.15
+  - @tinycloud/node-sdk@3.3.0-beta.15
+  - @tinycloud/operations@0.6.1-beta.14
+
 ## 1.3.0-beta.13
 
 ### Patch Changes
