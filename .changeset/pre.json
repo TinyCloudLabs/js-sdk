@@ -78,6 +78,7 @@
     "tc-841-legacy-read-gate",
     "tc-841-logout-contract",
     "tc-841-profile-containment",
+    "tc-858-s7-parity",
     "terminal-delegation-marker",
     "terminal-grant-pkh-refusal",
     "vault-etag-if-match-expect-aad",
