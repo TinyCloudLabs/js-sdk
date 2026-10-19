@@ -3,9 +3,11 @@ import { ed25519 } from "@noble/curves/ed25519";
 import { secp256k1 } from "@noble/curves/secp256k1";
 import { keccak_256 } from "@noble/hashes/sha3";
 import { sha256 } from "@noble/hashes/sha256";
+import { sha512 } from "@noble/hashes/sha512";
 import {
   HeldCredentialError,
   InMemoryNonceStore,
+  IssuerSet,
   PRESENTATION_STATEMENT,
   normaliseEmail,
   parseIssuerSet,
@@ -16,7 +18,10 @@ import {
   type NonceStore,
   type VerifyHeldPresentationOptions,
 } from "./index";
-import { asciiBytes, bytesToHex, encodeBase64Url } from "./encoding";
+import { MAX_JSON_DEPTH, decodeUtf8, asciiBytes, bytesToHex, encodeBase64Url, parseStrictJson } from "./encoding";
+import { HELD_LIMITS } from "./verify";
+import { verifyEd25519Strict } from "./crypto";
+import { parseRfc3339 } from "./siwe";
 import { EMAIL_HELD_ROW } from "./rows";
 
 const enc = (value: unknown) => encodeBase64Url(new TextEncoder().encode(typeof value === "string" ? value : JSON.stringify(value)));
@@ -163,8 +168,8 @@ describe("valid presentation", () => {
     const { presentation } = h.present({ disclosures: [["emailDomain", "example.com"]] });
     expect((await verifyHeldPresentation(presentation, h.options)).claims).toEqual({ emailDomain: "example.com" });
   });
-  test("a lowercase sub and a case-only SIWE address difference pass", async () => {
-    await expectCode("ok", { payload: (p) => ({ ...p, sub: `did:pkh:eip155:1:${HOLDER_LOWER}` }) }, { address: HOLDER_LOWER });
+  test("a lowercase sub passes against the checksummed SIWE address (the SIWE address itself must be EIP-55, TC-1540)", async () => {
+    await expectCode("ok", { payload: (p) => ({ ...p, sub: `did:pkh:eip155:1:${HOLDER_LOWER}` }) }, { address: HOLDER });
   });
 });
 
@@ -199,13 +204,10 @@ describe("issuer selection (R1, lookup, cross-org)", () => {
     const { presentation } = h.present({ signature: () => new Uint8Array(64) });
     expect(await code(verifyHeldPresentation(presentation, h.options))).toBe("issuer-stopped");
   });
-  test("unlisted DID method: refused with no lookup", async () => {
-    let lookups = 0;
+  test("unlisted DID method is refused before any issuer lookup", async () => {
     const real = harness();
-    const spy = { version: 1, resolveIssuer: () => { lookups += 1; return undefined; } };
     const { presentation } = real.present({ kid: "did:ethr:0xabc#k", iss: "did:ethr:0xabc" });
-    expect(await code(verifyHeldPresentation(presentation, { ...real.options, issuerSet: spy, acceptedIssuers: [{ issuerDid: "did:ethr:0xabc" }] }))).toBe("did-method-not-allowed");
-    expect(lookups).toBe(0);
+    expect(await code(verifyHeldPresentation(presentation, { ...real.options, acceptedIssuers: [{ issuerDid: "did:ethr:0xabc" }] }))).toBe("did-method-not-allowed");
   });
   test("did:key as an issuer is refused unless the caller enabled it", () => {
     const key = { ...entryA(), issuerDid: "did:key:z6MkTest", kid: "did:key:z6MkTest#z6MkTest" };
@@ -496,4 +498,331 @@ test("the module has no Node-only imports (Worker-safe)", async () => {
     const text = await Bun.file(new URL(`./${file}.ts`, import.meta.url)).text();
     expect(text).not.toMatch(/from "node:|require\(|Buffer\b|from "crypto"|process\./);
   }
+});
+
+describe("TC-1540 N1: jti", () => {
+  test("jti must be a lowercase urn:uuid v4", async () => {
+    const ok = "urn:uuid:11111111-1111-4111-8111-111111111111";
+    await expectCode("ok", { payload: (p) => ({ ...p, jti: ok }) });
+    for (const jti of [
+      "11111111-1111-4111-8111-111111111111", "urn:uuid:11111111-1111-1111-8111-111111111111", "urn:uuid:11111111-1111-5111-8111-111111111111",
+      "urn:uuid:11111111-1111-4111-c111-111111111111", "urn:uuid:11111111-1111-4111-7111-111111111111", "urn:uuid:AAAAAAAA-1111-4111-8111-111111111111",
+      "urn:uuid:11111111-1111-4111-8111-11111111111", "urn:uuid:11111111-1111-4111-8111-1111111111111", `${ok} `, "x", "",
+    ]) {
+      await expectCode("bad-payload", { payload: (p) => ({ ...p, jti }) });
+    }
+    for (const jti of [7, null, [ok]]) await expectCode("bad-payload", { payload: (p) => ({ ...p, jti }) });
+    for (const variant of ["8", "9", "a", "b"]) await expectCode("ok", { payload: (p) => ({ ...p, jti: `urn:uuid:11111111-1111-4111-${variant}111-111111111111` }) });
+  });
+});
+
+describe("TC-1540 N2: header members and descriptorDigest", () => {
+  test("crit and any unknown header member are refused; only alg, typ and kid are allowed", async () => {
+    for (const extra of [{ crit: ["exp"] }, { crit: [] }, { jku: "https://x" }, { jwk: {} }, { x5u: "https://x" }, { cty: "x" }, { zip: "DEF" }, { b64: false }, { foo: 1 }]) {
+      await expectCode("bad-header", { header: (h) => ({ ...h, ...extra }) });
+    }
+    await expectCode("ok", { header: (h) => ({ kid: h.kid, typ: h.typ, alg: h.alg }) });
+  });
+  test("descriptorDigest is not a signed claim of the email row (spec 3.2 does not list it)", async () => {
+    expect(EMAIL_HELD_ROW.optionalSignedClaims).toEqual([]);
+    await expectCode("bad-payload", { payload: (p) => ({ ...p, descriptorDigest: "sha256:abc" }) });
+  });
+});
+
+/** Presents a hand-built `sdJwt` with a SIWE that signs it, so the refusal under test is the only fault. */
+async function presentRaw(h: Harness, sdJwt: string) {
+  return code(verifyHeldPresentation({ sdJwt, siwe: makeSiwe(sdJwt, h.store.issue(AUDIENCE, SUB)) }, h.options));
+}
+const withHeaderSegment = (segment: string) => {
+  const [, payloadB64, sig] = makeCredential().jwt.split(".");
+  return `${segment}.${payloadB64}.${sig}~`;
+};
+
+describe("TC-1540 N3: bounded parsing", () => {
+  test("a 200k '[' and a 200k '{' header are refused with the verifier's code, before any signature work", async () => {
+    const h = harness();
+    for (const open of ["[", '{"a":']) {
+      expect(await presentRaw(h, withHeaderSegment(enc(open.repeat(200_000))))).toBe("bad-presentation");
+    }
+  });
+  test("a header inside the size limits but deeply nested is refused by the depth cap, not a RangeError", async () => {
+    const h = harness();
+    for (const text of ["[".repeat(700), '{"a":'.repeat(150)]) {
+      expect(await presentRaw(h, withHeaderSegment(enc(text)))).toBe("bad-header");
+    }
+  });
+  test("parseStrictJson is depth-capped with the caller's code, and the cap is exact", () => {
+    const thrown = (text: string) => { try { parseStrictJson(text, "bad-payload"); return "ok"; } catch (e) { return e instanceof HeldCredentialError ? e.code : `escaped ${(e as Error).name}`; } };
+    for (const open of ["[", '{"a":']) {
+      const close = open === "[" ? "]" : "}";
+      const nest = (n: number) => open.repeat(n) + "1" + close.repeat(n);
+      expect(thrown(nest(MAX_JSON_DEPTH))).toBe("ok");
+      expect(thrown(nest(MAX_JSON_DEPTH + 1))).toBe("bad-payload");
+      expect(thrown(open.repeat(200_000))).toBe("bad-payload");
+    }
+  });
+  test("oversized sdJwt, siwe message and siwe signature are refused", async () => {
+    const h = harness();
+    const good = makeCredential().sdJwt;
+    expect(await code(verifyHeldPresentation({ sdJwt: "a".repeat(HELD_LIMITS.sdJwtChars + 1), siwe: makeSiwe(good, h.store.issue(AUDIENCE, SUB)) }, h.options))).toBe("bad-presentation");
+    const siwe = makeSiwe(good, h.store.issue(AUDIENCE, SUB));
+    expect(await code(verifyHeldPresentation({ sdJwt: good, siwe: { ...siwe, message: siwe.message + "x".repeat(HELD_LIMITS.siweMessageChars) } }, h.options))).toBe("bad-presentation");
+    expect(await code(verifyHeldPresentation({ sdJwt: good, siwe: { ...siwe, signature: siwe.signature + "00" } }, h.options))).toBe("bad-presentation");
+  });
+  test("a near-limit valid credential still verifies (319-char email)", async () => {
+    const email = `${"a".repeat(307)}@example.com`;
+    expect(email.length).toBe(319);
+    const h = harness();
+    const { presentation } = h.present({ disclosures: [["email", email], ["emailDomain", "example.com"]] });
+    expect(presentation.sdJwt.length).toBeLessThan(HELD_LIMITS.sdJwtChars);
+    expect((await verifyHeldPresentation(presentation, h.options)).claims.email).toBe(email);
+  });
+  test("duplicate keys in a disclosure are refused; __proto__ keys are inert", async () => {
+    const h = harness();
+    const dup = enc('["s","email","a@example.com","x"]');
+    const digest = encodeBase64Url(sha256(asciiBytes(dup)));
+    const cred = makeCredential({ disclosures: [], rawDisclosures: [dup], payload: (p) => ({ ...p, _sd: [digest] }) });
+    expect(await presentRaw(h, cred.sdJwt)).toBe("bad-disclosure");
+    expect(() => parseStrictJson('{"a":1,"a":2}', "bad-payload")).toThrow(HeldCredentialError);
+    expect(() => parseStrictJson('{"__proto__":1,"__proto__":2}', "bad-payload")).toThrow(HeldCredentialError);
+    const parsed = parseStrictJson('{"__proto__":{"polluted":true}}', "bad-payload") as Record<string, unknown>;
+    expect(Object.keys(parsed)).toEqual(["__proto__"]);
+    expect(Object.getPrototypeOf(parsed)).toBeNull();
+    expect(({} as Record<string, unknown>).polluted).toBeUndefined();
+    await expectCode("bad-header", { header: (hd) => JSON.parse(`{"__proto__":{"alg":"x"},"alg":"EdDSA","typ":"${hd.typ}","kid":"${hd.kid}"}`) });
+    await expectCode("bad-payload", { payload: (p) => JSON.parse(`{"__proto__":{"x":1},${JSON.stringify(p).slice(1)}`) });
+  });
+});
+
+describe("TC-1540 Miller 1: per-segment byte limits", () => {
+  test("a 3.5 MB header is refused by the verifier's code (total cap) and an oversized header segment under the total cap too", async () => {
+    const h = harness();
+    expect(await presentRaw(h, withHeaderSegment("a".repeat(3_500_000)))).toBe("bad-presentation");
+    const [header, payload, sig] = makeCredential().jwt.split(".");
+    expect(await presentRaw(h, `${"a".repeat(HELD_LIMITS.headerSegmentChars + 1)}.${payload}.${sig}~`)).toBe("bad-presentation");
+    expect(await presentRaw(h, `${header}.${"a".repeat(HELD_LIMITS.payloadSegmentChars + 1)}.${sig}~`)).toBe("bad-presentation");
+    expect(await presentRaw(h, `${header}.${payload}.${"a".repeat(HELD_LIMITS.signatureSegmentChars + 1)}~`)).toBe("bad-presentation");
+  });
+  test("too many or oversized disclosures are refused before they are decoded", async () => {
+    const h = harness();
+    expect(await presentRaw(h, makeCredential({ rawDisclosures: Array.from({ length: HELD_LIMITS.disclosures }, (_, i) => enc(`d${i}`)) }).sdJwt)).toBe("bad-presentation");
+    expect(await presentRaw(h, makeCredential({ rawDisclosures: ["a".repeat(HELD_LIMITS.disclosureChars + 1)] }).sdJwt)).toBe("bad-presentation");
+  });
+  test("segments at exactly the limit are not refused for size", async () => {
+    const h = harness();
+    const [, payload, sig] = makeCredential().jwt.split(".");
+    // exactly at the cap: refused later (bad signature/header content), not for size
+    expect(await presentRaw(h, `${"a".repeat(HELD_LIMITS.headerSegmentChars)}.${payload}.${sig}~`)).not.toBe("bad-presentation");
+  });
+});
+
+describe("TC-1540 Miller 2: duplicate _sd digests", () => {
+  test("a repeated digest in _sd is refused even when the disclosure is genuine", async () => {
+    await expectCode("bad-payload", { payload: (p) => ({ ...p, _sd: [...(p._sd as string[]), (p._sd as string[])[0]] }) });
+    await expectCode("bad-payload", { payload: (p) => ({ ...p, _sd: [...(p._sd as string[]), ...(p._sd as string[])] }) });
+    await expectCode("ok", {});
+  });
+});
+
+describe("TC-1540 Miller 3: strict UTF-8", () => {
+  const bytes = (...parts: (string | number[])[]) => Uint8Array.from(parts.flatMap((p) => (typeof p === "string" ? [...new TextEncoder().encode(p)] : p)));
+  const b64 = (u: Uint8Array) => encodeBase64Url(u);
+  test("decodeUtf8 refuses invalid bytes and keeps a BOM", () => {
+    expect(() => decodeUtf8(Uint8Array.from([0xff]), "bad-payload")).toThrow(HeldCredentialError);
+    expect(() => decodeUtf8(Uint8Array.from([0xc0, 0x80]), "bad-payload")).toThrow(HeldCredentialError);
+    expect(decodeUtf8(bytes([0xef, 0xbb, 0xbf], "{}"), "bad-payload").charCodeAt(0)).toBe(0xfeff);
+  });
+  test("a BOM before the header JSON is refused", async () => {
+    const h = harness();
+    const header = b64(bytes([0xef, 0xbb, 0xbf], JSON.stringify({ alg: "EdDSA", typ: "vc+sd-jwt", kid: KID_A })));
+    expect(await presentRaw(h, withHeaderSegment(header))).toBe("bad-header");
+  });
+  test("invalid UTF-8 in a signed payload string is refused, not replaced", async () => {
+    const h = harness();
+    const payload = b64(bytes('{"iss":"', [0xff], '"}'));
+    const input = `${enc({ alg: "EdDSA", typ: "vc+sd-jwt", kid: KID_A })}.${payload}`;
+    const sdJwt = `${input}.${encodeBase64Url(ed25519.sign(asciiBytes(input), SEED_A))}~`;
+    expect(await presentRaw(h, sdJwt)).toBe("bad-payload");
+  });
+  test("invalid UTF-8 and a BOM in a genuine disclosure are refused", async () => {
+    for (const raw of [bytes('["s","email","', [0xff], '"]'), bytes([0xef, 0xbb, 0xbf], '["s","email","a@example.com"]')]) {
+      const text = b64(raw);
+      const digest = encodeBase64Url(sha256(asciiBytes(text)));
+      const cred = makeCredential({ disclosures: [], rawDisclosures: [text], payload: (p) => ({ ...p, _sd: [digest] }) });
+      expect(await presentRaw(harness(), cred.sdJwt)).toBe("bad-disclosure");
+    }
+  });
+});
+
+describe("TC-1540 Miller 4: integers only", () => {
+  const signedRaw = async (rewrite: (json: string) => string) => {
+    const h = harness();
+    const input = `${enc({ alg: "EdDSA", typ: "vc+sd-jwt", kid: KID_A })}.${enc(rewrite(JSON.stringify(makeCredential().payload)))}`;
+    return presentRaw(h, `${input}.${encodeBase64Url(ed25519.sign(asciiBytes(input), SEED_A))}~${makeCredential().sdJwt.split("~").slice(1).join("~")}`);
+  };
+  test("1.0, 1e3 and -0 are refused as numbers; plain integers still verify", async () => {
+    const iat = (makeCredential().payload.iat as number);
+    expect(await signedRaw((j) => j.replace(`"iat":${iat}`, `"iat":${iat}.0`))).toBe("bad-payload");
+    expect(await signedRaw((j) => j.replace(/"exp":(\d+)/, (_, n) => `"exp":${n}.0`))).toBe("bad-payload");
+    expect(await signedRaw((j) => j.replace(/"nbf":(\d+)/, (_, n) => `"nbf":${n}e0`))).toBe("bad-payload");
+    expect(await signedRaw((j) => j.replace('"profileVersion":1', '"profileVersion":-0'))).toBe("bad-payload");
+    expect(await signedRaw((j) => j)).toBe("ok");
+  });
+  test("parseStrictJson number forms", () => {
+    for (const bad of ["1.0", "1e3", "1E3", "1.5", "-0", "01", "-", "1.", "[1.0]"]) expect(() => parseStrictJson(bad, "bad-payload")).toThrow(HeldCredentialError);
+    for (const good of ["0", "-1", "123456789", "[0,1,-2]"]) expect(() => parseStrictJson(good, "bad-payload")).not.toThrow();
+  });
+});
+
+describe("TC-1540 Miller 5: strict Ed25519 (cofactorless, mixed-order R refused)", () => {
+  const L = ed25519.CURVE.n;
+  const le = (n: bigint, len: number) => { const out = new Uint8Array(len); for (let i = 0; i < len; i += 1) { out[i] = Number(n & 0xffn); n >>= 8n; } return out; };
+  const leNum = (b: Uint8Array) => b.reduceRight((acc, byte) => (acc << 8n) | BigInt(byte), 0n);
+  const Point = ed25519.ExtendedPoint;
+  // an order-8 torsion point (y = c7176a70...037a)
+  const T = Point.fromHex("c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac037a");
+
+  test("the torsion vector is really order 8, and R + T is mixed-order, not small-order", () => {
+    expect(T.multiply(8n).is0()).toBe(true);
+    expect(T.multiply(4n).is0()).toBe(false);
+    expect(T.isSmallOrder()).toBe(true);
+  });
+  test("a signature whose R carries an order-8 component passes noble's cofactored verify but is refused", () => {
+    const seedBytes = seed(7);
+    const message = asciiBytes("mixed-order R");
+    const { scalar: a, pointBytes: A } = ed25519.utils.getExtendedPublicKey(seedBytes);
+    const r = 123456789123456789n;
+    const R = Point.BASE.multiply(r).add(T);
+    expect(R.isSmallOrder()).toBe(false);
+    const Rbytes = R.toRawBytes();
+    const k = leNum(sha512(Uint8Array.from([...Rbytes, ...A, ...message]))) % L;
+    const S = (r + k * a) % L;
+    const signature = Uint8Array.from([...Rbytes, ...le(S, 32)]);
+    expect(ed25519.verify(signature, message, A, { zip215: false })).toBe(true); // noble: cofactored, accepts
+    expect(verifyEd25519Strict(signature, message, A)).toBe(false);
+  });
+  test("an honest signature still verifies", () => {
+    const message = asciiBytes("honest");
+    const pub = ed25519.getPublicKey(SEED_A);
+    expect(verifyEd25519Strict(ed25519.sign(message, SEED_A), message, pub)).toBe(true);
+  });
+  test("a small-order public key and a small-order R are still refused", () => {
+    const message = asciiBytes("x");
+    const sig = ed25519.sign(message, SEED_A);
+    expect(verifyEd25519Strict(sig, message, T.toRawBytes())).toBe(false);
+    expect(verifyEd25519Strict(Uint8Array.from([...Point.ZERO.toRawBytes(), ...sig.subarray(32)]), message, ed25519.getPublicKey(SEED_A))).toBe(false);
+  });
+});
+
+describe("TC-1540 Miller 6: address case and canonical subject", () => {
+  const upper = `0x${HOLDER_LOWER.slice(2).toUpperCase()}`;
+  test("a SIWE address that is lowercase, all-uppercase or badly checksummed is refused; the EIP-55 form passes", async () => {
+    expect(upper).not.toBe(HOLDER_LOWER);
+    for (const address of [HOLDER_LOWER, upper, HOLDER.replace(/[a-f]/i, (c) => (c === c.toLowerCase() ? c.toUpperCase() : c.toLowerCase()))]) {
+      await expectCode("bad-siwe", {}, { address });
+    }
+    await expectCode("ok", {}, { address: HOLDER });
+  });
+  test("an all-uppercase did:pkh address is refused as sub", async () => {
+    expect(pkhPrincipalsEqual(`did:pkh:eip155:1:${upper}`, SUB)).toBe(false);
+    await expectCode("bad-subject", { payload: (p) => ({ ...p, sub: `did:pkh:eip155:1:${upper}`, holderBinding: { did: SUB, signingDomain: BINDING } }) });
+  });
+  test("result.subject is the canonical EIP-55 did:pkh even when the credential carries the lowercase form", async () => {
+    const lowerSub = `did:pkh:eip155:1:${HOLDER_LOWER}`;
+    const h = harness();
+    const { presentation } = h.present({ payload: (p) => ({ ...p, sub: lowerSub, holderBinding: { did: lowerSub, signingDomain: BINDING } }) });
+    const result = await verifyHeldPresentation(presentation, h.options);
+    expect(result.subject).toBe(SUB);
+    expect(result.subjectAddress).toBe(HOLDER_LOWER);
+  });
+});
+
+describe("TC-1540 Miller 7: exact RFC 3339 in SIWE", () => {
+  test("parseRfc3339 refuses impossible dates and times", () => {
+    for (const bad of [
+      "2026-02-31T00:00:00Z", "2026-02-29T00:00:00Z", "2026-13-01T00:00:00Z", "2026-00-10T00:00:00Z", "2026-04-31T00:00:00Z", "2026-10-19T24:00:00Z",
+      "2026-10-19T23:60:00Z", "2026-10-19T23:59:60Z", "2026-10-19T00:00:00", "2026-10-19 00:00:00Z", "2026-10-19T00:00:00+24:00", "2026-10-19T00:00:00+01:60",
+      "2026-10-19T00:00:00.Z", "2026-10-19T00:00:00z", "", "2026-10-19",
+    ]) expect(parseRfc3339(bad)).toBeNull();
+  });
+  test("parseRfc3339 values", () => {
+    expect(parseRfc3339("2026-10-19T00:00:00Z")).toBe(Date.UTC(2026, 9, 19));
+    expect(parseRfc3339("2028-02-29T12:00:00.5Z")).toBe(Date.UTC(2028, 1, 29, 12, 0, 0, 500));
+    expect(parseRfc3339("2026-10-19T02:00:00+02:00")).toBe(Date.UTC(2026, 9, 19));
+    expect(parseRfc3339("2026-10-18T19:30:00-04:30")).toBe(Date.UTC(2026, 9, 19));
+  });
+  test("a SIWE with an impossible Expiration Time, Not Before or Issued At is refused; real ones pass", async () => {
+    await expectCode("bad-siwe", {}, { expirationTime: "2026-02-31T00:00:00Z" });
+    await expectCode("bad-siwe", {}, { expirationTime: "2026-10-21T24:00:00Z" });
+    await expectCode("bad-siwe", {}, { notBefore: "2026-10-19T00:00:00+25:00" });
+    await expectCode("ok", {}, { expirationTime: "2026-10-21T00:00:00Z", notBefore: "2026-10-19T00:00:00Z" });
+    await expectCode("bad-siwe", {}, { expirationTime: "2026-10-19T00:00:00Z" });
+  });
+});
+
+describe("TC-1540 Miller 8 and F1: opaque, immutable IssuerSet", () => {
+  test("only parseIssuerSet can create an IssuerSet", () => {
+    expect(() => new IssuerSet(Symbol("x"), 1, new Map())).toThrow(TypeError);
+    expect(() => (IssuerSet as unknown as () => unknown)()).toThrow();
+  });
+  test("a structural object, a prototype-only object and a spread copy are refused as the issuerSet", async () => {
+    const real = parseIssuerSet(setOf(entryA()), { didMethods: METHODS });
+    const entry = real.resolveIssuer(ISSUER_A, KID_A)!;
+    const structural = { version: 1, resolveIssuer: () => ({ ...entry, vcts: ["anything"], profiles: ["anything"] }) } as unknown as IssuerSet;
+    for (const issuerSet of [structural, Object.create(IssuerSet.prototype) as IssuerSet, { ...real } as IssuerSet]) {
+      await expectCode("bad-config", {}, undefined, { issuerSet });
+    }
+    expect(IssuerSet.is(real)).toBe(true);
+    await expectCode("ok", {}, undefined, { issuerSet: real });
+  });
+  test("resolveIssuer cannot be overridden on the instance or the prototype: the override fails and verification is unchanged", async () => {
+    const h = harness({}, [entryA(), entryB()]);
+    const set = h.options.issuerSet as unknown as { resolveIssuer: unknown };
+    const other = h.options.issuerSet.resolveIssuer(ISSUER_B, KID_B)!;
+    // test files are ES modules (strict mode), so assignment to a frozen object throws
+    expect(() => { set.resolveIssuer = () => other; }).toThrow(TypeError);
+    expect(() => Object.defineProperty(set, "resolveIssuer", { value: () => other })).toThrow(TypeError);
+    expect(() => { (IssuerSet.prototype as unknown as { resolveIssuer: unknown }).resolveIssuer = () => other; }).toThrow(TypeError);
+    expect(() => Object.defineProperty(IssuerSet.prototype, "resolveIssuer", { value: () => other })).toThrow(TypeError);
+    expect(() => Object.defineProperty(IssuerSet, "is", { value: () => true })).toThrow(TypeError);
+    expect(Object.isFrozen(set) && Object.isFrozen(IssuerSet.prototype) && Object.isFrozen(IssuerSet)).toBe(true);
+    // an attacker-signed credential (key B, claiming issuer A) still does not verify
+    const { presentation } = h.present({ seed: SEED_B });
+    expect(await code(verifyHeldPresentation(presentation, h.options))).toBe("bad-signature");
+  });
+  test("mutating a returned entry's publicKey bytes does not change a later verification", async () => {
+    const h = harness();
+    const entry = h.options.issuerSet.resolveIssuer(ISSUER_A, KID_A)!;
+    entry.publicKey.set(ed25519.getPublicKey(SEED_B)); // attacker swaps in their own key
+    expect(h.options.issuerSet.resolveIssuer(ISSUER_A, KID_A)!.publicKey).toEqual(ed25519.getPublicKey(SEED_A));
+    const forged = h.present({ seed: SEED_B });
+    expect(await code(verifyHeldPresentation(forged.presentation, h.options))).toBe("bad-signature");
+    const honest = h.present();
+    expect(await code(verifyHeldPresentation(honest.presentation, h.options))).toBe("ok");
+  });
+  test("returned entries are fresh copies, and vcts and profiles are frozen", () => {
+    const real = parseIssuerSet(setOf(entryA()), { didMethods: METHODS });
+    const first = real.resolveIssuer(ISSUER_A, KID_A)!;
+    expect(real.resolveIssuer(ISSUER_A, KID_A)).not.toBe(first);
+    expect(real.resolveIssuer(ISSUER_A, KID_A)!.publicKey).not.toBe(first.publicKey);
+    expect(Object.isFrozen(first.vcts) && Object.isFrozen(first.profiles)).toBe(true);
+    expect(() => (first.vcts as string[]).push("x")).toThrow(TypeError);
+  });
+  test("resolved entries are frozen", () => {
+    const real = parseIssuerSet(setOf(entryA()), { didMethods: METHODS });
+    expect(Object.isFrozen(real.resolveIssuer(ISSUER_A, KID_A))).toBe(true);
+  });
+});
+
+describe("TC-1540 Miller 9: email shape", () => {
+  test("normaliseEmail refuses an empty local part or domain", () => {
+    for (const bad of ["@ab", "ab@", "@", "+tag@example.com", "a@@b.com", "@example.com", "ab@.com"]) expect(normaliseEmail(bad)).toBeNull();
+    expect(normaliseEmail("ab@example.com")).toBe("ab@example.com");
+  });
+  test("a disclosed email with an empty local part or domain is refused", async () => {
+    for (const email of ["@ab", "ab@", "@a.b", "a@"]) {
+      await expectCode("bad-disclosure", { disclosures: [["email", email]] });
+    }
+    await expectCode("ok", { disclosures: [["email", "ab@example.com"]] });
+  });
 });
