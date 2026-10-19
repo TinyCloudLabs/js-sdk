@@ -1,5 +1,3 @@
-import { ReplicaContractCode } from "@tinycloud/sdk-services/kv/replication/contractConstants";
-
 /**
  * Typed replica errors. Every failure a caller can act on has its own code;
  * hosts (CLI, worker) map codes to their own exit codes or UI states.
@@ -19,8 +17,6 @@ export const ReplicaErrorCode = {
   STORAGE_ERROR: "STORAGE_ERROR",
   /** The local disk is full. */
   STORAGE_FULL: "STORAGE_FULL",
-  /** Quota admission refused the page (`maxBytes` or the free-space floor). Nothing committed. */
-  STORAGE_BUDGET: ReplicaContractCode.STORAGE_BUDGET,
   /** The key is outside the replica's prefix. */
   NOT_COVERED: "NOT_COVERED",
   /** Syncing the secrets space or the vault namespace needs an explicit opt-in. */
