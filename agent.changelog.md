@@ -22,6 +22,8 @@ entry when `agent.dev.md` or related agent workflow expectations change.
   delayed-close or unknown-child reservation safety.
 - Moved the Node socket lifecycle fixture into a real Node subprocess rather
   than Bun's HTTP shim; retained finish/aborted-stream/error and privacy assertions.
+- Distinguished package state roots from source directories in the alpha audit;
+  cache middleware is code, while hidden configuration and data/key files remain blocked.
 
 ## 2026-10-16
 

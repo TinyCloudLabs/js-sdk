@@ -42,12 +42,12 @@ export function assertPlatform() {
 }
 
 // Audit archive paths before extraction, then audit links and package metadata
-// in the extracted tree. Code named profile/history is not operator state.
+// in the extracted tree. State roots are forbidden, not source module directories.
 export function assertPackagePath(path) {
   const parts = path.replace(/\/$/, "").split("/");
   if (parts[0] !== "package" || parts.some((part) => part === ".." || part === "")
     || parts.some((part) => /^(?:\.env(?:\..*)?|\.npmrc|\.git|\.ssh|\.aws|\.gnupg|\.cache|\.npm|\.config|\.tinycloud|\.tc-apps|\.tc-diagnostics)$/.test(part))
-    || /(?:^|\/)(?:credentials|profiles|sessions|history|histories|cache|caches)\/(?!package\.json$)/i.test(path)
+    || /^package\/(?:(?:.*\/)?node_modules\/(?:@[^/]+\/)?[^/]+\/)?(?:credentials|profiles|sessions|history|histories|cache|caches)\/(?!package\.json$)/i.test(path)
     || /(?:^|\/)(?:credentials|profiles|sessions|config\.local)\.json$/i.test(path)
     || /\.(?:sqlite(?:3)?(?:-wal|-shm)?|db|log|pem|key)$/i.test(path)) {
     throw new Error(`Sensitive or unsafe package member: ${path}`);
