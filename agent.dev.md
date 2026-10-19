@@ -159,7 +159,8 @@ version metadata and make the immutable release checkout fail the clean-tree pub
   outcomes, lost coverage, and separate business/protocol/delivery evidence.
   `telemetry.diagnostics` is independent of generic telemetry. Only recognized
   tc-apps invocations may opt in; a shared launch marker is not admission.
-  Bounded close must not terminate the bridge that observes native child death.
+  A close deadline never authorizes bridge termination. Explicit native-child
+  close/retirement replies do: some hosts keep the bridge alive after port.close().
 - MCP inbound dispatch and transport sends stay synchronous, including cancellation
   during stdio policy refresh. Admission contexts are immutable across generation
   changes; racing requests may lack evidence, never gain permission to replay.

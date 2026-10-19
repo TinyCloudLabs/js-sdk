@@ -29,7 +29,7 @@ export interface DiagnosticDiscoveryRequest {
 export interface DiagnosticDiscoveryResult {
   type: "discovered"; key: string; policy?: DiagnosticPolicy; retained?: boolean; failure?: DiagnosticFailure;
 }
-export type DiagnosticWorkerReply = DiagnosticDiscoveryResult | { type: "retired" };
+export type DiagnosticWorkerReply = DiagnosticDiscoveryResult | { type: "retired" } | { type: "closed" };
 interface WriterConfiguration {
   type: "configure"; root: string; hosted: boolean; separateFrom?: string;
   terminal: boolean; batchEvents: number; sweepMs: number;
@@ -120,7 +120,10 @@ function bridge(configuration: DiagnosticWorkerConfiguration): void {
     Atomics.store(state, counter.bytes, 0); Atomics.store(state, counter.maintenance, 0);
     Atomics.store(ready, 0, 0);
     if (retiring && code === 0 && signal === null) port.postMessage({ type: "retired" } satisfies DiagnosticWorkerReply);
-    else Atomics.store(state, counter.closed, 1);
+    else {
+      Atomics.store(state, counter.closed, 1);
+      port.postMessage({ type: "closed" } satisfies DiagnosticWorkerReply);
+    }
     notify();
     port.close();
   });

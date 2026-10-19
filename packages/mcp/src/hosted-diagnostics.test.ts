@@ -1,12 +1,12 @@
 import { afterEach, expect, test } from "bun:test";
 import { createHmac } from "node:crypto";
 import { once } from "node:events";
-import { access, mkdir, mkdtemp, readdir, rm, symlink } from "node:fs/promises";
-import { createServer, request as nodeRequest, type Server } from "node:http";
+import { access, mkdir, mkdtemp, readdir, rm, symlink, writeFile } from "node:fs/promises";
+import { createServer, type Server } from "node:http";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { exportJWK, generateKeyPair, SignJWT } from "jose";
-import { DiagnosticStore, resolveDiagnosticTenant } from "@tinycloud/operations/diagnostics";
+import { DiagnosticStore, resolveDiagnosticTenant, type DiagnosticSnapshot } from "@tinycloud/operations/diagnostics";
 
 import { createHostedMcpApp } from "./http.js";
 import { HostedDiagnostics, createHostedNodeHandler } from "./hosted-diagnostics.js";
@@ -174,50 +174,88 @@ test("disabled service policy preserves Node responses without creating capture 
 test("real Node socket finish, close-before-finish and adapter errors are separate observations", async () => {
   const root = await mkdtemp(join(tmpdir(), "mcp-socket-diagnostics-"));
   cleanup.push(() => rm(root, { recursive: true, force: true }));
+  const history = join(root, "history");
   const tenantId = createHmac("sha256", "synthetic-secret").update("tenant:socket").digest("hex");
-  const partition = await resolveDiagnosticTenant(root, tenantId, { create: true });
-  const store = new DiagnosticStore(root, partition!);
-  await store.control("enable", { scope: "tc-apps" });
-  const diagnostics = new HostedDiagnostics({ root });
-  cleanup.push(() => diagnostics.close());
-  const app = {
-    diagnostics,
-    async fetch(request: Request): Promise<Response> {
-      return diagnostics.tenant(tenantId, async () => {
-      const path = new URL(request.url).pathname;
-      if (path === "/fail") throw new Error("PRIVATE_ADAPTER_ERROR");
-      if (path === "/stream") return new Response(new ReadableStream<Uint8Array>({
-        start(controller) {
-          controller.enqueue(new TextEncoder().encode("PRIVATE_STREAM_CONTENT"));
-          request.signal.addEventListener("abort", () => controller.close(), { once: true });
+  const partition = await resolveDiagnosticTenant(history, tenantId, { create: true });
+  await new DiagnosticStore(history, partition!).control("enable", { scope: "tc-apps" });
+  // Exercise the Node adapter on Node, not Bun's node:http compatibility layer.
+  // Bundle this private source entry for the fixture; do not add a public export.
+  const built = await Bun.build({
+    entrypoints: [new URL("./hosted-diagnostics.ts", import.meta.url).pathname],
+    target: "node", format: "cjs",
+  });
+  if (!built.success) throw new Error(built.logs.map((message) => message.message).join("\n"));
+  await writeFile(join(root, "adapter.cjs"), await built.outputs[0]!.text());
+  const script = join(root, "socket.mjs");
+  await writeFile(script, `
+import assert from 'node:assert/strict';
+import {once} from 'node:events';
+import {createServer,request as nodeRequest} from 'node:http';
+import adapter from './adapter.cjs';
+import {DiagnosticStore} from ${JSON.stringify(new URL("../../operations/dist/diagnostics.js", import.meta.url).href)};
+const {HostedDiagnostics,createHostedNodeHandler}=adapter;
+const diagnostics=new HostedDiagnostics({root:${JSON.stringify(history)}});
+const store=new DiagnosticStore(${JSON.stringify(history)},${JSON.stringify(partition)});
+const app={
+  diagnostics,
+  async fetch(request){
+    return diagnostics.tenant(${JSON.stringify(tenantId)},async()=>{
+      const path=new URL(request.url).pathname;
+      if(path==='/fail')throw new Error('PRIVATE_ADAPTER_ERROR');
+      if(path==='/stream')return new Response(new ReadableStream({
+        start(controller){
+          controller.enqueue(new TextEncoder().encode('PRIVATE_STREAM_CONTENT'));
+          request.signal.addEventListener('abort',()=>controller.close(),{once:true});
         },
       }));
-      return new Response("PRIVATE_COMPLETE_CONTENT", { status: 201 });
-      }, true);
-    },
-  };
-  const server = createServer(createHostedNodeHandler(app));
-  const origin = await listen(server);
-  const completed = await fetch(origin);
-  expect(completed.status).toBe(201);
-  expect(await completed.text()).toBe("PRIVATE_COMPLETE_CONTENT");
-  const closed = new Promise<void>((resolve) => {
-    server.once("request", (_request, response) => response.once("close", resolve));
+      return new Response('PRIVATE_COMPLETE_CONTENT',{status:201});
+    },true);
+  },
+};
+const server=createServer(createHostedNodeHandler(app));
+try{
+  server.listen(0,'127.0.0.1');await once(server,'listening');
+  const origin='http://127.0.0.1:'+server.address().port;
+  const completed=await fetch(origin);
+  assert.equal(completed.status,201);
+  assert.equal(await completed.text(),'PRIVATE_COMPLETE_CONTENT');
+  // This fixture also runs in the ordinary Node 20 conformance job.
+  const closed=new Promise(resolve=>{
+    server.once('request',(_request,response)=>response.once('close',resolve));
   });
-  await new Promise<void>((resolve, reject) => {
-    const request = nodeRequest(`${origin}/stream`, (response) => {
-      response.once("data", () => { response.destroy(); resolve(); });
-      response.once("error", reject);
+  await new Promise((resolve,reject)=>{
+    const request=nodeRequest(origin+'/stream',response=>{
+      response.once('data',()=>{response.destroy();resolve();});
+      response.once('error',reject);
     });
-    request.once("error", reject);
-    request.end();
+    request.once('error',reject);request.end();
   });
   await closed;
-  const failed = await fetch(`${origin}/fail`);
-  expect(failed.status).toBe(500);
-  expect(await failed.text()).not.toContain("PRIVATE_ADAPTER_ERROR");
+  const failed=await fetch(origin+'/fail');
+  assert.equal(failed.status,500);
+  assert(!((await failed.text()).includes('PRIVATE_ADAPTER_ERROR')));
   await diagnostics.close();
-  const snapshot = await store.snapshot({ all: true });
+  console.log(JSON.stringify(await store.snapshot({all:true})));
+}finally{
+  server.closeAllConnections();
+  await new Promise(resolve=>server.close(resolve));
+  await diagnostics.close();
+}
+`, { mode: 0o600 });
+  const child = Bun.spawn({
+    cmd: [process.env.NODE_BINARY ?? "node", script],
+    timeout: 20_000,
+    env: {
+      PATH: process.env.PATH, HOME: join(root, "home"), TC_HOME: join(root, "profiles"),
+      NODE_PATH: new URL("../../../node_modules", import.meta.url).pathname,
+    },
+    stdout: "pipe", stderr: "pipe",
+  });
+  const [exit, stdout, stderr] = await Promise.all([
+    child.exited, new Response(child.stdout).text(), new Response(child.stderr).text(),
+  ]);
+  expect(exit, stderr).toBe(0);
+  const snapshot = JSON.parse(stdout) as DiagnosticSnapshot;
   expect(snapshot.events.filter((event) => event.delivery === "finish")).toHaveLength(2);
   expect(snapshot.events.filter((event) => event.delivery === "close_before_finish")).toHaveLength(1);
   expect(snapshot.events.filter((event) => event.delivery === "error")).toHaveLength(1);

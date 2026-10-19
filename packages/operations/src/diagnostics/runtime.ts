@@ -163,7 +163,14 @@ export class DiagnosticRuntime {
       };
       worker.on("error", failed);
       worker.on("message", (message: DiagnosticWorkerReply) => {
-        if (message.type === "retired") { this.channel.retired = true; return; }
+        if (message.type === "retired" || message.type === "closed") {
+          if (message.type === "retired") this.channel.retired = true;
+          // Both replies follow the native child's close event. Some hosts keep
+          // an otherwise finished bridge alive after port.close(); it is safe
+          // to terminate only now, never merely because a deadline elapsed.
+          void worker.terminate().catch(failed);
+          return;
+        }
         const discovery = this.channel.discoveries.get(message.key);
         if (!discovery || discovery.worker !== worker) return;
         clearTimeout(discovery.timer);

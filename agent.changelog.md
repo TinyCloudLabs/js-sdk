@@ -16,6 +16,12 @@ entry when `agent.dev.md` or related agent workflow expectations change.
   preview image. Normal releases, live routing and participant capture stay untouched.
 - Updated pagination and KV/SQL lost-acknowledgment fixtures to use admitted
   tc-apps resources and scoped bindings; retained completeness/no-replay assertions.
+- Added explicit native-child close notification before bridge termination.
+  A traced Bun 1.3.14 bridge survived port.close() after child death and blocked
+  the next root; observed-death cleanup now reopens both roots without weakening
+  delayed-close or unknown-child reservation safety.
+- Moved the Node socket lifecycle fixture into a real Node subprocess rather
+  than Bun's HTTP shim; retained finish/aborted-stream/error and privacy assertions.
 
 ## 2026-10-16
 
