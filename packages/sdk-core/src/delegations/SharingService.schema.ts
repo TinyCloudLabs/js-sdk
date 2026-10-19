@@ -24,7 +24,6 @@ import {
   DelegationErrorCodes,
 } from "./types.schema.js";
 import type { ICapabilityKeyRegistry } from "../authorization/CapabilityKeyRegistry.js";
-import type { DelegationManager } from "./DelegationManager.js";
 
 // =============================================================================
 // EncodedShareData Schema
@@ -135,18 +134,6 @@ export const SharingServiceConfigSchema = z.object({
         val !== null && typeof val === "object",
       { message: "Expected an ICapabilityKeyRegistry object" }
     ),
-  /**
-   * Delegation manager for creating delegations.
-   * Required for generate(), optional for receive().
-   */
-  delegationManager: z
-    .unknown()
-    .refine(
-      (val): val is DelegationManager =>
-        val === undefined || (val !== null && typeof val === "object"),
-      { message: "Expected a DelegationManager object or undefined" }
-    )
-    .optional(),
   /** Factory for creating KV service instances */
   createKVService: z.unknown().refine(
     (val): val is (config: {

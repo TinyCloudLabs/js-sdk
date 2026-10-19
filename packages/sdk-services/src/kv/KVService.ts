@@ -26,6 +26,7 @@ import {
   authUnauthorizedError,
   validatedCapabilityOf,
   isRequestTimeoutError,
+  nodeRetryError,
 } from "../errors";
 import { IKVService } from "./IKVService";
 import { PrefixedKVService, IPrefixedKVService } from "./PrefixedKVService";
@@ -260,17 +261,6 @@ export class KVService extends BaseService implements IKVService {
     return this.context.hosts[0];
   }
 
-  private withJsonContentType(headers: ServiceHeaders): ServiceHeaders {
-    if (Array.isArray(headers)) {
-      return [...headers, ["content-type", "application/json"]];
-    }
-
-    return {
-      ...headers,
-      "content-type": "application/json",
-    };
-  }
-
   /**
    * Execute an invoke operation.
    *
@@ -287,24 +277,11 @@ export class KVService extends BaseService implements IKVService {
     signal: AbortSignal,
     extraHeaders?: Readonly<Record<string, string>>
   ): Promise<FetchResponse> {
-    const session = this.context.session!;
-    const headers = this.context.invoke(
-      session,
-      "kv",
-      path,
-      action
+    return this.invokeWithRetry(
+      `${this.host}/invoke`,
+      () => this.context.invoke(this.context.session!, "kv", path, action),
+      { headers: extraHeaders, body, signal }
     );
-
-    const requestHeaders: ServiceHeaders = Array.isArray(headers)
-      ? [...headers, ...Object.entries(extraHeaders ?? {})]
-      : { ...headers, ...extraHeaders };
-
-    return this.context.fetch(`${this.host}/invoke`, {
-      method: "POST",
-      headers: requestHeaders,
-      body,
-      signal,
-    });
   }
 
   /**
@@ -591,30 +568,28 @@ export class KVService extends BaseService implements IKVService {
 
     const request = this.createRequestSignal(options?.signal, options?.timeout);
     try {
-      const session = this.context.session!;
-      const invocationHeaders = this.context.invokeAny(
-        session,
-        paths.map((path) => ({
-          spaceId: session.spaceId,
-          service: "kv",
-          path,
-          action,
-        }))
-      );
       const limitHeaders: Record<string, string> = {};
       if (getOptions?.maxResponseBytes !== undefined) {
         limitHeaders["x-tinycloud-max-response-bytes"] = String(
           getOptions.maxResponseBytes
         );
       }
-      const headers: ServiceHeaders = Array.isArray(invocationHeaders)
-        ? [...invocationHeaders, ...Object.entries(limitHeaders)]
-        : { ...invocationHeaders, ...limitHeaders };
-      const response = await this.context.fetch(`${this.host}/invoke`, {
-        method: "POST",
-        headers,
-        signal: request.signal,
-      });
+      const response = await this.invokeWithRetry(
+        `${this.host}/invoke`,
+        () => {
+          const session = this.context.session!;
+          return this.context.invokeAny!(
+            session,
+            paths.map((path) => ({
+              spaceId: session.spaceId,
+              service: "kv",
+              path,
+              action,
+            }))
+          );
+        },
+        { headers: limitHeaders, signal: request.signal }
+      );
 
       if (!response.ok) {
         const errorText = response.status === 401 || response.status === 403
@@ -967,15 +942,18 @@ export class KVService extends BaseService implements IKVService {
           { meta: { status: response.status, statusText: response.statusText } }
         ));
       }
+      const message = `Failed to get key ${JSON.stringify(key)}: ${response.status} - ${errorText}`;
+      const retryError = nodeRetryError("kv", message, response, errorText);
+      if (retryError) return err(retryError);
       return err(serviceError(
         ErrorCodes.NETWORK_ERROR,
-        `Failed to get key ${JSON.stringify(key)}: ${response.status} - ${errorText}`,
+        message,
         "kv",
         { meta: { status: response.status, statusText: response.statusText } }
       ));
     }
     const data = await this.parseResponse<T>(response, options?.raw, options?.binary);
-    return ok({ data: data as T, headers: this.createResponseHeaders(response.headers) });
+    return ok({ data: data as T, headers: this.createResponseHeaders(response.headers), ...(response.retry && { retry: response.retry }) });
   }
 
   async batchGet<T = unknown>(
@@ -1071,19 +1049,16 @@ export class KVService extends BaseService implements IKVService {
           { meta: { status: response.status, statusText: response.statusText } }
         ));
       }
-      if (response.status === 503 && (options?.ifMatch !== undefined || options?.ifNoneMatch !== undefined)) {
-        return err(serviceError(
-          ErrorCodes.KV_CONFLICT,
-          `Concurrent KV update conflicted for key ${JSON.stringify(key)}`,
-          "kv",
-          { meta: { status: response.status, statusText: response.statusText } }
-        ));
-      }
+      // A 503 is never a precondition failure (that is the 412 above): it is
+      // the node's busy/timeout signal, or an unclassified outage.
+      const message = `Failed to put key ${JSON.stringify(key)}: ${response.status} - ${errorText}`;
+      const retryError = nodeRetryError("kv", message, response, errorText);
+      if (retryError) return err(retryError);
       const quotaError = this.handleQuotaErrorResponse(response, errorText, key);
       if (quotaError) return quotaError;
       return err(serviceError(
         ErrorCodes.KV_WRITE_FAILED,
-        `Failed to put key ${JSON.stringify(key)}: ${response.status} - ${errorText}`,
+        message,
         "kv",
         { meta: { status: response.status, statusText: response.statusText } }
       ));
@@ -1091,6 +1066,7 @@ export class KVService extends BaseService implements IKVService {
     return ok({
       data: undefined as void,
       headers: this.createResponseHeaders(response.headers),
+      ...(response.retry && { retry: response.retry }),
     });
   }
 
@@ -1184,32 +1160,27 @@ export class KVService extends BaseService implements IKVService {
           );
         }
 
-        const headers = this.context.invokeAny!(
-          session,
-          paths.map((path) => ({
-            spaceId: session.spaceId,
-            service: "kv",
-            path,
-            action: KVAction.PUT,
-          }))
+        // The invocation is re-minted per attempt (the node answers a repeated
+        // one with 409). The flag flips only after minting succeeded and the
+        // context accepted the call: a throw before that never reached a
+        // transport, so it must not be labeled "may have dispatched" (Sol B2).
+        const response = await this.invokeWithRetry(
+          `${this.host}/invoke`,
+          () => {
+            const headers = this.context.invokeAny!(
+              session,
+              paths.map((path) => ({
+                spaceId: session.spaceId,
+                service: "kv",
+                path,
+                action: KVAction.PUT,
+              }))
+            );
+            requestMayHaveDispatched = true;
+            return headers;
+          },
+          { body, signal }
         );
-
-        const url = `${this.host}/invoke`;
-        const init = {
-          method: "POST",
-          headers,
-          body,
-          signal,
-        };
-
-        // Resolve the fetch function to a local BEFORE flipping the flag.
-        // `this.context.fetch` is a getter (context.ts:154-156) that can
-        // itself throw (assertActive()) — if the flag were set first, that
-        // throw would be mislabeled as "may have dispatched" even though no
-        // request was ever handed to a transport (Sol B2).
-        const fetchFn = this.context.fetch;
-        requestMayHaveDispatched = true;
-        const response = await fetchFn(url, init);
 
         if (!response.ok) {
           let errorText: string;
@@ -1485,9 +1456,12 @@ export class KVService extends BaseService implements IKVService {
         );
       }
       const errorText = await response.text();
+      const message = `Failed to list keys: ${response.status} - ${errorText}`;
+      const retryError = nodeRetryError("kv", message, response, errorText);
+      if (retryError) return err(retryError);
       return err(serviceError(
         ErrorCodes.NETWORK_ERROR,
-        `Failed to list keys: ${response.status} - ${errorText}`,
+        message,
         "kv",
         { meta: { status: response.status, statusText: response.statusText } }
       ));
@@ -1795,17 +1769,12 @@ export class KVService extends BaseService implements IKVService {
           { meta: { status: response.status, statusText: response.statusText } }
         ));
       }
-      if (response.status === 503 && options?.ifMatch !== undefined) {
-        return err(serviceError(
-          ErrorCodes.KV_CONFLICT,
-          `Concurrent KV delete conflicted for key ${JSON.stringify(key)}`,
-          "kv",
-          { meta: { status: response.status, statusText: response.statusText } }
-        ));
-      }
+      const message = `Failed to delete key ${JSON.stringify(key)}: ${response.status} - ${errorText}`;
+      const retryError = nodeRetryError("kv", message, response, errorText);
+      if (retryError) return err(retryError);
       return err(serviceError(
         ErrorCodes.NETWORK_ERROR,
-        `Failed to delete key ${JSON.stringify(key)}: ${response.status} - ${errorText}`,
+        message,
         "kv",
         { meta: { status: response.status, statusText: response.statusText } }
       ));
@@ -1813,6 +1782,7 @@ export class KVService extends BaseService implements IKVService {
     return ok({
       data: undefined as void,
       headers: this.createResponseHeaders(response.headers),
+      ...(response.retry && { retry: response.retry }),
     });
   }
 
@@ -1855,10 +1825,13 @@ export class KVService extends BaseService implements IKVService {
           }
 
           const errorText = await response.text();
+          const message = `Failed to get metadata for key ${JSON.stringify(key)}: ${response.status} - ${errorText}`;
+          const retryError = nodeRetryError("kv", message, response, errorText);
+          if (retryError) return err(retryError);
           return err(
             serviceError(
               ErrorCodes.NETWORK_ERROR,
-              `Failed to get metadata for key ${JSON.stringify(key)}: ${response.status} - ${errorText}`,
+              message,
               "kv",
               { meta: { status: response.status, statusText: response.statusText } }
             )
@@ -1900,13 +1873,6 @@ export class KVService extends BaseService implements IKVService {
 
       const path = this.getFullPath(key, options?.prefix);
       const session = this.context.session!;
-      const headers = this.context.invoke(
-        session,
-        "kv",
-        path,
-        KVAction.GET
-      );
-
       const body: {
         space: string;
         path: string;
@@ -1930,12 +1896,15 @@ export class KVService extends BaseService implements IKVService {
 
       const request = this.createRequestSignal(options?.signal, options?.timeout);
       try {
-        const response = await this.context.fetch(`${this.host}/signed/kv`, {
-          method: "POST",
-          headers: this.withJsonContentType(headers),
-          body: JSON.stringify(body),
-          signal: request.signal,
-        });
+        const response = await this.invokeWithRetry(
+          `${this.host}/signed/kv`,
+          () => this.context.invoke(session, "kv", path, KVAction.GET),
+          {
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify(body),
+            signal: request.signal,
+          }
+        );
 
         if (!response.ok) {
           return await this.createSignedReadUrlError(response, key, path);

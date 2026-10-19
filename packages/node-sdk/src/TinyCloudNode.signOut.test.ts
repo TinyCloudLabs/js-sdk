@@ -146,6 +146,45 @@ describe.each([
   });
 });
 
+test("signOut retires authority even when replacement session-key creation fails", async () => {
+  recordRequests();
+  const proof = await signedSession();
+  const wasm = new NodeWasmBindings();
+  const sessionStorage = new MemorySessionStorage();
+  const node = new TinyCloudNode({
+    host: HOST,
+    wasmBindings: wasm,
+    sessionStorage,
+    autoBootstrapAccount: false,
+  });
+  await node.restoreSession(proof);
+  await sessionStorage.save(proof.address, {
+    address: proof.address,
+    chainId: proof.chainId,
+    sessionKey: JSON.stringify(proof.jwk),
+    siwe: proof.siwe,
+    signature: proof.signature,
+    expiresAt: proof.expiresAt,
+    createdAt: new Date().toISOString(),
+    version: "1.0",
+  });
+  const retainedKv = node.kv;
+  await retainedKv.get("notes/a");
+  const before = requests.length;
+  wasm.createSessionManager = () => {
+    throw new Error("session manager unavailable");
+  };
+
+  await expect(node.signOut()).rejects.toThrow("session manager unavailable");
+
+  expect(node.session).toBeUndefined();
+  expect(node.restorableSession).toBeUndefined();
+  expect(() => node.kv).toThrow("Not signed in");
+  await expectNoAuthorizedCall(() => retainedKv.get("notes/a"));
+  expect(requests.length).toBe(before);
+  expect(sessionStorage.exists(proof.address)).toBe(false);
+});
+
 describe("TinyCloudNode.signIn after signOut", () => {
   function stubNode(): void {
     requests = [];

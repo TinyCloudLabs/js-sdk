@@ -13,12 +13,16 @@ export function requestAsPromise<T>(request: IDBRequest<T>): Promise<T> {
   return promise;
 }
 
-/** Resolves when the transaction commits; rejects when it aborts or errors. */
+/**
+ * Resolves when the transaction commits; rejects when it aborts or errors.
+ * Listeners, not `on*` handlers, so several owners of one transaction (the
+ * store and the lifecycle gate's `run`) can each await it.
+ */
 export function transactionDone(tx: IDBTransaction): Promise<void> {
   const { promise, resolve, reject } = Promise.withResolvers<void>();
-  tx.oncomplete = () => resolve();
-  tx.onabort = () => reject(tx.error ?? new DOMException("Transaction aborted", "AbortError"));
-  tx.onerror = () => reject(tx.error ?? new DOMException("Transaction failed", "UnknownError"));
+  tx.addEventListener("complete", () => resolve(), { once: true });
+  tx.addEventListener("abort", () => reject(tx.error ?? new DOMException("Transaction aborted", "AbortError")), { once: true });
+  tx.addEventListener("error", () => reject(tx.error ?? new DOMException("Transaction failed", "UnknownError")), { once: true });
   return promise;
 }
 

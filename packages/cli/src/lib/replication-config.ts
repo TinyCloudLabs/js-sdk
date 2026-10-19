@@ -1,8 +1,8 @@
 import { join } from "node:path";
 import { CLI_NAME } from "@tinycloud/operations/cli-name";
 import { profilePath, withProfileLock } from "@tinycloud/operations/state";
-import { sqliteReplicaStorage, type KVReplicaStorage, type ReplicationOptions } from "@tinycloud/node-sdk";
-import { createReplicationEventSink } from "./replication-log.js";
+import { REPLICA_LOGOUT_PENDING_FILE, sqliteReplicaStorage, type KVReplicaStorage, type ReplicationOptions } from "@tinycloud/node-sdk";
+import { createReplicationEventSink, REPLICATION_DIAGNOSTIC_FILES } from "./replication-log.js";
 import { assertFolderPrefix } from "@tinycloud/replica";
 import { CLIError } from "../output/errors.js";
 import { ExitCode } from "../config/constants.js";
@@ -21,8 +21,8 @@ export interface ProfileReplicationSettings {
 function readPositiveIntegerEnv(name: string, max: number): number | undefined {
   const raw = process.env[name];
   if (raw === undefined) return undefined;
-  const value = Number(raw);
-  if (!Number.isSafeInteger(value) || value <= 0 || value > max) {
+  const value = /^[1-9][0-9]*$/.test(raw) ? Number(raw) : Number.NaN;
+  if (!Number.isSafeInteger(value) || value > max) {
     throw new CLIError(
       "INVALID_REPLICATION_ENV",
       `${name} must be a positive integer no greater than ${max}, got ${JSON.stringify(raw)}`,
@@ -66,6 +66,8 @@ export function createCliReplicationConfig(
     maxBytes: readPositiveIntegerEnv("TC_REPLICATION_MAX_BYTES", Number.MAX_SAFE_INTEGER),
     storage: sqliteReplicaStorage({
       dir: join(root, "replication"),
+      logoutPendingFile: join(root, REPLICA_LOGOUT_PENDING_FILE),
+      diagnosticFiles: REPLICATION_DIAGNOSTIC_FILES,
       guard: (section) => withProfileLock(profile, section, { requireProfile: true, timeoutMs: 35_000 }),
     }),
     onEvent: createReplicationEventSink(root, output),

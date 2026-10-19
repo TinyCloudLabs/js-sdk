@@ -75,7 +75,19 @@ jobs:
           bun test tests/operations-mcp-conformance/conformance.test.ts
           bun test packages/operations/src/legacy-cli-concurrency.test.ts
           bun test packages/cli/src/commands/auth.test.ts
+          bun test packages/cli/src/auth/prepared-openkey.test.ts
           bun test packages/cli/src/commands/auth.portable-proof.test.ts
+          bun test packages/cli/src/commands/auth-logout-gate.integration.test.ts
+          bun test packages/cli/src/commands/auth-logout-account.integration.test.ts
+          bun test packages/cli/src/commands/auth-logout-legacy.integration.test.ts
+          bun test packages/cli/src/commands/auth-logout-marker.integration.test.ts
+          bun test packages/cli/src/commands/auth-null-marker.integration.test.ts
+          bun test packages/cli/src/commands/auth-prepared.integration.test.ts
+          bun test packages/cli/src/commands/auth-revoke.integration.test.ts
+          bun test packages/cli/src/commands/auth-signin-stamp.integration.test.ts
+          bun test packages/cli/src/lib/logout-revocation.test.ts
+          bun test packages/cli/src/lib/profile-replicas.test.ts
+          bun test packages/cli/src/lib/profile-replicas.defer.test.ts
           bun test packages/cli/src/commands/secrets.test.ts
           bun test packages/cli/src/commands/secrets-owner-retry.test.ts
           bun test packages/cli/src/commands/expired-session.test.ts
@@ -91,10 +103,19 @@ jobs:
           bun test packages/cli/src/commands/raw-decrypt-grant.test.ts
           bun test packages/cli/src/commands/secrets-put-classification.test.ts
           bun test packages/cli/src/output/errors.test.ts
+          bun test packages/cli/src/commands/account.test.ts
+          bun test packages/cli/src/commands/account-invocations.test.ts
+          bun test packages/cli/src/lib/account-access.test.ts
+          bun test packages/cli/src/lib/approval-notices.test.ts
+          bun test packages/node-sdk/src/TinyCloudNode.accountRegistrySync.test.ts
           bun test packages/cli/src/commands/secrets-request.test.ts
           bun test packages/cli/src/lib/secrets-wait.test.ts
           bun test packages/cli/src/lib/probe-child.test.ts
+          bun test packages/cli/src/lib/node-release.test.ts
+          bun test packages/cli/src/lib/node-fetch.test.ts
           bun test packages/cli/src/commands/secrets-wait.test.ts
+          bun test packages/cli/src/commands/kv-retry.test.ts
+          bun test packages/cli/test/node-retry.node.test.ts
           bun test packages/mcp/src/results.test.ts packages/mcp/src/tools.test.ts packages/mcp/src/stdio.test.ts packages/mcp/src/http.test.ts packages/mcp/src/remote-store.test.ts packages/mcp/src/http.e2e.test.ts
       - name: Run production private-key secrets regression in isolation
         run: bun test packages/cli/src/commands/secrets-private-key-production.test.ts
@@ -106,6 +127,10 @@ jobs:
         run: |
           bun run check:operations-mcp
           bun run --cwd packages/cli check:coverage
+      - name: Verify node release pin against upstream
+        run: bun run --cwd packages/cli check:node-release
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
       - name: Verify packed Node 20 fixtures
         run: bun run check:operations-mcp-pack
 

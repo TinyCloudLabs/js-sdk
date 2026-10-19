@@ -1,6 +1,6 @@
 import type { TinyCloudNode } from "@tinycloud/node-sdk";
 import type { OperationContext, RuntimeOperationContext } from "../contract.js";
-import { isOperationErrorCode, OperationInvocationError, operationError, storageFullOperationError, type OperationError } from "../errors.js";
+import { isOperationErrorCode, nodeRetryOperationError, OperationInvocationError, operationError, storageFullOperationError, type OperationError } from "../errors.js";
 import { authorizationFailure } from "../kv-failure.js";
 import { operationSpaceResolver } from "../secrets.js";
 import { TC_APPS_RECORDS_ACTIONS, TC_APPS_ROOT } from "../tc-apps.js";
@@ -34,6 +34,8 @@ export function appsFailure(error: unknown): OperationError {
   if (auth?.status === "error") return auth.error;
   const storage = storageFullOperationError(error);
   if (storage) return storage;
+  const nodeRetry = nodeRetryOperationError(error);
+  if (nodeRetry) return nodeRetry;
   const code = typeof error === "object" && error !== null ? (error as KvError).code : undefined;
   if (code === "SPACE_NOT_HOSTED") return operationError("NODE_ERROR", "Your TinyCloud default space is not set up. Try again in a minute; if it still fails, ask for help setting up the space.", { details: { reason: "space_not_hosted" } });
   if (isOperationErrorCode(code)) return operationError(code, "The node could not complete this personal-record operation.");

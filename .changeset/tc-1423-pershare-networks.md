@@ -1,0 +1,21 @@
+---
+"@tinycloud/share-sdk": minor
+---
+
+Per-share encryption networks in `@tinycloud/share-sdk/share-root` (TC-1423 D3). Every addressed (email/domain) or edit share now has its own network, `urn:tinycloud:encryption:<owner did:pkh, lowercase>:share-<shareId>`, so a key or recipient holding decrypt reaches that one share only. The main entry is unchanged.
+
+Removed (allowed between betas; these shipped only in prereleases):
+
+- `ShareRoot` no longer has a decrypt scope: `ShareRootScope`, `root.scope`, `root.policyCapable`, `root.policyRootSigner()`, the `shareRootPolicyRoots` and `policyOwnerModeProbe` options, `ensureShareRoot`'s `purpose`, and the owner-authority probe (`POLICY_OWNER_AUTHORITY_FEATURES`, `POLICY_OWNER_AUTHORITY_PROBE_TTL_MS`, `readPolicyOwnerAuthorityMode`, `PolicyOwnerModeProbe`, `createPolicyOwnerModeProbe`, `defaultPolicyOwnerModeProbe`) are removed, with the error codes `policy-roots-disabled`, `policy-roots-not-enforced-by-node` and `root-not-policy-capable`. A share root is kv/bearer only, before and after the Node enforces owner-authority binding; the root record no longer has `scope`.
+- The owner-wide `:share` network is gone from the SDK: `ensureShareNetwork`, `shareNetworkIdFor` and `ShareNetworkResult` are removed.
+- `ShareRootPolicySigner` is renamed `SharePolicySigner`.
+- `ShareGrantRecord` is now version 2 (`shareId`, `networkId`); version 1 records are refused by `ShareGrant.restore`.
+
+Added:
+
+- `perShareNetworkIdFor(ownerDid, shareId)` and `assertNetworkSafeShareId`: a shareId must match `^[a-z0-9][a-z0-9-]{15,35}$` (UUIDs and 32-hex ids do), checked before any prompt (`share-id-not-network-safe`).
+- `ShareGrant.prepare(...)` (all checks, a network lookup, the key, and a `pending` row to persist before the prompt) then `pending.approve()`: one approval for kv `get` + `metadata` (+ `put` for `edit`) on the share's one key (`xyz.tinycloud.share/shares/<shareId>/<file>`, or for `view` only a TC-1428 version file) and `network.create`, `network.revoke`, `decrypt` on the share's network only. A shareId whose network already exists or was retired is refused before the prompt (`share-id-in-use`; `resumeExistingNetwork` accepts an active one for key-gone recovery). `ShareGrant.create` does both. A signed grant that is only narrower than requested is refused without `mustRevoke`.
+- `grant.ensureNetwork()` creates the network with the per-share key (no approval) and accepts it only after a fresh lookup shows it `active` with the expected owner, name, algorithm, key version 1 and threshold 1/1; a retired network is never re-created. `grant.publishAuthority(registerPolicy)` re-reads the network as `active` before every registration; `grant.assertContentSource` checks the stored object is this share's. `grant.row(state)` gives the history row for each publish step.
+- `grant.retireNetwork()` retires the network (permanent; every holder of decrypt is refused at the next request; idempotent; no approval). `revokeShareGrant` retires first, then revokes the grant with one owner SIWE; if that fails the error `grant-revoke-incomplete` says decrypt is already cut.
+- `openEditShare`: the owner reads back an edit share with one approval, to an in-memory key that lives at most one hour.
+- Owner kill-all: `planShareControlBatches` splits shares into owner controls sized by the exact `Authorization` bytes, at most `SHARE_CONTROL_HEADER_BUDGET_BYTES` (30,000; the production ingress refuses values above 32,751 bytes): 34 shares per control with the `applications`/`default` delegation rows, which every control carries. Targets must be the owner's per-share networks (`share-<shareId>`); `:default`, `:share` or any other network is refused (`control-target-invalid`) before anything is signed, in planning and again in `runShareControlBatch`, which also re-checks the domain, space rows and byte budget of the batch it is given. `runShareControlBatch` signs one control (one approval), retires every network first, then revokes each grant through the control, counting only a `{ revoked: true, cid }` receipt. A kill-all of L shares costs ceil(L/34) approvals on v1.20.6 and NODE-B2 N4' (measured live across two controls); 1.21.0 and N1b refuse control revokes of decrypt-bearing grants, so with `revokeFallback` each grant costs one more owner SIWE (ceil(L/34) + L).

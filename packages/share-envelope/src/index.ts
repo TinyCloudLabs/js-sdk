@@ -48,6 +48,7 @@ export {
   sessionJwkSchema,
   shareActionSchema,
   shareEnvelopeV2Schema,
+  artifactPinSchema,
   shareEnvelopeV3Schema,
   shareEnvelopeSchema,
   policyCredentialRequirementV1Schema,
@@ -85,6 +86,7 @@ export {
   type UnifiedPolicyV2,
   type UnifiedPolicyCapability,
   type UnifiedRoot,
+  type ArtifactPin,
   type ShareEnvelopeV3,
   type UnsignedShareEnvelopeV3,
 } from "./schema.js";

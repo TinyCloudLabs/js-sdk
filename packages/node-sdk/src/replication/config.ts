@@ -1,3 +1,4 @@
+import { MAX_GRANT_TTL_MS } from "@tinycloud/sdk-services/kv/replication/grantPolicyConstants";
 import { assertFolderPrefix as assertPureFolderPrefix, kvPrefixCovers } from "@tinycloud/sdk-services/kv/replication/prefix";
 import type { ReplicationOptions } from "@tinycloud/sdk-core";
 
@@ -5,12 +6,16 @@ import type { ReplicationOptions } from "@tinycloud/sdk-core";
 export function assertValidReplicationConfig(
   replication: (ReplicationOptions & { storage?: unknown }) | undefined,
 ): void {
-  if (replication === undefined || replication.enabled !== true) return;
+  if (replication === undefined || !replication.enabled) return;
   if (replication.storage === undefined || replication.storage === null) {
     throw new TypeError("replication.enabled requires replication.storage");
   }
   if (!Array.isArray(replication.prefixes) || replication.prefixes.length === 0) {
     throw new TypeError("replication.prefixes must be a non-empty array");
+  }
+  const grantTtlMs = replication.grantTtlMs;
+  if (grantTtlMs !== undefined && (!Number.isFinite(grantTtlMs) || grantTtlMs <= 0 || grantTtlMs > MAX_GRANT_TTL_MS)) {
+    throw new TypeError(`replication.grantTtlMs must be a positive number of milliseconds no greater than ${MAX_GRANT_TTL_MS}`);
   }
   for (const prefix of replication.prefixes) {
     try {

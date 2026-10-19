@@ -32,7 +32,17 @@ import {
   resourceCapabilitiesToSpaceAbilitiesMap,
   type ResourceCapability,
   resolveTinyCloudHosts,
+  resolveFailClosedTinyCloudHosts,
+  lookupOwnerRegistryVerdict,
+  assertSpaceCreationAllowed,
+  createInMemoryRegistrySequenceStore,
+  registryOwnerSubjectV1,
   type LocalNodeIdentityStore,
+  type OnNodeNotFound,
+  type RegistryPolicy,
+  type RegistrySequenceStore,
+  type RegistryVerdict,
+  type SpaceCreationContext,
   EXPIRY,
   canonicalizeAddress,
   makePkhSpaceId,
@@ -62,6 +72,17 @@ import {
   defaultSignStrategy,
 } from "./strategies";
 import { MemorySessionStorage } from "../storage/MemorySessionStorage";
+import type { OpenKeyBridgeInput, NodeUserAuthorizationAuthorizeFn } from "./openKeyBridge";
+
+export type OpenKeyAuthorizeInput = OpenKeyBridgeInput;
+export type OpenKeyAuthorizationResultV1 = Awaited<ReturnType<NodeUserAuthorizationAuthorizeFn>>;
+
+type PreparedOpenKeySession = {
+  siwe: string;
+  jwk: Record<string, unknown>;
+  spaceId: string;
+  verificationMethod: string;
+};
 
 /**
  * A PKH space id with its EIP-155 address lowercased: the address is
@@ -197,8 +218,46 @@ export interface NodeUserAuthorizationConfig {
   tinycloudHosts?: string[];
   /** TinyCloud location registry URL. Default: https://registry.tinycloud.xyz. */
   tinycloudRegistryUrl?: string | null;
-  /** Fallback TinyCloud hosts. Default: hosted TinyCloud node. */
+  /**
+   * Fallback TinyCloud hosts. Default: hosted TinyCloud node. Used only by the
+   * default `registryPolicy` ("legacy-fallback"), whose silent fallback is
+   * deprecated and will be removed in a future major release.
+   */
   tinycloudFallbackHosts?: string[] | null;
+  /**
+   * How sign-in uses the location registry when no host is configured.
+   *
+   * - `"legacy-fallback"` (default, deprecated): a registry miss or failure
+   *   silently uses `tinycloudFallbackHosts`, with a one-time warning.
+   * - `"fail-closed"`: sign-in acts on the registry verdict for the signer
+   *   address. Registered owners go to their listed hosts, unregistered owners
+   *   to `newUserHost`, and an unavailable registry is
+   *   `RegistryUnavailableError`, never a new account. Automatic space
+   *   creation is refused on a host the owner's record does not list
+   *   (`NodeRegistryEntryExistsError`) or when the registry gives no verdict
+   *   (`RegistryUnavailableError`).
+   */
+  registryPolicy?: RegistryPolicy;
+  /**
+   * `fail-closed` only: host for owners with no registry record (and only
+   * them). Default https://node.tinycloud.xyz. `null` refuses them with
+   * `NodeNotFoundError`.
+   */
+  newUserHost?: string | null;
+  /**
+   * `fail-closed` only: chain ID of the v1 registry subject, which is built
+   * from the signer address, never the session chain. Default 1.
+   */
+  registryChainId?: number;
+  /** `fail-closed` only: highest registry sequence seen per owner. Default: in-memory. */
+  registrySequenceStore?: RegistrySequenceStore;
+  /**
+   * `fail-closed` only: called when sign-in resolves no host
+   * (`NodeNotFoundError` or `RegistryUnavailableError`) to retry, use another
+   * host (not identity-checked; it persists with the session), or abort.
+   * Without it, sign-in throws the error.
+   */
+  onNodeNotFound?: OnNodeNotFound;
   /** Probe configured/registered local nodes before registry/fallback resolution. Default: true. */
   autoDiscoverLocalNode?: boolean;
   /** Local loopback node URL to probe. Omit to avoid probing loopback. */
@@ -253,6 +312,11 @@ export interface NodeUserAuthorizationConfig {
    * scheduling never reach this layer.
    */
   replication?: Pick<ReplicationOptions, "enabled" | "prefixes" | "allowSecrets">;
+  /**
+   * Mints the replica session stamp on each fresh sign-in (TC-858 §4). Returns
+   * `undefined` when replication is off, so the persisted session carries no stamp.
+   */
+  establishReplicaStamp?: (session: TinyCloudSession) => Promise<PersistedSessionData["replicaStamp"]>;
 }
 
 export interface CreateBootstrapSessionOptions {
@@ -308,6 +372,13 @@ export class NodeUserAuthorization implements IUserAuthorization {
   private tinycloudHosts?: string[];
   private readonly tinycloudRegistryUrl?: string | null;
   private readonly tinycloudFallbackHosts?: string[] | null;
+  private readonly registryPolicy?: RegistryPolicy;
+  private readonly newUserHost?: string | null;
+  private readonly registryChainId?: number;
+  private readonly registrySequenceStore: RegistrySequenceStore;
+  private readonly onNodeNotFound?: OnNodeNotFound;
+  /** Verdict from the last `fail-closed` host resolution, reused by {@link assertMayCreateSpace}. */
+  private registryVerdict?: RegistryVerdict;
   private readonly autoDiscoverLocalNode?: boolean;
   private readonly localNodeUrl?: string;
   private readonly localLinkName?: string;
@@ -315,6 +386,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
   private readonly localNodeIdentityStore?: LocalNodeIdentityStore;
   private readonly enablePublicSpace: boolean;
   private readonly replication?: Pick<ReplicationOptions, "enabled" | "prefixes" | "allowSecrets">;
+  private readonly establishReplicaStamp?: NodeUserAuthorizationConfig["establishReplicaStamp"];
   private readonly nonce?: string;
   private readonly siweConfig?: SiweConfig;
   private readonly wasm: IWasmBindings;
@@ -397,6 +469,12 @@ export class NodeUserAuthorization implements IUserAuthorization {
     this.tinycloudHosts = config.tinycloudHosts;
     this.tinycloudRegistryUrl = config.tinycloudRegistryUrl;
     this.tinycloudFallbackHosts = config.tinycloudFallbackHosts;
+    this.registryPolicy = config.registryPolicy;
+    this.newUserHost = config.newUserHost;
+    this.registryChainId = config.registryChainId;
+    this.registrySequenceStore =
+      config.registrySequenceStore ?? createInMemoryRegistrySequenceStore();
+    this.onNodeNotFound = config.onNodeNotFound;
     this.autoDiscoverLocalNode = config.autoDiscoverLocalNode;
     this.localNodeUrl = config.localNodeUrl;
     this.localLinkName = config.localLinkName;
@@ -409,6 +487,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
       config.includeAccountRegistryPermissions ?? true;
     this.replication =
       config.replication?.enabled === true ? config.replication : undefined;
+    this.establishReplicaStamp = config.establishReplicaStamp;
     this._manifest = config.manifest;
     this._capabilityRequest = config.capabilityRequest;
 
@@ -542,6 +621,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
     // particular, a second restore may target a different host and must not
     // retain skip decisions from the previous activation.
     this.tinycloudHosts = hosts && hosts.length > 0 ? [...hosts] : undefined;
+    this.registryVerdict = undefined;
     this._lastActivationSkippedSpaceIds = [];
     this._lastActivationActivatedSpaceIds = [];
     if (!session) {
@@ -599,6 +679,24 @@ export class NodeUserAuthorization implements IUserAuthorization {
       return;
     }
 
+    if (this.registryPolicy === "fail-closed") {
+      const resolved = await resolveFailClosedTinyCloudHosts(address, {
+        registryUrl: this.tinycloudRegistryUrl,
+        registryChainId: this.registryChainId,
+        newUserHost: this.newUserHost,
+        sequenceStore: this.registrySequenceStore,
+        onNodeNotFound: this.onNodeNotFound,
+        autoDiscoverLocalNode: this.autoDiscoverLocalNode,
+        localNodeUrl: this.localNodeUrl,
+        localLinkName: this.localLinkName,
+        expectedNodeDid: this.expectedNodeDid,
+        localNodeIdentityStore: this.localNodeIdentityStore,
+      });
+      this.tinycloudHosts = resolved.hosts;
+      this.registryVerdict = resolved.verdict;
+      return;
+    }
+
     const subject = pkhDid(address, chainId);
     const resolved = await resolveTinyCloudHosts(subject, {
       registryUrl: this.tinycloudRegistryUrl,
@@ -610,6 +708,33 @@ export class NodeUserAuthorization implements IUserAuthorization {
       localNodeIdentityStore: this.localNodeIdentityStore,
     });
     this.tinycloudHosts = resolved.hosts;
+  }
+
+  /**
+   * Space-creation guard (TC-1443). Under `registryPolicy: "fail-closed"`,
+   * throws unless the owner's registry verdict allows a space on the primary
+   * host: `NodeRegistryEntryExistsError` when the owner's record does not
+   * list it, `RegistryUnavailableError` when the registry gives no
+   * verdict. Reuses this session's sign-in verdict unless it was
+   * `unavailable`, else looks it up now (explicit-host apps). Under the
+   * default policy it returns at once and performs no lookup.
+   */
+  async assertMayCreateSpace(): Promise<void> {
+    if (this.registryPolicy !== "fail-closed") return;
+    if (this._address === undefined) {
+      throw new Error("Must be signed in to create a space");
+    }
+    await this.ensureTinyCloudHosts();
+    const subject = registryOwnerSubjectV1(this._address, this.registryChainId);
+    let verdict = this.registryVerdict;
+    if (verdict?.subject !== subject || verdict.status === "unavailable") {
+      verdict = await lookupOwnerRegistryVerdict(subject, {
+        registryUrl: this.tinycloudRegistryUrl,
+        sequenceStore: this.registrySequenceStore,
+      });
+      this.registryVerdict = verdict;
+    }
+    assertSpaceCreationAllowed(verdict, this.primaryTinyCloudHost);
   }
 
   private requireTinyCloudHosts(): string[] {
@@ -1184,6 +1309,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
         return;
       }
 
+      await this.guardSpaceCreation(handler, creationContext);
       const confirmed = await handler.confirmSpaceCreation(creationContext);
       if (!confirmed) {
         return;
@@ -1235,6 +1361,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
         return;
       }
 
+      await this.guardSpaceCreation(handler, creationContext);
       const confirmed = await handler.confirmSpaceCreation(creationContext);
       if (!confirmed) {
         return;
@@ -1281,6 +1408,20 @@ export class NodeUserAuthorization implements IUserAuthorization {
       new Error(`Failed to activate session: ${describeHostFailure(result)}`),
       { cause: result },
     );
+  }
+
+  /** {@link assertMayCreateSpace}, reporting a refusal to the creation handler before rethrowing it. */
+  private async guardSpaceCreation(
+    handler: ISpaceCreationHandler,
+    context: SpaceCreationContext,
+  ): Promise<void> {
+    try {
+      await this.assertMayCreateSpace();
+    } catch (error) {
+      const failure = error instanceof Error ? error : new Error(String(error));
+      handler.onSpaceCreationFailed?.(context, failure);
+      throw failure;
+    }
   }
 
   private recordActivationSkippedSpaces(
@@ -1383,6 +1524,33 @@ export class NodeUserAuthorization implements IUserAuthorization {
       jwk,
       siwe: prepared.siwe,
       signature,
+    };
+  }
+
+  private persistedData(
+    session: TinyCloudSession,
+    expiresAt: string,
+    createdAt: string,
+    replicaStamp?: PersistedSessionData["replicaStamp"],
+  ): PersistedSessionData {
+    return {
+      address: session.address,
+      chainId: session.chainId,
+      sessionKey: JSON.stringify(session.jwk),
+      siwe: session.siwe,
+      signature: session.signature,
+      tinycloudSession: {
+        delegationHeader: session.delegationHeader,
+        delegationCid: session.delegationCid,
+        spaceId: session.spaceId,
+        spaces: session.spaces,
+        verificationMethod: session.verificationMethod,
+      },
+      expiresAt,
+      createdAt,
+      version: "1.0",
+      tinycloudHosts: this.tinycloudHosts,
+      ...(replicaStamp ? { replicaStamp } : {}),
     };
   }
 
@@ -1502,25 +1670,13 @@ export class NodeUserAuthorization implements IUserAuthorization {
       signature,
     };
 
-    // Persist session with TinyCloud-specific data
-    const persistedData: PersistedSessionData = {
-      address,
-      chainId,
-      sessionKey: JSON.stringify(jwk),
-      siwe: prepared.siwe,
-      signature,
-      tinycloudSession: {
-        delegationHeader: session.delegationHeader,
-        delegationCid: session.delegationCid,
-        spaceId,
-        spaces: spacesMetadata,
-        verificationMethod: this.sessionManager.getDID(keyId),
-      },
-      expiresAt: expirationTime.toISOString(),
-      createdAt: now.toISOString(),
-      version: "1.0",
-      tinycloudHosts: this.tinycloudHosts,
-    };
+    const replicaStamp = await this.establishReplicaStamp?.(tinyCloudSession);
+    const persistedData = this.persistedData(
+      tinyCloudSession,
+      expirationTime.toISOString(),
+      now.toISOString(),
+      replicaStamp,
+    );
     await this.enqueuePersistence(async () => {
       await this.sessionStorage.save(address, persistedData);
       // Signed out while saving: remove exactly the record this save wrote.
@@ -1753,32 +1909,15 @@ export class NodeUserAuthorization implements IUserAuthorization {
     };
 
     // Extract expiration from SIWE message (parse the string)
-    const expirationMatch = prepared.siwe.match(/Expiration Time: (.+)/);
-    const issuedAtMatch = prepared.siwe.match(/Issued At: (.+)/);
+    const expirationMatch = prepared.siwe?.match(/Expiration Time: (.+)/);
+    const issuedAtMatch = prepared.siwe?.match(/Issued At: (.+)/);
     const expiresAt =
       expirationMatch?.[1] ??
       new Date(Date.now() + this.sessionExpirationMs).toISOString();
     const createdAt = issuedAtMatch?.[1] ?? new Date().toISOString();
 
-    // Persist session with TinyCloud-specific data
-    const persistedData: PersistedSessionData = {
-      address,
-      chainId,
-      sessionKey: JSON.stringify(jwk),
-      siwe: prepared.siwe,
-      signature,
-      tinycloudSession: {
-        delegationHeader: session.delegationHeader,
-        delegationCid: session.delegationCid,
-        spaceId: prepared.spaceId,
-        spaces: spacesMetadata,
-        verificationMethod: this.sessionManager.getDID(keyId),
-      },
-      expiresAt,
-      createdAt,
-      version: "1.0",
-      tinycloudHosts: this.tinycloudHosts,
-    };
+    const replicaStamp = await this.establishReplicaStamp?.(tinyCloudSession);
+    const persistedData = this.persistedData(tinyCloudSession, expiresAt, createdAt, replicaStamp);
     await this.sessionStorage.save(address, persistedData);
 
     // Set current session
@@ -1838,45 +1977,22 @@ export class NodeUserAuthorization implements IUserAuthorization {
    * @param options Optional overrides for the OpenKey request.
    */
   async signInWithOpenKey(
-    authorizeFn: (input: {
-      protocolVersion: 1;
-      siwe: string;
-      jwk: Record<string, unknown>;
-      host?: string;
-      /**
-       * Sol MAJOR-3: OpenKey key ID (managed or external key) to sign
-       * with. When omitted, the OpenKey SDK falls back to the last
-       * connected key. Callers who want to bind the flow to a specific
-       * OpenKey key can override via options.openkeyKeyId; otherwise the
-       * bridge relies on the SDK's connected-key state.
-       */
-      keyId?: string;
-      /**
-       * Optional presentation envelope forwarded to the OpenKey widget.
-       * Built from this instance's `_manifest` when set. Display-only —
-       * the widget/server MUST NOT let it expand authority. The envelope
-       * carries `manifests` payloads plus a stable SHA-256 digest so the
-       * OpenKey server can origin-bind the browser origin against the
-       * app's well-known manifest.
-       */
-      presentation?: CapabilityPresentationEnvelopeV1;
-    }) => Promise<{
-      protocolVersion: 1;
-      address: string;
-      signature: string;
-      signedMessage: string;
-      selectedActionKeys: string[];
-      permissions: Array<{ service: string; space: string; path: string; actions: string[] }>;
-    }>,
+    authorizeFn: NodeUserAuthorizationAuthorizeFn,
     options?: {
       host?: string;
       openkeyKeyId?: string;
-      /**
-       * Optional caller-supplied reason string forwarded in the
-       * presentation envelope. Rendered as caller-supplied (never
-       * verified) in the widget.
-       */
+      /** Caller-supplied display reason, not signed authority. */
       reason?: string;
+      /**
+       * Supply another candidate without regenerating the SIWE or session key.
+       * Called only after transport or pre-commit verification rejects a result.
+       * Return null to cancel; activation errors are never signing retries.
+       */
+      retryResult?: (
+        error: Error,
+        originalRequest: OpenKeyAuthorizeInput,
+        attempt: number,
+      ) => Promise<OpenKeyAuthorizationResultV1 | null>;
     },
   ): Promise<ClientSession> {
     // A per-call host override is the host this session will actually use,
@@ -1920,21 +2036,37 @@ export class NodeUserAuthorization implements IUserAuthorization {
     //    one so the widget/SDK routes to the specific OpenKey key rather
     //    than the SDK's connected-key default.
     const hostHint = this.primaryTinyCloudHost;
-    const result = await authorizeFn({
+    const originalRequest: OpenKeyAuthorizeInput = {
       protocolVersion: 1,
       siwe: prepared.siwe,
       jwk,
+      verificationMethod: prepared.verificationMethod,
       host: hostHint,
       keyId: options?.openkeyKeyId,
       presentation,
-    });
-
-    // 4. Complete with the EXACT bytes OpenKey signed. Every subset
-    //    invariant (immutable fields preserved, capabilities ⊆ prepared,
-    //    selectedActionKeys grounded in signedMessage, permissions
-    //    consistent) is enforced by signInWithOpenKeyResult before any
-    //    session state is created.
-    return this.signInWithOpenKeyResult(result, prepared, keyId, jwk);
+    };
+    let result: OpenKeyAuthorizationResultV1 | undefined;
+    let signed: PreparedOpenKeySession;
+    let signature: string;
+    for (let attempt = 0; ; ) {
+      try {
+        result ??= await authorizeFn(originalRequest);
+        signed = await this.verifyOpenKeyResult(result, prepared);
+        signature = result.signature;
+        break;
+      } catch (error) {
+        if (!options?.retryResult) throw error;
+        const next = await options.retryResult(
+          error instanceof Error ? error : new Error(String(error)),
+          originalRequest,
+          ++attempt,
+        );
+        if (next === null) throw error;
+        result = next;
+      }
+    }
+    // Verification retries never repeat network activation or create a new SIWE.
+    return this.signInWithPreparedSession(signed, signature, keyId, jwk);
   }
 
   /**
@@ -2027,28 +2159,20 @@ export class NodeUserAuthorization implements IUserAuthorization {
    *    (resource, action) pair in the returned SIWE.
    */
   async signInWithOpenKeyResult(
-    result: {
-      protocolVersion: 1;
-      address: string;
-      signature: string;
-      signedMessage: string;
-      selectedActionKeys: string[];
-      permissions: Array<{ service: string; space: string; path: string; actions: string[] }>;
-    },
-    prepared: {
-      /**
-       * The ORIGINAL SIWE the SDK produced via {@link prepareSessionForSigning}.
-       * Used as the source-of-truth reference for immutable-header and
-       * capability-subset comparison against `result.signedMessage`.
-       */
-      siwe: string;
-      jwk: Record<string, unknown>;
-      spaceId: string;
-      verificationMethod: string;
-    },
+    result: OpenKeyAuthorizationResultV1,
+    prepared: PreparedOpenKeySession,
     keyId: string,
     jwk: Record<string, unknown>,
   ): Promise<ClientSession> {
+    const signed = await this.verifyOpenKeyResult(result, prepared);
+    return this.signInWithPreparedSession(signed, result.signature, keyId, jwk);
+  }
+
+  /** Validate a candidate without activating a network session, so paste retries reuse one preparation. */
+  private async verifyOpenKeyResult(
+    result: OpenKeyAuthorizationResultV1,
+    prepared: PreparedOpenKeySession,
+  ): Promise<PreparedOpenKeySession> {
     if (result.protocolVersion !== 1) {
       throw new Error(`Unsupported OpenKey protocol version ${result.protocolVersion}`);
     }
@@ -2495,17 +2619,12 @@ export class NodeUserAuthorization implements IUserAuthorization {
     // Retain nonRequiredGrantedPairs reference so tsc doesn't drop it.
     void nonRequiredGrantedPairs;
 
-    return this.signInWithPreparedSession(
-      {
-        siwe: result.signedMessage,
-        jwk: prepared.jwk,
-        spaceId: prepared.spaceId,
-        verificationMethod: prepared.verificationMethod,
-      },
-      result.signature,
-      keyId,
-      jwk,
-    );
+    return {
+      siwe: result.signedMessage,
+      jwk: prepared.jwk,
+      spaceId: prepared.spaceId,
+      verificationMethod: prepared.verificationMethod,
+    };
   }
 
   /**

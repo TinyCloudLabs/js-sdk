@@ -1,10 +1,11 @@
 /**
  * Quota contract (TC-858 Phase 2, CONTRACT.md §4). Types only.
  *
- * Browser: `maxBytes` is origin-wide across every partition in the origin database; the ledger
- * lives in the `quota` control store, is constructed inside the worker (`ledgerFor`), and is
- * called inside `ReplicaGateTx.run` page-commit transactions and exempt erase transactions.
- * `accountErase` is idempotent once the partition's entry is gone (crash replay is safe).
+ * Browser: `maxBytes` is origin-wide over the deterministic application encoding of
+ * ciphertext entries/blobs/meta and sealed owner-device plus grant/first-install device
+ * records. The ledger lives in the `quota` control store; page and device writes admit
+ * before any put, then account in the same guarded transaction. Deny releases the reserved
+ * device bucket atomically with key deletion; partition erase remains idempotent.
  * Node/CLI: `maxBytes` is per profile (per storage `dir`); there is no ledger — usage is derived
  * from stored content, so erase replay is safe — and the `admit` hook runs inside `applyPage`'s
  * guarded mutation (profile lock held). `minFreeBytes` applies only in the browser.
@@ -18,32 +19,54 @@ export interface ReplicaQuotaSpec {
   minFreeBytes?: number;
 }
 
-/** One page offered for admission, measured before any write. */
+/** Node/CLI page admission keeps its existing blob/entry interpretation. */
 export interface ReplicaPageAdmission {
   partitionId: string;
-  /** Sum of the page's new blob bytes. */
+  /** Sum of the page's new blob bytes (node admission hook's existing metric). */
   blobBytes: number;
-  /** Number of entries the page writes (metadata overhead is the ledger's measured per-entry cost). */
+  /** Number of entry writes; not the browser ciphertext-row accounting metric. */
   entries: number;
-  /** Free bytes read just before the transaction (`freeBytes()`); null when unknown. */
+  /** Optional caller-supplied free bytes; node's browser-only floor is not applied. */
   freeBytes: number | null;
 }
 
 /**
- * Browser ledger seam, called by the adapter inside the page or erase transaction (which MUST
- * include the `quota` store). Implementations MUST only await requests on `tx`.
+ * Browser page admission uses the exact signed net application-encoded byte change of
+ * persisted ciphertext entries, blobs and active meta. Erase retains a keyless opaque/numeric
+ * purged meta tombstone, charged to the partition until replacement or physical deletion;
+ * the same row metric measures it. S5's browser ledger separately combines measured device-row
+ * deltas for owner/stamp writes in a reserved device bucket. New rows are sealed before opening
+ * the transaction; old stored rows are measured inside it. Replacements/GC may release space.
+ * Node's page admission stays unchanged.
+ */
+export interface ReplicaBrowserPageAdmission {
+  partitionId: string;
+  deltaBytes: number;
+  /** Free bytes read before opening the transaction; null when unknown. */
+  freeBytes: number | null;
+}
+
+/**
+ * Browser ledger seam, called by the adapter in guarded write or exempt erase/deny
+ * transactions that include the `quota` store. Every sealed meta mutation (including
+ * lease/status) and measured device write uses the origin ledger. Implementations MUST
+ * only await requests on `tx`; S5's browser implementation adds combined-row methods
+ * without changing this shared public interface.
  */
 export interface ReplicaQuotaLedger<Tx> {
   /** Read outside any transaction, just before it: `navigator.storage.estimate()` quota − usage. */
   freeBytes(): Promise<number | null>;
   /**
-   * Admits the projected size (blob bytes + per-entry overhead + repair headroom) against
-   * `maxBytes` and the free-space floor. Rejects with code STORAGE_BUDGET; caller aborts `tx`.
+   * Admits the exact projected application-encoded persisted ciphertext-row delta, including
+   * sealed value/IV/tag plus persisted key/index fields and envelope framing. IDB engine/page
+   * overhead is unobservable and excluded. The adapter uses the same measured delta for
+   * `accountCommit`; never admits plaintext lengths or a per-entry estimate. On
+   * STORAGE_BUDGET it aborts `tx` before any page write.
    */
-  admitPage(tx: Tx, page: ReplicaPageAdmission): Promise<void>;
-  /** Records the committed delta in the same transaction as the page. */
+  admitPage(tx: Tx, page: ReplicaBrowserPageAdmission): Promise<void>;
+  /** Records the same measured signed delta in the page/repair/GC/meta transaction. */
   accountCommit(tx: Tx, o: { partitionId: string; deltaBytes: number }): Promise<void>;
-  /** Subtracts erased bytes in the same transaction as the erase. */
+  /** Subtracts the exact encoded bytes removed in the erase transaction, idempotently. */
   accountErase(tx: Tx, o: { partitionId: string; bytes: number }): Promise<void>;
 }
 

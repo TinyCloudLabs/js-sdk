@@ -10,6 +10,10 @@ import {
   writeJsonAtomic,
 } from "../src/state.js";
 import { withFixtureLock } from "./lock-protocol.js";
+import { PROFILE_LOCK_HELPER_DEADLINE_MS } from "../src/test-support/profile-lock-protocol.js";
+import { exitWithParent } from "../src/test-support/parent-watch.mjs";
+
+exitWithParent(PROFILE_LOCK_HELPER_DEADLINE_MS);
 
 const [profile, key, encodedRecord, timeoutMs] = process.argv.slice(2);
 if (!profile || !key || !encodedRecord) {

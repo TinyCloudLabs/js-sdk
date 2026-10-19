@@ -92,6 +92,8 @@ function makeWasm(recap: Array<{ service: string; space: string; path: string; a
 function fullAccount(options: { grantsSpaceInfo?: boolean; grantsOtherSpaceInfo?: boolean; withoutRecap?: boolean } = {}) {
   const recap = [
     { service: "kv", space: SPACE_URI, path: "", actions: ["tinycloud.kv/get", "tinycloud.kv/put"] },
+    // Registry sync runs only for a session that can read the account index.
+    { service: "sql", space: `tinycloud:pkh:eip155:1:${ADDRESS}:account`, path: "account", actions: ["tinycloud.sql/read", "tinycloud.sql/write"] },
     ...(options.grantsSpaceInfo === false
       ? []
       : [{ service: "space", space: SPACE_URI, path: "", actions: [SPACE_INFO] }]),

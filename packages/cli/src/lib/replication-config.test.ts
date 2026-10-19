@@ -86,7 +86,7 @@ describe("CLI replication grant TTL and byte budget env", () => {
   });
 
   test("non-integer, zero, negative and non-numeric grant TTLs are usage errors", () => {
-    for (const value of ["0", "-1", "1.5", "soon", ""]) {
+    for (const value of ["0", "-1", "1.5", "soon", "", "0x10", "1e3", " 1000", "1000 ", "+1000", "010"]) {
       process.env.TC_REPLICATION_GRANT_TTL_MS = value;
       expect(() => configFor()).toThrow(CLIError);
     }
@@ -98,7 +98,7 @@ describe("CLI replication grant TTL and byte budget env", () => {
   });
 
   test("non-integer, zero and negative byte budgets are usage errors", () => {
-    for (const value of ["0", "-5", "2.5", "lots"]) {
+    for (const value of ["0", "-5", "2.5", "lots", "0x10", "1e3", " 1024", "1024 ", "+1024", "010", String(Number.MAX_SAFE_INTEGER) + "0"]) {
       process.env.TC_REPLICATION_MAX_BYTES = value;
       expect(() => configFor()).toThrow(CLIError);
     }

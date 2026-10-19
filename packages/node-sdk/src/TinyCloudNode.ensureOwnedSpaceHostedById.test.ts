@@ -57,6 +57,8 @@ function makeNode(): TinyCloudNode {
   (node as any)._address = ADDRESS;
   (node as any)._chainId = 1;
   (node as any).auth = {
+    // The real NodeUserAuthorization reports its signed-in address; sign-in reads it.
+    address: () => ADDRESS,
     tinyCloudSession: {
       address: ADDRESS,
       chainId: 1,

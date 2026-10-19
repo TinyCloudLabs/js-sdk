@@ -5,7 +5,7 @@ import { once } from "node:events";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { profileLockMetadataPath, profileTurnLockPath, withProfileLock } from "./state";
-import { waitForProfileLockProtocol } from "./test-support/profile-lock-protocol.js";
+import { PROFILE_LOCK_HELPER_ENV, waitForProfileLockProtocol } from "./test-support/profile-lock-protocol.js";
 
 const fixture = new URL("../test-support/lock-identity.mjs", import.meta.url).pathname;
 const holderFixture = new URL("../test-support/lock-namespace.mjs", import.meta.url).pathname;
@@ -31,7 +31,7 @@ async function exercise(mode: string, wrapper: string[] = []): Promise<{ outcome
   const home = await tempHome("tc-lock-identity-");
   const output = join(home, "out.json");
   const child = Bun.spawn([...wrapper, node, fixture, mode, "delegate", output], {
-    env: { ...process.env, TC_HOME: home }, stdout: "pipe", stderr: "pipe",
+    env: { ...process.env, ...PROFILE_LOCK_HELPER_ENV, TC_HOME: home }, stdout: "pipe", stderr: "pipe",
   });
   const [exit, stderr] = await Promise.all([child.exited, new Response(child.stderr).text()]);
   expect(exit, stderr).toBe(0);
@@ -46,7 +46,7 @@ async function liveSockets(home: string, profile: string): Promise<string[]> {
 /** The built lock under Node, outside any namespace: one contender's outcome and leftovers. */
 async function contendWithNode(home: string): Promise<{ outcome: string; leftovers: string[] }> {
   const out = join(home, "contender.json");
-  const child = Bun.spawn([node!, holderFixture, "contend", out, "2000"], { env: { ...process.env, TC_HOME: home }, stderr: "pipe" });
+  const child = Bun.spawn([node!, holderFixture, "contend", out, "2000"], { env: { ...process.env, ...PROFILE_LOCK_HELPER_ENV, TC_HOME: home }, stderr: "pipe" });
   const exit = await child.exited;
   if (exit !== 0) throw new Error(await new Response(child.stderr).text());
   return JSON.parse(await readFile(out, "utf8"));
@@ -106,7 +106,7 @@ test.skipIf(!linux)("a crash after binding, before any record, leaves no socket 
   const barrier = join(home, "liveness-barrier");
   await mkdir(barrier);
   const holder = Bun.spawn([node!, holderFixture, "hold"], {
-    env: { ...process.env, TC_HOME: home, NODE_ENV: "test", TC_TEST_PROFILE_LOCK_LIVENESS_BARRIER_DIR: barrier },
+    env: { ...process.env, ...PROFILE_LOCK_HELPER_ENV, TC_HOME: home, NODE_ENV: "test", TC_TEST_PROFILE_LOCK_LIVENESS_BARRIER_DIR: barrier },
     stdin: "pipe", stderr: "pipe",
   });
   await waitForProfileLockProtocol(join(barrier, `ready-${holder.pid}-probe`), "a holder that has bound its socket");
@@ -120,7 +120,7 @@ test.skipIf(!linux)("a crash after binding, before any record, leaves no socket 
 
 test.skipIf(!linux)("a crashed holder's socket that a Bun collector cannot judge is swept by the next Node acquisition", async () => {
   const home = await tempHome("tc-lock-bun-collector-");
-  const holder = Bun.spawn([node!, holderFixture, "hold"], { env: { ...process.env, TC_HOME: home }, stdin: "pipe", stdout: "pipe", stderr: "pipe" });
+  const holder = Bun.spawn([node!, holderFixture, "hold"], { env: { ...process.env, ...PROFILE_LOCK_HELPER_ENV, TC_HOME: home }, stdin: "pipe", stdout: "pipe", stderr: "pipe" });
   const reader = holder.stdout.getReader();
   for (let seen = ""; !seen.includes("ready\n");) {
     const { value, done } = await reader.read();
