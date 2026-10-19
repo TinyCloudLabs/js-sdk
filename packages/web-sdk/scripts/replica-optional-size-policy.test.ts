@@ -2,10 +2,10 @@ import { describe, expect, it } from "bun:test";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import {
-  compactFixOptionalAllowance, correctedOptionalAllowance, hardeningOptionalAllowance, tc1413OptionalAllowance, tc1432OptionalAllowance, tc1475OptionalAllowance, validateIntroducedOptionalSources,
+  compactFixOptionalAllowance, correctedOptionalAllowance, hardeningOptionalAllowance, tc1413OptionalAllowance, tc1432OptionalAllowance, tc1475OptionalAllowance, masterDriftOptionalAllowance, validateIntroducedOptionalSources,
   validateOptionalEntryTransition, validateOptionalLedger, type OptionalLedger,
 } from "./replica-optional-size-policy";
-import { approvedTc1432Ratchet, approvedTc1475Ratchet } from "./replica-size-policy";
+import { approvedMasterDriftRatchet, approvedTc1432Ratchet, approvedTc1475Ratchet } from "./replica-size-policy";
 
 const shipped = JSON.parse(readFileSync(resolve(import.meta.dir, "replica-optional-size-ledger.json"), "utf8")) as OptionalLedger;
 // The tests below cover the #565 hardening-era ledger; TC-1413's own allowance is tested at the end.
@@ -288,10 +288,17 @@ describe("TC-1432 optional allowance", () => {
   });
 });
 
+// The ledger as TC-1475 (#599) left it: before the master-drift allowance and entry.
+const tc1475Ledger: OptionalLedger = {
+  ...structuredClone(shipped),
+  allowance: { ...tc1475OptionalAllowance },
+  entries: structuredClone(shipped.entries.slice(0, shipped.entries.findIndex((entry) => entry.pr === "#608"))),
+};
+
 describe("TC-1475 optional allowance", () => {
   it("accepts exactly the canonical TC-1475 first-import and activation ceilings", () => {
-    expect(() => validateOptionalLedger(shipped, true, true, true, true, true, true)).not.toThrow();
-    expect(shipped.allowance).toEqual(tc1475OptionalAllowance);
+    expect(() => validateOptionalLedger(tc1475Ledger, true, true, true, true, true, true)).not.toThrow();
+    expect(tc1475Ledger.allowance).toEqual(tc1475OptionalAllowance);
     // The prior ceilings equal the merge-base measurements, so each bucket moves by exactly its delta.
     const fromPrior = { "replica.mjs": 0, "replica.cjs": 2, "activation.mjs": 11, "activation.cjs": 14 };
     for (const format of ["replica.mjs", "replica.cjs", "activation.mjs", "activation.cjs"] as const) {
@@ -301,21 +308,42 @@ describe("TC-1475 optional allowance", () => {
 
   it("refuses one extra byte in any optional bucket, the TC-1475 allowance without TC-1432's, or the old allowance after it", () => {
     for (const format of ["replica.mjs", "replica.cjs", "activation.mjs", "activation.cjs"] as const) {
-      const changed = structuredClone(shipped);
+      const changed = structuredClone(tc1475Ledger);
       changed.allowance[format]++;
       expect(() => validateOptionalLedger(changed, true, true, true, true, true, true)).toThrow();
     }
-    expect(() => validateOptionalLedger(shipped, true, true, true, true, false, true)).toThrow();
-    expect(() => validateOptionalLedger(shipped, true, true, true, true, true)).toThrow();
+    expect(() => validateOptionalLedger(tc1475Ledger, true, true, true, true, false, true)).toThrow();
+    expect(() => validateOptionalLedger(tc1475Ledger, true, true, true, true, true)).toThrow();
   });
 
   it("keeps the cumulative entries within the allowance, with this PR's row carrying the measured deltas", () => {
     for (const format of ["replica.mjs", "replica.cjs", "activation.mjs", "activation.cjs"] as const) {
-      expect(shipped.entries.reduce((sum, entry) => sum + entry[format], 0)).toBeLessThanOrEqual(shipped.allowance[format]);
+      expect(tc1475Ledger.entries.reduce((sum, entry) => sum + entry[format], 0)).toBeLessThanOrEqual(tc1475Ledger.allowance[format]);
     }
-    expect(shipped.entries.find((entry) => entry.pr === "#599")).toMatchObject({
+    expect(tc1475Ledger.entries.find((entry) => entry.pr === "#599")).toMatchObject({
       pr: "#599", ticket: "TC-1475",
       ...approvedTc1475Ratchet.firstImport.delta, ...approvedTc1475Ratchet.activation.delta,
     });
+  });
+});
+
+describe("master-drift optional allowance", () => {
+  it("accepts exactly the canonical ceilings: TC-1475's plus activation.cjs +1", () => {
+    expect(() => validateOptionalLedger(shipped, true, true, true, true, true, true, true)).not.toThrow();
+    expect(shipped.allowance).toEqual(masterDriftOptionalAllowance);
+    for (const format of ["replica.mjs", "replica.cjs", "activation.mjs", "activation.cjs"] as const) {
+      expect(masterDriftOptionalAllowance[format] - tc1475OptionalAllowance[format])
+        .toBe({ ...approvedMasterDriftRatchet.firstImport.delta, ...approvedMasterDriftRatchet.activation.delta }[format]);
+    }
+  });
+
+  it("refuses one extra byte, the allowance without TC-1475's, or the old allowance after it", () => {
+    for (const format of ["replica.mjs", "replica.cjs", "activation.mjs", "activation.cjs"] as const) {
+      const changed = structuredClone(shipped);
+      changed.allowance[format]++;
+      expect(() => validateOptionalLedger(changed, true, true, true, true, true, true, true)).toThrow();
+    }
+    expect(() => validateOptionalLedger(shipped, true, true, true, true, false, true, true)).toThrow();
+    expect(() => validateOptionalLedger(shipped, true, true, true, true, true, true)).toThrow();
   });
 });
