@@ -2,10 +2,10 @@ import { describe, expect, it } from "bun:test";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import {
-  compactFixOptionalAllowance, correctedOptionalAllowance, hardeningOptionalAllowance, tc1413OptionalAllowance, tc1432OptionalAllowance, validateIntroducedOptionalSources,
+  compactFixOptionalAllowance, correctedOptionalAllowance, hardeningOptionalAllowance, tc1413OptionalAllowance, tc1432OptionalAllowance, tc1475OptionalAllowance, validateIntroducedOptionalSources,
   validateOptionalEntryTransition, validateOptionalLedger, type OptionalLedger,
 } from "./replica-optional-size-policy";
-import { approvedTc1432Ratchet } from "./replica-size-policy";
+import { approvedTc1432Ratchet, approvedTc1475Ratchet } from "./replica-size-policy";
 
 const shipped = JSON.parse(readFileSync(resolve(import.meta.dir, "replica-optional-size-ledger.json"), "utf8")) as OptionalLedger;
 // The tests below cover the #565 hardening-era ledger; TC-1413's own allowance is tested at the end.
@@ -247,10 +247,17 @@ describe("TC-1413 optional allowance", () => {
   });
 });
 
+// The ledger as TC-1432 (#580) left it: before TC-1475's allowance and entry.
+const tc1432Ledger: OptionalLedger = {
+  ...structuredClone(shipped),
+  allowance: { ...tc1432OptionalAllowance },
+  entries: structuredClone(shipped.entries.slice(0, shipped.entries.findIndex((entry) => entry.pr === "#599"))),
+};
+
 describe("TC-1432 optional allowance", () => {
   it("accepts exactly the canonical TC-1432 first-import and activation ceilings", () => {
-    expect(() => validateOptionalLedger(shipped, true, true, true, true, true)).not.toThrow();
-    expect(shipped.allowance).toEqual(tc1432OptionalAllowance);
+    expect(() => validateOptionalLedger(tc1432Ledger, true, true, true, true, true)).not.toThrow();
+    expect(tc1432Ledger.allowance).toEqual(tc1432OptionalAllowance);
     // TC-1413's replica.mjs ceiling (51,925) sat 1 B above the merge-base measurement (51,924), so the
     // measured +1 lands exactly on the existing ceiling; every other bucket moves by its delta.
     const headroomAtBase = { "replica.mjs": 1, "replica.cjs": 0, "activation.mjs": 0, "activation.cjs": 0 };
@@ -262,21 +269,53 @@ describe("TC-1432 optional allowance", () => {
 
   it("refuses one extra byte in any optional bucket, the TC-1432 allowance without TC-1413's, or the old allowance after it", () => {
     for (const format of ["replica.mjs", "replica.cjs", "activation.mjs", "activation.cjs"] as const) {
-      const changed = structuredClone(shipped);
+      const changed = structuredClone(tc1432Ledger);
       changed.allowance[format]++;
       expect(() => validateOptionalLedger(changed, true, true, true, true, true)).toThrow();
     }
-    expect(() => validateOptionalLedger(shipped, true, true, true, false, true)).toThrow();
-    expect(() => validateOptionalLedger(shipped, true, true, true, true)).toThrow();
+    expect(() => validateOptionalLedger(tc1432Ledger, true, true, true, false, true)).toThrow();
+    expect(() => validateOptionalLedger(tc1432Ledger, true, true, true, true)).toThrow();
+  });
+
+  it("keeps the cumulative entries within the allowance, with this PR's row carrying the measured deltas", () => {
+    for (const format of ["replica.mjs", "replica.cjs", "activation.mjs", "activation.cjs"] as const) {
+      expect(tc1432Ledger.entries.reduce((sum, entry) => sum + entry[format], 0)).toBeLessThanOrEqual(tc1432Ledger.allowance[format]);
+    }
+    expect(tc1432Ledger.entries.find((entry) => entry.pr === "#580")).toMatchObject({
+      pr: "#580", ticket: "TC-1432",
+      ...approvedTc1432Ratchet.firstImport.delta, ...approvedTc1432Ratchet.activation.delta,
+    });
+  });
+});
+
+describe("TC-1475 optional allowance", () => {
+  it("accepts exactly the canonical TC-1475 first-import and activation ceilings", () => {
+    expect(() => validateOptionalLedger(shipped, true, true, true, true, true, true)).not.toThrow();
+    expect(shipped.allowance).toEqual(tc1475OptionalAllowance);
+    // The prior ceilings equal the merge-base measurements, so each bucket moves by exactly its delta.
+    const fromPrior = { "replica.mjs": -1, "replica.cjs": 1, "activation.mjs": 11, "activation.cjs": 13 };
+    for (const format of ["replica.mjs", "replica.cjs", "activation.mjs", "activation.cjs"] as const) {
+      expect(tc1475OptionalAllowance[format] - tc1432OptionalAllowance[format]).toBe(fromPrior[format]);
+    }
+  });
+
+  it("refuses one extra byte in any optional bucket, the TC-1475 allowance without TC-1432's, or the old allowance after it", () => {
+    for (const format of ["replica.mjs", "replica.cjs", "activation.mjs", "activation.cjs"] as const) {
+      const changed = structuredClone(shipped);
+      changed.allowance[format]++;
+      expect(() => validateOptionalLedger(changed, true, true, true, true, true, true)).toThrow();
+    }
+    expect(() => validateOptionalLedger(shipped, true, true, true, true, false, true)).toThrow();
+    expect(() => validateOptionalLedger(shipped, true, true, true, true, true)).toThrow();
   });
 
   it("keeps the cumulative entries within the allowance, with this PR's row carrying the measured deltas", () => {
     for (const format of ["replica.mjs", "replica.cjs", "activation.mjs", "activation.cjs"] as const) {
       expect(shipped.entries.reduce((sum, entry) => sum + entry[format], 0)).toBeLessThanOrEqual(shipped.allowance[format]);
     }
-    expect(shipped.entries.find((entry) => entry.pr === "#580")).toMatchObject({
-      pr: "#580", ticket: "TC-1432",
-      ...approvedTc1432Ratchet.firstImport.delta, ...approvedTc1432Ratchet.activation.delta,
+    expect(shipped.entries.find((entry) => entry.pr === "#599")).toMatchObject({
+      pr: "#599", ticket: "TC-1475",
+      ...approvedTc1475Ratchet.firstImport.delta, ...approvedTc1475Ratchet.activation.delta,
     });
   });
 });
