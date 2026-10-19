@@ -19,6 +19,7 @@ export default defineConfig({
     emptyOutDir: true,
     modulePreload: false,
     rollupOptions: {
+      input: { index: resolve(here, "index.html"), baseline: resolve(here, "baseline.html") },
       output: {
         entryFileNames: "assets/[name].js",
         chunkFileNames: "assets/[name].js",

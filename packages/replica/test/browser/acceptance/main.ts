@@ -4,11 +4,11 @@
  * test EIP-1193 provider backed by a throwaway key, read through the replica,
  * sign out. No grant injection: the SDK's own session and grant flow run.
  */
-import { TinyCloudWeb } from "@tinycloud/web-sdk";
+import { TinyCloudWeb, registerBrowserReplica } from "@tinycloud/web-sdk";
 import type { PendingWriteStore, ReplicaSessionStamp, ReplicationIdentity } from "@tinycloud/sdk-services/kv/replication";
-import { isHex } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
-import { replicationStorage } from "./storage";
+import { testWallet, walletCounter } from "./wallet";
+import { replicationStorage, replicationHooks } from "./storage";
 
 type BootOptions = {
   /** TinyCloud node origin, e.g. http://127.0.0.1:8123. */
@@ -16,8 +16,12 @@ type BootOptions = {
   /** Throwaway wallet key; never a real identity. */
   walletKey: string;
   prefix: string;
-  /** Replication on by default; off to measure the network-only baseline. */
-  replication: boolean;
+  /**
+   * "on": replication enabled (the replica plugin is imported on demand).
+   * "unset": no `replication` option at all. "disabled": `{ enabled: false }`.
+   * Neither off mode imports any replica code.
+   */
+  replication: "on" | "unset" | "disabled";
   allowSecrets?: boolean;
   grantTtlMs?: number;
   maxStalenessMs?: number;
@@ -28,38 +32,13 @@ const setStatus = (text: string) => {
   if (statusEl !== null) statusEl.textContent = text;
 };
 
-let walletRequests = 0;
 let tcw: TinyCloudWeb | null = null;
 /** Sink for `ReplicationOptions.onEvent`; cleared on each boot. */
 const replicationEventLog: unknown[] = [];
 /** The actual pending store obtained during this tab's bind, retaining its original session stamp. */
 let capturedPending: PendingWriteStore | undefined;
-
-function testWallet(walletKey: string) {
-  if (!isHex(walletKey)) throw new Error("test wallet key must be hex");
-  const account = privateKeyToAccount(walletKey);
-  return {
-    request: async ({ method, params }: { method: string; params?: unknown[] }) => {
-      switch (method) {
-        case "eth_requestAccounts":
-        case "eth_accounts":
-          return [account.address];
-        case "eth_chainId":
-          return "0x1";
-        case "personal_sign": {
-          walletRequests += 1;
-          const hexMessage = Array.isArray(params) ? params[0] : undefined;
-          if (typeof hexMessage !== "string" || !isHex(hexMessage)) {
-            throw new Error("personal_sign: message is not hex");
-          }
-          return account.signMessage({ message: { raw: hexMessage } });
-        }
-        default:
-          throw new Error(`test wallet: unsupported method ${method}`);
-      }
-    },
-  };
-}
+let pluginRegistered = false;
+let walletAddress: string | undefined;
 
 /** The replica surface S2 adds as `tcw.replication`. Narrowed at runtime. */
 type ReplicationCall = (...args: unknown[]) => Promise<unknown>;
@@ -84,10 +63,6 @@ function requireReplication(name: string): ReplicationCall {
   return method;
 }
 
-function unwired(hook: string): never {
-  throw new Error(`fixture hook ${hook} is not wired: needs the S1-S3 storage/worker seams`);
-}
-
 const api = {
   async boot(options: BootOptions): Promise<{ replicationPresent: boolean }> {
     const base = {
@@ -99,38 +74,49 @@ const api = {
       persistSession: true,
       sessionStorageKeyPrefix: "tc858-acceptance",
     };
-    // Replication options are S2's `tcw.replication` surface. Until S2 lands,
-    // `replicationPresent` is false and the replication scenarios fail.
     capturedPending = undefined;
-    const observedStorage = replicationStorage === undefined ? undefined : new Proxy(replicationStorage, {
-      get(target, property) {
-        if (property === "pendingWrites" && target.pendingWrites !== undefined) {
-          return (identity: ReplicationIdentity, options?: { stamp?: ReplicaSessionStamp }) => {
-            const pending = target.pendingWrites!(identity, options);
-            capturedPending = pending;
-            return pending;
-          };
-        }
-        const value: unknown = Reflect.get(target, property, target);
-        return typeof value === "function" ? value.bind(target) : value;
-      },
-    });
-    const replicationOptions: Record<string, unknown> = options.replication
-      ? {
-          replication: {
-            enabled: true,
-            prefixes: [options.prefix],
-            storage: observedStorage,
-            allowSecrets: options.allowSecrets === true,
-            ...(options.grantTtlMs === undefined ? {} : { grantTtlMs: options.grantTtlMs }),
-            ...(options.maxStalenessMs === undefined ? {} : { maxStalenessMs: options.maxStalenessMs }),
-            onEvent: (event: unknown) => {
-              replicationEventLog.push(event);
-            },
+    replicationEventLog.length = 0;
+    walletAddress = privateKeyToAccount(options.walletKey as `0x${string}`).address;
+    let replicationOptions: Record<string, unknown> = {};
+    if (options.replication === "on") {
+      // Replica code is loaded only when replication is requested, so the off modes
+      // fetch no replica chunk and register no plugin.
+      const { browserReplicaPlugin } = await import("@tinycloud/web-sdk/replica");
+      if (!pluginRegistered) {
+        registerBrowserReplica(browserReplicaPlugin);
+        pluginRegistered = true;
+      }
+      const storage = await replicationStorage();
+      const observedStorage = new Proxy(storage, {
+        get(target, property) {
+          if (property === "pendingWrites" && target.pendingWrites !== undefined) {
+            return (identity: ReplicationIdentity, options?: { stamp?: ReplicaSessionStamp }) => {
+              const pending = target.pendingWrites!(identity, options);
+              capturedPending = pending;
+              return pending;
+            };
+          }
+          const value: unknown = Reflect.get(target, property, target);
+          return typeof value === "function" ? value.bind(target) : value;
+        },
+      });
+      replicationOptions = {
+        replication: {
+          enabled: true,
+          prefixes: [options.prefix],
+          storage: observedStorage,
+          allowSecrets: options.allowSecrets === true,
+          ...(options.grantTtlMs === undefined ? {} : { grantTtlMs: options.grantTtlMs }),
+          ...(options.maxStalenessMs === undefined ? {} : { maxStalenessMs: options.maxStalenessMs }),
+          onEvent: (event: unknown) => {
+            replicationEventLog.push(event);
           },
-        }
-      : {};
-    tcw = new TinyCloudWeb({ ...base, ...replicationOptions });
+        },
+      };
+    } else if (options.replication === "disabled") {
+      replicationOptions = { replication: { enabled: false, prefixes: [options.prefix] } };
+    }
+    tcw = await TinyCloudWeb.create({ ...base, ...replicationOptions });
     return { replicationPresent: replicationMethod(tcw, "sync") !== undefined };
   },
 
@@ -143,7 +129,7 @@ const api = {
     await requireTcw().signOut();
   },
 
-  walletRequests: () => walletRequests,
+  walletRequests: () => walletCounter.requests,
 
   /**
    * Read through `tcw.kv.get`, exactly as an app would. `source: "network"` is the public
@@ -160,14 +146,31 @@ const api = {
   },
 
   replicationStatus: () => requireReplication("status")(),
-  replicationSync: () => requireReplication("sync")(),
+  /** A failed sync is data for the scenario, not an exception: it reports the error code. */
+  async replicationSync(): Promise<{ status: "ok" } | { status: "error"; code: string; message: string }> {
+    try {
+      await requireReplication("sync")();
+      return { status: "ok" };
+    } catch (error) {
+      const code = typeof error === "object" && error !== null && "code" in error ? String(error.code) : "ERROR";
+      return { status: "error", code, message: error instanceof Error ? error.message : String(error) };
+    }
+  },
+  /** Restore the persisted session (what an app does on load), without a wallet prompt. */
+  async restoreSession(): Promise<{ status: string }> {
+    if (walletAddress === undefined) throw new Error("fixture not booted");
+    const restored = await requireTcw().restoreSession(walletAddress);
+    return { status: restored.status };
+  },
+  /** Which replica keys exist (presence only, never material). */
+  keyPresence: () => replicationHooks.keyPresence(),
+  /** Row counts per object store of the replica database. */
+  replicaRows: () => replicationHooks.rows(),
   /** Every `replication.*` event since the last boot, in emission order. Read source is `replication.read`. */
   replicationEvents: (): unknown[] => replicationEventLog.slice(),
   /** Test-only: wait for deny intents to finish erasing before probing the old store. */
   async pendingPurgeCount(): Promise<number> {
-    const lifecycle = replicationStorage?.lifecycle;
-    if (lifecycle === undefined) throw new Error("replica lifecycle not wired");
-    return (await lifecycle.pendingPurge()).length;
+    return (await replicationHooks.pendingPurge()).length;
   },
   /** Test-only: attempt an update through the store captured under this tab's original stamp. */
   async stalePendingUpdate(key: string) {
@@ -188,14 +191,19 @@ const api = {
       };
     }
   },
-  /**
-   * Fault hooks live in the shared test-only entry `@tinycloud/replica/kv-storage/testing`
-   * (S1 owns the entry; S3 adds `injectDenyFailure`). Until it exists they fail loudly.
-   */
-  injectEraseFailure: () => unwired("injectEraseFailure"),
-  injectDenyFailure: (plan: { stage: "deny_tx" | "delete_database"; code?: string; once?: boolean }) =>
-    unwired(`injectDenyFailure(${plan.stage})`),
-  killReplicaWorker: () => unwired("killReplicaWorker"),
+  /** Every erase transaction fails from now on (this page load only): sign-out leaves a purge intent. */
+  injectEraseFailure: () => replicationHooks.failErases(),
+  /** Fail one deny step once (`@tinycloud/replica/kv-storage/testing`). */
+  injectDenyFailure: (plan: { stage: "deny_tx" | "delete_database"; once?: boolean }) =>
+    replicationHooks.failDeny(plan.stage, plan.once ?? true),
+  /** Terminate the replica worker as a crash would; the next call respawns it. */
+  killReplicaWorker: () => replicationHooks.killWorker(),
+  /** Read through `tcw.kv.list`, as an app would. */
+  async kvList(prefix: string): Promise<{ status: "present"; keys: string[] } | { status: "error"; code: string }> {
+    const result = await requireTcw().kv.list({ prefix });
+    if (!result.ok) return { status: "error", code: result.error.code };
+    return { status: "present", keys: result.data.keys };
+  },
 };
 
 declare global {

@@ -7,9 +7,11 @@
  * Scenario numbers follow plan §10. Deny-failure variants are 8a-8c; 8d
  * probes the stale tab's pending store across deny, erase and fresh sign-in.
  *
- * Gating: without `TC858_ACCEPTANCE_STRICT=1` every scenario is `test.todo`, so
- * non-strict CI stays green while S1-S5 are unlanded. Strict mode runs the real
- * assertions and is expected to fail until the slices land.
+ * Gating: `TC858_ACCEPTANCE_STRICT=1` (set by the CI step) runs every scenario; a missing node
+ * binary, missing fixture build or any todo/skip is a failure in strict mode. Without it (a laptop
+ * with no node binary) the scenarios are recorded as `test.todo` and nothing is asserted.
+ * S1-S5 are on master: the fixture runs `TinyCloudWeb` with `@tinycloud/web-sdk/replica` and
+ * the real IndexedDB adapter, using the `@tinycloud/replica/kv-storage/testing` seams.
  *
  * Needs TC_REPLICA_E2E_NODE_BIN (or TC_NODE_BIN): a tinycloud node binary
  * serving `kv-sync-v1`. Build the fixture with `bunx vite build` in
@@ -20,6 +22,7 @@ import { TinyCloudNode } from "@tinycloud/node-sdk";
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomBytes } from "node:crypto";
+import { existsSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
@@ -28,8 +31,9 @@ import { join, resolve } from "node:path";
 const NODE_BIN = process.env.TC_REPLICA_E2E_NODE_BIN ?? process.env.TC_NODE_BIN;
 const STRICT = process.env.TC858_ACCEPTANCE_STRICT === "1";
 const FIXTURE_DIST = resolve(import.meta.dir, "browser/acceptance/dist");
-/** Throwaway wallet. The owner and the fixture page share it, so one identity. */
+/** Throwaway wallets. The owner and the fixture pages share WALLET_KEY, so one identity; ACCOUNT_B is a second one. */
 const WALLET_KEY = `0x${randomBytes(32).toString("hex")}`;
+const ACCOUNT_B_KEY = `0x${randomBytes(32).toString("hex")}`;
 const nodeSecret = randomBytes(48).toString("base64url");
 
 /** Runs the scenario in strict mode; otherwise records it as a todo so CI stays green. */
@@ -52,6 +56,33 @@ async function replicationEventsOf(page: Page, type: string): Promise<Array<Reco
   return events.filter((event) => event.type === type);
 }
 
+/** The first `tcw.replication.status()` entry (one configured prefix, so one entry). */
+type StatusEntry = {
+  state: string;
+  gate?: string;
+  prefix: string;
+  grant?: { cid: string; expiresAt: number | null; effectiveExpiresAt?: number } | null;
+  syncedThroughEpoch?: number;
+  counts?: { keys: number };
+};
+async function statusOf(page: Page): Promise<StatusEntry> {
+  const entries = (await page.evaluate(() => window.__tcw.replicationStatus())) as StatusEntry[];
+  const entry = entries[0];
+  if (entry === undefined) throw new Error("tcw.replication.status() returned no entries");
+  return entry;
+}
+
+type SyncResult = { status: "ok" } | { status: "error"; code: string; message: string };
+
+/**
+ * Rows the replica holds for KV content (sealed entries and blobs; erase leaves a tombstone meta row and the partition index entry). Replica rows are
+ * AES-GCM sealed, so a plaintext scan cannot prove the replica is populated; this count does.
+ */
+async function contentRows(page: Page): Promise<number> {
+  const rows = await page.evaluate(() => window.__tcw.replicaRows());
+  return (rows.entries ?? 0) + (rows.blobs ?? 0);
+}
+
 /** The most recent `replication.read` event. Throws when the read emitted none. */
 async function lastRead(page: Page): Promise<ReadEvent> {
   const reads = await replicationEventsOf(page, "replication.read");
@@ -69,6 +100,14 @@ async function freePort(): Promise<number> {
     server.close(() => done(port));
   });
   return promise;
+}
+
+if (STRICT) {
+  test("strict mode has its prerequisites: a node binary and the built fixture page", () => {
+    expect(NODE_BIN, "TC_REPLICA_E2E_NODE_BIN must point at the pinned tinycloud node binary").toBeDefined();
+    expect(existsSync(join(FIXTURE_DIST, "index.html")), "run `bunx vite build` in test/browser/acceptance first").toBe(true);
+    expect(existsSync(join(FIXTURE_DIST, "baseline.html"))).toBe(true);
+  });
 }
 
 describe.skipIf(NODE_BIN === undefined)("TC-858 browser replication acceptance (Chromium)", () => {
@@ -128,9 +167,8 @@ describe.skipIf(NODE_BIN === undefined)("TC-858 browser replication acceptance (
   /** Revokes the device grant a replica is running under (the deny trigger in 8 and 9). */
   async function revokeGrantOf(page: Page): Promise<void> {
     if (owner === undefined) throw new Error("owner not signed in");
-    const status = await page.evaluate(() => window.__tcw.replicationStatus());
-    const grantCid = (status as { grantCid?: unknown }).grantCid;
-    if (typeof grantCid !== "string") throw new Error(`replicationStatus has no grantCid: ${JSON.stringify(status)}`);
+    const grantCid = (await statusOf(page)).grant?.cid;
+    if (typeof grantCid !== "string") throw new Error("the replica status entry has no installed grant to revoke");
     const revoked = await owner.revokeDelegation(grantCid);
     if (!revoked.ok) throw new Error(`revoke failed: ${JSON.stringify(revoked.error)}`);
   }
@@ -173,11 +211,28 @@ describe.skipIf(NODE_BIN === undefined)("TC-858 browser replication acceptance (
     }, needle);
   }
 
+  /**
+   * Contexts whose node requests are refused. Playwright's `setOffline` cannot be used: the node
+   * is reached through a driver-side `route.fetch`, which it does not affect, and it would also
+   * block the fixture reload. The fixture itself stays reachable, like a cached app shell.
+   */
+  const offline = new Set<BrowserContext>();
+
+  /** Closes a context without failing on node requests still in flight through the CORS route. */
+  async function closeContext(context: BrowserContext): Promise<void> {
+    await context.unrouteAll({ behavior: "ignoreErrors" });
+    await context.close();
+  }
+
   /** A fresh context with the node origin's CORS headers added at the driver layer. */
   async function newContext(): Promise<BrowserContext> {
     if (browser === undefined) throw new Error("browser not launched");
     const context = await browser.newContext();
     await context.route(`${host}/**`, async (route) => {
+      if (offline.has(context)) {
+        await route.abort("internetdisconnected");
+        return;
+      }
       const cors = {
         "access-control-allow-origin": "*",
         "access-control-allow-methods": "GET, POST, PUT, DELETE, OPTIONS",
@@ -209,7 +264,7 @@ describe.skipIf(NODE_BIN === undefined)("TC-858 browser replication acceptance (
         const path = url.pathname === "/" ? "/index.html" : url.pathname;
         const file = Bun.file(join(FIXTURE_DIST, path));
         if (!(await file.exists())) return new Response("not found", { status: 404 });
-        const type = path.endsWith(".js") ? "text/javascript" : path.endsWith(".html") ? "text/html" : "application/octet-stream";
+        const type = path.endsWith(".js") ? "text/javascript" : path.endsWith(".html") ? "text/html" : path.endsWith(".wasm") ? "application/wasm" : "application/octet-stream";
         return new Response(file, { headers: { "content-type": type } });
       },
     });
@@ -219,6 +274,10 @@ describe.skipIf(NODE_BIN === undefined)("TC-858 browser replication acceptance (
     await kvPut("notes/a", "alpha note");
     await kvPut("notes/b", "beta note");
     await kvPut("notes-secret/x", "OUT-OF-SCOPE-SECRET");
+    const ownerB = new TinyCloudNode({ privateKey: ACCOUNT_B_KEY, host, autoCreateSpace: true });
+    await ownerB.signIn();
+    const putB = await ownerB.kv.put("notes/b-only", new TextEncoder().encode("belongs to B"));
+    if (!putB.ok) throw new Error(`account B seed failed: ${JSON.stringify(putB.error)}`);
     browser = await chromium.launch();
   }, 120_000);
 
@@ -232,7 +291,14 @@ describe.skipIf(NODE_BIN === undefined)("TC-858 browser replication acceptance (
   /** Opens the fixture in a new page of `context` and boots `TinyCloudWeb`. */
   async function bootPage(
     context: BrowserContext,
-    options: { prefix?: string; replication?: boolean; allowSecrets?: boolean; grantTtlMs?: number; maxStalenessMs?: number } = {},
+    options: {
+      prefix?: string;
+      replication?: "on" | "unset" | "disabled";
+      walletKey?: string;
+      allowSecrets?: boolean;
+      grantTtlMs?: number;
+      maxStalenessMs?: number;
+    } = {},
   ): Promise<Page> {
     const page = await context.newPage();
     await page.goto(`${origin}/`);
@@ -241,7 +307,7 @@ describe.skipIf(NODE_BIN === undefined)("TC-858 browser replication acceptance (
       host,
       walletKey: WALLET_KEY,
       prefix: "notes/",
-      replication: true,
+      replication: "on" as const,
       ...options,
     });
     return page;
@@ -255,19 +321,19 @@ describe.skipIf(NODE_BIN === undefined)("TC-858 browser replication acceptance (
       const page = await bootPage(context, { grantTtlMs: 4_000 });
       await page.evaluate(() => window.__tcw.signIn());
       const walletBefore = await page.evaluate(() => window.__tcw.walletRequests());
+      await page.evaluate(() => window.__tcw.replicationSync());
       await page.waitForTimeout(3_000);
-      const status = (await page.evaluate(() => window.__tcw.replicationStatus())) as {
-        grant: { effectiveExpiresAt: string } | null;
-      };
-      expect(status.grant).not.toBeNull();
-      expect(Date.parse(status.grant?.effectiveExpiresAt ?? "") - Date.now()).toBeLessThanOrEqual(4_000);
+      const { grant } = await statusOf(page);
+      expect(grant).not.toBeNull();
+      expect(typeof grant?.effectiveExpiresAt).toBe("number");
+      expect((grant?.effectiveExpiresAt ?? Infinity) - Date.now()).toBeLessThanOrEqual(4_000);
       const minted = (await replicationEventsOf(page, "replication.grant")).filter((event) => event.action === "minted");
       expect(minted.length).toBeGreaterThan(0);
       for (const event of minted) expect(event.expiryMs).toBeLessThanOrEqual(4_000);
       // Renewal comes from the stored session, never from the wallet.
       expect(await page.evaluate(() => window.__tcw.walletRequests())).toBe(walletBefore);
     } finally {
-      await context.close();
+      await closeContext(context);
     }
   });
 
@@ -281,7 +347,7 @@ describe.skipIf(NODE_BIN === undefined)("TC-858 browser replication acceptance (
       expect(read).toMatchObject({ status: "present", value: "alpha note" });
       expect(await lastRead(page)).toMatchObject({ source: "replica", outcome: "found" });
     } finally {
-      await context.close();
+      await closeContext(context);
     }
   });
 
@@ -295,7 +361,7 @@ describe.skipIf(NODE_BIN === undefined)("TC-858 browser replication acceptance (
       expect(read).toMatchObject({ status: "present", value: "alpha note" });
       expect(await lastRead(page)).toMatchObject({ source: "network" });
     } finally {
-      await context.close();
+      await closeContext(context);
     }
   });
 
@@ -305,15 +371,21 @@ describe.skipIf(NODE_BIN === undefined)("TC-858 browser replication acceptance (
       const page = await bootPage(context, { maxStalenessMs: 0 });
       await page.evaluate(() => window.__tcw.signIn());
       await page.evaluate(() => window.__tcw.replicationSync());
-      await context.setOffline(true);
-      await page.evaluate(() => window.__tcw.kvGet("notes/a"));
-      expect(await lastRead(page)).toMatchObject({ outcome: "error", syncError: "NETWORK_ERROR" });
+      offline.add(context);
+      // maxStalenessMs 0 makes every read stale, so it tries to sync first; offline that fails with
+      // NETWORK_ERROR and the read falls back to the replica, reporting the sync error.
+      const covered = await page.evaluate(() => window.__tcw.kvGet("notes/a"));
+      expect(covered).toMatchObject({ status: "present", value: "alpha note" });
+      expect(await lastRead(page)).toMatchObject({
+        source: "replica", outcome: "found", syncError: "NETWORK_ERROR", syncedBeforeRead: false,
+      });
+      // A key outside the prefix is never served by the replica: offline it simply fails.
       const uncovered = await page.evaluate(() => window.__tcw.kvGet("notes-secret/x"));
       expect(uncovered).not.toHaveProperty("value");
-      expect((await lastRead(page)).source).not.toBe("replica");
+      expect(await lastRead(page)).toMatchObject({ source: "network", reason: "not_covered", outcome: "error" });
     } finally {
-      await context.setOffline(false);
-      await context.close();
+      offline.delete(context);
+      await closeContext(context);
     }
   });
 
@@ -323,38 +395,54 @@ describe.skipIf(NODE_BIN === undefined)("TC-858 browser replication acceptance (
       const page = await bootPage(context);
       await page.evaluate(() => window.__tcw.signIn());
       await page.evaluate(() => window.__tcw.replicationSync());
-      await context.setOffline(true);
+      offline.add(context);
       await page.reload();
       await page.waitForFunction(() => window.__tcw !== undefined);
-      await page.evaluate((input) => window.__tcw.boot(input), { host, walletKey: WALLET_KEY, prefix: "notes/", replication: true });
+      await page.evaluate((input) => window.__tcw.boot(input), { host, walletKey: WALLET_KEY, prefix: "notes/", replication: "on" as const });
+      expect(await page.evaluate(() => window.__tcw.restoreSession())).toEqual({ status: "restored" });
       const read = await page.evaluate(() => window.__tcw.kvGet("notes/a"));
       expect(read).toMatchObject({ status: "present", value: "alpha note" });
       expect(await lastRead(page)).toMatchObject({ source: "replica" });
     } finally {
-      await context.setOffline(false);
-      await context.close();
+      offline.delete(context);
+      await closeContext(context);
     }
   });
 
-  scenario("6 sign-out wipes in two tabs: no plaintext left in origin storage; reads fail; second tab cannot refill", async () => {
+  scenario("6 sign-out in one of two tabs: keys shredded, the other tab is gated and cannot refill, recovery erases the rows", async () => {
     const context = await newContext();
     try {
       const first = await bootPage(context);
       await first.evaluate(() => window.__tcw.signIn());
       await first.evaluate(() => window.__tcw.replicationSync());
-      expect(await originStoresContain(first, "alpha note")).toBe(true);
+      expect(await contentRows(first)).toBeGreaterThan(0);
+      expect(await first.evaluate(() => window.__tcw.keyPresence())).toEqual({ gateHmac: true, accountKey: true });
+      // Rows are sealed at rest: the plaintext is never in origin storage, before or after.
+      expect(await originStoresContain(first, "alpha note")).toBe(false);
       const second = await bootPage(context);
       await second.evaluate(() => window.__tcw.signIn());
       await first.evaluate(() => window.__tcw.signOut());
-      const lifecycle = await replicationEventsOf(first, "replication.lifecycle");
-      expect(lifecycle).toContainEqual(expect.objectContaining({ action: "denied", reason: "sign_out" }));
-      expect(await originStoresContain(first, "alpha note")).toBe(false);
+      expect(await replicationEventsOf(first, "replication.lifecycle")).toContainEqual(
+        expect.objectContaining({ action: "denied", reason: "sign_out" }),
+      );
+      // The deny transaction deleted the account keys: whatever rows remain are undecryptable.
+      expect(await second.evaluate(() => window.__tcw.keyPresence())).toEqual({ gateHmac: false, accountKey: false });
       await second.evaluate(() => window.__tcw.kvGet("notes/a"));
       expect(await lastRead(second)).toMatchObject({ source: "network", reason: "replica_gated" });
+      const before = await contentRows(second);
+      await kvPut("notes/after-signout", "written after sign-out");
       await second.evaluate(() => window.__tcw.replicationSync());
-      expect(await originStoresContain(second, "alpha note")).toBe(false);
+      expect(await contentRows(second)).toBeLessThanOrEqual(before);
+      await second.evaluate(() => window.__tcw.kvGet("notes/after-signout"));
+      expect(await lastRead(second)).toMatchObject({ source: "network", reason: "replica_gated" });
+      // The next startup's recovery completes the erase.
+      await first.reload();
+      await first.waitForFunction(() => window.__tcw !== undefined);
+      await first.evaluate((input) => window.__tcw.boot(input), { host, walletKey: WALLET_KEY, prefix: "notes/", replication: "on" as const });
+      await first.waitForFunction(async () => (await window.__tcw.pendingPurgeCount()) === 0);
+      expect(await contentRows(first)).toBe(0);
     } finally {
-      await context.close();
+      await closeContext(context);
     }
   });
 
@@ -366,34 +454,44 @@ describe.skipIf(NODE_BIN === undefined)("TC-858 browser replication acceptance (
       await page.evaluate(() => window.__tcw.replicationSync());
       await page.evaluate(() => window.__tcw.injectEraseFailure());
       await page.evaluate(() => window.__tcw.signOut());
+      // The erase failed, so the partition is condemned but not yet erased: a purge intent remains.
+      expect(await page.evaluate(() => window.__tcw.pendingPurgeCount())).toBeGreaterThan(0);
       await page.reload();
       await page.waitForFunction(() => window.__tcw !== undefined);
-      expect(await originStoresContain(page, "alpha note")).toBe(false);
+      // A fresh page load runs lifecycle recovery with the production eraser.
+      await page.evaluate((input) => window.__tcw.boot(input), { host, walletKey: WALLET_KEY, prefix: "notes/", replication: "on" as const });
+      await page.waitForFunction(async () => (await window.__tcw.pendingPurgeCount()) === 0);
+      expect(await contentRows(page)).toBe(0);
     } finally {
-      await context.close();
+      await closeContext(context);
     }
   });
 
-  scenario("8a deny with failed primary delete: the fallback delete runs and a sibling tab cannot read", async () => {
+  scenario("8a sign-out deny with a failed deny transaction: the fallback database delete runs and a sibling tab cannot read", async () => {
     const context = await newContext();
     try {
       const page = await bootPage(context);
       await page.evaluate(() => window.__tcw.signIn());
       await page.evaluate(() => window.__tcw.replicationSync());
+      expect(await contentRows(page)).toBeGreaterThan(0);
       const sibling = await bootPage(context);
       await sibling.evaluate(() => window.__tcw.signIn());
       await page.evaluate(() => window.__tcw.injectDenyFailure({ stage: "deny_tx", once: true }));
-      await revokeGrantOf(page);
-      await page.evaluate(() => window.__tcw.replicationSync());
-      expect(await originStoresContain(page, "alpha note")).toBe(false);
+      await page.evaluate(() => window.__tcw.signOut());
+      expect(await replicationEventsOf(page, "replication.lifecycle")).toContainEqual(
+        expect.objectContaining({ action: "database_deleted", reason: "sign_out" }),
+      );
+      // The whole replica database is gone, so no sealed row survives for any key.
+      expect(await page.evaluate(() => indexedDB.databases().then((all) => all.map((db) => db.name)))).not.toContain("tinycloud-replica-kv");
+      expect(await contentRows(page)).toBe(0);
       await sibling.evaluate(() => window.__tcw.kvGet("notes/a"));
-      expect((await lastRead(sibling)).source).not.toBe("replica");
+      expect(await lastRead(sibling)).toMatchObject({ source: "network", reason: "replica_gated" });
     } finally {
-      await context.close();
+      await closeContext(context);
     }
   });
 
-  scenario("8b deny then fresh sign-in recreates the DB; a session from before the deny is refused", async () => {
+  scenario("8b deny then fresh sign-in recreates the DB; a tab from before the deny is refused", async () => {
     const context = await newContext();
     try {
       const page = await bootPage(context);
@@ -402,20 +500,22 @@ describe.skipIf(NODE_BIN === undefined)("TC-858 browser replication acceptance (
       const stale = await bootPage(context);
       await stale.evaluate(() => window.__tcw.signIn());
       await page.evaluate(() => window.__tcw.injectDenyFailure({ stage: "deny_tx", once: true }));
-      await revokeGrantOf(page);
-      await page.evaluate(() => window.__tcw.replicationSync());
+      await page.evaluate(() => window.__tcw.signOut());
+      expect(await contentRows(page)).toBe(0);
       await page.evaluate(() => window.__tcw.signIn());
+      expect(await page.evaluate(() => window.__tcw.replicationSync())).toEqual({ status: "ok" });
+      expect(await contentRows(page)).toBeGreaterThan(0);
       // The tab signed in before the deny still holds the pre-deny stamp. The gate refuses it.
       await stale.evaluate(() => window.__tcw.kvGet("notes/a"));
-      expect(await lastRead(stale)).toMatchObject({ reason: "replica_gated" });
-      await page.evaluate(() => window.__tcw.replicationSync());
-      expect(await originStoresContain(page, "alpha note")).toBe(true);
+      expect(await lastRead(stale)).toMatchObject({ source: "network", reason: "replica_gated" });
+      await page.evaluate(() => window.__tcw.kvGet("notes/a"));
+      expect(await lastRead(page)).toMatchObject({ source: "replica", outcome: "found" });
     } finally {
-      await context.close();
+      await closeContext(context);
     }
   });
 
-  scenario("8c deny with delete blocked and a marker: sibling refuses the next read without reload; reload refuses to activate", async () => {
+  scenario("8c deny with the delete blocked and a marker: sibling refuses the next read without reload; reload refuses to activate", async () => {
     const context = await newContext();
     try {
       const page = await bootPage(context);
@@ -425,117 +525,252 @@ describe.skipIf(NODE_BIN === undefined)("TC-858 browser replication acceptance (
       await sibling.evaluate(() => window.__tcw.signIn());
       await page.evaluate(() => window.__tcw.injectDenyFailure({ stage: "deny_tx", once: true }));
       await page.evaluate(() => window.__tcw.injectDenyFailure({ stage: "delete_database", once: true }));
-      await revokeGrantOf(page);
-      await page.evaluate(() => window.__tcw.replicationSync());
-      const lifecycle = await replicationEventsOf(page, "replication.lifecycle");
-      expect(lifecycle).toContainEqual(expect.objectContaining({ action: "marker_set" }));
+      await page.evaluate(() => window.__tcw.signOut());
+      expect(await replicationEventsOf(page, "replication.lifecycle")).toContainEqual(expect.objectContaining({ action: "marker_set" }));
       await sibling.evaluate(() => window.__tcw.kvGet("notes/a"));
       expect(await lastRead(sibling)).toMatchObject({ source: "network", reason: "replica_gated" });
+      // Neither the deny transaction nor the delete ran, so the rows and keys survive. The marker alone
+      // is what refuses them: the read above was gated without a reload.
+      expect(await contentRows(sibling)).toBeGreaterThan(0);
+      // The next startup's recovery removes the database the marker stood in for.
       await sibling.reload();
       await sibling.waitForFunction(() => window.__tcw !== undefined);
-      const reloaded = (await sibling.evaluate(() => window.__tcw.replicationStatus())) as { state: string };
-      expect(reloaded.state).toBe("gated");
+      await sibling.evaluate((input) => window.__tcw.boot(input), { host, walletKey: WALLET_KEY, prefix: "notes/", replication: "on" as const });
+      await sibling.waitForFunction(async () => {
+        const rows = await window.__tcw.replicaRows();
+        return (rows.entries ?? 0) + (rows.blobs ?? 0) === 0;
+      });
+      expect(await contentRows(sibling)).toBe(0);
     } finally {
-      await context.close();
+      await closeContext(context);
     }
   });
 
-  scenario("8d a stale tab cannot refill pending writes after deny/erase or same-principal re-sign-in", async () => {
+  scenario("8d a stale tab cannot refill pending writes after deny, erase or same-principal re-sign-in", async () => {
     const context = await newContext();
     try {
+      const pendingRows = async (page: Page) => (await page.evaluate(() => window.__tcw.replicaRows())).pending ?? 0;
       const current = await bootPage(context);
       await current.evaluate(() => window.__tcw.signIn());
       await current.evaluate(() => window.__tcw.replicationSync());
       const stale = await bootPage(context);
       await stale.evaluate(() => window.__tcw.signIn());
-      expect(await originStoresContain(current, "alpha note")).toBe(true);
+      expect(await contentRows(current)).toBeGreaterThan(0);
       expect(await stale.evaluate(() => window.__tcw.stalePendingUpdate("notes/stale-before-deny"))).toEqual({ status: "updated" });
-      expect(await originStoresContain(stale, "notes/stale-before-deny")).toBe(true);
+      expect(await pendingRows(stale)).toBeGreaterThan(0);
 
       await current.evaluate(() => window.__tcw.signOut());
-      await current.waitForFunction(async () => (await window.__tcw.pendingPurgeCount()) === 0);
-      expect(await originStoresContain(current, "alpha note")).toBe(false);
-      expect(await originStoresContain(current, "notes/stale-before-deny")).toBe(false);
-      expect(await stale.evaluate(() => window.__tcw.stalePendingUpdate("notes/stale-after-erase"))).toMatchObject({
-        status: "error", code: "REPLICA_GATED", gate: "stamp_stale",
+      const afterDeny = await pendingRows(current);
+      expect(await stale.evaluate(() => window.__tcw.stalePendingUpdate("notes/stale-after-deny"))).toMatchObject({
+        status: "error", code: "REPLICA_GATED", gate: "not_established",
       });
-      expect(await originStoresContain(current, "notes/stale-after-erase")).toBe(false);
+      // No principal holds the gate after the deny, so the stale stamp is refused as not established.
+      expect(await pendingRows(current)).toBe(afterDeny);
 
+      // Startup recovery erases the denied partition's pending rows.
+      await current.reload();
+      await current.waitForFunction(() => window.__tcw !== undefined);
+      await current.evaluate((input) => window.__tcw.boot(input), { host, walletKey: WALLET_KEY, prefix: "notes/", replication: "on" as const });
+      await current.waitForFunction(async () => (await window.__tcw.pendingPurgeCount()) === 0);
+      expect(await pendingRows(current)).toBe(0);
+      expect(await stale.evaluate(() => window.__tcw.stalePendingUpdate("notes/stale-after-erase"))).toMatchObject({
+        status: "error", code: "REPLICA_GATED", gate: "not_established",
+      });
+      expect(await pendingRows(current)).toBe(0);
+
+      // A same-principal re-sign-in establishes a new incarnation; the old stamp is now stale, not merely unestablished.
       await current.evaluate(() => window.__tcw.signIn());
       await current.evaluate(() => window.__tcw.replicationSync());
-      expect(await originStoresContain(current, "alpha note")).toBe(true);
+      expect(await contentRows(current)).toBeGreaterThan(0);
       expect(await stale.evaluate(() => window.__tcw.stalePendingUpdate("notes/stale-after-resignin"))).toMatchObject({
         status: "error", code: "REPLICA_GATED", gate: "stamp_stale",
       });
-      expect(await originStoresContain(current, "notes/stale-after-resignin")).toBe(false);
+      expect(await pendingRows(current)).toBe(0);
     } finally {
-      await context.close();
+      await closeContext(context);
     }
   });
 
   scenario("9 revocation of an active device grant: next stale read learns GRANT_REVOKED; content erased; owner network reads still work", async () => {
     const context = await newContext();
     try {
-      const page = await bootPage(context);
+      // maxStalenessMs 0: the next read syncs first, which is where a revocation is learned.
+      const page = await bootPage(context, { maxStalenessMs: 0 });
       await page.evaluate(() => window.__tcw.signIn());
       await page.evaluate(() => window.__tcw.replicationSync());
       await revokeGrantOf(page);
       await page.evaluate(() => window.__tcw.kvGet("notes/a"));
-      expect(await lastRead(page)).toMatchObject({ reason: "grant_revoked", syncError: "GRANT_REVOKED" });
-      expect(await originStoresContain(page, "alpha note")).toBe(false);
+      expect(await lastRead(page)).toMatchObject({ source: "network", reason: "grant_revoked", code: "GRANT_REVOKED", outcome: "found" });
+      expect(await contentRows(page)).toBe(0);
       const network = await page.evaluate(() => window.__tcw.kvGet("notes/a"));
       expect(network).toMatchObject({ status: "present", value: "alpha note" });
     } finally {
-      await context.close();
+      await closeContext(context);
     }
   });
 
-  scenario("10 account switch: A's partition erased before B opens; B reads go to network until then; stale A tab refused", async () => {
+  scenario("10 account switch: B is refused while A holds the origin; after A signs out B opens a fresh partition with none of A's data; A's other tab stays refused", async () => {
     const context = await newContext();
     try {
       const accountA = await bootPage(context);
       await accountA.evaluate(() => window.__tcw.signIn());
       await accountA.evaluate(() => window.__tcw.replicationSync());
-      const accountB = await bootPage(context);
+      const staleA = await bootPage(context);
+      await staleA.evaluate(() => window.__tcw.signIn());
+      expect(await contentRows(accountA)).toBeGreaterThan(0);
+
+      // A second wallet is a second principal. While A holds the origin's gate B is refused, and its reads go to the network.
+      const accountB = await bootPage(context, { walletKey: ACCOUNT_B_KEY });
       await accountB.evaluate(() => window.__tcw.signIn());
-      await accountB.evaluate(() => window.__tcw.kvGet("notes/a"));
-      expect(await lastRead(accountB)).toMatchObject({ source: "network" });
-      const lifecycle = await replicationEventsOf(accountB, "replication.lifecycle");
-      expect(lifecycle).toContainEqual(expect.objectContaining({ reason: "account_switch" }));
-      await accountA.evaluate(() => window.__tcw.kvGet("notes/a"));
-      expect(await lastRead(accountA)).toMatchObject({ source: "network", reason: "replica_gated" });
+      await accountB.evaluate(() => window.__tcw.kvGet("notes/b-only"));
+      expect(await lastRead(accountB)).toMatchObject({ source: "network", reason: "replica_gated" });
+
+      await accountA.evaluate(() => window.__tcw.signOut());
+      // B ends its refused session so its next sign-in is fresh rather than a restore under a pre-switch stamp.
+      await accountB.evaluate(() => window.__tcw.signOut());
+      // B's next load runs startup recovery, which erases A's condemned partition before B can open.
+      await accountB.reload();
+      await accountB.waitForFunction(() => window.__tcw !== undefined);
+      await accountB.evaluate((input) => window.__tcw.boot(input), { host, walletKey: ACCOUNT_B_KEY, prefix: "notes/", replication: "on" as const });
+      await accountB.evaluate(() => window.__tcw.signIn());
+      expect(await accountB.evaluate(() => window.__tcw.replicationSync())).toEqual({ status: "ok" });
+      // A's partition was erased before B's opened: only B's one key (an entry and a blob) is present.
+      expect(await contentRows(accountB)).toBe(2);
+      const own = await accountB.evaluate(() => window.__tcw.kvGet("notes/b-only"));
+      expect(own).toMatchObject({ status: "present", value: "belongs to B" });
+      expect(await lastRead(accountB)).toMatchObject({ source: "replica", outcome: "found" });
+      const foreign = await accountB.evaluate(() => window.__tcw.kvGet("notes/a"));
+      expect(foreign).not.toHaveProperty("value");
+
+      // A's other tab holds a pre-switch stamp: refused.
+      await staleA.evaluate(() => window.__tcw.kvGet("notes/a"));
+      expect(await lastRead(staleA)).toMatchObject({ source: "network", reason: "replica_gated" });
     } finally {
-      await context.close();
+      await closeContext(context);
     }
   });
 
-  scenario("11 ciphertext: vault prefix with allowSecrets stores ciphertext only; plaintext never reaches origin storage", async () => {
+  scenario("11 sealed at rest: a synced prefix leaves no plaintext in origin storage; a vault prefix is refused outright", async () => {
     const context = await newContext();
     try {
-      await kvPut("vault/token", "PLAINTEXT-SECRET-VALUE");
-      const page = await bootPage(context, { prefix: "vault/", allowSecrets: true });
+      const page = await bootPage(context);
       await page.evaluate(() => window.__tcw.signIn());
       await page.evaluate(() => window.__tcw.replicationSync());
-      // Precondition: origin storage holds replica rows, so the negative check below is not vacuous.
-      expect(await originStoresContain(page, "")).toBe(true);
+      // Precondition: the replica holds both notes, so the negative scans below are not vacuous.
+      expect(await contentRows(page)).toBeGreaterThanOrEqual(4);
+      expect(await page.evaluate(() => window.__tcw.kvGet("notes/a"))).toMatchObject({ status: "present", value: "alpha note" });
+      for (const plaintext of ["alpha note", "beta note", "OUT-OF-SCOPE-SECRET", "notes/a", "notes/b"]) {
+        expect(await originStoresContain(page, plaintext), plaintext).toBe(false);
+      }
+    } finally {
+      await closeContext(context);
+    }
+    // The browser never holds secrets or vault content, even when the app opts in.
+    const vaultContext = await newContext();
+    try {
+      await kvPut("vault/token", "PLAINTEXT-SECRET-VALUE");
+      const page = await bootPage(vaultContext, { prefix: "vault/", allowSecrets: true });
+      await page.evaluate(() => window.__tcw.signIn());
+      const sync = (await page.evaluate(() => window.__tcw.replicationSync())) as SyncResult;
+      expect(sync).toMatchObject({ status: "error", code: "REPLICA_INVALID_ARGUMENT" });
+      expect(await contentRows(page)).toBe(0);
       expect(await originStoresContain(page, "PLAINTEXT-SECRET-VALUE")).toBe(false);
     } finally {
-      await context.close();
+      await closeContext(vaultContext);
     }
   });
 
-  scenario("12 cross-tab invalidation: a non-writing tab receives the commit event", async () => {
+  scenario("12 two tabs, one context: a commit synced by one tab is served by the other without it syncing", async () => {
     const context = await newContext();
     try {
       const writer = await bootPage(context);
       await writer.evaluate(() => window.__tcw.signIn());
+      await writer.evaluate(() => window.__tcw.replicationSync());
       const reader = await bootPage(context);
       await reader.evaluate(() => window.__tcw.signIn());
+      // Both tabs hold the same identity and partition. Only the writer syncs after the owner commits.
+      await kvPut("notes/peer", "committed by a peer tab");
       await writer.evaluate(() => window.__tcw.replicationSync());
-      const seen = await reader.evaluate(() => window.__tcw.replicationStatus());
-      expect((seen as { lastCommitSeen?: unknown }).lastCommitSeen).toEqual(expect.any(Number));
+      const read = await reader.evaluate(() => window.__tcw.kvGet("notes/peer"));
+      expect(read).toMatchObject({ status: "present", value: "committed by a peer tab" });
+      expect(await lastRead(reader)).toMatchObject({ source: "replica", outcome: "found" });
     } finally {
-      await context.close();
+      await closeContext(context);
+    }
+  });
+
+  scenario("14 flag off is byte-identical to a build without replica code: same requests, no replica chunk or worker", async () => {
+    type Seen = { method: string; url: string; headers: string };
+    // Credentials and per-request randomness legitimately differ between any two runs.
+    const volatile = /^(authorization|tinycloud-.*|x-tinycloud-.*|.*nonce.*|.*trace.*|date|content-length)$/i;
+    async function observe(variant: "baseline" | "unset" | "disabled"): Promise<{ signIn: string[]; kv: Seen[]; assets: string[]; workers: number }> {
+      const context = await newContext();
+      try {
+        const page = await context.newPage();
+        const assets: string[] = [];
+        let workers = 0;
+        page.on("worker", () => (workers += 1));
+        page.on("request", (request) => {
+          if (request.url().startsWith(origin)) assets.push(new URL(request.url()).pathname);
+        });
+        await page.goto(`${origin}/${variant === "baseline" ? "baseline.html" : "index.html"}`);
+        if (variant === "baseline") {
+          await page.waitForFunction(() => window.__baseline !== undefined);
+          await page.evaluate((input) => window.__baseline.boot(input), { host, walletKey: WALLET_KEY });
+        } else {
+          await page.waitForFunction(() => window.__tcw !== undefined);
+          await page.evaluate((input) => window.__tcw.boot(input), { host, walletKey: WALLET_KEY, prefix: "notes/", replication: variant });
+        }
+        const captured: Array<Promise<Seen>> = [];
+        let phase: "signIn" | "kv" = "signIn";
+        const signIn: string[] = [];
+        page.on("request", (request) => {
+          if (!request.url().startsWith(host) || request.method() === "OPTIONS") return;
+          if (phase === "signIn") {
+            signIn.push(`${request.method()} ${new URL(request.url()).pathname}`);
+            return;
+          }
+          // `headers()` is a partial, timing-dependent view; `allHeaders()` is the wire set.
+          captured.push(
+            request.allHeaders().then((all) => ({
+              method: request.method(),
+              url: request.url(),
+              headers: Object.entries(all)
+                .filter(([name]) => !volatile.test(name))
+                .map(([name, value]) => `${name}: ${value}`)
+                .sort()
+                .join("\n"),
+            })),
+          );
+        });
+        const apiName = variant === "baseline" ? "__baseline" : "__tcw";
+        const run = (method: "signIn" | "kvGet" | "kvList", arg?: string) =>
+          page.evaluate(
+            ([name, call, argument]) =>
+              (window as unknown as Record<string, Record<string, (value?: string) => Promise<unknown>>>)[name]![call]!(argument),
+            [apiName, method, arg] as const,
+          );
+        await run("signIn");
+        phase = "kv";
+        await run("kvGet", "notes/a");
+        await run("kvGet", "notes/does-not-exist");
+        await run("kvList", "notes/");
+        await run("kvGet", "notes/b");
+        await page.waitForTimeout(500);
+        return { signIn: signIn.sort(), kv: await Promise.all(captured), assets, workers };
+      } finally {
+        await closeContext(context);
+      }
+    }
+    await observe("baseline"); // warm-up: the first sign-in of a wallet creates its space
+    const baseline = await observe("baseline");
+    expect(baseline.kv.length).toBeGreaterThan(0);
+    for (const variant of ["unset", "disabled"] as const) {
+      const flagOff = await observe(variant);
+      expect(flagOff.kv).toEqual(baseline.kv);
+      expect(flagOff.signIn).toEqual(baseline.signIn);
+      expect(flagOff.workers).toBe(0);
+      expect(flagOff.assets.filter((path) => /replica|kv-storage|\.worker|sqlite/i.test(path))).toEqual([]);
     }
   });
 
@@ -551,10 +786,9 @@ describe.skipIf(NODE_BIN === undefined)("TC-858 browser replication acceptance (
       expect(read).toMatchObject({ status: "present", value: "beta note" });
       expect(await lastRead(page)).toMatchObject({ source: "replica" });
     } finally {
-      await context.close();
+      await closeContext(context);
     }
   });
 
-  // WebKit: not attempted in this slice. The CI image has no Playwright WebKit build; deferred, recorded in the PR.
-  test.todo("WebKit parity for scenarios 1-13: deferred, Playwright WebKit not in the CI image", () => {});
+  // WebKit is out of scope: the harness is Chromium-only and records no placeholder for it.
 });

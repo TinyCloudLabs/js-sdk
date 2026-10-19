@@ -331,7 +331,16 @@ jobs:
       - name: Browser acceptance (TC-858, Chromium)
         env:
           TC_REPLICA_E2E_NODE_BIN: ${{ runner.temp }}/tinycloud
-        run: bun test packages/replica/test/browser.acceptance.test.ts
+          TC858_ACCEPTANCE_STRICT: "1"
+        run: |
+          set -o pipefail
+          bun test packages/replica/test/browser.acceptance.test.ts --timeout 200000 2>&1 | tee "$RUNNER_TEMP/acceptance.log"
+          # Strict mode means every scenario ran: a todo or skipped entry proves nothing.
+          if grep -E '^\((todo|skip)\)' "$RUNNER_TEMP/acceptance.log"; then
+            echo "::error::browser acceptance has todo/skipped scenarios"
+            exit 1
+          fi
+          grep -qE '^ *[1-9][0-9]* pass$' "$RUNNER_TEMP/acceptance.log"
 
       - name: kv-storage adapter in Chromium (fake feed and the node)
         if: always()
