@@ -7,6 +7,7 @@ import { sha512 } from "@noble/hashes/sha512";
 import {
   HeldCredentialError,
   InMemoryNonceStore,
+  IssuerSet,
   PRESENTATION_STATEMENT,
   normaliseEmail,
   parseIssuerSet,
@@ -206,7 +207,8 @@ describe("issuer selection (R1, lookup, cross-org)", () => {
   test("unlisted DID method: refused with no lookup", async () => {
     let lookups = 0;
     const real = harness();
-    const spy = { version: 1, resolveIssuer: () => { lookups += 1; return undefined; } };
+    const spy = parseIssuerSet(setOf(entryA()), { didMethods: METHODS });
+    spy.resolveIssuer = () => { lookups += 1; return undefined; };
     const { presentation } = real.present({ kid: "did:ethr:0xabc#k", iss: "did:ethr:0xabc" });
     expect(await code(verifyHeldPresentation(presentation, { ...real.options, issuerSet: spy, acceptedIssuers: [{ issuerDid: "did:ethr:0xabc" }] }))).toBe("did-method-not-allowed");
     expect(lookups).toBe(0);
@@ -759,5 +761,34 @@ describe("TC-1540 Miller 7: exact RFC 3339 in SIWE", () => {
     await expectCode("bad-siwe", {}, { notBefore: "2026-10-19T00:00:00+25:00" });
     await expectCode("ok", {}, { expirationTime: "2026-10-21T00:00:00Z", notBefore: "2026-10-19T00:00:00Z" });
     await expectCode("bad-siwe", {}, { expirationTime: "2026-10-19T00:00:00Z" });
+  });
+});
+
+describe("TC-1540 Miller 8: opaque IssuerSet", () => {
+  test("only parseIssuerSet can create an IssuerSet", () => {
+    expect(() => new IssuerSet(Symbol("x"), 1, new Map())).toThrow(TypeError);
+    expect(() => (IssuerSet as unknown as () => unknown)()).toThrow();
+  });
+  test("a structural object, a prototype-only object and a spread copy are refused as the issuerSet", async () => {
+    const real = parseIssuerSet(setOf(entryA()), { didMethods: METHODS });
+    const entry = real.resolveIssuer(ISSUER_A, KID_A)!;
+    const structural = { version: 1, resolveIssuer: () => ({ ...entry, vcts: ["anything"], profiles: ["anything"] }) } as unknown as IssuerSet;
+    for (const issuerSet of [structural, Object.create(IssuerSet.prototype) as IssuerSet, { ...real } as IssuerSet]) {
+      await expectCode("bad-config", {}, undefined, { issuerSet });
+    }
+    expect(IssuerSet.is(real)).toBe(true);
+    await expectCode("ok", {}, undefined, { issuerSet: real });
+  });
+  test("verify re-checks that the resolved entry is the requested (issuerDid, kid)", async () => {
+    const h = harness({}, [entryA(), entryB()]);
+    const set = h.options.issuerSet;
+    const other = set.resolveIssuer(ISSUER_B, KID_B)!;
+    (set as unknown as { resolveIssuer: unknown }).resolveIssuer = () => other;
+    const { presentation } = h.present();
+    expect(await code(verifyHeldPresentation(presentation, h.options))).toBe("unknown-issuer");
+  });
+  test("resolved entries are frozen", () => {
+    const real = parseIssuerSet(setOf(entryA()), { didMethods: METHODS });
+    expect(Object.isFrozen(real.resolveIssuer(ISSUER_A, KID_A))).toBe(true);
   });
 });

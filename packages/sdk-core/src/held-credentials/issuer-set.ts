@@ -19,14 +19,38 @@ export interface IssuerEntry {
   notAfter: number | null;
 }
 
-export interface IssuerSet {
-  version: number;
+const CONSTRUCT = Symbol("IssuerSet.construct");
+
+/**
+ * An issuer set that has passed every rule of `parseIssuerSet`. It is opaque: the constructor
+ * refuses any caller but `parseIssuerSet`, and the verifier accepts only a genuine instance
+ * (`IssuerSet.is`), so a structural object can never stand in for a validated set.
+ */
+export class IssuerSet {
+  readonly version: number;
+  readonly #entries: ReadonlyMap<string, IssuerEntry>;
+
+  /** @internal Use `parseIssuerSet`. */
+  constructor(token: symbol, version: number, entries: ReadonlyMap<string, IssuerEntry>) {
+    if (token !== CONSTRUCT) throw new TypeError("IssuerSet can only be created by parseIssuerSet");
+    this.version = version;
+    this.#entries = entries;
+  }
+
+  /** True only for an instance built by `parseIssuerSet` (a real private-field brand check). */
+  static is(value: unknown): value is IssuerSet {
+    return typeof value === "object" && value !== null && #entries in value;
+  }
+
   /**
    * The one lookup seam (TC-1132 would plug an allow-listed did:web resolver in here). Returns the
    * FULL entry, never just a key, so vct/profile admission and the validity window come from the
    * same entry. Exact (issuerDid, kid) match only.
    */
-  resolveIssuer(issuerDid: string, kid: string): IssuerEntry | undefined;
+  resolveIssuer(issuerDid: string, kid: string): IssuerEntry | undefined {
+    const entry = this.#entries.get(kid);
+    return entry && entry.issuerDid === issuerDid ? entry : undefined;
+  }
 }
 
 export interface IssuerSetOptions {
@@ -98,7 +122,7 @@ export function parseIssuerSet(raw: unknown, options: IssuerSetOptions): IssuerS
     const retiredAt = item.retiredAt === null ? null : parseTime(item.retiredAt, "retiredAt");
     const notAfter = item.notAfter === null ? null : parseTime(item.notAfter, "notAfter");
     if (retiredAt !== null && notAfter !== null && retiredAt > notAfter) refuse("bad-issuer-set", "retiredAt must not be after notAfter");
-    entries.set(kid as string, {
+    entries.set(kid as string, Object.freeze({
       issuerDid: issuerDid as string,
       kid: kid as string,
       alg: "EdDSA",
@@ -108,13 +132,7 @@ export function parseIssuerSet(raw: unknown, options: IssuerSetOptions): IssuerS
       notBefore,
       retiredAt,
       notAfter,
-    });
+    }));
   }
-  return {
-    version: raw.version as number,
-    resolveIssuer(issuerDid, kid) {
-      const entry = entries.get(kid);
-      return entry && entry.issuerDid === issuerDid ? entry : undefined;
-    },
-  };
+  return new IssuerSet(CONSTRUCT, raw.version as number, entries);
 }

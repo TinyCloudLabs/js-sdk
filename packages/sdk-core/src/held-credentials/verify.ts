@@ -2,7 +2,7 @@ import { recoverEip191Address, sha256, verifyEd25519Strict } from "./crypto";
 import { canonicalPkhDid, parsePkhDid, pkhPrincipalsEqual, registryKey } from "./did";
 import { asciiBytes, decodeBase64Url, decodeUtf8, encodeBase64Url, hexToBytes, isAscii, isObject, parseStrictJson, type Json } from "./encoding";
 import { refuse } from "./errors";
-import { didMethod, isWellFormedKid, type IssuerEntry, type IssuerSet } from "./issuer-set";
+import { IssuerSet, didMethod, isWellFormedKid, type IssuerEntry } from "./issuer-set";
 import type { NonceStore } from "./nonce-store";
 import { DEFAULT_ROWS, findRow, type ProfileRow } from "./rows";
 import { PRESENTATION_STATEMENT, SD_HASH_RESOURCE_PREFIX, assertValidAudience, parseRfc3339, parseStrictSiwe } from "./siwe";
@@ -86,7 +86,8 @@ export async function verifyHeldPresentation(presentation: unknown, options: Ver
   const { now, issuerSet, acceptedIssuers, acceptedProfiles, didMethods, audience, nonceStore, callerAccount } = options;
   const rows = options.rows ?? DEFAULT_ROWS;
   if (!(now instanceof Date) || Number.isNaN(now.getTime())) refuse("bad-config", "now must be a valid Date");
-  if (!issuerSet || !nonceStore || !didMethods || !Array.isArray(didMethods.issuer)) refuse("bad-config", "issuerSet, nonceStore and didMethods are required");
+  if (!IssuerSet.is(issuerSet)) refuse("bad-config", "issuerSet must come from parseIssuerSet");
+  if (!nonceStore || !didMethods || !Array.isArray(didMethods.issuer)) refuse("bad-config", "issuerSet, nonceStore and didMethods are required");
   if (!Array.isArray(acceptedIssuers) || acceptedIssuers.length === 0) refuse("bad-config", "acceptedIssuers must not be empty");
   if (!Array.isArray(acceptedProfiles) || acceptedProfiles.length === 0) refuse("bad-config", "acceptedProfiles must not be empty");
   assertValidAudience(audience);
@@ -144,6 +145,7 @@ export async function verifyHeldPresentation(presentation: unknown, options: Ver
   // 4. entry lookup by the exact pair, then the checks that need only `now`
   const entry: IssuerEntry | undefined = issuerSet.resolveIssuer(issuerDid, kid as string);
   if (!entry) refuse("unknown-issuer", "no issuer-set entry for this kid");
+  if (entry.issuerDid !== issuerDid || entry.kid !== kid) refuse("unknown-issuer", "resolved entry is not the requested (issuerDid, kid)");
   const nowMs = now.getTime();
   if (nowMs < entry.notBefore) refuse("issuer-not-yet-valid", "issuer key is not yet valid");
   if (entry.notAfter !== null && nowMs >= entry.notAfter) refuse("issuer-stopped", "issuer key is past its hard stop");
