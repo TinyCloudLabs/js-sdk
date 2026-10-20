@@ -1,9 +1,9 @@
 import { CourierError } from './errors.js';
-import { ulid } from 'ulid';
+import { decodeTime, ulid } from 'ulid';
 import { ULID } from './request.js';
 import { k, PREFIX } from './keys.js';
 import { buildMessage } from './a2a.js';
-import { del, getJson, putCreate, putMatch } from './store.js';
+import { del, getJson, listAll, putCreate, putMatch } from './store.js';
 import type { KV } from './inbox.js';
 import type { ParsedArgs } from './args.js';
 import { cmd } from './program.js';
@@ -22,18 +22,26 @@ export interface PauseMarker {
   reason: string;
   informId?: string;
   informSent?: boolean;
+  resumeInformId?: string;
+}
+
+/** Separate CLI processes must still emit strictly increasing notice ids on this thread. */
+export async function nextNoticeId(kv: KV, peer: string, threadId: string, now = Date.now()): Promise<string> {
+  const prefix = k.msgPrefix(peer, threadId);
+  const ids = (await listAll(kv, prefix)).map(key => key.slice(prefix.length).replace(/\.json$/, '')).filter(id => ULID.test(id)).sort();
+  const latest = ids.at(-1);
+  return ulid(Math.max(now, latest ? decodeTime(latest) + 1 : 0));
 }
 
 /** Posts the machine-readable "thread paused" `inform` to the peer (it never wakes anyone; its watcher notifies its human). */
-export async function postPausedInform(kv: KV, profile: Profile, peerHandle: string, threadId: string, text: string, messageId?: string): Promise<string> {
+export async function postPausedInform(kv: KV, profile: Profile, peerHandle: string, threadId: string, text: string, messageId?: string, resumed = false): Promise<string> {
+  const pauseId = messageId ?? await nextNoticeId(kv, peerHandle, threadId);
+  if (!ULID.test(pauseId)) throw new CourierError('usage', 'Invalid pause inform id.');
   const message = buildMessage({
-    threadId, text, role: 'ROLE_AGENT', intent: 'inform', notice: 'thread-paused',
+    threadId, text, role: 'ROLE_AGENT', intent: 'inform', notice: resumed ? 'thread-resumed' : 'thread-paused',
     from: { owner: profile.ownerDid!, agent: profile.courierDid, label: profile.label },
   });
-  if (messageId) {
-    if (!ULID.test(messageId)) throw new CourierError('usage', 'Invalid pause inform id.');
-    message.messageId = messageId;
-  }
+  message.messageId = pauseId;
   try { await putCreate(kv, k.msg(peerHandle, threadId, message.messageId), message); } catch (error) {
     if (!(error instanceof CourierError && error.code === 'conflict')) throw error;
   }
@@ -71,7 +79,7 @@ export async function cmdPause(args: ParsedArgs, deps: { profile?: typeof loadPr
   if (!exists && paired.inbound && paired.theirHandleForMe) exists = await getJson(await peerKv(node, profile, paired), `${PREFIX}/to/${paired.theirHandleForMe}/threads/${threadId}/meta.json`);
   if (!exists) throw new CourierError('not-found', `Thread ${threadId} with ${peer} does not exist.`);
   const reason = args.has('reason') && args.get('reason') !== 'true' ? args.get('reason')! : 'paused by its owner';
-  const marker: PauseMarker = { v: 1, peer, threadId, by: 'human', at: new Date().toISOString(), reason, informId: ulid(), informSent: false };
+  const marker: PauseMarker = { v: 1, peer, threadId, by: 'human', at: new Date().toISOString(), reason, informId: await nextNoticeId(node.kv, peer, threadId), informSent: false };
   const wrote = await writePauseMarker(node.kv, marker);
   const stored = await getJson<PauseMarker>(node.kv, k.paused(peer, threadId));
   if (!stored) throw new CourierError('not-found', 'The pause marker disappeared; try again.');
@@ -81,7 +89,7 @@ export async function cmdPause(args: ParsedArgs, deps: { profile?: typeof loadPr
   }
   const saved = stored.value;
   if (!saved.informId) {
-    saved.informId = ulid();
+    saved.informId = await nextNoticeId(node.kv, peer, threadId);
     await putMatch(node.kv, k.paused(peer, threadId), saved, stored.etag!);
   }
   // A failed inform can be retried with the same message id, without duplicate messages or marker creation.
@@ -93,15 +101,20 @@ export async function cmdPause(args: ParsedArgs, deps: { profile?: typeof loadPr
 }
 
 /** Humans only: wake this side's agent for the thread again; the wake budget starts over. */
-export async function cmdResume(args: ParsedArgs): Promise<void> {
+export async function cmdResume(args: ParsedArgs, deps: { profile?: typeof loadProfile; node?: typeof courierNode } = {}): Promise<void> {
   const { peer, threadId } = target(args, resumeUsage());
-  const profile = loadProfile();
+  const profile = (deps.profile ?? loadProfile)();
   getPeer(profile, peer);
-  const node = await courierNode(profile);
-  if (!(await getJson(node.kv, k.paused(peer, threadId)))) {
+  const node = await (deps.node ?? courierNode)(profile);
+  const stored = await getJson<PauseMarker>(node.kv, k.paused(peer, threadId));
+  if (!stored) {
     console.log(`Thread ${threadId} with ${peer} is not paused.`);
     return;
   }
+  const resumeInformId = stored.value.resumeInformId ?? await nextNoticeId(node.kv, peer, threadId);
+  if (!stored.value.resumeInformId) await putMatch(node.kv, k.paused(peer, threadId), { ...stored.value, resumeInformId }, stored.etag!);
+  // Persist the id before posting: a retry cannot produce another resume transition.
+  await postPausedInform(node.kv, profile, peer, threadId, 'Thread resumed by its owner.', resumeInformId, true);
   await del(node.kv, k.paused(peer, threadId));
   console.log(`Resumed thread ${threadId} with ${peer}. A running watcher picks this up with the next message it sees.`);
 }

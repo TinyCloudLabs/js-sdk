@@ -59,8 +59,8 @@ export interface CourierExt {
   notice?: CourierNotice;
 }
 
-export type CourierNotice = 'thread-paused';
-export const COURIER_NOTICES: CourierNotice[] = ['thread-paused'];
+export type CourierNotice = 'thread-paused' | 'thread-resumed';
+export const COURIER_NOTICES: CourierNotice[] = ['thread-paused', 'thread-resumed'];
 
 export interface MessagePart {
   text?: string;
