@@ -335,6 +335,7 @@ export class RemoteTenantStore {
     const removed = this.#clearedScoped.get(tenant.stateRoot);
     if (removed?.has(refusal.revokedCid)) return "scoped";
     const additional = await readJson<unknown>(this.#additionalPath(tenant.stateRoot));
+    if (this.#clearedScoped.get(key)?.has(refusal.revokedCid)) return "scoped";
     if (!Array.isArray(additional)) return undefined;
     const affected = additional.some((entry) => {
       const cid = isRecord(entry) && isRecord(entry.delegation) ? entry.delegation.cid : undefined;

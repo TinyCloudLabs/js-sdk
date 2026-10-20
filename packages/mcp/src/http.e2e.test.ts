@@ -630,6 +630,73 @@ for (const marker of ["delegation-revoked", "delegation-ancestor-revoked"] as co
   }, 90_000);
 }
 
+test("a concurrent scoped refusal still includes approval after another call removes the grant", async () => {
+  const { proxy, client, stateRoot, approve } = await setupProxiedSession();
+  const primary = { space: "applications", key: "agents/demo/profile", representation: "json" };
+  const secondary = { ...primary, key: "agents/demo/settings" };
+  const requiredPrimary = record((await client.callTool({ name: "tinycloud_kv_get", arguments: primary })).structuredContent);
+  const primaryBody = await approve(String(record(requiredPrimary.approval).url));
+  const requiredSecondary = record((await client.callTool({ name: "tinycloud_kv_get", arguments: secondary })).structuredContent);
+  await approve(String(record(requiredSecondary.approval).url));
+  const additionalPath = join(stateRoot, ".tinycloud/profiles/agent/additional-delegations.json");
+  const originalRename = fileSystem.rename;
+  const originalRead = fileSystem.readFile;
+  let enteredWrite!: () => void;
+  const writeEntered = new Promise<void>((resolve) => { enteredWrite = resolve; });
+  let releaseWrite!: () => void;
+  const writeReleased = new Promise<void>((resolve) => { releaseWrite = resolve; });
+  let enteredRead!: () => void;
+  const readEntered = new Promise<void>((resolve) => { enteredRead = resolve; });
+  let releaseRead!: () => void;
+  const readReleased = new Promise<void>((resolve) => { releaseRead = resolve; });
+  let heldWrite = false;
+  let heldRead = false;
+  let primaryRefusals = 0;
+  const renameSpy = spyOn(fileSystem, "rename").mockImplementation(async (from, to) => {
+    if (to === additionalPath && !heldWrite) {
+      heldWrite = true;
+      enteredWrite();
+      await writeReleased;
+    }
+    return originalRename(from, to);
+  });
+  const readSpy = spyOn(fileSystem, "readFile").mockImplementation((async (path, options) => {
+    if (path === additionalPath && heldWrite && primaryRefusals === 2 && !heldRead) {
+      heldRead = true;
+      enteredRead();
+      await readReleased;
+    }
+    return originalRead(path, options);
+  }) as typeof fileSystem.readFile);
+  try {
+    proxy.onInvocation = (actions) => {
+      if (!respondsTo(actions, "tinycloud.kv/get", primary.key)) return undefined;
+      primaryRefusals++;
+      return new Response(`delegation-revoked: ${String(primaryBody.delegationCid)}`, { status: 401 });
+    };
+    const first = client.callTool({ name: "tinycloud_kv_get", arguments: primary });
+    await writeEntered;
+    const second = client.callTool({ name: "tinycloud_kv_get", arguments: primary });
+    await readEntered;
+    expect(primaryRefusals).toBe(2);
+    releaseWrite();
+    const firstReply = await first;
+    releaseRead();
+    const secondReply = await second;
+    const firstResult = record(firstReply.structuredContent);
+    const secondResult = record(secondReply.structuredContent);
+    expect(firstResult).toMatchObject({ status: "authority_required", approval: { kind: "openkey" } });
+    expect(secondResult).toMatchObject({ status: "authority_required", approval: { kind: "openkey" } });
+    expect(String(record(secondResult.approval).url)).toBe(String(record(firstResult.approval).url));
+    assertPublicReplyOmitsNodeData(secondReply, String(primaryBody.delegationCid));
+  } finally {
+    releaseRead();
+    releaseWrite();
+    readSpy.mockRestore();
+    renameSpy.mockRestore();
+  }
+}, 90_000);
+
 test("an in-flight approval finishes before bootstrap renewal clears saved authority", async () => {
   const { hermetic, proxy, app, client, stateRoot, bootstrap } = await setupProxiedSession();
   const first = { space: "applications", key: "agents/demo/profile", representation: "json" };
