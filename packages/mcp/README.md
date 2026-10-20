@@ -131,12 +131,14 @@ start time, and their recorded deadline. `--timeout-s` defaults to 300
 seconds, then interrupts work, attempts bounded cleanup, and exits.
 SIGINT/SIGTERM use the same cleanup.
 Exit codes: `0` pass (including explicit notes), `1` assertion/cleanup fail,
-`2` invalid options/config, `3` another run holds the lock, `4` deadline,
+`2` invalid options/config or unavailable lock directory (one-line error
+with its directory name only), `3` another run holds the lock, `4` deadline,
 `130` SIGINT, `143` SIGTERM.
 
 Cleanup drains in-flight OAuth registration/token exchange responses for up
 to five seconds before deleting the dynamic client and revoking the token.
-An unknown issuance outcome is a failure, never reported as absent. A missing
+An unknown issuance outcome, including a malformed registration response, is
+a cleanup failure, never reported as an absent or confirmed client. A missing
 revocation endpoint is a failure unless `--allow-unrevoked` is explicitly
 supplied; that mode reports the outstanding token. A client without
 registration management is reported as outstanding. Hosted

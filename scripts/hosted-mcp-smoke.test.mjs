@@ -4,7 +4,7 @@ import { createServer } from 'node:http';
 import { generateKeyPairSync, sign } from 'node:crypto';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { after, afterEach, beforeEach, test } from 'node:test';
 import * as smoke from './hosted-mcp-smoke.mjs';
 const { parseConfig, run } = smoke;
@@ -86,6 +86,12 @@ async function fakeMcp(options = {}) {
       options.onRegister?.(JSON.parse(body));
       if (options.hangRegister) return;
       if (options.delayRegisterMs) await new Promise((done) => setTimeout(done, options.delayRegisterMs));
+      if (options.registrationResponse === 'invalid-json') {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        return res.end('{malformed');
+      }
+      if (options.registrationResponse === 'missing-client-id') return json({ registration_client_uri: `${base}/client`, registration_access_token: 'fake-management-token' });
+      if (options.registrationResponse === 'http-500') return json({ error: secret }, 500);
       return json({ client_id: 'fake-client', ...(options.noClientManager ? {} : { registration_client_uri: `${base}/client`, registration_access_token: 'fake-management-token' }) }, 201);
     }
     if (url.pathname === '/authorize') {
@@ -187,6 +193,24 @@ test('usage failures exit 2 without running OAuth', async () => {
   assert.equal(invalid.code, 2);
   assert.match(invalid.stdout, /^FAIL config/);
   assert.equal(invalid.stderr, '');
+});
+
+test('missing and unwritable lock directories fail in one line with exit 2', async () => {
+  const missing = await launch('http://127.0.0.1:1', ['--dry-run'], { TC_QA_LOCK_DIR: join(home, 'missing-lock-dir') }).result();
+  assert.equal(missing.code, 2);
+  assert.equal(missing.stdout, 'FAIL config: missing-lock-dir\n');
+  assert.equal(missing.stderr, '');
+
+  chmodSync(lockDir, 0o500);
+  try {
+    const unwritable = await launch('http://127.0.0.1:1', ['--dry-run']).result();
+    assert.equal(unwritable.code, 2);
+    assert.equal(unwritable.stdout, `FAIL lock: directory ${basename(lockDir)} unavailable\n`);
+    assert.equal(unwritable.stderr, '');
+  } finally { chmodSync(lockDir, 0o700); }
+
+  const recovered = await launch('http://127.0.0.1:1', ['--dry-run']).result();
+  assert.equal(recovered.code, 0);
 });
 
 test('only one process can own the QA smoke lock; stale pid lock is reclaimed', async () => {
@@ -321,6 +345,27 @@ test('SIGINT during an unresponsive registration reports unknown client outcome'
     assert.equal(result.code, 130);
     assert.match(result.stdout, /FAIL cleanup: OAuth token not issued; dynamic client registration outcome unknown: client may exist/);
   } finally { processRun.child.kill('SIGKILL'); }
+});
+
+test('malformed late registration responses stay unknown before and after the drain limit', async () => {
+  for (const delayRegisterMs of [350, 5200]) {
+    for (const registrationResponse of ['invalid-json', 'missing-client-id', 'http-500']) {
+      let entered;
+      const registrationEntered = new Promise((resolve) => { entered = resolve; });
+      const { base, calls } = await fakeMcp({ delayRegisterMs, registrationResponse, onRegister: entered });
+      const processRun = launch(base);
+      try {
+        await waitForStart(registrationEntered);
+        processRun.child.kill('SIGINT');
+        const result = await processRun.result();
+        assert.equal(result.code, 130, `${registrationResponse} after ${delayRegisterMs} ms`);
+        assert.match(result.stdout, /FAIL cleanup: OAuth token not issued; dynamic client registration outcome unknown: client may exist/);
+        assert.doesNotMatch(result.stdout, /PASS(?:-WITH-NOTE)? cleanup/);
+        assert.ok(!calls.includes('delete'));
+        assert.equal(result.stderr, '');
+      } finally { processRun.child.kill('SIGKILL'); }
+    }
+  }
 });
 
 test('SIGINT during token exchange revokes the token returned after interruption', async () => {
