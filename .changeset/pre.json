@@ -75,6 +75,7 @@
     "replica-sign-out-gate",
     "replica-worker-init-failure",
     "republish-web-sdk-wasm-beta1",
+    "revoke-grant-from-node-record",
     "sdk-core-held-credentials-hardening",
     "sdk-node-busy-retry",
     "share-delivery-primary-session",
