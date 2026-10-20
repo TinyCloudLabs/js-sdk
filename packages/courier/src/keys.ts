@@ -53,6 +53,9 @@ export const k = {
   mirrorTask: (peer: string, threadId: string, taskId: string) =>
     `${PREFIX}/me/mirror/${peer}/threads/${threadId}/task/${taskId}.json`,
   watchState: `${PREFIX}/me/state/watch.json`,
+  /** One create-only marker per wake (see Watcher.claimWake). */
+  wakeClaim: (peer: string, threadId: string, firstId: string) => `${PREFIX}/me/state/wake-claims/${peer}/${threadId}/${firstId}.json`,
+  wakeClaimsPrefix: `${PREFIX}/me/state/wake-claims/`,
   peersPrefix: `${PREFIX}/me/peers/`,
   mirrorPrefix: `${PREFIX}/me/mirror/`,
   approvalsPrefix: `${PREFIX}/me/approvals/`,

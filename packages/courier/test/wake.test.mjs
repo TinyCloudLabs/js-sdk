@@ -135,3 +135,48 @@ test('service command line keeps the tc prefix and flags, drops install flags, p
   assert.ok(!argv.includes('--install-launchd') && !argv.includes('--dry-run') && !argv.includes('--name'));
   assert.ok(argv[argv.indexOf('--claude-bin') + 1].startsWith('/'), 'a bare binary name is pinned to an absolute path');
 });
+
+test('spawnRunner runs a real child process: stdin, exit code, stderr, missing binary and timeout (Node 20 compatible)', async () => {
+  const { spawnRunner } = await import('../dist/wake.js');
+  const echo = await spawnRunner(process.execPath, ['-e', 'process.stdin.on("data", d => process.stdout.write(String(d).toUpperCase()))'], { input: 'hi', timeoutMs: 10_000 });
+  assert.deepEqual([echo.code, echo.stdout], [0, 'HI']);
+  const failing = await spawnRunner(process.execPath, ['-e', 'console.error("boom"); process.exit(3)'], { timeoutMs: 10_000 });
+  assert.deepEqual([failing.code, failing.stderr.trim()], [3, 'boom']);
+  const missing = await spawnRunner('/nonexistent/binary', [], { timeoutMs: 10_000 });
+  assert.equal(missing.code, null);
+  assert.match(missing.stderr, /ENOENT/);
+  const slow = await spawnRunner(process.execPath, ['-e', 'setTimeout(() => {}, 60000)'], { timeoutMs: 300 });
+  assert.match(slow.stderr, /killed after 300 ms/);
+});
+
+test('a relative --cwd is resolved once, so the service command and its WorkingDirectory agree', () => {
+  const args = parseArgs(['watch', '--wake', 'exec', '--exec', 'echo hi', '--cwd', 'rel/dir']);
+  const config = wakeConfig(args, 'sam');
+  const argv = serviceArgv({ ...args, positional: [] }, config, ['node', '/opt/courier.js', 'watch']);
+  assert.ok(config.cwd.startsWith('/'));
+  assert.equal(argv[argv.indexOf('--cwd') + 1], config.cwd);
+  assert.equal(argv.filter((a) => a === '--cwd').length, 1);
+});
+
+test('systemd: $ is doubled in ExecStart (expanded there) and literal in Environment= (not expanded there)', () => {
+  const unit = systemdUnitFile({ ...spec, argv: ['/bin/sh', '-c', 'echo $HOME'], env: { PATH: '/a:/b', TOKEN_HINT: 'a$b' } });
+  assert.ok(unit.includes('"echo $$HOME"'));
+  assert.ok(unit.includes('Environment="TOKEN_HINT=a$b"'));
+});
+
+test('paseo: if `paseo run` fails after creating the agent, the retry finds it by label and messages it instead of creating a second', async () => {
+  const calls = [];
+  let created = false;
+  const waker = createWaker(config('paseo'), {
+    sessions: { get: () => undefined, set() {} },
+    run: async (bin, args) => {
+      calls.push(args[0]);
+      if (args[0] === 'ls') return { code: 0, stdout: created ? '[{"id":"agent-1"}]' : '[]', stderr: '' };
+      if (args[0] === 'run') { created = true; return { code: 1, stdout: '', stderr: 'daemon timed out after creating' }; }
+      return { code: 0, stdout: '', stderr: '' };
+    },
+  });
+  await assert.rejects(waker(request), /paseo run exited 1/);
+  await waker(request);
+  assert.deepEqual(calls, ['ls', 'run', 'ls', 'send']);
+});

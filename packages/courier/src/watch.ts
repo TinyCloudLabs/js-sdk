@@ -1,12 +1,12 @@
 import { defer } from './defer.js';
-import { decodeTime } from 'ulid';
+import { decodeTime, ulid } from 'ulid';
 import type { HookSubscription } from '@tinycloud/node-sdk';
 import { errInfo, CourierError } from './errors.js';
 import { k, PREFIX } from './keys.js';
 import type { StoredPeer } from './profile.js';
-import { isRecord, messageView, taskView } from './a2a.js';
+import { isRecord, messageView, oneLine, taskView } from './a2a.js';
 import { commitReceipts, selectUndelivered, type KV, type Receipts } from './inbox.js';
-import { getJson, listAll, putCreate, putMatch, putOverwrite } from './store.js';
+import { del, getJson, listAll, putCreate, putMatch, putOverwrite } from './store.js';
 import type { WakeMessage, Waker, WatchLog } from './wake.js';
 
 /** Spec §8. inform and receipts never wake; a message with no valid intent is delivered but never wakes. */
@@ -18,6 +18,11 @@ const WAKEN_MEMORY = 500;
 const WAKE_RETRY_MS = 60_000;
 /** Delay between starting a re-opened subscription and its catch-up list, so the stream is live first. */
 const RECONNECT_CATCH_UP_MS = 2000;
+/** A wake claim older than this belongs to a crashed watcher (wake runs are capped well below it: `--wake-timeout` <= 30 min). */
+const CLAIM_LEASE_MS = 35 * 60_000;
+const DAY_MS = 24 * 3600 * 1000;
+/** The subject is peer-controlled text that reaches state, prompts and environments: one line, control characters removed, capped. */
+const MAX_SUBJECT = 200;
 /** Thread and message ids come from key names the peer controls; they reach prompts and argv, so only ULID-like ids pass. */
 const SAFE_ID = /^[0-9A-Za-z_-]{1,64}$/;
 
@@ -110,6 +115,8 @@ export class Watcher {
   private state: WatchState = emptyWatchState();
   private readonly retryAt = new Map<string, number>();
   private readonly waking = new Set<string>();
+  private readonly holderId = ulid();
+  private lastClaimPrune = 0;
   /** Set when another watcher is writing this profile's state: this one stops and `run` throws it. */
   private fatalError: CourierError | undefined;
   private onFatal: (() => void) | undefined;
@@ -157,11 +164,7 @@ export class Watcher {
         this.stateEtag = written ?? undefined;
       } catch (error) {
         if (error instanceof CourierError && error.code === 'conflict') {
-          // Another watcher owns this state. Carrying on would double-wake and overwrite its pending wakes: stop.
-          const conflict = new CourierError('state-conflict', 'me/state/watch.json was changed by another process; a second `watch` is running for this profile. This watcher is stopping.');
-          this.fatalError ??= conflict;
-          this.onFatal?.();
-          throw conflict;
+          throw this.stateConflict('me/state/watch.json was changed by another process; a second `watch` is running for this profile. This watcher is stopping.');
         }
         throw error;
       }
@@ -169,6 +172,57 @@ export class Watcher {
     });
     this.stateQueue = run.catch(() => undefined);
     return run;
+  }
+
+  /** Another watcher owns this profile's state. Carrying on would double-wake and overwrite its pending wakes: stop. */
+  private stateConflict(message: string): CourierError {
+    const conflict = new CourierError('state-conflict', message);
+    this.fatalError ??= conflict;
+    this.onFatal?.();
+    return conflict;
+  }
+
+  /**
+   * One create-only marker per wake (keyed by the first message or approval it carries), so a second watcher that
+   * starts while this one's wake is in flight cannot wake the same thing: the stale-etag check alone only catches a
+   * watcher that loaded state before the other one wrote. A marker held by another process within the lease means
+   * two watchers are running: stop. After the lease the holder is presumed crashed and the claim is taken over.
+   */
+  private async claimWake(peer: string, threadId: string, firstId: string): Promise<void> {
+    const { selfKv } = this.deps;
+    const key = k.wakeClaim(peer, threadId, firstId);
+    const claim = { v: 1, holder: this.holderId, at: new Date(this.now()).toISOString() };
+    try {
+      await putCreate(selfKv, key, claim);
+      return;
+    } catch (error) {
+      if (!(error instanceof CourierError && error.code === 'conflict')) throw error;
+    }
+    const existing = await getJson<{ holder?: unknown; at?: unknown }>(selfKv, key);
+    if (existing?.value.holder === this.holderId) return; // this watcher's own retry after a failed wake
+    const age = existing && typeof existing.value.at === 'string' ? this.now() - Date.parse(existing.value.at) : Infinity;
+    if (existing?.etag && age >= CLAIM_LEASE_MS) {
+      try {
+        await putMatch(selfKv, key, claim, existing.etag);
+        return;
+      } catch (error) {
+        if (!(error instanceof CourierError && error.code === 'conflict')) throw error;
+      }
+    }
+    throw this.stateConflict(`Another watcher is already waking thread ${threadId} (${firstId}); a second \`watch\` is running for this profile. This watcher is stopping.`);
+  }
+
+  /** Claim markers are only needed while a double wake is possible; drop those older than two days. */
+  private async pruneClaims(): Promise<void> {
+    try {
+      for (const key of await listAll(this.deps.selfKv, k.wakeClaimsPrefix)) {
+        const id = /\/([^/]+)\.json$/.exec(key)?.[1];
+        const sentAt = id ? Date.parse(sentAtOf(id)) : NaN;
+        if (Number.isFinite(sentAt) && this.now() - sentAt > 2 * DAY_MS) await del(this.deps.selfKv, key);
+      }
+    } catch (error) {
+      this.deps.log('sync-error', { source: 'claims', ...errInfo(error) });
+    }
   }
 
   // ---------- catch-up and delivery ----------
@@ -231,7 +285,7 @@ export class Watcher {
     const subjects = new Map<string, string>();
     for (const threadId of new Set(delivered.map((d) => d.threadId))) {
       const meta = await getJson<unknown>(peerKv, `${PREFIX}/to/${mailbox}/threads/${threadId}/meta.json`).catch(() => undefined);
-      subjects.set(threadId, isRecord(meta?.value) && typeof meta.value.subject === 'string' ? meta.value.subject : '(no subject)');
+      subjects.set(threadId, isRecord(meta?.value) && typeof meta.value.subject === 'string' ? oneLine(meta.value.subject, MAX_SUBJECT) : '(no subject)');
     }
     const at = this.now();
     for (const item of delivered) {
@@ -345,6 +399,9 @@ export class Watcher {
     const woken = messages.map((m) => m.messageId);
     const oldestSentAt = messages[0]?.sentAt ?? '';
     // Claim the state first: a stale second watcher fails this conditional write and stops before it can wake.
+    // The per-wake claim goes first: a newcomer whose claim fails must stop without having written the state, which
+    // would otherwise make the watcher that legitimately owns the wake fail its next conditional write.
+    await this.claimWake(pending.peer, pending.threadId, woken[0]);
     await this.mutate(() => {});
     const startedAt = this.now();
     // `waking` is when the adapter is invoked: the send-to-wake latency. `woke` follows when the adapter returns.
@@ -399,46 +456,55 @@ export class Watcher {
     try {
       await this.loadState();
       log('start', { debounceMs: this.opts.debounceMs, pollMs: this.opts.pollMs, ticketSeconds: this.opts.ticketSeconds, once: Boolean(options.once) });
-      await this.pollOnce('startup');
-      if (options.once) {
-        await this.tick(true);
-      } else if (!signal.aborted) {
-        const reconcile = () => {
-          const desired = new Map<string, { sub: HookSubscription; hooks: () => Promise<HooksLike>; onEvent: (event?: HookEventLike) => void }>();
-          for (const peer of this.deps.loadPeers()) {
-            if (peer.status !== 'paired' || !peer.inbound || !peer.theirHandleForMe) continue;
-            // The id carries the delegation CID: a renewed delegation restarts the subscription.
-            desired.set(`peer:${peer.handle}:${peer.inbound.cid}`, {
-              sub: { space: peer.spaceId, service: 'kv', pathPrefix: `${PREFIX}/to/${peer.theirHandleForMe}` },
-              hooks: () => this.deps.peerHooks(peer),
-              onEvent: () => void this.sync(peer, 'hook'),
-            });
-          }
-          desired.set('approvals', {
-            sub: { space: this.deps.spaceId, service: 'kv', pathPrefix: k.approvalsPrefix },
-            hooks: async () => this.deps.selfHooks,
-            onEvent: () => void this.syncApprovals('hook'),
+      await this.pruneClaims();
+      this.lastClaimPrune = this.now();
+      const reconcile = () => {
+        const desired = new Map<string, { sub: HookSubscription; hooks: () => Promise<HooksLike>; onEvent: (event?: HookEventLike) => void }>();
+        for (const peer of this.deps.loadPeers()) {
+          if (peer.status !== 'paired' || !peer.inbound || !peer.theirHandleForMe) continue;
+          // The id carries the delegation CID: a renewed delegation restarts the subscription.
+          desired.set(`peer:${peer.handle}:${peer.inbound.cid}`, {
+            sub: { space: peer.spaceId, service: 'kv', pathPrefix: `${PREFIX}/to/${peer.theirHandleForMe}` },
+            hooks: () => this.deps.peerHooks(peer),
+            onEvent: () => void this.sync(peer, 'hook'),
           });
-          for (const [id, controller] of supervisors) {
-            if (!desired.has(id)) {
-              controller.abort();
-              supervisors.delete(id);
-            }
+        }
+        desired.set('approvals', {
+          sub: { space: this.deps.spaceId, service: 'kv', pathPrefix: k.approvalsPrefix },
+          hooks: async () => this.deps.selfHooks,
+          onEvent: () => void this.syncApprovals('hook'),
+        });
+        for (const [id, controller] of supervisors) {
+          if (!desired.has(id)) {
+            controller.abort();
+            supervisors.delete(id);
           }
-          for (const [id, source] of desired) {
-            if (supervisors.has(id)) continue;
-            const controller = new AbortController();
-            supervisors.set(id, controller);
-            void this.supervise(id, source.sub, source.hooks, source.onEvent, controller.signal);
-          }
-        };
+        }
+        for (const [id, source] of desired) {
+          if (supervisors.has(id)) continue;
+          const controller = new AbortController();
+          supervisors.set(id, controller);
+          void this.supervise(id, source.sub, source.hooks, source.onEvent, controller.signal);
+        }
+      };
+      if (options.once) {
+        await this.pollOnce('startup');
+        await this.tick(true);
+      } else {
+        // Open the subscriptions first, then catch up: a write between the two is seen by one or the other.
         reconcile();
+        await sleep(RECONNECT_CATCH_UP_MS, signal);
+        if (!signal.aborted) await this.pollOnce('startup');
         ticker = setInterval(() => void this.tick().catch((e) => log('wake-error', errInfo(e))), 1000);
         while (!signal.aborted) {
           await sleep(this.opts.pollMs, signal);
           if (signal.aborted) break;
           reconcile();
           await this.pollOnce('poll');
+          if (this.now() - this.lastClaimPrune > 3600_000) {
+            this.lastClaimPrune = this.now();
+            await this.pruneClaims();
+          }
         }
       }
     } finally {
