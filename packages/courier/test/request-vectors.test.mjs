@@ -123,3 +123,47 @@ test('requestIds: thread and task ids that are not ULID-like are refused before 
     assert.throws(() => requestIds({ threadId: 'T1', taskId: bad }), (e) => e.code === 'usage', JSON.stringify(bad));
   }
 });
+
+test('verifyApproval returns the request hash (the view\'s fingerprint is its first 8 hex digits)', async () => {
+  const { createHash } = await import('node:crypto');
+  const { canonicalJson } = await import('../dist/canonical.js');
+  const req = { ...base };
+  const v = verifyApproval('R1', req, approve(req), { now: NOW });
+  assert.equal(v.requestHash, createHash('sha256').update(canonicalJson(req), 'utf8').digest('hex'));
+  assert.match(v.requestHash, /^[0-9a-f]{64}$/);
+});
+
+test('the read side refuses an empty or malformed action, reason or risk, like the writer', () => {
+  const run = (over) => { const req = { ...base, ...over }; try { verifyApproval('R1', req, approve(req), { now: NOW }); return 'ok'; } catch (e) { return e.code; } };
+  assert.equal(run({}), 'ok');
+  assert.equal(run({ action: '' }), 'approval-mismatch');
+  assert.equal(run({ reason: '' }), 'approval-mismatch');
+  assert.equal(run({ risk: 7 }), 'approval-mismatch');
+  assert.equal(run({ action: 'x'.repeat(2001) }), 'approval-mismatch');
+});
+
+test('PR numbers are exact digits: nothing is rounded through a float, over 9 digits is refused', async () => {
+  const { canonicalTarget } = await import('../dist/guard/target.js');
+  assert.equal(canonicalTarget('merge', 'O/R#0042'), 'o/r#42');
+  assert.equal(canonicalTarget('merge', 'https://github.com/O/R/pull/000123/files'), 'o/r#123');
+  assert.equal(canonicalTarget('merge', 'o/r#999999999'), 'o/r#999999999');
+  for (const bad of ['o/r#1000000000', 'o/r#99999999999999999999', 'o/r#0', 'o/r#000']) {
+    assert.throws(() => canonicalTarget('merge', bad), (e) => e.code === 'usage', bad);
+  }
+});
+
+test('courier request --help prints the target forms, not the global help', async () => {
+  const { main } = await import('../dist/main.js');
+  const original = process.stdout.write.bind(process.stdout);
+  let out = '';
+  process.stdout.write = (chunk) => { out += String(chunk); return true; };
+  try {
+    assert.equal(await main(['request', '--help']), 0);
+  } finally {
+    process.stdout.write = original;
+  }
+  assert.match(out, /--verb merge\|deploy\|publish\|spend\|other/);
+  assert.match(out, /owner\/repo#<PR number>/);
+  assert.match(out, /npm:<name>@<version>/);
+  assert.ok(!/Setup & pairing/.test(out));
+});

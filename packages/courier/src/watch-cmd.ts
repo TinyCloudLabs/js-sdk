@@ -9,7 +9,7 @@ import { loadProfile, profileDir, writeSecure } from './profile.js';
 import { courierNode, peerHooks, peerKv } from './node.js';
 import type { ParsedArgs } from './args.js';
 import { WATCH_DEFAULTS, Watcher, type WatchOptions } from './watch.js';
-import { UNGUARDED_REFUSAL, createWaker, jsonLineLog, spawnRunner, type SessionStore, type WakeConfig } from './wake.js';
+import { UNGUARDED_REFUSAL, createWaker, jsonLineLog, killAllRunners, spawnRunner, type SessionStore, type WakeConfig } from './wake.js';
 import { guardArgv } from './guard/command.js';
 import { writeGuardSettings } from './guard/install.js';
 import {
@@ -217,5 +217,9 @@ export async function cmdWatch(args: ParsedArgs): Promise<void> {
 
   const stop = new AbortController();
   for (const signal of ['SIGINT', 'SIGTERM'] as const) process.once(signal, () => stop.abort());
-  await watcher.run(stop.signal, { once: args.has('once') });
+  try {
+    await watcher.run(stop.signal, { once: args.has('once') });
+  } finally {
+    killAllRunners(); // stopping (SIGTERM, state-conflict): wakes still running go down with the watcher
+  }
 }

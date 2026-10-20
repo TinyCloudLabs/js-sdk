@@ -351,3 +351,60 @@ test('the watcher id is created once and shared by watchers that start together'
     fs.rmSync(home, { recursive: true, force: true });
   }
 });
+
+// ---------- timeouts kill the whole process group ----------
+
+const unixOnly = process.platform === 'win32' ? { skip: 'process groups are POSIX' } : {};
+const alive = async (marker) => {
+  const { execFileSync } = await import('node:child_process');
+  return execFileSync('ps', ['-eo', 'args'], { encoding: 'utf8' }).split('\n').some((line) => line.includes(marker) && !line.includes('ps -eo'));
+};
+const settle = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+for (const [name, form] of [
+  ['a plain sleep', (m) => `sleep ${m}`],
+  ['a background job and wait', (m) => `sleep ${m} & wait`],
+  ['a pipeline', (m) => `sleep ${m} | cat`],
+  ['a subshell job plus a foreground sleep', (m) => `(sleep ${m} &); sleep ${m}`],
+]) {
+  test(`exec timeout: ${name}: resolves at the deadline and leaves nothing running`, unixOnly, async () => {
+    const { spawnRunner } = await import('../dist/wake.js');
+    const marker = `7${Math.floor(100000 + Math.random() * 899999)}`; // unique argument, found in `ps`
+    const started = Date.now();
+    const result = await spawnRunner('/bin/sh', ['-c', form(marker)], { timeoutMs: 1500 });
+    const took = Date.now() - started;
+    assert.ok(took < 4000, `resolved in ${took} ms`);
+    assert.equal(result.code, null);
+    assert.match(result.stderr, /killed after 1500 ms/);
+    await settle(400);
+    assert.equal(await alive(marker), false, 'no process of the group survives');
+  });
+}
+
+test('a command that backgrounds a job and exits is not held open by the job\'s pipes', unixOnly, async () => {
+  const { spawnRunner } = await import('../dist/wake.js');
+  const marker = `8${Math.floor(100000 + Math.random() * 899999)}`;
+  const started = Date.now();
+  const result = await spawnRunner('/bin/sh', ['-c', `echo started; sleep ${marker} &`], { timeoutMs: 10_000 });
+  try {
+    assert.ok(Date.now() - started < 3000, 'resolved without waiting for the background job');
+    assert.equal(result.code, 0);
+    assert.match(result.stdout, /started/);
+  } finally {
+    const { execFileSync } = await import('node:child_process');
+    try { execFileSync('pkill', ['-f', `sleep ${marker}`]); } catch { /* none left */ }
+  }
+});
+
+test('killAllRunners takes down runs still in flight (the watcher is stopping)', unixOnly, async () => {
+  const { spawnRunner, killAllRunners } = await import('../dist/wake.js');
+  const marker = `9${Math.floor(100000 + Math.random() * 899999)}`;
+  const running = spawnRunner('/bin/sh', ['-c', `sleep ${marker} & sleep ${marker}`], { timeoutMs: 60_000 });
+  await settle(300);
+  assert.equal(await alive(marker), true);
+  killAllRunners();
+  const result = await running;
+  assert.notEqual(result.code, 0);
+  await settle(400);
+  assert.equal(await alive(marker), false);
+});

@@ -398,6 +398,41 @@
    "value": "note:a\ud834\udd59b",
    "valid": false,
    "verb": "other"
+  },
+  {
+   "name": "PR number of 9 digits",
+   "field": "target",
+   "value": "o/r#999999999",
+   "valid": true,
+   "verb": "merge"
+  },
+  {
+   "name": "PR number of 10 digits is refused",
+   "field": "target",
+   "value": "o/r#1000000000",
+   "valid": false,
+   "verb": "merge"
+  },
+  {
+   "name": "PR number above 2^53 is refused, not rounded",
+   "field": "target",
+   "value": "o/r#99999999999999999999",
+   "valid": false,
+   "verb": "merge"
+  },
+  {
+   "name": "PR number with leading zeros is not canonical as stored",
+   "field": "target",
+   "value": "o/r#0042",
+   "valid": false,
+   "verb": "merge"
+  },
+  {
+   "name": "PR number zero",
+   "field": "target",
+   "value": "o/r#0",
+   "valid": false,
+   "verb": "merge"
   }
  ]
 }

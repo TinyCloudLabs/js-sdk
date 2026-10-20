@@ -159,8 +159,15 @@ subject is quoted and flattened onto one line.
 | `claude` | `claude -p --output-format json`, prompt on stdin, always with the guard settings (see Guard) and the courier-only environment. The session id is saved per thread in `<COURIER_HOME>/sessions.json` and later wakes pass `--resume`; a session the CLI no longer has starts a fresh one. Only `Bash(courier:*)` is allowed unless you pass `--claude-allow <rule>` (repeatable); `--claude-settings <file>` is merged under the guard. `--claude-bin`. |
 | `exec` | `sh -c <cmd>` with `COURIER_THREAD`, `COURIER_PEER`, `COURIER_MESSAGES` (JSON: id, intent, sent time), `COURIER_SUBJECT`, `COURIER_PROMPT` and `COURIER_HOME` in the courier-only environment. **Not approval-guarded:** it needs `--exec <cmd> --unguarded` (without the flag the watcher refuses to start, wakes nothing and names the flag), and every exec wake prints `this wake is not approval-guarded` to stderr (the service log). Not for agents that can merge, deploy or publish; use `claude` or `paseo --paseo-provider claude`. |
 
-A wake succeeds when the agent run exits 0 (`--wake-timeout`, default 900 s,
-kills a run that hangs). A failed wake stays pending and retries after 60 s.
+A wake succeeds when the agent run exits 0. `--wake-timeout` (default 900 s,
+at most 1800) is one deadline for the whole wake; on expiry the agent's whole
+process group is killed (a shell's background jobs, pipelines and subshells
+included) and the wake counts as failed. A failed wake stays pending, releases
+its claim and retries after 60 s. A timeout that hits after the agent already
+received the prompt therefore wakes the thread again: wakes are at-least-once.
+A command that exits normally but leaves a background job running is not
+waited for, and the job is left alone. When the watcher stops (SIGTERM, a state
+conflict) it kills the runs still in flight.
 
 ### Approvals: request fields, text rules and `courier approval`
 
@@ -185,12 +192,16 @@ never repaired or shortened**:
 - `target`, `summary`: 1 to 200 UTF-16 units, trimmed, one line; `action`,
   `reason`, `risk`: 1 to 2000, a single `\n` allowed, never a tab or CR;
 - `target` is printable ASCII (`[\x20-\x7E]`) for every verb, in the one
-  canonical spelling for its verb (lower-cased repo, a GitHub PR URL reduced to
-  `owner/repo#N`; see `courier request --help`) and with the shape
-  `merge`: `owner/repo#<N>` or `owner/repo@<ref>`; `publish`: `npm:`,
-  `release:`, `changeset:` or `script:` + text; `deploy`: `wrangler:`, `pages:`,
-  `phala:` or `script:` + text; `other`: `<kind>:` + text; `spend`: `spend:` +
-  text;
+  canonical spelling for its verb (`courier request --help` prints these forms):
+
+  | verb | canonical target |
+  |---|---|
+  | `merge` | `owner/repo#<PR number>` (a GitHub PR URL is reduced to it), or `owner/repo@<branch>` for a direct push; repo lower-cased; the PR number is exactly the digits written, 1 to 9 of them, no leading zeros (nothing is ever rounded through a float) |
+  | `publish` | `npm:<name>@<version>`, `release:owner/repo@<tag>`, `changeset:<root package name>` or `script:<package>:<script>` |
+  | `deploy` | `wrangler:<worker>[:<env>]`, `pages:<project>`, `phala:<name>` or `script:<package>:<script>` |
+  | `other` | `workflow:owner/repo:<workflow file or name>`, `secrets:<subcommand and key>`, or `<kind>:<text>` |
+  | `spend` | `spend:<what and how much>` |
+
 - the whole request must hash: `canonicalJson` / `requestHash` throw on a
   non-finite number (a parsed `1e999`) and on nesting deeper than 64 levels
   (top-level object = depth 1), so such a request is never written and
