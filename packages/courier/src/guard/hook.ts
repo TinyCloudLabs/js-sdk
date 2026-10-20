@@ -1,8 +1,9 @@
+import { blockedDestination, dnsRefusal, type ResolveHost } from './network.js';
 import path from 'node:path';
 import { isRecord } from '../a2a.js';
 import { cmd } from '../program.js';
 import { analyze, type Finding, type PolicyEnv } from './policy.js';
-import { isCredentialFile, isProtectedFile, type ProtectedSet } from './paths.js';
+import { isCredentialFile, isProtectedFile, isProtectedRead, type ProtectedSet } from './paths.js';
 
 /**
  * Claude Code `PreToolUse` decision for one tool call (spec §7). The hook never allows a gated action: it classifies and
@@ -10,8 +11,7 @@ import { isCredentialFile, isProtectedFile, type ProtectedSet } from './paths.js
  * approval itself and runs a fixed command with the owner's credential outside the agent's environment. Two outcomes:
  *  - `pass`: not a gated command; say nothing, so Claude's own permission rules decide as usual;
  *  - `deny`: everything else, including every error.
- * Only the tool call itself is read. Message text, task text and the owner's records never are, and the hook needs no
- * network, so a missing profile or a node outage cannot change what it decides.
+ * Only the tool call itself is read. Message text, task text and the owner's records never are, and the hook never opens the approval store. DNS destination checks fail closed; no approval is consumed here.
  */
 export type Decision = { kind: 'pass' } | { kind: 'deny'; reason: string };
 
@@ -21,11 +21,11 @@ export interface GuardDeps {
   protectedSet: ProtectedSet;
   /** MCP tool names (exact, or `mcp__server__*`) a woken agent may use. Default: none. */
   mcpAllow?: readonly string[];
+  resolveHost?: ResolveHost;
 }
 
 const WRITE_TOOLS = new Set(['edit', 'write', 'multiedit', 'notebookedit']);
 const READ_TOOLS = new Set(['read', 'grep', 'glob', 'notebookread', 'ls', 'lsp']);
-const LOOPBACK = /^(localhost|127\.\d+\.\d+\.\d+|\[?::1\]?|0\.0\.0\.0)$/i;
 
 const short = (text: string, n = 160) => text.replace(/\s+/g, ' ').slice(0, n);
 const deny = (reason: string): Decision => ({ kind: 'deny', reason });
@@ -65,15 +65,14 @@ export async function decide(input: unknown, deps: GuardDeps): Promise<Decision>
       return { kind: 'pass' };
     }
     if (READ_TOOLS.has(tool)) {
-      for (const file of call.files) if (isCredentialFile(file, cwd)) return deny('That path holds credentials and cannot be read from a woken agent.');
-      for (const pattern of call.patterns) if (isCredentialFile(pattern, cwd)) return deny('That pattern reaches credential paths and cannot be used from a woken agent.');
+      for (const file of call.files.length ? call.files : [cwd]) if (isCredentialFile(file, cwd) || isProtectedRead(file, cwd, deps.protectedSet)) return deny('That path holds credentials and cannot be read from a woken agent.');
+      for (const pattern of call.patterns) if (isCredentialFile(pattern, cwd) || isProtectedRead(pattern, cwd, deps.protectedSet)) return deny('That pattern reaches credential paths and cannot be used from a woken agent.');
       return { kind: 'pass' };
     }
     if (tool === 'webfetch' || tool === 'websearch') {
       if (call.url) {
-        let host = '';
-        try { host = new URL(call.url).hostname; } catch { return deny('Courier guard could not read that URL; refusing.'); }
-        if (LOOPBACK.test(host)) return deny('Requests to this machine (loopback) are not available to a woken agent: local services such as the Paseo daemon can start agents outside the guard.');
+        try { new URL(call.url); } catch { return deny('Courier guard could not read that URL; refusing.'); }
+        if (blockedDestination(call.url) || await dnsRefusal(call.url, deps.resolveHost)) return deny('Requests to this machine (loopback) are not available to a woken agent: local services such as the Paseo daemon can start agents outside the guard.');
       }
       return { kind: 'pass' };
     }
@@ -82,7 +81,10 @@ export async function decide(input: unknown, deps: GuardDeps): Promise<Decision>
       if (tool === 'bash') return deny('Courier guard could not read the Bash command; refusing.');
       return { kind: 'pass' };
     }
-    return decideCommand(call.command, { ...deps, env: { ...deps.env, cwd } });
+    const decision = decideCommand(call.command, { ...deps, env: { ...deps.env, cwd } });
+    if (decision.kind === 'deny') return decision;
+    if (await dnsRefusal(call.command, deps.resolveHost)) return deny('Network destination resolves to this machine or cannot be verified; refusing.');
+    return decision;
   } catch (error) {
     return deny(`Courier guard failed (${short(String((error as Error)?.message ?? error), 120)}); refusing.`);
   }

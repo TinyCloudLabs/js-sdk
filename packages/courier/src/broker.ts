@@ -1,6 +1,8 @@
 import { execFile } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
+import { brokerFile, brokerRoot, currentProfileId, loadBrokerConfig, saveBrokerConfig, pinProfile, assertPinnedProfile, TEST_TOKEN, type BrokerConfig } from './broker-config.js';
+import { profileId } from './guard/install.js';
 import path from 'node:path';
 import { CourierError } from './errors.js';
 import { k } from './keys.js';
@@ -9,7 +11,7 @@ import { isConsumed, markConsumed } from './consumed.js';
 import { verifyApproval, type VerifiedApproval } from './approval.js';
 import { canonicalTarget } from './guard/target.js';
 import { ULID } from './request.js';
-import { loadProfile, profileDir, writeSecure } from './profile.js';
+import { loadProfile, profileDir } from './profile.js';
 import { courierNode } from './node.js';
 import { writeOut, type KV } from './inbox.js';
 import { defer } from './defer.js';
@@ -20,9 +22,9 @@ import { cmd } from './program.js';
  * The broker: `courier run-approved <requestId>` is the only way a woken agent's gated action runs. The agent says
  * WHEN; the owner's approved request says WHAT. The command is built here from a fixed template out of the approved verb
  * and canonical target only (nothing the agent types reaches it), run without a shell, with the owner's credential that
- * the broker reads itself from `<COURIER_HOME>/broker/gh.json`, never from the agent's environment.
+ * the broker resolves from gh's own auth at run time, never from the agent's environment.
  *
- * What it is not: a privilege boundary. The broker runs as the agent's own OS user, so the credential file is readable by
+ * This is not a privilege boundary. The broker runs as the agent's own OS user, so gh's credential file is readable by
  * anything that user runs. The guard refuses commands that name it and the clean HOME hides the owner's own gh config,
  * but the real boundary is a separate OS user for the broker (see the README).
  */
@@ -36,29 +38,20 @@ export interface BrokerCredential {
   token: string;
 }
 
-export const brokerDir = (home = profileDir()) => path.join(home, 'broker');
-export const brokerFile = (home = profileDir()) => path.join(brokerDir(home), 'gh.json');
-
 const TOKEN = /^(gh[pousr]_[A-Za-z0-9]{20,255}|github_pat_[A-Za-z0-9_]{20,255})$/;
+export const validToken = (token: string) => TOKEN.test(token);
 
-export function validToken(token: string): boolean {
-  return TOKEN.test(token);
-}
-
-/** Read the broker's credential, or throw `broker-not-configured` with what the owner has to do. */
-export function loadBrokerCredential(home = profileDir()): BrokerCredential {
-  const file = brokerFile(home);
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(fs.readFileSync(file, 'utf8'));
-  } catch {
-    throw new CourierError('broker-not-configured', `No broker credential. Your owner sets one with \`${cmd('broker set-token')}\` (a GitHub token that can merge only the repositories you want merged); an agent cannot.`);
-  }
-  const rec = parsed as { v?: unknown; ghBin?: unknown; token?: unknown } | null;
-  if (!rec || rec.v !== 1 || typeof rec.ghBin !== 'string' || typeof rec.token !== 'string' || !path.isAbsolute(rec.ghBin) || !validToken(rec.token)) {
-    throw new CourierError('broker-not-configured', `The broker credential at ${file} is malformed; set it again with \`${cmd('broker set-token')}\`.`);
-  }
-  return { ghBin: rec.ghBin, token: rec.token };
+/** Resolve gh's own credential at run time. No agent variables, shell, token argv or disk copy. */
+export async function loadBrokerCredential(config: BrokerConfig, exec: Exec = execFileRunner): Promise<BrokerCredential> {
+  if (config.testToken === TEST_TOKEN) return { ghBin: config.ghBin, token: TEST_TOKEN };
+  const ownerHome = os.userInfo().homedir;
+  const result = await exec(config.ghBin, ['auth', 'token', '--hostname', 'github.com'], {
+    cwd: ownerHome, timeoutMs: 10_000,
+    env: { PATH: '/usr/bin:/bin', HOME: ownerHome, GH_CONFIG_DIR: path.join(ownerHome, '.config/gh'), GH_PROMPT_DISABLED: '1', GH_NO_UPDATE_NOTIFIER: '1', LANG: 'C' },
+  });
+  const token = result.stdout.trim();
+  if (result.code !== 0 || !validToken(token)) throw new CourierError('broker-not-configured', 'The owner must sign in to github.com with gh; no action was consumed');
+  return { ghBin: config.ghBin, token };
 }
 
 // ---------- templates ----------
@@ -101,9 +94,9 @@ const CONTROL = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2
 
 /** What the agent may see of a tool's output: secrets redacted, control characters gone, size capped. */
 export function sanitizeOutput(text: string, secrets: readonly string[] = []): string {
-  let out = text;
+  let out = text.replace(CONTROL, '');
   for (const secret of secrets) if (secret.length >= 8) out = out.split(secret).join('[redacted]');
-  out = out.replace(TOKEN_LIKE, '[redacted]').replace(CONTROL, ' ');
+  out = out.replace(TOKEN_LIKE, '[redacted]');
   return out.length > MAX_OUTPUT ? `${out.slice(0, MAX_OUTPUT)}\n[output truncated at ${MAX_OUTPUT} characters]` : out;
 }
 
@@ -142,7 +135,8 @@ export function brokerEnv(credential: BrokerCredential, scratch: string): NodeJS
 
 export interface BrokerDeps {
   kv: KV;
-  credential(): BrokerCredential;
+  credential(): BrokerCredential | Promise<BrokerCredential>;
+  scratchRoot?: string;
   exec: Exec;
   now(): number;
 }
@@ -180,10 +174,12 @@ export async function runApproved(id: string, deps: BrokerDeps): Promise<BrokerR
   if (verified.decision !== 'approved') fail('approval-denied', `Your owner denied request ${id}. Do not take the action.`);
 
   const template = templateFor(verified.verb, verified.target);
-  const credential = deps.credential();
+  const credential = await deps.credential();
   if (await isConsumed(deps.kv, id)) fail('approval-used', `Approval ${id} was already used; an approval covers one action.`);
 
-  const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'courier-broker-'));
+  const scratchRoot = deps.scratchRoot ?? brokerRoot();
+  fs.mkdirSync(scratchRoot, { recursive: true, mode: 0o700 });
+  const scratch = fs.mkdtempSync(path.join(scratchRoot, 'run-'));
   const env = brokerEnv(credential, scratch);
   const run = (args: string[]) => deps.exec(credential.ghBin, args, { cwd: scratch, env, timeoutMs: EXEC_TIMEOUT_MS });
   const clean = (text: string) => sanitizeOutput(text, [credential.token]);
@@ -216,29 +212,35 @@ export const runApprovedUsage = () => `Usage: ${cmd('run-approved <requestId>')}
 
 export async function cmdRunApproved(args: ParsedArgs): Promise<void> {
   const id = args.positional[0] ?? fail('usage', runApprovedUsage());
-  if (args.positional.length !== 1 || args.flags.size > 0) fail('usage', runApprovedUsage());
-  const node = await courierNode(loadProfile());
-  const result = await runApproved(id, { kv: node.kv, credential: () => loadBrokerCredential(), exec: execFileRunner, now: () => Date.now() });
+  if (args.positional.length !== 1 || [...args.flags.keys()].some(k => k !== 'test-owner-root')) fail('usage', runApprovedUsage());
+  const testOwnerRoot = args.get('test-owner-root');
+  const config = loadBrokerConfig(currentProfileId(), testOwnerRoot);
+  assertPinnedProfile(config, loadProfile());
+  const node = await courierNode(loadProfile(config.courierHome), config.courierHome);
+  const result = await runApproved(id, { kv: node.kv, credential: () => loadBrokerCredential(config), scratchRoot: path.dirname(brokerFile(currentProfileId(), testOwnerRoot)), exec: execFileRunner, now: () => Date.now() });
   await writeOut(`${JSON.stringify(result, null, 2)}\n`);
   if (!result.ok) throw new CourierError('broker-run-failed', `The approved action ran and failed (exit ${result.exitCode}); the approval is used up.`);
 }
 
 export const brokerUsage = () =>
-  `Usage: ${cmd('broker set-token [--gh-bin <path>]')}   (token on stdin; humans only)\n` +
+  `Usage: ${cmd('broker set-token [--gh-bin <path>]')}   (uses the owner's gh auth; humans only)\n` +
   `       ${cmd('broker status')}\n       ${cmd('broker clear')}`;
 
 /** `courier broker …`: the owner installs the credential the broker merges with. Never an agent. */
 export async function cmdBroker(args: ParsedArgs): Promise<void> {
   const sub = args.positional[0];
+  const testOwnerRoot = args.get('test-owner-root');
+  const file = brokerFile(profileId(profileDir()), testOwnerRoot);
+  if (sub === 'set-token' && args.has('test-token') !== (testOwnerRoot !== undefined)) fail('usage', '--test-token and --test-owner-root must be used together (dummy tests only)');
   if (sub === 'status') {
     let configured = false;
     let ghBin: string | undefined;
-    try { ({ ghBin } = loadBrokerCredential()); configured = true; } catch { /* not configured */ }
-    await writeOut(`${JSON.stringify({ configured, ...(ghBin ? { ghBin } : {}), file: brokerFile() }, null, 2)}\n`);
+    try { ({ ghBin } = loadBrokerConfig(profileId(profileDir()), testOwnerRoot)); configured = true; } catch { /* not configured */ }
+    await writeOut(`${JSON.stringify({ configured, ...(ghBin ? { ghBin } : {}), file }, null, 2)}\n`);
     return;
   }
   if (sub === 'clear') {
-    fs.rmSync(brokerFile(), { force: true });
+    fs.rmSync(file, { force: true });
     await writeOut('{"configured":false}\n');
     return;
   }
@@ -253,10 +255,16 @@ export async function cmdBroker(args: ParsedArgs): Promise<void> {
   }
   if (!ghBin || !path.isAbsolute(ghBin)) fail('usage', 'Could not find gh; pass --gh-bin <absolute path>.');
   try { fs.accessSync(ghBin, fs.constants.X_OK); } catch { fail('usage', `${ghBin} is not an executable file.`); }
-  const token = fs.readFileSync(0, 'utf8').trim();
-  if (!validToken(token)) fail('usage', 'Expected a GitHub token (ghp_…, gho_…, ghs_…, ghu_… or github_pat_…) on stdin.');
-  fs.mkdirSync(brokerDir(), { recursive: true, mode: 0o700 });
-  fs.chmodSync(brokerDir(), 0o700);
-  writeSecure(brokerFile(), { v: 1, ghBin, token });
-  await writeOut(`${JSON.stringify({ configured: true, ghBin, file: brokerFile() }, null, 2)}\n`);
+  const profile = loadProfile();
+  let testToken: string | undefined;
+  if (testOwnerRoot !== undefined) {
+    testToken = fs.readFileSync(0, 'utf8').trim();
+    if (testToken !== TEST_TOKEN) fail('usage', 'Tests accept only the fixed dummy token fixture on stdin');
+  }
+  ghBin = fs.realpathSync(ghBin);
+  const st = fs.statSync(ghBin);
+  const config: BrokerConfig = { v: 2, courierHome: fs.realpathSync(profileDir()), profile: pinProfile(profile), ghBin, ghIdentity: { dev: st.dev, ino: st.ino }, ...(testToken ? { testToken } : {}) };
+  if (!testToken) await loadBrokerCredential(config);
+  saveBrokerConfig(config, testOwnerRoot);
+  await writeOut(`${JSON.stringify({ configured: true, ghBin, file }, null, 2)}\n`);
 }

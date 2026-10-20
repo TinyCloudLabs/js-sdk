@@ -86,7 +86,7 @@ export function createNotifier(config: NotifyConfig, deps: { run: Runner; env?: 
         if (config.exec && startsAgentCli(config.exec)) throw new Error('notifications cannot start an agent CLI');
         const result = await run('/bin/sh', ['-c', config.exec!], {
           cwd: config.wake.cwd, timeoutMs: config.wake.timeoutMs,
-          env: { ...courierOnlyEnv(env, config.wake.home), COURIER_NOTICE: notice.kind, COURIER_PEER: peer, COURIER_THREAD: thread, COURIER_NOTICE_TITLE: title, COURIER_NOTICE_TEXT: body },
+          env: { ...courierOnlyEnv(env, config.wake.home), COURIER_HOME: config.wake.home, COURIER_NOTICE: notice.kind, COURIER_PEER: peer, COURIER_THREAD: thread, COURIER_NOTICE_TITLE: title, COURIER_NOTICE_TEXT: body },
         });
         if (result.code !== 0) throw new Error(`notify command exited ${result.code}`);
       }

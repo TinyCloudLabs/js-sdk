@@ -60,8 +60,8 @@ export function profileDir(): string {
   return process.env.COURIER_HOME ?? path.join(process.env.HOME ?? '.', '.courier');
 }
 
-function profilePath(name: string): string {
-  return path.join(profileDir(), name);
+function profilePath(name: string, home = profileDir()): string {
+  return path.join(home, name);
 }
 
 export function profileExists(): boolean {
@@ -86,13 +86,13 @@ export function writeSecure(file: string, obj: unknown): void {
   }
 }
 
-function readSecure<T>(name: string, required: boolean): T | undefined {
-  const file = profilePath(name);
+function readSecure<T>(name: string, required: boolean, home = profileDir()): T | undefined {
+  const file = profilePath(name, home);
   if (!fs.existsSync(file)) {
     if (required) throw new CourierError('no-profile', `Missing ${name} in ${profileDir()}. Run \`${cmd('init')}\` first.`);
     return undefined;
   }
-  const dirMode = fs.statSync(profileDir()).mode & 0o777;
+  const dirMode = fs.statSync(home).mode & 0o777;
   if ((dirMode & 0o077) !== 0) {
     throw new CourierError('insecure-profile', `${profileDir()} must not be accessible by group or others (mode ${dirMode.toString(8)}).`);
   }
@@ -107,8 +107,8 @@ function readSecure<T>(name: string, required: boolean): T | undefined {
   }
 }
 
-export function loadProfile(): Profile {
-  const loaded = readSecure<unknown>('profile.json', true)!;
+export function loadProfile(home = profileDir()): Profile {
+  const loaded = readSecure<unknown>('profile.json', true, home)!;
   if (!loaded || typeof loaded !== 'object' || !('version' in loaded)) {
     throw new CourierError('bad-profile', `Corrupt profile at ${profilePath('profile.json')}`);
   }
@@ -126,8 +126,8 @@ export function saveProfile(profile: Profile): void {
   writeSecure(profilePath('profile.json'), profile);
 }
 
-export function loadKey(): AgentKey {
-  const key = readSecure<AgentKey>('key.json', true)!;
+export function loadKey(home = profileDir()): AgentKey {
+  const key = readSecure<AgentKey>('key.json', true, home)!;
   if (key.v !== 1 || !key.jwk || !key.did?.startsWith('did:key:')) {
     throw new CourierError('bad-profile', `Corrupt agent key at ${profilePath('key.json')}`);
   }
@@ -138,8 +138,8 @@ export function saveKey(key: AgentKey): void {
   writeSecure(profilePath('key.json'), key);
 }
 
-export function loadGrant(): OwnerGrant | undefined {
-  const grant = readSecure<OwnerGrant>('grant.json', false);
+export function loadGrant(home = profileDir()): OwnerGrant | undefined {
+  const grant = readSecure<OwnerGrant>('grant.json', false, home);
   if (grant && (grant.v !== 1 || !grant.delegationHeader?.Authorization || !grant.delegationCid || !grant.siwe)) {
     throw new CourierError('bad-profile', `Corrupt owner grant at ${profilePath('grant.json')}`);
   }

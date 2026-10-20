@@ -7,6 +7,8 @@ import { CourierError } from '../errors.js';
 import { cmd } from '../program.js';
 import { profileDir } from '../profile.js';
 import { writeOut } from '../inbox.js';
+import { discoverBinaries, type BinaryIdentity } from './binaries.js';
+import { brokerRoot } from '../broker-config.js';
 import { decide, hookOutput, type GuardDeps } from './hook.js';
 import { guardSettings, writeGuardSettings } from './install.js';
 import { installRoots, protectedSet, realpathBest } from './paths.js';
@@ -23,9 +25,14 @@ export function installLiterals(home: string, entry: string): string[] {
 }
 
 export function realEnv(cwd: string, home = profileDir(), entry = process.argv[1] ?? ''): PolicyEnv {
+  let installed: BinaryIdentity[] = [];
+  try { installed = JSON.parse(fs.readFileSync(path.join(home, 'guard/binaries.json'), 'utf8')); if (!Array.isArray(installed)) installed = []; } catch { /* discovery still covers tools on PATH */ }
   return {
     cwd,
-    literals: installLiterals(home, entry),
+    binaries: [...installed, ...discoverBinaries(process.env.PATH ?? '', cwd)],
+    literals: [...installLiterals(home, entry), brokerRoot()],
+    protectedRoots: [home, brokerRoot(), path.join(os.homedir(), '.courier')],
+    realHome: process.env.COURIER_REAL_HOME || os.userInfo().homedir,
     courierEntries: [realpathBest(entry), realpathBest(path.join(path.dirname(entry), 'cli.js'))],
     readFile(file): FileRead {
       try {
@@ -98,7 +105,7 @@ export async function cmdGuard(args: ParsedArgs): Promise<void> {
     const realHome = process.env.COURIER_REAL_HOME || os.homedir();
     const deps: GuardDeps = {
       env: realEnv(process.cwd(), home, entry),
-      protectedSet: { ...protectedSet(home, entry, { agentHome: os.homedir() }), homes: [...new Set([realHome, os.homedir()])] },
+      protectedSet: { ...protectedSet(home, entry, { agentHome: os.homedir() }), roots: [...protectedSet(home, entry).roots, brokerRoot(), path.join(os.homedir(), '.courier')], homes: [...new Set([realHome, os.homedir()])], realHome },
     };
     const timeout = new Promise<never>((_, reject) => setTimeout(() => reject(new Error('timed out')), DEADLINE_MS).unref());
     const decision = await Promise.race([decide(input, deps), timeout]);

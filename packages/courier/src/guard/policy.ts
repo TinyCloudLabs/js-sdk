@@ -1,7 +1,9 @@
 import path from 'node:path';
+import { networkTextRefusal, blockedDestination } from './network.js';
+import { binaryName, gatedSource, executablePath, type BinaryIdentity } from './binaries.js';
 import { parseShell, wordLiteral, type RawCmd, type RawWord } from './shell.js';
 import { expansionRefusal } from './expansion.js';
-import { credentialTextRefusal, protectedTextRefusal, realpathBest, unquoted } from './paths.js';
+import { credentialTextRefusal, protectedTextRefusal, realpathBest, unquoted, pathTextRefusal } from './paths.js';
 import { parseArgs } from '../args.js';
 import { ULID } from '../request.js';
 import type { Verb } from './target.js';
@@ -38,6 +40,9 @@ export interface PolicyEnv {
   getenv(name: string): string | undefined;
   /** Absolute paths of this install and profile (courier home, guard dir, package roots) that a command must not name. */
   literals?: string[];
+  binaries?: BinaryIdentity[];
+  protectedRoots?: string[];
+  realHome?: string;
   /** Real paths of the courier entry points (`cli.js`, the `tc` entry): `node <entry> pair …` is a courier command. */
   courierEntries?: string[];
 }
@@ -250,6 +255,9 @@ export function progName(value: string): string {
 
 /** `wrangler@3`, `@tinycloud/cli@1.2`, `./bin/changeset.js` → the program it names. */
 function embeddedName(value: string): string | undefined {
+  if (/(?:^|\/)@tinycloud\/cli\/(?:dist|src)\//.test(value)) return 'tinycloud';
+  const agentPackage = /(?:^|\/)(paseo|claude|codex|omp|opencode|gemini)\/(?:dist|src)\//.exec(value);
+  if (agentPackage) return agentPackage[1];
   let v = value;
   const at = v.startsWith('@') ? v.indexOf('@', 1) : v.indexOf('@');
   if (at > 0) v = v.slice(0, at);
@@ -301,7 +309,11 @@ function classifyGh(args: Word[], top: Word[], sc: Scope, io: Io): void {
   if ((group === 'repo' && sub === 'sync') || (group === 'run' && ['rerun', 'cancel', 'delete'].includes(sub)) || group === 'secret' || group === 'variable') return unresolved(sc.sh, 'GitHub write command: your owner runs it');
   if (['auth', 'config', 'extension'].includes(group)) return never(sc, 'GitHub credential/configuration tools are not available');
   if (group === 'alias') return unresolved(sc.sh, 'gh alias (can hide a gated command)');
-  if (group === 'api') classifyApi(args, top, sc, io, 'gh');
+  if (group === 'api') return classifyApi(args, top, sc, io, 'gh');
+  const allowed: Record<string, string[]> = { pr: ['view', 'list', 'checks', 'diff', 'status', 'create', 'comment'], issue: ['view', 'list', 'status', 'create', 'comment'], repo: ['view', 'list'], workflow: ['list', 'view'], run: ['list', 'view', 'watch', 'download'], search: ['code', 'commits', 'issues', 'prs', 'repos'] };
+  if (allowed[group]?.includes(sub) || ['help', 'version', 'status'].includes(group) || (!group && args.every(a => /^--(?:help|version)$/.test(a.value)))) return;
+  if (sc.noAlias && !allowed[group]) return;
+  return unresolved(sc.sh, 'GitHub command outside the read/create/comment allowlist: your owner runs it');
 }
 
 /** Flags of `gh api` / curl that take a separate value (so the value is not a URL). */
@@ -368,18 +380,13 @@ function classifyApi(args: Word[], top: Word[], sc: Scope, io: Io, tool: string)
 }
 
 function classifyCurl(args: Word[], top: Word[], sc: Scope, io: Io): void {
-  for (const arg of args) {
-    if (arg.dynamic) continue;
-    try {
-      const host = new URL(arg.value).hostname;
-      if (/^(localhost|127\.\d+\.\d+\.\d+|\[::1\]|0\.0\.0\.0)$/i.test(host)) return never(sc, 'loopback requests can reach local services outside the guard');
-    } catch { /* not a URL */ }
-  }
+  if (statics(args).some(a => /^(--resolve|--connect-to|--unix-socket|--abstract-unix-socket)(=|$)/.test(a))) return never(sc, 'network destination overrides can reach local services');
+  if (args.some(a => !a.dynamic && blockedDestination(a.value))) return never(sc, 'loopback, numeric IP or local daemon destination is not available');
   classifyApi(args, top, sc, io, 'curl');
 }
 
 function executableGitKey(key: string): boolean {
-  return /^(alias\.|core\.(fsmonitor|pager|editor|sshcommand|hookspath)$|pager\.|sequence\.editor$|diff\..*\.(textconv|command)$|filter\..*\.(clean|smudge|process)$|merge\..*\.driver$|credential\..*helper$|credential\.helper$|gpg\.program$|remote\..*\.(receivepack|uploadpack|pushurl)$|url\..*\.(insteadof|pushinsteadof)$)/i.test(key);
+  return /^(alias\.|include\.|includeif\.|core\.(askpass|fsmonitor|pager|editor|sshcommand|hookspath)$|pager\.|sequence\.editor$|diff\..*\.(textconv|command)$|filter\..*\.(clean|smudge|process)$|merge\..*\.driver$|credential\..*helper$|credential\.helper$|gpg\.program$|remote\..*\.(receivepack|uploadpack|pushurl)$|url\..*\.(insteadof|pushinsteadof)$)/i.test(key);
 }
 
 const GIT_DIR_VALUE_FLAGS = new Set(['--git-dir', '--work-tree', '--namespace', '--super-prefix', '--config-env', '--exec-path']);
@@ -413,6 +420,7 @@ function classifyGit(args: Word[], top: Word[], sc: Scope, io: Io, depth = 0): v
   const subWord = args[i];
   if (!subWord) return;
   const sub = subWord.value.toLowerCase();
+  if (sub === 'credential') return never(sc, 'git credential can expose the owner credential');
   const rest = args.slice(i + 1);
   const cfg = (key: string, dir: string): string[] => {
     const got = sc.sh.env.git(dir, [...probeArgs, 'config', '--get-all', key]);
@@ -515,7 +523,7 @@ function classifyNpm(prog: string, args: Word[], top: Word[], sc: Scope, io: Io)
   }
   const lits = statics(args);
   if (lits.includes('publish')) return gate(sc, `${prog} publish`, top, () => normPublish(prog, args.slice(args.findIndex((a) => !a.dynamic && a.value === 'publish') + 1), nctx(sc)));
-  if (lits.some(v => ['unpublish', 'dist-tag'].includes(v))) return unresolved(sc.sh, `${prog} registry write: your owner runs it`);
+  if (lits.some(v => ['unpublish', 'dist-tag', 'deprecate', 'undeprecate', 'owner', 'access', 'token', 'logout', 'login', 'adduser'].includes(v))) return unresolved(sc.sh, `${prog} registry write: your owner runs it`);
   const positions: string[] = [];
   let dirs = [...sc.cwds];
   for (let i = 0; i < args.length; i++) {
@@ -562,7 +570,13 @@ function classifyTool(prog: 'wrangler' | 'phala' | 'changeset', args: Word[], to
     return gate(sc, `${prog} ${words[0]}`, top, () => (prog === 'wrangler' ? normWrangler(args, nctx(sc)) : prog === 'phala' ? normPhala(args) : normChangeset(nctx(sc))));
   }
   const positionals = args.filter((a) => a.dynamic || !a.value.startsWith('-')).slice(0, 2);
-  if (positionals.some((a) => a.dynamic)) unresolved(sc.sh, `${prog} subcommand built at run time`);
+  if (positionals.some((a) => a.dynamic)) return unresolved(sc.sh, `${prog} subcommand built at run time`);
+  if (sc.noAlias) return;
+  const readOnly: Record<string, string[]> = { wrangler: ['--help', '--version', 'help', 'whoami', 'dev', 'tail', 'types'], phala: ['--help', '--version', 'help', 'status', 'list', 'logs'], changeset: ['--help', '--version', 'help', 'status'] };
+  const lits = statics(args);
+  if (lits.length && readOnly[prog].includes(lits[0])) return;
+  if (prog === 'wrangler' && ['versions list', 'versions view', 'deployments list', 'deployments status'].includes(lits.slice(0, 2).join(' '))) return;
+  return unresolved(sc.sh, `${prog} command outside the read-only allowlist: your owner runs it`);
 }
 
 function classifyTc(args: Word[], sc: Scope): void {
@@ -671,7 +685,7 @@ function classifyInterpreter(prog: string, args: Word[], sc: Scope, io: Io): voi
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
     if (a.dynamic) continue;
-    const name = embeddedName(a.value);
+    const name = binaryName(a.value, sc.cwds[0], sc.sh.env.getenv('PATH') ?? '', sc.sh.env.binaries ?? []) ?? embeddedName(a.value);
     if (name && (a.value.includes('/') || i === 0)) classify(args.slice(i), args.slice(i), sc, io);
   }
   let sawCode = false;
@@ -730,13 +744,17 @@ function classify(argv: Word[], top: Word[], sc: Scope, io: Io): void {
   if (!argv.length) return;
   const head = argv[0];
   if (head.dynamic) return classifyDynamicHead(argv, top, sc, io);
-  const prog = embeddedName(head.value) ?? progName(head.value);
+  const identity = binaryName(head.value, sc.cwds[0], sc.sh.env.getenv('PATH') ?? '', sc.sh.env.binaries ?? []);
+  const prog = identity ?? embeddedName(head.value) ?? progName(head.value);
   const args = argv.slice(1);
 
   if (/^secret[-_]?bridge$/.test(prog)) return never(sc, 'Secret Bridge is retired and never allowed');
   if (AGENT_CLIS.has(prog)) return never(sc, `${prog} would start another agent without the Courier guard; do the work yourself`);
   if (NEVER_PROGS.has(prog)) return never(sc, `${prog} is not available to a woken agent (it changes user, outlives the call, or reaches another machine or a local service)`);
   if (head.value.includes('=') && SENSITIVE_VAR.test(head.value.split('=')[0])) return never(sc, `setting ${head.value.split('=')[0]} is not allowed for a woken agent`);
+  if (['ln', 'cp', 'mv', 'install', 'hardlink'].includes(prog)) {
+    for (const arg of args) if (!arg.dynamic && !arg.value.startsWith('-') && gatedSource(arg.value, sc.cwds[0], sc.sh.env.binaries ?? [])) return never(sc, 'copying, linking or moving a gated executable is not available');
+  }
   if (WRAPPERS.has(prog)) return classifyWrapper(prog, args, top, sc, io);
   if (SHELLS.has(prog)) return classifyShell(args, sc, io);
   switch (prog) {
@@ -767,6 +785,11 @@ function classify(argv: Word[], top: Word[], sc: Scope, io: Io): void {
       }
       return;
     }
+    case 'vercel': case 'netlify': case 'fly': case 'flyctl': case 'docker': {
+      const readOnly = ['--help', '--version', 'help', 'version', 'info', 'status', 'list', 'ls', 'logs', 'inspect', 'ps', 'images'];
+      if (args[0] && !args[0].dynamic && readOnly.includes(args[0].value)) return;
+      return unresolved(sc.sh, `${prog} command outside the read-only allowlist: your owner runs it`);
+    }
     case 'semantic-release': return unresolved(sc.sh, 'semantic-release publishes from agent-controlled code; your owner runs it');
     case 'make': case 'gmake': case 'turbo': case 'nx': case 'just': return unresolved(sc.sh, 'task runner recipes cannot be resolved safely; run the literal commands instead');
     case 'courier': return classifyCourier(args, sc);
@@ -782,10 +805,19 @@ function classify(argv: Word[], top: Word[], sc: Scope, io: Io): void {
   }
   if (CURLS.has(prog)) return classifyCurl(args, top, sc, io);
   if (INTERPRETERS.has(prog)) return classifyInterpreter(prog, args, sc, io);
-  if (head.value.includes('/')) classifyFile(head, sc, false, io);
+  if (!['echo', 'printf', 'grep', 'rg', 'cat', 'head', 'tail', 'ls'].includes(prog) && /\b(pr (merge|edit|review)|release (create|edit|delete|upload)|publish|deploy|run --provider)\b/.test(args.map(a => a.value).join(' '))) return unresolved(sc.sh, 'unknown executable with gated arguments');
+  const executable = executablePath(head.value, sc.cwds[0], sc.sh.env.getenv('PATH') ?? '');
+  const safeUtility = ['echo', 'printf', 'pwd', 'ls', 'cat', 'grep', 'rg', 'sed', 'awk', 'head', 'tail', 'sort', 'uniq', 'wc', 'cut', 'tr', 'tee', 'cp', 'mv', 'ln', 'install', 'hardlink', 'mkdir', 'rm', 'rmdir', 'touch', 'true', 'false', 'test', 'sleep', 'date', 'diff', 'which', 'whoami', 'id', 'env', 'find'];
+  if (head.value.includes('/') || (executable && !safeUtility.includes(prog))) {
+    for (const dir of sc.cwds) {
+      const file = sc.sh.env.readFile(executable ?? path.resolve(dir, head.value));
+      if (file.state === 'unreadable' || (file.state === 'text' && file.text.includes('\0'))) return unresolved(sc.sh, 'unknown binary executable cannot be inspected');
+    }
+    classifyFile(head, sc, false, io);
+  }
 }
 
-const WRITERS = new Set(['tee', 'cp', 'mv', 'install', 'sponge', 'dd']);
+const WRITERS = new Set(['tee', 'cp', 'mv', 'install', 'ln', 'hardlink', 'sponge', 'dd']);
 
 /** Resolve a command string into findings. */
 export function analyze(command: string, env: PolicyEnv): Finding[] {
@@ -799,11 +831,7 @@ function analyzeScript(text: string, parent: Scope, inexact: boolean): void {
   const sh = parent.sh;
   if (parent.depth + 1 > MAX_DEPTH) return unresolved(sh, 'scripts nested too deeply to inspect');
   // Credential and guard-configuration paths are refused wherever they appear, read or write (R2, B1, B2).
-  for (const candidate of unquoted(text).match(/https?:\/\/[^\s;]+/gi) ?? []) {
-    try {
-      if (/^(localhost|127\.\d+\.\d+\.\d+|\[::1\]|0\.0\.0\.0)$/i.test(new URL(candidate).hostname)) return never(parent, 'loopback requests can reach local services outside the guard');
-    } catch { /* not a literal URL */ }
-  }
+  if (networkTextRefusal(unquoted(text))) return never(parent, 'loopback, numeric IP or local daemon requests are not available');
   const credential = credentialTextRefusal(text);
   if (credential) return never(parent, `refused: ${credential}`);
   const parsed = parseShell(text);
@@ -827,6 +855,8 @@ function analyzeScript(text: string, parent: Scope, inexact: boolean): void {
     if (protectedArgs) return never(parent, `refused: ${protectedArgs}`);
     return classifyInterpreter(progName(words[0]!), words.slice(1).map((value) => ({ value: value!, dynamic: false })), parent, { heredocs: [], hereStrings: [], piped: false, otherStdin: false });
   }
+  const pathRefusal = pathTextRefusal(text, parent.cwds[0], sh.env.getenv('HOME') ?? '/nonexistent-agent-home', sh.env.protectedRoots ?? sh.env.literals ?? [], sh.env.realHome);
+  if (pathRefusal) return never(parent, `refused: ${pathRefusal}`);
   const protectedText = protectedTextRefusal(text, sh.env.literals);
   if (protectedText) return never(parent, `refused: ${protectedText}`);
   const sc: Scope = { ...parent, depth: parent.depth + 1, cwds: [...parent.cwds], written: new Set(parent.written), inexact: inexact || parent.inexact, assigns: [] };
