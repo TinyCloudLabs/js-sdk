@@ -152,13 +152,22 @@ last 24 hours, and `--action` equals the request's action. `--action` is
 required when consuming; `--peek` (for guards) may omit it.
 
 It then consumes the approval with a create-only marker at
-`me/state/approvals-used/<id>.json`, so a second run exits `approval-used`;
+`me/consumed/<id>.json`, so a second run exits `approval-used`;
 `--peek` checks the marker too (a used approval fails the peek) but does not
 write it. A denial exits `approval-denied`. The courier key cannot write
 `me/approvals/`, so only the owner's view session can produce a passing
-approval. Residual risk: the courier grant can delete under `me/state/`
-(spec §3), so a compromised agent could delete the used marker and replay an
-approval within its 24 hours; a delete-proof record is tracked separately.
+approval.
+
+**The used-marker is delete-proof for the courier key.** The grant gives
+`me/consumed/` get, put and list but not del (`me/state/` does allow del, which
+is why the marker is not there). A put can overwrite a marker's value but cannot
+remove its key, so the key's presence is what counts, whatever it contains. The
+check reads from the network every time (no replica, no cache, no ETag
+shortcut) and treats only a key-level 404 as "unused"; a transport error, a
+5xx, a 401/403 or a "space not found" fails closed (`approval-state-unknown`).
+The marker is written (create-only) before a guarded command is allowed to run.
+Grants issued before this change lack `me/consumed/` and are refused with
+`grant-incomplete`: run `init` once to renew (one passkey approval).
 
 The watcher wakes the thread's agent as soon as a new approval (approved or
 denied) for one of its requests appears, without the debounce. Approvals older

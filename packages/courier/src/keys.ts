@@ -20,6 +20,8 @@ export const AGENT_GRANT: PermissionEntry[] = [
   kv('me/requests/', ['put']),
   kv('me/mirror/', ['get', 'put', 'list', 'del']),
   kv('me/state/', ['get', 'put', 'list', 'del']),
+  // Used-markers for approvals: no del, so a consumed approval cannot be un-consumed with the courier key (spec §7).
+  kv('me/consumed/', ['get', 'put', 'list']),
   kv('me/peers/', ['get', 'put', 'list', 'del']),
   kv('me/', ['get', 'list']),
   {
@@ -53,8 +55,8 @@ export const k = {
   mirrorTask: (peer: string, threadId: string, taskId: string) =>
     `${PREFIX}/me/mirror/${peer}/threads/${threadId}/task/${taskId}.json`,
   watchState: `${PREFIX}/me/state/watch.json`,
-  /** Single-use marker for an approval (create-only), under the courier key's `me/state/` put. */
-  approvalUsed: (id: string) => `${PREFIX}/me/state/approvals-used/${id}.json`,
+  /** Single-use marker for an approval (create-only). `me/consumed/` is get/put/list for the courier key, never del. */
+  approvalUsed: (id: string) => `${PREFIX}/me/consumed/${id}.json`,
   peersPrefix: `${PREFIX}/me/peers/`,
   mirrorPrefix: `${PREFIX}/me/mirror/`,
   approvalsPrefix: `${PREFIX}/me/approvals/`,
