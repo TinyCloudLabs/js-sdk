@@ -118,10 +118,18 @@ reads earlier Release runs' logs (read-only, `actions: read`) and stops, rather 
 version number from newer code, when a version is missing from npm but an earlier run accepted it. It
 names that run; wait until `npm view <name>@<version>` answers, then push to `master` again, or bump the
 package with a changeset. A version no run accepted is published from HEAD as before.
+The warning holds only while no current version requires the pending one. `npm publish` moves each
+package's dist-tag at once, so a published package that requires a pending (or missing) internal version
+fails `Confirm npm` red: installing it by tag fails with ETARGET (`@tinycloud/web-sdk@beta` →
+`web-sdk-wasm@1.7.7-beta.0`, 2026-10-20). The failure prints a "tag back" `npm dist-tag add` command
+(to the version pre-publish recorded) and a "roll forward" one; a maintainer runs them by hand. CI never
+moves dist-tags.
 
 Runbook: **`Confirm npm has every current version` warns "pending" for web-sdk → wait; never re-run;
 never use the `release` dispatch (that's STABLE).** If it fails for web-sdk only, the version was not
 recorded as accepted: check the publish step log and `npm view`, still never re-run or dispatch `release`.
+If it fails because a package requires a version npm does not show, hold merges; wait for the dependency
+or run the printed tag-back command, then roll forward once `npm view <dependency> version` answers.
 A beta run's pre-publish check runs before it pushes, so a stop there leaves `master` and the pending
 changesets untouched; push to `master` again once npm shows the version.
 

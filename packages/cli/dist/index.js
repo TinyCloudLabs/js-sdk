@@ -122,7 +122,7 @@ import {
   tinycloudConfigPath,
   tinycloudHomePath
 } from "@tinycloud/operations/state";
-var CONFIG_DIR, PROFILES_DIR, CONFIG_FILE, DEFAULT_HOST, DEFAULT_PROFILE, PROFILE_COMMIT_LOCK_TIMEOUT_MS, ExitCode;
+var CONFIG_DIR, PROFILES_DIR, CONFIG_FILE, DEFAULT_HOST, DEFAULT_PROFILE, PROFILE_COMMIT_LOCK_TIMEOUT_MS, ExitCode, OPENKEY_SPACE_SETUP_RETRY_HINT;
 var init_constants = __esm({
   "src/config/constants.ts"() {
     "use strict";
@@ -148,6 +148,7 @@ var init_constants = __esm({
       /** Interrupted by SIGINT/SIGTERM (`CANCELLED`). */
       CANCELLED: 130
     };
+    OPENKEY_SPACE_SETUP_RETRY_HINT = "Wait a minute and retry; approving again in OpenKey re-runs the setup.";
   }
 });
 
@@ -7266,17 +7267,25 @@ async function isRootAuthority(spaceUri, profileName) {
   const selfAddr = await resolveLocalAddress(profile, profileName);
   return selfAddr !== null && selfAddr === ownerAddr;
 }
+async function primarySpaceUri(profileName) {
+  const session = await ProfileManager.getSession(profileName);
+  if (typeof session?.spaceId === "string" && session.spaceId !== "") return session.spaceId;
+  const profile = await ProfileManager.getProfile(profileName);
+  return typeof profile.spaceId === "string" && profile.spaceId !== "" ? profile.spaceId : void 0;
+}
 function spaceNameFromUri(spaceUri) {
   return spaceUri.slice(spaceUri.lastIndexOf(":") + 1);
 }
-async function unhostedSpaceError(error, spaceUri, profileName) {
-  if (!spaceUri) return null;
+async function unhostedSpaceError(error, requestedSpaceUri, profileName) {
   const status = error.meta?.status;
   const isUnhosted = status === 404 && /space not found/i.test(error.message);
   if (!isUnhosted) return null;
+  const spaceUri = requestedSpaceUri ?? await primarySpaceUri(profileName);
+  if (!spaceUri) return null;
   const spaceName = spaceNameFromUri(spaceUri);
   const owner = await isRootAuthority(spaceUri, profileName);
-  const hint = owner ? [
+  const openKeyOwner = owner && resolveProfilePosture(await ProfileManager.getProfile(profileName)) === "owner-openkey";
+  const hint = openKeyOwner ? `OpenKey is still setting up your space. ${OPENKEY_SPACE_SETUP_RETRY_HINT}` : owner ? [
     "You are the owner. Host it once:",
     `  ${CLI_NAME10} space host ${spaceName}`,
     "Then retry."
