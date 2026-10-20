@@ -13,9 +13,10 @@ import { k } from '../dist/keys.js';
 const ID = '01JTR100000000000000000000';
 const NOW = Date.parse('2026-10-20T12:00:00Z');
 const SHA = 'a'.repeat(40);
+const BASE = 'master';
 const TOKEN = `ghp_${'d'.repeat(36)}`; // Dummy only.
 function fixture({ verb = 'merge', target = 'a/b#42', request = {}, approval = {} } = {}) {
-  const req = { id: ID, peer: 'bob', threadId: ID, taskId: ID, verb, target, summary: 'Merge docs', reason: 'test', risk: 'low', requestedBy: { owner: 'did:pkh:o', agent: 'did:key:a' }, createdAt: '2026-10-20T10:00:00Z', expiresAt: '2026-10-21T10:00:00Z', status: 'pending', ...request };
+  const req = { id: ID, peer: 'bob', threadId: ID, taskId: ID, verb, target, ...(verb === 'merge' ? { headSha: SHA, base: BASE } : {}), summary: 'Merge docs', reason: 'test', risk: 'low', requestedBy: { owner: 'did:pkh:o', agent: 'did:key:a' }, createdAt: '2026-10-20T10:00:00Z', expiresAt: '2026-10-21T10:00:00Z', status: 'pending', ...request };
   const rows = new Map([[k.request(ID), req], [k.approval(ID), { requestId: ID, requestHash: requestHash(req), decision: 'approved', decidedAt: '2026-10-20T11:00:00Z', ...approval }]]);
   const calls = [];
   const kv = {
@@ -39,7 +40,7 @@ function fixture({ verb = 'merge', target = 'a/b#42', request = {}, approval = {
       assert.equal(options.env.GH_TOKEN, TOKEN);
       if (args[1] === 'view') {
         assert.ok(!rows.has(k.approvalUsed(ID)), 'read-only preflight is before consumption');
-        return { code: 0, stdout: JSON.stringify({ state: 'OPEN', headRefOid: SHA, isDraft: false }), stderr: '' };
+        return { code: 0, stdout: JSON.stringify({ state: 'OPEN', headRefOid: SHA, baseRefName: BASE, isDraft: false }), stderr: '' };
       }
       assert.ok(rows.has(k.approvalUsed(ID)), 'marker exists BEFORE merge exec');
       return { code: 0, stdout: `untrusted output ${TOKEN}`, stderr: '' };
@@ -69,6 +70,8 @@ test('broker builds only the fixed argv, consumes BEFORE exec, and refuses repla
 test('hash mismatch, expired, denied, missing and forged approval refuse before execution or consume', async () => {
   const cases = [
     [f => { f.rows.get(k.request(ID)).target = 'a/b#43'; }, 'approval-mismatch'],
+    [f => { f.rows.get(k.request(ID)).headSha = 'b'.repeat(40); }, 'approval-mismatch'],
+    [f => { f.rows.get(k.request(ID)).base = 'release'; }, 'approval-mismatch'],
     [f => { f.deps.now = () => NOW + 25 * 3600_000; }, 'approval-expired'],
     [f => { f.rows.get(k.approval(ID)).decision = 'denied'; }, 'approval-denied'],
     [f => { f.rows.delete(k.approval(ID)); }, 'approval-missing'],
@@ -121,7 +124,7 @@ test('one of two racing brokers wins the create-only marker', async () => {
   // Both may view before either consumes. The fake executor checks marker only for merge here.
   const exec = f.deps.exec;
   f.deps.exec = (bin, args, options) => args[1] === 'view'
-    ? Promise.resolve({ code: 0, stdout: JSON.stringify({ state: 'OPEN', headRefOid: SHA }), stderr: '' })
+    ? Promise.resolve({ code: 0, stdout: JSON.stringify({ state: 'OPEN', headRefOid: SHA, baseRefName: BASE }), stderr: '' })
     : exec(bin, args, options);
   const results = await Promise.allSettled([runApproved(ID, f.deps), runApproved(ID, f.deps)]);
   assert.equal(results.filter(r => r.status === 'fulfilled').length, 1);

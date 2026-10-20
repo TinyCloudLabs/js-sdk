@@ -1,12 +1,14 @@
 {
- "v": 2,
- "note": "Shared by js-sdk packages/courier and the share /courier view. field/value/verb: valid=false means the CLI refuses to write it and the view treats the request as unreadable. Canonical-JSON vectors are in canonical.json. For targets, the CLI may normalise on write (trim, lower-case the repo, GitHub PR URL -> owner/repo#N); valid=false means the value is not acceptable AS STORED. ids: request id, threadId and taskId must be ULIDs (26 Crockford base32 upper-case characters, no I L O U); the peer handle is 1-64 of [A-Za-z0-9_-]. Text contract v2: frozen Unicode 15.0.0 Lu/Ll/Lt/Lo/Nd minus Default_Ignorable, NFC, summary ASCII punctuation .,:;-_/#()?! and U+0027; multiline all printable ASCII punctuation plus LF; only U+0020 space. All marks, non-ASCII punctuation/symbols and newer characters refused. Exhaustive verdicts: text-verdicts.json; range table: src/text-ranges.ts.",
+ "v": 3,
+ "note": "Merge pins: headSha is exactly 40 lowercase hex; base is case-sensitive, 1-100 ASCII [A-Za-z0-9._/-], no leading dash, dot-leading or empty component, double dot, .lock component suffix, trailing dot or HEAD. Both required for merge, forbidden for other verbs. Shared by js-sdk packages/courier and the share /courier view. field/value/verb: valid=false means the CLI refuses to write it and the view treats the request as unreadable. Canonical-JSON vectors are in canonical.json. For targets, the CLI may normalise on write (trim, lower-case the repo, GitHub PR URL -> owner/repo#N); valid=false means the value is not acceptable AS STORED. ids: request id, threadId and taskId must be ULIDs (26 Crockford base32 upper-case characters, no I L O U); the peer handle is 1-64 of [A-Za-z0-9_-]. Text contract v2: frozen Unicode 15.0.0 Lu/Ll/Lt/Lo/Nd minus Default_Ignorable, NFC, summary ASCII punctuation .,:;-_/#()?! and U+0027; multiline all printable ASCII punctuation plus LF; only U+0020 space. All marks, non-ASCII punctuation/symbols and newer characters refused. Exhaustive verdicts: text-verdicts.json; range table: src/text-ranges.ts.",
  "limits": {
   "summary": 200,
   "target": 200,
   "action": 2000,
   "reason": 2000,
   "risk": 2000,
+  "headSha": 40,
+  "base": 100,
   "combiningRun": 0
  },
  "fields": [
@@ -751,6 +753,300 @@
    "name": "NFC multilingual letters and decimal digits",
    "value": "Caf\u00e9 \u4e2d\u6587 \u0627\u0644\u0639\u0631\u0628\u064a\u0629 \u0967\u0968\u0969",
    "valid": true
+  },
+  {
+   "name": "full lowercase hex",
+   "field": "headSha",
+   "value": "0123456789abcdef0123456789abcdef01234567",
+   "valid": true,
+   "verb": "merge"
+  },
+  {
+   "name": "uppercase",
+   "field": "headSha",
+   "value": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+   "valid": false,
+   "verb": "merge"
+  },
+  {
+   "name": "39 characters",
+   "field": "headSha",
+   "value": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+   "valid": false,
+   "verb": "merge"
+  },
+  {
+   "name": "41 characters",
+   "field": "headSha",
+   "value": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+   "valid": false,
+   "verb": "merge"
+  },
+  {
+   "name": "non-hex",
+   "field": "headSha",
+   "value": "gggggggggggggggggggggggggggggggggggggggg",
+   "valid": false,
+   "verb": "merge"
+  },
+  {
+   "name": "empty",
+   "field": "headSha",
+   "value": "",
+   "valid": false,
+   "verb": "merge"
+  },
+  {
+   "name": "newline",
+   "field": "headSha",
+   "value": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n",
+   "valid": false,
+   "verb": "merge"
+  },
+  {
+   "name": "not text",
+   "field": "headSha",
+   "value": 40,
+   "valid": false,
+   "verb": "merge"
+  },
+  {
+   "name": "main",
+   "field": "base",
+   "value": "main",
+   "valid": true,
+   "verb": "merge"
+  },
+  {
+   "name": "case preserved",
+   "field": "base",
+   "value": "Release/V1.2_fix-3",
+   "valid": true,
+   "verb": "merge"
+  },
+  {
+   "name": "one character",
+   "field": "base",
+   "value": "x",
+   "valid": true,
+   "verb": "merge"
+  },
+  {
+   "name": "100 characters",
+   "field": "base",
+   "value": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+   "valid": true,
+   "verb": "merge"
+  },
+  {
+   "name": "empty",
+   "field": "base",
+   "value": "",
+   "valid": false,
+   "verb": "merge"
+  },
+  {
+   "name": "101 characters",
+   "field": "base",
+   "value": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+   "valid": false,
+   "verb": "merge"
+  },
+  {
+   "name": "space",
+   "field": "base",
+   "value": "release candidate",
+   "valid": false,
+   "verb": "merge"
+  },
+  {
+   "name": "edge space",
+   "field": "base",
+   "value": " main",
+   "valid": false,
+   "verb": "merge"
+  },
+  {
+   "name": "double dot",
+   "field": "base",
+   "value": "release..next",
+   "valid": false,
+   "verb": "merge"
+  },
+  {
+   "name": "reflog syntax",
+   "field": "base",
+   "value": "main@{1}",
+   "valid": false,
+   "verb": "merge"
+  },
+  {
+   "name": "backslash",
+   "field": "base",
+   "value": "release\\next",
+   "valid": false,
+   "verb": "merge"
+  },
+  {
+   "name": "control character",
+   "field": "base",
+   "value": "ma\nin",
+   "valid": false,
+   "verb": "merge"
+  },
+  {
+   "name": "DEL",
+   "field": "base",
+   "value": "ma\u007fin",
+   "valid": false,
+   "verb": "merge"
+  },
+  {
+   "name": "leading dash",
+   "field": "base",
+   "value": "-main",
+   "valid": false,
+   "verb": "merge"
+  },
+  {
+   "name": "lock suffix",
+   "field": "base",
+   "value": "main.lock",
+   "valid": false,
+   "verb": "merge"
+  },
+  {
+   "name": "lock component",
+   "field": "base",
+   "value": "main.lock/next",
+   "valid": false,
+   "verb": "merge"
+  },
+  {
+   "name": "double slash",
+   "field": "base",
+   "value": "main//next",
+   "valid": false,
+   "verb": "merge"
+  },
+  {
+   "name": "unicode",
+   "field": "base",
+   "value": "caf\u00e9",
+   "valid": false,
+   "verb": "merge"
+  },
+  {
+   "name": "leading slash",
+   "field": "base",
+   "value": "/main",
+   "valid": false,
+   "verb": "merge"
+  },
+  {
+   "name": "trailing slash",
+   "field": "base",
+   "value": "main/",
+   "valid": false,
+   "verb": "merge"
+  },
+  {
+   "name": "dot component",
+   "field": "base",
+   "value": ".main",
+   "valid": false,
+   "verb": "merge"
+  },
+  {
+   "name": "nested dot component",
+   "field": "base",
+   "value": "main/.next",
+   "valid": false,
+   "verb": "merge"
+  },
+  {
+   "name": "trailing dot",
+   "field": "base",
+   "value": "main.",
+   "valid": false,
+   "verb": "merge"
+  },
+  {
+   "name": "reserved HEAD",
+   "field": "base",
+   "value": "HEAD",
+   "valid": false,
+   "verb": "merge"
+  },
+  {
+   "name": "not text",
+   "field": "base",
+   "value": 5,
+   "valid": false,
+   "verb": "merge"
+  },
+  {
+   "name": "non-merge field refused",
+   "field": "headSha",
+   "value": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+   "valid": false,
+   "verb": "publish"
+  },
+  {
+   "name": "non-merge field refused",
+   "field": "base",
+   "value": "main",
+   "valid": false,
+   "verb": "publish"
+  },
+  {
+   "name": "non-merge field refused",
+   "field": "headSha",
+   "value": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+   "valid": false,
+   "verb": "deploy"
+  },
+  {
+   "name": "non-merge field refused",
+   "field": "base",
+   "value": "main",
+   "valid": false,
+   "verb": "deploy"
+  },
+  {
+   "name": "non-merge field refused",
+   "field": "headSha",
+   "value": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+   "valid": false,
+   "verb": "other"
+  },
+  {
+   "name": "non-merge field refused",
+   "field": "base",
+   "value": "main",
+   "valid": false,
+   "verb": "other"
+  },
+  {
+   "name": "non-merge field refused",
+   "field": "headSha",
+   "value": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+   "valid": false,
+   "verb": "spend"
+  },
+  {
+   "name": "non-merge field refused",
+   "field": "base",
+   "value": "main",
+   "valid": false,
+   "verb": "spend"
+  },
+  {
+   "name": "trailing newline",
+   "field": "base",
+   "value": "main\n",
+   "valid": false,
+   "verb": "merge"
   }
  ],
  "ids": [

@@ -20,7 +20,8 @@ const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'courier-approval-'));
 console.log(`throwaway profiles: ${tmp}`);
 const write = (name, obj) => { const f = path.join(tmp, name); fs.writeFileSync(f, JSON.stringify(obj)); return f; };
 let failures = 0;
-const ok = (name, cond, extra = '') => { if (!cond) failures++; console.log(`${cond ? 'ok' : 'FAIL'}  ${name}${extra ? `  ${extra}` : ''}`); };
+let checks = 0;
+const ok = (name, cond, extra = '') => { checks++; if (!cond) failures++; console.log(`${cond ? 'ok' : 'FAIL'}  ${name}${extra ? `  ${extra}` : ''}`); };
 
 async function courier(home, args, { allowFail } = {}) {
   try {
@@ -76,7 +77,11 @@ const waitFor = (match, ms) => new Promise((resolve, reject) => {
 });
 
 const thread = ulid();
-const ask = async (verb, target) => (await courier(alice.home, ['request', thread, '--peer', 'bob', '--task', ulid(), '--verb', verb, '--target', target, '--summary', `e2e ${verb} ${target}`, '--why', 'e2e', '--risk', 'low'])).json.requestId;
+const HEAD_SHA = '0123456789abcdef0123456789abcdef01234567';
+const BASE = 'Release/V1.2';
+const ask = async (verb, target) => (await courier(alice.home, ['request', thread, '--peer', 'bob', '--task', ulid(), '--verb', verb, '--target', target,
+  ...(verb === 'merge' ? ['--head-sha', HEAD_SHA, '--base', BASE] : []),
+  '--summary', `e2e ${verb} request`, '--why', 'e2e', '--risk', 'low'])).json.requestId;
 const forWhat = (verb, target) => ['--verb', verb, '--target', target];
 const MERGE = ['merge', 'tinycloudlabs/docs#42'];
 const readRequest = async (id) => (await alice.owner.node.kv.get(k.request(id), { prefix: '' })).data;
@@ -106,11 +111,11 @@ try {
   ok('wake prompt tells the agent to verify', /courier approval <requestId>/.test(prompt) && prompt.includes(id));
 
   const peek = await courier(alice.home, ['approval', id, ...forWhat(...MERGE), '--peek']);
-  ok('peek verifies without consuming', peek.json.ok && peek.json.consumed === false);
+  ok('peek verifies pins without consuming', peek.json.ok && peek.json.consumed === false && peek.json.headSha === HEAD_SHA && peek.json.base === BASE);
   const wrongAction = await courier(alice.home, ['approval', id, ...forWhat('merge', 'tinycloudlabs/docs#43')], { allowFail: true });
   ok('a different target is refused', wrongAction.code !== 0 && /approval-mismatch/.test(wrongAction.stderr));
   const used = await courier(alice.home, ['approval', id, ...forWhat(...MERGE)]);
-  ok('approved request verifies and is consumed', used.json.ok && used.json.consumed && used.json.decision === 'approved');
+  ok('approved pinned request verifies and is consumed', used.json.ok && used.json.consumed && used.json.decision === 'approved' && used.json.headSha === HEAD_SHA && used.json.base === BASE);
   const again = await courier(alice.home, ['approval', id, ...forWhat(...MERGE)], { allowFail: true });
   ok('second use is refused', again.code !== 0 && /approval-used/.test(again.stderr));
   const peekUsed = await courier(alice.home, ['approval', id, ...forWhat(...MERGE), '--peek'], { allowFail: true });
@@ -118,14 +123,23 @@ try {
   const bare = await courier(alice.home, ['approval', id], { allowFail: true });
   ok('consuming without --verb and --target is a usage error', bare.code === 2 && /Say what you are about to do/.test(bare.stderr));
 
+  const legacyId = ulid();
+  const raw = await readRequest(id);
+  const { headSha, base, ...legacy } = typeof raw.data === 'string' ? JSON.parse(raw.data) : raw.data;
+  const putLegacy = await alice.owner.node.kv.put(k.request(legacyId), { ...legacy, id: legacyId }, { prefix: '', ifNoneMatch: '*' });
+  if (!putLegacy.ok) throw new Error(`owner could not write the legacy fixture: ${putLegacy.error?.message}`);
+  await decide(legacyId);
+  const old = await courier(alice.home, ['approval', legacyId, ...forWhat(...MERGE), '--peek'], { allowFail: true });
+  ok('legacy merge request without pins is refused with the re-request reason', old.code !== 0 && /merge request lacks headSha\/base: re-request/.test(old.stderr));
+
   const tampered = await ask('deploy', 'wrangler:eliza');
   await decide(tampered, { requestHash: '0'.repeat(64) });
   const t = await courier(alice.home, ['approval', tampered, ...forWhat('deploy', 'wrangler:eliza')], { allowFail: true });
   ok('hash that does not match the request is refused', t.code !== 0 && /approval-mismatch/.test(t.stderr));
 
-  const literal = await ask('publish', 'npm:@tinycloud/courier@9.9.9');
+  const literal = await ask('publish', 'npm:approval-e2e-fixture@9.9.9');
   await decide(literal, { decision: 'approve' });
-  const l = await courier(alice.home, ['approval', literal, ...forWhat('publish', 'npm:@tinycloud/courier@9.9.9')], { allowFail: true });
+  const l = await courier(alice.home, ['approval', literal, ...forWhat('publish', 'npm:approval-e2e-fixture@9.9.9')], { allowFail: true });
   ok('"approve" is not "approved"', l.code !== 0 && /approval-mismatch/.test(l.stderr));
 
   const denied = await ask('other', 'secrets:set DATABASE_URL');
@@ -133,10 +147,11 @@ try {
   const d = await courier(alice.home, ['approval', denied, ...forWhat('other', 'secrets:set DATABASE_URL')], { allowFail: true });
   ok('a denial exits non-zero as approval-denied', d.code !== 0 && /approval-denied/.test(d.stderr));
 } catch (error) {
+  checks++;
   failures++;
   console.error(`FAIL: ${error.stack ?? error.message}`);
 } finally {
   watcher.kill('SIGTERM');
 }
-console.log(failures ? `${failures} FAILURES` : 'ALL PASS');
+console.log(`${checks - failures}/${checks} passed${failures ? `; ${failures} FAILURES` : ' — ALL PASS'}`);
 process.exitCode = failures ? 1 : 0;
