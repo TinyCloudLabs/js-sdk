@@ -52,6 +52,8 @@ describe("apps-agent preset grants", () => {
     [`${HEALTH}/app/app.jsx`, false],
     [`${HEALTH}/install.json`, false],
     [`${HEALTH}/manifest.json`, false],
+    [`${HEALTH}/app/manifest.json`, false],
+    [`${HEALTH}/app/install.json`, false],
     [`${HEALTH}/data/x`, false],
     [`${HEALTH}/knowledge`, false],
     [`${HEALTH}/knowledgebase/a.md`, false],
@@ -129,6 +131,9 @@ describe("apps-agent scope notice states the facts of the grant", () => {
       expect(notice).toContain(`\`${app}/prefs/\``);
     }
     expect(notice).toContain("cannot change the apps' code, manifest or install record");
+    expect(notice).toContain("files outside those folders are read-only for it");
+    expect(notice).not.toContain("everything outside those folders");
+    expect(notice).toContain("SQL write is separate from that: it can change these apps' table rows");
     expect(notice).not.toContain(`\`${HEALTH}/app/\``);
     expect(notice).not.toContain("READ-ONLY");
     expect(notice).not.toContain("ALL your installed apps");
@@ -301,6 +306,8 @@ describe("describeGrantScope: the text follows what will be signed", () => {
     [`${HEALTH}/app/`, "the app's code"],
     [`${HEALTH}/manifest.json`, "the manifest"],
     [`${HEALTH}/install.json`, "the install record"],
+    [`${HEALTH}/app/manifest.json`, "the stored manifest"],
+    [`${HEALTH}/app/install.json`, "the stored install record"],
     [`${HEALTH}/data/`, "a folder the preset does not write"],
     [`${HEALTH}/knowledge`, "a single key that is not a folder"],
     [`${HEALTH}/knowledge/../app/`, "a path that climbs out of the write folder"],

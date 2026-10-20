@@ -18,9 +18,10 @@ import { normalizePkhIdentifier } from "./space.js";
  *   `applications` space or on named apps (`<app_id>/`).
  * - `write` (`--write`, named apps only): adds KV put on the app's
  *   `knowledge/` and `prefs/` folders (the two the sample apps' own manifests
- *   write to) and SQL write. Everything else under `<app_id>/` stays
- *   read-only, so the app's code (`app/`), `manifest.json` and `install.json`
- *   cannot be changed through it.
+ *   write to) and SQL write. Every other file under `<app_id>/` stays
+ *   read-only, so the app's code and its stored `manifest.json` and
+ *   `install.json` cannot be changed through it. The share runner keeps the
+ *   last two under `<app_id>/app/`; the root-level keys are refused as well.
  *
  * Neither grants KV delete, SQL admin or schema, any other service, or any
  * other space. The node lets `tinycloud.sql/write` run CREATE, ALTER and DROP
@@ -164,8 +165,8 @@ export function appsAgentScopeNotice(mode: AppsAgentMode, appIds: readonly strin
   ];
   if (variant.changesStructure) {
     lines.push(
-      `It cannot change ${appIds.length === 1 ? "the app's" : "the apps'"} code, manifest or install record: everything outside those folders is read-only for it.`,
-      `Because of how TinyCloud permissions work today, it can also change or delete ${appIds.length === 1 ? "this app's" : "these apps'"} tables (structure) and data.`,
+      `It cannot change ${appIds.length === 1 ? "the app's" : "the apps'"} code, manifest or install record: files outside those folders are read-only for it.`,
+      `SQL write is separate from that: it can change ${appIds.length === 1 ? "this app's" : "these apps'"} table rows and, because of how TinyCloud permissions work today (TC-1581), also change or delete its tables (structure).`,
       "It cannot touch other apps, other spaces or secrets.",
     );
   } else {

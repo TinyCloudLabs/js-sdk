@@ -183,7 +183,8 @@ describe.skipIf(!NODE_BIN)("tinycloud knowledge against a real node", () => {
     const hint: string = other.error().hint;
     expect(hint).toContain(`--preset apps-agent --app ${HEALTH} --emit req.json`);
     expect(hint).toContain(`--cap tinycloud.kv:applications:${HEALTH}/knowledge/:get,list`);
-    expect(hint).toContain(`--preset apps-agent --write --app ${HEALTH}`);
+    // The beta hint suggests only read-only requests, never --write.
+    expect(hint).not.toContain("--write");
     expect(hint).not.toContain("<app_id>");
   }, 120_000);
 
@@ -276,6 +277,9 @@ describe.skipIf(!NODE_BIN)("tinycloud knowledge against a real node", () => {
       [`${HEALTH}/app/app.jsx`]: "export default () => null;\n",
       [`${HEALTH}/manifest.json`]: '{"app_id":"x"}\n',
       [`${HEALTH}/install.json`]: '{"installed":true}\n',
+      // The share runner keeps the stored manifest and install record under app/.
+      [`${HEALTH}/app/manifest.json`]: '{"app_id":"x","stored":true}\n',
+      [`${HEALTH}/app/install.json`]: '{"installed":true,"stored":true}\n',
     };
     for (const [key, original] of Object.entries(protectedFiles)) {
       await writeFile(join(root, "protected.txt"), original);
