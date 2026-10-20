@@ -8,8 +8,7 @@ export interface Notice {
   kind: 'paused' | 'peer-paused';
   peer: string;
   threadId: string;
-  subject: string;
-  /** One line on why, from the pausing side. */
+  /** One fixed line on why (this watcher's own wording), never text a peer wrote. */
   detail: string;
 }
 
@@ -26,16 +25,15 @@ const label = (value: string, max = 120) => oneLine(value, max);
 
 export function noticeText(notice: Notice, owner: string): { title: string; body: string } {
   const peer = label(notice.peer, 40);
-  const subject = JSON.stringify(label(notice.subject));
   const detail = label(notice.detail, 200);
   return notice.kind === 'paused'
     ? {
       title: `Courier: thread with ${peer} paused`,
-      body: `Thread ${subject} with ${peer} is paused: ${detail}. ${owner}'s agent will not be woken for it until you run \`${cmd(`resume ${notice.peer} ${notice.threadId}`)}\`.`,
+      body: `Thread ${notice.threadId} with ${peer} is paused: ${detail}. ${owner}'s agent will not be woken for it until you run \`${cmd(`resume ${notice.peer} ${notice.threadId}`)}\`.`,
     }
     : {
       title: `Courier: ${peer} paused a thread`,
-      body: `${peer}'s side paused thread ${subject}: ${detail}. Their agent will not reply until their human resumes it.`,
+      body: `${peer}'s side paused thread ${notice.threadId}: ${detail}. Their agent will not reply until their human resumes it.`,
     };
 }
 
@@ -61,7 +59,7 @@ export function createNotifier(config: NotifyConfig, deps: { run: Runner; env?: 
         return;
       case 'paseo':
         await sendToThreadAgent(run, config.wake, {
-          threadId: notice.threadId, peer: notice.peer, title: `⏸ ${label(notice.peer, 40)} · ${label(notice.subject, 60)}`,
+          threadId: notice.threadId, peer: notice.peer, title: `⏸ ${label(notice.peer, 40)} · thread ${notice.threadId.slice(0, 8)}`,
           prompt: paseoNoticePrompt(notice, config.owner),
         });
         return;
