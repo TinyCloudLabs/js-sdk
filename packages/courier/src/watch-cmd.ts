@@ -10,6 +10,7 @@ import { courierNode, peerHooks, peerKv } from './node.js';
 import type { ParsedArgs } from './args.js';
 import { WATCH_DEFAULTS, Watcher, type WatchOptions } from './watch.js';
 import { UNGUARDED_REFUSAL, createWaker, jsonLineLog, killAllRunners, spawnRunner, type SessionStore, type WakeConfig } from './wake.js';
+import { startsAgentCli } from './guard/policy.js';
 import { guardArgv } from './guard/command.js';
 import { writeGuardSettings } from './guard/install.js';
 import {
@@ -72,6 +73,7 @@ export function wakeConfig(args: ParsedArgs, owner: string | undefined): WakeCon
   const unguarded = args.has('unguarded');
   if (unguarded && adapter !== 'exec') throw new CourierError('usage', '--unguarded only applies with --wake exec; the claude and paseo adapters are always guarded.');
   if (adapter === 'exec' && !unguarded) throw new CourierError('usage', `${UNGUARDED_REFUSAL}\n${watchUsage()}`);
+  if (adapter === 'exec' && exec && startsAgentCli(exec)) throw new CourierError('usage', '--unguarded exec cannot start an agent CLI; use the guarded claude or paseo adapter.');
   const allow = args.all('claude-allow');
   const envPass = args.all('env-pass');
   for (const name of envPass) {

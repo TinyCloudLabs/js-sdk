@@ -1,12 +1,12 @@
 import path from 'node:path';
 import { parseShell, wordLiteral, type RawCmd, type RawWord } from './shell.js';
 import { expansionRefusal } from './expansion.js';
-import { credentialTextRefusal, protectedTextRefusal, realpathBest } from './paths.js';
+import { credentialTextRefusal, protectedTextRefusal, realpathBest, unquoted } from './paths.js';
 import { parseArgs } from '../args.js';
 import { ULID } from '../request.js';
 import type { Verb } from './target.js';
 import {
-  normApi, normChangeset, normGhPrMerge, normGhRelease, normGhWorkflowRun, normPhala, normPublish, normPush, normScript, normSecrets, normWrangler,
+  normApi, normChangeset, normGhPrMerge, normGhRelease, normGhWorkflowRun, normPhala, normPublish, normPush, normScript, normWrangler,
   releaseIsReadOnly, type Norm, type NormCtx,
 } from './normalize.js';
 
@@ -40,6 +40,13 @@ export interface PolicyEnv {
   literals?: string[];
   /** Real paths of the courier entry points (`cli.js`, the `tc` entry): `node <entry> pair …` is a courier command. */
   courierEntries?: string[];
+}
+
+/** The exec opt-out never starts a second agent CLI. */
+export function startsAgentCli(command: string): boolean {
+  const head = parseShell(command).cmds[0]?.words[0];
+  const literal = head ? wordLiteral(head) : undefined;
+  return literal !== undefined && AGENT_CLIS.has(progName(literal));
 }
 
 const MAX_DEPTH = 6;
@@ -76,11 +83,11 @@ const INTERPRETERS = new Set(['python', 'python2', 'python3', 'node', 'nodejs', 
 const SOURCE_EXT = /\.(py|js|mjs|cjs|ts|mts|rb|pl|php|lua|sh|bash|zsh)$/i;
 const NPM_FAMILY = new Set(['npm', 'npx', 'pnpm', 'pnpx', 'yarn', 'bun', 'bunx', 'corepack']);
 const CURLS = new Set(['curl', 'wget', 'http', 'https', 'httpie', 'xh', 'xhs', 'aria2c']);
-const SCRIPT_NAME = /^(deploy|publish|release)$/i;
+const SCRIPT_NAME = /^(deploy|publish|release)(:|$)/i;
 const PKG_NAMES: Record<string, string> = {
-  '@tinycloud/cli': 'tinycloud', '@tinycloud/courier': 'courier', '@changesets/cli': 'changeset', '@phala/cli': 'phala',
+  '@anthropic-ai/claude-code': 'claude', '@openai/codex': 'codex', '@tinycloud/cli': 'tinycloud', '@tinycloud/courier': 'courier', '@changesets/cli': 'changeset', '@phala/cli': 'phala',
 };
-const EMBEDDED = new Set(['gh', 'git', 'wrangler', 'phala', 'changeset', 'tc', 'tinycloud', 'courier', 'secret-bridge', 'curl', 'wget']);
+const EMBEDDED = new Set(['claude', 'codex', 'semantic-release', 'turbo', 'nx', 'gh', 'git', 'wrangler', 'phala', 'changeset', 'tc', 'tinycloud', 'courier', 'secret-bridge', 'curl', 'wget']);
 const GIT_BUILTINS = new Set((
   'add am apply archive bisect blame branch bundle cat-file check-ignore checkout cherry-pick clean clone commit config describe diff ' +
   'difftool fetch for-each-ref format-patch fsck gc grep hash-object help init log ls-files ls-remote ls-tree maintenance merge ' +
@@ -269,7 +276,6 @@ function gate(sc: Scope, label: string, top: Word[], normalise: Normaliser): voi
 const never = (sc: Scope, label: string) => emit(sc.sh, { kind: 'never', label });
 
 const statics = (args: Word[]) => args.filter((a) => !a.dynamic).map((a) => a.value);
-const firstPositional = (args: Word[]) => args.find((a) => a.dynamic || !a.value.startsWith('-'));
 
 // ---------- per-program rules ----------
 
@@ -292,6 +298,8 @@ function classifyGh(args: Word[], top: Word[], sc: Scope, io: Io): void {
     if (releaseIsReadOnly(sub)) return;
     return gate(sc, 'gh release', top, () => normGhRelease(rest, nctx(sc), args));
   }
+  if ((group === 'repo' && sub === 'sync') || (group === 'run' && ['rerun', 'cancel', 'delete'].includes(sub)) || group === 'secret' || group === 'variable') return unresolved(sc.sh, 'GitHub write command: your owner runs it');
+  if (['auth', 'config', 'extension'].includes(group)) return never(sc, 'GitHub credential/configuration tools are not available');
   if (group === 'alias') return unresolved(sc.sh, 'gh alias (can hide a gated command)');
   if (group === 'api') classifyApi(args, top, sc, io, 'gh');
 }
@@ -336,6 +344,19 @@ function classifyApi(args: Word[], top: Word[], sc: Scope, io: Io, tool: string)
   if (mergeApi(info.text)) return gate(sc, 'GitHub API merge or ref write', top, () => normApi(info.text));
   const github = tool === 'gh' || /github/i.test(info.text);
   if (!github) return;
+  let method: string | undefined;
+  let payload = false;
+  for (let i = 0; i < args.length; i++) {
+    const value = args[i].value;
+    if (['-X', '--method', '--request'].includes(value)) method = args[++i]?.value.toUpperCase();
+    else if (/^(--method=|--request=|-X.)/.test(value)) method = value.replace(/^(--method=|--request=|-X)/, '').toUpperCase();
+    else if (/^(-f|-F|--field|--raw-field|--input|-d|--data(?:-[a-z]+)?|--form(?:-string)?|--json|-T|--upload-file)(=|$)/.test(value) || /^-[fFdT].+/.test(value)) payload = true;
+  }
+  const verb = method ?? (payload ? 'POST' : 'GET');
+  // Only literal comment writes are allowed here. Other GitHub writes cannot be brokered in v0.
+  const comment = args.some(a => !a.dynamic && /^(https:\/\/api\.github\.com\/)?\/?repos\/[^/\s]+\/[^/\s]+\/(issues|pulls)\/[1-9][0-9]*\/comments$/.test(a.value));
+  if (!['GET', 'HEAD', 'OPTIONS'].includes(verb) && !(verb === 'POST' && comment)) return unresolved(sc.sh, 'GitHub API write outside the comment allowlist: your owner runs it');
+  if (/graphql/i.test(info.text)) return unresolved(sc.sh, 'GitHub GraphQL calls are not resolved by the guard');
   if (info.unverifiable) return unresolved(sc.sh, 'GitHub API call whose payload cannot be read here');
   if (info.dynamic && /graphql/i.test(info.text)) return unresolved(sc.sh, 'GitHub GraphQL call built at run time');
   // An endpoint that is entirely decided at run time could be a merge.
@@ -347,16 +368,27 @@ function classifyApi(args: Word[], top: Word[], sc: Scope, io: Io, tool: string)
 }
 
 function classifyCurl(args: Word[], top: Word[], sc: Scope, io: Io): void {
+  for (const arg of args) {
+    if (arg.dynamic) continue;
+    try {
+      const host = new URL(arg.value).hostname;
+      if (/^(localhost|127\.\d+\.\d+\.\d+|\[::1\]|0\.0\.0\.0)$/i.test(host)) return never(sc, 'loopback requests can reach local services outside the guard');
+    } catch { /* not a URL */ }
+  }
   classifyApi(args, top, sc, io, 'curl');
+}
+
+function executableGitKey(key: string): boolean {
+  return /^(alias\.|core\.(fsmonitor|pager|editor|sshcommand|hookspath)$|pager\.|sequence\.editor$|diff\..*\.(textconv|command)$|filter\..*\.(clean|smudge|process)$|merge\..*\.driver$|credential\..*helper$|credential\.helper$|gpg\.program$|remote\..*\.(receivepack|uploadpack|pushurl)$|url\..*\.(insteadof|pushinsteadof)$)/i.test(key);
 }
 
 const GIT_DIR_VALUE_FLAGS = new Set(['--git-dir', '--work-tree', '--namespace', '--super-prefix', '--config-env', '--exec-path']);
 
 function classifyGit(args: Word[], top: Word[], sc: Scope, io: Io, depth = 0): void {
+  if (args.some(a => !a.dynamic && (a.value === '-c' || a.value.startsWith('-c') || a.value.startsWith('--config-env')))) return unresolved(sc.sh, 'git runtime config overrides can execute commands');
   const probeArgs: string[] = [];
   const dirs: string[] = [...sc.cwds];
   let dirsUnknown = sc.cwdUnknown;
-  const overrides: [string, string][] = [];
   let i = 0;
   for (; i < args.length; i++) {
     const a = args[i];
@@ -366,13 +398,6 @@ function classifyGit(args: Word[], top: Word[], sc: Scope, io: Io, depth = 0): v
       const d = args[++i];
       if (!d || d.dynamic) dirsUnknown = true;
       else for (let j = 0; j < dirs.length; j++) dirs[j] = path.resolve(dirs[j], d.value);
-      continue;
-    }
-    if (v === '-c') {
-      const kv = args[++i];
-      if (!kv || kv.dynamic) return unresolved(sc.sh, 'git -c value built at run time');
-      const eq = kv.value.indexOf('=');
-      overrides.push([(eq < 0 ? kv.value : kv.value.slice(0, eq)).toLowerCase(), eq < 0 ? 'true' : kv.value.slice(eq + 1)]);
       continue;
     }
     if (GIT_DIR_VALUE_FLAGS.has(v)) {
@@ -390,14 +415,12 @@ function classifyGit(args: Word[], top: Word[], sc: Scope, io: Io, depth = 0): v
   const sub = subWord.value.toLowerCase();
   const rest = args.slice(i + 1);
   const cfg = (key: string, dir: string): string[] => {
-    const ov = overrides.filter(([k]) => k === key.toLowerCase()).map(([, v]) => v);
     const got = sc.sh.env.git(dir, [...probeArgs, 'config', '--get-all', key]);
-    return [...ov, ...(got.ok ? got.out.split('\n').filter(Boolean) : [])];
+    return [...(got.ok ? got.out.split('\n').filter(Boolean) : [])];
   };
 
   if (!GIT_BUILTINS.has(sub) && !sc.noAlias && depth < 3) {
-    const cli = overrides.find(([k]) => k === `alias.${sub}`)?.[1];
-    const lookups = cli !== undefined ? [cli] : dirsUnknown ? [] : dirs.flatMap((d) => cfg(`alias.${sub}`, d).slice(-1));
+    const lookups = dirsUnknown ? [] : dirs.flatMap((d) => cfg(`alias.${sub}`, d).slice(-1));
     for (const aliased of lookups) {
       if (aliased.startsWith('!')) analyzeScript(aliased.slice(1), sc, sc.inexact);
       else classifyGit([...aliased.split(/\s+/).filter(Boolean).map((value) => ({ value, dynamic: false })), ...rest], top, sc, io, depth + 1);
@@ -406,8 +429,13 @@ function classifyGit(args: Word[], top: Word[], sc: Scope, io: Io, depth = 0): v
   }
   if (sub === 'send-pack') return unresolved(sc.sh, 'git send-pack');
   if (sub === 'config') {
-    if (statics(rest).some((s) => /^alias\./i.test(s))) unresolved(sc.sh, 'git alias definitions are not allowed (they can hide a push)');
+    if (statics(rest).some((s) => executableGitKey(s))) unresolved(sc.sh, 'git command-running configuration is not allowed');
     return;
+  }
+  // `git config` itself is read-only here. Detect local helpers before invoking commands that could run them.
+  for (const dir of dirs) {
+    const configured = sc.sh.env.git(dir, [...probeArgs, 'config', '--get-regexp', '.*']);
+    if (configured.ok && configured.out.split('\n').some(line => executableGitKey(line.split(/\s+/)[0]) && !/^core\.hookspath\s+\/dev\/null$/i.test(line))) return unresolved(sc.sh, 'existing git configuration can execute commands');
   }
   if (sub !== 'push') return;
 
@@ -421,6 +449,7 @@ function classifyGit(args: Word[], top: Word[], sc: Scope, io: Io, depth = 0): v
     const v = rest[j].value;
     if (!afterDashDash && v === '--') { afterDashDash = true; continue; }
     if (!afterDashDash && v.startsWith('-') && v !== '-') {
+      if (v === '--tags' || v === '--follow-tags') return unresolved(sc.sh, 'tag pushes can publish or deploy; your owner runs them');
       if (v === '--all' || v === '--mirror' || v === '--branches') gated = true;
       if (v === '--repo') repoFlag = true;
       if (v.startsWith('--repo=')) repoFlag = true;
@@ -443,7 +472,7 @@ function classifyGit(args: Word[], top: Word[], sc: Scope, io: Io, depth = 0): v
     else if (protectedRef(dst)) hit.push(branchName(dst));
   }
   if (hit.length) return gate(sc, 'git push to main/master', top, () => normPush(remote, hit, nctx(sc)));
-  if (!implicit) return;
+  if (!implicit) return unresolved(sc.sh, 'direct pushes (including tags) are not brokered in v0; your owner runs it');
   if (dirsUnknown || !dirs.length) return unresolved(sc.sh, 'git push without a branch from a directory that cannot be determined');
   for (const dir of dirs) {
     const head = sc.sh.env.git(dir, [...probeArgs, 'symbolic-ref', '-q', '--short', 'HEAD']);
@@ -465,6 +494,7 @@ function classifyGit(args: Word[], top: Word[], sc: Scope, io: Io, depth = 0): v
       }
     }
   }
+  unresolved(sc.sh, 'direct pushes are not brokered in v0; your owner runs them');
 }
 
 function protectedRef(ref: string): boolean {
@@ -485,19 +515,49 @@ function classifyNpm(prog: string, args: Word[], top: Word[], sc: Scope, io: Io)
   }
   const lits = statics(args);
   if (lits.includes('publish')) return gate(sc, `${prog} publish`, top, () => normPublish(prog, args.slice(args.findIndex((a) => !a.dynamic && a.value === 'publish') + 1), nctx(sc)));
-  const first = firstPositional(args);
-  if (first?.dynamic) return unresolved(sc.sh, `${prog} subcommand built at run time`);
-  const positionals = args.filter((a) => a.dynamic || !a.value.startsWith('-'));
-  const [p0, p1] = positionals;
-  if (!p0) return;
-  const runs = prog === 'npm' || prog === 'npx' ? ['run', 'run-script'] : ['run', 'run-script', 'x'];
-  if (prog !== 'npm' && prog !== 'npx' && SCRIPT_NAME.test(p0.value)) return gate(sc, `${prog} ${p0.value} (package script)`, top, () => normScript(prog, p0.value, nctx(sc)));
-  if (runs.includes(p0.value) && p1 && !p1.dynamic && SCRIPT_NAME.test(p1.value)) return gate(sc, `${prog} ${p0.value} ${p1.value} (package script)`, top, () => normScript(prog, p1.value, nctx(sc)));
-  if (runs.includes(p0.value) && p1?.dynamic) return unresolved(sc.sh, `${prog} script name built at run time`);
+  if (lits.some(v => ['unpublish', 'dist-tag'].includes(v))) return unresolved(sc.sh, `${prog} registry write: your owner runs it`);
+  const positions: string[] = [];
+  let dirs = [...sc.cwds];
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (arg.dynamic) return unresolved(sc.sh, `${prog} command built at run time`);
+    const v = arg.value;
+    if (/^(--filter|--workspace|--workspaces|--recursive|-r|-w)(=|$)/.test(v) || /^-w.+/.test(v)) return unresolved(sc.sh, 'workspace-selected scripts cannot be resolved safely');
+    if (['--prefix', '--cwd', '-C'].includes(v) || /^(--prefix|--cwd)=/.test(v)) {
+      const dir = v.includes('=') ? v.slice(v.indexOf('=') + 1) : args[++i]?.value;
+      if (!dir || sc.cwdUnknown) return unresolved(sc.sh, 'package directory cannot be resolved');
+      dirs = dirs.map(d => path.resolve(d, dir)); continue;
+    }
+    if (v.startsWith('-')) continue;
+    positions.push(v);
+  }
+  const [sub, name] = positions;
+  if (!sub || (prog === 'bun' && sub === 'test')) return;
+  if (['install', 'i', 'ci', 'add', 'rebuild', 'version', 'prepare', 'pack'].includes(sub)) return unresolved(sc.sh, 'package lifecycle scripts can execute commands; your owner runs this');
+  const script = ['run', 'run-script'].includes(sub) ? name : ['test', 't', 'start', 'stop', 'restart'].includes(sub) ? (sub === 't' ? 'test' : sub) : ['bun', 'pnpm', 'yarn'].includes(prog) && !['x', 'exec', 'dlx', 'list', 'ls', 'info', 'why', 'outdated', 'remove', 'update', 'pm', 'repl', ...(prog === 'bun' ? ['build'] : [])].includes(sub) ? sub : undefined;
+  if (!script) return;
+  if (SCRIPT_NAME.test(script)) return gate(sc, `${prog} script ${script}`, top, () => normScript(prog, script, { ...nctx(sc), cwds: dirs }));
+  if (sc.cwdUnknown) return unresolved(sc.sh, 'package script directory cannot be determined');
+  if (sc.depth >= MAX_DEPTH) return unresolved(sc.sh, 'package scripts nested too deeply');
+  for (const dir of dirs) {
+    const file = sc.sh.env.readFile(path.join(dir, 'package.json'));
+    if (file.state !== 'text') return unresolved(sc.sh, 'package script cannot be read');
+    let pkg: { scripts?: Record<string, unknown> };
+    try { pkg = JSON.parse(file.text); } catch { return unresolved(sc.sh, 'package.json cannot be parsed'); }
+    const scripts = pkg?.scripts;
+    if (!scripts || typeof scripts[script] !== 'string') return unresolved(sc.sh, `package script ${script} cannot be resolved`);
+    for (const key of [`pre${script}`, script, `post${script}`]) {
+      const body = scripts[key];
+      if (body === undefined) continue;
+      if (typeof body !== 'string') return unresolved(sc.sh, `package script ${key} is not text`);
+      analyzeScript(body, { ...sc, cwds: [dir], depth: sc.depth + 1 }, sc.inexact);
+    }
+  }
 }
 
 function classifyTool(prog: 'wrangler' | 'phala' | 'changeset', args: Word[], top: Word[], sc: Scope): void {
   const words = prog === 'wrangler' ? ['deploy', 'publish'] : prog === 'phala' ? ['deploy'] : ['publish'];
+  if ((prog === 'wrangler' && statics(args).some(v => ['rollback', 'delete', 'secret'].includes(v))) || (prog === 'phala' && statics(args).includes('cvms'))) return unresolved(sc.sh, `${prog} write command: your owner runs it`);
   if (statics(args).some((s) => words.includes(s.toLowerCase()))) {
     return gate(sc, `${prog} ${words[0]}`, top, () => (prog === 'wrangler' ? normWrangler(args, nctx(sc)) : prog === 'phala' ? normPhala(args) : normChangeset(nctx(sc))));
   }
@@ -707,6 +767,8 @@ function classify(argv: Word[], top: Word[], sc: Scope, io: Io): void {
       }
       return;
     }
+    case 'semantic-release': return unresolved(sc.sh, 'semantic-release publishes from agent-controlled code; your owner runs it');
+    case 'make': case 'gmake': case 'turbo': case 'nx': case 'just': return unresolved(sc.sh, 'task runner recipes cannot be resolved safely; run the literal commands instead');
     case 'courier': return classifyCourier(args, sc);
     case 'wrangler': return classifyTool('wrangler', args, top, sc);
     case 'phala': return classifyTool('phala', args, top, sc);
@@ -737,6 +799,11 @@ function analyzeScript(text: string, parent: Scope, inexact: boolean): void {
   const sh = parent.sh;
   if (parent.depth + 1 > MAX_DEPTH) return unresolved(sh, 'scripts nested too deeply to inspect');
   // Credential and guard-configuration paths are refused wherever they appear, read or write (R2, B1, B2).
+  for (const candidate of unquoted(text).match(/https?:\/\/[^\s;]+/gi) ?? []) {
+    try {
+      if (/^(localhost|127\.\d+\.\d+\.\d+|\[::1\]|0\.0\.0\.0)$/i.test(new URL(candidate).hostname)) return never(parent, 'loopback requests can reach local services outside the guard');
+    } catch { /* not a literal URL */ }
+  }
   const credential = credentialTextRefusal(text);
   if (credential) return never(parent, `refused: ${credential}`);
   const parsed = parseShell(text);

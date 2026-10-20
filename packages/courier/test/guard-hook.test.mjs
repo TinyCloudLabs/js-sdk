@@ -37,7 +37,7 @@ function memoryKv() {
   return kv;
 }
 
-const FILES = { '/repo/package.json': JSON.stringify({ name: '@x/pkg', version: '1.2.3' }) };
+const FILES = { '/repo/package.json': JSON.stringify({ name: '@x/pkg', version: '1.2.3', scripts: { test: 'echo test', build: 'echo build', lint: 'echo lint' } }) };
 const env = {
   cwd: '/repo',
   readFile: (f) => (f in FILES ? { state: 'text', text: FILES[f] } : { state: 'absent' }),

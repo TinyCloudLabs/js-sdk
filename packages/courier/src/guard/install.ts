@@ -20,7 +20,7 @@ const GATED_DENY = [
   'gh pr merge', 'gh workflow run', 'gh release create', 'gh release edit', 'gh release delete', 'gh release upload', 'gh run rerun', 'gh secret', 'gh repo sync',
   'npm publish', 'npm unpublish', 'npm dist-tag', 'pnpm publish', 'bun publish', 'yarn npm publish', 'changeset publish', 'npx changeset publish', 'bunx changeset publish',
   'wrangler deploy', 'wrangler publish', 'wrangler delete', 'wrangler rollback', 'wrangler secret', 'npx wrangler deploy', 'phala deploy', 'phala cvms',
-  'git push origin main', 'git push origin master', 'git push --force', 'git push -f', 'git push --mirror', 'git push --all', 'git push --tags',
+  'git push', 'git push origin main', 'git push origin master', 'git push --force', 'git push -f', 'git push --mirror', 'git push --all', 'git push --tags',
 ].map((prefix) => `Bash(${prefix}:*)`);
 
 /** Programs that change user, outlive the call or reach credentials. */
@@ -160,6 +160,7 @@ const BLANKED_ENV = [
   'PHALA_CLOUD_API_KEY', 'PHALA_API_KEY', 'LINEAR_API_KEY', 'LINEAR_ACCESS_TOKEN', 'TYPESAFE_API_KEY',
   'AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY', 'AWS_SESSION_TOKEN', 'AWS_PROFILE', 'GOOGLE_APPLICATION_CREDENTIALS', 'GOOGLE_API_KEY', 'AZURE_CLIENT_SECRET',
   'OPENAI_API_KEY', 'SLACK_BOT_TOKEN', 'SLACK_TOKEN', 'DOCKER_PASSWORD', 'SSH_AUTH_SOCK', 'SSH_ASKPASS', 'GIT_ASKPASS',
+  'GIT_CONFIG_PARAMETERS', 'GIT_CONFIG_SYSTEM', 'GIT_CONFIG', 'GIT_EXEC_PATH', 'GIT_SSH_COMMAND', 'GIT_SSH', 'GIT_PROXY_COMMAND', 'GIT_EDITOR', 'GIT_SEQUENCE_EDITOR', 'GIT_PAGER', 'GIT_EXTERNAL_DIFF',
   'BASH_ENV', 'ENV', 'NODE_OPTIONS', 'NODE_PATH', 'LD_PRELOAD', 'LD_LIBRARY_PATH', 'DYLD_INSERT_LIBRARIES', 'ZDOTDIR', 'GH_CONFIG_DIR',
   'ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_CODE_OAUTH_TOKEN', 'CLAUDE_CODE_MESSAGING_TOKEN',
   'TC_PRIVATE_KEY', 'TC_PROFILE', 'TC_OWNER_DID', 'TC_API_KEY', 'TC_TOKEN', 'TC_OPENKEY_HOST', 'TC_OPENKEY_API_HOST', 'TC_AUTH_NO_POPUP', 'TC_NO_POPUP',
@@ -176,6 +177,8 @@ export function agentHomeEnv(home: string): Record<string, string> {
     XDG_CACHE_HOME: path.join(clean, '.cache'), XDG_STATE_HOME: path.join(clean, '.local/state'),
     XDG_RUNTIME_DIR: path.join(clean, '.runtime'),
     COURIER_HOME: home, TC_HOME: noOwnerProfileDir(home),
+    GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'core.hooksPath', GIT_CONFIG_VALUE_0: '/dev/null',
+    GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: path.join(clean, '.gitconfig'),
   };
 }
 
@@ -200,7 +203,7 @@ const CREDENTIAL_LIKE = /(TOKEN|SECRET|PASSW|API_?KEY|ACCESS_KEY|PRIVATE_KEY|CRE
  */
 export function courierEnvOverrides(base: NodeJS.ProcessEnv, home: string, extra: readonly string[] = []): Record<string, string> {
   const out: Record<string, string> = {};
-  for (const name of [...Object.keys(base).filter((n) => CREDENTIAL_LIKE.test(n) || /^XDG_/.test(n)), ...BLANKED_ENV]) {
+  for (const name of [...Object.keys(base).filter((n) => CREDENTIAL_LIKE.test(n) || /^(XDG_|GIT_)/.test(n)), ...BLANKED_ENV]) {
     if (!allowed(name, extra) && !name.startsWith('PASEO_') && /^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) out[name] = '';
   }
   Object.assign(out, agentHomeEnv(home));

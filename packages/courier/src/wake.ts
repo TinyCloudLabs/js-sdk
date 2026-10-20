@@ -7,6 +7,7 @@ import { defer } from './defer.js';
 import { CourierError } from './errors.js';
 import { cmd } from './program.js';
 import { courierEnvOverrides, courierOnlyEnv } from './guard/install.js';
+import { startsAgentCli } from './guard/policy.js';
 import { prepareCleanHome } from './guard/cleanhome.js';
 import { GUARD_LABEL, installProjectGuard, isClaudeProvider, paseoEnv, sameDir, verifyProjectGuard } from './guard/paseo.js';
 
@@ -224,6 +225,7 @@ export function createWaker(
   const exec: Waker = async (request) => {
     // The exec adapter installs no guard. It runs only when the operator said so, and says so on every wake.
     if (!config.unguarded) throw new CourierError('usage', UNGUARDED_REFUSAL);
+    if (config.exec && startsAgentCli(config.exec)) throw new CourierError('usage', '--unguarded exec cannot start an agent CLI; use a guarded adapter.');
     prepareHome();
     notice(`${UNGUARDED_NOTICE} (thread ${request.threadId}, peer ${label(request.peer)})`);
     const run = deadlineRunner(deps.run, config.timeoutMs);

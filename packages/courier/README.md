@@ -290,14 +290,14 @@ owner's tokens and files are the deeper boundary (see Residual risk).
 | Command | Verb and target it is reduced to |
 |---|---|
 | `gh pr merge <n\|url> [--repo o/r]` | `merge owner/repo#<n>` |
-| `git push` of `main`/`master` in any spelling (`HEAD:main`, `refs/heads/main`, `+x:master`, `:main`, `--force`, `--all`/`--mirror`, glob refspecs, no refspec while on `main`, `push.default=matching`, upstream or `remote.*.push` pointing at `main`) | `merge owner/repo@main` |
+| `git push` (all direct pushes refused in v0), including `main`/`master` in any spelling (`HEAD:main`, `refs/heads/main`, `+x:master`, `:main`, `--force`, `--all`/`--mirror`, glob refspecs, no refspec while on `main`, `push.default=matching`, upstream or `remote.*.push` pointing at `main`) | `merge owner/repo@main` |
 | `gh api …/pulls/<n>/merge`, `…/git/refs/heads/main`, `…/merges`; `curl`/`wget` to the same URLs | `merge owner/repo#<n>` or `@<branch>` |
 | `npm`/`pnpm`/`yarn`/`bun publish` (reads `package.json`) | `publish npm:<name>@<version>` |
 | `changeset publish` | `publish changeset:<root package>` |
 | `gh release create\|edit\|delete\|upload` (not `list`/`view`/`download`) | `publish release:owner/repo@<tag>` |
 | `wrangler deploy\|publish`, `wrangler pages deploy` | `deploy wrangler:<name>[:<env>]`, `deploy pages:<project>` |
 | `phala deploy` | `deploy phala:<name>` |
-| `npm\|bun\|pnpm\|yarn run deploy\|publish\|release` | `deploy\|publish script:<package>:<script>` |
+| `npm\|bun\|pnpm\|yarn run deploy\|publish\|release` (including colon suffixes) | `deploy\|publish script:<package>:<script>` |
 | `gh workflow run` | `other workflow:owner/repo:<workflow>` |
 | `tc`/`tinycloud` except their Courier subcommand | Never approvable: reaches owner profiles |
 
@@ -378,6 +378,21 @@ first rule applies to the file). What it still cannot name (loops or functions
 around a gated command, a shell reading from a pipe, GraphQL merges, a script the
 same command writes, several targets) is refused as "cannot be told apart from a
 gated command". `gh release list|view|download` are read-only and not gated.
+
+**Scripts and write tools.** Package `run`/`test` scripts are read from the
+resolved package.json, including pre/post scripts, and inspected by the same
+policy. Unreadable or missing scripts, workspace/filter selectors, lifecycle
+install/version commands and unresolved make/turbo recipes refuse. Git `-c`
+and `--config-env` overrides, command-running config keys and pre-existing
+local executable helpers refuse; wake environments pin `core.hooksPath` to
+`/dev/null` with `GIT_CONFIG_COUNT/KEY_0/VALUE_0`. All direct pushes (including
+tags) are for the owner. GitHub API writes refuse except literal POSTs to
+issue/PR comment endpoints; gh repo sync/run rerun/secrets, npm unpublish and
+dist-tag, semantic-release, wrangler rollback/delete/secrets and phala cvms
+writes refuse. Loopback requests and nested agent npm packages refuse too.
+`--wake exec --unguarded` cannot start an agent CLI as its first word.
+Arbitrary code and pre-existing compiled tools remain outside this policy's
+inspection boundary.
 
 **Installing it.** `courier watch --wake claude` writes
 `<COURIER_HOME>/guard/settings.json` on every start and passes it as
