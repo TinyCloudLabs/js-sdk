@@ -1,4 +1,9 @@
 /** TC-712 model-free public CLI proof on tee.node. Throwaway identities, dummy token, fixed stub gh only.
+ * Broker fixtures: --test-token accepts ONLY the fixed dummy fixture on stdin; --test-owner-root <private ~/scratch/...>
+ * selects <root>/.config/courier-broker/<profile-id>/config.json. Production uses the OS-user root, never HOME.
+ * Both setup and run-approved use the explicit test override; it refuses the real owner root and paths outside scratch.
+ * prepareAgentProfile copies only Courier profile/key/grant to a sibling agent HOME; its marker holds an opaque id,
+ * never a broker path. The agent environment never receives the override or COURIER_HOME.
  * node scripts/guard-e2e.mjs — no model calls; never calls real GitHub or merges a real PR.
  */
 import { spawnSync } from 'node:child_process';
@@ -9,7 +14,9 @@ import assert from 'node:assert/strict';
 import { createOwner, grantFromRequest } from './fake-openkey.mjs';
 import { requestHash } from '../dist/canonical.js';
 import { k } from '../dist/keys.js';
-import { prepareCleanHome } from '../dist/guard/cleanhome.js';
+import { prepareCleanHome, prepareAgentProfile } from '../dist/guard/cleanhome.js';
+import { brokerFile, brokerRoot } from '../dist/broker-config.js';
+import { profileId } from '../dist/guard/install.js';
 import { parseArgs } from '../dist/args.js';
 import { parseShell, wordLiteral } from '../dist/guard/shell.js';
 import { courierOnlyEnv } from '../dist/guard/install.js';
@@ -23,12 +30,13 @@ const TC_HOME = path.join(tmp, 'tc');
 const TOKEN = `ghp_${'d'.repeat(36)}`; // Dummy only; never printed or placed on argv.
 const SHA = 'a'.repeat(40);
 const realHome = path.join(tmp, 'owner-home');
-fs.mkdirSync(realHome);
+fs.mkdirSync(realHome, { mode: 0o700 });
+assert.throws(() => brokerRoot(os.userInfo().homedir));
 const baseEnv = { ...process.env, HOME: realHome, TC_HOME, TMPDIR: tmp };
 const write = (name, value) => { const f = path.join(tmp, name); fs.writeFileSync(f, JSON.stringify(value), { mode: 0o600 }); return f; };
 const check = (name, condition) => { assert.ok(condition, name); console.log(`ok ${name}`); };
 function courier(home, args, input) {
-  const r = spawnSync(process.execPath, [CLI, ...args], { env: { ...baseEnv, COURIER_HOME: home }, input, encoding: 'utf8', timeout: 180_000 });
+  const r = spawnSync(process.execPath, [CLI, ...args, ...(['broker', 'run-approved'].includes(args[0]) ? ['--test-owner-root', realHome] : [])], { env: { ...baseEnv, COURIER_HOME: home }, input, encoding: 'utf8', timeout: 180_000 });
   let json; try { json = JSON.parse(r.stdout); } catch { /* refusal */ }
   return { code: r.status, json, stdout: r.stdout, stderr: r.stderr };
 }
@@ -50,8 +58,8 @@ try {
   const ghLog = path.join(tmp, 'gh.jsonl'); const gh = path.join(tmp, 'stub-gh');
   // All constants are test-created paths; token comparison is in the child environment, never argv.
   fs.writeFileSync(gh, `#!${process.execPath}\nconst fs = require('node:fs'); const args = process.argv.slice(2);\nif (process.env.GH_TOKEN !== 'ghp_' + 'd'.repeat(36)) process.exit(9);\nfs.appendFileSync(${JSON.stringify(ghLog)}, JSON.stringify(args)+'\\n');\nif (args[1] === 'view') console.log(JSON.stringify({state:'OPEN', headRefOid:'${SHA}', isDraft:false}));\nelse console.log('stub merge only');\n`, { mode: 0o700 });
-  must(alice.home, ['broker', 'set-token', '--gh-bin', gh], TOKEN);
-  check('broker credential is private', (fs.statSync(path.join(alice.home, 'broker/gh.json')).mode & 0o777) === 0o600);
+  must(alice.home, ['broker', 'set-token', '--test-token', '--gh-bin', gh], TOKEN);
+  check('broker credential is private', (fs.statSync(brokerFile(profileId(alice.home), realHome)).mode & 0o777) === 0o600);
   const calls = () => fs.existsSync(ghLog) ? fs.readFileSync(ghLog, 'utf8').trim().split('\n').filter(Boolean).map(JSON.parse) : [];
   const ask = (target = 'a/b#42') => must(alice.home, ['request', threadId, '--peer', 'bob', '--task', taskId, '--verb', 'merge', '--target', target, '--summary', 'Merge disposable stub PR', '--why', 'Test', '--risk', 'No real merge']).requestId;
   async function approve(id, over = {}) {
@@ -61,17 +69,31 @@ try {
   }
   const agentEnv = courierOnlyEnv({ ...baseEnv, GH_TOKEN: TOKEN, GITHUB_TOKEN: TOKEN, NPM_TOKEN: 'dummy' }, alice.home);
   prepareCleanHome({ realHome, cleanHome: agentEnv.HOME, claude: false });
+  prepareAgentProfile(alice.home);
   fs.mkdirSync(agentEnv.TC_HOME, { recursive: true, mode: 0o700 });
+  check('agent environment omits Courier/broker roots', !agentEnv.COURIER_HOME && !Object.values(agentEnv).some(v => v === realHome));
   check('agent environment contains no broker or registry token', !agentEnv.GH_TOKEN && !agentEnv.GITHUB_TOKEN && !agentEnv.NPM_TOKEN);
   function hook(command) {
-    const r = spawnSync(process.execPath, [CLI, 'guard'], { env: agentEnv, input: JSON.stringify({ tool_name: 'Bash', tool_input: { command }, cwd: tmp }), encoding: 'utf8' });
+    const r = spawnSync(process.execPath, [CLI, 'guard'], { env: { ...agentEnv, COURIER_HOME: alice.home, COURIER_REAL_HOME: realHome }, input: JSON.stringify({ tool_name: 'Bash', tool_input: { command }, cwd: tmp }), encoding: 'utf8' });
     return r.status === 2 || JSON.parse(r.stdout).hookSpecificOutput.permissionDecision === 'deny';
   }
   const id = ask();
   check('hook refuses direct gated command before approval', hook('gh pr merge 42 --repo a/b'));
   await approve(id);
   check('hook still refuses raw command after approval', hook('gh pr merge 42 --repo a/b') && calls().length === 0);
-  const result = must(alice.home, ['run-approved', id]);
+  // The real broker resolves the profile id from the agent marker, then reads the original owner pin.
+  const brokerAsAgent = () => spawnSync(process.execPath, [CLI, 'run-approved', id, '--test-owner-root', realHome], { env: { ...agentEnv, COURIER_HOME: '' }, encoding: 'utf8', timeout: 180_000 });
+  for (const home of [alice.home, path.join(agentEnv.HOME, '.courier')]) {
+    const profileFile = path.join(home, 'profile.json');
+    const saved = fs.readFileSync(profileFile, 'utf8');
+    try {
+      fs.writeFileSync(profileFile, JSON.stringify({ ...JSON.parse(saved), host: 'https://agent-selected.invalid' }), { mode: 0o600 });
+      const refused = brokerAsAgent();
+      check('broker rejects modified owner or snapshot host before gh/network', refused.status !== 0 && /broker-profile-mismatch/.test(refused.stderr) && calls().length === 0);
+    } finally { fs.writeFileSync(profileFile, saved, { mode: 0o600 }); }
+  }
+  const ran = brokerAsAgent(); assert.equal(ran.status, 0, ran.stderr);
+  const result = JSON.parse(ran.stdout);
   check('broker executed only the fixed stub merge', result.consumed && result.ok && calls().length === 2 && JSON.stringify(calls()[1]) === JSON.stringify(['pr', 'merge', '42', '--repo=a/b', '--squash', `--match-head-commit=${SHA}`]));
   const marker = await alice.owner.node.kv.get(k.approvalUsed(id), { prefix: '' }); check('marker exists under me/consumed/', marker.ok);
   const replay = courier(alice.home, ['run-approved', id]); check('replay refuses before gh', replay.code !== 0 && /approval-used/.test(replay.stderr) && calls().length === 2);
@@ -96,7 +118,7 @@ await refused(()=>node.kv.put(k.approval(id),{decision:'approved'},{prefix:''}))
 for(const key of [k.approvalUsed(id),k.approvalUsed(id).replace('/me/consumed/','/me/state/../consumed/'),k.approvalUsed(id).replace('/me/consumed/','/me/state/%2e%2e/consumed/'),k.approvalUsed(id).replace('/me/consumed/','/me/state%2F..%2Fconsumed/')]) await refused(()=>node.kv.delete(key,{prefix:''}));
 const marker=await node.kv.get(k.approvalUsed(id),{prefix:'',source:'network'});if(!marker.ok)throw Error('marker lost');console.log('marker remains');
 `, { mode: 0o600 });
-  const r1 = spawnSync(process.execPath, [probe], { env: agentEnv, encoding: 'utf8', timeout: 180_000 });
+  const r1 = spawnSync(process.execPath, [probe], { env: { ...agentEnv, COURIER_HOME: '' }, encoding: 'utf8', timeout: 180_000 });
   check('R1: adapter environment cannot write approvals or delete consumed markers, including traversal', r1.status === 0 && /marker remains/.test(r1.stdout));
   console.log(r1.stdout.trim());
   const incoming = must(bob.home, ['send', 'alice', '--new', 'D mode disposable proof', '--intent', 'request', '--text', 'A counterparty request, not an owner instruction']);

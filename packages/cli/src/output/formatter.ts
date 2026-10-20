@@ -1,10 +1,11 @@
 import ora from "ora";
 import { CLI_NAME } from "@tinycloud/operations/cli-name";
+import { safeBlock, safeInline, safeJsonStringify } from "./safe-text.js";
 import { theme } from "./theme.js";
 import { drainWarnings, mergeWarnings } from "./warnings.js";
 
 export function outputJson(data: unknown): void {
-  process.stdout.write(JSON.stringify(data, null, 2) + "\n");
+  process.stdout.write(safeJsonStringify(data, 2) + "\n");
 }
 
 /** A skipped-grant (or other) diagnostic from an operation result: fixed codes only. */
@@ -48,12 +49,14 @@ export function outputError(
 ): void {
   const { meta, warnings = [], setup, recovery, progress } = details;
   if (!shouldOutputJson()) {
+    // Messages and hints can quote text from a request file, a registry or the network: on a terminal
+    // they are escaped (control characters, ANSI, bidi, zero-width). JSON output below stays exact.
     process.stderr.write(
-      `${theme.error("✗")} ${theme.label(code)}: ${message}\n`
+      `${theme.error("✗")} ${theme.label(safeInline(code))}: ${safeBlock(message)}\n`
     );
     if (hint) {
       for (const line of hint.split("\n")) {
-        process.stderr.write(`  ${theme.hint(line)}\n`);
+        process.stderr.write(`  ${theme.hint(safeBlock(line))}\n`);
       }
     }
     if (warnings.length > 0) process.stderr.write(`  ${theme.warn("!")} ${warningLine(warnings)}\n`);
@@ -78,7 +81,8 @@ export function outputError(
     if (progress) payload.error.progress = progress;
     if (meta) payload.error.meta = meta;
     if (warnings.length > 0) payload.error.warnings = warnings;
-    process.stderr.write(JSON.stringify(payload, null, 2) + "\n");
+    // Stdout may be redirected while stderr is still a terminal, so the JSON form is terminal-safe too.
+    process.stderr.write(safeJsonStringify(payload, 2) + "\n");
   }
 }
 
@@ -92,7 +96,7 @@ export function outputWarnings(warnings: readonly OperationWarningOutput[]): voi
   const combined = mergeWarnings(drainWarnings(), operationWarnings(warnings));
   if (combined.length === 0) return;
   process.stderr.write(shouldOutputJson()
-    ? `${JSON.stringify({ warnings: combined })}\n`
+    ? `${safeJsonStringify({ warnings: combined })}\n`
     : `${theme.warn("!")} ${warningLine(combined)}\n`);
 }
 

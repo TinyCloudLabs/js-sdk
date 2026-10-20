@@ -16,6 +16,8 @@ const expectedOperationIds = [
   "tinycloud.auth.import",
   "tinycloud.auth.request",
   "tinycloud.auth.status",
+  "tinycloud.knowledge.list",
+  "tinycloud.knowledge.read",
   "tinycloud.kv.delete",
   "tinycloud.kv.get",
   "tinycloud.kv.head",

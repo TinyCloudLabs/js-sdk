@@ -320,7 +320,7 @@ test('held backlog wakes exactly once after resume without another incoming mess
   assert.deepEqual(a.wakes[0].messages.map(m => m.messageId).sort(), ids.sort());
 });
 
-test('bounded legacy outbox retries persist with hourly cap across restarts and stop after three attempts', async () => {
+test('bounded legacy outbox retries persist with backoff across restarts and stop after eight failures', async () => {
   const clock = { t: Date.parse('2026-10-20T12:00:00Z') };
   const mine = memoryKv();
   const items = Array.from({ length: 70 }, (_, i) => ({ id: `n${i}`, kind: 'notify', notice: { kind: 'peer-paused', peer: 'bob', threadId: ulid(), detail: 'fixed' } }));
@@ -328,12 +328,11 @@ test('bounded legacy outbox retries persist with hourly cap across restarts and 
   let a = side({ handle: 'alice', peerHandle: 'bob', mine, theirs: memoryKv(), clock, notifyFails: 1000 });
   await a.watcher.loadState(); assert.equal(a.watcher.snapshot().outbox.length, 50);
   await a.watcher.tick();
-  assert.equal(a.watcher.snapshot().outbox.length, 10, 'excess unattempted legacy notices are dropped at dispatch');
-  for (let attempt = 1; attempt < 3; attempt++) {
+  for (let attempt = 1; attempt < 8; attempt++) {
     a = side({ handle: 'alice', peerHandle: 'bob', mine, theirs: memoryKv(), clock, notifyFails: 1000 });
     await a.watcher.loadState(); await a.watcher.tick();
     assert.equal(a.events.filter(e => e.event === 'notify-error').length, 0, 'restart respects persisted deadline');
-    clock.t += 3600_001;
+    clock.t += 16 * 60_000;
     await a.watcher.tick();
   }
   assert.deepEqual(a.watcher.snapshot().outbox, []);
@@ -412,59 +411,4 @@ test('notification log is private, fixed-text, append-only between bounded rotat
     assert.throws(() => notifyConfig(parseArgs(['--notify', 'paseo']), wake), /Unknown --notify/);
     assert.throws(() => notifyConfig(parseArgs(['--notify', 'exec', '--notify-exec', 'claude -p hi']), wake), /agent CLI/);
   } finally { fs.rmSync(home, { recursive: true, force: true }); }
-});
-
-test('pause/resume/pause/resume/pause in one UTC day notifies both humans once per generation', async () => {
-  const clock = { t: Date.parse('2026-10-20T12:00:00Z') }, aliceKv=memoryKv(), bobKv=memoryKv();
-  const a=side({handle:'alice',peerHandle:'bob',mine:aliceKv,theirs:bobKv,clock,budget:1});
-  const b=side({handle:'bob',peerHandle:'alice',mine:bobKv,theirs:aliceKv,clock,budget:1});
-  a.watcher.deps.postInform=async(to,threadId,text,id)=>{await postPausedInform(aliceKv,{ownerDid:'o',courierDid:'a',label:'test'},to,threadId,text,id);};
-  const thread=ulid(),generations=[];
-  say(bobKv,'alice',thread,'request');await a.watcher.pollOnce('poll');await a.watcher.tick();
-  for(let i=0;i<3;i++){
-    clock.t+=1000;say(bobKv,'alice',thread,'request');await a.watcher.pollOnce('poll');await a.watcher.tick();await a.watcher.tick();
-    generations.push(aliceKv.rows.get(k.paused('bob',thread)).value.informId);
-    await b.watcher.pollOnce('poll');await b.watcher.tick();
-    assert.equal(a.notices.length,i+1,'local human sees each new marker');assert.equal(b.notices.length,i+1,'peer human sees each new generation');
-    await a.watcher.tick();await b.watcher.pollOnce('poll');await b.watcher.tick();assert.equal(a.notices.length,i+1);assert.equal(b.notices.length,i+1);
-    if(i<2){aliceKv.rows.delete(k.paused('bob',thread));await a.watcher.pollOnce('poll');await a.watcher.tick();}
-  }
-  assert.equal(new Set(generations).size,3);
-});
-
-test('delivered-then-failed real exec counts every attempt toward 10/hour and gives up after three per notice', async () => {
-  const home=fs.mkdtempSync(path.join(os.tmpdir(),'courier-notice-cap-'));
-  try{
-    const clock={t:Date.parse('2026-10-20T12:00:00Z')},mine=memoryKv(),theirs=memoryKv();
-    let a=side({handle:'alice',peerHandle:'bob',mine,theirs,clock});
-    const {spawnRunner}=await import('../dist/wake.js');
-    const notifier=createNotifier({adapter:'exec',owner:'alice',exec:'printf "%s\\n" "$COURIER_NOTICE_TEXT" >> "$COURIER_HOME/deliveries"; exit 1',wake:{cwd:home,home,timeoutMs:1000}},{run:spawnRunner,env:{PATH:process.env.PATH}});
-    a.watcher.deps.notify=notifier;
-    for(let i=0;i<10;i++)await postPausedInform(theirs,{ownerDid:'o',courierDid:'a',label:'test'},'alice',ulid(),'fixed');
-    await a.watcher.pollOnce('poll');
-    for(const minute of [0,1,3,7,15,30,45]){clock.t=Date.parse('2026-10-20T12:00:00Z')+minute*60000;await a.watcher.tick();}
-    const deliveries=()=>fs.readFileSync(path.join(home,'deliveries'),'utf8').trim().split('\n').length;
-    assert.equal(deliveries(),10,'no retry bypasses the hourly dispatch cap');
-    // Restart cannot reset dispatch counts or per-notice attempts.
-    for(let hour=1;hour<=2;hour++){
-      clock.t=Date.parse('2026-10-20T12:00:00Z')+hour*3600000;
-      a=side({handle:'alice',peerHandle:'bob',mine,theirs,clock});a.watcher.deps.notify=notifier;await a.watcher.loadState();await a.watcher.tick();
-      assert.equal(deliveries(),(hour+1)*10);
-    }
-    assert.deepEqual(a.watcher.snapshot().outbox,[]);
-    clock.t+=3600000;await a.watcher.tick();assert.equal(deliveries(),30,'three delivery attempts per notice maximum');
-  }finally{fs.rmSync(home,{recursive:true,force:true});}
-});
-
-test('long failed wake backs off from completion and preserves that deadline across restart', async () => {
-  const clock={t:Date.parse('2026-10-20T12:00:00Z')},mine=memoryKv(),theirs=memoryKv();
-  let a=side({handle:'alice',peerHandle:'bob',mine,theirs,clock,budget:3}),attempts=0;
-  const fail=async()=>{attempts++;clock.t+=15*60000;throw Error('timeout');};a.watcher.deps.wake=fail;
-  const thread=ulid();say(theirs,'alice',thread,'request');await a.watcher.pollOnce('poll');await a.watcher.tick();
-  const ended=clock.t;await a.watcher.tick();assert.equal(attempts,1,'failure completion starts the backoff');
-  a=side({handle:'alice',peerHandle:'bob',mine,theirs,clock,budget:3});a.watcher.deps.wake=fail;await a.watcher.loadState();
-  clock.t=ended+59999;await a.watcher.tick();assert.equal(attempts,1,'restart keeps the remaining delay');
-  clock.t=ended+60000;await a.watcher.tick();assert.equal(attempts,2);
-  const secondEnd=clock.t;clock.t+=119999;await a.watcher.tick();assert.equal(attempts,2,'second failure backs off two minutes from its end');
-  clock.t=secondEnd+120000;await a.watcher.tick();assert.equal(attempts,3);
 });

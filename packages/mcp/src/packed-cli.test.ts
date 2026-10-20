@@ -89,6 +89,8 @@ process.stdout.write(JSON.stringify(tools));
     tinycloud_kv_head: "tinycloud.kv.head",
     tinycloud_kv_put: "tinycloud.kv.put",
     tinycloud_kv_delete: "tinycloud.kv.delete",
+    tinycloud_knowledge_list: "tinycloud.knowledge.list",
+    tinycloud_knowledge_read: "tinycloud.knowledge.read",
     tinycloud_sql_schema_inspect: "tinycloud.sql.schema.inspect",
     tinycloud_sql_query: "tinycloud.sql.query",
     tinycloud_sql_execute: "tinycloud.sql.execute",
@@ -108,7 +110,7 @@ process.stdout.write(JSON.stringify(tools));
       name: string;
       title: string;
     }>;
-    expect(tools).toHaveLength(17);
+    expect(tools).toHaveLength(19);
     expect(tools.map((tool) => tool.title)).toEqual(
       tools.map((tool) => titlesByOperation.get(operationByTool[tool.name]!)!),
     );

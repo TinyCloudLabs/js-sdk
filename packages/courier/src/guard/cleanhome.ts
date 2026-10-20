@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { agentHome, profileId } from './install.js';
 import { spawnSync } from 'node:child_process';
 
 /**
@@ -118,4 +119,18 @@ export function prepareCleanHome(options: CleanHomeOptions): CleanHome {
     exposed.push(rel);
   }
   return { home, configDir: claudeDir, exposed };
+}
+
+/** Copy only the Courier identity, never broker state or a pointer to its directory. */
+export function prepareAgentProfile(courierHome: string): void {
+  const home = agentHome(courierHome);
+  const dir = path.join(home, '.courier');
+  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  fs.chmodSync(dir, 0o700);
+  for (const name of ['profile.json', 'key.json', 'grant.json']) {
+    const from = path.join(courierHome, name);
+    if (fs.existsSync(from) && !copyFile(from, path.join(dir, name), 0o600)) throw new Error('Cannot prepare agent Courier identity');
+  }
+  fs.writeFileSync(path.join(home, '.courier-agent.json'), JSON.stringify({ v: 1, profileId: profileId(courierHome) }), { mode: 0o600 });
+  for (const name of ['tmp', 'no-owner-profile']) fs.mkdirSync(path.join(home, name), { recursive: true, mode: 0o700 });
 }

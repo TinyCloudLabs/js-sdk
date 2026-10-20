@@ -26,13 +26,14 @@ export interface PauseMarker {
 
 /** Posts the machine-readable "thread paused" `inform` to the peer (it never wakes anyone; its watcher notifies its human). */
 export async function postPausedInform(kv: KV, profile: Profile, peerHandle: string, threadId: string, text: string, messageId?: string): Promise<string> {
-  const pauseId = messageId ?? ulid();
-  if (!ULID.test(pauseId)) throw new CourierError('usage', 'Invalid pause inform id.');
   const message = buildMessage({
-    pauseId, threadId, text, role: 'ROLE_AGENT', intent: 'inform', notice: 'thread-paused',
+    threadId, text, role: 'ROLE_AGENT', intent: 'inform', notice: 'thread-paused',
     from: { owner: profile.ownerDid!, agent: profile.courierDid, label: profile.label },
   });
-  message.messageId = pauseId;
+  if (messageId) {
+    if (!ULID.test(messageId)) throw new CourierError('usage', 'Invalid pause inform id.');
+    message.messageId = messageId;
+  }
   try { await putCreate(kv, k.msg(peerHandle, threadId, message.messageId), message); } catch (error) {
     if (!(error instanceof CourierError && error.code === 'conflict')) throw error;
   }

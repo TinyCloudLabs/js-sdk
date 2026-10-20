@@ -2,6 +2,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { isRecord } from '../a2a.js';
+import { discoverBinaries } from './binaries.js';
+import { guardDir } from './install.js';
 import { GUARD_HOOK_RE, guardSettings, projectSettings } from './install.js';
 
 /**
@@ -27,6 +29,8 @@ export interface ProjectGuard {
 
 /** Install (or refresh) the guard in `<cwd>/.claude/settings.local.json`, merged with whatever is already there. */
 export function installProjectGuard(cwd: string, home: string, guard: ProjectGuard): string {
+  fs.mkdirSync(guardDir(home), { recursive: true, mode: 0o700 });
+  fs.writeFileSync(path.join(guardDir(home), 'binaries.json'), JSON.stringify(discoverBinaries(process.env.PATH ?? '', cwd)), { mode: 0o600 });
   const file = projectSettingsFile(cwd);
   fs.mkdirSync(path.dirname(file), { recursive: true });
   let theirs: unknown;

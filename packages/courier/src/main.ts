@@ -53,7 +53,7 @@ Guards (woken agents run with these; humans rarely do):
   run-approved <requestId>         Broker: verify MY human's approval, consume before exec, then merge
                                    only the approved PR with fixed argv. No flags. Failure after exec uses
                                    the approval up; retry needs a new request.
-  broker set-token [--gh-bin path] Humans only: configure the broker GitHub token on stdin (never argv).
+  broker set-token [--gh-bin path] Humans only: pin Courier identity and use the owner’s gh auth at run time.
   broker status | clear            Inspect configuration without its token, or remove it.
   guard                            Claude Code PreToolUse hook: reads one tool call as JSON on stdin and refuses
                                    merge, deploy, publish, push to main/master, \`tc secrets\` and similar.
