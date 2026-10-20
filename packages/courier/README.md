@@ -105,18 +105,35 @@ For the OpenKey API host it is flag > env > derived. `TC_HOME`, `TC_PROFILE`,
 - **Wake.** After `--debounce` seconds (default 30, never later than twice that
   after the first message) the thread gets one wake carrying all its new
   messages. `inform` messages never wake. Pending wakes live in
-  `me/state/watch.json`, so a restart does not lose or repeat them.
+  `me/state/watch.json`, so a restart does not lose them.
 
 Every step logs one JSON object per line on stdout (`start`, `hook-event`,
 `delivered` with `via` and `latencyMs`, `waking` with `wakeLatencyMs` (send to
 adapter start), `woke` with `runMs`, errors). `--once` does a single catch-up pass,
-wakes immediately and exits. Run one watcher per profile: the state file is
-written with if-match and a wake is claimed with such a write first, so when a
-second watcher runs, the one holding the stale etag stops with `state-conflict`
-(exit 1) and never wakes. Wakes are at-least-once: a
-crash between a wake and the state write wakes that thread again on restart.
-When a subscription is re-opened the watcher also runs a catch-up sync; the
-SDK's own ticket renewals are invisible to it, and the poll covers those gaps.
+wakes immediately and exits. Run one watcher per profile.
+
+Wake claims keep a second watcher from waking what the first is waking. Before
+an adapter runs, the watcher takes a create-only claim
+(`me/state/wake-claims/<peer>/<thread>/<first message>.json`) naming itself:
+a profile id kept in `<COURIER_HOME>/watcher-id`, a run id and its pid.
+
+- A restarted watcher (same profile id, the old pid gone: crash, reboot,
+  service restart, a `--once` re-run) takes over the old claim **at once**. A
+  failed adapter run deletes its own claim, so a retry does not wait either.
+- A claim whose holder is still alive (a second watcher on the same profile),
+  or that another profile or machine made less than 35 minutes ago (adapter runs
+  are capped at 30 minutes by `--wake-timeout`), makes the watcher **skip that
+  thread** for 30 s and log `claimed-elsewhere`; it never wakes it.
+- The state file (`me/state/watch.json`) is written with if-match. A second
+  watcher that writes it with a stale etag stops with `state-conflict` (exit 1)
+  and releases any claim it had taken.
+
+Wakes are at-least-once: a crash between a wake and the state write wakes that
+thread again on restart (the new watcher takes the dead one's claim).
+When a subscription is re-opened the watcher also runs a catch-up sync two
+seconds later (the SDK's hook stream exposes no "connected" signal, only
+events); the SDK's own ticket renewals are invisible to it, and the poll covers
+those gaps.
 
 ### Wake adapters
 
