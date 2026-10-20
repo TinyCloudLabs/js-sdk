@@ -43,6 +43,7 @@
     "cli-share-fragment-wording",
     "cli-wait-openkey-space-setup",
     "courier-approval",
+    "courier-profile-permissions",
     "courier-wake",
     "courier-watch",
     "delegation-create-list-node-paths",
