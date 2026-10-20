@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 
 import { authorizationFailure, nodeRevocationOf } from "./kv-failure.js";
+import { REVOKED_GRANT_MESSAGE } from "./revoked-grant.js";
 
 const revokedCid = `bafkr4i${"a".repeat(52)}`;
 const ancestorCid = `bafkr4i${"b".repeat(52)}`;
@@ -27,7 +28,7 @@ test.each([
     status: "error",
     error: {
       code: "AUTH_REQUIRED",
-      message: "Authentication is required to read KV changes.",
+      message: REVOKED_GRANT_MESSAGE,
       retryable: false,
       details,
     },

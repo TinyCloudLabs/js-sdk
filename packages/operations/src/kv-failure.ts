@@ -3,6 +3,7 @@ import { authorizationVerdictOf, validatedCapabilityOf } from "@tinycloud/sdk-se
 import { DELEGATION_CID_PATTERN } from "./contract.js";
 import type { OperationExecutionOutcome } from "./contract.js";
 import { operationError } from "./errors.js";
+import { isRevokedGrantRefusal, REVOKED_GRANT_MESSAGE } from "./revoked-grant.js";
 
 export type NodeRevocation =
   | Readonly<{ reason: "delegation_revoked"; revokedCid: string }>
@@ -70,7 +71,9 @@ export function authorizationFailure(error: unknown, action: string): OperationE
       const revocation = nodeRevocationOf(error);
       return {
         status: "error",
-        error: operationError("AUTH_REQUIRED", `Authentication is required to ${action}.`, {
+        error: operationError("AUTH_REQUIRED", isRevokedGrantRefusal(error)
+          ? REVOKED_GRANT_MESSAGE
+          : `Authentication is required to ${action}.`, {
           ...(revocation === undefined ? {} : { details: revocation }),
         }),
       };

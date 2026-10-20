@@ -97,7 +97,7 @@ async function revoke(cid: string) {
   try {
     await program.parseAsync(["node", "tc", "--profile", profileName, "delegation", "revoke", cid, "--yes"], { from: "node" });
   } catch (error) {
-    if (!(error instanceof Error && "cliExitCode" in error && error.cliExitCode === 5)) throw error;
+    if (!(error instanceof Error && "cliExitCode" in error && (error.cliExitCode === 5 || error.cliExitCode === 4))) throw error;
   } finally {
     stdout.mockRestore();
     stderr.mockRestore();
@@ -173,6 +173,19 @@ test("without a matching signed grant OpenKey is never called and fails immediat
   const before = fixture.nativeBearerStats().revocations;
   const response = await revoke(cid);
   expect(response).toMatchObject({ error: { code: "RAW_RECAP_RESOURCE_UNSUPPORTED" } });
+  expect(openKey.requests).toEqual([]);
+  expect(fixture.nativeBearerStats().revocations).toBe(before);
+});
+
+test("a session that cannot list delegations says so and where to revoke instead, without calling OpenKey", async () => {
+  const cid = wasm.computeCid(new TextEncoder().encode("grant this profile cannot look up"), 0x55n);
+  const before = fixture.nativeBearerStats().revocations;
+  const response = await revoke(cid);
+  expect(response).toMatchObject({ error: { code: "TARGET_NOT_FOUND" } });
+  const message = String((response as { error: { message: string } }).error.message);
+  expect(message).toContain("cannot list the owner's delegations");
+  expect(message).toContain("profile that created the grant");
+  expect(message).toContain("Delegations screen");
   expect(openKey.requests).toEqual([]);
   expect(fixture.nativeBearerStats().revocations).toBe(before);
 });
