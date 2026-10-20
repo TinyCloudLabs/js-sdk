@@ -2,4 +2,4 @@
 "@tinycloud/mcp": patch
 ---
 
-A new sign-in after an account approval is withdrawn at the TinyCloud node offers fresh owner approval. Refused per-request grants also clear that account's stored approval state so the next request can reconnect.
+A new sign-in after an account approval is withdrawn at the TinyCloud node offers fresh owner approval. Node refusals that identify a withdrawn per-request permission renew only the affected approval; other node errors leave stored approvals available.

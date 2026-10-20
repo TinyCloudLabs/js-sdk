@@ -50,12 +50,13 @@ Production requests 30-day grants and uses 15-minute approval links. Expired or
 missing sessions return a fresh link in `error.details`; expired grants use
 `authority_required`. Approvals are renewed by the owner, not automatically.
 
-The hosted server checks the account approval with the node before reporting a
-connection. If that approval is no longer active, `tinycloud_connect` offers a
-new link. When the node refuses an operation using a stored per-request
-approval, the server removes that account's stored approvals and asks the owner
-to connect again. The delegate key stays with the account, while the owner
-signs new delegations through the normal approval flow.
+The hosted server checks the account approval with the node when a client
+connects or calls an authenticated tool. Successful checks are cached for up
+to 30 seconds. A node response identifying a withdrawn account approval starts
+a fresh connection approval; one identifying a withdrawn per-request grant
+renews only that grant. Other node responses keep stored approvals available.
+The account's delegate key stays in place while the owner signs new permissions
+through the usual OpenKey approval flow.
 
 If the owner declines, stop rather than asking again in that conversation.
 

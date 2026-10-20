@@ -56,7 +56,6 @@ export function createHostedMcpApp(config: HostedMcpConfig): HostedMcpApp {
   const handler = createMcpHandler(async ({ authInfo }) => {
     const identity = oauthIdentity(authInfo);
     const { subject, ownerDids } = identity;
-    await store.validateTenant(subject, ownerDids);
     const stateRoot = await store.initializeTenant(subject);
     const validator = createJsonSchemaValidator();
     const server = new McpServer(
@@ -72,7 +71,9 @@ export function createHostedMcpApp(config: HostedMcpConfig): HostedMcpApp {
       explicitProfile: true,
       allowOwnerProfile: false,
       stateRoot,
-      transformOperationResult: (result) => store.decorateAuthorityResult(subject, ownerDids, result),
+      beforeOperation: () => store.validateTenant(subject, ownerDids),
+      transformOperationResult: (result, invocation) =>
+        store.decorateAuthorityResult(subject, ownerDids, result, invocation),
     }, validator);
     registerConnectTool(server, validator, store, identity);
     return server;

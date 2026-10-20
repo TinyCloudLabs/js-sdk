@@ -5,7 +5,7 @@ import { join } from "node:path";
 
 import { invokeOperation } from "@tinycloud/operations";
 
-import { ApprovalOwnerMismatchError, ApprovalStageError, RemoteTenantStore } from "./remote-store.js";
+import { ApprovalOwnerMismatchError, ApprovalStageError, RemoteTenantStore, type ConnectStatus } from "./remote-store.js";
 import {
   OTHER_OWNER_KEY,
   REQUESTER_KEY,
@@ -52,6 +52,64 @@ test("keeps hosted delegates isolated by OAuth subject", async () => {
     operatorType: "agent",
     sessionDid: first.sessionDid,
   });
+});
+
+test("a partial or unreadable stored session offers fresh approval without replacing the delegate key", async () => {
+  const store = await testStore();
+  const requester = await ownerDid(REQUESTER_KEY);
+  for (const [subject, contents] of [
+    ["partial-account", JSON.stringify({ delegationCid: "incomplete" })],
+    ["unreadable-account", "{"],
+  ]) {
+    const initial = await store.connectStatus(subject, [requester]);
+    const path = join(store.tenantStateRoot(subject), ".tinycloud/profiles/agent/session.json");
+    await writeFile(path, contents);
+    const renewed = await store.connectStatus(subject, [requester]);
+    expect(renewed).toMatchObject({
+      connected: false,
+      sessionDid: initial.sessionDid,
+      approvalUrl: expect.stringContaining("/connect?state="),
+    });
+    expect(await exists(path)).toBe(false);
+  }
+});
+
+test("a new approval link refuses a signed session issued before the previous approval was cleared", async () => {
+  const store = await testStore();
+  const requester = await ownerDid(REQUESTER_KEY);
+  const subject = "renewed-account";
+  const older = Date.now() - 60_000;
+  const clock = spyOn(Date, "now").mockReturnValue(older);
+  let first: ConnectStatus;
+  let previous: Record<string, unknown>;
+  try {
+    first = await store.connectStatus(subject, [requester]);
+    previous = await openKeyCallbackBody({
+      tenantStateRoot: store.tenantStateRoot(subject),
+      privateKey: REQUESTER_KEY,
+      space: "account",
+      abilities: BOOTSTRAP_ABILITIES,
+    });
+    await store.completeApproval(new URL(first.approvalUrl!).searchParams.get("state")!, callbackRequest(previous));
+  } finally {
+    clock.mockRestore();
+  }
+  const sessionPath = join(store.tenantStateRoot(subject), ".tinycloud/profiles/agent/session.json");
+  await writeFile(sessionPath, "{");
+  const renewed = await store.connectStatus(subject, [requester]);
+  const newState = new URL(renewed.approvalUrl!).searchParams.get("state")!;
+  expect(renewed.approvalUrl).not.toBe(first!.approvalUrl);
+  await expect(store.completeApproval(newState, callbackRequest(previous!)))
+    .rejects.toMatchObject({ stage: "restore_approval" });
+  expect(await exists(sessionPath)).toBe(false);
+  const current = await openKeyCallbackBody({
+    tenantStateRoot: store.tenantStateRoot(subject),
+    privateKey: REQUESTER_KEY,
+    space: "account",
+    abilities: BOOTSTRAP_ABILITIES,
+  });
+  await store.completeApproval(newState, callbackRequest(current));
+  expect(await exists(sessionPath)).toBe(true);
 });
 
 test("first operations and expired sessions receive account-bound reconnect links", async () => {
