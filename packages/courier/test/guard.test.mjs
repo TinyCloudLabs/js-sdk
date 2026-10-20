@@ -182,7 +182,7 @@ test('ordinary harmless commands pass, with or without expansions that name no g
   const fine = [
     'ls', 'ls -la src', 'cat README.md', 'rg foo src', 'head -n 5 package.json', 'git status', 'git diff HEAD~1', 'git log --oneline -5', 'npm test', 'bun test', 'git commit -m "fix typo"',
     'git push origin feat/x', 'git push -u origin HEAD', 'echo $HOME', 'ls {a,b}', 'for f in *.ts; do echo $f; done', 'cd "$DIR" && ls', 'cat <<EOF\nhello\nEOF', 'git commit -m "costs $5"',
-    '"$TC" courier inbox', '"$TC" courier read T', '$HOME/bin/tool --flag', 'echo $(date)', 'x=$(pwd); echo "$x"', 'rg -n "TODO" src | head', 'wc -l *.md', '[ -x "$TC" ] || echo missing', 'for v in A B; do if [ -n "${!v}" ]; then echo set; fi; done', '[[ -n $x ]] && ls', 'ls [ab]*.ts',
+    '"$TC" courier inbox', '"$TC" courier read T', 'courier approval R1 --peek', 'courier approval R1 --peek --verb merge --target a/b#5', 'courier request T --peer bob --task K --verb merge --target a/b#5 --summary "Merge the docs PR" --why asked --risk low', 'courier task new --peer bob --thread T --state working', 'tc courier send bob --thread T --intent update --text done', '$HOME/bin/tool --flag', 'echo $(date)', 'x=$(pwd); echo "$x"', 'rg -n "TODO" src | head', 'wc -l *.md', '[ -x "$TC" ] || echo missing', 'for v in A B; do if [ -n "${!v}" ]; then echo set; fi; done', '[[ -n $x ]] && ls', 'ls [ab]*.ts',
   ];
   const blocked = fine.map((command) => [command, kinds(command)]).filter(([, got]) => got.length);
   assert.deepEqual(blocked, []);

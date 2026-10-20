@@ -498,7 +498,13 @@ function classifyCourier(args: Word[], sc: Scope): void {
   const first = firstPositional(args);
   if (!first) return;
   if (first.dynamic) return unresolved(sc.sh, 'courier subcommand built at run time');
-  if (['pair', 'revoke', 'init'].includes(first.value.toLowerCase())) never(sc, `courier ${first.value} is for humans (pairing, revoking and initialising are never done by an agent)`);
+  const sub = first.value.toLowerCase();
+  if (['pair', 'revoke', 'init'].includes(sub)) never(sc, `courier ${first.value} is for humans (pairing, revoking and initialising are never done by an agent)`);
+  // The wake budget is the reply loop's breaker: an agent must not lift its own pause, nor start another watcher.
+  if (['pause', 'resume'].includes(sub)) never(sc, `courier ${first.value} is for humans (a woken agent must not pause or un-pause its own reply loop)`);
+  if (sub === 'watch') never(sc, 'courier watch is for humans (a woken agent must not start a watcher, which could wake agents without the guard)');
+  // The guard uses an approval up when it lets the command through; an agent that consumes it first only burns it.
+  if (sub === 'approval' && !args.some((a) => !a.dynamic && /^--peek(=true)?$/.test(a.value))) never(sc, 'courier approval without --peek would use the approval up before the guard can; check with --peek and run the approved command');
 }
 
 // ---------- scripts and files ----------

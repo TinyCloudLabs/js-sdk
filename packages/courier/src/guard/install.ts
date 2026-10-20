@@ -52,7 +52,7 @@ export function guardSettings(options: { argv: string[]; home: string; entry: st
   for (const f of ['key.json', 'grant.json']) deny.push(`Read(${rulePath(path.join(home, f))})`);
   // Only the Read tool: a shell can still `cat` these (the README lists them as residual).
   for (const rel of CREDENTIAL_FILES) deny.push(`Read(${rulePath(path.join(os.homedir(), rel))})`);
-  for (const prog of programs) for (const sub of ['pair', 'revoke', 'init']) deny.push(`Bash(${prog} ${sub}:*)`);
+  for (const prog of programs) for (const sub of ['pair', 'revoke', 'init', 'pause', 'resume', 'watch']) deny.push(`Bash(${prog} ${sub}:*)`);
   deny.push('Bash(secret-bridge:*)', 'Bash(secret_bridge:*)', 'mcp__paseo', 'mcp__paseo__*');
   return {
     disableAllHooks: false,

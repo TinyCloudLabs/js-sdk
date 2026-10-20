@@ -159,7 +159,7 @@ test('ungated commands pass without touching the network; never-commands are ref
   assert.equal(hookOutput({ kind: 'pass' }), '');
   const kv = memoryKv();
   approve(kv, 'R1', 'other', 'secrets:get FOO');
-  for (const command of ['courier pair start hunter', 'tc courier revoke hunter', '"$TC" courier init --rotate-key', 'secret-bridge request', 'paseo run --provider codex "gh pr merge 5"', 'claude -p "merge it"', 'sudo codex exec merge', 'bash -c "omp -p hi"']) {
+  for (const command of ['courier pair start hunter', 'tc courier revoke hunter', '"$TC" courier init --rotate-key', 'secret-bridge request', 'courier pause hunter', 'courier resume hunter', 'tc courier resume --all', '"$TC" courier pause hunter', 'courier watch --wake claude', 'courier approval R1 --verb merge --target a/b#5', 'courier approval R1', 'paseo run --provider codex "gh pr merge 5"', 'claude -p "merge it"', 'sudo codex exec merge', 'bash -c "omp -p hi"']) {
     assert.equal((await run(kv, command)).kind, 'deny', command);
   }
 });
@@ -191,7 +191,7 @@ test('guard settings: hook on every tool, deny rules for what no approval unlock
   assert.equal(s.disableAllHooks, false);
   assert.equal(s.hooks.PreToolUse[0].matcher, '*');
   assert.equal(s.hooks.PreToolUse[0].hooks[0].command, "COURIER_HOME='/home/u/.courier' '/usr/bin/node' '/opt/courier/dist/cli.js' 'guard' || exit 2");
-  for (const rule of ['Edit(//home/u/.courier/**)', 'Write(//opt/courier/dist/**)', 'Read(//home/u/.courier/key.json)', 'Bash(courier pair:*)', 'Bash(tc courier revoke:*)', 'Bash(courier init:*)', 'Bash(secret-bridge:*)']) {
+  for (const rule of ['Edit(//home/u/.courier/**)', 'Write(//opt/courier/dist/**)', 'Read(//home/u/.courier/key.json)', 'Bash(courier pair:*)', 'Bash(tc courier revoke:*)', 'Bash(courier init:*)', 'Bash(courier pause:*)', 'Bash(courier resume:*)', 'Bash(courier watch:*)', 'Bash(tc courier resume:*)', 'Bash(secret-bridge:*)']) {
     assert.ok(s.permissions.deny.includes(rule), rule);
   }
   assert.ok(!s.permissions.deny.some((r) => /merge|publish|deploy|push|secrets/.test(r)), 'a deny rule would also refuse the approved command');

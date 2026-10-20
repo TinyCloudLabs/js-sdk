@@ -38,7 +38,7 @@ const VERB_RE = token(VERBS);
 const FETCH_RE = token(['curl', 'wget', 'http', 'https', 'xh', 'xhs', 'httpie', 'aria2c']);
 const GRAPHQL_RE = /mergePullRequest|enablePullRequestAutoMerge|updateRef|createCommitOnBranch|mergeBranch/i;
 const COURIER_HUMAN_RE = token(['courier']);
-const COURIER_SUB_RE = token(['pair', 'revoke', 'init']);
+const COURIER_SUB_RE = token(['pair', 'revoke', 'init', 'pause', 'resume', 'watch']);
 
 /** Quotes and backslashes removed, so `g""h`, `'g'h` and `\gh` read as the name they spell. */
 const unquoted = (text: string) => text.replace(/\$?['"]/g, '').replace(/\\\n/g, '').replace(/\\/g, '');
@@ -50,7 +50,7 @@ export function gatedName(text: string): string | undefined {
     if (name) return name.toLowerCase();
     if (GRAPHQL_RE.test(t)) return 'a GitHub merge mutation';
     if (FETCH_RE.test(t) && /github/i.test(t)) return 'a GitHub API call';
-    if (COURIER_HUMAN_RE.test(t) && COURIER_SUB_RE.test(t)) return 'courier pair|revoke|init';
+    if (COURIER_HUMAN_RE.test(t) && COURIER_SUB_RE.test(t)) return 'courier pair|revoke|init|pause|resume|watch';
   }
   return undefined;
 }
