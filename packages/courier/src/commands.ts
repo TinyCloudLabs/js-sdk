@@ -24,7 +24,8 @@ import {
 import { commitReceipts, collectInbound, renderInboxText, writeOut } from './inbox.js';
 import { getJson, listAll, putCreate, putMatch, del } from './store.js';
 import { DEFAULT_ORDERS } from './orders.js';
-import { requestFields } from './request.js';
+import { requestFields, requestText } from './request.js';
+import { requestHash } from './canonical.js';
 import { targetHelp } from './guard/target.js';
 import type { ParsedArgs } from './args.js';
 import { requireFlag, oneOf } from './args.js';
@@ -624,13 +625,13 @@ export async function cmdRequest(args: ParsedArgs) {
   const request = {
     id, peer: peerHandle, threadId, taskId, ...fields,
     // Free text for the owner to read; nothing matches against it (the structured fields above do that).
-    action: flag('action') ?? fields.summary, reason: why,
-    risk: risk ?? 'unspecified',
+    ...requestText({ action: flag('action'), reason: why, risk }, fields.summary),
     requestedBy: { owner: profile.ownerDid!, agent: profile.courierDid },
     createdAt: new Date().toISOString(),
     expiresAt: new Date(Date.now() + 24 * 3600 * 1000).toISOString(),
     status: 'pending',
   };
+  requestHash(request); // refuses (throws) a request that could never be hashed or approved, before anything is written
   await putCreate(node.kv, k.request(id), request);
   const taskKey = k.task(peerHandle, threadId, taskId);
   const existing = await getJson<CourierTask>(node.kv, taskKey);

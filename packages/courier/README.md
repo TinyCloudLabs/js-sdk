@@ -139,15 +139,43 @@ kills a run that hangs). A failed wake stays pending and retries after 60 s.
 
 ### Approvals
 
+### Request fields and text rules (shared with the view)
+
 `courier request` writes structured fields into `me/requests/<id>.json`:
-`verb` (`merge`, `deploy`, `publish`, `spend` or `other`), `target` (1 to 200
-characters, canonical for the verb: `owner/repo#<PR>`, `npm:<name>@<version>`,
-`wrangler:<worker>`, …; see `courier request --help`) and `summary` (one line, 1
-to 200 characters, control characters stripped). They are part of the request
-the hash covers, the view renders "Approving lets <peer>'s agent <verb>
-<target>: <summary>" from them, and the guard matches the command it is about
-to allow to `verb` and `target` only. `--action` stays as optional display
-text.
+`verb` (`merge`, `deploy`, `publish`, `spend` or `other`), `target` and
+`summary`. They are part of the request the hash covers; the view renders
+"Approving lets <peer>'s agent <verb> <target>: <summary>" from them; the guard
+matches the command it is about to allow to `verb` and `target` only. `action`
+(default: the summary), `reason` (`--why`) and `risk` are free text for the
+owner and are never matched.
+
+One rule set applies when `courier request` writes, when `courier approval`
+reads, and when the view shows the card. A value that breaks it is **refused,
+never repaired or shortened**:
+
+- every text field is a string with no lone surrogates, is in Unicode NFC, and
+  contains no control (Cc), format (Cf: bidi, zero-width, tag characters),
+  private-use (Co), unassigned (Cn), line or paragraph separator (Zl, Zp) or
+  default-ignorable character (variation selectors, U+034F, Hangul fillers,
+  soft hyphen, …), no space other than U+0020, and no run of 4 or more
+  combining marks (`\p{M}`);
+- `target`, `summary`: 1 to 200 UTF-16 units, trimmed, one line; `action`,
+  `reason`, `risk`: 1 to 2000, a single `\n` allowed, never a tab or CR;
+- `target` is printable ASCII (`[\x20-\x7E]`) for every verb, in the one
+  canonical spelling for its verb (lower-cased repo, a GitHub PR URL reduced to
+  `owner/repo#N`; see `courier request --help`) and with the shape
+  `merge`: `owner/repo#<N>` or `owner/repo@<ref>`; `publish`: `npm:`,
+  `release:`, `changeset:` or `script:` + text; `deploy`: `wrangler:`, `pages:`,
+  `phala:` or `script:` + text; `other`: `<kind>:` + text; `spend`: `spend:` +
+  text;
+- the whole request must hash: `canonicalJson` / `requestHash` throw on a
+  non-finite number (a parsed `1e999`) and on nesting deeper than 64 levels
+  (top-level object = depth 1), so such a request is never written and
+  `courier approval` fails closed on it.
+
+`test/vectors/request-fields.json` is the contract: every row says whether a
+value is accepted, and the canonical-JSON rows give the expected output (or
+"must throw"). Copy it into any other implementation.
 
 `courier approval <requestId> --verb <v> --target <t> [--peek]` is what a
 woken agent runs before a gated action. It reads `me/requests/<id>.json` and
@@ -155,7 +183,8 @@ woken agent runs before a gated action. It reads `me/requests/<id>.json` and
 fields, the approval names that request (`requestId` equals the id), carries
 `requestHash` equal to the SHA-256 of the request's canonical JSON
 (`canonicalJson` / `requestHash`, exported, mirrored by the view; a parsed
-`"__proto__"` key counts as an ordinary key), says `approved`, was decided in
+`"__proto__"` key counts as an ordinary key), the request contains no hidden
+text anywhere (rules above, applied to every string and key), says `approved`, was decided in
 `[createdAt, expiresAt)` of the request (a decision dated up to 5 minutes ahead
 of this machine's clock is tolerated; keep the clocks of the agent's machine
 and the owner's browser in step) and within the last 24 hours, and the given
