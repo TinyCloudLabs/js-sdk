@@ -495,7 +495,9 @@ describe("normaliseEmail (alias rules confirmed by Sam 2026-10-19, same as billi
 
 test("the module has no Node-only imports (Worker-safe)", async () => {
   for (const file of ["crypto", "did", "email", "encoding", "errors", "issuer-set", "nonce-store", "rows", "siwe", "verify", "index"]) {
-    const text = await Bun.file(new URL(`./${file}.ts`, import.meta.url)).text();
+    const source = await Bun.file(new URL(`./${file}.ts`, import.meta.url)).text();
+    // Scan code only: comments may mention Node or process.
+    const text = source.replace(/\/\*[\s\S]*?\*\/|\/\/[^\n]*/g, "");
     expect(text).not.toMatch(/from "node:|require\(|Buffer\b|from "crypto"|process\./);
   }
 });
