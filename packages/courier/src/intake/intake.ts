@@ -13,7 +13,7 @@ import { hiddenTextProblem, textVerdict, type TextVerdict } from '../text.js';
 import { jsonLineLog, type WatchLog } from '../wake.js';
 import { FLAG_TABLE, type Flag } from './flags.js';
 import { policyOf, loadPeers, type Peers } from './peers.js';
-import { acquireLock, ensureRealDir, readState, writeNew, writeState, type IntakeState, type PeerState } from './queue.js';
+import { acquireLock, ensureRealDir, readState, writeNew, writeState, type IntakeState, type PeerState, type Receipt } from './queue.js';
 
 const STATE_FILE = 'intake-state.json';
 const LOCK_FILE = 'intake.lock';
@@ -125,24 +125,18 @@ export function flagsFor(input: { text: string; verdict: TextVerdict; overRate: 
  * extend its own window. Receipts are kept while they are inside the window relative to the current reading, including
  * receipts later than it, so a clock that steps back does not reopen the cap.
  */
-function admit(receipts: number[], at: number, cap: number): { admitted: boolean; remaining: number; receipts: number[] } {
-  const recent = receipts.filter((t) => t > at - RATE_WINDOW_MS);
+function admit(receipts: Receipt[], id: string, at: number, cap: number): { admitted: boolean; remaining: number; receipts: Receipt[] } {
+  const recent = receipts.filter((r) => r.at > at - RATE_WINDOW_MS);
   if (recent.length >= cap) return { admitted: false, remaining: 0, receipts: recent.slice(-cap) };
-  return { admitted: true, remaining: cap - recent.length - 1, receipts: [...recent, at].slice(-cap) };
-}
-
-/** Counts receive times as a multiset: two admissions in the same millisecond are two entries, not one. */
-function tally(times: Iterable<number>): Map<number, number> {
-  const counts = new Map<number, number>();
-  for (const at of times) counts.set(at, (counts.get(at) ?? 0) + 1);
-  return counts;
+  return { admitted: true, remaining: cap - recent.length - 1, receipts: [...recent, { id, at }].slice(-cap) };
 }
 
 /**
- * Stored receipts merged with the receive times of this peer's queued records inside the window. The queued records are
- * the durable truth, so an admission whose state write was lost after publication still counts against the cap.
+ * Stored receipts merged with this peer's queued records inside the window, keyed by msgId. An admission counts once even
+ * when both its stored receipt and its queued record exist. A queued record whose state write was lost still counts against
+ * the cap. A record the owner has archived counts only through its stored receipt, and only until the window ends.
  */
-function reconcileReceipts(input: CycleInput, peer: string, receipts: number[], cap: number): number[] {
+function reconcileReceipts(input: CycleInput, peer: string, receipts: Receipt[], cap: number): Receipt[] {
   const now = input.now();
   const dir = path.join(input.queueRoot, peer);
   let names: string[];
@@ -152,10 +146,12 @@ function reconcileReceipts(input: CycleInput, peer: string, receipts: number[], 
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return receipts;
     throw error;
   }
-  const stored = tally(receipts);
-  const queued = new Map<number, number>();
+  const byId = new Map<string, Receipt>();
+  for (const r of receipts) if (!byId.has(r.id)) byId.set(r.id, r);
   for (const name of names) {
     if (!name.endsWith('.json') || name.startsWith('rate-')) continue;
+    const id = name.slice(0, -'.json'.length);
+    if (byId.has(id)) continue;
     let record: unknown;
     try {
       record = JSON.parse(fs.readFileSync(path.join(dir, name), 'utf8'));
@@ -164,14 +160,9 @@ function reconcileReceipts(input: CycleInput, peer: string, receipts: number[], 
     }
     if (!isRecord(record) || typeof record.receivedAt !== 'string') continue;
     const at = Date.parse(record.receivedAt);
-    if (Number.isFinite(at) && at > now - RATE_WINDOW_MS) queued.set(at, (queued.get(at) ?? 0) + 1);
+    if (Number.isFinite(at)) byId.set(id, { id, at });
   }
-  const merged: number[] = [];
-  for (const at of new Set([...stored.keys(), ...queued.keys()])) {
-    const count = Math.max(stored.get(at) ?? 0, queued.get(at) ?? 0);
-    for (let i = 0; i < count; i++) merged.push(at);
-  }
-  return merged.sort((a, b) => a - b).slice(-cap);
+  return [...byId.values()].filter((r) => r.at > now - RATE_WINDOW_MS).sort((a, b) => a.at - b.at).slice(-cap);
 }
 
 function persist(input: { stateDir: string; state: IntakeState }): void {
@@ -290,7 +281,7 @@ async function intakePeer(input: CycleInput, peer: StoredPeer): Promise<number> 
       continue;
     }
 
-    const { admitted, remaining, receipts } = admit(ps.receipts, at, policy.ratePerHour);
+    const { admitted, remaining, receipts } = admit(ps.receipts, c.msgId, at, policy.ratePerHour);
     const parts = Array.isArray(got.value.parts) ? got.value.parts : [];
     const texts: string[] = [];
     for (const part of parts) if (isRecord(part) && typeof part.text === 'string') texts.push(part.text);
@@ -419,6 +410,7 @@ function runJanitor(input: CycleInput): void {
       if (Date.parse(entry.receivedAt) > now - OVERFLOW_TTL_MS) continue;
       fs.unlinkSync(file);
     }
+    capOverflow(dir);
   }
 }
 

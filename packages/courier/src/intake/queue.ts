@@ -205,12 +205,18 @@ function takeOver(file: string, stale: number | undefined): boolean {
   }
 }
 
+/** One admitted arrival: the mirror msgId and its local receive time. Identity is the msgId, so equal times stay distinct. */
+export interface Receipt {
+  id: string;
+  at: number;
+}
+
 /**
- * Per-peer intake progress. `receipts` holds the last few local receive times for the inbound rate cap.
+ * Per-peer intake progress. `receipts` holds this peer's admitted arrivals for the inbound rate cap.
  * `cursor` is the last mirror msgId examined; the next cycle resumes after it. Older builds also wrote `highWater`; the key is ignored.
  */
 export interface PeerState {
-  receipts: number[];
+  receipts: Receipt[];
   cursor?: string;
 }
 
@@ -239,14 +245,23 @@ export function readState(file: string): IntakeState {
     throw new CourierError('bad-state', 'intake state is not valid JSON');
   }
   if (!isRecord(parsed) || parsed.v !== 1 || !isRecord(parsed.peers)) throw new CourierError('bad-state', 'intake state has an unknown shape');
-  for (const entry of Object.values(parsed.peers)) {
+  const peers: Record<string, PeerState> = Object.create(null);
+  for (const [peerId, entry] of Object.entries(parsed.peers)) {
     if (!isRecord(entry) || !Array.isArray(entry.receipts) || (entry.cursor !== undefined && typeof entry.cursor !== 'string')) {
       throw new CourierError('bad-state', 'intake state has an unknown shape');
     }
+    const peer: PeerState = { receipts: entry.receipts.map(readReceipt) };
+    if (typeof entry.cursor === 'string') peer.cursor = entry.cursor;
+    peers[peerId] = peer;
   }
-  const peers: Record<string, PeerState> = Object.create(null);
-  for (const [peerId, entry] of Object.entries(parsed.peers)) peers[peerId] = entry as PeerState;
   return { v: 1, peers };
+}
+
+/** Older builds wrote bare receive times; they get positional ids so they still count against the cap. */
+function readReceipt(raw: unknown, index: number): Receipt {
+  if (typeof raw === 'number') return { id: `legacy-${index}`, at: raw };
+  if (isRecord(raw) && typeof raw.id === 'string' && typeof raw.at === 'number') return { id: raw.id, at: raw.at };
+  throw new CourierError('bad-state', 'intake state has an unknown shape');
 }
 
 export function writeState(dir: string, file: string, state: IntakeState): void {

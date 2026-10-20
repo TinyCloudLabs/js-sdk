@@ -209,6 +209,52 @@ test('a queued admission whose state write failed still counts after restart', a
   assert.equal(h.overflowFiles(HANDLE).length, 1);
 });
 
+test('two admissions at the same receive time both count after the first is archived and the second state write is lost', async () => {
+  const h = harness({ peers: { alice: { tier: 'strict', ratePerHour: 2, outPerHour: 2 } } });
+  const stateFile = path.join(h.dirs.stateDir, 'intake-state.json');
+  const queued = () => h.queueFiles(HANDLE).filter((x) => !x.startsWith('rate-'));
+  const first = ulid(NOW);
+  const second = ulid(NOW + 1);
+  const third = ulid(NOW + 2);
+  await putMessage(h.kv, first, [{ text: 'a' }]);
+  await putMessage(h.kv, second, [{ text: 'b' }]);
+  const realRename = fs.renameSync;
+  let stateWrites = 0;
+  mock.method(fs, 'renameSync', (from, to) => {
+    if (String(to) === stateFile && ++stateWrites === 2) throw Object.assign(new Error('fixture full'), { code: 'ENOSPC' });
+    return realRename(from, to);
+  });
+  try {
+    await intakeCycle(h.input);
+  } finally {
+    mock.restoreAll();
+  }
+  assert.equal(queued().length, 2);
+  // The owner archives A to done/; the state still holds A's receipt, and B's state write was lost.
+  const doneDir = path.join(h.dirs.doneRoot, HANDLE);
+  fs.mkdirSync(doneDir, { recursive: true });
+  fs.renameSync(path.join(h.dirs.queueRoot, HANDLE, `${first}.json`), path.join(doneDir, `${first}.json`));
+  h.input.state = readState(stateFile);
+  await putMessage(h.kv, third, [{ text: 'c' }]);
+  await intakeCycle(h.input);
+  assert.deepEqual(queued(), [`${second}.json`]);
+  assert.equal(h.overflowFiles(HANDLE).length, 1);
+});
+
+test('an idle cycle trims an overflow store above the per-peer cap, oldest first', async () => {
+  const h = harness({ peers: { alice: { tier: 'strict', ratePerHour: 1, outPerHour: 1 } } });
+  const dir = path.join(h.dirs.overflowRoot, HANDLE);
+  fs.mkdirSync(dir, { recursive: true });
+  const names = [];
+  for (let i = 0; i < 250; i++) {
+    const name = `${ulid(NOW + i)}.json`;
+    names.push(name);
+    fs.writeFileSync(path.join(dir, name), JSON.stringify({ receivedAt: new Date(NOW).toISOString() }));
+  }
+  await intakeCycle(h.input);
+  assert.deepEqual(h.overflowFiles(HANDLE).sort(), names.slice(-200));
+});
+
 test('overflow files are retired once their message passes the stale horizon', async () => {
   const h = harness({ peers: { alice: { tier: 'strict', ratePerHour: 1, outPerHour: 1 } } });
   for (let i = 0; i < 150; i++) await putMessage(h.kv, ulid(NOW + i), [{ text: 'hello' }]);
