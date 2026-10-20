@@ -131,8 +131,8 @@ subject is quoted and flattened onto one line.
 |---|---|
 | `none` (default) | Delivers and mirrors; wakes nobody. |
 | `paseo` | Finds the agent labelled `courier-thread=<id>` (`paseo ls -g --label`) and sends it the prompt (`paseo send --prompt-file`); otherwise creates one (`paseo run`) with labels `courier-thread`, `courier-peer`, title `✉ <peer> · <subject>`, `COURIER_HOME` in its environment. `--paseo-provider` (default `claude`), `--paseo-mode`, `--paseo-bin`. |
-| `claude` | `claude -p --output-format json`, prompt on stdin. The session id is saved per thread in `<COURIER_HOME>/sessions.json` and later wakes pass `--resume`; a session the CLI no longer has starts a fresh one. Only `Bash(courier:*)` is allowed unless you pass `--claude-settings <file>` and/or `--claude-allow <rule>` (repeatable). `--claude-bin`. |
-| `exec` | `sh -c <cmd>` (`--exec <cmd>` alone selects it) with `COURIER_THREAD`, `COURIER_PEER`, `COURIER_MESSAGES` (JSON: id, intent, sent time), `COURIER_SUBJECT`, `COURIER_PROMPT` and `COURIER_HOME` in the environment. |
+| `claude` | `claude -p --output-format json`, prompt on stdin, always with the guard settings (see Guard) and the courier-only environment. The session id is saved per thread in `<COURIER_HOME>/sessions.json` and later wakes pass `--resume`; a session the CLI no longer has starts a fresh one. Only `Bash(courier:*)` is allowed unless you pass `--claude-allow <rule>` (repeatable); `--claude-settings <file>` is merged under the guard. `--claude-bin`. |
+| `exec` | `sh -c <cmd>` (`--exec <cmd>` alone selects it) with `COURIER_THREAD`, `COURIER_PEER`, `COURIER_MESSAGES` (JSON: id, intent, sent time), `COURIER_SUBJECT`, `COURIER_PROMPT` and `COURIER_HOME` in the courier-only environment (see Guard). |
 
 A wake succeeds when the agent run exits 0 (`--wake-timeout`, default 900 s,
 kills a run that hangs). A failed wake stays pending and retries after 60 s.
@@ -184,6 +184,92 @@ The watcher wakes the thread's agent as soon as a new approval (approved or
 denied) for one of its requests appears, without the debounce. Approvals older
 than 24 hours, already used, malformed, or without a request at start-up wake
 nobody.
+
+### Guard for woken agents
+
+A woken agent runs on another party's text, so instructions alone are not
+enough (spec §7). `courier guard` is a Claude Code `PreToolUse` hook that
+reads every tool call before it runs. It runs in every permission mode.
+
+**What it blocks** (each unless the owner approved that exact action):
+
+| Command | Verb and target it is reduced to |
+|---|---|
+| `gh pr merge <n\|url> [--repo o/r]` | `merge owner/repo#<n>` |
+| `git push` of `main`/`master` in any spelling (`HEAD:main`, `refs/heads/main`, `+x:master`, `:main`, `--force`, `--all`/`--mirror`, glob refspecs, no refspec while on `main`, `push.default=matching`, upstream or `remote.*.push` pointing at `main`) | `merge owner/repo@main` |
+| `gh api …/pulls/<n>/merge`, `…/git/refs/heads/main`, `…/merges`; `curl`/`wget` to the same URLs | `merge owner/repo#<n>` or `@<branch>` |
+| `npm`/`pnpm`/`yarn`/`bun publish` (reads `package.json`) | `publish npm:<name>@<version>` |
+| `changeset publish` | `publish changeset:<root package>` |
+| `gh release create\|edit\|delete\|upload` (not `list`/`view`/`download`) | `publish release:owner/repo@<tag>` |
+| `wrangler deploy\|publish`, `wrangler pages deploy` | `deploy wrangler:<name>[:<env>]`, `deploy pages:<project>` |
+| `phala deploy` | `deploy phala:<name>` |
+| `npm\|bun\|pnpm\|yarn run deploy\|publish\|release` | `deploy\|publish script:<package>:<script>` |
+| `gh workflow run` | `other workflow:owner/repo:<workflow>` |
+| `tc secrets …` | `other secrets:<args>` |
+
+Never approvable: `courier pair`, `courier revoke`, `courier init` (also as
+`tc courier …`), and Secret Bridge.
+
+**How an approval unlocks one.** The guard normalises the command to its
+(verb, target) and looks in the owner's space for a request with the same verb
+and (canonicalised) target whose approval is `approved`, hash-valid, decided
+within 24 hours and unused. It writes the create-only marker
+`me/consumed/<id>.json` first and only then allows the command, so a second
+attempt, a race and a replay are refused. It never reads message text, task
+text or the request's free-text fields. Anything it cannot name is refused:
+`gh pr merge` with no PR number, a push whose branch comes from a variable, a
+publish of several workspaces, a GraphQL merge, the repo of a remote that is
+not on GitHub. Several gated actions in one tool call are refused too. Every
+error (no profile, network, a marker it cannot read, bad input) refuses the
+call (exit 2), never allows it.
+
+**How commands are read.** The guard parses the command the way a shell
+would, without running it: quoting, backslashes, `$'…'`, env prefixes, `command`,
+`sudo`, `env`, `nohup`, `timeout`, `bash -c`/`sh -c`/`eval`, here-docs and
+here-strings, pipes, `&&`/`||`/`;`, subshells and groups, `$(…)`, backticks,
+process substitution, and the scripts it is told to run (`bash x.sh`,
+`source x`, `./x`, read from disk at that moment). Variables are followed when
+they are assigned exactly once in the same command. Words decided at run time
+(unknown variables, command substitution, globs, brace expansion, tilde), loops
+and functions around a gated command, `xargs`/`find -exec`/`watch`/`trap`
+wrappers, a shell reading from a pipe, and a script that the same command
+writes are refused as "cannot be told apart from a gated command": write the
+command out literally and run it on its own. `gh release list|view|download`
+are read-only and not gated.
+
+**Installing it.** `courier watch --wake claude` writes
+`<COURIER_HOME>/guard/settings.json` on every start and passes it as
+`claude --settings`, so a woken Claude never runs without it. The file holds the
+hook (`COURIER_HOME=… node …/cli.js guard || exit 2`, so a crash blocks), plus
+deny rules for `courier pair|revoke|init`, Secret Bridge, edits to
+`COURIER_HOME`, the hook's own program directory, and reads of `key.json` and
+`grant.json`. Approvable commands are deliberately not deny rules: a deny rule
+would also refuse them after the owner approved. `--claude-settings <file>` is
+merged under the guard (its hooks and deny rules are added, `disableAllHooks`
+is forced to `false`). `courier guard settings [--out f]` prints the same file,
+for a launcher that cannot pass `--settings` (put it in
+`.claude/settings.local.json` of the agent's working directory).
+
+**Courier-only environment.** Woken `claude` and `exec` runs get the Courier
+profile only: `COURIER_HOME` is set, `TC_HOME` points at an empty directory
+(`<COURIER_HOME>/guard/no-owner-profile`) and `TC_PRIVATE_KEY`, `TC_PROFILE`,
+`TC_OWNER_DID`, `TC_AUTH_*`, `TC_OPENKEY_*` and the other owner variables are
+removed. `paseo` agents get the same through `--env` overrides.
+
+**Residual risk (spec §7).** A woken agent runs as the same OS user, and its
+GitHub token can merge. This is a command blocklist, not a sandbox. It does
+not stop: a program the agent writes and runs (the guard reads shell and common
+interpreter scripts, but a compiled or obfuscated one is opaque), a direct call
+to the GitHub API from code, an alias or function defined in the user's shell
+start-up files, a merge triggered some other way (a push to a branch that a
+workflow merges, a bot command), or anything that edits the hook's files through
+a shell redirect instead of an edit tool (the deny rules cover edit tools, and
+`COURIER_HOME` is writable by the user). The single-use marker is delete-proof
+for the courier key but not against code that has the owner's own credentials.
+The `paseo` adapter does not install the hook (Paseo has no `--settings`
+option): put `courier guard settings` into the agent's
+`.claude/settings.local.json` until it does. v1 should give courier agents a
+GitHub token without merge rights.
 
 ### Running it as a service
 

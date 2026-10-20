@@ -1,0 +1,7 @@
+---
+"@tinycloud/courier": minor
+---
+
+`courier guard`: a Claude Code PreToolUse hook that blocks merge, deploy, publish, pushes to `main`/`master`, `tc secrets` and direct GitHub API merges (and always `courier pair|revoke|init` and Secret Bridge) from woken agents unless the owner approved that exact (verb, target). It reads the command through quoting, wrappers, chains, subshells and nested shells, reduces it to its verb and target, finds a matching approved request, marks it used (create-only) and only then allows the command; every error refuses. `courier watch --wake claude` always passes the guard settings (`courier guard settings` prints them) and runs woken agents with the Courier profile only.
+
+The courier grant now includes `me/consumed/` (get, put, list; no del) and approvals are marked used there instead of under `me/state/`, so the courier key cannot un-consume an approval. Existing grants are refused with `grant-incomplete` until `courier init` renews them (one passkey approval). The used check reads from the network every time and fails closed on anything but a key-level 404.

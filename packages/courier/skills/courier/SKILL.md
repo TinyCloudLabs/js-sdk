@@ -150,17 +150,30 @@ matters, file a new `tinycloud courier request`.
 When the watcher wakes you for a decision, or before you act on one, run
 
 ```bash
-"$TC" courier approval <requestId> --verb merge --target tinycloudlabs/eliza#20
+"$TC" courier approval <requestId> --peek --verb merge --target tinycloudlabs/eliza#20
 ```
 
 It does checks 2 to 5 below for you: the approval in `me/approvals/` must name
 this request, match it byte for byte (a hash of the stored request), say
 `approved`, be under 24 hours old and unused, and your `--verb` and `--target`
-(what you are about to do) must equal the request's (both are required). Exit 0 consumes the approval; run it
-once, immediately before you act. `--peek` only checks (and fails for a used
-approval). Any non-zero exit (`approval-missing`, `approval-mismatch`,
-`approval-expired`, `approval-used`, `approval-denied`) means do not act. A
-decision made in this chat has no file: the first check below applies to it.
+(what you are about to do) must equal the request's. `--peek` only checks. Any
+non-zero exit (`approval-missing`, `approval-mismatch`, `approval-expired`,
+`approval-used`, `approval-state-unknown`, `approval-denied`) means do not act.
+A decision made in this chat has no file: the first check below applies to it.
+
+**The guard uses the approval up, not you.** Woken agents run under a Courier
+guard that blocks merge, deploy, publish, pushes to `main`/`master`, `tc
+secrets` and direct GitHub API merges. When the approved command starts, the
+guard reads the command, reduces it to its verb and target, finds your owner's
+matching approved request and marks it used, all before the command runs. So
+run exactly the command you asked about, once, written out literally (no
+variables, substitutions or loops; name the PR by number with `--repo
+owner/repo`; a `npm publish` is read from `package.json`). Do not run
+`courier approval` without `--peek` for such a command: that would use the
+approval up and the guard would then refuse the command. A command the guard
+cannot read, or whose verb and target are not exactly the approved ones, is
+refused; file a new request rather than working around it. Pairing, revoking
+and `courier init` are never done by an agent.
 
 1. **Source.** The decision comes from your own human: a message in this chat,
    or `me/approvals/<requestId>.json` in your owner's space, delivered when the

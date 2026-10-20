@@ -136,6 +136,8 @@ const GATED = {
   'sh ./scripts/evil.sh': 'gated merge a/b#5',
   'source scripts/evil.sh': 'gated merge a/b#5',
   './scripts/evil.sh': 'gated merge a/b#5',
+  'source /dev/stdin <<< "gh pr merge 5 -R a/b"': 'gated merge a/b#5',
+  'bash /dev/stdin <<EOF\ngh pr merge 5 -R a/b\nEOF': 'gated merge a/b#5',
   // direct API calls
   'gh api repos/o/r/pulls/5/merge -X PUT': 'gated merge o/r#5',
   'gh api -X PUT /repos/o/r/pulls/5/merge -f merge_method=squash': 'gated merge o/r#5',
@@ -226,6 +228,9 @@ test('commands that cannot be told apart from a gated one are refused, not waved
     'npm publish pkg.tgz',
     'gh pr merge',
     'gh pr merge my-branch',
+    'exec 3< x.sh; bash <&3',
+    'source /dev/stdin',
+    'bash /dev/fd/63',
     'echo "unterminated',
     'echo $(unterminated',
     'wrangler deploy --config "$C"',

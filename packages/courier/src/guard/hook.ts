@@ -118,10 +118,9 @@ async function consumeMatchingApproval(finding: Extract<Finding, { kind: 'gated'
     } catch {
       continue; // wrong request, hash mismatch, expired, malformed: not an approval for anything
     }
-    const requested = request.target;
-    if (request.verb !== finding.verb || typeof requested !== 'string') continue;
+    if (verified.verb !== finding.verb) continue;
     let target: string;
-    try { target = canonicalTarget(finding.verb, requested); } catch { continue; }
+    try { target = canonicalTarget(finding.verb, verified.target); } catch { continue; }
     if (target !== finding.target) continue;
     if (verified.decision === 'denied') { denied ??= id; continue; }
     sawApproved = true;

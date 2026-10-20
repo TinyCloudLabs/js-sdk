@@ -192,7 +192,7 @@ const expandAll = (words: RawWord[], c: Census, cmd: RawCmd): Word[] => words.fl
 
 interface Shared { env: PolicyEnv; findings: Finding[]; seen: Set<string> }
 
-interface Io { heredocs: string[]; hereStrings: string[]; piped: boolean; stdinFile?: Word }
+interface Io { heredocs: string[]; hereStrings: string[]; piped: boolean; otherStdin: boolean; stdinFile?: Word }
 
 interface Scope {
   sh: Shared;
@@ -505,8 +505,16 @@ function classifyScriptText(text: string, sc: Scope, label: string): void {
   for (const hit of codeHits(text)) unresolved(sc.sh, `${label} contains ${hit}`);
 }
 
-function classifyFile(file: Word, sc: Scope, asShell: boolean): void {
+function classifyFile(file: Word, sc: Scope, asShell: boolean, io?: Io): void {
   if (file.dynamic) return unresolved(sc.sh, 'script path built at run time');
+  if (/^\/(dev\/(stdin|fd\/\d+)|proc\/self\/fd\/\d+)$/.test(file.value)) {
+    // `bash /dev/stdin <<< "…"`, `. /dev/fd/3`: the commands come from stdin or a descriptor.
+    if (io && (io.heredocs.length || io.hereStrings.length)) {
+      for (const body of [...io.heredocs, ...io.hereStrings]) analyzeScript(body, sc, sc.inexact);
+      return;
+    }
+    return unresolved(sc.sh, 'commands read from stdin or a file descriptor');
+  }
   if (sc.cwdUnknown && !path.isAbsolute(file.value)) return unresolved(sc.sh, 'script path relative to a directory that cannot be determined');
   const candidates = path.isAbsolute(file.value) ? [file.value] : sc.cwds.map((d) => path.resolve(d, file.value));
   for (const c of candidates) {
@@ -547,9 +555,10 @@ function classifyShell(args: Word[], sc: Scope, io: Io): void {
     if (next.dynamic) return unresolved(sc.sh, 'shell -c command built at run time');
     return analyzeScript(next.value, sc, sc.inexact);
   }
-  if (next) return classifyFile(next, sc, true);
+  if (next) return classifyFile(next, sc, true, io);
   for (const body of [...io.heredocs, ...io.hereStrings]) analyzeScript(body, sc, sc.inexact);
-  if (io.stdinFile) return classifyFile(io.stdinFile, sc, true);
+  if (io.stdinFile) return classifyFile(io.stdinFile, sc, true, io);
+  if (io.otherStdin) return unresolved(sc.sh, 'a shell reading commands from a file descriptor');
   if (io.piped && !io.heredocs.length && !io.hereStrings.length) unresolved(sc.sh, 'a shell reading commands from a pipe');
 }
 
@@ -627,7 +636,7 @@ function classify(argv: Word[], top: Word[], sc: Scope, io: Io): void {
     case 'source':
     case '.': {
       const file = args.find((a) => a.dynamic || !a.value.startsWith('-'));
-      if (file) classifyFile(file, sc, true);
+      if (file) classifyFile(file, sc, true, io);
       return;
     }
     case 'gh': return classifyGh(args, top, sc, io);
@@ -650,7 +659,7 @@ function classify(argv: Word[], top: Word[], sc: Scope, io: Io): void {
   }
   if (CURLS.has(prog)) return classifyCurl(args, top, sc, io);
   if (INTERPRETERS.has(prog)) return classifyInterpreter(prog, args, sc, io);
-  if (head.value.includes('/')) classifyFile(head, sc, false);
+  if (head.value.includes('/')) classifyFile(head, sc, false, io);
 }
 
 const WRITERS = new Set(['tee', 'cp', 'mv', 'install', 'sponge', 'dd']);
@@ -712,6 +721,7 @@ function analyzeScript(text: string, parent: Scope, inexact: boolean): void {
       heredocs: r.cmd.heredocs,
       hereStrings: r.here,
       piped: r.cmd.piped,
+      otherStdin: r.redirs.some((x) => x.op === '<&' || x.op === '<>'),
       ...(stdin?.target[0] ? { stdinFile: stdin.target[0] } : {}),
     };
     // Variables set for one command (`GH_REPO=x gh pr merge`) are part of what an approval has to name.
