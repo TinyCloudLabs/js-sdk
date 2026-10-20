@@ -1,5 +1,13 @@
 # @tinycloud/server
 
+## 2.5.7-beta.29
+
+### Patch Changes
+
+- Updated dependencies [6ad58de]
+  - @tinycloud/sdk-core@3.3.0-beta.31
+  - @tinycloud/node-sdk@3.3.0-beta.31
+
 ## 2.5.7-beta.28
 
 ### Patch Changes
