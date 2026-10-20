@@ -31,6 +31,8 @@ export interface CleanHomeOptions {
   cleanHome: string;
   /** Extra files relative to `realHome`, copied on purpose (`--home-file`). */
   files?: readonly string[];
+  /** Exec adapters need no model login. */
+  claude?: boolean;
 }
 
 export interface CleanHome {
@@ -92,7 +94,12 @@ export function prepareCleanHome(options: CleanHomeOptions): CleanHome {
 
   const claudeDir = path.join(home, '.claude');
   fs.mkdirSync(claudeDir, { recursive: true, mode: 0o700 });
-  if (copyFile(path.join(realHome, '.claude', '.credentials.json'), path.join(claudeDir, '.credentials.json'), 0o600)) exposed.push('.claude/.credentials.json');
+  const credential = path.join(claudeDir, '.credentials.json');
+  fs.rmSync(credential, { force: true });
+  if (options.claude !== false && copyFile(path.join(realHome, '.claude', '.credentials.json'), credential, 0o600)) exposed.push('.claude/.credentials.json');
+  // Never reuse user settings, MCP config, shell files or credential tool directories from a previous wake.
+  for (const rel of ['.claude.json', '.claude/settings.json', '.claude/settings.local.json', '.mcp.json', '.config/gh', '.config/git', '.npmrc', '.netrc', '.ssh', '.aws']) fs.rmSync(path.join(home, rel), { recursive: true, force: true });
+  for (const rel of ['.config', '.local/share', '.cache', '.local/state', '.runtime']) fs.mkdirSync(path.join(home, rel), { recursive: true, mode: 0o700 });
 
   const git = gitIdentity(realHome);
   const gitconfig = path.join(home, '.gitconfig');

@@ -143,8 +143,7 @@ const ALLOWED_ENV: RegExp[] = [
   /^LC_[A-Z_]+$/,
   /^(HTTPS?_PROXY|NO_PROXY|ALL_PROXY)$/i,
   /^(SSL_CERT_FILE|SSL_CERT_DIR|CURL_CA_BUNDLE|REQUESTS_CA_BUNDLE|NODE_EXTRA_CA_CERTS)$/,
-  /^XDG_(CONFIG|DATA|CACHE|STATE)_HOME$/,
-  /^(ANTHROPIC|CLAUDE|CLAUDE_CODE)_[A-Z0-9_]+$/,
+  /^CLAUDE_CODE_ENTRYPOINT$/,
   /^CLAUDECODE$/,
   /^COURIER_[A-Z0-9_]+$/,
   /^TC_BIN$/,
@@ -161,10 +160,24 @@ const BLANKED_ENV = [
   'PHALA_CLOUD_API_KEY', 'PHALA_API_KEY', 'LINEAR_API_KEY', 'LINEAR_ACCESS_TOKEN', 'TYPESAFE_API_KEY',
   'AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY', 'AWS_SESSION_TOKEN', 'AWS_PROFILE', 'GOOGLE_APPLICATION_CREDENTIALS', 'GOOGLE_API_KEY', 'AZURE_CLIENT_SECRET',
   'OPENAI_API_KEY', 'SLACK_BOT_TOKEN', 'SLACK_TOKEN', 'DOCKER_PASSWORD', 'SSH_AUTH_SOCK', 'SSH_ASKPASS', 'GIT_ASKPASS',
+  'BASH_ENV', 'ENV', 'NODE_OPTIONS', 'NODE_PATH', 'LD_PRELOAD', 'LD_LIBRARY_PATH', 'DYLD_INSERT_LIBRARIES', 'ZDOTDIR', 'GH_CONFIG_DIR',
+  'ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_CODE_OAUTH_TOKEN', 'CLAUDE_CODE_MESSAGING_TOKEN',
   'TC_PRIVATE_KEY', 'TC_PROFILE', 'TC_OWNER_DID', 'TC_API_KEY', 'TC_TOKEN', 'TC_OPENKEY_HOST', 'TC_OPENKEY_API_HOST', 'TC_AUTH_NO_POPUP', 'TC_NO_POPUP',
 ];
 
 const allowed = (name: string, extra: readonly string[]) => extra.includes(name) || ALLOWED_ENV.some((re) => re.test(name));
+
+/** Private shell/config roots shared by the direct adapters and stock Paseo overrides. */
+export function agentHomeEnv(home: string): Record<string, string> {
+  const clean = path.join(guardDir(home), 'home');
+  return {
+    HOME: clean, CLAUDE_CONFIG_DIR: path.join(clean, '.claude'), ZDOTDIR: clean,
+    XDG_CONFIG_HOME: path.join(clean, '.config'), XDG_DATA_HOME: path.join(clean, '.local/share'),
+    XDG_CACHE_HOME: path.join(clean, '.cache'), XDG_STATE_HOME: path.join(clean, '.local/state'),
+    XDG_RUNTIME_DIR: path.join(clean, '.runtime'),
+    COURIER_HOME: home, TC_HOME: noOwnerProfileDir(home),
+  };
+}
 
 /**
  * Environment for a woken agent: an allowlist (see {@link ALLOWED_ENV}) plus `extra` names the operator passed with
@@ -173,8 +186,7 @@ const allowed = (name: string, extra: readonly string[]) => extra.includes(name)
 export function courierOnlyEnv(base: NodeJS.ProcessEnv, home: string, extra: readonly string[] = []): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {};
   for (const [name, value] of Object.entries(base)) if (value !== undefined && allowed(name, extra)) env[name] = value;
-  env.COURIER_HOME = home;
-  env.TC_HOME = noOwnerProfileDir(home);
+  Object.assign(env, agentHomeEnv(home));
   return env;
 }
 
@@ -188,10 +200,9 @@ const CREDENTIAL_LIKE = /(TOKEN|SECRET|PASSW|API_?KEY|ACCESS_KEY|PRIVATE_KEY|CRE
  */
 export function courierEnvOverrides(base: NodeJS.ProcessEnv, home: string, extra: readonly string[] = []): Record<string, string> {
   const out: Record<string, string> = {};
-  for (const name of [...Object.keys(base).filter((n) => CREDENTIAL_LIKE.test(n)), ...BLANKED_ENV]) {
+  for (const name of [...Object.keys(base).filter((n) => CREDENTIAL_LIKE.test(n) || /^XDG_/.test(n)), ...BLANKED_ENV]) {
     if (!allowed(name, extra) && !name.startsWith('PASEO_') && /^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) out[name] = '';
   }
-  out.COURIER_HOME = home;
-  out.TC_HOME = noOwnerProfileDir(home);
+  Object.assign(out, agentHomeEnv(home));
   return out;
 }

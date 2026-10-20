@@ -430,11 +430,16 @@ cannot merge, deploy or publish. On a Paseo host, set `--paseo-provider claude`
 **Courier-only environment.** Woken `claude` and `exec` runs get an allowlist,
 not a filtered copy of your environment: `PATH`, `HOME`, `USER`, `LOGNAME`,
 `SHELL`, locale (`LANG`, `LC_*`), `TERM`, `TZ`, `TMPDIR`, proxy and CA variables
-(`HTTP(S)_PROXY`, `NO_PROXY`, `SSL_CERT_*`, `NODE_EXTRA_CA_CERTS`), what Claude
-Code itself needs (`ANTHROPIC_*`, `CLAUDE_*`), `XDG_*_HOME`, `TC_BIN` and
+(`HTTP(S)_PROXY`, `NO_PROXY`, `SSL_CERT_*`, `NODE_EXTRA_CA_CERTS`), the Claude entrypoint marker, `TC_BIN` and
 `COURIER_*`. `COURIER_HOME` is set and `TC_HOME` points at an empty directory
 (`<COURIER_HOME>/guard/no-owner-profile`), so `tc` finds no owner profile.
-Nothing else is passed: no `GH_TOKEN`/`GITHUB_TOKEN`, `NPM_TOKEN`,
+Before each wake, HOME is `<COURIER_HOME>/guard/home`; CLAUDE_CONFIG_DIR and
+ZDOTDIR point inside it, as do all five XDG config/data/cache/state/runtime
+paths. Shell startup files are removed. Only `.claude/.credentials.json` is
+copied for Claude (never `.claude.json`, settings or MCP config), plus git
+user.name/email; exec gets no model login. That one model login remains a
+credential readable by the same uid.
+Nothing else is passed implicitly: no model API tokens, `GH_TOKEN`/`GITHUB_TOKEN`, `NPM_TOKEN`,
 `CLOUDFLARE_*`, `WRANGLER_*`, `PHALA_*`, `LINEAR_*`, `AWS_*`, `GOOGLE_*`, `TC_*`
 credentials, `SSH_AUTH_SOCK`, `NODE_OPTIONS`, `LD_PRELOAD` or `BASH_ENV`. An
 operator who needs one passes it by name with `--env-pass NAME` (repeatable);
@@ -445,7 +450,9 @@ daemon's** environment (an audit of one host found `CLOUDFLARE_API_TOKEN`,
 `CLOUDFLARE_ACCOUNT_ID`, `TYPESAFE_API_KEY` and `TC_OWNER_DID` there). The
 adapter blanks (`--env NAME=`) every well-known credential name and every
 credential-looking variable of the watcher's own environment, `TC_*` included,
-and `TC_HOME` is redirected as above. Names it cannot know that the daemon
+and shell/interpreter injection variables (`BASH_ENV`, `ENV`, `NODE_OPTIONS`,
+loader variables) are blanked. HOME, CLAUDE_CONFIG_DIR, ZDOTDIR and all five
+XDG paths are redirected to the same clean HOME. Names it cannot know that the daemon
 holds still reach the agent: start the Paseo daemon without credentials in its
 environment, or use `--wake claude`, whose environment is the allowlist.
 

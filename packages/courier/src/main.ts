@@ -82,7 +82,7 @@ Delivery (one watcher per person per machine; never calls a model):
                                              wake; not for agents that can merge, deploy or publish
                                    [--wake-timeout 900] limits one wake run, in seconds.
                                    Woken claude/exec runs get an environment allowlist (PATH, HOME, locale,
-                                   proxy/CA, ANTHROPIC_*, CLAUDE_*, COURIER_*), no tokens; [--env-pass NAME]…
+                                   proxy/CA, COURIER_*), clean HOME/XDG paths, no tokens; [--env-pass NAME]…
                                    adds one on purpose. paseo agents inherit the Paseo daemon's environment:
                                    known credential names are blanked, others are not.
   watch … --install-launchd | --install-systemd [--dry-run] [--name n]

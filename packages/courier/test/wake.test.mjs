@@ -1,5 +1,13 @@
-import { test } from 'node:test';
+import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+const proofRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'wake-env-'));
+const courierHome = path.join(proofRoot, 'courier');
+const fakeRealHome = path.join(proofRoot, 'owner');
+fs.mkdirSync(fakeRealHome);
+after(() => fs.rmSync(proofRoot, { recursive: true, force: true }));
 import { createWaker, wakePrompt } from '../dist/wake.js';
 import { launchdPlist, systemdUnitFile, launchdPlan, systemdPlan } from '../dist/service.js';
 import { serviceArgv, wakeConfig } from '../dist/watch-cmd.js';
@@ -14,7 +22,7 @@ const request = {
 
 function config(adapter, extra = {}) {
   return {
-    adapter, cwd: '/work', owner: 'sam', home: '/home/sam/.courier', exec: 'agent.sh',
+    adapter, cwd: '/work', owner: 'sam', home: courierHome, realHome: fakeRealHome, exec: 'agent.sh',
     paseo: { bin: 'paseo', provider: 'claude' }, claude: { bin: 'claude', settings: '/home/sam/.courier/guard/settings.json', allow: ['Bash(courier:*)'] },
     timeoutMs: 1000, ...extra,
   };
@@ -89,10 +97,13 @@ test('claude: always runs with the guard settings and without the owner CLI prof
   });
   await waker(request);
   assert.equal(seen.args[seen.args.indexOf('--settings') + 1], '/home/sam/.courier/guard/settings.json');
-  assert.equal(seen.env.COURIER_HOME, '/home/sam/.courier');
+  assert.equal(seen.env.COURIER_HOME, courierHome);
+  assert.equal(seen.env.HOME, `${courierHome}/guard/home`);
+  assert.equal(seen.env.XDG_CONFIG_HOME, `${courierHome}/guard/home/.config`);
+  assert.ok(seen.args.includes('--strict-mcp-config'));
   assert.equal(seen.env.TC_PRIVATE_KEY, undefined);
   assert.equal(seen.env.TC_PROFILE, undefined);
-  assert.equal(seen.env.TC_HOME, '/home/sam/.courier/guard/no-owner-profile', 'tc finds an empty profile, not the owner');
+  assert.equal(seen.env.TC_HOME, `${courierHome}/guard/no-owner-profile`, 'tc finds an empty profile, not the owner');
   assert.equal(seen.env.TC_BIN, '/bin/tc');
   const noGuard = createWaker(config('claude', { claude: { bin: 'claude', allow: [] } }), { sessions: { get: () => undefined, set() {} }, run: async () => ({ code: 0, stdout: '{}', stderr: '' }) });
   await assert.rejects(noGuard(request), /guard settings/);

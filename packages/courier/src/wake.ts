@@ -7,6 +7,7 @@ import { defer } from './defer.js';
 import { CourierError } from './errors.js';
 import { cmd } from './program.js';
 import { courierEnvOverrides, courierOnlyEnv } from './guard/install.js';
+import { prepareCleanHome } from './guard/cleanhome.js';
 import { GUARD_LABEL, installProjectGuard, isClaudeProvider, paseoEnv, sameDir, verifyProjectGuard } from './guard/paseo.js';
 
 /** What the watcher hands a wake adapter: one thread, every message not yet woken for. */
@@ -167,6 +168,8 @@ export interface WakeConfig {
   /** Courier profile dir handed to the woken agent. */
   home: string;
   exec?: string;
+  /** Test/operator source HOME for the minimal model login and git identity; never inherited by the agent. */
+  realHome?: string;
   paseo: { bin: string; provider: string; mode?: string };
   claude: { bin: string; settings?: string; allow: string[] };
   /** How a woken agent reaches the guard hook (`node <entry> … guard`); the `paseo` adapter installs it in `cwd`. */
@@ -213,9 +216,15 @@ export function createWaker(
     verifyProjectGuard(installProjectGuard(config.cwd, config.home, config.guard), config.cwd);
   });
 
+  const prepareHome = () => prepareCleanHome({
+    realHome: config.realHome ?? env.HOME ?? os.homedir(),
+    cleanHome: path.join(config.home, 'guard/home'), claude: config.adapter !== 'exec',
+  });
+
   const exec: Waker = async (request) => {
     // The exec adapter installs no guard. It runs only when the operator said so, and says so on every wake.
     if (!config.unguarded) throw new CourierError('usage', UNGUARDED_REFUSAL);
+    prepareHome();
     notice(`${UNGUARDED_NOTICE} (thread ${request.threadId}, peer ${label(request.peer)})`);
     const run = deadlineRunner(deps.run, config.timeoutMs);
     const result = await run('/bin/sh', ['-c', config.exec!], {
@@ -239,6 +248,7 @@ export function createWaker(
     const key = `${request.peer}/${request.threadId}`;
     // A woken Claude never runs without the guard (spec §7): the settings file always carries the PreToolUse hook.
     if (!config.claude.settings) throw new Error('claude wake needs the guard settings file (courier guard settings)');
+    prepareHome();
     const attempt = async (session: string | undefined) => {
       const args = ['-p', '--output-format', 'json'];
       if (session) args.push('--resume', session);
@@ -274,6 +284,7 @@ export function createWaker(
       throw new Error(`the Courier guard only covers Claude agents (--paseo-provider claude); "${provider}" would run unguarded, so no agent was woken`);
     }
     prepareGuard();
+    prepareHome();
     const base = { cwd: config.cwd, timeoutMs: config.timeoutMs, env: paseoEnv(env) };
     const listed = await run(bin, ['ls', '-g', '--json', '--label', `courier-thread=${request.threadId}`, '--label', GUARD_LABEL], base);
     if (listed.code !== 0) throw failure('paseo ls', listed);
