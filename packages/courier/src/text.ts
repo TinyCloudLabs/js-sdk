@@ -6,6 +6,8 @@
 
 /** Controls (Cc), format incl. bidi and tag characters (Cf), private use (Co), unassigned (Cn), lone surrogates (Cs), line/paragraph separators. */
 const FORBIDDEN = /[\p{Cc}\p{Cf}\p{Co}\p{Cn}\p{Cs}\p{Zl}\p{Zp}]/u;
+/** Not format characters, but blank or near-blank on screen: Braille blank U+2800, object replacement U+FFFC, musical null notehead U+1D159. */
+const INVISIBLE_LOOKALIKES = /[\u2800\uFFFC\u{1D159}]/u;
 /** Variation selectors, U+034F, U+115F/1160, U+17B4/17B5, U+180B-180F, U+3164, U+FFA0, tag characters, soft hyphen, ... */
 const IGNORABLE = /\p{Default_Ignorable_Code_Point}/u;
 /** Any space other than U+0020 (no-break, em, ideographic, ...): look-alikes for a plain space. */
@@ -27,6 +29,7 @@ export const MAX_RISK = 2000;
 export function hiddenTextProblem(value: string, multiline = false): string | undefined {
   const text = multiline ? value.replace(/\n/g, ' ') : value;
   if (FORBIDDEN.test(text)) return 'it contains control, format (bidi, zero-width, tag), private-use, unassigned or separator characters';
+  if (INVISIBLE_LOOKALIKES.test(text)) return 'it contains a character that renders blank (U+2800, U+FFFC, U+1D159)';
   if (IGNORABLE.test(text)) return 'it contains invisible (default-ignorable) characters such as variation selectors';
   if (ODD_SPACE.test(text)) return 'it contains a space other than a plain space';
   if (COMBINING_RUN.test(text)) return `it stacks more than ${MAX_COMBINING_RUN} combining marks on one character`;

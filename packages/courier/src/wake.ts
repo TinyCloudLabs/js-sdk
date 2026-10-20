@@ -145,12 +145,20 @@ function failure(what: string, result: RunResult): Error {
   return new Error(`${what} exited ${result.code}: ${tail(result.stderr || result.stdout)}`);
 }
 
+/**
+ * One overall deadline for a wake: every process the adapter starts (ls, then send or run; claude's retry without
+ * `--resume`) gets only what is left of `totalMs`, so the whole wake stays under the claim lease.
+ */
+export function deadlineRunner(run: Runner, totalMs: number, now: () => number = Date.now): Runner {
+  const deadline = now() + totalMs;
+  return (bin, args, options) => run(bin, args, { ...options, timeoutMs: Math.max(1000, Math.min(options.timeoutMs, deadline - now())) });
+}
+
 export function createWaker(
   config: WakeConfig,
   deps: { run: Runner; sessions: SessionStore; env?: NodeJS.ProcessEnv; prepareGuard?: () => void; prompt?: (request: WakeRequest) => string },
 ): Waker {
   const env = deps.env ?? process.env;
-  const { run } = deps;
   const prompt = deps.prompt ?? ((request: WakeRequest) => wakePrompt(request, config.owner));
   /** Install the project guard in the agent's cwd and prove it works; throws, so the wake stays pending, if it cannot. */
   const prepareGuard = deps.prepareGuard ?? (() => {
@@ -159,6 +167,7 @@ export function createWaker(
   });
 
   const exec: Waker = async (request) => {
+    const run = deadlineRunner(deps.run, config.timeoutMs);
     const result = await run('/bin/sh', ['-c', config.exec!], {
       cwd: config.cwd,
       timeoutMs: config.timeoutMs,
@@ -176,6 +185,7 @@ export function createWaker(
   };
 
   const claude: Waker = async (request) => {
+    const run = deadlineRunner(deps.run, config.timeoutMs);
     const key = `${request.peer}/${request.threadId}`;
     // A woken Claude never runs without the guard (spec §7): the settings file always carries the PreToolUse hook.
     if (!config.claude.settings) throw new Error('claude wake needs the guard settings file (courier guard settings)');
@@ -205,6 +215,7 @@ export function createWaker(
   };
 
   const paseo: Waker = async (request) => {
+    const run = deadlineRunner(deps.run, config.timeoutMs);
     const { bin, provider, mode } = config.paseo;
     // Fail closed (spec §7): a Paseo agent is woken only if its cwd carries a guard that was just proven to refuse.
     if (!isClaudeProvider(provider)) {

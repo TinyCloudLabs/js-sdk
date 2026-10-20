@@ -265,3 +265,37 @@ test('paseo: runs are scoped by --cwd, not by the Paseo agent that started the w
     assert.equal(env.PASEO_HOME, '/home/sam/.paseo');
   }
 });
+
+test('one deadline covers a whole wake: later processes get only what is left of --wake-timeout', async () => {
+  const { deadlineRunner } = await import('../dist/wake.js');
+  let t = 1_000_000;
+  const seen = [];
+  const run = deadlineRunner(async (bin, args, o) => { seen.push(o.timeoutMs); t += 40_000; return { code: 0, stdout: '', stderr: '' }; }, 100_000, () => t);
+  await run('a', [], { timeoutMs: 900_000 });
+  await run('b', [], { timeoutMs: 900_000 });
+  await run('c', [], { timeoutMs: 900_000 });
+  assert.deepEqual(seen, [100_000, 60_000, 20_000]);
+  await run('d', [], { timeoutMs: 900_000 });
+  assert.equal(seen[3], 1000, 'never below one second, so a spent deadline fails fast');
+});
+
+test('the watcher id is created once and shared by watchers that start together', async () => {
+  const fs = await import('node:fs');
+  const os = await import('node:os');
+  const path = await import('node:path');
+  const { watcherProfileId } = await import('../dist/watch-cmd.js');
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'courier-wid-'));
+  const previous = process.env.COURIER_HOME;
+  process.env.COURIER_HOME = home;
+  try {
+    const first = watcherProfileId();
+    assert.match(first, /^[0-9a-f]{32}$/);
+    assert.equal(watcherProfileId(), first, 'a later start reads the same id');
+    // A second writer that lost the create race reads the winner's id instead of replacing it.
+    assert.equal(fs.readFileSync(path.join(home, 'watcher-id'), 'utf8').includes(first), true);
+    assert.equal((fs.statSync(path.join(home, 'watcher-id')).mode & 0o777), 0o600);
+  } finally {
+    if (previous === undefined) delete process.env.COURIER_HOME; else process.env.COURIER_HOME = previous;
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});

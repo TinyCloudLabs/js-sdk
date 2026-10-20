@@ -3,7 +3,7 @@ import { k } from './keys.js';
 import { isRecord } from './a2a.js';
 import { requestHash } from './canonical.js';
 import { storedRequestFields } from './request.js';
-import { allStrings, hiddenTextProblem } from './text.js';
+import { allStrings, hiddenTextProblem, plainLineProblem, plainTextProblem } from './text.js';
 import { canonicalTarget, targetHelp } from './guard/target.js';
 import { getJson } from './store.js';
 import { isConsumed, markConsumed } from './consumed.js';
@@ -15,6 +15,7 @@ import { loadProfile } from './profile.js';
 import { writeOut } from './inbox.js';
 
 const DAY_MS = 24 * 3600 * 1000;
+const MAX_NOTE = 2000;
 /** The view stamps `decidedAt` with the browser's clock; a decision dated slightly ahead of this machine's clock is tolerated. */
 const FUTURE_SKEW_MS = 5 * 60 * 1000;
 
@@ -82,6 +83,12 @@ export function verifyApproval(
   if (approval.requestHash !== hash) {
     fail('approval-mismatch', `Approval ${id} was not made for this request as stored (hash mismatch): the request changed after the decision.`);
   }
+  // Everything of the approval that is echoed to the agent is swept like the request: no hidden text.
+  const noteProblem = approval.note === undefined || approval.note === '' ? undefined : plainTextProblem(approval.note, MAX_NOTE);
+  if (typeof approval.note !== 'string' && approval.note !== undefined) fail('approval-mismatch', 'The approval note is not text.');
+  if (noteProblem) fail('approval-mismatch', `The approval note is refused: ${noteProblem}.`);
+  const stampProblem = plainLineProblem(approval.decidedAt, 40);
+  if (stampProblem) fail('approval-mismatch', `decidedAt is refused: ${stampProblem}.`);
   const decidedAt = ms(approval.decidedAt, 'decidedAt');
   const created = ms(request.createdAt, 'request createdAt');
   const expires = ms(request.expiresAt, 'request expiresAt');
@@ -141,6 +148,9 @@ export const approvalUsage = () =>
 export async function cmdApproval(args: ParsedArgs): Promise<void> {
   const id = args.positional[0] ?? fail('usage', approvalUsage());
   if (!SAFE.test(id)) fail('usage', `"${id}" is not a request id. ${approvalUsage()}`);
+  if (args.has('action')) {
+    fail('usage', `--action no longer exists: an approval is bound to what you are about to do by --verb and --target. ${approvalUsage()}\n${targetHelp()}`);
+  }
   const flag = (name: string) => {
     if (!args.has(name)) return undefined;
     const value = args.get(name);
