@@ -9,7 +9,10 @@ import { loadProfile, profileDir, writeSecure } from './profile.js';
 import { courierNode, peerHooks, peerKv } from './node.js';
 import type { ParsedArgs } from './args.js';
 import { WATCH_DEFAULTS, Watcher, type WatchOptions } from './watch.js';
-import { createWaker, jsonLineLog, killAllRunners, spawnRunner, type SessionStore, type WakeConfig } from './wake.js';
+import { UNGUARDED_REFUSAL, createWaker, jsonLineLog, killAllRunners, spawnRunner, type SessionStore, type WakeConfig } from './wake.js';
+import { startsAgentCli } from './guard/policy.js';
+import { guardArgv } from './guard/command.js';
+import { writeGuardSettings } from './guard/install.js';
 import { createNotifier, type NotifyConfig } from './notify.js';
 import { postPausedInform } from './pause.js';
 import {
@@ -55,7 +58,7 @@ export function watchOptions(args: ParsedArgs): WatchOptions {
 }
 
 export const watchUsage = () =>
-  `Usage: ${cmd('watch [--wake none|paseo|claude|exec] [--exec <cmd>] [--cwd dir] [--debounce 30] [--poll 60] [--ticket 25] [--wake-budget 12] [--notify paseo|osascript|exec|none] [--once]')}\n` +
+  `Usage: ${cmd('watch [--wake none|paseo|claude|exec] [--exec <cmd> --unguarded] [--env-pass NAME]… [--cwd dir] [--debounce 30] [--poll 60] [--ticket 25] [--wake-budget 12] [--notify osascript|exec|none] [--once]')}\n` +
   `       ${cmd('watch … (--install-launchd | --install-systemd) [--dry-run] [--name n]')}`;
 
 /** Where a bare `claude`/`paseo` resolves now, so a service with a minimal PATH still finds it. */
@@ -78,13 +81,23 @@ export function wakeConfig(args: ParsedArgs, owner: string | undefined): WakeCon
   if (!ADAPTERS.includes(adapter)) throw new CourierError('usage', `Unknown --wake adapter "${adapter}". ${watchUsage()}`);
   if (adapter === 'exec' && !exec) throw new CourierError('usage', `--wake exec needs --exec <cmd>. ${watchUsage()}`);
   if (exec && adapter !== 'exec') throw new CourierError('usage', '--exec only applies with --wake exec.');
+  const unguarded = args.has('unguarded');
+  if (unguarded && adapter !== 'exec') throw new CourierError('usage', '--unguarded only applies with --wake exec; the claude and paseo adapters are always guarded.');
+  if (adapter === 'exec' && !unguarded) throw new CourierError('usage', `${UNGUARDED_REFUSAL}\n${watchUsage()}`);
+  if (adapter === 'exec' && exec && startsAgentCli(exec)) throw new CourierError('usage', '--unguarded exec cannot start an agent CLI; use the guarded claude or paseo adapter.');
   const allow = args.all('claude-allow');
+  const envPass = args.all('env-pass');
+  for (const name of envPass) {
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) throw new CourierError('usage', `--env-pass needs a variable name (got "${name}").`);
+  }
   return {
     adapter,
     cwd: path.resolve(value(args, 'cwd') ?? process.cwd()),
     owner: owner ?? 'your owner',
     home: profileDir(),
     exec,
+    unguarded,
+    envPass,
     paseo: { bin: value(args, 'paseo-bin') ?? 'paseo', provider: value(args, 'paseo-provider') ?? 'claude', mode: value(args, 'paseo-mode') },
     // A woken claude may run only Courier commands unless the owner widens it with --claude-settings/--claude-allow.
     claude: { bin: value(args, 'claude-bin') ?? 'claude', settings: value(args, 'claude-settings'), allow: allow.length ? allow : [`Bash(${programName()}:*)`] },
@@ -209,6 +222,13 @@ export async function cmdWatch(args: ParsedArgs): Promise<void> {
   const profile = installing ? undefined : loadProfile();
   const config = wakeConfig(args, profile?.selfHandle);
   if (!profile) return installService(args, config);
+  if (config.adapter === 'claude' || config.adapter === 'paseo') config.guard = { argv: guardArgv(), entry: process.argv[1] ?? '' };
+  if (config.adapter === 'claude') {
+    // The owner's own --claude-settings is merged under the guard, never used instead of it.
+    config.claude.settings = writeGuardSettings({
+      ...config.guard!, home: config.home, ...(config.claude.settings ? { userSettings: config.claude.settings } : {}),
+    });
+  }
 
   const log = jsonLineLog();
   const node = await courierNode(profile);

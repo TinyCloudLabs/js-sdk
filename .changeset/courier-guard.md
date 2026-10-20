@@ -1,0 +1,17 @@
+---
+"@tinycloud/courier": minor
+---
+
+`courier guard`: a Claude Code PreToolUse hook that blocks merge, deploy, publish, pushes to `main`/`master`, `tc secrets` and direct GitHub API merges (and always `courier pair|revoke|init` and Secret Bridge) from woken agents unless the owner approved that exact (verb, target). It reads the command through quoting, wrappers, chains, subshells and nested shells, reduces it to its verb and target, finds a matching approved request, marks it used (create-only) and only then allows the command; every error refuses. `courier watch --wake claude` always passes the guard settings (`courier guard settings` prints them) and runs woken agents with the Courier profile only.
+
+The courier grant now includes `me/consumed/` (get, put, list; no del) and approvals are marked used there instead of under `me/state/`, so the courier key cannot un-consume an approval. Existing grants are refused with `grant-incomplete` until `courier init` renews them (one passkey approval). The used check reads from the network every time and fails closed on anything but a key-level 404.
+
+`courier watch --wake paseo` now installs the same guard in `<cwd>/.claude/settings.local.json` (merged with what is there), runs the hook once on a call no approval can unlock and requires a refusal, and wakes nothing otherwise. It only messages Paseo agents labelled `courier-guard=1` that run Claude in the guarded directory, deletes an agent Paseo started elsewhere, and drops `PASEO_AGENT_*`/`PASEO_WORKSPACE_ID` from its environment so `--cwd` is honoured. Non-Claude `--paseo-provider` values are refused. A guarded agent cannot start another agent (`paseo`, `claude`, `codex`, `omp`, … in Bash; `mcp__paseo__*` tools).
+
+`courier watch --wake exec` installs no guard, so it now needs `--exec <cmd> --unguarded` (also with `--install-launchd|--install-systemd`); without the flag the watcher refuses, wakes nothing and names the flag. Every exec wake prints "this wake is not approval-guarded" to stderr and adds it to `COURIER_PROMPT`. `--unguarded` is refused with the `claude`, `paseo` and `none` adapters, which are always guarded or wake nobody. Not for agents that can merge, deploy or publish.
+
+The guard's first rule is now fail-closed: a command with run-time expansion or indirection syntax (`{a,b}`, `$…`, backticks, `eval`, `source`, `alias`, here-strings, `xargs`, `find -exec`, `env`/`command`/`sudo` prefixes, `| sh`, …) that also names a gated tool or verb is refused ("expansion syntax with a gated tool name"); plain-word commands are read as before. README, `--help` and the skill say plainly that the guard stops a prompted or confused agent and is not a sandbox against a hostile local process.
+
+Woken `claude` and `exec` runs now get an environment allowlist (paths, locale, proxy and CA, `ANTHROPIC_*`, `CLAUDE_*`, `COURIER_*`) instead of a filtered copy; no tokens. `--env-pass NAME` adds a variable on purpose. `paseo` agents inherit the Paseo daemon's environment, so the adapter blanks well-known credential names and credential-looking watcher variables. The guard settings deny the Read tool on the usual credential files.
+
+`courier pause`, `courier resume` and `courier watch` (also as `tc courier …`) and `courier approval` without `--peek` are refused for a woken agent even with an approval, like `courier pair|revoke|init`: the wake budget is the reply loop's breaker, so an agent must not lift its own pause or start a watcher.
