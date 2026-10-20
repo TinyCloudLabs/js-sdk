@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { requestFields, cleanSummary, storedRequestFields, MAX_SUMMARY } from '../dist/request.js';
+import { requestFields, storedRequestFields } from '../dist/request.js';
 
 const code = (fn) => { try { fn(); } catch (e) { return e.code; } return 'no error'; };
 
@@ -17,13 +17,6 @@ test('requestFields rejects a missing or unknown verb, a missing target or summa
   assert.equal(code(() => requestFields({ ...ok, target: undefined })), 'usage');
   assert.equal(code(() => requestFields({ ...ok, target: 'whatever' })), 'usage');
   assert.equal(code(() => requestFields({ ...ok, summary: undefined })), 'usage');
-});
-
-test('summary: one line, control and bidi characters stripped, whitespace collapsed, empty or over-long rejected', () => {
-  assert.equal(cleanSummary('  Merge\u202e  docs\n\tPR\u0000 42 '), 'Merge docs PR 42');
-  assert.equal(code(() => cleanSummary('\u0000 \n')), 'usage');
-  assert.equal(code(() => cleanSummary('x'.repeat(MAX_SUMMARY + 1))), 'usage');
-  assert.equal(cleanSummary('x'.repeat(MAX_SUMMARY)).length, MAX_SUMMARY);
 });
 
 test('storedRequestFields reads only well-formed fields', () => {

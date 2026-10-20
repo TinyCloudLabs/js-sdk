@@ -132,7 +132,10 @@ names exactly what is acted on, in a fixed form per verb: `merge`:
 `deploy`: `wrangler:<worker>[:<env>]`, `pages:<project>` or `phala:<name>`;
 `other`: `workflow:owner/repo:<file>` or `secrets:<subcommand and key>`;
 `spend`: `spend:<what and how much>`. `--summary` is one line (200 characters
-at most) for your owner. Your owner's approval is for that verb and target, and
+at most, plain text: no control, zero-width, bidi or other invisible
+characters, NFC) for your owner. `--target` is printable ASCII. Text that breaks
+these rules is refused, not repaired: fix it and run the command again. Your
+owner's approval is for that verb and target, and
 the view shows them; free text is never matched. A request without all three is
 refused, and an older request without them cannot be approved.
 

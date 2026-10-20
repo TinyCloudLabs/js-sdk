@@ -3,6 +3,7 @@ import { k } from './keys.js';
 import { isRecord } from './a2a.js';
 import { requestHash } from './canonical.js';
 import { storedRequestFields } from './request.js';
+import { allStrings, hiddenTextProblem } from './text.js';
 import { canonicalTarget, targetHelp } from './guard/target.js';
 import { getJson, putCreate } from './store.js';
 import type { KV } from './inbox.js';
@@ -66,7 +67,18 @@ export function verifyApproval(
   if (approval.decision !== 'approved' && approval.decision !== 'denied') {
     fail('approval-mismatch', `Approval decision must be "approved" or "denied" (got ${JSON.stringify(approval.decision)}).`);
   }
-  if (approval.requestHash !== requestHash(request)) {
+  // Fail closed on a request that cannot be hashed (non-finite number, absurd nesting) or hides text from the reader.
+  let hash: string;
+  try {
+    hash = requestHash(request);
+  } catch (error) {
+    fail('approval-mismatch', `The request cannot be verified: ${(error as Error).message}`);
+  }
+  for (const text of allStrings(request)) {
+    const problem = hiddenTextProblem(text, true);
+    if (problem) fail('approval-mismatch', `The request contains text a person could not read as written (${problem}); it cannot be approved. File a new \`courier request\`.`);
+  }
+  if (approval.requestHash !== hash) {
     fail('approval-mismatch', `Approval ${id} was not made for this request as stored (hash mismatch): the request changed after the decision.`);
   }
   const decidedAt = ms(approval.decidedAt, 'decidedAt');
