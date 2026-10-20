@@ -183,12 +183,21 @@ export async function sendToThreadAgent(
   if (created.code !== 0) throw failure('paseo run', created);
 }
 
+/**
+ * One overall deadline for a wake: every process the adapter starts (ls, then send or run; claude's retry without
+ * `--resume`) gets only what is left of `totalMs`, so the whole wake stays under the claim lease.
+ */
+export function deadlineRunner(run: Runner, totalMs: number, now: () => number = Date.now): Runner {
+  const deadline = now() + totalMs;
+  return (bin, args, options) => run(bin, args, { ...options, timeoutMs: Math.max(1000, Math.min(options.timeoutMs, deadline - now())) });
+}
+
 export function createWaker(config: WakeConfig, deps: { run: Runner; sessions: SessionStore; env?: NodeJS.ProcessEnv }): Waker {
   const env = deps.env ?? process.env;
-  const { run } = deps;
   const prompt = (request: WakeRequest) => wakePrompt(request, config.owner);
 
   const exec: Waker = async (request) => {
+    const run = deadlineRunner(deps.run, config.timeoutMs);
     const result = await run('/bin/sh', ['-c', config.exec!], {
       cwd: config.cwd,
       timeoutMs: config.timeoutMs,
@@ -207,6 +216,7 @@ export function createWaker(config: WakeConfig, deps: { run: Runner; sessions: S
   };
 
   const claude: Waker = async (request) => {
+    const run = deadlineRunner(deps.run, config.timeoutMs);
     const key = `${request.peer}/${request.threadId}`;
     const attempt = async (session: string | undefined) => {
       const args = ['-p', '--output-format', 'json'];
@@ -233,7 +243,7 @@ export function createWaker(config: WakeConfig, deps: { run: Runner; sessions: S
     if (typeof parsed?.session_id === 'string') deps.sessions.set(key, parsed.session_id);
   };
 
-  const paseo: Waker = (request) => sendToThreadAgent(run, config, {
+  const paseo: Waker = (request) => sendToThreadAgent(deadlineRunner(deps.run, config.timeoutMs), config, {
     threadId: request.threadId, peer: request.peer, title: `✉ ${label(request.peer)} · ${label(request.subject, 60)}`, prompt: prompt(request),
   });
 

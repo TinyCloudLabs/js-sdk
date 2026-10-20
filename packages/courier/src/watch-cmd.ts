@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { randomBytes } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { cmd, programName } from './program.js';
 import { CourierError } from './errors.js';
@@ -103,6 +104,39 @@ export function notifyConfig(args: ParsedArgs, wake: WakeConfig, platform: strin
   return { adapter, owner: wake.owner, exec, wake };
 }
 
+/**
+ * Stable per profile and machine (`<COURIER_HOME>/watcher-id`, created once, create-only): a restarted watcher is
+ * recognised as the same watcher by its wake claims; another profile or machine gets a different id, so never copy or
+ * sync a COURIER_HOME between machines.
+ */
+export function watcherProfileId(): string {
+  const file = path.join(profileDir(), 'watcher-id');
+  const read = (): string | undefined => {
+    try {
+      const existing = JSON.parse(fs.readFileSync(file, 'utf8')) as { id?: unknown };
+      return typeof existing.id === 'string' && /^[0-9a-f]{32}$/.test(existing.id) ? existing.id : undefined;
+    } catch {
+      return undefined;
+    }
+  };
+  const existing = read();
+  if (existing) return existing;
+  const id = randomBytes(16).toString('hex');
+  try {
+    // Create-only: of two watchers starting for the first time, one id wins and both use it.
+    fs.writeFileSync(file, `${JSON.stringify({ v: 1, id })}\n`, { mode: 0o600, flag: 'wx' });
+    return id;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+    for (let i = 0; i < 20; i++) {
+      const winner = read();
+      if (winner) return winner;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 25); // the other writer may not have finished writing yet
+    }
+    throw new CourierError('bad-profile', `${file} exists but is not a valid watcher id; delete it and start the watcher again.`);
+  }
+}
+
 /** Claude session ids per thread, local to this machine (a session id means nothing on another one). */
 function fileSessions(): SessionStore {
   const file = path.join(profileDir(), 'sessions.json');
@@ -188,6 +222,7 @@ export async function cmdWatch(args: ParsedArgs): Promise<void> {
     wake: createWaker(config, { run: spawnRunner, sessions: fileSessions() }),
     postInform: async (peer, threadId, text) => { await postPausedInform(node.kv, loadProfile(), peer, threadId, text); },
     notify: createNotifier(notifyConfig(args, config), { run: spawnRunner }),
+    holder: { profileId: watcherProfileId() },
     log,
   }, opts);
 

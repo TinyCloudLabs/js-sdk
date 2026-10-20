@@ -5,8 +5,8 @@ import { CourierError } from './errors.js';
 export const MAX_CANONICAL_DEPTH = 64;
 
 /**
- * Canonical JSON for hashing: object keys sorted recursively in UTF-16 code-unit order, no whitespace, arrays in
- * order; otherwise `JSON.stringify` of the key-sorted tree. The `/courier` view mirrors this function: an
+ * Canonical JSON for hashing: object keys sorted recursively in UTF-16 code-unit order (integer-like keys too: `{"10":1,"9":2}`
+ * is `{"10":1,"9":2}`), no whitespace, arrays in order, values as `JSON.stringify` writes them. The `/courier` view mirrors this function: an
  * approval's `requestHash` is `requestHash(<parsed me/requests/<id>.json>)`, so both sides must agree byte for byte.
  *
  * Throws `CourierError('canonical-invalid')` for a non-finite number (a parsed `1e999` is Infinity, which
@@ -14,28 +14,22 @@ export const MAX_CANONICAL_DEPTH = 64;
  * request like that is never written and never approved.
  */
 export function canonicalJson(value: unknown): string {
-  return JSON.stringify(sortKeys(value, 1));
+  return canonicalize(value, 1);
 }
 
-function sortKeys(value: unknown, depth: number): unknown {
-  if (typeof value === 'number' && !Number.isFinite(value)) {
-    throw new CourierError('canonical-invalid', 'Not hashable: a number is not finite (for example 1e999).');
+/** Built as a string from the sorted entries (never by rebuilding an object, whose integer-like keys JS would reorder numerically). */
+function canonicalize(value: unknown, depth: number): string {
+  if (typeof value === 'number') {
+    if (!Number.isFinite(value)) throw new CourierError('canonical-invalid', 'Not hashable: a number is not finite (for example 1e999).');
+    return JSON.stringify(value);
   }
-  if (Array.isArray(value) || (value !== null && typeof value === 'object')) {
-    if (depth > MAX_CANONICAL_DEPTH) throw new CourierError('canonical-invalid', `Not hashable: nested deeper than ${MAX_CANONICAL_DEPTH} levels.`);
-  }
-  if (Array.isArray(value)) return value.map((item) => sortKeys(item, depth + 1));
-  if (value !== null && typeof value === 'object') {
-    const source = value as Record<string, unknown>;
-    const sorted: Record<string, unknown> = {};
-    // defineProperty, not assignment: a parsed `"__proto__"` key must stay an own property (assignment would set the
-    // prototype and drop it from the hash, and the view's string-built canonical JSON keeps it).
-    for (const key of Object.keys(source).sort()) {
-      Object.defineProperty(sorted, key, { value: sortKeys(source[key], depth + 1), enumerable: true, writable: true, configurable: true });
-    }
-    return sorted;
-  }
-  return value;
+  if (value === null || typeof value !== 'object') return JSON.stringify(value) ?? 'null';
+  if (depth > MAX_CANONICAL_DEPTH) throw new CourierError('canonical-invalid', `Not hashable: nested deeper than ${MAX_CANONICAL_DEPTH} levels.`);
+  if (Array.isArray(value)) return `[${value.map((item) => canonicalize(item, depth + 1)).join(',')}]`;
+  const source = value as Record<string, unknown>;
+  // Default sort order is UTF-16 code-unit order, as specified. A parsed "__proto__" key is an own key and is kept.
+  const entries = Object.keys(source).sort().flatMap((key) => (source[key] === undefined ? [] : [`${JSON.stringify(key)}:${canonicalize(source[key], depth + 1)}`]));
+  return `{${entries.join(',')}}`;
 }
 
 /** Lowercase hex SHA-256 of the UTF-8 bytes of {@link canonicalJson}. Throws like it. */

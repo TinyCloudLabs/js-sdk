@@ -28,6 +28,10 @@ function memoryKv() {
       rows.set(key, { value: structuredClone(value), etag });
       return { ok: true, data: { data: undefined, headers: { etag } } };
     },
+    async delete(key) {
+      rows.delete(key);
+      return { ok: true, data: undefined };
+    },
   };
 }
 
@@ -303,57 +307,176 @@ test('two watchers that loaded the same pending wake do not both wake it', async
   const wakes = [[], []];
   const results = await Promise.all([0, 1].map((i) =>
     runnable(selfKv, [], memoryKv(), wakes[i]).run(new AbortController().signal, { once: true }).then(() => 'ok', (e) => e.code)));
-  assert.deepEqual(results.slice().sort(), ['ok', 'state-conflict']);
-  assert.equal(wakes[0].length + wakes[1].length, 1);
+  assert.ok(results.every((r) => r === 'ok' || r === 'state-conflict'), results.join(','));
+  assert.equal(wakes[0].length + wakes[1].length, 1, 'exactly one of the two wakes the thread');
 });
 
 // ---------- wake claims ----------
 
-test('a second watcher that starts while the first one\'s wake is in flight does not wake the same message', async () => {
+// Watchers sharing one store, with a controllable process table for the claim tests.
+function claimWorld() {
   const selfKv = memoryKv();
-  const gate = defer();
-  const first = [];
-  const second = [];
+  const peerSide = memoryKv();
+  const clock = { t: 1_000_000_000_000 };
+  const alive = new Set();
   const thread = ulid();
-  const a = setup({ selfKv, wake: async (request) => { first.push(request); await gate.promise; } });
-  const id = a.send(thread, 'request');
+  const mk = ({ pid, profileId = 'profile-1', wake }) => {
+    alive.add(pid);
+    const wakes = [];
+    const events = [];
+    const watcher = new Watcher({
+      selfKv, spaceId: 's', selfHooks: {}, peerHooks: async () => ({}), loadPeers: () => [peer], kvFor: async () => peerSide,
+      wake: async (request) => { wakes.push(request); await wake?.(request); },
+      log: (event, fields) => events.push({ event, ...fields }),
+      holder: { profileId, pid, isAlive: (p) => alive.has(p) },
+      now: () => clock.t,
+    }, { debounceMs: 30_000, pollMs: 60_000, ticketSeconds: 25 });
+    return { watcher, wakes, events };
+  };
+  const send = (intent = 'request') => {
+    const message = buildMessage({ threadId: thread, text: 'hi', role: 'ROLE_USER', intent, from: { owner: 'o', agent: 'a' } });
+    message.messageId = ulid();
+    peerSide.rows.set(`${PREFIX}/to/alice/threads/${thread}/msg/${message.messageId}.json`, { value: message, etag: 'r' });
+    return message.messageId;
+  };
+  return { selfKv, clock, alive, thread, mk, send };
+}
+
+test('a second watcher that starts while the first one\'s wake is in flight skips the thread: no double wake, no stop, no state write', async () => {
+  const w = claimWorld();
+  const gate = defer();
+  const a = w.mk({ pid: 100, wake: () => gate.promise });
+  const id = w.send();
   await a.watcher.sync(peer, 'poll');
-  a.clock.t += 30_000;
+  w.clock.t += 30_000;
   const running = a.watcher.tick();
   await new Promise((resolve) => setTimeout(resolve, 20)); // A has claimed and is inside its wake
 
-  const b = new Watcher({
-    selfKv, spaceId: 's', selfHooks: {}, peerHooks: async () => ({}), loadPeers: () => [], kvFor: async () => memoryKv(),
-    wake: async (request) => { second.push(request); }, log: () => {}, now: () => a.clock.t,
-  }, { debounceMs: 30_000, pollMs: 60_000, ticketSeconds: 25 });
-  await assert.rejects(b.run(new AbortController().signal, { once: true }), (e) => e.code === 'state-conflict');
-  assert.equal(second.length, 0);
+  const b = w.mk({ pid: 200 });
+  await b.watcher.loadState();
+  await b.watcher.tick(true);
+  assert.equal(b.wakes.length, 0);
+  assert.ok(b.events.some((e) => e.event === 'claimed-elsewhere'));
+  assert.equal(b.watcher.fatalError, undefined, 'a live claim by another watcher skips the thread, it does not stop B');
   gate.resolve();
   await running;
-  assert.deepEqual(first.map((r) => r.messages.map((m) => m.messageId)), [[id]]);
+  assert.deepEqual(a.wakes.map((r) => r.messages.map((m) => m.messageId)), [[id]]);
+  assert.equal(a.watcher.fatalError, undefined, 'B did not write state, so A\'s own state write is not made to fail');
 });
 
-test('a wake claim left by a crashed watcher is taken over after the lease; a live one is not', async () => {
-  const selfKv = memoryKv();
-  const thread = ulid();
-  const a = setup({ selfKv });
-  const id = a.send(thread, 'request');
+test('pid reuse: a live, different pid holding an own-profile claim is respected for the own lease, then taken over', async () => {
+  const w = claimWorld();
+  const a = w.mk({ pid: 100, wake: () => new Promise(() => {}) }); // never returns: the process is "gone" but its pid now belongs to something else
+  w.send();
   await a.watcher.sync(peer, 'poll');
-  const claimKey = k.wakeClaim('bob', thread, id);
-
-  selfKv.rows.set(claimKey, { value: { v: 1, holder: 'someone-else', at: new Date(a.clock.t).toISOString() }, etag: 'c' });
-  a.clock.t += 30_000;
-  await assert.rejects(a.watcher.tick(), (e) => e.code === 'state-conflict');
-  assert.equal(a.wakes.length, 0, 'a claim made seconds ago by another process blocks the wake');
-  assert.ok(a.watcher.fatalError, 'and means two watchers are running');
-
-  const b = setup({ selfKv });
-  b.clock.t = a.clock.t + 36 * 60_000;
-  selfKv.rows.set(claimKey, { value: { v: 1, holder: 'crashed', at: new Date(a.clock.t).toISOString() }, etag: 'c2' });
+  w.clock.t += 30_000;
+  void a.watcher.tick();
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  // pid 100 stays "alive" in the process table: an unrelated process reused the number.
+  const b = w.mk({ pid: 200 });
   await b.watcher.loadState();
-  b.send(thread, 'request'); // keep b's peer side non-empty; b wakes from the shared pending state
-  await b.watcher.tick();
-  assert.equal(b.wakes.length, 1, 'after 35 minutes the claim is presumed abandoned and taken over');
+  w.clock.t += 30 * 60_000;
+  await b.watcher.tick(true);
+  assert.equal(b.wakes.length, 0, 'within the own lease the live pid keeps the thread');
+  assert.ok(b.events.some((e) => e.event === 'claimed-elsewhere'));
+  w.clock.t += 6 * 60_000;
+  await b.watcher.tick(true);
+  assert.equal(b.wakes.length, 1, 'after 35 minutes the claim is taken over');
+  assert.ok(b.events.some((e) => e.event === 'claim-taken-over' && e.reason === 'own-lease-expired'));
+});
+
+test('same pid number after a restart (pid 1 in a container) takes the claim over at once', async () => {
+  const w = claimWorld();
+  const a = w.mk({ pid: 1, wake: () => new Promise(() => {}) });
+  w.send();
+  await a.watcher.sync(peer, 'poll');
+  w.clock.t += 30_000;
+  void a.watcher.tick();
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  const restarted = w.mk({ pid: 1 }); // the container restarted: the new watcher is pid 1 again
+  await restarted.watcher.loadState();
+  await restarted.watcher.tick(true);
+  assert.equal(restarted.wakes.length, 1);
+  assert.ok(restarted.events.some((e) => e.event === 'claim-taken-over' && e.reason === 'same-pid'));
+});
+
+test('restart after a failed wake wakes immediately: the failed attempt released its claim', async () => {
+  const w = claimWorld();
+  const a = w.mk({ pid: 100, wake: async () => { throw new Error('agent down'); } });
+  const id = w.send();
+  await a.watcher.sync(peer, 'poll');
+  w.clock.t += 30_000;
+  await a.watcher.tick();
+  assert.equal(a.wakes.length, 1);
+  assert.ok(![...w.selfKv.rows.keys()].some((key) => key.includes('/wake-claims/')), 'the claim is gone');
+
+  w.clock.t += 3.5 * 60_000; // the service manager restarts the watcher 3.5 minutes later
+  w.alive.delete(100);
+  const a2 = w.mk({ pid: 101 });
+  await a2.watcher.loadState();
+  await a2.watcher.tick();
+  assert.deepEqual(a2.wakes.map((r) => r.messages.map((m) => m.messageId)), [[id]]);
+});
+
+test('crash during a wake: the restarted watcher (same profile, new pid) takes the dead holder\'s claim at once', async () => {
+  const w = claimWorld();
+  const gate = defer();
+  const a = w.mk({ pid: 100, wake: () => gate.promise });
+  const id = w.send();
+  await a.watcher.sync(peer, 'poll');
+  w.clock.t += 30_000;
+  void a.watcher.tick();
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  w.alive.delete(100); // the process is gone (crash, reboot, kill -9); the claim was never released
+
+  w.clock.t += 60_000;
+  const a2 = w.mk({ pid: 101 });
+  await a2.watcher.loadState();
+  await a2.watcher.tick(true);
+  assert.deepEqual(a2.wakes.map((r) => r.messages.map((m) => m.messageId)), [[id]], 'woken again: wakes are at-least-once');
+  assert.ok(a2.events.some((e) => e.event === 'claim-taken-over' && e.reason === 'holder-dead'));
+});
+
+test('a claim from another profile or machine is respected for the lease, then taken over', async () => {
+  const w = claimWorld();
+  const a = w.mk({ pid: 100, profileId: 'someone-elses', wake: async () => { throw new Error('x'); } });
+  w.send();
+  await a.watcher.sync(peer, 'poll');
+  const claimKey = [...w.selfKv.rows.keys()].find((key) => key.includes('/state/watch.json')) ? null : null;
+  void claimKey;
+  // Plant a claim as if made by another profile just now.
+  const pendingKey = Object.values(a.watcher.snapshot().pending)[0];
+  const key = k.wakeClaim('bob', w.thread, pendingKey.messages[0].messageId);
+  w.selfKv.rows.set(key, { value: { v: 1, profile: 'other-machine', run: 'r', pid: 5, at: new Date(w.clock.t).toISOString() }, etag: 'c' });
+
+  const b = w.mk({ pid: 200 });
+  await b.watcher.loadState();
+  w.clock.t += 40 * 60_000;
+  await b.watcher.tick(true);
+  assert.equal(b.wakes.length, 0, 'still inside the 45 minute lease (35 plus a clock-skew margin)');
+  w.clock.t += 6 * 60_000;
+  await b.watcher.tick(true);
+  assert.equal(b.wakes.length, 1, 'after the lease');
+});
+
+test('an orphan claim from a stale second watcher whose state write failed does not block the legitimate watcher', async () => {
+  const w = claimWorld();
+  const a = w.mk({ pid: 100 });
+  const ida = w.send();
+  await a.watcher.sync(peer, 'poll'); // A writes state with the pending wake
+  const stale = w.mk({ pid: 200 });
+  await stale.watcher.loadState(); // the stale watcher loads A's state (so it also sees the pending wake)...
+  const idb = w.send();
+  await a.watcher.sync(peer, 'poll'); // ...then A moves the state on
+  w.clock.t += 30_000;
+
+  await assert.rejects(stale.watcher.tick(true), (e) => e.code === 'state-conflict'); // it claims the thread, then its conditional state write fails
+  assert.equal(stale.watcher.fatalError?.code, 'state-conflict', 'the stale watcher stops on the state etag');
+  assert.equal(stale.wakes.length, 0);
+  assert.ok(![...w.selfKv.rows.keys()].some((key) => key.includes('/wake-claims/')), 'and released the claim it had taken');
+
+  await a.watcher.tick(true);
+  assert.deepEqual(a.wakes.map((r) => r.messages.map((m) => m.messageId)), [[ida, idb]], 'the legitimate watcher is not blocked');
 });
 
 test('a peer-controlled subject is one capped line before it reaches state and prompts', async () => {

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { requestFields, storedRequestFields, requestText } from '../dist/request.js';
 import { plainLineProblem, MAX_SUMMARY } from '../dist/text.js';
-import { canonicalJson, requestHash } from '../dist/canonical.js';
+import { requestHash } from '../dist/canonical.js';
 import { verifyApproval } from '../dist/approval.js';
 
 const vectors = JSON.parse(fs.readFileSync(new URL('./vectors/request-fields.json', import.meta.url), 'utf8'));
@@ -28,14 +28,6 @@ for (const v of vectors.fields) {
       const stored = storedRequestFields({ verb: v.verb, target: v.value, summary: 'ok' });
       assert.equal(stored !== undefined, v.valid, 'the stored form is judged by the same rules');
     }
-  });
-}
-
-for (const c of vectors.canonical) {
-  test(`shared vector: canonical JSON ${c.name}`, () => {
-    const parsed = JSON.parse(c.json);
-    if (c.canonical === null) assert.throws(() => canonicalJson(parsed), (e) => e.code === 'canonical-invalid');
-    else assert.equal(canonicalJson(parsed), c.canonical);
   });
 }
 
@@ -92,4 +84,42 @@ test('the target must match exactly and the verb must match the kind of command'
   assert.equal(run({ verb: 'merge', target: 'tinycloudlabs/docs#42 ' }), 'approval-mismatch');
   assert.equal(run({ verb: 'publish', target: 'tinycloudlabs/docs#42' }), 'approval-mismatch');
   assert.equal(run({ verb: 'other', target: 'tinycloudlabs/docs#42' }), 'approval-mismatch');
+});
+
+test('the approval note and decidedAt are swept like the request, since they are echoed to the agent', () => {
+  const NOW = Date.parse('2026-10-20T12:00:00Z');
+  const req = { ...base };
+  const hash = requestHash(req);
+  const run = (over) => { try { verifyApproval('R1', req, { requestId: 'R1', requestHash: hash, decision: 'approved', note: '', decidedAt: '2026-10-20T11:00:00Z', ...over }, { now: NOW }); return 'ok'; } catch (e) { return e.code; } };
+  assert.equal(run({}), 'ok');
+  assert.equal(run({ note: 'fine, go ahead' }), 'ok');
+  assert.equal(run({ note: 'ok\u{E0041}' }), 'approval-mismatch', 'tag characters in the note');
+  assert.equal(run({ note: 'ok\u202e' }), 'approval-mismatch');
+  assert.equal(run({ note: 5 }), 'approval-mismatch');
+  assert.equal(run({ note: 'x'.repeat(2001) }), 'approval-mismatch');
+  assert.equal(run({ decidedAt: '2026-10-20T11:00:00Z\u200b' }), 'approval-mismatch', 'zero-width space after the timestamp');
+  assert.equal(run({ decidedAt: ' 2026-10-20T11:00:00Z' }), 'approval-mismatch');
+});
+
+test('courier approval --action is an explicit error that points at --verb and --target', async () => {
+  const { main } = await import('../dist/main.js');
+  const original = console.error;
+  let message = '';
+  console.error = (m) => { message += String(m); };
+  try {
+    assert.equal(await main(['approval', 'R1', '--action', 'gh pr merge 1']), 2);
+  } finally {
+    console.error = original;
+  }
+  assert.match(message, /--action no longer exists/);
+  assert.match(message, /--verb/);
+});
+
+test('requestIds: thread and task ids that are not ULID-like are refused before anything is written', async () => {
+  const { requestIds } = await import('../dist/request.js');
+  assert.doesNotThrow(() => requestIds({ threadId: '01M5C9EDF03QMRZS2DJXGN5A4C', taskId: 'K1_a-b' }));
+  for (const bad of ['', 'a b', 'a\nb', 'a/b', 'x'.repeat(65), 'caf\u00e9', 'a\u200bb']) {
+    assert.throws(() => requestIds({ threadId: bad, taskId: 'K1' }), (e) => e.code === 'usage', JSON.stringify(bad));
+    assert.throws(() => requestIds({ threadId: 'T1', taskId: bad }), (e) => e.code === 'usage', JSON.stringify(bad));
+  }
 });

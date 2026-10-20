@@ -22,8 +22,12 @@ const WAKE_RETRY_MS = 60_000;
 const RECONNECT_CATCH_UP_MS = 2000;
 /** Spec §7: an approval expires after 24 hours; an older one found at startup wakes nobody. */
 const APPROVAL_MAX_AGE_MS = 24 * 3600 * 1000;
-/** A wake claim older than this belongs to a crashed watcher (wake runs are capped well below it: `--wake-timeout` <= 30 min). */
-const CLAIM_LEASE_MS = 35 * 60_000;
+/** Adapter runs are capped at 30 min in total (`--wake-timeout`, one deadline across all its calls). This profile's own claim is respected 35 min unless its holder is provably gone; another profile's or machine's, 45. */
+const OWN_CLAIM_LEASE_MS = 35 * 60_000;
+/** Another profile or machine: the same plus a margin for clock skew (`at` is the claimer's own clock). */
+const FOREIGN_CLAIM_LEASE_MS = 45 * 60_000;
+/** A thread another watcher is waking is looked at again after this. */
+const CLAIM_SKIP_MS = 30_000;
 const DAY_MS = 24 * 3600 * 1000;
 /** The subject is peer-controlled text that reaches state, prompts and environments: one line, control characters removed, capped. */
 const MAX_SUBJECT = 200;
@@ -105,6 +109,11 @@ export interface WatchDeps {
   postInform?(peer: string, threadId: string, text: string): Promise<void>;
   /** Tells this side's human (Paseo attention, desktop notification, …). Default: log only. */
   notify?: Notifier;
+  /**
+   * Who this watcher is, for wake claims. `profileId` is stable for this profile on this machine (a restart keeps it,
+   * a second profile or machine differs); `pid` and `isAlive` tell a restarted watcher its predecessor is dead.
+   */
+  holder?: { profileId: string; pid?: number; isAlive?(pid: number): boolean };
   now?(): number;
 }
 
@@ -126,6 +135,16 @@ export function sentAtOf(messageId: string): string {
     return new Date(decodeTime(messageId)).toISOString();
   } catch {
     return '';
+  }
+}
+
+/** Signal 0 only probes: ESRCH = gone, EPERM = alive but not ours. */
+function pidAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === 'EPERM';
   }
 }
 
@@ -152,7 +171,11 @@ export class Watcher {
   private readonly outboxBusy = new Set<string>();
   private readonly outboxRetryAt = new Map<string, number>();
   private approvalsAgain = false;
-  private readonly holderId = ulid();
+  /** Unique to this run: a claim with this id is this process's own. */
+  private readonly runId = ulid();
+  private readonly profileId: string;
+  private readonly pid: number;
+  private readonly isAlive: (pid: number) => boolean;
   private lastClaimPrune = 0;
   /** Set when another watcher is writing this profile's state: this one stops and `run` throws it. */
   private fatalError: CourierError | undefined;
@@ -167,6 +190,9 @@ export class Watcher {
 
   constructor(private readonly deps: WatchDeps, private readonly opts: WatchOptions = WATCH_DEFAULTS) {
     this.now = deps.now ?? Date.now;
+    this.profileId = deps.holder?.profileId ?? this.runId;
+    this.pid = deps.holder?.pid ?? process.pid;
+    this.isAlive = deps.holder?.isAlive ?? pidAlive;
   }
 
   // ---------- state ----------
@@ -221,32 +247,67 @@ export class Watcher {
 
   /**
    * One create-only marker per wake (keyed by the first message or approval it carries), so a second watcher that
-   * starts while this one's wake is in flight cannot wake the same thing: the stale-etag check alone only catches a
-   * watcher that loaded state before the other one wrote. A marker held by another process within the lease means
-   * two watchers are running: stop. After the lease the holder is presumed crashed and the claim is taken over.
+   * runs while this one's wake is in flight cannot wake the same thing. The marker names its holder
+   * (`profile`, `run`, `pid`):
+   *   - this run's own marker: reuse it;
+   *   - same profile and machine, holder pid gone or equal to ours (restart, crash, reboot, pid 1 in a container): take it over at once;
+   *   - same profile and machine, holder pid alive and different: another watcher is running now: skip the thread (the
+   *     state etag stops the loser when it writes state), unless the claim outlived the own lease (pid reuse);
+   *   - another profile or machine: skip until the lease (plus clock-skew margin) runs out, then take it over.
+   * Returns false when the thread must be skipped this tick. Markers are deleted when the adapter fails.
    */
-  private async claimWake(peer: string, threadId: string, firstId: string): Promise<void> {
-    const { selfKv } = this.deps;
+  private async claimWake(peer: string, threadId: string, firstId: string): Promise<boolean> {
+    const { selfKv, log } = this.deps;
     const key = k.wakeClaim(peer, threadId, firstId);
-    const claim = { v: 1, holder: this.holderId, at: new Date(this.now()).toISOString() };
-    try {
-      await putCreate(selfKv, key, claim);
-      return;
-    } catch (error) {
-      if (!(error instanceof CourierError && error.code === 'conflict')) throw error;
-    }
-    const existing = await getJson<{ holder?: unknown; at?: unknown }>(selfKv, key);
-    if (existing?.value.holder === this.holderId) return; // this watcher's own retry after a failed wake
-    const age = existing && typeof existing.value.at === 'string' ? this.now() - Date.parse(existing.value.at) : Infinity;
-    if (existing?.etag && age >= CLAIM_LEASE_MS) {
+    const claim = { v: 1, profile: this.profileId, run: this.runId, pid: this.pid, at: new Date(this.now()).toISOString() };
+    for (let attempt = 0; attempt < 2; attempt++) {
       try {
-        await putMatch(selfKv, key, claim, existing.etag);
-        return;
+        await putCreate(selfKv, key, claim);
+        return true;
       } catch (error) {
         if (!(error instanceof CourierError && error.code === 'conflict')) throw error;
       }
+      const existing = await getJson<{ profile?: unknown; run?: unknown; pid?: unknown; at?: unknown }>(selfKv, key);
+      if (!existing) continue; // released between our two calls
+      const held = existing.value;
+      let takeOver: string | undefined;
+      if (held.run === this.runId) return true;
+      const age = typeof held.at === 'string' ? this.now() - Date.parse(held.at) : Infinity;
+      if (held.profile === this.profileId) {
+        // Same profile, same machine, so the same clock. A pid proves liveness only while it is not reused: a live pid
+        // that is not a watcher (pid reuse, another user's process), or this very pid number (pid 1 in a container
+        // after a restart), would otherwise stall the thread, so the own-profile lease is the backstop.
+        if (typeof held.pid !== 'number') takeOver = 'no-pid';
+        else if (held.pid === this.pid) takeOver = 'same-pid';
+        else if (!this.isAlive(held.pid)) takeOver = 'holder-dead';
+        else if (!(age < OWN_CLAIM_LEASE_MS)) takeOver = 'own-lease-expired';
+      } else if (!(age < FOREIGN_CLAIM_LEASE_MS)) {
+        takeOver = 'lease-expired';
+      }
+      if (takeOver && existing.etag) {
+        try {
+          await putMatch(selfKv, key, claim, existing.etag);
+          log('claim-taken-over', { peer, threadId, reason: takeOver });
+          return true;
+        } catch (error) {
+          if (!(error instanceof CourierError && error.code === 'conflict')) throw error;
+        }
+      }
+      break;
     }
-    throw this.stateConflict(`Another watcher is already waking thread ${threadId} (${firstId}); a second \`watch\` is running for this profile. This watcher is stopping.`);
+    log('claimed-elsewhere', { peer, threadId, messageId: firstId });
+    return false;
+  }
+
+  /** Drops this run's own claim (best effort): a failed wake must not keep the thread from being woken. */
+  private async releaseClaim(peer: string, threadId: string, firstId: string): Promise<void> {
+    const key = k.wakeClaim(peer, threadId, firstId);
+    try {
+      const existing = await getJson<{ run?: unknown }>(this.deps.selfKv, key);
+      if (existing?.value.run === this.runId) await del(this.deps.selfKv, key);
+    } catch (error) {
+      this.deps.log('sync-error', { source: 'claim-release', ...errInfo(error) });
+    }
   }
 
   /** Claim markers are only needed while a double wake is possible; drop those older than two days. */
@@ -539,11 +600,20 @@ export class Watcher {
     const woken = messages.map((m) => m.messageId);
     const approvedIds = approvals.map((a) => a.approvalId);
     const oldestSentAt = messages[0]?.sentAt ?? '';
-    // Claim the state first: a stale second watcher fails this conditional write and stops before it can wake.
-    // The per-wake claim goes first: a newcomer whose claim fails must stop without having written the state, which
-    // would otherwise make the watcher that legitimately owns the wake fail its next conditional write.
-    await this.claimWake(pending.peer, pending.threadId, woken[0] ?? approvedIds[0]);
-    await this.mutate(() => {});
+    // The per-wake claim goes first: a watcher that loses it skips the thread without having written the state, which
+    // would otherwise make the watcher that legitimately owns the wake fail its next conditional write. Then the
+    // state write: a stale second watcher fails that conditional write and stops before it can wake.
+    const claimId = woken[0] ?? approvedIds[0];
+    if (!(await this.claimWake(pending.peer, pending.threadId, claimId))) {
+      this.retryAt.set(key, at + CLAIM_SKIP_MS);
+      return;
+    }
+    try {
+      await this.mutate(() => {});
+    } catch (error) {
+      await this.releaseClaim(pending.peer, pending.threadId, claimId);
+      throw error;
+    }
     const startedAt = this.now();
     // `waking` is when the adapter is invoked: the send-to-wake latency. `woke` follows when the adapter returns.
     this.deps.log('waking', {
@@ -556,9 +626,10 @@ export class Watcher {
     } catch (error) {
       this.retryAt.set(key, at + WAKE_RETRY_MS);
       this.deps.log('wake-error', { peer: pending.peer, threadId: pending.threadId, ...errInfo(error) });
+      // The attempt failed, so the thread is not being woken: release the claim (a restart must not wait for it).
+      await this.releaseClaim(pending.peer, pending.threadId, claimId);
       return;
     }
-    this.retryAt.delete(key);
     await this.mutate(() => {
       const current = this.state.pending[key];
       if (current) {
@@ -569,6 +640,8 @@ export class Watcher {
       this.state.woken = [...this.state.woken, ...woken].slice(-WAKEN_MEMORY);
       if (woken.length) this.state.wakes[key] = [...this.recentWakes(key), startedAt];
     });
+    // Only now, with the wake recorded, is the retry hold-off cleared.
+    this.retryAt.delete(key);
     this.deps.log('woke', {
       peer: pending.peer, threadId: pending.threadId, messageIds: woken, approvalIds: approvedIds,
       runMs: this.now() - startedAt,
