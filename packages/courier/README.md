@@ -92,8 +92,8 @@ For the OpenKey API host it is flag > env > derived. `TC_HOME`, `TC_PROFILE`,
 
 - **Subscribe.** One write-hook subscription per paired peer on that peer's
   `to/<me>/`, and one on your own `me/approvals/`, each on 25 s tickets
-  (`--ticket`). Hooks are a wake-up signal only; on production they arrive up
-  to one ticket late (TC-720) and have no replay.
+  (`--ticket`). A hook signals that something changed; the watcher then lists
+  the peer's messages, and that listing is the source of truth.
 - **Catch up.** Every `--poll` seconds (default 60, not 5 minutes) and at
   start, it lists each peer's `threads/` prefix in full and diffs it against
   `to/<peer>/receipts.json`. A subscription that is refused (for example an
@@ -297,14 +297,14 @@ It then consumes the approval with a create-only marker at
 `--peek` checks the marker too (a used approval fails the peek) but does not
 write it. A denial exits `approval-denied`. The courier key cannot write
 `me/approvals/`, so only the owner's view session can produce a passing
-approval. Residual risk: the courier grant can delete under `me/state/`
-(spec §3), so a compromised agent could delete the used marker and replay an
-approval within its 24 hours; a delete-proof record is tracked separately.
+approval. Each approval covers one request and is valid for 24 hours.
 
 The watcher wakes the thread's agent as soon as a new approval (approved or
 denied) for one of its requests appears, without the debounce. Approvals older
 than 24 hours, already used, malformed, or without a request at start-up wake
 nobody.
+
+Details: TC-1634
 
 ### Running it as a service
 
