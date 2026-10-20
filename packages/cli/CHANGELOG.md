@@ -1,5 +1,90 @@
 # @tinycloud/cli
 
+## 1.3.0-beta.36
+
+### Patch Changes
+
+- @tinycloud/node-sdk@3.3.0-beta.33
+- @tinycloud/operations@0.6.1-beta.30
+
+## 1.3.0-beta.35
+
+### Patch Changes
+
+- Updated dependencies [6ad58de]
+  - @tinycloud/operations@0.6.1-beta.29
+  - @tinycloud/sdk-core@3.3.0-beta.31
+  - @tinycloud/node-sdk-wasm@1.7.8-beta.0
+  - @tinycloud/node-sdk@3.3.0-beta.31
+
+## 1.3.0-beta.34
+
+### Patch Changes
+
+- 9b46aa1: `tc share` now names a failure by class instead of a bare `INVALID_ARGUMENT` "share operation failed". A share upload the node answers with `404 Space not found` fails with `SPACE_NOT_READY` (exit 4; a known node problem, retry after the node update).
+
+  Behaviour change for scripts: share failures that used to report `INVALID_ARGUMENT` (exit 2) now report a typed code and exit code:
+
+  | Signal                                                         | code                | exit |
+  | -------------------------------------------------------------- | ------------------- | ---- |
+  | upload 404 "Space not found"                                   | `SPACE_NOT_READY`   | 4    |
+  | HTTP 401 / unauthenticated                                     | `AUTH_REQUIRED`     | 3    |
+  | HTTP 403 / forbidden                                           | `PERMISSION_DENIED` | 5    |
+  | HTTP 404                                                       | `NOT_FOUND`         | 4    |
+  | HTTP 5xx, 408, 429                                             | `NODE_UNAVAILABLE`  | 7    |
+  | node unreachable (a `fetch failed` error, `ECONNREFUSED`, ...) | `NETWORK_ERROR`     | 6    |
+  | HTTP 400, 422                                                  | `INVALID_ARGUMENT`  | 2    |
+  | other 4xx                                                      | `NODE_REJECTED`     | 1    |
+
+  A `TypeError("fetch failed")` that used to be `INVALID_ARGUMENT` is now `NETWORK_ERROR`. The message carries the HTTP status and a plain upstream code, never response text; the original error is kept as `cause`. Errors with no status or network signal are unchanged.
+
+## 1.3.0-beta.33
+
+### Patch Changes
+
+- 72ff62a: `share publish`: `.jsx` and `.tsx` files are published as `text/jsx` and `text/tsx` instead of `application/octet-stream`. `--to anyone --action edit` now exits 2 with `INVALID_ARGUMENT` instead of silently publishing a read-only link. The tc-cli skill documents publishing Markdown, single-file HTML and JSX artifacts, and getting the link with `share show <id> --reveal-link`.
+
+## 1.3.0-beta.32
+
+### Patch Changes
+
+- Updated dependencies [fc88c48]
+  - @tinycloud/sdk-core@3.3.0-beta.30
+  - @tinycloud/node-sdk@3.3.0-beta.30
+  - @tinycloud/operations@0.6.1-beta.28
+
+## 1.3.0-beta.31
+
+### Patch Changes
+
+- Updated dependencies [e99a127]
+  - @tinycloud/node-sdk@3.3.0-beta.29
+  - @tinycloud/operations@0.6.1-beta.27
+
+## 1.3.0-beta.30
+
+### Patch Changes
+
+- Updated dependencies [ac612c0]
+  - @tinycloud/sdk-core@3.3.0-beta.28
+  - @tinycloud/node-sdk@3.3.0-beta.28
+  - @tinycloud/operations@0.6.1-beta.26
+
+## 1.3.0-beta.29
+
+### Patch Changes
+
+- b2b3b97: Replication: read `TC_REPLICATION_GRANT_TTL_MS` and `TC_REPLICATION_MAX_BYTES` in the CLI; both must be plain decimal integers (grant TTL at most 7 days), otherwise the command fails with a usage error naming the variable.
+
+## 1.3.0-beta.28
+
+### Patch Changes
+
+- Updated dependencies [4aae658]
+  - @tinycloud/sdk-core@3.3.0-beta.27
+  - @tinycloud/node-sdk@3.3.0-beta.27
+  - @tinycloud/operations@0.6.1-beta.25
+
 ## 1.3.0-beta.27
 
 ### Patch Changes

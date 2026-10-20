@@ -1,5 +1,47 @@
 # openkey-vite
 
+## 0.0.35-beta.33
+
+### Patch Changes
+
+- @tinycloud/web-sdk@3.3.0-beta.33
+
+## 0.0.35-beta.32
+
+### Patch Changes
+
+- @tinycloud/web-sdk@3.3.0-beta.32
+
+## 0.0.35-beta.31
+
+### Patch Changes
+
+- @tinycloud/web-sdk@3.3.0-beta.31
+
+## 0.0.35-beta.30
+
+### Patch Changes
+
+- @tinycloud/web-sdk@3.3.0-beta.30
+
+## 0.0.35-beta.29
+
+### Patch Changes
+
+- @tinycloud/web-sdk@3.3.0-beta.29
+
+## 0.0.35-beta.28
+
+### Patch Changes
+
+- @tinycloud/web-sdk@3.3.0-beta.28
+
+## 0.0.35-beta.27
+
+### Patch Changes
+
+- @tinycloud/web-sdk@3.3.0-beta.27
+
 ## 0.0.35-beta.26
 
 ### Patch Changes

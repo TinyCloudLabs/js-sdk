@@ -396,6 +396,10 @@ The fragment after `#` is the read key. Browsers never send it to a server; `--n
 
 Share publication without `--expires` requests a seven-day lifetime. For a session-only profile, the CLI clamps that request to the verified SIWE session expiry, prints a notice to stderr, and reports `"expiryClamped": true` in JSON. Explicit lifetimes beyond the session end, or with less than 60 seconds left after second-precision rounding, fail with `SESSION_LIFETIME_EXCEEDED`. Expired/invalid restored sessions and missing owner authority return `AUTH_REQUIRED`; rejected KV upload or delegation scopes return `PERMISSION_DENIED`. A session-only profile whose authority for an anyone-with-link share carries signed restrictions (caveats) is refused with `PERMISSION_DENIED` before anything is stored, because the link's delegation cannot carry the caveats; approve Share publishing without restrictions on a new profile (`tinycloud init --name publisher --key-only && tinycloud --profile publisher enable share`). Full TinyCloud storage returns the general storage-full error (`STORAGE_QUOTA_EXCEEDED` or `STORAGE_LIMIT_REACHED`, exit 10), and any other failed upload returns `UPLOAD_FAILED`; nothing is shared in either case. A filename that has characters other than `A-Z a-z 0-9 . _ -`, starts with anything but a letter or digit, contains `..`, or is longer than 128 characters is stored under a readable URI-safe name. It keeps its extension when that is 1-16 ASCII letters or digits (`Q3 plan (draft).md` is stored as `Q3-plan-draft.md`, `.env` as `share.env`); otherwise its dots become dashes, so it never gains one. Bearer links show the stored name and `receive` writes it, while addressed links keep the original. JSON publish output includes `expiryClamped: false` when no clamp was needed.
 
+**`SPACE_NOT_READY`** (exit 4). A share upload the node answered with `404 Space not found` for the owner space. A node restart can leave an empty space unregistered until it is first written; the node fix (1.21.5) is pending. Nothing sets the space up from the client, so retries keep failing until the node is updated: retry after the node update, and contact support with the code if it persists. Nothing was shared and repeating the command is safe. Only this write-time 404 maps here; other 404s (an unknown share, a missing key on a read) keep their own errors. The node's error is kept as the error's `cause`, not printed.
+
+A node or network failure that no specific Share mapping claims is named by class and HTTP status rather than `INVALID_ARGUMENT`: `AUTH_REQUIRED` (401, exit 3), `PERMISSION_DENIED` (403, exit 5), `NOT_FOUND` (404, exit 4), `NODE_UNAVAILABLE` (5xx/408/429, exit 7), `NETWORK_ERROR` (node unreachable, exit 6), `INVALID_ARGUMENT` (400/422, exit 2) and `NODE_REJECTED` (other 4xx, exit 1). The message carries fixed wording plus the status and a plain upstream code (`HTTP 502, UPSTREAM_DOWN`), never the node's response text; an error with no such signal still reports `share operation failed`.
+
 ### Share Publish Options
 
 | Flag | Description | Default |
@@ -406,11 +410,46 @@ Share publication without `--expires` requests a seven-day lifetime. For a sessi
 | `--notify` | Email the exact-email recipient, or one domain mailbox with `--notify-to`; requires `read` | off |
 | `--notify-to <email>` | Canonical mailbox at the `--to domain:<name>` target (node 1.17.3+) | required for domain `--notify` |
 | `--expires <duration>` | Duration: `1h`, `7d`, `1w`, or ISO date | implicit `7d`, clamped for session-only profiles |
-| `--media-type <type>` | Media type for a single input | inferred |
-| `--action <actions...>` | Addressed permission: `read`, `list`, or `edit` | `read` |
+| `--media-type <type>` | Media type for a single input. `.md` `text/markdown`, `.html` `text/html`, `.jsx` `text/jsx`, `.tsx` `text/tsx` | inferred |
+| `--action <actions...>` | Addressed permission: `read`, `list`, or `edit`. `edit` with `--to anyone` is refused (`INVALID_ARGUMENT`, exit 2): a link only reads | `read` |
 | `--prefix` | Publish multiple inputs beneath one addressed prefix | off |
 | `--binary` | Allow non-UTF-8 bearer content | off |
 | `--json` | Emit versioned redacted JSON | off |
+
+### Artifacts
+
+An artifact is a file an agent publishes for a person to open in the Share viewer. Publish it as a bearer link, the default: HTML renders for link recipients only and an addressed (`--to email:` / `did:` / `domain:`) HTML file is offered as a download; JSX follows the same rule once the JSX renderer ships, and until then it is shown as source text with a Download action. One file per artifact; folders and multi-file bundles are not supported.
+
+| Kind | File | What the viewer does |
+|------|------|----------------------|
+| Markdown | `report.md` | Renders GFM (tables, task lists, fenced code), sanitized; data: images only |
+| HTML | `page.html`, one self-contained file | Runs it in an isolated sandbox with no network: inline all CSS, scripts and images (`data:` URIs); links to other URLs and external scripts, fonts and stylesheets do not load |
+| JSX | `App.jsx` / `App.tsx` with a default-export component | Compiles and renders it in the same kind of sandbox once the viewer release that adds JSX rendering is live; until then the file is shown as source text with a Download action |
+
+JSX: `export default function App() { ... }`, no `ReactDOM.render`, no CSS file. Imports resolve only from this library set: `react` (19), `react-dom/client`, `lucide-react`, `recharts`, `d3`, `mermaid` (11), plus Tailwind utility classes. Any other import fails with an error panel listing the set; bundle other code into the file or publish a self-contained HTML page. Fetching data is not possible (no network): embed the data in the file.
+
+Style with the TinyCloud tokens so the artifact follows the viewer's light and dark theme: `var(--tc-color-page|surface|surface-subtle|text|text-muted|border|accent|on-accent|link)`, `var(--tc-color-status-success|warning|danger|info)`, `var(--tc-space-1…7)`, `var(--tc-radius-sm|md|lg)`, `var(--tc-font-sans|mono)`, `var(--tc-text-xs…2xl)`. HTML artifacts receive the custom properties only (no base styles), so set `body { background: var(--tc-color-page, #fff); color: var(--tc-color-text, #1a1c21); font-family: var(--tc-font-sans, system-ui, sans-serif); }` yourself and keep fallbacks for viewers that predate the tokens.
+
+```bash
+# 1. Publish; the JSON carries the share id and the artifact id, never the link
+"$TC" --profile publisher share publish ./report.md --to anyone --artifact new --json
+#    {"metadata":{"shareId":"…"},"artifactId":"art_…","version":1,"mode":"pinned", …}
+
+# 2. Get the link: a second call. Write it straight to a private file
+"$TC" --profile publisher share show <shareId> --reveal-link
+
+# 3. Revise: publish the next pinned version; it gets its own link, and earlier links keep showing the version they pinned
+"$TC" --profile publisher share publish ./report-v2.md --to anyone --artifact art_0123456789abcdef --json
+
+# 4. Take a link down; the node confirms before it reports revoked
+"$TC" --profile publisher share revoke <shareId>
+```
+
+- Default to `--to anyone` for artifacts unless the person you are working for named a narrower audience. Choose `--expires` deliberately (the default is `7d`). Anyone holding the complete URL can open it until it expires or is revoked, and revoking does not recall copies already received. For content that only named people may read, use `--to email:` and tell the recipient it will download rather than render.
+- `--artifact new` pins: the link reads the one version published, and the CLI never overwrites a version (the next publish writes the next one). Use it whenever the artifact may be revised; `share versions <artifact-id>` lists the versions and the shares pinned to each. A pinned share is read-only, so `--action edit` is refused with it, and `--to anyone --action edit` is refused for every share.
+- Give the person the link from `share show <shareId> --reveal-link` once; do not write it to logs, issue comments or shared files. `share publish --json` never has the link, and `share show --reveal-link` refuses `--json`, so a log of JSON output never holds it.
+- Never put secrets, tokens or private keys in an artifact. The source is stored in the owner's space and its bytes are readable by every link holder.
+- Limits: one file; the viewer renders sources up to 1 MB and offers larger ones as a download.
 
 ## KV Put Input Sources (mutually exclusive)
 

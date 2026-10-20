@@ -1,5 +1,61 @@
 # @tinycloudlabs/web-sdk
 
+## 3.3.0-beta.33
+
+### Patch Changes
+
+- Updated dependencies [8c95ddd]
+  - @tinycloud/replica@0.3.0-beta.9
+  - @tinycloud/node-sdk@3.3.0-beta.33
+
+## 3.3.0-beta.32
+
+### Patch Changes
+
+- Updated dependencies [ba650ce]
+  - @tinycloud/web-sdk-wasm@1.7.7-beta.1
+
+## 3.3.0-beta.31
+
+### Patch Changes
+
+- Updated dependencies [6ad58de]
+  - @tinycloud/sdk-core@3.3.0-beta.31
+  - @tinycloud/web-sdk-wasm@1.7.7-beta.0
+  - @tinycloud/node-sdk@3.3.0-beta.31
+
+## 3.3.0-beta.30
+
+### Patch Changes
+
+- Updated dependencies [fc88c48]
+  - @tinycloud/sdk-core@3.3.0-beta.30
+  - @tinycloud/node-sdk@3.3.0-beta.30
+
+## 3.3.0-beta.29
+
+### Patch Changes
+
+- Updated dependencies [e99a127]
+  - @tinycloud/node-sdk@3.3.0-beta.29
+  - @tinycloud/replica@0.3.0-beta.8
+
+## 3.3.0-beta.28
+
+### Patch Changes
+
+- Updated dependencies [ac612c0]
+  - @tinycloud/sdk-core@3.3.0-beta.28
+  - @tinycloud/node-sdk@3.3.0-beta.28
+
+## 3.3.0-beta.27
+
+### Patch Changes
+
+- Updated dependencies [4aae658]
+  - @tinycloud/sdk-core@3.3.0-beta.27
+  - @tinycloud/node-sdk@3.3.0-beta.27
+
 ## 3.3.0-beta.26
 
 ### Patch Changes

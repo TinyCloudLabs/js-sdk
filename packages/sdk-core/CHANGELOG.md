@@ -1,5 +1,29 @@
 # @tinycloudlabs/sdk-core
 
+## 3.3.0-beta.31
+
+### Patch Changes
+
+- 6ad58de: Consolidated dependency update: bump `@modelcontextprotocol/{node,server,client}` to 2.0.0-beta.5, `zod-to-json-schema` to ^3.25.2, `@openkey/sdk` to 0.9.0 in the example apps, and refresh the tokio entry in Cargo.lock.
+
+## 3.3.0-beta.30
+
+### Minor Changes
+
+- fc88c48: Add `listMatching(kv, prefix, options?)`, a standalone client-side helper for "keys whose name starts with a partial segment", imported from `@tinycloud/sdk-core/kv-list-matching`. Since node 1.19.0 (TC-731) the node matches list prefixes on whole path segments only (`qa/b` matches `qa/b` and `qa/b/...`, not `qa/b00`), so a grant on `docs` cannot enumerate `docsecret/...`. The helper splits the prefix at its last `/`, lists that folder with the normal `list` across every page, and filters the keys locally; it never lists more than the folder, so delegated sessions see only what their grant allows. It accepts a KV service or a `withPrefix` view. It reads the whole folder, so use it for type-ahead and small folders, not large ones. It is a separate entry (like `@tinycloud/sdk-core/held-credentials`), not part of `IKVService` or of any package root, so nothing in the interface changes and bundles that don't import it, including web-sdk's, don't include it. From TypeScript, the subpath's types resolve only with `moduleResolution` set to `node16`, `nodenext` or `bundler`; with `"node"` (as in `@tinycloud/node-sdk`'s own tsconfig) `tsc` reports TS2307, although the runtime CJS/ESM import works.
+
+## 3.3.0-beta.28
+
+### Minor Changes
+
+- ac612c0: Harden the held-credential verifier (TC-1540): size and depth limits before any parse, strict UTF-8, integer-only JSON numbers, `jti` must be a urn:uuid v4, header members limited to `alg`, `typ`, `kid`, duplicate `_sd` digests refused, cofactorless Ed25519 verification, EIP-55 SIWE addresses, exact RFC 3339 SIWE dates, canonical `result.subject`, and `@ab`/`ab@` emails refused. `descriptorDigest` is no longer an accepted signed claim of the email row. API change: `IssuerSet` is now an opaque class that only `parseIssuerSet` can create, and `verifyHeldPresentation` refuses any other object as `issuerSet`. Not yet released, so no published consumer is affected. Import only one build (ESM or CJS) of `@tinycloud/sdk-core/held-credentials` per process: an `IssuerSet` from the other build is refused as `bad-config`.
+
+## 3.3.0-beta.27
+
+### Minor Changes
+
+- 4aae658: Add `@tinycloud/sdk-core/held-credentials`: an off-node, Worker-safe verifier for held `tinycloud.email-held/v1` credentials (SD-JWT VC, EdDSA) with a SIWE holder proof, a pinned issuer set, an atomic `NonceStore` interface, and the shared `normaliseEmail`. `InMemoryNonceStore` is single process only; not safe across instances/isolates/replicas. Non-ASCII emails are refused until G14 lands. Nothing existing changes.
+
 ## 3.3.0-beta.25
 
 ### Patch Changes

@@ -303,20 +303,20 @@ var init_formatter = __esm({
 function storageRejection(error) {
   let node = error;
   for (let depth = 0; depth < MAX_CAUSE_DEPTH && typeof node === "object" && node !== null; depth += 1) {
-    const record = node;
+    const record2 = node;
     let code4;
-    if (record.code === "STORAGE_QUOTA_EXCEEDED" || record.code === "STORAGE_LIMIT_REACHED") {
-      code4 = record.code;
-    } else if (record.code !== void 0) {
+    if (record2.code === "STORAGE_QUOTA_EXCEEDED" || record2.code === "STORAGE_LIMIT_REACHED") {
+      code4 = record2.code;
+    } else if (record2.code !== void 0) {
       return void 0;
-    } else if (isStorageStatus(record)) {
-      code4 = storageCodeFromText(record.message);
+    } else if (isStorageStatus(record2)) {
+      code4 = storageCodeFromText(record2.message);
     }
     if (code4) {
-      const account = accountTotals(record) ?? accountTotals(record.meta) ?? accountTotals(record.metadata);
+      const account = accountTotals(record2) ?? accountTotals(record2.meta) ?? accountTotals(record2.metadata);
       return account ? { code: code4, account } : { code: code4 };
     }
-    node = record.cause;
+    node = record2.cause;
   }
   return void 0;
 }
@@ -350,11 +350,11 @@ function storageCodeFromText(message) {
   }
   return void 0;
 }
-function isStorageStatus(record) {
-  const meta = "meta" in record && typeof record.meta === "object" && record.meta !== null ? record.meta : {};
+function isStorageStatus(record2) {
+  const meta = "meta" in record2 && typeof record2.meta === "object" && record2.meta !== null ? record2.meta : {};
   const statuses = [
-    "status" in record ? record.status : void 0,
-    "statusCode" in record ? record.statusCode : void 0,
+    "status" in record2 ? record2.status : void 0,
+    "statusCode" in record2 ? record2.statusCode : void 0,
     "status" in meta ? meta.status : void 0
   ];
   return statuses.some((value) => value === 402 || value === 413);
@@ -3757,6 +3757,20 @@ import { join as join5 } from "path";
 import { CLI_NAME as CLI_NAME8 } from "@tinycloud/operations/cli-name";
 import { profilePath as profilePath2, withProfileLock as withProfileLock2 } from "@tinycloud/operations/state";
 import { REPLICA_LOGOUT_PENDING_FILE, sqliteReplicaStorage } from "@tinycloud/node-sdk";
+import { DEFAULT_GRANT_TTL_MS, MAX_GRANT_TTL_MS } from "@tinycloud/sdk-services/kv/replication/contractConstants";
+function readPositiveIntegerEnv(name, max) {
+  const raw = process.env[name];
+  if (raw === void 0) return void 0;
+  const value = /^[1-9][0-9]*$/.test(raw) ? Number(raw) : Number.NaN;
+  if (!Number.isSafeInteger(value) || value > max) {
+    throw new CLIError(
+      "INVALID_REPLICATION_ENV",
+      `${name} must be a positive integer no greater than ${max}, got ${JSON.stringify(raw)}`,
+      ExitCode.USAGE_ERROR
+    );
+  }
+  return value;
+}
 function createCliReplicationConfig(profile, settings, output, enabled) {
   if (!enabled || !settings || settings.prefixes.length === 0) return void 0;
   for (const prefix of settings.prefixes) {
@@ -3782,6 +3796,8 @@ function createCliReplicationConfig(profile, settings, output, enabled) {
     verify: process.env.TC_REPLICATION_VERIFY === "1",
     maxStalenessMs: Number(process.env.TC_REPLICATION_MAX_STALENESS_MS ?? 6e4),
     staleSyncTimeoutMs: Number(process.env.TC_REPLICATION_SYNC_TIMEOUT_MS ?? 1e4),
+    grantTtlMs: readPositiveIntegerEnv("TC_REPLICATION_GRANT_TTL_MS", MAX_GRANT_TTL_MS) ?? DEFAULT_GRANT_TTL_MS,
+    maxBytes: readPositiveIntegerEnv("TC_REPLICATION_MAX_BYTES", Number.MAX_SAFE_INTEGER),
     storage: sqliteReplicaStorage({
       dir: join5(root, "replication"),
       logoutPendingFile: join5(root, REPLICA_LOGOUT_PENDING_FILE),
@@ -3818,30 +3834,30 @@ function parseState(text) {
     throw gateRefusal("gate_unavailable", "The replica gate file is not valid JSON.");
   }
   if (typeof raw !== "object" || raw === null) throw gateRefusal("gate_unavailable", "The replica gate file is malformed.");
-  const record = raw;
-  if (record.v !== GATE_FILE_VERSION) throw gateRefusal("gate_unavailable", "The replica gate file has an unknown version.");
-  if (typeof record.incarnation !== "string" || record.incarnation.length === 0) {
+  const record2 = raw;
+  if (record2.v !== GATE_FILE_VERSION) throw gateRefusal("gate_unavailable", "The replica gate file has an unknown version.");
+  if (typeof record2.incarnation !== "string" || record2.incarnation.length === 0) {
     throw gateRefusal("gate_unavailable", "The replica gate file has no incarnation.");
   }
-  if (typeof record.salt !== "string" || Buffer.from(record.salt, "base64url").toString("base64url") !== record.salt || Buffer.from(record.salt, "base64url").length < 32) {
+  if (typeof record2.salt !== "string" || Buffer.from(record2.salt, "base64url").toString("base64url") !== record2.salt || Buffer.from(record2.salt, "base64url").length < 32) {
     throw gateRefusal("gate_unavailable", "The replica gate file has an invalid salt.");
   }
-  if (record.principalHash !== null && (typeof record.principalHash !== "string" || !/^[0-9a-f]{64}$/.test(record.principalHash))) {
+  if (record2.principalHash !== null && (typeof record2.principalHash !== "string" || !/^[0-9a-f]{64}$/.test(record2.principalHash))) {
     throw gateRefusal("gate_unavailable", "The replica gate file has an invalid principal hash.");
   }
-  if (typeof record.lifecycleEpoch !== "number" || !Number.isSafeInteger(record.lifecycleEpoch) || record.lifecycleEpoch < 0) {
+  if (typeof record2.lifecycleEpoch !== "number" || !Number.isSafeInteger(record2.lifecycleEpoch) || record2.lifecycleEpoch < 0) {
     throw gateRefusal("gate_unavailable", "The replica gate file has an invalid lifecycle epoch.");
   }
-  if (record.deniedAt !== null && (typeof record.deniedAt !== "number" || !Number.isSafeInteger(record.deniedAt) || record.deniedAt < 0)) {
+  if (record2.deniedAt !== null && (typeof record2.deniedAt !== "number" || !Number.isSafeInteger(record2.deniedAt) || record2.deniedAt < 0)) {
     throw gateRefusal("gate_unavailable", "The replica gate file has an invalid deniedAt.");
   }
-  if (!Array.isArray(record.intents)) throw gateRefusal("gate_unavailable", "The replica gate file has no intents list.");
-  for (const intent of record.intents) {
+  if (!Array.isArray(record2.intents)) throw gateRefusal("gate_unavailable", "The replica gate file has no intents list.");
+  for (const intent of record2.intents) {
     if (typeof intent !== "object" || intent === null || typeof intent.id !== "string" || !/^[0-9a-f]{64}$/.test(intent.principalHash) || !Number.isSafeInteger(intent.recordedAt) || intent.recordedAt < 0 || (intent.kind === "pending" ? !/^[0-9a-f]{64}$/.test(intent.identityKeyHash) || intent.id !== `pending:${intent.identityKeyHash}` : intent.kind !== "partition" || typeof intent.partitionId !== "string" || intent.partitionId.length === 0 || intent.id !== intent.partitionId)) {
       throw gateRefusal("gate_unavailable", "The replica gate file has an invalid purge intent.");
     }
   }
-  const firstInstall = record.firstInstall;
+  const firstInstall = record2.firstInstall;
   if (typeof firstInstall !== "object" || firstInstall === null || Array.isArray(firstInstall)) {
     throw gateRefusal("gate_unavailable", "The replica gate file has no valid firstInstall map.");
   }
@@ -3850,7 +3866,7 @@ function parseState(text) {
       throw gateRefusal("gate_unavailable", "The replica gate file has an invalid firstInstall entry.");
     }
   }
-  const grantInstall = Object.prototype.hasOwnProperty.call(record, "grantInstall") ? record.grantInstall : {};
+  const grantInstall = Object.prototype.hasOwnProperty.call(record2, "grantInstall") ? record2.grantInstall : {};
   if (typeof grantInstall !== "object" || grantInstall === null || Array.isArray(grantInstall)) {
     throw gateRefusal("gate_unavailable", "The replica gate has an invalid grantInstall map.");
   }
@@ -3859,7 +3875,7 @@ function parseState(text) {
       throw gateRefusal("gate_unavailable", "The replica gate has an invalid grant install time.");
     }
   }
-  const pendingGenerations = record.pendingGenerations;
+  const pendingGenerations = record2.pendingGenerations;
   if (typeof pendingGenerations !== "object" || pendingGenerations === null || Array.isArray(pendingGenerations)) {
     throw gateRefusal("gate_unavailable", "The replica gate file has an invalid pending generation map.");
   }
@@ -3868,18 +3884,18 @@ function parseState(text) {
       throw gateRefusal("gate_unavailable", "The replica gate file has an invalid pending generation.");
     }
   }
-  const eraseDeferred = Object.prototype.hasOwnProperty.call(record, "eraseDeferred") ? record.eraseDeferred : false;
-  const deferredPrincipalHash = Object.prototype.hasOwnProperty.call(record, "deferredPrincipalHash") ? record.deferredPrincipalHash : null;
-  if (typeof eraseDeferred !== "boolean" || deferredPrincipalHash !== null && (typeof deferredPrincipalHash !== "string" || !/^[0-9a-f]{64}$/.test(deferredPrincipalHash)) || eraseDeferred && (record.principalHash !== null || deferredPrincipalHash === null)) {
+  const eraseDeferred = Object.prototype.hasOwnProperty.call(record2, "eraseDeferred") ? record2.eraseDeferred : false;
+  const deferredPrincipalHash = Object.prototype.hasOwnProperty.call(record2, "deferredPrincipalHash") ? record2.deferredPrincipalHash : null;
+  if (typeof eraseDeferred !== "boolean" || deferredPrincipalHash !== null && (typeof deferredPrincipalHash !== "string" || !/^[0-9a-f]{64}$/.test(deferredPrincipalHash)) || eraseDeferred && (record2.principalHash !== null || deferredPrincipalHash === null)) {
     throw gateRefusal("gate_unavailable", "The replica gate has an invalid deferred erase state.");
   }
   return {
-    incarnation: record.incarnation,
-    salt: record.salt,
-    principalHash: record.principalHash,
-    lifecycleEpoch: record.lifecycleEpoch,
-    deniedAt: record.deniedAt,
-    intents: record.intents,
+    incarnation: record2.incarnation,
+    salt: record2.salt,
+    principalHash: record2.principalHash,
+    lifecycleEpoch: record2.lifecycleEpoch,
+    deniedAt: record2.deniedAt,
+    intents: record2.intents,
     firstInstall,
     grantInstall,
     pendingGenerations,
@@ -3901,17 +3917,17 @@ async function readStoredState(profileDir) {
   return parseState(text);
 }
 async function readDenyFloor(profileDir) {
-  let record;
+  let record2;
   try {
-    record = JSON.parse(await readFile3(join6(profileDir, DENY_FLOOR_FILE), "utf8"));
+    record2 = JSON.parse(await readFile3(join6(profileDir, DENY_FLOOR_FILE), "utf8"));
   } catch (error) {
     if (isNotFound(error)) return void 0;
     throw gateRefusal("gate_unavailable", "The replica deny floor cannot be read.");
   }
-  if (typeof record !== "object" || record === null || Array.isArray(record) || Object.keys(record).length !== 2 || !("epoch" in record) || !("deniedAt" in record) || !Number.isSafeInteger(record.epoch) || record.epoch < 1 || !Number.isSafeInteger(record.deniedAt) || record.deniedAt < 0) {
+  if (typeof record2 !== "object" || record2 === null || Array.isArray(record2) || Object.keys(record2).length !== 2 || !("epoch" in record2) || !("deniedAt" in record2) || !Number.isSafeInteger(record2.epoch) || record2.epoch < 1 || !Number.isSafeInteger(record2.deniedAt) || record2.deniedAt < 0) {
     throw gateRefusal("gate_unavailable", "The replica deny floor is malformed.");
   }
-  return { epoch: record.epoch, deniedAt: record.deniedAt };
+  return { epoch: record2.epoch, deniedAt: record2.deniedAt };
 }
 function behindFloor(state2, floor) {
   return state2.lifecycleEpoch < floor.epoch || state2.deniedAt === null || state2.deniedAt < floor.deniedAt;
@@ -3931,13 +3947,13 @@ async function readState(profileDir) {
 function readGateSnapshot(profileDir) {
   return readState(profileDir);
 }
-var HOUR_MS, DAY_MS, MAX_GRANT_TTL_MS, CONSENT_WINDOW_MS, DEFAULT_MIN_FREE_BYTES, REPLICA_GATE_FILE, ReplicaErrorCode2, REPLICA_ERROR2, ReplicaError2, GATE_FILE_VERSION, REPLICA_DENY_FLOOR_FILE, DENY_FLOOR_FILE, LOST_GATE_RECOVERY, INTERRUPTED_SIGN_OUT;
+var HOUR_MS, DAY_MS, MAX_GRANT_TTL_MS2, CONSENT_WINDOW_MS, DEFAULT_MIN_FREE_BYTES, REPLICA_GATE_FILE, ReplicaErrorCode2, REPLICA_ERROR2, ReplicaError2, GATE_FILE_VERSION, REPLICA_DENY_FLOOR_FILE, DENY_FLOOR_FILE, LOST_GATE_RECOVERY, INTERRUPTED_SIGN_OUT;
 var init_profile_gate = __esm({
   "../replica/dist/profile-gate.js"() {
     "use strict";
     HOUR_MS = 60 * 60 * 1e3;
     DAY_MS = 24 * HOUR_MS;
-    MAX_GRANT_TTL_MS = 7 * DAY_MS;
+    MAX_GRANT_TTL_MS2 = 7 * DAY_MS;
     CONSENT_WINDOW_MS = 7 * DAY_MS;
     DEFAULT_MIN_FREE_BYTES = 64 * 1024 * 1024;
     REPLICA_GATE_FILE = "replica-gate.json";
@@ -4532,6 +4548,74 @@ function storageError(error, action) {
 function errnoOf(error) {
   return typeof error === "object" && error !== null && "code" in error ? error.code : void 0;
 }
+async function writerBlobFiles(root) {
+  const out = [];
+  let shards;
+  try {
+    shards = await readdir2(root, { withFileTypes: true });
+  } catch (error) {
+    if (errnoOf(error) === "ENOENT" || errnoOf(error) === "ENOTDIR") return out;
+    throw error;
+  }
+  for (const shard of shards) {
+    const temp = shard.name === ".tmp";
+    if (!shard.isDirectory() || !(temp || isShard(shard.name))) continue;
+    const shardPath = join22(root, shard.name);
+    let files;
+    try {
+      files = await readdir2(shardPath, { withFileTypes: true });
+    } catch (error) {
+      if (errnoOf(error) === "ENOENT" || errnoOf(error) === "ENOTDIR") continue;
+      throw error;
+    }
+    for (const file of files) {
+      if (!file.isFile()) continue;
+      const ok = temp ? isTempName(file.name) : isHash(file.name) && file.name.startsWith(shard.name);
+      if (!ok) continue;
+      const path = join22(shardPath, file.name);
+      const info = await lstat2(path).catch(() => void 0);
+      if (!info?.isFile()) continue;
+      out.push({ path, hash: temp ? null : file.name, size: info.size });
+    }
+  }
+  return out;
+}
+async function unlinkWriterOrphans(root, keep) {
+  let removed = 0;
+  const touched = /* @__PURE__ */ new Set();
+  for (const file of await writerBlobFiles(root)) {
+    if (file.hash !== null && keep.has(file.hash)) continue;
+    await rm3(file.path, { force: true });
+    touched.add(dirname3(file.path));
+    removed += 1;
+  }
+  for (const dir of touched) if (!dir.endsWith(".tmp")) await rmdir2(dir).catch(() => void 0);
+  return removed;
+}
+async function unlinkBlobsIn(root, keep) {
+  let removed = 0;
+  for (const shard of await entriesOf(root)) {
+    const shardPath = join22(root, shard);
+    if (shard === ".tmp") {
+      for (const name of await entriesOf(shardPath)) {
+        await rm3(join22(shardPath, name), { force: true });
+        removed += 1;
+      }
+      continue;
+    }
+    let kept = 0;
+    for (const name of await entriesOf(shardPath)) {
+      if (isHash(name) && keep.has(name)) {
+        kept += 1;
+        continue;
+      }
+      await rm3(join22(shardPath, name), { force: true });
+      removed += 1;
+    }
+    if (kept === 0) await rmdir2(shardPath).catch(() => void 0);
+  }
+  return removed;
+}
 async function entriesOf(path) {
   try {
     return await readdir2(path);
@@ -4558,7 +4642,7 @@ async function acquireWritableMutation(shared) {
   await previous;
   return release;
 }
-var ReplicaErrorCode3, REPLICA_ERROR3, ReplicaError3, SCHEMA_VERSION, SCHEMA, POLICY_COLUMNS, normalizeSchema, SOURCE_SCHEMA, V1_SCHEMA, POLICY_REPLICA, POLICY_SCHEMA, SQLITE_FILE, SHARD, HASH, TEMP, LAYOUT_FAULTS, sqliteOpenQueue, DURABILITY, isHash, FAULTS, pinnedDirectories, writableStores, sharedStores, activeReadSection, SqliteReplicaStore;
+var ReplicaErrorCode3, REPLICA_ERROR3, ReplicaError3, SCHEMA_VERSION, SCHEMA, POLICY_COLUMNS, normalizeSchema, SOURCE_SCHEMA, V1_SCHEMA, POLICY_REPLICA, POLICY_SCHEMA, SQLITE_FILE, SHARD, HASH, TEMP, LAYOUT_FAULTS, sqliteOpenQueue, DURABILITY, isHash, isShard, isTempName, FAULTS, pinnedDirectories, writableStores, sharedStores, activeReadSection, SqliteReplicaStore;
 var init_sqlite = __esm({
   "../replica/dist/sqlite.js"() {
     "use strict";
@@ -4735,6 +4819,8 @@ CREATE TABLE IF NOT EXISTS grant_install (
     sqliteOpenQueue = Promise.resolve();
     DURABILITY = "sqlite-wal-synchronous-full+fsynced-blobs";
     isHash = (name) => /^[0-9a-f]{64}$/.test(name);
+    isShard = (name) => /^[0-9a-f]{2}$/.test(name);
+    isTempName = (name) => /^[0-9a-f]{64}\.[0-9a-f]{12}$/.test(name);
     FAULTS = /* @__PURE__ */ Symbol("tinycloud.replica.faults");
     pinnedDirectories = new FinalizationRegistry((fd) => {
       try {
@@ -4772,6 +4858,8 @@ CREATE TABLE IF NOT EXISTS grant_install (
       #guard;
       /** Identity of the database file this store opened: a deleted-and-recreated replica is a different file. */
       #ino;
+      #admit;
+      #partitionId;
       #dev;
       #namedAncestors;
       constructor(dir, db, identity, options, directoryFd, namedAncestors = [], shared, readonlySnapshot = false) {
@@ -4791,6 +4879,8 @@ CREATE TABLE IF NOT EXISTS grant_install (
         this.#dev = identity.dev;
         this.#now = options.now ?? Date.now;
         this.#faults = options[FAULTS] ?? {};
+        this.#admit = options.admit;
+        this.#partitionId = options.partitionId ?? "";
         this.#guard = options.guard ?? ((section) => section());
         this.#namedAncestors = namedAncestors;
       }
@@ -4858,6 +4948,55 @@ CREATE TABLE IF NOT EXISTS grant_install (
               releaseClose();
             }
           }
+        }
+      }
+      /**
+       * Blob content bytes on disk in the replica at `dir` (0 when absent): the writer's blob files under `blobs/`,
+       * including writer temp files and blobs no entry references any more, so garbage a failed sync
+       * left behind still counts. Counts exactly what `collectOrphans` may delete: foreign entries
+       * (stray files, symlinks, unknown names) are neither counted nor touched. Only blob content is counted: not the database, its WAL, rows or the
+       * pending store. Filesystem-only: it opens no
+       * database, so it can sum a profile's replicas under the caller's own mutation hold.
+       */
+      static async contentBytes(dir) {
+        try {
+          let bytes = 0;
+          for (const file of await writerBlobFiles(join22(dir, "blobs"))) bytes += file.size;
+          return bytes;
+        } catch (error) {
+          throw storageError(error, "Measuring replica content");
+        }
+      }
+      /**
+       * Remove blobs and temp files in the replica at `dir` that no committed row references: what a
+       * crash between writing blobs and committing (or between committing and collecting) leaves.
+       * Returns the number of files removed; 0 when the replica is absent or unreadable.
+       *
+       * The caller MUST hold the profile mutation guard, which every writer of this replica holds
+       * across its blob write and commit; that is what makes an unreferenced blob safe to delete
+       * (it cannot belong to an in-flight write). Never call it without that hold. The database is
+       * read only, so nothing here can take a lease or change committed state.
+       */
+      static async collectOrphans(dir) {
+        const dbPath = join22(dir, "replica.db");
+        const identity = await lstat2(dbPath).catch(() => void 0);
+        if (!identity?.isFile()) return 0;
+        const opener = await loadSqlite();
+        let keep;
+        let db;
+        try {
+          db = opener(dbPath, { readonly: true });
+          db.exec("PRAGMA busy_timeout = 0");
+          keep = new Set(db.all("SELECT DISTINCT hash FROM entry WHERE content = 1").map((row) => row.hash));
+        } catch {
+          return 0;
+        } finally {
+          db?.close();
+        }
+        try {
+          return await unlinkWriterOrphans(join22(dir, "blobs"), keep);
+        } catch (error) {
+          throw storageError(error, "Collecting orphaned content");
         }
       }
       /**
@@ -5569,6 +5708,41 @@ CREATE TABLE IF NOT EXISTS grant_install (
             }
             reused.set(change.hash, size);
           }
+          if (this.#admit) {
+            await this.#collectLocked(t);
+            const changed = new Set(p.changes.map((change) => change.key));
+            const kept = /* @__PURE__ */ new Set();
+            for (const change of p.changes) if (!change.deleted && change.content) kept.add(change.hash);
+            let blobBytes = 0;
+            for (const [hash, bytes] of p.blobs) {
+              const stored = this.#db.get(
+                "SELECT 1 AS hit FROM entry WHERE hash = ? AND content = 1 AND deleted = 0 LIMIT 1",
+                hash
+              );
+              if (stored === void 0) blobBytes += bytes.byteLength;
+            }
+            const released = /* @__PURE__ */ new Map();
+            for (const key of changed) {
+              const old = this.#db.get(
+                "SELECT hash, size FROM entry WHERE key = ? AND deleted = 0 AND content = 1 AND hash IS NOT NULL AND size IS NOT NULL",
+                key
+              );
+              if (old === void 0 || kept.has(old.hash) || released.has(old.hash)) continue;
+              const holders = this.#db.all(
+                "SELECT key FROM entry WHERE hash = ? AND content = 1 AND deleted = 0",
+                old.hash
+              );
+              if (holders.every((holder) => changed.has(holder.key))) released.set(old.hash, old.size);
+            }
+            let freed = 0;
+            for (const size of released.values()) freed += size;
+            await this.#admit({
+              partitionId: this.#partitionId,
+              blobBytes: blobBytes - freed,
+              entries: p.changes.length,
+              freeBytes: null
+            });
+          }
           try {
             await this.#writeBlobs(p.blobs);
           } catch (error) {
@@ -5644,36 +5818,16 @@ CREATE TABLE IF NOT EXISTS grant_install (
             });
           } catch (error) {
             if (isReplicaError(error, ReplicaErrorCode3.GRANT_REVOKED)) await this.#purgeContent().catch(() => void 0);
+            else if (this.#admit) await this.#collectLocked(t).catch(() => void 0);
             throw error;
           }
           this.#faults.afterCommit?.();
+          if (this.#admit) await this.#collectLocked(t);
         });
       }
       /** Unlink every blob not in `keep`, and every temp file. Only a missing directory counts as empty. */
-      async #unlinkBlobs(keep) {
-        let removed = 0;
-        const root = join22(this.#pinnedDir, "blobs");
-        for (const shard of await entriesOf(root)) {
-          const shardPath = join22(root, shard);
-          if (shard === ".tmp") {
-            for (const name of await entriesOf(shardPath)) {
-              await rm3(join22(shardPath, name), { force: true });
-              removed += 1;
-            }
-            continue;
-          }
-          let kept = 0;
-          for (const name of await entriesOf(shardPath)) {
-            if (isHash(name) && keep.has(name)) {
-              kept += 1;
-              continue;
-            }
-            await rm3(join22(shardPath, name), { force: true });
-            removed += 1;
-          }
-          if (kept === 0) await rmdir2(shardPath).catch(() => void 0);
-        }
-        return removed;
+      #unlinkBlobs(keep) {
+        return unlinkBlobsIn(join22(this.#pinnedDir, "blobs"), keep);
       }
       /** Whether any content file (a blob or a temp file) is on disk. */
       async #holdsContentFiles() {
@@ -5684,33 +5838,35 @@ CREATE TABLE IF NOT EXISTS grant_install (
         return false;
       }
       async collectGarbage(t) {
-        return this.#mutate(async () => {
-          const release = this.#shared ? await acquireWritableMutation(this.#shared) : void 0;
+        return this.#mutate(() => this.#collectLocked(t));
+      }
+      /** `collectGarbage` for callers already inside the mutation hold (it cannot re-enter `#mutate`). */
+      async #collectLocked(t) {
+        const release = this.#shared ? await acquireWritableMutation(this.#shared) : void 0;
+        try {
+          this.#db.exec("BEGIN IMMEDIATE");
+        } catch (error) {
+          release?.();
+          throw storageError(error, "Collecting unused content");
+        }
+        try {
+          this.#checkLease(t);
+          await this.#faults.afterGarbageCollectionBegin?.();
+          const keep = new Set(
+            this.#db.all("SELECT DISTINCT hash FROM entry WHERE content = 1").map((row) => row.hash)
+          );
+          const removed = await this.#unlinkBlobs(keep);
+          this.#db.exec("COMMIT");
+          return removed;
+        } catch (error) {
           try {
-            this.#db.exec("BEGIN IMMEDIATE");
-          } catch (error) {
-            release?.();
-            throw storageError(error, "Collecting unused content");
+            this.#db.exec("ROLLBACK");
+          } catch {
           }
-          try {
-            this.#checkLease(t);
-            await this.#faults.afterGarbageCollectionBegin?.();
-            const keep = new Set(
-              this.#db.all("SELECT DISTINCT hash FROM entry WHERE content = 1").map((row) => row.hash)
-            );
-            const removed = await this.#unlinkBlobs(keep);
-            this.#db.exec("COMMIT");
-            return removed;
-          } catch (error) {
-            try {
-              this.#db.exec("ROLLBACK");
-            } catch {
-            }
-            throw storageError(error, "Collecting unused content");
-          } finally {
-            release?.();
-          }
-        });
+          throw storageError(error, "Collecting unused content");
+        } finally {
+          release?.();
+        }
       }
       async reset(t, reason, options = {}) {
         await this.#mutate(async () => {
@@ -13048,15 +13204,15 @@ function parseArtifactManifest(bytes) {
     throw new ArtifactError("corrupt", "artifact manifest is malformed");
   };
   if (value === null || typeof value !== "object" || Array.isArray(value)) return fail();
-  const record = value;
+  const record2 = value;
   const allowed = ["v", "files", "createdAt", "parent", "note"];
-  if (Object.keys(record).some((key) => !allowed.includes(key)) || record.v !== ARTIFACT_MANIFEST_VERSION) return fail();
-  if (!Array.isArray(record.files) || record.files.length === 0) return fail();
-  if (typeof record.createdAt !== "string" || Number.isNaN(Date.parse(record.createdAt))) return fail();
-  if (record.parent !== null && (typeof record.parent !== "number" || !Number.isSafeInteger(record.parent) || record.parent < 1)) return fail();
-  if (record.note !== void 0 && (typeof record.note !== "string" || record.note.length > 1024)) return fail();
+  if (Object.keys(record2).some((key) => !allowed.includes(key)) || record2.v !== ARTIFACT_MANIFEST_VERSION) return fail();
+  if (!Array.isArray(record2.files) || record2.files.length === 0) return fail();
+  if (typeof record2.createdAt !== "string" || Number.isNaN(Date.parse(record2.createdAt))) return fail();
+  if (record2.parent !== null && (typeof record2.parent !== "number" || !Number.isSafeInteger(record2.parent) || record2.parent < 1)) return fail();
+  if (record2.note !== void 0 && (typeof record2.note !== "string" || record2.note.length > 1024)) return fail();
   const seen = /* @__PURE__ */ new Set();
-  const files = record.files.map((entry) => {
+  const files = record2.files.map((entry) => {
     if (entry === null || typeof entry !== "object" || Array.isArray(entry)) return fail();
     const file = entry;
     if (Object.keys(file).some((key) => !["path", "sha256", "bytes"].includes(key))) return fail();
@@ -13074,9 +13230,9 @@ function parseArtifactManifest(bytes) {
   return {
     v: ARTIFACT_MANIFEST_VERSION,
     files,
-    createdAt: record.createdAt,
-    parent: record.parent,
-    ...record.note === void 0 ? {} : { note: record.note }
+    createdAt: record2.createdAt,
+    parent: record2.parent,
+    ...record2.note === void 0 ? {} : { note: record2.note }
   };
 }
 async function listArtifactVersions(store, artifactId) {
@@ -18898,21 +19054,21 @@ async function parseSealedInlineShareUrl(url, options = {}) {
     throw new TypeError("sealed inline payload is not valid JSON");
   }
   if (typeof value !== "object" || value === null || Array.isArray(value) || canonicalize2(value) !== payloadText) throw new TypeError("sealed inline payload is not canonical JSON");
-  const record = value;
-  if (Object.keys(record).length !== 4 || record.v !== 2 || typeof record.c !== "string" || typeof record.cid !== "string" || typeof record.k !== "string") throw new TypeError("sealed inline payload has invalid fields");
+  const record2 = value;
+  if (Object.keys(record2).length !== 4 || record2.v !== 2 || typeof record2.c !== "string" || typeof record2.cid !== "string" || typeof record2.k !== "string") throw new TypeError("sealed inline payload has invalid fields");
   let ciphertext;
   let key32;
   try {
-    ciphertext = fromBase64Url2(record.c);
-    key32 = fromBase64Url2(record.k);
+    ciphertext = fromBase64Url2(record2.c);
+    key32 = fromBase64Url2(record2.k);
   } catch {
     throw new TypeError("sealed inline payload has invalid base64url material");
   }
   if (ciphertext.byteLength === 0 || ciphertext.byteLength > MAX_INLINE_BYTES2) throw new TypeError("sealed inline ciphertext is outside the allowed size");
   if (key32.byteLength !== KEY_LENGTH2) throw new TypeError("sealed inline key must be 32 bytes");
-  assertCanonicalCid(record.cid);
-  if (await computeCid(ciphertext) !== record.cid) throw new TypeError("sealed inline ciphertext does not match its CID");
-  return { kind: "inline", ciphertextCid: record.cid, ciphertext, key32 };
+  assertCanonicalCid(record2.cid);
+  if (await computeCid(ciphertext) !== record2.cid) throw new TypeError("sealed inline ciphertext does not match its CID");
+  return { kind: "inline", ciphertextCid: record2.cid, ciphertext, key32 };
 }
 var ARTIFACT_ROOT2 = "artifacts";
 function parseArtifactVersionPath2(path) {
@@ -20383,16 +20539,16 @@ var ShareNotifyError = class extends Error {
   }
   code = "delivery-failed";
 };
-function recipientMatchesShareRecord(record, recipient) {
-  const matcher = record.recipientMatcher;
+function recipientMatchesShareRecord(record2, recipient) {
+  const matcher = record2.recipientMatcher;
   const mailbox = canonicalMailbox(recipient);
   if (mailbox === void 0) return false;
   if (matcher.kind === "exactEmail") return canonicalMailbox(matcher.value)?.email === mailbox.email;
   if (matcher.kind === "emailDomain") return mailbox.domain === matcher.value;
   return false;
 }
-function shareDeliveryWindowExpiresAt(record) {
-  const expiresAt = Math.min(Date.parse(record.expiresAt), Date.parse(record.registeredAt) + 5 * 60 * 1e3);
+function shareDeliveryWindowExpiresAt(record2) {
+  const expiresAt = Math.min(Date.parse(record2.expiresAt), Date.parse(record2.registeredAt) + 5 * 60 * 1e3);
   if (!Number.isFinite(expiresAt)) throw new ShareNotifyError("share delivery history has invalid timestamps");
   return expiresAt;
 }
@@ -20580,17 +20736,17 @@ async function deliverCredentialInvitation(input) {
   }
   return { status: "accepted" };
 }
-function targetKind2(record) {
-  if (record.targetKind !== void 0) return record.targetKind;
-  return record.recipientMatcher.kind === "exactEmail" ? "email" : record.recipientMatcher.kind === "emailDomain" ? "emailDomain" : record.recipientMatcher.kind === "recipientDid" ? "recipientDid" : "bearer";
+function targetKind2(record2) {
+  if (record2.targetKind !== void 0) return record2.targetKind;
+  return record2.recipientMatcher.kind === "exactEmail" ? "email" : record2.recipientMatcher.kind === "emailDomain" ? "emailDomain" : record2.recipientMatcher.kind === "recipientDid" ? "recipientDid" : "bearer";
 }
-function policyNodeAudience(record) {
-  const envelope = record.deliveryMaterial?.envelope;
-  if (typeof envelope !== "object" || envelope === null || Array.isArray(envelope)) return record.target.nodeAudience;
+function policyNodeAudience(record2) {
+  const envelope = record2.deliveryMaterial?.envelope;
+  if (typeof envelope !== "object" || envelope === null || Array.isArray(envelope)) return record2.target.nodeAudience;
   const binding = envelope.attestedEnforcerBinding;
-  if (typeof binding !== "object" || binding === null || Array.isArray(binding)) return record.target.nodeAudience;
+  if (typeof binding !== "object" || binding === null || Array.isArray(binding)) return record2.target.nodeAudience;
   const nodeAudience = binding.nodeAudience;
-  return typeof nodeAudience === "string" ? nodeAudience : record.target.nodeAudience;
+  return typeof nodeAudience === "string" ? nodeAudience : record2.target.nodeAudience;
 }
 async function revokeShare(input) {
   const target = targetKind2(input.record);
@@ -20614,7 +20770,7 @@ async function revokeShare(input) {
   }
   let revokedAt = input.record.revokedAt ?? (input.now?.() ?? /* @__PURE__ */ new Date()).toISOString();
   if (input.records?.update !== void 0) {
-    const updated = await input.records.update(input.record.shareId, (record) => ({ ...record, revokedAt: record.revokedAt ?? revokedAt }));
+    const updated = await input.records.update(input.record.shareId, (record2) => ({ ...record2, revokedAt: record2.revokedAt ?? revokedAt }));
     revokedAt = updated?.revokedAt ?? revokedAt;
   } else if (input.records !== void 0) {
     const latest = await input.records.get(input.record.shareId);
@@ -20623,26 +20779,26 @@ async function revokeShare(input) {
   }
   return { state: "revoked", target, delegationCid, revokedAt };
 }
-function redactRecord(record, revealLink, link3) {
-  const matcher = record.recipientMatcher;
-  const revealedLink = revealLink ? link3 ?? record.link : void 0;
+function redactRecord(record2, revealLink, link3) {
+  const matcher = record2.recipientMatcher;
+  const revealedLink = revealLink ? link3 ?? record2.link : void 0;
   return {
-    shareId: record.shareId,
+    shareId: record2.shareId,
     target: matcher.kind === "exactEmail" ? "email" : matcher.kind === "emailDomain" ? "email-domain" : matcher.kind === "recipientDid" ? "recipient-did" : "bearer",
     ...matcher.kind === "exactEmail" ? { recipient: matcher.value } : matcher.kind === "emailDomain" ? { recipient: `*@${matcher.value}` } : matcher.kind === "recipientDid" ? { recipient: matcher.value } : {},
-    expiresAt: record.expiresAt,
-    revoked: record.revokedAt !== void 0,
+    expiresAt: record2.expiresAt,
+    revoked: record2.revokedAt !== void 0,
     ...revealedLink === void 0 ? {} : { link: revealedLink }
   };
 }
 async function listShares(storage) {
   const records = await storage.list();
-  return records.map((record) => redactRecord(record, false));
+  return records.map((record2) => redactRecord(record2, false));
 }
 async function showShare(input) {
-  const record = await input.storage.get(input.shareId);
-  if (record === void 0) throw new Error("share not found");
-  return redactRecord(record, input.revealLink === true, input.link);
+  const record2 = await input.storage.get(input.shareId);
+  if (record2 === void 0) throw new Error("share not found");
+  return redactRecord(record2, input.revealLink === true, input.link);
 }
 var SHARE_V2_PROTOCOL = Object.freeze({
   challengeDomain: "xyz.tinycloud.share/policy-challenge/v2\0",
@@ -26150,6 +26306,60 @@ function parseDuration(input) {
 // src/commands/share.ts
 init_errors();
 
+// src/share/failure-class.ts
+init_constants();
+import { authorizationVerdictOf as authorizationVerdictOf2 } from "@tinycloud/sdk-core";
+var NETWORK_FAILURE = /\b(?:fetch failed|ECONNREFUSED|ECONNRESET|ETIMEDOUT|ENOTFOUND|EAI_AGAIN|UND_ERR_[A-Z_]+)\b|network ?error|failed to fetch/i;
+function record(value) {
+  return typeof value === "object" && value !== null ? value : void 0;
+}
+function httpStatus(value) {
+  const status = typeof value === "number" && Number.isInteger(value) && value >= 400 && value <= 599 ? value : void 0;
+  return status;
+}
+function statusOf(error, depth = 0) {
+  const fields = record(error);
+  if (fields === void 0) return void 0;
+  const direct = httpStatus(fields.status) ?? httpStatus(fields.statusCode) ?? httpStatus(record(fields.meta)?.status);
+  return direct ?? (depth === 0 ? statusOf(fields.cause, 1) : void 0);
+}
+function codeOf(error) {
+  const code4 = record(error)?.code;
+  return typeof code4 === "string" && /^[A-Z][A-Z0-9_]{2,63}$/.test(code4) ? code4 : void 0;
+}
+function classifyShareFailure(error, loginHint) {
+  const status = statusOf(error);
+  const verdict = authorizationVerdictOf2(error);
+  const message = error instanceof Error ? error.message : "";
+  const code4 = codeOf(error);
+  const detail = (text) => {
+    const parts = [status === void 0 ? void 0 : `HTTP ${status}`, code4].filter((part) => part !== void 0);
+    return parts.length === 0 ? text : `${text} (${parts.join(", ")})`;
+  };
+  if (verdict === "unauthenticated" || status === 401) {
+    return { code: "AUTH_REQUIRED", exitCode: ExitCode.AUTH_REQUIRED, reason: detail(`the node did not accept this session; sign in again with ${loginHint}`) };
+  }
+  if (verdict === "forbidden" || status === 403) {
+    return { code: "PERMISSION_DENIED", exitCode: ExitCode.PERMISSION_DENIED, reason: detail("the node refused this session's authority for the request") };
+  }
+  if (status === 404) {
+    return { code: "NOT_FOUND", exitCode: ExitCode.NOT_FOUND, reason: detail("the node could not find what the request names") };
+  }
+  if (status !== void 0 && (status >= 500 || status === 408 || status === 429)) {
+    return { code: "NODE_UNAVAILABLE", exitCode: ExitCode.NODE_ERROR, reason: detail("the node could not complete the request; try again shortly") };
+  }
+  if (status === 400 || status === 422) {
+    return { code: "INVALID_ARGUMENT", exitCode: ExitCode.USAGE_ERROR, reason: detail("the node rejected the request as invalid") };
+  }
+  if (status !== void 0) {
+    return { code: "NODE_REJECTED", exitCode: ExitCode.ERROR, reason: detail("the node rejected the request") };
+  }
+  if (NETWORK_FAILURE.test(message) || typeof record(error)?.code === "string" && NETWORK_FAILURE.test(String(record(error)?.code))) {
+    return { code: "NETWORK_ERROR", exitCode: ExitCode.NETWORK_ERROR, reason: "the TinyCloud node could not be reached; check the connection and retry" };
+  }
+  return void 0;
+}
+
 // src/share/output.ts
 function writeJson2(value) {
   process.stdout.write(`${JSON.stringify(value, null, 2)}
@@ -26317,8 +26527,8 @@ async function writeShareOutput(directory, filename, bytes, force) {
 
 // src/share/errors.ts
 var SharePublishAuthorityError = class extends Error {
-  constructor(failure) {
-    super(failure.kind);
+  constructor(failure, options) {
+    super(failure.kind, options);
     this.failure = failure;
     this.name = "SharePublishAuthorityError";
   }
@@ -26436,6 +26646,17 @@ function shareCliError(error, operation = "publish") {
     if (failure.kind === "storage-full") {
       return storageFullError(failure);
     }
+    if (failure.kind === "space-not-ready") {
+      return Object.assign(
+        new CLIError(
+          "SPACE_NOT_READY",
+          "Your TinyCloud space isn't ready for this yet (SPACE_NOT_READY). This is a known node problem being fixed: retry after the node update; contact support with this code if it persists.",
+          4,
+          { hint: "Nothing was shared, and repeating the command is safe. Retries keep failing until the node is updated." }
+        ),
+        { cause: error.cause }
+      );
+    }
     if (failure.kind === "upload-failed") {
       return new CLIError("UPLOAD_FAILED", "share source upload failed; nothing was shared", 4);
     }
@@ -26469,8 +26690,10 @@ function shareCliError(error, operation = "publish") {
   };
   if (nodeCode === "ENOENT") return new CLIError("INVALID_ARGUMENT", "share input was not found", 2);
   if (nodeCode === "EISDIR") return new CLIError("INVALID_ARGUMENT", "share input must be a Markdown file", 2);
-  if (error instanceof TypeError) return new CLIError("INVALID_ARGUMENT", "share input is invalid", 2);
   const mapped = typeof nodeCode === "string" && known[nodeCode] !== void 0 ? known[nodeCode] : known[message];
+  const classified = mapped === void 0 ? classifyShareFailure(error, `\`${CLI_NAME12} auth login\``) : void 0;
+  if (classified !== void 0) return Object.assign(new CLIError(classified.code, classified.reason, classified.exitCode), { cause: error });
+  if (error instanceof TypeError) return new CLIError("INVALID_ARGUMENT", "share input is invalid", 2);
   return new CLIError(mapped?.code ?? "INVALID_ARGUMENT", mapped ? mapped.code : "share operation failed", mapped?.exit ?? 2);
 }
 function inputUrl(value, stdin) {
@@ -26498,24 +26721,24 @@ function expires(value) {
   }
 }
 async function rememberPublishedShare(result) {
-  const record = historyRecordForPublishedShare(result);
-  if (shareServices.records === void 0) return { record, recorded: false };
+  const record2 = historyRecordForPublishedShare(result);
+  if (shareServices.records === void 0) return { record: record2, recorded: false };
   try {
-    await shareServices.records.put(record);
-    return { record, recorded: true };
+    await shareServices.records.put(record2);
+    return { record: record2, recorded: true };
   } catch {
     process.stderr.write("Warning: share was published but not recorded in sender history; future share list, share notify, and share revoke by ID will not find it.\n");
-    return { record, recorded: false };
+    return { record: record2, recorded: false };
   }
 }
-async function notifyRecordedShare(record, recipient, adapter, storage) {
-  const result = await notifyShare({ shareId: record.shareId, recipient, record, adapter, checkDeliveryWindow: true });
+async function notifyRecordedShare(record2, recipient, adapter, storage) {
+  const result = await notifyShare({ shareId: record2.shareId, recipient, record: record2, adapter, checkDeliveryWindow: true });
   if (result.state !== "partial-failure" && storage !== void 0) {
     const mailbox = canonicalMailbox2(recipient).email;
-    if (!record.deliveredRecipients?.includes(mailbox)) {
+    if (!record2.deliveredRecipients?.includes(mailbox)) {
       try {
         if (storage.update === void 0) throw new Error("atomic sender history update is unavailable");
-        const updated = await storage.update(record.shareId, (current) => ({
+        const updated = await storage.update(record2.shareId, (current) => ({
           ...current,
           deliveredRecipients: current.deliveredRecipients?.includes(mailbox) ? current.deliveredRecipients : [...current.deliveredRecipients ?? [], mailbox]
         }));
@@ -26535,7 +26758,7 @@ function byteLimit(value) {
 }
 function mediaTypeFor(filename) {
   const extension = filename.toLowerCase().split(".").at(-1);
-  return extension === "md" || extension === "markdown" ? "text/markdown" : extension === "txt" ? "text/plain" : extension === "html" || extension === "htm" ? "text/html" : extension === "json" ? "application/json" : extension === "css" ? "text/css" : extension === "js" ? "text/javascript" : "application/octet-stream";
+  return extension === "md" || extension === "markdown" ? "text/markdown" : extension === "txt" ? "text/plain" : extension === "html" || extension === "htm" ? "text/html" : extension === "json" ? "application/json" : extension === "css" ? "text/css" : extension === "js" ? "text/javascript" : extension === "jsx" ? "text/jsx" : extension === "tsx" ? "text/tsx" : "application/octet-stream";
 }
 function requestedActions(values) {
   const actions = values === void 0 || values.length === 0 ? ["read"] : values;
@@ -26565,6 +26788,7 @@ function registerShareCommand(program2) {
       const target = parseShareTarget(options.to);
       const actions = requestedActions(options.action);
       if (options.prefix && target.kind === "bearer") throw new CLIError("INVALID_ARGUMENT", "--prefix requires an addressed target", 2);
+      if (target.kind === "bearer" && actions.includes("edit")) throw new CLIError("INVALID_ARGUMENT", `--action edit is not available with --to ${options.to}: a link can only be read; address a recipient to allow edits`, 2);
       if (inputs.length > 1 && target.kind === "bearer") throw new CLIError("UNSUPPORTED_LINK", "multiple files require an addressed target", 2);
       const artifact = artifactRequest(options, actions, inputs.length);
       if (inputs.length > 1 && !options.prefix) throw new CLIError("INVALID_ARGUMENT", "multiple files require --prefix", 2);
@@ -26609,11 +26833,11 @@ function registerShareCommand(program2) {
         }
         throw new CLIError(result.method === "openkey-device" ? "DEVICE_AUTH_REQUIRED" : "CLAIM_REQUIRED", "recipient authorization is required; continue through the configured authority adapter", 6);
       }
-      const { record, recorded } = await rememberPublishedShare(result);
+      const { record: record2, recorded } = await rememberPublishedShare(result);
       let notification;
       if (notifyRecipient !== void 0) {
         if (shareServices.delivery === void 0) throw new CLIError("AUTH_REQUIRED", "delivery authority is not configured", 3);
-        notification = await notifyRecordedShare(record, notifyRecipient, shareServices.delivery, recorded ? shareServices.records : void 0);
+        notification = await notifyRecordedShare(record2, notifyRecipient, shareServices.delivery, recorded ? shareServices.records : void 0);
         if (notification.state === "partial-failure") process.exitCode = 9;
         if (notification.reason === "delivery-window-expired") process.stderr.write(NOTIFY_WINDOW_MESSAGE);
       }
@@ -26646,11 +26870,11 @@ function registerShareCommand(program2) {
       if (shareServices.artifactStore === void 0) throw new CLIError("AUTH_REQUIRED", "artifact storage is not configured", 3);
       const versions = await listArtifactVersions(await shareServices.artifactStore(), id);
       const pinned = /* @__PURE__ */ new Map();
-      for (const record of await shareServices.records?.list() ?? []) {
-        const path = parseArtifactVersionPath(record.resource.path);
+      for (const record2 of await shareServices.records?.list() ?? []) {
+        const path = parseArtifactVersionPath(record2.resource.path);
         if (path === void 0 || path.artifactId !== id) continue;
         const shares = pinned.get(path.version) ?? [];
-        shares.push({ shareId: record.shareId, target: record.targetKind ?? record.recipientMatcher.kind, expiresAt: record.expiresAt, ...record.revokedAt === void 0 ? {} : { revokedAt: record.revokedAt } });
+        shares.push({ shareId: record2.shareId, target: record2.targetKind ?? record2.recipientMatcher.kind, expiresAt: record2.expiresAt, ...record2.revokedAt === void 0 ? {} : { revokedAt: record2.revokedAt } });
         pinned.set(path.version, shares);
       }
       const view = versions.map((version2) => ({
@@ -26750,19 +26974,19 @@ function registerShareCommand(program2) {
       const json = jsonOutput(options, command);
       if (shareServices.delivery === void 0) throw new CLIError("AUTH_REQUIRED", "delivery authority is not configured", 3);
       if (shareServices.records === void 0) throw new CLIError("AUTH_REQUIRED", "sender history storage is not configured", 3);
-      const record = await shareServices.records.get(id);
-      if (record === void 0) throw new CLIError("NOT_FOUND", "share not found", 4);
-      if (!record.actions.includes("tinycloud.kv/get")) {
+      const record2 = await shareServices.records.get(id);
+      if (record2 === void 0) throw new CLIError("NOT_FOUND", "share not found", 4);
+      if (!record2.actions.includes("tinycloud.kv/get")) {
         throw new CLIError("INVALID_ARGUMENT", "share notify requires a stored share with the read action; no invitation was sent", 2);
       }
       const mailbox = canonicalMailbox2(options.to);
       if (mailbox === void 0) throw new ShareNotifyError("recipient is invalid");
-      if (!recipientMatchesShareRecord(record, mailbox.email)) throw new ShareNotifyError("recipient does not match the stored share target");
-      if (record.recipientMatcher.kind === "emailDomain" && shareDeliveryWindowExpiresAt(record) > Date.now()) {
+      if (!recipientMatchesShareRecord(record2, mailbox.email)) throw new ShareNotifyError("recipient does not match the stored share target");
+      if (record2.recipientMatcher.kind === "emailDomain" && shareDeliveryWindowExpiresAt(record2) > Date.now()) {
         if (shareServices.assertDomainDelivery === void 0) throw new CLIError("UNAVAILABLE", "could not verify TinyCloud node 1.17.3 domain delivery support; no invitation was sent", 4);
         await shareServices.assertDomainDelivery();
       }
-      const result = await notifyRecordedShare(record, options.to, shareServices.delivery, shareServices.records);
+      const result = await notifyRecordedShare(record2, options.to, shareServices.delivery, shareServices.records);
       if (json) writeJson2(result);
       else process.stdout.write(`${result.state}
 `);
@@ -26776,9 +27000,9 @@ function registerShareCommand(program2) {
     try {
       const json = jsonOutput(options, command);
       if (shareServices.records === void 0) throw new CLIError("AUTH_REQUIRED", "sender history storage is not configured", 3);
-      const record = shareServices.getRecord ? await shareServices.getRecord(id) : await shareServices.records.get(id);
-      if (record === void 0) throw new CLIError("NOT_FOUND", "share not found", 4);
-      const result = await revokeShare({ record, records: shareServices.records, adapter: shareServices.revocation, scope: options.ancestor ? "ancestor" : "direct" });
+      const record2 = shareServices.getRecord ? await shareServices.getRecord(id) : await shareServices.records.get(id);
+      if (record2 === void 0) throw new CLIError("NOT_FOUND", "share not found", 4);
+      const result = await revokeShare({ record: record2, records: shareServices.records, adapter: shareServices.revocation, scope: options.ancestor ? "ancestor" : "direct" });
       if (result.state === "unsupported") {
         throw new CLIError("UNSUPPORTED_TARGET", result.reason, 2);
       }
@@ -26827,6 +27051,25 @@ function kvArtifactStore(kv) {
       throw new ArtifactError("storage", `listing ${prefix} exceeded ${MAX_LIST_PAGES} pages`);
     }
   };
+}
+
+// src/share/space-not-ready.ts
+function isSpaceNotFound(error) {
+  if (typeof error !== "object" || error === null) return false;
+  const message = "message" in error && typeof error.message === "string" ? error.message : "";
+  if (!/space not found/i.test(message)) return false;
+  const meta = "meta" in error && typeof error.meta === "object" && error.meta !== null ? error.meta : void 0;
+  const status = meta !== void 0 && "status" in meta ? meta.status : void 0;
+  return status === 404 || /\b404\b/.test(message);
+}
+function spaceNotReadyFailure(cause) {
+  return new SharePublishAuthorityError({ kind: "space-not-ready" }, { cause });
+}
+function failIfSpaceNotReady(result) {
+  if (!result.ok && isSpaceNotFound(result.error)) throw spaceNotReadyFailure(result.error);
+}
+function artifactSpaceNotReady(error) {
+  return error instanceof ArtifactError && isSpaceNotFound(error.cause) ? spaceNotReadyFailure(error.cause) : error;
 }
 
 // src/share/adapters.ts
@@ -26908,7 +27151,7 @@ async function storeArtifactVersion(kv, version2, authority) {
   try {
     return await publishArtifactVersion(kvArtifactStore(kv), version2);
   } catch (error) {
-    throw scopeDeniedFromArtifactError(error, "KV upload", authority) ?? error;
+    throw scopeDeniedFromArtifactError(error, "KV upload", authority) ?? artifactSpaceNotReady(error);
   }
 }
 function createEncryptedSessionHistory() {
@@ -26921,8 +27164,8 @@ function createEncryptedSessionHistory() {
   };
   let keyPromise;
   const key = async () => keyPromise ??= crypto.subtle.generateKey({ name: "AES-GCM", length: 256 }, false, ["encrypt", "decrypt"]);
-  const encode6 = async (record) => {
-    const secret = new TextEncoder().encode(JSON.stringify(record));
+  const encode6 = async (record2) => {
+    const secret = new TextEncoder().encode(JSON.stringify(record2));
     const iv = crypto.getRandomValues(new Uint8Array(12));
     const encrypted = new Uint8Array(await crypto.subtle.encrypt({ name: "AES-GCM", iv }, await key(), secret));
     const value = new Uint8Array(iv.length + encrypted.length);
@@ -26932,9 +27175,9 @@ function createEncryptedSessionHistory() {
   };
   const decode10 = async (value) => JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(await crypto.subtle.decrypt({ name: "AES-GCM", iv: value.slice(0, 12) }, await key(), value.slice(12))));
   return {
-    async put(record) {
+    async put(record2) {
       return serial(async () => {
-        records.set(record.shareId, await encode6(record));
+        records.set(record2.shareId, await encode6(record2));
       });
     },
     async update(shareId, change) {
@@ -27100,19 +27343,19 @@ function createEncryptedProfileHistory(profileName, sessionSigner) {
     throw new ShareHistoryRetryError(profile);
   });
   return {
-    async put(record) {
+    async put(record2) {
       return locked(async (profile, ready) => {
         const values = await read4(profile, ready);
-        const index = values.findIndex((value) => value.shareId === record.shareId);
-        if (index >= 0) values[index] = record;
-        else values.push(record);
+        const index = values.findIndex((value) => value.shareId === record2.shareId);
+        if (index >= 0) values[index] = record2;
+        else values.push(record2);
         await write(profile, values, ready);
       }, true);
     },
     async update(shareId, change) {
       return locked(async (profile, ready) => {
         const values = await read4(profile, ready);
-        const index = values.findIndex((record) => record.shareId === shareId);
+        const index = values.findIndex((record2) => record2.shareId === shareId);
         if (index < 0) return void 0;
         const updated = await change(values[index]);
         values[index] = updated;
@@ -27124,11 +27367,11 @@ function createEncryptedProfileHistory(profileName, sessionSigner) {
       return locked((profile, ready) => read4(profile, ready));
     },
     async get(shareId) {
-      return locked(async (profile, ready) => (await read4(profile, ready)).find((record) => record.shareId === shareId));
+      return locked(async (profile, ready) => (await read4(profile, ready)).find((record2) => record2.shareId === shareId));
     },
     async delete(shareId) {
       return locked(async (profile, ready) => {
-        await write(profile, (await read4(profile, ready)).filter((record) => record.shareId !== shareId), ready);
+        await write(profile, (await read4(profile, ready)).filter((record2) => record2.shareId !== shareId), ready);
       }, true);
     }
   };
@@ -27301,6 +27544,7 @@ function createShareAuthorityAdapters(input = {}) {
         const written = await node.kvForSpace(ownerSpaceId).put(resourcePath2, file2.bytes.slice(), {
           contentType: targetInput.mediaType ?? file2.mediaType ?? "application/octet-stream"
         });
+        failIfSpaceNotReady(written);
         if (!written.ok) {
           const code4 = typeof written.error === "object" && written.error !== null && "code" in written.error ? written.error.code : void 0;
           if (code4 === "AUTH_UNAUTHORIZED" || code4 === "PERMISSION_DENIED") {
@@ -27400,6 +27644,7 @@ function createShareAuthorityAdapters(input = {}) {
       resourcePath = artifactVersionFilePath(artifact.id, artifactVersion.version, storageName);
     } else {
       const stored = await node.kvForSpace(ownerSpaceId).put(resourcePath, storedBytes, { contentType: "application/vnd.tinycloud.encrypted-envelope+json" });
+      failIfSpaceNotReady(stored);
       if (!stored.ok) {
         const code4 = typeof stored.error === "object" && stored.error !== null && "code" in stored.error ? stored.error.code : void 0;
         if (code4 === "AUTH_UNAUTHORIZED" || code4 === "PERMISSION_DENIED") {
@@ -27466,21 +27711,21 @@ function createShareAuthorityAdapters(input = {}) {
     return published;
   } };
   const delivery = { deliver: input.deliver ?? (async (request) => {
-    const record = request.record;
-    if (record === void 0 || record.link === void 0 || record.deliveryMaterial === void 0 || request.idempotencyKey === void 0) throw new Error("share delivery history is incomplete");
-    const expiry = shareDeliveryWindowExpiresAt(record);
+    const record2 = request.record;
+    if (record2 === void 0 || record2.link === void 0 || record2.deliveryMaterial === void 0 || request.idempotencyKey === void 0) throw new Error("share delivery history is incomplete");
+    const expiry = shareDeliveryWindowExpiresAt(record2);
     if (expiry <= Date.now()) throw new ShareNotifyError("share delivery authorization window has expired", "delivery-window-expired");
     const authorizationExpiresAt = new Date(expiry).toISOString();
     const [config, node] = await Promise.all([publicConfig(), authenticatedNode()]);
     const receipt = await node.authorizeShareDeliveryV3({
-      envelope: record.deliveryMaterial.envelope,
-      sealedEnvelope: record.deliveryMaterial.sealedEnvelope,
-      envelopeKey: record.deliveryMaterial.envelopeKey,
-      shareCid: record.deliveryMaterial.shareCid,
-      resourcePath: record.resource.path,
+      envelope: record2.deliveryMaterial.envelope,
+      sealedEnvelope: record2.deliveryMaterial.sealedEnvelope,
+      envelopeKey: record2.deliveryMaterial.envelopeKey,
+      shareCid: record2.deliveryMaterial.shareCid,
+      resourcePath: record2.resource.path,
       recipientEmail: request.recipient,
-      shareUrl: record.link,
-      documentName: record.filename ?? "share.md",
+      shareUrl: record2.link,
+      documentName: record2.filename ?? "share.md",
       expiresAt: authorizationExpiresAt,
       deliveryAudience: config.credentialsOrigin,
       idempotencyKey: request.idempotencyKey
@@ -27488,7 +27733,7 @@ function createShareAuthorityAdapters(input = {}) {
     await deliverCredentialInvitation({
       credentialsOrigin: config.credentialsOrigin,
       receipt,
-      shareUrl: record.link,
+      shareUrl: record2.link,
       fetchFn,
       signal: request.signal
     });
@@ -27501,15 +27746,15 @@ function createShareAuthorityAdapters(input = {}) {
     // proofless session-key revocation covers the first, and a local owner
     // key covers both. Without either key (a session-only profile that signed
     // in again since, for example) the link cannot be revoked here.
-    revokeDelegation: input.revokeDelegation ?? (async ({ delegationCid, record }) => {
+    revokeDelegation: input.revokeDelegation ?? (async ({ delegationCid, record: record2 }) => {
       const node = await authenticatedNode();
       const activeNode = await node.activeNodeIdentity();
-      if (record.target.origin !== activeNode.origin) throw new Error("share delegation revocation is not bound to the active owner node");
+      if (record2.target.origin !== activeNode.origin) throw new Error("share delegation revocation is not bound to the active owner node");
       const linkUnavailable = new CLIError("SHARE_LINK_UNAVAILABLE", "this share's stored link could not be verified; nothing was revoked", ExitCode.NOT_FOUND);
-      const resource = `${record.target.spaceId}/kv/${record.resource.path}`;
+      const resource = `${record2.target.spaceId}/kv/${record2.resource.path}`;
       let sessionIssued;
       try {
-        const decoded = node.sharing.decodeLink(parseNativeShareUrl(record.link ?? ""));
+        const decoded = node.sharing.decodeLink(parseNativeShareUrl(record2.link ?? ""));
         const linkKey = decoded.keyDid.split("#", 1)[0];
         const authorization2 = withoutBearer(decoded.delegation.authHeader ?? "");
         if (authorization2.split(".").length === 3) {
@@ -27518,7 +27763,7 @@ function createShareAuthorityAdapters(input = {}) {
           sessionIssued = signed.payload.iss.split("#", 1)[0] === node.credentialHolderDid;
         } else {
           const signed = await parseSignedSiweCacao(authorization2, delegationCid);
-          const owner = /^tinycloud:pkh:(eip155:[1-9]\d*:0x[0-9a-fA-F]{40}):/.exec(record.target.spaceId)?.[1];
+          const owner = /^tinycloud:pkh:(eip155:[1-9]\d*:0x[0-9a-fA-F]{40}):/.exec(record2.target.spaceId)?.[1];
           if (owner === void 0 || signed.issuer.toLowerCase() !== `did:pkh:${owner}`.toLowerCase() || signed.audience !== linkKey || signed.attenuation[resource] === void 0) throw linkUnavailable;
           sessionIssued = false;
         }
@@ -27614,7 +27859,7 @@ function createShareAuthorityAdapters(input = {}) {
       try {
         return await operation();
       } catch (error) {
-        throw scopeDeniedFromArtifactError(error, "artifact storage", authority) ?? error;
+        throw scopeDeniedFromArtifactError(error, "artifact storage", authority) ?? artifactSpaceNotReady(error);
       }
     };
     return {

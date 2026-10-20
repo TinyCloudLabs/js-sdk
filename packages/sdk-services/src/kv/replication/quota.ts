@@ -22,7 +22,12 @@ export interface ReplicaQuotaSpec {
 /** Node/CLI page admission keeps its existing blob/entry interpretation. */
 export interface ReplicaPageAdmission {
   partitionId: string;
-  /** Sum of the page's new blob bytes (node admission hook's existing metric). */
+  /**
+   * Node/CLI: the page's NET blob bytes, only blob content counted (not the database, WAL, rows or
+   * pending store): new blobs not already stored, minus blobs only replaced or deleted entries
+   * referenced. Negative when the page frees more than it adds; a page with `blobBytes <= 0` is
+   * always admitted. Browser hosts keep their own ledger metric.
+   */
   blobBytes: number;
   /** Number of entry writes; not the browser ciphertext-row accounting metric. */
   entries: number;
