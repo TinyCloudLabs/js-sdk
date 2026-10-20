@@ -203,7 +203,14 @@ export async function cmdWatch(args: ParsedArgs): Promise<void> {
   }, opts);
 
   const stop = new AbortController();
-  for (const signal of ['SIGINT', 'SIGTERM'] as const) process.once(signal, () => stop.abort());
+  for (const signal of ['SIGINT', 'SIGTERM'] as const) {
+    process.once(signal, () => {
+      stop.abort();
+      // Do not wait for a wake in flight (it may run for the whole --wake-timeout): its agents go down now, the wake
+      // fails, releases its claim, and run() returns. A second signal then hits Node's default handler.
+      killAllRunners();
+    });
+  }
   try {
     await watcher.run(stop.signal, { once: args.has('once') });
   } finally {
