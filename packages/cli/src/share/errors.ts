@@ -37,8 +37,24 @@ export class ShareHistoryRetryError extends Error {
   }
 }
 
+/** An existing sender-history file cannot be decrypted or parsed with the current session key. */
+export class ShareHistoryUnreadableError extends Error {
+  constructor() {
+    super("share history is unavailable");
+    this.name = "ShareHistoryUnreadableError";
+  }
+}
+
+/** The filesystem refused or failed to read an existing sender-history file. */
+export class ShareHistoryReadError extends Error {
+  constructor() {
+    super("share history could not be read");
+    this.name = "ShareHistoryReadError";
+  }
+}
+
 /** Why a published share was not written to sender history. Stable codes for scripts; never carry paths or key material. */
-export type ShareHistoryReason = "HISTORY_UNREADABLE" | "HISTORY_WRITE_FAILED" | "HISTORY_UNAVAILABLE";
+export type ShareHistoryReason = "HISTORY_UNREADABLE" | "HISTORY_READ_FAILED" | "HISTORY_WRITE_FAILED" | "HISTORY_UNAVAILABLE";
 
 export type ShareHistoryStatus =
   | { readonly recorded: true }
@@ -46,9 +62,10 @@ export type ShareHistoryStatus =
 
 const HISTORY_WRITE_ERROR_CODES: Readonly<Record<string, true>> = { EACCES: true, EPERM: true, EROFS: true, ENOSPC: true, EDQUOT: true, EIO: true };
 
-/** Maps a sender-history failure to its reason. The adapter reports an existing file it cannot decrypt or parse as "share history is unavailable"; filesystem write errors keep their errno code. Anything else is HISTORY_UNAVAILABLE. */
+/** Maps a sender-history failure to its reason. Decrypt or parse failures of an existing file are UNREADABLE; filesystem read errors are READ_FAILED; filesystem write errors keep their errno code as WRITE_FAILED. Anything else, including lock timeouts, is HISTORY_UNAVAILABLE. */
 export function shareHistoryReason(error: unknown): ShareHistoryReason {
-  if (error instanceof Error && error.message === "share history is unavailable") return "HISTORY_UNREADABLE";
+  if (error instanceof ShareHistoryUnreadableError) return "HISTORY_UNREADABLE";
+  if (error instanceof ShareHistoryReadError) return "HISTORY_READ_FAILED";
   const code = typeof error === "object" && error !== null && "code" in error ? error.code : undefined;
   return typeof code === "string" && HISTORY_WRITE_ERROR_CODES[code] === true ? "HISTORY_WRITE_FAILED" : "HISTORY_UNAVAILABLE";
 }

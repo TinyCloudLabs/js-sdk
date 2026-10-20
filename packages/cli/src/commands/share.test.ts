@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { MemorySenderShareRecordStorage, revokeShare, ShareNotifyError, type PublishedShare, type SenderShareRecord, type ShareTarget } from "@tinycloud/share-sdk";
 import { ProfileLockTimeoutError } from "@tinycloud/operations/state";
 import { configureShareCommandServices, inspectShareInputOnce, registerShareCommand, parseShareTarget, shareCliError } from "./share.js";
-import { ShareHistoryRetryError, SharePublishAuthorityError } from "../share/errors.js";
+import { ShareHistoryReadError, ShareHistoryRetryError, ShareHistoryUnreadableError, SharePublishAuthorityError } from "../share/errors.js";
 import { safeFilename, writeShareOutput } from "../share/io.js";
 import { runShareCaptured } from "./share.integration-harness.js";
 
@@ -426,7 +426,7 @@ describe("tc share command contract", () => {
   }
 
   test("publish --json reports HISTORY_UNREADABLE when the existing sender history cannot be decrypted", async () => {
-    const output = await publishJsonWithHistoryPut(async () => { throw new Error("share history is unavailable"); });
+    const output = await publishJsonWithHistoryPut(async () => { throw new ShareHistoryUnreadableError(); });
     expect(output.exitCode).toBe(0);
     expect(JSON.parse(output.stdout)).toMatchObject({
       link: reviewPublished.link,
@@ -434,6 +434,13 @@ describe("tc share command contract", () => {
       history: { recorded: false, reason: "HISTORY_UNREADABLE" },
     });
     expectHistoryWarningWithoutSecrets(output.stderr, "HISTORY_UNREADABLE");
+  });
+
+  test("publish --json reports HISTORY_READ_FAILED when the filesystem cannot read the existing sender history", async () => {
+    const output = await publishJsonWithHistoryPut(async () => { throw new ShareHistoryReadError(); });
+    expect(output.exitCode).toBe(0);
+    expect(JSON.parse(output.stdout)).toMatchObject({ history: { recorded: false, reason: "HISTORY_READ_FAILED" } });
+    expectHistoryWarningWithoutSecrets(output.stderr, "HISTORY_READ_FAILED");
   });
 
   test("publish --json reports HISTORY_WRITE_FAILED for filesystem write errors", async () => {
@@ -557,12 +564,41 @@ describe("tc share command contract", () => {
     try {
       const published = await runShareCaptured(["share", "publish", file, "--to", "email:alice@example.com", "--notify"]);
       expect(published).toMatchObject({ exitCode: 0, stdout: `${reviewPublished.url}\n` });
-      expect(published.stderr).toContain("could not record");
+      expect(published.stderr).toContain("(HISTORY_UNAVAILABLE)");
       expect(persisted?.deliveredRecipients).toBeUndefined();
       const notified = await runShareCaptured(["share", "notify", reviewPublished.metadata.shareId, "--to", "alice@example.com", "--json"]);
       expect(notified.exitCode).toBe(0);
       expect(JSON.parse(notified.stdout)).toMatchObject({ state: "delivered" });
-      expect(notified.stderr).toContain("could not record");
+      expect(notified.stderr).toContain("(HISTORY_UNAVAILABLE)");
+      expect(notified.stderr).not.toContain(reviewPublished.link.cid);
+    } finally {
+      process.exit = originalExit;
+      configureShareCommandServices({});
+    }
+  });
+
+  test("publish --notify --json keeps history recorded and names the share when delivery confirmation cannot be persisted", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "tc-share-confirmation-json-"));
+    const file = join(directory, "note.md");
+    await writeFile(file, "# note\n");
+    configureShareCommandServices({
+      targetAdapter: { async publish() { return reviewPublished; } },
+      records: {
+        async put() {},
+        async get() { return undefined; },
+        async list() { return []; },
+        async delete() {},
+        async update() { throw new Error("sender history disk is full"); },
+      },
+      delivery: { async deliver() { return "delivered"; } },
+    });
+    const originalExit = process.exit;
+    process.exit = (() => {}) as typeof process.exit;
+    try {
+      const output = await runShareCaptured(["share", "publish", file, "--to", "email:alice@example.com", "--notify", "--json"]);
+      expect(output.exitCode).toBe(0);
+      expect(JSON.parse(output.stdout)).toMatchObject({ history: { recorded: true }, notification: { state: "delivered" } });
+      expectHistoryWarningWithoutSecrets(output.stderr, "HISTORY_UNAVAILABLE");
     } finally {
       process.exit = originalExit;
       configureShareCommandServices({});

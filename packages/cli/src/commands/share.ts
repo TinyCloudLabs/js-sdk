@@ -294,7 +294,7 @@ async function rememberPublishedShare(result: PublishedShare): Promise<{ record:
     return { record, history: { recorded: false, reason } };
   }
 }
-async function notifyRecordedShare(record: SenderShareRecord, recipient: string, adapter: ShareDeliveryAdapter, storage?: SenderShareRecordStorage): Promise<ShareNotifyResult> {
+async function notifyRecordedShare(record: SenderShareRecord, recipient: string, adapter: ShareDeliveryAdapter, storage?: SenderShareRecordStorage, published?: { readonly shareId: string; readonly cid: string }): Promise<ShareNotifyResult> {
   const result = await notifyShare({ shareId: record.shareId, recipient, record, adapter, checkDeliveryWindow: true });
   if (result.state !== "partial-failure" && storage !== undefined) {
     const mailbox = canonicalMailbox(recipient)!.email;
@@ -309,7 +309,9 @@ async function notifyRecordedShare(record: SenderShareRecord, recipient: string,
         }));
         if (updated === undefined) throw new Error("sender history record was removed");
       } catch (error) {
-        process.stderr.write(`Warning: delivery succeeded, but could not record its confirmation in sender history (${shareHistoryReason(error)}).\n`);
+        const reason = shareHistoryReason(error);
+        const identifiers = published === undefined ? "" : ` Keep share ID ${published.shareId} and CID ${published.cid}.`;
+        process.stderr.write(`Warning: delivery succeeded, but could not record its confirmation in sender history (${reason}).${identifiers}\n`);
       }
     }
   }
@@ -442,7 +444,7 @@ export function registerShareCommand(program: Command): void {
         let notification: ShareNotifyResult | undefined;
         if (notifyRecipient !== undefined) {
           if (shareServices.delivery === undefined) throw new CLIError("AUTH_REQUIRED", "delivery authority is not configured", 3);
-          notification = await notifyRecordedShare(record, notifyRecipient, shareServices.delivery, history.recorded ? shareServices.records : undefined);
+          notification = await notifyRecordedShare(record, notifyRecipient, shareServices.delivery, history.recorded ? shareServices.records : undefined, { shareId: result.metadata.shareId, cid: result.link.cid });
           if (notification.state === "partial-failure") process.exitCode = 9;
           if (notification.reason === "delivery-window-expired") process.stderr.write(NOTIFY_WINDOW_MESSAGE);
         }
