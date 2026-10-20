@@ -271,7 +271,7 @@ function program(word: string, sc: Scope): string | undefined {
 
 function courierEntry(file: string, sc: Scope): string | undefined {
   const real = realpathBest(path.resolve(sc.cwds[0], file));
-  const kind = program(file, { ...sc, externalOnly: true });
+  const kind = program(real, { ...sc, externalOnly: true });
   return sc.sh.env.courierEntries?.includes(real) && (kind === 'courier' || kind === 'tc') ? kind : undefined;
 }
 
@@ -681,40 +681,100 @@ function classifyShell(args: Word[], sc: Scope, io: Io): void {
   if (io.piped && !io.heredocs.length && !io.hereStrings.length) unresolved(sc.sh, 'a shell reading commands from a pipe');
 }
 
+const INTERPRETER_PACKAGES = new Set([
+  ...Object.keys(PKG_NAMES), ...AGENT_CLIS, ...NPM_FAMILY, 'gh', 'git', 'wrangler', 'changeset',
+  'semantic-release', 'lerna', 'turbo', 'nx', 'vercel', 'netlify-cli', 'flyctl',
+  '@getpaseo/cli', '@google/gemini-cli', 'opencode-ai', '@cloudflare/wrangler',
+  '@oh-my-pi/pi-coding-agent', 'phala',
+]);
+
+function scriptPackage(file: string, sc: Scope): string | undefined {
+  for (let dir = path.dirname(file); ; dir = path.dirname(dir)) {
+    const r = sc.sh.env.readFile(path.join(dir, 'package.json'));
+    if (r.state !== 'absent') {
+      if (r.state === 'text' && !r.text.includes('\0')) {
+        try { const pkg = JSON.parse(r.text); return typeof pkg?.name === 'string' ? pkg.name : undefined; }
+        catch { /* refuse below */ }
+      }
+      unresolved(sc.sh, 'script package manifest cannot be inspected');
+      return;
+    }
+    if (path.dirname(dir) === dir) return;
+  }
+}
+
+function interpreterFile(file: Word, rest: Word[], sc: Scope, io: Io): void {
+  if (sc.depth >= MAX_DEPTH) return unresolved(sc.sh, 'interpreter inputs nested too deeply to inspect');
+  if (file.dynamic || (sc.cwdUnknown && !path.isAbsolute(file.value))) return unresolved(sc.sh, 'interpreter script path cannot be resolved');
+  for (const cwd of sc.cwds) {
+    const absolute = path.resolve(cwd, file.value);
+    const real = realpathBest(absolute);
+    const scope = { ...sc, depth: sc.depth + 1, cwds: [cwd], externalOnly: true };
+    if (program(real, scope)) {
+      const argv = [{ value: real, dynamic: false }, ...rest];
+      classify(argv, argv, scope, io);
+      continue;
+    }
+    const pkg = scriptPackage(real, sc);
+    if ((pkg && INTERPRETER_PACKAGES.has(pkg)) || /(?:^|\/)(?:@tinycloud\/cli|@getpaseo\/cli|@anthropic-ai\/claude-code|@openai\/codex|@google\/gemini-cli|opencode-ai|paseo|claude|codex|omp|opencode|gemini)\/(?:bin|dist|src)\//.test(real)) {
+      never(sc, 'agent and gated-tool package entrypoints are not available through an interpreter');
+      continue;
+    }
+    const r = sc.sh.env.readFile(real);
+    if (r.state !== 'text' || r.text.includes('\0')) unresolved(sc.sh, `${file.value} cannot be inspected`);
+    else classifyScriptText(r.text, sc, file.value);
+    if (sc.written.has(absolute) || sc.written.has(real)) unresolved(sc.sh, 'runs a file that this same command writes');
+  }
+}
+
 function classifyInterpreter(prog: string, args: Word[], sc: Scope, io: Io): void {
-  // Only an inode-verified installed entry is Courier; a path/name match alone never exempts script inspection.
   const entry = args[0];
   const kind = entry && !entry.dynamic && !entry.value.startsWith('-') ? courierEntry(entry.value, sc) : undefined;
   if ((prog === 'node' || prog === 'nodejs') && kind) return kind === 'tc' ? classifyTc(args.slice(1), sc) : classifyCourier(args.slice(1), sc);
+  // These Bun subcommands were already inspected as package commands and script bodies.
+  if (prog === 'bun' && entry && ['run', 'test', 'publish', 'install', 'add', 'update', 'remove', 'x'].includes(entry.value)) return;
+  const node = ['node', 'nodejs', 'bun', 'tsx', 'ts-node'].includes(prog);
+  const python = /^python/.test(prog);
+  let inline = false;
+  let script = false;
+  let options = true;
   for (let i = 0; i < args.length; i++) {
-    const a = args[i];
-    if (a.dynamic || !a.value.includes('/')) continue;
-    const name = program(a.value, { ...sc, externalOnly: true });
-    if (name) classify(args.slice(i), args.slice(i), { ...sc, externalOnly: true }, io);
-    // These are refusal heuristics, never a way to exempt arbitrary package entry files from inspection.
-    if (/(?:^|\/)@tinycloud\/cli\/(?:dist|src)\//.test(a.value)) never(sc, 'unverified owner CLI entrypoint');
-    if (/(?:^|\/)(paseo|claude|codex|omp|opencode|gemini)\/(?:dist|src)\//.test(a.value)) never(sc, 'unverified agent launcher entrypoint');
-  }
-  let sawCode = false;
-  for (const a of args) {
-    if (a.dynamic) continue;
-    if (SOURCE_EXT.test(a.value) && !a.value.includes(' ')) {
-      sawCode = true;
-      let read = false;
-      for (const d of sc.cwds) {
-        const r = sc.sh.env.readFile(path.resolve(d, a.value));
-        if (r.state === 'text') { read = true; classifyScriptText(r.text, sc, a.value); }
-        if (r.state === 'unreadable') unresolved(sc.sh, `${a.value} cannot be read`);
+    const arg = args[i];
+    if (arg.dynamic) return unresolved(sc.sh, 'interpreter options or script path built at run time');
+    const v = arg.value;
+    if (options && v === '--') { options = false; continue; }
+    if (options && v.startsWith('-') && v !== '-') {
+      const preload = node || prog === 'ruby' ? /^(?:-r|--require|--import|--loader|--experimental-loader)(?:=(.*))?$/.exec(v) : undefined;
+      const shortPreload = (node || prog === 'ruby') && /^-r.+/.test(v) ? v.slice(2) : undefined;
+      if (preload || shortPreload) {
+        const file = preload?.[1] !== undefined ? { value: preload[1], dynamic: false } : shortPreload ? { value: shortPreload, dynamic: false } : args[++i];
+        if (!file || file.dynamic || !/^(?:\.{1,2}\/|\/)/.test(file.value)) return unresolved(sc.sh, 'interpreter preload must name an inspectable file');
+        interpreterFile(file, [], sc, io);
+        continue;
       }
-      if (!read) unresolved(sc.sh, `${a.value} cannot be inspected`);
-      if ([...sc.written].some((w) => w.endsWith(path.basename(a.value)))) unresolved(sc.sh, 'runs a file that this same command writes');
-    } else if (/\s|[(){};]/.test(a.value) || a.value.length > 12) {
-      sawCode = true;
-      classifyScriptText(a.value, sc, `${prog} code`);
+      const codeFlag = node ? /^(?:-e|-p|--eval|--print)(?:=(.*))?$/.exec(v)
+        : python ? /^-c$/.exec(v) : prog === 'php' ? /^(?:-r|--run)$/.exec(v) : /^-e$/.exec(v);
+      if (codeFlag) {
+        const code = codeFlag[1] !== undefined ? { value: codeFlag[1], dynamic: false } : args[++i];
+        if (!code || code.dynamic) return unresolved(sc.sh, 'interpreter inline code cannot be inspected');
+        classifyScriptText(code.value, sc, `${prog} code`); inline = true; continue;
+      }
+      if ((python && /^-m/.test(v)) || (!node && /^-(?:M|m|r)/.test(v))) return unresolved(sc.sh, 'interpreter module identity cannot be resolved');
+      if (python && ['-W', '-X'].includes(v)) {
+        const value = args[++i];
+        if (!value || value.dynamic || (v === '-X' && !['dev', 'utf8', 'faulthandler', 'importtime'].includes(value.value))) return unresolved(sc.sh, 'interpreter option cannot be inspected');
+        continue;
+      }
+      if (/^(?:--(?:help|version|check|no-warnings|trace-warnings|enable-source-maps)|-[vVhBIiSsuOEb]+)$/.test(v)) continue;
+      return unresolved(sc.sh, 'interpreter option cannot be resolved safely');
     }
+    if (!inline && v !== '-') { interpreterFile(arg, args.slice(i + 1), sc, io); script = true; }
+    break;
   }
-  for (const body of [...io.heredocs, ...io.hereStrings]) { sawCode = true; classifyScriptText(body, sc, `${prog} stdin`); }
-  if (!sawCode && io.piped && (args.length === 0 || (args.length === 1 && args[0].value === '-'))) unresolved(sc.sh, `${prog} reading code from a pipe`);
+  if (!inline && !script && io.stdinFile) interpreterFile(io.stdinFile, [], sc, io);
+  if (!inline && !script && io.otherStdin) unresolved(sc.sh, 'interpreter input descriptor cannot be inspected');
+  for (const body of [...io.heredocs, ...io.hereStrings]) classifyScriptText(body, sc, `${prog} stdin`);
+  if (!inline && io.piped && (args.length === 0 || (args.length === 1 && args[0].value === '-'))) unresolved(sc.sh, `${prog} reading code from a pipe`);
 }
 
 function classifyWrapper(prog: string, args: Word[], top: Word[], sc: Scope, io: Io): void {
@@ -768,7 +828,7 @@ function classify(argv: Word[], top: Word[], sc: Scope, io: Io): void {
     return;
   }
   const args = argv.slice(1);
-  for (const arg of args) if (!arg.dynamic && arg.value.includes('/') && registeredFile(arg.value, sc.cwds[0], sc.sh.env.binaries ?? [])) return never(sc, 'registered executable files cannot be read, rewritten or repurposed');
+  for (const arg of args) if (!INTERPRETERS.has(prog) && !arg.dynamic && arg.value.includes('/') && registeredFile(arg.value, sc.cwds[0], sc.sh.env.binaries ?? [])) return never(sc, 'registered executable files cannot be read, rewritten or repurposed');
 
   if (/^secret[-_]?bridge$/.test(prog)) return never(sc, 'Secret Bridge is retired and never allowed');
   if (AGENT_CLIS.has(prog)) return never(sc, `${prog} would start another agent without the Courier guard; do the work yourself`);

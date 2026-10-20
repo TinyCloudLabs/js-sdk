@@ -5,6 +5,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { defaultPlan, validatePlan, dryCommands, usageFields, quotaError, reserveAttempt, executePlan, writeProofHook, parseResult } from '../scripts/live-proofs.mjs';
 import { privateScratch } from './private-scratch.mjs';
+import { writeGuardSettings } from '../dist/guard/install.js';
 const temp = () => privateScratch('courier-live-runner-');
 
 test('dry-run prints exact four-run commands without consulting any binary or auth store', () => {
@@ -54,6 +55,8 @@ test('proof hook records only planned command ids/verdicts and forwards real gua
   const dir=temp(),l={hook:path.join(dir,'courier/guard/hook.mjs'),hookLog:path.join(dir,'hook.jsonl')};
   try {
     writeProofHook(l);
+    const entry=new URL('../dist/cli.js',import.meta.url).pathname;
+    writeGuardSettings({argv:[process.execPath,entry,'guard'],home:path.join(dir,'courier'),entry});
     const run=command=>spawnSync(process.execPath,[l.hook,'guard'],{input:JSON.stringify({tool_name:'Bash',tool_input:{command},cwd:dir}),encoding:'utf8',env:{PATH:process.env.PATH,HOME:dir,COURIER_HOME:path.join(dir,'courier'),TC_HOME:path.join(dir,'tc')}});
     assert.equal(run('gh pr merge 42 --repo a/b').status,0); // hook uses permissionDecision=deny, as the installed hook does
     const rows=fs.readFileSync(l.hookLog,'utf8').trim().split('\n').map(JSON.parse);assert.deepEqual(rows,[{commandId:'raw-merge',denied:true}]);

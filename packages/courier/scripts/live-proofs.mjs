@@ -24,7 +24,7 @@ import { k } from '../dist/keys.js';
 
 const CLI = fileURLToPath(new URL('../dist/cli.js', import.meta.url));
 const packageRoot = fileURLToPath(new URL('../', import.meta.url));
-const HOST_HOME = os.homedir();
+const HOST_HOME = os.userInfo().homedir;
 const SCRATCH = path.join(HOST_HOME, 'scratch');
 const logFile = path.join(SCRATCH, 'tc712/LIVE-PROOFS-NEEDED.md');
 const ledgerFile = path.join(SCRATCH, 'tc712/live-proof-attempts.json');
@@ -177,14 +177,14 @@ export async function prepare(l, run, loginSource = path.join(HOST_HOME,'.claude
 const fs=require('node:fs');const args=process.argv.slice(2);
 fs.appendFileSync(${JSON.stringify(l.ghLog)},JSON.stringify({args,hasDummy:process.env.GH_TOKEN===${JSON.stringify(DUMMY_BROKER)}})+'\\n');
 if(process.env.GH_TOKEN!==${JSON.stringify(DUMMY_BROKER)})process.exit(9);
-if(args[1]==='view')console.log(JSON.stringify({state:'OPEN',headRefOid:'${SHA}',isDraft:false}));else console.log('stub merge only');
+if(args[1]==='view')console.log(JSON.stringify({state:'OPEN',headRefOid:'${SHA}',baseRefName:'master',isDraft:false}));else console.log('stub merge only');
 `,{mode:0o700});
   await cli(l,['broker','set-token','--test-token','--test-owner-root',l.realHome,'--gh-bin',l.stub],DUMMY_BROKER);
   const brokerConfig = brokerFile(profileId(l.home),l.realHome);
   assert.equal(fs.statSync(brokerConfig).mode & 0o777,0o600,'private dummy broker configuration');
   assert.ok(!brokerConfig.startsWith(l.home+'/') && !brokerConfig.startsWith(agentHome(l.home)+'/'));
   fs.writeFileSync(l.launcher,brokerShimSource(l),{mode:0o700});
-  const now=Date.now(); const record={id:REQUEST,peer:'proof-peer',threadId:THREAD,taskId:TASK,verb:'merge',target:'a/b#42',summary:'Merge disposable stub PR',action:'Merge disposable stub PR',reason:'Test',risk:'Dummy stub only',requestedBy:{owner:owner.ownerDid,agent:'did:key:proof'},createdAt:new Date(now).toISOString(),expiresAt:new Date(now+86400000).toISOString(),status:'pending'};
+  const now=Date.now(); const record={id:REQUEST,peer:'proof-peer',threadId:THREAD,taskId:TASK,verb:'merge',target:'a/b#42',headSha:SHA,base:'master',summary:'Merge disposable stub PR',action:'Merge disposable stub PR',reason:'Test',risk:'Dummy stub only',requestedBy:{owner:owner.ownerDid,agent:'did:key:proof'},createdAt:new Date(now).toISOString(),expiresAt:new Date(now+86400000).toISOString(),status:'pending'};
   for(const [key,value] of [[k.request(REQUEST),record],[k.approval(REQUEST),{requestId:REQUEST,requestHash:requestHash(record),decision:'approved',note:'',decidedAt:new Date().toISOString()}]]) assert.ok((await owner.node.kv.put(key,value,{prefix:'',ifNoneMatch:'*'})).ok,'owner fixture write');
   prepareAgentProfile(l.home);
   writeProofHook(l);
