@@ -6,9 +6,10 @@ const MAX_CAUSE_DEPTH = 8;
 /**
  * The node's whole 401 body for a revoked chain (`delegation-revoked: <cid>`, or
  * `delegation-ancestor-revoked: ancestor=<cid> invoked=<cid>`; older nodes prefix `Invalid invocation: `),
- * as it ends an SDK error message (`<what failed>: 401 - <body>`). Anchored at both ends: only CIDs follow
- * the error kind, so a key or path in another 401 body (`Unauthorized Action: <space>/kv/…/delegation-revoked/ / …`)
- * or any other text that mentions "revoked" never matches.
+ * as it ends an SDK error message (`<what failed>: 401 - <body>`). The match starts at the `401 - ` separator
+ * and runs to the end of the message, and only letters and digits may follow the error kind (the CIDs are not
+ * checked beyond that), so a key or path in another 401 body (`Unauthorized Action: <space>/kv/…/delegation-revoked/ / …`)
+ * or any other text that mentions "revoked" does not match.
  */
 const REVOKED_GRANT_BODY =
   /\b401 - (?:Invalid invocation: )?delegation-(?:revoked: [A-Za-z0-9]+|ancestor-revoked: ancestor=[A-Za-z0-9]+ invoked=[A-Za-z0-9]+)\s*$/;

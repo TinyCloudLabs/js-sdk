@@ -1,7 +1,11 @@
 import type { AccountDelegationRecord, TinyCloudNode } from "@tinycloud/node-sdk";
 
-/** Pages read while looking a grant up (100 records each): past this the lookup fails closed instead of guessing. */
+/** Records asked for per page. A page that holds more is not trusted. */
+const PAGE_LIMIT = 100;
+/** Pages read while looking a grant up: past this the lookup fails closed instead of guessing. */
 const MAX_PAGES = 50;
+/** Records processed in total, whatever the page sizes: past this the lookup fails closed. */
+const MAX_RECORDS = PAGE_LIMIT * MAX_PAGES;
 /** Hops walked from the grant's issuer up to the account owner. */
 const MAX_CHAIN_DEPTH = 8;
 
@@ -40,6 +44,7 @@ export function ownerSpaceFromNodeRecords(
   ownerDid: string,
   sessionDid: string | undefined,
 ): string | undefined {
+  if (records.length > MAX_RECORDS) return undefined;
   // One CID may be listed once per direction; rows that disagree about issuer, recipient or scope are ambiguous.
   const matches = records.filter((record) => record.cid === cid);
   const target = matches[0];
@@ -57,7 +62,11 @@ export function ownerSpaceFromNodeRecords(
 
   const session = sessionDid === undefined ? undefined : normalizeDid(sessionDid);
   const byCid = new Map<string, AccountDelegationRecord[]>();
-  for (const record of records) byCid.set(record.cid, [...byCid.get(record.cid) ?? [], record]);
+  for (const record of records) {
+    const sameCid = byCid.get(record.cid);
+    if (sameCid === undefined) byCid.set(record.cid, [record]);
+    else sameCid.push(record);
+  }
   // One verdict per record: a crafted web of mutual parents costs one visit each, not one per path.
   const verdicts = new Map<string, boolean>();
   const rooted = (record: AccountDelegationRecord, depth: number): boolean => {
@@ -77,8 +86,9 @@ export function ownerSpaceFromNodeRecords(
 
 /**
  * Read the owner's node-side delegation records and resolve `cid` to its owner space.
- * `undefined` when the query is refused, more than {@link MAX_PAGES} pages would be needed, the grant is
- * absent or it fails {@link ownerSpaceFromNodeRecords}.
+ * `undefined` when the query is refused, a page holds more than {@link PAGE_LIMIT} records, more than
+ * {@link MAX_RECORDS} records (or {@link MAX_PAGES} pages) would be needed, the grant is absent or it fails
+ * {@link ownerSpaceFromNodeRecords}. Reading stops as soon as a running total passes the cap.
  */
 export async function lookupOwnerSpaceOnNode(
   node: Pick<TinyCloudNode, "delegationManager" | "sessionDid">,
@@ -89,10 +99,11 @@ export async function lookupOwnerSpaceOnNode(
   let cursor: string | undefined;
   for (let page = 0; page < MAX_PAGES; page += 1) {
     const query = await node.delegationManager.query({
-      direction: "all", limit: 100, ...(cursor === undefined ? {} : { cursor }),
+      direction: "all", limit: PAGE_LIMIT, ...(cursor === undefined ? {} : { cursor }),
     });
     if (!query.ok) return undefined;
-    records.push(...query.data.items);
+    if (query.data.items.length > PAGE_LIMIT || records.length + query.data.items.length > MAX_RECORDS) return undefined;
+    for (const item of query.data.items) records.push(item);
     cursor = query.data.nextCursor;
     if (cursor === undefined) return ownerSpaceFromNodeRecords(records, cid, ownerDid, node.sessionDid);
   }

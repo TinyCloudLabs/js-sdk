@@ -231,6 +231,54 @@ describe("lookupOwnerSpaceOnNode", () => {
     expect(await lookupOwnerSpaceOnNode(full as never, CID, OWNER)).toBeUndefined();
   });
 
+  const fixture = (item: AccountDelegationRecord, perPage: number, pages: number) => {
+    let calls = 0;
+    const node = { sessionDid: OWNER_SESSION, delegationManager: { query: async () => {
+      calls += 1;
+      return { ok: true as const, data: {
+        schemaVersion: 2 as const, items: Array.from({ length: perPage }, () => item),
+        ...(calls < pages ? { nextCursor: String(calls) } : {}),
+      } };
+    } } };
+    return { node, calls: () => calls };
+  };
+
+  test("a single page far over the page size is refused without being walked", async () => {
+    const huge = fixture(record({ delegatorDid: OWNER, parents: [] }), 200_000, 1);
+    const started = performance.now();
+    expect(await lookupOwnerSpaceOnNode(huge.node as never, CID, OWNER)).toBeUndefined();
+    expect(performance.now() - started).toBeLessThan(1000);
+    expect(huge.calls()).toBe(1);
+  });
+
+  test("a page just over the page size is refused even though the total is small", async () => {
+    expect(await lookupOwnerSpaceOnNode(fixture(record({ delegatorDid: OWNER, parents: [] }), 101, 1).node as never, CID, OWNER)).toBeUndefined();
+    expect(await lookupOwnerSpaceOnNode(fixture(record({ delegatorDid: OWNER, parents: [] }), 100, 1).node as never, CID, OWNER)).toBe(SPACE);
+  });
+
+  test("many full pages stop being read once the running total passes the record cap", async () => {
+    const many = fixture(record({ cid: "bafkr4iaother", delegatorDid: OWNER, parents: [] }), 100, 500);
+    const started = performance.now();
+    expect(await lookupOwnerSpaceOnNode(many.node as never, CID, OWNER)).toBeUndefined();
+    expect(performance.now() - started).toBeLessThan(1000);
+    expect(many.calls()).toBeLessThanOrEqual(51);
+  });
+
+  test("exactly the record cap, spread over the allowed pages, is still decided", async () => {
+    const full = fixture(record({ delegatorDid: OWNER, parents: [] }), 100, 50);
+    expect(await lookupOwnerSpaceOnNode(full.node as never, CID, OWNER)).toBe(SPACE);
+    expect(full.calls()).toBe(50);
+  });
+
+  test("a very large list of rows sharing the target's CID is refused quickly, directly or through the lookup", () => {
+    const rows = Array.from({ length: 200_000 }, () => record({ delegatorDid: OWNER, parents: [] }));
+    const started = performance.now();
+    expect(lookup(rows)).toBeUndefined();
+    expect(performance.now() - started).toBeLessThan(1000);
+    // Within the cap, identical rows are one grant and still resolve.
+    expect(lookup(rows.slice(0, 5000))).toBe(SPACE);
+  });
+
   test("a refused query yields nothing instead of throwing", async () => {
     const { node } = nodeWith([[record()], [ownerSessionRecord()]], 1);
     expect(await lookupOwnerSpaceOnNode(node as never, CID, OWNER)).toBeUndefined();
