@@ -91,25 +91,59 @@ export type Runner = (
 
 const OUTPUT_CAP = 256 * 1024;
 
+/** Process groups of runs in flight, so a stopping watcher can take its agents down with it. */
+const liveGroups = new Set<number>();
+
+function killGroup(pid: number | undefined): void {
+  if (pid === undefined) return;
+  try {
+    // A negative pid is the whole process group: the shell, the agent and everything they started.
+    process.kill(process.platform === 'win32' ? pid : -pid, 'SIGKILL');
+  } catch { /* already gone */ }
+}
+
+/** Kills every run still in flight (the watcher is stopping). */
+export function killAllRunners(): void {
+  for (const pid of liveGroups) killGroup(pid);
+  liveGroups.clear();
+}
+
+/** How long output may still arrive after the child itself has exited (a background job can hold the pipes forever). */
+const EXIT_GRACE_MS = 300;
+
+/**
+ * Runs a command in its own process group. On timeout the whole group is killed (a shell's `sleep &`, a pipeline,
+ * a subshell all die with it) and the run resolves at once, without waiting for pipe holders to close. When the
+ * child exits normally the run resolves within a short grace: a command that leaves a background job running is
+ * its own business, and its inherited pipes must not hold the wake open.
+ */
 export const spawnRunner: Runner = (bin, args, { cwd, env, input, timeoutMs }) => {
   const { promise, resolve } = defer<RunResult>();
   let stdout = '';
   let stderr = '';
-  const child = spawn(bin, args, { cwd, env, stdio: ['pipe', 'pipe', 'pipe'] });
+  let settled = false;
+  const child = spawn(bin, args, { cwd, env, stdio: ['pipe', 'pipe', 'pipe'], detached: process.platform !== 'win32' });
+  const pid = child.pid;
+  if (pid !== undefined) liveGroups.add(pid);
+  const finish = (code: number | null, extra = '') => {
+    if (settled) return;
+    settled = true;
+    clearTimeout(timer);
+    clearTimeout(grace);
+    if (pid !== undefined) liveGroups.delete(pid);
+    for (const stream of [child.stdin, child.stdout, child.stderr]) stream?.destroy();
+    resolve({ code, stdout, stderr: `${stderr}${extra}` });
+  };
+  let grace: NodeJS.Timeout | undefined;
   const timer = setTimeout(() => {
-    stderr += `\n(killed after ${timeoutMs} ms)`;
-    child.kill('SIGKILL');
+    killGroup(pid);
+    finish(null, `\n(killed after ${timeoutMs} ms)`);
   }, timeoutMs);
   child.stdout.on('data', (chunk) => { stdout = (stdout + chunk).slice(-OUTPUT_CAP); });
   child.stderr.on('data', (chunk) => { stderr = (stderr + chunk).slice(-OUTPUT_CAP); });
-  child.on('error', (error) => {
-    clearTimeout(timer);
-    resolve({ code: null, stdout, stderr: `${stderr}${error.message}` });
-  });
-  child.on('close', (code) => {
-    clearTimeout(timer);
-    resolve({ code, stdout, stderr });
-  });
+  child.on('error', (error) => finish(null, error.message));
+  child.on('exit', (code) => { grace = setTimeout(() => finish(code), EXIT_GRACE_MS); });
+  child.on('close', (code) => finish(code));
   child.stdin.on('error', () => { /* child exited before reading the prompt */ });
   child.stdin.end(input ?? '');
   return promise;

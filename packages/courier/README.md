@@ -159,8 +159,15 @@ subject is quoted and flattened onto one line.
 | `claude` | `claude -p --output-format json`, prompt on stdin. The session id is saved per thread in `<COURIER_HOME>/sessions.json` and later wakes pass `--resume`; a session the CLI no longer has starts a fresh one. Only `Bash(courier:*)` is allowed unless you pass `--claude-settings <file>` and/or `--claude-allow <rule>` (repeatable). `--claude-bin`. |
 | `exec` | `sh -c <cmd>` (`--exec <cmd>` alone selects it) with `COURIER_THREAD`, `COURIER_PEER`, `COURIER_MESSAGES` (JSON: id, intent, sent time), `COURIER_SUBJECT`, `COURIER_PROMPT` and `COURIER_HOME` in the environment. |
 
-A wake succeeds when the agent run exits 0 (`--wake-timeout`, default 900 s,
-kills a run that hangs). A failed wake stays pending and retries after 60 s.
+A wake succeeds when the agent run exits 0. `--wake-timeout` (default 900 s,
+at most 1800) is one deadline for the whole wake; on expiry the agent's whole
+process group is killed (a shell's background jobs, pipelines and subshells
+included) and the wake counts as failed. A failed wake stays pending, releases
+its claim and retries after 60 s. A timeout that hits after the agent already
+received the prompt therefore wakes the thread again: wakes are at-least-once.
+A command that exits normally but leaves a background job running is not
+waited for, and the job is left alone. When the watcher stops (SIGTERM, a state
+conflict) it kills the runs still in flight.
 
 ### Approvals: request fields, text rules and `courier approval`
 
