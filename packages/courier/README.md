@@ -110,7 +110,11 @@ For the OpenKey API host it is flag > env > derived. `TC_HOME`, `TC_PROFILE`,
 Every step logs one JSON object per line on stdout (`start`, `hook-event`,
 `delivered` with `via` and `latencyMs`, `woke`, errors). `--wake none` (the
 only adapter so far) wakes nobody; the `woke` line still records when a wake would fire. `--once` does a single catch-up pass,
-wakes immediately and exits. Run one watcher per profile; two would both wake.
+wakes immediately and exits. Run one watcher per profile: a second one fails
+with `state-conflict` on its first state write. Wakes are at-least-once: a
+crash between a wake and the state write wakes that thread again on restart.
+When a subscription is re-opened the watcher also runs a catch-up sync; the
+SDK's own ticket renewals are invisible to it, and the poll covers those gaps.
 
 ## Authority
 

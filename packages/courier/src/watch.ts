@@ -15,6 +15,8 @@ const TERMINAL_TASK_STATES = new Set([
 ]);
 const WAKEN_MEMORY = 500;
 const WAKE_RETRY_MS = 60_000;
+/** Thread and message ids come from key names the peer controls; they reach prompts and argv, so only ULID-like ids pass. */
+const SAFE_ID = /^[0-9A-Za-z_-]{1,64}$/;
 
 export interface PendingWake {
   peer: string;
@@ -104,6 +106,9 @@ function sleep(ms: number, signal: AbortSignal): Promise<void> {
 export class Watcher {
   private state: WatchState = emptyWatchState();
   private readonly retryAt = new Map<string, number>();
+  private readonly waking = new Set<string>();
+  /** Etag of me/state/watch.json as this watcher last saw it: null = absent, undefined = unknown (fetch before writing). */
+  private stateEtag: string | null | undefined;
   private readonly taskCache = new Map<string, { etag: string | null; terminal: boolean }>();
   private readonly metaMirrored = new Set<string>();
   private readonly syncing = new Map<string, { again: boolean; via: Via }>();
@@ -119,6 +124,7 @@ export class Watcher {
   async loadState(): Promise<void> {
     const got = await getJson<WatchState>(this.deps.selfKv, k.watchState);
     const value = got?.value;
+    this.stateEtag = got?.etag ?? null;
     this.state = isRecord(value) && value.v === 1
       ? { ...emptyWatchState(), ...(value as Partial<WatchState>) }
       : emptyWatchState();
@@ -128,17 +134,24 @@ export class Watcher {
     return structuredClone(this.state);
   }
 
-  /** Serialised: callers mutate `this.state` inside `fn`, then it is written with if-match. */
+  /**
+   * Serialised: callers mutate `this.state` inside `fn`, then it is written with if-match against the etag this
+   * watcher last saw. A second `watch` on the same profile therefore fails with `state-conflict` instead of
+   * silently overwriting (last writer wins) the other's pending wakes.
+   */
   private mutate<T>(fn: () => T): Promise<T> {
     const run = this.stateQueue.then(async () => {
       const result = fn();
-      const key = k.watchState;
-      const current = await getJson<WatchState>(this.deps.selfKv, key);
+      const { selfKv } = this.deps;
+      if (this.stateEtag === undefined) this.stateEtag = (await getJson<WatchState>(selfKv, k.watchState))?.etag ?? null;
       try {
-        if (current?.etag) await putMatch(this.deps.selfKv, key, this.state, current.etag);
-        else await putCreate(this.deps.selfKv, key, this.state);
+        const written = this.stateEtag
+          ? await putMatch(selfKv, k.watchState, this.state, this.stateEtag)
+          : await putCreate(selfKv, k.watchState, this.state);
+        this.stateEtag = written ?? undefined;
       } catch (error) {
         if (error instanceof CourierError && error.code === 'conflict') {
+          this.stateEtag = undefined;
           throw new CourierError('state-conflict', 'me/state/watch.json changed under this watcher; is a second `watch` running for this profile?');
         }
         throw error;
@@ -185,15 +198,26 @@ export class Watcher {
 
     const delivered: { threadId: string; messageId: string; intent?: string }[] = [];
     for (const selected of selectUndelivered(keys, receipts)) {
-      const got = await getJson<unknown>(peerKv, selected.key);
-      if (!got) continue;
-      const value = got.value;
-      if (!isRecord(value) || value.messageId !== selected.messageId || value.contextId !== selected.threadId) continue;
-      await this.mirrorCreate(k.mirrorMsg(peer.handle, selected.threadId, selected.messageId), value);
-      delivered.push({ threadId: selected.threadId, messageId: selected.messageId, intent: messageView(value).intent });
+      if (!SAFE_ID.test(selected.threadId) || !SAFE_ID.test(selected.messageId)) {
+        log('ignored', { peer: peer.handle, reason: 'unsafe-id' });
+        continue;
+      }
+      try {
+        const got = await getJson<unknown>(peerKv, selected.key);
+        if (!got) continue;
+        const value = got.value;
+        if (!isRecord(value) || value.messageId !== selected.messageId || value.contextId !== selected.threadId) continue;
+        await this.mirrorCreate(k.mirrorMsg(peer.handle, selected.threadId, selected.messageId), value);
+        delivered.push({ threadId: selected.threadId, messageId: selected.messageId, intent: messageView(value).intent });
+      } catch (error) {
+        // Not delivered, so no receipt: this message is retried on the next sync; the others go ahead.
+        log('sync-error', { peer: peer.handle, messageId: selected.messageId, ...errInfo(error) });
+      }
     }
-    await this.mirrorThreads(peer, peerKv, keys);
-    if (!delivered.length) return;
+    if (!delivered.length) {
+      await this.mirrorThreads(peer, peerKv, keys);
+      return;
+    }
 
     const subjects = new Map<string, string>();
     for (const threadId of new Set(delivered.map((d) => d.threadId))) {
@@ -222,6 +246,7 @@ export class Watcher {
       }
     });
     await commitReceipts(selfKv, new Map([[peer.handle, delivered.map(({ threadId, messageId }) => ({ threadId, messageId }))]]));
+    await this.mirrorThreads(peer, peerKv, keys);
   }
 
   private async mirrorCreate(key: string, value: unknown): Promise<void> {
@@ -232,29 +257,40 @@ export class Watcher {
     }
   }
 
-  /** meta.json is immutable (create-only); tasks are mutable, so copy the latest until they are terminal. */
+  /**
+   * meta.json is immutable (create-only); tasks are mutable, so copy the latest until they are terminal. Runs after
+   * message delivery and each item is isolated: a bad or unwritable peer task never blocks receipts or wakes.
+   */
   private async mirrorThreads(peer: StoredPeer, peerKv: KV, keys: string[]): Promise<void> {
     for (const key of keys) {
-      const meta = /\/threads\/([^/]+)\/meta\.json$/.exec(key);
-      if (meta) {
-        if (this.metaMirrored.has(key)) continue;
-        const got = await getJson<unknown>(peerKv, key);
-        if (!got) continue;
-        await this.mirrorCreate(k.mirrorMeta(peer.handle, meta[1]), got.value);
-        this.metaMirrored.add(key);
-        continue;
+      try {
+        await this.mirrorThreadItem(peer, peerKv, key);
+      } catch (error) {
+        this.deps.log('mirror-error', { peer: peer.handle, ...errInfo(error) });
       }
-      const task = /\/threads\/([^/]+)\/task\/([^/]+)\.json$/.exec(key);
-      if (!task) continue;
-      const cached = this.taskCache.get(key);
-      if (cached?.terminal) continue;
-      const got = await getJson<unknown>(peerKv, key);
-      if (!got) continue;
-      if (cached && got.etag && cached.etag === got.etag) continue;
-      await putOverwrite(this.deps.selfKv, k.mirrorTask(peer.handle, task[1], task[2]), got.value);
-      const state = taskView(got.value).state;
-      this.taskCache.set(key, { etag: got.etag, terminal: Boolean(state && TERMINAL_TASK_STATES.has(state)) });
     }
+  }
+
+  private async mirrorThreadItem(peer: StoredPeer, peerKv: KV, key: string): Promise<void> {
+    const meta = /\/threads\/([^/]+)\/meta\.json$/.exec(key);
+    if (meta) {
+      if (this.metaMirrored.has(key)) return;
+      const got = await getJson<unknown>(peerKv, key);
+      if (!got) return;
+      await this.mirrorCreate(k.mirrorMeta(peer.handle, meta[1]), got.value);
+      this.metaMirrored.add(key);
+      return;
+    }
+    const task = /\/threads\/([^/]+)\/task\/([^/]+)\.json$/.exec(key);
+    if (!task) return;
+    const cached = this.taskCache.get(key);
+    if (cached?.terminal) return;
+    const got = await getJson<unknown>(peerKv, key);
+    if (!got) return;
+    if (cached && got.etag && cached.etag === got.etag) return;
+    await putOverwrite(this.deps.selfKv, k.mirrorTask(peer.handle, task[1], task[2]), got.value);
+    const state = taskView(got.value).state;
+    this.taskCache.set(key, { etag: got.etag, terminal: Boolean(state && TERMINAL_TASK_STATES.has(state)) });
   }
 
   /** Own `me/approvals/`: record new decisions (the wake on them is added with `courier approval`). */
@@ -278,36 +314,46 @@ export class Watcher {
 
   // ---------- wake ----------
 
-  /** Wake every thread whose debounce has elapsed (`force`: all of them now). */
+  /** Wake every thread whose debounce has elapsed (`force`: all of them now). Threads wake in parallel, one wake per thread at a time. */
   async tick(force = false): Promise<void> {
     const at = this.now();
+    const runs: Promise<void>[] = [];
     for (const [key, pending] of Object.entries(this.state.pending)) {
+      if (this.waking.has(key)) continue;
       if (!force && wakeDueAt(pending, this.opts.debounceMs) > at) continue;
       if (!force && (this.retryAt.get(key) ?? 0) > at) continue;
-      try {
-        await this.deps.wake({ peer: pending.peer, threadId: pending.threadId, subject: pending.subject, messages: [...pending.messages] });
-      } catch (error) {
-        this.retryAt.set(key, at + WAKE_RETRY_MS);
-        this.deps.log('wake-error', { peer: pending.peer, threadId: pending.threadId, ...errInfo(error) });
-        continue;
-      }
-      this.retryAt.delete(key);
-      const woken = pending.messages.map((m) => m.messageId);
-      const oldestSentAt = pending.messages[0]?.sentAt ?? '';
-      await this.mutate(() => {
-        const current = this.state.pending[key];
-        if (!current) return;
-        // Messages that landed while the wake ran stay pending for the next one.
+      this.waking.add(key);
+      runs.push(this.wakeThread(key, pending, at).finally(() => this.waking.delete(key)));
+    }
+    await Promise.all(runs);
+  }
+
+  private async wakeThread(key: string, pending: PendingWake, at: number): Promise<void> {
+    // Messages that land while the wake runs stay pending for the next one, so wake exactly this snapshot.
+    const messages = [...pending.messages];
+    const woken = messages.map((m) => m.messageId);
+    try {
+      await this.deps.wake({ peer: pending.peer, threadId: pending.threadId, subject: pending.subject, messages });
+    } catch (error) {
+      this.retryAt.set(key, at + WAKE_RETRY_MS);
+      this.deps.log('wake-error', { peer: pending.peer, threadId: pending.threadId, ...errInfo(error) });
+      return;
+    }
+    this.retryAt.delete(key);
+    const oldestSentAt = messages[0]?.sentAt ?? '';
+    await this.mutate(() => {
+      const current = this.state.pending[key];
+      if (current) {
         current.messages = current.messages.filter((m) => !woken.includes(m.messageId));
         if (!current.messages.length) delete this.state.pending[key];
-        this.state.woken = [...this.state.woken, ...woken].slice(-WAKEN_MEMORY);
-      });
-      this.deps.log('woke', {
-        peer: pending.peer, threadId: pending.threadId, messageIds: woken,
-        oldestSentAt: oldestSentAt || null,
-        wakeLatencyMs: oldestSentAt ? this.now() - Date.parse(oldestSentAt) : null,
-      });
-    }
+      }
+      this.state.woken = [...this.state.woken, ...woken].slice(-WAKEN_MEMORY);
+    });
+    this.deps.log('woke', {
+      peer: pending.peer, threadId: pending.threadId, messageIds: woken,
+      oldestSentAt: oldestSentAt || null,
+      wakeLatencyMs: oldestSentAt ? this.now() - Date.parse(oldestSentAt) : null,
+    });
   }
 
   // ---------- run loop ----------
@@ -330,7 +376,7 @@ export class Watcher {
 
     const supervisors = new Map<string, AbortController>();
     const reconcile = () => {
-      const desired = new Map<string, { sub: HookSubscription; hooks: () => Promise<HooksLike>; onEvent: (event: HookEventLike) => void }>();
+      const desired = new Map<string, { sub: HookSubscription; hooks: () => Promise<HooksLike>; onEvent: (event?: HookEventLike) => void }>();
       for (const peer of this.deps.loadPeers()) {
         if (peer.status !== 'paired' || !peer.inbound || !peer.theirHandleForMe) continue;
         // The id carries the delegation CID: a renewed delegation restarts the subscription.
@@ -354,7 +400,6 @@ export class Watcher {
       for (const [id, source] of desired) {
         if (supervisors.has(id)) continue;
         const controller = new AbortController();
-        signal.addEventListener('abort', () => controller.abort(), { once: true });
         supervisors.set(id, controller);
         void this.supervise(id, source.sub, source.hooks, source.onEvent, controller.signal);
       }
@@ -381,13 +426,18 @@ export class Watcher {
     id: string,
     sub: HookSubscription,
     hooks: () => Promise<HooksLike>,
-    onEvent: (event: HookEventLike) => void,
+    onEvent: (event?: HookEventLike) => void,
     signal: AbortSignal,
   ): Promise<void> {
     let failures = 0;
+    let opened = false;
     while (!signal.aborted) {
       try {
         this.deps.log('hook-subscribe', { source: id.split(':').slice(0, 2).join(':'), ttlSeconds: this.opts.ticketSeconds });
+        // Spec §8.2: catch up on every (re)connect, since hooks have no replay. (The SDK's own ticket reopen is
+        // invisible here; the poll covers those gaps.)
+        if (opened) onEvent();
+        opened = true;
         const service = await hooks();
         for await (const event of service.subscribe([sub], { ttlSeconds: this.opts.ticketSeconds, signal })) {
           failures = 0;

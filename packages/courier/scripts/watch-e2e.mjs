@@ -2,7 +2,7 @@
  * TC-712 watcher end to end on tee.node with two throwaway identities.
  *
  * alice runs `courier watch`; bob sends. Measures send → delivered (hook or poll) → woke.
- * Run: node scripts/watch-e2e.mjs [--debounce 30] [--poll 60] [--ticket 25] [--runs 3] [--wake none|exec]
+ * Run: node scripts/watch-e2e.mjs [--debounce 30] [--poll 60] [--ticket 25] [--runs 3]
  * Writes throwaway identities to tee.node (COURIER_HOST overrides). Owner keys stay in this process.
  */
 import { execFile, spawn } from 'node:child_process';
@@ -22,8 +22,6 @@ const opt = (name, fallback) => {
 };
 const watchArgs = ['--debounce', opt('debounce', '30'), '--poll', opt('poll', '60'), '--ticket', opt('ticket', '25')];
 const runs = Number(opt('runs', '3'));
-const wakeAdapter = opt('wake', 'none');
-const execScript = opt('exec-script', '');
 
 async function courier(home, args, { input } = {}) {
   const pending = run(process.execPath, [CLI, ...args], { env: { ...process.env, COURIER_HOME: home }, timeout: 180_000 });
@@ -56,8 +54,7 @@ const artC = await courier(alice, ['pair', 'accept', '--file', write('b.json', a
 await courier(bob, ['pair', 'accept', '--file', write('c.json', artC)]);
 console.log('paired alice <-> bob');
 
-const wakeArgs = wakeAdapter === 'exec' ? ['--wake', 'exec', '--exec', execScript] : ['--wake', wakeAdapter];
-const watcher = spawn(process.execPath, [CLI, 'watch', ...wakeArgs, ...watchArgs], {
+const watcher = spawn(process.execPath, [CLI, 'watch', '--wake', 'none', ...watchArgs], {
   env: { ...process.env, COURIER_HOME: alice }, stdio: ['ignore', 'pipe', 'inherit'],
 });
 const events = [];
