@@ -130,19 +130,107 @@ describe("awaitSpaceSetup", () => {
   test("a session that cannot read the space is warned about, never waited on", async () => {
     const { state, deps } = clock();
 
-    await awaitSpaceSetup(pending, { ...deps, probe: probeReturning("unknown").probe });
+    await awaitSpaceSetup(pending, { ...deps, probe: probeReturning("unreadable").probe });
+
+    expect(state.sleeps).toEqual([]);
+    expect(state.lines).toEqual([expect.stringContaining("cannot read your TinyCloud space")]);
+  });
+
+  test("a transient first read does not end a pending wait: it keeps polling until the space is hosted", async () => {
+    const { state, deps } = clock();
+    const { state: probed, probe } = probeReturning("transient", "transient", "hosted");
+
+    await awaitSpaceSetup(pending, { ...deps, probe });
+
+    expect(probed.calls).toBe(3);
+    expect(state.sleeps).toEqual([2_000, 3_000]);
+    expect(state.lines.at(-1)).toBe("Your space is ready.");
+  });
+
+  test("a pending wait that only ever sees transient failures runs to the bound, then times out", async () => {
+    const { state, deps } = clock();
+    const started = state.time;
+
+    const failure = await awaitSpaceSetup(pending, { ...deps, probe: probeReturning("transient").probe }).then(() => undefined, (error: unknown) => error);
+
+    expect(failure).toMatchObject({ code: "SPACE_SETUP_PENDING" });
+    expect(state.time - started).toBe(150_000);
+  });
+
+  test("a probe that throws counts as transient", async () => {
+    const { state, deps } = clock();
+    const probe = probeReturning("hosted").probe;
+    let calls = 0;
+
+    await awaitSpaceSetup(pending, { ...deps, probe: async () => { if (calls++ === 0) throw new Error("socket closed"); return probe(); } });
+
+    expect(calls).toBe(2);
+    expect(state.sleeps).toEqual([2_000]);
+  });
+
+  test("a failed read with no pending setup is a warning that the space could not be checked", async () => {
+    const { state, deps } = clock();
+
+    await awaitSpaceSetup({ ready: false, pending: false, error: "final failure" }, { ...deps, probe: probeReturning("transient").probe });
 
     expect(state.sleeps).toEqual([]);
     expect(state.lines).toEqual([expect.stringContaining("could not check")]);
   });
+});
 
-  test("a probe that throws counts as unknown", async () => {
+/** The three `/delegate` readiness shapes of OpenKey #304, as the relay carries them. */
+describe("OpenKey #304 readiness responses", () => {
+  const timeoutCode = "TinyCloud account setup is still running (tinycloud_requested_space_timeout): the requested space was not hosted within 10 s.";
+  const retryingCode = "TinyCloud account setup failed (tinycloud_bootstrap_failed): host request failed; retrying.";
+  const finalError = "TinyCloud account setup failed (tinycloud_bootstrap_failed): host request failed.";
+
+  test.each([
+    ["null + pending + the requested-space timeout code", { spaceReady: null, spacePending: true, spaceError: timeoutCode }, timeoutCode],
+    ["null + pending + a retrying failure code", { spaceReady: null, spacePending: true, spaceError: retryingCode }, retryingCode],
+  ])("%s: keeps waiting and finishes when the space is hosted, showing the code as progress", async (_name, relayed, error) => {
     const { state, deps } = clock();
+    const report = spaceSetupReport(relayed)!;
+    const { state: probed, probe } = probeReturning("unhosted", "unhosted", "hosted");
 
-    await awaitSpaceSetup(pending, { ...deps, probe: async () => { throw new Error("socket closed"); } });
+    await awaitSpaceSetup(report, { ...deps, probe });
 
+    expect(report).toEqual({ ready: null, pending: true, error });
+    expect(probed.calls).toBe(3);
+    expect(state.lines[0]).toContain(error);
+    expect(state.lines.at(-1)).toBe("Your space is ready.");
+  });
+
+  test("null + pending + error that never resolves times out with SPACE_SETUP_PENDING, not SPACE_SETUP_FAILED, and names the last report", async () => {
+    const { deps } = clock();
+    const report = spaceSetupReport({ spaceReady: null, spacePending: true, spaceError: retryingCode })!;
+
+    const failure = await awaitSpaceSetup(report, { ...deps, probe: probeReturning("unhosted").probe }).then(() => undefined, (error: unknown) => error);
+
+    expect(failure).toMatchObject({ code: "SPACE_SETUP_PENDING", message: expect.stringContaining(retryingCode) });
+  });
+
+  test("spaceReady null alone is still running too", async () => {
+    const { deps } = clock();
+    const report = spaceSetupReport({ spaceReady: null })!;
+    const { state: probed, probe } = probeReturning("unhosted", "hosted");
+
+    await awaitSpaceSetup(report, { ...deps, probe });
+
+    expect(probed.calls).toBe(2);
+  });
+
+  test("false + error is final: it fails at once with OpenKey's text and code", async () => {
+    const { state, deps } = clock();
+    const report = spaceSetupReport({ spaceReady: false, spaceError: finalError })!;
+
+    const failure = await awaitSpaceSetup(report, { ...deps, probe: probeReturning("unhosted").probe }).then(() => undefined, (error: unknown) => error);
+
+    expect(failure).toMatchObject({ code: "SPACE_SETUP_FAILED", message: expect.stringContaining(finalError) });
     expect(state.sleeps).toEqual([]);
-    expect(state.lines).toHaveLength(1);
+  });
+
+  test("true is ready: nothing to wait for", () => {
+    expect(spaceSetupReport({ spaceReady: true })).toBeUndefined();
   });
 });
 
@@ -181,15 +269,17 @@ describe("kvSpaceProbe", () => {
     expect(await kvSpaceProbe(ctx, [kvList], fakeNode({ ok: true, data: {} }).restore)()).toBe("hosted");
   });
 
-  test("a refusal or network failure is unknown, not a verdict on the space", async () => {
+  test("a network or server failure is transient; a refusal means this session cannot read the space", async () => {
+    const down = { ok: false, error: { code: "NETWORK_ERROR", message: "503 - unavailable", meta: { status: 503 } } };
     const denied = { ok: false, error: { code: "PERMISSION_DENIED", message: "403 - forbidden", meta: { status: 403 } } };
-    expect(await kvSpaceProbe(ctx, [kvList], fakeNode(denied).restore)()).toBe("unknown");
+    expect(await kvSpaceProbe(ctx, [kvList], fakeNode(down).restore)()).toBe("transient");
+    expect(await kvSpaceProbe(ctx, [kvList], fakeNode(denied).restore)()).toBe("unreadable");
   });
 
-  test("no kv grant, or no restorable session, is unknown and reads nothing", async () => {
+  test("no kv grant, or no restorable session, is unreadable and reads nothing", async () => {
     const node = fakeNode({ ok: true, data: {} });
-    expect(await kvSpaceProbe(ctx, [capabilities], node.restore)()).toBe("unknown");
+    expect(await kvSpaceProbe(ctx, [capabilities], node.restore)()).toBe("unreadable");
     expect(node.calls).toEqual([]);
-    expect(await kvSpaceProbe(ctx, [kvList], async () => ({ unavailable: "session_missing" }) as never)()).toBe("unknown");
+    expect(await kvSpaceProbe(ctx, [kvList], async () => ({ unavailable: "session_missing" }) as never)()).toBe("unreadable");
   });
 });

@@ -23,13 +23,27 @@ const POLL_DELAYS_MS: readonly number[] = [2_000, 3_000, 5_000, 8_000, 13_000, 1
 const PROGRESS_INTERVAL_MS = 15_000;
 const SPACE_ERROR_MAX_LENGTH = 500;
 
-/** What one read of the space showed. `unknown`: it could not be told (no readable grant, or a failure that is not the unhosted 404). */
-export type SpaceProbeResult = "hosted" | "unhosted" | "unknown";
+/**
+ * What one read of the space showed:
+ * - `hosted`: the read worked, or hit only a missing key.
+ * - `unhosted`: the node answered `404 Space not found`.
+ * - `transient`: it failed some other way (network, 5xx); asking again may work.
+ * - `unreadable`: this session cannot make the read at all (no kv grant, no restorable session, refused); asking again cannot help.
+ */
+export type SpaceProbeResult = "hosted" | "unhosted" | "transient" | "unreadable";
 
-/** OpenKey's account of the space setup, when it is not a plain success. */
+/**
+ * OpenKey's account of the space setup, when it is not a plain success. It
+ * follows OpenKey's `/delegate` readiness (TC-1608, OpenKey #304):
+ * `spaceReady: true` is ready; `spaceReady: null` with `spacePending: true` is
+ * still running (with or without `spaceError`, which then describes a
+ * timeout or a failure a background retry will try again); `spaceReady: false`
+ * with `spaceError` is final.
+ */
 export interface SpaceSetupReport {
   /** `false`: OpenKey will not host it; `null`: setup is running; absent: not reported. */
   readonly ready: boolean | null | undefined;
+  /** Setup is still running (`spacePending: true` or `spaceReady: null`): keep waiting. */
   readonly pending: boolean;
   /** OpenKey's `spaceError`, verbatim (control characters removed, bounded), including its error code. */
   readonly error?: string;
@@ -44,11 +58,12 @@ export function spaceSetupReport(delegation: Record<string, unknown>): SpaceSetu
   const rawError = typeof delegation.spaceError === "string" ? delegation.spaceError : undefined;
   // OpenKey's text is printed to a terminal: one line, no control characters.
   const error = rawError?.replace(/[\u0000-\u001f\u007f-\u009f\s]+/g, " ").trim().slice(0, SPACE_ERROR_MAX_LENGTH);
-  const pending = delegation.spacePending === true;
   const ready = delegation.spaceReady;
-  if (!pending && !error && ready !== false && ready !== null) return undefined;
+  if (ready === true) return undefined;
+  const pending = delegation.spacePending === true || ready === null;
+  if (!pending && !error && ready !== false) return undefined;
   return {
-    ready: ready === true || ready === false || ready === null ? ready : undefined,
+    ready: ready === false || ready === null ? ready : undefined,
     pending,
     ...(error ? { error } : {}),
   };
@@ -66,11 +81,13 @@ export interface SpaceSetupDependencies {
 /**
  * Act on OpenKey's report after the session was saved.
  *
- * - A read that already works ends it (a `spaceError` is still reported as a warning).
- * - `spaceError` with the space still unhosted fails with `SPACE_SETUP_FAILED`, OpenKey's error kept in the message.
- * - `spacePending` with the space unhosted polls up to {@link SPACE_SETUP_TIMEOUT_MS}; then `SPACE_SETUP_PENDING`.
+ * - A read that already works ends it.
+ * - While OpenKey says setup is running (`pending`), the wait goes on, whatever `spaceError` says and
+ *   whether a read was `unhosted` or failed transiently, until {@link SPACE_SETUP_TIMEOUT_MS}; then `SPACE_SETUP_PENDING`.
+ *   `spaceError` is shown as progress and kept in the timeout message.
+ * - Not pending, with `spaceError`, and the space unhosted: final, `SPACE_SETUP_FAILED`, OpenKey's error kept in the message.
  * - `spaceReady: false` alone (auto-sign off, external wallet): OpenKey will not host it, so waiting cannot help; it warns.
- * - A space this session cannot read (no kv grant) is never waited on; it warns.
+ * - A session that cannot read the space (no kv grant) is never waited on; it warns.
  */
 export async function awaitSpaceSetup(report: SpaceSetupReport, deps: SpaceSetupDependencies): Promise<void> {
   const write = deps.write ?? ((line: string) => { process.stderr.write(`${line}\n`); });
@@ -79,30 +96,35 @@ export async function awaitSpaceSetup(report: SpaceSetupReport, deps: SpaceSetup
   const timeoutMs = deps.timeoutMs ?? SPACE_SETUP_TIMEOUT_MS;
   const started = now();
   const deadline = started + timeoutMs;
-  const probe = async (): Promise<SpaceProbeResult> => deps.probe().catch(() => "unknown" as const);
+  const probe = async (): Promise<SpaceProbeResult> => deps.probe().catch(() => "transient" as const);
+  const unreadable = (): void => write(
+    `Warning: this login cannot read your TinyCloud space to check it${report.error ? `; OpenKey reported: ${report.error}` : report.pending ? "; OpenKey is still setting it up" : ""}. ` +
+    `If the first storage command fails with "Space not found", OpenKey is still setting up your space. ${OPENKEY_SPACE_SETUP_RETRY_HINT}`,
+  );
 
-  const first = await probe();
-  if (first === "hosted") {
-    if (report.error) write(`Warning: OpenKey reported a problem finishing your account setup: ${report.error}`);
+  let result = await probe();
+  if (result === "hosted") {
+    if (!report.pending && report.error) write(`Warning: OpenKey reported a problem finishing your account setup: ${report.error}`);
     return;
   }
-  if (first === "unknown") {
-    write(
-      `Warning: could not check whether your TinyCloud space is hosted${report.error ? `; OpenKey reported: ${report.error}` : report.pending ? "; OpenKey is still setting it up" : ""}. ` +
-      `If the first storage command fails with "Space not found", OpenKey is still setting up your space. ${OPENKEY_SPACE_SETUP_RETRY_HINT}`,
-    );
+  if (result === "unreadable") {
+    unreadable();
     return;
   }
 
-  if (report.error) {
-    throw new CLIError(
-      "SPACE_SETUP_FAILED",
-      `OpenKey could not finish setting up your space: ${report.error} Your login is saved, but storage commands will fail with "Space not found" until the space is hosted.`,
-      ExitCode.ERROR,
-      { hint: "Approve again in OpenKey to re-run the setup, then retry." },
-    );
-  }
   if (!report.pending) {
+    if (result === "transient") {
+      write(`Warning: could not check whether your TinyCloud space is hosted${report.error ? `; OpenKey reported: ${report.error}` : ""}. ${OPENKEY_SPACE_SETUP_RETRY_HINT}`);
+      return;
+    }
+    if (report.error) {
+      throw new CLIError(
+        "SPACE_SETUP_FAILED",
+        `OpenKey could not finish setting up your space: ${report.error} Your login is saved, but storage commands will fail with "Space not found" until the space is hosted.`,
+        ExitCode.ERROR,
+        { hint: "Approve again in OpenKey to re-run the setup, then retry." },
+      );
+    }
     write(
       "Warning: OpenKey did not set up your TinyCloud space (spaceReady: false), so storage commands will fail with \"Space not found\". " +
       "Turn on Auto-Sign in OpenKey and approve again, or host the space from a wallet profile.",
@@ -110,14 +132,22 @@ export async function awaitSpaceSetup(report: SpaceSetupReport, deps: SpaceSetup
     return;
   }
 
-  write("Setting up your space… (OpenKey is hosting it; this can take a minute or two)");
+  write(
+    "Setting up your space… (OpenKey is hosting it; this can take a minute or two)" +
+    (report.error ? ` OpenKey reported: ${report.error} It is still retrying.` : ""),
+  );
   let lastProgress = started;
   for (let attempt = 0; ; attempt++) {
     const current = now();
     if (current >= deadline) break;
     await sleep(Math.min(POLL_DELAYS_MS[Math.min(attempt, POLL_DELAYS_MS.length - 1)]!, deadline - current));
-    if (await probe() === "hosted") {
+    result = await probe();
+    if (result === "hosted") {
       write("Your space is ready.");
+      return;
+    }
+    if (result === "unreadable") {
+      unreadable();
       return;
     }
     const elapsed = now();
@@ -128,7 +158,7 @@ export async function awaitSpaceSetup(report: SpaceSetupReport, deps: SpaceSetup
   }
   throw new CLIError(
     "SPACE_SETUP_PENDING",
-    `OpenKey is still setting up your space after ${Math.round(timeoutMs / 1000)} seconds. Your login is saved, but storage commands will fail with "Space not found" until the space is hosted.`,
+    `OpenKey is still setting up your space after ${Math.round(timeoutMs / 1000)} seconds.${report.error ? ` OpenKey's last report: ${report.error}` : ""} Your login is saved, but storage commands will fail with "Space not found" until the space is hosted.`,
     ExitCode.ERROR,
     { hint: OPENKEY_SPACE_SETUP_RETRY_HINT },
   );
@@ -157,8 +187,9 @@ const UNHOSTED = /space not found/i;
 /**
  * The production probe: one kv read with the session this login just saved,
  * inside the scope the owner approved. Only the unhosted 404 means
- * `unhosted`; success and a plain missing key mean `hosted`; any other
- * failure (denied, network) means `unknown`.
+ * `unhosted`; success and a plain missing key mean `hosted`; no readable
+ * grant, no restorable session or a 401/403 mean `unreadable`; any other
+ * failure (network, 5xx) is `transient`.
  */
 export function kvSpaceProbe(
   ctx: ProfileSessionContext,
@@ -168,9 +199,9 @@ export function kvSpaceProbe(
   const target = readTarget(permissions);
   let restored: ProfileSessionRestore | undefined;
   return async () => {
-    if (!target) return "unknown";
+    if (!target) return "unreadable";
     restored ??= await restore(ctx);
-    if ("unavailable" in restored) return "unknown";
+    if ("unavailable" in restored) return "unreadable";
     const kv = restored.node.kv;
     const result = target.op === "list"
       ? await kv.list({ prefix: target.prefix, limit: 1 })
@@ -178,7 +209,8 @@ export function kvSpaceProbe(
     if (result.ok) return "hosted";
     const status = (result.error.meta as { status?: number } | undefined)?.status;
     if (status === 404 && UNHOSTED.test(result.error.message)) return "unhosted";
-    return result.error.code === "KV_NOT_FOUND" || status === 404 ? "hosted" : "unknown";
+    if (status === 401 || status === 403) return "unreadable";
+    return result.error.code === "KV_NOT_FOUND" || status === 404 ? "hosted" : "transient";
   };
 }
 
