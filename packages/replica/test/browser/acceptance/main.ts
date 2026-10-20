@@ -154,14 +154,17 @@ const api = {
   },
 
   replicationStatus: () => requireReplication("status")(),
-  /** A failed sync is data for the scenario, not an exception: it reports the error code. */
-  async replicationSync(): Promise<{ status: "ok" } | { status: "error"; code: string; message: string }> {
+  /** A failed sync is data for the scenario, not an exception: it reports the error code and, for a gated refusal, the gate reason. */
+  async replicationSync(): Promise<{ status: "ok" } | { status: "error"; code: string; message: string; gate?: string }> {
     try {
       await requireReplication("sync")();
       return { status: "ok" };
     } catch (error) {
       const code = typeof error === "object" && error !== null && "code" in error ? String(error.code) : "ERROR";
-      return { status: "error", code, message: error instanceof Error ? error.message : String(error) };
+      return {
+        status: "error", code, message: error instanceof Error ? error.message : String(error),
+        ...(typeof error === "object" && error !== null && "gate" in error && typeof error.gate === "string" ? { gate: error.gate } : {}),
+      };
     }
   },
   /** Restore the persisted session (what an app does on load), without a wallet prompt. */
