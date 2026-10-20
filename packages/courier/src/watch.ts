@@ -33,6 +33,8 @@ const DAY_MS = 24 * 3600 * 1000;
 /** A peer can make this side's watcher notify its human at most this often per hour, and the outbox never grows past `MAX_OUTBOX`. */
 const NOTICES_PER_PEER_PER_HOUR = 10;
 const NOTICES_PER_HOUR = 10;
+const NOTICE_RESERVE_PER_PEER = 3;
+const MAX_COALESCED_PAUSES = 999999;
 const MAX_PEER_CLOCK_SKEW_MS = 10 * 60_000;
 const MAX_OUTBOX = 50;
 const MAX_OUTBOX_TRIES = 8;
@@ -61,6 +63,15 @@ interface ApprovalWake {
   subject: string;
 }
 
+interface PauseEpisode {
+  kind: '' | 'paused' | 'peer-paused';
+  eventId: string;
+  /** Fixed-width saturating count of additional transitions represented by this slot. */
+  repeats: string;
+}
+const emptyEpisode = (): PauseEpisode => ({ kind: '', eventId: '0'.repeat(26), repeats: '000000' });
+const episodeKey = (key: string, slot: number) => `notice:${key}:${slot}`;
+
 /** Allocated only from our own thread/wake/pause records, never from incoming notice ids. */
 interface ThreadNoticeState {
   ourPaused: boolean;
@@ -68,16 +79,14 @@ interface ThreadNoticeState {
   lastPeerNoticeId: string;
   lastNoticeSentAt: string;
   ourMarkerId: string;
-  ourNoticePending: boolean;
-  peerNoticePending: boolean;
-  peerNoticeId: string;
+  episodes: [PauseEpisode, PauseEpisode];
   informPending: boolean;
   informText: string;
 }
 
 function threadNoticeState(): ThreadNoticeState {
   return { ourPaused: false, peerPaused: false, lastPeerNoticeId: '0'.repeat(26), lastNoticeSentAt: new Date(0).toISOString(),
-    ourMarkerId: '', ourNoticePending: false, peerNoticePending: false, peerNoticeId: '0'.repeat(26), informPending: false, informText: '' };
+    ourMarkerId: '', episodes: [emptyEpisode(), emptyEpisode()], informPending: false, informText: '' };
 }
 
 export interface WatchState {
@@ -264,9 +273,31 @@ export class Watcher {
         record.ourPaused = this.state.paused.includes(key);
       }
     }
-    // Legacy peer-generated queues cannot establish local knowledge.
-    this.state.outbox = this.state.outbox.filter(item => item.kind !== 'notify' || item.notice.kind !== 'peer-paused'
-      || (item.id === `peer-paused:${item.notice.peer}/${item.notice.threadId}` && this.state.threadNotices[`${item.notice.peer}/${item.notice.threadId}`]));
+    // Upgrade the previous single-pending record while retaining its attempt/deadline metadata.
+    for (const [key, record] of Object.entries(this.state.threadNotices)) {
+      const old = record as ThreadNoticeState & { ourNoticePending?: boolean; peerNoticePending?: boolean; peerNoticeId?: string };
+      if (!record.episodes) {
+        record.episodes = [emptyEpisode(), emptyEpisode()];
+        for (const item of this.state.outbox) {
+          if (item.kind !== 'notify' || `${item.notice.peer}/${item.notice.threadId}` !== key
+            || item.id !== `${item.notice.kind}:${key}` || !item.notice.eventId) continue;
+          this.queueEpisode(record, item.notice.kind, item.notice.eventId);
+        }
+        if (old.ourNoticePending) this.queueEpisode(record, 'paused', record.ourMarkerId);
+        if (old.peerNoticePending && old.peerNoticeId) this.queueEpisode(record, 'peer-paused', old.peerNoticeId);
+      }
+      delete old.ourNoticePending; delete old.peerNoticePending; delete old.peerNoticeId;
+    }
+    this.state.outbox = this.state.outbox.filter(item => {
+      if (item.kind === 'inform') return true;
+      const key = `${item.notice.peer}/${item.notice.threadId}`;
+      const record = this.state.threadNotices[key];
+      const slot = record?.episodes.findIndex(episode => episode.kind === item.notice.kind && episode.eventId === item.notice.eventId) ?? -1;
+      if (slot < 0 || (item.id !== `${item.notice.kind}:${key}` && item.id !== episodeKey(key, slot))) return false;
+      item.id = episodeKey(key, slot);
+      item.notice.repeats ??= record.episodes[slot].repeats;
+      return true;
+    });
     for (const item of [...this.state.outbox]) {
       if ((item.tries ?? 0) >= (item.kind === 'notify' ? MAX_NOTICE_ATTEMPTS : MAX_OUTBOX_TRIES)) this.finishOutbox(item);
     }
@@ -492,10 +523,7 @@ export class Watcher {
         if (sentAt > at + MAX_PEER_CLOCK_SKEW_MS) continue;
         record.lastPeerNoticeId = item.messageId;
         const paused = item.notice === 'thread-paused';
-        if (paused && !record.peerPaused && !record.peerNoticePending) {
-          record.peerNoticePending = true;
-          record.peerNoticeId = item.messageId;
-        }
+        if (paused && !record.peerPaused) this.queueEpisode(record, 'peer-paused', item.messageId);
         record.peerPaused = paused;
       }
       this.fillOutbox();
@@ -797,7 +825,8 @@ export class Watcher {
     await this.mutate(() => {
       if (!this.state.paused.includes(key)) this.state.paused.push(key);
       const record = this.state.threadNotices[key] ??= threadNoticeState();
-      Object.assign(record, { ourPaused: true, ourMarkerId: pauseId, ourNoticePending: true, informPending: true, informText: text });
+      Object.assign(record, { ourPaused: true, ourMarkerId: pauseId, informPending: true, informText: text });
+      this.queueEpisode(record, 'paused', pauseId);
       this.fillOutbox();
     });
     this.deps.log('paused', { peer: pending.peer, threadId: pending.threadId, by: 'budget', reason });
@@ -816,6 +845,17 @@ export class Watcher {
     entry.messages = [...entry.messages, message].slice(-MAX_HELD_PER_THREAD);
   }
 
+  /** Two episode values per known thread. Additional transitions coalesce, without allocating another slot. */
+  private queueEpisode(record: ThreadNoticeState, kind: 'paused' | 'peer-paused', eventId: string): void {
+    if (!ULID.test(eventId) || record.episodes.some(episode => episode.kind === kind && episode.eventId === eventId)) return;
+    const slot = record.episodes.find(episode => !episode.kind);
+    if (slot) Object.assign(slot, { kind, eventId, repeats: '000000' });
+    else {
+      const last = record.episodes[1];
+      last.repeats = String(Math.min(MAX_COALESCED_PAUSES, Number(last.repeats) + 1)).padStart(6, '0');
+    }
+  }
+
   /** A fixed slot per locally known thread/kind; incoming ids never name outbox slots. */
   private enqueue(item: OutboxItem): void {
     if (this.state.outbox.some(existing => existing.id === item.id)) return;
@@ -829,21 +869,27 @@ export class Watcher {
     this.state.outbox.push(item);
   }
 
-  /** Local pause work is admitted first; no incoming notice can evict it. Called inside mutate. */
+  /** Local pause work is admitted first; each fixed slot keeps its own episode ULID and retries. */
   private fillOutbox(): void {
     for (const [key, record] of Object.entries(this.state.threadNotices)) {
       const [peer, threadId] = key.split('/');
       if (record.informPending) this.enqueue({ id: `inform:${key}`, kind: 'inform', peer, threadId, pauseId: record.ourMarkerId, text: record.informText });
-      if (record.ourNoticePending) this.enqueue({ id: `paused:${key}`, kind: 'notify', notice: { kind: 'paused', peer, threadId, eventId: record.ourMarkerId, detail: 'thread paused on this side' } });
     }
-    for (const [key, record] of Object.entries(this.state.threadNotices)) {
-      const [peer, threadId] = key.split('/');
-      if (record.peerNoticePending) this.enqueue({ id: `peer-paused:${key}`, kind: 'notify', notice: { kind: 'peer-paused', peer, threadId, eventId: record.peerNoticeId, detail: "the peer's watcher reported the thread paused" } });
+    for (const kind of ['paused', 'peer-paused'] as const) {
+      for (const [key, record] of Object.entries(this.state.threadNotices)) {
+        const [peer, threadId] = key.split('/');
+        record.episodes.forEach((episode, slot) => {
+          if (episode.kind === kind) this.enqueue({ id: episodeKey(key, slot), kind: 'notify', notice: {
+            kind, peer, threadId, eventId: episode.eventId, repeats: episode.repeats,
+            detail: kind === 'paused' ? 'thread paused on this side' : "the peer's watcher reported the thread paused",
+          } });
+        });
+      }
     }
   }
 
-  /** Clear only the pending transition this item represented; a later local pause retains its own work. */
-  private finishOutbox(item: OutboxItem): void {
+  /** Completion matches both the fixed slot and episode ULID; another queued episode is independent. */
+  private finishOutbox(item: OutboxItem, delivered = false): void {
     const peer = item.kind === 'inform' ? item.peer : item.notice.peer;
     const threadId = item.kind === 'inform' ? item.threadId : item.notice.threadId;
     const record = this.state.threadNotices[`${peer}/${threadId}`];
@@ -851,8 +897,12 @@ export class Watcher {
       if (item.kind === 'inform' && item.pauseId === record.ourMarkerId) record.informPending = false;
       if (item.kind === 'notify') {
         record.lastNoticeSentAt = new Date(this.now()).toISOString();
-        if (item.notice.kind === 'paused' && item.notice.eventId === record.ourMarkerId) record.ourNoticePending = false;
-        if (item.notice.kind === 'peer-paused' && item.notice.eventId === record.peerNoticeId) record.peerNoticePending = false;
+        const slot = record.episodes.find(episode => episode.kind === item.notice.kind && episode.eventId === item.notice.eventId);
+        if (slot) {
+          const arrivedDuringDelivery = Number(slot.repeats) - Number(item.notice.repeats ?? '000000');
+          if (delivered && arrivedDuringDelivery > 0) slot.repeats = String(arrivedDuringDelivery - 1).padStart(6, '0');
+          else Object.assign(slot, emptyEpisode());
+        }
       }
     }
     this.state.outbox = this.state.outbox.filter(o => o.id !== item.id);
@@ -929,8 +979,8 @@ export class Watcher {
     const at = this.now();
     const queued = new Set(this.state.outbox.map(item => item.id));
     const refill = this.state.outbox.length < MAX_OUTBOX && Object.entries(this.state.threadNotices).some(([key, record]) =>
-      (record.informPending && !queued.has(`inform:${key}`)) || (record.ourNoticePending && !queued.has(`paused:${key}`))
-      || (record.peerNoticePending && !queued.has(`peer-paused:${key}`)));
+      (record.informPending && !queued.has(`inform:${key}`))
+      || record.episodes.some((episode, slot) => episode.kind && !queued.has(episodeKey(key, slot))));
     if (refill) await this.mutate(() => this.fillOutbox());
     const runs: Promise<void>[] = [];
     const items = [...this.state.outbox].sort((a, b) => Number(a.kind === 'notify' && a.notice.kind === 'peer-paused') - Number(b.kind === 'notify' && b.notice.kind === 'peer-paused'));
@@ -953,12 +1003,19 @@ export class Watcher {
                 return;
               }
               const global = this.state.noticeGlobalLog.filter(t => now - t < 3600_000);
-              if (recent.length >= NOTICES_PER_PEER_PER_HOUR || global.length >= NOTICES_PER_HOUR) {
+              const peers = [...new Set([...this.deps.loadPeers().filter(peer => peer.status === 'paired').map(peer => peer.handle), notice.peer])];
+              const share = Math.min(NOTICE_RESERVE_PER_PEER, Math.floor(NOTICES_PER_HOUR / peers.length));
+              const reservedForOthers = peers.filter(peer => peer !== notice.peer).reduce((reserved, peer) =>
+                reserved + Math.max(0, share - (this.state.noticeLog[peer] ?? []).filter(t => now - t < 3600_000).length), 0);
+              if (recent.length >= NOTICES_PER_PEER_PER_HOUR || global.length + reservedForOthers >= NOTICES_PER_HOUR) {
                 stored.nextAttemptAt = Math.max(recent.length >= NOTICES_PER_PEER_PER_HOUR ? Math.min(...recent) + 3600_000 : 0,
-                  global.length >= NOTICES_PER_HOUR ? Math.min(...global) + 3600_000 : 0);
+                  global.length ? Math.min(...global) + 3600_000 : now + 3600_000);
                 this.deps.log('notice-rate-cap', { peer: notice.peer, id: item.id });
                 return;
               }
+              const episode = this.state.threadNotices[`${notice.peer}/${notice.threadId}`]?.episodes.find(episode =>
+                episode.kind === notice.kind && episode.eventId === notice.eventId);
+              if (episode) item.notice.repeats = stored.notice.repeats = episode.repeats;
               this.state.noticeGlobalLog = [...global, now];
               item.tries = stored.tries = (stored.tries ?? 0) + 1;
               this.state.noticeLog[notice.peer] = [...recent, now];
@@ -972,7 +1029,7 @@ export class Watcher {
             }
             await this.deps.notify?.(notice);
           }
-          await this.mutate(() => this.finishOutbox(item));
+          await this.mutate(() => this.finishOutbox(item, true));
         } catch (error) {
           const tries = item.kind === 'notify' ? (item.tries ?? 1) : (item.tries ?? 0) + 1;
           this.deps.log(item.kind === 'inform' ? 'inform-error' : 'notify-error', { id: item.id, tries, ...errInfo(error) });

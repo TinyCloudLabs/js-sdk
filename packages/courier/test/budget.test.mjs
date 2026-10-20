@@ -491,11 +491,13 @@ test('500 monotone pause/resume toggles stay within global cap and use fixed sta
   // Prime all fixed slots and rolling attempt logs, then exercise saturation without state growth.
   for(let i=0;i<20;i++){clock.t+=1000;peerNotice(theirs,'alice',thread,i%2?'thread-resumed':'thread-paused',clock.t);await a.watcher.pollOnce('poll');await a.watcher.tick();}
   assert.equal(a.notices.length,10);
-  // First deferred transition allocates the bounded outbox slot; subsequent toggles coalesce into it.
-  clock.t+=1000;peerNotice(theirs,'alice',thread,'thread-paused',clock.t);await a.watcher.pollOnce('poll');await a.watcher.tick();
+  // Prime both deferred episode slots; later transitions update only their fixed-width count.
+  for(const notice of ['thread-paused','thread-resumed','thread-paused']){clock.t+=1000;peerNotice(theirs,'alice',thread,notice,clock.t);await a.watcher.pollOnce('poll');await a.watcher.tick();}
   const size=JSON.stringify(a.watcher.snapshot()).length;
   for(let i=0;i<500;i++){clock.t+=10;peerNotice(theirs,'alice',thread,i%2?'thread-paused':'thread-resumed',clock.t);await a.watcher.pollOnce('poll');await a.watcher.tick();}
   assert.equal(a.notices.length,10);assert.equal(JSON.stringify(a.watcher.snapshot()).length,size);
+  assert.equal(a.watcher.snapshot().threadNotices[`bob/${thread}`].episodes.length,2);
+  assert.ok(Number(a.watcher.snapshot().threadNotices[`bob/${thread}`].episodes[1].repeats)>0,'additional transitions are counted');
   const key=`bob/${thread}`,accepted=a.watcher.snapshot().threadNotices[key].lastPeerNoticeId;
   peerNotice(theirs,'alice',thread,'thread-resumed',clock.t,'Z'.repeat(26));
   peerNotice(theirs,'alice',thread,'thread-resumed',clock.t+600001);
@@ -584,7 +586,7 @@ test('a full peer outbox yields only unattempted slots to a genuine local pause,
   const genuine=ulid();await a.watcher.pauseThread(`bob/${genuine}`,{peer:'bob',threadId:genuine},3);
   const queued=a.watcher.snapshot();assert.equal(queued.outbox.length,50);
   assert.equal(queued.outbox.filter(item=>item.kind==='inform'||item.notice.kind==='paused').length,2);
-  assert.equal(Object.values(queued.threadNotices).filter(record=>record.peerNoticePending).length,60);
+  assert.equal(Object.values(queued.threadNotices).filter(record=>record.episodes.some(episode=>episode.kind==='peer-paused')).length,60);
   await a.watcher.tick();assert.equal(a.informs.length,1);assert.equal(a.notices.length,10);
   assert.equal(a.notices[0].kind,'paused','genuine local work dispatches before peer work');
 });
@@ -598,6 +600,89 @@ test('three reserved notification attempts exhausted by crashes never refill a f
   for(let i=0;i<4;i++){
     a=side({handle:'alice',peerHandle:'bob',mine,theirs,clock});await a.watcher.loadState();await a.watcher.tick();
     assert.equal(a.notices.length,0);assert.deepEqual(a.watcher.snapshot().outbox,[]);
-    assert.equal(a.watcher.snapshot().threadNotices[`bob/${thread}`].peerNoticePending,false);
+    assert.ok(a.watcher.snapshot().threadNotices[`bob/${thread}`].episodes.every(episode=>!episode.kind));
   }
+});
+
+test('two peer pause episodes before dispatch each produce a notification',async()=>{
+  const clock={t:Date.parse('2026-10-20T12:00:00Z')},mine=memoryKv(),theirs=memoryKv();
+  const a=side({handle:'alice',peerHandle:'bob',mine,theirs,clock});const thread=ulid();know(mine,'bob',thread);
+  for(const [i,notice] of ['thread-paused','thread-resumed','thread-paused'].entries())peerNotice(theirs,'alice',thread,notice,clock.t+i*1000);
+  clock.t+=3000;await a.watcher.pollOnce('poll');await a.watcher.tick();await a.watcher.tick();
+  assert.equal(a.notices.length,2);assert.equal(a.wakes.length,0);assert.deepEqual(a.watcher.snapshot().outbox,[]);
+});
+
+test('a second peer episode survives the first notice retry and a restart',async()=>{
+  const clock={t:Date.parse('2026-10-20T12:00:00Z')},mine=memoryKv(),theirs=memoryKv();
+  let a=side({handle:'alice',peerHandle:'bob',mine,theirs,clock,notifyFails:1});const thread=ulid();know(mine,'bob',thread);
+  peerNotice(theirs,'alice',thread,'thread-paused',clock.t);await a.watcher.pollOnce('poll');await a.watcher.tick();
+  clock.t+=1000;peerNotice(theirs,'alice',thread,'thread-resumed',clock.t);
+  clock.t+=1000;peerNotice(theirs,'alice',thread,'thread-paused',clock.t);await a.watcher.pollOnce('poll');
+  a=side({handle:'alice',peerHandle:'bob',mine,theirs,clock});await a.watcher.loadState();await a.watcher.tick();
+  clock.t+=60001;await a.watcher.tick();await a.watcher.tick();
+  assert.equal(a.notices.length,2);assert.equal(a.watcher.snapshot().noticeLog.bob.length,3,'one failed attempt and two successful episode deliveries');
+  assert.deepEqual(a.watcher.snapshot().outbox,[]);
+});
+
+test('two local marker episodes queued before dispatch each produce a notification',async()=>{
+  const clock={t:Date.parse('2026-10-20T12:00:00Z')},mine=memoryKv(),theirs=memoryKv();
+  const a=side({handle:'alice',peerHandle:'bob',mine,theirs,clock});const thread=ulid(),pending={peer:'bob',threadId:thread};
+  await a.watcher.pauseThread(`bob/${thread}`,pending,3);
+  mine.rows.delete(k.paused('bob',thread));await a.watcher.syncPaused();clock.t+=1000;
+  await a.watcher.pauseThread(`bob/${thread}`,pending,3);await a.watcher.tick();await a.watcher.tick();
+  assert.equal(a.notices.length,2);assert.deepEqual(a.watcher.snapshot().outbox,[]);
+});
+
+test('shared hourly allowance reserves three attempts for each of two paired peers',async()=>{
+  const clock={t:Date.parse('2026-10-20T12:00:00Z')},mine=memoryKv(),bob=memoryKv(),carol=memoryKv();
+  const a=side({handle:'alice',peerHandle:'bob',mine,theirs:bob,clock}),c=peerRecord('carol','alice');
+  a.watcher.deps.loadPeers=()=>[a.peer,c];a.watcher.deps.kvFor=async peer=>peer.handle==='bob'?bob:carol;
+  for(let i=0;i<10;i++){const thread=ulid();know(mine,'bob',thread);peerNotice(bob,'alice',thread,'thread-paused',clock.t);}
+  await a.watcher.pollOnce('poll');await a.watcher.tick();assert.equal(a.notices.length,7);
+  for(let i=0;i<3;i++){const thread=ulid();know(mine,'carol',thread);peerNotice(carol,'alice',thread,'thread-paused',clock.t);}
+  await a.watcher.pollOnce('poll');await a.watcher.tick();
+  assert.equal(a.notices.filter(notice=>notice.peer==='carol').length,3);assert.equal(a.notices.length,10);
+});
+
+
+test('only two pending episodes are retained and later transitions appear in a fixed repeated-pause count',async()=>{
+  const clock={t:Date.parse('2026-10-20T12:00:00Z')},mine=memoryKv(),theirs=memoryKv();
+  const a=side({handle:'alice',peerHandle:'bob',mine,theirs,clock});const thread=ulid();know(mine,'bob',thread);
+  for(let i=0;i<500;i++)peerNotice(theirs,'alice',thread,i%2?'thread-resumed':'thread-paused',clock.t+i);
+  clock.t+=1000;await a.watcher.pollOnce('poll');
+  const record=a.watcher.snapshot().threadNotices[`bob/${thread}`];assert.equal(record.episodes.length,2);
+  assert.equal(record.episodes[1].repeats,'000248');assert.equal(a.watcher.snapshot().outbox.length,2);
+  await a.watcher.tick();await a.watcher.tick();assert.equal(a.notices.length,2);
+  assert.match(noticeText(a.notices[1],'alice').body,/Additional pauses on this thread: 248/);
+  assert.deepEqual(a.watcher.snapshot().outbox,[]);
+});
+
+test('single-pending persisted state upgrades to episode slots without resetting attempts or deadlines',async()=>{
+  const clock={t:Date.parse('2026-10-20T12:00:00Z')},mine=memoryKv(),theirs=memoryKv();
+  let a=side({handle:'alice',peerHandle:'bob',mine,theirs,clock,notifyFails:1});const thread=ulid(),key=`bob/${thread}`;know(mine,'bob',thread);
+  peerNotice(theirs,'alice',thread,'thread-paused',clock.t);await a.watcher.pollOnce('poll');await a.watcher.tick();
+  const state=a.watcher.snapshot(),record=state.threadNotices[key],id=record.episodes[0].eventId;
+  delete record.episodes;Object.assign(record,{ourNoticePending:false,peerNoticePending:true,peerNoticeId:id});
+  state.outbox[0].id=`peer-paused:${key}`;delete state.outbox[0].notice.repeats;
+  const deadline=state.outbox[0].nextAttemptAt;mine.rows.set(k.watchState,{value:state,etag:'previous-version'});
+  a=side({handle:'alice',peerHandle:'bob',mine,theirs,clock});await a.watcher.loadState();
+  assert.equal(a.watcher.snapshot().outbox[0].tries,1);assert.equal(a.watcher.snapshot().outbox[0].nextAttemptAt,deadline);
+  clock.t+=1000;peerNotice(theirs,'alice',thread,'thread-resumed',clock.t);
+  clock.t+=1000;peerNotice(theirs,'alice',thread,'thread-paused',clock.t);await a.watcher.pollOnce('poll');await a.watcher.tick();
+  clock.t=deadline;await a.watcher.tick();assert.equal(a.notices.length,2);assert.equal(a.watcher.snapshot().noticeLog.bob.length,3);
+  assert.equal('peerNoticePending' in a.watcher.snapshot().threadNotices[key],false);
+});
+
+test('transitions accepted while a coalesced notification is running remain pending after completion',async()=>{
+  const clock={t:Date.parse('2026-10-20T12:00:00Z')},mine=memoryKv(),theirs=memoryKv();
+  const a=side({handle:'alice',peerHandle:'bob',mine,theirs,clock});const thread=ulid();know(mine,'bob',thread);
+  for(const notice of ['thread-paused','thread-resumed','thread-paused']){clock.t++;peerNotice(theirs,'alice',thread,notice,clock.t);}
+  await a.watcher.pollOnce('poll');
+  let release,entered;const started=new Promise(resolve=>{entered=resolve;});let calls=0;
+  a.watcher.deps.notify=async notice=>{calls++;if(calls===2){entered();await new Promise(resolve=>{release=resolve;});}a.notices.push({...notice});};
+  const running=a.watcher.tick();await started;
+  // Slot zero finished; fill it once, then coalesce the next transition into the running second slot.
+  for(const notice of ['thread-resumed','thread-paused','thread-resumed','thread-paused']){clock.t++;peerNotice(theirs,'alice',thread,notice,clock.t);}
+  await a.watcher.pollOnce('poll');release();await running;await a.watcher.tick();await a.watcher.tick();
+  assert.equal(a.notices.length,4,'all four accepted episodes remain represented');assert.deepEqual(a.watcher.snapshot().outbox,[]);
 });

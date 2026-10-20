@@ -264,9 +264,15 @@ Pause notices use one fixed record per locally known thread, never records keyed
 by incoming ids. Only our authored meta/message/task or a local wake/pause record
 establishes a known thread; mirrored metadata does not. Newer peer notice ULIDs
 within ten minutes of our clock update the peer pause latch: paused-to-resumed
-clears it, resumed-to-paused notifies once. Duplicate/old notices, repeated paused
+clears it, resumed-to-paused queues one episode notice. Duplicate/old notices, repeated paused
 states and unknown threads do not notify, across days and restarts. Every delivery
 attempt, successful or failed, counts toward ten globally and ten per peer per
 hour across channels; at most three attempts per notice, with persisted backoff.
 Failed wake backoff starts when the attempt finishes and survives a restart;
 approval wakes have a separate retry clock and never wait for message backoff.
+
+Two fixed pending episode slots per known thread retain separate pause notices,
+including across retries and restarts. Additional pauses while both slots are
+occupied are included as a bounded repeated-pause count in the second notice.
+The global hourly allowance reserves up to three attempts per locally paired
+peer (at most the integer part of 10 divided by the peer count).

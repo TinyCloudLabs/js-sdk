@@ -6,4 +6,4 @@ Wake budget, pause and notifications for `courier watch`: at most `--wake-budget
 
 Count wake attempts (including failures), cap and deduplicate fixed-text notices with bounded persisted retries, and retain a bounded backlog through pause/resume. Notifications use local logs, osascript or an operator exec command only; no notification starts or messages an agent.
 
-Track pause/resume transitions in fixed records for locally known threads, ignore replayed and future peer notice ULIDs, keep inform ids stable through retries, and persist separate message/approval backoff from attempt completion. Peer-controlled ids cannot grow notification state or evict genuine pause work.
+Track pause/resume transitions in fixed records for locally known threads, ignore replayed and future peer notice ULIDs, keep inform ids stable through retries, and persist separate message/approval backoff from attempt completion. Keep two fixed pending episode slots per known thread, with separate retries and a bounded count for additional pauses. Reserve up to three of the global hourly attempts per locally paired peer.

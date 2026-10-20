@@ -322,10 +322,7 @@ fixed script source). An operator's exec command receives COURIER_NOTICE, COURIE
 COURIER_NOTICE_TITLE and COURIER_NOTICE_TEXT. `none` means local log only.
 No notification channel starts or messages a model-backed agent.
 
-The native Paseo check found `paseo hooks` records terminal activity using a
-terminal-specific token; it does not set an agent's attention flag. No
-attention-only operation was proven, so `--notify paseo` is unavailable in v0.
-Use the inbox/read/view surfaces, tail the log, or configure your own channel.
+Use the inbox/read/view surfaces, tail the notification log, or configure an exec channel.
 
 Example only: pick your own channel (push, Telegram, email, tail the log); no channel is chosen for Sam yet.
 
@@ -338,15 +335,25 @@ thread: our own authored meta/message/task, or a local wake/pause record.
 Mirrored peer metadata never establishes a known thread. One fixed record per
 known thread tracks our pause, the peer's pause, and the latest accepted peer
 notice ULID. Strictly newer ULIDs within ten minutes of our clock update the
-peer latch; only resumed-to-paused transitions notify. Replays, repeated paused
+peer latch; each resumed-to-paused transition queues a notice. Replays, repeated paused
 states and notices for unknown threads add no state or notifications, across
 UTC days and restarts. Resume clears the corresponding local or peer latch.
 
 Every dispatch attempt (success or failure) counts toward both 10 per peer/hour
 and 10 globally/hour across channels. Notifications use only fixed text, a
 validated handle and a ULID or thread fingerprint, never peer-written prose.
-The outbox holds at most 50 items, coalesced into fixed thread/kind slots; full
-capacity defers pending state changes without evicting genuine local work.
+Each known thread has two fixed pending episode slots, identified by their
+stored notice ULIDs or local pause-marker generations. Each slot has its own
+retry count and deadline. Two successive pauses are delivered separately even
+when the first is pending or retrying. Further transitions while both slots are
+occupied are counted in the second slot's "additional pauses" message (up to
+999999, displayed as 999999+ when saturated). Counts arriving during delivery
+remain pending for the next dispatch. The outbox holds at most 50 items.
+
+The global hourly allowance reserves up to three attempts for each locally
+paired peer. With more than three peers, the reserved share is the smaller of
+three and the integer part of 10 divided by the peer count; with more than ten
+peers it is zero. All attempts, including retries, count against both caps.
 Failures retry after 1, 2, 4, then up to 15 minutes, stopping after 3 notification
 attempts or 8 inform failures, with deadlines persisted across restarts.
 Wakes that reach the adapter count before it runs, including failures; failed
@@ -354,10 +361,7 @@ wakes back off from completion. Approval wakes have a separate retry clock and
 never wait for message-wake backoff. Held messages remain mirrored and up to
 100 recent messages per thread wake together once after human resume.
 
-Limits: a peer can send a ULID up to ten minutes in the future and mute its own
-further notices on that thread for up to about ten minutes under the monotone
-ULID rule. This only harms that peer's own signal for a bounded time; no other
-thread or peer is affected.
+A notice ID more than ten minutes ahead of the local clock is ignored.
 
 ### Guard for woken agents
 

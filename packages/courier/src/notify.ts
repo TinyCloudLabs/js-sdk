@@ -11,6 +11,8 @@ export interface Notice {
   kind: 'paused' | 'peer-paused';
   /** Machine event id, used only for deduplication, never notification prose. */
   eventId?: string;
+  /** Fixed-width local count of coalesced pause transitions. */
+  repeats?: string;
   peer: string;
   threadId: string;
   /** Internal fixed wording; never forwarded as notification prose. */
@@ -33,9 +35,11 @@ function identity(notice: Notice): { peer: string; thread: string } {
 }
 export function noticeText(notice: Notice, _owner: string): { title: string; body: string } {
   const { peer, thread } = identity(notice);
+  const count = /^[0-9]{6}$/.test(notice.repeats ?? '') ? Number(notice.repeats) : 0;
+  const repeated = count ? ` Additional pauses on this thread: ${count}${count === 999999 ? '+' : ''}.` : '';
   return notice.kind === 'paused'
-    ? { title: 'Courier: thread paused', body: `Thread ${thread} with ${peer} is paused on this side. Your agent will not wake for it until you resume it. Run courier inbox or courier read in a session you start.` }
-    : { title: 'Courier: peer paused', body: `The paired peer ${peer} reported thread ${thread} paused. Their agent waits for their human. Run courier inbox or courier read in a session you start.` };
+    ? { title: 'Courier: thread paused', body: `Thread ${thread} with ${peer} is paused on this side. Your agent will not wake for it until you resume it. Run courier inbox or courier read in a session you start.${repeated}` }
+    : { title: 'Courier: peer paused', body: `The paired peer ${peer} reported thread ${thread} paused. Their agent waits for their human. Run courier inbox or courier read in a session you start.${repeated}` };
 }
 
 /** Append-only current log with one rotated predecessor, at most roughly 512 KiB total. */
