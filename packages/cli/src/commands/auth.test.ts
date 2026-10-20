@@ -461,7 +461,14 @@ mock.module("../lib/permissions.js", () => ({
     },
   permissionsFromDelegation: () => [],
   readGrantHistory: async () => [],
-  resolvePermissionSpaces: async (permissions: unknown[]) => permissions,
+  // Like the real resolver: a space name becomes the owner's space id.
+  resolvePermissionSpaces: async (permissions: Array<{ space?: string }>) =>
+    permissions.map((permission) => ({
+      ...permission,
+      space: permission.space === undefined || permission.space.startsWith("tinycloud:")
+        ? permission.space
+        : `tinycloud:pkh:eip155:1:0xOwner:${permission.space}`,
+    })),
   storedAdditionalDelegation: (delegation: object, permissions: object[]) => ({
     delegation,
     permissions,
@@ -1644,7 +1651,11 @@ describe("CLI auth import command", () => {
     await runAuthCommand(["auth", "grant", source, "--yes"]);
 
     expect(recorded.errors).toEqual([]);
-    expect(recorded.grantedRequests).toEqual([request]);
+    // The signer receives the one resolved list (space ids, not names) that was printed and gated.
+    expect(recorded.grantedRequests).toEqual([{
+      ...request,
+      requested: [{ ...request.requested[0], space: "tinycloud:pkh:eip155:1:0xOwner:secrets" }],
+    }]);
   });
 });
 
