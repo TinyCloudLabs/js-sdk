@@ -610,6 +610,7 @@ import { join as join2 } from "path";
 import { ProfileDeletedError, ProfileLockTimeoutError, ProfileSymlinkError } from "@tinycloud/operations/state";
 import { isSafeRecovery } from "@tinycloud/operations/recovery";
 import { CLI_NAME as CLI_NAME2 } from "@tinycloud/operations/cli-name";
+import { isRevokedGrantRefusal, REVOKED_GRANT_MESSAGE } from "@tinycloud/operations/revoked-grant";
 import {
   buildSecretRequestUrl,
   isSafeRequestAccessRecovery,
@@ -637,6 +638,9 @@ function cliErrorFromService(error, message = error.message) {
   const missingCapability = validatedCapabilityOf({ ...error, meta }) !== void 0;
   const denied = verdict === "forbidden" || verdict === "unauthenticated" && missingCapability || verdict === void 0 && error.code === "PERMISSION_DENIED";
   const unauthenticated = !denied && (verdict === "unauthenticated" || verdict === void 0 && error.code === "AUTH_REQUIRED");
+  if (unauthenticated && isRevokedGrantRefusal({ ...error, meta, message })) {
+    return new CLIError("GRANT_REVOKED", REVOKED_GRANT_MESSAGE, GRANT_REVOKED_EXIT_CODE, { status: 401 });
+  }
   return new CLIError(
     denied ? "PERMISSION_DENIED" : unauthenticated ? "AUTH_REQUIRED" : error.code,
     message,
@@ -862,7 +866,7 @@ function buildNetworkHint() {
   lines.push(`Or override per-command with --host or TC_HOST.`);
   return lines.join("\n");
 }
-var activeProfileName, CLIError, SETUP_KEYS;
+var activeProfileName, GRANT_REVOKED_EXIT_CODE, CLIError, SETUP_KEYS;
 var init_errors = __esm({
   "src/output/errors.ts"() {
     "use strict";
@@ -871,6 +875,7 @@ var init_errors = __esm({
     init_formatter();
     init_storage2();
     init_warnings();
+    GRANT_REVOKED_EXIT_CODE = ExitCode.PERMISSION_DENIED;
     CLIError = class extends Error {
       constructor(code4, message, exitCode = ExitCode.ERROR, metadata) {
         super(message);
@@ -12360,7 +12365,75 @@ import { CLI_NAME as CLI_NAME13 } from "@tinycloud/operations/cli-name";
 import { parseSignedCompactUcanAttenuation as parseSignedCompactUcanAttenuation2 } from "@tinycloud/sdk-core";
 import { inspectStoredDelegation, withoutBearer as withoutBearer2 } from "@tinycloud/operations/delegation-binding";
 init_permissions();
+
+// src/lib/revoke-node-record.ts
+var PAGE_LIMIT = 100;
+var MAX_PAGES = 50;
+var MAX_RECORDS = PAGE_LIMIT * MAX_PAGES;
+var MAX_CHAIN_DEPTH = 8;
 function normalizeDid(input) {
+  const fragment = input.indexOf("#");
+  return (fragment < 0 ? input : input.slice(0, fragment)).trim().toLowerCase();
+}
+var SPACE = /^tinycloud:pkh:eip155:([1-9]\d{0,17}):(0x[0-9a-fA-F]{40}):[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
+function ownerOfSpace(space) {
+  const match = SPACE.exec(space);
+  return match === null ? void 0 : `did:pkh:eip155:${match[1]}:${match[2].toLowerCase()}`;
+}
+function ownerSpaceFromNodeRecords(records, cid, ownerDid, sessionDid) {
+  if (records.length > MAX_RECORDS) return void 0;
+  const matches = records.filter((record3) => record3.cid === cid);
+  const target = matches[0];
+  if (!target || new Set(matches.map(({ delegatorDid, delegateDid, resources }) => JSON.stringify([delegatorDid, delegateDid, resources]))).size !== 1) return void 0;
+  const owner = normalizeDid(ownerDid);
+  if (target.resources.length === 0) return void 0;
+  const spaces = /* @__PURE__ */ new Set();
+  for (const { resource } of target.resources) {
+    const space = /^(tinycloud:[^/]+)\//.exec(resource)?.[1];
+    if (!space || ownerOfSpace(space) !== owner) return void 0;
+    spaces.add(space);
+  }
+  if (spaces.size !== 1) return void 0;
+  const session = sessionDid === void 0 ? void 0 : normalizeDid(sessionDid);
+  const byCid = /* @__PURE__ */ new Map();
+  for (const record3 of records) {
+    const sameCid = byCid.get(record3.cid);
+    if (sameCid === void 0) byCid.set(record3.cid, [record3]);
+    else sameCid.push(record3);
+  }
+  const verdicts = /* @__PURE__ */ new Map();
+  const rooted = (record3, depth) => {
+    const issuer = normalizeDid(record3.delegatorDid);
+    if (issuer === owner || issuer === session) return true;
+    const known = verdicts.get(record3.cid);
+    if (known !== void 0) return known;
+    verdicts.set(record3.cid, false);
+    const verdict = depth < MAX_CHAIN_DEPTH && record3.parents.some((parentCid) => (byCid.get(parentCid) ?? []).some((parent) => normalizeDid(parent.delegateDid) === issuer && rooted(parent, depth + 1)));
+    verdicts.set(record3.cid, verdict);
+    return verdict;
+  };
+  return rooted(target, 0) ? [...spaces][0] : void 0;
+}
+async function lookupOwnerSpaceOnNode(node, cid, ownerDid) {
+  const records = [];
+  let cursor;
+  for (let page = 0; page < MAX_PAGES; page += 1) {
+    const query = await node.delegationManager.query({
+      direction: "all",
+      limit: PAGE_LIMIT,
+      ...cursor === void 0 ? {} : { cursor }
+    });
+    if (!query.ok) return void 0;
+    if (query.data.items.length > PAGE_LIMIT || records.length + query.data.items.length > MAX_RECORDS) return void 0;
+    for (const item of query.data.items) records.push(item);
+    cursor = query.data.nextCursor;
+    if (cursor === void 0) return ownerSpaceFromNodeRecords(records, cid, ownerDid, node.sessionDid);
+  }
+  return void 0;
+}
+
+// src/lib/revoke-delegation.ts
+function normalizeDid2(input) {
   const trimmed = input.trim();
   const fragment = trimmed.indexOf("#");
   return (fragment < 0 ? trimmed : trimmed.slice(0, fragment)).toLowerCase();
@@ -12379,7 +12452,7 @@ async function cidBoundOwnerSpace(record3, ownerDid, node, host) {
       const signed = parseSignedCompactUcanAttenuation2(withoutBearer2(authorization), delegation.cid);
       for (const resource of Object.keys(signed.payload.att)) {
         const space = /^(tinycloud:[^/]+)\/[^/]+(?:\/.*)?$/.exec(resource)?.[1];
-        if (space && ownerDidFromSpace(space) && normalizeDid(ownerDidFromSpace(space)) === normalizeDid(ownerDid)) {
+        if (space && ownerDidFromSpace(space) && normalizeDid2(ownerDidFromSpace(space)) === normalizeDid2(ownerDid)) {
           return space;
         }
       }
@@ -12393,7 +12466,7 @@ async function cidBoundOwnerSpace(record3, ownerDid, node, host) {
   if (inspected.local !== "verified" || inspected.cid !== delegation.cid) return void 0;
   for (const permission of inspected.effectivePermissions) {
     const space = permission.space;
-    if (space && ownerDidFromSpace(space) && normalizeDid(ownerDidFromSpace(space)) === normalizeDid(ownerDid)) {
+    if (space && ownerDidFromSpace(space) && normalizeDid2(ownerDidFromSpace(space)) === normalizeDid2(ownerDid)) {
       return space;
     }
   }
@@ -12461,7 +12534,11 @@ async function revokeDelegationOnNode(params) {
           host: ctx.host
         });
         if (!boundSpace) {
-          throw new CLIError("TARGET_NOT_FOUND", `Delegation "${cid}" was not found by the node or local grant sources.`, ExitCode.NOT_FOUND);
+          throw new CLIError(
+            "TARGET_NOT_FOUND",
+            `This profile cannot list the owner's delegations on the node, so it cannot look up "${cid}", and it has no local record of that grant. Use the profile that created the grant, or revoke it from the Delegations screen of the account site (https://account.tinycloud.xyz).`,
+            ExitCode.NOT_FOUND
+          );
         }
         targetSpaceSource = boundSpace.source;
       } else {
@@ -12492,24 +12569,29 @@ async function revokeDelegationOnNode(params) {
       if (error === null || typeof error !== "object" || !("code" in error) || error.code !== "RAW_RECAP_RESOURCE_UNSUPPORTED") {
         throw error;
       }
-      const fallback = boundSpace ?? await resolveCidBoundTargetSpace({
+      const ownerDid = profile.ownerDid ?? ownerDidFromSpace(node.accountSpaceId) ?? ownerDidFromSpace(profile.spaceId);
+      let fallback = boundSpace ?? await resolveCidBoundTargetSpace({
         profileName: ctx.profile,
-        ownerDid: profile.ownerDid ?? ownerDidFromSpace(node.accountSpaceId) ?? ownerDidFromSpace(profile.spaceId),
+        ownerDid,
         cid,
         node,
         host: ctx.host,
         localTarget: params.localTarget
       });
+      if (!fallback && ownerDid) {
+        const space = await lookupOwnerSpaceOnNode(node, cid, ownerDid);
+        if (space) fallback = { space, source: "node-delegation-record" };
+      }
       if (!fallback) {
         throw new CLIError(
           "RAW_RECAP_RESOURCE_UNSUPPORTED",
-          `Cannot safely revoke "${cid}": raw CID ReCap resources are unavailable and no matching owner-signed local grant binds its space to the CID.`,
+          `Cannot revoke "${cid}": this CLI profile has no record of this grant and the node's record does not match the signed-in owner.`,
           ExitCode.PERMISSION_DENIED
         );
       }
       fallbackSpaceId = fallback.space;
       authorityScopeSource = fallback.source;
-      authorityScopeReason = fallback.source === "local-signed-grant-artifact" ? "Raw-CID revoke authority could not be issued; the fallback space came from an owner-signed local grant whose Authorization recomputes to this CID." : "Raw-CID revoke authority could not be issued; the fallback space came from a locally verified owner-signed stored grant bound to this CID.";
+      authorityScopeReason = fallback.source === "local-signed-grant-artifact" ? "Raw-CID revoke authority could not be issued; the fallback space came from an owner-signed local grant whose Authorization recomputes to this CID." : fallback.source === "node-delegation-record" ? "Raw-CID revoke authority could not be issued; the fallback space came from the node's delegation record, whose issuer chains to the signed-in owner and whose space the owner holds." : "Raw-CID revoke authority could not be issued; the fallback space came from a locally verified owner-signed stored grant bound to this CID.";
       targetSpaceSource = fallback.source;
       const acquired = await ensureDelegationAuthority({
         ctx,
@@ -12522,7 +12604,7 @@ async function revokeDelegationOnNode(params) {
           actions: ["tinycloud.delegation/revoke"]
         }],
         expiryOption: void 0,
-        reason: `Revoke delegation ${cid} using its CID-bound owner-signed grant ${fallback.source === "local-stored-grant" ? "record" : "artifact"}`,
+        reason: fallback.source === "node-delegation-record" ? `Revoke delegation ${cid} using the node's record of the owner's grant` : `Revoke delegation ${cid} using its CID-bound owner-signed grant ${fallback.source === "local-stored-grant" ? "record" : "artifact"}`,
         yes: params.yes,
         consentAlreadyGiven: true,
         persist: false,
@@ -17059,7 +17141,7 @@ var EXIT_BY_CODE = {
   [ReplicaErrorCode.GRANT_NOT_COVERING]: ExitCode.AUTH_REQUIRED,
   [ReplicaErrorCode.GRANT_NOT_YET_VALID]: ExitCode.PERMISSION_DENIED,
   [ReplicaErrorCode.GRANT_EXPIRED]: ExitCode.PERMISSION_DENIED,
-  [ReplicaErrorCode.GRANT_REVOKED]: ExitCode.PERMISSION_DENIED,
+  [ReplicaErrorCode.GRANT_REVOKED]: GRANT_REVOKED_EXIT_CODE,
   [ReplicaErrorCode.CONSENT_EXPIRED]: ExitCode.PERMISSION_DENIED,
   [ReplicaErrorCode.GATED]: ExitCode.PERMISSION_DENIED,
   [ReplicaErrorCode.GRANT_UNAUTHORIZED]: ExitCode.PERMISSION_DENIED,
@@ -17844,7 +17926,7 @@ import {
   canonicalSecretRequestOwner,
   isValidSecretRequestScope,
   missingSecretRecovery,
-  ownerOfSpace,
+  ownerOfSpace as ownerOfSpace2,
   resolveSecretsOwner as resolveSecretsOwner2,
   SecretRequestInputError,
   validSecretNames
@@ -18858,7 +18940,7 @@ async function readDelegatedSecretValue(params) {
   if (!envelopeResult.ok) {
     if (envelopeResult.error.code === "NOT_FOUND" || envelopeResult.error.code === "KEY_NOT_FOUND" || envelopeResult.error.code === "KV_NOT_FOUND") {
       const recovery = missingSecretRecovery({
-        owner: ownerOfSpace(params.space?.startsWith("tinycloud:") ? params.space : params.delegation.spaceId),
+        owner: ownerOfSpace2(params.space?.startsWith("tinycloud:") ? params.space : params.delegation.spaceId),
         local: params.local,
         names: [params.name],
         ...params.scope === void 0 ? {} : { scope: params.scope }
@@ -37596,6 +37678,25 @@ var ShareHistoryRetryError = class extends Error {
   }
   code = "SHARE_HISTORY_RETRY";
 };
+var ShareHistoryUnreadableError = class extends Error {
+  constructor() {
+    super("share history is unavailable");
+    this.name = "ShareHistoryUnreadableError";
+  }
+};
+var ShareHistoryReadError = class extends Error {
+  constructor() {
+    super("share history could not be read");
+    this.name = "ShareHistoryReadError";
+  }
+};
+var HISTORY_WRITE_ERROR_CODES = { EACCES: true, EPERM: true, EROFS: true, ENOSPC: true, EDQUOT: true, EIO: true };
+function shareHistoryReason(error) {
+  if (error instanceof ShareHistoryUnreadableError) return "HISTORY_UNREADABLE";
+  if (error instanceof ShareHistoryReadError) return "HISTORY_READ_FAILED";
+  const code4 = typeof error === "object" && error !== null && "code" in error ? error.code : void 0;
+  return typeof code4 === "string" && HISTORY_WRITE_ERROR_CODES[code4] === true ? "HISTORY_WRITE_FAILED" : "HISTORY_UNAVAILABLE";
+}
 
 // src/commands/share.ts
 var SHARE_ORIGIN = "https://share.tinycloud.xyz";
@@ -37774,16 +37875,18 @@ function expires(value) {
 }
 async function rememberPublishedShare(result) {
   const record3 = historyRecordForPublishedShare(result);
-  if (shareServices.records === void 0) return { record: record3, recorded: false };
   try {
+    if (shareServices.records === void 0) throw new Error("sender history is not configured");
     await shareServices.records.put(record3);
-    return { record: record3, recorded: true };
-  } catch {
-    process.stderr.write("Warning: share was published but not recorded in sender history; future share list, share notify, and share revoke by ID will not find it.\n");
-    return { record: record3, recorded: false };
+    return { record: record3, history: { recorded: true } };
+  } catch (error) {
+    const reason = shareHistoryReason(error);
+    process.stderr.write(`Warning: share was published but not recorded in sender history (${reason}); future share list, share notify, and share revoke by ID will not find it. Keep share ID ${result.metadata.shareId} and CID ${result.link.cid}.
+`);
+    return { record: record3, history: { recorded: false, reason } };
   }
 }
-async function notifyRecordedShare(record3, recipient, adapter, storage) {
+async function notifyRecordedShare(record3, recipient, adapter, storage, published) {
   const result = await notifyShare({ shareId: record3.shareId, recipient, record: record3, adapter, checkDeliveryWindow: true });
   if (result.state !== "partial-failure" && storage !== void 0) {
     const mailbox = canonicalMailbox2(recipient).email;
@@ -37795,8 +37898,11 @@ async function notifyRecordedShare(record3, recipient, adapter, storage) {
           deliveredRecipients: current.deliveredRecipients?.includes(mailbox) ? current.deliveredRecipients : [...current.deliveredRecipients ?? [], mailbox]
         }));
         if (updated === void 0) throw new Error("sender history record was removed");
-      } catch {
-        process.stderr.write("Warning: delivery succeeded, but could not record its confirmation in sender history.\n");
+      } catch (error) {
+        const reason = shareHistoryReason(error);
+        const identifiers = published === void 0 ? "" : ` Keep share ID ${published.shareId} and CID ${published.cid}.`;
+        process.stderr.write(`Warning: delivery succeeded, but could not record its confirmation in sender history (${reason}).${identifiers}
+`);
       }
     }
   }
@@ -37885,17 +37991,17 @@ function registerShareCommand(program) {
         }
         throw new CLIError(result.method === "openkey-device" ? "DEVICE_AUTH_REQUIRED" : "CLAIM_REQUIRED", "recipient authorization is required; continue through the configured authority adapter", 6);
       }
-      const { record: record3, recorded } = await rememberPublishedShare(result);
+      const { record: record3, history } = await rememberPublishedShare(result);
       let notification;
       if (notifyRecipient !== void 0) {
         if (shareServices.delivery === void 0) throw new CLIError("AUTH_REQUIRED", "delivery authority is not configured", 3);
-        notification = await notifyRecordedShare(record3, notifyRecipient, shareServices.delivery, recorded ? shareServices.records : void 0);
+        notification = await notifyRecordedShare(record3, notifyRecipient, shareServices.delivery, history.recorded ? shareServices.records : void 0, { shareId: result.metadata.shareId, cid: result.link.cid });
         if (notification.state === "partial-failure") process.exitCode = 9;
         if (notification.reason === "delivery-window-expired") process.stderr.write(NOTIFY_WINDOW_MESSAGE);
       }
       if (result.metadata.expiryClamped === true) process.stderr.write(`Share expiry clamped to session expiry (${result.metadata.expiresAt}).
 `);
-      if (json) writeJson2({ ...redactPublishedShare(result), expiryClamped: result.metadata.expiryClamped === true, ...artifact === void 0 || result.metadata.artifact === void 0 ? {} : { artifactId: result.metadata.artifact.id, version: result.metadata.artifact.version, mode: result.metadata.artifact.mode }, ...notification === void 0 ? {} : { notification } });
+      if (json) writeJson2({ ...redactPublishedShare(result), history, expiryClamped: result.metadata.expiryClamped === true, ...artifact === void 0 || result.metadata.artifact === void 0 ? {} : { artifactId: result.metadata.artifact.id, version: result.metadata.artifact.version, mode: result.metadata.artifact.mode }, ...notification === void 0 ? {} : { notification } });
       else {
         if (result.metadata.artifact !== void 0) process.stderr.write(`Artifact ${result.metadata.artifact.id} v${result.metadata.artifact.version} (${result.metadata.artifact.mode})
 `);

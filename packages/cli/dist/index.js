@@ -416,6 +416,7 @@ import { join } from "path";
 import { ProfileDeletedError, ProfileLockTimeoutError, ProfileSymlinkError } from "@tinycloud/operations/state";
 import { isSafeRecovery } from "@tinycloud/operations/recovery";
 import { CLI_NAME as CLI_NAME3 } from "@tinycloud/operations/cli-name";
+import { isRevokedGrantRefusal, REVOKED_GRANT_MESSAGE } from "@tinycloud/operations/revoked-grant";
 import {
   buildSecretRequestUrl,
   isSafeRequestAccessRecovery,
@@ -644,7 +645,7 @@ function buildNetworkHint() {
   lines.push(`Or override per-command with --host or TC_HOST.`);
   return lines.join("\n");
 }
-var activeProfileName, CLIError, SETUP_KEYS;
+var activeProfileName, GRANT_REVOKED_EXIT_CODE, CLIError, SETUP_KEYS;
 var init_errors = __esm({
   "src/output/errors.ts"() {
     "use strict";
@@ -653,6 +654,7 @@ var init_errors = __esm({
     init_formatter();
     init_storage();
     init_warnings();
+    GRANT_REVOKED_EXIT_CODE = ExitCode.PERMISSION_DENIED;
     CLIError = class extends Error {
       constructor(code4, message, exitCode = ExitCode.ERROR, metadata) {
         super(message);
@@ -26576,6 +26578,25 @@ var ShareHistoryRetryError = class extends Error {
   }
   code = "SHARE_HISTORY_RETRY";
 };
+var ShareHistoryUnreadableError = class extends Error {
+  constructor() {
+    super("share history is unavailable");
+    this.name = "ShareHistoryUnreadableError";
+  }
+};
+var ShareHistoryReadError = class extends Error {
+  constructor() {
+    super("share history could not be read");
+    this.name = "ShareHistoryReadError";
+  }
+};
+var HISTORY_WRITE_ERROR_CODES = { EACCES: true, EPERM: true, EROFS: true, ENOSPC: true, EDQUOT: true, EIO: true };
+function shareHistoryReason(error) {
+  if (error instanceof ShareHistoryUnreadableError) return "HISTORY_UNREADABLE";
+  if (error instanceof ShareHistoryReadError) return "HISTORY_READ_FAILED";
+  const code4 = typeof error === "object" && error !== null && "code" in error ? error.code : void 0;
+  return typeof code4 === "string" && HISTORY_WRITE_ERROR_CODES[code4] === true ? "HISTORY_WRITE_FAILED" : "HISTORY_UNAVAILABLE";
+}
 
 // src/commands/share.ts
 var SHARE_ORIGIN = "https://share.tinycloud.xyz";
@@ -26757,16 +26778,18 @@ function expires(value) {
 }
 async function rememberPublishedShare(result) {
   const record2 = historyRecordForPublishedShare(result);
-  if (shareServices.records === void 0) return { record: record2, recorded: false };
   try {
+    if (shareServices.records === void 0) throw new Error("sender history is not configured");
     await shareServices.records.put(record2);
-    return { record: record2, recorded: true };
-  } catch {
-    process.stderr.write("Warning: share was published but not recorded in sender history; future share list, share notify, and share revoke by ID will not find it.\n");
-    return { record: record2, recorded: false };
+    return { record: record2, history: { recorded: true } };
+  } catch (error) {
+    const reason = shareHistoryReason(error);
+    process.stderr.write(`Warning: share was published but not recorded in sender history (${reason}); future share list, share notify, and share revoke by ID will not find it. Keep share ID ${result.metadata.shareId} and CID ${result.link.cid}.
+`);
+    return { record: record2, history: { recorded: false, reason } };
   }
 }
-async function notifyRecordedShare(record2, recipient, adapter, storage) {
+async function notifyRecordedShare(record2, recipient, adapter, storage, published) {
   const result = await notifyShare({ shareId: record2.shareId, recipient, record: record2, adapter, checkDeliveryWindow: true });
   if (result.state !== "partial-failure" && storage !== void 0) {
     const mailbox = canonicalMailbox2(recipient).email;
@@ -26778,8 +26801,11 @@ async function notifyRecordedShare(record2, recipient, adapter, storage) {
           deliveredRecipients: current.deliveredRecipients?.includes(mailbox) ? current.deliveredRecipients : [...current.deliveredRecipients ?? [], mailbox]
         }));
         if (updated === void 0) throw new Error("sender history record was removed");
-      } catch {
-        process.stderr.write("Warning: delivery succeeded, but could not record its confirmation in sender history.\n");
+      } catch (error) {
+        const reason = shareHistoryReason(error);
+        const identifiers = published === void 0 ? "" : ` Keep share ID ${published.shareId} and CID ${published.cid}.`;
+        process.stderr.write(`Warning: delivery succeeded, but could not record its confirmation in sender history (${reason}).${identifiers}
+`);
       }
     }
   }
@@ -26868,17 +26894,17 @@ function registerShareCommand(program2) {
         }
         throw new CLIError(result.method === "openkey-device" ? "DEVICE_AUTH_REQUIRED" : "CLAIM_REQUIRED", "recipient authorization is required; continue through the configured authority adapter", 6);
       }
-      const { record: record2, recorded } = await rememberPublishedShare(result);
+      const { record: record2, history } = await rememberPublishedShare(result);
       let notification;
       if (notifyRecipient !== void 0) {
         if (shareServices.delivery === void 0) throw new CLIError("AUTH_REQUIRED", "delivery authority is not configured", 3);
-        notification = await notifyRecordedShare(record2, notifyRecipient, shareServices.delivery, recorded ? shareServices.records : void 0);
+        notification = await notifyRecordedShare(record2, notifyRecipient, shareServices.delivery, history.recorded ? shareServices.records : void 0, { shareId: result.metadata.shareId, cid: result.link.cid });
         if (notification.state === "partial-failure") process.exitCode = 9;
         if (notification.reason === "delivery-window-expired") process.stderr.write(NOTIFY_WINDOW_MESSAGE);
       }
       if (result.metadata.expiryClamped === true) process.stderr.write(`Share expiry clamped to session expiry (${result.metadata.expiresAt}).
 `);
-      if (json) writeJson2({ ...redactPublishedShare(result), expiryClamped: result.metadata.expiryClamped === true, ...artifact === void 0 || result.metadata.artifact === void 0 ? {} : { artifactId: result.metadata.artifact.id, version: result.metadata.artifact.version, mode: result.metadata.artifact.mode }, ...notification === void 0 ? {} : { notification } });
+      if (json) writeJson2({ ...redactPublishedShare(result), history, expiryClamped: result.metadata.expiryClamped === true, ...artifact === void 0 || result.metadata.artifact === void 0 ? {} : { artifactId: result.metadata.artifact.id, version: result.metadata.artifact.version, mode: result.metadata.artifact.mode }, ...notification === void 0 ? {} : { notification } });
       else {
         if (result.metadata.artifact !== void 0) process.stderr.write(`Artifact ${result.metadata.artifact.id} v${result.metadata.artifact.version} (${result.metadata.artifact.mode})
 `);
@@ -27252,9 +27278,9 @@ function createEncryptedProfileHistory(profileName, sessionSigner) {
   const legacyPath = async (profile) => join12(await ProfileManager.getCacheDir(profile), "share-history-v1.bin");
   const b64 = (value) => Buffer.from(value).toString("base64url");
   const unb64 = (value) => {
-    if (typeof value !== "string" || !/^[A-Za-z0-9_-]+$/.test(value)) throw new Error("share history is unavailable");
+    if (typeof value !== "string" || !/^[A-Za-z0-9_-]+$/.test(value)) throw new ShareHistoryUnreadableError();
     const bytes = new Uint8Array(Buffer.from(value, "base64url"));
-    if (b64(bytes) !== value) throw new Error("share history is unavailable");
+    if (b64(bytes) !== value) throw new ShareHistoryUnreadableError();
     return bytes;
   };
   const isStoredRecord = (value) => typeof value === "object" && value !== null && "shareId" in value && typeof value.shareId === "string";
@@ -27283,43 +27309,53 @@ function createEncryptedProfileHistory(profileName, sessionSigner) {
     const legacyKey = await crypto.subtle.importKey("raw", digest, { name: "AES-GCM" }, false, ["decrypt"]);
     return preparedKeys = { profile, identity: snapshot.fingerprint, material, legacyKey };
   };
-  const preparedSalt = async (profile) => {
+  const readIfPresent = async (file) => {
     try {
-      const envelope = JSON.parse(await readFile7(await path(profile), "utf8"));
-      if (envelope.version !== HISTORY_VERSION) throw new Error("share history is unavailable");
-      const salt = unb64(envelope.kdfSalt);
-      if (salt.length < 16) throw new Error("share history is unavailable");
-      return salt;
+      return await readFile7(file);
     } catch (error) {
-      if (error.code === "ENOENT") return crypto.getRandomValues(new Uint8Array(16));
-      throw new Error("share history is unavailable");
+      if (error.code === "ENOENT") return void 0;
+      throw new ShareHistoryReadError();
     }
   };
-  const read4 = async (profile, ready) => {
+  const parseEnvelope = (text) => {
+    let envelope;
     try {
-      const envelope = JSON.parse(await readFile7(await path(profile), "utf8"));
-      if (envelope.version !== HISTORY_VERSION) throw new Error("share history is unavailable");
-      if (envelope.kdfSalt !== b64(ready.salt)) throw saltChanged;
-      const iv = unb64(envelope.iv);
-      const ciphertext = unb64(envelope.ciphertext);
-      if (iv.length !== 12 || ciphertext.length <= 16) throw new Error("share history is unavailable");
-      const bytes = await crypto.subtle.decrypt({ name: "AES-GCM", iv }, ready.key, ciphertext);
+      envelope = JSON.parse(text);
+    } catch {
+      throw new ShareHistoryUnreadableError();
+    }
+    if (typeof envelope !== "object" || envelope === null || envelope.version !== HISTORY_VERSION) throw new ShareHistoryUnreadableError();
+    return envelope;
+  };
+  const decryptRecords = async (key, iv, ciphertext) => {
+    try {
+      const bytes = await crypto.subtle.decrypt({ name: "AES-GCM", iv }, key, ciphertext);
       const values = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
       return Array.isArray(values) ? values.filter(isStoredRecord) : [];
-    } catch (error) {
-      if (error === saltChanged) throw error;
-      if (error.code !== "ENOENT") throw new Error("share history is unavailable");
-      try {
-        const legacy = new Uint8Array(await readFile7(await legacyPath(profile)));
-        if (legacy.length <= 12) return [];
-        const bytes = await crypto.subtle.decrypt({ name: "AES-GCM", iv: legacy.slice(0, 12) }, ready.legacyKey, legacy.slice(12));
-        const values = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
-        return Array.isArray(values) ? values.filter(isStoredRecord) : [];
-      } catch (legacyError) {
-        if (legacyError.code === "ENOENT") return [];
-        throw new Error("share history is unavailable");
-      }
+    } catch {
+      throw new ShareHistoryUnreadableError();
     }
+  };
+  const preparedSalt = async (profile) => {
+    const file = await readIfPresent(await path(profile));
+    if (file === void 0) return crypto.getRandomValues(new Uint8Array(16));
+    const salt = unb64(parseEnvelope(file.toString("utf8")).kdfSalt);
+    if (salt.length < 16) throw new ShareHistoryUnreadableError();
+    return salt;
+  };
+  const read4 = async (profile, ready) => {
+    const file = await readIfPresent(await path(profile));
+    if (file === void 0) {
+      const legacy = await readIfPresent(await legacyPath(profile));
+      if (legacy === void 0 || legacy.length <= 12) return [];
+      return decryptRecords(ready.legacyKey, new Uint8Array(legacy.subarray(0, 12)), new Uint8Array(legacy.subarray(12)));
+    }
+    const envelope = parseEnvelope(file.toString("utf8"));
+    if (envelope.kdfSalt !== b64(ready.salt)) throw saltChanged;
+    const iv = unb64(envelope.iv);
+    const ciphertext = unb64(envelope.ciphertext);
+    if (iv.length !== 12 || ciphertext.length <= 16) throw new ShareHistoryUnreadableError();
+    return decryptRecords(ready.key, iv, ciphertext);
   };
   const write = async (profile, values, ready) => {
     const iv = crypto.getRandomValues(new Uint8Array(12));

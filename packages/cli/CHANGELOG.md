@@ -1,5 +1,19 @@
 # @tinycloud/cli
 
+## 1.3.0-beta.44
+
+### Patch Changes
+
+- bba15a4: `tc share publish --json` now reports the sender-history write as `history`: `{"recorded": true}`, or `{"recorded": false, "reason": "HISTORY_UNREADABLE" | "HISTORY_READ_FAILED" | "HISTORY_WRITE_FAILED" | "HISTORY_UNAVAILABLE"}`. The exit status stays 0. The stderr warning names the reason. When a publish with `--notify` delivers but its confirmation cannot be saved, the warning also names the share id and CID to keep, and `history` stays `{"recorded": true}`. A failed delivery-confirmation write on `share notify` names its reason too.
+
+## 1.3.0-beta.43
+
+### Patch Changes
+
+- f2cb165: `tc delegation revoke <cid>` now revokes an owner-signed grant (such as one from `tc auth grant`) from a profile that has no local record of it, for example another CLI profile or machine of the same owner. When the profile has no matching record, the CLI reads the owner's delegation records from the node and uses that record's space only if the grant was issued by the signed-in owner, directly or through a chain of delegations recorded on the node that ends at the owner or the signed-in session key, and every space it covers is one plain space id that belongs to that owner; a CID the node does not list, an issuer or space that does not match, or an ambiguous record keeps the existing `RAW_RECAP_RESOURCE_UNSUPPORTED` refusal, now saying "this CLI profile has no record of this grant and the node's record does not match the signed-in owner". A locally recorded grant still resolves first and unchanged. An agent that presents a revoked grant now gets "This grant was revoked. Ask the owner for a new grant" instead of a bare authentication error: the CLI reports it as `GRANT_REVOKED` (exit 5, the same code and exit as `tc replica`), and operations (including `knowledge list|read` and the MCP tools) keep `AUTH_REQUIRED` with that message, only when the node's 401 says the delegation (or one it derives from) was revoked; any other 401 is unchanged.
+- Updated dependencies [f2cb165]
+  - @tinycloud/operations@0.7.0-beta.33
+
 ## 1.3.0-beta.42
 
 ### Patch Changes

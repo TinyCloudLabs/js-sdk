@@ -43,7 +43,7 @@ import { classifyShareFailure } from "../share/failure-class.js";
 import { authorizationRequiredJson, inspectHuman, publishHuman, receiveHuman, receiveJson, writeJson } from "../share/output.js";
 import { MAX_SHARE_STDIN_BYTES, readBoundedUrlStdin, readShareInput, shareInputFilename, writeShareOutput } from "../share/io.js";
 
-import { ShareHistoryRetryError, SharePublishAuthorityError } from "../share/errors.js";
+import { ShareHistoryRetryError, SharePublishAuthorityError, shareHistoryReason, type ShareHistoryStatus } from "../share/errors.js";
 const SHARE_ORIGIN = "https://share.tinycloud.xyz";
 const NOTIFY_WINDOW_MESSAGE = "Share notification authorization expired (at share expiry or 5 minutes after publication); publish a new share and invite the recipient then.\n";
 
@@ -282,18 +282,19 @@ function expires(value: string): Date {
   catch { throw new CLIError("INVALID_ARGUMENT", "invalid expiry duration", 2); }
 }
 
-async function rememberPublishedShare(result: PublishedShare): Promise<{ record: SenderShareRecord; recorded: boolean }> {
+async function rememberPublishedShare(result: PublishedShare): Promise<{ record: SenderShareRecord; history: ShareHistoryStatus }> {
   const record = historyRecordForPublishedShare(result);
-  if (shareServices.records === undefined) return { record, recorded: false };
   try {
+    if (shareServices.records === undefined) throw new Error("sender history is not configured");
     await shareServices.records.put(record);
-    return { record, recorded: true };
-  } catch {
-    process.stderr.write("Warning: share was published but not recorded in sender history; future share list, share notify, and share revoke by ID will not find it.\n");
-    return { record, recorded: false };
+    return { record, history: { recorded: true } };
+  } catch (error) {
+    const reason = shareHistoryReason(error);
+    process.stderr.write(`Warning: share was published but not recorded in sender history (${reason}); future share list, share notify, and share revoke by ID will not find it. Keep share ID ${result.metadata.shareId} and CID ${result.link.cid}.\n`);
+    return { record, history: { recorded: false, reason } };
   }
 }
-async function notifyRecordedShare(record: SenderShareRecord, recipient: string, adapter: ShareDeliveryAdapter, storage?: SenderShareRecordStorage): Promise<ShareNotifyResult> {
+async function notifyRecordedShare(record: SenderShareRecord, recipient: string, adapter: ShareDeliveryAdapter, storage?: SenderShareRecordStorage, published?: { readonly shareId: string; readonly cid: string }): Promise<ShareNotifyResult> {
   const result = await notifyShare({ shareId: record.shareId, recipient, record, adapter, checkDeliveryWindow: true });
   if (result.state !== "partial-failure" && storage !== undefined) {
     const mailbox = canonicalMailbox(recipient)!.email;
@@ -307,8 +308,10 @@ async function notifyRecordedShare(record: SenderShareRecord, recipient: string,
             : [...(current.deliveredRecipients ?? []), mailbox],
         }));
         if (updated === undefined) throw new Error("sender history record was removed");
-      } catch {
-        process.stderr.write("Warning: delivery succeeded, but could not record its confirmation in sender history.\n");
+      } catch (error) {
+        const reason = shareHistoryReason(error);
+        const identifiers = published === undefined ? "" : ` Keep share ID ${published.shareId} and CID ${published.cid}.`;
+        process.stderr.write(`Warning: delivery succeeded, but could not record its confirmation in sender history (${reason}).${identifiers}\n`);
       }
     }
   }
@@ -437,16 +440,16 @@ export function registerShareCommand(program: Command): void {
           }
           throw new CLIError(result.method === "openkey-device" ? "DEVICE_AUTH_REQUIRED" : "CLAIM_REQUIRED", "recipient authorization is required; continue through the configured authority adapter", 6);
         }
-        const { record, recorded } = await rememberPublishedShare(result);
+        const { record, history } = await rememberPublishedShare(result);
         let notification: ShareNotifyResult | undefined;
         if (notifyRecipient !== undefined) {
           if (shareServices.delivery === undefined) throw new CLIError("AUTH_REQUIRED", "delivery authority is not configured", 3);
-          notification = await notifyRecordedShare(record, notifyRecipient, shareServices.delivery, recorded ? shareServices.records : undefined);
+          notification = await notifyRecordedShare(record, notifyRecipient, shareServices.delivery, history.recorded ? shareServices.records : undefined, { shareId: result.metadata.shareId, cid: result.link.cid });
           if (notification.state === "partial-failure") process.exitCode = 9;
           if (notification.reason === "delivery-window-expired") process.stderr.write(NOTIFY_WINDOW_MESSAGE);
         }
         if (result.metadata.expiryClamped === true) process.stderr.write(`Share expiry clamped to session expiry (${result.metadata.expiresAt}).\n`);
-        if (json) writeJson({ ...redactPublishedShare(result), expiryClamped: result.metadata.expiryClamped === true, ...(artifact === undefined || result.metadata.artifact === undefined ? {} : { artifactId: result.metadata.artifact.id, version: result.metadata.artifact.version, mode: result.metadata.artifact.mode }), ...(notification === undefined ? {} : { notification }) });
+        if (json) writeJson({ ...redactPublishedShare(result), history, expiryClamped: result.metadata.expiryClamped === true, ...(artifact === undefined || result.metadata.artifact === undefined ? {} : { artifactId: result.metadata.artifact.id, version: result.metadata.artifact.version, mode: result.metadata.artifact.mode }), ...(notification === undefined ? {} : { notification }) });
         else {
           if (result.metadata.artifact !== undefined) process.stderr.write(`Artifact ${result.metadata.artifact.id} v${result.metadata.artifact.version} (${result.metadata.artifact.mode})\n`);
           publishHuman(result);
