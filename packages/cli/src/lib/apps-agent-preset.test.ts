@@ -5,6 +5,7 @@ import {
   APPS_AGENT_MAX_APPS,
   appsAgentPermissions,
   appsAgentScopeNotice,
+  assertRequestFields,
   describeAction,
   describeGrantScope,
   matchAppsAgentRequest,
@@ -305,5 +306,62 @@ describe("describeAction wording", () => {
     for (const action of ["tinycloud.delegation/create", "tinycloud.delegation/revoke", "tinycloud.delegation/*", "tinycloud.kv/*", "tinycloud.sql/*"]) {
       expect(describeAction(action)).not.toContain("unrecognised");
     }
+  });
+});
+
+describe("flag values echoed in errors are escaped and clipped", () => {
+  const HOSTILE = "\u001b[2J\u202e\u2028\u009b\u200b";
+  // eslint-disable-next-line no-control-regex
+  const RAW = /[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u2028\u2029\u202a-\u202e\u2066-\u2069\ufeff]/;
+  const message = (options: Parameters<typeof resolveAppsAgentRequest>[0]) => {
+    try {
+      resolveAppsAgentRequest(options);
+    } catch (error) {
+      return (error as Error).message;
+    }
+    throw new Error("expected a usage error");
+  };
+
+  test("--preset and --app values", () => {
+    const preset = message({ preset: `bad${HOSTILE}` });
+    expect(preset).not.toMatch(RAW);
+    expect(preset).toContain("\\u{1b}[2J");
+    const app = message({ preset: "apps-agent", app: [`bad${HOSTILE}`] });
+    expect(app).not.toMatch(RAW);
+    expect(app).toContain("\\u{202e}");
+    expect(message({ preset: "apps-agent", app: ["x".repeat(5000)] }).length).toBeLessThan(400);
+  });
+});
+
+describe("assertRequestFields: the fields that signer and parser errors quote", () => {
+  const ok = { sessionDid: "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK#z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK" };
+
+  test("accepts a DID with a fragment and a duration or number of milliseconds", () => {
+    expect(() => assertRequestFields(ok)).not.toThrow();
+    for (const requestedExpiry of [undefined, "7d", "12h", 3_600_000, "86400000"]) {
+      expect(() => assertRequestFields({ ...ok, requestedExpiry })).not.toThrow();
+    }
+  });
+
+  test.each([
+    ["a hostile sessionDid", { sessionDid: `did:key:z6Mk${"\u001b[2J\u202e"}` }],
+    ["a sessionDid with a newline", { sessionDid: "did:key:z6Mk\nx" }],
+    ["a missing sessionDid", {}],
+    ["a numeric sessionDid", { sessionDid: 7 }],
+    ["an overlong sessionDid", { sessionDid: `did:key:${"z".repeat(400)}` }],
+    ["a hostile requestedExpiry", { ...ok, requestedExpiry: "7d\u001b[2J\u202e" }],
+    ["a requestedExpiry that is no duration", { ...ok, requestedExpiry: "soon" }],
+    ["a negative requestedExpiry", { ...ok, requestedExpiry: -5 }],
+    ["an object requestedExpiry", { ...ok, requestedExpiry: { a: 1 } }],
+  ])("refuses %s with exit 2, fixed text and no echo", (_name, request) => {
+    let thrown: unknown;
+    try {
+      assertRequestFields(request as Parameters<typeof assertRequestFields>[0]);
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toMatchObject({ exitCode: 2 });
+    expect((thrown as Error).message).toMatch(/^The request's (sessionDid|requestedExpiry) is not /);
+    expect((thrown as Error).message).not.toMatch(/[\u0000-\u001f\u202e]/);
   });
 });

@@ -25,3 +25,36 @@ describe("terminal-safe text", () => {
     expect(safeInline(text)).toBe(text);
   });
 });
+
+describe("every class of invisible or terminal-driving character is neutralised", () => {
+  const classes: [string, string][] = [
+    ["C0 control (ESC)", "\u001b[2J"],
+    ["NUL", "\u0000"],
+    ["DEL", "\u007f"],
+    ["C1 control (CSI 0x9b)", "\u009b"],
+    ["C1 control (0x80)", "\u0080"],
+    ["zero-width space U+200B", "\u200b"],
+    ["zero-width non-joiner U+200C", "\u200c"],
+    ["zero-width joiner U+200D", "\u200d"],
+    ["left-to-right mark U+200E", "\u200e"],
+    ["right-to-left mark U+200F", "\u200f"],
+    ["line separator U+2028", "\u2028"],
+    ["paragraph separator U+2029", "\u2029"],
+    ["bidi embedding U+202A", "\u202a"],
+    ["bidi override U+202E", "\u202e"],
+    ["bidi isolate U+2066", "\u2066"],
+    ["bidi isolate U+2069", "\u2069"],
+    ["byte order mark U+FEFF", "\ufeff"],
+  ];
+  // eslint-disable-next-line no-control-regex
+  const RAW = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u200b-\u200f\u2028\u2029\u202a-\u202e\u2066-\u2069\ufeff]/;
+
+  test.each(classes)("%s is shown as an escape by both helpers", (_name, character) => {
+    for (const helper of [safeInline, safeBlock]) {
+      const out = helper(`a${character}b`);
+      expect(out).not.toMatch(RAW);
+      expect(out).toContain("\\u{");
+      expect(out.startsWith("a") && out.endsWith("b")).toBe(true);
+    }
+  });
+});

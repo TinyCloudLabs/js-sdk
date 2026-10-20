@@ -6,12 +6,12 @@
  * reads. JSON output keeps the exact text and never goes through here.
  */
 
-/** C0 (without tab and newline), DEL, C1, bidi controls and line/paragraph separators. */
+/** C0 (without tab and newline), DEL, C1, zero-width and bidi controls (U+200B-200F, U+202A-202E, U+2066-2069), BOM and line/paragraph separators. */
 // eslint-disable-next-line no-control-regex
-const UNSAFE_BLOCK = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u061c\u200e\u200f\u2028\u2029\u202a-\u202e\u2066-\u2069]/g;
+const UNSAFE_BLOCK = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u061c\u200b-\u200f\u2028\u2029\u202a-\u202e\u2066-\u2069\ufeff]/g;
 /** The same, plus tab and newline: a single-line value cannot start a new line. */
 // eslint-disable-next-line no-control-regex
-const UNSAFE_INLINE = /[\u0000-\u001f\u007f-\u009f\u061c\u200e\u200f\u2028\u2029\u202a-\u202e\u2066-\u2069]/g;
+const UNSAFE_INLINE = /[\u0000-\u001f\u007f-\u009f\u061c\u200b-\u200f\u2028\u2029\u202a-\u202e\u2066-\u2069\ufeff]/g;
 
 function escape(match: string): string {
   return `\\u{${match.codePointAt(0)!.toString(16)}}`;

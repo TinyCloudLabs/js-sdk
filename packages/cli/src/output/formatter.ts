@@ -1,5 +1,6 @@
 import ora from "ora";
 import { CLI_NAME } from "@tinycloud/operations/cli-name";
+import { safeBlock, safeInline } from "./safe-text.js";
 import { theme } from "./theme.js";
 import { drainWarnings, mergeWarnings } from "./warnings.js";
 
@@ -48,12 +49,14 @@ export function outputError(
 ): void {
   const { meta, warnings = [], setup, recovery, progress } = details;
   if (!shouldOutputJson()) {
+    // Messages and hints can quote text from a request file, a registry or the network: on a terminal
+    // they are escaped (control characters, ANSI, bidi, zero-width). JSON output below stays exact.
     process.stderr.write(
-      `${theme.error("✗")} ${theme.label(code)}: ${message}\n`
+      `${theme.error("✗")} ${theme.label(safeInline(code))}: ${safeBlock(message)}\n`
     );
     if (hint) {
       for (const line of hint.split("\n")) {
-        process.stderr.write(`  ${theme.hint(line)}\n`);
+        process.stderr.write(`  ${theme.hint(safeBlock(line))}\n`);
       }
     }
     if (warnings.length > 0) process.stderr.write(`  ${theme.warn("!")} ${warningLine(warnings)}\n`);

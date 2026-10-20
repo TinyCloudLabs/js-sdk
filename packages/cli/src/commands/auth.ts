@@ -131,6 +131,7 @@ import {
   APPS_AGENT_SPACE,
   appsAgentPermissions,
   appsAgentScopeNotice,
+  assertRequestFields,
   describeGrantScope,
   entriesForSigning,
   finalizeSigningEntries,
@@ -1300,6 +1301,7 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
             ExitCode.USAGE_ERROR,
           );
         }
+        assertRequestFields(parsed);
 
         // One resolved list is described, gated and signed. The signer's own defaults (an entry with
         // no space is in the owner's `applications` space) and the profile's name resolution are

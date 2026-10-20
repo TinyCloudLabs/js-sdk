@@ -194,7 +194,7 @@ export function resolveAppsAgentRequest(options: AppsAgentRequestOptions): AppsA
     return undefined;
   }
   if (options.preset !== APPS_AGENT_PRESET) {
-    throw usage(`Unknown --preset "${options.preset}". Available: ${APPS_AGENT_PRESET}.`);
+    throw usage(`Unknown --preset "${safeClipped(options.preset)}". Available: ${APPS_AGENT_PRESET}.`);
   }
   if ((options.cap?.length ?? 0) > 0 || options.permission !== undefined || options.manifest !== undefined ||
     options.expiry !== undefined) {
@@ -208,7 +208,7 @@ export function resolveAppsAgentRequest(options: AppsAgentRequestOptions): AppsA
   const mode: AppsAgentMode = options.write === true ? "write" : "read";
   const appIds = [...new Set(apps)];
   for (const appId of appIds) {
-    if (!isAppId(appId)) throw usage(`Invalid --app "${appId}": ${APP_ID_RULE}.`);
+    if (!isAppId(appId)) throw usage(`Invalid --app "${safeClipped(appId)}": ${APP_ID_RULE}.`);
   }
   if (appIds.length > APPS_AGENT_MAX_APPS) {
     throw usage(`--app can be repeated at most ${APPS_AGENT_MAX_APPS} times; for more apps, ask for read-only access to the whole space (leave --app off).`);
@@ -286,6 +286,25 @@ const RAW_ENCRYPTION_SPACE = "encryption";
 
 function badRequest(message: string): CLIError {
   return new CLIError("INVALID_AUTH_REQUEST", `${message} Nothing was signed.`, ExitCode.USAGE_ERROR);
+}
+
+/** A DID as it appears in a request: method and identifier characters only, no control or bidi characters. */
+const DID_SHAPE = /^did:[a-z0-9]+:[A-Za-z0-9._:%#-]+$/;
+
+/**
+ * The top-level fields of a request file that are echoed in signer and parser
+ * errors: `sessionDid` and `requestedExpiry`. A value of the wrong shape is
+ * refused here with fixed text, before anything is printed or signed.
+ */
+export function assertRequestFields(request: { sessionDid?: unknown; requestedExpiry?: unknown }): void {
+  if (typeof request.sessionDid !== "string" || request.sessionDid.length > 300 || !DID_SHAPE.test(request.sessionDid)) {
+    throw badRequest("The request's sessionDid is not a valid DID.");
+  }
+  if (request.requestedExpiry !== undefined &&
+    (typeof request.requestedExpiry !== "string" && typeof request.requestedExpiry !== "number" ||
+      lifetimeMs(request.requestedExpiry as string | number) === undefined)) {
+    throw badRequest("The request's requestedExpiry is not a duration such as 7d or 12h.");
+  }
 }
 
 /**
