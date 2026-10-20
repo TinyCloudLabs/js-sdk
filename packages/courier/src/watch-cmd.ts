@@ -106,14 +106,15 @@ export function wakeConfig(args: ParsedArgs, owner: string | undefined): WakeCon
   };
 }
 
-const NOTIFIERS = ['none', 'paseo', 'osascript', 'exec'] as const;
+const NOTIFIERS = ['none', 'osascript', 'exec'] as const;
 
-/** `--notify` default: Paseo wakes tell Paseo; a Mac running claude gets a desktop notification; otherwise log only. */
+/** macOS defaults to desktop notification; other hosts always have the local notifications log. */
 export function notifyConfig(args: ParsedArgs, wake: WakeConfig, platform: string = process.platform): NotifyConfig {
   const exec = value(args, 'notify-exec');
-  const adapter = (value(args, 'notify') ?? (exec ? 'exec' : wake.adapter === 'paseo' ? 'paseo' : wake.adapter === 'claude' && platform === 'darwin' ? 'osascript' : 'none')) as NotifyConfig['adapter'];
-  if (!NOTIFIERS.includes(adapter)) throw new CourierError('usage', `Unknown --notify "${adapter}". Use none, paseo, osascript or exec.`);
+  const adapter = (value(args, 'notify') ?? (exec ? 'exec' : platform === 'darwin' ? 'osascript' : 'none')) as NotifyConfig['adapter'];
+  if (!NOTIFIERS.includes(adapter)) throw new CourierError('usage', `Unknown --notify "${adapter}". Use none, osascript or exec. Notifications never start or message an agent.`);
   if (adapter === 'exec' && !exec) throw new CourierError('usage', '--notify exec needs --notify-exec <cmd>.');
+  if (exec && startsAgentCli(exec)) throw new CourierError('usage', 'notifications cannot start an agent CLI');
   return { adapter, owner: wake.owner, exec, wake };
 }
 
@@ -233,6 +234,7 @@ export async function cmdWatch(args: ParsedArgs): Promise<void> {
   const log = jsonLineLog();
   const node = await courierNode(profile);
   const watcher = new Watcher({
+    notificationHome: config.home,
     selfKv: node.kv,
     spaceId: profile.spaceId!,
     selfHooks: node.hooks,

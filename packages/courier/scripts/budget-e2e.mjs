@@ -26,7 +26,12 @@ const opt = (name, fallback) => {
 const BUDGET = Number(opt('budget', '3'));
 const DEBOUNCE = opt('debounce', '2');
 
-const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'courier-budget-'));
+const root = path.join(os.homedir(), 'scratch/tc712');
+fs.mkdirSync(root, { recursive: true, mode: 0o700 });
+const tmp = fs.mkdtempSync(path.join(root, 'courier-budget-'));
+fs.chmodSync(tmp, 0o700);
+const testEnv = { ...process.env, HOME: path.join(tmp, 'owner-home'), TC_HOME: path.join(tmp, 'tc'), TMPDIR: tmp };
+fs.mkdirSync(testEnv.HOME);
 console.log(`throwaway profiles: ${tmp}  (budget ${BUDGET}, debounce ${DEBOUNCE} s)`);
 const write = (name, obj) => { const f = path.join(tmp, name); fs.writeFileSync(f, JSON.stringify(obj)); return f; };
 let failures = 0;
@@ -34,7 +39,7 @@ const ok = (name, cond, extra = '') => { if (!cond) failures++; console.log(`${c
 
 async function courier(home, args, { allowFail } = {}) {
   try {
-    const { stdout } = await run(process.execPath, [CLI, ...args], { env: { ...process.env, COURIER_HOME: home }, timeout: 180_000 });
+    const { stdout } = await run(process.execPath, [CLI, ...args], { env: { ...testEnv, COURIER_HOME: home }, timeout: 180_000 });
     return { code: 0, stdout, json: stdout.trim().startsWith('{') ? JSON.parse(stdout) : undefined };
   } catch (e) {
     if (!allowFail) throw e;
@@ -67,9 +72,9 @@ const events = { alice: [], bob: [] };
 const notes = { alice: path.join(tmp, 'alice-notices'), bob: path.join(tmp, 'bob-notices') };
 function watch(side) {
   const p = spawn(process.execPath, [
-    CLI, 'watch', '--exec', reply, '--debounce', DEBOUNCE, '--wake-budget', String(BUDGET),
+    CLI, 'watch', '--exec', reply, '--unguarded', '--debounce', DEBOUNCE, '--wake-budget', String(BUDGET),
     '--notify-exec', `printf '%s %s\\n' "$COURIER_NOTICE" "$COURIER_PEER" >> '${notes[side]}'`, '--cwd', tmp,
-  ], { env: { ...process.env, COURIER_HOME: homes[side], PATH: `${shim}:${process.env.PATH}` }, stdio: ['ignore', 'pipe', 'inherit'] });
+  ], { env: { ...testEnv, COURIER_HOME: homes[side], PATH: `${shim}:${process.env.PATH}` }, stdio: ['ignore', 'pipe', 'inherit'] });
   let buffer = '';
   p.stdout.on('data', (chunk) => {
     buffer += chunk;
@@ -143,7 +148,8 @@ try {
   failures++;
   console.error(`FAIL: ${error.stack ?? error.message}`);
 } finally {
-  for (const p of watchers) p.kill('SIGTERM');
+  await Promise.all(watchers.map(p => new Promise(resolve => { if (p.exitCode !== null) return resolve(); p.once('exit', resolve); p.kill('SIGTERM'); })));
+  fs.rmSync(tmp, { recursive: true, force: true });
 }
 console.log(failures ? `${failures} FAILURES` : 'ALL PASS');
 process.exitCode = failures ? 1 : 0;

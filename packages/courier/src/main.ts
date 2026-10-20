@@ -82,9 +82,10 @@ Delivery (one watcher per person per machine; never calls a model):
                                              NOT approval-guarded: needs --unguarded, prints a notice on every
                                              wake; not for agents that can merge, deploy or publish
                                    [--wake-timeout 900] limits one wake run, in seconds.
-                                   Wake budget: at most --wake-budget message wakes per thread per 24 h; then
+                                   Wake budget: at most --wake-budget message wake attempts per thread per UTC day; then
                                    the thread pauses (inform "thread paused" to the peer, notification to you via
-                                   --notify; the peer's watcher notifies its human). inform never wakes.
+                                   --notify osascript|exec|none; fixed notices also go to notifications.jsonl).
+                                   Notification paths never start or message agents. inform never wakes.
                                    Woken claude/exec runs get an environment allowlist (PATH, HOME, locale,
                                    proxy/CA, COURIER_*), clean HOME/XDG paths, no tokens; [--env-pass NAME]…
                                    adds one on purpose. paseo agents inherit the Paseo daemon's environment:

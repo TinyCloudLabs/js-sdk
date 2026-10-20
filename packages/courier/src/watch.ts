@@ -8,7 +8,7 @@ import { isRecord, messageView, oneLine, taskView } from './a2a.js';
 import { commitReceipts, selectUndelivered, type KV, type Receipts } from './inbox.js';
 import { del, getJson, listAll, putCreate, putMatch, putOverwrite } from './store.js';
 import type { WakeApproval, WakeMessage, Waker, WatchLog } from './wake.js';
-import type { Notice, Notifier } from './notify.js';
+import { appendNotice, type Notice, type Notifier } from './notify.js';
 import { writePauseMarker } from './pause.js';
 
 /** Spec §8. inform and receipts never wake; a message with no valid intent is delivered but never wakes. */
@@ -64,23 +64,23 @@ export interface WatchState {
   /** Recently woken message ids, so a receipt write that failed cannot cause a second wake. */
   woken: string[];
   approvalsSeen: string[];
-  /** Successful message wakes today (UTC), per `<peer>/<threadId>`, as epoch ms (approval wakes do not count). */
+  /** Message wake attempts today (UTC), per `<peer>/<threadId>`, as epoch ms (approval wakes do not count). */
   wakes: Record<string, number[]>;
   /** Threads this watcher has seen paused; a marker that vanishes from this list means the human resumed it. */
   paused: string[];
   /** Posts and notifications that must happen exactly-ish once and survive a restart (retried until they succeed). */
   outbox: OutboxItem[];
   held: Record<string, HeldBacklog>;
-  /** Day (UTC, since epoch) of the last `peer-paused` notification per `<peer>/<threadId>`: one per thread per day. */
+  /** UTC day of the last notification per kind/peer/thread: one of each kind per day. */
   peerPausedDay: Record<string, number>;
-  /** Times of recent `peer-paused` notifications per peer, for the per-hour cap. */
+  /** Times of recent notifications per peer, for the shared per-hour cap. */
   noticeLog: Record<string, number[]>;
 }
 
 /** `tries` counts failed attempts; an item that keeps failing is dropped (see `MAX_OUTBOX_TRIES`). */
 export type OutboxItem =
-  | { id: string; kind: 'inform'; peer: string; threadId: string; text: string; tries?: number }
-  | { id: string; kind: 'notify'; notice: Notice; tries?: number };
+  | { id: string; kind: 'inform'; peer: string; threadId: string; text: string; tries?: number; nextAttemptAt?: number }
+  | { id: string; kind: 'notify'; notice: Notice; tries?: number; nextAttemptAt?: number; logged?: boolean };
 
 /** Messages that arrived while a thread was paused; they wake the agent once, together, after `courier resume`. */
 export interface HeldBacklog {
@@ -126,8 +126,10 @@ export interface WatchDeps {
   log: WatchLog;
   /** Posts the `thread-paused` inform to a peer (own space, `to/<peer>/threads/<id>/msg/`). Default: nothing. */
   postInform?(peer: string, threadId: string, text: string): Promise<void>;
-  /** Tells this side's human (Paseo attention, desktop notification, …). Default: log only. */
+  /** Tells this side's human without a model (desktop notification or operator command). Default: log only. */
   notify?: Notifier;
+  /** Local bounded notification log; omitted by library callers that want no disk output. */
+  notificationHome?: string;
   /**
    * Who this watcher is, for wake claims. `profileId` is stable for this profile on this machine (a restart keeps it,
    * a second profile or machine differs); `pid` and `isAlive` tell a restarted watcher its predecessor is dead.
@@ -191,7 +193,6 @@ export class Watcher {
   private pausedLock: Promise<unknown> = Promise.resolve();
   private readonly wakeFailures = new Map<string, number>();
   private readonly outboxBusy = new Set<string>();
-  private readonly outboxRetryAt = new Map<string, number>();
   private approvalsAgain = false;
   /** Unique to this run: a claim with this id is this process's own. */
   private readonly runId = ulid();
@@ -228,6 +229,7 @@ export class Watcher {
     this.state = isRecord(value) && value.v === 1
       ? { ...emptyWatchState(), ...(value as Partial<WatchState>) }
       : emptyWatchState();
+    this.state.outbox = this.state.outbox.slice(-MAX_OUTBOX).filter(item => (item.tries ?? 0) < MAX_OUTBOX_TRIES);
   }
 
   snapshot(): WatchState {
@@ -446,14 +448,6 @@ export class Watcher {
         if (item.notice !== 'thread-paused' || item.intent !== 'inform') continue;
         const key = `${peer.handle}/${item.threadId}`;
         const day = Math.floor(at / DAY_MS);
-        if (this.state.peerPausedDay[key] === day) continue;
-        const recent = (this.state.noticeLog[peer.handle] ?? []).filter((t) => at - t < 3600_000);
-        if (recent.length >= NOTICES_PER_PEER_PER_HOUR) {
-          log('notice-dropped', { peer: peer.handle, threadId: item.threadId, reason: 'peer-rate-cap' });
-          continue;
-        }
-        this.state.peerPausedDay[key] = day;
-        this.state.noticeLog[peer.handle] = [...recent, at];
         this.enqueue({
           id: `peer-paused:${key}:${day}`, kind: 'notify',
           notice: { kind: 'peer-paused', peer: peer.handle, threadId: item.threadId, detail: "the peer's watcher reported the thread paused" },
@@ -748,6 +742,20 @@ export class Watcher {
 
   /** Called inside `mutate`: queues an inform or notification; the outbox is bounded, the oldest item goes first. */
   private enqueue(item: OutboxItem): void {
+    if (item.kind === 'notify') {
+      const { notice } = item;
+      const at = this.now();
+      const day = Math.floor(at / DAY_MS);
+      const key = `${notice.kind}:${notice.peer}/${notice.threadId}`;
+      if (this.state.peerPausedDay[key] === day) return;
+      const recent = (this.state.noticeLog[notice.peer] ?? []).filter(t => at - t < 3600_000);
+      if (recent.length >= NOTICES_PER_PEER_PER_HOUR) {
+        this.deps.log('notice-dropped', { peer: notice.peer, reason: 'peer-rate-cap' });
+        return;
+      }
+      this.state.peerPausedDay[key] = day;
+      this.state.noticeLog[notice.peer] = [...recent, at];
+    }
     this.state.outbox.push(item);
     while (this.state.outbox.length > MAX_OUTBOX) {
       const dropped = this.state.outbox.shift()!;
@@ -818,7 +826,7 @@ export class Watcher {
     const at = this.now();
     const runs: Promise<void>[] = [];
     for (const item of [...this.state.outbox]) {
-      if (this.outboxBusy.has(item.id) || (this.outboxRetryAt.get(item.id) ?? 0) > at) continue;
+      if (this.outboxBusy.has(item.id) || (item.nextAttemptAt ?? 0) > at) continue;
       this.outboxBusy.add(item.id);
       runs.push((async () => {
         try {
@@ -826,20 +834,21 @@ export class Watcher {
           else {
             const { notice } = item;
             this.deps.log('notify', { kind: notice.kind, peer: notice.peer, threadId: notice.threadId, detail: notice.detail });
+            if (!item.logged && this.deps.notificationHome) {
+              appendNotice(this.deps.notificationHome, notice);
+              await this.mutate(() => { const stored = this.state.outbox.find(o => o.id === item.id); if (stored?.kind === 'notify') stored.logged = true; });
+            }
             await this.deps.notify?.(notice);
           }
-          this.outboxRetryAt.delete(item.id);
           await this.mutate(() => { this.state.outbox = this.state.outbox.filter((o) => o.id !== item.id); });
         } catch (error) {
           const tries = (item.tries ?? 0) + 1;
           this.deps.log(item.kind === 'inform' ? 'inform-error' : 'notify-error', { id: item.id, tries, ...errInfo(error) });
           if (tries >= MAX_OUTBOX_TRIES) {
-            this.outboxRetryAt.delete(item.id);
             this.deps.log('outbox-dropped', { id: item.id, reason: 'too-many-failures' });
             await this.mutate(() => { this.state.outbox = this.state.outbox.filter((o) => o.id !== item.id); });
           } else {
-            this.outboxRetryAt.set(item.id, at + Math.min(15 * 60_000, WAKE_RETRY_MS * 2 ** (tries - 1)));
-            await this.mutate(() => { const stored = this.state.outbox.find((o) => o.id === item.id); if (stored) stored.tries = tries; });
+            await this.mutate(() => { const stored = this.state.outbox.find((o) => o.id === item.id); if (stored) { stored.tries = tries; stored.nextAttemptAt = at + Math.min(15 * 60_000, WAKE_RETRY_MS * 2 ** (tries - 1)); } });
           }
         } finally {
           this.outboxBusy.delete(item.id);
