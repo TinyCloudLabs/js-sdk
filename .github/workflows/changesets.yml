@@ -150,6 +150,8 @@ jobs:
         env:
           # Read-only: lets the check see whether an earlier Release run already got npm to accept a version (TC-1457).
           GH_TOKEN: ${{ github.token }}
+          # Records each package's dist-tags before publishing, for post-publish's "tag back" commands.
+          RELEASE_DIST_TAGS_FILE: ${{ runner.temp }}/npm-dist-tags.json
 
       # Push the version commit before publishing anything (TC-1095). If the
       # push fails because master moved, stop: nothing is published, and the
@@ -227,9 +229,14 @@ jobs:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           RELEASE_SHA: ${{ steps.release.outputs.sha }}
 
+      # Fails red when a published version requires an internal version npm
+      # does not show (even one npm accepted), and prints the commands that move
+      # its dist-tag back and forward. It never moves a dist-tag itself.
       - name: Confirm npm has every current version
         if: steps.check.outputs.pending != '0'
         run: node .github/scripts/check-npm-release-provenance.mjs post-publish "$RUNNER_TEMP/changeset-publish.log"
+        env:
+          RELEASE_DIST_TAGS_FILE: ${{ runner.temp }}/npm-dist-tags.json
 
       - name: Remove release deploy key
         if: always()
@@ -409,6 +416,8 @@ jobs:
         env:
           # Read-only: lets the check see whether an earlier Release run already got npm to accept a version (TC-1457).
           GH_TOKEN: ${{ github.token }}
+          # Records each package's dist-tags before publishing, for post-publish's "tag back" commands.
+          RELEASE_DIST_TAGS_FILE: ${{ runner.temp }}/npm-dist-tags.json
 
       - name: Publish stable to npm
         run: |
@@ -456,6 +465,8 @@ jobs:
 
       - name: Confirm npm has every current version
         run: node .github/scripts/check-npm-release-provenance.mjs post-publish
+        env:
+          RELEASE_DIST_TAGS_FILE: ${{ runner.temp }}/npm-dist-tags.json
 
       # Tag the commit that was published, not master's tip: a recovery run
       # publishes an older release commit while master has moved on.
