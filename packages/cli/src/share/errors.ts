@@ -16,11 +16,13 @@ export type SharePublishFailure =
   | { readonly kind: "registry-rejected" }
   /** Storage is full or too small for the upload; account totals only when the SDK reported them. */
   | ({ readonly kind: "storage-full" } & StorageRejection)
-  | { readonly kind: "upload-failed" };
+  | { readonly kind: "upload-failed" }
+  /** The Node answered a share upload 404 "Space not found": the owner space has no row there. Retryable. */
+  | { readonly kind: "space-not-ready" };
 
 export class SharePublishAuthorityError extends Error {
-  constructor(readonly failure: SharePublishFailure) {
-    super(failure.kind);
+  constructor(readonly failure: SharePublishFailure, options?: { readonly cause?: unknown }) {
+    super(failure.kind, options);
     this.name = "SharePublishAuthorityError";
   }
 }
