@@ -736,6 +736,11 @@ test("a full renewal leaves no scoped grants when a scoped write is in flight", 
       redirectStatus = (await hostedFetch(app, pendingUrl, { redirect: "manual" })).status;
     }
     expect(redirectStatus).toBe(400);
+    const premature = await Promise.race([
+      full.then(() => "completed"),
+      new Promise<string>((resolve) => setTimeout(() => resolve("waiting"), 750)),
+    ]);
+    expect(premature).toBe("waiting");
     // The full clear cannot remove saved grants until the in-flight scoped write finishes.
     expect(removedBeforeScopedWrite).toBe(false);
     released = true;
@@ -774,9 +779,11 @@ test("a node request timeout preserves connection, saved grants, and tool discov
     return blocked;
   };
   try {
+    const started = performance.now();
     const pending = client.callTool({ name: "tinycloud_connect", arguments: {} });
     await arrived;
     const status = await pending;
+    expect(performance.now() - started).toBeLessThan(4_000);
     assertPublicReplyOmitsNodeData(
       status, String(bootstrap.delegationCid), String(record(bootstrap.delegationHeader).Authorization),
     );
