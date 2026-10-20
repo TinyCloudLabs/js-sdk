@@ -84,7 +84,7 @@ export function normGhPrMerge(rest: Word[], ctx: NormCtx, all: Word[] = rest): N
   const number = url ? url[3] : /^#?(\d+)$/.exec(selector)?.[1];
   if (!number) return fail('name the PR by number or URL, not by branch');
   if (!repo) return fail('could not tell which repository (add --repo owner/repo)');
-  return ok('merge', `${repo}#${Number(number)}`);
+  return ok('merge', `${repo}#${number}`);
 }
 
 export function normGhWorkflowRun(rest: Word[], ctx: NormCtx, all: Word[] = rest): Norm {
@@ -115,13 +115,17 @@ export function normApi(text: string): Norm {
     // A placeholder inside the endpoint (e.g. pulls/$N/merge) means the target is decided at run time.
     if (/\/pulls\/[^\/\s]*\u0001[^\/\s]*\/merge|repos\/[^\s]*\u0001/i.test(clean)) return fail('the API endpoint contains a variable; write it out literally');
   }
+  // Every target goes through the same canonicalTarget as an approval's: exact PR digits, lower-cased repo, and a
+  // number it cannot name (0, or more than 9 digits) becomes 'unknown', which refuses the call.
   const addAll = (re: RegExp, build: (m: RegExpExecArray) => string | undefined) => {
     for (const m of clean.matchAll(re)) {
-      const t = build(m);
-      targets.add(t ?? 'unknown');
+      const raw = build(m);
+      let canonical: string | undefined;
+      try { canonical = raw === undefined ? undefined : canonicalTarget('merge', raw); } catch { canonical = undefined; }
+      targets.add(canonical ?? 'unknown');
     }
   };
-  addAll(/repos\/([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)\/pulls\/(\d+)\/merge\b/gi, (m) => `${m[1]}/${m[2]}#${Number(m[3])}`.toLowerCase());
+  addAll(/repos\/([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)\/pulls\/(\d+)\/merge\b/gi, (m) => `${m[1]}/${m[2]}#${m[3]}`);
   addAll(/repos\/([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)\/git\/refs\/heads\/(main|master)\b/gi, (m) => `${m[1]}/${m[2]}`.toLowerCase() + `@${m[3].toLowerCase()}`);
   addAll(/repos\/([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)\/merges\b/gi, (m) => {
     const base = /(?:^|\n)(?:base=|"base"\s*:\s*")([A-Za-z0-9_./-]+)/.exec(clean)?.[1];
