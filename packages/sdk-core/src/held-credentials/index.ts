@@ -1,5 +1,4 @@
-// Held-credential verifier. Import ONE build (ESM or CJS) of this entry point per process: an
-// IssuerSet created by the other build is refused as `bad-config`.
+// Held-credential verifier. Use one build (ESM or CJS) of this entry point per process.
 export { HeldCredentialError, type HeldCredentialErrorCode } from "./errors";
 export { verifyHeldPresentation, type AcceptedIssuer, type AcceptedProfile, type HeldPresentation, type VerifiedHeldCredential, type VerifyHeldPresentationOptions } from "./verify";
 export { ISSUER_SET_FORMAT, IssuerSet, parseIssuerSet, type IssuerEntry, type IssuerSetOptions } from "./issuer-set";

@@ -1,17 +1,13 @@
 import { parsePkhDid, pkhPrincipalsEqual } from "./did";
 
 /**
- * Single use is a property of the store. `consume` is ONE atomic compare-and-delete and the only
- * nonce operation a verifier performs: it deletes the entry only where the audience, the nonce AND
- * the bound account all match (cf. `DELETE ... WHERE nonce = ? AND audience = ? AND owner_did = ?
- * RETURNING`). It must not delete first and compare afterwards: the verifier calls it FIRST, before
- * any signature or claim check, so anyone who saw a nonce could otherwise burn it. Every nonce is
- * minted bound to the authenticated caller's account; unbound nonces do not exist. A mismatch
- * finds nothing and spends nothing.
- *
- * Production stores: a Durable Object, or D1/Postgres with a conditional delete. Cloudflare KV is
- * eventually consistent and MUST NOT be used; there is no stateless (HMAC, self-expiring) mode
- * because that would rest on timestamps alone.
+ * Single use is a property of the store. `consume` is one atomic compare-and-delete and the only
+ * nonce operation a verifier performs: it deletes the entry only where the audience, the nonce and
+ * the bound account all match (for example `DELETE ... WHERE nonce = ? AND audience = ? AND
+ * owner_did = ? RETURNING`). The verifier calls it before the signature and claim checks. Every
+ * nonce is minted bound to the authenticated caller's account. Production stores: a Durable Object,
+ * or D1/Postgres with a conditional delete; there is no stateless mode, because single use does not
+ * rely on timestamps. Details: TC-1540
  */
 export interface NonceStore {
   consume(audience: string, nonce: string, account: string): Promise<{ existed: boolean }>;
@@ -24,9 +20,8 @@ export function randomNonce(): string {
 }
 
 /**
- * In-memory store for tests and single-process tools: single process only; not safe across
- * instances/isolates/replicas (no cross-isolate atomicity). It never expires entries: there is no
- * TTL, so a nonce lives until it is consumed or the process ends. Never use it in production Workers.
+ * In-memory store for tests and single-process tools. Deployments use a shared store that implements
+ * `consume` atomically. Entries do not expire: a nonce lives until it is consumed or the process ends.
  */
 export class InMemoryNonceStore implements NonceStore {
   private readonly nonces = new Map<string, string>();

@@ -104,9 +104,9 @@ export async function verifyHeldPresentation(presentation: unknown, options: Ver
   if (siweMessage.length > HELD_LIMITS.siweMessageChars) refuse("bad-presentation", "siwe message is too long");
   if (siweSignature.length > HELD_LIMITS.siweSignatureChars) refuse("bad-presentation", "siwe signature is too long");
 
-  // 2. SIWE fields and the nonce. The nonce is spent FIRST, on any outcome, by one atomic
-  // compare-and-delete that includes the authenticated caller's account. A forger can only spend a
-  // nonce bound to themselves, and every refusal below has already spent this one.
+  // 2. SIWE fields and the nonce. The nonce is consumed first, on any outcome, by one atomic
+  // compare-and-delete that includes the authenticated caller's account; each presentation uses its
+  // nonce once.
   const message = parseStrictSiwe(siweMessage);
   if (message.domain !== audience) refuse("bad-siwe", "domain is not this verifier's audience");
   if (!/^[0-9A-Za-z]{22,}$/.test(message.nonce)) refuse("bad-nonce", "nonce must be at least 22 base62 characters (or 32 hex)");
