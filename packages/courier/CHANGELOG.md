@@ -1,5 +1,11 @@
 # @tinycloud/courier
 
+## 0.2.0-beta.37
+
+### Patch Changes
+
+- c06c304: Courier profile permission errors use code profile-permissions; documentation wording updates.
+
 ## 0.2.0-beta.36
 
 ### Patch Changes
