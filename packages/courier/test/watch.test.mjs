@@ -509,3 +509,16 @@ test('run() starts the subscriptions before the first catch-up listing', async (
   assert.ok(order.indexOf('subscribe') !== -1 && order.indexOf('list') !== -1);
   assert.ok(order.indexOf('subscribe') < order.indexOf('list'), order.join(','));
 });
+
+test('a watcher told to stop starts no new wake (--once with an already-aborted signal)', async () => {
+  const w = claimWorld();
+  const a = w.mk({ pid: 100 });
+  w.send();
+  await a.watcher.sync(peer, 'poll');
+  const stop = new AbortController();
+  stop.abort();
+  const b = w.mk({ pid: 101 });
+  await b.watcher.run(stop.signal, { once: true });
+  assert.equal(b.wakes.length, 0);
+  assert.equal(Object.keys(b.watcher.snapshot().pending).length, 1, 'the wake stays pending for the next watcher');
+});

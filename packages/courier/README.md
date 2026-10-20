@@ -49,7 +49,7 @@ tc courier pair accept --file a.json
 tc courier send bob --new "Subject" --ask "…" --file handoff.md
 tc courier inbox && tc courier read <threadId>
 tc courier task new --peer bob --thread <id> --state working --ask a1
-tc courier request <threadId> --peer bob --task <id> --action "…" --why "…"
+tc courier request <threadId> --peer bob --task <id> --verb merge --target owner/repo#12 --summary "Merge PR 12" --why "…"
 tc courier orders bob
 ```
 
@@ -165,9 +165,122 @@ process group is killed (a shell's background jobs, pipelines and subshells
 included) and the wake counts as failed. A failed wake stays pending, releases
 its claim and retries after 60 s. A timeout that hits after the agent already
 received the prompt therefore wakes the thread again: wakes are at-least-once.
-A command that exits normally but leaves a background job running is not
-waited for, and the job is left alone. When the watcher stops (SIGTERM, a state
-conflict) it kills the runs still in flight.
+A child that calls `setsid` or `setpgid` leaves the group and survives the kill
+(the group kill reaches everything the shell started, not a program that
+deliberately detaches). A command that exits normally but leaves a background
+job running is not waited for, and the job is left alone. When the watcher stops (SIGINT, SIGTERM, a state
+conflict) it kills the runs still in flight at once, without waiting for the
+wake to end.
+
+If the watcher itself is killed (SIGKILL, power loss), its detached runs are not
+reaped by the watcher. `systemd --user` units set `KillMode=control-group`, so
+the whole cgroup goes down with the service; launchd tracks only the job's own
+process group (`AbandonProcessGroup` is false, but agents run in their own
+groups), so on macOS an agent may outlive a crashed watcher. The restarted
+watcher takes over the dead one's claim and wakes the thread again (at-least-once):
+that thread can briefly have two agent runs.
+
+### Approvals: request fields, text rules and `courier approval`
+
+`courier request` writes structured fields into `me/requests/<id>.json`:
+`verb` (`merge`, `deploy`, `publish`, `spend` or `other`), `target` and
+`summary`. They are part of the request the hash covers; the view renders
+"Approving lets your agent <verb> <target> for <peer>: “<summary>”" (your own agent
+acts; the peer is who asked) from them; the guard
+matches the command it is about to allow to `verb` and `target` only. `action`
+(default: the summary), `reason` (`--why`) and `risk` are free text for the
+owner and are never matched.
+
+One rule set applies when `courier request` writes, when `courier approval`
+reads, and when the view shows the card. A value that breaks it is **refused,
+never repaired or shortened**:
+
+- text must already be Unicode NFC; it is never normalized or repaired. Non-ASCII
+  characters are allowed only from the frozen **Unicode 15.0.0** categories
+  Lu, Ll, Lt, Lo and Nd, excluding Default_Ignorable. Modifier letters (Lm),
+  other numbers (Nl/No), all combining marks, punctuation, symbols, controls,
+  invisible characters, fillers and unassigned/newer characters are refused;
+- U+0020 is the only space. `summary` additionally allows exactly these ASCII
+  punctuation characters: `. , : ; - _ / # ( ) ? !` and apostrophe U+0027.
+  Non-ASCII apostrophes, quotes and brackets are refused. `action`, `reason`,
+  `risk` and approval notes allow all printable ASCII punctuation and LF (`\n`),
+  never a tab or CR;
+- `target`, `summary`: 1 to 200 UTF-16 units, trimmed, one line; `action`,
+  `reason`, `risk`: 1 to 2000, a single `\n` allowed, never a tab or CR;
+- `target` is printable ASCII (`[\x20-\x7E]`) for every verb, in the one
+  canonical spelling for its verb (`courier request --help` prints these forms):
+
+  | verb | canonical target |
+  |---|---|
+  | `merge` | `owner/repo#<PR number>` (a GitHub PR URL is reduced to it), or `owner/repo@<branch>` for a direct push; repo lower-cased; the PR number is exactly the digits written, 1 to 9 of them, no leading zeros (nothing is ever rounded through a float) |
+  | `publish` | `npm:<name>@<version>`, `release:owner/repo@<tag>`, `changeset:<root package name>` or `script:<package>:<script>` |
+  | `deploy` | `wrangler:<worker>[:<env>]`, `pages:<project>`, `phala:<name>` or `script:<package>:<script>` |
+  | `other` | `workflow:owner/repo:<workflow file or name>`, `secrets:<subcommand and key>`, or `<kind>:<text>` |
+  | `spend` | `spend:<what and how much>` |
+
+The CLI and view share `src/text-ranges.ts` and
+`test/vectors/text-verdicts.json`; decisions use only that frozen table and an
+NFC check, never runtime Unicode property tables. The version is pinned to
+Unicode 15.0.0 (Node 20.0.0). The vector ranges cover all 1,114,112 code points
+for `summary`, `multiline` and `target`, plus full-string verdict/reason samples.
+`textVerdict(value: unknown, field: 'summary' | 'multiline' | 'target')` returns
+`{ allowed: boolean, reason: null | 'not-string' | 'empty' | 'too-long' |
+'edge-whitespace' | 'not-nfc' | 'disallowed-code-point' }`. Limits/trim rules are
+included; `multiline` is the action/reason/risk/note policy (an optional empty
+approval note is handled by the caller). Target shapes remain verb-specific.
+The pinned UCD source hashes and regeneration instructions are in
+`scripts/generate-text-table.mjs`. The independent test walks every code point
+using runtime Unicode categories: it fails if the table permits more, and
+reports newer runtime additions without permitting them.
+
+- `threadId`, `taskId` and the request id are ULIDs (26 upper-case Crockford
+  base32 characters, no I L O U), and the peer handle is 1 to 64 of
+  `[A-Za-z0-9_-]`, on write and on read (the view only shows cards for ULIDs);
+- the key set of `me/requests/<id>.json` is closed: `id`, `peer`, `threadId`,
+  `taskId`, `verb`, `target`, `summary`, `requestedBy` (`{owner, agent}`),
+  `createdAt`, `expiresAt`, `status` (`"pending"`) and the optional free text
+  `action`, `reason`, `risk` (written by the CLI, well-formed when present).
+  Anything else makes the request unreviewable in the view and refused by
+  `courier approval`, even if the hash matches;
+- the whole request must hash: `canonicalJson` / `requestHash` throw on a
+  non-finite number (a parsed `1e999`) and on nesting deeper than 64 levels
+  (top-level object = depth 1), so such a request is never written and
+  `courier approval` fails closed on it.
+
+`test/vectors/request-fields.json` is the contract: every row says whether a
+value is accepted, and the canonical-JSON rows give the expected output (or
+"must throw"). Copy it into any other implementation.
+
+`courier approval <requestId> --verb <v> --target <t> [--peek]` is what a
+woken agent runs before a gated action. It reads `me/requests/<id>.json` and
+`me/approvals/<id>.json` and exits 0 only if the request has valid structured
+fields, the approval names that request (`requestId` equals the id), carries
+`requestHash` equal to the SHA-256 of the request's canonical JSON
+(`canonicalJson` / `requestHash`, exported, mirrored by the view; a parsed
+`"__proto__"` key counts as an ordinary key), the request contains no hidden
+text anywhere (rules above, applied to every string and key), says `approved`, was decided in
+`[createdAt, expiresAt)` of the request (a decision dated up to 5 minutes ahead
+of this machine's clock is tolerated; keep the clocks of the agent's machine
+and the owner's browser in step) and within the last 24 hours, and the given
+`--verb` and (canonicalised) `--target` equal the request's. Both are required
+when consuming; `--peek` (for guards) may omit them.
+
+`courier request` and `courier approval` (peek and consume) print the full
+`requestHash`; the view's card shows its first 8 hex digits as a fingerprint so the owner can match the card to the agent's request.
+
+It then consumes the approval with a create-only marker at
+`me/state/approvals-used/<id>.json`, so a second run exits `approval-used`;
+`--peek` checks the marker too (a used approval fails the peek) but does not
+write it. A denial exits `approval-denied`. The courier key cannot write
+`me/approvals/`, so only the owner's view session can produce a passing
+approval. Residual risk: the courier grant can delete under `me/state/`
+(spec §3), so a compromised agent could delete the used marker and replay an
+approval within its 24 hours; a delete-proof record is tracked separately.
+
+The watcher wakes the thread's agent as soon as a new approval (approved or
+denied) for one of its requests appears, without the debounce. Approvals older
+than 24 hours, already used, malformed, or without a request at start-up wake
+nobody.
 
 ### Running it as a service
 
