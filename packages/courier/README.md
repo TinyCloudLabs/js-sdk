@@ -277,8 +277,12 @@ owner's tokens and files are the deeper boundary (see Residual risk).
 | `gh workflow run` | `other workflow:owner/repo:<workflow>` |
 | `tc secrets …` | `other secrets:<args>` |
 
-Never approvable: `courier pair`, `courier revoke`, `courier init` (also as
-`tc courier …`), Secret Bridge, and starting another agent (see below).
+Never approvable: `courier pair`, `courier revoke`, `courier init`,
+`courier pause`, `courier resume` (the wake budget is the reply loop's breaker:
+an agent must not lift its own pause), `courier watch` (an agent must not start
+a watcher, which could wake agents without the guard), all also as `tc courier …`;
+`courier approval` without `--peek` (it would use the approval up before the
+guard can); Secret Bridge; and starting another agent (see below).
 
 **How an approval unlocks one.** The guard normalises the command to its
 (verb, target) and looks in the owner's space for a request with the same verb
@@ -325,7 +329,7 @@ gated command". `gh release list|view|download` are read-only and not gated.
 `<COURIER_HOME>/guard/settings.json` on every start and passes it as
 `claude --settings`, so a woken Claude never runs without it. The file holds the
 hook (`COURIER_HOME=… node …/cli.js guard || exit 2`, so a crash blocks), plus
-deny rules for `courier pair|revoke|init`, Secret Bridge, edits to
+deny rules for `courier pair|revoke|init|pause|resume|watch`, Secret Bridge, edits to
 `COURIER_HOME`, the hook's own program directory, and reads of `key.json` and
 `grant.json`. Approvable commands are deliberately not deny rules: a deny rule
 would also refuse them after the owner approved. `--claude-settings <file>` is
