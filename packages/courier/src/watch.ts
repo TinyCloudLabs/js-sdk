@@ -18,8 +18,10 @@ const WAKEN_MEMORY = 500;
 const WAKE_RETRY_MS = 60_000;
 /** Delay between starting a re-opened subscription and its catch-up list, so the stream is live first. */
 const RECONNECT_CATCH_UP_MS = 2000;
-/** A claim from another profile or machine is respected this long (adapter runs are capped at 30 min by `--wake-timeout`); a claim from this profile's own dead predecessor is taken over at once. */
-const CLAIM_LEASE_MS = 35 * 60_000;
+/** Adapter runs are capped at 30 min in total (`--wake-timeout`, one deadline across all its calls). This profile's own claim is respected 35 min unless its holder is provably gone; another profile's or machine's, 45. */
+const OWN_CLAIM_LEASE_MS = 35 * 60_000;
+/** Another profile or machine: the same plus a margin for clock skew (`at` is the claimer's own clock). */
+const FOREIGN_CLAIM_LEASE_MS = 45 * 60_000;
 /** A thread another watcher is waking is looked at again after this. */
 const CLAIM_SKIP_MS = 30_000;
 const DAY_MS = 24 * 3600 * 1000;
@@ -211,10 +213,10 @@ export class Watcher {
    * runs while this one's wake is in flight cannot wake the same thing. The marker names its holder
    * (`profile`, `run`, `pid`):
    *   - this run's own marker: reuse it;
-   *   - same profile and machine, holder pid gone: the previous watcher died (crash, reboot, restart): take it over at once;
-   *   - same profile and machine, holder pid alive: another watcher is running now: skip the thread (the state
-   *     etag stops the loser when it writes state);
-   *   - another profile or machine: skip until the lease runs out, then take it over.
+   *   - same profile and machine, holder pid gone or equal to ours (restart, crash, reboot, pid 1 in a container): take it over at once;
+   *   - same profile and machine, holder pid alive and different: another watcher is running now: skip the thread (the
+   *     state etag stops the loser when it writes state), unless the claim outlived the own lease (pid reuse);
+   *   - another profile or machine: skip until the lease (plus clock-skew margin) runs out, then take it over.
    * Returns false when the thread must be skipped this tick. Markers are deleted when the adapter fails.
    */
   private async claimWake(peer: string, threadId: string, firstId: string): Promise<boolean> {
@@ -233,11 +235,17 @@ export class Watcher {
       const held = existing.value;
       let takeOver: string | undefined;
       if (held.run === this.runId) return true;
+      const age = typeof held.at === 'string' ? this.now() - Date.parse(held.at) : Infinity;
       if (held.profile === this.profileId) {
-        if (typeof held.pid === 'number' && held.pid !== this.pid && !this.isAlive(held.pid)) takeOver = 'holder-dead';
-      } else {
-        const age = typeof held.at === 'string' ? this.now() - Date.parse(held.at) : Infinity;
-        if (!(age < CLAIM_LEASE_MS)) takeOver = 'lease-expired';
+        // Same profile, same machine, so the same clock. A pid proves liveness only while it is not reused: a live pid
+        // that is not a watcher (pid reuse, another user's process), or this very pid number (pid 1 in a container
+        // after a restart), would otherwise stall the thread, so the own-profile lease is the backstop.
+        if (typeof held.pid !== 'number') takeOver = 'no-pid';
+        else if (held.pid === this.pid) takeOver = 'same-pid';
+        else if (!this.isAlive(held.pid)) takeOver = 'holder-dead';
+        else if (!(age < OWN_CLAIM_LEASE_MS)) takeOver = 'own-lease-expired';
+      } else if (!(age < FOREIGN_CLAIM_LEASE_MS)) {
+        takeOver = 'lease-expired';
       }
       if (takeOver && existing.etag) {
         try {
