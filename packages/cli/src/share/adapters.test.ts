@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, mock } from "bun:test";
 import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { profilePath, withProfileLock, withTinyCloudStateRoot } from "@tinycloud/operations/state";
@@ -8,6 +8,7 @@ import { encodeSealedInlineShareUrl, unifiedPolicyV2Schema } from "@tinycloud/sh
 import { historyRecordForPublishedShare, notifyShare, type SenderShareRecord, type TargetPublishInput } from "@tinycloud/share-sdk";
 import { createEmailCredentialRequirement, createEmailDomainCredentialRequirement, credentialRequirementDigest, LocationRecordValidationError, LocationRegistryHttpError } from "@tinycloud/sdk-core";
 import { CLIError } from "../output/errors.js";
+import { ShareHistoryReadError, ShareHistoryUnreadableError, SharePublishAuthorityError, shareHistoryReason } from "./errors.js";
 
 const transportDid = "did:key:z6Mkon3Necd6NkkyfoGoHxid2znGc59LU3K7mubaRcFbLfLX";
 const credentialHolderDid = "did:key:z6Mko9hTggMwjSTEaJaPUfE6tqcy2xvU6BnNq3e3o8qVBiyH";
@@ -276,7 +277,6 @@ mock.module("../lib/sdk.js", () => ({
 }));
 
 const { createEncryptedProfileHistory, createShareAuthorityAdapters } = await import("./adapters.js");
-const { SharePublishAuthorityError } = await import("./errors.js");
 
 afterEach(() => {
   ownerKv.clear();
@@ -1208,6 +1208,41 @@ describe("TinyCloud share authority adapter", () => {
         expect(await first.get("share-history")).toMatchObject({
           revokedAt: "2026-01-02T00:00:00.000Z", deliveredRecipients: ["alice@example.com"],
         });
+      });
+    } finally {
+      historyCacheDir = undefined;
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("classifies a history path the filesystem cannot read as ShareHistoryReadError", async () => {
+    const root = await mkdtemp(join(tmpdir(), "tc-share-history-read-failed-"));
+    try {
+      await withTinyCloudStateRoot(root, async () => {
+        historyCacheDir = join(profilePath("history-test"), "cache");
+        await mkdir(join(historyCacheDir, "share-history-v2.json"), { recursive: true });
+        const storage = createEncryptedProfileHistory(async () => "history-test");
+        const error = await storage.get("share-history").catch((caught: unknown) => caught);
+        expect(error).toBeInstanceOf(ShareHistoryReadError);
+        expect(shareHistoryReason(error)).toBe("HISTORY_READ_FAILED");
+      });
+    } finally {
+      historyCacheDir = undefined;
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("classifies a corrupt history file as ShareHistoryUnreadableError", async () => {
+    const root = await mkdtemp(join(tmpdir(), "tc-share-history-unreadable-"));
+    try {
+      await withTinyCloudStateRoot(root, async () => {
+        historyCacheDir = join(profilePath("history-test"), "cache");
+        await mkdir(historyCacheDir, { recursive: true });
+        await writeFile(join(historyCacheDir, "share-history-v2.json"), "not json");
+        const storage = createEncryptedProfileHistory(async () => "history-test");
+        const error = await storage.get("share-history").catch((caught: unknown) => caught);
+        expect(error).toBeInstanceOf(ShareHistoryUnreadableError);
+        expect(shareHistoryReason(error)).toBe("HISTORY_UNREADABLE");
       });
     } finally {
       historyCacheDir = undefined;
