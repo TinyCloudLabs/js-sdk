@@ -174,6 +174,7 @@ describe.skipIf(!NODE_BIN)("tinycloud knowledge against a real node", () => {
     expect(all.exitCode).toBe(5);
     expect(all.error()).toMatchObject({ code: "PERMISSION_DENIED", message: expect.stringContaining("tinycloud.kv:applications::list") });
     expect(all.error().hint).toContain("--cap tinycloud.kv:applications::get,list");
+    expect(all.error().hint).not.toMatch(/<[a-z_.]+>/);
 
     const other = await cli("one-app", ["knowledge", "read", HEALTH]);
     expect(other.exitCode).toBe(5);
@@ -291,6 +292,46 @@ describe.skipIf(!NODE_BIN)("tinycloud knowledge against a real node", () => {
     const handmade = await grantAgent("handmade", ["--cap", "tinycloud.kv:applications::get,list,del", "--expiry", "2d"]);
     expect(handmade.grantNotice).toContain("delete files");
     expect(handmade.grantNotice).toContain("2 days");
+  }, 180_000);
+
+  test("an entry smuggled into the request file is listed, needs --yes, and the printed set is the signed set", async () => {
+    const bullets = (stderr: string) => (stderr.match(/^- /gm) ?? []).length;
+    const smuggle = (request: Record<string, unknown>) => {
+      (request.requested as unknown[]).push({
+        service: "tinycloud.delegation", space: "applications", path: "", actions: ["tinycloud.delegation/create"],
+      });
+    };
+
+    // Without --yes and without a terminal the owner signs nothing, and the refusal lists the entry.
+    await newAgent("smuggler");
+    const requestFile = join(root, "smuggler-request.json");
+    expect((await cli("smuggler", ["auth", "request", "--preset", "apps-agent", "--app", RECIPES, "--emit", requestFile])).exitCode).toBe(0);
+    const artifact = JSON.parse(await readFile(requestFile, "utf8")) as Record<string, unknown>;
+    smuggle(artifact);
+    await writeFile(requestFile, JSON.stringify(artifact));
+    const refused = await cli("owner", ["auth", "grant", requestFile]);
+    expect(refused.exitCode).toBe(2);
+    expect(refused.stderr).toContain("MORE than the apps-agent preset");
+    expect(refused.stdout).toBe("");
+    expect(refused.error().message).toContain("pass access on to others");
+
+    // With --yes it is signed, and every signed entry was printed first, the extra one in words.
+    const signed = await cli("owner", ["auth", "grant", requestFile, "--yes"]);
+    expect(signed.exitCode).toBe(0);
+    expect(signed.stderr).toContain("MORE than the apps-agent preset");
+    expect(signed.stderr).toContain("It can pass access on to others");
+    const permissions = signed.json().permissions as { service: string }[];
+    expect(permissions.map((permission) => permission.service)).toContain("tinycloud.delegation");
+    expect(bullets(signed.stderr)).toBe(permissions.length);
+
+    // The exact preset request prints only the preset text and needs no --yes.
+    await newAgent("plain");
+    const plainFile = join(root, "plain-request.json");
+    expect((await cli("plain", ["auth", "request", "--preset", "apps-agent", "--app", RECIPES, "--emit", plainFile])).exitCode).toBe(0);
+    const plain = await cli("owner", ["auth", "grant", plainFile]);
+    expect(plain.exitCode).toBe(0);
+    expect(plain.stderr).toContain(appsAgentScopeNotice("read", [RECIPES]));
+    expect(bullets(plain.stderr)).toBe(0);
   }, 180_000);
 
   test("revocation ends a grant", async () => {

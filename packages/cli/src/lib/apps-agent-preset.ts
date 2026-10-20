@@ -4,6 +4,7 @@ import type { PermissionEntry } from "@tinycloud/node-sdk";
 
 import { ExitCode } from "../config/constants.js";
 import { CLIError } from "../output/errors.js";
+import { safeInline } from "../output/safe-text.js";
 import { normalizePkhIdentifier } from "./space.js";
 
 /**
@@ -18,8 +19,9 @@ import { normalizePkhIdentifier } from "./space.js";
  *
  * Neither grants KV delete, SQL admin or schema, any other service, or any
  * other space. The node lets `tinycloud.sql/write` run CREATE, ALTER and DROP
- * TABLE (only the SDK asks for `tinycloud.sql/schema`), so the write variant
- * says so; the read ability is enforced by the node.
+ * TABLE (only the SDK asks for `tinycloud.sql/schema`; TC-1581 is the
+ * node-side fix that makes `sql/write` stop implying DDL), so the write
+ * variant says so; the read ability is enforced by the node.
  */
 export const APPS_AGENT_PRESET = "apps-agent";
 export const APPS_AGENT_SPACE = "applications";
@@ -65,7 +67,10 @@ export const APPS_AGENT_VARIANTS: Readonly<Record<AppsAgentMode, PresetVariant>>
   },
 };
 
-/** Plain words for every action a request can carry; unknown actions print as their name. */
+/**
+ * Plain words for every action a request can carry; anything else prints as
+ * `unrecognised: grants <ability>`.
+ */
 const ACTION_WORDS: Readonly<Record<string, string>> = {
   "tinycloud.kv/get": "read files",
   "tinycloud.kv/list": "list files",
@@ -76,9 +81,12 @@ const ACTION_WORDS: Readonly<Record<string, string>> = {
   "tinycloud.sql/write": "add, change and delete table rows",
   "tinycloud.sql/schema": "create, change and drop tables",
   "tinycloud.sql/admin": "do anything in the database",
+  "tinycloud.delegation/create": "pass access on to others (create new grants)",
+  "tinycloud.delegation/revoke": "revoke grants",
+  "tinycloud.capabilities/read": "see which permissions this key holds",
 };
 
-/** SQL actions that let the node run CREATE, ALTER or DROP TABLE. */
+/** SQL actions that let the node run CREATE, ALTER or DROP TABLE (TC-1581: the node-side fix). */
 const STRUCTURE_ACTIONS: ReadonlySet<string> = new Set([
   "tinycloud.sql/write",
   "tinycloud.sql/schema",
@@ -260,36 +268,94 @@ export function matchAppsAgentRequest(
   return undefined;
 }
 
+/** What `auth grant` prints before signing, and what the owner must confirm. */
+export interface GrantScope {
+  /** Plain-words text for stderr. */
+  readonly text: string;
+  /** Entries outside what the apps-agent preset can ever grant; they need an explicit confirmation. */
+  readonly extras: readonly PermissionEntry[];
+  /** One plain-words line per extra entry, escaped. */
+  readonly extraLines: readonly string[];
+}
+
 function describePath(path: string): string {
-  return path === "" ? "everything in the space" : `\`${path}\``;
+  return path === "" || path === "/" ? "everything in the space" : `\`${safeInline(path)}\``;
+}
+
+function describeAction(action: string): string {
+  const known = ACTION_WORDS[action];
+  if (known !== undefined) return known;
+  return action.endsWith("/*")
+    ? `ALL abilities of ${safeInline(action.slice(0, -2))} (unrecognised: grants ${safeInline(action)})`
+    : `unrecognised: grants ${safeInline(action)}`;
+}
+
+/** One line for one signed entry: its actions in words, the path, the space and the raw service. */
+function describeEntry(entry: PermissionEntry, applicationsSpace: string): string {
+  const space = inApplicationsSpace(entry, applicationsSpace)
+    ? "your `applications` space"
+    : `space \`${safeInline(entry.space ?? "")}\``;
+  const known = entry.service === "tinycloud.kv" || entry.service === "tinycloud.sql" ||
+    entry.service === "tinycloud.delegation" || entry.service === "tinycloud.capabilities";
+  const service = known ? safeInline(entry.service) : `unrecognised service ${safeInline(entry.service)}`;
+  return `${entry.actions.map(describeAction).join(", ")} on ${describePath(entry.path)} in ${space} (${service})`;
+}
+
+/** The widest actions the preset ever grants on a service, and whether writes need a named app. */
+function withinPresetSet(entry: PermissionEntry, applicationsSpace: string): boolean {
+  if (!inApplicationsSpace(entry, applicationsSpace) || entry.caveats !== undefined) return false;
+  const reads = new Set<string>();
+  const writes = new Set<string>();
+  for (const { grants } of Object.values(APPS_AGENT_VARIANTS)) {
+    for (const grant of grants) {
+      if (grant.service !== entry.service) continue;
+      for (const action of grant.actions) (action.endsWith("/put") || action.endsWith("/write") ? writes : reads).add(action);
+    }
+  }
+  const firstSegment = entry.path.split("/")[0] ?? "";
+  const named = entry.path.includes("/") && isAppId(firstSegment);
+  return entry.actions.length > 0 && entry.actions.every((action) =>
+    reads.has(action) || (writes.has(action) && named));
 }
 
 /**
  * The scope the owner is about to sign, in plain words, derived from the
- * request as it will be signed: the preset wording when the request is exactly
- * a preset variant, otherwise a description of each entry and the requested
- * lifetime. `undefined` when the request does not touch an `applications`
- * space's KV or SQL.
+ * request as it will be signed. Every entry is described, whatever its
+ * service or space; text from the request is escaped. The preset wording is
+ * used only when the request is exactly a preset variant. A request that
+ * touches an `applications` space and holds any entry the preset could never
+ * grant (another service or space, delete, schema, delegation, a write with no
+ * named app) lists those entries first and needs an explicit confirmation.
  */
 export function describeGrantScope(
   requested: readonly PermissionEntry[],
   requestedExpiry: string | number | undefined,
   applicationsSpace: string,
-): string | undefined {
+): GrantScope {
   const preset = matchAppsAgentRequest(requested, requestedExpiry, applicationsSpace);
-  if (preset !== undefined) return appsAgentScopeNotice(preset.mode, preset.appIds);
-  const touched = requested.filter((entry) =>
-    (entry.service === "tinycloud.kv" || entry.service === "tinycloud.sql") &&
-    ((entry.space ?? "").split(":").at(-1) === APPS_AGENT_SPACE));
-  if (touched.length === 0) return undefined;
-
-  const lines = ["This request is not the standard apps-agent grant. It asks for:"];
-  for (const entry of touched) {
-    const words = entry.actions.map((action) => ACTION_WORDS[action] ?? action).join(", ");
-    lines.push(`- ${words} on ${describePath(entry.path)} (${entry.service} in \`${entry.space}\`)`);
+  if (preset !== undefined) {
+    return { text: appsAgentScopeNotice(preset.mode, preset.appIds), extras: [], extraLines: [] };
   }
-  if (touched.some((entry) => entry.actions.some((action) => STRUCTURE_ACTIONS.has(action)))) {
-    lines.push("Because of how TinyCloud permissions work today, SQL write access can also change or delete tables (structure).");
+  const touchesApplications = requested.some((entry) => (entry.space ?? "").split(":").at(-1) === APPS_AGENT_SPACE);
+  const extras = touchesApplications ? requested.filter((entry) => !withinPresetSet(entry, applicationsSpace)) : [];
+  const extraLines = extras.map((entry) => `! ${describeEntry(entry, applicationsSpace)}`);
+
+  const lines: string[] = [];
+  if (extras.length > 0) {
+    lines.push("This request asks for MORE than the apps-agent preset:", ...extraLines, "In full, it asks for:");
+  } else if (touchesApplications) {
+    lines.push("This request is not the standard apps-agent grant (other paths or lifetime). It asks for:");
+  } else {
+    lines.push("This request asks for:");
+  }
+  for (const entry of requested) lines.push(`- ${describeEntry(entry, applicationsSpace)}`);
+
+  const actions = requested.flatMap((entry) => entry.actions);
+  if (requested.some((entry) => entry.service === "tinycloud.sql" && entry.actions.some((action) => STRUCTURE_ACTIONS.has(action)))) {
+    lines.push("Because of how TinyCloud permissions work today (TC-1581), SQL write access can also change or delete tables (structure).");
+  }
+  if (actions.some((action) => action.startsWith("tinycloud.delegation/"))) {
+    lines.push("It can pass access on to others: the agent could create new grants of its own.");
   }
   const entryLifetimes = requested.filter((entry) => entry.expiry !== undefined).map((entry) => lifetimeMs(entry.expiry));
   const durations = [lifetimeMs(requestedExpiry), ...entryLifetimes]
@@ -300,5 +366,5 @@ export function describeGrantScope(
       ? "Its lifetime could not be read from the request."
       : `It lasts up to ${lifetimePhrase(longest)}${requestedExpiry === undefined ? " (no lifetime was requested; this is the default)" : ""}; revoke it any time with \`${CLI_NAME} delegation revoke <id>\`.`,
   );
-  return lines.join("\n");
+  return { text: lines.join("\n"), extras, extraLines };
 }

@@ -11,7 +11,7 @@ import { assertKnowledgeAppId, assertKnowledgeConcept } from "../lib/knowledge-i
 import { compactPermission } from "../lib/permissions.js";
 import { CLIError, cliErrorFromService, handleError } from "../output/errors.js";
 import { formatTable, outputJson, shouldOutputJson, withSpinner } from "../output/formatter.js";
-import { safeBlock, safeInline } from "../output/safe-text.js";
+import { knowledgeListRows, knowledgeReadParts } from "../lib/knowledge-render.js";
 import { theme } from "../output/theme.js";
 
 type KnowledgeResult = OperationResult<unknown>;
@@ -49,17 +49,9 @@ export function registerKnowledgeCommand(program: Command): void {
           process.stdout.write(theme.muted("No installed apps with a knowledge bundle found.") + "\n");
           return;
         }
-        // App ids and names are written by other parties: print them escaped.
+        // App ids and names are written by other parties: the renderer escapes them.
         process.stdout.write(
-          formatTable(
-            ["App ID", "Name", "Root", "Concepts"],
-            output.apps.map((app) => [
-              safeInline(app.app_id),
-              app.name === undefined ? "—" : safeInline(app.name),
-              safeInline(app.has_index ? app.root : `${app.root} (no index)`),
-              String(app.concepts.length),
-            ]),
-          ) + "\n",
+          formatTable(["App ID", "Name", "Root", "Concepts"], knowledgeListRows(output.apps)) + "\n",
         );
         if (output.truncated) {
           process.stderr.write(theme.warn("The applications space has more keys than one listing covers; some apps may be missing.") + "\n");
@@ -90,10 +82,10 @@ export function registerKnowledgeCommand(program: Command): void {
           outputJson(result.output);
           return;
         }
-        process.stdout.write(`${theme.heading(safeInline(output.key))}\n`);
-        if (output.frontmatter !== null) process.stdout.write(`${safeInline(JSON.stringify(output.frontmatter))}\n`);
-        const body = safeBlock(output.body);
-        process.stdout.write(`\n${body}${body.endsWith("\n") ? "" : "\n"}`);
+        const parts = knowledgeReadParts(output);
+        process.stdout.write(`${theme.heading(parts.heading)}\n`);
+        if (parts.meta !== undefined) process.stdout.write(`${parts.meta}\n`);
+        process.stdout.write(`\n${parts.body}`);
       } catch (error) {
         return handleError(error);
       }
@@ -154,21 +146,20 @@ function knowledgeFailure(
 /** The ways to ask for access, narrowest first, with the real app id when the command knows it. */
 function missingGrantHint(profile: string, appId: string | undefined): string {
   const request = `${CLI_NAME} --profile ${profile} auth request`;
-  const app = appId ?? "<app_id>";
   const lines = appId === undefined
     ? [
-      `  ${request} --preset ${APPS_AGENT_PRESET} --app ${app} --emit req.json   (read-only, one app: recommended; repeat --app for up to 5)`,
       `  ${request} --preset ${APPS_AGENT_PRESET} --emit req.json   (read-only, all installed apps)`,
       `  ${request} --cap tinycloud.kv:${APPS_AGENT_SPACE}::get,list --emit req.json   (all files, no table access)`,
+      "To limit the grant to one app, add `--app` and that app's id to the first command (repeat `--app` for up to 5).",
     ]
     : [
-      `  ${request} --preset ${APPS_AGENT_PRESET} --app ${app} --emit req.json   (read-only: files and table rows of ${app})`,
-      `  ${request} --cap tinycloud.kv:${APPS_AGENT_SPACE}:${app}/knowledge/:get,list --emit req.json   (only ${app}'s knowledge)`,
-      `  ${request} --preset ${APPS_AGENT_PRESET} --write --app ${app} --emit req.json   (adds writes; SQL write can also change or drop ${app}'s tables)`,
+      `  ${request} --preset ${APPS_AGENT_PRESET} --app ${appId} --emit req.json   (read-only: files and table rows of ${appId})`,
+      `  ${request} --cap tinycloud.kv:${APPS_AGENT_SPACE}:${appId}/knowledge/:get,list --emit req.json   (only ${appId}'s knowledge)`,
+      `  ${request} --preset ${APPS_AGENT_PRESET} --write --app ${appId} --emit req.json   (adds writes; SQL write can also change or drop ${appId}'s tables)`,
     ];
   return [
     "Ask the owner for a grant, narrowest first. Create the request:",
     ...lines,
-    `The owner runs \`${CLI_NAME} auth grant req.json\`; then import the result with \`${CLI_NAME} --profile ${profile} auth import <grant.json>\`.`,
+    `The owner runs \`${CLI_NAME} auth grant req.json > grant.json\`; then import the result with \`${CLI_NAME} --profile ${profile} auth import grant.json\`.`,
   ].join("\n");
 }

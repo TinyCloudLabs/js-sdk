@@ -1293,14 +1293,26 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
         }
 
         const requested = await resolvePermissionSpaces(parsed.requested, ctx.profile);
-        // The owner reads this before signing: it describes the request as it will be signed
-        // (its own permissions and lifetime), never a wording chosen by the requester.
+        // The owner reads this before signing: it describes EVERY entry that will be signed, as it
+        // will be signed (its own permissions and lifetime), never a wording chosen by the requester.
         const [applications] = await resolvePermissionSpaces(
           [{ service: "tinycloud.kv", space: APPS_AGENT_SPACE, path: "", actions: ["tinycloud.kv/get"] }],
           ctx.profile,
         );
         const scope = describeGrantScope(requested, parsed.requestedExpiry, applications!.space ?? APPS_AGENT_SPACE);
-        if (scope !== undefined) process.stderr.write(`\n${scope}\n\n`);
+        process.stderr.write(`\n${scope.text}\n\n`);
+        // The request file comes from the agent: anything the apps-agent preset could never grant
+        // is signed only after an explicit --yes or an interactive confirmation.
+        if (scope.extras.length > 0 && options.yes !== true) {
+          if (!isInteractive()) {
+            throw new CLIError(
+              "CONFIRMATION_REQUIRED",
+              `This request asks for more than the apps-agent preset. Nothing was signed. Read the list above and re-run with --yes to sign it:\n${scope.extraLines.join("\n")}`,
+              ExitCode.USAGE_ERROR,
+            );
+          }
+          await requirePermissionConsent(scope.extras as PermissionEntry[], false);
+        }
         const resolvedRequest = { ...parsed, requested };
         const node = await ensureAuthenticated(ctx);
         await ensureDelegationAuthority({

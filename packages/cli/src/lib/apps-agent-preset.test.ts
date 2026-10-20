@@ -156,51 +156,158 @@ describe("matchAppsAgentRequest (the owner side)", () => {
   });
 });
 
+const DEFAULT_SPACE = "tinycloud:pkh:eip155:1:0xAbC0000000000000000000000000000000000001:default";
+const scopeOf = (requested: Parameters<typeof describeGrantScope>[0], expiry: string | number | undefined = "7d") =>
+  describeGrantScope(requested, expiry, OWNER_SPACE);
+/** The "- " lines of the text: one per entry that will be signed. */
+const entryLines = (text: string) => text.split("\n").filter((line) => line.startsWith("- "));
+
 describe("describeGrantScope: the text follows what will be signed", () => {
   test("a request for 365 days never gets the 7-day preset wording", () => {
-    const scope = describeGrantScope(asRequested("read"), "365d", OWNER_SPACE)!;
-    expect(scope).toContain("365 days");
-    expect(scope).not.toContain("7 days");
-    expect(scope).toContain("not the standard apps-agent grant");
-    expect(scope).toContain("read files, list files");
+    const { text } = scopeOf(asRequested("read"), "365d");
+    expect(text).toContain("365 days");
+    expect(text).not.toContain("7 days");
+    expect(text).toContain("not the standard apps-agent grant");
+    expect(text).toContain("read files, list files");
   });
 
-  test("the exact preset request prints the preset wording with 7 days", () => {
-    expect(describeGrantScope(asRequested("read"), "7d", OWNER_SPACE)).toBe(appsAgentScopeNotice("read"));
-    expect(describeGrantScope(asRequested("write", [HEALTH]), "7d", OWNER_SPACE)).toBe(appsAgentScopeNotice("write", [HEALTH]));
+  test("the exact preset request prints only the preset wording, with 7 days and nothing to confirm", () => {
+    for (const [requested, notice] of [
+      [asRequested("read"), appsAgentScopeNotice("read")],
+      [asRequested("write", [HEALTH]), appsAgentScopeNotice("write", [HEALTH])],
+    ] as const) {
+      const scope = scopeOf(requested);
+      expect(scope.text).toBe(notice);
+      expect(scope.extras).toEqual([]);
+      expect(entryLines(scope.text)).toEqual([]);
+    }
   });
 
   test("a shorter hand-made lifetime is printed as itself, not as the default", () => {
-    const scope = describeGrantScope(asRequested("read"), "2d", OWNER_SPACE)!;
-    expect(scope).toContain("2 days");
-    expect(scope).not.toContain("30 days");
+    const { text } = scopeOf(asRequested("read"), "2d");
+    expect(text).toContain("2 days");
+    expect(text).not.toContain("30 days");
   });
 
   test("a per-entry lifetime longer than the request's is the one that is printed", () => {
     const [kv, sql] = asRequested("read");
-    expect(describeGrantScope([{ ...kv!, expiry: "90d" }, sql!], "7d", OWNER_SPACE)).toContain("90 days");
+    expect(scopeOf([{ ...kv!, expiry: "90d" }, sql!]).text).toContain("90 days");
   });
 
   test("a request with no lifetime says it is the default", () => {
-    const scope = describeGrantScope(asRequested("read"), undefined, OWNER_SPACE)!;
-    expect(scope).toContain("30 days");
-    expect(scope).toContain("no lifetime was requested");
+    const { text } = describeGrantScope(asRequested("read"), undefined, OWNER_SPACE);
+    expect(text).toContain("30 days");
+    expect(text).toContain("no lifetime was requested");
   });
 
-  test("KV delete and SQL write in a hand-made request are described, with the structure warning for SQL write", () => {
-    const scope = describeGrantScope([
+  test("KV delete, whole-space SQL write and an unnamed write are beyond the preset and say what they do", () => {
+    const scope = scopeOf([
       { service: "tinycloud.kv", space: OWNER_SPACE, path: "", actions: ["tinycloud.kv/get", "tinycloud.kv/del"] },
+      { service: "tinycloud.sql", space: OWNER_SPACE, path: "", actions: ["tinycloud.sql/write"] },
       { service: "tinycloud.sql", space: OWNER_SPACE, path: `${HEALTH}/`, actions: ["tinycloud.sql/write"] },
-    ], "7d", OWNER_SPACE)!;
-    expect(scope).toContain("delete files");
-    expect(scope).toContain("everything in the space");
-    expect(scope).toContain(`\`${HEALTH}/\``);
-    expect(scope).toContain("(structure)");
+    ]);
+    expect(scope.text).toContain("MORE than the apps-agent preset");
+    expect(scope.text).toContain("delete files");
+    expect(scope.text).toContain("everything in the space");
+    expect(scope.text).toContain("(structure)");
+    expect(scope.text).toContain("TC-1581");
+    // the named-app write is within what the preset can grant; the other two are not
+    expect(scope.extras).toHaveLength(2);
   });
 
-  test("a request that does not touch an applications space prints nothing", () => {
-    expect(describeGrantScope([
-      { service: "tinycloud.kv", space: "tinycloud:pkh:eip155:1:0x1:default", path: "notes/", actions: ["tinycloud.kv/get"] },
-    ], "7d", OWNER_SPACE)).toBeUndefined();
+  test("a hand-made request inside the preset's limits (narrower paths, read, named-app write) needs no confirmation", () => {
+    const scope = scopeOf([
+      { service: "tinycloud.kv", space: OWNER_SPACE, path: `${HEALTH}/knowledge/`, actions: ["tinycloud.kv/get", "tinycloud.kv/list"] },
+      { service: "tinycloud.kv", space: OWNER_SPACE, path: `${HEALTH}/notes/`, actions: ["tinycloud.kv/put"] },
+    ]);
+    expect(scope.extras).toEqual([]);
+    expect(scope.text).toContain("not the standard apps-agent grant");
+    expect(entryLines(scope.text)).toHaveLength(2);
+  });
+
+  test("an extra delegation/create entry is listed, called out as passing access on, and needs confirmation", () => {
+    const delegation = { service: "tinycloud.delegation", space: OWNER_SPACE, path: "", actions: ["tinycloud.delegation/create"] };
+    const scope = scopeOf([...asRequested("read", [RECIPES]), delegation]);
+    expect(scope.extras).toEqual([delegation]);
+    expect(scope.text).toContain("This request asks for MORE than the apps-agent preset:");
+    expect(scope.extraLines).toEqual([expect.stringContaining("pass access on to others")]);
+    expect(scope.text).toContain("tinycloud.delegation");
+    expect(scope.text).toContain("It can pass access on to others");
+    expect(entryLines(scope.text)).toHaveLength(asRequested("read", [RECIPES]).length + 1);
+  });
+
+  test("an unknown service and an unknown action are printed raw and marked unrecognised", () => {
+    const scope = scopeOf([
+      ...asRequested("read"),
+      { service: "tinycloud.zzz", space: OWNER_SPACE, path: "x", actions: ["tinycloud.zzz/frob", "tinycloud.zzz/*"] },
+      { service: "tinycloud.kv", space: OWNER_SPACE, path: "", actions: ["tinycloud.kv/teleport"] },
+    ]);
+    expect(scope.text).toContain("unrecognised service tinycloud.zzz");
+    expect(scope.text).toContain("unrecognised: grants tinycloud.zzz/frob");
+    expect(scope.text).toContain("ALL abilities of tinycloud.zzz");
+    expect(scope.text).toContain("unrecognised: grants tinycloud.kv/teleport");
+    expect(scope.extras).toHaveLength(2);
+  });
+
+  test("an entry in a different space is listed with that space and needs confirmation", () => {
+    const other = { service: "tinycloud.kv", space: DEFAULT_SPACE, path: "notes/", actions: ["tinycloud.kv/get"] };
+    const scope = scopeOf([...asRequested("read"), other]);
+    expect(scope.extras).toEqual([other]);
+    expect(scope.text).toContain(`space \`${DEFAULT_SPACE}\``);
+  });
+
+  test("a request that touches no applications space is still described in full, with nothing to confirm", () => {
+    const scope = scopeOf([{ service: "tinycloud.kv", space: DEFAULT_SPACE, path: "notes/", actions: ["tinycloud.kv/get"] }]);
+    expect(scope.text).toContain("This request asks for:");
+    expect(scope.text).toContain("notes/");
+    expect(scope.extras).toEqual([]);
+  });
+
+  test("text from the request is escaped: no control, ANSI, newline or bidi character reaches the terminal", () => {
+    const hostile = [
+      { service: "tinycloud.kv\u001b[2J", space: `${OWNER_SPACE}\n`, path: "a\u001b[1A\u001b[2Kb/\raaaa\u202ex", actions: ["tinycloud.kv/\u001b[2Kx", "tinycloud.kv/get\u202e"] },
+    ];
+    const { text, extraLines } = scopeOf([...asRequested("read"), ...hostile]);
+    for (const output of [text, ...extraLines]) {
+      // eslint-disable-next-line no-control-regex
+      expect(output.replace(/\n/g, "")).not.toMatch(/[\u0000-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/);
+    }
+    expect(text).toContain("\\u{1b}[2J");
+    expect(text).toContain("\\u{202e}");
+    expect(text).toContain("\\u{d}");
+  });
+
+  test("the printed set equals the signed set: one line per entry, each naming that entry's service, path and actions", () => {
+    const crafted = [
+      asRequested("read"),
+      [...asRequested("read", [HEALTH]), { service: "tinycloud.delegation", space: OWNER_SPACE, path: "", actions: ["tinycloud.delegation/create"] }],
+      [...asRequested("write", [HEALTH, RECIPES]), { service: "tinycloud.hooks", space: OWNER_SPACE, path: "h/", actions: ["tinycloud.hooks/write"] }],
+      [{ service: "tinycloud.kv", space: DEFAULT_SPACE, path: "a/", actions: ["tinycloud.kv/get", "tinycloud.kv/put"] }, ...asRequested("read")],
+      [
+        { service: "tinycloud.sql", space: OWNER_SPACE, path: `${HEALTH}/`, actions: ["tinycloud.sql/read", "tinycloud.sql/admin"] },
+        { service: "tinycloud.capabilities", space: OWNER_SPACE, path: "", actions: ["tinycloud.capabilities/read"] },
+        { service: "tinycloud.duckdb", space: "evil:applications", path: "z", actions: ["tinycloud.duckdb/read"] },
+      ],
+    ];
+    for (const requested of crafted) {
+      const scope = scopeOf(requested, "9d");
+      const lines = entryLines(scope.text);
+      expect(lines).toHaveLength(requested.length);
+      requested.forEach((entry, index) => {
+        expect(lines[index]).toContain(entry.service);
+        if (entry.path !== "") expect(lines[index]).toContain(entry.path);
+        // every action is either in words or printed raw: none is dropped
+        expect(lines[index]!.split(",").length).toBeGreaterThanOrEqual(entry.actions.length);
+      });
+      // an independent oracle: an entry is beyond the preset unless it is KV or SQL in the owner's
+      // applications space with only read actions, or writes under a named app
+      for (const entry of requested) {
+        const inKvOrSql = entry.service === "tinycloud.kv" || entry.service === "tinycloud.sql";
+        const named = /^[A-Za-z0-9][\w.-]*\//.test(entry.path);
+        const allowed = (action: string) => /\/(get|list|read)$/.test(action) || (named && /\/(put|write)$/.test(action));
+        const beyond = !(inKvOrSql && entry.space === OWNER_SPACE && entry.actions.every(allowed));
+        expect(scope.extras.includes(entry)).toBe(beyond);
+      }
+    }
   });
 });
