@@ -39,6 +39,7 @@
     "cli-prepared-login-exit",
     "cli-prepared-login-failure-gate",
     "cli-replica-error-exits",
+    "cli-share-artifact-publish",
     "cli-share-fragment-wording",
     "delegation-create-list-node-paths",
     "deps-refresh-jose",
