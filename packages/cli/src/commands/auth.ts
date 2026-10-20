@@ -58,6 +58,7 @@ import {
   loginWithDeviceAuthorization,
   resolveDeviceApiHost,
 } from "../auth/device-auth.js";
+import { ensureSpaceSetup } from "../auth/space-setup.js";
 import {
   expectedOwnerFor,
   declinedPermissions,
@@ -686,6 +687,8 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
           await persistReplicationLogin(ctx.profile, replicationOptions);
           if (replicationOptions.allowSecrets) writeReplicationSecretsWarning();
           reportDeclined(result.declined);
+          // OpenKey hosts the space after the approval: wait for it before the first storage call can fail.
+          await ensureSpaceSetup({ profile: ctx.profile, host: ctx.host }, result.session, result.session.permissions);
           outputJson({
             authenticated: true,
             profile: ctx.profile,
@@ -2456,6 +2459,7 @@ async function handleOpenKeyAuth(
   const { profile, delegationData, declined, legacyNested } = await refreshOpenKeySession(profileName, host, options);
 
   reportDeclined(declined, legacyNested);
+  await ensureSpaceSetup({ profile: profileName, host }, delegationData, delegationData.permissions as PermissionEntry[] | undefined);
   outputJson({
     authenticated: true,
     profile: profileName,

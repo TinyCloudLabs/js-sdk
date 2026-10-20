@@ -1,5 +1,27 @@
 # @tinycloudlabs/web-sdk
 
+## 3.3.0-beta.34
+
+### Patch Changes
+
+- Updated dependencies [a553392]
+  - @tinycloud/node-sdk@3.3.0-beta.34
+
+## 3.3.0-beta.33
+
+### Patch Changes
+
+- Updated dependencies [8c95ddd]
+  - @tinycloud/replica@0.3.0-beta.9
+  - @tinycloud/node-sdk@3.3.0-beta.33
+
+## 3.3.0-beta.32
+
+### Patch Changes
+
+- Updated dependencies [ba650ce]
+  - @tinycloud/web-sdk-wasm@1.7.7-beta.1
+
 ## 3.3.0-beta.31
 
 ### Patch Changes
