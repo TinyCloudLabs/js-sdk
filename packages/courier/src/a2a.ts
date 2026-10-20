@@ -1,5 +1,6 @@
 import { ulid } from 'ulid';
 import { EXT } from './keys.js';
+import { ULID } from './request.js';
 
 /**
  * A2A v1.0 objects as Courier carries them (spec §6).
@@ -57,6 +58,8 @@ export interface CourierExt {
   constraints?: string[];
   /** Machine-readable system notices a watcher posts (always `intent: inform`, so they never wake anyone). */
   notice?: CourierNotice;
+  /** Stable pause episode id; repeated delivery of the same episode does not re-notify. */
+  pauseId?: string;
 }
 
 export type CourierNotice = 'thread-paused';
@@ -110,6 +113,8 @@ export interface BuildMessageArgs {
   referenceTaskIds?: string[];
   fileParts?: MessagePart[];
   notice?: CourierNotice;
+  /** Stable pause episode id; repeated delivery of the same episode does not re-notify. */
+  pauseId?: string;
 }
 
 export function messageRole(input: { startedByMe: boolean; refsOwnTask: boolean; refsAnyTask: boolean }): 'ROLE_USER' | 'ROLE_AGENT' {
@@ -151,6 +156,7 @@ export function buildMessage(a: BuildMessageArgs): CourierMessage {
         ...(a.asks?.length ? { asks: a.asks } : {}),
         ...(a.constraints?.length ? { constraints: a.constraints } : {}),
         ...(a.notice ? { notice: a.notice } : {}),
+        ...(a.pauseId ? { pauseId: a.pauseId } : {}),
       },
     },
   };
@@ -214,6 +220,8 @@ export interface MessageView {
   constraints?: string[];
   inReplyTo?: string | null;
   notice?: CourierNotice;
+  /** Stable pause episode id; repeated delivery of the same episode does not re-notify. */
+  pauseId?: string;
   invalid: string[];
 }
 
@@ -234,6 +242,7 @@ export function messageView(value: unknown): MessageView {
   let constraints: string[] | undefined;
   let inReplyTo: string | null | undefined;
   let notice: CourierNotice | undefined;
+  const pauseId = typeof ext?.pauseId === 'string' && ULID.test(ext.pauseId) ? ext.pauseId : undefined;
 
   if (ext && Object.hasOwn(ext, 'from')) {
     const raw = ext.from;
@@ -274,6 +283,7 @@ export function messageView(value: unknown): MessageView {
   return {
     text: firstText(parts),
     ...(notice ? { notice } : {}),
+    ...(pauseId ? { pauseId } : {}),
     ...(from ? { from } : {}),
     ...(intent ? { intent } : {}),
     ...(asks ? { asks } : {}),

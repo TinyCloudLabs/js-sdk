@@ -9,6 +9,8 @@ import { deadlineRunner, type Runner, type WakeConfig } from './wake.js';
 /** Fixed status for the human. No notification path starts or messages an agent. */
 export interface Notice {
   kind: 'paused' | 'peer-paused';
+  /** Machine event id, used only for deduplication, never notification prose. */
+  eventId?: string;
   peer: string;
   threadId: string;
   /** Internal fixed wording; never forwarded as notification prose. */

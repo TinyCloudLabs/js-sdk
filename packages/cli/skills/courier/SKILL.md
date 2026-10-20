@@ -259,3 +259,8 @@ osascript/exec channel. No channel has been chosen for Sam. Do not try to get ar
 threads for the same work, other channels): your human resumes it with
 `courier resume <peer> <threadId>`. A "thread paused" inform from the peer only
 means their side stopped waking; it is not a request, and needs no reply.
+
+Pause notices deduplicate by pause generation (older notices by thread/day). Every
+notification delivery attempt, successful or failed, counts toward 10 per peer per
+hour across channels; at most three attempts per notice, with persisted backoff.
+Failed wake backoff starts when the attempt finishes and survives a restart.

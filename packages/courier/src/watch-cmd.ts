@@ -242,7 +242,7 @@ export async function cmdWatch(args: ParsedArgs): Promise<void> {
     loadPeers: () => Object.values(loadProfile().peers),
     kvFor: (peer) => peerKv(node, loadProfile(), peer),
     wake: createWaker(config, { run: spawnRunner, sessions: fileSessions() }),
-    postInform: async (peer, threadId, text) => { await postPausedInform(node.kv, loadProfile(), peer, threadId, text); },
+    postInform: async (peer, threadId, text, pauseId) => { await postPausedInform(node.kv, loadProfile(), peer, threadId, text, pauseId); },
     notify: createNotifier(notifyConfig(args, config), { run: spawnRunner }),
     holder: { profileId: watcherProfileId() },
     log,
