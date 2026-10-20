@@ -23,6 +23,7 @@ packages/sdk-rs/.profile
 packages/sdk-rs/.zshenv
 packages/sdk-services/dist/
 tests/sdk-services/dist
+packages/replica/test/browser/acceptance/dist/
 tests/node-sdk/benchmarks/results/
 packages/cli/dist
 packages/operations/dist/
