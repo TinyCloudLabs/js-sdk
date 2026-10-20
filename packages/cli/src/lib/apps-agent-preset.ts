@@ -16,7 +16,11 @@ import { normalizePkhIdentifier } from "./space.js";
  *
  * - `read` (the default): KV get and list, SQL read, on the whole
  *   `applications` space or on named apps (`<app_id>/`).
- * - `write` (`--write`, named apps only): adds KV put and SQL write.
+ * - `write` (`--write`, named apps only): adds KV put on the app's
+ *   `knowledge/` and `prefs/` folders (the two the sample apps' own manifests
+ *   write to) and SQL write. Everything else under `<app_id>/` stays
+ *   read-only, so the app's code (`app/`), `manifest.json` and `install.json`
+ *   cannot be changed through it.
  *
  * Neither grants KV delete, SQL admin or schema, any other service, or any
  * other space. The node lets `tinycloud.sql/write` run CREATE, ALTER and DROP
@@ -36,9 +40,17 @@ const DAY_MS = 86_400_000;
 
 export type AppsAgentMode = "read" | "write";
 
+/**
+ * The app folders an agent may write files to. A stored `manifest.json` is
+ * user-writable, so these are fixed here, never read from it.
+ */
+export const APPS_AGENT_WRITE_FOLDERS: readonly string[] = ["knowledge/", "prefs/"];
+
 interface PresetGrant {
   readonly service: "tinycloud.kv" | "tinycloud.sql";
   readonly actions: readonly string[];
+  /** Folders inside an app the actions cover: `""` is the whole app (`<app_id>/`). */
+  readonly within: readonly string[];
 }
 
 interface PresetVariant {
@@ -52,16 +64,17 @@ interface PresetVariant {
 export const APPS_AGENT_VARIANTS: Readonly<Record<AppsAgentMode, PresetVariant>> = {
   read: {
     grants: [
-      { service: "tinycloud.kv", actions: ["tinycloud.kv/get", "tinycloud.kv/list"] },
-      { service: "tinycloud.sql", actions: ["tinycloud.sql/read"] },
+      { service: "tinycloud.kv", actions: ["tinycloud.kv/get", "tinycloud.kv/list"], within: [""] },
+      { service: "tinycloud.sql", actions: ["tinycloud.sql/read"], within: [""] },
     ],
     perAppOnly: false,
     changesStructure: false,
   },
   write: {
     grants: [
-      { service: "tinycloud.kv", actions: ["tinycloud.kv/get", "tinycloud.kv/list", "tinycloud.kv/put"] },
-      { service: "tinycloud.sql", actions: ["tinycloud.sql/read", "tinycloud.sql/write"] },
+      { service: "tinycloud.kv", actions: ["tinycloud.kv/get", "tinycloud.kv/list"], within: [""] },
+      { service: "tinycloud.kv", actions: ["tinycloud.kv/put"], within: APPS_AGENT_WRITE_FOLDERS },
+      { service: "tinycloud.sql", actions: ["tinycloud.sql/read", "tinycloud.sql/write"], within: [""] },
     ],
     perAppOnly: true,
     changesStructure: true,
@@ -110,9 +123,10 @@ export function isAppId(value: string): boolean {
 
 /** The permission entries to request. No app ids means the whole space (read-only only). */
 export function appsAgentPermissions(mode: AppsAgentMode, appIds: readonly string[] = []): PermissionEntry[] {
-  const paths = appIds.length === 0 ? [""] : appIds.map((appId) => `${appId}/`);
-  return APPS_AGENT_VARIANTS[mode].grants.flatMap(({ service, actions }) =>
-    paths.map((path) => ({ service, space: APPS_AGENT_SPACE, path, actions: [...actions] })));
+  const bases = appIds.length === 0 ? [""] : appIds.map((appId) => `${appId}/`);
+  return APPS_AGENT_VARIANTS[mode].grants.flatMap(({ service, actions, within }) =>
+    within.flatMap((folder) =>
+      bases.map((base) => ({ service, space: APPS_AGENT_SPACE, path: `${base}${folder}`, actions: [...actions] }))));
 }
 
 function quoteApps(appIds: readonly string[]): string {
@@ -135,8 +149,10 @@ function revokeSentence(lifetimeMs: number): string {
 /** Plain-words statement of exactly what a preset grant allows, shown before approval. */
 export function appsAgentScopeNotice(mode: AppsAgentMode, appIds: readonly string[] = []): string {
   const variant = APPS_AGENT_VARIANTS[mode];
-  const reads = variant.grants.some(({ actions }) => actions.includes("tinycloud.kv/put"))
-    ? "read it and add and change its files and table rows"
+  const writes = variant.grants.some(({ actions }) => actions.includes("tinycloud.kv/put"));
+  const writableFolders = appIds.flatMap((appId) => APPS_AGENT_WRITE_FOLDERS.map((folder) => `\`${appId}/${folder}\``)).join(", ");
+  const reads = writes
+    ? `read everything there, write knowledge and data files (${writableFolders}), and add, change and delete table rows`
     : "list and read its files and read its table rows";
   const scope = appIds.length === 0
     ? `ALL your installed apps' data in the \`${APPS_AGENT_SPACE}\` space`
@@ -148,6 +164,7 @@ export function appsAgentScopeNotice(mode: AppsAgentMode, appIds: readonly strin
   ];
   if (variant.changesStructure) {
     lines.push(
+      `It cannot change ${appIds.length === 1 ? "the app's" : "the apps'"} code, manifest or install record: everything outside those folders is read-only for it.`,
       `Because of how TinyCloud permissions work today, it can also change or delete ${appIds.length === 1 ? "this app's" : "these apps'"} tables (structure) and data.`,
       "It cannot touch other apps, other spaces or secrets.",
     );
@@ -252,10 +269,13 @@ export function matchAppsAgentRequest(
   if (requested.some((entry) => entry.expiry !== undefined || entry.caveats !== undefined)) return undefined;
   const kvPaths = requested.filter((entry) => entry.service === "tinycloud.kv").map((entry) => entry.path);
   const appIds: string[] = [];
-  for (const path of new Set(kvPaths)) {
+  for (const path of kvPaths) {
     if (path === "") continue;
-    if (!path.endsWith("/") || !isAppId(path.slice(0, -1))) return undefined;
-    appIds.push(path.slice(0, -1));
+    // The app is the first folder; whether the rest is a folder the preset grants is checked against the exact list below.
+    const slash = path.indexOf("/");
+    const appId = path.slice(0, slash);
+    if (slash < 1 || !isAppId(appId)) return undefined;
+    if (!appIds.includes(appId)) appIds.push(appId);
   }
   if (appIds.length > APPS_AGENT_MAX_APPS || (appIds.length > 0 && kvPaths.includes(""))) return undefined;
   for (const mode of ["read", "write"] as const) {
@@ -395,21 +415,22 @@ function describeEntry(entry: PermissionEntry, applicationsSpace: string): strin
   return `${entry.actions.map(describeAction).join(", ")} on ${where} (${service})`;
 }
 
-/** The widest actions the preset ever grants on a service, and whether writes need a named app. */
+/**
+ * Whether every action of `entry` is one the preset can grant at that path:
+ * reads anywhere, writes only in a named app's write folders (SQL write in
+ * the whole named app). A path with a `.` or `..` segment is never within it.
+ */
 function withinPresetSet(entry: PermissionEntry, applicationsSpace: string): boolean {
   if (!inApplicationsSpace(entry, applicationsSpace) || entry.caveats !== undefined) return false;
-  const reads = new Set<string>();
-  const writes = new Set<string>();
-  for (const { grants } of Object.values(APPS_AGENT_VARIANTS)) {
-    for (const grant of grants) {
-      if (grant.service !== entry.service) continue;
-      for (const action of grant.actions) (action.endsWith("/put") || action.endsWith("/write") ? writes : reads).add(action);
-    }
-  }
-  const firstSegment = entry.path.split("/")[0] ?? "";
-  const named = entry.path.includes("/") && isAppId(firstSegment);
+  if (entry.path.split("/").some((segment) => segment === "." || segment === "..")) return false;
+  const slash = entry.path.indexOf("/");
+  const folder = slash > 0 && isAppId(entry.path.slice(0, slash)) ? entry.path.slice(slash + 1) : undefined;
+  const grants = Object.values(APPS_AGENT_VARIANTS).flatMap(({ grants: variantGrants }) =>
+    variantGrants.filter((grant) => grant.service === entry.service));
   return entry.actions.length > 0 && entry.actions.every((action) =>
-    reads.has(action) || (writes.has(action) && named));
+    grants.some((grant) => grant.actions.includes(action) && (
+      !(action.endsWith("/put") || action.endsWith("/write")) ||
+      (folder !== undefined && grant.within.some((within) => folder.startsWith(within))))));
 }
 
 /**
@@ -419,8 +440,8 @@ function withinPresetSet(entry: PermissionEntry, applicationsSpace: string): boo
  * its service or space, with text from the request escaped. The preset wording
  * is used only when the list is exactly a preset variant. When the list
  * touches an `applications` space and holds any entry the preset could never
- * grant (another service or space, delete, schema, delegation, a write with no
- * named app), those entries come first, marked `!`, and need a confirmation.
+ * grant (another service or space, delete, schema, delegation, a write outside
+ * a named app's write folders), those entries come first, marked `!`, and need a confirmation.
  */
 export function describeGrantScope(
   requested: readonly PermissionEntry[],

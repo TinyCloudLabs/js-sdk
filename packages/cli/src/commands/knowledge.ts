@@ -155,6 +155,7 @@ function missingGrantHint(profile: string, appId: string | undefined): string {
     : [
       `  ${request} --preset ${APPS_AGENT_PRESET} --app ${appId} --emit req.json   (read-only: files and table rows of ${appId})`,
       `  ${request} --cap tinycloud.kv:${APPS_AGENT_SPACE}:${appId}/knowledge/:get,list --emit req.json   (only ${appId}'s knowledge)`,
+      `  ${request} --preset ${APPS_AGENT_PRESET} --write --app ${appId} --emit req.json   (adds writing ${appId}'s knowledge and data files, not its code; SQL write can also change or drop its tables)`,
     ];
   return [
     "Ask the owner for a grant, narrowest first. Create the request:",
