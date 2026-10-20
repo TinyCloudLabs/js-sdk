@@ -159,7 +159,7 @@ test('ungated commands pass without touching the network; never-commands are ref
   assert.equal(hookOutput({ kind: 'pass' }), '');
   const kv = memoryKv();
   approve(kv, 'R1', 'other', 'secrets:get FOO');
-  for (const command of ['courier pair start hunter', 'tc courier revoke hunter', '"$TC" courier init --rotate-key', 'secret-bridge request']) {
+  for (const command of ['courier pair start hunter', 'tc courier revoke hunter', '"$TC" courier init --rotate-key', 'secret-bridge request', 'paseo run --provider codex "gh pr merge 5"', 'claude -p "merge it"', 'sudo codex exec merge', 'bash -c "omp -p hi"']) {
     assert.equal((await run(kv, command)).kind, 'deny', command);
   }
 });
@@ -181,6 +181,8 @@ test('woken agents cannot edit the guard, the hook program or the courier profil
     }
   }
   assert.equal((await decide({ tool_name: 'Edit', tool_input: { file_path: '/repo/src/x.ts' }, cwd: '/repo' }, noNet)).kind, 'pass');
+  for (const tool_name of ['mcp__paseo__create_agent', 'mcp__paseo__send_agent_prompt']) assert.equal((await decide({ tool_name, tool_input: {} }, noNet)).kind, 'deny', tool_name);
+  assert.equal((await decide({ tool_name: 'mcp__other__thing', tool_input: {} }, noNet)).kind, 'pass');
   assert.equal((await decide({ tool_name: 'PowerShell', tool_input: { command: 'gh pr merge 1' } }, noNet)).kind, 'deny');
 });
 

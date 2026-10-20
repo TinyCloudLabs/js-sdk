@@ -130,7 +130,7 @@ subject is quoted and flattened onto one line.
 | Adapter | What it does |
 |---|---|
 | `none` (default) | Delivers and mirrors; wakes nobody. |
-| `paseo` | Finds the agent labelled `courier-thread=<id>` (`paseo ls -g --label`) and sends it the prompt (`paseo send --prompt-file`); otherwise creates one (`paseo run`) with labels `courier-thread`, `courier-peer`, title `✉ <peer> · <subject>`, `COURIER_HOME` in its environment. `--paseo-provider` (default `claude`), `--paseo-mode`, `--paseo-bin`. |
+| `paseo` | Finds the agent labelled `courier-thread=<id>` and `courier-guard=1` (`paseo ls -g --label`) and sends it the prompt (`paseo send --prompt-file`); otherwise creates one (`paseo run`) with labels `courier-thread`, `courier-peer`, `courier-guard`, title `✉ <peer> · <subject>` and the courier-only environment. Installs and proves the guard first and refuses to wake without it (see Guard); Claude agents only. `--paseo-provider` (default `claude`), `--paseo-mode`, `--paseo-bin`. |
 | `claude` | `claude -p --output-format json`, prompt on stdin, always with the guard settings (see Guard) and the courier-only environment. The session id is saved per thread in `<COURIER_HOME>/sessions.json` and later wakes pass `--resume`; a session the CLI no longer has starts a fresh one. Only `Bash(courier:*)` is allowed unless you pass `--claude-allow <rule>` (repeatable); `--claude-settings <file>` is merged under the guard. `--claude-bin`. |
 | `exec` | `sh -c <cmd>` (`--exec <cmd>` alone selects it) with `COURIER_THREAD`, `COURIER_PEER`, `COURIER_MESSAGES` (JSON: id, intent, sent time), `COURIER_SUBJECT`, `COURIER_PROMPT` and `COURIER_HOME` in the courier-only environment (see Guard). |
 
@@ -237,7 +237,7 @@ reads every tool call before it runs. It runs in every permission mode.
 | `tc secrets …` | `other secrets:<args>` |
 
 Never approvable: `courier pair`, `courier revoke`, `courier init` (also as
-`tc courier …`), and Secret Bridge.
+`tc courier …`), Secret Bridge, and starting another agent (see below).
 
 **How an approval unlocks one.** The guard normalises the command to its
 (verb, target) and looks in the owner's space for a request with the same verb
@@ -279,6 +279,33 @@ is forced to `false`). `courier guard settings [--out f]` prints the same file,
 for a launcher that cannot pass `--settings` (put it in
 `.claude/settings.local.json` of the agent's working directory).
 
+**Paseo agents.** Paseo cannot pass `claude --settings`, so the `paseo` adapter
+installs the same guard where Claude Code reads project settings:
+`<cwd>/.claude/settings.local.json` (merged with what is there; its own older
+hook is replaced; the file keeps its mode). Claude runs hooks in every
+permission mode, so this holds under `bypassPermissions` too (checked live).
+Before every wake the adapter proves the guard works: it runs the installed hook
+command once on a call no approval can unlock and requires a refusal. It then
+fails closed:
+
+- no guard configured, the hook not refusing, or an unreadable or unmergeable
+  settings file: nothing is woken and the wake stays pending;
+- `--paseo-provider` other than `claude` (the project hook covers Claude only):
+  nothing is woken;
+- an existing agent is messaged only if it carries the label `courier-guard=1`,
+  runs Claude and sits in the guarded `--cwd`; an older, unlabelled agent is
+  left alone and a new guarded one is created;
+- the agent `paseo run` created must report that guarded `--cwd`; otherwise it is
+  deleted and the wake fails. The adapter drops `PASEO_AGENT_ID`,
+  `PASEO_AGENT_CWD` and `PASEO_WORKSPACE_ID` from its own environment first,
+  because inside a Paseo agent they send `paseo run --cwd` to that agent's
+  workspace instead.
+
+A guarded agent cannot start another agent (it would run outside the guard):
+`paseo`, `claude`, `codex`, `omp`, `opencode`, `gemini`, `cursor-agent`, `amp`,
+`aider` and `goose` are refused in Bash, and Paseo's MCP tools
+(`mcp__paseo__*`) are denied.
+
 **Courier-only environment.** Woken `claude` and `exec` runs get the Courier
 profile only: `COURIER_HOME` is set, `TC_HOME` points at an empty directory
 (`<COURIER_HOME>/guard/no-owner-profile`) and `TC_PRIVATE_KEY`, `TC_PROFILE`,
@@ -295,10 +322,11 @@ workflow merges, a bot command), or anything that edits the hook's files through
 a shell redirect instead of an edit tool (the deny rules cover edit tools, and
 `COURIER_HOME` is writable by the user). The single-use marker is delete-proof
 for the courier key but not against code that has the owner's own credentials.
-The `paseo` adapter does not install the hook (Paseo has no `--settings`
-option): put `courier guard settings` into the agent's
-`.claude/settings.local.json` until it does. v1 should give courier agents a
-GitHub token without merge rights.
+An agent can still be started outside the guard from a program the agent
+writes, and a `paseo` agent shares its `<cwd>/.claude/settings.local.json` with
+anything else run in that directory (that file is the guard's too). The `exec`
+adapter runs your own command and installs no guard. v1 should give courier
+agents a GitHub token without merge rights.
 
 ### Running it as a service
 

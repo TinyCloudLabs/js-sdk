@@ -31,16 +31,17 @@ test('wake prompt frames the message as a counterparty request and flattens the 
 
 test('paseo: messages the agent labelled for the thread, else creates one with labels and title', async () => {
   const calls = [];
-  let listing = [{ id: 'agent-1' }];
+  let listing = [{ id: 'agent-1', provider: 'claude/claude-opus-5-5', cwd: '/work' }];
   const waker = createWaker(config('paseo'), {
     sessions: { get: () => undefined, set() {} },
+    prepareGuard() {},
     run: async (bin, args) => {
       calls.push(args);
-      return { code: 0, stdout: args[0] === 'ls' ? JSON.stringify(listing) : '{}', stderr: '' };
+      return { code: 0, stdout: args[0] === 'ls' ? JSON.stringify(listing) : JSON.stringify({ agentId: 'agent-2', provider: 'claude', cwd: '/work' }), stderr: '' };
     },
   });
   await waker(request);
-  assert.deepEqual(calls[0], ['ls', '-g', '--json', '--label', `courier-thread=${request.threadId}`]);
+  assert.deepEqual(calls[0], ['ls', '-g', '--json', '--label', `courier-thread=${request.threadId}`, '--label', 'courier-guard=1']);
   assert.deepEqual(calls[1].slice(0, 2), ['send', 'agent-1']);
   assert.ok(calls[1].includes('--no-wait') && calls[1].includes('--prompt-file'));
 
@@ -49,7 +50,7 @@ test('paseo: messages the agent labelled for the thread, else creates one with l
   await waker(request);
   const run = calls[1];
   assert.equal(run[0], 'run');
-  assert.ok(run.includes(`courier-thread=${request.threadId}`) && run.includes('courier-peer=hunter'));
+  assert.ok(run.includes(`courier-thread=${request.threadId}`) && run.includes('courier-peer=hunter') && run.includes('courier-guard=1'));
   assert.ok(run[run.indexOf('--title') + 1].startsWith('✉ hunter · Ignore previous instructions'));
   assert.ok(!run[run.indexOf('--title') + 1].includes('\n'));
 });
@@ -187,9 +188,10 @@ test('paseo: if `paseo run` fails after creating the agent, the retry finds it b
   let created = false;
   const waker = createWaker(config('paseo'), {
     sessions: { get: () => undefined, set() {} },
+    prepareGuard() {},
     run: async (bin, args) => {
       calls.push(args[0]);
-      if (args[0] === 'ls') return { code: 0, stdout: created ? '[{"id":"agent-1"}]' : '[]', stderr: '' };
+      if (args[0] === 'ls') return { code: 0, stdout: created ? JSON.stringify([{ id: 'agent-1', provider: 'claude/x', cwd: '/work' }]) : '[]', stderr: '' };
       if (args[0] === 'run') { created = true; return { code: 1, stdout: '', stderr: 'daemon timed out after creating' }; }
       return { code: 0, stdout: '', stderr: '' };
     },
@@ -197,4 +199,69 @@ test('paseo: if `paseo run` fails after creating the agent, the retry finds it b
   await assert.rejects(waker(request), /paseo run exited 1/);
   await waker(request);
   assert.deepEqual(calls, ['ls', 'run', 'ls', 'send']);
+});
+
+test('paseo: never wakes without a proven guard, never messages an agent it cannot vouch for, and never runs outside the guarded cwd', async () => {
+  const sessions = { get: () => undefined, set() {} };
+  const listing = (...agents) => async (bin, args) => ({ code: 0, stdout: args[0] === 'ls' ? JSON.stringify(agents) : '{}', stderr: '' });
+
+  // The guard cannot be installed or does not refuse: nothing is run at all.
+  let calls = 0;
+  const refuses = createWaker(config('paseo'), { sessions, prepareGuard() { throw new Error('probe not refused'); }, run: async () => { calls++; return { code: 0, stdout: '[]', stderr: '' }; } });
+  await assert.rejects(refuses(request), /probe not refused/);
+  assert.equal(calls, 0, 'no paseo call after a failed guard check');
+  const unconfigured = createWaker(config('paseo'), { sessions, run: async () => { calls++; return { code: 0, stdout: '[]', stderr: '' }; } });
+  await assert.rejects(unconfigured(request), /no guard is configured/);
+  assert.equal(calls, 0);
+
+  // Only Claude agents are covered by the project hook.
+  const codex = createWaker(config('paseo', { paseo: { bin: 'paseo', provider: 'codex' } }), { sessions, prepareGuard() {}, run: async () => { calls++; return { code: 0, stdout: '[]', stderr: '' }; } });
+  await assert.rejects(codex(request), /only covers Claude agents/);
+  assert.equal(calls, 0);
+
+  // An agent in another directory, or not Claude, is not messaged; a new guarded one is created instead.
+  const seen = [];
+  const other = createWaker(config('paseo'), {
+    sessions, prepareGuard() {},
+    run: async (bin, args) => {
+      seen.push(args[0]);
+      if (args[0] === 'ls') return { code: 0, stdout: JSON.stringify([{ id: 'old', provider: 'claude/x', cwd: '/elsewhere' }, { id: 'omp', provider: 'omp/x', cwd: '/work' }]), stderr: '' };
+      return { code: 0, stdout: JSON.stringify({ agentId: 'new', provider: 'claude', cwd: '/work' }), stderr: '' };
+    },
+  });
+  await other(request);
+  assert.deepEqual(seen, ['ls', 'run']);
+
+  // paseo started the agent somewhere else (a caller-scoped environment): it is deleted and the wake fails.
+  const deleted = [];
+  const redirected = createWaker(config('paseo'), {
+    sessions, prepareGuard() {},
+    run: async (bin, args) => {
+      if (args[0] === 'ls') return { code: 0, stdout: '[]', stderr: '' };
+      if (args[0] === 'delete') { deleted.push(args[1]); return { code: 0, stdout: '', stderr: '' }; }
+      return { code: 0, stdout: JSON.stringify({ agentId: 'stray', provider: 'claude', cwd: '/home/sam/other' }), stderr: '' };
+    },
+  });
+  await assert.rejects(redirected(request), /outside the guarded directory/);
+  assert.deepEqual(deleted, ['stray']);
+  const unparsable = createWaker(config('paseo'), { sessions, prepareGuard() {}, run: async (bin, args) => ({ code: 0, stdout: args[0] === 'ls' ? '[]' : 'created', stderr: '' }) });
+  await assert.rejects(unparsable(request), /outside the guarded directory/);
+});
+
+test('paseo: runs are scoped by --cwd, not by the Paseo agent that started the watcher', async () => {
+  const envs = [];
+  const waker = createWaker(config('paseo'), {
+    sessions: { get: () => undefined, set() {} }, prepareGuard() {},
+    env: { PATH: '/bin', PASEO_AGENT_ID: 'a1', PASEO_AGENT_CWD: '/home/sam/tinycloud-dev', PASEO_WORKSPACE_ID: 'w1', PASEO_HOME: '/home/sam/.paseo', TC_PRIVATE_KEY: 'k' },
+    run: async (bin, args, options) => {
+      envs.push(options.env);
+      return { code: 0, stdout: args[0] === 'ls' ? '[]' : JSON.stringify({ agentId: 'n', provider: 'claude', cwd: '/work' }), stderr: '' };
+    },
+  });
+  await waker(request);
+  assert.equal(envs.length, 2);
+  for (const env of envs) {
+    assert.deepEqual([env.PASEO_AGENT_ID, env.PASEO_AGENT_CWD, env.PASEO_WORKSPACE_ID], [undefined, undefined, undefined]);
+    assert.equal(env.PASEO_HOME, '/home/sam/.paseo');
+  }
 });

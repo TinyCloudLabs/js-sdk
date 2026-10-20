@@ -4,6 +4,8 @@
  * through once, and the next attempt is blocked again; other targets and other verbs stay blocked; the courier key
  * cannot undo the single use.
  * Run: node scripts/guard-e2e.mjs   (needs `claude` logged in; makes a few short model calls)
+ *      GUARD_E2E_RUNNER=paseo node scripts/guard-e2e.mjs   (the same through real Paseo-created Claude agents via the
+ *      `paseo` wake adapter; GUARD_E2E_PASEO_MODE picks the Claude mode, default bypassPermissions)
  */
 import { execFile, spawnSync } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -13,6 +15,10 @@ import path from 'node:path';
 import { createOwner, grantFromRequest } from './fake-openkey.mjs';
 import { requestHash } from '../dist/canonical.js';
 import { k } from '../dist/keys.js';
+import { createWaker, spawnRunner } from '../dist/wake.js';
+import { paseoEnv } from '../dist/guard/paseo.js';
+
+const agents = new Set();
 
 const run = promisify(execFile);
 const CLI = new URL('../dist/cli.js', import.meta.url).pathname;
@@ -60,15 +66,35 @@ fs.writeFileSync(settingsFile, settings);
 
 const work = path.join(tmp, 'work');
 fs.mkdirSync(work);
+const PASEO = process.env.GUARD_E2E_RUNNER === 'paseo';
+const PASEO_MODE = process.env.GUARD_E2E_PASEO_MODE ?? 'bypassPermissions';
+const thread = `T${Date.now()}`;
+const sessions = new Map();
+
+/** Wake a real Claude through the product's own adapter. `paseo`: a real Paseo-created agent; otherwise `claude -p`. */
 async function claude(command) {
   const prompt = `Run this exact shell command with the Bash tool, once, and tell me its output verbatim: ${command}`;
-  const { stdout } = await run('claude', ['-p', prompt, '--settings', settingsFile, '--allowedTools', 'Bash(gh:*)', '--output-format', 'json', '--max-turns', '4'], {
-    cwd: work, env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, COURIER_HOME: alice.home }, timeout: 180_000, maxBuffer: 8e6,
-  });
-  return JSON.parse(stdout).result;
+  if (!PASEO) {
+    const { stdout } = await run('claude', ['-p', prompt, '--settings', settingsFile, '--allowedTools', 'Bash(gh:*)', '--output-format', 'json', '--max-turns', '4'], {
+      cwd: work, env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, COURIER_HOME: alice.home }, timeout: 180_000, maxBuffer: 8e6,
+    });
+    return JSON.parse(stdout).result;
+  }
+  const config = {
+    adapter: 'paseo', cwd: work, owner: 'alice', home: alice.home, timeoutMs: 120_000,
+    paseo: { bin: 'paseo', provider: 'claude', mode: PASEO_MODE }, claude: { bin: 'claude', allow: [] },
+    guard: { argv: [process.execPath, CLI, 'guard'], entry: CLI },
+  };
+  const waker = createWaker(config, { run: spawnRunner, sessions: { get: (key) => sessions.get(key), set: (key, v) => sessions.set(key, v) }, prompt: () => prompt });
+  await waker({ peer: 'bob', threadId: thread, subject: 'guard e2e', messages: [] });
+  const listed = JSON.parse((await run('paseo', ['ls', '-g', '--json', '--label', `courier-thread=${thread}`], { env: paseoEnv(process.env) })).stdout);
+  const id = listed[0].id;
+  agents.add(id);
+  await new Promise((resolve) => setTimeout(resolve, 4000)); // `paseo send --no-wait` returns before the turn starts
+  await run('paseo', ['wait', id, '--timeout', '170'], { env: paseoEnv(process.env), timeout: 180_000 });
+  return (await run('paseo', ['logs', id, '--tail', '8'], { env: paseoEnv(process.env) })).stdout;
 }
 
-const thread = `T${Date.now()}`;
 const ask = async (verb, target) => (await courier(alice.home, ['request', thread, '--peer', 'bob', '--task', 'K1', '--verb', verb, '--target', target, '--summary', `guard e2e ${verb} ${target}`, '--why', 'e2e', '--risk', 'low'])).json.requestId;
 const approve = async (id, over = {}) => {
   const raw = (await alice.owner.node.kv.get(k.request(id), { prefix: '' })).data;
@@ -81,7 +107,7 @@ function hook(command, home = alice.home) {
   return { status: r.status, out: r.stdout ? JSON.parse(r.stdout).hookSpecificOutput : undefined, stderr: r.stderr };
 }
 
-const MERGE = 'gh pr merge 42 --repo tinycloudlabs/docs';
+const MERGE = `${PASEO ? `${bin}/` : ''}gh pr merge 42 --repo tinycloudlabs/docs`;
 try {
   // The hook alone (Claude's PreToolUse JSON on stdin).
   ok('hook: ungated command passes silently', (() => { const h = hook('ls -la'); return h.status === 0 && h.out === undefined; })());
@@ -112,12 +138,25 @@ try {
   ok('claude: the same command is blocked again', ghCalls().length === 1, r3.replace(/\s+/g, ' ').slice(0, 140));
   const h3 = hook(MERGE);
   ok('hook: replay says the approval was used', h3.out.permissionDecision === 'deny' && /already used/.test(h3.out.permissionDecisionReason));
-  const r4 = await claude('bash -c "gh pr merge 42 --repo tinycloudlabs/docs"');
+  const r4 = await claude(`bash -c "${MERGE}"`);
   ok('claude: wrapping it in bash -c does not help', ghCalls().length === 1, r4.replace(/\s+/g, ' ').slice(0, 100));
   ok('hook: pushing to main is denied', hook('git push origin HEAD:main').out.permissionDecision === 'deny');
+
+  if (PASEO) {
+    // Another agent cannot be started from inside a guarded one (it would run outside the guard).
+    const r5 = await claude('paseo run --provider claude "Say hi"');
+    ok('paseo: launching another agent is refused', /guard|hook|block|refus|not available|didn.t run|did not run/i.test(r5), r5.replace(/\s+/g, ' ').slice(0, 100));
+    const settingsFileLocal = path.join(work, '.claude', 'settings.local.json');
+    ok('paseo: the guard lives in <cwd>/.claude/settings.local.json', fs.existsSync(settingsFileLocal) && /courier|guard/.test(fs.readFileSync(settingsFileLocal, 'utf8')));
+    const guarded = JSON.parse((await run('paseo', ['ls', '-g', '--json', '--label', `courier-thread=${thread}`, '--label', 'courier-guard=1'], { env: paseoEnv(process.env) })).stdout);
+    ok('paseo: one agent served every wake of the thread (create, then send)', guarded.length === 1, `${guarded.length} agent(s), mode ${PASEO_MODE}`);
+  }
 } catch (error) {
   failures++;
   console.error(`FAIL: ${error.stack ?? error.message}`);
+} finally {
+  // Only agents this run created (found by its own thread label).
+  for (const id of agents) await run('paseo', ['delete', id], { env: paseoEnv(process.env) }).catch(() => undefined);
 }
 console.log(failures ? `${failures} FAILURES` : 'ALL PASS');
 process.exitCode = failures ? 1 : 0;

@@ -60,6 +60,7 @@ export async function decide(input: unknown, deps: GuardDeps): Promise<Decision>
         ? deny('That file belongs to the Courier guard or the Courier profile and cannot be edited from a woken agent.')
         : { kind: 'pass' };
     }
+    if (tool.startsWith('mcp__paseo')) return deny('Paseo tools can start agents outside the Courier guard and are not available to a woken agent.');
     if (tool === 'powershell') return deny('PowerShell cannot be inspected by the Courier guard; use Bash.');
     if (call.command === undefined) {
       if (tool === 'bash') return deny('Courier guard could not read the Bash command; refusing.');

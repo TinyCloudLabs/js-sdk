@@ -48,11 +48,36 @@ export function guardSettings(options: { argv: string[]; home: string; entry: st
   }
   for (const f of ['key.json', 'grant.json']) deny.push(`Read(${rulePath(path.join(home, f))})`);
   for (const prog of programs) for (const sub of ['pair', 'revoke', 'init']) deny.push(`Bash(${prog} ${sub}:*)`);
-  deny.push('Bash(secret-bridge:*)', 'Bash(secret_bridge:*)');
+  deny.push('Bash(secret-bridge:*)', 'Bash(secret_bridge:*)', 'mcp__paseo', 'mcp__paseo__*');
   return {
     disableAllHooks: false,
     hooks: { PreToolUse: [{ matcher: '*', hooks: [{ type: 'command', command: hookCommand(argv, home), timeout: 60 }] }] },
     permissions: { deny },
+  };
+}
+
+/** The guard's own hook command, as {@link hookCommand} writes it. */
+export const GUARD_HOOK_RE = /^COURIER_HOME=.* 'guard' \|\| exit 2$/;
+
+const isGuardHook = (entry: unknown): boolean =>
+  isRecord(entry) && Array.isArray(entry.hooks) && entry.hooks.some((h) => isRecord(h) && typeof h.command === 'string' && GUARD_HOOK_RE.test(h.command));
+
+/**
+ * `ours` merged over a user's settings: the guard's hook goes first, its deny rules are added, `disableAllHooks` is
+ * forced to false, and an older copy of the guard's hook in `theirs` is replaced, not duplicated.
+ */
+export function mergeGuardSettings(ours: GuardSettings, theirs: unknown): Record<string, unknown> {
+  if (theirs === undefined) return { ...ours };
+  if (!isRecord(theirs)) throw new Error('settings are not a JSON object');
+  const theirHooks = isRecord(theirs.hooks) ? theirs.hooks : {};
+  const theirPre = (Array.isArray(theirHooks.PreToolUse) ? theirHooks.PreToolUse : []).filter((entry) => !isGuardHook(entry));
+  const theirPerms = isRecord(theirs.permissions) ? theirs.permissions : {};
+  const theirDeny = Array.isArray(theirPerms.deny) ? theirPerms.deny : [];
+  return {
+    ...theirs,
+    disableAllHooks: false,
+    hooks: { ...theirHooks, PreToolUse: [...ours.hooks.PreToolUse, ...theirPre] },
+    permissions: { ...theirPerms, deny: [...new Set([...ours.permissions.deny, ...theirDeny])] },
   };
 }
 
@@ -64,22 +89,9 @@ export function writeGuardSettings(options: { argv: string[]; home: string; entr
   const dir = guardDir(options.home);
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
   fs.mkdirSync(noOwnerProfileDir(options.home), { recursive: true, mode: 0o700 });
-  const ours = guardSettings(options);
-  let merged: Record<string, unknown> = { ...ours };
-  if (options.userSettings) {
-    const theirs: unknown = JSON.parse(fs.readFileSync(options.userSettings, 'utf8'));
-    if (!isRecord(theirs)) throw new Error(`${options.userSettings} is not a JSON object`);
-    const theirHooks = isRecord(theirs.hooks) ? theirs.hooks : {};
-    const theirPre = Array.isArray(theirHooks.PreToolUse) ? theirHooks.PreToolUse : [];
-    const theirPerms = isRecord(theirs.permissions) ? theirs.permissions : {};
-    const theirDeny = Array.isArray(theirPerms.deny) ? theirPerms.deny : [];
-    merged = {
-      ...theirs,
-      disableAllHooks: false,
-      hooks: { ...theirHooks, PreToolUse: [...ours.hooks.PreToolUse, ...theirPre] },
-      permissions: { ...theirPerms, deny: [...new Set([...ours.permissions.deny, ...theirDeny])] },
-    };
-  }
+  const theirs: unknown = options.userSettings ? JSON.parse(fs.readFileSync(options.userSettings, 'utf8')) : undefined;
+  if (options.userSettings && !isRecord(theirs)) throw new Error(`${options.userSettings} is not a JSON object`);
+  const merged = mergeGuardSettings(guardSettings(options), theirs);
   const file = guardSettingsFile(options.home);
   const tmp = `${file}.${process.pid}.tmp`;
   fs.writeFileSync(tmp, `${JSON.stringify(merged, null, 2)}\n`, { mode: 0o600 });

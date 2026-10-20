@@ -6,6 +6,7 @@ import { oneLine } from './a2a.js';
 import { defer } from './defer.js';
 import { cmd } from './program.js';
 import { courierEnvOverrides, courierOnlyEnv } from './guard/install.js';
+import { GUARD_LABEL, installProjectGuard, isClaudeProvider, paseoEnv, sameDir, verifyProjectGuard } from './guard/paseo.js';
 
 /** What the watcher hands a wake adapter: one thread, every message not yet woken for. */
 export interface WakeMessage {
@@ -133,6 +134,8 @@ export interface WakeConfig {
   exec?: string;
   paseo: { bin: string; provider: string; mode?: string };
   claude: { bin: string; settings?: string; allow: string[] };
+  /** How a woken agent reaches the guard hook (`node <entry> … guard`); the `paseo` adapter installs it in `cwd`. */
+  guard?: { argv: string[]; entry: string };
   timeoutMs: number;
 }
 
@@ -142,10 +145,18 @@ function failure(what: string, result: RunResult): Error {
   return new Error(`${what} exited ${result.code}: ${tail(result.stderr || result.stdout)}`);
 }
 
-export function createWaker(config: WakeConfig, deps: { run: Runner; sessions: SessionStore; env?: NodeJS.ProcessEnv }): Waker {
+export function createWaker(
+  config: WakeConfig,
+  deps: { run: Runner; sessions: SessionStore; env?: NodeJS.ProcessEnv; prepareGuard?: () => void; prompt?: (request: WakeRequest) => string },
+): Waker {
   const env = deps.env ?? process.env;
   const { run } = deps;
-  const prompt = (request: WakeRequest) => wakePrompt(request, config.owner);
+  const prompt = deps.prompt ?? ((request: WakeRequest) => wakePrompt(request, config.owner));
+  /** Install the project guard in the agent's cwd and prove it works; throws, so the wake stays pending, if it cannot. */
+  const prepareGuard = deps.prepareGuard ?? (() => {
+    if (!config.guard) throw new Error('no guard is configured for this wake adapter; refusing to wake an agent without one');
+    verifyProjectGuard(installProjectGuard(config.cwd, config.home, config.guard), config.cwd);
+  });
 
   const exec: Waker = async (request) => {
     const result = await run('/bin/sh', ['-c', config.exec!], {
@@ -195,12 +206,19 @@ export function createWaker(config: WakeConfig, deps: { run: Runner; sessions: S
 
   const paseo: Waker = async (request) => {
     const { bin, provider, mode } = config.paseo;
-    const base = { cwd: config.cwd, timeoutMs: config.timeoutMs };
-    const listed = await run(bin, ['ls', '-g', '--json', '--label', `courier-thread=${request.threadId}`], base);
+    // Fail closed (spec §7): a Paseo agent is woken only if its cwd carries a guard that was just proven to refuse.
+    if (!isClaudeProvider(provider)) {
+      throw new Error(`the Courier guard only covers Claude agents (--paseo-provider claude); "${provider}" would run unguarded, so no agent was woken`);
+    }
+    prepareGuard();
+    const base = { cwd: config.cwd, timeoutMs: config.timeoutMs, env: paseoEnv(env) };
+    const listed = await run(bin, ['ls', '-g', '--json', '--label', `courier-thread=${request.threadId}`, '--label', GUARD_LABEL], base);
     if (listed.code !== 0) throw failure('paseo ls', listed);
-    let agents: { id?: unknown }[];
+    let agents: { id?: unknown; provider?: unknown; cwd?: unknown }[];
     try { agents = JSON.parse(listed.stdout); } catch { throw new Error(`paseo ls returned non-JSON: ${tail(listed.stdout)}`); }
-    const existing = agents.find((a) => typeof a.id === 'string')?.id as string | undefined;
+    // Only an agent that carries the guard label, runs Claude, and sits in the guarded cwd is ever messaged.
+    const existing = agents.find((a) => typeof a.id === 'string' && typeof a.provider === 'string' && isClaudeProvider(a.provider)
+      && typeof a.cwd === 'string' && sameDir(a.cwd, config.cwd))?.id as string | undefined;
     if (existing) {
       const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'courier-wake-'));
       const file = path.join(dir, 'prompt.txt');
@@ -220,12 +238,21 @@ export function createWaker(config: WakeConfig, deps: { run: Runner; sessions: S
       '--cwd', config.cwd,
       '--label', `courier-thread=${request.threadId}`,
       '--label', `courier-peer=${request.peer}`,
+      '--label', GUARD_LABEL,
       ...Object.entries(courierEnvOverrides(env, config.home)).flatMap(([name, value]) => ['--env', `${name}=${value}`]),
       ...(mode ? ['--mode', mode] : []),
       prompt(request),
     ];
     const created = await run(bin, args, base);
     if (created.code !== 0) throw failure('paseo run', created);
+    // The agent must have started where the guard is. A caller-scoped Paseo environment can redirect `--cwd`; stop it if so.
+    let started: { agentId?: unknown; provider?: unknown; cwd?: unknown } | undefined;
+    try { started = JSON.parse(created.stdout.slice(Math.max(0, created.stdout.indexOf('{')))); } catch { /* checked below */ }
+    const where = started && typeof started.cwd === 'string' ? started.cwd : undefined;
+    if (!where || !sameDir(where, config.cwd) || typeof started?.provider !== 'string' || !isClaudeProvider(started.provider)) {
+      if (typeof started?.agentId === 'string') await run(bin, ['delete', started.agentId], base);
+      throw new Error(`paseo started an agent outside the guarded directory ${config.cwd} (${where ?? 'unknown'}); it was stopped and nothing was woken`);
+    }
   };
 
   switch (config.adapter) {

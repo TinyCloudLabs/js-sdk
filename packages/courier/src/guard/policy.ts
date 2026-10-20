@@ -40,6 +40,8 @@ const PLACEHOLDER = '\u0001';
 // ---------- tables ----------
 
 const SHELLS = new Set(['sh', 'bash', 'dash', 'zsh', 'ksh', 'mksh', 'ash', 'csh', 'tcsh', 'fish']);
+/** Programs that start another coding agent. A woken agent may not launch one: it would run outside the guard. */
+const AGENT_CLIS = new Set(['paseo', 'claude', 'codex', 'omp', 'opencode', 'gemini', 'cursor-agent', 'amp', 'aider', 'goose']);
 /** Programs that run another program given in their arguments. */
 const WRAPPERS = new Set([
   'env', 'command', 'builtin', 'exec', 'nohup', 'time', 'nice', 'ionice', 'sudo', 'doas', 'setsid', 'stdbuf', 'timeout',
@@ -626,6 +628,7 @@ function classify(argv: Word[], top: Word[], sc: Scope, io: Io): void {
   const args = argv.slice(1);
 
   if (/^secret[-_]?bridge$/.test(prog)) return never(sc, 'Secret Bridge is retired and never allowed');
+  if (AGENT_CLIS.has(prog)) return never(sc, `${prog} would start another agent without the Courier guard; do the work yourself`);
   if (WRAPPERS.has(prog)) return classifyWrapper(prog, args, top, sc, io);
   if (SHELLS.has(prog)) return classifyShell(args, sc, io);
   switch (prog) {
@@ -648,9 +651,6 @@ function classify(argv: Word[], top: Word[], sc: Scope, io: Io): void {
     case 'phala': return classifyTool('phala', args, top, sc);
     case 'changeset': return classifyTool('changeset', args, top, sc);
     case 'lerna': if (statics(args).includes('publish')) gate(sc, 'lerna publish', top, () => 'lerna publish is not supported; use `changeset publish` or `npm publish` from a package directory'); return;
-    case 'paseo':
-      if (statics(args).some((s) => /^secret[-_]?bridge$/i.test(s))) never(sc, 'Secret Bridge is retired and never allowed');
-      return;
     default:
   }
   if (NPM_FAMILY.has(prog)) {

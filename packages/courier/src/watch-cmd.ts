@@ -155,10 +155,11 @@ export async function cmdWatch(args: ParsedArgs): Promise<void> {
   const profile = installing ? undefined : loadProfile();
   const config = wakeConfig(args, profile?.selfHandle);
   if (!profile) return installService(args, config);
+  if (config.adapter === 'claude' || config.adapter === 'paseo') config.guard = { argv: guardArgv(), entry: process.argv[1] ?? '' };
   if (config.adapter === 'claude') {
     // The owner's own --claude-settings is merged under the guard, never used instead of it.
     config.claude.settings = writeGuardSettings({
-      argv: guardArgv(), home: config.home, entry: process.argv[1] ?? '', ...(config.claude.settings ? { userSettings: config.claude.settings } : {}),
+      ...config.guard!, home: config.home, ...(config.claude.settings ? { userSettings: config.claude.settings } : {}),
     });
   }
 
