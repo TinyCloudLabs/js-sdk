@@ -749,7 +749,7 @@ function classifyInterpreter(prog: string, args: Word[], sc: Scope, io: Io): voi
       if (preload || shortPreload) {
         const file = preload?.[1] !== undefined ? { value: preload[1], dynamic: false } : shortPreload ? { value: shortPreload, dynamic: false } : args[++i];
         if (!file || file.dynamic || !/^(?:\.{1,2}\/|\/)/.test(file.value)) return unresolved(sc.sh, 'interpreter preload must name an inspectable file');
-        interpreterFile(file, [], sc, io);
+        interpreterFile(file, args.slice(i + 1), sc, io);
         continue;
       }
       const codeFlag = node ? /^(?:-e|-p|--eval|--print)(?:=(.*))?$/.exec(v)

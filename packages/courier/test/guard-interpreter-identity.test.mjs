@@ -16,6 +16,7 @@ test('N2: interpreter operands and preload files follow executable and package p
     const cwd = path.join(root, 'work'); const bin = path.join(root, 'bin'); const home = path.join(root, 'courier');
     fs.mkdirSync(cwd); fs.mkdirSync(bin); fs.symlinkSync(process.execPath, path.join(bin, 'node'));
     fs.writeFileSync(path.join(bin, 'python3'), '#!/bin/sh\nexit 0\n', { mode: 0o700 });
+    fs.writeFileSync(path.join(bin, 'npm'), '#!/bin/sh\nexit 0\n', { mode: 0o700 });
     const entry = path.join(root, 'cli.js'); fs.writeFileSync(entry, 'console.log(1)');
     process.env.PATH = bin;
     writeGuardSettings({ argv: [process.execPath, entry, 'guard'], home, entry });
@@ -38,6 +39,7 @@ test('N2: interpreter operands and preload files follow executable and package p
       ['node --loader ./m -e 1', 'unresolved'], ['python3 ./m', 'unresolved'],
       ['node ./missing', 'unresolved'], ['node ./binary', 'unresolved'],
       ['python3 -m missing', 'unresolved'], ['node -r missing -e 1', 'unresolved'],
+      [`node -r ${path.join(bin, 'npm')} -e 1 publish`, 'unresolved'],
     ];
     for (const name of ['@anthropic-ai/claude-code', '@openai/codex', '@google/gemini-cli', 'opencode-ai', 'wrangler', '@phala/cli', '@tinycloud/cli', '@oh-my-pi/pi-coding-agent', 'phala']) cases.push([`node ${script(name, 'bin/run')} status`, 'never']);
     const link = path.join(bin, 'paseo-link'); fs.symlinkSync(paseo, link); cases.push([`node ${link} run hi`, 'never']);
