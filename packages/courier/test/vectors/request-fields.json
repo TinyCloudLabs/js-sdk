@@ -1,13 +1,13 @@
 {
- "v": 1,
- "note": "Shared by js-sdk packages/courier and the share /courier view. field/value/verb: valid=false means the CLI refuses to write it and the view treats the request as unreadable. Canonical-JSON vectors are in canonical.json. For targets, the CLI may normalise on write (trim, lower-case the repo, GitHub PR URL -> owner/repo#N); valid=false means the value is not acceptable AS STORED. ids: request id, threadId and taskId must be ULIDs (26 Crockford base32 upper-case characters, no I L O U); the peer handle is 1-64 of [A-Za-z0-9_-].",
+ "v": 2,
+ "note": "Shared by js-sdk packages/courier and the share /courier view. field/value/verb: valid=false means the CLI refuses to write it and the view treats the request as unreadable. Canonical-JSON vectors are in canonical.json. For targets, the CLI may normalise on write (trim, lower-case the repo, GitHub PR URL -> owner/repo#N); valid=false means the value is not acceptable AS STORED. ids: request id, threadId and taskId must be ULIDs (26 Crockford base32 upper-case characters, no I L O U); the peer handle is 1-64 of [A-Za-z0-9_-]. Text contract v2: frozen Unicode 15.0.0 Lu/Ll/Lt/Lo/Nd minus Default_Ignorable, NFC, summary ASCII punctuation .,:;-_/#()?! and U+0027; multiline all printable ASCII punctuation plus LF; only U+0020 space. All marks, non-ASCII punctuation/symbols and newer characters refused. Exhaustive verdicts: text-verdicts.json; range table: src/text-ranges.ts.",
  "limits": {
   "summary": 200,
   "target": 200,
   "action": 2000,
   "reason": 2000,
   "risk": 2000,
-  "combiningRun": 3
+  "combiningRun": 0
  },
  "fields": [
   {
@@ -17,16 +17,16 @@
    "valid": true
   },
   {
-   "name": "non-ascii letters are fine",
+   "name": "non-ascii letters with punctuation refused",
    "field": "summary",
    "value": "Fusionner la PR docs n\u00b042 \u2014 caf\u00e9",
-   "valid": true
+   "valid": false
   },
   {
-   "name": "emoji ok",
+   "name": "emoji refused",
    "field": "summary",
    "value": "Ship it \ud83d\ude80",
-   "valid": true
+   "valid": false
   },
   {
    "name": "empty",
@@ -191,10 +191,10 @@
    "valid": true
   },
   {
-   "name": "3 combining marks ok",
+   "name": "3 combining marks refused",
    "field": "summary",
    "value": "x\u0301\u0302\u0303",
-   "valid": true
+   "valid": false
   },
   {
    "name": "4 combining marks refused",
@@ -735,15 +735,21 @@
    "valid": false
   },
   {
-   "name": "summary with a right single quote (apostrophe) is allowed",
+   "name": "summary with a right single quote (apostrophe) is refused",
    "field": "summary",
    "value": "Merge Sam\u2019s docs PR",
-   "valid": true
+   "valid": false
   },
   {
    "name": "summary with an ASCII apostrophe is allowed",
    "field": "summary",
    "value": "Merge Sam's docs PR",
+   "valid": true
+  },
+  {
+   "field": "summary",
+   "name": "NFC multilingual letters and decimal digits",
+   "value": "Caf\u00e9 \u4e2d\u6587 \u0627\u0644\u0639\u0631\u0628\u064a\u0629 \u0967\u0968\u0969",
    "valid": true
   }
  ],
@@ -808,5 +814,6 @@
    "valid": false,
    "applies": "id, threadId, taskId of a request"
   }
- ]
+ ],
+ "unicodeVersion": "15.0.0"
 }

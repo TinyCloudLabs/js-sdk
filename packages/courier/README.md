@@ -195,13 +195,16 @@ One rule set applies when `courier request` writes, when `courier approval`
 reads, and when the view shows the card. A value that breaks it is **refused,
 never repaired or shortened**:
 
-- every text field is a string with no lone surrogates, is in Unicode NFC, and
-  contains no control (Cc), format (Cf: bidi, zero-width, tag characters),
-  private-use (Co), unassigned (Cn), line or paragraph separator (Zl, Zp) or
-  default-ignorable character (variation selectors, U+034F, Hangul fillers,
-  soft hyphen, …), no space other than U+0020, and no run of 4 or more
-  combining marks (`\p{M}`);
-- `summary` also refuses every quotation mark (`\p{Quotation_Mark}`: `"`, curly quotes, guillemets, CJK corner brackets, …) and the look-alikes Unicode does not list as such (double primes U+2033 U+2036 U+02BA, gershayim U+05F4, the ditto mark U+3003, U+2760, U+275D-E, U+2E42, U+1F676-8, U+FF02), because the view shows it between quotes; the apostrophes U+0027 and U+2019 are fine;
+- text must already be Unicode NFC; it is never normalized or repaired. Non-ASCII
+  characters are allowed only from the frozen **Unicode 15.0.0** categories
+  Lu, Ll, Lt, Lo and Nd, excluding Default_Ignorable. Modifier letters (Lm),
+  other numbers (Nl/No), all combining marks, punctuation, symbols, controls,
+  invisible characters, fillers and unassigned/newer characters are refused;
+- U+0020 is the only space. `summary` additionally allows exactly these ASCII
+  punctuation characters: `. , : ; - _ / # ( ) ? !` and apostrophe U+0027.
+  Non-ASCII apostrophes, quotes and brackets are refused. `action`, `reason`,
+  `risk` and approval notes allow all printable ASCII punctuation and LF (`\n`),
+  never a tab or CR;
 - `target`, `summary`: 1 to 200 UTF-16 units, trimmed, one line; `action`,
   `reason`, `risk`: 1 to 2000, a single `\n` allowed, never a tab or CR;
 - `target` is printable ASCII (`[\x20-\x7E]`) for every verb, in the one
@@ -214,6 +217,21 @@ never repaired or shortened**:
   | `deploy` | `wrangler:<worker>[:<env>]`, `pages:<project>`, `phala:<name>` or `script:<package>:<script>` |
   | `other` | `workflow:owner/repo:<workflow file or name>`, `secrets:<subcommand and key>`, or `<kind>:<text>` |
   | `spend` | `spend:<what and how much>` |
+
+The CLI and view share `src/text-ranges.ts` and
+`test/vectors/text-verdicts.json`; decisions use only that frozen table and an
+NFC check, never runtime Unicode property tables. The version is pinned to
+Unicode 15.0.0 (Node 20.0.0). The vector ranges cover all 1,114,112 code points
+for `summary`, `multiline` and `target`, plus full-string verdict/reason samples.
+`textVerdict(value: unknown, field: 'summary' | 'multiline' | 'target')` returns
+`{ allowed: boolean, reason: null | 'not-string' | 'empty' | 'too-long' |
+'edge-whitespace' | 'not-nfc' | 'disallowed-code-point' }`. Limits/trim rules are
+included; `multiline` is the action/reason/risk/note policy (an optional empty
+approval note is handled by the caller). Target shapes remain verb-specific.
+The pinned UCD source hashes and regeneration instructions are in
+`scripts/generate-text-table.mjs`. The independent test walks every code point
+using runtime Unicode categories: it fails if the table permits more, and
+reports newer runtime additions without permitting them.
 
 - `threadId`, `taskId` and the request id are ULIDs (26 upper-case Crockford
   base32 characters, no I L O U), and the peer handle is 1 to 64 of
