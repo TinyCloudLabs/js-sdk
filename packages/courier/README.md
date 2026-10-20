@@ -92,8 +92,8 @@ For the OpenKey API host it is flag > env > derived. `TC_HOME`, `TC_PROFILE`,
 
 - **Subscribe.** One write-hook subscription per paired peer on that peer's
   `to/<me>/`, and one on your own `me/approvals/`, each on 25 s tickets
-  (`--ticket`). Hooks are a wake-up signal only; on production they arrive up
-  to one ticket late (TC-720) and have no replay.
+  (`--ticket`). A hook signals that something changed; the watcher then lists
+  the peer's messages, and that listing is the source of truth.
 - **Catch up.** Every `--poll` seconds (default 60, not 5 minutes) and at
   start, it lists each peer's `threads/` prefix in full and diffs it against
   `to/<peer>/receipts.json`. A subscription that is refused (for example an
@@ -293,18 +293,7 @@ It then consumes the approval with a create-only marker at
 `--peek` checks the marker too (a used approval fails the peek) but does not
 write it. A denial exits `approval-denied`. The courier key cannot write
 `me/approvals/`, so only the owner's view session can produce a passing
-approval.
-
-**The used-marker is delete-proof for the courier key.** The grant gives
-`me/consumed/` get, put and list but not del (`me/state/` does allow del, which
-is why the marker is not there). A put can overwrite a marker's value but cannot
-remove its key, so the key's presence is what counts, whatever it contains. The
-check reads from the network every time (no replica, no cache, no ETag
-shortcut) and treats only a key-level 404 as "unused"; a transport error, a
-5xx, a 401/403 or a "space not found" fails closed (`approval-state-unknown`).
-The broker writes the create-only marker before executing the approved merge.
-Grants issued before this change lack `me/consumed/` and are refused with
-`grant-incomplete`: run `init` once to renew (one passkey approval).
+approval. Each approval covers one request and is valid for 24 hours.
 
 The watcher wakes the thread's agent as soon as a new approval (approved or
 denied) for one of its requests appears, without the debounce. Approvals older
@@ -412,7 +401,7 @@ courier watch --wake none --notify exec --notify-exec 'printf "%s %s %s\n" "$COU
 
 `<COURIER_HOME>/notifications.jsonl` always exists after the first notification;
 it holds fixed-text status, never the peer's subject or message. Once notified,
-Start a session and watch it yourself. Paste this prompt (replace the
+start a session and watch it yourself. Paste this prompt (replace the
 thread and peer with the IDs shown by `courier inbox`):
 
 ```text

@@ -94,11 +94,11 @@ function readSecure<T>(name: string, required: boolean, home = profileDir()): T 
   }
   const dirMode = fs.statSync(home).mode & 0o777;
   if ((dirMode & 0o077) !== 0) {
-    throw new CourierError('insecure-profile', `${profileDir()} must not be accessible by group or others (mode ${dirMode.toString(8)}).`);
+    throw new CourierError('profile-permissions', `${profileDir()} must be owner-only (mode 0700); found mode ${dirMode.toString(8)}.`);
   }
   const mode = fs.statSync(file).mode & 0o777;
   if ((mode & 0o077) !== 0) {
-    throw new CourierError('insecure-profile', `${name} must not be accessible by group or others (mode ${mode.toString(8)}).`);
+    throw new CourierError('profile-permissions', `${name} must be owner-only (mode 0600); found mode ${mode.toString(8)}.`);
   }
   try {
     return JSON.parse(fs.readFileSync(file, 'utf8')) as T;
