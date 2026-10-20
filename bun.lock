@@ -196,7 +196,7 @@
     },
     "packages/cli": {
       "name": "@tinycloud/cli",
-      "version": "1.3.0-beta.39",
+      "version": "1.3.0-beta.41",
       "bin": {
         "tc": "./bin/tc",
         "tinycloud": "./bin/tinycloud",
@@ -216,7 +216,7 @@
         "siwe": "^3.0.0",
       },
       "devDependencies": {
-        "@tinycloud/courier": "0.2.0-beta.36",
+        "@tinycloud/courier": "0.2.0-beta.37",
         "@tinycloud/replica": "0.3.0-beta.10",
         "@types/node": "^20",
         "tsup": "^8.0.0",
@@ -225,7 +225,7 @@
     },
     "packages/courier": {
       "name": "@tinycloud/courier",
-      "version": "0.2.0-beta.36",
+      "version": "0.2.0-beta.37",
       "bin": {
         "courier": "./dist/cli.js",
       },
