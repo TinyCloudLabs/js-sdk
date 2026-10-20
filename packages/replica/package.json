@@ -65,7 +65,7 @@
     "@tinycloud/sdk-services": "3.3.0-beta.25"
   },
   "devDependencies": {
-    "@tinycloud/web-sdk-wasm": "1.7.7-beta.0",
+    "@tinycloud/web-sdk-wasm": "1.7.7-beta.1",
     "@types/node": "^20",
     "fake-indexeddb": "^6.2.5",
     "tsup": "^8.0.0",
