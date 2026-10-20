@@ -68,6 +68,7 @@
     "share-delivery-primary-session",
     "share-index-slice2",
     "share-receiver-non-extractable-key",
+    "share-space-not-ready",
     "sign-out-ends-session",
     "tc-1312-writable-handles",
     "tc-1413-node-retry-errors",
