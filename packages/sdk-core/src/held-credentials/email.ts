@@ -21,6 +21,7 @@ export function normaliseEmail(email: string): string | null {
   const parts = trimmed.split("@");
   if (parts.length !== 2) return null;
   let [local, domain] = parts as [string, string];
+  if (local === "" || domain === "") return null;
   if (domain === "googlemail.com") domain = "gmail.com";
   if (!domain.includes(".") || domain.startsWith(".") || domain.endsWith(".") || domain.includes("..")) return null;
   const plus = local.indexOf("+");

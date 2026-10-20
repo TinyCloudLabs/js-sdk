@@ -2,6 +2,7 @@ import { ed25519 } from "@noble/curves/ed25519";
 import { secp256k1 } from "@noble/curves/secp256k1";
 import { keccak_256 } from "@noble/hashes/sha3";
 import { sha256 } from "@noble/hashes/sha256";
+import { sha512 } from "@noble/hashes/sha512";
 import { asciiBytes, bytesToHex } from "./encoding";
 
 export { sha256, keccak_256 };
@@ -25,10 +26,24 @@ export function isStrictEd25519Point(bytes: Uint8Array): boolean {
 export function verifyEd25519Strict(signature: Uint8Array, message: Uint8Array, publicKey: Uint8Array): boolean {
   if (signature.length !== 64 || !isStrictEd25519Point(publicKey) || !isStrictEd25519Point(signature.subarray(0, 32))) return false;
   try {
-    return ed25519.verify(signature, message, publicKey, { zip215: false });
+    if (!ed25519.verify(signature, message, publicKey, { zip215: false })) return false;
+    // noble's check is cofactored (it multiplies the difference by 8), which accepts a mixed-order R
+    // that dalek's `verify_strict` refuses. Also require the exact, cofactorless equation
+    // [S]B == R + [k]A with k = H(R || A || M) mod L.
+    const R = Point.fromHex(signature.subarray(0, 32), false);
+    const A = Point.fromHex(publicKey, false);
+    const S = bytesToNumberLE(signature.subarray(32));
+    const k = bytesToNumberLE(sha512(Uint8Array.from([...signature.subarray(0, 32), ...publicKey, ...message]))) % ed25519.CURVE.n;
+    return Point.BASE.multiplyUnsafe(S).equals(R.add(A.multiply(k)));
   } catch {
     return false;
   }
+}
+
+function bytesToNumberLE(bytes: Uint8Array): bigint {
+  let out = 0n;
+  for (let i = bytes.length - 1; i >= 0; i -= 1) out = (out << 8n) | BigInt(bytes[i]!);
+  return out;
 }
 
 /** Lowercase `0x` + 40 hex address of the key that produced an EIP-191 `personal_sign` signature, or null. */

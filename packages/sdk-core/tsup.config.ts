@@ -30,6 +30,7 @@ export default defineConfig({
     "@noble/curves/secp256k1",
     "@noble/hashes/sha3",
     "@noble/hashes/sha256",
+    "@noble/hashes/sha512",
     "@tinycloud/bootstrap",
     "@tinycloud/sdk-services",
     "ms",

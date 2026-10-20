@@ -19,14 +19,65 @@ export interface IssuerEntry {
   notAfter: number | null;
 }
 
-export interface IssuerSet {
-  version: number;
+const CONSTRUCT = Symbol("IssuerSet.construct");
+
+/** Module-private read of the private entry map; assigned once by the class's static block. */
+let readEntry: (set: IssuerSet, issuerDid: string, kid: string) => IssuerEntry | undefined;
+
+/** A fresh, frozen entry: the public key is a new copy every time, so a caller cannot alter the set. */
+function copyEntry(entry: IssuerEntry): IssuerEntry {
+  return Object.freeze({ ...entry, publicKey: entry.publicKey.slice() });
+}
+
+/**
+ * An issuer set that has passed every rule of `parseIssuerSet`. It is opaque: the constructor
+ * refuses any caller but `parseIssuerSet`, and the verifier accepts only a genuine instance
+ * (`IssuerSet.is`), so a structural object can never stand in for a validated set. The instance,
+ * its prototype and the class are frozen, so `resolveIssuer` cannot be replaced, and the verifier
+ * reads entries through the module-private `lookupIssuerEntry`, never through a property.
+ *
+ * Do not mix the CJS and ESM builds of this package in one process: an `IssuerSet` made by the
+ * other build is a different class and is refused as `bad-config`. Import one build only.
+ */
+export class IssuerSet {
+  readonly version: number;
+  readonly #entries: ReadonlyMap<string, IssuerEntry>;
+
+  static {
+    readEntry = (set, issuerDid, kid) => {
+      const entry = set.#entries.get(kid);
+      return entry && entry.issuerDid === issuerDid ? copyEntry(entry) : undefined;
+    };
+  }
+
+  /** @internal Use `parseIssuerSet`. */
+  constructor(token: symbol, version: number, entries: ReadonlyMap<string, IssuerEntry>) {
+    if (token !== CONSTRUCT) throw new TypeError("IssuerSet can only be created by parseIssuerSet");
+    this.version = version;
+    this.#entries = entries;
+    Object.freeze(this);
+  }
+
+  /** True only for an instance built by `parseIssuerSet` (a real private-field brand check). */
+  static is(value: unknown): value is IssuerSet {
+    return typeof value === "object" && value !== null && #entries in value;
+  }
+
   /**
    * The one lookup seam (TC-1132 would plug an allow-listed did:web resolver in here). Returns the
    * FULL entry, never just a key, so vct/profile admission and the validity window come from the
-   * same entry. Exact (issuerDid, kid) match only.
+   * same entry. Exact (issuerDid, kid) match only. Every call returns a copy.
    */
-  resolveIssuer(issuerDid: string, kid: string): IssuerEntry | undefined;
+  resolveIssuer(issuerDid: string, kid: string): IssuerEntry | undefined {
+    return readEntry(this, issuerDid, kid);
+  }
+}
+Object.freeze(IssuerSet.prototype);
+Object.freeze(IssuerSet);
+
+/** What `verifyHeldPresentation` calls. Not exported from the package index. */
+export function lookupIssuerEntry(set: IssuerSet, issuerDid: string, kid: string): IssuerEntry | undefined {
+  return readEntry(set, issuerDid, kid);
 }
 
 export interface IssuerSetOptions {
@@ -98,23 +149,17 @@ export function parseIssuerSet(raw: unknown, options: IssuerSetOptions): IssuerS
     const retiredAt = item.retiredAt === null ? null : parseTime(item.retiredAt, "retiredAt");
     const notAfter = item.notAfter === null ? null : parseTime(item.notAfter, "notAfter");
     if (retiredAt !== null && notAfter !== null && retiredAt > notAfter) refuse("bad-issuer-set", "retiredAt must not be after notAfter");
-    entries.set(kid as string, {
+    entries.set(kid as string, Object.freeze({
       issuerDid: issuerDid as string,
       kid: kid as string,
       alg: "EdDSA",
       publicKey,
-      vcts: stringList(item.vcts, "vcts"),
-      profiles: stringList(item.profiles, "profiles"),
+      vcts: Object.freeze([...stringList(item.vcts, "vcts")]),
+      profiles: Object.freeze([...stringList(item.profiles, "profiles")]),
       notBefore,
       retiredAt,
       notAfter,
-    });
+    }));
   }
-  return {
-    version: raw.version as number,
-    resolveIssuer(issuerDid, kid) {
-      const entry = entries.get(kid);
-      return entry && entry.issuerDid === issuerDid ? entry : undefined;
-    },
-  };
+  return new IssuerSet(CONSTRUCT, raw.version as number, entries);
 }
