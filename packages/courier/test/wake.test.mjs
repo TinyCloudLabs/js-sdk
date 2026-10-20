@@ -123,7 +123,7 @@ test('launchd plist escapes XML and keeps every argv element a separate string',
 test('systemd unit quotes arguments and escapes % and $ so the manager does not expand them', () => {
   const unit = systemdUnitFile(spec);
   assert.ok(unit.includes('"echo \\"$$COURIER_THREAD\\" & 100%%"'));
-  assert.ok(unit.includes('WorkingDirectory="/Users/h/my repo"'));
+  assert.ok(unit.includes('WorkingDirectory=/Users/h/my repo\n'), 'a path with a space is unquoted: systemd rejects a quoted WorkingDirectory');
   assert.ok(unit.includes('Environment="COURIER_HOME=/Users/h/.courier"'));
   assert.equal(systemdPlan({ ...spec, name: 'sam' }, '/home/u').file, '/home/u/.config/systemd/user/courier-watch-sam.service');
 });

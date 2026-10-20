@@ -107,6 +107,9 @@ export class Watcher {
   private state: WatchState = emptyWatchState();
   private readonly retryAt = new Map<string, number>();
   private readonly waking = new Set<string>();
+  /** Set when another watcher is writing this profile's state: this one stops and `run` throws it. */
+  private fatalError: CourierError | undefined;
+  private onFatal: (() => void) | undefined;
   /** Etag of me/state/watch.json as this watcher last saw it: null = absent, undefined = unknown (fetch before writing). */
   private stateEtag: string | null | undefined;
   private readonly taskCache = new Map<string, { etag: string | null; terminal: boolean }>();
@@ -151,8 +154,11 @@ export class Watcher {
         this.stateEtag = written ?? undefined;
       } catch (error) {
         if (error instanceof CourierError && error.code === 'conflict') {
-          this.stateEtag = undefined;
-          throw new CourierError('state-conflict', 'me/state/watch.json changed under this watcher; is a second `watch` running for this profile?');
+          // Another watcher owns this state. Carrying on would double-wake and overwrite its pending wakes: stop.
+          const conflict = new CourierError('state-conflict', 'me/state/watch.json was changed by another process; a second `watch` is running for this profile. This watcher is stopping.');
+          this.fatalError ??= conflict;
+          this.onFatal?.();
+          throw conflict;
         }
         throw error;
       }
@@ -316,6 +322,7 @@ export class Watcher {
 
   /** Wake every thread whose debounce has elapsed (`force`: all of them now). Threads wake in parallel, one wake per thread at a time. */
   async tick(force = false): Promise<void> {
+    if (this.fatalError) return;
     const at = this.now();
     const runs: Promise<void>[] = [];
     for (const [key, pending] of Object.entries(this.state.pending)) {
@@ -332,6 +339,16 @@ export class Watcher {
     // Messages that land while the wake runs stay pending for the next one, so wake exactly this snapshot.
     const messages = [...pending.messages];
     const woken = messages.map((m) => m.messageId);
+    const oldestSentAt = messages[0]?.sentAt ?? '';
+    // Claim the state first: a stale second watcher fails this conditional write and stops before it can wake.
+    await this.mutate(() => {});
+    const startedAt = this.now();
+    // `waking` is when the adapter is invoked: the send-to-wake latency. `woke` follows when the adapter returns.
+    this.deps.log('waking', {
+      peer: pending.peer, threadId: pending.threadId, messageIds: woken,
+      oldestSentAt: oldestSentAt || null,
+      wakeLatencyMs: oldestSentAt ? startedAt - Date.parse(oldestSentAt) : null,
+    });
     try {
       await this.deps.wake({ peer: pending.peer, threadId: pending.threadId, subject: pending.subject, messages });
     } catch (error) {
@@ -340,7 +357,6 @@ export class Watcher {
       return;
     }
     this.retryAt.delete(key);
-    const oldestSentAt = messages[0]?.sentAt ?? '';
     await this.mutate(() => {
       const current = this.state.pending[key];
       if (current) {
@@ -351,8 +367,7 @@ export class Watcher {
     });
     this.deps.log('woke', {
       peer: pending.peer, threadId: pending.threadId, messageIds: woken,
-      oldestSentAt: oldestSentAt || null,
-      wakeLatencyMs: oldestSentAt ? this.now() - Date.parse(oldestSentAt) : null,
+      runMs: this.now() - startedAt,
     });
   }
 

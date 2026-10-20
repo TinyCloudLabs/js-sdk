@@ -84,7 +84,7 @@ export function launchdPlan(spec: ServiceSpec, home: string, uid: number): Servi
   };
 }
 
-/** systemd splits ExecStart and Environment on whitespace and expands `%` and `$`; quote and escape all three. */
+/** systemd splits ExecStart and Environment on whitespace and expands `%` and `$`; quote and escape all three. WorkingDirectory= is a plain path (quotes are rejected) and only expands `%`. */
 const sd = (s: string) => `"${s.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/%/g, '%%').replace(/\$/g, '$$$$')}"`;
 
 export function systemdUnitFile(spec: ServiceSpec): string {
@@ -97,7 +97,7 @@ export function systemdUnitFile(spec: ServiceSpec): string {
     '',
     '[Service]',
     'Type=simple',
-    `WorkingDirectory=${sd(spec.cwd)}`,
+    `WorkingDirectory=${spec.cwd.replace(/%/g, '%%')}`,
     ...env.map(([key, value]) => `Environment=${sd(`${key}=${value}`)}`),
     `ExecStart=${spec.argv.map(sd).join(' ')}`,
     'Restart=always',
