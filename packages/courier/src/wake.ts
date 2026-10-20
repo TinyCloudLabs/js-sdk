@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { oneLine } from './a2a.js';
 import { cmd } from './program.js';
+import { courierEnvOverrides, courierOnlyEnv } from './guard/install.js';
 
 /** What the watcher hands a wake adapter: one thread, every message not yet woken for. */
 export interface WakeMessage {
@@ -149,8 +150,7 @@ export function createWaker(config: WakeConfig, deps: { run: Runner; sessions: S
       cwd: config.cwd,
       timeoutMs: config.timeoutMs,
       env: {
-        ...env,
-        COURIER_HOME: config.home,
+        ...courierOnlyEnv(env, config.home),
         COURIER_THREAD: request.threadId,
         COURIER_PEER: request.peer,
         COURIER_MESSAGES: JSON.stringify(request.messages),
@@ -164,13 +164,15 @@ export function createWaker(config: WakeConfig, deps: { run: Runner; sessions: S
 
   const claude: Waker = async (request) => {
     const key = `${request.peer}/${request.threadId}`;
+    // A woken Claude never runs without the guard (spec §7): the settings file always carries the PreToolUse hook.
+    if (!config.claude.settings) throw new Error('claude wake needs the guard settings file (courier guard settings)');
     const attempt = async (session: string | undefined) => {
       const args = ['-p', '--output-format', 'json'];
       if (session) args.push('--resume', session);
-      if (config.claude.settings) args.push('--settings', config.claude.settings);
+      args.push('--settings', config.claude.settings!);
       if (config.claude.allow.length) args.push('--allowedTools', ...config.claude.allow);
       const result = await run(config.claude.bin, args, {
-        cwd: config.cwd, env: { ...env, COURIER_HOME: config.home }, input: prompt(request), timeoutMs: config.timeoutMs,
+        cwd: config.cwd, env: courierOnlyEnv(env, config.home), input: prompt(request), timeoutMs: config.timeoutMs,
       });
       let parsed: { session_id?: unknown; is_error?: unknown; result?: unknown } | undefined;
       for (const line of result.stdout.trim().split('\n').reverse()) {
@@ -216,7 +218,7 @@ export function createWaker(config: WakeConfig, deps: { run: Runner; sessions: S
       '--cwd', config.cwd,
       '--label', `courier-thread=${request.threadId}`,
       '--label', `courier-peer=${request.peer}`,
-      '--env', `COURIER_HOME=${config.home}`,
+      ...Object.entries(courierEnvOverrides(env, config.home)).flatMap(([name, value]) => ['--env', `${name}=${value}`]),
       ...(mode ? ['--mode', mode] : []),
       prompt(request),
     ];

@@ -9,6 +9,8 @@ import { courierNode, peerHooks, peerKv } from './node.js';
 import type { ParsedArgs } from './args.js';
 import { WATCH_DEFAULTS, Watcher, type WatchOptions } from './watch.js';
 import { createWaker, jsonLineLog, spawnRunner, type SessionStore, type WakeConfig } from './wake.js';
+import { guardArgv } from './guard/command.js';
+import { writeGuardSettings } from './guard/install.js';
 import {
   applyPlan, launchdPlan, renderPlan, serviceName, systemdPlan, type ServiceSpec,
 } from './service.js';
@@ -148,6 +150,12 @@ export async function cmdWatch(args: ParsedArgs): Promise<void> {
   const profile = installing ? undefined : loadProfile();
   const config = wakeConfig(args, profile?.selfHandle);
   if (!profile) return installService(args, config);
+  if (config.adapter === 'claude') {
+    // The owner's own --claude-settings is merged under the guard, never used instead of it.
+    config.claude.settings = writeGuardSettings({
+      argv: guardArgv(), home: config.home, entry: process.argv[1] ?? '', ...(config.claude.settings ? { userSettings: config.claude.settings } : {}),
+    });
+  }
 
   const log = jsonLineLog();
   const node = await courierNode(profile);

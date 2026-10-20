@@ -6,6 +6,7 @@ import {
 import { cmd, programName, setProgramName } from './program.js';
 import { cmdWatch } from './watch-cmd.js';
 import { cmdApproval } from './approval.js';
+import { cmdGuard } from './guard/command.js';
 
 function usage(): string {
   const name = programName();
@@ -41,6 +42,13 @@ Threads (agents run these):
                                    Check MY human's decision on request <id> before a gated action: must
                                    be approved, match the request exactly, be under 24 h old and unused.
                                    Consumes it (exit 0); --peek only checks. A denial or mismatch exits 1.
+
+Guards (woken agents run with these; humans rarely do):
+  guard                            Claude Code PreToolUse hook: reads one tool call as JSON on stdin and refuses
+                                   merge, deploy, publish, push to main/master, \`tc secrets\` and similar unless
+                                   your owner approved that exact (verb, target) and nobody has used the approval.
+  guard settings [--out f] [--claude-settings f]
+                                   Print/write the Claude Code settings (hook + deny rules) that install it.
 
 Delivery (one watcher per person per machine; never calls a model):
   watch [--wake none|paseo|claude|exec] [--exec <cmd>] [--cwd dir] [--debounce 30] [--poll 60] [--ticket 25] [--once]
@@ -93,6 +101,7 @@ export async function run(argv: string[]): Promise<void> {
     case 'orders': return cmdOrders(sub);
     case 'watch': return cmdWatch(sub);
     case 'approval': return cmdApproval(sub);
+    case 'guard': return cmdGuard(sub);
     default:
       throw new CourierError('usage', `Unknown command "${command}".\n\n${usage()}`);
   }

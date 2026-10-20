@@ -15,7 +15,7 @@ const request = {
 function config(adapter, extra = {}) {
   return {
     adapter, cwd: '/work', owner: 'sam', home: '/home/sam/.courier', exec: 'agent.sh',
-    paseo: { bin: 'paseo', provider: 'claude' }, claude: { bin: 'claude', allow: ['Bash(courier:*)'] },
+    paseo: { bin: 'paseo', provider: 'claude' }, claude: { bin: 'claude', settings: '/home/sam/.courier/guard/settings.json', allow: ['Bash(courier:*)'] },
     timeoutMs: 1000, ...extra,
   };
 }
@@ -77,6 +77,24 @@ test('claude: saves the session id and resumes it on the next wake; a vanished s
   assert.equal(argvs.length, 4);
   assert.ok(!argvs[3].args.includes('--resume'));
   assert.equal(sessions.get(`hunter/${request.threadId}`), 's4');
+});
+
+test('claude: always runs with the guard settings and without the owner CLI profile', async () => {
+  let seen;
+  const waker = createWaker(config('claude'), {
+    sessions: { get: () => undefined, set() {} },
+    env: { PATH: '/bin', TC_PRIVATE_KEY: 'k', TC_PROFILE: 'owner', TC_HOME: '/home/sam/.tinycloud', TC_BIN: '/bin/tc' },
+    run: async (bin, args, options) => { seen = { args, env: options.env }; return { code: 0, stdout: '{"session_id":"s"}', stderr: '' }; },
+  });
+  await waker(request);
+  assert.equal(seen.args[seen.args.indexOf('--settings') + 1], '/home/sam/.courier/guard/settings.json');
+  assert.equal(seen.env.COURIER_HOME, '/home/sam/.courier');
+  assert.equal(seen.env.TC_PRIVATE_KEY, undefined);
+  assert.equal(seen.env.TC_PROFILE, undefined);
+  assert.equal(seen.env.TC_HOME, '/home/sam/.courier/guard/no-owner-profile', 'tc finds an empty profile, not the owner');
+  assert.equal(seen.env.TC_BIN, '/bin/tc');
+  const noGuard = createWaker(config('claude', { claude: { bin: 'claude', allow: [] } }), { sessions: { get: () => undefined, set() {} }, run: async () => ({ code: 0, stdout: '{}', stderr: '' }) });
+  await assert.rejects(noGuard(request), /guard settings/);
 });
 
 test('claude: a failing run rejects so the wake stays pending', async () => {
