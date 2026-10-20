@@ -129,7 +129,7 @@ Anything gated by orders stops you, not the peer:
   --head-sha <40-lowercase-hex> --base master \
   --summary "Merge PR #20 (redeploys Eliza)" \
   --why "Handoff asks me to merge in order" \
-  --risk "Merging redeploys the service and drops live grants"
+  --risk "Redeploys the service"
 ```
 
 `--verb` is one of `merge`, `deploy`, `publish`, `spend`, `other`. `--target`
