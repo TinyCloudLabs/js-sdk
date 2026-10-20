@@ -1,7 +1,7 @@
 import type { IKVService } from "@tinycloud/node-sdk";
 import { kvArtifactStore } from "./artifact-store.js";
 import { artifactSpaceNotReady, failIfSpaceNotReady } from "./space-not-ready.js";
-import { ShareHistoryRetryError, SharePublishAuthorityError } from "./errors.js";
+import { ShareHistoryReadError, ShareHistoryRetryError, ShareHistoryUnreadableError, SharePublishAuthorityError } from "./errors.js";
 import { storageRejection } from "../output/storage.js";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -207,9 +207,9 @@ export function createEncryptedProfileHistory(profileName: () => Promise<string>
   const legacyPath = async (profile: string): Promise<string> => join(await ProfileManager.getCacheDir(profile), "share-history-v1.bin");
   const b64 = (value: Uint8Array): string => Buffer.from(value).toString("base64url");
   const unb64 = (value: unknown): Uint8Array => {
-    if (typeof value !== "string" || !/^[A-Za-z0-9_-]+$/.test(value)) throw new Error("share history is unavailable");
+    if (typeof value !== "string" || !/^[A-Za-z0-9_-]+$/.test(value)) throw new ShareHistoryUnreadableError();
     const bytes = new Uint8Array(Buffer.from(value, "base64url"));
-    if (b64(bytes) !== value) throw new Error("share history is unavailable");
+    if (b64(bytes) !== value) throw new ShareHistoryUnreadableError();
     return bytes;
   };
   const isStoredRecord = (value: unknown): value is SenderShareRecord =>
@@ -244,43 +244,54 @@ export function createEncryptedProfileHistory(profileName: () => Promise<string>
     const legacyKey = await crypto.subtle.importKey("raw", digest, { name: "AES-GCM" }, false, ["decrypt"]);
     return preparedKeys = { profile, identity: snapshot.fingerprint, material, legacyKey };
   };
-  const preparedSalt = async (profile: string): Promise<Uint8Array> => {
+  /** The file's bytes, or undefined when it does not exist. Any other filesystem error is a read failure. */
+  const readIfPresent = async (file: string): Promise<Buffer | undefined> => {
     try {
-      const envelope = JSON.parse(await readFile(await path(profile), "utf8")) as Record<string, unknown>;
-      if (envelope.version !== HISTORY_VERSION) throw new Error("share history is unavailable");
-      const salt = unb64(envelope.kdfSalt);
-      if (salt.length < 16) throw new Error("share history is unavailable");
-      return salt;
+      return await readFile(file);
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") return crypto.getRandomValues(new Uint8Array(16));
-      throw new Error("share history is unavailable");
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+      throw new ShareHistoryReadError();
     }
   };
-  const read = async (profile: string, ready: { readonly salt: Uint8Array; readonly key: CryptoKey; readonly legacyKey: CryptoKey }): Promise<SenderShareRecord[]> => {
+  const parseEnvelope = (text: string): Record<string, unknown> => {
+    let envelope: unknown;
     try {
-      const envelope = JSON.parse(await readFile(await path(profile), "utf8")) as Record<string, unknown>;
-      if (envelope.version !== HISTORY_VERSION) throw new Error("share history is unavailable");
-      if (envelope.kdfSalt !== b64(ready.salt)) throw saltChanged;
-      const iv = unb64(envelope.iv);
-      const ciphertext = unb64(envelope.ciphertext);
-      if (iv.length !== 12 || ciphertext.length <= 16) throw new Error("share history is unavailable");
-      const bytes = await crypto.subtle.decrypt({ name: "AES-GCM", iv }, ready.key, ciphertext);
+      envelope = JSON.parse(text);
+    } catch {
+      throw new ShareHistoryUnreadableError();
+    }
+    if (typeof envelope !== "object" || envelope === null || (envelope as Record<string, unknown>).version !== HISTORY_VERSION) throw new ShareHistoryUnreadableError();
+    return envelope as Record<string, unknown>;
+  };
+  const decryptRecords = async (key: CryptoKey, iv: Uint8Array, ciphertext: Uint8Array): Promise<SenderShareRecord[]> => {
+    try {
+      const bytes = await crypto.subtle.decrypt({ name: "AES-GCM", iv }, key, ciphertext);
       const values = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)) as unknown;
       return Array.isArray(values) ? values.filter(isStoredRecord) : [];
-    } catch (error) {
-      if (error === saltChanged) throw error;
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw new Error("share history is unavailable");
-      try {
-        const legacy = new Uint8Array(await readFile(await legacyPath(profile)));
-        if (legacy.length <= 12) return [];
-        const bytes = await crypto.subtle.decrypt({ name: "AES-GCM", iv: legacy.slice(0, 12) }, ready.legacyKey, legacy.slice(12));
-        const values = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)) as unknown;
-        return Array.isArray(values) ? values.filter(isStoredRecord) : [];
-      } catch (legacyError) {
-        if ((legacyError as NodeJS.ErrnoException).code === "ENOENT") return [];
-        throw new Error("share history is unavailable");
-      }
+    } catch {
+      throw new ShareHistoryUnreadableError();
     }
+  };
+  const preparedSalt = async (profile: string): Promise<Uint8Array> => {
+    const file = await readIfPresent(await path(profile));
+    if (file === undefined) return crypto.getRandomValues(new Uint8Array(16));
+    const salt = unb64(parseEnvelope(file.toString("utf8")).kdfSalt);
+    if (salt.length < 16) throw new ShareHistoryUnreadableError();
+    return salt;
+  };
+  const read = async (profile: string, ready: { readonly salt: Uint8Array; readonly key: CryptoKey; readonly legacyKey: CryptoKey }): Promise<SenderShareRecord[]> => {
+    const file = await readIfPresent(await path(profile));
+    if (file === undefined) {
+      const legacy = await readIfPresent(await legacyPath(profile));
+      if (legacy === undefined || legacy.length <= 12) return [];
+      return decryptRecords(ready.legacyKey, new Uint8Array(legacy.subarray(0, 12)), new Uint8Array(legacy.subarray(12)));
+    }
+    const envelope = parseEnvelope(file.toString("utf8"));
+    if (envelope.kdfSalt !== b64(ready.salt)) throw saltChanged;
+    const iv = unb64(envelope.iv);
+    const ciphertext = unb64(envelope.ciphertext);
+    if (iv.length !== 12 || ciphertext.length <= 16) throw new ShareHistoryUnreadableError();
+    return decryptRecords(ready.key, iv, ciphertext);
   };
   const write = async (profile: string, values: readonly SenderShareRecord[], ready: { readonly salt: Uint8Array; readonly key: CryptoKey }): Promise<void> => {
     const iv = crypto.getRandomValues(new Uint8Array(12));
