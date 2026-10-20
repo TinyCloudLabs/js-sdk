@@ -116,11 +116,15 @@ function generate(next: () => number): PermissionEntry[] {
     if (next() < 0.5) {
       // an entry inside the preset's limits: many of these make the "others" list long
       const kv = next() < 0.5;
+      const action = kv ? pick(["tinycloud.kv/get", "tinycloud.kv/list", "tinycloud.kv/put"]) : pick(["tinycloud.sql/read", "tinycloud.sql/write"]);
       entries.push({
         service: kv ? "tinycloud.kv" : "tinycloud.sql",
         space: mixed ? pick(["applications", OWNER_APPLICATIONS]) : "applications",
-        path: pick(["xyz.app/", "xyz.app/knowledge/", "other.app/", "a.b.c/", "b.c.d/", "c.d.e/", "d.e.f/", "e.f.g/"]),
-        actions: [kv ? pick(["tinycloud.kv/get", "tinycloud.kv/list", "tinycloud.kv/put"]) : pick(["tinycloud.sql/read", "tinycloud.sql/write"])],
+        // a KV put is inside the preset only in a write folder
+        path: action === "tinycloud.kv/put"
+          ? pick(["xyz.app/knowledge/", "xyz.app/prefs/", "other.app/prefs/", "a.b.c/knowledge/", "b.c.d/prefs/", "c.d.e/knowledge/x/"])
+          : pick(["xyz.app/", "xyz.app/knowledge/", "other.app/", "a.b.c/", "b.c.d/", "c.d.e/", "d.e.f/", "e.f.g/"]),
+        actions: [action],
       });
       continue;
     }
@@ -151,10 +155,15 @@ function beyondPreset(entries: readonly PermissionEntry[]): PermissionEntry[] {
     const named = /^[A-Za-z0-9][\w.-]*\//.test(entry.path);
     const reads = entry.service === "tinycloud.kv" ? ["tinycloud.kv/get", "tinycloud.kv/list"] : entry.service === "tinycloud.sql" ? ["tinycloud.sql/read"] : [];
     const writes = entry.service === "tinycloud.kv" ? ["tinycloud.kv/put"] : entry.service === "tinycloud.sql" ? ["tinycloud.sql/write"] : [];
-    const allowed = (action: string) => reads.includes(action) || (named && writes.includes(action));
+    // A KV put is allowed only inside a named app's knowledge/ or prefs/ folder; a SQL write anywhere in a named app.
+    const writable = entry.service === "tinycloud.kv"
+      ? /^[A-Za-z0-9][\w.-]*\/(knowledge|prefs)\//.test(entry.path)
+      : named;
+    const allowed = (action: string) => reads.includes(action) || (writable && writes.includes(action));
     const kvOrSql = reads.length > 0;
+    const climbs = entry.path.split("/").some((segment) => segment === "." || segment === "..");
     const owners = normalizePkhIdentifier(entry.space!) === normalizePkhIdentifier(OWNER_APPLICATIONS);
-    return !(kvOrSql && owners && entry.actions.every(allowed));
+    return !(kvOrSql && owners && !climbs && entry.actions.every(allowed));
   });
 }
 
