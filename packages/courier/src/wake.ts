@@ -72,7 +72,7 @@ export function wakePrompt(request: WakeRequest, owner: string): string {
       `${who} decided on ${request.approvals.length === 1 ? 'a request' : 'requests'} you filed in thread ${subject} (${request.threadId}): ` +
         `${request.approvals.map((a) => `${a.requestId} (${label(a.decision, 12)})`).join(', ')}. ` +
         `Check the decision with \`${cmd('approval <requestId> --peek')}\`: it exits non-zero unless the decision is approved, matches your request, is under 24 hours old and unused. ` +
-        `If it is approved, run exactly the command you asked about, once, as you described it: the Courier guard verifies the approval for that command and uses it up when the command starts, so do not run \`${cmd('approval')}\` without --peek first. ` +
+        `If it approves a PR merge, run exactly \`${cmd('run-approved <requestId>')}\`: the broker verifies the stored approval and consumes it before a fixed merge command. Your owner runs other gated actions. The guard always refuses direct gated commands; do not run \`${cmd('approval')}\` without --peek first. ` +
         `If the check fails, or the decision is denied, do not take the action; update the task and tell ${peer} only what ${who} allows.`,
     );
   }

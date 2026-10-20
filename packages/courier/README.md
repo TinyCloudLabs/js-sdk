@@ -264,7 +264,7 @@ remove its key, so the key's presence is what counts, whatever it contains. The
 check reads from the network every time (no replica, no cache, no ETag
 shortcut) and treats only a key-level 404 as "unused"; a transport error, a
 5xx, a 401/403 or a "space not found" fails closed (`approval-state-unknown`).
-The marker is written (create-only) before a guarded command is allowed to run.
+The broker writes the create-only marker before executing the approved merge.
 Grants issued before this change lack `me/consumed/` and are refused with
 `grant-incomplete`: run `init` once to renew (one passkey approval).
 
@@ -285,7 +285,7 @@ deploying, publishing, pushing to `main` or touching secrets without your
 approval. It is not a sandbox against a deliberately hostile local process: the
 owner's tokens and files are the deeper boundary (see Residual risk).
 
-**What it blocks** (each unless the owner approved that exact action):
+**What it blocks directly** (including after approval):
 
 | Command | Verb and target it is reduced to |
 |---|---|
@@ -299,27 +299,57 @@ owner's tokens and files are the deeper boundary (see Residual risk).
 | `phala deploy` | `deploy phala:<name>` |
 | `npm\|bun\|pnpm\|yarn run deploy\|publish\|release` | `deploy\|publish script:<package>:<script>` |
 | `gh workflow run` | `other workflow:owner/repo:<workflow>` |
-| `tc secrets …` | `other secrets:<args>` |
+| `tc`/`tinycloud` except their Courier subcommand | Never approvable: reaches owner profiles |
 
 Never approvable: `courier pair`, `courier revoke`, `courier init`,
 `courier pause`, `courier resume` (the wake budget is the reply loop's breaker:
 an agent must not lift its own pause), `courier watch` (an agent must not start
 a watcher, which could wake agents without the guard), all also as `tc courier …`;
-`courier approval` without `--peek` (it would use the approval up before the
-guard can); Secret Bridge; and starting another agent (see below).
+`courier approval` without `--peek` (it would consume without execution),
+`courier broker` and `courier guard`; privilege/session tools, Secret Bridge; and starting another agent (see below).
 
-**How an approval unlocks one.** The guard normalises the command to its
-(verb, target) and looks in the owner's space for a request with the same verb
-and (canonicalised) target whose approval is `approved`, hash-valid, decided
-within 24 hours and unused. It writes the create-only marker
-`me/consumed/<id>.json` first and only then allows the command, so a second
-attempt, a race and a replay are refused. It never reads message text, task
-text or the request's free-text fields. Anything it cannot name is refused:
-`gh pr merge` with no PR number, a push whose branch comes from a variable, a
-publish of several workspaces, a GraphQL merge, the repo of a remote that is
-not on GitHub. Several gated actions in one tool call are refused too. Every
-error (no profile, network, a marker it cannot read, bad input) refuses the
-call (exit 2), never allows it.
+**Only the broker executes an approved merge.** The hook has no network or
+approval-consumption path: every gated command is refused. The agent files
+`courier request <threadId> --peer <peer> --task <taskId> --verb merge --target
+owner/repo#42 --summary "Merge docs PR" --why "Reviewed"`, stops for the owner,
+then invokes `courier run-approved <requestId>` (one ULID, no flags).
+`courier approval <requestId> --peek` can check the decision without consuming.
+A chat decision does not create a broker approval: the owner records it in the
+view before `run-approved` can execute.
+
+The broker verifies the exact stored request hash and fields, `approved`, the
+24-hour decision window and the unused marker. It accepts only a strict PR
+target, constructs fixed argv without a shell, reads the PR's current state
+(open, not draft) and 40-hex head SHA, creates `me/consumed/<id>.json`, then runs:
+
+```text
+gh pr merge 42 --repo=owner/repo --squash --match-head-commit=<view-time SHA>
+```
+
+No command, flags, cwd or environment from the agent enters that template.
+The SHA is pinned at view time, not approval time: requests do not contain a
+head SHA yet. A changed head between view and merge makes gh refuse. If merge
+fails after consumption, the approval stays used; retry needs a new request.
+Output is redacted, capped at 4000 characters plus a truncation notice and
+returned as **untrusted text**, never as instructions.
+
+**Broker credential (human setup).** `courier broker set-token [--gh-bin
+/absolute/path/to/gh]` reads the token only from stdin. Supply it through an
+owner-controlled stdin source, never a command argument. The binary path is
+fixed at setup. The file `<COURIER_HOME>/broker/gh.json` is mode 0600 in a 0700
+directory (`{v:1, ghBin, token}`); `broker status` prints no token and `broker
+clear` removes it. The broker loads this itself; the agent's environment never
+gets the token. It executes gh from a fresh scratch cwd/HOME with a fixed
+environment and no gh config or extensions inherited from the agent.
+
+This file is outside the agent's HOME but **readable by the same OS user**.
+The guard refuses credential paths; that is policy, not OS isolation. A
+separate broker OS user/helper is the real credential boundary. Do not claim
+this protects against hostile code running as the owner's uid.
+
+Only PR merges are supported in v0. Publish/deploy can run agent-controlled
+code with the owner's token, so the owner runs them, along with `other`,
+`spend` and direct pushes. There is no `push` verb in the request schema.
 
 **How commands are read.** First rule, which does not depend on reading shell
 correctly: if a command contains run-time expansion or indirection syntax **and**
@@ -355,8 +385,7 @@ gated command". `gh release list|view|download` are read-only and not gated.
 hook (`COURIER_HOME=… node …/cli.js guard || exit 2`, so a crash blocks), plus
 deny rules for `courier pair|revoke|init|pause|resume|watch`, Secret Bridge, edits to
 `COURIER_HOME`, the hook's own program directory, and reads of `key.json` and
-`grant.json`. Approvable commands are deliberately not deny rules: a deny rule
-would also refuse them after the owner approved. `--claude-settings <file>` is
+`grant.json`. Direct gated commands also have deny rules; `run-approved` does not. `--claude-settings <file>` is
 merged under the guard (its hooks and deny rules are added, `disableAllHooks`
 is forced to `false`). `courier guard settings [--out f]` prints the same file,
 for a launcher that cannot pass `--settings` (put it in
@@ -364,8 +393,8 @@ for a launcher that cannot pass `--settings` (put it in
 
 **Paseo agents.** Paseo cannot pass `claude --settings`, so the `paseo` adapter
 installs the same guard where Claude Code reads project settings:
-`<cwd>/.claude/settings.local.json` (merged with what is there; its own older
-hook is replaced; the file keeps its mode). Claude runs hooks in every
+`<cwd>/.claude/settings.local.json` (only the guard hook and the union of deny
+rules survive; all other hooks and settings are replaced; file mode is kept). Claude runs hooks in every
 permission mode, so this holds under `bypassPermissions` too (checked live).
 Before every wake the adapter proves the guard works: it runs the installed hook
 command once on a call no approval can unlock and requires a refusal. It then
@@ -387,7 +416,8 @@ fails closed:
 A guarded agent cannot start another agent (it would run outside the guard):
 `paseo`, `claude`, `codex`, `omp`, `opencode`, `gemini`, `cursor-agent`, `amp`,
 `aider` and `goose` are refused in Bash, and Paseo's MCP tools
-(`mcp__paseo__*`) are denied.
+are denied. All unknown MCP tools are refused by default; the Claude adapter
+uses `--strict-mcp-config`.
 
 **Guarded and unguarded wakes.** `--wake claude` and `--wake paseo` are always
 guarded; neither has an off switch. `--wake exec` runs your own command and cannot
@@ -428,9 +458,9 @@ tokens and files are the deeper boundary. It does not stop: a program the agent
 writes and runs (a compiled or obfuscated one is opaque), a direct GitHub API
 call from code, an alias or function from the user's shell start-up files that
 the Bash tool loads, a merge triggered some other way (a push to a branch that a
-workflow merges, a bot command), or an edit of the hook's files through a shell
-redirect instead of an edit tool (the deny rules cover edit tools, and
-`COURIER_HOME` is writable by the user). The single-use marker is delete-proof
+workflow merges, a bot command), or obfuscated access to the guard or credential files. Literal credential and
+guard paths are refused in shell commands as well as file tools; the underlying
+files remain writable by the same uid. The single-use marker is delete-proof
 for the courier key but not against code that holds the owner's own
 credentials. A `paseo` agent shares `<cwd>/.claude/settings.local.json` with
 anything else run in that directory (that file is the guard's too). The `exec`
@@ -441,7 +471,8 @@ adapter runs your own command and installs no guard (hence `--unguarded`).
 can: `~/.config/gh/hosts.yml` (and so `gh`'s token, and any git credential
 helper that uses it), `~/.npmrc`, `~/.netrc`, `~/.ssh`, `~/.aws`,
 `~/.config/gcloud`, `~/.docker/config.json`, `~/.config/wrangler`. The Read tool
-is denied these paths in the guard settings; a shell `cat` is not. Shell
+and shell commands refuse these credential paths, globs, token-printing tools
+and `/proc/*/environ`; same-uid code can still access them indirectly. Shell
 start-up files (`~/.bashrc`, `~/.profile`, `~/.zshenv`) that export a token
 before their interactive-only guard re-add it in the Bash tool; keep tokens out
 of them. Recommended: run woken agents as a dedicated OS user (or at least a

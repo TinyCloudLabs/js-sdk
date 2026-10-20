@@ -601,6 +601,13 @@ function classifyShell(args: Word[], sc: Scope, io: Io): void {
 }
 
 function classifyInterpreter(prog: string, args: Word[], sc: Scope, io: Io): void {
+  // Only a literal, option-free installed entry is the Courier CLI.
+  const entry = args[0];
+  if ((prog === 'node' || prog === 'nodejs') && entry && !entry.dynamic && !entry.value.startsWith('-') &&
+      sc.sh.env.courierEntries?.includes(realpathBest(path.resolve(sc.cwds[0], entry.value)))) {
+    const rest = args.slice(1);
+    return rest[0]?.value === 'courier' ? classifyTc(rest, sc) : classifyCourier(rest, sc);
+  }
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
     if (a.dynamic) continue;
@@ -732,13 +739,29 @@ function analyzeScript(text: string, parent: Scope, inexact: boolean): void {
   // Credential and guard-configuration paths are refused wherever they appear, read or write (R2, B1, B2).
   const credential = credentialTextRefusal(text);
   if (credential) return never(parent, `refused: ${credential}`);
-  const protectedText = protectedTextRefusal(text, sh.env.literals);
-  if (protectedText) return never(parent, `refused: ${protectedText}`);
   const parsed = parseShell(text);
   if (parsed.errors.length) unresolved(sh, `could not read the command (${parsed.errors[0]})`);
-  // First rule (see expansion.ts): run-time expansion or indirection syntax next to a gated name is refused outright.
+  for (const command of parsed.cmds) {
+    for (const assignment of command.assigns) if (SENSITIVE_VAR.test(assignment.name)) return never(parent, `setting ${assignment.name} is not allowed for a woken agent`);
+    const words = command.words.map(wordLiteral);
+    if (words[0] && ['env', 'export', 'declare', 'typeset', 'readonly', 'local', 'set', 'unset'].includes(progName(words[0]))) {
+      for (const word of words.slice(1)) if (word && SENSITIVE_VAR.test(word.replace(/^-+/, '').split('=')[0])) return never(parent, 'changing the credential or tool environment is not allowed for a woken agent');
+    }
+  }
   const refusal = expansionRefusal(text, parsed);
   if (refusal) return unresolved(sh, refusal);
+  // A literal installed CLI entry must be callable; arbitrary reads/writes of its install still refuse.
+  const single = parsed.cmds.length === 1 ? parsed.cmds[0] : undefined;
+  const words = single?.words.map(wordLiteral);
+  if (single && words && words.every((w) => w !== undefined) && ['node', 'nodejs'].includes(progName(words[0] ?? '')) &&
+      words[1] && sh.env.courierEntries?.includes(realpathBest(path.resolve(parent.cwds[0], words[1])))) {
+    if (single.assigns.length || single.redirs.length || single.inLoop || single.inFunc || single.piped) return unresolved(sh, 'Courier entry must run as one literal command without redirects or wrappers');
+    const protectedArgs = protectedTextRefusal(words.slice(2).join(' '), sh.env.literals);
+    if (protectedArgs) return never(parent, `refused: ${protectedArgs}`);
+    return classifyInterpreter(progName(words[0]!), words.slice(1).map((value) => ({ value: value!, dynamic: false })), parent, { heredocs: [], hereStrings: [], piped: false, otherStdin: false });
+  }
+  const protectedText = protectedTextRefusal(text, sh.env.literals);
+  if (protectedText) return never(parent, `refused: ${protectedText}`);
   const sc: Scope = { ...parent, depth: parent.depth + 1, cwds: [...parent.cwds], written: new Set(parent.written), inexact: inexact || parent.inexact, assigns: [] };
   const c = census(parsed.cmds);
   const resolved = parsed.cmds.map((cmd) => ({

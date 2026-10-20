@@ -41,7 +41,6 @@ const GATED = {
   'gh pr merge 48': 'gated merge tinycloudlabs/js-sdk#48',
   'gh pr merge https://github.com/A/B/pull/7 --squash': 'gated merge a/b#7',
   'gh -R a/b pr merge 5': 'gated merge a/b#5',
-  'GH_REPO=a/b gh pr merge 5': 'gated merge a/b#5',
   'gh pr merge 0042 --repo O/R': 'gated merge o/r#42',
   'gh pr merge 123456789 --repo O/R': 'gated merge o/r#123456789',
   'gh api repos/O/R/pulls/0042/merge -X PUT': 'gated merge o/r#42',
@@ -110,9 +109,6 @@ const GATED = {
   'gh release create v1.0.0 -R a/b': 'gated publish release:a/b@v1.0.0',
   'gh release delete v1 -R a/b': 'gated publish release:a/b@v1',
   'gh workflow run ci.yml -R a/b': 'gated other workflow:a/b:ci.yml',
-  'tc secrets get FOO': 'gated other secrets:get FOO',
-  'tinycloud --profile x secrets list': 'gated other secrets:list',
-  'npx -y @tinycloud/cli secrets get K': 'gated other secrets:get K',
   'npm run deploy': 'gated deploy script:@x/pkg:deploy',
   'bun run release': 'gated publish script:@x/pkg:release',
   // a script is read and judged by what it contains
@@ -242,7 +238,6 @@ test('commands that cannot be told apart from a gated one are refused, not waved
     'function f { git push origin main; }; f',
     'trap "gh pr merge 5 -R a/b" EXIT',
     'eval "$CMD"',
-    'eval "$(ssh-agent -s)"',
     'bash -c "$CMD"',
     'sh -c "gh pr merge $N -R a/b"',
     'printf "gh pr merge 5 -R a/b" > /tmp/x.sh; sh /tmp/x.sh',
@@ -292,11 +287,11 @@ test('ordinary work is not blocked', () => {
     'gh api repos/o/r/pulls/5', 'gh api repos/o/r/pulls/5/comments -f body=hi', 'gh issue list',
     'npm test', 'npm run build', 'npm install', 'bun install', 'bun run test', 'bun run release:check', 'npm run lint -- --fix', 'npx tsc --noEmit', 'npx wrangler dev', 'wrangler --version',
     'echo gh pr merge 5', 'echo "npm publish"', 'grep -r "gh pr merge" docs', 'cat README.md | head', 'rg "phala deploy"',
-    'courier send hunter --thread T --intent update --text "pair done"', 'courier inbox', '"$TC" courier inbox', '"$TC" courier read T', 'tc courier orders hunter', 'tc kv get foo',
+    'courier send hunter --thread T --intent update --text "pair done"', 'courier inbox', '"$TC" courier inbox', '"$TC" courier read T', 'tc courier orders hunter',
     'curl https://example.com', 'curl -s https://api.github.com/repos/o/r/pulls/5', 'curl -X POST https://api.github.com/repos/o/r/issues -d \'{"title":"x"}\'',
     'cd /repo && npm test', 'for f in *.ts; do echo $f; done', '$HOME/bin/tool --flag', 'FOO=bar make', 'python3 -c "print(1)"', 'node scripts/ok.sh', 'bash scripts/ok.sh', 'sh -c "echo hi"',
-    'echo hi > out.txt', 'tee x <<< hi', 'git diff | grep merge', 'find . -name "*.ts" -exec wc -l {} +', 'xargs echo < list', 'sudo apt-get update', 'env | sort', 'time ls',
-    'phala status', 'tc secrets-docs', 'gh workflow list', 'gh workflow view ci.yml',
+    'echo hi > out.txt', 'tee x <<< hi', 'git diff | grep merge', 'find . -name "*.ts" -exec wc -l {} +', 'xargs echo < list', 'env | sort', 'time ls',
+    'phala status', 'gh workflow list', 'gh workflow view ci.yml',
   ];
   const blocked = fine.map((command) => [command, kinds(command)]).filter(([, got]) => got.length);
   assert.deepEqual(blocked, []);
@@ -311,4 +306,28 @@ test('canonicalTarget gives one spelling per target and rejects what it cannot n
   for (const [verb, raw] of [['merge', 'a/b'], ['merge', 'PR 48'], ['merge', 'a/b#1\nx'], ['publish', 'npm:pkg'], ['deploy', 'prod'], ['nope', 'a/b#1'], ['merge', '']]) {
     assert.throws(() => canonicalTarget(verb, raw), /canonical|verb/, `${verb} ${raw}`);
   }
+});
+
+ test('tc owner profiles, privilege tools and sensitive environment manipulation are never approvable', () => {
+  for (const command of ['tc secrets get FOO', 'tinycloud --profile x secrets list', 'npx -y @tinycloud/cli secrets get K', 'tc kv get foo', 'tc secrets-docs', 'eval "$(ssh-agent -s)"', 'sudo apt-get update', 'ssh host true', 'tmux new', 'export HOME=/x', 'unset TC_HOME', 'env COURIER_HOME=x courier run-approved 01JTR100000000000000000000', 'GH_REPO=a/b gh pr merge 5']) {
+    assert.ok(kinds(command).includes('never'), command);
+  }
+});
+
+test('courier uses the CLI parser and run-approved permits exactly one literal ULID', () => {
+  for (const command of ['courier --peer bob pause', 'courier --peer bob resume', 'courier --home x pair start x', 'courier approval 01ABC -- --peek', 'courier broker status', 'courier guard settings']) {
+    assert.ok(kinds(command).includes('never'), command);
+  }
+  const id = '01JTR100000000000000000000';
+  assert.deepEqual(kinds(`courier run-approved ${id}`), []);
+  for (const command of [`courier run-approved ${id} --foo`, `courier run-approved ${id} ${id}`, 'courier run-approved $(x)']) assert.ok(kinds(command).includes('unresolved'), command);
+});
+
+test('node installed Courier entries use Courier policy instead of scanning the CLI source', () => {
+  const entry = '/opt/courier/dist/cli.js';
+  const env = { ...policyEnv(), courierEntries: [entry], literals: ['/opt/courier'] };
+  for (const suffix of ['pair start bob', '--peer bob pause', 'courier pair start bob', 'approval R1 -- --peek']) assert.equal(analyze(`node ${entry} ${suffix}`, env)[0]?.kind, 'never', suffix);
+  assert.deepEqual(analyze(`node ${entry} run-approved 01JTR100000000000000000000`, env), []);
+  assert.deepEqual(analyze(`node ${entry} courier inbox`, env), []);
+  for (const command of [`node -r ./x.js ${entry} inbox`, `cat ${entry}`, `node ${entry} run-approved 01JTR100000000000000000000 > ${entry}`]) assert.ok(analyze(command, env).length, command);
 });

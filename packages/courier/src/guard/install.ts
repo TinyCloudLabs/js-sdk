@@ -11,9 +11,8 @@ export const CREDENTIAL_FILES = ['.config/gh/**', '.npmrc', '.netrc', '.ssh/**',
  * The guard's Claude Code settings and the environment woken agents get (spec §7).
  *
  * Settings = a `PreToolUse` hook that runs `courier guard` on every tool call, plus deny rules for what no approval can
- * unlock (pairing and revoking, Secret Bridge) and for the files the guard lives in. Approvable commands (merge,
- * deploy, publish, push to main, secrets) are deliberately NOT deny rules: a deny rule would also refuse them after the
- * owner approved, so those are decided by the hook alone.
+ * unlock (pairing and revoking, Secret Bridge), direct gated actions, and the files the guard lives in.
+ * Approved PR merges go through the broker, never through a hook allow decision.
  */
 
 /** Command prefixes a woken agent may not run directly (the broker runs the merge). */

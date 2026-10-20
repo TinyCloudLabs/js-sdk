@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { installProjectGuard, verifyProjectGuard, projectSettingsFile, paseoEnv, isClaudeProvider } from '../dist/guard/paseo.js';
+import { installProjectGuard, verifyProjectGuard, projectSettingsFile, paseoEnv, isClaudeProvider, assertNoManagedOverride } from '../dist/guard/paseo.js';
 
 const CLI = new URL('../dist/cli.js', import.meta.url).pathname;
 const guard = { argv: [process.execPath, CLI, 'guard'], entry: CLI };
@@ -13,7 +13,7 @@ function scratch(fn) {
   try { return fn(dir, path.join(dir, 'home')); } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 }
 
-test('the project guard merges into an existing settings.local.json, replaces its own old hook, and is idempotent', () => {
+test('the project guard replaces all hooks and settings except deny rules, and is idempotent', () => {
   scratch((cwd, home) => {
     const file = projectSettingsFile(cwd);
     fs.mkdirSync(path.dirname(file), { recursive: true });
@@ -24,12 +24,12 @@ test('the project guard merges into an existing settings.local.json, replaces it
     installProjectGuard(cwd, home, guard);
     const merged = JSON.parse(fs.readFileSync(file, 'utf8'));
     assert.equal(merged.disableAllHooks, false);
-    assert.equal(merged.model, 'x');
-    assert.deepEqual(merged.permissions.allow, ['Bash(ls:*)']);
+    assert.equal(merged.model, undefined);
+    assert.equal(merged.permissions.allow, undefined);
     for (const rule of ['Bash(rm:*)', 'Bash(courier pair:*)', 'mcp__paseo', 'mcp__paseo__*']) assert.ok(merged.permissions.deny.includes(rule), rule);
     const commands = merged.hooks.PreToolUse.flatMap((e) => e.hooks.map((h) => h.command));
     assert.equal(commands.filter((c) => /'guard' \|\| exit 2$/.test(c)).length, 1, 'one guard hook, the old one is gone');
-    assert.ok(commands.includes('echo mine'));
+    assert.ok(!commands.includes('echo mine'));
     assert.ok(!commands.some((c) => c.includes('/old/')));
     assert.equal(fs.statSync(file).mode & 0o777, 0o640, 'the file keeps its mode');
     const before = fs.statSync(file).mtimeMs;
@@ -66,7 +66,7 @@ test('verify runs the installed hook for real and accepts only one that refuses'
     write((s) => { delete s.disableAllHooks; });
     fails(/do not keep hooks enabled/);
     write((s) => { s.hooks.PreToolUse = []; });
-    fails(/no courier guard hook/);
+    fails(/exactly one PreToolUse/);
     write((s) => { s.hooks.PreToolUse[0].matcher = 'Bash'; });
     fails(/no courier guard hook/);
     // A hook shaped like the guard that allows everything (prints nothing, exits 0) is caught by the probe.
@@ -75,6 +75,15 @@ test('verify runs the installed hook for real and accepts only one that refuses'
     // A hook that cannot start must not count as a refusal either way: `|| exit 2` makes a crash a block, which is the safe side.
     write((s) => { s.hooks.PreToolUse[0].hooks[0].command = "COURIER_HOME='x' '/nonexistent/node' 'guard' || exit 2"; });
     verifyProjectGuard(file, cwd);
+    for (const mutate of [s => { s.hooks.SessionStart = []; }, s => { s.env = { X: 'x' }; }, s => { s.permissions.allow = ['Bash(*)']; }, s => { s.hooks.PreToolUse.push(s.hooks.PreToolUse[0]); }]) {
+      write(mutate);
+      fails(/other settings|other hook events|other than deny|exactly one PreToolUse/);
+    }
+    const managed = path.join(cwd, 'managed.json');
+    for (const key of ['disableAllHooks', 'allowManagedHooksOnly']) {
+      fs.writeFileSync(managed, JSON.stringify({ [key]: true }));
+      assert.throws(() => assertNoManagedOverride([managed]), /turn off project hooks/);
+    }
     fs.writeFileSync(file, '{ nope');
     fails(/unreadable/);
   });

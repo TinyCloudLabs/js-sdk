@@ -27,10 +27,10 @@ const CREDENTIAL_PATTERNS: [string, RegExp][] = [
   ['process environments (/proc/*/environ)', /\/proc\b[^\n]*environ/i],
   ['a glob in a dot-directory under .config', /\.config\/[^\s/]*[*?[]/],
   ['a glob in a dot-file name', /(^|[\s/=:])\.[A-Za-z_-]+[*?[]/],
-  ['a credential-printing command (gh auth, gh config)', /(^|[\s;&|(`])gh\s+(auth|config|extension)(\s|$)/],
-  ['a credential-printing command (git credential)', /(^|[\s;&|(`])git\s+([^\s]+\s+)*credential(\s|$|-)/],
-  ['a credential-printing command (npm/yarn/pnpm config)', /(^|[\s;&|(`])(npm|yarn|pnpm|bun)\s+config(\s|$)/],
-  ['a keyring or secret-store command', /(^|[\s;&|(`])(secret-tool|keyctl|gnome-keyring-daemon|pass|gpg|gpg2|ssh-add|ssh-agent|security\s+(find|dump|export)[-\w]*)(\s|$)/],
+  ['a credential-printing command (gh auth, gh config)', /(^|[\s/;&|(`])gh\s+(auth|config|extension)(\s|$)/],
+  ['a credential-printing command (git credential)', /(^|[\s/;&|(`])git\s+([^\s]+\s+)*credential(\s|$|-)/],
+  ['a credential-printing command (npm/yarn/pnpm config)', /(^|[\s/;&|(`])(npm|yarn|pnpm|bun)\s+config(\s|$)/],
+  ['a keyring or secret-store command', /(^|[\s/;&|(`])(secret-tool|keyctl|gnome-keyring-daemon|pass|gpg|gpg2|ssh-add|ssh-agent|security\s+(find|dump|export)[-\w]*)(\s|$)/],
 ];
 
 /** Quotes and backslashes removed, so `.n"p"mrc` and `.n\pmrc` read as the name they spell. */
