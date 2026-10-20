@@ -41,3 +41,15 @@ test('N1: file tools and Bash cannot traverse or search protected roots or their
     assert.equal((await decide({ tool_name: 'Read', tool_input: { path: path.join(cwd, 'src.js') }, cwd }, deps)).kind, 'pass');
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
+
+test('N1: a blanked Paseo COURIER_HOME discovers only the clean-home snapshot', async () => {
+  const { profileDir } = await import('../dist/profile.js');
+  const previousHome = process.env.HOME; const previousCourier = process.env.COURIER_HOME;
+  try {
+    process.env.HOME = '/private-agent-home'; process.env.COURIER_HOME = '';
+    assert.equal(profileDir(), '/private-agent-home/.courier');
+  } finally {
+    if (previousHome === undefined) delete process.env.HOME; else process.env.HOME = previousHome;
+    if (previousCourier === undefined) delete process.env.COURIER_HOME; else process.env.COURIER_HOME = previousCourier;
+  }
+});

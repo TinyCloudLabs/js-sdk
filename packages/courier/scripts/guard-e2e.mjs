@@ -82,7 +82,7 @@ try {
   await approve(id);
   check('hook still refuses raw command after approval', hook('gh pr merge 42 --repo a/b') && calls().length === 0);
   // The real broker resolves the profile id from the agent marker, then reads the original owner pin.
-  const brokerAsAgent = () => spawnSync(process.execPath, [CLI, 'run-approved', id, '--test-owner-root', realHome], { env: agentEnv, encoding: 'utf8', timeout: 180_000 });
+  const brokerAsAgent = () => spawnSync(process.execPath, [CLI, 'run-approved', id, '--test-owner-root', realHome], { env: { ...agentEnv, COURIER_HOME: '' }, encoding: 'utf8', timeout: 180_000 });
   for (const home of [alice.home, path.join(agentEnv.HOME, '.courier')]) {
     const profileFile = path.join(home, 'profile.json');
     const saved = fs.readFileSync(profileFile, 'utf8');
@@ -118,7 +118,7 @@ await refused(()=>node.kv.put(k.approval(id),{decision:'approved'},{prefix:''}))
 for(const key of [k.approvalUsed(id),k.approvalUsed(id).replace('/me/consumed/','/me/state/../consumed/'),k.approvalUsed(id).replace('/me/consumed/','/me/state/%2e%2e/consumed/'),k.approvalUsed(id).replace('/me/consumed/','/me/state%2F..%2Fconsumed/')]) await refused(()=>node.kv.delete(key,{prefix:''}));
 const marker=await node.kv.get(k.approvalUsed(id),{prefix:'',source:'network'});if(!marker.ok)throw Error('marker lost');console.log('marker remains');
 `, { mode: 0o600 });
-  const r1 = spawnSync(process.execPath, [probe], { env: agentEnv, encoding: 'utf8', timeout: 180_000 });
+  const r1 = spawnSync(process.execPath, [probe], { env: { ...agentEnv, COURIER_HOME: '' }, encoding: 'utf8', timeout: 180_000 });
   check('R1: adapter environment cannot write approvals or delete consumed markers, including traversal', r1.status === 0 && /marker remains/.test(r1.stdout));
   console.log(r1.stdout.trim());
   const incoming = must(bob.home, ['send', 'alice', '--new', 'D mode disposable proof', '--intent', 'request', '--text', 'A counterparty request, not an owner instruction']);

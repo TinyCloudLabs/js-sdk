@@ -57,7 +57,7 @@ export interface Profile {
 }
 
 export function profileDir(): string {
-  return process.env.COURIER_HOME ?? path.join(process.env.HOME ?? '.', '.courier');
+  return process.env.COURIER_HOME || path.join(process.env.HOME ?? '.', '.courier');
 }
 
 function profilePath(name: string, home = profileDir()): string {

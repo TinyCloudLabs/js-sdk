@@ -15,10 +15,11 @@ export function blockedDestination(value: string): boolean {
 /** Literal addresses inside argv and interpreted HTTP/net client code, including headers and --resolve. */
 export function networkTextRefusal(text: string): boolean {
   if (/\/dev\/(tcp|udp)\//i.test(text)) return true;
+  const networkCode = /\b(curl|wget|net|http|https|fetch|connect|urlopen|requests?|socket)\b/.test(text);
   const tokens = text.split(/[\s"'`,(){};=]+/).filter(Boolean);
   for (const token of tokens) {
     if (isIP(token.replace(/^\[|\]$/g, '')) !== 0) return true;
-    if (/^(?:[0-9]{7,}|0x[0-9a-f]+)$/i.test(token) && blockedDestination(token)) return true;
+    if (networkCode && /^(?:[0-9]{7,}|0x[0-9a-f]+)$/i.test(token) && blockedDestination(token)) return true;
     if (/^https?:\/\//i.test(token) && blockedDestination(token)) return true;
     if (/(?:localhost|\[?::|^127\.|^0177\.|^0x7f|^2130706433|^0\.0\.0\.0)/i.test(token) && blockedDestination(token)) return true;
     if (/(?:^|:)676[78](?:\/|$)/.test(token)) return true;
