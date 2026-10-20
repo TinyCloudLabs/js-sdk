@@ -6856,6 +6856,74 @@ function storageError(error, action) {
 function errnoOf(error) {
   return typeof error === "object" && error !== null && "code" in error ? error.code : void 0;
 }
+async function writerBlobFiles(root) {
+  const out = [];
+  let shards;
+  try {
+    shards = await readdir2(root, { withFileTypes: true });
+  } catch (error) {
+    if (errnoOf(error) === "ENOENT" || errnoOf(error) === "ENOTDIR") return out;
+    throw error;
+  }
+  for (const shard of shards) {
+    const temp = shard.name === ".tmp";
+    if (!shard.isDirectory() || !(temp || isShard(shard.name))) continue;
+    const shardPath = join22(root, shard.name);
+    let files;
+    try {
+      files = await readdir2(shardPath, { withFileTypes: true });
+    } catch (error) {
+      if (errnoOf(error) === "ENOENT" || errnoOf(error) === "ENOTDIR") continue;
+      throw error;
+    }
+    for (const file of files) {
+      if (!file.isFile()) continue;
+      const ok = temp ? isTempName(file.name) : isHash(file.name) && file.name.startsWith(shard.name);
+      if (!ok) continue;
+      const path = join22(shardPath, file.name);
+      const info = await lstat2(path).catch(() => void 0);
+      if (!info?.isFile()) continue;
+      out.push({ path, hash: temp ? null : file.name, size: info.size });
+    }
+  }
+  return out;
+}
+async function unlinkWriterOrphans(root, keep) {
+  let removed = 0;
+  const touched = /* @__PURE__ */ new Set();
+  for (const file of await writerBlobFiles(root)) {
+    if (file.hash !== null && keep.has(file.hash)) continue;
+    await rm3(file.path, { force: true });
+    touched.add(dirname3(file.path));
+    removed += 1;
+  }
+  for (const dir of touched) if (!dir.endsWith(".tmp")) await rmdir2(dir).catch(() => void 0);
+  return removed;
+}
+async function unlinkBlobsIn(root, keep) {
+  let removed = 0;
+  for (const shard of await entriesOf(root)) {
+    const shardPath = join22(root, shard);
+    if (shard === ".tmp") {
+      for (const name of await entriesOf(shardPath)) {
+        await rm3(join22(shardPath, name), { force: true });
+        removed += 1;
+      }
+      continue;
+    }
+    let kept = 0;
+    for (const name of await entriesOf(shardPath)) {
+      if (isHash(name) && keep.has(name)) {
+        kept += 1;
+        continue;
+      }
+      await rm3(join22(shardPath, name), { force: true });
+      removed += 1;
+    }
+    if (kept === 0) await rmdir2(shardPath).catch(() => void 0);
+  }
+  return removed;
+}
 async function entriesOf(path) {
   try {
     return await readdir2(path);
@@ -6882,7 +6950,7 @@ async function acquireWritableMutation(shared) {
   await previous;
   return release;
 }
-var ReplicaErrorCode3, REPLICA_ERROR3, ReplicaError3, SCHEMA_VERSION, SCHEMA, POLICY_COLUMNS, normalizeSchema, SOURCE_SCHEMA, V1_SCHEMA, POLICY_REPLICA, POLICY_SCHEMA, SQLITE_FILE, SHARD, HASH, TEMP, LAYOUT_FAULTS, sqliteOpenQueue, DURABILITY, isHash, FAULTS, pinnedDirectories, writableStores, sharedStores, activeReadSection, SqliteReplicaStore;
+var ReplicaErrorCode3, REPLICA_ERROR3, ReplicaError3, SCHEMA_VERSION, SCHEMA, POLICY_COLUMNS, normalizeSchema, SOURCE_SCHEMA, V1_SCHEMA, POLICY_REPLICA, POLICY_SCHEMA, SQLITE_FILE, SHARD, HASH, TEMP, LAYOUT_FAULTS, sqliteOpenQueue, DURABILITY, isHash, isShard, isTempName, FAULTS, pinnedDirectories, writableStores, sharedStores, activeReadSection, SqliteReplicaStore;
 var init_sqlite = __esm({
   "../replica/dist/sqlite.js"() {
     "use strict";
@@ -7059,6 +7127,8 @@ CREATE TABLE IF NOT EXISTS grant_install (
     sqliteOpenQueue = Promise.resolve();
     DURABILITY = "sqlite-wal-synchronous-full+fsynced-blobs";
     isHash = (name) => /^[0-9a-f]{64}$/.test(name);
+    isShard = (name) => /^[0-9a-f]{2}$/.test(name);
+    isTempName = (name) => /^[0-9a-f]{64}\.[0-9a-f]{12}$/.test(name);
     FAULTS = /* @__PURE__ */ Symbol("tinycloud.replica.faults");
     pinnedDirectories = new FinalizationRegistry((fd) => {
       try {
@@ -7096,6 +7166,8 @@ CREATE TABLE IF NOT EXISTS grant_install (
       #guard;
       /** Identity of the database file this store opened: a deleted-and-recreated replica is a different file. */
       #ino;
+      #admit;
+      #partitionId;
       #dev;
       #namedAncestors;
       constructor(dir, db, identity, options, directoryFd, namedAncestors = [], shared, readonlySnapshot = false) {
@@ -7115,6 +7187,8 @@ CREATE TABLE IF NOT EXISTS grant_install (
         this.#dev = identity.dev;
         this.#now = options.now ?? Date.now;
         this.#faults = options[FAULTS] ?? {};
+        this.#admit = options.admit;
+        this.#partitionId = options.partitionId ?? "";
         this.#guard = options.guard ?? ((section) => section());
         this.#namedAncestors = namedAncestors;
       }
@@ -7182,6 +7256,55 @@ CREATE TABLE IF NOT EXISTS grant_install (
               releaseClose();
             }
           }
+        }
+      }
+      /**
+       * Blob content bytes on disk in the replica at `dir` (0 when absent): the writer's blob files under `blobs/`,
+       * including writer temp files and blobs no entry references any more, so garbage a failed sync
+       * left behind still counts. Counts exactly what `collectOrphans` may delete: foreign entries
+       * (stray files, symlinks, unknown names) are neither counted nor touched. Only blob content is counted: not the database, its WAL, rows or the
+       * pending store. Filesystem-only: it opens no
+       * database, so it can sum a profile's replicas under the caller's own mutation hold.
+       */
+      static async contentBytes(dir) {
+        try {
+          let bytes = 0;
+          for (const file of await writerBlobFiles(join22(dir, "blobs"))) bytes += file.size;
+          return bytes;
+        } catch (error) {
+          throw storageError(error, "Measuring replica content");
+        }
+      }
+      /**
+       * Remove blobs and temp files in the replica at `dir` that no committed row references: what a
+       * crash between writing blobs and committing (or between committing and collecting) leaves.
+       * Returns the number of files removed; 0 when the replica is absent or unreadable.
+       *
+       * The caller MUST hold the profile mutation guard, which every writer of this replica holds
+       * across its blob write and commit; that is what makes an unreferenced blob safe to delete
+       * (it cannot belong to an in-flight write). Never call it without that hold. The database is
+       * read only, so nothing here can take a lease or change committed state.
+       */
+      static async collectOrphans(dir) {
+        const dbPath = join22(dir, "replica.db");
+        const identity = await lstat2(dbPath).catch(() => void 0);
+        if (!identity?.isFile()) return 0;
+        const opener = await loadSqlite();
+        let keep;
+        let db;
+        try {
+          db = opener(dbPath, { readonly: true });
+          db.exec("PRAGMA busy_timeout = 0");
+          keep = new Set(db.all("SELECT DISTINCT hash FROM entry WHERE content = 1").map((row) => row.hash));
+        } catch {
+          return 0;
+        } finally {
+          db?.close();
+        }
+        try {
+          return await unlinkWriterOrphans(join22(dir, "blobs"), keep);
+        } catch (error) {
+          throw storageError(error, "Collecting orphaned content");
         }
       }
       /**
@@ -7893,6 +8016,41 @@ CREATE TABLE IF NOT EXISTS grant_install (
             }
             reused.set(change.hash, size);
           }
+          if (this.#admit) {
+            await this.#collectLocked(t);
+            const changed = new Set(p.changes.map((change) => change.key));
+            const kept = /* @__PURE__ */ new Set();
+            for (const change of p.changes) if (!change.deleted && change.content) kept.add(change.hash);
+            let blobBytes = 0;
+            for (const [hash, bytes] of p.blobs) {
+              const stored = this.#db.get(
+                "SELECT 1 AS hit FROM entry WHERE hash = ? AND content = 1 AND deleted = 0 LIMIT 1",
+                hash
+              );
+              if (stored === void 0) blobBytes += bytes.byteLength;
+            }
+            const released = /* @__PURE__ */ new Map();
+            for (const key of changed) {
+              const old = this.#db.get(
+                "SELECT hash, size FROM entry WHERE key = ? AND deleted = 0 AND content = 1 AND hash IS NOT NULL AND size IS NOT NULL",
+                key
+              );
+              if (old === void 0 || kept.has(old.hash) || released.has(old.hash)) continue;
+              const holders = this.#db.all(
+                "SELECT key FROM entry WHERE hash = ? AND content = 1 AND deleted = 0",
+                old.hash
+              );
+              if (holders.every((holder) => changed.has(holder.key))) released.set(old.hash, old.size);
+            }
+            let freed = 0;
+            for (const size of released.values()) freed += size;
+            await this.#admit({
+              partitionId: this.#partitionId,
+              blobBytes: blobBytes - freed,
+              entries: p.changes.length,
+              freeBytes: null
+            });
+          }
           try {
             await this.#writeBlobs(p.blobs);
           } catch (error) {
@@ -7968,36 +8126,16 @@ CREATE TABLE IF NOT EXISTS grant_install (
             });
           } catch (error) {
             if (isReplicaError2(error, ReplicaErrorCode3.GRANT_REVOKED)) await this.#purgeContent().catch(() => void 0);
+            else if (this.#admit) await this.#collectLocked(t).catch(() => void 0);
             throw error;
           }
           this.#faults.afterCommit?.();
+          if (this.#admit) await this.#collectLocked(t);
         });
       }
       /** Unlink every blob not in `keep`, and every temp file. Only a missing directory counts as empty. */
-      async #unlinkBlobs(keep) {
-        let removed = 0;
-        const root = join22(this.#pinnedDir, "blobs");
-        for (const shard of await entriesOf(root)) {
-          const shardPath = join22(root, shard);
-          if (shard === ".tmp") {
-            for (const name of await entriesOf(shardPath)) {
-              await rm3(join22(shardPath, name), { force: true });
-              removed += 1;
-            }
-            continue;
-          }
-          let kept = 0;
-          for (const name of await entriesOf(shardPath)) {
-            if (isHash(name) && keep.has(name)) {
-              kept += 1;
-              continue;
-            }
-            await rm3(join22(shardPath, name), { force: true });
-            removed += 1;
-          }
-          if (kept === 0) await rmdir2(shardPath).catch(() => void 0);
-        }
-        return removed;
+      #unlinkBlobs(keep) {
+        return unlinkBlobsIn(join22(this.#pinnedDir, "blobs"), keep);
       }
       /** Whether any content file (a blob or a temp file) is on disk. */
       async #holdsContentFiles() {
@@ -8008,33 +8146,35 @@ CREATE TABLE IF NOT EXISTS grant_install (
         return false;
       }
       async collectGarbage(t) {
-        return this.#mutate(async () => {
-          const release = this.#shared ? await acquireWritableMutation(this.#shared) : void 0;
+        return this.#mutate(() => this.#collectLocked(t));
+      }
+      /** `collectGarbage` for callers already inside the mutation hold (it cannot re-enter `#mutate`). */
+      async #collectLocked(t) {
+        const release = this.#shared ? await acquireWritableMutation(this.#shared) : void 0;
+        try {
+          this.#db.exec("BEGIN IMMEDIATE");
+        } catch (error) {
+          release?.();
+          throw storageError(error, "Collecting unused content");
+        }
+        try {
+          this.#checkLease(t);
+          await this.#faults.afterGarbageCollectionBegin?.();
+          const keep = new Set(
+            this.#db.all("SELECT DISTINCT hash FROM entry WHERE content = 1").map((row) => row.hash)
+          );
+          const removed = await this.#unlinkBlobs(keep);
+          this.#db.exec("COMMIT");
+          return removed;
+        } catch (error) {
           try {
-            this.#db.exec("BEGIN IMMEDIATE");
-          } catch (error) {
-            release?.();
-            throw storageError(error, "Collecting unused content");
+            this.#db.exec("ROLLBACK");
+          } catch {
           }
-          try {
-            this.#checkLease(t);
-            await this.#faults.afterGarbageCollectionBegin?.();
-            const keep = new Set(
-              this.#db.all("SELECT DISTINCT hash FROM entry WHERE content = 1").map((row) => row.hash)
-            );
-            const removed = await this.#unlinkBlobs(keep);
-            this.#db.exec("COMMIT");
-            return removed;
-          } catch (error) {
-            try {
-              this.#db.exec("ROLLBACK");
-            } catch {
-            }
-            throw storageError(error, "Collecting unused content");
-          } finally {
-            release?.();
-          }
-        });
+          throw storageError(error, "Collecting unused content");
+        } finally {
+          release?.();
+        }
       }
       async reset(t, reason, options = {}) {
         await this.#mutate(async () => {
@@ -36927,7 +37067,7 @@ function byteLimit(value) {
 }
 function mediaTypeFor(filename) {
   const extension = filename.toLowerCase().split(".").at(-1);
-  return extension === "md" || extension === "markdown" ? "text/markdown" : extension === "txt" ? "text/plain" : extension === "html" || extension === "htm" ? "text/html" : extension === "json" ? "application/json" : extension === "css" ? "text/css" : extension === "js" ? "text/javascript" : "application/octet-stream";
+  return extension === "md" || extension === "markdown" ? "text/markdown" : extension === "txt" ? "text/plain" : extension === "html" || extension === "htm" ? "text/html" : extension === "json" ? "application/json" : extension === "css" ? "text/css" : extension === "js" ? "text/javascript" : extension === "jsx" ? "text/jsx" : extension === "tsx" ? "text/tsx" : "application/octet-stream";
 }
 function requestedActions(values) {
   const actions = values === void 0 || values.length === 0 ? ["read"] : values;
@@ -36957,6 +37097,7 @@ function registerShareCommand(program) {
       const target = parseShareTarget(options.to);
       const actions = requestedActions(options.action);
       if (options.prefix && target.kind === "bearer") throw new CLIError("INVALID_ARGUMENT", "--prefix requires an addressed target", 2);
+      if (target.kind === "bearer" && actions.includes("edit")) throw new CLIError("INVALID_ARGUMENT", `--action edit is not available with --to ${options.to}: a link can only be read; address a recipient to allow edits`, 2);
       if (inputs.length > 1 && target.kind === "bearer") throw new CLIError("UNSUPPORTED_LINK", "multiple files require an addressed target", 2);
       const artifact = artifactRequest(options, actions, inputs.length);
       if (inputs.length > 1 && !options.prefix) throw new CLIError("INVALID_ARGUMENT", "multiple files require --prefix", 2);

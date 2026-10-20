@@ -8,6 +8,7 @@ export default defineConfig({
     "src/requester/index.ts",
     "src/delegations/index.ts",
     "src/held-credentials/index.ts",
+    "src/kv-list-matching/index.ts",
   ],
   format: ["esm", "cjs"],
   dts: true,

@@ -22,6 +22,7 @@ import type {
   ReplicaStore,
   VerifiedPage,
 } from "../types.js";
+import type { ReplicaAdmitHook } from "@tinycloud/sdk-services/kv/replication";
 import { loadSqlite, type SqliteDatabase, type SqliteOpener, type SqlValue } from "./driver.js";
 import { removeSqliteReplicaLayout, type SqliteLayoutEntry } from "./layout.js";
 import { SCHEMA, SCHEMA_VERSION } from "./schema.js";
@@ -218,6 +219,89 @@ function errnoOf(error: unknown): unknown {
 
 
 /** A directory's entries; only a directory that does not exist is empty. */
+const isShard = (name: string) => /^[0-9a-f]{2}$/.test(name);
+const isTempName = (name: string) => /^[0-9a-f]{64}\.[0-9a-f]{12}$/.test(name);
+
+/**
+ * The files the writer itself creates under a replica's `blobs/`: `<2 hex>/<64 hex>` blobs (the
+ * shard is the hash's first two characters) and `.tmp/<64 hex>.<12 hex>` temp files. Only regular
+ * files inside real directories qualify; symlinks, stray files, unknown names and anything else
+ * are skipped, never followed, counted or deleted. A missing or non-directory `root` is empty.
+ */
+async function writerBlobFiles(root: string): Promise<Array<{ path: string; hash: string | null; size: number }>> {
+  const out: Array<{ path: string; hash: string | null; size: number }> = [];
+  let shards;
+  try {
+    shards = await readdir(root, { withFileTypes: true });
+  } catch (error) {
+    if (errnoOf(error) === "ENOENT" || errnoOf(error) === "ENOTDIR") return out;
+    throw error;
+  }
+  for (const shard of shards) {
+    const temp = shard.name === ".tmp";
+    if (!shard.isDirectory() || !(temp || isShard(shard.name))) continue;
+    const shardPath = join(root, shard.name);
+    let files;
+    try {
+      files = await readdir(shardPath, { withFileTypes: true });
+    } catch (error) {
+      if (errnoOf(error) === "ENOENT" || errnoOf(error) === "ENOTDIR") continue;
+      throw error;
+    }
+    for (const file of files) {
+      if (!file.isFile()) continue;
+      const ok = temp ? isTempName(file.name) : isHash(file.name) && file.name.startsWith(shard.name);
+      if (!ok) continue;
+      const path = join(shardPath, file.name);
+      const info = await lstat(path).catch(() => undefined);
+      if (!info?.isFile()) continue;
+      out.push({ path, hash: temp ? null : file.name, size: info.size });
+    }
+  }
+  return out;
+}
+
+/** Unlink every writer-created blob under `root` not in `keep`, and every writer temp file. Foreign entries are left alone. */
+async function unlinkWriterOrphans(root: string, keep: Set<string>): Promise<number> {
+  let removed = 0;
+  const touched = new Set<string>();
+  for (const file of await writerBlobFiles(root)) {
+    if (file.hash !== null && keep.has(file.hash)) continue;
+    await rm(file.path, { force: true });
+    touched.add(dirname(file.path));
+    removed += 1;
+  }
+  // Drop shard directories this sweep emptied; rmdir fails (and is ignored) when anything remains.
+  for (const dir of touched) if (!dir.endsWith(".tmp")) await rmdir(dir).catch(() => undefined);
+  return removed;
+}
+
+/** Unlink every blob under `root` not in `keep`, and every temp file. Only a missing directory counts as empty. Used by purge and the sync-time collector, which own the pinned replica directory and must leave nothing behind. */
+async function unlinkBlobsIn(root: string, keep: Set<string>): Promise<number> {
+  let removed = 0;
+  for (const shard of await entriesOf(root)) {
+    const shardPath = join(root, shard);
+    if (shard === ".tmp") {
+      for (const name of await entriesOf(shardPath)) {
+        await rm(join(shardPath, name), { force: true });
+        removed += 1;
+      }
+      continue;
+    }
+    let kept = 0;
+    for (const name of await entriesOf(shardPath)) {
+      if (isHash(name) && keep.has(name)) {
+        kept += 1;
+        continue;
+      }
+      await rm(join(shardPath, name), { force: true });
+      removed += 1;
+    }
+    if (kept === 0) await rmdir(shardPath).catch(() => undefined);
+  }
+  return removed;
+}
+
 async function entriesOf(path: string): Promise<string[]> {
   try {
     return await readdir(path);
@@ -272,6 +356,10 @@ export type SqliteReplicaStoreOptions = {
   /** Clock for leases and status (ms since epoch). */
   now?: () => number;
   guard?: MutationGuard;
+  /** Quota admission, run inside applyPage's guarded mutation before any write (TC-858 S5). */
+  admit?: ReplicaAdmitHook;
+  /** Partition the store belongs to; reported to `admit`. */
+  partitionId?: string;
 };
 
 /** Crash-test seam key. Only tests import it (from this module, not the package entry). */
@@ -346,6 +434,8 @@ export class SqliteReplicaStore implements ReplicaStore {
   readonly #guard: MutationGuard;
   /** Identity of the database file this store opened: a deleted-and-recreated replica is a different file. */
   readonly #ino: number;
+  readonly #admit: ReplicaAdmitHook | undefined;
+  readonly #partitionId: string;
   readonly #dev: number;
   readonly #namedAncestors: readonly NamedPathIdentity[];
 
@@ -366,6 +456,8 @@ export class SqliteReplicaStore implements ReplicaStore {
     this.#dev = identity.dev;
     this.#now = options.now ?? Date.now;
     this.#faults = (options as InternalOptions)[FAULTS] ?? {};
+    this.#admit = options.admit;
+    this.#partitionId = options.partitionId ?? "";
     this.#guard = options.guard ?? ((section) => section());
     this.#namedAncestors = namedAncestors;
   }
@@ -435,6 +527,57 @@ export class SqliteReplicaStore implements ReplicaStore {
         const releaseClose = await acquireSqliteOpen();
         try { db.close(); } finally { releaseClose(); }
       }
+    }
+  }
+
+  /**
+   * Blob content bytes on disk in the replica at `dir` (0 when absent): the writer's blob files under `blobs/`,
+   * including writer temp files and blobs no entry references any more, so garbage a failed sync
+   * left behind still counts. Counts exactly what `collectOrphans` may delete: foreign entries
+   * (stray files, symlinks, unknown names) are neither counted nor touched. Only blob content is counted: not the database, its WAL, rows or the
+   * pending store. Filesystem-only: it opens no
+   * database, so it can sum a profile's replicas under the caller's own mutation hold.
+   */
+  static async contentBytes(dir: string): Promise<number> {
+    try {
+      let bytes = 0;
+      for (const file of await writerBlobFiles(join(dir, "blobs"))) bytes += file.size;
+      return bytes;
+    } catch (error) {
+      throw storageError(error, "Measuring replica content");
+    }
+  }
+
+  /**
+   * Remove blobs and temp files in the replica at `dir` that no committed row references: what a
+   * crash between writing blobs and committing (or between committing and collecting) leaves.
+   * Returns the number of files removed; 0 when the replica is absent or unreadable.
+   *
+   * The caller MUST hold the profile mutation guard, which every writer of this replica holds
+   * across its blob write and commit; that is what makes an unreferenced blob safe to delete
+   * (it cannot belong to an in-flight write). Never call it without that hold. The database is
+   * read only, so nothing here can take a lease or change committed state.
+   */
+  static async collectOrphans(dir: string): Promise<number> {
+    const dbPath = join(dir, "replica.db");
+    const identity = await lstat(dbPath).catch(() => undefined);
+    if (!identity?.isFile()) return 0;
+    const opener = await loadSqlite();
+    let keep: Set<string>;
+    let db: SqliteDatabase | undefined;
+    try {
+      db = opener(dbPath, { readonly: true });
+      db.exec("PRAGMA busy_timeout = 0");
+      keep = new Set(db.all<{ hash: string }>("SELECT DISTINCT hash FROM entry WHERE content = 1").map((row) => row.hash));
+    } catch {
+      return 0; // locked or unreadable: skip, never delete under contention
+    } finally {
+      db?.close();
+    }
+    try {
+      return await unlinkWriterOrphans(join(dir, "blobs"), keep);
+    } catch (error) {
+      throw storageError(error, "Collecting orphaned content");
     }
   }
 
@@ -1174,6 +1317,49 @@ export class SqliteReplicaStore implements ReplicaStore {
         }
         reused.set(change.hash, size);
       }
+      // Quota admission (TC-858 S5). Runs under the same guard as the write, before any blob
+      // or row changes; a refusal leaves the replica untouched. Orphaned blobs (a failed sync,
+      // a crash after commit) are collected first so they are neither counted as free nor
+      // charged to this replica twice; the page is then charged its NET bytes (may be negative):
+      // new blobs not already stored, minus blobs only the entries this page replaces or deletes
+      // reference. The budget bounds COMMITTED blob content. The replaced blobs are unlinked only
+      // after the commit succeeds (never before: a failed commit must not lose data), so during
+      // one page on-disk blob bytes can transiently reach cap + the bytes that page replaces.
+      if (this.#admit) {
+        await this.#collectLocked(t);
+        const changed = new Set(p.changes.map((change) => change.key));
+        const kept = new Set<string>();
+        for (const change of p.changes) if (!change.deleted && change.content) kept.add(change.hash);
+        let blobBytes = 0;
+        for (const [hash, bytes] of p.blobs) {
+          const stored = this.#db.get<{ hit: number }>(
+            "SELECT 1 AS hit FROM entry WHERE hash = ? AND content = 1 AND deleted = 0 LIMIT 1",
+            hash,
+          );
+          if (stored === undefined) blobBytes += bytes.byteLength;
+        }
+        const released = new Map<string, number>();
+        for (const key of changed) {
+          const old = this.#db.get<{ hash: string; size: number }>(
+            "SELECT hash, size FROM entry WHERE key = ? AND deleted = 0 AND content = 1 AND hash IS NOT NULL AND size IS NOT NULL",
+            key,
+          );
+          if (old === undefined || kept.has(old.hash) || released.has(old.hash)) continue;
+          const holders = this.#db.all<{ key: string }>(
+            "SELECT key FROM entry WHERE hash = ? AND content = 1 AND deleted = 0",
+            old.hash,
+          );
+          if (holders.every((holder) => changed.has(holder.key))) released.set(old.hash, old.size);
+        }
+        let freed = 0;
+        for (const size of released.values()) freed += size;
+        await this.#admit({
+          partitionId: this.#partitionId,
+          blobBytes: blobBytes - freed,
+          entries: p.changes.length,
+          freeBytes: null,
+        });
+      }
       try {
         await this.#writeBlobs(p.blobs);
       } catch (error) {
@@ -1259,37 +1445,20 @@ export class SqliteReplicaStore implements ReplicaStore {
         // Revoked while this call wrote its blobs: the purge may already have
         // run, so remove them again (a failure leaves purge_pending for open).
         if (isReplicaError(error, ReplicaErrorCode.GRANT_REVOKED)) await this.#purgeContent().catch(() => undefined);
+        // A page that wrote blobs but did not commit leaves them unreferenced: drop them now
+        // when a quota is enforced, so on-disk bytes stay inside the budget.
+        else if (this.#admit) await this.#collectLocked(t).catch(() => undefined);
         throw error;
       }
       this.#faults.afterCommit?.();
+      // Blobs only the replaced or deleted entries referenced are free to go now.
+      if (this.#admit) await this.#collectLocked(t);
     });
   }
 
   /** Unlink every blob not in `keep`, and every temp file. Only a missing directory counts as empty. */
-  async #unlinkBlobs(keep: Set<string>): Promise<number> {
-    let removed = 0;
-    const root = join(this.#pinnedDir, "blobs");
-    for (const shard of await entriesOf(root)) {
-      const shardPath = join(root, shard);
-      if (shard === ".tmp") {
-        for (const name of await entriesOf(shardPath)) {
-          await rm(join(shardPath, name), { force: true });
-          removed += 1;
-        }
-        continue;
-      }
-      let kept = 0;
-      for (const name of await entriesOf(shardPath)) {
-        if (isHash(name) && keep.has(name)) {
-          kept += 1;
-          continue;
-        }
-        await rm(join(shardPath, name), { force: true });
-        removed += 1;
-      }
-      if (kept === 0) await rmdir(shardPath).catch(() => undefined);
-    }
-    return removed;
+  #unlinkBlobs(keep: Set<string>): Promise<number> {
+    return unlinkBlobsIn(join(this.#pinnedDir, "blobs"), keep);
   }
 
   /** Whether any content file (a blob or a temp file) is on disk. */
@@ -1302,37 +1471,40 @@ export class SqliteReplicaStore implements ReplicaStore {
   }
 
   async collectGarbage(t: LeaseToken): Promise<number> {
-    return this.#mutate(async () => {
-      const release = this.#shared ? await acquireWritableMutation(this.#shared) : undefined;
-      // The write lock is held across the unlinks, and the lease token is
-      // checked under it: a paused former holder can never unlink a blob the
-      // current holder just committed a reference to.
+    return this.#mutate(() => this.#collectLocked(t));
+  }
+
+  /** `collectGarbage` for callers already inside the mutation hold (it cannot re-enter `#mutate`). */
+  async #collectLocked(t: LeaseToken): Promise<number> {
+    const release = this.#shared ? await acquireWritableMutation(this.#shared) : undefined;
+    // The write lock is held across the unlinks, and the lease token is
+    // checked under it: a paused former holder can never unlink a blob the
+    // current holder just committed a reference to.
+    try {
+      this.#db.exec("BEGIN IMMEDIATE");
+    } catch (error) {
+      release?.();
+      throw storageError(error, "Collecting unused content");
+    }
+    try {
+      this.#checkLease(t);
+      await this.#faults.afterGarbageCollectionBegin?.();
+      const keep = new Set(
+        this.#db.all<{ hash: string }>("SELECT DISTINCT hash FROM entry WHERE content = 1").map((row) => row.hash),
+      );
+      const removed = await this.#unlinkBlobs(keep);
+      this.#db.exec("COMMIT");
+      return removed;
+    } catch (error) {
       try {
-        this.#db.exec("BEGIN IMMEDIATE");
-      } catch (error) {
-        release?.();
-        throw storageError(error, "Collecting unused content");
+        this.#db.exec("ROLLBACK");
+      } catch {
+        // already rolled back
       }
-      try {
-        this.#checkLease(t);
-        await this.#faults.afterGarbageCollectionBegin?.();
-        const keep = new Set(
-          this.#db.all<{ hash: string }>("SELECT DISTINCT hash FROM entry WHERE content = 1").map((row) => row.hash),
-        );
-        const removed = await this.#unlinkBlobs(keep);
-        this.#db.exec("COMMIT");
-        return removed;
-      } catch (error) {
-        try {
-          this.#db.exec("ROLLBACK");
-        } catch {
-          // already rolled back
-        }
-        throw storageError(error, "Collecting unused content");
-      } finally {
-        release?.();
-      }
-    });
+      throw storageError(error, "Collecting unused content");
+    } finally {
+      release?.();
+    }
   }
 
   async reset(t: LeaseToken, reason: string, options: { keepSource?: boolean } = {}): Promise<void> {
