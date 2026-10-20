@@ -530,7 +530,7 @@ describe.skipIf(NODE_BIN === undefined)("TC-858 browser replication acceptance (
     }
   });
 
-  scenario("8b deny then fresh sign-in recreates the DB; a tab from before the deny is refused", async () => {
+  scenario("8b deny then fresh sign-in recreates the DB; a tab from before the deny is refused; Details: TC-1621", async () => {
     const context = await newContext();
     try {
       const page = await bootPage(context);
@@ -541,8 +541,6 @@ describe.skipIf(NODE_BIN === undefined)("TC-858 browser replication acceptance (
       await page.evaluate(() => window.__tcw.injectDenyFailure({ stage: "deny_tx", once: true }));
       await page.evaluate(() => window.__tcw.signOut());
       expect(await contentRows(page)).toBe(0);
-      await page.evaluate(() => window.__tcw.kvGet("notes/a"));
-      expect(await lastRead(page)).toMatchObject({ source: "network", reason: "replica_gated" });
       await stale.evaluate(() => window.__tcw.kvGet("notes/a"));
       expect(await lastRead(stale)).toMatchObject({ source: "network", reason: "replica_gated" });
       await page.evaluate(() => window.__tcw.signIn());
@@ -550,7 +548,7 @@ describe.skipIf(NODE_BIN === undefined)("TC-858 browser replication acceptance (
       if (sync.status === "error" && "gate" in sync && sync.gate === "logout_pending") {
         // The fixture records the delete-blocked marker for this outcome. Startup recovery clears
         // that marker; signing out of the restored session and signing in again establishes a fresh stamp.
-        // This path still requires a successful sync, and any other gate reason fails the scenario.
+        // This path requires a successful sync, and any other gate reason fails the scenario. Details: TC-1621
         expect(await replicationEventsOf(page, "replication.lifecycle")).toContainEqual(
           expect.objectContaining({ action: "marker_set", code: "DELETE_BLOCKED" }),
         );

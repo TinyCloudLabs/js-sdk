@@ -154,7 +154,7 @@ const api = {
   },
 
   replicationStatus: () => requireReplication("status")(),
-  /** A failed sync is data for the scenario, not an exception: it reports the error code and, for a gated refusal, the gate reason. */
+  /** A failed sync is scenario data: the error result includes the code and, for a gated refusal, the gate reason. Details: TC-1621 */
   async replicationSync(): Promise<{ status: "ok" } | { status: "error"; code: string; message: string; gate?: string }> {
     try {
       await requireReplication("sync")();
