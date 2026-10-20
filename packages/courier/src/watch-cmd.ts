@@ -46,7 +46,7 @@ export function watchOptions(args: ParsedArgs): WatchOptions {
 }
 
 export const watchUsage = () =>
-  `Usage: ${cmd('watch [--wake none|paseo|claude|exec] [--exec <cmd> --unguarded] [--cwd dir] [--debounce 30] [--poll 60] [--ticket 25] [--once]')}\n` +
+  `Usage: ${cmd('watch [--wake none|paseo|claude|exec] [--exec <cmd> --unguarded] [--env-pass NAME]… [--cwd dir] [--debounce 30] [--poll 60] [--ticket 25] [--once]')}\n` +
   `       ${cmd('watch … (--install-launchd | --install-systemd) [--dry-run] [--name n]')}`;
 
 /** Where a bare `claude`/`paseo` resolves now, so a service with a minimal PATH still finds it. */
@@ -73,6 +73,10 @@ export function wakeConfig(args: ParsedArgs, owner: string | undefined): WakeCon
   if (unguarded && adapter !== 'exec') throw new CourierError('usage', '--unguarded only applies with --wake exec; the claude and paseo adapters are always guarded.');
   if (adapter === 'exec' && !unguarded) throw new CourierError('usage', `${UNGUARDED_REFUSAL}\n${watchUsage()}`);
   const allow = args.all('claude-allow');
+  const envPass = args.all('env-pass');
+  for (const name of envPass) {
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) throw new CourierError('usage', `--env-pass needs a variable name (got "${name}").`);
+  }
   return {
     adapter,
     cwd: path.resolve(value(args, 'cwd') ?? process.cwd()),
@@ -80,6 +84,7 @@ export function wakeConfig(args: ParsedArgs, owner: string | undefined): WakeCon
     home: profileDir(),
     exec,
     unguarded,
+    envPass,
     paseo: { bin: value(args, 'paseo-bin') ?? 'paseo', provider: value(args, 'paseo-provider') ?? 'claude', mode: value(args, 'paseo-mode') },
     // A woken claude may run only Courier commands unless the owner widens it with --claude-settings/--claude-allow.
     claude: { bin: value(args, 'claude-bin') ?? 'claude', settings: value(args, 'claude-settings'), allow: allow.length ? allow : [`Bash(${programName()}:*)`] },

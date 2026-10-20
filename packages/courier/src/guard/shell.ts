@@ -231,6 +231,10 @@ function lexWord(src: string, i: number, st: State, base: Base, allowAssignParen
       sub(unescapeBacktick(src.slice(i + 1, e)), st, base);
       parts.push({ t: 'dyn' });
       i = e + 1;
+    } else if (c === '[' && !/^\[[^\s\]]*\]/.test(src.slice(i, i + 256))) {
+      // `[` and `[[` are the test command; a glob bracket needs its closing `]` inside the same word.
+      lit(c, false);
+      i++;
     } else if (c === '*' || c === '?' || c === '[') {
       parts.push({ t: 'dyn' });
       i++;

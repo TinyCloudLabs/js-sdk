@@ -1,5 +1,6 @@
 import path from 'node:path';
 import { parseShell, wordLiteral, type RawCmd, type RawWord } from './shell.js';
+import { expansionRefusal } from './expansion.js';
 import type { Verb } from './target.js';
 import {
   normApi, normChangeset, normGhPrMerge, normGhRelease, normGhWorkflowRun, normPhala, normPublish, normPush, normScript, normSecrets, normWrangler,
@@ -677,6 +678,9 @@ function analyzeScript(text: string, parent: Scope, inexact: boolean): void {
   if (parent.depth + 1 > MAX_DEPTH) return unresolved(sh, 'scripts nested too deeply to inspect');
   const parsed = parseShell(text);
   if (parsed.errors.length) unresolved(sh, `could not read the command (${parsed.errors[0]})`);
+  // First rule (see expansion.ts): run-time expansion or indirection syntax next to a gated name is refused outright.
+  const refusal = expansionRefusal(text, parsed);
+  if (refusal) return unresolved(sh, refusal);
   const sc: Scope = { ...parent, depth: parent.depth + 1, cwds: [...parent.cwds], written: new Set(parent.written), inexact: inexact || parent.inexact, assigns: [] };
   const c = census(parsed.cmds);
   const resolved = parsed.cmds.map((cmd) => ({

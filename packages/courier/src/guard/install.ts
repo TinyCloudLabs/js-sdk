@@ -1,8 +1,11 @@
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { programName } from '../program.js';
 import { isRecord } from '../a2a.js';
 
+/** Where this OS user keeps credentials that a woken agent can read through the Read tool (and a shell) unless HOME differs. */
+export const CREDENTIAL_FILES = ['.config/gh/**', '.npmrc', '.netrc', '.ssh/**', '.aws/**', '.config/gcloud/**', '.docker/config.json', '.config/wrangler/**', '.config/.wrangler/**', '.git-credentials'];
 /**
  * The guard's Claude Code settings and the environment woken agents get (spec §7).
  *
@@ -47,6 +50,8 @@ export function guardSettings(options: { argv: string[]; home: string; entry: st
     for (const tool of ['Edit', 'Write', 'MultiEdit', 'NotebookEdit']) deny.push(`${tool}(${rulePath(p)}/**)`);
   }
   for (const f of ['key.json', 'grant.json']) deny.push(`Read(${rulePath(path.join(home, f))})`);
+  // Only the Read tool: a shell can still `cat` these (the README lists them as residual).
+  for (const rel of CREDENTIAL_FILES) deny.push(`Read(${rulePath(path.join(os.homedir(), rel))})`);
   for (const prog of programs) for (const sub of ['pair', 'revoke', 'init']) deny.push(`Bash(${prog} ${sub}:*)`);
   deny.push('Bash(secret-bridge:*)', 'Bash(secret_bridge:*)', 'mcp__paseo', 'mcp__paseo__*');
   return {
@@ -99,24 +104,66 @@ export function writeGuardSettings(options: { argv: string[]; home: string; entr
   return file;
 }
 
-/** Variables that point at an owner's TinyCloud CLI profile or keys. None of them reach a woken agent. */
-const OWNER_VARS = /^(TC_PRIVATE_KEY|TC_PROFILE|TC_OWNER_DID|TC_AUTH_.*|TC_OPENKEY_.*|TC_REPLICATION.*|TC_API.*|TC_TOKEN.*)$/;
+/**
+ * The only variables a woken agent inherits (claude and exec adapters build the environment from this list; nothing else
+ * is passed on): paths and locale, proxy and CA settings, what Claude Code itself needs, and `COURIER_*`. No tokens:
+ * not `GH_TOKEN`/`GITHUB_TOKEN`, `NPM_TOKEN`, `CLOUDFLARE_*`, `WRANGLER_*`, `PHALA_*`, `LINEAR_*`, `AWS_*`, cloud or
+ * `TC_*` credentials, nor `SSH_AUTH_SOCK`. An operator who really needs one names it with `--env-pass`.
+ */
+const ALLOWED_ENV: RegExp[] = [
+  /^(PATH|HOME|USER|LOGNAME|SHELL|LANG|LANGUAGE|TZ|TERM|COLORTERM|NO_COLOR|FORCE_COLOR|TMPDIR|TMP|TEMP|HOSTNAME)$/,
+  /^LC_[A-Z_]+$/,
+  /^(HTTPS?_PROXY|NO_PROXY|ALL_PROXY)$/i,
+  /^(SSL_CERT_FILE|SSL_CERT_DIR|CURL_CA_BUNDLE|REQUESTS_CA_BUNDLE|NODE_EXTRA_CA_CERTS)$/,
+  /^XDG_(CONFIG|DATA|CACHE|STATE)_HOME$/,
+  /^(ANTHROPIC|CLAUDE|CLAUDE_CODE)_[A-Z0-9_]+$/,
+  /^CLAUDECODE$/,
+  /^COURIER_[A-Z0-9_]+$/,
+  /^TC_BIN$/,
+];
 
 /**
- * Environment for a woken agent: the courier profile only. The owner's `tc` profile is hidden by pointing `TC_HOME`
- * at an empty directory and dropping the variables that carry owner keys.
+ * Credential variables that are blanked for agents the watcher cannot build an environment for (`paseo run` inherits the
+ * Paseo daemon's environment, which the watcher cannot see). Exact names only; a daemon that holds others is a residual
+ * risk the README names. Includes what an audit of a real Paseo host found (`CLOUDFLARE_*`, `TYPESAFE_API_KEY`, `TC_OWNER_DID`).
  */
-export function courierOnlyEnv(base: NodeJS.ProcessEnv, home: string): NodeJS.ProcessEnv {
+const BLANKED_ENV = [
+  'GH_TOKEN', 'GITHUB_TOKEN', 'GH_ENTERPRISE_TOKEN', 'GITHUB_ENTERPRISE_TOKEN', 'GITHUB_PAT', 'NPM_TOKEN', 'NODE_AUTH_TOKEN', 'YARN_NPM_AUTH_TOKEN', 'NPM_CONFIG_TOKEN',
+  'CLOUDFLARE_API_TOKEN', 'CLOUDFLARE_API_KEY', 'CLOUDFLARE_ACCOUNT_ID', 'CLOUDFLARE_EMAIL', 'CF_API_TOKEN', 'CF_ACCOUNT_ID', 'WRANGLER_API_TOKEN',
+  'PHALA_CLOUD_API_KEY', 'PHALA_API_KEY', 'LINEAR_API_KEY', 'LINEAR_ACCESS_TOKEN', 'TYPESAFE_API_KEY',
+  'AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY', 'AWS_SESSION_TOKEN', 'AWS_PROFILE', 'GOOGLE_APPLICATION_CREDENTIALS', 'GOOGLE_API_KEY', 'AZURE_CLIENT_SECRET',
+  'OPENAI_API_KEY', 'SLACK_BOT_TOKEN', 'SLACK_TOKEN', 'DOCKER_PASSWORD', 'SSH_AUTH_SOCK', 'SSH_ASKPASS', 'GIT_ASKPASS',
+  'TC_PRIVATE_KEY', 'TC_PROFILE', 'TC_OWNER_DID', 'TC_API_KEY', 'TC_TOKEN', 'TC_OPENKEY_HOST', 'TC_OPENKEY_API_HOST', 'TC_AUTH_NO_POPUP', 'TC_NO_POPUP',
+];
+
+const allowed = (name: string, extra: readonly string[]) => extra.includes(name) || ALLOWED_ENV.some((re) => re.test(name));
+
+/**
+ * Environment for a woken agent: an allowlist (see {@link ALLOWED_ENV}) plus `extra` names the operator passed with
+ * `--env-pass`. The owner's `tc` profile is hidden by pointing `TC_HOME` at an empty directory.
+ */
+export function courierOnlyEnv(base: NodeJS.ProcessEnv, home: string, extra: readonly string[] = []): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {};
-  for (const [name, value] of Object.entries(base)) if (!OWNER_VARS.test(name)) env[name] = value;
+  for (const [name, value] of Object.entries(base)) if (value !== undefined && allowed(name, extra)) env[name] = value;
   env.COURIER_HOME = home;
   env.TC_HOME = noOwnerProfileDir(home);
   return env;
 }
 
-/** The same hiding as {@link courierOnlyEnv}, as overrides for a launcher that can only set variables (`paseo run --env`). */
-export function courierEnvOverrides(base: NodeJS.ProcessEnv, home: string): Record<string, string> {
-  const out: Record<string, string> = { COURIER_HOME: home, TC_HOME: noOwnerProfileDir(home) };
-  for (const name of Object.keys(base)) if (OWNER_VARS.test(name)) out[name] = '';
+const CREDENTIAL_LIKE = /(TOKEN|SECRET|PASSW|API_?KEY|ACCESS_KEY|PRIVATE_KEY|CREDENTIAL|AUTH)|^(TC|CLOUDFLARE|CF|WRANGLER|PHALA|LINEAR|AWS|GOOGLE|AZURE|GH|GITHUB|NPM|SSH)_/i;
+
+/**
+ * The same as overrides for a launcher that can only set variables (`paseo run --env`). The agent inherits the Paseo
+ * daemon's environment, not the watcher's, so this blanks every well-known credential name and every credential-looking
+ * variable of the watcher's own environment that is not allowed. Anything else the daemon holds still reaches the agent;
+ * the README says so.
+ */
+export function courierEnvOverrides(base: NodeJS.ProcessEnv, home: string, extra: readonly string[] = []): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const name of [...Object.keys(base).filter((n) => CREDENTIAL_LIKE.test(n)), ...BLANKED_ENV]) {
+    if (!allowed(name, extra) && !name.startsWith('PASEO_') && /^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) out[name] = '';
+  }
+  out.COURIER_HOME = home;
+  out.TC_HOME = noOwnerProfileDir(home);
   return out;
 }

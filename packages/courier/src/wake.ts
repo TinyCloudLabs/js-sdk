@@ -173,6 +173,8 @@ export interface WakeConfig {
   guard?: { argv: string[]; entry: string };
   /** `--unguarded`: the operator accepts that the `exec` adapter runs without the Courier guard. */
   unguarded?: boolean;
+  /** `--env-pass NAME`: extra variables of the watcher's environment a woken agent may inherit (default none). */
+  envPass?: string[];
   timeoutMs: number;
 }
 
@@ -220,7 +222,7 @@ export function createWaker(
       cwd: config.cwd,
       timeoutMs: config.timeoutMs,
       env: {
-        ...courierOnlyEnv(env, config.home),
+        ...courierOnlyEnv(env, config.home, config.envPass),
         COURIER_THREAD: request.threadId,
         COURIER_PEER: request.peer,
         COURIER_MESSAGES: JSON.stringify(request.messages),
@@ -243,7 +245,7 @@ export function createWaker(
       args.push('--settings', config.claude.settings!);
       if (config.claude.allow.length) args.push('--allowedTools', ...config.claude.allow);
       const result = await run(config.claude.bin, args, {
-        cwd: config.cwd, env: courierOnlyEnv(env, config.home), input: prompt(request), timeoutMs: config.timeoutMs,
+        cwd: config.cwd, env: courierOnlyEnv(env, config.home, config.envPass), input: prompt(request), timeoutMs: config.timeoutMs,
       });
       let parsed: { session_id?: unknown; is_error?: unknown; result?: unknown } | undefined;
       for (const line of result.stdout.trim().split('\n').reverse()) {
@@ -298,7 +300,7 @@ export function createWaker(
       '--label', `courier-thread=${request.threadId}`,
       '--label', `courier-peer=${request.peer}`,
       '--label', GUARD_LABEL,
-      ...Object.entries(courierEnvOverrides(env, config.home)).flatMap(([name, value]) => ['--env', `${name}=${value}`]),
+      ...Object.entries(courierEnvOverrides(env, config.home, config.envPass)).flatMap(([name, value]) => ['--env', `${name}=${value}`]),
       ...(mode ? ['--mode', mode] : []),
       prompt(request),
     ];

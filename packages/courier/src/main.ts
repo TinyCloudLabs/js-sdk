@@ -51,11 +51,15 @@ Guards (woken agents run with these; humans rarely do):
   guard                            Claude Code PreToolUse hook: reads one tool call as JSON on stdin and refuses
                                    merge, deploy, publish, push to main/master, \`tc secrets\` and similar unless
                                    your owner approved that exact (verb, target) and nobody has used the approval.
+                                   A command with expansion syntax ($VAR, $(…), {a,b}, eval, xargs, env …) that
+                                   names a gated tool is refused: write it with plain words. A fail-closed policy
+                                   layer for a prompted or confused agent, NOT a sandbox against a hostile local
+                                   process; your owner's credentials are the real boundary.
   guard settings [--out f] [--claude-settings f]
                                    Print/write the Claude Code settings (hook + deny rules) that install it.
 
 Delivery (one watcher per person per machine; never calls a model):
-  watch [--wake none|paseo|claude|exec] [--exec <cmd> --unguarded] [--cwd dir] [--debounce 30] [--poll 60] [--ticket 25] [--once]
+  watch [--wake none|paseo|claude|exec] [--exec <cmd> --unguarded] [--env-pass NAME]… [--cwd dir] [--debounce 30] [--poll 60] [--ticket 25] [--once]
                                    Subscribe to each peer's to/<me>/ and your me/approvals/, poll every
                                    --poll s as the fallback, mirror new messages into me/mirror/, update
                                    receipts, then wake after a --debounce s quiet period. Logs one JSON
@@ -71,6 +75,10 @@ Delivery (one watcher per person per machine; never calls a model):
                                              NOT approval-guarded: needs --unguarded, prints a notice on every
                                              wake; not for agents that can merge, deploy or publish
                                    [--wake-timeout 900] limits one wake run, in seconds.
+                                   Woken claude/exec runs get an environment allowlist (PATH, HOME, locale,
+                                   proxy/CA, ANTHROPIC_*, CLAUDE_*, COURIER_*), no tokens; [--env-pass NAME]…
+                                   adds one on purpose. paseo agents inherit the Paseo daemon's environment:
+                                   known credential names are blanked, others are not.
   watch … --install-launchd | --install-systemd [--dry-run] [--name n]
                                    Install the same watch command as a macOS launchd agent or a Linux
                                    systemd --user unit. --dry-run prints the exact file and commands.

@@ -22,6 +22,12 @@ TC="${TC_BIN:-$HOME/.local/share/tinycloud/cli/node_modules/.bin/tinycloud}"   #
 "$TC" courier --help
 ```
 
+If the watcher woke you, the wake prompt gives plain commands such as
+`courier read <thread>` or `tc courier read <thread>`. Skip this discovery block
+(it uses variables and `npm`, which the Courier guard refuses) and, in every
+example below, write `courier …` (or `tc courier …`, as the wake prompt does)
+instead of `"$TC" courier …`: a `$` next to `--verb merge` is refused too.
+
 The standalone `courier` bin from `@tinycloud/courier` takes identical
 arguments and shares the same profile (`$COURIER_HOME`, default `~/.courier`).
 Commands below run it as `"$TC" courier`, set by the block above; prose calls it `tinycloud courier`.
@@ -175,8 +181,13 @@ owner/repo`; a `npm publish` is read from `package.json`). Do not run
 `courier approval` without `--peek` for such a command: that would use the
 approval up and the guard would then refuse the command. A command the guard
 cannot read, or whose verb and target are not exactly the approved ones, is
-refused; file a new request rather than working around it. Pairing, revoking
-and `courier init` are never done by an agent.
+refused; file a new request rather than working around it. A command with
+expansion syntax (`{a,b}`, `$VAR`, `$(…)`, backticks, `eval`, `xargs`, `env`,
+a here-string, …) that also names a gated tool (`gh`, `npm`, `git push`, `tc`,
+…) is refused as "expansion syntax with a gated tool name": rewrite it with
+plain words. The guard is a fail-closed policy layer that stops a prompted or
+confused agent; it is not a sandbox, and your owner's credentials are the real
+boundary. Pairing, revoking and `courier init` are never done by an agent.
 
 If your wake prompt says "this wake is not approval-guarded", your owner started
 the watcher with `--wake exec --unguarded`. Nothing checks your commands there,

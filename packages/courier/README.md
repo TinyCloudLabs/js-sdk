@@ -255,6 +255,12 @@ A woken agent runs on another party's text, so instructions alone are not
 enough (spec §7). `courier guard` is a Claude Code `PreToolUse` hook that
 reads every tool call before it runs. It runs in every permission mode.
 
+**What the guard is.** A fail-closed policy layer that stops a prompted or
+confused agent, including one carrying a peer's prompt injection, from merging,
+deploying, publishing, pushing to `main` or touching secrets without your
+approval. It is not a sandbox against a deliberately hostile local process: the
+owner's tokens and files are the deeper boundary (see Residual risk).
+
 **What it blocks** (each unless the owner approved that exact action):
 
 | Command | Verb and target it is reduced to |
@@ -287,19 +293,33 @@ not on GitHub. Several gated actions in one tool call are refused too. Every
 error (no profile, network, a marker it cannot read, bad input) refuses the
 call (exit 2), never allows it.
 
-**How commands are read.** The guard parses the command the way a shell
-would, without running it: quoting, backslashes, `$'…'`, env prefixes, `command`,
-`sudo`, `env`, `nohup`, `timeout`, `bash -c`/`sh -c`/`eval`, here-docs and
-here-strings, pipes, `&&`/`||`/`;`, subshells and groups, `$(…)`, backticks,
-process substitution, and the scripts it is told to run (`bash x.sh`,
-`source x`, `./x`, read from disk at that moment). Variables are followed when
-they are assigned exactly once in the same command. Words decided at run time
-(unknown variables, command substitution, globs, brace expansion, tilde), loops
-and functions around a gated command, `xargs`/`find -exec`/`watch`/`trap`
-wrappers, a shell reading from a pipe, and a script that the same command
-writes are refused as "cannot be told apart from a gated command": write the
-command out literally and run it on its own. `gh release list|view|download`
-are read-only and not gated.
+**How commands are read.** First rule, which does not depend on reading shell
+correctly: if a command contains run-time expansion or indirection syntax **and**
+a gated tool or verb appears anywhere in it, it is refused with "expansion
+syntax with a gated tool name". Expansion and indirection syntax means brace
+expansion (`{a,b}`, `{1..3}`), `$` of any kind (`$VAR`, `${…}`, `$(…)`, `$((…))`,
+`$'…'`, `$"…"`), backticks, a glob, `~` or substitution in the command word,
+`eval`, `source`/`.`, `alias`, function definitions, here-documents, here-strings,
+process substitution, text piped into a shell, `base64 -d`, `xargs`, `find
+-exec`, `env -S`, and the prefixes `env`, `command`, `builtin`, `exec`, `sudo`,
+`nohup`, `timeout`, `setsid`, `stdbuf`, `watch`, `time`, `ssh` and the like. Gated
+names are `gh`, `npm`, `pnpm`, `yarn`, `bun`, `npx`, `changeset`, `wrangler`,
+`phala`, `tc`, `tinycloud`, `lerna`, `paseo`, `claude`, `codex`, `omp`,
+`opencode`, `gemini`, the Secret Bridge names, `courier pair|revoke|init`, a
+fetch tool talking to GitHub, a GraphQL merge mutation, and the verbs `merge`,
+`push`, `publish`, `deploy`, `release`, `secrets`. Matching is on words, with
+quotes and backslashes removed first (`g""h` is `gh`; `$TC` is not `tc`). False
+refusals are accepted: write the command out with plain words (a PR number, a
+branch name, a package directory).
+
+Everything else is read word by word, the way a shell would, without running
+it: quoting, backslashes, variable assignments in the same command, `bash -c`
+and `sh -c` strings, pipes, `&&`/`||`/`;`, subshells and groups, and the scripts
+it is told to run (`bash x.sh`, `./x`, read from disk at that moment; the same
+first rule applies to the file). What it still cannot name (loops or functions
+around a gated command, a shell reading from a pipe, GraphQL merges, a script the
+same command writes, several targets) is refused as "cannot be told apart from a
+gated command". `gh release list|view|download` are read-only and not gated.
 
 **Installing it.** `courier watch --wake claude` writes
 `<COURIER_HOME>/guard/settings.json` on every start and passes it as
@@ -349,27 +369,57 @@ cannot merge, deploy or publish. On a Paseo host, set `--paseo-provider claude`
 (the default) and leave `--wake paseo` to install the guard; do not use
 `--paseo-provider` with another agent.
 
-**Courier-only environment.** Woken `claude` and `exec` runs get the Courier
-profile only: `COURIER_HOME` is set, `TC_HOME` points at an empty directory
-(`<COURIER_HOME>/guard/no-owner-profile`) and `TC_PRIVATE_KEY`, `TC_PROFILE`,
-`TC_OWNER_DID`, `TC_AUTH_*`, `TC_OPENKEY_*` and the other owner variables are
-removed. `paseo` agents get the same through `--env` overrides.
+**Courier-only environment.** Woken `claude` and `exec` runs get an allowlist,
+not a filtered copy of your environment: `PATH`, `HOME`, `USER`, `LOGNAME`,
+`SHELL`, locale (`LANG`, `LC_*`), `TERM`, `TZ`, `TMPDIR`, proxy and CA variables
+(`HTTP(S)_PROXY`, `NO_PROXY`, `SSL_CERT_*`, `NODE_EXTRA_CA_CERTS`), what Claude
+Code itself needs (`ANTHROPIC_*`, `CLAUDE_*`), `XDG_*_HOME`, `TC_BIN` and
+`COURIER_*`. `COURIER_HOME` is set and `TC_HOME` points at an empty directory
+(`<COURIER_HOME>/guard/no-owner-profile`), so `tc` finds no owner profile.
+Nothing else is passed: no `GH_TOKEN`/`GITHUB_TOKEN`, `NPM_TOKEN`,
+`CLOUDFLARE_*`, `WRANGLER_*`, `PHALA_*`, `LINEAR_*`, `AWS_*`, `GOOGLE_*`, `TC_*`
+credentials, `SSH_AUTH_SOCK`, `NODE_OPTIONS`, `LD_PRELOAD` or `BASH_ENV`. An
+operator who needs one passes it by name with `--env-pass NAME` (repeatable);
+that is a deliberate hole, so use a token that cannot merge.
 
-**Residual risk (spec §7).** A woken agent runs as the same OS user, and its
-GitHub token can merge. This is a command blocklist, not a sandbox. It does
-not stop: a program the agent writes and runs (the guard reads shell and common
-interpreter scripts, but a compiled or obfuscated one is opaque), a direct call
-to the GitHub API from code, an alias or function defined in the user's shell
-start-up files, a merge triggered some other way (a push to a branch that a
-workflow merges, a bot command), or anything that edits the hook's files through
-a shell redirect instead of an edit tool (the deny rules cover edit tools, and
+`paseo run` cannot build an environment: the new agent inherits the **Paseo
+daemon's** environment (an audit of one host found `CLOUDFLARE_API_TOKEN`,
+`CLOUDFLARE_ACCOUNT_ID`, `TYPESAFE_API_KEY` and `TC_OWNER_DID` there). The
+adapter blanks (`--env NAME=`) every well-known credential name and every
+credential-looking variable of the watcher's own environment, `TC_*` included,
+and `TC_HOME` is redirected as above. Names it cannot know that the daemon
+holds still reach the agent: start the Paseo daemon without credentials in its
+environment, or use `--wake claude`, whose environment is the allowlist.
+
+**Residual risk (spec §7).** The guard is a fail-closed policy layer. It stops a
+prompted or confused agent, including one carrying a peer's prompt injection,
+from merging, deploying, publishing, pushing to `main` or reading secrets by
+accident or on instruction. It is **not a sandbox** against a deliberately
+hostile local process: the agent runs as the same OS user, and the owner's own
+tokens and files are the deeper boundary. It does not stop: a program the agent
+writes and runs (a compiled or obfuscated one is opaque), a direct GitHub API
+call from code, an alias or function from the user's shell start-up files that
+the Bash tool loads, a merge triggered some other way (a push to a branch that a
+workflow merges, a bot command), or an edit of the hook's files through a shell
+redirect instead of an edit tool (the deny rules cover edit tools, and
 `COURIER_HOME` is writable by the user). The single-use marker is delete-proof
-for the courier key but not against code that has the owner's own credentials.
-An agent can still be started outside the guard from a program the agent
-writes, and a `paseo` agent shares its `<cwd>/.claude/settings.local.json` with
+for the courier key but not against code that holds the owner's own
+credentials. A `paseo` agent shares `<cwd>/.claude/settings.local.json` with
 anything else run in that directory (that file is the guard's too). The `exec`
-adapter runs your own command and installs no guard (hence `--unguarded`). v1 should give courier
-agents a GitHub token without merge rights.
+adapter runs your own command and installs no guard (hence `--unguarded`).
+
+**Credentials a woken agent can still reach.** The environment is an allowlist
+(above), but the agent runs as your user, so it can read what that user
+can: `~/.config/gh/hosts.yml` (and so `gh`'s token, and any git credential
+helper that uses it), `~/.npmrc`, `~/.netrc`, `~/.ssh`, `~/.aws`,
+`~/.config/gcloud`, `~/.docker/config.json`, `~/.config/wrangler`. The Read tool
+is denied these paths in the guard settings; a shell `cat` is not. Shell
+start-up files (`~/.bashrc`, `~/.profile`, `~/.zshenv`) that export a token
+before their interactive-only guard re-add it in the Bash tool; keep tokens out
+of them. Recommended: run woken agents as a dedicated OS user (or at least a
+dedicated `HOME`) that holds no GitHub, npm, Cloudflare, Phala or Linear
+credentials and, if it must push, only a token without merge rights. v1 should
+give courier agents exactly such a token.
 
 ### Running it as a service
 

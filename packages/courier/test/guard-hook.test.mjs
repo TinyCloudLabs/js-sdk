@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { decide, hookOutput } from '../dist/guard/hook.js';
 import { requestHash } from '../dist/canonical.js';
 import { k } from '../dist/keys.js';
-import { guardSettings, courierOnlyEnv, hookCommand, writeGuardSettings } from '../dist/guard/install.js';
+import { guardSettings, courierOnlyEnv, courierEnvOverrides, hookCommand, writeGuardSettings } from '../dist/guard/install.js';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -218,8 +218,36 @@ test('the owner\'s --claude-settings is merged under the guard, never over it', 
   }
 });
 
-test('courier-only env drops owner profile variables and points TC_HOME at an empty directory', () => {
-  const env = courierOnlyEnv({ PATH: '/bin', TC_PRIVATE_KEY: 'k', TC_PROFILE: 'p', TC_OWNER_DID: 'd', TC_HOME: '/home/u/.tinycloud', TC_AUTH_NO_POPUP: '1', TC_BIN: '/bin/tc', GH_TOKEN: 'x' }, '/home/u/.courier');
-  assert.deepEqual(Object.keys(env).sort(), ['COURIER_HOME', 'GH_TOKEN', 'PATH', 'TC_BIN', 'TC_HOME']);
-  assert.equal(env.TC_HOME, '/home/u/.courier/guard/no-owner-profile');
+test('a woken agent inherits an allowlist, never tokens: claude/exec environments carry only paths, locale, proxy/CA, Claude and COURIER_* variables', () => {
+  const secrets = {
+    GH_TOKEN: 'x', GITHUB_TOKEN: 'x', NPM_TOKEN: 'x', NODE_AUTH_TOKEN: 'x', CLOUDFLARE_API_TOKEN: 'x', CLOUDFLARE_ACCOUNT_ID: 'x', WRANGLER_API_TOKEN: 'x', PHALA_CLOUD_API_KEY: 'x',
+    LINEAR_API_KEY: 'x', AWS_ACCESS_KEY_ID: 'x', AWS_SECRET_ACCESS_KEY: 'x', GOOGLE_APPLICATION_CREDENTIALS: '/k', SSH_AUTH_SOCK: '/s', OPENAI_API_KEY: 'x', SOME_UNLISTED_SECRET: 'x',
+    TC_PRIVATE_KEY: 'k', TC_PROFILE: 'p', TC_OWNER_DID: 'd', TC_HOME: '/home/u/.tinycloud', TC_AUTH_NO_POPUP: '1', GIT_ASKPASS: '/a', NODE_OPTIONS: '--require /x', LD_PRELOAD: '/x.so', BASH_ENV: '/x',
+  };
+  const allowedIn = {
+    PATH: '/bin', HOME: '/home/u', USER: 'u', LANG: 'C.UTF-8', LC_ALL: 'C', TERM: 'xterm', HTTPS_PROXY: 'http://p', NO_PROXY: 'x', SSL_CERT_FILE: '/c', NODE_EXTRA_CA_CERTS: '/c',
+    ANTHROPIC_API_KEY: 'a', CLAUDE_CODE_ENTRYPOINT: 'x', CLAUDECODE: '1', COURIER_HOST: 'h', TC_BIN: '/bin/tc', XDG_CONFIG_HOME: '/x',
+  };
+  const env = courierOnlyEnv({ ...allowedIn, ...secrets }, '/home/u/.courier');
+  assert.deepEqual(Object.keys(env).sort(), [...Object.keys(allowedIn), 'COURIER_HOME', 'TC_HOME'].sort());
+  assert.equal(env.TC_HOME, '/home/u/.courier/guard/no-owner-profile', 'tc finds an empty profile, not the owner');
+  assert.equal(env.COURIER_HOME, '/home/u/.courier');
+  // The operator can pass one named variable on purpose; nothing else comes with it.
+  const passed = courierOnlyEnv({ ...allowedIn, ...secrets }, '/home/u/.courier', ['AWS_PROFILE', 'GH_TOKEN']);
+  assert.equal(passed.GH_TOKEN, 'x');
+  assert.equal(passed.NPM_TOKEN, undefined);
+});
+
+test('paseo agents inherit the daemon environment: well-known credentials and credential-looking watcher variables are blanked, Paseo\'s own are left alone', () => {
+  const out = courierEnvOverrides({ PATH: '/bin', GH_TOKEN: 'x', MY_SERVICE_PASSWORD: 'x', ANTHROPIC_API_KEY: 'a', CLAUDE_CODE_MESSAGING_TOKEN: 't', PASEO_AGENT_ID: 'a1', PASEO_HOME: '/h', LS_COLORS: 'x' }, '/home/u/.courier');
+  for (const name of ['GH_TOKEN', 'MY_SERVICE_PASSWORD', 'CLOUDFLARE_API_TOKEN', 'TYPESAFE_API_KEY', 'SSH_AUTH_SOCK', 'NPM_TOKEN', 'TC_OWNER_DID']) assert.equal(out[name], '', name);
+  for (const name of ['PATH', 'ANTHROPIC_API_KEY', 'CLAUDE_CODE_MESSAGING_TOKEN', 'PASEO_AGENT_ID', 'PASEO_HOME', 'LS_COLORS']) assert.equal(name in out, false, `${name} is not touched`);
+  assert.equal(out.COURIER_HOME, '/home/u/.courier');
+  assert.equal(out.TC_HOME, '/home/u/.courier/guard/no-owner-profile');
+  assert.equal(courierEnvOverrides({ GH_TOKEN: 'x' }, '/h', ['GH_TOKEN']).GH_TOKEN, undefined, 'a variable the operator passed is not blanked');
+});
+
+test('the guard settings deny reading the usual credential files through the Read tool', () => {
+  const s = guardSettings({ argv: ['n', 'c', 'guard'], home: '/home/u/.courier', entry: '/opt/c/dist/cli.js' });
+  for (const rule of [`Read(/${os.homedir()}/.npmrc)`, `Read(/${os.homedir()}/.ssh/**)`, `Read(/${os.homedir()}/.config/gh/**)`, `Read(/${os.homedir()}/.aws/**)`]) assert.ok(s.permissions.deny.includes(rule), rule);
 });
