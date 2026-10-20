@@ -492,20 +492,20 @@ var init_formatter = __esm({
 function storageRejection(error) {
   let node = error;
   for (let depth = 0; depth < MAX_CAUSE_DEPTH && typeof node === "object" && node !== null; depth += 1) {
-    const record3 = node;
+    const record2 = node;
     let code4;
-    if (record3.code === "STORAGE_QUOTA_EXCEEDED" || record3.code === "STORAGE_LIMIT_REACHED") {
-      code4 = record3.code;
-    } else if (record3.code !== void 0) {
+    if (record2.code === "STORAGE_QUOTA_EXCEEDED" || record2.code === "STORAGE_LIMIT_REACHED") {
+      code4 = record2.code;
+    } else if (record2.code !== void 0) {
       return void 0;
-    } else if (isStorageStatus(record3)) {
-      code4 = storageCodeFromText(record3.message);
+    } else if (isStorageStatus(record2)) {
+      code4 = storageCodeFromText(record2.message);
     }
     if (code4) {
-      const account = accountTotals(record3) ?? accountTotals(record3.meta) ?? accountTotals(record3.metadata);
+      const account = accountTotals(record2) ?? accountTotals(record2.meta) ?? accountTotals(record2.metadata);
       return account ? { code: code4, account } : { code: code4 };
     }
-    node = record3.cause;
+    node = record2.cause;
   }
   return void 0;
 }
@@ -539,11 +539,11 @@ function storageCodeFromText(message) {
   }
   return void 0;
 }
-function isStorageStatus(record3) {
-  const meta = "meta" in record3 && typeof record3.meta === "object" && record3.meta !== null ? record3.meta : {};
+function isStorageStatus(record2) {
+  const meta = "meta" in record2 && typeof record2.meta === "object" && record2.meta !== null ? record2.meta : {};
   const statuses = [
-    "status" in record3 ? record3.status : void 0,
-    "statusCode" in record3 ? record3.statusCode : void 0,
+    "status" in record2 ? record2.status : void 0,
+    "statusCode" in record2 ? record2.statusCode : void 0,
     "status" in meta ? meta.status : void 0
   ];
   return statuses.some((value) => value === 402 || value === 413);
@@ -2627,7 +2627,7 @@ async function appendLocalGrantArtifact(profile, delegation) {
     await ProfileManager.ensureProfileDir(profile);
     await refuseWriteToDeletedProfile(profile);
     const records = await loadLocalGrantArtifacts(profile);
-    if (records.some((record3) => record3.delegationCid === delegation.cid)) return;
+    if (records.some((record2) => record2.delegationCid === delegation.cid)) return;
     await writeJsonAtomic(localGrantArtifactsPath(profile), [
       ...records,
       { delegationCid: delegation.cid, delegation }
@@ -6082,30 +6082,30 @@ function parseState(text) {
     throw gateRefusal("gate_unavailable", "The replica gate file is not valid JSON.");
   }
   if (typeof raw !== "object" || raw === null) throw gateRefusal("gate_unavailable", "The replica gate file is malformed.");
-  const record3 = raw;
-  if (record3.v !== GATE_FILE_VERSION) throw gateRefusal("gate_unavailable", "The replica gate file has an unknown version.");
-  if (typeof record3.incarnation !== "string" || record3.incarnation.length === 0) {
+  const record2 = raw;
+  if (record2.v !== GATE_FILE_VERSION) throw gateRefusal("gate_unavailable", "The replica gate file has an unknown version.");
+  if (typeof record2.incarnation !== "string" || record2.incarnation.length === 0) {
     throw gateRefusal("gate_unavailable", "The replica gate file has no incarnation.");
   }
-  if (typeof record3.salt !== "string" || Buffer.from(record3.salt, "base64url").toString("base64url") !== record3.salt || Buffer.from(record3.salt, "base64url").length < 32) {
+  if (typeof record2.salt !== "string" || Buffer.from(record2.salt, "base64url").toString("base64url") !== record2.salt || Buffer.from(record2.salt, "base64url").length < 32) {
     throw gateRefusal("gate_unavailable", "The replica gate file has an invalid salt.");
   }
-  if (record3.principalHash !== null && (typeof record3.principalHash !== "string" || !/^[0-9a-f]{64}$/.test(record3.principalHash))) {
+  if (record2.principalHash !== null && (typeof record2.principalHash !== "string" || !/^[0-9a-f]{64}$/.test(record2.principalHash))) {
     throw gateRefusal("gate_unavailable", "The replica gate file has an invalid principal hash.");
   }
-  if (typeof record3.lifecycleEpoch !== "number" || !Number.isSafeInteger(record3.lifecycleEpoch) || record3.lifecycleEpoch < 0) {
+  if (typeof record2.lifecycleEpoch !== "number" || !Number.isSafeInteger(record2.lifecycleEpoch) || record2.lifecycleEpoch < 0) {
     throw gateRefusal("gate_unavailable", "The replica gate file has an invalid lifecycle epoch.");
   }
-  if (record3.deniedAt !== null && (typeof record3.deniedAt !== "number" || !Number.isSafeInteger(record3.deniedAt) || record3.deniedAt < 0)) {
+  if (record2.deniedAt !== null && (typeof record2.deniedAt !== "number" || !Number.isSafeInteger(record2.deniedAt) || record2.deniedAt < 0)) {
     throw gateRefusal("gate_unavailable", "The replica gate file has an invalid deniedAt.");
   }
-  if (!Array.isArray(record3.intents)) throw gateRefusal("gate_unavailable", "The replica gate file has no intents list.");
-  for (const intent of record3.intents) {
+  if (!Array.isArray(record2.intents)) throw gateRefusal("gate_unavailable", "The replica gate file has no intents list.");
+  for (const intent of record2.intents) {
     if (typeof intent !== "object" || intent === null || typeof intent.id !== "string" || !/^[0-9a-f]{64}$/.test(intent.principalHash) || !Number.isSafeInteger(intent.recordedAt) || intent.recordedAt < 0 || (intent.kind === "pending" ? !/^[0-9a-f]{64}$/.test(intent.identityKeyHash) || intent.id !== `pending:${intent.identityKeyHash}` : intent.kind !== "partition" || typeof intent.partitionId !== "string" || intent.partitionId.length === 0 || intent.id !== intent.partitionId)) {
       throw gateRefusal("gate_unavailable", "The replica gate file has an invalid purge intent.");
     }
   }
-  const firstInstall = record3.firstInstall;
+  const firstInstall = record2.firstInstall;
   if (typeof firstInstall !== "object" || firstInstall === null || Array.isArray(firstInstall)) {
     throw gateRefusal("gate_unavailable", "The replica gate file has no valid firstInstall map.");
   }
@@ -6114,7 +6114,7 @@ function parseState(text) {
       throw gateRefusal("gate_unavailable", "The replica gate file has an invalid firstInstall entry.");
     }
   }
-  const grantInstall = Object.prototype.hasOwnProperty.call(record3, "grantInstall") ? record3.grantInstall : {};
+  const grantInstall = Object.prototype.hasOwnProperty.call(record2, "grantInstall") ? record2.grantInstall : {};
   if (typeof grantInstall !== "object" || grantInstall === null || Array.isArray(grantInstall)) {
     throw gateRefusal("gate_unavailable", "The replica gate has an invalid grantInstall map.");
   }
@@ -6123,7 +6123,7 @@ function parseState(text) {
       throw gateRefusal("gate_unavailable", "The replica gate has an invalid grant install time.");
     }
   }
-  const pendingGenerations = record3.pendingGenerations;
+  const pendingGenerations = record2.pendingGenerations;
   if (typeof pendingGenerations !== "object" || pendingGenerations === null || Array.isArray(pendingGenerations)) {
     throw gateRefusal("gate_unavailable", "The replica gate file has an invalid pending generation map.");
   }
@@ -6132,18 +6132,18 @@ function parseState(text) {
       throw gateRefusal("gate_unavailable", "The replica gate file has an invalid pending generation.");
     }
   }
-  const eraseDeferred = Object.prototype.hasOwnProperty.call(record3, "eraseDeferred") ? record3.eraseDeferred : false;
-  const deferredPrincipalHash = Object.prototype.hasOwnProperty.call(record3, "deferredPrincipalHash") ? record3.deferredPrincipalHash : null;
-  if (typeof eraseDeferred !== "boolean" || deferredPrincipalHash !== null && (typeof deferredPrincipalHash !== "string" || !/^[0-9a-f]{64}$/.test(deferredPrincipalHash)) || eraseDeferred && (record3.principalHash !== null || deferredPrincipalHash === null)) {
+  const eraseDeferred = Object.prototype.hasOwnProperty.call(record2, "eraseDeferred") ? record2.eraseDeferred : false;
+  const deferredPrincipalHash = Object.prototype.hasOwnProperty.call(record2, "deferredPrincipalHash") ? record2.deferredPrincipalHash : null;
+  if (typeof eraseDeferred !== "boolean" || deferredPrincipalHash !== null && (typeof deferredPrincipalHash !== "string" || !/^[0-9a-f]{64}$/.test(deferredPrincipalHash)) || eraseDeferred && (record2.principalHash !== null || deferredPrincipalHash === null)) {
     throw gateRefusal("gate_unavailable", "The replica gate has an invalid deferred erase state.");
   }
   return {
-    incarnation: record3.incarnation,
-    salt: record3.salt,
-    principalHash: record3.principalHash,
-    lifecycleEpoch: record3.lifecycleEpoch,
-    deniedAt: record3.deniedAt,
-    intents: record3.intents,
+    incarnation: record2.incarnation,
+    salt: record2.salt,
+    principalHash: record2.principalHash,
+    lifecycleEpoch: record2.lifecycleEpoch,
+    deniedAt: record2.deniedAt,
+    intents: record2.intents,
     firstInstall,
     grantInstall,
     pendingGenerations,
@@ -6165,17 +6165,17 @@ async function readStoredState(profileDir) {
   return parseState(text);
 }
 async function readDenyFloor(profileDir) {
-  let record3;
+  let record2;
   try {
-    record3 = JSON.parse(await readFile3(join6(profileDir, DENY_FLOOR_FILE), "utf8"));
+    record2 = JSON.parse(await readFile3(join6(profileDir, DENY_FLOOR_FILE), "utf8"));
   } catch (error) {
     if (isNotFound2(error)) return void 0;
     throw gateRefusal("gate_unavailable", "The replica deny floor cannot be read.");
   }
-  if (typeof record3 !== "object" || record3 === null || Array.isArray(record3) || Object.keys(record3).length !== 2 || !("epoch" in record3) || !("deniedAt" in record3) || !Number.isSafeInteger(record3.epoch) || record3.epoch < 1 || !Number.isSafeInteger(record3.deniedAt) || record3.deniedAt < 0) {
+  if (typeof record2 !== "object" || record2 === null || Array.isArray(record2) || Object.keys(record2).length !== 2 || !("epoch" in record2) || !("deniedAt" in record2) || !Number.isSafeInteger(record2.epoch) || record2.epoch < 1 || !Number.isSafeInteger(record2.deniedAt) || record2.deniedAt < 0) {
     throw gateRefusal("gate_unavailable", "The replica deny floor is malformed.");
   }
-  return { epoch: record3.epoch, deniedAt: record3.deniedAt };
+  return { epoch: record2.epoch, deniedAt: record2.deniedAt };
 }
 function behindFloor(state2, floor) {
   return state2.lifecycleEpoch < floor.epoch || state2.deniedAt === null || state2.deniedAt < floor.deniedAt;
@@ -10316,9 +10316,9 @@ async function planLogoutRevocations(input) {
       throw inventoryError("artifact file", "invalid JSON");
     }
     if (!Array.isArray(records)) throw inventoryError("artifact file", "expected an array of signed grants");
-    for (const record3 of records) {
-      const cid = record3 && typeof record3 === "object" && "delegationCid" in record3 && typeof record3.delegationCid === "string" ? record3.delegationCid : "artifact entry";
-      const delegation = record3 && typeof record3 === "object" && "delegation" in record3 ? record3.delegation : void 0;
+    for (const record2 of records) {
+      const cid = record2 && typeof record2 === "object" && "delegationCid" in record2 && typeof record2.delegationCid === "string" ? record2.delegationCid : "artifact entry";
+      const delegation = record2 && typeof record2 === "object" && "delegation" in record2 ? record2.delegation : void 0;
       const authorization = delegation && typeof delegation === "object" && "delegationHeader" in delegation && delegation.delegationHeader && typeof delegation.delegationHeader === "object" && "Authorization" in delegation.delegationHeader ? delegation.delegationHeader.Authorization : void 0;
       if (!cid || !delegation || typeof delegation !== "object" || !("cid" in delegation) || delegation.cid !== cid || typeof authorization !== "string") throw inventoryError(cid, "the issued grant record is malformed");
       let owner;
@@ -10347,16 +10347,16 @@ async function planLogoutRevocations(input) {
   const historyText = await optionalFile(join11(root, "auth-grants.jsonl"));
   if (historyText !== null) {
     for (const line of historyText.split("\n").filter((row) => row.trim().length > 0)) {
-      let record3;
+      let record2;
       try {
-        record3 = JSON.parse(line);
+        record2 = JSON.parse(line);
       } catch {
         throw inventoryError("history file", "invalid JSONL");
       }
-      if (!record3 || typeof record3 !== "object" || !("source" in record3) || typeof record3.source !== "string") {
+      if (!record2 || typeof record2 !== "object" || !("source" in record2) || typeof record2.source !== "string") {
         throw inventoryError("history file", "malformed history row");
       }
-      const cid = "delegationCid" in record3 ? record3.delegationCid : void 0;
+      const cid = "delegationCid" in record2 ? record2.delegationCid : void 0;
       if (cid === void 0) continue;
       if (typeof cid !== "string" || !cid) throw inventoryError("history file", "invalid CID");
       if (cid !== sessionCid && !included.has(cid) && !foreign.has(cid)) unresolved.add(cid);
@@ -11435,8 +11435,8 @@ function deviceAuthRateLimit(response) {
 }
 function publicSessionJwk(value) {
   const publicJwk = publicJwkForDelegation(value);
-  const record3 = publicJwk;
-  if (record3.kty !== "OKP" || record3.crv !== "Ed25519" || typeof record3.x !== "string") {
+  const record2 = publicJwk;
+  if (record2.kty !== "OKP" || record2.crv !== "Ed25519" || typeof record2.x !== "string") {
     throw new Error("CLI session key is not a public Ed25519 JWK");
   }
   return publicJwk;
@@ -12064,8 +12064,8 @@ function ownerDidFromSpace(spaceId) {
   if (!owner) return void 0;
   return owner.startsWith("did:") ? owner : `did:${owner}`;
 }
-async function cidBoundOwnerSpace(record3, ownerDid, node, host) {
-  const { delegation } = record3;
+async function cidBoundOwnerSpace(record2, ownerDid, node, host) {
+  const { delegation } = record2;
   const authorization = delegation.delegationHeader?.Authorization;
   if (typeof authorization !== "string" || typeof delegation.cid !== "string") return void 0;
   if (!delegation.siweProof && withoutBearer2(authorization).split(".").length === 3) {
@@ -12083,7 +12083,7 @@ async function cidBoundOwnerSpace(record3, ownerDid, node, host) {
     return void 0;
   }
   if (!node || !delegation.siweProof) return void 0;
-  const inspected = await inspectStoredDelegation(record3, { node, host: host ?? delegation.host });
+  const inspected = await inspectStoredDelegation(record2, { node, host: host ?? delegation.host });
   if (inspected.local !== "verified" || inspected.cid !== delegation.cid) return void 0;
   for (const permission of inspected.effectivePermissions) {
     const space = permission.space;
@@ -13467,9 +13467,9 @@ ${signInAgainHint(ctx.profile, posture ?? void 0)}
       let activated = false;
       let permissions = imported.permissions;
       if (targetsSessionKey) {
-        let record3;
+        let record2;
         try {
-          record3 = await activateUnboundImport(
+          record2 = await activateUnboundImport(
             node,
             imported.delegation,
             ctx.host
@@ -13485,21 +13485,21 @@ ${signInAgainHint(ctx.profile, posture ?? void 0)}
           if (bootstrap) await bootstrap.abandon(refusal);
           throw refusal;
         }
-        await appendAdditionalDelegation(ctx.profile, record3);
-        importExpiry = record3.delegation.expiry;
-        permissions = record3.permissions;
+        await appendAdditionalDelegation(ctx.profile, record2);
+        importExpiry = record2.delegation.expiry;
+        permissions = record2.permissions;
         activated = true;
       } else {
-        const record3 = storedAdditionalDelegation(
+        const record2 = storedAdditionalDelegation(
           { ...imported.delegation, expiry: importExpiry },
           imported.permissions
         );
         if (!targetsSessionKey && kind === "compact") {
-          if (!await appendAdditionalDelegationIfUnexpired(ctx.profile, record3, signedExpiry)) {
+          if (!await appendAdditionalDelegationIfUnexpired(ctx.profile, record2, signedExpiry)) {
             throw delegationExpiredError();
           }
         } else {
-          await appendAdditionalDelegation(ctx.profile, record3);
+          await appendAdditionalDelegation(ctx.profile, record2);
         }
       }
       await appendGrantHistory(ctx.profile, {
@@ -16469,8 +16469,8 @@ async function storedGrants(profile) {
   const records = await readAdditionalDelegations2(profile).catch(
     () => []
   );
-  for (const record3 of records) {
-    const authorization = record3.delegation?.delegationHeader?.Authorization;
+  for (const record2 of records) {
+    const authorization = record2.delegation?.delegationHeader?.Authorization;
     if (typeof authorization === "string") authorizations.push(authorization);
   }
   const grants = [];
@@ -16716,7 +16716,7 @@ async function replicationPartitions(profile, root) {
     const partition = await withPinnedLocalDirectory(profile, root, entry.name, async (pinned) => {
       const identity = await readReportJson(profile, pinned, "identity.json");
       const pending = await readReportJson(profile, pinned, "pending.json");
-      const pinnedCount = pending?.records?.filter((record3) => record3.state === "in_flight" || record3.state === "ambiguous").length ?? 0;
+      const pinnedCount = pending?.records?.filter((record2) => record2.state === "in_flight" || record2.state === "ambiguous").length ?? 0;
       return {
         idHash: entry.name,
         host: typeof identity?.host === "string" ? identity.host : null,
@@ -17787,9 +17787,9 @@ function shouldRequestSecretPermissions(error) {
   return /permission|session expired|autosign|capabilit/i.test(error.message);
 }
 function thrownPermissionError(error) {
-  const record3 = error;
-  const message = typeof record3?.message === "string" ? record3.message : String(error);
-  const code4 = typeof record3?.code === "string" ? record3.code : "PERMISSION_DENIED";
+  const record2 = error;
+  const message = typeof record2?.message === "string" ? record2.message : String(error);
+  const code4 = typeof record2?.code === "string" ? record2.code : "PERMISSION_DENIED";
   if (code4 !== "PERMISSION_DENIED" && !/permission|session expired|autosign|capabilit/i.test(message)) {
     return null;
   }
@@ -18112,10 +18112,10 @@ async function readDelegatedSecretValue(params) {
   return parseDecryptedSecretPayload(decrypted.data, params.secretPath);
 }
 function isStoredSessionExpired(session) {
-  const record3 = session;
-  const direct = parseDate(record3.expiresAt ?? record3.expiry ?? record3.expirationTime);
+  const record2 = session;
+  const direct = parseDate(record2.expiresAt ?? record2.expiry ?? record2.expirationTime);
   if (direct) return direct.getTime() <= Date.now();
-  const signedOrSiweExpiry = sessionExpiresAt(record3);
+  const signedOrSiweExpiry = sessionExpiresAt(record2);
   return signedOrSiweExpiry !== null && Date.parse(signedOrSiweExpiry) <= Date.now();
 }
 function parseDate(value) {
@@ -24057,15 +24057,15 @@ function parseArtifactManifest(bytes) {
     throw new ArtifactError("corrupt", "artifact manifest is malformed");
   };
   if (value === null || typeof value !== "object" || Array.isArray(value)) return fail();
-  const record3 = value;
+  const record2 = value;
   const allowed = ["v", "files", "createdAt", "parent", "note"];
-  if (Object.keys(record3).some((key) => !allowed.includes(key)) || record3.v !== ARTIFACT_MANIFEST_VERSION) return fail();
-  if (!Array.isArray(record3.files) || record3.files.length === 0) return fail();
-  if (typeof record3.createdAt !== "string" || Number.isNaN(Date.parse(record3.createdAt))) return fail();
-  if (record3.parent !== null && (typeof record3.parent !== "number" || !Number.isSafeInteger(record3.parent) || record3.parent < 1)) return fail();
-  if (record3.note !== void 0 && (typeof record3.note !== "string" || record3.note.length > 1024)) return fail();
+  if (Object.keys(record2).some((key) => !allowed.includes(key)) || record2.v !== ARTIFACT_MANIFEST_VERSION) return fail();
+  if (!Array.isArray(record2.files) || record2.files.length === 0) return fail();
+  if (typeof record2.createdAt !== "string" || Number.isNaN(Date.parse(record2.createdAt))) return fail();
+  if (record2.parent !== null && (typeof record2.parent !== "number" || !Number.isSafeInteger(record2.parent) || record2.parent < 1)) return fail();
+  if (record2.note !== void 0 && (typeof record2.note !== "string" || record2.note.length > 1024)) return fail();
   const seen = /* @__PURE__ */ new Set();
-  const files = record3.files.map((entry) => {
+  const files = record2.files.map((entry) => {
     if (entry === null || typeof entry !== "object" || Array.isArray(entry)) return fail();
     const file = entry;
     if (Object.keys(file).some((key) => !["path", "sha256", "bytes"].includes(key))) return fail();
@@ -24083,9 +24083,9 @@ function parseArtifactManifest(bytes) {
   return {
     v: ARTIFACT_MANIFEST_VERSION,
     files,
-    createdAt: record3.createdAt,
-    parent: record3.parent,
-    ...record3.note === void 0 ? {} : { note: record3.note }
+    createdAt: record2.createdAt,
+    parent: record2.parent,
+    ...record2.note === void 0 ? {} : { note: record2.note }
   };
 }
 async function listArtifactVersions(store, artifactId) {
@@ -29784,21 +29784,21 @@ async function parseSealedInlineShareUrl(url, options = {}) {
     throw new TypeError("sealed inline payload is not valid JSON");
   }
   if (typeof value !== "object" || value === null || Array.isArray(value) || canonicalize(value) !== payloadText) throw new TypeError("sealed inline payload is not canonical JSON");
-  const record3 = value;
-  if (Object.keys(record3).length !== 4 || record3.v !== 2 || typeof record3.c !== "string" || typeof record3.cid !== "string" || typeof record3.k !== "string") throw new TypeError("sealed inline payload has invalid fields");
+  const record2 = value;
+  if (Object.keys(record2).length !== 4 || record2.v !== 2 || typeof record2.c !== "string" || typeof record2.cid !== "string" || typeof record2.k !== "string") throw new TypeError("sealed inline payload has invalid fields");
   let ciphertext;
   let key32;
   try {
-    ciphertext = fromBase64Url2(record3.c);
-    key32 = fromBase64Url2(record3.k);
+    ciphertext = fromBase64Url2(record2.c);
+    key32 = fromBase64Url2(record2.k);
   } catch {
     throw new TypeError("sealed inline payload has invalid base64url material");
   }
   if (ciphertext.byteLength === 0 || ciphertext.byteLength > MAX_INLINE_BYTES2) throw new TypeError("sealed inline ciphertext is outside the allowed size");
   if (key32.byteLength !== KEY_LENGTH2) throw new TypeError("sealed inline key must be 32 bytes");
-  assertCanonicalCid(record3.cid);
-  if (await computeCid(ciphertext) !== record3.cid) throw new TypeError("sealed inline ciphertext does not match its CID");
-  return { kind: "inline", ciphertextCid: record3.cid, ciphertext, key32 };
+  assertCanonicalCid(record2.cid);
+  if (await computeCid(ciphertext) !== record2.cid) throw new TypeError("sealed inline ciphertext does not match its CID");
+  return { kind: "inline", ciphertextCid: record2.cid, ciphertext, key32 };
 }
 var ARTIFACT_ROOT2 = "artifacts";
 function parseArtifactVersionPath2(path) {
@@ -31002,16 +31002,16 @@ var ShareNotifyError = class extends Error {
   }
   code = "delivery-failed";
 };
-function recipientMatchesShareRecord(record3, recipient) {
-  const matcher = record3.recipientMatcher;
+function recipientMatchesShareRecord(record2, recipient) {
+  const matcher = record2.recipientMatcher;
   const mailbox = canonicalMailbox(recipient);
   if (mailbox === void 0) return false;
   if (matcher.kind === "exactEmail") return canonicalMailbox(matcher.value)?.email === mailbox.email;
   if (matcher.kind === "emailDomain") return mailbox.domain === matcher.value;
   return false;
 }
-function shareDeliveryWindowExpiresAt(record3) {
-  const expiresAt = Math.min(Date.parse(record3.expiresAt), Date.parse(record3.registeredAt) + 5 * 60 * 1e3);
+function shareDeliveryWindowExpiresAt(record2) {
+  const expiresAt = Math.min(Date.parse(record2.expiresAt), Date.parse(record2.registeredAt) + 5 * 60 * 1e3);
   if (!Number.isFinite(expiresAt)) throw new ShareNotifyError("share delivery history has invalid timestamps");
   return expiresAt;
 }
@@ -31088,17 +31088,17 @@ async function defaultIdempotencyKey(shareId, recipient) {
   ));
   return `tinycloud-share:${shareId}:${toBase64Url(digest3)}`;
 }
-function targetKind2(record3) {
-  if (record3.targetKind !== void 0) return record3.targetKind;
-  return record3.recipientMatcher.kind === "exactEmail" ? "email" : record3.recipientMatcher.kind === "emailDomain" ? "emailDomain" : record3.recipientMatcher.kind === "recipientDid" ? "recipientDid" : "bearer";
+function targetKind2(record2) {
+  if (record2.targetKind !== void 0) return record2.targetKind;
+  return record2.recipientMatcher.kind === "exactEmail" ? "email" : record2.recipientMatcher.kind === "emailDomain" ? "emailDomain" : record2.recipientMatcher.kind === "recipientDid" ? "recipientDid" : "bearer";
 }
-function policyNodeAudience(record3) {
-  const envelope = record3.deliveryMaterial?.envelope;
-  if (typeof envelope !== "object" || envelope === null || Array.isArray(envelope)) return record3.target.nodeAudience;
+function policyNodeAudience(record2) {
+  const envelope = record2.deliveryMaterial?.envelope;
+  if (typeof envelope !== "object" || envelope === null || Array.isArray(envelope)) return record2.target.nodeAudience;
   const binding = envelope.attestedEnforcerBinding;
-  if (typeof binding !== "object" || binding === null || Array.isArray(binding)) return record3.target.nodeAudience;
+  if (typeof binding !== "object" || binding === null || Array.isArray(binding)) return record2.target.nodeAudience;
   const nodeAudience = binding.nodeAudience;
-  return typeof nodeAudience === "string" ? nodeAudience : record3.target.nodeAudience;
+  return typeof nodeAudience === "string" ? nodeAudience : record2.target.nodeAudience;
 }
 async function revokeShare(input) {
   const target = targetKind2(input.record);
@@ -31122,7 +31122,7 @@ async function revokeShare(input) {
   }
   let revokedAt = input.record.revokedAt ?? (input.now?.() ?? /* @__PURE__ */ new Date()).toISOString();
   if (input.records?.update !== void 0) {
-    const updated = await input.records.update(input.record.shareId, (record3) => ({ ...record3, revokedAt: record3.revokedAt ?? revokedAt }));
+    const updated = await input.records.update(input.record.shareId, (record2) => ({ ...record2, revokedAt: record2.revokedAt ?? revokedAt }));
     revokedAt = updated?.revokedAt ?? revokedAt;
   } else if (input.records !== void 0) {
     const latest = await input.records.get(input.record.shareId);
@@ -31131,26 +31131,26 @@ async function revokeShare(input) {
   }
   return { state: "revoked", target, delegationCid, revokedAt };
 }
-function redactRecord(record3, revealLink, link3) {
-  const matcher = record3.recipientMatcher;
-  const revealedLink = revealLink ? link3 ?? record3.link : void 0;
+function redactRecord(record2, revealLink, link3) {
+  const matcher = record2.recipientMatcher;
+  const revealedLink = revealLink ? link3 ?? record2.link : void 0;
   return {
-    shareId: record3.shareId,
+    shareId: record2.shareId,
     target: matcher.kind === "exactEmail" ? "email" : matcher.kind === "emailDomain" ? "email-domain" : matcher.kind === "recipientDid" ? "recipient-did" : "bearer",
     ...matcher.kind === "exactEmail" ? { recipient: matcher.value } : matcher.kind === "emailDomain" ? { recipient: `*@${matcher.value}` } : matcher.kind === "recipientDid" ? { recipient: matcher.value } : {},
-    expiresAt: record3.expiresAt,
-    revoked: record3.revokedAt !== void 0,
+    expiresAt: record2.expiresAt,
+    revoked: record2.revokedAt !== void 0,
     ...revealedLink === void 0 ? {} : { link: revealedLink }
   };
 }
 async function listShares(storage) {
   const records = await storage.list();
-  return records.map((record3) => redactRecord(record3, false));
+  return records.map((record2) => redactRecord(record2, false));
 }
 async function showShare(input) {
-  const record3 = await input.storage.get(input.shareId);
-  if (record3 === void 0) throw new Error("share not found");
-  return redactRecord(record3, input.revealLink === true, input.link);
+  const record2 = await input.storage.get(input.shareId);
+  if (record2 === void 0) throw new Error("share not found");
+  return redactRecord(record2, input.revealLink === true, input.link);
 }
 var SHARE_V2_PROTOCOL = Object.freeze({
   challengeDomain: "xyz.tinycloud.share/policy-challenge/v2\0",
@@ -36545,60 +36545,6 @@ var MAX_INLINE_BYTES3 = 256 * 1024;
 import { ProfileLockTimeoutError as ProfileLockTimeoutError3 } from "@tinycloud/operations/state";
 init_errors();
 
-// src/share/failure-class.ts
-init_constants();
-import { authorizationVerdictOf as authorizationVerdictOf2 } from "@tinycloud/sdk-core";
-var NETWORK_FAILURE = /\b(?:fetch failed|ECONNREFUSED|ECONNRESET|ETIMEDOUT|ENOTFOUND|EAI_AGAIN|UND_ERR_[A-Z_]+)\b|network ?error|failed to fetch/i;
-function record2(value) {
-  return typeof value === "object" && value !== null ? value : void 0;
-}
-function httpStatus(value) {
-  const status = typeof value === "number" && Number.isInteger(value) && value >= 400 && value <= 599 ? value : void 0;
-  return status;
-}
-function statusOf(error, depth = 0) {
-  const fields = record2(error);
-  if (fields === void 0) return void 0;
-  const direct = httpStatus(fields.status) ?? httpStatus(fields.statusCode) ?? httpStatus(record2(fields.meta)?.status);
-  return direct ?? (depth === 0 ? statusOf(fields.cause, 1) : void 0);
-}
-function codeOf(error) {
-  const code4 = record2(error)?.code;
-  return typeof code4 === "string" && /^[A-Z][A-Z0-9_]{2,63}$/.test(code4) ? code4 : void 0;
-}
-function classifyShareFailure(error, loginHint) {
-  const status = statusOf(error);
-  const verdict = authorizationVerdictOf2(error);
-  const message = error instanceof Error ? error.message : "";
-  const code4 = codeOf(error);
-  const detail = (text) => {
-    const parts = [status === void 0 ? void 0 : `HTTP ${status}`, code4].filter((part) => part !== void 0);
-    return parts.length === 0 ? text : `${text} (${parts.join(", ")})`;
-  };
-  if (verdict === "unauthenticated" || status === 401) {
-    return { code: "AUTH_REQUIRED", exitCode: ExitCode.AUTH_REQUIRED, reason: detail(`the node did not accept this session; sign in again with ${loginHint}`) };
-  }
-  if (verdict === "forbidden" || status === 403) {
-    return { code: "PERMISSION_DENIED", exitCode: ExitCode.PERMISSION_DENIED, reason: detail("the node refused this session's authority for the request") };
-  }
-  if (status === 404) {
-    return { code: "NOT_FOUND", exitCode: ExitCode.NOT_FOUND, reason: detail("the node could not find what the request names") };
-  }
-  if (status !== void 0 && (status >= 500 || status === 408 || status === 429)) {
-    return { code: "NODE_UNAVAILABLE", exitCode: ExitCode.NODE_ERROR, reason: detail("the node could not complete the request; try again shortly") };
-  }
-  if (status === 400 || status === 422) {
-    return { code: "INVALID_ARGUMENT", exitCode: ExitCode.USAGE_ERROR, reason: detail("the node rejected the request as invalid") };
-  }
-  if (status !== void 0) {
-    return { code: "NODE_REJECTED", exitCode: ExitCode.ERROR, reason: detail("the node rejected the request") };
-  }
-  if (NETWORK_FAILURE.test(message) || typeof record2(error)?.code === "string" && NETWORK_FAILURE.test(String(record2(error)?.code))) {
-    return { code: "NETWORK_ERROR", exitCode: ExitCode.NETWORK_ERROR, reason: "the TinyCloud node could not be reached; check the connection and retry" };
-  }
-  return void 0;
-}
-
 // src/share/output.ts
 function writeJson2(value) {
   process.stdout.write(`${JSON.stringify(value, null, 2)}
@@ -36766,8 +36712,8 @@ async function writeShareOutput(directory, filename, bytes, force) {
 
 // src/share/errors.ts
 var SharePublishAuthorityError = class extends Error {
-  constructor(failure, options) {
-    super(failure.kind, options);
+  constructor(failure) {
+    super(failure.kind);
     this.failure = failure;
     this.name = "SharePublishAuthorityError";
   }
@@ -36882,17 +36828,6 @@ function shareCliError(error, operation = "publish") {
     if (failure.kind === "storage-full") {
       return storageFullError(failure);
     }
-    if (failure.kind === "space-not-ready") {
-      return Object.assign(
-        new CLIError(
-          "SPACE_NOT_READY",
-          "Your TinyCloud space isn't ready for this yet (SPACE_NOT_READY). This is a known node problem being fixed: retry after the node update; contact support with this code if it persists.",
-          4,
-          { hint: "Nothing was shared, and repeating the command is safe. Retries keep failing until the node is updated." }
-        ),
-        { cause: error.cause }
-      );
-    }
     if (failure.kind === "upload-failed") {
       return new CLIError("UPLOAD_FAILED", "share source upload failed; nothing was shared", 4);
     }
@@ -36926,10 +36861,8 @@ function shareCliError(error, operation = "publish") {
   };
   if (nodeCode === "ENOENT") return new CLIError("INVALID_ARGUMENT", "share input was not found", 2);
   if (nodeCode === "EISDIR") return new CLIError("INVALID_ARGUMENT", "share input must be a Markdown file", 2);
-  const mapped = typeof nodeCode === "string" && known[nodeCode] !== void 0 ? known[nodeCode] : known[message];
-  const classified = mapped === void 0 ? classifyShareFailure(error, `\`${CLI_NAME27} auth login\``) : void 0;
-  if (classified !== void 0) return Object.assign(new CLIError(classified.code, classified.reason, classified.exitCode), { cause: error });
   if (error instanceof TypeError) return new CLIError("INVALID_ARGUMENT", "share input is invalid", 2);
+  const mapped = typeof nodeCode === "string" && known[nodeCode] !== void 0 ? known[nodeCode] : known[message];
   return new CLIError(mapped?.code ?? "INVALID_ARGUMENT", mapped ? mapped.code : "share operation failed", mapped?.exit ?? 2);
 }
 function inputUrl(value, stdin) {
@@ -36957,24 +36890,24 @@ function expires(value) {
   }
 }
 async function rememberPublishedShare(result) {
-  const record3 = historyRecordForPublishedShare(result);
-  if (shareServices.records === void 0) return { record: record3, recorded: false };
+  const record2 = historyRecordForPublishedShare(result);
+  if (shareServices.records === void 0) return { record: record2, recorded: false };
   try {
-    await shareServices.records.put(record3);
-    return { record: record3, recorded: true };
+    await shareServices.records.put(record2);
+    return { record: record2, recorded: true };
   } catch {
     process.stderr.write("Warning: share was published but not recorded in sender history; future share list, share notify, and share revoke by ID will not find it.\n");
-    return { record: record3, recorded: false };
+    return { record: record2, recorded: false };
   }
 }
-async function notifyRecordedShare(record3, recipient, adapter, storage) {
-  const result = await notifyShare({ shareId: record3.shareId, recipient, record: record3, adapter, checkDeliveryWindow: true });
+async function notifyRecordedShare(record2, recipient, adapter, storage) {
+  const result = await notifyShare({ shareId: record2.shareId, recipient, record: record2, adapter, checkDeliveryWindow: true });
   if (result.state !== "partial-failure" && storage !== void 0) {
     const mailbox = canonicalMailbox2(recipient).email;
-    if (!record3.deliveredRecipients?.includes(mailbox)) {
+    if (!record2.deliveredRecipients?.includes(mailbox)) {
       try {
         if (storage.update === void 0) throw new Error("atomic sender history update is unavailable");
-        const updated = await storage.update(record3.shareId, (current) => ({
+        const updated = await storage.update(record2.shareId, (current) => ({
           ...current,
           deliveredRecipients: current.deliveredRecipients?.includes(mailbox) ? current.deliveredRecipients : [...current.deliveredRecipients ?? [], mailbox]
         }));
@@ -37068,11 +37001,11 @@ function registerShareCommand(program) {
         }
         throw new CLIError(result.method === "openkey-device" ? "DEVICE_AUTH_REQUIRED" : "CLAIM_REQUIRED", "recipient authorization is required; continue through the configured authority adapter", 6);
       }
-      const { record: record3, recorded } = await rememberPublishedShare(result);
+      const { record: record2, recorded } = await rememberPublishedShare(result);
       let notification;
       if (notifyRecipient !== void 0) {
         if (shareServices.delivery === void 0) throw new CLIError("AUTH_REQUIRED", "delivery authority is not configured", 3);
-        notification = await notifyRecordedShare(record3, notifyRecipient, shareServices.delivery, recorded ? shareServices.records : void 0);
+        notification = await notifyRecordedShare(record2, notifyRecipient, shareServices.delivery, recorded ? shareServices.records : void 0);
         if (notification.state === "partial-failure") process.exitCode = 9;
         if (notification.reason === "delivery-window-expired") process.stderr.write(NOTIFY_WINDOW_MESSAGE);
       }
@@ -37105,11 +37038,11 @@ function registerShareCommand(program) {
       if (shareServices.artifactStore === void 0) throw new CLIError("AUTH_REQUIRED", "artifact storage is not configured", 3);
       const versions = await listArtifactVersions(await shareServices.artifactStore(), id);
       const pinned = /* @__PURE__ */ new Map();
-      for (const record3 of await shareServices.records?.list() ?? []) {
-        const path = parseArtifactVersionPath(record3.resource.path);
+      for (const record2 of await shareServices.records?.list() ?? []) {
+        const path = parseArtifactVersionPath(record2.resource.path);
         if (path === void 0 || path.artifactId !== id) continue;
         const shares = pinned.get(path.version) ?? [];
-        shares.push({ shareId: record3.shareId, target: record3.targetKind ?? record3.recipientMatcher.kind, expiresAt: record3.expiresAt, ...record3.revokedAt === void 0 ? {} : { revokedAt: record3.revokedAt } });
+        shares.push({ shareId: record2.shareId, target: record2.targetKind ?? record2.recipientMatcher.kind, expiresAt: record2.expiresAt, ...record2.revokedAt === void 0 ? {} : { revokedAt: record2.revokedAt } });
         pinned.set(path.version, shares);
       }
       const view = versions.map((version) => ({
@@ -37209,19 +37142,19 @@ function registerShareCommand(program) {
       const json = jsonOutput(options, command);
       if (shareServices.delivery === void 0) throw new CLIError("AUTH_REQUIRED", "delivery authority is not configured", 3);
       if (shareServices.records === void 0) throw new CLIError("AUTH_REQUIRED", "sender history storage is not configured", 3);
-      const record3 = await shareServices.records.get(id);
-      if (record3 === void 0) throw new CLIError("NOT_FOUND", "share not found", 4);
-      if (!record3.actions.includes("tinycloud.kv/get")) {
+      const record2 = await shareServices.records.get(id);
+      if (record2 === void 0) throw new CLIError("NOT_FOUND", "share not found", 4);
+      if (!record2.actions.includes("tinycloud.kv/get")) {
         throw new CLIError("INVALID_ARGUMENT", "share notify requires a stored share with the read action; no invitation was sent", 2);
       }
       const mailbox = canonicalMailbox2(options.to);
       if (mailbox === void 0) throw new ShareNotifyError("recipient is invalid");
-      if (!recipientMatchesShareRecord(record3, mailbox.email)) throw new ShareNotifyError("recipient does not match the stored share target");
-      if (record3.recipientMatcher.kind === "emailDomain" && shareDeliveryWindowExpiresAt(record3) > Date.now()) {
+      if (!recipientMatchesShareRecord(record2, mailbox.email)) throw new ShareNotifyError("recipient does not match the stored share target");
+      if (record2.recipientMatcher.kind === "emailDomain" && shareDeliveryWindowExpiresAt(record2) > Date.now()) {
         if (shareServices.assertDomainDelivery === void 0) throw new CLIError("UNAVAILABLE", "could not verify TinyCloud node 1.17.3 domain delivery support; no invitation was sent", 4);
         await shareServices.assertDomainDelivery();
       }
-      const result = await notifyRecordedShare(record3, options.to, shareServices.delivery, shareServices.records);
+      const result = await notifyRecordedShare(record2, options.to, shareServices.delivery, shareServices.records);
       if (json) writeJson2(result);
       else process.stdout.write(`${result.state}
 `);
@@ -37235,9 +37168,9 @@ function registerShareCommand(program) {
     try {
       const json = jsonOutput(options, command);
       if (shareServices.records === void 0) throw new CLIError("AUTH_REQUIRED", "sender history storage is not configured", 3);
-      const record3 = shareServices.getRecord ? await shareServices.getRecord(id) : await shareServices.records.get(id);
-      if (record3 === void 0) throw new CLIError("NOT_FOUND", "share not found", 4);
-      const result = await revokeShare({ record: record3, records: shareServices.records, adapter: shareServices.revocation, scope: options.ancestor ? "ancestor" : "direct" });
+      const record2 = shareServices.getRecord ? await shareServices.getRecord(id) : await shareServices.records.get(id);
+      if (record2 === void 0) throw new CLIError("NOT_FOUND", "share not found", 4);
+      const result = await revokeShare({ record: record2, records: shareServices.records, adapter: shareServices.revocation, scope: options.ancestor ? "ancestor" : "direct" });
       if (result.state === "unsupported") {
         throw new CLIError("UNSUPPORTED_TARGET", result.reason, 2);
       }
@@ -37891,12 +37824,12 @@ function sessionPermissionsFromRecap(session) {
   }
 }
 function permissionFromRawRecap(value) {
-  const record3 = asRecord(value);
-  if (!record3) return null;
-  const service = stringValue(record3.service);
-  const space = stringValue(record3.space);
-  const path = stringValue(record3.path);
-  const actions = Array.isArray(record3.actions) ? record3.actions.map(String).filter(Boolean) : [];
+  const record2 = asRecord(value);
+  if (!record2) return null;
+  const service = stringValue(record2.service);
+  const space = stringValue(record2.space);
+  const path = stringValue(record2.path);
+  const actions = Array.isArray(record2.actions) ? record2.actions.map(String).filter(Boolean) : [];
   if (!service || !space || path === null || actions.length === 0) return null;
   return {
     service: normalizeService2(service),
@@ -37914,12 +37847,12 @@ function normalizePermissions(entries) {
   return uniquePermissions(permissions);
 }
 function permissionFromUnknown(value) {
-  const record3 = asRecord(value);
-  if (!record3) return null;
-  const service = stringValue(record3.service);
-  const space = stringValue(record3.space);
-  const path = stringValue(record3.path);
-  const actions = Array.isArray(record3.actions) ? record3.actions.map(String).filter(Boolean) : [];
+  const record2 = asRecord(value);
+  if (!record2) return null;
+  const service = stringValue(record2.service);
+  const space = stringValue(record2.space);
+  const path = stringValue(record2.path);
+  const actions = Array.isArray(record2.actions) ? record2.actions.map(String).filter(Boolean) : [];
   if (!service || !space || path === null || actions.length === 0) return null;
   return {
     service: normalizeService2(service),
