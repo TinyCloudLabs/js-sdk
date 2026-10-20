@@ -189,9 +189,9 @@ export function shareCliError(error: unknown, operation: "publish" | "notify" = 
       return Object.assign(
         new CLIError(
           "SPACE_NOT_READY",
-          "Your TinyCloud space isn't ready yet. We're setting it up: try again in a moment. If it keeps failing, contact support with code SPACE_NOT_READY. Nothing was shared.",
+          "Your TinyCloud space isn't ready for this yet (SPACE_NOT_READY). This is a known node problem being fixed: retry after the node update; contact support with this code if it persists.",
           4,
-          { hint: "Retry in a moment; repeating the command is safe." },
+          { hint: "Nothing was shared, and repeating the command is safe. Retries keep failing until the node is updated." },
         ),
         { cause: error.cause },
       );

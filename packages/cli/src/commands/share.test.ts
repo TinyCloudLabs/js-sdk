@@ -115,7 +115,7 @@ describe("tc share command contract", () => {
     const nodeError = { code: "KV_WRITE_FAILED", message: "Failed to put key: 404 - Space not found", meta: { status: 404 } };
     const notReady = shareCliError(new SharePublishAuthorityError({ kind: "space-not-ready" }, { cause: nodeError }));
     expect(notReady).toMatchObject({ code: "SPACE_NOT_READY", exitCode: 4, cause: nodeError });
-    expect(notReady.message).toBe("Your TinyCloud space isn't ready yet. We're setting it up: try again in a moment. If it keeps failing, contact support with code SPACE_NOT_READY. Nothing was shared.");
+    expect(notReady.message).toBe("Your TinyCloud space isn't ready for this yet (SPACE_NOT_READY). This is a known node problem being fixed: retry after the node update; contact support with this code if it persists.");
     // A bare node 404 reaching the mapper (an unknown share, a missing key) is not SPACE_NOT_READY.
     expect(shareCliError(nodeError).code).not.toBe("SPACE_NOT_READY");
 
