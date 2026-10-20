@@ -129,7 +129,8 @@ describe("unhostedSpaceError", () => {
     expect(out).toBeNull();
   });
 
-  test("owner hint tells them to host directly", async () => {
+  test("a local-key owner, who can sign a host delegation, is told to host directly", async () => {
+    profile = { ...profile, authMethod: "local", posture: "local-owner-key" };
     const out = await unhostedSpaceError(
       err("SQL execute failed: 404 - Space not found", 404),
       OWNED,
@@ -141,6 +142,24 @@ describe("unhostedSpaceError", () => {
     expect(hint).toContain("You are the owner");
     expect(hint).toContain("tc space host applications");
     expect(hint).not.toContain("host-request");
+  });
+
+  test.each([
+    { posture: "owner-openkey" },
+    // No recorded posture on an OpenKey login resolves to owner-openkey.
+    { authMethod: "openkey" },
+  ])("an OpenKey owner (%j) is not sent to `tc space host`, which cannot work for it (TC-1608)", async (fields) => {
+    profile = { ...profile, ...fields };
+    const out = await unhostedSpaceError(
+      err("SQL execute failed: 404 - Space not found", 404),
+      OWNED,
+      "cli-test",
+    );
+    expect(out).not.toBeNull();
+    expect(out!.code).toBe("SPACE_NOT_HOSTED");
+    expect(out!.metadata?.hint).toBe(
+      "OpenKey is still setting up your space. Wait a minute and retry; approving again in OpenKey re-runs the setup.",
+    );
   });
 
   test("delegate hint tells them they cannot host and to emit a host-request", async () => {

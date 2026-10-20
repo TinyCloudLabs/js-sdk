@@ -4,7 +4,7 @@ import {
   type LocalNodeIdentityStore,
 } from "@tinycloud/sdk-core";
 import { ProfileManager } from "../config/profiles.js";
-import { ExitCode } from "../config/constants.js";
+import { ExitCode, OPENKEY_SPACE_SETUP_RETRY_HINT } from "../config/constants.js";
 import { resolveProfilePosture, type CLIContext, type ProfileConfig } from "../config/types.js";
 import { CLIError } from "../output/errors.js";
 import { resolveSpaceUri } from "./space.js";
@@ -215,7 +215,12 @@ export async function unhostedSpaceError(
 
   const spaceName = spaceNameFromUri(spaceUri);
   const owner = await isRootAuthority(spaceUri, profileName);
-  const hint = owner
+  // `tc space host` signs a host delegation, which an OpenKey session cannot
+  // (TinyCloudNode.hostOwnedSpace needs a signer). OpenKey hosts the space itself.
+  const openKeyOwner = owner && resolveProfilePosture(await ProfileManager.getProfile(profileName)) === "owner-openkey";
+  const hint = openKeyOwner
+    ? `OpenKey is still setting up your space. ${OPENKEY_SPACE_SETUP_RETRY_HINT}`
+    : owner
     ? [
         "You are the owner. Host it once:",
         `  ${CLI_NAME} space host ${spaceName}`,
