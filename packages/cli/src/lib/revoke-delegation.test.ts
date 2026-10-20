@@ -69,25 +69,38 @@ test("CID-bound fallback reads a valid compact signature, including Bearer heade
   expect(await cidBoundOwnerSpace(bearer, fixture.ownerDid, fixture.delegate)).toBe(record.delegation.spaceId);
 });
 
-test("CID-bound fallback binds a whole-space grant whose signed resource has no path", async () => {
+/** A signed compact grant whose only resource is `resource`. */
+async function recordSignedFor(resource: string) {
   const record = await compactRecord();
   const issuer = createUcanIssuer();
   const authorization = signUcan(issuer, {
     aud: fixture.delegate.sessionDid.split("#", 1)[0],
     exp: Math.floor(Date.now() / 1000) + 3_600,
-    att: { [`${fixture.applicationsSpaceId}/kv`]: { "tinycloud.kv/get": [{}], "tinycloud.kv/list": [{}] } },
+    att: { [resource]: { "tinycloud.kv/get": [{}], "tinycloud.kv/list": [{}] } },
     prf: ["bafyparent"],
   }, {
     alg: "EdDSA", typ: "JWT", ucv: "0.10.0",
     jwk: { kty: "OKP", crv: "Ed25519", x: Buffer.from(issuer.publicBytes).toString("base64url") },
   });
-  const wholeSpace = { ...record, delegation: {
+  return { ...record, delegation: {
     ...record.delegation,
     cid: fixture.delegate.computeDelegationCid(authorization),
     delegationHeader: { Authorization: authorization },
     spaceId: fixture.applicationsSpaceId,
   } };
+}
+
+test("CID-bound fallback binds a whole-space grant whose signed resource has no path", async () => {
+  const wholeSpace = await recordSignedFor(`${fixture.applicationsSpaceId}/kv`);
   expect(await cidBoundOwnerSpace(wholeSpace, fixture.ownerDid, fixture.delegate)).toBe(fixture.applicationsSpaceId);
+});
+
+test("CID-bound fallback still refuses a signed resource that names no service in a space", async () => {
+  const space = fixture.applicationsSpaceId;
+  for (const resource of [space, `${space}/`, `${space}//kv`, `urn:tinycloud:encryption:x/kv`, `tinycloud:/kv`]) {
+    const record = await recordSignedFor(resource);
+    expect(await cidBoundOwnerSpace(record, fixture.ownerDid, fixture.delegate)).toBeUndefined();
+  }
 });
 
 test("CID-bound fallback refuses corrupt signatures and foreign-owned signed spaces", async () => {

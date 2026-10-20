@@ -126,10 +126,12 @@ import { approvalNotices } from "../lib/approval-notices.js";
 import {
   APPS_AGENT_EXPIRY,
   APPS_AGENT_EXPIRY_DAYS,
+  APPS_AGENT_MAX_APPS,
   APPS_AGENT_PRESET,
+  APPS_AGENT_SPACE,
   appsAgentPermissions,
   appsAgentScopeNotice,
-  matchAppsAgentRequest,
+  describeGrantScope,
   resolveAppsAgentRequest,
 } from "../lib/apps-agent-preset.js";
 import { buildReplicationLoginRequest, type ReplicationLoginOptions } from "../auth/replication-login.js";
@@ -903,9 +905,15 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
     .option("--device", "With --grant: approve on another device (e.g. a phone) through OpenKey device authorization (KV-scoped; SQL needs browser login)")
     .option(
       "--preset <name>",
-      `Request a named permission set instead of --cap: ${APPS_AGENT_PRESET} (kv get/list/put + sql read/write on the applications space, ${APPS_AGENT_EXPIRY_DAYS} days)`,
+      `Request a named permission set instead of --cap: ${APPS_AGENT_PRESET} is READ-ONLY on the applications space (kv get/list + sql read, ${APPS_AGENT_EXPIRY_DAYS} days); add --write --app <app_id> for write access to named apps`,
     )
-    .option("--app <app_id>", "With --preset apps-agent: limit the grant to this app (its <app_id>/ prefix); recommended")
+    .option(
+      "--app <app_id>",
+      `With --preset ${APPS_AGENT_PRESET}: limit the grant to this app's <app_id>/ prefix (recommended); repeat for up to ${APPS_AGENT_MAX_APPS} apps`,
+      (value: string, previous: string[]) => [...previous, value],
+      [],
+    )
+    .option("--write", `With --preset ${APPS_AGENT_PRESET}: also allow writes (kv put + sql write) in the named --app apps. SQL write can also change or drop those apps' tables`)
     .option("--paste", "With --grant on an OpenKey profile: wait up to 5 minutes for a signed code from OpenKey on stdin instead of a browser callback (use when the browser cannot reach this CLI)")
     .action(async (options, cmd) => {
       try {
@@ -922,10 +930,10 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
         const preset = resolveAppsAgentRequest(options);
         const requested = preset === undefined
           ? await collectRequestedPermissions(options, ctx.profile)
-          : await resolvePermissionSpaces(appsAgentPermissions(preset.appId), ctx.profile);
+          : await resolvePermissionSpaces(appsAgentPermissions(preset.mode, preset.appIds), ctx.profile);
         const expiryOption = preset === undefined ? parseExpiryOption(options.expiry) : APPS_AGENT_EXPIRY;
         // Before any approval link is printed: the plain-words scope of the grant.
-        if (preset !== undefined) process.stderr.write(`\n${appsAgentScopeNotice(preset.appId)}\n\n`);
+        if (preset !== undefined) process.stderr.write(`\n${appsAgentScopeNotice(preset.mode, preset.appIds)}\n\n`);
 
         if (requested.length === 0) {
           throw new CLIError(
@@ -1285,8 +1293,14 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
         }
 
         const requested = await resolvePermissionSpaces(parsed.requested, ctx.profile);
-        const requestedPreset = matchAppsAgentRequest(requested);
-        if (requestedPreset !== undefined) process.stderr.write(`\n${appsAgentScopeNotice(requestedPreset.appId)}\n\n`);
+        // The owner reads this before signing: it describes the request as it will be signed
+        // (its own permissions and lifetime), never a wording chosen by the requester.
+        const [applications] = await resolvePermissionSpaces(
+          [{ service: "tinycloud.kv", space: APPS_AGENT_SPACE, path: "", actions: ["tinycloud.kv/get"] }],
+          ctx.profile,
+        );
+        const scope = describeGrantScope(requested, parsed.requestedExpiry, applications!.space ?? APPS_AGENT_SPACE);
+        if (scope !== undefined) process.stderr.write(`\n${scope}\n\n`);
         const resolvedRequest = { ...parsed, requested };
         const node = await ensureAuthenticated(ctx);
         await ensureDelegationAuthority({

@@ -1,3 +1,4 @@
+import type { PermissionEntry } from "@tinycloud/node-sdk";
 import { Command } from "commander";
 import { invokeOperation, type OperationResult } from "@tinycloud/operations";
 import { CLI_NAME } from "@tinycloud/operations/cli-name";
@@ -6,9 +7,11 @@ import { withSignInHint } from "../auth/session-expired.js";
 import { ExitCode } from "../config/constants.js";
 import { ProfileManager } from "../config/profiles.js";
 import { APPS_AGENT_PRESET, APPS_AGENT_SPACE } from "../lib/apps-agent-preset.js";
+import { assertKnowledgeAppId, assertKnowledgeConcept } from "../lib/knowledge-input.js";
 import { compactPermission } from "../lib/permissions.js";
 import { CLIError, cliErrorFromService, handleError } from "../output/errors.js";
 import { formatTable, outputJson, shouldOutputJson, withSpinner } from "../output/formatter.js";
+import { safeBlock, safeInline } from "../output/safe-text.js";
 import { theme } from "../output/theme.js";
 
 type KnowledgeResult = OperationResult<unknown>;
@@ -24,15 +27,16 @@ export function registerKnowledgeCommand(program: Command): void {
     .option("--app <app_id>", "Only this app; works with a grant scoped to that app")
     .action(async (options: { app?: string }, cmd: Command) => {
       try {
+        const appId = options.app === undefined ? undefined : assertKnowledgeAppId(options.app);
         const ctx = await ProfileManager.resolveContext(cmd.optsWithGlobals());
         const result = await withSpinner("Listing installed apps...", () =>
           invokeOperation(
             "tinycloud.knowledge.list",
             1,
             { profile: ctx.profile, host: ctx.host, allowOwnerProfile: true },
-            options.app === undefined ? {} : { app_id: options.app },
+            appId === undefined ? {} : { app_id: appId },
           ));
-        if (result.status !== "ok") throw knowledgeFailure(result, ctx.profile);
+        if (result.status !== "ok") throw knowledgeFailure(result, ctx.profile, appId);
         const output = result.output as {
           apps: { app_id: string; name?: string; root: string; has_index: boolean; concepts: string[] }[];
           truncated: boolean;
@@ -45,13 +49,14 @@ export function registerKnowledgeCommand(program: Command): void {
           process.stdout.write(theme.muted("No installed apps with a knowledge bundle found.") + "\n");
           return;
         }
+        // App ids and names are written by other parties: print them escaped.
         process.stdout.write(
           formatTable(
             ["App ID", "Name", "Root", "Concepts"],
             output.apps.map((app) => [
-              app.app_id,
-              app.name ?? "—",
-              app.has_index ? app.root : `${app.root} (no index)`,
+              safeInline(app.app_id),
+              app.name === undefined ? "—" : safeInline(app.name),
+              safeInline(app.has_index ? app.root : `${app.root} (no index)`),
               String(app.concepts.length),
             ]),
           ) + "\n",
@@ -67,8 +72,10 @@ export function registerKnowledgeCommand(program: Command): void {
   knowledge
     .command("read <app_id> [concept]")
     .description("Read an app's knowledge index, or one concept (for example tables/meal.md), with frontmatter parsed")
-    .action(async (appId: string, concept: string | undefined, _options: unknown, cmd: Command) => {
+    .action(async (appIdArgument: string, conceptArgument: string | undefined, _options: unknown, cmd: Command) => {
       try {
+        const appId = assertKnowledgeAppId(appIdArgument);
+        const concept = conceptArgument === undefined ? undefined : assertKnowledgeConcept(conceptArgument);
         const ctx = await ProfileManager.resolveContext(cmd.optsWithGlobals());
         const result = await withSpinner("Reading knowledge...", () =>
           invokeOperation(
@@ -77,31 +84,35 @@ export function registerKnowledgeCommand(program: Command): void {
             { profile: ctx.profile, host: ctx.host, allowOwnerProfile: true },
             { app_id: appId, ...(concept === undefined ? {} : { concept }) },
           ));
-        if (result.status !== "ok") throw knowledgeFailure(result, ctx.profile);
+        if (result.status !== "ok") throw knowledgeFailure(result, ctx.profile, appId);
         const output = result.output as { key: string; frontmatter: unknown; body: string };
         if (shouldOutputJson()) {
           outputJson(result.output);
           return;
         }
-        process.stdout.write(`${theme.heading(output.key)}\n`);
-        if (output.frontmatter !== null) process.stdout.write(`${JSON.stringify(output.frontmatter)}\n`);
-        process.stdout.write(`\n${output.body}${output.body.endsWith("\n") ? "" : "\n"}`);
+        process.stdout.write(`${theme.heading(safeInline(output.key))}\n`);
+        if (output.frontmatter !== null) process.stdout.write(`${safeInline(JSON.stringify(output.frontmatter))}\n`);
+        const body = safeBlock(output.body);
+        process.stdout.write(`\n${body}${body.endsWith("\n") ? "" : "\n"}`);
       } catch (error) {
         return handleError(error);
       }
     });
 }
 
-/** Map a non-ok operation result to the CLI error: missing grant is exit 5 with the `--cap` to request. */
-function knowledgeFailure(result: Exclude<KnowledgeResult, { status: "ok" }>, profile: string): CLIError {
+/** Map a non-ok operation result to the CLI error: a grant that does not cover the request is exit 5 with what to ask for. */
+function knowledgeFailure(
+  result: Exclude<KnowledgeResult, { status: "ok" }>,
+  profile: string,
+  appId: string | undefined,
+): CLIError {
   switch (result.status) {
     case "authority_required": {
-      const caps = result.missing.map((entry) => `--cap ${compactPermission(entry as never)}`);
       return new CLIError(
         "PERMISSION_DENIED",
-        `This profile has no grant for that. Missing: ${result.missing.map((entry) => compactPermission(entry as never)).join("; ")}`,
+        `This profile has no grant for that. Missing: ${result.missing.map((entry) => compactPermission(entry as unknown as PermissionEntry)).join("; ")}`,
         ExitCode.PERMISSION_DENIED,
-        { hint: missingGrantHint(profile, caps) },
+        { hint: missingGrantHint(profile, appId) },
       );
     }
     case "setup_required":
@@ -125,24 +136,39 @@ function knowledgeFailure(result: Exclude<KnowledgeResult, { status: "ok" }>, pr
       }
       if (result.error.code === "PERMISSION_DENIED") {
         return new CLIError("PERMISSION_DENIED", result.error.message, ExitCode.PERMISSION_DENIED, {
-          hint: missingGrantHint(profile, []),
+          hint: missingGrantHint(profile, appId),
         });
+      }
+      if (result.error.code === "INPUT_INVALID") {
+        return new CLIError(
+          "INVALID_ARGUMENT",
+          "The app id or concept is not valid. An app id looks like xyz.example.app; a concept is a path inside the app's knowledge folder, such as app or tables/meal.md.",
+          ExitCode.USAGE_ERROR,
+        );
       }
       return withSignInHint(cliErrorFromService(result.error), result.context.profile, result.context.posture);
     }
   }
 }
 
-function missingGrantHint(profile: string, caps: readonly string[]): string {
-  const exact = caps.length === 0
-    ? `--cap tinycloud.kv:${APPS_AGENT_SPACE}::get,list`
-    : caps.join(" ");
+/** The ways to ask for access, narrowest first, with the real app id when the command knows it. */
+function missingGrantHint(profile: string, appId: string | undefined): string {
   const request = `${CLI_NAME} --profile ${profile} auth request`;
+  const app = appId ?? "<app_id>";
+  const lines = appId === undefined
+    ? [
+      `  ${request} --preset ${APPS_AGENT_PRESET} --app ${app} --emit req.json   (read-only, one app: recommended; repeat --app for up to 5)`,
+      `  ${request} --preset ${APPS_AGENT_PRESET} --emit req.json   (read-only, all installed apps)`,
+      `  ${request} --cap tinycloud.kv:${APPS_AGENT_SPACE}::get,list --emit req.json   (all files, no table access)`,
+    ]
+    : [
+      `  ${request} --preset ${APPS_AGENT_PRESET} --app ${app} --emit req.json   (read-only: files and table rows of ${app})`,
+      `  ${request} --cap tinycloud.kv:${APPS_AGENT_SPACE}:${app}/knowledge/:get,list --emit req.json   (only ${app}'s knowledge)`,
+      `  ${request} --preset ${APPS_AGENT_PRESET} --write --app ${app} --emit req.json   (adds writes; SQL write can also change or drop ${app}'s tables)`,
+    ];
   return [
-    `Ask the owner for a grant, narrowest first. Create the request:`,
-    `  ${request} ${exact} --emit req.json`,
-    `  ${request} --preset ${APPS_AGENT_PRESET} --app <app_id> --emit req.json   (one app, recommended)`,
-    `  ${request} --preset ${APPS_AGENT_PRESET} --emit req.json   (all installed apps)`,
+    "Ask the owner for a grant, narrowest first. Create the request:",
+    ...lines,
     `The owner runs \`${CLI_NAME} auth grant req.json\`; then import the result with \`${CLI_NAME} --profile ${profile} auth import <grant.json>\`.`,
   ].join("\n");
 }

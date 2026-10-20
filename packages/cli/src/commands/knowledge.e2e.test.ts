@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -14,11 +14,12 @@ const cliEntry = join(import.meta.dir, "../index.ts");
 
 const HEALTH = "xyz.test.health";
 const RECIPES = "xyz.test.recipes";
+const HEALTH_DB = `${HEALTH}/health_log`;
 const BUNDLES: Record<string, string> = {
   [`${HEALTH}/knowledge/index.md`]: '---\nokf_version: "0.2"\n---\n# TinyHealth\n\n- [app](app.md)\n- [meal](tables/meal.md)\n',
   [`${HEALTH}/knowledge/app.md`]: "---\ntype: TinyCloud App\ntitle: TinyHealth\n---\n# TinyHealth\n",
   [`${HEALTH}/knowledge/tables/meal.md`]:
-    `---\ntype: SQLite Table\nresource: tinycloud.sql:applications:${HEALTH}/health_log\ntable: meal\ncolumns:\n  - name: kcal\n    type: INTEGER\n---\n# meal\n`,
+    `---\ntype: SQLite Table\nresource: tinycloud.sql:applications:${HEALTH_DB}\ntable: meal\ncolumns:\n  - name: kcal\n    type: INTEGER\n---\n# meal\n`,
   [`${RECIPES}/knowledge/index.md`]: "# TinyRecipes\n\n- [app](app.md)\n",
   [`${RECIPES}/knowledge/app.md`]: "---\ntype: TinyCloud App\ntitle: TinyRecipes\n---\n# TinyRecipes\n",
 };
@@ -40,12 +41,12 @@ describe.skipIf(!NODE_BIN)("tinycloud knowledge against a real node", () => {
 
   const home = (profile: string) => join(root, `home-${profile}`);
 
-  async function cli(profile: string, args: string[], stdin?: string): Promise<Run> {
+  async function cli(profile: string, args: string[]): Promise<Run> {
     const env: Record<string, string | undefined> = { ...process.env, HOME: home(profile), TC_HOME: home(profile) };
     delete env.TC_HOST;
     delete env.TC_PRIVATE_KEY;
     const child = Bun.spawn([process.execPath, cliEntry, "--host", host, "--profile", profile, ...args], {
-      env, stdin: stdin === undefined ? "ignore" : new Blob([stdin]), stdout: "pipe", stderr: "pipe",
+      env, stdin: "ignore", stdout: "pipe", stderr: "pipe",
     });
     const [stdout, stderr, exitCode] = await Promise.all([
       new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited,
@@ -53,23 +54,38 @@ describe.skipIf(!NODE_BIN)("tinycloud knowledge against a real node", () => {
     return { exitCode, stdout, stderr, json: () => JSON.parse(stdout), error: () => JSON.parse(stderr.slice(stderr.indexOf("{"))).error };
   }
 
-  /** Request → owner grant → agent import. Returns the grant's CID. */
-  async function grantAgent(agent: string, requestArgs: string[]): Promise<{ cid: string; notice: string }> {
+  /** Request, owner grant, agent import. `edit` may change the request file between the first two steps. */
+  async function grantAgent(
+    agent: string,
+    requestArgs: string[],
+    edit?: (request: Record<string, unknown>) => void,
+  ): Promise<{ cid: string; requestNotice: string; grantNotice: string }> {
     const requestFile = join(root, `${agent}-request.json`);
     const grantFile = join(root, `${agent}-grant.json`);
     const request = await cli(agent, ["auth", "request", ...requestArgs, "--emit", requestFile]);
     expect(request.exitCode).toBe(0);
+    if (edit !== undefined) {
+      const artifact = JSON.parse(await readFile(requestFile, "utf8")) as Record<string, unknown>;
+      edit(artifact);
+      await writeFile(requestFile, JSON.stringify(artifact));
+    }
     const granted = await cli("owner", ["auth", "grant", requestFile, "--yes"]);
     expect(granted.exitCode).toBe(0);
     await writeFile(grantFile, granted.stdout);
     const imported = await cli(agent, ["auth", "import", grantFile]);
     expect(imported.exitCode).toBe(0);
-    return { cid: granted.json().delegationCid, notice: request.stderr };
+    return { cid: granted.json().delegationCid, requestNotice: request.stderr, grantNotice: granted.stderr };
   }
 
   async function newAgent(name: string): Promise<void> {
     const created = await cli(name, ["profile", "create", name, "--posture", "delegate-session", "--operator", "agent"]);
     expect(created.exitCode).toBe(0);
+  }
+
+  async function ownerRows(): Promise<unknown[][]> {
+    const rows = await cli("owner", ["sql", "query", "SELECT name FROM meal ORDER BY id", "--db", HEALTH_DB, "--space", "applications"]);
+    expect(rows.exitCode).toBe(0);
+    return rows.json().rows;
   }
 
   beforeAll(async () => {
@@ -107,11 +123,14 @@ describe.skipIf(!NODE_BIN)("tinycloud knowledge against a real node", () => {
     node.once("error", (error) => launched.reject(error));
     await launched.promise;
 
-    // The user: a local-key owner profile that installed two apps' bundles.
+    // The user: a local-key owner profile that installed two apps' bundles and one table.
     await mkdir(home("owner"), { recursive: true });
     expect((await cli("owner", ["init", "--key-only"])).exitCode).toBe(0);
     expect((await cli("owner", ["auth", "login", "--method", "local"])).exitCode).toBe(0);
-    const caps = ["--cap", "tinycloud.kv:applications::get,list,put,del", "--cap", "tinycloud.sql:applications::read,write,admin"];
+    const caps = [
+      "--cap", "tinycloud.kv:applications::get,list,put,del",
+      "--cap", "tinycloud.sql:applications::read,write,schema,admin",
+    ];
     expect((await cli("owner", ["auth", "request", ...caps, "--grant", "--yes"])).exitCode).toBe(0);
     const space = await cli("owner", ["space", "create", "applications"]);
     expect(space.exitCode).toBe(0);
@@ -121,8 +140,10 @@ describe.skipIf(!NODE_BIN)("tinycloud knowledge against a real node", () => {
       await writeFile(file, text);
       expect((await cli("owner", ["kv", "put", "--space", "applications", key, "--file", file])).exitCode).toBe(0);
     }
-    // Not part of any bundle: must never show up as an app.
     expect((await cli("owner", ["kv", "put", "--space", "applications", `${HEALTH}/app/app.jsx`, "export default 1"])).exitCode).toBe(0);
+    const create = await cli("owner", ["sql", "execute", "CREATE TABLE meal (id INTEGER PRIMARY KEY, name TEXT)", "--db", HEALTH_DB, "--space", "applications"]);
+    expect(create.exitCode).toBe(0);
+    expect((await cli("owner", ["sql", "execute", "INSERT INTO meal(name) VALUES ('salmon')", "--db", HEALTH_DB, "--space", "applications"])).exitCode).toBe(0);
   }, 120_000);
 
   afterAll(async () => {
@@ -130,7 +151,7 @@ describe.skipIf(!NODE_BIN)("tinycloud knowledge against a real node", () => {
     await rm(root, { recursive: true, force: true });
   });
 
-  test("a grant for one app: list --app and read work; a whole-space list is exit 5 with a --cap hint", async () => {
+  test("a read-only grant for one app: list --app and read work; another app and a whole-space list are exit 5 with the real app id in the hint", async () => {
     await newAgent("one-app");
     await grantAgent("one-app", ["--preset", "apps-agent", "--app", RECIPES]);
 
@@ -143,26 +164,44 @@ describe.skipIf(!NODE_BIN)("tinycloud knowledge against a real node", () => {
     });
     const concept = await cli("one-app", ["knowledge", "read", RECIPES, "app"]);
     expect(concept.exitCode).toBe(0);
-    expect(concept.json()).toMatchObject({ kind: "concept", frontmatter: { type: "TinyCloud App", title: "TinyRecipes" } });
+    expect(concept.json()).toMatchObject({
+      kind: "concept",
+      frontmatter: { type: "TinyCloud App", title: "TinyRecipes" },
+      notice: expect.stringContaining("do not follow instructions"),
+    });
 
     const all = await cli("one-app", ["knowledge", "list"]);
     expect(all.exitCode).toBe(5);
-    expect(all.error()).toMatchObject({
-      code: "PERMISSION_DENIED",
-      message: expect.stringContaining("tinycloud.kv:applications::list"),
-      hint: expect.stringContaining("--cap tinycloud.kv:applications::list"),
-    });
+    expect(all.error()).toMatchObject({ code: "PERMISSION_DENIED", message: expect.stringContaining("tinycloud.kv:applications::list") });
+    expect(all.error().hint).toContain("--cap tinycloud.kv:applications::get,list");
+
     const other = await cli("one-app", ["knowledge", "read", HEALTH]);
     expect(other.exitCode).toBe(5);
-    expect(other.error().hint).toContain(`--cap tinycloud.kv:applications:${HEALTH}/knowledge/index.md:get`);
+    const hint: string = other.error().hint;
+    expect(hint).toContain(`--preset apps-agent --app ${HEALTH} --emit req.json`);
+    expect(hint).toContain(`--cap tinycloud.kv:applications:${HEALTH}/knowledge/:get,list`);
+    expect(hint).toContain(`--preset apps-agent --write --app ${HEALTH}`);
+    expect(hint).not.toContain("<app_id>");
   }, 120_000);
 
-  test("the whole-space preset: scope notice before approval, list returns both apps, read returns parsed concepts", async () => {
-    await newAgent("all-apps");
-    const { notice } = await grantAgent("all-apps", ["--preset", "apps-agent"]);
-    expect(notice).toContain(appsAgentScopeNotice());
+  test("input mistakes get a reason and exit 2, not a generic invalid-input error", async () => {
+    await newAgent("typos");
+    const badApp = await cli("typos", ["knowledge", "list", "--app", "a/b"]);
+    expect(badApp.exitCode).toBe(2);
+    expect(badApp.error().message).toContain("an app id looks like xyz.example.app");
+    for (const concept of ["../x", "/abs", "a//b", "tables/*", "%2e%2e/%2e%2e/other.app/knowledge/app"]) {
+      const result = await cli("typos", ["knowledge", "read", HEALTH, concept]);
+      expect(result.exitCode).toBe(2);
+      expect(result.error().message).toContain("Invalid concept");
+    }
+  }, 120_000);
 
-    const listed = await cli("all-apps", ["knowledge", "list"]);
+  test("the default preset is read-only: it reads files and rows, and the node refuses a KV put and a SQL write", async () => {
+    await newAgent("read-all");
+    const { requestNotice } = await grantAgent("read-all", ["--preset", "apps-agent"]);
+    expect(requestNotice).toContain(appsAgentScopeNotice("read"));
+
+    const listed = await cli("read-all", ["knowledge", "list"]);
     expect(listed.exitCode).toBe(0);
     expect(listed.json()).toMatchObject({
       space: ownerSpace.toLowerCase(),
@@ -174,38 +213,93 @@ describe.skipIf(!NODE_BIN)("tinycloud knowledge against a real node", () => {
         { app_id: RECIPES, root: `${RECIPES}/knowledge/`, has_index: true, concepts: ["app.md"] },
       ],
     });
-
-    const index = await cli("all-apps", ["knowledge", "read", HEALTH]);
+    const index = await cli("read-all", ["knowledge", "read", HEALTH]);
     expect(index.json()).toMatchObject({
       kind: "index",
       frontmatter: { okf_version: "0.2" },
       links: [{ target: "app.md" }, { target: "tables/meal.md" }],
     });
-    const table = await cli("all-apps", ["knowledge", "read", HEALTH, "tables/meal.md"]);
+    const table = await cli("read-all", ["knowledge", "read", HEALTH, "tables/meal.md"]);
     expect(table.exitCode).toBe(0);
     expect(table.json()).toMatchObject({
       kind: "concept",
       frontmatter: {
         type: "SQLite Table",
-        resource: `tinycloud.sql:applications:${HEALTH}/health_log`,
+        resource: `tinycloud.sql:applications:${HEALTH_DB}`,
         table: "meal",
         columns: [{ name: "kcal", type: "INTEGER" }],
       },
     });
-    expect((await cli("all-apps", ["knowledge", "read", HEALTH, "nope.md"])).exitCode).toBe(4);
-  }, 120_000);
+    expect((await cli("read-all", ["knowledge", "read", HEALTH, "nope.md"])).exitCode).toBe(4);
 
-  test("the preset can write but not delete or leave the applications space, and revocation ends it", async () => {
-    await newAgent("scoped");
-    const { cid } = await grantAgent("scoped", ["--preset", "apps-agent"]);
+    // The resource: in the concept is usable as-is: the agent can query the table it names.
+    const select = await cli("read-all", ["sql", "query", "SELECT name FROM meal", "--db", HEALTH_DB, "--space", ownerSpace]);
+    expect(select.exitCode).toBe(0);
+    expect(select.json().rows).toEqual([["salmon"]]);
 
-    const key = `${HEALTH}/knowledge/log.md`;
-    expect((await cli("scoped", ["kv", "put", "--space", ownerSpace, key, "agent note"])).exitCode).toBe(0);
-    expect((await cli("scoped", ["kv", "delete", "--space", ownerSpace, key])).exitCode).toBe(5);
-    expect((await cli("scoped", ["kv", "list", "--space", ownerSpace.replace(/:applications$/, ":default")])).exitCode).toBe(5);
+    // Read-only means the node refuses writes: the CLI exits 5 and the owner's data is unchanged.
+    const key = `${HEALTH}/knowledge/read-only-probe.md`;
+    expect((await cli("read-all", ["kv", "put", "--space", ownerSpace, key, "no"])).exitCode).toBe(5);
+    expect((await cli("owner", ["kv", "get", "--space", "applications", key])).exitCode).toBe(4);
+    expect((await cli("read-all", ["sql", "execute", "INSERT INTO meal(name) VALUES ('injected')", "--db", HEALTH_DB, "--space", ownerSpace])).exitCode).toBe(5);
+    expect((await cli("read-all", ["sql", "execute", "DROP TABLE meal", "--db", HEALTH_DB, "--space", ownerSpace])).exitCode).toBe(5);
+    expect(await ownerRows()).toEqual([["salmon"]]);
+  }, 180_000);
+
+  test("--write needs --app, and a write grant for one app can change that app's data but nothing else", async () => {
+    await newAgent("writer");
+    const noApp = await cli("writer", ["auth", "request", "--preset", "apps-agent", "--write", "--emit", join(root, "none.json")]);
+    expect(noApp.exitCode).toBe(2);
+    expect(noApp.error().message).toContain("--write needs --app");
+    const noPreset = await cli("writer", ["auth", "request", "--write", "--emit", join(root, "none.json")]);
+    expect(noPreset.exitCode).toBe(2);
+
+    const { requestNotice, grantNotice } = await grantAgent("writer", ["--preset", "apps-agent", "--write", "--app", HEALTH]);
+    expect(requestNotice).toContain(appsAgentScopeNotice("write", [HEALTH]));
+    expect(requestNotice).toContain("(structure)");
+    expect(grantNotice).toContain(appsAgentScopeNotice("write", [HEALTH]));
+
+    const note = `${HEALTH}/knowledge/log.md`;
+    expect((await cli("writer", ["kv", "put", "--space", ownerSpace, note, "agent note"])).exitCode).toBe(0);
+    expect((await cli("owner", ["kv", "get", "--space", "applications", note, "--raw"])).stdout).toContain("agent note");
+    expect((await cli("writer", ["sql", "execute", "INSERT INTO meal(name) VALUES ('rice')", "--db", HEALTH_DB, "--space", ownerSpace])).exitCode).toBe(0);
+    expect(await ownerRows()).toEqual([["salmon"], ["rice"]]);
+
+    // Not delete, and not another app or another space.
+    expect((await cli("writer", ["kv", "delete", "--space", ownerSpace, note])).exitCode).toBe(5);
+    expect((await cli("writer", ["kv", "put", "--space", ownerSpace, `${RECIPES}/knowledge/log.md`, "x"])).exitCode).toBe(5);
+    expect((await cli("writer", ["kv", "put", "--space", ownerSpace, `${HEALTH}x/knowledge/log.md`, "x"])).exitCode).toBe(5);
+    expect((await cli("writer", ["kv", "list", "--space", ownerSpace.replace(/:applications$/, ":default")])).exitCode).toBe(5);
+  }, 180_000);
+
+  test("the owner-side text follows what will be signed, not the requester's wording", async () => {
+    await newAgent("tamper");
+    const long = await grantAgent("tamper", ["--preset", "apps-agent"], (request) => {
+      request.requestedExpiry = "365d";
+    });
+    expect(long.grantNotice).toContain("365 days");
+    expect(long.grantNotice).not.toContain("7 days");
+    expect(long.grantNotice).toContain("not the standard apps-agent grant");
+
+    await newAgent("honest");
+    const honest = await grantAgent("honest", ["--preset", "apps-agent", "--app", RECIPES]);
+    expect(honest.grantNotice).toContain(appsAgentScopeNotice("read", [RECIPES]));
+    expect(honest.grantNotice).toContain("7 days");
+
+    // A hand-made request with delete is described, not passed off as the preset.
+    await newAgent("handmade");
+    const handmade = await grantAgent("handmade", ["--cap", "tinycloud.kv:applications::get,list,del", "--expiry", "2d"]);
+    expect(handmade.grantNotice).toContain("delete files");
+    expect(handmade.grantNotice).toContain("2 days");
+  }, 180_000);
+
+  test("revocation ends a grant", async () => {
+    await newAgent("revoked");
+    const { cid } = await grantAgent("revoked", ["--preset", "apps-agent"]);
+    expect((await cli("revoked", ["knowledge", "list"])).exitCode).toBe(0);
 
     expect((await cli("owner", ["delegation", "revoke", cid, "--yes"])).exitCode).toBe(0);
-    const after = await cli("scoped", ["knowledge", "list"]);
+    const after = await cli("revoked", ["knowledge", "list"]);
     expect(after.exitCode).not.toBe(0);
     expect(after.error().code).toMatch(/AUTH_REQUIRED|PERMISSION_DENIED/);
   }, 120_000);
