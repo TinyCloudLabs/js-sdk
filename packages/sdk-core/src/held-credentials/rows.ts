@@ -21,6 +21,8 @@ export interface ProfileRow {
   statusMethods: readonly string[];
   /** Checks the disclosed claim values; throws a HeldCredentialError. */
   validateDisclosed(claims: Readonly<Record<string, Json>>): void;
+  /** Pattern the credential's issuer DID must match under this row. Unset: the issuer set decides. */
+  issuerDidPattern?: RegExp;
 }
 
 export const HELD_EMAIL_TTL_SECONDS = 365 * 24 * 60 * 60;
@@ -59,6 +61,44 @@ export const EMAIL_HELD_ROW: ProfileRow = {
     }
   },
 };
+
+const ORG_MEMBERSHIP_BINDING_DOMAIN = "tinycloud.credentials/org-binding/v1";
+const ORG_MEMBERSHIP_TTL_SECONDS = 365 * 24 * 60 * 60;
+const ORG_MEMBERSHIP_FREE_TTL_SECONDS = 30 * 24 * 60 * 60;
+const ORG_ISSUER_DID_PATTERN = /^did:web:o[a-z2-7]{26}\.orgs\.credentials\.org$/;
+const ORG_ROLES: readonly string[] = ["member", "admin"];
+const MEMBERSHIP_TYPE_PATTERN = /^[a-z0-9][a-z0-9-]{0,62}$/;
+
+function orgMembershipRow(profile: string, maxLifetimeSeconds: number): ProfileRow {
+  return {
+    profile,
+    profileVersion: 1,
+    vct: "opencredentials.org-membership/v1",
+    holder: { kind: "account-pkh", chainId: "1" },
+    bindingDomain: ORG_MEMBERSHIP_BINDING_DOMAIN,
+    disclosable: ["role", "membershipType"],
+    optionalSignedClaims: [],
+    maxLifetimeSeconds,
+    statusMethods: ["none"],
+    issuerDidPattern: ORG_ISSUER_DID_PATTERN,
+    validateDisclosed(claims) {
+      const { role, membershipType } = claims;
+      if (role !== undefined && (typeof role !== "string" || !ORG_ROLES.includes(role))) {
+        refuse("bad-disclosure", "role must be member or admin");
+      }
+      if (membershipType !== undefined && (typeof membershipType !== "string" || !MEMBERSHIP_TYPE_PATTERN.test(membershipType))) {
+        refuse("bad-disclosure", "membershipType is not a canonical slug");
+      }
+    },
+  };
+}
+
+/** Paid org membership row (profile `tinycloud.org-membership/v1`). */
+export const ORG_MEMBERSHIP_ROW: ProfileRow = orgMembershipRow("tinycloud.org-membership/v1", ORG_MEMBERSHIP_TTL_SECONDS);
+/** Free org membership row (profile `tinycloud.org-membership-free/v1`). */
+export const ORG_MEMBERSHIP_FREE_ROW: ProfileRow = orgMembershipRow("tinycloud.org-membership-free/v1", ORG_MEMBERSHIP_FREE_TTL_SECONDS);
+/** Both org rows. Not in `DEFAULT_ROWS`: a caller opts in by passing them as `rows`. */
+export const ORG_MEMBERSHIP_ROWS: readonly ProfileRow[] = [ORG_MEMBERSHIP_ROW, ORG_MEMBERSHIP_FREE_ROW];
 
 export const DEFAULT_ROWS: readonly ProfileRow[] = [EMAIL_HELD_ROW];
 

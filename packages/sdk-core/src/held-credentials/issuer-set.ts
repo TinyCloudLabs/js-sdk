@@ -1,6 +1,8 @@
 import { decodeBase64Url, isObject } from "./encoding";
 import { isStrictEd25519Point } from "./crypto";
 import { refuse } from "./errors";
+import { DEFAULT_ROWS } from "./rows";
+import type { ProfileRow } from "./rows";
 
 export const ISSUER_SET_FORMAT = "tinycloud.credentials-issuers/v1";
 
@@ -79,6 +81,8 @@ export function lookupIssuerEntry(set: IssuerSet, issuerDid: string, kid: string
 export interface IssuerSetOptions {
   /** DID methods allowed for issuers (docs/principles.md principle 2), e.g. ["web"]. */
   didMethods: { issuer: readonly string[] };
+  /** Rows whose permitted-issuer rules apply to the profiles an entry lists. Defaults to the email row only. */
+  rows?: readonly ProfileRow[];
 }
 
 const ENTRY_KEYS = ["issuerDid", "kid", "alg", "publicKey", "vcts", "profiles", "notBefore", "retiredAt", "notAfter"].sort();
@@ -145,13 +149,18 @@ export function parseIssuerSet(raw: unknown, options: IssuerSetOptions): IssuerS
     const retiredAt = item.retiredAt === null ? null : parseTime(item.retiredAt, "retiredAt");
     const notAfter = item.notAfter === null ? null : parseTime(item.notAfter, "notAfter");
     if (retiredAt !== null && notAfter !== null && retiredAt > notAfter) refuse("bad-issuer-set", "retiredAt must not be after notAfter");
+    const listedProfiles = stringList(item.profiles, "profiles");
+    for (const profile of listedProfiles) {
+      const row = (options.rows ?? DEFAULT_ROWS).find((candidate) => candidate.profile === profile);
+      if (row?.issuerDidPattern && !row.issuerDidPattern.test(issuerDid as string)) refuse("bad-issuer-set", "issuer DID is not permitted for a profile it lists");
+    }
     entries.set(kid as string, Object.freeze({
       issuerDid: issuerDid as string,
       kid: kid as string,
       alg: "EdDSA",
       publicKey,
       vcts: Object.freeze([...stringList(item.vcts, "vcts")]),
-      profiles: Object.freeze([...stringList(item.profiles, "profiles")]),
+      profiles: Object.freeze([...listedProfiles]),
       notBefore,
       retiredAt,
       notAfter,

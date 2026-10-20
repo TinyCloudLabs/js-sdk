@@ -9,14 +9,19 @@ import {
   HeldCredentialError,
   InMemoryNonceStore,
   IssuerSet,
+  ORG_MEMBERSHIP_ROWS,
   PRESENTATION_STATEMENT,
+  assertValidAudience,
   normaliseEmail,
   parseIssuerSet,
   pkhPrincipalsEqual,
   registryKey,
   toChecksumAddress,
   verifyHeldPresentation,
+  type AcceptedIssuer,
+  type AcceptedProfile,
   type NonceStore,
+  type ProfileRow,
   type VerifyHeldPresentationOptions,
 } from "./index";
 import { MAX_JSON_DEPTH, decodeUtf8, asciiBytes, bytesToHex, encodeBase64Url, parseStrictJson } from "./encoding";
@@ -869,5 +874,155 @@ describe("TC-1540 Miller 9: email shape", () => {
       await expectCode("bad-disclosure", { disclosures: [["email", email]] });
     }
     await expectCode("ok", { disclosures: [["email", "ab@example.com"]] });
+  });
+});
+
+const ORG_A = `did:web:o${"abcdefghijklmnopqrstuvwxyz"}.orgs.credentials.org`;
+const ORG_A_KID = `${ORG_A}#issuing-1`;
+const SEED_ORG_A = seed(200);
+const PAID_PROFILE = "tinycloud.org-membership/v1";
+const FREE_PROFILE = "tinycloud.org-membership-free/v1";
+const ORG_VCT = "opencredentials.org-membership/v1";
+const ORG_BINDING = "tinycloud.credentials/org-binding/v1";
+const ALL_ROWS: readonly ProfileRow[] = [EMAIL_HELD_ROW, ...ORG_MEMBERSHIP_ROWS];
+
+function orgEntry(profiles: string[], extra: Obj = {}): Obj {
+  return {
+    issuerDid: ORG_A, kid: ORG_A_KID, alg: "EdDSA", publicKey: encodeBase64Url(ed25519.getPublicKey(SEED_ORG_A)),
+    vcts: [ORG_VCT], profiles, notBefore: "2026-10-01T00:00:00Z", retiredAt: null, notAfter: null, ...extra,
+  };
+}
+
+/** An org membership credential. The free row's lifetime limit is 30 days, so its default exp is shorter. */
+function orgCredential(profile: string, spec: CredentialSpec = {}): CredentialSpec {
+  const lifetimeDays = profile === FREE_PROFILE ? 29 : 365;
+  return {
+    seed: SEED_ORG_A, iss: ORG_A, kid: ORG_A_KID,
+    disclosures: [["role", "member"], ["membershipType", "team"]],
+    ...spec,
+    payload: (p) => {
+      const merged: Obj = { ...p, profile, vct: ORG_VCT, exp: (p.iat as number) + lifetimeDays * DAY, holderBinding: { did: SUB, signingDomain: ORG_BINDING } };
+      return spec.payload ? spec.payload(merged) : merged;
+    },
+  };
+}
+
+interface OrgCase {
+  entries: Obj[];
+  profiles: AcceptedProfile[];
+  issuers: AcceptedIssuer[];
+  /** Rows the verifier uses; defaults to every row. */
+  rows?: readonly ProfileRow[];
+  /** Rows the issuer set loader uses; defaults to every row. `[]` loads without org rules. */
+  issuerRows?: readonly ProfileRow[];
+}
+
+async function orgCode(cred: CredentialSpec, c: OrgCase): Promise<string> {
+  const store = new InMemoryNonceStore();
+  const options: VerifyHeldPresentationOptions = {
+    now: NOW, rows: c.rows ?? ALL_ROWS,
+    issuerSet: parseIssuerSet(setOf(...c.entries), { didMethods: METHODS, rows: c.issuerRows ?? ALL_ROWS }),
+    acceptedIssuers: c.issuers, acceptedProfiles: c.profiles,
+    didMethods: METHODS, audience: AUDIENCE, nonceStore: store, callerAccount: SUB,
+  };
+  const nonce = store.issue(AUDIENCE, SUB);
+  const { sdJwt } = makeCredential(cred);
+  return code(verifyHeldPresentation({ sdJwt, siwe: makeSiwe(sdJwt, nonce) }, options));
+}
+
+function loadCode(entries: Obj[], rows?: readonly ProfileRow[]): string {
+  try {
+    parseIssuerSet(setOf(...entries), rows ? { didMethods: METHODS, rows } : { didMethods: METHODS });
+    return "ok";
+  } catch (error) {
+    if (error instanceof HeldCredentialError) return error.code;
+    throw error;
+  }
+}
+
+function audienceCode(value: string): string {
+  try {
+    assertValidAudience(value);
+    return "ok";
+  } catch (error) {
+    if (error instanceof HeldCredentialError) return error.code;
+    throw error;
+  }
+}
+
+describe("TC-1553: six-credential-type refusal matrix", () => {
+  test("1. email-held credential verifies under the email row", async () => {
+    expect(await orgCode({}, { entries: [entryA()], profiles: [{ profile: PROFILE, profileVersion: 1 }], issuers: [{ issuerDid: ISSUER_A }] })).toBe("ok");
+  });
+  test("2. paid org credential verifies under the paid row", async () => {
+    expect(await orgCode(orgCredential(PAID_PROFILE), { entries: [orgEntry([PAID_PROFILE])], profiles: [{ profile: PAID_PROFILE, profileVersion: 1 }], issuers: [{ issuerDid: ORG_A }] })).toBe("ok");
+  });
+  test("3. free org credential verifies under the free row", async () => {
+    expect(await orgCode(orgCredential(FREE_PROFILE), { entries: [orgEntry([FREE_PROFILE])], profiles: [{ profile: FREE_PROFILE, profileVersion: 1 }], issuers: [{ issuerDid: ORG_A }] })).toBe("ok");
+  });
+  test("4. paid profile with the email vct is refused at the row's vct check", async () => {
+    expect(await orgCode(orgCredential(PAID_PROFILE, { payload: (p) => ({ ...p, vct: VCT }) }), { entries: [orgEntry([PAID_PROFILE])], profiles: [{ profile: PAID_PROFILE, profileVersion: 1 }], issuers: [{ issuerDid: ORG_A }] })).toBe("profile-mismatch");
+  });
+  test("5. email profile identity issued by an org is refused at the issuer entry check", async () => {
+    const cred: CredentialSpec = { iss: ORG_A, kid: ORG_A_KID, seed: SEED_ORG_A, payload: (p) => ({ ...p, profile: PROFILE, vct: VCT }) };
+    expect(await orgCode(cred, { entries: [orgEntry([PAID_PROFILE])], profiles: [{ profile: PROFILE, profileVersion: 1 }], issuers: [{ issuerDid: ORG_A }] })).toBe("profile-mismatch");
+  });
+  test("6. org credential whose entry omits the paid profile is refused at the issuer entry check", async () => {
+    expect(await orgCode(orgCredential(PAID_PROFILE), { entries: [orgEntry([FREE_PROFILE])], profiles: [{ profile: PAID_PROFILE, profileVersion: 1 }], issuers: [{ issuerDid: ORG_A }] })).toBe("profile-mismatch");
+  });
+  test("a free-row credential is refused by a paid-only acceptance", async () => {
+    expect(await orgCode(orgCredential(FREE_PROFILE), { entries: [orgEntry([FREE_PROFILE, PAID_PROFILE])], profiles: [{ profile: PAID_PROFILE, profileVersion: 1 }], issuers: [{ issuerDid: ORG_A }] })).toBe("profile-not-accepted");
+  });
+});
+
+describe("TC-1553: org membership rows", () => {
+  const accept = { profiles: [{ profile: PAID_PROFILE, profileVersion: 1 }], issuers: [{ issuerDid: ORG_A }] };
+
+  test("the free row refuses a credential longer than 30 days; the paid row allows 365", async () => {
+    expect(await orgCode(orgCredential(FREE_PROFILE, { payload: (p) => ({ ...p, exp: (p.iat as number) + 365 * DAY }) }), { entries: [orgEntry([FREE_PROFILE])], profiles: [{ profile: FREE_PROFILE, profileVersion: 1 }], issuers: [{ issuerDid: ORG_A }] })).toBe("bad-lifetime");
+    expect(await orgCode(orgCredential(PAID_PROFILE), { entries: [orgEntry([PAID_PROFILE])], ...accept })).toBe("ok");
+  });
+  test("role must be member or admin, and membershipType must be a lowercase slug", async () => {
+    expect(await orgCode(orgCredential(PAID_PROFILE, { disclosures: [["role", "owner"]] }), { entries: [orgEntry([PAID_PROFILE])], ...accept })).toBe("bad-disclosure");
+    expect(await orgCode(orgCredential(PAID_PROFILE, { disclosures: [["membershipType", "Team"]] }), { entries: [orgEntry([PAID_PROFILE])], ...accept })).toBe("bad-disclosure");
+    expect(await orgCode(orgCredential(PAID_PROFILE, { disclosures: [["role", "admin"], ["membershipType", "team-a"]] }), { entries: [orgEntry([PAID_PROFILE])], ...accept })).toBe("ok");
+  });
+  test("an email disclosure is outside the org row's disclosable list", async () => {
+    expect(await orgCode(orgCredential(PAID_PROFILE, { disclosures: [["email", "alice@example.com"]] }), { entries: [orgEntry([PAID_PROFILE])], ...accept })).toBe("bad-disclosure");
+  });
+  test("the email holder-binding domain is refused by the org row", async () => {
+    expect(await orgCode(orgCredential(PAID_PROFILE, { payload: (p) => ({ ...p, holderBinding: { did: SUB, signingDomain: BINDING } }) }), { entries: [orgEntry([PAID_PROFILE])], ...accept })).toBe("bad-holder-binding");
+  });
+  test("an unexpected signed claim is refused by the org row", async () => {
+    expect(await orgCode(orgCredential(PAID_PROFILE, { payload: (p) => ({ ...p, email: "alice@example.com" }) }), { entries: [orgEntry([PAID_PROFILE])], ...accept })).toBe("bad-payload");
+  });
+  test("the verifier refuses a paid-row credential from a non-org issuer even when the set loaded without org rules", async () => {
+    const cred = orgCredential(PAID_PROFILE, { iss: ISSUER_A, kid: KID_A, seed: SEED_A });
+    expect(await orgCode(cred, { entries: [entryA({ profiles: [PAID_PROFILE], vcts: [ORG_VCT] })], profiles: [{ profile: PAID_PROFILE, profileVersion: 1 }], issuers: [{ issuerDid: ISSUER_A }], issuerRows: [] })).toBe("issuer-not-accepted");
+  });
+  test("the set loader refuses a non-org issuer that lists a membership profile", () => {
+    expect(loadCode([entryA({ profiles: [PAID_PROFILE], vcts: [ORG_VCT] })], ALL_ROWS)).toBe("bad-issuer-set");
+  });
+  test("the set loader refuses did:web labels that are not an opaque org id", () => {
+    for (const label of ["x", "zingo"]) {
+      const issuerDid = `did:web:${label}.orgs.credentials.org`;
+      expect(loadCode([orgEntry([FREE_PROFILE], { issuerDid, kid: `${issuerDid}#issuing-1` })], ALL_ROWS)).toBe("bad-issuer-set");
+    }
+    expect(loadCode([orgEntry([FREE_PROFILE], { issuerDid: "did:web:zingo.credentials.org", kid: "did:web:zingo.credentials.org#issuing-1" })], ALL_ROWS)).toBe("bad-issuer-set");
+  });
+  test("the set loader accepts an opaque org id listing either org row, and checks nothing without the org rows passed", () => {
+    expect(loadCode([orgEntry([PAID_PROFILE, FREE_PROFILE])], ALL_ROWS)).toBe("ok");
+    expect(loadCode([entryA({ profiles: [PAID_PROFILE], vcts: [ORG_VCT] })])).toBe("ok");
+  });
+});
+
+describe("TC-1553: audience validator", () => {
+  test("accepts a bare lowercase host, with an optional non-default port", () => {
+    for (const good of ["billing.tinycloud.xyz", "localhost:8443", "billing.tinycloud.xyz:65535"]) expect(audienceCode(good)).toBe("ok");
+  });
+  test("refuses default ports, leading-zero or out-of-range ports, schemes, paths, uppercase and empty values", () => {
+    for (const bad of ["billing.tinycloud.xyz:443", "billing.tinycloud.xyz:0443", "billing.tinycloud.xyz:0", "billing.tinycloud.xyz:65536", "https://billing.tinycloud.xyz", "billing.tinycloud.xyz/path", "billing.tinycloud.xyz:8443/", "Billing.tinycloud.xyz", ""]) {
+      expect(audienceCode(bad)).toBe("bad-config");
+    }
   });
 });
