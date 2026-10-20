@@ -263,7 +263,7 @@ describe("auth grant: printed == gated == signed, over generated requests", () =
   test("a request with the vault shorthand or a service the signer cannot sign is refused with exit 2 and a plain reason", () => {
     for (const service of ["tinycloud.vault", "vault"]) {
       expect(() => entriesForSigning([{ service, space: "applications", path: "x/", actions: ["del"] }])).toThrow(
-        expect.objectContaining({ exitCode: 2, message: expect.stringContaining("vault access") }),
+        expect.objectContaining({ exitCode: 2, message: expect.stringContaining("the vault") }),
       );
     }
     expect(() => finalizeSigningEntries([{ service: "tinycloud.zzz", space: OWNER_APPLICATIONS, path: "", actions: ["tinycloud.zzz/x"] }])).toThrow(

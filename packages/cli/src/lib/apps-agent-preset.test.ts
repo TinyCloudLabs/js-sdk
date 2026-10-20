@@ -230,7 +230,7 @@ describe("describeGrantScope: the text follows what will be signed", () => {
   test.each([
     ["tinycloud.delegation/create", "can give other people or agents access on your behalf"],
     ["tinycloud.delegation/revoke", "can cancel access you gave"],
-    ["tinycloud.delegation/*", "can give other people or agents access on your behalf and cancel access you gave"],
+    ["tinycloud.delegation/*", "can do everything the delegation permissions allow, including giving access on to others"],
   ])("%s gets its own plain-words line, in the entry list, with no 'unrecognised' wording", (action, words) => {
     const entry = delegationEntry(action);
     const scope = scopeOf([...asRequested("read", [RECIPES]), entry]);

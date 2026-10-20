@@ -411,7 +411,7 @@ describe.skipIf(!NODE_BIN)("tinycloud knowledge against a real node", () => {
       expect(result.stderr).not.toMatch(RAW_CONTROL);
       expect(result.error().message).toContain(expected);
     };
-    await attempt({ service: "tinycloud.vault", space: "applications", path: "", actions: ["del"] }, "vault access");
+    await attempt({ service: "tinycloud.vault", space: "applications", path: "", actions: ["del"] }, "the vault");
     await attempt({ service: "tinycloud.zzz\u001b[2J\u202e", space: "applications", path: "", actions: ["tinycloud.zzz/x"] }, "cannot sign");
     await attempt({ service: "tinycloud.kv", space: "bad\u001b]0;x\u0007\u202e name", path: "", actions: ["get"] }, "Invalid space");
 

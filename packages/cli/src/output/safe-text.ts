@@ -26,3 +26,20 @@ export function safeBlock(text: string): string {
 export function safeInline(text: string): string {
   return text.replace(UNSAFE_INLINE, escape);
 }
+
+/** Most characters of one echoed request field in an error message. */
+export const ECHO_FIELD_MAX = 80;
+/** Most items of an echoed list in an error message. */
+export const ECHO_LIST_MAX = 5;
+
+/** A single-line value escaped, then cut to `max` characters (code points) with an ellipsis, so an error stays short. */
+export function safeClipped(text: string, max = ECHO_FIELD_MAX): string {
+  const escaped = Array.from(safeInline(text));
+  return escaped.length <= max ? escaped.join("") : `${escaped.slice(0, max).join("")}…`;
+}
+
+/** At most `ECHO_LIST_MAX` items, each escaped and clipped and quoted, then "and N more". */
+export function safeClippedList(items: readonly string[]): string {
+  const shown = items.slice(0, ECHO_LIST_MAX).map((item) => `"${safeClipped(item)}"`).join(", ");
+  return items.length > ECHO_LIST_MAX ? `${shown} … and ${items.length - ECHO_LIST_MAX} more` : shown;
+}

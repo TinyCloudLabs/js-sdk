@@ -4,7 +4,7 @@ import type { PermissionEntry } from "@tinycloud/node-sdk";
 
 import { ExitCode } from "../config/constants.js";
 import { CLIError } from "../output/errors.js";
-import { safeInline } from "../output/safe-text.js";
+import { safeClipped, safeClippedList, safeInline } from "../output/safe-text.js";
 import { isRawEncryptionPermission } from "./raw-encryption.js";
 import { normalizePkhIdentifier } from "./space.js";
 
@@ -84,7 +84,7 @@ const ACTION_WORDS: Readonly<Record<string, string>> = {
   "tinycloud.sql/admin": "do anything in the database",
   "tinycloud.delegation/create": "can give other people or agents access on your behalf",
   "tinycloud.delegation/revoke": "can cancel access you gave",
-  "tinycloud.delegation/*": "can give other people or agents access on your behalf and cancel access you gave",
+  "tinycloud.delegation/*": "can do everything the delegation permissions allow, including giving access on to others",
   "tinycloud.kv/*": "do anything with files (read, write, delete)",
   "tinycloud.sql/*": "do anything in the database",
   "tinycloud.capabilities/read": "see which permissions this key holds",
@@ -304,7 +304,7 @@ export function entriesForSigning(requested: readonly PermissionEntry[]): Permis
     // `tinycloud.vault` is an SDK shorthand the signer turns into KV access (delete included) on `vault/`:
     // what would be printed is not what would be signed, and an app-picking agent has no business there.
     if (entry.service === VAULT_PERMISSION_SERVICE || entry.service === "vault") {
-      throw badRequest(`${label} asks for vault access (\`tinycloud.vault\`), which a request file cannot carry: it is not part of picking up apps.`);
+      throw badRequest(`${label} asks for the vault (\`tinycloud.vault\`). This command does not sign vault access from a request file: the signer expands it into KV access, delete included, on \`vault/\`.`);
     }
     if (entry.space !== undefined && (typeof entry.space !== "string" || entry.space === "")) {
       throw badRequest(`${label} has an empty space: name the space, or leave it out to mean your \`${APPS_AGENT_SPACE}\` space.`);
@@ -329,14 +329,14 @@ export function finalizeSigningEntries(resolved: readonly PermissionEntry[]): Pe
   resolved.forEach((entry, index) => {
     const label = `Entry ${index + 1} of the request`;
     if (SERVICE_LONG_TO_SHORT[entry.service] === undefined) {
-      throw badRequest(`${label} names the service "${safeInline(entry.service)}", which the signer cannot sign.`);
+      throw badRequest(`${label} names the service "${safeClipped(entry.service)}", which the signer cannot sign.`);
     }
     const space = entry.space;
     const raw = isRawEncryptionPermission(entry);
     const concrete = typeof space === "string" &&
       (space.startsWith("tinycloud:") || (space === RAW_ENCRYPTION_SPACE && raw));
     if (!concrete) {
-      throw badRequest(`${label} does not resolve to a concrete space (got "${safeInline(String(space))}").`);
+      throw badRequest(`${label} does not resolve to a concrete space (got "${safeClipped(String(space))}").`);
     }
     const normalized = normalizePkhIdentifier(space);
     if (!raw) spaces.add(normalized);
@@ -349,7 +349,7 @@ export function finalizeSigningEntries(resolved: readonly PermissionEntry[]): Pe
     merged.set(key, existing === undefined ? unified : { ...existing, actions: [...existing.actions, ...entry.actions] });
   });
   if (spaces.size > 1) {
-    throw badRequest(`The request names ${spaces.size} different spaces (${[...spaces].map((space) => `"${safeInline(space)}"`).join(", ")}); a grant covers one space, so make one request per space.`);
+    throw badRequest(`The request names ${spaces.size} different spaces (${safeClippedList([...spaces])}); a grant covers one space, so make one request per space.`);
   }
   return [...merged.values()].map((entry) => ({ ...entry, actions: [...new Set(entry.actions)].sort() }));
 }
