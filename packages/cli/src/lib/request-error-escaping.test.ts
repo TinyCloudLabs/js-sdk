@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 
 import { entriesForSigning, finalizeSigningEntries } from "./apps-agent-preset.js";
+import { assertKnowledgeAppId, assertKnowledgeConcept } from "./knowledge-input.js";
 import { invalidSpaceError } from "./space.js";
 
 const OWNER_APPS = "tinycloud:pkh:eip155:1:0xabc:applications";
@@ -106,5 +107,26 @@ describe("refusals stay short however much request text they would echo", () => 
     expect(message.length).toBeLessThanOrEqual(MAX);
     expect(message).not.toMatch(RAW_CONTROL);
     expect(message).toContain("\\u{1b}[2J");
+  });
+});
+
+describe("knowledge command input errors echo the value escaped and clipped", () => {
+  test("an app id with control characters or 5,000 characters", () => {
+    const hostile = messageOf(() => assertKnowledgeAppId(`app${HOSTILE}\n\t`));
+    expect(hostile).not.toMatch(RAW_CONTROL);
+    expect(hostile).toContain("\\u{1b}[2J");
+    expect(hostile).toContain("\\u{a}");
+    expect(hostile).toContain("\\u{9}");
+    expect(messageOf(() => assertKnowledgeAppId("a".repeat(5000))).length).toBeLessThan(400);
+  });
+
+  test("a concept with control characters or 5,000 characters", () => {
+    const hostile = messageOf(() => assertKnowledgeConcept(`../${HOSTILE}\n`));
+    expect(hostile).not.toMatch(RAW_CONTROL);
+    expect(hostile).toContain("\\u{202e}");
+    expect(hostile).toContain("\\u{a}");
+    const long = messageOf(() => assertKnowledgeConcept(`../${"c".repeat(5000)}`));
+    expect(long.length).toBeLessThan(400);
+    expect(long).toContain("…");
   });
 });

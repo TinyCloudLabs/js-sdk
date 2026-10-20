@@ -1,5 +1,6 @@
 import { ExitCode } from "../config/constants.js";
 import { CLIError } from "../output/errors.js";
+import { safeClipped } from "../output/safe-text.js";
 import { APP_ID_RULE, isAppId } from "./apps-agent-preset.js";
 
 function usage(message: string): CLIError {
@@ -8,7 +9,7 @@ function usage(message: string): CLIError {
 
 /** An app id for `knowledge list --app` / `knowledge read`, or a usage error that says what is expected. */
 export function assertKnowledgeAppId(value: string): string {
-  if (!isAppId(value)) throw usage(`Invalid app id "${value}": ${APP_ID_RULE}.`);
+  if (!isAppId(value)) throw usage(`Invalid app id "${safeClipped(value)}": ${APP_ID_RULE}.`);
   return value;
 }
 
@@ -31,7 +32,7 @@ export function assertKnowledgeConcept(value: string): string {
     : undefined;
   if (reason !== undefined) {
     throw usage(
-      `Invalid concept "${value}": ${reason}. Use a path inside the app's knowledge folder, such as app or tables/meal.md.`,
+      `Invalid concept "${safeClipped(value)}": ${reason}. Use a path inside the app's knowledge folder, such as app or tables/meal.md.`,
     );
   }
   return value;

@@ -434,9 +434,11 @@ describe.skipIf(!NODE_BIN)("tinycloud knowledge against a real node", () => {
     const PAYLOAD = /\u001b\[2J|\u001b\]0;|\u0007|\u0000|\u202e|\u2028|\u2066|\u009b|\u200b|\ufeff/;
     const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
 
-    const onPty = async (artifact: unknown): Promise<{ exitCode: number; output: string }> => {
+    // `redirect` is the documented `auth grant req.json > grant.json`: stdout goes to a file, stderr is still the terminal.
+    const onPty = async (artifact: unknown, redirect = false, yes = true): Promise<{ exitCode: number; output: string }> => {
       await writeFile(requestFile, JSON.stringify(artifact));
-      const command = [process.execPath, cliEntry, "--host", host, "--profile", "owner", "auth", "grant", requestFile, "--yes"].map(quote).join(" ");
+      const args = [process.execPath, cliEntry, "--host", host, "--profile", "owner", "auth", "grant", requestFile, ...(yes ? ["--yes"] : [])];
+      const command = `${args.map(quote).join(" ")}${redirect ? ` > ${quote(join(root, "pty-stdout.json"))}` : ""}`;
       const env: Record<string, string | undefined> = { ...process.env, HOME: home("owner"), TC_HOME: home("owner") };
       delete env.TC_HOST;
       delete env.TC_PRIVATE_KEY;
@@ -458,17 +460,33 @@ describe.skipIf(!NODE_BIN)("tinycloud knowledge against a real node", () => {
       ["a bad space name", { ...base, requested: [...base.requested, { service: "tinycloud.kv", space: `bad${HOSTILE}`, path: "", actions: ["get"] }] }],
       ["a service the signer cannot sign", { ...base, requested: [...base.requested, { service: `tinycloud.zzz${HOSTILE}`, space: "applications", path: "", actions: ["tinycloud.zzz/x"] }] }],
     ];
-    for (const [name, artifact] of cases) {
-      const { exitCode, output } = await onPty(artifact);
-      expect(exitCode, name).not.toBe(0);
-      expect(output, name).not.toMatch(PAYLOAD);
-      expect(output, name).toContain("✗");
+    for (const redirect of [false, true]) {
+      for (const [name, artifact] of cases) {
+        const label = `${name}${redirect ? " (stdout redirected, stderr a terminal)" : ""}`;
+        const { exitCode, output } = await onPty(artifact, redirect);
+        expect(exitCode, label).not.toBe(0);
+        expect(output, label).not.toMatch(PAYLOAD);
+        expect(output, label).toContain(redirect ? '"error"' : "✗");
+        // the sessionDid and requestedExpiry are checked before anything is described: no scope text first
+        if (name === "a bad sessionDid" || name === "a bad requestedExpiry") expect(output, label).not.toContain("asks for");
+      }
     }
 
-    // A request that names the hostile text only in an encryption action reaches the signer's own message, which quotes it.
-    const encryption = await onPty(cases[2]![1]);
-    expect(encryption.output).toContain("\\u{202e}");
-  }, 240_000);
+    // An encryption-only request without --yes reaches the signer's own message, which quotes the text:
+    // a human error escapes it as \u{..}, the redirected JSON form as \uXXXX.
+    const encryptionOnly = {
+      ...base,
+      requested: [{ service: "tinycloud.encryption", path: "urn:tinycloud:encryption:did:pkh:eip155:1:0xabc:default", actions: [`decrypt${HOSTILE}`] }],
+    };
+    const human = await onPty(encryptionOnly, false, false);
+    expect(human.output).not.toMatch(PAYLOAD);
+    expect(human.output).toContain("\\u{202e}");
+    const redirected = await onPty(encryptionOnly, true, false);
+    expect(redirected.output).not.toMatch(PAYLOAD);
+    expect(redirected.output).toContain("\\u202e");
+    expect(redirected.output).toContain("\\u009b");
+    expect(redirected.output).toContain("\\ufeff");
+  }, 300_000);
 
   test("revocation ends a grant", async () => {
     await newAgent("revoked");

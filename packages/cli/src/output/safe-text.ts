@@ -43,3 +43,19 @@ export function safeClippedList(items: readonly string[]): string {
   const shown = items.slice(0, ECHO_LIST_MAX).map((item) => `"${safeClipped(item)}"`).join(", ");
   return items.length > ECHO_LIST_MAX ? `${shown} … and ${items.length - ECHO_LIST_MAX} more` : shown;
 }
+
+/**
+ * Characters JSON.stringify leaves as they are but a terminal acts on or hides: DEL, C1 controls (0x80-0x9f,
+ * including CSI 0x9b), zero-width and bidi controls, line/paragraph separators and the BOM.
+ */
+// eslint-disable-next-line no-control-regex
+const JSON_UNSAFE = /[\u007f-\u009f\u061c\u200b-\u200f\u2028\u2029\u202a-\u202e\u2066-\u2069\ufeff]/g;
+
+/**
+ * `JSON.stringify` whose output is safe to print on a terminal: every character above is written as a `\uXXXX`
+ * escape. The text parses to exactly the same value (JSON.stringify already escapes C0 controls and `"`/`\`).
+ */
+export function safeJsonStringify(value: unknown, space?: number): string {
+  const text = JSON.stringify(value, null, space);
+  return text === undefined ? text : text.replace(JSON_UNSAFE, (character) => `\\u${character.charCodeAt(0).toString(16).padStart(4, "0")}`);
+}

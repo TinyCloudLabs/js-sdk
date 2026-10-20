@@ -1,11 +1,11 @@
 import ora from "ora";
 import { CLI_NAME } from "@tinycloud/operations/cli-name";
-import { safeBlock, safeInline } from "./safe-text.js";
+import { safeBlock, safeInline, safeJsonStringify } from "./safe-text.js";
 import { theme } from "./theme.js";
 import { drainWarnings, mergeWarnings } from "./warnings.js";
 
 export function outputJson(data: unknown): void {
-  process.stdout.write(JSON.stringify(data, null, 2) + "\n");
+  process.stdout.write(safeJsonStringify(data, 2) + "\n");
 }
 
 /** A skipped-grant (or other) diagnostic from an operation result: fixed codes only. */
@@ -81,7 +81,8 @@ export function outputError(
     if (progress) payload.error.progress = progress;
     if (meta) payload.error.meta = meta;
     if (warnings.length > 0) payload.error.warnings = warnings;
-    process.stderr.write(JSON.stringify(payload, null, 2) + "\n");
+    // Stdout may be redirected while stderr is still a terminal, so the JSON form is terminal-safe too.
+    process.stderr.write(safeJsonStringify(payload, 2) + "\n");
   }
 }
 
@@ -95,7 +96,7 @@ export function outputWarnings(warnings: readonly OperationWarningOutput[]): voi
   const combined = mergeWarnings(drainWarnings(), operationWarnings(warnings));
   if (combined.length === 0) return;
   process.stderr.write(shouldOutputJson()
-    ? `${JSON.stringify({ warnings: combined })}\n`
+    ? `${safeJsonStringify({ warnings: combined })}\n`
     : `${theme.warn("!")} ${warningLine(combined)}\n`);
 }
 

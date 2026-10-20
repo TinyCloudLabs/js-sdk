@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 
-import { outputError } from "./formatter.js";
+import { outputError, outputJson } from "./formatter.js";
 
 // One of every class a hostile string can use to drive a terminal or hide text.
 const HOSTILE = "\u001b[2J\u001b]0;owned\u0007\u0000\u202e\u2028\u2066\u009b\u200b\ufeff\r";
@@ -55,11 +55,29 @@ describe("outputError", () => {
     expect(text).toContain("Run `tc knowledge list`.");
   });
 
-  test("JSON output keeps the exact text", () => {
+  test("JSON output (stdout redirected, stderr possibly still a terminal) parses to the exact text but carries no raw character", () => {
     terminal(false);
     outputError("CODE", `bad ${HOSTILE}`, `hint ${HOSTILE}`);
-    const parsed = JSON.parse(written.join("")) as { error: { message: string; hint: string } };
+    const text = written.join("");
+    expect(text.replace(/\n/g, "")).not.toMatch(RAW);
+    const parsed = JSON.parse(text) as { error: { message: string; hint: string } };
     expect(parsed.error.message).toBe(`bad ${HOSTILE}`);
     expect(parsed.error.hint).toBe(`hint ${HOSTILE}`);
+  });
+
+  test("the JSON success output and the warnings line are terminal-safe too", () => {
+    terminal(false);
+    const out: string[] = [];
+    const stdout = spyOn(process.stdout, "write").mockImplementation(((chunk: string | Uint8Array) => {
+      out.push(String(chunk));
+      return true;
+    }) as typeof process.stdout.write);
+    try {
+      outputJson({ value: HOSTILE });
+    } finally {
+      stdout.mockRestore();
+    }
+    expect(out.join("").replace(/\n/g, "")).not.toMatch(RAW);
+    expect((JSON.parse(out.join("")) as { value: string }).value).toBe(HOSTILE);
   });
 });

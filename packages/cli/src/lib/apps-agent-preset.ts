@@ -320,10 +320,10 @@ export function entriesForSigning(requested: readonly PermissionEntry[]): Permis
       entry.actions.some((action) => typeof action !== "string" || action === "")) {
       throw badRequest(`${label} is malformed: it needs a service, a path and at least one action.`);
     }
-    // `tinycloud.vault` is an SDK shorthand the signer turns into KV access (delete included) on `vault/`:
+    // `tinycloud.vault` is an SDK shorthand the signer turns into KV access on `vault/` for the vault actions listed:
     // what would be printed is not what would be signed, and an app-picking agent has no business there.
     if (entry.service === VAULT_PERMISSION_SERVICE || entry.service === "vault") {
-      throw badRequest(`${label} asks for the vault (\`tinycloud.vault\`). This command does not sign vault access from a request file: the signer expands it into KV access, delete included, on \`vault/\`.`);
+      throw badRequest(`${label} asks for the vault (\`tinycloud.vault\`). This command does not sign vault access from a request file: the signer turns it into KV access on \`vault/\` for the vault actions you listed, so the printed list would not show what is signed.`);
     }
     if (entry.space !== undefined && (typeof entry.space !== "string" || entry.space === "")) {
       throw badRequest(`${label} has an empty space: name the space, or leave it out to mean your \`${APPS_AGENT_SPACE}\` space.`);
