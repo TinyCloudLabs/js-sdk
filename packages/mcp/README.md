@@ -120,7 +120,7 @@ to select another profile.
 
 ## Tools
 
-The local server exposes 17 tools. Hosted mode exposes 20: it adds
+The local server exposes 19 tools. Hosted mode exposes 22: it adds
 `tinycloud_connect`, `tinycloud_apps_context`, `tinycloud_apps_read`,
 `tinycloud_apps_write` and `tinycloud_apps_query`, and omits
 `tinycloud_secrets_status` and `tinycloud_auth_import` (local/stdio only):
@@ -132,6 +132,12 @@ The local server exposes 17 tools. Hosted mode exposes 20: it adds
   `tinycloud_account_applications_list`
 - Bounded KV CRUD: `tinycloud_kv_list`, `tinycloud_kv_get`,
   `tinycloud_kv_head`, `tinycloud_kv_put`, `tinycloud_kv_delete`
+- Installed apps' knowledge (`<app_id>/knowledge/` in the `applications`
+  space): `tinycloud_knowledge_list` lists the apps that have a bundle with
+  their concept files; `tinycloud_knowledge_read` reads an app's index, or one
+  concept with its frontmatter parsed. Read the index first and open only the
+  concepts the task needs. These are not the `tinycloud_apps_*` personal-record
+  tools.
 - Bounded SQLite: `tinycloud_sql_schema_inspect`, `tinycloud_sql_query`,
   `tinycloud_sql_execute`
 - Delegated secrets: `tinycloud_secrets_get`, `tinycloud_secrets_status`

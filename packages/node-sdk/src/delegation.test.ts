@@ -282,6 +282,95 @@ describe("activateValidatedRuntimeDelegation", () => {
   });
 });
 
+describe("whole-service (empty path) runtime delegations", () => {
+  const space = "tinycloud:pkh:eip155:1:0xowner:applications";
+
+  /** A compact delegation whose signed resources are `att` and whose claimed resources are `claimed`. */
+  async function activate(
+    att: Record<string, Record<string, unknown>>,
+    claimed: PortableDelegation["resources"],
+  ): Promise<{ activated: Awaited<ReturnType<typeof activateValidatedRuntimeDelegation>>; installed: PortableDelegation[] }> {
+    const authorizationPayload = {
+      iss: "did:key:signed-delegator",
+      aud: REQUESTER_DID,
+      exp: Math.floor(Date.now() / 1000) + 3600,
+      prf: ["bafy-signed-parent"],
+      fct: [{ remainingRedelegationDepth: 0 }],
+      att,
+    };
+    const authorization = `header.${Buffer.from(JSON.stringify(authorizationPayload)).toString("base64url")}.signature`;
+    const delegation: PortableDelegation = {
+      cid: `cid:${authorization}`,
+      delegationHeader: { Authorization: authorization },
+      ownerAddress: "0xowner",
+      chainId: 1,
+      spaceId: space,
+      path: "",
+      actions: ["tinycloud.kv/get"],
+      expiry: new Date(authorizationPayload.exp * 1000),
+      delegateDID: REQUESTER_DID,
+      resources: claimed,
+    };
+    const installed: PortableDelegation[] = [];
+    const node: RuntimeDelegationActivator = {
+      sessionDid: REQUESTER_DID,
+      computeDelegationCid: (value) => `cid:${value}`,
+      async useRuntimeDelegation(candidate) {
+        installed.push(candidate);
+      },
+      getRuntimePermissionDelegations: () => installed,
+    };
+    const activated = await activateValidatedRuntimeDelegation(node, delegation, { host: "https://node.example" });
+    return { activated, installed };
+  }
+
+  const kvGet = { "tinycloud.kv/get": [{}] };
+  const claimedKv = (path: string, claimedSpace = space) =>
+    [{ service: "kv", space: claimedSpace, path, actions: ["tinycloud.kv/get"] }];
+
+  test("activates a delegation whose signed resource has no path and reads it back as the empty path", async () => {
+    const { activated, installed } = await activate(
+      {
+        [`${space}/kv`]: { "tinycloud.kv/get": [{}], "tinycloud.kv/list": [{}] },
+        [`${space}/sql`]: { "tinycloud.sql/read": [{}] },
+      },
+      [
+        { service: "kv", space, path: "", actions: ["tinycloud.kv/get", "tinycloud.kv/list"] },
+        { service: "sql", space, path: "", actions: ["tinycloud.sql/read"] },
+      ],
+    );
+
+    expect(activated.effectivePermissions).toEqual([
+      { service: "tinycloud.kv", space, path: "", actions: ["tinycloud.kv/get", "tinycloud.kv/list"] },
+      { service: "tinycloud.sql", space, path: "", actions: ["tinycloud.sql/read"] },
+    ]);
+    expect(installed).toHaveLength(1);
+  });
+
+  test("a signed resource that is not a known service in a space is still refused", async () => {
+    for (const resource of [`${space}/kvx`, `${space}/kv-extra/a`, `${space}/secrets`, `${space}/`, space, `${space}//kv`, `${space}/KV`]) {
+      await expect(activate({ [resource]: kvGet }, claimedKv(""))).rejects.toMatchObject({
+        reason: "authority_invalid",
+        message: expect.stringContaining("unsupported signed"),
+      });
+    }
+  });
+
+  test("the claimed path must equal the signed one exactly, including empty against non-empty", async () => {
+    // signed whole service, claimed a prefix, and the reverse
+    await expect(activate({ [`${space}/kv`]: kvGet }, claimedKv("docs/"))).rejects.toMatchObject({ reason: "resources_mismatch" });
+    await expect(activate({ [`${space}/kv/docs/`]: kvGet }, claimedKv(""))).rejects.toMatchObject({ reason: "resources_mismatch" });
+    // a trailing `..` is a different literal path, never normalised away
+    await expect(activate({ [`${space}/kv/docs/..`]: kvGet }, claimedKv("docs"))).rejects.toMatchObject({ reason: "resources_mismatch" });
+    await expect(activate({ [`${space}/kv/docs//`]: kvGet }, claimedKv("docs/"))).rejects.toMatchObject({ reason: "resources_mismatch" });
+  });
+
+  test("the claimed space must equal the signed space", async () => {
+    const other = "tinycloud:pkh:eip155:1:0xother:applications";
+    await expect(activate({ [`${space}/kv`]: kvGet }, claimedKv("", other))).rejects.toMatchObject({ reason: "resources_mismatch" });
+  });
+});
+
 describe("activation failure classification (TC-834)", () => {
   async function activateWith(failure: unknown): Promise<unknown> {
     const privateKey = new Uint8Array(32).fill(51);
