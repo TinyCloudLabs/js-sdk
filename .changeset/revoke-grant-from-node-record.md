@@ -1,0 +1,6 @@
+---
+"@tinycloud/cli": patch
+"@tinycloud/operations": patch
+---
+
+`tc delegation revoke <cid>` now revokes an owner-signed grant (such as one from `tc auth grant`) from a profile that has no local record of it, for example another CLI profile or machine of the same owner. When the profile has no matching record, the CLI reads the owner's delegation records from the node and uses that record's space only if the grant was issued by the signed-in owner, directly or through the owner's own session delegations, and every space it covers belongs to that owner; a CID the node does not list, an issuer or space that does not match, or an ambiguous record keeps the existing `RAW_RECAP_RESOURCE_UNSUPPORTED` refusal, now saying "this CLI profile has no record of this grant and the node's record does not match the signed-in owner". A locally recorded grant still resolves first and unchanged. An agent that presents a revoked grant now gets "This grant was revoked. Ask the owner for a new grant" instead of a bare authentication error: the CLI reports it as `GRANT_REVOKED` (exit 3), and operations (including `knowledge list|read` and the MCP tools) keep `AUTH_REQUIRED` with that message, only when the node's 401 says the delegation (or one it derives from) was revoked; any other 401 is unchanged.

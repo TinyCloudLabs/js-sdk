@@ -52,6 +52,21 @@ describe("wrapError", () => {
     expect(cliErrorFromService(deliberate)).toBe(deliberate);
   });
 
+  test("a node 401 that names a revoked grant is GRANT_REVOKED (exit 3) and drops the node text; other 401s are unchanged", () => {
+    for (const reason of ["delegation-revoked", "delegation-ancestor-revoked"]) {
+      const error = cliErrorFromService({
+        code: "KV_ERROR", message: `Failed to list keys: 401 - ${reason}: bafkr4icid`, meta: { status: 401 },
+      });
+      expect(error).toMatchObject({ code: "GRANT_REVOKED", exitCode: 3, status: 401 });
+      expect(error.message).toMatch(/^This grant was revoked\. Ask the owner for a new grant \(`\w+ auth request \.\.\.`\)\.$/);
+      expect(error.message).not.toContain("bafkr4icid");
+    }
+    expect(cliErrorFromService({ code: "KV_ERROR", message: "Failed to list keys: 401 - expired", meta: { status: 401 } }))
+      .toMatchObject({ code: "AUTH_REQUIRED", exitCode: 3 });
+    expect(cliErrorFromService({ code: "KV_ERROR", message: "403 - delegation-revoked", meta: { status: 403 } }))
+      .toMatchObject({ code: "PERMISSION_DENIED", exitCode: 5 });
+  });
+
   test("an operation's typed auth decision without an HTTP status keeps its exit code; a status still decides", () => {
     expect(cliErrorFromService({ code: "AUTH_REQUIRED", message: "The stored session has expired." }))
       .toMatchObject({ code: "AUTH_REQUIRED", exitCode: 3 });

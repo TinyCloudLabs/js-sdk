@@ -5,6 +5,7 @@ import { ExitCode, CONFIG_FILE, PROFILES_DIR, DEFAULT_PROFILE } from "../config/
 import { ProfileDeletedError, ProfileLockTimeoutError, ProfileSymlinkError } from "@tinycloud/operations/state";
 import { isSafeRecovery } from "@tinycloud/operations/recovery";
 import { CLI_NAME } from "@tinycloud/operations/cli-name";
+import { isRevokedGrantRefusal, REVOKED_GRANT_MESSAGE } from "@tinycloud/operations/revoked-grant";
 import {
   buildSecretRequestUrl,
   isSafeRequestAccessRecovery,
@@ -69,6 +70,10 @@ export function cliErrorFromService(
     (verdict === undefined && error.code === "PERMISSION_DENIED");
   const unauthenticated = !denied &&
     (verdict === "unauthenticated" || (verdict === undefined && error.code === "AUTH_REQUIRED"));
+  // The node names a revoked grant in its 401 body; say so instead of asking for a new sign-in.
+  if (unauthenticated && isRevokedGrantRefusal({ ...error, meta, message })) {
+    return new CLIError("GRANT_REVOKED", REVOKED_GRANT_MESSAGE, ExitCode.AUTH_REQUIRED, { status: 401 });
+  }
   return new CLIError(
     denied ? "PERMISSION_DENIED" : unauthenticated ? "AUTH_REQUIRED" : error.code,
     message,

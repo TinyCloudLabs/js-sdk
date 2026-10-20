@@ -7,8 +7,9 @@ import { ExitCode } from "../config/constants.js";
 import { CLIError, cliErrorFromService } from "../output/errors.js";
 import { ensureDelegationAuthority, requirePermissionConsent, type OpenKeyAcquisition } from "../commands/auth.js";
 import { loadLocalGrantArtifacts, readGrantHistory, type StoredAdditionalDelegation } from "./permissions.js";
+import { lookupOwnerSpaceOnNode } from "./revoke-node-record.js";
 
-type ScopeSource = "local-signed-grant-artifact" | "local-stored-grant";
+type ScopeSource = "local-signed-grant-artifact" | "local-stored-grant" | "node-delegation-record";
 type TargetSource = "node" | "local-grant-history" | ScopeSource;
 
 export interface RevocationResult {
@@ -164,14 +165,19 @@ export async function revokeDelegationOnNode(params: {
       if (error === null || typeof error !== "object" || !("code" in error) || error.code !== "RAW_RECAP_RESOURCE_UNSUPPORTED") {
         throw error;
       }
-      const fallback = boundSpace ?? await resolveCidBoundTargetSpace({
-        profileName: ctx.profile, ownerDid: profile.ownerDid ?? ownerDidFromSpace(node.accountSpaceId) ?? ownerDidFromSpace(profile.spaceId),
-        cid, node, host: ctx.host, localTarget: params.localTarget,
+      const ownerDid = profile.ownerDid ?? ownerDidFromSpace(node.accountSpaceId) ?? ownerDidFromSpace(profile.spaceId);
+      let fallback = boundSpace ?? await resolveCidBoundTargetSpace({
+        profileName: ctx.profile, ownerDid, cid, node, host: ctx.host, localTarget: params.localTarget,
       });
+      if (!fallback && ownerDid) {
+        // No local record of the grant (another profile or machine signed it): the owner's node-side record may name it.
+        const space = await lookupOwnerSpaceOnNode(node, cid, ownerDid);
+        if (space) fallback = { space, source: "node-delegation-record" };
+      }
       if (!fallback) {
         throw new CLIError(
           "RAW_RECAP_RESOURCE_UNSUPPORTED",
-          `Cannot safely revoke "${cid}": raw CID ReCap resources are unavailable and no matching owner-signed local grant binds its space to the CID.`,
+          `Cannot revoke "${cid}": this CLI profile has no record of this grant and the node's record does not match the signed-in owner.`,
           ExitCode.PERMISSION_DENIED,
         );
       }
@@ -179,7 +185,9 @@ export async function revokeDelegationOnNode(params: {
       authorityScopeSource = fallback.source;
       authorityScopeReason = fallback.source === "local-signed-grant-artifact"
         ? "Raw-CID revoke authority could not be issued; the fallback space came from an owner-signed local grant whose Authorization recomputes to this CID."
-        : "Raw-CID revoke authority could not be issued; the fallback space came from a locally verified owner-signed stored grant bound to this CID.";
+        : fallback.source === "node-delegation-record"
+          ? "Raw-CID revoke authority could not be issued; the fallback space came from the node's delegation record, whose issuer chains to the signed-in owner and whose space the owner holds."
+          : "Raw-CID revoke authority could not be issued; the fallback space came from a locally verified owner-signed stored grant bound to this CID.";
       targetSpaceSource = fallback.source;
       const acquired = await ensureDelegationAuthority({
         ctx, profile, node,
@@ -187,7 +195,9 @@ export async function revokeDelegationOnNode(params: {
           space: profile.authMethod !== "openkey" && fallback.space === node.accountSpaceId ? "default" : fallback.space,
           path: "", actions: ["tinycloud.delegation/revoke"] }],
         expiryOption: undefined,
-        reason: `Revoke delegation ${cid} using its CID-bound owner-signed grant ${fallback.source === "local-stored-grant" ? "record" : "artifact"}`,
+        reason: fallback.source === "node-delegation-record"
+          ? `Revoke delegation ${cid} using the node's record of the owner's grant`
+          : `Revoke delegation ${cid} using its CID-bound owner-signed grant ${fallback.source === "local-stored-grant" ? "record" : "artifact"}`,
         yes: params.yes, consentAlreadyGiven: true, persist: false,
         openKeyAcquisition: params.openKeyAcquisition,
       });
