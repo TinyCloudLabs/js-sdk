@@ -1254,6 +1254,15 @@ export interface SqliteReplicaStorageOptions {
    */
   diagnosticFiles?: readonly string[];
   /**
+   * Profile byte budget (CONTRACT §4, §5). Applies when the open spec carries no
+   * `quota.maxBytes`. Absent means unbounded, and the store opens with no admit hook.
+   * Bounds the COMMITTED replica blob content of the profile (not the database, WAL, rows or the
+   * pending store). Replaced blobs are unlinked only after their page commits, so on-disk bytes
+   * can transiently reach `maxBytes` plus the bytes one page replaces. Crash orphans are
+   * collected on open and before each admission.
+   */
+  maxBytes?: number;
+  /**
    * Test seam: supply sync transports without WASM/KVService. Production
    * builds invoke through `kvSyncTransport` like the CLI's `grantTransports`.
    * @internal
@@ -1690,6 +1699,47 @@ class SqliteReplicaHandle implements KVReplicaHandle {
     await Promise.allSettled([...this.#inFlight].map((sync) => sync.promise));
     await this.#store.close();
   }
+}
+
+/** Directory entries, or none when the path is absent or not a directory. */
+async function listDir(dir: string): Promise<string[]> {
+  try {
+    return await readdir(dir);
+  } catch (error) {
+    if (error instanceof Error && "code" in error && (error.code === "ENOENT" || error.code === "ENOTDIR")) {
+      return [];
+    }
+    throw error;
+  }
+}
+
+/**
+ * Content bytes across every replica in the profile at `root` (`<root>/<partition>/replicas/<replica>`).
+ * Blobs are stored per replica directory, so a hash held by two replicas counts twice, matching disk use.
+ */
+/**
+ * Remove crash orphans (blobs no committed row references) from every replica in the profile.
+ * Callers hold the profile guard, which every writer holds across its blob write and commit, so an
+ * unreferenced blob cannot belong to an in-flight write.
+ */
+async function collectProfileOrphans(root: string, collectOrphans: (dir: string) => Promise<number>): Promise<void> {
+  for (const partition of await listDir(root)) {
+    const replicasDir = join(root, partition, "replicas");
+    for (const replicaName of await listDir(replicasDir)) {
+      await collectOrphans(join(replicasDir, replicaName));
+    }
+  }
+}
+
+async function profileContentBytes(root: string, contentBytes: (dir: string) => Promise<number>): Promise<number> {
+  let total = 0;
+  for (const partition of await listDir(root)) {
+    const replicasDir = join(root, partition, "replicas");
+    for (const replicaName of await listDir(replicasDir)) {
+      total += await contentBytes(join(replicasDir, replicaName));
+    }
+  }
+  return total;
 }
 
 export function createSqliteReplicaStorage(
@@ -2776,10 +2826,37 @@ export function createSqliteReplicaStorage(
     const replicaHash = replicaHashOf(spec.prefix, device.did);
     partitionId = `${identityKeyHash}:${replicaHash}`;
     const replicaDir = join(idDir, "replicas", replicaHash);
-    const store = await sqlite.SqliteReplicaStore.open(replicaDir, {
-      create: true,
-      guard: storeGuard,
-    });
+    // Quota admission (TC-858 S5). Without maxBytes the store opens exactly as
+    // before: no admit hook. Admission runs inside the store's guarded write,
+    // which is already the profile section, so both share one hold.
+    const quota = spec.quota?.maxBytes ?? options.maxBytes;
+    if (quota !== undefined && (!Number.isSafeInteger(quota) || quota < 0)) {
+      throw new TypeError(`maxBytes must be a non-negative safe integer, got ${quota}.`);
+    }
+    // Recover crash leftovers before this handle's first admission, inside the profile hold.
+    if (quota !== undefined) await collectProfileOrphans(root, sqlite.SqliteReplicaStore.collectOrphans);
+    const store = await sqlite.SqliteReplicaStore.open(
+      replicaDir,
+      quota === undefined
+        ? { create: true, guard: storeGuard }
+        : {
+            create: true,
+            guard: storeGuard,
+            partitionId: basename(idDir),
+            admit: async (page) => {
+              await collectProfileOrphans(root, sqlite.SqliteReplicaStore.collectOrphans);
+              const used = await profileContentBytes(root, sqlite.SqliteReplicaStore.contentBytes);
+              // `blobBytes` is the page's NET bytes (replaced or deleted content is credited), so a
+              // page that frees at least what it adds is always admitted.
+              if (page.blobBytes > 0 && used + page.blobBytes > quota) {
+                throw new replica.ReplicaError(
+                  replica.ReplicaErrorCode.STORAGE_BUDGET,
+                  `Profile storage holds ${used} bytes; this page adds ${page.blobBytes} against a ${quota}-byte quota. Nothing was committed.`,
+                );
+              }
+            },
+          },
+    );
     let generation: number;
     try {
       // First-open race (review): the existence check must run INSIDE the
