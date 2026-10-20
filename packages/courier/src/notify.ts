@@ -13,7 +13,7 @@ export interface Notice {
   threadId: string;
   /** Internal fixed wording; never forwarded as notification prose. */
   detail: string;
-  /** Dedup reference only (message/approval id), never forwarded as prose. */
+  /** Dedup reference only (message/approval/pause id), never forwarded as prose. */
   eventId?: string;
 }
 export type Notifier = (notice: Notice) => Promise<void>;

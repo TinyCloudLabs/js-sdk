@@ -329,13 +329,14 @@ attention-only operation was proven, so `--notify paseo` is unavailable in v0.
 Use the inbox/read/view surfaces, tail the log, or configure your own channel.
 
 Peer pause notices require a paired peer's `inform`. Notices deduplicate per
-kind/thread/day (UTC), cap at 10 per peer/hour across channels, and use only
+pause generation (legacy notices: kind/thread/day UTC), cap every dispatch
+attempt (success or failure) at 10 per peer/hour across channels, and use only
 fixed text, a validated handle and a ULID or thread fingerprint. Subject,
 message and detail prose never enter notification text. The outbox holds at
 most 50 items. Failures retry after 1, 2, 4, then up to 15 minutes, stop after
-8 failures, and keep their retry deadline across restarts. Old counters are
+3 notification attempts or 8 inform failures, and keep retry deadlines across restarts. Old counters are
 pruned. Wakes that reach the adapter count before it runs, including failures;
-failed wakes back off. Held messages remain mirrored and up to 100 recent
+failed wakes back off from completion, with the deadline persisted across restarts. Held messages remain mirrored and up to 100 recent
 messages per thread wake together once after human resume.
 
 ### Sam's setup: notify only, start the session yourself
