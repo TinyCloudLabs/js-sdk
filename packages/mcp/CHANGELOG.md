@@ -1,5 +1,33 @@
 # @tinycloud/mcp
 
+## 0.6.1-beta.29
+
+### Patch Changes
+
+- @tinycloud/node-sdk@3.3.0-beta.30
+- @tinycloud/operations@0.6.1-beta.28
+
+## 0.6.1-beta.28
+
+### Patch Changes
+
+- Updated dependencies [e99a127]
+  - @tinycloud/node-sdk@3.3.0-beta.29
+  - @tinycloud/operations@0.6.1-beta.27
+
+## 0.6.1-beta.27
+
+### Patch Changes
+
+- 4dd842f: Update jose to 6.2.4.
+
+## 0.6.1-beta.26
+
+### Patch Changes
+
+- @tinycloud/node-sdk@3.3.0-beta.28
+- @tinycloud/operations@0.6.1-beta.26
+
 ## 0.6.1-beta.25
 
 ### Patch Changes

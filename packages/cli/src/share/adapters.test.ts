@@ -47,6 +47,8 @@ let historyResolvedProfile: string | undefined;
 let uploadErrorCode: string | undefined;
 let listErrorCode: string | undefined;
 let uploadErrorMeta: Record<string, unknown> | undefined;
+/** The Node has no row for the owner space: every write answers 404 "Space not found". */
+let spaceUnhosted = false;
 let sessionExpiresAt = "2099-01-01T00:00:00.000Z";
 let authenticationError: unknown;
 let registryError: unknown;
@@ -162,6 +164,9 @@ const node = {
       publishEvents.push("upload");
       uploadedSpaces.push(spaceId);
       uploadedPaths.push(path);
+      if (spaceUnhosted) {
+        return { ok: false as const, error: { code: "KV_WRITE_FAILED", message: `Failed to put key ${JSON.stringify(path)}: 404 - Space not found`, service: "kv", meta: { status: 404 } } };
+      }
       if (uploadErrorCode === undefined && options?.ifNoneMatch === "*" && ownerKv.has(path)) {
         return { ok: false as const, error: { code: "KV_PRECONDITION_FAILED", message: "exists", service: "kv", meta: { status: 412 } } };
       }
@@ -287,6 +292,7 @@ afterEach(() => {
   uploadErrorCode = undefined;
   listErrorCode = undefined;
   uploadErrorMeta = undefined;
+  spaceUnhosted = false;
   uploadedSpaces.length = 0;
   historyCacheDir = undefined;
   historyLocalKey = true;
@@ -751,6 +757,48 @@ describe("TinyCloud share authority adapter", () => {
     const requirement = createEmailDomainCredentialRequirement({ domain: "example.com", profile: commitment.profile, credentialType: commitment.credentialType });
     expect(await credentialRequirementDigest(requirement)).toBe(commitment.requirementDigest);
     expect(commitment.descriptorDigest).toBe(await goldenDescriptorDigest("email-domain-proof-v1"));
+  });
+
+  describe("owner space not found on upload (TC-1578)", () => {
+    const publish = (target: TargetPublishInput["target"], artifact?: { id: string }) => createShareAuthorityAdapters({
+      origin: "https://share.example",
+      profileName: async () => "test",
+      fetchFn: (async () => Response.json({
+        version: "tinycloud.share/config-v2",
+        shareOrigin: "https://share.example",
+        registryOrigin: "https://registry.example",
+        credentialsOrigin: "https://credentials.example",
+      })) as unknown as typeof globalThis.fetch,
+    }).targetAdapter.publish({
+      source: new TextEncoder().encode("report"),
+      filename: "report.md",
+      target,
+      expiresAt: new Date("2030-01-01T00:00:00.000Z"),
+      origin: "https://share.example",
+      ...(artifact === undefined ? {} : { artifact }),
+    });
+
+    it("types a 404 Space not found on the upload as space-not-ready, once, for bearer, addressed and artifact shares", async () => {
+      for (const [target, artifact] of [[{ kind: "bearer" as const }, undefined], [{ kind: "email" as const, address: "alice@example.com" }, undefined], [{ kind: "bearer" as const }, { id: "art_t" }]] as const) {
+        spaceUnhosted = true;
+        uploadedPaths.length = 0;
+        const error = await publish(target, artifact).then(() => undefined, (caught: unknown) => caught);
+        expect(error).toBeInstanceOf(SharePublishAuthorityError);
+        expect((error as InstanceType<typeof SharePublishAuthorityError>).failure).toEqual({ kind: "space-not-ready" });
+        // The Node's own error is kept on `cause`, not in the message; nothing retries.
+        expect((error as Error).cause).toMatchObject({ message: expect.stringContaining("404 - Space not found") });
+        expect((error as Error).message).not.toContain("Space not found");
+        expect(uploadedPaths).toHaveLength(1);
+      }
+    });
+
+    it("does not remap other upload failures, including other 404s", async () => {
+      for (const [code, meta, kind] of [["UNAVAILABLE", undefined, "upload-failed"], ["KV_NOT_FOUND", { status: 404 }, "upload-failed"], ["STORAGE_QUOTA_EXCEEDED", { status: 402 }, "storage-full"]] as const) {
+        uploadErrorCode = code;
+        uploadErrorMeta = meta;
+        await expect(publish({ kind: "bearer" })).rejects.toMatchObject({ failure: { kind } });
+      }
+    });
   });
 
   describe("artifact versions (TC-1428)", () => {

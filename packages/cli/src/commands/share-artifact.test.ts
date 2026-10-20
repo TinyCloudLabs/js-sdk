@@ -207,3 +207,77 @@ describe("tc share versions", () => {
     expect(result.stderr).toContain("(tinycloud.kv/list)");
   });
 });
+
+describe("tc share publish: component files and link output", () => {
+  async function fileNamed(name: string): Promise<string> {
+    const root = await mkdtemp(join(tmpdir(), "tc-share-media-"));
+    const path = join(root, name);
+    await writeFile(path, "export default function App() { return null; }\n", "utf8");
+    return path;
+  }
+
+  test("a .jsx or .tsx file is published as text/jsx or text/tsx, other extensions are unchanged", async () => {
+    const seen: TargetPublishInput[] = [];
+    configureShareCommandServices({ targetAdapter: { publish: async (request) => { seen.push(request); return publishedFor(request); } } });
+    for (const name of ["App.jsx", "App.tsx", "UPPER.JSX", "note.md", "page.html", "script.js", "blob.bin"]) {
+      await runShareCaptured(["share", "publish", await fileNamed(name), "--viewer-origin", viewerOrigin, "--json"]);
+    }
+    expect(seen.map((request) => request.mediaType)).toEqual(["text/jsx", "text/tsx", "text/jsx", "text/markdown", "text/html", "text/javascript", "application/octet-stream"]);
+  });
+
+  test("--media-type still overrides the extension", async () => {
+    const seen: TargetPublishInput[] = [];
+    configureShareCommandServices({ targetAdapter: { publish: async (request) => { seen.push(request); return publishedFor(request); } } });
+    await runShareCaptured(["share", "publish", await fileNamed("App.jsx"), "--media-type", "text/plain", "--viewer-origin", viewerOrigin, "--json"]);
+    expect(seen[0]?.mediaType).toBe("text/plain");
+  });
+
+  test("--to anyone --action edit is refused with an exit code and message, and nothing is published", async () => {
+    let published = 0;
+    configureShareCommandServices({ targetAdapter: { publish: async (request) => { published += 1; return publishedFor(request); } } });
+    const file = await input();
+    for (const to of ["anyone", "bearer"]) {
+      for (const actions of [["edit"], ["read", "edit"]]) {
+        const result = await refusal(["share", "publish", file, "--to", to, "--action", ...actions, "--json"]);
+        expect(result.exitCode).toBe(2);
+        expect(result.stderr).toContain("INVALID_ARGUMENT");
+        expect(result.stderr).toContain(`--action edit is not available with --to ${to}:`);
+        expect(result.stdout).toBe("");
+      }
+    }
+    expect(published).toBe(0);
+  });
+
+  test("edit stays available to an addressed recipient", async () => {
+    const seen: TargetPublishInput[] = [];
+    configureShareCommandServices({ targetAdapter: { publish: async (request) => { seen.push(request); return publishedFor(request); } } });
+    const result = await refusal(["share", "publish", await input(), "--to", did, "--action", "read", "edit", "--viewer-origin", viewerOrigin, "--json"]);
+    expect(result.exitCode).toBeUndefined();
+    expect(seen[0]?.actions).toEqual(["read", "edit"]);
+  });
+
+  test("publish --json never contains the link, the fragment or tc1=", async () => {
+    configureShareCommandServices({ targetAdapter: { publish: async (request) => publishedFor(request) } });
+    const file = await input();
+    for (const args of [
+      ["share", "publish", file, "--viewer-origin", viewerOrigin, "--json"],
+      ["--json", "share", "publish", file, "--viewer-origin", viewerOrigin],
+      ["share", "publish", file, "--viewer-origin", viewerOrigin, "--artifact", "new", "--json"],
+    ]) {
+      const result = await runShareCaptured(args);
+      expect(result.stdout).not.toContain("tc1=");
+      expect(result.stdout).not.toContain("#");
+      expect(result.stderr).not.toContain("tc1=");
+      const body = JSON.parse(result.stdout) as Record<string, unknown>;
+      expect(body).not.toHaveProperty("url");
+      expect(body).toMatchObject({ protocol: "tinycloud-share", link: { cid: "bafy-native" } });
+    }
+  });
+
+  test("share show --reveal-link still refuses --json", async () => {
+    const result = await refusal(["share", "show", "any-share-id", "--reveal-link", "--json"]);
+    expect(result.exitCode).toBe(2);
+    expect(result.stderr).toContain("--reveal-link cannot be combined with --json");
+    expect(result.stdout).toBe("");
+  });
+});

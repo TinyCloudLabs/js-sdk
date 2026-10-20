@@ -19,12 +19,18 @@ export function toChecksumAddress(address: string): string {
   return out;
 }
 
-/** All-lowercase, all-uppercase or correctly checksummed. A mixed-case address with a wrong EIP-55 checksum is refused. */
+/** All-lowercase or correctly checksummed. An all-uppercase address, or a mixed-case one with a wrong EIP-55 checksum, is refused. */
 export function isValidAddress(address: string): boolean {
   if (!/^0x[0-9a-fA-F]{40}$/.test(address)) return false;
   const body = address.slice(2);
-  if (body === body.toLowerCase() || body === body.toUpperCase()) return true;
+  if (body === body.toLowerCase()) return true;
   return toChecksumAddress(address) === address;
+}
+
+/** Canonical `did:pkh:eip155:<chainId>:<EIP-55 address>` of a valid pkh DID, or null. */
+export function canonicalPkhDid(did: unknown): string | null {
+  const parsed = parsePkhDid(did);
+  return parsed ? `did:pkh:eip155:${parsed.chainId}:${toChecksumAddress(parsed.address)}` : null;
 }
 
 /** Parses `did:pkh:eip155:<chainId>:<address>`; null for anything else (no byte fallback). */

@@ -1,6 +1,6 @@
 {
   "name": "@tinycloud/sdk-core",
-  "version": "3.3.0-beta.27",
+  "version": "3.3.0-beta.30",
   "description": "Core TinyCloud SDK - shared interfaces and TinyCloud class",
   "author": "TinyCloud, Inc.",
   "license": "EGPL",
@@ -42,6 +42,11 @@
       "types": "./dist/held-credentials/index.d.ts",
       "import": "./dist/held-credentials/index.js",
       "require": "./dist/held-credentials/index.cjs"
+    },
+    "./kv-list-matching": {
+      "types": "./dist/kv-list-matching/index.d.ts",
+      "import": "./dist/kv-list-matching/index.js",
+      "require": "./dist/kv-list-matching/index.cjs"
     }
   },
   "files": [
@@ -67,7 +72,7 @@
     "siwe": "^3.0.0",
     "viem": "^2.21.53",
     "zod": "^3.22.0",
-    "zod-to-json-schema": "^3.22.0"
+    "zod-to-json-schema": "^3.25.2"
   },
   "devDependencies": {
     "@types/ms": "^0.7.34",

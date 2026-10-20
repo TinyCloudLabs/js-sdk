@@ -1,5 +1,23 @@
 # tinycloud-openkey-example-app
 
+## 0.0.37-beta.30
+
+### Patch Changes
+
+- @tinycloud/web-sdk@3.3.0-beta.30
+
+## 0.0.37-beta.29
+
+### Patch Changes
+
+- @tinycloud/web-sdk@3.3.0-beta.29
+
+## 0.0.37-beta.28
+
+### Patch Changes
+
+- @tinycloud/web-sdk@3.3.0-beta.28
+
 ## 0.0.37-beta.27
 
 ### Patch Changes

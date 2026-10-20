@@ -25,7 +25,8 @@ export function randomNonce(): string {
 
 /**
  * In-memory store for tests and single-process tools: single process only; not safe across
- * instances/isolates/replicas (no cross-isolate atomicity). Never use it in production Workers.
+ * instances/isolates/replicas (no cross-isolate atomicity). It never expires entries: there is no
+ * TTL, so a nonce lives until it is consumed or the process ends. Never use it in production Workers.
  */
 export class InMemoryNonceStore implements NonceStore {
   private readonly nonces = new Map<string, string>();

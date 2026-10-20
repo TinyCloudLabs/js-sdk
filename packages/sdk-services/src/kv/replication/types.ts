@@ -554,6 +554,10 @@ export interface ReplicationOptions {
   /**
    * Replica byte budget; absent means unbounded. Browser: origin-wide across every partition.
    * Node/CLI: per profile (per storage dir). Forwarded to storage via `KVReplicaSpec.quota`.
+   * Node/CLI bounds the COMMITTED replica blob content only; the database, WAL, rows and the
+   * pending store are not counted. During a page commit the previous blobs of replaced entries
+   * stay until the commit completes, so on-disk bytes can transiently reach `maxBytes` plus the
+   * bytes that page replaces. Orphaned blobs left by a crash are counted until collected on open.
    */
   maxBytes?: number;
   /** Browser free-space floor; default DEFAULT_MIN_FREE_BYTES (64 MiB). Ignored on node/CLI. */

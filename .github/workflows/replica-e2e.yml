@@ -36,6 +36,10 @@ on:
       - ".github/workflows/replica-e2e.yml"
       - "tests/replication-harness/**"
       - ".github/workflows/replication-harness.yml"
+      # A lockfile-only change can move the bundled worker (#606: +86 B), so
+      # root dependency manifests must trigger the size checks too.
+      - "bun.lock"
+      - "package.json"
   schedule:
     - cron: "17 4 * * 1"
   push:

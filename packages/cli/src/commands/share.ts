@@ -39,6 +39,7 @@ import { canonicalMailbox } from "@tinycloud/share-envelope";
 import { ProfileLockTimeoutError } from "@tinycloud/operations/state";
 import { parseDuration } from "../lib/duration.js";
 import { CLIError, handleError, storageFullError, wrapError } from "../output/errors.js";
+import { classifyShareFailure } from "../share/failure-class.js";
 import { authorizationRequiredJson, inspectHuman, publishHuman, receiveHuman, receiveJson, writeJson } from "../share/output.js";
 import { MAX_SHARE_STDIN_BYTES, readBoundedUrlStdin, readShareInput, shareInputFilename, writeShareOutput } from "../share/io.js";
 
@@ -183,6 +184,18 @@ export function shareCliError(error: unknown, operation: "publish" | "notify" = 
     if (failure.kind === "storage-full") {
       return storageFullError(failure)!;
     }
+    if (failure.kind === "space-not-ready") {
+      // The Node's own error stays on `cause`; its text never reaches output.
+      return Object.assign(
+        new CLIError(
+          "SPACE_NOT_READY",
+          "Your TinyCloud space isn't ready for this yet (SPACE_NOT_READY). This is a known node problem being fixed: retry after the node update; contact support with this code if it persists.",
+          4,
+          { hint: "Nothing was shared, and repeating the command is safe. Retries keep failing until the node is updated." },
+        ),
+        { cause: error.cause },
+      );
+    }
     if (failure.kind === "upload-failed") {
       return new CLIError("UPLOAD_FAILED", "share source upload failed; nothing was shared", 4);
     }
@@ -220,8 +233,13 @@ export function shareCliError(error: unknown, operation: "publish" | "notify" = 
   };
   if (nodeCode === "ENOENT") return new CLIError("INVALID_ARGUMENT", "share input was not found", 2);
   if (nodeCode === "EISDIR") return new CLIError("INVALID_ARGUMENT", "share input must be a Markdown file", 2);
-  if (error instanceof TypeError) return new CLIError("INVALID_ARGUMENT", "share input is invalid", 2);
   const mapped = typeof nodeCode === "string" && known[nodeCode] !== undefined ? known[nodeCode] : known[message];
+  // A node or network failure no mapping above claimed (an HTTP status from a
+  // policy, delegation, revoke or delivery call; an unreachable node) is named
+  // by class and status instead of collapsing into an invalid-argument error.
+  const classified = mapped === undefined ? classifyShareFailure(error, `\`${CLI_NAME} auth login\``) : undefined;
+  if (classified !== undefined) return Object.assign(new CLIError(classified.code, classified.reason, classified.exitCode), { cause: error });
+  if (error instanceof TypeError) return new CLIError("INVALID_ARGUMENT", "share input is invalid", 2);
   // Share adapters are external authority seams. Never echo an adapter's
   // arbitrary exception text to contract stdout/stderr; it may contain a
   // bearer URL, claim, session identifier, or provider response.
@@ -312,7 +330,9 @@ function mediaTypeFor(filename: string): string {
         : extension === "json" ? "application/json"
           : extension === "css" ? "text/css"
             : extension === "js" ? "text/javascript"
-              : "application/octet-stream";
+              : extension === "jsx" ? "text/jsx"
+                : extension === "tsx" ? "text/tsx"
+                  : "application/octet-stream";
 }
 
 function requestedActions(values: readonly string[] | undefined): readonly ("read" | "list" | "edit")[] {
@@ -369,6 +389,8 @@ export function registerShareCommand(program: Command): void {
         const target = parseShareTarget(options.to);
         const actions = requestedActions(options.action);
         if (options.prefix && target.kind === "bearer") throw new CLIError("INVALID_ARGUMENT", "--prefix requires an addressed target", 2);
+        // A link is read-only: the bearer delegation never carries put, so an edit request would be dropped silently.
+        if (target.kind === "bearer" && actions.includes("edit")) throw new CLIError("INVALID_ARGUMENT", `--action edit is not available with --to ${options.to}: a link can only be read; address a recipient to allow edits`, 2);
         if (inputs.length > 1 && target.kind === "bearer") throw new CLIError("UNSUPPORTED_LINK", "multiple files require an addressed target", 2);
         const artifact = artifactRequest(options, actions, inputs.length);
         if (inputs.length > 1 && !options.prefix) throw new CLIError("INVALID_ARGUMENT", "multiple files require --prefix", 2);
