@@ -339,7 +339,7 @@ describe("browser callback login", () => {
 });
 
 const OPENKEY = "https://openkey.test";
-const HINT = "Still waiting. If your browser asked to connect to devices on your network, choose Allow. You can also finish by entering the code shown in the browser (`tinycloud auth login --paste` / the paste option)";
+const HINT_PREFIX = "Still waiting.";
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
 describe("browser callback wait", () => {
@@ -368,7 +368,7 @@ describe("browser callback wait", () => {
     if (interactive) Object.defineProperty(process, "stdin", { configurable: true, value: new PassThrough() });
     return {
       messages,
-      hints: () => messages.filter((message) => message === HINT).length,
+      hints: () => messages.filter((message) => message.startsWith(HINT_PREFIX)).length,
       restore: () => {
         error.mockRestore();
         if (stdin) Object.defineProperty(process, "stdin", stdin);

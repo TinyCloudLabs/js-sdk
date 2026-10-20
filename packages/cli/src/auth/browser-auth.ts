@@ -65,7 +65,7 @@ const CALLBACK_DEADLINE_MS = 5 * 60 * 1000;
 /** Delay before the one-time how-to line while the callback is still pending. */
 const CALLBACK_HINT_DELAY_MS = 15 * 1000;
 const CALLBACK_HINT =
-  "Still waiting. If your browser asked to connect to devices on your network, choose Allow. You can also finish by entering the code shown in the browser (`tinycloud auth login --paste` / the paste option)";
+  "Still waiting. If your browser asked to connect to devices on your network, choose Allow. Or press Ctrl+C and run `tinycloud auth login --paste` to enter a code instead.";
 
 export function publicJwkForDelegation(jwk: object): object {
   const publicJwk: Record<string, unknown> = {};
