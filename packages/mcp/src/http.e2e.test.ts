@@ -75,7 +75,7 @@ test("official Streamable HTTP client authenticates and starts delegated setup",
   resources.push(() => client.close());
 
   const tools = await client.listTools();
-  expect(tools.tools).toHaveLength(20);
+  expect(tools.tools).toHaveLength(22);
   expect(tools.tools.map((tool) => tool.name)).toContain("tinycloud_connect");
   // TC-834 scopes secrets status to local/stdio; hosted lacks a persistent
   // reauthorization path for a server-revoked session (TC-896).
