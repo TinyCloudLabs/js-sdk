@@ -24,7 +24,7 @@ import {
 import { commitReceipts, collectInbound, renderInboxText, writeOut } from './inbox.js';
 import { getJson, listAll, putCreate, putMatch, del } from './store.js';
 import { DEFAULT_ORDERS } from './orders.js';
-import { requestFields, requestText } from './request.js';
+import { requestFields, requestIds, requestText } from './request.js';
 import { requestHash } from './canonical.js';
 import { targetHelp } from './guard/target.js';
 import type { ParsedArgs } from './args.js';
@@ -619,6 +619,7 @@ export async function cmdRequest(args: ParsedArgs) {
   const peerHandle = requireFlag(args, 'peer', requestUsage());
   getPeer(profile, peerHandle);
   const flag = (name: string) => (args.get(name) === 'true' ? undefined : args.get(name));
+  requestIds({ threadId, taskId });
   const fields = requestFields({ verb: flag('verb'), target: flag('target'), summary: flag('summary') });
   const risk = args.get('risk');
   const id = ulid();

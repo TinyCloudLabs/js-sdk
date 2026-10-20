@@ -49,7 +49,7 @@ tc courier pair accept --file a.json
 tc courier send bob --new "Subject" --ask "…" --file handoff.md
 tc courier inbox && tc courier read <threadId>
 tc courier task new --peer bob --thread <id> --state working --ask a1
-tc courier request <threadId> --peer bob --task <id> --action "…" --why "…"
+tc courier request <threadId> --peer bob --task <id> --verb merge --target owner/repo#12 --summary "Merge PR 12" --why "…"
 tc courier orders bob
 ```
 
@@ -137,9 +137,7 @@ subject is quoted and flattened onto one line.
 A wake succeeds when the agent run exits 0 (`--wake-timeout`, default 900 s,
 kills a run that hangs). A failed wake stays pending and retries after 60 s.
 
-### Approvals
-
-### Request fields and text rules (shared with the view)
+### Approvals: request fields, text rules and `courier approval`
 
 `courier request` writes structured fields into `me/requests/<id>.json`:
 `verb` (`merge`, `deploy`, `publish`, `spend` or `other`), `target` and

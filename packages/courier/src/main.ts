@@ -34,13 +34,17 @@ Threads (agents run these):
                                    The merged thread: both sides' messages + tasks
   task <taskId|new> --peer p --thread <id> --state <s> [--note …] [--artifact f]… [--ask a1]
                                    Create or update a task (A2A states; updates use if-match)
-  request <threadId> --peer p --task <id> --action "…" --why "…" [--risk "…"]
-                                   Ask MY human (writes me/requests/, task → AUTH_REQUIRED)
+  request <threadId> --peer p --task <id> --verb merge|deploy|publish|spend|other --target <t>
+          --summary "…" --why "…" [--risk "…"] [--action "…"]
+                                   Ask MY human (writes me/requests/, task → AUTH_REQUIRED). The owner
+                                   approves that verb and target; every field is refused, never repaired,
+                                   if it has hidden text or is too long (see README: request fields).
   orders <peer> [--json]           Standing orders for this peer (me/orders/<peer>.md or defaults)
-  approval <id> [--action "…"] [--peek]
+  approval <id> --verb <v> --target <t> [--peek]
                                    Check MY human's decision on request <id> before a gated action: must
-                                   be approved, match the request exactly, be under 24 h old and unused.
-                                   Consumes it (exit 0); --peek only checks. A denial or mismatch exits 1.
+                                   be approved, match the request's verb and target exactly, be under 24 h
+                                   old and unused. Consumes it (exit 0); --peek only checks (--verb and
+                                   --target optional). A denial or mismatch exits 1.
 
 Delivery (one watcher per person per machine; never calls a model):
   watch [--wake none|paseo|claude|exec] [--exec <cmd>] [--cwd dir] [--debounce 30] [--poll 60] [--ticket 25] [--once]

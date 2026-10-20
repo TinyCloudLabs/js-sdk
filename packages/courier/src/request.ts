@@ -42,6 +42,15 @@ export function requestFields(input: { verb?: string; target?: string; summary?:
   return { verb: verb as Verb, target: canonical, summary };
 }
 
+const ID = /^[0-9A-Za-z_-]{1,64}$/;
+
+/** `threadId` and `taskId` are written into the request (and so shown and hashed): ULID-like ids only. */
+export function requestIds(ids: { threadId: string; taskId: string }): void {
+  for (const [name, value] of Object.entries(ids)) {
+    if (!ID.test(value)) throw new CourierError('usage', `${name === 'taskId' ? '--task' : 'the thread id'} must be 1 to 64 letters, digits, "_" or "-" (got ${JSON.stringify(value.slice(0, 40))}).`);
+  }
+}
+
 /** The free-text fields of a request, refused (not repaired) if they break the shared text rules. */
 export function requestText(input: { action?: string; reason: string; risk?: string }, summary: string): { action: string; reason: string; risk: string } {
   const action = input.action ?? summary;

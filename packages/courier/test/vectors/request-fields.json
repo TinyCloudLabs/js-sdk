@@ -359,6 +359,45 @@
    "value": "spend:$20 of API credit",
    "valid": true,
    "verb": "spend"
+  },
+  {
+   "name": "Braille blank U+2800",
+   "field": "summary",
+   "value": "Merge\u2800docs",
+   "valid": false
+  },
+  {
+   "name": "Braille blank U+2800 in a target",
+   "field": "target",
+   "value": "note:a\u2800b",
+   "valid": false,
+   "verb": "other"
+  },
+  {
+   "name": "object replacement U+FFFC",
+   "field": "summary",
+   "value": "Merge\ufffcdocs",
+   "valid": false
+  },
+  {
+   "name": "object replacement U+FFFC in a target",
+   "field": "target",
+   "value": "note:a\ufffcb",
+   "valid": false,
+   "verb": "other"
+  },
+  {
+   "name": "musical null notehead U+1D159",
+   "field": "summary",
+   "value": "Merge\ud834\udd59docs",
+   "valid": false
+  },
+  {
+   "name": "musical null notehead U+1D159 in a target",
+   "field": "target",
+   "value": "note:a\ud834\udd59b",
+   "valid": false,
+   "verb": "other"
   }
  ]
 }
