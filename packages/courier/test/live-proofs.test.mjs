@@ -1,11 +1,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { defaultPlan, validatePlan, dryCommands, usageFields, quotaError, reserveAttempt, executePlan, writeProofHook, parseResult } from '../scripts/live-proofs.mjs';
-const temp = () => fs.mkdtempSync(path.join(os.tmpdir(),'courier-live-runner-'));
+import { privateScratch } from './private-scratch.mjs';
+const temp = () => privateScratch('courier-live-runner-');
 
 test('dry-run prints exact four-run commands without consulting any binary or auth store', () => {
   const dir=temp();
