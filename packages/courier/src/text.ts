@@ -77,6 +77,22 @@ export function asciiTargetProblem(value: unknown): string | undefined {
   return textVerdict(value, 'target').reason ?? undefined;
 }
 
+/** Merge pins are hashed as written: a lowercase full commit id and a case-sensitive branch name. */
+export function headShaProblem(value: unknown): string | undefined {
+  return typeof value === 'string' && value.length === 40 && /^[0-9a-f]{40}$/.test(value)
+    ? undefined : 'expected 40 lowercase hex characters';
+}
+
+/** A bounded ASCII subset of Git branch names; never trim, lower-case or otherwise repair it. */
+export function baseBranchProblem(value: unknown): string | undefined {
+  if (typeof value !== 'string' || value.length < 1 || value.length > 100 || /[^A-Za-z0-9._/-]/.test(value) ||
+      value.startsWith('-') || value.endsWith('.') || value.includes('..') || value === 'HEAD' ||
+      value.split('/').some((part) => !part || part.startsWith('.') || part.endsWith('.lock'))) {
+    return 'expected a case-sensitive Git branch name: 1-100 ASCII characters [A-Za-z0-9._/-], no leading -, dot-leading or empty component, .., .lock component suffix, trailing dot or HEAD';
+  }
+  return undefined;
+}
+
 /** What each verb's stored target must look like: the view applies exactly these shapes on top of the ASCII rule. */
 const TARGET_SHAPES: Record<string, RegExp> = {
   merge: /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+(#[0-9]+|@[A-Za-z0-9_.@/+*-]+)$/,

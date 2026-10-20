@@ -38,6 +38,9 @@ export interface VerifiedApproval {
   verb: string;
   target: string;
   summary: string;
+  /** Merge-only pins from the hashed request. Branch names preserve case. */
+  headSha?: string;
+  base?: string;
   peer: string;
   threadId: string;
   taskId: string;
@@ -61,7 +64,7 @@ export function verifyApproval(
   id: string,
   request: unknown,
   approval: unknown,
-  options: { now?: number; verb?: string; target?: string } = {},
+  options: { now?: number; verb?: string; target?: string; headSha?: string; base?: string } = {},
 ): VerifiedApproval {
   const now = options.now ?? Date.now();
   if (!isRecord(request) || request.id !== id) fail('approval-mismatch', `me/requests/${id}.json is missing or its id is not "${id}".`);
@@ -110,7 +113,7 @@ export function verifyApproval(
   }
   const fields = storedRequestFields(request);
   if (!fields) {
-    fail('approval-mismatch', 'The request has no valid structured verb, target and summary (an older request, or a hand-written one); it cannot be approved. File a new `courier request`.');
+    fail('approval-mismatch', 'The request has invalid structured fields (verb, target, summary or merge headSha/base); it cannot be approved. File a new `courier request`.');
   }
   if (options.verb !== undefined && options.verb !== fields.verb) {
     fail('approval-mismatch', `The approval is for "${fields.verb}", not "${options.verb}".`);
@@ -118,9 +121,15 @@ export function verifyApproval(
   if (options.target !== undefined && options.target !== fields.target) {
     fail('approval-mismatch', `The approval is for target ${JSON.stringify(fields.target)}, not ${JSON.stringify(options.target)}.`);
   }
+  for (const key of ['headSha', 'base'] as const) {
+    if (options[key] !== undefined && options[key] !== fields[key]) {
+      fail('approval-mismatch', `The approval's ${key} does not match the supplied ${key}.`);
+    }
+  }
   return {
     requestId: id,
     requestHash: hash,
+    ...(fields.verb === 'merge' ? { headSha: fields.headSha, base: fields.base } : {}),
     decision: approval.decision,
     note: typeof approval.note === 'string' ? approval.note : '',
     decidedAt: approval.decidedAt as string,
@@ -154,7 +163,7 @@ export async function consumeApproval(kv: KV, id: string, at = new Date()): Prom
 const SAFE = /^[0-9A-Za-z_-]{1,64}$/;
 
 export const approvalUsage = () =>
-  `Usage: ${cmd('approval <id> --verb <v> --target <t> [--peek]')} (--verb and --target may be omitted with --peek)`;
+  `Usage: ${cmd('approval <id> --verb <v> --target <t> [--head-sha <sha>] [--base <branch>] [--peek]')} (--verb and --target may be omitted with --peek)`;
 
 /**
  * `courier approval <id> --verb V --target T`: exit 0 and consume the approval only if the owner approved this exact
@@ -175,6 +184,8 @@ export async function cmdApproval(args: ParsedArgs): Promise<void> {
   };
   const verb = flag('verb');
   const rawTarget = flag('target');
+  const headSha = flag('head-sha');
+  const base = flag('base');
   if ((verb === undefined) !== (rawTarget === undefined)) fail('usage', `--verb and --target go together. ${approvalUsage()}`);
   if (verb === undefined && !args.has('peek')) fail('usage', `Say what you are about to do, so the approval is bound to it. ${approvalUsage()}\n${targetHelp()}`);
   const target = verb !== undefined ? canonicalTarget(verb, rawTarget!) : undefined;
@@ -183,7 +194,7 @@ export async function cmdApproval(args: ParsedArgs): Promise<void> {
   if (!request) fail('approval-mismatch', `No request ${id} in me/requests/.`);
   const approval = await getJson<unknown>(node.kv, k.approval(id));
   if (!approval) fail('approval-missing', `No approval for request ${id} yet. Your owner decides in the view or in your chat; stop and wait.`);
-  const verified = verifyApproval(id, request.value, approval.value, { verb, target });
+  const verified = verifyApproval(id, request.value, approval.value, { verb, target, headSha, base });
   if (verified.decision === 'denied') {
     await writeOut(`${JSON.stringify({ ok: false, code: 'approval-denied', ...verified }, null, 2)}\n`);
     throw new CourierError('approval-denied', `Your owner denied request ${id}${verified.note ? `: ${verified.note}` : ''}. Do not take the action.`);
