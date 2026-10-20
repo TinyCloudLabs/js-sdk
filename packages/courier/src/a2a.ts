@@ -55,7 +55,12 @@ export interface CourierExt {
   inReplyTo: string | null;
   asks?: CourierAsk[];
   constraints?: string[];
+  /** Machine-readable system notices a watcher posts (always `intent: inform`, so they never wake anyone). */
+  notice?: CourierNotice;
 }
+
+export type CourierNotice = 'thread-paused';
+export const COURIER_NOTICES: CourierNotice[] = ['thread-paused'];
 
 export interface MessagePart {
   text?: string;
@@ -104,6 +109,7 @@ export interface BuildMessageArgs {
   inReplyTo?: string | null;
   referenceTaskIds?: string[];
   fileParts?: MessagePart[];
+  notice?: CourierNotice;
 }
 
 export function messageRole(input: { startedByMe: boolean; refsOwnTask: boolean; refsAnyTask: boolean }): 'ROLE_USER' | 'ROLE_AGENT' {
@@ -144,6 +150,7 @@ export function buildMessage(a: BuildMessageArgs): CourierMessage {
         inReplyTo: a.inReplyTo ?? null,
         ...(a.asks?.length ? { asks: a.asks } : {}),
         ...(a.constraints?.length ? { constraints: a.constraints } : {}),
+        ...(a.notice ? { notice: a.notice } : {}),
       },
     },
   };
@@ -206,6 +213,7 @@ export interface MessageView {
   asks?: CourierAsk[];
   constraints?: string[];
   inReplyTo?: string | null;
+  notice?: CourierNotice;
   invalid: string[];
 }
 
@@ -225,6 +233,7 @@ export function messageView(value: unknown): MessageView {
   let asks: CourierAsk[] | undefined;
   let constraints: string[] | undefined;
   let inReplyTo: string | null | undefined;
+  let notice: CourierNotice | undefined;
 
   if (ext && Object.hasOwn(ext, 'from')) {
     const raw = ext.from;
@@ -258,8 +267,13 @@ export function messageView(value: unknown): MessageView {
     if (ext.inReplyTo === null || typeof ext.inReplyTo === 'string') inReplyTo = ext.inReplyTo;
     else invalid.push('inReplyTo');
   }
+  if (ext && Object.hasOwn(ext, 'notice')) {
+    if (typeof ext.notice === 'string' && (COURIER_NOTICES as string[]).includes(ext.notice)) notice = ext.notice as CourierNotice;
+    else invalid.push('notice');
+  }
   return {
     text: firstText(parts),
+    ...(notice ? { notice } : {}),
     ...(from ? { from } : {}),
     ...(intent ? { intent } : {}),
     ...(asks ? { asks } : {}),

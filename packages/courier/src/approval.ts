@@ -5,7 +5,8 @@ import { requestHash } from './canonical.js';
 import { requestShapeProblem, storedRequestFields } from './request.js';
 import { allStrings, hiddenTextProblem, MAX_ACTION, MAX_REASON, MAX_RISK, plainLineProblem, plainTextProblem } from './text.js';
 import { canonicalTarget, targetHelp } from './guard/target.js';
-import { getJson, putCreate } from './store.js';
+import { getJson } from './store.js';
+import { isConsumed, markConsumed } from './consumed.js';
 import type { KV } from './inbox.js';
 import type { ParsedArgs } from './args.js';
 import { cmd } from './program.js';
@@ -143,22 +144,14 @@ export function verifyApproval(
 }
 
 /**
- * True if the approval was used (the marker under `me/state/approvals-used/`). Note the courier key can delete under
- * `me/state/` (spec §3); a delete-proof record is being designed separately (G3), so this is the one place to change.
+ * True if the approval was used: the marker under `me/consumed/`, which the courier key can create but never delete.
+ * Presence is the signal; only a key-level 404 means unused; anything else throws `approval-state-unknown`, so every
+ * caller fails closed (see consumed.ts).
  */
-export async function approvalIsUsed(kv: KV, id: string): Promise<boolean> {
-  return Boolean(await getJson(kv, k.approvalUsed(id)));
-}
+export const approvalIsUsed = isConsumed;
 
 /** Marks an approval used. The marker is create-only, so of two racing callers exactly one wins. */
-export async function consumeApproval(kv: KV, id: string, at = new Date()): Promise<void> {
-  try {
-    await putCreate(kv, k.approvalUsed(id), { requestId: id, usedAt: at.toISOString() });
-  } catch (error) {
-    if (error instanceof CourierError && error.code === 'conflict') fail('approval-used', `Approval ${id} was already used; an approval covers one action.`);
-    throw error;
-  }
-}
+export const consumeApproval = markConsumed;
 
 const SAFE = /^[0-9A-Za-z_-]{1,64}$/;
 

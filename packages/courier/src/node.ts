@@ -20,9 +20,9 @@ export function nodeOpts(host: string) {
 
 const activatedCids = new WeakMap<TinyCloudNode, Set<string>>();
 
-export async function courierNode(profile: Profile): Promise<TinyCloudNode> {
-  const key = loadKey();
-  const grant = loadGrant();
+export async function courierNode(profile: Profile, home?: string): Promise<TinyCloudNode> {
+  const key = loadKey(home);
+  const grant = loadGrant(home);
   if (profile.status === 'awaiting-space') {
     if (profile.spacePending) {
       throw new CourierError('no-space', `TinyCloud "${COURIER_SPACE}" space is still being set up by OpenKey; run \`${cmd('init --resume')}\`.`);

@@ -186,7 +186,7 @@ test('courier request --help prints the target forms, not the global help', asyn
   assert.match(out, /--head-sha/);
   assert.match(out, /--base/);
   assert.match(out, /headRefOid,baseRefName/);
-  assert.match(out, /broker \(separate PR\)/);
+  assert.match(out, /headSha and base in the approval hash/);
   assert.ok(!/Setup & pairing/.test(out));
 });
 

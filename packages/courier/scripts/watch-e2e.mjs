@@ -66,7 +66,7 @@ fs.mkdirSync(shimDir);
 fs.writeFileSync(path.join(shimDir, 'courier'), `#!/bin/sh\nexec "${process.execPath}" "${CLI}" "$@"\n`, { mode: 0o755 });
 const adapterArgs = {
   none: [],
-  exec: ['--exec', `printf '%s %s\\n' "$COURIER_PEER" "$COURIER_THREAD" >> '${wakeOut}'`],
+  exec: ['--exec', `printf '%s %s\\n' "$COURIER_PEER" "$COURIER_THREAD" >> '${wakeOut}'`, '--unguarded'],
   claude: ['--wake', 'claude', '--wake-timeout', '420'],
   paseo: ['--wake', 'paseo', '--paseo-provider', opt('paseo-provider', 'claude')],
 }[wakeAdapter];
