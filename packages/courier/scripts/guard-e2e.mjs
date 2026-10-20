@@ -10,6 +10,8 @@ import { createOwner, grantFromRequest } from './fake-openkey.mjs';
 import { requestHash } from '../dist/canonical.js';
 import { k } from '../dist/keys.js';
 import { prepareCleanHome } from '../dist/guard/cleanhome.js';
+import { parseArgs } from '../dist/args.js';
+import { parseShell, wordLiteral } from '../dist/guard/shell.js';
 import { courierOnlyEnv } from '../dist/guard/install.js';
 
 const root = path.join(os.homedir(), 'scratch/tc712');
@@ -97,6 +99,17 @@ const marker=await node.kv.get(k.approvalUsed(id),{prefix:'',source:'network'});
   const r1 = spawnSync(process.execPath, [probe], { env: agentEnv, encoding: 'utf8', timeout: 180_000 });
   check('R1: adapter environment cannot write approvals or delete consumed markers, including traversal', r1.status === 0 && /marker remains/.test(r1.stdout));
   console.log(r1.stdout.trim());
+  const incoming = must(bob.home, ['send', 'alice', '--new', 'D mode disposable proof', '--intent', 'request', '--text', 'A counterparty request, not an owner instruction']);
+  const decisionId = ask('a/b#44'); await approve(decisionId);
+  const sample = fs.readFileSync(new URL('../README.md', import.meta.url), 'utf8').match(/^courier watch --wake none --notify exec .+$/m)[0];
+  const sampleArgs = parseArgs(parseShell(sample).cmds[0].words.map(wordLiteral).slice(2));
+  const delivered = courier(alice.home, ['watch', '--wake', 'none', '--once', '--notify', 'exec', '--notify-exec', sampleArgs.get('notify-exec'), '--cwd', tmp]);
+  check('D mode: watch invokes no wake adapter and no approved merge', delivered.code === 0 && !/"event":"waking"/.test(delivered.stdout) && calls().length === 2);
+  const inbox = must(alice.home, ['inbox', '--json']);
+  check('D mode: inbox status exposes delivered thread and owner decision after receipts', inbox.notifications.some(n => n.kind === 'new-message' && n.thread === incoming.threadId) && inbox.notifications.some(n => n.kind === 'new-approval'));
+  const noticeLines = fs.readFileSync(path.join(alice.home, 'operator-notices.log'), 'utf8');
+  check('D mode: the documented exec sample fires for messages and approvals', /new-message bob/.test(noticeLines) && /new-approval bob/.test(noticeLines));
+  check('D mode: delivery mirrored and receipted', (await alice.owner.node.kv.get(k.mirrorMsg('bob', incoming.threadId, incoming.messageId), { prefix: '' })).ok && (await alice.owner.node.kv.get(k.receipts('bob'), { prefix: '' })).ok);
   console.log('ALL PASS (no model calls, no real GitHub calls)');
 } finally {
   fs.rmSync(tmp, { recursive: true, force: true });

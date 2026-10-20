@@ -71,6 +71,8 @@ Delivery (one watcher per person per machine; never calls a model):
                                    --poll s as the fallback, mirror new messages into me/mirror/, update
                                    receipts, then wake after a --debounce s quiet period. Logs one JSON
                                    line per event. --once: one catch-up pass, wake immediately, exit.
+                                   none: notify-only delivery for new messages and owner decisions; no agent
+                                   starts, no wake adapter invoked, no wake budget spent.
                                    Wake adapters (all run in --cwd, default here):
                                      paseo   find the agent labelled courier-thread=<id> and message it, else
                                              create one [--paseo-provider claude] [--paseo-mode m] [--paseo-bin p].

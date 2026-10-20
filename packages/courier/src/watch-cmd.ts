@@ -235,6 +235,7 @@ export async function cmdWatch(args: ParsedArgs): Promise<void> {
   const node = await courierNode(profile);
   const watcher = new Watcher({
     notificationHome: config.home,
+    notifyOnly: config.adapter === 'none',
     selfKv: node.kv,
     spaceId: profile.spaceId!,
     selfHooks: node.hooks,

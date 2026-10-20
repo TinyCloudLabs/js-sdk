@@ -130,6 +130,8 @@ export interface WatchDeps {
   notify?: Notifier;
   /** Local bounded notification log; omitted by library callers that want no disk output. */
   notificationHome?: string;
+  /** D mode: mirror/receipt and notify the human, never invoke the wake adapter or spend its budget. */
+  notifyOnly?: boolean;
   /**
    * Who this watcher is, for wake claims. `profileId` is stable for this profile on this machine (a restart keeps it,
    * a second profile or machine differs); `pid` and `isAlive` tell a restarted watcher its predecessor is dead.
@@ -420,14 +422,20 @@ export class Watcher {
       const sentAt = sentAtOf(item.messageId);
       log('delivered', {
         via, peer: peer.handle, threadId: item.threadId, messageId: item.messageId, intent: item.intent ?? null,
-        wakes: Boolean(item.intent && WAKE_INTENTS.has(item.intent)) && !this.pausedKeys.has(`${peer.handle}/${item.threadId}`),
+        wakes: !this.deps.notifyOnly && Boolean(item.intent && WAKE_INTENTS.has(item.intent)) && !this.pausedKeys.has(`${peer.handle}/${item.threadId}`),
         ...(this.pausedKeys.has(`${peer.handle}/${item.threadId}`) ? { paused: true } : {}),
         sentAt, latencyMs: sentAt ? at - Date.parse(sentAt) : null,
       });
     }
     await this.mutate(() => {
+      if (this.deps.notifyOnly) {
+        for (const threadId of new Set(delivered.filter(item => item.intent && item.notice !== 'thread-paused').map(item => item.threadId))) {
+          const first = delivered.find(item => item.threadId === threadId)!;
+          this.enqueue({ id: `message:${peer.handle}/${threadId}:${first.messageId}`, kind: 'notify', notice: { kind: 'new-message', peer: peer.handle, threadId, eventId: first.messageId, detail: '' } });
+        }
+      }
       for (const item of delivered) {
-        if (!item.intent || !WAKE_INTENTS.has(item.intent) || this.state.woken.includes(item.messageId)) continue;
+        if (this.deps.notifyOnly || !item.intent || !WAKE_INTENTS.has(item.intent) || this.state.woken.includes(item.messageId)) continue;
         const key = `${peer.handle}/${item.threadId}`;
         if (this.pausedKeys.has(key)) {
           // Delivered and mirrored, but a paused thread never wakes: the message waits for `courier resume`.
@@ -541,7 +549,7 @@ export class Watcher {
         const found = await this.approvalWake(id);
         if ('wake' in found) {
           wakes.push(found.wake);
-          log('approval-seen', { via, approvalId: id, wakes: true, decision: found.wake.approval.decision });
+          log('approval-seen', { via, approvalId: id, wakes: !this.deps.notifyOnly, notifies: Boolean(this.deps.notifyOnly), decision: found.wake.approval.decision });
         } else {
           log('approval-seen', { via, approvalId: id, wakes: false, reason: found.skip });
         }
@@ -556,6 +564,10 @@ export class Watcher {
     await this.mutate(() => {
       this.state.approvalsSeen = [...new Set([...this.state.approvalsSeen, ...handled])].sort();
       for (const { approval, peer, threadId, subject } of wakes) {
+        if (this.deps.notifyOnly) {
+          this.enqueue({ id: `approval:${approval.approvalId}`, kind: 'notify', notice: { kind: 'new-approval', peer, threadId, eventId: approval.approvalId, detail: '' } });
+          continue;
+        }
         const key = `${peer}/${threadId}`;
         const entry = this.state.pending[key] ??= { peer, threadId, subject, messages: [], firstSeenAt: at, lastSeenAt: at };
         entry.approvals ??= [];
@@ -592,6 +604,18 @@ export class Watcher {
   /** Wake every thread whose debounce has elapsed (`force`: all of them now). Threads wake in parallel, one wake per thread at a time. */
   async tick(force = false): Promise<void> {
     if (this.fatalError || this.stopping) return;
+    if (this.deps.notifyOnly) {
+      // A watcher switched from auto-wake to D may have a pending backlog from its previous run.
+      if (Object.keys(this.state.pending).length) await this.mutate(() => {
+        for (const pending of Object.values(this.state.pending)) {
+          if (pending.messages.length) this.enqueue({ id: `message:${pending.peer}/${pending.threadId}:${pending.messages[0].messageId}`, kind: 'notify', notice: { kind: 'new-message', peer: pending.peer, threadId: pending.threadId, eventId: pending.messages[0].messageId, detail: '' } });
+          for (const approval of pending.approvals ?? []) this.enqueue({ id: `approval:${approval.approvalId}`, kind: 'notify', notice: { kind: 'new-approval', peer: pending.peer, threadId: pending.threadId, eventId: approval.approvalId, detail: '' } });
+        }
+        this.state.pending = {};
+      });
+      await this.runOutbox();
+      return;
+    }
     const at = this.now();
     const runs: Promise<void>[] = [];
     for (const [key, pending] of Object.entries(this.state.pending)) {
@@ -746,7 +770,8 @@ export class Watcher {
       const { notice } = item;
       const at = this.now();
       const day = Math.floor(at / DAY_MS);
-      const key = `${notice.kind}:${notice.peer}/${notice.threadId}`;
+      const reference = notice.eventId && SAFE_ID.test(notice.eventId) ? `:${notice.eventId}` : '';
+      const key = `${notice.kind}:${notice.peer}/${notice.threadId}${reference}`;
       if (this.state.peerPausedDay[key] === day) return;
       const recent = (this.state.noticeLog[notice.peer] ?? []).filter(t => at - t < 3600_000);
       if (recent.length >= NOTICES_PER_PEER_PER_HOUR) {
