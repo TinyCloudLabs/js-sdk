@@ -1,8 +1,18 @@
 import { CLI_NAME } from "@tinycloud/operations/cli-name";
 import { CLIError } from "../output/errors.js";
 import { ExitCode } from "../config/constants.js";
+import { safeInline } from "../output/safe-text.js";
 import { ProfileManager } from "../config/profiles.js";
 import type { ProfileConfig } from "../config/types.js";
+
+/** The error for a space that is neither a short name nor a full URI. The text came from the user or a request file: escaped. */
+export function invalidSpaceError(input: string): CLIError {
+  return new CLIError(
+    "INVALID_SPACE",
+    `Invalid space "${safeInline(input)}". Use a short name ([A-Za-z0-9_-]) or a full tinycloud:... URI.`,
+    ExitCode.USAGE_ERROR,
+  );
+}
 
 interface ParsedPkhDid {
   address: string;
@@ -117,23 +127,11 @@ export async function resolveSpaceUri(
 
   if (effective.startsWith("tinycloud:")) {
     const parsed = parseSpaceUri(effective);
-    if (!parsed) {
-      throw new CLIError(
-        "INVALID_SPACE",
-        `Invalid space "${effective}". Use a short name ([A-Za-z0-9_-]) or a full tinycloud:... URI.`,
-        ExitCode.USAGE_ERROR,
-      );
-    }
+    if (!parsed) throw invalidSpaceError(effective);
     return buildSpaceUri(parsed.owner, parsed.name);
   }
 
-  if (!/^[A-Za-z0-9_-]+$/.test(effective)) {
-    throw new CLIError(
-      "INVALID_SPACE",
-      `Invalid space "${effective}". Use a short name ([A-Za-z0-9_-]) or a full tinycloud:... URI.`,
-      ExitCode.USAGE_ERROR,
-    );
-  }
+  if (!/^[A-Za-z0-9_-]+$/.test(effective)) throw invalidSpaceError(effective);
 
   const session = (await ProfileManager.getSession(profileName)) as Record<string, unknown> | null;
 

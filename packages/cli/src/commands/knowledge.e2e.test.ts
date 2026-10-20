@@ -80,7 +80,8 @@ describe.skipIf(!NODE_BIN)("tinycloud knowledge against a real node", () => {
   async function newAgent(name: string): Promise<void> {
     await mkdir(home(name), { recursive: true });
     const created = await cli(name, ["profile", "create", name, "--posture", "delegate-session", "--operator", "agent"]);
-    expect(created.exitCode).toBe(0);
+    // A setup failure names its cause instead of an anonymous "Expected: 0".
+    if (created.exitCode !== 0) throw new Error(`profile create ${name} exited ${created.exitCode}: ${created.stderr.slice(0, 500)}`);
   }
 
   async function ownerRows(): Promise<unknown[][]> {
@@ -392,6 +393,33 @@ describe.skipIf(!NODE_BIN)("tinycloud knowledge against a real node", () => {
     expect(empty.exitCode).toBe(2);
     expect(empty.stdout).toBe("");
     expect(empty.error().message).toContain("empty space");
+  }, 180_000);
+
+  test("a vault entry, an unsignable service, hostile text and a non-JSON file are refused with exit 2 and nothing signed or printed raw", async () => {
+    await newAgent("hostile");
+    const requestFile = join(root, "hostile-request.json");
+    expect((await cli("hostile", ["auth", "request", "--preset", "apps-agent", "--app", RECIPES, "--emit", requestFile])).exitCode).toBe(0);
+    const base = JSON.parse(await readFile(requestFile, "utf8")) as { requested: Record<string, unknown>[] };
+    // eslint-disable-next-line no-control-regex
+    const RAW_CONTROL = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/;
+    const attempt = async (extra: Record<string, unknown>, expected: string) => {
+      const artifact = { ...base, requested: [...base.requested, extra] };
+      await writeFile(requestFile, JSON.stringify(artifact));
+      const result = await cli("owner", ["auth", "grant", requestFile, "--yes"]);
+      expect(result.exitCode).toBe(2);
+      expect(result.stdout).toBe("");
+      expect(result.stderr).not.toMatch(RAW_CONTROL);
+      expect(result.error().message).toContain(expected);
+    };
+    await attempt({ service: "tinycloud.vault", space: "applications", path: "", actions: ["del"] }, "vault access");
+    await attempt({ service: "tinycloud.zzz\u001b[2J\u202e", space: "applications", path: "", actions: ["tinycloud.zzz/x"] }, "cannot sign");
+    await attempt({ service: "tinycloud.kv", space: "bad\u001b]0;x\u0007\u202e name", path: "", actions: ["get"] }, "Invalid space");
+
+    await writeFile(requestFile, "\u001b[2J\u202e not json");
+    const notJson = await cli("owner", ["auth", "grant", requestFile, "--yes"]);
+    expect(notJson.exitCode).toBe(2);
+    expect(notJson.stderr).not.toMatch(RAW_CONTROL);
+    expect(notJson.error().message).toBe("The request file is not valid JSON.");
   }, 180_000);
 
   test("revocation ends a grant", async () => {

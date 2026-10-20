@@ -1285,7 +1285,13 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
         const raw = await readAuthArtifactSource(source, {
           stdin: options.stdin === true || options.paste === true,
         });
-        const parsed = JSON.parse(raw) as unknown;
+        // The parser's own message quotes the offending text from the file, so it is not passed on.
+        let parsed: unknown;
+        try {
+          parsed = JSON.parse(raw);
+        } catch {
+          throw new CLIError("INVALID_AUTH_REQUEST", "The request file is not valid JSON.", ExitCode.USAGE_ERROR);
+        }
 
         if (!isCompatiblePermissionRequestArtifact(parsed)) {
           throw new CLIError(

@@ -1,4 +1,4 @@
-import { DEFAULT_EXPIRY, parseExpiry } from "@tinycloud/sdk-core";
+import { DEFAULT_EXPIRY, parseExpiry, SERVICE_LONG_TO_SHORT, VAULT_PERMISSION_SERVICE } from "@tinycloud/sdk-core";
 import { CLI_NAME } from "@tinycloud/operations/cli-name";
 import type { PermissionEntry } from "@tinycloud/node-sdk";
 
@@ -301,6 +301,11 @@ export function entriesForSigning(requested: readonly PermissionEntry[]): Permis
       entry.actions.some((action) => typeof action !== "string" || action === "")) {
       throw badRequest(`${label} is malformed: it needs a service, a path and at least one action.`);
     }
+    // `tinycloud.vault` is an SDK shorthand the signer turns into KV access (delete included) on `vault/`:
+    // what would be printed is not what would be signed, and an app-picking agent has no business there.
+    if (entry.service === VAULT_PERMISSION_SERVICE || entry.service === "vault") {
+      throw badRequest(`${label} asks for vault access (\`tinycloud.vault\`), which a request file cannot carry: it is not part of picking up apps.`);
+    }
     if (entry.space !== undefined && (typeof entry.space !== "string" || entry.space === "")) {
       throw badRequest(`${label} has an empty space: name the space, or leave it out to mean your \`${APPS_AGENT_SPACE}\` space.`);
     }
@@ -310,24 +315,42 @@ export function entriesForSigning(requested: readonly PermissionEntry[]): Permis
 
 /**
  * Step 3, after the profile has turned names into space ids and expanded
- * action names: require a concrete space on every entry, then merge entries
- * with the same service, space, path, lifetime and caveats (actions are
- * unioned and sorted), exactly as the signer would. The result is the one list
- * that is described, gated and signed.
+ * action names: require a service the signer can sign and a concrete space on
+ * every entry, one space for the whole request, then merge entries with the
+ * same service, space, path, lifetime and caveats (actions are unioned and
+ * sorted), exactly as the signer would. The result is the one list that is
+ * described, gated and signed. Everything echoed from the request in a
+ * refusal is escaped.
  */
 export function finalizeSigningEntries(resolved: readonly PermissionEntry[]): PermissionEntry[] {
   const merged = new Map<string, PermissionEntry>();
+  const spaces = new Set<string>();
+  const spellings = new Map<string, string>();
   resolved.forEach((entry, index) => {
-    const space = entry.space;
-    const concrete = typeof space === "string" &&
-      (space.startsWith("tinycloud:") || (space === RAW_ENCRYPTION_SPACE && isRawEncryptionPermission(entry)));
-    if (!concrete) {
-      throw badRequest(`Entry ${index + 1} of the request does not resolve to a concrete space (got "${safeInline(String(space))}").`);
+    const label = `Entry ${index + 1} of the request`;
+    if (SERVICE_LONG_TO_SHORT[entry.service] === undefined) {
+      throw badRequest(`${label} names the service "${safeInline(entry.service)}", which the signer cannot sign.`);
     }
-    const key = JSON.stringify([entry.service, normalizePkhIdentifier(space), entry.path, entry.expiry ?? null, entry.caveats ?? null]);
+    const space = entry.space;
+    const raw = isRawEncryptionPermission(entry);
+    const concrete = typeof space === "string" &&
+      (space.startsWith("tinycloud:") || (space === RAW_ENCRYPTION_SPACE && raw));
+    if (!concrete) {
+      throw badRequest(`${label} does not resolve to a concrete space (got "${safeInline(String(space))}").`);
+    }
+    const normalized = normalizePkhIdentifier(space);
+    if (!raw) spaces.add(normalized);
+    // One spelling per space (the signer compares them byte for byte): the first one seen.
+    const spelled = spellings.get(normalized) ?? space;
+    spellings.set(normalized, spelled);
+    const unified = { ...entry, space: spelled };
+    const key = JSON.stringify([entry.service, normalized, entry.path, entry.expiry ?? null, entry.caveats ?? null]);
     const existing = merged.get(key);
-    merged.set(key, existing === undefined ? entry : { ...existing, actions: [...existing.actions, ...entry.actions] });
+    merged.set(key, existing === undefined ? unified : { ...existing, actions: [...existing.actions, ...entry.actions] });
   });
+  if (spaces.size > 1) {
+    throw badRequest(`The request names ${spaces.size} different spaces (${[...spaces].map((space) => `"${safeInline(space)}"`).join(", ")}); a grant covers one space, so make one request per space.`);
+  }
   return [...merged.values()].map((entry) => ({ ...entry, actions: [...new Set(entry.actions)].sort() }));
 }
 
