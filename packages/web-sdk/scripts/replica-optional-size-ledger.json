@@ -182,6 +182,15 @@
       "activation.mjs": 0,
       "activation.cjs": 0,
       "note": "Optional first-import and IDB activation gzip deltas against this PR's merge base"
+    },
+    {
+      "pr": "#544",
+      "ticket": "TC-858",
+      "replica.mjs": 0,
+      "replica.cjs": 0,
+      "activation.mjs": 0,
+      "activation.cjs": 0,
+      "note": "Optional first-import and IDB activation gzip deltas against this PR's merge base"
     }
   ]
 }
