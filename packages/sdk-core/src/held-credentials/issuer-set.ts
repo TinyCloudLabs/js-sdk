@@ -1,7 +1,7 @@
 import { decodeBase64Url, isObject } from "./encoding";
 import { isStrictEd25519Point } from "./crypto";
 import { refuse } from "./errors";
-import { SHIPPED_ROWS } from "./rows";
+import { SHIPPED_ROWS, rowPermitsIssuer } from "./rows";
 import type { ProfileRow } from "./rows";
 
 export const ISSUER_SET_FORMAT = "tinycloud.credentials-issuers/v1";
@@ -153,7 +153,7 @@ export function parseIssuerSet(raw: unknown, options: IssuerSetOptions): IssuerS
     const listedProfiles = stringList(item.profiles, "profiles");
     for (const profile of listedProfiles) {
       for (const row of rowsForLoad) {
-        if (row.profile === profile && !row.permitsIssuer(issuerDid as string)) refuse("bad-issuer-set", "issuer DID is not permitted for a profile it lists");
+        if (row.profile === profile && !rowPermitsIssuer(row, issuerDid as string)) refuse("bad-issuer-set", "issuer DID is not permitted for a profile it lists");
       }
     }
     entries.set(kid as string, Object.freeze({

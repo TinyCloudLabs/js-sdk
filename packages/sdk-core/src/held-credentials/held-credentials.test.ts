@@ -28,7 +28,7 @@ import { MAX_JSON_DEPTH, decodeUtf8, asciiBytes, bytesToHex, encodeBase64Url, pa
 import { HELD_LIMITS } from "./verify";
 import { verifyEd25519Strict } from "./crypto";
 import { parseRfc3339 } from "./siwe";
-import { DEFAULT_ROWS, EMAIL_HELD_ROW, ORG_MEMBERSHIP_FREE_ROW, ORG_MEMBERSHIP_ROW, SHIPPED_ROWS } from "./rows";
+import { DEFAULT_ROWS, EMAIL_HELD_ROW, ORG_MEMBERSHIP_FREE_ROW, ORG_MEMBERSHIP_ROW, SHIPPED_ROWS, rowPermitsIssuer } from "./rows";
 
 const enc = (value: unknown) => encodeBase64Url(new TextEncoder().encode(typeof value === "string" ? value : JSON.stringify(value)));
 const seed = (n: number) => Uint8Array.from({ length: 32 }, (_, i) => (i + n) & 0xff);
@@ -958,17 +958,22 @@ describe("TC-1553: six-credential-type refusal matrix", () => {
     [{ profile: FREE_PROFILE, profileVersion: 1 }],
     [{ profile: PAID_PROFILE, profileVersion: 1 }, { profile: FREE_PROFILE, profileVersion: 1 }],
   ];
-  /** The other held types carry a bare `{alg}` header, which the header check refuses before any profile rule runs. */
-  const bareHeader = (profile: string): CredentialSpec => ({ header: (h) => ({ alg: h.alg }), payload: (p) => ({ ...p, profile }) });
-  const HEADER_REFUSED = ["bad-header", "bad-header", "bad-header", "bad-header"];
+  /** Real shapes for the other held-type cells. Each is refused at the first check its shape trips. */
+  const TICKET_SUB = "did:key:z6MkTicketHolder";
+  /** An acquisition ticket: held header, holder-binding domain, did:key subject, no profile. */
+  const ticket = (): CredentialSpec => orgCredential(PAID_PROFILE, { payload: ({ profile, ...p }) => ({ ...p, sub: TICKET_SUB, holderBinding: { did: TICKET_SUB, signingDomain: "tinycloud.credentials/holder-binding/v1" } }) });
+  /** A share credential: an otherwise valid held credential carrying the O3 `tinycloud_share` claim. */
+  const o3 = (): CredentialSpec => orgCredential(PAID_PROFILE, { payload: (p) => ({ ...p, tinycloud_share: {} }) });
+  /** A legacy record: `{"alg":"EdDSA"}` header with no `typ` and no `kid`, and no profile. */
+  const legacy = (): CredentialSpec => orgCredential(PAID_PROFILE, { header: (h) => ({ alg: h.alg }), payload: ({ profile, ...p }) => p });
   const cases: [string, CredentialSpec, string[]][] = [
     ["email-held", {}, ["ok", "profile-not-accepted", "profile-not-accepted", "profile-not-accepted"]],
     ["paid org", orgCredential(PAID_PROFILE), ["profile-not-accepted", "ok", "profile-not-accepted", "ok"]],
     ["free org", orgCredential(FREE_PROFILE), ["profile-not-accepted", "profile-not-accepted", "ok", "ok"]],
     ["paid profile with the email vct", orgCredential(PAID_PROFILE, { payload: (p) => ({ ...p, vct: VCT }) }), ["profile-not-accepted", "profile-mismatch", "profile-not-accepted", "profile-mismatch"]],
-    ["ticket", bareHeader("tinycloud.ticket/v1"), HEADER_REFUSED],
-    ["share-email O3", bareHeader("tinycloud.share-email-o3/v1"), HEADER_REFUSED],
-    ["legacy record", bareHeader("tinycloud.legacy/v1"), HEADER_REFUSED],
+    ["ticket", ticket(), ["bad-payload", "bad-payload", "bad-payload", "bad-payload"]],
+    ["share-email O3", o3(), ["profile-not-accepted", "bad-payload", "profile-not-accepted", "bad-payload"]],
+    ["legacy record", legacy(), ["bad-header", "bad-header", "bad-header", "bad-header"]],
   ];
   test("each credential type gets its expected code under each acceptance set", async () => {
     for (const [name, spec, expected] of cases) {
@@ -996,6 +1001,7 @@ describe("TC-1553: org membership rows", () => {
   test("role must be member or admin, and membershipType must be a lowercase slug", async () => {
     expect(await orgCode(orgCredential(PAID_PROFILE, { disclosures: [["role", "owner"]] }), { entries: [orgEntry([PAID_PROFILE])], ...accept })).toBe("bad-disclosure");
     expect(await orgCode(orgCredential(PAID_PROFILE, { disclosures: [["membershipType", "Team"]] }), { entries: [orgEntry([PAID_PROFILE])], ...accept })).toBe("bad-disclosure");
+    expect(await orgCode(orgCredential(PAID_PROFILE, { disclosures: [["membershipType", "-team"]] }), { entries: [orgEntry([PAID_PROFILE])], ...accept })).toBe("bad-disclosure");
     expect(await orgCode(orgCredential(PAID_PROFILE, { disclosures: [["role", "admin"], ["membershipType", "team-a"]] }), { entries: [orgEntry([PAID_PROFILE])], ...accept })).toBe("ok");
   });
   test("an email disclosure is outside the org row's disclosable list", async () => {
@@ -1044,6 +1050,44 @@ describe("TC-1553: org membership rows", () => {
     expect(loadCode([orgEntry([PROFILE], { vcts: [VCT] })])).toBe("bad-issuer-set");
     expect(loadCode([entryB()])).toBe("ok");
   });
+  test("a witness entry that lists only the free row is refused at load under the default rows", () => {
+    expect(loadCode([entryA({ profiles: [FREE_PROFILE], vcts: [ORG_VCT] })])).toBe("bad-issuer-set");
+  });
+  test("an entry mixing the email row and an org row is refused for either issuer family", () => {
+    expect(loadCode([orgEntry([PAID_PROFILE, PROFILE], { vcts: [ORG_VCT, VCT] })])).toBe("bad-issuer-set");
+    expect(loadCode([entryA({ profiles: [PROFILE, FREE_PROFILE], vcts: [VCT, ORG_VCT] })])).toBe("bad-issuer-set");
+  });
+  describe("a caller row without permitsIssuer", () => {
+    const CUSTOM_PROFILE = "tinycloud.test-custom/v1";
+    const customEntries = [entryA({ profiles: [CUSTOM_PROFILE], vcts: [ORG_VCT] })];
+    const customAccept = { profiles: [{ profile: CUSTOM_PROFILE, profileVersion: 1 }], issuers: [{ issuerDid: ISSUER_A }] };
+    const customCredential = () => orgCredential(CUSTOM_PROFILE, { iss: ISSUER_A, kid: KID_A, seed: SEED_A });
+    /** Typed: `permitsIssuer` is optional, so `delete` type-checks on a copy of a shipped row. */
+    const typedRow = (): ProfileRow => {
+      const row: ProfileRow = { ...ORG_MEMBERSHIP_ROW, profile: CUSTOM_PROFILE };
+      delete row.permitsIssuer;
+      return row;
+    };
+    /** Plain JS: a row object with no `permitsIssuer` key, cast only at the boundary. */
+    const plainJsRow = (): ProfileRow => Object.fromEntries(
+      Object.entries({ ...ORG_MEMBERSHIP_ROW, profile: CUSTOM_PROFILE }).filter(([key]) => key !== "permitsIssuer"),
+    ) as unknown as ProfileRow;
+    for (const [label, makeRow] of [["typed", typedRow], ["plain JS", plainJsRow]] as const) {
+      test(`a ${label} row without permitsIssuer loads and verifies under the default rule`, async () => {
+        const rows = [...ALL_ROWS, makeRow()];
+        expect(loadCode(customEntries, rows)).toBe("ok");
+        expect(await orgCode(customCredential(), { entries: customEntries, rows, ...customAccept })).toBe("ok");
+      });
+    }
+    test("the default rule does not relax a shipped row's issuer rule", () => {
+      expect(loadCode([entryA({ profiles: [PAID_PROFILE, CUSTOM_PROFILE], vcts: [ORG_VCT] })], [...ALL_ROWS, typedRow()])).toBe("bad-issuer-set");
+    });
+    test("a permitsIssuer that is present but not a function is refused as bad-config, not read as permissive", async () => {
+      const malformed = { ...ORG_MEMBERSHIP_ROW, profile: CUSTOM_PROFILE, permitsIssuer: "yes" } as unknown as ProfileRow;
+      expect(loadCode(customEntries, [...ALL_ROWS, malformed])).toBe("bad-config");
+      expect(await orgCode(customCredential(), { entries: customEntries, rows: [...ALL_ROWS, malformed], ...customAccept })).toBe("bad-config");
+    });
+  });
   test("lifetime boundaries: the free row admits 30 days and not a second more, the paid row admits 365 days and not a second more", async () => {
     const credentialWith = (profile: string, seconds: number) => orgCredential(profile, { payload: (p) => ({ ...p, exp: (p.iat as number) + seconds }) });
     const entriesFor = (profile: string) => ({ entries: [orgEntry([profile])], profiles: [{ profile, profileVersion: 1 }], issuers: [{ issuerDid: ORG_A }] });
@@ -1080,7 +1124,7 @@ describe("TC-1553: org issuer rule anchors", () => {
   const VALID = `did:web:o${"a".repeat(26)}.orgs.credentials.org`;
   test("the org rows admit the canonical org-family DID shape only", () => {
     for (const row of [ORG_MEMBERSHIP_ROW, ORG_MEMBERSHIP_FREE_ROW]) {
-      expect(row.permitsIssuer(VALID)).toBe(true);
+      expect(rowPermitsIssuer(row, VALID)).toBe(true);
       const refused = [
         `x${VALID}`, `${VALID}x`, `${VALID}.`,
         VALID.replace(".orgs.", "Xorgs."),
@@ -1088,12 +1132,12 @@ describe("TC-1553: org issuer rule anchors", () => {
         `did:web:o${"a".repeat(27)}.orgs.credentials.org`,
         `did:web:o${"a".repeat(25)}8.orgs.credentials.org`,
       ];
-      for (const issuer of refused) expect(row.permitsIssuer(issuer)).toBe(false);
+      for (const issuer of refused) expect(rowPermitsIssuer(row, issuer)).toBe(false);
     }
   });
   test("the email row refuses the org-family shape and admits a non-org issuer", () => {
-    expect(EMAIL_HELD_ROW.permitsIssuer(VALID)).toBe(false);
-    expect(EMAIL_HELD_ROW.permitsIssuer(ISSUER_B)).toBe(true);
+    expect(rowPermitsIssuer(EMAIL_HELD_ROW, VALID)).toBe(false);
+    expect(rowPermitsIssuer(EMAIL_HELD_ROW, ISSUER_B)).toBe(true);
   });
 });
 

@@ -21,8 +21,12 @@ export interface ProfileRow {
   statusMethods: readonly string[];
   /** Checks the disclosed claim values; throws a HeldCredentialError. */
   validateDisclosed(claims: Readonly<Record<string, Json>>): void;
-  /** Whether this row admits a credential signed by `issuerDid`. Fixed per shipped profile. */
-  permitsIssuer(issuerDid: string): boolean;
+  /**
+   * Whether this row admits a credential signed by `issuerDid`. Fixed per shipped profile.
+   * Optional for a caller-defined row. When omitted, the row admits any issuer that the issuer
+   * entry permits; the entry's own key, kid, and profile checks still apply.
+   */
+  permitsIssuer?(issuerDid: string): boolean;
 }
 
 export const HELD_EMAIL_TTL_SECONDS = 365 * 24 * 60 * 60;
@@ -125,4 +129,15 @@ export const SHIPPED_ROWS: readonly ProfileRow[] = Object.freeze([EMAIL_HELD_ROW
 
 export function findRow(rows: readonly ProfileRow[], profile: string, profileVersion: number): ProfileRow | undefined {
   return rows.find((row) => row.profile === profile && row.profileVersion === profileVersion);
+}
+
+/**
+ * Whether `row` admits `issuerDid`. A row without `permitsIssuer` admits every issuer its issuer
+ * entry permits. A `permitsIssuer` that is present but not a function refuses with `bad-config`,
+ * so a malformed rule is never read as permissive.
+ */
+export function rowPermitsIssuer(row: ProfileRow, issuerDid: string): boolean {
+  if (row.permitsIssuer === undefined) return true;
+  if (typeof row.permitsIssuer !== "function") refuse("bad-config", "a profile row's permitsIssuer must be a function when present");
+  return row.permitsIssuer(issuerDid);
 }
