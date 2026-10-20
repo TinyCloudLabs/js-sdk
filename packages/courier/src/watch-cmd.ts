@@ -9,6 +9,8 @@ import { courierNode, peerHooks, peerKv } from './node.js';
 import type { ParsedArgs } from './args.js';
 import { WATCH_DEFAULTS, Watcher, type WatchOptions } from './watch.js';
 import { createWaker, jsonLineLog, spawnRunner, type SessionStore, type WakeConfig } from './wake.js';
+import { createNotifier, type NotifyConfig } from './notify.js';
+import { postPausedInform } from './pause.js';
 import {
   applyPlan, launchdPlan, renderPlan, serviceName, systemdPlan, type ServiceSpec,
 } from './service.js';
@@ -34,8 +36,17 @@ function value(args: ParsedArgs, name: string): string | undefined {
   return v;
 }
 
+function wakeBudget(args: ParsedArgs): number {
+  if (!args.has('wake-budget')) return WATCH_DEFAULTS.wakeBudget;
+  const raw = args.get('wake-budget')!;
+  const value = Number(raw);
+  if (!Number.isInteger(value) || value < 1 || value > 1000) throw new CourierError('usage', `--wake-budget must be a whole number from 1 to 1000 (got "${raw}").`);
+  return value;
+}
+
 export function watchOptions(args: ParsedArgs): WatchOptions {
   return {
+    wakeBudget: wakeBudget(args),
     debounceMs: seconds(args, 'debounce', WATCH_DEFAULTS.debounceMs, 0, 600),
     pollMs: seconds(args, 'poll', WATCH_DEFAULTS.pollMs, 10, 3600),
     ticketSeconds: seconds(args, 'ticket', WATCH_DEFAULTS.ticketSeconds * 1000, 5, 300) / 1000,
@@ -43,7 +54,7 @@ export function watchOptions(args: ParsedArgs): WatchOptions {
 }
 
 export const watchUsage = () =>
-  `Usage: ${cmd('watch [--wake none|paseo|claude|exec] [--exec <cmd>] [--cwd dir] [--debounce 30] [--poll 60] [--ticket 25] [--once]')}\n` +
+  `Usage: ${cmd('watch [--wake none|paseo|claude|exec] [--exec <cmd>] [--cwd dir] [--debounce 30] [--poll 60] [--ticket 25] [--wake-budget 12] [--notify paseo|osascript|exec|none] [--once]')}\n` +
   `       ${cmd('watch … (--install-launchd | --install-systemd) [--dry-run] [--name n]')}`;
 
 /** Where a bare `claude`/`paseo` resolves now, so a service with a minimal PATH still finds it. */
@@ -78,6 +89,17 @@ export function wakeConfig(args: ParsedArgs, owner: string | undefined): WakeCon
     claude: { bin: value(args, 'claude-bin') ?? 'claude', settings: value(args, 'claude-settings'), allow: allow.length ? allow : [`Bash(${programName()}:*)`] },
     timeoutMs: seconds(args, 'wake-timeout', 15 * 60_000, 10, 6 * 3600),
   };
+}
+
+const NOTIFIERS = ['none', 'paseo', 'osascript', 'exec'] as const;
+
+/** `--notify` default: Paseo wakes tell Paseo; a Mac running claude gets a desktop notification; otherwise log only. */
+export function notifyConfig(args: ParsedArgs, wake: WakeConfig, platform: string = process.platform): NotifyConfig {
+  const exec = value(args, 'notify-exec');
+  const adapter = (value(args, 'notify') ?? (exec ? 'exec' : wake.adapter === 'paseo' ? 'paseo' : wake.adapter === 'claude' && platform === 'darwin' ? 'osascript' : 'none')) as NotifyConfig['adapter'];
+  if (!NOTIFIERS.includes(adapter)) throw new CourierError('usage', `Unknown --notify "${adapter}". Use none, paseo, osascript or exec.`);
+  if (adapter === 'exec' && !exec) throw new CourierError('usage', '--notify exec needs --notify-exec <cmd>.');
+  return { adapter, owner: wake.owner, exec, wake };
 }
 
 /** Claude session ids per thread, local to this machine (a session id means nothing on another one). */
@@ -159,6 +181,8 @@ export async function cmdWatch(args: ParsedArgs): Promise<void> {
     loadPeers: () => Object.values(loadProfile().peers),
     kvFor: (peer) => peerKv(node, loadProfile(), peer),
     wake: createWaker(config, { run: spawnRunner, sessions: fileSessions() }),
+    postInform: async (peer, threadId, text) => { await postPausedInform(node.kv, loadProfile(), peer, threadId, text); },
+    notify: createNotifier(notifyConfig(args, config), { run: spawnRunner }),
     log,
   }, opts);
 

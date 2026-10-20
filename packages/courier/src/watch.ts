@@ -8,6 +8,8 @@ import { isRecord, messageView, taskView } from './a2a.js';
 import { commitReceipts, selectUndelivered, type KV, type Receipts } from './inbox.js';
 import { getJson, listAll, putCreate, putMatch, putOverwrite } from './store.js';
 import type { WakeApproval, WakeMessage, Waker, WatchLog } from './wake.js';
+import type { Notice, Notifier } from './notify.js';
+import { writePauseMarker } from './pause.js';
 
 /** Spec §8. inform and receipts never wake; a message with no valid intent is delivered but never wakes. */
 const WAKE_INTENTS = new Set(['request', 'ask', 'answer', 'update']);
@@ -20,6 +22,7 @@ const WAKE_RETRY_MS = 60_000;
 const RECONNECT_CATCH_UP_MS = 2000;
 /** Spec §7: an approval expires after 24 hours; an older one found at startup wakes nobody. */
 const APPROVAL_MAX_AGE_MS = 24 * 3600 * 1000;
+const DAY_MS = 24 * 3600 * 1000;
 /** Thread and message ids come from key names the peer controls; they reach prompts and argv, so only ULID-like ids pass. */
 const SAFE_ID = /^[0-9A-Za-z_-]{1,64}$/;
 
@@ -48,15 +51,27 @@ export interface WatchState {
   /** Recently woken message ids, so a receipt write that failed cannot cause a second wake. */
   woken: string[];
   approvalsSeen: string[];
+  /** Successful message wakes in the last 24 h, per `<peer>/<threadId>` (approval wakes do not count). */
+  wakes: Record<string, number[]>;
+  /** Threads this watcher has seen paused; a marker that vanishes from this list means the human resumed it. */
+  paused: string[];
+  /** Posts and notifications that must happen exactly-ish once and survive a restart (retried until they succeed). */
+  outbox: OutboxItem[];
 }
+
+export type OutboxItem =
+  | { id: string; kind: 'inform'; peer: string; threadId: string; text: string }
+  | { id: string; kind: 'notify'; notice: Notice };
 
 export interface WatchOptions {
   debounceMs: number;
   pollMs: number;
   ticketSeconds: number;
+  /** Spec §8: at most this many wakes per side per thread per 24 h, then the thread pauses. */
+  wakeBudget: number;
 }
 
-export const WATCH_DEFAULTS: WatchOptions = { debounceMs: 30_000, pollMs: 60_000, ticketSeconds: 25 };
+export const WATCH_DEFAULTS: WatchOptions = { debounceMs: 30_000, pollMs: 60_000, ticketSeconds: 25, wakeBudget: 12 };
 
 interface HookEventLike {
   path?: string;
@@ -82,13 +97,17 @@ export interface WatchDeps {
   kvFor(peer: StoredPeer): Promise<KV>;
   wake: Waker;
   log: WatchLog;
+  /** Posts the `thread-paused` inform to a peer (own space, `to/<peer>/threads/<id>/msg/`). Default: nothing. */
+  postInform?(peer: string, threadId: string, text: string): Promise<void>;
+  /** Tells this side's human (Paseo attention, desktop notification, …). Default: log only. */
+  notify?: Notifier;
   now?(): number;
 }
 
 type Via = 'startup' | 'hook' | 'poll';
 
 export function emptyWatchState(): WatchState {
-  return { v: 1, pending: {}, woken: [], approvalsSeen: [] };
+  return { v: 1, pending: {}, woken: [], approvalsSeen: [], wakes: {}, paused: [], outbox: [] };
 }
 
 /** Wake time: `debounce` after the latest message, but never later than twice `debounce` after the first. */
@@ -124,6 +143,10 @@ export class Watcher {
   private readonly retryAt = new Map<string, number>();
   private readonly waking = new Set<string>();
   private approvalsRunning = false;
+  /** Thread keys currently paused: markers under me/state/paused/ plus those this watcher just wrote. */
+  private pausedKeys = new Set<string>();
+  private readonly outboxBusy = new Set<string>();
+  private readonly outboxRetryAt = new Map<string, number>();
   private approvalsAgain = false;
   /** Set when another watcher is writing this profile's state: this one stops and `run` throws it. */
   private fatalError: CourierError | undefined;
@@ -220,7 +243,7 @@ export class Watcher {
     const receipts = (await getJson<Receipts>(selfKv, k.receipts(peer.handle)))?.value ?? { v: 1, threads: {} };
     receipts.threads ??= {};
 
-    const delivered: { threadId: string; messageId: string; intent?: string }[] = [];
+    const delivered: { threadId: string; messageId: string; intent?: string; notice?: string }[] = [];
     for (const selected of selectUndelivered(keys, receipts)) {
       if (!SAFE_ID.test(selected.threadId) || !SAFE_ID.test(selected.messageId)) {
         log('ignored', { peer: peer.handle, reason: 'unsafe-id' });
@@ -232,7 +255,8 @@ export class Watcher {
         const value = got.value;
         if (!isRecord(value) || value.messageId !== selected.messageId || value.contextId !== selected.threadId) continue;
         await this.mirrorCreate(k.mirrorMsg(peer.handle, selected.threadId, selected.messageId), value);
-        delivered.push({ threadId: selected.threadId, messageId: selected.messageId, intent: messageView(value).intent });
+        const view = messageView(value);
+        delivered.push({ threadId: selected.threadId, messageId: selected.messageId, intent: view.intent, notice: view.notice });
       } catch (error) {
         // Not delivered, so no receipt: this message is retried on the next sync; the others go ahead.
         log('sync-error', { peer: peer.handle, messageId: selected.messageId, ...errInfo(error) });
@@ -253,7 +277,8 @@ export class Watcher {
       const sentAt = sentAtOf(item.messageId);
       log('delivered', {
         via, peer: peer.handle, threadId: item.threadId, messageId: item.messageId, intent: item.intent ?? null,
-        wakes: Boolean(item.intent && WAKE_INTENTS.has(item.intent)),
+        wakes: Boolean(item.intent && WAKE_INTENTS.has(item.intent)) && !this.pausedKeys.has(`${peer.handle}/${item.threadId}`),
+        ...(this.pausedKeys.has(`${peer.handle}/${item.threadId}`) ? { paused: true } : {}),
         sentAt, latencyMs: sentAt ? at - Date.parse(sentAt) : null,
       });
     }
@@ -261,12 +286,21 @@ export class Watcher {
       for (const item of delivered) {
         if (!item.intent || !WAKE_INTENTS.has(item.intent) || this.state.woken.includes(item.messageId)) continue;
         const key = `${peer.handle}/${item.threadId}`;
+        if (this.pausedKeys.has(key)) continue; // delivered and mirrored, but a paused thread never wakes
         const entry = this.state.pending[key] ??= {
           peer: peer.handle, threadId: item.threadId, subject: subjects.get(item.threadId)!, messages: [], firstSeenAt: at, lastSeenAt: at,
         };
         if (entry.messages.some((m) => m.messageId === item.messageId)) continue;
         entry.messages.push({ messageId: item.messageId, intent: item.intent, sentAt: sentAtOf(item.messageId) });
         entry.lastSeenAt = at;
+      }
+      // The peer's watcher paused the thread: tell this side's human (their agent is not coming back until resumed).
+      for (const item of delivered) {
+        if (item.notice !== 'thread-paused') continue;
+        this.state.outbox.push({
+          id: `peer-paused:${item.messageId}`, kind: 'notify',
+          notice: { kind: 'peer-paused', peer: peer.handle, threadId: item.threadId, subject: subjects.get(item.threadId)!, detail: "the peer's watcher reported the thread paused" },
+        });
       }
     });
     await commitReceipts(selfKv, new Map([[peer.handle, delivered.map(({ threadId, messageId }) => ({ threadId, messageId }))]]));
@@ -416,13 +450,38 @@ export class Watcher {
       this.waking.add(key);
       runs.push(this.wakeThread(key, pending, at).finally(() => this.waking.delete(key)));
     }
+    runs.push(this.runOutbox());
     await Promise.all(runs);
+  }
+
+  private recentWakes(key: string): number[] {
+    const now = this.now();
+    return (this.state.wakes[key] ?? []).filter((at) => now - at < DAY_MS);
   }
 
   private async wakeThread(key: string, pending: PendingWake, at: number): Promise<void> {
     // Messages that land while the wake runs stay pending for the next one, so wake exactly this snapshot.
-    const messages = [...pending.messages];
+    let messages = [...pending.messages];
     const approvals = [...(pending.approvals ?? [])];
+
+    // Spec §8: the loop stops here. A paused thread, or one over budget, wakes nobody for messages (approvals are
+    // a human decision, not a loop, and always wake).
+    if (messages.length) {
+      const used = this.recentWakes(key).length;
+      if (!this.pausedKeys.has(key) && used >= (this.opts.wakeBudget ?? WATCH_DEFAULTS.wakeBudget)) await this.pauseThread(key, pending, used);
+      if (this.pausedKeys.has(key)) {
+        const dropped = messages.map((m) => m.messageId);
+        messages = [];
+        await this.mutate(() => {
+          const current = this.state.pending[key];
+          if (!current) return;
+          current.messages = current.messages.filter((m) => !dropped.includes(m.messageId));
+          if (!current.messages.length && !(current.approvals ?? []).length) delete this.state.pending[key];
+        });
+        if (!approvals.length) return;
+      }
+    }
+
     const woken = messages.map((m) => m.messageId);
     const approvedIds = approvals.map((a) => a.approvalId);
     const oldestSentAt = messages[0]?.sentAt ?? '';
@@ -451,6 +510,7 @@ export class Watcher {
         if (!current.messages.length && !current.approvals.length) delete this.state.pending[key];
       }
       this.state.woken = [...this.state.woken, ...woken].slice(-WAKEN_MEMORY);
+      if (woken.length) this.state.wakes[key] = [...this.recentWakes(key), startedAt];
     });
     this.deps.log('woke', {
       peer: pending.peer, threadId: pending.threadId, messageIds: woken, approvalIds: approvedIds,
@@ -458,9 +518,82 @@ export class Watcher {
     });
   }
 
+  /** Budget reached: pause this side's wakes for the thread, tell the peer (inform), tell this side's human. */
+  private async pauseThread(key: string, pending: PendingWake, used: number): Promise<void> {
+    const reason = `wake budget reached (${used} wakes in 24 h, limit ${(this.opts.wakeBudget ?? WATCH_DEFAULTS.wakeBudget)})`;
+    const at = new Date(this.now()).toISOString();
+    await writePauseMarker(this.deps.selfKv, { v: 1, peer: pending.peer, threadId: pending.threadId, by: 'budget', at, reason });
+    this.pausedKeys.add(key);
+    const text = `Thread paused on this side: ${reason}. Its agent will not be woken for this thread until its owner resumes it. ` +
+      'This is an automatic stop for reply loops, not a refusal; messages you send are still stored and mirrored.';
+    await this.mutate(() => {
+      if (!this.state.paused.includes(key)) this.state.paused.push(key);
+      this.state.outbox.push(
+        { id: `inform:${key}:${at}`, kind: 'inform', peer: pending.peer, threadId: pending.threadId, text },
+        { id: `paused:${key}:${at}`, kind: 'notify', notice: { kind: 'paused', peer: pending.peer, threadId: pending.threadId, subject: pending.subject, detail: reason } },
+      );
+    });
+    this.deps.log('paused', { peer: pending.peer, threadId: pending.threadId, by: 'budget', reason });
+  }
+
+  /** Markers under me/state/paused/ are the truth; a marker that disappeared means the human resumed (budget starts over). */
+  async syncPaused(): Promise<void> {
+    try {
+      const keys = await listAll(this.deps.selfKv, k.pausedPrefix);
+      const listed = new Set<string>();
+      for (const key of keys) {
+        const match = /\/paused\/([^/]+)\/([^/]+)\.json$/.exec(key);
+        if (match && SAFE_ID.test(match[1]) && SAFE_ID.test(match[2])) listed.add(`${match[1]}/${match[2]}`);
+      }
+      const before = this.pausedKeys;
+      const resumed = this.state.paused.filter((key) => !listed.has(key));
+      const added = [...listed].filter((key) => !this.state.paused.includes(key));
+      this.pausedKeys = listed;
+      for (const key of added) if (!before.has(key)) this.deps.log('paused', { thread: key, by: 'marker' });
+      if (resumed.length || added.length) {
+        await this.mutate(() => {
+          for (const key of resumed) delete this.state.wakes[key];
+          this.state.paused = [...new Set([...this.state.paused.filter((key) => !resumed.includes(key)), ...added])].sort();
+        });
+        for (const key of resumed) this.deps.log('resumed', { thread: key });
+      }
+    } catch (error) {
+      this.deps.log('sync-error', { source: 'paused', ...errInfo(error) });
+    }
+  }
+
+  /** Informs and notifications queued in state; each retries every minute until it succeeds. */
+  private async runOutbox(): Promise<void> {
+    const at = this.now();
+    const runs: Promise<void>[] = [];
+    for (const item of [...this.state.outbox]) {
+      if (this.outboxBusy.has(item.id) || (this.outboxRetryAt.get(item.id) ?? 0) > at) continue;
+      this.outboxBusy.add(item.id);
+      runs.push((async () => {
+        try {
+          if (item.kind === 'inform') await this.deps.postInform?.(item.peer, item.threadId, item.text);
+          else {
+            const { notice } = item;
+            this.deps.log('notify', { kind: notice.kind, peer: notice.peer, threadId: notice.threadId, detail: notice.detail });
+            await this.deps.notify?.(notice);
+          }
+          this.outboxRetryAt.delete(item.id);
+          await this.mutate(() => { this.state.outbox = this.state.outbox.filter((o) => o.id !== item.id); });
+        } catch (error) {
+          this.outboxRetryAt.set(item.id, at + WAKE_RETRY_MS);
+          this.deps.log(item.kind === 'inform' ? 'inform-error' : 'notify-error', { id: item.id, ...errInfo(error) });
+        } finally {
+          this.outboxBusy.delete(item.id);
+        }
+      })());
+    }
+    await Promise.all(runs);
+  }
+
   // ---------- run loop ----------
 
   async pollOnce(via: Via): Promise<void> {
+    await this.syncPaused();
     await Promise.all(this.deps.loadPeers().map((peer) => this.sync(peer, via)));
     await this.syncApprovals(via);
   }

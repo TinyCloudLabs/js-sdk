@@ -22,3 +22,5 @@ export * from './wake.js';
 export * from './service.js';
 export * from './canonical.js';
 export * from './approval.js';
+export * from './notify.js';
+export * from './pause.js';

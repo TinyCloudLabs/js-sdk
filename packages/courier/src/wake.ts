@@ -139,6 +139,49 @@ function failure(what: string, result: RunResult): Error {
   return new Error(`${what} exited ${result.code}: ${tail(result.stderr || result.stdout)}`);
 }
 
+/**
+ * Paseo: message the agent labelled `courier-thread=<id>`, else create one (labels `courier-thread`,
+ * `courier-peer`, `COURIER_HOME` in its environment). The prompt goes through a 0600 file, not argv, when it
+ * is sent to an existing agent.
+ */
+export async function sendToThreadAgent(
+  run: Runner,
+  config: Pick<WakeConfig, 'cwd' | 'home' | 'paseo' | 'timeoutMs'>,
+  agent: { threadId: string; peer: string; title: string; prompt: string },
+): Promise<void> {
+  const { bin, provider, mode } = config.paseo;
+  const base = { cwd: config.cwd, timeoutMs: config.timeoutMs };
+  const listed = await run(bin, ['ls', '-g', '--json', '--label', `courier-thread=${agent.threadId}`], base);
+  if (listed.code !== 0) throw failure('paseo ls', listed);
+  let agents: { id?: unknown }[];
+  try { agents = JSON.parse(listed.stdout); } catch { throw new Error(`paseo ls returned non-JSON: ${tail(listed.stdout)}`); }
+  const existing = agents.find((a) => typeof a.id === 'string')?.id as string | undefined;
+  if (existing) {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'courier-wake-'));
+    const file = path.join(dir, 'prompt.txt');
+    try {
+      fs.writeFileSync(file, agent.prompt, { mode: 0o600 });
+      const sent = await run(bin, ['send', existing, '--prompt-file', file, '--no-wait'], base);
+      if (sent.code !== 0) throw failure('paseo send', sent);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+    return;
+  }
+  const created = await run(bin, [
+    'run', '--background', '--json',
+    '--title', agent.title,
+    '--provider', provider,
+    '--cwd', config.cwd,
+    '--label', `courier-thread=${agent.threadId}`,
+    '--label', `courier-peer=${agent.peer}`,
+    '--env', `COURIER_HOME=${config.home}`,
+    ...(mode ? ['--mode', mode] : []),
+    agent.prompt,
+  ], base);
+  if (created.code !== 0) throw failure('paseo run', created);
+}
+
 export function createWaker(config: WakeConfig, deps: { run: Runner; sessions: SessionStore; env?: NodeJS.ProcessEnv }): Waker {
   const env = deps.env ?? process.env;
   const { run } = deps;
@@ -189,40 +232,9 @@ export function createWaker(config: WakeConfig, deps: { run: Runner; sessions: S
     if (typeof parsed?.session_id === 'string') deps.sessions.set(key, parsed.session_id);
   };
 
-  const paseo: Waker = async (request) => {
-    const { bin, provider, mode } = config.paseo;
-    const base = { cwd: config.cwd, timeoutMs: config.timeoutMs };
-    const listed = await run(bin, ['ls', '-g', '--json', '--label', `courier-thread=${request.threadId}`], base);
-    if (listed.code !== 0) throw failure('paseo ls', listed);
-    let agents: { id?: unknown }[];
-    try { agents = JSON.parse(listed.stdout); } catch { throw new Error(`paseo ls returned non-JSON: ${tail(listed.stdout)}`); }
-    const existing = agents.find((a) => typeof a.id === 'string')?.id as string | undefined;
-    if (existing) {
-      const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'courier-wake-'));
-      const file = path.join(dir, 'prompt.txt');
-      try {
-        fs.writeFileSync(file, prompt(request), { mode: 0o600 });
-        const sent = await run(bin, ['send', existing, '--prompt-file', file, '--no-wait'], base);
-        if (sent.code !== 0) throw failure('paseo send', sent);
-      } finally {
-        fs.rmSync(dir, { recursive: true, force: true });
-      }
-      return;
-    }
-    const args = [
-      'run', '--background', '--json',
-      '--title', `✉ ${label(request.peer)} · ${label(request.subject, 60)}`,
-      '--provider', provider,
-      '--cwd', config.cwd,
-      '--label', `courier-thread=${request.threadId}`,
-      '--label', `courier-peer=${request.peer}`,
-      '--env', `COURIER_HOME=${config.home}`,
-      ...(mode ? ['--mode', mode] : []),
-      prompt(request),
-    ];
-    const created = await run(bin, args, base);
-    if (created.code !== 0) throw failure('paseo run', created);
-  };
+  const paseo: Waker = (request) => sendToThreadAgent(run, config, {
+    threadId: request.threadId, peer: request.peer, title: `✉ ${label(request.peer)} · ${label(request.subject, 60)}`, prompt: prompt(request),
+  });
 
   switch (config.adapter) {
     case 'none': return noWaker;
