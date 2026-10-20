@@ -1,12 +1,14 @@
 import { describe, expect, spyOn, test } from "bun:test";
 import { once } from "node:events";
-import { createServer, Server } from "node:http";
+import { createServer, request, Server, type IncomingMessage } from "node:http";
 import { PassThrough, Readable } from "node:stream";
 import {
   buildAuthUrl,
+  callbackFlow,
   publicJwkForDelegation,
   startAuthFlow,
   validateDelegationCallbackPayload,
+  type CallbackFlowEnv,
 } from "./browser-auth.js";
 import { CLIError, wrapError } from "../output/errors.js";
 
@@ -332,6 +334,131 @@ describe("browser callback login", () => {
       if (originalStdin) Object.defineProperty(process, "stdin", originalStdin);
       if (originalStderrTTY) Object.defineProperty(process.stderr, "isTTY", originalStderrTTY);
       else Reflect.deleteProperty(process.stderr, "isTTY");
+    }
+  });
+});
+
+const OPENKEY = "https://openkey.test";
+const HINT = "Still waiting. If your browser asked to connect to devices on your network, choose Allow. You can also finish by entering the code shown in the browser (`tinycloud auth login --paste` / the paste option)";
+const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+describe("browser callback wait", () => {
+  const code = { delegationHeader: { Authorization: "Bearer wait" }, delegationCid: "bafy-wait", spaceId: "tinycloud:pkh:eip155:1:0xabc:default" };
+
+  /** Start the callback flow and resolve once its callback URL is listening. */
+  async function startWait(env: CallbackFlowEnv) {
+    let onUrl!: (url: string) => void;
+    const listening = new Promise<string>((resolve) => { onUrl = resolve; });
+    const flow = callbackFlow("did:key:z6MkDelegate", { noPopup: true, openkeyHost: OPENKEY }, { ...env, onListening: onUrl });
+    return { flow, callback: new URL(await listening) };
+  }
+
+  const deliver = (callback: URL) =>
+    fetch(callback, {
+      method: "POST",
+      headers: { Origin: OPENKEY, "Content-Type": "application/json" },
+      body: JSON.stringify(code),
+    });
+
+  /** Capture stderr lines and stub stdin so the interactive paste prompt never reads the test runner's input. */
+  function captureTerminal(interactive: boolean) {
+    const messages: string[] = [];
+    const error = spyOn(console, "error").mockImplementation((...args) => { messages.push(args.join(" ")); });
+    const stdin = Object.getOwnPropertyDescriptor(process, "stdin");
+    if (interactive) Object.defineProperty(process, "stdin", { configurable: true, value: new PassThrough() });
+    return {
+      messages,
+      hints: () => messages.filter((message) => message === HINT).length,
+      restore: () => {
+        error.mockRestore();
+        if (stdin) Object.defineProperty(process, "stdin", stdin);
+      },
+    };
+  }
+
+  test("holds a POST the browser sends after 11 s, past the old 10 s request timeout", async () => {
+    const terminal = captureTerminal(false);
+    try {
+      const { flow, callback } = await startWait({ deadlineMs: 60_000, interactive: false });
+      const body = JSON.stringify(code);
+      const pending = request(callback, {
+        method: "POST",
+        headers: { Origin: OPENKEY, "Content-Type": "application/json", "Content-Length": Buffer.byteLength(body) },
+      });
+      pending.write(body.slice(0, 10));
+      await sleep(11_000);
+      pending.end(body.slice(10));
+      const [response] = (await once(pending, "response")) as [IncomingMessage];
+      response.resume();
+      expect(response.statusCode).toBe(200);
+      expect(await flow).toEqual(code);
+    } finally {
+      terminal.restore();
+    }
+  }, 30_000);
+
+  test("the hold ends at the sign-in deadline, and a later callback is refused", async () => {
+    const terminal = captureTerminal(false);
+    try {
+      const { flow, callback } = await startWait({ deadlineMs: 300, interactive: false });
+      await expect(flow).rejects.toThrow("Authentication timed out after 5 minutes");
+      await expect(deliver(callback)).rejects.toThrow();
+    } finally {
+      terminal.restore();
+    }
+  });
+
+  test("prints the how-to once after the hint delay while interactive, and not again", async () => {
+    const terminal = captureTerminal(true);
+    try {
+      const { flow, callback } = await startWait({ deadlineMs: 1_000, hintDelayMs: 50, interactive: true, jsonOutput: false });
+      await sleep(120);
+      expect(terminal.hints()).toBe(1);
+      await sleep(150);
+      expect(terminal.hints()).toBe(1);
+      expect((await deliver(callback)).status).toBe(200);
+      await flow;
+    } finally {
+      terminal.restore();
+    }
+  });
+
+  test("does not print the how-to once the callback has settled", async () => {
+    const terminal = captureTerminal(true);
+    try {
+      const { flow, callback } = await startWait({ deadlineMs: 1_000, hintDelayMs: 150, interactive: true, jsonOutput: false });
+      expect((await deliver(callback)).status).toBe(200);
+      await flow;
+      await sleep(250);
+      expect(terminal.hints()).toBe(0);
+    } finally {
+      terminal.restore();
+    }
+  });
+
+  test("does not print the how-to in JSON output", async () => {
+    const terminal = captureTerminal(true);
+    try {
+      const { flow, callback } = await startWait({ deadlineMs: 1_000, hintDelayMs: 50, interactive: true, jsonOutput: true });
+      await sleep(120);
+      expect(terminal.hints()).toBe(0);
+      expect((await deliver(callback)).status).toBe(200);
+      await flow;
+    } finally {
+      terminal.restore();
+    }
+  });
+
+  test("does not print the how-to when not interactive", async () => {
+    const terminal = captureTerminal(false);
+    try {
+      const { flow, callback } = await startWait({ deadlineMs: 1_000, hintDelayMs: 50, interactive: false, jsonOutput: false });
+      await sleep(120);
+      expect(terminal.hints()).toBe(0);
+      expect((await deliver(callback)).status).toBe(200);
+      await flow;
+    } finally {
+      terminal.restore();
     }
   });
 });

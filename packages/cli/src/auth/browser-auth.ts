@@ -4,6 +4,7 @@ import { randomBytes } from "node:crypto";
 import { createInterface } from "node:readline";
 import { DEFAULT_OPENKEY_HOST, DEFAULT_OPENKEY_DEVICE_API_HOST, ExitCode } from "../config/constants.js";
 import { CLIError } from "../output/errors.js";
+import { shouldOutputJson } from "../output/formatter.js";
 
 interface DelegationData {
   delegationHeader: { Authorization: string };
@@ -54,6 +55,17 @@ const PRIVATE_JWK_FIELDS = new Set([
 
 /** Real delegation callbacks are a few KB; anything far larger is refused unread. */
 const MAX_CALLBACK_BODY_BYTES = 1024 * 1024;
+
+/**
+ * Sign-in deadline. It also bounds how long the callback request and its
+ * keep-alive socket stay open, because the browser can hold the POST while the
+ * user answers its local-network permission prompt.
+ */
+const CALLBACK_DEADLINE_MS = 5 * 60 * 1000;
+/** Delay before the one-time how-to line while the callback is still pending. */
+const CALLBACK_HINT_DELAY_MS = 15 * 1000;
+const CALLBACK_HINT =
+  "Still waiting. If your browser asked to connect to devices on your network, choose Allow. You can also finish by entering the code shown in the browser (`tinycloud auth login --paste` / the paste option)";
 
 export function publicJwkForDelegation(jwk: object): object {
   const publicJwk: Record<string, unknown> = {};
@@ -242,9 +254,29 @@ function shouldOpenBrowser(options: AuthFlowOptions): boolean {
   return env !== "1" && env !== "true";
 }
 
-async function callbackFlow(did: string, options: AuthFlowOptions = {}): Promise<DelegationData> {
+/** Test seams; production callers pass nothing. */
+export interface CallbackFlowEnv {
+  deadlineMs?: number;
+  hintDelayMs?: number;
+  /** Defaults to stdin being a TTY, the same check that enables the paste prompt. */
+  interactive?: boolean;
+  /** Defaults to shouldOutputJson(). */
+  jsonOutput?: boolean;
+  onListening?: (callbackUrl: string) => void;
+}
+
+export async function callbackFlow(
+  did: string,
+  options: AuthFlowOptions = {},
+  env: CallbackFlowEnv = {},
+): Promise<DelegationData> {
   return new Promise((resolve, reject) => {
     let timeout: ReturnType<typeof setTimeout>;
+    let hintTimer: NodeJS.Timeout | undefined;
+    const deadlineMs = env.deadlineMs ?? CALLBACK_DEADLINE_MS;
+    const hintDelayMs = env.hintDelayMs ?? CALLBACK_HINT_DELAY_MS;
+    const interactive = env.interactive ?? Boolean(process.stdin.isTTY);
+    const jsonOutput = env.jsonOutput ?? shouldOutputJson();
     let settled = false;
     let rl: ReturnType<typeof createInterface> | undefined;
 
@@ -252,6 +284,7 @@ async function callbackFlow(did: string, options: AuthFlowOptions = {}): Promise
       if (settled) return;
       settled = true;
       clearTimeout(timeout);
+      clearTimeout(hintTimer);
       server.close();
       // A held-open socket must not keep the CLI alive after the login settles.
       server.closeAllConnections();
@@ -329,9 +362,14 @@ async function callbackFlow(did: string, options: AuthFlowOptions = {}): Promise
         res.end();
       }
     });
-    // Slow or stalled requests are dropped instead of lingering for the whole login.
-    server.headersTimeout = 10_000;
-    server.requestTimeout = 10_000;
+    // Slow or stalled requests are dropped only at the sign-in deadline. The
+    // earlier 10 s limits cut off a POST the browser held while it waited for
+    // the user's local-network permission answer.
+    server.headersTimeout = deadlineMs;
+    server.requestTimeout = deadlineMs;
+    // Idle keep-alive sockets (for example a preconnected browser socket) must
+    // outlive the default 5 s too. settle() closes them all at the deadline.
+    server.keepAliveTimeout = deadlineMs;
 
     server.listen(0, "127.0.0.1", async () => {
       const addr = server.address();
@@ -341,6 +379,7 @@ async function callbackFlow(did: string, options: AuthFlowOptions = {}): Promise
       }
       const port = addr.port;
       const callbackUrl = `http://127.0.0.1:${port}${callbackPath}`;
+      env.onListening?.(callbackUrl);
       const authUrl = buildAuthUrl(did, { ...options, callback: callbackUrl });
       const openBrowser = shouldOpenBrowser(options);
       const hasTerminal = Boolean(process.stdin.isTTY || process.stderr.isTTY);
@@ -363,7 +402,7 @@ async function callbackFlow(did: string, options: AuthFlowOptions = {}): Promise
       }
 
       // In interactive mode, also accept paste input while waiting for callback
-      if (process.stdin.isTTY) {
+      if (interactive) {
         console.error(`\nIf the browser can't connect back, enter the short code or paste the full delegation code here:`);
         rl = createInterface({
           input: process.stdin,
@@ -386,10 +425,16 @@ async function callbackFlow(did: string, options: AuthFlowOptions = {}): Promise
       }
     });
 
-    // Timeout after 5 minutes
+    // Timeout at the sign-in deadline
     timeout = setTimeout(() => {
       settle({ error: new Error("Authentication timed out after 5 minutes") });
-    }, 5 * 60 * 1000);
+    }, deadlineMs);
+    // One-time how-to line; only interactive, never in JSON output. stderr only.
+    if (interactive && !jsonOutput) {
+      hintTimer = setTimeout(() => {
+        console.error(CALLBACK_HINT);
+      }, hintDelayMs);
+    }
   });
 }
 
