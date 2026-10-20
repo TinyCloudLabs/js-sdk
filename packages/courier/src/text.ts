@@ -1,82 +1,80 @@
-/**
- * Text rules for what a human approves (spec §7), shared byte for byte with the `/courier` view: a field the
- * approval depends on is refused, never repaired or shortened, if any character could hide or reorder what the
- * human reads. The vectors in `test/vectors/request-fields.json` are the contract; copy them.
- */
+/** Frozen Unicode text contract for request writes, approval reads and the Courier view. */
+import { TEXT_ALLOWED_RANGES } from './text-ranges.js';
 
-/** Controls (Cc), format incl. bidi and tag characters (Cf), private use (Co), unassigned (Cn), lone surrogates (Cs), line/paragraph separators. */
-const FORBIDDEN = /[\p{Cc}\p{Cf}\p{Co}\p{Cn}\p{Cs}\p{Zl}\p{Zp}]/u;
-/**
- * Blank or near-blank on screen, not always a format character: Braille blank U+2800, object replacement U+FFFC,
- * musical null notehead U+1D159, Khitan filler U+16FE4, Hangul fillers U+115F U+1160 U+3164 U+FFA0, shorthand
- * format controls U+1BCA0 to U+1BCA3. The view refuses exactly this set.
- */
-const INVISIBLE_LOOKALIKES = /[\u2800\uFFFC\u115F\u1160\u3164\uFFA0\u{1D159}\u{16FE4}\u{1BCA0}-\u{1BCA3}]/u;
-/**
- * Quotes and their look-alikes: the view wraps `summary` in quotes, so the text must not be able to close them. Every
- * \p{Quotation_Mark} character is refused (ASCII, curly, guillemets, CJK corner and double-prime marks, ornaments)
- * plus double primes, gershayim, the ditto mark and the dingbat/ornament quotes Unicode does not list as such. The
- * apostrophe U+0027 and the right single quote U+2019 stay allowed ("Sam's PR").
- */
-const DOUBLE_QUOTES = /(?!['\u2019])[\p{Quotation_Mark}"\uFF02\u275D\u275E\u2760\u2E42\u{1F676}-\u{1F678}\u2033\u2036\u02BA\u05F4\u3003]/u;
-/** Variation selectors, U+034F, U+115F/1160, U+17B4/17B5, U+180B-180F, U+3164, U+FFA0, tag characters, soft hyphen, ... */
-const IGNORABLE = /\p{Default_Ignorable_Code_Point}/u;
-/** Any space other than U+0020 (no-break, em, ideographic, ...): look-alikes for a plain space. */
-const ODD_SPACE = /(?! )\p{Zs}/u;
-/** More than this many combining marks in a row is overdraw, not text. */
-export const MAX_COMBINING_RUN = 3;
-const COMBINING_RUN = new RegExp(`\\p{M}{${MAX_COMBINING_RUN + 1},}`, 'u');
-
+export type TextField = 'summary' | 'multiline' | 'target';
+export type TextReason = 'not-string' | 'empty' | 'too-long' | 'edge-whitespace' | 'not-nfc' | 'disallowed-code-point';
+export type TextVerdict = { allowed: true; reason: null } | { allowed: false; reason: TextReason };
 export const MAX_SUMMARY = 200;
 export const MAX_TARGET = 200;
 export const MAX_ACTION = 2000;
 export const MAX_REASON = 2000;
 export const MAX_RISK = 2000;
+const SUMMARY_PUNCTUATION = ".,:;-_/#()?!'";
 
-/**
- * Why `value` cannot be shown to a human as-is, or undefined if it can. `multiline` additionally allows U+000A (the
- * free-text `action`, `reason` and `risk`); a tab or carriage return is refused everywhere.
- */
-export function hiddenTextProblem(value: string, multiline = false): string | undefined {
-  const text = multiline ? value.replace(/\n/g, ' ') : value;
-  if (FORBIDDEN.test(text)) return 'it contains control, format (bidi, zero-width, tag), private-use, unassigned or separator characters';
-  if (INVISIBLE_LOOKALIKES.test(text)) return 'it contains a character that renders blank (for example U+2800, U+FFFC, a filler)';
-  if (IGNORABLE.test(text)) return 'it contains invisible (default-ignorable) characters such as variation selectors';
-  if (ODD_SPACE.test(text)) return 'it contains a space other than a plain space';
-  if (COMBINING_RUN.test(text)) return `it stacks more than ${MAX_COMBINING_RUN} combining marks on one character`;
-  if (value !== value.normalize('NFC')) return 'it is not in Unicode normalization form NFC';
+/** Character eligibility only; the full-string verdict additionally checks NFC, length and trimming. */
+export function textCodePointAllowed(cp: number, field: TextField): boolean {
+  if (!Number.isInteger(cp) || cp < 0 || cp > 0x10ffff) return false;
+  if (cp === 10) return field === 'multiline';
+  if (cp >= 0x20 && cp <= 0x7e) {
+    return field !== 'summary' || cp === 0x20 ||
+      (cp >= 0x30 && cp <= 0x39) || (cp >= 0x41 && cp <= 0x5a) || (cp >= 0x61 && cp <= 0x7a) ||
+      SUMMARY_PUNCTUATION.includes(String.fromCodePoint(cp));
+  }
+  if (field === 'target') return false;
+  let low = 0, high = TEXT_ALLOWED_RANGES.length - 1;
+  while (low <= high) {
+    const mid = (low + high) >>> 1;
+    const [start, end] = TEXT_ALLOWED_RANGES[mid];
+    if (cp < start) high = mid - 1;
+    else if (cp > end) low = mid + 1;
+    else return true;
+  }
+  return false;
+}
+
+function contentReason(value: string, field: TextField): TextReason | undefined {
+  for (const char of value) if (!textCodePointAllowed(char.codePointAt(0)!, field)) return 'disallowed-code-point';
+  if (value !== value.normalize('NFC')) return 'not-nfc';
   return undefined;
 }
 
-/** A single line a human reads: 1..max UTF-16 units, trimmed, nothing hidden. */
+/** Stable cross-runtime API. Limits are UTF-16 units: summary/target 200, multiline 2000. */
+export function textVerdict(value: unknown, field: TextField): TextVerdict {
+  let reason: TextReason | undefined;
+  if (typeof value !== 'string') reason = 'not-string';
+  else if (value.length === 0) reason = 'empty';
+  else if (value.length > (field === 'multiline' ? MAX_ACTION : MAX_SUMMARY)) reason = 'too-long';
+  else if (field !== 'multiline' && (value.startsWith(' ') || value.endsWith(' '))) reason = 'edge-whitespace';
+  else reason = contentReason(value, field);
+  return reason ? { allowed: false, reason } : { allowed: true, reason: null };
+}
+
+/** Sweep nested schema strings without imposing a particular field's length/empty rules. */
+export function hiddenTextProblem(value: string, multiline = false): string | undefined {
+  if (!multiline && value.includes('\n')) return 'disallowed-code-point';
+  return contentReason(value, 'multiline');
+}
+
+/** Generic schema line (e.g. a timestamp); summary and target use their narrower field verdicts. */
 export function plainLineProblem(value: unknown, max: number): string | undefined {
-  if (typeof value !== 'string') return 'it is not a string';
-  if (value.length === 0) return 'it is empty';
-  if (value.length > max) return `it is ${value.length} characters; the limit is ${max}`;
-  if (value !== value.trim()) return 'it has leading or trailing whitespace';
+  if (typeof value !== 'string') return 'not-string';
+  if (!value.length) return 'empty';
+  if (value.length > max) return 'too-long';
+  if (value.startsWith(' ') || value.endsWith(' ')) return 'edge-whitespace';
   return hiddenTextProblem(value);
 }
 
-/** Free text the human reads (`action`, `reason`, `risk`): 1..max, nothing hidden, newlines allowed. */
 export function plainTextProblem(value: unknown, max: number): string | undefined {
-  if (typeof value !== 'string') return 'it is not a string';
-  if (value.length === 0) return 'it is empty';
-  if (value.length > max) return `it is ${value.length} characters; the limit is ${max}`;
-  return hiddenTextProblem(value, true);
+  if (typeof value === 'string' && value.length > max) return 'too-long';
+  return textVerdict(value, 'multiline').reason ?? undefined;
 }
 
-/** `summary`: a plain line that also contains no double quotes or look-alikes (it is shown between quotes). */
 export function summaryProblem(value: unknown): string | undefined {
-  const line = plainLineProblem(value, MAX_SUMMARY);
-  if (line) return line;
-  return DOUBLE_QUOTES.test(value as string) ? 'it contains a quotation mark or a look-alike (" “ ” „ « » ‹ › ＂ ″ …); apostrophes are fine' : undefined;
+  return textVerdict(value, 'summary').reason ?? undefined;
 }
 
-/** `target`: printable ASCII (no look-alike letters), trimmed, one line. */
 export function asciiTargetProblem(value: unknown): string | undefined {
-  const line = plainLineProblem(value, MAX_TARGET);
-  if (line) return line;
-  return /^[\x20-\x7e]+$/.test(value as string) ? undefined : 'it is not printable ASCII';
+  return textVerdict(value, 'target').reason ?? undefined;
 }
 
 /** What each verb's stored target must look like: the view applies exactly these shapes on top of the ASCII rule. */
