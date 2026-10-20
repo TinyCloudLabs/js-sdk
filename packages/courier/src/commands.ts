@@ -645,6 +645,9 @@ export async function cmdRequest(args: ParsedArgs) {
 const requestUsage = () =>
   `Usage: ${cmd('request <threadId> --peer <p> --task <id> --verb merge|deploy|publish|spend|other --target <what> --summary "…" --why "…" [--risk "…"] [--action "…"]')}\n${targetHelp()}`;
 
+/** `courier request --help`: the usage line and every target form. */
+export const requestHelp = () => `${requestUsage()}\n`;
+
 // ---------- orders ----------
 
 export async function cmdOrders(args: ParsedArgs) {

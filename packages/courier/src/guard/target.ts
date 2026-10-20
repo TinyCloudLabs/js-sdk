@@ -18,6 +18,16 @@ const bad = (verb: string, raw: string): never => {
   throw new CourierError('usage', `"${raw.slice(0, 80)}" is not a canonical ${verb} target. ${targetHelp(verb)}`);
 };
 
+/**
+ * A PR number as the digits written, leading zeros stripped, never through a float (Number() rewrites anything above
+ * 2^53). 1 to 9 digits, so a number is always exactly what it looks like; the view applies the same rule.
+ */
+function prNumber(digits: string, raw: string): string {
+  const stripped = digits.replace(/^0+/, '');
+  if (!stripped || stripped.length > 9) return bad('merge', raw);
+  return stripped;
+}
+
 export function targetHelp(verb?: string): string {
   const forms: Record<string, string> = {
     merge: 'merge: owner/repo#<PR number> (or a GitHub PR URL), or owner/repo@<branch> for a direct push to it',
@@ -41,9 +51,9 @@ export function canonicalTarget(verb: string, raw: string): string {
 
   if (verb === 'merge') {
     m = new RegExp(`^https?://github\\.com/(${REPO})/(${REPO})/pull/(\\d+)(?:[/?#].*)?$`, 'i').exec(t);
-    if (m) return `${m[1]}/${m[2]}#${Number(m[3])}`.toLowerCase();
+    if (m) return `${m[1]}/${m[2]}#${prNumber(m[3], t)}`.toLowerCase();
     m = new RegExp(`^(${REPO})/(${REPO})#(\\d+)$`).exec(t);
-    if (m) return `${m[1]}/${m[2]}#${Number(m[3])}`.toLowerCase();
+    if (m) return `${m[1]}/${m[2]}#${prNumber(m[3], t)}`.toLowerCase();
     m = new RegExp(`^(${REPO})/(${REPO})@(${SEG}|\\*)$`).exec(t);
     if (m) return `${m[1]}/${m[2]}`.toLowerCase() + `@${m[3]}`;
     return bad(verb, t);

@@ -1,7 +1,7 @@
 import { parseArgs, type ParsedArgs } from './args.js';
 import { CourierError, errInfo } from './errors.js';
 import {
-  cmdInit, cmdManifest, cmdPair, cmdRevoke, cmdSend, cmdInbox, cmdRead, cmdTask, cmdRequest, cmdOrders,
+  requestHelp, cmdInit, cmdManifest, cmdPair, cmdRevoke, cmdSend, cmdInbox, cmdRead, cmdTask, cmdRequest, cmdOrders,
 } from './commands.js';
 import { cmd, programName, setProgramName } from './program.js';
 import { cmdWatch } from './watch-cmd.js';
@@ -76,6 +76,10 @@ api.openkey.so for openkey.so, otherwise the OpenKey host).
 export async function run(argv: string[]): Promise<void> {
   const args = parseArgs(argv);
   const command = args.positional[0];
+  if (command === 'request' && args.has('help')) {
+    process.stdout.write(requestHelp());
+    return;
+  }
   if (!command || args.has('help')) {
     process.stdout.write(usage());
     return;

@@ -192,12 +192,16 @@ never repaired or shortened**:
 - `target`, `summary`: 1 to 200 UTF-16 units, trimmed, one line; `action`,
   `reason`, `risk`: 1 to 2000, a single `\n` allowed, never a tab or CR;
 - `target` is printable ASCII (`[\x20-\x7E]`) for every verb, in the one
-  canonical spelling for its verb (lower-cased repo, a GitHub PR URL reduced to
-  `owner/repo#N`; see `courier request --help`) and with the shape
-  `merge`: `owner/repo#<N>` or `owner/repo@<ref>`; `publish`: `npm:`,
-  `release:`, `changeset:` or `script:` + text; `deploy`: `wrangler:`, `pages:`,
-  `phala:` or `script:` + text; `other`: `<kind>:` + text; `spend`: `spend:` +
-  text;
+  canonical spelling for its verb (`courier request --help` prints these forms):
+
+  | verb | canonical target |
+  |---|---|
+  | `merge` | `owner/repo#<PR number>` (a GitHub PR URL is reduced to it), or `owner/repo@<branch>` for a direct push; repo lower-cased; the PR number is exactly the digits written, 1 to 9 of them, no leading zeros (nothing is ever rounded through a float) |
+  | `publish` | `npm:<name>@<version>`, `release:owner/repo@<tag>`, `changeset:<root package name>` or `script:<package>:<script>` |
+  | `deploy` | `wrangler:<worker>[:<env>]`, `pages:<project>`, `phala:<name>` or `script:<package>:<script>` |
+  | `other` | `workflow:owner/repo:<workflow file or name>`, `secrets:<subcommand and key>`, or `<kind>:<text>` |
+  | `spend` | `spend:<what and how much>` |
+
 - the whole request must hash: `canonicalJson` / `requestHash` throw on a
   non-finite number (a parsed `1e999`) and on nesting deeper than 64 levels
   (top-level object = depth 1), so such a request is never written and
