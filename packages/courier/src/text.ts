@@ -24,7 +24,7 @@ export function textCodePointAllowed(cp: number, field: TextField): boolean {
   let low = 0, high = TEXT_ALLOWED_RANGES.length - 1;
   while (low <= high) {
     const mid = (low + high) >>> 1;
-    const [start, end] = TEXT_ALLOWED_RANGES[mid];
+    const [start, end] = TEXT_ALLOWED_RANGES[mid]!;
     if (cp < start) high = mid - 1;
     else if (cp > end) low = mid + 1;
     else return true;
