@@ -1,3 +1,4 @@
+import { defer } from './defer.js';
 import type { TinyCloudNode } from '@tinycloud/node-sdk';
 import { CourierError, unwrap, type ResultLike } from './errors.js';
 
@@ -20,7 +21,7 @@ interface KVResponse<T> {
 const TRANSIENT = /fetch failed|NETWORK_ERROR|ECONNRESET|ETIMEDOUT|5\d\d/i;
 
 async function nap(ms: number) {
-  const { promise, resolve } = Promise.withResolvers<void>();
+  const { promise, resolve } = defer<void>();
   setTimeout(resolve, ms);
   await promise;
 }
@@ -49,11 +50,17 @@ async function readRetry<T>(fn: () => Promise<T>): Promise<T> {
   throw last;
 }
 
+/** The new etag from a put response, when the node returns one. */
+function putEtag(res: KVResponse<void> | undefined): string | null {
+  const etag = res?.headers?.etag;
+  return typeof etag === 'string' ? etag : null;
+}
+
 /** Create-only put; throws CourierError('conflict') on 412. */
-export async function putCreate(kv: KV, key: string, value: unknown): Promise<void> {
+export async function putCreate(kv: KV, key: string, value: unknown): Promise<string | null> {
   const r = (await kv.put(key, value, { ...FULL, ifNoneMatch: '*' })) as ResultLike<KVResponse<void>>;
   try {
-    unwrap(r, `put ${key}`);
+    return putEtag(unwrap(r, `put ${key}`));
   } catch (e) {
     if (e instanceof CourierError && (e.code === '412' || /412|conflict|precondition/i.test(e.message))) {
       throw new CourierError('conflict', `${key} already exists (create-only write)`);
@@ -63,10 +70,10 @@ export async function putCreate(kv: KV, key: string, value: unknown): Promise<vo
 }
 
 /** Conditional put for updates. Throws CourierError('conflict') on 412. */
-export async function putMatch(kv: KV, key: string, value: unknown, etag: string): Promise<void> {
+export async function putMatch(kv: KV, key: string, value: unknown, etag: string): Promise<string | null> {
   const r = (await kv.put(key, value, { ...FULL, ifMatch: etag })) as ResultLike<KVResponse<void>>;
   try {
-    unwrap(r, `put ${key}`);
+    return putEtag(unwrap(r, `put ${key}`));
   } catch (e) {
     if (e instanceof CourierError && (e.code === '412' || /412|conflict|precondition/i.test(e.message))) {
       throw new CourierError('conflict', `${key} changed under us; re-read and retry`);
@@ -109,4 +116,10 @@ export async function listAll(kv: KV, prefix: string): Promise<string[]> {
 export async function del(kv: KV, key: string): Promise<void> {
   const r = (await kv.delete(key, FULL)) as ResultLike<unknown>;
   unwrap(r, `del ${key}`);
+}
+
+/** Unconditional put, for single-writer copies such as `me/mirror/` tasks. */
+export async function putOverwrite(kv: KV, key: string, value: unknown): Promise<void> {
+  const r = (await kv.put(key, value, FULL)) as ResultLike<KVResponse<void>>;
+  unwrap(r, `put ${key}`);
 }
