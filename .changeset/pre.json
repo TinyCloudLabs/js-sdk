@@ -95,6 +95,7 @@
     "tc858-s5-quota",
     "terminal-delegation-marker",
     "terminal-grant-pkh-refusal",
+    "tidy-courier-merge-pins",
     "vault-etag-if-match-expect-aad",
     "web-replica-frozen-plugin",
     "web-replica-recovery-retry",
