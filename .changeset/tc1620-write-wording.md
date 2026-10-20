@@ -2,4 +2,4 @@
 "@tinycloud/cli": patch
 ---
 
-Reword the `--write` description for `tinycloud auth request --preset apps-agent --write --app <app_id>` in the help, the README, the agent skill, the scope notice and the missing-grant hint (TC-1620). The write grant is described by what it lets the agent do: add and change the app's data under `knowledge/` and `prefs/`, and change its table rows. It cannot change the app's code, manifest or install record. The `tinycloud knowledge` missing-grant hint now also shows the write request for a named app. No grant shapes or behaviour change.
+Reword the `--write` description for `tinycloud auth request --preset apps-agent --write --app <app_id>` (TC-1620). With `--write --app <app_id>`, the agent can add and change that app's data: write its `knowledge/` and `prefs/` files and change its table rows. The `tinycloud knowledge` missing-grant hint also shows this write request for a named app. No grant shapes change.
