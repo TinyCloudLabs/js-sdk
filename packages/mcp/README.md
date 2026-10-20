@@ -124,17 +124,22 @@ knowledge descriptions, response shapes, and OAuth cleanup. It prints only
 counts and PASS/FAIL/PASS-WITH-NOTE lines. Test offline:
 `node --test scripts/hosted-mcp-smoke.test.mjs`.
 
-One run holds a per-QA-account lock (including cleanup); stale PID locks are
-reclaimed. `--timeout-s` defaults to 300 seconds, then interrupts work,
-attempts bounded cleanup, and exits. SIGINT/SIGTERM use the same cleanup.
+One run holds an atomically published per-QA-account lock (including cleanup)
+in the system temp directory. `TC_QA_LOCK_DIR` overrides that directory for
+isolated offline tests; stale holders are checked against PID, Linux process
+start time, and their recorded deadline. `--timeout-s` defaults to 300
+seconds, then interrupts work, attempts bounded cleanup, and exits.
+SIGINT/SIGTERM use the same cleanup.
 Exit codes: `0` pass (including explicit notes), `1` assertion/cleanup fail,
 `2` invalid options/config, `3` another run holds the lock, `4` deadline,
 `130` SIGINT, `143` SIGTERM.
 
-Cleanup revokes the OAuth token. A missing revocation endpoint is a failure
-unless `--allow-unrevoked` is explicitly supplied; that mode reports the
-outstanding token. It deletes the dynamic client when registration management
-is offered and reports a client without management as outstanding. Hosted
+Cleanup drains in-flight OAuth registration/token exchange responses for up
+to five seconds before deleting the dynamic client and revoking the token.
+An unknown issuance outcome is a failure, never reported as absent. A missing
+revocation endpoint is a failure unless `--allow-unrevoked` is explicitly
+supplied; that mode reports the outstanding token. A client without
+registration management is reported as outstanding. Hosted
 TinyCloud delegations themselves have **no MCP-side revoke route** (TC-1156);
 they expire on the server's configured lifetime. OAuth revocation does not
 revoke them.

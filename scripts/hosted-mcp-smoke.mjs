@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Post-deploy check only. Never run with a personal passkey or print server data.
 import { createHash, createPublicKey, randomBytes, verify } from 'node:crypto';
-import { closeSync, fstatSync, openSync, readFileSync, realpathSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
+import { closeSync, fstatSync, fsyncSync, linkSync, openSync, readFileSync, realpathSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { request as httpsRequest } from 'node:https';
@@ -74,7 +74,9 @@ export function parseConfig(argv, env = process.env) {
   const addressFile = privateQaFile(env.TC_QA_EXPECTED_ADDRESS_FILE, scratch, 'QA address');
   const expectedAddress = readFileSync(addressFile, 'utf8').trim();
   requireCheck(/^0x[0-9a-f]{40}$/.test(expectedAddress) && expectedAddress.startsWith(QA_PREFIX.toLowerCase()), 'QA address file format invalid');
-  return { baseUrl: url.origin, expectApps, dryRun, requireRead, allowUnrevoked, timeoutS, passkeyFile, addressFile, expectedAddress, expectedAddressPrefix: QA_PREFIX };
+  const lockDir = env.TC_QA_LOCK_DIR ? resolve(env.TC_QA_LOCK_DIR) : tmpdir();
+  requireCheck(statSync(lockDir).isDirectory(), 'QA lock directory invalid');
+  return { baseUrl: url.origin, expectApps, dryRun, requireRead, allowUnrevoked, timeoutS, lockDir, passkeyFile, addressFile, expectedAddress, expectedAddressPrefix: QA_PREFIX };
 }
 
 async function jsonRequest(url, options = {}) {
@@ -270,7 +272,7 @@ async function browserAuthorization(config, pins, onBrowser, signal) {
 }
 
 export async function run(config, { authorize: injectedAuthorize, print = console.log, signal } = {}) {
-  let metadata, client, token, callback, browser;
+  let metadata, client, token, callback, browser, registrationRequest, exchangeRequest;
   let passed = true, readExercised = false;
   const report = (ok, label, detail = '') => { print(`${ok ? 'PASS' : 'FAIL'} ${label}${detail ? `: ${detail}` : ''}`); if (!ok) passed = false; };
   async function stage(label, action) {
@@ -308,7 +310,10 @@ export async function run(config, { authorize: injectedAuthorize, print = consol
     });
     await stage('OAuth', async () => {
       callback = await callbackListener();
-      client = await jsonRequest(metadata.registration_endpoint, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ client_name: 'TinyCloud QA hosted MCP smoke', redirect_uris: [callback.uri], grant_types: ['authorization_code'], response_types: ['code'], scope: 'openid tinycloud:mcp', token_endpoint_auth_method: 'none' }) });
+      signal?.throwIfAborted();
+      registrationRequest = jsonRequest(metadata.registration_endpoint, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ client_name: 'TinyCloud QA hosted MCP smoke', redirect_uris: [callback.uri], grant_types: ['authorization_code'], response_types: ['code'], scope: 'openid tinycloud:mcp', token_endpoint_auth_method: 'none' }) }).then((registered) => { client = registered; return registered; });
+      await registrationRequest;
+      signal?.throwIfAborted();
       requireCheck(typeof client.client_id === 'string' && client.client_id, 'OAuth registration failed');
       const verifier = randomBytes(32).toString('base64url');
       const state = randomBytes(24).toString('base64url');
@@ -318,11 +323,14 @@ export async function run(config, { authorize: injectedAuthorize, print = consol
         const authorization = await browserAuthorization(config, pins, (launched) => { browser = launched; }, signal);
         browser = authorization;
       }
+      signal?.throwIfAborted();
       await (injectedAuthorize ?? browser.authorize)(url.toString(), () => callback.received());
+      signal?.throwIfAborted();
       const received = callback.received();
       requireCheck(received?.code && !received.error && received.state === state && (!received.iss || received.iss === metadata.issuer), 'OAuth callback invalid');
-      const issued = await jsonRequest(metadata.token_endpoint, { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ grant_type: 'authorization_code', client_id: client.client_id, redirect_uri: callback.uri, code: received.code, code_verifier: verifier, resource }) });
-      token = issued.access_token;
+      exchangeRequest = jsonRequest(metadata.token_endpoint, { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ grant_type: 'authorization_code', client_id: client.client_id, redirect_uri: callback.uri, code: received.code, code_verifier: verifier, resource }) }).then((issued) => { token = issued.access_token; return issued; });
+      await exchangeRequest;
+      signal?.throwIfAborted();
       requireCheck(typeof token === 'string' && token, 'OAuth access token missing');
       await verifyIdentity(token, metadata, resource, config.expectedAddress);
       return 'QA throwaway E identity verified';
@@ -399,8 +407,13 @@ export async function run(config, { authorize: injectedAuthorize, print = consol
     });
   } catch { /* Stage already reported; cleanup must always run. */ }
   finally {
+    // A signal can arrive after the server creates a client/token but before its reply.
+    // Drain both requests before declaring resources absent; unknown outcomes remain failures.
+    await Promise.all([registrationRequest, exchangeRequest].filter(Boolean).map(async (request) => {
+      try { await bounded(request, 5000); } catch { /* Report unknown below. */ }
+    }));
     const cleanupToken = async () => {
-      if (!token) return { text: 'not issued' };
+      if (!token) return exchangeRequest ? { text: 'issuance outcome unknown (token may exist)', failed: true } : { text: 'not issued' };
       if (!metadata?.revocation_endpoint) return { text: 'not revoked (no revocation endpoint)', failed: !config.allowUnrevoked, note: true };
       if (!sameOrigin(metadata.revocation_endpoint, metadata.issuer)) return { text: 'not revoked (untrusted revocation endpoint)', failed: true };
       try {
@@ -409,7 +422,7 @@ export async function run(config, { authorize: injectedAuthorize, print = consol
       } catch { return { text: 'not revoked (revocation failed)', failed: true }; }
     };
     const cleanupClient = async () => {
-      if (!client) return { text: 'not registered' };
+      if (!client) return registrationRequest ? { text: 'registration outcome unknown: client may exist', failed: true } : { text: 'not registered' };
       if (!client.registration_client_uri || !client.registration_access_token) return { text: 'registered; no management endpoint (outstanding)', note: true };
       if (!sameOrigin(client.registration_client_uri, metadata.issuer)) return { text: 'registered; untrusted management endpoint (outstanding)', failed: true };
       try {
@@ -446,39 +459,72 @@ export async function run(config, { authorize: injectedAuthorize, print = consol
   return passed;
 }
 
-function acquireLock() {
-  const path = join(tmpdir(), `tinycloud-hosted-mcp-smoke-${QA_PREFIX.toLowerCase()}.lock`);
-  for (let attempt = 0; attempt < 3; attempt++) {
-    let fd;
-    try { fd = openSync(path, 'wx', 0o600); }
-    catch (error) {
-      if (error.code !== 'EEXIST') throw error;
-      let stale = false;
-      let observedInode;
-      try {
-        const ownerFd = openSync(path, 'r');
-        try {
-          observedInode = fstatSync(ownerFd).ino;
-          const holder = JSON.parse(readFileSync(ownerFd, 'utf8'));
-          if (!Number.isInteger(holder.pid) || holder.pid <= 0) stale = true;
-          else try { process.kill(holder.pid, 0); } catch (check) { stale = check.code === 'ESRCH'; }
-        } finally { closeSync(ownerFd); }
-      } catch (check) { if (check.code === 'ENOENT') continue; stale = true; }
-      if (!stale) return null;
-      try {
-        if (statSync(path).ino === observedInode) unlinkSync(path);
-      } catch (check) { if (check.code !== 'ENOENT') throw check; }
-      continue;
-    }
-    const inode = fstatSync(fd).ino;
-    try { writeFileSync(fd, JSON.stringify({ pid: process.pid, startedAt: new Date().toISOString() })); }
-    finally { closeSync(fd); }
-    return () => {
-      try { if (statSync(path).ino === inode) unlinkSync(path); }
-      catch (error) { if (error.code !== 'ENOENT') throw error; }
-    };
+function processStartTicks(pid) {
+  try {
+    const value = readFileSync(`/proc/${pid}/stat`, 'utf8');
+    return value.slice(value.lastIndexOf(')') + 2).trim().split(/\s+/)[19];
+  } catch { return undefined; }
+}
+
+function lockSnapshot(path) {
+  const fd = openSync(path, 'r');
+  try { return { stats: fstatSync(fd), content: readFileSync(fd, 'utf8') }; }
+  finally { closeSync(fd); }
+}
+
+function sameLock(left, right) {
+  return left.dev === right.dev && left.ino === right.ino;
+}
+
+function staleLock(snapshot) {
+  const age = Date.now() - snapshot.stats.mtimeMs;
+  let holder;
+  try { holder = record(JSON.parse(snapshot.content)); } catch { return age > 5000; }
+  if (!Number.isInteger(holder.pid) || holder.pid <= 0 || !Number.isFinite(Date.parse(holder.startedAt))) return age > 5000;
+  const timeoutS = Number.isInteger(holder.timeoutS) && holder.timeoutS >= 1 && holder.timeoutS <= 3600 ? holder.timeoutS : 300;
+  if (Date.now() - Date.parse(holder.startedAt) > timeoutS * 1000 + 30_000) return true;
+  try { process.kill(holder.pid, 0); }
+  catch (error) { return error.code === 'ESRCH'; }
+  const currentStart = processStartTicks(holder.pid);
+  return Boolean(holder.processStartTicks && currentStart && currentStart !== holder.processStartTicks);
+}
+
+function acquireLock(lockDir, timeoutS) {
+  const path = join(lockDir, `tinycloud-hosted-mcp-smoke-${QA_PREFIX.toLowerCase()}.lock`);
+  const temporary = `${path}.${process.pid}.${randomBytes(8).toString('hex')}.tmp`;
+  const fd = openSync(temporary, 'wx', 0o600);
+  let prepared = false;
+  try {
+    writeFileSync(fd, JSON.stringify({ pid: process.pid, startedAt: new Date().toISOString(), timeoutS, processStartTicks: processStartTicks(process.pid) }));
+    fsyncSync(fd);
+    prepared = true;
+  } finally {
+    closeSync(fd);
+    if (!prepared) unlinkSync(temporary);
   }
-  return null;
+  try {
+    for (let attempt = 0; attempt < 10; attempt++) {
+      try {
+        linkSync(temporary, path);
+        const published = statSync(path);
+        return () => {
+          try { if (sameLock(statSync(path), published)) unlinkSync(path); }
+          catch (error) { if (error.code !== 'ENOENT') throw error; }
+        };
+      } catch (error) {
+        if (error.code !== 'EEXIST') throw error;
+        let observed;
+        try { observed = lockSnapshot(path); }
+        catch (readError) { if (readError.code === 'ENOENT') continue; throw readError; }
+        if (!staleLock(observed)) return null;
+        try {
+          const current = lockSnapshot(path);
+          if (sameLock(observed.stats, current.stats) && staleLock(current) && sameLock(current.stats, statSync(path))) unlinkSync(path);
+        } catch (readError) { if (readError.code !== 'ENOENT') throw readError; }
+      }
+    }
+    return null;
+  } finally { unlinkSync(temporary); }
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
@@ -486,7 +532,7 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
   try { config = parseConfig(process.argv.slice(2)); }
   catch { console.log('FAIL config'); process.exitCode = 2; }
   if (config) {
-    const release = acquireLock();
+    const release = acquireLock(config.lockDir, config.timeoutS);
     if (!release) { console.log('FAIL lock: another hosted MCP smoke is running'); process.exitCode = 3; }
     else {
       process.once('exit', release);
@@ -495,7 +541,7 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
       const stop = (reason) => {
         if (controller.signal.aborted) return;
         controller.abort(reason);
-        watchdog = setTimeout(() => process.exit(reason === 'deadline' ? 4 : reason === 'SIGINT' ? 130 : 143), 7000);
+        watchdog = setTimeout(() => process.exit(reason === 'deadline' ? 4 : reason === 'SIGINT' ? 130 : 143), 12_000);
       };
       const interrupt = () => stop('SIGINT');
       const terminate = () => stop('SIGTERM');

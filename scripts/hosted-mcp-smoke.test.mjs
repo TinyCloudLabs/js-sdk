@@ -2,10 +2,10 @@ import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { createServer } from 'node:http';
 import { generateKeyPairSync, sign } from 'node:crypto';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { after, afterEach, test } from 'node:test';
+import { after, afterEach, beforeEach, test } from 'node:test';
 import * as smoke from './hosted-mcp-smoke.mjs';
 const { parseConfig, run } = smoke;
 
@@ -17,6 +17,8 @@ afterEach(async () => {
   })));
 });
 const home = mkdtempSync(join(tmpdir(), 'mcp-smoke-home-'));
+let lockDir;
+beforeEach(() => { lockDir = mkdtempSync(join(home, 'lock-')); });
 const qaDir = join(home, 'scratch', 'qa');
 mkdirSync(qaDir, { recursive: true });
 const passkeyFile = join(qaDir, '.passkey-E.json');
@@ -80,7 +82,12 @@ async function fakeMcp(options = {}) {
     }
     if (url.pathname === '/.well-known/oauth-authorization-server/auth') return json({ issuer: `${base}/auth`, authorization_endpoint: `${base}/authorize`, token_endpoint: `${base}/token`, registration_endpoint: `${base}/register`, ...(options.noRevocation ? {} : { revocation_endpoint: `${base}/revoke` }), jwks_uri: `${base}/jwks`, code_challenge_methods_supported: ['S256'] });
     if (url.pathname === '/jwks') return json({ keys: [{ ...jwk, kid: 'fake-key', alg: 'EdDSA' }] });
-    if (url.pathname === '/register') { options.onRegister?.(JSON.parse(body)); return json({ client_id: 'fake-client', ...(options.noClientManager ? {} : { registration_client_uri: `${base}/client`, registration_access_token: 'fake-management-token' }) }, 201); }
+    if (url.pathname === '/register') {
+      options.onRegister?.(JSON.parse(body));
+      if (options.hangRegister) return;
+      if (options.delayRegisterMs) await new Promise((done) => setTimeout(done, options.delayRegisterMs));
+      return json({ client_id: 'fake-client', ...(options.noClientManager ? {} : { registration_client_uri: `${base}/client`, registration_access_token: 'fake-management-token' }) }, 201);
+    }
     if (url.pathname === '/authorize') {
       calls.push('authorize');
       const callback = new URL(url.searchParams.get('redirect_uri'));
@@ -97,6 +104,8 @@ async function fakeMcp(options = {}) {
       const content = Buffer.from(JSON.stringify(payload)).toString('base64url');
       const jwt = `${header}.${content}.${options.badSignature ? 'bad' : sign(null, Buffer.from(`${header}.${content}`), privateKey).toString('base64url')}`;
       issuedToken = jwt;
+      options.onToken?.();
+      if (options.delayTokenMs) await new Promise((done) => setTimeout(done, options.delayTokenMs));
       return json({ access_token: jwt });
     }
     if (url.pathname === '/revoke') { calls.push('revoke'); return json({}, options.revokeStatus ?? 200); }
@@ -129,6 +138,12 @@ function config(base, expectApps) {
 }
 async function authorize(url) { await fetch(url); }
 function log() { const lines = []; return { lines, print: (line) => lines.push(line) }; }
+async function waitForStart(promise) {
+  let timer;
+  try {
+    await Promise.race([promise, new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('OAuth request did not start')), 5000); })]);
+  } finally { clearTimeout(timer); }
+}
 
 test('validates dry-run configuration before any network or passkey read', () => {
   assert.throws(() => parseConfig(['--dry-run'], { TC_QA_EXPECTED_ADDRESS_PREFIX: '0x889E' }), /passkey/i);
@@ -152,14 +167,19 @@ test('pinned inventory and full descriptions match the generated MCP operation c
 function launch(base, args = [], extraEnv = {}) {
   const child = spawn(process.execPath, ['scripts/hosted-mcp-smoke.mjs', '--base-url', base, ...args], {
     cwd: new URL('..', import.meta.url),
-    env: { ...process.env, HOME: home, TC_QA_PASSKEY_FILE: passkeyFile, TC_QA_EXPECTED_ADDRESS_PREFIX: '0x889E', TC_QA_EXPECTED_ADDRESS_FILE: addressFile, TC_QA_PLAYWRIGHT_MODULE: playwrightDir, ...extraEnv },
+    env: { ...process.env, HOME: home, TC_QA_PASSKEY_FILE: passkeyFile, TC_QA_EXPECTED_ADDRESS_PREFIX: '0x889E', TC_QA_EXPECTED_ADDRESS_FILE: addressFile, TC_QA_PLAYWRIGHT_MODULE: playwrightDir, TC_QA_LOCK_DIR: lockDir, ...extraEnv },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   let stdout = '', stderr = '';
-  child.stdout.on('data', (chunk) => { stdout += chunk; });
+  let ready;
+  const configured = new Promise((resolve) => { ready = resolve; });
+  child.stdout.on('data', (chunk) => {
+    stdout += chunk;
+    if (stdout.includes('PASS config:')) ready();
+  });
   child.stderr.on('data', (chunk) => { stderr += chunk; });
   const exited = new Promise((resolve) => child.once('exit', (code, signal) => resolve({ code, signal, stdout, stderr })));
-  return { child, result: () => exited };
+  return { child, configured, result: () => exited };
 }
 
 test('usage failures exit 2 without running OAuth', async () => {
@@ -184,11 +204,51 @@ test('only one process can own the QA smoke lock; stale pid lock is reclaimed', 
     first.child.kill('SIGINT');
     await first.result();
   }
-  const lockPath = join(tmpdir(), 'tinycloud-hosted-mcp-smoke-0x889e.lock');
+  const lockPath = join(lockDir, 'tinycloud-hosted-mcp-smoke-0x889e.lock');
   writeFileSync(lockPath, JSON.stringify({ pid: 999999999, startedAt: new Date(0).toISOString() }), { mode: 0o600 });
   const recovered = await launch(base, ['--dry-run']).result();
   assert.equal(recovered.code, 0);
   assert.ok(!existsSync(lockPath));
+  writeFileSync(lockPath, '', { mode: 0o600 });
+  const incomplete = await launch(base, ['--dry-run']).result();
+  assert.equal(incomplete.code, 3, 'a freshly created holder must not be reclaimed');
+  unlinkSync(lockPath);
+  writeFileSync(lockPath, JSON.stringify({ pid: process.pid, startedAt: new Date(0).toISOString(), timeoutS: 300 }), { mode: 0o600 });
+  const reused = await launch(base, ['--dry-run']).result();
+  assert.equal(reused.code, 0, 'a long-expired lock cannot be held by a reused PID');
+  assert.ok(!existsSync(lockPath));
+  if (existsSync('/proc/self/stat')) {
+    writeFileSync(lockPath, JSON.stringify({ pid: process.pid, startedAt: new Date().toISOString(), timeoutS: 300, processStartTicks: '-1' }), { mode: 0o600 });
+    const changedProcess = await launch(base, ['--dry-run']).result();
+    assert.equal(changedProcess.code, 0, 'same PID with a different Linux process start must be reclaimed');
+    assert.ok(!existsSync(lockPath));
+  }
+});
+
+test('two processes racing 50 times never both acquire the same QA lock', async () => {
+  const { base } = await fakeMcp({ hangMetadata: true });
+  for (let round = 0; round < 50; round++) {
+    const first = launch(base, ['--timeout-s', '5']);
+    const second = launch(base, ['--timeout-s', '5']);
+    try {
+      const firstResult = first.result().then((result) => ({ opponent: second, result }));
+      const secondResult = second.result().then((result) => ({ opponent: first, result }));
+      const loser = await Promise.race([firstResult, secondResult]);
+      assert.equal(loser.result.code, 3, `round ${round}: exactly one contender must lose`);
+      await Promise.race([
+        loser.opponent.configured,
+        loser.opponent.result().then(() => { throw new Error(`round ${round}: winner exited before configuring`); }),
+      ]);
+      loser.opponent.child.kill('SIGTERM');
+      const winner = await loser.opponent.result();
+      assert.equal(winner.code, 143, `round ${round}: the winner must have held the lock`);
+      assert.match(winner.stdout, /PASS config/);
+    } finally {
+      first.child.kill('SIGKILL');
+      second.child.kill('SIGKILL');
+      await Promise.all([first.result(), second.result()]);
+    }
+  }
 });
 
 test('whole-process deadline interrupts a hung MCP request, revokes, closes, exits 4', async () => {
@@ -229,6 +289,51 @@ test('SIGINT after OAuth cleans up token/client and exits 130', async () => {
     const result = await processRun.result();
     assert.equal(result.code, 130);
     assert.match(result.stdout, /FAIL signal SIGINT/);
+    assert.deepEqual(calls.slice(-2).sort(), ['delete', 'revoke']);
+  } finally { processRun.child.kill('SIGKILL'); }
+});
+
+test('SIGINT during registration deletes the client returned after interruption', async () => {
+  let entered;
+  const registrationEntered = new Promise((resolve) => { entered = resolve; });
+  const { base, calls } = await fakeMcp({ delayRegisterMs: 350, onRegister: entered });
+  const processRun = launch(base);
+  try {
+    await waitForStart(registrationEntered);
+    processRun.child.kill('SIGINT');
+    const result = await processRun.result();
+    assert.equal(result.code, 130);
+    assert.match(result.stdout, /OAuth token not issued; dynamic client deleted/);
+    assert.ok(calls.includes('delete'));
+    assert.doesNotMatch(result.stdout, /dynamic client not registered/);
+  } finally { processRun.child.kill('SIGKILL'); }
+});
+
+test('SIGINT during an unresponsive registration reports unknown client outcome', async () => {
+  let entered;
+  const registrationEntered = new Promise((resolve) => { entered = resolve; });
+  const { base } = await fakeMcp({ hangRegister: true, onRegister: entered });
+  const processRun = launch(base);
+  try {
+    await waitForStart(registrationEntered);
+    processRun.child.kill('SIGINT');
+    const result = await processRun.result();
+    assert.equal(result.code, 130);
+    assert.match(result.stdout, /FAIL cleanup: OAuth token not issued; dynamic client registration outcome unknown: client may exist/);
+  } finally { processRun.child.kill('SIGKILL'); }
+});
+
+test('SIGINT during token exchange revokes the token returned after interruption', async () => {
+  let entered;
+  const tokenEntered = new Promise((resolve) => { entered = resolve; });
+  const { base, calls } = await fakeMcp({ delayTokenMs: 350, onToken: entered });
+  const processRun = launch(base);
+  try {
+    await waitForStart(tokenEntered);
+    processRun.child.kill('SIGINT');
+    const result = await processRun.result();
+    assert.equal(result.code, 130);
+    assert.match(result.stdout, /OAuth token revoked; dynamic client deleted/);
     assert.deepEqual(calls.slice(-2).sort(), ['delete', 'revoke']);
   } finally { processRun.child.kill('SIGKILL'); }
 });
