@@ -1,7 +1,7 @@
 import { decodeBase64Url, isObject } from "./encoding";
 import { isStrictEd25519Point } from "./crypto";
 import { refuse } from "./errors";
-import { DEFAULT_ROWS } from "./rows";
+import { SHIPPED_ROWS } from "./rows";
 import type { ProfileRow } from "./rows";
 
 export const ISSUER_SET_FORMAT = "tinycloud.credentials-issuers/v1";
@@ -81,7 +81,7 @@ export function lookupIssuerEntry(set: IssuerSet, issuerDid: string, kid: string
 export interface IssuerSetOptions {
   /** DID methods allowed for issuers (docs/principles.md principle 2), e.g. ["web"]. */
   didMethods: { issuer: readonly string[] };
-  /** Rows whose permitted-issuer rules apply to the profiles an entry lists. Defaults to the email row only. */
+  /** Additional rows whose permitted-issuer rules also apply to the profiles an entry lists. The shipped rows always apply. */
   rows?: readonly ProfileRow[];
 }
 
@@ -132,6 +132,7 @@ export function parseIssuerSet(raw: unknown, options: IssuerSetOptions): IssuerS
   if (raw.format !== ISSUER_SET_FORMAT) refuse("bad-issuer-set", "unknown format");
   if (typeof raw.version !== "number" || !Number.isInteger(raw.version) || raw.version < 1) refuse("bad-issuer-set", "version must be a positive integer");
   if (!Array.isArray(raw.issuers) || raw.issuers.length === 0) refuse("bad-issuer-set", "issuers must be a non-empty list");
+  const rowsForLoad: readonly ProfileRow[] = [...SHIPPED_ROWS, ...(options.rows ?? [])];
   const entries = new Map<string, IssuerEntry>();
   for (const item of raw.issuers) {
     if (!isObject(item) || Object.keys(item).sort().join() !== ENTRY_KEYS.join()) refuse("bad-issuer-set", "entry has missing or unknown fields");
@@ -151,8 +152,9 @@ export function parseIssuerSet(raw: unknown, options: IssuerSetOptions): IssuerS
     if (retiredAt !== null && notAfter !== null && retiredAt > notAfter) refuse("bad-issuer-set", "retiredAt must not be after notAfter");
     const listedProfiles = stringList(item.profiles, "profiles");
     for (const profile of listedProfiles) {
-      const row = (options.rows ?? DEFAULT_ROWS).find((candidate) => candidate.profile === profile);
-      if (row?.issuerDidPattern && !row.issuerDidPattern.test(issuerDid as string)) refuse("bad-issuer-set", "issuer DID is not permitted for a profile it lists");
+      for (const row of rowsForLoad) {
+        if (row.profile === profile && !row.permitsIssuer(issuerDid as string)) refuse("bad-issuer-set", "issuer DID is not permitted for a profile it lists");
+      }
     }
     entries.set(kid as string, Object.freeze({
       issuerDid: issuerDid as string,

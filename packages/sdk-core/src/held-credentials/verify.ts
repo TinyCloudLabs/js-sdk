@@ -173,7 +173,7 @@ export async function verifyHeldPresentation(presentation: unknown, options: Ver
   if (!acceptedProfiles.some((p) => p.profile === profile && p.profileVersion === profileVersion)) refuse("profile-not-accepted", "profile is not accepted by this caller");
   if (row.vct !== vct) refuse("profile-mismatch", "vct is not the row's vct");
   if (!entry.vcts.includes(vct) || !entry.profiles.includes(profile)) refuse("profile-mismatch", "issuer entry does not admit this vct and profile");
-  if (row.issuerDidPattern && !row.issuerDidPattern.test(issuerDid)) refuse("issuer-not-accepted", "this profile row does not permit the issuer DID");
+  if (!row.permitsIssuer(issuerDid)) refuse("issuer-not-accepted", "this profile row does not permit the issuer DID");
 
   // 8. claims against the row
   for (const key of Object.keys(payload)) {
