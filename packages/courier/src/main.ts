@@ -5,7 +5,7 @@ import {
 } from './commands.js';
 import { cmd, programName, setProgramName } from './program.js';
 import { cmdWatch } from './watch-cmd.js';
-import { cmdIntake } from './julie/intake.js';
+import { cmdIntake } from './intake/intake.js';
 import { cmdApproval } from './approval.js';
 import { cmdPause, cmdResume } from './pause.js';
 import { cmdGuard } from './guard/command.js';
@@ -95,7 +95,7 @@ Delivery (one watcher per person per machine; never calls a model):
                                    Install the same watch command as a macOS launchd agent or a Linux
                                    systemd --user unit. --dry-run prints the exact file and commands.
   intake [--queue-dir d] [--peers-file f] [--state-dir d] [--interval 60] [--once]
-                                   Julie reader: copy paired peers' mirrored messages into the local queue
+                                   Intake reader: copy paired peers' mirrored messages into the local queue
                                    (one <msgId>.json per message) with cheap checks. Never calls a model.
 
   pause <peer> <threadId> [--reason "…"]   Humans: stop waking your agent for a thread; tells the peer

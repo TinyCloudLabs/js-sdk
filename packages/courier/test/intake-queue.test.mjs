@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { acquireLock, emptyState, ensureRealDir, readState, writeNew, writeReplace } from '../dist/julie/queue.js';
+import { acquireLock, emptyState, ensureRealDir, readState, writeNew, writeReplace } from '../dist/intake/queue.js';
 
 function tempDir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'tc712-queue-'));

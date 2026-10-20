@@ -6,8 +6,8 @@ import path from 'node:path';
 import { ulid } from 'ulid';
 import { memoryKv } from './memory-kv.mjs';
 import { k } from '../dist/keys.js';
-import { capUtf8, flagsFor, intakeCycle } from '../dist/julie/intake.js';
-import { readState, ensureRealDir } from '../dist/julie/queue.js';
+import { capUtf8, flagsFor, intakeCycle } from '../dist/intake/intake.js';
+import { readState, ensureRealDir } from '../dist/intake/queue.js';
 
 const NOW = Date.UTC(2026, 9, 20, 18, 0, 0);
 const HANDLE = 'alice';

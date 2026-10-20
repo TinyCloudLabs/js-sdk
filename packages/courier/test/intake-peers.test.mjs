@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { loadPeers, tierOf, policyOf } from '../dist/julie/peers.js';
+import { loadPeers, tierOf, policyOf } from '../dist/intake/peers.js';
 
 function tempPeers(body, mode = 0o600) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tc712-peers-'));

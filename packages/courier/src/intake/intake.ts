@@ -212,7 +212,7 @@ function intervalSeconds(raw: string | undefined): number {
 }
 
 export async function cmdIntake(args: ParsedArgs): Promise<void> {
-  const base = path.join(profileDir(), 'julie');
+  const base = path.join(profileDir(), 'intake');
   const queueRoot = args.get('queue-dir') ?? path.join(base, 'queue');
   const stateDir = args.get('state-dir') ?? path.join(base, 'state');
   const peersFile = args.get('peers-file') ?? path.join(base, 'peers.json');

@@ -607,10 +607,10 @@ The service runs the same command line you gave (install flags removed, `claude`
 profile on the same machine. systemd needs `loginctl enable-linger $USER` to
 keep the watcher running while logged out.
 
-## Julie intake (reader)
+## Intake reader
 
 `courier intake` reads the mirror of paired peers' messages from the self-space KV
-and writes one JSON file per message into a queue directory for the Julie reader.
+and writes one JSON file per message into a queue directory for the intake reader.
 It does not send anything, and it does not change the watcher.
 
 ```bash
@@ -619,7 +619,7 @@ courier intake --interval 60 --queue-dir <dir> --state-dir <dir> --peers-file <f
 ```
 
 Defaults for `--queue-dir`, `--state-dir` and `--peers-file` are under
-`<COURIER_HOME>/julie/`. Only peers with status `paired` are read. A lock file in
+`<COURIER_HOME>/intake/`. Only peers with status `paired` are read. A lock file in
 the state directory keeps one intake process per profile.
 
 Queue record (`<queue-dir>/<peerId>/<msgId>.json`, directories 0750, files 0640,
