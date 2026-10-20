@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { oneLine } from './a2a.js';
+import { defer } from './defer.js';
 import { cmd } from './program.js';
 
 /** What the watcher hands a wake adapter: one thread, every message not yet woken for. */
@@ -67,8 +68,8 @@ export function wakePrompt(request: WakeRequest, owner: string): string {
     paragraphs.push(
       `${who} decided on ${request.approvals.length === 1 ? 'a request' : 'requests'} you filed in thread ${subject} (${request.threadId}): ` +
         `${request.approvals.map((a) => `${a.requestId} (${label(a.decision, 12)})`).join(', ')}. ` +
-        `Before you act, run \`${cmd('approval <requestId>')}\`: it checks the decision against your request and exits non-zero unless it is ` +
-        `approved, matches, is under 24 hours old and unused. If it fails, or the decision is denied, do not take the action; update the task and tell ${peer} only what ${who} allows.`,
+        `Before you act, run \`${cmd('approval <requestId> --verb <verb> --target <target>')}\` with the verb and target of what you are about to do: ` +
+        `it checks the decision against your request and exits non-zero unless it is approved, matches, is under 24 hours old and unused. If it fails, or the decision is denied, do not take the action; update the task and tell ${peer} only what ${who} allows.`,
     );
   }
   return paragraphs.join('\n\n');
@@ -91,7 +92,7 @@ export type Runner = (
 const OUTPUT_CAP = 256 * 1024;
 
 export const spawnRunner: Runner = (bin, args, { cwd, env, input, timeoutMs }) => {
-  const { promise, resolve } = Promise.withResolvers<RunResult>();
+  const { promise, resolve } = defer<RunResult>();
   let stdout = '';
   let stderr = '';
   const child = spawn(bin, args, { cwd, env, stdio: ['pipe', 'pipe', 'pipe'] });

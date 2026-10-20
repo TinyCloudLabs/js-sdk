@@ -65,7 +65,7 @@ test('after the budget, the next message pauses the thread: marker, one inform, 
   assert.ok(mine.rows.has(k.paused('bob', thread)));
   assert.equal(mine.rows.get(k.paused('bob', thread)).value.by, 'budget');
   assert.equal(a.informs.length, 1);
-  assert.match(a.informs[0].text, /wake budget reached \(2 wakes in 24 h, limit 2\)/);
+  assert.match(a.informs[0].text, /wake budget reached \(2 wakes today, UTC; limit 2 per thread per day\)/);
   assert.deepEqual(a.notices.map((n) => [n.kind, n.peer, n.threadId]), [['paused', 'bob', thread]]);
 
   say(theirs, 'alice', thread, 'request');
@@ -82,19 +82,29 @@ test('after the budget, the next message pauses the thread: marker, one inform, 
   assert.equal(a.wakes.length, 3, 'other threads have their own budget');
 });
 
-test('wakes older than 24 hours no longer count against the budget', async () => {
-  const clock = { t: 1_000_000_000_000 };
+test('the budget is per UTC day: wakes from yesterday do not count, and it is per side per thread', async () => {
+  const clock = { t: Date.parse('2026-10-20T22:00:00Z') };
   const theirs = memoryKv();
   const a = side({ handle: 'alice', peerHandle: 'bob', mine: memoryKv(), theirs, clock, budget: 2 });
   const thread = ulid();
-  for (let i = 0; i < 4; i++) {
+  const wakeOnce = async () => {
     say(theirs, 'alice', thread, 'update');
     await a.watcher.pollOnce('poll');
     await a.watcher.tick();
-    clock.t += 13 * 3600 * 1000; // two wakes fit in any 24 h window
-  }
-  assert.equal(a.wakes.length, 4);
+  };
+  await wakeOnce();
+  clock.t += 3600_000; // 23:00
+  await wakeOnce();
+  assert.equal(a.wakes.length, 2);
+  clock.t = Date.parse('2026-10-21T00:30:00Z'); // 90 minutes later but a new UTC day
+  await wakeOnce();
+  await wakeOnce();
+  assert.equal(a.wakes.length, 4, 'two more wakes in the new day');
   assert.equal(a.informs.length, 0);
+  await wakeOnce();
+  assert.equal(a.wakes.length, 4, 'the third wake of the day is refused');
+  await a.watcher.tick(); // the pause's inform goes out on the next tick
+  assert.equal(a.informs.length, 1);
 });
 
 test('approvals wake a paused thread and are not counted', async () => {

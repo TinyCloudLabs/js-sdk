@@ -139,18 +139,66 @@ kills a run that hangs). A failed wake stays pending and retries after 60 s.
 
 ### Approvals
 
-`courier approval <requestId> [--action "<exact action>"] [--peek]` is what a
+### Request fields and text rules (shared with the view)
+
+`courier request` writes structured fields into `me/requests/<id>.json`:
+`verb` (`merge`, `deploy`, `publish`, `spend` or `other`), `target` and
+`summary`. They are part of the request the hash covers; the view renders
+"Approving lets <peer>'s agent <verb> <target>: <summary>" from them; the guard
+matches the command it is about to allow to `verb` and `target` only. `action`
+(default: the summary), `reason` (`--why`) and `risk` are free text for the
+owner and are never matched.
+
+One rule set applies when `courier request` writes, when `courier approval`
+reads, and when the view shows the card. A value that breaks it is **refused,
+never repaired or shortened**:
+
+- every text field is a string with no lone surrogates, is in Unicode NFC, and
+  contains no control (Cc), format (Cf: bidi, zero-width, tag characters),
+  private-use (Co), unassigned (Cn), line or paragraph separator (Zl, Zp) or
+  default-ignorable character (variation selectors, U+034F, Hangul fillers,
+  soft hyphen, …), no space other than U+0020, and no run of 4 or more
+  combining marks (`\p{M}`);
+- `target`, `summary`: 1 to 200 UTF-16 units, trimmed, one line; `action`,
+  `reason`, `risk`: 1 to 2000, a single `\n` allowed, never a tab or CR;
+- `target` is printable ASCII (`[\x20-\x7E]`) for every verb, in the one
+  canonical spelling for its verb (lower-cased repo, a GitHub PR URL reduced to
+  `owner/repo#N`; see `courier request --help`) and with the shape
+  `merge`: `owner/repo#<N>` or `owner/repo@<ref>`; `publish`: `npm:`,
+  `release:`, `changeset:` or `script:` + text; `deploy`: `wrangler:`, `pages:`,
+  `phala:` or `script:` + text; `other`: `<kind>:` + text; `spend`: `spend:` +
+  text;
+- the whole request must hash: `canonicalJson` / `requestHash` throw on a
+  non-finite number (a parsed `1e999`) and on nesting deeper than 64 levels
+  (top-level object = depth 1), so such a request is never written and
+  `courier approval` fails closed on it.
+
+`test/vectors/request-fields.json` is the contract: every row says whether a
+value is accepted, and the canonical-JSON rows give the expected output (or
+"must throw"). Copy it into any other implementation.
+
+`courier approval <requestId> --verb <v> --target <t> [--peek]` is what a
 woken agent runs before a gated action. It reads `me/requests/<id>.json` and
-`me/approvals/<id>.json` and exits 0 only if the approval names that request
-(`requestId` equals the id), carries `requestHash` equal to the SHA-256 of the
-request's canonical JSON (`canonicalJson` / `requestHash`, exported, mirrored by
-the view), says `approved`, was decided within 24 hours and inside the request's
-lifetime, and `--action` (if given) equals the request's action. It then
-consumes the approval with a create-only marker at
-`me/state/approvals-used/<id>.json`, so a second run exits `approval-used`.
-`--peek` checks without consuming; a denial exits `approval-denied`. The
-courier key cannot write `me/approvals/`, so only the owner's view session can
-produce a passing approval.
+`me/approvals/<id>.json` and exits 0 only if the request has valid structured
+fields, the approval names that request (`requestId` equals the id), carries
+`requestHash` equal to the SHA-256 of the request's canonical JSON
+(`canonicalJson` / `requestHash`, exported, mirrored by the view; a parsed
+`"__proto__"` key counts as an ordinary key), the request contains no hidden
+text anywhere (rules above, applied to every string and key), says `approved`, was decided in
+`[createdAt, expiresAt)` of the request (a decision dated up to 5 minutes ahead
+of this machine's clock is tolerated; keep the clocks of the agent's machine
+and the owner's browser in step) and within the last 24 hours, and the given
+`--verb` and (canonicalised) `--target` equal the request's. Both are required
+when consuming; `--peek` (for guards) may omit them.
+
+It then consumes the approval with a create-only marker at
+`me/state/approvals-used/<id>.json`, so a second run exits `approval-used`;
+`--peek` checks the marker too (a used approval fails the peek) but does not
+write it. A denial exits `approval-denied`. The courier key cannot write
+`me/approvals/`, so only the owner's view session can produce a passing
+approval. Residual risk: the courier grant can delete under `me/state/`
+(spec §3), so a compromised agent could delete the used marker and replay an
+approval within its 24 hours; a delete-proof record is tracked separately.
 
 The watcher wakes the thread's agent as soon as a new approval (approved or
 denied) for one of its requests appears, without the debounce. Approvals older

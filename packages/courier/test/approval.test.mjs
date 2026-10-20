@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { canonicalJson, requestHash } from '../dist/canonical.js';
-import { verifyApproval, consumeApproval } from '../dist/approval.js';
+import { verifyApproval, consumeApproval, approvalIsUsed } from '../dist/approval.js';
 import { Watcher } from '../dist/watch.js';
 import { k } from '../dist/keys.js';
 
@@ -14,9 +14,15 @@ test('canonical JSON: shared vector with the /courier view', () => {
   assert.notEqual(canonicalJson([1, 2]), canonicalJson([2, 1]), 'array order does');
 });
 
+test('canonical JSON keeps a parsed "__proto__" key, like the view\'s string-built version', () => {
+  assert.equal(canonicalJson(JSON.parse('{"__proto__":{"x":1},"a":1}')), '{"__proto__":{"x":1},"a":1}');
+  assert.notEqual(requestHash(JSON.parse('{"__proto__":{"x":1},"a":1}')), requestHash({ a: 1 }));
+});
+
 const NOW = Date.parse('2026-10-20T12:00:00Z');
 const request = {
-  id: 'R1', peer: 'hunter', threadId: 'T1', taskId: 'K1', action: 'gh pr merge 42', reason: 'docs only', risk: 'low',
+  id: 'R1', peer: 'hunter', threadId: 'T1', taskId: 'K1', verb: 'merge', target: 'tinycloudlabs/docs#42', summary: 'Merge docs PR 42',
+  action: 'gh pr merge 42', reason: 'docs only', risk: 'low',
   requestedBy: { owner: 'did:pkh:o', agent: 'did:key:a' },
   createdAt: '2026-10-20T10:00:00Z', expiresAt: '2026-10-21T10:00:00Z', status: 'pending',
 };
@@ -26,8 +32,8 @@ const approval = (over = {}, req = request) => ({
 const code = (fn) => { try { fn(); } catch (e) { return e.code; } return 'no error'; };
 
 test('verifyApproval accepts a matching, current approval and returns what was approved', () => {
-  const v = verifyApproval('R1', request, approval(), { now: NOW, action: 'gh pr merge 42' });
-  assert.deepEqual([v.decision, v.action, v.peer, v.threadId, v.taskId], ['approved', 'gh pr merge 42', 'hunter', 'T1', 'K1']);
+  const v = verifyApproval('R1', request, approval(), { now: NOW, verb: 'merge', target: 'tinycloudlabs/docs#42' });
+  assert.deepEqual([v.decision, v.verb, v.target, v.summary, v.peer, v.threadId, v.taskId], ['approved', 'merge', 'tinycloudlabs/docs#42', 'Merge docs PR 42', 'hunter', 'T1', 'K1']);
 });
 
 test('verifyApproval refuses anything that is not exactly this request, decision and time window', () => {
@@ -36,13 +42,17 @@ test('verifyApproval refuses anything that is not exactly this request, decision
   assert.equal(v(approval({ requestId: 'R2' })), 'approval-mismatch');
   assert.equal(v(approval({ decision: 'approve' })), 'approval-mismatch', 'decision literals are "approved"/"denied"');
   assert.equal(v(approval({ requestHash: '0'.repeat(64) })), 'approval-mismatch');
-  assert.equal(v(approval(), {}, { ...request, action: 'gh pr merge 43' }), 'approval-mismatch', 'the request was edited after the decision');
-  assert.equal(v(approval(), { action: 'gh pr merge 43' }), 'approval-mismatch', 'caller is about to do something else');
+  assert.equal(v(approval(), {}, { ...request, target: 'tinycloudlabs/docs#43' }), 'approval-mismatch', 'the request was edited after the decision');
+  assert.equal(v(approval(), { verb: 'merge', target: 'tinycloudlabs/docs#43' }), 'approval-mismatch', 'caller is about to merge a different PR');
+  assert.equal(v(approval(), { verb: 'deploy', target: 'tinycloudlabs/docs#42' }), 'approval-mismatch', 'caller is about to do a different kind of thing');
   const older = { ...request, createdAt: '2026-10-19T00:00:00Z', expiresAt: '2026-10-20T00:00:00Z' };
   assert.equal(v(approval({ decidedAt: '2026-10-19T11:00:00Z' }, older), {}, older), 'approval-expired', 'decided 25 h ago');
   assert.equal(v(approval({ decidedAt: '2026-10-20T05:00:00Z' }, older), {}, older), 'approval-expired', 'decided after the request expired');
   assert.equal(v(approval({ decidedAt: '2026-10-20T15:00:00Z' })), 'approval-mismatch', 'dated in the future');
   assert.equal(v(approval({ decidedAt: '2026-10-20T09:00:00Z' })), 'approval-mismatch', 'dated before the request existed');
+  assert.equal(v(approval({ decidedAt: '2026-10-20T09:59:59Z' })), 'approval-mismatch', 'one second before createdAt: no skew allowance');
+  assert.equal(v(approval({ decidedAt: '2026-10-20T10:00:00Z' })), 'no error', 'createdAt itself is inside the window');
+  assert.equal(v(approval({ decidedAt: '2026-10-21T10:00:00Z' }), { now: Date.parse('2026-10-21T10:00:30Z') }), 'approval-expired', 'expiresAt itself is outside the window');
   assert.equal(v(approval({ decidedAt: 'yesterday' })), 'approval-mismatch');
 });
 
@@ -71,9 +81,11 @@ function memoryKv() {
   };
 }
 
-test('an approval is single use: the second consume fails', async () => {
+test('an approval is single use: the second consume fails and a peek sees it as used', async () => {
   const kv = memoryKv();
+  assert.equal(await approvalIsUsed(kv, 'R1'), false);
   await consumeApproval(kv, 'R1');
+  assert.equal(await approvalIsUsed(kv, 'R1'), true);
   await assert.rejects(consumeApproval(kv, 'R1'), (e) => e.code === 'approval-used');
 });
 
@@ -130,4 +142,23 @@ test('a denial wakes the agent too, so it can stop and update the task', async (
   await watcher.syncApprovals('hook');
   await watcher.tick();
   assert.equal(wakes[0].approvals[0].decision, 'denied');
+});
+
+test('the request hash covers verb, target and summary: changing any of them changes it', () => {
+  const base = requestHash(request);
+  for (const change of [{ verb: 'deploy' }, { target: 'tinycloudlabs/docs#43' }, { summary: 'Merge docs PR 43' }]) {
+    assert.notEqual(requestHash({ ...request, ...change }), base, JSON.stringify(change));
+  }
+});
+
+test('a request without valid structured fields cannot be approved', () => {
+  const v = (req) => code(() => verifyApproval('R1', req, approval({}, req), { now: NOW }));
+  const { verb, target, summary, ...bare } = request;
+  assert.equal(v(bare), 'approval-mismatch', 'an older request with only free-text action');
+  assert.equal(v({ ...request, verb: 'MERGE' }), 'approval-mismatch', 'verbs are exact lowercase');
+  assert.equal(v({ ...request, verb: 'yolo' }), 'approval-mismatch');
+  assert.equal(v({ ...request, target: '' }), 'approval-mismatch');
+  assert.equal(v({ ...request, target: 'x'.repeat(201) }), 'approval-mismatch');
+  assert.equal(v({ ...request, summary: 'two\nlines' }), 'approval-mismatch');
+  assert.equal(v({ ...request, summary: 5 }), 'approval-mismatch');
 });
