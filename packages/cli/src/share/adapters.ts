@@ -1,5 +1,6 @@
 import type { IKVService } from "@tinycloud/node-sdk";
 import { kvArtifactStore } from "./artifact-store.js";
+import { artifactSpaceNotReady, failIfSpaceNotReady } from "./space-not-ready.js";
 import { ShareHistoryRetryError, SharePublishAuthorityError } from "./errors.js";
 import { storageRejection } from "../output/storage.js";
 import { readFile } from "node:fs/promises";
@@ -140,7 +141,7 @@ async function storeArtifactVersion(
   try {
     return await publishArtifactVersion(kvArtifactStore(kv), version);
   } catch (error) {
-    throw scopeDeniedFromArtifactError(error, "KV upload", authority) ?? error;
+    throw scopeDeniedFromArtifactError(error, "KV upload", authority) ?? artifactSpaceNotReady(error);
   }
 }
 
@@ -566,6 +567,7 @@ export function createShareAuthorityAdapters(input: {
         const written = await node.kvForSpace(ownerSpaceId).put(resourcePath, file.bytes.slice(), {
           contentType: targetInput.mediaType ?? file.mediaType ?? "application/octet-stream",
         });
+        failIfSpaceNotReady(written);
         if (!written.ok) {
           const code = typeof written.error === "object" && written.error !== null && "code" in written.error ? written.error.code : undefined;
           if (code === "AUTH_UNAUTHORIZED" || code === "PERMISSION_DENIED") {
@@ -683,6 +685,7 @@ export function createShareAuthorityAdapters(input: {
       resourcePath = artifactVersionFilePath(artifact.id, artifactVersion.version, storageName);
     } else {
       const stored = await node.kvForSpace(ownerSpaceId).put(resourcePath, storedBytes, { contentType: "application/vnd.tinycloud.encrypted-envelope+json" });
+      failIfSpaceNotReady(stored);
       if (!stored.ok) {
         const code = typeof stored.error === "object" && stored.error !== null && "code" in stored.error ? stored.error.code : undefined;
         if (code === "AUTH_UNAUTHORIZED" || code === "PERMISSION_DENIED") {
@@ -907,7 +910,7 @@ export function createShareAuthorityAdapters(input: {
     // A profile signed in before the `artifacts/` scope existed is refused by the node; say so the way publish does.
     const mapped = async <T>(operation: () => Promise<T>): Promise<T> => {
       try { return await operation(); }
-      catch (error) { throw scopeDeniedFromArtifactError(error, "artifact storage", authority) ?? error; }
+      catch (error) { throw scopeDeniedFromArtifactError(error, "artifact storage", authority) ?? artifactSpaceNotReady(error); }
     };
     return {
       put: (key, bytes, options) => mapped(() => store.put(key, bytes, options)),
