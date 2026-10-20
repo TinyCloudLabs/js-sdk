@@ -1,3 +1,4 @@
+import { recentNotices } from './notify.js';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -460,10 +461,12 @@ export async function cmdInbox(args: ParsedArgs) {
   });
   const output = {
     notice: COUNTERPARTY_NOTICE,
+    notifications: recentNotices(profileDir()),
     items: collection.items.map((item) => ({ authority: 'counterparty', ...item })),
     errors: collection.errors,
   };
-  await writeOut(args.has('json') ? JSON.stringify(output, null, 2) + '\n' : renderInboxText(collection.items));
+  const status = output.notifications.length ? `\nRecent notifications (delivery receipts may already be current):\n${output.notifications.map(n => `${n.title}: ${n.body}`).join('\n')}\n` : '';
+  await writeOut(args.has('json') ? JSON.stringify(output, null, 2) + '\n' : renderInboxText(collection.items) + status);
   for (const error of collection.errors) console.error(`warning: inbox ${error.peer}: ${error.message}`);
   if (!args.has('peek')) await commitReceipts(node.kv, collection.pending);
 }

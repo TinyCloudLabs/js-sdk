@@ -80,21 +80,27 @@
   "command": "npx @tinycloud/courier pause 01M5C9EDF03QMRZS2DJXGN5A4C",
   "findings": [
    {
-    "kind": "never",
-    "label": "courier pause is for humans (pairing, grants, the wake budget, the watcher, the broker credential and the guard settings are never touched by an agent)"
+    "kind": "unresolved",
+    "label": "package-launched executable has no verified inode; run an installed tool directly"
    }
   ],
   "decision": {
    "kind": "deny",
-   "reason": "Blocked: courier pause is for humans (pairing, grants, the wake budget, the watcher, the broker credential and the guard settings are never touched by an agent). This is not something an owner approval can unlock."
+   "reason": "Blocked: package-launched executable has no verified inode; run an installed tool directly. The Courier guard cannot tell this command apart from a gated one (merge, deploy, publish, push to main, secrets). Write the command out with plain words, one action per call."
   }
  },
  {
   "name": "@tinycloud/courier",
   "command": "bunx @tinycloud/courier deploy",
-  "findings": [],
+  "findings": [
+   {
+    "kind": "unresolved",
+    "label": "package-launched executable has no verified inode; run an installed tool directly"
+   }
+  ],
   "decision": {
-   "kind": "pass"
+   "kind": "deny",
+   "reason": "Blocked: package-launched executable has no verified inode; run an installed tool directly. The Courier guard cannot tell this command apart from a gated one (merge, deploy, publish, push to main, secrets). Write the command out with plain words, one action per call."
   }
  },
  {
@@ -192,21 +198,27 @@
   "command": "npx courier pause 01M5C9EDF03QMRZS2DJXGN5A4C",
   "findings": [
    {
-    "kind": "never",
-    "label": "courier pause is for humans (pairing, grants, the wake budget, the watcher, the broker credential and the guard settings are never touched by an agent)"
+    "kind": "unresolved",
+    "label": "package-launched executable has no verified inode; run an installed tool directly"
    }
   ],
   "decision": {
    "kind": "deny",
-   "reason": "Blocked: courier pause is for humans (pairing, grants, the wake budget, the watcher, the broker credential and the guard settings are never touched by an agent). This is not something an owner approval can unlock."
+   "reason": "Blocked: package-launched executable has no verified inode; run an installed tool directly. The Courier guard cannot tell this command apart from a gated one (merge, deploy, publish, push to main, secrets). Write the command out with plain words, one action per call."
   }
  },
  {
   "name": "courier",
   "command": "bunx courier deploy",
-  "findings": [],
+  "findings": [
+   {
+    "kind": "unresolved",
+    "label": "package-launched executable has no verified inode; run an installed tool directly"
+   }
+  ],
   "decision": {
-   "kind": "pass"
+   "kind": "deny",
+   "reason": "Blocked: package-launched executable has no verified inode; run an installed tool directly. The Courier guard cannot tell this command apart from a gated one (merge, deploy, publish, push to main, secrets). Write the command out with plain words, one action per call."
   }
  },
  {
@@ -302,17 +314,29 @@
  {
   "name": "@tinycloud/other",
   "command": "npx @tinycloud/other pause 01M5C9EDF03QMRZS2DJXGN5A4C",
-  "findings": [],
+  "findings": [
+   {
+    "kind": "unresolved",
+    "label": "package-launched executable has no verified inode; run an installed tool directly"
+   }
+  ],
   "decision": {
-   "kind": "pass"
+   "kind": "deny",
+   "reason": "Blocked: package-launched executable has no verified inode; run an installed tool directly. The Courier guard cannot tell this command apart from a gated one (merge, deploy, publish, push to main, secrets). Write the command out with plain words, one action per call."
   }
  },
  {
   "name": "@tinycloud/other",
   "command": "bunx @tinycloud/other deploy",
-  "findings": [],
+  "findings": [
+   {
+    "kind": "unresolved",
+    "label": "package-launched executable has no verified inode; run an installed tool directly"
+   }
+  ],
   "decision": {
-   "kind": "pass"
+   "kind": "deny",
+   "reason": "Blocked: package-launched executable has no verified inode; run an installed tool directly. The Courier guard cannot tell this command apart from a gated one (merge, deploy, publish, push to main, secrets). Write the command out with plain words, one action per call."
   }
  },
  {

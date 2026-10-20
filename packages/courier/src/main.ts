@@ -53,15 +53,14 @@ Guards (woken agents run with these; humans rarely do):
   run-approved <requestId>         Broker: verify MY human's approval, consume before exec, then merge
                                    only the approved PR with fixed argv. No flags. Failure after exec uses
                                    the approval up; retry needs a new request.
-  broker set-token [--gh-bin path] Humans only: configure the broker GitHub token on stdin (never argv).
+  broker set-token [--gh-bin path] Humans only: pin Courier identity and use the owner’s gh auth at run time.
   broker status | clear            Inspect configuration without its token, or remove it.
   guard                            Claude Code PreToolUse hook: reads one tool call as JSON on stdin and refuses
                                    merge, deploy, publish, push to main/master, \`tc secrets\` and similar.
                                    Gated commands always refuse; approved PR merges use run-approved.
                                    A command with expansion syntax ($VAR, $(…), {a,b}, eval, xargs, env …) that
-                                   names a gated tool is refused: write it with plain words. A fail-closed policy
-                                   layer for a prompted or confused agent, NOT a sandbox against a hostile local
-                                   process; your owner's credentials are the real boundary.
+                                   names a gated tool is refused: write it with plain words. Approved PR merges
+                                   use the fixed run-approved broker command.
   guard settings [--out f] [--claude-settings f]
                                    Print/write the Claude Code settings (hook + deny rules) that install it.
 
@@ -71,6 +70,8 @@ Delivery (one watcher per person per machine; never calls a model):
                                    --poll s as the fallback, mirror new messages into me/mirror/, update
                                    receipts, then wake after a --debounce s quiet period. Logs one JSON
                                    line per event. --once: one catch-up pass, wake immediately, exit.
+                                   none: notify-only delivery for new messages and owner decisions; no agent
+                                   starts, no wake adapter invoked, no wake budget spent.
                                    Wake adapters (all run in --cwd, default here):
                                      paseo   find the agent labelled courier-thread=<id> and message it, else
                                              create one [--paseo-provider claude] [--paseo-mode m] [--paseo-bin p].

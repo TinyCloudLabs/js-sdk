@@ -1,6 +1,12 @@
-import { test } from 'node:test';
+import { privateScratch } from './private-scratch.mjs';
+import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { runApproved, templateFor, brokerEnv, sanitizeOutput, MAX_OUTPUT, loadBrokerCredential } from '../dist/broker.js';
+import fs from 'node:fs';
+import path from 'node:path';
+import { loadBrokerConfig } from '../dist/broker-config.js';
+const scratchRoot = privateScratch('tc712-broker-test-');
+after(() => fs.rmSync(scratchRoot, { recursive: true, force: true }));
 import { requestHash } from '../dist/canonical.js';
 import { k } from '../dist/keys.js';
 
@@ -25,7 +31,7 @@ function fixture({ verb = 'merge', target = 'a/b#42', request = {}, approval = {
     },
   };
   const deps = {
-    kv, now: () => NOW,
+    kv, scratchRoot, now: () => NOW,
     credential: () => ({ ghBin: '/stub/gh', token: TOKEN }),
     exec: async (bin, args, options) => {
       calls.push({ bin, args, options });
@@ -88,7 +94,7 @@ test('non-merge verbs and direct pushes refuse before consuming or loading crede
 
 test('credential missing, unavailable marker and create failure consume nothing and run no merge', async () => {
   const f = fixture();
-  f.deps.credential = () => loadBrokerCredential('/not-a-configured-courier-profile');
+  f.deps.credential = () => loadBrokerConfig('a'.repeat(24), scratchRoot);
   await assert.rejects(runApproved(ID, f.deps), { code: 'broker-not-configured' });
   unused(f); assert.equal(f.calls.length, 0);
   const g = fixture();
