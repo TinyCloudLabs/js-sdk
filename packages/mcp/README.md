@@ -96,6 +96,35 @@ and deploys that image to the `tinycloud-mcp` Phala CVM. Its `production`
 environment requires `PHALA_CLOUD_API_KEY`, `CLOUDFLARE_API_TOKEN`, and a stable
 32-byte-or-longer `TC_MCP_STATE_SECRET`.
 
+### Post-deploy knowledge smoke
+
+After the `mcp-image.yml` deploy of `tinycloud-mcp` is live, QA runs the repo-kept
+script with throwaway E only (never a personal account):
+
+```sh
+export TC_QA_PASSKEY_FILE=\"$HOME/scratch/tc1384/qa/.passkey-E.json\"
+export TC_QA_EXPECTED_ADDRESS_PREFIX=0x889E
+export TC_QA_PLAYWRIGHT_MODULE=\"$HOME/scratch/openkey-smoke/node_modules/playwright\"
+CHROME_PATH=\"$HOME/.cache/ms-playwright/chromium-1243/chrome-linux64/chrome\" node scripts/hosted-mcp-smoke.mjs --dry-run
+CHROME_PATH=\"$HOME/.cache/ms-playwright/chromium-1243/chrome-linux64/chrome\" node scripts/hosted-mcp-smoke.mjs --expect-apps 1
+```
+
+Run from the js-sdk repository root; `--base-url` defaults to
+`https://mcp.tinycloud.xyz` (HTTP is permitted only for localhost).
+Omit `--expect-apps` for an empty account: it requires a valid empty listing or
+honest missing-grant result, not a minimum. `--expect-apps N` requires at least
+N apps; the script reads the first app's first concept if present, otherwise
+its index. It verifies the signed-in QA address prefix before any MCP call,
+both read-only knowledge tool descriptions, response shapes, OAuth cleanup
+and exit status. Output has only counts and PASS/FAIL labels, never content or
+credentials. Test without production: `node --test scripts/hosted-mcp-smoke.test.mjs`.
+
+The `finally` cleanup revokes the OAuth access token and deletes the dynamic
+client when registration management is advertised. Hosted TinyCloud
+delegations themselves have **no MCP-side revoke route** (TC-1156); they
+expire on the server's configured lifetime. Keep this on the throwaway
+account; do not report OAuth revocation as delegation revocation.
+
 ### Local stdio
 
 ```bash
