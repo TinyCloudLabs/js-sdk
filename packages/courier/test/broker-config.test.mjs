@@ -1,3 +1,4 @@
+import { privateScratch } from './private-scratch.mjs';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -12,14 +13,14 @@ test('N1: test broker override rejects the real owner root, symlinks to it and p
   assert.throws(() => brokerRoot(os.userInfo().homedir), /scratch/);
   assert.throws(() => brokerRoot('/tmp'), /scratch/);
   assert.throws(() => brokerRoot('.'), /scratch/);
-  const dir = fs.mkdtempSync(path.join(os.userInfo().homedir, 'scratch/tc712-root-'));
+  const dir = privateScratch('tc712-root-');
   try {
     fs.symlinkSync(os.userInfo().homedir, path.join(dir, 'owner-link'));
     assert.throws(() => brokerRoot(path.join(dir, 'owner-link')), /scratch/);
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
 test('N1: owner-private pinned config stays outside Courier; agent snapshot has no broker pointer', () => {
-  const dir = fs.mkdtempSync(path.join(os.userInfo().homedir, 'scratch/tc712-config-'));
+  const dir = privateScratch('tc712-config-');
   try {
     const owner = path.join(dir, 'owner'); fs.mkdirSync(owner, { mode: 0o700 });
     const home = path.join(dir, 'courier'); fs.mkdirSync(home, { mode: 0o700 });

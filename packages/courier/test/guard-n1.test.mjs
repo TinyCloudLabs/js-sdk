@@ -1,14 +1,13 @@
+import { privateScratch } from './private-scratch.mjs';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { courierOnlyEnv, courierEnvOverrides } from '../dist/guard/install.js';
 import { analyze } from '../dist/guard/policy.js';
 import { decide } from '../dist/guard/hook.js';
 
-const root = path.join(os.userInfo().homedir, 'scratch');
-const fixture = () => fs.mkdtempSync(path.join(root, 'tc712-n1-'));
+const fixture = () => privateScratch('tc712-n1-');
 test('N1: no broker/Courier roots in agent environment; HOME/XDG/TMP and tc profile are separate', () => {
   const dir = fixture();
   try {
