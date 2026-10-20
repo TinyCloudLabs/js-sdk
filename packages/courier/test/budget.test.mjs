@@ -686,3 +686,68 @@ test('transitions accepted while a coalesced notification is running remain pend
   await a.watcher.pollOnce('poll');release();await running;await a.watcher.tick();await a.watcher.tick();
   assert.equal(a.notices.length,4,'all four accepted episodes remain represented');assert.deepEqual(a.watcher.snapshot().outbox,[]);
 });
+
+
+test('review: a full first-peer queue must not prevent a second paired peer using its reserved notices', async () => {
+  const clock={t:Date.parse('2026-10-20T12:00:00Z')},mine=memoryKv(),bob=memoryKv(),carol=memoryKv();
+  const a=side({handle:'alice',peerHandle:'bob',mine,theirs:bob,clock});
+  a.watcher.deps.loadPeers=()=>[a.peer,peerRecord('carol','alice')];
+  a.watcher.deps.kvFor=async peer=>peer.handle==='bob'?bob:carol;
+  for(let i=0;i<60;i++){const thread=ulid();know(mine,'bob',thread);peerNotice(bob,'alice',thread,'thread-paused',clock.t);}
+  await a.watcher.pollOnce('poll');await a.watcher.tick();
+  assert.equal(a.notices.length,7);
+  const thread=ulid();know(mine,'carol',thread);peerNotice(carol,'alice',thread,'thread-paused',clock.t);
+  await a.watcher.pollOnce('poll');
+  for(let i=0;i<5;i++)await a.watcher.tick();
+  console.log('QUEUE_EVIDENCE',JSON.stringify({bob:a.notices.filter(n=>n.peer==='bob').length,carol:a.notices.filter(n=>n.peer==='carol').length,outbox:a.watcher.snapshot().outbox.length,carolPending:a.watcher.snapshot().threadNotices[`carol/${thread}`].episodes}));
+  assert.equal(a.notices.filter(n=>n.peer==='carol').length,1);
+});
+
+test('review: a transition arriving during delivery of a saturated second slot remains pending', async()=>{
+  const clock={t:Date.parse('2026-10-20T12:00:00Z')},mine=memoryKv(),theirs=memoryKv();
+  const a=side({handle:'alice',peerHandle:'bob',mine,theirs,clock});const thread=ulid();know(mine,'bob',thread);
+  for(const notice of ['thread-paused','thread-resumed','thread-paused']){clock.t++;peerNotice(theirs,'alice',thread,notice,clock.t);}
+  await a.watcher.pollOnce('poll');
+  await a.watcher.mutate(()=>{a.watcher.state.threadNotices[`bob/${thread}`].episodes[1].repeats='999999';});
+  let release,entered;const started=new Promise(resolve=>{entered=resolve;});let calls=0;
+  a.watcher.deps.notify=async notice=>{calls++;if(calls===2){entered();await new Promise(resolve=>{release=resolve;});}a.notices.push({...notice});};
+  const running=a.watcher.tick();await started;
+  // Fill freed first slot, then accept another transition while saturated second slot is in flight.
+  for(const notice of ['thread-resumed','thread-paused','thread-resumed','thread-paused']){clock.t++;peerNotice(theirs,'alice',thread,notice,clock.t);}
+  await a.watcher.pollOnce('poll');release();await running;await a.watcher.tick();await a.watcher.tick();
+  console.log('SATURATED_DELIVERY',JSON.stringify({calls,episodes:a.watcher.snapshot().threadNotices[`bob/${thread}`].episodes}));
+  assert.equal(a.notices.length,4);
+});
+
+test('eligible peer admission retains a deferred episode attempt, deadline and log status across restart', async () => {
+  const clock={t:Date.parse('2026-10-20T12:00:00Z')},mine=memoryKv(),bob=memoryKv(),carol=memoryKv();
+  const home=fs.mkdtempSync(path.join(os.tmpdir(),'courier-admission-'));
+  try {
+    let a=side({handle:'alice',peerHandle:'bob',mine,theirs:bob,clock,notifyFails:1});
+    const configure=()=>{
+      a.watcher.deps.loadPeers=()=>[a.peer,peerRecord('carol','alice')];
+      a.watcher.deps.kvFor=async peer=>peer.handle==='bob'?bob:carol;
+      a.watcher.deps.notificationHome=home;
+    };
+    configure();
+    for(let i=0;i<60;i++){const thread=ulid();know(mine,'bob',thread);peerNotice(bob,'alice',thread,'thread-paused',clock.t);}
+    await a.watcher.pollOnce('poll');await a.watcher.tick();await a.watcher.tick();
+    const first=a.watcher.snapshot().outbox.find(item=>item.tries===1);
+    assert.ok(first?.logged);assert.equal(first.nextAttemptAt,clock.t+60000);
+    assert.equal(a.watcher.snapshot().outbox.length,50);
+    const thread=ulid();know(mine,'carol',thread);peerNotice(carol,'alice',thread,'thread-paused',clock.t);
+    await a.watcher.pollOnce('poll');
+    assert.ok(!a.watcher.snapshot().outbox.some(item=>item.id===first.id),'deferred episode yields its queue place');
+    const episode=a.watcher.snapshot().threadNotices[`bob/${first.notice.threadId}`].episodes[0];
+    assert.equal(episode.tries,1);assert.equal(episode.nextAttemptAt,first.nextAttemptAt);assert.equal(episode.logged,true);
+    a=side({handle:'alice',peerHandle:'bob',mine,theirs:bob,clock});configure();await a.watcher.loadState();
+    await a.watcher.tick();assert.equal(a.notices.filter(notice=>notice.peer==='carol').length,1);
+    await a.watcher.tick();
+    const restored=a.watcher.snapshot().outbox.find(item=>item.id===first.id);
+    assert.equal(restored.tries,first.tries);assert.equal(restored.nextAttemptAt,first.nextAttemptAt);assert.equal(restored.logged,true);
+    for(let hour=0;hour<9&&!a.notices.some(notice=>notice.threadId===first.notice.threadId);hour++){clock.t+=3600001;await a.watcher.tick();}
+    assert.equal(a.notices.filter(notice=>notice.threadId===first.notice.threadId).length,1);
+    const rows=fs.readFileSync(path.join(home,'notifications.jsonl'),'utf8').trim().split('\n').map(line=>JSON.parse(line));
+    assert.equal(rows.filter(row=>row.thread===first.notice.threadId).length,1,'the successful retry keeps the original log entry');
+  } finally { fs.rmSync(home,{recursive:true,force:true}); }
+});

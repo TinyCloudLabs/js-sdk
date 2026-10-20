@@ -349,6 +349,8 @@ when the first is pending or retrying. Further transitions while both slots are
 occupied are counted in the second slot's "additional pauses" message (up to
 999999, displayed as 999999+ when saturated). Counts arriving during delivery
 remain pending for the next dispatch. The outbox holds at most 50 items.
+Eligible notices can use queue places held by deferred notices; each deferred
+episode retains its retry count, deadline and log status in its fixed slot.
 
 The global hourly allowance reserves up to three attempts for each locally
 paired peer. With more than three peers, the reserved share is the smaller of
