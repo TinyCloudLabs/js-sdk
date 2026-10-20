@@ -6,8 +6,14 @@
 
 /** Controls (Cc), format incl. bidi and tag characters (Cf), private use (Co), unassigned (Cn), lone surrogates (Cs), line/paragraph separators. */
 const FORBIDDEN = /[\p{Cc}\p{Cf}\p{Co}\p{Cn}\p{Cs}\p{Zl}\p{Zp}]/u;
-/** Not format characters, but blank or near-blank on screen: Braille blank U+2800, object replacement U+FFFC, musical null notehead U+1D159. */
-const INVISIBLE_LOOKALIKES = /[\u2800\uFFFC\u{1D159}]/u;
+/**
+ * Blank or near-blank on screen, not always a format character: Braille blank U+2800, object replacement U+FFFC,
+ * musical null notehead U+1D159, Khitan filler U+16FE4, Hangul fillers U+115F U+1160 U+3164 U+FFA0, shorthand
+ * format controls U+1BCA0 to U+1BCA3. The view refuses exactly this set.
+ */
+const INVISIBLE_LOOKALIKES = /[\u2800\uFFFC\u115F\u1160\u3164\uFFA0\u{1D159}\u{16FE4}\u{1BCA0}-\u{1BCA3}]/u;
+/** Double-quote look-alikes: the view wraps `summary` in quotes, so the text must not be able to close them. */
+const DOUBLE_QUOTES = /["\u201C-\u201F\u00AB\u00BB\u2039\u203A\uFF02\u275D\u275E\u301D-\u301F]/u;
 /** Variation selectors, U+034F, U+115F/1160, U+17B4/17B5, U+180B-180F, U+3164, U+FFA0, tag characters, soft hyphen, ... */
 const IGNORABLE = /\p{Default_Ignorable_Code_Point}/u;
 /** Any space other than U+0020 (no-break, em, ideographic, ...): look-alikes for a plain space. */
@@ -29,7 +35,7 @@ export const MAX_RISK = 2000;
 export function hiddenTextProblem(value: string, multiline = false): string | undefined {
   const text = multiline ? value.replace(/\n/g, ' ') : value;
   if (FORBIDDEN.test(text)) return 'it contains control, format (bidi, zero-width, tag), private-use, unassigned or separator characters';
-  if (INVISIBLE_LOOKALIKES.test(text)) return 'it contains a character that renders blank (U+2800, U+FFFC, U+1D159)';
+  if (INVISIBLE_LOOKALIKES.test(text)) return 'it contains a character that renders blank (for example U+2800, U+FFFC, a filler)';
   if (IGNORABLE.test(text)) return 'it contains invisible (default-ignorable) characters such as variation selectors';
   if (ODD_SPACE.test(text)) return 'it contains a space other than a plain space';
   if (COMBINING_RUN.test(text)) return `it stacks more than ${MAX_COMBINING_RUN} combining marks on one character`;
@@ -52,6 +58,13 @@ export function plainTextProblem(value: unknown, max: number): string | undefine
   if (value.length === 0) return 'it is empty';
   if (value.length > max) return `it is ${value.length} characters; the limit is ${max}`;
   return hiddenTextProblem(value, true);
+}
+
+/** `summary`: a plain line that also contains no double quotes or look-alikes (it is shown between quotes). */
+export function summaryProblem(value: unknown): string | undefined {
+  const line = plainLineProblem(value, MAX_SUMMARY);
+  if (line) return line;
+  return DOUBLE_QUOTES.test(value as string) ? 'it contains a double quote or a look-alike (" “ ” „ ‟ « » ‹ › ＂ …)' : undefined;
 }
 
 /** `target`: printable ASCII (no look-alike letters), trimmed, one line. */

@@ -1,14 +1,14 @@
 import { CourierError } from './errors.js';
 import { canonicalTarget, VERBS, type Verb } from './guard/target.js';
 import {
-  asciiTargetProblem, MAX_ACTION, MAX_REASON, MAX_RISK, MAX_SUMMARY, MAX_TARGET, plainLineProblem, plainTextProblem, targetShapeProblem,
+  asciiTargetProblem, summaryProblem, MAX_ACTION, MAX_REASON, MAX_RISK, MAX_SUMMARY, MAX_TARGET, plainLineProblem, plainTextProblem, targetShapeProblem,
 } from './text.js';
 
 export { MAX_SUMMARY, MAX_TARGET };
 
 /**
  * What an approval request names, in structured fields (spec §7). They live in `me/requests/<id>.json`, so the
- * request hash covers them; the view renders "Approving lets <peer>'s agent <verb> <target>: <summary>" from them and
+ * request hash covers them; the view renders "Approving lets your agent <verb> <target> for <peer>: “<summary>”" from them and
  * the guard matches the command it is about to allow to `verb` and `target`, never to free text.
  *
  * The write-time rules (this file, `text.ts`) are the same the view enforces when it reads a request: anything that
@@ -37,8 +37,8 @@ export function requestFields(input: { verb?: string; target?: string; summary?:
   const canonical = canonicalTarget(verb, target);
   const targetProblem = asciiTargetProblem(canonical) ?? targetShapeProblem(verb, canonical);
   if (targetProblem) refuse('target', targetProblem);
-  const summaryProblem = plainLineProblem(summary, MAX_SUMMARY);
-  if (summaryProblem) refuse('summary', summaryProblem);
+  const summaryIssue = summaryProblem(summary);
+  if (summaryIssue) refuse('summary', summaryIssue);
   return { verb: verb as Verb, target: canonical, summary };
 }
 
@@ -49,6 +49,36 @@ export function requestIds(ids: { threadId: string; taskId: string }): void {
   for (const [name, value] of Object.entries(ids)) {
     if (!ID.test(value)) throw new CourierError('usage', `${name === 'taskId' ? '--task' : 'the thread id'} must be 1 to 64 letters, digits, "_" or "-" (got ${JSON.stringify(value.slice(0, 40))}).`);
   }
+}
+
+/**
+ * The closed key set of `me/requests/<id>.json` (what `courier request` writes and the view accepts): any other key,
+ * a missing one, or a value of the wrong type makes the request unreviewable. Returns the problem, or undefined.
+ */
+export const REQUEST_KEYS = [
+  'id', 'peer', 'threadId', 'taskId', 'verb', 'target', 'summary', 'action', 'reason', 'risk',
+  'requestedBy', 'createdAt', 'expiresAt', 'status',
+] as const;
+/** `courier request` always writes these three; a reader treats them as optional (but well-formed when present). */
+const OPTIONAL_KEYS = ['action', 'reason', 'risk'];
+
+export function requestShapeProblem(request: Record<string, unknown>): string | undefined {
+  const keys = Object.keys(request);
+  const unknown = keys.filter((key) => !(REQUEST_KEYS as readonly string[]).includes(key));
+  if (unknown.length) return `unknown key ${JSON.stringify(unknown[0])}`;
+  const missing = REQUEST_KEYS.filter((key) => !OPTIONAL_KEYS.includes(key) && !(key in request));
+  if (missing.length) return `missing key "${missing[0]}"`;
+  for (const key of REQUEST_KEYS) {
+    if (key === 'requestedBy' || !(key in request)) continue;
+    if (typeof request[key] !== 'string') return `"${key}" is not a string`;
+  }
+  const by = request.requestedBy;
+  if (by === null || typeof by !== 'object' || Array.isArray(by)) return '"requestedBy" is not an object';
+  const byKeys = Object.keys(by);
+  if (byKeys.length !== 2 || !byKeys.includes('owner') || !byKeys.includes('agent')) return '"requestedBy" must have exactly owner and agent';
+  if (typeof (by as Record<string, unknown>).owner !== 'string' || typeof (by as Record<string, unknown>).agent !== 'string') return '"requestedBy" values are not strings';
+  if (request.status !== 'pending') return '"status" must be "pending"';
+  return undefined;
 }
 
 /** The free-text fields of a request, refused (not repaired) if they break the shared text rules. */
@@ -72,7 +102,7 @@ export function storedRequestFields(request: Record<string, unknown>): RequestFi
   const { verb, target, summary } = request;
   if (typeof verb !== 'string' || !(VERBS as readonly string[]).includes(verb)) return undefined;
   if (typeof target !== 'string' || asciiTargetProblem(target) || targetShapeProblem(verb, target)) return undefined;
-  if (plainLineProblem(summary, MAX_SUMMARY)) return undefined;
+  if (summaryProblem(summary)) return undefined;
   try {
     // The stored target must already be the one canonical spelling for its verb: a hand-written variant is not what
     // the guard would match, and not what `courier request` writes.

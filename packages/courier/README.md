@@ -174,7 +174,8 @@ conflict) it kills the runs still in flight.
 `courier request` writes structured fields into `me/requests/<id>.json`:
 `verb` (`merge`, `deploy`, `publish`, `spend` or `other`), `target` and
 `summary`. They are part of the request the hash covers; the view renders
-"Approving lets <peer>'s agent <verb> <target>: <summary>" from them; the guard
+"Approving lets your agent <verb> <target> for <peer>: “<summary>”" (your own agent
+acts; the peer is who asked) from them; the guard
 matches the command it is about to allow to `verb` and `target` only. `action`
 (default: the summary), `reason` (`--why`) and `risk` are free text for the
 owner and are never matched.
