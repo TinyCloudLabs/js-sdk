@@ -295,6 +295,17 @@ write it. A denial exits `approval-denied`. The courier key cannot write
 `me/approvals/`, so only the owner's view session can produce a passing
 approval. Each approval covers one request and is valid for 24 hours.
 
+**The used-marker is delete-proof for the courier key.** The grant gives
+`me/consumed/` get, put and list but not del (`me/state/` does allow del, which
+is why the marker is not there). A put can overwrite a marker's value but cannot
+remove its key, so the key's presence is what counts, whatever it contains. The
+check reads from the network every time (no replica, no cache, no ETag
+shortcut) and treats only a key-level 404 as "unused"; a transport error, a
+5xx, a 401/403 or a "space not found" fails closed (`approval-state-unknown`).
+The broker writes the create-only marker before executing the approved merge.
+Grants issued before this change lack `me/consumed/` and are refused with
+`grant-incomplete`: run `init` once to renew (one passkey approval).
+
 The watcher wakes the thread's agent as soon as a new approval (approved or
 denied) for one of its requests appears, without the debounce. Approvals older
 than 24 hours, already used, malformed, or without a request at start-up wake
@@ -647,6 +658,8 @@ token-printing tools and `/proc/*/environ`.
 Merge requests include `headSha` and `base` in their hash. The broker pins
 `--match-head-commit` to the approved head SHA and checks the PR's base against
 the approved base.
+
+Details: TC-1634
 
 ### Running it as a service
 
