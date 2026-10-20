@@ -137,6 +137,26 @@ subject is quoted and flattened onto one line.
 A wake succeeds when the agent run exits 0 (`--wake-timeout`, default 900 s,
 kills a run that hangs). A failed wake stays pending and retries after 60 s.
 
+### Approvals
+
+`courier approval <requestId> [--action "<exact action>"] [--peek]` is what a
+woken agent runs before a gated action. It reads `me/requests/<id>.json` and
+`me/approvals/<id>.json` and exits 0 only if the approval names that request
+(`requestId` equals the id), carries `requestHash` equal to the SHA-256 of the
+request's canonical JSON (`canonicalJson` / `requestHash`, exported, mirrored by
+the view), says `approved`, was decided within 24 hours and inside the request's
+lifetime, and `--action` (if given) equals the request's action. It then
+consumes the approval with a create-only marker at
+`me/state/approvals-used/<id>.json`, so a second run exits `approval-used`.
+`--peek` checks without consuming; a denial exits `approval-denied`. The
+courier key cannot write `me/approvals/`, so only the owner's view session can
+produce a passing approval.
+
+The watcher wakes the thread's agent as soon as a new approval (approved or
+denied) for one of its requests appears, without the debounce. Approvals older
+than 24 hours, already used, malformed, or without a request at start-up wake
+nobody.
+
 ### Running it as a service
 
 ```bash

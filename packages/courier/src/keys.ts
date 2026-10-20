@@ -53,6 +53,8 @@ export const k = {
   mirrorTask: (peer: string, threadId: string, taskId: string) =>
     `${PREFIX}/me/mirror/${peer}/threads/${threadId}/task/${taskId}.json`,
   watchState: `${PREFIX}/me/state/watch.json`,
+  /** Single-use marker for an approval (create-only), under the courier key's `me/state/` put. */
+  approvalUsed: (id: string) => `${PREFIX}/me/state/approvals-used/${id}.json`,
   peersPrefix: `${PREFIX}/me/peers/`,
   mirrorPrefix: `${PREFIX}/me/mirror/`,
   approvalsPrefix: `${PREFIX}/me/approvals/`,

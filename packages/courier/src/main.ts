@@ -5,6 +5,7 @@ import {
 } from './commands.js';
 import { cmd, programName, setProgramName } from './program.js';
 import { cmdWatch } from './watch-cmd.js';
+import { cmdApproval } from './approval.js';
 
 function usage(): string {
   const name = programName();
@@ -36,6 +37,10 @@ Threads (agents run these):
   request <threadId> --peer p --task <id> --action "…" --why "…" [--risk "…"]
                                    Ask MY human (writes me/requests/, task → AUTH_REQUIRED)
   orders <peer> [--json]           Standing orders for this peer (me/orders/<peer>.md or defaults)
+  approval <id> [--action "…"] [--peek]
+                                   Check MY human's decision on request <id> before a gated action: must
+                                   be approved, match the request exactly, be under 24 h old and unused.
+                                   Consumes it (exit 0); --peek only checks. A denial or mismatch exits 1.
 
 Delivery (one watcher per person per machine; never calls a model):
   watch [--wake none|paseo|claude|exec] [--exec <cmd>] [--cwd dir] [--debounce 30] [--poll 60] [--ticket 25] [--once]
@@ -87,6 +92,7 @@ export async function run(argv: string[]): Promise<void> {
     case 'request': return cmdRequest(sub);
     case 'orders': return cmdOrders(sub);
     case 'watch': return cmdWatch(sub);
+    case 'approval': return cmdApproval(sub);
     default:
       throw new CourierError('usage', `Unknown command "${command}".\n\n${usage()}`);
   }
