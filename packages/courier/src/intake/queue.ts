@@ -11,6 +11,7 @@ export function ensureRealDir(dir: string, mode: number): void {
   if (stat.isSymbolicLink() || !stat.isDirectory()) {
     throw new CourierError('unsafe-dir', 'queue or state path is not a real directory');
   }
+  if (stat.uid === process.getuid?.() && (stat.mode & 0o7777) !== mode) fs.chmodSync(dir, mode);
 }
 
 /** Writes the full body to a same-directory temp file with the given mode, fsynced, and returns its path. */
@@ -100,9 +101,8 @@ export function acquireLock(file: string): () => void {
   throw new CourierError('locked', 'could not take the intake lock');
 }
 
-/** Per-peer intake progress. `highWater` is the newest message ULID already handled; `receipts` holds the last few local receive times for the inbound rate cap. */
+/** Per-peer intake progress. `receipts` holds the last few local receive times for the inbound rate cap. Older builds also wrote `highWater`; the key is ignored. */
 export interface PeerState {
-  highWater: string | null;
   receipts: number[];
 }
 
@@ -132,7 +132,7 @@ export function readState(file: string): IntakeState {
   }
   if (!isRecord(parsed) || parsed.v !== 1 || !isRecord(parsed.peers)) throw new CourierError('bad-state', 'intake state has an unknown shape');
   for (const entry of Object.values(parsed.peers)) {
-    if (!isRecord(entry) || !(entry.highWater === null || typeof entry.highWater === 'string') || !Array.isArray(entry.receipts)) {
+    if (!isRecord(entry) || !Array.isArray(entry.receipts)) {
       throw new CourierError('bad-state', 'intake state has an unknown shape');
     }
   }

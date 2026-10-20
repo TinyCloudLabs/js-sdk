@@ -43,24 +43,26 @@ function parseEntry(value: unknown): PeerPolicy | undefined {
 
 /**
  * Loads peers.json. An absent file means no peer is listed, so every peer is strict with the absent cap. An invalid
- * entry is reported through `log` and read as the absent policy. Refuses a file that is group- or other-writable,
- * because the box owner alone decides who is trusted.
+ * entry is reported through `log` and read as the absent policy. Refuses a symlink, a file owned by another uid, and a
+ * file that is group- or other-writable, because the box owner alone decides who is trusted.
  */
-export function loadPeers(path: string, log: (event: string, fields: Record<string, unknown>) => void = () => {}): Peers {
+export function loadPeers(path: string, log: (event: string, fields: Record<string, unknown>) => void = () => {}, ownerUid: number | undefined = process.getuid?.()): Peers {
   let stat: fs.Stats;
   try {
-    stat = fs.statSync(path);
+    stat = fs.lstatSync(path);
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return {};
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return Object.create(null) as Peers;
     throw error;
   }
+  if (stat.isSymbolicLink()) throw new CourierError('insecure-peers', `${path} is a symbolic link; point the flag at the file itself.`);
   if (!stat.isFile()) throw new CourierError('insecure-peers', `${path} is not a regular file.`);
+  if (ownerUid !== undefined && stat.uid !== ownerUid) throw new CourierError('insecure-peers', `${path} is not owned by the courier user.`);
   if ((stat.mode & 0o022) !== 0) {
     throw new CourierError('insecure-peers', `${path} is writable by group or others; restrict it to the owner (chmod 600).`);
   }
   const parsed: unknown = JSON.parse(fs.readFileSync(path, 'utf8'));
   if (!isRecord(parsed)) throw new CourierError('bad-peers', `${path} must be a JSON object keyed by peer id.`);
-  const peers: Peers = {};
+  const peers = Object.create(null) as Peers;
   for (const [peerId, value] of Object.entries(parsed)) {
     const policy = parseEntry(value);
     if (policy) peers[peerId] = policy;
@@ -74,10 +76,10 @@ export function loadPeers(path: string, log: (event: string, fields: Record<stri
 
 /** The tier for a peer. Absent from the file means strict. */
 export function tierOf(peers: Peers, peerId: string): Tier {
-  return peers[peerId]?.tier ?? 'strict';
+  return Object.hasOwn(peers, peerId) ? peers[peerId]!.tier : 'strict';
 }
 
 /** Full policy for a peer. Absent peers get the strict default with the absent inbound cap. */
 export function policyOf(peers: Peers, peerId: string): PeerPolicy {
-  return peers[peerId] ?? { ...ABSENT };
+  return Object.hasOwn(peers, peerId) ? peers[peerId]! : { ...ABSENT };
 }

@@ -106,6 +106,7 @@ try {
     threadId: record.threadId === sent.threadId,
     text: record.text === 'run 1',
     sender: record.sender.id === 'bob',
+    peerId: record.peerId === 'bob' && path.basename(path.dirname(file)) === record.peerId,
     tier: record.cheapChecks.tier === 'trusted',
     remaining: record.cheapChecks.peerRatePerHourRemaining === 99,
     mode: mode === 0o640,

@@ -625,7 +625,9 @@ the state directory keeps one intake process per profile.
 Queue record (`<queue-dir>/<peerId>/<msgId>.json`, directories 0750, files 0640,
 written atomically without overwriting):
 
-`{v:1, msgId, threadId, sender:{id, displayName}, receivedAt, text, cheapChecks:{textVerdict, tier, peerRatePerHourRemaining, flags}}`
+`{v:1, msgId, peerId, threadId, sender:{id, displayName}, receivedAt, text, cheapChecks:{textVerdict, tier, peerRatePerHourRemaining, flags}}`
+
+`peerId` is the peer handle and equals the queue directory name.
 
 `receivedAt` is the local time the record was written. `text` is the message text,
 cut to 16 KiB UTF-8 at a code-point boundary when longer; the `size` flag marks a cut.

@@ -17,7 +17,7 @@ test('absent peers file means every peer is strict with the default caps', () =>
   const t = tempPeers(undefined);
   try {
     const peers = loadPeers(t.file);
-    assert.deepEqual(peers, {});
+    assert.deepEqual(Object.keys(peers), []);
     assert.equal(tierOf(peers, 'hunter'), 'strict');
     assert.deepEqual(policyOf(peers, 'hunter'), { tier: 'strict', ratePerHour: 100, outPerHour: 100 });
   } finally {
@@ -60,6 +60,40 @@ test('invalid entries fail closed to strict with defaults and are logged', () =>
     }
     assert.equal(events.length, bad.length);
     assert.ok(events.every((e) => e.event === 'peers-invalid-entry' && e.as === 'strict'));
+  } finally {
+    t.cleanup();
+  }
+});
+
+test('a __proto__ key is an own entry, never a prototype change', () => {
+  const t = tempPeers('{"__proto__":{"tier":"trusted","ratePerHour":1,"outPerHour":1}}');
+  try {
+    const peers = loadPeers(t.file);
+    assert.equal(Object.getPrototypeOf(peers), null);
+    assert.equal(Object.hasOwn(peers, '__proto__'), true);
+    assert.equal(tierOf(peers, 'hunter'), 'strict');
+    assert.equal(tierOf(peers, 'toString'), 'strict');
+  } finally {
+    t.cleanup();
+  }
+});
+
+test('a symlinked peers file is refused', () => {
+  const t = tempPeers({ alice: { tier: 'trusted' } });
+  try {
+    const link = path.join(t.dir, 'link.json');
+    fs.symlinkSync(t.file, link);
+    assert.throws(() => loadPeers(link), (error) => error.code === 'insecure-peers');
+  } finally {
+    t.cleanup();
+  }
+});
+
+test('a peers file owned by another uid is refused', () => {
+  const t = tempPeers({ alice: { tier: 'trusted' } });
+  try {
+    const foreign = (process.getuid?.() ?? 0) + 1;
+    assert.throws(() => loadPeers(t.file, () => {}, foreign), (error) => error.code === 'insecure-peers');
   } finally {
     t.cleanup();
   }

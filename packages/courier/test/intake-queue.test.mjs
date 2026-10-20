@@ -51,6 +51,17 @@ test('ensureRealDir refuses a symlink in place of the directory', () => {
   assert.throws(() => ensureRealDir(link, 0o750), (e) => e.code === 'unsafe-dir');
 });
 
+test('ensureRealDir sets the requested mode even under a restrictive umask', () => {
+  const previous = process.umask(0o077);
+  try {
+    const dir = path.join(tempDir(), 'queue');
+    ensureRealDir(dir, 0o750);
+    assert.equal(fs.statSync(dir).mode & 0o777, 0o750);
+  } finally {
+    process.umask(previous);
+  }
+});
+
 test('the intake lock refuses a live holder and takes over a dead one', () => {
   const dir = tempDir();
   const file = path.join(dir, 'intake.lock');
@@ -71,5 +82,7 @@ test('readState: missing is empty, corrupt refuses to start', () => {
   fs.writeFileSync(file, '{not json');
   assert.throws(() => readState(file), (e) => e.code === 'bad-state');
   fs.writeFileSync(file, JSON.stringify({ v: 1, peers: { alice: { highWater: 5, receipts: [] } } }));
+  assert.deepEqual(readState(file).peers.alice.receipts, [], 'a stale highWater key from an older build is ignored');
+  fs.writeFileSync(file, JSON.stringify({ v: 1, peers: { alice: { receipts: 'x' } } }));
   assert.throws(() => readState(file), (e) => e.code === 'bad-state');
 });
