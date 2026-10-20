@@ -332,6 +332,62 @@ test("distinct concurrent node checks share one tenant approval cleanup", async 
   expect(await exists(join(stateRoot, ".tinycloud/profiles/agent/session.json"))).toBe(false);
 }, 90_000);
 
+test("a prior session file cannot be probed again while fresh approval is required", async () => {
+  const { proxy, client, stateRoot, bootstrap } = await setupProxiedSession();
+  const sessionPath = join(stateRoot, ".tinycloud/profiles/agent/session.json");
+  const priorSession = await readFile(sessionPath, "utf8");
+  const cid = String(bootstrap.delegationCid);
+  proxy.onInvocation = (actions) => respondsTo(actions, "tinycloud.kv/list", "spaces/")
+    ? new Response(`delegation-revoked: ${cid}`, { status: 401 })
+    : undefined;
+  const revoked = record((await client.callTool({ name: "tinycloud_connect", arguments: {} })).structuredContent);
+  expect(revoked).toMatchObject({ connected: false, approvalUrl: expect.stringContaining("/connect?state=") });
+  expect(await exists(sessionPath)).toBe(false);
+  const probes = proxy.probes();
+  // A delayed writer may restore older bytes after the cleanup has completed.
+  await writeFile(sessionPath, priorSession);
+  proxy.onInvocation = undefined;
+  const renewed = record((await client.callTool({ name: "tinycloud_connect", arguments: {} })).structuredContent);
+  expect(renewed).toMatchObject({ connected: false, approvalUrl: revoked.approvalUrl });
+  expect(proxy.probes()).toBe(probes);
+}, 90_000);
+
+test("a node check already in flight cannot restore a withdrawn connection", async () => {
+  const { hermetic, proxy, client, createClient, stateRoot, bootstrap } = await setupProxiedSession();
+  const alternate = await createClient("openkey-user-1", [
+    hermetic.ownerDid,
+    await ownerDid(OTHER_OWNER_KEY),
+  ]);
+  const cid = String(bootstrap.delegationCid);
+  let arrivals = 0;
+  let enteredFirst!: () => void;
+  const firstArrived = new Promise<void>((resolve) => { enteredFirst = resolve; });
+  let admitFirst!: () => void;
+  let admitSecond!: () => void;
+  const secondArrived = new Promise<void>((resolve) => { admitFirst = resolve; });
+  const releaseSecond = new Promise<void>((resolve) => { admitSecond = resolve; });
+  proxy.onInvocation = async (actions) => {
+    if (!respondsTo(actions, "tinycloud.kv/list", "spaces/")) return undefined;
+    if (++arrivals === 1) {
+      enteredFirst();
+      await secondArrived;
+      return new Response(`delegation-revoked: ${cid}`, { status: 401 });
+    }
+    admitFirst();
+    await releaseSecond;
+    return undefined;
+  };
+  const first = client.callTool({ name: "tinycloud_connect", arguments: {} });
+  await firstArrived;
+  const second = alternate.callTool({ name: "tinycloud_connect", arguments: {} });
+  await secondArrived;
+  expect((await first).structuredContent).toMatchObject({ connected: false });
+  admitSecond();
+  expect((await second).structuredContent).toMatchObject({ connected: false });
+  expect(await exists(join(stateRoot, ".tinycloud/profiles/agent/session.json"))).toBe(false);
+  expect(arrivals).toBe(2);
+}, 90_000);
+
 test("a positive node check expires within thirty seconds and an unsuccessful probe is not cached", async () => {
   const { proxy, client, stateRoot, bootstrap, approve } = await setupProxiedSession();
   const now = Date.now();
