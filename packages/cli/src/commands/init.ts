@@ -3,9 +3,11 @@ import { CLI_NAME } from "@tinycloud/operations/cli-name";
 import { ProfileManager } from "../config/profiles.js";
 import { outputJson, withSpinner } from "../output/formatter.js";
 import { handleError, CLIError } from "../output/errors.js";
+import type { PermissionEntry } from "@tinycloud/node-sdk";
 import { ExitCode, DEFAULT_HOST, DEFAULT_CHAIN_ID } from "../config/constants.js";
 import { generateKey } from "../auth/local-key.js";
 import { refreshOpenKeySession } from "./auth.js";
+import { ensureSpaceSetup } from "../auth/space-setup.js";
 
 export function registerInitCommand(program: Command): void {
   program
@@ -85,6 +87,7 @@ export function registerInitCommand(program: Command): void {
           noPopup: options.popup === false,
           persistHost: true,
         });
+        await ensureSpaceSetup({ profile: profileName, host }, delegationData, delegationData.permissions as PermissionEntry[] | undefined);
 
         outputJson({
           profile: profileName,

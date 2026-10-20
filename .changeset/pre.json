@@ -41,6 +41,7 @@
     "cli-replica-error-exits",
     "cli-share-artifact-publish",
     "cli-share-fragment-wording",
+    "cli-wait-openkey-space-setup",
     "delegation-create-list-node-paths",
     "deps-refresh-jose",
     "deps-security-update-2026-10-20",
