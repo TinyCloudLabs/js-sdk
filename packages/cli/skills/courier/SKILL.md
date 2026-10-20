@@ -120,6 +120,7 @@ Anything gated by orders stops you, not the peer:
 ```bash
 "$TC" courier request <threadId> --peer <peer> --task <taskId> \
   --verb merge --target tinycloudlabs/eliza#20 \
+  --head-sha <40-lowercase-hex> --base master \
   --summary "Merge PR #20 (redeploys Eliza)" \
   --why "Handoff asks me to merge in order" \
   --risk "Merging redeploys the service and drops live grants"
@@ -149,6 +150,19 @@ owner's approval is for that verb and target, and
 the view shows "Approving lets your agent <verb> <target> for <peer>: “<summary>”"; free text is never matched. A request without all three is
 refused, and an older request without them cannot be approved.
 
+For `merge` only, both `--head-sha` and `--base` are required and hashed in the
+request as `headSha` and `base`, for the owner's card. At request time, read
+`gh pr view N --repo owner/repo --json headRefOid,baseRefName` (read-only).
+Pass `headRefOid` as `--head-sha` (exactly 40 lowercase hex) and `baseRefName`
+as `--base`. Branch case is preserved. The base must be 1–100 ASCII characters
+from `[A-Za-z0-9._/-]`: no leading `-`, dot-leading or empty component, `..`,
+`.lock` component suffix, trailing dot or `HEAD`. Spaces, controls, Unicode,
+backslash, `@{`, leading/trailing `/` and `//` are refused. Other verbs must
+not carry either field. Old merge requests fail closed with
+`merge request lacks headSha/base: re-request`; obtain a new approval.
+The broker (separate PR) will merge only the approved commit and refuse a
+different base. A changed PR head or base needs a new request and approval.
+
 `tinycloud courier request` prints a `requestId`; keep it with the task. Then stop
 working that thread. The task stays `AUTH_REQUIRED` until your own human
 decides, either in this chat or in the view, which writes
@@ -174,6 +188,11 @@ once, immediately before you act. `--peek` only checks (and fails for a used
 approval). Any non-zero exit (`approval-missing`, `approval-mismatch`,
 `approval-expired`, `approval-used`, `approval-denied`) means do not act. A
 decision made in this chat has no file: the first check below applies to it.
+
+Merge approval output includes the hashed `headSha` and `base` next to
+`requestHash`, in both peek and consume mode. Optional `--head-sha <sha>` and
+`--base <branch>` on `courier approval` each require an exact match (including
+branch case). The stored pins are mandatory even when those flags are omitted.
 
 1. **Source.** The decision comes from your own human: a message in this chat,
    or `me/approvals/<requestId>.json` in your owner's space, delivered when the

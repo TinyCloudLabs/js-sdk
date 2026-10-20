@@ -8,6 +8,8 @@ import { verifyApproval } from '../dist/approval.js';
 
 const vectors = JSON.parse(fs.readFileSync(new URL('./vectors/request-fields.json', import.meta.url), 'utf8'));
 
+const pins = (verb) => verb === 'merge' ? { headSha: 'a'.repeat(40), base: 'Main' } : {};
+
 for (const v of vectors.fields) {
   test(`shared vector: ${v.field} ${v.name} -> ${v.valid ? 'accepted' : 'refused'}`, () => {
     if (v.field === 'summary') {
@@ -17,16 +19,24 @@ for (const v of vectors.fields) {
         if (v.valid) assert.equal(written().summary, v.value, 'accepted text is stored exactly as given');
         else assert.throws(written, (e) => e.code === 'usage', 'refused, not repaired');
       }
-    } else {
-      const written = () => requestFields({ verb: v.verb, target: v.value, summary: 'ok' }).target;
+    } else if (v.field === 'target') {
+      const written = () => requestFields({ ...pins(v.verb), verb: v.verb, target: v.value, summary: 'ok' }).target;
       if (v.valid) assert.equal(written(), v.value, 'a valid target is already the canonical spelling');
       else {
         let out;
         try { out = written(); } catch (e) { assert.equal(e.code, 'usage'); }
         assert.ok(out === undefined || out !== v.value, 'a refused value is never written as given (it is refused or normalised)');
       }
-      const stored = storedRequestFields({ verb: v.verb, target: v.value, summary: 'ok' });
+      const stored = storedRequestFields({ ...pins(v.verb), verb: v.verb, target: v.value, summary: 'ok' });
       assert.equal(stored !== undefined, v.valid, 'the stored form is judged by the same rules');
+    } else {
+      const targets = { merge: 'o/r#1', publish: 'npm:pkg@1.0.0', deploy: 'pages:site', other: 'note:ok', spend: 'spend:one credit' };
+      const input = { ...pins(v.verb), verb: v.verb, target: targets[v.verb], summary: 'ok', [v.field]: v.value };
+      if (v.valid) assert.equal(requestFields(input)[v.field], v.value, 'pins are stored exactly as given');
+      else assert.throws(() => requestFields(input), (e) => e.code === 'usage');
+      assert.equal(storedRequestFields(input) !== undefined, v.valid, 'the stored pins follow the writer rules');
+      const req = { ...base, ...input };
+      assert.equal(code(req) === 'ok', v.valid, 'approval reads enforce the same contract');
     }
   });
 }
@@ -44,7 +54,7 @@ test('requestText refuses hidden text in action, why and risk; allows a newline,
 
 const NOW = Date.parse('2026-10-20T12:00:00Z');
 const base = {
-  id: '01M5CBKA6RNA3RZ2819T9M7NDZ', peer: 'hunter', threadId: '01M5C9EDF03QMRZS2DJXGN5A4C', taskId: '01M5CBKA6RNA3RZ2819T9M7NK1', verb: 'merge', target: 'tinycloudlabs/docs#42', summary: 'Merge docs PR 42',
+  id: '01M5CBKA6RNA3RZ2819T9M7NDZ', peer: 'hunter', threadId: '01M5C9EDF03QMRZS2DJXGN5A4C', taskId: '01M5CBKA6RNA3RZ2819T9M7NK1', verb: 'merge', headSha: 'a'.repeat(40), base: 'Main', target: 'tinycloudlabs/docs#42', summary: 'Merge docs PR 42',
   action: 'Merge docs PR 42', reason: 'docs only', risk: 'low',
   requestedBy: { owner: 'did:pkh:o', agent: 'did:key:a' },
   createdAt: '2026-10-20T10:00:00Z', expiresAt: '2026-10-21T10:00:00Z', status: 'pending',
@@ -173,6 +183,10 @@ test('courier request --help prints the target forms, not the global help', asyn
   assert.match(out, /--verb merge\|deploy\|publish\|spend\|other/);
   assert.match(out, /owner\/repo#<PR number>/);
   assert.match(out, /npm:<name>@<version>/);
+  assert.match(out, /--head-sha/);
+  assert.match(out, /--base/);
+  assert.match(out, /headRefOid,baseRefName/);
+  assert.match(out, /broker \(separate PR\)/);
   assert.ok(!/Setup & pairing/.test(out));
 });
 
@@ -185,7 +199,7 @@ test('the request key set is closed: unknown keys refused, action/reason/risk op
   assert.match(requestShapeProblem({ ...base, requestedBy: { owner: 'o', agent: 'a', more: 'x' } }), /exactly owner and agent/);
   assert.match(requestShapeProblem({ ...base, status: 'approved' }), /pending/);
   assert.match(requestShapeProblem({ ...base, createdAt: 5 }), /not a string/);
-  const { verb, ...noVerb } = base;
+  const { verb, headSha, base: branch, ...noVerb } = base;
   assert.match(requestShapeProblem(noVerb), /missing key "verb"/);
 });
 

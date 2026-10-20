@@ -49,7 +49,7 @@ tc courier pair accept --file a.json
 tc courier send bob --new "Subject" --ask "…" --file handoff.md
 tc courier inbox && tc courier read <threadId>
 tc courier task new --peer bob --thread <id> --state working --ask a1
-tc courier request <threadId> --peer bob --task <id> --verb merge --target owner/repo#12 --summary "Merge PR 12" --why "…"
+tc courier request <threadId> --peer bob --task <id> --verb merge --target owner/repo#12 --head-sha <40-lowercase-hex> --base master --summary "Merge PR 12" --why "…"
 tc courier orders bob
 ```
 
@@ -191,6 +191,24 @@ matches the command it is about to allow to `verb` and `target` only. `action`
 (default: the summary), `reason` (`--why`) and `risk` are free text for the
 owner and are never matched.
 
+For `merge` only, the request also requires `headSha` and `base`, supplied as
+`--head-sha <sha>` and `--base <branch>`. Both are inside the hashed request and
+belong on the owner's approval card. Read the PR **at request time** with
+`gh pr view N --repo owner/repo --json headRefOid,baseRefName` (read-only), then
+pass `headRefOid` as `--head-sha` and `baseRefName` as `--base`. `headSha` must
+be exactly 40 lowercase hex characters. `base` preserves case: branch names
+are case-sensitive, with no trimming or lowercasing. It must be 1–100 ASCII
+characters from `[A-Za-z0-9._/-]`, with no leading `-`, dot-leading or empty
+path component, `..`, `.lock` component suffix, trailing dot or reserved `HEAD`.
+This excludes spaces, controls, Unicode, backslash, `@{`, leading/trailing `/`
+and `//`. Other verbs must not carry either field, on write or read.
+
+An old merge request without either pin is refused with
+`merge request lacks headSha/base: re-request`; file a new request and obtain
+a new approval. The broker (separate PR) will merge only the approved commit
+using `--match-head-commit=<approved sha>` and refuse a different base. A push
+or retarget after approval therefore needs a new request and approval.
+
 One rule set applies when `courier request` writes, when `courier approval`
 reads, and when the view shows the card. A value that breaks it is **refused,
 never repaired or shortened**:
@@ -240,6 +258,7 @@ reports newer runtime additions without permitting them.
   `taskId`, `verb`, `target`, `summary`, `requestedBy` (`{owner, agent}`),
   `createdAt`, `expiresAt`, `status` (`"pending"`) and the optional free text
   `action`, `reason`, `risk` (written by the CLI, well-formed when present).
+  For `merge` only, `headSha` and `base` are also required keys.
   Anything else makes the request unreviewable in the view and refused by
   `courier approval`, even if the hash matches;
 - the whole request must hash: `canonicalJson` / `requestHash` throw on a
@@ -251,7 +270,7 @@ reports newer runtime additions without permitting them.
 value is accepted, and the canonical-JSON rows give the expected output (or
 "must throw"). Copy it into any other implementation.
 
-`courier approval <requestId> --verb <v> --target <t> [--peek]` is what a
+`courier approval <requestId> --verb <v> --target <t> [--head-sha <sha>] [--base <branch>] [--peek]` is what a
 woken agent runs before a gated action. It reads `me/requests/<id>.json` and
 `me/approvals/<id>.json` and exits 0 only if the request has valid structured
 fields, the approval names that request (`requestId` equals the id), carries
@@ -264,9 +283,14 @@ of this machine's clock is tolerated; keep the clocks of the agent's machine
 and the owner's browser in step) and within the last 24 hours, and the given
 `--verb` and (canonicalised) `--target` equal the request's. Both are required
 when consuming; `--peek` (for guards) may omit them.
+For a merge, valid stored `headSha` and `base` are always required. Optional
+`--head-sha` and `--base` each require an exact match, including branch case;
+they cannot match a non-merge request.
 
 `courier request` and `courier approval` (peek and consume) print the full
 `requestHash`; the view's card shows its first 8 hex digits as a fingerprint so the owner can match the card to the agent's request.
+Merge approval output (peek and consume) also prints `headSha` and `base`
+next to `requestHash`.
 
 It then consumes the approval with a create-only marker at
 `me/state/approvals-used/<id>.json`, so a second run exits `approval-used`;
