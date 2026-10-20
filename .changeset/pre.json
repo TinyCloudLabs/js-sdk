@@ -49,6 +49,7 @@
     "deps-security-update-2026-10-20",
     "direct-owner-revoke",
     "held-credentials-verifier",
+    "knowledge-pickup-commands",
     "kv-list-matching",
     "node-replica-erase-replaced-roots",
     "node-sdk-registry-sync-authority",

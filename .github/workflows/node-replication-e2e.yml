@@ -8,6 +8,9 @@ on:
       - "packages/sdk-core/src/**"
       - "packages/replica/**"
       - "packages/sdk-rs/**"
+      - "packages/operations/src/operations/knowledge*"
+      - "packages/cli/src/commands/knowledge*"
+      - "packages/cli/src/lib/apps-agent-preset*"
       - ".github/workflows/node-replication-e2e.yml"
   push:
     branches: [master]
@@ -74,6 +77,8 @@ jobs:
           bun run --cwd packages/sdk-core build
           bun run --cwd packages/node-sdk build
           bun run --cwd packages/replica build
+          bun run --cwd packages/operations build
+          bun run --cwd packages/courier build
 
       - name: Log in to GHCR
         uses: docker/login-action@v3
@@ -99,6 +104,11 @@ jobs:
         env:
           TC_TERMINAL_DELEGATION_E2E_NODE_BIN: ${{ runner.temp }}/tinycloud
         run: bun test --max-concurrency=1 packages/node-sdk/src/TinyCloudNode.terminalDelegation.e2e.test.ts
+
+      - name: Run knowledge CLI e2e (apps-agent preset, knowledge list|read)
+        env:
+          TC_REPLICATION_E2E_NODE_BIN: ${{ runner.temp }}/tinycloud
+        run: bun test --max-concurrency=1 packages/cli/src/commands/knowledge.e2e.test.ts
 
       - name: Save Rust/Cargo cache
         if: github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/')
