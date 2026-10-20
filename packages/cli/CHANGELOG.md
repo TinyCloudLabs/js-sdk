@@ -1,5 +1,11 @@
 # @tinycloud/cli
 
+## 1.3.0-beta.40
+
+### Patch Changes
+
+- c06c304: Courier profile permission errors use code profile-permissions; documentation wording updates.
+
 ## 1.3.0-beta.39
 
 ### Patch Changes
