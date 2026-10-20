@@ -28,6 +28,9 @@ const VIEWER_PREVIEW_BYTES = 1024 * 1024;
 
 const FOLDER_HINT = "A folder is published as one self-contained page: every stylesheet, script and image it uses is inlined, and external URLs, frames, forms, <base>, module scripts and links to other pages are refused.";
 
+/** Why a directory is refused where a folder cannot be published as one page (addressed, `--prefix`, several inputs). */
+export const FOLDER_NOT_AVAILABLE = "Folders can only be published as a single page for an anyone-with-the-link share (`--to anyone`); for others publish a single file";
+
 /** True when `input` names an existing directory (a symbolic link to one counts: the user typed it). */
 export async function isDirectoryInput(input: string): Promise<boolean> {
   if (input === "-") return false;
@@ -49,7 +52,7 @@ function limitError(message: string): CLIError {
 }
 
 /** The file's bytes, read from one descriptor opened without following a link, never past `limit` bytes. */
-async function readRegularFile(path: string, relative: string, limit: number): Promise<Uint8Array | FolderProblem> {
+async function readRegularFile(path: string, relative: string, remaining: number, limit: number): Promise<Uint8Array | FolderProblem> {
   let handle;
   try {
     handle = await open(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0));
@@ -60,16 +63,16 @@ async function readRegularFile(path: string, relative: string, limit: number): P
   try {
     const info = await handle.stat();
     if (!info.isFile()) return { code: "UNSUPPORTED_FOLDER_ENTRY", path: relative, reason: "not a regular file" };
-    if (info.size > limit) throw limitError(`folder is larger than the ${limit} byte limit (at "${safeClipped(relative)}")`);
+    if (info.size > remaining) throw limitError(`folder is larger than the ${limit} byte limit (at "${safeClipped(relative)}")`);
     // The stat is only a shortcut: a file can grow while it is read, so the bytes read are bounded too.
     const chunks: Buffer[] = [];
     let total = 0;
     for (;;) {
-      const chunk = Buffer.allocUnsafe(Math.min(1 << 20, limit - total + 1));
+      const chunk = Buffer.allocUnsafe(Math.min(1 << 20, remaining - total + 1));
       const { bytesRead } = await handle.read(chunk, 0, chunk.length, null);
       if (bytesRead === 0) break;
       total += bytesRead;
-      if (total > limit) throw limitError(`folder is larger than the ${limit} byte limit (at "${safeClipped(relative)}")`);
+      if (total > remaining) throw limitError(`folder is larger than the ${limit} byte limit (at "${safeClipped(relative)}")`);
       chunks.push(chunk.subarray(0, bytesRead));
     }
     return new Uint8Array(Buffer.concat(chunks, total));
@@ -126,7 +129,7 @@ export async function readHtmlFolder(directory: string, limit: number): Promise<
           continue;
         }
         if (files.length >= MAX_ARTIFACT_FILES) throw limitError(`folder has more than ${MAX_ARTIFACT_FILES} files`);
-        const read = await readRegularFile(child, path, limit - total);
+        const read = await readRegularFile(child, path, limit - total, limit);
         if (read instanceof Uint8Array) {
           total += read.byteLength;
           files.push({ path: path.normalize("NFC"), bytes: read });
@@ -166,14 +169,25 @@ export function htmlFolderError(error: ArtifactBundleError): CLIError {
   );
 }
 
+interface JsdomModule {
+  readonly JSDOM: new (html: string) => {
+    readonly window: {
+      readonly DOMParser: new () => { parseFromString(html: string, type: "text/html"): Document };
+      close(): void;
+    };
+  };
+}
+
 async function jsdomParser(): Promise<{ readonly parseHtml: (html: string) => Document; readonly close: () => void }> {
   // Loaded on demand: only a folder publish pays for it. jsdom is built on parse5, the HTML5 tree builder a browser uses,
   // so the rewriter sees the tree the viewer's browser will build. Scripting and subresource loading are off in a
   // fresh JSDOM; nothing the folder contains runs or is fetched.
-  const { JSDOM } = await import("jsdom");
+  // The specifier is not a literal so the package needs no type declarations (`@types/jsdom` would put the DOM lib into
+  // every workspace project that resolves root `@types`); only the members used here are typed.
+  const { JSDOM } = (await import("jsdom" as string)) as JsdomModule;
   const window = new JSDOM("").window;
   const parser = new window.DOMParser();
-  return { parseHtml: (html) => parser.parseFromString(html, "text/html") as unknown as Document, close: () => window.close() };
+  return { parseHtml: (html) => parser.parseFromString(html, "text/html"), close: () => window.close() };
 }
 
 export interface HtmlFolderBundle {

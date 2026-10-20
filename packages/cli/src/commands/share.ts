@@ -42,7 +42,7 @@ import { CLIError, handleError, storageFullError, wrapError } from "../output/er
 import { classifyShareFailure } from "../share/failure-class.js";
 import { authorizationRequiredJson, inspectHuman, publishHuman, receiveHuman, receiveJson, writeJson } from "../share/output.js";
 import { MAX_SHARE_STDIN_BYTES, readBoundedUrlStdin, readShareInput, shareInputFilename, writeShareOutput } from "../share/io.js";
-import { bundleHtmlFolder, htmlFolderNotice, isDirectoryInput } from "../share/html-folder.js";
+import { FOLDER_NOT_AVAILABLE, bundleHtmlFolder, htmlFolderNotice, isDirectoryInput } from "../share/html-folder.js";
 
 import { ShareHistoryRetryError, SharePublishAuthorityError } from "../share/errors.js";
 const SHARE_ORIGIN = "https://share.tinycloud.xyz";
@@ -356,7 +356,7 @@ export function registerShareCommand(program: Command): void {
 
   share.command("publish <files...>")
     .description("Publish one or more bounded files as a Share, or a folder with an index.html as one self-contained page (anyone links only)")
-    .option("--name <filename>", "Filename for stdin input")
+    .option("--name <filename>", "Filename for stdin input, or the published .html name of a folder")
     .option("--to <target>", "Share target", "anyone")
     .option("--notify", "Email an exact-email recipient, or a domain mailbox on node 1.17.3+")
     .option("--notify-to <address>", "Mailbox to invite for --to domain:<name> --notify (node 1.17.3+)")
@@ -397,6 +397,8 @@ export function registerShareCommand(program: Command): void {
           if (notice !== undefined) process.stderr.write(notice);
           inputs = [{ bytes: bundle.bytes, filename: bundle.filename }];
         } else {
+          // A directory that is not a folder publish (addressed, --prefix, next to other inputs) gets one clear refusal.
+          for (const file of files) if (await isDirectoryInput(file)) throw new CLIError("MAX_BYTES_EXCEEDED", FOLDER_NOT_AVAILABLE, 7);
           // Refuse unsafe names before touching any source, so stdin is never awaited for one.
           for (const file of files) shareInputFilename(file, name);
           inputs = await Promise.all(files.map((file) => readShareInput(file, name, maxBytes)));

@@ -110,17 +110,25 @@ describe("tc share publish ./site/", () => {
       expect(result.exitCode).not.toBe(0);
     }
     expect(published).toHaveLength(0);
-    const addressed = await run([site, "--to", "email:alice@example.com"]);
-    expect(errorOf(addressed.stderr).code).toBe("MAX_BYTES_EXCEEDED");
-    expect(addressed.exitCode).toBe(7);
+    for (const args of [["--to", "email:alice@example.com"], ["--prefix", "--to", "email:alice@example.com"], ["--prefix"], ["--to", "domain:example.com"]]) {
+      const refused = await run([site, ...args]);
+      expect(errorOf(refused.stderr).code, args.join(" ")).toBe("MAX_BYTES_EXCEEDED");
+      expect(refused.exitCode).toBe(7);
+      expect(errorOf(refused.stderr).message).toBe("Folders can only be published as a single page for an anyone-with-the-link share (`--to anyone`); for others publish a single file");
+    }
   });
 
   test("a folder next to other inputs is not a folder publish", async () => {
     await basicSite();
     await writeFile(join(root, "note.md"), "# n\n");
     const result = await run([site, join(root, "note.md")]);
-    expect(result.exitCode).not.toBe(0);
+    expect(result.exitCode).toBe(7);
+    expect(errorOf(result.stderr).message).toContain("Folders can only be published as a single page");
     expect(published).toHaveLength(0);
+    // Two folders: the same refusal.
+    const second = await run([site, site]);
+    expect(second.exitCode).toBe(7);
+    expect(errorOf(second.stderr).message).toContain("Folders can only be published as a single page");
   });
 
   describe("refusals are typed, and name the file and reference", () => {
@@ -173,6 +181,8 @@ describe("tc share publish ./site/", () => {
       await put("img/unused.bin", new Uint8Array(4096));
       const small = await run([site, "--max-bytes", "1024"]);
       expect(errorOf(small.stderr).code).toBe("MAX_BYTES_EXCEEDED");
+      // The message names the limit asked for, not what was left of it when the file was reached.
+      expect(errorOf(small.stderr).message).toContain("larger than the 1024 byte limit");
       expect(published).toHaveLength(0);
     });
 

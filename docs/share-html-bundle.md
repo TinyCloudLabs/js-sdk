@@ -27,3 +27,5 @@ It is a subpath, not part of the package root, so browser bundles that import `@
 ## CLI notes
 
 The CLI reads the folder itself: symbolic links and special files are refused (never followed or read), entries starting with `.` are skipped and reported, nesting deeper than 16 folders is refused, and a file is read through a descriptor opened without following links and bounded by the byte limit. Echoed paths and references are escaped (`\u{..}`) and clipped.
+
+A folder is published only to an anyone-with-the-link target. For an addressed target, `--prefix`, or a folder next to other inputs the CLI refuses with `MAX_BYTES_EXCEEDED` (exit 7, the code a directory has always had) and a message that says folders need `--to anyone`.
