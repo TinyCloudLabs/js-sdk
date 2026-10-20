@@ -21,6 +21,12 @@
       "require": "./dist/artifact.cjs",
       "default": "./dist/artifact.js"
     },
+    "./html-bundle": {
+      "types": "./dist/html-bundle.d.ts",
+      "import": "./dist/html-bundle.js",
+      "require": "./dist/html-bundle.cjs",
+      "default": "./dist/html-bundle.js"
+    },
     "./share-root": {
       "types": "./dist/share-root.d.ts",
       "browser": "./dist/share-root.js",
@@ -53,6 +59,7 @@
   },
   "devDependencies": {
     "@types/node": "^20",
+    "jsdom": "26.1.0",
     "tsup": "^8.0.0",
     "typescript": "^5.9.3",
     "vitest": "^3.2.4"

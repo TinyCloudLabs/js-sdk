@@ -361,6 +361,7 @@ Publishing needs the publishing scope on a dedicated profile (`tinycloud --profi
 "$TC" share publish ./note.md --to domain:example.com                 # addressed: any verified address at the domain
 "$TC" share publish ./note.md --to domain:example.com --notify --notify-to alice@example.com  # invite one matching mailbox; node 1.17.3+
 cat note.md | "$TC" share publish - --name note.md
+"$TC" share publish ./site/ --json                                    # folder with index.html -> one self-contained page, bearer link
 
 printf '%s' "$SHARE_URL" | "$TC" share inspect - --json               # verify, print safe metadata
 printf '%s' "$SHARE_URL" | "$TC" share receive - --stdout             # bearer link: verified bytes
@@ -424,6 +425,7 @@ An artifact is a file an agent publishes for a person to open in the Share viewe
 |------|------|----------------------|
 | Markdown | `report.md` | Renders GFM (tables, task lists, fenced code), sanitized; data: images only |
 | HTML | `page.html`, one self-contained file | Runs it in an isolated sandbox with no network: inline all CSS, scripts and images (`data:` URIs); links to other URLs and external scripts, fonts and stylesheets do not load |
+| HTML folder | `./site/` with a top-level `index.html`, bearer links only | Not a separate kind: `share publish ./site/` inlines the folder's CSS, scripts, images and fonts into one self-contained page at publish time and publishes that single `.html` (named `site.html`, or `--name`). The page can use only what the folder holds: external URLs, frames, forms, `<base>`, module scripts and links to other pages are refused with a typed error naming the file and reference (`UNSUPPORTED_HTML`, `HTML_RESOURCE_MISSING`, `UNSAFE_PATH`, `UNSUPPORTED_FOLDER_ENTRY`, `MAX_BYTES_EXCEEDED`). Symbolic links and names starting with `.` are never read. `manifest.json` and `knowledge/**` stay out of the page and are not published. Addressed and `--prefix` folder publishing is not available |
 | JSX | `App.jsx` / `App.tsx` with a default-export component | Compiles and renders it in the same kind of sandbox once the viewer release that adds JSX rendering is live; until then the file is shown as source text with a Download action |
 
 JSX: `export default function App() { ... }`, no `ReactDOM.render`, no CSS file. Imports resolve only from this library set: `react` (19), `react-dom/client`, `lucide-react`, `recharts`, `d3`, `mermaid` (11), plus Tailwind utility classes. Any other import fails with an error panel listing the set; bundle other code into the file or publish a self-contained HTML page. Fetching data is not possible (no network): embed the data in the file.
