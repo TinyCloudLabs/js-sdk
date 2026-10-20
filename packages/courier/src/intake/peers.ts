@@ -42,36 +42,41 @@ function parseEntry(value: unknown): PeerPolicy | undefined {
 }
 
 /**
- * Loads peers.json. An absent file means no peer is listed, so every peer is strict with the absent cap. An invalid
- * entry is reported through `log` and read as the absent policy. Refuses a symlink, a file owned by another uid, and a
- * file that is group- or other-writable, because the box owner alone decides who is trusted.
+ * Loads peers.json. An absent file means no peer is listed, so every peer is strict with the absent cap. The file is
+ * opened without following links, checked, and read through that same descriptor, so the bytes parsed are the bytes
+ * checked. Refuses a symlink, a non-regular file, a file owned by another uid, and a file that is group- or
+ * other-writable, because the box owner alone decides who is trusted. An invalid entry refuses the whole file: a typo
+ * must not widen a peer's caps, so the caller keeps its last good policy.
  */
-export function loadPeers(path: string, log: (event: string, fields: Record<string, unknown>) => void = () => {}, ownerUid: number | undefined = process.getuid?.()): Peers {
-  let stat: fs.Stats;
+export function loadPeers(path: string, ownerUid: number | undefined = process.getuid?.()): Peers {
+  let fd: number;
   try {
-    stat = fs.lstatSync(path);
+    fd = fs.openSync(path, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return Object.create(null) as Peers;
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === 'ENOENT') return Object.create(null) as Peers;
+    if (code === 'ELOOP') throw new CourierError('insecure-peers', `${path} is a symbolic link; point the flag at the file itself.`);
     throw error;
   }
-  if (stat.isSymbolicLink()) throw new CourierError('insecure-peers', `${path} is a symbolic link; point the flag at the file itself.`);
-  if (!stat.isFile()) throw new CourierError('insecure-peers', `${path} is not a regular file.`);
-  if (ownerUid !== undefined && stat.uid !== ownerUid) throw new CourierError('insecure-peers', `${path} is not owned by the courier user.`);
-  if ((stat.mode & 0o022) !== 0) {
-    throw new CourierError('insecure-peers', `${path} is writable by group or others; restrict it to the owner (chmod 600).`);
-  }
-  const parsed: unknown = JSON.parse(fs.readFileSync(path, 'utf8'));
-  if (!isRecord(parsed)) throw new CourierError('bad-peers', `${path} must be a JSON object keyed by peer id.`);
-  const peers = Object.create(null) as Peers;
-  for (const [peerId, value] of Object.entries(parsed)) {
-    const policy = parseEntry(value);
-    if (policy) peers[peerId] = policy;
-    else {
-      log('peers-invalid-entry', { peer: peerId, reason: 'invalid-entry', as: 'strict' });
-      peers[peerId] = { ...ABSENT };
+  try {
+    const stat = fs.fstatSync(fd);
+    if (!stat.isFile()) throw new CourierError('insecure-peers', `${path} is not a regular file.`);
+    if (ownerUid !== undefined && stat.uid !== ownerUid) throw new CourierError('insecure-peers', `${path} is not owned by the courier user.`);
+    if ((stat.mode & 0o022) !== 0) {
+      throw new CourierError('insecure-peers', `${path} is writable by group or others; restrict it to the owner (chmod 600).`);
     }
+    const parsed: unknown = JSON.parse(fs.readFileSync(fd, 'utf8'));
+    if (!isRecord(parsed)) throw new CourierError('bad-peers', `${path} must be a JSON object keyed by peer id.`);
+    const peers = Object.create(null) as Peers;
+    for (const [peerId, value] of Object.entries(parsed)) {
+      const policy = parseEntry(value);
+      if (!policy) throw new CourierError('bad-peers', `${path} has an invalid policy for peer "${peerId}"; fix the entry. Nothing was loaded.`);
+      peers[peerId] = policy;
+    }
+    return peers;
+  } finally {
+    fs.closeSync(fd);
   }
-  return peers;
 }
 
 /** The tier for a peer. Absent from the file means strict. */

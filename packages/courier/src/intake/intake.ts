@@ -9,7 +9,7 @@ import { k } from '../keys.js';
 import { courierNode } from '../node.js';
 import { loadProfile, profileDir, type Profile, type StoredPeer } from '../profile.js';
 import { getJson, listAll } from '../store.js';
-import { textVerdict, type TextVerdict } from '../text.js';
+import { hiddenTextProblem, textVerdict, type TextVerdict } from '../text.js';
 import { jsonLineLog, type WatchLog } from '../wake.js';
 import { FLAG_TABLE, type Flag } from './flags.js';
 import { policyOf, loadPeers, type Peers } from './peers.js';
@@ -25,6 +25,8 @@ const MAX_SKEW_MS = 10 * 60_000;
 const STALE_MS = 7 * DAY_MS;
 /** Queue records older than STALE_MS move to done/; done/ entries older than this are pruned. */
 const DONE_TTL_MS = 14 * DAY_MS;
+/** Overflow files are owner-only and retired after this long, so a flooding peer cannot grow the store without bound. */
+const OVERFLOW_TTL_MS = 30 * DAY_MS;
 /** Inbound admissions are counted per peer over this window. */
 const RATE_WINDOW_MS = HOUR_MS;
 /** Queued text is capped at this many UTF-16 units; longer text is flagged `too-long`. */
@@ -32,7 +34,8 @@ export const MAX_QUEUE_CHARS = 8000;
 /** Queued text is also capped at 16 KiB of UTF-8 (cut at a code-point boundary) and flagged `size` when cut. */
 const MAX_QUEUE_BYTES = 16 * 1024;
 const RATE_TEXT = 'This peer went over its inbound rate limit; further messages this hour are held outside the queue.';
-const ULID_RE = /^[0-9A-HJKMNP-TV-Z]{26}$/;
+/** A ULID's first character is 0-7: its 48-bit timestamp cannot exceed 2^48-1. Larger ids overflow decodeTime. */
+const ULID_RE = /^[0-7][0-9A-HJKMNP-TV-Z]{25}$/;
 const SAFE_ID = /^[0-9A-Za-z_-]{1,64}$/;
 const MSG_KEY = /\/threads\/([^/]+)\/msg\/([^/]+)\.json$/;
 
@@ -99,7 +102,8 @@ export function capUtf8(text: string, maxBytes: number): { text: string; truncat
 /** Maps the verdict and the cheap text detectors to flag codes from FLAG_TABLE, in table order. */
 export function flagsFor(input: { text: string; verdict: TextVerdict; overRate: boolean; truncated: boolean }): Flag[] {
   const found = new Set<Flag>();
-  if (!input.verdict.allowed) found.add(input.verdict.reason === 'too-long' ? 'too-long' : 'unicode');
+  if (!input.verdict.allowed && input.verdict.reason === 'too-long') found.add('too-long');
+  if (hiddenTextProblem(input.text, true) || (!input.verdict.allowed && input.verdict.reason !== 'too-long')) found.add('unicode');
   const lower = input.text.toLowerCase();
   if (LINK.test(input.text)) found.add('link');
   if (INSTRUCTION_PHRASES.some((phrase) => lower.includes(phrase))) found.add('instruction');
@@ -116,14 +120,44 @@ export function flagsFor(input: { text: string; verdict: TextVerdict; overRate: 
  * extend its own window. Receipts are kept while they are inside the window relative to the current reading, including
  * receipts later than it, so a clock that steps back does not reopen the cap.
  */
-function admit(ps: PeerState, at: number, cap: number): { admitted: boolean; remaining: number } {
-  const recent = ps.receipts.filter((t) => t > at - RATE_WINDOW_MS);
-  if (recent.length >= cap) {
-    ps.receipts = recent.slice(-cap);
-    return { admitted: false, remaining: 0 };
+function admit(receipts: number[], at: number, cap: number): { admitted: boolean; remaining: number; receipts: number[] } {
+  const recent = receipts.filter((t) => t > at - RATE_WINDOW_MS);
+  if (recent.length >= cap) return { admitted: false, remaining: 0, receipts: recent.slice(-cap) };
+  return { admitted: true, remaining: cap - recent.length - 1, receipts: [...recent, at].slice(-cap) };
+}
+
+/**
+ * Stored receipts merged with the receive times of this peer's queued records inside the window. The queued records are
+ * the durable truth, so an admission whose state write was lost after publication still counts against the cap.
+ */
+function reconcileReceipts(input: CycleInput, peer: string, receipts: number[], cap: number): number[] {
+  const now = input.now();
+  const dir = path.join(input.queueRoot, peer);
+  let names: string[];
+  try {
+    names = fs.readdirSync(dir);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return receipts;
+    throw error;
   }
-  ps.receipts = [...recent, at].slice(-cap);
-  return { admitted: true, remaining: cap - recent.length - 1 };
+  const seen = new Set(receipts);
+  const merged = [...receipts];
+  for (const name of names) {
+    if (!name.endsWith('.json') || name.startsWith('rate-')) continue;
+    let record: unknown;
+    try {
+      record = JSON.parse(fs.readFileSync(path.join(dir, name), 'utf8'));
+    } catch {
+      continue;
+    }
+    if (!isRecord(record) || typeof record.receivedAt !== 'string') continue;
+    const at = Date.parse(record.receivedAt);
+    if (Number.isFinite(at) && at > now - RATE_WINDOW_MS && !seen.has(at)) {
+      seen.add(at);
+      merged.push(at);
+    }
+  }
+  return merged.sort((a, b) => a - b).slice(-cap);
 }
 
 function persist(input: { stateDir: string; state: IntakeState }): void {
@@ -174,7 +208,7 @@ function mirrorMessages(handle: string, keys: string[], log: WatchLog): { key: s
 function writeRateRecord(input: CycleInput, peer: string, senderName: string, tier: string, at: number): boolean {
   const msgId = `rate-${Math.floor(at / RATE_WINDOW_MS)}`;
   const dir = path.join(input.queueRoot, peer);
-  ensureRealDir(dir, 0o750);
+  ensureRealDir(dir, 0o2750);
   const record: IntakeRecord = {
     v: 1,
     msgId,
@@ -190,6 +224,7 @@ function writeRateRecord(input: CycleInput, peer: string, senderName: string, ti
       flags: ['rate'],
     },
   };
+  if (presentIn(input, peer, `${msgId}.json`)) return false;
   const created = writeNew(dir, `${msgId}.json`, `${JSON.stringify(record)}\n`, 0o640);
   if (created) input.log('peer-over-rate', { peer, msgId });
   return created;
@@ -197,8 +232,9 @@ function writeRateRecord(input: CycleInput, peer: string, senderName: string, ti
 
 async function intakePeer(input: CycleInput, peer: StoredPeer): Promise<number> {
   const policy = policyOf(input.peers, peer.handle);
-  const ps = input.state.peers[peer.handle] ?? { receipts: [] };
+  const ps = Object.hasOwn(input.state.peers, peer.handle) ? input.state.peers[peer.handle]! : { receipts: [] };
   input.state.peers[peer.handle] = ps;
+  ps.receipts = reconcileReceipts(input, peer.handle, ps.receipts, policy.ratePerHour);
   const senderName = typeof peer.label === 'string' && textVerdict(peer.label, 'summary').allowed ? peer.label : peer.handle;
 
   const keys = await listAll(input.kv, `${k.mirrorPrefix}${peer.handle}/threads/`);
@@ -235,8 +271,7 @@ async function intakePeer(input: CycleInput, peer: StoredPeer): Promise<number> 
       continue;
     }
 
-    const { admitted, remaining } = admit(ps, at, policy.ratePerHour);
-    persist(input);
+    const { admitted, remaining, receipts } = admit(ps.receipts, at, policy.ratePerHour);
     const parts = Array.isArray(got.value.parts) ? got.value.parts : [];
     const texts: string[] = [];
     for (const part of parts) if (isRecord(part) && typeof part.text === 'string') texts.push(part.text);
@@ -258,8 +293,10 @@ async function intakePeer(input: CycleInput, peer: StoredPeer): Promise<number> 
 
     if (admitted) {
       const dir = path.join(input.queueRoot, peer.handle);
-      ensureRealDir(dir, 0o750);
+      ensureRealDir(dir, 0o2750);
       if (writeNew(dir, `${c.msgId}.json`, body, 0o640)) {
+        ps.receipts = receipts;
+        persist(input);
         written++;
         input.log('intake-queued', { peer: peer.handle, msgId: c.msgId, tier: policy.tier, flags });
       }
@@ -267,6 +304,8 @@ async function intakePeer(input: CycleInput, peer: StoredPeer): Promise<number> 
       const dir = path.join(input.overflowRoot, peer.handle);
       ensureRealDir(dir, 0o700);
       writeNew(dir, `${c.msgId}.json`, body, 0o600);
+      ps.receipts = receipts;
+      persist(input);
       if (writeRateRecord(input, peer.handle, senderName, policy.tier, at)) written++;
     }
   }
@@ -321,6 +360,22 @@ function runJanitor(input: CycleInput): void {
       if (!isRecord(entry)) continue;
       const stamp = typeof entry.receivedAt === 'string' ? entry.receivedAt : entry.markedAt;
       if (typeof stamp !== 'string' || !(Date.parse(stamp) < now - DONE_TTL_MS)) continue;
+      fs.unlinkSync(file);
+    }
+  }
+  for (const peer of peerDirs(input.overflowRoot)) {
+    const dir = path.join(input.overflowRoot, peer);
+    for (const name of fs.readdirSync(dir)) {
+      if (!name.endsWith('.json')) continue;
+      const file = path.join(dir, name);
+      let entry: unknown;
+      try {
+        entry = JSON.parse(fs.readFileSync(file, 'utf8'));
+      } catch {
+        continue;
+      }
+      if (!isRecord(entry) || typeof entry.receivedAt !== 'string') continue;
+      if (Date.parse(entry.receivedAt) > now - OVERFLOW_TTL_MS) continue;
       fs.unlinkSync(file);
     }
   }
@@ -413,13 +468,17 @@ export async function cmdIntake(args: ParsedArgs): Promise<void> {
       return;
     }
     const state = readState(path.join(stateDir, STATE_FILE));
-    loadPeers(peersFile, log);
+    let peers = loadPeers(peersFile);
     log('intake-start', { once, intervalSeconds: intervalMs / 1000 });
     for (;;) {
       try {
         const profile = loadProfile();
         const node = await courierNode(profile);
-        const peers = loadPeers(peersFile, log);
+        try {
+          peers = loadPeers(peersFile);
+        } catch (error) {
+          log('intake-error', { code: errInfo(error).code ?? 'bad-peers' });
+        }
         const queued = await intakeCycle({
           kv: node.kv,
           profile,

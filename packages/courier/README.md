@@ -647,8 +647,10 @@ peers absent from `peers.json`. Over the cap, a message is still queued with
 
 `peers.json` must not be group- or world-writable and maps a peer id to
 `{"tier": "trusted"|"strict", "ratePerHour": n, "outPerHour": n}`. `tier` defaults to
-`strict` for absent peers. `ratePerHour` and `outPerHour` are integers from 1 up to
-the default of 100; a value above 100 makes the entry invalid, so that peer reads as strict with the defaults.
+`strict` for absent peers. `ratePerHour` and `outPerHour` are integers from 1 up to the
+default of 100. A value outside that range, or any other invalid entry, makes the whole
+file invalid: startup refuses to run, and a running cycle keeps its last good map and
+logs `intake-error`.
 
 ## Authority
 

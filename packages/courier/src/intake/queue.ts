@@ -4,14 +4,35 @@ import { randomBytes } from 'node:crypto';
 import { CourierError } from '../errors.js';
 import { isRecord } from '../a2a.js';
 
-/** Creates a directory and refuses anything that is not a real directory (a symlink in its place is refused). */
+/**
+ * Creates a directory and refuses anything that is not a real directory (a symlink in its place is refused). `mode`
+ * applies only to a directory this call creates; an existing directory keeps its mode, so a provisioned root (for
+ * example setgid 2750) is never rewritten.
+ */
 export function ensureRealDir(dir: string, mode: number): void {
+  let existed = true;
+  try {
+    fs.lstatSync(dir);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    existed = false;
+  }
   fs.mkdirSync(dir, { recursive: true, mode });
   const stat = fs.lstatSync(dir);
   if (stat.isSymbolicLink() || !stat.isDirectory()) {
     throw new CourierError('unsafe-dir', 'queue or state path is not a real directory');
   }
-  if (stat.uid === process.getuid?.() && (stat.mode & 0o7777) !== mode) fs.chmodSync(dir, mode);
+  if (!existed && stat.uid === process.getuid?.() && (stat.mode & 0o7777) !== mode) fs.chmodSync(dir, mode);
+}
+
+/** Makes a link or rename in `dir` durable: the directory entry is fsynced, not only the file contents. */
+function fsyncDir(dir: string): void {
+  const fd = fs.openSync(dir, 'r');
+  try {
+    fs.fsyncSync(fd);
+  } finally {
+    fs.closeSync(fd);
+  }
 }
 
 /** Writes the full body to a same-directory temp file with the given mode, fsynced, and returns its path. */
@@ -39,6 +60,7 @@ export function writeNew(dir: string, name: string, body: string, mode: number):
   const temp = writeTemp(dir, name, body, mode);
   try {
     fs.linkSync(temp, path.join(dir, name));
+    fsyncDir(dir);
     return true;
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'EEXIST') return false;
@@ -59,6 +81,7 @@ export function writeReplace(dir: string, name: string, body: string, mode: numb
   const temp = writeTemp(dir, name, body, mode);
   try {
     fs.renameSync(temp, target);
+    fsyncDir(dir);
   } catch (error) {
     fs.rmSync(temp, { force: true });
     throw error;
@@ -93,12 +116,38 @@ export function acquireLock(file: string): () => void {
       };
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
-      const pid = readPid(file);
-      if (pid !== undefined && pidAlive(pid)) throw new CourierError('locked', 'another courier intake is running');
-      fs.rmSync(file, { force: true });
+      const stale = readPid(file);
+      if (stale !== undefined && pidAlive(stale)) throw new CourierError('locked', 'another courier intake is running');
+      if (!takeOver(file, stale)) throw new CourierError('locked', 'another courier intake is running');
     }
   }
   throw new CourierError('locked', 'could not take the intake lock');
+}
+
+/**
+ * Removes a dead holder's lock without ever unlinking a live one. The lock is renamed to a private tombstone first, so
+ * only the tombstone is unlinked, and only when it still holds the dead pid. A different pid means another contender
+ * replaced the stale lock first: the tombstone is linked back and the takeover is refused.
+ */
+function takeOver(file: string, stale: number | undefined): boolean {
+  const tomb = `${file}.${process.pid}.${randomBytes(6).toString('hex')}.tomb`;
+  try {
+    fs.renameSync(file, tomb);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return true;
+    throw error;
+  }
+  if (readPid(tomb) === stale) {
+    fs.rmSync(tomb, { force: true });
+    return true;
+  }
+  try {
+    fs.linkSync(tomb, file);
+    fs.rmSync(tomb, { force: true });
+  } catch {
+    // Another lock already occupies the path; the tombstone stays as evidence of the replaced holder.
+  }
+  return false;
 }
 
 /** Per-peer intake progress. `receipts` holds the last few local receive times for the inbound rate cap. Older builds also wrote `highWater`; the key is ignored. */
@@ -112,7 +161,7 @@ export interface IntakeState {
 }
 
 export function emptyState(): IntakeState {
-  return { v: 1, peers: {} };
+  return { v: 1, peers: Object.create(null) as Record<string, PeerState> };
 }
 
 /** Reads the intake state. A missing file is an empty state; a corrupt one refuses to start, so nothing is re-queued. */
@@ -136,7 +185,9 @@ export function readState(file: string): IntakeState {
       throw new CourierError('bad-state', 'intake state has an unknown shape');
     }
   }
-  return parsed as unknown as IntakeState;
+  const peers: Record<string, PeerState> = Object.create(null);
+  for (const [peerId, entry] of Object.entries(parsed.peers)) peers[peerId] = entry as PeerState;
+  return { v: 1, peers };
 }
 
 export function writeState(dir: string, file: string, state: IntakeState): void {
