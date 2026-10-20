@@ -48,6 +48,11 @@ export const k = {
   approval: (id: string) => `${PREFIX}/me/approvals/${id}.json`,
   mirrorMsg: (peer: string, threadId: string, messageId: string) =>
     `${PREFIX}/me/mirror/${peer}/threads/${threadId}/msg/${messageId}.json`,
+  mirrorMeta: (peer: string, threadId: string) =>
+    `${PREFIX}/me/mirror/${peer}/threads/${threadId}/meta.json`,
+  mirrorTask: (peer: string, threadId: string, taskId: string) =>
+    `${PREFIX}/me/mirror/${peer}/threads/${threadId}/task/${taskId}.json`,
+  watchState: `${PREFIX}/me/state/watch.json`,
   peersPrefix: `${PREFIX}/me/peers/`,
   mirrorPrefix: `${PREFIX}/me/mirror/`,
   approvalsPrefix: `${PREFIX}/me/approvals/`,

@@ -86,6 +86,36 @@ Precedence for the node host and OpenKey host is flag > stored > env > default.
 For the OpenKey API host it is flag > env > derived. `TC_HOME`, `TC_PROFILE`,
 `TC_OPENKEY_HOST` and `TC_OPENKEY_API_HOST` are ignored.
 
+## Watcher
+
+`courier watch` runs once per person per machine and never calls a model.
+
+- **Subscribe.** One write-hook subscription per paired peer on that peer's
+  `to/<me>/`, and one on your own `me/approvals/`, each on 25 s tickets
+  (`--ticket`). Hooks are a wake-up signal only; on production they arrive up
+  to one ticket late (TC-720) and have no replay.
+- **Catch up.** Every `--poll` seconds (default 60, not 5 minutes) and at
+  start, it lists each peer's `threads/` prefix in full and diffs it against
+  `to/<peer>/receipts.json`. A subscription that is refused (for example an
+  expired delegation) backs off and the poll keeps delivering.
+- **Deliver.** Each new message is copied create-only into
+  `me/mirror/<peer>/threads/<id>/msg/`, the peer's `meta.json` and tasks are
+  copied next to it (`task/` is overwritten until the task is terminal), and
+  the receipts file is updated. The view reads only this mirror.
+- **Wake.** After `--debounce` seconds (default 30, never later than twice that
+  after the first message) the thread gets one wake carrying all its new
+  messages. `inform` messages never wake. Pending wakes live in
+  `me/state/watch.json`, so a restart does not lose or repeat them.
+
+Every step logs one JSON object per line on stdout (`start`, `hook-event`,
+`delivered` with `via` and `latencyMs`, `woke`, errors). `--wake none` (the
+only adapter so far) wakes nobody; the `woke` line still records when a wake would fire. `--once` does a single catch-up pass,
+wakes immediately and exits. Run one watcher per profile: a second one fails
+with `state-conflict` on its first state write. Wakes are at-least-once: a
+crash between a wake and the state write wakes that thread again on restart.
+When a subscription is re-opened the watcher also runs a catch-up sync; the
+SDK's own ticket renewals are invisible to it, and the poll covers those gaps.
+
 ## Authority
 
 Courier accepts only an OpenKey grant whose signed authority exactly equals
@@ -109,7 +139,7 @@ Messages and tasks are A2A v1.0 JSON with the
 Inbound text and JSON `notice`/`authority` fields identify peer content as
 counterparty data, never as an owner's instruction. Message roles are assigned
 from thread/task ownership. The `courier` skill documents the authority rules
-and handoff shape. The watcher is TC-710; the view is TC-711.
+and handoff shape. The view is TC-711.
 
 ## References
 

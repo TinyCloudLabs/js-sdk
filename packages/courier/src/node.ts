@@ -1,5 +1,5 @@
-import { TinyCloudNode, activateValidatedRuntimeDelegation, deserializeDelegation } from '@tinycloud/node-sdk';
-import type { PortableDelegation } from '@tinycloud/node-sdk';
+import { TinyCloudNode, DelegatedAccess, NodeWasmBindings, activateValidatedRuntimeDelegation, deserializeDelegation } from '@tinycloud/node-sdk';
+import type { IHooksService, PortableDelegation, TinyCloudSession } from '@tinycloud/node-sdk';
 import { cmd } from './program.js';
 import { CourierError } from './errors.js';
 import { COURIER_SPACE } from './keys.js';
@@ -92,3 +92,30 @@ export async function peerKv(node: TinyCloudNode, profile: Profile, peer: Stored
   return node.kvForSpace(peer.spaceId);
 }
 
+
+let wasm: NodeWasmBindings | undefined;
+
+/**
+ * Hook subscriptions on a peer's mailbox. The courier node cannot `useDelegation` (its holder is the owner's
+ * did:pkh), and a hook ticket minted from the node's own session is refused for a peer's space (401), so the
+ * stream runs on a `DelegatedAccess` whose session is the peer delegation, signed by the courier key (spec §8).
+ */
+export async function peerHooks(node: TinyCloudNode, profile: Profile, peer: StoredPeer): Promise<IHooksService> {
+  await peerKv(node, profile, peer); // validates the delegation against the pairing record
+  const delegation = deserializeDelegation(peer.inbound!.delegation);
+  const key = loadKey();
+  wasm ??= new NodeWasmBindings();
+  const session: TinyCloudSession = {
+    address: delegation.ownerAddress,
+    chainId: delegation.chainId,
+    sessionKey: JSON.stringify(key.jwk),
+    spaceId: delegation.spaceId,
+    delegationCid: delegation.cid,
+    delegationHeader: delegation.delegationHeader,
+    verificationMethod: node.sessionDid,
+    jwk: key.jwk as never,
+    siwe: '',
+    signature: '',
+  };
+  return new DelegatedAccess(session, delegation, profile.host, wasm.invoke, wasm.invokeAny).hooks;
+}
