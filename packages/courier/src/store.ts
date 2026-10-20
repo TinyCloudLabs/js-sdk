@@ -110,3 +110,9 @@ export async function del(kv: KV, key: string): Promise<void> {
   const r = (await kv.delete(key, FULL)) as ResultLike<unknown>;
   unwrap(r, `del ${key}`);
 }
+
+/** Unconditional put, for single-writer copies such as `me/mirror/` tasks. */
+export async function putOverwrite(kv: KV, key: string, value: unknown): Promise<void> {
+  const r = (await kv.put(key, value, FULL)) as ResultLike<KVResponse<void>>;
+  unwrap(r, `put ${key}`);
+}
