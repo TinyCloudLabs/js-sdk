@@ -1,12 +1,12 @@
 import { defer } from './defer.js';
-import { decodeTime } from 'ulid';
+import { decodeTime, ulid } from 'ulid';
 import type { HookSubscription } from '@tinycloud/node-sdk';
 import { errInfo, CourierError } from './errors.js';
 import { k, PREFIX } from './keys.js';
 import type { StoredPeer } from './profile.js';
-import { isRecord, messageView, taskView } from './a2a.js';
+import { isRecord, messageView, oneLine, taskView } from './a2a.js';
 import { commitReceipts, selectUndelivered, type KV, type Receipts } from './inbox.js';
-import { getJson, listAll, putCreate, putMatch, putOverwrite } from './store.js';
+import { del, getJson, listAll, putCreate, putMatch, putOverwrite } from './store.js';
 import type { WakeMessage, Waker, WatchLog } from './wake.js';
 
 /** Spec §8. inform and receipts never wake; a message with no valid intent is delivered but never wakes. */
@@ -16,6 +16,17 @@ const TERMINAL_TASK_STATES = new Set([
 ]);
 const WAKEN_MEMORY = 500;
 const WAKE_RETRY_MS = 60_000;
+/** Delay between starting a re-opened subscription and its catch-up list, so the stream is live first. */
+const RECONNECT_CATCH_UP_MS = 2000;
+/** Adapter runs are capped at 30 min in total (`--wake-timeout`, one deadline across all its calls). This profile's own claim is respected 35 min unless its holder is provably gone; another profile's or machine's, 45. */
+const OWN_CLAIM_LEASE_MS = 35 * 60_000;
+/** Another profile or machine: the same plus a margin for clock skew (`at` is the claimer's own clock). */
+const FOREIGN_CLAIM_LEASE_MS = 45 * 60_000;
+/** A thread another watcher is waking is looked at again after this. */
+const CLAIM_SKIP_MS = 30_000;
+const DAY_MS = 24 * 3600 * 1000;
+/** The subject is peer-controlled text that reaches state, prompts and environments: one line, control characters removed, capped. */
+const MAX_SUBJECT = 200;
 /** Thread and message ids come from key names the peer controls; they reach prompts and argv, so only ULID-like ids pass. */
 const SAFE_ID = /^[0-9A-Za-z_-]{1,64}$/;
 
@@ -69,6 +80,11 @@ export interface WatchDeps {
   kvFor(peer: StoredPeer): Promise<KV>;
   wake: Waker;
   log: WatchLog;
+  /**
+   * Who this watcher is, for wake claims. `profileId` is stable for this profile on this machine (a restart keeps it,
+   * a second profile or machine differs); `pid` and `isAlive` tell a restarted watcher its predecessor is dead.
+   */
+  holder?: { profileId: string; pid?: number; isAlive?(pid: number): boolean };
   now?(): number;
 }
 
@@ -91,6 +107,16 @@ export function sentAtOf(messageId: string): string {
   }
 }
 
+/** Signal 0 only probes: ESRCH = gone, EPERM = alive but not ours. */
+function pidAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === 'EPERM';
+  }
+}
+
 function sleep(ms: number, signal: AbortSignal): Promise<void> {
   const { promise, resolve } = defer<void>();
   if (signal.aborted) return Promise.resolve();
@@ -108,6 +134,15 @@ export class Watcher {
   private state: WatchState = emptyWatchState();
   private readonly retryAt = new Map<string, number>();
   private readonly waking = new Set<string>();
+  /** Unique to this run: a claim with this id is this process's own. */
+  private readonly runId = ulid();
+  private readonly profileId: string;
+  private readonly pid: number;
+  private readonly isAlive: (pid: number) => boolean;
+  private lastClaimPrune = 0;
+  /** Set when another watcher is writing this profile's state: this one stops and `run` throws it. */
+  private fatalError: CourierError | undefined;
+  private onFatal: (() => void) | undefined;
   /** Etag of me/state/watch.json as this watcher last saw it: null = absent, undefined = unknown (fetch before writing). */
   private stateEtag: string | null | undefined;
   private readonly taskCache = new Map<string, { etag: string | null; terminal: boolean }>();
@@ -118,6 +153,9 @@ export class Watcher {
 
   constructor(private readonly deps: WatchDeps, private readonly opts: WatchOptions = WATCH_DEFAULTS) {
     this.now = deps.now ?? Date.now;
+    this.profileId = deps.holder?.profileId ?? this.runId;
+    this.pid = deps.holder?.pid ?? process.pid;
+    this.isAlive = deps.holder?.isAlive ?? pidAlive;
   }
 
   // ---------- state ----------
@@ -152,8 +190,7 @@ export class Watcher {
         this.stateEtag = written ?? undefined;
       } catch (error) {
         if (error instanceof CourierError && error.code === 'conflict') {
-          this.stateEtag = undefined;
-          throw new CourierError('state-conflict', 'me/state/watch.json changed under this watcher; is a second `watch` running for this profile?');
+          throw this.stateConflict('me/state/watch.json was changed by another process; a second `watch` is running for this profile. This watcher is stopping.');
         }
         throw error;
       }
@@ -161,6 +198,92 @@ export class Watcher {
     });
     this.stateQueue = run.catch(() => undefined);
     return run;
+  }
+
+  /** Another watcher owns this profile's state. Carrying on would double-wake and overwrite its pending wakes: stop. */
+  private stateConflict(message: string): CourierError {
+    const conflict = new CourierError('state-conflict', message);
+    this.fatalError ??= conflict;
+    this.onFatal?.();
+    return conflict;
+  }
+
+  /**
+   * One create-only marker per wake (keyed by the first message or approval it carries), so a second watcher that
+   * runs while this one's wake is in flight cannot wake the same thing. The marker names its holder
+   * (`profile`, `run`, `pid`):
+   *   - this run's own marker: reuse it;
+   *   - same profile and machine, holder pid gone or equal to ours (restart, crash, reboot, pid 1 in a container): take it over at once;
+   *   - same profile and machine, holder pid alive and different: another watcher is running now: skip the thread (the
+   *     state etag stops the loser when it writes state), unless the claim outlived the own lease (pid reuse);
+   *   - another profile or machine: skip until the lease (plus clock-skew margin) runs out, then take it over.
+   * Returns false when the thread must be skipped this tick. Markers are deleted when the adapter fails.
+   */
+  private async claimWake(peer: string, threadId: string, firstId: string): Promise<boolean> {
+    const { selfKv, log } = this.deps;
+    const key = k.wakeClaim(peer, threadId, firstId);
+    const claim = { v: 1, profile: this.profileId, run: this.runId, pid: this.pid, at: new Date(this.now()).toISOString() };
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        await putCreate(selfKv, key, claim);
+        return true;
+      } catch (error) {
+        if (!(error instanceof CourierError && error.code === 'conflict')) throw error;
+      }
+      const existing = await getJson<{ profile?: unknown; run?: unknown; pid?: unknown; at?: unknown }>(selfKv, key);
+      if (!existing) continue; // released between our two calls
+      const held = existing.value;
+      let takeOver: string | undefined;
+      if (held.run === this.runId) return true;
+      const age = typeof held.at === 'string' ? this.now() - Date.parse(held.at) : Infinity;
+      if (held.profile === this.profileId) {
+        // Same profile, same machine, so the same clock. A pid proves liveness only while it is not reused: a live pid
+        // that is not a watcher (pid reuse, another user's process), or this very pid number (pid 1 in a container
+        // after a restart), would otherwise stall the thread, so the own-profile lease is the backstop.
+        if (typeof held.pid !== 'number') takeOver = 'no-pid';
+        else if (held.pid === this.pid) takeOver = 'same-pid';
+        else if (!this.isAlive(held.pid)) takeOver = 'holder-dead';
+        else if (!(age < OWN_CLAIM_LEASE_MS)) takeOver = 'own-lease-expired';
+      } else if (!(age < FOREIGN_CLAIM_LEASE_MS)) {
+        takeOver = 'lease-expired';
+      }
+      if (takeOver && existing.etag) {
+        try {
+          await putMatch(selfKv, key, claim, existing.etag);
+          log('claim-taken-over', { peer, threadId, reason: takeOver });
+          return true;
+        } catch (error) {
+          if (!(error instanceof CourierError && error.code === 'conflict')) throw error;
+        }
+      }
+      break;
+    }
+    log('claimed-elsewhere', { peer, threadId, messageId: firstId });
+    return false;
+  }
+
+  /** Drops this run's own claim (best effort): a failed wake must not keep the thread from being woken. */
+  private async releaseClaim(peer: string, threadId: string, firstId: string): Promise<void> {
+    const key = k.wakeClaim(peer, threadId, firstId);
+    try {
+      const existing = await getJson<{ run?: unknown }>(this.deps.selfKv, key);
+      if (existing?.value.run === this.runId) await del(this.deps.selfKv, key);
+    } catch (error) {
+      this.deps.log('sync-error', { source: 'claim-release', ...errInfo(error) });
+    }
+  }
+
+  /** Claim markers are only needed while a double wake is possible; drop those older than two days. */
+  private async pruneClaims(): Promise<void> {
+    try {
+      for (const key of await listAll(this.deps.selfKv, k.wakeClaimsPrefix)) {
+        const id = /\/([^/]+)\.json$/.exec(key)?.[1];
+        const sentAt = id ? Date.parse(sentAtOf(id)) : NaN;
+        if (Number.isFinite(sentAt) && this.now() - sentAt > 2 * DAY_MS) await del(this.deps.selfKv, key);
+      }
+    } catch (error) {
+      this.deps.log('sync-error', { source: 'claims', ...errInfo(error) });
+    }
   }
 
   // ---------- catch-up and delivery ----------
@@ -223,7 +346,7 @@ export class Watcher {
     const subjects = new Map<string, string>();
     for (const threadId of new Set(delivered.map((d) => d.threadId))) {
       const meta = await getJson<unknown>(peerKv, `${PREFIX}/to/${mailbox}/threads/${threadId}/meta.json`).catch(() => undefined);
-      subjects.set(threadId, isRecord(meta?.value) && typeof meta.value.subject === 'string' ? meta.value.subject : '(no subject)');
+      subjects.set(threadId, isRecord(meta?.value) && typeof meta.value.subject === 'string' ? oneLine(meta.value.subject, MAX_SUBJECT) : '(no subject)');
     }
     const at = this.now();
     for (const item of delivered) {
@@ -275,6 +398,7 @@ export class Watcher {
   private async mirrorThreadItem(peer: StoredPeer, peerKv: KV, key: string): Promise<void> {
     const meta = /\/threads\/([^/]+)\/meta\.json$/.exec(key);
     if (meta) {
+      if (!SAFE_ID.test(meta[1])) return;
       if (this.metaMirrored.has(key)) return;
       const got = await getJson<unknown>(peerKv, key);
       if (!got) return;
@@ -283,7 +407,7 @@ export class Watcher {
       return;
     }
     const task = /\/threads\/([^/]+)\/task\/([^/]+)\.json$/.exec(key);
-    if (!task) return;
+    if (!task || !SAFE_ID.test(task[1]) || !SAFE_ID.test(task[2])) return;
     const cached = this.taskCache.get(key);
     if (cached?.terminal) return;
     const got = await getJson<unknown>(peerKv, key);
@@ -317,6 +441,7 @@ export class Watcher {
 
   /** Wake every thread whose debounce has elapsed (`force`: all of them now). Threads wake in parallel, one wake per thread at a time. */
   async tick(force = false): Promise<void> {
+    if (this.fatalError) return;
     const at = this.now();
     const runs: Promise<void>[] = [];
     for (const [key, pending] of Object.entries(this.state.pending)) {
@@ -333,15 +458,37 @@ export class Watcher {
     // Messages that land while the wake runs stay pending for the next one, so wake exactly this snapshot.
     const messages = [...pending.messages];
     const woken = messages.map((m) => m.messageId);
+    const oldestSentAt = messages[0]?.sentAt ?? '';
+    // The per-wake claim goes first: a watcher that loses it skips the thread without having written the state, which
+    // would otherwise make the watcher that legitimately owns the wake fail its next conditional write. Then the
+    // state write: a stale second watcher fails that conditional write and stops before it can wake.
+    const claimId = woken[0];
+    if (!(await this.claimWake(pending.peer, pending.threadId, claimId))) {
+      this.retryAt.set(key, at + CLAIM_SKIP_MS);
+      return;
+    }
+    try {
+      await this.mutate(() => {});
+    } catch (error) {
+      await this.releaseClaim(pending.peer, pending.threadId, claimId);
+      throw error;
+    }
+    const startedAt = this.now();
+    // `waking` is when the adapter is invoked: the send-to-wake latency. `woke` follows when the adapter returns.
+    this.deps.log('waking', {
+      peer: pending.peer, threadId: pending.threadId, messageIds: woken,
+      oldestSentAt: oldestSentAt || null,
+      wakeLatencyMs: oldestSentAt ? startedAt - Date.parse(oldestSentAt) : null,
+    });
     try {
       await this.deps.wake({ peer: pending.peer, threadId: pending.threadId, subject: pending.subject, messages });
     } catch (error) {
       this.retryAt.set(key, at + WAKE_RETRY_MS);
       this.deps.log('wake-error', { peer: pending.peer, threadId: pending.threadId, ...errInfo(error) });
+      // The attempt failed, so the thread is not being woken: release the claim (a restart must not wait for it).
+      await this.releaseClaim(pending.peer, pending.threadId, claimId);
       return;
     }
-    this.retryAt.delete(key);
-    const oldestSentAt = messages[0]?.sentAt ?? '';
     await this.mutate(() => {
       const current = this.state.pending[key];
       if (current) {
@@ -350,10 +497,11 @@ export class Watcher {
       }
       this.state.woken = [...this.state.woken, ...woken].slice(-WAKEN_MEMORY);
     });
+    // Only now, with the wake recorded, is the retry hold-off cleared.
+    this.retryAt.delete(key);
     this.deps.log('woke', {
       peer: pending.peer, threadId: pending.threadId, messageIds: woken,
-      oldestSentAt: oldestSentAt || null,
-      wakeLatencyMs: oldestSentAt ? this.now() - Date.parse(oldestSentAt) : null,
+      runMs: this.now() - startedAt,
     });
   }
 
@@ -364,62 +512,82 @@ export class Watcher {
     await this.syncApprovals(via);
   }
 
-  /** Runs until `signal` aborts. With `once`, does one catch-up and wakes everything immediately. */
-  async run(signal: AbortSignal, options: { once?: boolean } = {}): Promise<void> {
+  /**
+   * Runs until `signal` aborts. With `once`, does one catch-up and wakes everything immediately. Throws
+   * `state-conflict` (after stopping everything) if another watcher is writing this profile's state.
+   */
+  async run(external: AbortSignal, options: { once?: boolean } = {}): Promise<void> {
     const { log } = this.deps;
-    await this.loadState();
-    log('start', { debounceMs: this.opts.debounceMs, pollMs: this.opts.pollMs, ticketSeconds: this.opts.ticketSeconds, once: Boolean(options.once) });
-    await this.pollOnce('startup');
-    if (options.once) {
-      await this.tick(true);
-      return;
-    }
-
+    const stop = new AbortController();
+    const signal = stop.signal;
+    const onExternalAbort = () => stop.abort();
+    external.addEventListener('abort', onExternalAbort, { once: true });
+    if (external.aborted) stop.abort();
+    this.onFatal = () => stop.abort();
     const supervisors = new Map<string, AbortController>();
-    const reconcile = () => {
-      const desired = new Map<string, { sub: HookSubscription; hooks: () => Promise<HooksLike>; onEvent: (event?: HookEventLike) => void }>();
-      for (const peer of this.deps.loadPeers()) {
-        if (peer.status !== 'paired' || !peer.inbound || !peer.theirHandleForMe) continue;
-        // The id carries the delegation CID: a renewed delegation restarts the subscription.
-        desired.set(`peer:${peer.handle}:${peer.inbound.cid}`, {
-          sub: { space: peer.spaceId, service: 'kv', pathPrefix: `${PREFIX}/to/${peer.theirHandleForMe}` },
-          hooks: () => this.deps.peerHooks(peer),
-          onEvent: () => void this.sync(peer, 'hook'),
-        });
-      }
-      desired.set('approvals', {
-        sub: { space: this.deps.spaceId, service: 'kv', pathPrefix: k.approvalsPrefix },
-        hooks: async () => this.deps.selfHooks,
-        onEvent: () => void this.syncApprovals('hook'),
-      });
-      for (const [id, controller] of supervisors) {
-        if (!desired.has(id)) {
-          controller.abort();
-          supervisors.delete(id);
-        }
-      }
-      for (const [id, source] of desired) {
-        if (supervisors.has(id)) continue;
-        const controller = new AbortController();
-        supervisors.set(id, controller);
-        void this.supervise(id, source.sub, source.hooks, source.onEvent, controller.signal);
-      }
-    };
-    reconcile();
-
-    const ticker = setInterval(() => void this.tick().catch((e) => log('wake-error', errInfo(e))), 1000);
+    let ticker: NodeJS.Timeout | undefined;
     try {
-      while (!signal.aborted) {
-        await sleep(this.opts.pollMs, signal);
-        if (signal.aborted) break;
+      await this.loadState();
+      log('start', { debounceMs: this.opts.debounceMs, pollMs: this.opts.pollMs, ticketSeconds: this.opts.ticketSeconds, once: Boolean(options.once) });
+      await this.pruneClaims();
+      this.lastClaimPrune = this.now();
+      const reconcile = () => {
+        const desired = new Map<string, { sub: HookSubscription; hooks: () => Promise<HooksLike>; onEvent: (event?: HookEventLike) => void }>();
+        for (const peer of this.deps.loadPeers()) {
+          if (peer.status !== 'paired' || !peer.inbound || !peer.theirHandleForMe) continue;
+          // The id carries the delegation CID: a renewed delegation restarts the subscription.
+          desired.set(`peer:${peer.handle}:${peer.inbound.cid}`, {
+            sub: { space: peer.spaceId, service: 'kv', pathPrefix: `${PREFIX}/to/${peer.theirHandleForMe}` },
+            hooks: () => this.deps.peerHooks(peer),
+            onEvent: () => void this.sync(peer, 'hook'),
+          });
+        }
+        desired.set('approvals', {
+          sub: { space: this.deps.spaceId, service: 'kv', pathPrefix: k.approvalsPrefix },
+          hooks: async () => this.deps.selfHooks,
+          onEvent: () => void this.syncApprovals('hook'),
+        });
+        for (const [id, controller] of supervisors) {
+          if (!desired.has(id)) {
+            controller.abort();
+            supervisors.delete(id);
+          }
+        }
+        for (const [id, source] of desired) {
+          if (supervisors.has(id)) continue;
+          const controller = new AbortController();
+          supervisors.set(id, controller);
+          void this.supervise(id, source.sub, source.hooks, source.onEvent, controller.signal);
+        }
+      };
+      if (options.once) {
+        await this.pollOnce('startup');
+        await this.tick(true);
+      } else {
+        // Open the subscriptions first, then catch up: a write between the two is seen by one or the other.
         reconcile();
-        await this.pollOnce('poll');
+        await sleep(RECONNECT_CATCH_UP_MS, signal);
+        if (!signal.aborted) await this.pollOnce('startup');
+        ticker = setInterval(() => void this.tick().catch((e) => log('wake-error', errInfo(e))), 1000);
+        while (!signal.aborted) {
+          await sleep(this.opts.pollMs, signal);
+          if (signal.aborted) break;
+          reconcile();
+          await this.pollOnce('poll');
+          if (this.now() - this.lastClaimPrune > 3600_000) {
+            this.lastClaimPrune = this.now();
+            await this.pruneClaims();
+          }
+        }
       }
     } finally {
       clearInterval(ticker);
       for (const controller of supervisors.values()) controller.abort();
+      external.removeEventListener('abort', onExternalAbort);
+      this.onFatal = undefined;
       log('stop');
     }
+    if (this.fatalError) throw this.fatalError;
   }
 
   /** One hook subscription. A refused ticket (revoked or expired delegation) backs off; the poll covers meanwhile. */
@@ -435,9 +603,10 @@ export class Watcher {
     while (!signal.aborted) {
       try {
         this.deps.log('hook-subscribe', { source: id.split(':').slice(0, 2).join(':'), ttlSeconds: this.opts.ticketSeconds });
-        // Spec §8.2: catch up on every (re)connect, since hooks have no replay. (The SDK's own ticket reopen is
-        // invisible here; the poll covers those gaps.)
-        if (opened) onEvent();
+        // Spec §8.2: catch up on every (re)connect, since hooks have no replay. The catch-up runs after the
+        // subscription below has been started, so a write in between is seen by one or the other. (The SDK's own
+        // ticket reopen is invisible here; the poll covers those gaps.)
+        if (opened) void sleep(RECONNECT_CATCH_UP_MS, signal).then(() => { if (!signal.aborted) onEvent(); });
         opened = true;
         const service = await hooks();
         for await (const event of service.subscribe([sub], { ttlSeconds: this.opts.ticketSeconds, signal })) {
