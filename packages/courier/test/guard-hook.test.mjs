@@ -1,9 +1,10 @@
+import { trustedProgram } from './policy-programs.mjs';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { decide, hookOutput } from '../dist/guard/hook.js';
 import { requestHash } from '../dist/canonical.js';
 import { k } from '../dist/keys.js';
-import { agentHomeEnv, guardSettings, courierOnlyEnv, courierEnvOverrides, hookCommand, writeGuardSettings } from '../dist/guard/install.js';
+import { agentHome, agentHomeEnv, guardSettings, courierOnlyEnv, courierEnvOverrides, hookCommand, writeGuardSettings } from '../dist/guard/install.js';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -39,7 +40,7 @@ function memoryKv() {
 
 const FILES = { '/repo/package.json': JSON.stringify({ name: '@x/pkg', version: '1.2.3', scripts: { test: 'echo test', build: 'echo build', lint: 'echo lint' } }) };
 const env = {
-  cwd: '/repo',
+  cwd: '/repo', resolveProgram: trustedProgram,
   readFile: (f) => (f in FILES ? { state: 'text', text: FILES[f] } : { state: 'absent' }),
   git: (dir, args) => (args.join(' ') === 'remote get-url origin' ? { ok: true, out: 'git@github.com:a/b.git' } : { ok: false, out: '' }),
   getenv: () => undefined,
@@ -171,12 +172,12 @@ test('a woken agent inherits an allowlist, never tokens: claude/exec environment
     ANTHROPIC_API_KEY: 'a', CLAUDE_CODE_ENTRYPOINT: 'x', CLAUDECODE: '1', COURIER_HOST: 'h', TC_BIN: '/bin/tc', XDG_CONFIG_HOME: '/x',
   };
   const env = courierOnlyEnv({ ...allowedIn, ...secrets }, '/home/u/.courier');
-  assert.deepEqual(Object.keys(env).sort(), [...new Set([...Object.keys(allowedIn).filter(n => n !== 'ANTHROPIC_API_KEY'), ...Object.keys(agentHomeEnv('/home/u/.courier'))])].sort());
-  assert.equal(env.HOME, '/home/u/.courier/guard/home');
-  assert.equal(env.XDG_CONFIG_HOME, '/home/u/.courier/guard/home/.config');
+  assert.deepEqual(Object.keys(env).sort(), [...new Set([...Object.keys(allowedIn).filter(n => !['ANTHROPIC_API_KEY', 'COURIER_HOST'].includes(n)), ...Object.keys(agentHomeEnv('/home/u/.courier'))])].sort());
+  assert.equal(env.HOME, agentHome('/home/u/.courier'));
+  assert.equal(env.XDG_CONFIG_HOME, `${agentHome('/home/u/.courier')}/.config`);
   assert.equal(env.ANTHROPIC_API_KEY, undefined);
-  assert.equal(env.TC_HOME, '/home/u/.courier/guard/no-owner-profile', 'tc finds an empty profile, not the owner');
-  assert.equal(env.COURIER_HOME, '/home/u/.courier');
+  assert.equal(env.TC_HOME, `${agentHome('/home/u/.courier')}/no-owner-profile`, 'tc finds an empty profile, not the owner');
+  assert.equal(env.COURIER_HOME, undefined);
   // The operator can pass one named variable on purpose; nothing else comes with it.
   const passed = courierOnlyEnv({ ...allowedIn, ...secrets }, '/home/u/.courier', ['AWS_PROFILE', 'GH_TOKEN']);
   assert.equal(passed.GH_TOKEN, 'x');
@@ -187,8 +188,8 @@ test('paseo agents inherit the daemon environment: well-known credentials and cr
   const out = courierEnvOverrides({ PATH: '/bin', GH_TOKEN: 'x', MY_SERVICE_PASSWORD: 'x', ANTHROPIC_API_KEY: 'a', CLAUDE_CODE_MESSAGING_TOKEN: 't', PASEO_AGENT_ID: 'a1', PASEO_HOME: '/h', LS_COLORS: 'x' }, '/home/u/.courier');
   for (const name of ['GH_TOKEN', 'MY_SERVICE_PASSWORD', 'CLOUDFLARE_API_TOKEN', 'TYPESAFE_API_KEY', 'SSH_AUTH_SOCK', 'NPM_TOKEN', 'TC_OWNER_DID', 'BASH_ENV', 'ENV', 'NODE_OPTIONS', 'ANTHROPIC_API_KEY', 'CLAUDE_CODE_MESSAGING_TOKEN']) assert.equal(out[name], '', name);
   for (const name of ['PATH', 'PASEO_AGENT_ID', 'PASEO_HOME', 'LS_COLORS']) assert.equal(name in out, false, `${name} is not touched`);
-  assert.equal(out.COURIER_HOME, '/home/u/.courier');
-  assert.equal(out.TC_HOME, '/home/u/.courier/guard/no-owner-profile');
+  assert.equal(out.COURIER_HOME, '');
+  assert.equal(out.TC_HOME, `${agentHome('/home/u/.courier')}/no-owner-profile`);
   assert.equal(courierEnvOverrides({ GH_TOKEN: 'x' }, '/h', ['GH_TOKEN']).GH_TOKEN, undefined, 'a variable the operator passed is not blanked');
 });
 

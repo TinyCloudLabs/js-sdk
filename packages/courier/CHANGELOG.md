@@ -1,5 +1,71 @@
 # @tinycloud/courier
 
+## 0.2.0-beta.38
+
+### Minor Changes
+
+- ecaf34b: Wake budget, pause and notifications for `courier watch`: at most `--wake-budget` (default 12) message wakes per side per thread per UTC day, then the thread pauses: a marker under `me/state/paused/`, an `inform` "thread paused" to the peer (never wakes it), and a notification to your human through `--notify paseo|osascript|exec` (queued in state and retried). A paused thread still delivers and mirrors but never wakes; the peer's watcher notifies its human when it sees the inform. New `courier pause <peer> <thread>` and `courier resume <peer> <thread>` (the budget starts over). Approval wakes are never counted or blocked.
+
+  Count wake attempts (including failures), cap and deduplicate fixed-text notices with bounded persisted retries, and retain a bounded backlog through pause/resume. Notifications use local logs, osascript or an operator exec command only; no notification starts or messages an agent.
+
+- db4781a: `courier guard`: a Claude Code PreToolUse hook that refuses direct merge, deploy, publish, pushes, credential-access and human-only Courier commands. It inspects quoting, wrappers, chains, subshells and nested shells. Approved PR merges use the fixed-argv `courier run-approved <requestId>` broker, which consumes the approval before executing. `courier watch --wake claude` installs guard settings and gives the agent its Courier-only profile snapshot.
+
+  The courier grant now includes `me/consumed/` (get, put, list; no del) and approvals are marked used there instead of under `me/state/`, so the courier key cannot un-consume an approval. Existing grants are refused with `grant-incomplete` until `courier init` renews them (one passkey approval). The used check reads from the network every time and fails closed on anything but a key-level 404.
+
+  `courier watch --wake paseo` now installs the same guard in `<cwd>/.claude/settings.local.json` (merged with what is there), runs the hook once on a call no approval can unlock and requires a refusal, and wakes nothing otherwise. It only messages Paseo agents labelled `courier-guard=1` that run Claude in the guarded directory, deletes an agent Paseo started elsewhere, and drops `PASEO_AGENT_*`/`PASEO_WORKSPACE_ID` from its environment so `--cwd` is honoured. Non-Claude `--paseo-provider` values are refused. Named agent CLI commands, recognized package entrypoints and unknown MCP tools are refused.
+
+  `courier watch --wake exec` installs no guard, so it now needs `--exec <cmd> --unguarded` (also with `--install-launchd|--install-systemd`); without the flag the watcher refuses, wakes nothing and names the flag. Every exec wake prints "this wake is not approval-guarded" to stderr and adds it to `COURIER_PROMPT`. `--unguarded` is refused with the `claude`, `paseo` and `none` adapters, which are always guarded or wake nobody. Use `claude` or `paseo` for guarded agent sessions.
+
+  The guard's first rule is now fail-closed: a command with run-time expansion or indirection syntax (`{a,b}`, `$…`, backticks, `eval`, `source`, `alias`, here-strings, `xargs`, `find -exec`, `env`/`command`/`sudo` prefixes, `| sh`, …) that also names a gated tool or verb is refused ("expansion syntax with a gated tool name"); plain-word commands are read as before. README, `--help` and the skill document refused commands and the broker invocation.
+
+  Woken `claude` and `exec` runs get an environment allowlist and a separate HOME. `--env-pass NAME` adds an explicitly selected variable. The Paseo adapter blanks known credential names and credential-looking watcher variables. Guard settings refuse Read access to credential files.
+
+  `courier pause`, `courier resume` and `courier watch` (also as `tc courier …`) and `courier approval` without `--peek` are refused for a woken agent even with an approval, like `courier pair|revoke|init`: the wake budget is the reply loop's breaker, so an agent must not lift its own pause or start a watcher.
+
+  Details: TC-1634
+
+### Patch Changes
+
+- 0524256: Keep broker configuration outside Courier and resolve the owner's gh credential at runtime without copying it. Woken agents use a separate home and Courier-only identity snapshot. Existing broker token files are no longer used; owners configure the broker again after signing in with gh.
+
+  Refuse protected-root traversal, gated executable aliases/copies, local network destinations and additional GitHub, registry and credential-access commands.
+
+  Require registered executable identities for tool allowances, including Courier entrypoints and wrappers. Unregistered executables and package launchers fail closed. Protect registered tools from agent edits and preserve the installed census across automatic refreshes; owners refresh it after tool upgrades.
+
+  Inspect interpreter script and preload files independently of their extension, and classify agent and gated-tool package entrypoints by their package manifest. Require the installed executable census and use its git identity for guard probes.
+
+  Details: TC-1634
+
+- 030fdf4: TC-712: refuse direct gated commands from woken agents and execute approved PR merges through a fixed-argv, single-use broker. Protect guard settings, dependencies and credential paths. Existing hook allow-once workflows must use `courier run-approved <requestId>` instead; publish, deploy and direct pushes require the owner.
+
+## 0.2.0-beta.37
+
+### Patch Changes
+
+- c06c304: Courier profile permission errors use code profile-permissions; documentation wording updates.
+
+## 0.2.0-beta.36
+
+### Patch Changes
+
+- @tinycloud/node-sdk@3.3.0-beta.35
+
+## 0.2.0-beta.35
+
+### Patch Changes
+
+- 2f3978c: Bind merge approval requests to a head commit and case-sensitive base branch (TC-712). Merge requests now require `--head-sha` and `--base`; older unpinned merge requests must be re-requested and approved again. Other verbs reject these fields. Approval verification returns both pins and can require exact matches for the broker.
+
+## 0.2.0-beta.34
+
+### Minor Changes
+
+- f81a22c: `courier approval <requestId>`: verifies the owner's decision before a gated action. The approval in `me/approvals/` must name the request, carry the SHA-256 of the request's canonical JSON (`canonicalJson` and `requestHash` are exported), say `approved`, be under 24 hours old and inside the request's lifetime, and match your `--verb` and `--target`; it is consumed once (create-only marker under `me/state/approvals-used/`). `courier watch` now wakes the thread's agent as soon as a new approval appears; the wake prompt tells the agent to run `courier approval` first.
+
+  `courier request` now requires `--verb` (merge, deploy, publish, spend, other), `--target` (canonical per verb) and `--summary` (one line, at most 200 characters); they are stored in the request and covered by its hash, so older free-text-only requests can no longer be approved. `--action` is optional display text.
+
+  One text rule set applies when `courier request` writes, when `courier approval` reads and in the `/courier` view: a frozen Unicode 15.0.0 allow-list (Lu/Ll/Lt/Lo/Nd minus Default*Ignorable), NFC, ASCII punctuation only (summary `. , : ; - * / # ( ) ? !`and U+0027; free multiline text all printable ASCII punctuation plus LF), plain U+0020 space only, caps (target and summary 200, action/reason/risk 2000),`target`printable ASCII in its per-verb canonical shape; violations are refused, never repaired.`canonicalJson`/`requestHash`throw on non-finite numbers and nesting deeper than 64.`test/vectors/request-fields.json`and the exhaustive`text-verdicts.json`hold the shared contract;`src/text-ranges.ts` is the generated table. Previously accepted emoji, smart apostrophes and all remaining combining marks are now refused. Watcher shutdown permanently latches runner cancellation so adapter follow-on commands cannot start after SIGINT/SIGTERM.
+
 ## 0.2.0-beta.33
 
 ### Patch Changes

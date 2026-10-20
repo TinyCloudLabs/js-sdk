@@ -610,6 +610,7 @@ import { join as join2 } from "path";
 import { ProfileDeletedError, ProfileLockTimeoutError, ProfileSymlinkError } from "@tinycloud/operations/state";
 import { isSafeRecovery } from "@tinycloud/operations/recovery";
 import { CLI_NAME as CLI_NAME2 } from "@tinycloud/operations/cli-name";
+import { isRevokedGrantRefusal, REVOKED_GRANT_MESSAGE } from "@tinycloud/operations/revoked-grant";
 import {
   buildSecretRequestUrl,
   isSafeRequestAccessRecovery,
@@ -637,6 +638,9 @@ function cliErrorFromService(error, message = error.message) {
   const missingCapability = validatedCapabilityOf({ ...error, meta }) !== void 0;
   const denied = verdict === "forbidden" || verdict === "unauthenticated" && missingCapability || verdict === void 0 && error.code === "PERMISSION_DENIED";
   const unauthenticated = !denied && (verdict === "unauthenticated" || verdict === void 0 && error.code === "AUTH_REQUIRED");
+  if (unauthenticated && isRevokedGrantRefusal({ ...error, meta, message })) {
+    return new CLIError("GRANT_REVOKED", REVOKED_GRANT_MESSAGE, GRANT_REVOKED_EXIT_CODE, { status: 401 });
+  }
   return new CLIError(
     denied ? "PERMISSION_DENIED" : unauthenticated ? "AUTH_REQUIRED" : error.code,
     message,
@@ -862,7 +866,7 @@ function buildNetworkHint() {
   lines.push(`Or override per-command with --host or TC_HOST.`);
   return lines.join("\n");
 }
-var activeProfileName, CLIError, SETUP_KEYS;
+var activeProfileName, GRANT_REVOKED_EXIT_CODE, CLIError, SETUP_KEYS;
 var init_errors = __esm({
   "src/output/errors.ts"() {
     "use strict";
@@ -871,6 +875,7 @@ var init_errors = __esm({
     init_formatter();
     init_storage2();
     init_warnings();
+    GRANT_REVOKED_EXIT_CODE = ExitCode.PERMISSION_DENIED;
     CLIError = class extends Error {
       constructor(code4, message, exitCode = ExitCode.ERROR, metadata) {
         super(message);
@@ -12360,7 +12365,75 @@ import { CLI_NAME as CLI_NAME13 } from "@tinycloud/operations/cli-name";
 import { parseSignedCompactUcanAttenuation as parseSignedCompactUcanAttenuation2 } from "@tinycloud/sdk-core";
 import { inspectStoredDelegation, withoutBearer as withoutBearer2 } from "@tinycloud/operations/delegation-binding";
 init_permissions();
+
+// src/lib/revoke-node-record.ts
+var PAGE_LIMIT = 100;
+var MAX_PAGES = 50;
+var MAX_RECORDS = PAGE_LIMIT * MAX_PAGES;
+var MAX_CHAIN_DEPTH = 8;
 function normalizeDid(input) {
+  const fragment = input.indexOf("#");
+  return (fragment < 0 ? input : input.slice(0, fragment)).trim().toLowerCase();
+}
+var SPACE = /^tinycloud:pkh:eip155:([1-9]\d{0,17}):(0x[0-9a-fA-F]{40}):[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
+function ownerOfSpace(space) {
+  const match = SPACE.exec(space);
+  return match === null ? void 0 : `did:pkh:eip155:${match[1]}:${match[2].toLowerCase()}`;
+}
+function ownerSpaceFromNodeRecords(records, cid, ownerDid, sessionDid) {
+  if (records.length > MAX_RECORDS) return void 0;
+  const matches = records.filter((record3) => record3.cid === cid);
+  const target = matches[0];
+  if (!target || new Set(matches.map(({ delegatorDid, delegateDid, resources }) => JSON.stringify([delegatorDid, delegateDid, resources]))).size !== 1) return void 0;
+  const owner = normalizeDid(ownerDid);
+  if (target.resources.length === 0) return void 0;
+  const spaces = /* @__PURE__ */ new Set();
+  for (const { resource } of target.resources) {
+    const space = /^(tinycloud:[^/]+)\//.exec(resource)?.[1];
+    if (!space || ownerOfSpace(space) !== owner) return void 0;
+    spaces.add(space);
+  }
+  if (spaces.size !== 1) return void 0;
+  const session = sessionDid === void 0 ? void 0 : normalizeDid(sessionDid);
+  const byCid = /* @__PURE__ */ new Map();
+  for (const record3 of records) {
+    const sameCid = byCid.get(record3.cid);
+    if (sameCid === void 0) byCid.set(record3.cid, [record3]);
+    else sameCid.push(record3);
+  }
+  const verdicts = /* @__PURE__ */ new Map();
+  const rooted = (record3, depth) => {
+    const issuer = normalizeDid(record3.delegatorDid);
+    if (issuer === owner || issuer === session) return true;
+    const known = verdicts.get(record3.cid);
+    if (known !== void 0) return known;
+    verdicts.set(record3.cid, false);
+    const verdict = depth < MAX_CHAIN_DEPTH && record3.parents.some((parentCid) => (byCid.get(parentCid) ?? []).some((parent) => normalizeDid(parent.delegateDid) === issuer && rooted(parent, depth + 1)));
+    verdicts.set(record3.cid, verdict);
+    return verdict;
+  };
+  return rooted(target, 0) ? [...spaces][0] : void 0;
+}
+async function lookupOwnerSpaceOnNode(node, cid, ownerDid) {
+  const records = [];
+  let cursor;
+  for (let page = 0; page < MAX_PAGES; page += 1) {
+    const query = await node.delegationManager.query({
+      direction: "all",
+      limit: PAGE_LIMIT,
+      ...cursor === void 0 ? {} : { cursor }
+    });
+    if (!query.ok) return void 0;
+    if (query.data.items.length > PAGE_LIMIT || records.length + query.data.items.length > MAX_RECORDS) return void 0;
+    for (const item of query.data.items) records.push(item);
+    cursor = query.data.nextCursor;
+    if (cursor === void 0) return ownerSpaceFromNodeRecords(records, cid, ownerDid, node.sessionDid);
+  }
+  return void 0;
+}
+
+// src/lib/revoke-delegation.ts
+function normalizeDid2(input) {
   const trimmed = input.trim();
   const fragment = trimmed.indexOf("#");
   return (fragment < 0 ? trimmed : trimmed.slice(0, fragment)).toLowerCase();
@@ -12379,7 +12452,7 @@ async function cidBoundOwnerSpace(record3, ownerDid, node, host) {
       const signed = parseSignedCompactUcanAttenuation2(withoutBearer2(authorization), delegation.cid);
       for (const resource of Object.keys(signed.payload.att)) {
         const space = /^(tinycloud:[^/]+)\/[^/]+(?:\/.*)?$/.exec(resource)?.[1];
-        if (space && ownerDidFromSpace(space) && normalizeDid(ownerDidFromSpace(space)) === normalizeDid(ownerDid)) {
+        if (space && ownerDidFromSpace(space) && normalizeDid2(ownerDidFromSpace(space)) === normalizeDid2(ownerDid)) {
           return space;
         }
       }
@@ -12393,7 +12466,7 @@ async function cidBoundOwnerSpace(record3, ownerDid, node, host) {
   if (inspected.local !== "verified" || inspected.cid !== delegation.cid) return void 0;
   for (const permission of inspected.effectivePermissions) {
     const space = permission.space;
-    if (space && ownerDidFromSpace(space) && normalizeDid(ownerDidFromSpace(space)) === normalizeDid(ownerDid)) {
+    if (space && ownerDidFromSpace(space) && normalizeDid2(ownerDidFromSpace(space)) === normalizeDid2(ownerDid)) {
       return space;
     }
   }
@@ -12461,7 +12534,11 @@ async function revokeDelegationOnNode(params) {
           host: ctx.host
         });
         if (!boundSpace) {
-          throw new CLIError("TARGET_NOT_FOUND", `Delegation "${cid}" was not found by the node or local grant sources.`, ExitCode.NOT_FOUND);
+          throw new CLIError(
+            "TARGET_NOT_FOUND",
+            `This profile cannot list the owner's delegations on the node, so it cannot look up "${cid}", and it has no local record of that grant. Use the profile that created the grant, or revoke it from the Delegations screen of the account site (https://account.tinycloud.xyz).`,
+            ExitCode.NOT_FOUND
+          );
         }
         targetSpaceSource = boundSpace.source;
       } else {
@@ -12492,24 +12569,29 @@ async function revokeDelegationOnNode(params) {
       if (error === null || typeof error !== "object" || !("code" in error) || error.code !== "RAW_RECAP_RESOURCE_UNSUPPORTED") {
         throw error;
       }
-      const fallback = boundSpace ?? await resolveCidBoundTargetSpace({
+      const ownerDid = profile.ownerDid ?? ownerDidFromSpace(node.accountSpaceId) ?? ownerDidFromSpace(profile.spaceId);
+      let fallback = boundSpace ?? await resolveCidBoundTargetSpace({
         profileName: ctx.profile,
-        ownerDid: profile.ownerDid ?? ownerDidFromSpace(node.accountSpaceId) ?? ownerDidFromSpace(profile.spaceId),
+        ownerDid,
         cid,
         node,
         host: ctx.host,
         localTarget: params.localTarget
       });
+      if (!fallback && ownerDid) {
+        const space = await lookupOwnerSpaceOnNode(node, cid, ownerDid);
+        if (space) fallback = { space, source: "node-delegation-record" };
+      }
       if (!fallback) {
         throw new CLIError(
           "RAW_RECAP_RESOURCE_UNSUPPORTED",
-          `Cannot safely revoke "${cid}": raw CID ReCap resources are unavailable and no matching owner-signed local grant binds its space to the CID.`,
+          `Cannot revoke "${cid}": this CLI profile has no record of this grant and the node's record does not match the signed-in owner.`,
           ExitCode.PERMISSION_DENIED
         );
       }
       fallbackSpaceId = fallback.space;
       authorityScopeSource = fallback.source;
-      authorityScopeReason = fallback.source === "local-signed-grant-artifact" ? "Raw-CID revoke authority could not be issued; the fallback space came from an owner-signed local grant whose Authorization recomputes to this CID." : "Raw-CID revoke authority could not be issued; the fallback space came from a locally verified owner-signed stored grant bound to this CID.";
+      authorityScopeReason = fallback.source === "local-signed-grant-artifact" ? "Raw-CID revoke authority could not be issued; the fallback space came from an owner-signed local grant whose Authorization recomputes to this CID." : fallback.source === "node-delegation-record" ? "Raw-CID revoke authority could not be issued; the fallback space came from the node's delegation record, whose issuer chains to the signed-in owner and whose space the owner holds." : "Raw-CID revoke authority could not be issued; the fallback space came from a locally verified owner-signed stored grant bound to this CID.";
       targetSpaceSource = fallback.source;
       const acquired = await ensureDelegationAuthority({
         ctx,
@@ -12522,7 +12604,7 @@ async function revokeDelegationOnNode(params) {
           actions: ["tinycloud.delegation/revoke"]
         }],
         expiryOption: void 0,
-        reason: `Revoke delegation ${cid} using its CID-bound owner-signed grant ${fallback.source === "local-stored-grant" ? "record" : "artifact"}`,
+        reason: fallback.source === "node-delegation-record" ? `Revoke delegation ${cid} using the node's record of the owner's grant` : `Revoke delegation ${cid} using its CID-bound owner-signed grant ${fallback.source === "local-stored-grant" ? "record" : "artifact"}`,
         yes: params.yes,
         consentAlreadyGiven: true,
         persist: false,
@@ -12795,19 +12877,21 @@ var APPS_AGENT_EXPIRY_DAYS = 7;
 var APPS_AGENT_EXPIRY = `${APPS_AGENT_EXPIRY_DAYS}d`;
 var APPS_AGENT_MAX_APPS = 5;
 var DAY_MS2 = 864e5;
+var APPS_AGENT_WRITE_FOLDERS = ["knowledge/", "prefs/"];
 var APPS_AGENT_VARIANTS = {
   read: {
     grants: [
-      { service: "tinycloud.kv", actions: ["tinycloud.kv/get", "tinycloud.kv/list"] },
-      { service: "tinycloud.sql", actions: ["tinycloud.sql/read"] }
+      { service: "tinycloud.kv", actions: ["tinycloud.kv/get", "tinycloud.kv/list"], within: [""] },
+      { service: "tinycloud.sql", actions: ["tinycloud.sql/read"], within: [""] }
     ],
     perAppOnly: false,
     changesStructure: false
   },
   write: {
     grants: [
-      { service: "tinycloud.kv", actions: ["tinycloud.kv/get", "tinycloud.kv/list", "tinycloud.kv/put"] },
-      { service: "tinycloud.sql", actions: ["tinycloud.sql/read", "tinycloud.sql/write"] }
+      { service: "tinycloud.kv", actions: ["tinycloud.kv/get", "tinycloud.kv/list"], within: [""] },
+      { service: "tinycloud.kv", actions: ["tinycloud.kv/put"], within: APPS_AGENT_WRITE_FOLDERS },
+      { service: "tinycloud.sql", actions: ["tinycloud.sql/read", "tinycloud.sql/write"], within: [""] }
     ],
     perAppOnly: true,
     changesStructure: true
@@ -12842,8 +12926,8 @@ function isAppId(value) {
   return value.length <= 200 && APP_ID.test(value);
 }
 function appsAgentPermissions(mode, appIds = []) {
-  const paths = appIds.length === 0 ? [""] : appIds.map((appId) => `${appId}/`);
-  return APPS_AGENT_VARIANTS[mode].grants.flatMap(({ service, actions }) => paths.map((path) => ({ service, space: APPS_AGENT_SPACE, path, actions: [...actions] })));
+  const bases = appIds.length === 0 ? [""] : appIds.map((appId) => `${appId}/`);
+  return APPS_AGENT_VARIANTS[mode].grants.flatMap(({ service, actions, within }) => within.flatMap((folder) => bases.map((base4) => ({ service, space: APPS_AGENT_SPACE, path: `${base4}${folder}`, actions: [...actions] }))));
 }
 function quoteApps(appIds) {
   return appIds.map((appId) => `\`${appId}\``).join(", ");
@@ -12861,14 +12945,17 @@ function revokeSentence(lifetimeMs2) {
 }
 function appsAgentScopeNotice(mode, appIds = []) {
   const variant = APPS_AGENT_VARIANTS[mode];
-  const reads = variant.grants.some(({ actions }) => actions.includes("tinycloud.kv/put")) ? "read it and add and change its files and table rows" : "list and read its files and read its table rows";
+  const writes = variant.grants.some(({ actions }) => actions.includes("tinycloud.kv/put"));
+  const writableFolders = appIds.flatMap((appId) => APPS_AGENT_WRITE_FOLDERS.map((folder) => `\`${appId}/${folder}\``)).join(", ");
+  const reads = writes ? `read everything there, write knowledge and data files (${writableFolders}), and add, change and delete table rows` : "list and read its files and read its table rows";
   const scope = appIds.length === 0 ? `ALL your installed apps' data in the \`${APPS_AGENT_SPACE}\` space` : `the data of ${quoteApps(appIds)} (everything under ${appIds.map((appId) => `\`${appId}/\``).join(", ")}) in the \`${APPS_AGENT_SPACE}\` space`;
   const lines = [
     variant.changesStructure ? `This gives the agent access to ${scope}: it can ${reads}.` : `This gives the agent READ-ONLY access to ${scope}: it can ${reads}.`
   ];
   if (variant.changesStructure) {
     lines.push(
-      `Because of how TinyCloud permissions work today, it can also change or delete ${appIds.length === 1 ? "this app's" : "these apps'"} tables (structure) and data.`,
+      `It cannot change ${appIds.length === 1 ? "the app's" : "the apps'"} code, manifest or install record: files outside those folders are read-only for it.`,
+      `SQL write is separate from that: it can change ${appIds.length === 1 ? "this app's" : "these apps'"} table rows and, because of how TinyCloud permissions work today (TC-1581), also change or delete ${appIds.length === 1 ? "its" : "their"} tables (structure).`,
       "It cannot touch other apps, other spaces or secrets."
     );
   } else {
@@ -12932,10 +13019,12 @@ function matchAppsAgentRequest(requested, requestedExpiry, applicationsSpace) {
   if (requested.some((entry) => entry.expiry !== void 0 || entry.caveats !== void 0)) return void 0;
   const kvPaths = requested.filter((entry) => entry.service === "tinycloud.kv").map((entry) => entry.path);
   const appIds = [];
-  for (const path of new Set(kvPaths)) {
+  for (const path of kvPaths) {
     if (path === "") continue;
-    if (!path.endsWith("/") || !isAppId(path.slice(0, -1))) return void 0;
-    appIds.push(path.slice(0, -1));
+    const slash = path.indexOf("/");
+    const appId = path.slice(0, slash);
+    if (slash < 1 || !isAppId(appId)) return void 0;
+    if (!appIds.includes(appId)) appIds.push(appId);
   }
   if (appIds.length > APPS_AGENT_MAX_APPS || appIds.length > 0 && kvPaths.includes("")) return void 0;
   for (const mode of ["read", "write"]) {
@@ -13018,17 +13107,11 @@ function describeEntry(entry, applicationsSpace) {
 }
 function withinPresetSet(entry, applicationsSpace) {
   if (!inApplicationsSpace(entry, applicationsSpace) || entry.caveats !== void 0) return false;
-  const reads = /* @__PURE__ */ new Set();
-  const writes = /* @__PURE__ */ new Set();
-  for (const { grants } of Object.values(APPS_AGENT_VARIANTS)) {
-    for (const grant of grants) {
-      if (grant.service !== entry.service) continue;
-      for (const action of grant.actions) (action.endsWith("/put") || action.endsWith("/write") ? writes : reads).add(action);
-    }
-  }
-  const firstSegment = entry.path.split("/")[0] ?? "";
-  const named = entry.path.includes("/") && isAppId(firstSegment);
-  return entry.actions.length > 0 && entry.actions.every((action) => reads.has(action) || writes.has(action) && named);
+  if (entry.path.split("/").some((segment) => segment === "." || segment === "..")) return false;
+  const slash = entry.path.indexOf("/");
+  const folder = slash > 0 && isAppId(entry.path.slice(0, slash)) ? entry.path.slice(slash + 1) : void 0;
+  const grants = Object.values(APPS_AGENT_VARIANTS).flatMap(({ grants: variantGrants }) => variantGrants.filter((grant) => grant.service === entry.service));
+  return entry.actions.length > 0 && entry.actions.every((action) => grants.some((grant) => grant.actions.includes(action) && (!(action.endsWith("/put") || action.endsWith("/write")) || folder !== void 0 && grant.within.some((within) => folder.startsWith(within)))));
 }
 function describeGrantScope(requested, requestedExpiry, applicationsSpace) {
   const preset = matchAppsAgentRequest(requested, requestedExpiry, applicationsSpace);
@@ -13818,13 +13901,13 @@ ${signInAgainHint(ctx.profile, posture ?? void 0)}
     `Lifetime of the granted delegation. ms-format string (e.g. "7d", "30m") or raw milliseconds. Defaults to 7d, capped by the active session's expiry.`
   ).option("--emit [file]", "Emit the request artifact to stdout, or write it to file when provided").option("--grant", "Grant the requested permissions immediately with this owner profile").option("--yes", "Skip local-key TTY confirmation", false).option("--no-popup", "Print the OpenKey URL without opening a browser when granting with OpenKey").option("--device", "With --grant: approve on another device (e.g. a phone) through OpenKey device authorization (KV-scoped; SQL needs browser login)").option(
     "--preset <name>",
-    `Request a named permission set instead of --cap: ${APPS_AGENT_PRESET} is READ-ONLY on the applications space (kv get/list + sql read, ${APPS_AGENT_EXPIRY_DAYS} days)`
+    `Request a named permission set instead of --cap: ${APPS_AGENT_PRESET} is READ-ONLY on the applications space (kv get/list + sql read, ${APPS_AGENT_EXPIRY_DAYS} days); add --write --app <app_id> to also write those apps' knowledge and data files`
   ).option(
     "--app <app_id>",
     `With --preset ${APPS_AGENT_PRESET}: limit the grant to this app's <app_id>/ prefix (recommended); repeat for up to ${APPS_AGENT_MAX_APPS} apps`,
     (value, previous) => [...previous, value],
     []
-  ).option("--write", `Don't request \`--write\` during the tiny-apps beta. It currently also allows changes to the app's own code and manifest; the narrowed write ships in TC-1620. With --preset ${APPS_AGENT_PRESET} it also allows writes (kv put + sql write) in the named --app apps; SQL write can also change or drop those apps' tables`).option("--paste", "With --grant on an OpenKey profile: wait up to 5 minutes for a signed code from OpenKey on stdin instead of a browser callback (use when the browser cannot reach this CLI)").action(async (options2, cmd) => {
+  ).option("--write", `With --preset ${APPS_AGENT_PRESET}: also allow writing the named --app apps' knowledge/ and prefs/ files (kv put) and table rows (sql write); their code, manifest and install record stay read-only. SQL write can also change or drop those apps' tables`).option("--paste", "With --grant on an OpenKey profile: wait up to 5 minutes for a signed code from OpenKey on stdin instead of a browser callback (use when the browser cannot reach this CLI)").action(async (options2, cmd) => {
     try {
       const globalOpts = cmd.optsWithGlobals();
       const ctx = await ProfileManager.resolveContext(globalOpts, options2.grant ? {} : { storedSession: "unused" });
@@ -17058,7 +17141,7 @@ var EXIT_BY_CODE = {
   [ReplicaErrorCode.GRANT_NOT_COVERING]: ExitCode.AUTH_REQUIRED,
   [ReplicaErrorCode.GRANT_NOT_YET_VALID]: ExitCode.PERMISSION_DENIED,
   [ReplicaErrorCode.GRANT_EXPIRED]: ExitCode.PERMISSION_DENIED,
-  [ReplicaErrorCode.GRANT_REVOKED]: ExitCode.PERMISSION_DENIED,
+  [ReplicaErrorCode.GRANT_REVOKED]: GRANT_REVOKED_EXIT_CODE,
   [ReplicaErrorCode.CONSENT_EXPIRED]: ExitCode.PERMISSION_DENIED,
   [ReplicaErrorCode.GATED]: ExitCode.PERMISSION_DENIED,
   [ReplicaErrorCode.GRANT_UNAUTHORIZED]: ExitCode.PERMISSION_DENIED,
@@ -17843,7 +17926,7 @@ import {
   canonicalSecretRequestOwner,
   isValidSecretRequestScope,
   missingSecretRecovery,
-  ownerOfSpace,
+  ownerOfSpace as ownerOfSpace2,
   resolveSecretsOwner as resolveSecretsOwner2,
   SecretRequestInputError,
   validSecretNames
@@ -18857,7 +18940,7 @@ async function readDelegatedSecretValue(params) {
   if (!envelopeResult.ok) {
     if (envelopeResult.error.code === "NOT_FOUND" || envelopeResult.error.code === "KEY_NOT_FOUND" || envelopeResult.error.code === "KV_NOT_FOUND") {
       const recovery = missingSecretRecovery({
-        owner: ownerOfSpace(params.space?.startsWith("tinycloud:") ? params.space : params.delegation.spaceId),
+        owner: ownerOfSpace2(params.space?.startsWith("tinycloud:") ? params.space : params.delegation.spaceId),
         local: params.local,
         names: [params.name],
         ...params.scope === void 0 ? {} : { scope: params.scope }

@@ -1,3 +1,4 @@
+import { trustedProgram } from './policy-programs.mjs';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { analyze } from '../dist/guard/policy.js';
@@ -18,7 +19,7 @@ const FILES = {
 
 function policyEnv({ branch = 'feat/x', config = {}, files = FILES, env = {} } = {}) {
   return {
-    cwd: '/repo',
+    cwd: '/repo', resolveProgram: trustedProgram,
     readFile: (f) => (f in files ? { state: 'text', text: files[f] } : { state: 'absent' }),
     git: (dir, args) => {
       const a = args.join(' ');
@@ -96,12 +97,9 @@ const GATED = {
   'bun publish': 'gated publish npm:@x/pkg@1.2.3',
   'pnpm publish --no-git-checks': 'gated publish npm:@x/pkg@1.2.3',
   'yarn npm publish': 'gated publish npm:@x/pkg@1.2.3',
-  'npx changeset publish': 'gated publish changeset:@x/pkg',
-  'bunx changeset publish': 'gated publish changeset:@x/pkg',
   'changeset publish': 'gated publish changeset:@x/pkg',
   'wrangler deploy': 'gated deploy wrangler:my-worker',
   'wrangler deploy --env prod': 'gated deploy wrangler:my-worker:prod',
-  'npx wrangler@3 deploy --name other': 'gated deploy wrangler:other',
   'wrangler publish': 'gated deploy wrangler:my-worker',
   'wrangler pages deploy dist --project-name site': 'gated deploy pages:site',
   'phala deploy --name foo': 'gated deploy phala:foo',
@@ -176,8 +174,8 @@ test('the same commands without the indirection are plain words, read as before'
 test('ordinary harmless commands pass, with or without expansions that name no gated tool', () => {
   const fine = [
     'ls', 'ls -la src', 'cat README.md', 'rg foo src', 'head -n 5 package.json', 'git status', 'git diff HEAD~1', 'git log --oneline -5', 'npm test', 'bun test', 'git commit -m "fix typo"',
-    'echo $HOME', 'ls {a,b}', 'for f in *.ts; do echo $f; done', 'cd "$DIR" && ls', 'cat <<EOF\nhello\nEOF', 'git commit -m "costs $5"',
-    '"$TC" courier inbox', '"$TC" courier read T', 'courier approval R1 --peek', 'courier approval R1 --peek --verb merge --target a/b#5', 'courier request T --peer bob --task K --verb merge --target a/b#5 --summary "Merge the docs PR" --why asked --risk low', 'courier task new --peer bob --thread T --state working', 'tc courier send bob --thread T --intent update --text done', '$HOME/bin/tool --flag', 'echo $(date)', 'x=$(pwd); echo "$x"', 'rg -n "TODO" src | head', 'wc -l *.md', '[ -x "$TC" ] || echo missing', 'for v in A B; do if [ -n "${!v}" ]; then echo set; fi; done', '[[ -n $x ]] && ls', 'ls [ab]*.ts',
+    'echo $HOME', 'ls {a,b}', 'for f in *.ts; do echo $f; done', 'cat <<EOF\nhello\nEOF', 'git commit -m "costs $5"',
+    'courier approval R1 --peek', 'courier approval R1 --peek --verb merge --target a/b#5', 'courier request T --peer bob --task K --verb merge --target a/b#5 --summary "Merge the docs PR" --why asked --risk low', 'courier task new --peer bob --thread T --state working', 'tc courier send bob --thread T --intent update --text done', 'echo $(date)', 'x=$(pwd); echo "$x"', 'rg -n "TODO" src | head', 'wc -l *.md', '[ -x "$TC" ] || echo missing', 'for v in A B; do if [ -n "${!v}" ]; then echo set; fi; done', '[[ -n $x ]] && ls', 'ls [ab]*.ts',
   ];
   const blocked = fine.map((command) => [command, kinds(command)]).filter(([, got]) => got.length);
   assert.deepEqual(blocked, []);
@@ -284,11 +282,11 @@ test('ordinary work is not blocked', () => {
     'git commit -m "gh pr merge 5; npm publish; git push origin main"', 'git log --oneline main..HEAD', 'git merge main', 'git checkout main', 'git branch -d old',
     'gh pr view 5', 'gh pr create --title x --body y', 'gh pr list', 'gh pr checks 5', 'gh pr comment 5 --body "merge it"', 'gh release view v1', 'gh release list',
     'gh api repos/o/r/pulls/5', 'gh api repos/o/r/pulls/5/comments -f body=hi', 'gh issue list',
-    'npm test', 'npm run build', 'bun run test', 'npm run lint -- --fix', 'npx tsc --noEmit', 'npx wrangler dev', 'wrangler --version',
+    'npm test', 'npm run build', 'bun run test', 'npm run lint -- --fix', 'wrangler --version',
     'echo gh pr merge 5', 'echo "npm publish"', 'grep -r "gh pr merge" docs', 'cat README.md | head', 'rg "phala deploy"',
-    'courier send hunter --thread T --intent update --text "pair done"', 'courier inbox', '"$TC" courier inbox', '"$TC" courier read T', 'tc courier orders hunter',
+    'courier send hunter --thread T --intent update --text "pair done"', 'courier inbox', 'tc courier orders hunter',
     'curl https://example.com', 'curl -s https://api.github.com/repos/o/r/pulls/5',
-    'cd /repo && npm test', 'for f in *.ts; do echo $f; done', '$HOME/bin/tool --flag', 'python3 -c "print(1)"', 'node scripts/ok.sh', 'bash scripts/ok.sh', 'sh -c "echo hi"',
+    'cd /repo && npm test', 'for f in *.ts; do echo $f; done', 'python3 -c "print(1)"', 'node scripts/ok.sh', 'bash scripts/ok.sh', 'sh -c "echo hi"',
     'echo hi > out.txt', 'tee x <<< hi', 'git diff | grep merge', 'find . -name "*.ts" -exec wc -l {} +', 'xargs echo < list', 'env | sort', 'time ls',
     'phala status', 'gh workflow list', 'gh workflow view ci.yml',
   ];
@@ -325,8 +323,13 @@ test('courier uses the CLI parser and run-approved permits exactly one literal U
 test('node installed Courier entries use Courier policy instead of scanning the CLI source', () => {
   const entry = '/opt/courier/dist/cli.js';
   const env = { ...policyEnv(), courierEntries: [entry], literals: ['/opt/courier'] };
-  for (const suffix of ['pair start bob', '--peer bob pause', 'courier pair start bob', 'approval R1 -- --peek']) assert.equal(analyze(`node ${entry} ${suffix}`, env)[0]?.kind, 'never', suffix);
+  for (const suffix of ['pair start bob', '--peer bob pause', 'approval R1 -- --peek']) assert.equal(analyze(`node ${entry} ${suffix}`, env)[0]?.kind, 'never', suffix);
   assert.deepEqual(analyze(`node ${entry} run-approved 01JTR100000000000000000000`, env), []);
-  assert.deepEqual(analyze(`node ${entry} courier inbox`, env), []);
+  assert.ok(analyze(`node ${entry} courier inbox`, env).length);
+  assert.ok(analyze(`node ${entry} courier pair start bob`, env).length);
   for (const command of [`node -r ./x.js ${entry} inbox`, `cat ${entry}`, `node ${entry} run-approved 01JTR100000000000000000000 > ${entry}`]) assert.ok(analyze(command, env).length, command);
+});
+
+test('dynamic executable words and unverified package launchers never gain a name-based exemption', () => {
+  for (const command of ['"$TC" courier inbox', '"$TC" courier read T', '$HOME/bin/tool --flag', 'npx changeset publish', 'bunx changeset publish', 'npx wrangler@3 deploy --name other', 'npx tsc --noEmit', 'npx wrangler dev', 'npm exec -- gh pr view 5', 'cd "$DIR" && ls']) assert.ok(kinds(command).includes('unresolved'), command);
 });

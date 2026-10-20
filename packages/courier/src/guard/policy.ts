@@ -1,7 +1,9 @@
 import path from 'node:path';
+import { networkTextRefusal, blockedDestination } from './network.js';
+import { binaryName, gatedSource, registeredFile, type BinaryIdentity } from './binaries.js';
 import { parseShell, wordLiteral, type RawCmd, type RawWord } from './shell.js';
 import { expansionRefusal } from './expansion.js';
-import { credentialTextRefusal, protectedTextRefusal, realpathBest, unquoted } from './paths.js';
+import { credentialTextRefusal, protectedTextRefusal, realpathBest, unquoted, pathTextRefusal } from './paths.js';
 import { parseArgs } from '../args.js';
 import { ULID } from '../request.js';
 import type { Verb } from './target.js';
@@ -12,7 +14,7 @@ import {
 
 /**
  * Which shell commands a woken agent may not run on its own (spec §7), found by reading the command the way a shell
- * would. Best effort, not a sandbox: it reads quoting, wrappers, chains, subshells and nested `sh -c`/`eval`, and it
+ * would. It reads quoting, wrappers, chains, subshells and nested `sh -c`/`eval`, and it
  * treats everything it cannot read exactly as a reason to refuse, never as a reason to allow.
  */
 
@@ -38,6 +40,11 @@ export interface PolicyEnv {
   getenv(name: string): string | undefined;
   /** Absolute paths of this install and profile (courier home, guard dir, package roots) that a command must not name. */
   literals?: string[];
+  binaries?: BinaryIdentity[];
+  /** Returns a canonical tool name only for a census-verified executable identity (mocked by offline grammar tests). */
+  resolveProgram?(word: string, cwd: string): string | undefined;
+  protectedRoots?: string[];
+  realHome?: string;
   /** Real paths of the courier entry points (`cli.js`, the `tc` entry): `node <entry> pair …` is a courier command. */
   courierEntries?: string[];
 }
@@ -87,7 +94,7 @@ const SCRIPT_NAME = /^(deploy|publish|release)(:|$)/i;
 const PKG_NAMES: Record<string, string> = {
   '@anthropic-ai/claude-code': 'claude', '@openai/codex': 'codex', '@tinycloud/cli': 'tinycloud', '@changesets/cli': 'changeset', '@phala/cli': 'phala',
 };
-const EMBEDDED = new Set(['claude', 'codex', 'semantic-release', 'turbo', 'nx', 'gh', 'git', 'wrangler', 'phala', 'changeset', 'tc', 'tinycloud', 'courier', 'secret-bridge', 'curl', 'wget']);
+
 const GIT_BUILTINS = new Set((
   'add am apply archive bisect blame branch bundle cat-file check-ignore checkout cherry-pick clean clone commit config describe diff ' +
   'difftool fetch for-each-ref format-patch fsck gc grep hash-object help init log ls-files ls-remote ls-tree maintenance merge ' +
@@ -232,7 +239,7 @@ interface Scope {
   written: Set<string>;
   inexact: boolean;
   assigns: string[];
-  noAlias: boolean;
+  externalOnly?: boolean;
 }
 
 function emit(sh: Shared, f: Finding): void {
@@ -248,14 +255,24 @@ export function progName(value: string): string {
   return path.basename(value).toLowerCase();
 }
 
-/** `wrangler@3`, `@tinycloud/cli@1.2`, `./bin/changeset.js` → the program it names. */
-function embeddedName(value: string): string | undefined {
-  let v = value;
-  const at = v.startsWith('@') ? v.indexOf('@', 1) : v.indexOf('@');
-  if (at > 0) v = v.slice(0, at);
-  if (PKG_NAMES[v.toLowerCase()]) return PKG_NAMES[v.toLowerCase()];
-  const base = path.basename(v).replace(/\.(c|m)?(js|ts)$/i, '').toLowerCase();
-  return EMBEDDED.has(base) ? base : undefined;
+/** Builtins are trusted only as exact shell words, never by a path's basename. */
+const BUILTINS = new Set([':', '[', '[[', 'true', 'false', 'echo', 'printf', 'pwd', 'cd', 'pushd', 'popd', 'eval', 'source', '.', 'export', 'declare', 'typeset', 'readonly', 'local', 'unset', 'set', 'command', 'builtin', 'exec', 'trap']);
+function program(word: string, sc: Scope): string | undefined {
+  if (!sc.externalOnly && BUILTINS.has(word)) return word;
+  if (sc.cwdUnknown && !path.isAbsolute(word)) return undefined;
+  let found: string | undefined;
+  for (const cwd of sc.cwds) {
+    const name = sc.sh.env.resolveProgram?.(word, cwd) ?? binaryName(word, cwd, sc.sh.env.getenv('PATH') ?? '', sc.sh.env.binaries ?? []);
+    if (!name || (found && found !== name)) return undefined;
+    found = name;
+  }
+  return found;
+}
+
+function courierEntry(file: string, sc: Scope): string | undefined {
+  const real = realpathBest(path.resolve(sc.cwds[0], file));
+  const kind = program(real, { ...sc, externalOnly: true });
+  return sc.sh.env.courierEntries?.includes(real) && (kind === 'courier' || kind === 'tc') ? kind : undefined;
 }
 
 type Normaliser = () => Norm;
@@ -301,7 +318,10 @@ function classifyGh(args: Word[], top: Word[], sc: Scope, io: Io): void {
   if ((group === 'repo' && sub === 'sync') || (group === 'run' && ['rerun', 'cancel', 'delete'].includes(sub)) || group === 'secret' || group === 'variable') return unresolved(sc.sh, 'GitHub write command: your owner runs it');
   if (['auth', 'config', 'extension'].includes(group)) return never(sc, 'GitHub credential/configuration tools are not available');
   if (group === 'alias') return unresolved(sc.sh, 'gh alias (can hide a gated command)');
-  if (group === 'api') classifyApi(args, top, sc, io, 'gh');
+  if (group === 'api') return classifyApi(args, top, sc, io, 'gh');
+  const allowed: Record<string, string[]> = { pr: ['view', 'list', 'checks', 'diff', 'status', 'create', 'comment'], issue: ['view', 'list', 'status', 'create', 'comment'], repo: ['view', 'list'], workflow: ['list', 'view'], run: ['list', 'view', 'watch', 'download'], search: ['code', 'commits', 'issues', 'prs', 'repos'] };
+  if (allowed[group]?.includes(sub) || ['help', 'version', 'status'].includes(group) || (!group && args.every(a => /^--(?:help|version)$/.test(a.value)))) return;
+  return unresolved(sc.sh, 'GitHub command outside the read/create/comment allowlist: your owner runs it');
 }
 
 /** Flags of `gh api` / curl that take a separate value (so the value is not a URL). */
@@ -368,18 +388,13 @@ function classifyApi(args: Word[], top: Word[], sc: Scope, io: Io, tool: string)
 }
 
 function classifyCurl(args: Word[], top: Word[], sc: Scope, io: Io): void {
-  for (const arg of args) {
-    if (arg.dynamic) continue;
-    try {
-      const host = new URL(arg.value).hostname;
-      if (/^(localhost|127\.\d+\.\d+\.\d+|\[::1\]|0\.0\.0\.0)$/i.test(host)) return never(sc, 'loopback requests can reach local services outside the guard');
-    } catch { /* not a URL */ }
-  }
+  if (statics(args).some(a => /^(--resolve|--connect-to|--unix-socket|--abstract-unix-socket)(=|$)/.test(a))) return never(sc, 'network destination overrides can reach local services');
+  if (args.some(a => !a.dynamic && blockedDestination(a.value))) return never(sc, 'loopback, numeric IP or local daemon destination is not available');
   classifyApi(args, top, sc, io, 'curl');
 }
 
 function executableGitKey(key: string): boolean {
-  return /^(alias\.|core\.(fsmonitor|pager|editor|sshcommand|hookspath)$|pager\.|sequence\.editor$|diff\..*\.(textconv|command)$|filter\..*\.(clean|smudge|process)$|merge\..*\.driver$|credential\..*helper$|credential\.helper$|gpg\.program$|remote\..*\.(receivepack|uploadpack|pushurl)$|url\..*\.(insteadof|pushinsteadof)$)/i.test(key);
+  return /^(alias\.|include\.|includeif\.|core\.(askpass|fsmonitor|pager|editor|sshcommand|hookspath)$|pager\.|sequence\.editor$|diff\..*\.(textconv|command)$|filter\..*\.(clean|smudge|process)$|merge\..*\.driver$|credential\..*helper$|credential\.helper$|gpg\.program$|remote\..*\.(receivepack|uploadpack|pushurl)$|url\..*\.(insteadof|pushinsteadof)$)/i.test(key);
 }
 
 const GIT_DIR_VALUE_FLAGS = new Set(['--git-dir', '--work-tree', '--namespace', '--super-prefix', '--config-env', '--exec-path']);
@@ -413,13 +428,14 @@ function classifyGit(args: Word[], top: Word[], sc: Scope, io: Io, depth = 0): v
   const subWord = args[i];
   if (!subWord) return;
   const sub = subWord.value.toLowerCase();
+  if (sub === 'credential') return never(sc, 'git credential can expose the owner credential');
   const rest = args.slice(i + 1);
   const cfg = (key: string, dir: string): string[] => {
     const got = sc.sh.env.git(dir, [...probeArgs, 'config', '--get-all', key]);
     return [...(got.ok ? got.out.split('\n').filter(Boolean) : [])];
   };
 
-  if (!GIT_BUILTINS.has(sub) && !sc.noAlias && depth < 3) {
+  if (!GIT_BUILTINS.has(sub) && depth < 3) {
     const lookups = dirsUnknown ? [] : dirs.flatMap((d) => cfg(`alias.${sub}`, d).slice(-1));
     for (const aliased of lookups) {
       if (aliased.startsWith('!')) analyzeScript(aliased.slice(1), sc, sc.inexact);
@@ -504,18 +520,18 @@ function protectedRef(ref: string): boolean {
 }
 
 function classifyNpm(prog: string, args: Word[], top: Word[], sc: Scope, io: Io): void {
-  const before = sc.sh.findings.length;
-  for (let i = 0; i < args.length; i++) {
-    const a = args[i];
-    if (a.dynamic) continue;
-    if (embeddedName(a.value)) {
-      classify(args.slice(i), top, sc, io);
-      if (sc.sh.findings.length > before) return;
+  // Package-launch strings name code to fetch/execute, not a verified local inode. They grant no tool exemption.
+  if (['npx', 'pnpx', 'bunx', 'corepack'].includes(prog) || statics(args).some(a => ['exec', 'dlx', 'x'].includes(a))) {
+    for (const arg of statics(args)) {
+      const pkg = arg.startsWith('@') ? arg.replace(/@[^/]*$/, '') : arg.replace(/@.*$/, '');
+      const name = PKG_NAMES[pkg] ?? pkg;
+      if (AGENT_CLIS.has(name) || ['tc', 'tinycloud'].includes(name)) return never(sc, 'package launcher can start an agent or reach an owner profile');
     }
+    return unresolved(sc.sh, 'package-launched executable has no verified inode; run an installed tool directly');
   }
   const lits = statics(args);
   if (lits.includes('publish')) return gate(sc, `${prog} publish`, top, () => normPublish(prog, args.slice(args.findIndex((a) => !a.dynamic && a.value === 'publish') + 1), nctx(sc)));
-  if (lits.some(v => ['unpublish', 'dist-tag'].includes(v))) return unresolved(sc.sh, `${prog} registry write: your owner runs it`);
+  if (lits.some(v => ['unpublish', 'dist-tag', 'deprecate', 'undeprecate', 'owner', 'access', 'token', 'logout', 'login', 'adduser'].includes(v))) return unresolved(sc.sh, `${prog} registry write: your owner runs it`);
   const positions: string[] = [];
   let dirs = [...sc.cwds];
   for (let i = 0; i < args.length; i++) {
@@ -562,7 +578,12 @@ function classifyTool(prog: 'wrangler' | 'phala' | 'changeset', args: Word[], to
     return gate(sc, `${prog} ${words[0]}`, top, () => (prog === 'wrangler' ? normWrangler(args, nctx(sc)) : prog === 'phala' ? normPhala(args) : normChangeset(nctx(sc))));
   }
   const positionals = args.filter((a) => a.dynamic || !a.value.startsWith('-')).slice(0, 2);
-  if (positionals.some((a) => a.dynamic)) unresolved(sc.sh, `${prog} subcommand built at run time`);
+  if (positionals.some((a) => a.dynamic)) return unresolved(sc.sh, `${prog} subcommand built at run time`);
+  const readOnly: Record<string, string[]> = { wrangler: ['--help', '--version', 'help', 'whoami', 'dev', 'tail', 'types'], phala: ['--help', '--version', 'help', 'status', 'list', 'logs'], changeset: ['--help', '--version', 'help', 'status'] };
+  const lits = statics(args);
+  if (lits.length && readOnly[prog].includes(lits[0])) return;
+  if (prog === 'wrangler' && ['versions list', 'versions view', 'deployments list', 'deployments status'].includes(lits.slice(0, 2).join(' '))) return;
+  return unresolved(sc.sh, `${prog} command outside the read-only allowlist: your owner runs it`);
 }
 
 function classifyTc(args: Word[], sc: Scope): void {
@@ -586,6 +607,7 @@ function classifyCourier(args: Word[], sc: Scope): void {
   if (COURIER_HUMAN_ONLY.has(sub)) {
     return never(sc, `courier ${sub} is for humans (pairing, grants, the wake budget, the watcher, the broker credential and the guard settings are never touched by an agent)`);
   }
+  if (!['manifest', 'send', 'inbox', 'read', 'task', 'request', 'orders', 'approval', 'run-approved'].includes(sub)) return unresolved(sc.sh, 'Courier subcommand is outside the agent allowlist');
   if (sub === 'approval' && !parsed.has('peek')) {
     return never(sc, 'courier approval without --peek would use the approval up; check with --peek, and run the approved action with `courier run-approved <requestId>`');
   }
@@ -626,12 +648,11 @@ function classifyFile(file: Word, sc: Scope, asShell: boolean, io?: Io): void {
     if (r.text.includes('\0')) return;
     const shebang = /^#!\s*(\S+)(?:\s+(\S+))?/.exec(r.text);
     const interp = shebang ? (progName(shebang[1]) === 'env' ? progName(shebang[2] ?? '') : progName(shebang[1])) : '';
-    if (shebang ? SHELLS.has(interp) : asShell || !SOURCE_EXT.test(c) || /\.(sh|bash|zsh)$/i.test(c)) {
+    if (asShell || (shebang ? SHELLS.has(interp) : !SOURCE_EXT.test(c) || /\.(sh|bash|zsh)$/i.test(c))) {
       analyzeScript(r.text, sc, sc.inexact);
     } else {
       classifyScriptText(r.text, sc, `${path.basename(c)}`);
     }
-    return;
   }
 }
 
@@ -660,83 +681,162 @@ function classifyShell(args: Word[], sc: Scope, io: Io): void {
   if (io.piped && !io.heredocs.length && !io.hereStrings.length) unresolved(sc.sh, 'a shell reading commands from a pipe');
 }
 
-function classifyInterpreter(prog: string, args: Word[], sc: Scope, io: Io): void {
-  // Only a literal, option-free installed entry is the Courier CLI.
-  const entry = args[0];
-  if ((prog === 'node' || prog === 'nodejs') && entry && !entry.dynamic && !entry.value.startsWith('-') &&
-      sc.sh.env.courierEntries?.includes(realpathBest(path.resolve(sc.cwds[0], entry.value)))) {
-    const rest = args.slice(1);
-    return rest[0]?.value === 'courier' ? classifyTc(rest, sc) : classifyCourier(rest, sc);
-  }
-  for (let i = 0; i < args.length; i++) {
-    const a = args[i];
-    if (a.dynamic) continue;
-    const name = embeddedName(a.value);
-    if (name && (a.value.includes('/') || i === 0)) classify(args.slice(i), args.slice(i), sc, io);
-  }
-  let sawCode = false;
-  for (const a of args) {
-    if (a.dynamic) continue;
-    if (SOURCE_EXT.test(a.value) && !a.value.includes(' ')) {
-      sawCode = true;
-      for (const d of sc.cwds) {
-        const r = sc.sh.env.readFile(path.resolve(d, a.value));
-        if (r.state === 'text') { classifyScriptText(r.text, sc, a.value); break; }
-        if (r.state === 'unreadable') { unresolved(sc.sh, `${a.value} cannot be read`); break; }
+const INTERPRETER_PACKAGES = new Set([
+  ...Object.keys(PKG_NAMES), ...AGENT_CLIS, ...NPM_FAMILY, 'gh', 'git', 'wrangler', 'changeset',
+  'semantic-release', 'lerna', 'turbo', 'nx', 'vercel', 'netlify-cli', 'flyctl',
+  '@getpaseo/cli', '@google/gemini-cli', 'opencode-ai', '@cloudflare/wrangler',
+  '@oh-my-pi/pi-coding-agent', 'phala',
+]);
+
+function scriptPackage(file: string, sc: Scope): string | undefined {
+  for (let dir = path.dirname(file); ; dir = path.dirname(dir)) {
+    const r = sc.sh.env.readFile(path.join(dir, 'package.json'));
+    if (r.state !== 'absent') {
+      if (r.state === 'text' && !r.text.includes('\0')) {
+        try { const pkg = JSON.parse(r.text); return typeof pkg?.name === 'string' ? pkg.name : undefined; }
+        catch { /* refuse below */ }
       }
-      if ([...sc.written].some((w) => w.endsWith(path.basename(a.value)))) unresolved(sc.sh, 'runs a file that this same command writes');
-    } else if (/\s|[(){};]/.test(a.value) || a.value.length > 12) {
-      sawCode = true;
-      classifyScriptText(a.value, sc, `${prog} code`);
+      unresolved(sc.sh, 'script package manifest cannot be inspected');
+      return;
     }
+    if (path.dirname(dir) === dir) return;
   }
-  for (const body of [...io.heredocs, ...io.hereStrings]) { sawCode = true; classifyScriptText(body, sc, `${prog} stdin`); }
-  if (!sawCode && io.piped && (args.length === 0 || (args.length === 1 && args[0].value === '-'))) unresolved(sc.sh, `${prog} reading code from a pipe`);
+}
+
+function interpreterFile(file: Word, rest: Word[], sc: Scope, io: Io): void {
+  if (sc.depth >= MAX_DEPTH) return unresolved(sc.sh, 'interpreter inputs nested too deeply to inspect');
+  if (file.dynamic || (sc.cwdUnknown && !path.isAbsolute(file.value))) return unresolved(sc.sh, 'interpreter script path cannot be resolved');
+  for (const cwd of sc.cwds) {
+    const absolute = path.resolve(cwd, file.value);
+    const real = realpathBest(absolute);
+    const scope = { ...sc, depth: sc.depth + 1, cwds: [cwd], externalOnly: true };
+    if (program(real, scope)) {
+      const argv = [{ value: real, dynamic: false }, ...rest];
+      classify(argv, argv, scope, io);
+      continue;
+    }
+    const pkg = scriptPackage(real, sc);
+    if ((pkg && INTERPRETER_PACKAGES.has(pkg)) || /(?:^|\/)(?:@tinycloud\/cli|@getpaseo\/cli|@anthropic-ai\/claude-code|@openai\/codex|@google\/gemini-cli|opencode-ai|paseo|claude|codex|omp|opencode|gemini)\/(?:bin|dist|src)\//.test(real)) {
+      never(sc, 'agent and gated-tool package entrypoints are not available through an interpreter');
+      continue;
+    }
+    const r = sc.sh.env.readFile(real);
+    if (r.state !== 'text' || r.text.includes('\0')) unresolved(sc.sh, `${file.value} cannot be inspected`);
+    else classifyScriptText(r.text, sc, file.value);
+    if (sc.written.has(absolute) || sc.written.has(real)) unresolved(sc.sh, 'runs a file that this same command writes');
+  }
+}
+
+function classifyInterpreter(prog: string, args: Word[], sc: Scope, io: Io): void {
+  const entry = args[0];
+  const kind = entry && !entry.dynamic && !entry.value.startsWith('-') ? courierEntry(entry.value, sc) : undefined;
+  if ((prog === 'node' || prog === 'nodejs') && kind) return kind === 'tc' ? classifyTc(args.slice(1), sc) : classifyCourier(args.slice(1), sc);
+  // These Bun subcommands were already inspected as package commands and script bodies.
+  if (prog === 'bun' && entry && ['run', 'test', 'publish', 'install', 'add', 'update', 'remove', 'x'].includes(entry.value)) return;
+  const node = ['node', 'nodejs', 'bun', 'tsx', 'ts-node'].includes(prog);
+  const python = /^python/.test(prog);
+  let inline = false;
+  let script = false;
+  let options = true;
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (arg.dynamic) return unresolved(sc.sh, 'interpreter options or script path built at run time');
+    const v = arg.value;
+    if (options && v === '--') { options = false; continue; }
+    if (options && v.startsWith('-') && v !== '-') {
+      const preload = node || prog === 'ruby' ? /^(?:-r|--require|--import|--loader|--experimental-loader)(?:=(.*))?$/.exec(v) : undefined;
+      const shortPreload = (node || prog === 'ruby') && /^-r.+/.test(v) ? v.slice(2) : undefined;
+      if (preload || shortPreload) {
+        const file = preload?.[1] !== undefined ? { value: preload[1], dynamic: false } : shortPreload ? { value: shortPreload, dynamic: false } : args[++i];
+        if (!file || file.dynamic || !/^(?:\.{1,2}\/|\/)/.test(file.value)) return unresolved(sc.sh, 'interpreter preload must name an inspectable file');
+        interpreterFile(file, args.slice(i + 1), sc, io);
+        continue;
+      }
+      const codeFlag = node ? /^(?:-e|-p|--eval|--print)(?:=(.*))?$/.exec(v)
+        : python ? /^-c$/.exec(v) : prog === 'php' ? /^(?:-r|--run)$/.exec(v) : /^-e$/.exec(v);
+      if (codeFlag) {
+        const code = codeFlag[1] !== undefined ? { value: codeFlag[1], dynamic: false } : args[++i];
+        if (!code || code.dynamic) return unresolved(sc.sh, 'interpreter inline code cannot be inspected');
+        classifyScriptText(code.value, sc, `${prog} code`); inline = true; continue;
+      }
+      if ((python && /^-m/.test(v)) || (!node && /^-(?:M|m|r)/.test(v))) return unresolved(sc.sh, 'interpreter module identity cannot be resolved');
+      if (python && ['-W', '-X'].includes(v)) {
+        const value = args[++i];
+        if (!value || value.dynamic || (v === '-X' && !['dev', 'utf8', 'faulthandler', 'importtime'].includes(value.value))) return unresolved(sc.sh, 'interpreter option cannot be inspected');
+        continue;
+      }
+      if (/^(?:--(?:help|version|check|no-warnings|trace-warnings|enable-source-maps)|-[vVhBIiSsuOEb]+)$/.test(v)) continue;
+      return unresolved(sc.sh, 'interpreter option cannot be resolved safely');
+    }
+    if (!inline && v !== '-') { interpreterFile(arg, args.slice(i + 1), sc, io); script = true; }
+    break;
+  }
+  if (!inline && !script && io.stdinFile) interpreterFile(io.stdinFile, [], sc, io);
+  if (!inline && !script && io.otherStdin) unresolved(sc.sh, 'interpreter input descriptor cannot be inspected');
+  for (const body of [...io.heredocs, ...io.hereStrings]) classifyScriptText(body, sc, `${prog} stdin`);
+  if (!inline && io.piped && (args.length === 0 || (args.length === 1 && args[0].value === '-'))) unresolved(sc.sh, `${prog} reading code from a pipe`);
 }
 
 function classifyWrapper(prog: string, args: Word[], top: Word[], sc: Scope, io: Io): void {
-  const inner: Scope = REPEATERS.has(prog) ? { ...sc, inexact: true } : sc;
-  const limit = Math.min(args.length, 100);
-  for (let i = 0; i < limit; i++) {
-    const w = args[i];
-    if (!w.dynamic && /^[A-Za-z_][A-Za-z0-9_]*=/.test(w.value) && SENSITIVE_VAR.test(w.value.split('=')[0])) {
-      return never(sc, `setting ${w.value.split('=')[0]} is not allowed for a woken agent`);
+  const inner: Scope = { ...sc, inexact: sc.inexact || REPEATERS.has(prog), externalOnly: !['command', 'builtin'].includes(prog) };
+  if (prog === 'find') {
+    for (let i = 0; i < args.length; i++) {
+      if (args[i].dynamic) continue;
+      if (['-exec', '-execdir', '-ok', '-okdir'].includes(args[i].value)) {
+        let end = i + 1;
+        while (end < args.length && ![';', '+'].includes(args[end].value)) end++;
+        if (end === args.length) return unresolved(sc.sh, 'find command terminator cannot be read');
+        classify(args.slice(i + 1, end), top, inner, io);
+        i = end;
+      }
     }
-    classify(args.slice(i), top, inner, io);
+    return;
+  }
+  if (!['env', 'command', 'builtin', 'exec', 'xargs', 'nohup', 'nice', 'timeout'].includes(prog)) return unresolved(sc.sh, 'wrapper executable cannot be resolved safely; run the installed tool directly');
+  const values = new Set(prog === 'env' ? ['-u', '--unset', '-C', '--chdir'] : prog === 'xargs' ? ['-n', '-P', '-I', '-L', '-s', '--max-args', '--max-procs', '--replace', '--max-lines'] : prog === 'timeout' ? ['-s', '--signal', '-k', '--kill-after'] : prog === 'nice' ? ['-n', '--adjustment'] : []);
+  let i = 0;
+  for (; i < args.length; i++) {
     const a = args[i];
-    if (!a.dynamic && /[\s;&|`$()<>]/.test(a.value) && a.value.trim()) analyzeScript(a.value, inner, inner.inexact);
+    if (a.dynamic) return unresolved(sc.sh, 'wrapper command/option built at run time');
+    if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(a.value)) {
+      if (SENSITIVE_VAR.test(a.value.split('=')[0])) return never(sc, 'changing the tool environment is not allowed');
+      if (prog === 'env') continue;
+    }
+    if (a.value === '--') { i++; break; }
+    if ((prog === 'env' && /^(?:-S|--split-string|-C|--chdir|-i$|--ignore-environment|-u|--unset)/.test(a.value)) || (prog === 'command' && a.value === '-p')) return unresolved(sc.sh, 'wrapper changes executable lookup and cannot preserve its verified identity');
+    if (!a.value.startsWith('-')) break;
+    if (values.has(a.value)) i++;
   }
-}
-
-function classifyDynamicHead(argv: Word[], top: Word[], sc: Scope, io: Io): void {
-  const rest = argv.slice(1);
-  const probe: Scope = { ...sc, noAlias: true };
-  classifyGh(rest, top, probe, io);
-  classifyGit(rest, top, probe, io);
-  classifyNpm('npm', rest, top, probe, io);
-  classifyTool('wrangler', rest, top, probe);
-  classifyTool('phala', rest, top, probe);
-  classifyTool('changeset', rest, top, probe);
-  classifyCurl(rest, top, probe, io);
-  for (const a of rest) {
-    if (!a.dynamic && /[\s;&|`$()<>]/.test(a.value) && a.value.trim()) analyzeScript(a.value, probe, probe.inexact);
+  if (prog === 'timeout' && i < args.length) i++;
+  if (i === args.length) {
+    if (prog === 'xargs') classify([{ value: 'echo', dynamic: false }], top, inner, io);
+    return;
   }
-  const first = rest.find((a) => !a.dynamic);
-  if (first && /^(eval|source|\.)$/.test(first.value)) unresolved(sc.sh, 'command built at run time');
+  classify(args.slice(i), top, inner, io);
 }
 
 /** Classify one simple command. `top` is the whole command as typed (what an approval has to name). */
 function classify(argv: Word[], top: Word[], sc: Scope, io: Io): void {
   if (!argv.length) return;
   const head = argv[0];
-  if (head.dynamic) return classifyDynamicHead(argv, top, sc, io);
-  const prog = embeddedName(head.value) ?? progName(head.value);
+  if (head.dynamic) return unresolved(sc.sh, 'executable identity cannot be resolved from a dynamic command word');
+  const prog = program(head.value, sc);
+  if (!prog) {
+    const before = sc.sh.findings.length;
+    classifyFile(head, sc, false, io);
+    if (sc.sh.findings.length === before) unresolved(sc.sh, 'unregistered executable identity: run an installed tool or a verified interpreter explicitly');
+    return;
+  }
   const args = argv.slice(1);
+  for (const arg of args) if (!INTERPRETERS.has(prog) && !arg.dynamic && arg.value.includes('/') && registeredFile(arg.value, sc.cwds[0], sc.sh.env.binaries ?? [])) return never(sc, 'registered executable files cannot be read, rewritten or repurposed');
 
   if (/^secret[-_]?bridge$/.test(prog)) return never(sc, 'Secret Bridge is retired and never allowed');
   if (AGENT_CLIS.has(prog)) return never(sc, `${prog} would start another agent without the Courier guard; do the work yourself`);
   if (NEVER_PROGS.has(prog)) return never(sc, `${prog} is not available to a woken agent (it changes user, outlives the call, or reaches another machine or a local service)`);
   if (head.value.includes('=') && SENSITIVE_VAR.test(head.value.split('=')[0])) return never(sc, `setting ${head.value.split('=')[0]} is not allowed for a woken agent`);
+  if (['ln', 'cp', 'mv', 'install', 'hardlink'].includes(prog)) {
+    for (const arg of args) if (!arg.dynamic && !arg.value.startsWith('-') && gatedSource(arg.value, sc.cwds[0], sc.sh.env.binaries ?? [])) return never(sc, 'copying, linking or moving a gated executable is not available');
+  }
   if (WRAPPERS.has(prog)) return classifyWrapper(prog, args, top, sc, io);
   if (SHELLS.has(prog)) return classifyShell(args, sc, io);
   switch (prog) {
@@ -767,6 +867,11 @@ function classify(argv: Word[], top: Word[], sc: Scope, io: Io): void {
       }
       return;
     }
+    case 'vercel': case 'netlify': case 'fly': case 'flyctl': case 'docker': {
+      const readOnly = ['--help', '--version', 'help', 'version', 'info', 'status', 'list', 'ls', 'logs', 'inspect', 'ps', 'images'];
+      if (args[0] && !args[0].dynamic && readOnly.includes(args[0].value)) return;
+      return unresolved(sc.sh, `${prog} command outside the read-only allowlist: your owner runs it`);
+    }
     case 'semantic-release': return unresolved(sc.sh, 'semantic-release publishes from agent-controlled code; your owner runs it');
     case 'make': case 'gmake': case 'turbo': case 'nx': case 'just': return unresolved(sc.sh, 'task runner recipes cannot be resolved safely; run the literal commands instead');
     case 'courier': return classifyCourier(args, sc);
@@ -782,15 +887,15 @@ function classify(argv: Word[], top: Word[], sc: Scope, io: Io): void {
   }
   if (CURLS.has(prog)) return classifyCurl(args, top, sc, io);
   if (INTERPRETERS.has(prog)) return classifyInterpreter(prog, args, sc, io);
-  if (head.value.includes('/')) classifyFile(head, sc, false, io);
+
 }
 
-const WRITERS = new Set(['tee', 'cp', 'mv', 'install', 'sponge', 'dd']);
+const WRITERS = new Set(['tee', 'cp', 'mv', 'install', 'ln', 'hardlink', 'sponge', 'dd']);
 
 /** Resolve a command string into findings. */
 export function analyze(command: string, env: PolicyEnv): Finding[] {
   const sh: Shared = { env, findings: [], seen: new Set() };
-  const sc: Scope = { sh, depth: 0, cwds: [path.resolve(env.cwd)], cwdUnknown: false, written: new Set(), inexact: false, assigns: [], noAlias: false };
+  const sc: Scope = { sh, depth: 0, cwds: [path.resolve(env.cwd)], cwdUnknown: false, written: new Set(), inexact: false, assigns: [] };
   analyzeScript(command, sc, false);
   return sh.findings;
 }
@@ -799,11 +904,7 @@ function analyzeScript(text: string, parent: Scope, inexact: boolean): void {
   const sh = parent.sh;
   if (parent.depth + 1 > MAX_DEPTH) return unresolved(sh, 'scripts nested too deeply to inspect');
   // Credential and guard-configuration paths are refused wherever they appear, read or write (R2, B1, B2).
-  for (const candidate of unquoted(text).match(/https?:\/\/[^\s;]+/gi) ?? []) {
-    try {
-      if (/^(localhost|127\.\d+\.\d+\.\d+|\[::1\]|0\.0\.0\.0)$/i.test(new URL(candidate).hostname)) return never(parent, 'loopback requests can reach local services outside the guard');
-    } catch { /* not a literal URL */ }
-  }
+  if (networkTextRefusal(unquoted(text))) return never(parent, 'loopback, numeric IP or local daemon requests are not available');
   const credential = credentialTextRefusal(text);
   if (credential) return never(parent, `refused: ${credential}`);
   const parsed = parseShell(text);
@@ -820,16 +921,25 @@ function analyzeScript(text: string, parent: Scope, inexact: boolean): void {
   // A literal installed CLI entry must be callable; arbitrary reads/writes of its install still refuse.
   const single = parsed.cmds.length === 1 ? parsed.cmds[0] : undefined;
   const words = single?.words.map(wordLiteral);
-  if (single && words && words.every((w) => w !== undefined) && ['node', 'nodejs'].includes(progName(words[0] ?? '')) &&
-      words[1] && sh.env.courierEntries?.includes(realpathBest(path.resolve(parent.cwds[0], words[1])))) {
+  if (single && words && words.every((w) => w !== undefined) && ['node', 'nodejs'].includes(program(words[0] ?? '', parent) ?? '') &&
+      words[1] && courierEntry(words[1], parent)) {
     if (single.assigns.length || single.redirs.length || single.inLoop || single.inFunc || single.piped) return unresolved(sh, 'Courier entry must run as one literal command without redirects or wrappers');
     const protectedArgs = protectedTextRefusal(words.slice(2).join(' '), sh.env.literals);
     if (protectedArgs) return never(parent, `refused: ${protectedArgs}`);
-    return classifyInterpreter(progName(words[0]!), words.slice(1).map((value) => ({ value: value!, dynamic: false })), parent, { heredocs: [], hereStrings: [], piped: false, otherStdin: false });
+    return classifyInterpreter(program(words[0]!, parent)!, words.slice(1).map((value) => ({ value: value!, dynamic: false })), parent, { heredocs: [], hereStrings: [], piped: false, otherStdin: false });
   }
+  if (single && words && words.every(w => w !== undefined) && courierEntry(words[0] ?? '', parent)) {
+    if (single.assigns.length || single.redirs.length || single.inLoop || single.inFunc || single.piped) return unresolved(sh, 'Courier entry must run as one literal command without redirects or wrappers');
+    const protectedArgs = protectedTextRefusal(words.slice(1).join(' '), sh.env.literals);
+    if (protectedArgs) return never(parent, `refused: ${protectedArgs}`);
+    const rest = words.slice(1).map(value => ({ value: value!, dynamic: false }));
+    return courierEntry(words[0]!, parent) === 'tc' ? classifyTc(rest, parent) : classifyCourier(rest, parent);
+  }
+  const pathRefusal = pathTextRefusal(text, parent.cwds[0], sh.env.getenv('HOME') ?? '/nonexistent-agent-home', sh.env.protectedRoots ?? sh.env.literals ?? [], sh.env.realHome);
+  if (pathRefusal) return never(parent, `refused: ${pathRefusal}`);
   const protectedText = protectedTextRefusal(text, sh.env.literals);
   if (protectedText) return never(parent, `refused: ${protectedText}`);
-  const sc: Scope = { ...parent, depth: parent.depth + 1, cwds: [...parent.cwds], written: new Set(parent.written), inexact: inexact || parent.inexact, assigns: [] };
+  const sc: Scope = { ...parent, depth: parent.depth + 1, cwds: [...parent.cwds], written: new Set(parent.written), inexact: inexact || parent.inexact, assigns: [], externalOnly: false };
   const c = census(parsed.cmds);
   const resolved = parsed.cmds.map((cmd) => ({
     cmd,
@@ -841,7 +951,7 @@ function analyzeScript(text: string, parent: Scope, inexact: boolean): void {
 
   // Pass A: directories the command can move to, and files it writes.
   for (const r of resolved) {
-    const head = r.words[0]?.dynamic ? undefined : progName(r.words[0]?.value ?? '');
+    const head = r.words[0]?.dynamic ? undefined : program(r.words[0]?.value ?? '', sc);
     if (head === 'cd' || head === 'pushd' || head === 'popd') {
       const target = r.words.slice(1).find((w) => w.dynamic || !w.value.startsWith('-'));
       if (head === 'popd' || !target || target.dynamic || target.value === '-' || target.value.startsWith('~')) sc.cwdUnknown = true;
@@ -851,11 +961,14 @@ function analyzeScript(text: string, parent: Scope, inexact: boolean): void {
   const note = (w: Word | undefined) => {
     if (!w) return;
     if (w.dynamic) { sc.cwdUnknown = sc.cwdUnknown || false; return; }
-    for (const d of sc.cwds) sc.written.add(path.resolve(d, w.value));
+    for (const d of sc.cwds) {
+      if (registeredFile(w.value, d, sc.sh.env.binaries ?? [])) never(sc, 'registered executable files cannot be overwritten');
+      sc.written.add(path.resolve(d, w.value));
+    }
   };
   for (const r of resolved) {
     for (const red of r.redirs) if (['>', '>>', '>|', '&>', '&>>', '<>'].includes(red.op)) note(red.target[0]);
-    const head = r.words[0] && !r.words[0].dynamic ? progName(r.words[0].value) : '';
+    const head = r.words[0] && !r.words[0].dynamic ? program(r.words[0].value, sc) ?? '' : '';
     if (WRITERS.has(head)) for (const w of r.words.slice(1)) { if (!w.dynamic && w.value.startsWith('of=')) note({ value: w.value.slice(3), dynamic: false }); else if (!w.value.startsWith('-')) note(w); }
     if (head === 'curl') r.words.forEach((w, i) => { if ((w.value === '-o' || w.value === '--output') && r.words[i + 1]) note(r.words[i + 1]); });
     if (head === 'wget') r.words.forEach((w, i) => { if ((w.value === '-O' || w.value === '--output-document') && r.words[i + 1]) note(r.words[i + 1]); });

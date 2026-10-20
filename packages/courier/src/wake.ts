@@ -6,9 +6,10 @@ import { oneLine } from './a2a.js';
 import { defer } from './defer.js';
 import { CourierError } from './errors.js';
 import { cmd } from './program.js';
-import { courierEnvOverrides, courierOnlyEnv } from './guard/install.js';
+import { agentHome, courierEnvOverrides, courierOnlyEnv } from './guard/install.js';
+import { realpathBest } from './guard/paths.js';
 import { startsAgentCli } from './guard/policy.js';
-import { prepareCleanHome } from './guard/cleanhome.js';
+import { prepareCleanHome, prepareAgentProfile } from './guard/cleanhome.js';
 import { GUARD_LABEL, installProjectGuard, isClaudeProvider, paseoEnv, sameDir, verifyProjectGuard } from './guard/paseo.js';
 
 /** What the watcher hands a wake adapter: one thread, every message not yet woken for. */
@@ -240,10 +241,16 @@ export function createWaker(
     verifyProjectGuard(installProjectGuard(config.cwd, config.home, config.guard), config.cwd);
   });
 
-  const prepareHome = () => prepareCleanHome({
-    realHome: config.realHome ?? env.HOME ?? os.homedir(),
-    cleanHome: path.join(config.home, 'guard/home'), claude: config.adapter !== 'exec',
-  });
+  const prepareHome = () => {
+    const courier = realpathBest(config.home);
+    const cwd = realpathBest(config.cwd);
+    if (cwd === courier || cwd.startsWith(`${courier}${path.sep}`)) throw new Error('agent cwd must be outside the Courier tree');
+    prepareCleanHome({
+      realHome: config.realHome ?? env.HOME ?? os.homedir(),
+      cleanHome: agentHome(config.home), claude: config.adapter !== 'exec',
+    });
+    prepareAgentProfile(config.home);
+  };
 
   const exec: Waker = async (request) => {
     // The exec adapter installs no guard. It runs only when the operator said so, and says so on every wake.

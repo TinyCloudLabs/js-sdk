@@ -27,7 +27,7 @@ esac
       const script = `
         import {createWaker, spawnRunner, killAllRunners} from ${JSON.stringify(new URL('../dist/wake.js', import.meta.url).href)};
         for (const signal of ['SIGINT','SIGTERM']) process.once(signal, killAllRunners);
-        const config = {adapter:${JSON.stringify(scenario.startsWith('paseo') ? 'paseo' : 'claude')}, cwd:${JSON.stringify(dir)}, home:${JSON.stringify(dir)}, owner:'test', timeoutMs:10000,
+        const config = {adapter:${JSON.stringify(scenario.startsWith('paseo') ? 'paseo' : 'claude')}, cwd:${JSON.stringify(dir)}, home:${JSON.stringify(path.join(dir, 'courier'))}, owner:'test', timeoutMs:10000,
           paseo:{bin:${JSON.stringify(bin)},provider:'claude'}, claude:{bin:${JSON.stringify(bin)},settings:'fake-settings',allow:[]}};
         const wake = createWaker(config,{run:spawnRunner,prepareGuard(){},env:{PATH:process.env.PATH,HOME:config.home},sessions:{get:()=> 'old-session',set(){}}});
         try {await wake({peer:'test', threadId:'01M5C9EDF03QMRZS2DJXGN5A4C', subject:'test',messages:[]}); process.exitCode=2;}

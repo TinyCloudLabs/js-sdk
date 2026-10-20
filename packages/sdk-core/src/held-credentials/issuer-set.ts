@@ -13,9 +13,9 @@ export interface IssuerEntry {
   vcts: readonly string[];
   profiles: readonly string[];
   notBefore: number;
-  /** Rotation: the key may not issue at or after this instant. null = not retired. */
+  /** Rotation: the key stops issuing at this instant. null = not retired. */
   retiredAt: number | null;
-  /** Compromise: hard stop, nothing verifies under the key once now >= this. null = no stop. */
+  /** Withdrawal: nothing verifies under the key once now >= this. null = no end. */
   notAfter: number | null;
 }
 
@@ -24,20 +24,16 @@ const CONSTRUCT = Symbol("IssuerSet.construct");
 /** Module-private read of the private entry map; assigned once by the class's static block. */
 let readEntry: (set: IssuerSet, issuerDid: string, kid: string) => IssuerEntry | undefined;
 
-/** A fresh, frozen entry: the public key is a new copy every time, so a caller cannot alter the set. */
+/** A fresh, frozen entry: the public key is a new copy on every lookup. */
 function copyEntry(entry: IssuerEntry): IssuerEntry {
   return Object.freeze({ ...entry, publicKey: entry.publicKey.slice() });
 }
 
 /**
- * An issuer set that has passed every rule of `parseIssuerSet`. It is opaque: the constructor
- * refuses any caller but `parseIssuerSet`, and the verifier accepts only a genuine instance
- * (`IssuerSet.is`), so a structural object can never stand in for a validated set. The instance,
- * its prototype and the class are frozen, so `resolveIssuer` cannot be replaced, and the verifier
- * reads entries through the module-private `lookupIssuerEntry`, never through a property.
- *
- * Do not mix the CJS and ESM builds of this package in one process: an `IssuerSet` made by the
- * other build is a different class and is refused as `bad-config`. Import one build only.
+ * An issuer set that has passed every rule of `parseIssuerSet`. Only `parseIssuerSet` creates one,
+ * and the verifier accepts only genuine instances (`IssuerSet.is`). The instance, its prototype and
+ * the class are frozen, and the verifier reads entries through the module-private `lookupIssuerEntry`.
+ * Use one build (ESM or CJS) of this package per process. Details: TC-1540
  */
 export class IssuerSet {
   readonly version: number;

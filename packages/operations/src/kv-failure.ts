@@ -2,6 +2,7 @@ import { authorizationVerdictOf, validatedCapabilityOf } from "@tinycloud/sdk-se
 
 import type { OperationExecutionOutcome } from "./contract.js";
 import { operationError } from "./errors.js";
+import { isRevokedGrantRefusal, REVOKED_GRANT_MESSAGE } from "./revoked-grant.js";
 
 /**
  * The TC-634 split of a node refusal: a 403, or a 401 that names a validated
@@ -20,6 +21,9 @@ export function kvRefusal(error: unknown): "permission_denied" | "auth_required"
 export function authorizationFailure(error: unknown, action: string): OperationExecutionOutcome<never> | undefined {
   switch (kvRefusal(error)) {
     case "auth_required":
+      if (isRevokedGrantRefusal(error)) {
+        return { status: "error", error: operationError("AUTH_REQUIRED", REVOKED_GRANT_MESSAGE) };
+      }
       return { status: "error", error: operationError("AUTH_REQUIRED", `Authentication is required to ${action}.`) };
     case "permission_denied":
       return { status: "error", error: operationError("PERMISSION_DENIED", `Permission is denied to ${action}.`) };

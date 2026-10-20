@@ -96,6 +96,56 @@ and deploys that image to the `tinycloud-mcp` Phala CVM. Its `production`
 environment requires `PHALA_CLOUD_API_KEY`, `CLOUDFLARE_API_TOKEN`, and a stable
 32-byte-or-longer `TC_MCP_STATE_SECRET`.
 
+### Post-deploy knowledge smoke
+
+After the `mcp-image.yml` deploy of `tinycloud-mcp` is live, QA runs the
+repo-kept script with throwaway E only (never a personal account). Clarissa's
+verified `.address-E` must already exist; both files must be owned by the
+current user, mode `0600`, and resolve under `~/scratch/`.
+
+```sh
+export TC_QA_PASSKEY_FILE=\"$HOME/scratch/tc1384/qa/.passkey-E.json\"
+export TC_QA_EXPECTED_ADDRESS_FILE=\"$HOME/scratch/tc1384/qa/.address-E\"
+export TC_QA_EXPECTED_ADDRESS_PREFIX=0x889E
+export TC_QA_PLAYWRIGHT_MODULE=\"$HOME/scratch/openkey-smoke/node_modules/playwright\"
+CHROME_PATH=\"$HOME/.cache/ms-playwright/chromium-1243/chrome-linux64/chrome\" node scripts/hosted-mcp-smoke.mjs --dry-run
+CHROME_PATH=\"$HOME/.cache/ms-playwright/chromium-1243/chrome-linux64/chrome\" node scripts/hosted-mcp-smoke.mjs --expect-apps 1 --require-read
+```
+
+Run from the js-sdk repository root after the deploy lead confirms production
+is live. `--base-url` defaults to `https://mcp.tinycloud.xyz` (HTTP only for
+localhost). Omit `--expect-apps` when no sample-app knowledge is installed;
+the empty/no-grant case is marked `PASS-WITH-NOTE` because read was not
+exercised. `--expect-apps N` requires at least N apps; `--require-read` fails
+instead of accepting an unexercised read. With an app, the script reads its
+first concept or its index. It verifies the full signed-in owner address
+against Clarissa's file before any MCP tool call, the complete read-only
+knowledge descriptions, response shapes, and OAuth cleanup. It prints only
+counts and PASS/FAIL/PASS-WITH-NOTE lines. Test offline:
+`node --test scripts/hosted-mcp-smoke.test.mjs`.
+
+One run holds an atomically published per-QA-account lock (including cleanup)
+in the system temp directory. `TC_QA_LOCK_DIR` overrides that directory for
+isolated offline tests; stale holders are checked against PID, Linux process
+start time, and their recorded deadline. `--timeout-s` defaults to 300
+seconds, then interrupts work, attempts bounded cleanup, and exits.
+SIGINT/SIGTERM use the same cleanup.
+Exit codes: `0` pass (including explicit notes), `1` assertion/cleanup fail,
+`2` invalid options/config or unavailable lock directory (one-line error
+with its directory name only), `3` another run holds the lock, `4` deadline,
+`130` SIGINT, `143` SIGTERM.
+
+Cleanup drains in-flight OAuth registration/token exchange responses for up
+to five seconds before deleting the dynamic client and revoking the token.
+An unknown issuance outcome, including a malformed registration response, is
+a cleanup failure, never reported as an absent or confirmed client. A missing
+revocation endpoint is a failure unless `--allow-unrevoked` is explicitly
+supplied; that mode reports the outstanding token. A client without
+registration management is reported as outstanding. Hosted
+TinyCloud delegations themselves have **no MCP-side revoke route** (TC-1156);
+they expire on the server's configured lifetime. OAuth revocation does not
+revoke them.
+
 ### Local stdio
 
 ```bash

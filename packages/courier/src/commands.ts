@@ -1,3 +1,4 @@
+import { recentNotices } from './notify.js';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -460,10 +461,12 @@ export async function cmdInbox(args: ParsedArgs) {
   });
   const output = {
     notice: COUNTERPARTY_NOTICE,
+    notifications: recentNotices(profileDir()),
     items: collection.items.map((item) => ({ authority: 'counterparty', ...item })),
     errors: collection.errors,
   };
-  await writeOut(args.has('json') ? JSON.stringify(output, null, 2) + '\n' : renderInboxText(collection.items));
+  const status = output.notifications.length ? `\nRecent notifications (delivery receipts may already be current):\n${output.notifications.map(n => `${n.title}: ${n.body}`).join('\n')}\n` : '';
+  await writeOut(args.has('json') ? JSON.stringify(output, null, 2) + '\n' : renderInboxText(collection.items) + status);
   for (const error of collection.errors) console.error(`warning: inbox ${error.peer}: ${error.message}`);
   if (!args.has('peek')) await commitReceipts(node.kv, collection.pending);
 }
@@ -612,15 +615,16 @@ const taskUsage = () => `Usage: ${cmd('task <taskId|new> --peer <p> --thread <id
 // ---------- request ----------
 
 export async function cmdRequest(args: ParsedArgs) {
-  const { profile, node } = await ctx();
   const threadId = args.positional[0] ?? fail('usage', requestUsage());
   const taskId = requireFlag(args, 'task', requestUsage());
   const why = requireFlag(args, 'why', requestUsage());
   const peerHandle = requireFlag(args, 'peer', requestUsage());
-  getPeer(profile, peerHandle);
   const flag = (name: string) => (args.get(name) === 'true' ? undefined : args.get(name));
+  const pinFlag = (name: string) => args.has(name) ? requireFlag(args, name, requestUsage()) : undefined;
   requestIds({ threadId, taskId });
-  const fields = requestFields({ verb: flag('verb'), target: flag('target'), summary: flag('summary') });
+  const fields = requestFields({ verb: flag('verb'), target: flag('target'), summary: flag('summary'), headSha: pinFlag('head-sha'), base: pinFlag('base') });
+  const { profile, node } = await ctx();
+  getPeer(profile, peerHandle);
   const risk = args.get('risk');
   const id = ulid();
   const request = {
@@ -649,7 +653,7 @@ export async function cmdRequest(args: ParsedArgs) {
 }
 
 const requestUsage = () =>
-  `Usage: ${cmd('request <threadId> --peer <p> --task <id> --verb merge|deploy|publish|spend|other --target <what> --summary "…" --why "…" [--risk "…"] [--action "…"]')}\n${targetHelp()}`;
+  `Usage: ${cmd('request <threadId> --peer <p> --task <id> --verb merge|deploy|publish|spend|other --target <what> --summary "…" --why "…" [--risk "…"] [--action "…"]')}\n${targetHelp()}\nMerge requires --head-sha <40 lowercase hex> and --base <branch> (refused for other verbs).\nRead the PR at request time: gh pr view N --repo owner/repo --json headRefOid,baseRefName\nPass headRefOid as --head-sha and baseRefName as --base; branch case is preserved.\nMerge requests include headSha and base in the approval hash.`;
 
 /** `courier request --help`: the usage line and every target form. */
 export const requestHelp = () => `${requestUsage()}\n`;

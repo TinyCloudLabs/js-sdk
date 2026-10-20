@@ -1,3 +1,4 @@
+import { trustedProgram } from './policy-programs.mjs';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { analyze } from '../dist/guard/policy.js';
@@ -9,7 +10,7 @@ const files = {
   '/repo/other/package.json': JSON.stringify({ name: '@x/other', version: '1.0.0', scripts: { test: 'gh pr merge 5 -R a/b' } }),
   '/repo/Makefile': 'ship:\n\tgh pr merge 5 -R a/b\n',
 };
-const env = { cwd: '/repo', readFile: file => files[file] ? { state: 'text', text: files[file] } : { state: 'absent' }, getenv: () => undefined, git: (_, args) => args.join(' ') === 'remote get-url origin' ? { ok: true, out: 'https://github.com/a/b.git' } : { ok: false, out: '' } };
+const env = { cwd: '/repo', resolveProgram: trustedProgram, readFile: file => files[file] ? { state: 'text', text: files[file] } : { state: 'absent' }, getenv: () => undefined, git: (_, args) => args.join(' ') === 'remote get-url origin' ? { ok: true, out: 'https://github.com/a/b.git' } : { ok: false, out: '' } };
 const refused = command => assert.ok(analyze(command, env).length, command);
 
 test('package script bodies include pre/post; selectors and task runners are resolved or refused', () => {
