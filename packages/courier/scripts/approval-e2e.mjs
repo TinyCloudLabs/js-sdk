@@ -10,6 +10,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { createOwner, grantFromRequest } from './fake-openkey.mjs';
+import { ulid } from 'ulid';
 import { requestHash } from '../dist/canonical.js';
 import { k } from '../dist/keys.js';
 
@@ -74,8 +75,8 @@ const waitFor = (match, ms) => new Promise((resolve, reject) => {
   waiters.push(w);
 });
 
-const thread = 'T' + Date.now();
-const ask = async (verb, target) => (await courier(alice.home, ['request', thread, '--peer', 'bob', '--task', 'K1', '--verb', verb, '--target', target, '--summary', `e2e ${verb} ${target}`, '--why', 'e2e', '--risk', 'low'])).json.requestId;
+const thread = ulid();
+const ask = async (verb, target) => (await courier(alice.home, ['request', thread, '--peer', 'bob', '--task', ulid(), '--verb', verb, '--target', target, '--summary', `e2e ${verb} ${target}`, '--why', 'e2e', '--risk', 'low'])).json.requestId;
 const forWhat = (verb, target) => ['--verb', verb, '--target', target];
 const MERGE = ['merge', 'tinycloudlabs/docs#42'];
 const readRequest = async (id) => (await alice.owner.node.kv.get(k.request(id), { prefix: '' })).data;
@@ -91,7 +92,7 @@ const decide = async (id, over = {}) => {
 try {
   await waitFor((e) => e.event === 'hook-subscribe', 60_000);
 
-  const noFields = await courier(alice.home, ['request', thread, '--peer', 'bob', '--task', 'K1', '--action', 'gh pr merge 42', '--why', 'e2e'], { allowFail: true });
+  const noFields = await courier(alice.home, ['request', thread, '--peer', 'bob', '--task', ulid(), '--action', 'gh pr merge 42', '--why', 'e2e'], { allowFail: true });
   ok('a request without verb/target/summary is refused', noFields.code === 2 && /--verb/.test(noFields.stderr));
   const id = await ask(...MERGE);
   const before = await courier(alice.home, ['approval', id, ...forWhat(...MERGE)], { allowFail: true });
