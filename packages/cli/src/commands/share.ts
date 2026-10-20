@@ -39,6 +39,7 @@ import { canonicalMailbox } from "@tinycloud/share-envelope";
 import { ProfileLockTimeoutError } from "@tinycloud/operations/state";
 import { parseDuration } from "../lib/duration.js";
 import { CLIError, handleError, storageFullError, wrapError } from "../output/errors.js";
+import { classifyShareFailure } from "../share/failure-class.js";
 import { authorizationRequiredJson, inspectHuman, publishHuman, receiveHuman, receiveJson, writeJson } from "../share/output.js";
 import { MAX_SHARE_STDIN_BYTES, readBoundedUrlStdin, readShareInput, shareInputFilename, writeShareOutput } from "../share/io.js";
 
@@ -183,6 +184,18 @@ export function shareCliError(error: unknown, operation: "publish" | "notify" = 
     if (failure.kind === "storage-full") {
       return storageFullError(failure)!;
     }
+    if (failure.kind === "space-not-ready") {
+      // The Node's own error stays on `cause`; its text never reaches output.
+      return Object.assign(
+        new CLIError(
+          "SPACE_NOT_READY",
+          "Your TinyCloud space isn't ready yet. We're setting it up: try again in a moment. If it keeps failing, contact support with code SPACE_NOT_READY. Nothing was shared.",
+          4,
+          { hint: "Retry in a moment; repeating the command is safe." },
+        ),
+        { cause: error.cause },
+      );
+    }
     if (failure.kind === "upload-failed") {
       return new CLIError("UPLOAD_FAILED", "share source upload failed; nothing was shared", 4);
     }
@@ -220,8 +233,13 @@ export function shareCliError(error: unknown, operation: "publish" | "notify" = 
   };
   if (nodeCode === "ENOENT") return new CLIError("INVALID_ARGUMENT", "share input was not found", 2);
   if (nodeCode === "EISDIR") return new CLIError("INVALID_ARGUMENT", "share input must be a Markdown file", 2);
-  if (error instanceof TypeError) return new CLIError("INVALID_ARGUMENT", "share input is invalid", 2);
   const mapped = typeof nodeCode === "string" && known[nodeCode] !== undefined ? known[nodeCode] : known[message];
+  // A node or network failure no mapping above claimed (an HTTP status from a
+  // policy, delegation, revoke or delivery call; an unreachable node) is named
+  // by class and status instead of collapsing into an invalid-argument error.
+  const classified = mapped === undefined ? classifyShareFailure(error, `\`${CLI_NAME} auth login\``) : undefined;
+  if (classified !== undefined) return Object.assign(new CLIError(classified.code, classified.reason, classified.exitCode), { cause: error });
+  if (error instanceof TypeError) return new CLIError("INVALID_ARGUMENT", "share input is invalid", 2);
   // Share adapters are external authority seams. Never echo an adapter's
   // arbitrary exception text to contract stdout/stderr; it may contain a
   // bearer URL, claim, session identifier, or provider response.
