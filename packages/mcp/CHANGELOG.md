@@ -1,5 +1,15 @@
 # @tinycloud/mcp
 
+## 0.6.1-beta.30
+
+### Patch Changes
+
+- 6ad58de: Consolidated dependency update: bump `@modelcontextprotocol/{node,server,client}` to 2.0.0-beta.5, `zod-to-json-schema` to ^3.25.2, `@openkey/sdk` to 0.9.0 in the example apps, and refresh the tokio entry in Cargo.lock.
+- Updated dependencies [6ad58de]
+  - @tinycloud/operations@0.6.1-beta.29
+  - @tinycloud/node-sdk-wasm@1.7.8-beta.0
+  - @tinycloud/node-sdk@3.3.0-beta.31
+
 ## 0.6.1-beta.29
 
 ### Patch Changes

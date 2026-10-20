@@ -43,6 +43,7 @@
     "cli-share-fragment-wording",
     "delegation-create-list-node-paths",
     "deps-refresh-jose",
+    "deps-security-update-2026-10-20",
     "direct-owner-revoke",
     "held-credentials-verifier",
     "kv-list-matching",

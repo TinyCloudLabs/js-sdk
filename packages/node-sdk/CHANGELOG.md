@@ -1,5 +1,13 @@
 # @tinycloudlabs/node-sdk
 
+## 3.3.0-beta.31
+
+### Patch Changes
+
+- Updated dependencies [6ad58de]
+  - @tinycloud/sdk-core@3.3.0-beta.31
+  - @tinycloud/node-sdk-wasm@1.7.8-beta.0
+
 ## 3.3.0-beta.30
 
 ### Patch Changes
