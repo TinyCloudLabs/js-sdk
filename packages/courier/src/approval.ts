@@ -2,8 +2,8 @@ import { CourierError } from './errors.js';
 import { k } from './keys.js';
 import { isRecord } from './a2a.js';
 import { requestHash } from './canonical.js';
-import { storedRequestFields } from './request.js';
-import { allStrings, hiddenTextProblem, plainLineProblem, plainTextProblem } from './text.js';
+import { requestShapeProblem, storedRequestFields } from './request.js';
+import { allStrings, hiddenTextProblem, MAX_ACTION, MAX_REASON, MAX_RISK, plainLineProblem, plainTextProblem } from './text.js';
 import { canonicalTarget, targetHelp } from './guard/target.js';
 import { getJson, putCreate } from './store.js';
 import type { KV } from './inbox.js';
@@ -29,6 +29,8 @@ export interface ApprovalRecord {
 
 export interface VerifiedApproval {
   requestId: string;
+  /** Lowercase hex SHA-256 of the request's canonical JSON; the view shows its first 8 digits as the card's fingerprint. */
+  requestHash: string;
   decision: 'approved' | 'denied';
   note: string;
   decidedAt: string;
@@ -100,6 +102,12 @@ export function verifyApproval(
   if (typeof request.peer !== 'string' || typeof request.threadId !== 'string' || typeof request.taskId !== 'string') {
     fail('approval-mismatch', 'The request is missing peer, threadId or taskId.');
   }
+  const shape = requestShapeProblem(request);
+  if (shape) fail('approval-mismatch', `The request is not in the form \`courier request\` writes (${shape}); it cannot be approved. File a new \`courier request\`.`);
+  // The free text is only displayed, but the owner read it: whatever is present must be well-formed text, never empty.
+  for (const [name, max] of [['action', MAX_ACTION], ['reason', MAX_REASON], ['risk', MAX_RISK]] as const) {
+    if (name in request && plainTextProblem(request[name], max)) fail('approval-mismatch', `The request's ${name} is empty, too long or not plain text; it cannot be approved. File a new \`courier request\`.`);
+  }
   const fields = storedRequestFields(request);
   if (!fields) {
     fail('approval-mismatch', 'The request has no valid structured verb, target and summary (an older request, or a hand-written one); it cannot be approved. File a new `courier request`.');
@@ -112,6 +120,7 @@ export function verifyApproval(
   }
   return {
     requestId: id,
+    requestHash: hash,
     decision: approval.decision,
     note: typeof approval.note === 'string' ? approval.note : '',
     decidedAt: approval.decidedAt as string,

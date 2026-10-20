@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { requestFields, storedRequestFields, requestText } from '../dist/request.js';
-import { plainLineProblem, MAX_SUMMARY } from '../dist/text.js';
+import { summaryProblem } from '../dist/text.js';
 import { requestHash } from '../dist/canonical.js';
 import { verifyApproval } from '../dist/approval.js';
 
@@ -11,7 +11,7 @@ const vectors = JSON.parse(fs.readFileSync(new URL('./vectors/request-fields.jso
 for (const v of vectors.fields) {
   test(`shared vector: ${v.field} ${v.name} -> ${v.valid ? 'accepted' : 'refused'}`, () => {
     if (v.field === 'summary') {
-      assert.equal(plainLineProblem(v.value, MAX_SUMMARY) === undefined, v.valid);
+      assert.equal(summaryProblem(v.value) === undefined, v.valid);
       if (typeof v.value === 'string') {
         const written = () => requestFields({ verb: 'other', target: 'workflow:o/r:ci.yml', summary: v.value });
         if (v.valid) assert.equal(written().summary, v.value, 'accepted text is stored exactly as given');
@@ -122,4 +122,66 @@ test('requestIds: thread and task ids that are not ULID-like are refused before 
     assert.throws(() => requestIds({ threadId: bad, taskId: 'K1' }), (e) => e.code === 'usage', JSON.stringify(bad));
     assert.throws(() => requestIds({ threadId: 'T1', taskId: bad }), (e) => e.code === 'usage', JSON.stringify(bad));
   }
+});
+
+test('verifyApproval returns the request hash (the view\'s fingerprint is its first 8 hex digits)', async () => {
+  const { createHash } = await import('node:crypto');
+  const { canonicalJson } = await import('../dist/canonical.js');
+  const req = { ...base };
+  const v = verifyApproval('R1', req, approve(req), { now: NOW });
+  assert.equal(v.requestHash, createHash('sha256').update(canonicalJson(req), 'utf8').digest('hex'));
+  assert.match(v.requestHash, /^[0-9a-f]{64}$/);
+});
+
+test('the read side refuses an empty or malformed action, reason or risk, like the writer', () => {
+  const run = (over) => { const req = { ...base, ...over }; try { verifyApproval('R1', req, approve(req), { now: NOW }); return 'ok'; } catch (e) { return e.code; } };
+  assert.equal(run({}), 'ok');
+  assert.equal(run({ action: '' }), 'approval-mismatch');
+  assert.equal(run({ reason: '' }), 'approval-mismatch');
+  assert.equal(run({ risk: 7 }), 'approval-mismatch');
+  assert.equal(run({ action: 'x'.repeat(2001) }), 'approval-mismatch');
+});
+
+test('PR numbers are exact digits: nothing is rounded through a float, over 9 digits is refused', async () => {
+  const { canonicalTarget } = await import('../dist/guard/target.js');
+  assert.equal(canonicalTarget('merge', 'O/R#0042'), 'o/r#42');
+  assert.equal(canonicalTarget('merge', 'https://github.com/O/R/pull/000123/files'), 'o/r#123');
+  assert.equal(canonicalTarget('merge', 'o/r#999999999'), 'o/r#999999999');
+  for (const bad of ['o/r#1000000000', 'o/r#99999999999999999999', 'o/r#0', 'o/r#000']) {
+    assert.throws(() => canonicalTarget('merge', bad), (e) => e.code === 'usage', bad);
+  }
+});
+
+test('courier request --help prints the target forms, not the global help', async () => {
+  const { main } = await import('../dist/main.js');
+  const original = process.stdout.write.bind(process.stdout);
+  let out = '';
+  process.stdout.write = (chunk) => { out += String(chunk); return true; };
+  try {
+    assert.equal(await main(['request', '--help']), 0);
+  } finally {
+    process.stdout.write = original;
+  }
+  assert.match(out, /--verb merge\|deploy\|publish\|spend\|other/);
+  assert.match(out, /owner\/repo#<PR number>/);
+  assert.match(out, /npm:<name>@<version>/);
+  assert.ok(!/Setup & pairing/.test(out));
+});
+
+test('the request key set is closed: unknown keys refused, action/reason/risk optional when read, requestedBy exactly owner+agent', async () => {
+  const { requestShapeProblem } = await import('../dist/request.js');
+  assert.equal(requestShapeProblem({ ...base }), undefined);
+  const { action, reason, risk, ...minimal } = base;
+  assert.equal(requestShapeProblem(minimal), undefined, 'a reader accepts a request without the three free-text fields');
+  assert.match(requestShapeProblem({ ...base, extra: 'x' }), /unknown key "extra"/);
+  assert.match(requestShapeProblem({ ...base, requestedBy: { owner: 'o', agent: 'a', more: 'x' } }), /exactly owner and agent/);
+  assert.match(requestShapeProblem({ ...base, status: 'approved' }), /pending/);
+  assert.match(requestShapeProblem({ ...base, createdAt: 5 }), /not a string/);
+  const { verb, ...noVerb } = base;
+  assert.match(requestShapeProblem(noVerb), /missing key "verb"/);
+});
+
+test('courier approval refuses a request with an extra key even if the hash matches', () => {
+  const req = { ...base, smuggled: 'gh pr merge 999' };
+  assert.match(code(req), /^approval-mismatch/);
 });

@@ -24,7 +24,7 @@ import {
 import { commitReceipts, collectInbound, renderInboxText, writeOut } from './inbox.js';
 import { getJson, listAll, putCreate, putMatch, del } from './store.js';
 import { DEFAULT_ORDERS } from './orders.js';
-import { requestFields, requestIds, requestText } from './request.js';
+import { requestFields, requestIds, requestShapeProblem, requestText } from './request.js';
 import { requestHash } from './canonical.js';
 import { targetHelp } from './guard/target.js';
 import type { ParsedArgs } from './args.js';
@@ -632,18 +632,27 @@ export async function cmdRequest(args: ParsedArgs) {
     expiresAt: new Date(Date.now() + 24 * 3600 * 1000).toISOString(),
     status: 'pending',
   };
-  requestHash(request); // refuses (throws) a request that could never be hashed or approved, before anything is written
-  await putCreate(node.kv, k.request(id), request);
+  const hash = requestHash(request); // refuses (throws) a request that could never be hashed or approved, before anything is written
+  const problem = requestShapeProblem(request);
+  if (problem) fail('usage', `The request is malformed: ${problem}.`);
+  // The task comes first: the view names <peer> on the card only if `to/<peer>/threads/<thread>/task/<task>.json`
+  // exists in this space, so the request is not written unless that file does (created here if the agent has not yet).
   const taskKey = k.task(peerHandle, threadId, taskId);
   const existing = await getJson<CourierTask>(node.kv, taskKey);
   const task = authRequiredTask(existing?.value, threadId, taskId);
   if (existing?.etag) await putMatch(node.kv, taskKey, task, existing.etag);
   else await putCreate(node.kv, taskKey, task);
-  printJson({ ok: true, requestId: id, taskId, state: 'TASK_STATE_AUTH_REQUIRED' });
+  if (!(await getJson<CourierTask>(node.kv, taskKey))) fail('task-missing', `The task ${taskId} is not in ${taskKey}; no request was written.`);
+  await putCreate(node.kv, k.request(id), request);
+  // `requestHash` is what the view's card shows as its fingerprint (first 8 hex digits) and `courier approval` prints in full.
+  printJson({ ok: true, requestId: id, requestHash: hash, taskId, state: 'TASK_STATE_AUTH_REQUIRED' });
 }
 
 const requestUsage = () =>
   `Usage: ${cmd('request <threadId> --peer <p> --task <id> --verb merge|deploy|publish|spend|other --target <what> --summary "…" --why "…" [--risk "…"] [--action "…"]')}\n${targetHelp()}`;
+
+/** `courier request --help`: the usage line and every target form. */
+export const requestHelp = () => `${requestUsage()}\n`;
 
 // ---------- orders ----------
 

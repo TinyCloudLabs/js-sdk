@@ -79,5 +79,5 @@ export async function cmdResume(args: ParsedArgs): Promise<void> {
     return;
   }
   await del(node.kv, k.paused(peer, threadId));
-  console.log(`Resumed thread ${threadId} with ${peer}. A running watcher picks this up within its poll interval.`);
+  console.log(`Resumed thread ${threadId} with ${peer}. A running watcher picks this up with the next message it sees.`);
 }

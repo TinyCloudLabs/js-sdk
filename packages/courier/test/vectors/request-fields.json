@@ -398,6 +398,257 @@
    "value": "note:a\ud834\udd59b",
    "valid": false,
    "verb": "other"
+  },
+  {
+   "name": "PR number of 9 digits",
+   "field": "target",
+   "value": "o/r#999999999",
+   "valid": true,
+   "verb": "merge"
+  },
+  {
+   "name": "PR number of 10 digits is refused",
+   "field": "target",
+   "value": "o/r#1000000000",
+   "valid": false,
+   "verb": "merge"
+  },
+  {
+   "name": "PR number above 2^53 is refused, not rounded",
+   "field": "target",
+   "value": "o/r#99999999999999999999",
+   "valid": false,
+   "verb": "merge"
+  },
+  {
+   "name": "PR number with leading zeros is not canonical as stored",
+   "field": "target",
+   "value": "o/r#0042",
+   "valid": false,
+   "verb": "merge"
+  },
+  {
+   "name": "PR number zero",
+   "field": "target",
+   "value": "o/r#0",
+   "valid": false,
+   "verb": "merge"
+  },
+  {
+   "name": "merge PR with leading zero is not canonical as stored",
+   "field": "target",
+   "value": "o/r#0139",
+   "valid": false,
+   "verb": "merge"
+  },
+  {
+   "name": "merge PR 00",
+   "field": "target",
+   "value": "o/r#00",
+   "valid": false,
+   "verb": "merge"
+  },
+  {
+   "name": "merge PR 139",
+   "field": "target",
+   "value": "o/r#139",
+   "valid": true,
+   "verb": "merge"
+  },
+  {
+   "name": "secrets target with a double space is not canonical",
+   "field": "target",
+   "value": "secrets:A  bB",
+   "valid": false,
+   "verb": "other"
+  },
+  {
+   "name": "workflow target with an upper-case repo is not canonical",
+   "field": "target",
+   "value": "workflow:O/R:x.yml",
+   "valid": false,
+   "verb": "other"
+  },
+  {
+   "name": "summary with ASCII double quote",
+   "field": "summary",
+   "value": "Merge \"docs\"",
+   "valid": false
+  },
+  {
+   "name": "summary with left double quotation mark",
+   "field": "summary",
+   "value": "Merge \u201cdocs\u201c",
+   "valid": false
+  },
+  {
+   "name": "summary with right double quotation mark",
+   "field": "summary",
+   "value": "Merge \u201ddocs\u201d",
+   "valid": false
+  },
+  {
+   "name": "summary with double low-9 quotation mark",
+   "field": "summary",
+   "value": "Merge \u201edocs\u201e",
+   "valid": false
+  },
+  {
+   "name": "summary with double high-reversed-9 quotation mark",
+   "field": "summary",
+   "value": "Merge \u201fdocs\u201f",
+   "valid": false
+  },
+  {
+   "name": "summary with left guillemet",
+   "field": "summary",
+   "value": "Merge \u00abdocs\u00ab",
+   "valid": false
+  },
+  {
+   "name": "summary with right guillemet",
+   "field": "summary",
+   "value": "Merge \u00bbdocs\u00bb",
+   "valid": false
+  },
+  {
+   "name": "summary with single left guillemet",
+   "field": "summary",
+   "value": "Merge \u2039docs\u2039",
+   "valid": false
+  },
+  {
+   "name": "summary with single right guillemet",
+   "field": "summary",
+   "value": "Merge \u203adocs\u203a",
+   "valid": false
+  },
+  {
+   "name": "summary with fullwidth quotation mark",
+   "field": "summary",
+   "value": "Merge \uff02docs\uff02",
+   "valid": false
+  },
+  {
+   "name": "summary with heavy double turned comma ornament",
+   "field": "summary",
+   "value": "Merge \u275ddocs\u275d",
+   "valid": false
+  },
+  {
+   "name": "summary with heavy double comma ornament",
+   "field": "summary",
+   "value": "Merge \u275edocs\u275e",
+   "valid": false
+  },
+  {
+   "name": "summary with reversed double prime quotation mark",
+   "field": "summary",
+   "value": "Merge \u301ddocs\u301d",
+   "valid": false
+  },
+  {
+   "name": "summary with low double prime quotation mark",
+   "field": "summary",
+   "value": "Merge \u301fdocs\u301f",
+   "valid": false
+  },
+  {
+   "name": "summary with an apostrophe is fine",
+   "field": "summary",
+   "value": "Merge the docs PR (it's small)",
+   "valid": true
+  },
+  {
+   "name": "summary with Khitan small script filling character",
+   "field": "summary",
+   "value": "Merge\ud81b\udfe4docs",
+   "valid": false
+  },
+  {
+   "name": "target with Khitan small script filling character",
+   "field": "target",
+   "value": "note:a\ud81b\udfe4b",
+   "valid": false,
+   "verb": "other"
+  },
+  {
+   "name": "summary with Hangul choseong filler",
+   "field": "summary",
+   "value": "Merge\u115fdocs",
+   "valid": false
+  },
+  {
+   "name": "target with Hangul choseong filler",
+   "field": "target",
+   "value": "note:a\u115fb",
+   "valid": false,
+   "verb": "other"
+  },
+  {
+   "name": "summary with Hangul jungseong filler",
+   "field": "summary",
+   "value": "Merge\u1160docs",
+   "valid": false
+  },
+  {
+   "name": "target with Hangul jungseong filler",
+   "field": "target",
+   "value": "note:a\u1160b",
+   "valid": false,
+   "verb": "other"
+  },
+  {
+   "name": "summary with Hangul filler",
+   "field": "summary",
+   "value": "Merge\u3164docs",
+   "valid": false
+  },
+  {
+   "name": "target with Hangul filler",
+   "field": "target",
+   "value": "note:a\u3164b",
+   "valid": false,
+   "verb": "other"
+  },
+  {
+   "name": "summary with halfwidth Hangul filler",
+   "field": "summary",
+   "value": "Merge\uffa0docs",
+   "valid": false
+  },
+  {
+   "name": "target with halfwidth Hangul filler",
+   "field": "target",
+   "value": "note:a\uffa0b",
+   "valid": false,
+   "verb": "other"
+  },
+  {
+   "name": "summary with shorthand format letter overlap",
+   "field": "summary",
+   "value": "Merge\ud82f\udca0docs",
+   "valid": false
+  },
+  {
+   "name": "target with shorthand format letter overlap",
+   "field": "target",
+   "value": "note:a\ud82f\udca0b",
+   "valid": false,
+   "verb": "other"
+  },
+  {
+   "name": "summary with shorthand format up step",
+   "field": "summary",
+   "value": "Merge\ud82f\udca3docs",
+   "valid": false
+  },
+  {
+   "name": "target with shorthand format up step",
+   "field": "target",
+   "value": "note:a\ud82f\udca3b",
+   "valid": false,
+   "verb": "other"
   }
  ]
 }
