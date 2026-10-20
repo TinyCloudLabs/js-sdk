@@ -23,10 +23,10 @@ const TIERS: Record<string, true> = { trusted: true, strict: true };
 /** The policy for an absent peer. Invalid entries are read as this too, so a typo never widens trust. */
 const ABSENT: PeerPolicy = { tier: 'strict', ratePerHour: DEFAULT_IN_PER_HOUR, outPerHour: DEFAULT_OUT_PER_HOUR };
 
-/** A per-hour cap is a whole number from 1 to 10000. */
+/** A per-hour override is a whole number from 1 up to the default, so an entry can only lower a cap. */
 function cap(value: unknown, fallback: number): number | undefined {
   if (value === undefined) return fallback;
-  if (!Number.isInteger(value) || (value as number) < 1 || (value as number) > 10000) return undefined;
+  if (!Number.isInteger(value) || (value as number) < 1 || (value as number) > fallback) return undefined;
   return value as number;
 }
 

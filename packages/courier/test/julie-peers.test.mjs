@@ -48,14 +48,17 @@ test('invalid entries fail closed to strict with defaults and are logged', () =>
     zeroRate: { tier: 'trusted', ratePerHour: 0 },
     floatRate: { tier: 'trusted', outPerHour: 2.5 },
     hugeRate: { tier: 'trusted', ratePerHour: 1e9 },
+    raiseInRate: { tier: 'trusted', ratePerHour: 101 },
+    raiseOutRate: { tier: 'trusted', outPerHour: 101 },
     notAnObject: 'trusted',
   });
   try {
     const peers = loadPeers(t.file, (event, fields) => events.push({ event, ...fields }));
-    for (const peerId of ['unknownKey', 'badTier', 'zeroRate', 'floatRate', 'hugeRate', 'notAnObject']) {
+    const bad = ['unknownKey', 'badTier', 'zeroRate', 'floatRate', 'hugeRate', 'raiseInRate', 'raiseOutRate', 'notAnObject'];
+    for (const peerId of bad) {
       assert.deepEqual(policyOf(peers, peerId), { tier: 'strict', ratePerHour: 100, outPerHour: 100 }, peerId);
     }
-    assert.equal(events.length, 6);
+    assert.equal(events.length, bad.length);
     assert.ok(events.every((e) => e.event === 'peers-invalid-entry' && e.as === 'strict'));
   } finally {
     t.cleanup();

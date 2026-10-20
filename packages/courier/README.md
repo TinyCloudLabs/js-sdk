@@ -607,6 +607,47 @@ The service runs the same command line you gave (install flags removed, `claude`
 profile on the same machine. systemd needs `loginctl enable-linger $USER` to
 keep the watcher running while logged out.
 
+## Julie intake (reader)
+
+`courier intake` reads the mirror of paired peers' messages from the self-space KV
+and writes one JSON file per message into a queue directory for the Julie reader.
+It does not send anything, and it does not change the watcher.
+
+```bash
+courier intake --once --queue-dir <dir> --state-dir <dir> --peers-file <file>
+courier intake --interval 60 --queue-dir <dir> --state-dir <dir> --peers-file <file>
+```
+
+Defaults for `--queue-dir`, `--state-dir` and `--peers-file` are under
+`<COURIER_HOME>/julie/`. Only peers with status `paired` are read. A lock file in
+the state directory keeps one intake process per profile.
+
+Queue record (`<queue-dir>/<peerId>/<msgId>.json`, directories 0750, files 0640,
+written atomically without overwriting):
+
+`{v:1, msgId, threadId, sender:{id, displayName}, receivedAt, text, cheapChecks:{textVerdict, tier, peerRatePerHourRemaining, flags}}`
+
+`receivedAt` is the local time the record was written. `text` is the message text,
+cut to 16 KiB UTF-8 at a code-point boundary when longer; the `size` flag marks a cut.
+
+Flags, in this order: `too-long`, `link`, `instruction`, `request`, `secret-request`,
+`encoded`, `unicode`, `size`, `rate`. They are cheap heuristics for the reader, not
+a verdict on content.
+
+Ordering: intake keeps a per-peer high-water mark in `intake-state.json`. A message
+whose id sorts at or below that mark is skipped. A message id more than 10 minutes
+ahead of local time stops that peer's cycle and is not recorded. The first run
+queues the whole mirror backlog for each paired peer.
+
+Rate: each peer is limited to 100 inbound messages per hour by default, including
+peers absent from `peers.json`. Over the cap, a message is still queued with
+`peerRatePerHourRemaining: 0` and the `rate` flag.
+
+`peers.json` must not be group- or world-writable and maps a peer id to
+`{"tier": "trusted"|"strict", "ratePerHour": n, "outPerHour": n}`. `tier` defaults to
+`strict` for absent peers. `ratePerHour` and `outPerHour` are integers from 1 up to
+the default of 100; a value above 100 makes the entry invalid, so that peer reads as strict with the defaults.
+
 ## Authority
 
 Courier accepts only an OpenKey grant whose signed authority exactly equals
