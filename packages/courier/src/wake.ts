@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { oneLine } from './a2a.js';
+import { defer } from './defer.js';
 import { cmd } from './program.js';
 
 /** What the watcher hands a wake adapter: one thread, every message not yet woken for. */
@@ -91,7 +92,7 @@ export type Runner = (
 const OUTPUT_CAP = 256 * 1024;
 
 export const spawnRunner: Runner = (bin, args, { cwd, env, input, timeoutMs }) => {
-  const { promise, resolve } = Promise.withResolvers<RunResult>();
+  const { promise, resolve } = defer<RunResult>();
   let stdout = '';
   let stderr = '';
   const child = spawn(bin, args, { cwd, env, stdio: ['pipe', 'pipe', 'pipe'] });
