@@ -33,6 +33,35 @@ async function assertCursorMatchesData(store: SqliteReplicaStore): Promise<numbe
   return covered;
 }
 
+describe("crash orphan collection", () => {
+  for (const [point, committedPages] of [
+    ["afterBlobs", 1],
+    ["beforeCommit", 1],
+    ["afterCommit", 2],
+  ] as const) {
+    test(`collectOrphans after a kill ${point} leaves exactly the committed blobs and keeps their content`, async () => {
+      const dir = await tempDir();
+      const child = spawnSync(process.execPath, [CHILD, dir, point], { encoding: "utf8" });
+      expect({ signal: child.signal, stderr: child.stderr }).toEqual({ signal: "SIGKILL", stderr: "" });
+
+      const removed = await SqliteReplicaStore.collectOrphans(dir);
+
+      const committed = committedPages * CRASH_PAGE_LIMIT;
+      expect(removed).toBe(point === "afterCommit" ? 0 : CRASH_PAGE_LIMIT);
+      expect((await blobs(dir)).length).toBe(committed);
+      expect(await SqliteReplicaStore.contentBytes(dir)).toBe(
+        CRASH_DATASET.slice(0, committed).reduce((sum, [, value]) => sum + value.length, 0),
+      );
+      const store = await SqliteReplicaStore.open(dir, { create: false });
+      expect(await assertCursorMatchesData(store)).toBe(committed);
+    });
+  }
+
+  test("collectOrphans on a missing replica is a no-op", async () => {
+    expect(await SqliteReplicaStore.collectOrphans(join(await tempDir(), "absent"))).toBe(0);
+  });
+});
+
 describe("crash safety", () => {
   for (const [point, committedPages] of [
     ["afterBlobs", 1],

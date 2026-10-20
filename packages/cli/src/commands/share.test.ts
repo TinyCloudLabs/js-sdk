@@ -112,6 +112,41 @@ describe("tc share command contract", () => {
     // A storage rejection from another share write (history, delegation) is the same error.
     expect(shareCliError({ code: "STORAGE_QUOTA_EXCEEDED", message: "raw node text", meta: { status: 402 } })).toMatchObject({ code: "STORAGE_QUOTA_EXCEEDED", exitCode: 10 });
 
+    const nodeError = { code: "KV_WRITE_FAILED", message: "Failed to put key: 404 - Space not found", meta: { status: 404 } };
+    const notReady = shareCliError(new SharePublishAuthorityError({ kind: "space-not-ready" }, { cause: nodeError }));
+    expect(notReady).toMatchObject({ code: "SPACE_NOT_READY", exitCode: 4, cause: nodeError });
+    expect(notReady.message).toBe("Your TinyCloud space isn't ready for this yet (SPACE_NOT_READY). This is a known node problem being fixed: retry after the node update; contact support with this code if it persists.");
+    // A bare node 404 reaching the mapper (an unknown share, a missing key) is not SPACE_NOT_READY.
+    expect(shareCliError(nodeError).code).not.toBe("SPACE_NOT_READY");
+
+    // A failure no specific mapping claims is named by class and HTTP status, never by remote text.
+    const secret = "tc1-SECRET-TOKEN https://share.example/viewer#tc1=SECRETFRAGMENT bafyPRIVATEMATERIALCID";
+    const withStatus = (status: number, extra: Record<string, unknown> = {}) => Object.assign(new Error(`policy root revocation rejected: HTTP ${status} - ${secret}`), { status, ...extra });
+    const classes: ReadonlyArray<readonly [string, unknown, string, number, string]> = [
+      ["401", withStatus(401), "AUTH_REQUIRED", 3, "HTTP 401"],
+      ["403", withStatus(403), "PERMISSION_DENIED", 5, "HTTP 403"],
+      ["service verdict on meta.status", { code: "AUTH_UNAUTHORIZED", message: secret, meta: { status: 403 } }, "PERMISSION_DENIED", 5, "HTTP 403"],
+      ["404", withStatus(404), "NOT_FOUND", 4, "HTTP 404"],
+      ["status on cause", Object.assign(new Error(secret), { cause: withStatus(404) }), "NOT_FOUND", 4, "HTTP 404"],
+      ["409", withStatus(409), "NODE_REJECTED", 1, "HTTP 409"],
+      ["422", withStatus(422), "INVALID_ARGUMENT", 2, "HTTP 422"],
+      ["429", withStatus(429), "NODE_UNAVAILABLE", 7, "HTTP 429"],
+      ["502 with an upstream code", withStatus(502, { code: "UPSTREAM_DOWN" }), "NODE_UNAVAILABLE", 7, "HTTP 502, UPSTREAM_DOWN"],
+      ["unreachable node", new TypeError(`fetch failed ${secret}`), "NETWORK_ERROR", 6, "could not be reached"],
+    ];
+    for (const [label, input, code, exitCode, reason] of classes) {
+      const mapped = shareCliError(input);
+      expect(mapped, label).toMatchObject({ code, exitCode, cause: input });
+      expect(mapped.message, label).toContain(reason);
+      expect(mapped.message, label).not.toMatch(/SECRET|PRIVATEMATERIAL|tc1-|viewer/);
+      expect(shareCliError(input, "notify").code, label).toBe(code);
+    }
+    // An upstream code that is not a plain identifier is dropped, not echoed.
+    expect(shareCliError(withStatus(500, { code: `bad ${secret}` })).message).not.toMatch(/SECRET|PRIVATEMATERIAL/);
+    // No status, verdict or network signal: unchanged.
+    expect(shareCliError(new Error(secret))).toMatchObject({ code: "INVALID_ARGUMENT", exitCode: 2, message: "share operation failed" });
+    expect(shareCliError(new TypeError("recipient is invalid"))).toMatchObject({ code: "INVALID_ARGUMENT", message: "share input is invalid" });
+
     const upload = shareCliError(new SharePublishAuthorityError({ kind: "upload-failed" }));
     expect(upload).toMatchObject({ code: "UPLOAD_FAILED", exitCode: 4 });
     expect(upload.message).toContain("nothing was shared");
