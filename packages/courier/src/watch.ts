@@ -15,6 +15,8 @@ const TERMINAL_TASK_STATES = new Set([
 ]);
 const WAKEN_MEMORY = 500;
 const WAKE_RETRY_MS = 60_000;
+/** Thread and message ids come from key names the peer controls; they reach prompts and argv, so only ULID-like ids pass. */
+const SAFE_ID = /^[0-9A-Za-z_-]{1,64}$/;
 
 export interface PendingWake {
   peer: string;
@@ -104,6 +106,7 @@ function sleep(ms: number, signal: AbortSignal): Promise<void> {
 export class Watcher {
   private state: WatchState = emptyWatchState();
   private readonly retryAt = new Map<string, number>();
+  private readonly waking = new Set<string>();
   private readonly taskCache = new Map<string, { etag: string | null; terminal: boolean }>();
   private readonly metaMirrored = new Set<string>();
   private readonly syncing = new Map<string, { again: boolean; via: Via }>();
@@ -185,6 +188,10 @@ export class Watcher {
 
     const delivered: { threadId: string; messageId: string; intent?: string }[] = [];
     for (const selected of selectUndelivered(keys, receipts)) {
+      if (!SAFE_ID.test(selected.threadId) || !SAFE_ID.test(selected.messageId)) {
+        log('ignored', { peer: peer.handle, reason: 'unsafe-id' });
+        continue;
+      }
       const got = await getJson<unknown>(peerKv, selected.key);
       if (!got) continue;
       const value = got.value;
@@ -278,36 +285,46 @@ export class Watcher {
 
   // ---------- wake ----------
 
-  /** Wake every thread whose debounce has elapsed (`force`: all of them now). */
+  /** Wake every thread whose debounce has elapsed (`force`: all of them now). Threads wake in parallel, one wake per thread at a time. */
   async tick(force = false): Promise<void> {
     const at = this.now();
+    const runs: Promise<void>[] = [];
     for (const [key, pending] of Object.entries(this.state.pending)) {
+      if (this.waking.has(key)) continue;
       if (!force && wakeDueAt(pending, this.opts.debounceMs) > at) continue;
       if (!force && (this.retryAt.get(key) ?? 0) > at) continue;
-      try {
-        await this.deps.wake({ peer: pending.peer, threadId: pending.threadId, subject: pending.subject, messages: [...pending.messages] });
-      } catch (error) {
-        this.retryAt.set(key, at + WAKE_RETRY_MS);
-        this.deps.log('wake-error', { peer: pending.peer, threadId: pending.threadId, ...errInfo(error) });
-        continue;
-      }
-      this.retryAt.delete(key);
-      const woken = pending.messages.map((m) => m.messageId);
-      const oldestSentAt = pending.messages[0]?.sentAt ?? '';
-      await this.mutate(() => {
-        const current = this.state.pending[key];
-        if (!current) return;
-        // Messages that landed while the wake ran stay pending for the next one.
+      this.waking.add(key);
+      runs.push(this.wakeThread(key, pending, at).finally(() => this.waking.delete(key)));
+    }
+    await Promise.all(runs);
+  }
+
+  private async wakeThread(key: string, pending: PendingWake, at: number): Promise<void> {
+    // Messages that land while the wake runs stay pending for the next one, so wake exactly this snapshot.
+    const messages = [...pending.messages];
+    const woken = messages.map((m) => m.messageId);
+    try {
+      await this.deps.wake({ peer: pending.peer, threadId: pending.threadId, subject: pending.subject, messages });
+    } catch (error) {
+      this.retryAt.set(key, at + WAKE_RETRY_MS);
+      this.deps.log('wake-error', { peer: pending.peer, threadId: pending.threadId, ...errInfo(error) });
+      return;
+    }
+    this.retryAt.delete(key);
+    const oldestSentAt = messages[0]?.sentAt ?? '';
+    await this.mutate(() => {
+      const current = this.state.pending[key];
+      if (current) {
         current.messages = current.messages.filter((m) => !woken.includes(m.messageId));
         if (!current.messages.length) delete this.state.pending[key];
-        this.state.woken = [...this.state.woken, ...woken].slice(-WAKEN_MEMORY);
-      });
-      this.deps.log('woke', {
-        peer: pending.peer, threadId: pending.threadId, messageIds: woken,
-        oldestSentAt: oldestSentAt || null,
-        wakeLatencyMs: oldestSentAt ? this.now() - Date.parse(oldestSentAt) : null,
-      });
-    }
+      }
+      this.state.woken = [...this.state.woken, ...woken].slice(-WAKEN_MEMORY);
+    });
+    this.deps.log('woke', {
+      peer: pending.peer, threadId: pending.threadId, messageIds: woken,
+      oldestSentAt: oldestSentAt || null,
+      wakeLatencyMs: oldestSentAt ? this.now() - Date.parse(oldestSentAt) : null,
+    });
   }
 
   // ---------- run loop ----------

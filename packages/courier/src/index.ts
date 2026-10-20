@@ -19,3 +19,4 @@ export type { Profile, StoredPeer, AgentKey, OwnerGrant } from './profile.js';
 export type { DelegateRequest, GrantPayload } from './grant.js';
 export * from './watch.js';
 export * from './wake.js';
+export * from './service.js';
