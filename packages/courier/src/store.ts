@@ -1,3 +1,4 @@
+import { defer } from './defer.js';
 import type { TinyCloudNode } from '@tinycloud/node-sdk';
 import { CourierError, unwrap, type ResultLike } from './errors.js';
 
@@ -20,7 +21,7 @@ interface KVResponse<T> {
 const TRANSIENT = /fetch failed|NETWORK_ERROR|ECONNRESET|ETIMEDOUT|5\d\d/i;
 
 async function nap(ms: number) {
-  const { promise, resolve } = Promise.withResolvers<void>();
+  const { promise, resolve } = defer<void>();
   setTimeout(resolve, ms);
   await promise;
 }

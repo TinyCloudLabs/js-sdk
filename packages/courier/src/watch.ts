@@ -1,3 +1,4 @@
+import { defer } from './defer.js';
 import { decodeTime } from 'ulid';
 import type { HookSubscription } from '@tinycloud/node-sdk';
 import { errInfo, CourierError } from './errors.js';
@@ -91,7 +92,7 @@ export function sentAtOf(messageId: string): string {
 }
 
 function sleep(ms: number, signal: AbortSignal): Promise<void> {
-  const { promise, resolve } = Promise.withResolvers<void>();
+  const { promise, resolve } = defer<void>();
   if (signal.aborted) return Promise.resolve();
   const done = () => {
     clearTimeout(timer);
