@@ -36,15 +36,17 @@ Threads (agents run these):
                                    Create or update a task (A2A states; updates use if-match)
   request <threadId> --peer p --task <id> --verb merge|deploy|publish|spend|other --target <t>
           --summary "…" --why "…" [--risk "…"] [--action "…"]
+          --head-sha <sha> --base <branch> (required for merge only)
                                    Ask MY human (writes me/requests/, task → AUTH_REQUIRED). The owner
-                                   approves that verb and target; every field is refused, never repaired,
+                                   approves that verb, target and merge pins; every field is refused, never repaired,
                                    if it has hidden text or is too long (see README: request fields).
   orders <peer> [--json]           Standing orders for this peer (me/orders/<peer>.md or defaults)
-  approval <id> --verb <v> --target <t> [--peek]
+  approval <id> --verb <v> --target <t> [--head-sha <sha>] [--base <branch>] [--peek]
                                    Check MY human's decision on request <id> before a gated action: must
                                    be approved, match the request's verb and target exactly, be under 24 h
                                    old and unused. Consumes it (exit 0); --peek only checks (--verb and
                                    --target optional). A denial or mismatch exits 1.
+                                   Merge pins must be valid; --head-sha and --base match them exactly.
 
 Delivery (one watcher per person per machine; never calls a model):
   watch [--wake none|paseo|claude|exec] [--exec <cmd>] [--cwd dir] [--debounce 30] [--poll 60] [--ticket 25] [--once]
