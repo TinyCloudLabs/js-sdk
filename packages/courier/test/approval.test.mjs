@@ -21,23 +21,23 @@ test('canonical JSON keeps a parsed "__proto__" key, like the view\'s string-bui
 
 const NOW = Date.parse('2026-10-20T12:00:00Z');
 const request = {
-  id: 'R1', peer: 'hunter', threadId: 'T1', taskId: 'K1', verb: 'merge', target: 'tinycloudlabs/docs#42', summary: 'Merge docs PR 42',
+  id: '01M5CBKA6RNA3RZ2819T9M7NDZ', peer: 'hunter', threadId: '01M5C9EDF03QMRZS2DJXGN5A4C', taskId: '01M5CBKA6RNA3RZ2819T9M7NK1', verb: 'merge', target: 'tinycloudlabs/docs#42', summary: 'Merge docs PR 42',
   action: 'gh pr merge 42', reason: 'docs only', risk: 'low',
   requestedBy: { owner: 'did:pkh:o', agent: 'did:key:a' },
   createdAt: '2026-10-20T10:00:00Z', expiresAt: '2026-10-21T10:00:00Z', status: 'pending',
 };
 const approval = (over = {}, req = request) => ({
-  requestId: 'R1', requestHash: requestHash(req), decision: 'approved', note: 'ok', decidedAt: '2026-10-20T11:00:00Z', ...over,
+  requestId: '01M5CBKA6RNA3RZ2819T9M7NDZ', requestHash: requestHash(req), decision: 'approved', note: 'ok', decidedAt: '2026-10-20T11:00:00Z', ...over,
 });
 const code = (fn) => { try { fn(); } catch (e) { return e.code; } return 'no error'; };
 
 test('verifyApproval accepts a matching, current approval and returns what was approved', () => {
-  const v = verifyApproval('R1', request, approval(), { now: NOW, verb: 'merge', target: 'tinycloudlabs/docs#42' });
-  assert.deepEqual([v.decision, v.verb, v.target, v.summary, v.peer, v.threadId, v.taskId], ['approved', 'merge', 'tinycloudlabs/docs#42', 'Merge docs PR 42', 'hunter', 'T1', 'K1']);
+  const v = verifyApproval('01M5CBKA6RNA3RZ2819T9M7NDZ', request, approval(), { now: NOW, verb: 'merge', target: 'tinycloudlabs/docs#42' });
+  assert.deepEqual([v.decision, v.verb, v.target, v.summary, v.peer, v.threadId, v.taskId], ['approved', 'merge', 'tinycloudlabs/docs#42', 'Merge docs PR 42', 'hunter', '01M5C9EDF03QMRZS2DJXGN5A4C', '01M5CBKA6RNA3RZ2819T9M7NK1']);
 });
 
 test('verifyApproval refuses anything that is not exactly this request, decision and time window', () => {
-  const v = (a, opts = {}, req = request) => code(() => verifyApproval('R1', req, a, { now: NOW, ...opts }));
+  const v = (a, opts = {}, req = request) => code(() => verifyApproval('01M5CBKA6RNA3RZ2819T9M7NDZ', req, a, { now: NOW, ...opts }));
   assert.equal(v(undefined), 'approval-missing');
   assert.equal(v(approval({ requestId: 'R2' })), 'approval-mismatch');
   assert.equal(v(approval({ decision: 'approve' })), 'approval-mismatch', 'decision literals are "approved"/"denied"');
@@ -57,7 +57,7 @@ test('verifyApproval refuses anything that is not exactly this request, decision
 });
 
 test('a denial verifies as a denial, never as an approval', () => {
-  const v = verifyApproval('R1', request, approval({ decision: 'denied', note: 'not now' }), { now: NOW });
+  const v = verifyApproval('01M5CBKA6RNA3RZ2819T9M7NDZ', request, approval({ decision: 'denied', note: 'not now' }), { now: NOW });
   assert.equal(v.decision, 'denied');
 });
 
@@ -83,10 +83,10 @@ function memoryKv() {
 
 test('an approval is single use: the second consume fails and a peek sees it as used', async () => {
   const kv = memoryKv();
-  assert.equal(await approvalIsUsed(kv, 'R1'), false);
-  await consumeApproval(kv, 'R1');
-  assert.equal(await approvalIsUsed(kv, 'R1'), true);
-  await assert.rejects(consumeApproval(kv, 'R1'), (e) => e.code === 'approval-used');
+  assert.equal(await approvalIsUsed(kv, '01M5CBKA6RNA3RZ2819T9M7NDZ'), false);
+  await consumeApproval(kv, '01M5CBKA6RNA3RZ2819T9M7NDZ');
+  assert.equal(await approvalIsUsed(kv, '01M5CBKA6RNA3RZ2819T9M7NDZ'), true);
+  await assert.rejects(consumeApproval(kv, '01M5CBKA6RNA3RZ2819T9M7NDZ'), (e) => e.code === 'approval-used');
 });
 
 function watcherWith(selfKv, wakes, clock) {
@@ -100,16 +100,16 @@ test('a new approval wakes the thread\'s agent at once, without waiting out the 
   const selfKv = memoryKv();
   const clock = { t: NOW };
   const wakes = [];
-  selfKv.rows.set(k.request('R1'), { value: request, etag: 'q' });
-  selfKv.rows.set(k.threadMeta('hunter', 'T1'), { value: { subject: 'Merge docs' }, etag: 'm' });
-  selfKv.rows.set(k.approval('R1'), { value: approval(), etag: 'a' });
+  selfKv.rows.set(k.request('01M5CBKA6RNA3RZ2819T9M7NDZ'), { value: request, etag: 'q' });
+  selfKv.rows.set(k.threadMeta('hunter', '01M5C9EDF03QMRZS2DJXGN5A4C'), { value: { subject: 'Merge docs' }, etag: 'm' });
+  selfKv.rows.set(k.approval('01M5CBKA6RNA3RZ2819T9M7NDZ'), { value: approval(), etag: 'a' });
   const watcher = watcherWith(selfKv, wakes, clock);
   await watcher.syncApprovals('hook');
   await watcher.tick();
   assert.equal(wakes.length, 1);
-  assert.deepEqual(wakes[0].approvals, [{ approvalId: 'R1', requestId: 'R1', decision: 'approved' }]);
+  assert.deepEqual(wakes[0].approvals, [{ approvalId: '01M5CBKA6RNA3RZ2819T9M7NDZ', requestId: '01M5CBKA6RNA3RZ2819T9M7NDZ', decision: 'approved' }]);
   assert.equal(wakes[0].subject, 'Merge docs');
-  assert.deepEqual([wakes[0].peer, wakes[0].threadId, wakes[0].messages.length], ['hunter', 'T1', 0]);
+  assert.deepEqual([wakes[0].peer, wakes[0].threadId, wakes[0].messages.length], ['hunter', '01M5C9EDF03QMRZS2DJXGN5A4C', 0]);
   await watcher.syncApprovals('poll');
   clock.t += 120_000;
   await watcher.tick();
@@ -136,8 +136,8 @@ test('approvals that cannot be acted on wake nobody: used, stale, malformed, or 
 test('a denial wakes the agent too, so it can stop and update the task', async () => {
   const selfKv = memoryKv();
   const wakes = [];
-  selfKv.rows.set(k.request('R1'), { value: request, etag: 'q' });
-  selfKv.rows.set(k.approval('R1'), { value: approval({ decision: 'denied' }), etag: 'a' });
+  selfKv.rows.set(k.request('01M5CBKA6RNA3RZ2819T9M7NDZ'), { value: request, etag: 'q' });
+  selfKv.rows.set(k.approval('01M5CBKA6RNA3RZ2819T9M7NDZ'), { value: approval({ decision: 'denied' }), etag: 'a' });
   const watcher = watcherWith(selfKv, wakes, { t: NOW });
   await watcher.syncApprovals('hook');
   await watcher.tick();
@@ -152,7 +152,7 @@ test('the request hash covers verb, target and summary: changing any of them cha
 });
 
 test('a request without valid structured fields cannot be approved', () => {
-  const v = (req) => code(() => verifyApproval('R1', req, approval({}, req), { now: NOW }));
+  const v = (req) => code(() => verifyApproval('01M5CBKA6RNA3RZ2819T9M7NDZ', req, approval({}, req), { now: NOW }));
   const { verb, target, summary, ...bare } = request;
   assert.equal(v(bare), 'approval-mismatch', 'an older request with only free-text action');
   assert.equal(v({ ...request, verb: 'MERGE' }), 'approval-mismatch', 'verbs are exact lowercase');

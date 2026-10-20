@@ -165,9 +165,20 @@ process group is killed (a shell's background jobs, pipelines and subshells
 included) and the wake counts as failed. A failed wake stays pending, releases
 its claim and retries after 60 s. A timeout that hits after the agent already
 received the prompt therefore wakes the thread again: wakes are at-least-once.
-A command that exits normally but leaves a background job running is not
-waited for, and the job is left alone. When the watcher stops (SIGTERM, a state
-conflict) it kills the runs still in flight.
+A child that calls `setsid` or `setpgid` leaves the group and survives the kill
+(the group kill reaches everything the shell started, not a program that
+deliberately detaches). A command that exits normally but leaves a background
+job running is not waited for, and the job is left alone. When the watcher stops (SIGINT, SIGTERM, a state
+conflict) it kills the runs still in flight at once, without waiting for the
+wake to end.
+
+If the watcher itself is killed (SIGKILL, power loss), its detached runs are not
+reaped by the watcher. `systemd --user` units set `KillMode=control-group`, so
+the whole cgroup goes down with the service; launchd tracks only the job's own
+process group (`AbandonProcessGroup` is false, but agents run in their own
+groups), so on macOS an agent may outlive a crashed watcher. The restarted
+watcher takes over the dead one's claim and wakes the thread again (at-least-once):
+that thread can briefly have two agent runs.
 
 ### Approvals: request fields, text rules and `courier approval`
 
@@ -190,6 +201,7 @@ never repaired or shortened**:
   default-ignorable character (variation selectors, U+034F, Hangul fillers,
   soft hyphen, …), no space other than U+0020, and no run of 4 or more
   combining marks (`\p{M}`);
+- `summary` also refuses every quotation mark (`\p{Quotation_Mark}`: `"`, curly quotes, guillemets, CJK corner brackets, …) and the look-alikes Unicode does not list as such (double primes U+2033 U+2036 U+02BA, gershayim U+05F4, the ditto mark U+3003, U+2760, U+275D-E, U+2E42, U+1F676-8, U+FF02), because the view shows it between quotes; the apostrophes U+0027 and U+2019 are fine;
 - `target`, `summary`: 1 to 200 UTF-16 units, trimmed, one line; `action`,
   `reason`, `risk`: 1 to 2000, a single `\n` allowed, never a tab or CR;
 - `target` is printable ASCII (`[\x20-\x7E]`) for every verb, in the one
@@ -203,6 +215,15 @@ never repaired or shortened**:
   | `other` | `workflow:owner/repo:<workflow file or name>`, `secrets:<subcommand and key>`, or `<kind>:<text>` |
   | `spend` | `spend:<what and how much>` |
 
+- `threadId`, `taskId` and the request id are ULIDs (26 upper-case Crockford
+  base32 characters, no I L O U), and the peer handle is 1 to 64 of
+  `[A-Za-z0-9_-]`, on write and on read (the view only shows cards for ULIDs);
+- the key set of `me/requests/<id>.json` is closed: `id`, `peer`, `threadId`,
+  `taskId`, `verb`, `target`, `summary`, `requestedBy` (`{owner, agent}`),
+  `createdAt`, `expiresAt`, `status` (`"pending"`) and the optional free text
+  `action`, `reason`, `risk` (written by the CLI, well-formed when present).
+  Anything else makes the request unreviewable in the view and refused by
+  `courier approval`, even if the hash matches;
 - the whole request must hash: `canonicalJson` / `requestHash` throw on a
   non-finite number (a parsed `1e999`) and on nesting deeper than 64 levels
   (top-level object = depth 1), so such a request is never written and
@@ -225,6 +246,9 @@ of this machine's clock is tolerated; keep the clocks of the agent's machine
 and the owner's browser in step) and within the last 24 hours, and the given
 `--verb` and (canonicalised) `--target` equal the request's. Both are required
 when consuming; `--peek` (for guards) may omit them.
+
+`courier request` and `courier approval` (peek and consume) print the full
+`requestHash`; the view's card shows its first 8 hex digits as a fingerprint so the owner can match the card to the agent's request.
 
 It then consumes the approval with a create-only marker at
 `me/consumed/<id>.json`, so a second run exits `approval-used`;

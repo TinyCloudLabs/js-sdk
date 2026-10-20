@@ -408,3 +408,10 @@ test('killAllRunners takes down runs still in flight (the watcher is stopping)',
   await settle(400);
   assert.equal(await alive(marker), false);
 });
+
+test('generated units: systemd kills the whole cgroup on stop, launchd leaves AbandonProcessGroup off', () => {
+  const unit = systemdUnitFile(spec);
+  assert.match(unit, /^KillMode=control-group$/m);
+  assert.match(unit, /^SendSIGKILL=yes$/m);
+  assert.match(launchdPlist(spec), /<key>AbandonProcessGroup<\/key>\s*<false\/>/);
+});

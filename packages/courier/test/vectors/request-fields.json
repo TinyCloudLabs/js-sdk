@@ -1,6 +1,6 @@
 {
  "v": 1,
- "note": "Shared by js-sdk packages/courier and the share /courier view. field/value/verb: valid=false means the CLI refuses to write it and the view treats the request as unreadable. Canonical-JSON vectors are in canonical.json. For targets, the CLI may normalise on write (trim, lower-case the repo, GitHub PR URL -> owner/repo#N); valid=false means the value is not acceptable AS STORED.",
+ "note": "Shared by js-sdk packages/courier and the share /courier view. field/value/verb: valid=false means the CLI refuses to write it and the view treats the request as unreadable. Canonical-JSON vectors are in canonical.json. For targets, the CLI may normalise on write (trim, lower-case the repo, GitHub PR URL -> owner/repo#N); valid=false means the value is not acceptable AS STORED. ids: request id, threadId and taskId must be ULIDs (26 Crockford base32 upper-case characters, no I L O U); the peer handle is 1-64 of [A-Za-z0-9_-].",
  "limits": {
   "summary": 200,
   "target": 200,
@@ -649,6 +649,164 @@
    "value": "note:a\ud82f\udca3b",
    "valid": false,
    "verb": "other"
+  },
+  {
+   "name": "summary with heavy low double comma ornament",
+   "field": "summary",
+   "value": "Merge \u2760docs",
+   "valid": false
+  },
+  {
+   "name": "summary with double low-reversed-9 quotation mark",
+   "field": "summary",
+   "value": "Merge \u2e42docs",
+   "valid": false
+  },
+  {
+   "name": "summary with sans-serif heavy double turned comma",
+   "field": "summary",
+   "value": "Merge \ud83d\ude76docs",
+   "valid": false
+  },
+  {
+   "name": "summary with sans-serif heavy double comma",
+   "field": "summary",
+   "value": "Merge \ud83d\ude77docs",
+   "valid": false
+  },
+  {
+   "name": "summary with sans-serif heavy low double comma",
+   "field": "summary",
+   "value": "Merge \ud83d\ude78docs",
+   "valid": false
+  },
+  {
+   "name": "summary with double prime",
+   "field": "summary",
+   "value": "Merge \u2033docs",
+   "valid": false
+  },
+  {
+   "name": "summary with reversed double prime",
+   "field": "summary",
+   "value": "Merge \u2036docs",
+   "valid": false
+  },
+  {
+   "name": "summary with modifier letter double prime",
+   "field": "summary",
+   "value": "Merge \u02badocs",
+   "valid": false
+  },
+  {
+   "name": "summary with Hebrew gershayim",
+   "field": "summary",
+   "value": "Merge \u05f4docs",
+   "valid": false
+  },
+  {
+   "name": "summary with ditto mark",
+   "field": "summary",
+   "value": "Merge \u3003docs",
+   "valid": false
+  },
+  {
+   "name": "summary with left single quotation mark",
+   "field": "summary",
+   "value": "Merge \u2018docs",
+   "valid": false
+  },
+  {
+   "name": "summary with single high-reversed-9 quotation mark",
+   "field": "summary",
+   "value": "Merge \u201bdocs",
+   "valid": false
+  },
+  {
+   "name": "summary with CJK left corner bracket",
+   "field": "summary",
+   "value": "Merge \u300cdocs",
+   "valid": false
+  },
+  {
+   "name": "summary with CJK right corner bracket",
+   "field": "summary",
+   "value": "Merge \u300ddocs",
+   "valid": false
+  },
+  {
+   "name": "summary with a right single quote (apostrophe) is allowed",
+   "field": "summary",
+   "value": "Merge Sam\u2019s docs PR",
+   "valid": true
+  },
+  {
+   "name": "summary with an ASCII apostrophe is allowed",
+   "field": "summary",
+   "value": "Merge Sam's docs PR",
+   "valid": true
+  }
+ ],
+ "ids": [
+  {
+   "name": "ULID",
+   "value": "01M5C9EDF03QMRZS2DJXGN5A4C",
+   "valid": true,
+   "applies": "id, threadId, taskId of a request"
+  },
+  {
+   "name": "lower-case ULID",
+   "value": "01m5c9edf03qmrzs2djxgn5a4c",
+   "valid": false,
+   "applies": "id, threadId, taskId of a request"
+  },
+  {
+   "name": "ULID with I",
+   "value": "01M5C9EDF03QMRZS2DJXGN5A4I",
+   "valid": false,
+   "applies": "id, threadId, taskId of a request"
+  },
+  {
+   "name": "27 characters",
+   "value": "01M5C9EDF03QMRZS2DJXGN5A4CA",
+   "valid": false,
+   "applies": "id, threadId, taskId of a request"
+  },
+  {
+   "name": "25 characters",
+   "value": "01M5C9EDF03QMRZS2DJXGN5A4",
+   "valid": false,
+   "applies": "id, threadId, taskId of a request"
+  },
+  {
+   "name": "T1",
+   "value": "T1",
+   "valid": false,
+   "applies": "id, threadId, taskId of a request"
+  },
+  {
+   "name": "path traversal",
+   "value": "../x",
+   "valid": false,
+   "applies": "id, threadId, taskId of a request"
+  },
+  {
+   "name": "space",
+   "value": "a b",
+   "valid": false,
+   "applies": "id, threadId, taskId of a request"
+  },
+  {
+   "name": "empty",
+   "value": "",
+   "valid": false,
+   "applies": "id, threadId, taskId of a request"
+  },
+  {
+   "name": "zero-width space",
+   "value": "01M5C9EDF03QMRZS2DJXGN5A4\u200b",
+   "valid": false,
+   "applies": "id, threadId, taskId of a request"
   }
  ]
 }
