@@ -1,13 +1,13 @@
+import { privateScratch } from './private-scratch.mjs';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { analyze } from '../dist/guard/policy.js';
 import { realEnv } from '../dist/guard/command.js';
 
 test('N2: executable aliases, hardlinks and copies cannot hide gated tools', () => {
-  const dir = fs.mkdtempSync(path.join(os.userInfo().homedir, 'scratch/tc712-n2-'));
+  const dir = privateScratch('tc712-n2-');
   const previous = process.env.PATH;
   try {
     const bin = path.join(dir, 'bin'); const cwd = path.join(dir, 'work'); fs.mkdirSync(bin); fs.mkdirSync(cwd);

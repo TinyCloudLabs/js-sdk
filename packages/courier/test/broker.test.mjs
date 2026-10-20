@@ -1,11 +1,11 @@
+import { privateScratch } from './private-scratch.mjs';
 import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { runApproved, templateFor, brokerEnv, sanitizeOutput, MAX_OUTPUT, loadBrokerCredential } from '../dist/broker.js';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { loadBrokerConfig } from '../dist/broker-config.js';
-const scratchRoot = fs.mkdtempSync(path.join(os.userInfo().homedir, 'scratch/tc712-broker-test-'));
+const scratchRoot = privateScratch('tc712-broker-test-');
 after(() => fs.rmSync(scratchRoot, { recursive: true, force: true }));
 import { requestHash } from '../dist/canonical.js';
 import { k } from '../dist/keys.js';
