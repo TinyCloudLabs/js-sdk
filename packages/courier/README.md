@@ -273,6 +273,53 @@ denied) for one of its requests appears, without the debounce. Approvals older
 than 24 hours, already used, malformed, or without a request at start-up wake
 nobody.
 
+### Wake budget, pause and notifications
+
+Two auto-woken agents that answer each other must not run forever (spec §8).
+Each side gets at most `--wake-budget` message wake attempts (default 12, including failures/timeouts) per thread per
+UTC day; the count is per side, so a busy peer cannot use up yours. `inform`
+messages and receipts never wake, and an approval wake (a human decision, not a
+loop) neither counts nor is ever blocked.
+
+When a thread has used its budget, the next message that would wake it pauses it
+instead:
+
+1. a marker is written at `me/state/paused/<peer>/<thread>.json` (so the pause
+   survives restarts and is visible to the view and to `courier resume`);
+2. an `inform` "thread paused" message goes to the peer (machine-readable
+   `notice: "thread-paused"`; it never wakes the peer's agent);
+3. this side's human is notified (below).
+
+A paused thread still delivers and mirrors: messages are copied, receipted and
+readable, they just wake nobody. The peer's watcher, on delivering the paused
+`inform`, notifies the peer's human (`peer-paused`). `courier pause <peer>
+<thread>` does the same by hand (marker plus `inform`); `courier resume <peer>
+<thread>` deletes the marker, starts the budget over, and takes effect on the
+very next message.
+
+Every notification also appends a fixed-text line to
+`<COURIER_HOME>/notifications.jsonl` (256 KiB current log plus one rotated
+predecessor). `--notify osascript` adds a macOS desktop notification (argv text,
+fixed script source); `--notify exec --notify-exec <cmd>` runs an operator's
+command with COURIER_NOTICE, COURIER_PEER, COURIER_THREAD,
+COURIER_NOTICE_TITLE and COURIER_NOTICE_TEXT. `none` means local log only.
+No notification channel starts or messages a model-backed agent.
+
+The native Paseo check found `paseo hooks` records terminal activity using a
+terminal-specific token; it does not set an agent's attention flag. No
+attention-only operation was proven, so `--notify paseo` is unavailable in v0.
+Use the inbox/read/view surfaces, tail the log, or configure your own channel.
+
+Peer pause notices require a paired peer's `inform`. Notices deduplicate per
+kind/thread/day (UTC), cap at 10 per peer/hour across channels, and use only
+fixed text, a validated handle and a ULID or thread fingerprint. Subject,
+message and detail prose never enter notification text. The outbox holds at
+most 50 items. Failures retry after 1, 2, 4, then up to 15 minutes, stop after
+8 failures, and keep their retry deadline across restarts. Old counters are
+pruned. Wakes that reach the adapter count before it runs, including failures;
+failed wakes back off. Held messages remain mirrored and up to 100 recent
+messages per thread wake together once after human resume.
+
 ### Guard for woken agents
 
 A woken agent runs on another party's text, so instructions alone are not
