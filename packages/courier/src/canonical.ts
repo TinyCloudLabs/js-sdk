@@ -14,7 +14,11 @@ function sortKeys(value: unknown): unknown {
   if (value !== null && typeof value === 'object') {
     const source = value as Record<string, unknown>;
     const sorted: Record<string, unknown> = {};
-    for (const key of Object.keys(source).sort()) sorted[key] = sortKeys(source[key]);
+    // defineProperty, not assignment: a parsed `"__proto__"` key must stay an own property (assignment would set the
+    // prototype and drop it from the hash, and the view's string-built canonical JSON keeps it).
+    for (const key of Object.keys(source).sort()) {
+      Object.defineProperty(sorted, key, { value: sortKeys(source[key]), enumerable: true, writable: true, configurable: true });
+    }
     return sorted;
   }
   return value;

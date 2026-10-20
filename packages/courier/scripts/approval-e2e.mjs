@@ -90,7 +90,7 @@ try {
   await waitFor((e) => e.event === 'hook-subscribe', 60_000);
 
   const id = await ask('gh pr merge 42');
-  const before = await courier(alice.home, ['approval', id], { allowFail: true });
+  const before = await courier(alice.home, ['approval', id, '--action', 'gh pr merge 42'], { allowFail: true });
   ok('no approval yet: refused', before.code !== 0 && /approval-missing/.test(before.stderr));
 
   const wrote = await decide(id);
@@ -106,22 +106,26 @@ try {
   ok('a different action is refused', wrongAction.code !== 0 && /approval-mismatch/.test(wrongAction.stderr));
   const used = await courier(alice.home, ['approval', id, '--action', 'gh pr merge 42']);
   ok('approved request verifies and is consumed', used.json.ok && used.json.consumed && used.json.decision === 'approved');
-  const again = await courier(alice.home, ['approval', id], { allowFail: true });
+  const again = await courier(alice.home, ['approval', id, '--action', 'gh pr merge 42'], { allowFail: true });
   ok('second use is refused', again.code !== 0 && /approval-used/.test(again.stderr));
+  const peekUsed = await courier(alice.home, ['approval', id, '--action', 'gh pr merge 42', '--peek'], { allowFail: true });
+  ok('peek on a used approval is refused too', peekUsed.code !== 0 && /approval-used/.test(peekUsed.stderr));
+  const bare = await courier(alice.home, ['approval', id], { allowFail: true });
+  ok('consuming without --action is a usage error', bare.code === 2 && /--action|Say what you are about to do/.test(bare.stderr));
 
   const tampered = await ask('deploy to prod');
   await decide(tampered, { requestHash: '0'.repeat(64) });
-  const t = await courier(alice.home, ['approval', tampered], { allowFail: true });
+  const t = await courier(alice.home, ['approval', tampered, '--action', 'deploy to prod'], { allowFail: true });
   ok('hash that does not match the request is refused', t.code !== 0 && /approval-mismatch/.test(t.stderr));
 
   const literal = await ask('npm publish');
   await decide(literal, { decision: 'approve' });
-  const l = await courier(alice.home, ['approval', literal], { allowFail: true });
+  const l = await courier(alice.home, ['approval', literal, '--action', 'npm publish'], { allowFail: true });
   ok('"approve" is not "approved"', l.code !== 0 && /approval-mismatch/.test(l.stderr));
 
   const denied = await ask('rm -rf data');
   await decide(denied, { decision: 'denied', note: 'no' });
-  const d = await courier(alice.home, ['approval', denied], { allowFail: true });
+  const d = await courier(alice.home, ['approval', denied, '--action', 'rm -rf data'], { allowFail: true });
   ok('a denial exits non-zero as approval-denied', d.code !== 0 && /approval-denied/.test(d.stderr));
 } catch (error) {
   failures++;

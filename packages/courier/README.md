@@ -139,18 +139,26 @@ kills a run that hangs). A failed wake stays pending and retries after 60 s.
 
 ### Approvals
 
-`courier approval <requestId> [--action "<exact action>"] [--peek]` is what a
+`courier approval <requestId> --action "<exact action>" [--peek]` is what a
 woken agent runs before a gated action. It reads `me/requests/<id>.json` and
 `me/approvals/<id>.json` and exits 0 only if the approval names that request
 (`requestId` equals the id), carries `requestHash` equal to the SHA-256 of the
 request's canonical JSON (`canonicalJson` / `requestHash`, exported, mirrored by
-the view), says `approved`, was decided within 24 hours and inside the request's
-lifetime, and `--action` (if given) equals the request's action. It then
-consumes the approval with a create-only marker at
-`me/state/approvals-used/<id>.json`, so a second run exits `approval-used`.
-`--peek` checks without consuming; a denial exits `approval-denied`. The
-courier key cannot write `me/approvals/`, so only the owner's view session can
-produce a passing approval.
+the view; a parsed `"__proto__"` key counts as an ordinary key), says
+`approved`, was decided in `[createdAt, expiresAt)` of the request (a decision
+dated up to 5 minutes ahead of this machine's clock is tolerated; keep the
+clocks of the agent's machine and the owner's browser in step) and within the
+last 24 hours, and `--action` equals the request's action. `--action` is
+required when consuming; `--peek` (for guards) may omit it.
+
+It then consumes the approval with a create-only marker at
+`me/state/approvals-used/<id>.json`, so a second run exits `approval-used`;
+`--peek` checks the marker too (a used approval fails the peek) but does not
+write it. A denial exits `approval-denied`. The courier key cannot write
+`me/approvals/`, so only the owner's view session can produce a passing
+approval. Residual risk: the courier grant can delete under `me/state/`
+(spec §3), so a compromised agent could delete the used marker and replay an
+approval within its 24 hours; a delete-proof record is tracked separately.
 
 The watcher wakes the thread's agent as soon as a new approval (approved or
 denied) for one of its requests appears, without the debounce. Approvals older

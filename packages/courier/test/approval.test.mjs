@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { canonicalJson, requestHash } from '../dist/canonical.js';
-import { verifyApproval, consumeApproval } from '../dist/approval.js';
+import { verifyApproval, consumeApproval, approvalIsUsed } from '../dist/approval.js';
 import { Watcher } from '../dist/watch.js';
 import { k } from '../dist/keys.js';
 
@@ -12,6 +12,11 @@ test('canonical JSON: shared vector with the /courier view', () => {
   assert.equal(requestHash({ b: 1, a: [{ d: 2, c: 'x' }] }), createHash('sha256').update(canonical).digest('hex'));
   assert.equal(canonicalJson({ b: 1, a: 2 }), canonicalJson({ a: 2, b: 1 }), 'key order does not matter');
   assert.notEqual(canonicalJson([1, 2]), canonicalJson([2, 1]), 'array order does');
+});
+
+test('canonical JSON keeps a parsed "__proto__" key, like the view\'s string-built version', () => {
+  assert.equal(canonicalJson(JSON.parse('{"__proto__":{"x":1},"a":1}')), '{"__proto__":{"x":1},"a":1}');
+  assert.notEqual(requestHash(JSON.parse('{"__proto__":{"x":1},"a":1}')), requestHash({ a: 1 }));
 });
 
 const NOW = Date.parse('2026-10-20T12:00:00Z');
@@ -43,6 +48,9 @@ test('verifyApproval refuses anything that is not exactly this request, decision
   assert.equal(v(approval({ decidedAt: '2026-10-20T05:00:00Z' }, older), {}, older), 'approval-expired', 'decided after the request expired');
   assert.equal(v(approval({ decidedAt: '2026-10-20T15:00:00Z' })), 'approval-mismatch', 'dated in the future');
   assert.equal(v(approval({ decidedAt: '2026-10-20T09:00:00Z' })), 'approval-mismatch', 'dated before the request existed');
+  assert.equal(v(approval({ decidedAt: '2026-10-20T09:59:59Z' })), 'approval-mismatch', 'one second before createdAt: no skew allowance');
+  assert.equal(v(approval({ decidedAt: '2026-10-20T10:00:00Z' })), 'no error', 'createdAt itself is inside the window');
+  assert.equal(v(approval({ decidedAt: '2026-10-21T10:00:00Z' }), { now: Date.parse('2026-10-21T10:00:30Z') }), 'approval-expired', 'expiresAt itself is outside the window');
   assert.equal(v(approval({ decidedAt: 'yesterday' })), 'approval-mismatch');
 });
 
@@ -71,9 +79,11 @@ function memoryKv() {
   };
 }
 
-test('an approval is single use: the second consume fails', async () => {
+test('an approval is single use: the second consume fails and a peek sees it as used', async () => {
   const kv = memoryKv();
+  assert.equal(await approvalIsUsed(kv, 'R1'), false);
   await consumeApproval(kv, 'R1');
+  assert.equal(await approvalIsUsed(kv, 'R1'), true);
   await assert.rejects(consumeApproval(kv, 'R1'), (e) => e.code === 'approval-used');
 });
 
