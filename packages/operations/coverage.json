@@ -157,6 +157,19 @@
     { "command": "account billing", "status": "legacy" },
     { "command": "account billing status", "status": "legacy" },
     { "command": "account billing checkout", "status": "legacy" },
-    { "command": "account billing portal", "status": "legacy" }
+    { "command": "account billing portal", "status": "legacy" },
+    { "command": "knowledge", "status": "excluded", "reason": "Command group; its subcommands project the knowledge operations." },
+    {
+      "command": "knowledge list",
+      "status": "migrated",
+      "operationId": "tinycloud.knowledge.list",
+      "operationVersion": 1
+    },
+    {
+      "command": "knowledge read <app_id> [concept]",
+      "status": "migrated",
+      "operationId": "tinycloud.knowledge.read",
+      "operationVersion": 1
+    }
   ]
 }

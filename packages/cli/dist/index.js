@@ -152,6 +152,35 @@ var init_constants = __esm({
   }
 });
 
+// src/output/safe-text.ts
+function escape(match) {
+  return `\\u{${match.codePointAt(0).toString(16)}}`;
+}
+function safeBlock(text) {
+  return text.replace(UNSAFE_BLOCK, escape);
+}
+function safeInline(text) {
+  return text.replace(UNSAFE_INLINE, escape);
+}
+function safeClipped(text, max = ECHO_FIELD_MAX) {
+  const escaped = Array.from(safeInline(text));
+  return escaped.length <= max ? escaped.join("") : `${escaped.slice(0, max).join("")}\u2026`;
+}
+function safeJsonStringify(value, space) {
+  const text = JSON.stringify(value, null, space);
+  return text === void 0 ? text : text.replace(JSON_UNSAFE, (character) => `\\u${character.charCodeAt(0).toString(16).padStart(4, "0")}`);
+}
+var UNSAFE_BLOCK, UNSAFE_INLINE, ECHO_FIELD_MAX, JSON_UNSAFE;
+var init_safe_text = __esm({
+  "src/output/safe-text.ts"() {
+    "use strict";
+    UNSAFE_BLOCK = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u061c\u200b-\u200f\u2028\u2029\u202a-\u202e\u2066-\u2069\ufeff]/g;
+    UNSAFE_INLINE = /[\u0000-\u001f\u007f-\u009f\u061c\u200b-\u200f\u2028\u2029\u202a-\u202e\u2066-\u2069\ufeff]/g;
+    ECHO_FIELD_MAX = 80;
+    JSON_UNSAFE = /[\u007f-\u009f\u061c\u200b-\u200f\u2028\u2029\u202a-\u202e\u2066-\u2069\ufeff]/g;
+  }
+});
+
 // src/output/theme.ts
 import chalk from "chalk";
 var TC_PALETTE, theme;
@@ -236,12 +265,12 @@ function outputError(code4, message, hint, details = {}) {
   const { meta, warnings = [], setup, recovery, progress } = details;
   if (!shouldOutputJson()) {
     process.stderr.write(
-      `${theme.error("\u2717")} ${theme.label(code4)}: ${message}
+      `${theme.error("\u2717")} ${theme.label(safeInline(code4))}: ${safeBlock(message)}
 `
     );
     if (hint) {
       for (const line of hint.split("\n")) {
-        process.stderr.write(`  ${theme.hint(line)}
+        process.stderr.write(`  ${theme.hint(safeBlock(line))}
 `);
       }
     }
@@ -257,13 +286,13 @@ function outputError(code4, message, hint, details = {}) {
     if (progress) payload.error.progress = progress;
     if (meta) payload.error.meta = meta;
     if (warnings.length > 0) payload.error.warnings = warnings;
-    process.stderr.write(JSON.stringify(payload, null, 2) + "\n");
+    process.stderr.write(safeJsonStringify(payload, 2) + "\n");
   }
 }
 function outputWarnings(warnings) {
   const combined = mergeWarnings(drainWarnings(), operationWarnings(warnings));
   if (combined.length === 0) return;
-  process.stderr.write(shouldOutputJson() ? `${JSON.stringify({ warnings: combined })}
+  process.stderr.write(shouldOutputJson() ? `${safeJsonStringify({ warnings: combined })}
 ` : `${theme.warn("!")} ${warningLine(combined)}
 `);
 }
@@ -291,6 +320,7 @@ var WARNING_CODE, WARNING_REASON, DELEGATION_CID, JSON_REQUESTED;
 var init_formatter = __esm({
   "src/output/formatter.ts"() {
     "use strict";
+    init_safe_text();
     init_theme();
     init_warnings();
     WARNING_CODE = /^[A-Z][A-Z_]{0,63}$/;
@@ -747,6 +777,13 @@ var init_types = __esm({
 
 // src/lib/space.ts
 import { CLI_NAME as CLI_NAME5 } from "@tinycloud/operations/cli-name";
+function invalidSpaceError(input) {
+  return new CLIError(
+    "INVALID_SPACE",
+    `Invalid space "${safeClipped(input)}". Use a short name ([A-Za-z0-9_-]) or a full tinycloud:... URI.`,
+    ExitCode.USAGE_ERROR
+  );
+}
 function canonicalizeAddress(address) {
   const trimmed = address.trim();
   return trimmed.startsWith("0x") ? `0x${trimmed.slice(2).toLowerCase()}` : trimmed.toLowerCase();
@@ -804,22 +841,10 @@ async function resolveSpaceUri(input, profileName, options = {}) {
   if (!effective) return void 0;
   if (effective.startsWith("tinycloud:")) {
     const parsed = parseSpaceUri(effective);
-    if (!parsed) {
-      throw new CLIError(
-        "INVALID_SPACE",
-        `Invalid space "${effective}". Use a short name ([A-Za-z0-9_-]) or a full tinycloud:... URI.`,
-        ExitCode.USAGE_ERROR
-      );
-    }
+    if (!parsed) throw invalidSpaceError(effective);
     return buildSpaceUri(parsed.owner, parsed.name);
   }
-  if (!/^[A-Za-z0-9_-]+$/.test(effective)) {
-    throw new CLIError(
-      "INVALID_SPACE",
-      `Invalid space "${effective}". Use a short name ([A-Za-z0-9_-]) or a full tinycloud:... URI.`,
-      ExitCode.USAGE_ERROR
-    );
-  }
+  if (!/^[A-Za-z0-9_-]+$/.test(effective)) throw invalidSpaceError(effective);
   const session = await ProfileManager.getSession(profileName);
   const address = resolveAddress(profile, session);
   const chainId = resolveChainId(profile, session);
@@ -830,6 +855,7 @@ var init_space = __esm({
     "use strict";
     init_errors();
     init_constants();
+    init_safe_text();
     init_profiles();
   }
 });

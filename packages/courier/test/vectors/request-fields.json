@@ -1,0 +1,819 @@
+{
+ "v": 2,
+ "note": "Shared by js-sdk packages/courier and the share /courier view. field/value/verb: valid=false means the CLI refuses to write it and the view treats the request as unreadable. Canonical-JSON vectors are in canonical.json. For targets, the CLI may normalise on write (trim, lower-case the repo, GitHub PR URL -> owner/repo#N); valid=false means the value is not acceptable AS STORED. ids: request id, threadId and taskId must be ULIDs (26 Crockford base32 upper-case characters, no I L O U); the peer handle is 1-64 of [A-Za-z0-9_-]. Text contract v2: frozen Unicode 15.0.0 Lu/Ll/Lt/Lo/Nd minus Default_Ignorable, NFC, summary ASCII punctuation .,:;-_/#()?! and U+0027; multiline all printable ASCII punctuation plus LF; only U+0020 space. All marks, non-ASCII punctuation/symbols and newer characters refused. Exhaustive verdicts: text-verdicts.json; range table: src/text-ranges.ts.",
+ "limits": {
+  "summary": 200,
+  "target": 200,
+  "action": 2000,
+  "reason": 2000,
+  "risk": 2000,
+  "combiningRun": 0
+ },
+ "fields": [
+  {
+   "name": "plain ascii",
+   "field": "summary",
+   "value": "Merge docs PR 42",
+   "valid": true
+  },
+  {
+   "name": "non-ascii letters with punctuation refused",
+   "field": "summary",
+   "value": "Fusionner la PR docs n\u00b042 \u2014 caf\u00e9",
+   "valid": false
+  },
+  {
+   "name": "emoji refused",
+   "field": "summary",
+   "value": "Ship it \ud83d\ude80",
+   "valid": false
+  },
+  {
+   "name": "empty",
+   "field": "summary",
+   "value": "",
+   "valid": false
+  },
+  {
+   "name": "200 chars ok",
+   "field": "summary",
+   "value": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+   "valid": true
+  },
+  {
+   "name": "201 chars refused, not truncated",
+   "field": "summary",
+   "value": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+   "valid": false
+  },
+  {
+   "name": "newline",
+   "field": "summary",
+   "value": "two\nlines",
+   "valid": false
+  },
+  {
+   "name": "tab",
+   "field": "summary",
+   "value": "a\tb",
+   "valid": false
+  },
+  {
+   "name": "leading space",
+   "field": "summary",
+   "value": " Merge",
+   "valid": false
+  },
+  {
+   "name": "trailing space",
+   "field": "summary",
+   "value": "Merge ",
+   "valid": false
+  },
+  {
+   "name": "nbsp",
+   "field": "summary",
+   "value": "Merge\u00a0docs",
+   "valid": false
+  },
+  {
+   "name": "em space",
+   "field": "summary",
+   "value": "Merge\u2003docs",
+   "valid": false
+  },
+  {
+   "name": "ideographic space",
+   "field": "summary",
+   "value": "Merge\u3000docs",
+   "valid": false
+  },
+  {
+   "name": "zero width space",
+   "field": "summary",
+   "value": "Merge\u200bdocs",
+   "valid": false
+  },
+  {
+   "name": "zero width joiner",
+   "field": "summary",
+   "value": "Merge\u200ddocs",
+   "valid": false
+  },
+  {
+   "name": "bidi override",
+   "field": "summary",
+   "value": "Merge \u202edocs",
+   "valid": false
+  },
+  {
+   "name": "bidi isolate",
+   "field": "summary",
+   "value": "Merge \u2066docs\u2069",
+   "valid": false
+  },
+  {
+   "name": "soft hyphen",
+   "field": "summary",
+   "value": "Mer\u00adge",
+   "valid": false
+  },
+  {
+   "name": "combining grapheme joiner",
+   "field": "summary",
+   "value": "Merge\u034f docs",
+   "valid": false
+  },
+  {
+   "name": "variation selector 16",
+   "field": "summary",
+   "value": "Merge\ufe0f docs",
+   "valid": false
+  },
+  {
+   "name": "variation selector supplement",
+   "field": "summary",
+   "value": "Merge\udb40\udd00 docs",
+   "valid": false
+  },
+  {
+   "name": "tag characters (ASCII smuggling)",
+   "field": "summary",
+   "value": "gh pr merge 12\udb40\udc20\udb40\udc61\udb40\udc6c\udb40\udc73\udb40\udc6f\udb40\udc20\udb40\udc64\udb40\udc65\udb40\udc70\udb40\udc6c\udb40\udc6f\udb40\udc79",
+   "valid": false
+  },
+  {
+   "name": "hangul filler",
+   "field": "summary",
+   "value": "Merge\u3164docs",
+   "valid": false
+  },
+  {
+   "name": "U+2028 line separator",
+   "field": "summary",
+   "value": "a\u2028b",
+   "valid": false
+  },
+  {
+   "name": "private use",
+   "field": "summary",
+   "value": "a\ue000b",
+   "valid": false
+  },
+  {
+   "name": "unassigned U+0378",
+   "field": "summary",
+   "value": "a\u0378b",
+   "valid": false
+  },
+  {
+   "name": "noncharacter U+10FFFF",
+   "field": "summary",
+   "value": "a\udbff\udfffb",
+   "valid": false
+  },
+  {
+   "name": "lone high surrogate",
+   "field": "summary",
+   "value": "a\ud800b",
+   "valid": false
+  },
+  {
+   "name": "not NFC (e + combining acute)",
+   "field": "summary",
+   "value": "cafe\u0301",
+   "valid": false
+  },
+  {
+   "name": "NFC precomposed",
+   "field": "summary",
+   "value": "caf\u00e9",
+   "valid": true
+  },
+  {
+   "name": "3 combining marks refused",
+   "field": "summary",
+   "value": "x\u0301\u0302\u0303",
+   "valid": false
+  },
+  {
+   "name": "4 combining marks refused",
+   "field": "summary",
+   "value": "x\u0301\u0302\u0303\u0304",
+   "valid": false
+  },
+  {
+   "name": "DEL",
+   "field": "summary",
+   "value": "a\u007fb",
+   "valid": false
+  },
+  {
+   "name": "C1 control",
+   "field": "summary",
+   "value": "a\u0085b",
+   "valid": false
+  },
+  {
+   "name": "not a string",
+   "field": "summary",
+   "value": 5,
+   "valid": false
+  },
+  {
+   "name": "merge PR",
+   "field": "target",
+   "value": "tinycloudlabs/docs#42",
+   "valid": true,
+   "verb": "merge"
+  },
+  {
+   "name": "merge PR uppercase repo is not canonical",
+   "field": "target",
+   "value": "TinyCloudLabs/docs#42",
+   "valid": false,
+   "verb": "merge"
+  },
+  {
+   "name": "merge branch",
+   "field": "target",
+   "value": "tinycloudlabs/docs@main",
+   "valid": true,
+   "verb": "merge"
+  },
+  {
+   "name": "merge free text",
+   "field": "target",
+   "value": "the docs PR",
+   "valid": false,
+   "verb": "merge"
+  },
+  {
+   "name": "merge cyrillic a lookalike",
+   "field": "target",
+   "value": "tinycloudlabs/d\u043ecs#42",
+   "valid": false,
+   "verb": "merge"
+  },
+  {
+   "name": "merge with trailing newline",
+   "field": "target",
+   "value": "tinycloudlabs/docs#42\n",
+   "valid": false,
+   "verb": "merge"
+  },
+  {
+   "name": "publish npm",
+   "field": "target",
+   "value": "npm:@tinycloud/courier@1.2.3",
+   "valid": true,
+   "verb": "publish"
+  },
+  {
+   "name": "publish npm no version",
+   "field": "target",
+   "value": "npm:@tinycloud/courier",
+   "valid": false,
+   "verb": "publish"
+  },
+  {
+   "name": "deploy wrangler with env",
+   "field": "target",
+   "value": "wrangler:eliza:prod",
+   "valid": true,
+   "verb": "deploy"
+  },
+  {
+   "name": "deploy zero width",
+   "field": "target",
+   "value": "wrangler:eli\u200bza",
+   "valid": false,
+   "verb": "deploy"
+  },
+  {
+   "name": "other secrets with a space",
+   "field": "target",
+   "value": "secrets:set DATABASE_URL",
+   "valid": true,
+   "verb": "other"
+  },
+  {
+   "name": "other non-ascii free text",
+   "field": "target",
+   "value": "note:caf\u00e9",
+   "valid": false,
+   "verb": "other"
+  },
+  {
+   "name": "spend ascii",
+   "field": "target",
+   "value": "spend:$20 of API credit",
+   "valid": true,
+   "verb": "spend"
+  },
+  {
+   "name": "spend 201 chars",
+   "field": "target",
+   "value": "spend:xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+   "valid": false,
+   "verb": "spend"
+  },
+  {
+   "name": "empty target",
+   "field": "target",
+   "value": "",
+   "valid": false,
+   "verb": "merge"
+  },
+  {
+   "name": "unknown verb",
+   "field": "target",
+   "value": "x",
+   "valid": false,
+   "verb": "rm"
+  },
+  {
+   "name": "shape: merge needs owner/repo#N or @ref",
+   "field": "target",
+   "value": "tinycloudlabs/docs",
+   "valid": false,
+   "verb": "merge"
+  },
+  {
+   "name": "shape: other needs a lowercase kind",
+   "field": "target",
+   "value": "Note:something",
+   "valid": false,
+   "verb": "other"
+  },
+  {
+   "name": "shape: other with a space inside",
+   "field": "target",
+   "value": "secrets:set DATABASE_URL",
+   "valid": true,
+   "verb": "other"
+  },
+  {
+   "name": "shape: spend prefix",
+   "field": "target",
+   "value": "spend:$20 of API credit",
+   "valid": true,
+   "verb": "spend"
+  },
+  {
+   "name": "Braille blank U+2800",
+   "field": "summary",
+   "value": "Merge\u2800docs",
+   "valid": false
+  },
+  {
+   "name": "Braille blank U+2800 in a target",
+   "field": "target",
+   "value": "note:a\u2800b",
+   "valid": false,
+   "verb": "other"
+  },
+  {
+   "name": "object replacement U+FFFC",
+   "field": "summary",
+   "value": "Merge\ufffcdocs",
+   "valid": false
+  },
+  {
+   "name": "object replacement U+FFFC in a target",
+   "field": "target",
+   "value": "note:a\ufffcb",
+   "valid": false,
+   "verb": "other"
+  },
+  {
+   "name": "musical null notehead U+1D159",
+   "field": "summary",
+   "value": "Merge\ud834\udd59docs",
+   "valid": false
+  },
+  {
+   "name": "musical null notehead U+1D159 in a target",
+   "field": "target",
+   "value": "note:a\ud834\udd59b",
+   "valid": false,
+   "verb": "other"
+  },
+  {
+   "name": "PR number of 9 digits",
+   "field": "target",
+   "value": "o/r#999999999",
+   "valid": true,
+   "verb": "merge"
+  },
+  {
+   "name": "PR number of 10 digits is refused",
+   "field": "target",
+   "value": "o/r#1000000000",
+   "valid": false,
+   "verb": "merge"
+  },
+  {
+   "name": "PR number above 2^53 is refused, not rounded",
+   "field": "target",
+   "value": "o/r#99999999999999999999",
+   "valid": false,
+   "verb": "merge"
+  },
+  {
+   "name": "PR number with leading zeros is not canonical as stored",
+   "field": "target",
+   "value": "o/r#0042",
+   "valid": false,
+   "verb": "merge"
+  },
+  {
+   "name": "PR number zero",
+   "field": "target",
+   "value": "o/r#0",
+   "valid": false,
+   "verb": "merge"
+  },
+  {
+   "name": "merge PR with leading zero is not canonical as stored",
+   "field": "target",
+   "value": "o/r#0139",
+   "valid": false,
+   "verb": "merge"
+  },
+  {
+   "name": "merge PR 00",
+   "field": "target",
+   "value": "o/r#00",
+   "valid": false,
+   "verb": "merge"
+  },
+  {
+   "name": "merge PR 139",
+   "field": "target",
+   "value": "o/r#139",
+   "valid": true,
+   "verb": "merge"
+  },
+  {
+   "name": "secrets target with a double space is not canonical",
+   "field": "target",
+   "value": "secrets:A  bB",
+   "valid": false,
+   "verb": "other"
+  },
+  {
+   "name": "workflow target with an upper-case repo is not canonical",
+   "field": "target",
+   "value": "workflow:O/R:x.yml",
+   "valid": false,
+   "verb": "other"
+  },
+  {
+   "name": "summary with ASCII double quote",
+   "field": "summary",
+   "value": "Merge \"docs\"",
+   "valid": false
+  },
+  {
+   "name": "summary with left double quotation mark",
+   "field": "summary",
+   "value": "Merge \u201cdocs\u201c",
+   "valid": false
+  },
+  {
+   "name": "summary with right double quotation mark",
+   "field": "summary",
+   "value": "Merge \u201ddocs\u201d",
+   "valid": false
+  },
+  {
+   "name": "summary with double low-9 quotation mark",
+   "field": "summary",
+   "value": "Merge \u201edocs\u201e",
+   "valid": false
+  },
+  {
+   "name": "summary with double high-reversed-9 quotation mark",
+   "field": "summary",
+   "value": "Merge \u201fdocs\u201f",
+   "valid": false
+  },
+  {
+   "name": "summary with left guillemet",
+   "field": "summary",
+   "value": "Merge \u00abdocs\u00ab",
+   "valid": false
+  },
+  {
+   "name": "summary with right guillemet",
+   "field": "summary",
+   "value": "Merge \u00bbdocs\u00bb",
+   "valid": false
+  },
+  {
+   "name": "summary with single left guillemet",
+   "field": "summary",
+   "value": "Merge \u2039docs\u2039",
+   "valid": false
+  },
+  {
+   "name": "summary with single right guillemet",
+   "field": "summary",
+   "value": "Merge \u203adocs\u203a",
+   "valid": false
+  },
+  {
+   "name": "summary with fullwidth quotation mark",
+   "field": "summary",
+   "value": "Merge \uff02docs\uff02",
+   "valid": false
+  },
+  {
+   "name": "summary with heavy double turned comma ornament",
+   "field": "summary",
+   "value": "Merge \u275ddocs\u275d",
+   "valid": false
+  },
+  {
+   "name": "summary with heavy double comma ornament",
+   "field": "summary",
+   "value": "Merge \u275edocs\u275e",
+   "valid": false
+  },
+  {
+   "name": "summary with reversed double prime quotation mark",
+   "field": "summary",
+   "value": "Merge \u301ddocs\u301d",
+   "valid": false
+  },
+  {
+   "name": "summary with low double prime quotation mark",
+   "field": "summary",
+   "value": "Merge \u301fdocs\u301f",
+   "valid": false
+  },
+  {
+   "name": "summary with an apostrophe is fine",
+   "field": "summary",
+   "value": "Merge the docs PR (it's small)",
+   "valid": true
+  },
+  {
+   "name": "summary with Khitan small script filling character",
+   "field": "summary",
+   "value": "Merge\ud81b\udfe4docs",
+   "valid": false
+  },
+  {
+   "name": "target with Khitan small script filling character",
+   "field": "target",
+   "value": "note:a\ud81b\udfe4b",
+   "valid": false,
+   "verb": "other"
+  },
+  {
+   "name": "summary with Hangul choseong filler",
+   "field": "summary",
+   "value": "Merge\u115fdocs",
+   "valid": false
+  },
+  {
+   "name": "target with Hangul choseong filler",
+   "field": "target",
+   "value": "note:a\u115fb",
+   "valid": false,
+   "verb": "other"
+  },
+  {
+   "name": "summary with Hangul jungseong filler",
+   "field": "summary",
+   "value": "Merge\u1160docs",
+   "valid": false
+  },
+  {
+   "name": "target with Hangul jungseong filler",
+   "field": "target",
+   "value": "note:a\u1160b",
+   "valid": false,
+   "verb": "other"
+  },
+  {
+   "name": "summary with Hangul filler",
+   "field": "summary",
+   "value": "Merge\u3164docs",
+   "valid": false
+  },
+  {
+   "name": "target with Hangul filler",
+   "field": "target",
+   "value": "note:a\u3164b",
+   "valid": false,
+   "verb": "other"
+  },
+  {
+   "name": "summary with halfwidth Hangul filler",
+   "field": "summary",
+   "value": "Merge\uffa0docs",
+   "valid": false
+  },
+  {
+   "name": "target with halfwidth Hangul filler",
+   "field": "target",
+   "value": "note:a\uffa0b",
+   "valid": false,
+   "verb": "other"
+  },
+  {
+   "name": "summary with shorthand format letter overlap",
+   "field": "summary",
+   "value": "Merge\ud82f\udca0docs",
+   "valid": false
+  },
+  {
+   "name": "target with shorthand format letter overlap",
+   "field": "target",
+   "value": "note:a\ud82f\udca0b",
+   "valid": false,
+   "verb": "other"
+  },
+  {
+   "name": "summary with shorthand format up step",
+   "field": "summary",
+   "value": "Merge\ud82f\udca3docs",
+   "valid": false
+  },
+  {
+   "name": "target with shorthand format up step",
+   "field": "target",
+   "value": "note:a\ud82f\udca3b",
+   "valid": false,
+   "verb": "other"
+  },
+  {
+   "name": "summary with heavy low double comma ornament",
+   "field": "summary",
+   "value": "Merge \u2760docs",
+   "valid": false
+  },
+  {
+   "name": "summary with double low-reversed-9 quotation mark",
+   "field": "summary",
+   "value": "Merge \u2e42docs",
+   "valid": false
+  },
+  {
+   "name": "summary with sans-serif heavy double turned comma",
+   "field": "summary",
+   "value": "Merge \ud83d\ude76docs",
+   "valid": false
+  },
+  {
+   "name": "summary with sans-serif heavy double comma",
+   "field": "summary",
+   "value": "Merge \ud83d\ude77docs",
+   "valid": false
+  },
+  {
+   "name": "summary with sans-serif heavy low double comma",
+   "field": "summary",
+   "value": "Merge \ud83d\ude78docs",
+   "valid": false
+  },
+  {
+   "name": "summary with double prime",
+   "field": "summary",
+   "value": "Merge \u2033docs",
+   "valid": false
+  },
+  {
+   "name": "summary with reversed double prime",
+   "field": "summary",
+   "value": "Merge \u2036docs",
+   "valid": false
+  },
+  {
+   "name": "summary with modifier letter double prime",
+   "field": "summary",
+   "value": "Merge \u02badocs",
+   "valid": false
+  },
+  {
+   "name": "summary with Hebrew gershayim",
+   "field": "summary",
+   "value": "Merge \u05f4docs",
+   "valid": false
+  },
+  {
+   "name": "summary with ditto mark",
+   "field": "summary",
+   "value": "Merge \u3003docs",
+   "valid": false
+  },
+  {
+   "name": "summary with left single quotation mark",
+   "field": "summary",
+   "value": "Merge \u2018docs",
+   "valid": false
+  },
+  {
+   "name": "summary with single high-reversed-9 quotation mark",
+   "field": "summary",
+   "value": "Merge \u201bdocs",
+   "valid": false
+  },
+  {
+   "name": "summary with CJK left corner bracket",
+   "field": "summary",
+   "value": "Merge \u300cdocs",
+   "valid": false
+  },
+  {
+   "name": "summary with CJK right corner bracket",
+   "field": "summary",
+   "value": "Merge \u300ddocs",
+   "valid": false
+  },
+  {
+   "name": "summary with a right single quote (apostrophe) is refused",
+   "field": "summary",
+   "value": "Merge Sam\u2019s docs PR",
+   "valid": false
+  },
+  {
+   "name": "summary with an ASCII apostrophe is allowed",
+   "field": "summary",
+   "value": "Merge Sam's docs PR",
+   "valid": true
+  },
+  {
+   "field": "summary",
+   "name": "NFC multilingual letters and decimal digits",
+   "value": "Caf\u00e9 \u4e2d\u6587 \u0627\u0644\u0639\u0631\u0628\u064a\u0629 \u0967\u0968\u0969",
+   "valid": true
+  }
+ ],
+ "ids": [
+  {
+   "name": "ULID",
+   "value": "01M5C9EDF03QMRZS2DJXGN5A4C",
+   "valid": true,
+   "applies": "id, threadId, taskId of a request"
+  },
+  {
+   "name": "lower-case ULID",
+   "value": "01m5c9edf03qmrzs2djxgn5a4c",
+   "valid": false,
+   "applies": "id, threadId, taskId of a request"
+  },
+  {
+   "name": "ULID with I",
+   "value": "01M5C9EDF03QMRZS2DJXGN5A4I",
+   "valid": false,
+   "applies": "id, threadId, taskId of a request"
+  },
+  {
+   "name": "27 characters",
+   "value": "01M5C9EDF03QMRZS2DJXGN5A4CA",
+   "valid": false,
+   "applies": "id, threadId, taskId of a request"
+  },
+  {
+   "name": "25 characters",
+   "value": "01M5C9EDF03QMRZS2DJXGN5A4",
+   "valid": false,
+   "applies": "id, threadId, taskId of a request"
+  },
+  {
+   "name": "T1",
+   "value": "T1",
+   "valid": false,
+   "applies": "id, threadId, taskId of a request"
+  },
+  {
+   "name": "path traversal",
+   "value": "../x",
+   "valid": false,
+   "applies": "id, threadId, taskId of a request"
+  },
+  {
+   "name": "space",
+   "value": "a b",
+   "valid": false,
+   "applies": "id, threadId, taskId of a request"
+  },
+  {
+   "name": "empty",
+   "value": "",
+   "valid": false,
+   "applies": "id, threadId, taskId of a request"
+  },
+  {
+   "name": "zero-width space",
+   "value": "01M5C9EDF03QMRZS2DJXGN5A4\u200b",
+   "valid": false,
+   "applies": "id, threadId, taskId of a request"
+  }
+ ],
+ "unicodeVersion": "15.0.0"
+}

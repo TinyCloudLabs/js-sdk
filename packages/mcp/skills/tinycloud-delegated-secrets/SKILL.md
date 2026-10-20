@@ -17,6 +17,8 @@ The following facts are generated from `@tinycloud/operations/operations.json`:
 - `tinycloud_auth_import` -> `tinycloud.auth.import@1`; surfaces: local; effects: local_write; postures: owner-openkey, delegate-session, local-owner-key; sensitive output: no.
 - `tinycloud_auth_request` -> `tinycloud.auth.request@1`; surfaces: local, hosted; effects: local_write; postures: owner-openkey, delegate-session, local-owner-key; sensitive output: no.
 - `tinycloud_auth_status` -> `tinycloud.auth.status@1`; surfaces: local, hosted; effects: read; postures: owner-openkey, delegate-session, local-owner-key, unauthenticated; sensitive output: no.
+- `tinycloud_knowledge_list` -> `tinycloud.knowledge.list@1`; surfaces: local, hosted; effects: read; postures: owner-openkey, delegate-session, local-owner-key; sensitive output: yes.
+- `tinycloud_knowledge_read` -> `tinycloud.knowledge.read@1`; surfaces: local, hosted; effects: read; postures: owner-openkey, delegate-session, local-owner-key; sensitive output: yes.
 - `tinycloud_kv_delete` -> `tinycloud.kv.delete@1`; surfaces: local, hosted; effects: destructive; postures: owner-openkey, delegate-session, local-owner-key; sensitive output: no.
 - `tinycloud_kv_get` -> `tinycloud.kv.get@1`; surfaces: local, hosted; effects: read; postures: owner-openkey, delegate-session, local-owner-key; sensitive output: yes.
 - `tinycloud_kv_head` -> `tinycloud.kv.head@1`; surfaces: local, hosted; effects: read; postures: owner-openkey, delegate-session, local-owner-key; sensitive output: no.
@@ -33,12 +35,14 @@ The following facts are generated from `@tinycloud/operations/operations.json`:
 <!-- BEGIN GENERATED TINYCloud operations coverage -->
 Coverage is generated from the Commander registration ledger; legacy commands are not MCP tools.
 
-- 2 migrated registration(s).
+- 4 migrated registration(s).
 - 1 partially migrated registration(s).
 - 129 legacy registration(s) remain Commander-owned.
 - `auth import [source]` → `tinycloud.auth.import@1` (partially-migrated; remaining legacy inputs: v1 delegation artifact, v1 permission artifact without command, bare portable delegation, stored delegation wrapper, cross-user delegation persisted with activated=false).
 - `secrets get <name>` → `tinycloud.secrets.get@1` (migrated).
 - `secrets probe <name>` → `tinycloud.secrets.status@1` (migrated).
+- `knowledge list` → `tinycloud.knowledge.list@1` (migrated).
+- `knowledge read <app_id> [concept]` → `tinycloud.knowledge.read@1` (migrated).
 <!-- END GENERATED TINYCloud operations coverage -->
 
 ## Account and KV exploration
