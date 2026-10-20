@@ -75,6 +75,8 @@ export interface FolderReadHooks {
   readonly afterLstat?: () => Promise<void>;
   /** Runs just after an entry is opened, before anything is checked. */
   readonly afterOpen?: () => Promise<void>;
+  /** Runs after a directory's descriptor is checked, just before it is listed. */
+  readonly beforeList?: () => Promise<void>;
   /** Runs after a file's bytes are read, before they are accepted. */
   readonly afterRead?: () => Promise<void>;
   /** The real path an open descriptor refers to, or `undefined` where the platform cannot say (then the weaker checks run). */
@@ -201,6 +203,7 @@ export async function listFolderDirectory(root: string, absolute: string, relati
       if (byDescriptor !== undefined) {
         if (byDescriptor !== absolute || (absolute !== root && !isWithinFolder(root, byDescriptor))) return problem("symbolic link");
         // The listing comes from the descriptor, not from the path.
+        await hooks.beforeList?.();
         return { entries: await readdir(`${PROC_FD}/${handle.fd}`, { withFileTypes: true }) };
       }
       const real = await realpath(absolute);

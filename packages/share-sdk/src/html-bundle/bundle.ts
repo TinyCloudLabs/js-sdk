@@ -134,7 +134,9 @@ interface ResolvedReference {
 }
 
 export function resolveArtifactReference(basePath: string, reference: string): ResolvedReference {
-  const raw = reference.trim();
+  // As a URL parser trims: controls and space only. `String.trim` also strips U+00A0 and other Unicode whitespace, which a
+  // browser keeps as part of a relative URL (so `&nbsp;#c` is a path, not a fragment).
+  const raw = trimUrl(reference);
   if (raw.length === 0) return { path: canonicalArtifactPath(basePath), fragment: "", fragmentOnly: true };
   if (raw.startsWith("#")) {
     return { path: canonicalArtifactPath(basePath), fragment: raw, fragmentOnly: true };
@@ -258,20 +260,54 @@ function queryAll<T extends Element = Element>(roots: readonly ParentNode[], sel
   return roots.flatMap((root) => [...root.querySelectorAll<T>(selector)]);
 }
 
-/** Attributes whose value is a URL (or a list of them) that a browser may fetch or navigate to. */
+/**
+ * Attributes whose value is a URL (or a list of them) that a browser may fetch or navigate to, or that names a resource:
+ * the HTML attributes that do (`src`, `href`, `srcset`, `imagesrcset`, `poster`, `action`, `formaction`, `ping`,
+ * `background`, `cite`, `data`, `codebase`, `archive`, `classid`, `profile`, `longdesc`, `usemap`, `manifest`, `icon`,
+ * `lowsrc`, `dynsrc`, `itemtype`, `itemid`), the Attribution Reporting `attributionsrc`, and `xlink:href` (matched by its
+ * local name, like `href` on SVG `<use>`, `<image>`, `<feImage>`, `<mpath>` and MathML). In the finished page each must be
+ * a `data:` URL the rewriter wrote or a `#fragment`.
+ */
 const URL_ATTRIBUTES = new Set([
   "href", "src", "srcset", "imagesrcset", "poster", "action", "formaction", "cite", "data", "codebase", "longdesc", "usemap",
-  "ping", "background", "manifest", "icon", "archive", "classid", "profile", "lowsrc", "dynsrc",
+  "ping", "background", "manifest", "icon", "archive", "classid", "profile", "lowsrc", "dynsrc", "attributionsrc", "itemtype", "itemid",
 ]);
 
-/** `data:` and `#fragment` are the only references the finished page may hold; an empty value fetches nothing. */
+/**
+ * A URL parser trims leading and trailing C0 controls and spaces and only those: not U+00A0, not Unicode whitespace
+ * (`String.prototype.trim` strips both, which would turn `&nbsp;#c` into a fragment). Tabs and newlines inside are removed.
+ */
+function trimUrl(value: string): string {
+  // eslint-disable-next-line no-control-regex
+  return value.replace(/^[\u0000-\u0020]+|[\u0000-\u0020]+$/g, "");
+}
+
+function urlText(value: string): string {
+  return trimUrl(value).replace(/[\t\n\r]/g, "");
+}
+
+/** A same-document fragment: `#` and then printable characters (no control, no space, no backslash). */
+function isFragmentOnly(trimmed: string): boolean {
+  // eslint-disable-next-line no-control-regex
+  return /^#[^\u0000-\u0020\u007f-\u009f\\]*$/.test(trimmed);
+}
+
+/** The shape of every `data:` URL the rewriter writes (once cut down by `withoutDataUris`), with an optional fragment. */
+// The comma is optional because a `srcset` list is split on commas, which strips the one that ends `data:;base64,`.
+const INLINE_DATA_URL = /^data:;base64(?:,[A-Za-z0-9+/=]*)?(?:#[^\u0000-\u0020\\]*)?$/;
+
+/**
+ * `data:` and `#fragment` are the only references the finished page may hold. Anything else is refused: a relative path
+ * such as `evil.png` resolves against the viewer's origin, and an empty value names the page itself.
+ */
 function isInlineReference(value: string): boolean {
-  const trimmed = value.trim();
-  return trimmed === "" || trimmed.startsWith("#") || /^data:/i.test(trimmed);
+  const text = urlText(value);
+  return isFragmentOnly(text) || INLINE_DATA_URL.test(text);
 }
 
 function assertInlineSrcset(value: string): void {
-  for (const raw of value.trim().split(/\s+/)) {
+  // The list is split on ASCII whitespace, as a browser splits it.
+  for (const raw of value.split(/[\t\n\f\r ]+/)) {
     const token = raw.replace(/,+$/, "");
     if (token === "" || /^\d+(?:\.\d+)?[wx]$/i.test(token)) continue;
     if (!isInlineReference(token)) throw new ArtifactBundleError("unsupported", "artifact page still references a resource", undefined, token);
@@ -293,10 +329,12 @@ function withoutDataUris(html: string): string {
 }
 
 /** Attributes that carry text, not a URL a browser fetches or follows. Every other attribute may not look like a URL. */
-const TEXT_ATTRIBUTES = /^(?:alt|title|placeholder|value|label|content|name|id|class|lang|summary|abbr|datetime|pattern|xmlns(?::[\w.-]+)?|aria-[\w.:-]*|data-[\w.:-]*|item(?:type|id)|vocab|about|resource|property|typeof|prefix)$/;
+const TEXT_ATTRIBUTES = /^(?:alt|title|placeholder|value|label|content|name|id|class|lang|summary|abbr|datetime|pattern|xmlns(?::[\w.-]+)?|aria-[\w.:-]*|data-[\w.:-]*)$/;
 
 /** Text that a browser would take for a URL to fetch or follow: a network or script scheme, a `//host`, or a path. */
-function looksLikeUrl(value: string): boolean {
+function looksLikeUrl(raw: string): boolean {
+  // A browser reads a backslash as a slash in the URLs of the special schemes (`\\host/x` is `//host/x`).
+  const value = raw.replace(/\\/g, "/");
   return /(?:^|[^a-z0-9+.-])(?:https?|ftps?|wss?|file|javascript|vbscript|blob|about|view-source|filesystem):/i.test(value)
     || /(?:^|[\s,;(="'])\/\/\S/.test(value)
     || /:\/\//.test(value)
@@ -317,42 +355,42 @@ function decodeAttributeValue(value: string): string {
   });
 }
 
-/** A URL as a browser reads it: leading control characters and spaces dropped, tab and newlines removed anywhere. */
-function readableUrl(value: string): string {
-  // eslint-disable-next-line no-control-regex
-  return decodeAttributeValue(value).replace(/[\t\n\r]/g, "").replace(/^[\u0000-\u0020]+/, "");
-}
-
 const MARKUP_BLOCKED_NAMES = new Set(["base", "form", "iframe", "frame", "frameset", "object", "embed", "portal", "noscript", "plaintext", "xmp", "noembed", "noframes", "applet"]);
 
 function unsupportedOutput(detail: string, reference?: string): never {
   throw new ArtifactBundleError("unsupported", detail, undefined, reference);
 }
 
-function checkAttribute(tag: string, rawName: string, rawValue: string): void {
-  const name = rawName.toLowerCase();
-  const value = readableUrl(rawValue);
+function checkAttribute(name: string, decoded: string): void {
   const local = name.slice(name.lastIndexOf(":") + 1);
   if (/^on/.test(name)) unsupportedOutput("artifact output contains a blocked html feature");
   if (name === "style") {
-    assertOnlyInlineCssReferences(value);
+    assertOnlyInlineCssReferences(decoded);
     return;
   }
   if (local === "srcset" || local === "imagesrcset") {
-    assertInlineSrcset(value);
+    assertInlineSrcset(decoded);
     return;
   }
   if (URL_ATTRIBUTES.has(local)) {
-    if (!isInlineReference(value)) unsupportedOutput("artifact page still references a resource", rawValue);
+    if (!isInlineReference(decoded)) unsupportedOutput("artifact page still references a resource", decoded);
     return;
   }
-  if (tag === "meta" && name === "http-equiv" && /^\s*refresh\s*$/i.test(value)) unsupportedOutput("artifact output contains a refresh");
   if (TEXT_ATTRIBUTES.test(name)) return;
-  // Any other attribute: a name no list here knows may still be one a browser fetches (`attributionsrc`), so a value that
-  // reads as a URL is refused whatever the name is.
-  if (looksLikeUrl(value)) unsupportedOutput("artifact page still references a resource", rawValue);
+  // Any other attribute: a name no list here knows may still be one a browser fetches, so a value that reads as a URL is
+  // refused whatever the name is.
+  if (looksLikeUrl(urlText(decoded))) unsupportedOutput("artifact page still references a resource", decoded);
   // CSS in an attribute that is not `style` (an SVG presentation attribute, for one): the same checks, escapes included.
-  if (/url\s*\(|image-set|@import|\\/i.test(value) || /(?:^|[^\w-])src\s*\(/i.test(value)) assertOnlyInlineCssReferences(value);
+  if (/url\s*\(|image-set|@import|\\/i.test(decoded) || /(?:^|[^\w-])src\s*\(/i.test(decoded)) assertOnlyInlineCssReferences(decoded);
+}
+
+/**
+ * The only `<meta http-equiv>` a finished page may hold is the rewriter's own Content-Security-Policy. Every other one
+ * either acts like a response header (`refresh`, `Link`, `Set-Cookie`, `Default-Style`, `Content-Security-Policy` of the
+ * author) or is not needed in a page that is already one UTF-8 document, so the rewriter drops them all.
+ */
+function isOwnPolicyMeta(httpEquiv: string, content: string | null): boolean {
+  return httpEquiv.trim().toLowerCase() === "content-security-policy" && content === INNER_CSP;
 }
 
 /**
@@ -397,6 +435,7 @@ function scanMarkupForReferences(html: string): void {
     const tag = nameMatch.exec(html)![0].toLowerCase();
     index = nameMatch.lastIndex;
     if (MARKUP_BLOCKED_NAMES.has(tag)) unsupportedOutput("artifact output contains a blocked html feature");
+    const attributes = new Map<string, string>();
     for (;;) {
       while (index < length && /[\s/]/.test(html[index]!)) index += 1;
       if (index >= length) unsupportedOutput("artifact output has an unterminated tag");
@@ -426,7 +465,20 @@ function scanMarkupForReferences(html: string): void {
           index = unquoted.lastIndex;
         }
       }
-      if (rawName.length > 0) checkAttribute(tag, rawName, rawValue);
+      if (rawName.length > 0) {
+        const name = rawName.toLowerCase();
+        const decoded = decodeAttributeValue(rawValue);
+        checkAttribute(name, decoded);
+        // A repeated attribute: a browser keeps the first, so only the first is the one that counts for the tag-level checks.
+        if (!attributes.has(name)) attributes.set(name, decoded);
+      }
+    }
+    // The same elements and attributes the DOM pass refuses by selector (`BLOCKED_ELEMENTS`), so neither pass depends on the other.
+    if ((tag === "area" && attributes.has("href")) || attributes.has("ping") || (tag === "link" && !attributes.has("href"))) {
+      unsupportedOutput("artifact output contains a blocked html feature");
+    }
+    if (tag === "meta" && attributes.has("http-equiv") && !isOwnPolicyMeta(attributes.get("http-equiv")!, attributes.get("content") ?? null)) {
+      unsupportedOutput("artifact output contains a meta http-equiv", attributes.get("http-equiv"));
     }
     if (tag === "style") {
       const close = html.slice(index).search(/<\/style/i);
@@ -439,20 +491,47 @@ function scanMarkupForReferences(html: string): void {
   }
 }
 
+export interface AssertSelfContainedOptions {
+  /** Parses HTML with the HTML5 tree builder. Defaults to the browser's `DOMParser`. */
+  readonly parseHtml?: (html: string) => Document;
+  /**
+   * Run only one of the two passes: `"bytes"` (the scan with its own tokenizer) or `"dom"` (the DOM parser's view). Both run
+   * by default; the option exists so each pass can be tested alone.
+   */
+  readonly only?: "bytes" | "dom";
+}
+
 /**
- * The last check, on the finished page and independent of the rewriting above: the page is read again, without its
- * `data:` URLs, by a scan that has its own tokenizer and by the DOM parser, and refused if anything in it could still fetch
- * or navigate to something other than a `data:` URL or a `#fragment`. This catches whatever the rewriting did not know
- * about, so "self-contained" is verified, not assumed.
+ * The last check, on a finished page and independent of the rewriting that made it: the page is read without its
+ * `data:` URLs by a scan that has its own tokenizer and then by the DOM parser, and refused (`unsupported`) if anything in it
+ * could still fetch or navigate to something other than a `data:` URL the rewriter wrote or a `#fragment` of the page.
+ *
+ * What it enforces (each class is refused, not rewritten):
+ * - every URL-bearing attribute (`URL_ATTRIBUTES`: `href`, `xlink:href`, `src`, `srcset`, `imagesrcset`, `poster`, `ping`,
+ *   `attributionsrc`, `background`, `formaction`, `cite`, `data`, `codebase`, `archive`, `profile`, `longdesc`, `usemap`,
+ *   `manifest`, `lowsrc`, `dynsrc`, `itemtype`, ...) holds only `data:;base64,...` or `#fragment`, after the value is read the way
+ *   a browser reads it (entities decoded, tabs and newlines removed, controls and spaces trimmed, U+00A0 and other Unicode
+ *   whitespace not trimmed): a relative path, an empty value, `&nbsp;#c` and `\host/x` are all refused;
+ * - any other attribute outside a text allow-list (`title`, `alt`, `aria-*`, `data-*`, `content`, `xmlns`, ...) whose value
+ *   reads as a URL (a network or script scheme, `//host`, `\host`, a path) is refused;
+ * - CSS in `<style>` and in attributes: no `@import`, `image-set()` or `src()`, and every `url()` is `data:` or `#fragment`,
+ *   backslash escapes decoded first;
+ * - no `<meta http-equiv>` except the rewriter's own Content-Security-Policy, no event handler, no `<base>`, `<form>`,
+ *   frames, `<object>`, `<embed>`, `<noscript>`, `<xmp>`, `<plaintext>`, `<area href>`, no `ping`, no SVG `<script>`.
+ *
+ * What it does not enforce: what a page's own script does (the scripts are scanned for blocked capabilities at rewrite
+ * time, and the viewer's sandbox and Content-Security-Policy are the second line), and text that is not an attribute or
+ * `<style>` (a script or a text node may hold `https://` as data).
  */
-function verifySelfContained(output: string, context: TransformContext): void {
+export function assertSelfContainedPage(output: string, options: AssertSelfContainedOptions = {}): void {
   const page = withoutDataUris(output);
-  scanMarkupForReferences(page);
-  const doc = context.parseHtml(page);
+  if (options.only !== "dom") scanMarkupForReferences(page);
+  if (options.only === "bytes") return;
+  const doc = (options.parseHtml ?? defaultParseHtml)(page);
   const roots = documentRoots(doc);
   if (queryAll(roots, BLOCKED_ELEMENTS).length > 0) fail("unsupported", "artifact output contains a blocked html feature");
   for (const meta of queryAll<HTMLMetaElement>(roots, "meta[http-equiv]")) {
-    if ((meta.getAttribute("http-equiv") ?? "").trim().toLowerCase() === "refresh") fail("unsupported", "artifact output contains a refresh");
+    if (!isOwnPolicyMeta(meta.getAttribute("http-equiv") ?? "", meta.getAttribute("content"))) fail("unsupported", "artifact output contains a meta http-equiv");
   }
   if (queryAll(roots, "script[src]").length > 0) fail("unsupported", "artifact output still loads a script");
   for (const style of queryAll(roots, "style")) assertOnlyInlineCssReferences(style.textContent ?? "");
@@ -462,6 +541,7 @@ function verifySelfContained(output: string, context: TransformContext): void {
     for (const name of element.getAttributeNames()) {
       const lower = name.toLowerCase();
       const local = lower.slice(lower.lastIndexOf(":") + 1);
+      // The DOM already holds the decoded value.
       const value = element.getAttribute(name) ?? "";
       if (/^on/.test(lower)) fail("unsupported", "artifact output contains a blocked html feature");
       if (URL_ATTRIBUTES.has(local)) {
@@ -473,6 +553,10 @@ function verifySelfContained(output: string, context: TransformContext): void {
   }
 }
 
+function verifySelfContained(output: string, context: TransformContext): void {
+  assertSelfContainedPage(output, { parseHtml: context.parseHtml });
+}
+
 /**
  * Inline SVG elements (`<image>`, `<use>`, `<script>`, `<feImage>`, ...) reference resources through `href` or
  * `xlink:href`, which the HTML resource list above does not cover. Only same-document `#fragment` references are
@@ -482,14 +566,14 @@ function rejectSvgResourceReferences(roots: readonly ParentNode[]): void {
   for (const element of queryAll(roots, "*")) {
     if (element.namespaceURI !== SVG_NAMESPACE) continue;
     const animatesHref = /^(?:animate|set|animatetransform|animatemotion)$/i.test(element.localName)
-      && element.getAttributeNames().some((name) => name.toLowerCase() === "attributename" && /^(?:xlink:)?href$/i.test((element.getAttribute(name) ?? "").trim()));
+      && element.getAttributeNames().some((name) => name.toLowerCase() === "attributename" && /^(?:xlink:)?href$/i.test(trimUrl(element.getAttribute(name) ?? "")));
     if (animatesHref) fail("unsupported", "artifact svg animates a resource reference");
     // An SVG `<script>` is read as markup by a browser's tokenizer, not as script text, so what is in it cannot be checked like a page script.
     if (element.localName === "script") fail("unsupported", "artifact svg contains a script");
     for (const attributeName of element.getAttributeNames()) {
       if (attributeName !== "href" && !attributeName.endsWith(":href")) continue;
       if (element.localName === "a" && attributeName === "href") continue;
-      if (!(element.getAttribute(attributeName) ?? "").trim().startsWith("#")) fail("unsupported", "artifact svg references a resource");
+      if (!isFragmentOnly(urlText(element.getAttribute(attributeName) ?? ""))) fail("unsupported", "artifact svg references a resource");
     }
   }
 }
@@ -664,10 +748,11 @@ function assertOnlyInlineCssReferences(css: string): void {
   if (/(?:^|[^\w-])(?:-webkit-)?image-set\s*\(/i.test(text) || /(?:^|[^\w-])src\s*\(/i.test(text)) fail("unsupported", "artifact css uses an unsupported resource function");
   const opened = text.match(/url\(/gi)?.length ?? 0;
   let read = 0;
-  for (const match of text.matchAll(/url\(\s*(?:"([^"]*)"|'([^']*)'|([^)"'\s]*))\s*\)/gi)) {
+  // CSS whitespace is space, tab, newline, carriage return and form feed: not U+00A0, which stays part of the URL.
+  for (const match of text.matchAll(/url\([ \t\n\r\f]*(?:"([^"]*)"|'([^']*)'|([^)"' \t\n\r\f]*))[ \t\n\r\f]*\)/gi)) {
     read += 1;
-    const value = (match[1] ?? match[2] ?? match[3] ?? "").trim();
-    if (!(value.startsWith("#") || /^data:/i.test(value)) || value.includes("\\")) {
+    const value = match[1] ?? match[2] ?? match[3] ?? "";
+    if (!isInlineReference(value) || value.includes("\\")) {
       throw new ArtifactBundleError("unsupported", "artifact css references a resource", undefined, value);
     }
   }
@@ -693,7 +778,7 @@ async function transformCss(sourceText: string, basePath: string, context: Trans
     imported,
     /url\(\s*(["']?)([^"')]+)\1\s*\)/gi,
     async (_whole, _quote, reference) => {
-      if (reference.trim().startsWith("#")) return `url("${reference.trim()}")`;
+      if (trimUrl(reference).startsWith("#")) return `url("${trimUrl(reference)}")`;
       const { file, resolved } = requiredFile(context, basePath, reference);
       const dataUrl = asDataUrl(file, context);
       return `url("${context.deferred === undefined ? dataUrl : parkUrl(context.deferred, dataUrl)}${resolved.fragment}")`;
@@ -757,10 +842,9 @@ async function transformHtml(path: string, file: ArtifactFile, context: Transfor
   rejectEventHandlerAttributes(roots);
   rejectSvgResourceReferences(roots);
   const inlineStyles = queryAll<HTMLStyleElement>(roots, "style");
-  for (const meta of queryAll<HTMLMetaElement>(roots, "meta[http-equiv]")) {
-    const directive = meta.httpEquiv.toLowerCase();
-    if (directive === "refresh" || directive === "content-security-policy") meta.remove();
-  }
+  // Every author `<meta http-equiv>` is dropped: they act like response headers (`refresh`, `Link`, `Set-Cookie`, the author's own
+  // Content-Security-Policy), and the finished page carries only the rewriter's own policy.
+  for (const meta of queryAll<HTMLMetaElement>(roots, "meta[http-equiv]")) meta.remove();
   for (const link of queryAll<HTMLLinkElement>(roots, "link[href]")) {
     const relation = classifyLinkRelation(link.getAttribute("rel"));
     if (relation === "stylesheet") {

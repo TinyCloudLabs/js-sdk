@@ -205,7 +205,7 @@ describe("the byte-level scan of the finished page", () => {
   });
 
   it("allows attributes that carry text, even text that contains a URL", async () => {
-    const prepared = await prepare([page('<p title="see https://x.example/ and //y.example" data-url="https://x.example/" aria-label="https://x.example/" id="a/b" class="https://x.example">x</p><img alt="https://x.example/" src="img/a.png"><svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"><rect/></svg><div itemscope itemtype="https://schema.org/Thing">x</div>', '<meta property="og:image" content="https://x.example/p.png"><meta name="viewport" content="width=device-width">'), PNG]);
+    const prepared = await prepare([page('<p title="see https://x.example/ and //y.example" data-url="https://x.example/" aria-label="https://x.example/" id="a/b" class="https://x.example">x</p><img alt="https://x.example/" src="img/a.png"><svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"><rect/></svg><div itemscope>x</div>', '<meta property="og:image" content="https://x.example/p.png"><meta name="viewport" content="width=device-width">'), PNG]);
     expect(prepared.pages["index.html"]).toContain('title="see https://x.example/ and //y.example"');
   });
 

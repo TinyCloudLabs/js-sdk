@@ -198,6 +198,17 @@ describe("folder reading stays inside the folder", () => {
     expect("entries" in result && result.entries.map((entry) => entry.name)).toEqual(["a.txt"]);
   });
 
+  // A directory is listed from the descriptor it was opened as, so a swap after the check cannot change what is listed (a listing
+  // by path would return the names in the outside folder).
+  test("a directory is listed from its descriptor, not from its path", async () => {
+    if (!linuxOnly) return;
+    await mkdir(join(root, "sub"));
+    await writeFile(join(root, "sub", "inside.txt"), "x");
+    await writeFile(join(outside, "outside-name.txt"), "y");
+    const result = await listFolderDirectory(root, join(root, "sub"), "sub", { beforeList: swapSubForLink });
+    expect("entries" in result && result.entries.map((entry) => entry.name)).toEqual(["inside.txt"]);
+  });
+
   test("on Linux the descriptor's real path is the file's path", async () => {
     if (!linuxOnly) return;
     await writeFile(join(root, "a.txt"), "x");
@@ -208,9 +219,11 @@ describe("folder reading stays inside the folder", () => {
     } finally { await handle.close(); }
   });
 
-  // A second process swaps a subfolder between a real directory and a link to the outside folder, as fast as it can, while the
-  // folder is read. On Linux (descriptor path) no walk may return the outside file; elsewhere the checks are best effort.
-  test("a subfolder swapped for a link by a running process never gets an outside file read (5,000 walks)", async () => {
+  // A SMOKE test, not the proof. A second process swaps a subfolder between a real directory and a link to the outside folder
+  // as fast as it can while the folder is read, and no walk may return the outside file. The window is too narrow for 5,000
+  // walks to find it: the earlier path-based check (which did leak) also passes this test. What proves each check is the
+  // hook tests above, which put the swap at an exact step. Elsewhere than Linux the checks are best effort, so it is skipped.
+  test("smoke: a subfolder swapped for a link by a running process never gets an outside file read (5,000 walks)", async () => {
     if (!linuxOnly) return;
     await mkdir(join(root, ".real"));
     await writeFile(join(root, ".real", "secret.txt"), "inside");
@@ -227,13 +240,18 @@ describe("folder reading stays inside the folder", () => {
     try {
       await new Promise<void>((resolveReady) => swapper.stdout!.once("data", () => resolveReady()));
       let leaked = 0;
-      for (let index = 0; index < 5_000; index += 1) {
+      let accepted = 0;
+      const walks = 5_000;
+      for (let index = 0; index < walks; index += 1) {
         try {
           const { files } = await readHtmlFolder(root, 10_000);
+          accepted += 1;
           for (const file of files) if (decode(file.bytes) === OUTSIDE) leaked += 1;
         } catch { /* refused or changed: fine */ }
       }
       expect(leaked).toBe(0);
+      // Not a measurement of the window, only of how the run went (it varies from run to run).
+      console.log(`html-folder race smoke: ${walks} walks, ${accepted} read, ${leaked} outside files returned`);
     } finally {
       swapper.kill("SIGKILL");
       await new Promise((resolveExit) => swapper.once("exit", resolveExit));
