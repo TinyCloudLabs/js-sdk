@@ -53,6 +53,7 @@
     "held-credentials-verifier",
     "knowledge-pickup-commands",
     "kv-list-matching",
+    "narrow-apps-agent-write",
     "node-replica-erase-replaced-roots",
     "node-sdk-registry-sync-authority",
     "node-sdk-replica-codes",

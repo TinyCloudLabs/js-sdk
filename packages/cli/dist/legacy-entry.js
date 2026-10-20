@@ -12795,19 +12795,21 @@ var APPS_AGENT_EXPIRY_DAYS = 7;
 var APPS_AGENT_EXPIRY = `${APPS_AGENT_EXPIRY_DAYS}d`;
 var APPS_AGENT_MAX_APPS = 5;
 var DAY_MS2 = 864e5;
+var APPS_AGENT_WRITE_FOLDERS = ["knowledge/", "prefs/"];
 var APPS_AGENT_VARIANTS = {
   read: {
     grants: [
-      { service: "tinycloud.kv", actions: ["tinycloud.kv/get", "tinycloud.kv/list"] },
-      { service: "tinycloud.sql", actions: ["tinycloud.sql/read"] }
+      { service: "tinycloud.kv", actions: ["tinycloud.kv/get", "tinycloud.kv/list"], within: [""] },
+      { service: "tinycloud.sql", actions: ["tinycloud.sql/read"], within: [""] }
     ],
     perAppOnly: false,
     changesStructure: false
   },
   write: {
     grants: [
-      { service: "tinycloud.kv", actions: ["tinycloud.kv/get", "tinycloud.kv/list", "tinycloud.kv/put"] },
-      { service: "tinycloud.sql", actions: ["tinycloud.sql/read", "tinycloud.sql/write"] }
+      { service: "tinycloud.kv", actions: ["tinycloud.kv/get", "tinycloud.kv/list"], within: [""] },
+      { service: "tinycloud.kv", actions: ["tinycloud.kv/put"], within: APPS_AGENT_WRITE_FOLDERS },
+      { service: "tinycloud.sql", actions: ["tinycloud.sql/read", "tinycloud.sql/write"], within: [""] }
     ],
     perAppOnly: true,
     changesStructure: true
@@ -12842,8 +12844,8 @@ function isAppId(value) {
   return value.length <= 200 && APP_ID.test(value);
 }
 function appsAgentPermissions(mode, appIds = []) {
-  const paths = appIds.length === 0 ? [""] : appIds.map((appId) => `${appId}/`);
-  return APPS_AGENT_VARIANTS[mode].grants.flatMap(({ service, actions }) => paths.map((path) => ({ service, space: APPS_AGENT_SPACE, path, actions: [...actions] })));
+  const bases = appIds.length === 0 ? [""] : appIds.map((appId) => `${appId}/`);
+  return APPS_AGENT_VARIANTS[mode].grants.flatMap(({ service, actions, within }) => within.flatMap((folder) => bases.map((base4) => ({ service, space: APPS_AGENT_SPACE, path: `${base4}${folder}`, actions: [...actions] }))));
 }
 function quoteApps(appIds) {
   return appIds.map((appId) => `\`${appId}\``).join(", ");
@@ -12861,14 +12863,17 @@ function revokeSentence(lifetimeMs2) {
 }
 function appsAgentScopeNotice(mode, appIds = []) {
   const variant = APPS_AGENT_VARIANTS[mode];
-  const reads = variant.grants.some(({ actions }) => actions.includes("tinycloud.kv/put")) ? "read it and add and change its files and table rows" : "list and read its files and read its table rows";
+  const writes = variant.grants.some(({ actions }) => actions.includes("tinycloud.kv/put"));
+  const writableFolders = appIds.flatMap((appId) => APPS_AGENT_WRITE_FOLDERS.map((folder) => `\`${appId}/${folder}\``)).join(", ");
+  const reads = writes ? `read everything there, write knowledge and data files (${writableFolders}), and add, change and delete table rows` : "list and read its files and read its table rows";
   const scope = appIds.length === 0 ? `ALL your installed apps' data in the \`${APPS_AGENT_SPACE}\` space` : `the data of ${quoteApps(appIds)} (everything under ${appIds.map((appId) => `\`${appId}/\``).join(", ")}) in the \`${APPS_AGENT_SPACE}\` space`;
   const lines = [
     variant.changesStructure ? `This gives the agent access to ${scope}: it can ${reads}.` : `This gives the agent READ-ONLY access to ${scope}: it can ${reads}.`
   ];
   if (variant.changesStructure) {
     lines.push(
-      `Because of how TinyCloud permissions work today, it can also change or delete ${appIds.length === 1 ? "this app's" : "these apps'"} tables (structure) and data.`,
+      `It cannot change ${appIds.length === 1 ? "the app's" : "the apps'"} code, manifest or install record: files outside those folders are read-only for it.`,
+      `SQL write is separate from that: it can change ${appIds.length === 1 ? "this app's" : "these apps'"} table rows and, because of how TinyCloud permissions work today (TC-1581), also change or delete ${appIds.length === 1 ? "its" : "their"} tables (structure).`,
       "It cannot touch other apps, other spaces or secrets."
     );
   } else {
@@ -12932,10 +12937,12 @@ function matchAppsAgentRequest(requested, requestedExpiry, applicationsSpace) {
   if (requested.some((entry) => entry.expiry !== void 0 || entry.caveats !== void 0)) return void 0;
   const kvPaths = requested.filter((entry) => entry.service === "tinycloud.kv").map((entry) => entry.path);
   const appIds = [];
-  for (const path of new Set(kvPaths)) {
+  for (const path of kvPaths) {
     if (path === "") continue;
-    if (!path.endsWith("/") || !isAppId(path.slice(0, -1))) return void 0;
-    appIds.push(path.slice(0, -1));
+    const slash = path.indexOf("/");
+    const appId = path.slice(0, slash);
+    if (slash < 1 || !isAppId(appId)) return void 0;
+    if (!appIds.includes(appId)) appIds.push(appId);
   }
   if (appIds.length > APPS_AGENT_MAX_APPS || appIds.length > 0 && kvPaths.includes("")) return void 0;
   for (const mode of ["read", "write"]) {
@@ -13018,17 +13025,11 @@ function describeEntry(entry, applicationsSpace) {
 }
 function withinPresetSet(entry, applicationsSpace) {
   if (!inApplicationsSpace(entry, applicationsSpace) || entry.caveats !== void 0) return false;
-  const reads = /* @__PURE__ */ new Set();
-  const writes = /* @__PURE__ */ new Set();
-  for (const { grants } of Object.values(APPS_AGENT_VARIANTS)) {
-    for (const grant of grants) {
-      if (grant.service !== entry.service) continue;
-      for (const action of grant.actions) (action.endsWith("/put") || action.endsWith("/write") ? writes : reads).add(action);
-    }
-  }
-  const firstSegment = entry.path.split("/")[0] ?? "";
-  const named = entry.path.includes("/") && isAppId(firstSegment);
-  return entry.actions.length > 0 && entry.actions.every((action) => reads.has(action) || writes.has(action) && named);
+  if (entry.path.split("/").some((segment) => segment === "." || segment === "..")) return false;
+  const slash = entry.path.indexOf("/");
+  const folder = slash > 0 && isAppId(entry.path.slice(0, slash)) ? entry.path.slice(slash + 1) : void 0;
+  const grants = Object.values(APPS_AGENT_VARIANTS).flatMap(({ grants: variantGrants }) => variantGrants.filter((grant) => grant.service === entry.service));
+  return entry.actions.length > 0 && entry.actions.every((action) => grants.some((grant) => grant.actions.includes(action) && (!(action.endsWith("/put") || action.endsWith("/write")) || folder !== void 0 && grant.within.some((within) => folder.startsWith(within)))));
 }
 function describeGrantScope(requested, requestedExpiry, applicationsSpace) {
   const preset = matchAppsAgentRequest(requested, requestedExpiry, applicationsSpace);
@@ -13818,13 +13819,13 @@ ${signInAgainHint(ctx.profile, posture ?? void 0)}
     `Lifetime of the granted delegation. ms-format string (e.g. "7d", "30m") or raw milliseconds. Defaults to 7d, capped by the active session's expiry.`
   ).option("--emit [file]", "Emit the request artifact to stdout, or write it to file when provided").option("--grant", "Grant the requested permissions immediately with this owner profile").option("--yes", "Skip local-key TTY confirmation", false).option("--no-popup", "Print the OpenKey URL without opening a browser when granting with OpenKey").option("--device", "With --grant: approve on another device (e.g. a phone) through OpenKey device authorization (KV-scoped; SQL needs browser login)").option(
     "--preset <name>",
-    `Request a named permission set instead of --cap: ${APPS_AGENT_PRESET} is READ-ONLY on the applications space (kv get/list + sql read, ${APPS_AGENT_EXPIRY_DAYS} days)`
+    `Request a named permission set instead of --cap: ${APPS_AGENT_PRESET} is READ-ONLY on the applications space (kv get/list + sql read, ${APPS_AGENT_EXPIRY_DAYS} days); add --write --app <app_id> to also write those apps' knowledge and data files`
   ).option(
     "--app <app_id>",
     `With --preset ${APPS_AGENT_PRESET}: limit the grant to this app's <app_id>/ prefix (recommended); repeat for up to ${APPS_AGENT_MAX_APPS} apps`,
     (value, previous) => [...previous, value],
     []
-  ).option("--write", `Don't request \`--write\` during the tiny-apps beta. It currently also allows changes to the app's own code and manifest; the narrowed write ships in TC-1620. With --preset ${APPS_AGENT_PRESET} it also allows writes (kv put + sql write) in the named --app apps; SQL write can also change or drop those apps' tables`).option("--paste", "With --grant on an OpenKey profile: wait up to 5 minutes for a signed code from OpenKey on stdin instead of a browser callback (use when the browser cannot reach this CLI)").action(async (options2, cmd) => {
+  ).option("--write", `With --preset ${APPS_AGENT_PRESET}: also allow writing the named --app apps' knowledge/ and prefs/ files (kv put) and table rows (sql write); their code, manifest and install record stay read-only. SQL write can also change or drop those apps' tables`).option("--paste", "With --grant on an OpenKey profile: wait up to 5 minutes for a signed code from OpenKey on stdin instead of a browser callback (use when the browser cannot reach this CLI)").action(async (options2, cmd) => {
     try {
       const globalOpts = cmd.optsWithGlobals();
       const ctx = await ProfileManager.resolveContext(globalOpts, options2.grant ? {} : { storedSession: "unused" });
