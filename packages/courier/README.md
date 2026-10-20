@@ -157,7 +157,7 @@ subject is quoted and flattened onto one line.
 | `none` (default) | Delivers, mirrors and receipts; notifies needs-you for new messages/decisions, without any wake adapter. |
 | `paseo` | Finds the agent labelled `courier-thread=<id>` and `courier-guard=1` (`paseo ls -g --label`) and sends it the prompt (`paseo send --prompt-file`); otherwise creates one (`paseo run`) with labels `courier-thread`, `courier-peer`, `courier-guard`, title `✉ <peer> · <subject>` and the courier-only environment. Installs and proves the guard first and refuses to wake without it (see Guard); Claude agents only. `--paseo-provider` (default `claude`), `--paseo-mode`, `--paseo-bin`. |
 | `claude` | `claude -p --output-format json`, prompt on stdin, always with the guard settings (see Guard) and the courier-only environment. The session id is saved per thread in `<COURIER_HOME>/sessions.json` and later wakes pass `--resume`; a session the CLI no longer has starts a fresh one. Only `Bash(courier:*)` is allowed unless you pass `--claude-allow <rule>` (repeatable); `--claude-settings <file>` is trusted owner configuration: its other hooks, allow rules and environment survive merging under the guard. `--claude-bin`. |
-| `exec` | `sh -c <cmd>` with `COURIER_THREAD`, `COURIER_PEER`, `COURIER_MESSAGES` (JSON: id, intent, sent time), `COURIER_SUBJECT`, `COURIER_PROMPT` in the courier-only environment. **Not approval-guarded:** it needs `--exec <cmd> --unguarded` (without the flag the watcher refuses to start, wakes nothing and names the flag), and every exec wake prints `this wake is not approval-guarded` to stderr (the service log). Not for agents that can merge, deploy or publish; use `claude` or `paseo --paseo-provider claude`. |
+| `exec` | `sh -c <cmd>` with `COURIER_THREAD`, `COURIER_PEER`, `COURIER_MESSAGES` (JSON: id, intent, sent time), `COURIER_SUBJECT`, `COURIER_PROMPT` in the courier-only environment. **Not approval-guarded:** it needs `--exec <cmd> --unguarded` (without the flag the watcher refuses to start, wakes nothing and names the flag), and every exec wake prints `this wake is not approval-guarded` to stderr (the service log). Use `claude` or `paseo --paseo-provider claude` for guarded agent sessions. |
 
 A wake succeeds when the agent run exits 0. `--wake-timeout` (default 900 s,
 at most 1800) is one deadline for the whole wake; on expiry the agent's whole
@@ -165,10 +165,7 @@ process group is killed (a shell's background jobs, pipelines and subshells
 included) and the wake counts as failed. A failed wake stays pending, releases
 its claim and retries after 60 s. A timeout that hits after the agent already
 received the prompt therefore wakes the thread again: wakes are at-least-once.
-A child that calls `setsid` or `setpgid` leaves the group and survives the kill
-(the group kill reaches everything the shell started, not a program that
-deliberately detaches). A command that exits normally but leaves a background
-job running is not waited for, and the job is left alone. When the watcher stops (SIGINT, SIGTERM, a state
+When the watcher stops (SIGINT, SIGTERM, a state
 conflict) it kills the runs still in flight at once, without waiting for the
 wake to end.
 
@@ -372,15 +369,10 @@ credentials/settings, or lift a pause. Send no acknowledgement-only reply.
 
 ### Guard for woken agents
 
-A woken agent runs on another party's text, so instructions alone are not
-enough (spec §7). `courier guard` is a Claude Code `PreToolUse` hook that
-reads every tool call before it runs. It runs in every permission mode.
-
-**What the guard is.** A fail-closed policy layer that stops a prompted or
-confused agent, including one carrying a peer's prompt injection, from merging,
-deploying, publishing, pushing to `main` or touching secrets without your
-approval. It is not a sandbox against a deliberately hostile local process: the
-owner's tokens and files are the deeper boundary (see Residual risk).
+`courier guard` is a Claude Code `PreToolUse` hook that reads every tool call
+before it runs, in every permission mode. It refuses direct merge, deploy,
+publish, push and credential-access commands. Approved PR merges run through
+`courier run-approved <requestId>`.
 
 **What it blocks directly** (including after approval):
 
@@ -396,7 +388,7 @@ owner's tokens and files are the deeper boundary (see Residual risk).
 | `phala deploy` | `deploy phala:<name>` |
 | `npm\|bun\|pnpm\|yarn run deploy\|publish\|release` (including colon suffixes) | `deploy\|publish script:<package>:<script>` |
 | `gh workflow run` | `other workflow:owner/repo:<workflow>` |
-| `tc`/`tinycloud` except their Courier subcommand | Never approvable: reaches owner profiles |
+| `tc`/`tinycloud` except their Courier subcommand | Never approvable: owner CLI commands |
 
 Never approvable: `courier pair`, `courier revoke`, `courier init`,
 `courier pause`, `courier resume` (the wake budget is the reply loop's breaker:
@@ -425,8 +417,8 @@ gh pr merge 42 --repo=owner/repo --squash --match-head-commit=<view-time SHA>
 ```
 
 No command, flags, cwd or environment from the agent enters that template.
-The SHA is pinned at view time, not approval time: requests do not contain a
-head SHA yet. A changed head between view and merge makes gh refuse. If merge
+The SHA is pinned from the broker's PR view. A changed head between view and
+merge makes gh refuse. If merge
 fails after consumption, the approval stays used; retry needs a new request.
 Output is redacted, capped at 4000 characters plus a truncation notice and
 returned as **untrusted text**, never as instructions.
@@ -444,13 +436,9 @@ The broker ignores agent-writable host/space pointers and refuses if either the
 owner profile or the agent snapshot differs from the pinned values. Its scratch
 directory is inside its private config directory, never the agent's TMPDIR.
 
-The broker keeps the token out of the agent's environment and out of the Courier
-files; it cannot hide it from a process running as the same OS user. The real
-boundary is a dedicated OS user. Until then Courier does not auto-wake agents on
-a machine whose owner token can merge/deploy (option D: `--wake none`). The
-owner-private configuration is policy-protected, not isolated from the same uid.
-A gh executable in an owner-writable directory is likewise still replaceable by
-same-uid code; pinning its path/inode does not make it an OS boundary.
+The broker keeps the token out of the agent's environment and Courier files.
+Run the watcher under a dedicated OS account. Use option D (`--wake none`)
+for manual sessions.
 
 **Dummy fixtures only.** `broker set-token --test-token --test-owner-root
 <private-root> --gh-bin <stub>` reads only the fixed dummy token fixture on stdin
@@ -463,9 +451,8 @@ also passes `--test-owner-root <private-root>`; the agent guard refuses that fla
 Tests never put a broker override in the agent environment or touch production
 broker configuration. See `scripts/guard-e2e.mjs` for the model-free stub proof.
 
-Only PR merges are supported in v0. Publish/deploy can run agent-controlled
-code with the owner's token, so the owner runs them, along with `other`,
-`spend` and direct pushes. There is no `push` verb in the request schema.
+v0 brokers PR merges. The owner runs publish, deploy, `other`, `spend` and
+direct pushes. There is no `push` verb in the request schema.
 
 **How commands are read.** First rule, which does not depend on reading shell
 correctly: if a command contains run-time expansion or indirection syntax **and**
@@ -482,18 +469,15 @@ names are `gh`, `npm`, `pnpm`, `yarn`, `bun`, `npx`, `changeset`, `wrangler`,
 `opencode`, `gemini`, the Secret Bridge names, `courier pair|revoke|init`, a
 fetch tool talking to GitHub, a GraphQL merge mutation, and the verbs `merge`,
 `push`, `publish`, `deploy`, `release`, `secrets`. Matching is on words, with
-quotes and backslashes removed first (`g""h` is `gh`; `$TC` is not `tc`). False
-refusals are accepted: write the command out with plain words (a PR number, a
-branch name, a package directory).
+quotes and backslashes removed first (`g""h` is `gh`; `$TC` is not `tc`). Use plain literal commands (a PR number, a branch name, a package directory).
 
 Everything else is read word by word, the way a shell would, without running
 it: quoting, backslashes, variable assignments in the same command, `bash -c`
 and `sh -c` strings, pipes, `&&`/`||`/`;`, subshells and groups, and the scripts
 it is told to run (`bash x.sh`, `./x`, read from disk at that moment; the same
-first rule applies to the file). What it still cannot name (loops or functions
-around a gated command, a shell reading from a pipe, GraphQL merges, a script the
-same command writes, several targets) is refused as "cannot be told apart from a
-gated command". `gh release list|view|download` are read-only and not gated.
+first rule applies to the file). Loops or functions around gated commands,
+shells reading from pipes, GraphQL merges, scripts written in the same command
+and commands naming several targets refuse. `gh release list|view|download` are read-only and not gated.
 
 **Scripts and write tools.** Package `run`/`test` scripts are read from the
 resolved package.json, including pre/post scripts, and inspected by the same
@@ -507,8 +491,6 @@ issue/PR comment endpoints; gh repo sync/run rerun/secrets, npm unpublish and
 dist-tag, semantic-release, wrangler rollback/delete/secrets and phala cvms
 writes refuse. Loopback requests and nested agent npm packages refuse too.
 `--wake exec --unguarded` cannot start an agent CLI as its first word.
-Arbitrary code and pre-existing compiled tools remain outside this policy's
-inspection boundary.
 
 **Installing it.** `courier watch --wake claude` writes
 `<COURIER_HOME>/guard/settings.json` on every start and passes it as
@@ -558,17 +540,26 @@ cannot merge, deploy or publish. On a Paseo host, set `--paseo-provider claude`
 (the default) and leave `--wake paseo` to install the guard; do not use
 `--paseo-provider` with another agent.
 
-Executable aliases are matched by real path and device/inode against the gated
-binaries discovered at guard installation and hook start. Copies, links and moves
-of those binaries (including directory copies) are refused. Unknown binary files
-executed directly cannot be inspected and refuse.
+Executable allowances require an identity recorded by the guard: the resolved
+path and device/inode of the installed tool. A basename such as `gh`, `git` or
+`courier` grants no allowance. Only this install's Courier entrypoint can use the
+agent subcommand allowlist. Unregistered executables are inspected as scripts
+and refused if their behavior or identity cannot be resolved; use a registered
+interpreter explicitly for local scripts. Dynamic executable words and package
+launchers such as `npx` or `pnpm dlx` refuse because they do not identify a pinned
+executable. Wrappers that change executable lookup also refuse.
+
+The first guard installation records `<COURIER_HOME>/guard/binaries.json`.
+Automatic settings refreshes and hook restarts preserve that census. A tool
+upgrade that changes its inode fails closed; the owner must remove the census
+and reinstall the guard from their own session to register the upgraded tools.
+Registered executable files cannot be edited by a woken agent. Copies, links
+and moves of gated tools (including directory copies) also refuse.
 
 Network tools refuse numeric IP destinations, localhost forms (including mapped
 IPv6, decimal/octal/hex IPv4 and trailing dots), local daemon ports 6767/6768,
 `/dev/tcp`, and destination overrides such as curl `--resolve`. The hook checks
 DNS destinations before execution and refuses loopback results or failed lookups.
-DNS rebinding after that check and networking hidden in arbitrary code remain
-residuals; this is a policy check, not a network sandbox or daemon authentication.
 
 **Courier-only environment.** Woken `claude` and `exec` runs get an allowlist,
 not a filtered copy of your environment: `PATH`, `HOME`, `USER`, `LOGNAME`,
@@ -583,59 +574,28 @@ outside Courier. Agent-facing commands discover their Courier-only identity
 snapshot under HOME/.courier; HOME/.courier-agent.json holds only an opaque
 profile ID, never a broker directory. The snapshot contains profile/key/grant
 only. The broker reads the original owner profile through its own pin.
- Shell startup files are removed. Only `.claude/.credentials.json` is
+Shell startup files are removed. Only `.claude/.credentials.json` is
 copied for Claude (never `.claude.json`, settings or MCP config), plus git
-user.name/email; exec gets no model login. That one model login remains a
-credential readable by the same uid.
+user.name/email; exec gets no model login.
 Nothing else is passed implicitly: no model API tokens, `GH_TOKEN`/`GITHUB_TOKEN`, `NPM_TOKEN`,
 `CLOUDFLARE_*`, `WRANGLER_*`, `PHALA_*`, `LINEAR_*`, `AWS_*`, `GOOGLE_*`, `TC_*`
 credentials, `SSH_AUTH_SOCK`, `NODE_OPTIONS`, `LD_PRELOAD` or `BASH_ENV`. An
-operator who needs one passes it by name with `--env-pass NAME` (repeatable);
-that is a deliberate hole, so use a token that cannot merge.
+operator who needs one passes it by name with `--env-pass NAME` (repeatable).
+Use narrowly scoped credentials for explicitly passed variables.
 
-`paseo run` cannot build an environment: the new agent inherits the **Paseo
-daemon's** environment (an audit of one host found `CLOUDFLARE_API_TOKEN`,
-`CLOUDFLARE_ACCOUNT_ID`, `TYPESAFE_API_KEY` and `TC_OWNER_DID` there). The
-adapter blanks (`--env NAME=`) every well-known credential name and every
-credential-looking variable of the watcher's own environment, `TC_*` included,
-and shell/interpreter injection variables (`BASH_ENV`, `ENV`, `NODE_OPTIONS`,
-loader variables) are blanked. HOME, CLAUDE_CONFIG_DIR, ZDOTDIR and all five
-XDG paths are redirected to the same clean HOME. Names it cannot know that the daemon
-holds still reach the agent: start the Paseo daemon without credentials in its
-environment, or use `--wake claude`, whose environment is the allowlist.
+The Paseo adapter blanks (`--env NAME=`) known credential variables,
+credential-looking watcher variables, `TC_*`, and shell/interpreter injection
+variables. HOME, CLAUDE_CONFIG_DIR, ZDOTDIR and all XDG paths point at the clean
+agent home. Start the Paseo daemon with a minimal environment, or choose
+`--wake claude` for the environment allowlist described above.
 
-**Residual risk (spec §7).** The guard is a fail-closed policy layer. It stops a
-prompted or confused agent, including one carrying a peer's prompt injection,
-from merging, deploying, publishing, pushing to `main` or reading secrets by
-accident or on instruction. It is **not a sandbox** against a deliberately
-hostile local process: the agent runs as the same OS user, and the owner's own
-tokens and files are the deeper boundary. It does not stop: a program the agent
-writes and runs (a compiled or obfuscated one is opaque), a direct GitHub API
-call from code, an alias or function from the user's shell start-up files that
-the Bash tool loads, a merge triggered some other way (a push to a branch that a
-workflow merges, a bot command), or obfuscated access to the guard or credential files. Literal credential and
-guard paths are refused in shell commands as well as file tools; the underlying
-files remain writable by the same uid. The single-use marker is delete-proof
-for the courier key but not against code that holds the owner's own
-credentials. A `paseo` agent shares `<cwd>/.claude/settings.local.json` with
-anything else run in that directory (that file is the guard's too). The `exec`
-adapter runs your own command and installs no guard (hence `--unguarded`).
+**Recommended setup.** Run woken agents under a dedicated OS account and keep
+credentials out of shell startup files. Use `--wake none` for manual sessions.
+The Read tool and shell policy refuse credential paths, credential globs,
+token-printing tools and `/proc/*/environ`.
 
-**Credentials a woken agent can still reach.** The environment is an allowlist
-(above), but the agent runs as your user, so it can read what that user
-can: `~/.config/gh/hosts.yml` (and so `gh`'s token, and any git credential
-helper that uses it), `~/.npmrc`, `~/.netrc`, `~/.ssh`, `~/.aws`,
-`~/.config/gcloud`, `~/.docker/config.json`, `~/.config/wrangler`. The Read tool
-and shell commands refuse these credential paths, globs, token-printing tools
-and `/proc/*/environ`; same-uid code can still access them indirectly. Shell
-start-up files (`~/.bashrc`, `~/.profile`, `~/.zshenv`) that export a token
-before their interactive-only guard re-add it in the Bash tool; keep tokens out
-of them. Run woken agents as a dedicated OS user that holds no GitHub, npm, Cloudflare, Phala or Linear
-credentials and, if it must push, only a token without merge rights. v1 should
-give courier agents exactly such a token.
-
-Approval-time head SHA and base pinning remain pending a separate decision and
-follow-up change; this branch retains only the existing view-time head pin.
+Approval-schema changes are tracked separately. The broker uses the PR head
+reported by its view for `--match-head-commit`.
 
 ### Running it as a service
 

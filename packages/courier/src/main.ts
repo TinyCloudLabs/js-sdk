@@ -59,9 +59,8 @@ Guards (woken agents run with these; humans rarely do):
                                    merge, deploy, publish, push to main/master, \`tc secrets\` and similar.
                                    Gated commands always refuse; approved PR merges use run-approved.
                                    A command with expansion syntax ($VAR, $(…), {a,b}, eval, xargs, env …) that
-                                   names a gated tool is refused: write it with plain words. A fail-closed policy
-                                   layer for a prompted or confused agent, NOT a sandbox against a hostile local
-                                   process; your owner's credentials are the real boundary.
+                                   names a gated tool is refused: write it with plain words. Approved PR merges
+                                   use the fixed run-approved broker command.
   guard settings [--out f] [--claude-settings f]
                                    Print/write the Claude Code settings (hook + deny rules) that install it.
 

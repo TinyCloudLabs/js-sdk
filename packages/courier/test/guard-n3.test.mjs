@@ -1,8 +1,9 @@
+import { trustedProgram } from './policy-programs.mjs';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { analyze } from '../dist/guard/policy.js';
 import { decide } from '../dist/guard/hook.js';
-const env = { cwd: '/repo', readFile: () => ({ state: 'absent' }), git: () => ({ ok: false, out: '' }), getenv: () => undefined };
+const env = { cwd: '/repo', resolveProgram: trustedProgram, readFile: () => ({ state: 'absent' }), git: () => ({ ok: false, out: '' }), getenv: () => undefined };
 const hosts = ['127.0.0.1', '127.1', '127.255.4.3', '2130706433', '2130706434', '017700000001', '0x7f000001', '0177.0.0.1', '0.0.0.0', 'localhost', 'localhost.', 'x.localhost', '[::1]', '[::ffff:127.0.0.1]', '[::ffff:7f00:1]', '[0:0:0:0:0:ffff:7f00:1]'];
 test('N3: every loopback address spelling, numeric destination and local daemon port refuses', async () => {
   for (const host of hosts) {

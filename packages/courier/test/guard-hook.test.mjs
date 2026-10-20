@@ -1,3 +1,4 @@
+import { trustedProgram } from './policy-programs.mjs';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { decide, hookOutput } from '../dist/guard/hook.js';
@@ -39,7 +40,7 @@ function memoryKv() {
 
 const FILES = { '/repo/package.json': JSON.stringify({ name: '@x/pkg', version: '1.2.3', scripts: { test: 'echo test', build: 'echo build', lint: 'echo lint' } }) };
 const env = {
-  cwd: '/repo',
+  cwd: '/repo', resolveProgram: trustedProgram,
   readFile: (f) => (f in FILES ? { state: 'text', text: FILES[f] } : { state: 'absent' }),
   git: (dir, args) => (args.join(' ') === 'remote get-url origin' ? { ok: true, out: 'git@github.com:a/b.git' } : { ok: false, out: '' }),
   getenv: () => undefined,

@@ -1,14 +1,8 @@
 import type { ParseResult } from './shell.js';
 
 /**
- * The guard's first rule, and the one that does not depend on reading shell correctly: a command that contains
- * run-time expansion or indirection syntax AND names a gated tool or verb anywhere is refused. The shell can build a
- * command out of pieces (`{gh,pr,merge} 5`, `$(echo gh) pr merge`, `eval`, an alias, `xargs`), and a static reader can
- * never be sure it saw the final words. When the pieces and a gated name are in the same command, the guard does not
- * try: it refuses, accepting false refusals. Commands without such syntax are read word by word, as before.
- *
- * This stops a prompted or confused agent, including one carrying a peer's prompt injection. It is not a sandbox against
- * a process that is deliberately hostile (see the README).
+ * Commands containing runtime expansion or indirection and a gated tool/verb name refuse.
+ * Commands without that combination are inspected word by word by the policy.
  */
 
 /** Syntax whose result is decided by the shell at run time, found in the raw text. */

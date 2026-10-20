@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { discoverBinaries } from './binaries.js';
+import { installBinaryCensus } from './binaries.js';
 import { programName } from '../program.js';
 import { isRecord } from '../a2a.js';
 import { installRoots, realpathBest } from './paths.js';
@@ -66,7 +66,7 @@ export function guardSettings(options: { argv: string[]; home: string; entry: st
     for (const tool of ['Edit', 'Write', 'MultiEdit', 'NotebookEdit']) deny.push(`${tool}(${rulePath(p)}/**)`);
   }
   for (const f of ['key.json', 'grant.json']) deny.push(`Read(${rulePath(path.join(home, f))})`);
-  // Only the Read tool: a shell can still `cat` these (the README lists them as residual).
+  // Credential-file Read rules supplement the hook policy.
   for (const rel of CREDENTIAL_FILES) deny.push(`Read(${rulePath(path.join(os.homedir(), rel))})`);
   for (const prog of programs) for (const sub of ['pair', 'revoke', 'init', 'pause', 'resume', 'watch']) deny.push(`Bash(${prog} ${sub}:*)`);
   deny.push('Bash(secret-bridge:*)', 'Bash(secret_bridge:*)', 'mcp__paseo', 'mcp__paseo__*');
@@ -126,7 +126,7 @@ export function writeGuardSettings(options: { argv: string[]; home: string; entr
   const dir = guardDir(options.home);
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
   fs.mkdirSync(noOwnerProfileDir(options.home), { recursive: true, mode: 0o700 });
-  fs.writeFileSync(path.join(guardDir(options.home), 'binaries.json'), JSON.stringify(discoverBinaries(process.env.PATH ?? '', process.cwd())), { mode: 0o600 });
+  installBinaryCensus(path.join(guardDir(options.home), 'binaries.json'), options.entry, options.argv, process.cwd());
   const theirs: unknown = options.userSettings ? JSON.parse(fs.readFileSync(options.userSettings, 'utf8')) : undefined;
   if (options.userSettings && !isRecord(theirs)) throw new Error(`${options.userSettings} is not a JSON object`);
   const merged = mergeGuardSettings(guardSettings(options), theirs);
@@ -154,11 +154,7 @@ const ALLOWED_ENV: RegExp[] = [
   /^TC_BIN$/,
 ];
 
-/**
- * Credential variables that are blanked for agents the watcher cannot build an environment for (`paseo run` inherits the
- * Paseo daemon's environment, which the watcher cannot see). Exact names only; a daemon that holds others is a residual
- * risk the README names. Includes what an audit of a real Paseo host found (`CLOUDFLARE_*`, `TYPESAFE_API_KEY`, `TC_OWNER_DID`).
- */
+/** Credential variables explicitly blanked by the Paseo adapter. */
 const BLANKED_ENV = [
   'COURIER_HOME', 'COURIER_REAL_HOME', 'COURIER_BROKER_DIR',
   'GH_TOKEN', 'GITHUB_TOKEN', 'GH_ENTERPRISE_TOKEN', 'GITHUB_ENTERPRISE_TOKEN', 'GITHUB_PAT', 'NPM_TOKEN', 'NODE_AUTH_TOKEN', 'YARN_NPM_AUTH_TOKEN', 'NPM_CONFIG_TOKEN',
@@ -202,12 +198,7 @@ export function courierOnlyEnv(base: NodeJS.ProcessEnv, home: string, extra: rea
 
 const CREDENTIAL_LIKE = /(TOKEN|SECRET|PASSW|API_?KEY|ACCESS_KEY|PRIVATE_KEY|CREDENTIAL|AUTH)|^(TC|CLOUDFLARE|CF|WRANGLER|PHALA|LINEAR|AWS|GOOGLE|AZURE|GH|GITHUB|NPM|SSH)_/i;
 
-/**
- * The same as overrides for a launcher that can only set variables (`paseo run --env`). The agent inherits the Paseo
- * daemon's environment, not the watcher's, so this blanks every well-known credential name and every credential-looking
- * variable of the watcher's own environment that is not allowed. Anything else the daemon holds still reaches the agent;
- * the README says so.
- */
+/** Environment overrides for Paseo: blank credential names and set the clean agent HOME. */
 export function courierEnvOverrides(base: NodeJS.ProcessEnv, home: string, extra: readonly string[] = []): Record<string, string> {
   const out: Record<string, string> = {};
   for (const name of [...Object.keys(base).filter((n) => CREDENTIAL_LIKE.test(n) || /^(XDG_|GIT_|COURIER_)/.test(n)), ...BLANKED_ENV]) {

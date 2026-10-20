@@ -7,7 +7,7 @@ import { CourierError } from '../errors.js';
 import { cmd } from '../program.js';
 import { profileDir } from '../profile.js';
 import { writeOut } from '../inbox.js';
-import { discoverBinaries, type BinaryIdentity } from './binaries.js';
+import { discoverBinaries, courierBinary, binaryName, type BinaryIdentity } from './binaries.js';
 import { brokerRoot } from '../broker-config.js';
 import { decide, hookOutput, type GuardDeps } from './hook.js';
 import { guardSettings, writeGuardSettings } from './install.js';
@@ -25,15 +25,20 @@ export function installLiterals(home: string, entry: string): string[] {
 }
 
 export function realEnv(cwd: string, home = profileDir(), entry = process.argv[1] ?? ''): PolicyEnv {
-  let installed: BinaryIdentity[] = [];
-  try { installed = JSON.parse(fs.readFileSync(path.join(home, 'guard/binaries.json'), 'utf8')); if (!Array.isArray(installed)) installed = []; } catch { /* discovery still covers tools on PATH */ }
+  const censusFile = path.join(home, 'guard/binaries.json');
+  const installed: BinaryIdentity[] = fs.existsSync(censusFile)
+    ? JSON.parse(fs.readFileSync(censusFile, 'utf8'))
+    : [...courierBinary(entry, process.argv), ...discoverBinaries(process.env.PATH ?? '', cwd)];
+  if (!Array.isArray(installed) || installed.some(b => !b || typeof b.name !== 'string' || typeof b.path !== 'string' || !Number.isFinite(b.dev) || !Number.isFinite(b.ino))) throw new Error('invalid installed executable census');
+  const searchPath = process.env.PATH ?? '';
   return {
     cwd,
-    binaries: [...installed, ...discoverBinaries(process.env.PATH ?? '', cwd)],
+    binaries: installed,
+    resolveProgram: (word, dir) => binaryName(word, dir, searchPath, installed),
     literals: [...installLiterals(home, entry), brokerRoot()],
     protectedRoots: [home, brokerRoot(), path.join(os.homedir(), '.courier')],
     realHome: process.env.COURIER_REAL_HOME || os.userInfo().homedir,
-    courierEntries: [realpathBest(entry), realpathBest(path.join(path.dirname(entry), 'cli.js'))],
+    courierEntries: installed.filter(b => b.path === realpathBest(entry) && ['courier', 'tc'].includes(b.name)).map(b => b.path),
     readFile(file): FileRead {
       try {
         const st = fs.statSync(file);

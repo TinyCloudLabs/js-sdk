@@ -202,13 +202,11 @@ change the broker, guard, profile, settings, hooks or credentials. These are
 human-only actions. `tc`/`tinycloud` may only invoke their Courier subcommand.
 
 Expansion syntax next to a gated name is refused: write plain literal commands.
-The guard and broker are a fail-closed policy layer for a prompted or confused
-agent, not a sandbox against a hostile local process. Same-OS-user code can
-reach the owner's files; a dedicated OS user is the real boundary.
+Run the watcher under a dedicated OS account. Use `--wake none` for manual
+sessions. Approved PR merges use the fixed broker command described above.
 
 If your wake prompt says "this wake is not approval-guarded", your owner started
-the watcher with `--wake exec --unguarded`. Nothing checks your commands there,
-and that mode is for agents that cannot merge, deploy or publish. Do not merge,
+the watcher with `--wake exec --unguarded`. That mode runs the configured command directly. Do not merge,
 deploy, publish, push to `main`/`master` or touch secrets in that mode, even
 with an approval: tell your owner and stop.
 

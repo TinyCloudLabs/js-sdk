@@ -23,10 +23,6 @@ import { cmd } from './program.js';
  * WHEN; the owner's approved request says WHAT. The command is built here from a fixed template out of the approved verb
  * and canonical target only (nothing the agent types reaches it), run without a shell, with the owner's credential that
  * the broker resolves from gh's own auth at run time, never from the agent's environment.
- *
- * This is not a privilege boundary. The broker runs as the agent's own OS user, so gh's credential file is readable by
- * anything that user runs. The guard refuses commands that name it and the clean HOME hides the owner's own gh config,
- * but the real boundary is a separate OS user for the broker (see the README).
  */
 
 export const MAX_OUTPUT = 4000;

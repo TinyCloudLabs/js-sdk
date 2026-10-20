@@ -1,3 +1,4 @@
+import { registeredFile } from './binaries.js';
 import { blockedDestination, dnsRefusal, type ResolveHost } from './network.js';
 import path from 'node:path';
 import { isRecord } from '../a2a.js';
@@ -59,6 +60,7 @@ export async function decide(input: unknown, deps: GuardDeps): Promise<Decision>
     if (WRITE_TOOLS.has(tool)) {
       if (call.files.length === 0) return deny('Courier guard could not read the file path of this edit; refusing.');
       for (const file of call.files) {
+        if (registeredFile(file, cwd, deps.env.binaries ?? [])) return deny('Registered executable files cannot be edited by a woken agent.');
         if (isProtectedFile(file, cwd, deps.protectedSet)) return deny('That file belongs to the Courier guard, the Courier profile or the tool configuration (settings, hooks, MCP, git hooks) and cannot be edited from a woken agent.');
         if (isCredentialFile(file, cwd)) return deny('That file holds credentials and cannot be written from a woken agent.');
       }

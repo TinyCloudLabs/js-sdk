@@ -30,7 +30,7 @@ export function networkTextRefusal(text: string): boolean {
 export type ResolveHost = (host: string) => Promise<string[]>;
 const resolveHost: ResolveHost = async host => (await lookup(host, { all: true, verbatim: true })).map(r => r.address);
 
-/** DNS check before the tool executes. Errors fail closed. Rebinding after this check remains a same-process residual. */
+/** DNS check before the tool executes. Errors fail closed. */
 export async function dnsRefusal(text: string, resolve: ResolveHost = resolveHost): Promise<boolean> {
   const hosts = new Set<string>();
   for (const token of text.match(/(?:https?:\/\/)[^\s"'`,)]+|\b[a-z0-9.-]+:\d+(?:\/[^\s"']*)?/gi) ?? []) {

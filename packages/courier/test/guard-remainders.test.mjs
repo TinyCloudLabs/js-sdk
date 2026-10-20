@@ -1,8 +1,9 @@
+import { trustedProgram } from './policy-programs.mjs';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { analyze } from '../dist/guard/policy.js';
 import { decide } from '../dist/guard/hook.js';
-const env = { cwd: '/repo', readFile: () => ({ state: 'absent' }), git: () => ({ ok: false, out: '' }), getenv: () => undefined };
+const env = { cwd: '/repo', resolveProgram: trustedProgram, readFile: () => ({ state: 'absent' }), git: () => ({ ok: false, out: '' }), getenv: () => undefined };
 for (const [finding, commands] of Object.entries({
   B6: ['gh pr edit 5 -R a/b --base main', 'gh pr review 5 --approve', 'gh repo edit a/b --default-branch x', 'gh workflow enable x -R a/b'],
   B7: ['wrangler versions upload', 'npm deprecate x old', 'npm owner add user x', 'npm access set status=public x', 'npm token create', 'vercel --prod', 'netlify deploy --prod', 'fly deploy', 'docker push x/y'],
