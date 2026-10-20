@@ -153,7 +153,7 @@ export function appsAgentScopeNotice(mode: AppsAgentMode, appIds: readonly strin
   const writes = variant.grants.some(({ actions }) => actions.includes("tinycloud.kv/put"));
   const writableFolders = appIds.flatMap((appId) => APPS_AGENT_WRITE_FOLDERS.map((folder) => `\`${appId}/${folder}\``)).join(", ");
   const reads = writes
-    ? `read everything there, write knowledge and data files (${writableFolders}), and add, change and delete table rows`
+    ? `read everything there, write files in (${writableFolders}), and add, change and delete table rows`
     : "list and read its files and read its table rows";
   const scope = appIds.length === 0
     ? `ALL your installed apps' data in the \`${APPS_AGENT_SPACE}\` space`

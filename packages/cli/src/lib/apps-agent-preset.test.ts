@@ -125,7 +125,7 @@ describe("apps-agent scope notice states the facts of the grant", () => {
     const notice = appsAgentScopeNotice("write", [HEALTH, RECIPES]);
     expect(notice).toContain(`\`${HEALTH}/\``);
     expect(notice).toContain(`\`${RECIPES}/\``);
-    expect(notice).toContain("write knowledge and data files");
+    expect(notice).toContain("write files in");
     for (const app of [HEALTH, RECIPES]) {
       expect(notice).toContain(`\`${app}/knowledge/\``);
       expect(notice).toContain(`\`${app}/prefs/\``);

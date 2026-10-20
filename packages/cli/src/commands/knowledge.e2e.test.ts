@@ -183,8 +183,9 @@ describe.skipIf(!NODE_BIN)("tinycloud knowledge against a real node", () => {
     const hint: string = other.error().hint;
     expect(hint).toContain(`--preset apps-agent --app ${HEALTH} --emit req.json`);
     expect(hint).toContain(`--cap tinycloud.kv:applications:${HEALTH}/knowledge/:get,list`);
-    // The beta hint suggests only read-only requests, never --write.
-    expect(hint).not.toContain("--write");
+    // The write request is offered for changing the app's data, after the read-only lines.
+    expect(hint).toContain("To change the app's data, ask for write access:");
+    expect(hint).toContain(`--preset apps-agent --write --app ${HEALTH} --emit req.json`);
     expect(hint).not.toContain("<app_id>");
   }, 120_000);
 
