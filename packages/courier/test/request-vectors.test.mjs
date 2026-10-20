@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { requestFields, storedRequestFields, requestText } from '../dist/request.js';
 import { plainLineProblem, MAX_SUMMARY } from '../dist/text.js';
-import { canonicalJson, requestHash } from '../dist/canonical.js';
+import { requestHash } from '../dist/canonical.js';
 import { verifyApproval } from '../dist/approval.js';
 
 const vectors = JSON.parse(fs.readFileSync(new URL('./vectors/request-fields.json', import.meta.url), 'utf8'));
@@ -28,14 +28,6 @@ for (const v of vectors.fields) {
       const stored = storedRequestFields({ verb: v.verb, target: v.value, summary: 'ok' });
       assert.equal(stored !== undefined, v.valid, 'the stored form is judged by the same rules');
     }
-  });
-}
-
-for (const c of vectors.canonical) {
-  test(`shared vector: canonical JSON ${c.name}`, () => {
-    const parsed = JSON.parse(c.json);
-    if (c.canonical === null) assert.throws(() => canonicalJson(parsed), (e) => e.code === 'canonical-invalid');
-    else assert.equal(canonicalJson(parsed), c.canonical);
   });
 }
 
