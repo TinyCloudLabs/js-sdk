@@ -45,3 +45,11 @@ export const ExitCode = {
   CANCELLED: 130,
 } as const;
 export type ExitCode = (typeof ExitCode)[keyof typeof ExitCode];
+
+/**
+ * The advice for an OpenKey profile whose space is not hosted yet. `tc space
+ * host` cannot help it: that command needs a signer, and an OpenKey session
+ * has none. OpenKey hosts the space itself, in the background after approval.
+ */
+export const OPENKEY_SPACE_SETUP_RETRY_HINT =
+  "Wait a minute and retry; approving again in OpenKey re-runs the setup.";

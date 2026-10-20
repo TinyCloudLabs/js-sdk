@@ -37,7 +37,7 @@ import {
   tinycloudConfigPath,
   tinycloudHomePath
 } from "@tinycloud/operations/state";
-var CONFIG_DIR, PROFILES_DIR, CONFIG_FILE, DEFAULT_HOST, DEFAULT_OPENKEY_HOST, DEFAULT_OPENKEY_DEVICE_API_HOST, DEFAULT_SHARE_ORIGIN, DEFAULT_PROFILE, DEFAULT_CHAIN_ID, PROFILE_COMMIT_LOCK_TIMEOUT_MS, ExitCode;
+var CONFIG_DIR, PROFILES_DIR, CONFIG_FILE, DEFAULT_HOST, DEFAULT_OPENKEY_HOST, DEFAULT_OPENKEY_DEVICE_API_HOST, DEFAULT_SHARE_ORIGIN, DEFAULT_PROFILE, DEFAULT_CHAIN_ID, PROFILE_COMMIT_LOCK_TIMEOUT_MS, ExitCode, OPENKEY_SPACE_SETUP_RETRY_HINT;
 var init_constants = __esm({
   "src/config/constants.ts"() {
     "use strict";
@@ -67,6 +67,7 @@ var init_constants = __esm({
       /** Interrupted by SIGINT/SIGTERM (`CANCELLED`). */
       CANCELLED: 130
     };
+    OPENKEY_SPACE_SETUP_RETRY_HINT = "Wait a minute and retry; approving again in OpenKey re-runs the setup.";
   }
 });
 
@@ -9604,17 +9605,25 @@ async function isRootAuthority(spaceUri, profileName2) {
   const selfAddr = await resolveLocalAddress(profile, profileName2);
   return selfAddr !== null && selfAddr === ownerAddr;
 }
+async function primarySpaceUri(profileName2) {
+  const session = await ProfileManager.getSession(profileName2);
+  if (typeof session?.spaceId === "string" && session.spaceId !== "") return session.spaceId;
+  const profile = await ProfileManager.getProfile(profileName2);
+  return typeof profile.spaceId === "string" && profile.spaceId !== "" ? profile.spaceId : void 0;
+}
 function spaceNameFromUri(spaceUri) {
   return spaceUri.slice(spaceUri.lastIndexOf(":") + 1);
 }
-async function unhostedSpaceError(error, spaceUri, profileName2) {
-  if (!spaceUri) return null;
+async function unhostedSpaceError(error, requestedSpaceUri, profileName2) {
   const status = error.meta?.status;
   const isUnhosted = status === 404 && /space not found/i.test(error.message);
   if (!isUnhosted) return null;
+  const spaceUri = requestedSpaceUri ?? await primarySpaceUri(profileName2);
+  if (!spaceUri) return null;
   const spaceName = spaceNameFromUri(spaceUri);
   const owner = await isRootAuthority(spaceUri, profileName2);
-  const hint = owner ? [
+  const openKeyOwner = owner && resolveProfilePosture(await ProfileManager.getProfile(profileName2)) === "owner-openkey";
+  const hint = openKeyOwner ? `OpenKey is still setting up your space. ${OPENKEY_SPACE_SETUP_RETRY_HINT}` : owner ? [
     "You are the owner. Host it once:",
     `  ${CLI_NAME8} space host ${spaceName}`,
     "Then retry."
@@ -11886,6 +11895,132 @@ async function loginWithDeviceAuthorization(input) {
   return { profile, result };
 }
 
+// src/auth/space-setup.ts
+init_constants();
+init_sdk();
+init_errors();
+var SPACE_SETUP_TIMEOUT_MS = 15e4;
+var POLL_DELAYS_MS = [2e3, 3e3, 5e3, 8e3, 13e3, 15e3];
+var PROGRESS_INTERVAL_MS = 15e3;
+var SPACE_ERROR_MAX_LENGTH = 500;
+function spaceSetupReport(delegation) {
+  const rawError = typeof delegation.spaceError === "string" ? delegation.spaceError : void 0;
+  const error = rawError?.replace(/[\u0000-\u001f\u007f-\u009f\s]+/g, " ").trim().slice(0, SPACE_ERROR_MAX_LENGTH);
+  const ready = delegation.spaceReady;
+  if (ready === true) return void 0;
+  const pending = delegation.spacePending === true || ready === null;
+  if (!pending && !error && ready !== false) return void 0;
+  return {
+    ready: ready === false || ready === null ? ready : void 0,
+    pending,
+    ...error ? { error } : {}
+  };
+}
+async function awaitSpaceSetup(report, deps) {
+  const write = deps.write ?? ((line) => {
+    process.stderr.write(`${line}
+`);
+  });
+  const sleep = deps.sleep ?? ((ms2) => new Promise((resolve8) => setTimeout(resolve8, ms2)));
+  const now = deps.now ?? Date.now;
+  const timeoutMs = deps.timeoutMs ?? SPACE_SETUP_TIMEOUT_MS;
+  const started = now();
+  const deadline = started + timeoutMs;
+  const probe = async () => deps.probe().catch(() => "transient");
+  const unreadable = () => write(
+    `Warning: this login cannot read your TinyCloud space to check it${report.error ? `; OpenKey reported: ${report.error}` : report.pending ? "; OpenKey is still setting it up" : ""}. If the first storage command fails with "Space not found", OpenKey is still setting up your space. ${OPENKEY_SPACE_SETUP_RETRY_HINT}`
+  );
+  let result = await probe();
+  if (result === "hosted") {
+    if (!report.pending && report.error) write(`Warning: OpenKey reported a problem finishing your account setup: ${report.error}`);
+    return;
+  }
+  if (result === "unreadable") {
+    unreadable();
+    return;
+  }
+  if (!report.pending) {
+    if (result === "transient") {
+      write(`Warning: could not check whether your TinyCloud space is hosted${report.error ? `; OpenKey reported: ${report.error}` : ""}. ${OPENKEY_SPACE_SETUP_RETRY_HINT}`);
+      return;
+    }
+    if (report.error) {
+      throw new CLIError(
+        "SPACE_SETUP_FAILED",
+        `OpenKey could not finish setting up your space: ${report.error} Your login is saved, but storage commands will fail with "Space not found" until the space is hosted.`,
+        ExitCode.ERROR,
+        { hint: "Approve again in OpenKey to re-run the setup, then retry." }
+      );
+    }
+    write(
+      'Warning: OpenKey did not set up your TinyCloud space (spaceReady: false), so storage commands will fail with "Space not found". Turn on Auto-Sign in OpenKey and approve again, or host the space from a wallet profile.'
+    );
+    return;
+  }
+  write(
+    "Setting up your space\u2026 (OpenKey is hosting it; this can take a minute or two)" + (report.error ? ` OpenKey reported: ${report.error} It is still retrying.` : "")
+  );
+  let lastProgress = started;
+  for (let attempt = 0; ; attempt++) {
+    const current = now();
+    if (current >= deadline) break;
+    await sleep(Math.min(POLL_DELAYS_MS[Math.min(attempt, POLL_DELAYS_MS.length - 1)], deadline - current));
+    result = await probe();
+    if (result === "hosted") {
+      write("Your space is ready.");
+      return;
+    }
+    if (result === "unreadable") {
+      unreadable();
+      return;
+    }
+    const elapsed = now();
+    if (elapsed < deadline && elapsed - lastProgress >= PROGRESS_INTERVAL_MS) {
+      lastProgress = elapsed;
+      write(`Still setting up your space\u2026 (${Math.round((elapsed - started) / 1e3)}s)`);
+    }
+  }
+  throw new CLIError(
+    "SPACE_SETUP_PENDING",
+    `OpenKey is still setting up your space after ${Math.round(timeoutMs / 1e3)} seconds.${report.error ? ` OpenKey's last report: ${report.error}` : ""} Your login is saved, but storage commands will fail with "Space not found" until the space is hosted.`,
+    ExitCode.ERROR,
+    { hint: OPENKEY_SPACE_SETUP_RETRY_HINT }
+  );
+}
+function hasKvAction(permission, action) {
+  return permission.actions.some((entry) => entry === action || entry === `tinycloud.kv/${action}`);
+}
+function readTarget(permissions) {
+  const kv = (permissions ?? []).filter((permission) => permission.service === "tinycloud.kv" || permission.service === "kv");
+  const list = kv.find((permission) => hasKvAction(permission, "list"));
+  if (list) return { op: "list", prefix: list.path };
+  const get = kv.find((permission) => hasKvAction(permission, "get"));
+  if (!get) return void 0;
+  return { op: "get", key: get.path === "" || get.path.endsWith("/") ? `${get.path}.tinycloud-space-probe` : get.path };
+}
+var UNHOSTED = /space not found/i;
+function kvSpaceProbe(ctx, permissions, restore2 = restoreProfileSessionNode) {
+  const target = readTarget(permissions);
+  let restored;
+  return async () => {
+    if (!target) return "unreadable";
+    restored ??= await restore2(ctx);
+    if ("unavailable" in restored) return "unreadable";
+    const kv = restored.node.kv;
+    const result = target.op === "list" ? await kv.list({ prefix: target.prefix, limit: 1 }) : await kv.get(target.key);
+    if (result.ok) return "hosted";
+    const status = result.error.meta?.status;
+    if (status === 404 && UNHOSTED.test(result.error.message)) return "unhosted";
+    if (status === 401 || status === 403) return "unreadable";
+    return result.error.code === "KV_NOT_FOUND" || status === 404 ? "hosted" : "transient";
+  };
+}
+async function ensureSpaceSetup(ctx, delegation, permissions) {
+  const report = spaceSetupReport(delegation);
+  if (!report) return;
+  await awaitSpaceSetup(report, { probe: kvSpaceProbe(ctx, permissions) });
+}
+
 // src/commands/auth.ts
 init_raw_encryption();
 init_owner_did();
@@ -13176,6 +13311,7 @@ function registerAuthCommand(program, options) {
         await persistReplicationLogin(ctx.profile, replicationOptions);
         if (replicationOptions.allowSecrets) writeReplicationSecretsWarning();
         reportDeclined(result.declined);
+        await ensureSpaceSetup({ profile: ctx.profile, host: ctx.host }, result.session, result.session.permissions);
         outputJson({
           authenticated: true,
           profile: ctx.profile,
@@ -14518,6 +14654,7 @@ async function handleLocalAuth(profileName2, host, options = {}) {
 async function handleOpenKeyAuth(profileName2, host, options = {}) {
   const { profile, delegationData, declined, legacyNested } = await refreshOpenKeySession(profileName2, host, options);
   reportDeclined(declined, legacyNested);
+  await ensureSpaceSetup({ profile: profileName2, host }, delegationData, delegationData.permissions);
   outputJson({
     authenticated: true,
     profile: profileName2,
@@ -15516,6 +15653,7 @@ function registerInitCommand(program) {
         noPopup: options.popup === false,
         persistHost: true
       });
+      await ensureSpaceSetup({ profile: profileName2, host }, delegationData, delegationData.permissions);
       outputJson({
         profile: profileName2,
         did,

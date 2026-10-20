@@ -1,5 +1,20 @@
 # @tinycloud/cli
 
+## 1.3.0-beta.37
+
+### Patch Changes
+
+- a05cfe5: `tc auth login` (`--device`, `--paste` and browser) and `tc init` now wait for OpenKey to host the account's space before reporting success (TC-1608). OpenKey hands the CLI its delegation while it is still hosting the space in the background, so the first storage command could fail with `404 Space not found`. When OpenKey reports `spacePending`, the login shows "Setting up your space…" and re-reads the space with the saved session (read-only, no new signature, ability or delegation) for up to 150 seconds. The wait follows OpenKey's readiness: `spaceReady: null` with `spacePending: true` keeps waiting, with or without a `spaceError` (a timeout or a failure OpenKey is retrying; the error is shown as progress), and a transient read failure does not end it. Only `spaceReady: false` with a `spaceError` is final and fails with `SPACE_SETUP_FAILED`, carrying OpenKey's error text and code. If the 150 seconds pass, the login fails with `SPACE_SETUP_PENDING` and OpenKey's last report. Both exit 1 and keep the saved session, so retrying or approving again in OpenKey re-runs the setup. `spaceReady: false` alone (OpenKey will not host it) and a session with no kv grant to read with print a warning. Logins whose delegation says nothing about the space, or says it is ready, do not wait.
+
+  An OpenKey profile's `SPACE_NOT_HOSTED` error, including one on the primary space when no `--space` is given (which previously got no `SPACE_NOT_HOSTED` error at all), no longer tells you to run `tc space host`, which cannot work without a signer. It says: "OpenKey is still setting up your space. Wait a minute and retry; approving again in OpenKey re-runs the setup." Local-key owners keep the `tc space host` hint.
+
+## 1.3.0-beta.36
+
+### Patch Changes
+
+- @tinycloud/node-sdk@3.3.0-beta.33
+- @tinycloud/operations@0.6.1-beta.30
+
 ## 1.3.0-beta.35
 
 ### Patch Changes
