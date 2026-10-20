@@ -85,7 +85,7 @@ const NPM_FAMILY = new Set(['npm', 'npx', 'pnpm', 'pnpx', 'yarn', 'bun', 'bunx',
 const CURLS = new Set(['curl', 'wget', 'http', 'https', 'httpie', 'xh', 'xhs', 'aria2c']);
 const SCRIPT_NAME = /^(deploy|publish|release)(:|$)/i;
 const PKG_NAMES: Record<string, string> = {
-  '@anthropic-ai/claude-code': 'claude', '@openai/codex': 'codex', '@tinycloud/cli': 'tinycloud', '@tinycloud/courier': 'courier', '@changesets/cli': 'changeset', '@phala/cli': 'phala',
+  '@anthropic-ai/claude-code': 'claude', '@openai/codex': 'codex', '@tinycloud/cli': 'tinycloud', '@changesets/cli': 'changeset', '@phala/cli': 'phala',
 };
 const EMBEDDED = new Set(['claude', 'codex', 'semantic-release', 'turbo', 'nx', 'gh', 'git', 'wrangler', 'phala', 'changeset', 'tc', 'tinycloud', 'courier', 'secret-bridge', 'curl', 'wget']);
 const GIT_BUILTINS = new Set((

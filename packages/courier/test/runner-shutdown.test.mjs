@@ -17,7 +17,7 @@ for (const signal of ['SIGINT', 'SIGTERM']) {
 case "$1" in
 ls|-p)
   if [ "$1" = '-p' ]; then printf '%s\\n' '{"is_error":true,"result":"No conversation found"}';
-  else printf '%s\\n' '${scenario === 'paseo-send' ? '[{"id":"fake-agent"}]' : '[]'}'; fi
+  else printf '%s\\n' '${scenario === 'paseo-send' ? JSON.stringify([{id:'fake-agent',provider:'claude',cwd:dir}]) : '[]'}'; fi
   sleep 60 &
   touch '${ready}'
   exit 0;;
@@ -28,8 +28,8 @@ esac
         import {createWaker, spawnRunner, killAllRunners} from ${JSON.stringify(new URL('../dist/wake.js', import.meta.url).href)};
         for (const signal of ['SIGINT','SIGTERM']) process.once(signal, killAllRunners);
         const config = {adapter:${JSON.stringify(scenario.startsWith('paseo') ? 'paseo' : 'claude')}, cwd:${JSON.stringify(dir)}, home:${JSON.stringify(dir)}, owner:'test', timeoutMs:10000,
-          paseo:{bin:${JSON.stringify(bin)},provider:'fake'}, claude:{bin:${JSON.stringify(bin)},allow:[]}};
-        const wake = createWaker(config,{run:spawnRunner,sessions:{get:()=> 'old-session',set(){}}});
+          paseo:{bin:${JSON.stringify(bin)},provider:'claude'}, claude:{bin:${JSON.stringify(bin)},settings:'fake-settings',allow:[]}};
+        const wake = createWaker(config,{run:spawnRunner,prepareGuard(){},env:{PATH:process.env.PATH,HOME:config.home},sessions:{get:()=> 'old-session',set(){}}});
         try {await wake({peer:'test', threadId:'01M5C9EDF03QMRZS2DJXGN5A4C', subject:'test',messages:[]}); process.exitCode=2;}
         catch(e) {if (!/shutting down/.test(e.message)) throw e;}
         const after = await spawnRunner(${JSON.stringify(bin)},['after'],{timeoutMs:10000});
