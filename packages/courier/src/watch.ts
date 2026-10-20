@@ -7,7 +7,7 @@ import type { StoredPeer } from './profile.js';
 import { isRecord, messageView, oneLine, taskView } from './a2a.js';
 import { commitReceipts, selectUndelivered, type KV, type Receipts } from './inbox.js';
 import { del, getJson, listAll, putCreate, putMatch, putOverwrite } from './store.js';
-import type { WakeMessage, Waker, WatchLog } from './wake.js';
+import type { WakeApproval, WakeMessage, Waker, WatchLog } from './wake.js';
 
 /** Spec §8. inform and receipts never wake; a message with no valid intent is delivered but never wakes. */
 const WAKE_INTENTS = new Set(['request', 'ask', 'answer', 'update']);
@@ -18,6 +18,8 @@ const WAKEN_MEMORY = 500;
 const WAKE_RETRY_MS = 60_000;
 /** Delay between starting a re-opened subscription and its catch-up list, so the stream is live first. */
 const RECONNECT_CATCH_UP_MS = 2000;
+/** Spec §7: an approval expires after 24 hours; an older one found at startup wakes nobody. */
+const APPROVAL_MAX_AGE_MS = 24 * 3600 * 1000;
 /** Adapter runs are capped at 30 min in total (`--wake-timeout`, one deadline across all its calls). This profile's own claim is respected 35 min unless its holder is provably gone; another profile's or machine's, 45. */
 const OWN_CLAIM_LEASE_MS = 35 * 60_000;
 /** Another profile or machine: the same plus a margin for clock skew (`at` is the claimer's own clock). */
@@ -35,8 +37,17 @@ export interface PendingWake {
   threadId: string;
   subject: string;
   messages: WakeMessage[];
+  /** Owner decisions on this thread's requests, waiting to wake the agent (they do not wait out the debounce). */
+  approvals?: WakeApproval[];
   firstSeenAt: number;
   lastSeenAt: number;
+}
+
+interface ApprovalWake {
+  approval: WakeApproval;
+  peer: string;
+  threadId: string;
+  subject: string;
 }
 
 export interface WatchState {
@@ -96,6 +107,8 @@ export function emptyWatchState(): WatchState {
 
 /** Wake time: `debounce` after the latest message, but never later than twice `debounce` after the first. */
 export function wakeDueAt(pending: PendingWake, debounceMs: number): number {
+  // A human is waiting on an approval: wake as soon as it is seen.
+  if (pending.approvals?.length) return pending.firstSeenAt;
   return Math.min(pending.lastSeenAt + debounceMs, pending.firstSeenAt + 2 * debounceMs);
 }
 
@@ -134,6 +147,8 @@ export class Watcher {
   private state: WatchState = emptyWatchState();
   private readonly retryAt = new Map<string, number>();
   private readonly waking = new Set<string>();
+  private approvalsRunning = false;
+  private approvalsAgain = false;
   /** Unique to this run: a claim with this id is this process's own. */
   private readonly runId = ulid();
   private readonly profileId: string;
@@ -142,6 +157,8 @@ export class Watcher {
   private lastClaimPrune = 0;
   /** Set when another watcher is writing this profile's state: this one stops and `run` throws it. */
   private fatalError: CourierError | undefined;
+  /** Set once `run` is told to stop: nothing new is woken after that. */
+  private stopping = false;
   private onFatal: (() => void) | undefined;
   /** Etag of me/state/watch.json as this watcher last saw it: null = absent, undefined = unknown (fetch before writing). */
   private stateEtag: string | null | undefined;
@@ -418,30 +435,95 @@ export class Watcher {
     this.taskCache.set(key, { etag: got.etag, terminal: Boolean(state && TERMINAL_TASK_STATES.has(state)) });
   }
 
-  /** Own `me/approvals/`: record new decisions (the wake on them is added with `courier approval`). */
-  async syncApprovals(via: Via): Promise<string[]> {
-    let fresh: string[] = [];
-    try {
-      const keys = await listAll(this.deps.selfKv, k.approvalsPrefix);
-      const ids = keys.map((key) => /\/([^/]+)\.json$/.exec(key)?.[1]).filter((id): id is string => Boolean(id));
-      fresh = ids.filter((id) => !this.state.approvalsSeen.includes(id));
-      if (fresh.length) {
-        await this.mutate(() => {
-          this.state.approvalsSeen = [...new Set([...this.state.approvalsSeen, ...fresh])].sort();
-        });
-        for (const id of fresh) this.deps.log('approval-seen', { via, approvalId: id });
-      }
-    } catch (error) {
-      this.deps.log('sync-error', { source: 'approvals', ...errInfo(error) });
+  /**
+   * Own `me/approvals/` (only the owner's view session can write there). A new decision on a request this agent
+   * filed wakes that thread's agent at once; it checks the decision itself with `courier approval`.
+   */
+  async syncApprovals(via: Via): Promise<void> {
+    if (this.approvalsRunning) {
+      this.approvalsAgain = true;
+      return;
     }
-    return fresh;
+    this.approvalsRunning = true;
+    try {
+      do {
+        this.approvalsAgain = false;
+        try {
+          await this.syncApprovalsOnce(via);
+        } catch (error) {
+          this.deps.log('sync-error', { source: 'approvals', ...errInfo(error) });
+        }
+      } while (this.approvalsAgain);
+    } finally {
+      this.approvalsRunning = false;
+    }
+  }
+
+  private async syncApprovalsOnce(via: Via): Promise<void> {
+    const { selfKv, log } = this.deps;
+    const keys = await listAll(selfKv, k.approvalsPrefix);
+    const ids = keys.map((key) => /\/([^/]+)\.json$/.exec(key)?.[1]).filter((id): id is string => Boolean(id));
+    const fresh = ids.filter((id) => !this.state.approvalsSeen.includes(id));
+    if (!fresh.length) return;
+
+    const handled: string[] = [];
+    const wakes: ApprovalWake[] = [];
+    for (const id of fresh) {
+      try {
+        const found = await this.approvalWake(id);
+        if ('wake' in found) {
+          wakes.push(found.wake);
+          log('approval-seen', { via, approvalId: id, wakes: true, decision: found.wake.approval.decision });
+        } else {
+          log('approval-seen', { via, approvalId: id, wakes: false, reason: found.skip });
+        }
+        handled.push(id);
+      } catch (error) {
+        // Unread (transient failure): left unseen so the next sync retries it.
+        log('sync-error', { source: 'approvals', approvalId: id, ...errInfo(error) });
+      }
+    }
+    if (!handled.length) return;
+    const at = this.now();
+    await this.mutate(() => {
+      this.state.approvalsSeen = [...new Set([...this.state.approvalsSeen, ...handled])].sort();
+      for (const { approval, peer, threadId, subject } of wakes) {
+        const key = `${peer}/${threadId}`;
+        const entry = this.state.pending[key] ??= { peer, threadId, subject, messages: [], firstSeenAt: at, lastSeenAt: at };
+        entry.approvals ??= [];
+        if (!entry.approvals.some((a) => a.approvalId === approval.approvalId)) entry.approvals.push(approval);
+        entry.lastSeenAt = at;
+      }
+    });
+  }
+
+  /** Reads one new approval and its request; `skip` says why it should not wake anyone. */
+  private async approvalWake(id: string): Promise<{ skip: string } | { wake: ApprovalWake }> {
+    const { selfKv } = this.deps;
+    if (!SAFE_ID.test(id)) return { skip: 'unsafe-id' };
+    const approval = (await getJson<unknown>(selfKv, k.approval(id)))?.value;
+    if (!isRecord(approval) || approval.requestId !== id || (approval.decision !== 'approved' && approval.decision !== 'denied')) {
+      return { skip: 'malformed' };
+    }
+    const decidedAt = typeof approval.decidedAt === 'string' ? Date.parse(approval.decidedAt) : NaN;
+    if (!Number.isFinite(decidedAt) || this.now() - decidedAt >= APPROVAL_MAX_AGE_MS) return { skip: 'stale' };
+    const request = (await getJson<unknown>(selfKv, k.request(id)))?.value;
+    if (!isRecord(request) || typeof request.peer !== 'string' || typeof request.threadId !== 'string'
+      || !SAFE_ID.test(request.peer) || !SAFE_ID.test(request.threadId)) {
+      return { skip: 'no-request' };
+    }
+    if (await getJson<unknown>(selfKv, k.approvalUsed(id))) return { skip: 'used' };
+    const own = (await getJson<unknown>(selfKv, k.threadMeta(request.peer, request.threadId)))?.value
+      ?? (await getJson<unknown>(selfKv, k.mirrorMeta(request.peer, request.threadId)))?.value;
+    const subject = isRecord(own) && typeof own.subject === 'string' ? oneLine(own.subject, MAX_SUBJECT) : '(no subject)';
+    return { wake: { approval: { approvalId: id, requestId: id, decision: approval.decision }, peer: request.peer, threadId: request.threadId, subject } };
   }
 
   // ---------- wake ----------
 
   /** Wake every thread whose debounce has elapsed (`force`: all of them now). Threads wake in parallel, one wake per thread at a time. */
   async tick(force = false): Promise<void> {
-    if (this.fatalError) return;
+    if (this.fatalError || this.stopping) return;
     const at = this.now();
     const runs: Promise<void>[] = [];
     for (const [key, pending] of Object.entries(this.state.pending)) {
@@ -455,14 +537,17 @@ export class Watcher {
   }
 
   private async wakeThread(key: string, pending: PendingWake, at: number): Promise<void> {
+    if (this.stopping) return; // told to stop: claim nothing, start nothing
     // Messages that land while the wake runs stay pending for the next one, so wake exactly this snapshot.
     const messages = [...pending.messages];
+    const approvals = [...(pending.approvals ?? [])];
     const woken = messages.map((m) => m.messageId);
+    const approvedIds = approvals.map((a) => a.approvalId);
     const oldestSentAt = messages[0]?.sentAt ?? '';
     // The per-wake claim goes first: a watcher that loses it skips the thread without having written the state, which
     // would otherwise make the watcher that legitimately owns the wake fail its next conditional write. Then the
     // state write: a stale second watcher fails that conditional write and stops before it can wake.
-    const claimId = woken[0];
+    const claimId = woken[0] ?? approvedIds[0];
     if (!(await this.claimWake(pending.peer, pending.threadId, claimId))) {
       this.retryAt.set(key, at + CLAIM_SKIP_MS);
       return;
@@ -473,15 +558,20 @@ export class Watcher {
       await this.releaseClaim(pending.peer, pending.threadId, claimId);
       throw error;
     }
+    if (this.stopping) {
+      // Told to stop while claiming: start no agent now; the claim is released and the wake stays pending.
+      await this.releaseClaim(pending.peer, pending.threadId, claimId);
+      return;
+    }
     const startedAt = this.now();
     // `waking` is when the adapter is invoked: the send-to-wake latency. `woke` follows when the adapter returns.
     this.deps.log('waking', {
-      peer: pending.peer, threadId: pending.threadId, messageIds: woken,
+      peer: pending.peer, threadId: pending.threadId, messageIds: woken, approvalIds: approvedIds,
       oldestSentAt: oldestSentAt || null,
       wakeLatencyMs: oldestSentAt ? startedAt - Date.parse(oldestSentAt) : null,
     });
     try {
-      await this.deps.wake({ peer: pending.peer, threadId: pending.threadId, subject: pending.subject, messages });
+      await this.deps.wake({ peer: pending.peer, threadId: pending.threadId, subject: pending.subject, messages, approvals });
     } catch (error) {
       this.retryAt.set(key, at + WAKE_RETRY_MS);
       this.deps.log('wake-error', { peer: pending.peer, threadId: pending.threadId, ...errInfo(error) });
@@ -493,14 +583,15 @@ export class Watcher {
       const current = this.state.pending[key];
       if (current) {
         current.messages = current.messages.filter((m) => !woken.includes(m.messageId));
-        if (!current.messages.length) delete this.state.pending[key];
+        current.approvals = (current.approvals ?? []).filter((a) => !approvedIds.includes(a.approvalId));
+        if (!current.messages.length && !current.approvals.length) delete this.state.pending[key];
       }
       this.state.woken = [...this.state.woken, ...woken].slice(-WAKEN_MEMORY);
     });
     // Only now, with the wake recorded, is the retry hold-off cleared.
     this.retryAt.delete(key);
     this.deps.log('woke', {
-      peer: pending.peer, threadId: pending.threadId, messageIds: woken,
+      peer: pending.peer, threadId: pending.threadId, messageIds: woken, approvalIds: approvedIds,
       runMs: this.now() - startedAt,
     });
   }
@@ -521,6 +612,7 @@ export class Watcher {
     const stop = new AbortController();
     const signal = stop.signal;
     const onExternalAbort = () => stop.abort();
+    signal.addEventListener('abort', () => { this.stopping = true; }, { once: true });
     external.addEventListener('abort', onExternalAbort, { once: true });
     if (external.aborted) stop.abort();
     this.onFatal = () => stop.abort();
