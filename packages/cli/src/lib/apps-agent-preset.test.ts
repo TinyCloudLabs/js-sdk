@@ -141,6 +141,9 @@ describe("apps-agent scope notice states the facts of the grant", () => {
     expect(notice).toContain("cannot touch other apps, other spaces or secrets");
     expect(notice).toContain("7 days");
     expect(appsAgentScopeNotice("write", [HEALTH])).toContain("cannot change the app's code, manifest or install record");
+    expect(appsAgentScopeNotice("write", [HEALTH])).toContain("also change or delete its tables (structure)");
+    expect(notice).toContain("also change or delete their tables (structure)");
+    expect(notice).not.toContain("delete its tables");
   });
 });
 

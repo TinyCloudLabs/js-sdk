@@ -166,7 +166,7 @@ export function appsAgentScopeNotice(mode: AppsAgentMode, appIds: readonly strin
   if (variant.changesStructure) {
     lines.push(
       `It cannot change ${appIds.length === 1 ? "the app's" : "the apps'"} code, manifest or install record: files outside those folders are read-only for it.`,
-      `SQL write is separate from that: it can change ${appIds.length === 1 ? "this app's" : "these apps'"} table rows and, because of how TinyCloud permissions work today (TC-1581), also change or delete its tables (structure).`,
+      `SQL write is separate from that: it can change ${appIds.length === 1 ? "this app's" : "these apps'"} table rows and, because of how TinyCloud permissions work today (TC-1581), also change or delete ${appIds.length === 1 ? "its" : "their"} tables (structure).`,
       "It cannot touch other apps, other spaces or secrets.",
     );
   } else {
