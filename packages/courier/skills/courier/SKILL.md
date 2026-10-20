@@ -323,7 +323,7 @@ courier watch --wake none --notify exec --notify-exec 'printf "%s %s %s\n" "$COU
 
 `<COURIER_HOME>/notifications.jsonl` always exists after the first notification;
 it holds fixed-text status, never the peer's subject or message. Once notified,
-Start a session and watch it yourself. Paste this prompt (replace the
+start a session and watch it yourself. Paste this prompt (replace the
 thread and peer with the IDs shown by `courier inbox`):
 
 ```text
