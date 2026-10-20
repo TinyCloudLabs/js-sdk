@@ -98,32 +98,46 @@ environment requires `PHALA_CLOUD_API_KEY`, `CLOUDFLARE_API_TOKEN`, and a stable
 
 ### Post-deploy knowledge smoke
 
-After the `mcp-image.yml` deploy of `tinycloud-mcp` is live, QA runs the repo-kept
-script with throwaway E only (never a personal account):
+After the `mcp-image.yml` deploy of `tinycloud-mcp` is live, QA runs the
+repo-kept script with throwaway E only (never a personal account). Clarissa's
+verified `.address-E` must already exist; both files must be owned by the
+current user, mode `0600`, and resolve under `~/scratch/`.
 
 ```sh
 export TC_QA_PASSKEY_FILE=\"$HOME/scratch/tc1384/qa/.passkey-E.json\"
+export TC_QA_EXPECTED_ADDRESS_FILE=\"$HOME/scratch/tc1384/qa/.address-E\"
 export TC_QA_EXPECTED_ADDRESS_PREFIX=0x889E
 export TC_QA_PLAYWRIGHT_MODULE=\"$HOME/scratch/openkey-smoke/node_modules/playwright\"
 CHROME_PATH=\"$HOME/.cache/ms-playwright/chromium-1243/chrome-linux64/chrome\" node scripts/hosted-mcp-smoke.mjs --dry-run
-CHROME_PATH=\"$HOME/.cache/ms-playwright/chromium-1243/chrome-linux64/chrome\" node scripts/hosted-mcp-smoke.mjs --expect-apps 1
+CHROME_PATH=\"$HOME/.cache/ms-playwright/chromium-1243/chrome-linux64/chrome\" node scripts/hosted-mcp-smoke.mjs --expect-apps 1 --require-read
 ```
 
-Run from the js-sdk repository root; `--base-url` defaults to
-`https://mcp.tinycloud.xyz` (HTTP is permitted only for localhost).
-Omit `--expect-apps` for an empty account: it requires a valid empty listing or
-honest missing-grant result, not a minimum. `--expect-apps N` requires at least
-N apps; the script reads the first app's first concept if present, otherwise
-its index. It verifies the signed-in QA address prefix before any MCP call,
-both read-only knowledge tool descriptions, response shapes, OAuth cleanup
-and exit status. Output has only counts and PASS/FAIL labels, never content or
-credentials. Test without production: `node --test scripts/hosted-mcp-smoke.test.mjs`.
+Run from the js-sdk repository root after the deploy lead confirms production
+is live. `--base-url` defaults to `https://mcp.tinycloud.xyz` (HTTP only for
+localhost). Omit `--expect-apps` when no sample-app knowledge is installed;
+the empty/no-grant case is marked `PASS-WITH-NOTE` because read was not
+exercised. `--expect-apps N` requires at least N apps; `--require-read` fails
+instead of accepting an unexercised read. With an app, the script reads its
+first concept or its index. It verifies the full signed-in owner address
+against Clarissa's file before any MCP tool call, the complete read-only
+knowledge descriptions, response shapes, and OAuth cleanup. It prints only
+counts and PASS/FAIL/PASS-WITH-NOTE lines. Test offline:
+`node --test scripts/hosted-mcp-smoke.test.mjs`.
 
-The `finally` cleanup revokes the OAuth access token and deletes the dynamic
-client when registration management is advertised. Hosted TinyCloud
-delegations themselves have **no MCP-side revoke route** (TC-1156); they
-expire on the server's configured lifetime. Keep this on the throwaway
-account; do not report OAuth revocation as delegation revocation.
+One run holds a per-QA-account lock (including cleanup); stale PID locks are
+reclaimed. `--timeout-s` defaults to 300 seconds, then interrupts work,
+attempts bounded cleanup, and exits. SIGINT/SIGTERM use the same cleanup.
+Exit codes: `0` pass (including explicit notes), `1` assertion/cleanup fail,
+`2` invalid options/config, `3` another run holds the lock, `4` deadline,
+`130` SIGINT, `143` SIGTERM.
+
+Cleanup revokes the OAuth token. A missing revocation endpoint is a failure
+unless `--allow-unrevoked` is explicitly supplied; that mode reports the
+outstanding token. It deletes the dynamic client when registration management
+is offered and reports a client without management as outstanding. Hosted
+TinyCloud delegations themselves have **no MCP-side revoke route** (TC-1156);
+they expire on the server's configured lifetime. OAuth revocation does not
+revoke them.
 
 ### Local stdio
 
