@@ -27,12 +27,12 @@ test('N1: no broker/Courier roots in agent environment; HOME/XDG/TMP and tc prof
 test('N1: file tools and Bash cannot traverse or search protected roots or their parents', async () => {
   const dir = fixture();
   try {
-    const courier = path.join(dir, 'private/courier'); const cwd = path.join(dir, 'work'); const agent = path.join(dir, 'agent');
-    for (const d of [courier, cwd, agent]) fs.mkdirSync(d, { recursive: true });
+    const courier = path.join(dir, 'private/courier'); const broker = path.join(dir, 'owner-private/config'); const cwd = path.join(dir, 'work'); const agent = path.join(dir, 'agent');
+    for (const d of [courier, broker, cwd, agent]) fs.mkdirSync(d, { recursive: true });
     fs.symlinkSync(courier, path.join(cwd, 'shortcut'));
-    const env = { cwd, literals: [courier], protectedRoots: [courier], realHome: path.join(dir, 'owner'), getenv: n => n === 'HOME' ? agent : undefined, readFile: () => ({ state: 'absent' }), git: () => ({ ok: false, out: '' }) };
-    const deps = { env, protectedSet: { roots: [courier], homes: [env.realHome, agent], realHome: env.realHome } };
-    for (const tool_name of ['Read', 'Grep', 'Glob']) for (const file of [courier, path.join(courier, 'key.json'), path.dirname(courier), path.join(cwd, 'shortcut')]) {
+    const env = { cwd, literals: [courier], protectedRoots: [courier, broker], realHome: path.join(dir, 'owner'), getenv: n => n === 'HOME' ? agent : undefined, readFile: () => ({ state: 'absent' }), git: () => ({ ok: false, out: '' }) };
+    const deps = { env, protectedSet: { roots: [courier, broker], homes: [env.realHome, agent], realHome: env.realHome } };
+    for (const tool_name of ['Read', 'Grep', 'Glob']) for (const file of [courier, broker, path.dirname(broker), path.join(courier, 'key.json'), path.dirname(courier), path.join(cwd, 'shortcut')]) {
       assert.equal((await decide({ tool_name, tool_input: { path: file, pattern: '**/*.json' }, cwd }, deps)).kind, 'deny', tool_name + ' ' + file);
     }
     for (const command of ['grep -r ghp_ ~/../..', 'cat $COURIER_HOME/broker/*', 'cat ~/../../broker/*', 'find / -name host?.yml', 'grep -r ghp_ /', 'ls ~/..', 'ls $HOME/..', 'cat shortcut/key.json', 'ls ' + path.dirname(courier)]) {
