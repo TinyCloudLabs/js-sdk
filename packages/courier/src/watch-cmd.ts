@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { randomBytes } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { cmd, programName } from './program.js';
 import { CourierError } from './errors.js';
@@ -79,6 +80,21 @@ export function wakeConfig(args: ParsedArgs, owner: string | undefined): WakeCon
     // Capped at 30 min: a crashed watcher's wake claim is taken over after 35 min (Watcher.claimWake).
     timeoutMs: seconds(args, 'wake-timeout', 15 * 60_000, 10, 30 * 60),
   };
+}
+
+/**
+ * Stable per profile and machine (`<COURIER_HOME>/watcher-id`): a restarted watcher is recognised as the same
+ * watcher by its wake claims; another profile or machine gets a different id.
+ */
+export function watcherProfileId(): string {
+  const file = path.join(profileDir(), 'watcher-id');
+  try {
+    const existing = JSON.parse(fs.readFileSync(file, 'utf8')) as { id?: unknown };
+    if (typeof existing.id === 'string' && /^[0-9a-f]{32}$/.test(existing.id)) return existing.id;
+  } catch { /* first run, or unreadable: make a new one */ }
+  const id = randomBytes(16).toString('hex');
+  writeSecure(file, { v: 1, id });
+  return id;
 }
 
 /** Claude session ids per thread, local to this machine (a session id means nothing on another one). */
@@ -164,6 +180,7 @@ export async function cmdWatch(args: ParsedArgs): Promise<void> {
     loadPeers: () => Object.values(loadProfile().peers),
     kvFor: (peer) => peerKv(node, loadProfile(), peer),
     wake: createWaker(config, { run: spawnRunner, sessions: fileSessions() }),
+    holder: { profileId: watcherProfileId() },
     log,
   }, opts);
 
