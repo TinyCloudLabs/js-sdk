@@ -1,3 +1,4 @@
+import { defer } from './defer.js';
 import type { TinyCloudNode } from '@tinycloud/node-sdk';
 import { errInfo } from './errors.js';
 import { k, PREFIX } from './keys.js';
@@ -147,7 +148,7 @@ export function renderInboxText(items: readonly InboundItem[]): string {
 }
 
 export function writeOut(value: string): Promise<void> {
-  const { promise, resolve, reject } = Promise.withResolvers<void>();
+  const { promise, resolve, reject } = defer<void>();
   process.stdout.write(value, (error) => error ? reject(error) : resolve());
   return promise;
 }

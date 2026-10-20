@@ -118,13 +118,22 @@ function persistedSessionData(
   };
 }
 
+/** A profile's persisted session restored into a node, or why it could not be. */
+export type ProfileSessionRestore =
+  | { node: TinyCloudNode }
+  | { unavailable: "session_missing" | "session_expired" | "session_invalid" };
+
+/** The part of a CLI context that restoring a stored session reads; a full {@link CLIContext} also fits. */
+export type ProfileSessionContext = Pick<CLIContext, "profile" | "host"> & Partial<CLIContext>;
+
 /**
- * Inspect a profile's own persisted session without signing in, replaying a
- * stored grant or contacting the node. Used for local grant inspection only.
+ * Inspect a profile's own persisted session without signing in or replaying a
+ * stored grant; this call does not contact the node. Used for local grant
+ * inspection and for the read that checks the space after a login.
  */
 export async function restoreProfileSessionNode(
-  ctx: CLIContext,
-): Promise<{ node: TinyCloudNode } | { unavailable: "session_missing" | "session_expired" | "session_invalid" }> {
+  ctx: ProfileSessionContext,
+): Promise<ProfileSessionRestore> {
   await recoverPendingLogout(ctx.profile);
   const profile = await ProfileManager.getProfile(ctx.profile);
   const session = await ProfileManager.getSession(ctx.profile) as Record<string, unknown> | null;
