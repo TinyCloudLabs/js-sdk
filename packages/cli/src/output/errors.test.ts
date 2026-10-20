@@ -53,9 +53,9 @@ describe("wrapError", () => {
   });
 
   test("a node 401 that names a revoked grant is GRANT_REVOKED (exit 5, the same as `tc replica`) and drops the node text; other 401s are unchanged", () => {
-    for (const reason of ["delegation-revoked", "delegation-ancestor-revoked"]) {
+    for (const body of ["delegation-revoked: bafkr4icid", "delegation-ancestor-revoked: ancestor=bafkr4icid invoked=bafkr4icid"]) {
       const error = cliErrorFromService({
-        code: "KV_ERROR", message: `Failed to list keys: 401 - ${reason}: bafkr4icid`, meta: { status: 401 },
+        code: "KV_ERROR", message: `Failed to list keys: 401 - ${body}`, meta: { status: 401 },
       });
       expect(error).toMatchObject({ code: "GRANT_REVOKED", exitCode: 5, status: 401 });
       expect(error.exitCode).toBe(GRANT_REVOKED_EXIT_CODE);
