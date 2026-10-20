@@ -130,6 +130,8 @@ let authNodeRestorableSession: Record<string, unknown> | undefined;
 let authNodeGrantDelegations: Array<{ cid: string; expiry: Date }>;
 let onGrantRuntimePermissions: (() => void | Promise<void>) | null = null;
 let operationInvokeHook: (() => void) | null = null;
+// What `restoreProfileSessionNode` returns; null: no restorable session.
+let restoredSessionNode: ((ctx: unknown) => unknown) | null = null;
 
 function resetState(): void {
   recorded.outputs.length = 0;
@@ -188,6 +190,7 @@ function resetState(): void {
   operationRecorded.calls.length = 0;
   operationRecorded.results.length = 0;
   operationInvokeHook = null;
+  restoredSessionNode = null;
 }
 
 function makeProfile(overrides: Partial<ProfileLike> = {}): ProfileLike {
@@ -406,7 +409,8 @@ mock.module("../lib/sdk.js", () => ({
       },
     };
   },
-  restoreProfileSessionNode: async () => ({ unavailable: "session_missing" as const }),
+  restoreProfileSessionNode: async (ctx: unknown) =>
+    restoredSessionNode ? restoredSessionNode(ctx) : { unavailable: "session_missing" as const },
 }));
 
 mock.module("../lib/permissions.js", () => ({
@@ -806,6 +810,66 @@ describe("CLI auth login command", () => {
     expect(recorded.errors).toEqual([expect.objectContaining({ code: "MANIFEST_REQUIRED" })]);
     expect(recorded.startAuthFlows).toEqual([]);
     expect(sessions.has("default")).toBe(false);
+  });
+
+  describe("OpenKey space setup after login (TC-1608)", () => {
+    const unhosted = { ok: false, error: { code: "KV_NOT_FOUND", message: "404 - Space not found", meta: { status: 404 } } };
+
+    function loginProfile(): void {
+      profiles.set("default", makeProfile({ did: "did:key:openkey-session", sessionDid: "did:key:openkey-session", authMethod: "openkey" }));
+      keys.set("default", { kty: "OKP", crv: "Ed25519", x: "key-public", d: "key-private" });
+    }
+
+    function nodeAnswering(answers: unknown[]): { reads: number; node: { kv: { get: () => Promise<unknown> } } } {
+      const state = { reads: 0, node: { kv: { get: async () => answers[Math.min(state.reads++, answers.length - 1)] } } };
+      return state;
+    }
+
+    test("waits while OpenKey is still hosting the space, then finishes the login", async () => {
+      loginProfile();
+      openKeyDelegation = { ...openKeyDelegation, verificationMethod: "did:key:openkey-session", spaceReady: null, spacePending: true };
+      const node = nodeAnswering([unhosted, { ok: true, data: {} }]);
+      restoredSessionNode = () => ({ node: node.node });
+      const stderr = spyOn(process.stderr, "write").mockImplementation(() => true);
+      try {
+        await runAuthCommand(["auth", "login", "--method", "openkey", "--paste"]);
+        expect(stderr.mock.calls.map(([text]) => String(text)).join("")).toContain("Setting up your space");
+      } finally {
+        stderr.mockRestore();
+      }
+
+      expect(recorded.errors).toEqual([]);
+      expect(node.reads).toBe(2);
+      expect(recorded.outputs).toEqual([expect.objectContaining({ authenticated: true })]);
+    }, 15_000);
+
+    test("surfaces OpenKey's spaceError with its code and exits non-zero, keeping the saved session", async () => {
+      loginProfile();
+      const spaceError = "TinyCloud account setup failed (tinycloud_bootstrap_failed): seed failed.";
+      openKeyDelegation = { ...openKeyDelegation, verificationMethod: "did:key:openkey-session", spaceReady: false, spaceError };
+      restoredSessionNode = () => ({ node: nodeAnswering([unhosted]).node });
+
+      await runAuthCommand(["auth", "login", "--method", "openkey", "--paste"]);
+
+      expect(recorded.errors).toEqual([expect.objectContaining({
+        code: "SPACE_SETUP_FAILED",
+        message: expect.stringContaining(spaceError),
+      })]);
+      expect(recorded.outputs).toEqual([]);
+      expect(sessions.has("default")).toBe(true);
+    });
+
+    test.each([{}, { spaceReady: true }])("does not read from the node when OpenKey says the space is ready or says nothing (%j)", async (fields) => {
+      loginProfile();
+      let probes = 0;
+      restoredSessionNode = () => { probes += 1; return { unavailable: "session_missing" }; };
+      openKeyDelegation = { ...openKeyDelegation, verificationMethod: "did:key:openkey-session", ...fields };
+
+      await runAuthCommand(["auth", "login", "--method", "openkey", "--paste"]);
+
+      expect(recorded.errors).toEqual([]);
+      expect(probes).toBe(0);
+    });
   });
 });
 
