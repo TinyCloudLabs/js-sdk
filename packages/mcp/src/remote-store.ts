@@ -148,6 +148,11 @@ export class ApprovalRequestError extends Error {
 export class RemoteTenantStore {
   readonly #config: RemoteStoreConfig;
   readonly #initializing = new Map<string, Promise<TenantProfile>>();
+  readonly #sessionChecks = new Map<string, Promise<boolean>>();
+  readonly #clearing = new Map<string, Promise<void>>();
+  readonly #activeSessions = new Map<string, { cids: string; until: number }>();
+  readonly #pendingWrites = new Map<string, Promise<PendingApproval>>();
+  readonly #renewalRequired = new Set<string>();
 
   constructor(config: RemoteStoreConfig) {
     this.#config = config;
@@ -161,10 +166,15 @@ export class RemoteTenantStore {
   async initializeTenant(subject: string): Promise<string> {
     return (await this.#ensureTenant(subject)).stateRoot;
   }
+  /** Check stored node authority before an authenticated operation uses it. */
+  async validateTenant(subject: string, ownerDids: readonly string[]): Promise<void> {
+    await this.#hasValidSession(await this.#ensureTenant(subject), ownerDids);
+  }
+
 
   async connectStatus(subject: string, ownerDids: readonly string[] = []): Promise<ConnectStatus> {
     const tenant = await this.#ensureTenant(subject);
-    if (await this.#hasValidSession(tenant, ownerDids)) {
+    if (await this.#hasValidSession(tenant, ownerDids, true)) {
       return { connected: true, sessionDid: tenant.sessionDid };
     }
     const pending = await this.#createPending(subject, ownerDids, "bootstrap", BOOTSTRAP_PERMISSIONS);
@@ -184,23 +194,46 @@ export class RemoteTenantStore {
     if (!isRecord(result)) return result;
     if (result.status === "error" && isRecord(result.error) &&
       (result.error.code === "SESSION_NOT_FOUND" || result.error.code === "AUTH_REQUIRED")) {
-      // The operation has already established that it needs a new session.
-      // Bind this approval to the authenticated account, just like connect.
-      await this.#ensureTenant(subject);
+      const tenant = await this.#ensureTenant(subject);
+      let valid = await this.#hasValidSession(tenant, ownerDids, true);
+      if (valid && result.error.code === "AUTH_REQUIRED" &&
+        await readJson<unknown>(this.#additionalPath(tenant.stateRoot)) !== null) {
+        await this.#clearAuthority(tenant);
+        valid = false;
+      }
+      if (valid && result.error.code === "AUTH_REQUIRED") return result;
       const pending = await this.#createPending(subject, ownerDids, "bootstrap", BOOTSTRAP_PERMISSIONS);
       return {
-        ...result,
+        status: "error",
+        operation: result.operation,
+        context: result.context,
         error: {
-          ...result.error,
-          details: {
-            ...(isRecord(result.error.details) ? result.error.details : {}),
-            approvalUrl: this.#connectUrl(pending),
-            expiresAt: pending.expiresAt,
-          },
+          code: result.error.code === "SESSION_NOT_FOUND" ? "SESSION_NOT_FOUND" : "AUTH_REQUIRED",
+          message: "A new TinyCloud approval is required.",
+          retryable: false,
+          details: { approvalUrl: this.#connectUrl(pending), expiresAt: pending.expiresAt },
         },
       };
     }
     if (result.status !== "authority_required") return result;
+    const tenant = await this.#ensureTenant(subject);
+    if (this.#renewalRequired.has(tenant.stateRoot) ||
+      !(await this.#hasValidSession(tenant, ownerDids, true))) {
+      if (this.#renewalRequired.has(tenant.stateRoot)) {
+        const pending = await this.#createPending(subject, ownerDids, "bootstrap", BOOTSTRAP_PERMISSIONS);
+        return {
+          status: "error",
+          operation: result.operation,
+          context: result.context,
+          error: {
+            code: "AUTH_REQUIRED",
+            message: "A new TinyCloud approval is required.",
+            retryable: false,
+            details: { approvalUrl: this.#connectUrl(pending), expiresAt: pending.expiresAt },
+          },
+        };
+      }
+    }
     const request = isRecord(result.request) ? result.request : undefined;
     const requestId = typeof request?.requestId === "string" ? request.requestId : undefined;
     const requested = Array.isArray(request?.requested)
@@ -306,6 +339,8 @@ export class RemoteTenantStore {
       authMethod: "openkey",
       ...session,
     });
+    this.#renewalRequired.delete(tenant.stateRoot);
+    this.#activeSessions.delete(tenant.stateRoot);
   }
 
   async #storeDelegation(
@@ -412,18 +447,76 @@ export class RemoteTenantStore {
     return initializing;
   }
 
-  async #hasValidSession(tenant: TenantProfile, ownerDids: readonly string[]): Promise<boolean> {
+  async #hasValidSession(
+    tenant: TenantProfile,
+    ownerDids: readonly string[],
+    fresh = false,
+  ): Promise<boolean> {
+    if (this.#renewalRequired.has(tenant.stateRoot)) return false;
+    const key = JSON.stringify([tenant.stateRoot, ownerDids.map(normalizeDid), fresh]);
+    const current = this.#sessionChecks.get(key);
+    if (current) return current;
+    const checking = this.#checkSession(tenant, ownerDids, fresh).finally(() => {
+      this.#sessionChecks.delete(key);
+    });
+    this.#sessionChecks.set(key, checking);
+    return checking;
+  }
+
+  async #checkSession(
+    tenant: TenantProfile,
+    ownerDids: readonly string[],
+    fresh: boolean,
+  ): Promise<boolean> {
     const raw = await readJson<Record<string, unknown>>(this.#sessionPath(tenant.stateRoot));
     if (raw === null) return false;
+    const node = new TinyCloudNode({ host: this.#config.nodeHost });
     try {
-      const node = new TinyCloudNode({ host: this.#config.nodeHost });
       await node.restoreSession(raw as unknown as TinyCloudSession);
-      return samePrincipal(node.sessionDid, tenant.sessionDid) &&
-        ownerDids.some((did) => samePrincipal(node.did, did));
     } catch {
-      await rm(this.#sessionPath(tenant.stateRoot), { force: true });
       return false;
     }
+    if (!samePrincipal(node.sessionDid, tenant.sessionDid) ||
+      !ownerDids.some((did) => samePrincipal(node.did, did))) return false;
+    const additional = await readJson<unknown>(this.#additionalPath(tenant.stateRoot));
+    const cids = [raw.delegationCid];
+    if (additional !== null) {
+      if (!Array.isArray(additional)) throw new Error("Stored TinyCloud authority is unavailable.");
+      for (const entry of additional) {
+        const cid = isRecord(entry) && isRecord(entry.delegation) ? entry.delegation.cid : undefined;
+        cids.push(cid);
+      }
+    }
+    if (!cids.every((cid): cid is string => typeof cid === "string" && cid.length > 0)) {
+      throw new Error("Stored TinyCloud authority is unavailable.");
+    }
+    const fingerprint = cids.join("\n");
+    const cached = this.#activeSessions.get(tenant.stateRoot);
+    if (!fresh && cached?.cids === fingerprint && cached.until > Date.now()) return true;
+    const probe = await node.kvForSpace(String(raw.spaceId)).list({ prefix: "spaces/" });
+    if (!probe.ok && probe.error.code === "AUTH_UNAUTHORIZED") {
+      await this.#clearAuthority(tenant);
+      return false;
+    }
+    if (!probe.ok) throw new Error("Stored TinyCloud authority is unavailable.");
+    if (this.#renewalRequired.has(tenant.stateRoot)) return false;
+    this.#activeSessions.set(tenant.stateRoot, { cids: fingerprint, until: Date.now() + 30_000 });
+    return true;
+  }
+
+  async #clearAuthority(tenant: TenantProfile): Promise<void> {
+    const current = this.#clearing.get(tenant.stateRoot);
+    if (current) return current;
+    this.#activeSessions.delete(tenant.stateRoot);
+    this.#renewalRequired.add(tenant.stateRoot);
+    const clearing = (async () => {
+      await rm(this.#additionalPath(tenant.stateRoot), { force: true });
+      await rm(join(tenant.stateRoot, ".tinycloud", "profiles", PROFILE, "auth-requests.json"), { force: true });
+      await rm(this.#pendingDirectory(tenant.stateRoot), { recursive: true, force: true });
+      await rm(this.#sessionPath(tenant.stateRoot), { force: true });
+    })().finally(() => this.#clearing.delete(tenant.stateRoot));
+    this.#clearing.set(tenant.stateRoot, clearing);
+    await clearing;
   }
 
   async #initializeTenant(tenantId: string): Promise<TenantProfile> {
@@ -490,9 +583,27 @@ export class RemoteTenantStore {
   ): Promise<PendingApproval> {
     const tenant = await this.#ensureTenant(subject);
     const tenantId = this.#tenantId(subject);
+    const normalizedOwners = ownerDids.map(normalizeDid);
+    const key = JSON.stringify([tenantId, kind, requestId, permissions, normalizedOwners]);
+    const current = this.#pendingWrites.get(key);
+    if (current) return current;
+    const writing = this.#writePending(tenant, tenantId, kind, permissions, normalizedOwners, requestId)
+      .finally(() => this.#pendingWrites.delete(key));
+    this.#pendingWrites.set(key, writing);
+    return writing;
+  }
+
+  async #writePending(
+    tenant: TenantProfile,
+    tenantId: string,
+    kind: PendingApproval["kind"],
+    permissions: PermissionEntry[],
+    ownerDids: string[],
+    requestId?: string,
+  ): Promise<PendingApproval> {
     const reusable = await reusablePending(
       this.#pendingDirectory(tenant.stateRoot),
-      { tenantId, kind, requestId, permissions, ownerDids: ownerDids.map(normalizeDid) },
+      { tenantId, kind, requestId, permissions, ownerDids },
     );
     if (reusable !== undefined) return reusable;
     const nonce = randomBytes(24).toString("base64url");
@@ -504,7 +615,7 @@ export class RemoteTenantStore {
       kind,
       ...(requestId === undefined ? {} : { requestId }),
       permissions,
-      ownerDids: ownerDids.map(normalizeDid),
+      ownerDids,
       createdAt: new Date(created).toISOString(),
       expiresAt: new Date(created + this.#config.approvalTtlSeconds * 1000).toISOString(),
     };
@@ -595,6 +706,10 @@ export class RemoteTenantStore {
 
   #sessionPath(stateRoot: string): string {
     return join(stateRoot, ".tinycloud", "profiles", PROFILE, "session.json");
+  }
+
+  #additionalPath(stateRoot: string): string {
+    return join(stateRoot, ".tinycloud", "profiles", PROFILE, "additional-delegations.json");
   }
 
   #pendingPath(stateRoot: string, nonce: string): string {

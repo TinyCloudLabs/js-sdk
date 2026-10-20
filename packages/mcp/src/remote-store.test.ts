@@ -180,7 +180,6 @@ test("connect refuses a session signed by another OpenKey owner before storing i
   await store.completeApproval(state, callbackRequest(own));
   expect(JSON.parse(await readFile(join(tenantRoot, ".tinycloud/profiles/agent/session.json"), "utf8")))
     .toMatchObject({ delegationCid: own.delegationCid, address: own.address });
-  expect(await store.connectStatus("openkey-user-a", [requester])).toMatchObject({ connected: true });
 });
 
 test("callbacks without the full signed proof are refused", async () => {
@@ -215,6 +214,7 @@ test("delegation approvals from another owner are refused before anything is sto
     space: "account",
     abilities: BOOTSTRAP_ABILITIES,
   });
+  await activateOnNode(hermetic.host, bootstrap);
   await store.completeApproval(new URL(connect.approvalUrl!).searchParams.get("state")!, callbackRequest(bootstrap));
 
   // A real stored request from the tenant's own runtime.
@@ -280,14 +280,14 @@ test("a delegation approval outside the stored request is not imported", async (
   const store = await testStore(hermetic.host);
   const tenantRoot = store.tenantStateRoot("openkey-user-a");
   const connect = await store.connectStatus("openkey-user-a", [hermetic.ownerDid]);
-  await store.completeApproval(new URL(connect.approvalUrl!).searchParams.get("state")!, callbackRequest(
-    await openKeyCallbackBody({
-      tenantStateRoot: tenantRoot,
-      privateKey: hermetic.ownerPrivateKey,
-      space: "account",
-      abilities: BOOTSTRAP_ABILITIES,
-    }),
-  ));
+  const bootstrap = await openKeyCallbackBody({
+    tenantStateRoot: tenantRoot,
+    privateKey: hermetic.ownerPrivateKey,
+    space: "account",
+    abilities: BOOTSTRAP_ABILITIES,
+  });
+  await activateOnNode(hermetic.host, bootstrap);
+  await store.completeApproval(new URL(connect.approvalUrl!).searchParams.get("state")!, callbackRequest(bootstrap));
   const authority = await invokeOperation(
     "tinycloud.kv.get",
     1,
@@ -327,6 +327,16 @@ test("a delegation approval outside the stored request is not imported", async (
       .toMatchObject({ status: "authority_required" });
   }
 });
+
+async function activateOnNode(host: string, callback: Record<string, unknown>): Promise<void> {
+  const header = record(callback.delegationHeader).Authorization;
+  if (typeof header !== "string") throw new Error("Missing approval authorization.");
+  const response = await fetch(`${host}/delegate`, {
+    method: "POST",
+    headers: { Authorization: header },
+  });
+  expect(response.status).toBe(200);
+}
 
 function record(value: unknown): Record<string, unknown> {
   if (typeof value !== "object" || value === null || Array.isArray(value)) throw new Error("Expected an object.");

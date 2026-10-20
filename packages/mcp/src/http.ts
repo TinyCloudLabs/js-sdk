@@ -56,6 +56,7 @@ export function createHostedMcpApp(config: HostedMcpConfig): HostedMcpApp {
   const handler = createMcpHandler(async ({ authInfo }) => {
     const identity = oauthIdentity(authInfo);
     const { subject, ownerDids } = identity;
+    await store.validateTenant(subject, ownerDids);
     const stateRoot = await store.initializeTenant(subject);
     const validator = createJsonSchemaValidator();
     const server = new McpServer(

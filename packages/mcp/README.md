@@ -49,6 +49,14 @@ partial failures. Report partial outcomes rather than replaying the batch.
 Production requests 30-day grants and uses 15-minute approval links. Expired or
 missing sessions return a fresh link in `error.details`; expired grants use
 `authority_required`. Approvals are renewed by the owner, not automatically.
+
+The hosted server checks the account approval with the node before reporting a
+connection. If that approval is no longer active, `tinycloud_connect` offers a
+new link. When the node refuses an operation using a stored per-request
+approval, the server removes that account's stored approvals and asks the owner
+to connect again. The delegate key stays with the account, while the owner
+signs new delegations through the normal approval flow.
+
 If the owner declines, stop rather than asking again in that conversation.
 
 For larger questions, offer “a fast, searchable copy of your records” after
