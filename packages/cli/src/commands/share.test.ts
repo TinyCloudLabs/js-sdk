@@ -393,6 +393,89 @@ describe("tc share command contract", () => {
     }
   });
 
+  async function publishJsonWithHistoryPut(put: () => Promise<void>) {
+    const directory = await mkdtemp(join(tmpdir(), "tc-share-history-reason-"));
+    const file = join(directory, "note.md");
+    await writeFile(file, "# note\n");
+    configureShareCommandServices({
+      targetAdapter: { async publish() { return reviewPublished; } },
+      records: {
+        put,
+        async get() { return undefined; },
+        async list() { return []; },
+        async delete() {},
+      },
+    });
+    const originalExit = process.exit;
+    process.exit = (() => {}) as typeof process.exit;
+    try {
+      return await runShareCaptured(["share", "publish", file, "--to", "email:alice@example.com", "--json"]);
+    } finally {
+      process.exit = originalExit;
+      configureShareCommandServices({});
+    }
+  }
+
+  function expectHistoryWarningWithoutSecrets(stderr: string, reason: string) {
+    expect(stderr).toContain(`(${reason})`);
+    expect(stderr).toContain(reviewPublished.metadata.shareId);
+    expect(stderr).toContain(reviewPublished.link.cid);
+    expect(stderr).not.toContain(reviewPublished.url);
+    expect(stderr).not.toContain("p=sealed");
+    expect(stderr).not.toContain("#v=2");
+  }
+
+  test("publish --json reports HISTORY_UNREADABLE when the existing sender history cannot be decrypted", async () => {
+    const output = await publishJsonWithHistoryPut(async () => { throw new Error("share history is unavailable"); });
+    expect(output.exitCode).toBe(0);
+    expect(JSON.parse(output.stdout)).toMatchObject({
+      link: reviewPublished.link,
+      metadata: { shareId: reviewPublished.metadata.shareId },
+      history: { recorded: false, reason: "HISTORY_UNREADABLE" },
+    });
+    expectHistoryWarningWithoutSecrets(output.stderr, "HISTORY_UNREADABLE");
+  });
+
+  test("publish --json reports HISTORY_WRITE_FAILED for filesystem write errors", async () => {
+    const diskFull = Object.assign(new Error("ENOSPC: no space left on device"), { code: "ENOSPC" });
+    const output = await publishJsonWithHistoryPut(async () => { throw diskFull; });
+    expect(output.exitCode).toBe(0);
+    expect(JSON.parse(output.stdout)).toMatchObject({ history: { recorded: false, reason: "HISTORY_WRITE_FAILED" } });
+    expectHistoryWarningWithoutSecrets(output.stderr, "HISTORY_WRITE_FAILED");
+  });
+
+  test("publish --json reports HISTORY_UNAVAILABLE for other sender history failures", async () => {
+    const output = await publishJsonWithHistoryPut(async () => { throw new ProfileLockTimeoutError("publisher", 45000); });
+    expect(output.exitCode).toBe(0);
+    expect(JSON.parse(output.stdout)).toMatchObject({ history: { recorded: false, reason: "HISTORY_UNAVAILABLE" } });
+    expectHistoryWarningWithoutSecrets(output.stderr, "HISTORY_UNAVAILABLE");
+  });
+
+  test("publish --json reports recorded history without a warning when the write succeeds", async () => {
+    const output = await publishJsonWithHistoryPut(async () => {});
+    expect(output.exitCode).toBe(0);
+    expect(JSON.parse(output.stdout)).toMatchObject({ history: { recorded: true } });
+    expect(output.stderr).not.toContain("not recorded in sender history");
+  });
+
+  test("publish --json reports unconfigured sender history instead of skipping it silently", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "tc-share-history-unconfigured-"));
+    const file = join(directory, "note.md");
+    await writeFile(file, "# note\n");
+    configureShareCommandServices({ targetAdapter: { async publish() { return reviewPublished; } } });
+    const originalExit = process.exit;
+    process.exit = (() => {}) as typeof process.exit;
+    try {
+      const output = await runShareCaptured(["share", "publish", file, "--to", "email:alice@example.com", "--json"]);
+      expect(output.exitCode).toBe(0);
+      expect(JSON.parse(output.stdout)).toMatchObject({ history: { recorded: false, reason: "HISTORY_UNAVAILABLE" } });
+      expectHistoryWarningWithoutSecrets(output.stderr, "HISTORY_UNAVAILABLE");
+    } finally {
+      process.exit = originalExit;
+      configureShareCommandServices({});
+    }
+  });
+
   test("revoke reports a retryable history race after node revocation already succeeded", async () => {
     let revocations = 0;
     configureShareCommandServices({
