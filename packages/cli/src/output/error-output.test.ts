@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 
-import { outputError, outputJson } from "./formatter.js";
+import { outputError, outputJson, outputWarnings } from "./formatter.js";
+import { drainWarnings, recordWarnings } from "./warnings.js";
 
 // One of every class a hostile string can use to drive a terminal or hide text.
 const HOSTILE = "\u001b[2J\u001b]0;owned\u0007\u0000\u202e\u2028\u2066\u009b\u200b\ufeff\r";
@@ -65,7 +66,7 @@ describe("outputError", () => {
     expect(parsed.error.hint).toBe(`hint ${HOSTILE}`);
   });
 
-  test("the JSON success output and the warnings line are terminal-safe too", () => {
+  test("the JSON success output is terminal-safe too", () => {
     terminal(false);
     const out: string[] = [];
     const stdout = spyOn(process.stdout, "write").mockImplementation(((chunk: string | Uint8Array) => {
@@ -79,5 +80,32 @@ describe("outputError", () => {
     }
     expect(out.join("").replace(/\n/g, "")).not.toMatch(RAW);
     expect((JSON.parse(out.join("")) as { value: string }).value).toBe(HOSTILE);
+  });
+
+  // Warnings reach stderr through the sink that recordWarnings fills and outputWarnings drains. The sink does
+  // not validate what it holds, so a hostile value placed there is the shape this path must survive.
+  test("the warnings line (the real record, drain and output path) is terminal-safe and parses to the same value", () => {
+    drainWarnings();
+    const hostile = { code: `CODE${HOSTILE}`, reason: `reason${HOSTILE}\u007f`, grantCid: `bafkr4i${HOSTILE}` };
+    recordWarnings([hostile]);
+    terminal(false);
+    outputWarnings([]);
+    const line = written.join("");
+    expect(line.endsWith("\n")).toBe(true);
+    expect(line.replace(/\n/g, "")).not.toMatch(RAW);
+    for (const escape of ["\\u001b", "\\u0007", "\\u0000", "\\r", "\\u202e", "\\u2028", "\\u2066", "\\u009b", "\\u200b", "\\ufeff", "\\u007f"]) {
+      expect(line).toContain(escape);
+    }
+    expect(JSON.parse(line)).toEqual({ warnings: [hostile] });
+    expect(drainWarnings()).toEqual([]);
+  });
+
+  test("the human warnings line is untouched by this and still prints on a terminal", () => {
+    drainWarnings();
+    recordWarnings([{ code: "STORED_GRANT_SKIPPED", reason: "cid_mismatch" }]);
+    terminal(true);
+    outputWarnings([]);
+    expect(written.join("")).toContain("!");
+    expect(written.join("")).not.toMatch(PAYLOAD);
   });
 });
