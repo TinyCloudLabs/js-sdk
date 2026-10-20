@@ -1,4 +1,5 @@
 import { test } from 'node:test';
+import { defer } from '../dist/defer.js';
 import assert from 'node:assert/strict';
 import { ulid } from 'ulid';
 import { Watcher, wakeDueAt } from '../dist/watch.js';
@@ -167,7 +168,7 @@ test('a wake that fails stays pending and is retried', async () => {
 });
 
 test('overlapping ticks do not wake a thread again while a slow wake is still running', async () => {
-  const gate = Promise.withResolvers();
+  const gate = defer();
   const calls = [];
   const { watcher, clock, send } = setup({ wake: async (request) => { calls.push(request); await gate.promise; } });
   const thread = ulid();
@@ -186,7 +187,7 @@ test('overlapping ticks do not wake a thread again while a slow wake is still ru
 });
 
 test('a message that lands during a wake is woken next, and only the woken snapshot is cleared', async () => {
-  const gate = Promise.withResolvers();
+  const gate = defer();
   const calls = [];
   const { watcher, clock, send } = setup({ wake: async (request) => { calls.push(request.messages.map((m) => m.messageId)); await gate.promise; } });
   const thread = ulid();
