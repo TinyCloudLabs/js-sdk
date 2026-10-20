@@ -183,7 +183,8 @@ describe.skipIf(!NODE_BIN)("tinycloud knowledge against a real node", () => {
     const hint: string = other.error().hint;
     expect(hint).toContain(`--preset apps-agent --app ${HEALTH} --emit req.json`);
     expect(hint).toContain(`--cap tinycloud.kv:applications:${HEALTH}/knowledge/:get,list`);
-    expect(hint).toContain(`--preset apps-agent --write --app ${HEALTH}`);
+    // The hint never points an agent at --write during the beta.
+    expect(hint).not.toContain("--write");
     expect(hint).not.toContain("<app_id>");
   }, 120_000);
 

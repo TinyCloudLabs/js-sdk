@@ -909,7 +909,7 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
     .option("--device", "With --grant: approve on another device (e.g. a phone) through OpenKey device authorization (KV-scoped; SQL needs browser login)")
     .option(
       "--preset <name>",
-      `Request a named permission set instead of --cap: ${APPS_AGENT_PRESET} is READ-ONLY on the applications space (kv get/list + sql read, ${APPS_AGENT_EXPIRY_DAYS} days); add --write --app <app_id> for write access to named apps`,
+      `Request a named permission set instead of --cap: ${APPS_AGENT_PRESET} is READ-ONLY on the applications space (kv get/list + sql read, ${APPS_AGENT_EXPIRY_DAYS} days)`,
     )
     .option(
       "--app <app_id>",
@@ -917,7 +917,7 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
       (value: string, previous: string[]) => [...previous, value],
       [],
     )
-    .option("--write", `With --preset ${APPS_AGENT_PRESET}: also allow writes (kv put + sql write) in the named --app apps. SQL write can also change or drop those apps' tables`)
+    .option("--write", `Don't request \`--write\` during the tiny-apps beta. It currently also allows changes to the app's own code and manifest; the narrowed write ships in TC-1620. With --preset ${APPS_AGENT_PRESET} it also allows writes (kv put + sql write) in the named --app apps; SQL write can also change or drop those apps' tables`)
     .option("--paste", "With --grant on an OpenKey profile: wait up to 5 minutes for a signed code from OpenKey on stdin instead of a browser callback (use when the browser cannot reach this CLI)")
     .action(async (options, cmd) => {
       try {
