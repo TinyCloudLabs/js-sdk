@@ -86,6 +86,7 @@
     "tc-841-logout-contract",
     "tc-841-profile-containment",
     "tc-858-s7-parity",
+    "tc858-browser-acceptance",
     "tc858-s5-quota",
     "terminal-delegation-marker",
     "terminal-grant-pkh-refusal",
