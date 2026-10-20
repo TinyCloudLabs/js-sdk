@@ -1,6 +1,6 @@
-import { constants } from "node:fs";
-import { open, readdir, stat } from "node:fs/promises";
-import { basename, join, resolve } from "node:path";
+import { constants, type Dirent } from "node:fs";
+import { lstat, open, readdir, realpath, stat } from "node:fs/promises";
+import { basename, isAbsolute, join, relative as relativePath, resolve, sep } from "node:path";
 import {
   ArtifactBundleError,
   MAX_ARTIFACT_FILES,
@@ -41,7 +41,7 @@ export async function isDirectoryInput(input: string): Promise<boolean> {
   }
 }
 
-interface FolderProblem {
+export interface FolderProblem {
   readonly code: "UNSUPPORTED_FOLDER_ENTRY" | "UNSAFE_PATH";
   readonly path: string;
   readonly reason: string;
@@ -51,18 +51,47 @@ function limitError(message: string): CLIError {
   return new CLIError("MAX_BYTES_EXCEEDED", message, 7);
 }
 
-/** The file's bytes, read from one descriptor opened without following a link, never past `limit` bytes. */
-async function readRegularFile(path: string, relative: string, remaining: number, limit: number): Promise<Uint8Array | FolderProblem> {
+/** True when `candidate` is a path strictly inside `root` (both absolute and already resolved). */
+export function isWithinFolder(root: string, candidate: string): boolean {
+  const path = relativePath(root, candidate);
+  return path !== "" && path !== ".." && !path.startsWith(`..${sep}`) && !isAbsolute(path);
+}
+
+const CHANGED = "changed while it was read";
+
+function isRaceError(error: unknown): boolean {
+  const code = (error as NodeJS.ErrnoException | undefined)?.code;
+  return code === "ENOENT" || code === "ENOTDIR" || code === "ELOOP";
+}
+
+/**
+ * The file's bytes, read from one descriptor, never past `limit` bytes. `root` is the folder's real path and `path` is
+ * the file as `root` plus its names, so no component of it may be a link. `O_NOFOLLOW` covers only the last component, so
+ * the opened file is also tied to the path afterwards: that path must resolve to itself (no link in any parent
+ * directory, and inside `root`) and its `lstat` must be the very file that was opened. A parent directory swapped for a
+ * link while the folder is read can therefore never get an outside file read.
+ */
+export async function readRegularFile(root: string, path: string, relative: string, remaining: number, limit: number): Promise<Uint8Array | FolderProblem> {
   let handle;
   try {
     handle = await open(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0));
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ELOOP") return { code: "UNSUPPORTED_FOLDER_ENTRY", path: relative, reason: "symbolic link" };
+    if (isRaceError(error)) return { code: "UNSUPPORTED_FOLDER_ENTRY", path: relative, reason: CHANGED };
     throw error;
   }
   try {
     const info = await handle.stat();
     if (!info.isFile()) return { code: "UNSUPPORTED_FOLDER_ENTRY", path: relative, reason: "not a regular file" };
+    try {
+      const real = await realpath(path);
+      if (real !== path || !isWithinFolder(root, real)) return { code: "UNSUPPORTED_FOLDER_ENTRY", path: relative, reason: "symbolic link" };
+      const named = await lstat(path);
+      if (named.isSymbolicLink() || named.dev !== info.dev || named.ino !== info.ino) return { code: "UNSUPPORTED_FOLDER_ENTRY", path: relative, reason: CHANGED };
+    } catch (error) {
+      if (isRaceError(error)) return { code: "UNSUPPORTED_FOLDER_ENTRY", path: relative, reason: CHANGED };
+      throw error;
+    }
     if (info.size > remaining) throw limitError(`folder is larger than the ${limit} byte limit (at "${safeClipped(relative)}")`);
     // The stat is only a shortcut: a file can grow while it is read, so the bytes read are bounded too.
     const chunks: Buffer[] = [];
@@ -78,6 +107,25 @@ async function readRegularFile(path: string, relative: string, remaining: number
     return new Uint8Array(Buffer.concat(chunks, total));
   } finally {
     await handle.close();
+  }
+}
+
+/** The entries of one directory that is a real directory of the folder: not a link, and the same directory before and after it is listed. */
+async function listFolderDirectory(root: string, absolute: string, relative: string): Promise<{ entries: Dirent[] } | FolderProblem> {
+  const problem = (reason: string): FolderProblem => ({ code: "UNSUPPORTED_FOLDER_ENTRY", path: relative === "" ? "." : relative, reason });
+  try {
+    const before = await lstat(absolute);
+    if (before.isSymbolicLink()) return problem("symbolic link");
+    if (!before.isDirectory()) return problem(CHANGED);
+    const real = await realpath(absolute);
+    if (real !== absolute || (absolute !== root && !isWithinFolder(root, real))) return problem("symbolic link");
+    const entries = await readdir(absolute, { withFileTypes: true });
+    const after = await lstat(absolute);
+    if (after.dev !== before.dev || after.ino !== before.ino || after.isSymbolicLink()) return problem(CHANGED);
+    return { entries };
+  } catch (error) {
+    if (isRaceError(error)) return problem(CHANGED);
+    throw error;
   }
 }
 
@@ -100,13 +148,19 @@ function problemError(problems: readonly FolderProblem[]): CLIError {
  * unsafe names are all collected and refused together.
  */
 export async function readHtmlFolder(directory: string, limit: number): Promise<{ readonly files: ArtifactFile[]; readonly skippedHidden: number }> {
-  const root = resolve(directory);
+  // The folder's real path: every path below is built from it, so a link anywhere under it shows as a mismatch.
+  const root = await realpath(resolve(directory));
   const files: ArtifactFile[] = [];
   const problems: FolderProblem[] = [];
   let skippedHidden = 0;
   let total = 0;
   const walk = async (absolute: string, relative: string, depth: number): Promise<void> => {
-    const entries = (await readdir(absolute, { withFileTypes: true })).sort((left, right) => (left.name < right.name ? -1 : left.name > right.name ? 1 : 0));
+    const listed = await listFolderDirectory(root, absolute, relative);
+    if ("reason" in listed) {
+      problems.push(listed);
+      return;
+    }
+    const entries = listed.entries.sort((left, right) => (left.name < right.name ? -1 : left.name > right.name ? 1 : 0));
     for (const entry of entries) {
       if (entry.name.startsWith(".")) {
         skippedHidden += 1;
@@ -129,7 +183,7 @@ export async function readHtmlFolder(directory: string, limit: number): Promise<
           continue;
         }
         if (files.length >= MAX_ARTIFACT_FILES) throw limitError(`folder has more than ${MAX_ARTIFACT_FILES} files`);
-        const read = await readRegularFile(child, path, limit - total, limit);
+        const read = await readRegularFile(root, child, path, limit - total, limit);
         if (read instanceof Uint8Array) {
           total += read.byteLength;
           files.push({ path: path.normalize("NFC"), bytes: read });

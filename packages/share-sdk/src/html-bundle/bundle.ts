@@ -5,7 +5,7 @@ export const MAX_ARTIFACT_FILES = 1_000;
 export const MAX_ARTIFACT_SOURCE_BYTES = 100 * 1024 * 1024;
 export const MAX_ARTIFACT_RENDER_BYTES = 10 * 1024 * 1024;
 export const MAX_ARTIFACT_TEXT_BYTES = 5 * 1024 * 1024;
-export const MAX_ARTIFACT_REFERENCES = 10_000;
+export const MAX_ARTIFACT_REFERENCES = 2_000;
 export const MAX_ARTIFACT_CSS_IMPORT_DEPTH = 16;
 
 export type ArtifactFailureKind = "malformed" | "missing" | "unsupported" | "limit";
@@ -187,13 +187,25 @@ function toBase64(bytes: Uint8Array): string {
   return btoa(binary);
 }
 
-function asDataUrl(file: ArtifactFile): string {
-  if (file.bytes.byteLength > MAX_ARTIFACT_RENDER_BYTES) fail("limit", "artifact resource exceeds render limit");
-  return `data:${artifactMediaType(file.path, file.mediaType)};base64,${toBase64(file.bytes)}`;
+/**
+ * Every use of a resource adds to one running total, checked BEFORE the encoded copy is built, so a page that refers to one
+ * large file many times is refused at the reference that passes the render cap instead of after it has been built.
+ */
+function chargeInlinedBytes(context: TransformContext, bytes: number): void {
+  context.counter.inlinedBytes += bytes;
+  if (context.counter.inlinedBytes > MAX_ARTIFACT_RENDER_BYTES) fail("limit", "artifact inlined resources exceed the render limit");
 }
 
-function decodeText(file: ArtifactFile): string {
+function asDataUrl(file: ArtifactFile, context: TransformContext): string {
+  if (file.bytes.byteLength > MAX_ARTIFACT_RENDER_BYTES) fail("limit", "artifact resource exceeds render limit");
+  const prefix = `data:${artifactMediaType(file.path, file.mediaType)};base64,`;
+  chargeInlinedBytes(context, prefix.length + 4 * Math.ceil(file.bytes.byteLength / 3));
+  return `${prefix}${toBase64(file.bytes)}`;
+}
+
+function decodeText(file: ArtifactFile, context?: TransformContext): string {
   if (file.bytes.byteLength > MAX_ARTIFACT_TEXT_BYTES) fail("limit", "artifact text file exceeds render limit");
+  if (context !== undefined) chargeInlinedBytes(context, file.bytes.byteLength);
   try {
     return new TextDecoder("utf-8", { fatal: true }).decode(file.bytes);
   } catch {
@@ -230,13 +242,85 @@ function classifyLinkRelation(rel: string | null): "stylesheet" | "icon" | null 
 const SVG_NAMESPACE = "http://www.w3.org/2000/svg";
 
 /**
+ * The document and the content of every `<template>` in it (nested ones too). `querySelectorAll` does not enter template
+ * content, but a browser clones it into the live page and a declarative shadow root (`shadowrootmode`) attaches it while
+ * parsing, so it is examined and rewritten like the rest of the page.
+ */
+function documentRoots(doc: Document): ParentNode[] {
+  const roots: ParentNode[] = [doc];
+  for (let index = 0; index < roots.length; index += 1) {
+    for (const template of roots[index]!.querySelectorAll<HTMLTemplateElement>("template")) roots.push(template.content);
+  }
+  return roots;
+}
+
+function queryAll<T extends Element = Element>(roots: readonly ParentNode[], selector: string): T[] {
+  return roots.flatMap((root) => [...root.querySelectorAll<T>(selector)]);
+}
+
+/** Attributes whose value is a URL (or a list of them) that a browser may fetch or navigate to. */
+const URL_ATTRIBUTES = new Set([
+  "href", "src", "srcset", "imagesrcset", "poster", "action", "formaction", "cite", "data", "codebase", "longdesc", "usemap",
+  "ping", "background", "manifest", "icon", "archive", "classid", "profile", "lowsrc", "dynsrc",
+]);
+
+/** `data:` and `#fragment` are the only references the finished page may hold; an empty value fetches nothing. */
+function isInlineReference(value: string): boolean {
+  const trimmed = value.trim();
+  return trimmed === "" || trimmed.startsWith("#") || /^data:/i.test(trimmed);
+}
+
+function assertInlineSrcset(value: string): void {
+  for (const raw of value.trim().split(/\s+/)) {
+    const token = raw.replace(/,+$/, "");
+    if (token === "" || /^\d+(?:\.\d+)?[wx]$/i.test(token)) continue;
+    if (!isInlineReference(token)) throw new ArtifactBundleError("unsupported", "artifact page still references a resource", undefined, token);
+  }
+}
+
+const BLOCKED_ELEMENTS = "base, form, iframe, frame, frameset, object, embed, portal, noscript, area[href], link:not([href]), [ping]";
+
+/**
+ * The last check, on the finished page and independent of the rewriting above: parse the produced HTML again and refuse it
+ * if anything in it could still fetch or navigate to something other than a `data:` URL or a `#fragment`. This catches
+ * whatever the rewriting did not know about, so "self-contained" is verified, not assumed.
+ */
+function verifySelfContained(output: string, context: TransformContext): void {
+  const doc = context.parseHtml(output);
+  const roots = documentRoots(doc);
+  if (queryAll(roots, BLOCKED_ELEMENTS).length > 0) fail("unsupported", "artifact output contains a blocked html feature");
+  for (const meta of queryAll<HTMLMetaElement>(roots, "meta[http-equiv]")) {
+    if ((meta.getAttribute("http-equiv") ?? "").trim().toLowerCase() === "refresh") fail("unsupported", "artifact output contains a refresh");
+  }
+  if (queryAll(roots, "script[src]").length > 0) fail("unsupported", "artifact output still loads a script");
+  for (const style of queryAll(roots, "style")) assertOnlyInlineCssReferences(style.textContent ?? "");
+  for (const element of queryAll(roots, "*")) {
+    const inSvg = element.namespaceURI === SVG_NAMESPACE;
+    for (const name of element.getAttributeNames()) {
+      const lower = name.toLowerCase();
+      const local = lower.slice(lower.lastIndexOf(":") + 1);
+      const value = element.getAttribute(name) ?? "";
+      if (/^on/.test(lower)) fail("unsupported", "artifact output contains a blocked html feature");
+      if (URL_ATTRIBUTES.has(local)) {
+        if (local === "srcset" || local === "imagesrcset") assertInlineSrcset(value);
+        else if (!isInlineReference(value)) throw new ArtifactBundleError("unsupported", "artifact page still references a resource", undefined, value);
+      }
+      if (lower === "style" || inSvg) assertOnlyInlineCssReferences(value);
+    }
+  }
+}
+
+/**
  * Inline SVG elements (`<image>`, `<use>`, `<script>`, `<feImage>`, ...) reference resources through `href` or
  * `xlink:href`, which the HTML resource list above does not cover. Only same-document `#fragment` references are
  * allowed; a plain `href` on `<a>` is handled with the other anchors.
  */
-function rejectSvgResourceReferences(doc: Document): void {
-  for (const element of doc.querySelectorAll("*")) {
+function rejectSvgResourceReferences(roots: readonly ParentNode[]): void {
+  for (const element of queryAll(roots, "*")) {
     if (element.namespaceURI !== SVG_NAMESPACE) continue;
+    const animatesHref = /^(?:animate|set|animatetransform|animatemotion)$/i.test(element.localName)
+      && element.getAttributeNames().some((name) => name.toLowerCase() === "attributename" && /^(?:xlink:)?href$/i.test((element.getAttribute(name) ?? "").trim()));
+    if (animatesHref) fail("unsupported", "artifact svg animates a resource reference");
     for (const attributeName of element.getAttributeNames()) {
       if (attributeName !== "href" && !attributeName.endsWith(":href")) continue;
       if (element.localName === "a" && attributeName === "href") continue;
@@ -245,8 +329,8 @@ function rejectSvgResourceReferences(doc: Document): void {
   }
 }
 
-function rejectEventHandlerAttributes(doc: Document): void {
-  for (const element of doc.querySelectorAll("*")) {
+function rejectEventHandlerAttributes(roots: readonly ParentNode[]): void {
+  for (const element of queryAll(roots, "*")) {
     for (const attributeName of element.getAttributeNames()) {
       if (/^on/i.test(attributeName)) fail("unsupported", "artifact contains a blocked html feature");
     }
@@ -272,7 +356,7 @@ function replaceAsync(
 interface TransformContext {
   readonly files: ReadonlyMap<string, ArtifactFile>;
   readonly cssStack: readonly string[];
-  readonly counter: { references: number };
+  readonly counter: { references: number; inlinedBytes: number };
   readonly parseHtml: (html: string) => Document;
   readonly singlePage: boolean;
 }
@@ -296,8 +380,107 @@ function requiredFile(context: TransformContext, basePath: string, reference: st
   return { file, resolved };
 }
 
-async function transformCss(source: string, basePath: string, context: TransformContext): Promise<string> {
+/** The CSS names that start a reference. A backslash escape in one of them would hide it from the expressions below. */
+const CSS_REFERENCE_NAMES = new Set(["url", "image-set", "-webkit-image-set", "src", "import"]);
+
+function isCssIdentifierCode(code: number): boolean {
+  return code >= 0x80 || (code >= 0x30 && code <= 0x39) || (code >= 0x41 && code <= 0x5a) || (code >= 0x61 && code <= 0x7a) || code === 0x5f || code === 0x2d;
+}
+
+/**
+ * Decode the backslash escapes of function names and at-keywords that start a reference (`u\72l(`, `\75rl(`,
+ * `@\69mport`), so the expressions that find `url()`, `@import`, `image-set()` and `src()` see the name a CSS parser
+ * sees. Any other identifier (a selector such as `.sm\:flex`), string, comment and url token is copied unchanged, so the
+ * result means what the source meant.
+ */
+export function normalizeCssEscapes(source: string): string {
+  let output = "";
+  let index = 0;
+  const length = source.length;
+  while (index < length) {
+    const char = source[index]!;
+    if (char === "/" && source[index + 1] === "*") {
+      const end = source.indexOf("*/", index + 2);
+      const stop = end === -1 ? length : end + 2;
+      output += source.slice(index, stop);
+      index = stop;
+      continue;
+    }
+    if (char === '"' || char === "'") {
+      let cursor = index + 1;
+      while (cursor < length && source[cursor] !== char && source[cursor] !== "\n") cursor += source[cursor] === "\\" ? 2 : 1;
+      const stop = Math.min(source[cursor] === char ? cursor + 1 : cursor, length);
+      output += source.slice(index, stop);
+      index = stop;
+      continue;
+    }
+    if (char === "\\" || isCssIdentifierCode(source.charCodeAt(index))) {
+      let cursor = index;
+      let decoded = "";
+      let escaped = false;
+      while (cursor < length) {
+        if (source[cursor] === "\\") {
+          const next = source[cursor + 1];
+          if (next === undefined) {
+            decoded += "\ufffd";
+            escaped = true;
+            cursor += 1;
+            break;
+          }
+          if (next === "\n" || next === "\r" || next === "\f") break;
+          escaped = true;
+          const hex = /^[0-9a-fA-F]{1,6}/.exec(source.slice(cursor + 1, cursor + 7));
+          if (hex !== null) {
+            const point = Number.parseInt(hex[0], 16);
+            cursor += 1 + hex[0].length;
+            if (source[cursor] === "\r" && source[cursor + 1] === "\n") cursor += 2;
+            else if (/[ \t\n\r\f]/.test(source[cursor] ?? "")) cursor += 1;
+            decoded += point === 0 || point > 0x10ffff || (point >= 0xd800 && point <= 0xdfff) ? "\ufffd" : String.fromCodePoint(point);
+          } else {
+            const point = source.codePointAt(cursor + 1)!;
+            decoded += String.fromCodePoint(point);
+            cursor += 1 + (point > 0xffff ? 2 : 1);
+          }
+        } else if (isCssIdentifierCode(source.charCodeAt(cursor))) {
+          decoded += source[cursor];
+          cursor += 1;
+        } else break;
+      }
+      const raw = source.slice(index, cursor);
+      const startsReference = escaped && (source[cursor] === "(" || output.endsWith("@")) && CSS_REFERENCE_NAMES.has(decoded.toLowerCase());
+      output += startsReference ? decoded : raw;
+      index = cursor;
+      continue;
+    }
+    output += char;
+    index += 1;
+  }
+  return output;
+}
+
+/**
+ * Whatever CSS is in the finished page: no `@import`, `image-set()` or `src()`, and every `url()` is a `data:` URL or a
+ * `#fragment` (what this rewriter writes). Escapes in the names are decoded first.
+ */
+function assertOnlyInlineCssReferences(css: string): void {
+  const text = normalizeCssEscapes(css);
+  if (/@import/i.test(text)) fail("unsupported", "artifact css still imports a stylesheet");
+  if (/(?:^|[^\w-])(?:-webkit-)?image-set\s*\(/i.test(text) || /(?:^|[^\w-])src\s*\(/i.test(text)) fail("unsupported", "artifact css uses an unsupported resource function");
+  const opened = text.match(/url\(/gi)?.length ?? 0;
+  let read = 0;
+  for (const match of text.matchAll(/url\(\s*(?:"([^"]*)"|'([^']*)'|([^)"'\s]*))\s*\)/gi)) {
+    read += 1;
+    const value = (match[1] ?? match[2] ?? match[3] ?? "").trim();
+    if (!(value.startsWith("#") || /^data:/i.test(value)) || value.includes("\\")) {
+      throw new ArtifactBundleError("unsupported", "artifact css references a resource", undefined, value);
+    }
+  }
+  if (read !== opened) fail("unsupported", "artifact css has a url() that cannot be read");
+}
+
+async function transformCss(sourceText: string, basePath: string, context: TransformContext): Promise<string> {
   if (context.cssStack.length > MAX_ARTIFACT_CSS_IMPORT_DEPTH) fail("limit", "artifact stylesheet import depth exceeded");
+  const source = normalizeCssEscapes(sourceText);
   const imported = await replaceAsync(
     source,
     /@import\s+(?:url\(\s*(?:(["'])([^"']+)\1|([^"')\s]+))\s*\)|(["'])([^"']+)\4)\s*([^;]*);/gi,
@@ -306,7 +489,7 @@ async function transformCss(source: string, basePath: string, context: Transform
       if (/^(?:layer|supports)\b/i.test(media.trim()) || /\b(?:layer|supports)\b/i.test(media)) fail("unsupported", "artifact uses an unsupported stylesheet import condition");
       const { file, resolved } = requiredFile(context, basePath, reference);
       if (context.cssStack.includes(resolved.path)) fail("unsupported", "artifact stylesheet import cycle");
-      const css = await transformCss(decodeText(file), resolved.path, { ...context, cssStack: [...context.cssStack, resolved.path] });
+      const css = await transformCss(decodeText(file, context), resolved.path, { ...context, cssStack: [...context.cssStack, resolved.path] });
       return wrapMediaCss(css, media, "artifact uses an unsupported stylesheet import condition");
     },
   );
@@ -316,7 +499,7 @@ async function transformCss(source: string, basePath: string, context: Transform
     async (_whole, _quote, reference) => {
       if (reference.trim().startsWith("#")) return `url("${reference.trim()}")`;
       const { file, resolved } = requiredFile(context, basePath, reference);
-      return `url("${asDataUrl(file)}${resolved.fragment}")`;
+      return `url("${asDataUrl(file, context)}${resolved.fragment}")`;
     },
   );
 }
@@ -328,7 +511,7 @@ function serializeSrcset(value: string, basePath: string, context: TransformCont
     const reference = separator === -1 ? trimmed : trimmed.slice(0, separator);
     const descriptor = separator === -1 ? "" : trimmed.slice(separator).trim();
     const { file, resolved } = requiredFile(context, basePath, reference);
-    return `${asDataUrl(file)}${resolved.fragment}${descriptor.length === 0 ? "" : ` ${descriptor}`}`;
+    return `${asDataUrl(file, context)}${resolved.fragment}${descriptor.length === 0 ? "" : ` ${descriptor}`}`;
   }).join(", ");
 }
 
@@ -366,29 +549,32 @@ const INNER_CSP = [
 
 async function transformHtml(path: string, file: ArtifactFile, context: TransformContext): Promise<string> {
   const doc = context.parseHtml(decodeText(file));
+  const roots = documentRoots(doc);
   if (doc.querySelector("parsererror") !== null) fail("malformed", "artifact html is malformed");
-  if (doc.querySelector("base, form, iframe, frame, frameset, object, embed, portal") !== null) {
+  // `noscript` is refused outright: a parser with scripting off (jsdom's) and the viewer's frame (scripting on) read its
+  // content differently, so what is in it cannot be checked consistently.
+  if (queryAll(roots, BLOCKED_ELEMENTS).length > 0) {
     fail("unsupported", "artifact contains a blocked html feature");
   }
-  rejectEventHandlerAttributes(doc);
-  rejectSvgResourceReferences(doc);
-  const inlineStyles = [...doc.querySelectorAll<HTMLStyleElement>("style")];
-  for (const meta of doc.querySelectorAll<HTMLMetaElement>("meta[http-equiv]")) {
+  rejectEventHandlerAttributes(roots);
+  rejectSvgResourceReferences(roots);
+  const inlineStyles = queryAll<HTMLStyleElement>(roots, "style");
+  for (const meta of queryAll<HTMLMetaElement>(roots, "meta[http-equiv]")) {
     const directive = meta.httpEquiv.toLowerCase();
     if (directive === "refresh" || directive === "content-security-policy") meta.remove();
   }
-  for (const link of [...doc.querySelectorAll<HTMLLinkElement>("link[href]")]) {
+  for (const link of queryAll<HTMLLinkElement>(roots, "link[href]")) {
     const relation = classifyLinkRelation(link.getAttribute("rel"));
     if (relation === "stylesheet") {
       const { file: stylesheet, resolved } = requiredFile(context, path, link.getAttribute("href") ?? "");
       const style = doc.createElement("style");
-      style.textContent = wrapMediaCss(await transformCss(decodeText(stylesheet), resolved.path, { ...context, cssStack: [resolved.path] }), link.getAttribute("media"));
+      style.textContent = wrapMediaCss(await transformCss(decodeText(stylesheet, context), resolved.path, { ...context, cssStack: [resolved.path] }), link.getAttribute("media"));
       link.replaceWith(style);
       continue;
     }
     if (relation === "icon") {
       const { file: icon, resolved } = requiredFile(context, path, link.getAttribute("href") ?? "");
-      link.href = `${asDataUrl(icon)}${resolved.fragment}`;
+      link.href = `${asDataUrl(icon, context)}${resolved.fragment}`;
       continue;
     }
     fail("unsupported", "artifact contains an unsupported link relation");
@@ -396,11 +582,11 @@ async function transformHtml(path: string, file: ArtifactFile, context: Transfor
   for (const style of inlineStyles) {
     style.textContent = wrapMediaCss(await transformCss(style.textContent ?? "", path, { ...context, cssStack: [] }), style.getAttribute("media"));
   }
-  for (const element of doc.querySelectorAll<HTMLElement>("[style]")) {
+  for (const element of queryAll<HTMLElement>(roots, "[style]")) {
     const value = element.getAttribute("style");
     if (value !== null) element.setAttribute("style", await transformCss(value, path, { ...context, cssStack: [] }));
   }
-  for (const script of doc.querySelectorAll<HTMLScriptElement>("script")) {
+  for (const script of queryAll<HTMLScriptElement>(roots, "script")) {
     // `getAttribute`, not `script.type`: an SVG `<script>` has no `type` property in every DOM (jsdom has no SVGScriptElement).
     if ((script.getAttribute("type") ?? "").trim().toLowerCase() === "module" || script.hasAttribute("async") || script.hasAttribute("defer")) {
       fail("unsupported", "artifact uses an unsupported script mode");
@@ -409,7 +595,7 @@ async function transformHtml(path: string, file: ArtifactFile, context: Transfor
     const reference = script.getAttribute("src");
     if (reference !== null) {
       const { file: scriptFile } = requiredFile(context, path, reference);
-      source = decodeText(scriptFile);
+      source = decodeText(scriptFile, context);
       script.removeAttribute("src");
     }
     assertClassicScript(source);
@@ -420,18 +606,18 @@ async function transformHtml(path: string, file: ArtifactFile, context: Transfor
     ["audio[src]", "src"], ["track[src]", "src"], ["input[type=image][src]", "src"],
   ];
   for (const [selector, attribute] of resourceAttributes) {
-    for (const element of doc.querySelectorAll<HTMLElement>(selector)) {
+    for (const element of queryAll<HTMLElement>(roots, selector)) {
       const reference = element.getAttribute(attribute);
       if (reference === null) continue;
       const { file: resource, resolved } = requiredFile(context, path, reference);
-      element.setAttribute(attribute, `${asDataUrl(resource)}${resolved.fragment}`);
+      element.setAttribute(attribute, `${asDataUrl(resource, context)}${resolved.fragment}`);
     }
   }
-  for (const element of doc.querySelectorAll<HTMLElement>("[srcset]")) {
+  for (const element of queryAll<HTMLElement>(roots, "[srcset]")) {
     const value = element.getAttribute("srcset");
     if (value !== null) element.setAttribute("srcset", serializeSrcset(value, path, context));
   }
-  for (const anchor of doc.querySelectorAll<HTMLAnchorElement>("a[href]")) {
+  for (const anchor of queryAll<HTMLAnchorElement>(roots, "a[href]")) {
     anchor.removeAttribute("target");
     anchor.removeAttribute("download");
     const reference = anchor.getAttribute("href") ?? "";
@@ -451,7 +637,9 @@ async function transformHtml(path: string, file: ArtifactFile, context: Transfor
   bootstrap.textContent = CHILD_BOOTSTRAP;
   head.prepend(bootstrap);
   head.prepend(csp);
-  return `<!DOCTYPE html>\n${doc.documentElement.outerHTML}`;
+  const output = `<!DOCTYPE html>\n${doc.documentElement.outerHTML}`;
+  verifySelfContained(output, context);
+  return output;
 }
 
 export async function prepareHtmlArtifact(input: readonly ArtifactFile[], options: PrepareHtmlArtifactOptions = {}): Promise<PreparedArtifact> {
@@ -484,7 +672,7 @@ export async function prepareHtmlArtifact(input: readonly ArtifactFile[], option
   const context: TransformContext = {
     files,
     cssStack: [],
-    counter: { references: 0 },
+    counter: { references: 0, inlinedBytes: 0 },
     parseHtml: options.parseHtml ?? defaultParseHtml,
     singlePage: options.singlePage === true,
   };

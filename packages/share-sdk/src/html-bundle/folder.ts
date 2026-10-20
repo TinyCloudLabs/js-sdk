@@ -26,7 +26,7 @@ export function isPassiveArtifactPath(canonicalPath: string): boolean {
 
 export interface InlinedHtmlFolder {
   readonly entry: typeof ARTIFACT_ENTRY;
-  /** The one self-contained document (UTF-8). It references nothing outside itself. */
+  /** The one self-contained document (UTF-8). Self-contained: it fetches nothing and links nowhere at render time (see `docs/share-html-bundle.md`). */
   readonly html: Uint8Array;
   /** `manifest.json` and `knowledge/**`, byte for byte, in path order. See `isPassiveArtifactPath`. */
   readonly passive: readonly ArtifactFile[];

@@ -141,6 +141,9 @@ describe("tc share publish ./site/", () => {
       ["<object>", '<object data="x.swf"></object>', "UNSUPPORTED_HTML", 2, ["blocked html feature"]],
       ["inline svg with an external image", '<svg><image href="https://evil.example/p.png"/></svg>', "UNSUPPORTED_HTML", 2, ["svg references a resource"]],
       ["inline svg with a script", '<svg><script>fetch("/x")</script></svg>', "UNSUPPORTED_HTML", 2, ["blocked browser capability"]],
+      ["<noscript>", "<noscript>Enable JavaScript</noscript>", "UNSUPPORTED_HTML", 2, ["blocked html feature"]],
+      ["<area href>", '<map name="m"><area href="https://evil.example/" shape="rect" coords="0,0,1,1"></map>', "UNSUPPORTED_HTML", 2, ["blocked html feature"]],
+      ["an escaped url()", '<p style="background:u\\72l(https://evil.example/p.png)">x</p>', "UNSUPPORTED_HTML", 2, ["https://evil.example/p.png"]],
       ["a link to another page", '<a href="about.html">About</a>', "UNSUPPORTED_HTML", 2, ["links to another page", "about.html"]],
       ["a traversal reference", '<img src="../secret.png">', "UNSAFE_PATH", 8, ["../secret.png"]],
       ["a missing file", '<img src="img/nope.png">', "HTML_RESOURCE_MISSING", 2, ["img/nope.png", "not in the folder"]],
@@ -183,6 +186,17 @@ describe("tc share publish ./site/", () => {
       expect(errorOf(small.stderr).code).toBe("MAX_BYTES_EXCEEDED");
       // The message names the limit asked for, not what was left of it when the file was reached.
       expect(errorOf(small.stderr).message).toContain("larger than the 1024 byte limit");
+      expect(published).toHaveLength(0);
+    });
+
+    test("one large file referenced many times is refused at the cap, fast", async () => {
+      await basicSite(`<!doctype html>${"<img src='img/big.png'>".repeat(120)}`);
+      await put("img/big.png", new Uint8Array(6 * 1024 * 1024));
+      const started = performance.now();
+      const result = await run([site]);
+      expect(errorOf(result.stderr).code).toBe("MAX_BYTES_EXCEEDED");
+      expect(result.exitCode).toBe(7);
+      expect(performance.now() - started).toBeLessThan(5_000);
       expect(published).toHaveLength(0);
     });
 
