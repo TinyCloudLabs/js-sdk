@@ -115,15 +115,23 @@ wakes immediately and exits. Run one watcher per profile.
 Wake claims keep a second watcher from waking what the first is waking. Before
 an adapter runs, the watcher takes a create-only claim
 (`me/state/wake-claims/<peer>/<thread>/<first message>.json`) naming itself:
-a profile id kept in `<COURIER_HOME>/watcher-id`, a run id and its pid.
+a profile id kept in `<COURIER_HOME>/watcher-id` (created once, machine-local:
+never copy or sync a `COURIER_HOME` between machines, or two watchers would
+share an id), a run id and its pid.
 
-- A restarted watcher (same profile id, the old pid gone: crash, reboot,
-  service restart, a `--once` re-run) takes over the old claim **at once**. A
-  failed adapter run deletes its own claim, so a retry does not wait either.
-- A claim whose holder is still alive (a second watcher on the same profile),
-  or that another profile or machine made less than 35 minutes ago (adapter runs
-  are capped at 30 minutes by `--wake-timeout`), makes the watcher **skip that
-  thread** for 30 s and log `claimed-elsewhere`; it never wakes it.
+- A restarted watcher (same profile id; the old pid gone or equal to this one:
+  crash, reboot, service restart, `--once` re-run, pid 1 in a container) takes
+  over the old claim **at once**. A failed adapter run deletes its own claim, so
+  a retry does not wait either.
+- A claim whose holder pid is alive and different (a second watcher on the same
+  profile, or a reused pid) makes the watcher **skip that thread** for 30 s and
+  log `claimed-elsewhere`; it never wakes it. After 35 minutes the claim is
+  taken over anyway. A claim another profile or machine made is respected 45
+  minutes (35 plus 10 for clock skew; `at` is the claimer's own clock).
+- Adapter runs have one deadline in total (`--wake-timeout`, at most 30
+  minutes) across all the processes a wake starts (`paseo ls` then `send`,
+  claude's retry without `--resume`), so a wake always ends before its claim
+  can be taken over.
 - The state file (`me/state/watch.json`) is written with if-match. A second
   watcher that writes it with a stale etag stops with `state-conflict` (exit 1)
   and releases any claim it had taken.

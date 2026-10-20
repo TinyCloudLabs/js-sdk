@@ -83,18 +83,36 @@ export function wakeConfig(args: ParsedArgs, owner: string | undefined): WakeCon
 }
 
 /**
- * Stable per profile and machine (`<COURIER_HOME>/watcher-id`): a restarted watcher is recognised as the same
- * watcher by its wake claims; another profile or machine gets a different id.
+ * Stable per profile and machine (`<COURIER_HOME>/watcher-id`, created once, create-only): a restarted watcher is
+ * recognised as the same watcher by its wake claims; another profile or machine gets a different id, so never copy or
+ * sync a COURIER_HOME between machines.
  */
 export function watcherProfileId(): string {
   const file = path.join(profileDir(), 'watcher-id');
-  try {
-    const existing = JSON.parse(fs.readFileSync(file, 'utf8')) as { id?: unknown };
-    if (typeof existing.id === 'string' && /^[0-9a-f]{32}$/.test(existing.id)) return existing.id;
-  } catch { /* first run, or unreadable: make a new one */ }
+  const read = (): string | undefined => {
+    try {
+      const existing = JSON.parse(fs.readFileSync(file, 'utf8')) as { id?: unknown };
+      return typeof existing.id === 'string' && /^[0-9a-f]{32}$/.test(existing.id) ? existing.id : undefined;
+    } catch {
+      return undefined;
+    }
+  };
+  const existing = read();
+  if (existing) return existing;
   const id = randomBytes(16).toString('hex');
-  writeSecure(file, { v: 1, id });
-  return id;
+  try {
+    // Create-only: of two watchers starting for the first time, one id wins and both use it.
+    fs.writeFileSync(file, `${JSON.stringify({ v: 1, id })}\n`, { mode: 0o600, flag: 'wx' });
+    return id;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+    for (let i = 0; i < 20; i++) {
+      const winner = read();
+      if (winner) return winner;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 25); // the other writer may not have finished writing yet
+    }
+    throw new CourierError('bad-profile', `${file} exists but is not a valid watcher id; delete it and start the watcher again.`);
+  }
 }
 
 /** Claude session ids per thread, local to this machine (a session id means nothing on another one). */

@@ -140,12 +140,21 @@ function failure(what: string, result: RunResult): Error {
   return new Error(`${what} exited ${result.code}: ${tail(result.stderr || result.stdout)}`);
 }
 
+/**
+ * One overall deadline for a wake: every process the adapter starts (ls, then send or run; claude's retry without
+ * `--resume`) gets only what is left of `totalMs`, so the whole wake stays under the claim lease.
+ */
+export function deadlineRunner(run: Runner, totalMs: number, now: () => number = Date.now): Runner {
+  const deadline = now() + totalMs;
+  return (bin, args, options) => run(bin, args, { ...options, timeoutMs: Math.max(1000, Math.min(options.timeoutMs, deadline - now())) });
+}
+
 export function createWaker(config: WakeConfig, deps: { run: Runner; sessions: SessionStore; env?: NodeJS.ProcessEnv }): Waker {
   const env = deps.env ?? process.env;
-  const { run } = deps;
   const prompt = (request: WakeRequest) => wakePrompt(request, config.owner);
 
   const exec: Waker = async (request) => {
+    const run = deadlineRunner(deps.run, config.timeoutMs);
     const result = await run('/bin/sh', ['-c', config.exec!], {
       cwd: config.cwd,
       timeoutMs: config.timeoutMs,
@@ -164,6 +173,7 @@ export function createWaker(config: WakeConfig, deps: { run: Runner; sessions: S
   };
 
   const claude: Waker = async (request) => {
+    const run = deadlineRunner(deps.run, config.timeoutMs);
     const key = `${request.peer}/${request.threadId}`;
     const attempt = async (session: string | undefined) => {
       const args = ['-p', '--output-format', 'json'];
@@ -191,6 +201,7 @@ export function createWaker(config: WakeConfig, deps: { run: Runner; sessions: S
   };
 
   const paseo: Waker = async (request) => {
+    const run = deadlineRunner(deps.run, config.timeoutMs);
     const { bin, provider, mode } = config.paseo;
     const base = { cwd: config.cwd, timeoutMs: config.timeoutMs };
     const listed = await run(bin, ['ls', '-g', '--json', '--label', `courier-thread=${request.threadId}`], base);

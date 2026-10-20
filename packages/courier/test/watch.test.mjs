@@ -364,21 +364,40 @@ test('a second watcher that starts while the first one\'s wake is in flight skip
   assert.equal(a.watcher.fatalError, undefined, 'B did not write state, so A\'s own state write is not made to fail');
 });
 
-test('same process, two watcher instances: the second still skips a thread the first is waking', async () => {
+test('pid reuse: a live, different pid holding an own-profile claim is respected for the own lease, then taken over', async () => {
   const w = claimWorld();
-  const gate = defer();
-  const a = w.mk({ pid: 100, wake: () => gate.promise });
+  const a = w.mk({ pid: 100, wake: () => new Promise(() => {}) }); // never returns: the process is "gone" but its pid now belongs to something else
   w.send();
   await a.watcher.sync(peer, 'poll');
   w.clock.t += 30_000;
-  const running = a.watcher.tick();
+  void a.watcher.tick();
   await new Promise((resolve) => setTimeout(resolve, 20));
-  const b = w.mk({ pid: 100 });
+  // pid 100 stays "alive" in the process table: an unrelated process reused the number.
+  const b = w.mk({ pid: 200 });
   await b.watcher.loadState();
+  w.clock.t += 30 * 60_000;
   await b.watcher.tick(true);
-  assert.equal(b.wakes.length, 0);
-  gate.resolve();
-  await running;
+  assert.equal(b.wakes.length, 0, 'within the own lease the live pid keeps the thread');
+  assert.ok(b.events.some((e) => e.event === 'claimed-elsewhere'));
+  w.clock.t += 6 * 60_000;
+  await b.watcher.tick(true);
+  assert.equal(b.wakes.length, 1, 'after 35 minutes the claim is taken over');
+  assert.ok(b.events.some((e) => e.event === 'claim-taken-over' && e.reason === 'own-lease-expired'));
+});
+
+test('same pid number after a restart (pid 1 in a container) takes the claim over at once', async () => {
+  const w = claimWorld();
+  const a = w.mk({ pid: 1, wake: () => new Promise(() => {}) });
+  w.send();
+  await a.watcher.sync(peer, 'poll');
+  w.clock.t += 30_000;
+  void a.watcher.tick();
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  const restarted = w.mk({ pid: 1 }); // the container restarted: the new watcher is pid 1 again
+  await restarted.watcher.loadState();
+  await restarted.watcher.tick(true);
+  assert.equal(restarted.wakes.length, 1);
+  assert.ok(restarted.events.some((e) => e.event === 'claim-taken-over' && e.reason === 'same-pid'));
 });
 
 test('restart after a failed wake wakes immediately: the failed attempt released its claim', async () => {
@@ -432,9 +451,9 @@ test('a claim from another profile or machine is respected for the lease, then t
 
   const b = w.mk({ pid: 200 });
   await b.watcher.loadState();
-  w.clock.t += 30 * 60_000;
+  w.clock.t += 40 * 60_000;
   await b.watcher.tick(true);
-  assert.equal(b.wakes.length, 0, 'within the 35 minute lease');
+  assert.equal(b.wakes.length, 0, 'still inside the 45 minute lease (35 plus a clock-skew margin)');
   w.clock.t += 6 * 60_000;
   await b.watcher.tick(true);
   assert.equal(b.wakes.length, 1, 'after the lease');
