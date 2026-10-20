@@ -241,7 +241,7 @@ describe("tc share publish: component files and link output", () => {
         const result = await refusal(["share", "publish", file, "--to", to, "--action", ...actions, "--json"]);
         expect(result.exitCode).toBe(2);
         expect(result.stderr).toContain("INVALID_ARGUMENT");
-        expect(result.stderr).toContain("--action edit is not available with --to anyone");
+        expect(result.stderr).toContain(`--action edit is not available with --to ${to}:`);
         expect(result.stdout).toBe("");
       }
     }

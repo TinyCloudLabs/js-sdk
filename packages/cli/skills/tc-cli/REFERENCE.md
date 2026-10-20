@@ -414,13 +414,13 @@ Share publication without `--expires` requests a seven-day lifetime. For a sessi
 
 ### Artifacts
 
-An artifact is a file an agent publishes for a person to open in the Share viewer. Publish it as a bearer link, the default: HTML and JSX render for link recipients only; an addressed (`--to email:` / `did:` / `domain:`) HTML or JSX file is offered as a download. One file per artifact; folders and multi-file bundles are not supported.
+An artifact is a file an agent publishes for a person to open in the Share viewer. Publish it as a bearer link, the default: HTML renders for link recipients only and an addressed (`--to email:` / `did:` / `domain:`) HTML file is offered as a download; JSX follows the same rule once the JSX renderer ships, and until then it is shown as source text with a Download action. One file per artifact; folders and multi-file bundles are not supported.
 
 | Kind | File | What the viewer does |
 |------|------|----------------------|
 | Markdown | `report.md` | Renders GFM (tables, task lists, fenced code), sanitized; data: images only |
 | HTML | `page.html`, one self-contained file | Runs it in an isolated sandbox with no network: inline all CSS, scripts and images (`data:` URIs); links to other URLs and external scripts, fonts and stylesheets do not load |
-| JSX | `App.jsx` / `App.tsx` with a default-export component | Compiles and renders it in the same kind of sandbox once the viewer release that adds JSX rendering is live; until then recipients get a download |
+| JSX | `App.jsx` / `App.tsx` with a default-export component | Compiles and renders it in the same kind of sandbox once the viewer release that adds JSX rendering is live; until then the file is shown as source text with a Download action |
 
 JSX: `export default function App() { ... }`, no `ReactDOM.render`, no CSS file. Imports resolve only from this library set: `react` (19), `react-dom/client`, `lucide-react`, `recharts`, `d3`, `mermaid` (11), plus Tailwind utility classes. Any other import fails with an error panel listing the set; bundle other code into the file or publish a self-contained HTML page. Fetching data is not possible (no network): embed the data in the file.
 
