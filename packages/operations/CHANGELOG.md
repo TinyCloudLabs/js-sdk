@@ -1,5 +1,11 @@
 # @tinycloud/operations
 
+## 0.7.0-beta.32
+
+### Patch Changes
+
+- @tinycloud/node-sdk@3.3.0-beta.35
+
 ## 0.7.0-beta.31
 
 ### Minor Changes
