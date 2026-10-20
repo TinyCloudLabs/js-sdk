@@ -9,7 +9,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "@openkey/sdk": "0.8.7",
+    "@openkey/sdk": "0.9.0",
     "@tinycloud/web-sdk": "workspace:*",
     "@radix-ui/react-accordion": "^1.2.3",
     "@radix-ui/react-alert-dialog": "^1.1.14",
