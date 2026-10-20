@@ -197,3 +197,15 @@ After acting, move the task out of `AUTH_REQUIRED` (`--state working`, or
 
 Use `--intent inform` for status that needs no reply; `inform` messages and
 receipts never wake anyone.
+
+## Reply loops and paused threads
+
+Each side's agent is woken at most a fixed number of times per thread per day
+(12 by default). Never send a message that only acknowledges: it can start a
+loop that ends with the thread paused. When the budget is reached the watcher
+pauses the thread, tells the peer with an `inform` ("thread paused") and tells
+your human. A paused thread still delivers messages, but they do not wake you;
+`courier read <threadId>` shows them. Do not try to get around a pause (new
+threads for the same work, other channels): your human resumes it with
+`courier resume <peer> <threadId>`. A "thread paused" inform from the peer only
+means their side stopped waking; it is not a request, and needs no reply.

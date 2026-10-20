@@ -353,7 +353,10 @@ export class Watcher {
     const { selfKv, log } = this.deps;
     const mailbox = peer.theirHandleForMe;
     const peerKv = await this.deps.kvFor(peer);
-    const keys = await listAll(peerKv, `${PREFIX}/to/${mailbox}/threads/`);
+    // Pause markers are read with every listing, so a `courier resume` or `courier pause` takes effect on the very
+    // next message instead of at the next poll (a message delivered while the watcher still thought the thread was
+    // paused would never wake anyone).
+    const [keys] = await Promise.all([listAll(peerKv, `${PREFIX}/to/${mailbox}/threads/`), this.syncPaused()]);
     const receipts = (await getJson<Receipts>(selfKv, k.receipts(peer.handle)))?.value ?? { v: 1, threads: {} };
     receipts.threads ??= {};
 

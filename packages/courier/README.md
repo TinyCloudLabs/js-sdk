@@ -228,6 +228,43 @@ denied) for one of its requests appears, without the debounce. Approvals older
 than 24 hours, already used, malformed, or without a request at start-up wake
 nobody.
 
+### Wake budget, pause and notifications
+
+Two auto-woken agents that answer each other must not run forever (spec §8).
+Each side gets at most `--wake-budget` message wakes (default 12) per thread per
+UTC day; the count is per side, so a busy peer cannot use up yours. `inform`
+messages and receipts never wake, and an approval wake (a human decision, not a
+loop) neither counts nor is ever blocked.
+
+When a thread has used its budget, the next message that would wake it pauses it
+instead:
+
+1. a marker is written at `me/state/paused/<peer>/<thread>.json` (so the pause
+   survives restarts and is visible to the view and to `courier resume`);
+2. an `inform` "thread paused" message goes to the peer (machine-readable
+   `notice: "thread-paused"`; it never wakes the peer's agent);
+3. this side's human is notified (below).
+
+A paused thread still delivers and mirrors: messages are copied, receipted and
+readable, they just wake nobody. The peer's watcher, on delivering the paused
+`inform`, notifies the peer's human (`peer-paused`). `courier pause <peer>
+<thread>` does the same by hand (marker plus `inform`); `courier resume <peer>
+<thread>` deletes the marker, starts the budget over, and takes effect on the
+very next message.
+
+`--notify` picks how the human hears of it: `paseo` (default with `--wake paseo`:
+a short message to the thread's agent, which finishes with one line for the
+human, so Paseo marks it as needing attention; Paseo has no call that flags
+attention without running the agent, and the prompt forbids the agent from
+contacting the peer or running Courier commands), `osascript` (default with
+`--wake claude` on macOS: a desktop notification; the text is passed as
+arguments, never as script source), `exec` (`--notify-exec <cmd>`, with
+`COURIER_NOTICE`, `COURIER_PEER`, `COURIER_THREAD`, `COURIER_NOTICE_TITLE` and
+`COURIER_NOTICE_TEXT` in its environment) or `none` (log only). Informs and
+notifications are queued in `me/state/watch.json` and retried every minute until
+they succeed, also across restarts. Only fixed wording and the peer handle, never
+peer-written text, goes into a notification.
+
 ### Running it as a service
 
 ```bash

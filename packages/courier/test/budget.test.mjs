@@ -143,12 +143,11 @@ test('a human pause (marker) stops wakes but messages are still delivered and mi
   assert.equal(a.informs.length, 0, 'a human pause posts its own inform (courier pause), not the watcher');
 
   mine.rows.delete(k.paused('bob', thread)); // courier resume
-  await a.watcher.pollOnce('poll');
-  assert.equal(a.watcher.snapshot().wakes['bob/' + thread], undefined, 'the budget starts over');
   say(theirs, 'alice', thread, 'request');
-  await a.watcher.pollOnce('poll');
+  await a.watcher.sync(a.peer, 'hook'); // the next message after the resume, before any poll
   await a.watcher.tick();
-  assert.equal(a.wakes.length, 2);
+  assert.equal(a.watcher.snapshot().wakes['bob/' + thread]?.length, 1, 'the budget started over: only the new wake counts');
+  assert.equal(a.wakes.length, 2, 'and it woke: a resume does not wait for the next poll');
 });
 
 test('the peer\'s paused inform notifies this side\'s human and never wakes', async () => {
