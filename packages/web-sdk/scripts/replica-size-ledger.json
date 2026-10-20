@@ -143,6 +143,13 @@
       "index.mjs": 0,
       "index.cjs": 0,
       "note": "Replica gzip growth measured against this PR's merge base"
+    },
+    {
+      "pr": "#632",
+      "ticket": "TC-1621",
+      "index.mjs": 0,
+      "index.cjs": 0,
+      "note": "Replica gzip growth measured against this PR's merge base"
     }
   ],
   "phase2Ratchet": {
