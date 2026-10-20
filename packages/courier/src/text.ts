@@ -12,8 +12,13 @@ const FORBIDDEN = /[\p{Cc}\p{Cf}\p{Co}\p{Cn}\p{Cs}\p{Zl}\p{Zp}]/u;
  * format controls U+1BCA0 to U+1BCA3. The view refuses exactly this set.
  */
 const INVISIBLE_LOOKALIKES = /[\u2800\uFFFC\u115F\u1160\u3164\uFFA0\u{1D159}\u{16FE4}\u{1BCA0}-\u{1BCA3}]/u;
-/** Double-quote look-alikes: the view wraps `summary` in quotes, so the text must not be able to close them. */
-const DOUBLE_QUOTES = /["\u201C-\u201F\u00AB\u00BB\u2039\u203A\uFF02\u275D\u275E\u301D-\u301F]/u;
+/**
+ * Quotes and their look-alikes: the view wraps `summary` in quotes, so the text must not be able to close them. Every
+ * \p{Quotation_Mark} character is refused (ASCII, curly, guillemets, CJK corner and double-prime marks, ornaments)
+ * plus double primes, gershayim, the ditto mark and the dingbat/ornament quotes Unicode does not list as such. The
+ * apostrophe U+0027 and the right single quote U+2019 stay allowed ("Sam's PR").
+ */
+const DOUBLE_QUOTES = /(?!['\u2019])[\p{Quotation_Mark}"\uFF02\u275D\u275E\u2760\u2E42\u{1F676}-\u{1F678}\u2033\u2036\u02BA\u05F4\u3003]/u;
 /** Variation selectors, U+034F, U+115F/1160, U+17B4/17B5, U+180B-180F, U+3164, U+FFA0, tag characters, soft hyphen, ... */
 const IGNORABLE = /\p{Default_Ignorable_Code_Point}/u;
 /** Any space other than U+0020 (no-break, em, ideographic, ...): look-alikes for a plain space. */
@@ -64,7 +69,7 @@ export function plainTextProblem(value: unknown, max: number): string | undefine
 export function summaryProblem(value: unknown): string | undefined {
   const line = plainLineProblem(value, MAX_SUMMARY);
   if (line) return line;
-  return DOUBLE_QUOTES.test(value as string) ? 'it contains a double quote or a look-alike (" “ ” „ ‟ « » ‹ › ＂ …)' : undefined;
+  return DOUBLE_QUOTES.test(value as string) ? 'it contains a quotation mark or a look-alike (" “ ” „ « » ‹ › ＂ ″ …); apostrophes are fine' : undefined;
 }
 
 /** `target`: printable ASCII (no look-alike letters), trimmed, one line. */

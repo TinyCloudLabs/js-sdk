@@ -42,12 +42,15 @@ export function requestFields(input: { verb?: string; target?: string; summary?:
   return { verb: verb as Verb, target: canonical, summary };
 }
 
-const ID = /^[0-9A-Za-z_-]{1,64}$/;
+/** A ULID: 26 Crockford base32 characters (no I, L, O, U), upper case. Thread, task and request ids all are. */
+export const ULID = /^[0-9A-HJKMNP-TV-Z]{26}$/;
+/** A peer handle as pairing stores it. */
+export const HANDLE = /^[A-Za-z0-9_-]{1,64}$/;
 
-/** `threadId` and `taskId` are written into the request (and so shown and hashed): ULID-like ids only. */
+/** `threadId` and `taskId` are written into the request (and so shown and hashed): ULIDs only, the one form the view shows. */
 export function requestIds(ids: { threadId: string; taskId: string }): void {
   for (const [name, value] of Object.entries(ids)) {
-    if (!ID.test(value)) throw new CourierError('usage', `${name === 'taskId' ? '--task' : 'the thread id'} must be 1 to 64 letters, digits, "_" or "-" (got ${JSON.stringify(value.slice(0, 40))}).`);
+    if (!ULID.test(value)) throw new CourierError('usage', `${name === 'taskId' ? '--task' : 'the thread id'} must be a ULID (26 characters, digits and capital letters except I L O U; got ${JSON.stringify(value.slice(0, 40))}).`);
   }
 }
 
@@ -78,6 +81,8 @@ export function requestShapeProblem(request: Record<string, unknown>): string | 
   if (byKeys.length !== 2 || !byKeys.includes('owner') || !byKeys.includes('agent')) return '"requestedBy" must have exactly owner and agent';
   if (typeof (by as Record<string, unknown>).owner !== 'string' || typeof (by as Record<string, unknown>).agent !== 'string') return '"requestedBy" values are not strings';
   if (request.status !== 'pending') return '"status" must be "pending"';
+  for (const key of ['id', 'threadId', 'taskId'] as const) if (!ULID.test(request[key] as string)) return `"${key}" is not a ULID`;
+  if (!HANDLE.test(request.peer as string)) return '"peer" is not a peer handle';
   return undefined;
 }
 

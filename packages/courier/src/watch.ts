@@ -157,6 +157,8 @@ export class Watcher {
   private lastClaimPrune = 0;
   /** Set when another watcher is writing this profile's state: this one stops and `run` throws it. */
   private fatalError: CourierError | undefined;
+  /** Set once `run` is told to stop: nothing new is woken after that. */
+  private stopping = false;
   private onFatal: (() => void) | undefined;
   /** Etag of me/state/watch.json as this watcher last saw it: null = absent, undefined = unknown (fetch before writing). */
   private stateEtag: string | null | undefined;
@@ -521,7 +523,7 @@ export class Watcher {
 
   /** Wake every thread whose debounce has elapsed (`force`: all of them now). Threads wake in parallel, one wake per thread at a time. */
   async tick(force = false): Promise<void> {
-    if (this.fatalError) return;
+    if (this.fatalError || this.stopping) return;
     const at = this.now();
     const runs: Promise<void>[] = [];
     for (const [key, pending] of Object.entries(this.state.pending)) {
@@ -535,6 +537,7 @@ export class Watcher {
   }
 
   private async wakeThread(key: string, pending: PendingWake, at: number): Promise<void> {
+    if (this.stopping) return; // told to stop: claim nothing, start nothing
     // Messages that land while the wake runs stay pending for the next one, so wake exactly this snapshot.
     const messages = [...pending.messages];
     const approvals = [...(pending.approvals ?? [])];
@@ -554,6 +557,11 @@ export class Watcher {
     } catch (error) {
       await this.releaseClaim(pending.peer, pending.threadId, claimId);
       throw error;
+    }
+    if (this.stopping) {
+      // Told to stop while claiming: start no agent now; the claim is released and the wake stays pending.
+      await this.releaseClaim(pending.peer, pending.threadId, claimId);
+      return;
     }
     const startedAt = this.now();
     // `waking` is when the adapter is invoked: the send-to-wake latency. `woke` follows when the adapter returns.
@@ -604,6 +612,7 @@ export class Watcher {
     const stop = new AbortController();
     const signal = stop.signal;
     const onExternalAbort = () => stop.abort();
+    signal.addEventListener('abort', () => { this.stopping = true; }, { once: true });
     external.addEventListener('abort', onExternalAbort, { once: true });
     if (external.aborted) stop.abort();
     this.onFatal = () => stop.abort();

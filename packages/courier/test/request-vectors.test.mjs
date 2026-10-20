@@ -44,7 +44,7 @@ test('requestText refuses hidden text in action, why and risk; allows a newline,
 
 const NOW = Date.parse('2026-10-20T12:00:00Z');
 const base = {
-  id: 'R1', peer: 'hunter', threadId: 'T1', taskId: 'K1', verb: 'merge', target: 'tinycloudlabs/docs#42', summary: 'Merge docs PR 42',
+  id: '01M5CBKA6RNA3RZ2819T9M7NDZ', peer: 'hunter', threadId: '01M5C9EDF03QMRZS2DJXGN5A4C', taskId: '01M5CBKA6RNA3RZ2819T9M7NK1', verb: 'merge', target: 'tinycloudlabs/docs#42', summary: 'Merge docs PR 42',
   action: 'Merge docs PR 42', reason: 'docs only', risk: 'low',
   requestedBy: { owner: 'did:pkh:o', agent: 'did:key:a' },
   createdAt: '2026-10-20T10:00:00Z', expiresAt: '2026-10-21T10:00:00Z', status: 'pending',
@@ -52,9 +52,9 @@ const base = {
 const approve = (req) => {
   let hash = 'x';
   try { hash = requestHash(req); } catch { /* unhashable: the approval carries a made-up hash */ }
-  return { requestId: 'R1', requestHash: hash, decision: 'approved', note: '', decidedAt: '2026-10-20T11:00:00Z' };
+  return { requestId: '01M5CBKA6RNA3RZ2819T9M7NDZ', requestHash: hash, decision: 'approved', note: '', decidedAt: '2026-10-20T11:00:00Z' };
 };
-const code = (req) => { try { verifyApproval('R1', req, approve(req), { now: NOW }); } catch (e) { return `${e.code}: ${e.message.slice(0, 70)}`; } return 'ok'; };
+const code = (req) => { try { verifyApproval('01M5CBKA6RNA3RZ2819T9M7NDZ', req, approve(req), { now: NOW }); } catch (e) { return `${e.code}: ${e.message.slice(0, 70)}`; } return 'ok'; };
 
 test('courier approval refuses a request that hides text anywhere, even in a free-text field it does not match on', () => {
   assert.equal(code(base), 'ok');
@@ -78,7 +78,7 @@ test('courier approval requires the stored target to be the canonical, ASCII spe
 
 test('the target must match exactly and the verb must match the kind of command', () => {
   const req = base;
-  const run = (opts) => { try { verifyApproval('R1', req, approve(req), { now: NOW, ...opts }); return 'ok'; } catch (e) { return e.code; } };
+  const run = (opts) => { try { verifyApproval('01M5CBKA6RNA3RZ2819T9M7NDZ', req, approve(req), { now: NOW, ...opts }); return 'ok'; } catch (e) { return e.code; } };
   assert.equal(run({ verb: 'merge', target: 'tinycloudlabs/docs#42' }), 'ok');
   assert.equal(run({ verb: 'merge', target: 'tinycloudlabs/docs#4' }), 'approval-mismatch', 'prefix of the number is not a match');
   assert.equal(run({ verb: 'merge', target: 'tinycloudlabs/docs#42 ' }), 'approval-mismatch');
@@ -90,7 +90,7 @@ test('the approval note and decidedAt are swept like the request, since they are
   const NOW = Date.parse('2026-10-20T12:00:00Z');
   const req = { ...base };
   const hash = requestHash(req);
-  const run = (over) => { try { verifyApproval('R1', req, { requestId: 'R1', requestHash: hash, decision: 'approved', note: '', decidedAt: '2026-10-20T11:00:00Z', ...over }, { now: NOW }); return 'ok'; } catch (e) { return e.code; } };
+  const run = (over) => { try { verifyApproval('01M5CBKA6RNA3RZ2819T9M7NDZ', req, { requestId: '01M5CBKA6RNA3RZ2819T9M7NDZ', requestHash: hash, decision: 'approved', note: '', decidedAt: '2026-10-20T11:00:00Z', ...over }, { now: NOW }); return 'ok'; } catch (e) { return e.code; } };
   assert.equal(run({}), 'ok');
   assert.equal(run({ note: 'fine, go ahead' }), 'ok');
   assert.equal(run({ note: 'ok\u{E0041}' }), 'approval-mismatch', 'tag characters in the note');
@@ -107,7 +107,7 @@ test('courier approval --action is an explicit error that points at --verb and -
   let message = '';
   console.error = (m) => { message += String(m); };
   try {
-    assert.equal(await main(['approval', 'R1', '--action', 'gh pr merge 1']), 2);
+    assert.equal(await main(['approval', '01M5CBKA6RNA3RZ2819T9M7NDZ', '--action', 'gh pr merge 1']), 2);
   } finally {
     console.error = original;
   }
@@ -115,12 +115,20 @@ test('courier approval --action is an explicit error that points at --verb and -
   assert.match(message, /--verb/);
 });
 
-test('requestIds: thread and task ids that are not ULID-like are refused before anything is written', async () => {
+test('requestIds: thread and task ids must be ULIDs, refused before anything is written', async () => {
   const { requestIds } = await import('../dist/request.js');
-  assert.doesNotThrow(() => requestIds({ threadId: '01M5C9EDF03QMRZS2DJXGN5A4C', taskId: 'K1_a-b' }));
-  for (const bad of ['', 'a b', 'a\nb', 'a/b', 'x'.repeat(65), 'caf\u00e9', 'a\u200bb']) {
-    assert.throws(() => requestIds({ threadId: bad, taskId: 'K1' }), (e) => e.code === 'usage', JSON.stringify(bad));
-    assert.throws(() => requestIds({ threadId: 'T1', taskId: bad }), (e) => e.code === 'usage', JSON.stringify(bad));
+  assert.doesNotThrow(() => requestIds({ threadId: '01M5C9EDF03QMRZS2DJXGN5A4C', taskId: '01M5CBKA6RNA3RZ2819T9M7NK1' }));
+  for (const bad of ['', 'T1', 'K1_a-b', 'a b', 'a\nb', 'a/b', '../x', 'x'.repeat(65), 'caf\u00e9', '01m5c9edf03qmrzs2djxgn5a4c', '01M5C9EDF03QMRZS2DJXGN5A4I', '01M5C9EDF03QMRZS2DJXGN5A4CA', '01M5C9EDF03QMRZS2DJXGN5A4\u200b']) {
+    assert.throws(() => requestIds({ threadId: bad, taskId: '01M5CBKA6RNA3RZ2819T9M7NK1' }), (e) => e.code === 'usage', JSON.stringify(bad));
+    assert.throws(() => requestIds({ threadId: '01M5C9EDF03QMRZS2DJXGN5A4C', taskId: bad }), (e) => e.code === 'usage', JSON.stringify(bad));
+  }
+});
+
+test('the read side refuses non-ULID ids and a malformed peer handle in a stored request', () => {
+  const run = (over) => { const req = { ...base, ...over }; try { verifyApproval('01M5CBKA6RNA3RZ2819T9M7NDZ', req, approve(req), { now: NOW }); return 'ok'; } catch (e) { return e.code; } };
+  assert.equal(run({}), 'ok');
+  for (const over of [{ threadId: 'T1' }, { taskId: '../x' }, { taskId: 'a b' }, { threadId: '' }, { peer: 'a b' }, { peer: '' }, { peer: '../x' }]) {
+    assert.equal(run(over), 'approval-mismatch', JSON.stringify(over));
   }
 });
 
@@ -128,13 +136,13 @@ test('verifyApproval returns the request hash (the view\'s fingerprint is its fi
   const { createHash } = await import('node:crypto');
   const { canonicalJson } = await import('../dist/canonical.js');
   const req = { ...base };
-  const v = verifyApproval('R1', req, approve(req), { now: NOW });
+  const v = verifyApproval('01M5CBKA6RNA3RZ2819T9M7NDZ', req, approve(req), { now: NOW });
   assert.equal(v.requestHash, createHash('sha256').update(canonicalJson(req), 'utf8').digest('hex'));
   assert.match(v.requestHash, /^[0-9a-f]{64}$/);
 });
 
 test('the read side refuses an empty or malformed action, reason or risk, like the writer', () => {
-  const run = (over) => { const req = { ...base, ...over }; try { verifyApproval('R1', req, approve(req), { now: NOW }); return 'ok'; } catch (e) { return e.code; } };
+  const run = (over) => { const req = { ...base, ...over }; try { verifyApproval('01M5CBKA6RNA3RZ2819T9M7NDZ', req, approve(req), { now: NOW }); return 'ok'; } catch (e) { return e.code; } };
   assert.equal(run({}), 'ok');
   assert.equal(run({ action: '' }), 'approval-mismatch');
   assert.equal(run({ reason: '' }), 'approval-mismatch');
@@ -184,4 +192,13 @@ test('the request key set is closed: unknown keys refused, action/reason/risk op
 test('courier approval refuses a request with an extra key even if the hash matches', () => {
   const req = { ...base, smuggled: 'gh pr merge 999' };
   assert.match(code(req), /^approval-mismatch/);
+});
+
+test('shared id vectors', async () => {
+  const { requestIds } = await import('../dist/request.js');
+  const { ids } = JSON.parse(fs.readFileSync(new URL('./vectors/request-fields.json', import.meta.url), 'utf8'));
+  for (const v of ids) {
+    const ok = (() => { try { requestIds({ threadId: v.value, taskId: v.value }); return true; } catch { return false; } })();
+    assert.equal(ok, v.valid, v.name);
+  }
 });

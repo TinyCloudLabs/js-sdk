@@ -134,7 +134,11 @@ names exactly what is acted on, in a fixed form per verb: `merge`:
 `spend`: `spend:<what and how much>`. `--summary` is one line (200 characters
 at most, plain text: no control, zero-width, bidi or other invisible
 characters, NFC) for your owner. `--target` is printable ASCII. Text that breaks
-these rules is refused, not repaired: fix it and run the command again. Your
+these rules is refused, not repaired: fix it and run the command again. The
+summary may not contain quotation marks of any kind (apostrophes are fine), the
+thread and task ids must be ULIDs, and the command prints a `requestHash`
+(your owner's card shows its first 8 hex digits; `courier approval` prints it
+too). Your
 owner's approval is for that verb and target, and
 the view shows "Approving lets your agent <verb> <target> for <peer>: “<summary>”"; free text is never matched. A request without all three is
 refused, and an older request without them cannot be approved.
