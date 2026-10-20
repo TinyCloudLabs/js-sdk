@@ -138,10 +138,16 @@ names exactly what is acted on, in a fixed form per verb: `merge`:
 `deploy`: `wrangler:<worker>[:<env>]`, `pages:<project>` or `phala:<name>`;
 `other`: `workflow:owner/repo:<file>` or `secrets:<subcommand and key>`;
 `spend`: `spend:<what and how much>`. `--summary` is one line (200 characters
-at most, plain text: no control, zero-width, bidi or other invisible
-characters, NFC) for your owner. `--target` is printable ASCII. Text that breaks
-these rules is refused, not repaired: fix it and run the command again. The
-summary may not contain quotation marks of any kind (apostrophes are fine), the
+at most, trimmed) for your owner. Text must already be NFC. The frozen Unicode
+15.0.0 table allows only Lu/Ll/Lt/Lo letters and Nd decimal digits, excluding
+Default_Ignorable; only U+0020 is a space. Summary ASCII punctuation is exactly
+`. , : ; - _ / # ( ) ? !` and apostrophe U+0027. No other quotes/brackets,
+non-ASCII punctuation, emoji, symbols or combining marks are allowed.
+Action/reason/risk/notes allow all printable ASCII punctuation plus LF (2000
+UTF-16 units; no tab/CR). `--target` stays printable ASCII per verb. Newer Unicode
+characters are refused on all runtimes. Shared source: `src/text-ranges.ts`;
+full verdict contract: `test/vectors/text-verdicts.json`. Text that breaks these
+rules is refused, never repaired: fix it and run the command again. The
 thread and task ids must be ULIDs, and the command prints a `requestHash`
 (your owner's card shows its first 8 hex digits; `courier approval` prints it
 too). Your

@@ -99,6 +99,12 @@ const OUTPUT_CAP = 256 * 1024;
 
 /** Process groups of runs in flight, so a stopping watcher can take its agents down with it. */
 const liveGroups = new Set<number>();
+const cancelRuns = new Set<() => void>();
+let shuttingDown = false;
+
+function requireRunning(): void {
+  if (shuttingDown) throw new Error('runner is shutting down');
+}
 
 function killGroup(pid: number | undefined): void {
   if (pid === undefined) return;
@@ -110,6 +116,8 @@ function killGroup(pid: number | undefined): void {
 
 /** Kills every run still in flight (the watcher is stopping). */
 export function killAllRunners(): void {
+  shuttingDown = true;
+  for (const cancel of cancelRuns) cancel();
   for (const pid of liveGroups) killGroup(pid);
   liveGroups.clear();
 }
@@ -124,6 +132,7 @@ const EXIT_GRACE_MS = 300;
  * its own business, and its inherited pipes must not hold the wake open.
  */
 export const spawnRunner: Runner = (bin, args, { cwd, env, input, timeoutMs }) => {
+  if (shuttingDown) return Promise.resolve({ code: null, stdout: '', stderr: 'runner is shutting down' });
   const { promise, resolve } = defer<RunResult>();
   let stdout = '';
   let stderr = '';
@@ -136,10 +145,16 @@ export const spawnRunner: Runner = (bin, args, { cwd, env, input, timeoutMs }) =
     settled = true;
     clearTimeout(timer);
     clearTimeout(grace);
+    cancelRuns.delete(cancel);
     if (pid !== undefined) liveGroups.delete(pid);
     for (const stream of [child.stdin, child.stdout, child.stderr]) stream?.destroy();
     resolve({ code, stdout, stderr: `${stderr}${extra}` });
   };
+  const cancel = () => {
+    killGroup(pid);
+    finish(null, '\n(runner is shutting down)');
+  };
+  cancelRuns.add(cancel);
   let grace: NodeJS.Timeout | undefined;
   const timer = setTimeout(() => {
     killGroup(pid);
@@ -148,7 +163,10 @@ export const spawnRunner: Runner = (bin, args, { cwd, env, input, timeoutMs }) =
   child.stdout.on('data', (chunk) => { stdout = (stdout + chunk).slice(-OUTPUT_CAP); });
   child.stderr.on('data', (chunk) => { stderr = (stderr + chunk).slice(-OUTPUT_CAP); });
   child.on('error', (error) => finish(null, error.message));
-  child.on('exit', (code) => { grace = setTimeout(() => finish(code), EXIT_GRACE_MS); });
+  child.on('exit', (code) => {
+    if (shuttingDown) cancel();
+    else if (!settled) grace = setTimeout(() => finish(code), EXIT_GRACE_MS);
+  });
   child.on('close', (code) => finish(code));
   child.stdin.on('error', () => { /* child exited before reading the prompt */ });
   child.stdin.end(input ?? '');
@@ -194,7 +212,12 @@ function failure(what: string, result: RunResult): Error {
  */
 export function deadlineRunner(run: Runner, totalMs: number, now: () => number = Date.now): Runner {
   const deadline = now() + totalMs;
-  return (bin, args, options) => run(bin, args, { ...options, timeoutMs: Math.max(1000, Math.min(options.timeoutMs, deadline - now())) });
+  return async (bin, args, options) => {
+    requireRunning(); // includes injected runners and every adapter subprocess/retry
+    const result = await run(bin, args, { ...options, timeoutMs: Math.max(1000, Math.min(options.timeoutMs, deadline - now())) });
+    requireRunning(); // an exit-grace await may have crossed watcher shutdown
+    return result;
+  };
 }
 
 /** Printed on every `exec` wake (stderr, so the service log has it). */
