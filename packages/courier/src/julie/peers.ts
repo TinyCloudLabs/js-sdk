@@ -12,18 +12,16 @@ export interface PeerPolicy {
 
 export type Peers = Record<string, PeerPolicy>;
 
-/** Inbound cap for a peer that is present without `ratePerHour`. */
-export const DEFAULT_IN_PER_HOUR = 20;
-/** Inbound cap for a peer absent from peers.json, or whose entry is invalid. */
-export const ABSENT_IN_PER_HOUR = 4;
-/** Outbound cap for any peer without an explicit `outPerHour`. */
-export const DEFAULT_OUT_PER_HOUR = 10;
+/** Default inbound cap per sender per hour, for a peer present without `ratePerHour` and for a peer absent from peers.json. */
+export const DEFAULT_IN_PER_HOUR = 100;
+/** Default outbound cap per peer per hour, for any peer without an explicit `outPerHour`. */
+export const DEFAULT_OUT_PER_HOUR = 100;
 
 const KEYS: Record<string, true> = { tier: true, ratePerHour: true, outPerHour: true };
 const TIERS: Record<string, true> = { trusted: true, strict: true };
 
 /** The policy for an absent peer. Invalid entries are read as this too, so a typo never widens trust. */
-const ABSENT: PeerPolicy = { tier: 'strict', ratePerHour: ABSENT_IN_PER_HOUR, outPerHour: DEFAULT_OUT_PER_HOUR };
+const ABSENT: PeerPolicy = { tier: 'strict', ratePerHour: DEFAULT_IN_PER_HOUR, outPerHour: DEFAULT_OUT_PER_HOUR };
 
 /** A per-hour cap is a whole number from 1 to 10000. */
 function cap(value: unknown, fallback: number): number | undefined {
