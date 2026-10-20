@@ -352,7 +352,6 @@ export function registerShareCommand(program: Command): void {
     .addOption(new Option("--ongoing").hideHelp())
     .option("--note <text>", "Note stored with the artifact version")
     .option("--json", "Print versioned redacted JSON")
-    .option("--reveal-link", "With --json, include the complete share link as \"url\" (a bearer link grants access to anyone who holds it)")
     .option("--viewer-origin <origin>", "Canonical HTTPS viewer origin", SHARE_ORIGIN)
     .action(async (files: string[], options, command: Command) => {
       try {
@@ -429,7 +428,7 @@ export function registerShareCommand(program: Command): void {
           if (notification.reason === "delivery-window-expired") process.stderr.write(NOTIFY_WINDOW_MESSAGE);
         }
         if (result.metadata.expiryClamped === true) process.stderr.write(`Share expiry clamped to session expiry (${result.metadata.expiresAt}).\n`);
-        if (json) writeJson({ ...redactPublishedShare(result), ...(options.revealLink === true ? { url: result.url } : {}), expiryClamped: result.metadata.expiryClamped === true, ...(artifact === undefined || result.metadata.artifact === undefined ? {} : { artifactId: result.metadata.artifact.id, version: result.metadata.artifact.version, mode: result.metadata.artifact.mode }), ...(notification === undefined ? {} : { notification }) });
+        if (json) writeJson({ ...redactPublishedShare(result), expiryClamped: result.metadata.expiryClamped === true, ...(artifact === undefined || result.metadata.artifact === undefined ? {} : { artifactId: result.metadata.artifact.id, version: result.metadata.artifact.version, mode: result.metadata.artifact.mode }), ...(notification === undefined ? {} : { notification }) });
         else {
           if (result.metadata.artifact !== undefined) process.stderr.write(`Artifact ${result.metadata.artifact.id} v${result.metadata.artifact.version} (${result.metadata.artifact.mode})\n`);
           publishHuman(result);

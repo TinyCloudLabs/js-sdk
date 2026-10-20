@@ -256,23 +256,28 @@ describe("tc share publish: component files and link output", () => {
     expect(seen[0]?.actions).toEqual(["read", "edit"]);
   });
 
-  test("--json prints the link only with --reveal-link", async () => {
+  test("publish --json never contains the link, the fragment or tc1=", async () => {
     configureShareCommandServices({ targetAdapter: { publish: async (request) => publishedFor(request) } });
     const file = await input();
-    const plain = await runShareCaptured(["share", "publish", file, "--viewer-origin", viewerOrigin, "--json"]);
-    expect(plain.stdout).not.toContain("tc1=");
-    expect(JSON.parse(plain.stdout)).not.toHaveProperty("url");
-
-    const revealed = await runShareCaptured(["share", "publish", file, "--viewer-origin", viewerOrigin, "--json", "--reveal-link"]);
-    const body = JSON.parse(revealed.stdout) as { url?: string; protocol: string; link: { cid: string } };
-    expect(body.url).toBe(`${viewerOrigin}/viewer#tc1=opaque`);
-    expect(body).toMatchObject({ protocol: "tinycloud-share", link: { cid: "bafy-native" } });
-    expect(revealed.stderr).not.toContain("tc1=");
+    for (const args of [
+      ["share", "publish", file, "--viewer-origin", viewerOrigin, "--json"],
+      ["--json", "share", "publish", file, "--viewer-origin", viewerOrigin],
+      ["share", "publish", file, "--viewer-origin", viewerOrigin, "--artifact", "new", "--json"],
+    ]) {
+      const result = await runShareCaptured(args);
+      expect(result.stdout).not.toContain("tc1=");
+      expect(result.stdout).not.toContain("#");
+      expect(result.stderr).not.toContain("tc1=");
+      const body = JSON.parse(result.stdout) as Record<string, unknown>;
+      expect(body).not.toHaveProperty("url");
+      expect(body).toMatchObject({ protocol: "tinycloud-share", link: { cid: "bafy-native" } });
+    }
   });
 
-  test("the link is not in --json output when the global --json flag is used without --reveal-link", async () => {
-    configureShareCommandServices({ targetAdapter: { publish: async (request) => publishedFor(request) } });
-    const result = await runShareCaptured(["--json", "share", "publish", await input(), "--viewer-origin", viewerOrigin]);
-    expect(result.stdout).not.toContain("tc1=");
+  test("share show --reveal-link still refuses --json", async () => {
+    const result = await refusal(["share", "show", "any-share-id", "--reveal-link", "--json"]);
+    expect(result.exitCode).toBe(2);
+    expect(result.stderr).toContain("--reveal-link cannot be combined with --json");
+    expect(result.stdout).toBe("");
   });
 });
