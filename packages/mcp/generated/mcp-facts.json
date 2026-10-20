@@ -178,6 +178,42 @@
       "sensitiveOutput": false
     },
     {
+      "name": "tinycloud_knowledge_list",
+      "surfaces": [
+        "local",
+        "hosted"
+      ],
+      "operationId": "tinycloud.knowledge.list",
+      "operationVersion": 1,
+      "effects": [
+        "read"
+      ],
+      "postures": [
+        "owner-openkey",
+        "delegate-session",
+        "local-owner-key"
+      ],
+      "sensitiveOutput": true
+    },
+    {
+      "name": "tinycloud_knowledge_read",
+      "surfaces": [
+        "local",
+        "hosted"
+      ],
+      "operationId": "tinycloud.knowledge.read",
+      "operationVersion": 1,
+      "effects": [
+        "read"
+      ],
+      "postures": [
+        "owner-openkey",
+        "delegate-session",
+        "local-owner-key"
+      ],
+      "sensitiveOutput": true
+    },
+    {
       "name": "tinycloud_kv_delete",
       "surfaces": [
         "local",

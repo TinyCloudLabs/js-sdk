@@ -465,7 +465,14 @@ mock.module("../lib/permissions.js", () => ({
     },
   permissionsFromDelegation: () => [],
   readGrantHistory: async () => [],
-  resolvePermissionSpaces: async (permissions: unknown[]) => permissions,
+  // Like the real resolver: a space name becomes the owner's space id.
+  resolvePermissionSpaces: async (permissions: Array<{ space?: string }>) =>
+    permissions.map((permission) => ({
+      ...permission,
+      space: permission.space === undefined || permission.space.startsWith("tinycloud:")
+        ? permission.space
+        : `tinycloud:pkh:eip155:1:0xOwner:${permission.space}`,
+    })),
   storedAdditionalDelegation: (delegation: object, permissions: object[]) => ({
     delegation,
     permissions,
@@ -1708,7 +1715,50 @@ describe("CLI auth import command", () => {
     await runAuthCommand(["auth", "grant", source, "--yes"]);
 
     expect(recorded.errors).toEqual([]);
-    expect(recorded.grantedRequests).toEqual([request]);
+    // The signer receives the one resolved list (space ids, not names) that was printed and gated.
+    expect(recorded.grantedRequests).toEqual([{
+      ...request,
+      requested: [{ ...request.requested[0], space: "tinycloud:pkh:eip155:1:0xOwner:secrets" }],
+    }]);
+  });
+
+  test.each([
+    ["a hostile sessionDid", { sessionDid: "did:key:z6Mk\u001b[2J\u202e" }],
+    ["a hostile requestedExpiry", { requestedExpiry: "7d\u001b[2J\u202e" }],
+  ])("%s is refused before anything is printed or signed", async (_name, override) => {
+    profiles.set("default", makeProfile());
+    const request = {
+      kind: "tinycloud.auth.request",
+      version: 1,
+      requestId: "req_hostile_fields",
+      sessionDid: "did:key:z6MkSession",
+      // a request that WOULD print a scope text and ask for confirmation if it got that far
+      requested: [{ service: "tinycloud.kv", space: "applications", path: "", actions: ["tinycloud.kv/del"] }],
+      ...override,
+    };
+    const source = join(tempDir, "hostile-fields.json");
+    await writeFile(source, JSON.stringify(request), "utf8");
+    const streams: string[] = [];
+    const stderr = spyOn(process.stderr, "write").mockImplementation(((chunk: string | Uint8Array) => {
+      streams.push(`stderr:${String(chunk)}`);
+      return true;
+    }) as never);
+    const stdout = spyOn(process.stdout, "write").mockImplementation(((chunk: string | Uint8Array) => {
+      streams.push(`stdout:${String(chunk)}`);
+      return true;
+    }) as never);
+    try {
+      await runAuthCommand(["auth", "grant", source, "--yes"]);
+    } finally {
+      stderr.mockRestore();
+      stdout.mockRestore();
+    }
+
+    expect(recorded.errors).toHaveLength(1);
+    expect(recorded.errors[0]).toMatchObject({ code: "INVALID_AUTH_REQUEST", exitCode: 2 });
+    expect(recorded.grantedRequests).toEqual([]);
+    // no scope text, no notice, nothing at all was written before the refusal
+    expect(streams).toEqual([]);
   });
 });
 
