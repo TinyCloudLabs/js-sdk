@@ -260,7 +260,13 @@ threads for the same work, other channels): your human resumes it with
 `courier resume <peer> <threadId>`. A "thread paused" inform from the peer only
 means their side stopped waking; it is not a request, and needs no reply.
 
-Pause notices deduplicate by pause generation (older notices by thread/day). Every
-notification delivery attempt, successful or failed, counts toward 10 per peer per
+Pause notices use one fixed record per locally known thread, never records keyed
+by incoming ids. Only our authored meta/message/task or a local wake/pause record
+establishes a known thread; mirrored metadata does not. Newer peer notice ULIDs
+within ten minutes of our clock update the peer pause latch: paused-to-resumed
+clears it, resumed-to-paused notifies once. Duplicate/old notices, repeated paused
+states and unknown threads do not notify, across days and restarts. Every delivery
+attempt, successful or failed, counts toward ten globally and ten per peer per
 hour across channels; at most three attempts per notice, with persisted backoff.
-Failed wake backoff starts when the attempt finishes and survives a restart.
+Failed wake backoff starts when the attempt finishes and survives a restart;
+approval wakes have a separate retry clock and never wait for message backoff.

@@ -9,7 +9,7 @@ import { commitReceipts, selectUndelivered, type KV, type Receipts } from './inb
 import { del, getJson, listAll, putCreate, putMatch, putOverwrite } from './store.js';
 import type { WakeApproval, WakeMessage, Waker, WatchLog } from './wake.js';
 import { appendNotice, type Notice, type Notifier } from './notify.js';
-import { writePauseMarker } from './pause.js';
+import { nextNoticeId, writePauseMarker } from './pause.js';
 import { ULID } from './request.js';
 
 /** Spec §8. inform and receipts never wake; a message with no valid intent is delivered but never wakes. */
@@ -32,6 +32,8 @@ const CLAIM_SKIP_MS = 30_000;
 const DAY_MS = 24 * 3600 * 1000;
 /** A peer can make this side's watcher notify its human at most this often per hour, and the outbox never grows past `MAX_OUTBOX`. */
 const NOTICES_PER_PEER_PER_HOUR = 10;
+const NOTICES_PER_HOUR = 10;
+const MAX_PEER_CLOCK_SKEW_MS = 10 * 60_000;
 const MAX_OUTBOX = 50;
 const MAX_OUTBOX_TRIES = 8;
 const MAX_NOTICE_ATTEMPTS = 3;
@@ -59,6 +61,25 @@ interface ApprovalWake {
   subject: string;
 }
 
+/** Allocated only from our own thread/wake/pause records, never from incoming notice ids. */
+interface ThreadNoticeState {
+  ourPaused: boolean;
+  peerPaused: boolean;
+  lastPeerNoticeId: string;
+  lastNoticeSentAt: string;
+  ourMarkerId: string;
+  ourNoticePending: boolean;
+  peerNoticePending: boolean;
+  peerNoticeId: string;
+  informPending: boolean;
+  informText: string;
+}
+
+function threadNoticeState(): ThreadNoticeState {
+  return { ourPaused: false, peerPaused: false, lastPeerNoticeId: '0'.repeat(26), lastNoticeSentAt: new Date(0).toISOString(),
+    ourMarkerId: '', ourNoticePending: false, peerNoticePending: false, peerNoticeId: '0'.repeat(26), informPending: false, informText: '' };
+}
+
 export interface WatchState {
   v: 1;
   /** Keyed `<peer>/<threadId>`. */
@@ -72,11 +93,13 @@ export interface WatchState {
   paused: string[];
   /** Failed wake count and completion-based backoff, retained across watcher restarts. */
   wakeRetries: Record<string, { failures: number; nextAttemptAt: number }>;
+  approvalRetries: Record<string, { failures: number; nextAttemptAt: number }>;
   /** Posts and notifications that must happen exactly-ish once and survive a restart (retried until they succeed). */
   outbox: OutboxItem[];
   held: Record<string, HeldBacklog>;
-  /** UTC day of the last notice per kind/peer/thread/episode (legacy notices: per thread/day). */
-  peerPausedDay: Record<string, number>;
+  /** One fixed record per locally known thread. Peer ids are values, never keys. */
+  threadNotices: Record<string, ThreadNoticeState>;
+  noticeGlobalLog: number[];
   /** Every dispatch attempt, success or failure, per peer for the shared rolling-hour cap. */
   noticeLog: Record<string, number[]>;
 }
@@ -145,7 +168,7 @@ export interface WatchDeps {
 type Via = 'startup' | 'hook' | 'poll';
 
 export function emptyWatchState(): WatchState {
-  return { v: 1, pending: {}, woken: [], approvalsSeen: [], wakes: {}, paused: [], wakeRetries: {}, outbox: [], held: {}, peerPausedDay: {}, noticeLog: {} };
+  return { v: 1, pending: {}, woken: [], approvalsSeen: [], wakes: {}, paused: [], wakeRetries: {}, approvalRetries: {}, outbox: [], held: {}, threadNotices: {}, noticeGlobalLog: [], noticeLog: {} };
 }
 
 /** Wake time: `debounce` after the latest message, but never later than twice `debounce` after the first. */
@@ -232,7 +255,22 @@ export class Watcher {
     this.state = isRecord(value) && value.v === 1
       ? { ...emptyWatchState(), ...(value as Partial<WatchState>) }
       : emptyWatchState();
-    this.state.outbox = this.state.outbox.slice(-MAX_OUTBOX).filter(item => (item.tries ?? 0) < (item.kind === 'notify' ? MAX_NOTICE_ATTEMPTS : MAX_OUTBOX_TRIES));
+    // Discard the old per-peer-generation map; it was sized by untrusted ids.
+    delete (this.state as WatchState & { peerPausedDay?: unknown }).peerPausedDay;
+    for (const key of [...Object.keys(this.state.wakes), ...this.state.paused]) {
+      const [peer, threadId] = key.split('/');
+      if (peer && threadId && SAFE_ID.test(peer) && SAFE_ID.test(threadId)) {
+        const record = this.state.threadNotices[key] ??= threadNoticeState();
+        record.ourPaused = this.state.paused.includes(key);
+      }
+    }
+    // Legacy peer-generated queues cannot establish local knowledge.
+    this.state.outbox = this.state.outbox.filter(item => item.kind !== 'notify' || item.notice.kind !== 'peer-paused'
+      || (item.id === `peer-paused:${item.notice.peer}/${item.notice.threadId}` && this.state.threadNotices[`${item.notice.peer}/${item.notice.threadId}`]));
+    for (const item of [...this.state.outbox]) {
+      if ((item.tries ?? 0) >= (item.kind === 'notify' ? MAX_NOTICE_ATTEMPTS : MAX_OUTBOX_TRIES)) this.finishOutbox(item);
+    }
+    this.state.outbox = this.state.outbox.slice(-MAX_OUTBOX);
   }
 
   snapshot(): WatchState {
@@ -385,11 +423,11 @@ export class Watcher {
     // Pause markers are read with every listing, so a `courier resume` or `courier pause` takes effect on the very
     // next message instead of at the next poll (a message delivered while the watcher still thought the thread was
     // paused would never wake anyone).
-    const [keys] = await Promise.all([listAll(peerKv, `${PREFIX}/to/${mailbox}/threads/`), this.syncPaused()]);
+    const [keys] = await Promise.all([listAll(peerKv, `${PREFIX}/to/${mailbox}/threads/`), this.syncPaused(), this.syncKnownThreads(peer)]);
     const receipts = (await getJson<Receipts>(selfKv, k.receipts(peer.handle)))?.value ?? { v: 1, threads: {} };
     receipts.threads ??= {};
 
-    const delivered: { threadId: string; messageId: string; intent?: string; notice?: string; pauseId?: string }[] = [];
+    const delivered: { threadId: string; messageId: string; intent?: string; notice?: string }[] = [];
     for (const selected of selectUndelivered(keys, receipts)) {
       if (!SAFE_ID.test(selected.threadId) || !SAFE_ID.test(selected.messageId)) {
         log('ignored', { peer: peer.handle, reason: 'unsafe-id' });
@@ -402,7 +440,7 @@ export class Watcher {
         if (!isRecord(value) || value.messageId !== selected.messageId || value.contextId !== selected.threadId) continue;
         await this.mirrorCreate(k.mirrorMsg(peer.handle, selected.threadId, selected.messageId), value);
         const view = messageView(value);
-        delivered.push({ threadId: selected.threadId, messageId: selected.messageId, intent: view.intent, notice: view.notice, pauseId: view.pauseId });
+        delivered.push({ threadId: selected.threadId, messageId: selected.messageId, intent: view.intent, notice: view.notice });
       } catch (error) {
         // Not delivered, so no receipt: this message is retried on the next sync; the others go ahead.
         log('sync-error', { peer: peer.handle, messageId: selected.messageId, ...errInfo(error) });
@@ -444,21 +482,42 @@ export class Watcher {
         entry.messages.push({ messageId: item.messageId, intent: item.intent, sentAt: sentAtOf(item.messageId) });
         entry.lastSeenAt = at;
       }
-      // The peer's watcher paused the thread: tell this side's human (their agent is not coming back until resumed).
-      // Only a paired peer's `inform` carrying the notice counts, once per pause episode (legacy: thread/day), at most
-      // NOTICES_PER_PEER_PER_HOUR per peer: a peer cannot turn this into a stream of notifications or agent runs.
+      // Only our local listing establishes a known thread. The peer controls its own state, not allocation.
       for (const item of delivered) {
-        if (item.notice !== 'thread-paused' || item.intent !== 'inform') continue;
-        const key = `${peer.handle}/${item.threadId}`;
-        const day = Math.floor(at / DAY_MS);
-        this.enqueue({
-          id: `peer-paused:${key}:${item.pauseId ?? day}`, kind: 'notify',
-          notice: { kind: 'peer-paused', eventId: item.pauseId, peer: peer.handle, threadId: item.threadId, detail: "the peer's watcher reported the thread paused" },
-        });
+        if (item.intent !== 'inform' || (item.notice !== 'thread-paused' && item.notice !== 'thread-resumed')) continue;
+        const record = this.state.threadNotices[`${peer.handle}/${item.threadId}`];
+        if (!record || !ULID.test(item.messageId) || item.messageId <= record.lastPeerNoticeId) continue;
+        let sentAt: number;
+        try { sentAt = decodeTime(item.messageId); } catch { continue; } // ULID's high bits must fit 128 bits
+        if (sentAt > at + MAX_PEER_CLOCK_SKEW_MS) continue;
+        record.lastPeerNoticeId = item.messageId;
+        const paused = item.notice === 'thread-paused';
+        if (paused && !record.peerPaused && !record.peerNoticePending) {
+          record.peerNoticePending = true;
+          record.peerNoticeId = item.messageId;
+        }
+        record.peerPaused = paused;
       }
+      this.fillOutbox();
     });
     await commitReceipts(selfKv, new Map([[peer.handle, delivered.map(({ threadId, messageId }) => ({ threadId, messageId }))]]));
     await this.mirrorThreads(peer, peerKv, keys);
+  }
+
+  /** Only locally authored meta/messages/tasks, or a local wake/pause witness, establish a known thread. */
+  private async syncKnownThreads(peer: StoredPeer): Promise<void> {
+    const prefix = `${PREFIX}/to/${peer.handle}/threads/`;
+    const keys = await listAll(this.deps.selfKv, prefix);
+    const known = new Set<string>();
+    for (const path of keys) {
+      const match = /^([^/]+)\/(?:meta\.json|(?:msg|task)\/[^/]+\.json)$/.exec(path.slice(prefix.length));
+      if (match && SAFE_ID.test(match[1])) known.add(`${peer.handle}/${match[1]}`);
+    }
+    for (const key of Object.keys(this.state.wakes)) if (key.startsWith(`${peer.handle}/`)) known.add(key);
+    const missing = [...known].filter(key => !this.state.threadNotices[key]);
+    if (missing.length) await this.mutate(() => {
+      for (const key of missing) this.state.threadNotices[key] ??= threadNoticeState();
+    });
   }
 
   private async mirrorCreate(key: string, value: unknown): Promise<void> {
@@ -599,9 +658,8 @@ export class Watcher {
     const runs: Promise<void>[] = [];
     for (const [key, pending] of Object.entries(this.state.pending)) {
       if (this.waking.has(key)) continue;
-      if ((this.state.wakeRetries[key]?.nextAttemptAt ?? 0) > at) continue;
       if (!force && wakeDueAt(pending, this.opts.debounceMs) > at) continue;
-      if (!force && (this.retryAt.get(key) ?? 0) > at) continue;
+      if (!force && !pending.approvals?.length && (this.retryAt.get(key) ?? 0) > at) continue;
       this.waking.add(key);
       runs.push(this.wakeThread(key, pending, at).finally(() => this.waking.delete(key)));
     }
@@ -621,7 +679,7 @@ export class Watcher {
     await this.syncPaused();
     // Messages that land while the wake runs stay pending for the next one, so wake exactly this snapshot.
     let messages = [...pending.messages];
-    const approvals = [...(pending.approvals ?? [])];
+    let approvals = [...(pending.approvals ?? [])];
 
     // Spec §8: the loop stops here. A paused thread, or one over budget, wakes nobody for messages (approvals are
     // a human decision, not a loop, and always wake).
@@ -644,6 +702,11 @@ export class Watcher {
       }
     }
 
+    // Owner decisions have their own retry clock. A failed message adapter cannot delay an approval.
+    if ((this.state.wakeRetries[key]?.nextAttemptAt ?? 0) > at) messages = [];
+    if ((this.state.approvalRetries[key]?.nextAttemptAt ?? 0) > at) approvals = [];
+    if (!messages.length && !approvals.length) return;
+
     const woken = messages.map((m) => m.messageId);
     const approvedIds = approvals.map((a) => a.approvalId);
     const oldestSentAt = messages[0]?.sentAt ?? '';
@@ -659,6 +722,7 @@ export class Watcher {
       // The attempt is counted against the budget BEFORE the adapter runs, and whether it then succeeds, fails or
       // times out: an adapter that always throws must not be retried forever. (A crash mid-wake counts too.)
       await this.mutate(() => {
+        this.state.threadNotices[key] ??= threadNoticeState();
         if (woken.length) this.state.wakes[key] = [...this.recentWakes(key), this.now()];
       });
     } catch (error) {
@@ -681,9 +745,14 @@ export class Watcher {
       await this.deps.wake({ peer: pending.peer, threadId: pending.threadId, subject: pending.subject, messages, approvals });
     } catch (error) {
       // Failures back off: 1, 2, 4, ... minutes, at most 15.
-      const failures = (this.state.wakeRetries[key]?.failures ?? 0) + 1;
-      const nextAttemptAt = this.now() + Math.min(15 * 60_000, WAKE_RETRY_MS * 2 ** (failures - 1));
-      await this.mutate(() => { this.state.wakeRetries[key] = { failures, nextAttemptAt }; });
+      let failures = 0;
+      await this.mutate(() => {
+        for (const retries of [ ...(woken.length ? [this.state.wakeRetries] : []), ...(approvedIds.length ? [this.state.approvalRetries] : []) ]) {
+          const count = (retries[key]?.failures ?? 0) + 1;
+          retries[key] = { failures: count, nextAttemptAt: this.now() + Math.min(15 * 60_000, WAKE_RETRY_MS * 2 ** (count - 1)) };
+          failures = Math.max(failures, count);
+        }
+      });
       this.deps.log('wake-error', { peer: pending.peer, threadId: pending.threadId, failures, ...errInfo(error) });
       // The attempt failed, so the thread is not being woken: release the claim (a restart must not wait for it).
       await this.releaseClaim(pending.peer, pending.threadId, claimId);
@@ -697,7 +766,8 @@ export class Watcher {
         if (!current.messages.length && !current.approvals.length) delete this.state.pending[key];
       }
       this.state.woken = [...this.state.woken, ...woken].slice(-WAKEN_MEMORY);
-      delete this.state.wakeRetries[key];
+      if (woken.length) delete this.state.wakeRetries[key];
+      if (approvedIds.length) delete this.state.approvalRetries[key];
     });
     // Only now, with the wake recorded, is the retry hold-off cleared.
     this.retryAt.delete(key);
@@ -711,7 +781,7 @@ export class Watcher {
   private async pauseThread(key: string, pending: PendingWake, used: number): Promise<void> {
     const reason = `wake budget reached (${used} wakes today, UTC; limit ${this.opts.wakeBudget ?? WATCH_DEFAULTS.wakeBudget} per thread per day)`;
     const at = new Date(this.now()).toISOString();
-    const pauseId = ulid();
+    const pauseId = await nextNoticeId(this.deps.selfKv, pending.peer, pending.threadId, this.now());
     const wrote = await this.exclusive(async () => {
       const created = await writePauseMarker(this.deps.selfKv, { v: 1, peer: pending.peer, threadId: pending.threadId, by: 'budget', at, reason, informId: pauseId });
       this.pausedKeys.add(key);
@@ -726,8 +796,9 @@ export class Watcher {
       'This is an automatic stop for reply loops, not a refusal; messages you send are still stored and mirrored.';
     await this.mutate(() => {
       if (!this.state.paused.includes(key)) this.state.paused.push(key);
-      this.enqueue({ id: `inform:${key}:${pauseId}`, kind: 'inform', pauseId, peer: pending.peer, threadId: pending.threadId, text });
-      this.enqueue({ id: `paused:${key}:${pauseId}`, kind: 'notify', notice: { kind: 'paused', eventId: pauseId, peer: pending.peer, threadId: pending.threadId, detail: reason } });
+      const record = this.state.threadNotices[key] ??= threadNoticeState();
+      Object.assign(record, { ourPaused: true, ourMarkerId: pauseId, ourNoticePending: true, informPending: true, informText: text });
+      this.fillOutbox();
     });
     this.deps.log('paused', { peer: pending.peer, threadId: pending.threadId, by: 'budget', reason });
   }
@@ -745,27 +816,46 @@ export class Watcher {
     entry.messages = [...entry.messages, message].slice(-MAX_HELD_PER_THREAD);
   }
 
-  /** Called inside `mutate`: queues an inform or notification; the outbox is bounded, the oldest item goes first. */
+  /** A fixed slot per locally known thread/kind; incoming ids never name outbox slots. */
   private enqueue(item: OutboxItem): void {
-    if (item.kind === 'notify') {
-      const { notice } = item;
-      const at = this.now();
-      const day = Math.floor(at / DAY_MS);
-      const episode = notice.eventId && ULID.test(notice.eventId) ? `:${notice.eventId}` : '';
-      const key = `${notice.kind}:${notice.peer}/${notice.threadId}${episode}`;
-      if (this.state.peerPausedDay[key] === day) return;
-      const recent = (this.state.noticeLog[notice.peer] ?? []).filter(t => at - t < 3600_000);
-      if (recent.length >= NOTICES_PER_PEER_PER_HOUR) {
-        this.deps.log('notice-dropped', { peer: notice.peer, reason: 'peer-rate-cap' });
-        return;
-      }
-      this.state.peerPausedDay[key] = day;
+    if (this.state.outbox.some(existing => existing.id === item.id)) return;
+    if (this.state.outbox.length >= MAX_OUTBOX && (item.kind === 'inform' || item.notice.kind === 'paused')) {
+      // Only unattempted peer work can yield capacity. Its fixed pending flag survives, so retries never reset.
+      const peerSlot = this.state.outbox.findIndex(existing => existing.kind === 'notify' && existing.notice.kind === 'peer-paused'
+        && !existing.tries && !this.outboxBusy.has(existing.id));
+      if (peerSlot >= 0) this.state.outbox.splice(peerSlot, 1);
     }
+    if (this.state.outbox.length >= MAX_OUTBOX) return; // fixed pending slots retain work until capacity returns
     this.state.outbox.push(item);
-    while (this.state.outbox.length > MAX_OUTBOX) {
-      const dropped = this.state.outbox.shift()!;
-      this.deps.log('outbox-dropped', { id: dropped.id, reason: 'full' });
+  }
+
+  /** Local pause work is admitted first; no incoming notice can evict it. Called inside mutate. */
+  private fillOutbox(): void {
+    for (const [key, record] of Object.entries(this.state.threadNotices)) {
+      const [peer, threadId] = key.split('/');
+      if (record.informPending) this.enqueue({ id: `inform:${key}`, kind: 'inform', peer, threadId, pauseId: record.ourMarkerId, text: record.informText });
+      if (record.ourNoticePending) this.enqueue({ id: `paused:${key}`, kind: 'notify', notice: { kind: 'paused', peer, threadId, eventId: record.ourMarkerId, detail: 'thread paused on this side' } });
     }
+    for (const [key, record] of Object.entries(this.state.threadNotices)) {
+      const [peer, threadId] = key.split('/');
+      if (record.peerNoticePending) this.enqueue({ id: `peer-paused:${key}`, kind: 'notify', notice: { kind: 'peer-paused', peer, threadId, eventId: record.peerNoticeId, detail: "the peer's watcher reported the thread paused" } });
+    }
+  }
+
+  /** Clear only the pending transition this item represented; a later local pause retains its own work. */
+  private finishOutbox(item: OutboxItem): void {
+    const peer = item.kind === 'inform' ? item.peer : item.notice.peer;
+    const threadId = item.kind === 'inform' ? item.threadId : item.notice.threadId;
+    const record = this.state.threadNotices[`${peer}/${threadId}`];
+    if (record) {
+      if (item.kind === 'inform' && item.pauseId === record.ourMarkerId) record.informPending = false;
+      if (item.kind === 'notify') {
+        record.lastNoticeSentAt = new Date(this.now()).toISOString();
+        if (item.notice.kind === 'paused' && item.notice.eventId === record.ourMarkerId) record.ourNoticePending = false;
+        if (item.notice.kind === 'peer-paused' && item.notice.eventId === record.peerNoticeId) record.peerNoticePending = false;
+      }
+    }
+    this.state.outbox = this.state.outbox.filter(o => o.id !== item.id);
   }
 
   /**
@@ -791,6 +881,7 @@ export class Watcher {
           const backlog: Record<string, number> = {};
           await this.mutate(() => {
             for (const key of resumed) {
+              if (this.state.threadNotices[key]) this.state.threadNotices[key].ourPaused = false;
               delete this.state.wakes[key];
               delete this.state.wakeRetries[key];
               const held = this.state.held[key];
@@ -801,6 +892,10 @@ export class Watcher {
                 entry.lastSeenAt = at;
               }
               delete this.state.held[key];
+            }
+            for (const key of added) {
+              const record = this.state.threadNotices[key] ??= threadNoticeState();
+              record.ourPaused = true;
             }
             this.state.paused = [...new Set([...this.state.paused.filter((key) => !resumed.includes(key)), ...added])].sort();
           });
@@ -815,16 +910,16 @@ export class Watcher {
   /** State that only matters for a day or an hour is dropped, so it cannot grow without bound. */
   private async pruneState(): Promise<void> {
     const at = this.now();
-    const today = Math.floor(at / DAY_MS);
     const stale = Object.keys(this.state.wakes).filter((key) => !this.recentWakes(key).length)
-      .concat(Object.keys(this.state.peerPausedDay).filter((key) => today - this.state.peerPausedDay[key] > 7))
+      .concat(Object.keys(this.state.approvalRetries).filter(key => !this.state.pending[key]?.approvals?.length))
       .concat(Object.keys(this.state.wakeRetries).filter(key => !this.state.pending[key]))
       .concat(Object.keys(this.state.noticeLog).filter((peer) => !this.state.noticeLog[peer].some((t) => at - t < 3600_000)));
-    if (!stale.length) return;
+    if (!stale.length && !this.state.noticeGlobalLog.some(t => at - t >= 3600_000)) return;
     await this.mutate(() => {
       for (const key of Object.keys(this.state.wakeRetries)) if (!this.state.pending[key]) delete this.state.wakeRetries[key];
       for (const key of Object.keys(this.state.wakes)) if (!this.recentWakes(key).length) delete this.state.wakes[key];
-      for (const key of Object.keys(this.state.peerPausedDay)) if (today - this.state.peerPausedDay[key] > 7) delete this.state.peerPausedDay[key];
+      for (const key of Object.keys(this.state.approvalRetries)) if (!this.state.pending[key]?.approvals?.length) delete this.state.approvalRetries[key];
+      this.state.noticeGlobalLog = this.state.noticeGlobalLog.filter(t => at - t < 3600_000);
       for (const peer of Object.keys(this.state.noticeLog)) if (!this.state.noticeLog[peer].some((t) => at - t < 3600_000)) delete this.state.noticeLog[peer];
     });
   }
@@ -832,8 +927,14 @@ export class Watcher {
   /** Informs and notifications queued in state; failures back off (1, 2, 4 ... 15 minutes) and give up after 3 notification attempts or 8 inform failures. */
   private async runOutbox(): Promise<void> {
     const at = this.now();
+    const queued = new Set(this.state.outbox.map(item => item.id));
+    const refill = this.state.outbox.length < MAX_OUTBOX && Object.entries(this.state.threadNotices).some(([key, record]) =>
+      (record.informPending && !queued.has(`inform:${key}`)) || (record.ourNoticePending && !queued.has(`paused:${key}`))
+      || (record.peerNoticePending && !queued.has(`peer-paused:${key}`)));
+    if (refill) await this.mutate(() => this.fillOutbox());
     const runs: Promise<void>[] = [];
-    for (const item of [...this.state.outbox]) {
+    const items = [...this.state.outbox].sort((a, b) => Number(a.kind === 'notify' && a.notice.kind === 'peer-paused') - Number(b.kind === 'notify' && b.notice.kind === 'peer-paused'));
+    for (const item of items) {
       if (this.outboxBusy.has(item.id) || (item.nextAttemptAt ?? 0) > at) continue;
       this.outboxBusy.add(item.id);
       runs.push((async () => {
@@ -848,16 +949,17 @@ export class Watcher {
               const now = this.now();
               const recent = (this.state.noticeLog[notice.peer] ?? []).filter(t => now - t < 3600_000);
               if ((stored.tries ?? 0) >= MAX_NOTICE_ATTEMPTS) {
-                this.state.outbox = this.state.outbox.filter(o => o.id !== item.id);
+                this.finishOutbox(item);
                 return;
               }
-              if (recent.length >= NOTICES_PER_PEER_PER_HOUR) {
-                // An attempted notice waits for the rolling-hour window; excess new notices are dropped.
-                if (stored.tries) stored.nextAttemptAt = Math.min(...recent) + 3600_000;
-                else this.state.outbox = this.state.outbox.filter(o => o.id !== item.id);
+              const global = this.state.noticeGlobalLog.filter(t => now - t < 3600_000);
+              if (recent.length >= NOTICES_PER_PEER_PER_HOUR || global.length >= NOTICES_PER_HOUR) {
+                stored.nextAttemptAt = Math.max(recent.length >= NOTICES_PER_PEER_PER_HOUR ? Math.min(...recent) + 3600_000 : 0,
+                  global.length >= NOTICES_PER_HOUR ? Math.min(...global) + 3600_000 : 0);
                 this.deps.log('notice-rate-cap', { peer: notice.peer, id: item.id });
                 return;
               }
+              this.state.noticeGlobalLog = [...global, now];
               item.tries = stored.tries = (stored.tries ?? 0) + 1;
               this.state.noticeLog[notice.peer] = [...recent, now];
               reserved = true; // persisted BEFORE any channel operation, even one that delivers then fails
@@ -870,13 +972,13 @@ export class Watcher {
             }
             await this.deps.notify?.(notice);
           }
-          await this.mutate(() => { this.state.outbox = this.state.outbox.filter((o) => o.id !== item.id); });
+          await this.mutate(() => this.finishOutbox(item));
         } catch (error) {
           const tries = item.kind === 'notify' ? (item.tries ?? 1) : (item.tries ?? 0) + 1;
           this.deps.log(item.kind === 'inform' ? 'inform-error' : 'notify-error', { id: item.id, tries, ...errInfo(error) });
           if (tries >= (item.kind === 'notify' ? MAX_NOTICE_ATTEMPTS : MAX_OUTBOX_TRIES)) {
             this.deps.log('outbox-dropped', { id: item.id, reason: 'too-many-failures' });
-            await this.mutate(() => { this.state.outbox = this.state.outbox.filter((o) => o.id !== item.id); });
+            await this.mutate(() => this.finishOutbox(item));
           } else {
             await this.mutate(() => { const stored = this.state.outbox.find((o) => o.id === item.id); if (stored) { stored.tries = tries; stored.nextAttemptAt = this.now() + Math.min(15 * 60_000, WAKE_RETRY_MS * 2 ** (tries - 1)); } });
           }
