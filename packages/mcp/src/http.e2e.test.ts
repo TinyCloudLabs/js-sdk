@@ -3,7 +3,8 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { generateKeyPair, exportJWK, SignJWT } from "jose";
 import { createServer, type Server } from "node:http";
-import { access, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import * as fileSystem from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createServer as createPortServer } from "node:net";
@@ -250,6 +251,11 @@ for (const marker of ["delegation-revoked", "delegation-ancestor-revoked"] as co
     const key = { space: "applications", key: "agents/demo/profile", representation: "json" };
     const required = record((await client.callTool({ name: "tinycloud_kv_get", arguments: key })).structuredContent);
     await approve(String(record(required.approval).url));
+    const invokedRequest = record((await client.callTool({
+      name: "tinycloud_kv_get", arguments: { ...key, key: "agents/demo/settings" },
+    })).structuredContent);
+    const invokedCid = String((await approve(String(record(invokedRequest.approval).url))).delegationCid);
+    expect(invokedCid).not.toBe(cid);
     expect(await exists(additionalPath)).toBe(true);
     const other = await createClient("openkey-user-2");
     const otherConnect = record((await other.callTool({ name: "tinycloud_connect", arguments: {} })).structuredContent);
@@ -269,7 +275,7 @@ for (const marker of ["delegation-revoked", "delegation-ancestor-revoked"] as co
     const epochBefore = Number(record(JSON.parse(await readFile(profilePath, "utf8"))).approvalEpoch ?? 0);
     const nodeText = marker === "delegation-revoked"
       ? `delegation-revoked: ${cid}`
-      : `delegation-ancestor-revoked: ancestor=${cid} invoked=${cid}`;
+      : `delegation-ancestor-revoked: ancestor=${cid} invoked=${invokedCid}`;
     proxy.onInvocation = async (actions) => {
       if (!respondsTo(actions, "tinycloud.kv/list", "spaces/")) return undefined;
       await Promise.resolve();
@@ -302,6 +308,46 @@ for (const marker of ["delegation-revoked", "delegation-ancestor-revoked"] as co
     expect(await readFile(sessionPath, "utf8") === original).toBe(false);
   }, 90_000);
 }
+
+test("a cleared approval cannot be restored by a delayed pending-file writer", async () => {
+  const { hermetic, proxy, app, client, stateRoot, bootstrap, approve } = await setupProxiedSession();
+  const request = record((await client.callTool({
+    name: "tinycloud_kv_get",
+    arguments: { space: "applications", key: "agents/demo/profile", representation: "json" },
+  })).structuredContent);
+  expect(request.status).toBe("authority_required");
+  const oldUrl = String(record(request.approval).url);
+  const oldRedirect = await openKeyRedirect(app, oldUrl);
+  const nonce = new URL(oldUrl).searchParams.get("state")!.split(".")[1]!;
+  const pendingPath = join(stateRoot, ".tinycloud/profiles/agent/pending", `${nonce}.json`);
+  const pendingBytes = await readFile(pendingPath);
+  const sessionPath = join(stateRoot, ".tinycloud/profiles/agent/session.json");
+  const additionalPath = join(stateRoot, ".tinycloud/profiles/agent/additional-delegations.json");
+  const bootstrapCid = String(bootstrap.delegationCid);
+  proxy.onInvocation = (actions) => respondsTo(actions, "tinycloud.kv/list", "spaces/")
+    ? new Response(`delegation-revoked: ${bootstrapCid}`, { status: 401 })
+    : undefined;
+  const renewed = record((await client.callTool({ name: "tinycloud_connect", arguments: {} })).structuredContent);
+  const renewedUrl = String(renewed.approvalUrl);
+  expect(renewed).toMatchObject({ connected: false, approvalUrl: expect.stringContaining("/connect?state=") });
+  expect(await exists(sessionPath)).toBe(false);
+  expect(await exists(additionalPath)).toBe(false);
+
+  // A writer that started before cleanup may put the old file back afterwards.
+  await mkdir(join(stateRoot, ".tinycloud/profiles/agent/pending"), { recursive: true });
+  await writeFile(pendingPath, pendingBytes);
+  const freshOldApproval = await openKeyApprovalBody({
+    redirect: oldRedirect, tenantStateRoot: stateRoot, privateKey: hermetic.ownerPrivateKey,
+  });
+  expect((await hostedFetch(app, oldUrl, { redirect: "manual" })).status).toBe(400);
+  expect(await postCallback(app, oldUrl, freshOldApproval)).toMatchObject({ status: 400 });
+  expect(await exists(sessionPath)).toBe(false);
+  expect(await exists(additionalPath)).toBe(false);
+  proxy.onInvocation = undefined;
+  await approve(renewedUrl);
+  expect((await client.callTool({ name: "tinycloud_connect", arguments: {} })).structuredContent)
+    .toMatchObject({ connected: true });
+}, 90_000);
 
 test("distinct concurrent node checks share one tenant approval cleanup", async () => {
   const { hermetic, proxy, client, createClient, stateRoot, bootstrap } = await setupProxiedSession();
@@ -541,7 +587,7 @@ for (const marker of ["delegation-revoked", "delegation-ancestor-revoked"] as co
 
     const nodeText = marker === "delegation-revoked"
       ? `delegation-revoked: ${primaryCid}`
-      : `delegation-ancestor-revoked: ancestor=${primaryCid} invoked=${primaryCid}`;
+      : `delegation-ancestor-revoked: ancestor=${primaryCid} invoked=${String(otherBody.delegationCid)}`;
     proxy.onInvocation = (actions) => respondsTo(actions, "tinycloud.kv/get", primary.key)
       ? new Response(nodeText, { status: 401 })
       : undefined;
@@ -583,6 +629,128 @@ for (const marker of ["delegation-revoked", "delegation-ancestor-revoked"] as co
     expect(String(record(again.approval).url) === String(record(primaryRequest.approval).url)).toBe(false);
   }, 90_000);
 }
+
+test("an in-flight approval finishes before bootstrap renewal clears saved authority", async () => {
+  const { hermetic, proxy, app, client, stateRoot, bootstrap } = await setupProxiedSession();
+  const first = { space: "applications", key: "agents/demo/profile", representation: "json" };
+  const second = { ...first, key: "agents/demo/settings" };
+  const firstRequest = record((await client.callTool({ name: "tinycloud_kv_get", arguments: first })).structuredContent);
+  const firstUrl = String(record(firstRequest.approval).url);
+  const secondRequest = record((await client.callTool({ name: "tinycloud_kv_get", arguments: second })).structuredContent);
+  const secondUrl = String(record(secondRequest.approval).url);
+  const firstBody = await openKeyApprovalBody({
+    redirect: await openKeyRedirect(app, firstUrl),
+    tenantStateRoot: stateRoot,
+    privateKey: hermetic.ownerPrivateKey,
+  });
+  await activateOnNode(proxy.host, firstBody);
+  const sessionPath = join(stateRoot, ".tinycloud/profiles/agent/session.json");
+  const additionalPath = join(stateRoot, ".tinycloud/profiles/agent/additional-delegations.json");
+  let entered!: () => void;
+  const approvalReachedNode = new Promise<void>((resolve) => { entered = resolve; });
+  let release!: () => void;
+  const nodeMayAnswer = new Promise<void>((resolve) => { release = resolve; });
+  proxy.onDelegation = async () => {
+    entered();
+    await nodeMayAnswer;
+  };
+  try {
+    const callback = postCallback(app, firstUrl, firstBody);
+    await approvalReachedNode;
+    proxy.onInvocation = (actions) => respondsTo(actions, "tinycloud.kv/list", "spaces/")
+      ? new Response(`delegation-revoked: ${String(bootstrap.delegationCid)}`, { status: 401 })
+      : undefined;
+    const reconnect = client.callTool({ name: "tinycloud_connect", arguments: {} });
+    let redirectStatus = 302;
+    for (let attempt = 0; attempt < 100 && redirectStatus !== 400; attempt++) {
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      redirectStatus = (await hostedFetch(app, secondUrl, { redirect: "manual" })).status;
+    }
+    expect(redirectStatus).toBe(400);
+    expect(await exists(sessionPath)).toBe(true);
+    release();
+    expect(await callback).toEqual({ status: 200, body: { success: true } });
+    expect((await reconnect).structuredContent).toMatchObject({ connected: false });
+    expect(await exists(sessionPath)).toBe(false);
+    expect(await exists(additionalPath)).toBe(false);
+  } finally {
+    release();
+    proxy.onDelegation = undefined;
+  }
+}, 90_000);
+
+test("a full renewal leaves no scoped grants when a scoped write is in flight", async () => {
+  const { proxy, app, client, stateRoot, bootstrap, approve } = await setupProxiedSession();
+  const primary = { space: "applications", key: "agents/demo/profile", representation: "json" };
+  const secondary = { ...primary, key: "agents/demo/settings" };
+  const requiredPrimary = record((await client.callTool({ name: "tinycloud_kv_get", arguments: primary })).structuredContent);
+  const primaryBody = await approve(String(record(requiredPrimary.approval).url));
+  const requiredSecondary = record((await client.callTool({ name: "tinycloud_kv_get", arguments: secondary })).structuredContent);
+  await approve(String(record(requiredSecondary.approval).url));
+  const additionalPath = join(stateRoot, ".tinycloud/profiles/agent/additional-delegations.json");
+  const sessionPath = join(stateRoot, ".tinycloud/profiles/agent/session.json");
+  const originalRename = fileSystem.rename;
+  const originalRm = fileSystem.rm;
+  let entered!: () => void;
+  const scopedWriteEntered = new Promise<void>((resolve) => { entered = resolve; });
+  let release!: () => void;
+  const scopedWriteReleased = new Promise<void>((resolve) => { release = resolve; });
+  let held = false;
+  let released = false;
+  let removedBeforeScopedWrite = false;
+  const renameSpy = spyOn(fileSystem, "rename").mockImplementation(async (from, to) => {
+    if (to === additionalPath && !held) {
+      held = true;
+      entered();
+      await scopedWriteReleased;
+    }
+    return originalRename(from, to);
+  });
+  const rmSpy = spyOn(fileSystem, "rm").mockImplementation(async (path, options) => {
+    if (path === additionalPath && !released) {
+      removedBeforeScopedWrite = true;
+    }
+    return originalRm(path, options);
+  });
+  try {
+    proxy.onInvocation = (actions) => respondsTo(actions, "tinycloud.kv/get", primary.key)
+      ? new Response(`delegation-revoked: ${String(primaryBody.delegationCid)}`, { status: 401 })
+      : undefined;
+    const scoped = client.callTool({ name: "tinycloud_kv_get", arguments: primary });
+    await scopedWriteEntered;
+    const third = record((await client.callTool({
+      name: "tinycloud_kv_get",
+      arguments: { ...primary, key: "agents/demo/other" },
+    })).structuredContent);
+    expect(third.status).toBe("authority_required");
+    const pendingUrl = String(record(third.approval).url);
+    expect((await hostedFetch(app, pendingUrl, { redirect: "manual" })).status).toBe(302);
+    proxy.onInvocation = (actions) => respondsTo(actions, "tinycloud.kv/list", "spaces/")
+      ? new Response(`delegation-revoked: ${String(bootstrap.delegationCid)}`, { status: 401 })
+      : undefined;
+    const full = client.callTool({ name: "tinycloud_connect", arguments: {} });
+    // The pending link changes as soon as full renewal begins, before disk cleanup.
+    let redirectStatus = 302;
+    for (let attempt = 0; attempt < 100 && redirectStatus !== 400; attempt++) {
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      redirectStatus = (await hostedFetch(app, pendingUrl, { redirect: "manual" })).status;
+    }
+    expect(redirectStatus).toBe(400);
+    // The full clear cannot remove saved grants until the in-flight scoped write finishes.
+    expect(removedBeforeScopedWrite).toBe(false);
+    released = true;
+    release();
+    await scoped;
+    expect((await full).structuredContent).toMatchObject({ connected: false });
+    expect(await exists(additionalPath)).toBe(false);
+    expect(await exists(sessionPath)).toBe(false);
+  } finally {
+    released = true;
+    release();
+    rmSpy.mockRestore();
+    renameSpy.mockRestore();
+  }
+}, 90_000);
 
 test("a node request timeout preserves connection, saved grants, and tool discovery", async () => {
   const { proxy, client, stateRoot, bootstrap, approve } = await setupProxiedSession();
@@ -1140,6 +1308,7 @@ interface NodeProxy {
   host: string;
   readonly probes: () => number;
   onInvocation: ((actions: readonly NodeInvocation[]) => Promise<Response | undefined> | Response | undefined) | undefined;
+  onDelegation: (() => Promise<void>) | undefined;
   stop(): Promise<void>;
 }
 
@@ -1150,6 +1319,7 @@ async function serveNodeProxy(upstream: string): Promise<NodeProxy> {
   const proxy: NodeProxy = {
     host: "",
     probes: () => probes,
+    onDelegation: undefined,
     onInvocation: undefined,
     stop: async () => {
       if (!closed) {
@@ -1177,6 +1347,7 @@ async function serveNodeProxy(upstream: string): Promise<NodeProxy> {
           action === "tinycloud.kv/list" && resource.includes("/kv/spaces/"))) probes++;
         replacement = await proxy.onInvocation?.(actions);
       }
+      if (url.pathname === "/delegate") await proxy.onDelegation?.();
       const headers = new Headers();
       for (const [name, value] of Object.entries(incoming.headers)) {
         if (name === "host" || name === "connection" || name === "content-length" || name === "transfer-encoding") continue;

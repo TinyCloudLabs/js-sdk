@@ -58,6 +58,11 @@ renews only that grant. Other node responses keep stored approvals available.
 The account's delegate key stays in place while the owner signs new permissions
 through the usual OpenKey approval flow.
 
+HTTP integration tests cover approval renewal with an in-process node by
+default. The additional local-node case uses a v1.21.0 node binary when
+`TC_MCP_TEST_NODE` is set to its absolute path; otherwise that case is skipped.
+The test starts and stops its own node process.
+
 If the owner declines, stop rather than asking again in that conversation.
 
 For larger questions, offer “a fast, searchable copy of your records” after

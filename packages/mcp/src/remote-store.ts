@@ -16,7 +16,8 @@ import {
   type TinyCloudSession,
 } from "@tinycloud/node-sdk";
 import { TCWSessionManager, importKey, initPanicHook } from "@tinycloud/node-sdk-wasm";
-import { invokeOperation, nodeRevocationOf, operationRetryDescriptor, type NodeRevocation } from "@tinycloud/operations";
+import { invokeOperation } from "@tinycloud/operations";
+import { nodeRevocationOf, operationRetryDescriptor, type NodeRevocation } from "@tinycloud/operations/mcp-authority";
 import { tcAppsApprovalMessage, tcAppsApprovalReason } from "@tinycloud/operations/tc-apps";
 
 import type { McpOperationInvocation } from "./tools.js";
@@ -331,11 +332,6 @@ export class RemoteTenantStore {
       return "bootstrap";
     }
     const key = tenant.stateRoot;
-    const current = this.#scopedClearing.get(key);
-    if (current) {
-      await current;
-      return this.#clearRefusedAuthority(tenant, refusal);
-    }
     const removed = this.#clearedScoped.get(tenant.stateRoot);
     if (removed?.has(refusal.revokedCid)) return "scoped";
     const additional = await readJson<unknown>(this.#additionalPath(tenant.stateRoot));
@@ -424,11 +420,9 @@ export class RemoteTenantStore {
     const pending = await this.#readPending(state, true);
     const stateRoot = join(this.#config.stateDir, "tenants", pending.tenantId);
     const prior = this.#approvalProcessing.get(stateRoot);
-    const clearing = this.#clearing.get(stateRoot);
     const processing = (async () => {
       if (prior) await prior.catch(() => undefined);
       try {
-        if (clearing) await clearing;
         const tenant = await this.#readTenant(pending.tenantId);
         if ((pending.approvalEpoch ?? 0) !== tenant.approvalEpoch) {
           throw new ApprovalRequestError("state_not_pending", "Approval state is invalid or already used.");
