@@ -339,6 +339,8 @@ depends on sdk-core). It is a separate entry, not in any package root, so
 
 ```typescript
 import { listMatching } from '@tinycloud/sdk-core/kv-list-matching';
+// TypeScript: the subpath's types need `moduleResolution` node16, nodenext or
+// bundler. With "node" tsc reports TS2307 (the runtime import still works).
 
 // Keys: qa/b00, qa/b01, qa/c00
 const result = await listMatching(tc.kv, 'qa/b');

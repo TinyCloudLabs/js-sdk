@@ -56,8 +56,16 @@ export type KVListMatchingOptions = Omit<
  * apps too (web-sdk already depends on sdk-core). It is deliberately not
  * exported from any package root (sdk-core, sdk-services, web-sdk, node-sdk),
  * to keep their bundles unchanged. node-sdk builds with `moduleResolution:
- * "node"`, which cannot resolve package subpaths, so it has no re-export;
- * import this entry directly.
+ * "node"`, which cannot resolve package subpaths, so it has no re-export.
+ *
+ * **TypeScript requirement:** the subpath's types resolve only when
+ * `moduleResolution` is `node16`, `nodenext` or `bundler`. Under `"node"`
+ * (node-sdk's own setting) `tsc` fails the import with TS2307; the runtime
+ * CJS/ESM import still works. No `typesVersions` shim is provided, the same
+ * limit as `@tinycloud/sdk-core/held-credentials`.
+ *
+ * **Leading slash:** `prefix` is passed through un-normalised, like `list`:
+ * `'/qa/b'` lists the folder `/qa/` and matches keys that start with `/qa/b`.
  *
  * ## Why this is a helper and not a `list` option
  *

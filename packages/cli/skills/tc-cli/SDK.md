@@ -19,6 +19,8 @@ const keys = await tc.kv.list();           // string[]
 // (node >= 1.19.0), so this standalone helper lists the folder and filters
 // client-side. Reads the whole folder: use for type-ahead over small folders.
 // import { listMatching } from "@tinycloud/sdk-core/kv-list-matching";
+// (TypeScript needs moduleResolution node16/nodenext/bundler to see its types;
+// "node" gives TS2307, though the runtime import works.)
 const starting = await listMatching(tc.kv, "qa/b");  // Result: keys qa/b00, qa/b01, ...
 const meta = await tc.kv.head("key");      // metadata only
 await tc.kv.delete("key");

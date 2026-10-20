@@ -161,6 +161,16 @@ describe("listMatching (partial-segment listing, client-side)", () => {
     ]);
   });
 
+  test("matching is case-exact: an uppercase sibling is neither listed nor matched", async () => {
+    const service = serviceOver(nodeListing(["qa/b00", "qa/B00", "qa/b01", "QA/b00"]));
+    // `qa/B00` shares the letters but not the case: excluded.
+    expect(keysOf(await listMatching(service, "qa/b"))).toEqual(["qa/b00", "qa/b01"]);
+    // And the other way round: only the uppercase key matches `qa/B`.
+    expect(keysOf(await listMatching(service, "qa/B"))).toEqual(["qa/B00"]);
+    // The folder is case-exact too (node 1.19.0, TC-731).
+    expect(keysOf(await listMatching(service, "QA/b"))).toEqual(["QA/b00"]);
+  });
+
   test("no match returns an empty list, not an error", async () => {
     const service = serviceOver(nodeListing(KEYS));
     expect(await listMatching(service, "qa/zzz")).toEqual({ ok: true, data: { keys: [] } });
