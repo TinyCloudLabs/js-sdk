@@ -47,7 +47,7 @@ const artC = (await courier(alice.home, ['pair', 'accept', '--file', write('b.js
 await courier(bob.home, ['pair', 'accept', '--file', write('c.json', artC)]);
 
 const wakeOut = path.join(tmp, 'wake.out');
-const watcher = spawn(process.execPath, [CLI, 'watch', '--exec', `printf '%s\\n' "$COURIER_PROMPT" >> '${wakeOut}'`, '--cwd', tmp], {
+const watcher = spawn(process.execPath, [CLI, 'watch', '--exec', `printf '%s\\n' "$COURIER_PROMPT" >> '${wakeOut}'`, '--unguarded', '--cwd', tmp], {
   env: { ...process.env, COURIER_HOME: alice.home }, stdio: ['ignore', 'pipe', 'inherit'],
 });
 const events = [];

@@ -9,7 +9,7 @@ import { loadProfile, profileDir, writeSecure } from './profile.js';
 import { courierNode, peerHooks, peerKv } from './node.js';
 import type { ParsedArgs } from './args.js';
 import { WATCH_DEFAULTS, Watcher, type WatchOptions } from './watch.js';
-import { createWaker, jsonLineLog, spawnRunner, type SessionStore, type WakeConfig } from './wake.js';
+import { UNGUARDED_REFUSAL, createWaker, jsonLineLog, spawnRunner, type SessionStore, type WakeConfig } from './wake.js';
 import { guardArgv } from './guard/command.js';
 import { writeGuardSettings } from './guard/install.js';
 import {
@@ -46,7 +46,7 @@ export function watchOptions(args: ParsedArgs): WatchOptions {
 }
 
 export const watchUsage = () =>
-  `Usage: ${cmd('watch [--wake none|paseo|claude|exec] [--exec <cmd>] [--cwd dir] [--debounce 30] [--poll 60] [--ticket 25] [--once]')}\n` +
+  `Usage: ${cmd('watch [--wake none|paseo|claude|exec] [--exec <cmd> --unguarded] [--cwd dir] [--debounce 30] [--poll 60] [--ticket 25] [--once]')}\n` +
   `       ${cmd('watch … (--install-launchd | --install-systemd) [--dry-run] [--name n]')}`;
 
 /** Where a bare `claude`/`paseo` resolves now, so a service with a minimal PATH still finds it. */
@@ -69,6 +69,9 @@ export function wakeConfig(args: ParsedArgs, owner: string | undefined): WakeCon
   if (!ADAPTERS.includes(adapter)) throw new CourierError('usage', `Unknown --wake adapter "${adapter}". ${watchUsage()}`);
   if (adapter === 'exec' && !exec) throw new CourierError('usage', `--wake exec needs --exec <cmd>. ${watchUsage()}`);
   if (exec && adapter !== 'exec') throw new CourierError('usage', '--exec only applies with --wake exec.');
+  const unguarded = args.has('unguarded');
+  if (unguarded && adapter !== 'exec') throw new CourierError('usage', '--unguarded only applies with --wake exec; the claude and paseo adapters are always guarded.');
+  if (adapter === 'exec' && !unguarded) throw new CourierError('usage', `${UNGUARDED_REFUSAL}\n${watchUsage()}`);
   const allow = args.all('claude-allow');
   return {
     adapter,
@@ -76,6 +79,7 @@ export function wakeConfig(args: ParsedArgs, owner: string | undefined): WakeCon
     owner: owner ?? 'your owner',
     home: profileDir(),
     exec,
+    unguarded,
     paseo: { bin: value(args, 'paseo-bin') ?? 'paseo', provider: value(args, 'paseo-provider') ?? 'claude', mode: value(args, 'paseo-mode') },
     // A woken claude may run only Courier commands unless the owner widens it with --claude-settings/--claude-allow.
     claude: { bin: value(args, 'claude-bin') ?? 'claude', settings: value(args, 'claude-settings'), allow: allow.length ? allow : [`Bash(${programName()}:*)`] },

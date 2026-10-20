@@ -108,8 +108,8 @@ test('claude: a failing run rejects so the wake stays pending', async () => {
 
 test('exec: passes thread, peer and messages in the environment and rejects on a non-zero exit', async () => {
   let seen;
-  const waker = createWaker(config('exec'), {
-    sessions: { get: () => undefined, set() {} }, env: { PATH: '/bin' },
+  const waker = createWaker(config('exec', { unguarded: true }), {
+    sessions: { get: () => undefined, set() {} }, env: { PATH: '/bin' }, notice() {},
     run: async (bin, args, options) => { seen = { bin, args, env: options.env }; return { code: 3, stdout: '', stderr: 'nope' }; },
   });
   await assert.rejects(waker(request), /exited 3/);
@@ -117,6 +117,58 @@ test('exec: passes thread, peer and messages in the environment and rejects on a
   assert.equal(seen.env.COURIER_THREAD, request.threadId);
   assert.equal(seen.env.COURIER_PEER, 'hunter');
   assert.deepEqual(JSON.parse(seen.env.COURIER_MESSAGES).map((m) => m.messageId), ['01M5C9EDF0417FAM64RPKT5WP5']);
+});
+
+test('exec: refuses without --unguarded and runs nothing; with it, says so on every wake and in the prompt', async () => {
+  let ran = 0;
+  const run = async () => { ran++; return { code: 0, stdout: '', stderr: '' }; };
+  const sessions = { get: () => undefined, set() {} };
+  const lines = [];
+  const refused = createWaker(config('exec'), { sessions, run, notice: (l) => lines.push(l) });
+  await assert.rejects(refused(request), /--unguarded/);
+  assert.equal(ran, 0, 'nothing is woken');
+  assert.deepEqual(lines, [], 'and no notice claims a wake happened');
+
+  let prompt;
+  const guarded = createWaker(config('exec', { unguarded: true }), { sessions, notice: (l) => lines.push(l), run: async (bin, args, o) => { ran++; prompt = o.env.COURIER_PROMPT; return { code: 0, stdout: '', stderr: '' }; } });
+  await guarded(request);
+  await guarded(request);
+  await guarded(request);
+  assert.equal(ran, 3);
+  assert.equal(lines.length, 3, 'one notice per wake, not per start');
+  for (const line of lines) assert.match(line, /this wake is not approval-guarded/);
+  assert.match(lines[0], new RegExp(request.threadId));
+  assert.match(prompt, /this wake is not approval-guarded/, 'the agent sees it too');
+});
+
+test('claude and paseo wakes are unaffected by the exec notice and never print it', async () => {
+  const lines = [];
+  const sessions = { get: () => undefined, set() {} };
+  const claude = createWaker(config('claude'), { sessions, notice: (l) => lines.push(l), run: async () => ({ code: 0, stdout: '{"session_id":"s"}', stderr: '' }) });
+  await claude(request);
+  const paseo = createWaker(config('paseo'), {
+    sessions, notice: (l) => lines.push(l), prepareGuard() {},
+    run: async (bin, args) => ({ code: 0, stdout: args[0] === 'ls' ? '[]' : JSON.stringify({ agentId: 'a', provider: 'claude', cwd: '/work' }), stderr: '' }),
+  });
+  await paseo(request);
+  assert.deepEqual(lines, []);
+});
+
+test('watch: --wake exec / --exec needs --unguarded (also when installing a service); --unguarded is exec-only', () => {
+  const cfg = (...argv) => wakeConfig(parseArgs(['watch', ...argv]), 'sam');
+  assert.throws(() => cfg('--wake', 'exec', '--exec', 'echo hi'), /needs --unguarded/);
+  assert.throws(() => cfg('--exec', 'echo hi'), /needs --unguarded/, '--exec alone selects exec');
+  assert.throws(() => cfg('--wake', 'exec', '--exec', 'echo hi', '--install-systemd', '--dry-run'), /needs --unguarded/);
+  assert.equal(cfg('--wake', 'exec', '--exec', 'echo hi', '--unguarded').unguarded, true);
+  assert.equal(cfg('--exec', 'echo hi', '--unguarded', '--cwd', '/x').adapter, 'exec');
+  for (const wake of ['claude', 'paseo', 'none']) {
+    assert.equal(cfg('--wake', wake).unguarded, false, wake);
+    assert.throws(() => cfg('--wake', wake, '--unguarded'), /only applies with --wake exec/, wake);
+  }
+  // The flag survives into the service command line.
+  const args = parseArgs(['watch', '--exec', 'echo hi', '--unguarded', '--install-launchd', '--dry-run']);
+  const argv = serviceArgv({ ...args, positional: [] }, wakeConfig(args, 'sam'), ['node', '/opt/courier.js', 'watch']);
+  assert.ok(argv.includes('--unguarded') && argv.includes('--exec'));
 });
 
 const spec = {
@@ -169,7 +221,7 @@ test('spawnRunner runs a real child process: stdin, exit code, stderr, missing b
 });
 
 test('a relative --cwd is resolved once, so the service command and its WorkingDirectory agree', () => {
-  const args = parseArgs(['watch', '--wake', 'exec', '--exec', 'echo hi', '--cwd', 'rel/dir']);
+  const args = parseArgs(['watch', '--wake', 'exec', '--exec', 'echo hi', '--unguarded', '--cwd', 'rel/dir']);
   const config = wakeConfig(args, 'sam');
   const argv = serviceArgv({ ...args, positional: [] }, config, ['node', '/opt/courier.js', 'watch']);
   assert.ok(config.cwd.startsWith('/'));

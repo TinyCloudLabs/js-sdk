@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { oneLine } from './a2a.js';
 import { defer } from './defer.js';
+import { CourierError } from './errors.js';
 import { cmd } from './program.js';
 import { courierEnvOverrides, courierOnlyEnv } from './guard/install.js';
 import { GUARD_LABEL, installProjectGuard, isClaudeProvider, paseoEnv, sameDir, verifyProjectGuard } from './guard/paseo.js';
@@ -136,6 +137,8 @@ export interface WakeConfig {
   claude: { bin: string; settings?: string; allow: string[] };
   /** How a woken agent reaches the guard hook (`node <entry> … guard`); the `paseo` adapter installs it in `cwd`. */
   guard?: { argv: string[]; entry: string };
+  /** `--unguarded`: the operator accepts that the `exec` adapter runs without the Courier guard. */
+  unguarded?: boolean;
   timeoutMs: number;
 }
 
@@ -154,11 +157,19 @@ export function deadlineRunner(run: Runner, totalMs: number, now: () => number =
   return (bin, args, options) => run(bin, args, { ...options, timeoutMs: Math.max(1000, Math.min(options.timeoutMs, deadline - now())) });
 }
 
+/** Printed on every `exec` wake (stderr, so the service log has it). */
+export const UNGUARDED_NOTICE = 'this wake is not approval-guarded: the exec adapter installs no Courier guard, so the command it runs can merge, deploy or publish without an approval';
+
+export const UNGUARDED_REFUSAL =
+  '--wake exec installs no Courier guard (no approval check on merge, deploy, publish or pushes to main), so it needs --unguarded. ' +
+  'Use it only for commands that cannot merge, deploy or publish; for an agent that can, use --wake claude or --wake paseo --paseo-provider claude, which are guarded.';
+
 export function createWaker(
   config: WakeConfig,
-  deps: { run: Runner; sessions: SessionStore; env?: NodeJS.ProcessEnv; prepareGuard?: () => void; prompt?: (request: WakeRequest) => string },
+  deps: { run: Runner; sessions: SessionStore; env?: NodeJS.ProcessEnv; prepareGuard?: () => void; prompt?: (request: WakeRequest) => string; notice?: (line: string) => void },
 ): Waker {
   const env = deps.env ?? process.env;
+  const notice = deps.notice ?? ((line: string) => process.stderr.write(`${line}\n`));
   const prompt = deps.prompt ?? ((request: WakeRequest) => wakePrompt(request, config.owner));
   /** Install the project guard in the agent's cwd and prove it works; throws, so the wake stays pending, if it cannot. */
   const prepareGuard = deps.prepareGuard ?? (() => {
@@ -167,6 +178,9 @@ export function createWaker(
   });
 
   const exec: Waker = async (request) => {
+    // The exec adapter installs no guard. It runs only when the operator said so, and says so on every wake.
+    if (!config.unguarded) throw new CourierError('usage', UNGUARDED_REFUSAL);
+    notice(`${UNGUARDED_NOTICE} (thread ${request.threadId}, peer ${label(request.peer)})`);
     const run = deadlineRunner(deps.run, config.timeoutMs);
     const result = await run('/bin/sh', ['-c', config.exec!], {
       cwd: config.cwd,
@@ -178,7 +192,7 @@ export function createWaker(
         COURIER_MESSAGES: JSON.stringify(request.messages),
         COURIER_APPROVALS: JSON.stringify(request.approvals ?? []),
         COURIER_SUBJECT: request.subject,
-        COURIER_PROMPT: prompt(request),
+        COURIER_PROMPT: `${prompt(request)}\n\n${UNGUARDED_NOTICE}.`,
       },
     });
     if (result.code !== 0) throw failure('exec command', result);

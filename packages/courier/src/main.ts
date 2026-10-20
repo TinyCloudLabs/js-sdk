@@ -55,17 +55,21 @@ Guards (woken agents run with these; humans rarely do):
                                    Print/write the Claude Code settings (hook + deny rules) that install it.
 
 Delivery (one watcher per person per machine; never calls a model):
-  watch [--wake none|paseo|claude|exec] [--exec <cmd>] [--cwd dir] [--debounce 30] [--poll 60] [--ticket 25] [--once]
+  watch [--wake none|paseo|claude|exec] [--exec <cmd> --unguarded] [--cwd dir] [--debounce 30] [--poll 60] [--ticket 25] [--once]
                                    Subscribe to each peer's to/<me>/ and your me/approvals/, poll every
                                    --poll s as the fallback, mirror new messages into me/mirror/, update
                                    receipts, then wake after a --debounce s quiet period. Logs one JSON
                                    line per event. --once: one catch-up pass, wake immediately, exit.
                                    Wake adapters (all run in --cwd, default here):
                                      paseo   find the agent labelled courier-thread=<id> and message it, else
-                                             create one [--paseo-provider claude] [--paseo-mode m] [--paseo-bin p]
-                                     claude  \`claude -p\`, session id kept per thread and resumed later
+                                             create one [--paseo-provider claude] [--paseo-mode m] [--paseo-bin p].
+                                             Guarded: installs the guard in <cwd>/.claude/settings.local.json,
+                                             Claude agents only (use --paseo-provider claude), refuses without it
+                                     claude  \`claude -p\`, always guarded, session id kept per thread and resumed
                                              [--claude-settings f] [--claude-allow rule]… [--claude-bin p]
-                                     exec    sh -c <cmd> with COURIER_THREAD, COURIER_PEER, COURIER_MESSAGES
+                                     exec    sh -c <cmd> with COURIER_THREAD, COURIER_PEER, COURIER_MESSAGES.
+                                             NOT approval-guarded: needs --unguarded, prints a notice on every
+                                             wake; not for agents that can merge, deploy or publish
                                    [--wake-timeout 900] limits one wake run, in seconds.
   watch … --install-launchd | --install-systemd [--dry-run] [--name n]
                                    Install the same watch command as a macOS launchd agent or a Linux

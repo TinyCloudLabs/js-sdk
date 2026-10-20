@@ -157,7 +157,7 @@ subject is quoted and flattened onto one line.
 | `none` (default) | Delivers and mirrors; wakes nobody. |
 | `paseo` | Finds the agent labelled `courier-thread=<id>` and `courier-guard=1` (`paseo ls -g --label`) and sends it the prompt (`paseo send --prompt-file`); otherwise creates one (`paseo run`) with labels `courier-thread`, `courier-peer`, `courier-guard`, title `✉ <peer> · <subject>` and the courier-only environment. Installs and proves the guard first and refuses to wake without it (see Guard); Claude agents only. `--paseo-provider` (default `claude`), `--paseo-mode`, `--paseo-bin`. |
 | `claude` | `claude -p --output-format json`, prompt on stdin, always with the guard settings (see Guard) and the courier-only environment. The session id is saved per thread in `<COURIER_HOME>/sessions.json` and later wakes pass `--resume`; a session the CLI no longer has starts a fresh one. Only `Bash(courier:*)` is allowed unless you pass `--claude-allow <rule>` (repeatable); `--claude-settings <file>` is merged under the guard. `--claude-bin`. |
-| `exec` | `sh -c <cmd>` (`--exec <cmd>` alone selects it) with `COURIER_THREAD`, `COURIER_PEER`, `COURIER_MESSAGES` (JSON: id, intent, sent time), `COURIER_SUBJECT`, `COURIER_PROMPT` and `COURIER_HOME` in the courier-only environment (see Guard). |
+| `exec` | `sh -c <cmd>` with `COURIER_THREAD`, `COURIER_PEER`, `COURIER_MESSAGES` (JSON: id, intent, sent time), `COURIER_SUBJECT`, `COURIER_PROMPT` and `COURIER_HOME` in the courier-only environment. **Not approval-guarded:** it needs `--exec <cmd> --unguarded` (without the flag the watcher refuses to start, wakes nothing and names the flag), and every exec wake prints `this wake is not approval-guarded` to stderr (the service log). Not for agents that can merge, deploy or publish; use `claude` or `paseo --paseo-provider claude`. |
 
 A wake succeeds when the agent run exits 0 (`--wake-timeout`, default 900 s,
 kills a run that hangs). A failed wake stays pending and retries after 60 s.
@@ -329,6 +329,14 @@ A guarded agent cannot start another agent (it would run outside the guard):
 `aider` and `goose` are refused in Bash, and Paseo's MCP tools
 (`mcp__paseo__*`) are denied.
 
+**Guarded and unguarded wakes.** `--wake claude` and `--wake paseo` are always
+guarded; neither has an off switch. `--wake exec` runs your own command and cannot
+install a guard, so it is refused unless you pass `--unguarded`, and it says
+"this wake is not approval-guarded" on every wake. Use it only for commands that
+cannot merge, deploy or publish. On a Paseo host, set `--paseo-provider claude`
+(the default) and leave `--wake paseo` to install the guard; do not use
+`--paseo-provider` with another agent.
+
 **Courier-only environment.** Woken `claude` and `exec` runs get the Courier
 profile only: `COURIER_HOME` is set, `TC_HOME` points at an empty directory
 (`<COURIER_HOME>/guard/no-owner-profile`) and `TC_PRIVATE_KEY`, `TC_PROFILE`,
@@ -348,7 +356,7 @@ for the courier key but not against code that has the owner's own credentials.
 An agent can still be started outside the guard from a program the agent
 writes, and a `paseo` agent shares its `<cwd>/.claude/settings.local.json` with
 anything else run in that directory (that file is the guard's too). The `exec`
-adapter runs your own command and installs no guard. v1 should give courier
+adapter runs your own command and installs no guard (hence `--unguarded`). v1 should give courier
 agents a GitHub token without merge rights.
 
 ### Running it as a service
