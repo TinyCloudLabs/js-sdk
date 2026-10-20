@@ -41,6 +41,7 @@
     "cli-replica-error-exits",
     "cli-share-artifact-publish",
     "cli-share-fragment-wording",
+    "cli-share-history-reason",
     "cli-wait-openkey-space-setup",
     "courier-approval",
     "courier-budget",
