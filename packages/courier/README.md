@@ -667,3 +667,15 @@ bun run --cwd packages/courier test:live  # manual only
 fresh throwaway identities on the production `https://tee.node.tinycloud.xyz`,
 including a grant installed through a short code served by a local fake
 OpenKey API. It is not part of `test` or CI.
+
+The bounded Claude/Paseo proof runner is `scripts/live-proofs.mjs`. Its default
+and `--dry-run` print the four planned commands without calling a binary, reading
+authentication or creating files. `--plan <json>` selects an ordered subset of
+the four proof cases. `--self-test` rehearses fixtures with scripted adapters,
+dummy login and broker tokens, and disposable tee.node identities; it calls no
+model or Paseo agent. Only an explicitly released batch may use `--execute
+--approved-head <pushed SHA>`. The runner verifies the account email before
+copying only `.claude/.credentials.json` into private HOME, records usage with
+its provider source, persists every attempt before invocation, and stops on
+any failure or quota error without retry. The lifetime cap is ten attempts;
+current plan is four single-prompt Haiku runs. The live batch remains on hold.
