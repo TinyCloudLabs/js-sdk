@@ -67,6 +67,46 @@ test('broker builds only the fixed argv, consumes BEFORE exec, and refuses repla
   assert.equal(f.calls.length, 2);
 });
 
+for (const [label, changedView] of [
+  ['changed head', { headRefOid: 'b'.repeat(40) }],
+  ['changed base', { baseRefName: 'release' }],
+  ['absent base', { baseRefName: undefined }],
+  ['empty base', { baseRefName: '' }],
+  ['base case differs', { baseRefName: 'Master' }],
+  ['absent head', { headRefOid: undefined }],
+  ['empty head', { headRefOid: '' }],
+  ['head case differs', { headRefOid: SHA.toUpperCase() }],
+]) {
+  test(`broker refuses ${label} before consumption or merge`, async () => {
+    const f = fixture();
+    const exec = f.deps.exec;
+    f.deps.exec = async (bin, args, options) => {
+      const result = await exec(bin, args, options);
+      return args[1] === 'view'
+        ? { ...result, stdout: JSON.stringify({ ...JSON.parse(result.stdout), ...changedView }) }
+        : result;
+    };
+    await assert.rejects(runApproved(ID, f.deps), /nothing was consumed/);
+    unused(f);
+    assert.deepEqual(f.calls.map(c => c.args[1]), ['view']);
+  });
+}
+
+test('broker accepts an exact case-preserved approved base', async () => {
+  const f = fixture({ request: { base: 'Release/Main' } });
+  const exec = f.deps.exec;
+  f.deps.exec = async (bin, args, options) => {
+    const result = await exec(bin, args, options);
+    return args[1] === 'view'
+      ? { ...result, stdout: JSON.stringify({ ...JSON.parse(result.stdout), baseRefName: 'Release/Main' }) }
+      : result;
+  };
+  const result = await runApproved(ID, f.deps);
+  assert.equal(result.ok, true);
+  assert.equal(result.headSha, SHA);
+  assert.equal(f.calls[1].args.at(-1), `--match-head-commit=${SHA}`);
+});
+
 test('hash mismatch, expired, denied, missing and forged approval refuse before execution or consume', async () => {
   const cases = [
     [f => { f.rows.get(k.request(ID)).target = 'a/b#43'; }, 'approval-mismatch'],

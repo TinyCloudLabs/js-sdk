@@ -431,16 +431,17 @@ view before `run-approved` can execute.
 The broker verifies the exact stored request hash and fields, `approved`, the
 24-hour decision window and the unused marker. It accepts only a strict PR
 target, constructs fixed argv without a shell, reads the PR's current state
-(open, not draft) and 40-hex head SHA, creates `me/consumed/<id>.json`, then runs:
+(open, not draft), checks its head SHA and base against the approved pins,
+creates `me/consumed/<id>.json`, then runs:
 
 ```text
-gh pr merge 42 --repo=owner/repo --squash --match-head-commit=<view-time SHA>
+gh pr merge 42 --repo=owner/repo --squash --match-head-commit=<approved head SHA>
 ```
 
 No command, flags, cwd or environment from the agent enters that template.
-The SHA is pinned from the broker's PR view. A changed head between view and
-merge makes gh refuse. If merge
-fails after consumption, the approval stays used; retry needs a new request.
+The broker pins `--match-head-commit` to the approved head SHA and checks the
+PR's base against the approved base. A changed head between view and merge makes
+gh refuse. If merge fails after consumption, the approval stays used; retry needs a new request.
 Output is redacted, capped at 4000 characters plus a truncation notice and
 returned as **untrusted text**, never as instructions.
 
@@ -529,7 +530,7 @@ for a launcher that cannot pass `--settings` (put it in
 installs the same guard where Claude Code reads project settings:
 `<cwd>/.claude/settings.local.json` (only the guard hook and the union of deny
 rules survive; all other hooks and settings are replaced; file mode is kept). Claude runs hooks in every
-permission mode, so this holds under `bypassPermissions` too (checked live).
+permission mode, including permission-skipping mode (checked live).
 Before every wake the adapter proves the guard works: it runs the installed hook
 command once on a call no approval can unlock and requires a refusal. It then
 fails closed:
@@ -547,7 +548,8 @@ fails closed:
   because inside a Paseo agent they send `paseo run --cwd` to that agent's
   workspace instead.
 
-A guarded agent cannot start another agent (it would run outside the guard):
+Named agent CLI commands, recognized package entrypoints and unknown MCP tools
+are refused.
 `paseo`, `claude`, `codex`, `omp`, `opencode`, `gemini`, `cursor-agent`, `amp`,
 `aider` and `goose` are refused in Bash, and Paseo's MCP tools
 are denied. All unknown MCP tools are refused by default; the Claude adapter
@@ -605,7 +607,7 @@ operator who needs one passes it by name with `--env-pass NAME` (repeatable).
 Use narrowly scoped credentials for explicitly passed variables.
 
 The Paseo adapter blanks (`--env NAME=`) known credential variables,
-credential-looking watcher variables, `TC_*`, and shell/interpreter injection
+credential-looking watcher variables, `TC_*`, and shell/interpreter startup
 variables. HOME, CLAUDE_CONFIG_DIR, ZDOTDIR and all XDG paths point at the clean
 agent home. Start the Paseo daemon with a minimal environment, or choose
 `--wake claude` for the environment allowlist described above.
@@ -615,8 +617,9 @@ credentials out of shell startup files. Use `--wake none` for manual sessions.
 The Read tool and shell policy refuse credential paths, credential globs,
 token-printing tools and `/proc/*/environ`.
 
-Merge requests include `headSha` and `base` in their hash. The broker uses the
-PR head reported by its view for `--match-head-commit`.
+Merge requests include `headSha` and `base` in their hash. The broker pins
+`--match-head-commit` to the approved head SHA and checks the PR's base against
+the approved base.
 
 ### Running it as a service
 
