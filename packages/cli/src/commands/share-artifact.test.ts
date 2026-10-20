@@ -207,3 +207,72 @@ describe("tc share versions", () => {
     expect(result.stderr).toContain("(tinycloud.kv/list)");
   });
 });
+
+describe("tc share publish: component files and link output", () => {
+  async function fileNamed(name: string): Promise<string> {
+    const root = await mkdtemp(join(tmpdir(), "tc-share-media-"));
+    const path = join(root, name);
+    await writeFile(path, "export default function App() { return null; }\n", "utf8");
+    return path;
+  }
+
+  test("a .jsx or .tsx file is published as text/jsx or text/tsx, other extensions are unchanged", async () => {
+    const seen: TargetPublishInput[] = [];
+    configureShareCommandServices({ targetAdapter: { publish: async (request) => { seen.push(request); return publishedFor(request); } } });
+    for (const name of ["App.jsx", "App.tsx", "UPPER.JSX", "note.md", "page.html", "script.js", "blob.bin"]) {
+      await runShareCaptured(["share", "publish", await fileNamed(name), "--viewer-origin", viewerOrigin, "--json"]);
+    }
+    expect(seen.map((request) => request.mediaType)).toEqual(["text/jsx", "text/tsx", "text/jsx", "text/markdown", "text/html", "text/javascript", "application/octet-stream"]);
+  });
+
+  test("--media-type still overrides the extension", async () => {
+    const seen: TargetPublishInput[] = [];
+    configureShareCommandServices({ targetAdapter: { publish: async (request) => { seen.push(request); return publishedFor(request); } } });
+    await runShareCaptured(["share", "publish", await fileNamed("App.jsx"), "--media-type", "text/plain", "--viewer-origin", viewerOrigin, "--json"]);
+    expect(seen[0]?.mediaType).toBe("text/plain");
+  });
+
+  test("--to anyone --action edit is refused with an exit code and message, and nothing is published", async () => {
+    let published = 0;
+    configureShareCommandServices({ targetAdapter: { publish: async (request) => { published += 1; return publishedFor(request); } } });
+    const file = await input();
+    for (const to of ["anyone", "bearer"]) {
+      for (const actions of [["edit"], ["read", "edit"]]) {
+        const result = await refusal(["share", "publish", file, "--to", to, "--action", ...actions, "--json"]);
+        expect(result.exitCode).toBe(2);
+        expect(result.stderr).toContain("INVALID_ARGUMENT");
+        expect(result.stderr).toContain("--action edit is not available with --to anyone");
+        expect(result.stdout).toBe("");
+      }
+    }
+    expect(published).toBe(0);
+  });
+
+  test("edit stays available to an addressed recipient", async () => {
+    const seen: TargetPublishInput[] = [];
+    configureShareCommandServices({ targetAdapter: { publish: async (request) => { seen.push(request); return publishedFor(request); } } });
+    const result = await refusal(["share", "publish", await input(), "--to", did, "--action", "read", "edit", "--viewer-origin", viewerOrigin, "--json"]);
+    expect(result.exitCode).toBeUndefined();
+    expect(seen[0]?.actions).toEqual(["read", "edit"]);
+  });
+
+  test("--json prints the link only with --reveal-link", async () => {
+    configureShareCommandServices({ targetAdapter: { publish: async (request) => publishedFor(request) } });
+    const file = await input();
+    const plain = await runShareCaptured(["share", "publish", file, "--viewer-origin", viewerOrigin, "--json"]);
+    expect(plain.stdout).not.toContain("tc1=");
+    expect(JSON.parse(plain.stdout)).not.toHaveProperty("url");
+
+    const revealed = await runShareCaptured(["share", "publish", file, "--viewer-origin", viewerOrigin, "--json", "--reveal-link"]);
+    const body = JSON.parse(revealed.stdout) as { url?: string; protocol: string; link: { cid: string } };
+    expect(body.url).toBe(`${viewerOrigin}/viewer#tc1=opaque`);
+    expect(body).toMatchObject({ protocol: "tinycloud-share", link: { cid: "bafy-native" } });
+    expect(revealed.stderr).not.toContain("tc1=");
+  });
+
+  test("the link is not in --json output when the global --json flag is used without --reveal-link", async () => {
+    configureShareCommandServices({ targetAdapter: { publish: async (request) => publishedFor(request) } });
+    const result = await runShareCaptured(["--json", "share", "publish", await input(), "--viewer-origin", viewerOrigin]);
+    expect(result.stdout).not.toContain("tc1=");
+  });
+});
