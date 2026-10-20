@@ -282,6 +282,56 @@ describe("activateValidatedRuntimeDelegation", () => {
   });
 });
 
+describe("whole-service (empty path) runtime delegations", () => {
+  test("activates a delegation whose signed resource has no path and reads it back as the empty path", async () => {
+    const space = "tinycloud:pkh:eip155:1:0xowner:applications";
+    const authorizationPayload = {
+      iss: "did:key:signed-delegator",
+      aud: REQUESTER_DID,
+      exp: Math.floor(Date.now() / 1000) + 3600,
+      prf: ["bafy-signed-parent"],
+      fct: [{ remainingRedelegationDepth: 0 }],
+      att: {
+        [`${space}/kv`]: { "tinycloud.kv/get": [{}], "tinycloud.kv/list": [{}] },
+        [`${space}/sql`]: { "tinycloud.sql/read": [{}] },
+      },
+    };
+    const authorization = `header.${Buffer.from(JSON.stringify(authorizationPayload)).toString("base64url")}.signature`;
+    const delegation: PortableDelegation = {
+      cid: `cid:${authorization}`,
+      delegationHeader: { Authorization: authorization },
+      ownerAddress: "0xowner",
+      chainId: 1,
+      spaceId: space,
+      path: "",
+      actions: ["tinycloud.kv/get", "tinycloud.kv/list"],
+      expiry: new Date(authorizationPayload.exp * 1000),
+      delegateDID: REQUESTER_DID,
+      resources: [
+        { service: "kv", space, path: "", actions: ["tinycloud.kv/get", "tinycloud.kv/list"] },
+        { service: "sql", space, path: "", actions: ["tinycloud.sql/read"] },
+      ],
+    };
+    const installed: PortableDelegation[] = [];
+    const node: RuntimeDelegationActivator = {
+      sessionDid: REQUESTER_DID,
+      computeDelegationCid: (value) => `cid:${value}`,
+      async useRuntimeDelegation(candidate) {
+        installed.push(candidate);
+      },
+      getRuntimePermissionDelegations: () => installed,
+    };
+
+    const activated = await activateValidatedRuntimeDelegation(node, delegation, { host: "https://node.example" });
+
+    expect(activated.effectivePermissions).toEqual([
+      { service: "tinycloud.kv", space, path: "", actions: ["tinycloud.kv/get", "tinycloud.kv/list"] },
+      { service: "tinycloud.sql", space, path: "", actions: ["tinycloud.sql/read"] },
+    ]);
+    expect(installed).toHaveLength(1);
+  });
+});
+
 describe("activation failure classification (TC-834)", () => {
   async function activateWith(failure: unknown): Promise<unknown> {
     const privateKey = new Uint8Array(32).fill(51);

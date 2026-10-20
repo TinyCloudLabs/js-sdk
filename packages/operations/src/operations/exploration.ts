@@ -644,7 +644,7 @@ async function executeKvDelete(
   }
 }
 
-function runtimeContext(context: OperationContext): RuntimeOperationContext {
+export function runtimeContext(context: OperationContext): RuntimeOperationContext {
   if (context.runtime === undefined) {
     throw new TypeError("Authenticated operation runtime is unavailable.");
   }
@@ -659,11 +659,11 @@ function genericKv(context: RuntimeOperationContext, space: string): KvOperation
   return runtimeNode(context).kvForSpace(space) as unknown as KvOperationHandle;
 }
 
-function resolveSpace(context: RuntimeOperationContext, space: string): string {
+export function resolveSpace(context: RuntimeOperationContext, space: string): string {
   return operationSpaceResolver(context.runtime.node, context.summary.space)(space);
 }
 
-function resolveGenericKvSpace(context: RuntimeOperationContext, space: string): string {
+export function resolveGenericKvSpace(context: RuntimeOperationContext, space: string): string {
   const resolved = resolveSpace(context, space);
   const protectedName = resolved.split(":").at(-1)?.toLowerCase();
   if (protectedName === "secrets" || protectedName === "account") {
@@ -675,7 +675,7 @@ function resolveGenericKvSpace(context: RuntimeOperationContext, space: string):
   return resolved;
 }
 
-async function readAccountRegistry(
+export async function readAccountRegistry(
   context: OperationContext,
   prefix: "spaces/" | "applications/",
 ): Promise<
@@ -775,7 +775,7 @@ function projectAccountSpace(
   };
 }
 
-function projectAccountApplication(
+export function projectAccountApplication(
   key: string,
   record: Record<string, unknown>,
 ): AccountApplicationsOutput["applications"][number] {
@@ -898,7 +898,7 @@ function projectKvMetadata(headers: {
   };
 }
 
-function caughtKvFailure(error: unknown, action: string): OperationExecutionOutcome<never> {
+export function caughtKvFailure(error: unknown, action: string): OperationExecutionOutcome<never> {
   if (error instanceof OperationInvocationError) return { status: "error", error: error.operationError };
   return authorizationFailure(error, action) ?? nodeFailure(action);
 }
@@ -916,7 +916,7 @@ function accountRegistryOutput<T>(output: T): OperationExecutionOutcome<T> {
   return { status: "ok", output };
 }
 
-function kvFailure(
+export function kvFailure(
   error: Readonly<{ code?: string; meta?: Readonly<Record<string, unknown>> }>,
   action: string,
 ): OperationExecutionOutcome<never> {

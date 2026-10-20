@@ -45,7 +45,7 @@ export async function cidBoundOwnerSpace(
     try {
       const signed = parseSignedCompactUcanAttenuation(withoutBearer(authorization), delegation.cid);
       for (const resource of Object.keys(signed.payload.att)) {
-        const space = /^(tinycloud:[^/]+)\/[^/]+\/.*$/.exec(resource)?.[1];
+        const space = /^(tinycloud:[^/]+)\/[^/]+(?:\/.*)?$/.exec(resource)?.[1];
         if (space && ownerDidFromSpace(space) && normalizeDid(ownerDidFromSpace(space)!) === normalizeDid(ownerDid)) {
           return space;
         }

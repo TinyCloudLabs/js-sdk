@@ -425,8 +425,9 @@ function signedAuthorityFromCompactUcan(
       continue;
     }
 
-    const nativeMatch = /^(tinycloud:[^/]+)\/(kv|sql|duckdb|hooks)\/(.*)$/.exec(resource);
-    const policyMatch = /^tinycloud:\/\/([^/]+)\/(kv|sql|duckdb|hooks)\/(.*)$/.exec(resource);
+    // An empty path (`<space>/kv`, no trailing slash) covers the whole service in the space.
+    const nativeMatch = /^(tinycloud:[^/]+)\/(kv|sql|duckdb|hooks)(?:\/(.*))?$/.exec(resource);
+    const policyMatch = /^tinycloud:\/\/([^/]+)\/(kv|sql|duckdb|hooks)(?:\/(.*))?$/.exec(resource);
     const match = nativeMatch ?? policyMatch;
     if (!match) {
       throw new Error(
@@ -443,7 +444,7 @@ function signedAuthorityFromCompactUcan(
     permissions.push(...groupedSignedEntries(
       service,
       space!,
-      path!,
+      path ?? "",
       abilities as Record<string, unknown>,
     ));
   }

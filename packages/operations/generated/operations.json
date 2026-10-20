@@ -12655,6 +12655,2450 @@
       }
     },
     {
+      "id": "tinycloud.knowledge.list",
+      "version": 1,
+      "title": "List installed apps' knowledge bundles",
+      "description": "List the apps whose knowledge bundle (`<app_id>/knowledge/index.md`) is in the user's `applications` space, with each bundle's concept files. Merges the account application registry when the session can read it. Pass app_id to inspect one app with a grant scoped to that app.",
+      "input": {
+        "type": "object",
+        "properties": {
+          "app_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+          }
+        },
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "output": {
+        "type": "object",
+        "properties": {
+          "space": {
+            "type": "string",
+            "minLength": 1
+          },
+          "apps": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "app_id": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "name": {
+                  "type": "string"
+                },
+                "root": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "has_index": {
+                  "type": "boolean"
+                },
+                "concepts": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "registered": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "app_id",
+                "root",
+                "has_index",
+                "concepts",
+                "registered"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "count": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "truncated": {
+            "type": "boolean"
+          },
+          "registry": {
+            "type": "string",
+            "enum": [
+              "merged",
+              "not_granted",
+              "unavailable",
+              "skipped"
+            ]
+          }
+        },
+        "required": [
+          "space",
+          "apps",
+          "count",
+          "truncated",
+          "registry"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "result": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "type": "object",
+        "anyOf": [
+          {
+            "type": "object",
+            "properties": {
+              "status": {
+                "const": "ok"
+              },
+              "operation": {
+                "type": "object",
+                "properties": {
+                  "operationId": {
+                    "type": "string",
+                    "const": "tinycloud.knowledge.list"
+                  },
+                  "operationVersion": {
+                    "type": "integer",
+                    "const": 1
+                  }
+                },
+                "required": [
+                  "operationId",
+                  "operationVersion"
+                ],
+                "additionalProperties": false
+              },
+              "context": {
+                "type": "object",
+                "properties": {
+                  "profile": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "host": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "posture": {
+                    "type": "string",
+                    "enum": [
+                      "owner-openkey",
+                      "delegate-session",
+                      "local-owner-key",
+                      "unauthenticated"
+                    ]
+                  },
+                  "operatorType": {
+                    "type": "string",
+                    "enum": [
+                      "human",
+                      "agent"
+                    ]
+                  },
+                  "principalDid": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "sessionDid": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "ownerDid": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "space": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "required": [
+                  "profile",
+                  "host",
+                  "posture"
+                ],
+                "additionalProperties": false
+              },
+              "warnings": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "const": "STORED_GRANT_SKIPPED"
+                    },
+                    "reason": {
+                      "type": "string",
+                      "enum": [
+                        "malformed",
+                        "unbound",
+                        "outside_request",
+                        "host_mismatch",
+                        "expired",
+                        "cid_mismatch",
+                        "authority_invalid",
+                        "proof_missing",
+                        "proof_invalid",
+                        "owner_mismatch",
+                        "audience_mismatch",
+                        "resources_mismatch",
+                        "unsupported",
+                        "activation_rejected",
+                        "activation_unavailable",
+                        "activation_unauthenticated",
+                        "invalid"
+                      ]
+                    },
+                    "grantCid": {
+                      "type": "string",
+                      "pattern": "^bafkr4i[a-z2-7]{52}$"
+                    }
+                  },
+                  "required": [
+                    "code",
+                    "reason"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "output": {
+                "$ref": "#/$defs/output"
+              }
+            },
+            "required": [
+              "status",
+              "operation",
+              "context",
+              "output"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "status": {
+                "const": "authority_required"
+              },
+              "operation": {
+                "type": "object",
+                "properties": {
+                  "operationId": {
+                    "type": "string",
+                    "const": "tinycloud.knowledge.list"
+                  },
+                  "operationVersion": {
+                    "type": "integer",
+                    "const": 1
+                  }
+                },
+                "required": [
+                  "operationId",
+                  "operationVersion"
+                ],
+                "additionalProperties": false
+              },
+              "context": {
+                "type": "object",
+                "properties": {
+                  "profile": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "host": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "posture": {
+                    "type": "string",
+                    "enum": [
+                      "owner-openkey",
+                      "delegate-session",
+                      "local-owner-key",
+                      "unauthenticated"
+                    ]
+                  },
+                  "operatorType": {
+                    "type": "string",
+                    "enum": [
+                      "human",
+                      "agent"
+                    ]
+                  },
+                  "principalDid": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "sessionDid": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "ownerDid": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "space": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "required": [
+                  "profile",
+                  "host",
+                  "posture"
+                ],
+                "additionalProperties": false
+              },
+              "warnings": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "const": "STORED_GRANT_SKIPPED"
+                    },
+                    "reason": {
+                      "type": "string",
+                      "enum": [
+                        "malformed",
+                        "unbound",
+                        "outside_request",
+                        "host_mismatch",
+                        "expired",
+                        "cid_mismatch",
+                        "authority_invalid",
+                        "proof_missing",
+                        "proof_invalid",
+                        "owner_mismatch",
+                        "audience_mismatch",
+                        "resources_mismatch",
+                        "unsupported",
+                        "activation_rejected",
+                        "activation_unavailable",
+                        "activation_unauthenticated",
+                        "invalid"
+                      ]
+                    },
+                    "grantCid": {
+                      "type": "string",
+                      "pattern": "^bafkr4i[a-z2-7]{52}$"
+                    }
+                  },
+                  "required": [
+                    "code",
+                    "reason"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "missing": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "$ref": "#/$defs/permissionEntry"
+                }
+              },
+              "request": {
+                "$ref": "#/$defs/permissionRequest"
+              },
+              "approval": {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "const": "openkey"
+                  },
+                  "requestId": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "url": {
+                    "type": "string",
+                    "format": "uri"
+                  },
+                  "fallback": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "required": [
+                  "kind",
+                  "requestId",
+                  "fallback"
+                ],
+                "additionalProperties": false
+              },
+              "retry": {
+                "type": "object",
+                "properties": {
+                  "operationId": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "operationVersion": {
+                    "type": "integer",
+                    "const": 1
+                  },
+                  "inputDigest": {
+                    "type": "string",
+                    "pattern": "^[a-f0-9]{64}$"
+                  },
+                  "safeInput": {
+                    "type": "object",
+                    "additionalProperties": true
+                  },
+                  "requiresCallerInput": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "operationId",
+                  "operationVersion",
+                  "inputDigest",
+                  "requiresCallerInput"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "status",
+              "operation",
+              "context",
+              "missing",
+              "request",
+              "approval",
+              "retry"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "status": {
+                "const": "setup_required"
+              },
+              "operation": {
+                "type": "object",
+                "properties": {
+                  "operationId": {
+                    "type": "string",
+                    "const": "tinycloud.knowledge.list"
+                  },
+                  "operationVersion": {
+                    "type": "integer",
+                    "const": 1
+                  }
+                },
+                "required": [
+                  "operationId",
+                  "operationVersion"
+                ],
+                "additionalProperties": false
+              },
+              "context": {
+                "type": "object",
+                "properties": {
+                  "profile": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "host": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "posture": {
+                    "type": "string",
+                    "enum": [
+                      "owner-openkey",
+                      "delegate-session",
+                      "local-owner-key",
+                      "unauthenticated"
+                    ]
+                  },
+                  "operatorType": {
+                    "type": "string",
+                    "enum": [
+                      "human",
+                      "agent"
+                    ]
+                  },
+                  "principalDid": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "sessionDid": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "ownerDid": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "space": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "required": [
+                  "profile",
+                  "host",
+                  "posture"
+                ],
+                "additionalProperties": false
+              },
+              "warnings": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "const": "STORED_GRANT_SKIPPED"
+                    },
+                    "reason": {
+                      "type": "string",
+                      "enum": [
+                        "malformed",
+                        "unbound",
+                        "outside_request",
+                        "host_mismatch",
+                        "expired",
+                        "cid_mismatch",
+                        "authority_invalid",
+                        "proof_missing",
+                        "proof_invalid",
+                        "owner_mismatch",
+                        "audience_mismatch",
+                        "resources_mismatch",
+                        "unsupported",
+                        "activation_rejected",
+                        "activation_unavailable",
+                        "activation_unauthenticated",
+                        "invalid"
+                      ]
+                    },
+                    "grantCid": {
+                      "type": "string",
+                      "pattern": "^bafkr4i[a-z2-7]{52}$"
+                    }
+                  },
+                  "required": [
+                    "code",
+                    "reason"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "setup": {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "const": "secret_manager"
+                  },
+                  "action": {
+                    "const": "add_secret"
+                  },
+                  "url": {
+                    "type": "string",
+                    "format": "uri"
+                  },
+                  "names": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 10,
+                    "items": {
+                      "type": "string",
+                      "minLength": 1
+                    }
+                  },
+                  "scope": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "owner": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "secret": {
+                    "type": "object",
+                    "properties": {
+                      "name": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "scope": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "space": {
+                        "type": "string",
+                        "minLength": 1
+                      }
+                    },
+                    "required": [
+                      "name",
+                      "space"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "message": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "required": [
+                  "kind",
+                  "action",
+                  "url",
+                  "names",
+                  "owner",
+                  "secret",
+                  "message"
+                ],
+                "additionalProperties": false
+              },
+              "retry": {
+                "type": "object",
+                "properties": {
+                  "operationId": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "operationVersion": {
+                    "type": "integer",
+                    "const": 1
+                  },
+                  "inputDigest": {
+                    "type": "string",
+                    "pattern": "^[a-f0-9]{64}$"
+                  },
+                  "safeInput": {
+                    "type": "object",
+                    "additionalProperties": true
+                  },
+                  "requiresCallerInput": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "operationId",
+                  "operationVersion",
+                  "inputDigest",
+                  "requiresCallerInput"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "status",
+              "operation",
+              "context",
+              "setup",
+              "retry"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "status": {
+                "const": "error"
+              },
+              "operation": {
+                "type": "object",
+                "properties": {
+                  "operationId": {
+                    "type": "string",
+                    "const": "tinycloud.knowledge.list"
+                  },
+                  "operationVersion": {
+                    "type": "integer",
+                    "const": 1
+                  }
+                },
+                "required": [
+                  "operationId",
+                  "operationVersion"
+                ],
+                "additionalProperties": false
+              },
+              "context": {
+                "type": "object",
+                "properties": {
+                  "profile": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "host": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "posture": {
+                    "type": "string",
+                    "enum": [
+                      "owner-openkey",
+                      "delegate-session",
+                      "local-owner-key",
+                      "unauthenticated"
+                    ]
+                  },
+                  "operatorType": {
+                    "type": "string",
+                    "enum": [
+                      "human",
+                      "agent"
+                    ]
+                  },
+                  "principalDid": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "sessionDid": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "ownerDid": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "space": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "required": [
+                  "profile",
+                  "host",
+                  "posture"
+                ],
+                "additionalProperties": false
+              },
+              "warnings": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "const": "STORED_GRANT_SKIPPED"
+                    },
+                    "reason": {
+                      "type": "string",
+                      "enum": [
+                        "malformed",
+                        "unbound",
+                        "outside_request",
+                        "host_mismatch",
+                        "expired",
+                        "cid_mismatch",
+                        "authority_invalid",
+                        "proof_missing",
+                        "proof_invalid",
+                        "owner_mismatch",
+                        "audience_mismatch",
+                        "resources_mismatch",
+                        "unsupported",
+                        "activation_rejected",
+                        "activation_unavailable",
+                        "activation_unauthenticated",
+                        "invalid"
+                      ]
+                    },
+                    "grantCid": {
+                      "type": "string",
+                      "pattern": "^bafkr4i[a-z2-7]{52}$"
+                    }
+                  },
+                  "required": [
+                    "code",
+                    "reason"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "error": {
+                "type": "object",
+                "properties": {
+                  "code": {
+                    "type": "string",
+                    "enum": [
+                      "INPUT_INVALID",
+                      "OPERATION_NOT_FOUND",
+                      "OPERATION_VERSION_UNSUPPORTED",
+                      "PROFILE_NOT_FOUND",
+                      "PROFILE_POSTURE_NOT_ALLOWED",
+                      "PROFILE_OWNER_OPT_IN_REQUIRED",
+                      "PROFILE_MIGRATION_REQUIRED",
+                      "AUTH_REQUIRED",
+                      "PERMISSION_DENIED",
+                      "SESSION_NOT_FOUND",
+                      "PERMISSION_HINT_INVALID",
+                      "DELEGATION_ARTIFACT_INVALID",
+                      "DELEGATION_EXPIRED",
+                      "DELEGATION_AUDIENCE_MISMATCH",
+                      "DELEGATION_HOST_MISMATCH",
+                      "DELEGATION_REJECTED",
+                      "ENCRYPTION_NETWORK_UNRESOLVED",
+                      "NODE_UNREACHABLE",
+                      "NODE_ERROR",
+                      "STORAGE_QUOTA_EXCEEDED",
+                      "KV_NOT_FOUND",
+                      "KV_PRECONDITION_FAILED",
+                      "KV_CONFLICT",
+                      "KV_RESPONSE_TOO_LARGE",
+                      "SQL_QUERY_INVALID",
+                      "SQL_EXECUTION_FAILED",
+                      "SQL_RESULT_LIMIT_EXCEEDED",
+                      "SQL_VALUE_UNSAFE",
+                      "SECRET_READ_FAILED",
+                      "SECRET_DECRYPT_FAILED",
+                      "OUTPUT_INVALID",
+                      "INTERNAL_ERROR"
+                    ]
+                  },
+                  "message": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "retryable": {
+                    "type": "boolean"
+                  },
+                  "details": {
+                    "type": "object",
+                    "additionalProperties": true
+                  }
+                },
+                "required": [
+                  "code",
+                  "message",
+                  "retryable"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "status",
+              "operation",
+              "context",
+              "error"
+            ],
+            "additionalProperties": false
+          }
+        ],
+        "$defs": {
+          "permissionEntry": {
+            "type": "object",
+            "properties": {
+              "service": {
+                "type": "string",
+                "minLength": 1
+              },
+              "space": {
+                "type": "string",
+                "minLength": 1
+              },
+              "path": {
+                "type": "string"
+              },
+              "actions": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "minItems": 1
+              },
+              "caveats": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": {}
+                }
+              },
+              "skipPrefix": {
+                "type": "boolean"
+              },
+              "expiry": {
+                "type": "string",
+                "minLength": 1
+              },
+              "description": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "service",
+              "path",
+              "actions"
+            ],
+            "additionalProperties": false,
+            "$schema": "http://json-schema.org/draft-07/schema#"
+          },
+          "permissionRequest": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "const": "tinycloud.auth.request"
+              },
+              "version": {
+                "type": "number",
+                "const": 1
+              },
+              "requestId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "createdAt": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "profile": {
+                "type": "string",
+                "minLength": 1
+              },
+              "posture": {
+                "type": "string",
+                "enum": [
+                  "owner-openkey",
+                  "delegate-session",
+                  "local-owner-key",
+                  "unauthenticated"
+                ]
+              },
+              "operatorType": {
+                "type": "string",
+                "enum": [
+                  "human",
+                  "agent"
+                ]
+              },
+              "host": {
+                "type": "string",
+                "minLength": 1
+              },
+              "sessionDid": {
+                "type": "string",
+                "minLength": 1
+              },
+              "ownerDid": {
+                "type": "string",
+                "minLength": 1
+              },
+              "spaceId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "requestedExpiry": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  {
+                    "type": "number"
+                  }
+                ]
+              },
+              "requested": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "service": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "space": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "path": {
+                      "type": "string"
+                    },
+                    "actions": {
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "minItems": 1
+                    },
+                    "caveats": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "additionalProperties": {}
+                      }
+                    },
+                    "skipPrefix": {
+                      "type": "boolean"
+                    },
+                    "expiry": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "description": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "service",
+                    "path",
+                    "actions"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "command": {
+                "type": "object",
+                "properties": {
+                  "argv": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    },
+                    "minItems": 1
+                  },
+                  "cwd": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "required": [
+                  "argv",
+                  "cwd"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "kind",
+              "version",
+              "requestId",
+              "createdAt",
+              "profile",
+              "posture",
+              "operatorType",
+              "host",
+              "sessionDid",
+              "requested"
+            ],
+            "additionalProperties": false,
+            "$schema": "http://json-schema.org/draft-07/schema#"
+          },
+          "output": {
+            "type": "object",
+            "properties": {
+              "space": {
+                "type": "string",
+                "minLength": 1
+              },
+              "apps": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "app_id": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "name": {
+                      "type": "string"
+                    },
+                    "root": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "has_index": {
+                      "type": "boolean"
+                    },
+                    "concepts": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "registered": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "app_id",
+                    "root",
+                    "has_index",
+                    "concepts",
+                    "registered"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "count": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "truncated": {
+                "type": "boolean"
+              },
+              "registry": {
+                "type": "string",
+                "enum": [
+                  "merged",
+                  "not_granted",
+                  "unavailable",
+                  "skipped"
+                ]
+              }
+            },
+            "required": [
+              "space",
+              "apps",
+              "count",
+              "truncated",
+              "registry"
+            ],
+            "additionalProperties": false,
+            "$schema": "http://json-schema.org/draft-07/schema#"
+          }
+        }
+      },
+      "postures": [
+        "owner-openkey",
+        "delegate-session",
+        "local-owner-key"
+      ],
+      "effects": [
+        "read"
+      ],
+      "sensitivity": {
+        "input": false,
+        "output": true
+      },
+      "exposure": {
+        "cli": {
+          "status": "required"
+        },
+        "mcp": {
+          "status": "required"
+        },
+        "skill": {
+          "status": "required"
+        },
+        "docs": {
+          "status": "required"
+        }
+      },
+      "stableErrors": [
+        "INPUT_INVALID",
+        "OPERATION_NOT_FOUND",
+        "OPERATION_VERSION_UNSUPPORTED",
+        "PROFILE_NOT_FOUND",
+        "PROFILE_POSTURE_NOT_ALLOWED",
+        "PROFILE_OWNER_OPT_IN_REQUIRED",
+        "PROFILE_MIGRATION_REQUIRED",
+        "AUTH_REQUIRED",
+        "PERMISSION_DENIED",
+        "SESSION_NOT_FOUND",
+        "PERMISSION_HINT_INVALID",
+        "DELEGATION_ARTIFACT_INVALID",
+        "DELEGATION_EXPIRED",
+        "DELEGATION_AUDIENCE_MISMATCH",
+        "DELEGATION_HOST_MISMATCH",
+        "DELEGATION_REJECTED",
+        "ENCRYPTION_NETWORK_UNRESOLVED",
+        "NODE_UNREACHABLE",
+        "NODE_ERROR",
+        "STORAGE_QUOTA_EXCEEDED",
+        "KV_NOT_FOUND",
+        "KV_PRECONDITION_FAILED",
+        "KV_CONFLICT",
+        "KV_RESPONSE_TOO_LARGE",
+        "SQL_QUERY_INVALID",
+        "SQL_EXECUTION_FAILED",
+        "SQL_RESULT_LIMIT_EXCEEDED",
+        "SQL_VALUE_UNSAFE",
+        "SECRET_READ_FAILED",
+        "SECRET_DECRYPT_FAILED",
+        "OUTPUT_INVALID",
+        "INTERNAL_ERROR"
+      ],
+      "authority": {
+        "dynamic": true
+      }
+    },
+    {
+      "id": "tinycloud.knowledge.read",
+      "version": 1,
+      "title": "Read an app's knowledge index or concept",
+      "description": "Read `<app_id>/knowledge/index.md`, or one concept file of the bundle, with its frontmatter parsed. Concepts name the KV prefixes and SQL tables an app uses (`resource:`); read the index first, then open only the concepts you need.",
+      "input": {
+        "type": "object",
+        "properties": {
+          "app_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+          },
+          "concept": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 300
+          }
+        },
+        "required": [
+          "app_id"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "output": {
+        "type": "object",
+        "properties": {
+          "app_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "space": {
+            "type": "string",
+            "minLength": 1
+          },
+          "path": {
+            "type": "string",
+            "minLength": 1
+          },
+          "key": {
+            "type": "string",
+            "minLength": 1
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "index",
+              "concept"
+            ]
+          },
+          "frontmatter": {
+            "anyOf": [
+              {
+                "type": "object",
+                "additionalProperties": {
+                  "anyOf": [
+                    {
+                      "type": "null"
+                    },
+                    {
+                      "type": "boolean"
+                    },
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/properties/frontmatter/anyOf/0/additionalProperties"
+                      }
+                    },
+                    {
+                      "type": "object",
+                      "additionalProperties": {
+                        "$ref": "#/properties/frontmatter/anyOf/0/additionalProperties"
+                      }
+                    }
+                  ]
+                }
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "frontmatter_error": {
+            "type": "string"
+          },
+          "frontmatter_raw": {
+            "type": "string"
+          },
+          "body": {
+            "type": "string"
+          },
+          "links": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "title": {
+                  "type": "string"
+                },
+                "target": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "title",
+                "target"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "byteLength": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "etag": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "app_id",
+          "space",
+          "path",
+          "key",
+          "kind",
+          "frontmatter",
+          "body",
+          "links",
+          "byteLength"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "result": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "type": "object",
+        "anyOf": [
+          {
+            "type": "object",
+            "properties": {
+              "status": {
+                "const": "ok"
+              },
+              "operation": {
+                "type": "object",
+                "properties": {
+                  "operationId": {
+                    "type": "string",
+                    "const": "tinycloud.knowledge.read"
+                  },
+                  "operationVersion": {
+                    "type": "integer",
+                    "const": 1
+                  }
+                },
+                "required": [
+                  "operationId",
+                  "operationVersion"
+                ],
+                "additionalProperties": false
+              },
+              "context": {
+                "type": "object",
+                "properties": {
+                  "profile": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "host": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "posture": {
+                    "type": "string",
+                    "enum": [
+                      "owner-openkey",
+                      "delegate-session",
+                      "local-owner-key",
+                      "unauthenticated"
+                    ]
+                  },
+                  "operatorType": {
+                    "type": "string",
+                    "enum": [
+                      "human",
+                      "agent"
+                    ]
+                  },
+                  "principalDid": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "sessionDid": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "ownerDid": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "space": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "required": [
+                  "profile",
+                  "host",
+                  "posture"
+                ],
+                "additionalProperties": false
+              },
+              "warnings": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "const": "STORED_GRANT_SKIPPED"
+                    },
+                    "reason": {
+                      "type": "string",
+                      "enum": [
+                        "malformed",
+                        "unbound",
+                        "outside_request",
+                        "host_mismatch",
+                        "expired",
+                        "cid_mismatch",
+                        "authority_invalid",
+                        "proof_missing",
+                        "proof_invalid",
+                        "owner_mismatch",
+                        "audience_mismatch",
+                        "resources_mismatch",
+                        "unsupported",
+                        "activation_rejected",
+                        "activation_unavailable",
+                        "activation_unauthenticated",
+                        "invalid"
+                      ]
+                    },
+                    "grantCid": {
+                      "type": "string",
+                      "pattern": "^bafkr4i[a-z2-7]{52}$"
+                    }
+                  },
+                  "required": [
+                    "code",
+                    "reason"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "output": {
+                "$ref": "#/$defs/output"
+              }
+            },
+            "required": [
+              "status",
+              "operation",
+              "context",
+              "output"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "status": {
+                "const": "authority_required"
+              },
+              "operation": {
+                "type": "object",
+                "properties": {
+                  "operationId": {
+                    "type": "string",
+                    "const": "tinycloud.knowledge.read"
+                  },
+                  "operationVersion": {
+                    "type": "integer",
+                    "const": 1
+                  }
+                },
+                "required": [
+                  "operationId",
+                  "operationVersion"
+                ],
+                "additionalProperties": false
+              },
+              "context": {
+                "type": "object",
+                "properties": {
+                  "profile": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "host": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "posture": {
+                    "type": "string",
+                    "enum": [
+                      "owner-openkey",
+                      "delegate-session",
+                      "local-owner-key",
+                      "unauthenticated"
+                    ]
+                  },
+                  "operatorType": {
+                    "type": "string",
+                    "enum": [
+                      "human",
+                      "agent"
+                    ]
+                  },
+                  "principalDid": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "sessionDid": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "ownerDid": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "space": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "required": [
+                  "profile",
+                  "host",
+                  "posture"
+                ],
+                "additionalProperties": false
+              },
+              "warnings": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "const": "STORED_GRANT_SKIPPED"
+                    },
+                    "reason": {
+                      "type": "string",
+                      "enum": [
+                        "malformed",
+                        "unbound",
+                        "outside_request",
+                        "host_mismatch",
+                        "expired",
+                        "cid_mismatch",
+                        "authority_invalid",
+                        "proof_missing",
+                        "proof_invalid",
+                        "owner_mismatch",
+                        "audience_mismatch",
+                        "resources_mismatch",
+                        "unsupported",
+                        "activation_rejected",
+                        "activation_unavailable",
+                        "activation_unauthenticated",
+                        "invalid"
+                      ]
+                    },
+                    "grantCid": {
+                      "type": "string",
+                      "pattern": "^bafkr4i[a-z2-7]{52}$"
+                    }
+                  },
+                  "required": [
+                    "code",
+                    "reason"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "missing": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "$ref": "#/$defs/permissionEntry"
+                }
+              },
+              "request": {
+                "$ref": "#/$defs/permissionRequest"
+              },
+              "approval": {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "const": "openkey"
+                  },
+                  "requestId": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "url": {
+                    "type": "string",
+                    "format": "uri"
+                  },
+                  "fallback": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "required": [
+                  "kind",
+                  "requestId",
+                  "fallback"
+                ],
+                "additionalProperties": false
+              },
+              "retry": {
+                "type": "object",
+                "properties": {
+                  "operationId": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "operationVersion": {
+                    "type": "integer",
+                    "const": 1
+                  },
+                  "inputDigest": {
+                    "type": "string",
+                    "pattern": "^[a-f0-9]{64}$"
+                  },
+                  "safeInput": {
+                    "type": "object",
+                    "additionalProperties": true
+                  },
+                  "requiresCallerInput": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "operationId",
+                  "operationVersion",
+                  "inputDigest",
+                  "requiresCallerInput"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "status",
+              "operation",
+              "context",
+              "missing",
+              "request",
+              "approval",
+              "retry"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "status": {
+                "const": "setup_required"
+              },
+              "operation": {
+                "type": "object",
+                "properties": {
+                  "operationId": {
+                    "type": "string",
+                    "const": "tinycloud.knowledge.read"
+                  },
+                  "operationVersion": {
+                    "type": "integer",
+                    "const": 1
+                  }
+                },
+                "required": [
+                  "operationId",
+                  "operationVersion"
+                ],
+                "additionalProperties": false
+              },
+              "context": {
+                "type": "object",
+                "properties": {
+                  "profile": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "host": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "posture": {
+                    "type": "string",
+                    "enum": [
+                      "owner-openkey",
+                      "delegate-session",
+                      "local-owner-key",
+                      "unauthenticated"
+                    ]
+                  },
+                  "operatorType": {
+                    "type": "string",
+                    "enum": [
+                      "human",
+                      "agent"
+                    ]
+                  },
+                  "principalDid": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "sessionDid": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "ownerDid": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "space": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "required": [
+                  "profile",
+                  "host",
+                  "posture"
+                ],
+                "additionalProperties": false
+              },
+              "warnings": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "const": "STORED_GRANT_SKIPPED"
+                    },
+                    "reason": {
+                      "type": "string",
+                      "enum": [
+                        "malformed",
+                        "unbound",
+                        "outside_request",
+                        "host_mismatch",
+                        "expired",
+                        "cid_mismatch",
+                        "authority_invalid",
+                        "proof_missing",
+                        "proof_invalid",
+                        "owner_mismatch",
+                        "audience_mismatch",
+                        "resources_mismatch",
+                        "unsupported",
+                        "activation_rejected",
+                        "activation_unavailable",
+                        "activation_unauthenticated",
+                        "invalid"
+                      ]
+                    },
+                    "grantCid": {
+                      "type": "string",
+                      "pattern": "^bafkr4i[a-z2-7]{52}$"
+                    }
+                  },
+                  "required": [
+                    "code",
+                    "reason"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "setup": {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "const": "secret_manager"
+                  },
+                  "action": {
+                    "const": "add_secret"
+                  },
+                  "url": {
+                    "type": "string",
+                    "format": "uri"
+                  },
+                  "names": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 10,
+                    "items": {
+                      "type": "string",
+                      "minLength": 1
+                    }
+                  },
+                  "scope": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "owner": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "secret": {
+                    "type": "object",
+                    "properties": {
+                      "name": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "scope": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "space": {
+                        "type": "string",
+                        "minLength": 1
+                      }
+                    },
+                    "required": [
+                      "name",
+                      "space"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "message": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "required": [
+                  "kind",
+                  "action",
+                  "url",
+                  "names",
+                  "owner",
+                  "secret",
+                  "message"
+                ],
+                "additionalProperties": false
+              },
+              "retry": {
+                "type": "object",
+                "properties": {
+                  "operationId": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "operationVersion": {
+                    "type": "integer",
+                    "const": 1
+                  },
+                  "inputDigest": {
+                    "type": "string",
+                    "pattern": "^[a-f0-9]{64}$"
+                  },
+                  "safeInput": {
+                    "type": "object",
+                    "additionalProperties": true
+                  },
+                  "requiresCallerInput": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "operationId",
+                  "operationVersion",
+                  "inputDigest",
+                  "requiresCallerInput"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "status",
+              "operation",
+              "context",
+              "setup",
+              "retry"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "status": {
+                "const": "error"
+              },
+              "operation": {
+                "type": "object",
+                "properties": {
+                  "operationId": {
+                    "type": "string",
+                    "const": "tinycloud.knowledge.read"
+                  },
+                  "operationVersion": {
+                    "type": "integer",
+                    "const": 1
+                  }
+                },
+                "required": [
+                  "operationId",
+                  "operationVersion"
+                ],
+                "additionalProperties": false
+              },
+              "context": {
+                "type": "object",
+                "properties": {
+                  "profile": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "host": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "posture": {
+                    "type": "string",
+                    "enum": [
+                      "owner-openkey",
+                      "delegate-session",
+                      "local-owner-key",
+                      "unauthenticated"
+                    ]
+                  },
+                  "operatorType": {
+                    "type": "string",
+                    "enum": [
+                      "human",
+                      "agent"
+                    ]
+                  },
+                  "principalDid": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "sessionDid": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "ownerDid": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "space": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "required": [
+                  "profile",
+                  "host",
+                  "posture"
+                ],
+                "additionalProperties": false
+              },
+              "warnings": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "const": "STORED_GRANT_SKIPPED"
+                    },
+                    "reason": {
+                      "type": "string",
+                      "enum": [
+                        "malformed",
+                        "unbound",
+                        "outside_request",
+                        "host_mismatch",
+                        "expired",
+                        "cid_mismatch",
+                        "authority_invalid",
+                        "proof_missing",
+                        "proof_invalid",
+                        "owner_mismatch",
+                        "audience_mismatch",
+                        "resources_mismatch",
+                        "unsupported",
+                        "activation_rejected",
+                        "activation_unavailable",
+                        "activation_unauthenticated",
+                        "invalid"
+                      ]
+                    },
+                    "grantCid": {
+                      "type": "string",
+                      "pattern": "^bafkr4i[a-z2-7]{52}$"
+                    }
+                  },
+                  "required": [
+                    "code",
+                    "reason"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "error": {
+                "type": "object",
+                "properties": {
+                  "code": {
+                    "type": "string",
+                    "enum": [
+                      "INPUT_INVALID",
+                      "OPERATION_NOT_FOUND",
+                      "OPERATION_VERSION_UNSUPPORTED",
+                      "PROFILE_NOT_FOUND",
+                      "PROFILE_POSTURE_NOT_ALLOWED",
+                      "PROFILE_OWNER_OPT_IN_REQUIRED",
+                      "PROFILE_MIGRATION_REQUIRED",
+                      "AUTH_REQUIRED",
+                      "PERMISSION_DENIED",
+                      "SESSION_NOT_FOUND",
+                      "PERMISSION_HINT_INVALID",
+                      "DELEGATION_ARTIFACT_INVALID",
+                      "DELEGATION_EXPIRED",
+                      "DELEGATION_AUDIENCE_MISMATCH",
+                      "DELEGATION_HOST_MISMATCH",
+                      "DELEGATION_REJECTED",
+                      "ENCRYPTION_NETWORK_UNRESOLVED",
+                      "NODE_UNREACHABLE",
+                      "NODE_ERROR",
+                      "STORAGE_QUOTA_EXCEEDED",
+                      "KV_NOT_FOUND",
+                      "KV_PRECONDITION_FAILED",
+                      "KV_CONFLICT",
+                      "KV_RESPONSE_TOO_LARGE",
+                      "SQL_QUERY_INVALID",
+                      "SQL_EXECUTION_FAILED",
+                      "SQL_RESULT_LIMIT_EXCEEDED",
+                      "SQL_VALUE_UNSAFE",
+                      "SECRET_READ_FAILED",
+                      "SECRET_DECRYPT_FAILED",
+                      "OUTPUT_INVALID",
+                      "INTERNAL_ERROR"
+                    ]
+                  },
+                  "message": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "retryable": {
+                    "type": "boolean"
+                  },
+                  "details": {
+                    "type": "object",
+                    "additionalProperties": true
+                  }
+                },
+                "required": [
+                  "code",
+                  "message",
+                  "retryable"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "status",
+              "operation",
+              "context",
+              "error"
+            ],
+            "additionalProperties": false
+          }
+        ],
+        "$defs": {
+          "permissionEntry": {
+            "type": "object",
+            "properties": {
+              "service": {
+                "type": "string",
+                "minLength": 1
+              },
+              "space": {
+                "type": "string",
+                "minLength": 1
+              },
+              "path": {
+                "type": "string"
+              },
+              "actions": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "minItems": 1
+              },
+              "caveats": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": {}
+                }
+              },
+              "skipPrefix": {
+                "type": "boolean"
+              },
+              "expiry": {
+                "type": "string",
+                "minLength": 1
+              },
+              "description": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "service",
+              "path",
+              "actions"
+            ],
+            "additionalProperties": false,
+            "$schema": "http://json-schema.org/draft-07/schema#"
+          },
+          "permissionRequest": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "const": "tinycloud.auth.request"
+              },
+              "version": {
+                "type": "number",
+                "const": 1
+              },
+              "requestId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "createdAt": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "profile": {
+                "type": "string",
+                "minLength": 1
+              },
+              "posture": {
+                "type": "string",
+                "enum": [
+                  "owner-openkey",
+                  "delegate-session",
+                  "local-owner-key",
+                  "unauthenticated"
+                ]
+              },
+              "operatorType": {
+                "type": "string",
+                "enum": [
+                  "human",
+                  "agent"
+                ]
+              },
+              "host": {
+                "type": "string",
+                "minLength": 1
+              },
+              "sessionDid": {
+                "type": "string",
+                "minLength": 1
+              },
+              "ownerDid": {
+                "type": "string",
+                "minLength": 1
+              },
+              "spaceId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "requestedExpiry": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  {
+                    "type": "number"
+                  }
+                ]
+              },
+              "requested": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "service": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "space": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "path": {
+                      "type": "string"
+                    },
+                    "actions": {
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "minItems": 1
+                    },
+                    "caveats": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "additionalProperties": {}
+                      }
+                    },
+                    "skipPrefix": {
+                      "type": "boolean"
+                    },
+                    "expiry": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "description": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "service",
+                    "path",
+                    "actions"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "command": {
+                "type": "object",
+                "properties": {
+                  "argv": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    },
+                    "minItems": 1
+                  },
+                  "cwd": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "required": [
+                  "argv",
+                  "cwd"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "kind",
+              "version",
+              "requestId",
+              "createdAt",
+              "profile",
+              "posture",
+              "operatorType",
+              "host",
+              "sessionDid",
+              "requested"
+            ],
+            "additionalProperties": false,
+            "$schema": "http://json-schema.org/draft-07/schema#"
+          },
+          "output": {
+            "type": "object",
+            "properties": {
+              "app_id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "space": {
+                "type": "string",
+                "minLength": 1
+              },
+              "path": {
+                "type": "string",
+                "minLength": 1
+              },
+              "key": {
+                "type": "string",
+                "minLength": 1
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "index",
+                  "concept"
+                ]
+              },
+              "frontmatter": {
+                "anyOf": [
+                  {
+                    "type": "object",
+                    "additionalProperties": {
+                      "anyOf": [
+                        {
+                          "type": "null"
+                        },
+                        {
+                          "type": "boolean"
+                        },
+                        {
+                          "type": "number"
+                        },
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "array",
+                          "items": {
+                            "$ref": "#/$defs/output/properties/frontmatter/anyOf/0/additionalProperties"
+                          }
+                        },
+                        {
+                          "type": "object",
+                          "additionalProperties": {
+                            "$ref": "#/$defs/output/properties/frontmatter/anyOf/0/additionalProperties"
+                          }
+                        }
+                      ]
+                    }
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "frontmatter_error": {
+                "type": "string"
+              },
+              "frontmatter_raw": {
+                "type": "string"
+              },
+              "body": {
+                "type": "string"
+              },
+              "links": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "title": {
+                      "type": "string"
+                    },
+                    "target": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "title",
+                    "target"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "byteLength": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "etag": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "app_id",
+              "space",
+              "path",
+              "key",
+              "kind",
+              "frontmatter",
+              "body",
+              "links",
+              "byteLength"
+            ],
+            "additionalProperties": false,
+            "$schema": "http://json-schema.org/draft-07/schema#"
+          }
+        }
+      },
+      "postures": [
+        "owner-openkey",
+        "delegate-session",
+        "local-owner-key"
+      ],
+      "effects": [
+        "read"
+      ],
+      "sensitivity": {
+        "input": true,
+        "output": true
+      },
+      "exposure": {
+        "cli": {
+          "status": "required"
+        },
+        "mcp": {
+          "status": "required"
+        },
+        "skill": {
+          "status": "required"
+        },
+        "docs": {
+          "status": "required"
+        }
+      },
+      "stableErrors": [
+        "INPUT_INVALID",
+        "OPERATION_NOT_FOUND",
+        "OPERATION_VERSION_UNSUPPORTED",
+        "PROFILE_NOT_FOUND",
+        "PROFILE_POSTURE_NOT_ALLOWED",
+        "PROFILE_OWNER_OPT_IN_REQUIRED",
+        "PROFILE_MIGRATION_REQUIRED",
+        "AUTH_REQUIRED",
+        "PERMISSION_DENIED",
+        "SESSION_NOT_FOUND",
+        "PERMISSION_HINT_INVALID",
+        "DELEGATION_ARTIFACT_INVALID",
+        "DELEGATION_EXPIRED",
+        "DELEGATION_AUDIENCE_MISMATCH",
+        "DELEGATION_HOST_MISMATCH",
+        "DELEGATION_REJECTED",
+        "ENCRYPTION_NETWORK_UNRESOLVED",
+        "NODE_UNREACHABLE",
+        "NODE_ERROR",
+        "STORAGE_QUOTA_EXCEEDED",
+        "KV_NOT_FOUND",
+        "KV_PRECONDITION_FAILED",
+        "KV_CONFLICT",
+        "KV_RESPONSE_TOO_LARGE",
+        "SQL_QUERY_INVALID",
+        "SQL_EXECUTION_FAILED",
+        "SQL_RESULT_LIMIT_EXCEEDED",
+        "SQL_VALUE_UNSAFE",
+        "SECRET_READ_FAILED",
+        "SECRET_DECRYPT_FAILED",
+        "OUTPUT_INVALID",
+        "INTERNAL_ERROR"
+      ],
+      "authority": {
+        "dynamic": true
+      }
+    },
+    {
       "id": "tinycloud.kv.delete",
       "version": 1,
       "title": "Delete a TinyCloud KV value",

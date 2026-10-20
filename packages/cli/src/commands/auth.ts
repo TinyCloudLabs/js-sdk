@@ -123,6 +123,15 @@ import {
   type PermissionRequestArtifact,
 } from "../lib/permissions.js";
 import { approvalNotices } from "../lib/approval-notices.js";
+import {
+  APPS_AGENT_EXPIRY,
+  APPS_AGENT_EXPIRY_DAYS,
+  APPS_AGENT_PRESET,
+  appsAgentPermissions,
+  appsAgentScopeNotice,
+  matchAppsAgentRequest,
+  resolveAppsAgentRequest,
+} from "../lib/apps-agent-preset.js";
 import { buildReplicationLoginRequest, type ReplicationLoginOptions } from "../auth/replication-login.js";
 
 /** The one function dependency used by owner OpenKey permission acquisition. */
@@ -892,6 +901,11 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
     .option("--yes", "Skip local-key TTY confirmation", false)
     .option("--no-popup", "Print the OpenKey URL without opening a browser when granting with OpenKey")
     .option("--device", "With --grant: approve on another device (e.g. a phone) through OpenKey device authorization (KV-scoped; SQL needs browser login)")
+    .option(
+      "--preset <name>",
+      `Request a named permission set instead of --cap: ${APPS_AGENT_PRESET} (kv get/list/put + sql read/write on the applications space, ${APPS_AGENT_EXPIRY_DAYS} days)`,
+    )
+    .option("--app <app_id>", "With --preset apps-agent: limit the grant to this app (its <app_id>/ prefix); recommended")
     .option("--paste", "With --grant on an OpenKey profile: wait up to 5 minutes for a signed code from OpenKey on stdin instead of a browser callback (use when the browser cannot reach this CLI)")
     .action(async (options, cmd) => {
       try {
@@ -905,8 +919,13 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
         if (options.device && (!options.grant || resolveProfilePosture(profile) !== "owner-openkey")) {
           throw new CLIError("INVALID_ARGUMENT", "--device requires --grant on an OpenKey owner profile.", ExitCode.USAGE_ERROR);
         }
-        const requested = await collectRequestedPermissions(options, ctx.profile);
-        const expiryOption = parseExpiryOption(options.expiry);
+        const preset = resolveAppsAgentRequest(options);
+        const requested = preset === undefined
+          ? await collectRequestedPermissions(options, ctx.profile)
+          : await resolvePermissionSpaces(appsAgentPermissions(preset.appId), ctx.profile);
+        const expiryOption = preset === undefined ? parseExpiryOption(options.expiry) : APPS_AGENT_EXPIRY;
+        // Before any approval link is printed: the plain-words scope of the grant.
+        if (preset !== undefined) process.stderr.write(`\n${appsAgentScopeNotice(preset.appId)}\n\n`);
 
         if (requested.length === 0) {
           throw new CLIError(
@@ -1266,6 +1285,8 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
         }
 
         const requested = await resolvePermissionSpaces(parsed.requested, ctx.profile);
+        const requestedPreset = matchAppsAgentRequest(requested);
+        if (requestedPreset !== undefined) process.stderr.write(`\n${appsAgentScopeNotice(requestedPreset.appId)}\n\n`);
         const resolvedRequest = { ...parsed, requested };
         const node = await ensureAuthenticated(ctx);
         await ensureDelegationAuthority({
