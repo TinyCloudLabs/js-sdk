@@ -1,5 +1,28 @@
 # @tinycloud/cli
 
+## 1.3.0-beta.33
+
+### Patch Changes
+
+- 72ff62a: `share publish`: `.jsx` and `.tsx` files are published as `text/jsx` and `text/tsx` instead of `application/octet-stream`. `--to anyone --action edit` now exits 2 with `INVALID_ARGUMENT` instead of silently publishing a read-only link. The tc-cli skill documents publishing Markdown, single-file HTML and JSX artifacts, and getting the link with `share show <id> --reveal-link`.
+
+## 1.3.0-beta.32
+
+### Patch Changes
+
+- Updated dependencies [fc88c48]
+  - @tinycloud/sdk-core@3.3.0-beta.30
+  - @tinycloud/node-sdk@3.3.0-beta.30
+  - @tinycloud/operations@0.6.1-beta.28
+
+## 1.3.0-beta.31
+
+### Patch Changes
+
+- Updated dependencies [e99a127]
+  - @tinycloud/node-sdk@3.3.0-beta.29
+  - @tinycloud/operations@0.6.1-beta.27
+
 ## 1.3.0-beta.30
 
 ### Patch Changes
