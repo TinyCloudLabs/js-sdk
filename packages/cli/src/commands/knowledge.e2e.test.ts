@@ -6,7 +6,7 @@ import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { appsAgentScopeNotice } from "../lib/apps-agent-preset.js";
+import { appsAgentScopeNotice, describeAction } from "../lib/apps-agent-preset.js";
 
 // Runs against a real TinyCloud node binary (the variable the node-sdk e2e tests use).
 const NODE_BIN = process.env.TC_REPLICATION_E2E_NODE_BIN;
@@ -78,6 +78,7 @@ describe.skipIf(!NODE_BIN)("tinycloud knowledge against a real node", () => {
   }
 
   async function newAgent(name: string): Promise<void> {
+    await mkdir(home(name), { recursive: true });
     const created = await cli(name, ["profile", "create", name, "--posture", "delegate-session", "--operator", "agent"]);
     expect(created.exitCode).toBe(0);
   }
@@ -294,15 +295,37 @@ describe.skipIf(!NODE_BIN)("tinycloud knowledge against a real node", () => {
     expect(handmade.grantNotice).toContain("2 days");
   }, 180_000);
 
-  test("an entry smuggled into the request file is listed, needs --yes, and the printed set is the signed set", async () => {
-    const bullets = (stderr: string) => (stderr.match(/^- /gm) ?? []).length;
+  /** The entry lines of the owner-side text: `- ` inside the preset's limits, `! ` beyond them. */
+  const bulletLines = (stderr: string) => stderr.split("\n").filter((line) => /^[-!] /.test(line));
+
+  /**
+   * Every SIGNED resource (decoded from the grant's `delegation.resources`, not the request echo) has exactly
+   * one printed line, naming its space, its path and each of its actions.
+   */
+  function expectPrintedToEqualSigned(stderr: string, grant: { delegation: { resources: { service: string; space: string; path: string; actions: string[] }[] } }): void {
+    const resources = grant.delegation.resources;
+    const lines = bulletLines(stderr);
+    expect(lines).toHaveLength(resources.length);
+    for (const resource of resources) {
+      const service = resource.service.startsWith("tinycloud.") ? resource.service : `tinycloud.${resource.service}`;
+      const inApplications = resource.space.toLowerCase() === ownerSpace.toLowerCase();
+      const matching = lines.filter((line) =>
+        line.includes(`(${service})`) &&
+        line.includes(inApplications ? "your `applications` space" : `space \`${resource.space}\``) &&
+        line.includes(resource.path === "" ? "ALL apps in" : `\`${resource.path}\``) &&
+        resource.actions.every((action) => line.includes(describeAction(action))));
+      expect(matching).toHaveLength(1);
+    }
+  }
+
+  test("an entry smuggled into the request file is listed once, needs --yes, and the printed set is the signed set", async () => {
     const smuggle = (request: Record<string, unknown>) => {
       (request.requested as unknown[]).push({
         service: "tinycloud.delegation", space: "applications", path: "", actions: ["tinycloud.delegation/create"],
       });
     };
 
-    // Without --yes and without a terminal the owner signs nothing, and the refusal lists the entry.
+    // Without --yes and without a terminal the owner signs nothing, and the refusal says so without repeating the list.
     await newAgent("smuggler");
     const requestFile = join(root, "smuggler-request.json");
     expect((await cli("smuggler", ["auth", "request", "--preset", "apps-agent", "--app", RECIPES, "--emit", requestFile])).exitCode).toBe(0);
@@ -312,17 +335,19 @@ describe.skipIf(!NODE_BIN)("tinycloud knowledge against a real node", () => {
     const refused = await cli("owner", ["auth", "grant", requestFile]);
     expect(refused.exitCode).toBe(2);
     expect(refused.stderr).toContain("MORE than the apps-agent preset");
+    expect(refused.stderr.split("can give other people or agents access on your behalf")).toHaveLength(2);
     expect(refused.stdout).toBe("");
-    expect(refused.error().message).toContain("pass access on to others");
+    expect(refused.error().message).toContain("Nothing was signed");
 
-    // With --yes it is signed, and every signed entry was printed first, the extra one in words.
+    // With --yes it is signed; the printed lines are the signed resources, the extra one first and in words.
     const signed = await cli("owner", ["auth", "grant", requestFile, "--yes"]);
     expect(signed.exitCode).toBe(0);
     expect(signed.stderr).toContain("MORE than the apps-agent preset");
-    expect(signed.stderr).toContain("It can pass access on to others");
-    const permissions = signed.json().permissions as { service: string }[];
-    expect(permissions.map((permission) => permission.service)).toContain("tinycloud.delegation");
-    expect(bullets(signed.stderr)).toBe(permissions.length);
+    expect(bulletLines(signed.stderr)[0]).toStartWith("! ");
+    expect(bulletLines(signed.stderr)[0]).toContain("can give other people or agents access on your behalf");
+    const grant = signed.json();
+    expect(grant.delegation.resources.map((resource: { service: string }) => resource.service)).toContain("delegation");
+    expectPrintedToEqualSigned(signed.stderr, grant);
 
     // The exact preset request prints only the preset text and needs no --yes.
     await newAgent("plain");
@@ -331,7 +356,42 @@ describe.skipIf(!NODE_BIN)("tinycloud knowledge against a real node", () => {
     const plain = await cli("owner", ["auth", "grant", plainFile]);
     expect(plain.exitCode).toBe(0);
     expect(plain.stderr).toContain(appsAgentScopeNotice("read", [RECIPES]));
-    expect(bullets(plain.stderr)).toBe(0);
+    expect(bulletLines(plain.stderr)).toHaveLength(0);
+  }, 180_000);
+
+  test("an entry with no space is the owner's applications space: listed as that, gated, signs nothing without --yes", async () => {
+    await newAgent("nospace");
+    const requestFile = join(root, "nospace-request.json");
+    expect((await cli("nospace", ["auth", "request", "--preset", "apps-agent", "--app", RECIPES, "--emit", requestFile])).exitCode).toBe(0);
+    const artifact = JSON.parse(await readFile(requestFile, "utf8")) as { requested: Record<string, unknown>[] };
+    // the whole space, with delete, and no `space` field at all
+    artifact.requested.push({ service: "tinycloud.kv", path: "", actions: ["tinycloud.kv/get", "tinycloud.kv/put", "tinycloud.kv/del"] });
+    await writeFile(requestFile, JSON.stringify(artifact));
+
+    const refused = await cli("owner", ["auth", "grant", requestFile]);
+    expect(refused.exitCode).toBe(2);
+    expect(refused.stdout).toBe("");
+    expect(refused.stderr).toContain("MORE than the apps-agent preset");
+    expect(refused.stderr).toContain("delete files");
+    expect(refused.stderr).toContain("ALL apps in your `applications` space");
+    expect(refused.stderr).not.toContain("space ``");
+
+    const signed = await cli("owner", ["auth", "grant", requestFile, "--yes"]);
+    expect(signed.exitCode).toBe(0);
+    expectPrintedToEqualSigned(signed.stderr, signed.json());
+    // what was signed is that whole-space entry, in the owner's applications space
+    const wholeSpace = signed.json().delegation.resources.find((resource: { service: string; path: string }) => resource.service === "kv" && resource.path === "");
+    expect(wholeSpace).toBeDefined();
+    expect(wholeSpace.space.toLowerCase()).toBe(ownerSpace.toLowerCase());
+    expect(wholeSpace.actions).toEqual(["tinycloud.kv/del", "tinycloud.kv/get", "tinycloud.kv/put"]);
+
+    // An empty space is refused outright.
+    artifact.requested[artifact.requested.length - 1]!.space = "";
+    await writeFile(requestFile, JSON.stringify(artifact));
+    const empty = await cli("owner", ["auth", "grant", requestFile, "--yes"]);
+    expect(empty.exitCode).toBe(2);
+    expect(empty.stdout).toBe("");
+    expect(empty.error().message).toContain("empty space");
   }, 180_000);
 
   test("revocation ends a grant", async () => {

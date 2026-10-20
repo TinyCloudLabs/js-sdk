@@ -132,8 +132,11 @@ import {
   appsAgentPermissions,
   appsAgentScopeNotice,
   describeGrantScope,
+  entriesForSigning,
+  finalizeSigningEntries,
   resolveAppsAgentRequest,
 } from "../lib/apps-agent-preset.js";
+import { permissionConsentLine, signExtrasQuestion } from "../lib/consent-text.js";
 import { buildReplicationLoginRequest, type ReplicationLoginOptions } from "../auth/replication-login.js";
 
 /** The one function dependency used by owner OpenKey permission acquisition. */
@@ -1292,9 +1295,12 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
           );
         }
 
-        const requested = await resolvePermissionSpaces(parsed.requested, ctx.profile);
-        // The owner reads this before signing: it describes EVERY entry that will be signed, as it
-        // will be signed (its own permissions and lifetime), never a wording chosen by the requester.
+        // One resolved list is described, gated and signed. The signer's own defaults (an entry with
+        // no space is in the owner's `applications` space) and the profile's name resolution are
+        // applied once, here, and the signer then consumes this list rather than re-reading the file.
+        const requested = finalizeSigningEntries(
+          await resolvePermissionSpaces(entriesForSigning(parsed.requested as PermissionEntry[]), ctx.profile),
+        );
         const [applications] = await resolvePermissionSpaces(
           [{ service: "tinycloud.kv", space: APPS_AGENT_SPACE, path: "", actions: ["tinycloud.kv/get"] }],
           ctx.profile,
@@ -1302,16 +1308,18 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
         const scope = describeGrantScope(requested, parsed.requestedExpiry, applications!.space ?? APPS_AGENT_SPACE);
         process.stderr.write(`\n${scope.text}\n\n`);
         // The request file comes from the agent: anything the apps-agent preset could never grant
-        // is signed only after an explicit --yes or an interactive confirmation.
+        // is signed only after an explicit --yes or an interactive confirmation of the list above.
+        let confirmedExtras = false;
         if (scope.extras.length > 0 && options.yes !== true) {
           if (!isInteractive()) {
             throw new CLIError(
               "CONFIRMATION_REQUIRED",
-              `This request asks for more than the apps-agent preset. Nothing was signed. Read the list above and re-run with --yes to sign it:\n${scope.extraLines.join("\n")}`,
+              `This request asks for more than the apps-agent preset (${scope.extras.length} entr${scope.extras.length === 1 ? "y" : "ies"} marked ! in the list above). Nothing was signed. Read the list, then re-run with --yes to sign it.`,
               ExitCode.USAGE_ERROR,
             );
           }
-          await requirePermissionConsent(scope.extras as PermissionEntry[], false);
+          await askYesNo(signExtrasQuestion(scope.extras.length), "Grant cancelled. Nothing was signed.");
+          confirmedExtras = true;
         }
         const resolvedRequest = { ...parsed, requested };
         const node = await ensureAuthenticated(ctx);
@@ -1322,7 +1330,7 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
           requested,
           expiryOption: parsed.requestedExpiry,
           reason: "Grant permissions requested by a TinyCloud auth request artifact.",
-          yes: options.yes === true,
+          yes: options.yes === true || confirmedExtras,
         });
 
         // The grant logic lives in the SDK (grantAuthRequest) so it is callable
@@ -2004,28 +2012,31 @@ async function collectRequestedPermissions(
   return permissions;
 }
 
-async function confirmPermissionRequest(permissions: PermissionEntry[]): Promise<void> {
-  process.stderr.write("\n" + theme.heading("Additional Permissions") + "\n");
-  for (const permission of permissions) {
-    const dangerous = isDangerousPermission(permission);
-    const line = `  ${compactPermission(permission)}`;
-    process.stderr.write((dangerous ? theme.warn(line) : theme.value(line)) + "\n");
-  }
-  process.stderr.write("\n");
-
+async function askYesNo(question: string, cancelMessage: string): Promise<void> {
   const rl = createInterface({
     input: process.stdin,
     output: process.stderr,
   });
 
   const answer = await new Promise<string>((resolve) => {
-    rl.question("Approve local-key delegation? [y/N] ", resolve);
+    rl.question(question, resolve);
   });
   rl.close();
 
   if (!/^y(es)?$/i.test(answer.trim())) {
-    throw new CLIError("REQUEST_CANCELLED", "Permission request cancelled.", ExitCode.ERROR);
+    throw new CLIError("REQUEST_CANCELLED", cancelMessage, ExitCode.ERROR);
   }
+}
+
+async function confirmPermissionRequest(permissions: PermissionEntry[]): Promise<void> {
+  process.stderr.write("\n" + theme.heading("Additional Permissions") + "\n");
+  for (const permission of permissions) {
+    const dangerous = isDangerousPermission(permission);
+    const line = `  ${permissionConsentLine(permission)}`;
+    process.stderr.write((dangerous ? theme.warn(line) : theme.value(line)) + "\n");
+  }
+  process.stderr.write("\n");
+  await askYesNo("Approve local-key delegation? [y/N] ", "Permission request cancelled.");
 }
 
 export async function requirePermissionConsent(

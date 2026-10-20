@@ -5,6 +5,7 @@ import {
   APPS_AGENT_MAX_APPS,
   appsAgentPermissions,
   appsAgentScopeNotice,
+  describeAction,
   describeGrantScope,
   matchAppsAgentRequest,
   resolveAppsAgentRequest,
@@ -159,8 +160,9 @@ describe("matchAppsAgentRequest (the owner side)", () => {
 const DEFAULT_SPACE = "tinycloud:pkh:eip155:1:0xAbC0000000000000000000000000000000000001:default";
 const scopeOf = (requested: Parameters<typeof describeGrantScope>[0], expiry: string | number | undefined = "7d") =>
   describeGrantScope(requested, expiry, OWNER_SPACE);
-/** The "- " lines of the text: one per entry that will be signed. */
-const entryLines = (text: string) => text.split("\n").filter((line) => line.startsWith("- "));
+/** The entry lines of the text: `- ` for entries inside the preset's limits, `! ` for entries beyond them. */
+const entryLines = (text: string) => text.split("\n").filter((line) => /^[-!] /.test(line));
+const delegationEntry = (action: string) => ({ service: "tinycloud.delegation", space: OWNER_SPACE, path: "", actions: [action] });
 
 describe("describeGrantScope: the text follows what will be signed", () => {
   test("a request for 365 days never gets the 7-day preset wording", () => {
@@ -202,13 +204,13 @@ describe("describeGrantScope: the text follows what will be signed", () => {
 
   test("KV delete, whole-space SQL write and an unnamed write are beyond the preset and say what they do", () => {
     const scope = scopeOf([
-      { service: "tinycloud.kv", space: OWNER_SPACE, path: "", actions: ["tinycloud.kv/get", "tinycloud.kv/del"] },
+      { service: "tinycloud.kv", space: OWNER_SPACE, path: "", actions: ["tinycloud.kv/del", "tinycloud.kv/get"] },
       { service: "tinycloud.sql", space: OWNER_SPACE, path: "", actions: ["tinycloud.sql/write"] },
       { service: "tinycloud.sql", space: OWNER_SPACE, path: `${HEALTH}/`, actions: ["tinycloud.sql/write"] },
     ]);
     expect(scope.text).toContain("MORE than the apps-agent preset");
     expect(scope.text).toContain("delete files");
-    expect(scope.text).toContain("everything in the space");
+    expect(scope.text).toContain("ALL apps in your `applications` space");
     expect(scope.text).toContain("(structure)");
     expect(scope.text).toContain("TC-1581");
     // the named-app write is within what the preset can grant; the other two are not
@@ -225,21 +227,36 @@ describe("describeGrantScope: the text follows what will be signed", () => {
     expect(entryLines(scope.text)).toHaveLength(2);
   });
 
-  test("an extra delegation/create entry is listed, called out as passing access on, and needs confirmation", () => {
-    const delegation = { service: "tinycloud.delegation", space: OWNER_SPACE, path: "", actions: ["tinycloud.delegation/create"] };
-    const scope = scopeOf([...asRequested("read", [RECIPES]), delegation]);
-    expect(scope.extras).toEqual([delegation]);
-    expect(scope.text).toContain("This request asks for MORE than the apps-agent preset:");
-    expect(scope.extraLines).toEqual([expect.stringContaining("pass access on to others")]);
-    expect(scope.text).toContain("tinycloud.delegation");
-    expect(scope.text).toContain("It can pass access on to others");
-    expect(entryLines(scope.text)).toHaveLength(asRequested("read", [RECIPES]).length + 1);
+  test.each([
+    ["tinycloud.delegation/create", "can give other people or agents access on your behalf"],
+    ["tinycloud.delegation/revoke", "can cancel access you gave"],
+    ["tinycloud.delegation/*", "can give other people or agents access on your behalf and cancel access you gave"],
+  ])("%s gets its own plain-words line, in the entry list, with no 'unrecognised' wording", (action, words) => {
+    const entry = delegationEntry(action);
+    const scope = scopeOf([...asRequested("read", [RECIPES]), entry]);
+    expect(scope.extras).toEqual([entry]);
+    const lines = entryLines(scope.text).filter((line) => line.includes("tinycloud.delegation"));
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toStartWith("! ");
+    expect(lines[0]).toContain(words);
+    expect(scope.text).not.toContain("unrecognised: grants tinycloud.delegation");
+    expect(scope.text).not.toContain("ALL abilities of tinycloud.delegation");
+  });
+
+  test("each entry is printed once: an extra entry appears in one list only, not again in an 'in full' list or a footer", () => {
+    const scope = scopeOf([...asRequested("read", [RECIPES]), delegationEntry("tinycloud.delegation/create")]);
+    expect(scope.text.split("access on your behalf")).toHaveLength(2);
+    expect(scope.text).not.toContain("In full");
+    expect(entryLines(scope.text)).toHaveLength(scope.entries.length);
+    // beyond-preset entries come first, marked
+    expect(entryLines(scope.text)[0]).toStartWith("! ");
+    expect(entryLines(scope.text).slice(1).every((line) => line.startsWith("- "))).toBe(true);
   });
 
   test("an unknown service and an unknown action are printed raw and marked unrecognised", () => {
     const scope = scopeOf([
       ...asRequested("read"),
-      { service: "tinycloud.zzz", space: OWNER_SPACE, path: "x", actions: ["tinycloud.zzz/frob", "tinycloud.zzz/*"] },
+      { service: "tinycloud.zzz", space: OWNER_SPACE, path: "x", actions: ["tinycloud.zzz/*", "tinycloud.zzz/frob"] },
       { service: "tinycloud.kv", space: OWNER_SPACE, path: "", actions: ["tinycloud.kv/teleport"] },
     ]);
     expect(scope.text).toContain("unrecognised service tinycloud.zzz");
@@ -267,47 +284,26 @@ describe("describeGrantScope: the text follows what will be signed", () => {
     const hostile = [
       { service: "tinycloud.kv\u001b[2J", space: `${OWNER_SPACE}\n`, path: "a\u001b[1A\u001b[2Kb/\raaaa\u202ex", actions: ["tinycloud.kv/\u001b[2Kx", "tinycloud.kv/get\u202e"] },
     ];
-    const { text, extraLines } = scopeOf([...asRequested("read"), ...hostile]);
-    for (const output of [text, ...extraLines]) {
-      // eslint-disable-next-line no-control-regex
-      expect(output.replace(/\n/g, "")).not.toMatch(/[\u0000-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/);
-    }
+    const { text } = scopeOf([...asRequested("read"), ...hostile]);
+    // eslint-disable-next-line no-control-regex
+    expect(text.replace(/\n/g, "")).not.toMatch(/[\u0000-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/);
     expect(text).toContain("\\u{1b}[2J");
     expect(text).toContain("\\u{202e}");
     expect(text).toContain("\\u{d}");
   });
 
-  test("the printed set equals the signed set: one line per entry, each naming that entry's service, path and actions", () => {
-    const crafted = [
-      asRequested("read"),
-      [...asRequested("read", [HEALTH]), { service: "tinycloud.delegation", space: OWNER_SPACE, path: "", actions: ["tinycloud.delegation/create"] }],
-      [...asRequested("write", [HEALTH, RECIPES]), { service: "tinycloud.hooks", space: OWNER_SPACE, path: "h/", actions: ["tinycloud.hooks/write"] }],
-      [{ service: "tinycloud.kv", space: DEFAULT_SPACE, path: "a/", actions: ["tinycloud.kv/get", "tinycloud.kv/put"] }, ...asRequested("read")],
-      [
-        { service: "tinycloud.sql", space: OWNER_SPACE, path: `${HEALTH}/`, actions: ["tinycloud.sql/read", "tinycloud.sql/admin"] },
-        { service: "tinycloud.capabilities", space: OWNER_SPACE, path: "", actions: ["tinycloud.capabilities/read"] },
-        { service: "tinycloud.duckdb", space: "evil:applications", path: "z", actions: ["tinycloud.duckdb/read"] },
-      ],
-    ];
-    for (const requested of crafted) {
-      const scope = scopeOf(requested, "9d");
-      const lines = entryLines(scope.text);
-      expect(lines).toHaveLength(requested.length);
-      requested.forEach((entry, index) => {
-        expect(lines[index]).toContain(entry.service);
-        if (entry.path !== "") expect(lines[index]).toContain(entry.path);
-        // every action is either in words or printed raw: none is dropped
-        expect(lines[index]!.split(",").length).toBeGreaterThanOrEqual(entry.actions.length);
-      });
-      // an independent oracle: an entry is beyond the preset unless it is KV or SQL in the owner's
-      // applications space with only read actions, or writes under a named app
-      for (const entry of requested) {
-        const inKvOrSql = entry.service === "tinycloud.kv" || entry.service === "tinycloud.sql";
-        const named = /^[A-Za-z0-9][\w.-]*\//.test(entry.path);
-        const allowed = (action: string) => /\/(get|list|read)$/.test(action) || (named && /\/(put|write)$/.test(action));
-        const beyond = !(inKvOrSql && entry.space === OWNER_SPACE && entry.actions.every(allowed));
-        expect(scope.extras.includes(entry)).toBe(beyond);
-      }
+  test("an ability named like an Object property is printed raw, not looked up", () => {
+    const text = scopeOf([...asRequested("read"), { service: "tinycloud.kv", space: OWNER_SPACE, path: "", actions: ["constructor", "__proto__", "toString"] }]).text;
+    expect(text).toContain("unrecognised: grants constructor");
+    expect(text).toContain("unrecognised: grants toString");
+    expect(text).not.toContain("native code");
+  });
+});
+
+describe("describeAction wording", () => {
+  test("every delegation ability and the kv/sql wildcards have plain words", () => {
+    for (const action of ["tinycloud.delegation/create", "tinycloud.delegation/revoke", "tinycloud.delegation/*", "tinycloud.kv/*", "tinycloud.sql/*"]) {
+      expect(describeAction(action)).not.toContain("unrecognised");
     }
   });
 });

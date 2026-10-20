@@ -5,6 +5,7 @@ import type { PermissionEntry } from "@tinycloud/node-sdk";
 import { ExitCode } from "../config/constants.js";
 import { CLIError } from "../output/errors.js";
 import { safeInline } from "../output/safe-text.js";
+import { isRawEncryptionPermission } from "./raw-encryption.js";
 import { normalizePkhIdentifier } from "./space.js";
 
 /**
@@ -81,8 +82,11 @@ const ACTION_WORDS: Readonly<Record<string, string>> = {
   "tinycloud.sql/write": "add, change and delete table rows",
   "tinycloud.sql/schema": "create, change and drop tables",
   "tinycloud.sql/admin": "do anything in the database",
-  "tinycloud.delegation/create": "pass access on to others (create new grants)",
-  "tinycloud.delegation/revoke": "revoke grants",
+  "tinycloud.delegation/create": "can give other people or agents access on your behalf",
+  "tinycloud.delegation/revoke": "can cancel access you gave",
+  "tinycloud.delegation/*": "can give other people or agents access on your behalf and cancel access you gave",
+  "tinycloud.kv/*": "do anything with files (read, write, delete)",
+  "tinycloud.sql/*": "do anything in the database",
   "tinycloud.capabilities/read": "see which permissions this key holds",
 };
 
@@ -270,35 +274,83 @@ export function matchAppsAgentRequest(
 
 /** What `auth grant` prints before signing, and what the owner must confirm. */
 export interface GrantScope {
-  /** Plain-words text for stderr. */
+  /** Plain-words text for stderr: every entry once, entries beyond the preset first and marked `!`. */
   readonly text: string;
+  /** The entries described, exactly the resolved list that is signed. */
+  readonly entries: readonly PermissionEntry[];
   /** Entries outside what the apps-agent preset can ever grant; they need an explicit confirmation. */
   readonly extras: readonly PermissionEntry[];
-  /** One plain-words line per extra entry, escaped. */
-  readonly extraLines: readonly string[];
 }
 
-function describePath(path: string): string {
-  return path === "" || path === "/" ? "everything in the space" : `\`${safeInline(path)}\``;
+const RAW_ENCRYPTION_SPACE = "encryption";
+
+function badRequest(message: string): CLIError {
+  return new CLIError("INVALID_AUTH_REQUEST", `${message} Nothing was signed.`, ExitCode.USAGE_ERROR);
 }
 
-function describeAction(action: string): string {
-  const known = ACTION_WORDS[action];
-  if (known !== undefined) return known;
+/**
+ * Step 1 of preparing a request file for signing: check its shape and apply
+ * the signer's default for an entry with no `space` (the owner's
+ * `applications` space). An empty space is refused rather than guessed.
+ */
+export function entriesForSigning(requested: readonly PermissionEntry[]): PermissionEntry[] {
+  return requested.map((entry, index) => {
+    const label = `Entry ${index + 1} of the request`;
+    if (typeof entry !== "object" || entry === null || typeof entry.service !== "string" || entry.service === "" ||
+      typeof entry.path !== "string" || !Array.isArray(entry.actions) || entry.actions.length === 0 ||
+      entry.actions.some((action) => typeof action !== "string" || action === "")) {
+      throw badRequest(`${label} is malformed: it needs a service, a path and at least one action.`);
+    }
+    if (entry.space !== undefined && (typeof entry.space !== "string" || entry.space === "")) {
+      throw badRequest(`${label} has an empty space: name the space, or leave it out to mean your \`${APPS_AGENT_SPACE}\` space.`);
+    }
+    return entry.space === undefined && !isRawEncryptionPermission(entry) ? { ...entry, space: APPS_AGENT_SPACE } : entry;
+  });
+}
+
+/**
+ * Step 3, after the profile has turned names into space ids and expanded
+ * action names: require a concrete space on every entry, then merge entries
+ * with the same service, space, path, lifetime and caveats (actions are
+ * unioned and sorted), exactly as the signer would. The result is the one list
+ * that is described, gated and signed.
+ */
+export function finalizeSigningEntries(resolved: readonly PermissionEntry[]): PermissionEntry[] {
+  const merged = new Map<string, PermissionEntry>();
+  resolved.forEach((entry, index) => {
+    const space = entry.space;
+    const concrete = typeof space === "string" &&
+      (space.startsWith("tinycloud:") || (space === RAW_ENCRYPTION_SPACE && isRawEncryptionPermission(entry)));
+    if (!concrete) {
+      throw badRequest(`Entry ${index + 1} of the request does not resolve to a concrete space (got "${safeInline(String(space))}").`);
+    }
+    const key = JSON.stringify([entry.service, normalizePkhIdentifier(space), entry.path, entry.expiry ?? null, entry.caveats ?? null]);
+    const existing = merged.get(key);
+    merged.set(key, existing === undefined ? entry : { ...existing, actions: [...existing.actions, ...entry.actions] });
+  });
+  return [...merged.values()].map((entry) => ({ ...entry, actions: [...new Set(entry.actions)].sort() }));
+}
+
+/** Plain words for one ability; anything unknown is printed raw and marked unrecognised. */
+export function describeAction(action: string): string {
+  if (Object.prototype.hasOwnProperty.call(ACTION_WORDS, action)) return ACTION_WORDS[action]!;
   return action.endsWith("/*")
     ? `ALL abilities of ${safeInline(action.slice(0, -2))} (unrecognised: grants ${safeInline(action)})`
     : `unrecognised: grants ${safeInline(action)}`;
 }
 
-/** One line for one signed entry: its actions in words, the path, the space and the raw service. */
+/** One line for one entry: its actions in words, where, and the raw service. */
 function describeEntry(entry: PermissionEntry, applicationsSpace: string): string {
-  const space = inApplicationsSpace(entry, applicationsSpace)
-    ? "your `applications` space"
-    : `space \`${safeInline(entry.space ?? "")}\``;
+  const inApplications = inApplicationsSpace(entry, applicationsSpace);
+  const space = inApplications ? "your `applications` space" : `space \`${safeInline(entry.space ?? "")}\``;
+  const wholeSpace = entry.path === "" || entry.path === "/";
+  const where = wholeSpace
+    ? (inApplications ? `ALL apps in ${space}` : `everything in ${space}`)
+    : `\`${safeInline(entry.path)}\` in ${space}`;
   const known = entry.service === "tinycloud.kv" || entry.service === "tinycloud.sql" ||
     entry.service === "tinycloud.delegation" || entry.service === "tinycloud.capabilities";
   const service = known ? safeInline(entry.service) : `unrecognised service ${safeInline(entry.service)}`;
-  return `${entry.actions.map(describeAction).join(", ")} on ${describePath(entry.path)} in ${space} (${service})`;
+  return `${entry.actions.map(describeAction).join(", ")} on ${where} (${service})`;
 }
 
 /** The widest actions the preset ever grants on a service, and whether writes need a named app. */
@@ -319,13 +371,14 @@ function withinPresetSet(entry: PermissionEntry, applicationsSpace: string): boo
 }
 
 /**
- * The scope the owner is about to sign, in plain words, derived from the
- * request as it will be signed. Every entry is described, whatever its
- * service or space; text from the request is escaped. The preset wording is
- * used only when the request is exactly a preset variant. A request that
+ * The scope the owner is about to sign, in plain words. `requested` must be
+ * the resolved list from `entriesForSigning` + the profile + `finalizeSigningEntries`,
+ * the same list that is then signed. Every entry is described once, whatever
+ * its service or space, with text from the request escaped. The preset wording
+ * is used only when the list is exactly a preset variant. When the list
  * touches an `applications` space and holds any entry the preset could never
  * grant (another service or space, delete, schema, delegation, a write with no
- * named app) lists those entries first and needs an explicit confirmation.
+ * named app), those entries come first, marked `!`, and need a confirmation.
  */
 export function describeGrantScope(
   requested: readonly PermissionEntry[],
@@ -334,28 +387,23 @@ export function describeGrantScope(
 ): GrantScope {
   const preset = matchAppsAgentRequest(requested, requestedExpiry, applicationsSpace);
   if (preset !== undefined) {
-    return { text: appsAgentScopeNotice(preset.mode, preset.appIds), extras: [], extraLines: [] };
+    return { text: appsAgentScopeNotice(preset.mode, preset.appIds), entries: requested, extras: [] };
   }
   const touchesApplications = requested.some((entry) => (entry.space ?? "").split(":").at(-1) === APPS_AGENT_SPACE);
   const extras = touchesApplications ? requested.filter((entry) => !withinPresetSet(entry, applicationsSpace)) : [];
-  const extraLines = extras.map((entry) => `! ${describeEntry(entry, applicationsSpace)}`);
+  const others = requested.filter((entry) => !extras.includes(entry));
 
-  const lines: string[] = [];
-  if (extras.length > 0) {
-    lines.push("This request asks for MORE than the apps-agent preset:", ...extraLines, "In full, it asks for:");
-  } else if (touchesApplications) {
-    lines.push("This request is not the standard apps-agent grant (other paths or lifetime). It asks for:");
-  } else {
-    lines.push("This request asks for:");
-  }
-  for (const entry of requested) lines.push(`- ${describeEntry(entry, applicationsSpace)}`);
-
-  const actions = requested.flatMap((entry) => entry.actions);
+  const lines: string[] = [
+    extras.length > 0
+      ? "This request asks for MORE than the apps-agent preset. Entries marked ! go beyond it:"
+      : touchesApplications
+      ? "This request is not the standard apps-agent grant (other paths or lifetime). It asks for:"
+      : "This request asks for:",
+    ...extras.map((entry) => `! ${describeEntry(entry, applicationsSpace)}`),
+    ...others.map((entry) => `- ${describeEntry(entry, applicationsSpace)}`),
+  ];
   if (requested.some((entry) => entry.service === "tinycloud.sql" && entry.actions.some((action) => STRUCTURE_ACTIONS.has(action)))) {
     lines.push("Because of how TinyCloud permissions work today (TC-1581), SQL write access can also change or delete tables (structure).");
-  }
-  if (actions.some((action) => action.startsWith("tinycloud.delegation/"))) {
-    lines.push("It can pass access on to others: the agent could create new grants of its own.");
   }
   const entryLifetimes = requested.filter((entry) => entry.expiry !== undefined).map((entry) => lifetimeMs(entry.expiry));
   const durations = [lifetimeMs(requestedExpiry), ...entryLifetimes]
@@ -366,5 +414,5 @@ export function describeGrantScope(
       ? "Its lifetime could not be read from the request."
       : `It lasts up to ${lifetimePhrase(longest)}${requestedExpiry === undefined ? " (no lifetime was requested; this is the default)" : ""}; revoke it any time with \`${CLI_NAME} delegation revoke <id>\`.`,
   );
-  return { text: lines.join("\n"), extras, extraLines };
+  return { text: lines.join("\n"), entries: requested, extras };
 }
