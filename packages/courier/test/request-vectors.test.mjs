@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { requestFields, storedRequestFields, requestText } from '../dist/request.js';
-import { plainLineProblem, MAX_SUMMARY } from '../dist/text.js';
+import { summaryProblem } from '../dist/text.js';
 import { requestHash } from '../dist/canonical.js';
 import { verifyApproval } from '../dist/approval.js';
 
@@ -11,7 +11,7 @@ const vectors = JSON.parse(fs.readFileSync(new URL('./vectors/request-fields.jso
 for (const v of vectors.fields) {
   test(`shared vector: ${v.field} ${v.name} -> ${v.valid ? 'accepted' : 'refused'}`, () => {
     if (v.field === 'summary') {
-      assert.equal(plainLineProblem(v.value, MAX_SUMMARY) === undefined, v.valid);
+      assert.equal(summaryProblem(v.value) === undefined, v.valid);
       if (typeof v.value === 'string') {
         const written = () => requestFields({ verb: 'other', target: 'workflow:o/r:ci.yml', summary: v.value });
         if (v.valid) assert.equal(written().summary, v.value, 'accepted text is stored exactly as given');
@@ -166,4 +166,22 @@ test('courier request --help prints the target forms, not the global help', asyn
   assert.match(out, /owner\/repo#<PR number>/);
   assert.match(out, /npm:<name>@<version>/);
   assert.ok(!/Setup & pairing/.test(out));
+});
+
+test('the request key set is closed: unknown keys refused, action/reason/risk optional when read, requestedBy exactly owner+agent', async () => {
+  const { requestShapeProblem } = await import('../dist/request.js');
+  assert.equal(requestShapeProblem({ ...base }), undefined);
+  const { action, reason, risk, ...minimal } = base;
+  assert.equal(requestShapeProblem(minimal), undefined, 'a reader accepts a request without the three free-text fields');
+  assert.match(requestShapeProblem({ ...base, extra: 'x' }), /unknown key "extra"/);
+  assert.match(requestShapeProblem({ ...base, requestedBy: { owner: 'o', agent: 'a', more: 'x' } }), /exactly owner and agent/);
+  assert.match(requestShapeProblem({ ...base, status: 'approved' }), /pending/);
+  assert.match(requestShapeProblem({ ...base, createdAt: 5 }), /not a string/);
+  const { verb, ...noVerb } = base;
+  assert.match(requestShapeProblem(noVerb), /missing key "verb"/);
+});
+
+test('courier approval refuses a request with an extra key even if the hash matches', () => {
+  const req = { ...base, smuggled: 'gh pr merge 999' };
+  assert.match(code(req), /^approval-mismatch/);
 });

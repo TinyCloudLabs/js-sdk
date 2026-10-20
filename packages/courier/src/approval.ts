@@ -2,7 +2,7 @@ import { CourierError } from './errors.js';
 import { k } from './keys.js';
 import { isRecord } from './a2a.js';
 import { requestHash } from './canonical.js';
-import { storedRequestFields } from './request.js';
+import { requestShapeProblem, storedRequestFields } from './request.js';
 import { allStrings, hiddenTextProblem, MAX_ACTION, MAX_REASON, MAX_RISK, plainLineProblem, plainTextProblem } from './text.js';
 import { canonicalTarget, targetHelp } from './guard/target.js';
 import { getJson, putCreate } from './store.js';
@@ -102,6 +102,8 @@ export function verifyApproval(
   if (typeof request.peer !== 'string' || typeof request.threadId !== 'string' || typeof request.taskId !== 'string') {
     fail('approval-mismatch', 'The request is missing peer, threadId or taskId.');
   }
+  const shape = requestShapeProblem(request);
+  if (shape) fail('approval-mismatch', `The request is not in the form \`courier request\` writes (${shape}); it cannot be approved. File a new \`courier request\`.`);
   // The free text is only displayed, but the owner read it: whatever is present must be well-formed text, never empty.
   for (const [name, max] of [['action', MAX_ACTION], ['reason', MAX_REASON], ['risk', MAX_RISK]] as const) {
     if (name in request && plainTextProblem(request[name], max)) fail('approval-mismatch', `The request's ${name} is empty, too long or not plain text; it cannot be approved. File a new \`courier request\`.`);
