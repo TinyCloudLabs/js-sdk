@@ -42,6 +42,7 @@
     "cli-share-artifact-publish",
     "cli-share-fragment-wording",
     "cli-wait-openkey-space-setup",
+    "courier-watch",
     "delegation-create-list-node-paths",
     "deps-refresh-jose",
     "deps-security-update-2026-10-20",
