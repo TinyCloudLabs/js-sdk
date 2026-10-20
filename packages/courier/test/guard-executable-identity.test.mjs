@@ -17,6 +17,7 @@ test('N2: an unregistered executable gets no exemption from a trusted-tool basen
     for (const d of [cwd, home, tmp, bin]) fs.mkdirSync(d);
     fs.writeFileSync(path.join(bin, 'gh'), '#!/bin/sh\nexit 0\n', { mode: 0o700 });
     process.env.PATH = bin + path.delimiter + previousPath; process.env.HOME = home;
+    writeGuardSettings({ argv: [process.execPath, '/opt/courier/dist/cli.js', 'guard'], home: path.join(dir, 'courier'), entry: '/opt/courier/dist/cli.js' });
     const env = { ...realEnv(cwd, path.join(dir, 'courier'), '/opt/courier/dist/cli.js'), literals: [], protectedRoots: [], realHome: undefined };
     const deps = { env, protectedSet: { roots: [], homes: [] } };
     assert.equal((await decide({ tool_name: 'Bash', tool_input: { command: 'gh pr view 5 -R a/b' }, cwd }, deps)).kind, 'pass');

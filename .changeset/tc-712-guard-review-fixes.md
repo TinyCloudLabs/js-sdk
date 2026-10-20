@@ -8,3 +8,7 @@ Keep broker configuration outside Courier and resolve the owner's gh credential 
 Refuse protected-root traversal, gated executable aliases/copies, local network destinations and additional GitHub, registry and credential-access commands.
 
 Require registered executable identities for tool allowances, including Courier entrypoints and wrappers. Unregistered executables and package launchers fail closed. Protect registered tools from agent edits and preserve the installed census across automatic refreshes; owners refresh it after tool upgrades.
+
+Inspect interpreter script and preload files independently of their extension, and classify agent and gated-tool package entrypoints by their package manifest. Require the installed executable census and use its git identity for guard probes.
+
+Details: TC-1634

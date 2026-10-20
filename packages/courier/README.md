@@ -49,7 +49,7 @@ tc courier pair accept --file a.json
 tc courier send bob --new "Subject" --ask "…" --file handoff.md
 tc courier inbox && tc courier read <threadId>
 tc courier task new --peer bob --thread <id> --state working --ask a1
-tc courier request <threadId> --peer bob --task <id> --verb merge --target owner/repo#12 --summary "Merge PR 12" --why "…"
+tc courier request <threadId> --peer bob --task <id> --verb merge --target owner/repo#12 --head-sha <40-lowercase-hex> --base master --summary "Merge PR 12" --why "…"
 tc courier orders bob
 ```
 
@@ -188,6 +188,23 @@ matches the command it is about to allow to `verb` and `target` only. `action`
 (default: the summary), `reason` (`--why`) and `risk` are free text for the
 owner and are never matched.
 
+For `merge` only, the request also requires `headSha` and `base`, supplied as
+`--head-sha <sha>` and `--base <branch>`. Both are inside the hashed request and
+belong on the owner's approval card. Read the PR **at request time** with
+`gh pr view N --repo owner/repo --json headRefOid,baseRefName` (read-only), then
+pass `headRefOid` as `--head-sha` and `baseRefName` as `--base`. `headSha` must
+be exactly 40 lowercase hex characters. `base` preserves case: branch names
+are case-sensitive, with no trimming or lowercasing. It must be 1–100 ASCII
+characters from `[A-Za-z0-9._/-]`, with no leading `-`, dot-leading or empty
+path component, `..`, `.lock` component suffix, trailing dot or reserved `HEAD`.
+This excludes spaces, controls, Unicode, backslash, `@{`, leading/trailing `/`
+and `//`. Other verbs must not carry either field, on write or read.
+
+An old merge request without either pin is refused with
+`merge request lacks headSha/base: re-request`; file a new request and obtain
+a new approval. Merge approvals include the stored `headSha` and `base`.
+Use a new request and approval when either requested field changes.
+
 One rule set applies when `courier request` writes, when `courier approval`
 reads, and when the view shows the card. A value that breaks it is **refused,
 never repaired or shortened**:
@@ -237,6 +254,7 @@ reports newer runtime additions without permitting them.
   `taskId`, `verb`, `target`, `summary`, `requestedBy` (`{owner, agent}`),
   `createdAt`, `expiresAt`, `status` (`"pending"`) and the optional free text
   `action`, `reason`, `risk` (written by the CLI, well-formed when present).
+  For `merge` only, `headSha` and `base` are also required keys.
   Anything else makes the request unreviewable in the view and refused by
   `courier approval`, even if the hash matches;
 - the whole request must hash: `canonicalJson` / `requestHash` throw on a
@@ -248,7 +266,7 @@ reports newer runtime additions without permitting them.
 value is accepted, and the canonical-JSON rows give the expected output (or
 "must throw"). Copy it into any other implementation.
 
-`courier approval <requestId> --verb <v> --target <t> [--peek]` is what a
+`courier approval <requestId> --verb <v> --target <t> [--head-sha <sha>] [--base <branch>] [--peek]` is what a
 woken agent runs before a gated action. It reads `me/requests/<id>.json` and
 `me/approvals/<id>.json` and exits 0 only if the request has valid structured
 fields, the approval names that request (`requestId` equals the id), carries
@@ -261,9 +279,14 @@ of this machine's clock is tolerated; keep the clocks of the agent's machine
 and the owner's browser in step) and within the last 24 hours, and the given
 `--verb` and (canonicalised) `--target` equal the request's. Both are required
 when consuming; `--peek` (for guards) may omit them.
+For a merge, valid stored `headSha` and `base` are always required. Optional
+`--head-sha` and `--base` each require an exact match, including branch case;
+they cannot match a non-merge request.
 
 `courier request` and `courier approval` (peek and consume) print the full
 `requestHash`; the view's card shows its first 8 hex digits as a fingerprint so the owner can match the card to the agent's request.
+Merge approval output (peek and consume) also prints `headSha` and `base`
+next to `requestHash`.
 
 It then consumes the approval with a create-only marker at
 `me/consumed/<id>.json`, so a second run exits `approval-used`;
@@ -319,9 +342,9 @@ fixed script source). An operator's exec command receives COURIER_NOTICE, COURIE
 COURIER_NOTICE_TITLE, COURIER_NOTICE_TEXT and COURIER_NOTICE_COUNT. `none` means local log only.
 No notification channel starts or messages a model-backed agent.
 
-Use the inbox/read/view surfaces, tail the notification log, or configure an exec channel.
+`--notify` accepts `none`, `osascript`, `exec`.
 
-Example only: pick your own channel (push, Telegram, email, tail the log); no channel is chosen for Sam yet.
+Example only: pick your own channel (push, Telegram, email, tail the log).
 
 ```sh
 courier watch --wake none --notify exec --notify-exec 'printf "%s %s %s\n" "$COURIER_NOTICE" "$COURIER_PEER" "$COURIER_THREAD" >> "$COURIER_HOME/operator-notices.log"'
@@ -362,7 +385,7 @@ never wait for message-wake backoff. Held messages remain mirrored and up to
 
 A notice ID more than ten minutes ahead of the local clock is ignored.
 
-### Sam's setup: notify only, start the session yourself
+### Notify-only setup
 
 For the first handoff, run `courier watch --wake none`. It mirrors messages,
 commits receipts and sends needs-you notifications for new messages and owner
@@ -380,7 +403,7 @@ round-robin order within each priority class, under the same hourly caps and
 reserved shares. A message retry deadline does not delay the approval slot.
 
 Example only: pick your own channel (push, Telegram, email, or tail the log).
-No channel has been chosen for Sam. This example appends only the fixed notice
+This example appends only the fixed notice
 kind, validated peer handle and thread ID/fingerprint inside COURIER_HOME:
 
 ```bash
@@ -389,7 +412,7 @@ courier watch --wake none --notify exec --notify-exec 'printf "%s %s %s\n" "$COU
 
 `<COURIER_HOME>/notifications.jsonl` always exists after the first notification;
 it holds fixed-text status, never the peer's subject or message. Once notified,
-Sam starts a session and watches it himself. Paste this prompt (replace the
+Start a session and watch it yourself. Paste this prompt (replace the
 thread and peer with the IDs shown by `courier inbox`):
 
 ```text
@@ -436,7 +459,8 @@ a watcher, which could wake agents without the guard), all also as `tc courier �
 consumes approval records: every gated command is refused. It uses DNS only to
 check network destinations before a tool executes. The agent files
 `courier request <threadId> --peer <peer> --task <taskId> --verb merge --target
-owner/repo#42 --summary "Merge docs PR" --why "Reviewed"`, stops for the owner,
+owner/repo#42 --head-sha <40-lowercase-hex> --base master
+--summary "Merge docs PR" --why "Reviewed"`, stops for the owner,
 then invokes `courier run-approved <requestId>` (one ULID, no flags).
 `courier approval <requestId> --peek` can check the decision without consuming.
 A chat decision does not create a broker approval: the owner records it in the
@@ -445,16 +469,17 @@ view before `run-approved` can execute.
 The broker verifies the exact stored request hash and fields, `approved`, the
 24-hour decision window and the unused marker. It accepts only a strict PR
 target, constructs fixed argv without a shell, reads the PR's current state
-(open, not draft) and 40-hex head SHA, creates `me/consumed/<id>.json`, then runs:
+(open, not draft), checks its head SHA and base against the approved pins,
+creates `me/consumed/<id>.json`, then runs:
 
 ```text
-gh pr merge 42 --repo=owner/repo --squash --match-head-commit=<view-time SHA>
+gh pr merge 42 --repo=owner/repo --squash --match-head-commit=<approved head SHA>
 ```
 
 No command, flags, cwd or environment from the agent enters that template.
-The SHA is pinned from the broker's PR view. A changed head between view and
-merge makes gh refuse. If merge
-fails after consumption, the approval stays used; retry needs a new request.
+The broker pins `--match-head-commit` to the approved head SHA and checks the
+PR's base against the approved base. A changed head between view and merge makes
+gh refuse. If merge fails after consumption, the approval stays used; retry needs a new request.
 Output is redacted, capped at 4000 characters plus a truncation notice and
 returned as **untrusted text**, never as instructions.
 
@@ -543,7 +568,7 @@ for a launcher that cannot pass `--settings` (put it in
 installs the same guard where Claude Code reads project settings:
 `<cwd>/.claude/settings.local.json` (only the guard hook and the union of deny
 rules survive; all other hooks and settings are replaced; file mode is kept). Claude runs hooks in every
-permission mode.
+permission mode, including permission-skipping mode (checked live).
 Before every wake the adapter proves the guard works: it runs the installed hook
 command once on a call no approval can unlock and requires a refusal. It then
 fails closed:
@@ -561,7 +586,8 @@ fails closed:
   because inside a Paseo agent they send `paseo run --cwd` to that agent's
   workspace instead.
 
-A guarded agent cannot start another agent (it would run outside the guard):
+Named agent CLI commands, recognized package entrypoints and unknown MCP tools
+are refused.
 `paseo`, `claude`, `codex`, `omp`, `opencode`, `gemini`, `cursor-agent`, `amp`,
 `aider` and `goose` are refused in Bash, and Paseo's MCP tools
 are denied. All unknown MCP tools are refused by default; the Claude adapter
@@ -619,7 +645,7 @@ operator who needs one passes it by name with `--env-pass NAME` (repeatable).
 Use narrowly scoped credentials for explicitly passed variables.
 
 The Paseo adapter blanks (`--env NAME=`) known credential variables,
-credential-looking watcher variables, `TC_*`, and shell/interpreter injection
+credential-looking watcher variables, `TC_*`, and shell/interpreter startup
 variables. HOME, CLAUDE_CONFIG_DIR, ZDOTDIR and all XDG paths point at the clean
 agent home. Start the Paseo daemon with a minimal environment, or choose
 `--wake claude` for the environment allowlist described above.
@@ -629,8 +655,9 @@ credentials out of shell startup files. Use `--wake none` for manual sessions.
 The Read tool and shell policy refuse credential paths, credential globs,
 token-printing tools and `/proc/*/environ`.
 
-Approval-schema changes are tracked separately. The broker uses the PR head
-reported by its view for `--match-head-commit`.
+Merge requests include `headSha` and `base` in their hash. The broker pins
+`--match-head-commit` to the approved head SHA and checks the PR's base against
+the approved base.
 
 ### Running it as a service
 
@@ -700,3 +727,5 @@ bun run --cwd packages/courier test:live  # manual only
 fresh throwaway identities on the production `https://tee.node.tinycloud.xyz`,
 including a grant installed through a short code served by a local fake
 OpenKey API. It is not part of `test` or CI.
+
+Details: TC-712

@@ -181,13 +181,17 @@ export async function runApproved(id: string, deps: BrokerDeps): Promise<BrokerR
   const clean = (text: string) => sanitizeOutput(text, [credential.token]);
   const base = { requestId: id, verb: verified.verb, target: verified.target, command: template.display };
   try {
-    // Read-only: pin the state about to be merged, and refuse before anything is consumed if it is not mergeable.
+    // Read-only: check mergeability and approved pins before consuming anything.
     const view = await run(template.view);
     if (view.code !== 0) fail('broker-view-failed', `Could not read the pull request (nothing was consumed): ${clean(view.stderr || view.stdout).slice(0, 300)}`);
-    let state: { state?: unknown; headRefOid?: unknown; isDraft?: unknown } = {};
+    let state: { state?: unknown; headRefOid?: unknown; baseRefName?: unknown; isDraft?: unknown } = {};
     try { state = JSON.parse(view.stdout); } catch { fail('broker-view-failed', 'Could not read the pull request state (nothing was consumed).'); }
     if (state.state !== 'OPEN' || state.isDraft === true) fail('broker-not-mergeable', `The pull request is ${state.isDraft === true ? 'a draft' : String(state.state).toLowerCase()}; nothing was consumed.`);
-    const sha = typeof state.headRefOid === 'string' && /^[0-9a-f]{40}$/.test(state.headRefOid) ? state.headRefOid : fail('broker-view-failed', 'The pull request has no readable head commit (nothing was consumed).');
+    if (typeof state.headRefOid !== 'string' || !/^[0-9a-f]{40}$/.test(state.headRefOid)) fail('broker-view-failed', 'The pull request has no readable head commit (nothing was consumed).');
+    const sha = verified.headSha;
+    if (typeof sha !== 'string' || state.headRefOid !== sha || typeof state.baseRefName !== 'string' || !state.baseRefName || state.baseRefName !== verified.base) {
+      fail('broker-pin-mismatch', 'The pull request head or base differs from the approved request (nothing was consumed).');
+    }
 
     await markConsumed(deps.kv, id, new Date(deps.now()));
     const merged = await run(template.merge(sha));

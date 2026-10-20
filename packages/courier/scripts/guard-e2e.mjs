@@ -19,7 +19,7 @@ import { brokerFile, brokerRoot } from '../dist/broker-config.js';
 import { profileId } from '../dist/guard/install.js';
 import { parseArgs } from '../dist/args.js';
 import { parseShell, wordLiteral } from '../dist/guard/shell.js';
-import { courierOnlyEnv } from '../dist/guard/install.js';
+import { courierOnlyEnv, writeGuardSettings } from '../dist/guard/install.js';
 
 const root = path.join(os.homedir(), 'scratch/tc712');
 fs.mkdirSync(root, { recursive: true, mode: 0o700 });
@@ -57,11 +57,11 @@ try {
   const { taskId } = must(alice.home, ['task', 'new', '--peer', 'bob', '--thread', threadId, '--state', 'working']);
   const ghLog = path.join(tmp, 'gh.jsonl'); const gh = path.join(tmp, 'stub-gh');
   // All constants are test-created paths; token comparison is in the child environment, never argv.
-  fs.writeFileSync(gh, `#!${process.execPath}\nconst fs = require('node:fs'); const args = process.argv.slice(2);\nif (process.env.GH_TOKEN !== 'ghp_' + 'd'.repeat(36)) process.exit(9);\nfs.appendFileSync(${JSON.stringify(ghLog)}, JSON.stringify(args)+'\\n');\nif (args[1] === 'view') console.log(JSON.stringify({state:'OPEN', headRefOid:'${SHA}', isDraft:false}));\nelse console.log('stub merge only');\n`, { mode: 0o700 });
+  fs.writeFileSync(gh, `#!${process.execPath}\nconst fs = require('node:fs'); const args = process.argv.slice(2);\nif (process.env.GH_TOKEN !== 'ghp_' + 'd'.repeat(36)) process.exit(9);\nfs.appendFileSync(${JSON.stringify(ghLog)}, JSON.stringify(args)+'\\n');\nif (args[1] === 'view') console.log(JSON.stringify({state:'OPEN', headRefOid:'${SHA}', baseRefName:'master', isDraft:false}));\nelse console.log('stub merge only');\n`, { mode: 0o700 });
   must(alice.home, ['broker', 'set-token', '--test-token', '--gh-bin', gh], TOKEN);
   check('broker credential is private', (fs.statSync(brokerFile(profileId(alice.home), realHome)).mode & 0o777) === 0o600);
   const calls = () => fs.existsSync(ghLog) ? fs.readFileSync(ghLog, 'utf8').trim().split('\n').filter(Boolean).map(JSON.parse) : [];
-  const ask = (target = 'a/b#42') => must(alice.home, ['request', threadId, '--peer', 'bob', '--task', taskId, '--verb', 'merge', '--target', target, '--summary', 'Merge disposable stub PR', '--why', 'Test', '--risk', 'No real merge']).requestId;
+  const ask = (target = 'a/b#42') => must(alice.home, ['request', threadId, '--peer', 'bob', '--task', taskId, '--verb', 'merge', '--target', target, '--head-sha', SHA, '--base', 'master', '--summary', 'Merge disposable stub PR', '--why', 'Test', '--risk', 'No real merge']).requestId;
   async function approve(id, over = {}) {
     const raw = await alice.owner.node.kv.get(k.request(id), { prefix: '' }); assert.ok(raw.ok);
     const req = typeof raw.data.data === 'string' ? JSON.parse(raw.data.data) : raw.data.data;
@@ -70,6 +70,7 @@ try {
   const agentEnv = courierOnlyEnv({ ...baseEnv, GH_TOKEN: TOKEN, GITHUB_TOKEN: TOKEN, NPM_TOKEN: 'dummy' }, alice.home);
   prepareCleanHome({ realHome, cleanHome: agentEnv.HOME, claude: false });
   prepareAgentProfile(alice.home);
+  writeGuardSettings({ argv: [process.execPath, CLI, 'guard'], home: alice.home, entry: CLI });
   fs.mkdirSync(agentEnv.TC_HOME, { recursive: true, mode: 0o700 });
   check('agent environment omits Courier/broker roots', !agentEnv.COURIER_HOME && !Object.values(agentEnv).some(v => v === realHome));
   check('agent environment contains no broker or registry token', !agentEnv.GH_TOKEN && !agentEnv.GITHUB_TOKEN && !agentEnv.NPM_TOKEN);

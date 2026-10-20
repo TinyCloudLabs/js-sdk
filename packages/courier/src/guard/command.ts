@@ -7,7 +7,7 @@ import { CourierError } from '../errors.js';
 import { cmd } from '../program.js';
 import { profileDir } from '../profile.js';
 import { writeOut } from '../inbox.js';
-import { discoverBinaries, courierBinary, binaryName, type BinaryIdentity } from './binaries.js';
+import { binaryName, type BinaryIdentity } from './binaries.js';
 import { brokerRoot } from '../broker-config.js';
 import { decide, hookOutput, type GuardDeps } from './hook.js';
 import { guardSettings, writeGuardSettings } from './install.js';
@@ -26,9 +26,9 @@ export function installLiterals(home: string, entry: string): string[] {
 
 export function realEnv(cwd: string, home = profileDir(), entry = process.argv[1] ?? ''): PolicyEnv {
   const censusFile = path.join(home, 'guard/binaries.json');
-  const installed: BinaryIdentity[] = fs.existsSync(censusFile)
-    ? JSON.parse(fs.readFileSync(censusFile, 'utf8'))
-    : [...courierBinary(entry, process.argv), ...discoverBinaries(process.env.PATH ?? '', cwd)];
+  let installed: BinaryIdentity[];
+  try { installed = JSON.parse(fs.readFileSync(censusFile, 'utf8')); }
+  catch { throw new Error('invalid installed executable census'); }
   if (!Array.isArray(installed) || installed.some(b => !b || typeof b.name !== 'string' || typeof b.path !== 'string' || !Number.isFinite(b.dev) || !Number.isFinite(b.ino))) throw new Error('invalid installed executable census');
   const searchPath = process.env.PATH ?? '';
   return {
@@ -51,7 +51,9 @@ export function realEnv(cwd: string, home = profileDir(), entry = process.argv[1
       }
     },
     git(dir, args) {
-      const r = spawnSync('git', args, {
+      const git = installed.find(b => b.name === 'git');
+      if (!git || binaryName(git.path, dir, searchPath, installed) !== 'git') return { ok: false, out: '' };
+      const r = spawnSync(git.path, args, {
         cwd: dir,
         encoding: 'utf8',
         timeout: 5000,
