@@ -4,6 +4,7 @@ import { secp256k1 } from "@noble/curves/secp256k1";
 import { keccak_256 } from "@noble/hashes/sha3";
 import { sha256 } from "@noble/hashes/sha256";
 import { sha512 } from "@noble/hashes/sha512";
+import * as ts from "typescript";
 import {
   HeldCredentialError,
   InMemoryNonceStore,
@@ -493,11 +494,55 @@ describe("normaliseEmail (alias rules confirmed by Sam 2026-10-19, same as billi
   });
 });
 
+const FORBIDDEN_NODE_ACCESS = /from "node:|require\(|Buffer\b|from "crypto"|process\./;
+
+/** Removes comments by parser position; string, template and regex contents are kept, so only comment text is blanked. */
+function stripComments(source: string): string {
+  const sf = ts.createSourceFile("source.ts", source, ts.ScriptTarget.Latest, true);
+  const ranges = new Map<number, number>();
+  const collect = (found: readonly ts.CommentRange[] | undefined) => {
+    for (const r of found ?? []) ranges.set(r.pos, r.end);
+  };
+  const visit = (node: ts.Node) => {
+    collect(ts.getLeadingCommentRanges(source, node.pos));
+    collect(ts.getTrailingCommentRanges(source, node.end));
+    for (const child of node.getChildren(sf)) visit(child);
+  };
+  visit(sf);
+  let out = source;
+  for (const [pos, end] of [...ranges].sort((a, b) => b[0] - a[0])) {
+    out = out.slice(0, pos) + out.slice(pos, end).replace(/[^\n]/g, " ") + out.slice(end);
+  }
+  return out;
+}
+
 test("the module has no Node-only imports (Worker-safe)", async () => {
   for (const file of ["crypto", "did", "email", "encoding", "errors", "issuer-set", "nonce-store", "rows", "siwe", "verify", "index"]) {
     const text = await Bun.file(new URL(`./${file}.ts`, import.meta.url)).text();
-    expect(text).not.toMatch(/from "node:|require\(|Buffer\b|from "crypto"|process\./);
+    expect(stripComments(text)).not.toMatch(FORBIDDEN_NODE_ACCESS);
   }
+});
+
+describe("Worker-safety scan (stripComments + FORBIDDEN_NODE_ACCESS)", () => {
+  const flagged = (source: string) => FORBIDDEN_NODE_ACCESS.test(stripComments(source));
+
+  test("flags executable Node access, including after literals that contain comment markers", () => {
+    expect(flagged("process.env.NODE_ENV;\n")).toBe(true);
+    expect(flagged(`const probeUrl = "https://example.invalid"; process.env.NODE_ENV;\n`)).toBe(true);
+    expect(flagged(`const beginMarker = "/*"; process.env.NODE_ENV; const endMarker = "*/";\n`)).toBe(true);
+    expect(flagged(`const q = /"/; process.env.A;\n`)).toBe(true);
+  });
+
+  test("ignores line and block comments that mention Node access", () => {
+    expect(flagged("// uses process.env here\nconst a = 1;\n")).toBe(false);
+    expect(flagged("/**\n * process.x in docs\n */\nconst a = 1;\n")).toBe(false);
+    expect(flagged("const a = 1; // process.z\nexport const b = a;\n")).toBe(false);
+  });
+
+  test("still flags Node access written as string or template data", () => {
+    expect(flagged("const t = `process.data`;\n")).toBe(true);
+    expect(flagged(`const s = "process.data";\n`)).toBe(true);
+  });
 });
 
 describe("TC-1540 N1: jti", () => {
