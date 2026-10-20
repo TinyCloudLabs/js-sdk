@@ -57,6 +57,9 @@ export const k = {
   watchState: `${PREFIX}/me/state/watch.json`,
   /** Single-use marker for an approval (create-only). `me/consumed/` is get/put/list for the courier key, never del. */
   approvalUsed: (id: string) => `${PREFIX}/me/consumed/${id}.json`,
+  /** One create-only marker per wake (see Watcher.claimWake). */
+  wakeClaim: (peer: string, threadId: string, firstId: string) => `${PREFIX}/me/state/wake-claims/${peer}/${threadId}/${firstId}.json`,
+  wakeClaimsPrefix: `${PREFIX}/me/state/wake-claims/`,
   peersPrefix: `${PREFIX}/me/peers/`,
   mirrorPrefix: `${PREFIX}/me/mirror/`,
   approvalsPrefix: `${PREFIX}/me/approvals/`,

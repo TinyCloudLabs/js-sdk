@@ -78,7 +78,8 @@ export function wakeConfig(args: ParsedArgs, owner: string | undefined): WakeCon
     paseo: { bin: value(args, 'paseo-bin') ?? 'paseo', provider: value(args, 'paseo-provider') ?? 'claude', mode: value(args, 'paseo-mode') },
     // A woken claude may run only Courier commands unless the owner widens it with --claude-settings/--claude-allow.
     claude: { bin: value(args, 'claude-bin') ?? 'claude', settings: value(args, 'claude-settings'), allow: allow.length ? allow : [`Bash(${programName()}:*)`] },
-    timeoutMs: seconds(args, 'wake-timeout', 15 * 60_000, 10, 6 * 3600),
+    // Capped at 30 min: a crashed watcher's wake claim is taken over after 35 min (Watcher.claimWake).
+    timeoutMs: seconds(args, 'wake-timeout', 15 * 60_000, 10, 30 * 60),
   };
 }
 
@@ -110,7 +111,11 @@ export function serviceArgv(args: ParsedArgs, config: WakeConfig, invocation: st
   };
   if (config.adapter === 'claude') pin('claude-bin', config.claude.bin);
   if (config.adapter === 'paseo') pin('paseo-bin', config.paseo.bin);
-  if (!args.has('cwd')) flags.push('--cwd', config.cwd);
+  // The service's WorkingDirectory is the resolved cwd; `--cwd` must be that same absolute path, not a relative
+  // one that would resolve a second time against it.
+  const cwdAt = flags.indexOf('--cwd');
+  if (cwdAt === -1) flags.push('--cwd', config.cwd);
+  else flags[cwdAt + 1] = config.cwd;
   return [process.execPath, invocation[1], ...prefix, 'watch', ...flags];
 }
 

@@ -24,6 +24,8 @@ import {
 import { commitReceipts, collectInbound, renderInboxText, writeOut } from './inbox.js';
 import { getJson, listAll, putCreate, putMatch, del } from './store.js';
 import { DEFAULT_ORDERS } from './orders.js';
+import { requestFields } from './request.js';
+import { targetHelp } from './guard/target.js';
 import type { ParsedArgs } from './args.js';
 import { requireFlag, oneOf } from './args.js';
 import { assertPeerDelegation, bareDid, durationMs, AGENT_GRANT_MAX_MS } from './authority.js';
@@ -612,14 +614,17 @@ export async function cmdRequest(args: ParsedArgs) {
   const { profile, node } = await ctx();
   const threadId = args.positional[0] ?? fail('usage', requestUsage());
   const taskId = requireFlag(args, 'task', requestUsage());
-  const action = requireFlag(args, 'action', requestUsage());
   const why = requireFlag(args, 'why', requestUsage());
   const peerHandle = requireFlag(args, 'peer', requestUsage());
   getPeer(profile, peerHandle);
+  const flag = (name: string) => (args.get(name) === 'true' ? undefined : args.get(name));
+  const fields = requestFields({ verb: flag('verb'), target: flag('target'), summary: flag('summary') });
   const risk = args.get('risk');
   const id = ulid();
   const request = {
-    id, peer: peerHandle, threadId, taskId, action, reason: why,
+    id, peer: peerHandle, threadId, taskId, ...fields,
+    // Free text for the owner to read; nothing matches against it (the structured fields above do that).
+    action: flag('action') ?? fields.summary, reason: why,
     risk: risk ?? 'unspecified',
     requestedBy: { owner: profile.ownerDid!, agent: profile.courierDid },
     createdAt: new Date().toISOString(),
@@ -635,7 +640,8 @@ export async function cmdRequest(args: ParsedArgs) {
   printJson({ ok: true, requestId: id, taskId, state: 'TASK_STATE_AUTH_REQUIRED' });
 }
 
-const requestUsage = () => `Usage: ${cmd('request <threadId> --peer <p> --task <id> --action "…" --why "…" [--risk "…"]')}`;
+const requestUsage = () =>
+  `Usage: ${cmd('request <threadId> --peer <p> --task <id> --verb merge|deploy|publish|spend|other --target <what> --summary "…" --why "…" [--risk "…"] [--action "…"]')}\n${targetHelp()}`;
 
 // ---------- orders ----------
 

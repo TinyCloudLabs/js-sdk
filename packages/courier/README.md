@@ -139,17 +139,28 @@ kills a run that hangs). A failed wake stays pending and retries after 60 s.
 
 ### Approvals
 
-`courier approval <requestId> --action "<exact action>" [--peek]` is what a
+`courier request` writes structured fields into `me/requests/<id>.json`:
+`verb` (`merge`, `deploy`, `publish`, `spend` or `other`), `target` (1 to 200
+characters, canonical for the verb: `owner/repo#<PR>`, `npm:<name>@<version>`,
+`wrangler:<worker>`, …; see `courier request --help`) and `summary` (one line, 1
+to 200 characters, control characters stripped). They are part of the request
+the hash covers, the view renders "Approving lets <peer>'s agent <verb>
+<target>: <summary>" from them, and the guard matches the command it is about
+to allow to `verb` and `target` only. `--action` stays as optional display
+text.
+
+`courier approval <requestId> --verb <v> --target <t> [--peek]` is what a
 woken agent runs before a gated action. It reads `me/requests/<id>.json` and
-`me/approvals/<id>.json` and exits 0 only if the approval names that request
-(`requestId` equals the id), carries `requestHash` equal to the SHA-256 of the
-request's canonical JSON (`canonicalJson` / `requestHash`, exported, mirrored by
-the view; a parsed `"__proto__"` key counts as an ordinary key), says
-`approved`, was decided in `[createdAt, expiresAt)` of the request (a decision
-dated up to 5 minutes ahead of this machine's clock is tolerated; keep the
-clocks of the agent's machine and the owner's browser in step) and within the
-last 24 hours, and `--action` equals the request's action. `--action` is
-required when consuming; `--peek` (for guards) may omit it.
+`me/approvals/<id>.json` and exits 0 only if the request has valid structured
+fields, the approval names that request (`requestId` equals the id), carries
+`requestHash` equal to the SHA-256 of the request's canonical JSON
+(`canonicalJson` / `requestHash`, exported, mirrored by the view; a parsed
+`"__proto__"` key counts as an ordinary key), says `approved`, was decided in
+`[createdAt, expiresAt)` of the request (a decision dated up to 5 minutes ahead
+of this machine's clock is tolerated; keep the clocks of the agent's machine
+and the owner's browser in step) and within the last 24 hours, and the given
+`--verb` and (canonicalised) `--target` equal the request's. Both are required
+when consuming; `--peek` (for guards) may omit them.
 
 It then consumes the approval with a create-only marker at
 `me/consumed/<id>.json`, so a second run exits `approval-used`;

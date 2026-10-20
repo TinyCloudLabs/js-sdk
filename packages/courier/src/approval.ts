@@ -2,6 +2,8 @@ import { CourierError } from './errors.js';
 import { k } from './keys.js';
 import { isRecord } from './a2a.js';
 import { requestHash } from './canonical.js';
+import { storedRequestFields } from './request.js';
+import { canonicalTarget, targetHelp } from './guard/target.js';
 import { getJson } from './store.js';
 import { isConsumed, markConsumed } from './consumed.js';
 import type { KV } from './inbox.js';
@@ -29,7 +31,10 @@ export interface VerifiedApproval {
   decision: 'approved' | 'denied';
   note: string;
   decidedAt: string;
-  action: string;
+  /** What was approved: matched against the command by `verb` and `target`, never by free text. */
+  verb: string;
+  target: string;
+  summary: string;
   peer: string;
   threadId: string;
   taskId: string;
@@ -53,7 +58,7 @@ export function verifyApproval(
   id: string,
   request: unknown,
   approval: unknown,
-  options: { now?: number; action?: string } = {},
+  options: { now?: number; verb?: string; target?: string } = {},
 ): VerifiedApproval {
   const now = options.now ?? Date.now();
   if (!isRecord(request) || request.id !== id) fail('approval-mismatch', `me/requests/${id}.json is missing or its id is not "${id}".`);
@@ -74,18 +79,27 @@ export function verifyApproval(
   if (decidedAt > now + FUTURE_SKEW_MS) fail('approval-mismatch', 'The decision is dated in the future.');
   if (decidedAt >= expires) fail('approval-expired', 'The decision came after the request expired.');
   if (now - decidedAt >= DAY_MS) fail('approval-expired', 'The approval is older than 24 hours; ask your owner again.');
-  if (typeof request.action !== 'string' || typeof request.peer !== 'string' || typeof request.threadId !== 'string' || typeof request.taskId !== 'string') {
-    fail('approval-mismatch', 'The request is missing action, peer, threadId or taskId.');
+  if (typeof request.peer !== 'string' || typeof request.threadId !== 'string' || typeof request.taskId !== 'string') {
+    fail('approval-mismatch', 'The request is missing peer, threadId or taskId.');
   }
-  if (options.action !== undefined && options.action !== request.action) {
-    fail('approval-mismatch', 'The approved action is not the action you are about to take; it must match the request exactly.');
+  const fields = storedRequestFields(request);
+  if (!fields) {
+    fail('approval-mismatch', 'The request has no valid structured verb, target and summary (an older request, or a hand-written one); it cannot be approved. File a new `courier request`.');
+  }
+  if (options.verb !== undefined && options.verb !== fields.verb) {
+    fail('approval-mismatch', `The approval is for "${fields.verb}", not "${options.verb}".`);
+  }
+  if (options.target !== undefined && options.target !== fields.target) {
+    fail('approval-mismatch', `The approval is for target ${JSON.stringify(fields.target)}, not ${JSON.stringify(options.target)}.`);
   }
   return {
     requestId: id,
     decision: approval.decision,
     note: typeof approval.note === 'string' ? approval.note : '',
     decidedAt: approval.decidedAt as string,
-    action: request.action,
+    verb: fields.verb,
+    target: fields.target,
+    summary: fields.summary,
     peer: request.peer,
     threadId: request.threadId,
     taskId: request.taskId,
@@ -104,25 +118,34 @@ export const consumeApproval = markConsumed;
 
 const SAFE = /^[0-9A-Za-z_-]{1,64}$/;
 
-export const approvalUsage = () => `Usage: ${cmd('approval <id> --action "<the exact action>" [--peek]')} (--action may be omitted with --peek)`;
+export const approvalUsage = () =>
+  `Usage: ${cmd('approval <id> --verb <v> --target <t> [--peek]')} (--verb and --target may be omitted with --peek)`;
 
 /**
- * `courier approval <id> --action "…"`: exit 0 and consume the approval only if the owner approved this exact request,
- * within 24 hours, and nobody has used it. `--peek` verifies without consuming (for guards) and fails the same way
- * for a used approval. A denial exits non-zero.
+ * `courier approval <id> --verb V --target T`: exit 0 and consume the approval only if the owner approved this exact
+ * request (its structured verb and target equal yours), within 24 hours, and nobody has used it. `--peek` verifies
+ * without consuming (for guards) and fails the same way for a used approval. A denial exits non-zero.
  */
 export async function cmdApproval(args: ParsedArgs): Promise<void> {
   const id = args.positional[0] ?? fail('usage', approvalUsage());
   if (!SAFE.test(id)) fail('usage', `"${id}" is not a request id. ${approvalUsage()}`);
-  const action = args.has('action') ? args.get('action') : undefined;
-  if (action === 'true') fail('usage', '--action needs a value.');
-  if (action === undefined && !args.has('peek')) fail('usage', `Say what you are about to do, so the approval is bound to it. ${approvalUsage()}`);
+  const flag = (name: string) => {
+    if (!args.has(name)) return undefined;
+    const value = args.get(name);
+    if (value === 'true' || value === '') fail('usage', `--${name} needs a value.`);
+    return value;
+  };
+  const verb = flag('verb');
+  const rawTarget = flag('target');
+  if ((verb === undefined) !== (rawTarget === undefined)) fail('usage', `--verb and --target go together. ${approvalUsage()}`);
+  if (verb === undefined && !args.has('peek')) fail('usage', `Say what you are about to do, so the approval is bound to it. ${approvalUsage()}\n${targetHelp()}`);
+  const target = verb !== undefined ? canonicalTarget(verb, rawTarget!) : undefined;
   const node = await courierNode(loadProfile());
   const request = await getJson<unknown>(node.kv, k.request(id));
   if (!request) fail('approval-mismatch', `No request ${id} in me/requests/.`);
   const approval = await getJson<unknown>(node.kv, k.approval(id));
   if (!approval) fail('approval-missing', `No approval for request ${id} yet. Your owner decides in the view or in your chat; stop and wait.`);
-  const verified = verifyApproval(id, request.value, approval.value, { action });
+  const verified = verifyApproval(id, request.value, approval.value, { verb, target });
   if (verified.decision === 'denied') {
     await writeOut(`${JSON.stringify({ ok: false, code: 'approval-denied', ...verified }, null, 2)}\n`);
     throw new CourierError('approval-denied', `Your owner denied request ${id}${verified.note ? `: ${verified.note}` : ''}. Do not take the action.`);
