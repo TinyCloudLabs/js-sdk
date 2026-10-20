@@ -186,10 +186,11 @@ try {
   const afterError = property(afterValue, "error");
   const afterCode = property(afterError, "code");
   const afterMessage = property(afterError, "message");
-  const afterMeta = property(afterError, "meta");
-  const afterStatus = property(afterMeta, "status");
-  const revokedMessage = `delegation-revoked: ${cid}`;
-  if (afterRead.exitCode === 0 || afterStatus !== 401 || typeof afterMessage !== "string" || !afterMessage.includes(revokedMessage)) {
+  // The node's `delegation-revoked: <cid>` 401 is reported as GRANT_REVOKED (exit 5) with one fixed message; the node's text and the CID are not shown.
+  if (
+    afterRead.exitCode !== 5 || afterCode !== "GRANT_REVOKED" || typeof afterMessage !== "string" ||
+    !afterMessage.startsWith("This grant was revoked.") || afterRead.stderr.includes(cid)
+  ) {
     throw new Error(
       `Post-revoke scoped read did not fail with the revocation verdict.\n` +
       `Exit code: ${afterRead.exitCode}\nSTDOUT:\n${redact(afterRead.stdout)}\nSTDERR:\n${redact(afterRead.stderr)}`,
@@ -227,7 +228,6 @@ try {
       exitCode: afterRead.exitCode,
       code: afterCode,
       message: afterMessage,
-      status: afterStatus,
     },
   }) + "\n");
 } finally {

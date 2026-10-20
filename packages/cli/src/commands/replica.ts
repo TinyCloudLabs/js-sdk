@@ -42,7 +42,7 @@ import { SqliteReplicaStore, loadSqlite, type MutationGuard } from "@tinycloud/r
 
 import { ProfileManager } from "../config/profiles.js";
 import { DEFAULT_PROFILE, ExitCode, type ExitCode as ExitCodeValue } from "../config/constants.js";
-import { CLIError, handleError } from "../output/errors.js";
+import { CLIError, GRANT_REVOKED_EXIT_CODE, handleError } from "../output/errors.js";
 import { formatBytes, formatField, formatTable, outputJson, shouldOutputJson } from "../output/formatter.js";
 import { theme } from "../output/theme.js";
 
@@ -66,7 +66,7 @@ const EXIT_BY_CODE: Record<ReplicaErrorCode, ExitCodeValue> = {
   [ReplicaErrorCode.GRANT_NOT_COVERING]: ExitCode.AUTH_REQUIRED,
   [ReplicaErrorCode.GRANT_NOT_YET_VALID]: ExitCode.PERMISSION_DENIED,
   [ReplicaErrorCode.GRANT_EXPIRED]: ExitCode.PERMISSION_DENIED,
-  [ReplicaErrorCode.GRANT_REVOKED]: ExitCode.PERMISSION_DENIED,
+  [ReplicaErrorCode.GRANT_REVOKED]: GRANT_REVOKED_EXIT_CODE,
   [ReplicaErrorCode.CONSENT_EXPIRED]: ExitCode.PERMISSION_DENIED,
   [ReplicaErrorCode.GATED]: ExitCode.PERMISSION_DENIED,
   [ReplicaErrorCode.GRANT_UNAUTHORIZED]: ExitCode.PERMISSION_DENIED,
