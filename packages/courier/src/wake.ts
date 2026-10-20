@@ -68,8 +68,8 @@ export function wakePrompt(request: WakeRequest, owner: string): string {
     paragraphs.push(
       `${who} decided on ${request.approvals.length === 1 ? 'a request' : 'requests'} you filed in thread ${subject} (${request.threadId}): ` +
         `${request.approvals.map((a) => `${a.requestId} (${label(a.decision, 12)})`).join(', ')}. ` +
-        `Before you act, run \`${cmd('approval <requestId>')}\`: it checks the decision against your request and exits non-zero unless it is ` +
-        `approved, matches, is under 24 hours old and unused. If it fails, or the decision is denied, do not take the action; update the task and tell ${peer} only what ${who} allows.`,
+        `Before you act, run \`${cmd('approval <requestId> --verb <verb> --target <target>')}\` with the verb and target of what you are about to do: ` +
+        `it checks the decision against your request and exits non-zero unless it is approved, matches, is under 24 hours old and unused. If it fails, or the decision is denied, do not take the action; update the task and tell ${peer} only what ${who} allows.`,
     );
   }
   return paragraphs.join('\n\n');

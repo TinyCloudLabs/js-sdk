@@ -75,7 +75,9 @@ const waitFor = (match, ms) => new Promise((resolve, reject) => {
 });
 
 const thread = 'T' + Date.now();
-const ask = async (action) => (await courier(alice.home, ['request', thread, '--peer', 'bob', '--task', 'K1', '--action', action, '--why', 'e2e', '--risk', 'low'])).json.requestId;
+const ask = async (verb, target) => (await courier(alice.home, ['request', thread, '--peer', 'bob', '--task', 'K1', '--verb', verb, '--target', target, '--summary', `e2e ${verb} ${target}`, '--why', 'e2e', '--risk', 'low'])).json.requestId;
+const forWhat = (verb, target) => ['--verb', verb, '--target', target];
+const MERGE = ['merge', 'tinycloudlabs/docs#42'];
 const readRequest = async (id) => (await alice.owner.node.kv.get(k.request(id), { prefix: '' })).data;
 const decide = async (id, over = {}) => {
   const raw = await readRequest(id);
@@ -89,8 +91,10 @@ const decide = async (id, over = {}) => {
 try {
   await waitFor((e) => e.event === 'hook-subscribe', 60_000);
 
-  const id = await ask('gh pr merge 42');
-  const before = await courier(alice.home, ['approval', id, '--action', 'gh pr merge 42'], { allowFail: true });
+  const noFields = await courier(alice.home, ['request', thread, '--peer', 'bob', '--task', 'K1', '--action', 'gh pr merge 42', '--why', 'e2e'], { allowFail: true });
+  ok('a request without verb/target/summary is refused', noFields.code === 2 && /--verb/.test(noFields.stderr));
+  const id = await ask(...MERGE);
+  const before = await courier(alice.home, ['approval', id, ...forWhat(...MERGE)], { allowFail: true });
   ok('no approval yet: refused', before.code !== 0 && /approval-missing/.test(before.stderr));
 
   const wrote = await decide(id);
@@ -100,32 +104,32 @@ try {
   const prompt = fs.readFileSync(wakeOut, 'utf8');
   ok('wake prompt tells the agent to verify', /courier approval <requestId>/.test(prompt) && prompt.includes(id));
 
-  const peek = await courier(alice.home, ['approval', id, '--action', 'gh pr merge 42', '--peek']);
+  const peek = await courier(alice.home, ['approval', id, ...forWhat(...MERGE), '--peek']);
   ok('peek verifies without consuming', peek.json.ok && peek.json.consumed === false);
-  const wrongAction = await courier(alice.home, ['approval', id, '--action', 'gh pr merge 43'], { allowFail: true });
-  ok('a different action is refused', wrongAction.code !== 0 && /approval-mismatch/.test(wrongAction.stderr));
-  const used = await courier(alice.home, ['approval', id, '--action', 'gh pr merge 42']);
+  const wrongAction = await courier(alice.home, ['approval', id, ...forWhat('merge', 'tinycloudlabs/docs#43')], { allowFail: true });
+  ok('a different target is refused', wrongAction.code !== 0 && /approval-mismatch/.test(wrongAction.stderr));
+  const used = await courier(alice.home, ['approval', id, ...forWhat(...MERGE)]);
   ok('approved request verifies and is consumed', used.json.ok && used.json.consumed && used.json.decision === 'approved');
-  const again = await courier(alice.home, ['approval', id, '--action', 'gh pr merge 42'], { allowFail: true });
+  const again = await courier(alice.home, ['approval', id, ...forWhat(...MERGE)], { allowFail: true });
   ok('second use is refused', again.code !== 0 && /approval-used/.test(again.stderr));
-  const peekUsed = await courier(alice.home, ['approval', id, '--action', 'gh pr merge 42', '--peek'], { allowFail: true });
+  const peekUsed = await courier(alice.home, ['approval', id, ...forWhat(...MERGE), '--peek'], { allowFail: true });
   ok('peek on a used approval is refused too', peekUsed.code !== 0 && /approval-used/.test(peekUsed.stderr));
   const bare = await courier(alice.home, ['approval', id], { allowFail: true });
-  ok('consuming without --action is a usage error', bare.code === 2 && /--action|Say what you are about to do/.test(bare.stderr));
+  ok('consuming without --verb and --target is a usage error', bare.code === 2 && /Say what you are about to do/.test(bare.stderr));
 
-  const tampered = await ask('deploy to prod');
+  const tampered = await ask('deploy', 'wrangler:eliza');
   await decide(tampered, { requestHash: '0'.repeat(64) });
-  const t = await courier(alice.home, ['approval', tampered, '--action', 'deploy to prod'], { allowFail: true });
+  const t = await courier(alice.home, ['approval', tampered, ...forWhat('deploy', 'wrangler:eliza')], { allowFail: true });
   ok('hash that does not match the request is refused', t.code !== 0 && /approval-mismatch/.test(t.stderr));
 
-  const literal = await ask('npm publish');
+  const literal = await ask('publish', 'npm:@tinycloud/courier@9.9.9');
   await decide(literal, { decision: 'approve' });
-  const l = await courier(alice.home, ['approval', literal, '--action', 'npm publish'], { allowFail: true });
+  const l = await courier(alice.home, ['approval', literal, ...forWhat('publish', 'npm:@tinycloud/courier@9.9.9')], { allowFail: true });
   ok('"approve" is not "approved"', l.code !== 0 && /approval-mismatch/.test(l.stderr));
 
-  const denied = await ask('rm -rf data');
+  const denied = await ask('other', 'secrets:set DATABASE_URL');
   await decide(denied, { decision: 'denied', note: 'no' });
-  const d = await courier(alice.home, ['approval', denied, '--action', 'rm -rf data'], { allowFail: true });
+  const d = await courier(alice.home, ['approval', denied, ...forWhat('other', 'secrets:set DATABASE_URL')], { allowFail: true });
   ok('a denial exits non-zero as approval-denied', d.code !== 0 && /approval-denied/.test(d.stderr));
 } catch (error) {
   failures++;
