@@ -1,5 +1,15 @@
 # @tinycloud/courier
 
+## 0.2.0-beta.34
+
+### Minor Changes
+
+- f81a22c: `courier approval <requestId>`: verifies the owner's decision before a gated action. The approval in `me/approvals/` must name the request, carry the SHA-256 of the request's canonical JSON (`canonicalJson` and `requestHash` are exported), say `approved`, be under 24 hours old and inside the request's lifetime, and match your `--verb` and `--target`; it is consumed once (create-only marker under `me/state/approvals-used/`). `courier watch` now wakes the thread's agent as soon as a new approval appears; the wake prompt tells the agent to run `courier approval` first.
+
+  `courier request` now requires `--verb` (merge, deploy, publish, spend, other), `--target` (canonical per verb) and `--summary` (one line, at most 200 characters); they are stored in the request and covered by its hash, so older free-text-only requests can no longer be approved. `--action` is optional display text.
+
+  One text rule set applies when `courier request` writes, when `courier approval` reads and in the `/courier` view: a frozen Unicode 15.0.0 allow-list (Lu/Ll/Lt/Lo/Nd minus Default*Ignorable), NFC, ASCII punctuation only (summary `. , : ; - * / # ( ) ? !`and U+0027; free multiline text all printable ASCII punctuation plus LF), plain U+0020 space only, caps (target and summary 200, action/reason/risk 2000),`target`printable ASCII in its per-verb canonical shape; violations are refused, never repaired.`canonicalJson`/`requestHash`throw on non-finite numbers and nesting deeper than 64.`test/vectors/request-fields.json`and the exhaustive`text-verdicts.json`hold the shared contract;`src/text-ranges.ts` is the generated table. Previously accepted emoji, smart apostrophes and all remaining combining marks are now refused. Watcher shutdown permanently latches runner cancellation so adapter follow-on commands cannot start after SIGINT/SIGTERM.
+
 ## 0.2.0-beta.33
 
 ### Patch Changes
