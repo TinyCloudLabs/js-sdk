@@ -184,3 +184,85 @@ describe("output amplification is refused as it grows", () => {
     expect((await refusal([page(body(MAX_ARTIFACT_REFERENCES + 1)), tiny])).kind).toBe("limit");
   });
 });
+
+describe("the byte-level scan of the finished page", () => {
+  it.each([
+    ["attributionsrc on an image", '<img attributionsrc="https://x.example/r" src="img/a.png">'],
+    ["attributionsrc on a link", '<a href="#x" attributionsrc="https://x.example/r">x</a>'],
+    ["attributionsrc with a //host", '<a href="#x" attributionsrc="//x.example/r">x</a>'],
+    ["attributionsrc with a path", '<a href="#x" attributionsrc="/r?x=1">x</a>'],
+    ["an unknown attribute with a scheme", '<p foo="javascript:alert(1)">x</p>'],
+    ["an unknown attribute with an entity-encoded scheme", '<p foo="&#104;ttps://x.example/">x</p>'],
+    ["an unknown attribute with tabs inside the scheme", '<p foo="ht\ttps://x.example/">x</p>'],
+    ["an unknown attribute with url()", '<svg><rect foo="url(https://x.example/a.svg#g)"/></svg>'],
+    ["xml:base", '<svg xml:base="https://x.example/"><rect/></svg>'],
+    ["<xmp>", "<xmp>text</xmp>"],
+    ["<plaintext>", "<plaintext>text"],
+    ["<noembed>", "<noembed>text</noembed>"],
+    ["<svg> script, even a plain one", "<svg><script>var a = 1;</script></svg>"],
+  ])("refuses %s", async (_name, body) => {
+    expect((await refusal([page(body), PNG])).kind).toBe("unsupported");
+  });
+
+  it("allows attributes that carry text, even text that contains a URL", async () => {
+    const prepared = await prepare([page('<p title="see https://x.example/ and //y.example" data-url="https://x.example/" aria-label="https://x.example/" id="a/b" class="https://x.example">x</p><img alt="https://x.example/" src="img/a.png"><svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"><rect/></svg><div itemscope itemtype="https://schema.org/Thing">x</div>', '<meta property="og:image" content="https://x.example/p.png"><meta name="viewport" content="width=device-width">'), PNG]);
+    expect(prepared.pages["index.html"]).toContain('title="see https://x.example/ and //y.example"');
+  });
+
+  it("allows a script that holds a URL as data, and a comment that holds a tag", async () => {
+    const prepared = await prepare([page('<script>var homepage = "https://x.example/"; var html = \'<a href="https://x.example/">x</a>\';</script><!-- <img src="https://x.example/p.png"> --><p>x</p>')]);
+    expect(prepared.pages["index.html"]).toContain('var homepage = "https://x.example/"');
+  });
+
+  // The DOM pass is blinded (the second parse of a page returns an empty document); the scan has to refuse on its own.
+  it("refuses on its own, with the DOM pass reading an empty page", async () => {
+    const blindedParser = (): ((html: string) => Document) => {
+      let parses = 0;
+      return (html) => { parses += 1; return parses % 2 === 1 ? parseHtml(html) : parseHtml("<!doctype html><p>empty</p>"); };
+    };
+    for (const body of ['<img attributionsrc="https://x.example/r">', '<p foo="//x.example/">x</p>', '<p style="background:u\\72l(https://x.example/p.png)">x</p>', "<xmp>t</xmp>"]) {
+      await expect(prepareHtmlArtifact([page(body)], { parseHtml: blindedParser() })).rejects.toMatchObject({ kind: "unsupported" });
+    }
+    // And a clean page is accepted through the same wrapper.
+    await expect(prepareHtmlArtifact([page("<p>clean</p>")], { parseHtml: blindedParser() })).resolves.toBeDefined();
+  });
+});
+
+describe("large inlined images in style attributes", () => {
+  it("are put back exactly, once, with no placeholder left", async () => {
+    const image = new Uint8Array(300_000).map((_, index) => index % 251);
+    const prepared = await prepare([page('<p style="background:url(img/big.png)">x</p><p style="background:url(img/big.png#a)">y</p>'), binary("img/big.png", image, "image/png")]);
+    const output = prepared.pages["index.html"]!;
+    const encoded = Buffer.from(image).toString("base64");
+    expect(output.split(`data:image/png;base64,${encoded}`).length - 1).toBe(2);
+    expect(output).not.toContain("TCPH");
+    expect(output).toContain(`data:image/png;base64,${encoded}#a`);
+  });
+
+  it("are refused fast when many of them pass the cap: 120 references to a 6 MiB image", async () => {
+    const before = process.memoryUsage().rss;
+    const started = performance.now();
+    const error = await refusal([page('<p style="background:url(big.png)">x</p>'.repeat(120)), binary("big.png", new Uint8Array(6 * 1024 * 1024), "image/png")]);
+    expect(error.kind).toBe("limit");
+    expect(performance.now() - started).toBeLessThan(1_000);
+    expect(process.memoryUsage().rss - before).toBeLessThan(200 * 1024 * 1024);
+  });
+
+  it("one large image in a style attribute is accepted quickly", async () => {
+    const before = process.memoryUsage().rss;
+    const started = performance.now();
+    const prepared = await prepare([page('<p style="background:url(big.png)">x</p>'), binary("big.png", new Uint8Array(6 * 1024 * 1024), "image/png")]);
+    expect(prepared.pages["index.html"]!.length).toBeGreaterThan(8 * 1024 * 1024);
+    expect(performance.now() - started).toBeLessThan(1_000);
+    expect(process.memoryUsage().rss - before).toBeLessThan(200 * 1024 * 1024);
+  });
+});
+
+describe("an imported stylesheet cannot reference other resources", () => {
+  it("is refused, as in the Share viewer's rewriter: inline them in the page's own stylesheet instead", async () => {
+    const error = await refusal([page("", '<style>@import "x.css";</style>'), utf8("x.css", "p{background:url(img/a.png)}"), PNG]);
+    expect(error.kind).toBe("unsupported");
+    // An import that holds only rules is fine.
+    expect((await prepare([page("", '<style>@import "x.css";</style>'), utf8("x.css", "p{color:red}")])).pages["index.html"]).toContain("p{color:red}");
+  });
+});

@@ -3,7 +3,8 @@ import { spawn } from "node:child_process";
 import { mkdir, mkdtemp, realpath, rename, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { isWithinFolder, readHtmlFolder, readRegularFile } from "./html-folder.js";
+import { ArtifactBundleError } from "@tinycloud/share-sdk/html-bundle";
+import { htmlFolderError, isWithinFolder, linuxDescriptorPath, listFolderDirectory, readHtmlFolder, readRegularFile, type FolderReadHooks } from "./html-folder.js";
 
 const OUTSIDE = "OUTSIDE-SECRET-CONTENT";
 const decode = (bytes: Uint8Array): string => new TextDecoder().decode(bytes);
@@ -69,8 +70,148 @@ describe("folder reading stays inside the folder", () => {
     await expect(readHtmlFolder(root, 10_000)).rejects.toMatchObject({ code: "UNSUPPORTED_FOLDER_ENTRY", message: expect.stringContaining('"sub" (symbolic link)') });
   });
 
-  // A second process swaps a subfolder for a link to the outside folder while the folder is read.
-  test("a subfolder swapped for a link during the walk never gets an outside file read (200 walks)", async () => {
+  // The checks, each run with the descriptor's real path (Linux) and without it (the checks used where the platform cannot
+  // name an open file). A hook models another process changing the folder at an exact point.
+  const MODES: [string, FolderReadHooks][] = [
+    ["by descriptor path", {}],
+    ["without a descriptor path", { descriptorPath: async () => undefined }],
+  ];
+  const linuxOnly = process.platform === "linux";
+
+  /** `sub/` is a real directory holding secret.txt; swap it for a link to `outside/`, keeping the real one as `.sub-real`. */
+  async function swapSubForLink(): Promise<void> {
+    await rename(join(root, "sub"), join(root, ".sub-real"));
+    await symlink(outside, join(root, "sub"));
+  }
+  async function swapSubBack(): Promise<void> {
+    await rm(join(root, "sub"));
+    await rename(join(root, ".sub-real"), join(root, "sub"));
+  }
+
+  test.each(MODES)("a parent directory swapped for a link just before the open: the outside file is refused (%s)", async (_mode, hooks) => {
+    if (hooks.descriptorPath === undefined && !linuxOnly) return;
+    await mkdir(join(root, "sub"));
+    await writeFile(join(root, "sub", "secret.txt"), "inside");
+    const result = await readRegularFile(root, join(root, "sub", "secret.txt"), "sub/secret.txt", 1000, 1000, { ...hooks, beforeOpen: swapSubForLink });
+    expect(result instanceof Uint8Array).toBe(false);
+    expect(result).toMatchObject({ code: "UNSUPPORTED_FOLDER_ENTRY", reason: "symbolic link" });
+  });
+
+  // The window the path-based checks left: the open went through the link, then the link was put back to the real directory.
+  test.each(MODES)("the link is put back after the open: the outside file is still refused (%s)", async (_mode, hooks) => {
+    if (hooks.descriptorPath === undefined && !linuxOnly) return;
+    await mkdir(join(root, "sub"));
+    await writeFile(join(root, "sub", "secret.txt"), "inside");
+    const result = await readRegularFile(root, join(root, "sub", "secret.txt"), "sub/secret.txt", 1000, 1000, { ...hooks, beforeOpen: swapSubForLink, afterOpen: swapSubBack });
+    expect(result instanceof Uint8Array).toBe(false);
+  });
+
+  test.each(MODES)("a file replaced by another file after the open is refused (%s)", async (_mode, hooks) => {
+    if (hooks.descriptorPath === undefined && !linuxOnly) return;
+    await writeFile(join(root, "a.txt"), "original");
+    const result = await readRegularFile(root, join(root, "a.txt"), "a.txt", 1000, 1000, {
+      ...hooks,
+      afterOpen: async () => { await writeFile(join(root, "a.new"), "replacement"); await rename(join(root, "a.new"), join(root, "a.txt")); },
+    });
+    // The descriptor path of a replaced file names a deleted file ("...(deleted)"); without it the inode differs.
+    expect(result).toMatchObject({ code: "UNSUPPORTED_FOLDER_ENTRY" });
+    if (hooks.descriptorPath !== undefined) expect(result).toMatchObject({ reason: "changed while it was read" });
+  });
+
+  test("without a descriptor path a parent that became a link to the same folder after the read is refused", async () => {
+    await mkdir(join(root, "sub"));
+    await writeFile(join(root, "sub", "a.txt"), "inside");
+    const result = await readRegularFile(root, join(root, "sub", "a.txt"), "sub/a.txt", 1000, 1000, {
+      descriptorPath: async () => undefined,
+      // The path still reaches the very same file, so only the check on each parent directory can see the link.
+      afterRead: async () => { await rename(join(root, "sub"), join(root, ".sub-real")); await symlink(join(root, ".sub-real"), join(root, "sub")); },
+    });
+    expect(result).toMatchObject({ code: "UNSUPPORTED_FOLDER_ENTRY", reason: "changed while it was read" });
+  });
+
+  test.each(MODES)("a file replaced between its lstat and its open is refused (%s)", async (_mode, hooks) => {
+    if (hooks.descriptorPath === undefined && !linuxOnly) return;
+    await writeFile(join(root, "a.txt"), "original");
+    const result = await readRegularFile(root, join(root, "a.txt"), "a.txt", 1000, 1000, {
+      ...hooks,
+      afterLstat: async () => { await writeFile(join(root, "a.new"), "replacement"); await rename(join(root, "a.new"), join(root, "a.txt")); },
+    });
+    expect(result).toMatchObject({ code: "UNSUPPORTED_FOLDER_ENTRY", reason: "changed while it was read" });
+  });
+
+  test.each(MODES)("a directory replaced between its lstat and its open is refused (%s)", async (_mode, hooks) => {
+    if (hooks.descriptorPath === undefined && !linuxOnly) return;
+    await mkdir(join(root, "sub"));
+    await writeFile(join(root, "sub", "a.txt"), "inside");
+    const result = await listFolderDirectory(root, join(root, "sub"), "sub", {
+      ...hooks,
+      afterLstat: async () => {
+        await mkdir(join(root, ".other"));
+        await rename(join(root, "sub"), join(root, ".old"));
+        await rename(join(root, ".other"), join(root, "sub"));
+      },
+    });
+    expect(result).toMatchObject({ code: "UNSUPPORTED_FOLDER_ENTRY", reason: "changed while it was read" });
+  });
+
+  test("without a descriptor path a parent swapped for a link after the read is refused", async () => {
+    await mkdir(join(root, "sub"));
+    await writeFile(join(root, "sub", "a.txt"), "inside");
+    await writeFile(join(outside, "a.txt"), "outside a file with the same name");
+    const result = await readRegularFile(root, join(root, "sub", "a.txt"), "sub/a.txt", 1000, 1000, {
+      descriptorPath: async () => undefined,
+      afterRead: swapSubForLink,
+    });
+    expect(result).toMatchObject({ code: "UNSUPPORTED_FOLDER_ENTRY", reason: "changed while it was read" });
+  });
+
+  test.each(MODES)("a directory swapped for a link after it is opened is refused (%s)", async (_mode, hooks) => {
+    if (hooks.descriptorPath === undefined && !linuxOnly) return;
+    await mkdir(join(root, "sub"));
+    await writeFile(join(root, "sub", "a.txt"), "inside");
+    const result = await listFolderDirectory(root, join(root, "sub"), "sub", { ...hooks, afterOpen: swapSubForLink });
+    expect("entries" in result).toBe(false);
+    expect(result).toMatchObject({ code: "UNSUPPORTED_FOLDER_ENTRY", reason: "symbolic link" });
+  });
+
+  test.each(MODES)("a directory replaced by another directory after it is opened is refused (%s)", async (_mode, hooks) => {
+    if (hooks.descriptorPath === undefined && !linuxOnly) return;
+    await mkdir(join(root, "sub"));
+    await writeFile(join(root, "sub", "a.txt"), "inside");
+    const result = await listFolderDirectory(root, join(root, "sub"), "sub", {
+      ...hooks,
+      afterOpen: async () => {
+        await mkdir(join(root, ".other"));
+        await rename(join(root, "sub"), join(root, ".old"));
+        await rename(join(root, ".other"), join(root, "sub"));
+      },
+    });
+    expect("entries" in result).toBe(false);
+    expect(result).toMatchObject({ code: "UNSUPPORTED_FOLDER_ENTRY" });
+  });
+
+  test.each(MODES)("an unchanged directory lists (%s)", async (_mode, hooks) => {
+    if (hooks.descriptorPath === undefined && !linuxOnly) return;
+    await mkdir(join(root, "sub"));
+    await writeFile(join(root, "sub", "a.txt"), "inside");
+    const result = await listFolderDirectory(root, join(root, "sub"), "sub", hooks);
+    expect("entries" in result && result.entries.map((entry) => entry.name)).toEqual(["a.txt"]);
+  });
+
+  test("on Linux the descriptor's real path is the file's path", async () => {
+    if (!linuxOnly) return;
+    await writeFile(join(root, "a.txt"), "x");
+    const { open } = await import("node:fs/promises");
+    const handle = await open(join(root, "a.txt"), "r");
+    try {
+      expect(await linuxDescriptorPath(handle.fd)).toBe(join(root, "a.txt"));
+    } finally { await handle.close(); }
+  });
+
+  // A second process swaps a subfolder between a real directory and a link to the outside folder, as fast as it can, while the
+  // folder is read. On Linux (descriptor path) no walk may return the outside file; elsewhere the checks are best effort.
+  test("a subfolder swapped for a link by a running process never gets an outside file read (5,000 walks)", async () => {
+    if (!linuxOnly) return;
     await mkdir(join(root, ".real"));
     await writeFile(join(root, ".real", "secret.txt"), "inside");
     await writeFile(join(root, "index.html"), "<p>x</p>");
@@ -86,7 +227,7 @@ describe("folder reading stays inside the folder", () => {
     try {
       await new Promise<void>((resolveReady) => swapper.stdout!.once("data", () => resolveReady()));
       let leaked = 0;
-      for (let index = 0; index < 200; index += 1) {
+      for (let index = 0; index < 5_000; index += 1) {
         try {
           const { files } = await readHtmlFolder(root, 10_000);
           for (const file of files) if (decode(file.bytes) === OUTSIDE) leaked += 1;
@@ -97,5 +238,19 @@ describe("folder reading stays inside the folder", () => {
       swapper.kill("SIGKILL");
       await new Promise((resolveExit) => swapper.once("exit", resolveExit));
     }
-  }, 60_000);
+  }, 120_000);
+});
+
+describe("refusals from the rewriter are echoed escaped", () => {
+  test("the file path of a bundle error is escaped and clipped", () => {
+    const hostile = "dir\u001b[2J\u001b]0;owned\u0007\u202e/a\u2028.css";
+    const error = htmlFolderError(new ArtifactBundleError("unsupported", "artifact contains a blocked html feature", hostile));
+    expect(error.message).toContain("\\u{1b}[2J");
+    expect(error.message).toContain("\\u{202e}");
+    expect(error.message).not.toMatch(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u2028\u202e]/);
+    const missing = htmlFolderError(new ArtifactBundleError("missing", "artifact resource is missing", hostile, hostile));
+    expect(missing.message).not.toMatch(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u2028\u202e]/);
+    const limit = htmlFolderError(new ArtifactBundleError("limit", "artifact source exceeds limit", hostile));
+    expect(limit.message).not.toMatch(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u2028\u202e]/);
+  });
 });

@@ -278,15 +278,177 @@ function assertInlineSrcset(value: string): void {
   }
 }
 
-const BLOCKED_ELEMENTS = "base, form, iframe, frame, frameset, object, embed, portal, noscript, area[href], link:not([href]), [ping]";
+const BLOCKED_ELEMENTS = "base, form, iframe, frame, frameset, object, embed, portal, noscript, plaintext, xmp, noembed, noframes, applet, area[href], link:not([href]), [ping]";
 
 /**
- * The last check, on the finished page and independent of the rewriting above: parse the produced HTML again and refuse it
- * if anything in it could still fetch or navigate to something other than a `data:` URL or a `#fragment`. This catches
- * whatever the rewriting did not know about, so "self-contained" is verified, not assumed.
+ * The `data:` URLs the rewriter wrote, cut down to `data:;base64,`. They are the only large things in a finished page and
+ * the only references it may hold, so the checks below read the page without them: parsing a multi-megabyte `style=`
+ * value is what costs memory and time, and their content is base64 that no check looks at. Only text of the exact shape
+ * `data:<type>;base64,<base64 characters>` is cut, so nothing that could carry markup or a URL is hidden.
+ */
+const DATA_URI = /data:[a-z0-9!#$&^_.+/-]*(?:;[a-z0-9!#$&^_.+=-]+)*;base64,[A-Za-z0-9+/=]*/gi;
+
+function withoutDataUris(html: string): string {
+  return html.replace(DATA_URI, "data:;base64,");
+}
+
+/** Attributes that carry text, not a URL a browser fetches or follows. Every other attribute may not look like a URL. */
+const TEXT_ATTRIBUTES = /^(?:alt|title|placeholder|value|label|content|name|id|class|lang|summary|abbr|datetime|pattern|xmlns(?::[\w.-]+)?|aria-[\w.:-]*|data-[\w.:-]*|item(?:type|id)|vocab|about|resource|property|typeof|prefix)$/;
+
+/** Text that a browser would take for a URL to fetch or follow: a network or script scheme, a `//host`, or a path. */
+function looksLikeUrl(value: string): boolean {
+  return /(?:^|[^a-z0-9+.-])(?:https?|ftps?|wss?|file|javascript|vbscript|blob|about|view-source|filesystem):/i.test(value)
+    || /(?:^|[\s,;(="'])\/\/\S/.test(value)
+    || /:\/\//.test(value)
+    || /^\s*\.{0,2}\/[^\s]/.test(value);
+}
+
+const NAMED_CHARACTERS: Readonly<Record<string, string>> = {
+  amp: "&", quot: '"', apos: "'", lt: "<", gt: ">", nbsp: "\u00a0", colon: ":", sol: "/", bsol: "\\", period: ".", comma: ",", semi: ";",
+  equals: "=", num: "#", quest: "?", lpar: "(", rpar: ")", tab: "\t", newline: "\n",
+};
+
+/** The character references a page may still hold in an attribute value, decoded the way a browser decodes them. */
+function decodeAttributeValue(value: string): string {
+  return value.replace(/&(?:#[xX]([0-9a-fA-F]{1,6})|#([0-9]{1,7})|([A-Za-z]{2,8}));?/g, (whole, hex: string | undefined, decimal: string | undefined, name: string | undefined) => {
+    if (name !== undefined) return NAMED_CHARACTERS[name.toLowerCase()] ?? whole;
+    const point = Number.parseInt(hex ?? decimal ?? "", hex === undefined ? 10 : 16);
+    return point > 0 && point <= 0x10ffff && !(point >= 0xd800 && point <= 0xdfff) ? String.fromCodePoint(point) : "\ufffd";
+  });
+}
+
+/** A URL as a browser reads it: leading control characters and spaces dropped, tab and newlines removed anywhere. */
+function readableUrl(value: string): string {
+  // eslint-disable-next-line no-control-regex
+  return decodeAttributeValue(value).replace(/[\t\n\r]/g, "").replace(/^[\u0000-\u0020]+/, "");
+}
+
+const MARKUP_BLOCKED_NAMES = new Set(["base", "form", "iframe", "frame", "frameset", "object", "embed", "portal", "noscript", "plaintext", "xmp", "noembed", "noframes", "applet"]);
+
+function unsupportedOutput(detail: string, reference?: string): never {
+  throw new ArtifactBundleError("unsupported", detail, undefined, reference);
+}
+
+function checkAttribute(tag: string, rawName: string, rawValue: string): void {
+  const name = rawName.toLowerCase();
+  const value = readableUrl(rawValue);
+  const local = name.slice(name.lastIndexOf(":") + 1);
+  if (/^on/.test(name)) unsupportedOutput("artifact output contains a blocked html feature");
+  if (name === "style") {
+    assertOnlyInlineCssReferences(value);
+    return;
+  }
+  if (local === "srcset" || local === "imagesrcset") {
+    assertInlineSrcset(value);
+    return;
+  }
+  if (URL_ATTRIBUTES.has(local)) {
+    if (!isInlineReference(value)) unsupportedOutput("artifact page still references a resource", rawValue);
+    return;
+  }
+  if (tag === "meta" && name === "http-equiv" && /^\s*refresh\s*$/i.test(value)) unsupportedOutput("artifact output contains a refresh");
+  if (TEXT_ATTRIBUTES.test(name)) return;
+  // Any other attribute: a name no list here knows may still be one a browser fetches (`attributionsrc`), so a value that
+  // reads as a URL is refused whatever the name is.
+  if (looksLikeUrl(value)) unsupportedOutput("artifact page still references a resource", rawValue);
+  // CSS in an attribute that is not `style` (an SVG presentation attribute, for one): the same checks, escapes included.
+  if (/url\s*\(|image-set|@import|\\/i.test(value) || /(?:^|[^\w-])src\s*\(/i.test(value)) assertOnlyInlineCssReferences(value);
+}
+
+/**
+ * A scan of the finished page's text that shares nothing with the DOM parser: it finds the tags and attributes itself, so
+ * a difference in how a parser reads some markup (jsdom against a browser) cannot hide a reference from both checks. Scripts
+ * are the author's code and are skipped (a script may hold the text `https://` as data; what scripts may do is the
+ * sandbox's and the CSP's job, with the capability scan on their source); `<style>` text is checked as CSS and then read as
+ * markup like everything else, so nothing after a `<` is ever skipped except a script's source and a comment. A tag found in
+ * text that is really not one (inside an `<xmp>` or a comment-like string) can only cause a refusal, never a miss.
+ */
+function scanMarkupForReferences(html: string): void {
+  const length = html.length;
+  let index = 0;
+  while (index < length) {
+    const open = html.indexOf("<", index);
+    if (open === -1) return;
+    index = open + 1;
+    const next = html[index] ?? "";
+    if (html.startsWith("!--", index)) {
+      let end: number;
+      if (html[index + 3] === ">") end = index + 4;
+      else if (html.startsWith("->", index + 3)) end = index + 5;
+      else {
+        const close = html.indexOf("-->", index + 3);
+        const bang = html.indexOf("--!>", index + 3);
+        if (close === -1 && bang === -1) unsupportedOutput("artifact output has an unterminated comment");
+        end = close === -1 ? bang + 4 : bang === -1 ? close + 3 : Math.min(close + 3, bang + 4);
+      }
+      index = end;
+      continue;
+    }
+    if (next === "!" || next === "?" || next === "/") {
+      // A doctype, a bogus comment or an end tag ends at the first `>`; an end tag's attributes are never used.
+      const close = html.indexOf(">", index);
+      if (close === -1) unsupportedOutput("artifact output has an unterminated tag");
+      index = close + 1;
+      continue;
+    }
+    if (!/[A-Za-z]/.test(next)) continue;
+    const nameMatch = /[^\s/>]*/y;
+    nameMatch.lastIndex = index;
+    const tag = nameMatch.exec(html)![0].toLowerCase();
+    index = nameMatch.lastIndex;
+    if (MARKUP_BLOCKED_NAMES.has(tag)) unsupportedOutput("artifact output contains a blocked html feature");
+    for (;;) {
+      while (index < length && /[\s/]/.test(html[index]!)) index += 1;
+      if (index >= length) unsupportedOutput("artifact output has an unterminated tag");
+      if (html[index] === ">") {
+        index += 1;
+        break;
+      }
+      const attributeName = /=?[^\s/>=]*/y;
+      attributeName.lastIndex = index;
+      const rawName = attributeName.exec(html)![0];
+      index = attributeName.lastIndex;
+      while (index < length && /\s/.test(html[index]!)) index += 1;
+      let rawValue = "";
+      if (html[index] === "=") {
+        index += 1;
+        while (index < length && /\s/.test(html[index]!)) index += 1;
+        const quote = html[index];
+        if (quote === '"' || quote === "'") {
+          const close = html.indexOf(quote, index + 1);
+          if (close === -1) unsupportedOutput("artifact output has an unterminated attribute");
+          rawValue = html.slice(index + 1, close);
+          index = close + 1;
+        } else {
+          const unquoted = /[^\s>]*/y;
+          unquoted.lastIndex = index;
+          rawValue = unquoted.exec(html)![0];
+          index = unquoted.lastIndex;
+        }
+      }
+      if (rawName.length > 0) checkAttribute(tag, rawName, rawValue);
+    }
+    if (tag === "style") {
+      const close = html.slice(index).search(/<\/style/i);
+      assertOnlyInlineCssReferences(close === -1 ? html.slice(index) : html.slice(index, index + close));
+    } else if (tag === "script") {
+      const close = html.slice(index).search(/<\/script/i);
+      if (close === -1) return;
+      index += close;
+    }
+  }
+}
+
+/**
+ * The last check, on the finished page and independent of the rewriting above: the page is read again, without its
+ * `data:` URLs, by a scan that has its own tokenizer and by the DOM parser, and refused if anything in it could still fetch
+ * or navigate to something other than a `data:` URL or a `#fragment`. This catches whatever the rewriting did not know
+ * about, so "self-contained" is verified, not assumed.
  */
 function verifySelfContained(output: string, context: TransformContext): void {
-  const doc = context.parseHtml(output);
+  const page = withoutDataUris(output);
+  scanMarkupForReferences(page);
+  const doc = context.parseHtml(page);
   const roots = documentRoots(doc);
   if (queryAll(roots, BLOCKED_ELEMENTS).length > 0) fail("unsupported", "artifact output contains a blocked html feature");
   for (const meta of queryAll<HTMLMetaElement>(roots, "meta[http-equiv]")) {
@@ -296,6 +458,7 @@ function verifySelfContained(output: string, context: TransformContext): void {
   for (const style of queryAll(roots, "style")) assertOnlyInlineCssReferences(style.textContent ?? "");
   for (const element of queryAll(roots, "*")) {
     const inSvg = element.namespaceURI === SVG_NAMESPACE;
+    if (inSvg && element.localName === "script") fail("unsupported", "artifact svg contains a script");
     for (const name of element.getAttributeNames()) {
       const lower = name.toLowerCase();
       const local = lower.slice(lower.lastIndexOf(":") + 1);
@@ -321,6 +484,8 @@ function rejectSvgResourceReferences(roots: readonly ParentNode[]): void {
     const animatesHref = /^(?:animate|set|animatetransform|animatemotion)$/i.test(element.localName)
       && element.getAttributeNames().some((name) => name.toLowerCase() === "attributename" && /^(?:xlink:)?href$/i.test((element.getAttribute(name) ?? "").trim()));
     if (animatesHref) fail("unsupported", "artifact svg animates a resource reference");
+    // An SVG `<script>` is read as markup by a browser's tokenizer, not as script text, so what is in it cannot be checked like a page script.
+    if (element.localName === "script") fail("unsupported", "artifact svg contains a script");
     for (const attributeName of element.getAttributeNames()) {
       if (attributeName !== "href" && !attributeName.endsWith(":href")) continue;
       if (element.localName === "a" && attributeName === "href") continue;
@@ -359,6 +524,37 @@ interface TransformContext {
   readonly counter: { references: number; inlinedBytes: number };
   readonly parseHtml: (html: string) => Document;
   readonly singlePage: boolean;
+  /** Set while rewriting a `style=` attribute: inlined URLs are parked here and swapped back after serialization (see `Deferred`). */
+  readonly deferred?: Deferred;
+}
+
+/**
+ * Large `data:` URLs written into a `style=` attribute are parked behind a placeholder and put back in the serialized page.
+ * A DOM that parses the value as CSS (jsdom does, on every set) takes seconds and gigabytes for a few megabytes of
+ * base64, which no check needs to see: the placeholder has the same shape (`data:;base64,...`) and is replaced by exactly
+ * the URL that was parked, through a per-page random token, so page text cannot collide with it.
+ */
+interface Deferred {
+  readonly token: string;
+  readonly urls: string[];
+}
+
+function newDeferred(): Deferred {
+  const bytes = new Uint8Array(8);
+  if (globalThis.crypto?.getRandomValues !== undefined) globalThis.crypto.getRandomValues(bytes);
+  else for (let index = 0; index < bytes.length; index += 1) bytes[index] = Math.floor(Math.random() * 256);
+  return { token: Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join(""), urls: [] };
+}
+
+function parkUrl(deferred: Deferred, url: string): string {
+  deferred.urls.push(url);
+  return `data:;base64,TCPH${deferred.token}x${deferred.urls.length - 1}x`;
+}
+
+function restoreParkedUrls(page: string, deferred: Deferred): string {
+  if (deferred.urls.length === 0) return page;
+  const pattern = new RegExp(`data:;base64,TCPH${deferred.token}x(\\d+)x`, "g");
+  return page.replace(pattern, (_whole, index: string) => deferred.urls[Number(index)]!);
 }
 
 /** `resolveArtifactReference`, with a refusal naming the file and the reference text that caused it. */
@@ -499,7 +695,8 @@ async function transformCss(sourceText: string, basePath: string, context: Trans
     async (_whole, _quote, reference) => {
       if (reference.trim().startsWith("#")) return `url("${reference.trim()}")`;
       const { file, resolved } = requiredFile(context, basePath, reference);
-      return `url("${asDataUrl(file, context)}${resolved.fragment}")`;
+      const dataUrl = asDataUrl(file, context);
+      return `url("${context.deferred === undefined ? dataUrl : parkUrl(context.deferred, dataUrl)}${resolved.fragment}")`;
     },
   );
 }
@@ -550,6 +747,7 @@ const INNER_CSP = [
 async function transformHtml(path: string, file: ArtifactFile, context: TransformContext): Promise<string> {
   const doc = context.parseHtml(decodeText(file));
   const roots = documentRoots(doc);
+  const deferred = newDeferred();
   if (doc.querySelector("parsererror") !== null) fail("malformed", "artifact html is malformed");
   // `noscript` is refused outright: a parser with scripting off (jsdom's) and the viewer's frame (scripting on) read its
   // content differently, so what is in it cannot be checked consistently.
@@ -584,7 +782,7 @@ async function transformHtml(path: string, file: ArtifactFile, context: Transfor
   }
   for (const element of queryAll<HTMLElement>(roots, "[style]")) {
     const value = element.getAttribute("style");
-    if (value !== null) element.setAttribute("style", await transformCss(value, path, { ...context, cssStack: [] }));
+    if (value !== null) element.setAttribute("style", await transformCss(value, path, { ...context, cssStack: [], deferred }));
   }
   for (const script of queryAll<HTMLScriptElement>(roots, "script")) {
     // `getAttribute`, not `script.type`: an SVG `<script>` has no `type` property in every DOM (jsdom has no SVGScriptElement).
@@ -637,7 +835,7 @@ async function transformHtml(path: string, file: ArtifactFile, context: Transfor
   bootstrap.textContent = CHILD_BOOTSTRAP;
   head.prepend(bootstrap);
   head.prepend(csp);
-  const output = `<!DOCTYPE html>\n${doc.documentElement.outerHTML}`;
+  const output = restoreParkedUrls(`<!DOCTYPE html>\n${doc.documentElement.outerHTML}`, deferred);
   verifySelfContained(output, context);
   return output;
 }

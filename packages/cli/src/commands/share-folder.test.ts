@@ -140,7 +140,7 @@ describe("tc share publish ./site/", () => {
       ["<iframe>", '<iframe src="other.html"></iframe>', "UNSUPPORTED_HTML", 2, ["blocked html feature"]],
       ["<object>", '<object data="x.swf"></object>', "UNSUPPORTED_HTML", 2, ["blocked html feature"]],
       ["inline svg with an external image", '<svg><image href="https://evil.example/p.png"/></svg>', "UNSUPPORTED_HTML", 2, ["svg references a resource"]],
-      ["inline svg with a script", '<svg><script>fetch("/x")</script></svg>', "UNSUPPORTED_HTML", 2, ["blocked browser capability"]],
+      ["inline svg with a script", '<svg><script>fetch("/x")</script></svg>', "UNSUPPORTED_HTML", 2, ["svg contains a script"]],
       ["<noscript>", "<noscript>Enable JavaScript</noscript>", "UNSUPPORTED_HTML", 2, ["blocked html feature"]],
       ["<area href>", '<map name="m"><area href="https://evil.example/" shape="rect" coords="0,0,1,1"></map>', "UNSUPPORTED_HTML", 2, ["blocked html feature"]],
       ["an escaped url()", '<p style="background:u\\72l(https://evil.example/p.png)">x</p>', "UNSUPPORTED_HTML", 2, ["https://evil.example/p.png"]],

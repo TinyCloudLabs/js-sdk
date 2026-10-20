@@ -1,6 +1,6 @@
-import { constants, type Dirent } from "node:fs";
+import { constants, existsSync, type Dirent } from "node:fs";
 import { lstat, open, readdir, realpath, stat } from "node:fs/promises";
-import { basename, isAbsolute, join, relative as relativePath, resolve, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, relative as relativePath, resolve, sep } from "node:path";
 import {
   ArtifactBundleError,
   MAX_ARTIFACT_FILES,
@@ -65,31 +65,88 @@ function isRaceError(error: unknown): boolean {
 }
 
 /**
- * The file's bytes, read from one descriptor, never past `limit` bytes. `root` is the folder's real path and `path` is
- * the file as `root` plus its names, so no component of it may be a link. `O_NOFOLLOW` covers only the last component, so
- * the opened file is also tied to the path afterwards: that path must resolve to itself (no link in any parent
- * directory, and inside `root`) and its `lstat` must be the very file that was opened. A parent directory swapped for a
- * link while the folder is read can therefore never get an outside file read.
+ * Seams for the filesystem checks. Production code passes none. The two hooks let a test model another process changing the
+ * folder at an exact point; `descriptorPath` lets a test run the checks used where the platform cannot name an open file.
  */
-export async function readRegularFile(root: string, path: string, relative: string, remaining: number, limit: number): Promise<Uint8Array | FolderProblem> {
+export interface FolderReadHooks {
+  /** Runs just before an entry is opened. */
+  readonly beforeOpen?: () => Promise<void>;
+  /** Runs after an entry's `lstat` and before it is opened. */
+  readonly afterLstat?: () => Promise<void>;
+  /** Runs just after an entry is opened, before anything is checked. */
+  readonly afterOpen?: () => Promise<void>;
+  /** Runs after a file's bytes are read, before they are accepted. */
+  readonly afterRead?: () => Promise<void>;
+  /** The real path an open descriptor refers to, or `undefined` where the platform cannot say (then the weaker checks run). */
+  readonly descriptorPath?: (fd: number) => Promise<string | undefined>;
+}
+
+const PROC_FD = "/proc/self/fd";
+
+/**
+ * The real path the kernel says an open descriptor refers to: Linux only (`/proc/self/fd/<fd>`). Other platforms return
+ * `undefined`: Node exposes neither `F_GETPATH` (macOS) nor `openat`, so there is no way to ask a descriptor where it
+ * lives. An error means the file moved or was deleted since it was opened.
+ */
+export async function linuxDescriptorPath(fd: number): Promise<string | undefined> {
+  if (process.platform !== "linux" || !existsSync(PROC_FD)) return undefined;
+  return realpath(`${PROC_FD}/${fd}`);
+}
+
+/** Every directory between `root` (not included) and the entry named by `path` (not included) is a real directory. */
+async function parentChainIsRealDirectories(root: string, path: string): Promise<boolean> {
+  let current = dirname(path);
+  while (current !== root && isWithinFolder(root, current)) {
+    const info = await lstat(current);
+    if (info.isSymbolicLink() || !info.isDirectory()) return false;
+    current = dirname(current);
+  }
+  return current === root;
+}
+
+/**
+ * The file's bytes, read from one descriptor, never past `limit` bytes. `root` is the folder's real path and `path` is the
+ * file as `root` plus its names, so no component of it may be a link.
+ *
+ * `O_NOFOLLOW` covers only the last component, so a link in a parent directory is checked another way. On Linux the check
+ * is on the OPEN DESCRIPTOR: its real path (`/proc/self/fd/<fd>`) must be exactly `path`, so what was opened is the file
+ * at that path inside the folder and no path is looked up again; swapping a parent directory for a link at any moment
+ * cannot get an outside file read. Elsewhere (macOS: Node has no `F_GETPATH`) the closest checks are made instead: `path`
+ * must resolve to itself, its `lstat` must be the opened file (same device and inode), and after the read every parent
+ * directory and the file are checked again. That narrows the window but does not close it: a process that can write to the
+ * folder while it is published and times its swaps can still win there.
+ */
+export async function readRegularFile(root: string, path: string, relative: string, remaining: number, limit: number, hooks: FolderReadHooks = {}): Promise<Uint8Array | FolderProblem> {
+  const problem = (reason: string): FolderProblem => ({ code: "UNSUPPORTED_FOLDER_ENTRY", path: relative, reason });
+  const descriptorPath = hooks.descriptorPath ?? linuxDescriptorPath;
   let handle;
+  let before;
   try {
+    await hooks.beforeOpen?.();
+    before = await lstat(path);
+    await hooks.afterLstat?.();
     handle = await open(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0));
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ELOOP") return { code: "UNSUPPORTED_FOLDER_ENTRY", path: relative, reason: "symbolic link" };
-    if (isRaceError(error)) return { code: "UNSUPPORTED_FOLDER_ENTRY", path: relative, reason: CHANGED };
+    if ((error as NodeJS.ErrnoException).code === "ELOOP") return problem("symbolic link");
+    if (isRaceError(error)) return problem(CHANGED);
     throw error;
   }
   try {
+    await hooks.afterOpen?.();
     const info = await handle.stat();
-    if (!info.isFile()) return { code: "UNSUPPORTED_FOLDER_ENTRY", path: relative, reason: "not a regular file" };
+    if (!info.isFile()) return problem("not a regular file");
+    let byDescriptor: string | undefined;
     try {
-      const real = await realpath(path);
-      if (real !== path || !isWithinFolder(root, real)) return { code: "UNSUPPORTED_FOLDER_ENTRY", path: relative, reason: "symbolic link" };
-      const named = await lstat(path);
-      if (named.isSymbolicLink() || named.dev !== info.dev || named.ino !== info.ino) return { code: "UNSUPPORTED_FOLDER_ENTRY", path: relative, reason: CHANGED };
+      if (before.dev !== info.dev || before.ino !== info.ino) return problem(CHANGED);
+      byDescriptor = await descriptorPath(handle.fd);
+      if (byDescriptor !== undefined) {
+        if (byDescriptor !== path || !isWithinFolder(root, byDescriptor)) return problem("symbolic link");
+      } else {
+        const real = await realpath(path);
+        if (real !== path || !isWithinFolder(root, real)) return problem("symbolic link");
+      }
     } catch (error) {
-      if (isRaceError(error)) return { code: "UNSUPPORTED_FOLDER_ENTRY", path: relative, reason: CHANGED };
+      if (isRaceError(error)) return problem(CHANGED);
       throw error;
     }
     if (info.size > remaining) throw limitError(`folder is larger than the ${limit} byte limit (at "${safeClipped(relative)}")`);
@@ -104,25 +161,58 @@ export async function readRegularFile(root: string, path: string, relative: stri
       if (total > remaining) throw limitError(`folder is larger than the ${limit} byte limit (at "${safeClipped(relative)}")`);
       chunks.push(chunk.subarray(0, bytesRead));
     }
+    await hooks.afterRead?.();
+    if (byDescriptor === undefined) {
+      // Without a descriptor path, look at the path again once the bytes are in: every parent still a real directory and the
+      // file still the one that was read.
+      try {
+        const again = await lstat(path);
+        if (again.isSymbolicLink() || again.dev !== info.dev || again.ino !== info.ino || !(await parentChainIsRealDirectories(root, path))) return problem(CHANGED);
+      } catch (error) {
+        if (isRaceError(error)) return problem(CHANGED);
+        throw error;
+      }
+    }
     return new Uint8Array(Buffer.concat(chunks, total));
   } finally {
     await handle.close();
   }
 }
 
-/** The entries of one directory that is a real directory of the folder: not a link, and the same directory before and after it is listed. */
-async function listFolderDirectory(root: string, absolute: string, relative: string): Promise<{ entries: Dirent[] } | FolderProblem> {
+/**
+ * The entries of one directory of the folder: a real directory (not a link), listed from the descriptor it was opened as
+ * where the platform can name one (see `readRegularFile` for what that closes and what it does not).
+ */
+export async function listFolderDirectory(root: string, absolute: string, relative: string, hooks: FolderReadHooks = {}): Promise<{ entries: Dirent[] } | FolderProblem> {
   const problem = (reason: string): FolderProblem => ({ code: "UNSUPPORTED_FOLDER_ENTRY", path: relative === "" ? "." : relative, reason });
+  const descriptorPath = hooks.descriptorPath ?? linuxDescriptorPath;
   try {
+    await hooks.beforeOpen?.();
     const before = await lstat(absolute);
     if (before.isSymbolicLink()) return problem("symbolic link");
     if (!before.isDirectory()) return problem(CHANGED);
-    const real = await realpath(absolute);
-    if (real !== absolute || (absolute !== root && !isWithinFolder(root, real))) return problem("symbolic link");
-    const entries = await readdir(absolute, { withFileTypes: true });
-    const after = await lstat(absolute);
-    if (after.dev !== before.dev || after.ino !== before.ino || after.isSymbolicLink()) return problem(CHANGED);
-    return { entries };
+    await hooks.afterLstat?.();
+    const handle = await open(absolute, constants.O_RDONLY | (constants.O_DIRECTORY ?? 0) | (constants.O_NOFOLLOW ?? 0));
+    try {
+      await hooks.afterOpen?.();
+      const info = await handle.stat();
+      if (!info.isDirectory() || info.dev !== before.dev || info.ino !== before.ino) return problem(CHANGED);
+      const byDescriptor = await descriptorPath(handle.fd);
+      if (byDescriptor !== undefined) {
+        if (byDescriptor !== absolute || (absolute !== root && !isWithinFolder(root, byDescriptor))) return problem("symbolic link");
+        // The listing comes from the descriptor, not from the path.
+        return { entries: await readdir(`${PROC_FD}/${handle.fd}`, { withFileTypes: true }) };
+      }
+      const real = await realpath(absolute);
+      if (real !== absolute || (absolute !== root && !isWithinFolder(root, real))) return problem("symbolic link");
+      const entries = await readdir(absolute, { withFileTypes: true });
+      const after = await lstat(absolute);
+      if (after.isSymbolicLink() || after.dev !== info.dev || after.ino !== info.ino) return problem(CHANGED);
+      if (absolute !== root && !(await parentChainIsRealDirectories(root, absolute))) return problem(CHANGED);
+      return { entries };
+    } finally {
+      await handle.close();
+    }
   } catch (error) {
     if (isRaceError(error)) return problem(CHANGED);
     throw error;
