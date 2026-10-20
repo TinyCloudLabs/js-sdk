@@ -16,6 +16,8 @@ const TERMINAL_TASK_STATES = new Set([
 ]);
 const WAKEN_MEMORY = 500;
 const WAKE_RETRY_MS = 60_000;
+/** Delay between starting a re-opened subscription and its catch-up list, so the stream is live first. */
+const RECONNECT_CATCH_UP_MS = 2000;
 /** Thread and message ids come from key names the peer controls; they reach prompts and argv, so only ULID-like ids pass. */
 const SAFE_ID = /^[0-9A-Za-z_-]{1,64}$/;
 
@@ -281,6 +283,7 @@ export class Watcher {
   private async mirrorThreadItem(peer: StoredPeer, peerKv: KV, key: string): Promise<void> {
     const meta = /\/threads\/([^/]+)\/meta\.json$/.exec(key);
     if (meta) {
+      if (!SAFE_ID.test(meta[1])) return;
       if (this.metaMirrored.has(key)) return;
       const got = await getJson<unknown>(peerKv, key);
       if (!got) return;
@@ -289,7 +292,7 @@ export class Watcher {
       return;
     }
     const task = /\/threads\/([^/]+)\/task\/([^/]+)\.json$/.exec(key);
-    if (!task) return;
+    if (!task || !SAFE_ID.test(task[1]) || !SAFE_ID.test(task[2])) return;
     const cached = this.taskCache.get(key);
     if (cached?.terminal) return;
     const got = await getJson<unknown>(peerKv, key);
@@ -379,62 +382,73 @@ export class Watcher {
     await this.syncApprovals(via);
   }
 
-  /** Runs until `signal` aborts. With `once`, does one catch-up and wakes everything immediately. */
-  async run(signal: AbortSignal, options: { once?: boolean } = {}): Promise<void> {
+  /**
+   * Runs until `signal` aborts. With `once`, does one catch-up and wakes everything immediately. Throws
+   * `state-conflict` (after stopping everything) if another watcher is writing this profile's state.
+   */
+  async run(external: AbortSignal, options: { once?: boolean } = {}): Promise<void> {
     const { log } = this.deps;
-    await this.loadState();
-    log('start', { debounceMs: this.opts.debounceMs, pollMs: this.opts.pollMs, ticketSeconds: this.opts.ticketSeconds, once: Boolean(options.once) });
-    await this.pollOnce('startup');
-    if (options.once) {
-      await this.tick(true);
-      return;
-    }
-
+    const stop = new AbortController();
+    const signal = stop.signal;
+    const onExternalAbort = () => stop.abort();
+    external.addEventListener('abort', onExternalAbort, { once: true });
+    if (external.aborted) stop.abort();
+    this.onFatal = () => stop.abort();
     const supervisors = new Map<string, AbortController>();
-    const reconcile = () => {
-      const desired = new Map<string, { sub: HookSubscription; hooks: () => Promise<HooksLike>; onEvent: (event?: HookEventLike) => void }>();
-      for (const peer of this.deps.loadPeers()) {
-        if (peer.status !== 'paired' || !peer.inbound || !peer.theirHandleForMe) continue;
-        // The id carries the delegation CID: a renewed delegation restarts the subscription.
-        desired.set(`peer:${peer.handle}:${peer.inbound.cid}`, {
-          sub: { space: peer.spaceId, service: 'kv', pathPrefix: `${PREFIX}/to/${peer.theirHandleForMe}` },
-          hooks: () => this.deps.peerHooks(peer),
-          onEvent: () => void this.sync(peer, 'hook'),
-        });
-      }
-      desired.set('approvals', {
-        sub: { space: this.deps.spaceId, service: 'kv', pathPrefix: k.approvalsPrefix },
-        hooks: async () => this.deps.selfHooks,
-        onEvent: () => void this.syncApprovals('hook'),
-      });
-      for (const [id, controller] of supervisors) {
-        if (!desired.has(id)) {
-          controller.abort();
-          supervisors.delete(id);
-        }
-      }
-      for (const [id, source] of desired) {
-        if (supervisors.has(id)) continue;
-        const controller = new AbortController();
-        supervisors.set(id, controller);
-        void this.supervise(id, source.sub, source.hooks, source.onEvent, controller.signal);
-      }
-    };
-    reconcile();
-
-    const ticker = setInterval(() => void this.tick().catch((e) => log('wake-error', errInfo(e))), 1000);
+    let ticker: NodeJS.Timeout | undefined;
     try {
-      while (!signal.aborted) {
-        await sleep(this.opts.pollMs, signal);
-        if (signal.aborted) break;
+      await this.loadState();
+      log('start', { debounceMs: this.opts.debounceMs, pollMs: this.opts.pollMs, ticketSeconds: this.opts.ticketSeconds, once: Boolean(options.once) });
+      await this.pollOnce('startup');
+      if (options.once) {
+        await this.tick(true);
+      } else if (!signal.aborted) {
+        const reconcile = () => {
+          const desired = new Map<string, { sub: HookSubscription; hooks: () => Promise<HooksLike>; onEvent: (event?: HookEventLike) => void }>();
+          for (const peer of this.deps.loadPeers()) {
+            if (peer.status !== 'paired' || !peer.inbound || !peer.theirHandleForMe) continue;
+            // The id carries the delegation CID: a renewed delegation restarts the subscription.
+            desired.set(`peer:${peer.handle}:${peer.inbound.cid}`, {
+              sub: { space: peer.spaceId, service: 'kv', pathPrefix: `${PREFIX}/to/${peer.theirHandleForMe}` },
+              hooks: () => this.deps.peerHooks(peer),
+              onEvent: () => void this.sync(peer, 'hook'),
+            });
+          }
+          desired.set('approvals', {
+            sub: { space: this.deps.spaceId, service: 'kv', pathPrefix: k.approvalsPrefix },
+            hooks: async () => this.deps.selfHooks,
+            onEvent: () => void this.syncApprovals('hook'),
+          });
+          for (const [id, controller] of supervisors) {
+            if (!desired.has(id)) {
+              controller.abort();
+              supervisors.delete(id);
+            }
+          }
+          for (const [id, source] of desired) {
+            if (supervisors.has(id)) continue;
+            const controller = new AbortController();
+            supervisors.set(id, controller);
+            void this.supervise(id, source.sub, source.hooks, source.onEvent, controller.signal);
+          }
+        };
         reconcile();
-        await this.pollOnce('poll');
+        ticker = setInterval(() => void this.tick().catch((e) => log('wake-error', errInfo(e))), 1000);
+        while (!signal.aborted) {
+          await sleep(this.opts.pollMs, signal);
+          if (signal.aborted) break;
+          reconcile();
+          await this.pollOnce('poll');
+        }
       }
     } finally {
       clearInterval(ticker);
       for (const controller of supervisors.values()) controller.abort();
+      external.removeEventListener('abort', onExternalAbort);
+      this.onFatal = undefined;
       log('stop');
     }
+    if (this.fatalError) throw this.fatalError;
   }
 
   /** One hook subscription. A refused ticket (revoked or expired delegation) backs off; the poll covers meanwhile. */
@@ -450,9 +464,10 @@ export class Watcher {
     while (!signal.aborted) {
       try {
         this.deps.log('hook-subscribe', { source: id.split(':').slice(0, 2).join(':'), ttlSeconds: this.opts.ticketSeconds });
-        // Spec §8.2: catch up on every (re)connect, since hooks have no replay. (The SDK's own ticket reopen is
-        // invisible here; the poll covers those gaps.)
-        if (opened) onEvent();
+        // Spec §8.2: catch up on every (re)connect, since hooks have no replay. The catch-up runs after the
+        // subscription below has been started, so a write in between is seen by one or the other. (The SDK's own
+        // ticket reopen is invisible here; the poll covers those gaps.)
+        if (opened) void sleep(RECONNECT_CATCH_UP_MS, signal).then(() => { if (!signal.aborted) onEvent(); });
         opened = true;
         const service = await hooks();
         for await (const event of service.subscribe([sub], { ttlSeconds: this.opts.ticketSeconds, signal })) {

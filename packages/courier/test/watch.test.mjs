@@ -178,6 +178,7 @@ test('overlapping ticks do not wake a thread again while a slow wake is still ru
   const first = watcher.tick();
   await watcher.tick(); // the 1 s interval fires again mid-wake
   await watcher.tick();
+  await new Promise((resolve) => setTimeout(resolve, 20)); // the first tick claims the state, then calls the waker
   assert.equal(calls.length, 1);
   gate.resolve();
   await first;
@@ -265,4 +266,66 @@ test('a second watcher on the same profile fails with state-conflict instead of 
   await b.watcher.sync(peer, 'poll');
   assert.ok(b.events.some((e) => e.event === 'sync-error' && e.code === 'state-conflict'));
   assert.deepEqual(Object.keys(selfKv.rows.get(k.watchState).value.pending), [`bob/${thread}`]);
+});
+
+// ---------- one profile, two watchers ----------
+
+function idleHooks() {
+  return {
+    subscribe: (_subscriptions, { signal }) => ({
+      async *[Symbol.asyncIterator]() {
+        const done = defer();
+        signal.addEventListener('abort', () => done.resolve(), { once: true });
+        if (!signal.aborted) await done.promise;
+      },
+    }),
+  };
+}
+
+function runnable(selfKv, peers, peerSide, wakes, debounceMs = 0) {
+  return new Watcher({
+    selfKv, spaceId: 's', selfHooks: idleHooks(), peerHooks: async () => idleHooks(),
+    loadPeers: () => peers, kvFor: async () => peerSide,
+    wake: async (request) => { wakes.push(request); }, log: () => {},
+  }, { debounceMs, pollMs: 60_000, ticketSeconds: 25 });
+}
+
+test('a second watcher on the same profile exits with state-conflict and never wakes', async () => {
+  const selfKv = memoryKv();
+  const thread = ulid();
+  const sides = [memoryKv(), memoryKv()];
+  const wakes = [[], []];
+  for (const side of sides) {
+    const message = buildMessage({ threadId: thread, text: 'hi', role: 'ROLE_USER', intent: 'request', from: { owner: 'o', agent: 'a' } });
+    message.messageId = '01M5C9EDF0417FAM64RPKT5WP5';
+    side.rows.set(`${PREFIX}/to/alice/threads/${thread}/msg/${message.messageId}.json`, { value: message, etag: 'r' });
+  }
+  const stops = [new AbortController(), new AbortController()];
+  const runs = [0, 1].map((i) => runnable(selfKv, [peer], sides[i], wakes[i]).run(stops[i].signal).then(() => 'ok', (e) => e));
+  const settled = await Promise.race([runs[0].then((r) => [0, r]), runs[1].then((r) => [1, r])]);
+  const [loser, error] = settled;
+  assert.equal(error?.code, 'state-conflict', 'the watcher that lost the state write stops with state-conflict');
+  const winner = 1 - loser;
+  await new Promise((resolve) => setTimeout(resolve, 1500)); // the winner's ticker wakes the pending thread
+  stops[winner].abort();
+  assert.equal(await runs[winner], 'ok');
+  assert.equal(wakes[loser].length, 0, 'the stopped watcher never woke anything');
+  assert.equal(wakes[winner].length, 1);
+});
+
+test('two watchers that loaded the same pending wake do not both wake it', async () => {
+  const selfKv = memoryKv();
+  const thread = ulid();
+  selfKv.rows.set(k.watchState, {
+    etag: 'seed',
+    value: {
+      v: 1, woken: [], approvalsSeen: [],
+      pending: { [`bob/${thread}`]: { peer: 'bob', threadId: thread, subject: 'S', firstSeenAt: 0, lastSeenAt: 0, messages: [{ messageId: 'M1', intent: 'request', sentAt: '' }] } },
+    },
+  });
+  const wakes = [[], []];
+  const results = await Promise.all([0, 1].map((i) =>
+    runnable(selfKv, [], memoryKv(), wakes[i]).run(new AbortController().signal, { once: true }).then(() => 'ok', (e) => e.code)));
+  assert.deepEqual(results.slice().sort(), ['ok', 'state-conflict']);
+  assert.equal(wakes[0].length + wakes[1].length, 1);
 });
