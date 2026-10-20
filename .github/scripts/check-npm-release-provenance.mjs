@@ -49,7 +49,8 @@
 //                       Retries while the registry catches up. A version that
 //                       the changesets publish output in <publish-log> says npm
 //                       accepted, but that npm still does not show after the
-//                       whole budget, is pending, not a failure (TC-1457).
+//                       whole budget, is pending, not a failure (TC-1457),
+//                       unless a current version requires it (see below).
 //   record-accepted <publish-log>
 //                       Print one `tinycloud-npm-accepted: name@version` line
 //                       per version npm accepted in the changesets publish
@@ -66,9 +67,19 @@
 // pre-publish and post-publish also require every exact internal dependency of
 // every current version (as published on npm, or as about to be published) to
 // be on npm, or in pre-publish, about to be published by this run.
+//
+// In post-publish a pending version is not enough for a package that requires
+// it. `npm publish` moves each package's dist-tag as soon as npm accepts it, so
+// on 2026-10-20 `@tinycloud/web-sdk@beta` pointed at 3.3.0-beta.31 while npm
+// did not show the @tinycloud/web-sdk-wasm@1.7.7-beta.0 it requires, and
+// `npm install @tinycloud/web-sdk@beta` failed with ETARGET. The dependent fails
+// red, with the commands that move its tag back and later forward. Nothing here
+// runs them: CI never moves dist-tags. When RELEASE_DIST_TAGS_FILE is set,
+// pre-publish records every package's dist-tags there before anything is
+// published, and post-publish reads the record to name the version to move back to.
 
 import { spawnSync } from "node:child_process";
-import { appendFileSync, existsSync, readFileSync } from "node:fs";
+import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 
@@ -212,6 +223,15 @@ export function npmView(name, version) {
   throw new Error(`npm view ${name}@${version} failed: ${result.stderr.trim() || result.stdout.trim()}`);
 }
 
+// npm view name dist-tags -> { tag: version } ({} if npm has never had the package).
+export function npmDistTags(name) {
+  const result = spawnSync("npm", ["view", name, "dist-tags", "--json"], { encoding: "utf8" });
+  const output = parseJson(result.stdout.trim() || "null");
+  if (result.status === 0) return output && typeof output === "object" ? output : {};
+  if (output?.error?.code === "E404") return {};
+  throw new Error(`npm view ${name} dist-tags failed: ${result.stderr.trim() || result.stdout.trim()}`);
+}
+
 // npm view name -> has npm ever had this package?
 export function npmPackageExists(name) {
   const result = spawnSync("npm", ["view", name, "name", "--json"], { encoding: "utf8" });
@@ -333,6 +353,9 @@ export async function check({
   accepted = new Set(),
   acceptedEarlier = (pkg) => acceptedByEarlierRun({ pkg, repo, head: repo.revParse("HEAD") }),
   onPending = () => {},
+  // post-publish: dist-tags recorded before publishing ({ name: { tag: version } }) and npm's current ones.
+  previousTags = {},
+  tagsOf = npmDistTags,
   // npm's index can lag a successful publish by many minutes (web-sdk 3.2.5 showed up after ~17 min, TC-1155).
   // Poll with backoff (10 s doubling, capped at 2 min) within one 30-minute budget shared by every package.
   waitMs = 30 * 60_000,
@@ -402,14 +425,59 @@ export async function check({
     for (const [name, range] of npm.published ? npm.requires ?? [] : pkg.requires) {
       const dependency = workspace.get(name);
       const version = dependency && pinnedVersion(range, dependency.version);
-      if (!version || pending.has(`${name}@${version}`) || lookup(name, version).published) continue;
+      if (!version) continue;
+      const id = `${name}@${version}`;
+      if (pending.has(id)) {
+        fail(pkg, {
+          kind: "dependency-not-visible",
+          reason: `requires ${id}, which npm accepted in this run but does not show yet, so installing ${pkg.name}@${pkg.version} fails until it does`,
+          commands: tagCommands({ pkg, dependency: id, previousTags, tagsOf }),
+        });
+        continue;
+      }
+      if (lookup(name, version).published) continue;
       const publishing = mode === "pre-publish" && !dependency.private && dependency.version === version;
       if (publishing) continue;
-      const where = mode === "pre-publish" ? "not on npm and not published by this run" : "not on npm";
-      fail(pkg, { reason: `requires ${name}@${version}, which is ${where}` });
+      if (mode === "pre-publish") {
+        fail(pkg, { reason: `requires ${id}, which is not on npm and not published by this run` });
+      } else {
+        fail(pkg, {
+          kind: "dependency-not-visible",
+          reason: `requires ${id}, which is not on npm`,
+          commands: tagCommands({ pkg, dependency: id, previousTags, tagsOf }),
+        });
+      }
     }
   }
   return failures;
+}
+
+// The commands a maintainer runs for a published package whose dependency npm
+// does not show: move each dist-tag that now points at it back to the version
+// recorded before publishing, and forward again once the dependency shows.
+function tagCommands({ pkg, dependency, previousTags, tagsOf }) {
+  const id = `${pkg.name}@${pkg.version}`;
+  let current;
+  try {
+    current = tagsOf(pkg.name);
+  } catch (error) {
+    return [`could not read npm's dist-tags for ${pkg.name} (${error.message}); check \`npm view ${pkg.name} dist-tags\``];
+  }
+  const recorded = previousTags[pkg.name] ?? {};
+  const moved = Object.keys(current).filter((tag) => current[tag] === pkg.version).sort();
+  if (moved.length === 0) {
+    const before = Object.entries(recorded).map(([tag, version]) => `${tag}=${version}`).join(", ") || "none recorded";
+    return [`no dist-tag points at ${id} yet (before publishing: ${before}); check \`npm view ${pkg.name} dist-tags\``];
+  }
+  return moved.flatMap((tag) => {
+    const previous = recorded[tag];
+    return [
+      previous && previous !== pkg.version
+        ? `tag back:     npm dist-tag add ${pkg.name}@${previous} ${tag}`
+        : `tag back:     no earlier \`${tag}\` was recorded for ${pkg.name}; pick one from \`npm view ${pkg.name} time\``,
+      `roll forward: npm dist-tag add ${id} ${tag}   (once \`npm view ${dependency} version\` answers)`,
+    ];
+  });
 }
 
 const ADVICE = {
@@ -430,6 +498,13 @@ const ADVICE = {
     "Check the publish log and `npm view <name>@<version> gitHead`.",
 };
 
+const DEPENDENCY_ADVICE =
+  "These versions are published and their dist-tags already point at them, but they require an internal version npm\n" +
+  "does not show, so installing them by tag fails (ETARGET). CI does not move dist-tags. Do not re-run. A maintainer\n" +
+  "with npm publish rights either waits until `npm view <dependency> version` answers (npm has shown accepted versions\n" +
+  "17 minutes to 2.5 hours late, TC-1457), or runs each \"tag back\" command now and its \"roll forward\" command once the\n" +
+  "dependency shows. Hold merges to master until then.";
+
 const ACCEPTED_ADVICE =
   "npm accepted these versions in an earlier Release run but does not show them yet. Publishing them again from this\n" +
   "commit would give the same version number different code, so nothing was published. In a beta run\n" +
@@ -444,12 +519,15 @@ export function failureMessage(failures, mode, problems = []) {
       ...(missingOnly ? [] : [`    npm gitHead:    ${failure.gitHead ?? "(none)"}`]),
       `    version commit: ${failure.versionCommit ?? "(unknown)"}`,
       `    HEAD:           ${failure.head}`,
+      ...(failure.commands ?? []).map((command) => `    ${command}`),
     ].join("\n"),
   );
   const why = problems.length ? `\nWhy: ${problems.join("; ")}.\n` : "";
+  const kinds = new Set(failures.map((failure) => failure.kind));
   const advice = [
-    ...(failures.some((failure) => failure.kind === "accepted-not-visible") ? [ACCEPTED_ADVICE] : []),
-    ...(failures.some((failure) => failure.kind !== "accepted-not-visible") ? [ADVICE[mode]] : []),
+    ...(kinds.has("accepted-not-visible") ? [ACCEPTED_ADVICE] : []),
+    ...(kinds.has("dependency-not-visible") ? [DEPENDENCY_ADVICE] : []),
+    ...(failures.some((failure) => !["accepted-not-visible", "dependency-not-visible"].includes(failure.kind)) ? [ADVICE[mode]] : []),
   ].join("\n\n");
   return `Release provenance check failed (${mode}):\n\n${lines.join("\n")}\n${why}\n${advice}`;
 }
@@ -458,9 +536,10 @@ function report(failures, mode, problems) {
   if (failures.length === 0) return;
   if (process.env.GITHUB_ACTIONS === "true") {
     for (const failure of failures) {
+      const commands = failure.commands?.length ? ` ${failure.commands.map((command) => command.replace(/\s+/g, " ")).join("; ")}` : "";
       console.log(
         `::error title=${mode}: ${failure.name}@${failure.version}::${failure.reason} ` +
-          `(npm gitHead ${failure.gitHead ?? "none"}, HEAD ${failure.head})`,
+          `(npm gitHead ${failure.gitHead ?? "none"}, HEAD ${failure.head})${commands}`,
       );
     }
   }
@@ -469,6 +548,23 @@ function report(failures, mode, problems) {
 }
 
 const readLog = (path) => (existsSync(path) ? readFileSync(path, "utf8") : "");
+
+// Record every public package's dist-tags before publishing, for post-publish's
+// "tag back" commands. Best effort: without the record those commands say so.
+function recordDistTags(repo, path) {
+  try {
+    const tags = Object.fromEntries(publicPackages(repo, repo.revParse("HEAD")).map((pkg) => [pkg.name, npmDistTags(pkg.name)]));
+    writeFileSync(path, `${JSON.stringify(tags, null, 2)}\n`);
+    console.log(`Recorded the dist-tags of ${Object.keys(tags).length} packages in ${path}.`);
+  } catch (error) {
+    console.log(`Could not record dist-tags before publishing (${error.message}); a post-publish failure will not name the version to move back to.`);
+  }
+}
+
+function readDistTags(path) {
+  if (!path || !existsSync(path)) return {};
+  return parseJson(readFileSync(path, "utf8")) ?? {};
+}
 
 async function main([mode, output, ...rest]) {
   const repo = gitRepo();
@@ -495,9 +591,11 @@ async function main([mode, output, ...rest]) {
       if (process.env.GITHUB_STEP_SUMMARY) appendFileSync(process.env.GITHUB_STEP_SUMMARY, `- ${message}\n`);
     };
     const accepted = output ? acceptedFromPublishLog(readLog(output)) : new Set();
-    return report(await check({ mode, repo, accepted, onPending }), mode);
+    const previousTags = readDistTags(process.env.RELEASE_DIST_TAGS_FILE);
+    return report(await check({ mode, repo, accepted, onPending, previousTags }), mode);
   }
   if (mode === "pre-publish" && output === undefined) {
+    if (process.env.RELEASE_DIST_TAGS_FILE) recordDistTags(repo, process.env.RELEASE_DIST_TAGS_FILE);
     let failures;
     try {
       failures = await check({ mode, repo });

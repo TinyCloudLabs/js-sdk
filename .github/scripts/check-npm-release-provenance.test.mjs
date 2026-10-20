@@ -99,6 +99,7 @@ const run = (r, mode, npm, options = {}) =>
     sleep: noSleep,
     log: quiet,
     acceptedEarlier: async () => undefined,
+    tagsOf: () => assert.fail("unexpected dist-tag lookup"),
     ...options,
   });
 
@@ -352,11 +353,23 @@ test("pre/post-publish: internal dependencies may be in this run's publish set, 
     ...npm.entries,
     "@x/a@1.0.1-beta.0": { gitHead: head, requires: [["@x/b", "2.0.1-beta.0"]] },
   });
-  const failures = await run(r, "post-publish", partial, { sleep: async () => {}, waitMs: 1, firstRetryMs: 1 });
+  const failures = await run(r, "post-publish", partial, {
+    sleep: async () => {},
+    waitMs: 1,
+    firstRetryMs: 1,
+    tagsOf: () => ({ beta: "1.0.1-beta.0" }),
+  });
   assert.deepEqual(failures.map(({ name, reason }) => `${name}: ${reason}`), [
     "@x/b: not on npm after publish",
     "@x/a: requires @x/b@2.0.1-beta.0, which is not on npm",
   ]);
+  assert.deepEqual(failures[1].commands, [
+    "tag back:     no earlier `beta` was recorded for @x/a; pick one from `npm view @x/a time`",
+    "roll forward: npm dist-tag add @x/a@1.0.1-beta.0 beta   (once `npm view @x/b@2.0.1-beta.0 version` answers)",
+  ]);
+  const message = failureMessage(failures, "post-publish");
+  assert.match(message, /CI does not move dist-tags/);
+  assert.match(message, /Check the publish log/);
 });
 
 test("unfinished-stable: a partial stable release is finished from its release commit before anything else", async (t) => {
@@ -499,12 +512,75 @@ test("post-publish: a version npm never accepted still fails next to a pending o
   assert.deepEqual(failures.map(({ name, reason }) => `${name}: ${reason}`), ["@x/b: not on npm after publish"]);
 });
 
-test("post-publish: a package that requires a pending version is not failed for it", async (t) => {
+test("post-publish: a package that requires a pending version fails red, with tag commands and no tag moves", async (t) => {
+  // 2026-10-20: web-sdk@3.3.0-beta.31 (now tagged beta) required web-sdk-wasm@1.7.7-beta.0, accepted but not shown.
   const r = repository(t);
   const head = r.commit(BETA, { ...a("1.0.1-beta.0", { "@x/b": "2.0.1-beta.0" }), ...b("2.0.1-beta.0") });
   const npm = registry({ "@x/a@1.0.1-beta.0": { gitHead: head, requires: [["@x/b", "2.0.1-beta.0"]] } });
-  const failures = await run(r, "post-publish", npm, { ...budget, sleep: async () => {}, accepted: new Set(["@x/b@2.0.1-beta.0"]) });
+  const pending = [];
+  const tagLookups = [];
+  const failures = await run(r, "post-publish", npm, {
+    ...budget,
+    sleep: async () => {},
+    accepted: new Set(["@x/a@1.0.1-beta.0", "@x/b@2.0.1-beta.0"]),
+    onPending: (pkg) => pending.push(`${pkg.name}@${pkg.version}`),
+    previousTags: { "@x/a": { latest: "1.0.0", beta: "1.0.0-beta.3" } },
+    tagsOf: (name) => (tagLookups.push(name), { latest: "1.0.0", beta: "1.0.1-beta.0" }),
+  });
+  // b itself is still only pending; a, which requires it, is the failure.
+  assert.deepEqual(pending, ["@x/b@2.0.1-beta.0"]);
+  assert.deepEqual(tagLookups, ["@x/a"]);
+  assert.deepEqual(
+    failures.map(({ name, version, kind, reason, commands }) => ({ name, version, kind, reason, commands })),
+    [
+      {
+        name: "@x/a",
+        version: "1.0.1-beta.0",
+        kind: "dependency-not-visible",
+        reason: "requires @x/b@2.0.1-beta.0, which npm accepted in this run but does not show yet, so installing @x/a@1.0.1-beta.0 fails until it does",
+        commands: [
+          "tag back:     npm dist-tag add @x/a@1.0.0-beta.3 beta",
+          "roll forward: npm dist-tag add @x/a@1.0.1-beta.0 beta   (once `npm view @x/b@2.0.1-beta.0 version` answers)",
+        ],
+      },
+    ],
+  );
+  const message = failureMessage(failures, "post-publish");
+  assert.match(message, /    tag back:     npm dist-tag add @x\/a@1\.0\.0-beta\.3 beta\n/);
+  assert.match(message, /CI does not move dist-tags\. Do not re-run\./);
+  assert.doesNotMatch(message, /Check the publish log/);
+});
+
+test("post-publish: a pending version nothing requires stays a warning (TC-1457)", async (t) => {
+  const r = repository(t);
+  const head = r.commit(BETA, { ...a("1.0.1-beta.0", { "@x/b": "2.0.0" }), ...b("2.0.1-beta.0") });
+  const npm = registry({ "@x/a@1.0.1-beta.0": { gitHead: head, requires: [["@x/b", "2.0.0"]] }, "@x/b@2.0.0": r.released });
+  const failures = await run(r, "post-publish", npm, {
+    ...budget,
+    sleep: async () => {},
+    accepted: new Set(["@x/a@1.0.1-beta.0", "@x/b@2.0.1-beta.0"]),
+    tagsOf: () => assert.fail("no failure, so no tag lookup"),
+  });
   assert.deepEqual(failures, []);
+});
+
+test("post-publish: tag commands without a pre-publish record, without a moved tag, or without npm", async (t) => {
+  const r = repository(t);
+  const head = r.commit(BETA, { ...a("1.0.1-beta.0", { "@x/b": "2.0.1-beta.0" }), ...b("2.0.1-beta.0") });
+  const npm = registry({ "@x/a@1.0.1-beta.0": { gitHead: head, requires: [["@x/b", "2.0.1-beta.0"]] } });
+  const commands = async (options) =>
+    (await run(r, "post-publish", npm, { ...budget, sleep: async () => {}, accepted: new Set(["@x/b@2.0.1-beta.0"]), ...options }))
+      .flatMap((failure) => failure.commands);
+  assert.deepEqual(await commands({ tagsOf: () => ({ beta: "1.0.1-beta.0" }) }), [
+    "tag back:     no earlier `beta` was recorded for @x/a; pick one from `npm view @x/a time`",
+    "roll forward: npm dist-tag add @x/a@1.0.1-beta.0 beta   (once `npm view @x/b@2.0.1-beta.0 version` answers)",
+  ]);
+  assert.deepEqual(await commands({ tagsOf: () => ({ beta: "1.0.0-beta.3" }), previousTags: { "@x/a": { beta: "1.0.0-beta.3" } } }), [
+    "no dist-tag points at @x/a@1.0.1-beta.0 yet (before publishing: beta=1.0.0-beta.3); check `npm view @x/a dist-tags`",
+  ]);
+  assert.deepEqual(await commands({ tagsOf: () => { throw new Error("E500"); } }), [
+    "could not read npm's dist-tags for @x/a (E500); check `npm view @x/a dist-tags`",
+  ]);
 });
 
 test("pre-publish: a version an earlier run got npm to accept, but npm does not show, is a hard stop", async (t) => {
