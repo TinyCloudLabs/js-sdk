@@ -116,10 +116,10 @@ function fakeOpenKey(approve: (start: Record<string, unknown>, transactionId: st
   return { fetchFn, startBodies, urls, get polls() { return polls; } };
 }
 
-async function approved(start: Record<string, unknown>, transactionId: string, input: { signed: PermissionEntry[]; claimed?: PermissionEntry[]; binding?: PermissionEntry[]; shareOrigin?: string; lifetimeMs?: number; caveat?: Record<string, unknown>; primary?: boolean }) {
+async function approved(start: Record<string, unknown>, transactionId: string, input: { signed: PermissionEntry[]; claimed?: PermissionEntry[]; binding?: PermissionEntry[]; shareOrigin?: string; lifetimeMs?: number; caveat?: Record<string, unknown>; primary?: boolean; space?: Record<string, unknown> }) {
   const delegation = await signedDelegation(input.signed, start.publicJwk as object, input.claimed ?? input.signed, input.lifetimeMs, input.caveat);
-  // OpenKey's unsigned report that the approving key is the account's primary key.
-  const relayed = input.primary === undefined ? delegation : { ...delegation, primary: input.primary };
+  // OpenKey's unsigned report that the approving key is the account's primary key, and how far it got hosting the space.
+  const relayed = { ...delegation, ...(input.primary === undefined ? {} : { primary: input.primary }), ...input.space };
   return response({
     status: "approved",
     relay: await encryptRelay(start.relayPublicJwk as object, transactionId, relayed),
@@ -405,6 +405,15 @@ describe("OpenKey device authorization", () => {
       await expect(acquire(openkey, { emitInstructions: (prompt) => prompts.push(prompt) })).rejects.toMatchObject({ code: "DEVICE_AUTH_INVALID_RESPONSE" });
     }
     expect(prompts).toEqual([]);
+  });
+
+  test("keeps OpenKey's space setup report on the verified session so the login can wait for it (TC-1608)", async () => {
+    const spaceError = "TinyCloud account setup failed (tinycloud_bootstrap_failed): seed failed.";
+    for (const space of [{ spaceReady: null, spacePending: true }, { spaceReady: false, spaceError }]) {
+      const openkey = fakeOpenKey((start, id) => approved(start, id, { signed: requested, space }));
+      const result = await acquire(openkey);
+      expect(result.session).toMatchObject(space);
+    }
   });
 });
 

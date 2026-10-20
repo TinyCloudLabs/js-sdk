@@ -130,6 +130,8 @@ let authNodeRestorableSession: Record<string, unknown> | undefined;
 let authNodeGrantDelegations: Array<{ cid: string; expiry: Date }>;
 let onGrantRuntimePermissions: (() => void | Promise<void>) | null = null;
 let operationInvokeHook: (() => void) | null = null;
+// What `restoreProfileSessionNode` returns; null: no restorable session.
+let restoredSessionNode: ((ctx: unknown) => unknown) | null = null;
 
 function resetState(): void {
   recorded.outputs.length = 0;
@@ -188,6 +190,7 @@ function resetState(): void {
   operationRecorded.calls.length = 0;
   operationRecorded.results.length = 0;
   operationInvokeHook = null;
+  restoredSessionNode = null;
 }
 
 function makeProfile(overrides: Partial<ProfileLike> = {}): ProfileLike {
@@ -406,7 +409,8 @@ mock.module("../lib/sdk.js", () => ({
       },
     };
   },
-  restoreProfileSessionNode: async () => ({ unavailable: "session_missing" as const }),
+  restoreProfileSessionNode: async (ctx: unknown) =>
+    restoredSessionNode ? restoredSessionNode(ctx) : { unavailable: "session_missing" as const },
 }));
 
 mock.module("../lib/permissions.js", () => ({
@@ -461,7 +465,14 @@ mock.module("../lib/permissions.js", () => ({
     },
   permissionsFromDelegation: () => [],
   readGrantHistory: async () => [],
-  resolvePermissionSpaces: async (permissions: unknown[]) => permissions,
+  // Like the real resolver: a space name becomes the owner's space id.
+  resolvePermissionSpaces: async (permissions: Array<{ space?: string }>) =>
+    permissions.map((permission) => ({
+      ...permission,
+      space: permission.space === undefined || permission.space.startsWith("tinycloud:")
+        ? permission.space
+        : `tinycloud:pkh:eip155:1:0xOwner:${permission.space}`,
+    })),
   storedAdditionalDelegation: (delegation: object, permissions: object[]) => ({
     delegation,
     permissions,
@@ -806,6 +817,66 @@ describe("CLI auth login command", () => {
     expect(recorded.errors).toEqual([expect.objectContaining({ code: "MANIFEST_REQUIRED" })]);
     expect(recorded.startAuthFlows).toEqual([]);
     expect(sessions.has("default")).toBe(false);
+  });
+
+  describe("OpenKey space setup after login (TC-1608)", () => {
+    const unhosted = { ok: false, error: { code: "KV_NOT_FOUND", message: "404 - Space not found", meta: { status: 404 } } };
+
+    function loginProfile(): void {
+      profiles.set("default", makeProfile({ did: "did:key:openkey-session", sessionDid: "did:key:openkey-session", authMethod: "openkey" }));
+      keys.set("default", { kty: "OKP", crv: "Ed25519", x: "key-public", d: "key-private" });
+    }
+
+    function nodeAnswering(answers: unknown[]): { reads: number; node: { kv: { get: () => Promise<unknown> } } } {
+      const state = { reads: 0, node: { kv: { get: async () => answers[Math.min(state.reads++, answers.length - 1)] } } };
+      return state;
+    }
+
+    test("waits while OpenKey is still hosting the space, then finishes the login", async () => {
+      loginProfile();
+      openKeyDelegation = { ...openKeyDelegation, verificationMethod: "did:key:openkey-session", spaceReady: null, spacePending: true };
+      const node = nodeAnswering([unhosted, { ok: true, data: {} }]);
+      restoredSessionNode = () => ({ node: node.node });
+      const stderr = spyOn(process.stderr, "write").mockImplementation(() => true);
+      try {
+        await runAuthCommand(["auth", "login", "--method", "openkey", "--paste"]);
+        expect(stderr.mock.calls.map(([text]) => String(text)).join("")).toContain("Setting up your space");
+      } finally {
+        stderr.mockRestore();
+      }
+
+      expect(recorded.errors).toEqual([]);
+      expect(node.reads).toBe(2);
+      expect(recorded.outputs).toEqual([expect.objectContaining({ authenticated: true })]);
+    }, 15_000);
+
+    test("surfaces OpenKey's spaceError with its code and exits non-zero, keeping the saved session", async () => {
+      loginProfile();
+      const spaceError = "TinyCloud account setup failed (tinycloud_bootstrap_failed): seed failed.";
+      openKeyDelegation = { ...openKeyDelegation, verificationMethod: "did:key:openkey-session", spaceReady: false, spaceError };
+      restoredSessionNode = () => ({ node: nodeAnswering([unhosted]).node });
+
+      await runAuthCommand(["auth", "login", "--method", "openkey", "--paste"]);
+
+      expect(recorded.errors).toEqual([expect.objectContaining({
+        code: "SPACE_SETUP_FAILED",
+        message: expect.stringContaining(spaceError),
+      })]);
+      expect(recorded.outputs).toEqual([]);
+      expect(sessions.has("default")).toBe(true);
+    });
+
+    test.each([{}, { spaceReady: true }])("does not read from the node when OpenKey says the space is ready or says nothing (%j)", async (fields) => {
+      loginProfile();
+      let probes = 0;
+      restoredSessionNode = () => { probes += 1; return { unavailable: "session_missing" }; };
+      openKeyDelegation = { ...openKeyDelegation, verificationMethod: "did:key:openkey-session", ...fields };
+
+      await runAuthCommand(["auth", "login", "--method", "openkey", "--paste"]);
+
+      expect(recorded.errors).toEqual([]);
+      expect(probes).toBe(0);
+    });
   });
 });
 
@@ -1644,7 +1715,50 @@ describe("CLI auth import command", () => {
     await runAuthCommand(["auth", "grant", source, "--yes"]);
 
     expect(recorded.errors).toEqual([]);
-    expect(recorded.grantedRequests).toEqual([request]);
+    // The signer receives the one resolved list (space ids, not names) that was printed and gated.
+    expect(recorded.grantedRequests).toEqual([{
+      ...request,
+      requested: [{ ...request.requested[0], space: "tinycloud:pkh:eip155:1:0xOwner:secrets" }],
+    }]);
+  });
+
+  test.each([
+    ["a hostile sessionDid", { sessionDid: "did:key:z6Mk\u001b[2J\u202e" }],
+    ["a hostile requestedExpiry", { requestedExpiry: "7d\u001b[2J\u202e" }],
+  ])("%s is refused before anything is printed or signed", async (_name, override) => {
+    profiles.set("default", makeProfile());
+    const request = {
+      kind: "tinycloud.auth.request",
+      version: 1,
+      requestId: "req_hostile_fields",
+      sessionDid: "did:key:z6MkSession",
+      // a request that WOULD print a scope text and ask for confirmation if it got that far
+      requested: [{ service: "tinycloud.kv", space: "applications", path: "", actions: ["tinycloud.kv/del"] }],
+      ...override,
+    };
+    const source = join(tempDir, "hostile-fields.json");
+    await writeFile(source, JSON.stringify(request), "utf8");
+    const streams: string[] = [];
+    const stderr = spyOn(process.stderr, "write").mockImplementation(((chunk: string | Uint8Array) => {
+      streams.push(`stderr:${String(chunk)}`);
+      return true;
+    }) as never);
+    const stdout = spyOn(process.stdout, "write").mockImplementation(((chunk: string | Uint8Array) => {
+      streams.push(`stdout:${String(chunk)}`);
+      return true;
+    }) as never);
+    try {
+      await runAuthCommand(["auth", "grant", source, "--yes"]);
+    } finally {
+      stderr.mockRestore();
+      stdout.mockRestore();
+    }
+
+    expect(recorded.errors).toHaveLength(1);
+    expect(recorded.errors[0]).toMatchObject({ code: "INVALID_AUTH_REQUEST", exitCode: 2 });
+    expect(recorded.grantedRequests).toEqual([]);
+    // no scope text, no notice, nothing at all was written before the refusal
+    expect(streams).toEqual([]);
   });
 });
 

@@ -105,9 +105,47 @@ describe("unhostedSpaceError", () => {
     return { code: "SQL_DATABASE_NOT_FOUND", message, meta: { status } };
   }
 
-  test("returns null when no space URI (primary space is always hosted)", async () => {
-    const out = await unhostedSpaceError(err("404 - Space not found", 404), undefined, "cli-test");
-    expect(out).toBeNull();
+  describe("primary space (no --space), TC-1608", () => {
+    const primary = `tinycloud:pkh:eip155:1:${SELF_ADDR}:default`;
+    const unhosted = err("kv list failed: 404 - Space not found", 404);
+
+    test("an OpenKey owner's unhosted primary space gets the OpenKey setup hint, not `tc space host`", async () => {
+      profile = { ...profile, authMethod: "openkey", posture: "owner-openkey" };
+      session = { spaceId: primary };
+      const out = await unhostedSpaceError(unhosted, undefined, "cli-test");
+      expect(out).toMatchObject({ code: "SPACE_NOT_HOSTED" });
+      expect(out!.message).toContain("'default'");
+      expect(out!.metadata?.hint).toBe(
+        "OpenKey is still setting up your space. Wait a minute and retry; approving again in OpenKey re-runs the setup.",
+      );
+    });
+
+    test("a local-key owner's unhosted primary space is still told to host it", async () => {
+      profile = { ...profile, authMethod: "local", posture: "local-owner-key" };
+      session = { spaceId: primary };
+      const out = await unhostedSpaceError(unhosted, undefined, "cli-test");
+      expect(out!.metadata?.hint).toContain("tc space host default");
+    });
+
+    test("a delegate's primary space is the owner's: host-request hint", async () => {
+      profile = { name: "cli-test", chainId: 1, posture: "delegate-session", ownerDid: `did:pkh:eip155:1:${OTHER_ADDR}` };
+      session = { spaceId: `tinycloud:pkh:eip155:1:${OTHER_ADDR}:default` };
+      const out = await unhostedSpaceError(unhosted, undefined, "cli-test");
+      expect(out!.metadata?.hint).toContain("tc space host-request default --emit");
+    });
+
+    test("falls back to the profile's recorded space when the session has none", async () => {
+      profile = { ...profile, posture: "owner-openkey", spaceId: primary };
+      session = null;
+      expect((await unhostedSpaceError(unhosted, undefined, "cli-test"))?.code).toBe("SPACE_NOT_HOSTED");
+    });
+
+    test("stays null when the error is not the unhosted 404, or no primary space is recorded", async () => {
+      session = { spaceId: primary };
+      expect(await unhostedSpaceError(err("404 - key not found", 404), undefined, "cli-test")).toBeNull();
+      session = null;
+      expect(await unhostedSpaceError(unhosted, undefined, "cli-test")).toBeNull();
+    });
   });
 
   test("returns null for a 404 that is NOT a space-not-found body", async () => {
@@ -129,7 +167,8 @@ describe("unhostedSpaceError", () => {
     expect(out).toBeNull();
   });
 
-  test("owner hint tells them to host directly", async () => {
+  test("a local-key owner, who can sign a host delegation, is told to host directly", async () => {
+    profile = { ...profile, authMethod: "local", posture: "local-owner-key" };
     const out = await unhostedSpaceError(
       err("SQL execute failed: 404 - Space not found", 404),
       OWNED,
@@ -141,6 +180,24 @@ describe("unhostedSpaceError", () => {
     expect(hint).toContain("You are the owner");
     expect(hint).toContain("tc space host applications");
     expect(hint).not.toContain("host-request");
+  });
+
+  test.each([
+    { posture: "owner-openkey" },
+    // No recorded posture on an OpenKey login resolves to owner-openkey.
+    { authMethod: "openkey" },
+  ])("an OpenKey owner (%j) is not sent to `tc space host`, which cannot work for it (TC-1608)", async (fields) => {
+    profile = { ...profile, ...fields };
+    const out = await unhostedSpaceError(
+      err("SQL execute failed: 404 - Space not found", 404),
+      OWNED,
+      "cli-test",
+    );
+    expect(out).not.toBeNull();
+    expect(out!.code).toBe("SPACE_NOT_HOSTED");
+    expect(out!.metadata?.hint).toBe(
+      "OpenKey is still setting up your space. Wait a minute and retry; approving again in OpenKey re-runs the setup.",
+    );
   });
 
   test("delegate hint tells them they cannot host and to emit a host-request", async () => {
