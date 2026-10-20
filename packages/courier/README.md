@@ -668,15 +668,21 @@ Flags, in this order: `too-long`, `link`, `instruction`, `request`, `secret-requ
 `encoded`, `unicode`, `size`, `rate`. They are cheap heuristics for the reader, not
 a verdict on content.
 
-Ordering: intake keeps a per-peer high-water mark in `intake-state.json`. A message
-whose id sorts at or below that mark is skipped. A message id more than 10 minutes
-ahead of local time stops that peer's cycle and is not recorded. The first run
-queues the whole mirror backlog for each paired peer.
+Ordering: each cycle reads a peer's mirror in message-id order and examines up to 200 mirror rows. It stores the last
+id examined as a cursor in `intake-state.json`; the next cycle resumes after it, and once the mirror is exhausted it
+starts again from the oldest id. A message is skipped when a queue, done or overflow file for its id already exists.
+A message whose id time is older than 7 days gets a done marker (outcome `stale`) and is not queued. A message id more
+than 10 minutes ahead of local time is not recorded and does not block the other messages: the cursor moves past it,
+so it is retried only when the cursor next wraps around the mirror. Existing history is not queued if you run
+`courier intake --init-from-now` first. It marks the current mirror messages of each paired peer as done (outcome
+`init`), and it refuses to run again while a paired peer has done entries unless `--force` is given. Without it, the
+first cycle works through the backlog from the oldest id, 200 rows per cycle.
 
 Rate: each peer is limited to 100 inbound messages per hour by default, including
 peers absent from `peers.json`. Over the cap, the message is not queued. It is written
 to the overflow directory (`<COURIER_HOME>/intake/overflow/<peerId>/`, directories 0700,
-files 0600), where it is kept for 30 days. The first overflow in each hour also writes
+files 0600), where it is kept until its message passes the stale horizon (7 days). Each peer's
+overflow is capped at 200 files and 1 MiB; the oldest messages are dropped first. The first overflow in each hour also writes
 one `rate-<unixHour>` record to the queue with `peerRatePerHourRemaining: 0` and the
 `rate` flag.
 

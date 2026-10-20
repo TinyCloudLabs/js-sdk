@@ -169,47 +169,160 @@ test('rate record stays deduped after it is archived within its window', async (
   assert.equal(h.eventsNamed('peer-over-rate').length, 1);
 });
 
-test('overflow retention is finite: overflow files are retired after a month', async () => {
+test('admissions sharing one millisecond each count after the stored receipts are lost', async () => {
+  const h = harness({ peers: { alice: { tier: 'strict', ratePerHour: 2, outPerHour: 2 } } });
+  await putMessage(h.kv, ulid(NOW), [{ text: 'a' }]);
+  await putMessage(h.kv, ulid(NOW + 1), [{ text: 'b' }]);
+  await intakeCycle(h.input);
+  const queued = () => h.queueFiles(HANDLE).filter((x) => !x.startsWith('rate-'));
+  assert.equal(queued().length, 2);
+  h.input.state = { v: 1, peers: {} };
+  await putMessage(h.kv, ulid(NOW + 2), [{ text: 'c' }]);
+  await intakeCycle(h.input);
+  assert.equal(queued().length, 2);
+  assert.equal(h.overflowFiles(HANDLE).length, 1);
+});
+
+test('a queued admission whose state write failed still counts after restart', async () => {
+  const h = harness({ peers: { alice: { tier: 'strict', ratePerHour: 2, outPerHour: 2 } } });
+  const stateFile = path.join(h.dirs.stateDir, 'intake-state.json');
+  await putMessage(h.kv, ulid(NOW), [{ text: 'a' }]);
+  await putMessage(h.kv, ulid(NOW + 1), [{ text: 'b' }]);
+  const realRename = fs.renameSync;
+  let stateWrites = 0;
+  mock.method(fs, 'renameSync', (from, to) => {
+    if (String(to) === stateFile && ++stateWrites === 2) throw Object.assign(new Error('fixture full'), { code: 'ENOSPC' });
+    return realRename(from, to);
+  });
+  try {
+    await intakeCycle(h.input);
+  } finally {
+    mock.restoreAll();
+  }
+  assert.equal(h.eventsNamed('intake-error').length, 1);
+  const queued = () => h.queueFiles(HANDLE).filter((x) => !x.startsWith('rate-'));
+  assert.equal(queued().length, 2);
+  h.input.state = readState(stateFile);
+  await putMessage(h.kv, ulid(NOW + 2), [{ text: 'c' }]);
+  await intakeCycle(h.input);
+  assert.equal(queued().length, 2);
+  assert.equal(h.overflowFiles(HANDLE).length, 1);
+});
+
+test('overflow files are retired once their message passes the stale horizon', async () => {
   const h = harness({ peers: { alice: { tier: 'strict', ratePerHour: 1, outPerHour: 1 } } });
   for (let i = 0; i < 150; i++) await putMessage(h.kv, ulid(NOW + i), [{ text: 'hello' }]);
   await intakeCycle(h.input);
   assert.equal(h.overflowFiles(HANDLE).length, 149);
-  h.setClock(NOW + 30 * DAY);
+  h.setClock(NOW + 8 * DAY);
   await intakeCycle(h.input);
   assert.equal(h.overflowFiles(HANDLE).length, 0);
 });
 
-test('two stale-lock contenders cannot both acquire the lock', async () => {
+test('one cycle examines at most 200 mirror rows and the next cycle resumes after them', async () => {
+  const h = harness({ peers: { alice: { tier: 'strict', ratePerHour: 1, outPerHour: 1 } } });
+  const ids = Array.from({ length: 450 }, (_, i) => ulid(NOW + i));
+  for (const id of ids) await putMessage(h.kv, id, [{ text: 'hello' }]);
+  const queuedMessages = () => h.queueFiles(HANDLE).filter((x) => !x.startsWith('rate-')).length;
+  await intakeCycle(h.input);
+  assert.equal(queuedMessages() + h.overflowFiles(HANDLE).length, 200);
+  await intakeCycle(h.input);
+  assert.deepEqual(
+    h.overflowFiles(HANDLE),
+    ids.slice(200, 400).map((id) => `${id}.json`).sort(),
+  );
+});
+
+test('overflow is capped at 1 MiB and the oldest files go first', async () => {
+  const h = harness({ peers: { alice: { tier: 'strict', ratePerHour: 1, outPerHour: 1 } } });
+  const text = 'x'.repeat(16 * 1024);
+  for (let i = 0; i < 120; i++) await putMessage(h.kv, ulid(NOW + i), [{ text }]);
+  await intakeCycle(h.input);
+  const dir = path.join(h.dirs.overflowRoot, HANDLE);
+  const bytes = h.overflowFiles(HANDLE).reduce((n, f) => n + fs.statSync(path.join(dir, f)).size, 0);
+  assert.ok(bytes <= 1024 * 1024, `overflow holds ${bytes} bytes`);
+  assert.equal(h.overflowFiles(HANDLE).includes(`${ulid(NOW + 1)}.json`), false);
+});
+
+test('a message retired by the overflow cap is not admitted on a later cycle', async () => {
+  const h = harness({ peers: { alice: { tier: 'strict', ratePerHour: 1, outPerHour: 1 } } });
+  for (let i = 0; i < 450; i++) await putMessage(h.kv, ulid(NOW + i), [{ text: 'hello' }]);
+  for (let cycle = 0; cycle < 3; cycle++) await intakeCycle(h.input);
+  assert.equal(await intakeCycle(h.input), 0);
+  assert.equal(h.overflowFiles(HANDLE).length, 200);
+});
+
+test('a fresh lock file with no pid yet is a live holder mid-write, so it is refused and kept', async () => {
   const { acquireLock } = await import('../dist/intake/queue.js');
   const h = harness();
-  const file = path.join(h.dirs.stateDir, 'fixture.lock');
-  fs.writeFileSync(file, '313131\n');
-  const rename = fs.renameSync;
-  let entered = false;
-  let secondRelease;
-  mock.method(process, 'kill', () => {
-    throw Object.assign(new Error('fixture dead'), { code: 'ESRCH' });
-  });
+  const file = path.join(h.dirs.stateDir, 'fresh-empty.lock');
+  fs.writeFileSync(file, '');
+  assert.throws(() => acquireLock(file), { code: 'locked' });
+  assert.equal(fs.readFileSync(file, 'utf8'), '');
+});
+
+test('an empty lock file left by a crash is taken over once it is old', async () => {
+  const { acquireLock } = await import('../dist/intake/queue.js');
+  const h = harness();
+  const file = path.join(h.dirs.stateDir, 'old-empty.lock');
+  fs.writeFileSync(file, '');
+  const old = new Date(Date.now() - 60_000);
+  fs.utimesSync(file, old, old);
+  const release = acquireLock(file);
+  assert.equal(fs.readFileSync(file, 'utf8').trim(), String(process.pid));
+  release();
+});
+
+test('a contender retiring an aged takeover guard does not unlink a fresh guard written meanwhile', async () => {
+  const { acquireLock } = await import('../dist/intake/queue.js');
+  const h = harness();
+  const file = path.join(h.dirs.stateDir, 'stale-holder.lock');
+  const guard = `${file}.takeover`;
+  fs.writeFileSync(file, '2147483646\n');
+  fs.writeFileSync(guard, '2147483645\n');
+  const old = new Date(Date.now() - 60_000);
+  fs.utimesSync(guard, old, old);
+  const realRename = fs.renameSync;
+  let injected = false;
   mock.method(fs, 'renameSync', (from, to) => {
-    if (from === file && !entered) {
-      entered = true;
-      secondRelease = acquireLock(file);
+    if (String(from) === guard && !injected) {
+      injected = true;
+      // A rival retires the abandoned guard and claims a fresh one for a live process (this test's parent).
+      fs.rmSync(guard, { force: true });
+      fs.writeFileSync(guard, `${process.ppid}\n`);
     }
-    return rename(from, to);
+    return realRename(from, to);
   });
-  let firstRelease;
   try {
-    try {
-      firstRelease = acquireLock(file);
-    } catch (error) {
-      assert.equal(error.code, 'locked');
-    }
-    assert.equal(Boolean(firstRelease) && Boolean(secondRelease), false);
+    assert.throws(() => acquireLock(file), { code: 'locked' });
   } finally {
     mock.restoreAll();
-    firstRelease?.();
-    secondRelease?.();
   }
+  assert.equal(fs.readFileSync(guard, 'utf8'), `${process.ppid}\n`);
+  assert.equal(fs.readFileSync(file, 'utf8'), '2147483646\n');
+});
+
+test('a contender is refused while a takeover of the same dead lock is in progress', async () => {
+  const { acquireLock } = await import('../dist/intake/queue.js');
+  const h = harness();
+  const file = path.join(h.dirs.stateDir, 'busy.lock');
+  fs.writeFileSync(file, '2147483646\n');
+  fs.writeFileSync(`${file}.takeover`, '1 another-contender\n');
+  assert.throws(() => acquireLock(file), { code: 'locked' });
+  assert.equal(fs.readFileSync(file, 'utf8'), '2147483646\n');
+});
+
+test('a takeover guard left by a crashed contender expires and the dead lock is taken over', async () => {
+  const { acquireLock } = await import('../dist/intake/queue.js');
+  const h = harness();
+  const file = path.join(h.dirs.stateDir, 'crashed-guard.lock');
+  fs.writeFileSync(file, '2147483646\n');
+  fs.writeFileSync(`${file}.takeover`, '1 crashed-contender\n');
+  const old = new Date(Date.now() - 60_000);
+  fs.utimesSync(`${file}.takeover`, old, old);
+  const release = acquireLock(file);
+  assert.equal(fs.readFileSync(file, 'utf8').trim(), String(process.pid));
+  release();
 });
 
 test('a peers file swapped for a symlink between check and read is not trusted', async () => {

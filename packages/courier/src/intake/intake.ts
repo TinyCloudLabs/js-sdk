@@ -25,8 +25,13 @@ const MAX_SKEW_MS = 10 * 60_000;
 const STALE_MS = 7 * DAY_MS;
 /** Queue records older than STALE_MS move to done/; done/ entries older than this are pruned. */
 const DONE_TTL_MS = 14 * DAY_MS;
-/** Overflow files are owner-only and retired after this long, so a flooding peer cannot grow the store without bound. */
-const OVERFLOW_TTL_MS = 30 * DAY_MS;
+/** Overflow is retired once older than the stale horizon: a message that old would be stale on admission anyway. */
+const OVERFLOW_TTL_MS = STALE_MS;
+/** Overflow is capped by count and by bytes; the oldest sent messages are dropped first. */
+const OVERFLOW_MAX_FILES = 200;
+const OVERFLOW_MAX_BYTES = 1024 * 1024;
+/** Mirror rows examined per peer per cycle; the next cycle resumes after the last one examined. */
+const MIRROR_BATCH = 200;
 /** Inbound admissions are counted per peer over this window. */
 const RATE_WINDOW_MS = HOUR_MS;
 /** Queued text is capped at this many UTF-16 units; longer text is flagged `too-long`. */
@@ -126,6 +131,13 @@ function admit(receipts: number[], at: number, cap: number): { admitted: boolean
   return { admitted: true, remaining: cap - recent.length - 1, receipts: [...recent, at].slice(-cap) };
 }
 
+/** Counts receive times as a multiset: two admissions in the same millisecond are two entries, not one. */
+function tally(times: Iterable<number>): Map<number, number> {
+  const counts = new Map<number, number>();
+  for (const at of times) counts.set(at, (counts.get(at) ?? 0) + 1);
+  return counts;
+}
+
 /**
  * Stored receipts merged with the receive times of this peer's queued records inside the window. The queued records are
  * the durable truth, so an admission whose state write was lost after publication still counts against the cap.
@@ -140,8 +152,8 @@ function reconcileReceipts(input: CycleInput, peer: string, receipts: number[], 
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return receipts;
     throw error;
   }
-  const seen = new Set(receipts);
-  const merged = [...receipts];
+  const stored = tally(receipts);
+  const queued = new Map<number, number>();
   for (const name of names) {
     if (!name.endsWith('.json') || name.startsWith('rate-')) continue;
     let record: unknown;
@@ -152,10 +164,12 @@ function reconcileReceipts(input: CycleInput, peer: string, receipts: number[], 
     }
     if (!isRecord(record) || typeof record.receivedAt !== 'string') continue;
     const at = Date.parse(record.receivedAt);
-    if (Number.isFinite(at) && at > now - RATE_WINDOW_MS && !seen.has(at)) {
-      seen.add(at);
-      merged.push(at);
-    }
+    if (Number.isFinite(at) && at > now - RATE_WINDOW_MS) queued.set(at, (queued.get(at) ?? 0) + 1);
+  }
+  const merged: number[] = [];
+  for (const at of new Set([...stored.keys(), ...queued.keys()])) {
+    const count = Math.max(stored.get(at) ?? 0, queued.get(at) ?? 0);
+    for (let i = 0; i < count; i++) merged.push(at);
   }
   return merged.sort((a, b) => a - b).slice(-cap);
 }
@@ -238,11 +252,16 @@ async function intakePeer(input: CycleInput, peer: StoredPeer): Promise<number> 
   const senderName = typeof peer.label === 'string' && textVerdict(peer.label, 'summary').allowed ? peer.label : peer.handle;
 
   const keys = await listAll(input.kv, `${k.mirrorPrefix}${peer.handle}/threads/`);
-  const candidates = mirrorMessages(peer.handle, keys, input.log);
-  candidates.sort((a, b) => (a.msgId < b.msgId ? -1 : a.msgId > b.msgId ? 1 : 0));
+  const all = mirrorMessages(peer.handle, keys, input.log);
+  all.sort((a, b) => (a.msgId < b.msgId ? -1 : a.msgId > b.msgId ? 1 : 0));
+  // Resume after the last examined id; once the mirror is exhausted, start a new pass from the beginning.
+  const after = ps.cursor ?? '';
+  const ahead = all.filter((c) => c.msgId > after);
+  const candidates = (ahead.length > 0 ? ahead : all).slice(0, MIRROR_BATCH);
 
   let written = 0;
   let future = 0;
+  let overflowed = false;
   for (const c of candidates) {
     if (presentIn(input, peer.handle, `${c.msgId}.json`)) continue;
     const at = input.now();
@@ -304,13 +323,35 @@ async function intakePeer(input: CycleInput, peer: StoredPeer): Promise<number> 
       const dir = path.join(input.overflowRoot, peer.handle);
       ensureRealDir(dir, 0o700);
       writeNew(dir, `${c.msgId}.json`, body, 0o600);
+      overflowed = true;
       ps.receipts = receipts;
       persist(input);
       if (writeRateRecord(input, peer.handle, senderName, policy.tier, at)) written++;
     }
   }
+  if (candidates.length > 0) ps.cursor = candidates[candidates.length - 1]!.msgId;
+  if (overflowed) capOverflow(path.join(input.overflowRoot, peer.handle));
+  persist(input);
   if (future > 0) input.log('intake-skip', { peer: peer.handle, code: 'stale', direction: 'future', count: future });
   return written;
+}
+
+/**
+ * Drops the oldest overflow files of one peer until both caps hold. File names are ULIDs, so name order is sent order.
+ */
+function capOverflow(dir: string): void {
+  const names = fs
+    .readdirSync(dir)
+    .filter((name) => name.endsWith('.json'))
+    .sort();
+  const sizes = names.map((name) => fs.statSync(path.join(dir, name)).size);
+  let bytes = sizes.reduce((sum, size) => sum + size, 0);
+  let count = names.length;
+  for (let i = 0; i < names.length && (count > OVERFLOW_MAX_FILES || bytes > OVERFLOW_MAX_BYTES); i++) {
+    fs.unlinkSync(path.join(dir, names[i]!));
+    bytes -= sizes[i]!;
+    count--;
+  }
 }
 
 /** Names of the peer directories directly under `root`. Entries whose names fail SAFE_ID are not peers. */

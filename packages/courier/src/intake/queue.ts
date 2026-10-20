@@ -106,53 +106,112 @@ function pidAlive(pid: number): boolean {
   }
 }
 
-/** Takes the intake lock. A lock whose pid is no longer alive is taken over; a live one refuses to start. */
+/** A lock or takeover guard with no readable pid that is older than this was abandoned by a crashed process. */
+const LOCK_STALE_MS = 30_000;
+
+function ageMs(file: string): number | undefined {
+  try {
+    return Date.now() - fs.statSync(file).mtimeMs;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Takes the intake lock. The lock is created whole (never empty), so an empty lock is an unfinished or crashed writer.
+ * A live pid refuses to start; a dead one is taken over.
+ */
 export function acquireLock(file: string): () => void {
+  const dir = path.dirname(file);
+  const name = path.basename(file);
   for (let attempt = 0; attempt < 2; attempt++) {
-    try {
-      fs.writeFileSync(file, `${process.pid}\n`, { flag: 'wx', mode: 0o600 });
+    if (writeNew(dir, name, `${process.pid}\n`, 0o600)) {
       return () => {
         if (readPid(file) === process.pid) fs.rmSync(file, { force: true });
       };
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
-      const stale = readPid(file);
-      if (stale !== undefined && pidAlive(stale)) throw new CourierError('locked', 'another courier intake is running');
-      if (!takeOver(file, stale)) throw new CourierError('locked', 'another courier intake is running');
     }
+    const stale = readPid(file);
+    if (stale !== undefined && pidAlive(stale)) throw new CourierError('locked', 'another courier intake is running');
+    const age = ageMs(file);
+    if (stale === undefined && age !== undefined && age < LOCK_STALE_MS) {
+      throw new CourierError('locked', 'another courier intake is running');
+    }
+    if (!takeOver(file, stale)) throw new CourierError('locked', 'another courier intake is running');
   }
   throw new CourierError('locked', 'could not take the intake lock');
 }
 
-/**
- * Removes a dead holder's lock without ever unlinking a live one. The lock is renamed to a private tombstone first, so
- * only the tombstone is unlinked, and only when it still holds the dead pid. A different pid means another contender
- * replaced the stale lock first: the tombstone is linked back and the takeover is refused.
- */
-function takeOver(file: string, stale: number | undefined): boolean {
-  const tomb = `${file}.${process.pid}.${randomBytes(6).toString('hex')}.tomb`;
-  try {
-    fs.renameSync(file, tomb);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return true;
-    throw error;
-  }
-  if (readPid(tomb) === stale) {
-    fs.rmSync(tomb, { force: true });
-    return true;
-  }
-  try {
-    fs.linkSync(tomb, file);
-    fs.rmSync(tomb, { force: true });
-  } catch {
-    // Another lock already occupies the path; the tombstone stays as evidence of the replaced holder.
+/** Claims `guard` exclusively. A fresh guard held by another contender refuses; an abandoned one is replaced. */
+function claimGuard(guard: string): boolean {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    if (writeNew(path.dirname(guard), path.basename(guard), `${process.pid}\n`, 0o600)) return true;
+    const age = ageMs(guard);
+    if (age !== undefined && age < LOCK_STALE_MS) return false;
+    if (!retireStaleGuard(guard)) return false;
   }
   return false;
 }
 
-/** Per-peer intake progress. `receipts` holds the last few local receive times for the inbound rate cap. Older builds also wrote `highWater`; the key is ignored. */
+function readText(file: string): string | undefined {
+  try {
+    return fs.readFileSync(file, 'utf8');
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Retires an aged guard without unlinking a live one. The guard is first renamed to a private name, so only one
+ * contender can move a given path. The moved file must still be the aged guard that was observed; if a fresh claim
+ * slipped in between the check and the rename, it is linked back and the claim is refused.
+ */
+function retireStaleGuard(guard: string): boolean {
+  const seen = readText(guard);
+  const retired = `${guard}.${process.pid}.${randomBytes(6).toString('hex')}.retired`;
+  try {
+    fs.renameSync(guard, retired);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return true;
+    throw error;
+  }
+  const age = ageMs(retired);
+  if (readText(retired) === seen && age !== undefined && age >= LOCK_STALE_MS) {
+    fs.rmSync(retired, { force: true });
+    return true;
+  }
+  try {
+    fs.linkSync(retired, guard);
+    fs.rmSync(retired, { force: true });
+  } catch {
+    // Another claim took the path meanwhile: keep the moved file rather than unlink a live guard.
+  }
+  return false;
+}
+
+/**
+ * Removes a dead holder's lock. Takeovers are serialized by an exclusive guard file, and the pid is re-checked under
+ * the guard before the lock is unlinked. A live lock is never renamed or unlinked: a changed pid refuses the takeover.
+ */
+function takeOver(file: string, stale: number | undefined): boolean {
+  const guard = `${file}.takeover`;
+  if (!claimGuard(guard)) return false;
+  try {
+    if (!fs.existsSync(file)) return true;
+    if (readPid(file) !== stale) return false;
+    fs.rmSync(file, { force: true });
+    return true;
+  } finally {
+    if (readPid(guard) === process.pid) fs.rmSync(guard, { force: true });
+  }
+}
+
+/**
+ * Per-peer intake progress. `receipts` holds the last few local receive times for the inbound rate cap.
+ * `cursor` is the last mirror msgId examined; the next cycle resumes after it. Older builds also wrote `highWater`; the key is ignored.
+ */
 export interface PeerState {
   receipts: number[];
+  cursor?: string;
 }
 
 export interface IntakeState {
@@ -181,7 +240,7 @@ export function readState(file: string): IntakeState {
   }
   if (!isRecord(parsed) || parsed.v !== 1 || !isRecord(parsed.peers)) throw new CourierError('bad-state', 'intake state has an unknown shape');
   for (const entry of Object.values(parsed.peers)) {
-    if (!isRecord(entry) || !Array.isArray(entry.receipts)) {
+    if (!isRecord(entry) || !Array.isArray(entry.receipts) || (entry.cursor !== undefined && typeof entry.cursor !== 'string')) {
       throw new CourierError('bad-state', 'intake state has an unknown shape');
     }
   }
