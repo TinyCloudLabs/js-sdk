@@ -1,6 +1,6 @@
 import type { AccountDelegationRecord, TinyCloudNode } from "@tinycloud/node-sdk";
 
-/** Records scanned while looking a grant up: a page holds 100, so a hostile or huge account cannot stall a revoke. */
+/** Pages read while looking a grant up (100 records each): past this the lookup fails closed instead of guessing. */
 const MAX_PAGES = 50;
 /** Hops walked from the grant's issuer up to the account owner. */
 const MAX_CHAIN_DEPTH = 8;
@@ -10,20 +10,26 @@ function normalizeDid(input: string): string {
   return (fragment < 0 ? input : input.slice(0, fragment)).trim().toLowerCase();
 }
 
+/**
+ * A space the node names, exactly `tinycloud:pkh:eip155:<chain>:<address>:<name>`: no other prefix,
+ * no extra segments, no control or non-ASCII characters, bounded. Returns the owner it belongs to.
+ */
+const SPACE = /^tinycloud:pkh:eip155:([1-9]\d{0,17}):(0x[0-9a-fA-F]{40}):[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
+
 function ownerOfSpace(space: string): string | undefined {
-  const owner = /^tinycloud:((?:did:)?pkh:eip155:[1-9]\d*:0x[0-9a-fA-F]{40})(?::|$)/.exec(space)?.[1];
-  if (!owner) return undefined;
-  return normalizeDid(owner.startsWith("did:") ? owner : `did:${owner}`);
+  const match = SPACE.exec(space);
+  return match === null ? undefined : `did:pkh:eip155:${match[1]}:${match[2]!.toLowerCase()}`;
 }
 
 /**
  * The space a node-recorded grant covers, only when that grant is the signed-in owner's to revoke.
  * Both checks must hold; anything else (not found, another issuer, a space the owner does not
- * own, several spaces) is `undefined`, so the caller keeps failing closed.
+ * own or that is not a plain space id, several spaces) is `undefined`, so the caller keeps failing closed.
  *
- *  - Every resource names a `tinycloud:` space owned by `ownerDid`, and they are all the same one.
- *  - The issuer is `ownerDid` itself, the signed-in session key, or a session key whose own
- *    delegation (found through `parents` in the same records) was issued by one of those.
+ *  - Every resource names one `tinycloud:pkh:…:<name>` space owned by `ownerDid`, and they are all the same one.
+ *  - The issuer is `ownerDid` itself or the signed-in session key, or a key that holds a delegation
+ *    recorded on the node (found through `parents`) whose own issuer is, in turn, one of those:
+ *    any holder along an owner-rooted chain counts, whether or not it is a session key.
  *
  * The node still decides whether the revocation is allowed; this only stops the CLI from asking it
  * to revoke on behalf of a space or issuer that the lookup response alone vouches for.
@@ -50,26 +56,29 @@ export function ownerSpaceFromNodeRecords(
   if (spaces.size !== 1) return undefined;
 
   const session = sessionDid === undefined ? undefined : normalizeDid(sessionDid);
-  const byDelegate = new Map<string, AccountDelegationRecord[]>();
-  for (const record of records) {
-    const key = normalizeDid(record.delegateDid);
-    byDelegate.set(key, [...byDelegate.get(key) ?? [], record]);
-  }
-  const issuedByOwner = (record: AccountDelegationRecord, depth: number, seen: ReadonlySet<string>): boolean => {
+  const byCid = new Map<string, AccountDelegationRecord[]>();
+  for (const record of records) byCid.set(record.cid, [...byCid.get(record.cid) ?? [], record]);
+  // One verdict per record: a crafted web of mutual parents costs one visit each, not one per path.
+  const verdicts = new Map<string, boolean>();
+  const rooted = (record: AccountDelegationRecord, depth: number): boolean => {
     const issuer = normalizeDid(record.delegatorDid);
     if (issuer === owner || issuer === session) return true;
-    if (depth >= MAX_CHAIN_DEPTH) return false;
-    return record.parents.some((parentCid) =>
-      !seen.has(parentCid) &&
-      (byDelegate.get(issuer) ?? []).some((parent) =>
-        parent.cid === parentCid && issuedByOwner(parent, depth + 1, new Set([...seen, parentCid]))));
+    const known = verdicts.get(record.cid);
+    if (known !== undefined) return known;
+    // A record under evaluation that is reached again is a loop, not a proof.
+    verdicts.set(record.cid, false);
+    const verdict = depth < MAX_CHAIN_DEPTH && record.parents.some((parentCid) =>
+      (byCid.get(parentCid) ?? []).some((parent) => normalizeDid(parent.delegateDid) === issuer && rooted(parent, depth + 1)));
+    verdicts.set(record.cid, verdict);
+    return verdict;
   };
-  return issuedByOwner(target, 0, new Set([cid])) ? [...spaces][0] : undefined;
+  return rooted(target, 0) ? [...spaces][0] : undefined;
 }
 
 /**
  * Read the owner's node-side delegation records and resolve `cid` to its owner space.
- * `undefined` when the query is refused, the grant is absent or fails {@link ownerSpaceFromNodeRecords}.
+ * `undefined` when the query is refused, more than {@link MAX_PAGES} pages would be needed, the grant is
+ * absent or it fails {@link ownerSpaceFromNodeRecords}.
  */
 export async function lookupOwnerSpaceOnNode(
   node: Pick<TinyCloudNode, "delegationManager" | "sessionDid">,
@@ -85,7 +94,8 @@ export async function lookupOwnerSpaceOnNode(
     if (!query.ok) return undefined;
     records.push(...query.data.items);
     cursor = query.data.nextCursor;
-    if (cursor === undefined) break;
+    if (cursor === undefined) return ownerSpaceFromNodeRecords(records, cid, ownerDid, node.sessionDid);
   }
-  return ownerSpaceFromNodeRecords(records, cid, ownerDid, node.sessionDid);
+  // More records than were read: a duplicate or a parent could be past the cut, so do not decide on part of them.
+  return undefined;
 }

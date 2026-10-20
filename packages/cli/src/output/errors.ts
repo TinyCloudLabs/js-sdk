@@ -24,6 +24,9 @@ export function setActiveProfileName(name: string): void {
   activeProfileName = name;
 }
 
+/** Every command that reports `GRANT_REVOKED` exits with this (documented: 5, a refused grant). */
+export const GRANT_REVOKED_EXIT_CODE = ExitCode.PERMISSION_DENIED;
+
 export class CLIError extends Error {
   readonly status?: number;
 
@@ -72,7 +75,7 @@ export function cliErrorFromService(
     (verdict === "unauthenticated" || (verdict === undefined && error.code === "AUTH_REQUIRED"));
   // The node names a revoked grant in its 401 body; say so instead of asking for a new sign-in.
   if (unauthenticated && isRevokedGrantRefusal({ ...error, meta, message })) {
-    return new CLIError("GRANT_REVOKED", REVOKED_GRANT_MESSAGE, ExitCode.AUTH_REQUIRED, { status: 401 });
+    return new CLIError("GRANT_REVOKED", REVOKED_GRANT_MESSAGE, GRANT_REVOKED_EXIT_CODE, { status: 401 });
   }
   return new CLIError(
     denied ? "PERMISSION_DENIED" : unauthenticated ? "AUTH_REQUIRED" : error.code,

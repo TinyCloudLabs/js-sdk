@@ -125,8 +125,75 @@ describe("node record lookup: refused", () => {
     expect(lookup([first, wider])).toBeUndefined();
   });
 
+  test.each([
+    ["a control character in the name", `${SPACE}\nx`],
+    ["a newline-separated second space", `${SPACE}\ntinycloud:pkh:eip155:1:${ADDRESS}:secrets`],
+    ["an inner did: prefix", `tinycloud:did:pkh:eip155:1:${ADDRESS}:applications`],
+    ["an extra segment after the name", `${SPACE}:extra`],
+    ["no name at all", `tinycloud:pkh:eip155:1:${ADDRESS}`],
+    ["an empty name", `tinycloud:pkh:eip155:1:${ADDRESS}:`],
+    ["a name over 64 characters", `${SPACE}${"x".repeat(64)}`],
+    ["a non-ASCII name", `tinycloud:pkh:eip155:1:${ADDRESS}:applicati\u043ens`],
+    ["a zero-width character in the name", `${SPACE}\u200b`],
+    ["an upper-cased scheme", `TINYCLOUD:PKH:EIP155:1:${ADDRESS}:applications`],
+    ["a name that starts with a dot", `tinycloud:pkh:eip155:1:${ADDRESS}:.applications`],
+    ["an address that is not 40 hex digits", `tinycloud:pkh:eip155:1:${ADDRESS.slice(0, -1)}:applications`],
+    ["chain id zero", `tinycloud:pkh:eip155:0:${ADDRESS}:applications`],
+  ])("a node-supplied space with %s is refused even when the owner and issuer match", (_why, space) => {
+    const odd = record({ delegatorDid: OWNER, parents: [], resources: [{ resource: `${space}/kv/x/`, actions: [], caveats: [] }] });
+    expect(lookup([odd])).toBeUndefined();
+  });
+
+  test("a CID that differs only in case, or only after a shared prefix, is a different grant", () => {
+    const issuedByOwner = { delegatorDid: OWNER, parents: [] };
+    expect(lookup([record({ ...issuedByOwner, cid: CID.toUpperCase() })])).toBeUndefined();
+    expect(lookup([record({ ...issuedByOwner, cid: `${CID}x` })])).toBeUndefined();
+    expect(lookup([record({ ...issuedByOwner, cid: CID.slice(0, 12) })])).toBeUndefined();
+    expect(lookup([record({ ...issuedByOwner, cid: `${CID.slice(0, 12)}${"z".repeat(CID.length - 12)}` })])).toBeUndefined();
+    expect(lookup([record({ ...issuedByOwner, cid: CID })])).toBe(SPACE);
+  });
+
   test("a different signed-in owner never matches", () => {
     expect(lookup([record(), ownerSessionRecord()], undefined, OTHER)).toBeUndefined();
+  });
+});
+
+describe("the chain walk is bounded", () => {
+  /** Records held by one key that each name every other one as a parent, none rooted at the owner: the worst case for a naive walk. */
+  function web(size: number): AccountDelegationRecord[] {
+    const cids = Array.from({ length: size }, (_, index) => (index === 0 ? CID : `bafkr4iaweb${index}`));
+    return cids.map((own) => record({
+      cid: own, delegatorDid: "did:key:z6MkShared", delegateDid: "did:key:z6MkShared",
+      parents: cids.filter((other) => other !== own),
+    }));
+  }
+
+  test("a web of mutual parents with no owner root is refused quickly", () => {
+    const records = web(9);
+    const started = performance.now();
+    expect(lookup(records, undefined)).toBeUndefined();
+    // Without one visit per record this is 8^8 walks (seconds); 11 crafted records took about 2 s before the fix.
+    expect(performance.now() - started).toBeLessThan(500);
+  });
+
+  test("the same web still resolves when one record in it is the owner's", () => {
+    const records = web(9);
+    records[5] = { ...records[5]!, delegatorDid: OWNER, parents: [] };
+    const started = performance.now();
+    expect(lookup(records, undefined)).toBe(SPACE);
+    expect(performance.now() - started).toBeLessThan(500);
+  });
+
+  test("a chain longer than the hop limit is refused", () => {
+    const hops = 12;
+    const chain = Array.from({ length: hops }, (_, index) => record({
+      cid: index === 0 ? CID : `bafkr4iahop${index}`,
+      delegatorDid: index === hops - 1 ? OWNER : `did:key:z6MkHop${index + 1}`,
+      delegateDid: index === 0 ? AGENT : `did:key:z6MkHop${index}`,
+      parents: index === hops - 1 ? [] : [`bafkr4iahop${index + 1}`],
+    }));
+    expect(lookup(chain)).toBeUndefined();
+    expect(lookup(chain.slice(0, 5).map((entry, index) => index === 4 ? { ...entry, delegatorDid: OWNER, parents: [] } : entry))).toBe(SPACE);
   });
 });
 
@@ -154,6 +221,14 @@ describe("lookupOwnerSpaceOnNode", () => {
     const { node, cursors } = nodeWith([[record()], [ownerSessionRecord()]]);
     expect(await lookupOwnerSpaceOnNode(node as never, CID, OWNER)).toBe(SPACE);
     expect(cursors).toEqual([undefined, "1"]);
+  });
+
+  test("a grant found before the page limit is still refused when more pages remain unread", async () => {
+    const full = { sessionDid: OWNER_SESSION, delegationManager: { query: async () => ({
+      ok: true as const,
+      data: { schemaVersion: 2 as const, items: [record({ delegatorDid: OWNER, parents: [] })], nextCursor: "more" },
+    }) } };
+    expect(await lookupOwnerSpaceOnNode(full as never, CID, OWNER)).toBeUndefined();
   });
 
   test("a refused query yields nothing instead of throwing", async () => {

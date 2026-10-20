@@ -140,7 +140,11 @@ export async function revokeDelegationOnNode(params: {
           cid, node, host: ctx.host,
         });
         if (!boundSpace) {
-          throw new CLIError("TARGET_NOT_FOUND", `Delegation "${cid}" was not found by the node or local grant sources.`, ExitCode.NOT_FOUND);
+          throw new CLIError(
+            "TARGET_NOT_FOUND",
+            `This profile cannot list the owner's delegations on the node, so it cannot look up "${cid}", and it has no local record of that grant. Use the profile that created the grant, or revoke it from the Delegations screen of the account site (https://account.tinycloud.xyz).`,
+            ExitCode.NOT_FOUND,
+          );
         }
         targetSpaceSource = boundSpace.source;
       } else {

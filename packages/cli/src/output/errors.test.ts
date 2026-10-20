@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { ProfileLockTimeoutError } from "@tinycloud/operations/state";
-import { CLIError, cliErrorFromService, handleError, setActiveProfileName, storageFullError, wrapError } from "./errors.js";
+import { CLIError, GRANT_REVOKED_EXIT_CODE, cliErrorFromService, handleError, setActiveProfileName, storageFullError, wrapError } from "./errors.js";
 import { buildSecretRequestUrl, secretSetupFor } from "@tinycloud/operations/secret-request";
 
 afterEach(() => {
@@ -52,12 +52,13 @@ describe("wrapError", () => {
     expect(cliErrorFromService(deliberate)).toBe(deliberate);
   });
 
-  test("a node 401 that names a revoked grant is GRANT_REVOKED (exit 3) and drops the node text; other 401s are unchanged", () => {
+  test("a node 401 that names a revoked grant is GRANT_REVOKED (exit 5, the same as `tc replica`) and drops the node text; other 401s are unchanged", () => {
     for (const reason of ["delegation-revoked", "delegation-ancestor-revoked"]) {
       const error = cliErrorFromService({
         code: "KV_ERROR", message: `Failed to list keys: 401 - ${reason}: bafkr4icid`, meta: { status: 401 },
       });
-      expect(error).toMatchObject({ code: "GRANT_REVOKED", exitCode: 3, status: 401 });
+      expect(error).toMatchObject({ code: "GRANT_REVOKED", exitCode: 5, status: 401 });
+      expect(error.exitCode).toBe(GRANT_REVOKED_EXIT_CODE);
       expect(error.message).toMatch(/^This grant was revoked\. Ask the owner for a new grant \(`\w+ auth request \.\.\.`\)\.$/);
       expect(error.message).not.toContain("bafkr4icid");
     }

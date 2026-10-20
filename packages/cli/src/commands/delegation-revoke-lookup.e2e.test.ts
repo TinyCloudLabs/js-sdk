@@ -110,6 +110,13 @@ describe.skipIf(!NODE_BIN)("delegation revoke from a profile with no local recor
     await writeFile(join(root, "index.md"), "# TinyHealth\n");
     expect((await cli("owner", ["kv", "put", "--space", "applications", KEY, "--file", join(root, "index.md")])).exitCode).toBe(0);
 
+    // The same owner wallet on another machine, signed in afresh: a new session key, and none of the grant records.
+    const wallet = JSON.parse(await readFile(join(home("owner"), ".tinycloud", "profiles", "owner", "profile.json"), "utf8"));
+    await mkdir(join(home("owner3"), ".tinycloud", "profiles", "owner3"), { recursive: true });
+    await writeFile(join(home("owner3"), ".tinycloud", "profiles", "owner3", "profile.json"), JSON.stringify({ ...wallet, name: "owner3", sessionDid: undefined }));
+    await cp(join(home("owner"), ".tinycloud", "config.json"), join(home("owner3"), ".tinycloud", "config.json"));
+    expect((await cli("owner3", ["auth", "login", "--method", "local"])).exitCode).toBe(0);
+
     // The same owner on another machine: the key and session, but none of the grant records.
     const source = join(home("owner"), ".tinycloud", "profiles", "owner");
     const copy = join(home("owner2"), ".tinycloud", "profiles", "owner2");
@@ -139,12 +146,21 @@ describe.skipIf(!NODE_BIN)("delegation revoke from a profile with no local recor
     expect(revoked.json()).toMatchObject({ cid, revoked: true, targetSpaceSource: "node-delegation-record", authorityScopeSource: "node-delegation-record" });
 
     const refused = await agentRead("agentA");
-    expect(refused.exitCode).toBe(3);
+    expect(refused.exitCode).toBe(5);
     expect(refused.error()).toMatchObject({
       code: "GRANT_REVOKED",
       message: expect.stringMatching(/^This grant was revoked\. Ask the owner for a new grant/),
     });
     expect(refused.stderr).not.toContain(cid);
+  });
+
+  test("a profile with the owner's wallet but a different session key walks the node's chain to the owner, and revokes", async () => {
+    const cid = await grantAgent("agentF");
+    expect((await agentRead("agentF")).exitCode).toBe(0);
+    const revoked = await cli("owner3", ["delegation", "revoke", cid, "--yes"]);
+    if (revoked.exitCode !== 0) throw new Error(`revoke exited ${revoked.exitCode}: ${revoked.stderr.slice(0, 600)}`);
+    expect(revoked.json()).toMatchObject({ cid, revoked: true, targetSpaceSource: "node-delegation-record" });
+    expect((await agentRead("agentF")).error()).toMatchObject({ code: "GRANT_REVOKED" });
   });
 
   test("a revoke that repeats is still accepted", async () => {
