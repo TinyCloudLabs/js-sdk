@@ -1,6 +1,9 @@
 import path from 'node:path';
 import { parseShell, wordLiteral, type RawCmd, type RawWord } from './shell.js';
 import { expansionRefusal } from './expansion.js';
+import { credentialTextRefusal, protectedTextRefusal, realpathBest } from './paths.js';
+import { parseArgs } from '../args.js';
+import { ULID } from '../request.js';
 import type { Verb } from './target.js';
 import {
   normApi, normChangeset, normGhPrMerge, normGhRelease, normGhWorkflowRun, normPhala, normPublish, normPush, normScript, normSecrets, normWrangler,
@@ -33,6 +36,10 @@ export interface PolicyEnv {
   git(dir: string, args: string[]): { ok: boolean; out: string };
   /** Environment variable of the guard process (the woken agent's environment). */
   getenv(name: string): string | undefined;
+  /** Absolute paths of this install and profile (courier home, guard dir, package roots) that a command must not name. */
+  literals?: string[];
+  /** Real paths of the courier entry points (`cli.js`, the `tc` entry): `node <entry> pair …` is a courier command. */
+  courierEntries?: string[];
 }
 
 const MAX_DEPTH = 6;
@@ -45,11 +52,24 @@ const SHELLS = new Set(['sh', 'bash', 'dash', 'zsh', 'ksh', 'mksh', 'ash', 'csh'
 const AGENT_CLIS = new Set(['paseo', 'claude', 'codex', 'omp', 'opencode', 'gemini', 'cursor-agent', 'amp', 'aider', 'goose']);
 /** Programs that run another program given in their arguments. */
 const WRAPPERS = new Set([
-  'env', 'command', 'builtin', 'exec', 'nohup', 'time', 'nice', 'ionice', 'sudo', 'doas', 'setsid', 'stdbuf', 'timeout',
-  'unbuffer', 'chronic', 'flock', 'su', 'runuser', 'script', 'strace', 'ltrace', 'taskset', 'chrt', 'unshare', 'nsenter',
-  'chroot', 'watch', 'parallel', 'xargs', 'find', 'trap', 'at', 'batch', 'caffeinate', 'systemd-run', 'xvfb-run',
-  'dbus-run-session', 'xdotool', 'ssh', 'nsjail', 'firejail', 'busybox', 'toybox', 'entr', 'cronic', 'cpulimit',
+  'env', 'command', 'builtin', 'exec', 'nohup', 'time', 'nice', 'ionice', 'setsid', 'stdbuf', 'timeout',
+  'unbuffer', 'chronic', 'flock', 'script', 'strace', 'ltrace', 'taskset', 'chrt',
+  'watch', 'parallel', 'xargs', 'find', 'trap', 'caffeinate', 'xvfb-run',
+  'dbus-run-session', 'xdotool', 'nsjail', 'firejail', 'busybox', 'toybox', 'entr', 'cronic', 'cpulimit',
 ]);
+/**
+ * Programs a woken agent never runs: they change user or namespace (sudo works without a password on some hosts), start
+ * a session that outlives the call (tmux, screen, cron, systemd, launchd, at), reach another machine or a loopback service
+ * such as the Paseo daemon (ssh, nc, socat), or hand out credentials.
+ */
+const NEVER_PROGS = new Set([
+  'sudo', 'doas', 'su', 'runuser', 'pkexec', 'setpriv', 'unshare', 'nsenter', 'chroot', 'machinectl', 'run0',
+  'tmux', 'screen', 'byobu', 'zellij', 'crontab', 'at', 'batch', 'systemctl', 'systemd-run', 'launchctl', 'loginctl',
+  'ssh', 'scp', 'sftp', 'rsync', 'nc', 'ncat', 'netcat', 'socat', 'telnet',
+]);
+/** Variables a woken agent may not set for a command: they redirect the profile, the home, the shell or the tools. */
+const SENSITIVE_VAR = /^(COURIER_|TC_|XDG_|GH_|GITHUB_|GIT_|CLAUDE_|ANTHROPIC_|NPM_|NODE_|LD_|DYLD_|PASEO_|CLOUDFLARE_|WRANGLER_|PHALA_|AWS_|SSH_|BASH_|HOME$|PATH$|SHELL$|ENV$|ZDOTDIR$)/;
+
 /** Wrappers that run the inner command more than once (or an unknown number of times): approvals cannot cover those. */
 const REPEATERS = new Set(['xargs', 'parallel', 'find', 'watch', 'trap', 'at', 'batch', 'entr']);
 const INTERPRETERS = new Set(['python', 'python2', 'python3', 'node', 'nodejs', 'deno', 'perl', 'ruby', 'php', 'lua', 'luajit', 'tsx', 'ts-node', 'osascript', 'bun']);
@@ -485,26 +505,35 @@ function classifyTool(prog: 'wrangler' | 'phala' | 'changeset', args: Word[], to
   if (positionals.some((a) => a.dynamic)) unresolved(sc.sh, `${prog} subcommand built at run time`);
 }
 
-function classifyTc(args: Word[], top: Word[], sc: Scope): void {
-  const first = firstPositional(args);
-  if (first?.dynamic) return unresolved(sc.sh, 'tc subcommand built at run time');
-  const lits = statics(args).map((s) => s.toLowerCase());
-  if (lits.includes('secrets') || lits.includes('secret')) return gate(sc, 'tc secrets', top, () => normSecrets(args.slice(args.findIndex((a) => !a.dynamic && /^secrets?$/i.test(a.value)) + 1)));
-  const at = lits.indexOf('courier');
-  if (at >= 0) classifyCourier(args.slice(args.findIndex((a) => !a.dynamic && a.value.toLowerCase() === 'courier') + 1), sc);
+function classifyTc(args: Word[], sc: Scope): void {
+  // `tc` reaches an owner profile (any `--profile`, `TC_HOME`, the default one): a woken agent only gets `tc courier …`.
+  const first = args[0];
+  if (!first || first.dynamic || first.value.toLowerCase() !== 'courier') {
+    return never(sc, 'tc/tinycloud is not available to a woken agent (it reaches an owner profile); use `courier …` or `tc courier …`');
+  }
+  classifyCourier(args.slice(1), sc);
 }
 
+/** Subcommands for humans only: pairing, grants, the wake budget, the watcher, the broker's credential, the guard's own settings. */
+const COURIER_HUMAN_ONLY = new Set(['pair', 'revoke', 'init', 'pause', 'resume', 'watch', 'broker', 'guard']);
+
 function classifyCourier(args: Word[], sc: Scope): void {
-  const first = firstPositional(args);
-  if (!first) return;
-  if (first.dynamic) return unresolved(sc.sh, 'courier subcommand built at run time');
-  const sub = first.value.toLowerCase();
-  if (['pair', 'revoke', 'init'].includes(sub)) never(sc, `courier ${first.value} is for humans (pairing, revoking and initialising are never done by an agent)`);
-  // The wake budget is the reply loop's breaker: an agent must not lift its own pause, nor start another watcher.
-  if (['pause', 'resume'].includes(sub)) never(sc, `courier ${first.value} is for humans (a woken agent must not pause or un-pause its own reply loop)`);
-  if (sub === 'watch') never(sc, 'courier watch is for humans (a woken agent must not start a watcher, which could wake agents without the guard)');
-  // The guard uses an approval up when it lets the command through; an agent that consumes it first only burns it.
-  if (sub === 'approval' && !args.some((a) => !a.dynamic && /^--peek(=true)?$/.test(a.value))) never(sc, 'courier approval without --peek would use the approval up before the guard can; check with --peek and run the approved command');
+  if (args.some((a) => a.dynamic)) return unresolved(sc.sh, 'courier command with words built at run time');
+  // The CLI's own parser decides what the subcommand is: `courier --peer bob pause` is `pause`, and everything after `--` is positional.
+  const parsed = parseArgs(args.map((a) => a.value));
+  const sub = parsed.positional[0]?.toLowerCase();
+  if (!sub) return;
+  if (COURIER_HUMAN_ONLY.has(sub)) {
+    return never(sc, `courier ${sub} is for humans (pairing, grants, the wake budget, the watcher, the broker credential and the guard settings are never touched by an agent)`);
+  }
+  if (sub === 'approval' && !parsed.has('peek')) {
+    return never(sc, 'courier approval without --peek would use the approval up; check with --peek, and run the approved action with `courier run-approved <requestId>`');
+  }
+  if (sub === 'run-approved') {
+    if (parsed.positional.length !== 2 || !ULID.test(parsed.positional[1]) || parsed.flags.size > 0) {
+      return unresolved(sc.sh, 'courier run-approved takes exactly one request id and no flags: `courier run-approved <requestId>`');
+    }
+  }
 }
 
 // ---------- scripts and files ----------
@@ -602,6 +631,10 @@ function classifyWrapper(prog: string, args: Word[], top: Word[], sc: Scope, io:
   const inner: Scope = REPEATERS.has(prog) ? { ...sc, inexact: true } : sc;
   const limit = Math.min(args.length, 100);
   for (let i = 0; i < limit; i++) {
+    const w = args[i];
+    if (!w.dynamic && /^[A-Za-z_][A-Za-z0-9_]*=/.test(w.value) && SENSITIVE_VAR.test(w.value.split('=')[0])) {
+      return never(sc, `setting ${w.value.split('=')[0]} is not allowed for a woken agent`);
+    }
     classify(args.slice(i), top, inner, io);
     const a = args[i];
     if (!a.dynamic && /[\s;&|`$()<>]/.test(a.value) && a.value.trim()) analyzeScript(a.value, inner, inner.inexact);
@@ -613,7 +646,6 @@ function classifyDynamicHead(argv: Word[], top: Word[], sc: Scope, io: Io): void
   const probe: Scope = { ...sc, noAlias: true };
   classifyGh(rest, top, probe, io);
   classifyGit(rest, top, probe, io);
-  classifyTc(rest, top, probe);
   classifyNpm('npm', rest, top, probe, io);
   classifyTool('wrangler', rest, top, probe);
   classifyTool('phala', rest, top, probe);
@@ -636,6 +668,8 @@ function classify(argv: Word[], top: Word[], sc: Scope, io: Io): void {
 
   if (/^secret[-_]?bridge$/.test(prog)) return never(sc, 'Secret Bridge is retired and never allowed');
   if (AGENT_CLIS.has(prog)) return never(sc, `${prog} would start another agent without the Courier guard; do the work yourself`);
+  if (NEVER_PROGS.has(prog)) return never(sc, `${prog} is not available to a woken agent (it changes user, outlives the call, or reaches another machine or a local service)`);
+  if (head.value.includes('=') && SENSITIVE_VAR.test(head.value.split('=')[0])) return never(sc, `setting ${head.value.split('=')[0]} is not allowed for a woken agent`);
   if (WRAPPERS.has(prog)) return classifyWrapper(prog, args, top, sc, io);
   if (SHELLS.has(prog)) return classifyShell(args, sc, io);
   switch (prog) {
@@ -652,7 +686,20 @@ function classify(argv: Word[], top: Word[], sc: Scope, io: Io): void {
     case 'gh': return classifyGh(args, top, sc, io);
     case 'git': return classifyGit(args, top, sc, io);
     case 'tc':
-    case 'tinycloud': return classifyTc(args, top, sc);
+    case 'tinycloud': return classifyTc(args, sc);
+    case 'export':
+    case 'declare':
+    case 'typeset':
+    case 'readonly':
+    case 'local':
+    case 'unset':
+    case 'set': {
+      for (const a of args) {
+        const name = a.value.replace(/^-+/, '').split('=')[0];
+        if (a.dynamic || (name && SENSITIVE_VAR.test(name))) return never(sc, `changing ${name || 'the environment'} is not allowed for a woken agent`);
+      }
+      return;
+    }
     case 'courier': return classifyCourier(args, sc);
     case 'wrangler': return classifyTool('wrangler', args, top, sc);
     case 'phala': return classifyTool('phala', args, top, sc);
@@ -682,6 +729,11 @@ export function analyze(command: string, env: PolicyEnv): Finding[] {
 function analyzeScript(text: string, parent: Scope, inexact: boolean): void {
   const sh = parent.sh;
   if (parent.depth + 1 > MAX_DEPTH) return unresolved(sh, 'scripts nested too deeply to inspect');
+  // Credential and guard-configuration paths are refused wherever they appear, read or write (R2, B1, B2).
+  const credential = credentialTextRefusal(text);
+  if (credential) return never(parent, `refused: ${credential}`);
+  const protectedText = protectedTextRefusal(text, sh.env.literals);
+  if (protectedText) return never(parent, `refused: ${protectedText}`);
   const parsed = parseShell(text);
   if (parsed.errors.length) unresolved(sh, `could not read the command (${parsed.errors[0]})`);
   // First rule (see expansion.ts): run-time expansion or indirection syntax next to a gated name is refused outright.
@@ -734,6 +786,7 @@ function analyzeScript(text: string, parent: Scope, inexact: boolean): void {
       otherStdin: r.redirs.some((x) => x.op === '<&' || x.op === '<>'),
       ...(stdin?.target[0] ? { stdinFile: stdin.target[0] } : {}),
     };
+    for (const a of r.assigns) if (SENSITIVE_VAR.test(a.name)) { never(cmdScope, `setting ${a.name} is not allowed for a woken agent`); }
     // Variables set for one command (`GH_REPO=x gh pr merge`) are part of what an approval has to name.
     if (r.words.length) classify(r.words, r.words, cmdScope, io);
     for (const red of r.redirs) if (red.op === '<' && !r.words.length) continue;

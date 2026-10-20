@@ -243,6 +243,8 @@ export function createWaker(
       const args = ['-p', '--output-format', 'json'];
       if (session) args.push('--resume', session);
       args.push('--settings', config.claude.settings!);
+      // No user or project MCP server loads (B3): their tools run with their own credentials, outside the guard.
+      args.push('--strict-mcp-config');
       if (config.claude.allow.length) args.push('--allowedTools', ...config.claude.allow);
       const result = await run(config.claude.bin, args, {
         cwd: config.cwd, env: courierOnlyEnv(env, config.home, config.envPass), input: prompt(request), timeoutMs: config.timeoutMs,

@@ -7,6 +7,7 @@ import { cmd, programName, setProgramName } from './program.js';
 import { cmdWatch } from './watch-cmd.js';
 import { cmdApproval } from './approval.js';
 import { cmdGuard } from './guard/command.js';
+import { cmdBroker, cmdRunApproved } from './broker.js';
 
 function usage(): string {
   const name = programName();
@@ -122,6 +123,8 @@ export async function run(argv: string[]): Promise<void> {
     case 'watch': return cmdWatch(sub);
     case 'approval': return cmdApproval(sub);
     case 'guard': return cmdGuard(sub);
+    case 'run-approved': return cmdRunApproved(sub);
+    case 'broker': return cmdBroker(sub);
     default:
       throw new CourierError('usage', `Unknown command "${command}".\n\n${usage()}`);
   }

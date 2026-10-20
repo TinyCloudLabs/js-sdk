@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { isRecord } from '../a2a.js';
-import { GUARD_HOOK_RE, guardSettings, mergeGuardSettings } from './install.js';
+import { GUARD_HOOK_RE, guardSettings, projectSettings } from './install.js';
 
 /**
  * Guard for agents the `paseo` wake adapter starts. Paseo cannot pass `claude --settings`, so the guard goes where
@@ -41,7 +41,7 @@ export function installProjectGuard(cwd: string, home: string, guard: ProjectGua
     }
   }
   if (theirs !== undefined && !isRecord(theirs)) throw new Error(`${file} is not a JSON object; refusing to overwrite it`);
-  const merged = mergeGuardSettings(guardSettings({ argv: guard.argv, home, entry: guard.entry }), theirs);
+  const merged = projectSettings(guardSettings({ argv: guard.argv, home, entry: guard.entry }), theirs);
   const next = `${JSON.stringify(merged, null, 2)}\n`;
   if (!fs.existsSync(file) || fs.readFileSync(file, 'utf8') !== next) {
     const tmp = `${file}.${process.pid}.tmp`;
@@ -49,6 +49,24 @@ export function installProjectGuard(cwd: string, home: string, guard: ProjectGua
     fs.renameSync(tmp, file);
   }
   return file;
+}
+
+/** Managed (policy) settings that switch hooks off or pin hooks to the managed set: the guard would not run. */
+const MANAGED_SETTINGS = ['/etc/claude-code/managed-settings.json', '/Library/Application Support/ClaudeCode/managed-settings.json'];
+
+export function assertNoManagedOverride(files: readonly string[] = MANAGED_SETTINGS): void {
+  for (const file of files) {
+    let text: string;
+    try { text = fs.readFileSync(file, 'utf8'); } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT' || (error as NodeJS.ErrnoException).code === 'ENOTDIR') continue;
+      throw new Error(`cannot read managed settings ${file}: ${(error as Error).message}`);
+    }
+    let managed: unknown;
+    try { managed = JSON.parse(text); } catch { throw new Error(`managed settings ${file} are not valid JSON; not waking an agent that may run without the guard`); }
+    if (isRecord(managed) && (managed.disableAllHooks === true || managed.allowManagedHooksOnly === true)) {
+      throw new Error(`managed settings ${file} turn off project hooks (disableAllHooks or allowManagedHooksOnly); the guard would not run, so no agent is woken`);
+    }
+  }
 }
 
 /**
@@ -64,7 +82,16 @@ export function verifyProjectGuard(file: string, cwd: string): void {
     throw new Error(`guard settings ${file} are unreadable: ${(error as Error).message}`);
   }
   if (!isRecord(parsed) || parsed.disableAllHooks !== false) throw new Error(`guard settings ${file} do not keep hooks enabled`);
+  // Nothing but the guard's own hook and deny rules (B1): any other hook event, `env`, `apiKeyHelper`, MCP server or allow rule can run a command.
+  const extraKeys = Object.keys(parsed).filter((key) => !['disableAllHooks', 'hooks', 'permissions'].includes(key));
+  if (extraKeys.length) throw new Error(`guard settings ${file} carry other settings (${extraKeys.join(', ')}); only the guard's hook and deny rules are allowed`);
+  const hookEvents = isRecord(parsed.hooks) ? Object.keys(parsed.hooks) : [];
+  if (hookEvents.length !== 1 || hookEvents[0] !== 'PreToolUse') throw new Error(`guard settings ${file} define other hook events (${hookEvents.join(', ')}); only the guard's PreToolUse hook is allowed`);
+  const permKeys = isRecord(parsed.permissions) ? Object.keys(parsed.permissions) : [];
+  if (permKeys.some((key) => key !== 'deny')) throw new Error(`guard settings ${file} carry permission rules other than deny rules`);
+  assertNoManagedOverride();
   const hooks = isRecord(parsed.hooks) && Array.isArray(parsed.hooks.PreToolUse) ? parsed.hooks.PreToolUse : [];
+  if (hooks.length !== 1) throw new Error(`guard settings ${file} must hold exactly one PreToolUse entry (found ${hooks.length})`);
   let command: string | undefined;
   for (const entry of hooks) {
     if (!isRecord(entry) || entry.matcher !== '*' || !Array.isArray(entry.hooks)) continue;

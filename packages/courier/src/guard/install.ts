@@ -3,6 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { programName } from '../program.js';
 import { isRecord } from '../a2a.js';
+import { installRoots } from './paths.js';
 
 /** Where this OS user keeps credentials that a woken agent can read through the Read tool (and a shell) unless HOME differs. */
 export const CREDENTIAL_FILES = ['.config/gh/**', '.npmrc', '.netrc', '.ssh/**', '.aws/**', '.config/gcloud/**', '.docker/config.json', '.config/wrangler/**', '.config/.wrangler/**', '.git-credentials'];
@@ -15,11 +16,23 @@ export const CREDENTIAL_FILES = ['.config/gh/**', '.npmrc', '.netrc', '.ssh/**',
  * owner approved, so those are decided by the hook alone.
  */
 
+/** Command prefixes a woken agent may not run directly (the broker runs the merge). */
+const GATED_DENY = [
+  'gh pr merge', 'gh workflow run', 'gh release create', 'gh release edit', 'gh release delete', 'gh release upload', 'gh run rerun', 'gh secret', 'gh repo sync',
+  'npm publish', 'npm unpublish', 'npm dist-tag', 'pnpm publish', 'bun publish', 'yarn npm publish', 'changeset publish', 'npx changeset publish', 'bunx changeset publish',
+  'wrangler deploy', 'wrangler publish', 'wrangler delete', 'wrangler rollback', 'wrangler secret', 'npx wrangler deploy', 'phala deploy', 'phala cvms',
+  'git push origin main', 'git push origin master', 'git push --force', 'git push -f', 'git push --mirror', 'git push --all', 'git push --tags',
+].map((prefix) => `Bash(${prefix}:*)`);
+
+/** Programs that change user, outlive the call or reach credentials. */
+const PRIVILEGE_DENY = ['sudo', 'su', 'doas', 'pkexec', 'tmux', 'screen', 'crontab', 'systemctl', 'ssh', 'gh auth', 'git credential', 'secret-tool'].map((prefix) => `Bash(${prefix}:*)`);
+
 const shq = (s: string) => `'${s.replace(/'/g, `'\\''`)}'`;
 
 /** The command Claude Code runs for the hook. `|| exit 2` turns any crash into a blocking error (exit 1 would fail open). */
-export function hookCommand(argv: string[], home: string): string {
-  return `COURIER_HOME=${shq(home)} ${argv.map(shq).join(' ')} || exit 2`;
+export function hookCommand(argv: string[], home: string, realHome: string = os.homedir()): string {
+  // COURIER_REAL_HOME: the hook runs with the agent's clean HOME, and still has to protect the owner's real one.
+  return `COURIER_HOME=${shq(home)} COURIER_REAL_HOME=${shq(realHome)} ${argv.map(shq).join(' ')} || exit 2`;
 }
 
 /** Everything the guard keeps for a profile lives here; no tool call may write it. */
@@ -28,9 +41,9 @@ export const guardSettingsFile = (home: string) => path.join(guardDir(home), 'se
 /** `TC_HOME` for woken agents: an empty directory, so the owner's `tc` profile is not found. */
 export const noOwnerProfileDir = (home: string) => path.join(guardDir(home), 'no-owner-profile');
 
-/** Paths no tool call may write: the courier profile (keys, grant, state), the guard files and the hook program itself. */
+/** Paths no tool call may write: the courier profile (keys, grant, state), the guard files, the hook program and what it imports. */
 export function protectedPaths(home: string, entry: string): string[] {
-  return [path.resolve(home), path.dirname(path.resolve(entry))];
+  return [path.resolve(home), ...installRoots(entry)];
 }
 
 export interface GuardSettings {
@@ -54,6 +67,9 @@ export function guardSettings(options: { argv: string[]; home: string; entry: st
   for (const rel of CREDENTIAL_FILES) deny.push(`Read(${rulePath(path.join(os.homedir(), rel))})`);
   for (const prog of programs) for (const sub of ['pair', 'revoke', 'init', 'pause', 'resume', 'watch']) deny.push(`Bash(${prog} ${sub}:*)`);
   deny.push('Bash(secret-bridge:*)', 'Bash(secret_bridge:*)', 'mcp__paseo', 'mcp__paseo__*');
+  // Gated actions are refused by the hook; these rules make them hold even if the hook does not start. Merges go through
+  // `courier run-approved`, which is not on this list. Rules use only the prefix forms Claude Code documents.
+  deny.push(...GATED_DENY, ...PRIVILEGE_DENY);
   return {
     disableAllHooks: false,
     hooks: { PreToolUse: [{ matcher: '*', hooks: [{ type: 'command', command: hookCommand(argv, home), timeout: 60 }] }] },
@@ -84,6 +100,19 @@ export function mergeGuardSettings(ours: GuardSettings, theirs: unknown): Record
     hooks: { ...theirHooks, PreToolUse: [...ours.hooks.PreToolUse, ...theirPre] },
     permissions: { ...theirPerms, deny: [...new Set([...ours.permissions.deny, ...theirDeny])] },
   };
+}
+
+/**
+ * The settings the guard installs in a woken agent's project directory. The file is the guard's: only the guard's hook
+ * (as the one PreToolUse entry, with no other hook event) and the union of deny rules survive. Everything else in it
+ * (other hooks, `env`, `apiKeyHelper`, `statusLine`, MCP servers, allow rules) is replaced, because any of it can run a
+ * command or widen what the agent may do (B1).
+ */
+export function projectSettings(ours: GuardSettings, theirs: unknown): Record<string, unknown> {
+  if (theirs !== undefined && !isRecord(theirs)) throw new Error('settings are not a JSON object');
+  const perms = isRecord(theirs) && isRecord(theirs.permissions) ? theirs.permissions : {};
+  const theirDeny = Array.isArray(perms.deny) ? perms.deny.filter((rule): rule is string => typeof rule === 'string') : [];
+  return { disableAllHooks: false, hooks: ours.hooks, permissions: { deny: [...new Set([...ours.permissions.deny, ...theirDeny])] } };
 }
 
 /**

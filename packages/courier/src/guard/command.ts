@@ -1,14 +1,15 @@
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import type { ParsedArgs } from '../args.js';
 import { CourierError } from '../errors.js';
 import { cmd } from '../program.js';
-import { loadProfile, profileDir } from '../profile.js';
-import { courierNode } from '../node.js';
+import { profileDir } from '../profile.js';
 import { writeOut } from '../inbox.js';
 import { decide, hookOutput, type GuardDeps } from './hook.js';
-import { guardSettings, protectedPaths, writeGuardSettings } from './install.js';
+import { guardSettings, writeGuardSettings } from './install.js';
+import { installRoots, protectedSet, realpathBest } from './paths.js';
 import type { FileRead, PolicyEnv } from './policy.js';
 
 const MAX_FILE = 1_000_000;
@@ -16,9 +17,16 @@ const MAX_STDIN = 4_000_000;
 /** The whole decision, network included, must finish well inside the hook timeout (60 s) or the call is refused. */
 const DEADLINE_MS = 25_000;
 
-export function realEnv(cwd: string): PolicyEnv {
+/** Where this install lives: what the hook refuses to let a command name or an edit tool write. */
+export function installLiterals(home: string, entry: string): string[] {
+  return [realpathBest(home), ...installRoots(entry)].filter((p) => p.length >= 8);
+}
+
+export function realEnv(cwd: string, home = profileDir(), entry = process.argv[1] ?? ''): PolicyEnv {
   return {
     cwd,
+    literals: installLiterals(home, entry),
+    courierEntries: [realpathBest(entry), realpathBest(path.join(path.dirname(entry), 'cli.js'))],
     readFile(file): FileRead {
       try {
         const st = fs.statSync(file);
@@ -86,11 +94,11 @@ export async function cmdGuard(args: ParsedArgs): Promise<void> {
     const input: unknown = JSON.parse(readStdin());
     const home = profileDir();
     const entry = process.argv[1] ?? '';
+    // The hook runs with the agent's environment: HOME is the agent's clean one, so the owner's real home comes from the settings.
+    const realHome = process.env.COURIER_REAL_HOME || os.homedir();
     const deps: GuardDeps = {
-      env: realEnv(process.cwd()),
-      openKv: async () => (await courierNode(loadProfile())).kv,
-      now: () => Date.now(),
-      protectedPaths: protectedPaths(home, entry),
+      env: realEnv(process.cwd(), home, entry),
+      protectedSet: { ...protectedSet(home, entry, { agentHome: os.homedir() }), homes: [...new Set([realHome, os.homedir()])] },
     };
     const timeout = new Promise<never>((_, reject) => setTimeout(() => reject(new Error('timed out')), DEADLINE_MS).unref());
     const decision = await Promise.race([decide(input, deps), timeout]);
