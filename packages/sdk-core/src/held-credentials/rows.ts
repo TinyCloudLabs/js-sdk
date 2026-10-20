@@ -39,7 +39,7 @@ export const EMAIL_HELD_ROW: ProfileRow = {
   validateDisclosed(claims) {
     const { email, emailDomain } = claims;
     if ((typeof email === "string" && /[^\x00-\x7F]/.test(email)) || (typeof emailDomain === "string" && /[^\x00-\x7F]/.test(emailDomain))) {
-      refuse("bad-disclosure", "non-ASCII email is refused until G14 (Unicode/IDNA) is decided");
+      refuse("bad-disclosure", "email must be ASCII");
     }
     if (email !== undefined) {
       if (typeof email === "string" && (email.indexOf("@") < 1 || email.indexOf("@") === email.length - 1)) {
