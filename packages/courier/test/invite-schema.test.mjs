@@ -64,6 +64,7 @@ const blob = () => ({
   permissions: { put: 'PUT-DELEGATION', read: 'READ-DELEGATION', hooks: 'HOOKS-DELEGATION' },
   artifactA: artifactA(),
   expiresAt: LATER,
+  expectEmail: 'invitee@example.com',
 });
 
 const hello = () => ({ v: 1, inviteId: INVITE_ID, artifactB: artifactB(), claimedLabel: 'Hunter Agent', sentAt: ISSUED });
@@ -118,6 +119,9 @@ const BLOB_REJECTS = [
   ['expiresAt already past', (d) => { d.expiresAt = '2026-10-20T00:00:00.000Z'; return d; }, /invite is expired/],
   ['control character in spaceId', (d) => { d.spaceId = `${d.spaceId}\u0007`; return d; }, /spaceId has an invalid format|control character/],
   ['over 128 KiB file', (d) => { d.pad = 'x'.repeat(128 * 1024); return d; }, /invite file is over 131072 bytes/],
+  ['expectEmail missing', (d) => { delete d.expectEmail; return d; }, /missing "expectEmail"/],
+  ['expectEmail mixed case', (d) => { d.expectEmail = 'Invitee@Example.com'; return d; }, /expectEmail must be lowercase/],
+  ['expectEmail malformed', (d) => { d.expectEmail = 'not-an-address'; return d; }, /expectEmail has an invalid format/],
 ];
 
 test('invite blob: golden object parses and keeps the exact fields', () => {
@@ -168,12 +172,19 @@ const HELLO_REJECTS = [
   ['v is 0', (d) => { d.v = 0; return d; }, /v must be 1/],
   ['control character in delegation', (d) => { d.artifactB.delegation = 'DELEG\u0000ATION'; return d; }, /control character/],
   ['over 16 KiB', (d) => { d.artifactB.delegation = 'D'.repeat(16 * 1024); return d; }, /is over/],
+  ['credential empty', (d) => { d.credential = ''; return d; }, /credential must be a non-empty string/],
+  ['credential not a string', (d) => { d.credential = 7; return d; }, /credential must be a non-empty string/],
 ];
 
 test('hello: golden object parses', () => {
   const parsed = parseHello(JSON.stringify(hello()));
   assert.equal(parsed.claimedLabel, 'Hunter Agent');
   assert.equal(parsed.artifactB.step, 'B');
+});
+
+test('hello: optional credential round-trips; absent credential stays absent', () => {
+  assert.equal(parseHello(JSON.stringify({ ...hello(), credential: 'PROOF' })).credential, 'PROOF');
+  assert.equal(Object.hasOwn(parseHello(JSON.stringify(hello())), 'credential'), false);
 });
 
 for (const [name, mutate, pattern] of HELLO_REJECTS) {

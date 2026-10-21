@@ -53,6 +53,7 @@ export interface InviteBlob {
   permissions: Permissions;
   artifactA: PairArtifact;
   expiresAt: string;
+  expectEmail: string;
 }
 
 export interface Hello {
@@ -60,6 +61,7 @@ export interface Hello {
   inviteId: string;
   artifactB: PairArtifact;
   claimedLabel: string;
+  credential?: string;
   sentAt: string;
 }
 
@@ -78,7 +80,7 @@ export function inviteFolder(inviteId: string): string {
 
 export function parseInviteBlob(text: string, now: number = Date.now()): InviteBlob {
   const b = parseStrict(text, INVITE_BLOB_MAX_BYTES);
-  exactKeys(b, 'invite', ['v', 'inviteId', 'host', 'spaceId', 'folder', 'helloKey', 'outPrefix', 'oneTimeKey', 'permissions', 'artifactA', 'expiresAt']);
+  exactKeys(b, 'invite', ['v', 'inviteId', 'host', 'spaceId', 'folder', 'helloKey', 'outPrefix', 'oneTimeKey', 'permissions', 'artifactA', 'expiresAt', 'expectEmail']);
   if (b.v !== 1) fail('invite: v must be 1');
   const inviteId = str(b.inviteId, 'inviteId', 26, INVITE_ID);
   const folder = inviteFolder(inviteId);
@@ -89,6 +91,7 @@ export function parseInviteBlob(text: string, now: number = Date.now()): InviteB
   const spaceId = str(b.spaceId, 'spaceId', 256);
   if (artifactA.spaceId !== spaceId) fail('spaceId does not match artifactA');
   const expiresAt = isoUtc(b.expiresAt, 'expiresAt');
+  const expectEmail = emailAddress(b.expectEmail, 'expectEmail');
   if (Date.parse(expiresAt) <= now) fail('invite is expired');
   return {
     v: 1,
@@ -102,6 +105,7 @@ export function parseInviteBlob(text: string, now: number = Date.now()): InviteB
     permissions: parsePermissions(b.permissions),
     artifactA,
     expiresAt,
+    expectEmail,
   };
 }
 
@@ -118,7 +122,7 @@ function parsePermissions(value: unknown): Permissions {
 
 export function parseHello(text: string): Hello {
   const h = parseStrict(text, HELLO_MAX_BYTES);
-  exactKeys(h, 'hello', ['v', 'inviteId', 'artifactB', 'claimedLabel', 'sentAt']);
+  exactKeys(h, 'hello', ['v', 'inviteId', 'artifactB', 'claimedLabel', 'sentAt'], ['credential']);
   if (h.v !== 1) fail('hello: v must be 1');
   return {
     v: 1,
@@ -126,6 +130,7 @@ export function parseHello(text: string): Hello {
     artifactB: checkArtifact(h.artifactB, 'B', 'artifactB'),
     claimedLabel: str(h.claimedLabel, 'claimedLabel', 64, CLAIMED_LABEL),
     sentAt: isoUtc(h.sentAt, 'sentAt'),
+    ...(Object.hasOwn(h, 'credential') ? { credential: str(h.credential, 'credential', HELLO_MAX_BYTES) } : {}),
   };
 }
 
@@ -142,6 +147,13 @@ export function parseWelcome(text: string): Welcome {
     ...(tier === 'rejected' ? {} : { artifactC: checkArtifact(w.artifactC, 'C', 'artifactC') }),
     sentAt: isoUtc(w.sentAt, 'sentAt'),
   };
+}
+
+/** Lowercase email address, at most 254 bytes. Format check only: ownership is proven by the credential, not here. */
+function emailAddress(value: unknown, where: string): string {
+  const s = str(value, where, 254, /^[^\s@]+@[^\s@]+\.[^\s@]+$/);
+  if (s !== s.toLowerCase()) fail(`${where} must be lowercase`);
+  return s;
 }
 
 /** True when both DIDs are `did:pkh:eip155:<chain>:0x<address>`, on the same chain, with the same address (case-insensitive). */
