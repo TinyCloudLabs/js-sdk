@@ -1,10 +1,11 @@
 import { randomBytes } from "node:crypto";
 import { spawn, type ChildProcess } from "node:child_process";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, setDefaultTimeout, test } from "bun:test";
+import { profilePath, withTinyCloudStateRoot } from "@tinycloud/operations/state";
 
 const NODE_BIN = process.env.TC_REPLICATION_E2E_NODE_BIN;
 const cliEntry = join(import.meta.dir, "../index.ts");
@@ -29,7 +30,7 @@ interface RevokeOutput {
 // Covers a local-owner profile: its sender share history is keyed by the local private key, which survives logout and
 // re-login, so a Share published before either can still be revoked by ID. The OpenKey-recorded history path is covered
 // by adapters.test.ts and auth-logout-history-guard.integration.test.ts.
-describe.skipIf(!NODE_BIN)("share revoke by ID across re-login and logout, against a real node", () => {
+describe.skipIf(!NODE_BIN)("share revoke by ID and history recover, against a real node", () => {
   let root: string;
   let host: string;
   let home: string;
@@ -122,6 +123,26 @@ describe.skipIf(!NODE_BIN)("share revoke by ID across re-login and logout, again
     expect((await cli(["auth", "logout"])).exitCode).toBe(0);
     expect((await cli(["auth", "login", "--method", "local"])).exitCode).toBe(0);
 
+    const revoked = await cli(["share", "revoke", shareId, "--json"]);
+    expect(revoked.exitCode).toBe(0);
+    expect(revoked.json<RevokeOutput>().result.state).toBe("revoked");
+  });
+
+  test("share history recover moves an unreadable local-owner history aside, and a new history starts", async () => {
+    const cacheDir = await withTinyCloudStateRoot(home, async () => join(profilePath("owner"), "cache"));
+    const historyFile = join(cacheDir, "share-history-v2.json");
+    await writeFile(historyFile, "not-json-history");
+
+    const recovered = await cli(["share", "history", "recover", "--json"]);
+    expect(recovered.exitCode).toBe(0);
+
+    const names = await readdir(cacheDir);
+    expect(names).not.toContain("share-history-v2.json");
+    const moved = names.filter((name) => name.startsWith("share-history-v2.json.unreadable-"));
+    expect(moved).toHaveLength(1);
+    expect(await readFile(join(cacheDir, moved[0]!), "utf8")).toBe("not-json-history");
+
+    const shareId = await publish("after-recover.txt");
     const revoked = await cli(["share", "revoke", shareId, "--json"]);
     expect(revoked.exitCode).toBe(0);
     expect(revoked.json<RevokeOutput>().result.state).toBe("revoked");
