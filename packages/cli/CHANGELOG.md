@@ -1,5 +1,11 @@
 # @tinycloud/cli
 
+## 1.3.0-beta.52
+
+### Patch Changes
+
+- aad5dd6: Clarify in the agent skill that write access to an app includes its tables and that structural changes are confirmed with the owner first. Details: TC-1422
+
 ## 1.3.0-beta.51
 
 ### Minor Changes
