@@ -1,5 +1,13 @@
 # @tinycloud/cli
 
+## 1.3.0-beta.46
+
+### Patch Changes
+
+- 5bbc05c: `tinycloud auth login` keeps its browser callback open for the full five-minute sign-in window, so the browser can finish a slow local-network permission prompt. Interactive sign-in also prints a one-time how-to line on stderr after 15 seconds while it waits. JSON output is unchanged.
+
+  Details: TC-1675
+
 ## 1.3.0-beta.45
 
 ### Patch Changes
