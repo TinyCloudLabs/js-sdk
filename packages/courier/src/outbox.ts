@@ -117,7 +117,7 @@ function ownerUid(): number {
 /** Error codes that may be logged: OS errno values and this package's own CourierError codes. Anything else logs as `unknown`. */
 const LOGGABLE_CODES = new Set([
   'EACCES', 'EEXIST', 'EIO', 'EISDIR', 'EMFILE', 'ENOENT', 'ENOSPC', 'ENOTDIR', 'EPERM', 'EPIPE', 'EROFS', 'ECONNRESET',
-  'bad-marker', 'bad-peers', 'socket-group-denied', 'unknown-group', 'unsafe-dir', 'unsafe-pipe', 'unsafe-socket-dir',
+  'bad-marker', 'bad-peers', 'insecure-peers', 'socket-group-denied', 'unknown-group', 'unsafe-dir', 'unsafe-pipe', 'unsafe-socket-dir',
   'unsafe-socket-group', 'unsupported',
 ]);
 

@@ -61,7 +61,9 @@ export function loadPeers(path: string, ownerUid: number | undefined = process.g
   try {
     const stat = fs.fstatSync(fd);
     if (!stat.isFile()) throw new CourierError('insecure-peers', `${path} is not a regular file.`);
-    if (ownerUid !== undefined && stat.uid !== ownerUid) throw new CourierError('insecure-peers', `${path} is not owned by the courier user.`);
+    if (ownerUid !== undefined && stat.uid !== ownerUid) {
+      throw new CourierError('insecure-peers', `${path} is not owned by the peers owner (uid ${ownerUid}); pass --peers-owner or chown the file.`);
+    }
     if ((stat.mode & 0o022) !== 0) {
       throw new CourierError('insecure-peers', `${path} is writable by group or others; restrict it to the owner (chmod 600).`);
     }
@@ -103,7 +105,7 @@ function uidOfName(name: string, passwdPath: string): number {
   for (const line of text.split('\n')) {
     if (line === '' || line.startsWith('#') || line.startsWith('+') || line.startsWith('-')) continue;
     const fields = line.split(':');
-    if (fields.length !== 7 || !/^(0|[1-9]\d*)$/.test(fields[2]!)) {
+    if (fields.length !== 7 || !/^(0|[1-9]\d*)$/.test(fields[2]!) || Number(fields[2]) > UID_MAX) {
       throw new CourierError('usage', `${passwdPath} has a malformed line; fix it or pass a numeric uid.`);
     }
     if (fields[0] === name) uids.add(Number(fields[2]));

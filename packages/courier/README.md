@@ -742,8 +742,12 @@ file invalid: startup refuses to run, and a running cycle keeps its last good ma
 logs `intake-error`.
 
 `--peers-owner <name|uid>` (or `COURIER_PEERS_OWNER`) names the account that must own `peers.json` for `courier intake`
-and `courier outbox serve`. A user name resolves through the passwd database and must map to exactly one uid. The default
-is the running user. The flag changes only the owner check; the mode, symlink, and regular-file checks still apply.
+and `courier outbox serve`. A user name is looked up in `/etc/passwd` and must match exactly one uid. Accounts that exist
+only in NSS (LDAP, for example) are not in that file: pass the numeric uid. A numeric uid is used as given. Without the
+flag the default is the running user on POSIX systems; where the process reports no numeric uid, startup refuses with
+`unsupported` unless the flag is given. The flag changes only the owner check; the mode, symlink, and regular-file checks
+still apply. Keep the directory that contains `peers.json` owned by the same account and not writable by the service user:
+a writable directory lets that user replace the file.
 
 ## Authority
 
