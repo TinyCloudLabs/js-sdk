@@ -171,6 +171,33 @@ describe("TinyCloudWeb notifications.throwErrors", () => {
     expect(() => advance(10 * WINDOW_DEBOUNCE_MS)).not.toThrow();
   });
 
+  test("ui.toasts:false throws nothing, matching the old popups: false", () => {
+    const { handler } = create({ ui: { toasts: false }, notifications: { throwErrors: true } });
+    handler.error("network.timeout", "raw timeout");
+    expect(() => advance(10 * WINDOW_DEBOUNCE_MS)).not.toThrow();
+  });
+
+  test("ui.button:false with ui.toasts:false throws nothing", () => {
+    const { handler } = create({
+      ui: { button: false, toasts: false },
+      notifications: { throwErrors: true },
+    });
+    handler.error("network.timeout", "raw timeout");
+    expect(() => advance(10 * WINDOW_DEBOUNCE_MS)).not.toThrow();
+  });
+
+  test("legacy popups: false throws nothing", () => {
+    const { handler } = create({ notifications: { popups: false, throwErrors: true } });
+    handler.error("network.timeout", "raw timeout");
+    expect(() => advance(10 * WINDOW_DEBOUNCE_MS)).not.toThrow();
+  });
+
+  test("ui.button:false alone keeps throws on", () => {
+    const { handler } = create({ ui: { button: false }, notifications: { throwErrors: true } });
+    handler.error("network.timeout", "raw timeout");
+    expect(() => advance(WINDOW_DEBOUNCE_MS)).toThrow("raw timeout");
+  });
+
   test("a framed page drops the toast but still throws, matching the old code", () => {
     // Old code had no frame guard: popups alone gated the listener and the throw.
     const real = g.window;

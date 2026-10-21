@@ -3,6 +3,7 @@ import { JSDOM } from "jsdom";
 
 import type { TinyCloudWeb as TinyCloudWebType } from "../../src/modules/tcw";
 import { REGISTRY_KEY } from "../../src/ui/host";
+import { toastStore } from "../../src/ui/parts/toasts";
 
 type Config = NonNullable<ConstructorParameters<typeof TinyCloudWebType>[0]>;
 type Loose = Record<PropertyKey, unknown>;
@@ -58,10 +59,20 @@ afterAll(() => {
   }
 });
 
+// The toast store is a module singleton; a toast left by one test would render into the next host.
+function clearToasts(): void {
+  let current: readonly { id: string }[] = [];
+  toastStore.subscribe((toasts) => {
+    current = toasts;
+  })();
+  for (const toast of current) toastStore.dismiss(toast.id);
+}
+
 beforeEach(() => {
   delete g[REGISTRY_KEY];
   page.document.body.innerHTML = "";
   page.localStorage.clear();
+  clearToasts();
   warnings = [];
   console.warn = (...args: unknown[]) => {
     warnings.push(args.map(String).join(" "));
@@ -102,10 +113,35 @@ function layerPosition(): string | null {
 
 // Constructor tests share one module instance, so they assert behaviour only, never warnings.
 describe("legacy notifications.popups", () => {
-  test("popups: false behaves exactly like ui: false (no host, no toasts)", () => {
+  test("popups: false keeps the host and no button, and the UI stays available for prompts", () => {
     const legacy = create({ notifications: { popups: false } });
-    expect(hostEl()).toBeNull();
+    expect(hostEl()).not.toBeNull();
+    expect(shadow().querySelector("button[aria-controls]")).toBeNull();
+    expect((legacy.ui as { available: boolean }).available).toBe(true);
+  });
+
+  test("popups: false shows no toast for an error event and reports the toast as not shown", () => {
+    const legacy = create({ notifications: { popups: false } });
     expect(showError(legacy)).toBe(false);
+    const handler = legacy.notificationHandler as { error?: (c: string, m: string) => void } | undefined;
+    if (typeof handler?.error !== "function") throw new Error("no notification handler on the instance");
+    const realError = console.error;
+    console.error = () => {};
+    try {
+      handler.error("network.timeout", "raw timeout");
+    } finally {
+      console.error = realError;
+    }
+    expect(shadow().querySelector(".toast")).toBeNull();
+  });
+
+  test("without popups the same error event does show a toast", () => {
+    const tc = create({});
+    (tc.notificationHandler as { error(c: string, m: string): void }).error("network.timeout", "raw timeout");
+    expect(shadow().querySelector(".toast")).not.toBeNull();
+  });
+
+  test("ui: false still renders nothing", () => {
     create({ ui: false });
     expect(hostEl()).toBeNull();
   });
@@ -148,12 +184,21 @@ describe("legacy notifications.duration and maxVisible", () => {
 });
 
 describe("legacy key mapping (pure)", () => {
-  test("popups: false maps to ui: false and never mutates the caller's object", async () => {
+  test("popups: false maps to button and toasts off, and never mutates the caller's object", async () => {
     const apply = await freshMapper();
     const input = { notifications: { popups: false } };
     const out = apply(input);
-    expect(out.ui).toBe(false);
+    expect(out.ui).toEqual({ button: false, toasts: false });
     expect(input).toEqual({ notifications: { popups: false } });
+  });
+
+  test("popups: false keeps a legacy position on the mapped object", async () => {
+    const apply = await freshMapper();
+    expect(apply({ notifications: { popups: false, position: "top-left" } }).ui).toEqual({
+      button: false,
+      toasts: false,
+      position: "top-left",
+    });
   });
 
   test("popups: true and absent keys leave the config's ui untouched", async () => {
@@ -199,6 +244,6 @@ describe("legacy key mapping (pure)", () => {
     console.warn = () => {
       throw new Error("console unavailable");
     };
-    expect(apply({ notifications: { popups: false } }).ui).toBe(false);
+    expect(apply({ notifications: { popups: false } }).ui).toEqual({ button: false, toasts: false });
   });
 });

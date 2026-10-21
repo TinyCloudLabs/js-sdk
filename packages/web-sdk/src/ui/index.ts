@@ -104,8 +104,7 @@ export function registerUiClient(options: UiClientOptions): UiClientHandle {
     },
     toast(request) {
       if (target === undefined) return false;
-      runtime.toast(request, id);
-      return true;
+      return runtime.toast(request, id);
     },
     promptScope,
   };

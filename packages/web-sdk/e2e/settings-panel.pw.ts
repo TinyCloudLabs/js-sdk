@@ -7,7 +7,7 @@ const BUNDLE = readFileSync(resolve("e2e/.build/ui.bundle.js"), "utf8");
 const ORIGIN = "http://tinycloud-ui.test";
 
 interface HarnessWindow {
-  __tc: { mount(): boolean; toast(kind: string): string; dismiss(id: string): void };
+  __tc: { mount(ui?: unknown): boolean; toast(kind: string): string; dismiss(id: string): void; rejectWithTinyCloudError(): boolean };
   tc?: { ui: { open(): void } };
 }
 
@@ -17,7 +17,7 @@ const PANEL_BACKGROUND = {
   dark: "rgb(21, 21, 23)",
 } as const;
 
-async function mountHarness(page: Page, scheme: "light" | "dark") {
+async function mountHarness(page: Page, scheme: "light" | "dark", ui?: Record<string, unknown>) {
   await page.emulateMedia({ colorScheme: scheme });
   await page.route(`${ORIGIN}/**`, (route) => {
     const path = new URL(route.request().url()).pathname;
@@ -31,7 +31,7 @@ async function mountHarness(page: Page, scheme: "light" | "dark") {
     });
   });
   await page.goto(`${ORIGIN}/`);
-  await page.evaluate(() => (window as unknown as HarnessWindow).__tc.mount());
+  await page.evaluate((option) => (window as unknown as HarnessWindow).__tc.mount(option), ui);
 }
 
 for (const scheme of ["light", "dark"] as const) {
@@ -166,6 +166,110 @@ for (const scheme of ["light", "dark"] as const) {
       });
       expect(computed.stripe).toBe(STRIPE[scheme][kind]);
       expect(contrast(computed.stripe, computed.surface)).toBeGreaterThanOrEqual(3);
+    });
+  }
+}
+
+// The button-off test also proves the mount option reached the host: the launcher is absent and the host renders.
+for (const scheme of ["light", "dark"] as const) {
+  test(`${scheme}: ui.toasts:false shows no toast for a TinyCloud error, and the host stays`, async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await mountHarness(page, scheme, { button: false, toasts: false });
+    await page.evaluate(() => (window as unknown as HarnessWindow).__tc.rejectWithTinyCloudError());
+
+    await expect(page.locator("[data-tinycloud-ui]")).toHaveCount(1);
+    await expect(page.getByRole("button", { name: "TinyCloud settings", exact: true })).toHaveCount(0);
+    await expect(page.locator(".toast")).toHaveCount(0);
+  });
+
+  test(`${scheme}: the same TinyCloud error shows a toast when ui.toasts is not false`, async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await mountHarness(page, scheme);
+    await page.evaluate(() => (window as unknown as HarnessWindow).__tc.rejectWithTinyCloudError());
+
+    await expect(page.locator(".toast")).toHaveCount(1);
+  });
+}
+
+// Toasts stack above the open panel and above the launcher once it closes. Three toasts is the worst stack.
+interface Box {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+const VIEWPORTS = {
+  desktop: { width: 1280, height: 800 },
+  phone: { width: 390, height: 844 },
+} as const;
+
+function overlaps(a: Box, b: Box): boolean {
+  return a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height;
+}
+
+function insideViewport(box: Box, size: { width: number; height: number }): boolean {
+  return box.x >= 0 && box.y >= 0 && box.x + box.width <= size.width && box.y + box.height <= size.height;
+}
+
+async function toastBoxes(page: Page): Promise<Box[]> {
+  const count = await page.locator(".toast").count();
+  const boxes: Box[] = [];
+  for (let i = 0; i < count; i++) {
+    const box = await page.locator(".toast").nth(i).boundingBox();
+    if (box) boxes.push(box);
+  }
+  return boxes;
+}
+
+async function openPanelViolations(page: Page, size: { width: number; height: number }): Promise<string[]> {
+  const panel = await page.locator("#tinycloud-ui-panel").boundingBox();
+  if (!panel) return ["panel not rendered"];
+  const problems: string[] = [];
+  if (!insideViewport(panel, size)) problems.push("panel outside viewport");
+  const toasts = await toastBoxes(page);
+  if (toasts.length !== 3) problems.push(`expected 3 toasts, found ${toasts.length}`);
+  toasts.forEach((toast, i) => {
+    if (!insideViewport(toast, size)) problems.push(`toast ${i} outside viewport`);
+    if (overlaps(toast, panel)) problems.push(`toast ${i} overlaps panel`);
+  });
+  return problems;
+}
+
+async function closedLauncherViolations(page: Page, size: { width: number; height: number }): Promise<string[]> {
+  const launcher = await page.getByRole("button", { name: "TinyCloud settings", exact: true }).boundingBox();
+  if (!launcher) return ["launcher not rendered"];
+  const problems: string[] = [];
+  const toasts = await toastBoxes(page);
+  if (toasts.length !== 3) problems.push(`expected 3 toasts, found ${toasts.length}`);
+  toasts.forEach((toast, i) => {
+    if (!insideViewport(toast, size)) problems.push(`toast ${i} outside viewport`);
+    if (overlaps(toast, launcher)) problems.push(`toast ${i} overlaps launcher`);
+  });
+  return problems;
+}
+
+for (const scheme of ["light", "dark"] as const) {
+  for (const [name, size] of Object.entries(VIEWPORTS)) {
+    test(`${scheme} ${name}: toasts stay above the open panel and above the launcher after close, inside the viewport`, async ({ page }) => {
+      await page.setViewportSize(size);
+      await mountHarness(page, scheme);
+      const launcher = page.getByRole("button", { name: "TinyCloud settings", exact: true });
+      await launcher.click();
+      await expect(page.locator("#tinycloud-ui-panel")).toBeVisible();
+      await page.evaluate(() => {
+        const harness = window as unknown as HarnessWindow;
+        harness.__tc.toast("info");
+        harness.__tc.toast("success");
+        harness.__tc.toast("warning");
+      });
+      await expect(page.locator(".toast")).toHaveCount(3);
+
+      await expect.poll(() => openPanelViolations(page, size)).toEqual([]);
+
+      await launcher.click();
+      await expect(page.locator("#tinycloud-ui-panel")).toBeHidden();
+      await expect.poll(() => closedLauncherViolations(page, size)).toEqual([]);
     });
   }
 }

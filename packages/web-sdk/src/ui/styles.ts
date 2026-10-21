@@ -16,7 +16,7 @@ export const HOST_CSS = `
 .button:focus-visible{outline:2px solid #111827;outline-offset:2px;box-shadow:0 0 0 6px #fafafa,0 1px 3px rgba(0,0,0,.16)}
 .action:focus-visible,.switch:focus-visible{outline:2px solid #111827;outline-offset:2px;box-shadow:0 0 0 6px #fafafa}
 .dot{position:absolute;top:6px;right:6px;width:8px;height:8px;border-radius:50%;background:#4b5563;border:2px solid #fff}
-.panel{position:fixed;bottom:calc(var(--b) + 52px);box-sizing:border-box;width:min(360px,calc(100vw - 24px));max-width:min(360px,calc(100vw - 24px));max-height:calc(100dvh - 96px);overflow:auto;padding:12px;border:1px solid #d1d5db;border-radius:12px;background:#fff;box-shadow:0 8px 24px rgba(0,0,0,.18);pointer-events:auto}
+.panel{position:fixed;bottom:calc(var(--b) + 52px);box-sizing:border-box;width:min(360px,calc(100vw - 24px));max-width:min(360px,calc(100vw - 24px));max-height:calc(100dvh - 96px - var(--tinycloud-ui-toast-room,0px));overflow:auto;padding:12px;border:1px solid #d1d5db;border-radius:12px;background:#fff;box-shadow:0 8px 24px rgba(0,0,0,.18);pointer-events:auto}
 .layer[data-position="bottom-right"] .button,.layer[data-position="bottom-right"] .panel{right:var(--tinycloud-ui-offset-inline,12px)}
 .layer[data-position="bottom-left"] .button,.layer[data-position="bottom-left"] .panel{left:var(--tinycloud-ui-offset-inline,12px)}
 .layer[data-position="bottom-center"] .button,.layer[data-position="bottom-center"] .panel{left:50%;transform:translateX(-50%)}
