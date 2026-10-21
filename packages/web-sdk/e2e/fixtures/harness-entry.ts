@@ -84,4 +84,9 @@ w.__tc = {
   dismiss(id: string) {
     toastStore.dismiss(id);
   },
+  // Sets the sync state the panel renders from, so a spec can reach states the stub facade never produces.
+  setSync(next: SyncState) {
+    emit(next);
+    return true;
+  },
 };
