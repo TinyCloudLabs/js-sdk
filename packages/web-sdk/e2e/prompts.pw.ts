@@ -505,14 +505,28 @@ for (const scheme of ["light", "dark"] as const) {
     await expect.poll(() => pageErrors).toEqual(["probe onDismiss"]);
   });
 
-  // Legacy popups:false maps to ui.button/toasts off; the prompts must still render in the panel.
+  // Legacy `notifications.popups: false` maps to ui.button/toasts off. The host stays mounted,
+  // the launcher is absent, the prompts still render, and the deprecation warns exactly once.
+  const LEGACY_POPUPS_WARN = "[tinycloud] notifications.popups is deprecated, use ui (code: legacy-notification-key)";
+  async function mountLegacyPopupsOff(page: Page, scheme: "light" | "dark") {
+    const warnings: string[] = [];
+    page.on("console", (message) => {
+      if (message.type() === "warning") warnings.push(message.text());
+    });
+    await mountHarness(page, scheme, false, { notifications: { popups: false } });
+    await expect(page.locator("[data-tinycloud-ui]")).toHaveCount(1);
+    await expect(page.locator("button.button")).toHaveCount(0);
+    return warnings;
+  }
+
   test(`${scheme}: legacy popups:false still shows the space prompt and Escape resolves false`, async ({ page }) => {
-    await mountHarness(page, scheme, false, { popups: false });
+    const warnings = await mountLegacyPopupsOff(page, scheme);
     await openSpaceCreation(page);
 
     const spaceModal = page.locator(SPACE);
     await expect(spaceModal).toHaveCount(1);
     await expect(spaceModal.locator(".modal-content")).toBeVisible();
+    await expect.poll(() => warnings.filter((text) => text === LEGACY_POPUPS_WARN)).toHaveLength(1);
 
     await page.keyboard.press("Escape");
     await expect(spaceModal).toHaveCount(0);
@@ -520,12 +534,13 @@ for (const scheme of ["light", "dark"] as const) {
   });
 
   test(`${scheme}: legacy popups:false still shows the permission prompt and Escape resolves false`, async ({ page }) => {
-    await mountHarness(page, scheme, false, { popups: false });
+    const warnings = await mountLegacyPopupsOff(page, scheme);
     await openPermission(page);
 
     const permissionModal = page.locator(PERMISSION);
     await expect(permissionModal).toHaveCount(1);
     await expect(permissionModal.locator(".modal-content")).toBeVisible();
+    await expect.poll(() => warnings.filter((text) => text === LEGACY_POPUPS_WARN)).toHaveLength(1);
 
     await page.keyboard.press("Escape");
     await expect(permissionModal).toHaveCount(0);
