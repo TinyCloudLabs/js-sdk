@@ -95,12 +95,7 @@ export const syncSection: PanelSection = {
       toggle.setAttribute("aria-checked", String(checked));
       toggle.disabled = locked || busy;
 
-      const wordKey =
-        effective === "off" || effective === "on"
-          ? state.requested
-            ? "sync.state.on"
-            : "sync.state.off"
-          : WORD[effective];
+      const wordKey = WORD[effective];
       word.hidden = wordKey === undefined;
       word.textContent = wordKey === undefined ? "" : ctx.text(wordKey);
 

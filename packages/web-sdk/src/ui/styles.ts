@@ -3,6 +3,11 @@
  * adoptedStyleSheets. Neutral palette only. Offsets are CSS custom properties
  * so an app can reserve space without an API.
  */
+// Dark scheme: prefers-color-scheme only, no data-tc-theme attribute, following
+// the brand guide §4.1 "Dark candidate" column (PROPOSED). Values: surface #151517,
+// ink #fafafa, dim #a1a1aa, hairline #69696b, control-edge #71717a, focus ink #fafafa.
+// Copied as literals because the shadow root cannot import tokens.css. Light values
+// are unchanged.
 export const HOST_CSS = `
 [hidden]{display:none!important}
 .layer{--b:calc(env(safe-area-inset-bottom,0px) + var(--tinycloud-ui-offset-bottom,12px));position:fixed;inset:0;pointer-events:none;font:14px/1.4 system-ui,-apple-system,"Segoe UI",sans-serif;color:#111827}
@@ -30,15 +35,10 @@ export const HOST_CSS = `
 .switch[aria-checked="true"] .knob{background:#111827}
 .switch[aria-checked="true"] .knob::after{transform:translateX(16px)}
 .busy,.note,.error{margin:6px 0 0;font-size:12px;color:#4b5563}
+.note{text-wrap:pretty}
 .error{color:#111827}
 .confirm{margin-top:8px}
 .confirm .actions{display:flex;gap:8px;margin:8px 0}
-/* Dark candidate, app family (docs/brand/guide.md §4.1, "Dark candidate" column, PROPOSED).
-   The guide makes dark opt-in via data-tc-theme; this block follows the ruling instead:
-   prefers-color-scheme only, no attribute. Values: surface #151517 (bg/surface row),
-   ink #fafafa (ink row), dim #a1a1aa (dim row), hairline #69696b (hairline row),
-   control-edge #71717a (control-edge row), focus ink #fafafa (focus row). Copied as literals
-   because the shadow root cannot import tokens.css. Light values above are unchanged. */
 @media (prefers-color-scheme: dark){
 .layer{color:#fafafa}
 .button{border-color:#71717a;background:#151517;color:#fafafa}
