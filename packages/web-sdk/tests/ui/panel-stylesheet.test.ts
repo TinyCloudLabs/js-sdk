@@ -22,9 +22,7 @@ const KINDS: readonly ToastKind[] = ["info", "success", "warning", "error"];
 
 let page: Window;
 const saved = new Map<string, unknown>();
-const attached: ShadowRoot[] = [];
 const handles: UiClientHandle[] = [];
-let restoreAttachShadow: () => void = () => undefined;
 
 beforeAll(() => {
   for (const name of GLOBAL_NAMES) saved.set(name, g[name]);
@@ -37,23 +35,9 @@ beforeAll(() => {
   g.Element = page.Element;
   g.Event = page.Event;
   g.KeyboardEvent = page.KeyboardEvent;
-
-  // The host's shadow root is closed. Record each root the host attaches so the
-  // test can read the stylesheet and the rendered nodes.
-  const proto = page.Element.prototype as unknown as { attachShadow(init: ShadowRootInit): ShadowRoot };
-  const original = proto.attachShadow;
-  proto.attachShadow = function attachShadow(this: unknown, init: ShadowRootInit): ShadowRoot {
-    const root = original.call(this, init);
-    attached.push(root);
-    return root;
-  };
-  restoreAttachShadow = () => {
-    proto.attachShadow = original;
-  };
 });
 
 afterAll(() => {
-  restoreAttachShadow();
   for (const name of GLOBAL_NAMES) {
     if (saved.get(name) === undefined) delete g[name];
     else g[name] = saved.get(name);
@@ -62,7 +46,6 @@ afterAll(() => {
 
 beforeEach(() => {
   delete g[REGISTRY_KEY];
-  attached.length = 0;
   page.document.body.innerHTML = "";
   page.localStorage.clear();
 });
@@ -81,8 +64,8 @@ function storedToasts(): readonly ToastView[] {
 }
 
 function shadow(): ShadowRoot {
-  const root = attached.at(-1);
-  if (!root) throw new Error("no shadow root was created");
+  const root = document.querySelector<HTMLElement>("[data-tinycloud-ui]")?.shadowRoot;
+  if (!root) throw new Error("no open shadow root on the TinyCloud host");
   return root;
 }
 
@@ -357,3 +340,12 @@ for (const scheme of ["light", "dark"] as const) {
     }
   });
 }
+
+describe("host shadow root", () => {
+  test("the host root is open and reachable from document", () => {
+    openPanel();
+    const host = document.querySelector<HTMLElement>("[data-tinycloud-ui]");
+    expect(host?.shadowRoot).not.toBeNull();
+    expect(host?.shadowRoot?.querySelector("#tinycloud-ui-panel")).not.toBeNull();
+  });
+});

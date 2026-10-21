@@ -1,5 +1,5 @@
 /**
- * Stylesheet for the closed shadow root. One inline string, no fonts, no
+ * Stylesheet for the open shadow root. One inline string, no fonts, no
  * adoptedStyleSheets. Neutral palette only. Offsets are CSS custom properties
  * so an app can reserve space without an API.
  */

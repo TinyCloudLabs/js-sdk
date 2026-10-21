@@ -19,8 +19,6 @@ const GLOBAL_NAMES = ["window", "document", "location", "localStorage", "HTMLEle
 
 let page: Window;
 const saved = new Map<string, unknown>();
-const attached: ShadowRoot[] = [];
-let restoreAttachShadow: () => void = () => undefined;
 
 // jsdom makes window.top and window.location unforgeable. Framed and
 // opaque-origin tests override them through this view of the global window.
@@ -47,25 +45,9 @@ beforeAll(() => {
   g.Element = page.Element;
   g.Event = page.Event;
   g.KeyboardEvent = page.KeyboardEvent;
-
-  // Record every shadow root the host creates. The root is closed, so the
-  // tests reach into it through this recording only.
-  const proto = page.Element.prototype as unknown as {
-    attachShadow(init: ShadowRootInit): ShadowRoot;
-  };
-  const original = proto.attachShadow;
-  proto.attachShadow = function attachShadow(this: unknown, init: ShadowRootInit): ShadowRoot {
-    const root = original.call(this, init);
-    attached.push(root);
-    return root;
-  };
-  restoreAttachShadow = () => {
-    proto.attachShadow = original;
-  };
 });
 
 afterAll(() => {
-  restoreAttachShadow();
   for (const name of GLOBAL_NAMES) {
     if (saved.get(name) === undefined) delete g[name];
     else g[name] = saved.get(name);
@@ -74,7 +56,6 @@ afterAll(() => {
 
 beforeEach(() => {
   delete g[REGISTRY_KEY];
-  attached.length = 0;
   page.document.body.innerHTML = "";
   page.localStorage.clear();
 });
@@ -100,8 +81,8 @@ function hostState(): string | null {
 }
 
 function shadow(): ShadowRoot {
-  const root = attached.at(-1);
-  if (!root) throw new Error("no shadow root was created");
+  const root = hostEl()?.shadowRoot;
+  if (!root) throw new Error("no open shadow root on the TinyCloud host");
   return root;
 }
 
@@ -124,13 +105,13 @@ function overrideWindowProp(name: "top" | "location", value: unknown): void {
 }
 
 describe("host mount", () => {
-  test("mounts one closed host at z-index 999990", () => {
+  test("mounts one open host at z-index 999990", () => {
     mountClient();
     expect(hostEl()).not.toBeNull();
-    expect(hostEl()?.shadowRoot).toBeNull();
+    expect(hostEl()?.shadowRoot).not.toBeNull();
     expect(hostEl()?.style.zIndex).toBe("999990");
     expect(hostState()).toBe("closed");
-    expect(attached.length).toBe(1);
+    expect(page.document.querySelectorAll("[data-tinycloud-ui]").length).toBe(1);
   });
 
   test("shadow tree contains no dialog or popover markup", () => {
@@ -243,7 +224,6 @@ describe("headless modes", () => {
   test("ui:false creates no host and every method is a silent no-op", () => {
     const ui = mountClient(false);
     expect(hostEl()).toBeNull();
-    expect(attached.length).toBe(0);
     ui.api.open();
     ui.api.toggle();
     ui.api.close();
@@ -369,11 +349,13 @@ describe("sync status on the button while the panel is closed", () => {
     expect(dotEl()?.hasAttribute("data-status")).toBe(false);
   });
 
-  test("unregistering the last client hides the dot", () => {
+  test("unregistering the last client removes the host and its dot", () => {
     const sync = syncStub({ requested: false, effective: "pending" });
     const ui = mountWithSync(sync.facade);
+    const dot = dotEl();
     ui.unregister();
-    expect(dotEl()?.hidden).toBe(true);
+    expect(hostEl()).toBeNull();
+    expect(dot?.isConnected).toBe(false);
   });
 });
 

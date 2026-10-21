@@ -273,7 +273,7 @@ the historical local measurements cannot set ledger ceilings.
 
 ## Floating button and panel
 
-`TinyCloudWeb` adds a floating button and a panel to the page. The panel is rendered in a closed shadow root, so host page styles do not reach it. It is not rendered inside an iframe or an opaque origin. In those cases, and with `ui: false`, nothing is added to the page.
+`TinyCloudWeb` adds a floating button and a panel to the page. The panel is rendered in an open shadow root, so host page styles do not reach it. It is not rendered inside an iframe or an opaque origin. In those cases, and with `ui: false`, nothing is added to the page.
 
 ```typescript
 const tc = new TinyCloudWeb({

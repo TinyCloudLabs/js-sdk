@@ -6,15 +6,6 @@ import { expect, test, type Page } from "@playwright/test";
 const BUNDLE = readFileSync(resolve("e2e/.build/ui.bundle.js"), "utf8");
 const ORIGIN = "http://tinycloud-ui.test";
 
-// The panel's shadow root is closed in production. Open it so Playwright can
-// reach the panel's controls; the rendered output is unchanged.
-const OPEN_SHADOW_ROOTS = `(() => {
-  const attach = Element.prototype.attachShadow;
-  Element.prototype.attachShadow = function (init) {
-    return attach.call(this, { ...init, mode: "open" });
-  };
-})();`;
-
 interface HarnessWindow {
   __tc: { mount(): boolean };
   tc?: { ui: { open(): void } };
@@ -28,7 +19,6 @@ const PANEL_BACKGROUND = {
 
 async function mountHarness(page: Page, scheme: "light" | "dark") {
   await page.emulateMedia({ colorScheme: scheme });
-  await page.addInitScript(OPEN_SHADOW_ROOTS);
   await page.route(`${ORIGIN}/**`, (route) => {
     const path = new URL(route.request().url()).pathname;
     if (path === "/ui.bundle.js") {
