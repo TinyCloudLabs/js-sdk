@@ -88,3 +88,51 @@ export function tierOf(peers: Peers, peerId: string): Tier {
 export function policyOf(peers: Peers, peerId: string): PeerPolicy {
   return Object.hasOwn(peers, peerId) ? peers[peerId]! : { ...ABSENT };
 }
+
+const UID_MAX = 4294967294;
+const PASSWD = '/etc/passwd';
+
+function uidOfName(name: string, passwdPath: string): number {
+  let text: string;
+  try {
+    text = fs.readFileSync(passwdPath, 'utf8');
+  } catch {
+    throw new CourierError('usage', `cannot read ${passwdPath} to resolve "${name}"; pass a numeric uid instead.`);
+  }
+  const uids = new Set<number>();
+  for (const line of text.split('\n')) {
+    if (line === '' || line.startsWith('#') || line.startsWith('+') || line.startsWith('-')) continue;
+    const fields = line.split(':');
+    if (fields.length !== 7 || !/^(0|[1-9]\d*)$/.test(fields[2]!)) {
+      throw new CourierError('usage', `${passwdPath} has a malformed line; fix it or pass a numeric uid.`);
+    }
+    if (fields[0] === name) uids.add(Number(fields[2]));
+  }
+  if (uids.size === 0) throw new CourierError('usage', `no account named "${name}"; pass a numeric uid instead.`);
+  if (uids.size > 1) throw new CourierError('usage', `"${name}" maps to more than one uid in ${passwdPath}; pass a numeric uid.`);
+  return [...uids][0]!;
+}
+
+/**
+ * Resolves the account that must own peers.json. The value is a numeric uid or a user name from the passwd database,
+ * taken from the flag, else the env, else the running user. Anything that does not resolve to exactly one uid is
+ * refused, so a typo never selects a different owner.
+ */
+export function resolvePeersOwner(flag: string | undefined, env: string | undefined, passwdPath: string = PASSWD): number {
+  const value = flag ?? env;
+  if (value === undefined) {
+    const uid = process.getuid?.();
+    if (uid === undefined) throw new CourierError('unsupported', 'peers ownership needs a POSIX platform.');
+    return uid;
+  }
+  if (value === 'true') throw new CourierError('usage', '--peers-owner needs a user name or numeric uid.');
+  if (/^(0|[1-9]\d*)$/.test(value)) {
+    const uid = Number(value);
+    if (uid > UID_MAX) throw new CourierError('usage', `peers owner uid ${value} is out of range.`);
+    return uid;
+  }
+  if (!/^[A-Za-z_][A-Za-z0-9._-]{0,31}$/.test(value)) {
+    throw new CourierError('usage', `peers owner "${value}" is neither a user name nor a numeric uid.`);
+  }
+  return uidOfName(value, passwdPath);
+}

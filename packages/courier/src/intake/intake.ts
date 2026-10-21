@@ -12,7 +12,7 @@ import { getJson, listAll } from '../store.js';
 import { hiddenTextProblem, textVerdict, type TextVerdict } from '../text.js';
 import { jsonLineLog, type WatchLog } from '../wake.js';
 import { FLAG_TABLE, type Flag } from './flags.js';
-import { policyOf, loadPeers, type Peers } from './peers.js';
+import { policyOf, loadPeers, resolvePeersOwner, type Peers } from './peers.js';
 import { acquireLock, ensureRealDir, readState, writeNew, writeState, type IntakeState, type PeerState, type Receipt } from './queue.js';
 
 const STATE_FILE = 'intake-state.json';
@@ -584,6 +584,7 @@ export async function cmdIntake(args: ParsedArgs): Promise<void> {
   const overflowRoot = args.get('overflow-dir') ?? path.join(base, 'overflow');
   const stateDir = args.get('state-dir') ?? path.join(base, 'state');
   const peersFile = args.get('peers-file') ?? path.join(base, 'peers.json');
+  const peersOwner = resolvePeersOwner(args.get('peers-owner'), process.env.COURIER_PEERS_OWNER);
   const once = args.has('once');
   const intervalMs = intervalSeconds(args.get('interval')) * 1000;
   const log = jsonLineLog();
@@ -601,14 +602,14 @@ export async function cmdIntake(args: ParsedArgs): Promise<void> {
       return;
     }
     const state = readState(path.join(stateDir, STATE_FILE));
-    let peers = loadPeers(peersFile);
+    let peers = loadPeers(peersFile, peersOwner);
     log('intake-start', { once, intervalSeconds: intervalMs / 1000 });
     for (;;) {
       try {
         const profile = loadProfile();
         const node = await courierNode(profile);
         try {
-          peers = loadPeers(peersFile);
+          peers = loadPeers(peersFile, peersOwner);
         } catch (error) {
           log('intake-error', { code: errInfo(error).code ?? 'bad-peers' });
         }

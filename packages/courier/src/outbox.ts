@@ -14,7 +14,7 @@ import { cmd } from './program.js';
 import { courierNode } from './node.js';
 import { getPeer, loadProfile, profileDir } from './profile.js';
 import type { Profile } from './profile.js';
-import { loadPeers, policyOf } from './intake/peers.js';
+import { loadPeers, policyOf, resolvePeersOwner } from './intake/peers.js';
 import type { Peers } from './intake/peers.js';
 import { acquireLock, ensureRealDir, fsyncDir, writeNew, writeReplace } from './intake/queue.js';
 import { textVerdict } from './text.js';
@@ -73,6 +73,8 @@ export interface OutboxOptions {
   pipe: string;
   socketGroup: string;
   peersFile: string;
+  /** Account that must own peers.json. Undefined means the running user. */
+  peersOwnerUid?: number;
   once?: boolean;
   dryRun?: boolean;
   groups?: (name: string) => number;
@@ -94,7 +96,7 @@ class Refusal extends Error {
 }
 
 const ADD_USAGE = `Usage: ${cmd('outbox add <peer> (--thread <id> | --new <subject>) [--text t | --file f | stdin] [--outbox-dir d]')}`;
-const SERVE_USAGE = `Usage: ${cmd('outbox serve --pipe <socket> [--outbox-dir d] [--socket-group g] [--peers-file f] [--sent-dir d] [--once] [--dry-run]')}`;
+const SERVE_USAGE = `Usage: ${cmd('outbox serve --pipe <socket> [--outbox-dir d] [--socket-group g] [--peers-file f] [--peers-owner u] [--sent-dir d] [--once] [--dry-run]')}`;
 const OUTBOX_USAGE = `Usage: ${cmd('outbox add <peer> ... | outbox serve ...')}`;
 
 function lstatOrUndefined(file: string): fs.Stats | undefined {
@@ -447,7 +449,7 @@ export async function startOutbox(opts: OutboxOptions): Promise<OutboxHandle> {
   /** Loads peers.json for this send. An invalid file keeps the last good policy; the peer id is never logged. */
   function currentPeers(): Peers | undefined {
     try {
-      peersNow = loadPeers(opts.peersFile);
+      peersNow = loadPeers(opts.peersFile, opts.peersOwnerUid);
     } catch (error) {
       limited('outbox.peers-invalid', { code: safeCode(error) });
     }
@@ -611,6 +613,7 @@ async function cmdOutboxServe(args: ParsedArgs): Promise<void> {
     pipe: configValue(args, 'pipe', 'COURIER_OUTBOX_PIPE', SERVE_USAGE),
     socketGroup: configValue(args, 'socket-group', 'COURIER_OUTBOX_SOCKET_GROUP', SERVE_USAGE, DEFAULT_SOCKET_GROUP),
     peersFile: args.get('peers-file') ?? path.join(base, 'intake', 'peers.json'),
+    peersOwnerUid: resolvePeersOwner(args.get('peers-owner'), process.env.COURIER_PEERS_OWNER),
     sentDir: args.get('sent-dir') ?? path.join(base, 'outbox-sent'),
     once: args.has('once'),
     dryRun: args.has('dry-run'),

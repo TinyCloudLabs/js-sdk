@@ -741,6 +741,10 @@ default of 100. A value outside that range, or any other invalid entry, makes th
 file invalid: startup refuses to run, and a running cycle keeps its last good map and
 logs `intake-error`.
 
+`--peers-owner <name|uid>` (or `COURIER_PEERS_OWNER`) names the account that must own `peers.json` for `courier intake`
+and `courier outbox serve`. A user name resolves through the passwd database and must map to exactly one uid. The default
+is the running user. The flag changes only the owner check; the mode, symlink, and regular-file checks still apply.
+
 ## Authority
 
 Courier accepts only an OpenKey grant whose signed authority exactly equals
