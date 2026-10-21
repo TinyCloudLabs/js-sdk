@@ -421,6 +421,11 @@ export class TinyCloudPermissionRequestModal extends HTMLElement {
     this.options.onDismiss?.();
     this.hide();
   }
+
+  /** True until the prompt starts closing (approve, decline, dismiss, or teardown). */
+  get isOpen(): boolean {
+    return this.isVisible;
+  }
 }
 
 interface CapabilityDescription {

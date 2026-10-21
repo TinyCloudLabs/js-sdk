@@ -421,6 +421,11 @@ export class TinyCloudSpaceModal extends HTMLElement {
     this.options.onDismiss?.();
     this.hide();
   }
+
+  /** True until the prompt starts closing (confirm, dismiss, or teardown). */
+  get isOpen(): boolean {
+    return this.isVisible;
+  }
 }
 
 if (!customElements.get('tinycloud-space-modal')) {

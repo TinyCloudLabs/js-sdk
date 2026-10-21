@@ -93,13 +93,16 @@ export class ModalManager {
     this.activeModal = null;
   }
 
+  /**
+   * Settles the open prompt, if any, as dismissed, so its promise never stays
+   * pending. The resolved value matches the prompt's close control. Its caller's
+   * onDismiss runs once; a prompt that already settled is not dismissed again.
+   */
   public closeActiveModal(): void {
-    if (this.activeModal) {
-      this.releaseActivePrompt?.();
-      this.releaseActivePrompt = null;
-      this.activeModal.remove();
-      this.activeModal = null;
-    }
+    const modal = this.activeModal;
+    if (!modal) return;
+    if (modal.isOpen) modal.dismiss();
+    this.clearActive(modal);
   }
 
   public hasActiveModal(): boolean {
