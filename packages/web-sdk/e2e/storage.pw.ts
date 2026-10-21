@@ -251,6 +251,18 @@ for (const scheme of SCHEMES) {
 }
 
 for (const scheme of SCHEMES) {
+  test(`${scheme}: a full episode names the state once in the open panel`, async ({ page }) => {
+    await mountHarness(page, scheme, KNOWN);
+    await openPanel(page);
+    await expect(usageLine(page)).toBeVisible();
+
+    await setEpisode(page, true);
+    await expect(panel(page).getByText(STRINGS["status.storage_full"], { exact: true }).filter({ visible: true })).toHaveCount(1);
+    await expect(section(page).getByText(STRINGS["storage.state.full"], { exact: true }).filter({ visible: true })).toHaveCount(0);
+  });
+}
+
+for (const scheme of SCHEMES) {
   for (const [viewportName, viewport] of Object.entries(VIEWPORTS)) {
     test(`${scheme} ${viewportName}: Manage storage is at least 44px tall`, async ({ page }) => {
       await page.setViewportSize(viewport);

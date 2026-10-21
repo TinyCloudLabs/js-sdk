@@ -121,7 +121,9 @@ export const storageSection: PanelSection = {
       const episodeOn = client?.storageEpisode?.current() !== undefined;
       const model = storageModel(view, episodeOn);
 
-      word.hidden = model.wordKey === undefined;
+      // The header already shows the same storage_full word; the panel keeps the usage line and note.
+      const headerShowsWord = model.wordKey === "storage.state.full" && ctx.topStatus() === "storage_full";
+      word.hidden = model.wordKey === undefined || headerShowsWord;
       word.textContent = model.wordKey === undefined ? "" : ctx.text(model.wordKey);
 
       usage.hidden = model.usage === undefined;
