@@ -30,6 +30,7 @@ function actionButton(label: string, onClick: () => void): HTMLButtonElement {
 export function createPanel(options: PanelOptions): PanelView {
   const el = document.createElement("div");
   el.id = PANEL_ID;
+  el.className = "panel";
   el.setAttribute("role", "dialog");
   el.setAttribute("aria-modal", "false");
   el.setAttribute("aria-label", text("button.aria"));

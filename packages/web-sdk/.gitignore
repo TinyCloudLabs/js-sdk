@@ -9,6 +9,7 @@ temp
 
 # testing
 /coverage
+/e2e/.build
 
 # production
 /build
