@@ -35,6 +35,7 @@ export const HOST_CSS = `
 .switch[aria-checked="true"] .knob{background:#111827}
 .switch[aria-checked="true"] .knob::after{transform:translateX(16px)}
 .busy,.note,.error{margin:6px 0 0;font-size:12px;color:#4b5563}
+.note{text-wrap:pretty}
 .error{color:#111827}
 .confirm{margin-top:8px}
 .confirm .actions{display:flex;gap:8px;margin:8px 0}
