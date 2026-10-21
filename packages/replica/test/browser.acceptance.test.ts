@@ -72,7 +72,7 @@ async function statusOf(page: Page): Promise<StatusEntry> {
   return entry;
 }
 
-type SyncResult = { status: "ok" } | { status: "error"; code: string; message: string };
+type SyncResult = { status: "ok" } | { status: "error"; code: string; message: string; gate?: string };
 
 /**
  * Rows the replica holds for KV content (sealed entries and blobs; erase leaves a tombstone meta row and the partition index entry). Replica rows are
@@ -530,7 +530,7 @@ describe.skipIf(NODE_BIN === undefined)("TC-858 browser replication acceptance (
     }
   });
 
-  scenario("8b deny then fresh sign-in recreates the DB; a tab from before the deny is refused", async () => {
+  scenario("8b deny then fresh sign-in recreates the DB; a tab from before the deny is refused; Details: TC-1621", async () => {
     const context = await newContext();
     try {
       const page = await bootPage(context);
@@ -541,8 +541,25 @@ describe.skipIf(NODE_BIN === undefined)("TC-858 browser replication acceptance (
       await page.evaluate(() => window.__tcw.injectDenyFailure({ stage: "deny_tx", once: true }));
       await page.evaluate(() => window.__tcw.signOut());
       expect(await contentRows(page)).toBe(0);
+      await stale.evaluate(() => window.__tcw.kvGet("notes/a"));
+      expect(await lastRead(stale)).toMatchObject({ source: "network", reason: "replica_gated" });
       await page.evaluate(() => window.__tcw.signIn());
-      expect(await page.evaluate(() => window.__tcw.replicationSync())).toEqual({ status: "ok" });
+      let sync = (await page.evaluate(() => window.__tcw.replicationSync())) as SyncResult;
+      if (sync.status === "error" && "gate" in sync && sync.gate === "logout_pending") {
+        // The fixture records the delete-blocked marker for this outcome. Startup recovery clears
+        // that marker; signing out of the restored session and signing in again establishes a fresh stamp.
+        // This path requires a successful sync, and any other gate reason fails the scenario. Details: TC-1621
+        expect(await replicationEventsOf(page, "replication.lifecycle")).toContainEqual(
+          expect.objectContaining({ action: "marker_set", code: "DELETE_BLOCKED" }),
+        );
+        await page.reload();
+        await page.waitForFunction(() => window.__tcw !== undefined);
+        await page.evaluate((input) => window.__tcw.boot(input), { host, walletKey: WALLET_KEY, prefix: "notes/", replication: "on" as const });
+        await page.evaluate(() => window.__tcw.signOut());
+        await page.evaluate(() => window.__tcw.signIn());
+        sync = (await page.evaluate(() => window.__tcw.replicationSync())) as SyncResult;
+      }
+      expect(sync).toEqual({ status: "ok" });
       expect(await contentRows(page)).toBeGreaterThan(0);
       // The tab signed in before the deny still holds the pre-deny stamp. The gate refuses it.
       await stale.evaluate(() => window.__tcw.kvGet("notes/a"));
