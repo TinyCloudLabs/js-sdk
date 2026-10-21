@@ -272,8 +272,9 @@ describe.skipIf(!NODE_BIN)("agent OpenKey grant, against a real node", () => {
     expect(result.callbackStatus).toBeLessThan(300);
     expect(result.exitCode).toBe(0);
 
-    const grant = JSON.parse(result.stdout) as { expiry: string };
+    const grant = JSON.parse(result.stdout) as { expiry: string; prompted: boolean };
     expect(result.expiryParam).toBe(`${SEVEN_DAYS_S}s`);
+    expect(grant.prompted).toBe(true);
     expect(hoursUntil(grant.expiry)).toBeGreaterThan(7 * 24 - 0.1);
     expect(hoursUntil(grant.expiry)).toBeLessThanOrEqual(7 * 24);
 
@@ -291,8 +292,9 @@ describe.skipIf(!NODE_BIN)("agent OpenKey grant, against a real node", () => {
     const req = await agentRequest("agent6d", ["--cap", "tinycloud.kv:applications:demo/:get,list", "--expiry", "6d"]);
     const result = await grantWithOpenKey(req, (permissions) => ({ permissions, signer: ownerSigner }));
     expect(result.exitCode).toBe(0);
-    const grant = JSON.parse(result.stdout) as { expiry: string };
+    const grant = JSON.parse(result.stdout) as { expiry: string; prompted: boolean };
     expect(result.expiryParam).toBe(`${6 * 86400}s`);
+    expect(grant.prompted).toBe(true);
     expect(hoursUntil(grant.expiry)).toBeGreaterThan(6 * 24 - 0.1);
     expect(hoursUntil(grant.expiry)).toBeLessThanOrEqual(6 * 24);
   });

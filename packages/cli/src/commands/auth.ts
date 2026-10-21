@@ -1368,9 +1368,13 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
           // Sign from the approval's own session, so the grant is bounded by that approval
           // and never takes the owner's stored authority.
           const approvalNode = await nodeFromOpenKeyApproval(ctx.host, approval.session);
-          grant = await grantAuthRequest(approvalNode, resolvedRequest, {
-            expiry: approval.delegation.expiry.getTime() - Date.now(),
-          });
+          grant = {
+            ...(await grantAuthRequest(approvalNode, resolvedRequest, {
+              expiry: approval.delegation.expiry.getTime() - Date.now(),
+            })),
+            // The owner approved this grant on the OpenKey approval screen, so it was prompted.
+            prompted: true,
+          };
           process.stderr.write(`Grant lasts until ${grant.expiry}, the lifetime of the OpenKey approval.\n`);
         } else {
           await ensureDelegationAuthority({
