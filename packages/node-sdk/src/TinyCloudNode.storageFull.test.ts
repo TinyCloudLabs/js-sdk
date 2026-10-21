@@ -145,7 +145,7 @@ function fullAccount(options: { grantsSpaceInfo?: boolean; grantsOtherSpaceInfo?
         account: host.full
           ? { usedBytes: 389777359, limitBytes: 104857600, plan: "free" }
           : { usedBytes: 40_000_000, limitBytes: 104857600, plan: "free" },
-        manageUrl: "https://account.tinycloud.xyz/billing",
+        manageUrl: "https://account.tinycloud.xyz/storage",
       }), { status: 200 });
     }
     if (action === "tinycloud.kv/put") {
@@ -237,7 +237,7 @@ describe("TC-628: a full account", () => {
         account: { usedBytes: 389777359, limitBytes: 104857600, plan: "free" },
         plan: "free",
         state: "full",
-        manageUrl: "https://account.tinycloud.xyz/billing",
+        manageUrl: "https://account.tinycloud.xyz/storage",
       },
     });
     // Still full: no second banner.

@@ -105,10 +105,10 @@ describe("tc share command contract", () => {
       exitCode: 10,
       message: "TinyCloud storage is full; nothing was written.",
     });
-    expect(quota.metadata?.hint).toBe("371.7 MiB used of 100 MiB (free plan). Reading still works.\nFree up space or upgrade: https://account.tinycloud.xyz/billing");
+    expect(quota.metadata?.hint).toBe("371.7 MiB used of 100 MiB (free plan). Reading still works.\nFree up space or upgrade: https://account.tinycloud.xyz/storage");
     const tooLarge = shareCliError(new SharePublishAuthorityError({ kind: "storage-full", code: "STORAGE_LIMIT_REACHED" }));
     expect(tooLarge).toMatchObject({ code: "STORAGE_LIMIT_REACHED", exitCode: 10 });
-    expect(tooLarge.metadata?.hint).toBe("Reading still works.\nFree up space or upgrade: https://account.tinycloud.xyz/billing");
+    expect(tooLarge.metadata?.hint).toBe("Reading still works.\nFree up space or upgrade: https://account.tinycloud.xyz/storage");
     // A storage rejection from another share write (history, delegation) is the same error.
     expect(shareCliError({ code: "STORAGE_QUOTA_EXCEEDED", message: "raw node text", meta: { status: 402 } })).toMatchObject({ code: "STORAGE_QUOTA_EXCEEDED", exitCode: 10 });
 
