@@ -7,7 +7,7 @@ import { CourierError } from './errors.js';
  * Non-secret public copy of an owner-side invite record, read by the gate.
  * Only the fields below are written. Keys, delete tokens and blob ids never belong here.
  */
-export const PUBLIC_INVITE_STATUSES = ['open', 'consumed', 'held', 'completed', 'denied', 'revoked', 'expired'] as const;
+export const PUBLIC_INVITE_STATUSES = ['open', 'consumed', 'held', 'completed', 'failed', 'denied', 'revoked', 'expired'] as const;
 export type PublicInviteStatus = (typeof PUBLIC_INVITE_STATUSES)[number];
 
 export interface PublicInvite {
@@ -156,4 +156,13 @@ export function updatePublicInvite(dir: string, inviteId: string, patch: Partial
   if (!fs.existsSync(file)) refused(`no public record for invite ${inviteId} in ${dir}`);
   const current = JSON.parse(fs.readFileSync(file, 'utf8')) as unknown;
   writePublicInvite(dir, { ...(current as PublicInvite), ...patch });
+}
+
+/** Reads `status` and `completedPeer` from an existing public record. Undefined when the file is absent. */
+export function readPublicStatus(dir: string, inviteId: string): Pick<PublicInvite, 'status' | 'completedPeer'> | undefined {
+  const file = publicFile(dir, inviteId);
+  plainFileOrAbsent(file);
+  if (!fs.existsSync(file)) return undefined;
+  const clean = checkRecord(JSON.parse(fs.readFileSync(file, 'utf8')) as unknown as PublicInvite);
+  return { status: clean.status, completedPeer: clean.completedPeer };
 }

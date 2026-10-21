@@ -18,7 +18,7 @@ export interface InviteNotice {
 }
 /** Fixed status for the human. No notification path starts or messages an agent. */
 export interface Notice {
-  kind: 'paused' | 'peer-paused' | 'new-message' | 'new-approval' | 'invite-held' | 'invite-completed';
+  kind: 'paused' | 'peer-paused' | 'new-message' | 'new-approval' | 'invite-held' | 'invite-completed' | 'invite-failed';
   /** Machine event id, used only for deduplication, never notification prose. */
   eventId?: string;
   /** Fixed-width local count of coalesced pause transitions. */
@@ -60,6 +60,7 @@ export function noticeText(notice: Notice, _owner: string): { title: string; bod
       ? { title: 'Courier: invite needs you', body: `Invite ${invite.id} for ${invite.handle} is held (${invite.reason}). Claimed label "${invite.label}", owner ${invite.owner}, courier ${invite.courierDid}, requested tier ${invite.tier}. Run courier invite approve ${invite.id} or courier invite deny ${invite.id}. No agent was woken.` }
       : { title: 'Courier: invite paired', body: `Invite ${invite.id} paired with ${invite.handle}: owner ${invite.owner}, courier ${invite.courierDid}, requested tier ${invite.tier}. The peer starts as strict until you confirm trusted status. Claimed label "${invite.label}". No agent was woken.` };
   }
+  if (notice.kind === 'invite-failed') return { title: 'Courier: invite failed', body: `An invite for ${peer} could not be recovered (${notice.detail}). No pairing happened, and the invite closes at its expiry. No approve or deny applies. No agent was woken.` };
   const count = /^[0-9]{6}$/.test(notice.repeats ?? '') ? Number(notice.repeats) : 0;
   const repeated = count ? ` Additional pauses on this thread: ${count}${count === 999999 ? '+' : ''}.` : '';
   return notice.kind === 'paused'

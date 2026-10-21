@@ -274,35 +274,7 @@ test('Welcome put fails once: held with internal-error, approve writes exactly o
   assert.deepEqual(notices.map((n) => n.kind), ['invite-held', 'invite-completed']);
 });
 
-test('public update fails during completion: held with internal-error; approve completes once the public copy is repaired', async () => {
-  const dir = path.join(home, 'public');
-  fs.mkdirSync(dir);
-  invite(ID, { publicDir: dir });
-  seedPublic(dir, ID);
-  await putHello(ID);
-  fs.rmSync(publicFile(dir, ID));
-  fs.mkdirSync(publicFile(dir, ID));
-  const welcomePuts = countPuts(`${inviteFolder(ID)}out/welcome.json`);
-  let accepts = 0;
-  const w = watcher({ accept: async () => {
-    accepts += 1;
-    return C_ARTIFACT;
-  } });
-  await w.onHello(ID);
-  assertHeldOnce('internal-error');
-  assert.equal(welcomePuts.n, 1);
-
-  fs.rmdirSync(publicFile(dir, ID));
-  seedPublic(dir, ID);
-  await w.approve(ID);
-  assert.equal(accepts, 1);
-  assert.equal(welcomePuts.n, 1);
-  assert.equal(readRecord(ID).status, 'completed');
-  assert.equal(readPublic(dir, ID).status, 'completed');
-  assert.deepEqual(notices.map((n) => n.kind), ['invite-held', 'invite-completed']);
-});
-
-test('deny after a partial approve: Welcome already exists, deny fails and the invite stays held', async () => {
+test('public update fails during completion: pairing completes; the next sweep repairs the public copy', async () => {
   const dir = path.join(home, 'public');
   fs.mkdirSync(dir);
   invite(ID, { publicDir: dir });
@@ -312,11 +284,36 @@ test('deny after a partial approve: Welcome already exists, deny fails and the i
   fs.mkdirSync(publicFile(dir, ID));
   const w = watcher();
   await w.onHello(ID);
-  assertHeldOnce('internal-error');
+  assert.equal(readRecord(ID).status, 'completed');
+  assert.equal(welcomeOf(ID).artifactC.step, 'C');
+  assert.deepEqual(notices.map((n) => n.kind), ['invite-completed']);
+  assert.ok(logs.some((e) => e.event === 'public-write-failed' && e.inviteId === ID));
+
+  fs.rmdirSync(publicFile(dir, ID));
+  seedPublic(dir, ID);
+  assert.equal(readPublic(dir, ID).status, 'open');
+  await w.sweep();
+  assert.equal(readPublic(dir, ID).status, 'completed');
+  assert.ok(readPublic(dir, ID).completedPeer);
+  assert.deepEqual(notices.map((n) => n.kind), ['invite-completed']);
+});
+
+test('deny after completion is refused with invite-not-held; a stale public copy does not hold the invite', async () => {
+  const dir = path.join(home, 'public');
+  fs.mkdirSync(dir);
+  invite(ID, { publicDir: dir });
+  seedPublic(dir, ID);
+  await putHello(ID);
+  fs.rmSync(publicFile(dir, ID));
+  fs.mkdirSync(publicFile(dir, ID));
+  const w = watcher();
+  await w.onHello(ID);
+  assert.equal(readRecord(ID).status, 'completed');
   assert.ok(welcomeOf(ID));
 
-  await assert.rejects(w.deny(ID), { code: 'welcome-exists' });
-  assert.equal(readRecord(ID).status, 'held');
+  await assert.rejects(w.deny(ID), { code: 'invite-not-held' });
+  assert.equal(readRecord(ID).status, 'completed');
+  assert.equal(welcomeOf(ID).tier, 'strict');
 });
 
 test('expectOwner set and hello owner differs: held owner-mismatch, no pairing, no Welcome', async () => {
@@ -623,22 +620,83 @@ test('no public directory on the record means no public writes, even with the en
   }
 });
 
-test('a failed public write holds the invite; the log keeps only the reason code', async () => {
+test('a failed public write during complete does not change the pairing; the log keeps only the reason code', async () => {
   const pub = fs.mkdtempSync(path.join('/var/tmp', 'courier-watch-pub-'));
   try {
     invite(ID, { publicDir: pub });
     await putHello(ID);
     await watcher().onHello(ID);
-    assert.equal(readRecord(ID).status, 'held');
-    assert.equal(readRecord(ID).held.reason, 'internal-error');
-    assert.deepEqual(notices.map((n) => n.kind), ['invite-held']);
-    const failure = logs.find((e) => e.event === 'invite-error');
+    assert.equal(readRecord(ID).status, 'completed');
+    assert.deepEqual(notices.map((n) => n.kind), ['invite-completed']);
+    const failure = logs.find((e) => e.event === 'public-write-failed');
     assert.ok(failure, 'failure is logged');
     assert.deepEqual(Object.keys(failure).sort(), ['event', 'inviteId', 'reason']);
     assert.match(failure.reason, /^[A-Za-z0-9_-]{1,40}$/);
   } finally {
     fs.rmSync(pub, { recursive: true, force: true });
   }
+});
+
+test('consumed with a valid remote hello: sweep holds it with internal-error, one notice, remote hello removed', async () => {
+  invite(ID, { status: 'consumed', consumedAt: new Date(NOW - 11 * 60e3).toISOString() });
+  await putHello(ID);
+  await watcher().sweep();
+  assertHeldOnce('internal-error');
+  assert.deepEqual(inKeys(ID), []);
+  assert.ok(readHeld(ID));
+});
+
+test('consumed with no remote hello: sweep fails the invite with hello-lost, one notice', async () => {
+  invite(ID, { status: 'consumed', consumedAt: new Date(NOW - 11 * 60e3).toISOString() });
+  await watcher().sweep();
+  assert.equal(readRecord(ID).status, 'failed');
+  assert.deepEqual(notices.map((n) => [n.kind, n.detail]), [['invite-failed', 'hello-lost']]);
+  assert.ok(logs.some((e) => e.event === 'invite-failed' && e.reason === 'hello-lost'));
+});
+
+test('consumed with an invalid remote hello: sweep fails the invite with hello-lost', async () => {
+  invite(ID, { status: 'consumed', consumedAt: new Date(NOW - 11 * 60e3).toISOString() });
+  await kv.put(`${inviteFolder(ID)}in/hello.json`, { v: 1, inviteId: ID, junk: true });
+  await watcher().sweep();
+  assert.equal(readRecord(ID).status, 'failed');
+  assert.deepEqual(notices.map((n) => [n.kind, n.detail]), [['invite-failed', 'hello-lost']]);
+});
+
+test('crash between consumed and held: the remote hello survives and the next sweep recovers it once', async () => {
+  const heldPath = path.join(secureSubdir('invites'), `${ID}.held.json`);
+  invite(ID);
+  await putHello(ID);
+  fs.mkdirSync(heldPath);
+  await watcher({ accept: async () => { throw new Error('accept crashed'); } }).onHello(ID);
+  assert.equal(readRecord(ID).status, 'consumed');
+  assert.ok(inKeys(ID).length > 0);
+  assert.deepEqual(notices, []);
+  fs.rmdirSync(heldPath);
+  await watcher({ now: () => new Date(NOW + 11 * 60e3) }).sweep();
+  assertHeldOnce('internal-error');
+  assert.deepEqual(inKeys(ID), []);
+});
+
+test('a consumed invite younger than the recovery window is left alone until it ages out', async () => {
+  invite(ID, { status: 'consumed', consumedAt: new Date(NOW).toISOString() });
+  await putHello(ID);
+  await watcher().sweep();
+  assert.equal(readRecord(ID).status, 'consumed');
+  assert.deepEqual(notices, []);
+  assert.ok(inKeys(ID).length > 0);
+  await watcher({ now: () => new Date(NOW + 11 * 60e3) }).sweep();
+  assertHeldOnce('internal-error');
+});
+
+test('sweep repairs a public copy that is stale after completion', async () => {
+  const dir = path.join(home, 'public');
+  fs.mkdirSync(dir);
+  seedPublic(dir, ID);
+  invite(ID, { publicDir: dir, status: 'completed', completedPeer: { handle: 'hunter', courierDid: HUNTER_COURIER, ownerDid: HUNTER_OWNER } });
+  await watcher().sweep();
+  assert.equal(readPublic(dir, ID).status, 'completed');
+  assert.ok(readPublic(dir, ID).completedPeer);
+  assert.deepEqual(notices, []);
 });
 
 test('sweep expires open invites and removes a completed invite Welcome at expiry', async () => {

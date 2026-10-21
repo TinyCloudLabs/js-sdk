@@ -4,7 +4,7 @@ import type { TinyCloudNode } from '@tinycloud/node-sdk';
 import { acceptB, fail } from './commands.js';
 import { CourierError } from './errors.js';
 import { deleteSealed as deleteSealedReal, inviteOrigin } from './invite-link.js';
-import { updatePublicInvite, type PublicInvite } from './invite-public.js';
+import { readPublicStatus, updatePublicInvite, type PublicInvite } from './invite-public.js';
 import { inviteFolder, ownerMatches, parseHello, type Hello, type Tier, type Welcome } from './invite-schema.js';
 import type { Notice, Notifier } from './notify.js';
 import type { WatchLog } from './wake.js';
@@ -19,7 +19,7 @@ export function requestedTier(flag: string): AcceptedTier {
   if (flag === 'trusted') return 'trusted-requested';
   return fail('usage', '--tier must be strict or trusted.');
 }
-export type InviteStatus = 'open' | 'consumed' | 'held' | 'completed' | 'denied' | 'revoked' | 'expired';
+export type InviteStatus = 'open' | 'consumed' | 'held' | 'completed' | 'failed' | 'denied' | 'revoked' | 'expired';
 export type Log = (entry: Record<string, unknown>) => void;
 /** Adapts the wake log's `(event, fields)` form to the record-style log the watcher calls. */
 export const eventLog = (log: WatchLog): Log => ({ event, ...fields }) => log(String(event), fields);
@@ -47,9 +47,13 @@ export interface InviteRecord {
   artifactC?: Welcome['artifactC'];
   completedPeer?: { handle: string; courierDid: string; ownerDid: string };
   cleanedAt?: string;
+  /** Set when the record moves to consumed. Recovery waits RECOVER_AFTER_MS past it. */
+  consumedAt?: string;
 }
 
 const RECORD_FILE = /^[a-z2-7]{26}\.json$/;
+const RECOVER_AFTER_MS = 10 * 60 * 1000;
+const peerKey = (p: { handle: string; courierDid: string; ownerDid: string } | null | undefined): string => (p ? `${p.handle}|${p.courierDid}|${p.ownerDid}` : '');
 const invitesDir = () => secureSubdir('invites');
 export const recordPath = (id: string) => path.join(invitesDir(), `${id}.json`);
 const heldPath = (id: string) => path.join(invitesDir(), `${id}.held.json`);
@@ -168,8 +172,10 @@ export class InviteWatcher {
   }
 
   private async sweepOne(record: InviteRecord): Promise<void> {
+    await this.recoverConsumed(record);
+    await this.reconcilePublic(record);
     if (Date.parse(record.expiresAt) > this.now().getTime()) return;
-    if (record.status === 'open' || record.status === 'held') {
+    if (record.status === 'open' || record.status === 'held' || record.status === 'failed') {
       await this.close(record, 'expired');
       return;
     }
@@ -177,6 +183,62 @@ export class InviteWatcher {
       await delIfPresent(this.env.node.kv, `${inviteFolder(record.inviteId)}out/welcome.json`);
       record.cleanedAt = this.now().toISOString();
       writeRecord(record);
+    }
+  }
+
+  /**
+   * Recovers an invite left in consumed by a crash or a failed hold. Waits RECOVER_AFTER_MS past consumedAt so a live handleHello or approve is not disturbed.
+   * An expired invite closes. A valid remote hello, else the held copy, is held with internal-error. With neither, the invite fails with hello-lost.
+   */
+  private async recoverConsumed(record: InviteRecord): Promise<void> {
+    if (record.status !== 'consumed') return;
+    if (record.consumedAt !== undefined && this.now().getTime() - Date.parse(record.consumedAt) < RECOVER_AFTER_MS) return;
+    if (Date.parse(record.expiresAt) <= this.now().getTime()) {
+      await this.close(record, 'expired');
+      return;
+    }
+    const hello = (await this.remoteHello(record.inviteId)) ?? readHeld(record.inviteId);
+    if (hello) {
+      await this.hold(record, hello, 'internal-error');
+      return;
+    }
+    record.status = 'failed';
+    writeRecord(record);
+    publishStatus(record, this.env.log);
+    await this.finish(record);
+    this.env.log({ event: 'invite-failed', inviteId: record.inviteId, reason: 'hello-lost' });
+    await this.emit({ kind: 'invite-failed', peer: record.handle, threadId: record.inviteId, detail: 'hello-lost' });
+  }
+
+  /** The hello still under in/, or undefined when it is gone or invalid. An invalid hello is logged by reason; finish clears it. */
+  private async remoteHello(id: string): Promise<Hello | undefined> {
+    const got = await getJson<unknown>(this.env.node.kv, `${inviteFolder(id)}in/hello.json`);
+    if (!got) return undefined;
+    try {
+      const text = typeof got.value === 'string' ? got.value : JSON.stringify(got.value);
+      const hello = parseHello(text);
+      if (hello.inviteId !== id) throw new CourierError('bad-hello', 'hello is for another invite');
+      return hello;
+    } catch (e) {
+      this.env.log({ event: 'invite-bad-hello', inviteId: id, reason: reasonOf(e) });
+      return undefined;
+    }
+  }
+
+  /** Rewrites the public copy's status and completedPeer when they differ from the private record. A failure is logged by reason and retried next sweep. */
+  private reconcilePublic(record: InviteRecord): void {
+    if (record.publicDir === undefined) return;
+    try {
+      const pub = readPublicStatus(record.publicDir, record.inviteId);
+      if (pub === undefined) {
+        this.env.log({ event: 'public-reconcile-failed', inviteId: record.inviteId, reason: 'public-record-missing' });
+        return;
+      }
+      if (pub.status === record.status && peerKey(pub.completedPeer) === peerKey(record.completedPeer)) return;
+      writePublicStatus(record);
+      this.env.log({ event: 'public-reconciled', inviteId: record.inviteId });
+    } catch (e) {
+      this.env.log({ event: 'public-reconcile-failed', inviteId: record.inviteId, reason: reasonOf(e) });
     }
   }
 
@@ -195,7 +257,7 @@ export class InviteWatcher {
     const helloKey = `${folder}in/hello.json`;
     const record = readRecord(id);
     if (!record || record.status !== 'open') {
-      await this.clearInbound(folder);
+      if (record?.status !== 'consumed') await this.clearInbound(folder);
       return;
     }
     if (Date.parse(record.expiresAt) <= this.now().getTime()) {
@@ -224,19 +286,19 @@ export class InviteWatcher {
       return;
     }
     latest.status = 'consumed';
+    latest.consumedAt = this.now().toISOString();
     writeRecord(latest);
     publishStatus(latest, this.env.log);
-    await this.decide(latest, hello, helloKey);
+    await this.decide(latest, hello);
   }
 
   /**
    * Runs after `consumed` is persisted. Any exception ends HELD with reason internal-error; the specific code is logged as invite-error.
    * A verified credential's replay key is recorded before pairing, so a held invite cannot be re-verified with the same credential.
    */
-  private async decide(record: InviteRecord, hello: Hello, helloKey: string): Promise<void> {
+  private async decide(record: InviteRecord, hello: Hello): Promise<void> {
     let decision: Check;
     try {
-      await delIfPresent(this.env.node.kv, helloKey);
       decision = await this.check(record, hello);
       if (decision.ok) addSeenReplayKey(decision.replayKey);
     } catch (e) {
@@ -304,8 +366,6 @@ export class InviteWatcher {
       await this.writeWelcome({ v: 1, inviteId: record.inviteId, tier: record.tier, artifactC: record.artifactC, sentAt: this.now().toISOString() });
       record.status = 'completed';
       record.completedPeer = { handle: record.handle, courierDid: hello.artifactB.from.courier, ownerDid: hello.artifactB.from.owner };
-      // Strict: a failed public update holds the invite instead of completing with a stale public copy.
-      writePublicStatus(record);
       delete record.held;
       writeRecord(record);
     } catch (e) {
@@ -314,21 +374,29 @@ export class InviteWatcher {
       await this.hold(record, hello, 'internal-error');
       return 'internal-error';
     }
+    // The public copy is best-effort. A failed write is logged by reason and reconciled by the next sweep; it never changes the outcome.
+    publishStatus(record, this.env.log);
     await this.finish(record);
     await this.emit({ kind: 'invite-completed', peer: record.handle, threadId: record.inviteId, detail: '', invite: inviteFacts(record, hello, '') });
     return undefined;
   }
 
+  /**
+   * Stores the hello for a decision, then removes the remote copy. The remote copy goes only after the held copy is written, so a crash
+   * in between leaves a hello to recover. A failure here leaves the invite consumed; the next sweep holds it and notifies once.
+   */
   private async hold(record: InviteRecord, hello: Hello, reason: string): Promise<void> {
     try {
       writeSecure(heldPath(record.inviteId), hello);
+      await delIfPresent(this.env.node.kv, `${inviteFolder(record.inviteId)}in/hello.json`);
       record.status = 'held';
       record.held = { reason, at: this.now().toISOString() };
       writeRecord(record);
-      publishStatus(record, this.env.log);
     } catch (e) {
       this.env.log({ event: 'invite-error', inviteId: record.inviteId, reason: reasonOf(e) });
+      return;
     }
+    publishStatus(record, this.env.log);
     this.env.log({ event: 'invite-held', inviteId: record.inviteId, reason });
     await this.emit({ kind: 'invite-held', peer: record.handle, threadId: record.inviteId, detail: '', invite: inviteFacts(record, hello, reason) });
   }
@@ -340,6 +408,7 @@ export class InviteWatcher {
     if (!hello) fail('invite-not-held', 'Held hello is missing; nothing to approve.');
     if (tier !== undefined) record.tier = tier;
     record.status = 'consumed';
+    record.consumedAt = this.now().toISOString();
     writeRecord(record);
     publishStatus(record, this.env.log);
     const reason = await this.complete(record, hello);
@@ -350,6 +419,7 @@ export class InviteWatcher {
   async deny(id: string): Promise<void> {
     const record = await this.heldRecord(id);
     record.status = 'consumed';
+    record.consumedAt = this.now().toISOString();
     writeRecord(record);
     publishStatus(record, this.env.log);
     const welcome: Welcome = { v: 1, inviteId: id, tier: 'rejected', sentAt: this.now().toISOString() };
