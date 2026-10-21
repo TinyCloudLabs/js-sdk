@@ -410,7 +410,7 @@ var MANAGE_STORAGE_URL, MAX_CAUSE_DEPTH;
 var init_storage = __esm({
   "src/output/storage.ts"() {
     "use strict";
-    MANAGE_STORAGE_URL = "https://account.tinycloud.xyz/billing";
+    MANAGE_STORAGE_URL = "https://account.tinycloud.xyz/storage";
     MAX_CAUSE_DEPTH = 4;
   }
 });
