@@ -24,10 +24,12 @@ import { normalizePkhIdentifier } from "./space.js";
  *   last two under `<app_id>/app/`; the root-level keys are refused as well.
  *
  * Neither grants KV delete, SQL admin, any other service, or any other space.
- * CREATE, ALTER and DROP TABLE need `tinycloud.sql/schema`, which SQL write
- * does not carry. The write variant adds it only for an app listed in
- * `APPS_AGENT_SCHEMA_DATABASES`, on that app's one database, at the exact path
- * with no trailing slash (the node matches a SQL path exactly unless it ends in `/`).
+ * CREATE, ALTER and DROP TABLE need `tinycloud.sql/schema`, which SQL write does
+ * not request. Nodes before 1.21.6 do not enforce that split: SQL write can run
+ * those statements there too. The write variant adds `tinycloud.sql/schema` only
+ * for an app listed in `APPS_AGENT_SCHEMA_DATABASES`, on that app's one database,
+ * at the exact path with no trailing slash (the node matches a SQL path exactly
+ * unless it ends in `/`).
  */
 export const APPS_AGENT_PRESET = "apps-agent";
 export const APPS_AGENT_SPACE = "applications";
@@ -190,8 +192,8 @@ export function appsAgentScopeNotice(mode: AppsAgentMode, appIds: readonly strin
       `It cannot change ${appIds.length === 1 ? "the app's" : "the apps'"} code, manifest or install record: files outside those folders are read-only for it.`,
       `SQL write is separate from that: it can add, change and delete ${appIds.length === 1 ? "this app's" : "these apps'"} table rows.`,
       variant.schemaForCatalogApps && schemaPaths.length > 0
-        ? `It can also set up and repair the tables and views in ${schemaPaths.join(", ")}, the database of each named catalog app. It has no permission for any other database.`
-        : "This grant does not include permission to create, change or drop tables (tinycloud.sql/schema).",
+        ? `It can also set up and repair the tables and views in ${schemaPaths.join(", ")}, the database of each named catalog app. That grant names no other database for table changes.`
+        : "This grant does not include permission to create, change or drop tables (tinycloud.sql/schema). Nodes before 1.21.6 do not enforce that split, so the write grant may still let it do so there.",
       "It cannot touch other apps, other spaces or secrets.",
     );
   } else {
@@ -468,13 +470,27 @@ function withinPresetSet(entry: PermissionEntry, applicationsSpace: string): boo
 }
 
 /**
+ * A schema entry is within the preset only alongside the same app's SQL write:
+ * the preset always grants the two together, so a lone schema entry is beyond it.
+ */
+function schemaPairedWithWrite(entry: PermissionEntry, requested: readonly PermissionEntry[], applicationsSpace: string): boolean {
+  if (!entry.actions.includes(SCHEMA_ACTION)) return true;
+  const app = entry.path.slice(0, entry.path.indexOf("/"));
+  return requested.some((other) =>
+    other.service === "tinycloud.sql" &&
+    other.actions.includes("tinycloud.sql/write") &&
+    inApplicationsSpace(other, applicationsSpace) &&
+    other.path.replace(/\/$/, "") === app);
+}
+
+/**
  * The scope the owner is about to sign, in plain words. `requested` must be
  * the resolved list from `entriesForSigning` + the profile + `finalizeSigningEntries`,
  * the same list that is then signed. Every entry is described once, whatever
  * its service or space, with text from the request escaped. The preset wording
  * is used only when the list is exactly a preset variant. When the list
  * touches an `applications` space and holds any entry the preset could never
- * grant (another service or space, delete, schema outside a catalog app's database, delegation, a write outside
+ * grant (another service or space, delete, schema outside a catalog app's database or without its SQL write, delegation, a write outside
  * a named app's write folders), those entries come first, marked `!`, and need a confirmation.
  */
 export function describeGrantScope(
@@ -487,7 +503,9 @@ export function describeGrantScope(
     return { text: appsAgentScopeNotice(preset.mode, preset.appIds), entries: requested, extras: [] };
   }
   const touchesApplications = requested.some((entry) => (entry.space ?? "").split(":").at(-1) === APPS_AGENT_SPACE);
-  const extras = touchesApplications ? requested.filter((entry) => !withinPresetSet(entry, applicationsSpace)) : [];
+  const extras = touchesApplications
+    ? requested.filter((entry) => !withinPresetSet(entry, applicationsSpace) || !schemaPairedWithWrite(entry, requested, applicationsSpace))
+    : [];
   const others = requested.filter((entry) => !extras.includes(entry));
 
   const lines: string[] = [

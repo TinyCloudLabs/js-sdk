@@ -114,7 +114,7 @@ tc delegation create --to did:pkh:eip155:1:0x...
 | `tc context` | Show the selected profile, owner, host, space and session state |
 | `tc auth status` | Show authentication status |
 | `tc auth whoami` | Show current identity |
-| `tc auth request --preset apps-agent [--app <id>]... [--write]` | Request access for an agent to the user's installed apps: read-only by default, for one app, several, or all. `--write --app <id>` also lets the agent change that app's data: write its `knowledge/` and `prefs/` files and add, change or delete its table rows. For the Health Log app's catalog database, it can also create, change and drop tables. It cannot change the app's code, manifest or install record |
+| `tc auth request --preset apps-agent [--app <id>]... [--write]` | Request access for an agent to the user's installed apps: read-only by default, for one app, several, or all. `--write --app <id>` also lets the agent change that app's data: write its `knowledge/` and `prefs/` files and add, change or delete its table rows. For the Health Log app's catalog database, it can also create, change and drop tables (nodes before 1.21.6 do not enforce that split). It cannot change the app's code, manifest or install record |
 | `tc knowledge list` | List the installed apps that have a knowledge bundle |
 | `tc knowledge read <app_id> [concept]` | Read an app's knowledge index, or one concept with its frontmatter parsed |
 | `tc kv get <key>` | Retrieve a value |

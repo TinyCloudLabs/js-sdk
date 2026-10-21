@@ -260,7 +260,7 @@ describe.skipIf(!NODE_BIN)("tinycloud knowledge against a real node", () => {
 
     const { requestNotice, grantNotice } = await grantAgent("writer", ["--preset", "apps-agent", "--write", "--app", HEALTH]);
     expect(requestNotice).toContain(appsAgentScopeNotice("write", [HEALTH]));
-    expect(requestNotice).toContain("It cannot create, change or drop tables");
+    expect(requestNotice).toContain("This grant does not include permission to create, change or drop tables (tinycloud.sql/schema).");
     expect(grantNotice).toContain(appsAgentScopeNotice("write", [HEALTH]));
 
     const note = `${HEALTH}/knowledge/log.md`;

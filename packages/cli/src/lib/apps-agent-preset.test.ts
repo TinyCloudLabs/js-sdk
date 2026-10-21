@@ -160,7 +160,7 @@ describe("apps-agent scope notice states the facts of the grant", () => {
   test("write for a catalog app names its one database as the only database where the agent can set up tables", () => {
     const notice = appsAgentScopeNotice("write", [CATALOG]);
     expect(notice).toContain(`set up and repair the tables and views in \`${CATALOG_DB}\``);
-    expect(notice).toContain("It has no permission for any other database.");
+    expect(notice).toContain("That grant names no other database for table changes.");
     expect(notice).not.toContain("does not include permission to create, change or drop tables");
   });
 });
@@ -319,24 +319,36 @@ describe("describeGrantScope: the text follows what will be signed", () => {
     expect(scope.extras).toHaveLength(2);
   });
 
-  test("schema is within the preset only on a catalog app's database; any other schema path is beyond it and says it can change tables", () => {
+  test("schema is within the preset only on a catalog app's database, and only alongside that app's SQL write", () => {
     const schema = (path: string) => ({ service: "tinycloud.sql", space: OWNER_SPACE, path, actions: ["tinycloud.sql/schema"] });
-    expect(scopeOf([schema(CATALOG_DB)]).extras).toEqual([]);
+    const write = { service: "tinycloud.sql", space: OWNER_SPACE, path: `${CATALOG}/`, actions: ["tinycloud.sql/write"] };
+    expect(scopeOf([schema(CATALOG_DB), write]).extras).toEqual([]);
+    // a lone schema entry is never the preset: the preset always grants it with the app's write
+    expect(scopeOf([schema(CATALOG_DB)]).extras).toHaveLength(1);
+    // the write must be on the same app
+    expect(scopeOf([schema(CATALOG_DB), { ...write, path: `${RECIPES}/` }]).extras).toHaveLength(1);
     for (const path of [`${CATALOG_DB}/`, `${CATALOG}/other`, `${HEALTH}/healthlog`]) {
-      const scope = scopeOf([schema(path)]);
+      const scope = scopeOf([schema(path), write]);
       expect(scope.extras).toHaveLength(1);
       expect(scope.text).toContain("create, change and drop tables");
     }
   });
 
   test("a schema entry that also carries sql/admin is beyond the preset even on a catalog app's database", () => {
+    const write = { service: "tinycloud.sql", space: OWNER_SPACE, path: `${CATALOG}/`, actions: ["tinycloud.sql/write"] };
     const entry = { service: "tinycloud.sql", space: OWNER_SPACE, path: CATALOG_DB, actions: ["tinycloud.sql/schema", "tinycloud.sql/admin"] };
-    expect(scopeOf([entry]).extras).toHaveLength(1);
+    expect(scopeOf([entry, write]).extras).toHaveLength(1);
   });
 
   test("a schema entry on a catalog app's database under the tinycloud.kv service is beyond the preset", () => {
+    const write = { service: "tinycloud.sql", space: OWNER_SPACE, path: `${CATALOG}/`, actions: ["tinycloud.sql/write"] };
     const entry = { service: "tinycloud.kv", space: OWNER_SPACE, path: CATALOG_DB, actions: ["tinycloud.sql/schema"] };
-    expect(scopeOf([entry]).extras).toHaveLength(1);
+    expect(scopeOf([entry, write]).extras).toHaveLength(1);
+  });
+
+  test("an SQL action named like an object property is not a table-change action", () => {
+    const scope = scopeOf([{ service: "tinycloud.sql", space: OWNER_SPACE, path: `${HEALTH}/`, actions: ["constructor"] }]);
+    expect(scope.text).not.toContain("an SQL schema, admin or wildcard entry");
   });
 
   test("a plain sql write beyond the preset never gets the table-change sentence", () => {
