@@ -53,7 +53,7 @@ function isCanonicalKey(key: string): boolean {
 
 /** RFC 4648 base32, lowercase, unpadded (multibase `b`). */
 const BASE32 = 'abcdefghijklmnopqrstuvwxyz234567';
-function base32(bytes: Uint8Array): string {
+export function base32(bytes: Uint8Array): string {
   let bits = 0;
   let value = 0;
   let out = '';

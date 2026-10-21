@@ -86,6 +86,34 @@ Precedence for the node host and OpenKey host is flag > stored > env > default.
 For the OpenKey API host it is flag > env > derived. `TC_HOME`, `TC_PROFILE`,
 `TC_OPENKEY_HOST` and `TC_OPENKEY_API_HOST` are ignored.
 
+### Invites
+
+An invite is a one-time bearer string that starts a pairing without an
+artifact exchange. The owner creates it for a handle and an email address; the
+invitee joins with it.
+
+```bash
+tc courier invite alice --email alice@example.com --tier strict --ttl 24h
+tc courier invite list
+tc courier invite revoke <invite-id>
+tc courier join <invite-string> --credential-file proof.txt
+tc courier join --resume
+```
+
+- `invite <handle>` prints the string once. `--call-me` sets the name the
+  invitee uses for the owner; it defaults to the owner's handle.
+- `invite list` shows invite id, handle, status and expiry. It never prints
+  the revoke token or the invite key.
+- `invite revoke` deletes the sealed invite and any pending hello or welcome.
+  Delegations granted to the one-time key remain until their TTL ends.
+- `join` sends a hello and waits for the owner's reply. If none arrives in
+  about 10 minutes it prints the resume command and exits. `join --resume`
+  continues a pending join without sending a second hello.
+- Handles may not begin with `_`. The words `list` and `revoke` cannot be
+  invitee handles, because they select the `invite` subcommands.
+
+Details: TC-712
+
 ## Watcher
 
 `courier watch` runs once per person per machine and never calls a model.

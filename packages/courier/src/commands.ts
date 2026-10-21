@@ -33,18 +33,18 @@ import type { ParsedArgs } from './args.js';
 import { requireFlag, oneOf } from './args.js';
 import { assertPeerDelegation, bareDid, durationMs, AGENT_GRANT_MAX_MS } from './authority.js';
 
-interface Ctx {
+export interface Ctx {
   profile: Profile;
   node: TinyCloudNode;
 }
 
-async function ctx(): Promise<Ctx> {
+export async function ctx(): Promise<Ctx> {
   const profile = loadProfile();
   const node = await courierNode(profile);
   return { profile, node };
 }
 
-function newAgentKey(): AgentKey {
+export function newAgentKey(): AgentKey {
   const manager = new NodeWasmBindings().createSessionManager();
   const id = manager.createSessionKey('courier');
   const jwk = manager.jwk(id);
@@ -52,12 +52,12 @@ function newAgentKey(): AgentKey {
   return { v: 1, jwk: JSON.parse(jwk) as Record<string, unknown>, did: manager.getDID(id), createdAt: new Date().toISOString() };
 }
 
-function printJson(v: unknown) {
+export function printJson(v: unknown) {
   process.stdout.write(JSON.stringify(v, null, 2) + '\n');
 }
 
 
-function fail(code: string, message: string): never {
+export function fail(code: string, message: string): never {
   throw new CourierError(code, message);
 }
 

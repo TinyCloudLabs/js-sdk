@@ -155,7 +155,7 @@ export function parseWelcome(text: string): Welcome {
 }
 
 /** Lowercase email address, at most 254 bytes. Format check only: ownership is proven by the credential, not here. */
-function emailAddress(value: unknown, where: string): string {
+export function emailAddress(value: unknown, where: string): string {
   const s = str(value, where, 254, /^[^\s@]+@[^\s@]+\.[^\s@]+$/);
   if (s !== s.toLowerCase()) fail(`${where} must be lowercase`);
   return s;
