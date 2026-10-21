@@ -2042,6 +2042,7 @@ export async function acquireAgentGrant(params: {
   });
   const verified = await verifyAgentApproval(data, {
     sessionDid: params.sessionDid,
+    host: params.host,
     expectedOwner: pinnedOwner(params.profile),
     expiry,
     requested: request,
