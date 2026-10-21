@@ -15,6 +15,7 @@ interface PromptWindow {
     mountWithKeeper(): boolean;
     openSpaceCreation(): boolean;
     openPermission(): boolean;
+    openThrowingSpaceCreation(): boolean;
     reset(): boolean;
     unregister(): boolean;
   };
@@ -52,6 +53,10 @@ async function openSpaceCreation(page: Page) {
 
 async function openPermission(page: Page) {
   await page.evaluate(() => (window as unknown as PromptWindow).__tc.openPermission());
+}
+
+async function openThrowingSpaceCreation(page: Page) {
+  await page.evaluate(() => (window as unknown as PromptWindow).__tc.openThrowingSpaceCreation());
 }
 
 function spaceResult(page: Page) {
@@ -358,6 +363,26 @@ for (const scheme of ["light", "dark"] as const) {
     );
     expect(overflow).toBe("hidden");
     await expect(page.locator(PERMISSION)).toHaveCount(1);
+  });
+
+  // A throwing onDismiss on the displaced prompt must not orphan it: the new prompt still mounts,
+  // the scroll lock is released, and the error still reaches the page.
+  test(`${scheme}: a throwing onDismiss on the displaced prompt still removes it and mounts the new one`, async ({ page }) => {
+    const pageErrors: string[] = [];
+    page.on("pageerror", (error) => pageErrors.push(error.message));
+    await mountHarness(page, scheme);
+    await openThrowingSpaceCreation(page);
+    await openPermission(page);
+
+    await expect(page.locator(`${SPACE}, ${PERMISSION}`)).toHaveCount(1);
+    await expect(page.locator(`${PERMISSION} .modal-content`)).toBeVisible();
+    await page.locator(PERMISSION).locator(".modal-content").click({ trial: true });
+    expect(await page.evaluate(() => document.body.style.overflow)).toBe("hidden");
+    await expect.poll(() => pageErrors).toEqual(["probe onDismiss"]);
+
+    await page.evaluate(() => (window as unknown as PromptWindow).__tc.reset());
+    await expect.poll(() => permResult(page)).toBe(false);
+    await expect.poll(() => page.evaluate(() => document.body.style.overflow)).toBe("");
   });
 
   // Assertion e: reset dismisses a pending prompt and resolves it false.

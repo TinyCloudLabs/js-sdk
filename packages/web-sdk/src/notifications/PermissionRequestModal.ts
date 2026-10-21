@@ -424,9 +424,12 @@ export class TinyCloudPermissionRequestModal extends HTMLElement {
   }
 
   dismiss(): void {
-    this.resolveResult?.({ approved: false });
-    this.options.onDismiss?.();
-    this.hide();
+    try {
+      this.resolveResult?.({ approved: false });
+      this.options.onDismiss?.();
+    } finally {
+      this.hide();
+    }
   }
 
   /** True until the prompt starts closing (approve, decline, dismiss, or teardown). */

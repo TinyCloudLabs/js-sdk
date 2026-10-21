@@ -30,7 +30,7 @@ export class ModalManager {
     promptScope: PromptScope = DEFAULT_PROMPT_SCOPE,
   ): Promise<SpaceCreationResult> {
     // Close any existing modal first
-    this.closeActiveModal();
+    this.displaceActiveModal();
 
     const modal = new TinyCloudSpaceModal({
       ...options,
@@ -56,7 +56,7 @@ export class ModalManager {
     options: PermissionRequestModalOptions,
     promptScope: PromptScope = DEFAULT_PROMPT_SCOPE,
   ): Promise<PermissionRequestResult> {
-    this.closeActiveModal();
+    this.displaceActiveModal();
 
     const modal = new TinyCloudPermissionRequestModal({
       ...options,
@@ -94,6 +94,20 @@ export class ModalManager {
   }
 
   /**
+   * Displaces the open prompt for a new one. A throwing caller onDismiss must not
+   * stop the new prompt from mounting, so its error is rethrown asynchronously.
+   */
+  private displaceActiveModal(): void {
+    try {
+      this.closeActiveModal();
+    } catch (error) {
+      queueMicrotask(() => {
+        throw error;
+      });
+    }
+  }
+
+  /**
    * Settles the open prompt, if any, as dismissed, so its promise never stays
    * pending. The resolved value matches the prompt's close control. Its caller's
    * onDismiss runs once; a prompt that already settled is not dismissed again.
@@ -103,9 +117,12 @@ export class ModalManager {
   public closeActiveModal(): void {
     const modal = this.activeModal;
     if (!modal) return;
-    if (modal.isOpen) modal.dismiss();
-    modal.remove();
-    this.clearActive(modal);
+    try {
+      if (modal.isOpen) modal.dismiss();
+    } finally {
+      modal.remove();
+      this.clearActive(modal);
+    }
   }
 
   public hasActiveModal(): boolean {

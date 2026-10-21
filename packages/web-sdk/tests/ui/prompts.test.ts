@@ -399,6 +399,48 @@ describe("opening a prompt while another is open", () => {
     expect(await second).toEqual({ success: false, dismissed: true });
   });
 
+  test("a throwing onDismiss on the displaced space prompt still mounts the new one", async () => {
+    const manager = modals.ModalManager.getInstance();
+    const deferred: Array<() => void> = [];
+    const realQueueMicrotask = globalThis.queueMicrotask;
+    // Captures the asynchronous rethrow so it does not fail this test directly.
+    globalThis.queueMicrotask = (task: () => void) => {
+      deferred.push(task);
+    };
+    let throwOnce = true;
+    try {
+      const secondScope = createPromptScope(true);
+      const first = manager.showSpaceCreationModal(
+        spaceOptions(() => {
+          if (throwOnce) {
+            throwOnce = false;
+            throw new Error("probe onDismiss");
+          }
+        }),
+        createPromptScope(true),
+      );
+      const displaced = layer.children[0];
+      const second = manager.showPermissionRequestModal(permissionOptions(() => {}), secondScope);
+
+      expect(await first).toEqual({ success: false, dismissed: true });
+      // Only the new prompt's mount is asserted here. The displaced element's
+      // remove() can be JSDOM's when another file loaded the modal classes first,
+      // so its removal from this fake layer is covered by the e2e test.
+      expect(layer.children.filter((child) => child !== displaced)).toHaveLength(1);
+      expect(body.style.overflow).toBe("hidden");
+      expect(manager.hasActiveModal()).toBe(true);
+
+      expect(deferred).toHaveLength(1);
+      expect(() => deferred[0]!()).toThrow("probe onDismiss");
+
+      dismissPrompts(secondScope);
+      expect(await second).toEqual({ approved: false });
+    } finally {
+      globalThis.queueMicrotask = realQueueMicrotask;
+      if (manager.hasActiveModal()) manager.closeActiveModal();
+    }
+  });
+
   test("keeps the scroll lock while the displaced permission prompt's hide timer runs", async () => {
     const manager = modals.ModalManager.getInstance();
     const firstScope = createPromptScope(true);

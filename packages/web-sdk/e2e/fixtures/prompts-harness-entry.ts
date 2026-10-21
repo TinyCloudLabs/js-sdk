@@ -7,7 +7,7 @@
 // window.__tc.
 import { registerUiClient, type UiClientHandle } from "../../src/ui/index";
 import { ModalSpaceCreationHandler } from "../../src/authorization/WebSpaceCreationHandler";
-import { showPermissionRequestModal } from "../../src/notifications/ModalManager";
+import { showPermissionRequestModal, showSpaceCreationModal } from "../../src/notifications/ModalManager";
 
 type SyncState = { requested: boolean; effective: string; reason?: string };
 
@@ -120,6 +120,20 @@ w.__tc = {
       (error: unknown) => {
         w.__permError = String(error);
       },
+    );
+    return true;
+  },
+  openThrowingSpaceCreation() {
+    if (handle === undefined) throw new Error("mount() must run first");
+    // Its onDismiss throws, so the next prompt that displaces it sees the error.
+    showSpaceCreationModal(
+      {
+        onCreateSpace: async () => {},
+        onDismiss: () => {
+          throw new Error("probe onDismiss");
+        },
+      },
+      handle.promptScope,
     );
     return true;
   },

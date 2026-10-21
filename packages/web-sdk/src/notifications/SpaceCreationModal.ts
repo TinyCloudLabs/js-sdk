@@ -424,9 +424,12 @@ export class TinyCloudSpaceModal extends HTMLElement {
   }
 
   dismiss(): void {
-    this.resolveResult?.({ success: false, dismissed: true });
-    this.options.onDismiss?.();
-    this.hide();
+    try {
+      this.resolveResult?.({ success: false, dismissed: true });
+      this.options.onDismiss?.();
+    } finally {
+      this.hide();
+    }
   }
 
   /** True until the prompt starts closing (confirm, dismiss, or teardown). */
