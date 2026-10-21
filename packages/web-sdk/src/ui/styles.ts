@@ -32,4 +32,24 @@ export const HOST_CSS = `
 .error{color:#111827}
 .confirm{margin-top:8px}
 .confirm .actions{display:flex;gap:8px;margin:8px 0}
+/* Dark candidate, app family (docs/brand/guide.md §4.1, "Dark candidate" column, PROPOSED).
+   The guide makes dark opt-in via data-tc-theme; this block follows the ruling instead:
+   prefers-color-scheme only, no attribute. Values: surface #151517 (bg/surface row),
+   ink #fafafa (ink row), dim #a1a1aa (dim row), hairline #69696b (hairline row),
+   control-edge #71717a (control-edge row), focus ink #fafafa (focus row). Copied as literals
+   because the shadow root cannot import tokens.css. Light values above are unchanged. */
+@media (prefers-color-scheme: dark){
+.layer{color:#fafafa}
+.button{border-color:#71717a;background:#151517;color:#fafafa}
+.dot{background:#a1a1aa;border-color:#151517}
+.button:focus-visible,.action:focus-visible{outline-color:#fafafa}
+.panel{border-color:#69696b;background:#151517}
+.status,.busy,.note{color:#a1a1aa}
+.error{color:#fafafa}
+.section+.section{border-top-color:#69696b}
+.action{border-color:#71717a;background:#151517;color:#fafafa}
+.knob{background:#71717a}
+.knob::after{background:#151517}
+.switch[aria-checked="true"] .knob{background:#fafafa}
+}
 `;

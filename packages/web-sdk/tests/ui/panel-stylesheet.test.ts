@@ -141,8 +141,10 @@ function pointerEventsAutoClasses(css: string): Set<string> {
   return out;
 }
 
+/** Stylesheet text with comments removed, so prose such as "tokens.css" is not read as a selector. */
 function stylesheetText(root: ShadowRoot): string {
-  return [...root.querySelectorAll("style")].map((el) => el.textContent ?? "").join("\n");
+  const raw = [...root.querySelectorAll("style")].map((el) => el.textContent ?? "").join("\n");
+  return raw.replace(/\/\*[\s\S]*?\*\//g, "");
 }
 
 describe("panel stylesheet targets", () => {
@@ -177,5 +179,62 @@ describe("panel stylesheet targets", () => {
       })
       .map((el) => el.outerHTML.slice(0, 80));
     expect(unreachable).toEqual([]);
+  });
+});
+
+const DARK_HEADER = "@media (prefers-color-scheme: dark){";
+
+/** Splits the stylesheet into its light rules and the body of the dark media block. */
+function splitScheme(css: string): { light: string; dark: string } {
+  const text = css.replace(/\/\*[\s\S]*?\*\//g, "");
+  const start = text.indexOf(DARK_HEADER);
+  if (start < 0) return { light: text, dark: "" };
+  const bodyStart = start + DARK_HEADER.length;
+  let depth = 1;
+  for (let i = bodyStart; i < text.length; i++) {
+    if (text[i] === "{") depth++;
+    else if (text[i] === "}" && --depth === 0) {
+      return { light: text.slice(0, start) + text.slice(i + 1), dark: text.slice(bodyStart, i) };
+    }
+  }
+  throw new Error("unbalanced dark media block");
+}
+
+/**
+ * Declarations a single-class selector ends up with under a scheme. Dark rules
+ * come after light ones, so a later declaration of the same property wins.
+ */
+function resolvedDeclarations(css: string, scheme: "light" | "dark", cls: string): Map<string, string> {
+  const { light, dark } = splitScheme(css);
+  const rules = scheme === "dark" ? `${light}\n${dark}` : light;
+  const out = new Map<string, string>();
+  for (const [, selector, body] of rules.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+    if (!selector.split(",").map((s) => s.trim()).includes(`.${cls}`)) continue;
+    for (const decl of body.split(";")) {
+      const colon = decl.indexOf(":");
+      if (colon < 0) continue;
+      out.set(decl.slice(0, colon).trim(), decl.slice(colon + 1).trim());
+    }
+  }
+  return out;
+}
+
+describe("panel colour scheme", () => {
+  test("dark scheme paints the panel, toasts and text on the dark surface", () => {
+    openPanel();
+    toastStore.push({ kind: "warning", textCode: "panel.title", href: "https://example.com/docs", hrefLabelCode: "panel.close" });
+    const css = stylesheetText(shadow());
+    expect(resolvedDeclarations(css, "dark", "panel").get("background")).toBe("#151517");
+    expect(resolvedDeclarations(css, "dark", "layer").get("color")).toBe("#fafafa");
+    expect(resolvedDeclarations(css, "dark", "toast").get("background")).toBe("#151517");
+    expect(resolvedDeclarations(css, "dark", "toast").get("color")).toBe("#fafafa");
+    expect(resolvedDeclarations(css, "dark", "toast--warning").get("border-left-color")).toBe("#fbbd23");
+  });
+
+  test("light scheme keeps the light palette when no dark rule applies", () => {
+    openPanel();
+    const css = stylesheetText(shadow());
+    expect(resolvedDeclarations(css, "light", "panel").get("background")).toBe("#fff");
+    expect(resolvedDeclarations(css, "light", "layer").get("color")).toBe("#111827");
   });
 });

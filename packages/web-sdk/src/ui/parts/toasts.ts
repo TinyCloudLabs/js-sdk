@@ -17,6 +17,13 @@ const TOAST_CSS = `
 .toast__message{flex:1;min-width:0;overflow-wrap:anywhere}
 .toast a{color:inherit;text-decoration:underline;white-space:nowrap}
 .toast__close{border:0;background:transparent;color:inherit;cursor:pointer;padding:0 2px;font:inherit;line-height:1}
+/* Dark candidate, app family (docs/brand/guide.md §4.1): surface #151517, ink #fafafa,
+   hairline #69696b, warning #fbbd23. The guide has no dark value for info, success or
+   error; the light stripes are kept, and each measures at least 3:1 on #151517. */
+@media (prefers-color-scheme: dark){
+.toast{border-color:#69696b;background:#151517;color:#fafafa}
+.toast--warning{border-left-color:#fbbd23}
+}
 `;
 
 /** Renders `store` into the host layer. Exposed for tests with a short-duration store. */
