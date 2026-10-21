@@ -43,6 +43,8 @@ export interface InviteRecord {
   /** Public record directory, resolved from --invites-public-dir or the env at create. Unset means no public copy. */
   publicDir?: string;
   held?: { reason: string; at: string };
+  /** Artifact C, persisted before the Welcome write so a retried approve reuses it instead of pairing again. */
+  artifactC?: Welcome['artifactC'];
   completedPeer?: { handle: string; courierDid: string; ownerDid: string };
   cleanedAt?: string;
 }
@@ -97,16 +99,18 @@ export function reasonOf(e: unknown): string {
   return typeof code === 'string' && /^[A-Za-z0-9_-]{1,40}$/.test(code) ? code : 'handler-error';
 }
 
-/**
- * Best-effort public copy update. Failure is logged by reason code and never changes the invite outcome.
- * Only status and completedPeer are patched; the create-time fields stay as written at create.
- */
-export function publishStatus(record: InviteRecord, log: Log): void {
+/** Public copy update that throws on failure. Only status and completedPeer are patched; create-time fields stay as written at create. */
+export function writePublicStatus(record: InviteRecord): void {
   if (record.publicDir === undefined) return;
   const patch: Partial<Pick<PublicInvite, 'status' | 'completedPeer'>> = { status: record.status };
   if (record.completedPeer !== undefined) patch.completedPeer = record.completedPeer;
+  updatePublicInvite(record.publicDir, record.inviteId, patch);
+}
+
+/** Best-effort public copy update for transitions that do not decide the outcome. Failure is logged by reason code only. */
+export function publishStatus(record: InviteRecord, log: Log): void {
   try {
-    updatePublicInvite(record.publicDir, record.inviteId, patch);
+    writePublicStatus(record);
   } catch (e) {
     log({ event: 'public-write-failed', inviteId: record.inviteId, reason: reasonOf(e) });
   }
@@ -121,6 +125,8 @@ export interface InviteEnv {
   verify?: (input: VerifyEmailProofInput) => Promise<VerifyEmailProofResult>;
   accept?: typeof acceptB;
   deleteSealed?: typeof deleteSealedReal;
+  /** Test seam: runs after acceptB's artifact is persisted and before the Welcome write. */
+  fault?: (step: 'before-welcome') => void;
 }
 
 type Check = { ok: true; replayKey: string } | { ok: false; reason: string };
@@ -220,23 +226,29 @@ export class InviteWatcher {
     latest.status = 'consumed';
     writeRecord(latest);
     publishStatus(latest, this.env.log);
-    await delIfPresent(kv, helloKey);
-    await this.decide(latest, hello);
+    await this.decide(latest, hello, helloKey);
   }
 
-  private async decide(record: InviteRecord, hello: Hello): Promise<void> {
+  /**
+   * Runs after `consumed` is persisted. Any exception ends HELD with reason internal-error; the specific code is logged as invite-error.
+   * A verified credential's replay key is recorded before pairing, so a held invite cannot be re-verified with the same credential.
+   */
+  private async decide(record: InviteRecord, hello: Hello, helloKey: string): Promise<void> {
     let decision: Check;
     try {
+      await delIfPresent(this.env.node.kv, helloKey);
       decision = await this.check(record, hello);
+      if (decision.ok) addSeenReplayKey(decision.replayKey);
     } catch (e) {
-      await this.hold(record, hello, reasonOf(e));
+      this.env.log({ event: 'invite-error', inviteId: record.inviteId, reason: reasonOf(e) });
+      await this.hold(record, hello, 'internal-error');
       return;
     }
     if (!decision.ok) {
       await this.hold(record, hello, decision.reason);
       return;
     }
-    await this.complete(record, hello, record.tier, decision.replayKey);
+    await this.complete(record, hello);
   }
 
   private async check(record: InviteRecord, hello: Hello): Promise<Check> {
@@ -260,25 +272,47 @@ export class InviteWatcher {
     return { ok: true, replayKey: `${verified.credentialId}:${record.inviteId}` };
   }
 
-  /** Pairs the peer and writes Welcome. Returns a reason code on failure; the invite then stays consumed. */
-  private async complete(record: InviteRecord, hello: Hello, tier: AcceptedTier, replayKey?: string): Promise<string | undefined> {
+  /** Writes the Welcome once. An identical existing Welcome (a retried approve) is accepted; any other existing Welcome is a conflict. */
+  private async writeWelcome(welcome: Welcome): Promise<void> {
+    const kv = this.env.node.kv;
+    const key = `${inviteFolder(welcome.inviteId)}out/welcome.json`;
     try {
-      const artifactC = await this.accept(this.env.profile(), this.env.node, hello.artifactB, record.handle);
-      if (replayKey !== undefined) addSeenReplayKey(replayKey);
-      const welcome: Welcome = { v: 1, inviteId: record.inviteId, tier, artifactC, sentAt: this.now().toISOString() };
-      if ((await putCreate(this.env.node.kv, `${inviteFolder(record.inviteId)}out/welcome.json`, welcome)) === null) {
-        throw new CourierError('welcome-exists', 'welcome already written for this invite');
+      await putCreate(kv, key, welcome);
+      return;
+    } catch (e) {
+      // Production create-only put throws 'conflict' on 412; the record exists, so compare it below.
+      if (!(e instanceof CourierError && e.code === 'conflict')) throw e;
+    }
+    const prior = (await getJson<Welcome>(kv, key))?.value;
+    if (!prior || prior.inviteId !== welcome.inviteId || prior.tier !== welcome.tier || JSON.stringify(prior.artifactC) !== JSON.stringify(welcome.artifactC)) {
+      throw new CourierError('welcome-exists', 'welcome already written for this invite');
+    }
+  }
+
+  /**
+   * Pairs the peer (acceptB, skipped when artifactC is already persisted), writes the Welcome, then commits the record as completed.
+   * Any failure ends HELD with reason internal-error. A retried approve resumes from the persisted artifactC and an identical Welcome.
+   * Returns the reason code on failure, undefined on success.
+   */
+  private async complete(record: InviteRecord, hello: Hello): Promise<string | undefined> {
+    try {
+      if (record.artifactC === undefined) {
+        record.artifactC = await this.accept(this.env.profile(), this.env.node, hello.artifactB, record.handle);
+        writeRecord(record);
       }
+      this.env.fault?.('before-welcome');
+      await this.writeWelcome({ v: 1, inviteId: record.inviteId, tier: record.tier, artifactC: record.artifactC, sentAt: this.now().toISOString() });
       record.status = 'completed';
-      record.tier = tier;
       record.completedPeer = { handle: record.handle, courierDid: hello.artifactB.from.courier, ownerDid: hello.artifactB.from.owner };
+      // Strict: a failed public update holds the invite instead of completing with a stale public copy.
+      writePublicStatus(record);
       delete record.held;
       writeRecord(record);
-      publishStatus(record, this.env.log);
     } catch (e) {
-      const reason = reasonOf(e);
-      this.env.log({ event: 'invite-error', inviteId: record.inviteId, reason });
-      return reason;
+      this.env.log({ event: 'invite-error', inviteId: record.inviteId, reason: reasonOf(e) });
+      delete record.completedPeer;
+      await this.hold(record, hello, 'internal-error');
+      return 'internal-error';
     }
     await this.finish(record);
     await this.emit({ kind: 'invite-completed', peer: record.handle, threadId: record.inviteId, detail: '', invite: inviteFacts(record, hello, '') });
@@ -299,16 +333,17 @@ export class InviteWatcher {
     await this.emit({ kind: 'invite-held', peer: record.handle, threadId: record.inviteId, detail: '', invite: inviteFacts(record, hello, reason) });
   }
 
-  /** Owner approves a held invite. Status is consumed before pairing so a second decision cannot run. */
+  /** Owner approves a held invite, optionally overriding the requested tier. A failure ends held again, so approve can be retried. */
   async approve(id: string, tier?: AcceptedTier): Promise<void> {
     const record = await this.heldRecord(id);
     const hello = readHeld(id);
     if (!hello) fail('invite-not-held', 'Held hello is missing; nothing to approve.');
+    if (tier !== undefined) record.tier = tier;
     record.status = 'consumed';
     writeRecord(record);
     publishStatus(record, this.env.log);
-    const reason = await this.complete(record, hello, tier ?? record.tier);
-    if (reason !== undefined) fail(reason, 'Pairing failed; the invite stays consumed.');
+    const reason = await this.complete(record, hello);
+    if (reason !== undefined) fail(reason, 'Pairing failed; the invite is held again. Retry approve or deny.');
   }
 
   /** Owner denies a held invite. The invitee gets a rejected Welcome with no artifact. */
@@ -318,8 +353,15 @@ export class InviteWatcher {
     writeRecord(record);
     publishStatus(record, this.env.log);
     const welcome: Welcome = { v: 1, inviteId: id, tier: 'rejected', sentAt: this.now().toISOString() };
-    if ((await putCreate(this.env.node.kv, `${inviteFolder(id)}out/welcome.json`, welcome)) === null) {
-      fail('welcome-exists', 'Welcome already written for this invite.');
+    try {
+      await putCreate(this.env.node.kv, `${inviteFolder(id)}out/welcome.json`, welcome);
+    } catch (e) {
+      // Any failure leaves the invite held, so approve or a retried deny stays possible.
+      record.status = 'held';
+      writeRecord(record);
+      publishStatus(record, this.env.log);
+      if (e instanceof CourierError && e.code === 'conflict') fail('welcome-exists', 'Welcome already written for this invite; it cannot be denied.');
+      throw e;
     }
     this.dropPendingPeer(record.handle);
     record.status = 'denied';

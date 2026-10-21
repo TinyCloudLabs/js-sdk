@@ -171,26 +171,186 @@ test('valid hello pairs, writes one strict Welcome, and notifies invite-complete
   assert.equal(verifyInput.now, NOW);
 });
 
-test('invite is marked consumed before acceptB runs, and cannot be reused after a crash', async () => {
+function countPuts(key) {
+  const real = kv.put;
+  const counter = { n: 0 };
+  kv.put = async (k, v, o) => {
+    const r = await real(k, v, o);
+    if (k === key && r.ok) counter.n += 1;
+    return r;
+  };
+  return counter;
+}
+
+function failPutOnce(key) {
+  const real = kv.put;
+  let armed = true;
+  kv.put = async (k, v, o) => {
+    if (armed && k === key) {
+      armed = false;
+      throw new Error(`injected put failure: ${k}`);
+    }
+    return real(k, v, o);
+  };
+}
+
+function assertHeldOnce(reason) {
+  assert.equal(readRecord(ID).status, 'held');
+  assert.equal(readRecord(ID).held.reason, reason);
+  assert.deepEqual(notices.map((n) => [n.kind, n.invite.reason]), [['invite-held', reason]]);
+}
+
+test('acceptB throws after consumed: held with internal-error, one notice, approve completes once', async () => {
   invite(ID);
   await putHello(ID);
+  let calls = 0;
   let statusInAccept;
-  await watcher({
+  const w = watcher({
     accept: async () => {
+      calls += 1;
       statusInAccept = readRecord(ID).status;
-      throw new Error('accept crashed');
+      if (calls === 1) throw new Error('accept crashed');
+      return C_ARTIFACT;
     },
-  }).onHello(ID);
+  });
+  await w.onHello(ID);
   assert.equal(statusInAccept, 'consumed');
-  assert.equal(readRecord(ID).status, 'consumed');
+  assertHeldOnce('internal-error');
   assert.equal(welcomeOf(ID), undefined);
+  assert.deepEqual(inKeys(ID), []);
   assert.ok(logs.some((e) => e.event === 'invite-error' && e.inviteId === ID));
 
+  await w.approve(ID);
+  assert.equal(calls, 2);
+  assert.equal(readRecord(ID).status, 'completed');
+  assert.equal(welcomeOf(ID).artifactC.step, 'C');
+  assert.deepEqual(notices.map((n) => n.kind), ['invite-held', 'invite-completed']);
+});
+
+test('fault after acceptB, before the Welcome write: held, approve reuses artifact C and writes one Welcome', async () => {
+  invite(ID);
   await putHello(ID);
-  let calls = 0;
-  await watcher({ accept: async () => { calls += 1; return C_ARTIFACT; } }).onHello(ID);
-  assert.equal(calls, 0);
-  assert.deepEqual(inKeys(ID), []);
+  let accepts = 0;
+  let armed = true;
+  const welcomePuts = countPuts(`${inviteFolder(ID)}out/welcome.json`);
+  const w = watcher({
+    accept: async () => {
+      accepts += 1;
+      return C_ARTIFACT;
+    },
+    fault: (step) => {
+      if (step === 'before-welcome' && armed) {
+        armed = false;
+        throw new Error('crash before welcome');
+      }
+    },
+  });
+  await w.onHello(ID);
+  assertHeldOnce('internal-error');
+  assert.equal(welcomeOf(ID), undefined);
+  assert.equal(accepts, 1);
+
+  await w.approve(ID);
+  assert.equal(accepts, 1);
+  assert.equal(welcomePuts.n, 1);
+  assert.equal(readRecord(ID).status, 'completed');
+  assert.deepEqual(notices.map((n) => n.kind), ['invite-held', 'invite-completed']);
+});
+
+test('Welcome put fails once: held with internal-error, approve writes exactly one Welcome', async () => {
+  invite(ID);
+  await putHello(ID);
+  failPutOnce(`${inviteFolder(ID)}out/welcome.json`);
+  const welcomePuts = countPuts(`${inviteFolder(ID)}out/welcome.json`);
+  const w = watcher();
+  await w.onHello(ID);
+  assertHeldOnce('internal-error');
+  assert.equal(welcomeOf(ID), undefined);
+
+  await w.approve(ID);
+  assert.equal(welcomePuts.n, 1);
+  assert.equal(welcomeOf(ID).artifactC.step, 'C');
+  assert.equal(readRecord(ID).status, 'completed');
+  assert.deepEqual(notices.map((n) => n.kind), ['invite-held', 'invite-completed']);
+});
+
+test('public update fails during completion: held with internal-error; approve completes once the public copy is repaired', async () => {
+  const dir = path.join(home, 'public');
+  fs.mkdirSync(dir);
+  invite(ID, { publicDir: dir });
+  seedPublic(dir, ID);
+  await putHello(ID);
+  fs.rmSync(publicFile(dir, ID));
+  fs.mkdirSync(publicFile(dir, ID));
+  const welcomePuts = countPuts(`${inviteFolder(ID)}out/welcome.json`);
+  let accepts = 0;
+  const w = watcher({ accept: async () => {
+    accepts += 1;
+    return C_ARTIFACT;
+  } });
+  await w.onHello(ID);
+  assertHeldOnce('internal-error');
+  assert.equal(welcomePuts.n, 1);
+
+  fs.rmdirSync(publicFile(dir, ID));
+  seedPublic(dir, ID);
+  await w.approve(ID);
+  assert.equal(accepts, 1);
+  assert.equal(welcomePuts.n, 1);
+  assert.equal(readRecord(ID).status, 'completed');
+  assert.equal(readPublic(dir, ID).status, 'completed');
+  assert.deepEqual(notices.map((n) => n.kind), ['invite-held', 'invite-completed']);
+});
+
+test('deny after a partial approve: Welcome already exists, deny fails and the invite stays held', async () => {
+  const dir = path.join(home, 'public');
+  fs.mkdirSync(dir);
+  invite(ID, { publicDir: dir });
+  seedPublic(dir, ID);
+  await putHello(ID);
+  fs.rmSync(publicFile(dir, ID));
+  fs.mkdirSync(publicFile(dir, ID));
+  const w = watcher();
+  await w.onHello(ID);
+  assertHeldOnce('internal-error');
+  assert.ok(welcomeOf(ID));
+
+  await assert.rejects(w.deny(ID), { code: 'welcome-exists' });
+  assert.equal(readRecord(ID).status, 'held');
+});
+
+test('expectOwner set and hello owner differs: held owner-mismatch, no pairing, no Welcome', async () => {
+  invite(ID, { expectOwner: SAM_OWNER });
+  await putHello(ID);
+  let accepts = 0;
+  await watcher({ accept: async () => {
+    accepts += 1;
+    return C_ARTIFACT;
+  } }).onHello(ID);
+  assertHeldOnce('owner-mismatch');
+  assert.equal(accepts, 0);
+  assert.equal(welcomeOf(ID), undefined);
+});
+
+test('a verified credential is recorded even when pairing then fails', async () => {
+  invite(ID);
+  await putHello(ID);
+  await watcher({ accept: async () => { throw new Error('accept crashed'); } }).onHello(ID);
+  assertHeldOnce('internal-error');
+  assert.ok(loadSeenCredentials().has(`${CRED}:${ID}`));
+});
+
+test('a public copy that cannot be written is logged and does not block the hold', async () => {
+  const dir = path.join(home, 'public');
+  fs.mkdirSync(dir);
+  invite(ID, { publicDir: dir });
+  seedPublic(dir, ID);
+  await putHello(ID);
+  fs.rmSync(publicFile(dir, ID));
+  fs.mkdirSync(publicFile(dir, ID));
+  await watcher({ accept: async () => { throw new Error('accept crashed'); } }).onHello(ID);
+  assertHeldOnce('internal-error');
+  assert.ok(logs.some((e) => e.event === 'public-write-failed' && e.inviteId === ID));
 });
 
 test('a second hello for a completed invite is ignored and deleted', async () => {
@@ -378,7 +538,7 @@ test('a handler exception holds the invite, and the next invite still pairs', as
   const broken = watcher({ verify: async () => { throw new Error('verifier exploded'); } });
   await broken.onHello(ID);
   assert.equal(readRecord(ID).status, 'held');
-  assert.equal(readRecord(ID).held.reason, 'handler-error');
+  assert.equal(readRecord(ID).held.reason, 'internal-error');
   assert.equal(welcomeOf(ID), undefined);
 
   invite(ID2);
@@ -463,17 +623,17 @@ test('no public directory on the record means no public writes, even with the en
   }
 });
 
-test('a failed public write does not undo a completed pairing and logs only the reason code', async () => {
+test('a failed public write holds the invite; the log keeps only the reason code', async () => {
   const pub = fs.mkdtempSync(path.join('/var/tmp', 'courier-watch-pub-'));
   try {
     invite(ID, { publicDir: pub });
     await putHello(ID);
     await watcher().onHello(ID);
-    assert.equal(readRecord(ID).status, 'completed');
-    assert.equal(welcomeOf(ID).tier, 'strict');
-    assert.equal(notices.at(-1).kind, 'invite-completed');
-    const failure = logs.find((e) => e.event === 'public-write-failed');
-    assert.ok(failure, 'public write failure is logged');
+    assert.equal(readRecord(ID).status, 'held');
+    assert.equal(readRecord(ID).held.reason, 'internal-error');
+    assert.deepEqual(notices.map((n) => n.kind), ['invite-held']);
+    const failure = logs.find((e) => e.event === 'invite-error');
+    assert.ok(failure, 'failure is logged');
     assert.deepEqual(Object.keys(failure).sort(), ['event', 'inviteId', 'reason']);
     assert.match(failure.reason, /^[A-Za-z0-9_-]{1,40}$/);
   } finally {
