@@ -13,6 +13,7 @@ import {
   deleteSealed, fetchSealed, formatInviteString, inviteOrigin, openInvitation, parseInviteString,
   sealInvitation, uploadSealed, type UploadedInvite,
 } from './invite-link.js';
+import { publicInvitesDir, updatePublicInvite, writePublicInvite } from './invite-public.js';
 import { emailAddress, inviteFolder, parseInviteBlob, parseWelcome, type InviteBlob, type OneTimeKey } from './invite-schema.js';
 import { artifactA, validateArtifactIdentity } from './pairing.js';
 import { HANDLE } from './request.js';
@@ -42,6 +43,7 @@ interface InviteRecord {
   expiresAt: string;
   store: { id: string; cid: string; deleteToken: string };
   status: 'open' | 'consumed' | 'revoked';
+  publicDir?: string;
 }
 
 /** Invitee-side join state. `d` of the one-time key lives inside `blob`: this file is 0600. */
@@ -53,7 +55,7 @@ interface JoinState {
   stage: 'hello-ready' | 'hello-sent';
 }
 
-const inviteUsage = () => `Usage: ${cmd('invite <handle> --email <address> [--tier strict|trusted] [--ttl 24h] [--call-me <handle>] [--also-ask]')}`;
+const inviteUsage = () => `Usage: ${cmd('invite <handle> --email <address> [--tier strict|trusted] [--ttl 24h] [--call-me <handle>] [--also-ask] [--invites-public-dir d]')}`;
 
 function requireInviteId(id: string | undefined, usage: string): string {
   if (id === undefined || !INVITE_ID.test(id)) fail('usage', `Invite id is 26 characters from a-z and 2-7. ${usage}`);
@@ -113,6 +115,7 @@ async function inviteCreate(args: ParsedArgs): Promise<void> {
   if (ttlMs === undefined || ttlMs <= 0 || ttlMs > PEER_DELEGATION_MAX_MS) {
     fail('usage', `--ttl must be a duration like 24h, at most 7d (got "${ttl}").`);
   }
+  const publicDir = publicInvitesDir(args.get('invites-public-dir'), process.env.COURIER_INVITES_PUBLIC_DIR);
   const existing = profile.peers[handle];
   if (existing) fail('usage', `Peer "${handle}" already exists (${existing.status}); revoke it first.`);
 
@@ -122,6 +125,7 @@ async function inviteCreate(args: ParsedArgs): Promise<void> {
 
   const inviteId = newInviteId();
   const expiresAt = new Date(Date.now() + ttlMs);
+  const createdAt = new Date().toISOString();
   const folder = inviteFolder(inviteId);
   const delegate = (entries: Entries) => node.delegateTo(bareDid(oneTime.did), entries, { expiry: ttl });
 
@@ -132,6 +136,7 @@ async function inviteCreate(args: ParsedArgs): Promise<void> {
   saveProfile(profile);
 
   let uploaded: UploadedInvite | undefined;
+  let recordWritten = false;
   try {
     const put = await delegate([{ space: spaceId, service: 'tinycloud.kv', path: `${folder}in/hello.json`, actions: ['tinycloud.kv/put'] }]);
     const read = await delegate([{ space: spaceId, service: 'tinycloud.kv', path: `${folder}out/`, actions: ['tinycloud.kv/get', 'tinycloud.kv/list'] }]);
@@ -164,11 +169,20 @@ async function inviteCreate(args: ParsedArgs): Promise<void> {
       expiresAt: expiresAt.toISOString(),
       store: { id: uploaded.id, cid: uploaded.cid, deleteToken: uploaded.deleteToken },
       status: 'open',
+      publicDir,
     });
+    recordWritten = true;
+    if (publicDir !== undefined) {
+      writePublicInvite(publicDir, {
+        v: 1, inviteId, handle, expectEmail, expectOwner: null, tier, createdAt,
+        expiresAt: expiresAt.toISOString(), status: 'open', completedPeer: null,
+      });
+    }
     console.log(`Invite for ${expectEmail} as "${handle}" (tier ${tier}), expires ${expiresAt.toISOString()}.`);
     console.log('Send this string to the invitee. It is a bearer link: keep it private until revoked or expired.');
     console.log(formatInviteString({ id: uploaded.id, key: seal.key, cid: uploaded.cid }));
   } catch (e) {
+    if (recordWritten) fs.rmSync(recordPath(inviteId), { force: true });
     delete profile.peers[handle];
     saveProfile(profile);
     if (uploaded) await deleteSealed(inviteOrigin(), uploaded.id, uploaded.deleteToken).catch(() => undefined);
@@ -199,6 +213,7 @@ async function inviteRevoke(id: string | undefined): Promise<void> {
   const inviteId = requireInviteId(id, `Usage: ${cmd('invite revoke <invite-id>')}`);
   const record = readRecord(inviteId) ?? fail('usage', `No invite ${inviteId} on this machine.`);
   if (record.status === 'revoked') {
+    if (record.publicDir !== undefined) updatePublicInvite(record.publicDir, inviteId, { status: 'revoked' });
     console.log(`Invite ${inviteId} is already revoked.`);
     return;
   }
@@ -216,6 +231,7 @@ async function inviteRevoke(id: string | undefined): Promise<void> {
   await delIfPresent(node.kv, `${folder}out/welcome.json`);
   record.status = 'revoked';
   writeRecord(record);
+  if (record.publicDir !== undefined) updatePublicInvite(record.publicDir, inviteId, { status: 'revoked' });
   if (profile.peers[record.handle]?.status === 'pending-A') {
     delete profile.peers[record.handle];
     saveProfile(profile);
