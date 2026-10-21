@@ -1079,19 +1079,22 @@ describe.skipIf(!REAL_NODE_BIN)("node-sdk replication against a real node", () =
     });
     // Count HTTP attempts issued during the sync window only. Fetch is captured when the node's
     // services are built, so the counter is installed before `new TinyCloudNode` and restored in `finally`.
+    // Only the replication transport's own attempts are counted: the kv sync `/invoke` and the `/info`
+    // probe. Session activation and delegation (`POST /delegate`, issued by mintNodeReplicationGrant via
+    // activateSessionWithHost) are NOT recorded in the v1 request log. They are excluded from the count,
+    // and the window opens only after a warm-up sync has completed the grant mint.
+    const TRANSPORT_PATHS = new Set(["/invoke", "/info"]);
     const originalFetch = globalThis.fetch;
     let counting = false;
     let attempts = 0;
-    const countedUrls: string[] = [];
     globalThis.fetch = (async (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
-      if (counting) {
-        attempts += 1;
-        countedUrls.push(`${init?.method ?? "GET"} ${String(input)}`);
-      }
+      if (counting && TRANSPORT_PATHS.has(new URL(String(input)).pathname)) attempts += 1;
       return originalFetch(input, init);
     }) as typeof fetch;
     try {
       await node.signIn();
+      // Warm-up: completes session activation and the replication grant mint before the counted window.
+      await node.replication!.sync();
       expect((await node.kv.put("notes/sync-log-seed", "sync-log-v0")).ok).toBe(true);
       const baseline = node.requests!.snapshot().length;
       counting = true;
@@ -1100,6 +1103,7 @@ describe.skipIf(!REAL_NODE_BIN)("node-sdk replication against a real node", () =
 
       const windowRows = node.requests!.snapshot().slice(baseline);
       const syncRows = windowRows.filter((event) => event.service === "sync");
+      expect(attempts).toBeGreaterThan(0);
       expect(syncRows.length).toBeGreaterThan(0);
       expect(windowRows.every((event) => event.service === "sync")).toBe(true);
       for (const row of syncRows) {
@@ -1110,8 +1114,7 @@ describe.skipIf(!REAL_NODE_BIN)("node-sdk replication against a real node", () =
       expect(serialized).not.toContain("notes/");
       expect(serialized).not.toContain("sync-log-seed");
       // One row per logical call, carrying its HTTP attempts (a retried call is one row, attempts > 1).
-      // Summing attempts still requires every counted HTTP attempt to appear in some row.
-      console.log("TC848_DIAG " + JSON.stringify({ countedUrls, rows: windowRows.map((r) => ({ service: r.service, op: r.op, code: r.code, attempts: r.attempts })) }));
+      // Summing attempts requires every counted transport attempt to appear in exactly one row.
       expect(syncRows.reduce((total, row) => total + row.attempts, 0)).toBe(attempts);
     } finally {
       counting = false;
