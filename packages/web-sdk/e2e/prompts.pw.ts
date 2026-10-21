@@ -226,6 +226,33 @@ for (const scheme of ["light", "dark"] as const) {
     await expect.poll(() => permResult(page)).toBe(true);
   });
 
+  // An overlay at z-index 999999 in document.body stands in for OpenKey's layer.
+  // The host is 999990, so the overlay must win the hit-test at the prompt's own
+  // button. If the host ever rises above 999999, this fails.
+  for (const [name, selector, action, open] of [
+    ["space", SPACE, "create", openSpaceCreation],
+    ["permission", PERMISSION, "approve", openPermission],
+  ] as const) {
+    test(`${scheme}: ${name} prompt is covered by a body overlay at z-index 999999`, async ({ page }) => {
+      await mountHarness(page, scheme);
+      await page.evaluate(() => {
+        const overlay = document.createElement("div");
+        overlay.id = "e2e-openkey-stand-in";
+        overlay.setAttribute("style", "position:fixed;inset:0;z-index:999999;background:rgba(0,0,0,.5);");
+        document.body.appendChild(overlay);
+      });
+      await open(page);
+
+      const box = await page.locator(selector).locator(`[data-action="${action}"]`).boundingBox();
+      expect(box).not.toBeNull();
+      const hit = await page.evaluate(
+        ([x, y]) => document.elementFromPoint(x, y)?.id ?? null,
+        [box!.x + box!.width / 2, box!.y + box!.height / 2],
+      );
+      expect(hit).toBe("e2e-openkey-stand-in");
+    });
+  }
+
   // Assertion d: colour scheme. Each prompt paints an opaque surface whose
   // text colour differs from it, in both light and dark emulation.
   for (const [name, selector, open] of [
