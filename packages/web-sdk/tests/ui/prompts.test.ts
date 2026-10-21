@@ -23,6 +23,9 @@ class FakeNode {
   appendChild(child: FakeNode): FakeNode {
     child.parent = this;
     this.children.push(child);
+    // The DOM calls connectedCallback on insertion; modals open from it.
+    // Boundary cast: connectedCallback is only present on custom elements.
+    (child as unknown as { connectedCallback?: () => void }).connectedCallback?.();
     return child;
   }
   remove(): void {
@@ -78,6 +81,8 @@ const savedGlobals = {
 const savedWarn = console.warn;
 
 const warnings: string[] = [];
+// Keydown listeners registered on the shim document, so tests can press Escape.
+const keydownListeners = new Set<(event: KeyboardEvent) => void>();
 const body = new FakeBody();
 const fakeWindow = {
   top: undefined as unknown,
@@ -99,8 +104,12 @@ beforeAll(async () => {
     body,
     documentElement: new FakeNode(),
     createElement: () => new FakeNode(),
-    addEventListener() {},
-    removeEventListener() {},
+    addEventListener(type: string, listener: (event: KeyboardEvent) => void) {
+      if (type === "keydown") keydownListeners.add(listener);
+    },
+    removeEventListener(type: string, listener: (event: KeyboardEvent) => void) {
+      if (type === "keydown") keydownListeners.delete(listener);
+    },
   };
   globals.window = fakeWindow;
   globals.requestAnimationFrame = (cb: () => void) => {
@@ -334,5 +343,97 @@ describe("scoped dismissal", () => {
     dismissPrompts(scope);
     stopPrompts();
     expect(dismissed).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Displacement and Escape
+// ---------------------------------------------------------------------------
+
+function pressEscape(): void {
+  for (const listener of [...keydownListeners]) listener({ key: "Escape" } as KeyboardEvent);
+}
+
+describe("opening a prompt while another is open", () => {
+  test("settles the displaced permission prompt as declined and keeps the new one", async () => {
+    const manager = modals.ModalManager.getInstance();
+    const firstScope = createPromptScope(true);
+    const secondScope = createPromptScope(true);
+    let firstDismissed = 0;
+    const first = manager.showPermissionRequestModal(
+      permissionOptions(() => {
+        firstDismissed += 1;
+      }),
+      firstScope,
+    );
+    const second = manager.showPermissionRequestModal(permissionOptions(() => {}), secondScope);
+
+    expect(await first).toEqual({ approved: false });
+    expect(firstDismissed).toBe(1);
+    expect(manager.hasActiveModal()).toBe(true);
+
+    dismissPrompts(secondScope);
+    expect(await second).toEqual({ approved: false });
+  });
+
+  test("settles the displaced space creation prompt as dismissed and keeps the new one", async () => {
+    const manager = modals.ModalManager.getInstance();
+    const firstScope = createPromptScope(true);
+    const secondScope = createPromptScope(true);
+    let firstDismissed = 0;
+    const first = manager.showSpaceCreationModal(
+      spaceOptions(() => {
+        firstDismissed += 1;
+      }),
+      firstScope,
+    );
+    const second = manager.showSpaceCreationModal(spaceOptions(() => {}), secondScope);
+
+    expect(await first).toEqual({ success: false, dismissed: true });
+    expect(firstDismissed).toBe(1);
+    expect(manager.hasActiveModal()).toBe(true);
+
+    dismissPrompts(secondScope);
+    expect(await second).toEqual({ success: false, dismissed: true });
+  });
+});
+
+describe("Escape", () => {
+  test("Escape settles a permission prompt as declined and calls onDismiss once", async () => {
+    const manager = modals.ModalManager.getInstance();
+    let dismissed = 0;
+    const pending = manager.showPermissionRequestModal(
+      permissionOptions(() => {
+        dismissed += 1;
+      }),
+      createPromptScope(true),
+    );
+
+    pressEscape();
+    expect(await pending).toEqual({ approved: false });
+    expect(dismissed).toBe(1);
+    expect(manager.hasActiveModal()).toBe(false);
+
+    pressEscape();
+    expect(dismissed).toBe(1);
+  });
+
+  test("Escape settles a space creation prompt as dismissed and calls onDismiss once", async () => {
+    const manager = modals.ModalManager.getInstance();
+    let dismissed = 0;
+    const pending = manager.showSpaceCreationModal(
+      spaceOptions(() => {
+        dismissed += 1;
+      }),
+      createPromptScope(true),
+    );
+
+    pressEscape();
+    expect(await pending).toEqual({ success: false, dismissed: true });
+    expect(dismissed).toBe(1);
+    expect(manager.hasActiveModal()).toBe(false);
+
+    pressEscape();
+    expect(dismissed).toBe(1);
   });
 });
