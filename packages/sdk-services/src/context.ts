@@ -182,7 +182,12 @@ export class ServiceContext implements IServiceContext {
    */
   get unrecordedFetch(): FetchFunction {
     this.assertActive();
-    return this._fetchCore;
+    return this.uncountedFetch;
+  }
+
+  /** The fetch for one attempt this context does not record. With no sink it is `_fetch`, read at call time, so an override of `_fetch` applies here too. */
+  private get uncountedFetch(): FetchFunction {
+    return this._requestSink === undefined ? this._fetch : this._fetchCore;
   }
 
   /** The developer request sink this context records to; undefined when developer mode is off. */
@@ -505,7 +510,7 @@ export class ServiceContext implements IServiceContext {
       const init = await build();
       signal ??= this.combineSignals(init.signal);
       tally.attempts = attempt;
-      const response = await this._fetchCore(url, init);
+      const response = await this.uncountedFetch(url, init);
       const done = (): FetchResponse => {
         try { response.retry = { attempts: attempt, backoffMs }; } catch { /* frozen custom response */ }
         return response;

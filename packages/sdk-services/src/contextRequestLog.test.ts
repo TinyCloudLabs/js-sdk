@@ -154,6 +154,25 @@ test("developer off, zero-call proof: with no sink, fetch is the unrecorded tran
   expect(received.every((response, i) => response === sent[i])).toBe(true);
 });
 
+test("developer off: a _fetch override reaches unrecordedFetch and the retry loop", async () => {
+  // The real transport must never run: the override below answers every attempt.
+  const context = contextWith(undefined, async () => {
+    throw new Error("real transport ran");
+  });
+  let overrideCalls = 0;
+  // Test-only seam: `_fetch` is the call-time override point; the cast stays on this named const.
+  const seam = context as unknown as { _fetch: (url: string, init?: unknown) => Promise<FetchResponse> };
+  seam._fetch = async () => {
+    overrideCalls += 1;
+    return reply(200, "ok");
+  };
+  const direct = await context.unrecordedFetch("https://node.example/kv", { method: "POST" });
+  expect(direct.ok).toBe(true);
+  const retried = await context.invokeWithRetry("https://node.example/invoke", () => ({ method: "POST" }));
+  expect(retried.ok).toBe(true);
+  expect(overrideCalls).toBe(2);
+});
+
 function replyWithLength(length: string | null): FetchResponse {
   return { ...reply(200, "ok"), headers: { get: (name) => (name.toLowerCase() === "content-length" ? length : null) } };
 }
