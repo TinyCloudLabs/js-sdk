@@ -310,6 +310,21 @@ describe("teardown settles pending prompts", () => {
     stopPrompts();
     expect(await pending).toEqual({ success: false, dismissed: true });
   });
+
+  test("host stop still settles later prompts when one dismiss throws", () => {
+    const scope = createPromptScope(true);
+    const calls = { first: 0, second: 0 };
+    mountPrompt(scope, new FakeNode() as unknown as HTMLElement, () => {
+      calls.first += 1;
+      throw new Error("probe teardown");
+    });
+    mountPrompt(scope, new FakeNode() as unknown as HTMLElement, () => {
+      calls.second += 1;
+    });
+
+    expect(() => stopPrompts()).toThrow("probe teardown");
+    expect(calls).toEqual({ first: 1, second: 1 });
+  });
 });
 
 describe("scoped dismissal", () => {

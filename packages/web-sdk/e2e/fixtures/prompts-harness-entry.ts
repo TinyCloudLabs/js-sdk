@@ -5,9 +5,10 @@
 // scope the host registered, so a reset dismisses pending prompts through the
 // same scope. The spec injects no init script; everything is driven through
 // window.__tc.
-import { registerUiClient, type UiClientHandle } from "../../src/ui/index";
+import { registerUiClient, type UiClientHandle, type UiConfig } from "../../src/ui/index";
 import { ModalSpaceCreationHandler } from "../../src/authorization/WebSpaceCreationHandler";
 import { showPermissionRequestModal, showSpaceCreationModal } from "../../src/notifications/ModalManager";
+import { applyLegacyNotificationKeys } from "../../src/notifications/legacy-config";
 
 type SyncState = { requested: boolean; effective: string; reason?: string };
 
@@ -62,9 +63,9 @@ const source = {
 let handle: UiClientHandle | undefined;
 let keeper: UiClientHandle | undefined;
 
-function register(): UiClientHandle {
+function register(ui: UiConfig | false | undefined): UiClientHandle {
   return registerUiClient({
-    ui: undefined,
+    ui,
     source: source as never,
     manifestAppId: () => "e2e-prompts-smoke",
   });
@@ -72,11 +73,11 @@ function register(): UiClientHandle {
 
 // Replaces both clients. With a keeper, the host stays mounted when the
 // prompt client unregisters, so only prompt dismissal can remove its prompts.
-function attach(withKeeper: boolean): void {
+function attach(withKeeper: boolean, ui?: UiConfig | false): void {
   handle?.unregister();
   keeper?.unregister();
-  keeper = withKeeper ? register() : undefined;
-  handle = register();
+  keeper = withKeeper ? register(ui) : undefined;
+  handle = register(ui);
 }
 
 const w = window as unknown as Record<string, unknown>;
@@ -89,6 +90,11 @@ w.__tc = {
     attach(true);
     return true;
   },
+  mountWithConfig(legacy: Parameters<typeof applyLegacyNotificationKeys>[0]) {
+    // Same mapping as TinyCloudWeb's constructor, so legacy keys reach the host as ui.
+    attach(false, applyLegacyNotificationKeys(legacy).ui);
+    return true;
+  },
   openSpaceCreation() {
     if (handle === undefined) throw new Error("mount() must run first");
     delete w.__spaceResult;
@@ -96,6 +102,7 @@ w.__tc = {
     const handler = new ModalSpaceCreationHandler({
       promptScope: handle.promptScope,
       timeoutMs: 0,
+      toast: (request) => handle?.toast(request) ?? false,
     });
     handler
       .confirmSpaceCreation({ spaceId: "space-e2e", host: "tinycloud.test" } as never)

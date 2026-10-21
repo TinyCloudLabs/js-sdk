@@ -13,6 +13,7 @@ interface PromptWindow {
   __tc: {
     mount(): boolean;
     mountWithKeeper(): boolean;
+    mountWithConfig(legacy: Record<string, unknown>): boolean;
     openSpaceCreation(): boolean;
     openPermission(): boolean;
     openThrowingSpaceCreation(): boolean;
@@ -27,7 +28,12 @@ interface PromptWindow {
 
 // No init script is added. The page only receives the bundle and mounts it.
 // Both prompts and the host use open shadow roots, which Playwright pierces.
-async function mountHarness(page: Page, scheme: "light" | "dark", withKeeper = false) {
+async function mountHarness(
+  page: Page,
+  scheme: "light" | "dark",
+  withKeeper = false,
+  legacy?: Record<string, unknown>,
+) {
   await page.emulateMedia({ colorScheme: scheme });
   await page.route(`${ORIGIN}/**`, (route) => {
     const path = new URL(route.request().url()).pathname;
@@ -41,10 +47,14 @@ async function mountHarness(page: Page, scheme: "light" | "dark", withKeeper = f
     });
   });
   await page.goto(`${ORIGIN}/`);
-  await page.evaluate((keeper) => {
-    const tc = (window as unknown as PromptWindow).__tc;
-    return keeper ? tc.mountWithKeeper() : tc.mount();
-  }, withKeeper);
+  await page.evaluate(
+    ({ keeper, legacy }) => {
+      const tc = (window as unknown as PromptWindow).__tc;
+      if (legacy) return tc.mountWithConfig(legacy);
+      return keeper ? tc.mountWithKeeper() : tc.mount();
+    },
+    { keeper: withKeeper, legacy },
+  );
 }
 
 async function openSpaceCreation(page: Page) {
@@ -466,5 +476,32 @@ for (const scheme of ["light", "dark"] as const) {
     await expect(permissionModal).toHaveCount(0);
     await expect.poll(() => permResult(page)).toBe(false);
     expect(await hostMounted(page)).toBe(true);
+  });
+
+  // Legacy popups:false maps to ui.button/toasts off; the prompts must still render in the panel.
+  test(`${scheme}: legacy popups:false still shows the space prompt and Escape resolves false`, async ({ page }) => {
+    await mountHarness(page, scheme, false, { popups: false });
+    await openSpaceCreation(page);
+
+    const spaceModal = page.locator(SPACE);
+    await expect(spaceModal).toHaveCount(1);
+    await expect(spaceModal.locator(".modal-content")).toBeVisible();
+
+    await page.keyboard.press("Escape");
+    await expect(spaceModal).toHaveCount(0);
+    await expect.poll(() => spaceResult(page)).toBe(false);
+  });
+
+  test(`${scheme}: legacy popups:false still shows the permission prompt and Escape resolves false`, async ({ page }) => {
+    await mountHarness(page, scheme, false, { popups: false });
+    await openPermission(page);
+
+    const permissionModal = page.locator(PERMISSION);
+    await expect(permissionModal).toHaveCount(1);
+    await expect(permissionModal.locator(".modal-content")).toBeVisible();
+
+    await page.keyboard.press("Escape");
+    await expect(permissionModal).toHaveCount(0);
+    await expect.poll(() => permResult(page)).toBe(false);
   });
 }

@@ -94,10 +94,20 @@ export const prompts: HostPart = {
     promptLayer = layer;
     return () => {
       promptLayer = undefined;
+      let failed = false;
+      let firstError: unknown;
       for (const entry of [...openPrompts]) {
         openPrompts.delete(entry);
-        entry.dismiss();
+        try {
+          entry.dismiss();
+        } catch (error) {
+          if (!failed) {
+            failed = true;
+            firstError = error;
+          }
+        }
       }
+      if (failed) throw firstError;
     };
   },
 };
