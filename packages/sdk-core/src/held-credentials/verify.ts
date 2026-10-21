@@ -4,7 +4,7 @@ import { asciiBytes, decodeBase64Url, decodeUtf8, encodeBase64Url, hexToBytes, i
 import { refuse } from "./errors";
 import { IssuerSet, didMethod, lookupIssuerEntry, isWellFormedKid, type IssuerEntry } from "./issuer-set";
 import type { NonceStore } from "./nonce-store";
-import { DEFAULT_ROWS, findRow, type ProfileRow } from "./rows";
+import { DEFAULT_ROWS, findRow, rowPermitsIssuer, type ProfileRow } from "./rows";
 import { PRESENTATION_STATEMENT, SD_HASH_RESOURCE_PREFIX, assertValidAudience, parseRfc3339, parseStrictSiwe } from "./siwe";
 
 
@@ -104,9 +104,9 @@ export async function verifyHeldPresentation(presentation: unknown, options: Ver
   if (siweMessage.length > HELD_LIMITS.siweMessageChars) refuse("bad-presentation", "siwe message is too long");
   if (siweSignature.length > HELD_LIMITS.siweSignatureChars) refuse("bad-presentation", "siwe signature is too long");
 
-  // 2. SIWE fields and the nonce. The nonce is spent FIRST, on any outcome, by one atomic
-  // compare-and-delete that includes the authenticated caller's account. A forger can only spend a
-  // nonce bound to themselves, and every refusal below has already spent this one.
+  // 2. SIWE fields and the nonce. The nonce is consumed first, on any outcome, by one atomic
+  // compare-and-delete that includes the authenticated caller's account; each presentation uses its
+  // nonce once.
   const message = parseStrictSiwe(siweMessage);
   if (message.domain !== audience) refuse("bad-siwe", "domain is not this verifier's audience");
   if (!/^[0-9A-Za-z]{22,}$/.test(message.nonce)) refuse("bad-nonce", "nonce must be at least 22 base62 characters (or 32 hex)");
@@ -173,6 +173,7 @@ export async function verifyHeldPresentation(presentation: unknown, options: Ver
   if (!acceptedProfiles.some((p) => p.profile === profile && p.profileVersion === profileVersion)) refuse("profile-not-accepted", "profile is not accepted by this caller");
   if (row.vct !== vct) refuse("profile-mismatch", "vct is not the row's vct");
   if (!entry.vcts.includes(vct) || !entry.profiles.includes(profile)) refuse("profile-mismatch", "issuer entry does not admit this vct and profile");
+  if (!rowPermitsIssuer(row, issuerDid)) refuse("issuer-not-accepted", "this profile row does not permit the issuer DID");
 
   // 8. claims against the row
   for (const key of Object.keys(payload)) {

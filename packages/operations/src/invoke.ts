@@ -19,6 +19,7 @@ import {
   type OperationDefinition,
   type OperationRef,
   type OperationResult,
+  type RetryDescriptor,
   type OperationRuntimeRequirement,
   type RuntimeOperationContext,
 } from "./contract.js";
@@ -682,7 +683,7 @@ async function executePreparedInvocation(
           operation,
           context: runtimeResolution.context.summary,
           setup: outcome.setup,
-          retry: retryDescriptor(
+          retry: operationRetryDescriptor(
             operation,
             parsedInput.data,
             outcome.requiresCallerInput ?? false,
@@ -787,16 +788,12 @@ function errorResult(
   return { status: "error", operation, context, error };
 }
 
-function retryDescriptor(
+/** Build the same canonical retry identity used by operation authority results. */
+export function operationRetryDescriptor(
   operation: OperationRef,
   input: unknown,
-  requiresCallerInput: boolean,
-): Readonly<{
-  operationId: string;
-  operationVersion: number;
-  inputDigest: string;
-  requiresCallerInput: boolean;
-}> {
+  requiresCallerInput = false,
+): RetryDescriptor {
   return {
     operationId: operation.operationId,
     operationVersion: operation.operationVersion,
@@ -899,7 +896,7 @@ function authorityRequiredResult(
     missing,
     request,
     approval: approvalAction(request, node),
-    retry: retryDescriptor(operation, input, requiresCallerInput),
+    retry: operationRetryDescriptor(operation, input, requiresCallerInput),
   };
 }
 

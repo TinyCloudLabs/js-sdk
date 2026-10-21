@@ -114,7 +114,7 @@ tc delegation create --to did:pkh:eip155:1:0x...
 | `tc context` | Show the selected profile, owner, host, space and session state |
 | `tc auth status` | Show authentication status |
 | `tc auth whoami` | Show current identity |
-| `tc auth request --preset apps-agent [--app <id>]... [--write]` | Request read-only access for an agent to the user's installed apps (one app, several, or all); `--write --app <id>` also lets the agent write the app's `knowledge/` and `prefs/` files and table rows, never its code, manifest or install record |
+| `tc auth request --preset apps-agent [--app <id>]... [--write]` | Request access for an agent to the user's installed apps: read-only by default, for one app, several, or all. `--write --app <id>` also lets the agent change that app's data: write its `knowledge/` and `prefs/` files and change its tables. It cannot change the app's code, manifest or install record |
 | `tc knowledge list` | List the installed apps that have a knowledge bundle |
 | `tc knowledge read <app_id> [concept]` | Read an app's knowledge index, or one concept with its frontmatter parsed |
 | `tc kv get <key>` | Retrieve a value |

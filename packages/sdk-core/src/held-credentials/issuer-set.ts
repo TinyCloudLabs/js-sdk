@@ -1,6 +1,8 @@
 import { decodeBase64Url, isObject } from "./encoding";
 import { isStrictEd25519Point } from "./crypto";
 import { refuse } from "./errors";
+import { SHIPPED_ROWS, rowPermitsIssuer } from "./rows";
+import type { ProfileRow } from "./rows";
 
 export const ISSUER_SET_FORMAT = "tinycloud.credentials-issuers/v1";
 
@@ -13,9 +15,9 @@ export interface IssuerEntry {
   vcts: readonly string[];
   profiles: readonly string[];
   notBefore: number;
-  /** Rotation: the key may not issue at or after this instant. null = not retired. */
+  /** Rotation: the key stops issuing at this instant. null = not retired. */
   retiredAt: number | null;
-  /** Compromise: hard stop, nothing verifies under the key once now >= this. null = no stop. */
+  /** Withdrawal: nothing verifies under the key once now >= this. null = no end. */
   notAfter: number | null;
 }
 
@@ -24,20 +26,16 @@ const CONSTRUCT = Symbol("IssuerSet.construct");
 /** Module-private read of the private entry map; assigned once by the class's static block. */
 let readEntry: (set: IssuerSet, issuerDid: string, kid: string) => IssuerEntry | undefined;
 
-/** A fresh, frozen entry: the public key is a new copy every time, so a caller cannot alter the set. */
+/** A fresh, frozen entry: the public key is a new copy on every lookup. */
 function copyEntry(entry: IssuerEntry): IssuerEntry {
   return Object.freeze({ ...entry, publicKey: entry.publicKey.slice() });
 }
 
 /**
- * An issuer set that has passed every rule of `parseIssuerSet`. It is opaque: the constructor
- * refuses any caller but `parseIssuerSet`, and the verifier accepts only a genuine instance
- * (`IssuerSet.is`), so a structural object can never stand in for a validated set. The instance,
- * its prototype and the class are frozen, so `resolveIssuer` cannot be replaced, and the verifier
- * reads entries through the module-private `lookupIssuerEntry`, never through a property.
- *
- * Do not mix the CJS and ESM builds of this package in one process: an `IssuerSet` made by the
- * other build is a different class and is refused as `bad-config`. Import one build only.
+ * An issuer set that has passed every rule of `parseIssuerSet`. Only `parseIssuerSet` creates one,
+ * and the verifier accepts only genuine instances (`IssuerSet.is`). The instance, its prototype and
+ * the class are frozen, and the verifier reads entries through the module-private `lookupIssuerEntry`.
+ * Use one build (ESM or CJS) of this package per process. Details: TC-1540
  */
 export class IssuerSet {
   readonly version: number;
@@ -83,6 +81,8 @@ export function lookupIssuerEntry(set: IssuerSet, issuerDid: string, kid: string
 export interface IssuerSetOptions {
   /** DID methods allowed for issuers (docs/principles.md principle 2), e.g. ["web"]. */
   didMethods: { issuer: readonly string[] };
+  /** Additional rows whose permitted-issuer rules also apply to the profiles an entry lists. The shipped rows always apply. */
+  rows?: readonly ProfileRow[];
 }
 
 const ENTRY_KEYS = ["issuerDid", "kid", "alg", "publicKey", "vcts", "profiles", "notBefore", "retiredAt", "notAfter"].sort();
@@ -132,6 +132,7 @@ export function parseIssuerSet(raw: unknown, options: IssuerSetOptions): IssuerS
   if (raw.format !== ISSUER_SET_FORMAT) refuse("bad-issuer-set", "unknown format");
   if (typeof raw.version !== "number" || !Number.isInteger(raw.version) || raw.version < 1) refuse("bad-issuer-set", "version must be a positive integer");
   if (!Array.isArray(raw.issuers) || raw.issuers.length === 0) refuse("bad-issuer-set", "issuers must be a non-empty list");
+  const rowsForLoad: readonly ProfileRow[] = [...SHIPPED_ROWS, ...(options.rows ?? [])];
   const entries = new Map<string, IssuerEntry>();
   for (const item of raw.issuers) {
     if (!isObject(item) || Object.keys(item).sort().join() !== ENTRY_KEYS.join()) refuse("bad-issuer-set", "entry has missing or unknown fields");
@@ -149,13 +150,19 @@ export function parseIssuerSet(raw: unknown, options: IssuerSetOptions): IssuerS
     const retiredAt = item.retiredAt === null ? null : parseTime(item.retiredAt, "retiredAt");
     const notAfter = item.notAfter === null ? null : parseTime(item.notAfter, "notAfter");
     if (retiredAt !== null && notAfter !== null && retiredAt > notAfter) refuse("bad-issuer-set", "retiredAt must not be after notAfter");
+    const listedProfiles = stringList(item.profiles, "profiles");
+    for (const profile of listedProfiles) {
+      for (const row of rowsForLoad) {
+        if (row.profile === profile && !rowPermitsIssuer(row, issuerDid as string)) refuse("bad-issuer-set", "issuer DID is not permitted for a profile it lists");
+      }
+    }
     entries.set(kid as string, Object.freeze({
       issuerDid: issuerDid as string,
       kid: kid as string,
       alg: "EdDSA",
       publicKey,
       vcts: Object.freeze([...stringList(item.vcts, "vcts")]),
-      profiles: Object.freeze([...stringList(item.profiles, "profiles")]),
+      profiles: Object.freeze([...listedProfiles]),
       notBefore,
       retiredAt,
       notAfter,

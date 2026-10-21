@@ -1,5 +1,27 @@
 # @tinycloud/operations
 
+## 0.7.0-beta.35
+
+### Minor Changes
+
+- 5373fa2: Preserve validated node revocation context for hosted approval renewal while keeping other authorization results unchanged.
+
+  Details: TC-1627
+
+## 0.7.0-beta.34
+
+### Patch Changes
+
+- Updated dependencies [9592d3d]
+  - @tinycloud/sdk-core@3.3.0-beta.36
+  - @tinycloud/node-sdk@3.3.0-beta.36
+
+## 0.7.0-beta.33
+
+### Patch Changes
+
+- f2cb165: `tc delegation revoke <cid>` now revokes an owner-signed grant (such as one from `tc auth grant`) from a profile that has no local record of it, for example another CLI profile or machine of the same owner. When the profile has no matching record, the CLI reads the owner's delegation records from the node and uses that record's space only if the grant was issued by the signed-in owner, directly or through a chain of delegations recorded on the node that ends at the owner or the signed-in session key, and every space it covers is one plain space id that belongs to that owner; a CID the node does not list, an issuer or space that does not match, or an ambiguous record keeps the existing `RAW_RECAP_RESOURCE_UNSUPPORTED` refusal, now saying "this CLI profile has no record of this grant and the node's record does not match the signed-in owner". A locally recorded grant still resolves first and unchanged. An agent that presents a revoked grant now gets "This grant was revoked. Ask the owner for a new grant" instead of a bare authentication error: the CLI reports it as `GRANT_REVOKED` (exit 5, the same code and exit as `tc replica`), and operations (including `knowledge list|read` and the MCP tools) keep `AUTH_REQUIRED` with that message, only when the node's 401 says the delegation (or one it derives from) was revoked; any other 401 is unchanged.
+
 ## 0.7.0-beta.32
 
 ### Patch Changes

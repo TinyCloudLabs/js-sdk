@@ -1,5 +1,11 @@
 # @tinycloudlabs/sdk-core
 
+## 3.3.0-beta.36
+
+### Minor Changes
+
+- 9592d3d: Add `ORG_MEMBERSHIP_ROW` (`tinycloud.org-membership/v1`, 365-day lifetime), `ORG_MEMBERSHIP_FREE_ROW` (`tinycloud.org-membership-free/v1`, 30-day lifetime) and `ORG_MEMBERSHIP_ROWS` to `@tinycloud/sdk-core/held-credentials`. Pass the rows as `rows` to `parseIssuerSet` and `verifyHeldPresentation`; the default remains the email row. Each row decides which issuer DIDs it permits: org rows permit opaque org-family DIDs only, and the email row does not permit org-family DIDs. The issuer set loader applies the shipped rows in addition to any rows passed. The shipped rows are frozen. A row's `permitsIssuer` is optional; a row that omits it accepts any issuer its issuer entry permits. `assertValidAudience` is exported for callers that validate audience values. Details: TC-1553
+
 ## 3.3.0-beta.31
 
 ### Patch Changes
@@ -16,13 +22,13 @@
 
 ### Minor Changes
 
-- ac612c0: Harden the held-credential verifier (TC-1540): size and depth limits before any parse, strict UTF-8, integer-only JSON numbers, `jti` must be a urn:uuid v4, header members limited to `alg`, `typ`, `kid`, duplicate `_sd` digests refused, cofactorless Ed25519 verification, EIP-55 SIWE addresses, exact RFC 3339 SIWE dates, canonical `result.subject`, and `@ab`/`ab@` emails refused. `descriptorDigest` is no longer an accepted signed claim of the email row. API change: `IssuerSet` is now an opaque class that only `parseIssuerSet` can create, and `verifyHeldPresentation` refuses any other object as `issuerSet`. Not yet released, so no published consumer is affected. Import only one build (ESM or CJS) of `@tinycloud/sdk-core/held-credentials` per process: an `IssuerSet` from the other build is refused as `bad-config`.
+- ac612c0: Update the held-credential verifier: input size and nesting limits, strict UTF-8 and integer-only JSON numbers, `jti` as a urn:uuid v4, header members limited to `alg`, `typ` and `kid`, cofactorless Ed25519 verification, EIP-55 SIWE addresses, exact RFC 3339 SIWE dates, canonical `result.subject`. `IssuerSet` is created only by `parseIssuerSet`, and `verifyHeldPresentation` accepts only that type. Import one build (ESM or CJS) of `@tinycloud/sdk-core/held-credentials` per process. Details: TC-1540
 
 ## 3.3.0-beta.27
 
 ### Minor Changes
 
-- 4aae658: Add `@tinycloud/sdk-core/held-credentials`: an off-node, Worker-safe verifier for held `tinycloud.email-held/v1` credentials (SD-JWT VC, EdDSA) with a SIWE holder proof, a pinned issuer set, an atomic `NonceStore` interface, and the shared `normaliseEmail`. `InMemoryNonceStore` is single process only; not safe across instances/isolates/replicas. Non-ASCII emails are refused until G14 lands. Nothing existing changes.
+- 4aae658: Add `@tinycloud/sdk-core/held-credentials`: an off-node, Worker-safe verifier for held `tinycloud.email-held/v1` credentials (SD-JWT VC, EdDSA) with a SIWE holder proof, a pinned issuer set, a `NonceStore` interface and the shared `normaliseEmail` (ASCII addresses). Deployments supply a shared `NonceStore`; `InMemoryNonceStore` is for tests and single-process tools. Nothing existing changes. Details: TC-1540
 
 ## 3.3.0-beta.25
 

@@ -9,7 +9,12 @@ import { loadProfile, profileDir, writeSecure } from './profile.js';
 import { courierNode, peerHooks, peerKv } from './node.js';
 import type { ParsedArgs } from './args.js';
 import { WATCH_DEFAULTS, Watcher, type WatchOptions } from './watch.js';
-import { createWaker, jsonLineLog, killAllRunners, spawnRunner, type SessionStore, type WakeConfig } from './wake.js';
+import { UNGUARDED_REFUSAL, createWaker, jsonLineLog, killAllRunners, spawnRunner, type SessionStore, type WakeConfig } from './wake.js';
+import { startsAgentCli } from './guard/policy.js';
+import { guardArgv } from './guard/command.js';
+import { writeGuardSettings } from './guard/install.js';
+import { createNotifier, type NotifyConfig } from './notify.js';
+import { postPausedInform } from './pause.js';
 import {
   applyPlan, launchdPlan, renderPlan, serviceName, systemdPlan, type ServiceSpec,
 } from './service.js';
@@ -35,8 +40,17 @@ function value(args: ParsedArgs, name: string): string | undefined {
   return v;
 }
 
+function wakeBudget(args: ParsedArgs): number {
+  if (!args.has('wake-budget')) return WATCH_DEFAULTS.wakeBudget;
+  const raw = args.get('wake-budget')!;
+  const value = Number(raw);
+  if (!Number.isInteger(value) || value < 1 || value > 1000) throw new CourierError('usage', `--wake-budget must be a whole number from 1 to 1000 (got "${raw}").`);
+  return value;
+}
+
 export function watchOptions(args: ParsedArgs): WatchOptions {
   return {
+    wakeBudget: wakeBudget(args),
     debounceMs: seconds(args, 'debounce', WATCH_DEFAULTS.debounceMs, 0, 600),
     pollMs: seconds(args, 'poll', WATCH_DEFAULTS.pollMs, 10, 3600),
     ticketSeconds: seconds(args, 'ticket', WATCH_DEFAULTS.ticketSeconds * 1000, 5, 300) / 1000,
@@ -44,7 +58,7 @@ export function watchOptions(args: ParsedArgs): WatchOptions {
 }
 
 export const watchUsage = () =>
-  `Usage: ${cmd('watch [--wake none|paseo|claude|exec] [--exec <cmd>] [--cwd dir] [--debounce 30] [--poll 60] [--ticket 25] [--once]')}\n` +
+  `Usage: ${cmd('watch [--wake none|paseo|claude|exec] [--exec <cmd> --unguarded] [--env-pass NAME]… [--cwd dir] [--debounce 30] [--poll 60] [--ticket 25] [--wake-budget 12] [--notify osascript|exec|none] [--once]')}\n` +
   `       ${cmd('watch … (--install-launchd | --install-systemd) [--dry-run] [--name n]')}`;
 
 /** Where a bare `claude`/`paseo` resolves now, so a service with a minimal PATH still finds it. */
@@ -67,19 +81,41 @@ export function wakeConfig(args: ParsedArgs, owner: string | undefined): WakeCon
   if (!ADAPTERS.includes(adapter)) throw new CourierError('usage', `Unknown --wake adapter "${adapter}". ${watchUsage()}`);
   if (adapter === 'exec' && !exec) throw new CourierError('usage', `--wake exec needs --exec <cmd>. ${watchUsage()}`);
   if (exec && adapter !== 'exec') throw new CourierError('usage', '--exec only applies with --wake exec.');
+  const unguarded = args.has('unguarded');
+  if (unguarded && adapter !== 'exec') throw new CourierError('usage', '--unguarded only applies with --wake exec; the claude and paseo adapters are always guarded.');
+  if (adapter === 'exec' && !unguarded) throw new CourierError('usage', `${UNGUARDED_REFUSAL}\n${watchUsage()}`);
+  if (adapter === 'exec' && exec && startsAgentCli(exec)) throw new CourierError('usage', '--unguarded exec cannot start an agent CLI; use the guarded claude or paseo adapter.');
   const allow = args.all('claude-allow');
+  const envPass = args.all('env-pass');
+  for (const name of envPass) {
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) throw new CourierError('usage', `--env-pass needs a variable name (got "${name}").`);
+  }
   return {
     adapter,
     cwd: path.resolve(value(args, 'cwd') ?? process.cwd()),
     owner: owner ?? 'your owner',
     home: profileDir(),
     exec,
+    unguarded,
+    envPass,
     paseo: { bin: value(args, 'paseo-bin') ?? 'paseo', provider: value(args, 'paseo-provider') ?? 'claude', mode: value(args, 'paseo-mode') },
     // A woken claude may run only Courier commands unless the owner widens it with --claude-settings/--claude-allow.
     claude: { bin: value(args, 'claude-bin') ?? 'claude', settings: value(args, 'claude-settings'), allow: allow.length ? allow : [`Bash(${programName()}:*)`] },
     // Capped at 30 min: a crashed watcher's wake claim is taken over after 35 min (Watcher.claimWake).
     timeoutMs: seconds(args, 'wake-timeout', 15 * 60_000, 10, 30 * 60),
   };
+}
+
+const NOTIFIERS = ['none', 'osascript', 'exec'] as const;
+
+/** macOS defaults to desktop notification; other hosts always have the local notifications log. */
+export function notifyConfig(args: ParsedArgs, wake: WakeConfig, platform: string = process.platform): NotifyConfig {
+  const exec = value(args, 'notify-exec');
+  const adapter = (value(args, 'notify') ?? (exec ? 'exec' : platform === 'darwin' ? 'osascript' : 'none')) as NotifyConfig['adapter'];
+  if (!NOTIFIERS.includes(adapter)) throw new CourierError('usage', `Unknown --notify "${adapter}". Use none, osascript or exec. Notifications never start or message an agent.`);
+  if (adapter === 'exec' && !exec) throw new CourierError('usage', '--notify exec needs --notify-exec <cmd>.');
+  if (exec && startsAgentCli(exec)) throw new CourierError('usage', 'notifications cannot start an agent CLI');
+  return { adapter, owner: wake.owner, exec, wake };
 }
 
 /**
@@ -187,10 +223,19 @@ export async function cmdWatch(args: ParsedArgs): Promise<void> {
   const profile = installing ? undefined : loadProfile();
   const config = wakeConfig(args, profile?.selfHandle);
   if (!profile) return installService(args, config);
+  if (config.adapter === 'claude' || config.adapter === 'paseo') config.guard = { argv: guardArgv(), entry: process.argv[1] ?? '' };
+  if (config.adapter === 'claude') {
+    // The owner's own --claude-settings is merged under the guard, never used instead of it.
+    config.claude.settings = writeGuardSettings({
+      ...config.guard!, home: config.home, ...(config.claude.settings ? { userSettings: config.claude.settings } : {}),
+    });
+  }
 
   const log = jsonLineLog();
   const node = await courierNode(profile);
   const watcher = new Watcher({
+    notificationHome: config.home,
+    notifyOnly: config.adapter === 'none',
     selfKv: node.kv,
     spaceId: profile.spaceId!,
     selfHooks: node.hooks,
@@ -198,6 +243,8 @@ export async function cmdWatch(args: ParsedArgs): Promise<void> {
     loadPeers: () => Object.values(loadProfile().peers),
     kvFor: (peer) => peerKv(node, loadProfile(), peer),
     wake: createWaker(config, { run: spawnRunner, sessions: fileSessions() }),
+    postInform: async (peer, threadId, text, pauseId) => { await postPausedInform(node.kv, loadProfile(), peer, threadId, text, pauseId); },
+    notify: createNotifier(notifyConfig(args, config), { run: spawnRunner }),
     holder: { profileId: watcherProfileId() },
     log,
   }, opts);

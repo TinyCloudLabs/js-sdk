@@ -1,6 +1,6 @@
 {
   "name": "@tinycloud/operations",
-  "version": "0.7.0-beta.32",
+  "version": "0.7.0-beta.35",
   "description": "TinyCloud shared operations contracts and runtime",
   "author": "TinyCloud, Inc.",
   "license": "EGPL",
@@ -54,6 +54,11 @@
       "import": "./dist/recovery.js",
       "require": "./dist/recovery.cjs"
     },
+    "./revoked-grant": {
+      "types": "./dist/revoked-grant.d.ts",
+      "import": "./dist/revoked-grant.js",
+      "require": "./dist/revoked-grant.cjs"
+    },
     "./cli-name": {
       "types": "./dist/cli-name.d.ts",
       "import": "./dist/cli-name.js",
@@ -63,6 +68,11 @@
       "types": "./dist/tc-apps.d.ts",
       "import": "./dist/tc-apps.js",
       "require": "./dist/tc-apps.cjs"
+    },
+    "./mcp-authority": {
+      "types": "./dist/mcp-authority.d.ts",
+      "import": "./dist/mcp-authority.js",
+      "require": "./dist/mcp-authority.cjs"
     },
     "./operations.json": "./generated/operations.json"
   },
@@ -75,7 +85,7 @@
     "coverage.json"
   ],
   "scripts": {
-    "build": "tsup --entry src/index.ts --entry src/state.ts --entry src/artifacts.ts --entry src/cli-runtime.ts --entry src/profile.ts --entry src/secret-capabilities.ts --entry src/delegation-binding.ts --entry src/secret-request.ts --entry src/recovery.ts --entry src/cli-name.ts --entry src/tc-apps.ts",
+    "build": "tsup --entry src/index.ts --entry src/state.ts --entry src/artifacts.ts --entry src/cli-runtime.ts --entry src/profile.ts --entry src/secret-capabilities.ts --entry src/delegation-binding.ts --entry src/secret-request.ts --entry src/recovery.ts --entry src/cli-name.ts --entry src/revoked-grant.ts --entry src/tc-apps.ts --entry src/mcp-authority.ts",
     "clean": "rm -rf dist",
     "test": "bun scripts/test.ts",
     "typecheck": "tsc -p tsconfig.typecheck.json",
@@ -84,8 +94,8 @@
     "check:generated": "bun scripts/generate.ts --check"
   },
   "dependencies": {
-    "@tinycloud/node-sdk": "3.3.0-beta.35",
-    "@tinycloud/sdk-core": "3.3.0-beta.31",
+    "@tinycloud/node-sdk": "3.3.0-beta.36",
+    "@tinycloud/sdk-core": "3.3.0-beta.36",
     "@tinycloud/sdk-services": "3.3.0-beta.25",
     "node-sql-parser": "5.4.0",
     "zod": "^3.22.0",
