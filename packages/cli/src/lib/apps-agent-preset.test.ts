@@ -161,6 +161,7 @@ describe("apps-agent scope notice states the facts of the grant", () => {
     const notice = appsAgentScopeNotice("write", [CATALOG]);
     expect(notice).toContain(`create, change and drop the tables in \`${CATALOG_DB}\`, which the app needs to set itself up.`);
     expect(notice).toContain("That grant names no other database for table changes.");
+    expect(notice).toContain("Nodes before 1.21.6 do not enforce that database limit, so the write grant may still let it change tables elsewhere there.");
     expect(notice).not.toContain("does not include permission to create, change or drop tables");
   });
 });

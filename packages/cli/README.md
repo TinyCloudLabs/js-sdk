@@ -117,7 +117,7 @@ tc delegation create --to did:pkh:eip155:1:0x...
 | `tc auth request --preset apps-agent [--app <id>]... [--write]` | Request access for an agent to the user's installed apps: read-only by default, for one app, several, or all. `--write --app <id>` also lets the agent change that app's data: write its `knowledge/` and `prefs/` files and add, change or delete its table rows. For the Health Log app's catalog database, it can also create, change and drop tables (nodes before 1.21.6 do not enforce that split). It cannot change the app's code, manifest or install record |
 | `tc knowledge list` | List the installed apps that have a knowledge bundle |
 | `tc knowledge read <app_id> [concept]` | Read an app's knowledge index, or one concept with its frontmatter parsed |
-| `tc apps install <app_id>` | Install a pinned catalog app into your applications space: each file is verified against its pinned digest, the pinned DDL runs only if every statement is allowed, and knowledge notes are created create-only. Notes you have edited are left as they are and reported (exit 0) |
+| `tc apps install <app_id>` | Install a pinned catalog app into the applications space of the profile it runs under (the owner's, for a delegate profile, through its grant): each file is verified against its pinned digest, the pinned DDL runs only if every statement is allowed, and knowledge notes are created create-only. Notes you have edited are left as they are and reported (exit 0) |
 | `tc kv get <key>` | Retrieve a value |
 | `tc kv put <key> <value>` | Store a value |
 | `tc kv list` | List all keys |

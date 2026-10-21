@@ -2,7 +2,7 @@
 "@tinycloud/cli": minor
 ---
 
-New `tinycloud apps install <app_id>` installs a pinned catalog app (currently `xyz.tinycloud.sample.healthlog`) into your applications space. It fetches each file from Share by its pinned bundle digest and checks its size and sha256 before anything is written. It then checks the pinned DDL: only `CREATE TABLE/INDEX/VIEW IF NOT EXISTS` and `DROP VIEW IF EXISTS` for the pinned views are allowed, and any other statement, including `DROP TABLE`, aborts before any write. It reads every knowledge file under `<app_id>/knowledge/` first, then creates the missing ones create-only, with `index.md` last. Then it applies the schema and re-creates the pinned views on every run.
+New `tinycloud apps install <app_id>` installs a pinned catalog app (currently `xyz.tinycloud.sample.healthlog`) into the applications space of the profile it runs under (the owner's space, for a delegate profile, through the grant). It fetches each file from Share by its pinned bundle digest and checks its size and sha256 before anything is written. It then checks the pinned DDL: only `CREATE TABLE/INDEX/VIEW IF NOT EXISTS` and `DROP VIEW IF EXISTS` for the pinned views are allowed, and any other statement, including `DROP TABLE`, aborts before any write. It reads every knowledge file under `<app_id>/knowledge/` first, then creates the missing ones create-only, with `index.md` last. Then it applies the schema and re-creates the pinned views on every run.
 
 If `<app_id>/app/install.json` names a different bundle digest than this CLI pins, or is not a valid install record, the command refuses with `INSTALL_RECORD_MISMATCH` or `INSTALL_RECORD_INVALID` before writing anything. A missing record is not an error.
 

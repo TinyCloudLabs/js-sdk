@@ -117,6 +117,9 @@ describe("planDdl", () => {
     ["table with WITHOUT ROWID tail", "CREATE TABLE IF NOT EXISTS t (a INTEGER) WITHOUT ROWID"],
     ["index with WHERE tail", "CREATE INDEX IF NOT EXISTS i ON meal(note) WHERE note IS NOT NULL"],
     ["view that is not a SELECT", "CREATE VIEW IF NOT EXISTS v AS WITH x AS (SELECT 1) SELECT * FROM x"],
+    ["table without IF NOT EXISTS", "CREATE TABLE t (a INTEGER)"],
+    ["index without IF NOT EXISTS", "CREATE INDEX i ON meal(note)"],
+    ["view without IF NOT EXISTS", "CREATE VIEW v AS SELECT 1"],
   ])("refuses a %s", (_label, statement) => {
     expect(() => planDdl(`${statement};`)).toThrow(AppsInstallError);
   });
