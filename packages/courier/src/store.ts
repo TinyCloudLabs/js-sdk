@@ -1,6 +1,6 @@
 import { defer } from './defer.js';
 import type { TinyCloudNode } from '@tinycloud/node-sdk';
-import { CourierError, unwrap, type ResultLike } from './errors.js';
+import { CourierError, unwrap, isNotFoundError, isPreconditionError, isTransientError, type ResultLike } from './errors.js';
 
 /** `DelegatedAccess.path` reflects only the first grant entry — always pass full keys (TC-708). */
 const FULL = { prefix: '' };
@@ -18,8 +18,6 @@ interface KVResponse<T> {
   headers: { get(name: string): string | null } & Record<string, unknown>;
 }
 
-const TRANSIENT = /fetch failed|NETWORK_ERROR|ECONNRESET|ETIMEDOUT|5\d\d/i;
-
 async function nap(ms: number) {
   const { promise, resolve } = defer<void>();
   setTimeout(resolve, ms);
@@ -32,10 +30,9 @@ async function readRetry<T>(fn: () => Promise<T>): Promise<T> {
   for (let i = 0; i < 3; i++) {
     try {
       const r = await fn();
-      const res = r as { ok?: boolean; error?: { code?: unknown; message?: string } };
+      const res = r as { ok?: boolean; error?: unknown };
       if (res && typeof res === 'object' && res.ok === false) {
-        const m = `${res.error?.code ?? ''} ${res.error?.message ?? ''}`;
-        if (TRANSIENT.test(m) && i < 2) {
+        if (isTransientError(res.error) && i < 2) {
           await nap(1500);
           continue;
         }
@@ -43,7 +40,8 @@ async function readRetry<T>(fn: () => Promise<T>): Promise<T> {
       return r;
     } catch (e) {
       last = e;
-      if (!TRANSIENT.test(String((e as Error).message ?? e)) || i === 2) throw e;
+      const undiciFetchFailure = e instanceof Error && e.message === 'fetch failed';
+      if (!(isTransientError(e) || undiciFetchFailure) || i === 2) throw e;
       await nap(1500);
     }
   }
@@ -62,7 +60,7 @@ export async function putCreate(kv: KV, key: string, value: unknown): Promise<st
   try {
     return putEtag(unwrap(r, `put ${key}`));
   } catch (e) {
-    if (e instanceof CourierError && (e.code === '412' || /412|conflict|precondition/i.test(e.message))) {
+    if (e instanceof CourierError && r.ok === false && isPreconditionError(r.error)) {
       throw new CourierError('conflict', `${key} already exists (create-only write)`);
     }
     throw e;
@@ -75,7 +73,7 @@ export async function putMatch(kv: KV, key: string, value: unknown, etag: string
   try {
     return putEtag(unwrap(r, `put ${key}`));
   } catch (e) {
-    if (e instanceof CourierError && (e.code === '412' || /412|conflict|precondition/i.test(e.message))) {
+    if (e instanceof CourierError && r.ok === false && isPreconditionError(r.error)) {
       throw new CourierError('conflict', `${key} changed under us; re-read and retry`);
     }
     throw e;
@@ -85,11 +83,10 @@ export async function putMatch(kv: KV, key: string, value: unknown, etag: string
 export async function getJson<T>(kv: KV, key: string): Promise<{ value: T; etag: string | null } | undefined> {
   const r = (await readRetry(() => kv.get(key, FULL))) as ResultLike<KVResponse<unknown>>;
   if (r && typeof r === 'object' && 'ok' in r && !r.ok) {
-    const status = r.error?.status ?? r.error?.meta?.status ?? r.error?.code;
     if (/space not found/i.test(String(r.error?.message))) {
       throw new CourierError('no-space', String(r.error?.message));
     }
-    if (status === 404 || String(status) === '404' || /not.found/i.test(String(r.error?.message))) return undefined;
+    if (isNotFoundError(r.error)) return undefined;
     unwrap(r, `get ${key}`);
   }
   const res = (r as ResultLike<KVResponse<unknown>>).data as KVResponse<unknown>;
