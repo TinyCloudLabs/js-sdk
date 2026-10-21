@@ -182,10 +182,8 @@ describe("valid presentation", () => {
 describe("issuer selection (R1, lookup, cross-org)", () => {
   test("wrong issuer: not in the set", () => expectCode("unknown-issuer", { kid: "did:web:other.credentials.org#k", iss: "did:web:other.credentials.org" }, undefined, { acceptedIssuers: [{ issuerDid: "did:web:other.credentials.org" }] }));
   test("unknown kid", () => expectCode("unknown-issuer", { kid: `${ISSUER_A}#nope` }));
-  test("issuer not in acceptedIssuers", () => expectCode("issuer-not-accepted", {}, undefined, { acceptedIssuers: [{ issuerDid: ISSUER_B }] }, [entryA(), entryB()]));
+  test("issuer not in acceptedIssuers", () => expectCode("issuer-not-accepted", {}, undefined, { acceptedIssuers: [{ issuerDid: ISSUER_B }] }));
   test("empty acceptedIssuers is refused", () => expectCode("bad-config", {}, undefined, { acceptedIssuers: [] }));
-  test("cross-org: org B's credential cannot satisfy org A's policy", () => expectCode("issuer-not-accepted", { seed: SEED_B, kid: KID_B, iss: ISSUER_B }, undefined, { acceptedIssuers: [{ issuerDid: ISSUER_A }] }, [entryA(), entryB()]));
-  test("the same credential passes when the policy accepts org B", () => expectCode("ok", { seed: SEED_B, kid: KID_B, iss: ISSUER_B }, undefined, { acceptedIssuers: [{ issuerDid: ISSUER_B }] }, [entryA(), entryB()]));
   test("a kid pinned by the policy but a different kid presented", () => expectCode("issuer-not-accepted", { kid: `${ISSUER_A}#issuing-2` }, undefined, { acceptedIssuers: [{ issuerDid: ISSUER_A, kid: KID_A }] }, [entryA(), entryA({ kid: `${ISSUER_A}#issuing-2` })]));
   test("a credential signed by the wrong key under a listed kid", () => expectCode("bad-signature", { seed: SEED_B }));
   test("iss different from the kid's DID is refused after the signature", () => expectCode("bad-payload", { payload: (p) => ({ ...p, iss: ISSUER_B }) }));
@@ -216,7 +214,7 @@ describe("issuer selection (R1, lookup, cross-org)", () => {
     expect(await code(verifyHeldPresentation(presentation, { ...real.options, acceptedIssuers: [{ issuerDid: "did:ethr:0xabc" }] }))).toBe("did-method-not-allowed");
   });
   test("did:key as an issuer is refused unless the caller enabled it", () => {
-    const key = { ...entryA(), issuerDid: "did:key:z6MkTest", kid: "did:key:z6MkTest#z6MkTest" };
+    const key = { ...entryA(), issuerDid: "did:key:z6MkTest", kid: "did:key:z6MkTest#z6MkTest", profiles: ["tinycloud.did-key-fixture/v1"] };
     expect(() => parseIssuerSet(setOf(key), { didMethods: METHODS })).toThrow(/did-method-not-allowed/);
     expect(() => parseIssuerSet(setOf(key), { didMethods: { issuer: ["web", "key"] } })).not.toThrow();
   });
@@ -826,9 +824,9 @@ describe("TC-1540 Miller 8 and F1: opaque, immutable IssuerSet", () => {
     await expectCode("ok", {}, undefined, { issuerSet: real });
   });
   test("resolveIssuer cannot be overridden on the instance or the prototype: the override fails and verification is unchanged", async () => {
-    const h = harness({}, [entryA(), entryB()]);
+    const h = harness({}, [entryA(), entryA({ kid: `${ISSUER_A}#issuing-2`, publicKey: encodeBase64Url(ed25519.getPublicKey(SEED_B)) })]);
     const set = h.options.issuerSet as unknown as { resolveIssuer: unknown };
-    const other = h.options.issuerSet.resolveIssuer(ISSUER_B, KID_B)!;
+    const other = h.options.issuerSet.resolveIssuer(ISSUER_A, `${ISSUER_A}#issuing-2`)!;
     // test files are ES modules (strict mode), so assignment to a frozen object throws
     expect(() => { set.resolveIssuer = () => other; }).toThrow(TypeError);
     expect(() => Object.defineProperty(set, "resolveIssuer", { value: () => other })).toThrow(TypeError);
@@ -993,6 +991,17 @@ describe("TC-1553: six-credential-type refusal matrix", () => {
 
 describe("TC-1553: org membership rows", () => {
   const accept = { profiles: [{ profile: PAID_PROFILE, profileVersion: 1 }], issuers: [{ issuerDid: ORG_A }] };
+  const ORG_B = `did:web:o${"b".repeat(26)}.orgs.credentials.org`;
+  const ORG_B_KID = `${ORG_B}#issuing-1`;
+  const SEED_ORG_B = seed(201);
+  const orgBEntry = () => orgEntry([PAID_PROFILE], { issuerDid: ORG_B, kid: ORG_B_KID, publicKey: encodeBase64Url(ed25519.getPublicKey(SEED_ORG_B)) });
+  const orgBCredential = () => orgCredential(PAID_PROFILE, { seed: SEED_ORG_B, iss: ORG_B, kid: ORG_B_KID });
+  test("cross-org: org B's credential cannot satisfy org A's policy", async () => {
+    expect(await orgCode(orgBCredential(), { entries: [orgEntry([PAID_PROFILE]), orgBEntry()], ...accept })).toBe("issuer-not-accepted");
+  });
+  test("the same credential passes when the policy accepts org B", async () => {
+    expect(await orgCode(orgBCredential(), { entries: [orgEntry([PAID_PROFILE]), orgBEntry()], profiles: accept.profiles, issuers: [{ issuerDid: ORG_B }] })).toBe("ok");
+  });
 
   test("the free row refuses a credential longer than 30 days; the paid row allows 365", async () => {
     expect(await orgCode(orgCredential(FREE_PROFILE, { payload: (p) => ({ ...p, exp: (p.iat as number) + 365 * DAY }) }), { entries: [orgEntry([FREE_PROFILE])], profiles: [{ profile: FREE_PROFILE, profileVersion: 1 }], issuers: [{ issuerDid: ORG_A }] })).toBe("bad-lifetime");
@@ -1046,9 +1055,10 @@ describe("TC-1553: org membership rows", () => {
     expect(loadCode([orgEntry([PAID_PROFILE])], [...ALL_ROWS, refusesEveryIssuer])).toBe("bad-issuer-set");
     expect(loadCode([orgEntry([PAID_PROFILE])], ALL_ROWS)).toBe("ok");
   });
-  test("the email profile is refused on an org-family issuer and admitted on a non-org issuer", () => {
+  test("the email profile is refused on an org-family issuer and on any other non-literal issuer", () => {
     expect(loadCode([orgEntry([PROFILE], { vcts: [VCT] })])).toBe("bad-issuer-set");
-    expect(loadCode([entryB()])).toBe("ok");
+    expect(loadCode([entryA()])).toBe("ok");
+    expect(loadCode([entryB()])).toBe("bad-issuer-set");
   });
   test("a witness entry that lists only the free row is refused at load under the default rows", () => {
     expect(loadCode([entryA({ profiles: [FREE_PROFILE], vcts: [ORG_VCT] })])).toBe("bad-issuer-set");
@@ -1083,9 +1093,19 @@ describe("TC-1553: org membership rows", () => {
       expect(loadCode([entryA({ profiles: [PAID_PROFILE, CUSTOM_PROFILE], vcts: [ORG_VCT] })], [...ALL_ROWS, typedRow()])).toBe("bad-issuer-set");
     });
     test("a permitsIssuer that is present but not a function is refused as bad-config, not read as permissive", async () => {
-      const malformed = { ...ORG_MEMBERSHIP_ROW, profile: CUSTOM_PROFILE, permitsIssuer: "yes" } as unknown as ProfileRow;
-      expect(loadCode(customEntries, [...ALL_ROWS, malformed])).toBe("bad-config");
-      expect(await orgCode(customCredential(), { entries: customEntries, rows: [...ALL_ROWS, malformed], ...customAccept })).toBe("bad-config");
+      for (const permitsIssuer of ["yes", null, false]) {
+        const malformed = { ...ORG_MEMBERSHIP_ROW, profile: CUSTOM_PROFILE, permitsIssuer } as unknown as ProfileRow;
+        expect(loadCode(customEntries, [...ALL_ROWS, malformed])).toBe("bad-config");
+        expect(await orgCode(customCredential(), { entries: customEntries, rows: [...ALL_ROWS, malformed], ...customAccept })).toBe("bad-config");
+      }
+    });
+    test("a rule that does not return exactly true refuses the issuer, whatever the value", async () => {
+      const rules = [() => undefined, () => "true", () => 1, async () => true] as ((issuerDid: string) => unknown)[];
+      for (const permitsIssuer of rules) {
+        const row = { ...ORG_MEMBERSHIP_ROW, profile: CUSTOM_PROFILE, permitsIssuer } as unknown as ProfileRow;
+        expect(loadCode(customEntries, [...ALL_ROWS, row])).toBe("bad-issuer-set");
+        expect(await orgCode(customCredential(), { entries: customEntries, rows: [...ALL_ROWS, row], ...customAccept })).toBe("issuer-not-accepted");
+      }
     });
   });
   test("lifetime boundaries: the free row admits 30 days and not a second more, the paid row admits 365 days and not a second more", async () => {
@@ -1135,9 +1155,13 @@ describe("TC-1553: org issuer rule anchors", () => {
       for (const issuer of refused) expect(rowPermitsIssuer(row, issuer)).toBe(false);
     }
   });
-  test("the email row refuses the org-family shape and admits a non-org issuer", () => {
+  test("the email row admits only the literal issuer and refuses the org family", () => {
     expect(rowPermitsIssuer(EMAIL_HELD_ROW, VALID)).toBe(false);
-    expect(rowPermitsIssuer(EMAIL_HELD_ROW, ISSUER_B)).toBe(true);
+    expect(rowPermitsIssuer(EMAIL_HELD_ROW, ISSUER_A)).toBe(true);
+    expect(rowPermitsIssuer(EMAIL_HELD_ROW, ISSUER_B)).toBe(false);
+    for (const nearMiss of [`${ISSUER_A}x`, `${ISSUER_A}.example`, "did:web:Issuer.credentials.org"]) {
+      expect(rowPermitsIssuer(EMAIL_HELD_ROW, nearMiss)).toBe(false);
+    }
   });
 });
 
