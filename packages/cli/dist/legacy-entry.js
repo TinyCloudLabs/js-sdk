@@ -2734,11 +2734,11 @@ async function getLastPermissionRequestArtifact(profile) {
   return existing.at(-1) ?? null;
 }
 async function replayAdditionalDelegations(node, profile, options) {
-  const { operationSpaceResolver: operationSpaceResolver2, replayProfileDelegations } = await import("@tinycloud/operations/delegation-binding");
+  const { operationSpaceResolver: operationSpaceResolver3, replayProfileDelegations } = await import("@tinycloud/operations/delegation-binding");
   const { warnings } = await replayProfileDelegations(profile, node, {
     host: options.host,
     migrate: options.migrate,
-    resolveSpace: operationSpaceResolver2(node, options.ownerSpace)
+    resolveSpace: operationSpaceResolver3(node, options.ownerSpace)
   });
   return warnings;
 }
@@ -11083,15 +11083,15 @@ var makeIssue = (params) => {
       message: issueData.message
     };
   }
-  let errorMessage2 = "";
+  let errorMessage3 = "";
   const maps = errorMaps.filter((m) => !!m).slice().reverse();
   for (const map of maps) {
-    errorMessage2 = map(fullIssue, { data, defaultError: errorMessage2 }).message;
+    errorMessage3 = map(fullIssue, { data, defaultError: errorMessage3 }).message;
   }
   return {
     ...issueData,
     path: fullPath,
-    message: errorMessage2
+    message: errorMessage3
   };
 };
 var EMPTY_PATH = [];
@@ -16612,15 +16612,15 @@ var makeIssue2 = (params) => {
       message: issueData.message
     };
   }
-  let errorMessage2 = "";
+  let errorMessage3 = "";
   const maps = errorMaps.filter((m) => !!m).slice().reverse();
   for (const map of maps) {
-    errorMessage2 = map(fullIssue, { data, defaultError: errorMessage2 }).message;
+    errorMessage3 = map(fullIssue, { data, defaultError: errorMessage3 }).message;
   }
   return {
     ...issueData,
     path: fullPath,
-    message: errorMessage2
+    message: errorMessage3
   };
 };
 var EMPTY_PATH2 = [];
@@ -23658,15 +23658,15 @@ var makeIssue3 = (params) => {
       message: issueData.message
     };
   }
-  let errorMessage2 = "";
+  let errorMessage3 = "";
   const maps = errorMaps.filter((m) => !!m).slice().reverse();
   for (const map of maps) {
-    errorMessage2 = map(fullIssue, { data, defaultError: errorMessage2 }).message;
+    errorMessage3 = map(fullIssue, { data, defaultError: errorMessage3 }).message;
   }
   return {
     ...issueData,
     path: fullPath,
-    message: errorMessage2
+    message: errorMessage3
   };
 };
 var EMPTY_PATH3 = [];
@@ -31159,7 +31159,7 @@ var APPS_AGENT_VARIANTS = {
       { service: "tinycloud.sql", actions: ["tinycloud.sql/read"], within: [""] }
     ],
     perAppOnly: false,
-    changesStructure: false
+    schemaForCatalogApps: false
   },
   write: {
     grants: [
@@ -31168,9 +31168,13 @@ var APPS_AGENT_VARIANTS = {
       { service: "tinycloud.sql", actions: ["tinycloud.sql/read", "tinycloud.sql/write"], within: [""] }
     ],
     perAppOnly: true,
-    changesStructure: true
+    schemaForCatalogApps: true
   }
 };
+var APPS_AGENT_SCHEMA_DATABASES = {
+  "xyz.tinycloud.sample.healthlog": "healthlog"
+};
+var SCHEMA_ACTION = "tinycloud.sql/schema";
 var ACTION_WORDS = {
   "tinycloud.kv/get": "read files",
   "tinycloud.kv/list": "list files",
@@ -31188,12 +31192,11 @@ var ACTION_WORDS = {
   "tinycloud.sql/*": "do anything in the database",
   "tinycloud.capabilities/read": "see which permissions this key holds"
 };
-var STRUCTURE_ACTIONS = /* @__PURE__ */ new Set([
-  "tinycloud.sql/write",
-  "tinycloud.sql/schema",
-  "tinycloud.sql/admin",
-  "tinycloud.sql/*"
-]);
+var STRUCTURE_ACTIONS = {
+  "tinycloud.sql/schema": true,
+  "tinycloud.sql/admin": true,
+  "tinycloud.sql/*": true
+};
 var APP_ID = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 var APP_ID_RULE = "an app id looks like xyz.example.app: letters, digits, dots, hyphens and underscores, no slashes or spaces";
 function isAppId(value) {
@@ -31201,7 +31204,15 @@ function isAppId(value) {
 }
 function appsAgentPermissions(mode, appIds = []) {
   const bases = appIds.length === 0 ? [""] : appIds.map((appId) => `${appId}/`);
-  return APPS_AGENT_VARIANTS[mode].grants.flatMap(({ service, actions, within }) => within.flatMap((folder) => bases.map((base4) => ({ service, space: APPS_AGENT_SPACE, path: `${base4}${folder}`, actions: [...actions] }))));
+  const grants = APPS_AGENT_VARIANTS[mode].grants.flatMap(({ service, actions, within }) => within.flatMap((folder) => bases.map((base4) => ({ service, space: APPS_AGENT_SPACE, path: `${base4}${folder}`, actions: [...actions] }))));
+  const schema = APPS_AGENT_VARIANTS[mode].schemaForCatalogApps ? schemaPathsFor(appIds).map((path) => ({ service: "tinycloud.sql", space: APPS_AGENT_SPACE, path, actions: [SCHEMA_ACTION] })) : [];
+  return [...grants, ...schema];
+}
+function schemaPathsFor(appIds) {
+  return appIds.flatMap((appId) => {
+    if (!Object.hasOwn(APPS_AGENT_SCHEMA_DATABASES, appId)) return [];
+    return [`${appId}/${APPS_AGENT_SCHEMA_DATABASES[appId]}`];
+  });
 }
 function quoteApps(appIds) {
   return appIds.map((appId) => `\`${appId}\``).join(", ");
@@ -31224,12 +31235,14 @@ function appsAgentScopeNotice(mode, appIds = []) {
   const reads = writes ? `read everything there, write knowledge and data files (${writableFolders}), and add, change and delete table rows` : "list and read its files and read its table rows";
   const scope = appIds.length === 0 ? `ALL your installed apps' data in the \`${APPS_AGENT_SPACE}\` space` : `the data of ${quoteApps(appIds)} (everything under ${appIds.map((appId) => `\`${appId}/\``).join(", ")}) in the \`${APPS_AGENT_SPACE}\` space`;
   const lines = [
-    variant.changesStructure ? `This gives the agent access to ${scope}: it can ${reads}.` : `This gives the agent READ-ONLY access to ${scope}: it can ${reads}.`
+    writes ? `This gives the agent access to ${scope}: it can ${reads}.` : `This gives the agent READ-ONLY access to ${scope}: it can ${reads}.`
   ];
-  if (variant.changesStructure) {
+  if (writes) {
+    const schemaPaths = schemaPathsFor(appIds).map((path) => `\`${path}\``);
     lines.push(
       `It cannot change ${appIds.length === 1 ? "the app's" : "the apps'"} code, manifest or install record: files outside those folders are read-only for it.`,
-      `SQL write is separate from that: it can change ${appIds.length === 1 ? "this app's" : "these apps'"} table rows and, because of how TinyCloud permissions work today (TC-1581), also change or delete ${appIds.length === 1 ? "its" : "their"} tables (structure).`,
+      `SQL write is separate from that: it can add, change and delete ${appIds.length === 1 ? "this app's" : "these apps'"} table rows.`,
+      variant.schemaForCatalogApps && schemaPaths.length > 0 ? `It can also create, change and drop the tables in ${schemaPaths.join(", ")}, which the app needs to set itself up. That grant names no other database for table changes. Nodes before 1.21.6 do not enforce that database limit, so the write grant may still let it change tables elsewhere there.` : "This grant does not include permission to create, change or drop tables (tinycloud.sql/schema). Nodes before 1.21.6 do not enforce that split, so the write grant may still let it do so there.",
       "It cannot touch other apps, other spaces or secrets."
     );
   } else {
@@ -31382,6 +31395,7 @@ function describeEntry(entry, applicationsSpace) {
 function withinPresetSet(entry, applicationsSpace) {
   if (!inApplicationsSpace(entry, applicationsSpace) || entry.caveats !== void 0) return false;
   if (entry.path.split("/").some((segment) => segment === "." || segment === "..")) return false;
+  if (entry.actions.includes(SCHEMA_ACTION)) return false;
   const slash = entry.path.indexOf("/");
   const folder = slash > 0 && isAppId(entry.path.slice(0, slash)) ? entry.path.slice(slash + 1) : void 0;
   const grants = Object.values(APPS_AGENT_VARIANTS).flatMap(({ grants: variantGrants }) => variantGrants.filter((grant) => grant.service === entry.service));
@@ -31400,8 +31414,8 @@ function describeGrantScope(requested, requestedExpiry, applicationsSpace, maxLi
     ...extras.map((entry) => `! ${describeEntry(entry, applicationsSpace)}`),
     ...others.map((entry) => `- ${describeEntry(entry, applicationsSpace)}`)
   ];
-  if (requested.some((entry) => entry.service === "tinycloud.sql" && entry.actions.some((action) => STRUCTURE_ACTIONS.has(action)))) {
-    lines.push("Because of how TinyCloud permissions work today (TC-1581), SQL write access can also change or delete tables (structure).");
+  if (requested.some((entry) => entry.service === "tinycloud.sql" && entry.actions.some((action) => Object.hasOwn(STRUCTURE_ACTIONS, action)))) {
+    lines.push("This request can create, change and drop tables (an SQL schema, admin or wildcard entry).");
   }
   const entryLifetimes = requested.filter((entry) => entry.expiry !== void 0).map((entry) => lifetimeMs(entry.expiry));
   const durations = [lifetimeMs(requestedExpiry), ...entryLifetimes].filter((ms2) => ms2 !== void 0).map((ms2) => Math.min(ms2, maxLifetimeMs ?? Number.POSITIVE_INFINITY));
@@ -32184,7 +32198,7 @@ ${signInAgainHint(ctx.profile, posture ?? void 0)}
     `With --preset ${APPS_AGENT_PRESET}: limit the grant to this app's <app_id>/ prefix (recommended); repeat for up to ${APPS_AGENT_MAX_APPS} apps`,
     (value, previous) => [...previous, value],
     []
-  ).option("--write", `With --preset ${APPS_AGENT_PRESET}: also let the agent add and change the named --app apps' data: write their knowledge/ and prefs/ files (kv put) and change their tables (sql write). Their code, manifest and install record stay read-only. SQL write can also change or drop those apps' tables`).option("--paste", "With --grant on an OpenKey profile: wait up to 5 minutes for a signed code from OpenKey on stdin instead of a browser callback (use when the browser cannot reach this CLI)").action(async (options2, cmd) => {
+  ).option("--write", `With --preset ${APPS_AGENT_PRESET}: also let the agent add and change the named --app apps' data: write their knowledge/ and prefs/ files (kv put) and add, change or delete their table rows (sql write). Their code, manifest and install record stay read-only. Creating, changing or dropping tables is granted only for an app's catalog database (today Health Log's healthlog)`).option("--paste", "With --grant on an OpenKey profile: wait up to 5 minutes for a signed code from OpenKey on stdin instead of a browser callback (use when the browser cannot reach this CLI)").action(async (options2, cmd) => {
     try {
       const globalOpts = cmd.optsWithGlobals();
       const ctx = await ProfileManager.resolveContext(globalOpts, options2.grant ? {} : { storedSession: "unused" });
@@ -34412,12 +34426,369 @@ function registerEnableCommand(program) {
   });
 }
 
+// src/commands/apps.ts
+init_profiles();
+init_constants();
+init_sdk();
+import { CLI_NAME as CLI_NAME23 } from "@tinycloud/operations/cli-name";
+import { operationSpaceResolver as operationSpaceResolver2 } from "@tinycloud/operations/delegation-binding";
+
+// src/lib/knowledge-input.ts
+init_constants();
+init_errors();
+init_safe_text();
+function usage2(message) {
+  return new CLIError("INVALID_ARGUMENT", message, ExitCode.USAGE_ERROR);
+}
+function assertKnowledgeAppId(value) {
+  if (!isAppId(value)) throw usage2(`Invalid app id "${safeClipped(value)}": ${APP_ID_RULE}.`);
+  return value;
+}
+function assertKnowledgeConcept(value) {
+  const reason = value.length > 300 ? "it is longer than 300 characters" : value.startsWith("/") ? "it starts with a slash" : /[*\\]/.test(value) ? "it contains a wildcard or backslash" : /%(?:2e|2f|5c)/i.test(value) ? "it contains an encoded dot, slash or backslash" : value.split("/").some((segment) => segment === "" || segment === "." || segment === "..") ? "it has an empty, `.` or `..` segment" : void 0;
+  if (reason !== void 0) {
+    throw usage2(
+      `Invalid concept "${safeClipped(value)}": ${reason}. Use a path inside the app's knowledge folder, such as app or tables/meal.md.`
+    );
+  }
+  return value;
+}
+
+// src/lib/apps-install-pin.ts
+var SHARE_ORIGIN = "https://share.tinycloud.xyz";
+var HEALTHLOG_ID = "xyz.tinycloud.sample.healthlog";
+var PINNED = {
+  [HEALTHLOG_ID]: {
+    appId: HEALTHLOG_ID,
+    database: `${HEALTHLOG_ID}/healthlog`,
+    bundleDigest: "dc3ec19fffce8fee350944469948531659a258347538a98aacdd5544deea5014",
+    files: [
+      { path: "schema.sql", sha256: "bb46ab35ac7887f672beba2f50b9f982c31d41607b3fa77ac9c2e72003edf199", size: 4105 },
+      { path: "knowledge/app.md", sha256: "74a65d0332ba06fe5f7fb47c67243ebc6ca80435f3388cb5201712287240f4c7", size: 3994 },
+      { path: "knowledge/kv/app.md", sha256: "1583fdefdf6261a8ce110d8de22843855f8393f760de9fa79c3491868924bd42", size: 1283 },
+      { path: "knowledge/kv/knowledge.md", sha256: "1f3fb9d50e0ccea10dbe4a223efdbbde2b277bbed8f4790251331c5a7dcebc0f", size: 1170 },
+      { path: "knowledge/kv/prefs.md", sha256: "0de88eb2cd8c2ad7302b84c2f6b972364d9e9354f15b70657349339167dd52e4", size: 831 },
+      { path: "knowledge/log.md", sha256: "7753435d03afe51c36023c596330c7f04c597319586b5b39d4cf8a675512b1d0", size: 263 },
+      { path: "knowledge/tables/meal.md", sha256: "1bc09271c8c2cf987ef81dfb99c4427234fdfbc795f5229a1d631aef0fbff795", size: 1921 },
+      { path: "knowledge/tables/weight.md", sha256: "fbae8b103931f976b838024d3ec7ea2596f1b1af3e9834e8aaba1d216d227bc0", size: 1401 },
+      { path: "knowledge/views/day_card.md", sha256: "f1ea0738b6905a4952ab1f9c269310f2f888c6606b16304c12bdf69dfb3fafbe", size: 1707 },
+      { path: "knowledge/views/week_rollup.md", sha256: "b9773f2ae10fadb9b0ce5f5a78885c87f90bd202a00f7f157428911239c2077e", size: 1579 },
+      { path: "knowledge/index.md", sha256: "06e54fa6a4f14ae13bdbcf2ad5ab22b6d561da90e04c27fc616787762e45811e", size: 945 }
+    ]
+  }
+};
+function pinnedApp(appId) {
+  return Object.hasOwn(PINNED, appId) ? PINNED[appId] : void 0;
+}
+
+// src/lib/apps-install.ts
+import { createHash as createHash3 } from "crypto";
+function errorMessage2(error) {
+  return error instanceof Error ? error.message : String(error);
+}
+var MAX_FILE_BYTES = 1e6;
+var AppsInstallError = class extends Error {
+  constructor(code4, message) {
+    super(message);
+    this.code = code4;
+    this.name = "AppsInstallError";
+  }
+};
+function sha256Hex2(bytes) {
+  return createHash3("sha256").update(bytes).digest("hex");
+}
+function bytesEqual(a, b) {
+  return a.length === b.length && Buffer.from(a).equals(Buffer.from(b));
+}
+async function fetchVerified(app, io) {
+  const verified = /* @__PURE__ */ new Map();
+  for (const file of app.files) {
+    const url = `${SHARE_ORIGIN}/apps/b/${app.bundleDigest}/${file.path}`;
+    let bytes;
+    try {
+      bytes = await io.fetchBytes(url);
+    } catch (error) {
+      throw new AppsInstallError("FETCH_FAILED", `Could not fetch ${file.path}: ${errorMessage2(error)}`);
+    }
+    verifyBytes(file, bytes);
+    verified.set(file.path, bytes);
+  }
+  return verified;
+}
+function verifyBytes(file, bytes) {
+  if (bytes.length > MAX_FILE_BYTES) {
+    throw new AppsInstallError("INTEGRITY_FAILED", `${file.path} is ${bytes.length} bytes, above the ${MAX_FILE_BYTES} byte limit`);
+  }
+  if (bytes.length !== file.size || sha256Hex2(bytes) !== file.sha256) {
+    throw new AppsInstallError("INTEGRITY_FAILED", `${file.path} does not match the pinned sha256 and size`);
+  }
+}
+function splitStatements(sql) {
+  let stripped = "";
+  let inQuote = false;
+  for (let i = 0; i < sql.length; i++) {
+    const ch = sql[i];
+    if (ch === "'") inQuote = !inQuote;
+    if (!inQuote && ch === "-" && sql[i + 1] === "-") {
+      while (i < sql.length && sql[i] !== "\n") i++;
+      stripped += "\n";
+      continue;
+    }
+    stripped += ch;
+  }
+  return stripped.split(";").map((statement) => statement.replace(/\s+/g, " ").trim()).filter((statement) => statement.length > 0);
+}
+var TABLE_FORM = /^CREATE TABLE IF NOT EXISTS ([A-Za-z_][A-Za-z0-9_]*) \(.*\)$/i;
+var INDEX_FORM = /^CREATE INDEX IF NOT EXISTS ([A-Za-z_][A-Za-z0-9_]*) ON [A-Za-z_][A-Za-z0-9_]*\([A-Za-z_][A-Za-z0-9_, ]*\)$/i;
+var VIEW_FORM = /^CREATE VIEW IF NOT EXISTS ([A-Za-z_][A-Za-z0-9_]*) AS SELECT .+$/i;
+function planDdl(schemaSql) {
+  const tables = [];
+  const views = [];
+  const statements = [];
+  for (const statement of splitStatements(schemaSql)) {
+    const table = TABLE_FORM.exec(statement);
+    const index = INDEX_FORM.exec(statement);
+    const view = VIEW_FORM.exec(statement);
+    if (table) {
+      tables.push(table[1]);
+      statements.push(statement);
+    } else if (index) {
+      statements.push(statement);
+    } else if (view) {
+      views.push(view[1]);
+      statements.push(`DROP VIEW IF EXISTS ${view[1]}`, statement);
+    } else {
+      throw new AppsInstallError("DDL_REFUSED", `Pinned schema statement is not an allowed form: ${statement.slice(0, 80)}`);
+    }
+  }
+  return { tables, views, statements };
+}
+async function applySchema(plan, io) {
+  let existing;
+  try {
+    existing = new Set(await io.sqlTableNames());
+  } catch (error) {
+    throw new AppsInstallError("SQL_FAILED", `Could not list tables: ${errorMessage2(error)}`);
+  }
+  for (const statement of plan.statements) {
+    try {
+      await io.sqlExecute(statement);
+    } catch (error) {
+      throw new AppsInstallError("SQL_FAILED", `Schema statement failed: ${errorMessage2(error)}`);
+    }
+  }
+  return {
+    tablesCreated: plan.tables.filter((name) => !existing.has(name)),
+    viewsRecreated: [...plan.views]
+  };
+}
+function knowledgePaths(app) {
+  const paths = app.files.map((file) => file.path).filter((path) => path.startsWith("knowledge/"));
+  return [...paths.filter((path) => path !== "knowledge/index.md"), ...paths.filter((path) => path === "knowledge/index.md")];
+}
+async function inspectKnowledge(appId, app, verified, io) {
+  const missing = [];
+  const unchanged = [];
+  const conflicts = [];
+  for (const path of knowledgePaths(app)) {
+    const current = await readKv(`${appId}/${path}`, io);
+    if (current === void 0) missing.push(path);
+    else if (bytesEqual(current, verified.get(path))) unchanged.push(path);
+    else conflicts.push(path);
+  }
+  return { missing, unchanged, conflicts };
+}
+async function createMissing(appId, missing, verified, io) {
+  const written = [];
+  const unchanged = [];
+  const conflicts = [];
+  for (const path of missing) {
+    const key = `${appId}/${path}`;
+    const bytes = verified.get(path);
+    const outcome = await createKv(key, bytes, io);
+    if (outcome === "created") {
+      written.push(path);
+      continue;
+    }
+    const raced = await readKv(key, io);
+    if (raced !== void 0 && bytesEqual(raced, bytes)) unchanged.push(path);
+    else conflicts.push(path);
+  }
+  return { written, unchanged, conflicts };
+}
+async function readKv(key, io) {
+  try {
+    return await io.kvGet(key);
+  } catch (error) {
+    throw new AppsInstallError("KV_FAILED", `Could not read ${key}: ${errorMessage2(error)}`);
+  }
+}
+async function checkInstallRecord(appId, app, io) {
+  const key = `${appId}/app/install.json`;
+  const bytes = await readKv(key, io);
+  if (bytes === void 0) return;
+  const digest2 = installRecordDigest(bytes);
+  if (digest2 === void 0) {
+    throw new AppsInstallError("INSTALL_RECORD_INVALID", `${key} is not an install record with a digest`);
+  }
+  if (digest2 !== app.bundleDigest) {
+    throw new AppsInstallError(
+      "INSTALL_RECORD_MISMATCH",
+      `${key} names bundle ${digest2}, but this CLI pins ${app.bundleDigest}; update the CLI before installing`
+    );
+  }
+}
+function installRecordDigest(bytes) {
+  let parsed;
+  try {
+    parsed = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
+  } catch {
+    return void 0;
+  }
+  if (typeof parsed !== "object" || parsed === null || !("digest" in parsed)) return void 0;
+  return typeof parsed.digest === "string" ? parsed.digest : void 0;
+}
+async function createKv(key, bytes, io) {
+  try {
+    return await io.kvCreate(key, bytes);
+  } catch (error) {
+    throw new AppsInstallError("KV_FAILED", `Could not write ${key}: ${errorMessage2(error)}`);
+  }
+}
+async function installApp(appId, io, lookup = pinnedApp) {
+  const app = lookup(appId);
+  if (!app) throw new AppsInstallError("UNKNOWN_APP", `No pinned catalog entry for ${appId}`);
+  const verified = await fetchVerified(app, io);
+  await checkInstallRecord(appId, app, io);
+  const schemaSql = new TextDecoder("utf-8", { fatal: true }).decode(verified.get("schema.sql"));
+  const plan = planDdl(schemaSql);
+  const inspected = await inspectKnowledge(appId, app, verified, io);
+  const created = await createMissing(appId, inspected.missing, verified, io);
+  let schema;
+  try {
+    schema = await applySchema(plan, io);
+  } catch (error) {
+    if (error instanceof AppsInstallError) {
+      throw new AppsInstallError(error.code, `notes saved; tables not set up: run again. ${error.message}`);
+    }
+    throw error;
+  }
+  return {
+    appId,
+    status: created.written.length > 0 ? "installed" : "already",
+    database: app.database,
+    filesWritten: created.written,
+    filesUnchanged: [...inspected.unchanged, ...created.unchanged],
+    conflicts: [...inspected.conflicts, ...created.conflicts],
+    tablesCreated: schema.tablesCreated,
+    viewsRecreated: schema.viewsRecreated
+  };
+}
+
+// src/commands/apps.ts
+init_errors();
+init_formatter();
+init_theme();
+var APPLICATIONS_SPACE = "applications";
+function registerAppsCommand(program) {
+  const apps = program.command("apps").description("Install catalog apps into your applications space");
+  apps.command("install <app_id>").description("Install a pinned catalog app: verify Share bytes, apply its schema, write its knowledge bundle").addHelpText(
+    "after",
+    `
+Examples:
+  $ ${CLI_NAME23} apps install xyz.tinycloud.sample.healthlog
+`
+  ).action(async (appIdInput, _options, cmd) => {
+    try {
+      const appId = assertKnowledgeAppId(appIdInput);
+      const entry = pinnedApp(appId);
+      if (!entry) throw new CLIError("UNKNOWN_APP", `No pinned catalog entry for ${appId}`, ExitCode.USAGE_ERROR);
+      const ctx = await ProfileManager.resolveContext(cmd.optsWithGlobals());
+      const node = await ensureAuthenticated(ctx);
+      const profile = await ProfileManager.getProfile(ctx.profile);
+      const spaceUri = operationSpaceResolver2(node, profile.spaceId)(APPLICATIONS_SPACE);
+      const io = appsInstallIo(node.kvForSpace(spaceUri), node.sqlForSpace(spaceUri).db(entry.database));
+      const result = await withSpinner(`Installing ${appId}...`, () => installApp(appId, io)).catch((error) => {
+        throw installFailure(error);
+      });
+      if (shouldOutputJson()) outputJson(result);
+      else printResult(result);
+    } catch (error) {
+      return handleError(error);
+    }
+  });
+}
+function appsInstallIo(kv, db) {
+  return {
+    async fetchBytes(url) {
+      const response = await fetch(url, { redirect: "error" });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      return new Uint8Array(await response.arrayBuffer());
+    },
+    async kvGet(key) {
+      const result = await kv.get(key, { binary: true });
+      if (result.ok) {
+        const bytes = result.data.data;
+        if (bytes instanceof Uint8Array) return bytes;
+        throw new Error("KV_GET_NOT_BYTES");
+      }
+      if (result.error.code === "KV_NOT_FOUND") return void 0;
+      throw new Error(result.error.code ?? "KV_GET_FAILED");
+    },
+    async kvCreate(key, bytes) {
+      const result = await kv.put(key, bytes, { ifNoneMatch: "*" });
+      if (result.ok) return "created";
+      if (result.error.code === "KV_PRECONDITION_FAILED") return "exists";
+      throw new Error(result.error.code ?? "KV_PUT_FAILED");
+    },
+    async sqlExecute(statement) {
+      const result = await db.execute(statement);
+      if (!result.ok) throw new Error(result.error.code ?? "SQL_EXECUTE_FAILED");
+    },
+    async sqlTableNames() {
+      const result = await db.query("SELECT name FROM sqlite_master WHERE type = 'table'");
+      if (!result.ok) throw new Error(result.error.code ?? "SQL_QUERY_FAILED");
+      return result.data.rows.map(tableName);
+    }
+  };
+}
+function tableName(row) {
+  if (Array.isArray(row)) return String(row[0]);
+  if (row !== null && typeof row === "object" && "name" in row) return String(row.name);
+  throw new Error("SQL_ROW_UNEXPECTED");
+}
+function installFailure(error) {
+  if (!(error instanceof AppsInstallError)) return error;
+  return new CLIError(error.code, error.message, ExitCode.ERROR);
+}
+function printResult(result) {
+  const rows = [
+    ["App", result.appId],
+    ["Status", result.status],
+    ["Database", result.database],
+    ["Tables created", result.tablesCreated.join(", ") || "none"],
+    ["Views recreated", result.viewsRecreated.join(", ") || "none"],
+    ["Knowledge written", String(result.filesWritten.length)],
+    ["Knowledge unchanged", String(result.filesUnchanged.length)],
+    ["Knowledge left as edited", String(result.conflicts.length)]
+  ];
+  process.stdout.write(formatTable(["Field", "Value"], rows) + "\n");
+  if (result.conflicts.length > 0) {
+    const count = result.conflicts.length;
+    const sentence = count === 1 ? "1 note was left as you edited it" : `${count} notes were left as you edited them`;
+    process.stdout.write(theme.muted(`${sentence}: ${result.conflicts.join(", ")}`) + "\n");
+  }
+  if (result.status === "already") {
+    process.stdout.write(theme.muted("Already installed; views refreshed.") + "\n");
+  }
+}
+
 // src/commands/init.ts
 init_profiles();
 init_formatter();
 init_errors();
 init_constants();
-import { CLI_NAME as CLI_NAME23 } from "@tinycloud/operations/cli-name";
+import { CLI_NAME as CLI_NAME24 } from "@tinycloud/operations/cli-name";
 function registerInitCommand(program) {
   program.command("init").description("Initialize a new TinyCloud profile").option("--name <profile>", "Profile name", "default").option("--key-only", "Only generate key, skip authentication").option("--host <url>", "TinyCloud node URL").option("--paste", "Use manual paste mode for authentication").option("--no-popup", "Print the OpenKey URL without opening a browser").option("--default-space <name>", "Default space used when --space is omitted (e.g. applications)").action(async (options, cmd) => {
     try {
@@ -34435,7 +34806,7 @@ function registerInitCommand(program) {
       if (await ProfileManager.profileExists(profileName2)) {
         throw new CLIError(
           "PROFILE_EXISTS",
-          `Profile "${profileName2}" already exists. Use \`${CLI_NAME23} profile delete ${profileName2}\` first or choose a different name.`,
+          `Profile "${profileName2}" already exists. Use \`${CLI_NAME24} profile delete ${profileName2}\` first or choose a different name.`,
           ExitCode.ERROR
         );
       }
@@ -34491,30 +34862,7 @@ init_session_expired();
 init_constants();
 init_profiles();
 import { invokeOperation as invokeOperation2 } from "@tinycloud/operations";
-import { CLI_NAME as CLI_NAME24 } from "@tinycloud/operations/cli-name";
-
-// src/lib/knowledge-input.ts
-init_constants();
-init_errors();
-init_safe_text();
-function usage2(message) {
-  return new CLIError("INVALID_ARGUMENT", message, ExitCode.USAGE_ERROR);
-}
-function assertKnowledgeAppId(value) {
-  if (!isAppId(value)) throw usage2(`Invalid app id "${safeClipped(value)}": ${APP_ID_RULE}.`);
-  return value;
-}
-function assertKnowledgeConcept(value) {
-  const reason = value.length > 300 ? "it is longer than 300 characters" : value.startsWith("/") ? "it starts with a slash" : /[*\\]/.test(value) ? "it contains a wildcard or backslash" : /%(?:2e|2f|5c)/i.test(value) ? "it contains an encoded dot, slash or backslash" : value.split("/").some((segment) => segment === "" || segment === "." || segment === "..") ? "it has an empty, `.` or `..` segment" : void 0;
-  if (reason !== void 0) {
-    throw usage2(
-      `Invalid concept "${safeClipped(value)}": ${reason}. Use a path inside the app's knowledge folder, such as app or tables/meal.md.`
-    );
-  }
-  return value;
-}
-
-// src/commands/knowledge.ts
+import { CLI_NAME as CLI_NAME25 } from "@tinycloud/operations/cli-name";
 init_permissions();
 init_errors();
 init_formatter();
@@ -34617,7 +34965,7 @@ function knowledgeFailure(result, profile, appId) {
     case "error": {
       if (result.error.code === "SESSION_NOT_FOUND" || result.error.code === "PROFILE_POSTURE_NOT_ALLOWED" && result.context.posture === "unauthenticated") {
         return new CLIError("AUTH_REQUIRED", "Not signed in to TinyCloud.", ExitCode.AUTH_REQUIRED, {
-          hint: `Sign in with: ${CLI_NAME24} --profile ${result.context.profile} auth login`
+          hint: `Sign in with: ${CLI_NAME25} --profile ${result.context.profile} auth login`
         });
       }
       if (result.error.code === "NODE_UNREACHABLE") {
@@ -34647,7 +34995,7 @@ function knowledgeFailure(result, profile, appId) {
   }
 }
 function missingGrantHint(profile, appId) {
-  const request = `${CLI_NAME24} --profile ${profile} auth request`;
+  const request = `${CLI_NAME25} --profile ${profile} auth request`;
   const lines = appId === void 0 ? [
     `  ${request} --preset ${APPS_AGENT_PRESET} --emit req.json   (read-only, all installed apps)`,
     `  ${request} --cap tinycloud.kv:${APPS_AGENT_SPACE}::get,list --emit req.json   (all files, no table access)`,
@@ -34660,7 +35008,7 @@ function missingGrantHint(profile, appId) {
   return [
     "Ask the owner for a grant, narrowest first. Create the request:",
     ...lines,
-    `The owner runs \`${CLI_NAME24} auth grant req.json > grant.json\`; then import the result with \`${CLI_NAME24} --profile ${profile} auth import grant.json\`.`
+    `The owner runs \`${CLI_NAME25} auth grant req.json > grant.json\`; then import the result with \`${CLI_NAME25} --profile ${profile} auth import grant.json\`.`
   ].join("\n");
 }
 
@@ -34968,7 +35316,7 @@ init_errors();
 init_constants();
 init_theme();
 import { resolveManifestKnowledgeRoot as resolveManifestKnowledgeRoot2 } from "@tinycloud/sdk-core";
-import { CLI_NAME as CLI_NAME25 } from "@tinycloud/operations/cli-name";
+import { CLI_NAME as CLI_NAME26 } from "@tinycloud/operations/cli-name";
 import { readFile as readFile12 } from "fs/promises";
 var DEFAULT_APP_SPACE = "applications";
 function registerManifestCommand(program) {
@@ -34976,8 +35324,8 @@ function registerManifestCommand(program) {
   manifest.command("resolve <source>").description("Resolve a manifest file or URL to its effective space, paths, and DB basenames").addHelpText("after", `
 
 Examples:
-  $ ${CLI_NAME25} manifest resolve ./manifest.json
-  $ ${CLI_NAME25} manifest resolve https://app.example.com/manifest.json --json
+  $ ${CLI_NAME26} manifest resolve ./manifest.json
+  $ ${CLI_NAME26} manifest resolve https://app.example.com/manifest.json --json
 
 What it shows:
   - app_id, name, manifest_version
@@ -34987,7 +35335,7 @@ What it shows:
 
 This command is read-only and does NOT contact the node \u2014 it just resolves
 the manifest against the active profile's address/chain so you know which
-\`--space\` and \`--db\` values to pass to other ${CLI_NAME25} commands.
+\`--space\` and \`--db\` values to pass to other ${CLI_NAME26} commands.
 `).action(async (source, _options, cmd) => {
     try {
       const globalOpts = cmd.optsWithGlobals();
@@ -35056,7 +35404,7 @@ ${theme.heading("SQL databases")}
 `);
         }
         process.stdout.write(theme.muted(`
-Use with: ${CLI_NAME25} sql query --space ${spaceName} --db <db> "..."
+Use with: ${CLI_NAME26} sql query --space ${spaceName} --db <db> "..."
 `));
       }
       if (permissions.length > 0) {
@@ -35176,7 +35524,7 @@ init_profiles();
 init_formatter();
 init_errors();
 init_constants();
-import { CLI_NAME as CLI_NAME26 } from "@tinycloud/operations/cli-name";
+import { CLI_NAME as CLI_NAME27 } from "@tinycloud/operations/cli-name";
 import { createInterface as createInterface5 } from "readline";
 init_theme();
 init_types();
@@ -35322,9 +35670,9 @@ profile at command time. Precedence for every kv/sql command:
   explicit --space flag  >  profile defaultSpace  >  primary space.
 
 Examples:
-  $ ${CLI_NAME26} profile set-default-space applications
-  $ ${CLI_NAME26} profile set-default-space applications --profile cli-test
-  $ ${CLI_NAME26} profile set-default-space --unset
+  $ ${CLI_NAME27} profile set-default-space applications
+  $ ${CLI_NAME27} profile set-default-space applications --profile cli-test
+  $ ${CLI_NAME27} profile set-default-space --unset
 `).action(async (name, options, cmd) => {
     try {
       const globalOpts = cmd.optsWithGlobals();
@@ -35336,7 +35684,7 @@ Examples:
       if (!options.unset && (name === void 0 || name === "")) {
         throw new CLIError(
           "USAGE_ERROR",
-          `Provide a space name (e.g. \`${CLI_NAME26} profile set-default-space applications\`) or pass --unset.`,
+          `Provide a space name (e.g. \`${CLI_NAME27} profile set-default-space applications\`) or pass --unset.`,
           ExitCode.USAGE_ERROR
         );
       }
@@ -35395,7 +35743,7 @@ function parseOperatorType(raw) {
 
 // src/commands/replica.ts
 init_profile_replicas();
-import { CLI_NAME as CLI_NAME27 } from "@tinycloud/operations/cli-name";
+import { CLI_NAME as CLI_NAME28 } from "@tinycloud/operations/cli-name";
 import { randomBytes as randomBytes7 } from "crypto";
 import { constants as fsConstants5 } from "fs";
 import { mkdir as mkdir5, open as open11, readdir as readdir6, rename as rename4, unlink as unlink5, lstat as lstat9 } from "fs/promises";
@@ -35536,11 +35884,11 @@ var EXIT_BY_CODE = {
 var READ_FAILURE = {
   absent: { code: "KEY_ABSENT", exit: ExitCode.NOT_FOUND, what: "is not in the replica (the replica covers its whole prefix)" },
   deleted: { code: "KEY_DELETED", exit: ExitCode.NOT_FOUND, what: "was deleted at the source" },
-  content_missing: { code: "CONTENT_MISSING", exit: ExitCode.NOT_FOUND, what: `is known but its content has not been fetched yet; run ${CLI_NAME27} replica sync` },
+  content_missing: { code: "CONTENT_MISSING", exit: ExitCode.NOT_FOUND, what: `is known but its content has not been fetched yet; run ${CLI_NAME28} replica sync` },
   coverage_incomplete: {
     code: "COVERAGE_INCOMPLETE",
     exit: ExitCode.NOT_FOUND,
-    what: `is not in the replica, which has not finished its first sync; run ${CLI_NAME27} replica sync`
+    what: `is not in the replica, which has not finished its first sync; run ${CLI_NAME28} replica sync`
   },
   not_covered: { code: "NOT_COVERED", exit: ExitCode.USAGE_ERROR, what: "is outside the replica's prefix" }
 };
@@ -35658,7 +36006,7 @@ async function existingReplicaName(profile, option) {
   const names = await replicaNames(profile);
   if (names.length === 1) return names[0];
   if (names.length === 0) {
-    throw new ReplicaError(ReplicaErrorCode.NOT_FOUND, `Profile "${profile}" has no replicas. Create one with: ${CLI_NAME27} replica sync --prefix <prefix>`);
+    throw new ReplicaError(ReplicaErrorCode.NOT_FOUND, `Profile "${profile}" has no replicas. Create one with: ${CLI_NAME28} replica sync --prefix <prefix>`);
   }
   throw new CLIError("USAGE_ERROR", `Profile "${profile}" has several replicas (${names.join(", ")}); pass --replica <name>.`, ExitCode.USAGE_ERROR);
 }
@@ -35766,9 +36114,9 @@ async function storedGrants(profile) {
 function grantHint(space, prefix) {
   return [
     "A replica needs a device grant with get and sync on its prefix:",
-    `  device: ${CLI_NAME27} auth request --cap tinycloud.kv:${space}:${prefix}:get,list,metadata,sync --expiry 30d --emit req.json`,
-    `  owner:  ${CLI_NAME27} auth grant req.json > grant.json`,
-    `  device: ${CLI_NAME27} auth import grant.json`
+    `  device: ${CLI_NAME28} auth request --cap tinycloud.kv:${space}:${prefix}:get,list,metadata,sync --expiry 30d --emit req.json`,
+    `  owner:  ${CLI_NAME28} auth grant req.json > grant.json`,
+    `  device: ${CLI_NAME28} auth import grant.json`
   ].join("\n");
 }
 function resolveSpace(input, prefix, grants) {
@@ -35859,7 +36207,7 @@ function describeStatus(status) {
     formatField("Size", formatBytes(status.bytes)),
     formatField("Grant", status.device.delegationCid),
     formatField("Last error", status.lastError ? `${status.lastError.code}: ${status.lastError.message}` : null),
-    formatField("Purge", status.purgePending ? `incomplete: content files remain; the next ${CLI_NAME27} replica command retries` : null)
+    formatField("Purge", status.purgePending ? `incomplete: content files remain; the next ${CLI_NAME28} replica command retries` : null)
   ].join("\n");
 }
 async function writeFileAtomic(path, bytes) {
@@ -36023,7 +36371,7 @@ or coverage incomplete; 5 grant expired, revoked or not yet valid; 6 network;
     (options, cmd) => run(async () => {
       const profile = await profileName(cmd);
       if (options.purge) {
-        throw new CLIError("REPORT_READ_ONLY", `Replica report is read-only. To remove a named local replica, run ${CLI_NAME27} replica reset --replica <name> --purge; flag-owned purge has no equivalent yet (TC-1309).`, ExitCode.USAGE_ERROR);
+        throw new CLIError("REPORT_READ_ONLY", `Replica report is read-only. To remove a named local replica, run ${CLI_NAME28} replica reset --replica <name> --purge; flag-owned purge has no equivalent yet (TC-1309).`, ExitCode.USAGE_ERROR);
       }
       if (options.clearPending) {
         throw new CLIError("REPORT_READ_ONLY", "Clearing pending replica writes has no equivalent yet; see TC-1309 for a safe replacement command.", ExitCode.USAGE_ERROR);
@@ -36125,7 +36473,7 @@ or coverage incomplete; 5 grant expired, revoked or not yet valid; 6 network;
               if (differs !== void 0) {
                 throw new ReplicaError(
                   ReplicaErrorCode.CONFIG_MISMATCH,
-                  `Replica ${name} already follows ${differs}. Use another --replica name, or ${CLI_NAME27} replica reset --replica ${name} --purge first.`
+                  `Replica ${name} already follows ${differs}. Use another --replica name, or ${CLI_NAME28} replica reset --replica ${name} --purge first.`
                 );
               }
             }
@@ -36290,7 +36638,7 @@ init_theme();
 init_errors();
 init_warnings();
 init_constants();
-import { CLI_NAME as CLI_NAME29 } from "@tinycloud/operations/cli-name";
+import { CLI_NAME as CLI_NAME30 } from "@tinycloud/operations/cli-name";
 import { readFile as readFile13 } from "fs/promises";
 import { join as join17 } from "path";
 import { homedir, hostname, userInfo } from "os";
@@ -36501,7 +36849,7 @@ function parseStatusEnvelope(line) {
 // src/lib/secrets-wait.ts
 init_constants();
 init_errors();
-import { CLI_NAME as CLI_NAME28 } from "@tinycloud/operations/cli-name";
+import { CLI_NAME as CLI_NAME29 } from "@tinycloud/operations/cli-name";
 var WAIT_BACKOFF_MS = [3e3, 4500, 6750, 10125];
 var WAIT_STEADY_INTERVAL_MS = 15e3;
 var DEFAULT_WAIT_TIMEOUT = "5m";
@@ -36509,7 +36857,7 @@ var MAX_WAIT_TIMEOUT_MS = 9 * 6e4;
 var MAX_CONSECUTIVE_FAILURES = 5;
 var TIMEOUT_RE = /^(0|\d+s|\d+m)$/;
 var RETRYABLE_STATUS_ERRORS = { NODE_UNREACHABLE: true, NODE_ERROR: true };
-var EXPLICIT_KEY_HINT = `${CLI_NAME28} secrets wait never signs in, and an explicit private key has no stored session. Use a local profile signed in once with ${CLI_NAME28} --profile <profile> auth login --method local, without TC_PRIVATE_KEY.`;
+var EXPLICIT_KEY_HINT = `${CLI_NAME29} secrets wait never signs in, and an explicit private key has no stored session. Use a local profile signed in once with ${CLI_NAME29} --profile <profile> auth login --method local, without TC_PRIVATE_KEY.`;
 function abortableSleep(ms2, signal) {
   return new Promise((resolve9) => {
     if (signal.aborted) {
@@ -36545,7 +36893,7 @@ async function runSecretsWait(request, deps) {
   let step = 0;
   const cancelled = () => new CLIError(
     "CANCELLED",
-    `Interrupted: ${CLI_NAME28} secrets wait stopped before the secrets were ready.`,
+    `Interrupted: ${CLI_NAME29} secrets wait stopped before the secrets were ready.`,
     ExitCode.CANCELLED,
     progress === void 0 ? {} : { progress }
   );
@@ -36689,13 +37037,13 @@ function statusError(error, profile, warnings) {
   if (error.code === "AUTH_REQUIRED" || error.code === "SESSION_NOT_FOUND") {
     const recovery = recoveryOf(error, "sign_in");
     if (recovery !== void 0) {
-      const hint = recovery.command !== void 0 ? `Sign in once with: ${recovery.command}, then retry.` : `Sign in to profile "${profile}" once with ${CLI_NAME28} auth login, then retry.`;
+      const hint = recovery.command !== void 0 ? `Sign in once with: ${recovery.command}, then retry.` : `Sign in to profile "${profile}" once with ${CLI_NAME29} auth login, then retry.`;
       return new CLIError("AUTH_REQUIRED", error.message, ExitCode.AUTH_REQUIRED, { hint, recovery, ...extra });
     }
   }
   if (error.code === "PROFILE_MIGRATION_REQUIRED") {
     const recovery = recoveryOf(error, "complete_migration");
-    const hint = recovery?.command !== void 0 ? `Run ${recovery.command} once to finish this profile's one-time upgrade, then retry wait.` : `Run ${CLI_NAME28} auth caps once with profile "${profile}" to finish its one-time upgrade, then retry wait.`;
+    const hint = recovery?.command !== void 0 ? `Run ${recovery.command} once to finish this profile's one-time upgrade, then retry wait.` : `Run ${CLI_NAME29} auth caps once with profile "${profile}" to finish its one-time upgrade, then retry wait.`;
     return new CLIError("PROFILE_MIGRATION_REQUIRED", error.message, ExitCode.ERROR, {
       hint,
       ...recovery === void 0 ? {} : { recovery },
@@ -36887,11 +37235,11 @@ async function runSecretOperation(params) {
 }
 function secretPermissionReason(action, name) {
   const target = name ? ` secret "${name}"` : " secrets";
-  return `Allow \`${CLI_NAME29} secrets ${action}${name ? ` ${name}` : ""}\` to access${target} with the required TinyCloud permissions.`;
+  return `Allow \`${CLI_NAME30} secrets ${action}${name ? ` ${name}` : ""}\` to access${target} with the required TinyCloud permissions.`;
 }
 function assertOwnerApprovalPossible(profileName2, profile, action, name, missing = []) {
   if (profile.authMethod !== "openkey" || process.stdin.isTTY || process.stderr.isTTY) return;
-  const command = `${CLI_NAME29} secrets ${action === "del" ? "delete" : action}${name ? ` ${name}` : ""}`;
+  const command = `${CLI_NAME30} secrets ${action === "del" ? "delete" : action}${name ? ` ${name}` : ""}`;
   throw new CLIError(
     "PERMISSION_DENIED",
     action === "get" ? missing.length > 0 && missing.every((permission) => permission.service === "tinycloud.encryption" && Array.isArray(permission.actions) && permission.actions.length > 0 && permission.actions.every((capability) => capability === SECRET_DECRYPT_CAPABILITY)) ? `Profile "${profileName2}" lacks the scoped decrypt authority (${SECRET_DECRYPT_CAPABILITY}) needed to read secret "${name}", and requesting it needs an interactive browser approval.` : `Profile "${profileName2}" lacks a scoped read or decrypt grant needed to read secret "${name}", and requesting it needs an interactive browser approval.` : `Profile "${profileName2}" holds no grant for \`${command}\`, and requesting one needs an interactive browser approval.`,
@@ -36902,7 +37250,7 @@ function assertOwnerApprovalPossible(profileName2, profile, action, name, missin
   );
 }
 function scopedSecretLoginHint(profileName2) {
-  return `Have the owner approve a scoped login whose manifest names the secret: ${CLI_NAME29} --profile ${profileName2} auth login --method openkey --paste --manifest <manifest.json>. Pass the owner's code on stdin, newline-terminated.`;
+  return `Have the owner approve a scoped login whose manifest names the secret: ${CLI_NAME30} --profile ${profileName2} auth login --method openkey --paste --manifest <manifest.json>. Pass the owner's code on stdin, newline-terminated.`;
 }
 async function runSecretOperationAttempt(label, operation) {
   try {
@@ -37036,7 +37384,7 @@ ${message}`,
           "AUTH_REQUIRED",
           "Not signed in to TinyCloud.",
           ExitCode.AUTH_REQUIRED,
-          { hint: `Sign in with: ${CLI_NAME29} --profile ${result.context.profile} auth login` }
+          { hint: `Sign in with: ${CLI_NAME30} --profile ${result.context.profile} auth login` }
         );
       }
       if (result.error.code === "NODE_UNREACHABLE") {
@@ -37513,7 +37861,7 @@ function registerSecretsCommand(program, openKeyAcquisition) {
           name: "Encryption network",
           ok: false,
           detail: `${networkName} not found`,
-          hint: `${CLI_NAME29} secrets network init ${networkName}`
+          hint: `${CLI_NAME30} secrets network init ${networkName}`
         }
       ];
       let secret;
@@ -37559,7 +37907,7 @@ function registerSecretsCommand(program, openKeyAcquisition) {
             name: "Secret access",
             ok: false,
             detail: notFound ? `${resolved.permissionPaths.vault} not found` : result.error.message,
-            hint: notFound ? local ? `${CLI_NAME29} secrets put ${resolved.name}${formatSecretScopeFlag(scopeOptions)} --stdin` : `${CLI_NAME29} secrets request ${resolved.name}${formatSecretScopeFlag(scopeOptions)}` : `Ask the owner profile to grant ${secretCapabilityAction("get")} and ${SECRET_DECRYPT_CAPABILITY}.`
+            hint: notFound ? local ? `${CLI_NAME30} secrets put ${resolved.name}${formatSecretScopeFlag(scopeOptions)} --stdin` : `${CLI_NAME30} secrets request ${resolved.name}${formatSecretScopeFlag(scopeOptions)}` : `Ask the owner profile to grant ${secretCapabilityAction("get")} and ${SECRET_DECRYPT_CAPABILITY}.`
           });
         }
       } else {
@@ -37803,7 +38151,7 @@ function registerSecretsCommand(program, openKeyAcquisition) {
       if (effectiveLocal(profile, options)) {
         throw new CLIError(
           "LOCAL_OWNER_PROFILE",
-          `Profile "${ctx.profile}" uses a local key, which owns its secrets: store them with ${CLI_NAME29} secrets put NAME --stdin instead of requesting them.`,
+          `Profile "${ctx.profile}" uses a local key, which owns its secrets: store them with ${CLI_NAME30} secrets put NAME --stdin instead of requesting them.`,
           ExitCode.USAGE_ERROR
         );
       }
@@ -37926,7 +38274,7 @@ function registerSecretsCommand(program, openKeyAcquisition) {
 
 // src/commands/share.ts
 import { Option } from "commander";
-import { CLI_NAME as CLI_NAME30 } from "@tinycloud/operations/cli-name";
+import { CLI_NAME as CLI_NAME31 } from "@tinycloud/operations/cli-name";
 import { ProfileLockTimeoutError as ProfileLockTimeoutError3 } from "@tinycloud/operations/state";
 init_errors();
 
@@ -39320,7 +39668,7 @@ function htmlFolderNotice(bundle) {
 }
 
 // src/commands/share.ts
-var SHARE_ORIGIN = "https://share.tinycloud.xyz";
+var SHARE_ORIGIN2 = "https://share.tinycloud.xyz";
 var NOTIFY_WINDOW_MESSAGE = "Share notification authorization expired (at share expiry or 5 minutes after publication); publish a new share and invite the recipient then.\n";
 var ONGOING_UNAVAILABLE = "Ongoing shares are not available yet; v1 shares pin a version";
 function artifactRequest(options, actions, inputCount) {
@@ -39385,7 +39733,7 @@ function shareCliError(error, operation = "publish") {
       "SHARE_HISTORY_UNREADABLE",
       "sender history cannot be read with the current session key",
       1,
-      { hint: `Run \`${CLI_NAME30} share history recover\` to move the unreadable file aside. The old file is kept, not deleted.` }
+      { hint: `Run \`${CLI_NAME31} share history recover\` to move the unreadable file aside. The old file is kept, not deleted.` }
     );
   }
   if (error instanceof SharePublishAuthorityError) {
@@ -39393,12 +39741,12 @@ function shareCliError(error, operation = "publish") {
     const profileName2 = "profileName" in failure ? failure.profileName : void 0;
     const localKey = "localKey" in failure && failure.localKey === true;
     const profileHint = profileName2 === void 0 ? "" : `--profile ${profileName2} `;
-    const loginHint = localKey ? `\`${CLI_NAME30} ${profileHint}auth login --method local\`` : `\`${CLI_NAME30} ${profileHint}auth login --device --manifest builtin:share-publishing\` (or \`${CLI_NAME30} ${profileHint}enable share\`)`;
+    const loginHint = localKey ? `\`${CLI_NAME31} ${profileHint}auth login --method local\`` : `\`${CLI_NAME31} ${profileHint}auth login --device --manifest builtin:share-publishing\` (or \`${CLI_NAME31} ${profileHint}enable share\`)`;
     if (failure.kind === "caveated-session") {
       const holder = profileName2 === void 0 ? "this session" : `profile ${profileName2}'s session`;
       return new CLIError(
         "PERMISSION_DENIED",
-        `${holder} carries signed restrictions (caveats) on the authority an anyone-with-link share needs, so it cannot create the share link; nothing was shared. Approve Share publishing without restrictions on a new, dedicated profile (any unused name): \`${CLI_NAME30} init --name publisher --key-only && ${CLI_NAME30} --profile publisher enable share\``,
+        `${holder} carries signed restrictions (caveats) on the authority an anyone-with-link share needs, so it cannot create the share link; nothing was shared. Approve Share publishing without restrictions on a new, dedicated profile (any unused name): \`${CLI_NAME31} init --name publisher --key-only && ${CLI_NAME31} --profile publisher enable share\``,
         5
       );
     }
@@ -39484,7 +39832,7 @@ function shareCliError(error, operation = "publish") {
   if (nodeCode === "ENOENT") return new CLIError("INVALID_ARGUMENT", "share input was not found", 2);
   if (nodeCode === "EISDIR") return new CLIError("INVALID_ARGUMENT", "share input must be a Markdown file", 2);
   const mapped = typeof nodeCode === "string" && known[nodeCode] !== void 0 ? known[nodeCode] : known[message];
-  const classified = mapped === void 0 ? classifyShareFailure(error, `\`${CLI_NAME30} auth login\``) : void 0;
+  const classified = mapped === void 0 ? classifyShareFailure(error, `\`${CLI_NAME31} auth login\``) : void 0;
   if (classified !== void 0) return Object.assign(new CLIError(classified.code, classified.reason, classified.exitCode), { cause: error });
   if (error instanceof TypeError) return new CLIError("INVALID_ARGUMENT", "share input is invalid", 2);
   return new CLIError(mapped?.code ?? "INVALID_ARGUMENT", mapped ? mapped.code : "share operation failed", mapped?.exit ?? 2);
@@ -39573,7 +39921,7 @@ function assertAggregateInputLimit(inputs, maxBytes) {
 }
 function registerShareCommand(program) {
   const share = program.command("share").description("Publish and consume TinyCloud Share links");
-  share.command("publish <files...>").description("Publish one or more bounded files as a Share, or a folder with an index.html as one self-contained page (anyone links only)").option("--name <filename>", "Filename for stdin input, or the published .html name of a folder").option("--to <target>", "Share target", "anyone").option("--notify", "Email an exact-email recipient, or a domain mailbox on node 1.17.3+").option("--notify-to <address>", "Mailbox to invite for --to domain:<name> --notify (node 1.17.3+)").option("--expires <duration>", "Share lifetime").option("--max-bytes <bytes>", "Bound input bytes").option("--media-type <type>", "Media type for a single input").option("--action <actions...>", "Addressed permission: read, list, or edit").option("--prefix", "Publish multiple inputs beneath one addressed prefix").option("--binary", "Allow non-UTF-8 bearer content").option("--artifact <id>", 'Publish as the next write-once version of an artifact ("new" starts one); the share is pinned to that version').addOption(new Option("--ongoing").hideHelp()).option("--note <text>", "Note stored with the artifact version").option("--json", "Print versioned redacted JSON").option("--viewer-origin <origin>", "Canonical HTTPS viewer origin", SHARE_ORIGIN).action(async (files, options, command) => {
+  share.command("publish <files...>").description("Publish one or more bounded files as a Share, or a folder with an index.html as one self-contained page (anyone links only)").option("--name <filename>", "Filename for stdin input, or the published .html name of a folder").option("--to <target>", "Share target", "anyone").option("--notify", "Email an exact-email recipient, or a domain mailbox on node 1.17.3+").option("--notify-to <address>", "Mailbox to invite for --to domain:<name> --notify (node 1.17.3+)").option("--expires <duration>", "Share lifetime").option("--max-bytes <bytes>", "Bound input bytes").option("--media-type <type>", "Media type for a single input").option("--action <actions...>", "Addressed permission: read, list, or edit").option("--prefix", "Publish multiple inputs beneath one addressed prefix").option("--binary", "Allow non-UTF-8 bearer content").option("--artifact <id>", 'Publish as the next write-once version of an artifact ("new" starts one); the share is pinned to that version').addOption(new Option("--ongoing").hideHelp()).option("--note <text>", "Note stored with the artifact version").option("--json", "Print versioned redacted JSON").option("--viewer-origin <origin>", "Canonical HTTPS viewer origin", SHARE_ORIGIN2).action(async (files, options, command) => {
     try {
       const json = jsonOutput(options, command);
       if (options.ongoing === true) throw new CLIError("UNSUPPORTED_TARGET", ONGOING_UNAVAILABLE, 2);
@@ -39664,7 +40012,7 @@ function registerShareCommand(program) {
       return handleError(shareCliError(error));
     }
   });
-  share.command("inspect [url]").description("Verify a share link and print safe metadata").option("--stdin", "Read the complete URL from stdin").option("--json", "Print versioned redacted JSON").option("--viewer-origin <origin>", "Require this canonical Share origin", SHARE_ORIGIN).action(async (url, options, command) => {
+  share.command("inspect [url]").description("Verify a share link and print safe metadata").option("--stdin", "Read the complete URL from stdin").option("--json", "Print versioned redacted JSON").option("--viewer-origin <origin>", "Require this canonical Share origin", SHARE_ORIGIN2).action(async (url, options, command) => {
     try {
       const json = jsonOutput(options, command);
       const result = await inspectShareInputOnce(url, options.stdin === true, options.viewerOrigin);
@@ -39709,7 +40057,7 @@ function registerShareCommand(program) {
       return handleError(shareCliError(error));
     }
   });
-  share.command("receive [url]").description("Verify and receive a share link").option("--stdin", "Read the complete URL from stdin").option("--output <directory>", "Create the file in this directory").option("--stdout", "Write verified plaintext bytes to stdout").option("--force", "Allow replacing an existing non-symlink output").option("--max-bytes <bytes>", "Bound received content bytes").option("--json", "Print versioned redacted JSON").option("--viewer-origin <origin>", "Require this canonical Share origin", SHARE_ORIGIN).action(async (url, options, command) => {
+  share.command("receive [url]").description("Verify and receive a share link").option("--stdin", "Read the complete URL from stdin").option("--output <directory>", "Create the file in this directory").option("--stdout", "Write verified plaintext bytes to stdout").option("--force", "Allow replacing an existing non-symlink output").option("--max-bytes <bytes>", "Bound received content bytes").option("--json", "Print versioned redacted JSON").option("--viewer-origin <origin>", "Require this canonical Share origin", SHARE_ORIGIN2).action(async (url, options, command) => {
     try {
       const json = jsonOutput(options, command);
       if (options.stdout && json) throw new CLIError("INVALID_ARGUMENT", "--stdout and --json are mutually exclusive", 2);
@@ -39848,7 +40196,7 @@ init_constants();
 init_sdk();
 init_host();
 init_theme();
-import { CLI_NAME as CLI_NAME31 } from "@tinycloud/operations/cli-name";
+import { CLI_NAME as CLI_NAME32 } from "@tinycloud/operations/cli-name";
 import { ACCOUNT_REGISTRY_SPACE } from "@tinycloud/node-sdk";
 import { randomBytes as randomBytes9 } from "crypto";
 import { mkdir as mkdir7, writeFile as writeFile4 } from "fs/promises";
@@ -39895,7 +40243,7 @@ function registerSpaceCommand(program) {
       } else {
         const profile = await ProfileManager.getProfile(ctx.profile);
         const cap = "tinycloud.kv:account:spaces/:get,list";
-        const hint = resolveProfilePosture(profile) === "delegate-session" ? `Ask the space owner to grant it. Create the request with: ${CLI_NAME31} --profile ${ctx.profile} auth request --cap ${cap} --emit` : `Grant it to this session with: ${CLI_NAME31} --profile ${ctx.profile} auth request --grant --cap ${cap}. The default OpenKey owner sign-in covers only the default space, so it includes neither.`;
+        const hint = resolveProfilePosture(profile) === "delegate-session" ? `Ask the space owner to grant it. Create the request with: ${CLI_NAME32} --profile ${ctx.profile} auth request --cap ${cap} --emit` : `Grant it to this session with: ${CLI_NAME32} --profile ${ctx.profile} auth request --grant --cap ${cap}. The default OpenKey owner sign-in covers only the default space, so it includes neither.`;
         throw new CLIError(
           "PERMISSION_DENIED",
           `Listing spaces needs tinycloud.kv/get and tinycloud.kv/list on the account space's spaces/ registry (${accountSpaceId ?? ACCOUNT_REGISTRY_SPACE}), or tinycloud.space/list. This session holds neither.`,
@@ -39932,10 +40280,10 @@ function registerSpaceCommand(program) {
 
 A delegate cannot host a space \u2014 only its owner (root authority) can. This
 emits a tinycloud.host.request artifact naming the space and its owner so you
-can hand it to the owner; they run \`${CLI_NAME31} space host <name>\` and confirm.
+can hand it to the owner; they run \`${CLI_NAME32} space host <name>\` and confirm.
 
 If you ARE the owner of the resolved space, this refuses and tells you to host
-it directly with \`${CLI_NAME31} space host <name>\` (no request needed).
+it directly with \`${CLI_NAME32} space host <name>\` (no request needed).
 `).action(async (name, options, cmd) => {
     try {
       const globalOpts = cmd.optsWithGlobals();
@@ -39946,7 +40294,7 @@ it directly with \`${CLI_NAME31} space host <name>\` (no request needed).
       if (await isRootAuthority(spaceId, ctx.profile)) {
         throw new CLIError(
           "ALREADY_ROOT_AUTHORITY",
-          `You are the owner of ${spaceId}. Host it directly: ${CLI_NAME31} space host ${spaceName}`,
+          `You are the owner of ${spaceId}. Host it directly: ${CLI_NAME32} space host ${spaceName}`,
           ExitCode.USAGE_ERROR
         );
       }
@@ -40032,7 +40380,7 @@ init_sdk();
 init_space();
 init_host();
 init_theme();
-import { CLI_NAME as CLI_NAME32 } from "@tinycloud/operations/cli-name";
+import { CLI_NAME as CLI_NAME33 } from "@tinycloud/operations/cli-name";
 import { writeFile as writeFile5 } from "fs/promises";
 import { resolve as resolve8 } from "path";
 async function dbHandle(node, dbName, spaceInput, profileName2) {
@@ -40056,12 +40404,12 @@ database for simple apps, or pass --db to target a named database. Pass
 --space to target a non-primary space (e.g. the manifest "applications" space).
 
 Common workflows:
-  $ ${CLI_NAME32} sql execute "CREATE TABLE IF NOT EXISTS notes (id INTEGER PRIMARY KEY, body TEXT)"
-  $ ${CLI_NAME32} sql execute "INSERT INTO notes (body) VALUES (?)" --params '["ship docs"]'
-  $ ${CLI_NAME32} sql query "SELECT id, body FROM notes ORDER BY id"
-  $ ${CLI_NAME32} sql query "SELECT * FROM events WHERE type = ?" --db analytics --params '["signup"]'
-  $ ${CLI_NAME32} sql query "SELECT count(*) FROM conversation" --space applications --db xyz.tinycloud.listen/conversations
-  $ ${CLI_NAME32} sql export --db analytics --output analytics.db
+  $ ${CLI_NAME33} sql execute "CREATE TABLE IF NOT EXISTS notes (id INTEGER PRIMARY KEY, body TEXT)"
+  $ ${CLI_NAME33} sql execute "INSERT INTO notes (body) VALUES (?)" --params '["ship docs"]'
+  $ ${CLI_NAME33} sql query "SELECT id, body FROM notes ORDER BY id"
+  $ ${CLI_NAME33} sql query "SELECT * FROM events WHERE type = ?" --db analytics --params '["signup"]'
+  $ ${CLI_NAME33} sql query "SELECT count(*) FROM conversation" --space applications --db xyz.tinycloud.listen/conversations
+  $ ${CLI_NAME33} sql export --db analytics --output analytics.db
 
 Commands:
   query     Read rows with SELECT statements
@@ -40078,10 +40426,10 @@ Tips:
   sql.command("query <sql>").description("Run a read-only SELECT query").option("--db <name>", "SQLite database name within the current space", "default").option("--space <name|uri>", "Target a non-primary space (short name or full URI)").option("--params <json>", "Bind parameters as a JSON array for ? placeholders").addHelpText("after", `
 
 Examples:
-  $ ${CLI_NAME32} sql query "SELECT * FROM notes ORDER BY id"
-  $ ${CLI_NAME32} sql query "SELECT * FROM notes WHERE id = ?" --params '[42]'
-  $ ${CLI_NAME32} sql query "SELECT count(*) AS total FROM events" --db analytics --json
-  $ ${CLI_NAME32} sql query "SELECT count(*) FROM conversation" --space applications --db xyz.tinycloud.listen/conversations
+  $ ${CLI_NAME33} sql query "SELECT * FROM notes ORDER BY id"
+  $ ${CLI_NAME33} sql query "SELECT * FROM notes WHERE id = ?" --params '[42]'
+  $ ${CLI_NAME33} sql query "SELECT count(*) AS total FROM events" --db analytics --json
+  $ ${CLI_NAME33} sql query "SELECT count(*) FROM conversation" --space applications --db xyz.tinycloud.listen/conversations
 
 Output:
   Human output is formatted as a table. Piped output or --json returns
@@ -40122,11 +40470,11 @@ ${rowCount} row${rowCount === 1 ? "" : "s"} returned`) + "\n");
   sql.command("execute <sql>").description("Run a write or schema statement").option("--db <name>", "SQLite database name within the current space", "default").option("--space <name|uri>", "Target a non-primary space (short name or full URI)").option("--params <json>", "Bind parameters as a JSON array for ? placeholders").addHelpText("after", `
 
 Examples:
-  $ ${CLI_NAME32} sql execute "CREATE TABLE IF NOT EXISTS notes (id INTEGER PRIMARY KEY, body TEXT)"
-  $ ${CLI_NAME32} sql execute "INSERT INTO notes (body) VALUES (?)" --params '["first note"]'
-  $ ${CLI_NAME32} sql execute "UPDATE notes SET body = ? WHERE id = ?" --params '["edited", 1]'
-  $ ${CLI_NAME32} sql execute "DROP TABLE old_notes" --db archive
-  $ ${CLI_NAME32} sql execute "DELETE FROM conversation WHERE id = ?" --space applications --db xyz.tinycloud.listen/conversations --params '["abc"]'
+  $ ${CLI_NAME33} sql execute "CREATE TABLE IF NOT EXISTS notes (id INTEGER PRIMARY KEY, body TEXT)"
+  $ ${CLI_NAME33} sql execute "INSERT INTO notes (body) VALUES (?)" --params '["first note"]'
+  $ ${CLI_NAME33} sql execute "UPDATE notes SET body = ? WHERE id = ?" --params '["edited", 1]'
+  $ ${CLI_NAME33} sql execute "DROP TABLE old_notes" --db archive
+  $ ${CLI_NAME33} sql execute "DELETE FROM conversation WHERE id = ?" --space applications --db xyz.tinycloud.listen/conversations --params '["abc"]'
 
 Output:
   Returns JSON with the changed row count and last inserted row id when available.
@@ -40155,9 +40503,9 @@ Output:
   sql.command("export").description("Export a SQLite database as a binary .db file").option("--db <name>", "SQLite database name within the current space", "default").option("--space <name|uri>", "Target a non-primary space (short name or full URI)").option("-o, --output <file>", "Output file path", "export.db").addHelpText("after", `
 
 Examples:
-  $ ${CLI_NAME32} sql export
-  $ ${CLI_NAME32} sql export --db analytics --output analytics.db
-  $ ${CLI_NAME32} sql export --space applications --db xyz.tinycloud.listen/conversations --output listen.db
+  $ ${CLI_NAME33} sql export
+  $ ${CLI_NAME33} sql export --db analytics --output analytics.db
+  $ ${CLI_NAME33} sql export --space applications --db xyz.tinycloud.listen/conversations --output listen.db
 
 Output:
   Writes the database file locally and returns JSON with the path and size.
@@ -40190,19 +40538,19 @@ Output:
   sql.command("copy").description("Copy rows between SQL databases (optionally across spaces)").requiredOption("--from-db <name>", "Source database name").requiredOption("--to-db <name>", "Destination database name").option("--from-space <name|uri>", "Source space (defaults to primary)").option("--to-space <name|uri>", "Destination space (defaults to primary)").option("--table <name...>", "Restrict copy to specific tables (repeat or comma-separated)").option("--dry-run", "Print the plan without writing", false).addHelpText("after", `
 
 Examples:
-  $ ${CLI_NAME32} sql copy --from-db com.tinycloud.conversation-sync/conversations \\
+  $ ${CLI_NAME33} sql copy --from-db com.tinycloud.conversation-sync/conversations \\
                 --to-db xyz.tinycloud.listen/conversations \\
                 --space applications --dry-run
-  $ ${CLI_NAME32} sql copy --from-space applications --from-db com.foo/data \\
+  $ ${CLI_NAME33} sql copy --from-space applications --from-db com.foo/data \\
                 --to-space applications --to-db com.bar/data \\
                 --table conversation --table participant
 
 Notes:
   - Refuses to run when (resolved space, db) is identical for source and destination.
-  - Does NOT create destination tables. Run the target app once (or use \`${CLI_NAME32} sql execute\`)
+  - Does NOT create destination tables. Run the target app once (or use \`${CLI_NAME33} sql execute\`)
     to materialize the schema before copying.
   - One row at a time; suitable for small/medium datasets. Large copies should
-    use \`${CLI_NAME32} sql export\` + bulk import.
+    use \`${CLI_NAME33} sql export\` + bulk import.
   - Authorization: the active session/delegation must cover sql/read on source
     AND sql/write on destination. Otherwise the relevant operation will fail.
 `).action(async (options, cmd) => {
@@ -40302,7 +40650,7 @@ init_errors();
 init_formatter();
 init_theme();
 init_permissions();
-import { CLI_NAME as CLI_NAME33 } from "@tinycloud/operations/cli-name";
+import { CLI_NAME as CLI_NAME34 } from "@tinycloud/operations/cli-name";
 import {
   NodeWasmBindings as NodeWasmBindings2
 } from "@tinycloud/node-sdk";
@@ -40576,7 +40924,7 @@ function formatStatus(summary) {
   lines.push(`Default profile: ${theme.value(summary.defaultProfile)}`);
   lines.push("");
   if (summary.profiles.length === 0) {
-    lines.push(theme.muted(`No profiles configured. Run: ${CLI_NAME33} init`));
+    lines.push(theme.muted(`No profiles configured. Run: ${CLI_NAME34} init`));
     return `${lines.join("\n")}
 `;
   }
@@ -41075,6 +41423,7 @@ function registerTinyCloudCommands(program) {
   registerDuckdbCommand(program);
   registerManifestCommand(program);
   registerKnowledgeCommand(program);
+  registerAppsCommand(program);
   registerUpgradeCommand(program);
   registerStatusCommand(program);
   registerAccountCommand(program);
