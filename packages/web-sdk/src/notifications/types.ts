@@ -1,8 +1,9 @@
 /** Notification configuration. Toast placement and visibility are set through `ui`. */
 export interface NotificationConfig {
   /**
-   * Throw, asynchronously, for each error toast that was shown. The caller is not
-   * affected; the error surfaces as an uncaught exception.
+   * Rethrow each reported error asynchronously as an uncaught exception, unless
+   * `ui: false`. Identical errors within 200 ms collapse into one throw. The
+   * caller is not affected.
    */
   throwErrors?: boolean;
 }

@@ -130,7 +130,7 @@ declare global {
  * Extends ClientConfig with browser-specific options.
  */
 export interface Config extends ClientConfig {
-  /** Notifications. `throwErrors` rethrows each error's raw message asynchronously, once per burst of identical errors (200 ms window). It still applies when `ui` hides toasts, but not when `ui: false`. Toast placement and visibility are set through `ui`. */
+  /** Notifications. `throwErrors` rethrows each error's raw message asynchronously, once per burst of identical errors (200 ms window). It applies unless `ui: false`, which turns off toasts and throws together; other `ui` options, such as `button: false`, leave throws on. Toast placement and visibility are set through `ui`. */
   notifications?: NotificationConfig;
 
   /** Optional prefix for KV service keys */
