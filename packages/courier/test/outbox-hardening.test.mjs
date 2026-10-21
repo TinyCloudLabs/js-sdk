@@ -449,3 +449,33 @@ test('a peers policy change takes effect at the next send, and the rate window s
   });
   assert.equal(env.calls.length, 1);
 });
+
+test('the sender loads peers.json under the configured owner: a matching owner applies the file policy', async () => {
+  const env = makeEnv({
+    peersJson: { alpha: { tier: 'trusted', ratePerHour: 100, outPerHour: 100 } },
+  });
+  const first = writeItem(env);
+  const second = writeItem(env);
+  await withSender(env, async () => {
+    assert.equal(await request(env.pipe, requestFor(first.itemId)), 'ok\n');
+    assert.equal(await request(env.pipe, requestFor(second.itemId)), 'ok\n');
+  }, { peersOwnerUid: process.getuid() });
+  assert.equal(env.calls.length, 2);
+  assert.ok(!env.logs.some(({ event }) => event === 'outbox.peers-invalid'));
+});
+
+test('a peers file owned by another uid is refused by the sender, which falls back to the unloaded cap', async () => {
+  const env = makeEnv({
+    peersJson: { alpha: { tier: 'trusted', ratePerHour: 100, outPerHour: 100 } },
+  });
+  const first = writeItem(env);
+  const second = writeItem(env);
+  await withSender(env, async () => {
+    assert.equal(await request(env.pipe, requestFor(first.itemId)), 'ok\n');
+    assert.equal(await request(env.pipe, requestFor(second.itemId)), 'refused:rate-limited\n');
+  }, { peersOwnerUid: process.getuid() + 1 });
+  assert.equal(env.calls.length, 1);
+  const invalid = env.logs.filter(({ event }) => event === 'outbox.peers-invalid');
+  assert.ok(invalid.length >= 1);
+  assert.ok(invalid.every(({ fields }) => fields.code === 'insecure-peers'));
+});

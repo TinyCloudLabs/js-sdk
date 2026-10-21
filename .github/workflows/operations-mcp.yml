@@ -124,6 +124,9 @@ jobs:
           bun test packages/cli/src/share/adapters.test.ts
           bun test packages/cli/src/share/bearer-revoke.test.ts
           bun test packages/cli/src/share/native-receive.test.ts
+          bun test packages/cli/src/commands/share-folder.test.ts
+          bun test packages/cli/src/share/html-folder.test.ts
+          bun test packages/share-sdk/test/html-bundle
       - name: Run production private-key secrets regression in isolation
         run: bun test packages/cli/src/commands/secrets-private-key-production.test.ts
       - name: Run MCP CLI regression in isolation
