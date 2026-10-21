@@ -1,5 +1,9 @@
 import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
 import { JSDOM } from "jsdom";
+// Test-only. This deep import reaches into jsdom internals to reach the impl
+// of a jsdom event, so it depends on jsdom's file layout. It is pinned to
+// jsdom 26.1.0 (exact version in packages/web-sdk/package.json devDependencies).
+// Re-check this path whenever jsdom is upgraded. It is not part of the SDK.
 import { implSymbol } from "jsdom/lib/jsdom/living/generated/utils.js";
 
 import { syncSection } from "../../src/ui/sections/sync";
@@ -145,8 +149,8 @@ const noteOf = (el: HTMLElement) => el.querySelector(".note") as HTMLElement;
 
 describe("availability", () => {
   test("row is unavailable without tc.sync and available with it", () => {
-    const withoutSync = makeCtx(undefined, []);
-    const withSync = makeCtx(makeFacade({ requested: false, effective: "off" }), []);
+    const withoutSync = makeCtx(undefined);
+    const withSync = makeCtx(makeFacade({ requested: false, effective: "off" }));
     expect(syncSection.isAvailable(withoutSync)).toBe(false);
     expect(syncSection.isAvailable(withSync)).toBe(true);
   });
