@@ -161,10 +161,8 @@ for (const scheme of SCHEMES) {
     await expect(section(page).locator("a")).toHaveAttribute("href", STORAGE_MANAGE_URL);
   });
 
-  test(`${scheme}: meter and status text clear 4.5:1 against the panel`, async ({ page }) => {
+  test(`${scheme}: status text clears 4.5:1 against the panel`, async ({ page }) => {
     const rows: ContrastRow[] = [];
-    // Meter colours are non-text; measured and logged, not held to the text threshold.
-    const meterRows: ContrastRow[] = [];
 
     await mountHarness(page, scheme, KNOWN);
     await openPanel(page);
@@ -172,11 +170,6 @@ for (const scheme of SCHEMES) {
     const background = await panel(page).evaluate((el) => getComputedStyle(el).backgroundColor);
     rows.push(await textRow("known word", section(page).locator("p.busy").nth(0), background));
     rows.push(await textRow("known usage", usageLine(page), background));
-    const track = section(page).locator(".storage-bar");
-    const trackColor = await track.evaluate((el) => getComputedStyle(el).backgroundColor);
-    meterRows.push(row("meter track vs panel", trackColor, background));
-    const fillColor = await track.locator("span").evaluate((el) => getComputedStyle(el).backgroundColor);
-    meterRows.push(row("meter fill vs track", fillColor, trackColor));
 
     await remount(page, { kind: "needs_permission" });
     await openPanel(page);
@@ -192,8 +185,20 @@ for (const scheme of SCHEMES) {
     rows.push(await textRow("full word", section(page).locator("p.busy").nth(0), background));
 
     console.log(`contrast text ${scheme}: ${JSON.stringify(rows)}`);
-    console.log(`contrast meter ${scheme}: ${JSON.stringify(meterRows)}`);
     expect(rows.filter((r) => !r.opaque || r.ratio < 4.5)).toEqual([]);
+  });
+
+  test(`${scheme}: meter track and fill clear 3:1 against their neighbours (WCAG 1.4.11)`, async ({ page }) => {
+    await mountHarness(page, scheme, KNOWN);
+    await openPanel(page);
+    await expect(usageLine(page)).toBeVisible();
+    const background = await panel(page).evaluate((el) => getComputedStyle(el).backgroundColor);
+    const track = section(page).locator(".storage-bar");
+    const trackColor = await track.evaluate((el) => getComputedStyle(el).backgroundColor);
+    const fillColor = await track.locator("span").evaluate((el) => getComputedStyle(el).backgroundColor);
+    const rows = [row("meter track vs panel", trackColor, background), row("meter fill vs track", fillColor, trackColor)];
+    console.log(`contrast meter ${scheme}: ${JSON.stringify(rows)}`);
+    expect(rows.filter((r) => !r.opaque || r.ratio < 3)).toEqual([]);
   });
 }
 
