@@ -81,6 +81,8 @@ export interface ConnectStatus {
   readonly expiresAt?: string;
 }
 
+type SessionState = "valid" | "invalid" | "unknown";
+
 interface CallbackSession {
   readonly delegationHeader: { Authorization: string };
   readonly delegationCid: string;
@@ -153,7 +155,7 @@ export class ApprovalRequestError extends Error {
 export class RemoteTenantStore {
   readonly #config: RemoteStoreConfig;
   readonly #initializing = new Map<string, Promise<TenantProfile>>();
-  readonly #sessionChecks = new Map<string, Promise<boolean>>();
+  readonly #sessionChecks = new Map<string, Promise<SessionState>>();
   readonly #clearing = new Map<string, Promise<void>>();
   readonly #activeSessions = new Map<string, { cids: string; until: number }>();
   readonly #pendingWrites = new Map<string, Promise<PendingApproval>>();
@@ -183,9 +185,10 @@ export class RemoteTenantStore {
 
   async connectStatus(subject: string, ownerDids: readonly string[] = []): Promise<ConnectStatus> {
     const tenant = await this.#ensureTenant(subject);
-    if (await this.#hasValidSession(tenant, ownerDids, true)) {
-      return { connected: true, sessionDid: tenant.sessionDid };
-    }
+    const state = await this.#sessionState(tenant, ownerDids, true);
+    if (state === "valid") return { connected: true, sessionDid: tenant.sessionDid };
+    // An unconfirmed session is not connected, but no new approval is issued for it.
+    if (state === "unknown") return { connected: false, sessionDid: tenant.sessionDid };
     const pending = await this.#createPending(subject, ownerDids, "bootstrap", BOOTSTRAP_PERMISSIONS);
     return {
       connected: false,
@@ -594,7 +597,15 @@ export class RemoteTenantStore {
     ownerDids: readonly string[],
     fresh = false,
   ): Promise<boolean> {
-    if (this.#renewalRequired.has(tenant.stateRoot)) return false;
+    return (await this.#sessionState(tenant, ownerDids, fresh)) !== "invalid";
+  }
+
+  async #sessionState(
+    tenant: TenantProfile,
+    ownerDids: readonly string[],
+    fresh = false,
+  ): Promise<SessionState> {
+    if (this.#renewalRequired.has(tenant.stateRoot)) return "invalid";
     const key = JSON.stringify([tenant.stateRoot, ownerDids.map(normalizeDid), fresh]);
     const current = this.#sessionChecks.get(key);
     if (current) return current;
@@ -609,16 +620,16 @@ export class RemoteTenantStore {
     tenant: TenantProfile,
     ownerDids: readonly string[],
     fresh: boolean,
-  ): Promise<boolean> {
+  ): Promise<SessionState> {
     let raw: Record<string, unknown> | null;
     try {
       raw = await readJson<Record<string, unknown>>(this.#sessionPath(tenant.stateRoot));
     } catch (error) {
       if (!(error instanceof SyntaxError)) throw error;
       await this.#clearAuthority(tenant);
-      return false;
+      return "invalid";
     }
-    if (raw === null) return false;
+    if (raw === null) return "invalid";
     const node = new TinyCloudNode({ host: this.#config.nodeHost });
     try {
       await node.restoreSession(raw as unknown as TinyCloudSession);
@@ -629,12 +640,12 @@ export class RemoteTenantStore {
         ? /^Expiration Time: ([^\r\n]+)\r?$/m.exec(raw.siwe)?.[1]
         : undefined;
       const expiry = signedExpiry ?? (siweExpiry === undefined ? undefined : new Date(siweExpiry));
-      if (expiry !== undefined && expiry.getTime() <= Date.now()) return false;
+      if (expiry !== undefined && expiry.getTime() <= Date.now()) return "invalid";
       await this.#clearAuthority(tenant);
-      return false;
+      return "invalid";
     }
     if (!samePrincipal(node.sessionDid, tenant.sessionDid) ||
-      !ownerDids.some((did) => samePrincipal(node.did, did))) return false;
+      !ownerDids.some((did) => samePrincipal(node.did, did))) return "invalid";
     const additional = await readJson<unknown>(this.#additionalPath(tenant.stateRoot));
     const cids = [raw.delegationCid];
     if (additional !== null) {
@@ -649,9 +660,8 @@ export class RemoteTenantStore {
     }
     const fingerprint = cids.join("\n");
     const cached = this.#activeSessions.get(tenant.stateRoot);
-    if (!fresh && cached?.cids === fingerprint && cached.until > Date.now()) return true;
+    if (!fresh && cached?.cids === fingerprint && cached.until > Date.now()) return "valid";
     // A node refusal is actionable only when it names this stored permission.
-    // All other probe failures leave the locally restored session untouched.
     let timer: NodeJS.Timeout | undefined;
     const timeout = new Promise<undefined>((resolve) => {
       timer = setTimeout(() => resolve(undefined), 2_000);
@@ -666,13 +676,16 @@ export class RemoteTenantStore {
       (refusal.revokedCid === raw.delegationCid ||
         (refusal.reason === "delegation_ancestor_revoked" && refusal.ancestorCid === raw.delegationCid))) {
       await this.#clearAuthority(tenant);
-      return false;
+      return "invalid";
     }
-    if (this.#renewalRequired.has(tenant.stateRoot)) return false;
+    if (this.#renewalRequired.has(tenant.stateRoot)) return "invalid";
     if (probe?.ok) {
       this.#activeSessions.set(tenant.stateRoot, { cids: fingerprint, until: Date.now() + 30_000 });
+      return "valid";
     }
-    return true;
+    // Timeouts, transport errors and refusals that do not name this permission
+    // leave the stored session in place without confirming it.
+    return "unknown";
   }
 
   async #clearAuthority(tenant: TenantProfile): Promise<void> {

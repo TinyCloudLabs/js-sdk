@@ -54,7 +54,10 @@ The hosted server checks the account approval with the node when a client
 connects or calls an authenticated tool. Successful checks are cached for up
 to 30 seconds. A node response identifying a withdrawn account approval starts
 a fresh connection approval; one identifying a withdrawn per-request grant
-renews only that grant. Other node responses keep stored approvals available.
+renews only that grant. Other node responses keep stored approvals available for
+tool calls. `tinycloud_connect` reports `connected: true` only after a positive
+check; when the node cannot confirm the account, it reports `connected: false`
+without an approval URL and the caller retries shortly.
 The account's delegate key stays in place while the owner signs new permissions
 through the usual OpenKey approval flow.
 

@@ -10,7 +10,7 @@ import { join } from "node:path";
 import { createServer as createPortServer } from "node:net";
 
 import { Client, StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
-import { NodeWasmBindings, PrivateKeySigner, TinyCloudNode, type TinyCloudSession } from "@tinycloud/node-sdk";
+import { NodeWasmBindings, TinyCloudNode, type TinyCloudSession } from "@tinycloud/node-sdk";
 
 import { createHostedMcpApp, type HostedMcpApp } from "./http.js";
 import {
@@ -496,7 +496,8 @@ test("node errors without a definitive refusal preserve stored authority and dis
     expect(tools.tools.some((tool) => tool.name === "tinycloud_connect")).toBe(true);
     const reply = await client.callTool({ name: "tinycloud_connect", arguments: {} });
     assertPublicReplyOmitsNodeData(reply, cid, authorization, text);
-    expect(reply.structuredContent).toMatchObject({ connected: true });
+    expect(reply.structuredContent).toMatchObject({ connected: false });
+    expect(record(reply.structuredContent).approvalUrl).toBeUndefined();
     expect(await readFile(sessionPath, "utf8") === initial).toBe(true);
     expect(await readFile(additionalPath, "utf8") === initialAdditional).toBe(true);
     assertPublicReplyOmitsNodeData(reply, String(grant.delegationCid));
@@ -522,7 +523,8 @@ test("node connection refusal does not break initialization, tools/list or a sav
   assertPublicReplyOmitsNodeData(
     status, String(bootstrap.delegationCid), String(record(bootstrap.delegationHeader).Authorization),
   );
-  expect(status.structuredContent).toMatchObject({ connected: true });
+  expect(status.structuredContent).toMatchObject({ connected: false });
+  expect(record(status.structuredContent).approvalUrl).toBeUndefined();
   expect(await readFile(sessionPath, "utf8") === initial).toBe(true);
   expect(await readFile(additionalPath, "utf8") === initialAdditional).toBe(true);
   const freshClient = await createClient("openkey-user-new");
@@ -824,7 +826,7 @@ test("a full renewal leaves no scoped grants when a scoped write is in flight", 
   }
 }, 90_000);
 
-test("a node request timeout preserves connection, saved grants, and tool discovery", async () => {
+test("a node request timeout preserves saved grants and tool discovery", async () => {
   const { proxy, client, stateRoot, bootstrap, approve } = await setupProxiedSession();
   const sessionPath = join(stateRoot, ".tinycloud/profiles/agent/session.json");
   const additionalPath = join(stateRoot, ".tinycloud/profiles/agent/additional-delegations.json");
@@ -854,7 +856,8 @@ test("a node request timeout preserves connection, saved grants, and tool discov
     assertPublicReplyOmitsNodeData(
       status, String(bootstrap.delegationCid), String(record(bootstrap.delegationHeader).Authorization),
     );
-    expect(status.structuredContent).toMatchObject({ connected: true });
+    expect(status.structuredContent).toMatchObject({ connected: false });
+    expect(record(status.structuredContent).approvalUrl).toBeUndefined();
     expect((await client.listTools()).tools.length).toBeGreaterThan(0);
     expect(await readFile(sessionPath, "utf8") === initial).toBe(true);
     expect(await readFile(additionalPath, "utf8") === initialAdditional).toBe(true);
@@ -880,11 +883,10 @@ test.skipIf(!nodeBinary)("a node revocation starts fresh hosted approval and res
   const host = await startLocalNode(nodeBinary!);
   const owner = new TinyCloudNode({
     host,
-    signer: new PrivateKeySigner(REQUESTER_KEY),
+    privateKey: REQUESTER_KEY,
     wasmBindings: new NodeWasmBindings(),
     domain: "mcp.test",
     autoCreateSpace: true,
-    autoBootstrapAccount: false,
     enablePublicSpace: false,
   });
   await owner.signIn();
@@ -894,21 +896,7 @@ test.skipIf(!nodeBinary)("a node revocation starts fresh hosted approval and res
   const first = record((await client.callTool({ name: "tinycloud_connect", arguments: {} })).structuredContent);
   const [tenantId] = await readdir(join(stateDir, "tenants"));
   const root = join(stateDir, "tenants", tenantId!);
-  const approve = async (url: string) => {
-    const body = await openKeyApprovalBody({
-      redirect: await openKeyRedirect(app, url),
-      tenantStateRoot: root,
-      privateKey: REQUESTER_KEY,
-    });
-    const authorization = record(body.delegationHeader).Authorization;
-    const activation = await fetch(`${host}/delegate`, {
-      method: "POST",
-      headers: { Authorization: String(authorization) },
-    });
-    expect(activation.status).toBe(200);
-    expect(await postCallback(app, url, body)).toEqual({ status: 200, body: { success: true } });
-    return body;
-  };
+  const approve = openKeyApprover(app, host, root);
   const firstApproval = await approve(String(first.approvalUrl));
   const activeCapabilities = () => client.callTool({
     name: "tinycloud_auth_capabilities",
@@ -926,8 +914,6 @@ test.skipIf(!nodeBinary)("a node revocation starts fresh hosted approval and res
   const refused = await delegate.kvForSpace(String(firstApproval.spaceId)).list({ prefix: "spaces/" });
   expect(refused.ok).toBe(false);
   if (!refused.ok) expect(refused.error.code).toBe("AUTH_UNAUTHORIZED");
-  const next = await activeCapabilities();
-  expect(record(next.structuredContent)).toMatchObject({ status: "error", error: { code: "SESSION_NOT_FOUND" } });
   const status = record((await client.callTool({ name: "tinycloud_connect", arguments: {} })).structuredContent);
   const url = String(status.approvalUrl);
   expect(status).toMatchObject({ connected: false, approvalUrl: expect.stringContaining("/connect?state=") });
@@ -936,6 +922,100 @@ test.skipIf(!nodeBinary)("a node revocation starts fresh hosted approval and res
     .toMatchObject({ connected: true });
   expect(record((await activeCapabilities()).structuredContent).status).toBe("ok");
 }, 120_000);
+
+test.skipIf(!nodeBinary)("a local node revocation sequence refuses each stored grant until fresh approval", async () => {
+  const host = await startLocalNode(nodeBinary!);
+  const owner = new TinyCloudNode({
+    host,
+    privateKey: REQUESTER_KEY,
+    wasmBindings: new NodeWasmBindings(),
+    domain: "mcp.test",
+    autoCreateSpace: true,
+    enablePublicSpace: false,
+  });
+  await owner.signIn();
+  const applicationsSpace = await owner.hostOwnedSpace("applications");
+  expect((await owner.kvForSpace(applicationsSpace).put("agents/demo/profile", { name: "Ada" })).ok).toBe(true);
+  const { app, client, stateDir } = await startHostedMcp({
+    nodeHost: host, ownerDids: [await ownerDid(REQUESTER_KEY)],
+  });
+  const first = record((await client.callTool({ name: "tinycloud_connect", arguments: {} })).structuredContent);
+  const [tenantId] = await readdir(join(stateDir, "tenants"));
+  const approve = openKeyApprover(app, host, join(stateDir, "tenants", tenantId!));
+  const bootstrapCid = String((await approve(String(first.approvalUrl))).delegationCid);
+  const scoped = { space: "applications", key: "agents/demo/profile", representation: "json" };
+  const connect = async () =>
+    record((await client.callTool({ name: "tinycloud_connect", arguments: {} })).structuredContent);
+  const account = async () =>
+    record((await client.callTool({ name: "tinycloud_auth_capabilities", arguments: {} })).structuredContent);
+  const knowledge = async () =>
+    record((await client.callTool({ name: "tinycloud_knowledge_list", arguments: {} })).structuredContent);
+  const readScoped = async () =>
+    record((await client.callTool({ name: "tinycloud_kv_get", arguments: scoped })).structuredContent);
+  const grantScoped = async () => {
+    const required = await readScoped();
+    expect(required).toMatchObject({ status: "authority_required" });
+    return approve(String(record(required.approval).url));
+  };
+
+  expect(await connect()).toMatchObject({ connected: true });
+  expect(await account()).toMatchObject({ status: "ok" });
+  const scopedCid = String((await grantScoped()).delegationCid);
+  expect(await readScoped()).toMatchObject({ status: "ok" });
+
+  // Revoking only the scoped grant leaves the bootstrap session valid.
+  expect((await owner.revokeDelegation(scopedCid)).ok).toBe(true);
+  expect(await readScoped()).toMatchObject({ status: "authority_required" });
+  expect(await account()).toMatchObject({ status: "ok" });
+  expect(await connect()).toMatchObject({ connected: true });
+  const regrantedCid = String((await grantScoped()).delegationCid);
+  expect(await readScoped()).toMatchObject({ status: "ok" });
+
+  // Revoking the bootstrap session and the grant it replays refuses account, scoped and connect calls alike.
+  const stored = JSON.parse(await readFile(join(stateDir, "tenants", tenantId!, ".tinycloud/profiles/agent/session.json"), "utf8")) as { delegationCid: string };
+  expect(stored.delegationCid).toBe(bootstrapCid);
+  expect((await owner.revokeDelegation(bootstrapCid)).ok).toBe(true);
+  expect((await owner.revokeDelegation(regrantedCid)).ok).toBe(true);
+  expect(await readScoped()).not.toMatchObject({ status: "ok" });
+  const pending = await connect();
+  expect(pending.connected).toBe(false);
+  expect(String(pending.approvalUrl)).toContain("/connect?state=");
+  // A refused knowledge call under the same session offers the same bootstrap link as connect.
+  const knowledgeBootstrap = await knowledge();
+  expect(knowledgeBootstrap).toMatchObject({ status: "error", error: { code: "SESSION_NOT_FOUND" } });
+  expect(String(record(record(knowledgeBootstrap.error).details).approvalUrl)).toBe(String(pending.approvalUrl));
+
+  await approve(String(pending.approvalUrl));
+  expect(await connect()).toMatchObject({ connected: true });
+  expect(await account()).toMatchObject({ status: "ok" });
+  // After the bootstrap approval, knowledge_list needs its own approval and then succeeds.
+  const knowledgeScoped = await knowledge();
+  expect(knowledgeScoped).toMatchObject({ status: "authority_required" });
+  await approve(String(record(knowledgeScoped.approval).url));
+  expect(await knowledge()).toMatchObject({ status: "ok" });
+  await grantScoped();
+  expect(await readScoped()).toMatchObject({ status: "ok" });
+}, 180_000);
+
+function openKeyApprover(app: HostedApp, host: string, root: string) {
+  return async (url: string) => {
+    const body = await openKeyApprovalBody({
+      redirect: await openKeyRedirect(app, url),
+      tenantStateRoot: root,
+      privateKey: REQUESTER_KEY,
+    });
+    const authorization = record(body.delegationHeader).Authorization;
+    const activation = await fetch(`${host}/delegate`, {
+      method: "POST",
+      headers: { Authorization: String(authorization) },
+    });
+    expect(activation.status).toBe(200);
+    expect(await postCallback(app, url, body)).toEqual({ status: 200, body: { success: true } });
+    return body;
+  };
+}
+
+type HostedApp = Awaited<ReturnType<typeof startHostedMcp>>["app"];
 
 test("hosted apps approvals persist records and recover an expired session without losing grants", async () => {
   // This loopback fixture is outside MCP's package build graph.
@@ -1545,8 +1625,10 @@ async function startLocalNode(binary: string): Promise<string> {
   });
   let output = "";
   const onData = (chunk: Buffer) => {
-    output = (output + chunk.toString()).slice(-128);
-    if (output.includes("Rocket has launched")) resolveReady();
+    const text = output + chunk.toString();
+    if (text.includes("Rocket has launched")) resolveReady();
+    // Keep only enough tail to match a marker split across chunks.
+    output = text.slice(-"Rocket has launched".length);
   };
   child.stdout!.on("data", onData);
   child.stderr!.on("data", onData);
