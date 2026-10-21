@@ -40,6 +40,7 @@ interface NodeInternals {
   _serviceGraph: { track(context: ServiceContext): ServiceContext };
   _serviceContext?: ServiceContext;
   storageFull: { isFull: boolean };
+  tc: { signIn(options?: unknown): Promise<unknown> };
   bootstrapStatus: unknown;
   registerPrimarySessionGrant(session: unknown): void;
   resolveBootstrapDecision(): Promise<{ action: "run"; mode: "repair" }>;
@@ -552,5 +553,27 @@ describe("TC-628: restoring a session", () => {
 
     await node.signOut();
     expect(internals.storageFull.isFull).toBe(false);
+  });
+
+  test("signing in as a different account ends the storage-full episode", async () => {
+    let address = ADDRESS;
+    const node = new TinyCloudNode({
+      host: "https://tinycloud.test",
+      signer: { getAddress: async () => address, getChainId: async () => 1, signMessage: async () => "0xsig" },
+      wasmBindings: makeWasm([]),
+    });
+    const internals = node as unknown as NodeInternals;
+    internals._address = ADDRESS;
+    let fullWhenSigningIn: boolean | undefined;
+    internals.tc.signIn = async () => {
+      fullWhenSigningIn = internals.storageFull.isFull;
+      throw new Error("sign-in stopped after the account changed");
+    };
+    await rejectWriteOn(internals, SPACE_URI);
+    expect(internals.storageFull.isFull).toBe(true);
+
+    address = "0x00000000000000000000000000000000000000aa";
+    await expect(node.signIn()).rejects.toThrow("sign-in stopped after the account changed");
+    expect(fullWhenSigningIn).toBe(false);
   });
 });
