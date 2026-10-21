@@ -615,6 +615,34 @@ describe("host toasts", () => {
     ui.unregister();
   });
 
+  test("ui.toasts:false hides the storage-full toast but keeps the full state on the button", () => {
+    const ui = mountStorageFull({ toasts: false });
+    expect(storedToasts()).toEqual([]);
+    expect(storageStatus()).toBe("storage_full");
+    ui.unregister();
+  });
+
+  test("storage-full toast is shown when toasts are enabled (control for the test above)", () => {
+    const ui = mountStorageFull(undefined);
+    expect(storedToasts().map((view) => view.textCode)).toEqual(["storage.full"]);
+    expect(storageStatus()).toBe("storage_full");
+    ui.unregister();
+  });
+
+  function mountStorageFull(ui: Parameters<typeof registerUiClient>[0]["ui"]): UiClientHandle {
+    const storageEpisode = { current: () => ({}), subscribe: () => () => undefined };
+    const src = {
+      signedIn: () => false,
+      storage: { status: () => undefined },
+      storageEpisode,
+    } as unknown as ClientSource;
+    return registerUiClient({ ui, source: src, manifestAppId: () => undefined });
+  }
+
+  function storageStatus(): string | null {
+    return buttonEl()?.querySelector("[data-status]")?.getAttribute("data-status") ?? null;
+  }
+
   // Parts receive the HostContext when the host mounts. The toasts part starts
   // first among the host parts, so wrap its start to capture that context.
   function captureHostContext(): { context: () => HostContext | undefined; restore: () => void } {
