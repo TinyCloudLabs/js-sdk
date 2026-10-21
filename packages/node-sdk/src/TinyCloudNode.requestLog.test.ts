@@ -66,6 +66,13 @@ describe("TinyCloudNode request log", () => {
     expect(node.requests).toBeUndefined();
   });
 
+  test("developer mode off allocates no request ring: the node's _requestLog field stays undefined", () => {
+    const node = new TinyCloudNode({ host: HOST, wasmBindings: makeFakeWasmBindings() });
+    // Private field read is the only way to observe that no RequestLog was allocated.
+    expect(Reflect.get(node, "_requestLog")).toBeUndefined();
+    expect(node.requests).toBeUndefined();
+  });
+
   test("sign-out clears recorded requests and notifies onClear listeners", async () => {
     const node = new TinyCloudNode({
       host: HOST,

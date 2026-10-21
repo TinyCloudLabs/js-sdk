@@ -125,7 +125,7 @@ test("replica-sourced replication reads map to kv events; network and none do no
   expect(events[1]).toMatchObject({ service: "kv", op: "kv/list", source: "replica", ok: true, code: "KV_NOT_FOUND" });
 });
 
-test("developer off: no sink means no events, no invocation metadata, and globalThis.fetch is untouched", async () => {
+test("developer off: no sink means no invocation metadata and globalThis.fetch is untouched", async () => {
   const before = globalThis.fetch;
   const context = contextWith(undefined, async () => reply(200, "ok"));
   expect(globalThis.fetch).toBe(before);
@@ -133,6 +133,25 @@ test("developer off: no sink means no events, no invocation metadata, and global
   expect(invocationMetaOf(headers)).toBeUndefined();
   const response = await context.fetch("https://node.example/kv", { method: "POST", headers });
   expect(response.ok).toBe(true);
+});
+
+test("developer off, zero-call proof: with no sink, fetch is the unrecorded transport and a burst passes every response through", async () => {
+  const sent: FetchResponse[] = [];
+  let calls = 0;
+  const context = contextWith(undefined, async () => {
+    calls++;
+    const response = reply(200, "ok");
+    sent.push(response);
+    return response;
+  });
+  expect(context.requestSink).toBeUndefined();
+  // Identity, not behaviour: the recording wrapper is never installed, so buildRequestEvent is unreachable.
+  expect(context.fetch).toBe(context.unrecordedFetch);
+
+  const received: unknown[] = [];
+  for (let i = 0; i < 50; i++) received.push(await context.fetch(`https://node.example/kv/${i}`, { method: "GET" }));
+  expect(calls).toBe(50);
+  expect(received.every((response, i) => response === sent[i])).toBe(true);
 });
 
 function replyWithLength(length: string | null): FetchResponse {
