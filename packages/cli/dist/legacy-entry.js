@@ -10600,6 +10600,7 @@ init_types();
 // src/auth/browser-auth.ts
 init_constants();
 init_errors();
+init_formatter();
 import { createServer } from "http";
 import { randomBytes as randomBytes3 } from "crypto";
 import { createInterface } from "readline";
@@ -10614,6 +10615,9 @@ var PRIVATE_JWK_FIELDS = /* @__PURE__ */ new Set([
   "k"
 ]);
 var MAX_CALLBACK_BODY_BYTES = 1024 * 1024;
+var CALLBACK_DEADLINE_MS = 5 * 60 * 1e3;
+var CALLBACK_HINT_DELAY_MS = 15 * 1e3;
+var CALLBACK_HINT = "Still waiting. If your browser asked to connect to devices on your network, choose Allow. Or press Ctrl+C and run `tinycloud auth login --paste` to enter a code instead.";
 function publicJwkForDelegation(jwk) {
   const publicJwk = {};
   for (const [key, value] of Object.entries(jwk)) {
@@ -10755,15 +10759,21 @@ function shouldOpenBrowser(options) {
   const env = process.env.TC_AUTH_NO_POPUP ?? process.env.TC_NO_POPUP;
   return env !== "1" && env !== "true";
 }
-async function callbackFlow(did, options = {}) {
+async function callbackFlow(did, options = {}, env = {}) {
   return new Promise((resolve8, reject) => {
     let timeout;
+    let hintTimer;
+    const deadlineMs = env.deadlineMs ?? CALLBACK_DEADLINE_MS;
+    const hintDelayMs = env.hintDelayMs ?? CALLBACK_HINT_DELAY_MS;
+    const interactive = env.interactive ?? Boolean(process.stdin.isTTY);
+    const jsonOutput2 = env.jsonOutput ?? shouldOutputJson();
     let settled = false;
     let rl;
     function settle(result) {
       if (settled) return;
       settled = true;
       clearTimeout(timeout);
+      clearTimeout(hintTimer);
       server.close();
       server.closeAllConnections();
       if (rl) {
@@ -10828,8 +10838,9 @@ async function callbackFlow(did, options = {}) {
         res.end();
       }
     });
-    server.headersTimeout = 1e4;
-    server.requestTimeout = 1e4;
+    server.headersTimeout = deadlineMs;
+    server.requestTimeout = deadlineMs;
+    server.keepAliveTimeout = deadlineMs;
     server.listen(0, "127.0.0.1", async () => {
       const addr = server.address();
       if (!addr || typeof addr === "string") {
@@ -10838,6 +10849,7 @@ async function callbackFlow(did, options = {}) {
       }
       const port = addr.port;
       const callbackUrl = `http://127.0.0.1:${port}${callbackPath}`;
+      env.onListening?.(callbackUrl);
       const authUrl = buildAuthUrl(did, { ...options, callback: callbackUrl });
       const openBrowser = shouldOpenBrowser(options);
       const hasTerminal = Boolean(process.stdin.isTTY || process.stderr.isTTY);
@@ -10856,7 +10868,7 @@ async function callbackFlow(did, options = {}) {
           return;
         }
       }
-      if (process.stdin.isTTY) {
+      if (interactive) {
         console.error(`
 If the browser can't connect back, enter the short code or paste the full delegation code here:`);
         rl = createInterface({
@@ -10880,7 +10892,12 @@ If the browser can't connect back, enter the short code or paste the full delega
     });
     timeout = setTimeout(() => {
       settle({ error: new Error("Authentication timed out after 5 minutes") });
-    }, 5 * 60 * 1e3);
+    }, deadlineMs);
+    if (interactive && !jsonOutput2) {
+      hintTimer = setTimeout(() => {
+        console.error(CALLBACK_HINT);
+      }, hintDelayMs);
+    }
   });
 }
 async function pasteFlow(did, options = {}) {

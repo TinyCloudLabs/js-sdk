@@ -10,14 +10,17 @@ import {
   isCapabilitySubset,
   principalDidEquals,
   siweRuntimeDelegation,
+  signedCompactUcanExpiry,
   type PermissionEntry,
   type PortableDelegation,
   type TinyCloudSession,
 } from "@tinycloud/node-sdk";
 import { TCWSessionManager, importKey, initPanicHook } from "@tinycloud/node-sdk-wasm";
 import { invokeOperation } from "@tinycloud/operations";
+import { nodeRevocationOf, operationRetryDescriptor, type NodeRevocation } from "@tinycloud/operations/mcp-authority";
 import { tcAppsApprovalMessage, tcAppsApprovalReason } from "@tinycloud/operations/tc-apps";
 
+import type { McpOperationInvocation } from "./tools.js";
 const PROFILE = "agent";
 const MAX_CALLBACK_BYTES = 256 * 1024;
 /**
@@ -55,6 +58,7 @@ interface TenantProfile {
   readonly stateRoot: string;
   readonly sessionDid: string;
   readonly jwk: Record<string, unknown>;
+  readonly approvalEpoch: number;
 }
 
 interface PendingApproval {
@@ -66,6 +70,7 @@ interface PendingApproval {
   readonly permissions: PermissionEntry[];
   readonly ownerDids: string[];
   readonly createdAt: string;
+  readonly approvalEpoch: number;
   readonly expiresAt: string;
 }
 
@@ -148,6 +153,15 @@ export class ApprovalRequestError extends Error {
 export class RemoteTenantStore {
   readonly #config: RemoteStoreConfig;
   readonly #initializing = new Map<string, Promise<TenantProfile>>();
+  readonly #sessionChecks = new Map<string, Promise<boolean>>();
+  readonly #clearing = new Map<string, Promise<void>>();
+  readonly #activeSessions = new Map<string, { cids: string; until: number }>();
+  readonly #pendingWrites = new Map<string, Promise<PendingApproval>>();
+  readonly #renewalRequired = new Set<string>();
+  readonly #approvalEpochs = new Map<string, number>();
+  readonly #scopedClearing = new Map<string, Promise<void>>();
+  readonly #clearedScoped = new Map<string, Set<string>>();
+  readonly #approvalProcessing = new Map<string, Promise<void>>();
 
   constructor(config: RemoteStoreConfig) {
     this.#config = config;
@@ -161,10 +175,15 @@ export class RemoteTenantStore {
   async initializeTenant(subject: string): Promise<string> {
     return (await this.#ensureTenant(subject)).stateRoot;
   }
+  /** Check stored node authority before an authenticated operation uses it. */
+  async validateTenant(subject: string, ownerDids: readonly string[]): Promise<void> {
+    await this.#hasValidSession(await this.#ensureTenant(subject), ownerDids);
+  }
+
 
   async connectStatus(subject: string, ownerDids: readonly string[] = []): Promise<ConnectStatus> {
     const tenant = await this.#ensureTenant(subject);
-    if (await this.#hasValidSession(tenant, ownerDids)) {
+    if (await this.#hasValidSession(tenant, ownerDids, true)) {
       return { connected: true, sessionDid: tenant.sessionDid };
     }
     const pending = await this.#createPending(subject, ownerDids, "bootstrap", BOOTSTRAP_PERMISSIONS);
@@ -180,27 +199,60 @@ export class RemoteTenantStore {
     subject: string,
     ownerDids: readonly string[],
     result: unknown,
+    invocation?: McpOperationInvocation,
   ): Promise<unknown> {
     if (!isRecord(result)) return result;
     if (result.status === "error" && isRecord(result.error) &&
       (result.error.code === "SESSION_NOT_FOUND" || result.error.code === "AUTH_REQUIRED")) {
-      // The operation has already established that it needs a new session.
-      // Bind this approval to the authenticated account, just like connect.
-      await this.#ensureTenant(subject);
+      const tenant = await this.#ensureTenant(subject);
+      const refusal = revocationFromResult(result.error);
+      const cleared = refusal === undefined ? undefined : await this.#clearRefusedAuthority(tenant, refusal);
+      if (cleared === "scoped" && invocation !== undefined) {
+        return this.#renewScopedApproval(subject, ownerDids, tenant, result, invocation);
+      }
+      const valid = await this.#hasValidSession(tenant, ownerDids, true);
+      if (valid && result.error.code === "AUTH_REQUIRED") {
+        if (refusal === undefined) return result;
+        return {
+          ...result,
+          error: { code: "AUTH_REQUIRED", message: "TinyCloud approval is required.", retryable: false },
+        };
+      }
       const pending = await this.#createPending(subject, ownerDids, "bootstrap", BOOTSTRAP_PERMISSIONS);
       return {
-        ...result,
+        status: "error",
+        operation: result.operation,
+        context: result.context,
         error: {
-          ...result.error,
-          details: {
-            ...(isRecord(result.error.details) ? result.error.details : {}),
-            approvalUrl: this.#connectUrl(pending),
-            expiresAt: pending.expiresAt,
-          },
+          code: result.error.code === "SESSION_NOT_FOUND" &&
+            await readJson<unknown>(this.#sessionPath(tenant.stateRoot)) === null
+            ? "SESSION_NOT_FOUND"
+            : "AUTH_REQUIRED",
+          message: "A new TinyCloud approval is required.",
+          retryable: false,
+          details: { approvalUrl: this.#connectUrl(pending), expiresAt: pending.expiresAt },
         },
       };
     }
     if (result.status !== "authority_required") return result;
+    const tenant = await this.#ensureTenant(subject);
+    if (this.#renewalRequired.has(tenant.stateRoot) ||
+      !(await this.#hasValidSession(tenant, ownerDids, true))) {
+      if (this.#renewalRequired.has(tenant.stateRoot)) {
+        const pending = await this.#createPending(subject, ownerDids, "bootstrap", BOOTSTRAP_PERMISSIONS);
+        return {
+          status: "error",
+          operation: result.operation,
+          context: result.context,
+          error: {
+            code: "AUTH_REQUIRED",
+            message: "A new TinyCloud approval is required.",
+            retryable: false,
+            details: { approvalUrl: this.#connectUrl(pending), expiresAt: pending.expiresAt },
+          },
+        };
+      }
+    }
     const request = isRecord(result.request) ? result.request : undefined;
     const requestId = typeof request?.requestId === "string" ? request.requestId : undefined;
     const requested = Array.isArray(request?.requested)
@@ -219,6 +271,105 @@ export class RemoteTenantStore {
           "Open the approval URL, then retry the same MCP tool.",
       },
     };
+  }
+
+  async #renewScopedApproval(
+    subject: string,
+    ownerDids: readonly string[],
+    tenant: TenantProfile,
+    result: Record<string, unknown>,
+    invocation: McpOperationInvocation,
+  ): Promise<unknown> {
+    const planned = await invokeOperation(
+      "tinycloud.auth.request",
+      1,
+      { profile: PROFILE, stateRoot: tenant.stateRoot },
+      invocation,
+    );
+    const output = planned.status === "ok" && isRecord(planned.output) ? planned.output : undefined;
+    const request = isRecord(output?.request) ? output.request : undefined;
+    const requestId = typeof request?.requestId === "string" ? request.requestId : undefined;
+    const requested = Array.isArray(request?.requested)
+      ? request.requested.filter(isPermissionEntry)
+      : [];
+    const missing = Array.isArray(output?.missing) ? output.missing.filter(isPermissionEntry) : [];
+    if (requestId === undefined || requested.length === 0 || missing.length === 0) {
+      return {
+        status: "error",
+        operation: result.operation,
+        context: result.context,
+        error: { code: "AUTH_REQUIRED", message: "A new TinyCloud approval is required.", retryable: false },
+      };
+    }
+    const pending = await this.#createPending(subject, ownerDids, "delegation", requested, requestId);
+    return {
+      status: "authority_required",
+      operation: result.operation,
+      context: result.context,
+      missing,
+      request,
+      approval: {
+        kind: "openkey",
+        requestId,
+        url: this.#connectUrl(pending),
+        fallback: tcAppsApprovalMessage(requested) ??
+          "Open the approval URL, then retry the same MCP tool.",
+      },
+      retry: operationRetryDescriptor(invocation, invocation.input),
+    };
+  }
+
+  async #clearRefusedAuthority(
+    tenant: TenantProfile,
+    refusal: NodeRevocation,
+  ): Promise<"bootstrap" | "scoped" | undefined> {
+    const raw = await readJson<Record<string, unknown>>(this.#sessionPath(tenant.stateRoot)).catch(() => null);
+    const bootstrapCid = raw?.delegationCid;
+    const ancestorCid = refusal.reason === "delegation_ancestor_revoked" ? refusal.ancestorCid : undefined;
+    if (typeof bootstrapCid === "string" &&
+      (bootstrapCid === refusal.revokedCid || bootstrapCid === ancestorCid)) {
+      await this.#clearAuthority(tenant);
+      return "bootstrap";
+    }
+    const key = tenant.stateRoot;
+    const removed = this.#clearedScoped.get(tenant.stateRoot);
+    if (removed?.has(refusal.revokedCid)) return "scoped";
+    const additional = await readJson<unknown>(this.#additionalPath(tenant.stateRoot));
+    if (this.#clearedScoped.get(key)?.has(refusal.revokedCid)) return "scoped";
+    if (!Array.isArray(additional)) return undefined;
+    const affected = additional.some((entry) => {
+      const cid = isRecord(entry) && isRecord(entry.delegation) ? entry.delegation.cid : undefined;
+      return typeof cid === "string" && (cid === refusal.revokedCid || cid === ancestorCid);
+    });
+    const inProgress = this.#scopedClearing.get(key);
+    if (inProgress) {
+      await inProgress;
+      return this.#clearRefusedAuthority(tenant, refusal);
+    }
+    if (!affected) return undefined;
+    const clearing = (async () => {
+      const latest = await readJson<unknown>(this.#additionalPath(tenant.stateRoot));
+      if (!Array.isArray(latest)) return;
+      const remaining = latest.filter((entry) => {
+        const cid = isRecord(entry) && isRecord(entry.delegation) ? entry.delegation.cid : undefined;
+        return typeof cid !== "string" || (cid !== refusal.revokedCid && cid !== ancestorCid);
+      });
+      if (remaining.length === latest.length) return;
+      this.#activeSessions.delete(tenant.stateRoot);
+      const epoch = (this.#approvalEpochs.get(tenant.stateRoot) ?? tenant.approvalEpoch) + 1;
+      this.#approvalEpochs.set(tenant.stateRoot, epoch);
+      const profilePath = this.#profilePath(tenant.stateRoot);
+      const profile = await readJson<Record<string, unknown>>(profilePath);
+      await secureWrite(profilePath, { ...profile, approvalEpoch: epoch });
+      if (remaining.length === 0) await rm(this.#additionalPath(tenant.stateRoot), { force: true });
+      else await secureWrite(this.#additionalPath(tenant.stateRoot), remaining);
+      const cleared = removed ?? new Set<string>();
+      cleared.add(refusal.revokedCid);
+      this.#clearedScoped.set(tenant.stateRoot, cleared);
+    })().finally(() => this.#scopedClearing.delete(key));
+    this.#scopedClearing.set(key, clearing);
+    await clearing;
+    return "scoped";
   }
 
   async approvalRedirect(state: string): Promise<string> {
@@ -268,17 +419,31 @@ export class RemoteTenantStore {
     if (!isRecord(data)) throw new ApprovalRequestError("body_invalid", "Callback body is invalid.");
 
     const pending = await this.#readPending(state, true);
-    try {
-      const tenant = await this.#readTenant(pending.tenantId);
-      if (pending.kind === "bootstrap") {
-        await this.#storeBootstrap(tenant, pending, data);
-      } else {
-        await this.#storeDelegation(tenant, pending, data);
+    const stateRoot = join(this.#config.stateDir, "tenants", pending.tenantId);
+    const prior = this.#approvalProcessing.get(stateRoot);
+    const processing = (async () => {
+      if (prior) await prior.catch(() => undefined);
+      try {
+        const tenant = await this.#readTenant(pending.tenantId);
+        if ((pending.approvalEpoch ?? 0) !== tenant.approvalEpoch) {
+          throw new ApprovalRequestError("state_not_pending", "Approval state is invalid or already used.");
+        }
+        if (pending.kind === "bootstrap") {
+          await this.#storeBootstrap(tenant, pending, data);
+        } else {
+          await this.#storeDelegation(tenant, pending, data);
+        }
+        await rm(this.#pendingPath(tenant.stateRoot, pending.nonce) + ".processing", { force: true });
+      } catch (error) {
+        await this.#restorePending(pending).catch(() => undefined);
+        throw error;
       }
-      await rm(this.#pendingPath(tenant.stateRoot, pending.nonce) + ".processing", { force: true });
-    } catch (error) {
-      await this.#restorePending(pending).catch(() => undefined);
-      throw error;
+    })();
+    this.#approvalProcessing.set(stateRoot, processing);
+    try {
+      await processing;
+    } finally {
+      if (this.#approvalProcessing.get(stateRoot) === processing) this.#approvalProcessing.delete(stateRoot);
     }
   }
 
@@ -288,6 +453,7 @@ export class RemoteTenantStore {
     data: Record<string, unknown>,
   ): Promise<void> {
     const { node, session } = await this.#restoreApproval(tenant, data);
+    this.#assertCurrentApproval(pending, session);
     if (pending.ownerDids.length > 0 && !pending.ownerDids.some((did) => samePrincipal(node.did, did))) {
       throw new ApprovalOwnerMismatchError();
     }
@@ -306,6 +472,8 @@ export class RemoteTenantStore {
       authMethod: "openkey",
       ...session,
     });
+    this.#renewalRequired.delete(tenant.stateRoot);
+    this.#activeSessions.delete(tenant.stateRoot);
   }
 
   async #storeDelegation(
@@ -317,6 +485,7 @@ export class RemoteTenantStore {
     // Unlike bootstrap there is no empty-list exemption: a delegation is only
     // imported when its verified signer is the OAuth principal that asked.
     const { node, session } = await this.#restoreApproval(tenant, data);
+    this.#assertCurrentApproval(pending, session);
     if (!pending.ownerDids.some((did) => samePrincipal(node.did, did))) throw new ApprovalOwnerMismatchError();
     // OpenKey returns a signed-login (CACAO) delegation. Every field is
     // projected from the verified SIWE; `tinycloud.auth.import` verifies it
@@ -363,6 +532,14 @@ export class RemoteTenantStore {
       );
     }
     if (result.status !== "ok") throw new ApprovalStageError("auth_import", "AUTHORITY_REQUIRED");
+  }
+
+  #assertCurrentApproval(pending: PendingApproval, session: CallbackSession): void {
+    const issuedAt = /^Issued At: ([^\r\n]+)\r?$/m.exec(session.siwe)?.[1];
+    if (issuedAt === undefined || !Number.isFinite(Date.parse(issuedAt)) ||
+      Date.parse(issuedAt) < Date.parse(pending.createdAt)) {
+      throw new ApprovalStageError("restore_approval", "APPROVAL_PREDATES_REQUEST");
+    }
   }
 
   /**
@@ -412,18 +589,121 @@ export class RemoteTenantStore {
     return initializing;
   }
 
-  async #hasValidSession(tenant: TenantProfile, ownerDids: readonly string[]): Promise<boolean> {
-    const raw = await readJson<Record<string, unknown>>(this.#sessionPath(tenant.stateRoot));
-    if (raw === null) return false;
+  async #hasValidSession(
+    tenant: TenantProfile,
+    ownerDids: readonly string[],
+    fresh = false,
+  ): Promise<boolean> {
+    if (this.#renewalRequired.has(tenant.stateRoot)) return false;
+    const key = JSON.stringify([tenant.stateRoot, ownerDids.map(normalizeDid), fresh]);
+    const current = this.#sessionChecks.get(key);
+    if (current) return current;
+    const checking = this.#checkSession(tenant, ownerDids, fresh).finally(() => {
+      this.#sessionChecks.delete(key);
+    });
+    this.#sessionChecks.set(key, checking);
+    return checking;
+  }
+
+  async #checkSession(
+    tenant: TenantProfile,
+    ownerDids: readonly string[],
+    fresh: boolean,
+  ): Promise<boolean> {
+    let raw: Record<string, unknown> | null;
     try {
-      const node = new TinyCloudNode({ host: this.#config.nodeHost });
-      await node.restoreSession(raw as unknown as TinyCloudSession);
-      return samePrincipal(node.sessionDid, tenant.sessionDid) &&
-        ownerDids.some((did) => samePrincipal(node.did, did));
-    } catch {
-      await rm(this.#sessionPath(tenant.stateRoot), { force: true });
+      raw = await readJson<Record<string, unknown>>(this.#sessionPath(tenant.stateRoot));
+    } catch (error) {
+      if (!(error instanceof SyntaxError)) throw error;
+      await this.#clearAuthority(tenant);
       return false;
     }
+    if (raw === null) return false;
+    const node = new TinyCloudNode({ host: this.#config.nodeHost });
+    try {
+      await node.restoreSession(raw as unknown as TinyCloudSession);
+    } catch {
+      const header = isRecord(raw.delegationHeader) ? raw.delegationHeader.Authorization : undefined;
+      const signedExpiry = typeof header === "string" ? signedCompactUcanExpiry(header) : undefined;
+      const siweExpiry = typeof raw.siwe === "string"
+        ? /^Expiration Time: ([^\r\n]+)\r?$/m.exec(raw.siwe)?.[1]
+        : undefined;
+      const expiry = signedExpiry ?? (siweExpiry === undefined ? undefined : new Date(siweExpiry));
+      if (expiry !== undefined && expiry.getTime() <= Date.now()) return false;
+      await this.#clearAuthority(tenant);
+      return false;
+    }
+    if (!samePrincipal(node.sessionDid, tenant.sessionDid) ||
+      !ownerDids.some((did) => samePrincipal(node.did, did))) return false;
+    const additional = await readJson<unknown>(this.#additionalPath(tenant.stateRoot));
+    const cids = [raw.delegationCid];
+    if (additional !== null) {
+      if (!Array.isArray(additional)) throw new Error("Stored TinyCloud authority is unavailable.");
+      for (const entry of additional) {
+        const cid = isRecord(entry) && isRecord(entry.delegation) ? entry.delegation.cid : undefined;
+        cids.push(cid);
+      }
+    }
+    if (!cids.every((cid): cid is string => typeof cid === "string" && cid.length > 0)) {
+      throw new Error("Stored TinyCloud authority is unavailable.");
+    }
+    const fingerprint = cids.join("\n");
+    const cached = this.#activeSessions.get(tenant.stateRoot);
+    if (!fresh && cached?.cids === fingerprint && cached.until > Date.now()) return true;
+    // A node refusal is actionable only when it names this stored permission.
+    // All other probe failures leave the locally restored session untouched.
+    let timer: NodeJS.Timeout | undefined;
+    const timeout = new Promise<undefined>((resolve) => {
+      timer = setTimeout(() => resolve(undefined), 2_000);
+      timer.unref();
+    });
+    const probe = await Promise.race([
+      node.kvForSpace(String(raw.spaceId)).list({ prefix: "spaces/" }).catch(() => undefined),
+      timeout,
+    ]).finally(() => clearTimeout(timer));
+    const refusal = probe !== undefined && !probe.ok ? nodeRevocationOf(probe.error) : undefined;
+    if (refusal !== undefined &&
+      (refusal.revokedCid === raw.delegationCid ||
+        (refusal.reason === "delegation_ancestor_revoked" && refusal.ancestorCid === raw.delegationCid))) {
+      await this.#clearAuthority(tenant);
+      return false;
+    }
+    if (this.#renewalRequired.has(tenant.stateRoot)) return false;
+    if (probe?.ok) {
+      this.#activeSessions.set(tenant.stateRoot, { cids: fingerprint, until: Date.now() + 30_000 });
+    }
+    return true;
+  }
+
+  async #clearAuthority(tenant: TenantProfile): Promise<void> {
+    const current = this.#clearing.get(tenant.stateRoot);
+    if (current) return current;
+    this.#activeSessions.delete(tenant.stateRoot);
+    this.#renewalRequired.add(tenant.stateRoot);
+    this.#clearedScoped.delete(tenant.stateRoot);
+    this.#approvalEpochs.set(
+      tenant.stateRoot,
+      (this.#approvalEpochs.get(tenant.stateRoot) ?? tenant.approvalEpoch) + 1,
+    );
+    const clearing = (async () => {
+      const processing = this.#approvalProcessing.get(tenant.stateRoot);
+      if (processing) await processing.catch(() => undefined);
+      const scoped = this.#scopedClearing.get(tenant.stateRoot);
+      if (scoped) await scoped;
+      this.#renewalRequired.add(tenant.stateRoot);
+      const profilePath = this.#profilePath(tenant.stateRoot);
+      const profile = await readJson<Record<string, unknown>>(profilePath);
+      await secureWrite(profilePath, {
+        ...profile,
+        approvalEpoch: this.#approvalEpochs.get(tenant.stateRoot),
+      });
+      await rm(this.#additionalPath(tenant.stateRoot), { force: true });
+      await rm(join(tenant.stateRoot, ".tinycloud", "profiles", PROFILE, "auth-requests.json"), { force: true });
+      await rm(this.#pendingDirectory(tenant.stateRoot), { recursive: true, force: true });
+      await rm(this.#sessionPath(tenant.stateRoot), { force: true });
+    })().finally(() => this.#clearing.delete(tenant.stateRoot));
+    this.#clearing.set(tenant.stateRoot, clearing);
+    await clearing;
   }
 
   async #initializeTenant(tenantId: string): Promise<TenantProfile> {
@@ -470,7 +750,10 @@ export class RemoteTenantStore {
         `[tinycloud-mcp-http] tenant node host migrated: from=${LEGACY_DEFAULT_NODE_HOST} to=${new URL(this.#config.nodeHost).origin}\n`,
       );
     }
-    return { stateRoot, sessionDid, jwk };
+    const approvalEpoch = this.#approvalEpochs.get(stateRoot) ??
+      (typeof profile?.approvalEpoch === "number" ? profile.approvalEpoch : 0);
+    this.#approvalEpochs.set(stateRoot, approvalEpoch);
+    return { stateRoot, sessionDid, jwk, approvalEpoch };
   }
 
   async #readTenant(tenantId: string): Promise<TenantProfile> {
@@ -478,7 +761,10 @@ export class RemoteTenantStore {
     const stateRoot = join(this.#config.stateDir, "tenants", tenantId);
     const jwk = await readJson<Record<string, unknown>>(this.#keyPath(stateRoot));
     if (jwk === null) throw new ApprovalRequestError("tenant_missing", "The TinyCloud delegate no longer exists.");
-    return { stateRoot, jwk, sessionDid: didFromJwk(jwk) };
+    const profile = await readJson<Record<string, unknown>>(this.#profilePath(stateRoot));
+    const approvalEpoch = this.#approvalEpochs.get(stateRoot) ??
+      (typeof profile?.approvalEpoch === "number" ? profile.approvalEpoch : 0);
+    return { stateRoot, jwk, sessionDid: didFromJwk(jwk), approvalEpoch };
   }
 
   async #createPending(
@@ -488,11 +774,31 @@ export class RemoteTenantStore {
     permissions: PermissionEntry[],
     requestId?: string,
   ): Promise<PendingApproval> {
+    const clearing = this.#clearing.get(this.tenantStateRoot(subject));
+    if (clearing) await clearing;
     const tenant = await this.#ensureTenant(subject);
     const tenantId = this.#tenantId(subject);
+    const normalizedOwners = ownerDids.map(normalizeDid);
+    const key = JSON.stringify([tenantId, tenant.approvalEpoch, kind, requestId, permissions, normalizedOwners]);
+    const current = this.#pendingWrites.get(key);
+    if (current) return current;
+    const writing = this.#writePending(tenant, tenantId, kind, permissions, normalizedOwners, requestId)
+      .finally(() => this.#pendingWrites.delete(key));
+    this.#pendingWrites.set(key, writing);
+    return writing;
+  }
+
+  async #writePending(
+    tenant: TenantProfile,
+    tenantId: string,
+    kind: PendingApproval["kind"],
+    permissions: PermissionEntry[],
+    ownerDids: string[],
+    requestId?: string,
+  ): Promise<PendingApproval> {
     const reusable = await reusablePending(
       this.#pendingDirectory(tenant.stateRoot),
-      { tenantId, kind, requestId, permissions, ownerDids: ownerDids.map(normalizeDid) },
+      { tenantId, approvalEpoch: tenant.approvalEpoch, kind, requestId, permissions, ownerDids },
     );
     if (reusable !== undefined) return reusable;
     const nonce = randomBytes(24).toString("base64url");
@@ -501,10 +807,11 @@ export class RemoteTenantStore {
       version: 1,
       nonce,
       tenantId,
+      approvalEpoch: tenant.approvalEpoch,
       kind,
       ...(requestId === undefined ? {} : { requestId }),
       permissions,
-      ownerDids: ownerDids.map(normalizeDid),
+      ownerDids,
       createdAt: new Date(created).toISOString(),
       expiresAt: new Date(created + this.#config.approvalTtlSeconds * 1000).toISOString(),
     };
@@ -552,6 +859,12 @@ export class RemoteTenantStore {
       if (pending === null || pending.version !== 1 || pending.tenantId !== tenantId || pending.nonce !== nonce) {
         throw new ApprovalRequestError("state_not_pending", "Approval state is invalid or already used.");
       }
+      const profile = await readJson<Record<string, unknown>>(this.#profilePath(stateRoot));
+      const approvalEpoch = this.#approvalEpochs.get(stateRoot) ??
+        (typeof profile?.approvalEpoch === "number" ? profile.approvalEpoch : 0);
+      if ((pending.approvalEpoch ?? 0) !== approvalEpoch) {
+        throw new ApprovalRequestError("state_not_pending", "Approval state is invalid or already used.");
+      }
       if (new Date(pending.expiresAt).getTime() <= Date.now()) {
         await rm(consume ? claimed : path, { force: true });
         throw new ApprovalRequestError("state_expired", "Approval state has expired.");
@@ -597,6 +910,10 @@ export class RemoteTenantStore {
     return join(stateRoot, ".tinycloud", "profiles", PROFILE, "session.json");
   }
 
+  #additionalPath(stateRoot: string): string {
+    return join(stateRoot, ".tinycloud", "profiles", PROFILE, "additional-delegations.json");
+  }
+
   #pendingPath(stateRoot: string, nonce: string): string {
     return join(this.#pendingDirectory(stateRoot), `${nonce}.json`);
   }
@@ -628,6 +945,22 @@ function ensureWasm(): void {
   if (wasmInitialized) return;
   initPanicHook();
   wasmInitialized = true;
+}
+
+function revocationFromResult(error: Record<string, unknown>): NodeRevocation | undefined {
+  const details = error.details;
+  if (!isRecord(details) || typeof details.revokedCid !== "string") return undefined;
+  if (details.reason === "delegation_revoked") {
+    return { reason: "delegation_revoked", revokedCid: details.revokedCid };
+  }
+  if (details.reason === "delegation_ancestor_revoked" && typeof details.ancestorCid === "string") {
+    return {
+      reason: "delegation_ancestor_revoked",
+      revokedCid: details.revokedCid,
+      ancestorCid: details.ancestorCid,
+    };
+  }
+  return undefined;
 }
 
 /**
@@ -715,7 +1048,7 @@ async function readJson<T>(path: string): Promise<T | null> {
 
 async function reusablePending(
   directory: string,
-  expected: Pick<PendingApproval, "tenantId" | "kind" | "requestId" | "permissions" | "ownerDids">,
+  expected: Pick<PendingApproval, "tenantId" | "approvalEpoch" | "kind" | "requestId" | "permissions" | "ownerDids">,
 ): Promise<PendingApproval | undefined> {
   let names: string[];
   try {
@@ -745,9 +1078,10 @@ async function reusablePending(
 
 function samePendingRequest(
   pending: PendingApproval,
-  expected: Pick<PendingApproval, "tenantId" | "kind" | "requestId" | "permissions" | "ownerDids">,
+  expected: Pick<PendingApproval, "tenantId" | "approvalEpoch" | "kind" | "requestId" | "permissions" | "ownerDids">,
 ): boolean {
   return pending.version === 1 && pending.tenantId === expected.tenantId &&
+    (pending.approvalEpoch ?? 0) === expected.approvalEpoch &&
     pending.kind === expected.kind && pending.requestId === expected.requestId &&
     JSON.stringify(pending.permissions) === JSON.stringify(expected.permissions) &&
     JSON.stringify(pending.ownerDids) === JSON.stringify(expected.ownerDids);
