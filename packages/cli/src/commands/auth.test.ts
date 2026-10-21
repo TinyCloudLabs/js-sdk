@@ -311,7 +311,7 @@ mock.module("../auth/local-key.js", () => ({
   keyToDID: (jwk: { did?: string }) => jwk.did ?? "did:key:from-key",
 }));
 
-const { TinyCloudNode, REPLICA_LOGOUT_PENDING_FILE } = await import("@tinycloud/node-sdk");
+const { TinyCloudNode, REPLICA_LOGOUT_PENDING_FILE, NodeWasmBindings: RealNodeWasmBindings } = await import("@tinycloud/node-sdk");
 
 mock.module("@tinycloud/node-sdk", () => ({
   TinyCloudNode,
@@ -330,7 +330,7 @@ mock.module("@tinycloud/node-sdk", () => ({
     left.split("#", 1)[0] === right.split("#", 1)[0],
   // Signature checks run against real proofs in auth/scoped-login.test.ts and
   // auth/device-auth.test.ts; here any structurally complete proof verifies.
-  NodeWasmBindings: class NodeWasmBindings {
+  NodeWasmBindings: class NodeWasmBindings extends RealNodeWasmBindings {
     validatePersistedSession(proof: { spaceId: string }) {
       return {
         verifiedRecap: [
@@ -2321,6 +2321,8 @@ describe("auth grant for an OpenKey owner gets a fresh owner approval per agent 
   const otherOwner = "did:pkh:eip155:1:0x00000000000000000000000000000000000000bb";
   const key = { kty: "OKP", crv: "Ed25519", x: "key-public", d: "key-private" };
   let tempDir: string;
+  const restores: Array<Record<string, unknown>> = [];
+  let restoreSpy: { mockRestore(): void } | undefined;
 
   function approvalBy(owner: string, validForMs: number): Record<string, unknown> {
     return {
@@ -2355,10 +2357,15 @@ describe("auth grant for an OpenKey owner gets a fresh owner approval per agent 
     }));
     keys.set("default", key);
     sessions.set("default", { authMethod: "openkey", spaceId: "tinycloud:pkh:eip155:1:0xowner:default" });
+    restores.length = 0;
+    restoreSpy = spyOn(TinyCloudNode.prototype, "restoreSession").mockImplementation(async (sessionData: object) => {
+      restores.push(sessionData as Record<string, unknown>);
+    });
   });
 
   afterEach(async () => {
     await rm(tempDir, { recursive: true, force: true });
+    restoreSpy?.mockRestore();
   });
 
   async function writeAgentRequest(name: string, requestedExpiry?: string): Promise<string> {
@@ -2388,6 +2395,7 @@ describe("auth grant for an OpenKey owner gets a fresh owner approval per agent 
     expect(recorded.errors).toEqual([]);
     expect(recorded.startAuthFlows.map((flow) => flow.did)).toEqual([sessionDid]);
     expect(recorded.grantedRequests).toHaveLength(1);
+    expect(restores.map((sessionData) => sessionData.spaceId)).toEqual([openKeyDelegation.spaceId]);
   });
 
   test("the grant lasts as long as the owner's approval, not the requested lifetime", async () => {

@@ -389,6 +389,9 @@ export interface SignedSession {
   expiresAt: string;
 }
 
+/** A verified session: the signed authority fields plus the proof that restores it. */
+export type VerifiedScopedSession = Record<string, unknown> & SignedSession;
+
 /**
  * Verify an OpenKey session proof: SIWE signature, session key, owner and
  * lifetime. Unsigned callback fields never stand in for these values.
@@ -455,7 +458,7 @@ export function verifyScopedLogin(
   sessionDid: string,
   requested: PermissionEntry[],
   expected: SignedSessionExpectations = {},
-): { session: Record<string, unknown> & SignedSession; legacyNested: PermissionEntry[] } {
+): { session: VerifiedScopedSession; legacyNested: PermissionEntry[] } {
   const notStored = expected.purpose === "grant" ? "No grant was stored." : "No scoped session was saved.";
   let signed: SignedSession;
   try {
