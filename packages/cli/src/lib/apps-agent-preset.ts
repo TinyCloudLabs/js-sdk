@@ -23,11 +23,13 @@ import { normalizePkhIdentifier } from "./space.js";
  *   `install.json` cannot be changed through it. The share runner keeps the
  *   last two under `<app_id>/app/`; the root-level keys are refused as well.
  *
- * Neither grants KV delete, SQL admin or schema, any other service, or any
- * other space. The node lets `tinycloud.sql/write` run CREATE, ALTER and DROP
- * TABLE (only the SDK asks for `tinycloud.sql/schema`; TC-1581 is the
- * node-side fix that makes `sql/write` stop implying DDL), so the write
- * variant says so; the read ability is enforced by the node.
+ * Neither grants KV delete, SQL admin, any other service, or any other space.
+ * CREATE, ALTER and DROP TABLE need `tinycloud.sql/schema`, which SQL write does
+ * not request. Nodes before 1.21.6 do not enforce that split: SQL write can run
+ * those statements there too. The write variant adds `tinycloud.sql/schema` only
+ * for an app listed in `APPS_AGENT_SCHEMA_DATABASES`, on that app's one database,
+ * at the exact path with no trailing slash (the node matches a SQL path exactly
+ * unless it ends in `/`).
  */
 export const APPS_AGENT_PRESET = "apps-agent";
 export const APPS_AGENT_SPACE = "applications";
@@ -58,8 +60,8 @@ interface PresetVariant {
   readonly grants: readonly PresetGrant[];
   /** Whether the variant needs named apps (`--app`). */
   readonly perAppOnly: boolean;
-  /** Whether the granted actions let the agent change or drop tables, not only rows. */
-  readonly changesStructure: boolean;
+  /** Whether named apps listed in `APPS_AGENT_SCHEMA_DATABASES` also get `tinycloud.sql/schema` on their database. */
+  readonly schemaForCatalogApps: boolean;
 }
 
 export const APPS_AGENT_VARIANTS: Readonly<Record<AppsAgentMode, PresetVariant>> = {
@@ -69,7 +71,7 @@ export const APPS_AGENT_VARIANTS: Readonly<Record<AppsAgentMode, PresetVariant>>
       { service: "tinycloud.sql", actions: ["tinycloud.sql/read"], within: [""] },
     ],
     perAppOnly: false,
-    changesStructure: false,
+    schemaForCatalogApps: false,
   },
   write: {
     grants: [
@@ -78,9 +80,19 @@ export const APPS_AGENT_VARIANTS: Readonly<Record<AppsAgentMode, PresetVariant>>
       { service: "tinycloud.sql", actions: ["tinycloud.sql/read", "tinycloud.sql/write"], within: [""] },
     ],
     perAppOnly: true,
-    changesStructure: true,
+    schemaForCatalogApps: true,
   },
 };
+
+/**
+ * The one database each catalog app declares for `tinycloud.sql/schema` in its
+ * manifest. Only the write variant gives it, and only on that database; an app
+ * not listed here gets no table-structure grant.
+ */
+const APPS_AGENT_SCHEMA_DATABASES: Readonly<Record<string, string>> = {
+  "xyz.tinycloud.sample.healthlog": "healthlog",
+};
+const SCHEMA_ACTION = "tinycloud.sql/schema";
 
 /**
  * Plain words for every action a request can carry; anything else prints as
@@ -104,13 +116,12 @@ const ACTION_WORDS: Readonly<Record<string, string>> = {
   "tinycloud.capabilities/read": "see which permissions this key holds",
 };
 
-/** SQL actions that let the node run CREATE, ALTER or DROP TABLE (TC-1581: the node-side fix). */
-const STRUCTURE_ACTIONS: ReadonlySet<string> = new Set([
-  "tinycloud.sql/write",
-  "tinycloud.sql/schema",
-  "tinycloud.sql/admin",
-  "tinycloud.sql/*",
-]);
+/** SQL actions that let the node run CREATE, ALTER or DROP TABLE. SQL write is not one of them. */
+const STRUCTURE_ACTIONS: Readonly<Record<string, true>> = {
+  "tinycloud.sql/schema": true,
+  "tinycloud.sql/admin": true,
+  "tinycloud.sql/*": true,
+};
 
 /** A valid app id as the knowledge operations accept it; it becomes a key prefix. */
 const APP_ID = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
@@ -125,9 +136,21 @@ export function isAppId(value: string): boolean {
 /** The permission entries to request. No app ids means the whole space (read-only only). */
 export function appsAgentPermissions(mode: AppsAgentMode, appIds: readonly string[] = []): PermissionEntry[] {
   const bases = appIds.length === 0 ? [""] : appIds.map((appId) => `${appId}/`);
-  return APPS_AGENT_VARIANTS[mode].grants.flatMap(({ service, actions, within }) =>
+  const grants = APPS_AGENT_VARIANTS[mode].grants.flatMap(({ service, actions, within }) =>
     within.flatMap((folder) =>
       bases.map((base) => ({ service, space: APPS_AGENT_SPACE, path: `${base}${folder}`, actions: [...actions] }))));
+  const schema: PermissionEntry[] = APPS_AGENT_VARIANTS[mode].schemaForCatalogApps
+    ? schemaPathsFor(appIds).map((path) => ({ service: "tinycloud.sql", space: APPS_AGENT_SPACE, path, actions: [SCHEMA_ACTION] }))
+    : [];
+  return [...grants, ...schema];
+}
+
+/** The `<app_id>/<db>` paths the write variant grants `tinycloud.sql/schema` on, for the listed apps that have one. */
+function schemaPathsFor(appIds: readonly string[]): string[] {
+  return appIds.flatMap((appId) => {
+    if (!Object.hasOwn(APPS_AGENT_SCHEMA_DATABASES, appId)) return [];
+    return [`${appId}/${APPS_AGENT_SCHEMA_DATABASES[appId]}`];
+  });
 }
 
 function quoteApps(appIds: readonly string[]): string {
@@ -159,14 +182,18 @@ export function appsAgentScopeNotice(mode: AppsAgentMode, appIds: readonly strin
     ? `ALL your installed apps' data in the \`${APPS_AGENT_SPACE}\` space`
     : `the data of ${quoteApps(appIds)} (everything under ${appIds.map((appId) => `\`${appId}/\``).join(", ")}) in the \`${APPS_AGENT_SPACE}\` space`;
   const lines = [
-    variant.changesStructure
+    writes
       ? `This gives the agent access to ${scope}: it can ${reads}.`
       : `This gives the agent READ-ONLY access to ${scope}: it can ${reads}.`,
   ];
-  if (variant.changesStructure) {
+  if (writes) {
+    const schemaPaths = schemaPathsFor(appIds).map((path) => `\`${path}\``);
     lines.push(
       `It cannot change ${appIds.length === 1 ? "the app's" : "the apps'"} code, manifest or install record: files outside those folders are read-only for it.`,
-      `SQL write is separate from that: it can change ${appIds.length === 1 ? "this app's" : "these apps'"} table rows and, because of how TinyCloud permissions work today (TC-1581), also change or delete ${appIds.length === 1 ? "its" : "their"} tables (structure).`,
+      `SQL write is separate from that: it can add, change and delete ${appIds.length === 1 ? "this app's" : "these apps'"} table rows.`,
+      variant.schemaForCatalogApps && schemaPaths.length > 0
+        ? `It can also create, change and drop the tables in ${schemaPaths.join(", ")}, which the app needs to set itself up. That grant names no other database for table changes. Nodes before 1.21.6 do not enforce that database limit, so the write grant may still let it change tables elsewhere there.`
+        : "This grant does not include permission to create, change or drop tables (tinycloud.sql/schema). Nodes before 1.21.6 do not enforce that split, so the write grant may still let it do so there.",
       "It cannot touch other apps, other spaces or secrets.",
     );
   } else {
@@ -419,11 +446,13 @@ function describeEntry(entry: PermissionEntry, applicationsSpace: string): strin
 /**
  * Whether every action of `entry` is one the preset can grant at that path:
  * reads anywhere, writes only in a named app's write folders (SQL write in
- * the whole named app). A path with a `.` or `..` segment is never within it.
+ * the whole named app). Schema is never within it: the preset grants it only inside the exact write variant, which `matchAppsAgentRequest` recognises first.
+ * A path with a `.` or `..` segment is never within it.
  */
 function withinPresetSet(entry: PermissionEntry, applicationsSpace: string): boolean {
   if (!inApplicationsSpace(entry, applicationsSpace) || entry.caveats !== undefined) return false;
   if (entry.path.split("/").some((segment) => segment === "." || segment === "..")) return false;
+  if (entry.actions.includes(SCHEMA_ACTION)) return false;
   const slash = entry.path.indexOf("/");
   const folder = slash > 0 && isAppId(entry.path.slice(0, slash)) ? entry.path.slice(slash + 1) : undefined;
   const grants = Object.values(APPS_AGENT_VARIANTS).flatMap(({ grants: variantGrants }) =>
@@ -441,7 +470,7 @@ function withinPresetSet(entry: PermissionEntry, applicationsSpace: string): boo
  * its service or space, with text from the request escaped. The preset wording
  * is used only when the list is exactly a preset variant. When the list
  * touches an `applications` space and holds any entry the preset could never
- * grant (another service or space, delete, schema, delegation, a write outside
+ * grant (another service or space, delete, any schema entry outside the exact write variant, delegation, a write outside
  * a named app's write folders), those entries come first, marked `!`, and need a confirmation.
  */
 export function describeGrantScope(
@@ -456,7 +485,9 @@ export function describeGrantScope(
     return { text: appsAgentScopeNotice(preset.mode, preset.appIds), entries: requested, extras: [] };
   }
   const touchesApplications = requested.some((entry) => (entry.space ?? "").split(":").at(-1) === APPS_AGENT_SPACE);
-  const extras = touchesApplications ? requested.filter((entry) => !withinPresetSet(entry, applicationsSpace)) : [];
+  const extras = touchesApplications
+    ? requested.filter((entry) => !withinPresetSet(entry, applicationsSpace))
+    : [];
   const others = requested.filter((entry) => !extras.includes(entry));
 
   const lines: string[] = [
@@ -468,8 +499,8 @@ export function describeGrantScope(
     ...extras.map((entry) => `! ${describeEntry(entry, applicationsSpace)}`),
     ...others.map((entry) => `- ${describeEntry(entry, applicationsSpace)}`),
   ];
-  if (requested.some((entry) => entry.service === "tinycloud.sql" && entry.actions.some((action) => STRUCTURE_ACTIONS.has(action)))) {
-    lines.push("Because of how TinyCloud permissions work today (TC-1581), SQL write access can also change or delete tables (structure).");
+  if (requested.some((entry) => entry.service === "tinycloud.sql" && entry.actions.some((action) => Object.hasOwn(STRUCTURE_ACTIONS, action)))) {
+    lines.push("This request can create, change and drop tables (an SQL schema, admin or wildcard entry).");
   }
   const entryLifetimes = requested.filter((entry) => entry.expiry !== undefined).map((entry) => lifetimeMs(entry.expiry));
   const durations = [lifetimeMs(requestedExpiry), ...entryLifetimes]
