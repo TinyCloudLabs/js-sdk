@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
-import { buildRequestEvent, byteLengthOf, declaredLengthOf, RequestLog, type RawRequest } from "./requestLog";
+import { buildRequestEvent, byteLengthOf, declaredLengthOf, observeReplicaReads, RequestLog, type RawRequest } from "./requestLog";
+import type { IServiceContext } from "../types";
 
 const base: RawRequest = { durationMs: 4.6, ok: true, at: 1_700_000_000_000 };
 const build = (extra: Partial<RawRequest>) => buildRequestEvent({ ...base, ...extra });
@@ -207,4 +208,29 @@ test("declared Content-Length is a byte count only for plain digits", () => {
   expect(declaredLengthOf("12abc")).toBeNull();
   expect(declaredLengthOf(null)).toBeNull();
   expect(declaredLengthOf(undefined)).toBeNull();
+});
+
+test("observeReplicaReads records replica-served reads and ignores network and none reads", () => {
+  const handlers: Array<(data: unknown) => void> = [];
+  // observeReplicaReads only subscribes through `on`; this stub captures the handler.
+  const context = {
+    on: (_event: string, handler: (data: unknown) => void) => {
+      handlers.push(handler);
+      return () => {};
+    },
+  } as unknown as IServiceContext;
+  const log = new RequestLog();
+  observeReplicaReads(context, log);
+
+  const emit = (source: string, outcome: string) =>
+    handlers.forEach((handler) =>
+      handler({ op: "get", space: "space:a", key: "notes/x", source, outcome, latencyMs: 3 }),
+    );
+  emit("network", "hit");
+  emit("none", "miss");
+  emit("replica", "hit");
+
+  const rows = log.snapshot();
+  expect(rows.map((row) => row.source)).toEqual(["replica"]);
+  expect(rows[0]?.service).toBe("kv");
 });
