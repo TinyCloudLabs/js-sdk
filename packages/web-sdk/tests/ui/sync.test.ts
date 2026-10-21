@@ -10,6 +10,7 @@ import { syncSection } from "../../src/ui/sections/sync";
 import type {
   HostContext,
   PanelClient,
+  StatusCode,
   SyncEffective,
   SyncFacade,
   SyncState,
@@ -92,7 +93,28 @@ function makeFacade(initial: SyncState): FacadeStub {
   return stub;
 }
 
-function makeCtx(facade: SyncFacade | undefined): HostContext {
+type HeaderFake = ReturnType<typeof makeHeader>;
+
+/** Header status fake. `set` changes the top status and notifies listeners, as the host board does. */
+function makeHeader(initial: StatusCode | null = null) {
+  let top = initial;
+  const listeners = new Set<() => void>();
+  return {
+    topStatus: (): StatusCode | null => top,
+    onStatusChange(cb: () => void): () => void {
+      listeners.add(cb);
+      return () => {
+        listeners.delete(cb);
+      };
+    },
+    set(next: StatusCode | null): void {
+      top = next;
+      for (const cb of [...listeners]) cb();
+    },
+  };
+}
+
+function makeCtx(facade: SyncFacade | undefined, header: HeaderFake = makeHeader()): HostContext {
   const client = {
     id: 1,
     signedIn: () => true,
@@ -105,6 +127,8 @@ function makeCtx(facade: SyncFacade | undefined): HostContext {
     onClientChange: () => () => undefined,
     developerMode: () => false,
     setStatus: () => undefined,
+    topStatus: header.topStatus,
+    onStatusChange: header.onStatusChange,
     toast: () => "",
     openPanel: () => undefined,
     closePanel: () => undefined,
@@ -112,10 +136,10 @@ function makeCtx(facade: SyncFacade | undefined): HostContext {
   };
 }
 
-function mount(facade: SyncFacade | undefined) {
+function mount(facade: SyncFacade | undefined, header?: HeaderFake) {
   const el = document.createElement("div");
   document.body.appendChild(el);
-  const dispose = syncSection.mount(el, makeCtx(facade));
+  const dispose = syncSection.mount(el, makeCtx(facade, header));
   cleanups.push(dispose);
   return { el, dispose };
 }
@@ -242,6 +266,50 @@ describe("effective states", () => {
     const { el } = mount(facade);
     expect(noteOf(el).textContent).toBe(text("sync.reason.unknown"));
     expect(el.textContent).not.toContain("made-up-xyz");
+  });
+});
+
+describe("pending word and header status", () => {
+  const pending: SyncState = { requested: false, effective: "pending", reason: "erase-pending" };
+
+  test("hides the busy word while the header shows the same status", () => {
+    const { el } = mount(makeFacade(pending), makeHeader("sync_pending"));
+    expect(busyOf(el).hidden).toBe(true);
+    expect(noteOf(el).textContent).toBe(text("sync.reason.erase-pending"));
+  });
+
+  test("shows the busy word when the header shows a different status", () => {
+    const { el } = mount(makeFacade(pending), makeHeader("storage_full"));
+    expect(busyOf(el).hidden).toBe(false);
+    expect(busyOf(el).textContent).toBe(text("sync.pending"));
+  });
+
+  test("follows header status changes while mounted", () => {
+    const header = makeHeader("sync_pending");
+    const { el } = mount(makeFacade(pending), header);
+    header.set("storage_full");
+    expect(busyOf(el).hidden).toBe(false);
+    header.set("sync_pending");
+    expect(busyOf(el).hidden).toBe(true);
+  });
+});
+
+describe("wipe note placement", () => {
+  const on: SyncState = { requested: true, effective: "on" };
+
+  test("sits directly under the wipe button in the default on state", () => {
+    const { el } = mount(makeFacade(on));
+    const note = wipeOf(el).nextElementSibling as HTMLElement;
+    expect(note.textContent).toBe(text("sync.wipe.note"));
+    expect(note.hidden).toBe(false);
+  });
+
+  test("is shown once while confirming", () => {
+    const { el } = mount(makeFacade(on));
+    clickEl(wipeOf(el), true);
+    const notes = [...el.querySelectorAll<HTMLElement>(".note")].filter((n) => n.textContent === text("sync.wipe.note"));
+    expect(notes).toHaveLength(1);
+    expect(notes[0]?.hidden).toBe(false);
   });
 });
 

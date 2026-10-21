@@ -25,6 +25,7 @@ function warnOnce(key: string, message: string): void {
 
 /**
  * Returns a shallow copy of `config` with legacy `notifications` keys mapped onto `ui`.
+ * `popups: false` maps to `{ button: false, toasts: false }`, so SDK prompts still render.
  * The caller's object is never mutated. An explicit `ui` always wins over a legacy key.
  */
 export function applyLegacyNotificationKeys<T extends { ui?: UiConfig | false; notifications?: object }>(
@@ -39,7 +40,7 @@ export function applyLegacyNotificationKeys<T extends { ui?: UiConfig | false; n
   if (maxVisible !== undefined) warnOnce("maxVisible", "was removed and is ignored");
 
   let ui = config.ui;
-  if (popups === false && ui === undefined) ui = false;
+  if (popups === false && ui === undefined) ui = { button: false, toasts: false };
   if (position !== undefined && ui !== false && ui?.position === undefined) {
     ui = { ...ui, position: position as UiPosition };
   }

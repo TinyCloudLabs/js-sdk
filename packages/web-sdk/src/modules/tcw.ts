@@ -130,7 +130,7 @@ declare global {
  * Extends ClientConfig with browser-specific options.
  */
 export interface Config extends ClientConfig {
-  /** Notifications. `throwErrors` rethrows each error's raw message asynchronously, once per burst of identical errors (200 ms window). It applies unless `ui: false`, which turns off toasts and throws together; other `ui` options, such as `button: false`, leave throws on. Toast placement and visibility are set through `ui`. */
+  /** Notifications. `throwErrors` rethrows each error's raw message asynchronously, once per burst of identical errors (200 ms window). It applies unless `ui: false` or `ui.toasts: false`, which turn off toasts and throws together, as the old `popups: false` did; `ui.button: false` leaves throws on. Toast placement and visibility are set through `ui`. */
   notifications?: NotificationConfig;
 
   /** Optional prefix for KV service keys */
@@ -249,7 +249,7 @@ export interface Config extends ClientConfig {
   retryPolicy?: Partial<RetryPolicy>;
   /** Accountless share receiver transport and session-custody configuration. */
   shareReceiver?: ShareReceiverServiceOptions;
-  /** Floating button and panel. `false` creates no host, button, or listeners. See {@link UiConfig}. */
+  /** Floating button, panel, and toasts. `false` creates no host, button, toasts, or listeners. See {@link UiConfig}. */
   ui?: UiConfig | false;
 }
 
@@ -485,7 +485,7 @@ export class TinyCloudWeb {
     // With `notifications.throwErrors`, error events rethrow even when no toast is shown.
     this.notificationHandler = new BrowserNotificationHandler(
       this.showToast,
-      this.config.notifications?.throwErrors === true && this.config.ui !== false,
+      this.config.notifications?.throwErrors === true && this.config.ui !== false && this.config.ui?.toasts !== false,
     );
 
     // Create browser WASM bindings

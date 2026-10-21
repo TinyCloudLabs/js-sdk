@@ -42,7 +42,12 @@ export interface HostContext {
   onClientChange(cb: () => void): () => void;
   developerMode(): boolean;
   setStatus(source: string, status: StatusCode | null): void;
-  toast(t: ToastRequest): string;
+  /** Status currently shown in the panel header (highest priority), or null. */
+  topStatus(): StatusCode | null;
+  /** Fires whenever `topStatus()` changes. Returns the unsubscribe function. */
+  onStatusChange(cb: () => void): () => void;
+  /** Returns the toast id, or null when `ui.toasts` is false. */
+  toast(t: ToastRequest): string | null;
   openPanel(): void;
   closePanel(): void;
   /** strings.ts lookup. Unknown codes return the neutral line, never raw text. */

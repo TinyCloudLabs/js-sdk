@@ -6,8 +6,8 @@ import type { ClientSource } from "../../src/ui/client";
 import { REGISTRY_KEY } from "../../src/ui/host";
 import { HIDE_KEY_PREFIX } from "../../src/ui/persistence";
 import { text } from "../../src/ui/strings";
-import type { SyncFacade, SyncState } from "../../src/ui/slots";
-import { toastStore } from "../../src/ui/parts/toasts";
+import type { HostContext, SyncFacade, SyncState } from "../../src/ui/slots";
+import { toastStore, toasts } from "../../src/ui/parts/toasts";
 import type { ToastView } from "../../src/ui/toast-store";
 import type { UiPosition } from "../../src/ui/config";
 
@@ -217,6 +217,16 @@ describe("open, close, hide", () => {
     const panel = shadow().querySelector("[role='dialog']") as HTMLElement;
     panel.dispatchEvent(new page.KeyboardEvent("keydown", { key: "Escape", bubbles: true, composed: true }));
     expect(ui.api.isOpen).toBe(false);
+  });
+
+  test("the layer carries data-panel-open only while the panel is open", () => {
+    const ui = mountClient();
+    const layer = () => shadow().querySelector(".layer") as HTMLElement;
+    expect(layer().hasAttribute("data-panel-open")).toBe(false);
+    ui.api.open();
+    expect(layer().hasAttribute("data-panel-open")).toBe(true);
+    buttonEl()?.click();
+    expect(layer().hasAttribute("data-panel-open")).toBe(false);
   });
 });
 
@@ -589,4 +599,78 @@ describe("host toasts", () => {
     expect(buttonEl()).toBeNull();
     ui.unregister();
   });
+
+  test("ui.toasts:false shows no rejection toast and keeps the button", () => {
+    const ui = mountClient({ toasts: false });
+    globalThis.dispatchEvent(rejection(new Error("TinyCloud storage failed")));
+    expect(storedToasts()).toEqual([]);
+    expect(buttonEl()).not.toBeNull();
+    ui.unregister();
+  });
+
+  test("ui.toasts:false makes toast return false and store nothing", () => {
+    const ui = mountClient({ toasts: false });
+    expect(ui.toast(REQUEST)).toBe(false);
+    expect(storedToasts()).toEqual([]);
+    ui.unregister();
+  });
+
+  // Parts receive the HostContext when the host mounts. The toasts part starts
+  // first among the host parts, so wrap its start to capture that context.
+  function captureHostContext(): { context: () => HostContext | undefined; restore: () => void } {
+    let captured: HostContext | undefined;
+    const original = toasts.start;
+    toasts.start = (ctx, layer) => {
+      captured = ctx;
+      return original.call(toasts, ctx, layer);
+    };
+    return {
+      context: () => captured,
+      restore: () => {
+        toasts.start = original;
+      },
+    };
+  }
+
+  test("HostContext.toast under ui.toasts:false returns null and stores nothing", () => {
+    const probe = captureHostContext();
+    try {
+      const ui = mountClient({ toasts: false });
+      expect(probe.context()?.toast(REQUEST)).toBeNull();
+      expect(storedToasts()).toEqual([]);
+      ui.unregister();
+    } finally {
+      probe.restore();
+    }
+  });
+
+  test("HostContext.toast with toasts enabled returns the toast id and stores it", () => {
+    const probe = captureHostContext();
+    try {
+      const ui = mountClient();
+      expect(probe.context()?.toast(REQUEST)).toEqual(expect.any(String));
+      expect(storedToasts()).toHaveLength(1);
+      ui.unregister();
+    } finally {
+      probe.restore();
+    }
+  });
+
+  test("the first client's toasts setting governs a shared rejection listener", () => {
+    const first = mountClient({ toasts: false });
+    const second = mountClient();
+    globalThis.dispatchEvent(rejection(new Error("TinyCloud storage failed")));
+    expect(storedToasts()).toEqual([]);
+    first.unregister();
+    second.unregister();
+  });
+
+  test("when the toasts:false client unregisters, the remaining client's rejections toast again", () => {
+    const first = mountClient({ toasts: false });
+    const second = mountClient();
+    first.unregister();
+    globalThis.dispatchEvent(rejection(new Error("TinyCloud storage failed")));
+    expect(storedToasts().length).toBe(1);
+    second.unregister();
+   });
 });

@@ -1,11 +1,13 @@
 import type { HostPart } from "../slots";
 import { createToastStore, type ToastStore, type ToastView } from "../toast-store";
+import { publishHeight } from "../layout";
 
 /** Shared store: host.ts pushes here; the registered part renders it. */
 export const toastStore: ToastStore = createToastStore();
 
 const TOAST_CSS = `
 .toasts{position:fixed;bottom:calc(var(--b) + 56px);display:flex;flex-direction:column;gap:8px;width:min(360px,calc(100vw - 24px));pointer-events:none}
+.layer[data-panel-open] .toasts{bottom:calc(var(--b) + 52px + var(--tinycloud-ui-panel-height,0px) + 8px)}
 .layer[data-position="bottom-right"] .toasts{right:var(--tinycloud-ui-offset-inline,12px)}
 .layer[data-position="bottom-left"] .toasts{left:var(--tinycloud-ui-offset-inline,12px)}
 .layer[data-position="bottom-center"] .toasts{left:50%;transform:translateX(-50%)}
@@ -38,6 +40,7 @@ export function createToastsPart(store: ToastStore): HostPart {
       const stack = document.createElement("div");
       stack.className = "toasts";
       layer.append(style, stack);
+      const stopRoom = publishHeight(stack, layer, "--tinycloud-ui-toast-room", (px) => (px > 0 ? `${px + 8}px` : "0px"));
 
       const items = new Map<string, HTMLElement>();
       const hovered = new Set<string>();
@@ -105,6 +108,7 @@ export function createToastsPart(store: ToastStore): HostPart {
         for (let i = 0; i < hovered.size; i++) store.resume();
         hovered.clear();
         items.clear();
+        stopRoom();
         stack.remove();
         style.remove();
       };

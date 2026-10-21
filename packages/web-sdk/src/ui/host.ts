@@ -2,6 +2,7 @@ import { createButton, type ButtonView } from "./button";
 import type { PanelClientHandle } from "./client";
 import type { ResolvedUiConfig } from "./config";
 import { createPanel, type PanelView } from "./panel";
+import { publishHeight } from "./layout";
 import { HOST_PARTS } from "./parts";
 import { toastStore } from "./parts/toasts";
 import type { ToastRequest } from "./toast-store";
@@ -33,7 +34,7 @@ export interface HostRuntime {
   open(): void;
   close(): void;
   isOpen(): boolean;
-  toast(request: ToastRequest, owner?: number): void;
+  toast(request: ToastRequest, owner?: number): boolean;
 }
 
 interface ClientEntry {
@@ -45,6 +46,7 @@ interface ClientEntry {
 
 interface Mounted {
   readonly host: HTMLElement;
+  readonly layer: HTMLElement;
   readonly panel: PanelView;
   readonly button: ButtonView | undefined;
   readonly stopParts: Array<() => void>;
@@ -67,10 +69,12 @@ function onUnhandledRejection(event: PromiseRejectionEvent): void {
 export function createHostRuntime(): HostRuntime {
   const clients = new Map<number, ClientEntry>();
   const clientListeners = new Set<() => void>();
+  const statusListeners = new Set<() => void>();
   const hideStore = createButtonHideStore(defaultLocalStorage);
   const board = createStatusBoard((top) => {
     mounted?.button?.setStatus(top);
     mounted?.panel.setStatus(top);
+    for (const cb of [...statusListeners]) cb();
   });
 
   let nextId = 1;
@@ -81,17 +85,13 @@ export function createHostRuntime(): HostRuntime {
   let disposers: Array<() => void> = [];
   let rejectionListening = false;
 
-  /** Host-owned: attached on the first register, detached when the last client leaves. */
-  function attachRejectionListener(): void {
-    if (rejectionListening) return;
-    rejectionListening = true;
-    globalThis.addEventListener("unhandledrejection", onUnhandledRejection);
-  }
-
-  function detachRejectionListener(): void {
-    if (!rejectionListening) return;
-    rejectionListening = false;
-    globalThis.removeEventListener("unhandledrejection", onUnhandledRejection);
+  /** Host-owned: listens while a client is registered and the primary client allows toasts. */
+  function syncRejectionListener(): void {
+    const listen = clients.size > 0 && primaryConfig()?.toasts !== false;
+    if (listen === rejectionListening) return;
+    rejectionListening = listen;
+    if (listen) globalThis.addEventListener("unhandledrejection", onUnhandledRejection);
+    else globalThis.removeEventListener("unhandledrejection", onUnhandledRejection);
   }
 
   /** Records the order in which clients were first seen signed in. */
@@ -137,7 +137,14 @@ export function createHostRuntime(): HostRuntime {
     },
     developerMode: () => [...clients.values()].some((entry) => entry.registration.config.developerMode),
     setStatus: (source, status) => board.set(source, status),
-    toast: (t) => toastStore.push(t),
+    topStatus: () => board.top(),
+    onStatusChange(cb) {
+      statusListeners.add(cb);
+      return () => {
+        statusListeners.delete(cb);
+      };
+    },
+    toast: (t) => (primaryConfig()?.toasts === false ? null : toastStore.push(t)),
     openPanel: () => setOpen(true),
     closePanel: () => setOpen(false),
     text,
@@ -170,6 +177,7 @@ export function createHostRuntime(): HostRuntime {
     if (!mounted) return;
     mounted.host.setAttribute("data-tinycloud-ui", isPanelOpen ? "open" : buttonHidden ? "hidden" : "closed");
     mounted.panel.setOpen(isPanelOpen);
+    mounted.layer.toggleAttribute("data-panel-open", isPanelOpen);
     mounted.button?.setExpanded(isPanelOpen);
     mounted.button?.setHidden(buttonHidden);
   }
@@ -219,8 +227,11 @@ export function createHostRuntime(): HostRuntime {
     root.append(style, layer);
     (document.body ?? document.documentElement).append(host);
 
-    const stopParts = HOST_PARTS.map((part) => part.start(context, layer));
-    return { host, panel, button, stopParts };
+    const stopParts = [
+      publishHeight(panel.el, layer, "--tinycloud-ui-panel-height"),
+      ...HOST_PARTS.map((part) => part.start(context, layer)),
+    ];
+    return { host, layer, panel, button, stopParts };
   }
 
   function ensureMounted(): void {
@@ -235,7 +246,7 @@ export function createHostRuntime(): HostRuntime {
   }
 
   function unmount(): void {
-    detachRejectionListener();
+    syncRejectionListener();
     if (!mounted) return;
     closeSections();
     for (const stop of mounted.stopParts) stop();
@@ -256,7 +267,7 @@ export function createHostRuntime(): HostRuntime {
     register(id, registration) {
       clients.set(id, { id, registration, signedIn: false, signedInSeq: 0 });
       observeSignIns();
-      attachRejectionListener();
+      syncRejectionListener();
       ensureMounted();
       notifyClientChange();
     },
@@ -267,6 +278,7 @@ export function createHostRuntime(): HostRuntime {
         unmount();
         return;
       }
+      syncRejectionListener();
       notifyClientChange();
     },
 
@@ -297,7 +309,9 @@ export function createHostRuntime(): HostRuntime {
 
     isOpen: () => isPanelOpen,
     toast(request, owner) {
+      if (primaryConfig()?.toasts === false) return false;
       toastStore.push(request, owner);
+      return true;
     },
   };
 }
