@@ -98,14 +98,15 @@ export function serializeShortLinkRecord(record: ShortLinkRecord): Uint8Array {
   return new TextEncoder().encode(JSON.stringify({ id: record.id, deleteToken: record.deleteToken }));
 }
 
-function request(init: RequestInit): RequestInit {
-  // The CLI is not a browser: no cookies, no redirects to another origin, no referrer.
-  return { ...init, credentials: "omit", redirect: "error", referrerPolicy: "no-referrer", signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) };
+function request(init: RequestInit, timeoutMs: number): RequestInit {
+  // The CLI is not a browser: no cookies, no redirects to another origin, no referrer. The timeout covers the
+  // response body too, so a blackholed or stalled service ends in an error, never a hang.
+  return { ...init, credentials: "omit", redirect: "error", referrerPolicy: "no-referrer", signal: AbortSignal.timeout(timeoutMs) };
 }
 
-async function send(fetchFn: typeof fetch, url: string, init: RequestInit): Promise<Response> {
+async function send(fetchFn: typeof fetch, url: string, init: RequestInit, timeoutMs: number): Promise<Response> {
   try {
-    return await fetchFn(url, request(init));
+    return await fetchFn(url, request(init, timeoutMs));
   } catch (error) {
     throw new ShortLinkError("unavailable", "the short-link service could not be reached", { cause: error });
   }
@@ -126,7 +127,7 @@ export interface ShortLinkClient {
 }
 
 /** Client for `${origin}/api/share-links`. It never sends a key, a fragment, or a full link. */
-export function createShortLinkClient(origin: string, fetchFn: typeof fetch = globalThis.fetch): ShortLinkClient {
+export function createShortLinkClient(origin: string, fetchFn: typeof fetch = globalThis.fetch, timeoutMs = REQUEST_TIMEOUT_MS): ShortLinkClient {
   const base = `${origin}/api/share-links`;
   return {
     async create(ciphertext, expiresAt) {
@@ -136,7 +137,7 @@ export function createShortLinkClient(origin: string, fetchFn: typeof fetch = gl
         method: "POST",
         headers: { "content-type": "application/json", accept: "application/json" },
         body: JSON.stringify({ ciphertext: toBase64Url(ciphertext), expiresAt: expiresAt.toISOString() }),
-      });
+      }, timeoutMs);
       if (response.status !== 201) throw statusError(response);
       let value: unknown;
       try { value = await response.json(); } catch { throw new ShortLinkError("invalid-response", "the short-link service returned an unreadable response"); }
@@ -151,7 +152,7 @@ export function createShortLinkClient(origin: string, fetchFn: typeof fetch = gl
     },
     async fetchCiphertext(id) {
       if (!SHORT_LINK_ID_PATTERN.test(id)) throw new ShortLinkError("not-found", "the short link has expired, was revoked, or never existed");
-      const response = await send(fetchFn, `${base}/${id}`, { method: "GET", headers: { accept: "application/octet-stream" } });
+      const response = await send(fetchFn, `${base}/${id}`, { method: "GET", headers: { accept: "application/octet-stream" } }, timeoutMs);
       if (response.status !== 200) throw statusError(response);
       if ((response.headers.get("content-type") ?? "").split(";", 1)[0]!.trim().toLowerCase() !== "application/octet-stream") {
         await response.body?.cancel().catch(() => undefined);
@@ -167,7 +168,7 @@ export function createShortLinkClient(origin: string, fetchFn: typeof fetch = gl
       return bytes;
     },
     async delete(record) {
-      const response = await send(fetchFn, `${base}/${record.id}`, { method: "DELETE", headers: { authorization: `Bearer ${record.deleteToken}` } });
+      const response = await send(fetchFn, `${base}/${record.id}`, { method: "DELETE", headers: { authorization: `Bearer ${record.deleteToken}` } }, timeoutMs);
       if (response.status === 204) return "deleted";
       // Uniform 404: already deleted, expired, or a token that never matched. None is retryable.
       if (response.status === 404) return "absent";
@@ -259,9 +260,11 @@ function isInlineLink(link: string | undefined): link is string {
 export function createShareShortLinks(input: {
   readonly kvForSpace: (spaceId: string) => Promise<IKVService>;
   readonly fetchFn?: typeof fetch;
+  /** Per-request limit for the short-link service, body included. */
+  readonly timeoutMs?: number;
 }): ShareShortLinks {
   const tokens = (spaceId: string): ShortLinkTokenStore => kvShortLinkTokenStore(() => input.kvForSpace(spaceId));
-  const client = (inlineUrl: string): ShortLinkClient => createShortLinkClient(new URL(inlineUrl).origin, input.fetchFn);
+  const client = (inlineUrl: string): ShortLinkClient => createShortLinkClient(new URL(inlineUrl).origin, input.fetchFn, input.timeoutMs);
   return {
     async shorten(published) {
       if (published.link.kind !== "policy" || !isInlineLink(published.url)) throw new ShortLinkError("rejected", "only addressed shares get a short link");

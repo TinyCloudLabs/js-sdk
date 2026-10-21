@@ -201,6 +201,10 @@ export function shareCliError(error: unknown, operation: "publish" | "notify" = 
     if (failure.kind === "registry-unavailable") {
       return new CLIError("UNAVAILABLE", "the TinyCloud location registry could not be reached, so nothing was shared; try again shortly", 4);
     }
+    if (failure.kind === "share-service-unavailable") {
+      const outcome = operation === "publish" ? "nothing was shared" : "no invitation was sent";
+      return new CLIError("SHARE_SERVICE_UNAVAILABLE", `the Share service at ${failure.origin} could not be reached, so ${outcome}; try again shortly`, 4);
+    }
     if (failure.kind === "node-info-unavailable") {
       const outcome = operation === "publish" ? "nothing was shared and no invitation was sent" : "no invitation was sent";
       return new CLIError("UNAVAILABLE", `could not verify TinyCloud node 1.17.3 domain delivery support; ${outcome}. Check the node and retry`, 4);

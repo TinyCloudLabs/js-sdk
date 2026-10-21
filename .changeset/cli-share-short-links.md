@@ -7,6 +7,8 @@
 
 - `--long-link` prints the long self-contained link instead.
 - If the short-link service is unavailable, publishing still succeeds. The CLI prints the long link and warns that it is long, and `--json` adds `shortLinkError`.
+- That includes refused connections, timeouts (10 seconds per request) and broken answers.
+- When the Share host itself can't be reached, publishing stops before anything is shared with `SHARE_SERVICE_UNAVAILABLE` (exit 4), instead of a message blaming the TinyCloud node.
 - `share show <id> --reveal-link` prints the same short link.
 - `share revoke` deletes the stored envelope after the node confirms the revocation. A failed delete only warns; the envelope expires with the share.
 - Sender history and the `--notify` invitation still carry the long link. Bearer links are unchanged.

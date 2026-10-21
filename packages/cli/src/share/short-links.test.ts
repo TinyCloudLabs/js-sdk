@@ -304,4 +304,50 @@ describe("tc share publish with short links", () => {
     expect(output.shortLinkError).toBe("capacity");
     expect(json.stdout).not.toContain(json.published.key);
   });
+
+  test("network-level failures and broken answers fall back too, and a stalled service is cut off", async () => {
+    // Connection refused: what fetch throws when nothing listens.
+    const refused = (async () => { throw new TypeError("fetch failed", { cause: Object.assign(new Error("connect ECONNREFUSED 127.0.0.1:443"), { code: "ECONNREFUSED" }) }); }) as unknown as typeof fetch;
+    // Blackhole: never answers; ends only when the request's own signal aborts.
+    const blackhole = ((_input: string | URL | Request, init?: RequestInit) => new Promise<Response>((_resolve, reject) => {
+      init?.signal?.addEventListener("abort", () => reject(init.signal!.reason), { once: true });
+    })) as unknown as typeof fetch;
+    // Answers 201 headers, then stalls the body forever.
+    const stalledBody = ((_input: string | URL | Request, init?: RequestInit) => Promise.resolve(new Response(new ReadableStream<Uint8Array>({
+      start(controller) { init?.signal?.addEventListener("abort", () => controller.error(init.signal!.reason), { once: true }); },
+    }), { status: 201 }))) as unknown as typeof fetch;
+    const serverError = (async () => new Response("<html>oops</html>", { status: 500 })) as unknown as typeof fetch;
+    const garbage201 = (async () => new Response("not json", { status: 201 })) as unknown as typeof fetch;
+    const cases: Array<[string, typeof fetch, string]> = [
+      ["refused", refused, "unavailable"],
+      ["blackhole", blackhole, "unavailable"],
+      ["stalled body", stalledBody, "invalid-response"],
+      ["HTTP 500", serverError, "unavailable"],
+      ["garbage 201", garbage201, "invalid-response"],
+    ];
+    for (const [label, fetchFn, code] of cases) {
+      const started = Date.now();
+      const result = await publish(["--json"], createShareShortLinks({ kvForSpace: async () => fakeKv().kv, fetchFn, timeoutMs: 50 }));
+      expect({ label, exit: result.exitCode ?? 0 }).toEqual({ label, exit: 0 });
+      expect({ label, shortLinkError: (JSON.parse(result.stdout) as { shortLinkError?: string }).shortLinkError }).toEqual({ label, shortLinkError: code });
+      expect(result.stderr).toContain("printing the long link instead");
+      expect(Date.now() - started).toBeLessThan(5_000);
+    }
+  });
+
+  test("a failing token-store write or revoke delete never fails the command", async () => {
+    const service = fakeService();
+    const human = await publish([], createShareShortLinks({ kvForSpace: async () => { throw new Error("kv unavailable"); }, fetchFn: service.fetchFn }));
+    expect(human.exitCode ?? 0).toBe(0);
+    expect(human.stdout).toBe(`${human.published.url}\n`);
+    // The stored bytes were deleted again, since their delete token could not be kept.
+    expect(service.stored.size).toBe(0);
+    // Revoke: the record exists, but the DELETE cannot connect → "failed", and the token is kept for a retry.
+    const { kv, values } = fakeKv();
+    const published = await publishedShare("share-revoke-net");
+    await createShareShortLinks({ kvForSpace: async () => kv, fetchFn: fakeService().fetchFn }).shorten(published);
+    const offline = createShareShortLinks({ kvForSpace: async () => kv, fetchFn: (async () => { throw new TypeError("fetch failed"); }) as unknown as typeof fetch, timeoutMs: 50 });
+    expect(await offline.discard(recordFor(published))).toBe("failed");
+    expect(values.size).toBe(1);
+  });
 });

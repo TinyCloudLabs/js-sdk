@@ -509,13 +509,21 @@ export function createShareAuthorityAdapters(input: {
   };
   let configPromise: Promise<SharePublicConfig> | undefined;
   const publicConfig = async (): Promise<SharePublicConfig> => configPromise ??= (async () => {
-    const response = await fetchFn(`${origin}/.well-known/tinycloud-share/config.json`, {
-      headers: { accept: "application/json" },
-      credentials: "omit",
-      redirect: "error",
-      referrerPolicy: "no-referrer",
-    });
-    if (!response.ok) throw new Error("share public config is unavailable");
+    // The first request of every publish. Without it nothing can be shared, so a failure here names the Share
+    // service rather than the node, and a blackholed host cannot hang the command.
+    let response: Response;
+    try {
+      response = await fetchFn(`${origin}/.well-known/tinycloud-share/config.json`, {
+        headers: { accept: "application/json" },
+        credentials: "omit",
+        redirect: "error",
+        referrerPolicy: "no-referrer",
+        signal: AbortSignal.timeout(10_000),
+      });
+    } catch (error) {
+      throw new SharePublishAuthorityError({ kind: "share-service-unavailable", origin }, { cause: error });
+    }
+    if (!response.ok) throw new SharePublishAuthorityError({ kind: "share-service-unavailable", origin });
     const value = await response.json() as unknown;
     if (typeof value !== "object" || value === null || Array.isArray(value)) throw new Error("share public config is invalid");
     const object = value as Record<string, unknown>;
