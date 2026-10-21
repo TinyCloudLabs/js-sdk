@@ -15,7 +15,7 @@ import { validateArtifactIdentity, type PairArtifact } from './pairing.js';
 export const INVITE_BLOB_MAX_BYTES = 128 * 1024;
 export const HELLO_MAX_BYTES = 16 * 1024;
 export const WELCOME_MAX_BYTES = 16 * 1024;
-export const PERMISSION_MAX_BYTES = 24 * 1024;
+export const DELEGATION_MAX_BYTES = 16 * 1024;
 
 const INVITE_ID = /^[a-z2-7]{26}$/;
 const CLAIMED_LABEL = /^[A-Za-z0-9 ._@-]{1,64}$/;
@@ -35,6 +35,12 @@ export interface OneTimeKey {
   d: string;
 }
 
+export interface Permissions {
+  put: string;
+  read: string;
+  hooks: string;
+}
+
 export interface InviteBlob {
   v: 1;
   inviteId: string;
@@ -44,7 +50,7 @@ export interface InviteBlob {
   helloKey: string;
   outPrefix: string;
   oneTimeKey: OneTimeKey;
-  permission: string;
+  permissions: Permissions;
   artifactA: PairArtifact;
   expiresAt: string;
 }
@@ -72,7 +78,7 @@ export function inviteFolder(inviteId: string): string {
 
 export function parseInviteBlob(text: string, now: number = Date.now()): InviteBlob {
   const b = parseStrict(text, INVITE_BLOB_MAX_BYTES);
-  exactKeys(b, 'invite', ['v', 'inviteId', 'host', 'spaceId', 'folder', 'helloKey', 'outPrefix', 'oneTimeKey', 'permission', 'artifactA', 'expiresAt']);
+  exactKeys(b, 'invite', ['v', 'inviteId', 'host', 'spaceId', 'folder', 'helloKey', 'outPrefix', 'oneTimeKey', 'permissions', 'artifactA', 'expiresAt']);
   if (b.v !== 1) fail('invite: v must be 1');
   const inviteId = str(b.inviteId, 'inviteId', 26, INVITE_ID);
   const folder = inviteFolder(inviteId);
@@ -93,9 +99,20 @@ export function parseInviteBlob(text: string, now: number = Date.now()): InviteB
     helloKey: `${folder}in/hello.json`,
     outPrefix: `${folder}out/`,
     oneTimeKey: parseOneTimeKey(b.oneTimeKey),
-    permission: str(b.permission, 'permission', PERMISSION_MAX_BYTES),
+    permissions: parsePermissions(b.permissions),
     artifactA,
     expiresAt,
+  };
+}
+
+/** Three serialized delegation strings (put, read, hooks), each at most DELEGATION_MAX_BYTES; exact key set. */
+function parsePermissions(value: unknown): Permissions {
+  const p = asRecord(value, 'permissions');
+  exactKeys(p, 'permissions', ['put', 'read', 'hooks']);
+  return {
+    put: str(p.put, 'permissions.put', DELEGATION_MAX_BYTES),
+    read: str(p.read, 'permissions.read', DELEGATION_MAX_BYTES),
+    hooks: str(p.hooks, 'permissions.hooks', DELEGATION_MAX_BYTES),
   };
 }
 
