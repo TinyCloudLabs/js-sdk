@@ -104,6 +104,7 @@ describe("planDdl", () => {
   it.each([
     ["DROP TABLE", "DROP TABLE meal"],
     ["DROP INDEX", "DROP INDEX meal_note"],
+    ["DROP VIEW", "DROP VIEW meal_count"],
     ["ALTER", "ALTER TABLE meal ADD COLUMN x TEXT"],
     ["DELETE", "DELETE FROM meal"],
   ])("refuses %s before any statement runs", (_label, statement) => {
