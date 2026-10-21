@@ -1,5 +1,19 @@
 # @tinycloud/cli
 
+## 1.3.0-beta.55
+
+### Patch Changes
+
+- ef49c14: The "Manage storage" link in storage-full errors and status now points to https://account.tinycloud.xyz/storage instead of /billing. The `tinycloud account billing` commands still open the billing page.
+
+  Details: TC-848
+
+- Updated dependencies [ef49c14]
+  - @tinycloud/sdk-services@3.3.0-beta.39
+  - @tinycloud/operations@0.7.0-beta.38
+  - @tinycloud/node-sdk@3.3.0-beta.39
+  - @tinycloud/sdk-core@3.3.0-beta.39
+
 ## 1.3.0-beta.54
 
 ### Minor Changes
