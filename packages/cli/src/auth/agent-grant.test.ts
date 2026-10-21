@@ -3,7 +3,6 @@ import { SiweMessage } from "siwe";
 import { NodeWasmBindings, PrivateKeySigner, type PermissionEntry } from "@tinycloud/node-sdk";
 import { openKeyDelegate } from "../test-support/openkey-delegate.js";
 import { requiresAgentApproval, verifyAgentApproval, type AgentApprovalExpectations } from "./agent-grant.js";
-import { APPS_AGENT_SPACE, appsAgentPermissions } from "../lib/apps-agent-preset.js";
 import { parseRequestedExpiry } from "./scoped-login.js";
 
 const wasm = new NodeWasmBindings();
@@ -148,17 +147,11 @@ describe("verifyAgentApproval", () => {
 });
 
 describe("requiresAgentApproval", () => {
-  const presetRead = appsAgentPermissions("read", ["demo"]);
-
-  test("requires approval for an apps-agent preset request from an OpenKey owner", () => {
-    expect(requiresAgentApproval("openkey", presetRead, "7d", APPS_AGENT_SPACE)).toBe(true);
+  test("requires approval for every auth grant from an OpenKey owner", () => {
+    expect(requiresAgentApproval("openkey")).toBe(true);
   });
 
   test("keeps the existing path for a local-key owner", () => {
-    expect(requiresAgentApproval("local", presetRead, "7d", APPS_AGENT_SPACE)).toBe(false);
-  });
-
-  test("keeps the existing path for a request that is not the preset lifetime", () => {
-    expect(requiresAgentApproval("openkey", presetRead, "1d", APPS_AGENT_SPACE)).toBe(false);
+    expect(requiresAgentApproval("local")).toBe(false);
   });
 });

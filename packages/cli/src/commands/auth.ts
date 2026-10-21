@@ -1343,7 +1343,7 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
         const resolvedRequest = { ...parsed, requested };
         const node = await ensureAuthenticated(ctx);
         let grant: Awaited<ReturnType<typeof grantAuthRequest>>;
-        if (requiresAgentApproval(profile.authMethod, requested, parsed.requestedExpiry, applications!.space ?? APPS_AGENT_SPACE)) {
+        if (requiresAgentApproval(profile.authMethod)) {
           // The owner approves each agent request in OpenKey. Existing runtime
           // authority and --yes do not skip that approval.
           const delegation = await acquireAgentGrant({
