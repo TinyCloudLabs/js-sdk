@@ -9,6 +9,7 @@ import { loadProfile, profileDir, writeSecure } from './profile.js';
 import { courierNode, peerHooks, peerKv } from './node.js';
 import type { ParsedArgs } from './args.js';
 import { WATCH_DEFAULTS, Watcher, type WatchOptions } from './watch.js';
+import { InviteWatcher, eventLog } from './invite-watch.js';
 import { UNGUARDED_REFUSAL, createWaker, jsonLineLog, killAllRunners, spawnRunner, type SessionStore, type WakeConfig } from './wake.js';
 import { startsAgentCli } from './guard/policy.js';
 import { guardArgv } from './guard/command.js';
@@ -233,6 +234,8 @@ export async function cmdWatch(args: ParsedArgs): Promise<void> {
 
   const log = jsonLineLog();
   const node = await courierNode(profile);
+  const notify = createNotifier(notifyConfig(args, config), { run: spawnRunner });
+  const invites = new InviteWatcher({ node, profile: () => loadProfile(), log: eventLog(log), notify });
   const watcher = new Watcher({
     notificationHome: config.home,
     notifyOnly: config.adapter === 'none',
@@ -244,8 +247,9 @@ export async function cmdWatch(args: ParsedArgs): Promise<void> {
     kvFor: (peer) => peerKv(node, loadProfile(), peer),
     wake: createWaker(config, { run: spawnRunner, sessions: fileSessions() }),
     postInform: async (peer, threadId, text, pauseId) => { await postPausedInform(node.kv, loadProfile(), peer, threadId, text, pauseId); },
-    notify: createNotifier(notifyConfig(args, config), { run: spawnRunner }),
+    notify,
     holder: { profileId: watcherProfileId() },
+    invites,
     log,
   }, opts);
 
