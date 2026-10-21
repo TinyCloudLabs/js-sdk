@@ -271,6 +271,29 @@ and [Postgres Node size job 117210798348](https://github.com/TinyCloudLabs/js-sd
 independently reported identical root and optional gzip bytes on `e5b080d5`;
 the historical local measurements cannot set ledger ceilings.
 
+## Floating button and panel
+
+`TinyCloudWeb` adds a floating button and a panel to the page. The panel is rendered in a closed shadow root, so host page styles do not reach it. It is not rendered inside an iframe or an opaque origin. In those cases, and with `ui: false`, nothing is added to the page.
+
+```typescript
+const tc = new TinyCloudWeb({
+  ui: {
+    button: true,         // default true; false hides the button only
+    developerMode: false, // default false; shows the developer section
+    position: "bottom-right", // "bottom-right" | "bottom-left" | "bottom-center"
+    appId: "my-app",      // identity for the hide flag when no manifest is set
+  },
+});
+
+tc.ui.open();
+tc.ui.close();
+tc.ui.toggle();
+tc.ui.isOpen;    // boolean
+tc.ui.available; // false in iframes, opaque origins, SSR, or when ui is false
+```
+
+`open()` also clears the user's hidden flag for the button. The hidden flag is stored per origin and app id under `tinycloud:ui:button-hidden:v1:`. The panel shows sections only for capabilities the client exposes.
+
 ## Basic Storage Operations
 
 ### Storing Data
