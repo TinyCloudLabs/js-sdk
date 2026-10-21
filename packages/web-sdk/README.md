@@ -296,7 +296,7 @@ tc.ui.available; // false in iframes, opaque origins, SSR, or when ui is false
 
 ### Storage section and storage-full toast
 
-When the client exposes `storage.status()`, the panel shows a Storage section with the account's usage: "Room left", "Nearly full", "Storage is full", or "No limit", plus a bar and a "Manage storage" link. The link uses the status `manageUrl` only when it is https; otherwise it falls back to `https://account.tinycloud.xyz/storage`. When the storage needs permission, the section offers "Allow storage info", which requests `space/info` authority and re-reads status on approval.
+When the client exposes `storage.status()`, the panel shows a Storage section with the account's usage: "Room left", "Nearly full", "Storage is full", or "No limit", plus a bar and a "Manage storage" link. The link uses the status `manageUrl` only when it is https; otherwise it falls back to `https://account.tinycloud.xyz/storage`. When the storage needs permission, the section shows an "Allow storage info" action. The action calls the internal `requestAuthority("space/info")` hook, which is not wired yet (it lands with B2). Until then the action settles on the unavailable state.
 
 The host also watches the own-storage `storage.full` episode. While the episode is on, the button and panel show "Storage is full", and one warning toast with the manage link is shown per episode, even when the panel is closed. The toast shows again only after the episode ends and a new one starts. The episode ends only on a successful write to that storage, so a status read alone does not end it.
 
