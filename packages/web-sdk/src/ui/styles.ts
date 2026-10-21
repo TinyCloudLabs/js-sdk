@@ -102,4 +102,50 @@ export const HOST_CSS = `
   font: inherit;
   cursor: pointer;
 }
+.row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 44px;
+}
+.label { font-weight: 500; }
+.switch {
+  display: inline-flex;
+  align-items: center;
+  width: 52px;
+  min-width: 44px;
+  height: 44px;
+  min-height: 44px;
+  padding: 0;
+  border: 0;
+  background: none;
+  cursor: pointer;
+}
+.switch:disabled { cursor: default; opacity: 0.6; }
+.knob {
+  position: relative;
+  display: block;
+  width: 40px;
+  height: 24px;
+  border-radius: 12px;
+  background: #9ca3af;
+}
+.knob::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: #ffffff;
+  transition: transform 0.15s ease;
+}
+.switch[aria-checked="true"] .knob { background: #111827; }
+.switch[aria-checked="true"] .knob::after { transform: translateX(16px); }
+.busy, .note, .error { margin: 6px 0 0; font-size: 12px; color: #4b5563; }
+.error { color: #111827; }
+.confirm { margin-top: 8px; }
+.confirm .actions { display: flex; gap: 8px; margin: 8px 0; }
 `;
