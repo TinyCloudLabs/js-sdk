@@ -107,9 +107,9 @@ export function splitStatements(sql: string): string[] {
     .filter((statement) => statement.length > 0);
 }
 
-const TABLE_FORM = /^CREATE TABLE IF NOT EXISTS ([A-Za-z_][A-Za-z0-9_]*) \(/i;
-const INDEX_FORM = /^CREATE INDEX IF NOT EXISTS ([A-Za-z_][A-Za-z0-9_]*) ON [A-Za-z_][A-Za-z0-9_]*\(/i;
-const VIEW_FORM = /^CREATE VIEW IF NOT EXISTS ([A-Za-z_][A-Za-z0-9_]*) AS /i;
+const TABLE_FORM = /^CREATE TABLE IF NOT EXISTS ([A-Za-z_][A-Za-z0-9_]*) \(.*\)$/i;
+const INDEX_FORM = /^CREATE INDEX IF NOT EXISTS ([A-Za-z_][A-Za-z0-9_]*) ON [A-Za-z_][A-Za-z0-9_]*\([A-Za-z_][A-Za-z0-9_, ]*\)$/i;
+const VIEW_FORM = /^CREATE VIEW IF NOT EXISTS ([A-Za-z_][A-Za-z0-9_]*) AS SELECT .+$/i;
 
 export interface DdlPlan {
   readonly tables: readonly string[];

@@ -1,6 +1,7 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import type { PinnedApp } from "./apps-install-pin.js";
-import { SHARE_ORIGIN } from "./apps-install-pin.js";
+import { SHARE_ORIGIN, pinnedApp } from "./apps-install-pin.js";
 import {
   AppsInstallError,
   installApp,
@@ -110,6 +111,36 @@ describe("planDdl", () => {
     ["DELETE", "DELETE FROM meal"],
   ])("refuses %s before any statement runs", (_label, statement) => {
     expect(() => planDdl(`${SCHEMA}${statement};`)).toThrow(AppsInstallError);
+  });
+
+  it.each([
+    ["table with WITHOUT ROWID tail", "CREATE TABLE IF NOT EXISTS t (a INTEGER) WITHOUT ROWID"],
+    ["index with WHERE tail", "CREATE INDEX IF NOT EXISTS i ON meal(note) WHERE note IS NOT NULL"],
+    ["view that is not a SELECT", "CREATE VIEW IF NOT EXISTS v AS WITH x AS (SELECT 1) SELECT * FROM x"],
+  ])("refuses a %s", (_label, statement) => {
+    expect(() => planDdl(`${statement};`)).toThrow(AppsInstallError);
+  });
+
+  it("plans the real pinned healthlog schema.sql, whose bytes match the pinned digest", () => {
+    const bytes = new Uint8Array(readFileSync(new URL("./apps-install.healthlog.schema.sql", import.meta.url)));
+    const pinned = pinnedApp("xyz.tinycloud.sample.healthlog")?.files.find((file) => file.path === "schema.sql");
+    expect(sha256Hex(bytes)).toBe(pinned?.sha256);
+    const plan = planDdl(new TextDecoder().decode(bytes));
+    expect(plan.tables).toEqual(["meal", "weight"]);
+    expect(plan.views).toEqual(["day_card", "week_rollup"]);
+  });
+});
+
+describe("pinned bundle shape", () => {
+  it("pins only schema.sql and knowledge files, with no path escape and index.md last", () => {
+    const app = pinnedApp("xyz.tinycloud.sample.healthlog");
+    const paths = app?.files.map((file) => file.path) ?? [];
+    expect(paths.length).toBeGreaterThan(0);
+    for (const path of paths) {
+      expect(path.includes("..")).toBe(false);
+      expect(path === "schema.sql" || path.startsWith("knowledge/")).toBe(true);
+    }
+    expect(paths[paths.length - 1]).toBe("knowledge/index.md");
   });
 });
 
