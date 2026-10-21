@@ -159,7 +159,7 @@ describe("apps-agent scope notice states the facts of the grant", () => {
 
   test("write for a catalog app names its one database as the only database where the agent can set up tables", () => {
     const notice = appsAgentScopeNotice("write", [CATALOG]);
-    expect(notice).toContain(`set up and repair the tables and views in \`${CATALOG_DB}\``);
+    expect(notice).toContain(`create, change and drop the tables in \`${CATALOG_DB}\`, which the app needs to set itself up.`);
     expect(notice).toContain("That grant names no other database for table changes.");
     expect(notice).not.toContain("does not include permission to create, change or drop tables");
   });

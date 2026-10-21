@@ -192,7 +192,7 @@ export function appsAgentScopeNotice(mode: AppsAgentMode, appIds: readonly strin
       `It cannot change ${appIds.length === 1 ? "the app's" : "the apps'"} code, manifest or install record: files outside those folders are read-only for it.`,
       `SQL write is separate from that: it can add, change and delete ${appIds.length === 1 ? "this app's" : "these apps'"} table rows.`,
       variant.schemaForCatalogApps && schemaPaths.length > 0
-        ? `It can also set up and repair the tables and views in ${schemaPaths.join(", ")}, the database of each named catalog app. That grant names no other database for table changes.`
+        ? `It can also create, change and drop the tables in ${schemaPaths.join(", ")}, which the app needs to set itself up. That grant names no other database for table changes.`
         : "This grant does not include permission to create, change or drop tables (tinycloud.sql/schema). Nodes before 1.21.6 do not enforce that split, so the write grant may still let it do so there.",
       "It cannot touch other apps, other spaces or secrets.",
     );
