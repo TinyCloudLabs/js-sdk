@@ -676,6 +676,71 @@ The service runs the same command line you gave (install flags removed, `claude`
 profile on the same machine. systemd needs `loginctl enable-linger $USER` to
 keep the watcher running while logged out.
 
+## Intake reader
+
+`courier intake` reads the mirror of paired peers' messages from the self-space KV
+and writes one JSON file per message into a queue directory for the intake reader.
+It does not send anything, and it does not change the watcher.
+
+```bash
+courier intake --once --queue-dir <dir> --state-dir <dir> --peers-file <file>
+courier intake --interval 60 --queue-dir <dir> --state-dir <dir> --peers-file <file>
+```
+
+Defaults for `--queue-dir`, `--state-dir` and `--peers-file` are under
+`<COURIER_HOME>/intake/`. Only peers with status `paired` are read. `intake.lock` in the state directory allows one
+intake process per state directory: a live holder always refuses a second start, a lock whose pid is gone is broken,
+and an unreadable lock refuses.
+
+Queue record (`<queue-dir>/<peerId>/<msgId>.json`): peer queue directories are created
+with mode 2750 (setgid) and only directories created by that call are chmodded. Records
+are mode 0640, written atomically without overwriting.
+
+`{v:1, msgId, peerId, threadId, sender:{id, displayName}, receivedAt, text, cheapChecks:{textVerdict, tier, peerRatePerHourRemaining, flags}}`
+
+`peerId` is the peer handle and equals the queue directory name.
+
+`receivedAt` is the local time the record was written. `text` is the message text,
+cut to 16 KiB UTF-8 at a code-point boundary when longer; the `size` flag marks a cut.
+
+Flags, in this order: `too-long`, `link`, `instruction`, `request`, `secret-request`,
+`encoded`, `unicode`, `size`, `rate`. They are cheap heuristics for the reader, not
+a verdict on content.
+
+Ordering: each cycle reads at most 200 mirror messages per peer. A cyclic cursor in `intake-state.json` marks the last
+id picked; the next cycle takes the next 200 ids after it in ascending order and wraps to the oldest id after the
+newest. Ids more than 7 days old by message time are dropped before selection: they are not fetched and get no marker,
+and a queue record that old moves to `done/`. A message is skipped when a queue, done or overflow file for its id
+already exists. A message id more than 10 minutes ahead of local time is not recorded and does not block the others:
+the cursor moves past it, so it is retried only when the cursor next wraps around the mirror. A mirror key whose
+message or thread id is not a ULID is logged as `intake-skip` (`bad-id`) and gets no marker. A message id whose
+time cannot be decoded gets a `bad-id` done marker. A fetched row that is malformed, or whose `messageId` or
+`contextId` does not match its key, gets a `mismatch` done marker. A message whose processing throws is logged
+as `intake-error`, and the cursor still moves past it. Existing history is not queued if you run
+`courier intake --init-from-now` first. It marks the current mirror messages of each paired peer as done (outcome
+`init`), and it refuses to run again while a paired peer has done entries unless `--force` is given. Without it, the
+first cycle works through the backlog from the oldest id inside the 7-day window, 200 rows per cycle.
+
+Rate: each peer is limited to 100 inbound messages per hour by default, including
+peers absent from `peers.json`. Over the cap, the message is not queued. It is written
+to the overflow directory (`<COURIER_HOME>/intake/overflow/<peerId>/`, directories 0700,
+files 0600), where it is kept until its message is 7 days old by message time. Each peer's overflow is capped at 200
+files and 1 MiB; the oldest messages are dropped first. Each cycle retires at most 500 expired files per directory.
+Over-cap retirement runs once per peer per pass: it removes at most 500 files by count, then, once at most 200 files
+remain, removes the oldest of them until the 1 MiB cap holds, so one pass can retire up to 700 files. A cycle runs the
+pass from the janitor and again after it writes new overflow for that peer, so one cycle can retire more than 500
+over-cap files for one peer. Each retirement writes an `overflow` done marker before the unlink, so the id is not admitted
+again when the cursor laps. The first overflow in each hour also writes one `rate-<unixHour>` record to the queue with
+`peerRatePerHourRemaining: 0` and the `rate` flag. After a start, the hour's count is rebuilt from `receivedAt` in
+queue and done records whose files were modified within the last hour.
+
+`peers.json` must not be group- or world-writable and maps a peer id to
+`{"tier": "trusted"|"strict", "ratePerHour": n, "outPerHour": n}`. `tier` defaults to
+`strict` for absent peers. `ratePerHour` and `outPerHour` are integers from 1 up to the
+default of 100. A value outside that range, or any other invalid entry, makes the whole
+file invalid: startup refuses to run, and a running cycle keeps its last good map and
+logs `intake-error`.
+
 ## Authority
 
 Courier accepts only an OpenKey grant whose signed authority exactly equals
