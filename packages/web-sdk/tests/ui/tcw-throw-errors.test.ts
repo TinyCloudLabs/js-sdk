@@ -3,6 +3,8 @@ import { JSDOM } from "jsdom";
 
 import type { TinyCloudWeb as TinyCloudWebType } from "../../src/modules/tcw";
 import { REGISTRY_KEY } from "../../src/ui/host";
+import { toastStore } from "../../src/ui/parts/toasts";
+import type { ToastView } from "../../src/ui/toast-store";
 
 type Config = NonNullable<ConstructorParameters<typeof TinyCloudWebType>[0]>;
 type Loose = Record<PropertyKey, unknown>;
@@ -191,5 +193,35 @@ describe("TinyCloudWeb notifications.throwErrors", () => {
     if (typeof cleanup !== "function") throw new Error("TinyCloudWeb has no cleanup()");
     cleanup.call(tc);
     expect(() => advance(10 * WINDOW_DEBOUNCE_MS)).not.toThrow();
+  });
+});
+
+describe("TinyCloudWeb.signOut clears only its own toasts", () => {
+  function storedToasts(): readonly ToastView[] {
+    let current: readonly ToastView[] = [];
+    toastStore.subscribe((toasts) => {
+      current = toasts;
+    })();
+    return current;
+  }
+
+  async function signOut(tc: Loose): Promise<void> {
+    const fn = tc.signOut;
+    if (typeof fn !== "function") throw new Error("TinyCloudWeb has no signOut()");
+    await fn.call(tc);
+  }
+
+  beforeEach(() => {
+    for (const toast of storedToasts()) toastStore.dismiss(toast.id);
+  });
+
+  test("signing out one client clears its toasts and leaves another client's", async () => {
+    const a = create({});
+    const b = create({});
+    a.handler.success("Signed in");
+    b.handler.error("network.timeout", "raw timeout");
+    expect(storedToasts().map((toast) => toast.kind)).toEqual(["success", "error"]);
+    await signOut(a.tc);
+    expect(storedToasts().map((toast) => toast.kind)).toEqual(["error"]);
   });
 });
