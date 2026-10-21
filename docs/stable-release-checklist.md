@@ -10,7 +10,7 @@ Applies to every stable cut of the SDK and CLI packages. A stable is published b
 
 ## Stable 1.3.0
 
-Cut date: TBD: set from the Artifacts lead's TC-1737 target.
+Cut date: TBD (set when the short-links work lands).
 
 Must land, in addition to the items already on the cut list:
 
