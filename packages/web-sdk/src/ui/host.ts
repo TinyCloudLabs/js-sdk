@@ -3,6 +3,7 @@ import type { PanelClientHandle } from "./client";
 import type { ResolvedUiConfig } from "./config";
 import { createPanel, type PanelView } from "./panel";
 import { HOST_PARTS } from "./parts";
+import { toastStore } from "./parts/toasts";
 import { createButtonHideStore, defaultLocalStorage, resolveUiAppId, type HideScope } from "./persistence";
 import { PANEL_SECTIONS } from "./sections";
 import type { HostContext, StatusCode } from "./slots";
@@ -106,8 +107,7 @@ export function createHostRuntime(): HostRuntime {
     },
     developerMode: () => [...clients.values()].some((entry) => entry.registration.config.developerMode),
     setStatus: (source, status) => board.set(source, status),
-    // Toast rendering arrives with the toasts part (A2). Until then, toasts are dropped.
-    toast: () => "",
+    toast: (t) => toastStore.push(t),
     openPanel: () => setOpen(true),
     closePanel: () => setOpen(false),
     text,
