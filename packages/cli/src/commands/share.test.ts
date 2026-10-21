@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { MemorySenderShareRecordStorage, revokeShare, ShareNotifyError, type PublishedShare, type SenderShareRecord, type ShareTarget } from "@tinycloud/share-sdk";
 import { ProfileLockTimeoutError } from "@tinycloud/operations/state";
-import { configureShareCommandServices, inspectShareInputOnce, registerShareCommand, parseShareTarget, shareCliError } from "./share.js";
+import { configureShareCommandServices, inspectShareInputOnce, registerShareCommand, parseShareTarget, shareCliError, shareHistoryRecoverError } from "./share.js";
 import { ShareHistoryReadError, ShareHistoryRetryError, ShareHistoryUnreadableError, SharePublishAuthorityError } from "../share/errors.js";
 import { safeFilename, writeShareOutput } from "../share/io.js";
 import { runShareCaptured } from "./share.integration-harness.js";
@@ -865,5 +865,22 @@ describe("safe Share output", () => {
       try { safeFilename(name); } catch (error) { caught = error; }
       expect(caught).toMatchObject({ code: "UNSAFE_FILENAME", exitCode: 8, message: "filename contains control or invisible characters" });
     }
+  });
+});
+
+describe("share history recover failures", () => {
+  test("names a filesystem failure on the quarantine step without hinting at the input", () => {
+    for (const code of ["EACCES", "EEXIST", "EPERM", "EROFS", "EXDEV", "ENOTSUP", "ENOSPC", "EIO"]) {
+      const failure = shareHistoryRecoverError(Object.assign(new Error("raw fs text"), { code }));
+      expect(failure).toMatchObject({ code: "SHARE_HISTORY_RECOVER_FAILED", exitCode: 1 });
+      expect(failure.message).toBe(`could not move the unreadable sender history aside (${code})`);
+      expect(failure.metadata?.hint).toBe("The original history file was not deleted. Check write permission on the profile directory, then retry.");
+    }
+  });
+
+  test("leaves other failures to the generic share mapping", () => {
+    const unknown = shareHistoryRecoverError(new Error("Not signed in. Call signIn() first."));
+    expect(unknown).toMatchObject({ code: "INVALID_ARGUMENT", exitCode: 2, message: "share operation failed" });
+    expect(shareHistoryRecoverError(Object.assign(new Error("missing"), { code: "ENOENT" }))).toMatchObject({ code: "INVALID_ARGUMENT", exitCode: 2 });
   });
 });

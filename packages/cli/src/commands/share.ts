@@ -112,6 +112,17 @@ function canonicalMailboxTarget(target: Extract<ShareTarget, { readonly kind: "e
   }
 }
 
+const SHARE_HISTORY_RECOVER_FS_ERRNO: Record<string, true> = { EACCES: true, EEXIST: true, EIO: true, ENOSPC: true, ENOTSUP: true, EPERM: true, EROFS: true, EXDEV: true };
+
+/** @internal Map fs failures from `share history recover`. The original history file is never deleted on these paths. */
+export function shareHistoryRecoverError(error: unknown): CLIError {
+  const code = error instanceof Error ? (error as NodeJS.ErrnoException).code : undefined;
+  if (code !== undefined && SHARE_HISTORY_RECOVER_FS_ERRNO[code] === true) {
+    return new CLIError("SHARE_HISTORY_RECOVER_FAILED", `could not move the unreadable sender history aside (${code})`, 1, { hint: "The original history file was not deleted. Check write permission on the profile directory, then retry." });
+  }
+  return shareCliError(error);
+}
+
 /** @internal Map share failures without echoing remote error text. */
 export function shareCliError(error: unknown, operation: "publish" | "notify" = "publish"): CLIError {
   if (error instanceof CLIError) return error;
@@ -644,7 +655,7 @@ export function registerShareCommand(program: Command): void {
 
   const history = share.command("history").description("Inspect and repair the local sender-share history");
   history.command("recover")
-    .description("Move an unreadable sender-share history file aside. The file is renamed, never deleted, so a new history can start.")
+    .description("Move an unreadable sender-share history file aside under a timestamped name. Nothing is deleted or overwritten, so a new history can start.")
     .option("--json", "Print versioned JSON")
     .action(async (options, command: Command) => {
       try {
@@ -653,6 +664,6 @@ export function registerShareCommand(program: Command): void {
         const quarantined = await quarantineUnreadableProfileHistory(ctx.profile);
         if (json) writeJson({ protocol: "tinycloud-share", version: 1, result: { profile: ctx.profile, quarantined } });
         else process.stdout.write(quarantined === null ? "no unreadable sender history to recover\n" : `moved unreadable sender history to ${quarantined}\n`);
-      } catch (error) { return handleError(shareCliError(error)); }
+      } catch (error) { return handleError(shareHistoryRecoverError(error)); }
     });
 }
