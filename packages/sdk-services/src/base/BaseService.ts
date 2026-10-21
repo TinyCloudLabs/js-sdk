@@ -21,6 +21,7 @@ import {
   ServiceHeaders,
 } from "../types";
 import { authRequiredError, wrapError, RequestTimeoutError } from "../errors";
+import { carryInvocationMeta } from "../telemetry/requestLog";
 import type { RequestSignal } from "./types";
 
 /** setTimeout's delay is a signed 32-bit integer; larger values fire at once. */
@@ -276,13 +277,11 @@ export abstract class BaseService implements IService {
   ): Promise<FetchResponse> {
     const build = (): FetchRequestInit => {
       const signed = mint();
-      return {
-        method: "POST",
-        ...init,
-        headers: Array.isArray(signed)
-          ? [...signed, ...Object.entries(extra ?? {})]
-          : { ...signed, ...extra },
-      };
+      const headers = Array.isArray(signed)
+        ? [...signed, ...Object.entries(extra ?? {})]
+        : { ...signed, ...extra };
+      carryInvocationMeta(signed, headers);
+      return { method: "POST", ...init, headers };
     };
     return this.context.invokeWithRetry
       ? this.context.invokeWithRetry(url, build)

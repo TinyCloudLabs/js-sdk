@@ -4,6 +4,8 @@
  * bodies, tokens, delegations, and error text have no field to land in.
  */
 
+import { TelemetryEvents, type IServiceContext } from "../types";
+
 export type RequestService =
   | "kv"
   | "sql"
@@ -137,6 +139,31 @@ export function byteLengthOf(body: unknown): number | null {
   return null;
 }
 
+/** What the signing path knows about a request; read back by the fetch layer. */
+export interface InvocationMeta {
+  service: string;
+  path: string;
+  action: string;
+  spaceId?: string | null;
+}
+
+const invocationMeta = new WeakMap<object, InvocationMeta>();
+
+/** Called only when a sink is set, so developer-off code never writes here. */
+export function rememberInvocation(headers: object, meta: InvocationMeta): void {
+  invocationMeta.set(headers, meta);
+}
+
+/** Copies metadata onto headers rebuilt from signed headers (per retry attempt). */
+export function carryInvocationMeta(from: object, to: object): void {
+  const meta = invocationMeta.get(from);
+  if (meta !== undefined) invocationMeta.set(to, meta);
+}
+
+export function invocationMetaOf(headers: unknown): InvocationMeta | undefined {
+  return typeof headers === "object" && headers !== null ? invocationMeta.get(headers) : undefined;
+}
+
 export function buildRequestEvent(raw: RawRequest): RequestDraft {
   const service: RequestService =
     raw.service !== undefined && SERVICES[raw.service] === true
@@ -169,6 +196,38 @@ export function buildRequestEvent(raw: RawRequest): RequestDraft {
     code,
     source: raw.source === "replica" ? "replica" : "network",
   };
+}
+
+/**
+ * Maps replica-served KV reads (`replication.read` with `source: "replica"`) to
+ * request events. Network reads and replication writes are not mapped here:
+ * their wire requests are recorded by the fetch layer.
+ */
+export function observeReplicaReads(context: IServiceContext, sink: RequestSink): () => void {
+  return context.on(TelemetryEvents.REPLICATION_READ, (data: unknown) => {
+    try {
+      const read = (typeof data === "object" && data !== null ? data : {}) as Record<string, unknown>;
+      if (read.source !== "replica") return;
+      sink.record(
+        buildRequestEvent({
+          service: "kv",
+          op: `kv/${String(read.op)}`,
+          path: typeof read.key === "string" ? read.key : null,
+          spaceId: typeof read.space === "string" ? read.space : null,
+          url: null,
+          bytes: null,
+          durationMs: typeof read.latencyMs === "number" ? read.latencyMs : 0,
+          attempts: 1,
+          ok: read.outcome !== "error",
+          code: read.outcome === "not_found" ? "KV_NOT_FOUND" : typeof read.code === "string" ? read.code : undefined,
+          source: "replica",
+          at: Date.now(),
+        }),
+      );
+    } catch {
+      // Observability must not affect KV behavior.
+    }
+  });
 }
 
 type Listener<T extends unknown[]> = (...args: T) => void;

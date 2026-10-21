@@ -141,6 +141,10 @@ export type {
 export { ServiceContext } from "./context";
 export type { ServiceContextConfig } from "./context";
 
+// Developer request log
+export { RequestLog, observeReplicaReads } from "./telemetry/requestLog";
+export type { RequestEvent, RequestLogReader, RequestSink, RequestService } from "./telemetry/requestLog";
+
 // Errors
 export {
   authRequiredError,
