@@ -35,6 +35,9 @@ const MAX_PENDING = 32;
 /** Refusal and diagnostic events per fixed window. The rest are counted and reported once when the window rolls over. */
 const LOG_WINDOW_MS = 60 * 1000;
 const LOG_BUDGET = 10;
+/** Requests that reach the outbox lookup per fixed window. Over this, the reply is `refused:busy`, independent of the send quota. */
+const REQUEST_BUDGET = 60;
+const REQUEST_WINDOW_MS = 60 * 1000;
 const DEFAULT_SOCKET_GROUP = 'courier-sender';
 const DENIED_SOCKET_GROUPS = ['tinycloud', 'tinycloud-dev', 'sudo', 'docker'];
 const SERVE_LOCK = 'serve.lock';
@@ -48,7 +51,7 @@ const ITEM_KEYS = ['v', 'itemId', 'to', 'thread', 'subject', 'text', 'approvedSh
 export const REFUSAL_CODES = [
   'bad-request', 'not-found', 'ambiguous-item', 'unsafe-item', 'bad-item', 'not-approved', 'hash-mismatch',
   'unpaired-peer', 'invalid-text', 'rate-limited', 'already-used', 'send-failed', 'dry-run',
-  'root-unsafe', 'busy', 'internal',
+  'root-unsafe', 'busy', 'internal', 'uncertain',
 ] as const;
 export type RefusalCode = (typeof REFUSAL_CODES)[number];
 
@@ -109,10 +112,17 @@ function ownerUid(): number {
   return uid;
 }
 
-/** An error code safe to log: a short identifier, or null. Messages and paths are never logged. */
-function safeCode(error: unknown): string | null {
+/** Error codes that may be logged: OS errno values and this package's own CourierError codes. Anything else logs as `unknown`. */
+const LOGGABLE_CODES = new Set([
+  'EACCES', 'EEXIST', 'EIO', 'EISDIR', 'EMFILE', 'ENOENT', 'ENOSPC', 'ENOTDIR', 'EPERM', 'EPIPE', 'EROFS', 'ECONNRESET',
+  'bad-marker', 'bad-peers', 'socket-group-denied', 'unknown-group', 'unsafe-dir', 'unsafe-pipe', 'unsafe-socket-dir',
+  'unsafe-socket-group', 'unsupported',
+]);
+
+/** An error code safe to log: from the fixed vocabulary above, else `unknown`. Messages and paths are never logged. */
+function safeCode(error: unknown): string {
   const code = errInfo(error).code;
-  return typeof code === 'string' && /^[A-Za-z0-9_-]{1,40}$/.test(code) ? code : null;
+  return typeof code === 'string' && LOGGABLE_CODES.has(code) ? code : 'unknown';
 }
 
 /** Hash over the item without its own approvedSha256 field. Shared by `outbox add` and the sender. */
@@ -207,12 +217,12 @@ function isOutboxItem(value: unknown, itemId: string, peer: string): value is Ou
 
 /**
  * Parses the item bytes. The only accepted representation is the canonical one: `canonicalJson(item)` plus one newline.
- * Whitespace, key order, duplicate keys, a missing final newline, and invalid UTF-8 are all refused as bad-item.
+ * Whitespace, key order, duplicate keys, a missing final newline, invalid UTF-8, and a leading byte-order mark are all refused as bad-item.
  */
 function parseItem(raw: Buffer, itemId: string, peer: string): OutboxItem {
   let value: unknown;
   try {
-    const text = new TextDecoder('utf-8', { fatal: true }).decode(raw);
+    const text = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(raw);
     value = JSON.parse(text);
     if (text !== `${canonicalJson(value)}\n`) throw new Refusal('bad-item');
   } catch {
@@ -270,6 +280,21 @@ function reconcileUncertain(sentDir: string, now: number, log: OutboxLog): numbe
   return pending.length;
 }
 
+/**
+ * The recorded outcome of an item, or undefined when none is recorded. An unreadable result counts as `uncertain`, so the
+ * item is never resent.
+ */
+function recordedState(sentDir: string, itemId: string): string | undefined {
+  const file = path.join(sentDir, `${itemId}.result.json`);
+  if (lstatOrUndefined(file) === undefined) return undefined;
+  try {
+    const state = (JSON.parse(fs.readFileSync(file, 'utf8')) as { state?: unknown }).state;
+    return typeof state === 'string' ? state : 'uncertain';
+  } catch {
+    return 'uncertain';
+  }
+}
+
 /** Group id from /etc/group. Injectable in tests through `OutboxOptions.groups`. */
 export function groupGid(name: string, file = '/etc/group'): number {
   for (const line of fs.readFileSync(file, 'utf8').split('\n')) {
@@ -310,23 +335,48 @@ function nodeSender(): (profile: Profile, peerHandle: string, input: SendInput) 
 }
 
 /**
- * Starts the sender pipe. One request frame per connection (`{"v":1,"itemId":"<ulid>"}` then a newline, or end of stream);
- * the reply is one line, `ok` or `refused:<code>`. Requests are served one at a time. A connection that sends nothing for
- * PIPE_TIMEOUT_MS is dropped without a reply.
+ * Wraps the sender log in a fixed-window budget of LOG_BUDGET events per LOG_WINDOW_MS. Events over it are counted, and the
+ * count is logged once when the window rolls over. Every sender diagnostic goes through this wrapper.
+ */
+function budgetedLog(log: OutboxLog, now: () => number): OutboxLog {
+  const budget = { start: 0, used: 0, suppressed: 0 };
+  return (event, fields = {}) => {
+    const t = now();
+    if (t < budget.start || t - budget.start >= LOG_WINDOW_MS) {
+      if (budget.suppressed > 0) log('outbox.log-suppressed', { count: budget.suppressed });
+      budget.start = t;
+      budget.used = 0;
+      budget.suppressed = 0;
+    }
+    if (budget.used < LOG_BUDGET) {
+      budget.used++;
+      log(event, fields);
+    } else {
+      budget.suppressed++;
+    }
+  };
+}
+
+/**
+ * Starts the sender pipe. One request per connection: `{"v":1,"itemId":"<ulid>"}` then a newline, or the frame then end of
+ * stream. The reply is one line, `ok` or `refused:<code>`. Bytes after the frame's newline that arrive before the request is
+ * served refuse it as `bad-request`, and nothing is sent. A connection that has sent bytes but no complete frame within
+ * PIPE_TIMEOUT_MS gets `refused:bad-request`. One that sent nothing is dropped without a reply. Requests are served one at a time.
  */
 export async function startOutbox(opts: OutboxOptions): Promise<OutboxHandle> {
   const log: OutboxLog = opts.log ?? jsonLineLog();
   const now = opts.now ?? Date.now;
+  const limited = budgetedLog(log, now);
   const loadNow = opts.loadProfile ?? loadProfile;
   const send = opts.send ?? nodeSender();
   const gidOf = opts.groups ?? groupGid;
   const dryRun = opts.dryRun ?? false;
   const once = opts.once ?? false;
 
-  ensureRealDir(opts.sentDir, 0o700);
+  if (ensureRealDir(opts.sentDir, 0o700)) fsyncDir(path.dirname(opts.sentDir));
   const releaseLock = acquireLock(path.join(opts.sentDir, SERVE_LOCK));
-  const uncertain = reconcileUncertain(opts.sentDir, Date.now(), log);
-  if (uncertain > 0) log('outbox.uncertain', { count: uncertain });
+  const uncertain = reconcileUncertain(opts.sentDir, Date.now(), limited);
+  if (uncertain > 0) limited('outbox.uncertain', { count: uncertain });
   const server = net.createServer({ allowHalfOpen: true }, accept);
   try {
     const gid = checkSocketDir(path.dirname(opts.pipe), opts.socketGroup, gidOf);
@@ -351,7 +401,7 @@ export async function startOutbox(opts: OutboxOptions): Promise<OutboxHandle> {
     releaseLock();
     throw error;
   }
-  log('outbox.listening', { once, dryRun });
+  limited('outbox.listening', { once, dryRun });
 
   let chain: Promise<void> = Promise.resolve();
   let pending = 0;
@@ -374,27 +424,28 @@ export async function startOutbox(opts: OutboxOptions): Promise<OutboxHandle> {
     return closing;
   };
 
-  const budget = { start: 0, used: 0, suppressed: 0 };
-  /** Budgeted diagnostic: at most LOG_BUDGET events per window. Sender logs never carry ids, paths, or text. */
-  function limited(event: string, fields: Record<string, unknown>): void {
+  const requests = { start: 0, count: 0 };
+  /** Fixed-window budget on requests that reach the outbox lookup. Over REQUEST_BUDGET per window, the reply is refused. */
+  function admitRequest(): boolean {
     const t = now();
-    if (t < budget.start || t - budget.start >= LOG_WINDOW_MS) {
-      if (budget.suppressed > 0) log('outbox.log-suppressed', { count: budget.suppressed });
-      budget.start = t;
-      budget.used = 0;
-      budget.suppressed = 0;
+    if (t < requests.start || t - requests.start >= REQUEST_WINDOW_MS) {
+      requests.start = t;
+      requests.count = 0;
     }
-    if (budget.used < LOG_BUDGET) {
-      budget.used++;
-      log(event, fields);
-    } else {
-      budget.suppressed++;
-    }
+    if (requests.count >= REQUEST_BUDGET) return false;
+    requests.count++;
+    return true;
   }
 
-  let peersNow: Peers = Object.create(null) as Peers;
+  /**
+   * Outbound cap while no peers.json has loaded in this process. The validator only accepts caps of at least 1, so a
+   * restart with an invalid file can never raise an established cap.
+   */
+  const UNLOADED_OUT_PER_HOUR = 1;
+  /** Policy from the last peers.json that loaded in this process. Undefined until one has. */
+  let peersNow: Peers | undefined;
   /** Loads peers.json for this send. An invalid file keeps the last good policy; the peer id is never logged. */
-  function currentPeers(): Peers {
+  function currentPeers(): Peers | undefined {
     try {
       peersNow = loadPeers(opts.peersFile);
     } catch (error) {
@@ -405,6 +456,7 @@ export async function startOutbox(opts: OutboxOptions): Promise<OutboxHandle> {
 
   async function processRequest(frame: Buffer): Promise<void> {
     const itemId = parseRequest(frame);
+    if (!admitRequest()) throw new Refusal('busy');
     if (lstatOrUndefined(opts.outboxRoot)?.isDirectory() !== true) throw new Refusal('root-unsafe');
     const found = findItem(opts.outboxRoot, itemId);
     // One read: the bytes checked, hashed, and sent are the same buffer.
@@ -421,7 +473,9 @@ export async function startOutbox(opts: OutboxOptions): Promise<OutboxHandle> {
     const peer = Object.hasOwn(profile.peers, item.to) ? profile.peers[item.to] : undefined;
     if (peer?.status !== 'paired') throw new Refusal('unpaired-peer');
     if (!textOk(item.text, item.subject)) throw new Refusal('invalid-text');
-    checkRate(opts.sentDir, item.to, policyOf(peers, item.to).outPerHour, now());
+    if (recordedState(opts.sentDir, item.itemId) === 'uncertain') throw new Refusal('uncertain');
+    const outPerHour = peers === undefined ? UNLOADED_OUT_PER_HOUR : policyOf(peers, item.to).outPerHour;
+    checkRate(opts.sentDir, item.to, outPerHour, now());
     if (dryRun) throw new Refusal('dry-run');
 
     const marker = `${JSON.stringify({ v: 1, peer: item.to, at: new Date(now()).toISOString() })}\n`;
@@ -442,11 +496,11 @@ export async function startOutbox(opts: OutboxOptions): Promise<OutboxHandle> {
     try {
       sent = await send(profile, item.to, input);
     } catch (error) {
-      recordResult(opts.sentDir, item.itemId, 'failed', undefined, now(), log);
-      log('outbox.send-failed', { code: safeCode(error) });
+      recordResult(opts.sentDir, item.itemId, 'failed', undefined, now(), limited);
+      limited('outbox.send-failed', { code: safeCode(error) });
       throw new Refusal('send-failed');
     }
-    recordResult(opts.sentDir, item.itemId, 'sent', sent.messageId, now(), log);
+    recordResult(opts.sentDir, item.itemId, 'sent', sent.messageId, now(), limited);
   }
 
   function refusal(code: RefusalCode): string {
@@ -460,17 +514,23 @@ export async function startOutbox(opts: OutboxOptions): Promise<OutboxHandle> {
       return 'ok';
     } catch (error) {
       if (error instanceof Refusal) return refusal(error.code);
-      log('outbox.internal', { code: safeCode(error) });
+      limited('outbox.internal', { code: safeCode(error) });
       return 'refused:internal';
     }
   }
 
   function respond(socket: net.Socket, reply: string): void {
-    if (!socket.destroyed) socket.end(`${reply}\n`);
+    if (socket.destroyed) return;
+    socket.end(`${reply}\n`);
+    // The client closes after the reply. A connection that stays open is dropped after the idle timeout.
+    socket.setTimeout(PIPE_TIMEOUT_MS, () => socket.destroy());
   }
 
-  /** Queues a frame behind the request in progress. A malformed frame is refused at once and never queued. */
-  function enqueue(socket: net.Socket, frame: Buffer | undefined): void {
+  /**
+   * Queues a request behind the one in progress. A malformed frame is refused at once and never queued. A queued request is
+   * refused, not served, if any byte arrived on its connection after the frame.
+   */
+  function enqueue(socket: net.Socket, frame: Buffer | undefined, sawExtraBytes: () => boolean): void {
     if (frame === undefined) {
       respond(socket, refusal('bad-request'));
       return;
@@ -482,7 +542,7 @@ export async function startOutbox(opts: OutboxOptions): Promise<OutboxHandle> {
     pending++;
     chain = chain.then(async () => {
       pending--;
-      respond(socket, await serveRequest(frame));
+      respond(socket, sawExtraBytes() ? refusal('bad-request') : await serveRequest(frame));
     });
   }
 
@@ -492,7 +552,6 @@ export async function startOutbox(opts: OutboxOptions): Promise<OutboxHandle> {
       return;
     }
     open++;
-    socket.setTimeout(PIPE_TIMEOUT_MS, () => socket.destroy());
     socket.on('error', (error) => limited('outbox.socket-error', { code: safeCode(error) }));
     socket.on('close', () => {
       open--;
@@ -500,25 +559,36 @@ export async function startOutbox(opts: OutboxOptions): Promise<OutboxHandle> {
     });
     let received = Buffer.alloc(0);
     let decided = false;
+    let extraBytes = false;
     const decide = (frame: Buffer | undefined): void => {
-      if (decided) return;
       decided = true;
-      socket.off('data', onData);
-      socket.off('end', onEnd);
-      enqueue(socket, frame);
+      enqueue(socket, frame, () => extraBytes);
     };
-    // Bytes that follow the first newline, in any chunk, make the frame invalid: one request per connection.
+    socket.setTimeout(PIPE_TIMEOUT_MS, () => {
+      if (!decided && received.length > 0) decide(undefined);
+      else socket.destroy();
+    });
+    // The frame is decided at its first newline or at end of stream. Bytes after the decision never change the frame; they
+    // mark the connection, and a request still queued when they arrive is refused without a send.
     const onData = (chunk: Buffer): void => {
-      received = Buffer.concat([received, chunk]);
-      const newline = received.indexOf(0x0a);
-      if (newline === -1) {
-        if (received.length > MAX_REQUEST_BYTES) decide(undefined);
+      if (decided) {
+        extraBytes = true;
         return;
       }
+      if (received.length + chunk.length > MAX_REQUEST_BYTES + 1) {
+        decide(undefined);
+        return;
+      }
+      received = Buffer.concat([received, chunk]);
+      const newline = received.indexOf(0x0a);
+      if (newline === -1) return;
       decide(newline === received.length - 1 ? received.subarray(0, newline) : undefined);
     };
-    // A complete frame may end at end of stream without a newline; anything else fails REQUEST_RE.
-    const onEnd = (): void => decide(received);
+    const onEnd = (): void => {
+      if (decided) return;
+      if (received.length === 0) socket.destroy();
+      else decide(received);
+    };
     socket.on('data', onData);
     socket.on('end', onEnd);
   }
@@ -605,7 +675,7 @@ export function publishItem(dir: string, itemId: string, body: string): boolean 
 /** Approval ledger directory under the outbox root (0700). */
 function ensureLedgerDir(root: string): string {
   const dir = path.join(root, APPROVED_DIR);
-  ensureRealDir(dir, 0o700);
+  if (ensureRealDir(dir, 0o700)) fsyncDir(root);
   return dir;
 }
 

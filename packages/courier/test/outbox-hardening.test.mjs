@@ -255,7 +255,7 @@ test('a reservation left without a result is reported uncertain at startup and n
     { mode: 0o600 },
   );
   await withSender(env, async () => {
-    assert.equal(await request(env.pipe, requestFor(itemId)), 'refused:already-used\n');
+    assert.equal(await request(env.pipe, requestFor(itemId)), 'refused:uncertain\n');
   });
   assert.equal(env.calls.length, 0);
   assert.ok(env.logs.some((entry) => entry.event === 'outbox.uncertain' && entry.fields.count === 1), JSON.stringify(env.logs));
