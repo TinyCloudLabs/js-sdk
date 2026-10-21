@@ -98,6 +98,7 @@
     "share-receiver-non-extractable-key",
     "share-space-not-ready",
     "sign-out-ends-session",
+    "storage-manage-link-storage-page",
     "tc-1312-writable-handles",
     "tc-1413-node-retry-errors",
     "tc-1423-pershare-networks",
