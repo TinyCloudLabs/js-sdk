@@ -592,9 +592,17 @@ export interface IntakeLoopDeps {
   loadProfile: typeof loadProfile;
   courierNode: typeof courierNode;
   reloadPeers: typeof reloadPeers;
+  intakeCycle: typeof intakeCycle;
+  sleep: (ms: number) => Promise<void>;
 }
 
-const defaultLoopDeps: IntakeLoopDeps = { loadProfile, courierNode, reloadPeers };
+const defaultLoopDeps: IntakeLoopDeps = {
+  loadProfile,
+  courierNode,
+  reloadPeers,
+  intakeCycle,
+  sleep: (ms) => new Promise<void>((resolve) => setTimeout(resolve, ms)),
+};
 
 export async function cmdIntake(args: ParsedArgs, deps: IntakeLoopDeps = defaultLoopDeps): Promise<void> {
   const base = path.join(profileDir(), 'intake');
@@ -628,7 +636,7 @@ export async function cmdIntake(args: ParsedArgs, deps: IntakeLoopDeps = default
         const profile = deps.loadProfile();
         const node = await deps.courierNode(profile);
         peers = deps.reloadPeers(peersFile, peersOwner, peers, log);
-        const queued = await intakeCycle({
+        const queued = await deps.intakeCycle({
           kv: node.kv,
           profile,
           peers,
@@ -646,9 +654,7 @@ export async function cmdIntake(args: ParsedArgs, deps: IntakeLoopDeps = default
         if (once) throw error;
       }
       if (once) return;
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, intervalMs);
-      });
+      await deps.sleep(intervalMs);
     }
   } finally {
     release();

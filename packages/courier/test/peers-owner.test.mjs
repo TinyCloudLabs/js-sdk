@@ -1,8 +1,10 @@
 import { mock, test } from 'node:test';
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { loadPeers, resolvePeersOwner, tierOf } from '../dist/intake/peers.js';
 import { cmdIntake, reloadPeers } from '../dist/intake/intake.js';
 import { cmdOutbox } from '../dist/outbox.js';
@@ -318,6 +320,7 @@ test('intake refresh passes the peers owner to the reload and keeps the last goo
         seen.out = reloadPeers(file, owner, last, (event, fields) => seen.events.push({ event, ...fields }));
         return seen.out;
       },
+      intakeCycle: async () => 0,
     });
     assert.equal(seen.owner, UID + 1);
     assert.equal(seen.out, seen.last);
@@ -325,6 +328,111 @@ test('intake refresh passes the peers owner to the reload and keeps the last goo
   } finally {
     if (home === undefined) delete process.env.COURIER_HOME;
     else process.env.COURIER_HOME = home;
+    s.cleanup();
+  }
+});
+
+test('the intake loop applies a changed peers file from the next iteration', { timeout: 10000 }, async () => {
+  const s = scratch();
+  const peersPath = path.join(s.dir, 'peers.json');
+  fs.writeFileSync(peersPath, JSON.stringify({ alice: { tier: 'trusted' } }), { mode: 0o600 });
+  fs.chmodSync(peersPath, 0o600);
+  const home = process.env.COURIER_HOME;
+  process.env.COURIER_HOME = s.dir;
+  const tiers = [];
+  const stop = new Error('stop after two iterations');
+  let sleeps = 0;
+  try {
+    await assert.rejects(
+      cmdIntake(parseArgs([
+        '--queue-dir', path.join(s.dir, 'queue'),
+        '--done-dir', path.join(s.dir, 'done'),
+        '--overflow-dir', path.join(s.dir, 'overflow'),
+        '--state-dir', path.join(s.dir, 'state'),
+        '--peers-file', peersPath,
+        '--peers-owner', String(UID),
+      ]), {
+        loadProfile: () => ({ peers: {} }),
+        courierNode: async () => ({ kv: {} }),
+        reloadPeers,
+        intakeCycle: async (input) => {
+          tiers.push(tierOf(input.peers, 'alice'));
+          return 0;
+        },
+        sleep: async () => {
+          sleeps += 1;
+          if (sleeps === 2) throw stop;
+          // Lower alice from trusted to strict between iterations. The second cycle must see strict.
+          fs.writeFileSync(peersPath, JSON.stringify({ alice: { tier: 'strict' } }), { mode: 0o600 });
+          fs.chmodSync(peersPath, 0o600);
+        },
+      }),
+      (error) => error === stop,
+    );
+    assert.deepEqual(tiers, ['trusted', 'strict']);
+  } finally {
+    if (home === undefined) delete process.env.COURIER_HOME;
+    else process.env.COURIER_HOME = home;
+    s.cleanup();
+  }
+});
+
+test('COURIER_PEERS_OWNER alone sets the intake owner, and --peers-owner beats it', { timeout: 10000 }, async () => {
+  const s = scratch();
+  const peers = peersFile();
+  const home = process.env.COURIER_HOME;
+  const envOwner = process.env.COURIER_PEERS_OWNER;
+  process.env.COURIER_HOME = s.dir;
+  const stubs = {
+    loadProfile: () => ({ peers: {} }),
+    courierNode: async () => ({ kv: {} }),
+    reloadPeers,
+    intakeCycle: async () => 0,
+    sleep: async () => {},
+  };
+  const run = (extra) => cmdIntake(parseArgs([
+    '--queue-dir', path.join(s.dir, 'queue'),
+    '--done-dir', path.join(s.dir, 'done'),
+    '--overflow-dir', path.join(s.dir, 'overflow'),
+    '--state-dir', path.join(s.dir, 'state'),
+    '--peers-file', peers.file,
+    ...extra,
+    '--once',
+  ]), stubs);
+  try {
+    process.env.COURIER_PEERS_OWNER = String(UID + 1);
+    await assert.rejects(run([]), insecure);
+    await run(['--peers-owner', String(UID)]);
+  } finally {
+    if (home === undefined) delete process.env.COURIER_HOME;
+    else process.env.COURIER_HOME = home;
+    if (envOwner === undefined) delete process.env.COURIER_PEERS_OWNER;
+    else process.env.COURIER_PEERS_OWNER = envOwner;
+    peers.cleanup();
+    s.cleanup();
+  }
+});
+
+test('COURIER_PEERS_OWNER alone sets the outbox serve owner, and --peers-owner beats it', { timeout: 20000 }, () => {
+  const s = scratch();
+  const cli = fileURLToPath(new URL('../dist/cli.js', import.meta.url));
+  const env = { ...process.env, COURIER_HOME: s.dir, COURIER_PEERS_OWNER: 'no-such-user-tc712' };
+  const serve = (extra) => spawnSync(process.execPath, [
+    cli, 'outbox', 'serve',
+    '--outbox-dir', path.join(s.dir, 'outbox'),
+    '--pipe', path.join(s.dir, 'outbox.sock'),
+    ...extra,
+  ], { env, encoding: 'utf8', timeout: 3000 });
+  try {
+    // No flag: the env name is refused as usage before any socket opens.
+    const refused = serve([]);
+    assert.equal(refused.signal, null);
+    assert.notEqual(refused.status, 0);
+    assert.match(refused.stderr, /no account named "no-such-user-tc712"/);
+    // With the flag: the env name is ignored, so the owner resolves to the running user and the env name is never refused.
+    const flagged = serve(['--peers-owner', String(UID)]);
+    assert.doesNotMatch(flagged.stderr, /no account named/);
+  } finally {
     s.cleanup();
   }
 });
