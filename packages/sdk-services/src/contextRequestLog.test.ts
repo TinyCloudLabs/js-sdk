@@ -159,11 +159,13 @@ test("a digit Content-Length is the response byte count, including an explicit 0
 
 test("a stream body without a known length is recorded as unknown bytes and is not consumed", async () => {
   const log = new RequestLog();
-  const body = new ReadableStream();
+  const stream = new ReadableStream();
+  // The runtime accepts a stream body; the init type is narrower, so the cast stays local to this test.
+  const body = stream as unknown as string;
   const context = contextWith(log, async () => reply(200, "ok"));
   await context.fetch("https://node.example/kv", { method: "POST", body });
   expect(log.snapshot()[0]!.bytes).toBeNull();
-  expect(body.locked).toBe(false);
+  expect(stream.locked).toBe(false);
 });
 
 test("attempts counts every HTTP attempt in a retry loop", async () => {
