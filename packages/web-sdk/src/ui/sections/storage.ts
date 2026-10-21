@@ -12,7 +12,7 @@ import {
 } from "../storage-state";
 
 /**
- * Only the bar needs CSS of its own. Text uses the panel's `busy`, `note` and `action` classes.
+ * Only the bar and the manage link need CSS of their own. Text uses the panel's `busy`, `note` and `action` classes.
  * Track is the light control border `#6b7280` from styles.ts (`.button`, `.action`): 4.83:1 on white (WCAG 1.4.11).
  * Dark keeps the light track, which measures 14.73:1 on the dark panel.
  */
@@ -20,6 +20,8 @@ const STYLE = `
 .storage-bar{height:6px;margin:6px 0 8px;border-radius:3px;background:#6b7280;overflow:hidden}
 .storage-bar>span{display:block;height:100%;background:#111827}
 @media (prefers-color-scheme: dark){.storage-bar{background:#e5e7eb}}
+/* The action class sets min-height:44px, which an inline a ignores. */
+a.storage-manage{display:inline-flex;align-items:center;justify-content:center;box-sizing:border-box}
 `;
 
 const UNITS = ["byte", "kilobyte", "megabyte", "gigabyte", "terabyte"] as const;
@@ -100,7 +102,7 @@ export const storageSection: PanelSection = {
     action.type = "button";
     action.className = "action";
     const manage = document.createElement("a");
-    manage.className = "action";
+    manage.className = "action storage-manage";
     manage.target = "_blank";
     manage.rel = "noopener noreferrer";
     manage.textContent = ctx.text("storage.manage");

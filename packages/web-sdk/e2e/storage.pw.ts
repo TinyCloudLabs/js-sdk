@@ -250,6 +250,23 @@ for (const scheme of SCHEMES) {
   }
 }
 
+for (const scheme of SCHEMES) {
+  for (const [viewportName, viewport] of Object.entries(VIEWPORTS)) {
+    test(`${scheme} ${viewportName}: Manage storage is at least 44px tall`, async ({ page }) => {
+      await page.setViewportSize(viewport);
+      await mountHarness(page, scheme, KNOWN);
+      await openPanel(page);
+      await expect(usageLine(page)).toBeVisible();
+
+      const manage = section(page).getByRole("link", { name: STRINGS["storage.manage"], exact: true });
+      await expect(manage).toBeVisible();
+      const box = await manage.boundingBox();
+      if (!box) throw new Error("Manage storage has no layout box");
+      expect(box.height, `Manage storage is ${box.height}px tall`).toBeGreaterThanOrEqual(44);
+    });
+  }
+}
+
 interface ContrastRow {
   label: string;
   ratio: number;
