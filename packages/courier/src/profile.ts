@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { cmd } from './program.js';
@@ -57,7 +58,7 @@ export interface Profile {
 }
 
 export function profileDir(): string {
-  return process.env.COURIER_HOME || path.join(process.env.HOME ?? '.', '.courier');
+  return process.env.COURIER_HOME || path.join(os.homedir(), '.courier');
 }
 
 function profilePath(name: string, home = profileDir()): string {
@@ -68,9 +69,27 @@ export function profileExists(): boolean {
   return fs.existsSync(profilePath('profile.json'));
 }
 
+/**
+ * Creates `dir` and any missing ancestors, each at 0700 regardless of the process umask.
+ * `mkdir -p` with a mode is umask-masked, so a 0277 umask leaves a 0500 parent and the
+ * next child create fails with EACCES. Chmod after create, parent first.
+ */
+export function mkdirOwnerOnly(dir: string): void {
+  if (fs.existsSync(dir)) return;
+  const parent = path.dirname(dir);
+  if (parent !== dir) mkdirOwnerOnly(parent);
+  try {
+    fs.mkdirSync(dir, { mode: 0o700 });
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code !== 'EEXIST') throw e;
+    return;
+  }
+  fs.chmodSync(dir, 0o700);
+}
+
 function ensureSecureDir(): void {
   const dir = profileDir();
-  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  mkdirOwnerOnly(dir);
   fs.chmodSync(dir, 0o700);
 }
 

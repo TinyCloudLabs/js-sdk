@@ -23,9 +23,9 @@ import {
   type StoredCredentialRecord,
   type VerifiedCredential,
 } from '@tinycloud/sdk-core';
-import { EMAIL_PROOF_CREDENTIAL_TYPE, EMAIL_PROOF_PROFILE, type EmailProofPending } from '@tinycloud/web-sdk/credentials';
+import { EMAIL_PROOF_CREDENTIAL_TYPE, EMAIL_PROOF_PENDING_MAX_MS, EMAIL_PROOF_PROFILE, type EmailProofPending } from '@tinycloud/web-sdk/credentials';
 import { CourierError } from './errors.js';
-import { profileDir } from './profile.js';
+import { mkdirOwnerOnly, profileDir } from './profile.js';
 
 /**
  * Credentials held by Courier, keyed by holder DID and requirement digest.
@@ -63,6 +63,8 @@ function credentialFile(home: string, holderDid: string, requirementDigest: stri
 
 /** Pending files are named by a hash of the request id, so mailbox addresses never appear in file names. */
 const PENDING_FILE_PATTERN = /^pending-[0-9a-f]{64}\.json$/;
+/** Temp files from `writeOwnerOnly`: `<pending file>.<pid>.<12 hex>.tmp`. */
+const PENDING_TEMP_PATTERN = /^pending-[0-9a-f]{64}\.json\.\d+\.[0-9a-f]{12}\.tmp$/;
 
 function pendingFile(home: string, requestId: string): string {
   return path.join(credentialsDir(home), `pending-${sha256Hex(requestId)}.json`);
@@ -94,7 +96,7 @@ function assertOwnedByCurrentUser(st: fs.Stats, label: string): void {
 /** Creates the store directory 0700 if absent. Refuses a symlink or a directory owned by another user. */
 function ensureSecureDir(home: string): void {
   const dir = credentialsDir(home);
-  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  mkdirOwnerOnly(dir);
   const st = fs.lstatSync(dir);
   if (!st.isDirectory()) throw new CourierError('credential-permissions', `${dir} must be a real directory, not a symlink or file.`);
   assertOwnedByCurrentUser(st, dir);
@@ -155,6 +157,7 @@ function readOwnerOnly<T>(home: string, file: string): T | undefined {
     if (!opened.isFile() || opened.dev !== before.dev || opened.ino !== before.ino) {
       throw new CourierError('credential-permissions', `${label} changed while it was being opened.`);
     }
+    if (opened.nlink !== 1) throw new CourierError('credential-permissions', `${label} has multiple hard links; refusing to read it.`);
     assertOwnerOnly(opened, label, '0600');
     text = fs.readFileSync(fd, 'utf8');
   } finally {
@@ -191,8 +194,12 @@ function loadPendingEntries(home: string, now: Date): PendingEntry[] {
   const dir = credentialsDir(home);
   const entries: PendingEntry[] = [];
   for (const name of fs.readdirSync(dir)) {
-    if (!PENDING_FILE_PATTERN.test(name)) continue;
     const file = path.join(dir, name);
+    if (PENDING_TEMP_PATTERN.test(name)) {
+      sweepAbandonedTemp(file, now);
+      continue;
+    }
+    if (!PENDING_FILE_PATTERN.test(name)) continue;
     const pending = readOwnerOnly<EmailProofPending>(home, file);
     if (!pending) continue;
     if (
@@ -202,6 +209,7 @@ function loadPendingEntries(home: string, now: Date): PendingEntry[] {
       typeof pending.requestId !== 'string' ||
       typeof pending.expiresAt !== 'string' ||
       Number.isNaN(Date.parse(pending.expiresAt)) ||
+      Date.parse(pending.expiresAt) > now.getTime() + EMAIL_PROOF_PENDING_MAX_MS ||
       pendingFile(home, pending.requestId) !== file
     ) {
       removeFile(file);
@@ -212,6 +220,12 @@ function loadPendingEntries(home: string, now: Date): PendingEntry[] {
     entries.push({ file, pending, expired });
   }
   return entries;
+}
+
+/** A temp file older than the pending window was left by a killed writer. It holds a verifier, so it is deleted. */
+function sweepAbandonedTemp(file: string, now: Date): void {
+  const st = lstatOrUndefined(file);
+  if (st && now.getTime() - st.mtimeMs > EMAIL_PROOF_PENDING_MAX_MS) removeFile(file);
 }
 
 /**

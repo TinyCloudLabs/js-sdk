@@ -8,6 +8,7 @@ import { cmdCredential } from '../dist/credential.js';
 import { savePendingEmailProof } from '../dist/credential-source.js';
 import { emailCredentialRequirement } from '../dist/credential-source.js';
 import { EmailProofError } from '@tinycloud/web-sdk/credentials';
+import { generateHolderKey, makeWitness } from './support/witness-stub.mjs';
 
 const WITNESS = 'https://witness.credentials.org';
 const ADDRESS = 'qa.owner@example.test';
@@ -111,30 +112,21 @@ test('holder.sign is raw Ed25519 over exactly the given bytes: a 32-byte digest 
   }
 });
 
-test('acquire step 1 maps witness RATE_LIMITED to stable code and whole-minute wait, and stores nothing', async () => {
+test('acquire step 1 maps witness RATE_LIMITED to a stable code and stores nothing', async () => {
   const home = freshHome();
-  const cases = [
-    [150_000, 'Try again in 3 minutes.'],
-    [60_000, 'Try again in 1 minute.'],
-    [1, 'Try again in 1 minute.'],
-  ];
-  for (const [retryAfterMs, phrase] of cases) {
-    await assert.rejects(
-      run(['acquire', '--email', ADDRESS], {
-        home,
-        now: () => NOW,
-        requestCode: async () => {
-          throw new EmailProofError('request', 'RATE_LIMITED', 'raw witness text', retryAfterMs);
-        },
-      }).promise,
-      (error) => {
-        assert.equal(error.code, 'credential.request.RATE_LIMITED');
-        assert.ok(error.message.endsWith(phrase), `got: ${error.message}`);
-        assert.ok(!error.message.includes('raw witness text'));
-        return true;
+  await assert.rejects(
+    run(['acquire', '--email', ADDRESS], {
+      home,
+      now: () => NOW,
+      requestCode: async () => {
+        throw new EmailProofError('request', 'RATE_LIMITED', undefined, 150_000);
       },
-    );
-  }
+    }).promise,
+    (error) => {
+      assert.equal(error.code, 'credential.request.RATE_LIMITED');
+      return true;
+    },
+  );
   assert.equal(existsSync(credDir(home)), false, 'no credential dir or pending file on rate limit');
 });
 
@@ -258,7 +250,7 @@ test('a rejected code keeps pending state; a retry reuses the same request and a
       now: () => NOW,
       completeProof: async (input) => {
         seen.push({ code: input.code, requestId: input.pending.requestId });
-        throw new EmailProofError('code', 'CODE_REJECTED', 'witness said no');
+        throw new EmailProofError('code', 'CODE_REJECTED', 'witness said no', undefined, true);
       },
     }).promise,
     (error) => {
@@ -298,6 +290,29 @@ test('an unexpected failure also deletes pending state and never echoes the code
   );
   assert.equal(readdirSync(credDir(home)).length, 0);
 });
+
+// Outcome is decided by the error's `recoverable` flag, not by the code name.
+const PENDING_OUTCOMES = [
+  ['recoverable code rejection', new EmailProofError('code', 'CODE_REJECTED', 'x', undefined, true), true],
+  ['non-recoverable code rejection', new EmailProofError('code', 'CODE_REJECTED', 'x', undefined, false), false],
+  ['recoverable issuer outage', new EmailProofError('code', 'ISSUER_UNAVAILABLE', 'x', undefined, true), true],
+  ['non-recoverable issuer outage', new EmailProofError('code', 'ISSUER_UNAVAILABLE', 'x', undefined, false), false],
+  ['non-recoverable rate limit', new EmailProofError('code', 'RATE_LIMITED', 'x', undefined, false), false],
+  ['unknown failure', new EmailProofError('code', 'FAILED', 'x', undefined, false), false],
+  ['expired session', new EmailProofError('session', 'SESSION_EXPIRED', 'x', undefined, false), false],
+];
+for (const [label, error, keeps] of PENDING_OUTCOMES) {
+  test(`pending state after ${label} is ${keeps ? 'kept' : 'deleted'}`, async () => {
+    const home = freshHome();
+    savePendingEmailProof(pendingFixture(NOW), home);
+    await assert.rejects(run(['acquire', '--email', ADDRESS, '--code', CODE], {
+      home,
+      now: () => NOW,
+      completeProof: async () => { throw error; },
+    }).promise);
+    assert.equal(readdirSync(credDir(home)).length, keeps ? 1 : 0);
+  });
+}
 
 test('a pending file with group or world access is refused and left in place', async () => {
   const home = freshHome();
@@ -371,4 +386,21 @@ test('unknown subcommand prints usage', async () => {
     run(['bogus'], { home: freshHome(), now: () => NOW }).promise,
     (error) => error.code === 'usage' && /credential acquire/.test(error.message),
   );
+});
+
+test('two-step acquire with a fragment-bearing agent key reaches the witness and stores the credential', async () => {
+  const home = freshHome();
+  const holder = generateHolderKey();
+  const fragmentKey = { v: 1, jwk: holder.jwk, did: `${holder.bare}#${holder.bare.slice('did:key:'.length)}`, createdAt: '2026-10-20T10:00:00Z' };
+  const witness = makeWitness();
+  const deps = { home, loadKey: () => fragmentKey, fetch: witness.fetch, issuerKeys: witness.issuerKeys };
+
+  const requested = run(['acquire', '--email', ADDRESS], deps);
+  await requested.promise;
+  assert.match(requested.out(), /Verification code sent to qa\.owner@example\.test/);
+
+  const completed = run(['acquire', '--email', ADDRESS, '--code', witness.code], deps);
+  await completed.promise;
+  assert.match(completed.out(), /Email credential stored for qa\.owner@example\.test/);
+  assert.equal([...witness.reqs.values()][0].state, 'issued');
 });

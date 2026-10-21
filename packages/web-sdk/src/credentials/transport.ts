@@ -19,15 +19,16 @@ function serverError(value: unknown, response: Response): CredentialError | unde
   // A rejected proof is retryable only while the issuer still has attempts
   // left for this challenge; once exhausted the acquisition cannot finish.
   if (body.code === "PROOF_REJECTED") return body.recoverable
-    ? new CredentialError("PROOF_REJECTED", "The proof was not accepted", { state: body.state, correlationId: body.correlationId })
+    ? new CredentialError("PROOF_REJECTED", "The proof was not accepted", { state: body.state, correlationId: body.correlationId, recoverable: true })
     : new CredentialError("VERIFICATION_FAILED", "The proof attempt limit was reached", { state: "proof_attempts_exhausted", correlationId: body.correlationId });
-  if (body.code === "RATE_LIMITED") return new CredentialError("ISSUER_UNREADY", "Too many verification codes were requested", { state: "rate_limited", correlationId: body.correlationId, retryAfterMs: Number(response.headers.get("retry-after")) * 1000 || undefined });
+  if (body.code === "RATE_LIMITED") return new CredentialError("ISSUER_UNREADY", "Too many verification codes were requested", { state: "rate_limited", correlationId: body.correlationId, recoverable: body.recoverable, retryAfterMs: Number(response.headers.get("retry-after")) * 1000 || undefined });
   if (body.code === "CHALLENGE_EXPIRED") return new CredentialError("REQUEST_EXPIRED", "The credential challenge expired", { state: body.state, correlationId: body.correlationId });
   if (!SERVER_CODES.has(body.code as any)) return undefined;
   const code = body.code as "REQUEST_EXPIRED" | "ISSUER_UNREADY" | "UNSUPPORTED_PROFILE" | "UNSUPPORTED_VERSION" | "SIGNATURE_REJECTED";
   return new CredentialError(code, `OpenCredentials rejected the request: ${code}`, {
     state: body.state,
     correlationId: body.correlationId,
+    recoverable: body.recoverable,
     retryAfterMs: Number(response.headers.get("retry-after")) * 1000 || undefined,
   });
 }
@@ -48,7 +49,7 @@ export class OpenCredentialsHttpTransport implements CredentialAcquisitionTransp
       if (typed) throw typed;
       if (response.status === 410) throw new CredentialError("REQUEST_EXPIRED", "Credential request expired");
       if (response.status === 409) throw new CredentialError("REQUEST_SUBSTITUTED", "Credential request was replayed or substituted");
-      if (response.status === 503) throw new CredentialError("ISSUER_UNREADY", "Credential issuer is not ready", { retryAfterMs: Number(response.headers.get("retry-after")) * 1000 || undefined });
+      if (response.status === 503) throw new CredentialError("ISSUER_UNREADY", "Credential issuer is not ready", { recoverable: false, retryAfterMs: Number(response.headers.get("retry-after")) * 1000 || undefined });
       throw new CredentialError("VERIFICATION_FAILED", "OpenCredentials rejected the request");
     }
     if (response.status === 204) return undefined; try { return await response.json(); } catch (cause) { throw new CredentialError("VERIFICATION_FAILED", "OpenCredentials response is invalid", { cause }); }

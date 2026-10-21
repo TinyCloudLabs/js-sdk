@@ -10,8 +10,10 @@ import {
   validateCredentialFlowDescriptor,
   verifyIssuedCredential,
   type CredentialFlowDescriptor,
+  type CredentialIssuerMetadata,
   type CredentialRequirement,
   type IssuedCredentialEnvelope,
+  type IssuerVerificationKey,
   type VerifiedCredential,
 } from "@tinycloud/sdk-core";
 import { interpretCredentialFlow } from "./interpreter";
@@ -26,6 +28,21 @@ export const EMAIL_PROOF_CREDENTIAL_TYPE = { id: "opencredentials.email/v1", ver
 export const EMAIL_PROOF_PENDING_MAX_MS = 15 * 60_000;
 
 const DISCOVERY_URL = `${EMAIL_PROOF_WITNESS_ORIGIN}/.well-known/opencredentials`;
+
+/** Pinned OpenCredentials email issuer. Credentials verify only against this DID and key, never keys the witness serves. */
+const EMAIL_PROOF_ISSUER_DID = "did:web:issuer.credentials.org";
+/** The only email descriptor digest this SDK accepts. Any other catalog entry is rejected. */
+const EMAIL_PROOF_DESCRIPTOR_DIGEST = "1tg-qphmKBVtNwzVg9xyz-xxqt_xtMXAsQyXw46m8S0";
+const EMAIL_PROOF_ISSUER_KEYS: readonly IssuerVerificationKey[] = [
+  {
+    kid: `${EMAIL_PROOF_ISSUER_DID}#controller`,
+    alg: "EdDSA",
+    jwk: { kty: "OKP", crv: "Ed25519", x: "eEJI4xEobto4HtQ7Pg9R1vBOwcpfGRTlXDG5QfqLnGQ" },
+    validFrom: "2020-01-01T00:00:00Z",
+    validUntil: "2100-01-01T00:00:00Z",
+  },
+];
+
 const OPENER_ORIGIN = "https://localhost";
 const STEP_TIMEOUT_MS = 60_000;
 const HOLDER_DID_PATTERN = /^did:key:z6Mk[^#]+$/;
@@ -80,11 +97,11 @@ const MESSAGES: Record<EmailProofErrorCode, string> = {
   ADDRESS_INVALID: "Email address is invalid.",
   HOLDER_INVALID: "Holder must be a did:key Ed25519 identifier.",
   CODE_INVALID: "Verification code must be 8 digits.",
-  RATE_LIMITED: "Too many verification codes were requested. Try again later.",
-  ISSUER_UNAVAILABLE: "Email verification is unavailable right now. Try again later.",
-  NETWORK: "Could not reach the email verification service. Try again.",
+  RATE_LIMITED: "Too many codes were requested for this address. Try again in about an hour.",
+  ISSUER_UNAVAILABLE: "Email verification is unavailable right now.",
+  NETWORK: "Could not reach the email verification service.",
   PROFILE_UNAVAILABLE: "The witness does not offer the email verification profile.",
-  CODE_REJECTED: "Verification code was not accepted. Request a new code.",
+  CODE_REJECTED: "Verification code was not accepted.",
   CODE_ATTEMPTS_EXHAUSTED: "Too many wrong codes. Request a new code.",
   SIGNATURE_REJECTED: "Holder signature was rejected.",
   CREDENTIAL_INVALID: "Issued credential failed verification.",
@@ -103,6 +120,7 @@ export class EmailProofError extends Error {
     readonly code: EmailProofErrorCode,
     message: string = MESSAGES[code],
     readonly retryAfterMs?: number,
+    readonly recoverable: boolean = false,
   ) {
     super(message);
   }
@@ -126,6 +144,8 @@ export interface EmailProofOptions {
   readonly fetch?: typeof fetch;
   readonly signal?: AbortSignal;
   readonly now?: () => Date;
+  /** Test seam: verify against these issuer keys instead of the pinned production key. Production callers MUST NOT set this. */
+  readonly issuerKeys?: readonly IssuerVerificationKey[];
 }
 
 /** Durable state between `requestEmailProofCode` and `completeEmailProof`. The verifier is a bearer secret: store it 0600. */
@@ -216,7 +236,7 @@ export async function requestEmailProofCode(input: EmailProofOptions & { readonl
       signal,
     });
   } catch (error) {
-    if (error instanceof CodeRequested) return pending;
+    if (error instanceof CodeRequested) return redacted(pending);
     throw mapError(error, "request");
   }
   throw new EmailProofError("request", "FAILED", "Witness did not request a verification code.");
@@ -274,7 +294,7 @@ export async function completeEmailProof(input: EmailProofOptions & { readonly p
       descriptorDigest,
       requirement,
       holderDid: pending.holderDid,
-      issuerMetadata: await transport.issuerMetadata(signal),
+      issuerMetadata: pinnedIssuerMetadata(input.issuerKeys),
       now: now(),
       checkStatus: (status, statusSignal) => transport.checkStatus(status, statusSignal),
       signal,
@@ -306,10 +326,15 @@ async function witnessDescriptor(requirement: CredentialRequirement, options: Em
   } catch (error) {
     throw mapError(error, step);
   }
-  if (descriptor.issuer.origin !== EMAIL_PROOF_WITNESS_ORIGIN || !descriptor.steps.some((candidate) => candidate.type === "mailbox_otp")) {
+  if (descriptor.issuer.origin !== EMAIL_PROOF_WITNESS_ORIGIN || descriptor.issuer.did !== EMAIL_PROOF_ISSUER_DID || !descriptor.steps.some((candidate) => candidate.type === "mailbox_otp")) {
     throw new EmailProofError(step, "PROFILE_UNAVAILABLE");
   }
+  if (await canonicalDigest(descriptor) !== EMAIL_PROOF_DESCRIPTOR_DIGEST) throw new EmailProofError(step, "PROFILE_UNAVAILABLE");
   return descriptor;
+}
+
+function pinnedIssuerMetadata(keys: readonly IssuerVerificationKey[] = EMAIL_PROOF_ISSUER_KEYS): CredentialIssuerMetadata {
+  return { type: "OpenCredentialsIssuerMetadata", version: 1, origin: EMAIL_PROOF_WITNESS_ORIGIN, issuerDid: EMAIL_PROOF_ISSUER_DID, keys, cache: { maxAgeSeconds: 3600, etag: "pinned" } };
 }
 
 function holderSigning(holder: EmailProofHolder): CredentialSigningAdapter {
@@ -326,33 +351,43 @@ function isPending(value: EmailProofPending): boolean {
     && [value.address, value.requestId, value.verifier, value.holderDid, value.descriptorDigest, value.requirementDigest, value.openerOrigin, value.expiresAt].every((field) => typeof field === "string");
 }
 
+const INSPECT = Symbol.for("nodejs.util.inspect.custom");
+/** Hides the bearer verifier from console and util.inspect. JSON and property access still carry it: courier persists it. */
+function redacted(pending: EmailProofPending): EmailProofPending {
+  return Object.defineProperty(pending, INSPECT, { value: () => ({ ...pending, verifier: "[redacted]" }), enumerable: false });
+}
+
 function rateLimitMessage(retryAfterMs: number | undefined): string {
   if (retryAfterMs === undefined || !Number.isFinite(retryAfterMs) || retryAfterMs <= 0) return MESSAGES.RATE_LIMITED;
   const minutes = Math.max(1, Math.ceil(retryAfterMs / 60_000));
-  return `Too many verification codes were requested. Try again in ${minutes} minute${minutes === 1 ? "" : "s"}.`;
+  return `Too many codes were requested for this address. Try again in ${minutes} minute${minutes === 1 ? "" : "s"}.`;
 }
 
+/**
+ * Maps any failure to a stable code. `recoverable` is true only when the same
+ * pending request may be retried with another code before it expires.
+ */
 function mapError(value: unknown, step: EmailProofStep): EmailProofError {
   if (value instanceof EmailProofError) return value;
-  if (value instanceof DOMException && value.name === "TimeoutError") return new EmailProofError(step, "NETWORK");
+  if (value instanceof DOMException && value.name === "TimeoutError") return new EmailProofError(step, "NETWORK", undefined, undefined, true);
   const error = credentialError(value);
   const details = error.details;
   switch (error.code) {
     case "ISSUER_UNREADY":
       return details.state === "rate_limited"
-        ? new EmailProofError("request", "RATE_LIMITED", rateLimitMessage(details.retryAfterMs), details.retryAfterMs)
-        : new EmailProofError(step, "ISSUER_UNAVAILABLE");
+        ? new EmailProofError(step, "RATE_LIMITED", rateLimitMessage(details.retryAfterMs), details.retryAfterMs, error.recoverable)
+        : new EmailProofError(step, "ISSUER_UNAVAILABLE", undefined, undefined, error.recoverable);
     case "OFFLINE":
-      return new EmailProofError(step, "NETWORK");
+      return new EmailProofError(step, "NETWORK", undefined, undefined, true);
     case "UNSUPPORTED_PROFILE":
     case "DESCRIPTOR_INVALID":
       return new EmailProofError("request", "PROFILE_UNAVAILABLE");
     case "PROOF_REJECTED":
-      return new EmailProofError("code", "CODE_REJECTED");
+      return new EmailProofError("code", "CODE_REJECTED", undefined, undefined, error.recoverable);
     case "VERIFICATION_FAILED":
       if (details.state === "proof_attempts_exhausted") return new EmailProofError("code", "CODE_ATTEMPTS_EXHAUSTED");
       if (step === "credential") return new EmailProofError("credential", "CREDENTIAL_INVALID");
-      if (step === "code") return new EmailProofError("code", "CODE_REJECTED");
+      if (step === "code") return new EmailProofError("code", "CODE_REJECTED", "Verification code was not accepted. Request a new code.");
       return new EmailProofError(step, "FAILED");
     case "REQUEST_EXPIRED":
       return new EmailProofError("session", "SESSION_EXPIRED");

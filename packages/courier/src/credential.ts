@@ -7,7 +7,7 @@ import {
   type EmailProofPending,
   type EmailProofResult,
 } from '@tinycloud/web-sdk/credentials';
-import { credentialRequirementDigest } from '@tinycloud/sdk-core';
+import { credentialRequirementDigest, type IssuerVerificationKey } from '@tinycloud/sdk-core';
 import { CourierError } from './errors.js';
 import { requireFlag, type ParsedArgs } from './args.js';
 import { cmd } from './program.js';
@@ -30,6 +30,8 @@ export interface CredentialDeps {
   loadKey?: (home: string) => AgentKey;
   requestCode?: typeof requestEmailProofCode;
   completeProof?: typeof completeEmailProof;
+  /** Test seam: issuer keys the proof is verified against. Production leaves this unset to use the pinned key. */
+  issuerKeys?: readonly IssuerVerificationKey[];
   out?: (text: string) => void;
 }
 
@@ -40,6 +42,7 @@ interface Resolved {
   loadKey: (home: string) => AgentKey;
   requestCode: typeof requestEmailProofCode;
   completeProof: typeof completeEmailProof;
+  issuerKeys: readonly IssuerVerificationKey[] | undefined;
   out: (text: string) => void;
 }
 
@@ -73,23 +76,13 @@ function isEmailProofError(error: unknown): error is EmailProofError {
  * message never contains the verification code, the pending verifier, or key material.
  */
 function mapEmailProofError(error: unknown, fallbackStep: Step): CourierError {
-  if (isEmailProofError(error)) {
-    const code = `credential.${error.step}.${error.code}`;
-    if (error.code === 'RATE_LIMITED' && error.retryAfterMs !== undefined) {
-      const minutes = Math.max(1, Math.ceil(error.retryAfterMs / 60_000));
-      return new CourierError(code, `Too many verification codes were requested. Try again in ${minutes} minute${minutes === 1 ? '' : 's'}.`);
-    }
-    return new CourierError(code, error.message);
-  }
+  if (isEmailProofError(error)) return new CourierError(`credential.${error.step}.${error.code}`, error.message);
   return new CourierError(`credential.${fallbackStep}.FAILED`, 'Email verification failed.');
 }
 
-/** Step-2 failures the owner can retry with the same pending request before it expires. */
-const RETRYABLE_PROOF_CODES: Record<string, true> = { CODE_REJECTED: true, NETWORK: true, ISSUER_UNAVAILABLE: true, RATE_LIMITED: true };
-
-/** Attempts-exhausted, session, signature, credential, and unknown failures are terminal. */
+/** The witness marks which failures leave the pending request usable for another code. */
 function keepsPendingAfterFailure(error: unknown): boolean {
-  return isEmailProofError(error) && RETRYABLE_PROOF_CODES[error.code] === true;
+  return isEmailProofError(error) && error.recoverable;
 }
 
 async function acquire(args: ParsedArgs, deps: Resolved): Promise<void> {
@@ -125,7 +118,7 @@ async function acquire(args: ParsedArgs, deps: Resolved): Promise<void> {
 
   let result: EmailProofResult;
   try {
-    result = await deps.completeProof({ pending, code, holder, fetch: deps.fetch, now: deps.now });
+    result = await deps.completeProof({ pending, code, holder, fetch: deps.fetch, now: deps.now, issuerKeys: deps.issuerKeys });
   } catch (error) {
     if (keepsPendingAfterFailure(error)) {
       // Retryable: the same pending request stays until its expiry.
@@ -136,8 +129,6 @@ async function acquire(args: ParsedArgs, deps: Resolved): Promise<void> {
     removePendingEmailProof(pending.requestId, deps.home);
     throw mapEmailProofError(error, 'credential');
   }
-  removePendingEmailProof(pending.requestId, deps.home);
-
   const requirement = emailCredentialRequirement(address);
   const requirementDigest = await credentialRequirementDigest(requirement);
   await new StoredCredentialSource(deps.home).store({
@@ -147,6 +138,7 @@ async function acquire(args: ParsedArgs, deps: Resolved): Promise<void> {
     holderDid: holder.did,
     now: deps.now(),
   });
+  removePendingEmailProof(pending.requestId, deps.home);
   deps.out(`Email credential stored for ${address}. It is valid for up to 1 hour from issuance.\n`);
 }
 
@@ -185,6 +177,7 @@ export async function cmdCredential(args: ParsedArgs, deps: CredentialDeps = {})
     loadKey: deps.loadKey ?? ((home: string) => loadKey(home)),
     requestCode: deps.requestCode ?? requestEmailProofCode,
     completeProof: deps.completeProof ?? completeEmailProof,
+    issuerKeys: deps.issuerKeys,
     out: deps.out ?? ((text: string) => { process.stdout.write(text); }),
   };
   switch (args.positional[0]) {
