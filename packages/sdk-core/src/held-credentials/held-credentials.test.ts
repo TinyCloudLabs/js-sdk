@@ -1159,9 +1159,22 @@ describe("TC-1553: org issuer rule anchors", () => {
     expect(rowPermitsIssuer(EMAIL_HELD_ROW, VALID)).toBe(false);
     expect(rowPermitsIssuer(EMAIL_HELD_ROW, ISSUER_A)).toBe(true);
     expect(rowPermitsIssuer(EMAIL_HELD_ROW, ISSUER_B)).toBe(false);
-    for (const nearMiss of [`${ISSUER_A}x`, `${ISSUER_A}.example`, "did:web:Issuer.credentials.org"]) {
+    for (const nearMiss of [`${ISSUER_A}x`, `${ISSUER_A}.example`, "did:web:Issuer.credentials.org", "did:web:issuer.credentials", "did:web:evil.issuer.credentials.org"]) {
       expect(rowPermitsIssuer(EMAIL_HELD_ROW, nearMiss)).toBe(false);
     }
+  });
+  test("the email row's permitsIssuer getter is read exactly once per check", () => {
+    const counted: ProfileRow = { ...EMAIL_HELD_ROW };
+    let reads = 0;
+    Object.defineProperty(counted, "permitsIssuer", {
+      enumerable: true,
+      get() {
+        reads += 1;
+        return EMAIL_HELD_ROW.permitsIssuer;
+      },
+    });
+    expect(rowPermitsIssuer(counted, ISSUER_A)).toBe(true);
+    expect(reads).toBe(1);
   });
 });
 

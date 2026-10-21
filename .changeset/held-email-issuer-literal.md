@@ -2,4 +2,4 @@
 "@tinycloud/sdk-core": minor
 ---
 
-The `tinycloud.email-held/v1` profile admits only the issuer `did:web:issuer.credentials.org`, as the profile specification requires. Other issuers, including org-family issuers, are refused.
+An issuer set that lists the email profile for any issuer other than `did:web:issuer.credentials.org` now fails to load with `bad-issuer-set`.
