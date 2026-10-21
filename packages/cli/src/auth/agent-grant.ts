@@ -64,11 +64,6 @@ function siweErrorText(error: unknown): string {
   return "";
 }
 
-/** The SIWE domain for a requester host: its authority, as OpenKey signs it. */
-function hostAuthority(host: string): string {
-  return new URL(host.includes("://") ? host : `https://${host}`).host;
-}
-
 /** Ability map for an approved ReCap, in the shape the WASM emitter renders. */
 function recapAbilities(entries: readonly PermissionEntry[]): Record<string, Record<string, string[]>> {
   const abilities: Record<string, Record<string, string[]>> = {};
@@ -151,7 +146,7 @@ export async function verifyAgentApproval(
   if (message.uri.split("#")[0] !== sessionDid) {
     throw refuse("OPENKEY_AUDIENCE_MISMATCH", "The approval was issued to a different session than this auth request.");
   }
-  if (message.domain !== hostAuthority(expected.host)) {
+  if (message.domain !== new URL(expected.host.includes("://") ? expected.host : `https://${expected.host}`).host) {
     throw refuse("OPENKEY_AUDIENCE_MISMATCH", "The approval was issued for a different host than this auth request.");
   }
 
