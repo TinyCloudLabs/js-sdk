@@ -17,6 +17,7 @@ import {
   retryMinutes,
   selectCredentialSource,
   type EmailProofGate,
+  type HeadlessReceiveErrorCode,
   type EmailProofMaterial,
   type ShareAccessPort,
 } from "./headless-receive.js";
@@ -59,7 +60,7 @@ function fakeAccess(bytes = new TextEncoder().encode("# hello"), onReceive?: (en
   };
 }
 
-async function expectHeadless(promise: Promise<unknown>, code: string): Promise<HeadlessReceiveError> {
+async function expectHeadless(promise: Promise<unknown>, code: HeadlessReceiveErrorCode): Promise<HeadlessReceiveError> {
   const error = await promise.then(
     () => { throw new Error("expected HeadlessReceiveError"); },
     (caught: unknown) => caught,
