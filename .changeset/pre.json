@@ -42,6 +42,7 @@
     "cli-share-artifact-publish",
     "cli-share-fragment-wording",
     "cli-share-history-reason",
+    "cli-share-history-recovery",
     "cli-share-publish-html-folder",
     "cli-sign-in-callback-wait",
     "cli-wait-openkey-space-setup",
