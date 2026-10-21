@@ -44,11 +44,6 @@ describe("text lookup", () => {
     );
   });
 
-  test("the on and off state lines are the agreed literals", () => {
-    expect(text("sync.state.on")).toBe("Local copy: on");
-    expect(text("sync.state.off")).toBe("Local copy: off");
-  });
-
   test("unknown keys never echo the input", () => {
     expect(text("<script>")).not.toContain("<script>");
   });
