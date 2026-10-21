@@ -72,6 +72,23 @@ test('acquire step 1 persists pending state 0600 in a 0700 dir and prints no ver
   assert.ok(!text.includes(seen.pending.requestId), 'request id must not be printed');
 });
 
+test('the holder DID given to the helper is the bare did:key, even when the stored key DID carries a #fragment', async () => {
+  const home = freshHome();
+  const withFragment = { v: 1, jwk, did: `${DID}#${DID.slice('did:key:'.length)}`, createdAt: '2026-10-20T10:00:00Z' };
+  let holderDid;
+  const { promise } = run(['acquire', '--email', ADDRESS], {
+    home,
+    now: () => NOW,
+    loadKey: () => withFragment,
+    requestCode: async (input) => {
+      holderDid = input.holder.did;
+      return pendingFixture(NOW);
+    },
+  });
+  await promise;
+  assert.equal(holderDid, DID);
+});
+
 test('holder.sign is raw Ed25519 over exactly the given bytes: a 32-byte digest and a 64-byte holder binding both verify', async () => {
   const home = freshHome();
   let holder;

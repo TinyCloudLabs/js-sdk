@@ -12,6 +12,7 @@ import { CourierError } from './errors.js';
 import { requireFlag, type ParsedArgs } from './args.js';
 import { cmd } from './program.js';
 import { loadKey, profileDir, type AgentKey } from './profile.js';
+import { bareDid } from './authority.js';
 import {
   emailCredentialRequirement,
   removePendingEmailProof,
@@ -58,7 +59,7 @@ function holderFor(key: AgentKey): EmailProofHolder {
     throw new CourierError('credential.request.HOLDER_INVALID', 'Agent signing key is unusable.');
   }
   return {
-    did: key.did,
+    did: bareDid(key.did),
     sign: async (bytes: Uint8Array) => new Uint8Array(cryptoSign(null, bytes, privateKey)),
   };
 }
