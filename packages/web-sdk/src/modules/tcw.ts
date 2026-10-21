@@ -78,6 +78,7 @@ import {
   type IStorageService,
 } from "@tinycloud/sdk-core";
 import { showPermissionRequestModal } from "../notifications/ModalManager";
+import { applyLegacyNotificationKeys } from "../notifications/legacy-config";
 import {
   requestPermissionsCore,
   validateAdditionalPermissions,
@@ -442,7 +443,8 @@ export class TinyCloudWeb {
     ) => Promise<readonly PortableDelegation[] | void>;
   };
 
-  constructor(config: Config = {}) {
+  constructor(callerConfig: Config = {}) {
+    const config = applyLegacyNotificationKeys(callerConfig);
     if (config.replication?.enabled) {
       if (!registeredBrowserReplica) {
         throw new Error("Call registerBrowserReplica from @tinycloud/web-sdk with the @tinycloud/web-sdk/replica plugin before constructing TinyCloudWeb with replication enabled.");
