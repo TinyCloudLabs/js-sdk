@@ -33,8 +33,8 @@ export interface RequestEvent {
   host: string | null;
   /** Body bytes for writes, response bytes for reads; null when unknown. */
   bytes: number | null;
-  /** Whole logical request, including retry backoff. */
-  durationMs: number;
+  /** Whole logical request, including retry backoff; null when unknown. */
+  durationMs: number | null;
   attempts: number;
   ok: boolean;
   code: string;
@@ -65,7 +65,7 @@ export interface RawRequest {
   spaceId?: string | null;
   url?: string | null;
   bytes?: number | null;
-  durationMs: number;
+  durationMs: number | null;
   attempts?: number;
   ok: boolean;
   code?: string;
@@ -184,7 +184,7 @@ export function buildRequestEvent(raw: RawRequest): RequestDraft {
     space,
     host: hostOf(raw.url),
     bytes,
-    durationMs: Number.isFinite(raw.durationMs) ? Math.max(0, Math.round(raw.durationMs)) : 0,
+    durationMs: typeof raw.durationMs === "number" && Number.isFinite(raw.durationMs) ? Math.max(0, Math.round(raw.durationMs)) : null,
     attempts:
       raw.attempts !== undefined && Number.isFinite(raw.attempts) && raw.attempts >= 1
         ? Math.floor(raw.attempts)
@@ -213,7 +213,7 @@ export function observeReplicaReads(context: IServiceContext, sink: RequestSink)
           spaceId: typeof read.space === "string" ? read.space : null,
           url: null,
           bytes: null,
-          durationMs: typeof read.latencyMs === "number" ? read.latencyMs : 0,
+          durationMs: typeof read.latencyMs === "number" ? read.latencyMs : null,
           attempts: 1,
           ok: read.outcome !== "error",
           code: read.outcome === "not_found" ? "KV_NOT_FOUND" : typeof read.code === "string" ? read.code : undefined,

@@ -142,6 +142,8 @@ test("byte length is UTF-8 for strings and null when unknown, never 0", () => {
 test("duration is rounded and clamped at zero; attempts floor at one", () => {
   expect(build({ durationMs: 4.6 }).durationMs).toBe(5);
   expect(build({ durationMs: -3 }).durationMs).toBe(0);
+  expect(build({ durationMs: null }).durationMs).toBeNull();
+  expect(build({ durationMs: Number.NaN }).durationMs).toBeNull();
   expect(build({ attempts: 0 }).attempts).toBe(1);
   expect(build({ attempts: 3 }).attempts).toBe(3);
 });
@@ -233,4 +235,21 @@ test("observeReplicaReads records replica-served reads and ignores network and n
   const rows = log.snapshot();
   expect(rows.map((row) => row.source)).toEqual(["replica"]);
   expect(rows[0]?.service).toBe("kv");
+});
+
+test("a replica read without latency records a null duration, never 0", () => {
+  const handlers: Array<(data: unknown) => void> = [];
+  const context = {
+    on: (_event: string, handler: (data: unknown) => void) => {
+      handlers.push(handler);
+      return () => {};
+    },
+  } as unknown as IServiceContext;
+  const log = new RequestLog();
+  observeReplicaReads(context, log);
+
+  handlers.forEach((handler) => handler({ op: "get", space: "space:a", key: "notes/x", source: "replica", outcome: "hit" }));
+  handlers.forEach((handler) => handler({ op: "get", space: "space:a", key: "notes/x", source: "replica", outcome: "hit", latencyMs: 3 }));
+
+  expect(log.snapshot().map((row) => row.durationMs)).toEqual([null, 3]);
 });
