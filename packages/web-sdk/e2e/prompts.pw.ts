@@ -334,6 +334,17 @@ for (const scheme of ["light", "dark"] as const) {
     await expect.poll(() => permResult(page)).toBe(true);
   });
 
+  // The displaced prompt is removed in the same turn it is displaced. Its hide
+  // timer runs only after 200 ms, so a leftover element is still counted at 50 ms.
+  test(`${scheme}: a displaced prompt is removed at once, leaving one prompt in the DOM`, async ({ page }) => {
+    await mountHarness(page, scheme);
+    await openSpaceCreation(page);
+    await openPermission(page);
+    await page.waitForTimeout(50);
+    expect(await page.locator(`${SPACE}, ${PERMISSION}`).count()).toBe(1);
+    expect(await page.locator(PERMISSION).count()).toBe(1);
+  });
+
   // A displaced prompt's hide timer must not clear the scroll lock of the prompt that replaced it.
   test(`${scheme}: a displaced prompt keeps the scroll lock of the prompt that replaced it`, async ({ page }) => {
     await mountHarness(page, scheme);
