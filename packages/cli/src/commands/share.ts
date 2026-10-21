@@ -44,6 +44,7 @@ import { authorizationRequiredJson, inspectHuman, publishHuman, receiveHuman, re
 import { MAX_SHARE_STDIN_BYTES, readBoundedUrlStdin, readShareInput, shareInputFilename, writeShareOutput } from "../share/io.js";
 import { quarantineUnreadableProfileHistory } from "../share/adapters.js";
 import { ProfileManager } from "../config/profiles.js";
+import { FOLDER_NOT_AVAILABLE, bundleHtmlFolder, htmlFolderNotice, isDirectoryInput } from "../share/html-folder.js";
 
 import { ShareHistoryReadError, ShareHistoryRetryError, ShareHistoryUnreadableError, SharePublishAuthorityError, shareHistoryReason, type ShareHistoryStatus } from "../share/errors.js";
 const SHARE_ORIGIN = "https://share.tinycloud.xyz";
@@ -381,8 +382,8 @@ export function registerShareCommand(program: Command): void {
   const share = program.command("share").description("Publish and consume TinyCloud Share links");
 
   share.command("publish <files...>")
-    .description("Publish one or more bounded files as a Share")
-    .option("--name <filename>", "Filename for stdin input")
+    .description("Publish one or more bounded files as a Share, or a folder with an index.html as one self-contained page (anyone links only)")
+    .option("--name <filename>", "Filename for stdin input, or the published .html name of a folder")
     .option("--to <target>", "Share target", "anyone")
     .option("--notify", "Email an exact-email recipient, or a domain mailbox on node 1.17.3+")
     .option("--notify-to <address>", "Mailbox to invite for --to domain:<name> --notify (node 1.17.3+)")
@@ -409,11 +410,27 @@ export function registerShareCommand(program: Command): void {
         const maxBytes = byteLimit(options.maxBytes);
         if (files.length === 0 || (files.includes("-") && files.length > 1)) throw new CLIError("INVALID_ARGUMENT", "stdin must be the only publish input", 2);
         const name = files.length === 1 ? options.name : undefined;
-        // Refuse unsafe names before touching any source, so stdin is never awaited for one.
-        for (const file of files) shareInputFilename(file, name);
-        const inputs = await Promise.all(files.map((file) => readShareInput(file, name, maxBytes)));
-        assertAggregateInputLimit(inputs, maxBytes);
         const target = parseShareTarget(options.to);
+        // A folder with an index.html becomes one self-contained page for an anyone-with-the-link share. Addressed and
+        // --prefix publication of a folder is not offered: a directory falls through to the file reader and is refused.
+        const folder = files.length === 1 && target.kind === "bearer" && options.prefix !== true && await isDirectoryInput(files[0]!);
+        let inputs: { bytes: Uint8Array; filename: string }[];
+        if (folder) {
+          if (options.mediaType !== undefined && options.mediaType.split(";")[0]!.trim().toLowerCase() !== "text/html") {
+            throw new CLIError("INVALID_ARGUMENT", "a folder is published as text/html; drop --media-type", 2);
+          }
+          const bundle = await bundleHtmlFolder(files[0]!, { ...(name === undefined ? {} : { name }), ...(maxBytes === undefined ? {} : { maxBytes }) });
+          const notice = htmlFolderNotice(bundle);
+          if (notice !== undefined) process.stderr.write(notice);
+          inputs = [{ bytes: bundle.bytes, filename: bundle.filename }];
+        } else {
+          // A directory that is not a folder publish (addressed, --prefix, next to other inputs) gets one clear refusal.
+          for (const file of files) if (await isDirectoryInput(file)) throw new CLIError("MAX_BYTES_EXCEEDED", FOLDER_NOT_AVAILABLE, 7);
+          // Refuse unsafe names before touching any source, so stdin is never awaited for one.
+          for (const file of files) shareInputFilename(file, name);
+          inputs = await Promise.all(files.map((file) => readShareInput(file, name, maxBytes)));
+        }
+        assertAggregateInputLimit(inputs, maxBytes);
         const actions = requestedActions(options.action);
         if (options.prefix && target.kind === "bearer") throw new CLIError("INVALID_ARGUMENT", "--prefix requires an addressed target", 2);
         // A link is read-only: the bearer delegation never carries put, so an edit request would be dropped silently.
