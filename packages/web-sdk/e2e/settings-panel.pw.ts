@@ -7,7 +7,7 @@ const BUNDLE = readFileSync(resolve("e2e/.build/ui.bundle.js"), "utf8");
 const ORIGIN = "http://tinycloud-ui.test";
 
 interface HarnessWindow {
-  __tc: { mount(): boolean };
+  __tc: { mount(): boolean; toast(kind: string): string; dismiss(id: string): void };
   tc?: { ui: { open(): void } };
 }
 
@@ -64,4 +64,46 @@ for (const scheme of ["light", "dark"] as const) {
     await expect(panel).toBeVisible();
     await expect(launcher).toBeVisible();
   });
+}
+
+// Each toast's left stripe must be its kind colour in the rendered page, and at
+// least 3:1 against the toast surface. Dark warning is the only dark override.
+const KINDS = ["info", "success", "warning", "error"] as const;
+const STRIPE = {
+  light: { info: "rgb(37, 99, 235)", success: "rgb(22, 163, 74)", warning: "rgb(217, 119, 6)", error: "rgb(220, 38, 38)" },
+  dark: { info: "rgb(37, 99, 235)", success: "rgb(22, 163, 74)", warning: "rgb(251, 189, 35)", error: "rgb(220, 38, 38)" },
+} as const;
+
+function channel(c: number) {
+  const v = c / 255;
+  return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4;
+}
+
+function luminance(rgb: string) {
+  const [r, g, b] = (rgb.match(/\d+/g) ?? []).map(Number);
+  return 0.2126 * channel(r ?? 0) + 0.7152 * channel(g ?? 0) + 0.0722 * channel(b ?? 0);
+}
+
+function contrast(a: string, b: string) {
+  const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x);
+  return ((hi ?? 0) + 0.05) / ((lo ?? 0) + 0.05);
+}
+
+for (const scheme of ["light", "dark"] as const) {
+  for (const kind of KINDS) {
+    test(`${scheme} ${kind} toast stripe is its kind colour and at least 3:1 on the toast`, async ({ page }) => {
+      await page.setViewportSize({ width: 1280, height: 800 });
+      await mountHarness(page, scheme);
+      await page.evaluate((k) => (window as unknown as HarnessWindow).__tc.toast(k), kind);
+
+      const toast = page.locator(`.toast.toast--${kind}`);
+      await expect(toast).toBeVisible();
+      const computed = await toast.evaluate((el) => {
+        const style = getComputedStyle(el);
+        return { stripe: style.borderLeftColor, surface: style.backgroundColor };
+      });
+      expect(computed.stripe).toBe(STRIPE[scheme][kind]);
+      expect(contrast(computed.stripe, computed.surface)).toBeGreaterThanOrEqual(3);
+    });
+  }
 }

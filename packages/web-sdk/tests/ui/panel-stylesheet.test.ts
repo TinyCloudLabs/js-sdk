@@ -212,6 +212,40 @@ function resolvedDeclarations(css: string, scheme: "light" | "dark", selector: s
   return out;
 }
 
+const SIDES = ["top", "right", "bottom", "left"] as const;
+
+/**
+ * Colour longhands an element with `classes` ends up with under a scheme. Only
+ * single-class selectors (`.name`) match. Rules apply in source order, so a later
+ * rule wins at equal specificity. `border` and `border-color` expand to all four
+ * sides, and a shorthand resets any side longhand set earlier, as the cascade does.
+ */
+function cascadedColours(css: string, scheme: "light" | "dark", classes: readonly string[]): Map<string, string> {
+  const { light, dark } = splitScheme(css.replace(/\/\*[\s\S]*?\*\//g, ""));
+  const rules = scheme === "dark" ? `${light}\n${dark}` : light;
+  const wanted = new Set(classes.map((c) => `.${c}`));
+  const out = new Map<string, string>();
+  for (const [, listed, body] of rules.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+    if (!listed.split(",").some((s) => wanted.has(s.trim()))) continue;
+    for (const decl of body.split(";")) {
+      const colon = decl.indexOf(":");
+      if (colon < 0) continue;
+      const prop = decl.slice(0, colon).trim();
+      const value = decl.slice(colon + 1).trim();
+      if (prop === "border") {
+        const colour = value.split(/\s+/).find((t) => t.startsWith("#") || t.startsWith("rgb")) ?? "currentcolor";
+        for (const side of SIDES) out.set(`border-${side}-color`, colour);
+      } else if (prop === "border-color") {
+        if (/\s/.test(value)) throw new Error(`multi-value border-color is not modelled: ${value}`);
+        for (const side of SIDES) out.set(`border-${side}-color`, value);
+      } else if (/^border-(top|right|bottom|left)-color$/.test(prop)) {
+        out.set(prop, value);
+      }
+    }
+  }
+  return out;
+}
+
 /** WCAG 2.x relative luminance of a #rgb or #rrggbb colour. Anything else throws. */
 function luminance(hex: string): number {
   const m = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(hex);
@@ -251,10 +285,6 @@ const CONTRAST_CHECKS: readonly ContrastCheck[] = [
   { name: "switch track off", fg: [".knob", "background"], bg: [".panel", "background"], min: GRAPHIC_MIN },
   { name: "switch thumb", fg: [".knob::after", "background"], bg: [".knob", "background"], min: GRAPHIC_MIN },
   { name: "switch track on", fg: [".switch[aria-checked=\"true\"] .knob", "background"], bg: [".panel", "background"], min: GRAPHIC_MIN },
-  { name: "toast stripe info", fg: [".toast--info", "border-left-color"], bg: [".toast", "background"], min: GRAPHIC_MIN },
-  { name: "toast stripe success", fg: [".toast--success", "border-left-color"], bg: [".toast", "background"], min: GRAPHIC_MIN },
-  { name: "toast stripe warning", fg: [".toast--warning", "border-left-color"], bg: [".toast", "background"], min: GRAPHIC_MIN },
-  { name: "toast stripe error", fg: [".toast--error", "border-left-color"], bg: [".toast", "background"], min: GRAPHIC_MIN },
 ];
 
 /** Stylesheet text with a warning toast rendered, so every toast rule is present. */
@@ -348,4 +378,27 @@ describe("host shadow root", () => {
     expect(host?.shadowRoot).not.toBeNull();
     expect(host?.shadowRoot?.querySelector("#tinycloud-ui-panel")).not.toBeNull();
   });
+});
+
+// Stripe colour per kind. The warning stripe is the only dark override.
+const STRIPE: Record<ToastKind, { light: string; dark: string }> = {
+  info: { light: "#2563eb", dark: "#2563eb" },
+  success: { light: "#16a34a", dark: "#16a34a" },
+  warning: { light: "#d97706", dark: "#fbbd23" },
+  error: { light: "#dc2626", dark: "#dc2626" },
+};
+
+describe("toast stripe colour", () => {
+  for (const scheme of ["light", "dark"] as const) {
+    for (const kind of KINDS) {
+      test(`${scheme} ${kind} stripe is its kind colour and at least 3:1 on the toast surface`, () => {
+        const css = renderedCss();
+        const stripe = cascadedColours(css, scheme, ["toast", `toast--${kind}`]).get("border-left-color");
+        const surface = resolvedDeclarations(css, scheme, ".toast").get("background");
+        if (!stripe || !surface) throw new Error(`no resolved stripe or surface for ${kind}`);
+        expect(stripe).toBe(STRIPE[kind][scheme]);
+        expect(contrastRatio(stripe, surface)).toBeGreaterThanOrEqual(GRAPHIC_MIN);
+      });
+    }
+  }
 });

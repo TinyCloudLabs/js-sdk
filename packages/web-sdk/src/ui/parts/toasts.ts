@@ -22,7 +22,7 @@ const TOAST_CSS = `
    hairline #69696b, warning #fbbd23. The guide has no dark value for info, success or
    error; the light stripes are kept, and each measures at least 3:1 on #151517. */
 @media (prefers-color-scheme: dark){
-.toast{border-color:#69696b;background:#151517;color:#fafafa}
+.toast{border-top-color:#69696b;border-right-color:#69696b;border-bottom-color:#69696b;background:#151517;color:#fafafa}
 .toast a:focus-visible,.toast__close:focus-visible{outline-color:#fafafa}
 .toast--warning{border-left-color:#fbbd23}
 }
