@@ -25,7 +25,7 @@ export interface RequestEvent {
   service: RequestService;
   /** `service/action`, e.g. `kv/get`; `other` when unknown. */
   op: string;
-  /** Scrubbed key path, at most 256 chars; `secrets/` for secret keys. */
+  /** `first/` of the key (`[redacted]` when unsafe or slashless); full key only for allowlisted first segments. */
   path: string | null;
   /** Tail label of the space id, never the id. */
   space: string | null;
@@ -75,36 +75,35 @@ export interface RawRequest {
 
 const RING_SIZE = 500;
 const MAX_PATH = 256;
-const SECRETS_PATH = "secrets/";
 const REDACTED = "[redacted]";
 
 const SERVICE_NAME = /^(kv|sql|duckdb|hooks|vault|space|sync)$/;
 const OP_SHAPE = /^[a-z]+\/[A-Za-z]+$/;
 const SPACE_LABEL = /^[a-z0-9][a-z0-9_-]{0,31}$/;
 const CODE_SHAPE = /^(ok|HTTP_[1-5]\d\d|[A-Z][A-Z0-9_]{1,63}|ERROR)$/;
-const OPAQUE_RUN = /[A-Za-z0-9_+=-]{32,}/g;
-
-function scrubSegment(segment: string): string {
-  if (segment.startsWith("did:key:")) return "did:key:…";
-  if (segment.startsWith("eyJ") || /0x[0-9a-fA-F]{8}/.test(segment)) return REDACTED;
-  for (const run of segment.match(OPAQUE_RUN) ?? []) {
-    if (/\d/.test(run) && /[A-Za-z]/.test(run)) return REDACTED;
-  }
-  return segment;
-}
+const PATH_LABEL = /^[a-z0-9][a-z0-9_-]{0,31}$/;
+/** First segments whose full key may be recorded. Empty: only `first/` is ever kept. */
+const PATH_ALLOWLIST: ReadonlySet<string> = new Set<string>();
 
 function scrubPath(raw: string | null | undefined): string | null {
   if (typeof raw !== "string") return null;
   const bare = raw.split(/[?#]/, 1)[0] ?? "";
   if (bare === "") return null;
-  const out = bare.split("/").map(scrubSegment).join("/");
-  return out.length > MAX_PATH ? out.slice(0, MAX_PATH) : out;
-}
-
-function isSecretKey(raw: string | null | undefined): boolean {
-  if (typeof raw !== "string") return false;
-  const key = raw.replace(/^\/+/, "");
-  return key === "secrets" || key.startsWith("secrets/");
+  let decoded: string;
+  try {
+    decoded = decodeURIComponent(bare);
+  } catch {
+    return REDACTED;
+  }
+  const stripped = decoded.replace(/^\/+/, "").replace(/\/+/g, "/");
+  if (stripped === "") return null;
+  const slash = stripped.indexOf("/");
+  // Slashless: the whole value may be a bare secret name.
+  if (slash === -1) return REDACTED;
+  const first = stripped.slice(0, slash).toLowerCase();
+  if (!PATH_LABEL.test(first)) return REDACTED;
+  if (PATH_ALLOWLIST.has(first)) return stripped.length > MAX_PATH ? stripped.slice(0, MAX_PATH) : stripped;
+  return `${first}/`;
 }
 
 function spaceLabel(spaceId: string | null | undefined): string | null {
@@ -162,7 +161,6 @@ export function buildRequestEvent(raw: RawRequest): RequestDraft {
       ? (raw.service as RequestService)
       : "other";
   const space = spaceLabel(raw.spaceId);
-  const secret = service === "vault" || space === "secrets" || isSecretKey(raw.path);
   const op = typeof raw.op === "string" && OP_SHAPE.test(raw.op) ? raw.op : "other";
   const code =
     raw.code === undefined ? (raw.ok ? "ok" : "ERROR") : CODE_SHAPE.test(raw.code) ? raw.code : "ERROR";
@@ -175,8 +173,8 @@ export function buildRequestEvent(raw: RawRequest): RequestDraft {
     at: raw.at,
     service,
     op,
-    path: secret ? SECRETS_PATH : scrubPath(raw.path),
-    space: secret && space === null ? "secrets" : space,
+    path: scrubPath(raw.path),
+    space,
     host: hostOf(raw.url),
     bytes,
     durationMs: Number.isFinite(raw.durationMs) ? Math.max(0, Math.round(raw.durationMs)) : 0,

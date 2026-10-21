@@ -63,9 +63,19 @@ test("an invoke-signed kv request is labelled kv with its op, path, and space", 
   const headers = context.invoke(session, "kv", "notes/a", "tinycloud.kv/get");
   await context.fetch("https://node.example/kv", { method: "POST", headers });
   const [event] = log.snapshot();
-  expect(event).toMatchObject({ service: "kv", op: "kv/get", path: "notes/a", ok: true, code: "ok" });
+  expect(event).toMatchObject({ service: "kv", op: "kv/get", path: "notes/", ok: true, code: "ok" });
   expect(event.space).not.toBe(SPACE);
   expect(JSON.stringify(event)).not.toContain("0x1234");
+});
+
+test("a vault key reaches the log as its first segment only", async () => {
+  const log = new RequestLog();
+  const context = contextWith(log, async () => reply(200, "ok"));
+  const headers = context.invoke(session, "vault", "prod/OPENAI_API_KEY", "tinycloud.vault/get");
+  await context.fetch("https://node.example/vault", { method: "POST", headers });
+  const [event] = log.snapshot();
+  expect(event).toMatchObject({ service: "vault", path: "prod/", ok: true });
+  expect(JSON.stringify(event)).not.toContain("OPENAI_API_KEY");
 });
 
 test("a retried invokeWithRetry produces exactly one event with the attempt count", async () => {
@@ -111,7 +121,7 @@ test("replica-sourced replication reads map to kv events; network and none do no
   context.emit("replication.read", { ...base, op: "get", source: "replica", outcome: "found" });
   const events = log.snapshot();
   expect(events).toHaveLength(2);
-  expect(events[0]).toMatchObject({ service: "kv", op: "kv/get", path: "notes/a", host: null, bytes: null, durationMs: 2, source: "replica", ok: true, code: "ok" });
+  expect(events[0]).toMatchObject({ service: "kv", op: "kv/get", path: "notes/", host: null, bytes: null, durationMs: 2, source: "replica", ok: true, code: "ok" });
   expect(events[1]).toMatchObject({ service: "kv", op: "kv/list", source: "replica", ok: true, code: "KV_NOT_FOUND" });
 });
 

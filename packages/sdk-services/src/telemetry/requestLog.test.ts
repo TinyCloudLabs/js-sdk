@@ -4,62 +4,57 @@ import { buildRequestEvent, byteLengthOf, RequestLog, type RawRequest } from "./
 const base: RawRequest = { durationMs: 4.6, ok: true, at: 1_700_000_000_000 };
 const build = (extra: Partial<RawRequest>) => buildRequestEvent({ ...base, ...extra });
 
-test("path drops query and fragment and keeps ordinary segments", () => {
+test("a key is recorded as its first segment and a slash, never deeper", () => {
   const event = build({ service: "kv", op: "kv/get", path: "notes/2024/a.txt?x=1#frag" });
-  expect(event.path).toBe("notes/2024/a.txt");
+  expect(event.path).toBe("notes/");
+  expect(JSON.stringify(event)).not.toContain("2024");
+  expect(JSON.stringify(event)).not.toContain("a.txt");
 });
 
-test("did:key segments are cut to the method prefix", () => {
-  const event = build({ service: "kv", op: "kv/get", path: "peers/did:key:z6MkSecretKeyMaterial/x" });
-  expect(event.path).toBe("peers/did:key:…/x");
-  expect(JSON.stringify(event)).not.toContain("z6MkSecretKeyMaterial");
+test("a vault key records only its first segment, whatever the key name", () => {
+  const event = build({ service: "vault", op: "vault/get", path: "vault/secrets/OPENAI_API_KEY" });
+  expect(event.path).toBe("vault/");
+  expect(JSON.stringify(event)).not.toContain("OPENAI_API_KEY");
 });
 
-test("JWT-shaped and 0x-prefixed address segments are redacted", () => {
-  const jwt = "eyJhbGciOiJFUzI1NiJ9.payload";
-  const event = build({ service: "kv", op: "kv/get", path: `tokens/${jwt}/0xDEADBEEF42/z` });
-  expect(event.path).toBe("tokens/[redacted]/[redacted]/z");
-  expect(JSON.stringify(event)).not.toContain("payload");
-  expect(JSON.stringify(event)).not.toContain("DEADBEEF42");
+test("a slashless key is redacted: it may be the bare secret name", () => {
+  const event = build({ service: "vault", op: "vault/get", path: "OPENAI_API_KEY" });
+  expect(event.path).toBe("[redacted]");
+  expect(JSON.stringify(event)).not.toContain("OPENAI_API_KEY");
 });
 
-test("opaque runs of 32+ chars are redacted only when they mix digits and letters", () => {
-  const mixed = "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6";
-  const letters = "abcdefghijklmnopqrstuvwxyzabcdefghij";
-  const event = build({ service: "kv", op: "kv/get", path: `${mixed}/${letters}` });
-  expect(event.path).toBe(`[redacted]/${letters}`);
+test("a namespace listed with a trailing slash keeps that slash", () => {
+  const event = build({ service: "kv", op: "kv/list", path: "notes/" });
+  expect(event.path).toBe("notes/");
 });
 
-test("secrets space reports the literal secrets/ path and no deeper segment", () => {
+test("encoded separators, traversal, and leading slashes cannot reach a deeper key", () => {
+  expect(build({ service: "vault", op: "vault/get", path: "vault%2Fprod-db-password" }).path).toBe("vault/");
+  expect(build({ service: "vault", op: "vault/get", path: "//vault/prod-db-password" }).path).toBe("vault/");
+  const traversal = build({ service: "kv", op: "kv/get", path: "%2e%2e/secret-name/x" });
+  expect(traversal.path).toBe("[redacted]");
+  expect(JSON.stringify(traversal)).not.toContain("secret-name");
+});
+
+test("a first segment that is not a plain label is redacted, not echoed", () => {
+  const token = "a".repeat(40);
+  expect(build({ service: "kv", op: "kv/get", path: `${token}/x` }).path).toBe("[redacted]");
+  expect(build({ service: "kv", op: "kv/get", path: "did:key:z6MkSecret/x" }).path).toBe("[redacted]");
+  expect(build({ service: "kv", op: "kv/get", path: "100%/x" }).path).toBe("[redacted]");
+});
+
+test("the secrets space keeps its tail label and records only the first path segment", () => {
   const event = build({
     service: "kv",
     op: "kv/get",
     spaceId: "tinycloud:pkh:eip155:1:0xAbCdEf:secrets",
     path: "scoped/feed-api/OPENAI_KEY",
   });
-  expect(event.path).toBe("secrets/");
+  expect(event.path).toBe("scoped/");
   expect(event.space).toBe("secrets");
   const json = JSON.stringify(event);
-  expect(json).not.toContain("scoped");
+  expect(json).not.toContain("feed-api");
   expect(json).not.toContain("OPENAI_KEY");
-});
-
-test("secrets/ prefix keys report secrets/ even in an ordinary space", () => {
-  const event = build({
-    service: "kv",
-    op: "kv/put",
-    spaceId: "tinycloud:pkh:eip155:1:0xAbCdEf:default",
-    path: "secrets/scoped/feed-api/OPENAI_KEY",
-  });
-  expect(event.path).toBe("secrets/");
-  expect(event.space).toBe("default");
-  expect(JSON.stringify(event)).not.toContain("feed-api");
-});
-
-test("vault events report secrets/ regardless of the vault key", () => {
-  const event = build({ service: "vault", op: "vault/get", path: "prod/database-url" });
-  expect(event.path).toBe("secrets/");
-  expect(JSON.stringify(event)).not.toContain("database-url");
 });
 
 test("space id never leaves the log, only its tail label does", () => {
@@ -153,14 +148,14 @@ test("duration is rounded and clamped at zero; attempts floor at one", () => {
 test("ring keeps the newest 500 events in order and drops the oldest", () => {
   const log = new RequestLog();
   for (let i = 0; i < 501; i++) {
-    log.record(build({ service: "kv", op: "kv/get", path: `k${i}` }));
+    log.record(build({ service: "kv", op: "kv/get", path: `k${i}/x` }));
   }
   const events = log.snapshot();
   expect(events.length).toBe(500);
   expect(events[0]!.id).toBe(2);
   expect(events[499]!.id).toBe(501);
-  expect(events[0]!.path).toBe("k1");
-  expect(events[499]!.path).toBe("k500");
+  expect(events[0]!.path).toBe("k1/");
+  expect(events[499]!.path).toBe("k500/");
 });
 
 test("snapshot is a copy; mutating it does not change the log", () => {
