@@ -2,23 +2,27 @@
  * Toast queue for the always-on toasts part. Pure state, no DOM: the part
  * subscribes and renders. Text is a strings.ts code, never raw text.
  */
+import type { StringKey } from "./strings";
 
 export type ToastKind = "info" | "success" | "warning" | "error";
 
 export interface ToastRequest {
   readonly kind: ToastKind;
-  readonly textCode: string;
+  readonly textCode: StringKey;
   readonly href?: string;
-  readonly hrefLabelCode?: string;
+  readonly hrefLabelCode?: StringKey;
 }
+
+/** Delivers a toast to the page's host. Returns false when nothing was shown. */
+export type ToastSink = (request: ToastRequest) => boolean;
 
 export interface ToastView {
   readonly id: string;
   readonly kind: ToastKind;
-  readonly textCode: string;
+  readonly textCode: StringKey;
   /** Present only when it passed the http(s) check. */
   readonly href?: string;
-  readonly hrefLabelCode?: string;
+  readonly hrefLabelCode?: StringKey;
 }
 
 export interface ToastStoreOptions {
@@ -29,7 +33,10 @@ export interface ToastStoreOptions {
 }
 
 export interface ToastStore {
-  /** Returns the toast id. */
+  /**
+   * Returns the toast id. A request identical to a visible toast (same kind,
+   * text code, and link) returns that toast's id and shows nothing new.
+   */
   push(request: ToastRequest): string;
   dismiss(id: string): void;
   /** Ref-counted hold: auto-dismiss stops while any hold is outstanding. */
@@ -40,6 +47,7 @@ export interface ToastStore {
 }
 
 interface Entry {
+  readonly key: string;
   readonly view: ToastView;
   timer: ReturnType<typeof setTimeout> | undefined;
   remainingMs: number;
@@ -97,17 +105,23 @@ export function createToastStore(options: ToastStoreOptions = {}): ToastStore {
 
   return {
     push(request) {
-      const id = `toast-${nextId++}`;
       const href = safeHref(request.href);
+      const linkLabel = href !== undefined ? request.hrefLabelCode : undefined;
+      const key = `${request.kind}|${request.textCode}|${href ?? ""}`;
+      for (const entry of entries.values()) {
+        if (entry.key === key) return entry.view.id;
+      }
+
+      const id = `toast-${nextId++}`;
       const view: ToastView = {
         id,
         kind: request.kind,
         textCode: request.textCode,
-        ...(href !== undefined && request.hrefLabelCode !== undefined
-          ? { href, hrefLabelCode: request.hrefLabelCode }
+        ...(href !== undefined && linkLabel !== undefined
+          ? { href, hrefLabelCode: linkLabel }
           : {}),
       };
-      const entry: Entry = { view, timer: undefined, remainingMs: durationMs, startedAt: 0 };
+      const entry: Entry = { key, view, timer: undefined, remainingMs: durationMs, startedAt: 0 };
       entries.set(id, entry);
       while (entries.size > maxVisible) {
         const oldest = entries.keys().next().value as string;

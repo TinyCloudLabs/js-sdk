@@ -4,6 +4,7 @@
  */
 
 import type { IStorageService } from "@tinycloud/sdk-core";
+import type { ToastRequest } from "./toast-store";
 
 export type SectionId = "sync" | "storage" | "developer";
 
@@ -41,12 +42,7 @@ export interface HostContext {
   onClientChange(cb: () => void): () => void;
   developerMode(): boolean;
   setStatus(source: string, status: StatusCode | null): void;
-  toast(t: {
-    kind: "info" | "success" | "warning" | "error";
-    textCode: string;
-    href?: string;
-    hrefLabelCode?: string;
-  }): string;
+  toast(t: ToastRequest): string;
   openPanel(): void;
   closePanel(): void;
   /** strings.ts lookup. Unknown codes return the neutral line, never raw text. */

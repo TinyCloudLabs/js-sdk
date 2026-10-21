@@ -3,6 +3,7 @@ import { createPanelClient, type ClientSource } from "./client";
 import { resolveUiConfig, type UiConfig } from "./config";
 import { canRenderUi } from "./frame-guard";
 import { HOST_API_VERSION, REGISTRY_KEY, createHostRuntime, type HostRuntime } from "./host";
+import type { ToastRequest } from "./toast-store";
 
 export type { TinyCloudUI } from "./api";
 export type { UiConfig, UiPosition } from "./config";
@@ -14,6 +15,8 @@ export interface UiClientHandle {
   reset(): void;
   /** Cleanup: removes this client. The host unmounts when the last client unregisters. */
   unregister(): void;
+  /** Shows a toast in the host. False when this client is headless, detached in a frame, or unregistered. */
+  toast(request: ToastRequest): boolean;
 }
 
 export interface UiClientOptions {
@@ -52,6 +55,7 @@ function detachedHandle(): UiClientHandle {
     api: createUiApi(() => undefined),
     reset() {},
     unregister() {},
+    toast: () => false,
   };
 }
 
@@ -88,6 +92,11 @@ export function registerUiClient(options: UiClientOptions): UiClientHandle {
       if (!target) return;
       target = undefined;
       runtime.unregister(id);
+    },
+    toast(request) {
+      if (target === undefined) return false;
+      runtime.toast(request);
+      return true;
     },
   };
 }

@@ -104,7 +104,6 @@ const { TinyCloudWeb } = require("../src/modules/tcw");
 const { BrowserWasmBindings } = require("../src/adapters/BrowserWasmBindings");
 const { BrowserSessionStorage } = require("../src/adapters/BrowserSessionStorage");
 const { restoreDataFromPersisted } = require("../src/modules/browserSessionPersistence");
-const { dispatchSDKEvent } = require("../src/notifications");
 const { TinyCloudNode, NodeWasmBindings, PrivateKeySigner } = require("@tinycloud/node-sdk");
 
 test("optional replica import is inert until one explicit root registration", () => {
@@ -261,8 +260,6 @@ test("accountAuthorizationCid returns the delegation CID of a wallet sign-in", a
     await tcw._node.waitForAccountRegistrySync();
   } finally {
     globalThis.fetch = originalFetch;
-    // Drop the debounced "signed in" event so it cannot fire into a later file's window shim.
-    dispatchSDKEvent.cleanup();
   }
 
   expect(signedMessages).toHaveLength(1);
@@ -678,7 +675,6 @@ test("signOut then signIn uses a fresh wallet SIWE even if another tab restores 
     expect(web.sessionRestoreStatus).toBe("logging-in");
   } finally {
     globalThis.fetch = originalFetch;
-    dispatchSDKEvent.cleanup();
   }
 });
 

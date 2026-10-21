@@ -4,6 +4,7 @@ import type { ResolvedUiConfig } from "./config";
 import { createPanel, type PanelView } from "./panel";
 import { HOST_PARTS } from "./parts";
 import { toastStore } from "./parts/toasts";
+import type { ToastRequest } from "./toast-store";
 import { createButtonHideStore, defaultLocalStorage, resolveUiAppId, type HideScope } from "./persistence";
 import { PANEL_SECTIONS } from "./sections";
 import type { HostContext, StatusCode } from "./slots";
@@ -32,6 +33,7 @@ export interface HostRuntime {
   open(): void;
   close(): void;
   isOpen(): boolean;
+  toast(request: ToastRequest): void;
 }
 
 interface ClientEntry {
@@ -46,6 +48,20 @@ interface Mounted {
   readonly panel: PanelView;
   readonly button: ButtonView | undefined;
   readonly stopParts: Array<() => void>;
+}
+
+/** Only rejections raised by TinyCloud code. */
+function isSdkRejection(reason: unknown): boolean {
+  if (typeof reason !== "object" || reason === null) return false;
+  const { message, stack } = reason as { message?: unknown; stack?: unknown };
+  if (typeof message === "string" && /tinycloud|TinyCloud/.test(message)) return true;
+  return typeof stack === "string" && stack.includes("tinycloud");
+}
+
+function onUnhandledRejection(event: PromiseRejectionEvent): void {
+  if (isSdkRejection(event.reason)) {
+    toastStore.push({ kind: "error", textCode: "toast.unexpected_error" });
+  }
 }
 
 export function createHostRuntime(): HostRuntime {
@@ -63,6 +79,20 @@ export function createHostRuntime(): HostRuntime {
   let buttonHidden = false;
   let mounted: Mounted | undefined;
   let disposers: Array<() => void> = [];
+  let rejectionListening = false;
+
+  /** Host-owned: attached on the first register, detached when the last client leaves. */
+  function attachRejectionListener(): void {
+    if (rejectionListening) return;
+    rejectionListening = true;
+    globalThis.addEventListener("unhandledrejection", onUnhandledRejection);
+  }
+
+  function detachRejectionListener(): void {
+    if (!rejectionListening) return;
+    rejectionListening = false;
+    globalThis.removeEventListener("unhandledrejection", onUnhandledRejection);
+  }
 
   /** Records the order in which clients were first seen signed in. */
   function observeSignIns(): void {
@@ -205,6 +235,7 @@ export function createHostRuntime(): HostRuntime {
   }
 
   function unmount(): void {
+    detachRejectionListener();
     if (!mounted) return;
     closeSections();
     for (const stop of mounted.stopParts) stop();
@@ -225,6 +256,7 @@ export function createHostRuntime(): HostRuntime {
     register(id, registration) {
       clients.set(id, { id, registration, signedIn: false, signedInSeq: 0 });
       observeSignIns();
+      attachRejectionListener();
       ensureMounted();
       notifyClientChange();
     },
@@ -263,5 +295,8 @@ export function createHostRuntime(): HostRuntime {
     },
 
     isOpen: () => isPanelOpen,
+    toast(request) {
+      toastStore.push(request);
+    },
   };
 }
