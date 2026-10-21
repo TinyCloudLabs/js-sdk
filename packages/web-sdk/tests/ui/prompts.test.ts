@@ -1,0 +1,338 @@
+/**
+ * Prompt host tests. Permission and space-creation prompts render into the
+ * host layer, never `document.body`, and fail closed in frames and with
+ * `ui:false`. The real ModalManager and modal classes run against a minimal
+ * DOM shim.
+ */
+
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from "bun:test";
+import type * as ModalManagerNs from "../../src/notifications/ModalManager";
+import type { HostContext } from "../../src/ui/slots";
+import { createPromptScope, dismissPrompts, mountPrompt, prompts } from "../../src/ui/parts/prompts";
+
+// ---------------------------------------------------------------------------
+// Minimal DOM shim
+// ---------------------------------------------------------------------------
+
+class FakeNode {
+  children: FakeNode[] = [];
+  parent: FakeNode | undefined;
+  innerHTML = "";
+  private attrs = new Map<string, string>();
+
+  appendChild(child: FakeNode): FakeNode {
+    child.parent = this;
+    this.children.push(child);
+    return child;
+  }
+  remove(): void {
+    const parent = this.parent;
+    if (parent !== undefined) {
+      parent.children = parent.children.filter((c) => c !== this);
+    }
+    this.parent = undefined;
+  }
+  setAttribute(name: string, value: string): void {
+    this.attrs.set(name, value);
+  }
+  getAttribute(name: string): string | null {
+    return this.attrs.get(name) ?? null;
+  }
+  removeAttribute(name: string): void {
+    this.attrs.delete(name);
+  }
+  addEventListener(): void {}
+  removeEventListener(): void {}
+  dispatchEvent(): boolean {
+    return true;
+  }
+  querySelector(): FakeNode {
+    return new FakeNode();
+  }
+}
+
+class FakeHTMLElement extends FakeNode {
+  shadowRoot: FakeNode | null = null;
+  attachShadow(_init: { mode: "open" | "closed" }): FakeNode {
+    this.shadowRoot = new FakeNode();
+    return this.shadowRoot;
+  }
+}
+
+class FakeBody extends FakeNode {
+  style = { overflow: "" };
+}
+
+// ---------------------------------------------------------------------------
+// Globals
+// ---------------------------------------------------------------------------
+
+const globals = globalThis as unknown as Record<string, unknown>;
+const savedGlobals = {
+  HTMLElement: globals.HTMLElement,
+  customElements: globals.customElements,
+  document: globals.document,
+  window: globals.window,
+  requestAnimationFrame: globals.requestAnimationFrame,
+};
+const savedWarn = console.warn;
+
+const warnings: string[] = [];
+const body = new FakeBody();
+const fakeWindow = {
+  top: undefined as unknown,
+  location: { origin: "https://app.test" },
+  addEventListener() {},
+  removeEventListener() {},
+  dispatchEvent: () => true,
+};
+fakeWindow.top = fakeWindow;
+
+let modals: typeof ModalManagerNs;
+let layer: FakeNode;
+let stopPrompts: () => void;
+
+beforeAll(async () => {
+  globals.HTMLElement = FakeHTMLElement;
+  globals.customElements = { define() {}, get: () => undefined };
+  globals.document = {
+    body,
+    documentElement: new FakeNode(),
+    createElement: () => new FakeNode(),
+    addEventListener() {},
+    removeEventListener() {},
+  };
+  globals.window = fakeWindow;
+  globals.requestAnimationFrame = (cb: () => void) => {
+    cb();
+    return 0;
+  };
+  console.warn = (...args: unknown[]) => {
+    warnings.push(args.map(String).join(" "));
+  };
+  // Dynamic on purpose: the modal classes extend HTMLElement at module load,
+  // so they cannot be imported statically before the shim above is installed.
+  modals = await import("../../src/notifications/ModalManager");
+});
+
+afterAll(async () => {
+  // Exception to the no-timers rule: modal hide() schedules a 200ms timer that
+  // touches `document`. Restoring globals first would make that timer throw, so
+  // the drain waits for it. No event signals its completion.
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  globals.HTMLElement = savedGlobals.HTMLElement;
+  globals.customElements = savedGlobals.customElements;
+  globals.document = savedGlobals.document;
+  globals.window = savedGlobals.window;
+  globals.requestAnimationFrame = savedGlobals.requestAnimationFrame;
+  console.warn = savedWarn;
+});
+
+beforeEach(() => {
+  warnings.length = 0;
+  body.children = [];
+  layer = new FakeNode();
+  // FakeNode stands in for the host layer. Prompts only append to it and never inspect it.
+  stopPrompts = prompts.start(undefined as unknown as HostContext, layer as unknown as HTMLElement);
+});
+
+afterEach(() => {
+  stopPrompts();
+  fakeWindow.top = fakeWindow;
+});
+
+function permissionOptions(onDismiss: () => void) {
+  return { appName: "Test App", additional: [], onDismiss };
+}
+
+function spaceOptions(onDismiss: () => void) {
+  return { onCreateSpace: async () => {}, onDismiss };
+}
+
+// ---------------------------------------------------------------------------
+// Fail closed
+// ---------------------------------------------------------------------------
+
+describe("prompts fail closed", () => {
+  test("frame: permission prompt is refused, resolves declined, and mounts nothing", async () => {
+    fakeWindow.top = {};
+    let dismissed = 0;
+    const result = await modals.ModalManager.getInstance().showPermissionRequestModal(
+      permissionOptions(() => {
+        dismissed += 1;
+      }),
+      createPromptScope(true),
+    );
+
+    expect(result).toEqual({ approved: false });
+    expect(dismissed).toBe(1);
+    expect(layer.children).toHaveLength(0);
+    expect(body.children).toHaveLength(0);
+    expect(modals.ModalManager.getInstance().hasActiveModal()).toBe(false);
+    expect(warnings).toEqual(["[tinycloud] ui-unavailable-frame"]);
+  });
+
+  test("frame: space creation prompt is refused and resolves dismissed", async () => {
+    fakeWindow.top = {};
+    let dismissed = 0;
+    const result = await modals.ModalManager.getInstance().showSpaceCreationModal(
+      spaceOptions(() => {
+        dismissed += 1;
+      }),
+      createPromptScope(true),
+    );
+
+    expect(result).toEqual({ success: false, dismissed: true });
+    expect(dismissed).toBe(1);
+    expect(layer.children).toHaveLength(0);
+    expect(modals.ModalManager.getInstance().hasActiveModal()).toBe(false);
+    expect(warnings).toEqual(["[tinycloud] ui-unavailable-frame"]);
+  });
+
+  test("ui:false: permission prompt is refused, resolves declined, and mounts nothing", async () => {
+    const result = await modals.ModalManager.getInstance().showPermissionRequestModal(
+      permissionOptions(() => {}),
+      createPromptScope(false),
+    );
+
+    expect(result).toEqual({ approved: false });
+    expect(layer.children).toHaveLength(0);
+    expect(warnings).toEqual(["[tinycloud] ui-disabled"]);
+  });
+
+  test("ui:false: space creation prompt is refused, resolves dismissed, and mounts nothing", async () => {
+    const result = await modals.ModalManager.getInstance().showSpaceCreationModal(
+      spaceOptions(() => {}),
+      createPromptScope(false),
+    );
+
+    expect(result).toEqual({ success: false, dismissed: true });
+    expect(layer.children).toHaveLength(0);
+    expect(warnings).toEqual(["[tinycloud] ui-disabled"]);
+  });
+
+  test("no host layer: prompt is refused with ui-disabled", async () => {
+    stopPrompts();
+    const result = await modals.ModalManager.getInstance().showPermissionRequestModal(
+      permissionOptions(() => {}),
+      createPromptScope(true),
+    );
+
+    expect(result).toEqual({ approved: false });
+    expect(warnings).toEqual(["[tinycloud] ui-disabled"]);
+  });
+
+  test("refused mount is not registered, so a later dismissal does not call it", () => {
+    fakeWindow.top = {};
+    const scope = createPromptScope(true);
+    let dismissed = 0;
+    const mount = mountPrompt(scope, new FakeNode() as unknown as HTMLElement, () => {
+      dismissed += 1;
+    });
+
+    expect(mount).toEqual({ refusal: "ui-unavailable-frame" });
+    dismissPrompts(scope);
+    expect(dismissed).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Host layer
+// ---------------------------------------------------------------------------
+
+describe("prompts render into the host layer", () => {
+  test("permission prompt mounts into the layer, not document.body", async () => {
+    const scope = createPromptScope(true);
+    const pending = modals.ModalManager.getInstance().showPermissionRequestModal(
+      permissionOptions(() => {}),
+      scope,
+    );
+
+    expect(layer.children).toHaveLength(1);
+    expect(body.children).toHaveLength(0);
+    expect(warnings).toEqual([]);
+
+    dismissPrompts(scope);
+    expect(await pending).toEqual({ approved: false });
+  });
+
+  test("space creation prompt mounts into the layer, not document.body", async () => {
+    const scope = createPromptScope(true);
+    const pending = modals.ModalManager.getInstance().showSpaceCreationModal(
+      spaceOptions(() => {}),
+      scope,
+    );
+
+    expect(layer.children).toHaveLength(1);
+    expect(body.children).toHaveLength(0);
+
+    dismissPrompts(scope);
+    expect(await pending).toEqual({ success: false, dismissed: true });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Teardown and scope
+// ---------------------------------------------------------------------------
+
+describe("teardown settles pending prompts", () => {
+  test("host stop resolves a pending permission prompt as declined", async () => {
+    let dismissed = 0;
+    const pending = modals.ModalManager.getInstance().showPermissionRequestModal(
+      permissionOptions(() => {
+        dismissed += 1;
+      }),
+      createPromptScope(true),
+    );
+
+    stopPrompts();
+    expect(await pending).toEqual({ approved: false });
+    expect(dismissed).toBe(1);
+  });
+
+  test("host stop resolves a pending space creation prompt as dismissed", async () => {
+    const pending = modals.ModalManager.getInstance().showSpaceCreationModal(
+      spaceOptions(() => {}),
+      createPromptScope(true),
+    );
+
+    stopPrompts();
+    expect(await pending).toEqual({ success: false, dismissed: true });
+  });
+});
+
+describe("scoped dismissal", () => {
+  test("dismissPrompts settles only the given scope's prompts", () => {
+    const scopeA = createPromptScope(true);
+    const scopeB = createPromptScope(true);
+    const calls = { a: 0, b: 0 };
+    const element = () => new FakeNode() as unknown as HTMLElement;
+
+    mountPrompt(scopeA, element(), () => {
+      calls.a += 1;
+    });
+    mountPrompt(scopeB, element(), () => {
+      calls.b += 1;
+    });
+
+    dismissPrompts(scopeA);
+    expect(calls).toEqual({ a: 1, b: 0 });
+
+    stopPrompts();
+    expect(calls).toEqual({ a: 1, b: 1 });
+  });
+
+  test("a released prompt is no longer dismissed by teardown", () => {
+    const scope = createPromptScope(true);
+    let dismissed = 0;
+    const mount = mountPrompt(scope, new FakeNode() as unknown as HTMLElement, () => {
+      dismissed += 1;
+    });
+    if (!("release" in mount)) throw new Error("expected prompt to mount");
+
+    mount.release();
+    dismissPrompts(scope);
+    stopPrompts();
+    expect(dismissed).toBe(0);
+  });
+});
