@@ -6,7 +6,7 @@ Toasts now render in the UI host panel. They replace the legacy `ToastManager` s
 
 Breaking changes:
 
-- `notifications.popups`, `notifications.position`, `notifications.duration`, and `notifications.maxVisible` are removed. Setting any of them fails schema validation. Migrate `popups: false` to `ui: false`, which creates no host, button, or toasts. Migrate `position` to `ui: { position }`. `ui.position` accepts only `bottom-right`, `bottom-left`, and `bottom-center`. The former `top-*` values are gone, and an unrecognised value silently falls back to `bottom-right`. Duration (5 s) and maximum visible (3) are no longer configurable.
+- `notifications.popups`, `notifications.position`, `notifications.duration`, and `notifications.maxVisible` are removed. Setting any of them fails schema validation. Migrate `popups: false` to `ui: false`, which creates no host, button, or toasts. Migrate `position` to `ui: { position }`. `position` values starting with `top-` are accepted and now place the button and toasts at the matching bottom position. An unrecognised value silently falls back to `bottom-right`. Duration (5 s) and maximum visible (3) are no longer configurable.
 - `ui: { button: false }` hides the floating button but keeps toasts.
 - `notifications.throwErrors` is kept. It now rethrows asynchronously only for an error toast that was actually shown.
 - The `tinycloud:error`, `tinycloud:warning`, and `tinycloud:success` window events are no longer dispatched. The `tinycloud-toast*` custom elements are removed. `tinycloud:awaiting-user-input*` events are unchanged.

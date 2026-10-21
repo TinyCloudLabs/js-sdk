@@ -280,7 +280,7 @@ const tc = new TinyCloudWeb({
   ui: {
     button: true,         // default true; false hides the button only
     developerMode: false, // default false; shows the developer section
-    position: "bottom-right", // "bottom-right" | "bottom-left" | "bottom-center"
+    position: "bottom-right", // "bottom-right" | "bottom-left" | "bottom-center"; each "top-*" value places at the matching bottom position
     appId: "my-app",      // identity for the hide flag when no manifest is set
   },
 });
