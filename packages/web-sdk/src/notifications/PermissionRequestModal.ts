@@ -757,6 +757,9 @@ function escapeAttr(s: string): string {
   return escapeHtml(s);
 }
 
+// Deliberately no role or aria-modal: this prompt is not announced as a modal
+// dialog. e2e/prompts.pw.ts pins the absence until consent review decides; adding
+// them is a product change.
 // Register exactly once even under HMR / repeated bundler runs.
 if (
   typeof customElements !== "undefined" &&

@@ -156,6 +156,31 @@ for (const scheme of ["light", "dark"] as const) {
     expect({ space, permission }).toEqual({ space: "open", permission: "open" });
   });
 
+  // The prompts deliberately carry no role or aria-modal (see the comments in
+  // PermissionRequestModal.ts and SpaceCreationModal.ts). This pins that until
+  // consent review decides otherwise; adding them is a product change.
+  test(`${scheme}: space prompt has no dialog role or aria-modal`, async ({ page }) => {
+    await mountHarness(page, scheme);
+    await openSpaceCreation(page);
+    await expect(page.locator(SPACE)).toHaveCount(1);
+    const attrs = await page.locator(SPACE).evaluate((el) => ({
+      role: el.getAttribute("role"),
+      ariaModal: el.getAttribute("aria-modal"),
+    }));
+    expect(attrs).toEqual({ role: null, ariaModal: null });
+  });
+
+  test(`${scheme}: permission prompt has no dialog role or aria-modal`, async ({ page }) => {
+    await mountHarness(page, scheme);
+    await openPermission(page);
+    await expect(page.locator(PERMISSION)).toHaveCount(1);
+    const attrs = await page.locator(PERMISSION).evaluate((el) => ({
+      role: el.getAttribute("role"),
+      ariaModal: el.getAttribute("aria-modal"),
+    }));
+    expect(attrs).toEqual({ role: null, ariaModal: null });
+  });
+
   // Assertion b: Approve, Deny, and Escape each settle the permission prompt.
   test(`${scheme}: permission Approve resolves true and removes the prompt`, async ({ page }) => {
     await mountHarness(page, scheme);
