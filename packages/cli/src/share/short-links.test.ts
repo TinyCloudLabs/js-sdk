@@ -13,7 +13,7 @@ const ORIGIN = "https://share.example";
 const SPACE = "tinycloud:pkh:eip155:1:0x0000000000000000000000000000000000000001:default";
 
 /** An in-memory short-link service implementing the TC-1737 contract. */
-function fakeService(options: { readonly createStatus?: number; readonly wrongCid?: boolean; readonly deleteStatus?: number } = {}) {
+function fakeService(options: { readonly createStatus?: number; readonly wrongCid?: boolean; readonly deleteStatus?: number; readonly getResponse?: () => Response } = {}) {
   const stored = new Map<string, { bytes: Uint8Array; token: string }>();
   const requests: { method: string; url: string; body?: string; authorization?: string }[] = [];
   let next = 0;
@@ -35,8 +35,11 @@ function fakeService(options: { readonly createStatus?: number; readonly wrongCi
       return new Response(JSON.stringify({ id: newId, cid, deleteToken: token }), { status: 201 });
     }
     if (method === "GET") {
+      if (options.getResponse !== undefined) return options.getResponse();
       const entry = stored.get(id);
-      return entry === undefined ? new Response(JSON.stringify({ error: "not_found" }), { status: 404 }) : new Response(entry.bytes.slice(), { status: 200 });
+      return entry === undefined
+        ? new Response(JSON.stringify({ error: "not_found" }), { status: 404 })
+        : new Response(entry.bytes.slice(), { status: 200, headers: { "content-type": "application/octet-stream" } });
     }
     if (method === "DELETE") {
       if (options.deleteStatus !== undefined) return new Response(null, { status: options.deleteStatus });
@@ -193,6 +196,42 @@ describe("short links for addressed shares", () => {
     await links.shorten(published);
     expect(await links.discard(recordFor(published))).toBe("failed");
     expect(values.size).toBe(1);
+  });
+
+  test("a shared file named short-link.json keeps its content apart from the token record", async () => {
+    const service = fakeService();
+    const { kv, values } = fakeKv();
+    const links = createShareShortLinks({ kvForSpace: async () => kv, fetchFn: service.fetchFn });
+    const published = await publishedShare("share-collide");
+    // Where an addressed and a bearer share store a source file named short-link.json.
+    const content = new TextEncoder().encode("user content");
+    for (const path of ["shares/share-collide/short-link.json", "xyz.tinycloud.share/shares/share-collide/short-link.json"]) values.set(path, content);
+
+    await links.shorten(published);
+
+    expect(values.get("shares/share-collide/short-link.json")).toBe(content);
+    expect(values.get("xyz.tinycloud.share/shares/share-collide/short-link.json")).toBe(content);
+    // The key the Share web composer reads and writes too.
+    expect(shortLinkTokenKey("share-collide")).toBe("xyz.tinycloud.share/shares/share-collide/.short-link.json");
+    expect(values.has(shortLinkTokenKey("share-collide"))).toBe(true);
+  });
+
+  test("resolving refuses an oversized streamed body and a body that is not sealed bytes", async () => {
+    const published = await publishedShare();
+    const created = fakeService();
+    const short = await createShareShortLinks({ kvForSpace: async () => fakeKv().kv, fetchFn: created.fetchFn }).shorten(published);
+    let pulled = 0;
+    // A chunked body with no Content-Length that would grow without end.
+    const endless = () => new Response(new ReadableStream<Uint8Array>({
+      pull(controller) { pulled += 1; controller.enqueue(new Uint8Array(64 * 1024)); },
+    }), { status: 200, headers: { "content-type": "application/octet-stream" } });
+    const oversized = createShareShortLinks({ kvForSpace: async () => fakeKv().kv, fetchFn: fakeService({ getResponse: endless }).fetchFn });
+    await expect(oversized.resolve(short, ORIGIN)).rejects.toMatchObject({ code: "too-large" });
+    expect(pulled).toBeLessThan(10);
+
+    const html = () => new Response("<html></html>", { status: 200, headers: { "content-type": "text/html" } });
+    const wrongType = createShareShortLinks({ kvForSpace: async () => fakeKv().kv, fetchFn: fakeService({ getResponse: html }).fetchFn });
+    await expect(wrongType.resolve(short, ORIGIN)).rejects.toMatchObject({ code: "invalid-response" });
   });
 });
 

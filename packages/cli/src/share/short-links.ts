@@ -45,15 +45,42 @@ export interface ShortLinkRecord {
   readonly deleteToken: string;
 }
 
-/** Where the creator keeps each short link's delete token: the owner's KV `shares/<shareId>/short-link.json`. */
+/** Where the creator keeps each short link's delete token, in the owner's `default` space: see {@link shortLinkTokenKey}. */
 export interface ShortLinkTokenStore {
   read(shareId: string): Promise<ShortLinkRecord | undefined>;
   write(shareId: string, record: ShortLinkRecord): Promise<void>;
   remove(shareId: string): Promise<void>;
 }
 
+/**
+ * The delete-token record of a share. It is the same key in the Share web composer, so a share published in one
+ * client can be revoked from the other. The leading dot keeps it apart from shared content: no stored filename
+ * can start with one.
+ */
 export function shortLinkTokenKey(shareId: string): string {
-  return `shares/${shareId}/short-link.json`;
+  return `xyz.tinycloud.share/shares/${shareId}/.short-link.json`;
+}
+
+/** Read a response body as bytes, refusing more than `max` while it streams rather than after buffering it. */
+async function readCapped(response: Response, max: number): Promise<Uint8Array> {
+  if (response.body === null) return new Uint8Array(0);
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > max) {
+      await reader.cancel().catch(() => undefined);
+      throw new ShortLinkError("too-large", "the short-link service returned too many bytes");
+    }
+    chunks.push(value);
+  }
+  const bytes = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
+  return bytes;
 }
 
 /** Strict decode of a stored token file; anything else reads as absent. */
@@ -126,10 +153,17 @@ export function createShortLinkClient(origin: string, fetchFn: typeof fetch = gl
       if (!SHORT_LINK_ID_PATTERN.test(id)) throw new ShortLinkError("not-found", "the short link has expired, was revoked, or never existed");
       const response = await send(fetchFn, `${base}/${id}`, { method: "GET", headers: { accept: "application/octet-stream" } });
       if (response.status !== 200) throw statusError(response);
+      if ((response.headers.get("content-type") ?? "").split(";", 1)[0]!.trim().toLowerCase() !== "application/octet-stream") {
+        await response.body?.cancel().catch(() => undefined);
+        throw new ShortLinkError("invalid-response", "the short-link service did not return sealed bytes");
+      }
       const declared = Number(response.headers.get("content-length") ?? "0");
-      if (declared > MAX_SHORT_LINK_BYTES) throw new ShortLinkError("too-large", "the short-link service returned too many bytes");
-      const bytes = new Uint8Array(await response.arrayBuffer());
-      if (bytes.byteLength === 0 || bytes.byteLength > MAX_SHORT_LINK_BYTES) throw new ShortLinkError("invalid-response", "the short-link service returned no usable bytes");
+      if (declared > MAX_SHORT_LINK_BYTES) {
+        await response.body?.cancel().catch(() => undefined);
+        throw new ShortLinkError("too-large", "the short-link service returned too many bytes");
+      }
+      const bytes = await readCapped(response, MAX_SHORT_LINK_BYTES);
+      if (bytes.byteLength === 0) throw new ShortLinkError("invalid-response", "the short-link service returned no bytes");
       return bytes;
     },
     async delete(record) {

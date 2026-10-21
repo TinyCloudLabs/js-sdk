@@ -219,21 +219,25 @@ function assertShortLinkId(id: string): void {
   if (!SHORT_LINK_ID_PATTERN.test(id)) throw new TypeError("short link id must be 26 lowercase base32 characters");
 }
 
-/** Parse only the canonical short-link form; anything else is refused, never normalized. */
+/**
+ * Parse only the canonical short-link form; anything else is refused, never normalized. The one exception is the
+ * id's letter case: ids are case-insensitive base32 (a mail client or a reader may upper-case them), so `id` is
+ * returned lowercased.
+ */
 export function parseShortShareUrl(url: string, options: ParseShareUrlOptions = {}): ParsedShortShareUrl {
   let parsed: URL;
   try { parsed = new URL(url); } catch { throw new TypeError("short share URL is not a URL"); }
   if (parsed.protocol !== "https:" || parsed.username !== "" || parsed.password !== "") throw new TypeError("short share URL must be canonical HTTPS without userinfo");
   if (!isCanonicalHttpsOrigin(parsed.origin) || (options.expectedOrigin !== undefined && parsed.origin !== options.expectedOrigin)) throw new TypeError("short share URL origin is not trusted");
   if (parsed.search !== "") throw new TypeError("short share URL must not have a query string");
-  const match = /^\/s\/([a-z2-7]{26})$/.exec(parsed.pathname);
+  const match = /^\/s\/([A-Za-z2-7]{26})$/.exec(parsed.pathname);
   if (match === null) throw new TypeError("not a short share URL path");
-  const id = match[1]!;
+  const id = match[1]!.toLowerCase();
   const fragment = /^#v=3&k=([A-Za-z0-9_-]{43})&c=([a-z2-7]+)$/.exec(parsed.hash);
   if (fragment === null) throw new TypeError("short share URL fragment is not canonical");
   const k = fragment[1]!;
   const ciphertextCid = fragment[2]!;
-  if (url !== `${parsed.origin}/s/${id}${parsed.hash}`) throw new TypeError("short share URL is not lexically canonical");
+  if (url !== `${parsed.origin}${parsed.pathname}${parsed.hash}`) throw new TypeError("short share URL is not lexically canonical");
   let key32: Uint8Array;
   try { key32 = fromBase64Url(k); } catch { throw new TypeError("short share URL key is not canonical base64url"); }
   if (key32.byteLength !== KEY_LENGTH) throw new TypeError("short share URL key must be 32 bytes");

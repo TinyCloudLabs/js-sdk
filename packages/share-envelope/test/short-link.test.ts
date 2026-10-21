@@ -46,12 +46,13 @@ describe("short share links", () => {
     }
   });
 
-  it("accepts only the canonical short form", () => {
+  it("accepts only the canonical short form, with a case-insensitive id", () => {
     const { short, id, cid, k } = vectors[0]!;
     expect(parseShortShareUrl(short, { expectedOrigin: ORIGIN })).toMatchObject({ kind: "short", origin: ORIGIN, id, k, ciphertextCid: cid });
     const fragment = short.slice(short.indexOf("#"));
+    expect(parseShortShareUrl(`${ORIGIN}/s/${id.toUpperCase()}${fragment}`).id).toBe(id);
     for (const alias of [
-      `${ORIGIN}/s/${id.toUpperCase()}${fragment}`,
+      `${ORIGIN}/s/${id}0${fragment}`,
       `${ORIGIN}/s/${id}/${fragment}`,
       `${ORIGIN}/s/${id}?x=1${fragment}`,
       `http://share.tinycloud.xyz/s/${id}${fragment}`,
