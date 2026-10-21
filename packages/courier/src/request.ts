@@ -53,8 +53,8 @@ export function requestFields(input: { verb?: string; target?: string; summary?:
 
 /** A ULID: 26 Crockford base32 characters (no I, L, O, U), upper case. Thread, task and request ids all are. */
 export const ULID = /^[0-9A-HJKMNP-TV-Z]{26}$/;
-/** A peer handle as pairing stores it. */
-export const HANDLE = /^[A-Za-z0-9_-]{1,64}$/;
+/** A peer handle as pairing stores it. A leading `_` is reserved (invite folders live under `to/_invites/`). */
+export const HANDLE = /^[A-Za-z0-9-][A-Za-z0-9_-]{0,63}$/;
 
 /** `threadId` and `taskId` are written into the request (and so shown and hashed): ULIDs only, the one form the view shows. */
 export function requestIds(ids: { threadId: string; taskId: string }): void {

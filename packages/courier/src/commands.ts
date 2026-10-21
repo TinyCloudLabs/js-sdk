@@ -17,6 +17,7 @@ import { courierGrantRequest, grantFromInput, installGrant, openKeyDelegateUrl, 
 import {
   artifactA, artifactWithDelegation, parseArtifact, peerRecordBody, PEER_DELEGATION_EXPIRY, validateArtifactIdentity,
 } from './pairing.js';
+import type { PairArtifact } from './pairing.js';
 import {
   authRequiredTask, buildMessage, buildTask, COUNTERPARTY_NOTICE, isRecord, messageView, oneLine, safeText,
   messageRole, parseTaskState, taskView,
@@ -25,7 +26,7 @@ import {
 import { commitReceipts, collectInbound, renderInboxText, writeOut } from './inbox.js';
 import { getJson, listAll, putCreate, putMatch, del } from './store.js';
 import { DEFAULT_ORDERS } from './orders.js';
-import { requestFields, requestIds, requestShapeProblem, requestText } from './request.js';
+import { HANDLE, requestFields, requestIds, requestShapeProblem, requestText } from './request.js';
 import { requestHash } from './canonical.js';
 import { targetHelp } from './guard/target.js';
 import type { ParsedArgs } from './args.js';
@@ -187,6 +188,7 @@ async function pairStart(args: ParsedArgs) {
   const { profile } = await ctx();
   const peerHandle = args.positional[1] ?? fail('usage', `Usage: ${cmd('pair start <peer> [--call-me <handle>]')}`);
   const callMe = args.get('call-me') ?? profile.selfHandle ?? peerHandle;
+  if (!HANDLE.test(peerHandle) || !HANDLE.test(callMe)) fail('usage', `Handles are letters, digits, "-" or "_", not starting with "_" (got "${peerHandle}" / "${callMe}").`);
   if (profile.peers[peerHandle]?.status === 'paired') fail('usage', `Already paired with ${peerHandle}.`);
   profile.peers[peerHandle] = {
     handle: peerHandle,
@@ -236,46 +238,51 @@ async function pairAccept(args: ParsedArgs) {
   const art = parseArtifact(readArtifactArg(args));
   validateArtifactIdentity(art);
   if (art.from.owner === profile.ownerDid || art.from.courier === profile.courierDid) fail('bad-artifact', 'Refusing to pair with this agent identity.');
+  if (art.step === 'A') return printJson(await acceptA(profile, node, art));
+  if (art.step === 'B') return printJson(await acceptB(profile, node, art, args.get('as') ?? art.callMe));
+  printJson(await acceptC(profile, node, art));
+}
 
-  if (art.step === 'A') {
-    const handle = art.callMe;
-    const outbound = await node.delegateTo(art.from.courier, peerReadPermissions(handle, profile.spaceId!), { expiry: PEER_DELEGATION_EXPIRY });
-    const peer: StoredPeer = {
-      handle, ownerDid: art.from.owner, courierDid: art.from.courier, label: art.from.label,
-      spaceId: art.spaceId, outbound: [], theirHandleForMe: art.peer, status: 'awaiting-C', pairedAt: new Date().toISOString(),
-    };
-    recordOutbound(peer, outbound.delegation);
-    profile.peers[handle] = peer;
-    saveProfile(profile);
-    await writePeerRecord(node, peer);
-    printJson(artifactWithDelegation('B', profile, outbound.delegation, handle, art.peer));
-    return;
-  }
+/** Step A received: grant the peer read on our mailbox, record it as awaiting C, return artifact B. */
+export async function acceptA(profile: Profile, node: TinyCloudNode, art: PairArtifact): Promise<PairArtifact> {
+  const handle = art.callMe;
+  const outbound = await node.delegateTo(art.from.courier, peerReadPermissions(handle, profile.spaceId!), { expiry: PEER_DELEGATION_EXPIRY });
+  const peer: StoredPeer = {
+    handle, ownerDid: art.from.owner, courierDid: art.from.courier, label: art.from.label,
+    spaceId: art.spaceId, outbound: [], theirHandleForMe: art.peer, status: 'awaiting-C', pairedAt: new Date().toISOString(),
+  };
+  recordOutbound(peer, outbound.delegation);
+  profile.peers[handle] = peer;
+  saveProfile(profile);
+  await writePeerRecord(node, peer);
+  return artifactWithDelegation('B', profile, outbound.delegation, handle, art.peer);
+}
 
-  if (art.step === 'B') {
-    const handle = args.get('as') ?? art.callMe;
-    const peer = findPendingPeer(profile, handle);
-    if (art.from.owner === profile.ownerDid) fail('bad-artifact', 'Refusing to pair with our own owner identity.');
-    const candidate: StoredPeer = {
-      ...peer,
-      ownerDid: art.from.owner,
-      courierDid: art.from.courier,
-      label: art.from.label,
-      spaceId: art.spaceId,
-      theirHandleForMe: art.peer,
-    };
-    const incoming = await validatePeerDelegation(node, profile, candidate, art.delegation!);
-    Object.assign(peer, candidate);
-    peer.inbound = { delegation: serializeDelegation(incoming.delegation), cid: incoming.cid, expiresAt: incoming.expiresAt };
-    const outgoing = await node.delegateTo(peer.courierDid, peerReadPermissions(peer.handle, profile.spaceId!), { expiry: PEER_DELEGATION_EXPIRY });
-    recordOutbound(peer, outgoing.delegation);
-    peer.status = 'paired';
-    saveProfile(profile);
-    await writePeerRecord(node, peer);
-    printJson(artifactWithDelegation('C', profile, outgoing.delegation, peer.handle, art.peer));
-    return;
-  }
+/** Step B received for a pending-A peer `handle`: validate, grant read back, mark paired, return artifact C. */
+export async function acceptB(profile: Profile, node: TinyCloudNode, art: PairArtifact, handle: string): Promise<PairArtifact> {
+  const peer = findPendingPeer(profile, handle);
+  if (art.from.owner === profile.ownerDid) fail('bad-artifact', 'Refusing to pair with our own owner identity.');
+  const candidate: StoredPeer = {
+    ...peer,
+    ownerDid: art.from.owner,
+    courierDid: art.from.courier,
+    label: art.from.label,
+    spaceId: art.spaceId,
+    theirHandleForMe: art.peer,
+  };
+  const incoming = await validatePeerDelegation(node, profile, candidate, art.delegation!);
+  Object.assign(peer, candidate);
+  peer.inbound = { delegation: serializeDelegation(incoming.delegation), cid: incoming.cid, expiresAt: incoming.expiresAt };
+  const outgoing = await node.delegateTo(peer.courierDid, peerReadPermissions(peer.handle, profile.spaceId!), { expiry: PEER_DELEGATION_EXPIRY });
+  recordOutbound(peer, outgoing.delegation);
+  peer.status = 'paired';
+  saveProfile(profile);
+  await writePeerRecord(node, peer);
+  return artifactWithDelegation('C', profile, outgoing.delegation, peer.handle, art.peer);
+}
 
+/** Step C received: validate against the awaiting-C peer, mark paired, return the pairing result. */
+export async function acceptC(profile: Profile, node: TinyCloudNode, art: PairArtifact): Promise<Record<string, unknown>> {
   const peer = profile.peers[art.callMe] ?? findPeerByCourier(profile, art.from.courier);
   if (!peer) fail('unknown-peer', `No pending pairing for "${art.callMe}". Did you run \`pair accept\` on artifact A?`);
   if (art.from.courier !== peer.courierDid || art.spaceId !== peer.spaceId || art.from.owner !== peer.ownerDid) {
@@ -288,7 +295,7 @@ async function pairAccept(args: ParsedArgs) {
   peer.status = 'paired';
   saveProfile(profile);
   await writePeerRecord(node, peer);
-  printJson({ ok: true, paired: peer.handle, peerDid: peer.courierDid, peerSpace: peer.spaceId, delegationExpiresAt: peer.inbound.expiresAt });
+  return { ok: true, paired: peer.handle, peerDid: peer.courierDid, peerSpace: peer.spaceId, delegationExpiresAt: peer.inbound.expiresAt };
 }
 
 function recordOutbound(peer: StoredPeer, delegation: PortableDelegation): void {
