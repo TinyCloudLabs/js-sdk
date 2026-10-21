@@ -51,13 +51,13 @@ There are two release paths in this repo and you need to know which one you're l
 
 ### Beta releases: via changesets, from master
 
-`.github/workflows/changesets.yml` runs on every push to `master`. If there are pending changeset files under `.changeset/*.md`, it runs `bun changeset version` (which consumes them and emits beta version bumps, because the repo is held in pre-mode), then publishes to npm under the `beta` dist-tag, then commits the version bumps back to master with `[skip ci]`.
+`.github/workflows/changesets.yml` runs on every push to `master`. If there are pending changeset files under `.changeset/*.md`, it runs `bun changeset version` (which consumes them and emits beta version bumps, because the repo is held in pre-mode), commits the bumps as `chore: beta version packages [skip ci]` and pushes that commit to `master`, then publishes to npm under the `beta` dist-tag.
 
 This path only works while `.changeset/pre.json` is present. Do not run `bun changeset pre exit` casually — that file is what makes `changeset version` produce `X.Y.Z-beta.N` instead of a stable bump. The team uses pre-mode as the steady state.
 
 ### Stable releases: via the Stable Release job
 
-Stable releases are cut by the `Stable Release` job in `.github/workflows/changesets.yml`. It runs only on manual dispatch with `confirm` set to `release`, and only from `master`:
+Stable releases are cut by the `Stable Release` job in `.github/workflows/changesets.yml`. It runs only on manual dispatch with `confirm` set to `release`, and always checks out and releases `master` (no ref guard):
 
 ```bash
 gh workflow run changesets.yml --ref master -f confirm=release
@@ -75,7 +75,7 @@ Because the job re-enters beta mode itself, `.changeset/pre.json` needs no manua
 
 Guards:
 
-- A stable release that graduates a package to a higher major than it had when it entered pre mode fails unless the release has an `approve-major-release:` sign-off commit.
+- A stable release fails for any package that would leave pre mode at a higher major than it entered (`check-major-release-signoff.mjs stable`), unless a commit message in the current pre-release cycle, from the commit that added `.changeset/pre.json` through `master`'s HEAD, has an `approve-major-release:` line listing that package. The check reads every commit message in that range, including squash-merge messages, not only empty commits. Recovery runs that finish an unfinished stable release skip this check.
 - If the push fails, nothing is published. Dispatch the job again.
 - If an earlier stable run pushed but did not finish publishing, the next dispatch finishes that release from its commit and graduates nothing new. Beta runs refuse to run until then.
 
@@ -83,7 +83,7 @@ Break-glass only: `.github/workflows/raw-publish.yml` (manual dispatch, optional
 
 ### How releases push
 
-`changesets.yml` pushes its release commits (`chore: beta version packages`, `chore: release stable packages`, `chore: enter beta pre-release mode`) to `master` over SSH with a **deploy key**, not a personal access token.
+`changesets.yml` pushes its release commits (`chore: beta version packages [skip ci]`, `chore: release stable packages [skip ci]`, `chore: enter beta pre-release mode [skip ci]`) to `master` over SSH with a **deploy key**, not a personal access token. Every release commit carries `[skip ci]`, so the push does not start another beta run.
 
 - **Secret:** `RELEASE_DEPLOY_KEY` (repository secret) holds the private half of the key. The public half is a deploy key on `TinyCloudLabs/js-sdk` with **write access**.
 - **Ruleset bypass:** when `master` is protected, the deploy key is the only actor allowed to bypass the ruleset, so it is the only way for the workflow to push straight to `master`. Everything else goes through pull requests.
