@@ -77,7 +77,7 @@ export const syncSection: PanelSection = {
     const wipeNote = document.createElement("p");
     wipeNote.className = "note";
     wipeNote.textContent = ctx.text("sync.wipe.note");
-    confirmBox.append(question, actions, wipeNote);
+    confirmBox.append(question, actions);
 
     const errorLine = document.createElement("p");
     errorLine.className = "error";
@@ -96,7 +96,9 @@ export const syncSection: PanelSection = {
       toggle.disabled = locked || busy;
 
       const wordKey = WORD[effective];
-      word.hidden = wordKey === undefined;
+      // The header already shows the same sync_pending word; the reason line still explains it.
+      const headerShowsWord = effective === "pending" && ctx.topStatus() === "sync_pending";
+      word.hidden = wordKey === undefined || headerShowsWord;
       word.textContent = wordKey === undefined ? "" : ctx.text(wordKey);
 
       const showReason = effective === "pending" || effective === "unavailable";
@@ -160,12 +162,14 @@ export const syncSection: PanelSection = {
     });
 
     const unsubscribe = facade.subscribe(() => render());
-    el.append(row, word, reasonLine, wipe, confirmBox, errorLine);
+    const unsubscribeStatus = ctx.onStatusChange(() => render());
+    el.append(row, word, reasonLine, wipe, wipeNote, confirmBox, errorLine);
     render();
 
     return () => {
       disposed = true;
       unsubscribe();
+      unsubscribeStatus();
       el.replaceChildren();
     };
   },

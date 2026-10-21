@@ -67,10 +67,12 @@ function onUnhandledRejection(event: PromiseRejectionEvent): void {
 export function createHostRuntime(): HostRuntime {
   const clients = new Map<number, ClientEntry>();
   const clientListeners = new Set<() => void>();
+  const statusListeners = new Set<() => void>();
   const hideStore = createButtonHideStore(defaultLocalStorage);
   const board = createStatusBoard((top) => {
     mounted?.button?.setStatus(top);
     mounted?.panel.setStatus(top);
+    for (const cb of [...statusListeners]) cb();
   });
 
   let nextId = 1;
@@ -137,6 +139,13 @@ export function createHostRuntime(): HostRuntime {
     },
     developerMode: () => [...clients.values()].some((entry) => entry.registration.config.developerMode),
     setStatus: (source, status) => board.set(source, status),
+    topStatus: () => board.top(),
+    onStatusChange(cb) {
+      statusListeners.add(cb);
+      return () => {
+        statusListeners.delete(cb);
+      };
+    },
     toast: (t) => toastStore.push(t),
     openPanel: () => setOpen(true),
     closePanel: () => setOpen(false),

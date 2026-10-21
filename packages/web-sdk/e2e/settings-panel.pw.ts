@@ -115,6 +115,19 @@ for (const scheme of ["light", "dark"] as const) {
   });
 }
 
+// The wipe note is always shown directly under the Erase button, so it is visible in the default on state.
+for (const scheme of ["light", "dark"] as const) {
+  test(`${scheme}: wipe note is visible under the Erase button in the default on state`, async ({ page }) => {
+    await mountHarness(page, scheme);
+    await page.getByRole("button", { name: "TinyCloud settings", exact: true }).click();
+    const erase = page.getByRole("button", { name: "Erase local copy", exact: true });
+    await expect(erase).toBeVisible();
+    const note = erase.locator("xpath=following-sibling::p[1]");
+    await expect(note).toBeVisible();
+    await expect(note).toHaveClass(/\bnote\b/);
+  });
+}
+
 // Each toast's left stripe must be its kind colour in the rendered page, and at
 // least 3:1 against the toast surface. Dark warning is the only dark override.
 const KINDS = ["info", "success", "warning", "error"] as const;
