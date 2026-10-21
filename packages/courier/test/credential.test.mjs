@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { parseArgs } from '../dist/args.js';
 import { cmdCredential } from '../dist/credential.js';
 import { savePendingEmailProof } from '../dist/credential-source.js';
+import { emailCredentialRequirement } from '../dist/credential-source.js';
 import { EmailProofError } from '@tinycloud/web-sdk/credentials';
 
 const WITNESS = 'https://witness.credentials.org';
@@ -340,6 +341,29 @@ test('show without a stored credential fails with NOT_FOUND and prints nothing',
   const { promise, out } = run(['show', '--email', ADDRESS], { home, now: () => NOW });
   await assert.rejects(promise, (error) => error.code === 'credential.show.NOT_FOUND');
   assert.equal(out(), '');
+});
+
+test('acquire step 2 stores a credential that show finds for a fragment-bearing key', async () => {
+  const home = freshHome();
+  const withFragment = { v: 1, jwk, did: `${DID}#${DID.slice('did:key:'.length)}`, createdAt: '2026-10-20T10:00:00Z' };
+  savePendingEmailProof(pendingFixture(NOW, { holderDid: DID }), home);
+  const requirement = emailCredentialRequirement(ADDRESS);
+  const issuedAt = new Date(NOW.getTime() - 60_000).toISOString();
+  const verified = {
+    type: 'OpenCredentialsIssuedCredential', version: 1, protocol: requirement.protocol ?? 'tinycloud.email-proof/v1',
+    profile: requirement.profile, credentialType: requirement.credentialType, schema: 'urn:test', format: 'sd-jwt',
+    issuerDid: 'did:web:issuer.credentials.org', issuerKid: 'kid-1', subjectDid: DID, holderDid: DID,
+    claims: requirement.claims, claimsDigest: 'a'.repeat(64), descriptorDigest: 'b'.repeat(64), credentialId: 'cred-b4b-1',
+    issuedAt, notBefore: issuedAt, expiresAt: new Date(NOW.getTime() + 3_600_000).toISOString(),
+    status: { method: 'none', freshnessSeconds: 60 }, credential: 'bearer-not-printed',
+    verifiedAt: NOW.toISOString(), credentialDigest: 'c'.repeat(64), statusCheckedAt: NOW.toISOString(),
+  };
+  await run(['acquire', '--email', ADDRESS, '--code', CODE], {
+    home, now: () => NOW, loadKey: () => withFragment, completeProof: async () => ({ verified }),
+  }).promise;
+  const shown = run(['show', '--email', ADDRESS], { home, now: () => NOW, loadKey: () => withFragment });
+  await shown.promise;
+  assert.match(shown.out(), /credentialId: cred-b4b-1/);
 });
 
 test('unknown subcommand prints usage', async () => {

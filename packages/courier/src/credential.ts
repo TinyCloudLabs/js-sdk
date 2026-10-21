@@ -144,7 +144,7 @@ async function acquire(args: ParsedArgs, deps: Resolved): Promise<void> {
     verified: result.verified,
     requirement,
     requirementDigest,
-    holderDid: key.did,
+    holderDid: holder.did,
     now: deps.now(),
   });
   deps.out(`Email credential stored for ${address}. It is valid for up to 1 hour from issuance.\n`);
@@ -152,13 +152,13 @@ async function acquire(args: ParsedArgs, deps: Resolved): Promise<void> {
 
 async function show(args: ParsedArgs, deps: Resolved): Promise<void> {
   const address = requireFlag(args, 'email', showUsage()).trim();
-  const key = deps.loadKey(deps.home);
+  const holder = holderFor(deps.loadKey(deps.home));
   const requirement = emailCredentialRequirement(address);
   const requirementDigest = await credentialRequirementDigest(requirement);
   const record = await new StoredCredentialSource(deps.home).find({
     requirement,
     requirementDigest,
-    holderDid: key.did,
+    holderDid: holder.did,
     now: deps.now(),
   });
   if (!record) {
