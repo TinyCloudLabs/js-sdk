@@ -310,21 +310,6 @@ describe("teardown settles pending prompts", () => {
     stopPrompts();
     expect(await pending).toEqual({ success: false, dismissed: true });
   });
-
-  test("host stop still settles later prompts when one dismiss throws", () => {
-    const scope = createPromptScope(true);
-    const calls = { first: 0, second: 0 };
-    mountPrompt(scope, new FakeNode() as unknown as HTMLElement, () => {
-      calls.first += 1;
-      throw new Error("probe teardown");
-    });
-    mountPrompt(scope, new FakeNode() as unknown as HTMLElement, () => {
-      calls.second += 1;
-    });
-
-    expect(() => stopPrompts()).toThrow("probe teardown");
-    expect(calls).toEqual({ first: 1, second: 1 });
-  });
 });
 
 describe("scoped dismissal", () => {
@@ -348,22 +333,41 @@ describe("scoped dismissal", () => {
     expect(calls).toEqual({ a: 1, b: 1 });
   });
 
-  test("a throwing dismiss does not stop later prompts in the same scope", () => {
+  test("a throwing dismiss does not stop cleanup and surfaces on a microtask", () => {
     const scope = createPromptScope(true);
     const calls = { first: 0, second: 0 };
-    mountPrompt(scope, new FakeNode() as unknown as HTMLElement, () => {
+    const throwing = () => {
       calls.first += 1;
       throw new Error("probe dismiss");
-    });
+    };
+    mountPrompt(scope, new FakeNode() as unknown as HTMLElement, throwing);
     mountPrompt(scope, new FakeNode() as unknown as HTMLElement, () => {
       calls.second += 1;
     });
 
-    expect(() => dismissPrompts(scope)).toThrow("probe dismiss");
-    expect(calls).toEqual({ first: 1, second: 1 });
+    const realQueueMicrotask = globalThis.queueMicrotask;
+    const queued: Array<() => void> = [];
+    globalThis.queueMicrotask = (task: () => void) => {
+      queued.push(task);
+    };
+    try {
+      expect(() => dismissPrompts(scope)).not.toThrow();
+      expect(calls).toEqual({ first: 1, second: 1 });
+      expect(queued).toHaveLength(1);
+      expect(() => queued[0]!()).toThrow("probe dismiss");
 
-    stopPrompts();
-    expect(calls).toEqual({ first: 1, second: 1 });
+      queued.length = 0;
+      mountPrompt(scope, new FakeNode() as unknown as HTMLElement, throwing);
+      mountPrompt(scope, new FakeNode() as unknown as HTMLElement, () => {
+        calls.second += 1;
+      });
+      expect(() => stopPrompts()).not.toThrow();
+      expect(calls).toEqual({ first: 2, second: 2 });
+      expect(queued).toHaveLength(1);
+      expect(() => queued[0]!()).toThrow("probe dismiss");
+    } finally {
+      globalThis.queueMicrotask = realQueueMicrotask;
+    }
   });
 
   test("a released prompt is no longer dismissed by teardown", () => {

@@ -478,6 +478,33 @@ for (const scheme of ["light", "dark"] as const) {
     expect(await hostMounted(page)).toBe(true);
   });
 
+  // A throwing onDismiss must not block cleanup: unregister still removes the sole client's host.
+  test(`${scheme}: unregister with a throwing onDismiss still unmounts the host and surfaces the error`, async ({ page }) => {
+    const pageErrors: string[] = [];
+    page.on("pageerror", (error) => pageErrors.push(error.message));
+    await mountHarness(page, scheme);
+    await openThrowingSpaceCreation(page);
+    await expect(page.locator(SPACE)).toHaveCount(1);
+
+    await page.evaluate(() => (window as unknown as PromptWindow).__tc.unregister());
+    await expect(page.locator(SPACE)).toHaveCount(0);
+    await expect(page.locator("[data-tinycloud-ui]")).toHaveCount(0);
+    await expect.poll(() => pageErrors).toEqual(["probe onDismiss"]);
+  });
+
+  test(`${scheme}: reset with a throwing onDismiss still settles the prompt and releases the scroll lock`, async ({ page }) => {
+    const pageErrors: string[] = [];
+    page.on("pageerror", (error) => pageErrors.push(error.message));
+    await mountHarness(page, scheme);
+    await openThrowingSpaceCreation(page);
+    await expect(page.locator(SPACE)).toHaveCount(1);
+
+    await page.evaluate(() => (window as unknown as PromptWindow).__tc.reset());
+    await expect(page.locator(SPACE)).toHaveCount(0);
+    await expect.poll(() => page.evaluate(() => document.body.style.overflow)).toBe("");
+    await expect.poll(() => pageErrors).toEqual(["probe onDismiss"]);
+  });
+
   // Legacy popups:false maps to ui.button/toasts off; the prompts must still render in the panel.
   test(`${scheme}: legacy popups:false still shows the space prompt and Escape resolves false`, async ({ page }) => {
     await mountHarness(page, scheme, false, { popups: false });

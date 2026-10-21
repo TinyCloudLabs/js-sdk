@@ -69,12 +69,15 @@ export function mountPrompt(
   };
 }
 
-/** Dismisses every pending prompt opened by `scope`. Used on reset and unregister. */
-export function dismissPrompts(scope: PromptScope): void {
+/**
+ * Runs every entry's dismiss, removing each from the registry first. A throwing
+ * caller callback must not stop cleanup, so the first error is rethrown on a
+ * microtask after all entries have been settled.
+ */
+function dismissEntries(entries: readonly OpenPrompt[]): void {
   let failed = false;
   let firstError: unknown;
-  for (const entry of [...openPrompts]) {
-    if (entry.scope !== scope) continue;
+  for (const entry of entries) {
     openPrompts.delete(entry);
     try {
       entry.dismiss();
@@ -85,7 +88,16 @@ export function dismissPrompts(scope: PromptScope): void {
       }
     }
   }
-  if (failed) throw firstError;
+  if (failed) {
+    queueMicrotask(() => {
+      throw firstError;
+    });
+  }
+}
+
+/** Dismisses every pending prompt opened by `scope`. Used on reset and unregister. */
+export function dismissPrompts(scope: PromptScope): void {
+  dismissEntries([...openPrompts].filter((entry) => entry.scope === scope));
 }
 
 export const prompts: HostPart = {
@@ -94,20 +106,7 @@ export const prompts: HostPart = {
     promptLayer = layer;
     return () => {
       promptLayer = undefined;
-      let failed = false;
-      let firstError: unknown;
-      for (const entry of [...openPrompts]) {
-        openPrompts.delete(entry);
-        try {
-          entry.dismiss();
-        } catch (error) {
-          if (!failed) {
-            failed = true;
-            firstError = error;
-          }
-        }
-      }
-      if (failed) throw firstError;
+      dismissEntries([...openPrompts]);
     };
   },
 };
