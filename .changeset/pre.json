@@ -54,6 +54,7 @@
     "deps-refresh-jose",
     "deps-security-update-2026-10-20",
     "direct-owner-revoke",
+    "held-credentials-org-rows",
     "held-credentials-verifier",
     "knowledge-pickup-commands",
     "kv-list-matching",
