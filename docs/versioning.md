@@ -13,7 +13,7 @@ This monorepo publishes two families of packages to npm that move on **independe
 
 These are declared as a `linked` group in `.changeset/config.json` and are always bumped to the same version. `@tinycloud/cli` tracks this family closely but is not formally linked (it versions independently so it can have patch-only releases).
 
-Current line: `2.x` (latest stable: `2.0.4`).
+Current line: `3.x` (latest stable: `3.3.0`).
 
 ### WASM bindings family (independent, only bumped on Rust/WASM output changes)
 
@@ -22,7 +22,7 @@ Current line: `2.x` (latest stable: `2.0.4`).
 
 These are wasm-pack outputs from the Rust crates in `packages/sdk-rs/`. They are bumped **only when the generated WASM or its TypeScript glue actually changes**. They are not in the linked group with the TypeScript SDK family and they are not co-bumped on TS-only releases.
 
-Current line: `1.x` (latest stable: `1.7.1`).
+Current line: `1.x` (latest stable: `1.7.7` for `web-sdk-wasm`, `1.7.8` for `node-sdk-wasm`).
 
 **Triggers that warrant a WASM package bump:**
 
