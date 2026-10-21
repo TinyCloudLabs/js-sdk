@@ -242,6 +242,17 @@ record (for example, restored from an older copy) refuses logout; switch the
 default profile if needed, then run `tc profile delete <name>` and sign in
 again.
 
+`auth logout`, `auth rotate`, and replica-enabled `auth login` that replaces the
+profile's share-history key check the sender share history first. If it records
+unexpired shares, or cannot be read, the command refuses with exit 5
+(`SHARE_HISTORY_UNEXPIRED` or `SHARE_HISTORY_UNAVAILABLE`) and changes nothing.
+Pass `--force` to proceed anyway; `auth logout --revoke` also skips the check. A
+plain re-login that keeps the key is not checked, and local-owner profiles are not
+checked. `tc share history recover` moves an unreadable history file aside to
+`share-history-v2.json.unreadable-<UTC timestamp>` and reports the new path. It
+never deletes or overwrites a file. If the file exists but cannot be read,
+recover exits 1 with `SHARE_HISTORY_RECOVER_FAILED` and moves nothing.
+
 `tc auth grants list` labels the signed-in delegation CID `(current session)`.
 `tc delegation revoke <cid>` still accepts any eligible exact CID, but when
 `<cid>` is the current session it requires `--yes` or an interactive confirmation

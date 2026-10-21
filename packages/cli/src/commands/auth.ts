@@ -17,6 +17,7 @@ import { isReplicaError, ReplicaErrorCode } from "@tinycloud/replica";
 import { REPLICA_GATE_FILE } from "@tinycloud/sdk-services/kv/replication/contractConstants";
 import { ProfileManager } from "../config/profiles.js";
 import { logoutInventorySnapshot, planLogoutRevocations, type LogoutRevocationPlan } from "../lib/logout-revocation.js";
+import { assertShareHistoryAllowsKeyDrop } from "../share/history-guard.js";
 import {
   assertPendingLogoutOwner, assertPendingRemoteLogoutSession, clearProfileCredentials, eraseApprovedLegacyReplicas,
   finishLegacyReplicaCleanup, gateHeldByAnotherAccount, profilePurge, recoverPendingLogout, refuseRestoredGate,
@@ -627,6 +628,7 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
     .option("--expiry <duration>", "OpenKey session lifetime, e.g. 1h or 7d (device login: at most 30d, default 30d)")
     .option("--owner <did>", "Sign in as this owner (did:pkh:eip155:CHAIN:ADDRESS): OpenKey preselects that key, e.g. one that is not the account's primary key, and an approval by any other identity is refused. With --manifest, also names the secrets owner for a manifest's `secrets` on a profile with no recorded owner")
     .option("--replace-session", "Scoped or device login: replace this profile's live session even though the new scope would narrow, change or shorten it (prefer a new profile)")
+    .option("--force", "Replica-enabled OpenKey login: replace the stored session key even when recorded shares could not be checked or hold unexpired shares that need the current key")
     .option("--replication-prefix <prefix>", "Add replication get+sync authority for a folder prefix ending in /, or root (repeatable)", (prefix: string, values: string[] = []) => [...values, prefix])
     .option("--replication-allow-secrets", "Allow replication of secret material (network-wide decrypt warning)")
     .action(async (options, cmd) => {
@@ -744,6 +746,7 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
             expectedOwner: owner,
             replaceSession: options.replaceSession === true,
             persistHost,
+            force: options.force === true,
           });
           if (!preparedCommitted) await persistReplicationLogin(ctx.profile, replicationOptions);
           if (replicationOptions.allowSecrets) writeReplicationSecretsWarning();
@@ -760,6 +763,7 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
     .option("--revoke", "Revoke owner-controlled grants and the session CID on the node before local logout")
     .option("--discard-local-changes", "Approve deletion of the exact local replica paths and identities listed before logout; with --revoke, deletion waits for every node receipt")
     .option("--approve-inventory <token>", "After a refused pending remote logout, confirm the exact changed paths printed by the previous command; requires --discard-local-changes")
+    .option("--force", "Log out even when recorded shares could not be checked or hold unexpired shares that need the current session key")
     .action(async (options, cmd) => {
       try {
         const globalOpts = cmd.optsWithGlobals();
@@ -780,6 +784,7 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
             "--approve-inventory only applies to a separate plain logout after a refused pending remote revocation.",
             ExitCode.USAGE_ERROR);
         }
+        if (!options.revoke && !options.force) await assertShareHistoryAllowsKeyDrop(ctx.profile, "logout");
         const online = options.revoke ? await revokeForLogout(ctx, options.discardLocalChanges === true) : undefined;
         const replicasRemoved = await finishProfileLogout(ctx, {
           keepReplicas: options.keepReplicas,
@@ -812,6 +817,7 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
     .description("Rotate the active profile session key")
     .option("--paste", "Use manual paste mode instead of browser callback")
     .option("--no-popup", "Print the OpenKey URL without opening a browser")
+    .option("--force", "Rotate even when recorded shares could not be checked or hold unexpired shares that need the current session key")
     .action(async (options, cmd) => {
       try {
         const globalOpts = cmd.optsWithGlobals();
@@ -819,6 +825,7 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
         await rotateAuthKey(ctx.profile, ctx.host, {
           paste: options.paste,
           noPopup: options.popup === false,
+          force: options.force === true,
         });
       } catch (error) {
         return handleError(error);
@@ -2194,7 +2201,7 @@ export function portableFromOpenKeyDelegation(
 async function rotateAuthKey(
   profileName: string,
   host: string,
-  options: { paste?: boolean; noPopup?: boolean } = {},
+  options: { paste?: boolean; noPopup?: boolean; force?: boolean } = {},
 ): Promise<void> {
   await recoverPendingLogout(profileName);
   const profile = await ProfileManager.getProfile(profileName);
@@ -2233,6 +2240,7 @@ async function rotateAuthKey(
       ExitCode.AUTH_REQUIRED);
   }
 
+  if (!options.force) await assertShareHistoryAllowsKeyDrop(profileName, "rotate");
   const { jwk, did } = await withSpinner("Generating session key...", async () => {
     return generateKey();
   });
@@ -2526,6 +2534,8 @@ interface OpenKeyLoginOptions {
   /** Record `host` as the profile host (an explicit `--host`). */
   persistHost?: boolean;
   openKeyAcquisition?: OpenKeyAcquisition;
+  /** Bypass the share-history check that guards replacing the stored session key. */
+  force?: boolean;
 }
 
 /** Only a fresh SDK-prepared, OpenKey-signed owner session may establish replica consent. */
@@ -2553,6 +2563,7 @@ async function refreshPreparedOpenKeySession(params: {
   if (expectedOwner && normalizePkhIdentifier(owner) !== normalizePkhIdentifier(expectedOwner)) {
     throw new CLIError("OPENKEY_OWNER_MISMATCH", "The verified owner differs from this profile. No approval was started.", ExitCode.PERMISSION_DENIED);
   }
+  if (options.force !== true) await assertShareHistoryAllowsKeyDrop(profileName, "login");
   const replicationConfig = createCliReplicationConfig(profileName, replication, { debug: false, quiet: true }, true);
   if (!replicationConfig) throw new CLIError("V2_REQUIRED", "Replica configuration is unavailable; no approval was started.", ExitCode.AUTH_REQUIRED);
   const space = permissions.find((permission) => permission.service === "tinycloud.kv")?.space ?? ownerSpaceId("default", owner);

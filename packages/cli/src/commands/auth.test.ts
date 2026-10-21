@@ -218,6 +218,7 @@ mock.module("../config/profiles.js", () => ({
       return next;
     },
     withLock: async <T>(_name: string, action: () => Promise<T>) => action(),
+    getCacheDir: async (name: string) => join(testHome, "cache", name),
     resolveContext: async () => ({
       profile: activeProfile,
       host: activeHost,
