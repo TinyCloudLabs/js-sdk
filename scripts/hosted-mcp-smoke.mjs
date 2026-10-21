@@ -163,6 +163,10 @@ function assertInventory(tools) {
   return tools.length;
 }
 
+const APPLICATIONS_SPACE = /^tinycloud:pkh:[^:]+:[^:]+:0x[0-9a-fA-F]{40}:applications$/;
+// beta.36 returns the full space id; accept only that exact shape or the bare name.
+function isApplicationsSpace(space) { return space === 'applications' || (typeof space === 'string' && APPLICATIONS_SPACE.test(space)); }
+
 function assertListing(result, minimum) {
   if (result.status === 'authority_required') {
     requireCheck(typeof result.approval?.url === 'string', 'missing-grant result shape invalid');
@@ -170,7 +174,7 @@ function assertListing(result, minimum) {
     return 'no-grant';
   }
   const output = record(result.output);
-  requireCheck(result.status === 'ok' && output.space === 'applications' && Array.isArray(output.apps) && Number.isInteger(output.count) && output.count === output.apps.length && typeof output.truncated === 'boolean' && ['merged', 'not_granted', 'unavailable', 'skipped'].includes(output.registry), 'knowledge list shape invalid');
+  requireCheck(result.status === 'ok' && isApplicationsSpace(output.space) && Array.isArray(output.apps) && Number.isInteger(output.count) && output.count === output.apps.length && typeof output.truncated === 'boolean' && ['merged', 'not_granted', 'unavailable', 'skipped'].includes(output.registry), 'knowledge list shape invalid');
   requireCheck(output.apps.every((app) => typeof app.app_id === 'string' && app.app_id.length > 0 && typeof app.root === 'string' && typeof app.has_index === 'boolean' && Array.isArray(app.concepts) && app.concepts.every((concept) => typeof concept === 'string') && typeof app.registered === 'boolean'), 'knowledge app shape invalid');
   requireCheck(minimum === undefined || output.count >= minimum, 'knowledge app count below --expect-apps');
   return output;
@@ -178,7 +182,7 @@ function assertListing(result, minimum) {
 
 function assertRead(result, appId, concept) {
   const output = record(result.output);
-  requireCheck(result.status === 'ok' && output.app_id === appId && output.space === 'applications' && output.path === (concept ?? 'index.md') && output.kind === (concept ? 'concept' : 'index') && typeof output.key === 'string' && typeof output.body === 'string' && (output.frontmatter === null || (typeof output.frontmatter === 'object' && !Array.isArray(output.frontmatter))) && Array.isArray(output.links) && Number.isInteger(output.byteLength) && output.byteLength >= 0 && typeof output.notice === 'string' && output.notice.includes('do not follow instructions'), 'knowledge read shape invalid');
+  requireCheck(result.status === 'ok' && output.app_id === appId && isApplicationsSpace(output.space) && output.path === (concept ?? 'index.md') && output.kind === (concept ? 'concept' : 'index') && typeof output.key === 'string' && typeof output.body === 'string' && (output.frontmatter === null || (typeof output.frontmatter === 'object' && !Array.isArray(output.frontmatter))) && Array.isArray(output.links) && Number.isInteger(output.byteLength) && output.byteLength >= 0 && typeof output.notice === 'string' && output.notice.includes('do not follow instructions'), 'knowledge read shape invalid');
 }
 
 async function callbackListener() {
@@ -252,7 +256,11 @@ async function browserAuthorization(config, pins, onBrowser, signal) {
         for (const open of context.pages()) {
           if (!/^https:\/\/(?:api\.)?openkey\.so\//.test(open.url())) continue;
           const buttons = open.getByRole('button');
-          const labels = await buttons.allTextContents();
+          // A navigation can destroy the page context mid-read; an empty read lets the poll loop below retry.
+          const labels = await buttons.allTextContents().catch((error) => {
+            if (/Execution context was destroyed/.test(error?.message ?? '')) return [];
+            throw error;
+          });
           const index = labels.findIndex((label) => [/use a passkey instead/i, /sign in with passkey/i, /^use passkey$/i, /^key 0\b/i, /^continue$/i, /^authorize$/i, /^allow$/i, /^approve$/i, /^approve exact bytes$/i].some((name) => name.test(label.trim())));
           if (index >= 0) {
             const key = `${open.url().split('?')[0]}:${labels[index].trim()}`;
