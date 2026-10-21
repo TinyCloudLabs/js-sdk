@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
+import { ServiceContext } from "@tinycloud/sdk-services";
 import type { TinyCloudSession } from "@tinycloud/sdk-core";
 import { DelegatedAccess, type RestorableSession } from "./DelegatedAccess";
 import type { PortableDelegation } from "./delegation";
@@ -76,5 +77,25 @@ describe("DelegatedAccess.restorable", () => {
 
     expect(first).not.toBe(second);
     expect(first).toEqual(second);
+  });
+});
+
+describe("DelegatedAccess request sink", () => {
+  const invoke = (() => {
+    throw new Error("invoke should not be called in this test");
+  }) as any;
+
+  test("a fetch through the delegated context is recorded by the lifetime's request sink", async () => {
+    const drafts: unknown[] = [];
+    const requestSink = { record: (draft: unknown) => drafts.push(draft) };
+    const fetch = (async () => ({ ok: true, status: 200, statusText: "OK", headers: { get: () => null }, body: null })) as any;
+    const lifetime = { fetch, track: (context: ServiceContext) => context, requestSink } as any;
+    const access = new DelegatedAccess(makeSession(), makeDelegation(), "https://node.test", invoke, undefined, undefined, lifetime);
+    const context: unknown = Reflect.get(access, "_serviceContext");
+    if (!(context instanceof ServiceContext)) throw new Error("DelegatedAccess did not create a ServiceContext");
+
+    await context.fetch("https://node.test/kv/x", { method: "GET" });
+
+    expect(drafts).toHaveLength(1);
   });
 });

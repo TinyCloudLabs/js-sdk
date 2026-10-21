@@ -12,7 +12,7 @@ import {
   ServiceContext,
   type TelemetryConfig,
 } from "@tinycloud/sdk-core";
-import type { FetchFunction, InvokeFunction, InvokeAnyFunction } from "@tinycloud/sdk-services";
+import type { FetchFunction, InvokeFunction, InvokeAnyFunction, RequestSink } from "@tinycloud/sdk-services";
 import { PortableDelegation } from "./delegation";
 
 /**
@@ -69,6 +69,7 @@ export class DelegatedAccess {
     lifetime?: {
       fetch: FetchFunction;
       track(context: ServiceContext): ServiceContext;
+      requestSink?: RequestSink;
     },
   ) {
     this.session = session;
@@ -86,6 +87,7 @@ export class DelegatedAccess {
       fetch: lifetime?.fetch ?? globalThis.fetch.bind(globalThis),
       hosts: [host],
       telemetry,
+      requestSink: lifetime?.requestSink,
     });
     this._serviceContext = lifetime ? lifetime.track(context) : context;
 
