@@ -1,6 +1,6 @@
 import { pkhDid } from "@tinycloud/sdk-core";
 import type { ServiceContext, ServiceSession } from "@tinycloud/sdk-core";
-import { requestSinkOf, unrecordedFetchOf } from "../recordingServiceContext";
+import { requestSinkOf, unrecordedFetchOf } from "../recordingRegistry";
 import { replicationFetchFor } from "./syncRequestLog";
 import type {
   KVReadThrough,

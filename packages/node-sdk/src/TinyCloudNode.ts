@@ -1,4 +1,5 @@
-import { createServiceContext, unrecordedFetchOf } from "./recordingServiceContext";
+import { createServiceContext } from "./recordingServiceContext";
+import { unrecordedFetchOf } from "./recordingRegistry";
 import { signedCompactUcanExpiry } from "./delegation";
 import { generateNonce, SiweMessage } from "siwe";
 /**

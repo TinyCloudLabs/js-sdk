@@ -8,6 +8,7 @@ import {
   type ServiceContextConfig,
 } from "@tinycloud/sdk-services";
 import type { InvocationMeta, RequestSink } from "@tinycloud/sdk-services/telemetry/requestLog";
+import { registerRecording } from "./recordingRegistry";
 
 /**
  * Developer request recording lives here, outside the sdk-services graph that the replica worker
@@ -38,19 +39,6 @@ export function createServiceContext(config: RecordingServiceContextConfig): Ser
     : new RecordingServiceContext(base, requestSink);
 }
 
-/**
- * The transport fetch for a context: `context.fetch` for a plain context (identical to master),
- * the raw transport for a recording context, so the caller's own recording is not doubled.
- */
-export function unrecordedFetchOf(context: ServiceContext): FetchFunction {
-  return context instanceof RecordingServiceContext ? context.unrecordedFetch : context.fetch;
-}
-
-/** The sink behind a recording context; undefined for a plain context. */
-export function requestSinkOf(context: ServiceContext): RequestSink | undefined {
-  return context instanceof RecordingServiceContext ? context.requestSink : undefined;
-}
-
 class RecordingServiceContext extends ServiceContext {
   readonly requestSink: RequestSink;
   private readonly pending: PendingMeta;
@@ -64,6 +52,7 @@ class RecordingServiceContext extends ServiceContext {
     });
     this.requestSink = sink;
     this.pending = pending;
+    registerRecording(this, { requestSink: sink, unrecordedFetch: () => this.unrecordedFetch });
   }
 
   /** Per-call recording; `_fetch` is read at access time, so overrides apply. */
