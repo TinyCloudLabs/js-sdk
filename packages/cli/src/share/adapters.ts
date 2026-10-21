@@ -1,4 +1,4 @@
-import type { IKVService } from "@tinycloud/node-sdk";
+import type { IKVService, TinyCloudNode } from "@tinycloud/node-sdk";
 import { kvArtifactStore } from "./artifact-store.js";
 import { artifactSpaceNotReady, failIfSpaceNotReady } from "./space-not-ready.js";
 import { ShareHistoryReadError, ShareHistoryRetryError, ShareHistoryUnreadableError, SharePublishAuthorityError } from "./errors.js";
@@ -63,6 +63,11 @@ function throwKvUploadFailure(error: unknown): never {
   const rejection = storageRejection(error);
   if (rejection) throw new SharePublishAuthorityError({ kind: "storage-full", ...rejection });
   throw new SharePublishAuthorityError({ kind: "upload-failed" });
+}
+
+/** Whether the node's session (or an installed runtime grant) holds decrypt on the encryption network. */
+export function sessionHoldsEncryptionDecrypt(node: Pick<TinyCloudNode, "hasRuntimePermissions">, networkId: string): boolean {
+  return node.hasRuntimePermissions([{ service: "tinycloud.encryption", path: networkId, actions: ["tinycloud.encryption/decrypt"] }]);
 }
 const DEFAULT_SHARE_ORIGIN = "https://share.tinycloud.xyz";
 const MIN_DOMAIN_DELIVERY_VERSION = "1.17.3";
@@ -632,11 +637,7 @@ export function createShareAuthorityAdapters(input: {
     // session-only sign-in (e.g. builtin:share-publishing) deliberately lacks. Refuse before any network
     // call, registry write or upload. A signer-backed (local-key) owner has full authority.
     const addressedEncryptionNetwork = targetInput.target.kind === "bearer" ? undefined : node.getEncryptionNetworkIdForSpace(ownerSpaceId);
-    if (addressedEncryptionNetwork !== undefined && node.isSessionOnly && !node.hasRuntimePermissions([{
-      service: "tinycloud.encryption",
-      path: addressedEncryptionNetwork,
-      actions: ["tinycloud.encryption/decrypt"],
-    }])) {
+    if (addressedEncryptionNetwork !== undefined && node.isSessionOnly && !sessionHoldsEncryptionDecrypt(node, addressedEncryptionNetwork)) {
       throw new SharePublishAuthorityError({ kind: "decrypt-not-held" });
     }
     const activeNode = await node.activeNodeIdentity();
