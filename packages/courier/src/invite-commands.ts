@@ -330,6 +330,16 @@ function oneTimeKv(blob: InviteBlob, which: 'put' | 'read') {
   return new DelegatedAccess(session, delegation, blob.host, wasm.invoke, wasm.invokeAny).kv;
 }
 
+/** Side effects of the join state machine. Production uses the real store and accept; tests inject fakes. */
+export interface JoinIO {
+  kv(blob: InviteBlob, which: 'put' | 'read'): Parameters<typeof getJson>[0];
+  acceptC: typeof acceptC;
+  pollMs: number;
+  waitMs: number;
+}
+
+const productionIO: JoinIO = { kv: oneTimeKv, acceptC, pollMs: WELCOME_POLL_MS, waitMs: WELCOME_WAIT_MS };
+
 function possessionFor(blob: InviteBlob, holderDid: string, credential: string, now: number): string {
   const key = loadKey();
   const sig = signPossession(
@@ -348,10 +358,10 @@ function possessionFor(blob: InviteBlob, holderDid: string, credential: string, 
 }
 
 /** Writes hello once. Create-only: a conflict means an earlier attempt already landed. */
-async function sendHello(blob: InviteBlob, state: JoinState): Promise<void> {
+export async function sendHello(blob: InviteBlob, state: JoinState, io: JoinIO = productionIO): Promise<void> {
   if (state.stage === 'hello-sent') return;
   try {
-    await putCreate(oneTimeKv(blob, 'put'), blob.helloKey, JSON.parse(state.helloText));
+    await putCreate(io.kv(blob, 'put'), blob.helloKey, JSON.parse(state.helloText));
   } catch (e) {
     if (!(e instanceof CourierError && e.code === 'conflict')) throw e;
   }
@@ -360,9 +370,9 @@ async function sendHello(blob: InviteBlob, state: JoinState): Promise<void> {
 }
 
 /** Polls out/welcome.json until the inviter answers, the invite expires, or the wait cap passes. */
-async function driveJoin(profile: Profile, node: TinyCloudNode, blob: InviteBlob, state: JoinState): Promise<void> {
-  const deadline = Math.min(Date.now() + WELCOME_WAIT_MS, Date.parse(blob.expiresAt));
-  const kv = oneTimeKv(blob, 'read');
+export async function driveJoin(profile: Profile, node: TinyCloudNode, blob: InviteBlob, state: JoinState, io: JoinIO = productionIO): Promise<void> {
+  const deadline = Math.min(Date.now() + io.waitMs, Date.parse(blob.expiresAt));
+  const kv = io.kv(blob, 'read');
   for (;;) {
     const got = await getJson(kv, `${blob.outPrefix}welcome.json`);
     if (got) {
@@ -374,14 +384,14 @@ async function driveJoin(profile: Profile, node: TinyCloudNode, blob: InviteBlob
         return;
       }
       if (welcome.artifactC === undefined) fail('bad-welcome', 'Welcome has no pairing artifact C.');
-      printJson(await acceptC(profile, node, welcome.artifactC));
+      printJson(await io.acceptC(profile, node, welcome.artifactC));
       removeJoin(state.inviteId);
       return;
     }
-    if (Date.now() + WELCOME_POLL_MS >= deadline) {
+    if (Date.now() + io.pollMs >= deadline) {
       console.log(`No reply yet. Run \`${cmd(`join --resume ${blob.inviteId}`)}\` to keep waiting.`);
       return;
     }
-    await new Promise((resolve) => setTimeout(resolve, WELCOME_POLL_MS));
+    await new Promise((resolve) => setTimeout(resolve, io.pollMs));
   }
 }
