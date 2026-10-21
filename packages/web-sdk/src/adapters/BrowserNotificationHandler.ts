@@ -73,6 +73,12 @@ export class BrowserNotificationHandler implements INotificationHandler {
       }, THROW_WINDOW_MS),
     );
   }
+
+  /** Drops throws still waiting in their window, so none fires after cleanup. */
+  cancelPendingThrows(): void {
+    for (const timer of this.pendingThrows.values()) clearTimeout(timer);
+    this.pendingThrows.clear();
+  }
 }
 
 /** Console line for a notification: the message, plus its description when present. */

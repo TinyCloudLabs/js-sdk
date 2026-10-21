@@ -183,4 +183,13 @@ describe("TinyCloudWeb notifications.throwErrors", () => {
       g.window = real;
     }
   });
+
+  test("cleanup cancels a throw still waiting in its window", () => {
+    const { tc, handler } = create({ notifications: { throwErrors: true } });
+    handler.error("network.timeout", "raw timeout");
+    const cleanup = tc.cleanup;
+    if (typeof cleanup !== "function") throw new Error("TinyCloudWeb has no cleanup()");
+    cleanup.call(tc);
+    expect(() => advance(10 * WINDOW_DEBOUNCE_MS)).not.toThrow();
+  });
 });

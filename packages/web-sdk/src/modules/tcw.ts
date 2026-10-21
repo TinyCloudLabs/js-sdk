@@ -1075,6 +1075,7 @@ export class TinyCloudWeb {
 
   cleanup(): void {
     this.uiClient.unregister();
+    this.notificationHandler.cancelPendingThrows();
   }
 
   connectWallet(
