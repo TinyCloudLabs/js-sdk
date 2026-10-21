@@ -15,6 +15,8 @@ import {
 const OWNER_SPACE = "tinycloud:pkh:eip155:1:0xAbC0000000000000000000000000000000000001:applications";
 const HEALTH = "xyz.tinycloud.health";
 const RECIPES = "xyz.tinycloud.recipes";
+const CATALOG = "xyz.tinycloud.sample.healthlog";
+const CATALOG_DB = `${CATALOG}/healthlog`;
 
 /** A request as the owner sees it after the agent's logical space is resolved to the owner's space. */
 const asRequested = (mode: "read" | "write", appIds: string[] = []) =>
@@ -94,24 +96,36 @@ describe("apps-agent preset grants", () => {
     ]);
   });
 
-  test("no variant carries delete, admin, schema, a wildcard or another service", () => {
+  test("the schema grant is only the catalog app's database, and only in write mode", () => {
+    const schemaOf = (mode: "read" | "write", appIds: string[]) =>
+      appsAgentPermissions(mode, appIds).filter((permission) => permission.actions.includes("tinycloud.sql/schema"));
+    expect(schemaOf("write", [CATALOG])).toEqual([
+      { service: "tinycloud.sql", space: "applications", path: CATALOG_DB, actions: ["tinycloud.sql/schema"] },
+    ]);
+    expect(schemaOf("write", [HEALTH, CATALOG])).toEqual(schemaOf("write", [CATALOG]));
+    expect(schemaOf("write", [HEALTH])).toEqual([]);
+    expect(schemaOf("read", [CATALOG])).toEqual([]);
+    expect(schemaOf("write", [])).toEqual([]);
+  });
+
+  test("no variant carries delete, admin, a wildcard or another service", () => {
     for (const mode of ["read", "write"] as const) {
-      const permissions = appsAgentPermissions(mode, [HEALTH]);
+      const permissions = appsAgentPermissions(mode, [CATALOG]);
       expect(new Set(permissions.map((permission) => permission.service))).toEqual(new Set(["tinycloud.kv", "tinycloud.sql"]));
-      expect(permissions.flatMap((permission) => permission.actions).filter((action) => /\/(del|admin|ddl|schema|metadata)$|\*/.test(action))).toEqual([]);
+      expect(permissions.flatMap((permission) => permission.actions).filter((action) => /\/(del|admin|ddl|metadata)$|\*/.test(action))).toEqual([]);
     }
   });
 });
 
 describe("apps-agent scope notice states the facts of the grant", () => {
-  test("read-only, all apps: names the space, says read-only and all apps, 7 days, no structure warning", () => {
+  test("read-only, all apps: names the space, says read-only and all apps, and 7 days", () => {
     const notice = appsAgentScopeNotice("read");
     expect(notice).toContain("`applications` space");
     expect(notice).toContain("READ-ONLY");
     expect(notice).toContain("ALL your installed apps");
     expect(notice).toContain("7 days");
     expect(notice).toContain("delegation revoke <id>");
-    expect(notice).not.toContain("(structure)");
+    expect(notice).toContain("It cannot create, change or delete anything");
   });
 
   test("read-only, one app: names that app and its prefix instead of all apps", () => {
@@ -121,7 +135,7 @@ describe("apps-agent scope notice states the facts of the grant", () => {
     expect(notice).toContain("READ-ONLY");
   });
 
-  test("write names the apps and the folders it can write, says it cannot change the app's code, and warns that tables can be changed or deleted", () => {
+  test("write names the apps and the folders it can write, says it cannot change the app's code, and says it cannot create or drop tables when no catalog app is named", () => {
     const notice = appsAgentScopeNotice("write", [HEALTH, RECIPES]);
     expect(notice).toContain(`\`${HEALTH}/\``);
     expect(notice).toContain(`\`${RECIPES}/\``);
@@ -133,17 +147,21 @@ describe("apps-agent scope notice states the facts of the grant", () => {
     expect(notice).toContain("cannot change the apps' code, manifest or install record");
     expect(notice).toContain("files outside those folders are read-only for it");
     expect(notice).not.toContain("everything outside those folders");
-    expect(notice).toContain("SQL write is separate from that: it can change these apps' table rows");
+    expect(notice).toContain("SQL write is separate from that: it can add, change and delete these apps' table rows");
     expect(notice).not.toContain(`\`${HEALTH}/app/\``);
     expect(notice).not.toContain("READ-ONLY");
     expect(notice).not.toContain("ALL your installed apps");
-    expect(notice).toContain("(structure)");
+    expect(notice).toContain("It cannot create, change or drop tables.");
     expect(notice).toContain("cannot touch other apps, other spaces or secrets");
     expect(notice).toContain("7 days");
     expect(appsAgentScopeNotice("write", [HEALTH])).toContain("cannot change the app's code, manifest or install record");
-    expect(appsAgentScopeNotice("write", [HEALTH])).toContain("also change or delete its tables (structure)");
-    expect(notice).toContain("also change or delete their tables (structure)");
-    expect(notice).not.toContain("delete its tables");
+  });
+
+  test("write for a catalog app names its one database as the only place the agent can change tables", () => {
+    const notice = appsAgentScopeNotice("write", [CATALOG]);
+    expect(notice).toContain(`create, change and drop tables in \`${CATALOG_DB}\``);
+    expect(notice).toContain("It cannot change tables anywhere else.");
+    expect(notice).not.toContain("It cannot create, change or drop tables.");
   });
 });
 
@@ -211,6 +229,16 @@ describe("matchAppsAgentRequest (the owner side)", () => {
     expect(matchAppsAgentRequest([kv!, { ...sql!, caveats: [{}] }], "7d", OWNER_SPACE)).toBeUndefined();
     expect(matchAppsAgentRequest([kv!], "7d", OWNER_SPACE)).toBeUndefined();
     expect(matchAppsAgentRequest(asRequested("write"), "7d", OWNER_SPACE)).toBeUndefined();
+  });
+
+  test("the schema entry belongs to the write preset only for a catalog app, at its exact path", () => {
+    const write = asRequested("write", [CATALOG]);
+    const schemaEntry = write.find((entry) => entry.actions.includes("tinycloud.sql/schema"))!;
+    const rest = write.filter((entry) => entry !== schemaEntry);
+    expect(matchAppsAgentRequest(write, "7d", OWNER_SPACE)).toEqual({ mode: "write", appIds: [CATALOG] });
+    expect(matchAppsAgentRequest(rest, "7d", OWNER_SPACE)).toBeUndefined();
+    expect(matchAppsAgentRequest([...rest, { ...schemaEntry, path: `${CATALOG_DB}/` }], "7d", OWNER_SPACE)).toBeUndefined();
+    expect(matchAppsAgentRequest([...rest, { ...schemaEntry, path: `${HEALTH}/healthlog` }], "7d", OWNER_SPACE)).toBeUndefined();
   });
 
   test("the earlier wide write request (put on the whole app) and a put on app/ are not the preset", () => {
@@ -287,10 +315,18 @@ describe("describeGrantScope: the text follows what will be signed", () => {
     expect(scope.text).toContain("MORE than the apps-agent preset");
     expect(scope.text).toContain("delete files");
     expect(scope.text).toContain("ALL apps in your `applications` space");
-    expect(scope.text).toContain("(structure)");
-    expect(scope.text).toContain("TC-1581");
     // the named-app SQL write is within what the preset can grant; the other two are not
     expect(scope.extras).toHaveLength(2);
+  });
+
+  test("schema is within the preset only on a catalog app's database; any other schema path is beyond it and says it can change tables", () => {
+    const schema = (path: string) => ({ service: "tinycloud.sql", space: OWNER_SPACE, path, actions: ["tinycloud.sql/schema"] });
+    expect(scopeOf([schema(CATALOG_DB)]).extras).toEqual([]);
+    for (const path of [`${CATALOG_DB}/`, `${CATALOG}/other`, `${HEALTH}/healthlog`]) {
+      const scope = scopeOf([schema(path)]);
+      expect(scope.extras).toHaveLength(1);
+      expect(scope.text).toContain("create, change and drop tables");
+    }
   });
 
   test("a hand-made request inside the preset's limits (narrower paths, read, a put inside a write folder) needs no confirmation", () => {

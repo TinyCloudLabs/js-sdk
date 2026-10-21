@@ -260,7 +260,7 @@ describe.skipIf(!NODE_BIN)("tinycloud knowledge against a real node", () => {
 
     const { requestNotice, grantNotice } = await grantAgent("writer", ["--preset", "apps-agent", "--write", "--app", HEALTH]);
     expect(requestNotice).toContain(appsAgentScopeNotice("write", [HEALTH]));
-    expect(requestNotice).toContain("(structure)");
+    expect(requestNotice).toContain("It cannot create, change or drop tables");
     expect(grantNotice).toContain(appsAgentScopeNotice("write", [HEALTH]));
 
     const note = `${HEALTH}/knowledge/log.md`;
@@ -268,6 +268,7 @@ describe.skipIf(!NODE_BIN)("tinycloud knowledge against a real node", () => {
     expect((await cli("owner", ["kv", "get", "--space", "applications", note, "--raw"])).stdout).toContain("agent note");
     expect((await cli("writer", ["sql", "execute", "INSERT INTO meal(name) VALUES ('rice')", "--db", HEALTH_DB, "--space", ownerSpace])).exitCode).toBe(0);
     expect(await ownerRows()).toEqual([["salmon"], ["rice"]]);
+    expect((await cli("writer", ["sql", "execute", "CREATE TABLE extra (x TEXT)", "--db", HEALTH_DB, "--space", ownerSpace])).exitCode).toBe(5);
     const prefs = `${HEALTH}/prefs/targets.json`;
     expect((await cli("writer", ["kv", "put", "--space", ownerSpace, prefs, '{"kcal":2000}'])).exitCode).toBe(0);
     expect((await cli("owner", ["kv", "get", "--space", "applications", prefs, "--raw"])).stdout).toContain("2000");
