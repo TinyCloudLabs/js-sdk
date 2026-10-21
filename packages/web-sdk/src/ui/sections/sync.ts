@@ -108,13 +108,18 @@ export const syncSection: PanelSection = {
       const known = isKnownEffective(state.effective);
       const effective: SyncEffective = known ? state.effective : "unavailable";
 
-      const checked =
-        effective === "on" || effective === "enabling" || (effective === "unavailable" && state.requested);
+      // The switch position is state.requested only. The app and SDK defaults can both set it.
+      const checked = state.requested;
       const locked = effective === "enabling" || effective === "wiping" || effective === "pending" || effective === "unavailable";
       toggle.setAttribute("aria-checked", String(checked));
       toggle.disabled = locked || busy;
 
-      const wordKey = WORD[effective];
+      const wordKey =
+        effective === "off" || effective === "on"
+          ? state.requested
+            ? "sync.state.on"
+            : "sync.state.off"
+          : WORD[effective];
       word.hidden = wordKey === undefined;
       word.textContent = wordKey === undefined ? "" : ctx.text(wordKey);
 

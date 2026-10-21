@@ -13,7 +13,9 @@ export const STRINGS = {
   "status.sync_attention": "Local copy needs attention",
 
   "sync.label": "Local copy on this device",
-  "sync.switch": "Keep a local copy on this device",
+  "sync.switch": "Local copy on this device",
+  "sync.state.on": "Local copy: on on this device",
+  "sync.state.off": "Local copy: off on this device",
   "sync.busy.enabling": "Turning on",
   "sync.busy.wiping": "Erasing",
   "sync.pending": "Erase not confirmed",
