@@ -70,7 +70,7 @@ for (const scheme of ["light", "dark"] as const) {
 // outline sits outside the element, so the 6px halo of the opposite ink covers
 // whichever page is behind it.
 for (const scheme of ["light", "dark"] as const) {
-  test(`${scheme}: launcher focus ring and halo are each at least 3:1 on light and dark pages`, async ({ page }) => {
+  test(`${scheme}: at least one of launcher focus ring and halo is at least 3:1 on light and dark pages`, async ({ page }) => {
     await mountHarness(page, scheme);
     const launcher = page.getByRole("button", { name: "TinyCloud settings" });
     await launcher.focus();
