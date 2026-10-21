@@ -1,0 +1,296 @@
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from "bun:test";
+import { Window } from "happy-dom";
+
+import { registerUiClient, type UiClientHandle } from "../../src/ui";
+import type { ClientSource } from "../../src/ui/client";
+import { REGISTRY_KEY } from "../../src/ui/host";
+import { HIDE_KEY_PREFIX } from "../../src/ui/persistence";
+import { text } from "../../src/ui/strings";
+
+type Loose = Record<PropertyKey, unknown>;
+
+const g = globalThis as unknown as Loose;
+const ORIGIN = "https://app.example";
+const GLOBAL_NAMES = ["window", "document", "location", "localStorage", "HTMLElement", "Element", "Event", "KeyboardEvent"];
+
+let page: Window;
+const saved = new Map<string, unknown>();
+const attached: ShadowRoot[] = [];
+let restoreAttachShadow: () => void = () => undefined;
+
+beforeAll(() => {
+  for (const name of GLOBAL_NAMES) saved.set(name, g[name]);
+  page = new Window({ url: `${ORIGIN}/page` });
+  g.window = page;
+  g.document = page.document;
+  g.location = page.location;
+  g.localStorage = page.localStorage;
+  g.HTMLElement = page.HTMLElement;
+  g.Element = page.Element;
+  g.Event = page.Event;
+  g.KeyboardEvent = page.KeyboardEvent;
+
+  // Record every shadow root the host creates. The root is closed, so the
+  // tests reach into it through this recording only.
+  const proto = page.Element.prototype as unknown as {
+    attachShadow(init: ShadowRootInit): ShadowRoot;
+  };
+  const original = proto.attachShadow;
+  proto.attachShadow = function attachShadow(this: unknown, init: ShadowRootInit): ShadowRoot {
+    const root = original.call(this, init);
+    attached.push(root);
+    return root;
+  };
+  restoreAttachShadow = () => {
+    proto.attachShadow = original;
+  };
+});
+
+afterAll(() => {
+  restoreAttachShadow();
+  for (const name of GLOBAL_NAMES) {
+    if (saved.get(name) === undefined) delete g[name];
+    else g[name] = saved.get(name);
+  }
+});
+
+beforeEach(() => {
+  delete g[REGISTRY_KEY];
+  attached.length = 0;
+  page.document.body.innerHTML = "";
+  page.localStorage.clear();
+});
+
+afterEach(() => {
+  delete (page as unknown as Loose).top;
+  delete (page as unknown as Loose).location;
+});
+
+function source(signedIn = false): ClientSource {
+  return { signedIn: () => signedIn, storage: { status: () => undefined } } as unknown as ClientSource;
+}
+
+function mountClient(ui?: Parameters<typeof registerUiClient>[0]["ui"], signedIn = false): UiClientHandle {
+  return registerUiClient({ ui, source: source(signedIn), manifestAppId: () => undefined });
+}
+
+function hostEl(): HTMLElement | null {
+  return page.document.querySelector("[data-tinycloud-ui]") as HTMLElement | null;
+}
+
+function hostState(): string | null {
+  return hostEl()?.getAttribute("data-tinycloud-ui") ?? null;
+}
+
+function shadow(): ShadowRoot {
+  const root = attached.at(-1);
+  if (!root) throw new Error("no shadow root was created");
+  return root;
+}
+
+function buttonEl(): HTMLButtonElement | null {
+  return shadow().querySelector("button[aria-controls]") as HTMLButtonElement | null;
+}
+
+function actionEl(label: string): HTMLButtonElement | undefined {
+  return [...shadow().querySelectorAll("button.action")].find(
+    (el) => el.textContent === label,
+  ) as HTMLButtonElement | undefined;
+}
+
+function hideKey(): string {
+  return `${HIDE_KEY_PREFIX}${encodeURIComponent(ORIGIN)}:_page`;
+}
+
+function overrideWindowProp(name: "top" | "location", value: unknown): void {
+  Object.defineProperty(page, name, { configurable: true, value });
+}
+
+describe("host mount", () => {
+  test("mounts one closed host at z-index 999990", () => {
+    mountClient();
+    expect(hostEl()).not.toBeNull();
+    expect(hostEl()?.shadowRoot).toBeNull();
+    expect(hostEl()?.style.zIndex).toBe("999990");
+    expect(hostState()).toBe("closed");
+    expect(attached.length).toBe(1);
+  });
+
+  test("shadow tree contains no dialog or popover markup", () => {
+    mountClient();
+    const root = shadow();
+    expect(root.querySelector("dialog")).toBeNull();
+    expect(root.querySelector("[popover]")).toBeNull();
+  });
+
+  test("adds no string-keyed global and only the registry symbol", () => {
+    const namesBefore = Object.getOwnPropertyNames(globalThis);
+    const pageNamesBefore = Object.getOwnPropertyNames(page);
+    const symbolsBefore = new Set(Object.getOwnPropertySymbols(globalThis));
+
+    const ui = mountClient();
+    ui.api.open();
+    ui.api.close();
+
+    const newNames = Object.getOwnPropertyNames(globalThis).filter((name) => !namesBefore.includes(name));
+    const newPageNames = Object.getOwnPropertyNames(page).filter((name) => !pageNamesBefore.includes(name));
+    const newSymbols = Object.getOwnPropertySymbols(globalThis).filter((sym) => !symbolsBefore.has(sym));
+    expect(newNames).toEqual([]);
+    expect(newPageNames).toEqual([]);
+    expect(newSymbols).toEqual([REGISTRY_KEY]);
+  });
+
+  test("adds no message, storage, or messaging listeners to window or document", () => {
+    const seen: string[] = [];
+    const targets = [page, page.document] as unknown as Array<{ addEventListener: (...a: unknown[]) => unknown }>;
+    const originals = targets.map((target) => target.addEventListener);
+    targets.forEach((target, index) => {
+      target.addEventListener = (type: unknown, ...rest: unknown[]) => {
+        seen.push(String(type));
+        return Reflect.apply(originals[index] as (...a: unknown[]) => unknown, target, [type, ...rest]);
+      };
+    });
+    try {
+      const ui = mountClient();
+      ui.api.open();
+      buttonEl()?.click();
+      ui.api.close();
+    } finally {
+      targets.forEach((target, index) => {
+        target.addEventListener = originals[index] as (...a: unknown[]) => unknown;
+      });
+    }
+    expect(seen.filter((type) => ["message", "messageerror", "storage"].includes(type))).toEqual([]);
+  });
+
+  test("one host is shared by two clients; unregistering the last removes it", () => {
+    const a = mountClient();
+    const b = mountClient();
+    expect(page.document.querySelectorAll("[data-tinycloud-ui]").length).toBe(1);
+    a.unregister();
+    expect(hostEl()).not.toBeNull();
+    b.unregister();
+    expect(hostEl()).toBeNull();
+  });
+
+  test("reset keeps the host mounted", () => {
+    const a = mountClient();
+    a.reset();
+    expect(hostEl()).not.toBeNull();
+  });
+
+  test("a second copy with another apiVersion mounts nothing and warns once", () => {
+    g[REGISTRY_KEY] = { apiVersion: 2, runtime: undefined };
+    const warnings: unknown[][] = [];
+    const originalWarn = console.warn;
+    console.warn = (...args: unknown[]) => {
+      warnings.push(args);
+    };
+    try {
+      const first = mountClient();
+      const second = mountClient();
+      expect(first.api.available).toBe(false);
+      expect(second.api.available).toBe(false);
+    } finally {
+      console.warn = originalWarn;
+    }
+    expect(hostEl()).toBeNull();
+    expect(warnings).toEqual([["[tinycloud] ui-host-version-mismatch"]]);
+  });
+});
+
+describe("open, close, hide", () => {
+  test("open clears the hidden flag and shows the button", () => {
+    page.localStorage.setItem(hideKey(), "1");
+    const ui = mountClient();
+    expect(hostState()).toBe("hidden");
+    ui.api.open();
+    expect(hostState()).toBe("open");
+    expect(page.localStorage.getItem(hideKey())).toBeNull();
+    expect(ui.api.isOpen).toBe(true);
+  });
+
+  test("the panel hide control sets the flag and closes", () => {
+    const ui = mountClient();
+    ui.api.open();
+    actionEl(text("panel.hide"))?.click();
+    expect(page.localStorage.getItem(hideKey())).toBe("1");
+    expect(hostState()).toBe("hidden");
+    expect(ui.api.isOpen).toBe(false);
+  });
+
+  test("close never changes the hidden flag", () => {
+    const ui = mountClient();
+    ui.api.open();
+    actionEl(text("panel.hide"))?.click();
+    ui.api.close();
+    expect(page.localStorage.getItem(hideKey())).toBe("1");
+    expect(hostState()).toBe("hidden");
+  });
+
+  test("the floating button toggles the panel", () => {
+    const ui = mountClient();
+    buttonEl()?.click();
+    expect(ui.api.isOpen).toBe(true);
+    buttonEl()?.click();
+    expect(ui.api.isOpen).toBe(false);
+  });
+
+  test("Escape on the panel element closes it", () => {
+    const ui = mountClient();
+    ui.api.open();
+    const panel = shadow().querySelector("[role='dialog']") as HTMLElement;
+    panel.dispatchEvent(new page.KeyboardEvent("keydown", { key: "Escape", bubbles: true, composed: true }));
+    expect(ui.api.isOpen).toBe(false);
+  });
+});
+
+describe("headless modes", () => {
+  test("ui:false creates no host and every method is a silent no-op", () => {
+    const ui = mountClient(false);
+    expect(hostEl()).toBeNull();
+    expect(attached.length).toBe(0);
+    ui.api.open();
+    ui.api.toggle();
+    ui.api.close();
+    expect(ui.api.available).toBe(false);
+    expect(ui.api.isOpen).toBe(false);
+    expect(hostEl()).toBeNull();
+  });
+
+  test("ui.button:false renders no button and no hide control, and open still works", () => {
+    const ui = mountClient({ button: false });
+    expect(buttonEl()).toBeNull();
+    ui.api.open();
+    expect(ui.api.isOpen).toBe(true);
+    expect(actionEl(text("panel.hide"))).toBeUndefined();
+    expect(page.localStorage.getItem(hideKey())).toBeNull();
+  });
+});
+
+describe("frame and opaque-origin refusal", () => {
+  test("an iframe at register creates no host and reports available false", () => {
+    overrideWindowProp("top", {});
+    const ui = mountClient();
+    expect(hostEl()).toBeNull();
+    expect(ui.api.available).toBe(false);
+    ui.api.open();
+    expect(ui.api.isOpen).toBe(false);
+  });
+
+  test("an opaque origin at register creates no host", () => {
+    overrideWindowProp("location", { origin: "null" });
+    const ui = mountClient();
+    expect(hostEl()).toBeNull();
+    expect(ui.api.available).toBe(false);
+  });
+
+  test("open() is refused after the page becomes framed", () => {
+    const ui = mountClient();
+    expect(ui.api.available).toBe(true);
+    overrideWindowProp("top", {});
+    ui.api.open();
+    expect(ui.api.isOpen).toBe(false);
+    expect(hostState()).toBe("closed");
+  });
+});

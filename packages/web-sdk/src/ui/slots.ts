@@ -29,6 +29,13 @@ export interface SyncFacade {
   wipeLocalData(): Promise<void>;
 }
 
+/** Request-log reader for developer mode (E). Event payload is opaque here. */
+export interface RequestLogReader {
+  snapshot(): readonly unknown[];
+  subscribe(cb: (event: unknown) => void): () => void;
+  onClear(cb: () => void): () => void;
+}
+
 export interface HostContext {
   client(): PanelClient | undefined;
   onClientChange(cb: () => void): () => void;
@@ -68,6 +75,14 @@ export interface PanelClient {
   /** Sign-out or account switch. */
   onReset(cb: () => void): () => void;
   /** = tc.sync when present. */
-  sync?: SyncFacade;
-  storage: Pick<IStorageService, "status">;
+  readonly sync?: SyncFacade | undefined;
+  readonly storage: Pick<IStorageService, "status">;
+  /** D3: storage episode view. Undefined until D3 lands. */
+  readonly storageEpisode?: { current(): unknown; subscribe(cb: () => void): () => void } | undefined;
+  /** B2: internal authority request for replication. Undefined until B2 lands. */
+  readonly requestAuthority?:
+    | ((kind: "kv/sync" | "space/info") => Promise<{ approved: boolean; code?: FacadeErrorCode }>)
+    | undefined;
+  /** E: request log, present only in developer mode. */
+  readonly requests?: RequestLogReader | undefined;
 }
