@@ -10,7 +10,7 @@ const wasm = new NodeWasmBindings();
 const signer = new PrivateKeySigner("4f3edf983ac636a65a842ce7c78d9aa706d3b113bce036f4d9c5c1b5605dce6f");
 const address = await signer.getAddress();
 const ownerDid = `did:pkh:eip155:1:${address}`;
-const HOST = "https://cli.tinycloud.xyz";
+const HOST = "https://tee.node.tinycloud.xyz";
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 const session = wasm.createSessionManager();
@@ -81,7 +81,7 @@ describe("verifyAgentApproval", () => {
     expect(await refusalCode(await approval(), { expectedOwner: otherOwner })).toBe("OPENKEY_OWNER_MISMATCH");
   });
 
-  test("refuses an approval whose signed domain is not the requester host", async () => {
+  test("refuses an approval whose signed domain is not OpenKey's approval domain", async () => {
     const data = await approval({ domain: "other.example" });
     expect(await refusalCode(data)).toBe("OPENKEY_AUDIENCE_MISMATCH");
   });

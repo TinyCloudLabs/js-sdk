@@ -18,6 +18,8 @@ import {
 
 const NOT_STORED = "No grant was stored.";
 const CAPABILITIES_SERVICE = "tinycloud.capabilities";
+/** Domain that OpenKey's delegate endpoint signs every approval under, independent of the node host. */
+const OPENKEY_APPROVAL_DOMAIN = "cli.tinycloud.xyz";
 
 /** Ed25519 public key of the requester's session as a JWK. The private key never leaves the agent. */
 export function requesterPublicJwk(sessionDid: string): { kty: "OKP"; crv: "Ed25519"; x: string } {
@@ -147,8 +149,8 @@ export async function verifyAgentApproval(
   if (message.uri.split("#")[0] !== sessionDid) {
     throw refuse("OPENKEY_AUDIENCE_MISMATCH", "The approval was issued to a different session than this auth request.");
   }
-  if (message.domain !== new URL(expected.host.includes("://") ? expected.host : `https://${expected.host}`).host) {
-    throw refuse("OPENKEY_AUDIENCE_MISMATCH", "The approval was issued for a different host than this auth request.");
+  if (message.domain !== OPENKEY_APPROVAL_DOMAIN) {
+    throw refuse("OPENKEY_AUDIENCE_MISMATCH", "The approval was not issued by OpenKey's approval domain.");
   }
 
   const now = Date.now();
