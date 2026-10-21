@@ -20,7 +20,7 @@ export interface ToastView {
   readonly id: string;
   readonly kind: ToastKind;
   readonly textCode: StringKey;
-  /** Present only when it passed the http(s) check. */
+  /** Present only when it is an absolute https URL. */
   readonly href?: string;
   readonly hrefLabelCode?: StringKey;
 }

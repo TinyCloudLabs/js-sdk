@@ -280,7 +280,7 @@ const tc = new TinyCloudWeb({
   ui: {
     button: true,         // default true; false hides the button only
     developerMode: false, // default false; shows the developer section
-    position: "bottom-right", // "bottom-right" | "bottom-left" | "bottom-center"; each "top-*" value places at the matching bottom position
+    position: "bottom-right", // "bottom-right" | "bottom-left" | "bottom-center"; each "top-*" value places at the matching bottom position; an unrecognised value falls back to "bottom-right"
     appId: "my-app",      // identity for the hide flag when no manifest is set
   },
 });
@@ -298,7 +298,7 @@ tc.ui.available; // false in iframes, opaque origins, SSR, or when ui is false
 
 Toasts render in the host panel layer and follow the same `ui` options. `ui: false` renders no host and no toasts. `ui.position` sets placement. Toast copy is fixed text per error kind. The raw error message is written to the console. A toast auto-dismisses after 5 seconds, at most 3 show at once, and an identical visible toast is not shown twice.
 
-`notifications.throwErrors: true` rethrows each error toast that was shown, asynchronously, so global error handlers see it. The legacy `popups`, `position`, `duration`, and `maxVisible` keys under `notifications` are deprecated. JavaScript callers that still pass them are mapped onto `ui` once per page load, with a console warning: `popups: false` becomes `ui: false`, and `position` becomes `ui.position` unless `ui.position` is set. `duration` and `maxVisible` are ignored. TypeScript types no longer include these keys. Migrate to `ui`.
+`notifications.throwErrors: true` rethrows the raw error message asynchronously, so global error handlers see it. Errors that arrive within 200 ms collapse into one throw. It applies whenever `ui` is enabled, including on a framed page where the toast is dropped, and never with `ui: false`. The legacy `popups`, `position`, `duration`, and `maxVisible` keys under `notifications` are removed from the TypeScript types. JavaScript callers that still pass them are mapped onto `ui` once per page load, with a console warning per key: `popups: false` becomes `ui: false` unless `ui` is also set, and `position` becomes `ui.position` unless `ui.position` is set. `duration` and `maxVisible` are ignored, and their warning says so. Migrate to `ui`.
 
 ## Basic Storage Operations
 
