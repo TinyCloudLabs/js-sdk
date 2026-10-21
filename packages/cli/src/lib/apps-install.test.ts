@@ -129,6 +129,16 @@ describe("installApp", () => {
     expect(kvWrites).toEqual([]);
   });
 
+  it("refuses a same-length tampered byte, so the sha256 check alone catches it", async () => {
+    const { app, served } = buildApp();
+    served.set(`${SHARE_ORIGIN}/apps/b/${BUNDLE}/knowledge/meals.md`, enc("# mealz\n"));
+    const { io, sql, kvWrites } = fakeIo({ served });
+    expect(enc("# mealz\n").length).toBe(enc("# meals\n").length);
+    await expect(installApp("test.app", io, () => app)).rejects.toMatchObject({ code: "INTEGRITY_FAILED" });
+    expect(sql).toEqual([]);
+    expect(kvWrites).toEqual([]);
+  });
+
   it("refuses a file above the size limit even when the hash matches", async () => {
     const big = "x".repeat(1_000_001);
     const { app, served } = buildApp({ ...FILES, "knowledge/big.md": big });
@@ -166,15 +176,18 @@ describe("installApp", () => {
     expect(sql).toContain("DROP VIEW IF EXISTS meal_count");
   });
 
-  it("never overwrites a differing key and reports a conflict", async () => {
+  it("leaves a differing note as the user edited it, reports it, and installs the rest without throwing", async () => {
     const { app, served } = buildApp();
     const kv = new Map<string, Uint8Array>([["test.app/knowledge/meals.md", enc("# local edit\n")]]);
-    const { io, kvWrites } = fakeIo({ served, kv });
+    const { io, sql, kvWrites } = fakeIo({ served, kv });
     const result = await installApp("test.app", io, () => app);
-    expect(result.status).toBe("conflict");
-    expect(result.filesConflicting).toEqual(["knowledge/meals.md"]);
+    expect(result.status).toBe("installed");
+    expect(result.conflicts).toEqual(["knowledge/meals.md"]);
+    expect(result.filesWritten).toEqual(["knowledge/app.md", "knowledge/index.md"]);
     expect(kv.get("test.app/knowledge/meals.md")).toEqual(enc("# local edit\n"));
     expect(kvWrites).not.toContain("test.app/knowledge/meals.md");
+    expect(kvWrites.at(-1)).toBe("test.app/knowledge/index.md");
+    expect(sql).toContain("DROP VIEW IF EXISTS meal_count");
   });
 
   it("treats a create race that lost to identical bytes as unchanged", async () => {
@@ -192,6 +205,41 @@ describe("installApp", () => {
     expect(result.filesWritten).toEqual([]);
     expect(result.filesUnchanged).toHaveLength(3);
     expect(result.status).toBe("already");
+  });
+
+  it("saves notes first, then reports a schema failure as notes saved and tables not set up", async () => {
+    const { app, served } = buildApp();
+    const { io, kvWrites } = fakeIo({ served });
+    const failing: InstallIo = {
+      ...io,
+      async sqlExecute() {
+        throw new Error("SQLITE_ERROR");
+      },
+    };
+    const error = await installApp("test.app", failing, () => app).catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(AppsInstallError);
+    expect(error).toMatchObject({ code: "SQL_FAILED" });
+    expect((error as AppsInstallError).message).toMatch(/^notes saved; tables not set up: run again\./);
+    expect(kvWrites).toEqual(["test.app/knowledge/app.md", "test.app/knowledge/meals.md", "test.app/knowledge/index.md"]);
+  });
+
+  it("refuses a DDL plan that drops a table before any note is written", async () => {
+    const { app, served } = buildApp({ ...FILES, "schema.sql": "DROP TABLE meal;\n" });
+    const { io, kvWrites } = fakeIo({ served });
+    await expect(installApp("test.app", io, () => app)).rejects.toMatchObject({ code: "DDL_REFUSED" });
+    expect(kvWrites).toEqual([]);
+  });
+
+  it("a second run restores a pinned view that was dropped, with its CREATE statement", async () => {
+    const { app, served } = buildApp();
+    const kv = new Map<string, Uint8Array>();
+    for (const file of app.files.filter((f) => f.path.startsWith("knowledge/"))) {
+      kv.set(`test.app/${file.path}`, served.get(`${SHARE_ORIGIN}/apps/b/${BUNDLE}/${file.path}`)!);
+    }
+    const { io, sql } = fakeIo({ served, kv, tables: ["meal"] });
+    const result = await installApp("test.app", io, () => app);
+    expect(result.viewsRecreated).toEqual(["meal_count"]);
+    expect(sql.some((s) => s.startsWith("CREATE VIEW IF NOT EXISTS meal_count"))).toBe(true);
   });
 
   it("never issues DROP for a view or table outside the pinned schema", async () => {

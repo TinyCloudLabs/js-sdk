@@ -47,15 +47,6 @@ Examples:
 
         if (shouldOutputJson()) outputJson(result);
         else printResult(result);
-
-        if (result.status === "conflict") {
-          throw new CLIError(
-            "APPS_CONFLICT",
-            `${result.filesConflicting.length} knowledge file(s) already exist with different bytes and were left unchanged`,
-            ExitCode.ERROR,
-            { filesConflicting: [...result.filesConflicting] },
-          );
-        }
       } catch (error) {
         return handleError(error);
       }
@@ -121,9 +112,14 @@ function printResult(result: InstallResult): void {
     ["Views recreated", result.viewsRecreated.join(", ") || "none"],
     ["Knowledge written", String(result.filesWritten.length)],
     ["Knowledge unchanged", String(result.filesUnchanged.length)],
-    ["Knowledge conflicting", String(result.filesConflicting.length)],
+    ["Knowledge left as edited", String(result.conflicts.length)],
   ];
   process.stdout.write(formatTable(["Field", "Value"], rows) + "\n");
+  if (result.conflicts.length > 0) {
+    const count = result.conflicts.length;
+    const sentence = count === 1 ? "1 note was left as you edited it" : `${count} notes were left as you edited them`;
+    process.stdout.write(theme.muted(`${sentence}: ${result.conflicts.join(", ")}`) + "\n");
+  }
   if (result.status === "already") {
     process.stdout.write(theme.muted("Already installed; views refreshed.") + "\n");
   }

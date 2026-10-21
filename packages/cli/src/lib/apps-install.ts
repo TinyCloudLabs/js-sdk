@@ -42,12 +42,13 @@ export class AppsInstallError extends Error {
 
 export interface InstallResult {
   readonly appId: string;
-  /** `installed`: knowledge files were written. `already`: nothing to write. `conflict`: a file differs from the pinned bytes and was left alone. */
-  readonly status: "installed" | "already" | "conflict";
+  /** `installed`: at least one knowledge file was written. `already`: nothing was written. Conflicts never change the status. */
+  readonly status: "installed" | "already";
   readonly database: string;
   readonly filesWritten: readonly string[];
   readonly filesUnchanged: readonly string[];
-  readonly filesConflicting: readonly string[];
+  /** Notes that differ from the pinned bytes. They were left as the user edited them. */
+  readonly conflicts: readonly string[];
   readonly tablesCreated: readonly string[];
   readonly viewsRecreated: readonly string[];
 }
@@ -146,15 +147,19 @@ export function planDdl(schemaSql: string): DdlPlan {
   return { tables, views, statements };
 }
 
-/** Run the pinned DDL. Every statement is idempotent, so a failed run can be retried. */
-export async function applySchema(schemaSql: string, io: InstallIo): Promise<{ tablesCreated: string[]; viewsRecreated: string[] }> {
-  const plan = planDdl(schemaSql);
-  const existing = new Set(await io.sqlTableNames());
+/** Run the pinned DDL from a plan that already passed `planDdl`. Every statement is idempotent. */
+export async function applySchema(plan: DdlPlan, io: InstallIo): Promise<{ tablesCreated: string[]; viewsRecreated: string[] }> {
+  let existing: Set<string>;
+  try {
+    existing = new Set(await io.sqlTableNames());
+  } catch (error) {
+    throw new AppsInstallError("SQL_FAILED", `Could not list tables: ${errorMessage(error)}`);
+  }
   for (const statement of plan.statements) {
     try {
       await io.sqlExecute(statement);
     } catch (error) {
-      throw new AppsInstallError("SQL_FAILED", `Schema statement failed (safe to retry): ${errorMessage(error)}`);
+      throw new AppsInstallError("SQL_FAILED", `Schema statement failed: ${errorMessage(error)}`);
     }
   }
   return {
@@ -163,37 +168,54 @@ export async function applySchema(schemaSql: string, io: InstallIo): Promise<{ t
   };
 }
 
-/** Create-only writes of the knowledge files. `knowledge/index.md` is written last. */
-async function writeKnowledge(
+/** Pinned knowledge paths in write order: every note before `knowledge/index.md`. */
+function knowledgePaths(app: PinnedApp): string[] {
+  const paths = app.files.map((file) => file.path).filter((path) => path.startsWith("knowledge/"));
+  return [...paths.filter((path) => path !== "knowledge/index.md"), ...paths.filter((path) => path === "knowledge/index.md")];
+}
+
+/** Read every pinned note before any write. Only absent notes are candidates for creation. */
+async function inspectKnowledge(
   appId: string,
   app: PinnedApp,
   verified: Map<string, Uint8Array>,
   io: InstallIo,
-): Promise<{ written: string[]; unchanged: string[]; conflicting: string[] }> {
+): Promise<{ missing: string[]; unchanged: string[]; conflicts: string[] }> {
+  const missing: string[] = [];
+  const unchanged: string[] = [];
+  const conflicts: string[] = [];
+  for (const path of knowledgePaths(app)) {
+    const current = await readKv(`${appId}/${path}`, io);
+    if (current === undefined) missing.push(path);
+    else if (bytesEqual(current, verified.get(path)!)) unchanged.push(path);
+    else conflicts.push(path);
+  }
+  return { missing, unchanged, conflicts };
+}
+
+/** Create-only writes for absent notes, in pinned order. A note that appeared since inspection is classified as if it had been inspected. */
+async function createMissing(
+  appId: string,
+  missing: readonly string[],
+  verified: Map<string, Uint8Array>,
+  io: InstallIo,
+): Promise<{ written: string[]; unchanged: string[]; conflicts: string[] }> {
   const written: string[] = [];
   const unchanged: string[] = [];
-  const conflicting: string[] = [];
-  const knowledge = app.files.filter((file) => file.path.startsWith("knowledge/"));
-  const ordered = [...knowledge.filter((file) => file.path !== "knowledge/index.md"), ...knowledge.filter((file) => file.path === "knowledge/index.md")];
-  for (const file of ordered) {
-    const bytes = verified.get(file.path)!;
-    const key = `${appId}/${file.path}`;
-    const current = await readKv(key, io);
-    if (current === undefined) {
-      const outcome = await createKv(key, bytes, io);
-      if (outcome === "created") {
-        written.push(file.path);
-        continue;
-      }
-      const raced = await readKv(key, io);
-      if (raced !== undefined && bytesEqual(raced, bytes)) unchanged.push(file.path);
-      else conflicting.push(file.path);
+  const conflicts: string[] = [];
+  for (const path of missing) {
+    const key = `${appId}/${path}`;
+    const bytes = verified.get(path)!;
+    const outcome = await createKv(key, bytes, io);
+    if (outcome === "created") {
+      written.push(path);
       continue;
     }
-    if (bytesEqual(current, bytes)) unchanged.push(file.path);
-    else conflicting.push(file.path);
+    const raced = await readKv(key, io);
+    if (raced !== undefined && bytesEqual(raced, bytes)) unchanged.push(path);
+    else conflicts.push(path);
   }
-  return { written, unchanged, conflicting };
+  return { written, unchanged, conflicts };
 }
 
 async function readKv(key: string, io: InstallIo): Promise<Uint8Array | undefined> {
@@ -213,9 +235,11 @@ async function createKv(key: string, bytes: Uint8Array, io: InstallIo): Promise<
 }
 
 /**
- * Install one catalog app. Order: verify every pinned byte, run the pinned DDL
- * (views are dropped and recreated on every run), then create-only knowledge writes.
- * Nothing is written until all bytes verify.
+ * Install one catalog app. Order: verify every pinned byte, validate the pinned DDL,
+ * inspect the knowledge notes, create absent notes (`knowledge/index.md` last), then
+ * apply the schema. Nothing is written until all bytes verify and the DDL passes.
+ * A note that differs from its pinned bytes is left as the user edited it and listed
+ * in `conflicts`; conflicts do not throw.
  */
 export async function installApp(
   appId: string,
@@ -225,19 +249,27 @@ export async function installApp(
   const app = lookup(appId);
   if (!app) throw new AppsInstallError("UNKNOWN_APP", `No pinned catalog entry for ${appId}`);
   const verified = await fetchVerified(app, io);
-  const schemaBytes = verified.get("schema.sql")!;
-  const schemaSql = new TextDecoder("utf-8", { fatal: true }).decode(schemaBytes);
-  const { tablesCreated, viewsRecreated } = await applySchema(schemaSql, io);
-  const knowledge = await writeKnowledge(appId, app, verified, io);
-  const status = knowledge.conflicting.length > 0 ? "conflict" : knowledge.written.length > 0 ? "installed" : "already";
+  const schemaSql = new TextDecoder("utf-8", { fatal: true }).decode(verified.get("schema.sql")!);
+  const plan = planDdl(schemaSql);
+  const inspected = await inspectKnowledge(appId, app, verified, io);
+  const created = await createMissing(appId, inspected.missing, verified, io);
+  let schema: { tablesCreated: string[]; viewsRecreated: string[] };
+  try {
+    schema = await applySchema(plan, io);
+  } catch (error) {
+    if (error instanceof AppsInstallError) {
+      throw new AppsInstallError(error.code, `notes saved; tables not set up: run again. ${error.message}`);
+    }
+    throw error;
+  }
   return {
     appId,
-    status,
+    status: created.written.length > 0 ? "installed" : "already",
     database: app.database,
-    filesWritten: knowledge.written,
-    filesUnchanged: knowledge.unchanged,
-    filesConflicting: knowledge.conflicting,
-    tablesCreated,
-    viewsRecreated,
+    filesWritten: created.written,
+    filesUnchanged: [...inspected.unchanged, ...created.unchanged],
+    conflicts: [...inspected.conflicts, ...created.conflicts],
+    tablesCreated: schema.tablesCreated,
+    viewsRecreated: schema.viewsRecreated,
   };
 }
