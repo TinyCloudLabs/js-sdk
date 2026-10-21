@@ -34,8 +34,10 @@ Setup & pairing (humans run these):
                                    Create a one-time invite string for an invitee (bearer link)
   invite list                      Invites on this machine: status and expiry, no secrets
   invite revoke <invite-id>        Delete the sealed invite and any pending hello or welcome
+  join --stdin | --file f          Accept an invite read from stdin or a file, then send hello; waits for the reply
+                                   Prefer --stdin or --file: an invite passed as an argument is visible in ps.
   join <invite-string> [--credential-file f | --credential-stdin]
-                                   Accept an invite and send hello; waits for the reply
+                                   Same as above with the invite on the command line
   join --resume [invite-id]        Resume a pending join; id may be omitted when only one is pending
 
 Threads (agents run these):

@@ -96,7 +96,7 @@ invitee joins with it.
 tc courier invite alice --email alice@example.com --tier strict --ttl 24h
 tc courier invite list
 tc courier invite revoke <invite-id>
-tc courier join <invite-string> --credential-file proof.txt
+tc courier join --file invite.txt --credential-file proof.txt
 tc courier join --resume
 ```
 
@@ -109,6 +109,9 @@ tc courier join --resume
 - `join` sends a hello and waits for the owner's reply. If none arrives in
   about 10 minutes it prints the resume command and exits. `join --resume`
   continues a pending join without sending a second hello.
+- `join --stdin` and `join --file` read the invite string without putting it
+  on the command line. The positional form works, but the string is visible
+  in `ps` to other users on the machine.
 - Handles may not begin with `_`. The words `list` and `revoke` cannot be
   invitee handles, because they select the `invite` subcommands.
 
