@@ -99,7 +99,6 @@ import {
 import { BrowserWalletSigner } from "../adapters/BrowserWalletSigner";
 import { BrowserNotificationHandler } from "../adapters/BrowserNotificationHandler";
 import { registerUiClient, type TinyCloudUI, type UiClientHandle, type UiConfig } from "../ui";
-import { text } from "../ui/strings";
 import type { ToastSink } from "../ui/toast-store";
 import { BrowserWasmBindings } from "../adapters/BrowserWasmBindings";
 import { BrowserENSResolver } from "../adapters/BrowserENSResolver";
@@ -130,7 +129,7 @@ declare global {
  * Extends ClientConfig with browser-specific options.
  */
 export interface Config extends ClientConfig {
-  /** Notifications. `throwErrors` rethrows each shown error toast asynchronously. Toast placement and visibility are set through `ui`. */
+  /** Notifications. `throwErrors` rethrows each error's raw message asynchronously, once per burst of identical errors (200 ms window). It still applies when `ui` hides toasts, but not when `ui: false`. Toast placement and visibility are set through `ui`. */
   notifications?: NotificationConfig;
 
   /** Optional prefix for KV service keys */
@@ -374,21 +373,8 @@ export class TinyCloudWeb {
   private _node: TinyCloudNode | null = null;
   private readonly uiClient: UiClientHandle;
 
-  /**
-   * Shows a toast in this instance's host. With `notifications.throwErrors`, each
-   * error toast that was shown also throws asynchronously, so the error reaches
-   * the global handler without breaking the caller.
-   */
-  private readonly showToast: ToastSink = (request) => {
-    const shown = this.uiClient.toast(request);
-    if (shown && request.kind === "error" && this.config.notifications?.throwErrors) {
-      const message = text(request.textCode);
-      setTimeout(() => {
-        throw new Error(message);
-      }, 0);
-    }
-    return shown;
-  };
+  /** Shows a toast in this instance's host. Returns false when nothing was shown. */
+  private readonly showToast: ToastSink = (request) => this.uiClient.toast(request);
 
   /** Browser notification handler */
   private notificationHandler: BrowserNotificationHandler;
@@ -481,7 +467,11 @@ export class TinyCloudWeb {
     });
 
     // Initialize browser notification handler
-    this.notificationHandler = new BrowserNotificationHandler(this.showToast);
+    // With `notifications.throwErrors`, error events rethrow even when no toast is shown.
+    this.notificationHandler = new BrowserNotificationHandler(
+      this.showToast,
+      this.config.notifications?.throwErrors === true && this.config.ui !== false,
+    );
 
     // Create browser WASM bindings
     this.wasmBindings = new BrowserWasmBindings();

@@ -20,19 +20,27 @@ const SUCCESS_CODES: Partial<Record<string, StringKey>> = {
   "Successfully signed in": "toast.signed_in",
 };
 
+/** Repeats of the same error within this window collapse into one rethrow. */
+const THROW_WINDOW_MS = 200;
+
 /**
  * Routes node-sdk notifications to the host toast. Toasts show fixed copy only;
  * the raw message and description go to the console.
  */
 export class BrowserNotificationHandler implements INotificationHandler {
   private readonly toast: ToastSink | undefined;
+  private readonly rethrowErrors: boolean;
+  private readonly pendingThrows = new Map<string, ReturnType<typeof setTimeout>>();
 
   /**
    * @param toast Shows a toast in the host. Without it, nothing is shown, but
    * warnings and errors still reach the console.
+   * @param rethrowErrors Throw each error's raw message asynchronously, as the
+   * old `throwErrors` did. Identical errors within 200 ms collapse into one throw.
    */
-  constructor(toast?: ToastSink) {
+  constructor(toast?: ToastSink, rethrowErrors = false) {
     this.toast = toast;
+    this.rethrowErrors = rethrowErrors;
   }
 
   success(message: string): void {
@@ -47,10 +55,23 @@ export class BrowserNotificationHandler implements INotificationHandler {
   error(category: string, message: string, description?: string): void {
     console.error(detail(message, description));
     this.show("error", ERROR_CODES[category] ?? "toast.error_generic");
+    if (this.rethrowErrors) this.throwLater(JSON.stringify([category, message, description]), message);
   }
 
   private show(kind: ToastKind, textCode: StringKey): void {
     this.toast?.({ kind, textCode });
+  }
+
+  /** A repeat of the same key restarts the window, so only the last of a burst throws. */
+  private throwLater(key: string, message: string): void {
+    clearTimeout(this.pendingThrows.get(key));
+    this.pendingThrows.set(
+      key,
+      setTimeout(() => {
+        this.pendingThrows.delete(key);
+        throw new Error(message);
+      }, THROW_WINDOW_MS),
+    );
   }
 }
 

@@ -3,12 +3,14 @@ import { JSDOM } from "jsdom";
 
 import type { TinyCloudWeb as TinyCloudWebType } from "../../src/modules/tcw";
 import { REGISTRY_KEY } from "../../src/ui/host";
-import { text } from "../../src/ui/strings";
 
 type Config = NonNullable<ConstructorParameters<typeof TinyCloudWebType>[0]>;
 type Loose = Record<PropertyKey, unknown>;
-type Sink = (request: { kind: string; textCode: string }) => void;
-type Scheduled = { callback: () => void; delay: number | undefined };
+type Handler = {
+  error(category: string, message: string, description?: string): void;
+  success(message: string): void;
+  warning(message: string, description?: string): void;
+};
 
 const g = globalThis as unknown as Loose;
 const ORIGIN = "https://app.example";
@@ -23,13 +25,39 @@ const GLOBAL_NAMES = [
   "Event",
   "KeyboardEvent",
 ];
-const ERROR_CODE = "toast.space_creation_failed";
+const WINDOW_DEBOUNCE_MS = 200;
 
 let page: Window;
 let TinyCloudWeb: typeof TinyCloudWebType;
 const saved = new Map<string, unknown>();
 const realSetTimeout = globalThis.setTimeout;
-const scheduled: Scheduled[] = [];
+const realClearTimeout = globalThis.clearTimeout;
+const realWarn = console.warn;
+const realError = console.error;
+
+// A tiny fake clock: timers run only when advance() moves time forward.
+interface Timer {
+  readonly callback: () => void;
+  readonly at: number;
+}
+let now = 0;
+let nextTimerId = 1;
+const timers = new Map<number, Timer>();
+
+function advance(ms: number): void {
+  const target = now + ms;
+  for (;;) {
+    let due: [number, Timer] | undefined;
+    for (const entry of timers) {
+      if (entry[1].at <= target && (due === undefined || entry[1].at < due[1].at)) due = entry;
+    }
+    if (due === undefined) break;
+    timers.delete(due[0]);
+    now = due[1].at;
+    due[1].callback();
+  }
+  now = target;
+}
 
 beforeAll(async () => {
   for (const name of GLOBAL_NAMES) saved.set(name, g[name]);
@@ -58,59 +86,101 @@ beforeEach(() => {
   delete g[REGISTRY_KEY];
   page.document.body.innerHTML = "";
   page.localStorage.clear();
-  scheduled.length = 0;
-  // Capture timers instead of running them, so nothing throws into the
-  // test runner and no real wall-clock timer is involved.
-  globalThis.setTimeout = ((callback: () => void, delay?: number) => {
-    scheduled.push({ callback, delay });
-    return 0 as unknown as ReturnType<typeof setTimeout>;
+  timers.clear();
+  now = 0;
+  nextTimerId = 1;
+  globalThis.setTimeout = ((callback: () => void, delay = 0) => {
+    const id = nextTimerId++;
+    timers.set(id, { callback, at: now + delay });
+    return id as unknown as ReturnType<typeof setTimeout>;
   }) as unknown as typeof setTimeout;
+  globalThis.clearTimeout = ((id: number) => {
+    timers.delete(id);
+  }) as unknown as typeof clearTimeout;
+  console.warn = () => {};
+  console.error = () => {};
 });
 
 afterEach(() => {
   globalThis.setTimeout = realSetTimeout;
+  globalThis.clearTimeout = realClearTimeout;
+  console.warn = realWarn;
+  console.error = realError;
 });
 
-// The toast store also schedules its own 5 s auto-dismiss timer. Only the
-// zero-delay timer is the throw path under test.
-function throwTimers(): Scheduled[] {
-  return scheduled.filter((entry) => entry.delay === 0);
-}
-
-function sinkFor(config: Config): Sink {
+function create(config: Config): { tc: Loose; handler: Handler } {
   const tc = new TinyCloudWeb({ persistSession: false, ...config }) as unknown as Loose;
-  return tc.showToast as Sink;
+  return { tc, handler: tc.notificationHandler as Handler };
 }
 
 describe("TinyCloudWeb notifications.throwErrors", () => {
-  test("a shown error toast schedules one zero-delay throw with the fixed copy", () => {
-    const sink = sinkFor({ notifications: { throwErrors: true } });
-    sink({ kind: "error", textCode: ERROR_CODE });
-    const timers = throwTimers();
-    expect(timers.length).toBe(1);
-    expect(() => timers[0]?.callback()).toThrow(text(ERROR_CODE));
+  test("an error event throws its raw message once the 200 ms window closes", () => {
+    const { handler } = create({ notifications: { throwErrors: true } });
+    handler.error("storage.upload_failed", "raw upstream reason", "details");
+    expect(() => advance(WINDOW_DEBOUNCE_MS - 1)).not.toThrow();
+    expect(() => advance(1)).toThrow("raw upstream reason");
   });
 
-  test("the sink itself does not throw synchronously", () => {
-    const sink = sinkFor({ notifications: { throwErrors: true } });
-    expect(() => sink({ kind: "error", textCode: ERROR_CODE })).not.toThrow();
+  test("identical error events inside the window collapse into one throw", () => {
+    const { handler } = create({ notifications: { throwErrors: true } });
+    handler.error("network.timeout", "raw timeout");
+    advance(50);
+    handler.error("network.timeout", "raw timeout");
+    advance(50);
+    handler.error("network.timeout", "raw timeout");
+    expect(() => advance(WINDOW_DEBOUNCE_MS - 1)).not.toThrow();
+    expect(() => advance(1)).toThrow("raw timeout");
+    expect(() => advance(10 * WINDOW_DEBOUNCE_MS)).not.toThrow();
   });
 
-  test("a success toast schedules no throw even with throwErrors", () => {
-    const sink = sinkFor({ notifications: { throwErrors: true } });
-    sink({ kind: "success", textCode: "toast.done" });
-    expect(throwTimers()).toEqual([]);
+  test("a repeat restarts the window, as the old emitter debounce did", () => {
+    const { handler } = create({ notifications: { throwErrors: true } });
+    handler.error("network.timeout", "raw timeout");
+    advance(150);
+    handler.error("network.timeout", "raw timeout");
+    expect(() => advance(WINDOW_DEBOUNCE_MS - 1)).not.toThrow();
+    expect(() => advance(1)).toThrow("raw timeout");
   });
 
-  test("without throwErrors an error toast schedules no throw", () => {
-    const sink = sinkFor({});
-    sink({ kind: "error", textCode: ERROR_CODE });
-    expect(throwTimers()).toEqual([]);
+  test("different error messages in the same window each throw", () => {
+    const { handler } = create({ notifications: { throwErrors: true } });
+    handler.error("network.timeout", "first reason");
+    handler.error("network.timeout", "second reason");
+    expect(() => advance(WINDOW_DEBOUNCE_MS)).toThrow("first reason");
+    expect(() => advance(0)).toThrow("second reason");
   });
 
-  test("an error that was not shown (headless ui) schedules no throw", () => {
-    const sink = sinkFor({ ui: false, notifications: { throwErrors: true } });
-    sink({ kind: "error", textCode: ERROR_CODE });
-    expect(throwTimers()).toEqual([]);
+  test("success and warning notifications never throw", () => {
+    const { handler } = create({ notifications: { throwErrors: true } });
+    handler.success("Successfully signed in");
+    handler.warning("careful");
+    expect(() => advance(10 * WINDOW_DEBOUNCE_MS)).not.toThrow();
+  });
+
+  test("without throwErrors an error event throws nothing", () => {
+    const { handler } = create({});
+    handler.error("network.timeout", "raw timeout");
+    expect(() => advance(10 * WINDOW_DEBOUNCE_MS)).not.toThrow();
+  });
+
+  test("headless ui (ui: false) throws nothing, matching the old popups: false", () => {
+    const { handler } = create({ ui: false, notifications: { throwErrors: true } });
+    handler.error("network.timeout", "raw timeout");
+    expect(() => advance(10 * WINDOW_DEBOUNCE_MS)).not.toThrow();
+  });
+
+  test("a framed page drops the toast but still throws, matching the old code", () => {
+    // Old code had no frame guard: popups alone gated the listener and the throw.
+    const real = g.window;
+    g.window = Object.create(page, { top: { value: {} } });
+    try {
+      const { tc, handler } = create({ notifications: { throwErrors: true } });
+      const showToast = tc.showToast as (r: { kind: string; textCode: string }) => boolean;
+      expect(showToast({ kind: "error", textCode: "toast.error_generic" })).toBe(false);
+      handler.error("network.timeout", "raw timeout");
+      expect(() => advance(WINDOW_DEBOUNCE_MS)).toThrow("raw timeout");
+    } finally {
+      g.window = real;
+    }
   });
 });
