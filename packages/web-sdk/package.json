@@ -24,6 +24,11 @@
       "import": "./dist/replica-gated.mjs",
       "require": "./dist/replica-gated.cjs"
     },
+    "./credentials": {
+      "types": "./dist/credentials.d.ts",
+      "import": "./dist/credentials.mjs",
+      "require": "./dist/credentials.cjs"
+    },
     "./package.json": "./package.json"
   },
   "repository": {
