@@ -211,8 +211,10 @@ describe("tc share command contract", () => {
     registerShareCommand(program);
     const share = program.commands.find((command) => command.name() === "share");
     expect(share?.commands.map((command) => command.name())).toEqual([
-      "publish", "inspect", "versions", "receive", "list", "show", "notify", "revoke",
+      "publish", "inspect", "versions", "receive", "list", "show", "notify", "revoke", "history",
     ]);
+    const history = share?.commands.find((command) => command.name() === "history");
+    expect(history?.commands.map((command) => command.name())).toEqual(["recover"]);
   });
 
   test("--notify without read refuses before publishing or recording anything", async () => {
