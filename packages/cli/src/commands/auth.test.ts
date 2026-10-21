@@ -2494,14 +2494,15 @@ describe("auth grant asks the owner about entries beyond the preset on the termi
   }
 
   /**
-   * Runs `auth grant` with each stream's terminal state set as given, `answer` (if any) typed on
-   * stdin, and stdout/stderr captured. Returns what was written to stderr.
+   * Runs `auth grant` with each stream's terminal state set as given, `answer` (if any) waiting on
+   * stdin, and stdout/stderr captured. Returns what was written to stderr and whether anything
+   * started reading stdin.
    */
   async function grantWith(
     args: string[],
     terminal: { stdin: boolean; stdout: boolean; stderr: boolean },
     answer?: string,
-  ): Promise<string> {
+  ): Promise<{ stderr: string; stdinRead: boolean }> {
     const stdinDescriptor = Object.getOwnPropertyDescriptor(process, "stdin");
     const input = Object.assign(Readable.from(answer === undefined ? [] : [answer]), { setRawMode: () => input });
     Object.defineProperty(process, "stdin", { configurable: true, value: input });
@@ -2524,14 +2525,15 @@ describe("auth grant asks the owner about entries beyond the preset on the termi
       for (const undo of restore) undo();
       if (stdinDescriptor) Object.defineProperty(process, "stdin", stdinDescriptor);
     }
-    return stderr.join("");
+    return { stderr: stderr.join(""), stdinRead: input.readableFlowing !== null };
   }
 
   test("stdout redirected to a file still gets the question on the terminal, and a yes signs", async () => {
     const source = await writeBeyondPresetRequest();
 
-    const stderr = await grantWith([source], { stdin: true, stdout: false, stderr: true }, "y\n");
+    const { stderr, stdinRead } = await grantWith([source], { stdin: true, stdout: false, stderr: true }, "y\n");
 
+    expect(stdinRead).toBe(true);
     expect(stderr).toContain("1 entry marked !");
     expect(recorded.errors).toEqual([]);
     expect(recorded.grantedRequests).toHaveLength(1);
@@ -2553,9 +2555,10 @@ describe("auth grant asks the owner about entries beyond the preset on the termi
   ])("%s: refused with CONFIRMATION_REQUIRED, nothing read from stdin, nothing signed", async (_name, terminal) => {
     const source = await writeBeyondPresetRequest();
 
-    const stderr = await grantWith([source], terminal, "y\n");
+    const { stderr, stdinRead } = await grantWith([source], terminal, "y\n");
 
     expect(recorded.errors).toEqual([expect.objectContaining({ code: "CONFIRMATION_REQUIRED", exitCode: 2 })]);
+    expect(stdinRead).toBe(false);
     expect(stderr).not.toContain("1 entry marked !");
     expect(recorded.grantedRequests).toEqual([]);
   });
@@ -2563,7 +2566,7 @@ describe("auth grant asks the owner about entries beyond the preset on the termi
   test("--yes signs without a terminal and without asking", async () => {
     const source = await writeBeyondPresetRequest();
 
-    const stderr = await grantWith([source, "--yes"], { stdin: false, stdout: false, stderr: false });
+    const { stderr } = await grantWith([source, "--yes"], { stdin: false, stdout: false, stderr: false });
 
     expect(stderr).not.toContain("1 entry marked !");
     expect(recorded.errors).toEqual([]);
