@@ -1,5 +1,5 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from "bun:test";
-import { Window } from "happy-dom";
+import { JSDOM } from "jsdom";
 
 import { registerUiClient, type UiClientHandle } from "../../src/ui";
 import type { ClientSource } from "../../src/ui/client";
@@ -19,10 +19,24 @@ const saved = new Map<string, unknown>();
 const attached: ShadowRoot[] = [];
 let restoreAttachShadow: () => void = () => undefined;
 
+// jsdom makes window.top and window.location unforgeable. Framed and
+// opaque-origin tests override them through this view of the global window.
+const overrides = new Map<PropertyKey, unknown>();
+let view: Window;
+
 beforeAll(() => {
   for (const name of GLOBAL_NAMES) saved.set(name, g[name]);
-  page = new Window({ url: `${ORIGIN}/page` });
-  g.window = page;
+  page = new JSDOM("", { url: `${ORIGIN}/page` }).window as unknown as Window;
+  view = new Proxy(page, {
+    get(target, prop) {
+      if (overrides.has(prop)) return overrides.get(prop);
+      if (prop === "top") return view;
+      const value = Reflect.get(target, prop, target);
+      // Methods need the real window as `this`; constructors are returned as-is.
+      return typeof value === "function" && !/^[A-Z]/.test(String(prop)) ? value.bind(target) : value;
+    },
+  });
+  g.window = view;
   g.document = page.document;
   g.location = page.location;
   g.localStorage = page.localStorage;
@@ -63,8 +77,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  delete (page as unknown as Loose).top;
-  delete (page as unknown as Loose).location;
+  overrides.clear();
 });
 
 function source(signedIn = false): ClientSource {
@@ -104,7 +117,7 @@ function hideKey(): string {
 }
 
 function overrideWindowProp(name: "top" | "location", value: unknown): void {
-  Object.defineProperty(page, name, { configurable: true, value });
+  overrides.set(name, value);
 }
 
 describe("host mount", () => {

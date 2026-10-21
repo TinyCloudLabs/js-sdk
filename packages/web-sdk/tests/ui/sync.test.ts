@@ -1,5 +1,6 @@
 import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
-import { Window } from "happy-dom";
+import { JSDOM } from "jsdom";
+import { implSymbol } from "jsdom/lib/jsdom/living/generated/utils.js";
 
 import { syncSection } from "../../src/ui/sections/sync";
 import type {
@@ -23,7 +24,7 @@ const cleanups: Array<() => void> = [];
 
 beforeAll(() => {
   for (const name of GLOBAL_NAMES) saved.set(name, g[name]);
-  page = new Window({ url: `${ORIGIN}/page` });
+  page = new JSDOM("", { url: `${ORIGIN}/page` }).window as unknown as Window;
   g.window = page;
   g.document = page.document;
   g.HTMLElement = page.HTMLElement;
@@ -120,9 +121,15 @@ async function flush(): Promise<void> {
   for (let i = 0; i < 10; i++) await Promise.resolve();
 }
 
+// jsdom makes the wrapper's isTrusted non-configurable and resets it to false
+// during dispatch. Pin the impl field to true for trusted clicks; the setter
+// ignores jsdom's reset. Untrusted clicks need no change: jsdom dispatches them as untrusted.
 function clickEl(target: Element, trusted: boolean): void {
   const ev = new page.MouseEvent("click", { bubbles: true, cancelable: true });
-  Object.defineProperty(ev, "isTrusted", { value: trusted });
+  if (trusted) {
+    const impl = (ev as unknown as Record<symbol, object>)[implSymbol];
+    Object.defineProperty(impl, "isTrusted", { get: () => true, set: () => {} });
+  }
   target.dispatchEvent(ev);
 }
 
