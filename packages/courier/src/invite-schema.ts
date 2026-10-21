@@ -13,7 +13,10 @@ import { validateArtifactIdentity, type PairArtifact } from './pairing.js';
  */
 
 export const INVITE_BLOB_MAX_BYTES = 128 * 1024;
-export const HELLO_MAX_BYTES = 16 * 1024;
+export const CREDENTIAL_MAX_BYTES = 16 * 1024;
+export const POSSESSION_MAX_BYTES = 2 * 1024;
+// Whole-Hello cap: credential + possession + one artifact B (delegation-sized) allowance.
+export const HELLO_MAX_BYTES = CREDENTIAL_MAX_BYTES + POSSESSION_MAX_BYTES + 16 * 1024;
 export const WELCOME_MAX_BYTES = 16 * 1024;
 export const DELEGATION_MAX_BYTES = 16 * 1024;
 
@@ -62,6 +65,7 @@ export interface Hello {
   artifactB: PairArtifact;
   claimedLabel: string;
   credential?: string;
+  possession?: string;
   sentAt: string;
 }
 
@@ -122,7 +126,7 @@ function parsePermissions(value: unknown): Permissions {
 
 export function parseHello(text: string): Hello {
   const h = parseStrict(text, HELLO_MAX_BYTES);
-  exactKeys(h, 'hello', ['v', 'inviteId', 'artifactB', 'claimedLabel', 'sentAt'], ['credential']);
+  exactKeys(h, 'hello', ['v', 'inviteId', 'artifactB', 'claimedLabel', 'sentAt'], ['credential', 'possession']);
   if (h.v !== 1) fail('hello: v must be 1');
   return {
     v: 1,
@@ -130,7 +134,8 @@ export function parseHello(text: string): Hello {
     artifactB: checkArtifact(h.artifactB, 'B', 'artifactB'),
     claimedLabel: str(h.claimedLabel, 'claimedLabel', 64, CLAIMED_LABEL),
     sentAt: isoUtc(h.sentAt, 'sentAt'),
-    ...(Object.hasOwn(h, 'credential') ? { credential: str(h.credential, 'credential', HELLO_MAX_BYTES) } : {}),
+    ...(Object.hasOwn(h, 'credential') ? { credential: str(h.credential, 'credential', CREDENTIAL_MAX_BYTES) } : {}),
+    ...(Object.hasOwn(h, 'possession') ? { possession: str(h.possession, 'possession', POSSESSION_MAX_BYTES) } : {}),
   };
 }
 
@@ -200,7 +205,7 @@ function checkArtifact(value: unknown, step: 'A' | 'B' | 'C', where: string): Pa
     ...(step === 'A'
       ? {}
       : {
-          delegation: str(a.delegation, `${where}.delegation`, HELLO_MAX_BYTES),
+          delegation: str(a.delegation, `${where}.delegation`, DELEGATION_MAX_BYTES),
           delegationExpiresAt: isoUtc(a.delegationExpiresAt, `${where}.delegationExpiresAt`),
         }),
   };

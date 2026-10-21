@@ -171,7 +171,10 @@ const HELLO_REJECTS = [
   ['sentAt not ISO', (d) => { d.sentAt = 'yesterday'; return d; }, /sentAt must be an ISO UTC time/],
   ['v is 0', (d) => { d.v = 0; return d; }, /v must be 1/],
   ['control character in delegation', (d) => { d.artifactB.delegation = 'DELEG\u0000ATION'; return d; }, /control character/],
-  ['over 16 KiB', (d) => { d.artifactB.delegation = 'D'.repeat(16 * 1024); return d; }, /is over/],
+  ['artifactB.delegation over 16 KiB', (d) => { d.artifactB.delegation = 'D'.repeat(16 * 1024 + 1); return d; }, /artifactB\.delegation is over 16384 bytes/],
+  ['credential over 16 KiB', (d) => { d.credential = 'C'.repeat(16 * 1024 + 1); return d; }, /credential is over 16384 bytes/],
+  ['possession over 2 KiB', (d) => { d.possession = 'P'.repeat(2 * 1024 + 1); return d; }, /possession is over 2048 bytes/],
+  ['whole hello over HELLO_MAX_BYTES', (d) => { d.artifactB.delegation = 'D'.repeat(16 * 1024); d.credential = 'C'.repeat(16 * 1024); d.possession = 'P'.repeat(2 * 1024); return d; }, /is over/],
   ['credential empty', (d) => { d.credential = ''; return d; }, /credential must be a non-empty string/],
   ['credential not a string', (d) => { d.credential = 7; return d; }, /credential must be a non-empty string/],
 ];
@@ -185,6 +188,11 @@ test('hello: golden object parses', () => {
 test('hello: optional credential round-trips; absent credential stays absent', () => {
   assert.equal(parseHello(JSON.stringify({ ...hello(), credential: 'PROOF' })).credential, 'PROOF');
   assert.equal(Object.hasOwn(parseHello(JSON.stringify(hello())), 'credential'), false);
+});
+
+test('hello: optional possession round-trips; absent possession stays absent', () => {
+  assert.equal(parseHello(JSON.stringify({ ...hello(), possession: 'PAYLOAD.SIG' })).possession, 'PAYLOAD.SIG');
+  assert.equal(Object.hasOwn(parseHello(JSON.stringify(hello())), 'possession'), false);
 });
 
 for (const [name, mutate, pattern] of HELLO_REJECTS) {
