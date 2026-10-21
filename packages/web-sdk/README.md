@@ -294,6 +294,12 @@ tc.ui.available; // false in iframes, opaque origins, SSR, or when ui is false
 
 `open()` also clears the user's hidden flag for the button. The hidden flag is stored per origin and app id under `tinycloud:ui:button-hidden:v1:`. The panel shows sections only for capabilities the client exposes.
 
+### Storage section and storage-full toast
+
+When the client exposes `storage.status()`, the panel shows a Storage section with the account's usage: "Room left", "Nearly full", "Storage is full", or "No limit", plus a bar and a "Manage storage" link. The link uses the status `manageUrl` only when it is https; otherwise it falls back to `https://account.tinycloud.xyz/storage`. When the storage needs permission, the section offers "Allow storage info", which requests `space/info` authority and re-reads status on approval.
+
+The host also watches the own-storage `storage.full` episode. While the episode is on, the button and panel show "Storage is full", and one warning toast with the manage link is shown per episode, even when the panel is closed. The toast shows again only after the episode ends and a new one starts. The episode ends only on a successful write to that storage, so a status read alone does not end it.
+
 ### Toasts and notification errors
 
 Toasts render in the host panel layer and follow the same `ui` options. `ui: false` renders no host and no toasts. `ui.position` sets placement. Toast copy is fixed text per error kind. The raw error message is written to the console. A toast auto-dismisses after 5 seconds, at most 3 show at once, and an identical visible toast is not shown twice.
