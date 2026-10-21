@@ -144,7 +144,7 @@ export function createHostRuntime(): HostRuntime {
         statusListeners.delete(cb);
       };
     },
-    toast: (t) => toastStore.push(t),
+    toast: (t) => (primaryConfig()?.toasts === false ? null : toastStore.push(t)),
     openPanel: () => setOpen(true),
     closePanel: () => setOpen(false),
     text,
