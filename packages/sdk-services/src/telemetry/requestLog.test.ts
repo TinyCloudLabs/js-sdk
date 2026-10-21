@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { buildRequestEvent, byteLengthOf, RequestLog, type RawRequest } from "./requestLog";
+import { buildRequestEvent, byteLengthOf, declaredLengthOf, RequestLog, type RawRequest } from "./requestLog";
 
 const base: RawRequest = { durationMs: 4.6, ok: true, at: 1_700_000_000_000 };
 const build = (extra: Partial<RawRequest>) => buildRequestEvent({ ...base, ...extra });
@@ -195,4 +195,16 @@ test("clear empties the ring, fires onClear, and keeps ids increasing", () => {
   expect(cleared).toBe(1);
   log.record(build({ service: "kv", op: "kv/get" }));
   expect(log.snapshot()[0]!.id).toBe(2);
+});
+
+test("declared Content-Length is a byte count only for plain digits", () => {
+  expect(declaredLengthOf("0")).toBe(0);
+  expect(declaredLengthOf(" 42 ")).toBe(42);
+  expect(declaredLengthOf("")).toBeNull();
+  expect(declaredLengthOf("   ")).toBeNull();
+  expect(declaredLengthOf("1e3")).toBeNull();
+  expect(declaredLengthOf("-1")).toBeNull();
+  expect(declaredLengthOf("12abc")).toBeNull();
+  expect(declaredLengthOf(null)).toBeNull();
+  expect(declaredLengthOf(undefined)).toBeNull();
 });

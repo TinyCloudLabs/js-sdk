@@ -134,3 +134,34 @@ test("developer off: no sink means no events, no invocation metadata, and global
   const response = await context.fetch("https://node.example/kv", { method: "POST", headers });
   expect(response.ok).toBe(true);
 });
+
+function replyWithLength(length: string | null): FetchResponse {
+  return { ...reply(200, "ok"), headers: { get: (name) => (name.toLowerCase() === "content-length" ? length : null) } };
+}
+
+test("blank or missing Content-Length leaves response bytes unknown, never 0", async () => {
+  const log = new RequestLog();
+  for (const length of ["", "  ", null]) {
+    const context = contextWith(log, async () => replyWithLength(length));
+    await context.fetch("https://node.example/kv", { method: "GET" });
+  }
+  expect(log.snapshot().map((event) => event.bytes)).toEqual([null, null, null]);
+});
+
+test("a digit Content-Length is the response byte count, including an explicit 0", async () => {
+  const log = new RequestLog();
+  for (const length of ["0", "12"]) {
+    const context = contextWith(log, async () => replyWithLength(length));
+    await context.fetch("https://node.example/kv", { method: "GET" });
+  }
+  expect(log.snapshot().map((event) => event.bytes)).toEqual([0, 12]);
+});
+
+test("a stream body without a known length is recorded as unknown bytes and is not consumed", async () => {
+  const log = new RequestLog();
+  const body = new ReadableStream();
+  const context = contextWith(log, async () => reply(200, "ok"));
+  await context.fetch("https://node.example/kv", { method: "POST", body });
+  expect(log.snapshot()[0]!.bytes).toBeNull();
+  expect(body.locked).toBe(false);
+});

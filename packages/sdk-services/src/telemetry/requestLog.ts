@@ -130,6 +130,13 @@ export function byteLengthOf(body: unknown): number | null {
   return null;
 }
 
+/** Response Content-Length as bytes; null unless the header is plain digits (blank, signed, or exponent forms are unknown). */
+export function declaredLengthOf(header: string | null | undefined): number | null {
+  if (typeof header !== "string") return null;
+  const value = header.trim();
+  return /^\d+$/.test(value) ? Number(value) : null;
+}
+
 /** What the signing path knows about a request; read back by the fetch layer. */
 export interface InvocationMeta {
   service: string;

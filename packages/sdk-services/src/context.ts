@@ -25,6 +25,7 @@ import { projectDiagnosticData } from "./diagnostics";
 import {
   buildRequestEvent,
   byteLengthOf,
+  declaredLengthOf,
   invocationMetaOf,
   rememberInvocation,
   type RequestSink,
@@ -592,7 +593,7 @@ export class ServiceContext implements IServiceContext {
     try {
       const { url, init, response } = sample;
       const meta = invocationMetaOf(init?.headers);
-      const declared = Number(response?.headers.get("content-length") ?? NaN);
+      const declared = declaredLengthOf(response?.headers.get("content-length"));
       sink.record(
         buildRequestEvent({
           service: meta?.service ?? "other",
@@ -600,7 +601,7 @@ export class ServiceContext implements IServiceContext {
           path: meta?.path ?? null,
           spaceId: meta?.spaceId ?? null,
           url,
-          bytes: byteLengthOf(init?.body) ?? (Number.isFinite(declared) ? declared : null),
+          bytes: byteLengthOf(init?.body) ?? declared,
           durationMs: performance.now() - sample.clock,
           attempts: response?.retry?.attempts ?? 1,
           ok: response?.ok === true,
