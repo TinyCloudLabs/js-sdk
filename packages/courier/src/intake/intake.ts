@@ -214,6 +214,17 @@ function presentIn(input: CycleInput, peer: string, name: string): boolean {
   return false;
 }
 
+/** True when something exists at `file`, a symlink included. Only a missing name reads as absent. */
+function pathExists(file: string): boolean {
+  try {
+    fs.lstatSync(file);
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false;
+    throw error;
+  }
+}
+
 /** Writes a done marker for one message id. Returns false when a marker already exists. */
 function markDone(input: Pick<CycleInput, 'doneRoot' | 'now'>, peer: string, msgId: string, outcome: DoneOutcome): boolean {
   const dir = path.join(input.doneRoot, peer);
@@ -359,7 +370,16 @@ async function intakePeer(input: CycleInput, peer: StoredPeer): Promise<number> 
         if (admitted) {
           const dir = path.join(input.queueRoot, peer.handle);
           ensureRealDir(dir, 0o2750);
-          if (writeNew(dir, `${c.msgId}.json`, body, 0o640)) {
+          const name = `${c.msgId}.json`;
+          let published: boolean;
+          try {
+            published = writeNew(dir, name, body, 0o640);
+          } catch (error) {
+            // The link can succeed before the directory fsync fails. A record that is visible is admitted, so it counts.
+            if (pathExists(path.join(dir, name))) ps.receipts = receipts;
+            throw error;
+          }
+          if (published) {
             ps.receipts = receipts;
             persist(input, peer.handle);
             written++;

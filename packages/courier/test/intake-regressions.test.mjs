@@ -135,6 +135,34 @@ test('a failed queue publication does not spend the peer admission', async () =>
   assert.deepEqual(h.overflowFiles(HANDLE), []);
 });
 
+test('a publication visible before its directory fsync failed still consumes admission', async () => {
+  const h = harness({ peers: { alice: { tier: 'strict', ratePerHour: 1, outPerHour: 1 } } });
+  const first = ulid(NOW);
+  const second = ulid(NOW + 1);
+  await putMessage(h.kv, first, [{ text: 'first' }]);
+  const realFsync = fs.fsyncSync;
+  let failed = false;
+  mock.method(fs, 'fsyncSync', (fd) => {
+    const queueDir = path.join(h.dirs.queueRoot, HANDLE);
+    if (!failed && fs.existsSync(queueDir) && fs.fstatSync(fd).ino === fs.statSync(queueDir).ino) {
+      failed = true;
+      throw Object.assign(new Error('fixture directory fsync failed'), { code: 'EIO' });
+    }
+    return realFsync(fd);
+  });
+  try {
+    await intakeCycle(h.input);
+  } finally {
+    mock.restoreAll();
+  }
+  assert.ok(failed);
+  assert.ok(h.queueFiles(HANDLE).includes(first + '.json'));
+  await putMessage(h.kv, second, [{ text: 'second' }]);
+  await intakeCycle(h.input);
+  assert.ok(!h.queueFiles(HANDLE).includes(second + '.json'), 'the visible first record must consume the one-per-hour admission');
+  assert.ok(h.overflowFiles(HANDLE).includes(second + '.json'));
+});
+
 test('prototype-named paired handles are independent peers', async () => {
   const handle = 'constructor';
   const h = harness({ profile: profileWith({ [handle]: pairedPeer(handle) }) });

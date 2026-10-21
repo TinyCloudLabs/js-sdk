@@ -674,8 +674,10 @@ id picked; the next cycle takes the next 200 ids after it in ascending order and
 newest. Ids more than 7 days old by message time are dropped before selection: they are not fetched and get no marker,
 and a queue record that old moves to `done/`. A message is skipped when a queue, done or overflow file for its id
 already exists. A message id more than 10 minutes ahead of local time is not recorded and does not block the others:
-the cursor moves past it, so it is retried only when the cursor next wraps around the mirror. A malformed or
-mismatched mirror row gets a done marker (outcome `bad-id` or `mismatch`). A message whose processing throws is logged
+the cursor moves past it, so it is retried only when the cursor next wraps around the mirror. A mirror key whose
+message or thread id is not a ULID is logged as `intake-skip` (`bad-id`) and gets no marker. A message id whose
+time cannot be decoded gets a `bad-id` done marker. A fetched row that is malformed, or whose `messageId` or
+`contextId` does not match its key, gets a `mismatch` done marker. A message whose processing throws is logged
 as `intake-error`, and the cursor still moves past it. Existing history is not queued if you run
 `courier intake --init-from-now` first. It marks the current mirror messages of each paired peer as done (outcome
 `init`), and it refuses to run again while a paired peer has done entries unless `--force` is given. Without it, the
@@ -685,8 +687,11 @@ Rate: each peer is limited to 100 inbound messages per hour by default, includin
 peers absent from `peers.json`. Over the cap, the message is not queued. It is written
 to the overflow directory (`<COURIER_HOME>/intake/overflow/<peerId>/`, directories 0700,
 files 0600), where it is kept until its message is 7 days old by message time. Each peer's overflow is capped at 200
-files and 1 MiB; the oldest messages are dropped first. Each cycle retires at most 500 expired files and at most 500
-over-cap files per peer. Each retirement writes an `overflow` done marker before the unlink, so the id is not admitted
+files and 1 MiB; the oldest messages are dropped first. Each cycle retires at most 500 expired files per directory.
+Over-cap retirement runs once per peer per pass: it removes at most 500 files by count, then, once at most 200 files
+remain, removes the oldest of them until the 1 MiB cap holds, so one pass can retire up to 700 files. A cycle runs the
+pass from the janitor and again after it writes new overflow for that peer, so one cycle can retire more than 500
+over-cap files for one peer. Each retirement writes an `overflow` done marker before the unlink, so the id is not admitted
 again when the cursor laps. The first overflow in each hour also writes one `rate-<unixHour>` record to the queue with
 `peerRatePerHourRemaining: 0` and the `rate` flag. After a start, the hour's count is rebuilt from `receivedAt` in
 queue and done records whose files were modified within the last hour.
