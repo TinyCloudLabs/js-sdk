@@ -7,6 +7,7 @@ import {
   parseInviteBlob,
   type OneTimeKey,
   type Permissions,
+  type RequestedTier,
 } from './invite-schema.js';
 import type { PairArtifact } from './pairing.js';
 
@@ -24,6 +25,10 @@ export interface InviteBlobInput {
   artifactA: PairArtifact;
   expiresAt: Date;
   expectEmail: string;
+  /** Owner DID the invitee must match, or null for any owner. */
+  expectOwner: string | null;
+  /** Requested tier. The owner confirms trusted by hand; a self-service invite never grants it. */
+  tier: RequestedTier;
 }
 
 /** Canonical JSON text of the sealed invitation. Self-checked against the strict parser before it is returned. */
@@ -42,6 +47,8 @@ export function buildInviteBlob(input: InviteBlobInput): string {
     artifactA: input.artifactA,
     expiresAt: input.expiresAt.toISOString(),
     expectEmail: input.expectEmail,
+    expectOwner: input.expectOwner,
+    tier: input.tier,
   });
   parseInviteBlob(text);
   return text;

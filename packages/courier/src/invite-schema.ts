@@ -31,6 +31,8 @@ const MAX_NESTING = 8;
 
 export type Tier = (typeof TIERS)[number];
 
+export type RequestedTier = 'strict' | 'trusted';
+
 export interface OneTimeKey {
   kty: 'OKP';
   crv: 'Ed25519';
@@ -57,6 +59,10 @@ export interface InviteBlob {
   artifactA: PairArtifact;
   expiresAt: string;
   expectEmail: string;
+  /** Owner DID the invitee must match, or null for any owner. */
+  expectOwner: string | null;
+  /** Requested tier only. The paired peer starts strict; the owner confirms trusted by hand. */
+  tier: RequestedTier;
 }
 
 export interface Hello {
@@ -85,7 +91,7 @@ export function inviteFolder(inviteId: string): string {
 
 export function parseInviteBlob(text: string, now: number = Date.now()): InviteBlob {
   const b = parseStrict(text, INVITE_BLOB_MAX_BYTES);
-  exactKeys(b, 'invite', ['v', 'inviteId', 'host', 'spaceId', 'folder', 'helloKey', 'outPrefix', 'oneTimeKey', 'permissions', 'artifactA', 'expiresAt', 'expectEmail']);
+  exactKeys(b, 'invite', ['v', 'inviteId', 'host', 'spaceId', 'folder', 'helloKey', 'outPrefix', 'oneTimeKey', 'permissions', 'artifactA', 'expiresAt', 'expectEmail', 'expectOwner', 'tier']);
   if (b.v !== 1) fail('invite: v must be 1');
   const inviteId = str(b.inviteId, 'inviteId', 26, INVITE_ID);
   const folder = inviteFolder(inviteId);
@@ -97,6 +103,8 @@ export function parseInviteBlob(text: string, now: number = Date.now()): InviteB
   if (artifactA.spaceId !== spaceId) fail('spaceId does not match artifactA');
   const expiresAt = isoUtc(b.expiresAt, 'expiresAt');
   const expectEmail = emailAddress(b.expectEmail, 'expectEmail');
+  const expectOwner = expectOwnerField(b.expectOwner);
+  const tier = requestedTierField(b.tier);
   if (Date.parse(expiresAt) <= now) fail('invite is expired');
   return {
     v: 1,
@@ -111,6 +119,8 @@ export function parseInviteBlob(text: string, now: number = Date.now()): InviteB
     artifactA,
     expiresAt,
     expectEmail,
+    expectOwner,
+    tier,
   };
 }
 
@@ -160,6 +170,22 @@ export function emailAddress(value: unknown, where: string): string {
   const s = str(value, where, 254, /^[^\s@]+@[^\s@]+\.[^\s@]+$/);
   if (s !== s.toLowerCase()) fail(`${where} must be lowercase`);
   return s;
+}
+
+/** True when the value is a `did:pkh:eip155:<chain>:0x<address>` DID. Shape only; ownership is proven elsewhere. */
+export function isOwnerDid(value: string): boolean {
+  return PKH_EIP155.test(value);
+}
+
+function expectOwnerField(value: unknown): string | null {
+  if (value === null) return null;
+  if (typeof value !== 'string' || !isOwnerDid(value)) fail('expectOwner must be null or a did:pkh:eip155 DID');
+  return value;
+}
+
+function requestedTierField(value: unknown): RequestedTier {
+  if (value !== 'strict' && value !== 'trusted') fail('tier must be strict or trusted');
+  return value;
 }
 
 /** True when both DIDs are `did:pkh:eip155:<chain>:0x<address>`, on the same chain, with the same address (case-insensitive). */

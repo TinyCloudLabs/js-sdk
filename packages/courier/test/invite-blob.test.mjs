@@ -57,6 +57,8 @@ test('built invite blob parses back to the same fields and folder', () => {
     artifactA: artifactA(),
     expiresAt: LATER,
     expectEmail: 'hunter@example.test',
+    expectOwner: null,
+    tier: 'strict',
   }, );
   const blob = parseInviteBlob(text, NOW);
   assert.equal(blob.inviteId, inviteId);
@@ -78,6 +80,8 @@ test('an invite blob whose expiry has passed is refused by the parser', () => {
     artifactA: artifactA(),
     expiresAt: LATER,
     expectEmail: 'hunter@example.test',
+    expectOwner: null,
+    tier: 'strict',
   });
   assert.throws(() => parseInviteBlob(text, LATER.getTime() + 1));
 });
@@ -92,6 +96,8 @@ test('building an invite blob refuses a mixed-case expected email', () => {
     artifactA: artifactA(),
     expiresAt: LATER,
     expectEmail: 'Hunter@Example.test',
+    expectOwner: null,
+    tier: 'strict',
   }));
 });
 

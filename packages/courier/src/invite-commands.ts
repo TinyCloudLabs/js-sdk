@@ -13,8 +13,8 @@ import {
   deleteSealed, fetchSealed, formatInviteString, inviteOrigin, openInvitation, parseInviteString,
   sealInvitation, uploadSealed, type UploadedInvite,
 } from './invite-link.js';
-import { publicInvitesDir, updatePublicInvite, writePublicInvite } from './invite-public.js';
-import { emailAddress, inviteFolder, parseInviteBlob, parseWelcome, type InviteBlob, type OneTimeKey } from './invite-schema.js';
+import { publicInvitesDir, updatePublicInvite, writePublicInvite, type PublicInvite } from './invite-public.js';
+import { emailAddress, inviteFolder, isOwnerDid, parseInviteBlob, parseWelcome, type InviteBlob, type OneTimeKey, type RequestedTier } from './invite-schema.js';
 import { artifactA, validateArtifactIdentity } from './pairing.js';
 import { HANDLE } from './request.js';
 import { cmd } from './program.js';
@@ -28,7 +28,6 @@ const DEFAULT_TTL = '24h';
 const WELCOME_POLL_MS = 30_000;
 const WELCOME_WAIT_MS = 10 * 60_000;
 
-type Tier = (typeof TIERS)[number];
 type Entries = Parameters<TinyCloudNode['delegateTo']>[1];
 
 /** Owner-side record of an invite. Holds the store delete token: never printed. */
@@ -39,7 +38,9 @@ interface InviteRecord {
   callMe: string;
   email: string;
   /** Requested tier only. The paired peer starts strict; the owner confirms trusted by hand. */
-  tier: Tier;
+  tier: RequestedTier;
+  /** Owner DID the invitee must match, or null for any owner. */
+  expectOwner: string | null;
   alsoAsk: boolean;
   expiresAt: string;
   store: { id: string; cid: string; deleteToken: string };
@@ -56,7 +57,17 @@ interface JoinState {
   stage: 'hello-ready' | 'hello-sent';
 }
 
-const inviteUsage = () => `Usage: ${cmd('invite <handle> --email <address> [--tier strict|trusted] [--ttl 24h] [--call-me <handle>] [--also-ask] [--invites-public-dir d]')}`;
+const inviteUsage = () => `Usage: ${cmd('invite <handle> --email <address> [--tier strict|trusted] [--expect-owner <did>] [--ttl 24h] [--call-me <handle>] [--also-ask] [--invites-public-dir d]')}`;
+
+/** Owner and tier flags. No flags: no owner check, strict. `--tier trusted` is a request the owner confirms by hand. */
+export function requestedOwnerAndTier(args: ParsedArgs): { tier: RequestedTier; expectOwner: string | null } {
+  const tier = args.get('tier') ?? 'strict';
+  if (!(TIERS as readonly string[]).includes(tier)) fail('usage', '--tier must be strict or trusted.');
+  const owner = args.get('expect-owner');
+  if (owner === undefined) return { tier: tier as RequestedTier, expectOwner: null };
+  if (!isOwnerDid(owner)) fail('usage', '--expect-owner must be a DID of the form did:pkh:eip155:<chain>:0x<address>.');
+  return { tier: tier as RequestedTier, expectOwner: owner };
+}
 
 function requireInviteId(id: string | undefined, usage: string): string {
   if (id === undefined || !INVITE_ID.test(id)) fail('usage', `Invite id is 26 characters from a-z and 2-7. ${usage}`);
@@ -71,6 +82,30 @@ function readJson<T>(file: string): T | undefined {
 const recordPath = (id: string) => path.join(secureSubdir('invites'), `${id}.json`);
 const readRecord = (id: string) => readJson<InviteRecord>(recordPath(id));
 const writeRecord = (record: InviteRecord) => writeSecure(recordPath(record.inviteId), record);
+
+/** Owner-side private record and public copy for one invite. Both carry the requested tier and owner DID that the blob carries. */
+export function inviteRecordsFor(input: {
+  inviteId: string; handle: string; callMe: string; expectEmail: string;
+  tier: RequestedTier; expectOwner: string | null; alsoAsk: boolean;
+  expiresAt: Date; createdAt: string;
+  store: Pick<UploadedInvite, 'id' | 'cid' | 'deleteToken'>;
+  publicDir: string | undefined;
+}): { record: InviteRecord; publicRecord: PublicInvite } {
+  const expiresAt = input.expiresAt.toISOString();
+  return {
+    record: {
+      v: 1, inviteId: input.inviteId, handle: input.handle, callMe: input.callMe, email: input.expectEmail,
+      expectOwner: input.expectOwner, tier: input.tier, alsoAsk: input.alsoAsk, expiresAt,
+      store: { id: input.store.id, cid: input.store.cid, deleteToken: input.store.deleteToken },
+      status: 'open', publicDir: input.publicDir,
+    },
+    publicRecord: {
+      v: 1, inviteId: input.inviteId, handle: input.handle, expectEmail: input.expectEmail,
+      expectOwner: input.expectOwner, tier: input.tier, createdAt: input.createdAt,
+      expiresAt, status: 'open', completedPeer: null,
+    },
+  };
+}
 
 const joinPath = (id: string) => path.join(secureSubdir('joins'), `${id}.json`);
 const readJoin = (id: string) => readJson<JoinState>(joinPath(id));
@@ -101,14 +136,13 @@ export async function cmdInvite(args: ParsedArgs): Promise<void> {
 
 async function inviteCreate(args: ParsedArgs): Promise<void> {
   const handle = args.positional[0] ?? fail('usage', inviteUsage());
+  const { tier, expectOwner } = requestedOwnerAndTier(args);
   const { profile, node } = await ctx();
   const spaceId = profile.spaceId ?? fail('no-space', `No TinyCloud space yet; run \`${cmd('init')}\` first.`);
   if (!HANDLE.test(handle)) fail('usage', `Handles are letters, digits, "-" or "_", not starting with "_" (got "${handle}").`);
   const emailArg = args.get('email');
   if (emailArg === undefined || emailArg === 'true') fail('usage', `--email <address> is required. ${inviteUsage()}`);
   const expectEmail = emailAddress(emailArg.trim().toLowerCase(), '--email');
-  const tier = args.get('tier') ?? 'strict';
-  if (!(TIERS as readonly string[]).includes(tier)) fail('usage', '--tier must be strict or trusted.');
   const callMe = args.get('call-me') ?? profile.selfHandle ?? handle;
   if (!HANDLE.test(callMe)) fail('usage', `Handles are letters, digits, "-" or "_", not starting with "_" (got "${callMe}").`);
   const ttl = args.get('ttl') ?? DEFAULT_TTL;
@@ -156,29 +190,18 @@ async function inviteCreate(args: ParsedArgs): Promise<void> {
       artifactA: artifactA(profile, handle, callMe),
       expiresAt,
       expectEmail,
+      expectOwner,
+      tier,
     });
     const seal = sealInvitation(new TextEncoder().encode(blob));
     uploaded = await uploadSealed(inviteOrigin(), seal.sealed, expiresAt);
-    writeRecord({
-      v: 1,
-      inviteId,
-      handle,
-      callMe,
-      email: expectEmail,
-      tier: tier as Tier,
-      alsoAsk: args.has('also-ask'),
-      expiresAt: expiresAt.toISOString(),
-      store: { id: uploaded.id, cid: uploaded.cid, deleteToken: uploaded.deleteToken },
-      status: 'open',
-      publicDir,
+    const records = inviteRecordsFor({
+      inviteId, handle, callMe, expectEmail, tier, expectOwner, alsoAsk: args.has('also-ask'),
+      expiresAt, createdAt, store: uploaded, publicDir,
     });
+    writeRecord(records.record);
     recordWritten = true;
-    if (publicDir !== undefined) {
-      writePublicInvite(publicDir, {
-        v: 1, inviteId, handle, expectEmail, expectOwner: null, tier, createdAt,
-        expiresAt: expiresAt.toISOString(), status: 'open', completedPeer: null,
-      });
-    }
+    if (publicDir !== undefined) writePublicInvite(publicDir, records.publicRecord);
     console.log(`Invite for ${expectEmail} as "${handle}" (requested tier ${tier}; the peer starts strict until you confirm), expires ${expiresAt.toISOString()}.`);
     console.log('Send this string to the invitee. It is a bearer link: keep it private until revoked or expired.');
     console.log(formatInviteString({ id: uploaded.id, key: seal.key, cid: uploaded.cid }));

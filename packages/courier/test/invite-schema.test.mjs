@@ -65,6 +65,8 @@ const blob = () => ({
   artifactA: artifactA(),
   expiresAt: LATER,
   expectEmail: 'invitee@example.com',
+  expectOwner: null,
+  tier: 'strict',
 });
 
 const hello = () => ({ v: 1, inviteId: INVITE_ID, artifactB: artifactB(), claimedLabel: 'Hunter Agent', sentAt: ISSUED });
