@@ -53,6 +53,7 @@
     "courier-notify-final",
     "courier-outbox-publish",
     "courier-outbox-sender-hardening",
+    "courier-peers-owner",
     "courier-profile-permissions",
     "courier-wake",
     "courier-watch",

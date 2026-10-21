@@ -98,14 +98,14 @@ Delivery (one watcher per person per machine; never calls a model):
   watch … --install-launchd | --install-systemd [--dry-run] [--name n]
                                    Install the same watch command as a macOS launchd agent or a Linux
                                    systemd --user unit. --dry-run prints the exact file and commands.
-  intake [--queue-dir d] [--peers-file f] [--state-dir d] [--interval 60] [--once]
+  intake [--queue-dir d] [--peers-file f] [--peers-owner u] [--state-dir d] [--interval 60] [--once]
                                    Intake reader: copy paired peers' mirrored messages into the local queue
                                    (one <msgId>.json per message) with cheap checks. Never calls a model.
   outbox add <peer> (--thread <id> | --new <subject>) [--text t | --file f | stdin] [--outbox-dir d]
                                    Queue one message for a paired peer as a single-use outbox item. Text limit:
                                    2000 characters (8 KiB UTF-8); subject limit: 200 characters.
   outbox serve --pipe <socket> [--outbox-dir d] [--socket-group courier-sender] [--peers-file f]
-               [--sent-dir d] [--once] [--dry-run]
+               [--peers-owner u] [--sent-dir d] [--once] [--dry-run]
                                    Sender: accept one-line item requests over a Unix socket and send the
                                    named outbox item. Replies are ok or refused:<code>.
 
