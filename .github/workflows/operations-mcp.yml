@@ -76,7 +76,6 @@ jobs:
           bun test packages/operations/src/legacy-cli-concurrency.test.ts
           bun test packages/cli/src/commands/auth.test.ts
           bun test packages/cli/src/auth/prepared-openkey.test.ts
-          bun test packages/cli/src/auth/agent-grant.test.ts
           bun test packages/cli/src/auth/browser-auth.test.ts
           bun test packages/cli/src/commands/auth.portable-proof.test.ts
           bun test packages/cli/src/commands/auth-logout-gate.integration.test.ts

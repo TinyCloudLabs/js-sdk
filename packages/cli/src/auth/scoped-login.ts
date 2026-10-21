@@ -387,16 +387,6 @@ export interface SignedSession {
   expiresAt: string;
 }
 
-/** Approved authority from a verified ReCap: service-prefixed, action-qualified, caveats kept. */
-export function permissionsFromVerifiedRecap(entries: NonNullable<VerifiedSessionProof["verifiedRecap"]>): PermissionEntry[] {
-  return entries.map((entry) => {
-    const service = entry.service.startsWith("tinycloud.") ? entry.service : `tinycloud.${entry.service}`;
-    const actions = entry.actions.map((action) => action.includes("/") ? action : `${service}/${action}`);
-    const caveats = plainCaveats(entry.caveats);
-    return { service, space: entry.space, path: entry.path, actions, ...(caveats.length > 0 ? { caveats } : {}) };
-  });
-}
-
 /**
  * Verify an OpenKey session proof: SIWE signature, session key, owner and
  * lifetime. Unsigned callback fields never stand in for these values.
@@ -426,7 +416,12 @@ export function verifySignedSession(
     if (!proof.verifiedRecap?.length || !proof.expiresAt || !Number.isFinite(Date.parse(proof.expiresAt))) throw new Error();
     // One entry per signed action, with its caveats. Dropping them would
     // record a restricted action as unrestricted.
-    permissions = permissionsFromVerifiedRecap(proof.verifiedRecap);
+    permissions = proof.verifiedRecap.map((entry) => {
+      const service = entry.service.startsWith("tinycloud.") ? entry.service : `tinycloud.${entry.service}`;
+      const actions = entry.actions.map((action) => action.includes("/") ? action : `${service}/${action}`);
+      const caveats = plainCaveats(entry.caveats);
+      return { service, space: entry.space, path: entry.path, actions, ...(caveats.length > 0 ? { caveats } : {}) };
+    });
     expiresAt = proof.expiresAt;
   } catch (error) {
     if (/expir/i.test(error instanceof Error ? error.message : String(error))) {

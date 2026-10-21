@@ -101,6 +101,7 @@ const recorded = {
   spinners: [] as string[],
   generateKeyCalls: 0,
   grantedRequests: [] as Array<Record<string, unknown>>,
+  grantedExpiries: [] as Array<number | undefined>,
   grantHistory: [] as Array<{ profile: string; entry: Record<string, unknown> }>,
   localGrantArtifacts: [] as Array<{ profile: string; delegation: Record<string, unknown> }>,
   removedReplicaProfiles: [] as string[],
@@ -146,6 +147,7 @@ function resetState(): void {
   recorded.spinners.length = 0;
   recorded.generateKeyCalls = 0;
   recorded.grantedRequests.length = 0;
+  recorded.grantedExpiries.length = 0;
   recorded.localGrantArtifacts.length = 0;
   recorded.removedReplicaProfiles.length = 0;
   recorded.grantHistory.length = 0;
@@ -314,8 +316,9 @@ const { TinyCloudNode, REPLICA_LOGOUT_PENDING_FILE } = await import("@tinycloud/
 mock.module("@tinycloud/node-sdk", () => ({
   TinyCloudNode,
   REPLICA_LOGOUT_PENDING_FILE,
-  grantAuthRequest: async (_node: unknown, request: Record<string, unknown>) => {
+  grantAuthRequest: async (_node: unknown, request: Record<string, unknown>, options?: { expiry?: number }) => {
     recorded.grantedRequests.push(request);
+    recorded.grantedExpiries.push(options?.expiry);
     return {
       delegationCid: grantedDelegation.cid,
       delegation: grantedDelegation,
@@ -330,8 +333,8 @@ mock.module("@tinycloud/node-sdk", () => ({
   NodeWasmBindings: class NodeWasmBindings {
     validatePersistedSession(proof: { spaceId: string }) {
       return {
-        verifiedRecap: [{ service: "kv", space: proof.spaceId, path: "", actions: ["tinycloud.kv/get"] }],
-        expiresAt: "2099-01-01T00:00:00.000Z",
+        verifiedRecap: [{ service: "kv", space: proof.spaceId, path: typeof openKeyDelegation.verifiedPath === "string" ? openKeyDelegation.verifiedPath : "", actions: ["tinycloud.kv/get"] }],
+        expiresAt: typeof openKeyDelegation.expiry === "string" ? openKeyDelegation.expiry : "2099-01-01T00:00:00.000Z",
       };
     }
   },
@@ -2305,5 +2308,139 @@ describe("OpenKey primary key (TC-705)", () => {
     await runAuthCommand(["auth", "status"]);
 
     expect(recorded.outputs).toEqual([expect.objectContaining({ ownerKeyPrimary: null })]);
+  });
+});
+
+describe("auth grant for an OpenKey owner gets a fresh owner approval per agent request (TC-1422)", () => {
+  const DAY_MS = 24 * 60 * 60 * 1000;
+  const sessionDid = "did:key:z6MktdN3L74zrn1iFLmaRviQ4HEaC8gTcM8xND9BYfZ4Ep51#z6MktdN3L74zrn1iFLmaRviQ4HEaC8gTcM8xND9BYfZ4Ep51";
+  const primaryOwner = "did:pkh:eip155:1:0x00000000000000000000000000000000000000aa";
+  const otherOwner = "did:pkh:eip155:1:0x00000000000000000000000000000000000000bb";
+  const key = { kty: "OKP", crv: "Ed25519", x: "key-public", d: "key-private" };
+  let tempDir: string;
+
+  function approvalBy(owner: string, validForMs: number): Record<string, unknown> {
+    return {
+      ...openKeyDelegation,
+      verificationMethod: sessionDid,
+      address: owner.split(":")[4],
+      chainId: 1,
+      spaceId: `tinycloud:${owner.slice("did:".length)}:secrets`,
+      verifiedPath: "vault/secrets/ANTHROPIC_API_KEY",
+      expiry: new Date(Date.now() + validForMs).toISOString(),
+    };
+  }
+
+  function setTTY(stream: NodeJS.ReadStream | NodeJS.WriteStream, isTTY: boolean): () => void {
+    const original = Object.getOwnPropertyDescriptor(stream, "isTTY");
+    Object.defineProperty(stream, "isTTY", { configurable: true, value: isTTY });
+    return () => {
+      if (original) Object.defineProperty(stream, "isTTY", original);
+      else delete (stream as { isTTY?: boolean }).isTTY;
+    };
+  }
+
+  beforeEach(async () => {
+    resetState();
+    tempDir = await mkdtemp(join(tmpdir(), "tc-auth-grant-openkey-"));
+    profiles.set("default", makeProfile({
+      did: sessionDid,
+      sessionDid,
+      authMethod: "openkey",
+      posture: "owner-openkey",
+      ownerDid: primaryOwner,
+    }));
+    keys.set("default", key);
+    sessions.set("default", { authMethod: "openkey", spaceId: "tinycloud:pkh:eip155:1:0xowner:default" });
+  });
+
+  afterEach(async () => {
+    await rm(tempDir, { recursive: true, force: true });
+  });
+
+  async function writeAgentRequest(name: string, requestedExpiry?: string): Promise<string> {
+    const source = join(tempDir, name);
+    await writeFile(source, JSON.stringify(makeStoredImportRequest({
+      posture: "delegate-session",
+      operatorType: "agent",
+      sessionDid,
+      requested: [{
+        service: "tinycloud.kv",
+        space: `tinycloud:${primaryOwner.slice("did:".length)}:secrets`,
+        path: "vault/secrets/ANTHROPIC_API_KEY",
+        actions: ["tinycloud.kv/get"],
+      }],
+      ...(requestedExpiry === undefined ? {} : { requestedExpiry }),
+    })), "utf8");
+    return source;
+  }
+
+  test("an agent request gets the owner's approval even when runtime authority already covers it", async () => {
+    authNodeHasRuntimePermissions = true;
+    openKeyDelegation = approvalBy(primaryOwner, 2 * DAY_MS);
+    const source = await writeAgentRequest("openkey-agent-covered.json");
+
+    await runAuthCommand(["auth", "grant", source, "--yes"]);
+
+    expect(recorded.errors).toEqual([]);
+    expect(recorded.startAuthFlows.map((flow) => flow.did)).toEqual([sessionDid]);
+    expect(recorded.grantedRequests).toHaveLength(1);
+  });
+
+  test("the grant lasts as long as the owner's approval, not the requested lifetime", async () => {
+    openKeyDelegation = approvalBy(primaryOwner, 2 * DAY_MS);
+    const source = await writeAgentRequest("openkey-agent-lifetime.json", "7d");
+
+    await runAuthCommand(["auth", "grant", source, "--yes"]);
+
+    const [grantExpiry] = recorded.grantedExpiries;
+    expect(grantExpiry).toBeLessThanOrEqual(2 * DAY_MS);
+    expect(grantExpiry).toBeGreaterThan(2 * DAY_MS - 60_000);
+  });
+
+  test("the approval requested from OpenKey for an agent is capped at 7 days", async () => {
+    openKeyDelegation = approvalBy(primaryOwner, 2 * DAY_MS);
+    const source = await writeAgentRequest("openkey-agent-capped.json", "30d");
+
+    await runAuthCommand(["auth", "grant", source, "--yes"]);
+
+    expect(recorded.startAuthFlows[0]?.options.expiry).toBe("604800s");
+  });
+
+  test("an approval from another owner is refused and no grant is stored", async () => {
+    openKeyDelegation = approvalBy(otherOwner, 2 * DAY_MS);
+    const source = await writeAgentRequest("openkey-agent-refused.json");
+
+    await runAuthCommand(["auth", "grant", source, "--yes"]);
+
+    expect(recorded.errors).toEqual([expect.objectContaining({ code: "OPENKEY_OWNER_MISMATCH" })]);
+    expect(recorded.grantedRequests).toEqual([]);
+    expect(recorded.localGrantArtifacts).toEqual([]);
+  });
+
+  test("with no terminal attached the OpenKey approval is printed for a URL, not opened in a browser", async () => {
+    openKeyDelegation = approvalBy(primaryOwner, 2 * DAY_MS);
+    const source = await writeAgentRequest("openkey-agent-headless.json");
+    const restore = [setTTY(process.stdin, false), setTTY(process.stderr, false)];
+    try {
+      await runAuthCommand(["auth", "grant", source, "--yes"]);
+    } finally {
+      for (const undo of restore) undo();
+    }
+
+    expect(recorded.startAuthFlows[0]?.options.noPopup).toBe(true);
+  });
+
+  test("with a terminal attached the OpenKey approval opens in the browser", async () => {
+    openKeyDelegation = approvalBy(primaryOwner, 2 * DAY_MS);
+    const source = await writeAgentRequest("openkey-agent-interactive.json");
+    const restore = [setTTY(process.stdin, true), setTTY(process.stderr, true)];
+    try {
+      await runAuthCommand(["auth", "grant", source, "--yes"]);
+    } finally {
+      for (const undo of restore) undo();
+    }
+
+    expect(recorded.startAuthFlows[0]?.options.noPopup).toBe(false);
   });
 });

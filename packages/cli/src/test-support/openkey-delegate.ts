@@ -38,8 +38,6 @@ export function openKeyDelegate(params: {
   signer: PrivateKeySigner;
   sessionKey: object;
   sessionDid: string;
-  /** SIWE domain OpenKey signs for the requester host. */
-  domain?: string;
 }): { delegate: OpenKeyDelegate; requests: PermissionEntry[][]; refusals: Array<{ code: "invalid_permissions"; message: string }> } {
   const requests: PermissionEntry[][] = [];
   const refusals: Array<{ code: "invalid_permissions"; message: string }> = [];
@@ -102,7 +100,7 @@ export function openKeyDelegate(params: {
     const prepared = params.wasm.prepareSession({
       abilities,
       ...(Object.keys(rawAbilities).length > 0 ? { rawAbilities } : {}),
-      address, chainId: 1, domain: params.domain ?? "cli.tinycloud.xyz", spaceId, jwk: params.sessionKey,
+      address, chainId: 1, domain: "cli.tinycloud.xyz", spaceId, jwk: params.sessionKey,
       issuedAt: new Date(now - 60_000).toISOString(),
       expirationTime: new Date(now + 3600_000).toISOString(),
     });

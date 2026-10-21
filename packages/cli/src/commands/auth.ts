@@ -7,7 +7,7 @@ import { lstat, mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { createInterface } from "node:readline";
 import type { IncomingMessage } from "node:http";
-import { TinyCloudNode, grantAuthRequest, principalDidEquals, REPLICA_LOGOUT_PENDING_FILE, signedCompactUcanExpiry, type PermissionEntry, type PortableDelegation, type RuntimeDelegationActivator, type TinyCloudSession } from "@tinycloud/node-sdk";
+import { TinyCloudNode, grantAuthRequest, principalDidEquals, REPLICA_LOGOUT_PENDING_FILE, signedCompactUcanExpiry, type AuthDelegationArtifact, type PermissionEntry, type PortableDelegation, type RuntimeDelegationActivator, type TinyCloudSession } from "@tinycloud/node-sdk";
 import type { ProfileReplicaApprovalEntry, ProfileReplicaDeferredToken, ProfileReplicaLogoutPending, ProfileReplicaPreflight, ProfileReplicaPurge } from "@tinycloud/sdk-services/kv/replication";
 import { composeManifestRequest } from "@tinycloud/sdk-core";
 import { invokeOperation } from "@tinycloud/operations";
@@ -141,7 +141,6 @@ import {
 } from "../lib/apps-agent-preset.js";
 import { permissionConsentLine, signExtrasQuestion } from "../lib/consent-text.js";
 import { buildReplicationLoginRequest, type ReplicationLoginOptions } from "../auth/replication-login.js";
-import { portableFromAgentApproval, requiresAgentApproval, requesterPublicJwk, verifyAgentApproval } from "../auth/agent-grant.js";
 
 /** The one function dependency used by owner OpenKey permission acquisition. */
 export type OpenKeyAcquisition = typeof startAuthFlow;
@@ -1324,7 +1323,12 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
           [{ service: "tinycloud.kv", space: APPS_AGENT_SPACE, path: "", actions: ["tinycloud.kv/get"] }],
           ctx.profile,
         );
-        const scope = describeGrantScope(requested, parsed.requestedExpiry, applications!.space ?? APPS_AGENT_SPACE);
+        const scope = describeGrantScope(
+          requested,
+          parsed.requestedExpiry,
+          applications!.space ?? APPS_AGENT_SPACE,
+          profile.authMethod === "openkey" ? OPENKEY_AGENT_MAX_LIFETIME_MS : undefined,
+        );
         process.stderr.write(`\n${scope.text}\n\n`);
         // The request file comes from the agent: anything the apps-agent preset could never grant
         // is signed only after an explicit --yes or an interactive confirmation of the list above.
@@ -1342,28 +1346,35 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
         }
         const resolvedRequest = { ...parsed, requested };
         const node = await ensureAuthenticated(ctx);
-        let grant: Awaited<ReturnType<typeof grantAuthRequest>>;
-        if (requiresAgentApproval(profile.authMethod)) {
-          // The owner approves each agent request in OpenKey. Existing runtime
-          // authority and --yes do not skip that approval.
-          const delegation = await acquireAgentGrant({
+        let grant: AuthDelegationArtifact;
+        if (profile.authMethod === "openkey") {
+          assertOpenKeyAgentRequest(requested);
+          // The owner approves each agent request in OpenKey, requested fresh for this command:
+          // existing runtime or persisted authority and --yes do not skip it. The approval lasts the
+          // request's lifetime, capped at the apps-agent default, and the grant lasts as long as it.
+          const approval = await ensureDelegationAuthority({
+            ctx,
             profile,
-            host: ctx.host,
+            node,
             requested,
-            sessionDid: parsed.sessionDid,
-            requestedExpiry: parsed.requestedExpiry,
+            expiryOption: Math.min(
+              parseRequestedExpiry(parsed.requestedExpiry ?? APPS_AGENT_EXPIRY).durationMs,
+              OPENKEY_AGENT_MAX_LIFETIME_MS,
+            ),
             reason: "Grant permissions requested by a TinyCloud auth request artifact.",
+            yes: options.yes === true || confirmedExtras,
+            persist: false,
+            force: true,
+            consentAlreadyGiven: true,
+            noPopup: !(process.stdin.isTTY || process.stderr.isTTY),
           });
-          grant = {
-            kind: "tinycloud.auth.delegation",
-            version: 1,
-            requestId: parsed.requestId,
-            delegationCid: delegation.cid,
-            delegation,
-            permissions: requested,
-            expiry: delegation.expiry.toISOString(),
-            prompted: true,
-          };
+          if (approval === undefined) {
+            throw new Error("OpenKey approval returned no delegation.");
+          }
+          grant = await grantAuthRequest(node, resolvedRequest, {
+            expiry: approval.expiry.getTime() - Date.now(),
+          });
+          process.stderr.write(`Grant lasts until ${grant.expiry}, the lifetime of the OpenKey approval.\n`);
         } else {
           await ensureDelegationAuthority({
             ctx,
@@ -1904,6 +1915,8 @@ export async function ensureDelegationAuthority(params: {
   anchorSpace?: string;
   /** Test seam for the browser acquisition boundary; production uses startAuthFlow. */
   openKeyAcquisition?: OpenKeyAcquisition;
+  /** Print the OpenKey approval URL and wait for the callback instead of opening a browser. */
+  noPopup?: boolean;
 }): Promise<PortableDelegation | undefined> {
   if (!params.force && params.node.hasRuntimePermissions(params.requested)) return undefined;
 
@@ -1949,6 +1962,7 @@ export async function ensureDelegationAuthority(params: {
         reason: permissionGrantReason(params.reason, request),
         openkeyHost,
         expiry: expiryCap === undefined ? undefined : openKeyExpiryParam(expiryCap),
+        noPopup: params.noPopup,
       });
       const delegation = portableFromOpenKeyDelegation(
         delegationData,
@@ -1971,6 +1985,7 @@ export async function ensureDelegationAuthority(params: {
         reason: permissionGrantReason(params.reason, group),
         openkeyHost,
         expiry: expiryCap === undefined ? undefined : openKeyExpiryParam(expiryCap),
+        noPopup: params.noPopup,
       });
       const delegation = portableFromOpenKeyDelegation(delegationData, request, params.ctx.host, proof);
       grants.push({ delegation, effective: permissionsFromDelegation(delegation) });
@@ -1999,59 +2014,25 @@ export async function ensureDelegationAuthority(params: {
   }
 }
 
-/**
- * Owner-side grant for an agent request on an OpenKey profile. The owner approves
- * each request in OpenKey, audienced to the requester's session. The approval is
- * verified before the grant is returned; nothing short-circuits it.
- */
-export async function acquireAgentGrant(params: {
-  profile: ProfileConfig;
-  host: string;
-  requested: PermissionEntry[];
-  sessionDid: string;
-  requestedExpiry: string | undefined;
-  reason: string;
-  openKeyAcquisition?: OpenKeyAcquisition;
-  /** Whether no terminal is attached. Defaults to detecting stdin/stderr TTY. */
-  headless?: boolean;
-}): Promise<PortableDelegation> {
-  if (params.requested.some((permission) => isRawEncryptionPermission(permission) || isRawCidRevocationPermission(permission))) {
+/** OpenKey lifetime cap for an agent grant: the apps-agent default. */
+const OPENKEY_AGENT_MAX_LIFETIME_MS = parseRequestedExpiry(APPS_AGENT_EXPIRY).durationMs;
+
+/** An agent request is approved in OpenKey only if it covers one space and no raw authority. */
+function assertOpenKeyAgentRequest(requested: PermissionEntry[]): void {
+  if (requested.some((permission) => isRawEncryptionPermission(permission) || isRawCidRevocationPermission(permission))) {
     throw new CLIError(
       "RAW_RECAP_RESOURCE_UNSUPPORTED",
       "OpenKey cannot approve raw urn:cid or raw encryption authority for an agent request.",
       ExitCode.PERMISSION_DENIED,
     );
   }
-  const groups = groupPermissionsBySpace(params.requested);
-  if (groups.length !== 1) {
+  if (groupPermissionsBySpace(requested).length !== 1) {
     throw new CLIError(
       "AGENT_GRANT_MULTIPLE_SPACES",
       "An agent grant must cover exactly one space. Request one space per auth request.",
       ExitCode.PERMISSION_DENIED,
     );
   }
-  const expiry = parseRequestedExpiry(params.requestedExpiry ?? APPS_AGENT_EXPIRY);
-  const anchorSpace = params.profile.spaceId ?? params.profile.spaceName;
-  const request = grantRequestPermissions(groups[0]!, anchorSpace);
-  const acquireOpenKey = params.openKeyAcquisition ?? startAuthFlow;
-  const data = await acquireOpenKey(params.profile.did, {
-    jwk: requesterPublicJwk(params.sessionDid),
-    host: params.host,
-    permissions: request,
-    reason: permissionGrantReason(params.reason, request),
-    openkeyHost: resolveOpenKeyHost(params.profile),
-    expiry: openKeyExpiryParam(expiry),
-    // Headless: print the approval URL and wait for the callback; no browser is launched.
-    noPopup: params.headless ?? !(process.stdin.isTTY || process.stderr.isTTY),
-  });
-  const verified = await verifyAgentApproval(data, {
-    sessionDid: params.sessionDid,
-    host: params.host,
-    expectedOwner: pinnedOwner(params.profile),
-    expiry,
-    requested: request,
-  });
-  return portableFromAgentApproval(data, verified, params.host);
 }
 
 function permissionGrantReason(context: string, permissions: PermissionEntry[]): string {
