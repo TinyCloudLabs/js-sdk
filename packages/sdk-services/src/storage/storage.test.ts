@@ -243,6 +243,41 @@ describe("StorageFullMonitor on a full space", () => {
     expect(monitor.isFull).toBe(false);
   });
 
+  test("a network failure during the own episode neither ends nor re-emits it", async () => {
+    const node = fullSpaceNode("tinycloud:pkh:eip155:1:0xaaa:default");
+    const monitor = new StorageFullMonitor(
+      (spaceId) => spaceId.split(":").slice(0, 5).join(":"),
+      () => "tinycloud:pkh:eip155:1:0xaaa",
+    );
+    monitor.observe(node.context);
+    const events: StorageFullEvent[] = [];
+    monitor.on((event) => events.push(event));
+    const episodes: boolean[] = [];
+    monitor.onEpisode(() => episodes.push(monitor.rejection !== undefined));
+
+    await node.kv.put("y", "1");
+    expect(events).toHaveLength(1);
+
+    // A write that failed on the network is not a committed write.
+    node.context.emit(TelemetryEvents.SERVICE_RESPONSE, { service: "kv", action: "put", ok: false });
+    node.context.emit(TelemetryEvents.SERVICE_ERROR, {
+      service: "kv",
+      error: { code: ErrorCodes.NETWORK_ERROR, message: "down", service: "kv" },
+    });
+    expect(monitor.rejection).toBeDefined();
+    expect(episodes).toEqual([true]);
+
+    // Still the same episode: a later full rejection does not emit again.
+    expect((await node.kv.put("y", "2")).ok).toBe(false);
+    expect(events).toHaveLength(1);
+    expect(monitor.rejection).toBeDefined();
+
+    // A committed own write ends it.
+    node.context.emit(TelemetryEvents.SERVICE_RESPONSE, { service: "kv", action: "put", ok: true });
+    expect(monitor.rejection).toBeUndefined();
+    expect(episodes).toEqual([true, false]);
+  });
+
   test("a rejection whose space is unknown counts for every owner", async () => {
     const node = fullSpaceNode();
     node.context.setSession(null);
