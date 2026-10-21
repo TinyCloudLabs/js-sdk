@@ -463,6 +463,7 @@
         "@babel/preset-env": "^7.26.7",
         "@microsoft/api-documenter": "^7.26.5",
         "@microsoft/api-extractor": "^7.49.1",
+        "@playwright/test": "1.58.2",
         "@types/jest": "^30.0.0",
         "@types/node": "^18.19.74",
         "@types/webpack": "^5.28.5",

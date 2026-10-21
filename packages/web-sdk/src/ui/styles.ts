@@ -8,7 +8,7 @@ export const HOST_CSS = `
 .layer{--b:calc(env(safe-area-inset-bottom,0px) + var(--tinycloud-ui-offset-bottom,12px));position:fixed;inset:0;pointer-events:none;font:14px/1.4 system-ui,-apple-system,"Segoe UI",sans-serif;color:#111827}
 .button{position:fixed;bottom:var(--b);width:44px;height:44px;padding:0;display:inline-flex;align-items:center;justify-content:center;border:1px solid #d1d5db;border-radius:50%;background:#fff;color:#111827;box-shadow:0 1px 3px rgba(0,0,0,.16);cursor:pointer;pointer-events:auto}
 .button svg{width:20px;height:20px}
-.button:focus-visible,.action:focus-visible{outline:2px solid #111827;outline-offset:2px}
+.button:focus-visible,.action:focus-visible,.switch:focus-visible{outline:2px solid #111827;outline-offset:2px}
 .dot{position:absolute;top:6px;right:6px;width:8px;height:8px;border-radius:50%;background:#4b5563;border:2px solid #fff}
 .panel{position:fixed;bottom:calc(var(--b) + 52px);box-sizing:border-box;width:min(360px,calc(100vw - 24px));max-width:min(360px,calc(100vw - 24px));max-height:calc(100dvh - 96px);overflow:auto;padding:12px;border:1px solid #d1d5db;border-radius:12px;background:#fff;box-shadow:0 8px 24px rgba(0,0,0,.18);pointer-events:auto}
 .layer[data-position="bottom-right"] .button,.layer[data-position="bottom-right"] .panel{right:var(--tinycloud-ui-offset-inline,12px)}
@@ -24,7 +24,7 @@ export const HOST_CSS = `
 .label{font-weight:500}
 .switch{display:inline-flex;align-items:center;width:52px;min-width:44px;height:44px;padding:0;border:0;background:none;cursor:pointer}
 .switch:disabled{cursor:default;opacity:.6}
-.knob{position:relative;display:block;width:40px;height:24px;border-radius:12px;background:#9ca3af}
+.knob{position:relative;display:block;width:40px;height:24px;border-radius:12px;background:#6b7280}
 .knob::after{content:"";position:absolute;top:2px;left:2px;width:20px;height:20px;border-radius:50%;background:#fff;transition:transform .15s ease}
 .switch[aria-checked="true"] .knob{background:#111827}
 .switch[aria-checked="true"] .knob::after{transform:translateX(16px)}
@@ -32,4 +32,24 @@ export const HOST_CSS = `
 .error{color:#111827}
 .confirm{margin-top:8px}
 .confirm .actions{display:flex;gap:8px;margin:8px 0}
+/* Dark candidate, app family (docs/brand/guide.md §4.1, "Dark candidate" column, PROPOSED).
+   The guide makes dark opt-in via data-tc-theme; this block follows the ruling instead:
+   prefers-color-scheme only, no attribute. Values: surface #151517 (bg/surface row),
+   ink #fafafa (ink row), dim #a1a1aa (dim row), hairline #69696b (hairline row),
+   control-edge #71717a (control-edge row), focus ink #fafafa (focus row). Copied as literals
+   because the shadow root cannot import tokens.css. Light values above are unchanged. */
+@media (prefers-color-scheme: dark){
+.layer{color:#fafafa}
+.button{border-color:#71717a;background:#151517;color:#fafafa}
+.dot{background:#a1a1aa;border-color:#151517}
+.button:focus-visible,.action:focus-visible,.switch:focus-visible{outline-color:#fafafa}
+.panel{border-color:#69696b;background:#151517}
+.status,.busy,.note{color:#a1a1aa}
+.error{color:#fafafa}
+.section+.section{border-top-color:#69696b}
+.action{border-color:#71717a;background:#151517;color:#fafafa}
+.knob{background:#71717a}
+.knob::after{background:#151517}
+.switch[aria-checked="true"] .knob{background:#fafafa}
+}
 `;
