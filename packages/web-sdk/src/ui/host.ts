@@ -2,6 +2,7 @@ import { createButton, type ButtonView } from "./button";
 import type { PanelClientHandle } from "./client";
 import type { ResolvedUiConfig } from "./config";
 import { createPanel, type PanelView } from "./panel";
+import { publishHeight } from "./layout";
 import { HOST_PARTS } from "./parts";
 import { toastStore } from "./parts/toasts";
 import type { ToastRequest } from "./toast-store";
@@ -45,6 +46,7 @@ interface ClientEntry {
 
 interface Mounted {
   readonly host: HTMLElement;
+  readonly layer: HTMLElement;
   readonly panel: PanelView;
   readonly button: ButtonView | undefined;
   readonly stopParts: Array<() => void>;
@@ -175,6 +177,7 @@ export function createHostRuntime(): HostRuntime {
     if (!mounted) return;
     mounted.host.setAttribute("data-tinycloud-ui", isPanelOpen ? "open" : buttonHidden ? "hidden" : "closed");
     mounted.panel.setOpen(isPanelOpen);
+    mounted.layer.toggleAttribute("data-panel-open", isPanelOpen);
     mounted.button?.setExpanded(isPanelOpen);
     mounted.button?.setHidden(buttonHidden);
   }
@@ -224,8 +227,11 @@ export function createHostRuntime(): HostRuntime {
     root.append(style, layer);
     (document.body ?? document.documentElement).append(host);
 
-    const stopParts = HOST_PARTS.map((part) => part.start(context, layer));
-    return { host, panel, button, stopParts };
+    const stopParts = [
+      publishHeight(panel.el, layer, "--tinycloud-ui-panel-height"),
+      ...HOST_PARTS.map((part) => part.start(context, layer)),
+    ];
+    return { host, layer, panel, button, stopParts };
   }
 
   function ensureMounted(): void {

@@ -218,6 +218,16 @@ describe("open, close, hide", () => {
     panel.dispatchEvent(new page.KeyboardEvent("keydown", { key: "Escape", bubbles: true, composed: true }));
     expect(ui.api.isOpen).toBe(false);
   });
+
+  test("the layer carries data-panel-open only while the panel is open", () => {
+    const ui = mountClient();
+    const layer = () => shadow().querySelector(".layer") as HTMLElement;
+    expect(layer().hasAttribute("data-panel-open")).toBe(false);
+    ui.api.open();
+    expect(layer().hasAttribute("data-panel-open")).toBe(true);
+    buttonEl()?.click();
+    expect(layer().hasAttribute("data-panel-open")).toBe(false);
+  });
 });
 
 describe("headless modes", () => {
