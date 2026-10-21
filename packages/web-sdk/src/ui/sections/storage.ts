@@ -3,6 +3,7 @@ import type { HostContext, PanelClient, PanelSection } from "../slots";
 import { text } from "../strings";
 import {
   afterAuthority,
+  manageHrefFor,
   reduceStorage,
   storageModel,
   type StorageModel,
@@ -55,15 +56,7 @@ async function readStatus(client: PanelClient): Promise<StorageResult> {
 /** The `manageUrl` from the last good status, if it is https. The constant otherwise. */
 function manageHref(read: StorageRead): string {
   if (!read.signedIn || read.result === undefined || !read.result.ok) return STORAGE_MANAGE_URL;
-  const value: unknown = read.result.value;
-  if (typeof value !== "object" || value === null || !("manageUrl" in value)) return STORAGE_MANAGE_URL;
-  const url: unknown = value.manageUrl;
-  if (typeof url !== "string") return STORAGE_MANAGE_URL;
-  try {
-    return new URL(url).protocol === "https:" ? url : STORAGE_MANAGE_URL;
-  } catch {
-    return STORAGE_MANAGE_URL;
-  }
+  return manageHrefFor(read.result.value);
 }
 
 /**
@@ -119,7 +112,7 @@ export const storageSection: PanelSection = {
     function render(): void {
       if (disposed) return;
       const episodeOn = client?.storageEpisode?.current() !== undefined;
-      const model = storageModel(view, episodeOn);
+      const model = storageModel(view, episodeOn, client?.requestAuthority !== undefined);
 
       // The header already shows the same storage_full word; the panel keeps the usage line and note.
       const headerShowsWord = model.wordKey === "storage.state.full" && ctx.topStatus() === "storage_full";

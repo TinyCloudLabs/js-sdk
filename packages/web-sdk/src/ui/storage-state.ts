@@ -1,4 +1,4 @@
-import type { StorageStatus, StorageUsage, StorageUsageState } from "@tinycloud/sdk-core";
+import { STORAGE_MANAGE_URL, type StorageStatus, type StorageUsage, type StorageUsageState } from "@tinycloud/sdk-core";
 
 /**
  * Pure view-state reducer for the storage section. No DOM, no strings.
@@ -10,6 +10,18 @@ import type { StorageStatus, StorageUsage, StorageUsageState } from "@tinycloud/
 export type StorageResult =
   | { readonly ok: true; readonly value: unknown }
   | { readonly ok: false; readonly code: string };
+
+/** The `manageUrl` in a status value, if it is https. The constant otherwise. */
+export function manageHrefFor(value: unknown): string {
+  if (typeof value !== "object" || value === null || !("manageUrl" in value)) return STORAGE_MANAGE_URL;
+  const url: unknown = value.manageUrl;
+  if (typeof url !== "string") return STORAGE_MANAGE_URL;
+  try {
+    return new URL(url).protocol === "https:" ? url : STORAGE_MANAGE_URL;
+  } catch {
+    return STORAGE_MANAGE_URL;
+  }
+}
 
 export type StorageRead =
   | { readonly signedIn: false }
@@ -132,7 +144,7 @@ function percentFull(usedBytes: number, limitBytes: number): number {
   return Math.min(100, Math.round((usedBytes * 100) / limitBytes));
 }
 
-function viewModel(view: StorageViewState): StorageModel {
+function viewModel(view: StorageViewState, canAsk: boolean): StorageModel {
   switch (view.kind) {
     case "signed_out":
       return {};
@@ -154,7 +166,8 @@ function viewModel(view: StorageViewState): StorageModel {
         usage: { key: "storage.usage.unlimited", usedBytes: view.usedBytes },
       };
     case "needs_permission":
-      return { noteKey: "storage.permission", action: "allow" };
+      // Without an authority request the panel has nothing to ask, so it states the need and stops.
+      return canAsk ? { noteKey: "storage.permission", action: "allow" } : { noteKey: "storage.permission" };
     case "declined":
       return { noteKey: "storage.declined", action: "try_again" };
     case "unavailable":
@@ -173,8 +186,8 @@ function viewModel(view: StorageViewState): StorageModel {
  * and drops numbers, because a 413 can arrive while status still says `ok` (contract §3.3).
  * The note and action of a failed read stay, so the user can still retry.
  */
-export function storageModel(view: StorageViewState, episodeOn: boolean): StorageModel {
-  const base = viewModel(view);
+export function storageModel(view: StorageViewState, episodeOn: boolean, canAsk: boolean): StorageModel {
+  const base = viewModel(view, canAsk);
   if (!episodeOn || view.kind === "signed_out") return base;
   return { wordKey: "storage.state.full", noteKey: base.noteKey, action: base.action };
 }
