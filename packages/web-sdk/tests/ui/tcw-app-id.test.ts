@@ -39,10 +39,12 @@ beforeAll(async () => {
   g.Element = page.Element;
   g.Event = page.Event;
   g.KeyboardEvent = page.KeyboardEvent;
-  // Dynamic import is required here: a static import is hoisted above the
-  // jsdom globals above, and tcw's module graph (SpaceCreationModal) extends
-  // HTMLElement and calls customElements.define at evaluation time.
-  TinyCloudWeb = (await import("../../src/modules/tcw")).TinyCloudWeb;
+  // Dynamic import is required: a static import is hoisted above the jsdom
+  // globals, and tcw's module graph (SpaceCreationModal) extends HTMLElement
+  // and calls customElements.define at evaluation time. The query suffix gives
+  // a distinct module record, because other test files call mock.module on
+  // "../src/modules/tcw" and those mocks persist for the whole bun test process.
+  TinyCloudWeb = (await import("../../src/modules/tcw.ts?real-tcw")).TinyCloudWeb;
 });
 
 afterAll(() => {
