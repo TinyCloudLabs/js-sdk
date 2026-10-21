@@ -1,5 +1,43 @@
 # @tinycloud/cli
 
+## 1.3.0-beta.48
+
+### Patch Changes
+
+- 45ca334: Reword the `--write` description for `tinycloud auth request --preset apps-agent --write --app <app_id>` (TC-1620). With `--write --app <app_id>`, the agent can add and change that app's data: write its `knowledge/` and `prefs/` files and change its tables. The `tinycloud knowledge` missing-grant hint also shows this write request for a named app. No grant shapes change.
+
+  Details: TC-1620
+
+## 1.3.0-beta.47
+
+### Patch Changes
+
+- Updated dependencies [5373fa2]
+  - @tinycloud/operations@0.7.0-beta.35
+
+## 1.3.0-beta.46
+
+### Patch Changes
+
+- 5bbc05c: `tinycloud auth login` keeps its browser callback open for the full five-minute sign-in window, so the browser can finish a slow local-network permission prompt. Interactive sign-in also prints a one-time how-to line on stderr after 15 seconds while it waits. JSON output is unchanged.
+
+  Details: TC-1675
+
+## 1.3.0-beta.45
+
+### Patch Changes
+
+- Updated dependencies [9592d3d]
+  - @tinycloud/sdk-core@3.3.0-beta.36
+  - @tinycloud/node-sdk@3.3.0-beta.36
+  - @tinycloud/operations@0.7.0-beta.34
+
+## 1.3.0-beta.44
+
+### Patch Changes
+
+- bba15a4: `tc share publish --json` now reports the sender-history write as `history`: `{"recorded": true}`, or `{"recorded": false, "reason": "HISTORY_UNREADABLE" | "HISTORY_READ_FAILED" | "HISTORY_WRITE_FAILED" | "HISTORY_UNAVAILABLE"}`. The exit status stays 0. The stderr warning names the reason. When a publish with `--notify` delivers but its confirmation cannot be saved, the warning also names the share id and CID to keep, and `history` stays `{"recorded": true}`. A failed delivery-confirmation write on `share notify` names its reason too.
+
 ## 1.3.0-beta.43
 
 ### Patch Changes

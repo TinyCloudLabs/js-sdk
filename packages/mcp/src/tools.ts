@@ -47,8 +47,16 @@ export interface McpStartupSelection {
   readonly allowOwnerProfile: boolean;
   /** Absolute TinyCloud home used to isolate one hosted OAuth principal. */
   readonly stateRoot?: string;
+  /** Check node authority only when an operation needs the account. */
+  readonly beforeOperation?: () => Promise<void>;
   /** Hosted transports may attach a browser approval URL to canonical results. */
-  readonly transformOperationResult?: (result: unknown) => Promise<unknown>;
+  readonly transformOperationResult?: (result: unknown, invocation: McpOperationInvocation) => Promise<unknown>;
+}
+
+export interface McpOperationInvocation {
+  readonly operationId: string;
+  readonly operationVersion: number;
+  readonly input: unknown;
 }
 
 export interface McpInvocationTarget {
@@ -391,6 +399,7 @@ export function registerTinyCloudTools(
         const metrics = { replayedGrants: 0 };
         let code = "INTERNAL_ERROR";
         try {
+          await selection.beforeOperation?.();
           const result = await invokeOperation(
             binding.operationId,
             binding.operationVersion,
@@ -400,7 +409,11 @@ export function registerTinyCloudTools(
           );
           const projected = selection.transformOperationResult === undefined
             ? result
-            : await selection.transformOperationResult(result);
+            : await selection.transformOperationResult(result, {
+              operationId: binding.operationId,
+              operationVersion: binding.operationVersion,
+              input,
+            });
           const response = toMcpToolResult(projected, TOOL_BINDINGS, {
             surface: selection.surface,
             readOnly: binding.readOnlyHint,

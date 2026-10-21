@@ -1,5 +1,20 @@
 # @tinycloud/mcp
 
+## 0.7.0-beta.36
+
+### Patch Changes
+
+- 6793a14: A new sign-in after an account approval is withdrawn at the TinyCloud node offers fresh owner approval. Node refusals that identify a withdrawn per-request permission renew only the affected approval; other node errors leave stored approvals available.
+- Updated dependencies [5373fa2]
+  - @tinycloud/operations@0.7.0-beta.35
+
+## 0.7.0-beta.35
+
+### Patch Changes
+
+- @tinycloud/node-sdk@3.3.0-beta.36
+- @tinycloud/operations@0.7.0-beta.34
+
 ## 0.7.0-beta.34
 
 ### Patch Changes

@@ -10600,6 +10600,7 @@ init_types();
 // src/auth/browser-auth.ts
 init_constants();
 init_errors();
+init_formatter();
 import { createServer } from "http";
 import { randomBytes as randomBytes3 } from "crypto";
 import { createInterface } from "readline";
@@ -10614,6 +10615,9 @@ var PRIVATE_JWK_FIELDS = /* @__PURE__ */ new Set([
   "k"
 ]);
 var MAX_CALLBACK_BODY_BYTES = 1024 * 1024;
+var CALLBACK_DEADLINE_MS = 5 * 60 * 1e3;
+var CALLBACK_HINT_DELAY_MS = 15 * 1e3;
+var CALLBACK_HINT = "Still waiting. If your browser asked to connect to devices on your network, choose Allow. Or press Ctrl+C and run `tinycloud auth login --paste` to enter a code instead.";
 function publicJwkForDelegation(jwk) {
   const publicJwk = {};
   for (const [key, value] of Object.entries(jwk)) {
@@ -10755,15 +10759,21 @@ function shouldOpenBrowser(options) {
   const env = process.env.TC_AUTH_NO_POPUP ?? process.env.TC_NO_POPUP;
   return env !== "1" && env !== "true";
 }
-async function callbackFlow(did, options = {}) {
+async function callbackFlow(did, options = {}, env = {}) {
   return new Promise((resolve8, reject) => {
     let timeout;
+    let hintTimer;
+    const deadlineMs = env.deadlineMs ?? CALLBACK_DEADLINE_MS;
+    const hintDelayMs = env.hintDelayMs ?? CALLBACK_HINT_DELAY_MS;
+    const interactive = env.interactive ?? Boolean(process.stdin.isTTY);
+    const jsonOutput2 = env.jsonOutput ?? shouldOutputJson();
     let settled = false;
     let rl;
     function settle(result) {
       if (settled) return;
       settled = true;
       clearTimeout(timeout);
+      clearTimeout(hintTimer);
       server.close();
       server.closeAllConnections();
       if (rl) {
@@ -10828,8 +10838,9 @@ async function callbackFlow(did, options = {}) {
         res.end();
       }
     });
-    server.headersTimeout = 1e4;
-    server.requestTimeout = 1e4;
+    server.headersTimeout = deadlineMs;
+    server.requestTimeout = deadlineMs;
+    server.keepAliveTimeout = deadlineMs;
     server.listen(0, "127.0.0.1", async () => {
       const addr = server.address();
       if (!addr || typeof addr === "string") {
@@ -10838,6 +10849,7 @@ async function callbackFlow(did, options = {}) {
       }
       const port = addr.port;
       const callbackUrl = `http://127.0.0.1:${port}${callbackPath}`;
+      env.onListening?.(callbackUrl);
       const authUrl = buildAuthUrl(did, { ...options, callback: callbackUrl });
       const openBrowser = shouldOpenBrowser(options);
       const hasTerminal = Boolean(process.stdin.isTTY || process.stderr.isTTY);
@@ -10856,7 +10868,7 @@ async function callbackFlow(did, options = {}) {
           return;
         }
       }
-      if (process.stdin.isTTY) {
+      if (interactive) {
         console.error(`
 If the browser can't connect back, enter the short code or paste the full delegation code here:`);
         rl = createInterface({
@@ -10880,7 +10892,12 @@ If the browser can't connect back, enter the short code or paste the full delega
     });
     timeout = setTimeout(() => {
       settle({ error: new Error("Authentication timed out after 5 minutes") });
-    }, 5 * 60 * 1e3);
+    }, deadlineMs);
+    if (interactive && !jsonOutput2) {
+      hintTimer = setTimeout(() => {
+        console.error(CALLBACK_HINT);
+      }, hintDelayMs);
+    }
   });
 }
 async function pasteFlow(did, options = {}) {
@@ -13901,13 +13918,13 @@ ${signInAgainHint(ctx.profile, posture ?? void 0)}
     `Lifetime of the granted delegation. ms-format string (e.g. "7d", "30m") or raw milliseconds. Defaults to 7d, capped by the active session's expiry.`
   ).option("--emit [file]", "Emit the request artifact to stdout, or write it to file when provided").option("--grant", "Grant the requested permissions immediately with this owner profile").option("--yes", "Skip local-key TTY confirmation", false).option("--no-popup", "Print the OpenKey URL without opening a browser when granting with OpenKey").option("--device", "With --grant: approve on another device (e.g. a phone) through OpenKey device authorization (KV-scoped; SQL needs browser login)").option(
     "--preset <name>",
-    `Request a named permission set instead of --cap: ${APPS_AGENT_PRESET} is READ-ONLY on the applications space (kv get/list + sql read, ${APPS_AGENT_EXPIRY_DAYS} days); add --write --app <app_id> to also write those apps' knowledge and data files`
+    `Request a named permission set instead of --cap: ${APPS_AGENT_PRESET} is READ-ONLY on the applications space (kv get/list + sql read, ${APPS_AGENT_EXPIRY_DAYS} days); add --write --app <app_id> to also let the agent change that app's data (see --write)`
   ).option(
     "--app <app_id>",
     `With --preset ${APPS_AGENT_PRESET}: limit the grant to this app's <app_id>/ prefix (recommended); repeat for up to ${APPS_AGENT_MAX_APPS} apps`,
     (value, previous) => [...previous, value],
     []
-  ).option("--write", `With --preset ${APPS_AGENT_PRESET}: also allow writing the named --app apps' knowledge/ and prefs/ files (kv put) and table rows (sql write); their code, manifest and install record stay read-only. SQL write can also change or drop those apps' tables`).option("--paste", "With --grant on an OpenKey profile: wait up to 5 minutes for a signed code from OpenKey on stdin instead of a browser callback (use when the browser cannot reach this CLI)").action(async (options2, cmd) => {
+  ).option("--write", `With --preset ${APPS_AGENT_PRESET}: also let the agent add and change the named --app apps' data: write their knowledge/ and prefs/ files (kv put) and change their tables (sql write). Their code, manifest and install record stay read-only. SQL write can also change or drop those apps' tables`).option("--paste", "With --grant on an OpenKey profile: wait up to 5 minutes for a signed code from OpenKey on stdin instead of a browser callback (use when the browser cannot reach this CLI)").action(async (options2, cmd) => {
     try {
       const globalOpts = cmd.optsWithGlobals();
       const ctx = await ProfileManager.resolveContext(globalOpts, options2.grant ? {} : { storedSession: "unused" });
@@ -16277,8 +16294,9 @@ function missingGrantHint(profile, appId) {
     `  ${request} --cap tinycloud.kv:${APPS_AGENT_SPACE}::get,list --emit req.json   (all files, no table access)`,
     "To limit the grant to one app, add `--app` and that app's id to the first command (repeat `--app` for up to 5)."
   ] : [
-    `  ${request} --preset ${APPS_AGENT_PRESET} --app ${appId} --emit req.json   (read-only: files and table rows of ${appId})`,
-    `  ${request} --cap tinycloud.kv:${APPS_AGENT_SPACE}:${appId}/knowledge/:get,list --emit req.json   (only ${appId}'s knowledge)`
+    `  ${request} --preset ${APPS_AGENT_PRESET} --app ${appId} --emit req.json   (read-only: files and tables of ${appId})`,
+    `  ${request} --cap tinycloud.kv:${APPS_AGENT_SPACE}:${appId}/knowledge/:get,list --emit req.json   (only ${appId}'s knowledge)`,
+    `To change the app's data, ask for write access: ${request} --preset ${APPS_AGENT_PRESET} --write --app ${appId} --emit req.json`
   ];
   return [
     "Ask the owner for a grant, narrowest first. Create the request:",
@@ -37678,6 +37696,25 @@ var ShareHistoryRetryError = class extends Error {
   }
   code = "SHARE_HISTORY_RETRY";
 };
+var ShareHistoryUnreadableError = class extends Error {
+  constructor() {
+    super("share history is unavailable");
+    this.name = "ShareHistoryUnreadableError";
+  }
+};
+var ShareHistoryReadError = class extends Error {
+  constructor() {
+    super("share history could not be read");
+    this.name = "ShareHistoryReadError";
+  }
+};
+var HISTORY_WRITE_ERROR_CODES = { EACCES: true, EPERM: true, EROFS: true, ENOSPC: true, EDQUOT: true, EIO: true };
+function shareHistoryReason(error) {
+  if (error instanceof ShareHistoryUnreadableError) return "HISTORY_UNREADABLE";
+  if (error instanceof ShareHistoryReadError) return "HISTORY_READ_FAILED";
+  const code4 = typeof error === "object" && error !== null && "code" in error ? error.code : void 0;
+  return typeof code4 === "string" && HISTORY_WRITE_ERROR_CODES[code4] === true ? "HISTORY_WRITE_FAILED" : "HISTORY_UNAVAILABLE";
+}
 
 // src/commands/share.ts
 var SHARE_ORIGIN = "https://share.tinycloud.xyz";
@@ -37856,16 +37893,18 @@ function expires(value) {
 }
 async function rememberPublishedShare(result) {
   const record3 = historyRecordForPublishedShare(result);
-  if (shareServices.records === void 0) return { record: record3, recorded: false };
   try {
+    if (shareServices.records === void 0) throw new Error("sender history is not configured");
     await shareServices.records.put(record3);
-    return { record: record3, recorded: true };
-  } catch {
-    process.stderr.write("Warning: share was published but not recorded in sender history; future share list, share notify, and share revoke by ID will not find it.\n");
-    return { record: record3, recorded: false };
+    return { record: record3, history: { recorded: true } };
+  } catch (error) {
+    const reason = shareHistoryReason(error);
+    process.stderr.write(`Warning: share was published but not recorded in sender history (${reason}); future share list, share notify, and share revoke by ID will not find it. Keep share ID ${result.metadata.shareId} and CID ${result.link.cid}.
+`);
+    return { record: record3, history: { recorded: false, reason } };
   }
 }
-async function notifyRecordedShare(record3, recipient, adapter, storage) {
+async function notifyRecordedShare(record3, recipient, adapter, storage, published) {
   const result = await notifyShare({ shareId: record3.shareId, recipient, record: record3, adapter, checkDeliveryWindow: true });
   if (result.state !== "partial-failure" && storage !== void 0) {
     const mailbox = canonicalMailbox2(recipient).email;
@@ -37877,8 +37916,11 @@ async function notifyRecordedShare(record3, recipient, adapter, storage) {
           deliveredRecipients: current.deliveredRecipients?.includes(mailbox) ? current.deliveredRecipients : [...current.deliveredRecipients ?? [], mailbox]
         }));
         if (updated === void 0) throw new Error("sender history record was removed");
-      } catch {
-        process.stderr.write("Warning: delivery succeeded, but could not record its confirmation in sender history.\n");
+      } catch (error) {
+        const reason = shareHistoryReason(error);
+        const identifiers = published === void 0 ? "" : ` Keep share ID ${published.shareId} and CID ${published.cid}.`;
+        process.stderr.write(`Warning: delivery succeeded, but could not record its confirmation in sender history (${reason}).${identifiers}
+`);
       }
     }
   }
@@ -37967,17 +38009,17 @@ function registerShareCommand(program) {
         }
         throw new CLIError(result.method === "openkey-device" ? "DEVICE_AUTH_REQUIRED" : "CLAIM_REQUIRED", "recipient authorization is required; continue through the configured authority adapter", 6);
       }
-      const { record: record3, recorded } = await rememberPublishedShare(result);
+      const { record: record3, history } = await rememberPublishedShare(result);
       let notification;
       if (notifyRecipient !== void 0) {
         if (shareServices.delivery === void 0) throw new CLIError("AUTH_REQUIRED", "delivery authority is not configured", 3);
-        notification = await notifyRecordedShare(record3, notifyRecipient, shareServices.delivery, recorded ? shareServices.records : void 0);
+        notification = await notifyRecordedShare(record3, notifyRecipient, shareServices.delivery, history.recorded ? shareServices.records : void 0, { shareId: result.metadata.shareId, cid: result.link.cid });
         if (notification.state === "partial-failure") process.exitCode = 9;
         if (notification.reason === "delivery-window-expired") process.stderr.write(NOTIFY_WINDOW_MESSAGE);
       }
       if (result.metadata.expiryClamped === true) process.stderr.write(`Share expiry clamped to session expiry (${result.metadata.expiresAt}).
 `);
-      if (json) writeJson2({ ...redactPublishedShare(result), expiryClamped: result.metadata.expiryClamped === true, ...artifact === void 0 || result.metadata.artifact === void 0 ? {} : { artifactId: result.metadata.artifact.id, version: result.metadata.artifact.version, mode: result.metadata.artifact.mode }, ...notification === void 0 ? {} : { notification } });
+      if (json) writeJson2({ ...redactPublishedShare(result), history, expiryClamped: result.metadata.expiryClamped === true, ...artifact === void 0 || result.metadata.artifact === void 0 ? {} : { artifactId: result.metadata.artifact.id, version: result.metadata.artifact.version, mode: result.metadata.artifact.mode }, ...notification === void 0 ? {} : { notification } });
       else {
         if (result.metadata.artifact !== void 0) process.stderr.write(`Artifact ${result.metadata.artifact.id} v${result.metadata.artifact.version} (${result.metadata.artifact.mode})
 `);

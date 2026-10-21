@@ -279,6 +279,23 @@ threads for the same work, other channels): your human resumes it with
 `courier resume <peer> <threadId>`. A "thread paused" inform from the peer only
 means their side stopped waking; it is not a request, and needs no reply.
 
+Pause notices use one fixed record per locally known thread, never records keyed
+by incoming ids. Only our authored meta/message/task or a local wake/pause record
+establishes a known thread; mirrored metadata does not. Newer peer notice ULIDs
+within ten minutes of our clock update the peer pause latch: paused-to-resumed
+clears it, resumed-to-paused queues one episode notice. Duplicate/old notices, repeated paused
+states and unknown threads do not notify, across days and restarts. Every delivery
+attempt, successful or failed, counts toward ten globally and ten per peer per
+hour across channels; at most three attempts per notice, with persisted backoff.
+Failed wake backoff starts when the attempt finishes and survives a restart;
+approval wakes have a separate retry clock and never wait for message backoff.
+
+Two fixed pending episode slots per known thread retain separate pause notices,
+including across retries and restarts. Additional pauses while both slots are
+occupied are included as a bounded repeated-pause count in the second notice.
+The global hourly allowance reserves up to three attempts per locally paired
+peer (at most the integer part of 10 divided by the peer count).
+
 ## Notify-only setup
 
 For the first handoff, run `courier watch --wake none`. It mirrors messages,
@@ -287,6 +304,14 @@ decisions through the same bounded outbox. It invokes no wake adapter, spends
 no wake budget and starts or messages no agent. Inbox JSON includes recent
 fixed-text notifications, even if the watcher already committed delivery
 receipts. The /courier view retains the owner's approval cards.
+
+D mode preallocates one message slot and one approval slot per locally paired
+peer. Each slot coalesces deliveries into a six-digit count (up to 999999+),
+records its first local arrival time and latest validated thread ULID, and
+keeps separate retry metadata. Arrivals during a dispatch remain pending for
+another notice. The shared outbox admits and dispatches eligible peers in
+round-robin order within each priority class, under the same hourly caps and
+reserved shares. A message retry deadline does not delay the approval slot.
 
 Example only: pick your own channel (push, Telegram, email, or tail the log).
 This example appends only the fixed notice
@@ -298,7 +323,7 @@ courier watch --wake none --notify exec --notify-exec 'printf "%s %s %s\n" "$COU
 
 `<COURIER_HOME>/notifications.jsonl` always exists after the first notification;
 it holds fixed-text status, never the peer's subject or message. Once notified,
-Start a session and watch it yourself. Paste this prompt (replace the
+start a session and watch it yourself. Paste this prompt (replace the
 thread and peer with the IDs shown by `courier inbox`):
 
 ```text
