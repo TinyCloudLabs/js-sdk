@@ -1054,4 +1054,63 @@ describe.skipIf(!REAL_NODE_BIN)("node-sdk replication against a real node", () =
       await rm(profile.profileDir, { recursive: true, force: true });
     }
   }, 120_000);
+
+  test("developer mode: one real sync cycle records only sanitized sync rows, one per HTTP attempt", async () => {
+    const profile = await guardedProfile("tc848-sync-log-");
+    const events: ReplicationEvent[] = [];
+    const node = new TinyCloudNode({
+      host,
+      signer: new PrivateKeySigner(RESTORE_PRIVATE_KEY),
+      wasmBindings: new NodeWasmBindings(),
+      domain: "replication.test",
+      autoCreateSpace: true,
+      autoBootstrapAccount: false,
+      enablePublicSpace: false,
+      requestLog: true,
+      replication: {
+        enabled: true,
+        prefixes: ["notes/"],
+        storage: profile.storage,
+        profileDir: profile.profileDir,
+        profileGuard: profile.guard,
+        mode: "foreground",
+        onEvent: (event) => events.push(event),
+      },
+    });
+    // Count HTTP attempts issued during the sync window only. Fetch is captured when the node's
+    // services are built, so the counter is installed before `new TinyCloudNode` and restored in `finally`.
+    const originalFetch = globalThis.fetch;
+    let counting = false;
+    let attempts = 0;
+    globalThis.fetch = (async (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
+      if (counting) attempts += 1;
+      return originalFetch(input, init);
+    }) as typeof fetch;
+    try {
+      await node.signIn();
+      expect((await node.kv.put("notes/sync-log-seed", "sync-log-v0")).ok).toBe(true);
+      const baseline = node.requests!.snapshot().length;
+      counting = true;
+      await node.replication!.sync();
+      counting = false;
+
+      const windowRows = node.requests!.snapshot().slice(baseline);
+      const syncRows = windowRows.filter((event) => event.service === "sync");
+      expect(syncRows.length).toBeGreaterThan(0);
+      expect(windowRows.every((event) => event.service === "sync")).toBe(true);
+      for (const row of syncRows) {
+        expect(row.path).toBeNull();
+        expect(row.space).toBeNull();
+      }
+      const serialized = JSON.stringify(syncRows);
+      expect(serialized).not.toContain("notes/");
+      expect(serialized).not.toContain("sync-log-seed");
+      expect(syncRows.length).toBe(attempts);
+    } finally {
+      counting = false;
+      globalThis.fetch = originalFetch;
+      await node.replication?.close();
+      await rm(profile.profileDir, { recursive: true, force: true });
+    }
+  }, 120_000);
 });
