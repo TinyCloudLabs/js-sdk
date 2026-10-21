@@ -1,0 +1,243 @@
+import { createHash } from "node:crypto";
+import { pinnedApp, SHARE_ORIGIN, type PinnedApp, type PinnedFile } from "./apps-install-pin.js";
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+/** Largest file the installer accepts from Share. The Share bundle limit is 1 MB per file. */
+export const MAX_FILE_BYTES = 1_000_000;
+
+/** I/O seam. The command wires the SDK; tests wire fakes. */
+export interface InstallIo {
+  /** Bytes of one Share URL. Must refuse redirects and non-2xx responses. */
+  fetchBytes(url: string): Promise<Uint8Array>;
+  /** Current bytes of a KV key, or `undefined` when the key does not exist. */
+  kvGet(key: string): Promise<Uint8Array | undefined>;
+  /** Create-only write. `"exists"` when the key was already present. */
+  kvCreate(key: string, bytes: Uint8Array): Promise<"created" | "exists">;
+  /** Run one SQL statement against the app database. */
+  sqlExecute(sql: string): Promise<void>;
+  /** Names of all tables in the app database. */
+  sqlTableNames(): Promise<string[]>;
+}
+
+export type InstallErrorCode =
+  | "UNKNOWN_APP"
+  | "FETCH_FAILED"
+  | "INTEGRITY_FAILED"
+  | "DDL_REFUSED"
+  | "SQL_FAILED"
+  | "KV_FAILED";
+
+export class AppsInstallError extends Error {
+  constructor(
+    readonly code: InstallErrorCode,
+    message: string,
+  ) {
+    super(message);
+    this.name = "AppsInstallError";
+  }
+}
+
+export interface InstallResult {
+  readonly appId: string;
+  /** `installed`: knowledge files were written. `already`: nothing to write. `conflict`: a file differs from the pinned bytes and was left alone. */
+  readonly status: "installed" | "already" | "conflict";
+  readonly database: string;
+  readonly filesWritten: readonly string[];
+  readonly filesUnchanged: readonly string[];
+  readonly filesConflicting: readonly string[];
+  readonly tablesCreated: readonly string[];
+  readonly viewsRecreated: readonly string[];
+}
+
+export function sha256Hex(bytes: Uint8Array): string {
+  return createHash("sha256").update(bytes).digest("hex");
+}
+
+function bytesEqual(a: Uint8Array, b: Uint8Array): boolean {
+  return a.length === b.length && Buffer.from(a).equals(Buffer.from(b));
+}
+
+/** Fetch every pinned file and refuse the whole install unless every byte matches. */
+export async function fetchVerified(app: PinnedApp, io: InstallIo): Promise<Map<string, Uint8Array>> {
+  const verified = new Map<string, Uint8Array>();
+  for (const file of app.files) {
+    const url = `${SHARE_ORIGIN}/apps/b/${app.bundleDigest}/${file.path}`;
+    let bytes: Uint8Array;
+    try {
+      bytes = await io.fetchBytes(url);
+    } catch (error) {
+      throw new AppsInstallError("FETCH_FAILED", `Could not fetch ${file.path}: ${errorMessage(error)}`);
+    }
+    verifyBytes(file, bytes);
+    verified.set(file.path, bytes);
+  }
+  return verified;
+}
+
+function verifyBytes(file: PinnedFile, bytes: Uint8Array): void {
+  if (bytes.length > MAX_FILE_BYTES) {
+    throw new AppsInstallError("INTEGRITY_FAILED", `${file.path} is ${bytes.length} bytes, above the ${MAX_FILE_BYTES} byte limit`);
+  }
+  if (bytes.length !== file.size || sha256Hex(bytes) !== file.sha256) {
+    throw new AppsInstallError("INTEGRITY_FAILED", `${file.path} does not match the pinned sha256 and size`);
+  }
+}
+
+/** Strip `--` line comments outside single-quoted strings, then split on `;`. */
+export function splitStatements(sql: string): string[] {
+  let stripped = "";
+  let inQuote = false;
+  for (let i = 0; i < sql.length; i++) {
+    const ch = sql[i]!;
+    if (ch === "'") inQuote = !inQuote;
+    if (!inQuote && ch === "-" && sql[i + 1] === "-") {
+      while (i < sql.length && sql[i] !== "\n") i++;
+      stripped += "\n";
+      continue;
+    }
+    stripped += ch;
+  }
+  return stripped
+    .split(";")
+    .map((statement) => statement.replace(/\s+/g, " ").trim())
+    .filter((statement) => statement.length > 0);
+}
+
+const TABLE_FORM = /^CREATE TABLE IF NOT EXISTS ([A-Za-z_][A-Za-z0-9_]*) \(/i;
+const INDEX_FORM = /^CREATE INDEX IF NOT EXISTS ([A-Za-z_][A-Za-z0-9_]*) ON [A-Za-z_][A-Za-z0-9_]*\(/i;
+const VIEW_FORM = /^CREATE VIEW IF NOT EXISTS ([A-Za-z_][A-Za-z0-9_]*) AS /i;
+
+export interface DdlPlan {
+  readonly tables: readonly string[];
+  readonly views: readonly string[];
+  /** Statements in file order. View creates are preceded by their `DROP VIEW IF EXISTS`. */
+  readonly statements: readonly string[];
+}
+
+/**
+ * Accept only the three pinned forms (create-if-not-exists table, index, view).
+ * The one extra form is `DROP VIEW IF EXISTS <view>`, generated here for pinned
+ * view names only. Anything else, including DROP TABLE or DROP INDEX, is refused
+ * before any statement runs.
+ */
+export function planDdl(schemaSql: string): DdlPlan {
+  const tables: string[] = [];
+  const views: string[] = [];
+  const statements: string[] = [];
+  for (const statement of splitStatements(schemaSql)) {
+    const table = TABLE_FORM.exec(statement);
+    const index = INDEX_FORM.exec(statement);
+    const view = VIEW_FORM.exec(statement);
+    if (table) {
+      tables.push(table[1]!);
+      statements.push(statement);
+    } else if (index) {
+      statements.push(statement);
+    } else if (view) {
+      views.push(view[1]!);
+      statements.push(`DROP VIEW IF EXISTS ${view[1]}`, statement);
+    } else {
+      throw new AppsInstallError("DDL_REFUSED", `Pinned schema statement is not an allowed form: ${statement.slice(0, 80)}`);
+    }
+  }
+  return { tables, views, statements };
+}
+
+/** Run the pinned DDL. Every statement is idempotent, so a failed run can be retried. */
+export async function applySchema(schemaSql: string, io: InstallIo): Promise<{ tablesCreated: string[]; viewsRecreated: string[] }> {
+  const plan = planDdl(schemaSql);
+  const existing = new Set(await io.sqlTableNames());
+  for (const statement of plan.statements) {
+    try {
+      await io.sqlExecute(statement);
+    } catch (error) {
+      throw new AppsInstallError("SQL_FAILED", `Schema statement failed (safe to retry): ${errorMessage(error)}`);
+    }
+  }
+  return {
+    tablesCreated: plan.tables.filter((name) => !existing.has(name)),
+    viewsRecreated: [...plan.views],
+  };
+}
+
+/** Create-only writes of the knowledge files. `knowledge/index.md` is written last. */
+async function writeKnowledge(
+  appId: string,
+  app: PinnedApp,
+  verified: Map<string, Uint8Array>,
+  io: InstallIo,
+): Promise<{ written: string[]; unchanged: string[]; conflicting: string[] }> {
+  const written: string[] = [];
+  const unchanged: string[] = [];
+  const conflicting: string[] = [];
+  const knowledge = app.files.filter((file) => file.path.startsWith("knowledge/"));
+  const ordered = [...knowledge.filter((file) => file.path !== "knowledge/index.md"), ...knowledge.filter((file) => file.path === "knowledge/index.md")];
+  for (const file of ordered) {
+    const bytes = verified.get(file.path)!;
+    const key = `${appId}/${file.path}`;
+    const current = await readKv(key, io);
+    if (current === undefined) {
+      const outcome = await createKv(key, bytes, io);
+      if (outcome === "created") {
+        written.push(file.path);
+        continue;
+      }
+      const raced = await readKv(key, io);
+      if (raced !== undefined && bytesEqual(raced, bytes)) unchanged.push(file.path);
+      else conflicting.push(file.path);
+      continue;
+    }
+    if (bytesEqual(current, bytes)) unchanged.push(file.path);
+    else conflicting.push(file.path);
+  }
+  return { written, unchanged, conflicting };
+}
+
+async function readKv(key: string, io: InstallIo): Promise<Uint8Array | undefined> {
+  try {
+    return await io.kvGet(key);
+  } catch (error) {
+    throw new AppsInstallError("KV_FAILED", `Could not read ${key}: ${errorMessage(error)}`);
+  }
+}
+
+async function createKv(key: string, bytes: Uint8Array, io: InstallIo): Promise<"created" | "exists"> {
+  try {
+    return await io.kvCreate(key, bytes);
+  } catch (error) {
+    throw new AppsInstallError("KV_FAILED", `Could not write ${key}: ${errorMessage(error)}`);
+  }
+}
+
+/**
+ * Install one catalog app. Order: verify every pinned byte, run the pinned DDL
+ * (views are dropped and recreated on every run), then create-only knowledge writes.
+ * Nothing is written until all bytes verify.
+ */
+export async function installApp(
+  appId: string,
+  io: InstallIo,
+  lookup: (id: string) => PinnedApp | undefined = pinnedApp,
+): Promise<InstallResult> {
+  const app = lookup(appId);
+  if (!app) throw new AppsInstallError("UNKNOWN_APP", `No pinned catalog entry for ${appId}`);
+  const verified = await fetchVerified(app, io);
+  const schemaBytes = verified.get("schema.sql")!;
+  const schemaSql = new TextDecoder("utf-8", { fatal: true }).decode(schemaBytes);
+  const { tablesCreated, viewsRecreated } = await applySchema(schemaSql, io);
+  const knowledge = await writeKnowledge(appId, app, verified, io);
+  const status = knowledge.conflicting.length > 0 ? "conflict" : knowledge.written.length > 0 ? "installed" : "already";
+  return {
+    appId,
+    status,
+    database: app.database,
+    filesWritten: knowledge.written,
+    filesUnchanged: knowledge.unchanged,
+    filesConflicting: knowledge.conflicting,
+    tablesCreated,
+    viewsRecreated,
+  };
+}
