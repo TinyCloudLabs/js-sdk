@@ -457,7 +457,8 @@ export class TinyCloudWeb {
       },
       manifestAppId: () => {
         const manifest = this._manifest;
-        return (Array.isArray(manifest) ? manifest[0] : manifest)?.app_id;
+        const fromManifest = (Array.isArray(manifest) ? manifest[0] : manifest)?.app_id;
+        return fromManifest ?? this._capabilityRequest?.manifests[0]?.app_id;
       },
     });
 
