@@ -245,6 +245,7 @@ const CONTRAST_CHECKS: readonly ContrastCheck[] = [
   { name: "panel dim text", fg: [".status", "color"], bg: [".panel", "background"], min: TEXT_MIN },
   { name: "panel error text", fg: [".error", "color"], bg: [".panel", "background"], min: TEXT_MIN },
   { name: "action label", fg: [".action", "color"], bg: [".action", "background"], min: TEXT_MIN },
+  { name: "action border", fg: [".action", "border-color"], bg: [".action", "background"], min: GRAPHIC_MIN },
   { name: "toast text", fg: [".toast", "color"], bg: [".toast", "background"], min: TEXT_MIN },
   { name: "button glyph", fg: [".button", "color"], bg: [".button", "background"], min: GRAPHIC_MIN },
   { name: "button notice dot", fg: [".dot", "background"], bg: [".button", "background"], min: GRAPHIC_MIN },

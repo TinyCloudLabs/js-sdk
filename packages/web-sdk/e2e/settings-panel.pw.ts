@@ -100,6 +100,21 @@ for (const scheme of ["light", "dark"] as const) {
   });
 }
 
+// Action buttons (Hide button, Close, Erase, Cancel, ...) are identified by their 1px border, so it must clear 3:1 on the button surface.
+for (const scheme of ["light", "dark"] as const) {
+  test(`${scheme}: action button border is at least 3:1 on its surface`, async ({ page }) => {
+    await mountHarness(page, scheme);
+    await page.getByRole("button", { name: "TinyCloud settings", exact: true }).click();
+    const action = page.getByRole("button", { name: "Hide button", exact: true });
+    await expect(action).toHaveClass(/\baction\b/);
+    const colours = await action.evaluate((el) => {
+      const style = getComputedStyle(el);
+      return { border: style.borderTopColor, surface: style.backgroundColor };
+    });
+    expect(contrast(colours.border, colours.surface)).toBeGreaterThanOrEqual(3);
+  });
+}
+
 // Each toast's left stripe must be its kind colour in the rendered page, and at
 // least 3:1 against the toast surface. Dark warning is the only dark override.
 const KINDS = ["info", "success", "warning", "error"] as const;
