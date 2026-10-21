@@ -89,6 +89,17 @@ for (const scheme of ["light", "dark"] as const) {
   });
 }
 
+// The launcher's 1px border is the only edge against the page, so it must clear 3:1 on both.
+for (const scheme of ["light", "dark"] as const) {
+  test(`${scheme}: launcher border is at least 3:1 on light and dark pages`, async ({ page }) => {
+    await mountHarness(page, scheme);
+    const border = await page.getByRole("button", { name: "TinyCloud settings" }).evaluate((el) => getComputedStyle(el).borderTopColor);
+    for (const page_bg of ["rgb(255, 255, 255)", "rgb(11, 12, 16)"]) {
+      expect(contrast(border, page_bg)).toBeGreaterThanOrEqual(3);
+    }
+  });
+}
+
 // Each toast's left stripe must be its kind colour in the rendered page, and at
 // least 3:1 against the toast surface. Dark warning is the only dark override.
 const KINDS = ["info", "success", "warning", "error"] as const;

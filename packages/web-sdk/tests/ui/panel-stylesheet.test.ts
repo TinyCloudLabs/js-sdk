@@ -379,6 +379,20 @@ describe("host shadow root", () => {
   });
 });
 
+// The launcher is a 1px ring around a round button, so its border is the only
+// edge a user sees against the page. It must clear 3:1 on light and dark pages.
+describe("launcher border", () => {
+  for (const scheme of ["light", "dark"] as const) {
+    for (const bg of BACKGROUNDS) {
+      test(`${scheme} launcher border is at least 3:1 on the ${bg} page`, () => {
+        const border = cascadedColours(renderedCss(), scheme, ["button"]).get("border-top-color");
+        if (!border) throw new Error(`no launcher border for ${scheme}`);
+        expect(contrastRatio(border, bg)).toBeGreaterThanOrEqual(GRAPHIC_MIN);
+      });
+    }
+  }
+});
+
 // Stripe colour per kind. The warning stripe is the only dark override.
 const STRIPE: Record<ToastKind, { light: string; dark: string }> = {
   info: { light: "#2563eb", dark: "#2563eb" },
