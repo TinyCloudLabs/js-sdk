@@ -497,7 +497,7 @@ export interface ReplicaRuntime {
     grant: ParsedUcanGrant,
     input: { deviceDid: string; space: string; prefix: string; now: number },
   ): void;
-  kvSyncTransport(kv: KVSyncClient): ReplicaTransport;
+  kvSyncTransport(kv: KVSyncClient, options?: { host?: string; fetch?: typeof globalThis.fetch }): ReplicaTransport;
 }
 
 /** JSON-safe identity of a source-unknown path approved before logout. */

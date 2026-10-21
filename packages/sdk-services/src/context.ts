@@ -176,6 +176,20 @@ export class ServiceContext implements IServiceContext {
   }
 
   /**
+   * The fetch function without developer request recording. Replication hands this to its own
+   * inner context so each HTTP attempt is recorded once, by that context, not twice.
+   */
+  get unrecordedFetch(): FetchFunction {
+    this.assertActive();
+    return this._fetchCore;
+  }
+
+  /** The developer request sink this context records to; undefined when developer mode is off. */
+  get requestSink(): RequestSink | undefined {
+    return this._requestSink;
+  }
+
+  /**
    * Get the list of TinyCloud host URLs.
    */
   get hosts(): string[] {

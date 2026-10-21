@@ -1,5 +1,5 @@
 import { pkhDid } from "@tinycloud/sdk-core";
-import type { FetchFunction, ServiceContext, ServiceSession } from "@tinycloud/sdk-core";
+import type { ServiceContext, ServiceSession } from "@tinycloud/sdk-core";
 import type {
   KVReadThrough,
   KVReplicaStorage,
@@ -256,7 +256,8 @@ export class ReplicationRuntime {
         pending,
         scheduler: this.clock,
         emit,
-        fetch: context.fetch as FetchFunction,
+        fetch: context.unrecordedFetch,
+        requestSink: context.requestSink,
         nodeFeatures: input.nodeFeatures,
         previous: previousClose,
       });

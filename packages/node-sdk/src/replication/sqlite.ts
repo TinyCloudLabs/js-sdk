@@ -74,6 +74,7 @@ import type {
   SqliteRuntime,
 } from "./replica-contract";
 import { ucanAttUnconstrainedFor } from "./authority";
+import { recordingInfoFetch, syncRequestSink } from "./syncRequestLog";
 export type { ProfileReplicaDeferredToken, ProfileReplicaPurge };
 
 /** CLI-only crash fence; generic SQLite stores do not opt in to this path. */
@@ -1440,12 +1441,15 @@ class SqliteReplicaHandle implements KVReplicaHandle {
       const spec = this.spec;
       const device = this.#device;
       const fetch = spec.fetch ?? globalThis.fetch.bind(globalThis);
+      const syncSink = spec.requestSink && syncRequestSink(spec.requestSink);
+      const infoFetch = spec.requestSink && recordingInfoFetch(globalThis.fetch.bind(globalThis), spec.requestSink);
       return (grant: GrantRecord): ReplicaTransport => {
         const context = new ServiceContext({
           invoke: wasm.invoke,
           invokeAny: wasm.invokeAny,
           fetch,
           hosts: [spec.identity.host],
+          ...(syncSink ? { requestSink: syncSink } : {}),
         });
         const kv = new KVService({});
         kv.initialize(context);
@@ -1457,7 +1461,7 @@ class SqliteReplicaHandle implements KVReplicaHandle {
           verificationMethod: device.did,
           jwk: device.jwk,
         });
-        return kvSyncTransport(kv);
+        return kvSyncTransport(kv, infoFetch ? { fetch: infoFetch } : {});
       };
     })();
     return this.#transportFactory;
