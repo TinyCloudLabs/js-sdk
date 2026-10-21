@@ -32,6 +32,7 @@
     "account-manifest-primary",
     "account-space-list-manifest",
     "cli-account-access-gate",
+    "cli-agent-grant-openkey-approval",
     "cli-logout-replica-order",
     "cli-node-release-fetch",
     "cli-openkey-pinned-owner-hint",
