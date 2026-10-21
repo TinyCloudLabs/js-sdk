@@ -9,6 +9,7 @@ import { text } from "../../src/ui/strings";
 import type { SyncFacade, SyncState } from "../../src/ui/slots";
 import { toastStore } from "../../src/ui/parts/toasts";
 import type { ToastView } from "../../src/ui/toast-store";
+import type { UiPosition } from "../../src/ui/config";
 
 type Loose = Record<PropertyKey, unknown>;
 
@@ -259,6 +260,29 @@ describe("headless modes", () => {
     expect(actionEl(text("panel.hide"))).toBeUndefined();
     expect(page.localStorage.getItem(hideKey())).toBeNull();
   });
+});
+
+describe("ui.position placement", () => {
+  // Every accepted value, plus one unknown value that falls back to bottom-right.
+  const PLACEMENTS: ReadonlyArray<readonly [string, string]> = [
+    ["top-right", "bottom-right"],
+    ["top-left", "bottom-left"],
+    ["top-center", "bottom-center"],
+    ["bottom-right", "bottom-right"],
+    ["bottom-left", "bottom-left"],
+    ["bottom-center", "bottom-center"],
+    ["sideways", "bottom-right"],
+  ];
+
+  for (const [requested, placed] of PLACEMENTS) {
+    test(`${requested} places the button and toast stack in the ${placed} layer`, () => {
+      mountClient({ position: requested as UiPosition });
+      const layer = shadow().querySelector(".layer");
+      expect(layer?.getAttribute("data-position")).toBe(placed);
+      expect(layer?.contains(buttonEl())).toBe(true);
+      expect(layer?.querySelector(".toasts")).not.toBeNull();
+    });
+  }
 });
 
 describe("frame and opaque-origin refusal", () => {

@@ -1,4 +1,13 @@
-export type UiPosition = "bottom-right" | "bottom-left" | "bottom-center";
+/** Accepted `ui.position` values. Each `top-*` value places at the matching bottom position. */
+export type UiPosition =
+  | "top-right"
+  | "top-left"
+  | "top-center"
+  | "bottom-right"
+  | "bottom-left"
+  | "bottom-center";
+
+type BottomPosition = "bottom-right" | "bottom-left" | "bottom-center";
 
 /** Config passed as `ui` on TinyCloudWeb. `ui: false` disables the UI entirely (see index.ts). */
 export interface UiConfig {
@@ -15,21 +24,24 @@ export interface UiConfig {
 export interface ResolvedUiConfig {
   readonly button: boolean;
   readonly developerMode: boolean;
-  readonly position: UiPosition;
+  readonly position: BottomPosition;
   readonly appId: string | undefined;
 }
 
-const POSITIONS: Record<UiPosition, true> = {
-  "bottom-right": true,
-  "bottom-left": true,
-  "bottom-center": true,
+const PLACEMENT: Record<UiPosition, BottomPosition> = {
+  "top-right": "bottom-right",
+  "top-left": "bottom-left",
+  "top-center": "bottom-center",
+  "bottom-right": "bottom-right",
+  "bottom-left": "bottom-left",
+  "bottom-center": "bottom-center",
 };
 
 export function resolveUiConfig(ui: UiConfig | undefined): ResolvedUiConfig {
   const requested = ui?.position;
-  const position: UiPosition =
-    requested !== undefined && Object.prototype.hasOwnProperty.call(POSITIONS, requested)
-      ? requested
+  const position: BottomPosition =
+    requested !== undefined && Object.prototype.hasOwnProperty.call(PLACEMENT, requested)
+      ? PLACEMENT[requested]
       : "bottom-right";
   return {
     button: ui?.button !== false,
