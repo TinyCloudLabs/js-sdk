@@ -45,6 +45,8 @@ export function createButton(onActivate: () => void): ButtonView {
     },
     setStatus(status) {
       dot.hidden = status === null;
+      if (status === null) dot.removeAttribute("data-status");
+      else dot.setAttribute("data-status", status);
     },
     focus() {
       el.focus();

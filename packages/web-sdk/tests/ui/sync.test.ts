@@ -5,7 +5,6 @@ import { syncSection } from "../../src/ui/sections/sync";
 import type {
   HostContext,
   PanelClient,
-  StatusCode,
   SyncEffective,
   SyncFacade,
   SyncState,
@@ -88,7 +87,7 @@ function makeFacade(initial: SyncState): FacadeStub {
   return stub;
 }
 
-function makeCtx(facade: SyncFacade | undefined, statuses: Array<StatusCode | null>): HostContext {
+function makeCtx(facade: SyncFacade | undefined): HostContext {
   const client = {
     id: 1,
     signedIn: () => true,
@@ -100,9 +99,7 @@ function makeCtx(facade: SyncFacade | undefined, statuses: Array<StatusCode | nu
     client: () => client,
     onClientChange: () => () => undefined,
     developerMode: () => false,
-    setStatus: (source, status) => {
-      if (source === "sync") statuses.push(status);
-    },
+    setStatus: () => undefined,
     toast: () => "",
     openPanel: () => undefined,
     closePanel: () => undefined,
@@ -111,12 +108,11 @@ function makeCtx(facade: SyncFacade | undefined, statuses: Array<StatusCode | nu
 }
 
 function mount(facade: SyncFacade | undefined) {
-  const statuses: Array<StatusCode | null> = [];
   const el = document.createElement("div");
   document.body.appendChild(el);
-  const dispose = syncSection.mount(el, makeCtx(facade, statuses));
+  const dispose = syncSection.mount(el, makeCtx(facade));
   cleanups.push(dispose);
-  return { el, statuses, dispose };
+  return { el, dispose };
 }
 
 // Drain pending promise continuations. The section resolves only through promises, so no timer is needed.
@@ -237,38 +233,6 @@ describe("effective states", () => {
     expect(noteOf(el).textContent).toBe(text("sync.reason.unknown"));
     expect(el.textContent).not.toContain("made-up-xyz");
   });
-});
-
-describe("status", () => {
-  const cases: Array<{ name: string; state: SyncState; status: StatusCode | null }> = [
-    { name: "off", state: { requested: false, effective: "off" }, status: null },
-    { name: "on", state: { requested: true, effective: "on" }, status: null },
-    { name: "enabling", state: { requested: true, effective: "enabling" }, status: null },
-    { name: "wiping", state: { requested: true, effective: "wiping" }, status: null },
-    { name: "pending", state: { requested: false, effective: "pending" }, status: "sync_pending" },
-    {
-      name: "unavailable while requested",
-      state: { requested: true, effective: "unavailable" },
-      status: "sync_attention",
-    },
-    {
-      name: "unavailable while not requested",
-      state: { requested: false, effective: "unavailable" },
-      status: null,
-    },
-    {
-      name: "unknown effective while requested",
-      state: { requested: true, effective: "exploded" as SyncEffective },
-      status: "sync_attention",
-    },
-  ];
-
-  for (const c of cases) {
-    test(`publishes ${c.status ?? "no status"} for ${c.name}`, () => {
-      const { statuses } = mount(makeFacade(c.state));
-      expect(statuses.at(-1)).toBe(c.status);
-    });
-  }
 });
 
 describe("switch", () => {
@@ -407,15 +371,12 @@ describe("wipe", () => {
 });
 
 describe("dispose", () => {
-  test("unsubscribes, clears the status, and ignores later changes", () => {
+  test("unsubscribes and ignores later changes", () => {
     const facade = makeFacade({ requested: false, effective: "off" });
-    const { el, statuses, dispose } = mount(facade);
+    const { el, dispose } = mount(facade);
     dispose();
     expect(facade.listenerCount()).toBe(0);
-    expect(statuses.at(-1)).toBe(null);
-    const before = statuses.length;
     facade.set({ requested: false, effective: "pending" });
-    expect(statuses.length).toBe(before);
     expect(el.childElementCount).toBe(0);
   });
 });

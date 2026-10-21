@@ -63,7 +63,7 @@ export interface PanelSection {
 
 /** Always-on part. Runs while the client is registered, even with the panel closed and button hidden. */
 export interface HostPart {
-  readonly id: "toasts" | "prompts" | "storage-watch";
+  readonly id: "toasts" | "prompts" | "storage-watch" | "sync-status";
   /** Returns stop. */
   start(ctx: HostContext, layer: HTMLElement): () => void;
 }

@@ -6,6 +6,7 @@ import type { ClientSource } from "../../src/ui/client";
 import { REGISTRY_KEY } from "../../src/ui/host";
 import { HIDE_KEY_PREFIX } from "../../src/ui/persistence";
 import { text } from "../../src/ui/strings";
+import type { SyncFacade, SyncState } from "../../src/ui/slots";
 
 type Loose = Record<PropertyKey, unknown>;
 
@@ -292,5 +293,70 @@ describe("frame and opaque-origin refusal", () => {
     ui.api.open();
     expect(ui.api.isOpen).toBe(false);
     expect(hostState()).toBe("closed");
+  });
+});
+
+describe("sync status on the button while the panel is closed", () => {
+  function syncStub(initial: SyncState) {
+    let state = initial;
+    const listeners = new Set<() => void>();
+    const facade: SyncFacade = {
+      get state() {
+        return state;
+      },
+      subscribe(cb) {
+        listeners.add(cb);
+        return () => {
+          listeners.delete(cb);
+        };
+      },
+      setEnabled: async () => undefined,
+      wipeLocalData: async () => undefined,
+    };
+    return {
+      facade,
+      set(next: SyncState) {
+        state = next;
+        for (const cb of [...listeners]) cb();
+      },
+    };
+  }
+
+  function mountWithSync(facade: SyncFacade): UiClientHandle {
+    const src = { signedIn: () => false, storage: { status: () => undefined }, sync: facade } as unknown as ClientSource;
+    return registerUiClient({ source: src, manifestAppId: () => undefined });
+  }
+
+  function dotEl(): HTMLElement | null {
+    return buttonEl()?.querySelector(".dot") as HTMLElement | null;
+  }
+
+  test("pending shows the dot with sync_pending while the panel is closed", () => {
+    const sync = syncStub({ requested: false, effective: "pending" });
+    const ui = mountWithSync(sync.facade);
+    expect(ui.api.isOpen).toBe(false);
+    expect(dotEl()?.hidden).toBe(false);
+    expect(dotEl()?.getAttribute("data-status")).toBe("sync_pending");
+  });
+
+  test("unavailable while requested shows the dot with sync_attention", () => {
+    const sync = syncStub({ requested: true, effective: "unavailable" });
+    mountWithSync(sync.facade);
+    expect(dotEl()?.getAttribute("data-status")).toBe("sync_attention");
+  });
+
+  test("a facade change updates the dot and clears it when no status applies", () => {
+    const sync = syncStub({ requested: false, effective: "pending" });
+    mountWithSync(sync.facade);
+    sync.set({ requested: false, effective: "off" });
+    expect(dotEl()?.hidden).toBe(true);
+    expect(dotEl()?.hasAttribute("data-status")).toBe(false);
+  });
+
+  test("unregistering the last client hides the dot", () => {
+    const sync = syncStub({ requested: false, effective: "pending" });
+    const ui = mountWithSync(sync.facade);
+    ui.unregister();
+    expect(dotEl()?.hidden).toBe(true);
   });
 });

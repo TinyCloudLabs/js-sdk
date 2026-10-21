@@ -1,18 +1,5 @@
-import type { HostContext, PanelSection, StatusCode, SyncEffective, SyncState } from "../slots";
-
-function isKnownEffective(value: string): value is SyncEffective {
-  switch (value) {
-    case "off":
-    case "enabling":
-    case "on":
-    case "wiping":
-    case "pending":
-    case "unavailable":
-      return true;
-    default:
-      return false;
-  }
-}
+import type { HostContext, PanelSection, SyncEffective, SyncState } from "../slots";
+import { normalizeSyncEffective } from "../status";
 
 /** Busy or status word per effective value. Undefined when no word is shown. */
 const WORD: Record<SyncEffective, string | undefined> = {
@@ -23,12 +10,6 @@ const WORD: Record<SyncEffective, string | undefined> = {
   pending: "sync.pending",
   unavailable: "sync.unavailable",
 };
-
-function statusFor(effective: SyncEffective, requested: boolean): StatusCode | null {
-  if (effective === "pending") return "sync_pending";
-  if (effective === "unavailable" && requested) return "sync_attention";
-  return null;
-}
 
 /** Error code from a rejected facade call. Non-string codes become "unknown" and render neutral. */
 function codeOf(err: unknown): string {
@@ -105,8 +86,8 @@ export const syncSection: PanelSection = {
     function render(): void {
       if (disposed) return;
       const state: SyncState = facade.state;
-      const known = isKnownEffective(state.effective);
-      const effective: SyncEffective = known ? state.effective : "unavailable";
+      const effective: SyncEffective = normalizeSyncEffective(state.effective);
+      const known = effective === state.effective;
 
       // The switch position is state.requested only. The app and SDK defaults can both set it.
       const checked = state.requested;
@@ -137,8 +118,6 @@ export const syncSection: PanelSection = {
 
       errorLine.hidden = errorCode === undefined;
       errorLine.textContent = errorCode === undefined ? "" : ctx.text(`sync.error.${errorCode}`);
-
-      ctx.setStatus("sync", statusFor(effective, state.requested));
     }
 
     async function run(action: () => Promise<void>): Promise<boolean> {
@@ -192,7 +171,6 @@ export const syncSection: PanelSection = {
     return () => {
       disposed = true;
       unsubscribe();
-      ctx.setStatus("sync", null);
       el.replaceChildren();
     };
   },
