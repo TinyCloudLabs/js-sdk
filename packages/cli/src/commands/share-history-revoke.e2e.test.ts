@@ -27,8 +27,8 @@ interface RevokeOutput {
 }
 
 // Covers a local-owner profile: its sender share history is keyed by the local private key, which survives logout and
-// re-login, so a Share published before either can still be revoked by ID. OpenKey-recorded profiles need an OpenKey
-// session, so they are not covered here.
+// re-login, so a Share published before either can still be revoked by ID. The OpenKey-recorded history path is covered
+// by adapters.test.ts and auth-logout-history-guard.integration.test.ts.
 describe.skipIf(!NODE_BIN)("share revoke by ID across re-login and logout, against a real node", () => {
   let root: string;
   let host: string;
