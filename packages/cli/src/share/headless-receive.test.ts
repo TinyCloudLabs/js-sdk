@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtemp, rm, stat, readdir } from "node:fs/promises";
 import { join } from "node:path";
+import type { ShareEnvelopeV3 } from "@tinycloud/share-envelope";
 import {
   CODE_GATE_PROFILE,
   EmailProofGateError,
@@ -8,7 +9,9 @@ import {
   PENDING_RECEIVE_MAX_AGE_MS,
   codeGateSource,
   completeHeadlessReceive,
-  filePendingStore,
+  exactEmailRecipient,
+  filePendingStore as createFilePendingStore,
+  parseStoredEnvelope,
   promptHeadlessReceive,
   requestHeadlessCode,
   retryMinutes,
@@ -21,7 +24,10 @@ import {
 const NOW = Date.parse("2026-01-01T00:00:00.000Z");
 const RESUME = "0123456789abcdef0123456789abcdef";
 const CODE = "24681357";
-const ENVELOPE = { v: 3, recipient: "owner@example.com" };
+const ENVELOPE = { v: 3, recipient: "owner@example.com" } as unknown as ShareEnvelopeV3;
+
+// Fixture envelopes are plain objects, so this store accepts them as-is. The production schema is exercised by the malformed-envelope test below.
+const filePendingStore = (dir: string) => createFilePendingStore(dir, (value) => value as ShareEnvelopeV3);
 
 let dir: string;
 
@@ -210,5 +216,28 @@ describe("retryMinutes", () => {
     expect(retryMinutes(0)).toBe(1);
     expect(retryMinutes(60_000)).toBe(1);
     expect(retryMinutes(60_001)).toBe(2);
+  });
+});
+
+describe("stored envelope and recipient", () => {
+  test("production store refuses a stored envelope that fails the share schema and removes it", async () => {
+    await requestHeadlessCode({ envelope: ENVELOPE, recipient: "owner@example.com", gate: fakeGate(), store: filePendingStore(dir), now: NOW, randomId: () => RESUME });
+    await expectHeadless(createFilePendingStore(dir).load(RESUME, NOW + 1000), "RESUME_NOT_FOUND");
+    expect(await readdir(dir)).toEqual([]);
+  });
+
+  test("the schema parser accepts nothing that is not a share envelope", () => {
+    expect(parseStoredEnvelope(ENVELOPE)).toBeUndefined();
+  });
+
+  test("exact-email shares name the mailbox; other matchers are refused as unsupported", () => {
+    const exact = { recipientMatcher: { kind: "exactEmail", value: "owner@example.com" } } as unknown as ShareEnvelopeV3;
+    expect(exactEmailRecipient(exact)).toBe("owner@example.com");
+    const domain = { recipientMatcher: { kind: "emailDomain", value: "example.com" } } as unknown as ShareEnvelopeV3;
+    const refused = (() => {
+      try { exactEmailRecipient(domain); return undefined; } catch (caught) { return caught; }
+    })();
+    expect(refused).toBeInstanceOf(HeadlessReceiveError);
+    expect((refused as HeadlessReceiveError).code).toBe("UNSUPPORTED_PROFILE");
   });
 });

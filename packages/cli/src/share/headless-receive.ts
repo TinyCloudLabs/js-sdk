@@ -1,6 +1,7 @@
 import { chmod, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { SharePresentationMaterial } from "@tinycloud/share-sdk";
+import { shareEnvelopeV3Schema, type ShareEnvelopeV3 } from "@tinycloud/share-envelope";
 import { ExitCode } from "../config/constants.js";
 
 /** Credential profile served by the email code gate. Other profiles are not handled here. */
@@ -44,7 +45,7 @@ export class EmailProofGateError extends Error {
 
 /** Share access seam: opens the share with the presentation built from `material`, then loads the bytes. */
 export interface ShareAccessPort {
-  receive(envelope: JsonValue, material: EmailProofMaterial): Promise<ReceivedContent>;
+  receive(envelope: ShareEnvelopeV3, material: EmailProofMaterial): Promise<ReceivedContent>;
 }
 
 export interface ReceivedContent {
@@ -101,7 +102,7 @@ export interface PendingReceive {
   readonly type: typeof PENDING_TYPE;
   readonly id: string;
   readonly expiresAt: number;
-  readonly envelope: JsonValue;
+  readonly envelope: ShareEnvelopeV3;
   readonly gateState: JsonValue;
 }
 
@@ -121,8 +122,23 @@ export function retryMinutes(retryAfterMs: number | undefined): number {
   return retryAfterMs === undefined ? 1 : Math.max(1, Math.ceil(retryAfterMs / 60_000));
 }
 
+/** The mailbox to send the code to. Only exact-email shares name it; other matchers are refused with UNSUPPORTED_PROFILE. */
+export function exactEmailRecipient(envelope: ShareEnvelopeV3): string {
+  const matcher = envelope.recipientMatcher;
+  if (matcher.kind !== "exactEmail") {
+    throw new HeadlessReceiveError("UNSUPPORTED_PROFILE", "headless receive by email code supports exact-email shares only");
+  }
+  return matcher.value;
+}
+
+/** Default parser for a stored envelope: the production schema. Tests inject a fixture parser. */
+export function parseStoredEnvelope(value: unknown): ShareEnvelopeV3 | undefined {
+  const parsed = shareEnvelopeV3Schema.safeParse(value);
+  return parsed.success ? parsed.data : undefined;
+}
+
 /** File-backed pending store under a private directory. The resume id is the file name, validated to block traversal. */
-export function filePendingStore(dir: string): PendingStore {
+export function filePendingStore(dir: string, parseEnvelope: (value: unknown) => ShareEnvelopeV3 | undefined = parseStoredEnvelope): PendingStore {
   const pathFor = (id: string): string => {
     if (!RESUME_ID.test(id)) throw new HeadlessReceiveError("RESUME_NOT_FOUND", "no pending share receive matches this --resume id");
     return join(dir, `${id}.json`);
@@ -147,7 +163,12 @@ export function filePendingStore(dir: string): PendingStore {
         await rm(path, { force: true });
         throw new HeadlessReceiveError("REQUEST_EXPIRED", "the code request expired; start again with --request-code");
       }
-      return parsed;
+      const envelope = parseEnvelope(parsed.envelope);
+      if (envelope === undefined) {
+        await rm(path, { force: true });
+        throw new HeadlessReceiveError("RESUME_NOT_FOUND", "no pending share receive matches this --resume id");
+      }
+      return { ...parsed, envelope };
     },
     async remove(id) {
       await rm(pathFor(id), { force: true });
@@ -155,7 +176,7 @@ export function filePendingStore(dir: string): PendingStore {
   };
 }
 
-function isPending(value: unknown): value is PendingReceive {
+function isPending(value: unknown): value is Omit<PendingReceive, "envelope"> & { readonly envelope: unknown } {
   if (typeof value !== "object" || value === null) return false;
   const record = value as Record<string, unknown>;
   return record.type === PENDING_TYPE && typeof record.id === "string" && typeof record.expiresAt === "number" && "envelope" in record && "gateState" in record;
@@ -220,7 +241,7 @@ export function selectCredentialSource<M>(profile: string, sources: Readonly<Rec
 }
 
 export interface RequestCodeInput {
-  readonly envelope: JsonValue;
+  readonly envelope: ShareEnvelopeV3;
   readonly recipient: string;
   readonly gate: EmailProofGate;
   readonly store: PendingStore;
@@ -266,7 +287,7 @@ export async function completeHeadlessReceive(input: CompleteHeadlessInput): Pro
 }
 
 export interface PromptReceiveInput {
-  readonly envelope: JsonValue;
+  readonly envelope: ShareEnvelopeV3;
   readonly recipient: string;
   readonly source: CredentialSource<EmailProofMaterial>;
   readonly access: ShareAccessPort;
