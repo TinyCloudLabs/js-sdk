@@ -6,8 +6,8 @@
 // Dark scheme: prefers-color-scheme only, no data-tc-theme attribute, following
 // the brand guide §4.1 "Dark candidate" column (PROPOSED). Values: surface #151517,
 // ink #fafafa, dim #a1a1aa, hairline #69696b, control-edge #71717a, focus ink #fafafa.
-// Copied as literals because the shadow root cannot import tokens.css. Light values
-// are unchanged.
+// Copied as literals because the shadow root cannot import tokens.css.
+// The .panel edge (#d1d5db) is decorative, not a 3:1 target: the shadow carries it.
 export const HOST_CSS = `
 [hidden]{display:none!important}
 .layer{--b:calc(env(safe-area-inset-bottom,0px) + var(--tinycloud-ui-offset-bottom,12px));position:fixed;inset:0;pointer-events:none;font:14px/1.4 system-ui,-apple-system,"Segoe UI",sans-serif;color:#111827}
@@ -25,7 +25,7 @@ export const HOST_CSS = `
 .status{font-size:12px;color:#4b5563}
 .section+.section{margin-top:12px;padding-top:12px;border-top:1px solid #e5e7eb}
 .footer{display:flex;justify-content:flex-end;gap:8px;margin-top:12px}
-.action{min-width:44px;min-height:44px;padding:0 12px;border:1px solid #d1d5db;border-radius:8px;background:#fff;color:#111827;font:inherit;cursor:pointer}
+.action{min-width:44px;min-height:44px;padding:0 12px;border:1px solid;border-color:#6b7280;border-radius:8px;background:#fff;color:#111827;font:inherit;cursor:pointer}
 .row{display:flex;align-items:center;justify-content:space-between;gap:8px;min-height:44px}
 .label{font-weight:500}
 .switch{display:inline-flex;align-items:center;width:52px;min-width:44px;height:44px;padding:0;border:0;background:none;cursor:pointer}
