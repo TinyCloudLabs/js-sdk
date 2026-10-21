@@ -71,7 +71,9 @@ export function createHostedMcpApp(config: HostedMcpConfig): HostedMcpApp {
       explicitProfile: true,
       allowOwnerProfile: false,
       stateRoot,
-      transformOperationResult: (result) => store.decorateAuthorityResult(subject, ownerDids, result),
+      beforeOperation: () => store.validateTenant(subject, ownerDids),
+      transformOperationResult: (result, invocation) =>
+        store.decorateAuthorityResult(subject, ownerDids, result, invocation),
     }, validator);
     registerConnectTool(server, validator, store, identity);
     return server;

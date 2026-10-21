@@ -1,5 +1,27 @@
 # @tinycloud/courier
 
+## 0.2.0-beta.41
+
+### Patch Changes
+
+- dbdb20e: Classify conditional-write and read failures from structured error fields (`code`, `status`, `meta.status`) only, never from message text. Previously the storage key was matched against a 412 pattern, so a non-412 failure on a key containing the digits `412` could be reported as a write conflict and silently skipped. Missing-key detection and transient read retries use the same structured fields.
+
+  Details: TC-1684
+
+## 0.2.0-beta.40
+
+### Patch Changes
+
+- @tinycloud/node-sdk@3.3.0-beta.36
+
+## 0.2.0-beta.39
+
+### Patch Changes
+
+- 19ca88c: `courier watch` wake budget, pause and notifications, final behaviour: `--notify` accepts `none`, `osascript` and `exec`. Notifications for new messages and decisions are coalesced into two fixed slots per locally paired peer, with separate retries and counts, and pause notices use fixed per-thread episode slots. Eligible notifications are admitted and dispatched in peer round-robin order within the hourly caps, a retry never delays another peer's reserved share, and a message that arrives while a notice is being delivered keeps its own pending notice. Each known thread keeps two pause-notice slots; further pauses are counted in a bounded counter. A notice id that is not newer than the stored one, or is more than ten minutes ahead of the local clock, is ignored.
+
+  Details: TC-1634
+
 ## 0.2.0-beta.38
 
 ### Minor Changes
