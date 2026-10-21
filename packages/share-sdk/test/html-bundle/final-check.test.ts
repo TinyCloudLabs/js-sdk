@@ -26,9 +26,9 @@ const URL_ATTRIBUTES = [
 
 // What a browser reads as something other than a fragment of this page.
 const NOT_A_FRAGMENT: ReadonlyArray<readonly [string, string]> = [
-  ["a bare relative path", "evil.png"],
+  ["a bare relative path", "other.png"],
   ["a relative path with a query", "a/b.png?x=1"],
-  ["an absolute path", "/evil.png"],
+  ["an absolute path", "/other.png"],
   ["an https URL", "https://x.example/p.png"],
   ["a protocol-relative URL", "//x.example/p.png"],
   ["a backslash host", "\\\\x.example\\p.png"],
@@ -51,12 +51,12 @@ const NOT_A_FRAGMENT: ReadonlyArray<readonly [string, string]> = [
 describe("each pass refuses on its own", () => {
   const rows: ReadonlyArray<string> = [
     ...["src", "href", "poster", "action", "formaction", "cite", "data", "codebase", "longdesc", "usemap", "background", "manifest", "icon", "archive", "classid", "profile", "lowsrc", "dynsrc", "attributionsrc", "itemtype", "itemid"].flatMap((attribute) =>
-      ["evil.png", "https://x.example/p.png", "&nbsp;#c", ""].map((value) => `<img ${attribute}="${value}">`)),
-    '<img srcset="evil.png 1x">', '<img srcset="data:image/png;base64,AA 1x, evil.png 2x">', '<link rel="preload" as="image" imagesrcset="evil.png 1x">',
-    '<svg><use href="&nbsp;#c"/></svg>', '<svg><use xlink:href="evil.svg#a"/></svg>', '<svg><image href="evil.png"/></svg>',
+      ["other.png", "https://x.example/p.png", "&nbsp;#c", ""].map((value) => `<img ${attribute}="${value}">`)),
+    '<img srcset="other.png 1x">', '<img srcset="data:image/png;base64,AA 1x, other.png 2x">', '<link rel="preload" as="image" imagesrcset="other.png 1x">',
+    '<svg><use href="&nbsp;#c"/></svg>', '<svg><use xlink:href="other.svg#a"/></svg>', '<svg><image href="other.png"/></svg>',
     '<a href="#c" ping="#c">x</a>', '<map name="m"><area href="#c" shape="rect" coords="0,0,1,1"></map>', "<noscript>x</noscript>", "<xmp>x</xmp>",
-    '<p style="background:url(evil.png)">x</p>', "<style>@import 'evil.css';</style>",
-    '<meta http-equiv="refresh" content="0;url=#c">', '<meta http-equiv="Link" content="<evil.css>; rel=preload">',
+    '<p style="background:url(other.png)">x</p>', "<style>@import 'other.css';</style>",
+    '<meta http-equiv="refresh" content="0;url=#c">', '<meta http-equiv="Link" content="<other.css>; rel=preload">',
   ].map((row) => (row.startsWith("<meta") ? wrap("<p>x</p>", row) : wrap(row)));
 
   // The byte scan cannot tell an SVG `<script>` from a page script (it skips script source); the DOM pass knows the namespace.
@@ -94,21 +94,21 @@ describe("every URL-bearing attribute holds only data: or a fragment", () => {
   });
 
   it.each([
-    ["href on a link", '<a href="evil.png">x</a>'],
+    ["href on a link", '<a href="other.png">x</a>'],
     ["an empty href on a link", '<a href="">x</a>'],
     ["a valueless href", "<a href>x</a>"],
     ["href on svg <use>, with a no-break space", '<svg><use href="&nbsp;#c"/></svg>'],
     ["xlink:href on svg <use>, with a numeric no-break space", '<svg><use xlink:href="&#160;#c"/></svg>'],
-    ["href on svg <use>, relative", '<svg><use href="evil.svg#a"/></svg>'],
-    ["href on svg <image>", '<svg><image href="evil.png"/></svg>'],
-    ["xlink:href on svg <image>", '<svg><image xlink:href="evil.png"/></svg>'],
-    ["href on svg <feImage>", '<svg><filter id="f"><feImage href="evil.png"/></filter></svg>'],
-    ["href on svg <mpath>", '<svg><animateMotion><mpath href="evil.svg#p"/></animateMotion></svg>'],
-    ["href on a mathml element", '<math><mi href="evil.png">x</mi></math>'],
-    ["srcset with a relative candidate", '<img srcset="evil.png 1x">'],
-    ["srcset with one good and one relative candidate", '<img srcset="data:image/png;base64,AA 1x, evil.png 2x">'],
-    ["imagesrcset on a link", '<link rel="preload" as="image" imagesrcset="evil.png 1x">'],
-    ["ping", '<a href="#c" ping="evil">x</a>'],
+    ["href on svg <use>, relative", '<svg><use href="other.svg#a"/></svg>'],
+    ["href on svg <image>", '<svg><image href="other.png"/></svg>'],
+    ["xlink:href on svg <image>", '<svg><image xlink:href="other.png"/></svg>'],
+    ["href on svg <feImage>", '<svg><filter id="f"><feImage href="other.png"/></filter></svg>'],
+    ["href on svg <mpath>", '<svg><animateMotion><mpath href="other.svg#p"/></animateMotion></svg>'],
+    ["href on a mathml element", '<math><mi href="other.png">x</mi></math>'],
+    ["srcset with a relative candidate", '<img srcset="other.png 1x">'],
+    ["srcset with one good and one relative candidate", '<img srcset="data:image/png;base64,AA 1x, other.png 2x">'],
+    ["imagesrcset on a link", '<link rel="preload" as="image" imagesrcset="other.png 1x">'],
+    ["ping", '<a href="#c" ping="other">x</a>'],
     ["area href", '<map name="m"><area href="#c" shape="rect" coords="0,0,1,1"></map>'],
   ])("refuses %s", (_name, body) => {
     expect(refused(wrap(body), { blinded: true })).toBe(true);
@@ -143,17 +143,17 @@ describe("attributes outside the allow-list that read as URLs", () => {
 
 describe("CSS in the finished page", () => {
   it.each([
-    ["url() with a relative path in style=", '<p style="background:url(evil.png)">x</p>'],
+    ["url() with a relative path in style=", '<p style="background:url(other.png)">x</p>'],
     ["url() with a no-break space before a fragment in style=", '<p style="background:url(&nbsp;#c)">x</p>'],
     ["url() with a no-break space before a fragment in <style>", "<style>p{background:url(\u00a0#c)}</style>"],
     ["url() with a quoted no-break space fragment", '<style>p{background:url("\u00a0#c")}</style>'],
-    ["image-set() in <style>", '<style>p{background:image-set("evil.png" 1x)}</style>'],
+    ["image-set() in <style>", '<style>p{background:image-set("other.png" 1x)}</style>'],
     ["-webkit-image-set() in style=", '<p style="background:-webkit-image-set(url(#c) 1x)">x</p>'],
-    ["src() in <style>", '<style>p{background:src("evil.png")}</style>'],
-    ["@import in <style>", '<style>@import "evil.css";</style>'],
-    ["@import url() in <style>", "<style>@import url(evil.css);</style>"],
-    ["an escaped url()", '<style>p{background:u\\72l(evil.png)}</style>'],
-    ["svg fill with a relative url()", '<svg><rect fill="url(evil.svg#g)"/></svg>'],
+    ["src() in <style>", '<style>p{background:src("other.png")}</style>'],
+    ["@import in <style>", '<style>@import "other.css";</style>'],
+    ["@import url() in <style>", "<style>@import url(other.css);</style>"],
+    ["an escaped url()", '<style>p{background:u\\72l(other.png)}</style>'],
+    ["svg fill with a relative url()", '<svg><rect fill="url(other.svg#g)"/></svg>'],
   ])("refuses %s", (_name, body) => {
     expect(refused(wrap(body), { blinded: true })).toBe(true);
   });
@@ -167,9 +167,9 @@ describe("<meta http-equiv>", () => {
   const OWN = (page: string): string => page; // the rewriter's own policy comes out of prepareHtmlArtifact below
   it.each([
     ["refresh", '<meta http-equiv="refresh" content="0;url=https://x.example/">'],
-    ["refresh to a relative path", '<meta http-equiv="Refresh" content="0;url=evil.html">'],
+    ["refresh to a relative path", '<meta http-equiv="Refresh" content="0;url=other.html">'],
     ["Link, which acts as a Link header", '<meta http-equiv="Link" content="<https://x.example/p.css>; rel=preload; as=style">'],
-    ["Link to a relative preload", '<meta http-equiv="link" content="<evil.css>; rel=preload">'],
+    ["Link to a relative preload", '<meta http-equiv="link" content="<other.css>; rel=preload">'],
     ["an author Content-Security-Policy", '<meta http-equiv="Content-Security-Policy" content="default-src *">'],
     ["Set-Cookie", '<meta http-equiv="set-cookie" content="a=b">'],
     ["Default-Style", '<meta http-equiv="default-style" content="x">'],
@@ -207,8 +207,8 @@ describe("<meta http-equiv>", () => {
 
 describe("the check reads a page the way a browser does", () => {
   it("does not trust a parser: refusals come from the byte scan when the DOM pass is blinded", () => {
-    expect(refused(wrap('<img attributionsrc="evil.png">'), { blinded: true })).toBe(true);
-    expect(refused(wrap('<img attributionsrc="evil.png">'))).toBe(true);
+    expect(refused(wrap('<img attributionsrc="other.png">'), { blinded: true })).toBe(true);
+    expect(refused(wrap('<img attributionsrc="other.png">'))).toBe(true);
   });
 
   it("passes a plain finished page", () => {

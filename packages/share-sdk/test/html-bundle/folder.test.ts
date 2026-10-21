@@ -97,9 +97,9 @@ describe("passive files (the T8 extension point)", () => {
 
   it("does not examine a passive file's contents", async () => {
     // Not valid utf-8, not html, not json: it is carried, not parsed.
-    const result = await inline([utf8("index.html", "<p>x</p>"), binary("knowledge/blob.bin", [0xff, 0xfe, 0x00]), utf8("knowledge/page.html", '<iframe src="https://evil.example"></iframe>')]);
+    const result = await inline([utf8("index.html", "<p>x</p>"), binary("knowledge/blob.bin", [0xff, 0xfe, 0x00]), utf8("knowledge/page.html", '<iframe src="https://other.example"></iframe>')]);
     expect(result.passive).toHaveLength(2);
-    expect(decode(result.html)).not.toContain("evil.example");
+    expect(decode(result.html)).not.toContain("other.example");
   });
 
   it("does not let the page reference a passive file: the reference is refused like a missing file", async () => {

@@ -31,11 +31,11 @@ describe("network references and external URLs", () => {
     ["javascript: anchor", [page('<a href="javascript:alert(1)">x</a>')], "unsupported", "javascript:alert(1)"],
     ["data: image (not inlined by the author)", [page('<img src="data:image/png;base64,AAAA">')], "unsupported", "data:image/png;base64,AAAA"],
     ["root-relative image", [page('<img src="/img/a.png">')], "unsupported", "/img/a.png"],
-    ["@import url(http) in a linked stylesheet", [page("", '<link rel="stylesheet" href="a.css">'), utf8("a.css", '@import url("http://evil.example/x.css");')], "unsupported", "http://evil.example/x.css"],
-    ["@import url(http) unquoted in a style element", [page("", "<style>@import url(https://evil.example/x.css);</style>")], "unsupported", "https://evil.example/x.css"],
-    ["@import string form with an external url", [page("", "<style>@import 'https://evil.example/x.css';</style>")], "unsupported", "https://evil.example/x.css"],
-    ["css url() with an external host", [page("", '<link rel="stylesheet" href="a.css">'), utf8("a.css", "body{background:url(https://evil.example/p.png)}")], "unsupported", "https://evil.example/p.png"],
-    ["css url() in a style attribute", [page('<p style="background:url(//evil.example/p.png)">x</p>')], "unsupported", "//evil.example/p.png"],
+    ["@import url(http) in a linked stylesheet", [page("", '<link rel="stylesheet" href="a.css">'), utf8("a.css", '@import url("http://other.example/x.css");')], "unsupported", "http://other.example/x.css"],
+    ["@import url(http) unquoted in a style element", [page("", "<style>@import url(https://other.example/x.css);</style>")], "unsupported", "https://other.example/x.css"],
+    ["@import string form with an external url", [page("", "<style>@import 'https://other.example/x.css';</style>")], "unsupported", "https://other.example/x.css"],
+    ["css url() with an external host", [page("", '<link rel="stylesheet" href="a.css">'), utf8("a.css", "body{background:url(https://other.example/p.png)}")], "unsupported", "https://other.example/p.png"],
+    ["css url() in a style attribute", [page('<p style="background:url(//other.example/p.png)">x</p>')], "unsupported", "//other.example/p.png"],
     ["@font-face src url() with an external host", [page("", "<style>@font-face{font-family:x;src:url(https://fonts.example/x.woff2)}</style>")], "unsupported", "https://fonts.example/x.woff2"],
     ["@import layer() condition", [page("", '<link rel="stylesheet" href="a.css">'), utf8("a.css", '@import url(b.css) layer(x);'), utf8("b.css", "p{}")], "unsupported", ""],
   ])("refuses %s", async (_name, files, kind, reference) => {
@@ -65,31 +65,31 @@ describe("network references and external URLs", () => {
   });
 
   it("allows a same-document svg reference and inlines a referenced svg file as an inert image", async () => {
-    const hostile = '<svg xmlns="http://www.w3.org/2000/svg"><script>fetch("https://evil.example")</script><image href="https://evil.example/p.png"/></svg>';
+    const odd = '<svg xmlns="http://www.w3.org/2000/svg"><script>fetch("https://other.example")</script><image href="https://other.example/p.png"/></svg>';
     const prepared = await prepare([
-      page('<svg><defs><symbol id="a"><path d="M0 0"/></symbol></defs><use href="#a"/></svg><img src="art/hostile.svg" alt="">'),
-      utf8("art/hostile.svg", hostile, "image/svg+xml"),
+      page('<svg><defs><symbol id="a"><path d="M0 0"/></symbol></defs><use href="#a"/></svg><img src="art/odd.svg" alt="">'),
+      utf8("art/odd.svg", odd, "image/svg+xml"),
     ]);
     const output = prepared.pages["index.html"]!;
     const encoded = /src="data:image\/svg\+xml;base64,([^"]+)"/.exec(output)?.[1];
     expect(encoded).toBeDefined();
     // The file's bytes only travel inside an image data URL; none of its markup reaches the page as markup.
-    expect(Buffer.from(encoded!, "base64").toString("utf8")).toBe(hostile);
-    expect(output).not.toContain("evil.example");
+    expect(Buffer.from(encoded!, "base64").toString("utf8")).toBe(odd);
+    expect(output).not.toContain("other.example");
     expect(output).not.toContain("fetch(");
   });
 });
 
 describe("html features that are always refused", () => {
   it.each([
-    ["<base>", page("", '<base href="https://evil.example/">')],
+    ["<base>", page("", '<base href="https://other.example/">')],
     ["<base> without a url", page("", '<base target="_blank">')],
     ["<iframe src>", page('<iframe src="other.html"></iframe>')],
     ["<iframe srcdoc>", page('<iframe srcdoc="<p>x</p>"></iframe>')],
     ["<frameset>", utf8("index.html", '<!doctype html><frameset><frame src="a.html"></frameset>')],
     ["<object>", page('<object data="movie.swf"></object>')],
     ["<embed>", page('<embed src="movie.swf">')],
-    ["<form>", page('<form action="https://evil.example/"><input name=q></form>')],
+    ["<form>", page('<form action="https://other.example/"><input name=q></form>')],
     ["event handler attribute", page('<img src="a.png" onerror="alert(1)">')],
     ["event handler attribute in capitals", page('<p ONCLICK="x()">x</p>')],
     ["module script", page('<script type="module">import "./a.js"</script>')],
@@ -119,10 +119,10 @@ describe("html features that are always refused", () => {
   });
 
   it("drops meta refresh and author CSP metas instead of passing them through", async () => {
-    const prepared = await prepare([page("<p>hi</p>", '<meta http-equiv="refresh" content="0;url=https://evil.example/"><meta http-equiv="Content-Security-Policy" content="default-src *">')]);
+    const prepared = await prepare([page("<p>hi</p>", '<meta http-equiv="refresh" content="0;url=https://other.example/"><meta http-equiv="Content-Security-Policy" content="default-src *">')]);
     const output = prepared.pages["index.html"]!;
     expect(output).not.toMatch(/refresh/i);
-    expect(output).not.toContain("evil.example");
+    expect(output).not.toContain("other.example");
     expect(output).not.toContain("default-src *");
     expect(output).toContain("default-src 'none'");
   });

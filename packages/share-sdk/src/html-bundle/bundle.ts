@@ -7,13 +7,16 @@ export const MAX_ARTIFACT_RENDER_BYTES = 10 * 1024 * 1024;
 export const MAX_ARTIFACT_TEXT_BYTES = 5 * 1024 * 1024;
 export const MAX_ARTIFACT_REFERENCES = 2_000;
 export const MAX_ARTIFACT_CSS_IMPORT_DEPTH = 16;
+/** Comments in one page, and attributes on one element: a page over either is refused before it is parsed (`limit`). */
+export const MAX_ARTIFACT_COMMENTS = 20_000;
+export const MAX_ARTIFACT_ATTRIBUTES_PER_ELEMENT = 5_000;
 
 export type ArtifactFailureKind = "malformed" | "missing" | "unsupported" | "limit";
 
 export class ArtifactBundleError extends Error {
   /**
    * `path` is the bundle file being processed when the refusal happened; `reference` is the reference text inside it
-   * that was refused, when there is one. Both come from the (untrusted) folder: escape them before printing.
+   * that was refused, when there is one. Both are the folder's own text: print them through a terminal-safe printer.
    */
   constructor(readonly kind: ArtifactFailureKind, message: string, readonly path?: string, readonly reference?: string) {
     super(message);
@@ -298,7 +301,7 @@ const INLINE_DATA_URL = /^data:;base64(?:,[A-Za-z0-9+/=]*)?(?:#[^\u0000-\u0020\\
 
 /**
  * `data:` and `#fragment` are the only references the finished page may hold. Anything else is refused: a relative path
- * such as `evil.png` resolves against the viewer's origin, and an empty value names the page itself.
+ * such as `other.png` resolves against the viewer's origin, and an empty value names the page itself.
  */
 function isInlineReference(value: string): boolean {
   const text = urlText(value);
@@ -312,6 +315,25 @@ function assertInlineSrcset(value: string): void {
     if (token === "" || /^\d+(?:\.\d+)?[wx]$/i.test(token)) continue;
     if (!isInlineReference(token)) throw new ArtifactBundleError("unsupported", "artifact page still references a resource", undefined, token);
   }
+}
+
+/**
+ * The values of a `<script type>` that name JavaScript (the HTML spec's JavaScript MIME type essences). Any other type makes
+ * the element a data block that the browser or a script reads, not a script that runs: `speculationrules` (a list of URLs
+ * the browser prefetches or prerenders), `importmap`, `webbundle`, templates, JSON. A page of this kind has no use for them,
+ * so each is refused. `module` is refused separately.
+ */
+const JAVASCRIPT_TYPES = new Set([
+  "application/ecmascript", "application/javascript", "application/x-ecmascript", "application/x-javascript", "text/ecmascript",
+  "text/javascript", "text/javascript1.0", "text/javascript1.1", "text/javascript1.2", "text/javascript1.3", "text/javascript1.4",
+  "text/javascript1.5", "text/jscript", "text/livescript", "text/x-ecmascript", "text/x-javascript",
+]);
+
+/** An absent or empty `type`, or a JavaScript MIME type (parameters such as `;charset=utf-8` are not part of the type). */
+function isJavaScriptType(value: string | null | undefined): boolean {
+  const type = (value ?? "").replace(/^[\t\n\f\r ]+|[\t\n\f\r ]+$/g, "").toLowerCase();
+  if (type === "") return true;
+  return JAVASCRIPT_TYPES.has(type.split(";")[0]!.replace(/[\t\n\f\r ]+$/g, ""));
 }
 
 const BLOCKED_ELEMENTS = "base, form, iframe, frame, frameset, object, embed, portal, noscript, plaintext, xmp, noembed, noframes, applet, area[href], link:not([href]), [ping]";
@@ -361,6 +383,11 @@ function unsupportedOutput(detail: string, reference?: string): never {
   throw new ArtifactBundleError("unsupported", detail, undefined, reference);
 }
 
+/** An SVG animation element (`<set>`, `<animate>`, ...) whose `attributeName` is `href` or `xlink:href`: it writes a URL into the page. */
+function isHrefAnimation(tag: string, attributeName: string, value: string): boolean {
+  return /^(?:animate|set|animatetransform|animatemotion)$/i.test(tag) && attributeName.toLowerCase() === "attributename" && /^(?:xlink:)?href$/i.test(trimUrl(value));
+}
+
 function checkAttribute(name: string, decoded: string): void {
   const local = name.slice(name.lastIndexOf(":") + 1);
   if (/^on/.test(name)) unsupportedOutput("artifact output contains a blocked html feature");
@@ -393,100 +420,168 @@ function isOwnPolicyMeta(httpEquiv: string, content: string | null): boolean {
   return httpEquiv.trim().toLowerCase() === "content-security-policy" && content === INNER_CSP;
 }
 
+/** HTML's whitespace: space, tab, newline, form feed, carriage return. A tag or attribute name never ends at U+00A0 or other Unicode whitespace. */
+const HTML_SPACE = "\\t\\n\\f\\r ";
+const TAG_NAME = new RegExp(`[^${HTML_SPACE}/>]*`, "y");
+const ATTRIBUTE_NAME = new RegExp(`=?[^${HTML_SPACE}/>=]*`, "y");
+const UNQUOTED_VALUE = new RegExp(`[^${HTML_SPACE}>]*`, "y");
+const SKIPPED = new RegExp(`[${HTML_SPACE}/]`);
+const SPACE = new RegExp(`[${HTML_SPACE}]`);
+/** Unicode whitespace and invisible characters that are never part of a tag name a page means. */
+const ODD_TAG_NAME = /[\u00a0\u1680\u180e\u2000-\u200f\u2028-\u202f\u205f-\u2064\u3000\ufeff]/;
+const COMMENT_END = /--!?>/g;
+const SCRIPT_END = /<\/script/gi;
+const STYLE_END = /<\/style/gi;
+
+interface ScanOptions {
+  /**
+   * `true` (a finished page): every reference is checked and a malformed tag is refused. `false` (a source page, before it
+   * is parsed): only the comment and attribute limits are enforced, and a malformed tag ends the scan.
+   */
+  readonly references: boolean;
+}
+
 /**
- * A scan of the finished page's text that shares nothing with the DOM parser: it finds the tags and attributes itself, so
- * a difference in how a parser reads some markup (jsdom against a browser) cannot hide a reference from both checks. Scripts
- * are the author's code and are skipped (a script may hold the text `https://` as data; what scripts may do is the
- * sandbox's and the CSP's job, with the capability scan on their source); `<style>` text is checked as CSS and then read as
- * markup like everything else, so nothing after a `<` is ever skipped except a script's source and a comment. A tag found in
- * text that is really not one (inside an `<xmp>` or a comment-like string) can only cause a refusal, never a miss.
+ * A scan of a page's text that shares nothing with the DOM parser: it finds the tags and attributes itself, so a difference
+ * in how a parser reads some markup (jsdom against a browser) cannot hide a reference from both checks. Scripts are the
+ * author's code and are skipped (a script may hold the text `https://` as data; what scripts may do is the sandbox's and the
+ * CSP's job, with the capability scan on their source); `<style>` text is checked as CSS and then read as markup like
+ * everything else, so nothing after a `<` is ever skipped except a script's source and a comment. A tag found in text that
+ * is really not one (inside an `<xmp>` or a comment-like string) can only cause a refusal, never a miss. Names end at
+ * HTML whitespace only, as a browser ends them.
+ *
+ * Both modes count comments and the attributes of each tag and refuse (`limit`) a page over `MAX_ARTIFACT_COMMENTS` or
+ * `MAX_ARTIFACT_ATTRIBUTES_PER_ELEMENT`, so the DOM parser is never given a page whose comments or attributes would take
+ * minutes to parse.
  */
-function scanMarkupForReferences(html: string): void {
+function scanMarkup(html: string, options: ScanOptions): void {
+  const checkReferences = options.references;
   const length = html.length;
   let index = 0;
+  let comments = 0;
+  /** A malformed page: refused when references are checked; in the pre-parse mode the scan simply ends. */
+  const malformed = (detail: string): boolean => {
+    if (checkReferences) unsupportedOutput(detail);
+    return true;
+  };
+  const countComment = (): void => {
+    comments += 1;
+    if (comments > MAX_ARTIFACT_COMMENTS) fail("limit", "artifact page has too many comments");
+  };
   while (index < length) {
     const open = html.indexOf("<", index);
     if (open === -1) return;
     index = open + 1;
     const next = html[index] ?? "";
     if (html.startsWith("!--", index)) {
+      countComment();
       let end: number;
       if (html[index + 3] === ">") end = index + 4;
       else if (html.startsWith("->", index + 3)) end = index + 5;
       else {
-        const close = html.indexOf("-->", index + 3);
-        const bang = html.indexOf("--!>", index + 3);
-        if (close === -1 && bang === -1) unsupportedOutput("artifact output has an unterminated comment");
-        end = close === -1 ? bang + 4 : bang === -1 ? close + 3 : Math.min(close + 3, bang + 4);
+        // The first `-->` or `--!>`, found in one pass.
+        COMMENT_END.lastIndex = index + 3;
+        const close = COMMENT_END.exec(html);
+        if (close === null) {
+          if (malformed("artifact output has an unterminated comment")) return;
+          return;
+        }
+        end = close.index + close[0].length;
       }
       index = end;
       continue;
     }
     if (next === "!" || next === "?" || next === "/") {
       // A doctype, a bogus comment or an end tag ends at the first `>`; an end tag's attributes are never used.
+      if (next === "?" || (next === "!" && !/^!doctype/i.test(html.slice(index, index + 8)))) countComment();
       const close = html.indexOf(">", index);
-      if (close === -1) unsupportedOutput("artifact output has an unterminated tag");
+      if (close === -1) {
+        if (malformed("artifact output has an unterminated tag")) return;
+        return;
+      }
       index = close + 1;
       continue;
     }
     if (!/[A-Za-z]/.test(next)) continue;
-    const nameMatch = /[^\s/>]*/y;
-    nameMatch.lastIndex = index;
-    const tag = nameMatch.exec(html)![0].toLowerCase();
-    index = nameMatch.lastIndex;
-    if (MARKUP_BLOCKED_NAMES.has(tag)) unsupportedOutput("artifact output contains a blocked html feature");
+    TAG_NAME.lastIndex = index;
+    const rawTag = TAG_NAME.exec(html)![0];
+    const tag = rawTag.toLowerCase();
+    index = TAG_NAME.lastIndex;
+    if (checkReferences) {
+      if (ODD_TAG_NAME.test(rawTag)) unsupportedOutput("artifact output has a tag name with an unexpected character");
+      if (MARKUP_BLOCKED_NAMES.has(tag)) unsupportedOutput("artifact output contains a blocked html feature");
+    }
     const attributes = new Map<string, string>();
+    let attributeCount = 0;
     for (;;) {
-      while (index < length && /[\s/]/.test(html[index]!)) index += 1;
-      if (index >= length) unsupportedOutput("artifact output has an unterminated tag");
+      while (index < length && SKIPPED.test(html[index]!)) index += 1;
+      if (index >= length) {
+        if (malformed("artifact output has an unterminated tag")) return;
+        return;
+      }
       if (html[index] === ">") {
         index += 1;
         break;
       }
-      const attributeName = /=?[^\s/>=]*/y;
-      attributeName.lastIndex = index;
-      const rawName = attributeName.exec(html)![0];
-      index = attributeName.lastIndex;
-      while (index < length && /\s/.test(html[index]!)) index += 1;
+      ATTRIBUTE_NAME.lastIndex = index;
+      const rawName = ATTRIBUTE_NAME.exec(html)![0];
+      index = ATTRIBUTE_NAME.lastIndex;
+      while (index < length && SPACE.test(html[index]!)) index += 1;
       let rawValue = "";
       if (html[index] === "=") {
         index += 1;
-        while (index < length && /\s/.test(html[index]!)) index += 1;
+        while (index < length && SPACE.test(html[index]!)) index += 1;
         const quote = html[index];
         if (quote === '"' || quote === "'") {
           const close = html.indexOf(quote, index + 1);
-          if (close === -1) unsupportedOutput("artifact output has an unterminated attribute");
+          if (close === -1) {
+            if (malformed("artifact output has an unterminated attribute")) return;
+            return;
+          }
           rawValue = html.slice(index + 1, close);
           index = close + 1;
         } else {
-          const unquoted = /[^\s>]*/y;
-          unquoted.lastIndex = index;
-          rawValue = unquoted.exec(html)![0];
-          index = unquoted.lastIndex;
+          UNQUOTED_VALUE.lastIndex = index;
+          rawValue = UNQUOTED_VALUE.exec(html)![0];
+          index = UNQUOTED_VALUE.lastIndex;
         }
       }
       if (rawName.length > 0) {
+        attributeCount += 1;
+        if (attributeCount > MAX_ARTIFACT_ATTRIBUTES_PER_ELEMENT) fail("limit", "artifact element has too many attributes");
+        if (!checkReferences) continue;
         const name = rawName.toLowerCase();
         const decoded = decodeAttributeValue(rawValue);
         checkAttribute(name, decoded);
+        if (isHrefAnimation(tag, name, decoded)) unsupportedOutput("artifact svg animates a resource reference");
         // A repeated attribute: a browser keeps the first, so only the first is the one that counts for the tag-level checks.
         if (!attributes.has(name)) attributes.set(name, decoded);
+      } else if (index < length && html[index] !== ">" && !SKIPPED.test(html[index]!)) {
+        // A lone quote or other character that starts no name: step over it so the scan always moves forward.
+        index += 1;
       }
     }
-    // The same elements and attributes the DOM pass refuses by selector (`BLOCKED_ELEMENTS`), so neither pass depends on the other.
-    if ((tag === "area" && attributes.has("href")) || attributes.has("ping") || (tag === "link" && !attributes.has("href"))) {
-      unsupportedOutput("artifact output contains a blocked html feature");
+    if (checkReferences) {
+      // The same elements and attributes the DOM pass refuses by selector (`BLOCKED_ELEMENTS`), so neither pass depends on the other.
+      if ((tag === "area" && attributes.has("href")) || attributes.has("ping") || (tag === "link" && !attributes.has("href"))) {
+        unsupportedOutput("artifact output contains a blocked html feature");
+      }
+      if (tag === "meta" && attributes.has("http-equiv") && !isOwnPolicyMeta(attributes.get("http-equiv")!, attributes.get("content") ?? null)) {
+        unsupportedOutput("artifact output contains a meta http-equiv", attributes.get("http-equiv"));
+      }
+      if (tag === "script" && !isJavaScriptType(attributes.get("type"))) {
+        unsupportedOutput("artifact output holds a script type that is not JavaScript", attributes.get("type"));
+      }
     }
-    if (tag === "meta" && attributes.has("http-equiv") && !isOwnPolicyMeta(attributes.get("http-equiv")!, attributes.get("content") ?? null)) {
-      unsupportedOutput("artifact output contains a meta http-equiv", attributes.get("http-equiv"));
-    }
-    if (tag === "style") {
-      const close = html.slice(index).search(/<\/style/i);
-      assertOnlyInlineCssReferences(close === -1 ? html.slice(index) : html.slice(index, index + close));
-    } else if (tag === "script") {
-      const close = html.slice(index).search(/<\/script/i);
-      if (close === -1) return;
-      index += close;
+    if (tag === "script") {
+      SCRIPT_END.lastIndex = index;
+      const close = SCRIPT_END.exec(html);
+      if (close === null) return;
+      index = close.index;
+    } else if (tag === "style" && checkReferences) {
+      STYLE_END.lastIndex = index;
+      const close = STYLE_END.exec(html);
+      assertOnlyInlineCssReferences(html.slice(index, close === null ? length : close.index));
     }
   }
 }
@@ -525,7 +620,7 @@ export interface AssertSelfContainedOptions {
  */
 export function assertSelfContainedPage(output: string, options: AssertSelfContainedOptions = {}): void {
   const page = withoutDataUris(output);
-  if (options.only !== "dom") scanMarkupForReferences(page);
+  if (options.only !== "dom") scanMarkup(page, { references: true });
   if (options.only === "bytes") return;
   const doc = (options.parseHtml ?? defaultParseHtml)(page);
   const roots = documentRoots(doc);
@@ -534,6 +629,9 @@ export function assertSelfContainedPage(output: string, options: AssertSelfConta
     if (!isOwnPolicyMeta(meta.getAttribute("http-equiv") ?? "", meta.getAttribute("content"))) fail("unsupported", "artifact output contains a meta http-equiv");
   }
   if (queryAll(roots, "script[src]").length > 0) fail("unsupported", "artifact output still loads a script");
+  for (const script of queryAll(roots, "script")) {
+    if (!isJavaScriptType(script.getAttribute("type"))) fail("unsupported", "artifact output holds a script type that is not JavaScript");
+  }
   for (const style of queryAll(roots, "style")) assertOnlyInlineCssReferences(style.textContent ?? "");
   for (const element of queryAll(roots, "*")) {
     const inSvg = element.namespaceURI === SVG_NAMESPACE;
@@ -547,8 +645,12 @@ export function assertSelfContainedPage(output: string, options: AssertSelfConta
       if (URL_ATTRIBUTES.has(local)) {
         if (local === "srcset" || local === "imagesrcset") assertInlineSrcset(value);
         else if (!isInlineReference(value)) throw new ArtifactBundleError("unsupported", "artifact page still references a resource", undefined, value);
+      } else if (lower !== "style" && !TEXT_ATTRIBUTES.test(lower) && looksLikeUrl(urlText(value))) {
+        // Any other attribute outside the text allow-list whose value reads as a URL, whatever its name.
+        throw new ArtifactBundleError("unsupported", "artifact page still references a resource", undefined, value);
       }
       if (lower === "style" || inSvg) assertOnlyInlineCssReferences(value);
+      if (isHrefAnimation(element.localName, lower, value)) fail("unsupported", "artifact svg animates a resource reference");
     }
   }
 }
@@ -830,7 +932,11 @@ const INNER_CSP = [
 ].join("; ");
 
 async function transformHtml(path: string, file: ArtifactFile, context: TransformContext): Promise<string> {
-  const doc = context.parseHtml(decodeText(file));
+  const text = decodeText(file);
+  // Before the DOM parser sees the page: the comment and attribute limits, which keep it from being given a page it would
+  // take minutes to parse.
+  scanMarkup(text, { references: false });
+  const doc = context.parseHtml(text);
   const roots = documentRoots(doc);
   const deferred = newDeferred();
   if (doc.querySelector("parsererror") !== null) fail("malformed", "artifact html is malformed");
@@ -873,6 +979,7 @@ async function transformHtml(path: string, file: ArtifactFile, context: Transfor
     if ((script.getAttribute("type") ?? "").trim().toLowerCase() === "module" || script.hasAttribute("async") || script.hasAttribute("defer")) {
       fail("unsupported", "artifact uses an unsupported script mode");
     }
+    if (!isJavaScriptType(script.getAttribute("type"))) fail("unsupported", "artifact uses a script type that is not JavaScript");
     let source = script.textContent ?? "";
     const reference = script.getAttribute("src");
     if (reference !== null) {

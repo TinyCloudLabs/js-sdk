@@ -17,7 +17,7 @@ import { shareFilename } from "./io.js";
  * `tc share publish ./site/`: a folder with a root `index.html` becomes ONE self-contained `.html` file, published as
  * any other single file. The folder is read here (the CLI's filesystem rules), the rewriting is the share-sdk
  * `html-bundle` rewriter (the rules of what a page may reference). Nothing outside the folder is read, symbolic links are
- * refused rather than followed, and every path or reference text echoed in an error is escaped for the terminal.
+ * refused rather than followed, and every path or reference text echoed in an error is printed through the terminal-safe printer.
  */
 
 /** Deepest directory nesting read. */
@@ -79,7 +79,7 @@ export interface FolderReadHooks {
   readonly beforeList?: () => Promise<void>;
   /** Runs after a file's bytes are read, before they are accepted. */
   readonly afterRead?: () => Promise<void>;
-  /** The real path an open descriptor refers to, or `undefined` where the platform cannot say (then the weaker checks run). */
+  /** The real path an open descriptor refers to, or `undefined` where the platform cannot say (then the path-based checks run in its place). */
   readonly descriptorPath?: (fd: number) => Promise<string | undefined>;
 }
 
@@ -110,13 +110,12 @@ async function parentChainIsRealDirectories(root: string, path: string): Promise
  * The file's bytes, read from one descriptor, never past `limit` bytes. `root` is the folder's real path and `path` is the
  * file as `root` plus its names, so no component of it may be a link.
  *
- * `O_NOFOLLOW` covers only the last component, so a link in a parent directory is checked another way. On Linux the check
- * is on the OPEN DESCRIPTOR: its real path (`/proc/self/fd/<fd>`) must be exactly `path`, so what was opened is the file
- * at that path inside the folder and no path is looked up again; swapping a parent directory for a link at any moment
- * cannot get an outside file read. Elsewhere (macOS: Node has no `F_GETPATH`) the closest checks are made instead: `path`
- * must resolve to itself, its `lstat` must be the opened file (same device and inode), and after the read every parent
- * directory and the file are checked again. That narrows the window but does not close it: a process that can write to the
- * folder while it is published and times its swaps can still win there.
+ * `O_NOFOLLOW` applies to the last component, so a parent directory is checked another way. On Linux the check is on the open
+ * descriptor: its real path (`/proc/self/fd/<fd>`) must equal `path`, and `path` must lie inside `root`, so the opened file is
+ * the file at that path inside the folder and no path is resolved again after the open. Where the platform has no way to name
+ * an open descriptor (macOS: Node has no `F_GETPATH`) the same sequence runs with path-based checks, in this order: `lstat`
+ * the path, open it, compare the opened file's device and inode with the `lstat`, resolve the path and require it to equal
+ * itself inside `root`, read the bytes, then `lstat` the file and every parent directory again.
  */
 export async function readRegularFile(root: string, path: string, relative: string, remaining: number, limit: number, hooks: FolderReadHooks = {}): Promise<Uint8Array | FolderProblem> {
   const problem = (reason: string): FolderProblem => ({ code: "UNSUPPORTED_FOLDER_ENTRY", path: relative, reason });

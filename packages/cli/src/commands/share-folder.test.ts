@@ -134,16 +134,16 @@ describe("tc share publish ./site/", () => {
   describe("refusals are typed, and name the file and reference", () => {
     const cases: [string, string, string, number, string[]][] = [
       ["an external script", '<script src="https://cdn.example/lib.js"></script>', "UNSUPPORTED_HTML", 2, ["index.html", "https://cdn.example/lib.js"]],
-      ["@import url(http) in a style element", "<style>@import url(http://evil.example/a.css);</style>", "UNSUPPORTED_HTML", 2, ["http://evil.example/a.css"]],
+      ["@import url(http) in a style element", "<style>@import url(http://other.example/a.css);</style>", "UNSUPPORTED_HTML", 2, ["http://other.example/a.css"]],
       ["link rel=preload", '<link rel="preload" href="js/app.js" as="script">', "UNSUPPORTED_HTML", 2, ["link relation"]],
-      ["<base>", '<base href="https://evil.example/">', "UNSUPPORTED_HTML", 2, ["blocked html feature"]],
+      ["<base>", '<base href="https://other.example/">', "UNSUPPORTED_HTML", 2, ["blocked html feature"]],
       ["<iframe>", '<iframe src="other.html"></iframe>', "UNSUPPORTED_HTML", 2, ["blocked html feature"]],
       ["<object>", '<object data="x.swf"></object>', "UNSUPPORTED_HTML", 2, ["blocked html feature"]],
-      ["inline svg with an external image", '<svg><image href="https://evil.example/p.png"/></svg>', "UNSUPPORTED_HTML", 2, ["svg references a resource"]],
+      ["inline svg with an external image", '<svg><image href="https://other.example/p.png"/></svg>', "UNSUPPORTED_HTML", 2, ["svg references a resource"]],
       ["inline svg with a script", '<svg><script>fetch("/x")</script></svg>', "UNSUPPORTED_HTML", 2, ["svg contains a script"]],
       ["<noscript>", "<noscript>Enable JavaScript</noscript>", "UNSUPPORTED_HTML", 2, ["blocked html feature"]],
-      ["<area href>", '<map name="m"><area href="https://evil.example/" shape="rect" coords="0,0,1,1"></map>', "UNSUPPORTED_HTML", 2, ["blocked html feature"]],
-      ["an escaped url()", '<p style="background:u\\72l(https://evil.example/p.png)">x</p>', "UNSUPPORTED_HTML", 2, ["https://evil.example/p.png"]],
+      ["<area href>", '<map name="m"><area href="https://other.example/" shape="rect" coords="0,0,1,1"></map>', "UNSUPPORTED_HTML", 2, ["blocked html feature"]],
+      ["an escaped url()", '<p style="background:u\\72l(https://other.example/p.png)">x</p>', "UNSUPPORTED_HTML", 2, ["https://other.example/p.png"]],
       ["a link to another page", '<a href="about.html">About</a>', "UNSUPPORTED_HTML", 2, ["links to another page", "about.html"]],
       ["a traversal reference", '<img src="../secret.png">', "UNSAFE_PATH", 8, ["../secret.png"]],
       ["a missing file", '<img src="img/nope.png">', "HTML_RESOURCE_MISSING", 2, ["img/nope.png", "not in the folder"]],
@@ -161,9 +161,9 @@ describe("tc share publish ./site/", () => {
     });
 
     test("a meta refresh is dropped from the page, not published", async () => {
-      await basicSite('<!doctype html><meta http-equiv="refresh" content="0;url=https://evil.example/"><p>ok</p>');
+      await basicSite('<!doctype html><meta http-equiv="refresh" content="0;url=https://other.example/"><p>ok</p>');
       expect((await run([site])).exitCode).toBe(0);
-      expect(decode(published[0]!.source as Uint8Array)).not.toMatch(/refresh|evil\.example/i);
+      expect(decode(published[0]!.source as Uint8Array)).not.toMatch(/refresh|other\.example/i);
     });
 
     test("no index.html at the top level, including one in a subfolder only", async () => {
@@ -290,12 +290,12 @@ describe("tc share publish ./site/", () => {
   });
 
   describe("echoed names are escaped for the terminal and clipped", () => {
-    const HOSTILE = "\u001b[2J\u001b]0;owned\u0007\u202e\u2028\u200b";
+    const CONTROLS = "\u001b[2J\u001b]0;owned\u0007\u202e\u2028\u200b";
     const RAW = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u200b-\u200f\u2028\u2029\u202a-\u202e\u2066-\u2069\ufeff]/;
 
     test("an unsafe file name is escaped and the refusal lists at most 5", async () => {
       await basicSite();
-      for (let index = 0; index < 8; index += 1) await put(`bad${index}${HOSTILE}.txt`, "x");
+      for (let index = 0; index < 8; index += 1) await put(`bad${index}${CONTROLS}.txt`, "x");
       const result = await run([site]);
       const error = errorOf(result.stderr);
       expect(error.code).toBe("UNSAFE_PATH");
@@ -308,8 +308,8 @@ describe("tc share publish ./site/", () => {
       expect(result.stderr).not.toMatch(RAW);
     });
 
-    test("a hostile reference text in the page is escaped", async () => {
-      await basicSite(`<!doctype html><script src="https://x.example/${HOSTILE}${"a".repeat(300)}.js"></script>`);
+    test("an odd reference text in the page is escaped", async () => {
+      await basicSite(`<!doctype html><script src="https://x.example/${CONTROLS}${"a".repeat(300)}.js"></script>`);
       const error = errorOf((await run([site])).stderr);
       expect(error.code).toBe("UNSUPPORTED_HTML");
       expect(error.message).toContain("\\u{1b}[2J");
@@ -317,9 +317,9 @@ describe("tc share publish ./site/", () => {
       expect(error.message.length).toBeLessThan(400);
     });
 
-    test("a hostile symlink name is escaped", async () => {
+    test("an odd symlink name is escaped", async () => {
       await basicSite();
-      await symlink(root, join(site, `link${HOSTILE}`));
+      await symlink(root, join(site, `link${CONTROLS}`));
       const error = errorOf((await run([site])).stderr);
       expect(error.code).toBe("UNSUPPORTED_FOLDER_ENTRY");
       expect(error.message).toContain("\\u{1b}[2J");

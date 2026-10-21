@@ -47,7 +47,7 @@ describe("folder reading stays inside the folder", () => {
     expect(await readRegularFile(root, join(root, "file-link"), "file-link", 1000, 1000)).toMatchObject({ reason: "symbolic link" });
   });
 
-  // The state the race produces: a parent directory is a link by the time the file is opened. O_NOFOLLOW alone reads it.
+  // A parent directory is a link by the time the file is opened. `O_NOFOLLOW` applies to the last component only.
   test("a file reached through a symbolic link in a parent directory is refused and never read", async () => {
     await symlink(outside, join(root, "sub"));
     const result = await readRegularFile(root, join(root, "sub", "secret.txt"), "sub/secret.txt", 1000, 1000);
@@ -219,10 +219,10 @@ describe("folder reading stays inside the folder", () => {
     } finally { await handle.close(); }
   });
 
-  // A SMOKE test, not the proof. A second process swaps a subfolder between a real directory and a link to the outside folder
-  // as fast as it can while the folder is read, and no walk may return the outside file. The window is too narrow for 5,000
-  // walks to find it: the earlier path-based check (which did leak) also passes this test. What proves each check is the
-  // hook tests above, which put the swap at an exact step. Elsewhere than Linux the checks are best effort, so it is skipped.
+  // A smoke run of the whole walk. A second process swaps a subfolder between a real directory and a link to the outside
+  // folder in a loop while the folder is read, and no walk may return the outside file. The hook tests above test each check at
+  // an exact step; this run tests that the walk as a whole keeps working with a changing folder. It runs on Linux, where the
+  // checks use the descriptor path.
   test("smoke: a subfolder swapped for a link by a running process never gets an outside file read (5,000 walks)", async () => {
     if (!linuxOnly) return;
     await mkdir(join(root, ".real"));
@@ -239,19 +239,19 @@ describe("folder reading stays inside the folder", () => {
     `], { stdio: ["ignore", "pipe", "ignore"] });
     try {
       await new Promise<void>((resolveReady) => swapper.stdout!.once("data", () => resolveReady()));
-      let leaked = 0;
+      let outsideReads = 0;
       let accepted = 0;
       const walks = 5_000;
       for (let index = 0; index < walks; index += 1) {
         try {
           const { files } = await readHtmlFolder(root, 10_000);
           accepted += 1;
-          for (const file of files) if (decode(file.bytes) === OUTSIDE) leaked += 1;
+          for (const file of files) if (decode(file.bytes) === OUTSIDE) outsideReads += 1;
         } catch { /* refused or changed: fine */ }
       }
-      expect(leaked).toBe(0);
+      expect(outsideReads).toBe(0);
       // Not a measurement of the window, only of how the run went (it varies from run to run).
-      console.log(`html-folder race smoke: ${walks} walks, ${accepted} read, ${leaked} outside files returned`);
+      console.log(`html-folder walk smoke: ${walks} walks, ${accepted} read, ${outsideReads} outside files returned`);
     } finally {
       swapper.kill("SIGKILL");
       await new Promise((resolveExit) => swapper.once("exit", resolveExit));
@@ -261,14 +261,14 @@ describe("folder reading stays inside the folder", () => {
 
 describe("refusals from the rewriter are echoed escaped", () => {
   test("the file path of a bundle error is escaped and clipped", () => {
-    const hostile = "dir\u001b[2J\u001b]0;owned\u0007\u202e/a\u2028.css";
-    const error = htmlFolderError(new ArtifactBundleError("unsupported", "artifact contains a blocked html feature", hostile));
+    const odd = "dir\u001b[2J\u001b]0;owned\u0007\u202e/a\u2028.css";
+    const error = htmlFolderError(new ArtifactBundleError("unsupported", "artifact contains a blocked html feature", odd));
     expect(error.message).toContain("\\u{1b}[2J");
     expect(error.message).toContain("\\u{202e}");
     expect(error.message).not.toMatch(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u2028\u202e]/);
-    const missing = htmlFolderError(new ArtifactBundleError("missing", "artifact resource is missing", hostile, hostile));
+    const missing = htmlFolderError(new ArtifactBundleError("missing", "artifact resource is missing", odd, odd));
     expect(missing.message).not.toMatch(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u2028\u202e]/);
-    const limit = htmlFolderError(new ArtifactBundleError("limit", "artifact source exceeds limit", hostile));
+    const limit = htmlFolderError(new ArtifactBundleError("limit", "artifact source exceeds limit", odd));
     expect(limit.message).not.toMatch(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u2028\u202e]/);
   });
 });
