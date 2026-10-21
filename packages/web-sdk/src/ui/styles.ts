@@ -24,7 +24,7 @@ export const HOST_CSS = `
 .label{font-weight:500}
 .switch{display:inline-flex;align-items:center;width:52px;min-width:44px;height:44px;padding:0;border:0;background:none;cursor:pointer}
 .switch:disabled{cursor:default;opacity:.6}
-.knob{position:relative;display:block;width:40px;height:24px;border-radius:12px;background:#9ca3af}
+.knob{position:relative;display:block;width:40px;height:24px;border-radius:12px;background:#6b7280}
 .knob::after{content:"";position:absolute;top:2px;left:2px;width:20px;height:20px;border-radius:50%;background:#fff;transition:transform .15s ease}
 .switch[aria-checked="true"] .knob{background:#111827}
 .switch[aria-checked="true"] .knob::after{transform:translateX(16px)}

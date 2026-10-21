@@ -201,15 +201,15 @@ function splitScheme(css: string): { light: string; dark: string } {
 }
 
 /**
- * Declarations a single-class selector ends up with under a scheme. Dark rules
- * come after light ones, so a later declaration of the same property wins.
+ * Declarations a selector ends up with under a scheme. Dark rules come after
+ * light ones, so a later declaration of the same property wins.
  */
-function resolvedDeclarations(css: string, scheme: "light" | "dark", cls: string): Map<string, string> {
+function resolvedDeclarations(css: string, scheme: "light" | "dark", selector: string): Map<string, string> {
   const { light, dark } = splitScheme(css);
   const rules = scheme === "dark" ? `${light}\n${dark}` : light;
   const out = new Map<string, string>();
-  for (const [, selector, body] of rules.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
-    if (!selector.split(",").map((s) => s.trim()).includes(`.${cls}`)) continue;
+  for (const [, listed, body] of rules.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+    if (!listed.split(",").map((s) => s.trim()).includes(selector)) continue;
     for (const decl of body.split(";")) {
       const colon = decl.indexOf(":");
       if (colon < 0) continue;
@@ -219,22 +219,84 @@ function resolvedDeclarations(css: string, scheme: "light" | "dark", cls: string
   return out;
 }
 
+/** WCAG 2.x relative luminance of a #rgb or #rrggbb colour. Anything else throws. */
+function luminance(hex: string): number {
+  const m = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(hex);
+  if (!m) throw new Error(`not a hex colour: ${hex}`);
+  const digits = m[1].length === 3 ? [...m[1]].map((c) => c + c).join("") : m[1];
+  const [r, g, b] = [0, 2, 4].map((i) => {
+    const c = parseInt(digits.slice(i, i + 2), 16) / 255;
+    return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+  });
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+}
+
+function contrastRatio(a: string, b: string): number {
+  const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x);
+  return (hi + 0.05) / (lo + 0.05);
+}
+
+const TEXT_MIN = 4.5;
+const GRAPHIC_MIN = 3;
+
+/** A foreground and background, each a [selector, property] pair, and the minimum ratio. */
+interface ContrastCheck {
+  name: string;
+  fg: [string, string];
+  bg: [string, string];
+  min: number;
+}
+
+const CONTRAST_CHECKS: readonly ContrastCheck[] = [
+  { name: "panel text", fg: [".layer", "color"], bg: [".panel", "background"], min: TEXT_MIN },
+  { name: "panel dim text", fg: [".status", "color"], bg: [".panel", "background"], min: TEXT_MIN },
+  { name: "panel error text", fg: [".error", "color"], bg: [".panel", "background"], min: TEXT_MIN },
+  { name: "action label", fg: [".action", "color"], bg: [".action", "background"], min: TEXT_MIN },
+  { name: "toast text", fg: [".toast", "color"], bg: [".toast", "background"], min: TEXT_MIN },
+  { name: "button glyph", fg: [".button", "color"], bg: [".button", "background"], min: GRAPHIC_MIN },
+  { name: "button notice dot", fg: [".dot", "background"], bg: [".button", "background"], min: GRAPHIC_MIN },
+  { name: "switch track off", fg: [".knob", "background"], bg: [".panel", "background"], min: GRAPHIC_MIN },
+  { name: "switch thumb", fg: [".knob::after", "background"], bg: [".knob", "background"], min: GRAPHIC_MIN },
+  { name: "switch track on", fg: [".switch[aria-checked=\"true\"] .knob", "background"], bg: [".panel", "background"], min: GRAPHIC_MIN },
+  { name: "toast stripe info", fg: [".toast--info", "border-left-color"], bg: [".toast", "background"], min: GRAPHIC_MIN },
+  { name: "toast stripe success", fg: [".toast--success", "border-left-color"], bg: [".toast", "background"], min: GRAPHIC_MIN },
+  { name: "toast stripe warning", fg: [".toast--warning", "border-left-color"], bg: [".toast", "background"], min: GRAPHIC_MIN },
+  { name: "toast stripe error", fg: [".toast--error", "border-left-color"], bg: [".toast", "background"], min: GRAPHIC_MIN },
+];
+
+/** Stylesheet text with a warning toast rendered, so every toast rule is present. */
+function renderedCss(): string {
+  openPanel();
+  toastStore.push({ kind: "warning", textCode: "panel.title", href: "https://example.com/docs", hrefLabelCode: "panel.close" });
+  return stylesheetText(shadow());
+}
+
 describe("panel colour scheme", () => {
   test("dark scheme paints the panel, toasts and text on the dark surface", () => {
-    openPanel();
-    toastStore.push({ kind: "warning", textCode: "panel.title", href: "https://example.com/docs", hrefLabelCode: "panel.close" });
-    const css = stylesheetText(shadow());
-    expect(resolvedDeclarations(css, "dark", "panel").get("background")).toBe("#151517");
-    expect(resolvedDeclarations(css, "dark", "layer").get("color")).toBe("#fafafa");
-    expect(resolvedDeclarations(css, "dark", "toast").get("background")).toBe("#151517");
-    expect(resolvedDeclarations(css, "dark", "toast").get("color")).toBe("#fafafa");
-    expect(resolvedDeclarations(css, "dark", "toast--warning").get("border-left-color")).toBe("#fbbd23");
+    const css = renderedCss();
+    expect(resolvedDeclarations(css, "dark", ".panel").get("background")).toBe("#151517");
+    expect(resolvedDeclarations(css, "dark", ".layer").get("color")).toBe("#fafafa");
+    expect(resolvedDeclarations(css, "dark", ".toast").get("background")).toBe("#151517");
+    expect(resolvedDeclarations(css, "dark", ".toast").get("color")).toBe("#fafafa");
+    expect(resolvedDeclarations(css, "dark", ".toast--warning").get("border-left-color")).toBe("#fbbd23");
   });
 
   test("light scheme keeps the light palette when no dark rule applies", () => {
-    openPanel();
-    const css = stylesheetText(shadow());
-    expect(resolvedDeclarations(css, "light", "panel").get("background")).toBe("#fff");
-    expect(resolvedDeclarations(css, "light", "layer").get("color")).toBe("#111827");
+    const css = renderedCss();
+    expect(resolvedDeclarations(css, "light", ".panel").get("background")).toBe("#fff");
+    expect(resolvedDeclarations(css, "light", ".layer").get("color")).toBe("#111827");
   });
 });
+
+for (const scheme of ["light", "dark"] as const) {
+  describe(`panel contrast, ${scheme} scheme`, () => {
+    for (const check of CONTRAST_CHECKS) {
+      test(`${check.name} is at least ${check.min}:1`, () => {
+        const css = renderedCss();
+        const fg = resolvedDeclarations(css, scheme, check.fg[0]).get(check.fg[1]) ?? "";
+        const bg = resolvedDeclarations(css, scheme, check.bg[0]).get(check.bg[1]) ?? "";
+        expect(contrastRatio(fg, bg)).toBeGreaterThanOrEqual(check.min);
+      });
+    }
+  });
+}
