@@ -628,6 +628,17 @@ export function createShareAuthorityAdapters(input: {
         profileName: activeProfileName,
       });
     }
+    // An addressed share's policy ceiling includes decrypt on the owner's encryption network, which a
+    // session-only sign-in (e.g. builtin:share-publishing) deliberately lacks. Refuse before any network
+    // call, registry write or upload. A signer-backed (local-key) owner has full authority.
+    const addressedEncryptionNetwork = targetInput.target.kind === "bearer" ? undefined : node.getEncryptionNetworkIdForSpace(ownerSpaceId);
+    if (addressedEncryptionNetwork !== undefined && node.isSessionOnly && !node.hasRuntimePermissions([{
+      service: "tinycloud.encryption",
+      path: addressedEncryptionNetwork,
+      actions: ["tinycloud.encryption/decrypt"],
+    }])) {
+      throw new SharePublishAuthorityError({ kind: "decrypt-not-held" });
+    }
     const activeNode = await node.activeNodeIdentity();
     if (targetInput.notify === true && targetInput.target.kind === "emailDomain") {
       await assertDomainDeliveryForOrigin(activeNode.origin, "publish");
@@ -773,7 +784,7 @@ export function createShareAuthorityAdapters(input: {
         || (error instanceof LocationRegistryHttpError && error.status >= 400 && error.status < 500 && error.status !== 408 && error.status !== 429);
       throw new SharePublishAuthorityError({ kind: rejected ? "registry-rejected" : "registry-unavailable" });
     }
-    const encryptionNetwork = node.getEncryptionNetworkIdForSpace(ownerSpaceId);
+    const encryptionNetwork = addressedEncryptionNetwork!;
     const encrypted = await node.encryption.encryptToNetwork(encryptionNetwork, file.bytes, { metadata: { contentType: mediaType } });
     if (!encrypted.ok) throw new Error("addressed source encryption was rejected");
     const storedBytes = new TextEncoder().encode(canonicalize(encrypted.data as unknown as Record<string, unknown>));

@@ -224,6 +224,14 @@ export function shareCliError(error: unknown, operation: "publish" | "notify" = 
     if (failure.kind === "upload-failed") {
       return new CLIError("UPLOAD_FAILED", "share source upload failed; nothing was shared", 4);
     }
+    if (failure.kind === "decrypt-not-held") {
+      return new CLIError(
+        "PERMISSION_DENIED",
+        "this sign-in can't create email-addressed shares: it has no permission to decrypt with the account's key. Nothing was shared.",
+        5,
+        { hint: "Share it from https://share.tinycloud.xyz while signed in as the account owner, or ask the owner to share it. A link anyone can open works from this sign-in: --to anyone." },
+      );
+    }
   }
   // Fixed SDK refusals (invalid or mismatched recipient); never remote text.
   if (error instanceof ShareNotifyError) {
@@ -609,7 +617,7 @@ export function registerShareCommand(program: Command): void {
         if (shareServices.records === undefined) throw new CLIError("AUTH_REQUIRED", "sender history storage is not configured", 3);
         const result = await listShares(shareServices.records);
         if (json) writeJson({ protocol: "tinycloud-share", version: 1, shares: result });
-        else process.stdout.write(result.map((item) => `${item.shareId}\t${item.target}\t${item.expiresAt}`).join("\n") + (result.length ? "\n" : ""));
+        else process.stdout.write(result.map((item) => `${item.shareId}\t${item.target}\t${item.expiresAt}\t${item.revoked ? "revoked" : Date.parse(item.expiresAt) < Date.now() ? "expired" : "active"}`).join("\n") + (result.length ? "\n" : ""));
       } catch (error) { return handleError(shareCliError(error)); }
     });
 

@@ -110,13 +110,18 @@ function metadataFor(envelope: ShareEnvelopeV3, origin: string): ShareMetadata {
 async function resolvePolicyShare(link: string, options: ShareFetchOptions): Promise<{ readonly envelope: ShareEnvelopeV3; readonly origin: string; readonly cid: string }> {
   options.signal?.throwIfAborted();
   let url: URL;
-  let parsed: Awaited<ReturnType<typeof parseSealedInlineShareUrl>>;
   try {
     url = new URL(link);
-    parsed = await parseSealedInlineShareUrl(link, { ...(options.expectedOrigin === undefined ? {} : { expectedOrigin: options.expectedOrigin }) });
   } catch {
     throw new ShareReceiveError("invalid-link", "share link format is invalid");
   }
+  // A well-formed link at an untrusted origin is an origin mismatch, not a format error (matches short links).
+  if (options.expectedOrigin !== undefined && url.origin !== options.expectedOrigin) {
+    throw new ShareReceiveError("origin-mismatch", "share link origin does not match the trusted viewer origin");
+  }
+  const parsed = await parseSealedInlineShareUrl(link, { ...(options.expectedOrigin === undefined ? {} : { expectedOrigin: options.expectedOrigin }) }).catch(() => {
+    throw new ShareReceiveError("invalid-link", "share link format is invalid");
+  });
   const limit = options.maxSealedBlobBytes ?? DEFAULT_MAX_SEALED_BLOB_BYTES;
   if (!Number.isSafeInteger(limit) || limit <= 0 || parsed.ciphertext.byteLength > limit) throw new ShareReceiveError("max-bytes-exceeded", "sealed policy envelope exceeds the configured byte limit");
   if (await computeCid(parsed.ciphertext) !== parsed.ciphertextCid) throw new ShareReceiveError("cid-mismatch", "sealed envelope bytes do not match the link CID");

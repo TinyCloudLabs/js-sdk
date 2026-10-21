@@ -31,6 +31,8 @@ const uploadedSpaces: string[] = [];
 const uploadedPaths: string[] = [];
 const encryptionSpaces: string[] = [];
 let sessionOnly = true;
+let holdsDecrypt = true;
+const decryptChecks: unknown[] = [];
 let invokerDid = credentialHolderDid;
 let nodeInfoStatus = 200;
 const nodeInfoRequests: RequestInit[] = [];
@@ -141,6 +143,10 @@ const node = {
   getEncryptionNetworkIdForSpace: (spaceId: string) => {
     encryptionSpaces.push(spaceId);
     return `urn:tinycloud:encryption:${credentialHolderDid}:default`;
+  },
+  hasRuntimePermissions: (entries: unknown) => {
+    decryptChecks.push(entries);
+    return holdsDecrypt;
   },
   encryption: {
     encryptToNetwork: async (networkId: string) => {
@@ -288,6 +294,8 @@ afterEach(() => {
   nativeSpaceId = "tinycloud:test-space";
   uploadedPaths.length = 0;
   sessionOnly = true;
+  holdsDecrypt = true;
+  decryptChecks.length = 0;
   invokerDid = credentialHolderDid;
   nodeInfoStatus = 200;
   nodeInfoRequests.length = 0;
@@ -963,6 +971,43 @@ describe("TinyCloud share authority adapter", () => {
     expect("state" in bearer).toBe(false);
     expect(preflightRequests).toEqual([]);
     expect(uploadedPaths).toHaveLength(2);
+  });
+
+  it("refuses an addressed share before any request when a session-only sign-in lacks decrypt on the encryption network (TC-1753)", async () => {
+    holdsDecrypt = false;
+    const error = await addressedAdapter().publish(addressedInput({ kind: "email", address: "owner@example.com" })).then(() => undefined, (caught: unknown) => caught);
+    expect(error).toBeInstanceOf(SharePublishAuthorityError);
+    expect((error as InstanceType<typeof SharePublishAuthorityError>).failure).toEqual({ kind: "decrypt-not-held" });
+    expect(decryptChecks).toEqual([[{
+      service: "tinycloud.encryption",
+      path: `urn:tinycloud:encryption:${credentialHolderDid}:default`,
+      actions: ["tinycloud.encryption/decrypt"],
+    }]]);
+    // No registry write, upload, encryption, signing or policy registration.
+    expect(publishEvents).toEqual([]);
+    expect(uploadedPaths).toEqual([]);
+    expect(encryptions).toBe(0);
+    expect(ownerRootInputs).toEqual([]);
+    expect(sessionSignatures).toEqual([]);
+    expect(registeredPolicies).toEqual([]);
+    expect(nodeInfoRequests).toEqual([]);
+  });
+
+  it("still publishes addressed shares for a session that holds decrypt, and for a signer-backed owner without a session grant", async () => {
+    const held = await addressedAdapter().publish(addressedInput({ kind: "email", address: "owner@example.com" }));
+    expect("state" in held).toBe(false);
+    holdsDecrypt = false;
+    sessionOnly = false;
+    const local = await addressedAdapter().publish(addressedInput({ kind: "email", address: "owner@example.com" }));
+    expect("state" in local).toBe(false);
+    expect(uploadedPaths).toHaveLength(2);
+  });
+
+  it("does not ask for decrypt on a bearer share", async () => {
+    holdsDecrypt = false;
+    const bearer = await addressedAdapter().publish(addressedInput({ kind: "bearer" }));
+    expect("state" in bearer).toBe(false);
+    expect(decryptChecks).toEqual([]);
   });
 
   it("keeps a lost-response retry identical after the clock advances and the adapter is recreated", async () => {
