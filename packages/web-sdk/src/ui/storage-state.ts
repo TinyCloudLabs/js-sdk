@@ -95,3 +95,86 @@ export function afterAuthority(outcome: {
   if (outcome.code === "unsupported") return { kind: "unavailable" };
   return { kind: "error", code: outcome.code };
 }
+
+/** The button the panel offers for a view. `allow` and `try_again` ask for authority; `retry` re-reads. */
+export type StorageAction = "allow" | "try_again" | "retry";
+
+/** Byte amounts shown with a number. Only `known` and `unlimited` carry one. */
+export interface StorageUsageView {
+  readonly key: "storage.usage.known" | "storage.usage.unlimited";
+  readonly usedBytes: number;
+  readonly limitBytes?: number;
+  /** Bar fill, 0 to 100. Only for `known`. */
+  readonly percent?: number;
+}
+
+/** Copy keys and numbers for one render. Keys, not strings: the section looks them up. */
+export interface StorageModel {
+  readonly wordKey?: string;
+  readonly noteKey?: string;
+  readonly usage?: StorageUsageView;
+  readonly action?: StorageAction;
+}
+
+const STATE_KEYS: Readonly<Record<StorageUsageState, string>> = {
+  ok: "storage.state.ok",
+  nearly_full: "storage.state.nearly_full",
+  full: "storage.state.full",
+};
+
+const ERROR_KEYS: ReadonlyMap<string, string> = new Map([
+  ["NETWORK_ERROR", "storage.error.network"],
+  ["AUTH_UNAUTHORIZED", "storage.error.auth"],
+]);
+
+function percentFull(usedBytes: number, limitBytes: number): number {
+  if (limitBytes <= 0) return 100;
+  return Math.min(100, Math.round((usedBytes * 100) / limitBytes));
+}
+
+function viewModel(view: StorageViewState): StorageModel {
+  switch (view.kind) {
+    case "signed_out":
+      return {};
+    case "loading":
+      return { wordKey: "storage.checking" };
+    case "known":
+      return {
+        wordKey: STATE_KEYS[view.state],
+        usage: {
+          key: "storage.usage.known",
+          usedBytes: view.usedBytes,
+          limitBytes: view.limitBytes,
+          percent: percentFull(view.usedBytes, view.limitBytes),
+        },
+      };
+    case "unlimited":
+      return {
+        wordKey: "storage.state.unlimited",
+        usage: { key: "storage.usage.unlimited", usedBytes: view.usedBytes },
+      };
+    case "needs_permission":
+      return { noteKey: "storage.permission", action: "allow" };
+    case "declined":
+      return { noteKey: "storage.declined", action: "try_again" };
+    case "unavailable":
+      return { noteKey: "storage.unavailable" };
+    case "error":
+      return {
+        noteKey: ERROR_KEYS.get(view.code) ?? "storage.error.generic",
+        action: "retry",
+      };
+  }
+}
+
+/**
+ * What the panel renders for a view. An own-storage episode (`storage.full` fired
+ * and no successful write since) wins over the status read: it shows the full word
+ * and drops numbers, because a 413 can arrive while status still says `ok` (contract §3.3).
+ * The note and action of a failed read stay, so the user can still retry.
+ */
+export function storageModel(view: StorageViewState, episodeOn: boolean): StorageModel {
+  const base = viewModel(view);
+  if (!episodeOn || view.kind === "signed_out") return base;
+  return { wordKey: "storage.state.full", noteKey: base.noteKey, action: base.action };
+}
