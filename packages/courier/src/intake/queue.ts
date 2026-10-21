@@ -7,9 +7,9 @@ import { isRecord } from '../a2a.js';
 /**
  * Creates a directory and refuses anything that is not a real directory (a symlink in its place is refused). `mode`
  * applies only to a directory this call creates; an existing directory keeps its mode, so a provisioned root (for
- * example setgid 2750) is never rewritten.
+ * example setgid 2750) is never rewritten. Returns true when this call created the directory.
  */
-export function ensureRealDir(dir: string, mode: number): void {
+export function ensureRealDir(dir: string, mode: number): boolean {
   let existed = true;
   try {
     fs.lstatSync(dir);
@@ -23,10 +23,11 @@ export function ensureRealDir(dir: string, mode: number): void {
     throw new CourierError('unsafe-dir', 'queue or state path is not a real directory');
   }
   if (!existed && stat.uid === process.getuid?.() && (stat.mode & 0o7777) !== mode) fs.chmodSync(dir, mode);
+  return !existed;
 }
 
 /** Makes a link or rename in `dir` durable: the directory entry is fsynced, not only the file contents. */
-function fsyncDir(dir: string): void {
+export function fsyncDir(dir: string): void {
   const fd = fs.openSync(dir, 'r');
   try {
     fs.fsyncSync(fd);

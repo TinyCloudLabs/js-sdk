@@ -391,22 +391,22 @@ export async function cmdRevoke(args: ParsedArgs) {
 
 // ---------- send ----------
 
-export async function cmdSend(args: ParsedArgs) {
-  const { profile, node } = await ctx();
-  const peerHandle = args.positional[0] ?? fail('usage', sendUsage());
-  const peer = getPeer(profile, peerHandle);
-  const which = oneOf(args, ['new', 'thread']);
-  const threadId = which === 'new' ? ulid() : which === 'thread' ? requireFlag(args, 'thread', sendUsage()) : fail('usage', sendUsage());
-  const subject = args.get('new');
-  const intentRaw = args.get('intent') ?? 'request';
-  if (!INTENTS.includes(intentRaw as Intent)) fail('usage', `--intent must be one of: ${INTENTS.join(', ')}`);
-  const text = readTextArg(args, '--text or --file is required (or pipe the body on stdin)');
-  if (text.length > 256 * 1024) fail('too-large', 'Message body exceeds the 256 KB inline limit (§4) — put it under files/ instead.');
+export type SendInput = {
+  which: 'new' | 'thread';
+  threadId: string;
+  subject?: string;
+  text: string;
+  intent: Intent;
+  asks: { id: string; title: string }[];
+  constraints: string[];
+  inReplyTo: string | null;
+  referenceTaskIds: string[];
+};
+
+/** Writes one outbound message (and thread meta for a new thread) to the peer's mirror. Shared by `courier send` and the outbox. */
+export async function sendMessage(node: TinyCloudNode, profile: Profile, peerHandle: string, peer: StoredPeer, input: SendInput): Promise<CourierMessage> {
+  const { which, threadId, subject, text, intent, asks, constraints, inReplyTo, referenceTaskIds } = input;
   const from = { owner: profile.ownerDid!, agent: profile.courierDid, label: profile.label };
-  const asks = args.all('ask').map((title, i) => ({ id: `a${i + 1}`, title }));
-  const constraints = args.all('constraint');
-  const inReplyTo = args.get('reply-to') ?? null;
-  const referenceTaskIds = args.all('task-ref');
   const startedByMe = which === 'new' || Boolean(await getJson(node.kv, k.threadMeta(peerHandle, threadId)));
   let refsOwnTask = false;
   let refsAnyTask = false;
@@ -423,7 +423,7 @@ export async function cmdSend(args: ParsedArgs) {
     }
   }
   const msg = buildMessage({
-    threadId, text, from, intent: intentRaw as Intent, asks, constraints, inReplyTo, referenceTaskIds,
+    threadId, text, from, intent, asks, constraints, inReplyTo, referenceTaskIds,
     role: messageRole({ startedByMe, refsOwnTask, refsAnyTask }),
   });
   if (which === 'new') {
@@ -435,12 +435,33 @@ export async function cmdSend(args: ParsedArgs) {
     await putCreate(node.kv, k.threadMeta(peerHandle, threadId), meta);
   }
   await putCreate(node.kv, k.msg(peerHandle, threadId, msg.messageId), msg);
+  return msg;
+}
+
+export async function cmdSend(args: ParsedArgs) {
+  const { profile, node } = await ctx();
+  const peerHandle = args.positional[0] ?? fail('usage', sendUsage());
+  const peer = getPeer(profile, peerHandle);
+  const which = oneOf(args, ['new', 'thread']);
+  const threadId = which === 'new' ? ulid() : which === 'thread' ? requireFlag(args, 'thread', sendUsage()) : fail('usage', sendUsage());
+  const subject = args.get('new');
+  const intentRaw = args.get('intent') ?? 'request';
+  if (!INTENTS.includes(intentRaw as Intent)) fail('usage', `--intent must be one of: ${INTENTS.join(', ')}`);
+  const text = readTextArg(args, '--text or --file is required (or pipe the body on stdin)');
+  if (text.length > 256 * 1024) fail('too-large', 'Message body exceeds the 256 KB inline limit (§4) — put it under files/ instead.');
+  const msg = await sendMessage(node, profile, peerHandle, peer, {
+    which: which === 'new' ? 'new' : 'thread', threadId, subject, text, intent: intentRaw as Intent,
+    asks: args.all('ask').map((title, i) => ({ id: `a${i + 1}`, title })),
+    constraints: args.all('constraint'),
+    inReplyTo: args.get('reply-to') ?? null,
+    referenceTaskIds: args.all('task-ref'),
+  });
   printJson({ ok: true, threadId, messageId: msg.messageId, peer: peerHandle, intent: intentRaw, role: msg.role });
 }
 
 const sendUsage = () => `Usage: ${cmd('send <peer> (--new <subject> | --thread <id>) [--text t | --file f | stdin] [--intent i] [--ask "…"]… [--reply-to id]')}`;
 
-function readTextArg(args: ParsedArgs, usage: string): string {
+export function readTextArg(args: ParsedArgs, usage: string): string {
   const t = args.get('text');
   if (t !== undefined && t !== 'true') return t;
   const file = args.get('file');
