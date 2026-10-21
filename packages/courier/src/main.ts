@@ -6,6 +6,7 @@ import {
 import { cmd, programName, setProgramName } from './program.js';
 import { cmdWatch } from './watch-cmd.js';
 import { cmdIntake } from './intake/intake.js';
+import { cmdOutbox } from './outbox.js';
 import { cmdApproval } from './approval.js';
 import { cmdPause, cmdResume } from './pause.js';
 import { cmdGuard } from './guard/command.js';
@@ -100,6 +101,13 @@ Delivery (one watcher per person per machine; never calls a model):
   intake [--queue-dir d] [--peers-file f] [--state-dir d] [--interval 60] [--once]
                                    Intake reader: copy paired peers' mirrored messages into the local queue
                                    (one <msgId>.json per message) with cheap checks. Never calls a model.
+  outbox add <peer> (--thread <id> | --new <subject>) [--text t | --file f | stdin] [--outbox-dir d]
+                                   Queue one message for a paired peer as a single-use outbox item. Text limit:
+                                   2000 characters (8 KiB UTF-8); subject limit: 200 characters.
+  outbox serve --pipe <socket> [--outbox-dir d] [--socket-group courier-sender] [--peers-file f]
+               [--sent-dir d] [--once] [--dry-run]
+                                   Sender: accept one-line item requests over a Unix socket and send the
+                                   named outbox item. Replies are ok or refused:<code>.
 
   pause <peer> <threadId> [--reason "…"]   Humans: stop waking your agent for a thread; tells the peer
   resume <peer> <threadId>                 Humans: wake it again (the wake budget starts over)
@@ -142,6 +150,7 @@ export async function run(argv: string[]): Promise<void> {
     case 'orders': return cmdOrders(sub);
     case 'watch': return cmdWatch(sub);
     case 'intake': return cmdIntake(sub);
+    case 'outbox': return cmdOutbox(sub);
     case 'approval': return cmdApproval(sub);
     case 'pause': return cmdPause(sub);
     case 'resume': return cmdResume(sub);
