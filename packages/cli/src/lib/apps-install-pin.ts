@@ -16,7 +16,7 @@ export interface PinnedFile {
 
 export interface PinnedApp {
   readonly appId: string;
-  /** SQLite database inside the applications space that the app's schema.sql targets. */
+  /** SQLite database in the applications space that the app's schema.sql targets, named `<app_id>/<name>` as `--db` takes it. */
   readonly database: string;
   /** Bundle digest; the bundle root is `/apps/b/<bundleDigest>/`. */
   readonly bundleDigest: string;
@@ -29,7 +29,7 @@ const HEALTHLOG_ID = "xyz.tinycloud.sample.healthlog";
 const PINNED: Readonly<Record<string, PinnedApp>> = {
   [HEALTHLOG_ID]: {
     appId: HEALTHLOG_ID,
-    database: "healthlog",
+    database: `${HEALTHLOG_ID}/healthlog`,
     bundleDigest: "dc3ec19fffce8fee350944469948531659a258347538a98aacdd5544deea5014",
     files: [
       { path: "schema.sql", sha256: "bb46ab35ac7887f672beba2f50b9f982c31d41607b3fa77ac9c2e72003edf199", size: 4105 },

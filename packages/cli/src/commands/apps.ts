@@ -5,7 +5,7 @@ import type { TinyCloudNode } from "@tinycloud/node-sdk";
 import { ProfileManager } from "../config/profiles.js";
 import { ExitCode } from "../config/constants.js";
 import { ensureAuthenticated } from "../lib/sdk.js";
-import { resolveSpaceUri } from "../lib/space.js";
+import { operationSpaceResolver } from "@tinycloud/operations/delegation-binding";
 import { assertKnowledgeAppId } from "../lib/knowledge-input.js";
 import { pinnedApp } from "../lib/apps-install-pin.js";
 import { AppsInstallError, installApp, type InstallIo, type InstallResult } from "../lib/apps-install.js";
@@ -37,8 +37,9 @@ Examples:
 
         const ctx = await ProfileManager.resolveContext(cmd.optsWithGlobals());
         const node = await ensureAuthenticated(ctx);
-        const spaceUri = await resolveSpaceUri(APPLICATIONS_SPACE, ctx.profile);
-        if (!spaceUri) throw new CLIError("NOT_FOUND", "The applications space is not available for this profile", ExitCode.NOT_FOUND);
+        const profile = await ProfileManager.getProfile(ctx.profile);
+        // Same owner-aware resolution as `knowledge list`: a delegate session's applications space is the owner's, not the delegate's address.
+        const spaceUri = operationSpaceResolver(node, profile.spaceId)(APPLICATIONS_SPACE);
         const io = appsInstallIo(node, spaceUri, entry.database);
 
         const result = await withSpinner(`Installing ${appId}...`, () => installApp(appId, io)).catch((error: unknown) => {

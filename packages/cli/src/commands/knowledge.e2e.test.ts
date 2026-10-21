@@ -322,6 +322,58 @@ describe.skipIf(!NODE_BIN)("tinycloud knowledge against a real node", () => {
     expect((await cli("owner", ["sql", "query", "SELECT name FROM sqlite_master WHERE name = 'extra'", "--db", CAT_DB, "--space", "applications"])).json().rows).toEqual([]);
   }, 180_000);
 
+  test("apps install as a delegate-session agent: installs, re-runs as already, reports owner-edited notes, repairs an altered view, and refuses a CREATE outside its database", async () => {
+    const CAT = "xyz.tinycloud.sample.healthlog";
+    const CAT_DB = `${CAT}/healthlog`;
+    const CAT_INDEX = `${CAT}/knowledge/index.md`;
+    await newAgent("installer");
+    await grantAgent("installer", ["--preset", "apps-agent", "--write", "--app", CAT]);
+
+    const first = await cli("installer", ["apps", "install", CAT]);
+    expect(first.exitCode).toBe(0);
+    expect(first.json()).toMatchObject({
+      appId: CAT,
+      status: "installed",
+      database: CAT_DB,
+      conflicts: [],
+      tablesCreated: ["meal", "weight"],
+      viewsRecreated: ["day_card", "week_rollup"],
+    });
+    expect(first.json().filesWritten).toHaveLength(10);
+
+    const second = await cli("installer", ["apps", "install", CAT]);
+    expect(second.exitCode).toBe(0);
+    expect(second.json()).toMatchObject({
+      status: "already",
+      filesWritten: [],
+      conflicts: [],
+      tablesCreated: [],
+      viewsRecreated: ["day_card", "week_rollup"],
+    });
+
+    // The owner edits the index. The agent's next run reports it and leaves the owner's bytes alone.
+    const ownerIndex = join(root, "owner-index.md");
+    await writeFile(ownerIndex, "owner notes: keep this\n");
+    expect((await cli("owner", ["kv", "put", "--space", "applications", CAT_INDEX, "--file", ownerIndex])).exitCode).toBe(0);
+    const edited = await cli("installer", ["apps", "install", CAT]);
+    expect(edited.exitCode).toBe(0);
+    expect(edited.json()).toMatchObject({ status: "already", conflicts: ["knowledge/index.md"] });
+    expect((await cli("owner", ["kv", "get", "--space", "applications", CAT_INDEX, "--raw"])).stdout).toBe("owner notes: keep this\n");
+
+    // The agent alters a pinned view. The next run puts the pinned definition back.
+    expect((await cli("installer", ["sql", "execute", "DROP VIEW day_card", "--db", CAT_DB, "--space", ownerSpace])).exitCode).toBe(0);
+    expect((await cli("installer", ["sql", "execute", "CREATE VIEW day_card AS SELECT 0 AS altered", "--db", CAT_DB, "--space", ownerSpace])).exitCode).toBe(0);
+    const repaired = await cli("installer", ["apps", "install", CAT]);
+    expect(repaired.exitCode).toBe(0);
+    expect(repaired.json().viewsRecreated).toEqual(["day_card", "week_rollup"]);
+    const dayCard = await cli("owner", ["sql", "query", "SELECT sql FROM sqlite_master WHERE type = 'view' AND name = 'day_card'", "--db", CAT_DB, "--space", "applications"]);
+    expect(dayCard.json().rows).toHaveLength(1);
+    expect(JSON.stringify(dayCard.json().rows)).not.toContain("altered");
+
+    // The grant covers CREATE in its own database only. A CREATE in another database is refused for the agent.
+    expect((await cli("installer", ["sql", "execute", "CREATE TABLE IF NOT EXISTS extra (x TEXT)", "--db", `${CAT}/other`, "--space", ownerSpace])).exitCode).not.toBe(0);
+  }, 180_000);
+
   test("the owner-side text follows what will be signed, not the requester's wording", async () => {
     await newAgent("tamper");
     const long = await grantAgent("tamper", ["--preset", "apps-agent"], (request) => {
