@@ -249,7 +249,7 @@ export interface Config extends ClientConfig {
   retryPolicy?: Partial<RetryPolicy>;
   /** Accountless share receiver transport and session-custody configuration. */
   shareReceiver?: ShareReceiverServiceOptions;
-  /** Floating button, panel, and toasts. `false` creates no host, button, or toasts, and SDK prompts fail closed. See {@link UiConfig}. */
+  /** Floating button, panel, and toasts. `false` creates no host, button, toasts, or listeners. See {@link UiConfig}. */
   ui?: UiConfig | false;
 }
 
