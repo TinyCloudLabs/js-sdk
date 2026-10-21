@@ -333,6 +333,24 @@ describe("scoped dismissal", () => {
     expect(calls).toEqual({ a: 1, b: 1 });
   });
 
+  test("a throwing dismiss does not stop later prompts in the same scope", () => {
+    const scope = createPromptScope(true);
+    const calls = { first: 0, second: 0 };
+    mountPrompt(scope, new FakeNode() as unknown as HTMLElement, () => {
+      calls.first += 1;
+      throw new Error("probe dismiss");
+    });
+    mountPrompt(scope, new FakeNode() as unknown as HTMLElement, () => {
+      calls.second += 1;
+    });
+
+    expect(() => dismissPrompts(scope)).toThrow("probe dismiss");
+    expect(calls).toEqual({ first: 1, second: 1 });
+
+    stopPrompts();
+    expect(calls).toEqual({ first: 1, second: 1 });
+  });
+
   test("a released prompt is no longer dismissed by teardown", () => {
     const scope = createPromptScope(true);
     let dismissed = 0;
