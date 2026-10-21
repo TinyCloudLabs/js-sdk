@@ -2012,6 +2012,8 @@ export async function acquireAgentGrant(params: {
   requestedExpiry: string | undefined;
   reason: string;
   openKeyAcquisition?: OpenKeyAcquisition;
+  /** Whether no terminal is attached. Defaults to detecting stdin/stderr TTY. */
+  headless?: boolean;
 }): Promise<PortableDelegation> {
   if (params.requested.some((permission) => isRawEncryptionPermission(permission) || isRawCidRevocationPermission(permission))) {
     throw new CLIError(
@@ -2039,6 +2041,8 @@ export async function acquireAgentGrant(params: {
     reason: permissionGrantReason(params.reason, request),
     openkeyHost: resolveOpenKeyHost(params.profile),
     expiry: openKeyExpiryParam(expiry),
+    // Headless: print the approval URL and wait for the callback; no browser is launched.
+    noPopup: params.headless ?? !(process.stdin.isTTY || process.stderr.isTTY),
   });
   const verified = await verifyAgentApproval(data, {
     sessionDid: params.sessionDid,
