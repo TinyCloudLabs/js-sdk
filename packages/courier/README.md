@@ -650,8 +650,9 @@ courier intake --interval 60 --queue-dir <dir> --state-dir <dir> --peers-file <f
 ```
 
 Defaults for `--queue-dir`, `--state-dir` and `--peers-file` are under
-`<COURIER_HOME>/intake/`. Only peers with status `paired` are read. A lock file in
-the state directory keeps one intake process per profile.
+`<COURIER_HOME>/intake/`. Only peers with status `paired` are read. `intake.lock` in the state directory allows one
+intake process per state directory: a live holder always refuses a second start, a lock whose pid is gone is broken,
+and an unreadable lock refuses.
 
 Queue record (`<queue-dir>/<peerId>/<msgId>.json`): peer queue directories are created
 with mode 2750 (setgid) and only directories created by that call are chmodded. Records
@@ -668,23 +669,27 @@ Flags, in this order: `too-long`, `link`, `instruction`, `request`, `secret-requ
 `encoded`, `unicode`, `size`, `rate`. They are cheap heuristics for the reader, not
 a verdict on content.
 
-Ordering: each cycle reads a peer's mirror in message-id order and examines up to 200 mirror rows. It stores the last
-id examined as a cursor in `intake-state.json`; the next cycle resumes after it, and once the mirror is exhausted it
-starts again from the oldest id. A message is skipped when a queue, done or overflow file for its id already exists.
-A message whose id time is older than 7 days gets a done marker (outcome `stale`) and is not queued. A message id more
-than 10 minutes ahead of local time is not recorded and does not block the other messages: the cursor moves past it,
-so it is retried only when the cursor next wraps around the mirror. Existing history is not queued if you run
+Ordering: each cycle reads at most 200 mirror messages per peer. A cyclic cursor in `intake-state.json` marks the last
+id picked; the next cycle takes the next 200 ids after it in ascending order and wraps to the oldest id after the
+newest. Ids more than 7 days old by message time are dropped before selection: they are not fetched and get no marker,
+and a queue record that old moves to `done/`. A message is skipped when a queue, done or overflow file for its id
+already exists. A message id more than 10 minutes ahead of local time is not recorded and does not block the others:
+the cursor moves past it, so it is retried only when the cursor next wraps around the mirror. A malformed or
+mismatched mirror row gets a done marker (outcome `bad-id` or `mismatch`). A message whose processing throws is logged
+as `intake-error`, and the cursor still moves past it. Existing history is not queued if you run
 `courier intake --init-from-now` first. It marks the current mirror messages of each paired peer as done (outcome
 `init`), and it refuses to run again while a paired peer has done entries unless `--force` is given. Without it, the
-first cycle works through the backlog from the oldest id, 200 rows per cycle.
+first cycle works through the backlog from the oldest id inside the 7-day window, 200 rows per cycle.
 
 Rate: each peer is limited to 100 inbound messages per hour by default, including
 peers absent from `peers.json`. Over the cap, the message is not queued. It is written
 to the overflow directory (`<COURIER_HOME>/intake/overflow/<peerId>/`, directories 0700,
-files 0600), where it is kept until its message passes the stale horizon (7 days). Each peer's
-overflow is capped at 200 files and 1 MiB; the oldest messages are dropped first. The first overflow in each hour also writes
-one `rate-<unixHour>` record to the queue with `peerRatePerHourRemaining: 0` and the
-`rate` flag.
+files 0600), where it is kept until its message is 7 days old by message time. Each peer's overflow is capped at 200
+files and 1 MiB; the oldest messages are dropped first. Each cycle retires at most 500 expired files and at most 500
+over-cap files per peer. Each retirement writes an `overflow` done marker before the unlink, so the id is not admitted
+again when the cursor laps. The first overflow in each hour also writes one `rate-<unixHour>` record to the queue with
+`peerRatePerHourRemaining: 0` and the `rate` flag. After a start, the hour's count is rebuilt from `receivedAt` in
+queue and done records whose files were modified within the last hour.
 
 `peers.json` must not be group- or world-writable and maps a peer id to
 `{"tier": "trusted"|"strict", "ratePerHour": n, "outPerHour": n}`. `tier` defaults to

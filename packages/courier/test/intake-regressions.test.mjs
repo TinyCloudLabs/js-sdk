@@ -298,77 +298,15 @@ test('a message retired by the overflow cap is not admitted on a later cycle', a
   assert.equal(h.overflowFiles(HANDLE).length, 200);
 });
 
-test('a fresh lock file with no pid yet is a live holder mid-write, so it is refused and kept', async () => {
-  const { acquireLock } = await import('../dist/intake/queue.js');
-  const h = harness();
-  const file = path.join(h.dirs.stateDir, 'fresh-empty.lock');
-  fs.writeFileSync(file, '');
-  assert.throws(() => acquireLock(file), { code: 'locked' });
-  assert.equal(fs.readFileSync(file, 'utf8'), '');
-});
-
-test('an empty lock file left by a crash is taken over once it is old', async () => {
+test('an unparseable lock file is refused however old it is, and is never broken', async () => {
   const { acquireLock } = await import('../dist/intake/queue.js');
   const h = harness();
   const file = path.join(h.dirs.stateDir, 'old-empty.lock');
   fs.writeFileSync(file, '');
-  const old = new Date(Date.now() - 60_000);
+  const old = new Date(Date.now() - 365 * DAY);
   fs.utimesSync(file, old, old);
-  const release = acquireLock(file);
-  assert.equal(fs.readFileSync(file, 'utf8').trim(), String(process.pid));
-  release();
-});
-
-test('a contender retiring an aged takeover guard does not unlink a fresh guard written meanwhile', async () => {
-  const { acquireLock } = await import('../dist/intake/queue.js');
-  const h = harness();
-  const file = path.join(h.dirs.stateDir, 'stale-holder.lock');
-  const guard = `${file}.takeover`;
-  fs.writeFileSync(file, '2147483646\n');
-  fs.writeFileSync(guard, '2147483645\n');
-  const old = new Date(Date.now() - 60_000);
-  fs.utimesSync(guard, old, old);
-  const realRename = fs.renameSync;
-  let injected = false;
-  mock.method(fs, 'renameSync', (from, to) => {
-    if (String(from) === guard && !injected) {
-      injected = true;
-      // A rival retires the abandoned guard and claims a fresh one for a live process (this test's parent).
-      fs.rmSync(guard, { force: true });
-      fs.writeFileSync(guard, `${process.ppid}\n`);
-    }
-    return realRename(from, to);
-  });
-  try {
-    assert.throws(() => acquireLock(file), { code: 'locked' });
-  } finally {
-    mock.restoreAll();
-  }
-  assert.equal(fs.readFileSync(guard, 'utf8'), `${process.ppid}\n`);
-  assert.equal(fs.readFileSync(file, 'utf8'), '2147483646\n');
-});
-
-test('a contender is refused while a takeover of the same dead lock is in progress', async () => {
-  const { acquireLock } = await import('../dist/intake/queue.js');
-  const h = harness();
-  const file = path.join(h.dirs.stateDir, 'busy.lock');
-  fs.writeFileSync(file, '2147483646\n');
-  fs.writeFileSync(`${file}.takeover`, '1 another-contender\n');
   assert.throws(() => acquireLock(file), { code: 'locked' });
-  assert.equal(fs.readFileSync(file, 'utf8'), '2147483646\n');
-});
-
-test('a takeover guard left by a crashed contender expires and the dead lock is taken over', async () => {
-  const { acquireLock } = await import('../dist/intake/queue.js');
-  const h = harness();
-  const file = path.join(h.dirs.stateDir, 'crashed-guard.lock');
-  fs.writeFileSync(file, '2147483646\n');
-  fs.writeFileSync(`${file}.takeover`, '1 crashed-contender\n');
-  const old = new Date(Date.now() - 60_000);
-  fs.utimesSync(`${file}.takeover`, old, old);
-  const release = acquireLock(file);
-  assert.equal(fs.readFileSync(file, 'utf8').trim(), String(process.pid));
-  release();
+  assert.equal(fs.readFileSync(file, 'utf8'), '');
 });
 
 test('a peers file swapped for a symlink between check and read is not trusted', async () => {
@@ -439,4 +377,251 @@ test('an overflowing ULID is rejected before any filesystem lookup', async () =>
   }
   assert.equal(idLookups, 0);
   assert.equal(h.doneFiles(HANDLE).length, 0);
+});
+
+function countGets(kv) {
+  const keys = [];
+  const real = kv.get;
+  kv.get = async (key) => {
+    keys.push(key);
+    return real(key);
+  };
+  return keys;
+}
+
+function messageFiles(h) {
+  return [...h.queueFiles(HANDLE), ...h.overflowFiles(HANDLE)].filter((x) => !x.startsWith('rate-')).sort();
+}
+
+test('a late older message is queued despite a newer arrival every hour', async () => {
+  const h = harness({ batch: 2 });
+  for (let i = 0; i < 4; i++) await putMessage(h.kv, ulid(NOW - (4 - i) * HOUR), [{ text: 'old' }]);
+  const late = ulid(NOW - 3 * HOUR - 30 * 60_000);
+  let admitted;
+  for (let c = 0; c < 170; c++) {
+    const clock = NOW + c * HOUR;
+    h.setClock(clock);
+    if (c === 3) await putMessage(h.kv, late, [{ text: 'late' }]);
+    await putMessage(h.kv, ulid(clock - 60_000), [{ text: 'new' }]);
+    await intakeCycle(h.input);
+    if (admitted === undefined && h.queueFiles(HANDLE).includes(`${late}.json`)) admitted = c;
+  }
+  assert.notEqual(admitted, undefined);
+});
+
+test('a batch cap of three takes ten messages in four cycles with no repeats', async () => {
+  const h = harness({ batch: 3 });
+  for (let i = 0; i < 10; i++) await putMessage(h.kv, ulid(NOW - HOUR + i), [{ text: 'x' }]);
+  const seen = [];
+  for (let c = 0; c < 4; c++) {
+    await intakeCycle(h.input);
+    seen.push(messageFiles(h).length);
+  }
+  assert.deepEqual(seen, [3, 6, 9, 10]);
+});
+
+test('a message whose fetch throws does not stop the cursor', async () => {
+  const h = harness({ batch: 1 });
+  const ids = [ulid(NOW - 3 * HOUR), ulid(NOW - 2 * HOUR), ulid(NOW - HOUR)];
+  for (const id of ids) await putMessage(h.kv, id, [{ text: 'x' }]);
+  const realGet = h.kv.get;
+  const bad = k.mirrorMsg(HANDLE, THREAD, ids[0]);
+  h.kv.get = async (key) => {
+    if (key === bad) throw new Error('boom');
+    return realGet(key);
+  };
+  await intakeCycle(h.input);
+  await intakeCycle(h.input);
+  await intakeCycle(h.input);
+  assert.deepEqual(messageFiles(h), [ids[1], ids[2]].map((id) => `${id}.json`).sort());
+  assert.equal(readState(path.join(h.dirs.stateDir, 'intake-state.json')).peers[HANDLE].cursor, ids[2]);
+});
+
+test('the cursor is persisted, so a restarted process resumes after the last examined id', async () => {
+  const h = harness({ batch: 2 });
+  const ids = [0, 1, 2, 3, 4].map((i) => ulid(NOW - HOUR + i));
+  for (const id of ids) await putMessage(h.kv, id, [{ text: 'x' }]);
+  await intakeCycle(h.input);
+  h.input.state = readState(path.join(h.dirs.stateDir, 'intake-state.json'));
+  await intakeCycle(h.input);
+  assert.deepEqual(messageFiles(h), ids.slice(0, 4).map((id) => `${id}.json`).sort());
+});
+
+test('a message older than seven days is skipped without a fetch or a marker', async () => {
+  const h = harness();
+  const old = ulid(NOW - 8 * DAY);
+  await putMessage(h.kv, old, [{ text: 'x' }]);
+  const keys = countGets(h.kv);
+  await intakeCycle(h.input);
+  assert.ok(!keys.includes(k.mirrorMsg(HANDLE, THREAD, old)));
+  assert.deepEqual(messageFiles(h), []);
+  assert.deepEqual(h.doneFiles(HANDLE), []);
+});
+
+test('a message stamped beyond the skew is skipped without a fetch or a marker', async () => {
+  const h = harness();
+  const future = ulid(NOW + 2 * HOUR);
+  await putMessage(h.kv, future, [{ text: 'x' }]);
+  const keys = countGets(h.kv);
+  await intakeCycle(h.input);
+  assert.ok(!keys.includes(k.mirrorMsg(HANDLE, THREAD, future)));
+  assert.deepEqual(messageFiles(h), []);
+  assert.deepEqual(h.doneFiles(HANDLE), []);
+});
+
+test('one cycle fetches at most the batch cap even when the mirror holds 5000 ids', async () => {
+  const h = harness();
+  for (let i = 0; i < 5000; i++) await putMessage(h.kv, ulid(NOW - HOUR + i), [{ text: 'x' }]);
+  const keys = countGets(h.kv);
+  await intakeCycle(h.input);
+  assert.ok(keys.filter((key) => key.includes('/msg/')).length <= 200);
+});
+
+test('an id retired by the overflow cap keeps a done marker, so a later lap never fetches it again', async () => {
+  const h = harness({ batch: 260, peers: { alice: { tier: 'strict', ratePerHour: 1, outPerHour: 1 } } });
+  const ids = Array.from({ length: 260 }, (_, i) => ulid(NOW + i));
+  for (const id of ids) await putMessage(h.kv, id, [{ text: 'hello' }]);
+  const keys = countGets(h.kv);
+  const fetches = (id) => keys.filter((key) => key === k.mirrorMsg(HANDLE, THREAD, id)).length;
+  await intakeCycle(h.input);
+  await intakeCycle(h.input);
+  assert.equal(h.overflowFiles(HANDLE).length, 200);
+  const retired = ids.slice(1, 60);
+  for (const id of retired) {
+    assert.equal(h.readDone(HANDLE, id).outcome, 'overflow');
+    assert.equal(fetches(id), 1);
+  }
+  h.setClock(NOW + HOUR);
+  await intakeCycle(h.input);
+  for (const id of retired) {
+    assert.equal(fetches(id), 1);
+    assert.equal(h.queueFiles(HANDLE).includes(`${id}.json`), false);
+    assert.equal(h.overflowFiles(HANDLE).includes(`${id}.json`), false);
+  }
+});
+
+test('an overflow tombstone lives until its message id is 14 days old, then is pruned', async () => {
+  const h = harness({ peers: { alice: { tier: 'strict', ratePerHour: 1, outPerHour: 1 } } });
+  const admitted = ulid(NOW);
+  const overflowed = ulid(NOW + 1);
+  await putMessage(h.kv, admitted, [{ text: 'hello' }]);
+  await putMessage(h.kv, overflowed, [{ text: 'hello' }]);
+  await intakeCycle(h.input);
+  assert.deepEqual(h.overflowFiles(HANDLE), [`${overflowed}.json`]);
+  h.setClock(NOW + 8 * DAY);
+  await intakeCycle(h.input);
+  assert.deepEqual(h.overflowFiles(HANDLE), []);
+  assert.equal(h.readDone(HANDLE, overflowed).outcome, 'overflow');
+  h.setClock(NOW + 14 * DAY - HOUR);
+  await intakeCycle(h.input);
+  assert.ok(h.doneFiles(HANDLE).includes(`${overflowed}.json`));
+  h.setClock(NOW + 14 * DAY + HOUR);
+  await intakeCycle(h.input);
+  assert.equal(h.doneFiles(HANDLE).includes(`${overflowed}.json`), false);
+});
+
+test('the janitor retires at most 500 expired overflow files in one cycle, and converges to the cap', async () => {
+  const h = harness();
+  const dir = path.join(h.dirs.overflowRoot, HANDLE);
+  ensureRealDir(dir, 0o700);
+  const stamp = new Date(NOW - 8 * DAY).toISOString();
+  for (let i = 0; i < 5000; i++) fs.writeFileSync(path.join(dir, `${ulid(NOW - 8 * DAY + i)}.json`), JSON.stringify({ receivedAt: stamp }));
+  await intakeCycle(h.input);
+  assert.ok(h.overflowFiles(HANDLE).length >= 4000, `${h.overflowFiles(HANDLE).length} files left after one cycle`);
+  for (let cycle = 0; cycle < 10; cycle++) await intakeCycle(h.input);
+  assert.ok(h.overflowFiles(HANDLE).length <= 200);
+});
+
+test('the janitor moves at most 500 expired queue records to done in one cycle', async () => {
+  const h = harness();
+  const dir = path.join(h.dirs.queueRoot, HANDLE);
+  ensureRealDir(dir, 0o750);
+  const stamp = new Date(NOW - 8 * DAY).toISOString();
+  for (let i = 0; i < 600; i++) fs.writeFileSync(path.join(dir, `${ulid(NOW - 8 * DAY + i)}.json`), JSON.stringify({ receivedAt: stamp }));
+  await intakeCycle(h.input);
+  assert.equal(h.doneFiles(HANDLE).length, 500);
+});
+
+test('receipts: owner-archived unreceipted admission is recovered', async () => {
+  const h = harness({ peers: { alice: { tier: 'strict', ratePerHour: 2, outPerHour: 2 } } });
+  const stateFile = path.join(h.dirs.stateDir, 'intake-state.json');
+  const a = ulid(NOW);
+  const b = ulid(NOW + 1);
+  const c = ulid(NOW + 2);
+  await putMessage(h.kv, a, [{ text: 'a' }]);
+  await intakeCycle(h.input);
+  await putMessage(h.kv, b, [{ text: 'b' }]);
+  const realRename = fs.renameSync;
+  mock.method(fs, 'renameSync', (from, to) => {
+    if (String(to) === stateFile) throw Object.assign(new Error('fixture full'), { code: 'ENOSPC' });
+    return realRename(from, to);
+  });
+  try {
+    await intakeCycle(h.input);
+  } finally {
+    mock.restoreAll();
+  }
+  assert.ok(h.queueFiles(HANDLE).includes(`${b}.json`));
+  ensureRealDir(path.join(h.dirs.doneRoot, HANDLE), 0o700);
+  fs.renameSync(path.join(h.dirs.queueRoot, HANDLE, `${b}.json`), path.join(h.dirs.doneRoot, HANDLE, `${b}.json`));
+  h.input.state = readState(stateFile);
+  await putMessage(h.kv, c, [{ text: 'c' }]);
+  await intakeCycle(h.input);
+  assert.ok(!h.queueFiles(HANDLE).includes(`${b}.json`), 'an archived admission is not admitted a second time');
+  assert.ok(!h.queueFiles(HANDLE).includes(`${c}.json`), 'the cap of two still holds');
+});
+
+test('receipts: done entry older than the window is not counted', async () => {
+  const h = harness({ peers: { alice: { tier: 'strict', ratePerHour: 1, outPerHour: 1 } } });
+  const old = ulid(NOW - 2 * HOUR);
+  ensureRealDir(path.join(h.dirs.doneRoot, HANDLE), 0o700);
+  const file = path.join(h.dirs.doneRoot, HANDLE, `${old}.json`);
+  fs.writeFileSync(file, JSON.stringify({ receivedAt: new Date(NOW - 2 * HOUR).toISOString() }));
+  fs.utimesSync(file, new Date(NOW - 2 * HOUR), new Date(NOW - 2 * HOUR));
+  const fresh = ulid(NOW);
+  await putMessage(h.kv, fresh, [{ text: 'hello' }]);
+  await intakeCycle(h.input);
+  assert.ok(h.queueFiles(HANDLE).includes(`${fresh}.json`));
+});
+
+test('receipts: reconcile reads peer records at start and after a persist failure only', async () => {
+  const h = harness({ peers: { alice: { tier: 'strict', ratePerHour: 100, outPerHour: 100 } } });
+  const stateFile = path.join(h.dirs.stateDir, 'intake-state.json');
+  const queuePeer = path.join(h.dirs.queueRoot, HANDLE) + path.sep;
+  const donePeer = path.join(h.dirs.doneRoot, HANDLE) + path.sep;
+  const isPeerRecord = (p) => (String(p).startsWith(queuePeer) || String(p).startsWith(donePeer)) && String(p).endsWith('.json');
+  let reads = 0;
+  let failState = false;
+  const realRead = fs.readFileSync;
+  const realRename = fs.renameSync;
+  // Admission lstat checks (presentIn) are not reconciliation work; only record-file reads are counted.
+  mock.method(fs, 'readFileSync', (p, ...rest) => {
+    if (isPeerRecord(p)) reads++;
+    return realRead(p, ...rest);
+  });
+  mock.method(fs, 'renameSync', (from, to) => {
+    if (failState && String(to) === stateFile) throw Object.assign(new Error('fixture full'), { code: 'ENOSPC' });
+    return realRename(from, to);
+  });
+  const cycle = async (n) => {
+    await putMessage(h.kv, ulid(NOW + n), [{ text: 'x' }]);
+    reads = 0;
+    await intakeCycle(h.input);
+    return reads;
+  };
+  try {
+    assert.equal(await cycle(0), 0);
+    assert.equal(await cycle(1), 0);
+    assert.equal(await cycle(2), 0);
+    const planted = ulid(NOW - 30 * 60_000);
+    ensureRealDir(path.join(h.dirs.doneRoot, HANDLE), 0o700);
+    fs.writeFileSync(path.join(h.dirs.doneRoot, HANDLE, `${planted}.json`), JSON.stringify({ receivedAt: new Date(NOW - 30 * 60_000).toISOString() }));
+    failState = true;
+    assert.equal(await cycle(3), 0);
+    failState = false;
+    assert.ok((await cycle(4)) > 0, 'the cycle after a persist failure reconciles');
+    assert.equal(await cycle(5), 0);
+  } finally {
+    mock.restoreAll();
+  }
 });

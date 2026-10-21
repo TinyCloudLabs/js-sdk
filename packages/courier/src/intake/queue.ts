@@ -88,13 +88,54 @@ export function writeReplace(dir: string, name: string, body: string, mode: numb
   }
 }
 
-function readPid(file: string): number | undefined {
+interface LockRecord {
+  pid: number;
+  nonce: string;
+}
+
+type LockRead = { kind: 'missing' } | { kind: 'corrupt' } | { kind: 'held'; record: LockRecord };
+
+/** Parses `{"pid":N,"nonce":"..."}`. A legacy `pid\n` lock parses with its own text as the nonce. */
+function parseRecord(text: string): LockRecord | undefined {
+  if (/^\d+\n?$/.test(text)) {
+    const pid = Number(text);
+    return Number.isInteger(pid) && pid > 0 ? { pid, nonce: text } : undefined;
+  }
   try {
-    const pid = Number(fs.readFileSync(file, 'utf8').trim());
-    return Number.isInteger(pid) && pid > 0 ? pid : undefined;
+    const value: unknown = JSON.parse(text);
+    if (typeof value !== 'object' || value === null) return undefined;
+    const { pid, nonce } = value as { pid?: unknown; nonce?: unknown };
+    if (typeof pid !== 'number' || !Number.isInteger(pid) || pid <= 0) return undefined;
+    if (typeof nonce !== 'string' || nonce.length === 0) return undefined;
+    return { pid, nonce };
   } catch {
     return undefined;
   }
+}
+
+function recordBody(record: LockRecord): string {
+  return `${JSON.stringify({ pid: record.pid, nonce: record.nonce })}\n`;
+}
+
+function readRecordFile(file: string): LockRecord | undefined {
+  try {
+    return parseRecord(fs.readFileSync(file, 'utf8'));
+  } catch {
+    return undefined;
+  }
+}
+
+/** Reads the lock. An unparseable lock is never broken: it refuses, as a live one would. */
+function readLock(file: string): LockRead {
+  let text: string;
+  try {
+    text = fs.readFileSync(file, 'utf8');
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { kind: 'missing' };
+    throw error;
+  }
+  const record = parseRecord(text);
+  return record ? { kind: 'held', record } : { kind: 'corrupt' };
 }
 
 function pidAlive(pid: number): boolean {
@@ -106,102 +147,77 @@ function pidAlive(pid: number): boolean {
   }
 }
 
-/** A lock or takeover guard with no readable pid that is older than this was abandoned by a crashed process. */
-const LOCK_STALE_MS = 30_000;
-
-function ageMs(file: string): number | undefined {
-  try {
-    return Date.now() - fs.statSync(file).mtimeMs;
-  } catch {
-    return undefined;
-  }
+export interface LockOptions {
+  /** Pid recorded in this contender's lock. Default: this process. */
+  pid?: number;
+  /** Liveness probe for a recorded pid. Default: a signal-0 probe. */
+  alive?: (pid: number) => boolean;
+  /** Test seam: runs after a dead holder is observed, before any break guard is claimed. */
+  afterObserve?: () => void;
 }
 
+/** Guard slots per dead lock. The bound stops a corrupt directory from looping forever. */
+const MAX_BREAK_GUARDS = 8;
+
 /**
- * Takes the intake lock. The lock is created whole (never empty), so an empty lock is an unfinished or crashed writer.
- * A live pid refuses to start; a dead one is taken over.
+ * Takes the intake lock. A live holder always refuses, however old its files are; only a holder whose pid is dead is
+ * broken. The lock is created whole (never empty) and carries a nonce, so a release or a break removes only the lock
+ * it actually observed.
  */
-export function acquireLock(file: string): () => void {
+export function acquireLock(file: string, opts: LockOptions = {}): () => void {
   const dir = path.dirname(file);
   const name = path.basename(file);
-  for (let attempt = 0; attempt < 2; attempt++) {
-    if (writeNew(dir, name, `${process.pid}\n`, 0o600)) {
+  const alive = opts.alive ?? pidAlive;
+  const self: LockRecord = { pid: opts.pid ?? process.pid, nonce: randomBytes(6).toString('hex') };
+  for (let attempt = 0; attempt < 3; attempt++) {
+    if (writeNew(dir, name, recordBody(self), 0o600)) {
       return () => {
-        if (readPid(file) === process.pid) fs.rmSync(file, { force: true });
+        const current = readLock(file);
+        if (current.kind === 'held' && current.record.nonce === self.nonce) fs.rmSync(file, { force: true });
       };
     }
-    const stale = readPid(file);
-    if (stale !== undefined && pidAlive(stale)) throw new CourierError('locked', 'another courier intake is running');
-    const age = ageMs(file);
-    if (stale === undefined && age !== undefined && age < LOCK_STALE_MS) {
+    const seen = readLock(file);
+    if (seen.kind === 'missing') continue;
+    if (seen.kind === 'corrupt' || alive(seen.record.pid)) {
       throw new CourierError('locked', 'another courier intake is running');
     }
-    if (!takeOver(file, stale)) throw new CourierError('locked', 'another courier intake is running');
+    opts.afterObserve?.();
+    if (!breakDead(file, seen.record, self, alive)) {
+      throw new CourierError('locked', 'another courier intake is running');
+    }
   }
-  throw new CourierError('locked', 'could not take the intake lock');
-}
-
-/** Claims `guard` exclusively. A fresh guard held by another contender refuses; an abandoned one is replaced. */
-function claimGuard(guard: string): boolean {
-  for (let attempt = 0; attempt < 2; attempt++) {
-    if (writeNew(path.dirname(guard), path.basename(guard), `${process.pid}\n`, 0o600)) return true;
-    const age = ageMs(guard);
-    if (age !== undefined && age < LOCK_STALE_MS) return false;
-    if (!retireStaleGuard(guard)) return false;
-  }
-  return false;
-}
-
-function readText(file: string): string | undefined {
-  try {
-    return fs.readFileSync(file, 'utf8');
-  } catch {
-    return undefined;
-  }
+  throw new CourierError('locked', 'another courier intake is running');
 }
 
 /**
- * Retires an aged guard without unlinking a live one. The guard is first renamed to a private name, so only one
- * contender can move a given path. The moved file must still be the aged guard that was observed; if a fresh claim
- * slipped in between the check and the rename, it is linked back and the claim is refused.
+ * Breaks the dead lock `stale`. Breakers serialize on numbered guard files `<lock>.break.<nonce>.<k>`: guard k is
+ * claimed exclusively; a guard whose holder is alive refuses the break, and one whose holder is dead is passed over.
+ * Under the guard the lock is re-read and unlinked only if it is still exactly `stale`. Returns false when a live
+ * contender holds the break, and true when the caller should retry creating its own lock.
  */
-function retireStaleGuard(guard: string): boolean {
-  const seen = readText(guard);
-  const retired = `${guard}.${process.pid}.${randomBytes(6).toString('hex')}.retired`;
-  try {
-    fs.renameSync(guard, retired);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return true;
-    throw error;
+function breakDead(file: string, stale: LockRecord, self: LockRecord, alive: (pid: number) => boolean): boolean {
+  const dir = path.dirname(file);
+  const tag = `${path.basename(file)}.break.${stale.nonce.trim().replace(/[^A-Za-z0-9_-]/g, '_')}.`;
+  const body = recordBody(self);
+  let claimed = false;
+  for (let k = 1; k <= MAX_BREAK_GUARDS && !claimed; k++) {
+    const candidate = `${tag}${k}`;
+    if (writeNew(dir, candidate, body, 0o600)) {
+      claimed = true;
+      break;
+    }
+    const holder = readRecordFile(path.join(dir, candidate));
+    if (holder && alive(holder.pid)) return false;
   }
-  const age = ageMs(retired);
-  if (readText(retired) === seen && age !== undefined && age >= LOCK_STALE_MS) {
-    fs.rmSync(retired, { force: true });
-    return true;
-  }
+  if (!claimed) return false;
   try {
-    fs.linkSync(retired, guard);
-    fs.rmSync(retired, { force: true });
-  } catch {
-    // Another claim took the path meanwhile: keep the moved file rather than unlink a live guard.
-  }
-  return false;
-}
-
-/**
- * Removes a dead holder's lock. Takeovers are serialized by an exclusive guard file, and the pid is re-checked under
- * the guard before the lock is unlinked. A live lock is never renamed or unlinked: a changed pid refuses the takeover.
- */
-function takeOver(file: string, stale: number | undefined): boolean {
-  const guard = `${file}.takeover`;
-  if (!claimGuard(guard)) return false;
-  try {
-    if (!fs.existsSync(file)) return true;
-    if (readPid(file) !== stale) return false;
-    fs.rmSync(file, { force: true });
+    const now = readLock(file);
+    if (now.kind === 'held' && now.record.nonce === stale.nonce) fs.rmSync(file, { force: true });
     return true;
   } finally {
-    if (readPid(guard) === process.pid) fs.rmSync(guard, { force: true });
+    for (const entry of fs.readdirSync(dir)) {
+      if (entry.startsWith(tag)) fs.rmSync(path.join(dir, entry), { force: true });
+    }
   }
 }
 

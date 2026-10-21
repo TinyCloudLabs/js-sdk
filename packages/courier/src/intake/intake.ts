@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { decodeTime } from 'ulid';
+import { decodeTime, encodeTime } from 'ulid';
 import type { ParsedArgs } from '../args.js';
 import type { KV } from '../inbox.js';
 import { isRecord } from '../a2a.js';
@@ -21,7 +21,7 @@ const HOUR_MS = 60 * 60_000;
 const DAY_MS = 24 * HOUR_MS;
 /** A message ULID more than this far ahead of local time is not trusted; it is retried on a later cycle. */
 const MAX_SKEW_MS = 10 * 60_000;
-/** Messages whose ULID time is older than this are not queued; they get a done marker with outcome `stale`. */
+/** Mirror ids whose ULID time is older than this are dropped at selection: no fetch, no marker. */
 const STALE_MS = 7 * DAY_MS;
 /** Queue records older than STALE_MS move to done/; done/ entries older than this are pruned. */
 const DONE_TTL_MS = 14 * DAY_MS;
@@ -30,8 +30,10 @@ const OVERFLOW_TTL_MS = STALE_MS;
 /** Overflow is capped by count and by bytes; the oldest sent messages are dropped first. */
 const OVERFLOW_MAX_FILES = 200;
 const OVERFLOW_MAX_BYTES = 1024 * 1024;
-/** Mirror rows examined per peer per cycle; the next cycle resumes after the last one examined. */
+/** Mirror ids taken per peer per cycle. The cursor walks the mirror cyclically, so every id is reached within a lap. */
 const MIRROR_BATCH = 200;
+/** Queue moves, done prunes, overflow retirements and cap retirements per directory per pass: bounds cleanup IO per cycle. */
+const JANITOR_BATCH = 500;
 /** Inbound admissions are counted per peer over this window. */
 const RATE_WINDOW_MS = HOUR_MS;
 /** Queued text is capped at this many UTF-16 units; longer text is flagged `too-long`. */
@@ -75,7 +77,7 @@ export interface IntakeRecord {
   };
 }
 
-type DoneOutcome = 'init' | 'stale' | 'mismatch' | 'bad-id';
+type DoneOutcome = 'init' | 'mismatch' | 'bad-id' | 'overflow';
 
 export interface CycleInput {
   kv: KV;
@@ -88,6 +90,8 @@ export interface CycleInput {
   state: IntakeState;
   now: () => number;
   log: WatchLog;
+  /** Mirror ids taken per peer per cycle. Defaults to MIRROR_BATCH. */
+  batch?: number;
 }
 
 /** Cuts `text` to at most `maxBytes` of UTF-8 at a code-point boundary. */
@@ -131,42 +135,70 @@ function admit(receipts: Receipt[], id: string, at: number, cap: number): { admi
   return { admitted: true, remaining: cap - recent.length - 1, receipts: [...recent, { id, at }].slice(-cap) };
 }
 
+/** Peers whose receipts were reconciled against disk for one loaded state. A persist failure clears its peer. */
+const reconciledPeers = new WeakMap<IntakeState, Set<string>>();
+
+function reconciledSet(state: IntakeState): Set<string> {
+  let set = reconciledPeers.get(state);
+  if (!set) {
+    set = new Set();
+    reconciledPeers.set(state, set);
+  }
+  return set;
+}
+
 /**
- * Stored receipts merged with this peer's queued records inside the window, keyed by msgId. An admission counts once even
- * when both its stored receipt and its queued record exist. A queued record whose state write was lost still counts against
- * the cap. A record the owner has archived counts only through its stored receipt, and only until the window ends.
+ * Stored receipts merged with this peer's ULID records in queue/ and done/ inside the window, keyed by msgId. An admission
+ * counts once even when both its stored receipt and its record exist. A queued record whose state write was lost still
+ * counts against the cap, and so does a record the owner has archived to done/. Files whose mtime is older than the window
+ * cannot hold a receipt inside it, so they are skipped before being read.
  */
 function reconcileReceipts(input: CycleInput, peer: string, receipts: Receipt[], cap: number): Receipt[] {
   const now = input.now();
-  const dir = path.join(input.queueRoot, peer);
-  let names: string[];
-  try {
-    names = fs.readdirSync(dir);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return receipts;
-    throw error;
-  }
   const byId = new Map<string, Receipt>();
   for (const r of receipts) if (!byId.has(r.id)) byId.set(r.id, r);
-  for (const name of names) {
-    if (!name.endsWith('.json') || name.startsWith('rate-')) continue;
-    const id = name.slice(0, -'.json'.length);
-    if (byId.has(id)) continue;
-    let record: unknown;
+  for (const root of [input.queueRoot, input.doneRoot]) {
+    const dir = path.join(root, peer);
+    let names: string[];
     try {
-      record = JSON.parse(fs.readFileSync(path.join(dir, name), 'utf8'));
-    } catch {
-      continue;
+      names = fs.readdirSync(dir);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue;
+      throw error;
     }
-    if (!isRecord(record) || typeof record.receivedAt !== 'string') continue;
-    const at = Date.parse(record.receivedAt);
-    if (Number.isFinite(at)) byId.set(id, { id, at });
+    for (const name of names) {
+      if (!name.endsWith('.json')) continue;
+      const id = name.slice(0, -'.json'.length);
+      if (!ULID_RE.test(id) || byId.has(id)) continue;
+      const file = path.join(dir, name);
+      let stat;
+      try {
+        stat = fs.lstatSync(file);
+      } catch {
+        continue;
+      }
+      if (!stat.isFile() || stat.mtimeMs < now - RATE_WINDOW_MS - 60_000) continue;
+      let record: unknown;
+      try {
+        record = JSON.parse(fs.readFileSync(file, 'utf8'));
+      } catch {
+        continue;
+      }
+      if (!isRecord(record) || typeof record.receivedAt !== 'string') continue;
+      const at = Date.parse(record.receivedAt);
+      if (Number.isFinite(at)) byId.set(id, { id, at });
+    }
   }
   return [...byId.values()].filter((r) => r.at > now - RATE_WINDOW_MS).sort((a, b) => a.at - b.at).slice(-cap);
 }
 
-function persist(input: { stateDir: string; state: IntakeState }): void {
-  writeState(input.stateDir, path.join(input.stateDir, STATE_FILE), input.state);
+function persist(input: CycleInput, peer: string): void {
+  try {
+    writeState(input.stateDir, path.join(input.stateDir, STATE_FILE), input.state);
+  } catch (error) {
+    reconciledSet(input.state).delete(peer);
+    throw error;
+  }
 }
 
 /** True when `name` already exists for the peer in the queue, done, or overflow store. Symlinks count as present. */
@@ -235,113 +267,172 @@ function writeRateRecord(input: CycleInput, peer: string, senderName: string, ti
   return created;
 }
 
+/**
+ * The next `cap` ids after `cursor` in ascending order, wrapping to the smallest ids once the end is passed.
+ * Ids below `floor` are dropped before selection, so they never use up the cap. Keeps two bounded sorted lists,
+ * so memory is O(cap) however large the mirror is.
+ */
+function pickBatch<T extends { msgId: string }>(items: readonly T[], cursor: string, cap: number, floor: string): T[] {
+  if (cap < 1) return [];
+  const after: T[] = [];
+  const wrapped: T[] = [];
+  const insertSorted = (list: T[], item: T): void => {
+    if (list.length === cap && item.msgId >= list[cap - 1]!.msgId) return;
+    let i = list.length;
+    while (i > 0 && list[i - 1]!.msgId > item.msgId) i--;
+    list.splice(i, 0, item);
+    if (list.length > cap) list.pop();
+  };
+  for (const item of items) {
+    if (item.msgId < floor) continue;
+    if (item.msgId > cursor) insertSorted(after, item);
+    else insertSorted(wrapped, item);
+  }
+  return [...after, ...wrapped].slice(0, cap);
+}
+
 async function intakePeer(input: CycleInput, peer: StoredPeer): Promise<number> {
   const policy = policyOf(input.peers, peer.handle);
   const ps = Object.hasOwn(input.state.peers, peer.handle) ? input.state.peers[peer.handle]! : { receipts: [] };
   input.state.peers[peer.handle] = ps;
-  ps.receipts = reconcileReceipts(input, peer.handle, ps.receipts, policy.ratePerHour);
+  const reconciled = reconciledSet(input.state);
+  if (!reconciled.has(peer.handle)) {
+    ps.receipts = reconcileReceipts(input, peer.handle, ps.receipts, policy.ratePerHour);
+    reconciled.add(peer.handle);
+  }
   const senderName = typeof peer.label === 'string' && textVerdict(peer.label, 'summary').allowed ? peer.label : peer.handle;
 
   const keys = await listAll(input.kv, `${k.mirrorPrefix}${peer.handle}/threads/`);
   const all = mirrorMessages(peer.handle, keys, input.log);
-  all.sort((a, b) => (a.msgId < b.msgId ? -1 : a.msgId > b.msgId ? 1 : 0));
-  // Resume after the last examined id; once the mirror is exhausted, start a new pass from the beginning.
-  const after = ps.cursor ?? '';
-  const ahead = all.filter((c) => c.msgId > after);
-  const candidates = (ahead.length > 0 ? ahead : all).slice(0, MIRROR_BATCH);
+  const cap = input.batch ?? MIRROR_BATCH;
+  const floor = encodeTime(input.now() - STALE_MS, 10) + '0'.repeat(16);
+  const picked = pickBatch(all, ps.cursor ?? '', cap, floor);
 
   let written = 0;
   let future = 0;
   let overflowed = false;
-  for (const c of candidates) {
-    if (presentIn(input, peer.handle, `${c.msgId}.json`)) continue;
-    const at = input.now();
-    let sentAt: number;
-    try {
-      sentAt = decodeTime(c.msgId);
-    } catch {
-      input.log('intake-skip', { peer: peer.handle, code: 'bad-id' });
-      markDone(input, peer.handle, c.msgId, 'bad-id');
-      continue;
-    }
-    if (sentAt < at - STALE_MS) {
-      input.log('intake-skip', { peer: peer.handle, code: 'stale', direction: 'past' });
-      markDone(input, peer.handle, c.msgId, 'stale');
-      continue;
-    }
-    if (sentAt > at + MAX_SKEW_MS) {
-      future++; // no marker: the id may be inside the skew on a later cycle
-      continue;
-    }
+  try {
+    for (const c of picked) {
+      try {
+        if (presentIn(input, peer.handle, `${c.msgId}.json`)) continue;
+        const at = input.now();
+        let sentAt: number;
+        try {
+          sentAt = decodeTime(c.msgId);
+        } catch {
+          input.log('intake-skip', { peer: peer.handle, code: 'bad-id' });
+          markDone(input, peer.handle, c.msgId, 'bad-id');
+          continue;
+        }
+        if (sentAt > at + MAX_SKEW_MS) {
+          future++; // no marker: the id may be inside the skew on a later cycle
+          continue;
+        }
 
-    const got = await getJson<unknown>(input.kv, c.key);
-    if (!got || !isRecord(got.value) || got.value.messageId !== c.msgId || got.value.contextId !== c.threadId) {
-      input.log('intake-skip', { peer: peer.handle, code: 'mismatch' });
-      markDone(input, peer.handle, c.msgId, 'mismatch');
-      continue;
-    }
+        const got = await getJson<unknown>(input.kv, c.key);
+        if (!got || !isRecord(got.value) || got.value.messageId !== c.msgId || got.value.contextId !== c.threadId) {
+          input.log('intake-skip', { peer: peer.handle, code: 'mismatch' });
+          markDone(input, peer.handle, c.msgId, 'mismatch');
+          continue;
+        }
 
-    const { admitted, remaining, receipts } = admit(ps.receipts, c.msgId, at, policy.ratePerHour);
-    const parts = Array.isArray(got.value.parts) ? got.value.parts : [];
-    const texts: string[] = [];
-    for (const part of parts) if (isRecord(part) && typeof part.text === 'string') texts.push(part.text);
-    const text = texts.join('\n');
-    const verdict = textVerdict(text, 'multiline', MAX_QUEUE_CHARS);
-    const capped = capUtf8(text, MAX_QUEUE_BYTES);
-    const flags = flagsFor({ text, verdict, overRate: !admitted, truncated: capped.truncated });
-    const record: IntakeRecord = {
-      v: 1,
-      msgId: c.msgId,
-      peerId: peer.handle,
-      threadId: c.threadId,
-      sender: { id: peer.handle, displayName: senderName },
-      receivedAt: new Date(at).toISOString(),
-      text: capped.text,
-      cheapChecks: { textVerdict: verdict, tier: policy.tier, peerRatePerHourRemaining: remaining, flags },
-    };
-    const body = `${JSON.stringify(record)}\n`;
+        const { admitted, remaining, receipts } = admit(ps.receipts, c.msgId, at, policy.ratePerHour);
+        const parts = Array.isArray(got.value.parts) ? got.value.parts : [];
+        const texts: string[] = [];
+        for (const part of parts) if (isRecord(part) && typeof part.text === 'string') texts.push(part.text);
+        const text = texts.join('\n');
+        const verdict = textVerdict(text, 'multiline', MAX_QUEUE_CHARS);
+        const capped = capUtf8(text, MAX_QUEUE_BYTES);
+        const flags = flagsFor({ text, verdict, overRate: !admitted, truncated: capped.truncated });
+        const record: IntakeRecord = {
+          v: 1,
+          msgId: c.msgId,
+          peerId: peer.handle,
+          threadId: c.threadId,
+          sender: { id: peer.handle, displayName: senderName },
+          receivedAt: new Date(at).toISOString(),
+          text: capped.text,
+          cheapChecks: { textVerdict: verdict, tier: policy.tier, peerRatePerHourRemaining: remaining, flags },
+        };
+        const body = `${JSON.stringify(record)}\n`;
 
-    if (admitted) {
-      const dir = path.join(input.queueRoot, peer.handle);
-      ensureRealDir(dir, 0o2750);
-      if (writeNew(dir, `${c.msgId}.json`, body, 0o640)) {
-        ps.receipts = receipts;
-        persist(input);
-        written++;
-        input.log('intake-queued', { peer: peer.handle, msgId: c.msgId, tier: policy.tier, flags });
+        if (admitted) {
+          const dir = path.join(input.queueRoot, peer.handle);
+          ensureRealDir(dir, 0o2750);
+          if (writeNew(dir, `${c.msgId}.json`, body, 0o640)) {
+            ps.receipts = receipts;
+            persist(input, peer.handle);
+            written++;
+            input.log('intake-queued', { peer: peer.handle, msgId: c.msgId, tier: policy.tier, flags });
+          }
+        } else {
+          const dir = path.join(input.overflowRoot, peer.handle);
+          ensureRealDir(dir, 0o700);
+          writeNew(dir, `${c.msgId}.json`, body, 0o600);
+          overflowed = true;
+          ps.receipts = receipts;
+          persist(input, peer.handle);
+          if (writeRateRecord(input, peer.handle, senderName, policy.tier, at)) written++;
+        }
+      } catch (error) {
+        input.log('intake-error', { peer: peer.handle, msgId: c.msgId, code: errInfo(error).code ?? 'error' });
       }
-    } else {
-      const dir = path.join(input.overflowRoot, peer.handle);
-      ensureRealDir(dir, 0o700);
-      writeNew(dir, `${c.msgId}.json`, body, 0o600);
-      overflowed = true;
-      ps.receipts = receipts;
-      persist(input);
-      if (writeRateRecord(input, peer.handle, senderName, policy.tier, at)) written++;
     }
+  } finally {
+    // Every picked id counts as traversed, failed or not, so one bad id cannot hold the cursor in place.
+    if (picked.length > 0) ps.cursor = picked[picked.length - 1]!.msgId;
+    if (overflowed) capOverflow(input, peer.handle);
+    persist(input, peer.handle);
   }
-  if (candidates.length > 0) ps.cursor = candidates[candidates.length - 1]!.msgId;
-  if (overflowed) capOverflow(path.join(input.overflowRoot, peer.handle));
-  persist(input);
   if (future > 0) input.log('intake-skip', { peer: peer.handle, code: 'stale', direction: 'future', count: future });
   return written;
 }
 
-/**
- * Drops the oldest overflow files of one peer until both caps hold. File names are ULIDs, so name order is sent order.
- */
-function capOverflow(dir: string): void {
-  const names = fs
+/** Names of the JSON files in `dir`, ascending. ULID names sort by time. */
+function jsonNames(dir: string): string[] {
+  return fs
     .readdirSync(dir)
     .filter((name) => name.endsWith('.json'))
     .sort();
-  const sizes = names.map((name) => fs.statSync(path.join(dir, name)).size);
+}
+
+/**
+ * Time a queue, done or overflow entry belongs to: the ULID's time, or the start of the hour for a `rate-<unixHour>` record.
+ * Undefined for any other name.
+ */
+function nameTime(name: string): number | undefined {
+  const base = name.slice(0, -'.json'.length);
+  if (ULID_RE.test(base)) return decodeTime(base);
+  const rate = /^rate-(\d+)$/.exec(base);
+  return rate ? Number(rate[1]) * RATE_WINDOW_MS : undefined;
+}
+
+/**
+ * Retires one overflow file. The done marker is written before the unlink, so a retired id is not admitted again when the
+ * cursor laps. Markers live until the id is DONE_TTL_MS old, far past the 7-day floor below which ids are never fetched.
+ */
+function retireOverflow(input: CycleInput, peer: string, name: string): void {
+  const msgId = name.slice(0, -'.json'.length);
+  if (ULID_RE.test(msgId)) markDone(input, peer, msgId, 'overflow');
+  fs.unlinkSync(path.join(input.overflowRoot, peer, name));
+}
+
+/**
+ * Retires the oldest overflow files of one peer until the count and byte caps hold, at most JANITOR_BATCH per call. The
+ * byte cap is checked only once the count cap holds, so only the files that remain are sized.
+ */
+function capOverflow(input: CycleInput, peer: string): void {
+  const dir = path.join(input.overflowRoot, peer);
+  const names = jsonNames(dir);
+  const excess = Math.min(Math.max(0, names.length - OVERFLOW_MAX_FILES), JANITOR_BATCH);
+  for (const name of names.slice(0, excess)) retireOverflow(input, peer, name);
+  const kept = names.slice(excess);
+  if (kept.length > OVERFLOW_MAX_FILES) return;
+  const sizes = kept.map((name) => fs.statSync(path.join(dir, name)).size);
   let bytes = sizes.reduce((sum, size) => sum + size, 0);
-  let count = names.length;
-  for (let i = 0; i < names.length && (count > OVERFLOW_MAX_FILES || bytes > OVERFLOW_MAX_BYTES); i++) {
-    fs.unlinkSync(path.join(dir, names[i]!));
+  for (let i = 0; i < kept.length && bytes > OVERFLOW_MAX_BYTES; i++) {
+    retireOverflow(input, peer, kept[i]!);
     bytes -= sizes[i]!;
-    count--;
   }
 }
 
@@ -354,24 +445,26 @@ function peerDirs(root: string): string[] {
 }
 
 /**
- * Moves queue records older than 7 days into done/, and prunes done/ entries whose `receivedAt` (or `markedAt`) is older
- * than 14 days. Unparseable files are left in place.
+ * One bounded pass per directory per cycle. Age comes from the file name, so unexpired entries are not read. Queue records
+ * older than 7 days move to done/. done/ entries older than 14 days are pruned. Overflow entries older than 7 days are
+ * retired with a marker, then the overflow caps apply. Names that are neither ULIDs nor rate records are left in place.
  */
 function runJanitor(input: CycleInput): void {
   const now = input.now();
   for (const peer of peerDirs(input.queueRoot)) {
     const dir = path.join(input.queueRoot, peer);
-    for (const name of fs.readdirSync(dir)) {
-      if (!name.endsWith('.json')) continue;
+    let budget = JANITOR_BATCH;
+    for (const name of jsonNames(dir)) {
+      const at = nameTime(name);
+      if (at === undefined || !(at < now - STALE_MS)) continue;
+      if (budget-- <= 0) break;
       const file = path.join(dir, name);
       const body = fs.readFileSync(file, 'utf8');
-      let record: unknown;
       try {
-        record = JSON.parse(body);
+        if (!isRecord(JSON.parse(body))) continue;
       } catch {
         continue;
       }
-      if (!isRecord(record) || typeof record.receivedAt !== 'string' || !(Date.parse(record.receivedAt) < now - STALE_MS)) continue;
       const doneDir = path.join(input.doneRoot, peer);
       ensureRealDir(doneDir, 0o700);
       writeNew(doneDir, name, body, 0o600);
@@ -380,37 +473,24 @@ function runJanitor(input: CycleInput): void {
   }
   for (const peer of peerDirs(input.doneRoot)) {
     const dir = path.join(input.doneRoot, peer);
-    for (const name of fs.readdirSync(dir)) {
-      if (!name.endsWith('.json')) continue;
-      const file = path.join(dir, name);
-      let entry: unknown;
-      try {
-        entry = JSON.parse(fs.readFileSync(file, 'utf8'));
-      } catch {
-        continue;
-      }
-      if (!isRecord(entry)) continue;
-      const stamp = typeof entry.receivedAt === 'string' ? entry.receivedAt : entry.markedAt;
-      if (typeof stamp !== 'string' || !(Date.parse(stamp) < now - DONE_TTL_MS)) continue;
-      fs.unlinkSync(file);
+    let budget = JANITOR_BATCH;
+    for (const name of jsonNames(dir)) {
+      const at = nameTime(name);
+      if (at === undefined || !(at < now - DONE_TTL_MS)) continue;
+      if (budget-- <= 0) break;
+      fs.unlinkSync(path.join(dir, name));
     }
   }
   for (const peer of peerDirs(input.overflowRoot)) {
     const dir = path.join(input.overflowRoot, peer);
-    for (const name of fs.readdirSync(dir)) {
-      if (!name.endsWith('.json')) continue;
-      const file = path.join(dir, name);
-      let entry: unknown;
-      try {
-        entry = JSON.parse(fs.readFileSync(file, 'utf8'));
-      } catch {
-        continue;
-      }
-      if (!isRecord(entry) || typeof entry.receivedAt !== 'string') continue;
-      if (Date.parse(entry.receivedAt) > now - OVERFLOW_TTL_MS) continue;
-      fs.unlinkSync(file);
+    let budget = JANITOR_BATCH;
+    for (const name of jsonNames(dir)) {
+      const at = nameTime(name);
+      if (at === undefined || !(at < now - OVERFLOW_TTL_MS)) continue;
+      if (budget-- <= 0) break;
+      retireOverflow(input, peer, name);
     }
-    capOverflow(dir);
+    capOverflow(input, peer);
   }
 }
 
