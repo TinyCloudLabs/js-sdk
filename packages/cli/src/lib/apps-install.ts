@@ -28,7 +28,9 @@ export type InstallErrorCode =
   | "INTEGRITY_FAILED"
   | "DDL_REFUSED"
   | "SQL_FAILED"
-  | "KV_FAILED";
+  | "KV_FAILED"
+  | "INSTALL_RECORD_MISMATCH"
+  | "INSTALL_RECORD_INVALID";
 
 export class AppsInstallError extends Error {
   constructor(
@@ -226,6 +228,38 @@ async function readKv(key: string, io: InstallIo): Promise<Uint8Array | undefine
   }
 }
 
+/**
+ * The share runner writes `<app>/app/install.json` as `{source, digest, installed_at}` when it
+ * installs an app. An absent record is fine. A record that names another digest means the
+ * pinned bundle is out of date (or the record is damaged), so the install stops before any write.
+ */
+async function checkInstallRecord(appId: string, app: PinnedApp, io: InstallIo): Promise<void> {
+  const key = `${appId}/app/install.json`;
+  const bytes = await readKv(key, io);
+  if (bytes === undefined) return;
+  const digest = installRecordDigest(bytes);
+  if (digest === undefined) {
+    throw new AppsInstallError("INSTALL_RECORD_INVALID", `${key} is not an install record with a digest`);
+  }
+  if (digest !== app.bundleDigest) {
+    throw new AppsInstallError(
+      "INSTALL_RECORD_MISMATCH",
+      `${key} names bundle ${digest}, but this CLI pins ${app.bundleDigest}; update the CLI before installing`,
+    );
+  }
+}
+
+function installRecordDigest(bytes: Uint8Array): string | undefined {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
+  } catch {
+    return undefined;
+  }
+  if (typeof parsed !== "object" || parsed === null || !("digest" in parsed)) return undefined;
+  return typeof parsed.digest === "string" ? parsed.digest : undefined;
+}
+
 async function createKv(key: string, bytes: Uint8Array, io: InstallIo): Promise<"created" | "exists"> {
   try {
     return await io.kvCreate(key, bytes);
@@ -249,6 +283,7 @@ export async function installApp(
   const app = lookup(appId);
   if (!app) throw new AppsInstallError("UNKNOWN_APP", `No pinned catalog entry for ${appId}`);
   const verified = await fetchVerified(app, io);
+  await checkInstallRecord(appId, app, io);
   const schemaSql = new TextDecoder("utf-8", { fatal: true }).decode(verified.get("schema.sql")!);
   const plan = planDdl(schemaSql);
   const inspected = await inspectKnowledge(appId, app, verified, io);

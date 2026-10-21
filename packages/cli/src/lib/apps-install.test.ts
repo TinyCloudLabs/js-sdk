@@ -194,6 +194,38 @@ describe("installApp", () => {
     expect(result.filesWritten).toHaveLength(3);
   });
 
+  describe("app install record", () => {
+    const recordKey = "test.app/app/install.json";
+    const record = (digest: unknown) =>
+      enc(JSON.stringify({ source: { repo: "r", tag: "t", commit: "c" }, digest, installed_at: "2026-01-01T00:00:00Z" }));
+
+    it("installs when no install record exists", async () => {
+      const { app, served } = buildApp();
+      const { io } = fakeIo({ served });
+      expect((await installApp("test.app", io, () => app)).status).toBe("installed");
+    });
+
+    it("installs when the record names the pinned digest", async () => {
+      const { app, served } = buildApp();
+      const kv = new Map<string, Uint8Array>([[recordKey, record(BUNDLE)]]);
+      const { io } = fakeIo({ served, kv });
+      expect((await installApp("test.app", io, () => app)).status).toBe("installed");
+    });
+
+    it.each([
+      ["another digest", record("older-digest"), "INSTALL_RECORD_MISMATCH"],
+      ["a non-string digest", record(42), "INSTALL_RECORD_INVALID"],
+      ["no JSON", enc("not json"), "INSTALL_RECORD_INVALID"],
+    ])("refuses a record with %s before any write", async (_label, bytes, code) => {
+      const { app, served } = buildApp();
+      const kv = new Map<string, Uint8Array>([[recordKey, bytes]]);
+      const { io, sql, kvWrites } = fakeIo({ served, kv });
+      await expect(installApp("test.app", io, () => app)).rejects.toMatchObject({ code });
+      expect(sql).toEqual([]);
+      expect(kvWrites).toEqual([]);
+    });
+  });
+
   it("reports already when every knowledge file is present and identical, still refreshing views", async () => {
     const { app, served } = buildApp();
     const kv = new Map<string, Uint8Array>();
