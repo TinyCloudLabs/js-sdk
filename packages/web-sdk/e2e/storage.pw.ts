@@ -202,6 +202,54 @@ for (const scheme of SCHEMES) {
   });
 }
 
+const VIEWPORTS = {
+  desktop: { width: 1280, height: 800 },
+  phone: { width: 390, height: 844 },
+} as const;
+
+interface Box {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+function overlaps(a: Box, b: Box): boolean {
+  return a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height;
+}
+
+for (const scheme of SCHEMES) {
+  for (const [viewportName, viewport] of Object.entries(VIEWPORTS)) {
+    test(`${scheme} ${viewportName}: a full-state toast clears the open panel and Manage storage stays hit-testable`, async ({ page }) => {
+      await page.setViewportSize(viewport);
+      await mountHarness(page, scheme, KNOWN);
+      await openPanel(page);
+      await expect(usageLine(page)).toBeVisible();
+
+      await setEpisode(page, true);
+      const toast = page.locator(".toast--warning");
+      await expect(toast).toBeVisible();
+      const toastBox = await toast.boundingBox();
+      const panelBox = await panel(page).boundingBox();
+      if (!toastBox || !panelBox) throw new Error("toast or panel has no layout box");
+      expect(overlaps(toastBox, panelBox), `toast ${JSON.stringify(toastBox)} overlaps panel ${JSON.stringify(panelBox)}`).toBe(false);
+
+      const manage = section(page).getByRole("link", { name: STRINGS["storage.manage"], exact: true });
+      await expect(manage).toBeVisible();
+      const hitsLink = await manage.evaluate((el) => {
+        const r = el.getBoundingClientRect();
+        // The UI lives in an open shadow root, so ask the root node: document.elementFromPoint would return the host.
+        const root = el.getRootNode() as Document | ShadowRoot;
+        const hit = root.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+        return hit !== null && (hit === el || el.contains(hit));
+      });
+      const manageBox = await manage.boundingBox();
+      console.log(`storage geometry ${scheme} ${viewportName}: toast=${JSON.stringify(toastBox)} panel=${JSON.stringify(panelBox)} manage=${JSON.stringify(manageBox)} hit=${hitsLink}`);
+      expect(hitsLink).toBe(true);
+    });
+  }
+}
+
 interface ContrastRow {
   label: string;
   ratio: number;
