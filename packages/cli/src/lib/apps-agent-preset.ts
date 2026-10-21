@@ -115,11 +115,11 @@ const ACTION_WORDS: Readonly<Record<string, string>> = {
 };
 
 /** SQL actions that let the node run CREATE, ALTER or DROP TABLE. SQL write is not one of them. */
-const STRUCTURE_ACTIONS: ReadonlySet<string> = new Set([
-  "tinycloud.sql/schema",
-  "tinycloud.sql/admin",
-  "tinycloud.sql/*",
-]);
+const STRUCTURE_ACTIONS: Readonly<Record<string, true>> = {
+  "tinycloud.sql/schema": true,
+  "tinycloud.sql/admin": true,
+  "tinycloud.sql/*": true,
+};
 
 /** A valid app id as the knowledge operations accept it; it becomes a key prefix. */
 const APP_ID = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
@@ -189,8 +189,8 @@ export function appsAgentScopeNotice(mode: AppsAgentMode, appIds: readonly strin
     lines.push(
       `It cannot change ${appIds.length === 1 ? "the app's" : "the apps'"} code, manifest or install record: files outside those folders are read-only for it.`,
       `SQL write is separate from that: it can add, change and delete ${appIds.length === 1 ? "this app's" : "these apps'"} table rows.`,
-      schemaPaths.length > 0
-        ? `It can also create, change and drop tables in ${schemaPaths.join(", ")}, the catalog database of each named catalog app. It cannot change tables anywhere else.`
+      variant.schemaForCatalogApps && schemaPaths.length > 0
+        ? `It can also create, change and drop tables in ${schemaPaths.join(", ")}, the catalog database of each named catalog app. It cannot create, change or drop tables anywhere else.`
         : "It cannot create, change or drop tables.",
       "It cannot touch other apps, other spaces or secrets.",
     );
@@ -474,7 +474,7 @@ function withinPresetSet(entry: PermissionEntry, applicationsSpace: string): boo
  * its service or space, with text from the request escaped. The preset wording
  * is used only when the list is exactly a preset variant. When the list
  * touches an `applications` space and holds any entry the preset could never
- * grant (another service or space, delete, schema, delegation, a write outside
+ * grant (another service or space, delete, schema outside a catalog app's database, delegation, a write outside
  * a named app's write folders), those entries come first, marked `!`, and need a confirmation.
  */
 export function describeGrantScope(
@@ -499,7 +499,7 @@ export function describeGrantScope(
     ...extras.map((entry) => `! ${describeEntry(entry, applicationsSpace)}`),
     ...others.map((entry) => `- ${describeEntry(entry, applicationsSpace)}`),
   ];
-  if (requested.some((entry) => entry.service === "tinycloud.sql" && entry.actions.some((action) => STRUCTURE_ACTIONS.has(action)))) {
+  if (requested.some((entry) => entry.service === "tinycloud.sql" && entry.actions.some((action) => Object.hasOwn(STRUCTURE_ACTIONS, action)))) {
     lines.push("This request can create, change and drop tables (an SQL schema, admin or wildcard entry).");
   }
   const entryLifetimes = requested.filter((entry) => entry.expiry !== undefined).map((entry) => lifetimeMs(entry.expiry));
