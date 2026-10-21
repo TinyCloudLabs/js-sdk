@@ -51,8 +51,31 @@ export interface RequestLogReader {
   onClear(cb: () => void): () => void;
 }
 
+/**
+ * The fetch layer's only view of the developer request log. A context without a
+ * sink never links the sanitizer or the invocation-meta store.
+ */
 export interface RequestSink {
   record(event: RequestDraft): void;
+  /** Derive and record one event from one transport attempt's raw facts. */
+  observe(observation: FetchObservation): void;
+  /** Attach service, path, and action to headers built for an invocation. */
+  remember(headers: object, meta: InvocationMeta): void;
+  /** Copy invocation metadata onto headers rebuilt from signed headers (per retry attempt). */
+  carry(from: object, to: object): void;
+}
+
+/** Transport facts for one attempt, read by `observeFetch`. */
+export interface FetchObservation {
+  url: string;
+  requestHeaders: unknown;
+  requestBody: unknown;
+  responseContentLength: string | null | undefined;
+  ok: boolean;
+  code: string;
+  durationMs: number;
+  attempts: number;
+  at: number;
 }
 
 /** Raw facts about one logical request. Only `buildRequestEvent` reads them. */
@@ -147,17 +170,6 @@ export interface InvocationMeta {
 
 const invocationMeta = new WeakMap<object, InvocationMeta>();
 
-/** Called only when a sink is set, so developer-off code never writes here. */
-export function rememberInvocation(headers: object, meta: InvocationMeta): void {
-  invocationMeta.set(headers, meta);
-}
-
-/** Copies metadata onto headers rebuilt from signed headers (per retry attempt). */
-export function carryInvocationMeta(from: object, to: object): void {
-  const meta = invocationMeta.get(from);
-  if (meta !== undefined) invocationMeta.set(to, meta);
-}
-
 export function invocationMetaOf(headers: unknown): InvocationMeta | undefined {
   return typeof headers === "object" && headers !== null ? invocationMeta.get(headers) : undefined;
 }
@@ -193,6 +205,30 @@ export function buildRequestEvent(raw: RawRequest): RequestDraft {
     code,
     source: raw.source === "replica" ? "replica" : "network",
   };
+}
+
+/**
+ * Derives one event from one transport attempt. Invocation metadata comes from the
+ * request headers; bytes are measured for known body types, else the declared length.
+ */
+export function observeFetch(observation: FetchObservation, emit: (event: RequestDraft) => void): void {
+  const meta = invocationMetaOf(observation.requestHeaders);
+  const declared = declaredLengthOf(observation.responseContentLength);
+  emit(
+    buildRequestEvent({
+      service: meta?.service ?? "other",
+      op: meta ? `${meta.service}/${meta.action.split("/").pop() ?? meta.action}` : "other",
+      path: meta?.path ?? null,
+      spaceId: meta?.spaceId ?? null,
+      url: observation.url,
+      bytes: byteLengthOf(observation.requestBody) ?? declared,
+      durationMs: observation.durationMs,
+      attempts: observation.attempts,
+      ok: observation.ok,
+      code: observation.code,
+      at: observation.at,
+    }),
+  );
 }
 
 /**
@@ -250,6 +286,21 @@ export class RequestLog implements RequestSink, RequestLogReader {
         // A failing subscriber must not break the request path or other subscribers.
       }
     }
+  }
+
+  /** Called only when a sink is set, so developer-off code never writes here. */
+  remember(headers: object, meta: InvocationMeta): void {
+    invocationMeta.set(headers, meta);
+  }
+
+  /** Copies metadata onto headers rebuilt from signed headers (per retry attempt). */
+  carry(from: object, to: object): void {
+    const meta = invocationMeta.get(from);
+    if (meta !== undefined) invocationMeta.set(to, meta);
+  }
+
+  observe(observation: FetchObservation): void {
+    observeFetch(observation, (event) => this.record(event));
   }
 
   snapshot(): RequestEvent[] {

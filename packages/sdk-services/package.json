@@ -26,6 +26,16 @@
       "import": "./dist/kv/index.js",
       "require": "./dist/kv/index.cjs"
     },
+    "./telemetry/requestLog": {
+      "import": {
+        "types": "./dist/telemetry/requestLog.d.ts",
+        "default": "./dist/telemetry/requestLog.js"
+      },
+      "require": {
+        "types": "./dist/telemetry/requestLog.d.cts",
+        "default": "./dist/telemetry/requestLog.cjs"
+      }
+    },
     "./kv/replication/prefix": {
       "import": {
         "types": "./dist/kv/replication/prefix.d.ts",
@@ -121,6 +131,9 @@
       ],
       "kv/replication/grantPolicy": [
         "dist/kv/replication/grantPolicy.d.ts"
+      ],
+      "telemetry/requestLog": [
+        "dist/telemetry/requestLog.d.ts"
       ]
     }
   },

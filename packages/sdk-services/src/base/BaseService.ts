@@ -21,7 +21,6 @@ import {
   ServiceHeaders,
 } from "../types";
 import { authRequiredError, wrapError, RequestTimeoutError } from "../errors";
-import { carryInvocationMeta } from "../telemetry/requestLog";
 import type { RequestSignal } from "./types";
 
 /** setTimeout's delay is a signed 32-bit integer; larger values fire at once. */
@@ -280,7 +279,7 @@ export abstract class BaseService implements IService {
       const headers = Array.isArray(signed)
         ? [...signed, ...Object.entries(extra ?? {})]
         : { ...signed, ...extra };
-      carryInvocationMeta(signed, headers);
+      this.context.requestSink?.carry(signed, headers);
       return { method: "POST", ...init, headers };
     };
     return this.context.invokeWithRetry

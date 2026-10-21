@@ -5,6 +5,8 @@
  * Services use dependency injection via IServiceContext for platform independence.
  */
 
+import type { RequestSink } from "./telemetry/requestLog";
+
 // =============================================================================
 // Result Type Pattern
 // =============================================================================
@@ -375,6 +377,8 @@ export interface IServiceContext {
   readonly invokeAny?: InvokeAnyFunction;
   /** Fetch function (defaults to globalThis.fetch) */
   readonly fetch: FetchFunction;
+  /** Developer request log sink; absent unless developer mode is on. */
+  readonly requestSink?: RequestSink;
   /** Send a signed invocation, retrying a busy node; `build` re-signs per attempt. Absent: sends once. */
   invokeWithRetry?(
     url: string,

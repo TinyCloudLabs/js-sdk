@@ -22,14 +22,7 @@ import { tinyCloudDebugLogger } from "./debug";
 import { nodeRetryError } from "./errors";
 import { abortableSleep } from "./sleep";
 import { projectDiagnosticData } from "./diagnostics";
-import {
-  buildRequestEvent,
-  byteLengthOf,
-  declaredLengthOf,
-  invocationMetaOf,
-  rememberInvocation,
-  type RequestSink,
-} from "./telemetry/requestLog";
+import type { RequestSink } from "./telemetry/requestLog";
 
 /**
  * Configuration options for ServiceContext.
@@ -418,10 +411,11 @@ export class ServiceContext implements IServiceContext {
 
   private wrapInvoke(invoke: InvokeFunction): InvokeFunction {
     const traced = this.traceInvoke(invoke);
-    if (this._requestSink === undefined) return traced;
+    const sink = this._requestSink;
+    if (sink === undefined) return traced;
     return (session, service, path, action, facts) => {
       const headers = traced(session, service, path, action, facts);
-      rememberInvocation(headers, { service, path, action, spaceId: session.spaceId });
+      sink.remember(headers, { service, path, action, spaceId: session.spaceId });
       return headers;
     };
   }
@@ -457,12 +451,13 @@ export class ServiceContext implements IServiceContext {
 
   private wrapInvokeAny(invokeAny: InvokeAnyFunction): InvokeAnyFunction {
     const traced = this.traceInvokeAny(invokeAny);
-    if (this._requestSink === undefined) return traced;
+    const sink = this._requestSink;
+    if (sink === undefined) return traced;
     return (session, entries, facts) => {
       const headers = traced(session, entries, facts);
       const first = entries[0];
       if (first !== undefined) {
-        rememberInvocation(headers, {
+        sink.remember(headers, {
           service: first.service,
           path: first.path,
           action: first.action,
@@ -601,23 +596,17 @@ export class ServiceContext implements IServiceContext {
     if (sink === undefined) return;
     try {
       const { url, init, response } = sample;
-      const meta = invocationMetaOf(init?.headers);
-      const declared = declaredLengthOf(response?.headers.get("content-length"));
-      sink.record(
-        buildRequestEvent({
-          service: meta?.service ?? "other",
-          op: meta ? `${meta.service}/${meta.action.split("/").pop() ?? meta.action}` : "other",
-          path: meta?.path ?? null,
-          spaceId: meta?.spaceId ?? null,
-          url,
-          bytes: byteLengthOf(init?.body) ?? declared,
-          durationMs: performance.now() - sample.clock,
-          attempts: sample.attempts ?? 1,
-          ok: response?.ok === true,
-          code: response === undefined ? "ERROR" : response.ok ? "ok" : `HTTP_${response.status}`,
-          at: sample.at,
-        }),
-      );
+      sink.observe({
+        url,
+        requestHeaders: init?.headers,
+        requestBody: init?.body,
+        responseContentLength: response?.headers.get("content-length"),
+        ok: response?.ok === true,
+        code: response === undefined ? "ERROR" : response.ok ? "ok" : `HTTP_${response.status}`,
+        durationMs: performance.now() - sample.clock,
+        attempts: sample.attempts ?? 1,
+        at: sample.at,
+      });
     } catch {
       /* logging never changes the request's outcome */
     }
