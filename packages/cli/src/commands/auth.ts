@@ -141,6 +141,7 @@ import {
 } from "../lib/apps-agent-preset.js";
 import { permissionConsentLine, signExtrasQuestion } from "../lib/consent-text.js";
 import { buildReplicationLoginRequest, type ReplicationLoginOptions } from "../auth/replication-login.js";
+import { portableFromAgentApproval, requesterPublicJwk, verifyAgentApproval } from "../auth/agent-grant.js";
 
 /** The one function dependency used by owner OpenKey permission acquisition. */
 export type OpenKeyAcquisition = typeof startAuthFlow;
@@ -1341,20 +1342,44 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
         }
         const resolvedRequest = { ...parsed, requested };
         const node = await ensureAuthenticated(ctx);
-        await ensureDelegationAuthority({
-          ctx,
-          profile,
-          node,
-          requested,
-          expiryOption: parsed.requestedExpiry,
-          reason: "Grant permissions requested by a TinyCloud auth request artifact.",
-          yes: options.yes === true || confirmedExtras,
-        });
+        let grant: Awaited<ReturnType<typeof grantAuthRequest>>;
+        if (profile.authMethod === "openkey") {
+          // The owner approves each agent request in OpenKey. Existing runtime
+          // authority and --yes do not skip that approval.
+          const delegation = await acquireAgentGrant({
+            profile,
+            host: ctx.host,
+            requested,
+            sessionDid: parsed.sessionDid,
+            requestedExpiry: parsed.requestedExpiry,
+            reason: "Grant permissions requested by a TinyCloud auth request artifact.",
+          });
+          grant = {
+            kind: "tinycloud.auth.delegation",
+            version: 1,
+            requestId: parsed.requestId,
+            delegationCid: delegation.cid,
+            delegation,
+            permissions: requested,
+            expiry: delegation.expiry.toISOString(),
+            prompted: true,
+          };
+        } else {
+          await ensureDelegationAuthority({
+            ctx,
+            profile,
+            node,
+            requested,
+            expiryOption: parsed.requestedExpiry,
+            reason: "Grant permissions requested by a TinyCloud auth request artifact.",
+            yes: options.yes === true || confirmedExtras,
+          });
 
-        // The grant logic lives in the SDK (grantAuthRequest) so it is callable
-        // programmatically; this command is a thin wrapper. The CLI request
-        // artifact is a structural superset of AuthRequestArtifact.
-        const grant = await grantAuthRequest(node, resolvedRequest);
+          // The grant logic lives in the SDK (grantAuthRequest) so it is callable
+          // programmatically; this command is a thin wrapper. The CLI request
+          // artifact is a structural superset of AuthRequestArtifact.
+          grant = await grantAuthRequest(node, resolvedRequest);
+        }
         await appendLocalGrantArtifact(ctx.profile, grant.delegation);
         await appendGrantHistory(ctx.profile, {
           addedCaps: grant.permissions,
@@ -1972,6 +1997,56 @@ export async function ensureDelegationAuthority(params: {
       expiry: delegation.expiry.toISOString(),
     });
   }
+}
+
+/**
+ * Owner-side grant for an agent request on an OpenKey profile. The owner approves
+ * each request in OpenKey, audienced to the requester's session. The approval is
+ * verified before the grant is returned; nothing short-circuits it.
+ */
+export async function acquireAgentGrant(params: {
+  profile: ProfileConfig;
+  host: string;
+  requested: PermissionEntry[];
+  sessionDid: string;
+  requestedExpiry: string | undefined;
+  reason: string;
+  openKeyAcquisition?: OpenKeyAcquisition;
+}): Promise<PortableDelegation> {
+  if (params.requested.some((permission) => isRawEncryptionPermission(permission) || isRawCidRevocationPermission(permission))) {
+    throw new CLIError(
+      "RAW_RECAP_RESOURCE_UNSUPPORTED",
+      "OpenKey cannot approve raw urn:cid or raw encryption authority for an agent request.",
+      ExitCode.PERMISSION_DENIED,
+    );
+  }
+  const groups = groupPermissionsBySpace(params.requested);
+  if (groups.length !== 1) {
+    throw new CLIError(
+      "AGENT_GRANT_MULTIPLE_SPACES",
+      "An agent grant must cover exactly one space. Request one space per auth request.",
+      ExitCode.PERMISSION_DENIED,
+    );
+  }
+  const expiry = parseRequestedExpiry(params.requestedExpiry ?? APPS_AGENT_EXPIRY);
+  const anchorSpace = params.profile.spaceId ?? params.profile.spaceName;
+  const request = grantRequestPermissions(groups[0]!, anchorSpace);
+  const acquireOpenKey = params.openKeyAcquisition ?? startAuthFlow;
+  const data = await acquireOpenKey(params.profile.did, {
+    jwk: requesterPublicJwk(params.sessionDid),
+    host: params.host,
+    permissions: request,
+    reason: permissionGrantReason(params.reason, request),
+    openkeyHost: resolveOpenKeyHost(params.profile),
+    expiry: openKeyExpiryParam(expiry),
+  });
+  const verified = await verifyAgentApproval(data, {
+    sessionDid: params.sessionDid,
+    expectedOwner: pinnedOwner(params.profile),
+    expiry,
+    requested: request,
+  });
+  return portableFromAgentApproval(data, verified, params.host);
 }
 
 function permissionGrantReason(context: string, permissions: PermissionEntry[]): string {

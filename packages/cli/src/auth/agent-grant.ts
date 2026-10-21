@@ -1,0 +1,182 @@
+import { SiweMessage } from "siwe";
+import { NodeWasmBindings, type PermissionEntry, type PortableDelegation } from "@tinycloud/node-sdk";
+import { ed25519PublicKeyFromDidKey } from "@tinycloud/share-envelope";
+import { ExitCode } from "../config/constants.js";
+import { CLIError } from "../output/errors.js";
+import { normalizePkhIdentifier } from "../lib/space.js";
+import type { RequestedExpiry } from "./scoped-login.js";
+import { isRawEncryptionPermission } from "../lib/raw-encryption.js";
+import {
+  CLOCK_SKEW_MS,
+  expiryLimit,
+  isRawCidRevocationPermission,
+  ownerSpaceId,
+  permissionsFromVerifiedRecap,
+  scopeCovers,
+} from "./scoped-login.js";
+
+const NOT_STORED = "No grant was stored.";
+const CAPABILITIES_SERVICE = "tinycloud.capabilities";
+
+/** Ed25519 public key of the requester's session as a JWK. The private key never leaves the agent. */
+export function requesterPublicJwk(sessionDid: string): { kty: "OKP"; crv: "Ed25519"; x: string } {
+  let publicKey: Uint8Array;
+  try {
+    publicKey = ed25519PublicKeyFromDidKey(sessionDid.split("#")[0]!);
+  } catch (error) {
+    throw Object.assign(
+      new CLIError("INVALID_AUTH_REQUEST", "The auth request's sessionDid is not an Ed25519 did:key.", ExitCode.USAGE_ERROR),
+      { cause: error },
+    );
+  }
+  return { kty: "OKP", crv: "Ed25519", x: Buffer.from(publicKey).toString("base64url") };
+}
+
+export interface AgentApprovalExpectations {
+  /** The requester's session DID, from the auth request artifact. */
+  sessionDid: string;
+  expectedOwner: string | undefined;
+  expiry: RequestedExpiry;
+  /** The requested permissions, after `grantRequestPermissions`. */
+  requested: readonly PermissionEntry[];
+}
+
+export interface VerifiedAgentApproval {
+  ownerDid: string;
+  spaceId: string;
+  permissions: PermissionEntry[];
+  expiresAt: string;
+}
+
+function refuse(code: string, message: string, exit: ExitCode = ExitCode.PERMISSION_DENIED): CLIError {
+  return new CLIError(code, `${message} ${NOT_STORED}`, exit);
+}
+
+/**
+ * Verify an OpenKey approval for an agent request before it is written to disk.
+ * The approval must be signed by the pinned owner, issued to the requester's
+ * session, expire within the cap, and cover no more than the requested scope.
+ */
+export async function verifyAgentApproval(
+  data: Record<string, unknown>,
+  expected: AgentApprovalExpectations,
+): Promise<VerifiedAgentApproval> {
+  const sessionDid = expected.sessionDid.split("#")[0]!;
+  if (typeof data.siwe !== "string" || typeof data.signature !== "string" ||
+    typeof data.address !== "string" || !Number.isSafeInteger(data.chainId) ||
+    typeof data.spaceId !== "string" || typeof data.delegationCid !== "string" ||
+    !data.delegationHeader || typeof data.delegationHeader !== "object" ||
+    typeof data.verificationMethod !== "string" ||
+    data.verificationMethod.split("#")[0] !== sessionDid) {
+    throw refuse("OPENKEY_PROOF_INVALID", "OpenKey did not return a complete approval for this agent.", ExitCode.AUTH_REQUIRED);
+  }
+  if (expected.expectedOwner === undefined) {
+    throw refuse("OPENKEY_OWNER_MISMATCH", "This profile has no pinned owner to approve against.");
+  }
+
+  let message: SiweMessage;
+  try {
+    message = new SiweMessage(data.siwe);
+    await message.verify({ signature: data.signature });
+  } catch (error) {
+    if (/expir/i.test(error instanceof Error ? error.message : String(error))) {
+      throw refuse("AUTH_EXPIRED", "The approval has expired.", ExitCode.AUTH_REQUIRED);
+    }
+    throw Object.assign(
+      refuse("OPENKEY_PROOF_INVALID", "The approval signature does not verify against its message.", ExitCode.AUTH_REQUIRED),
+      { cause: error },
+    );
+  }
+
+  const ownerDid = `did:pkh:eip155:${data.chainId}:${data.address}`;
+  if (normalizePkhIdentifier(expected.expectedOwner) !== normalizePkhIdentifier(ownerDid)) {
+    throw refuse("OPENKEY_OWNER_MISMATCH", "The approving identity differs from this profile's owner. Use a new profile for another account.");
+  }
+  if (message.address.toLowerCase() !== data.address.toLowerCase() || message.chainId !== data.chainId) {
+    throw refuse("OPENKEY_PROOF_INVALID", "The approval's signer does not match its owner.", ExitCode.AUTH_REQUIRED);
+  }
+  if (message.uri.split("#")[0] !== sessionDid) {
+    throw refuse("OPENKEY_AUDIENCE_MISMATCH", "The approval was issued to a different session than this auth request.");
+  }
+
+  const now = Date.now();
+  const expiresMs = Date.parse(message.expirationTime ?? "");
+  if (!Number.isFinite(expiresMs)) {
+    throw refuse("OPENKEY_PROOF_INVALID", "The approval has no expiry.", ExitCode.AUTH_REQUIRED);
+  }
+  if (expiresMs <= now) {
+    throw refuse("AUTH_EXPIRED", "The approval has expired.", ExitCode.AUTH_REQUIRED);
+  }
+  if (expiresMs > expiryLimit(expected.expiry)) {
+    throw refuse("OPENKEY_EXPIRY_EXCEEDED", "The approval outlives the grant's expiry cap.");
+  }
+  const issuedMs = Date.parse(message.issuedAt ?? "");
+  if (!Number.isFinite(issuedMs) || issuedMs > now + CLOCK_SKEW_MS) {
+    throw refuse("OPENKEY_PROOF_INVALID", "The approval's issue time is invalid.", ExitCode.AUTH_REQUIRED);
+  }
+  if (message.notBefore !== undefined && Date.parse(message.notBefore) > now + CLOCK_SKEW_MS) {
+    throw refuse("OPENKEY_PROOF_INVALID", "The approval is not yet valid.", ExitCode.AUTH_REQUIRED);
+  }
+  if ((message.resources ?? []).some((resource) => !resource.startsWith("urn:recap:"))) {
+    throw refuse("OPENKEY_PROOF_INVALID", "The approval names a resource outside its ReCap.", ExitCode.AUTH_REQUIRED);
+  }
+
+  let approved: PermissionEntry[];
+  try {
+    approved = permissionsFromVerifiedRecap(new NodeWasmBindings().parseVerifiedRecapFromSiwe(data.siwe));
+  } catch (error) {
+    throw Object.assign(
+      refuse("OPENKEY_PROOF_INVALID", "The approval's ReCap could not be read.", ExitCode.AUTH_REQUIRED),
+      { cause: error },
+    );
+  }
+  if (approved.length === 0) {
+    throw refuse("OPENKEY_PROOF_INVALID", "The approval grants no authority.", ExitCode.AUTH_REQUIRED);
+  }
+  for (const permission of approved) {
+    if (permission.service === CAPABILITIES_SERVICE) continue;
+    if (normalizePkhIdentifier(ownerSpaceId(permission.space ?? "", ownerDid)) !== normalizePkhIdentifier(data.spaceId)) {
+      throw refuse("OPENKEY_SCOPE_MISMATCH", "The approved space differs from the requested space.");
+    }
+  }
+  if (!scopeCovers(expected.requested, approved, ownerDid)) {
+    throw refuse("OPENKEY_GRANT_BROADENED", "The approval contains authority beyond the requested grant.");
+  }
+  return { ownerDid, spaceId: data.spaceId, permissions: approved, expiresAt: message.expirationTime! };
+}
+
+/** Portable delegation built from an approval that `verifyAgentApproval` accepted. */
+export function portableFromAgentApproval(
+  data: Record<string, unknown>,
+  verified: VerifiedAgentApproval,
+  host: string,
+): PortableDelegation {
+  const effective = verified.permissions;
+  // The headline resource is a requested data entry, not capabilities/read.
+  const spaced = effective.filter((permission) =>
+    !isRawEncryptionPermission(permission) && !isRawCidRevocationPermission(permission)
+  );
+  const primary = spaced.find((permission) => permission.service !== CAPABILITIES_SERVICE) ?? spaced[0] ?? effective[0]!;
+  const resources = effective.map((permission) => ({
+    service: permission.service.slice("tinycloud.".length),
+    space: verified.spaceId,
+    path: permission.path,
+    actions: [...permission.actions],
+    ...(permission.caveats === undefined ? {} : { caveats: structuredClone(permission.caveats) }),
+  }));
+  const ownerParts = verified.ownerDid.split(":");
+  return {
+    cid: data.delegationCid as string,
+    delegationHeader: data.delegationHeader as { Authorization: string },
+    spaceId: verified.spaceId,
+    path: primary.path,
+    actions: [...primary.actions],
+    resources,
+    expiry: new Date(verified.expiresAt),
+    delegateDID: data.verificationMethod as string,
+    ownerAddress: ownerParts[4]!,
+    chainId: Number(ownerParts[3]),
+    host,
+    siweProof: { siwe: data.siwe as string, signature: data.signature as string },
+  };
+}
