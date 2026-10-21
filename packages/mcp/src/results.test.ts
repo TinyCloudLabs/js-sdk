@@ -42,7 +42,7 @@ test("hosted read cap preserves the exact boundary and reports canonical narrowi
       status: "ok" as const, operation: { operationId, operationVersion: 1 }, context: {}, output: { value: "" },
     };
     envelope.output.value = "x".repeat(100_000 - JSON.stringify(envelope).length);
-    const options = { surface: "hosted" as const, readOnly: true, operationId };
+    const options = { surface: "hosted" as const, readOnly: operationId !== "tinycloud.apps.query", operationId };
     expect(toMcpToolResult(envelope, [], options).structuredContent).toEqual(envelope);
     envelope.output.value += "x";
     const capped = toMcpToolResult(envelope, [], options);
