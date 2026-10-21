@@ -539,4 +539,18 @@ describe("TC-628: restoring a session", () => {
     await restore(OTHER_SPACE);
     expect(internals.storageFull.isFull).toBe(false);
   });
+
+  test("signing out ends the storage-full episode", async () => {
+    const wasm = new NodeWasmBindings();
+    const { full } = await signedSession(wasm);
+    const node = new TinyCloudNode({ host: "https://tinycloud.test", wasmBindings: wasm });
+    const internals = node as unknown as NodeInternals;
+
+    await node.restoreSession(full);
+    await rejectWriteOn(internals, full.spaceId);
+    expect(internals.storageFull.isFull).toBe(true);
+
+    await node.signOut();
+    expect(internals.storageFull.isFull).toBe(false);
+  });
 });
