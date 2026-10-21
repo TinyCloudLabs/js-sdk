@@ -136,7 +136,7 @@ beforeAll(() => {
     top: undefined as unknown,
   };
   fakeWindow.top = fakeWindow;
-  (globalThis as any).window = fakeWindow;
+  (globalThis as unknown as typeof globalThis).window = fakeWindow as unknown as Window & typeof globalThis;
   (globalThis as any).requestAnimationFrame = (cb: () => void) => {
     cb();
     return 0;
