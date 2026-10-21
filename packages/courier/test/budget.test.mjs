@@ -378,6 +378,21 @@ test('human pause checks thread existence; failed inform retries idempotently wi
   assert.equal([...kv.rows.keys()].filter(key => key.includes('/msg/')).length, 1);
 });
 
+test('a non-412 failure is not reclassified as conflict when the key contains "412"', async () => {
+  const kv = memoryKv();
+  const profile = { peers: { bob: { handle: 'bob', status: 'paired' } }, ownerDid: 'did:pkh:dummy', courierDid: 'did:key:dummy', label: 'Disposable' };
+  const deps = { profile: () => profile, node: async () => ({ kv }) };
+  const thread = '01M5DZW1ED8Q95XH7DJ39YG412'; const args = parseArgs(['bob', thread]);
+  kv.rows.set(k.threadMeta('bob', thread), { value: { subject: 'test' }, etag: 'meta' });
+  const put = kv.put.bind(kv);
+  kv.put = async (key, value, options) => {
+    if (key.includes('/msg/')) return { ok: false, error: { status: 503, message: 'down' } };
+    return put(key, value, options);
+  };
+  await assert.rejects(cmdPause(args, deps), { code: '503' });
+  assert.equal(kv.rows.get(k.paused('bob', thread)).value.informSent, false);
+});
+
 
 test('notification log is private, fixed-text, append-only between bounded rotations; model adapters refuse', () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'courier-notices-'));

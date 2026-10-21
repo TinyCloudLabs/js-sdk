@@ -56,13 +56,24 @@ function putEtag(res: KVResponse<void> | undefined): string | null {
   return typeof etag === 'string' ? etag : null;
 }
 
+/**
+ * True when the store rejected a conditional write with 412. Classified from the response
+ * status and the server's own message only. The key is excluded because it can contain
+ * digits (ULIDs), so a key containing "412" must not turn another failure into a conflict.
+ */
+function isPreconditionFailed(r: ResultLike<unknown>): boolean {
+  if (r?.ok !== false) return false;
+  const code = String(r.error?.code ?? r.error?.status ?? r.error?.meta?.status ?? '');
+  return code === '412' || /412|conflict|precondition/i.test(r.error?.message ?? '');
+}
+
 /** Create-only put; throws CourierError('conflict') on 412. */
 export async function putCreate(kv: KV, key: string, value: unknown): Promise<string | null> {
   const r = (await kv.put(key, value, { ...FULL, ifNoneMatch: '*' })) as ResultLike<KVResponse<void>>;
   try {
     return putEtag(unwrap(r, `put ${key}`));
   } catch (e) {
-    if (e instanceof CourierError && (e.code === '412' || /412|conflict|precondition/i.test(e.message))) {
+    if (e instanceof CourierError && isPreconditionFailed(r)) {
       throw new CourierError('conflict', `${key} already exists (create-only write)`);
     }
     throw e;
@@ -75,7 +86,7 @@ export async function putMatch(kv: KV, key: string, value: unknown, etag: string
   try {
     return putEtag(unwrap(r, `put ${key}`));
   } catch (e) {
-    if (e instanceof CourierError && (e.code === '412' || /412|conflict|precondition/i.test(e.message))) {
+    if (e instanceof CourierError && isPreconditionFailed(r)) {
       throw new CourierError('conflict', `${key} changed under us; re-read and retry`);
     }
     throw e;
