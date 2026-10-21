@@ -338,22 +338,52 @@ very next message.
 Every notification also appends a fixed-text line to
 `<COURIER_HOME>/notifications.jsonl` (256 KiB current log plus one rotated
 predecessor). `--notify osascript` adds a macOS desktop notification (argv text,
-fixed script source); `--notify exec --notify-exec <cmd>` runs an operator's
-command with COURIER_NOTICE, COURIER_PEER, COURIER_THREAD,
-COURIER_NOTICE_TITLE and COURIER_NOTICE_TEXT. `none` means local log only.
+fixed script source). An operator's exec command receives COURIER_NOTICE, COURIER_PEER, COURIER_THREAD,
+COURIER_NOTICE_TITLE, COURIER_NOTICE_TEXT and COURIER_NOTICE_COUNT. `none` means local log only.
 No notification channel starts or messages a model-backed agent.
 
 `--notify` accepts `none`, `osascript`, `exec`.
 
-Peer pause notices require a paired peer's `inform`. Notices deduplicate per
-kind/thread/day (UTC), cap at 10 per peer/hour across channels, and use only
-fixed text, a validated handle and a ULID or thread fingerprint. Subject,
-message and detail prose never enter notification text. The outbox holds at
-most 50 items. Failures retry after 1, 2, 4, then up to 15 minutes, stop after
-8 failures, and keep their retry deadline across restarts. Old counters are
-pruned. Wakes that reach the adapter count before it runs, including failures;
-failed wakes back off. Held messages remain mirrored and up to 100 recent
-messages per thread wake together once after human resume.
+Example only: pick your own channel (push, Telegram, email, tail the log).
+
+```sh
+courier watch --wake none --notify exec --notify-exec 'printf "%s %s %s\n" "$COURIER_NOTICE" "$COURIER_PEER" "$COURIER_THREAD" >> "$COURIER_HOME/operator-notices.log"'
+```
+
+Peer pause/resume notices require a paired peer's `inform` on a locally known
+thread: our own authored meta/message/task, or a local wake/pause record.
+Mirrored peer metadata never establishes a known thread. One fixed record per
+known thread tracks our pause, the peer's pause, and the latest accepted peer
+notice ULID. Strictly newer ULIDs within ten minutes of our clock update the
+peer latch; each resumed-to-paused transition queues a notice. Repeated or older notices produce no new notice.
+Repeated paused states and notices for unknown threads add no state or
+notifications across UTC days and restarts. Resume clears the corresponding local or peer latch.
+
+Every dispatch attempt (success or failure) counts toward both 10 per peer/hour
+and 10 globally/hour across channels. Notifications use only fixed text, a
+validated handle and a ULID or thread fingerprint, never peer-written prose.
+Each known thread has two fixed pending episode slots, identified by their
+stored notice ULIDs or local pause-marker generations. Each slot has its own
+retry count and deadline. Two successive pauses are delivered separately even
+when the first is pending or retrying. Further transitions while both slots are
+occupied are counted in the second slot's "additional pauses" message (up to
+999999, displayed as 999999+ when saturated). Counts arriving during delivery
+remain pending for the next dispatch. The outbox holds at most 50 items.
+Eligible notices can use queue places held by deferred notices; each deferred
+episode retains its retry count, deadline and log status in its fixed slot.
+
+The global hourly allowance reserves up to three attempts for each locally
+paired peer. With more than three peers, the reserved share is the smaller of
+three and the integer part of 10 divided by the peer count; with more than ten
+peers it is zero. All attempts, including retries, count against both caps.
+Failures retry after 1, 2, 4, then up to 15 minutes, stopping after 3 notification
+attempts or 8 inform failures, with deadlines persisted across restarts.
+Wakes that reach the adapter count before it runs, including failures; failed
+wakes back off from completion. Approval wakes have a separate retry clock and
+never wait for message-wake backoff. Held messages remain mirrored and up to
+100 recent messages per thread wake together once after human resume.
+
+A notice ID more than ten minutes ahead of the local clock is ignored.
 
 ### Notify-only setup
 
@@ -363,6 +393,14 @@ decisions through the same bounded outbox. It invokes no wake adapter, spends
 no wake budget and starts or messages no agent. Inbox JSON includes recent
 fixed-text notifications, even if the watcher already committed delivery
 receipts. The /courier view retains the owner's approval cards.
+
+D mode preallocates one message slot and one approval slot per locally paired
+peer. Each slot coalesces deliveries into a six-digit count (up to 999999+),
+records its first local arrival time and latest validated thread ULID, and
+keeps separate retry metadata. Arrivals during a dispatch remain pending for
+another notice. The shared outbox admits and dispatches eligible peers in
+round-robin order within each priority class, under the same hourly caps and
+reserved shares. A message retry deadline does not delay the approval slot.
 
 Example only: pick your own channel (push, Telegram, email, or tail the log).
 This example appends only the fixed notice
@@ -374,7 +412,7 @@ courier watch --wake none --notify exec --notify-exec 'printf "%s %s %s\n" "$COU
 
 `<COURIER_HOME>/notifications.jsonl` always exists after the first notification;
 it holds fixed-text status, never the peer's subject or message. Once notified,
-Start a session and watch it yourself. Paste this prompt (replace the
+start a session and watch it yourself. Paste this prompt (replace the
 thread and peer with the IDs shown by `courier inbox`):
 
 ```text
