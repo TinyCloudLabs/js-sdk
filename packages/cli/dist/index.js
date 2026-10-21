@@ -47,15 +47,15 @@ function closeReplication(schedule = scheduleTimeout) {
   removeSignalHandlers();
   let resolveClosing;
   let rejectClosing;
-  const closing = new Promise((resolve5, reject) => {
-    resolveClosing = resolve5;
+  const closing = new Promise((resolve6, reject) => {
+    resolveClosing = resolve6;
     rejectClosing = reject;
   });
   state.closing = closing;
   void (async () => {
     let timeout;
-    const deadline = new Promise((resolve5) => {
-      timeout = schedule(() => resolve5(true), CLOSE_TIMEOUT_MS);
+    const deadline = new Promise((resolve6) => {
+      timeout = schedule(() => resolve6(true), CLOSE_TIMEOUT_MS);
     });
     let timedOut = false;
     const abandonQueuedControls = () => {
@@ -81,7 +81,7 @@ function closeReplication(schedule = scheduleTimeout) {
           if (state.generation === generation && state.allControls.size === 0) break;
         }
         if (timedOut) break;
-        const turn = new Promise((resolve5) => setImmediate(() => resolve5(false)));
+        const turn = new Promise((resolve6) => setImmediate(() => resolve6(false)));
         timedOut ||= await Promise.race([turn, deadline]);
         if (timedOut) abandonQueuedControls();
         else if (state.allControls.size === 0) break;
@@ -166,17 +166,22 @@ function safeClipped(text, max = ECHO_FIELD_MAX) {
   const escaped = Array.from(safeInline(text));
   return escaped.length <= max ? escaped.join("") : `${escaped.slice(0, max).join("")}\u2026`;
 }
+function safeClippedList(items) {
+  const shown = items.slice(0, ECHO_LIST_MAX).map((item) => `"${safeClipped(item)}"`).join(", ");
+  return items.length > ECHO_LIST_MAX ? `${shown} \u2026 and ${items.length - ECHO_LIST_MAX} more` : shown;
+}
 function safeJsonStringify(value, space) {
   const text = JSON.stringify(value, null, space);
   return text === void 0 ? text : text.replace(JSON_UNSAFE, (character) => `\\u${character.charCodeAt(0).toString(16).padStart(4, "0")}`);
 }
-var UNSAFE_BLOCK, UNSAFE_INLINE, ECHO_FIELD_MAX, JSON_UNSAFE;
+var UNSAFE_BLOCK, UNSAFE_INLINE, ECHO_FIELD_MAX, ECHO_LIST_MAX, JSON_UNSAFE;
 var init_safe_text = __esm({
   "src/output/safe-text.ts"() {
     "use strict";
     UNSAFE_BLOCK = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u061c\u200b-\u200f\u2028\u2029\u202a-\u202e\u2066-\u2069\ufeff]/g;
     UNSAFE_INLINE = /[\u0000-\u001f\u007f-\u009f\u061c\u200b-\u200f\u2028\u2029\u202a-\u202e\u2066-\u2069\ufeff]/g;
     ECHO_FIELD_MAX = 80;
+    ECHO_LIST_MAX = 5;
     JSON_UNSAFE = /[\u007f-\u009f\u061c\u200b-\u200f\u2028\u2029\u202a-\u202e\u2066-\u2069\ufeff]/g;
   }
 });
@@ -13237,31 +13242,31 @@ function parseArtifactManifest(bytes) {
   } catch {
     throw new ArtifactError("corrupt", "artifact manifest is not valid JSON");
   }
-  const fail = () => {
+  const fail2 = () => {
     throw new ArtifactError("corrupt", "artifact manifest is malformed");
   };
-  if (value === null || typeof value !== "object" || Array.isArray(value)) return fail();
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return fail2();
   const record2 = value;
   const allowed = ["v", "files", "createdAt", "parent", "note"];
-  if (Object.keys(record2).some((key) => !allowed.includes(key)) || record2.v !== ARTIFACT_MANIFEST_VERSION) return fail();
-  if (!Array.isArray(record2.files) || record2.files.length === 0) return fail();
-  if (typeof record2.createdAt !== "string" || Number.isNaN(Date.parse(record2.createdAt))) return fail();
-  if (record2.parent !== null && (typeof record2.parent !== "number" || !Number.isSafeInteger(record2.parent) || record2.parent < 1)) return fail();
-  if (record2.note !== void 0 && (typeof record2.note !== "string" || record2.note.length > 1024)) return fail();
+  if (Object.keys(record2).some((key) => !allowed.includes(key)) || record2.v !== ARTIFACT_MANIFEST_VERSION) return fail2();
+  if (!Array.isArray(record2.files) || record2.files.length === 0) return fail2();
+  if (typeof record2.createdAt !== "string" || Number.isNaN(Date.parse(record2.createdAt))) return fail2();
+  if (record2.parent !== null && (typeof record2.parent !== "number" || !Number.isSafeInteger(record2.parent) || record2.parent < 1)) return fail2();
+  if (record2.note !== void 0 && (typeof record2.note !== "string" || record2.note.length > 1024)) return fail2();
   const seen = /* @__PURE__ */ new Set();
   const files = record2.files.map((entry) => {
-    if (entry === null || typeof entry !== "object" || Array.isArray(entry)) return fail();
+    if (entry === null || typeof entry !== "object" || Array.isArray(entry)) return fail2();
     const file = entry;
-    if (Object.keys(file).some((key) => !["path", "sha256", "bytes"].includes(key))) return fail();
-    if (typeof file.path !== "string" || file.path === ARTIFACT_MANIFEST_NAME || seen.has(file.path)) return fail();
+    if (Object.keys(file).some((key) => !["path", "sha256", "bytes"].includes(key))) return fail2();
+    if (typeof file.path !== "string" || file.path === ARTIFACT_MANIFEST_NAME || seen.has(file.path)) return fail2();
     try {
       canonicalShareFilename(file.path);
     } catch {
-      return fail();
+      return fail2();
     }
     seen.add(file.path);
-    if (typeof file.sha256 !== "string" || !SHA256_HEX.test(file.sha256)) return fail();
-    if (typeof file.bytes !== "number" || !Number.isSafeInteger(file.bytes) || file.bytes < 0) return fail();
+    if (typeof file.sha256 !== "string" || !SHA256_HEX.test(file.sha256)) return fail2();
+    if (typeof file.bytes !== "number" || !Number.isSafeInteger(file.bytes) || file.bytes < 0) return fail2();
     return { path: file.path, sha256: file.sha256, bytes: file.bytes };
   });
   return {
@@ -26562,6 +26567,1173 @@ async function writeShareOutput(directory, filename, bytes, force) {
   return join11(outputDirectory, safeName);
 }
 
+// src/share/html-folder.ts
+import { constants as constants2, existsSync } from "fs";
+import { lstat as lstat7, open as open8, readdir as readdir6, realpath as realpath3, stat as stat5 } from "fs/promises";
+import { basename as basename3, dirname as dirname5, isAbsolute, join as join12, relative as relativePath, resolve as resolve5, sep as sep4 } from "path";
+
+// ../share-sdk/dist/html-bundle.js
+var UNSAFE_FILENAME_CODE_POINT3 = /[\p{Cc}\p{Cf}\p{Cs}\u2028\u2029]/u;
+function hasUnsafeFilenameCodePoint3(value) {
+  return UNSAFE_FILENAME_CODE_POINT3.test(value);
+}
+var ARTIFACT_ENTRY = "index.html";
+var MAX_ARTIFACT_FILES = 1e3;
+var MAX_ARTIFACT_SOURCE_BYTES = 100 * 1024 * 1024;
+var MAX_ARTIFACT_RENDER_BYTES = 10 * 1024 * 1024;
+var MAX_ARTIFACT_TEXT_BYTES = 5 * 1024 * 1024;
+var MAX_ARTIFACT_REFERENCES = 2e3;
+var MAX_ARTIFACT_CSS_IMPORT_DEPTH = 16;
+var MAX_ARTIFACT_COMMENTS = 2e4;
+var MAX_ARTIFACT_ATTRIBUTES_PER_ELEMENT = 5e3;
+var ArtifactBundleError = class extends Error {
+  /**
+   * `path` is the bundle file being processed when the refusal happened; `reference` is the reference text inside it
+   * that was refused, when there is one. Both are the folder's own text: print them through a terminal-safe printer.
+   */
+  constructor(kind, message, path, reference) {
+    super(message);
+    this.kind = kind;
+    this.path = path;
+    this.reference = reference;
+    this.name = "ArtifactBundleError";
+  }
+};
+var MIME_BY_EXTENSION = Object.freeze({
+  html: "text/html;charset=utf-8",
+  htm: "text/html;charset=utf-8",
+  css: "text/css;charset=utf-8",
+  js: "text/javascript;charset=utf-8",
+  json: "application/json;charset=utf-8",
+  txt: "text/plain;charset=utf-8",
+  md: "text/markdown;charset=utf-8",
+  svg: "image/svg+xml",
+  png: "image/png",
+  jpg: "image/jpeg",
+  jpeg: "image/jpeg",
+  gif: "image/gif",
+  webp: "image/webp",
+  avif: "image/avif",
+  ico: "image/x-icon",
+  woff: "font/woff",
+  woff2: "font/woff2",
+  ttf: "font/ttf",
+  otf: "font/otf",
+  mp3: "audio/mpeg",
+  wav: "audio/wav",
+  mp4: "video/mp4",
+  webm: "video/webm",
+  pdf: "application/pdf"
+});
+var SCHEME = /^[a-z][a-z0-9+.-]*:/i;
+var ENCODED_PATH_ALIAS = /%2f|%5c|%2e/i;
+var SAFE_MEDIA_QUERY = /^[a-z0-9\s,().:%\-+/]+$/i;
+var UNSAFE_CLASSIC_SCRIPT = /\b(?:fetch|XMLHttpRequest|WebSocket|EventSource|Worker|SharedWorker|importScripts|sendBeacon)\s*\(|\b(?:window|self|globalThis|top|parent|opener)\s*\.\s*open\s*\(|\b(?:window|document|globalThis|self|top|parent|opener)\s*(?:\.\s*location|\[\s*["']location["']\s*\])|\blocation\s*(?:=|(?:\.\s*|\[\s*["'])href(?:["']\s*\])?|\.assign\s*\(|\.replace\s*\(|\.reload\s*\()|\bimport\s*\(|\beval\s*\(|\bWebAssembly\b/;
+function fail(kind, detail) {
+  throw new ArtifactBundleError(kind, detail);
+}
+function defaultParseHtml(html) {
+  if (typeof DOMParser === "undefined") {
+    throw new TypeError("html-bundle needs a DOM parser: pass parseHtml outside a browser");
+  }
+  return new DOMParser().parseFromString(html, "text/html");
+}
+function canonicalArtifactPath(input) {
+  const value = input.normalize("NFC");
+  const encodedLength = new TextEncoder().encode(value).byteLength;
+  if (value.length === 0 || encodedLength > 4096 || value.startsWith("/") || value.endsWith("/") || value.includes("\\") || hasUnsafeFilenameCodePoint3(value) || ENCODED_PATH_ALIAS.test(value)) {
+    fail("malformed", "artifact path is not canonical");
+  }
+  const segments = value.split("/");
+  if (segments.some((segment) => segment.length === 0 || segment === "." || segment === ".." || new TextEncoder().encode(segment).byteLength > 255)) {
+    fail("malformed", "artifact path is not canonical");
+  }
+  return segments.join("/");
+}
+function artifactMediaType(path, supplied) {
+  const normalized = supplied?.split(";")[0]?.trim().toLowerCase();
+  if (normalized !== void 0 && /^[a-z0-9!#$&^_.+-]+\/[a-z0-9!#$&^_.+-]+$/.test(normalized)) {
+    return supplied.trim();
+  }
+  const extension = path.split(".").at(-1)?.toLowerCase() ?? "";
+  return MIME_BY_EXTENSION[extension] ?? "application/octet-stream";
+}
+function resolveArtifactReference(basePath, reference) {
+  const raw = trimUrl(reference);
+  if (raw.length === 0) return { path: canonicalArtifactPath(basePath), fragment: "", fragmentOnly: true };
+  if (raw.startsWith("#")) {
+    return { path: canonicalArtifactPath(basePath), fragment: raw, fragmentOnly: true };
+  }
+  if (raw.startsWith("//") || raw.startsWith("/") || SCHEME.test(raw)) {
+    fail("unsupported", "external artifact reference");
+  }
+  const hashAt = raw.indexOf("#");
+  const queryAt = raw.indexOf("?");
+  const end = [hashAt, queryAt].filter((value) => value >= 0).reduce((min, value) => Math.min(min, value), raw.length);
+  const pathname = raw.slice(0, end);
+  const fragment = hashAt >= 0 ? raw.slice(hashAt) : "";
+  if (pathname.length === 0) return { path: canonicalArtifactPath(basePath), fragment, fragmentOnly: true };
+  if (pathname.includes("\\") || hasUnsafeFilenameCodePoint3(pathname) || ENCODED_PATH_ALIAS.test(pathname)) {
+    fail("malformed", "artifact reference is not canonical");
+  }
+  const output = basePath.split("/").slice(0, -1);
+  for (const segment of pathname.normalize("NFC").split("/")) {
+    if (segment === "" || segment === ".") continue;
+    if (segment === "..") {
+      if (output.length === 0) fail("malformed", "artifact reference escapes its bundle");
+      output.pop();
+      continue;
+    }
+    output.push(segment);
+  }
+  return { path: canonicalArtifactPath(output.join("/")), fragment, fragmentOnly: false };
+}
+function detectHtmlArtifact(paths) {
+  const seen = /* @__PURE__ */ new Set();
+  let rootCount = 0;
+  for (const rawPath of paths) {
+    const path = canonicalArtifactPath(rawPath);
+    const key = path.toLowerCase();
+    if (seen.has(key)) fail("malformed", "artifact paths collide after canonicalization");
+    seen.add(key);
+    if (path === ARTIFACT_ENTRY) rootCount += 1;
+  }
+  if (rootCount === 1) return { kind: "html", entry: ARTIFACT_ENTRY };
+  return { kind: "folder", reason: "missing-root-index" };
+}
+function toBase64(bytes) {
+  let binary = "";
+  const chunk = 32768;
+  for (let offset = 0; offset < bytes.length; offset += chunk) {
+    binary += String.fromCharCode(...bytes.subarray(offset, offset + chunk));
+  }
+  return btoa(binary);
+}
+function chargeInlinedBytes(context, bytes) {
+  context.counter.inlinedBytes += bytes;
+  if (context.counter.inlinedBytes > MAX_ARTIFACT_RENDER_BYTES) fail("limit", "artifact inlined resources exceed the render limit");
+}
+function asDataUrl(file, context) {
+  if (file.bytes.byteLength > MAX_ARTIFACT_RENDER_BYTES) fail("limit", "artifact resource exceeds render limit");
+  const prefix = `data:${artifactMediaType(file.path, file.mediaType)};base64,`;
+  chargeInlinedBytes(context, prefix.length + 4 * Math.ceil(file.bytes.byteLength / 3));
+  return `${prefix}${toBase64(file.bytes)}`;
+}
+function decodeText(file, context) {
+  if (file.bytes.byteLength > MAX_ARTIFACT_TEXT_BYTES) fail("limit", "artifact text file exceeds render limit");
+  if (context !== void 0) chargeInlinedBytes(context, file.bytes.byteLength);
+  try {
+    return new TextDecoder("utf-8", { fatal: true }).decode(file.bytes);
+  } catch {
+    return fail("malformed", "artifact text is not utf-8");
+  }
+}
+function assertClassicScript(source) {
+  if (UNSAFE_CLASSIC_SCRIPT.test(source)) fail("unsupported", "artifact script uses a blocked browser capability");
+}
+function normalizeMediaQuery(media, detail = "artifact uses an unsupported stylesheet media query") {
+  const value = media?.trim() ?? "";
+  if (value.length === 0 || value.toLowerCase() === "all") return null;
+  if (/[\u0000-\u001f\u007f<>{};"'`\\]/.test(value) || !SAFE_MEDIA_QUERY.test(value)) fail("unsupported", detail);
+  return value;
+}
+function wrapMediaCss(source, media, detail) {
+  const value = normalizeMediaQuery(media, detail);
+  if (value === null) return source;
+  return `@media ${value} {
+${source}
+}`;
+}
+function classifyLinkRelation(rel) {
+  const tokens = rel?.trim().toLowerCase().split(/\s+/).filter(Boolean) ?? [];
+  if (tokens.length === 0) return null;
+  const tokenSet = new Set(tokens);
+  if (tokenSet.has("stylesheet") && [...tokenSet].every((token) => token === "stylesheet" || token === "alternate")) return "stylesheet";
+  if ((tokenSet.has("icon") || tokenSet.has("apple-touch-icon")) && [...tokenSet].every((token) => token === "icon" || token === "apple-touch-icon" || token === "shortcut")) return "icon";
+  return null;
+}
+var SVG_NAMESPACE = "http://www.w3.org/2000/svg";
+function documentRoots(doc) {
+  const roots = [doc];
+  for (let index = 0; index < roots.length; index += 1) {
+    for (const template of roots[index].querySelectorAll("template")) roots.push(template.content);
+  }
+  return roots;
+}
+function queryAll(roots, selector) {
+  return roots.flatMap((root) => [...root.querySelectorAll(selector)]);
+}
+var URL_ATTRIBUTES = /* @__PURE__ */ new Set([
+  "href",
+  "src",
+  "srcset",
+  "imagesrcset",
+  "poster",
+  "action",
+  "formaction",
+  "cite",
+  "data",
+  "codebase",
+  "longdesc",
+  "usemap",
+  "ping",
+  "background",
+  "manifest",
+  "icon",
+  "archive",
+  "classid",
+  "profile",
+  "lowsrc",
+  "dynsrc",
+  "attributionsrc",
+  "itemtype",
+  "itemid"
+]);
+function trimUrl(value) {
+  return value.replace(/^[\u0000-\u0020]+|[\u0000-\u0020]+$/g, "");
+}
+function urlText(value) {
+  return trimUrl(value).replace(/[\t\n\r]/g, "");
+}
+function isFragmentOnly(trimmed) {
+  return /^#[^\u0000-\u0020\u007f-\u009f\\]*$/.test(trimmed);
+}
+var INLINE_DATA_URL = /^data:;base64(?:,[A-Za-z0-9+/=]*)?(?:#[^\u0000-\u0020\\]*)?$/;
+function isInlineReference(value) {
+  const text = urlText(value);
+  return isFragmentOnly(text) || INLINE_DATA_URL.test(text);
+}
+function assertInlineSrcset(value) {
+  for (const raw of value.split(/[\t\n\f\r ]+/)) {
+    const token = raw.replace(/,+$/, "");
+    if (token === "" || /^\d+(?:\.\d+)?[wx]$/i.test(token)) continue;
+    if (!isInlineReference(token)) throw new ArtifactBundleError("unsupported", "artifact page still references a resource", void 0, token);
+  }
+}
+var JAVASCRIPT_TYPES = /* @__PURE__ */ new Set([
+  "application/ecmascript",
+  "application/javascript",
+  "application/x-ecmascript",
+  "application/x-javascript",
+  "text/ecmascript",
+  "text/javascript",
+  "text/javascript1.0",
+  "text/javascript1.1",
+  "text/javascript1.2",
+  "text/javascript1.3",
+  "text/javascript1.4",
+  "text/javascript1.5",
+  "text/jscript",
+  "text/livescript",
+  "text/x-ecmascript",
+  "text/x-javascript"
+]);
+function isJavaScriptType(value) {
+  const type = (value ?? "").replace(/^[\t\n\f\r ]+|[\t\n\f\r ]+$/g, "").toLowerCase();
+  if (type === "") return true;
+  return JAVASCRIPT_TYPES.has(type.split(";")[0].replace(/[\t\n\f\r ]+$/g, ""));
+}
+var BLOCKED_ELEMENTS = "base, form, iframe, frame, frameset, object, embed, portal, noscript, plaintext, xmp, noembed, noframes, applet, area[href], link:not([href]), [ping]";
+var DATA_URI = /data:[a-z0-9!#$&^_.+/-]*(?:;[a-z0-9!#$&^_.+=-]+)*;base64,[A-Za-z0-9+/=]*/gi;
+function withoutDataUris(html) {
+  return html.replace(DATA_URI, "data:;base64,");
+}
+var TEXT_ATTRIBUTES = /^(?:alt|title|placeholder|value|label|content|name|id|class|lang|summary|abbr|datetime|pattern|xmlns(?::[\w.-]+)?|aria-[\w.:-]*|data-[\w.:-]*)$/;
+function looksLikeUrl(raw) {
+  const value = raw.replace(/\\/g, "/");
+  return /(?:^|[^a-z0-9+.-])(?:https?|ftps?|wss?|file|javascript|vbscript|blob|about|view-source|filesystem):/i.test(value) || /(?:^|[\s,;(="'])\/\/\S/.test(value) || /:\/\//.test(value) || /^\s*\.{0,2}\/[^\s]/.test(value);
+}
+var NAMED_CHARACTERS = {
+  amp: "&",
+  quot: '"',
+  apos: "'",
+  lt: "<",
+  gt: ">",
+  nbsp: "\xA0",
+  colon: ":",
+  sol: "/",
+  bsol: "\\",
+  period: ".",
+  comma: ",",
+  semi: ";",
+  equals: "=",
+  num: "#",
+  quest: "?",
+  lpar: "(",
+  rpar: ")",
+  tab: "	",
+  newline: "\n"
+};
+function decodeAttributeValue(value) {
+  return value.replace(/&(?:#[xX]([0-9a-fA-F]{1,6})|#([0-9]{1,7})|([A-Za-z]{2,8}));?/g, (whole, hex3, decimal, name) => {
+    if (name !== void 0) return NAMED_CHARACTERS[name.toLowerCase()] ?? whole;
+    const point = Number.parseInt(hex3 ?? decimal ?? "", hex3 === void 0 ? 10 : 16);
+    return point > 0 && point <= 1114111 && !(point >= 55296 && point <= 57343) ? String.fromCodePoint(point) : "\uFFFD";
+  });
+}
+var MARKUP_BLOCKED_NAMES = /* @__PURE__ */ new Set(["base", "form", "iframe", "frame", "frameset", "object", "embed", "portal", "noscript", "plaintext", "xmp", "noembed", "noframes", "applet"]);
+function unsupportedOutput(detail, reference) {
+  throw new ArtifactBundleError("unsupported", detail, void 0, reference);
+}
+function isHrefAnimation(tag, attributeName, value) {
+  return /^(?:animate|set|animatetransform|animatemotion)$/i.test(tag) && attributeName.toLowerCase() === "attributename" && /^(?:xlink:)?href$/i.test(trimUrl(value));
+}
+function checkAttribute(name, decoded) {
+  const local = name.slice(name.lastIndexOf(":") + 1);
+  if (/^on/.test(name)) unsupportedOutput("artifact output contains a blocked html feature");
+  if (name === "style") {
+    assertOnlyInlineCssReferences(decoded);
+    return;
+  }
+  if (local === "srcset" || local === "imagesrcset") {
+    assertInlineSrcset(decoded);
+    return;
+  }
+  if (URL_ATTRIBUTES.has(local)) {
+    if (!isInlineReference(decoded)) unsupportedOutput("artifact page still references a resource", decoded);
+    return;
+  }
+  if (TEXT_ATTRIBUTES.test(name)) return;
+  if (looksLikeUrl(urlText(decoded))) unsupportedOutput("artifact page still references a resource", decoded);
+  if (/url\s*\(|image-set|@import|\\/i.test(decoded) || /(?:^|[^\w-])src\s*\(/i.test(decoded)) assertOnlyInlineCssReferences(decoded);
+}
+function isOwnPolicyMeta(httpEquiv, content) {
+  return httpEquiv.trim().toLowerCase() === "content-security-policy" && content === INNER_CSP;
+}
+var HTML_SPACE = "\\t\\n\\f\\r ";
+var TAG_NAME = new RegExp(`[^${HTML_SPACE}/>]*`, "y");
+var ATTRIBUTE_NAME = new RegExp(`=?[^${HTML_SPACE}/>=]*`, "y");
+var UNQUOTED_VALUE = new RegExp(`[^${HTML_SPACE}>]*`, "y");
+var SKIPPED = new RegExp(`[${HTML_SPACE}/]`);
+var SPACE = new RegExp(`[${HTML_SPACE}]`);
+var ODD_TAG_NAME = /[\u00a0\u1680\u180e\u2000-\u200f\u2028-\u202f\u205f-\u2064\u3000\ufeff]/;
+var COMMENT_END = /--!?>/g;
+var SCRIPT_END = /<\/script/gi;
+var STYLE_END = /<\/style/gi;
+function scanMarkup(html, options) {
+  const checkReferences = options.references;
+  const length4 = html.length;
+  let index = 0;
+  let comments = 0;
+  const malformed = (detail) => {
+    if (checkReferences) unsupportedOutput(detail);
+    return true;
+  };
+  const countComment = () => {
+    comments += 1;
+    if (comments > MAX_ARTIFACT_COMMENTS) fail("limit", "artifact page has too many comments");
+  };
+  while (index < length4) {
+    const open9 = html.indexOf("<", index);
+    if (open9 === -1) return;
+    index = open9 + 1;
+    const next = html[index] ?? "";
+    if (html.startsWith("!--", index)) {
+      countComment();
+      let end;
+      if (html[index + 3] === ">") end = index + 4;
+      else if (html.startsWith("->", index + 3)) end = index + 5;
+      else {
+        COMMENT_END.lastIndex = index + 3;
+        const close = COMMENT_END.exec(html);
+        if (close === null) {
+          if (malformed("artifact output has an unterminated comment")) return;
+          return;
+        }
+        end = close.index + close[0].length;
+      }
+      index = end;
+      continue;
+    }
+    if (next === "!" || next === "?" || next === "/") {
+      if (next === "?" || next === "!" && !/^!doctype/i.test(html.slice(index, index + 8))) countComment();
+      const close = html.indexOf(">", index);
+      if (close === -1) {
+        if (malformed("artifact output has an unterminated tag")) return;
+        return;
+      }
+      index = close + 1;
+      continue;
+    }
+    if (!/[A-Za-z]/.test(next)) continue;
+    TAG_NAME.lastIndex = index;
+    const rawTag = TAG_NAME.exec(html)[0];
+    const tag = rawTag.toLowerCase();
+    index = TAG_NAME.lastIndex;
+    if (checkReferences) {
+      if (ODD_TAG_NAME.test(rawTag)) unsupportedOutput("artifact output has a tag name with an unexpected character");
+      if (MARKUP_BLOCKED_NAMES.has(tag)) unsupportedOutput("artifact output contains a blocked html feature");
+    }
+    const attributes = /* @__PURE__ */ new Map();
+    let attributeCount = 0;
+    for (; ; ) {
+      while (index < length4 && SKIPPED.test(html[index])) index += 1;
+      if (index >= length4) {
+        if (malformed("artifact output has an unterminated tag")) return;
+        return;
+      }
+      if (html[index] === ">") {
+        index += 1;
+        break;
+      }
+      ATTRIBUTE_NAME.lastIndex = index;
+      const rawName = ATTRIBUTE_NAME.exec(html)[0];
+      index = ATTRIBUTE_NAME.lastIndex;
+      while (index < length4 && SPACE.test(html[index])) index += 1;
+      let rawValue = "";
+      if (html[index] === "=") {
+        index += 1;
+        while (index < length4 && SPACE.test(html[index])) index += 1;
+        const quote = html[index];
+        if (quote === '"' || quote === "'") {
+          const close = html.indexOf(quote, index + 1);
+          if (close === -1) {
+            if (malformed("artifact output has an unterminated attribute")) return;
+            return;
+          }
+          rawValue = html.slice(index + 1, close);
+          index = close + 1;
+        } else {
+          UNQUOTED_VALUE.lastIndex = index;
+          rawValue = UNQUOTED_VALUE.exec(html)[0];
+          index = UNQUOTED_VALUE.lastIndex;
+        }
+      }
+      if (rawName.length > 0) {
+        attributeCount += 1;
+        if (attributeCount > MAX_ARTIFACT_ATTRIBUTES_PER_ELEMENT) fail("limit", "artifact element has too many attributes");
+        if (!checkReferences) continue;
+        const name = rawName.toLowerCase();
+        const decoded = decodeAttributeValue(rawValue);
+        checkAttribute(name, decoded);
+        if (isHrefAnimation(tag, name, decoded)) unsupportedOutput("artifact svg animates a resource reference");
+        if (!attributes.has(name)) attributes.set(name, decoded);
+      } else if (index < length4 && html[index] !== ">" && !SKIPPED.test(html[index])) {
+        index += 1;
+      }
+    }
+    if (checkReferences) {
+      if (tag === "area" && attributes.has("href") || attributes.has("ping") || tag === "link" && !attributes.has("href")) {
+        unsupportedOutput("artifact output contains a blocked html feature");
+      }
+      if (tag === "meta" && attributes.has("http-equiv") && !isOwnPolicyMeta(attributes.get("http-equiv"), attributes.get("content") ?? null)) {
+        unsupportedOutput("artifact output contains a meta http-equiv", attributes.get("http-equiv"));
+      }
+      if (tag === "script" && !isJavaScriptType(attributes.get("type"))) {
+        unsupportedOutput("artifact output holds a script type that is not JavaScript", attributes.get("type"));
+      }
+    }
+    if (tag === "script") {
+      SCRIPT_END.lastIndex = index;
+      const close = SCRIPT_END.exec(html);
+      if (close === null) return;
+      index = close.index;
+    } else if (tag === "style" && checkReferences) {
+      STYLE_END.lastIndex = index;
+      const close = STYLE_END.exec(html);
+      assertOnlyInlineCssReferences(html.slice(index, close === null ? length4 : close.index));
+    }
+  }
+}
+function assertSelfContainedPage(output, options = {}) {
+  const page = withoutDataUris(output);
+  if (options.only !== "dom") scanMarkup(page, { references: true });
+  if (options.only === "bytes") return;
+  const doc = (options.parseHtml ?? defaultParseHtml)(page);
+  const roots = documentRoots(doc);
+  if (queryAll(roots, BLOCKED_ELEMENTS).length > 0) fail("unsupported", "artifact output contains a blocked html feature");
+  for (const meta of queryAll(roots, "meta[http-equiv]")) {
+    if (!isOwnPolicyMeta(meta.getAttribute("http-equiv") ?? "", meta.getAttribute("content"))) fail("unsupported", "artifact output contains a meta http-equiv");
+  }
+  if (queryAll(roots, "script[src]").length > 0) fail("unsupported", "artifact output still loads a script");
+  for (const script of queryAll(roots, "script")) {
+    if (!isJavaScriptType(script.getAttribute("type"))) fail("unsupported", "artifact output holds a script type that is not JavaScript");
+  }
+  for (const style of queryAll(roots, "style")) assertOnlyInlineCssReferences(style.textContent ?? "");
+  for (const element of queryAll(roots, "*")) {
+    const inSvg = element.namespaceURI === SVG_NAMESPACE;
+    if (inSvg && element.localName === "script") fail("unsupported", "artifact svg contains a script");
+    for (const name of element.getAttributeNames()) {
+      const lower = name.toLowerCase();
+      const local = lower.slice(lower.lastIndexOf(":") + 1);
+      const value = element.getAttribute(name) ?? "";
+      if (/^on/.test(lower)) fail("unsupported", "artifact output contains a blocked html feature");
+      if (URL_ATTRIBUTES.has(local)) {
+        if (local === "srcset" || local === "imagesrcset") assertInlineSrcset(value);
+        else if (!isInlineReference(value)) throw new ArtifactBundleError("unsupported", "artifact page still references a resource", void 0, value);
+      } else if (lower !== "style" && !TEXT_ATTRIBUTES.test(lower) && looksLikeUrl(urlText(value))) {
+        throw new ArtifactBundleError("unsupported", "artifact page still references a resource", void 0, value);
+      }
+      if (lower === "style" || inSvg) assertOnlyInlineCssReferences(value);
+      if (isHrefAnimation(element.localName, lower, value)) fail("unsupported", "artifact svg animates a resource reference");
+    }
+  }
+}
+function verifySelfContained(output, context) {
+  assertSelfContainedPage(output, { parseHtml: context.parseHtml });
+}
+function rejectSvgResourceReferences(roots) {
+  for (const element of queryAll(roots, "*")) {
+    if (element.namespaceURI !== SVG_NAMESPACE) continue;
+    const animatesHref = /^(?:animate|set|animatetransform|animatemotion)$/i.test(element.localName) && element.getAttributeNames().some((name) => name.toLowerCase() === "attributename" && /^(?:xlink:)?href$/i.test(trimUrl(element.getAttribute(name) ?? "")));
+    if (animatesHref) fail("unsupported", "artifact svg animates a resource reference");
+    if (element.localName === "script") fail("unsupported", "artifact svg contains a script");
+    for (const attributeName of element.getAttributeNames()) {
+      if (attributeName !== "href" && !attributeName.endsWith(":href")) continue;
+      if (element.localName === "a" && attributeName === "href") continue;
+      if (!isFragmentOnly(urlText(element.getAttribute(attributeName) ?? ""))) fail("unsupported", "artifact svg references a resource");
+    }
+  }
+}
+function rejectEventHandlerAttributes(roots) {
+  for (const element of queryAll(roots, "*")) {
+    for (const attributeName of element.getAttributeNames()) {
+      if (/^on/i.test(attributeName)) fail("unsupported", "artifact contains a blocked html feature");
+    }
+  }
+}
+function replaceAsync(input, expression, replacer) {
+  const matches = [...input.matchAll(expression)];
+  return matches.reduceRight(
+    async (next, match) => {
+      const value = await next;
+      const replacement = await replacer(...match.map((entry) => entry ?? ""));
+      return `${value.slice(0, match.index)}${replacement}${value.slice((match.index ?? 0) + match[0].length)}`;
+    },
+    Promise.resolve(input)
+  );
+}
+function newDeferred() {
+  const bytes = new Uint8Array(8);
+  if (globalThis.crypto?.getRandomValues !== void 0) globalThis.crypto.getRandomValues(bytes);
+  else for (let index = 0; index < bytes.length; index += 1) bytes[index] = Math.floor(Math.random() * 256);
+  return { token: Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join(""), urls: [] };
+}
+function parkUrl(deferred, url) {
+  deferred.urls.push(url);
+  return `data:;base64,TCPH${deferred.token}x${deferred.urls.length - 1}x`;
+}
+function restoreParkedUrls(page, deferred) {
+  if (deferred.urls.length === 0) return page;
+  const pattern = new RegExp(`data:;base64,TCPH${deferred.token}x(\\d+)x`, "g");
+  return page.replace(pattern, (_whole, index) => deferred.urls[Number(index)]);
+}
+function resolveReferenceFrom(basePath, reference) {
+  try {
+    return resolveArtifactReference(basePath, reference);
+  } catch (error) {
+    if (error instanceof ArtifactBundleError) throw new ArtifactBundleError(error.kind, error.message, basePath, reference);
+    throw error;
+  }
+}
+function requiredFile(context, basePath, reference) {
+  context.counter.references += 1;
+  if (context.counter.references > MAX_ARTIFACT_REFERENCES) fail("limit", "artifact has too many resource references");
+  const resolved = resolveReferenceFrom(basePath, reference);
+  const file = context.files.get(resolved.path);
+  if (file === void 0) throw new ArtifactBundleError("missing", "artifact resource is missing", basePath, reference);
+  return { file, resolved };
+}
+var CSS_REFERENCE_NAMES = /* @__PURE__ */ new Set(["url", "image-set", "-webkit-image-set", "src", "import"]);
+function isCssIdentifierCode(code4) {
+  return code4 >= 128 || code4 >= 48 && code4 <= 57 || code4 >= 65 && code4 <= 90 || code4 >= 97 && code4 <= 122 || code4 === 95 || code4 === 45;
+}
+function normalizeCssEscapes(source) {
+  let output = "";
+  let index = 0;
+  const length4 = source.length;
+  while (index < length4) {
+    const char = source[index];
+    if (char === "/" && source[index + 1] === "*") {
+      const end = source.indexOf("*/", index + 2);
+      const stop = end === -1 ? length4 : end + 2;
+      output += source.slice(index, stop);
+      index = stop;
+      continue;
+    }
+    if (char === '"' || char === "'") {
+      let cursor = index + 1;
+      while (cursor < length4 && source[cursor] !== char && source[cursor] !== "\n") cursor += source[cursor] === "\\" ? 2 : 1;
+      const stop = Math.min(source[cursor] === char ? cursor + 1 : cursor, length4);
+      output += source.slice(index, stop);
+      index = stop;
+      continue;
+    }
+    if (char === "\\" || isCssIdentifierCode(source.charCodeAt(index))) {
+      let cursor = index;
+      let decoded = "";
+      let escaped = false;
+      while (cursor < length4) {
+        if (source[cursor] === "\\") {
+          const next = source[cursor + 1];
+          if (next === void 0) {
+            decoded += "\uFFFD";
+            escaped = true;
+            cursor += 1;
+            break;
+          }
+          if (next === "\n" || next === "\r" || next === "\f") break;
+          escaped = true;
+          const hex3 = /^[0-9a-fA-F]{1,6}/.exec(source.slice(cursor + 1, cursor + 7));
+          if (hex3 !== null) {
+            const point = Number.parseInt(hex3[0], 16);
+            cursor += 1 + hex3[0].length;
+            if (source[cursor] === "\r" && source[cursor + 1] === "\n") cursor += 2;
+            else if (/[ \t\n\r\f]/.test(source[cursor] ?? "")) cursor += 1;
+            decoded += point === 0 || point > 1114111 || point >= 55296 && point <= 57343 ? "\uFFFD" : String.fromCodePoint(point);
+          } else {
+            const point = source.codePointAt(cursor + 1);
+            decoded += String.fromCodePoint(point);
+            cursor += 1 + (point > 65535 ? 2 : 1);
+          }
+        } else if (isCssIdentifierCode(source.charCodeAt(cursor))) {
+          decoded += source[cursor];
+          cursor += 1;
+        } else break;
+      }
+      const raw = source.slice(index, cursor);
+      const startsReference = escaped && (source[cursor] === "(" || output.endsWith("@")) && CSS_REFERENCE_NAMES.has(decoded.toLowerCase());
+      output += startsReference ? decoded : raw;
+      index = cursor;
+      continue;
+    }
+    output += char;
+    index += 1;
+  }
+  return output;
+}
+function assertOnlyInlineCssReferences(css) {
+  const text = normalizeCssEscapes(css);
+  if (/@import/i.test(text)) fail("unsupported", "artifact css still imports a stylesheet");
+  if (/(?:^|[^\w-])(?:-webkit-)?image-set\s*\(/i.test(text) || /(?:^|[^\w-])src\s*\(/i.test(text)) fail("unsupported", "artifact css uses an unsupported resource function");
+  const opened = text.match(/url\(/gi)?.length ?? 0;
+  let read4 = 0;
+  for (const match of text.matchAll(/url\([ \t\n\r\f]*(?:"([^"]*)"|'([^']*)'|([^)"' \t\n\r\f]*))[ \t\n\r\f]*\)/gi)) {
+    read4 += 1;
+    const value = match[1] ?? match[2] ?? match[3] ?? "";
+    if (!isInlineReference(value) || value.includes("\\")) {
+      throw new ArtifactBundleError("unsupported", "artifact css references a resource", void 0, value);
+    }
+  }
+  if (read4 !== opened) fail("unsupported", "artifact css has a url() that cannot be read");
+}
+async function transformCss(sourceText, basePath, context) {
+  if (context.cssStack.length > MAX_ARTIFACT_CSS_IMPORT_DEPTH) fail("limit", "artifact stylesheet import depth exceeded");
+  const source = normalizeCssEscapes(sourceText);
+  const imported = await replaceAsync(
+    source,
+    /@import\s+(?:url\(\s*(?:(["'])([^"']+)\1|([^"')\s]+))\s*\)|(["'])([^"']+)\4)\s*([^;]*);/gi,
+    async (_whole, _urlQuote, quotedUrl, unquotedUrl, _quote, quotedReference, media) => {
+      const reference = quotedUrl || unquotedUrl || quotedReference;
+      if (/^(?:layer|supports)\b/i.test(media.trim()) || /\b(?:layer|supports)\b/i.test(media)) fail("unsupported", "artifact uses an unsupported stylesheet import condition");
+      const { file, resolved } = requiredFile(context, basePath, reference);
+      if (context.cssStack.includes(resolved.path)) fail("unsupported", "artifact stylesheet import cycle");
+      const css = await transformCss(decodeText(file, context), resolved.path, { ...context, cssStack: [...context.cssStack, resolved.path] });
+      return wrapMediaCss(css, media, "artifact uses an unsupported stylesheet import condition");
+    }
+  );
+  return replaceAsync(
+    imported,
+    /url\(\s*(["']?)([^"')]+)\1\s*\)/gi,
+    async (_whole, _quote, reference) => {
+      if (trimUrl(reference).startsWith("#")) return `url("${trimUrl(reference)}")`;
+      const { file, resolved } = requiredFile(context, basePath, reference);
+      const dataUrl = asDataUrl(file, context);
+      return `url("${context.deferred === void 0 ? dataUrl : parkUrl(context.deferred, dataUrl)}${resolved.fragment}")`;
+    }
+  );
+}
+function serializeSrcset(value, basePath, context) {
+  return value.split(",").map((candidate) => {
+    const trimmed = candidate.trim();
+    const separator = trimmed.search(/\s/);
+    const reference = separator === -1 ? trimmed : trimmed.slice(0, separator);
+    const descriptor = separator === -1 ? "" : trimmed.slice(separator).trim();
+    const { file, resolved } = requiredFile(context, basePath, reference);
+    return `${asDataUrl(file, context)}${resolved.fragment}${descriptor.length === 0 ? "" : ` ${descriptor}`}`;
+  }).join(", ");
+}
+var CHILD_BOOTSTRAP = `(function(){
+  "use strict";
+  document.addEventListener("click",function(event){
+    var target=event.target instanceof Element?event.target.closest("a[data-tc-artifact-path]"):null;
+    if(!target)return;
+    event.preventDefault();
+    window.parent.postMessage({type:"navigate",path:target.getAttribute("data-tc-artifact-path"),fragment:target.getAttribute("data-tc-artifact-fragment")||""},"*");
+  },true);
+  window.addEventListener("message",function(event){
+    if(event.source!==window.parent||event.origin!=="null"||!event.data||event.data.type!=="artifact-fragment"||typeof event.data.fragment!=="string")return;
+    var fragment=event.data.fragment;
+    if(!/^#[^\\u0000-\\u001f\\u007f]{1,1024}$/.test(fragment))return;
+    try{var target=document.getElementById(decodeURIComponent(fragment.slice(1)));if(target)target.scrollIntoView();}catch(_){}
+  });
+  window.parent.postMessage({type:"artifact-ready"},"*");
+})();`;
+var INNER_CSP = [
+  "default-src 'none'",
+  "script-src 'unsafe-inline'",
+  "style-src 'unsafe-inline'",
+  "img-src data: blob:",
+  "font-src data: blob:",
+  "media-src data: blob:",
+  "connect-src 'none'",
+  "frame-src 'none'",
+  "child-src 'none'",
+  "object-src 'none'",
+  "base-uri 'none'",
+  "form-action 'none'"
+].join("; ");
+async function transformHtml(path, file, context) {
+  const text = decodeText(file);
+  scanMarkup(text, { references: false });
+  const doc = context.parseHtml(text);
+  const roots = documentRoots(doc);
+  const deferred = newDeferred();
+  if (doc.querySelector("parsererror") !== null) fail("malformed", "artifact html is malformed");
+  if (queryAll(roots, BLOCKED_ELEMENTS).length > 0) {
+    fail("unsupported", "artifact contains a blocked html feature");
+  }
+  rejectEventHandlerAttributes(roots);
+  rejectSvgResourceReferences(roots);
+  const inlineStyles = queryAll(roots, "style");
+  for (const meta of queryAll(roots, "meta[http-equiv]")) meta.remove();
+  for (const link3 of queryAll(roots, "link[href]")) {
+    const relation = classifyLinkRelation(link3.getAttribute("rel"));
+    if (relation === "stylesheet") {
+      const { file: stylesheet, resolved } = requiredFile(context, path, link3.getAttribute("href") ?? "");
+      const style = doc.createElement("style");
+      style.textContent = wrapMediaCss(await transformCss(decodeText(stylesheet, context), resolved.path, { ...context, cssStack: [resolved.path] }), link3.getAttribute("media"));
+      link3.replaceWith(style);
+      continue;
+    }
+    if (relation === "icon") {
+      const { file: icon, resolved } = requiredFile(context, path, link3.getAttribute("href") ?? "");
+      link3.href = `${asDataUrl(icon, context)}${resolved.fragment}`;
+      continue;
+    }
+    fail("unsupported", "artifact contains an unsupported link relation");
+  }
+  for (const style of inlineStyles) {
+    style.textContent = wrapMediaCss(await transformCss(style.textContent ?? "", path, { ...context, cssStack: [] }), style.getAttribute("media"));
+  }
+  for (const element of queryAll(roots, "[style]")) {
+    const value = element.getAttribute("style");
+    if (value !== null) element.setAttribute("style", await transformCss(value, path, { ...context, cssStack: [], deferred }));
+  }
+  for (const script of queryAll(roots, "script")) {
+    if ((script.getAttribute("type") ?? "").trim().toLowerCase() === "module" || script.hasAttribute("async") || script.hasAttribute("defer")) {
+      fail("unsupported", "artifact uses an unsupported script mode");
+    }
+    if (!isJavaScriptType(script.getAttribute("type"))) fail("unsupported", "artifact uses a script type that is not JavaScript");
+    let source = script.textContent ?? "";
+    const reference = script.getAttribute("src");
+    if (reference !== null) {
+      const { file: scriptFile } = requiredFile(context, path, reference);
+      source = decodeText(scriptFile, context);
+      script.removeAttribute("src");
+    }
+    assertClassicScript(source);
+    script.textContent = source.replace(/<\/script/gi, "<\\/script");
+  }
+  const resourceAttributes = [
+    ["img[src]", "src"],
+    ["source[src]", "src"],
+    ["video[src]", "src"],
+    ["video[poster]", "poster"],
+    ["audio[src]", "src"],
+    ["track[src]", "src"],
+    ["input[type=image][src]", "src"]
+  ];
+  for (const [selector, attribute] of resourceAttributes) {
+    for (const element of queryAll(roots, selector)) {
+      const reference = element.getAttribute(attribute);
+      if (reference === null) continue;
+      const { file: resource, resolved } = requiredFile(context, path, reference);
+      element.setAttribute(attribute, `${asDataUrl(resource, context)}${resolved.fragment}`);
+    }
+  }
+  for (const element of queryAll(roots, "[srcset]")) {
+    const value = element.getAttribute("srcset");
+    if (value !== null) element.setAttribute("srcset", serializeSrcset(value, path, context));
+  }
+  for (const anchor of queryAll(roots, "a[href]")) {
+    anchor.removeAttribute("target");
+    anchor.removeAttribute("download");
+    const reference = anchor.getAttribute("href") ?? "";
+    if (reference.startsWith("#")) continue;
+    const resolved = resolveReferenceFrom(path, reference);
+    if (context.singlePage) throw new ArtifactBundleError("unsupported", "artifact links to another page", path, reference);
+    if (!context.files.has(resolved.path) || !/\.html?$/i.test(resolved.path)) fail("unsupported", "artifact link leaves its html bundle");
+    anchor.href = "#";
+    anchor.dataset.tcArtifactPath = resolved.path;
+    if (resolved.fragment.length > 0) anchor.dataset.tcArtifactFragment = resolved.fragment;
+  }
+  const head = doc.head ?? doc.documentElement.insertBefore(doc.createElement("head"), doc.body);
+  const csp = doc.createElement("meta");
+  csp.httpEquiv = "Content-Security-Policy";
+  csp.content = INNER_CSP;
+  const bootstrap = doc.createElement("script");
+  bootstrap.textContent = CHILD_BOOTSTRAP;
+  head.prepend(bootstrap);
+  head.prepend(csp);
+  const output = restoreParkedUrls(`<!DOCTYPE html>
+${doc.documentElement.outerHTML}`, deferred);
+  verifySelfContained(output, context);
+  return output;
+}
+async function prepareHtmlArtifact(input, options = {}) {
+  if (input.length === 0) fail("malformed", "artifact bundle is empty");
+  if (input.length > MAX_ARTIFACT_FILES) fail("limit", "artifact has too many files");
+  const files = /* @__PURE__ */ new Map();
+  const aliases = /* @__PURE__ */ new Set();
+  let sourceBytes = 0;
+  for (const candidate of input) {
+    let path;
+    try {
+      path = canonicalArtifactPath(candidate.path);
+    } catch (error) {
+      if (error instanceof ArtifactBundleError) throw new ArtifactBundleError(error.kind, error.message, candidate.path);
+      throw error;
+    }
+    const alias = path.toLowerCase();
+    if (aliases.has(alias)) throw new ArtifactBundleError("malformed", "artifact paths collide after canonicalization", path);
+    aliases.add(alias);
+    sourceBytes += candidate.bytes.byteLength;
+    if (!Number.isSafeInteger(sourceBytes) || sourceBytes > MAX_ARTIFACT_SOURCE_BYTES) throw new ArtifactBundleError("limit", "artifact source exceeds limit", path);
+    files.set(path, { ...candidate, path });
+  }
+  const detection = detectHtmlArtifact([...files.keys()]);
+  if (detection.kind !== "html") fail("malformed", "artifact root index is missing");
+  const renderBytes = [...files.values()].filter((file) => /^(?:text\/|application\/(?:javascript|json)|image\/svg\+xml)/i.test(artifactMediaType(file.path, file.mediaType))).reduce((total, file) => total + file.bytes.byteLength, 0);
+  if (renderBytes > MAX_ARTIFACT_RENDER_BYTES) fail("limit", "artifact render aggregate exceeds limit");
+  const context = {
+    files,
+    cssStack: [],
+    counter: { references: 0, inlinedBytes: 0 },
+    parseHtml: options.parseHtml ?? defaultParseHtml,
+    singlePage: options.singlePage === true
+  };
+  const pages = {};
+  let renderedBytes = 0;
+  for (const [path, file] of files) {
+    if (!/\.html?$/i.test(path)) continue;
+    if (context.singlePage && path !== ARTIFACT_ENTRY) continue;
+    let page;
+    try {
+      page = await transformHtml(path, file, context);
+    } catch (error) {
+      if (error instanceof ArtifactBundleError && error.path === void 0) throw new ArtifactBundleError(error.kind, error.message, path, error.reference);
+      throw error;
+    }
+    renderedBytes += new TextEncoder().encode(page).byteLength;
+    if (!Number.isSafeInteger(renderedBytes) || renderedBytes > MAX_ARTIFACT_RENDER_BYTES) {
+      fail("limit", "artifact rendered output exceeds limit");
+    }
+    pages[path] = page;
+  }
+  return { entry: ARTIFACT_ENTRY, pages: Object.freeze(pages), fileCount: files.size, sourceBytes };
+}
+function isPassiveArtifactPath(canonicalPath) {
+  const lower = canonicalPath.toLowerCase();
+  return lower === "manifest.json" || lower.startsWith("knowledge/");
+}
+function canonicalWithPath(path) {
+  try {
+    return canonicalArtifactPath(path);
+  } catch (error) {
+    if (error instanceof ArtifactBundleError) throw new ArtifactBundleError(error.kind, error.message, path);
+    throw error;
+  }
+}
+async function inlineHtmlFolder(files, options = {}) {
+  if (files.length === 0) throw new ArtifactBundleError("malformed", "artifact bundle is empty");
+  if (files.length > MAX_ARTIFACT_FILES) throw new ArtifactBundleError("limit", "artifact has too many files");
+  const canonical = /* @__PURE__ */ new Map();
+  const aliases = /* @__PURE__ */ new Map();
+  let sourceBytes = 0;
+  for (const candidate of files) {
+    const path = canonicalWithPath(candidate.path);
+    const alias = path.toLowerCase();
+    if (aliases.has(alias)) throw new ArtifactBundleError("malformed", "artifact paths collide after canonicalization", path);
+    aliases.set(alias, path);
+    sourceBytes += candidate.bytes.byteLength;
+    if (!Number.isSafeInteger(sourceBytes) || sourceBytes > MAX_ARTIFACT_SOURCE_BYTES) {
+      throw new ArtifactBundleError("limit", "artifact source exceeds limit", path);
+    }
+    canonical.set(path, { ...candidate, path });
+  }
+  if (!canonical.has(ARTIFACT_ENTRY)) throw new ArtifactBundleError("missing", "artifact root index is missing", ARTIFACT_ENTRY);
+  const active = [];
+  const passive = [];
+  for (const file of canonical.values()) (isPassiveArtifactPath(file.path) ? passive : active).push(file);
+  const prepared = await prepareHtmlArtifact(active, { ...options, singlePage: true });
+  passive.sort((left, right) => left.path < right.path ? -1 : left.path > right.path ? 1 : 0);
+  return {
+    entry: ARTIFACT_ENTRY,
+    html: new TextEncoder().encode(prepared.pages[ARTIFACT_ENTRY]),
+    passive,
+    fileCount: canonical.size,
+    sourceBytes
+  };
+}
+
+// src/share/html-folder.ts
+init_errors();
+init_safe_text();
+var MAX_HTML_FOLDER_DEPTH = 16;
+var VIEWER_PREVIEW_BYTES = 1024 * 1024;
+var FOLDER_HINT = "A folder is published as one self-contained page: every stylesheet, script and image it uses is inlined, and external URLs, frames, forms, <base>, module scripts and links to other pages are refused.";
+var FOLDER_NOT_AVAILABLE = "Folders can only be published as a single page for an anyone-with-the-link share (`--to anyone`); for others publish a single file";
+async function isDirectoryInput(input) {
+  if (input === "-") return false;
+  try {
+    return (await stat5(resolve5(input))).isDirectory();
+  } catch {
+    return false;
+  }
+}
+function limitError(message) {
+  return new CLIError("MAX_BYTES_EXCEEDED", message, 7);
+}
+function isWithinFolder(root, candidate) {
+  const path = relativePath(root, candidate);
+  return path !== "" && path !== ".." && !path.startsWith(`..${sep4}`) && !isAbsolute(path);
+}
+var CHANGED = "changed while it was read";
+function isRaceError(error) {
+  const code4 = error?.code;
+  return code4 === "ENOENT" || code4 === "ENOTDIR" || code4 === "ELOOP";
+}
+var PROC_FD = "/proc/self/fd";
+async function linuxDescriptorPath(fd) {
+  if (process.platform !== "linux" || !existsSync(PROC_FD)) return void 0;
+  return realpath3(`${PROC_FD}/${fd}`);
+}
+async function parentChainIsRealDirectories(root, path) {
+  let current = dirname5(path);
+  while (current !== root && isWithinFolder(root, current)) {
+    const info = await lstat7(current);
+    if (info.isSymbolicLink() || !info.isDirectory()) return false;
+    current = dirname5(current);
+  }
+  return current === root;
+}
+async function readRegularFile(root, path, relative, remaining, limit, hooks = {}) {
+  const problem = (reason) => ({ code: "UNSUPPORTED_FOLDER_ENTRY", path: relative, reason });
+  const descriptorPath = hooks.descriptorPath ?? linuxDescriptorPath;
+  let handle;
+  let before;
+  try {
+    await hooks.beforeOpen?.();
+    before = await lstat7(path);
+    await hooks.afterLstat?.();
+    handle = await open8(path, constants2.O_RDONLY | (constants2.O_NOFOLLOW ?? 0) | (constants2.O_NONBLOCK ?? 0));
+  } catch (error) {
+    if (error.code === "ELOOP") return problem("symbolic link");
+    if (isRaceError(error)) return problem(CHANGED);
+    throw error;
+  }
+  try {
+    await hooks.afterOpen?.();
+    const info = await handle.stat();
+    if (!info.isFile()) return problem("not a regular file");
+    let byDescriptor;
+    try {
+      if (before.dev !== info.dev || before.ino !== info.ino) return problem(CHANGED);
+      byDescriptor = await descriptorPath(handle.fd);
+      if (byDescriptor !== void 0) {
+        if (byDescriptor !== path || !isWithinFolder(root, byDescriptor)) return problem("symbolic link");
+      } else {
+        const real = await realpath3(path);
+        if (real !== path || !isWithinFolder(root, real)) return problem("symbolic link");
+      }
+    } catch (error) {
+      if (isRaceError(error)) return problem(CHANGED);
+      throw error;
+    }
+    if (info.size > remaining) throw limitError(`folder is larger than the ${limit} byte limit (at "${safeClipped(relative)}")`);
+    const chunks = [];
+    let total = 0;
+    for (; ; ) {
+      const chunk = Buffer.allocUnsafe(Math.min(1 << 20, remaining - total + 1));
+      const { bytesRead } = await handle.read(chunk, 0, chunk.length, null);
+      if (bytesRead === 0) break;
+      total += bytesRead;
+      if (total > remaining) throw limitError(`folder is larger than the ${limit} byte limit (at "${safeClipped(relative)}")`);
+      chunks.push(chunk.subarray(0, bytesRead));
+    }
+    await hooks.afterRead?.();
+    if (byDescriptor === void 0) {
+      try {
+        const again = await lstat7(path);
+        if (again.isSymbolicLink() || again.dev !== info.dev || again.ino !== info.ino || !await parentChainIsRealDirectories(root, path)) return problem(CHANGED);
+      } catch (error) {
+        if (isRaceError(error)) return problem(CHANGED);
+        throw error;
+      }
+    }
+    return new Uint8Array(Buffer.concat(chunks, total));
+  } finally {
+    await handle.close();
+  }
+}
+async function listFolderDirectory(root, absolute, relative, hooks = {}) {
+  const problem = (reason) => ({ code: "UNSUPPORTED_FOLDER_ENTRY", path: relative === "" ? "." : relative, reason });
+  const descriptorPath = hooks.descriptorPath ?? linuxDescriptorPath;
+  try {
+    await hooks.beforeOpen?.();
+    const before = await lstat7(absolute);
+    if (before.isSymbolicLink()) return problem("symbolic link");
+    if (!before.isDirectory()) return problem(CHANGED);
+    await hooks.afterLstat?.();
+    const handle = await open8(absolute, constants2.O_RDONLY | (constants2.O_DIRECTORY ?? 0) | (constants2.O_NOFOLLOW ?? 0));
+    try {
+      await hooks.afterOpen?.();
+      const info = await handle.stat();
+      if (!info.isDirectory() || info.dev !== before.dev || info.ino !== before.ino) return problem(CHANGED);
+      const byDescriptor = await descriptorPath(handle.fd);
+      if (byDescriptor !== void 0) {
+        if (byDescriptor !== absolute || absolute !== root && !isWithinFolder(root, byDescriptor)) return problem("symbolic link");
+        await hooks.beforeList?.();
+        return { entries: await readdir6(`${PROC_FD}/${handle.fd}`, { withFileTypes: true }) };
+      }
+      const real = await realpath3(absolute);
+      if (real !== absolute || absolute !== root && !isWithinFolder(root, real)) return problem("symbolic link");
+      const entries = await readdir6(absolute, { withFileTypes: true });
+      const after = await lstat7(absolute);
+      if (after.isSymbolicLink() || after.dev !== info.dev || after.ino !== info.ino) return problem(CHANGED);
+      if (absolute !== root && !await parentChainIsRealDirectories(root, absolute)) return problem(CHANGED);
+      return { entries };
+    } finally {
+      await handle.close();
+    }
+  } catch (error) {
+    if (isRaceError(error)) return problem(CHANGED);
+    throw error;
+  }
+}
+function problemError(problems) {
+  const first = problems[0];
+  const listed = problems.slice(0, ECHO_LIST_MAX).map((problem) => `"${safeClipped(problem.path)}" (${problem.reason})`).join(", ");
+  const more = problems.length > ECHO_LIST_MAX ? ` \u2026 and ${problems.length - ECHO_LIST_MAX} more` : "";
+  const noun = first.code === "UNSAFE_PATH" ? "paths that cannot be published safely" : "entries that cannot be published";
+  return new CLIError(
+    first.code,
+    `folder has ${problems.length} ${noun}: ${listed}${more}`,
+    first.code === "UNSAFE_PATH" ? 8 : 2,
+    { hint: first.code === "UNSAFE_PATH" ? "Rename these files to plain names without control, invisible or direction-changing characters." : "Symbolic links and special files are never followed or read; copy the real files into the folder." }
+  );
+}
+async function readHtmlFolder(directory, limit) {
+  const root = await realpath3(resolve5(directory));
+  const files = [];
+  const problems = [];
+  let skippedHidden = 0;
+  let total = 0;
+  const walk = async (absolute, relative, depth) => {
+    const listed = await listFolderDirectory(root, absolute, relative);
+    if ("reason" in listed) {
+      problems.push(listed);
+      return;
+    }
+    const entries = listed.entries.sort((left, right) => left.name < right.name ? -1 : left.name > right.name ? 1 : 0);
+    for (const entry of entries) {
+      if (entry.name.startsWith(".")) {
+        skippedHidden += 1;
+        continue;
+      }
+      const path = relative === "" ? entry.name : `${relative}/${entry.name}`;
+      const child = join12(absolute, entry.name);
+      if (entry.isSymbolicLink()) {
+        problems.push({ code: "UNSUPPORTED_FOLDER_ENTRY", path, reason: "symbolic link" });
+      } else if (entry.isDirectory()) {
+        if (depth >= MAX_HTML_FOLDER_DEPTH) problems.push({ code: "UNSUPPORTED_FOLDER_ENTRY", path, reason: `nested deeper than ${MAX_HTML_FOLDER_DEPTH} folders` });
+        else await walk(child, path, depth + 1);
+      } else if (!entry.isFile()) {
+        problems.push({ code: "UNSUPPORTED_FOLDER_ENTRY", path, reason: "not a regular file" });
+      } else {
+        try {
+          canonicalArtifactPath(path);
+        } catch {
+          problems.push({ code: "UNSAFE_PATH", path, reason: "unsafe name" });
+          continue;
+        }
+        if (files.length >= MAX_ARTIFACT_FILES) throw limitError(`folder has more than ${MAX_ARTIFACT_FILES} files`);
+        const read4 = await readRegularFile(root, child, path, limit - total, limit);
+        if (read4 instanceof Uint8Array) {
+          total += read4.byteLength;
+          files.push({ path: path.normalize("NFC"), bytes: read4 });
+        } else problems.push(read4);
+      }
+    }
+  };
+  await walk(root, "", 0);
+  if (problems.length > 0) throw problemError(problems);
+  return { files, skippedHidden };
+}
+function htmlFolderError(error) {
+  const file = error.path === void 0 ? "" : `"${safeClipped(error.path)}"`;
+  const reference = error.reference === void 0 ? "" : ` "${safeClipped(error.reference)}"`;
+  if (error.kind === "limit") return limitError(`folder cannot be published as one page: ${error.message.replace(/^artifact /, "")}${file === "" ? "" : ` (${file})`}`);
+  if (error.kind === "missing") {
+    if (error.reference === void 0) {
+      return new CLIError("INVALID_ARGUMENT", "folder needs an index.html at its top level", 2, { hint: "Publish the folder that directly contains index.html." });
+    }
+    return new CLIError(
+      "HTML_RESOURCE_MISSING",
+      `${file} refers to${reference}, which is not in the folder`,
+      2,
+      { hint: "manifest.json and knowledge/ are never inlined, so a page cannot refer to them. Names are case-sensitive." }
+    );
+  }
+  if (error.kind === "unsupported") {
+    return new CLIError("UNSUPPORTED_HTML", `${file === "" ? "folder" : file} cannot be published as one page: ${error.message.replace(/^artifact /, "")}${reference}`, 2, { hint: FOLDER_HINT });
+  }
+  const pathProblem = /\b(?:path|paths|reference)\b/.test(error.message);
+  return new CLIError(
+    pathProblem ? "UNSAFE_PATH" : "INVALID_ARGUMENT",
+    `folder cannot be published as one page: ${error.message.replace(/^artifact /, "")}${file === "" ? "" : ` (${file}${reference})`}`,
+    pathProblem ? 8 : 2
+  );
+}
+async function jsdomParser() {
+  const { JSDOM } = await import("jsdom");
+  const window = new JSDOM("").window;
+  const parser = new window.DOMParser();
+  return { parseHtml: (html) => parser.parseFromString(html, "text/html"), close: () => window.close() };
+}
+function htmlFolderFilename(directory, name) {
+  const filename = shareFilename(name ?? `${basename3(resolve5(directory))}.html`);
+  if (!/\.html?$/i.test(filename)) throw new CLIError("INVALID_ARGUMENT", "a folder is published as an .html file; --name must end in .html", 2);
+  return filename;
+}
+async function bundleHtmlFolder(directory, options = {}) {
+  const filename = htmlFolderFilename(directory, options.name);
+  const { files, skippedHidden } = await readHtmlFolder(directory, Math.min(options.maxBytes ?? MAX_ARTIFACT_SOURCE_BYTES, MAX_ARTIFACT_SOURCE_BYTES));
+  const parser = await jsdomParser();
+  try {
+    const inlined = await inlineHtmlFolder(files, { parseHtml: parser.parseHtml });
+    return { filename, bytes: inlined.html, passive: inlined.passive, skippedHidden, fileCount: inlined.fileCount };
+  } catch (error) {
+    if (error instanceof ArtifactBundleError) throw htmlFolderError(error);
+    throw error;
+  } finally {
+    parser.close();
+  }
+}
+function htmlFolderNotice(bundle) {
+  const parts = [];
+  if (bundle.passive.length > 0) {
+    parts.push(`Left out of the page and not published (never inlined): ${safeClippedList(bundle.passive.map((file) => file.path))}.`);
+  }
+  if (bundle.bytes.byteLength > VIEWER_PREVIEW_BYTES) {
+    parts.push(`The page is ${(bundle.bytes.byteLength / (1024 * 1024)).toFixed(1)} MiB; the Share viewer previews pages up to 1 MiB and offers a download above that.`);
+  }
+  if (bundle.skippedHidden > 0) parts.push(`Skipped ${bundle.skippedHidden} hidden ${bundle.skippedHidden === 1 ? "entry" : "entries"} (names starting with a dot).`);
+  return parts.length === 0 ? void 0 : `${parts.join(" ")}
+`;
+}
+
 // src/share/errors.ts
 var SharePublishAuthorityError = class extends Error {
   constructor(failure, options) {
@@ -26836,17 +28008,30 @@ function assertAggregateInputLimit(inputs, maxBytes) {
 }
 function registerShareCommand(program2) {
   const share = program2.command("share").description("Publish and consume TinyCloud Share links");
-  share.command("publish <files...>").description("Publish one or more bounded files as a Share").option("--name <filename>", "Filename for stdin input").option("--to <target>", "Share target", "anyone").option("--notify", "Email an exact-email recipient, or a domain mailbox on node 1.17.3+").option("--notify-to <address>", "Mailbox to invite for --to domain:<name> --notify (node 1.17.3+)").option("--expires <duration>", "Share lifetime").option("--max-bytes <bytes>", "Bound input bytes").option("--media-type <type>", "Media type for a single input").option("--action <actions...>", "Addressed permission: read, list, or edit").option("--prefix", "Publish multiple inputs beneath one addressed prefix").option("--binary", "Allow non-UTF-8 bearer content").option("--artifact <id>", 'Publish as the next write-once version of an artifact ("new" starts one); the share is pinned to that version').addOption(new Option("--ongoing").hideHelp()).option("--note <text>", "Note stored with the artifact version").option("--json", "Print versioned redacted JSON").option("--viewer-origin <origin>", "Canonical HTTPS viewer origin", SHARE_ORIGIN).action(async (files, options, command) => {
+  share.command("publish <files...>").description("Publish one or more bounded files as a Share, or a folder with an index.html as one self-contained page (anyone links only)").option("--name <filename>", "Filename for stdin input, or the published .html name of a folder").option("--to <target>", "Share target", "anyone").option("--notify", "Email an exact-email recipient, or a domain mailbox on node 1.17.3+").option("--notify-to <address>", "Mailbox to invite for --to domain:<name> --notify (node 1.17.3+)").option("--expires <duration>", "Share lifetime").option("--max-bytes <bytes>", "Bound input bytes").option("--media-type <type>", "Media type for a single input").option("--action <actions...>", "Addressed permission: read, list, or edit").option("--prefix", "Publish multiple inputs beneath one addressed prefix").option("--binary", "Allow non-UTF-8 bearer content").option("--artifact <id>", 'Publish as the next write-once version of an artifact ("new" starts one); the share is pinned to that version').addOption(new Option("--ongoing").hideHelp()).option("--note <text>", "Note stored with the artifact version").option("--json", "Print versioned redacted JSON").option("--viewer-origin <origin>", "Canonical HTTPS viewer origin", SHARE_ORIGIN).action(async (files, options, command) => {
     try {
       const json = jsonOutput(options, command);
       if (options.ongoing === true) throw new CLIError("UNSUPPORTED_TARGET", ONGOING_UNAVAILABLE, 2);
       const maxBytes = byteLimit(options.maxBytes);
       if (files.length === 0 || files.includes("-") && files.length > 1) throw new CLIError("INVALID_ARGUMENT", "stdin must be the only publish input", 2);
       const name = files.length === 1 ? options.name : void 0;
-      for (const file of files) shareInputFilename(file, name);
-      const inputs = await Promise.all(files.map((file) => readShareInput(file, name, maxBytes)));
-      assertAggregateInputLimit(inputs, maxBytes);
       const target = parseShareTarget(options.to);
+      const folder = files.length === 1 && target.kind === "bearer" && options.prefix !== true && await isDirectoryInput(files[0]);
+      let inputs;
+      if (folder) {
+        if (options.mediaType !== void 0 && options.mediaType.split(";")[0].trim().toLowerCase() !== "text/html") {
+          throw new CLIError("INVALID_ARGUMENT", "a folder is published as text/html; drop --media-type", 2);
+        }
+        const bundle = await bundleHtmlFolder(files[0], { ...name === void 0 ? {} : { name }, ...maxBytes === void 0 ? {} : { maxBytes } });
+        const notice = htmlFolderNotice(bundle);
+        if (notice !== void 0) process.stderr.write(notice);
+        inputs = [{ bytes: bundle.bytes, filename: bundle.filename }];
+      } else {
+        for (const file of files) if (await isDirectoryInput(file)) throw new CLIError("MAX_BYTES_EXCEEDED", FOLDER_NOT_AVAILABLE, 7);
+        for (const file of files) shareInputFilename(file, name);
+        inputs = await Promise.all(files.map((file) => readShareInput(file, name, maxBytes)));
+      }
+      assertAggregateInputLimit(inputs, maxBytes);
       const actions = requestedActions(options.action);
       if (options.prefix && target.kind === "bearer") throw new CLIError("INVALID_ARGUMENT", "--prefix requires an addressed target", 2);
       if (target.kind === "bearer" && actions.includes("edit")) throw new CLIError("INVALID_ARGUMENT", `--action edit is not available with --to ${options.to}: a link can only be read; address a recipient to allow edits`, 2);
@@ -27140,7 +28325,7 @@ init_constants();
 init_errors();
 init_session_expired();
 import { readFile as readFile7 } from "fs/promises";
-import { join as join12 } from "path";
+import { join as join13 } from "path";
 import { createHash } from "crypto";
 import { writeJsonAtomic as writeJsonAtomic2 } from "@tinycloud/operations/state";
 import { withoutBearer } from "@tinycloud/operations/delegation-binding";
@@ -27274,8 +28459,8 @@ function createEncryptedProfileHistory(profileName, sessionSigner) {
   const observedProfiles = /* @__PURE__ */ new Set();
   let preparedKeys;
   let preparedKey;
-  const path = async (profile) => join12(await ProfileManager.getCacheDir(profile), "share-history-v2.json");
-  const legacyPath = async (profile) => join12(await ProfileManager.getCacheDir(profile), "share-history-v1.bin");
+  const path = async (profile) => join13(await ProfileManager.getCacheDir(profile), "share-history-v2.json");
+  const legacyPath = async (profile) => join13(await ProfileManager.getCacheDir(profile), "share-history-v1.bin");
   const b64 = (value) => Buffer.from(value).toString("base64url");
   const unb64 = (value) => {
     if (typeof value !== "string" || !/^[A-Za-z0-9_-]+$/.test(value)) throw new ShareHistoryUnreadableError();
