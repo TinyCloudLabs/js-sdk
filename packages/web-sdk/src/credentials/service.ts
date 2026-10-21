@@ -21,6 +21,7 @@ import {
 } from "@tinycloud/sdk-core";
 import { BrowserCredentialInteraction, BrowserCredentialRedirectStore } from "./browser";
 import { CredentialAcquisitionController } from "./element";
+import { discoverCatalogDescriptor } from "./discovery";
 import { interpretCredentialFlow, mailboxSubject } from "./interpreter";
 import { findStoredCredential, storeCredential } from "./storage";
 import { OpenCredentialsHttpTransport } from "./transport";
@@ -98,20 +99,7 @@ export class CredentialsService {
       return descriptor;
     }
     if (!options.discoveryUrl) throw new CredentialError("UNSUPPORTED_PROFILE", "A pinned descriptor or explicit discovery URL is required");
-    let url: URL; try { url = new URL(options.discoveryUrl); } catch { throw new CredentialError("UNSUPPORTED_PROFILE", "Discovery URL is invalid"); }
-    if (url.protocol !== "https:" || !["/.well-known/opencredentials", "/v1/credential-types"].includes(url.pathname) || url.search || url.hash) throw new CredentialError("UNSUPPORTED_PROFILE", "Discovery URL is not an allowed catalog endpoint");
-    let response: Response;
-    try { response = await (options.fetch ?? globalThis.fetch.bind(globalThis))(url, { credentials: "omit", cache: "no-store", redirect: "error", referrerPolicy: "no-referrer", signal: options.signal }); } catch (cause) { throw new CredentialError("OFFLINE", "Credential discovery is unavailable", { cause }); }
-    if (!response.ok) throw new CredentialError(response.status === 503 ? "ISSUER_UNREADY" : "OFFLINE", "Credential discovery is unavailable");
-    const catalog = await response.json() as Record<string, unknown>;
-    if (catalog.type !== "tinycloud.credentials/catalog/v1" || catalog.protocol !== "tinycloud.credentials/acquisition/v1" || catalog.catalogVersion !== 1 || !Array.isArray(catalog.profiles)) throw new CredentialError("DESCRIPTOR_INVALID", "Credential catalog is invalid");
-    for (const entryValue of catalog.profiles) {
-      if (typeof entryValue !== "object" || entryValue === null || Array.isArray(entryValue)) continue;
-      const entry = entryValue as Record<string, unknown>;
-      if (entry.supported !== true || entry.enabled !== true || (entry.readiness !== "ready" && entry.readiness !== "degraded")) continue;
-      try { const candidate = validateCredentialFlowDescriptor(entry.descriptor); if (descriptorSatisfiesRequirement(candidate, requirement) && entry.descriptorDigest === await canonicalDigest(candidate)) return candidate; } catch { /* fail closed and inspect no other metadata on malformed entry */ }
-    }
-    throw new CredentialError("UNSUPPORTED_PROFILE", "No available credential profile satisfies the requirement");
+    return discoverCatalogDescriptor(requirement, options.discoveryUrl, options);
   }
 
   async find(requirementValue: CredentialRequirement, options: CredentialsOperationOptions = {}): Promise<StoredCredentialRecord | undefined> {

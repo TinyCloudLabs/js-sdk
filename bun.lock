@@ -232,10 +232,11 @@
       },
       "dependencies": {
         "@tinycloud/node-sdk": "3.3.0",
+        "@tinycloud/sdk-core": "3.3.0",
+        "@tinycloud/web-sdk": "3.3.0",
         "ulid": "^3.0.2",
       },
       "devDependencies": {
-        "@tinycloud/sdk-core": "3.3.0",
         "@types/node": "^20",
         "typescript": "^5.9.3",
       },

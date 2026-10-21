@@ -11,6 +11,7 @@ import { cmdApproval } from './approval.js';
 import { cmdPause, cmdResume } from './pause.js';
 import { cmdGuard } from './guard/command.js';
 import { cmdBroker, cmdRunApproved } from './broker.js';
+import { cmdCredential } from './credential.js';
 
 function usage(): string {
   const name = programName();
@@ -67,6 +68,12 @@ Guards (woken agents run with these; humans rarely do):
                                    use the fixed run-approved broker command.
   guard settings [--out f] [--claude-settings f]
                                    Print/write the Claude Code settings (hook + deny rules) that install it.
+
+Credentials (email proof; the owner supplies the code, it is never logged or stored):
+  credential acquire --email <addr>  Step 1: the witness emails an 8-digit code. Pending state lasts 15 minutes.
+  credential acquire --email <addr> --code <8 digits>
+                                     Step 2: exchange the code for a verified email credential (valid 1 hour).
+  credential show --email <addr>     Print a stored credential's metadata. The credential itself is never printed.
 
 Delivery (one watcher per person per machine; never calls a model):
   watch [--wake none|paseo|claude|exec] [--exec <cmd> --unguarded] [--env-pass NAME]… [--cwd dir] [--debounce 30] [--poll 60] [--ticket 25] [--wake-budget 12] [--notify none|osascript|exec] [--notify-exec <cmd>] [--once]
@@ -157,6 +164,7 @@ export async function run(argv: string[]): Promise<void> {
     case 'guard': return cmdGuard(sub);
     case 'run-approved': return cmdRunApproved(sub);
     case 'broker': return cmdBroker(sub);
+    case 'credential': return cmdCredential(sub);
     default:
       throw new CourierError('usage', `Unknown command "${command}".\n\n${usage()}`);
   }
