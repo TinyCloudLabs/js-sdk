@@ -40,9 +40,8 @@ test('valid entries keep their tier and caps, absent peers stay strict', () => {
   }
 });
 
-test('invalid entries fail closed to strict with defaults and are logged', () => {
-  const events = [];
-  const t = tempPeers({
+test('an invalid entry refuses the whole file, so no policy is widened', () => {
+  const entries = {
     unknownKey: { tier: 'trusted', extra: true },
     badTier: { tier: 'admin' },
     zeroRate: { tier: 'trusted', ratePerHour: 0 },
@@ -51,17 +50,14 @@ test('invalid entries fail closed to strict with defaults and are logged', () =>
     raiseInRate: { tier: 'trusted', ratePerHour: 101 },
     raiseOutRate: { tier: 'trusted', outPerHour: 101 },
     notAnObject: 'trusted',
-  });
-  try {
-    const peers = loadPeers(t.file, (event, fields) => events.push({ event, ...fields }));
-    const bad = ['unknownKey', 'badTier', 'zeroRate', 'floatRate', 'hugeRate', 'raiseInRate', 'raiseOutRate', 'notAnObject'];
-    for (const peerId of bad) {
-      assert.deepEqual(policyOf(peers, peerId), { tier: 'strict', ratePerHour: 100, outPerHour: 100 }, peerId);
+  };
+  for (const [peerId, value] of Object.entries(entries)) {
+    const t = tempPeers({ alice: { tier: 'trusted' }, [peerId]: value });
+    try {
+      assert.throws(() => loadPeers(t.file), (error) => error.code === 'bad-peers', peerId);
+    } finally {
+      t.cleanup();
     }
-    assert.equal(events.length, bad.length);
-    assert.ok(events.every((e) => e.event === 'peers-invalid-entry' && e.as === 'strict'));
-  } finally {
-    t.cleanup();
   }
 });
 
@@ -93,7 +89,7 @@ test('a peers file owned by another uid is refused', () => {
   const t = tempPeers({ alice: { tier: 'trusted' } });
   try {
     const foreign = (process.getuid?.() ?? 0) + 1;
-    assert.throws(() => loadPeers(t.file, () => {}, foreign), (error) => error.code === 'insecure-peers');
+    assert.throws(() => loadPeers(t.file, foreign), (error) => error.code === 'insecure-peers');
   } finally {
     t.cleanup();
   }

@@ -21,7 +21,7 @@ test('canonical JSON keeps a parsed "__proto__" key, like the view\'s string-bui
 
 const NOW = Date.parse('2026-10-20T12:00:00Z');
 const request = {
-  id: '01M5CBKA6RNA3RZ2819T9M7NDZ', peer: 'hunter', threadId: '01M5C9EDF03QMRZS2DJXGN5A4C', taskId: '01M5CBKA6RNA3RZ2819T9M7NK1', verb: 'merge', target: 'tinycloudlabs/docs#42', summary: 'Merge docs PR 42',
+  id: '01M5CBKA6RNA3RZ2819T9M7NDZ', peer: 'hunter', threadId: '01M5C9EDF03QMRZS2DJXGN5A4C', taskId: '01M5CBKA6RNA3RZ2819T9M7NK1', verb: 'merge', headSha: 'a'.repeat(40), base: 'Main', target: 'tinycloudlabs/docs#42', summary: 'Merge docs PR 42',
   action: 'gh pr merge 42', reason: 'docs only', risk: 'low',
   requestedBy: { owner: 'did:pkh:o', agent: 'did:key:a' },
   createdAt: '2026-10-20T10:00:00Z', expiresAt: '2026-10-21T10:00:00Z', status: 'pending',
@@ -144,10 +144,44 @@ test('a denial wakes the agent too, so it can stop and update the task', async (
   assert.equal(wakes[0].approvals[0].decision, 'denied');
 });
 
-test('the request hash covers verb, target and summary: changing any of them changes it', () => {
+test('the request hash covers verb, target, summary and merge pins: changing any invalidates approval', () => {
   const base = requestHash(request);
-  for (const change of [{ verb: 'deploy' }, { target: 'tinycloudlabs/docs#43' }, { summary: 'Merge docs PR 43' }]) {
+  for (const change of [{ verb: 'deploy' }, { target: 'tinycloudlabs/docs#43' }, { summary: 'Merge docs PR 43' }, { headSha: 'b'.repeat(40) }, { base: 'main' }]) {
     assert.notEqual(requestHash({ ...request, ...change }), base, JSON.stringify(change));
+    assert.equal(code(() => verifyApproval(request.id, { ...request, ...change }, approval(), { now: NOW })), 'approval-mismatch');
+  }
+});
+
+test('merge approvals return both pins and optionally match each exactly', () => {
+  const verify = (options = {}) => verifyApproval(request.id, request, approval(), { now: NOW, ...options });
+  const v = verify({ headSha: request.headSha, base: request.base });
+  assert.deepEqual([v.headSha, v.base], [request.headSha, request.base]);
+  for (const options of [{ headSha: 'b'.repeat(40) }, { headSha: request.headSha.toUpperCase() }, { base: 'main' }, { base: 'Main ' }]) {
+    assert.equal(code(() => verify(options)), 'approval-mismatch', JSON.stringify(options));
+  }
+  assert.doesNotThrow(() => verify({ headSha: request.headSha }));
+  assert.doesNotThrow(() => verify({ base: request.base }));
+});
+
+test('legacy merge requests missing either pin fail closed with a re-request reason', () => {
+  for (const keys of [['headSha'], ['base'], ['headSha', 'base']]) {
+    const legacy = { ...request };
+    for (const key of keys) delete legacy[key];
+    assert.throws(() => verifyApproval(request.id, legacy, approval({}, legacy), { now: NOW }),
+      (e) => e.code === 'approval-mismatch' && e.message.includes('merge request lacks headSha/base: re-request'));
+  }
+});
+
+test('non-merge approvals have no pins and cannot match merge-only expectations', () => {
+  const { headSha, base, ...rest } = request;
+  const req = { ...rest, verb: 'deploy', target: 'pages:site' };
+  const verify = (opts = {}, r = req) => verifyApproval(r.id, r, approval({}, r), { now: NOW, ...opts });
+  assert.equal('headSha' in verify(), false);
+  assert.equal('base' in verify(), false);
+  assert.equal(code(() => verify({ headSha })), 'approval-mismatch');
+  assert.equal(code(() => verify({ base })), 'approval-mismatch');
+  for (const extra of [{ headSha }, { base }, { headSha, base }]) {
+    assert.equal(code(() => verify({}, { ...req, ...extra })), 'approval-mismatch');
   }
 });
 

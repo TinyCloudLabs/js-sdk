@@ -165,7 +165,7 @@ test('an id more than 10 minutes ahead is skipped and retried later; ids within 
   assert.ok(h.events.some((e) => e.event === 'intake-skip' && e.fields.code === 'stale' && e.fields.direction === 'future'));
 });
 
-test('an id older than 7 days is skipped as stale once, and gets a seen marker', async () => {
+test('an id older than 7 days is skipped with no marker; an id just inside the horizon is queued', async () => {
   const h = harness();
   const old = ulid(NOW - 7 * DAY - 60_000);
   const edge = ulid(NOW - 7 * DAY + 60_000);
@@ -173,10 +173,8 @@ test('an id older than 7 days is skipped as stale once, and gets a seen marker',
   await putMessage(h.kv, edge, [{ kind: 'text', text: 'edge' }]);
   assert.equal(await intakeCycle(h.input), 1);
   assert.deepEqual(h.queueFiles(HANDLE), [`${edge}.json`]);
-  assert.deepEqual(h.doneFiles(HANDLE), [`${old}.json`]);
-  assert.equal(h.readDone(HANDLE, old).outcome, 'stale');
+  assert.deepEqual(h.doneFiles(HANDLE), [], 'a stale id is dropped at selection and gets no marker');
   assert.equal(await intakeCycle(h.input), 0);
-  assert.equal(h.eventsNamed('intake-skip').filter((e) => e.fields.code === 'stale').length, 1);
 });
 
 test('a row whose messageId or contextId does not match its key is not queued, and is logged once', async () => {
@@ -501,7 +499,7 @@ test('janitor: a record older than 7 days moves to done/; done/ entries older th
 
   h.setClock(NOW + 14 * DAY + 1000);
   await intakeCycle(h.input);
-  assert.equal(h.readDone(HANDLE, msg).outcome, 'stale', 'the archived record is pruned; only the stale marker remains');
+  assert.deepEqual(h.doneFiles(HANDLE), [], 'the archived record is pruned; the id is past the stale floor, so no marker replaces it');
   assert.deepEqual(h.queueFiles(HANDLE), []);
 });
 

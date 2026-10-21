@@ -1,15 +1,22 @@
-import { test } from 'node:test';
+import { privateScratch } from './private-scratch.mjs';
+import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { runApproved, templateFor, brokerEnv, sanitizeOutput, MAX_OUTPUT, loadBrokerCredential } from '../dist/broker.js';
+import fs from 'node:fs';
+import path from 'node:path';
+import { loadBrokerConfig } from '../dist/broker-config.js';
+const scratchRoot = privateScratch('tc712-broker-test-');
+after(() => fs.rmSync(scratchRoot, { recursive: true, force: true }));
 import { requestHash } from '../dist/canonical.js';
 import { k } from '../dist/keys.js';
 
 const ID = '01JTR100000000000000000000';
 const NOW = Date.parse('2026-10-20T12:00:00Z');
 const SHA = 'a'.repeat(40);
+const BASE = 'master';
 const TOKEN = `ghp_${'d'.repeat(36)}`; // Dummy only.
 function fixture({ verb = 'merge', target = 'a/b#42', request = {}, approval = {} } = {}) {
-  const req = { id: ID, peer: 'bob', threadId: ID, taskId: ID, verb, target, summary: 'Merge docs', reason: 'test', risk: 'low', requestedBy: { owner: 'did:pkh:o', agent: 'did:key:a' }, createdAt: '2026-10-20T10:00:00Z', expiresAt: '2026-10-21T10:00:00Z', status: 'pending', ...request };
+  const req = { id: ID, peer: 'bob', threadId: ID, taskId: ID, verb, target, ...(verb === 'merge' ? { headSha: SHA, base: BASE } : {}), summary: 'Merge docs', reason: 'test', risk: 'low', requestedBy: { owner: 'did:pkh:o', agent: 'did:key:a' }, createdAt: '2026-10-20T10:00:00Z', expiresAt: '2026-10-21T10:00:00Z', status: 'pending', ...request };
   const rows = new Map([[k.request(ID), req], [k.approval(ID), { requestId: ID, requestHash: requestHash(req), decision: 'approved', decidedAt: '2026-10-20T11:00:00Z', ...approval }]]);
   const calls = [];
   const kv = {
@@ -25,7 +32,7 @@ function fixture({ verb = 'merge', target = 'a/b#42', request = {}, approval = {
     },
   };
   const deps = {
-    kv, now: () => NOW,
+    kv, scratchRoot, now: () => NOW,
     credential: () => ({ ghBin: '/stub/gh', token: TOKEN }),
     exec: async (bin, args, options) => {
       calls.push({ bin, args, options });
@@ -33,7 +40,7 @@ function fixture({ verb = 'merge', target = 'a/b#42', request = {}, approval = {
       assert.equal(options.env.GH_TOKEN, TOKEN);
       if (args[1] === 'view') {
         assert.ok(!rows.has(k.approvalUsed(ID)), 'read-only preflight is before consumption');
-        return { code: 0, stdout: JSON.stringify({ state: 'OPEN', headRefOid: SHA, isDraft: false }), stderr: '' };
+        return { code: 0, stdout: JSON.stringify({ state: 'OPEN', headRefOid: SHA, baseRefName: BASE, isDraft: false }), stderr: '' };
       }
       assert.ok(rows.has(k.approvalUsed(ID)), 'marker exists BEFORE merge exec');
       return { code: 0, stdout: `untrusted output ${TOKEN}`, stderr: '' };
@@ -60,9 +67,51 @@ test('broker builds only the fixed argv, consumes BEFORE exec, and refuses repla
   assert.equal(f.calls.length, 2);
 });
 
+for (const [label, changedView] of [
+  ['changed head', { headRefOid: 'b'.repeat(40) }],
+  ['changed base', { baseRefName: 'release' }],
+  ['absent base', { baseRefName: undefined }],
+  ['empty base', { baseRefName: '' }],
+  ['base case differs', { baseRefName: 'Master' }],
+  ['absent head', { headRefOid: undefined }],
+  ['empty head', { headRefOid: '' }],
+  ['head case differs', { headRefOid: SHA.toUpperCase() }],
+]) {
+  test(`broker refuses ${label} before consumption or merge`, async () => {
+    const f = fixture();
+    const exec = f.deps.exec;
+    f.deps.exec = async (bin, args, options) => {
+      const result = await exec(bin, args, options);
+      return args[1] === 'view'
+        ? { ...result, stdout: JSON.stringify({ ...JSON.parse(result.stdout), ...changedView }) }
+        : result;
+    };
+    await assert.rejects(runApproved(ID, f.deps), /nothing was consumed/);
+    unused(f);
+    assert.deepEqual(f.calls.map(c => c.args[1]), ['view']);
+  });
+}
+
+test('broker accepts an exact case-preserved approved base', async () => {
+  const f = fixture({ request: { base: 'Release/Main' } });
+  const exec = f.deps.exec;
+  f.deps.exec = async (bin, args, options) => {
+    const result = await exec(bin, args, options);
+    return args[1] === 'view'
+      ? { ...result, stdout: JSON.stringify({ ...JSON.parse(result.stdout), baseRefName: 'Release/Main' }) }
+      : result;
+  };
+  const result = await runApproved(ID, f.deps);
+  assert.equal(result.ok, true);
+  assert.equal(result.headSha, SHA);
+  assert.equal(f.calls[1].args.at(-1), `--match-head-commit=${SHA}`);
+});
+
 test('hash mismatch, expired, denied, missing and forged approval refuse before execution or consume', async () => {
   const cases = [
     [f => { f.rows.get(k.request(ID)).target = 'a/b#43'; }, 'approval-mismatch'],
+    [f => { f.rows.get(k.request(ID)).headSha = 'b'.repeat(40); }, 'approval-mismatch'],
+    [f => { f.rows.get(k.request(ID)).base = 'release'; }, 'approval-mismatch'],
     [f => { f.deps.now = () => NOW + 25 * 3600_000; }, 'approval-expired'],
     [f => { f.rows.get(k.approval(ID)).decision = 'denied'; }, 'approval-denied'],
     [f => { f.rows.delete(k.approval(ID)); }, 'approval-missing'],
@@ -88,7 +137,7 @@ test('non-merge verbs and direct pushes refuse before consuming or loading crede
 
 test('credential missing, unavailable marker and create failure consume nothing and run no merge', async () => {
   const f = fixture();
-  f.deps.credential = () => loadBrokerCredential('/not-a-configured-courier-profile');
+  f.deps.credential = () => loadBrokerConfig('a'.repeat(24), scratchRoot);
   await assert.rejects(runApproved(ID, f.deps), { code: 'broker-not-configured' });
   unused(f); assert.equal(f.calls.length, 0);
   const g = fixture();
@@ -115,7 +164,7 @@ test('one of two racing brokers wins the create-only marker', async () => {
   // Both may view before either consumes. The fake executor checks marker only for merge here.
   const exec = f.deps.exec;
   f.deps.exec = (bin, args, options) => args[1] === 'view'
-    ? Promise.resolve({ code: 0, stdout: JSON.stringify({ state: 'OPEN', headRefOid: SHA }), stderr: '' })
+    ? Promise.resolve({ code: 0, stdout: JSON.stringify({ state: 'OPEN', headRefOid: SHA, baseRefName: BASE }), stderr: '' })
     : exec(bin, args, options);
   const results = await Promise.allSettled([runApproved(ID, f.deps), runApproved(ID, f.deps)]);
   assert.equal(results.filter(r => r.status === 'fulfilled').length, 1);

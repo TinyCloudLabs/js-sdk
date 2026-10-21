@@ -183,7 +183,7 @@ describe.skipIf(!NODE_BIN)("tinycloud knowledge against a real node", () => {
     const hint: string = other.error().hint;
     expect(hint).toContain(`--preset apps-agent --app ${HEALTH} --emit req.json`);
     expect(hint).toContain(`--cap tinycloud.kv:applications:${HEALTH}/knowledge/:get,list`);
-    // The hint never points an agent at --write during the beta.
+    // The beta hint suggests only read-only requests, never --write.
     expect(hint).not.toContain("--write");
     expect(hint).not.toContain("<app_id>");
   }, 120_000);
@@ -250,7 +250,7 @@ describe.skipIf(!NODE_BIN)("tinycloud knowledge against a real node", () => {
     expect(await ownerRows()).toEqual([["salmon"]]);
   }, 180_000);
 
-  test("--write needs --app, and a write grant for one app can change that app's data but nothing else", async () => {
+  test("--write needs --app, and a write grant for one app can write its knowledge and data files but not its code, manifest or install record", async () => {
     await newAgent("writer");
     const noApp = await cli("writer", ["auth", "request", "--preset", "apps-agent", "--write", "--emit", join(root, "none.json")]);
     expect(noApp.exitCode).toBe(2);
@@ -268,6 +268,33 @@ describe.skipIf(!NODE_BIN)("tinycloud knowledge against a real node", () => {
     expect((await cli("owner", ["kv", "get", "--space", "applications", note, "--raw"])).stdout).toContain("agent note");
     expect((await cli("writer", ["sql", "execute", "INSERT INTO meal(name) VALUES ('rice')", "--db", HEALTH_DB, "--space", ownerSpace])).exitCode).toBe(0);
     expect(await ownerRows()).toEqual([["salmon"], ["rice"]]);
+    const prefs = `${HEALTH}/prefs/targets.json`;
+    expect((await cli("writer", ["kv", "put", "--space", ownerSpace, prefs, '{"kcal":2000}'])).exitCode).toBe(0);
+    expect((await cli("owner", ["kv", "get", "--space", "applications", prefs, "--raw"])).stdout).toContain("2000");
+
+    // The app's code, manifest and install record are readable but the node refuses every write to them.
+    const protectedFiles: Record<string, string> = {
+      [`${HEALTH}/app/app.jsx`]: "export default () => null;\n",
+      [`${HEALTH}/manifest.json`]: '{"app_id":"x"}\n',
+      [`${HEALTH}/install.json`]: '{"installed":true}\n',
+      // The share runner keeps the stored manifest and install record under app/.
+      [`${HEALTH}/app/manifest.json`]: '{"app_id":"x","stored":true}\n',
+      [`${HEALTH}/app/install.json`]: '{"installed":true,"stored":true}\n',
+    };
+    for (const [key, original] of Object.entries(protectedFiles)) {
+      await writeFile(join(root, "protected.txt"), original);
+      expect((await cli("owner", ["kv", "put", "--space", "applications", key, "--file", join(root, "protected.txt")])).exitCode).toBe(0);
+    }
+    for (const key of [...Object.keys(protectedFiles), `${HEALTH}/data/x`, `${HEALTH}/knowledgebase/x`]) {
+      expect((await cli("writer", ["kv", "put", "--space", ownerSpace, key, "overwritten by the agent"])).exitCode).toBe(5);
+    }
+    // A key that climbs out of the write folder is refused too (the node's 401 carries no capability to name, so the CLI exits 3).
+    expect((await cli("writer", ["kv", "put", "--space", ownerSpace, `${HEALTH}/knowledge/../app/app.jsx`, "overwritten by the agent"])).exitCode).not.toBe(0);
+    for (const [key, original] of Object.entries(protectedFiles)) {
+      expect((await cli("writer", ["kv", "get", "--space", ownerSpace, key, "--raw"])).stdout).toBe(original);
+      expect((await cli("owner", ["kv", "get", "--space", "applications", key, "--raw"])).stdout).toBe(original);
+    }
+    expect((await cli("writer", ["knowledge", "read", HEALTH])).exitCode).toBe(0);
 
     // Not delete, and not another app or another space.
     expect((await cli("writer", ["kv", "delete", "--space", ownerSpace, note])).exitCode).toBe(5);

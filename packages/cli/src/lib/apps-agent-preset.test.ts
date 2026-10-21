@@ -29,11 +29,59 @@ describe("apps-agent preset grants", () => {
     expect(APPS_AGENT_EXPIRY).toBe("7d");
   });
 
-  test("write adds exactly KV put and SQL write, for named apps only", () => {
+  test("write reads the whole app but puts files only in knowledge/ and prefs/, and writes SQL rows; named apps only", () => {
     expect(appsAgentPermissions("write", [HEALTH])).toEqual([
-      { service: "tinycloud.kv", space: "applications", path: `${HEALTH}/`, actions: ["tinycloud.kv/get", "tinycloud.kv/list", "tinycloud.kv/put"] },
+      { service: "tinycloud.kv", space: "applications", path: `${HEALTH}/`, actions: ["tinycloud.kv/get", "tinycloud.kv/list"] },
+      { service: "tinycloud.kv", space: "applications", path: `${HEALTH}/knowledge/`, actions: ["tinycloud.kv/put"] },
+      { service: "tinycloud.kv", space: "applications", path: `${HEALTH}/prefs/`, actions: ["tinycloud.kv/put"] },
       { service: "tinycloud.sql", space: "applications", path: `${HEALTH}/`, actions: ["tinycloud.sql/read", "tinycloud.sql/write"] },
     ]);
+  });
+
+  /** Whether an entry of the request would let a KV put on `key` through: the node matches the key against the entry's path as a prefix. */
+  const putAllowed = (entries: ReturnType<typeof appsAgentPermissions>, key: string) =>
+    !key.split("/").some((segment) => segment === "." || segment === "..") &&
+    entries.some((entry) => entry.service === "tinycloud.kv" && entry.actions.includes("tinycloud.kv/put") && key.startsWith(entry.path));
+  const readAllowed = (entries: ReturnType<typeof appsAgentPermissions>, key: string) =>
+    entries.some((entry) => entry.service === "tinycloud.kv" && entry.actions.includes("tinycloud.kv/get") && key.startsWith(entry.path));
+
+  test.each([
+    [`${HEALTH}/knowledge/a.md`, true],
+    [`${HEALTH}/knowledge/nested/b.md`, true],
+    [`${HEALTH}/prefs/settings.json`, true],
+    [`${HEALTH}/app/app.jsx`, false],
+    [`${HEALTH}/install.json`, false],
+    [`${HEALTH}/manifest.json`, false],
+    [`${HEALTH}/app/manifest.json`, false],
+    [`${HEALTH}/app/install.json`, false],
+    [`${HEALTH}/data/x`, false],
+    [`${HEALTH}/knowledge`, false],
+    [`${HEALTH}/knowledgebase/a.md`, false],
+    [`${HEALTH}/knowledge/../app/app.jsx`, false],
+    [`${HEALTH}/../${RECIPES}/knowledge/a.md`, false],
+    [`${RECIPES}/knowledge/a.md`, false],
+    [`${HEALTH}other/knowledge/a.md`, false],
+  ])("the write preset for one app: a KV put on %s is allowed: %p", (key, allowed) => {
+    expect(putAllowed(appsAgentPermissions("write", [HEALTH]), key)).toBe(allowed);
+  });
+
+  test("the write preset still reads every key of the app, and the read preset puts nowhere", () => {
+    const write = appsAgentPermissions("write", [HEALTH]);
+    for (const key of [`${HEALTH}/app/app.jsx`, `${HEALTH}/install.json`, `${HEALTH}/manifest.json`, `${HEALTH}/knowledge/a.md`]) {
+      expect(readAllowed(write, key)).toBe(true);
+    }
+    expect(readAllowed(write, `${RECIPES}/knowledge/a.md`)).toBe(false);
+    for (const key of [`${HEALTH}/knowledge/a.md`, `${HEALTH}/prefs/x`]) {
+      expect(putAllowed(appsAgentPermissions("read", [HEALTH]), key)).toBe(false);
+    }
+  });
+
+  test("each of several apps gets its own write folders and no other app's", () => {
+    const both = appsAgentPermissions("write", [HEALTH, RECIPES]);
+    expect(putAllowed(both, `${RECIPES}/prefs/x`)).toBe(true);
+    expect(putAllowed(both, `${HEALTH}/knowledge/x`)).toBe(true);
+    expect(putAllowed(both, `${RECIPES}/app/app.jsx`)).toBe(false);
+    expect(putAllowed(both, `${HEALTH}/manifest.json`)).toBe(false);
   });
 
   test("each named app gets its own prefix for both services", () => {
@@ -73,15 +121,29 @@ describe("apps-agent scope notice states the facts of the grant", () => {
     expect(notice).toContain("READ-ONLY");
   });
 
-  test("write names the apps, drops READ-ONLY and warns that tables can be changed or deleted", () => {
+  test("write names the apps and the folders it can write, says it cannot change the app's code, and warns that tables can be changed or deleted", () => {
     const notice = appsAgentScopeNotice("write", [HEALTH, RECIPES]);
     expect(notice).toContain(`\`${HEALTH}/\``);
     expect(notice).toContain(`\`${RECIPES}/\``);
+    expect(notice).toContain("write knowledge and data files");
+    for (const app of [HEALTH, RECIPES]) {
+      expect(notice).toContain(`\`${app}/knowledge/\``);
+      expect(notice).toContain(`\`${app}/prefs/\``);
+    }
+    expect(notice).toContain("cannot change the apps' code, manifest or install record");
+    expect(notice).toContain("files outside those folders are read-only for it");
+    expect(notice).not.toContain("everything outside those folders");
+    expect(notice).toContain("SQL write is separate from that: it can change these apps' table rows");
+    expect(notice).not.toContain(`\`${HEALTH}/app/\``);
     expect(notice).not.toContain("READ-ONLY");
     expect(notice).not.toContain("ALL your installed apps");
     expect(notice).toContain("(structure)");
     expect(notice).toContain("cannot touch other apps, other spaces or secrets");
     expect(notice).toContain("7 days");
+    expect(appsAgentScopeNotice("write", [HEALTH])).toContain("cannot change the app's code, manifest or install record");
+    expect(appsAgentScopeNotice("write", [HEALTH])).toContain("also change or delete its tables (structure)");
+    expect(notice).toContain("also change or delete their tables (structure)");
+    expect(notice).not.toContain("delete its tables");
   });
 });
 
@@ -151,6 +213,19 @@ describe("matchAppsAgentRequest (the owner side)", () => {
     expect(matchAppsAgentRequest(asRequested("write"), "7d", OWNER_SPACE)).toBeUndefined();
   });
 
+  test("the earlier wide write request (put on the whole app) and a put on app/ are not the preset", () => {
+    const [get, put, prefs, sql] = asRequested("write", [HEALTH]).slice(0, 4).map((entry, index) => ({ ...entry, index }));
+    const strip = ({ index: _index, ...entry }: typeof get) => entry;
+    const wide = [
+      { ...strip(get!), actions: ["tinycloud.kv/get", "tinycloud.kv/list", "tinycloud.kv/put"] },
+      strip(sql!),
+    ];
+    expect(matchAppsAgentRequest(wide, "7d", OWNER_SPACE)).toBeUndefined();
+    const withApp = [strip(get!), strip(put!), strip(prefs!), { ...strip(put!), path: `${HEALTH}/app/` }, strip(sql!)];
+    expect(matchAppsAgentRequest(withApp, "7d", OWNER_SPACE)).toBeUndefined();
+    expect(matchAppsAgentRequest([strip(get!), strip(put!), strip(sql!)], "7d", OWNER_SPACE)).toBeUndefined();
+  });
+
   test("another owner's applications space, or a space that only ends in :applications, is not the owner's", () => {
     const foreign = "tinycloud:pkh:eip155:1:0x2222222222222222222222222222222222222222:applications";
     expect(matchAppsAgentRequest(asRequested("read"), "7d", foreign)).toBeUndefined();
@@ -214,18 +289,48 @@ describe("describeGrantScope: the text follows what will be signed", () => {
     expect(scope.text).toContain("ALL apps in your `applications` space");
     expect(scope.text).toContain("(structure)");
     expect(scope.text).toContain("TC-1581");
-    // the named-app write is within what the preset can grant; the other two are not
+    // the named-app SQL write is within what the preset can grant; the other two are not
     expect(scope.extras).toHaveLength(2);
   });
 
-  test("a hand-made request inside the preset's limits (narrower paths, read, named-app write) needs no confirmation", () => {
+  test("a hand-made request inside the preset's limits (narrower paths, read, a put inside a write folder) needs no confirmation", () => {
     const scope = scopeOf([
-      { service: "tinycloud.kv", space: OWNER_SPACE, path: `${HEALTH}/knowledge/`, actions: ["tinycloud.kv/get", "tinycloud.kv/list"] },
-      { service: "tinycloud.kv", space: OWNER_SPACE, path: `${HEALTH}/notes/`, actions: ["tinycloud.kv/put"] },
+      { service: "tinycloud.kv", space: OWNER_SPACE, path: `${HEALTH}/notes/`, actions: ["tinycloud.kv/get", "tinycloud.kv/list"] },
+      { service: "tinycloud.kv", space: OWNER_SPACE, path: `${HEALTH}/knowledge/notes/`, actions: ["tinycloud.kv/put"] },
+      { service: "tinycloud.kv", space: OWNER_SPACE, path: `${HEALTH}/prefs/`, actions: ["tinycloud.kv/put"] },
     ]);
     expect(scope.extras).toEqual([]);
     expect(scope.text).toContain("not the standard apps-agent grant");
-    expect(entryLines(scope.text)).toHaveLength(2);
+    expect(entryLines(scope.text)).toHaveLength(3);
+  });
+
+  test.each([
+    [`${HEALTH}/`, "the whole app (its code, manifest and install record)"],
+    [`${HEALTH}/app/`, "the app's code"],
+    [`${HEALTH}/manifest.json`, "the manifest"],
+    [`${HEALTH}/install.json`, "the install record"],
+    [`${HEALTH}/app/manifest.json`, "the stored manifest"],
+    [`${HEALTH}/app/install.json`, "the stored install record"],
+    [`${HEALTH}/data/`, "a folder the preset does not write"],
+    [`${HEALTH}/knowledge`, "a single key that is not a folder"],
+    [`${HEALTH}/knowledge/../app/`, "a path that climbs out of the write folder"],
+    ["", "the whole space"],
+  ])("a KV put on %s (%s) is beyond the preset: listed first with !, and needs a confirmation", (path, _why) => {
+    const put = { service: "tinycloud.kv", space: OWNER_SPACE, path, actions: ["tinycloud.kv/put"] };
+    const scope = scopeOf([...asRequested("read", [HEALTH]), put]);
+    expect(scope.extras).toEqual([put]);
+    expect(scope.text).toContain("MORE than the apps-agent preset");
+    expect(entryLines(scope.text)[0]).toStartWith("! ");
+    expect(entryLines(scope.text)[0]).toContain("create and overwrite files");
+  });
+
+  test("the earlier wide write request is described as MORE than the preset, with the put on the whole app marked", () => {
+    const [get, , , sql] = asRequested("write", [HEALTH]);
+    const widePut = { ...get!, actions: ["tinycloud.kv/get", "tinycloud.kv/list", "tinycloud.kv/put"] };
+    const scope = scopeOf([widePut, sql!]);
+    expect(scope.extras).toEqual([widePut]);
+    expect(scope.text).toContain("MORE than the apps-agent preset");
+    expect(scope.text).not.toBe(appsAgentScopeNotice("write", [HEALTH]));
   });
 
   test.each([

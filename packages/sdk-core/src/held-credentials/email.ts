@@ -8,9 +8,8 @@
  *   - remove dots of the local part for gmail.com and googlemail.com only (googlemail.com maps to
  *     gmail.com, as in billing's implementation).
  *
- * OPEN (G14): Unicode/IDNA handling is not defined. Until it is decided and frozen (before billing's
- * first production write), any input containing a UTF-16 code unit above 0x7F is refused, checked
- * before trim and lowercase. Billing mirrors this rule byte for byte.
+ * Unicode/IDNA handling is being defined. Until then, inputs containing a UTF-16 code unit above
+ * 0x7F are refused, checked before trim and lowercase. Billing applies the same rule.
  *
  * Returns null for empty or malformed input: callers must fail closed.
  */

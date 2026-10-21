@@ -19,11 +19,16 @@ const CREDENTIAL_SUBSTRINGS = [
 
 /** Config and hook files that decide what runs next: writing them could switch the guard off or add a command. */
 const PROTECTED_SUBSTRINGS = [
-  '.claude/settings', 'settings.local.json', '.claude/hooks', '.claude/commands', '.claude/agents', '.mcp.json', '.git/hooks', '.git/config', 'guard/settings.json',
+  '.courier-agent.json', '.claude/settings', 'settings.local.json', '.claude/hooks', '.claude/commands', '.claude/agents', '.mcp.json', '.git/hooks', '.git/config', 'guard/settings.json',
   '.config/git', '.gitconfig', '.git-hooks',
 ];
 
 const CREDENTIAL_PATTERNS: [string, RegExp][] = [
+  ['owner shell startup files', /(?:^|[\s/])\.(?:bashrc|bash_profile|bash_login|profile|zshenv|zshrc|zprofile)(?:[\s/]|$)/i],
+  ['a glob in a process environment path', /\/proc\/[^\s]*[*?[]/i],
+  ['a glob hiding a credential directory', /(?:^|[\s/])[^\s/]*[*?[][^\s/]*(?:config|tinycloud|courier)[^\s/]*\//i],
+  ['a glob hiding gh hosts', /(?:^|[\s/])host[^\s/]*[*?[][^\s/]*\.ya?ml/i],
+  ['an embedded privilege command', /['"(;]\s*(?:sudo|doas|pkexec|runuser)\s/i],
   ['process environments (/proc/*/environ)', /\/proc\b[^\n]*environ/i],
   ['a glob in a dot-directory under .config', /\.config\/[^\s/]*[*?[]/],
   ['a glob in a dot-file name', /(^|[\s/=:])\.[A-Za-z_-]+[*?[]/],
@@ -90,18 +95,21 @@ function ancestors(from: string): string[] {
 const PER_DIRECTORY = ['.claude/settings.json', '.claude/settings.local.json', '.claude/hooks', '.claude/commands', '.claude/agents', '.mcp.json', '.git/hooks', '.git/config', '.gitmodules'];
 
 /** Names under a home directory (the real one and the agent's clean one). */
-const PER_HOME = ['.claude/settings.json', '.claude/settings.local.json', '.claude/hooks', '.claude/commands', '.claude/agents', '.claude.json', '.gitconfig', '.config/git', '.bashrc', '.bash_profile', '.profile', '.zshenv', '.zshrc', '.zprofile', '.npmrc'];
+const PER_HOME = ['.courier-agent.json', '.claude/settings.json', '.claude/settings.local.json', '.claude/hooks', '.claude/commands', '.claude/agents', '.claude.json', '.gitconfig', '.config/git', '.bashrc', '.bash_profile', '.profile', '.zshenv', '.zshrc', '.zprofile', '.npmrc'];
 
 export interface ProtectedSet {
   /** Absolute paths (courier home, guard install dir, node_modules chain, package roots): nothing under them may be written. */
   roots: string[];
   /** Home directories whose tool configuration may not be written. */
   homes: string[];
+  realHome?: string;
 }
 
 /** True if `file` (relative to `cwd`) may not be written by a woken agent. Compares real paths. */
 export function isProtectedFile(file: string, cwd: string, set: ProtectedSet): boolean {
-  const real = realpathBest(path.resolve(cwd, file));
+  const home = set.homes[set.homes.length - 1] ?? process.env.HOME ?? '';
+  const expanded = file.replace(/^~(?=\/|$)/, home).replace(/^\$\{?HOME\}?(?=\/|$)/, home);
+  const real = realpathBest(path.resolve(cwd, expanded));
   for (const root of set.roots) if (within(real, realpathBest(root))) return true;
   for (const dir of ancestors(cwd)) for (const rel of PER_DIRECTORY) if (within(real, realpathBest(path.join(dir, rel)))) return true;
   for (const home of set.homes) for (const rel of PER_HOME) if (within(real, realpathBest(path.join(home, rel)))) return true;
@@ -137,4 +145,33 @@ export function protectedSet(home: string, entry: string, extra: { agentHome?: s
     roots: [path.resolve(home), ...installRoots(entry)],
     homes: [...new Set([os.homedir(), ...(extra.agentHome ? [extra.agentHome] : [])])],
   };
+}
+
+/** Reads/searches must not descend into protected state or enumerate an ancestor that contains it. */
+export function isProtectedRead(file: string, cwd: string, set: ProtectedSet): boolean {
+  const home = set.homes[set.homes.length - 1] ?? process.env.HOME ?? '';
+  const expanded = file.replace(/^~(?=\/|$)/, home).replace(/^\$\{?HOME\}?(?=\/|$)/, home);
+  const real = realpathBest(path.resolve(cwd, expanded));
+  for (const root of set.roots) {
+    const r = realpathBest(root);
+    if (within(real, r) || within(r, real)) return true;
+  }
+  const owner = set.realHome ?? set.homes[0];
+  if (owner && within(real, realpathBest(owner)) && !within(real, realpathBest(cwd))) return true;
+  return false;
+}
+
+/** Check literal shell paths by realpath, including symlinks and broad ancestor searches. */
+export function pathTextRefusal(text: string, cwd: string, home: string, roots: readonly string[], realHome?: string): string | undefined {
+  const flat = unquoted(text);
+  if (/\bCOURIER_(HOME|REAL_HOME|BROKER\w*)\b/.test(flat) || /(?:~|\$\{?HOME\}?)\/\.\.(?:\/|\s|$)/.test(flat)) return 'broker/profile environment or home traversal';
+  for (let word of flat.split(/[\s;&|<>]+/)) {
+    if (!word || word.startsWith('-') || word.includes('://')) continue;
+    word = word.replace(/^~(?=\/|$)/, home).replace(/^\$\{?HOME\}?(?=\/|$)/, home);
+    if (!word.includes('/') && word !== '.' && word !== '..') continue;
+    const prefix = word.split(/[*?[]/, 1)[0];
+    const file = prefix || '.';
+    if (isProtectedRead(file, cwd, { roots: [...roots], homes: realHome ? [realHome] : [], realHome })) return 'a protected root or its parent';
+  }
+  return undefined;
 }

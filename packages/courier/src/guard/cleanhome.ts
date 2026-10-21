@@ -1,20 +1,12 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { agentHome, profileId } from './install.js';
 import { spawnSync } from 'node:child_process';
 
 /**
- * A clean HOME for woken agents. The shell reads its start-up files through `$HOME`, so an agent whose HOME is an empty
- * directory cannot source `~/.bashrc`, `~/.profile` or `~/.zshenv`, even through `bash -lc` or `bash -ic`, and cannot
- * reach `~/.config/gh`, `~/.npmrc`, `~/.ssh` and the rest by `~` or `$HOME`. (An absolute path to the real home still
- * resolves: that is the residual risk the README names, and the reason to prefer a dedicated OS user.)
- *
- * The clean HOME holds only what an agent needs to run:
- *  - Claude Code's login, `<real>/.claude/.credentials.json`, copied into `<clean>/.claude/` (the one credential the
- *    agent can read here: the account it is running as);
- *  - a `.gitconfig` with the owner's `user.name` and `user.email` and nothing else (no credential helper);
- *  - files the operator named with `--home-file`, copied as they are (a deliberate hole).
- * Session files Claude writes under `<clean>/.claude/` stay between wakes so `--resume` works. Shell start-up files an
- * earlier wake left behind are removed on every wake.
+ * A separate HOME for woken agents. The clean HOME holds Claude's login (for Claude wakes),
+ * the git user.name/email identity and explicitly selected --home-file copies.
+ * Session files stay between wakes for --resume. Shell start-up files are removed on every wake.
  */
 
 /** Start-up files of the common shells, removed from the clean HOME before every wake. */
@@ -118,4 +110,18 @@ export function prepareCleanHome(options: CleanHomeOptions): CleanHome {
     exposed.push(rel);
   }
   return { home, configDir: claudeDir, exposed };
+}
+
+/** Copy only the Courier identity, never broker state or a pointer to its directory. */
+export function prepareAgentProfile(courierHome: string): void {
+  const home = agentHome(courierHome);
+  const dir = path.join(home, '.courier');
+  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  fs.chmodSync(dir, 0o700);
+  for (const name of ['profile.json', 'key.json', 'grant.json']) {
+    const from = path.join(courierHome, name);
+    if (fs.existsSync(from) && !copyFile(from, path.join(dir, name), 0o600)) throw new Error('Cannot prepare agent Courier identity');
+  }
+  fs.writeFileSync(path.join(home, '.courier-agent.json'), JSON.stringify({ v: 1, profileId: profileId(courierHome) }), { mode: 0o600 });
+  for (const name of ['tmp', 'no-owner-profile']) fs.mkdirSync(path.join(home, name), { recursive: true, mode: 0o700 });
 }

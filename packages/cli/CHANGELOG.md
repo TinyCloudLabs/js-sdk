@@ -1,5 +1,46 @@
 # @tinycloud/cli
 
+## 1.3.0-beta.43
+
+### Patch Changes
+
+- f2cb165: `tc delegation revoke <cid>` now revokes an owner-signed grant (such as one from `tc auth grant`) from a profile that has no local record of it, for example another CLI profile or machine of the same owner. When the profile has no matching record, the CLI reads the owner's delegation records from the node and uses that record's space only if the grant was issued by the signed-in owner, directly or through a chain of delegations recorded on the node that ends at the owner or the signed-in session key, and every space it covers is one plain space id that belongs to that owner; a CID the node does not list, an issuer or space that does not match, or an ambiguous record keeps the existing `RAW_RECAP_RESOURCE_UNSUPPORTED` refusal, now saying "this CLI profile has no record of this grant and the node's record does not match the signed-in owner". A locally recorded grant still resolves first and unchanged. An agent that presents a revoked grant now gets "This grant was revoked. Ask the owner for a new grant" instead of a bare authentication error: the CLI reports it as `GRANT_REVOKED` (exit 5, the same code and exit as `tc replica`), and operations (including `knowledge list|read` and the MCP tools) keep `AUTH_REQUIRED` with that message, only when the node's 401 says the delegation (or one it derives from) was revoked; any other 401 is unchanged.
+- Updated dependencies [f2cb165]
+  - @tinycloud/operations@0.7.0-beta.33
+
+## 1.3.0-beta.42
+
+### Patch Changes
+
+- 0524256: Keep broker configuration outside Courier and resolve the owner's gh credential at runtime without copying it. Woken agents use a separate home and Courier-only identity snapshot. Existing broker token files are no longer used; owners configure the broker again after signing in with gh.
+
+  Refuse protected-root traversal, gated executable aliases/copies, local network destinations and additional GitHub, registry and credential-access commands.
+
+  Require registered executable identities for tool allowances, including Courier entrypoints and wrappers. Unregistered executables and package launchers fail closed. Protect registered tools from agent edits and preserve the installed census across automatic refreshes; owners refresh it after tool upgrades.
+
+  Inspect interpreter script and preload files independently of their extension, and classify agent and gated-tool package entrypoints by their package manifest. Require the installed executable census and use its git identity for guard probes.
+
+  Details: TC-1634
+
+## 1.3.0-beta.41
+
+### Patch Changes
+
+- e8448a4: `tinycloud auth request --preset apps-agent --write --app <app_id>` no longer lets the agent change an app's own code or manifest (TC-1620). KV put is now granted only on `<app_id>/knowledge/` and `<app_id>/prefs/` (the two folders the sample apps' manifests write to), and KV get and list stay on all of `<app_id>/`; SQL read and write are unchanged. A put on `<app_id>/app/` (which holds the code and the stored `app/manifest.json` and `app/install.json`), on the root-level `<app_id>/manifest.json` or `<app_id>/install.json`, or on any other folder is refused by the node. The scope printed to the agent and to the owner says so ("write knowledge and data files ... cannot change the app's code, manifest or install record"; SQL write is described separately: it can change rows and, because of TC-1581, table structure), and a request file that still asks for a put on the whole app, or on any path outside those folders, is listed under "MORE than the apps-agent preset" and needs the owner's explicit confirmation. Grants issued with the earlier wide write shape keep working until they expire (7 days) or are revoked.
+
+## 1.3.0-beta.40
+
+### Patch Changes
+
+- c06c304: Courier profile permission errors use code profile-permissions; documentation wording updates.
+
+## 1.3.0-beta.39
+
+### Patch Changes
+
+- @tinycloud/node-sdk@3.3.0-beta.35
+- @tinycloud/operations@0.7.0-beta.32
+
 ## 1.3.0-beta.38
 
 ### Minor Changes

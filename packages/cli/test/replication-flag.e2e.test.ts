@@ -518,9 +518,14 @@ describe.skipIf(!NODE_BIN)(`replication flag against a real node (${DATABASE_URL
       replication: "on",
       extraEnv: { TC_REPLICATION_MAX_STALENESS_MS: "0" },
     });
-    expect(revokedRead.code).not.toBe(0);
-    expect(revokedRead.stderr).toContain("delegation-revoked");
-    expect(revokedRead.stderr).toContain(importedDelegate.delegationCid);
+    // The node's `delegation-revoked: <cid>` 401 becomes one fixed message under a typed code; neither the node's text nor the CID is shown.
+    expect(revokedRead.code).toBe(5);
+    expect(JSON.parse(revokedRead.stderr.slice(revokedRead.stderr.indexOf("{"))).error).toMatchObject({
+      code: "GRANT_REVOKED",
+      message: expect.stringMatching(/^This grant was revoked\. Ask the owner for a new grant/),
+    });
+    expect(revokedRead.stderr).not.toContain("delegation-revoked");
+    expect(revokedRead.stderr).not.toContain(importedDelegate.delegationCid);
     const revokedReport = await ok<{ replicas: unknown[]; replicasUnavailable: boolean }>(
       ["replica", "report", "--json"], "delegate", { replication: "on" },
     );
