@@ -2314,6 +2314,15 @@ describe("OpenKey primary key (TC-705)", () => {
   });
 });
 
+function setTTY(stream: NodeJS.ReadStream | NodeJS.WriteStream, isTTY: boolean): () => void {
+  const original = Object.getOwnPropertyDescriptor(stream, "isTTY");
+  Object.defineProperty(stream, "isTTY", { configurable: true, value: isTTY });
+  return () => {
+    if (original) Object.defineProperty(stream, "isTTY", original);
+    else delete (stream as { isTTY?: boolean }).isTTY;
+  };
+}
+
 describe("auth grant for an OpenKey owner gets a fresh owner approval per agent request (TC-1422)", () => {
   const DAY_MS = 24 * 60 * 60 * 1000;
   const sessionDid = "did:key:z6MktdN3L74zrn1iFLmaRviQ4HEaC8gTcM8xND9BYfZ4Ep51#z6MktdN3L74zrn1iFLmaRviQ4HEaC8gTcM8xND9BYfZ4Ep51";
@@ -2333,15 +2342,6 @@ describe("auth grant for an OpenKey owner gets a fresh owner approval per agent 
       spaceId: `tinycloud:${owner.slice("did:".length)}:secrets`,
       verifiedPath: "vault/secrets/ANTHROPIC_API_KEY",
       expiry: new Date(Date.now() + validForMs).toISOString(),
-    };
-  }
-
-  function setTTY(stream: NodeJS.ReadStream | NodeJS.WriteStream, isTTY: boolean): () => void {
-    const original = Object.getOwnPropertyDescriptor(stream, "isTTY");
-    Object.defineProperty(stream, "isTTY", { configurable: true, value: isTTY });
-    return () => {
-      if (original) Object.defineProperty(stream, "isTTY", original);
-      else delete (stream as { isTTY?: boolean }).isTTY;
     };
   }
 
@@ -2464,5 +2464,109 @@ describe("auth grant for an OpenKey owner gets a fresh owner approval per agent 
     expect(recorded.errors).toEqual([expect.objectContaining({ code: "OPENKEY_APPROVAL_NARROWER" })]);
     expect(recorded.grantedRequests).toEqual([]);
     expect(recorded.localGrantArtifacts).toEqual([]);
+  });
+});
+
+describe("auth grant asks the owner about entries beyond the preset on the terminal, wherever stdout goes", () => {
+  let tempDir: string;
+
+  beforeEach(async () => {
+    resetState();
+    profiles.set("default", makeProfile());
+    tempDir = await mkdtemp(join(tmpdir(), "tc-auth-grant-confirm-"));
+  });
+
+  afterEach(async () => {
+    await rm(tempDir, { recursive: true, force: true });
+  });
+
+  /** A request with one entry the apps-agent preset never grants (delete), so it is marked `!`. */
+  async function writeBeyondPresetRequest(): Promise<string> {
+    const source = join(tempDir, "beyond-preset.json");
+    await writeFile(source, JSON.stringify({
+      kind: "tinycloud.auth.request",
+      version: 1,
+      requestId: "req_beyond_preset",
+      sessionDid: "did:key:z6MkSession",
+      requested: [{ service: "tinycloud.kv", space: "applications", path: "xyz.example.app/", actions: ["tinycloud.kv/del"] }],
+    }), "utf8");
+    return source;
+  }
+
+  /**
+   * Runs `auth grant` with each stream's terminal state set as given, `answer` (if any) typed on
+   * stdin, and stdout/stderr captured. Returns what was written to stderr.
+   */
+  async function grantWith(
+    args: string[],
+    terminal: { stdin: boolean; stdout: boolean; stderr: boolean },
+    answer?: string,
+  ): Promise<string> {
+    const stdinDescriptor = Object.getOwnPropertyDescriptor(process, "stdin");
+    const input = Object.assign(Readable.from(answer === undefined ? [] : [answer]), { setRawMode: () => input });
+    Object.defineProperty(process, "stdin", { configurable: true, value: input });
+    const restore = [
+      setTTY(process.stdin, terminal.stdin),
+      setTTY(process.stdout, terminal.stdout),
+      setTTY(process.stderr, terminal.stderr),
+    ];
+    const stderr: string[] = [];
+    const stderrSpy = spyOn(process.stderr, "write").mockImplementation(((chunk: string | Uint8Array) => {
+      stderr.push(String(chunk));
+      return true;
+    }) as never);
+    const stdoutSpy = spyOn(process.stdout, "write").mockImplementation((() => true) as never);
+    try {
+      await runAuthCommand(["auth", "grant", ...args]);
+    } finally {
+      stderrSpy.mockRestore();
+      stdoutSpy.mockRestore();
+      for (const undo of restore) undo();
+      if (stdinDescriptor) Object.defineProperty(process, "stdin", stdinDescriptor);
+    }
+    return stderr.join("");
+  }
+
+  test("stdout redirected to a file still gets the question on the terminal, and a yes signs", async () => {
+    const source = await writeBeyondPresetRequest();
+
+    const stderr = await grantWith([source], { stdin: true, stdout: false, stderr: true }, "y\n");
+
+    expect(stderr).toContain("1 entry marked !");
+    expect(recorded.errors).toEqual([]);
+    expect(recorded.grantedRequests).toHaveLength(1);
+  });
+
+  test("with stdout redirected, any answer but yes cancels and signs nothing", async () => {
+    const source = await writeBeyondPresetRequest();
+
+    await grantWith([source], { stdin: true, stdout: false, stderr: true }, "n\n");
+
+    expect(recorded.errors).toEqual([expect.objectContaining({ code: "REQUEST_CANCELLED" })]);
+    expect(recorded.grantedRequests).toEqual([]);
+  });
+
+  test.each([
+    ["no terminal at all", { stdin: false, stdout: false, stderr: false }],
+    ["piped stdin, even with stdout and stderr on a terminal", { stdin: false, stdout: true, stderr: true }],
+    ["stderr redirected, so the question would not be seen", { stdin: true, stdout: true, stderr: false }],
+  ])("%s: refused with CONFIRMATION_REQUIRED, nothing read from stdin, nothing signed", async (_name, terminal) => {
+    const source = await writeBeyondPresetRequest();
+
+    const stderr = await grantWith([source], terminal, "y\n");
+
+    expect(recorded.errors).toEqual([expect.objectContaining({ code: "CONFIRMATION_REQUIRED", exitCode: 2 })]);
+    expect(stderr).not.toContain("1 entry marked !");
+    expect(recorded.grantedRequests).toEqual([]);
+  });
+
+  test("--yes signs without a terminal and without asking", async () => {
+    const source = await writeBeyondPresetRequest();
+
+    const stderr = await grantWith([source, "--yes"], { stdin: false, stdout: false, stderr: false });
+
+    expect(stderr).not.toContain("1 entry marked !");
+    expect(recorded.errors).toEqual([]);
+    expect(recorded.grantedRequests).toHaveLength(1);
   });
 });
