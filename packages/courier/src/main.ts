@@ -33,6 +33,7 @@ Setup & pairing (humans run these):
   invite <handle> --email <address> [--tier strict|trusted] [--ttl 24h] [--call-me h] [--also-ask] [--invites-public-dir d]
                                    Create a one-time invite string for an invitee (bearer link). With a public dir
                                    (flag or COURIER_INVITES_PUBLIC_DIR) also writes a non-secret copy of the record there
+                                   --tier trusted  request trusted status; the peer starts as strict until you confirm
   invite list                      Invites on this machine: status and expiry, no secrets
   invite revoke <invite-id>        Delete the sealed invite and any pending hello or welcome
   join --stdin | --file f          Accept an invite read from stdin or a file, then send hello; waits for the reply

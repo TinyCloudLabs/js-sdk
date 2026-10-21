@@ -16,6 +16,7 @@ export interface PublicInvite {
   handle: string;
   expectEmail: string;
   expectOwner: string | null;
+  /** Requested tier. The peer starts strict until the owner confirms trusted by hand. */
   tier: string;
   createdAt: string;
   expiresAt: string;

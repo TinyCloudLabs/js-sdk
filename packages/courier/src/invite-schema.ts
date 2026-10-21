@@ -72,6 +72,7 @@ export interface Hello {
 export interface Welcome {
   v: 1;
   inviteId: string;
+  /** The owner's decision. A self-service invite never makes the peer trusted; only the owner confirms trusted by hand. */
   tier: Tier;
   artifactC?: PairArtifact;
   sentAt: string;

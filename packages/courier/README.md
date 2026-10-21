@@ -102,13 +102,16 @@ tc courier join --resume
 
 - `invite <handle>` prints the string once. `--call-me` sets the name the
   invitee uses for the owner; it defaults to the owner's handle.
+- `--tier` is the requested tier. `--tier trusted` asks for trusted status; the
+  paired peer starts strict until you confirm trusted by hand. Self-service
+  invites never create a trusted peer.
 - `invite list` shows invite id, handle, status and expiry. It never prints
   the revoke token or the invite key.
 - `invite revoke` deletes the sealed invite and any pending hello or welcome.
   Delegations granted to the one-time key remain until their TTL ends.
 - With `--invites-public-dir <dir>` (or `COURIER_INVITES_PUBLIC_DIR`), `invite`
   also writes `<invite-id>.json` there with mode 0640: the handle, expected
-  email, tier, timestamps and status, with no keys, tokens or blob ids.
+  email, requested tier, timestamps and status, with no keys, tokens or blob ids.
   `invite revoke` updates the status in that file.
 - `join` sends a hello and waits for the owner's reply. If none arrives in
   about 10 minutes it prints the resume command and exits. `join --resume`

@@ -38,6 +38,7 @@ interface InviteRecord {
   handle: string;
   callMe: string;
   email: string;
+  /** Requested tier only. The paired peer starts strict; the owner confirms trusted by hand. */
   tier: Tier;
   alsoAsk: boolean;
   expiresAt: string;
@@ -178,7 +179,7 @@ async function inviteCreate(args: ParsedArgs): Promise<void> {
         expiresAt: expiresAt.toISOString(), status: 'open', completedPeer: null,
       });
     }
-    console.log(`Invite for ${expectEmail} as "${handle}" (tier ${tier}), expires ${expiresAt.toISOString()}.`);
+    console.log(`Invite for ${expectEmail} as "${handle}" (requested tier ${tier}; the peer starts strict until you confirm), expires ${expiresAt.toISOString()}.`);
     console.log('Send this string to the invitee. It is a bearer link: keep it private until revoked or expired.');
     console.log(formatInviteString({ id: uploaded.id, key: seal.key, cid: uploaded.cid }));
   } catch (e) {
