@@ -1,5 +1,7 @@
 import { pkhDid } from "@tinycloud/sdk-core";
 import type { ServiceContext, ServiceSession } from "@tinycloud/sdk-core";
+import { requestSinkOf, unrecordedFetchOf } from "../recordingServiceContext";
+import { replicationFetchFor } from "./syncRequestLog";
 import type {
   KVReadThrough,
   KVReplicaStorage,
@@ -245,6 +247,7 @@ export class ReplicationRuntime {
       }
       const pending = cached.store;
       this.lastPending = pending;
+      const recordSink = requestSinkOf(context);
       const controller = services.createKVReplication({
         options: resolvedOptions(this.options),
         mode: this.options.mode ?? "background",
@@ -256,8 +259,7 @@ export class ReplicationRuntime {
         pending,
         scheduler: this.clock,
         emit,
-        fetch: context.unrecordedFetch,
-        requestSink: context.requestSink,
+        fetch: recordSink === undefined ? context.fetch : replicationFetchFor(unrecordedFetchOf(context), recordSink),
         nodeFeatures: input.nodeFeatures,
         previous: previousClose,
       });

@@ -1,3 +1,4 @@
+import { createServiceContext, unrecordedFetchOf } from "./recordingServiceContext";
 import { signedCompactUcanExpiry } from "./delegation";
 import { generateNonce, SiweMessage } from "siwe";
 /**
@@ -1867,7 +1868,7 @@ export class TinyCloudNode {
         const prefix = config.pathPrefix?.replace(/\/$/, '');
         const kvService = new KVService({ prefix });
         // Create a new service context for the KV service
-        const kvContext = receiveOnlyGraph.track(new ServiceContext({
+        const kvContext = receiveOnlyGraph.track(createServiceContext({
           requestSink: receiveOnlyGraph.requestSink,
           invoke: config.invoke,
           fetch: config.fetch ?? globalThis.fetch.bind(globalThis),
@@ -3195,11 +3196,11 @@ export class TinyCloudNode {
     const contexts: ServiceContext[] = [context];
     const accountSpaceId = this.ownedSpaceId(ACCOUNT_REGISTRY_SPACE);
     const createScopedContext = (spaceId: string): ServiceContext => {
-      const scoped = this._serviceGraph.track(new ServiceContext({
+      const scoped = this._serviceGraph.track(createServiceContext({
         requestSink: this._serviceGraph.requestSink,
         invoke: context.invoke,
         invokeAny: context.invokeAny,
-        fetch: context.unrecordedFetch,
+        fetch: unrecordedFetchOf(context),
         hosts: context.hosts,
         telemetry: this.config.telemetry,
         retryPolicy: this.config.retryPolicy,
@@ -3280,11 +3281,11 @@ export class TinyCloudNode {
     const promise = this.enqueueAccountRegistryOperation(session, async () => {
       const sharedContext = this._serviceContext;
       if (!sharedContext) return;
-      const context = this._serviceGraph.track(new ServiceContext({
+      const context = this._serviceGraph.track(createServiceContext({
         requestSink: this._serviceGraph.requestSink,
         invoke: sharedContext.invoke,
         invokeAny: sharedContext.invokeAny,
-        fetch: sharedContext.unrecordedFetch,
+        fetch: unrecordedFetchOf(sharedContext),
         hosts: sharedContext.hosts,
         telemetry: this.config.telemetry,
         retryPolicy: this.config.retryPolicy,
@@ -4361,7 +4362,7 @@ export class TinyCloudNode {
       const coreContext = graph.track(core.serviceContext as ServiceContext);
       coreContext.setSession(input.serviceSession);
     }
-    const serviceContext = graph.track(new ServiceContext({
+    const serviceContext = graph.track(createServiceContext({
       requestSink: graph.requestSink,
       invoke: graph.invoke,
       invokeAny: graph.invokeAny,
@@ -4454,7 +4455,7 @@ export class TinyCloudNode {
       },
       createKVService: (config) => {
         const service = new KVService({ prefix: config.pathPrefix?.replace(/\/$/, '') });
-        const context = graph.track(new ServiceContext({
+        const context = graph.track(createServiceContext({
           requestSink: graph.requestSink,
           invoke: config.invoke,
           fetch: config.fetch ?? globalThis.fetch.bind(globalThis),
@@ -4495,7 +4496,7 @@ export class TinyCloudNode {
       createKVService: (spaceId) => {
         graph.assertActive();
         const scopedKv = new KVService({});
-        const context = graph.track(new ServiceContext({
+        const context = graph.track(createServiceContext({
           requestSink: graph.requestSink,
           invoke: graph.invoke,
           invokeAny: graph.invokeAny,
@@ -4512,7 +4513,7 @@ export class TinyCloudNode {
       createVaultService: (spaceId) => {
         graph.assertActive();
         const scopedKv = new KVService({});
-        const context = graph.track(new ServiceContext({
+        const context = graph.track(createServiceContext({
           requestSink: graph.requestSink,
           invoke: graph.invoke,
           invokeAny: graph.invokeAny,
@@ -4978,7 +4979,7 @@ export class TinyCloudNode {
     this._serviceGraph.track(this.tc!.serviceContext as ServiceContext);
 
     // Create service context
-    this._serviceContext = this._serviceGraph.track(new ServiceContext({
+    this._serviceContext = this._serviceGraph.track(createServiceContext({
       requestSink: this._serviceGraph.requestSink,
       invoke: this._serviceGraph.invoke,
       invokeAny: this._serviceGraph.invokeAny,
@@ -5042,11 +5043,11 @@ export class TinyCloudNode {
   private createSpaceScopedKVService(spaceId: string): KVService {
     const kvService = new KVService({});
     if (this._serviceContext) {
-      const spaceScopedContext = this._serviceGraph.track(new ServiceContext({
+      const spaceScopedContext = this._serviceGraph.track(createServiceContext({
         requestSink: this._serviceGraph.requestSink,
         invoke: this._serviceContext.invoke,
         invokeAny: this._serviceContext.invokeAny,
-        fetch: this._serviceContext.unrecordedFetch,
+        fetch: unrecordedFetchOf(this._serviceContext),
         hosts: this._serviceContext.hosts,
         telemetry: this.config.telemetry,
         retryPolicy: this.config.retryPolicy,
@@ -5603,7 +5604,7 @@ export class TinyCloudNode {
       createKVService: (config) => {
         graph.assertActive();
         const service = new KVService({ prefix: config.pathPrefix?.replace(/\/$/, "") });
-        const context = graph.track(new ServiceContext({
+        const context = graph.track(createServiceContext({
           requestSink: graph.requestSink,
           invoke: config.invoke,
           fetch: config.fetch ?? graph.fetch,
@@ -5991,11 +5992,11 @@ export class TinyCloudNode {
     }
 
     const sql = new SQLService({});
-    const spaceScopedContext = this._serviceGraph.track(new ServiceContext({
+    const spaceScopedContext = this._serviceGraph.track(createServiceContext({
       requestSink: this._serviceGraph.requestSink,
       invoke: this._serviceContext.invoke,
       invokeAny: this._serviceContext.invokeAny,
-      fetch: this._serviceContext.unrecordedFetch,
+      fetch: unrecordedFetchOf(this._serviceContext),
       hosts: this._serviceContext.hosts,
       telemetry: this.config.telemetry,
       retryPolicy: this.config.retryPolicy,
@@ -6025,11 +6026,11 @@ export class TinyCloudNode {
     }
 
     const kv = new KVService({});
-    const spaceScopedContext = this._serviceGraph.track(new ServiceContext({
+    const spaceScopedContext = this._serviceGraph.track(createServiceContext({
       requestSink: this._serviceGraph.requestSink,
       invoke: this._serviceContext.invoke,
       invokeAny: this._serviceContext.invokeAny,
-      fetch: this._serviceContext.unrecordedFetch,
+      fetch: unrecordedFetchOf(this._serviceContext),
       hosts: this._serviceContext.hosts,
     }));
     spaceScopedContext.setSession({ ...this._serviceContext.session, spaceId });
@@ -6960,7 +6961,7 @@ export class TinyCloudNode {
     // Cache a properly authorized public KV service using the new delegation
     if (this._serviceContext) {
       const publicKV = new KVService({ prefix: "" });
-      const publicContext = this._serviceGraph.track(new ServiceContext({
+      const publicContext = this._serviceGraph.track(createServiceContext({
         requestSink: this._serviceGraph.requestSink,
         invoke: this._serviceGraph.invoke,
         fetch: this._serviceGraph.fetch,

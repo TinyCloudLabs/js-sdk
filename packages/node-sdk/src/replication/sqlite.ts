@@ -19,7 +19,7 @@ import { chmod, lstat, mkdir, open as openFile, readFile, readdir, realpath, ren
 import { basename, dirname, join, parse, resolve, sep } from "node:path";
 
 
-import { KVService, ServiceContext, principalDid } from "@tinycloud/sdk-core";
+import { KVService, principalDid } from "@tinycloud/sdk-core";
 import {
   canonicalReplicationIdentity,
   replicationIdentityKey,
@@ -74,7 +74,8 @@ import type {
   SqliteRuntime,
 } from "./replica-contract";
 import { ucanAttUnconstrainedFor } from "./authority";
-import { recordingInfoFetch, syncRequestSink } from "./syncRequestLog";
+import { recordingInfoFetch, requestSinkOfFetch, syncRequestSink } from "./syncRequestLog";
+import { createServiceContext } from "../recordingServiceContext";
 export type { ProfileReplicaDeferredToken, ProfileReplicaPurge };
 
 /** CLI-only crash fence; generic SQLite stores do not opt in to this path. */
@@ -1441,10 +1442,11 @@ class SqliteReplicaHandle implements KVReplicaHandle {
       const spec = this.spec;
       const device = this.#device;
       const fetch = spec.fetch ?? globalThis.fetch.bind(globalThis);
-      const syncSink = spec.requestSink && syncRequestSink(spec.requestSink);
-      const infoFetch = spec.requestSink && recordingInfoFetch(globalThis.fetch.bind(globalThis), spec.requestSink);
+      const recordSink = requestSinkOfFetch(spec.fetch);
+      const syncSink = recordSink && syncRequestSink(recordSink);
+      const infoFetch = recordSink && recordingInfoFetch(globalThis.fetch.bind(globalThis), recordSink);
       return (grant: GrantRecord): ReplicaTransport => {
-        const context = new ServiceContext({
+        const context = createServiceContext({
           invoke: wasm.invoke,
           invokeAny: wasm.invokeAny,
           fetch,

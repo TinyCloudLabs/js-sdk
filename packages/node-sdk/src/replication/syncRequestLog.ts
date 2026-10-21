@@ -1,4 +1,4 @@
-import type { RequestSink } from "@tinycloud/sdk-services";
+import type { FetchFunction, RequestSink } from "@tinycloud/sdk-services";
 import { buildRequestEvent, observeFetch } from "@tinycloud/sdk-services/telemetry/requestLog";
 
 type Draft = Parameters<RequestSink["record"]>[0];
@@ -13,7 +13,6 @@ export function syncRequestSink(sink: RequestSink): RequestSink {
     record: relabel,
     observe: (observation) => observeFetch(observation, relabel),
     remember: (headers, meta) => sink.remember(headers, meta),
-    carry: (from, to) => sink.carry(from, to),
   };
 }
 
@@ -50,4 +49,21 @@ export function recordingInfoFetch(fetchFn: typeof globalThis.fetch, sink: Reque
     record(url, started, response.ok, response.ok ? "ok" : `HTTP_${response.status}`);
     return response;
   }) as typeof globalThis.fetch;
+}
+
+const sinkByFetch = new WeakMap<FetchFunction, RequestSink>();
+
+/**
+ * A fresh replication transport fetch that remembers the sink recording its traffic. Keyed on this
+ * wrapper, not on the shared user fetch, so two nodes cannot cross-wire their sinks.
+ */
+export function replicationFetchFor(raw: FetchFunction, sink: RequestSink): FetchFunction {
+  const fetch: FetchFunction = (url, init) => raw(url, init);
+  sinkByFetch.set(fetch, sink);
+  return fetch;
+}
+
+/** The sink behind a replication transport fetch; undefined when developer mode is off. */
+export function requestSinkOfFetch(fetch: FetchFunction | undefined): RequestSink | undefined {
+  return fetch === undefined ? undefined : sinkByFetch.get(fetch);
 }
