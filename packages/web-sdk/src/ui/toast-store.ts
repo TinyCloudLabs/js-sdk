@@ -35,10 +35,13 @@ export interface ToastStoreOptions {
 export interface ToastStore {
   /**
    * Returns the toast id. A request identical to a visible toast (same kind,
-   * text code, and link) returns that toast's id and shows nothing new.
+   * text code, and link) returns that toast's id and shows nothing new; that
+   * toast keeps its original owner.
    */
-  push(request: ToastRequest): string;
+  push(request: ToastRequest, owner?: number): string;
   dismiss(id: string): void;
+  /** Removes every toast pushed with `owner`. Ownerless toasts are untouched. */
+  clearOwner(owner: number): void;
   /** Ref-counted hold: auto-dismiss stops while any hold is outstanding. */
   pause(): void;
   resume(): void;
@@ -48,6 +51,7 @@ export interface ToastStore {
 
 interface Entry {
   readonly key: string;
+  readonly owner: number | undefined;
   readonly view: ToastView;
   timer: ReturnType<typeof setTimeout> | undefined;
   remainingMs: number;
@@ -104,7 +108,7 @@ export function createToastStore(options: ToastStoreOptions = {}): ToastStore {
   }
 
   return {
-    push(request) {
+    push(request, owner) {
       const href = safeHref(request.href);
       const linkLabel = href !== undefined ? request.hrefLabelCode : undefined;
       const key = `${request.kind}|${request.textCode}|${href ?? ""}`;
@@ -121,7 +125,7 @@ export function createToastStore(options: ToastStoreOptions = {}): ToastStore {
           ? { href, hrefLabelCode: linkLabel }
           : {}),
       };
-      const entry: Entry = { key, view, timer: undefined, remainingMs: durationMs, startedAt: 0 };
+      const entry: Entry = { key, owner, view, timer: undefined, remainingMs: durationMs, startedAt: 0 };
       entries.set(id, entry);
       while (entries.size > maxVisible) {
         const oldest = entries.keys().next().value as string;
@@ -130,6 +134,12 @@ export function createToastStore(options: ToastStoreOptions = {}): ToastStore {
       arm(entry);
       emit();
       return id;
+    },
+
+    clearOwner(owner) {
+      const owned = [...entries.values()].filter((entry) => entry.owner === owner);
+      for (const entry of owned) remove(entry.view.id);
+      if (owned.length > 0) emit();
     },
 
     dismiss(id) {

@@ -33,7 +33,7 @@ export interface HostRuntime {
   open(): void;
   close(): void;
   isOpen(): boolean;
-  toast(request: ToastRequest): void;
+  toast(request: ToastRequest, owner?: number): void;
 }
 
 interface ClientEntry {
@@ -273,6 +273,7 @@ export function createHostRuntime(): HostRuntime {
     reset(id) {
       const entry = clients.get(id);
       if (!entry) return;
+      toastStore.clearOwner(id);
       const wasActive = activeEntry()?.id === id;
       entry.signedIn = false;
       entry.registration.handle.reset();
@@ -295,8 +296,8 @@ export function createHostRuntime(): HostRuntime {
     },
 
     isOpen: () => isPanelOpen,
-    toast(request) {
-      toastStore.push(request);
+    toast(request, owner) {
+      toastStore.push(request, owner);
     },
   };
 }

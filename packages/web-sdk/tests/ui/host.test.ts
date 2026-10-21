@@ -588,4 +588,23 @@ describe("host toasts", () => {
     expect(ui.toast(REQUEST)).toBe(false);
     expect(storedToasts()).toEqual([]);
   });
+
+  test("reset clears only this client's toasts", () => {
+    const a = mountClient();
+    const b = mountClient();
+    a.toast(REQUEST);
+    b.toast({ kind: "info", textCode: "toast.done" });
+    a.reset();
+    expect(storedToasts().map((toast) => toast.textCode)).toEqual(["toast.done"]);
+    a.unregister();
+    b.unregister();
+  });
+
+  test("ui.button:false still shows toasts", () => {
+    const ui = mountClient({ button: false });
+    expect(ui.toast({ kind: "info", textCode: "toast.done" })).toBe(true);
+    expect(storedToasts().map((toast) => toast.textCode)).toEqual(["toast.done"]);
+    expect(buttonEl()).toBeNull();
+    ui.unregister();
+  });
 });
