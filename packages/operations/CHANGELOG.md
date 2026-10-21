@@ -1,5 +1,13 @@
 # @tinycloud/operations
 
+## 0.7.0-beta.35
+
+### Minor Changes
+
+- 5373fa2: Preserve validated node revocation context for hosted approval renewal while keeping other authorization results unchanged.
+
+  Details: TC-1627
+
 ## 0.7.0-beta.34
 
 ### Patch Changes

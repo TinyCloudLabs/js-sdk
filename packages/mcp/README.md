@@ -49,6 +49,20 @@ partial failures. Report partial outcomes rather than replaying the batch.
 Production requests 30-day grants and uses 15-minute approval links. Expired or
 missing sessions return a fresh link in `error.details`; expired grants use
 `authority_required`. Approvals are renewed by the owner, not automatically.
+
+The hosted server checks the account approval with the node when a client
+connects or calls an authenticated tool. Successful checks are cached for up
+to 30 seconds. A node response identifying a withdrawn account approval starts
+a fresh connection approval; one identifying a withdrawn per-request grant
+renews only that grant. Other node responses keep stored approvals available.
+The account's delegate key stays in place while the owner signs new permissions
+through the usual OpenKey approval flow.
+
+HTTP integration tests cover approval renewal with an in-process node by
+default. The additional local-node case uses a v1.21.0 node binary when
+`TC_MCP_TEST_NODE` is set to its absolute path; otherwise that case is skipped.
+The test starts and stops its own node process.
+
 If the owner declines, stop rather than asking again in that conversation.
 
 For larger questions, offer “a fast, searchable copy of your records” after
