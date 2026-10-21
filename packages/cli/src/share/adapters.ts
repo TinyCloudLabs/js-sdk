@@ -1,5 +1,6 @@
 import type { IKVService } from "@tinycloud/node-sdk";
 import { kvArtifactStore } from "./artifact-store.js";
+import { createShareShortLinks, type ShareShortLinks } from "./short-links.js";
 import { artifactSpaceNotReady, failIfSpaceNotReady } from "./space-not-ready.js";
 import { ShareHistoryReadError, ShareHistoryRetryError, ShareHistoryUnreadableError, SharePublishAuthorityError } from "./errors.js";
 import { storageRejection } from "../output/storage.js";
@@ -492,6 +493,8 @@ export function createShareAuthorityAdapters(input: {
   readonly nativeReader: (link: string) => Promise<{ readonly bytes: Uint8Array; readonly filename: string }>;
   /** The authenticated owner's artifact storage (`tc share versions`). */
   readonly artifactStore: () => Promise<ArtifactStore>;
+  /** Short links for addressed shares (TC-1737). */
+  readonly shortLinks: ShareShortLinks;
 } {
   const origin = input.origin ?? DEFAULT_SHARE_ORIGIN;
   const fetchFn = input.fetchFn ?? globalThis.fetch;
@@ -1023,6 +1026,10 @@ export function createShareAuthorityAdapters(input: {
       list: (prefix) => mapped(() => store.list(prefix)),
     };
   };
+  const shortLinks = createShareShortLinks({
+    kvForSpace: async (spaceId) => (await authenticatedNode()).kvForSpace(spaceId),
+    fetchFn,
+  });
   return {
     targetAdapter,
     records: input.profileName === undefined ? createEncryptedSessionHistory() : createEncryptedProfileHistory(profileName, signShareHistoryBytes),
@@ -1031,6 +1038,7 @@ export function createShareAuthorityAdapters(input: {
     assertDomainDelivery,
     nativeReader,
     artifactStore,
+    shortLinks,
   };
 }
 
