@@ -78,9 +78,15 @@ export interface PanelClient {
   /** = tc.sync when present. */
   readonly sync?: SyncFacade | undefined;
   readonly storage: Pick<IStorageService, "status">;
-  /** D3: storage episode view. Undefined until D3 lands. */
-  readonly storageEpisode?: { current(): unknown; subscribe(cb: () => void): () => void } | undefined;
-  /** B2: internal authority request for replication. Undefined until B2 lands. */
+  /** Storage episode view. Undefined when the client does not expose it. `subscribeDelegated` fires once per delegated owner found full. */
+  readonly storageEpisode?:
+    | {
+        current(): unknown;
+        subscribe(cb: () => void): () => void;
+        subscribeDelegated(cb: () => void): () => void;
+      }
+    | undefined;
+  /** Authority request for storage and sync prompts. Undefined when the client does not expose it. */
   readonly requestAuthority?:
     | ((kind: "kv/sync" | "space/info") => Promise<{ approved: boolean; code?: FacadeErrorCode }>)
     | undefined;

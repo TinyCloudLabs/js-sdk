@@ -127,7 +127,7 @@ for (const scheme of SCHEMES) {
     await expect(usageLine(page)).toBeVisible();
 
     await setEpisode(page, true);
-    const toast = page.locator(".toast--warning");
+    const toast = page.locator(".toast--info");
     await expect(toast.locator(".toast__message")).toHaveText(STRINGS["storage.full"]);
     await expect(toast.locator("a")).toHaveAttribute("href", STORAGE_MANAGE_URL);
   });
@@ -144,8 +144,8 @@ for (const scheme of SCHEMES) {
     await openPanel(page);
     await expect(panel(page).locator(".header .status")).toHaveText(STRINGS["status.storage_full"]);
     await expect(section(page).locator("p.busy").nth(0)).toHaveText(STRINGS["storage.state.full"]);
-    // A full episode drops the numbers: the usage line and the meter are gone.
-    await expect(section(page).locator("p.busy:visible")).toHaveCount(1);
+    // A full episode drops the numbers, and the panel word is hidden because the header already shows it.
+    await expect(section(page).locator("p.busy:visible")).toHaveCount(0);
     await expect(section(page).locator(".storage-bar")).toBeHidden();
   });
 
@@ -227,7 +227,7 @@ for (const scheme of SCHEMES) {
       await expect(usageLine(page)).toBeVisible();
 
       await setEpisode(page, true);
-      const toast = page.locator(".toast--warning");
+      const toast = page.locator(".toast--info");
       await expect(toast).toBeVisible();
       const toastBox = await toast.boundingBox();
       const panelBox = await panel(page).boundingBox();

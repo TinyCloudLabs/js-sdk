@@ -375,6 +375,8 @@ export class TinyCloudWeb {
   private readonly uiClient: UiClientHandle;
   /** Listeners for the own-storage episode, forwarded from the current node. */
   private readonly storageEpisodeListeners = new Set<() => void>();
+  /** Listeners for a delegated owner's storage being found full, forwarded from the current node. */
+  private readonly delegatedStorageListeners = new Set<() => void>();
   /** The episode the UI reads. Lazy: the node is created after UI registration. */
   private readonly uiStorageEpisode = {
     current: () => this._node?.storageEpisode.current(),
@@ -382,6 +384,12 @@ export class TinyCloudWeb {
       this.storageEpisodeListeners.add(listener);
       return () => {
         this.storageEpisodeListeners.delete(listener);
+      };
+    },
+    subscribeDelegated: (listener: () => void) => {
+      this.delegatedStorageListeners.add(listener);
+      return () => {
+        this.delegatedStorageListeners.delete(listener);
       };
     },
   };
@@ -595,6 +603,15 @@ export class TinyCloudWeb {
           listener();
         } catch (error) {
           console.error("Error in storage episode listener:", error);
+        }
+      }
+    });
+    this._node.storageEpisode.subscribeDelegated(() => {
+      for (const listener of [...this.delegatedStorageListeners]) {
+        try {
+          listener();
+        } catch (error) {
+          console.error("Error in delegated storage listener:", error);
         }
       }
     });

@@ -1495,15 +1495,22 @@ export class TinyCloudNode {
   }
 
   /**
-   * The signed-in account's storage-full episode, for UI that must match it on
-   * mount: `current()` returns the rejection that started the episode, or
-   * undefined. `subscribe` calls its listener when the episode starts or ends;
-   * read `current()` inside it. @internal
+   * Storage episode state for the UI mount. @internal
+   *
+   * `current()` returns the own-storage rejection that started the episode, or
+   * undefined. `subscribe` calls its listener when the own episode starts or
+   * ends; read `current()` inside it. `subscribeDelegated` calls its listener
+   * once per delegated owner found full, until that owner is cleared.
    */
-  get storageEpisode(): { current(): StorageFullEvent | undefined; subscribe(listener: () => void): () => void } {
+  get storageEpisode(): {
+    current(): StorageFullEvent | undefined;
+    subscribe(listener: () => void): () => void;
+    subscribeDelegated(listener: () => void): () => void;
+  } {
     return {
       current: () => this.storageFull.rejection,
       subscribe: (listener) => this.storageFull.onEpisode(listener),
+      subscribeDelegated: (listener) => this.storageFull.onDelegated(listener),
     };
   }
 

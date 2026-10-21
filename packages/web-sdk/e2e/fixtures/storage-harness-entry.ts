@@ -52,6 +52,10 @@ const storageEpisode = {
       episodeListeners.delete(cb);
     };
   },
+  // The harness has no delegated owners, so no delegated notification ever fires.
+  subscribeDelegated() {
+    return () => undefined;
+  },
 };
 
 function setEpisode(on: boolean) {

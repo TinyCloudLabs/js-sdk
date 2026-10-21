@@ -615,22 +615,33 @@ describe("host toasts", () => {
     ui.unregister();
   });
 
-  test("ui.toasts:false hides the storage-full toast but keeps the full state on the button", () => {
+  // The toast waits on one status read; a few microtask turns settle it without timers.
+  async function flushToasts(): Promise<void> {
+    for (let i = 0; i < 10; i++) await Promise.resolve();
+  }
+
+  test("ui.toasts:false hides the storage-full toast but keeps the full state on the button", async () => {
     const ui = mountStorageFull({ toasts: false });
+    await flushToasts();
     expect(storedToasts()).toEqual([]);
     expect(storageStatus()).toBe("storage_full");
     ui.unregister();
   });
 
-  test("storage-full toast is shown when toasts are enabled (control for the test above)", () => {
+  test("storage-full toast is shown when toasts are enabled (control for the test above)", async () => {
     const ui = mountStorageFull(undefined);
+    await flushToasts();
     expect(storedToasts().map((view) => view.textCode)).toEqual(["storage.full"]);
     expect(storageStatus()).toBe("storage_full");
     ui.unregister();
   });
 
   function mountStorageFull(ui: Parameters<typeof registerUiClient>[0]["ui"]): UiClientHandle {
-    const storageEpisode = { current: () => ({}), subscribe: () => () => undefined };
+    const storageEpisode = {
+      current: () => ({}),
+      subscribe: () => () => undefined,
+      subscribeDelegated: () => () => undefined,
+    };
     const src = {
       signedIn: () => false,
       storage: { status: () => undefined },

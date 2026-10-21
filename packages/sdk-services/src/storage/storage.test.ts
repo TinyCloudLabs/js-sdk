@@ -243,6 +243,32 @@ describe("StorageFullMonitor on a full space", () => {
     expect(monitor.isFull).toBe(false);
   });
 
+  test("onDelegated fires once per delegated owner and never for the own episode", async () => {
+    const delegated = fullSpaceNode("tinycloud:pkh:eip155:1:0xbbb:shared");
+    const own = fullSpaceNode("tinycloud:pkh:eip155:1:0xaaa:default");
+    const monitor = new StorageFullMonitor(
+      (spaceId) => spaceId.split(":").slice(0, 5).join(":"),
+      () => "tinycloud:pkh:eip155:1:0xaaa",
+    );
+    monitor.observe(delegated.context);
+    monitor.observe(own.context);
+    let delegatedCount = 0;
+    monitor.onDelegated(() => {
+      delegatedCount += 1;
+    });
+
+    await own.kv.put("y", "1");
+    expect(delegatedCount).toBe(0);
+
+    await delegated.kv.put("x", "1");
+    await delegated.kv.put("x", "2");
+    expect(delegatedCount).toBe(1);
+
+    monitor.clearFor("tinycloud:pkh:eip155:1:0xbbb:shared");
+    await delegated.kv.put("x", "3");
+    expect(delegatedCount).toBe(2);
+  });
+
   test("a network failure during the own episode neither ends nor re-emits it", async () => {
     const node = fullSpaceNode("tinycloud:pkh:eip155:1:0xaaa:default");
     const monitor = new StorageFullMonitor(
@@ -274,6 +300,29 @@ describe("StorageFullMonitor on a full space", () => {
 
     // A committed own write ends it.
     node.context.emit(TelemetryEvents.SERVICE_RESPONSE, { service: "kv", action: "put", ok: true });
+    expect(monitor.rejection).toBeUndefined();
+    expect(episodes).toEqual([true, false]);
+  });
+
+  test("a successful delete or get does not end the own episode; a committed batchPut does", async () => {
+    const node = fullSpaceNode("tinycloud:pkh:eip155:1:0xaaa:default");
+    const monitor = new StorageFullMonitor(
+      (spaceId) => spaceId.split(":").slice(0, 5).join(":"),
+      () => "tinycloud:pkh:eip155:1:0xaaa",
+    );
+    monitor.observe(node.context);
+    const episodes: boolean[] = [];
+    monitor.onEpisode(() => episodes.push(monitor.rejection !== undefined));
+
+    await node.kv.put("y", "1");
+    expect(monitor.rejection).toBeDefined();
+
+    node.context.emit(TelemetryEvents.SERVICE_RESPONSE, { service: "kv", action: "delete", ok: true });
+    node.context.emit(TelemetryEvents.SERVICE_RESPONSE, { service: "kv", action: "get", ok: true });
+    expect(monitor.rejection).toBeDefined();
+    expect(episodes).toEqual([true]);
+
+    node.context.emit(TelemetryEvents.SERVICE_RESPONSE, { service: "kv", action: "batchPut", ok: true });
     expect(monitor.rejection).toBeUndefined();
     expect(episodes).toEqual([true, false]);
   });

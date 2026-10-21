@@ -61,6 +61,7 @@ export class StorageFullMonitor {
   private readonly full = new Map<string, StorageFullEvent>();
   private readonly handlers = new Set<StorageFullHandler>();
   private readonly episodeListeners = new Set<() => void>();
+  private readonly delegatedListeners = new Set<() => void>();
 
   /**
    * @param ownerOf Owner key of a space id. Spaces with one key share one
@@ -100,6 +101,18 @@ export class StorageFullMonitor {
     };
   }
 
+  /**
+   * Subscribe to a delegated owner's storage being found full: once per owner
+   * until that owner is cleared. The own-storage episode does not fire it.
+   * Returns the unsubscribe function.
+   */
+  onDelegated(listener: () => void): () => void {
+    this.delegatedListeners.add(listener);
+    return () => {
+      this.delegatedListeners.delete(listener);
+    };
+  }
+
   /** Watch a context's service errors and successful writes. Returns the unsubscribe function. */
   observe(context: IServiceContext): () => void {
     const stopErrors = context.on(TelemetryEvents.SERVICE_ERROR, (data) => {
@@ -121,6 +134,8 @@ export class StorageFullMonitor {
         if (this.episode) return;
         this.episode = { owner, event };
         this.notifyEpisode();
+      } else {
+        this.notifyDelegated();
       }
       context.emit(TelemetryEvents.STORAGE_FULL, event);
       for (const handler of this.handlers) {
@@ -186,6 +201,17 @@ export class StorageFullMonitor {
       } catch (listenerError) {
         // A UI listener must not break the write that ended or started the episode.
         console.error("Error in storage episode listener:", listenerError);
+      }
+    }
+  }
+
+  private notifyDelegated(): void {
+    for (const listener of this.delegatedListeners) {
+      try {
+        listener();
+      } catch (listenerError) {
+        // A UI listener must not break the write that was rejected.
+        console.error("Error in delegated storage listener:", listenerError);
       }
     }
   }
