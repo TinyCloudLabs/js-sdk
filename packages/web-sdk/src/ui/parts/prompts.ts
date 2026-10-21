@@ -3,7 +3,7 @@ import type { HostPart } from "../slots";
 
 /**
  * Prompt host. Permission and space-creation prompts render into the host
- * layer, which lives inside the host's closed shadow root, never into
+ * layer, which lives inside the host's open shadow root, never into
  * `document.body`. Fail closed: a prompt that cannot render is refused before
  * it mounts, and the caller resolves it as declined/dismissed.
  */
