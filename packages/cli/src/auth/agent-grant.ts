@@ -39,6 +39,8 @@ export interface AgentApprovalExpectations {
   expiry: RequestedExpiry;
   /** The requested permissions, after `grantRequestPermissions`. */
   requested: readonly PermissionEntry[];
+  /** The requester host passed to OpenKey; the approval's domain must be its authority. */
+  host: string;
 }
 
 export interface VerifiedAgentApproval {
@@ -51,6 +53,57 @@ export interface VerifiedAgentApproval {
 function refuse(code: string, message: string, exit: ExitCode = ExitCode.PERMISSION_DENIED): CLIError {
   return new CLIError(code, `${message} ${NOT_STORED}`, exit);
 }
+
+/** Reason from a failed `SiweMessage.verify`, which rejects with a result object rather than an Error. */
+function siweErrorText(error: unknown): string {
+  if (error instanceof Error) return error.message;
+  if (error && typeof error === "object" && "error" in error && error.error && typeof error.error === "object" &&
+    "type" in error.error && typeof error.error.type === "string") {
+    return error.error.type;
+  }
+  return "";
+}
+
+/** The SIWE domain for a requester host: its authority, as OpenKey signs it. */
+function hostAuthority(host: string): string {
+  return new URL(host.includes("://") ? host : `https://${host}`).host;
+}
+
+/** Ability map for an approved ReCap, in the shape the WASM emitter renders. */
+function recapAbilities(entries: readonly PermissionEntry[]): Record<string, Record<string, string[]>> {
+  const abilities: Record<string, Record<string, string[]>> = {};
+  for (const entry of entries) {
+    const service = entry.service.slice("tinycloud.".length);
+    const paths = (abilities[service] ??= {});
+    paths[entry.path] = [...new Set([...(paths[entry.path] ?? []), ...entry.actions])];
+  }
+  return abilities;
+}
+
+/**
+ * The signed statement and resources must be exactly what the WASM emitter
+ * renders for the approved ReCap: nothing added, nothing rewritten.
+ */
+function statementMatchesRecap(
+  message: SiweMessage,
+  spaceId: string,
+  approved: readonly PermissionEntry[],
+  sessionDid: string,
+): boolean {
+  const rendered = new SiweMessage(new NodeWasmBindings().prepareSession({
+    abilities: recapAbilities(approved),
+    address: message.address,
+    chainId: message.chainId,
+    domain: message.domain,
+    spaceId,
+    jwk: requesterPublicJwk(sessionDid),
+    issuedAt: message.issuedAt!,
+    expirationTime: message.expirationTime!,
+  }).siwe);
+  return (rendered.statement ?? "") === (message.statement ?? "") &&
+    JSON.stringify(rendered.resources ?? []) === JSON.stringify(message.resources ?? []);
+}
+
 
 /**
  * Verify an OpenKey approval for an agent request before it is written to disk.
@@ -79,7 +132,7 @@ export async function verifyAgentApproval(
     message = new SiweMessage(data.siwe);
     await message.verify({ signature: data.signature });
   } catch (error) {
-    if (/expir/i.test(error instanceof Error ? error.message : String(error))) {
+    if (/expir/i.test(siweErrorText(error))) {
       throw refuse("AUTH_EXPIRED", "The approval has expired.", ExitCode.AUTH_REQUIRED);
     }
     throw Object.assign(
@@ -97,6 +150,9 @@ export async function verifyAgentApproval(
   }
   if (message.uri.split("#")[0] !== sessionDid) {
     throw refuse("OPENKEY_AUDIENCE_MISMATCH", "The approval was issued to a different session than this auth request.");
+  }
+  if (message.domain !== hostAuthority(expected.host)) {
+    throw refuse("OPENKEY_AUDIENCE_MISMATCH", "The approval was issued for a different host than this auth request.");
   }
 
   const now = Date.now();
@@ -133,7 +189,7 @@ export async function verifyAgentApproval(
   if (approved.length === 0) {
     throw refuse("OPENKEY_PROOF_INVALID", "The approval grants no authority.", ExitCode.AUTH_REQUIRED);
   }
-  for (const permission of approved) {
+  for (const permission of [...approved, ...expected.requested]) {
     if (permission.service === CAPABILITIES_SERVICE) continue;
     if (normalizePkhIdentifier(ownerSpaceId(permission.space ?? "", ownerDid)) !== normalizePkhIdentifier(data.spaceId)) {
       throw refuse("OPENKEY_SCOPE_MISMATCH", "The approved space differs from the requested space.");
@@ -141,6 +197,9 @@ export async function verifyAgentApproval(
   }
   if (!scopeCovers(expected.requested, approved, ownerDid)) {
     throw refuse("OPENKEY_GRANT_BROADENED", "The approval contains authority beyond the requested grant.");
+  }
+  if (!statementMatchesRecap(message, data.spaceId, approved, expected.sessionDid)) {
+    throw refuse("OPENKEY_PROOF_INVALID", "The approval's statement or resources do not match its ReCap.", ExitCode.AUTH_REQUIRED);
   }
   return { ownerDid, spaceId: data.spaceId, permissions: approved, expiresAt: message.expirationTime! };
 }
