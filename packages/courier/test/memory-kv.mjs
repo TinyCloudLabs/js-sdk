@@ -11,12 +11,14 @@ export function memoryKv() {
       const row = rows.get(key);
       return row
         ? { ok: true, data: { data: row.value, headers: { etag: row.etag } } }
-        : { ok: false, error: { status: 404, message: 'not found' } };
+        : { ok: false, error: { code: 'KV_NOT_FOUND', message: `Key not found: ${key}`, service: 'kv' } };
     },
     async put(key, value, options = {}) {
       const prior = rows.get(key);
-      if (options.ifNoneMatch === '*' && prior) return { ok: false, error: { status: 412, message: 'precondition failed' } };
-      if (options.ifMatch && options.ifMatch !== prior?.etag) return { ok: false, error: { status: 412, message: 'precondition failed' } };
+      const conflict = (options.ifNoneMatch === '*' && prior) || (options.ifMatch && options.ifMatch !== prior?.etag);
+      if (conflict) {
+        return { ok: false, error: { code: 'KV_PRECONDITION_FAILED', message: `KV precondition failed for key ${JSON.stringify(key)}`, service: 'kv', meta: { status: 412 } } };
+      }
       const etag = `e${++sequence}`;
       rows.set(key, { value: structuredClone(value), etag });
       return { ok: true, data: { data: undefined, headers: { etag } } };

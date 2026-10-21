@@ -1,6 +1,6 @@
 import { defer } from './defer.js';
 import type { TinyCloudNode } from '@tinycloud/node-sdk';
-import { errInfo } from './errors.js';
+import { CourierError, errInfo } from './errors.js';
 import { k, PREFIX } from './keys.js';
 import type { StoredPeer } from './profile.js';
 import { COUNTERPARTY_NOTICE, isRecord, messageView, oneLine } from './a2a.js';
@@ -123,7 +123,7 @@ export async function commitReceipts(selfKv: KV, pending: Map<string, PendingDel
         else await putCreate(selfKv, key, receipts);
         break;
       } catch (error) {
-        const conflict = /conflict|412|precondition/i.test(`${errInfo(error).code ?? ''} ${errInfo(error).message}`);
+        const conflict = error instanceof CourierError && error.code === 'conflict';
         if (conflict && attempt < 2) continue;
         console.error(`warning: could not advance receipts for ${peer}: ${errInfo(error).message}`);
         break;
