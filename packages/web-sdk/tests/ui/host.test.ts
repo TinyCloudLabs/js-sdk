@@ -154,29 +154,6 @@ describe("host mount", () => {
     expect(newSymbols).toEqual([REGISTRY_KEY]);
   });
 
-  test("adds no message, storage, or messaging listeners to window or document", () => {
-    const seen: string[] = [];
-    const targets = [page, page.document] as unknown as Array<{ addEventListener: (...a: unknown[]) => unknown }>;
-    const originals = targets.map((target) => target.addEventListener);
-    targets.forEach((target, index) => {
-      target.addEventListener = (type: unknown, ...rest: unknown[]) => {
-        seen.push(String(type));
-        return Reflect.apply(originals[index] as (...a: unknown[]) => unknown, target, [type, ...rest]);
-      };
-    });
-    try {
-      const ui = mountClient();
-      ui.api.open();
-      buttonEl()?.click();
-      ui.api.close();
-    } finally {
-      targets.forEach((target, index) => {
-        target.addEventListener = originals[index] as (...a: unknown[]) => unknown;
-      });
-    }
-    expect(seen.filter((type) => ["message", "messageerror", "storage"].includes(type))).toEqual([]);
-  });
-
   test("one host is shared by two clients; unregistering the last removes it", () => {
     const a = mountClient();
     const b = mountClient();
@@ -371,5 +348,138 @@ describe("sync status on the button while the panel is closed", () => {
     const ui = mountWithSync(sync.facade);
     ui.unregister();
     expect(dotEl()?.hidden).toBe(true);
+  });
+});
+
+describe("messaging and dialog HARD rules", () => {
+  // Spies stay installed for each test in this block, so every mount, open,
+  // click, and unregister runs under them.
+  const FORBIDDEN = ["message", "messageerror", "storage"];
+  type Listener = { target: string; type: string };
+  type Spy = { calls: string[]; listeners: Listener[] };
+  const undo: Array<() => void> = [];
+  let spy: Spy;
+
+  function define(target: object, name: PropertyKey, descriptor: PropertyDescriptor): void {
+    const original = Object.getOwnPropertyDescriptor(target, name);
+    Object.defineProperty(target, name, { configurable: true, ...descriptor });
+    undo.push(() => {
+      if (original) Object.defineProperty(target, name, original);
+      else Reflect.deleteProperty(target, name);
+    });
+  }
+
+  function installSpies(): Spy {
+    const next: Spy = { calls: [], listeners: [] };
+    const roots: Array<[string, Loose]> = [
+      ["globalThis", g],
+      ["window", page as unknown as Loose],
+      ["document", page.document as unknown as Loose],
+    ];
+    for (const [label, target] of roots) {
+      const realAdd = target.addEventListener as (...a: unknown[]) => unknown;
+      define(target, "addEventListener", {
+        writable: true,
+        value(this: unknown, type: unknown, ...rest: unknown[]) {
+          next.listeners.push({ target: label, type: String(type) });
+          return realAdd.apply(this, [type, ...rest]);
+        },
+      });
+    }
+    for (const [label, target] of roots.slice(0, 2)) {
+      for (const ctor of ["BroadcastChannel", "MessageChannel"]) {
+        define(target, ctor, {
+          writable: true,
+          value: function stub() {
+            next.calls.push(`${label}.${ctor}`);
+          },
+        });
+      }
+      define(target, "postMessage", {
+        writable: true,
+        value: () => {
+          next.calls.push(`${label}.postMessage`);
+        },
+      });
+      let handler: unknown = null;
+      define(target, "onmessage", {
+        get: () => handler,
+        set: (value: unknown) => {
+          next.calls.push(`${label}.onmessage`);
+          handler = value;
+        },
+      });
+    }
+    return next;
+  }
+
+  function installDialogSpies(): void {
+    const dialogProto = page.HTMLDialogElement.prototype as unknown as object;
+    define(dialogProto, "showModal", {
+      writable: true,
+      value: () => {
+        spy.calls.push("showModal");
+      },
+    });
+    for (const name of ["showPopover", "hidePopover", "togglePopover"]) {
+      define(page.HTMLElement.prototype, name, {
+        writable: true,
+        value: () => {
+          spy.calls.push(name);
+        },
+      });
+    }
+  }
+
+  function forbiddenListeners(): Listener[] {
+    return spy.listeners.filter((listener) => FORBIDDEN.includes(listener.type));
+  }
+
+  beforeEach(() => {
+    spy = installSpies();
+  });
+
+  afterEach(() => {
+    while (undo.length) undo.pop()?.();
+  });
+
+  test("default config: no BroadcastChannel, MessageChannel, postMessage, onmessage, or message listener", () => {
+    const ui = mountClient();
+    ui.api.open();
+    buttonEl()?.click();
+    ui.api.close();
+    ui.unregister();
+    expect(spy.calls).toEqual([]);
+    expect(forbiddenListeners()).toEqual([]);
+  });
+
+  test("ui:false: no host and no listeners of any type on globalThis, window, or document", () => {
+    const ui = mountClient(false);
+    ui.api.open();
+    ui.api.close();
+    expect(hostEl()).toBeNull();
+    expect(spy.calls).toEqual([]);
+    expect(spy.listeners).toEqual([]);
+  });
+
+  test("framed: open is refused and no messaging API is touched", () => {
+    overrideWindowProp("top", {});
+    const ui = mountClient();
+    ui.api.open();
+    expect(ui.api.isOpen).toBe(false);
+    expect(hostEl()).toBeNull();
+    expect(spy.calls).toEqual([]);
+    expect(forbiddenListeners()).toEqual([]);
+  });
+
+  test("no showModal, showPopover, togglePopover, or hidePopover, and no dialog or popover markup", () => {
+    expect(page.HTMLDialogElement).toBeDefined();
+    installDialogSpies();
+    const ui = mountClient();
+    ui.api.open();
+    actionEl(text("panel.hide"))?.click();
+    expect(spy.calls).toEqual([]);
+    expect(shadow().querySelector("dialog, [popover]")).toBeNull();
+    expect(page.document.querySelector("dialog, [popover]")).toBeNull();
   });
 });
