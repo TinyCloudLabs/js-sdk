@@ -516,7 +516,7 @@ describe("TinyCloudNode.restoreSession session-key lifecycle", () => {
     };
     const node = new TinyCloudNode({ wasmBindings: wasm });
 
-    await node.restoreSession(proof);
+    await node.restoreSession({ ...proof, tinycloudHosts: [RESTORE_HOST] });
 
     const registry = node.capabilityRegistry;
     const key = registry.getAllKeys()[0]!;
