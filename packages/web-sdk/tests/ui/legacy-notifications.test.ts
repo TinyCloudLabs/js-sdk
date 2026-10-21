@@ -27,8 +27,6 @@ let TinyCloudWeb: typeof TinyCloudWebType;
 const saved = new Map<string, unknown>();
 const realWarn = console.warn;
 let warnings: string[] = [];
-let attached: ShadowRoot[] = [];
-let restoreAttachShadow: () => void = () => {};
 let freshCounter = 0;
 
 // Each query suffix is a separate module instance, so its once-per-key warning set starts empty.
@@ -50,25 +48,10 @@ beforeAll(async () => {
   g.Event = page.Event;
   g.KeyboardEvent = page.KeyboardEvent;
 
-  // The host's root is closed, so record each one as it is created.
-  const proto = page.Element.prototype as unknown as {
-    attachShadow(init: ShadowRootInit): ShadowRoot;
-  };
-  const original = proto.attachShadow;
-  proto.attachShadow = function attachShadow(this: unknown, init: ShadowRootInit): ShadowRoot {
-    const root = original.call(this, init);
-    attached.push(root);
-    return root;
-  };
-  restoreAttachShadow = () => {
-    proto.attachShadow = original;
-  };
-
   TinyCloudWeb = (await import("../../src/modules/tcw.ts?legacy-notifications")).TinyCloudWeb;
 });
 
 afterAll(() => {
-  restoreAttachShadow();
   for (const name of GLOBAL_NAMES) {
     if (saved.get(name) === undefined) delete g[name];
     else g[name] = saved.get(name);
@@ -79,7 +62,6 @@ beforeEach(() => {
   delete g[REGISTRY_KEY];
   page.document.body.innerHTML = "";
   page.localStorage.clear();
-  attached = [];
   warnings = [];
   console.warn = (...args: unknown[]) => {
     warnings.push(args.map(String).join(" "));
@@ -94,10 +76,10 @@ function hostEl(): HTMLElement | null {
   return page.document.querySelector("[data-tinycloud-ui]") as HTMLElement | null;
 }
 
-// Throws when no root was created, so a missing host can never pass as `undefined`.
+// Throws when no host or root exists, so a missing host can never pass as `undefined`.
 function shadow(): ShadowRoot {
-  const root = attached.at(-1);
-  if (!root) throw new Error("no shadow root was created");
+  const root = hostEl()?.shadowRoot;
+  if (!root) throw new Error("no open shadow root on the TinyCloud host");
   return root;
 }
 

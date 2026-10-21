@@ -193,7 +193,7 @@ export function createHostRuntime(): HostRuntime {
   function mount(config: ResolvedUiConfig): Mounted {
     const host = document.createElement("div");
     host.setAttribute("style", HOST_STYLE);
-    const root = host.attachShadow({ mode: "closed" });
+    const root = host.attachShadow({ mode: "open" });
 
     const style = document.createElement("style");
     style.textContent = HOST_CSS;
