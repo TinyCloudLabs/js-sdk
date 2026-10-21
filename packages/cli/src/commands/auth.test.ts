@@ -333,7 +333,10 @@ mock.module("@tinycloud/node-sdk", () => ({
   NodeWasmBindings: class NodeWasmBindings {
     validatePersistedSession(proof: { spaceId: string }) {
       return {
-        verifiedRecap: [{ service: "kv", space: proof.spaceId, path: typeof openKeyDelegation.verifiedPath === "string" ? openKeyDelegation.verifiedPath : "", actions: ["tinycloud.kv/get"] }],
+        verifiedRecap: [
+          ...(openKeyDelegation.kvUnchecked === true ? [] : [{ service: "kv", space: proof.spaceId, path: typeof openKeyDelegation.verifiedPath === "string" ? openKeyDelegation.verifiedPath : "", actions: ["tinycloud.kv/get"] }]),
+          { service: "capabilities", space: proof.spaceId, path: "", actions: ["tinycloud.capabilities/read"] },
+        ],
         expiresAt: typeof openKeyDelegation.expiry === "string" ? openKeyDelegation.expiry : "2099-01-01T00:00:00.000Z",
       };
     }
@@ -2442,5 +2445,16 @@ describe("auth grant for an OpenKey owner gets a fresh owner approval per agent 
     }
 
     expect(recorded.startAuthFlows[0]?.options.noPopup).toBe(false);
+  });
+
+  test("an agent request whose owner approval unchecks an ability is refused and stores nothing", async () => {
+    openKeyDelegation = { ...approvalBy(primaryOwner, 2 * DAY_MS), kvUnchecked: true };
+    const source = await writeAgentRequest("openkey-agent-narrow.json");
+
+    await runAuthCommand(["auth", "grant", source, "--yes"]);
+
+    expect(recorded.errors).toEqual([expect.objectContaining({ code: "OPENKEY_APPROVAL_NARROWER" })]);
+    expect(recorded.grantedRequests).toEqual([]);
+    expect(recorded.localGrantArtifacts).toEqual([]);
   });
 });

@@ -149,7 +149,7 @@ afterAll(async () => {
   await rm(home, { recursive: true, force: true });
 });
 
-async function escalate(proof: SignedCallback, expectedOwner = ownerDid, expiryOption?: string): Promise<void> {
+async function escalate(proof: SignedCallback, expectedOwner = ownerDid, expiryOption?: string, exactApproval = false): Promise<void> {
   callback = proof;
   const profile = await ProfileManager.getProfile(profileName);
   if (expectedOwner !== ownerDid) {
@@ -159,7 +159,7 @@ async function escalate(proof: SignedCallback, expectedOwner = ownerDid, expiryO
     ctx: { profile: profileName, host },
     profile: await ProfileManager.getProfile(profileName),
     node: node as never,
-    requested, expiryOption, reason: "Read named secret", yes: true,
+    requested, expiryOption, reason: "Read named secret", yes: true, exactApproval,
     openKeyAcquisition: async () => callback,
   });
 }
@@ -221,6 +221,21 @@ describe("signed portable OpenKey grants", () => {
     expect(activated).toEqual([]);
     expect(await loadAdditionalDelegations(profileName)).toEqual([]);
     expect(await readGrantHistory(profileName)).toEqual([]);
+  });
+
+  test("an agent approval that unchecks an ability is refused and stores no grant", async () => {
+    await expect(escalate(await signedProof({ raw: false, capabilitiesRead: true }), ownerDid, undefined, true)).rejects.toMatchObject({
+      code: "OPENKEY_APPROVAL_NARROWER",
+      message: expect.stringContaining("Approve all of it"),
+    });
+    expect(activated).toEqual([]);
+    expect(await loadAdditionalDelegations(profileName)).toEqual([]);
+    expect(await readGrantHistory(profileName)).toEqual([]);
+  });
+
+  test("an agent approval that covers the whole request is stored", async () => {
+    await escalate(await signedProof({ capabilitiesRead: true }), ownerDid, undefined, true);
+    expect(activated).toHaveLength(1);
   });
 
   test("activation refusal leaves stored delegations unchanged", async () => {

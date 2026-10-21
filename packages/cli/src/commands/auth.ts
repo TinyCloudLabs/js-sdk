@@ -1366,6 +1366,7 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
             persist: false,
             force: true,
             consentAlreadyGiven: true,
+            exactApproval: true,
             noPopup: !(process.stdin.isTTY || process.stderr.isTTY),
           });
           if (approval === undefined) {
@@ -1917,6 +1918,8 @@ export async function ensureDelegationAuthority(params: {
   openKeyAcquisition?: OpenKeyAcquisition;
   /** Print the OpenKey approval URL and wait for the callback instead of opening a browser. */
   noPopup?: boolean;
+  /** Agent request: the approval must cover every requested action, or no grant is stored. */
+  exactApproval?: boolean;
 }): Promise<PortableDelegation | undefined> {
   if (!params.force && params.node.hasRuntimePermissions(params.requested)) return undefined;
 
@@ -1951,6 +1954,7 @@ export async function ensureDelegationAuthority(params: {
       sessionDid: params.profile.sessionDid ?? params.profile.did,
       expectedOwner: pinnedOwner(params.profile),
       expiry: expiryCap,
+      exactApproval: params.exactApproval === true,
     };
     const anchorSpace = params.anchorSpace ?? params.profile.spaceId ?? params.profile.spaceName;
     if (params.persist === false) {
@@ -2203,6 +2207,8 @@ export interface PortableGrantProof {
   sessionDid: string;
   expectedOwner?: string;
   expiry?: RequestedExpiry;
+  /** Agent request: the approval must cover every requested action, or no grant is stored. */
+  exactApproval?: boolean;
 }
 
 /** A portable grant contains only authority from the owner-signed ReCap. */
@@ -2216,6 +2222,7 @@ export function portableFromOpenKeyDelegation(
     expectedOwner: proof.expectedOwner,
     expiry: proof.expiry,
     purpose: "grant",
+    exactApproval: proof.exactApproval,
   });
   if (legacyNested.length > 0) {
     throw new CLIError(

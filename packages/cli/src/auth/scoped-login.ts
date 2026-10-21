@@ -372,6 +372,8 @@ export interface SignedSessionExpectations {
   expiry?: RequestedExpiry;
   /** Grant escalation stores a portable delegation, not a login session. */
   purpose?: "grant";
+  /** Agent grant: the approval must cover every requested action, or no grant is stored. */
+  exactApproval?: boolean;
 }
 
 /** What the WASM verifier returns (its binding is untyped). Caveats arrive as `Map`s. */
@@ -497,6 +499,11 @@ export function verifyScopedLogin(
   // same action, unrestricted or with the same caveats (OpenKey may narrow).
   if (!scopeCovers(requested, approved, signed.ownerDid)) {
     throw new CLIError("OPENKEY_GRANT_BROADENED", `The signed grant contains authority beyond the requested ${expected.purpose === "grant" ? "grant" : "manifest"}. ${notStored}`, ExitCode.PERMISSION_DENIED);
+  }
+  // An agent grant stands for the whole request. An action the owner unchecked
+  // is not granted, and the grant must not be recorded as if it were.
+  if (expected.exactApproval && !scopeCovers(approved, requested, signed.ownerDid)) {
+    throw new CLIError("OPENKEY_APPROVAL_NARROWER", `The approval was narrower than the request. Approve all of it, or ask the agent to request less. ${notStored}`, ExitCode.PERMISSION_DENIED);
   }
   // The SIWE proof stays intact for validation/diagnostics. Only effective,
   // requested authority is recorded as approved and compared on renewals.
