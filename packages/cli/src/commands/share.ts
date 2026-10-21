@@ -45,7 +45,7 @@ import { MAX_SHARE_STDIN_BYTES, readBoundedUrlStdin, readShareInput, shareInputF
 import { quarantineUnreadableProfileHistory } from "../share/adapters.js";
 import { ProfileManager } from "../config/profiles.js";
 
-import { ShareHistoryRetryError, ShareHistoryUnreadableError, SharePublishAuthorityError, shareHistoryReason, type ShareHistoryStatus } from "../share/errors.js";
+import { ShareHistoryReadError, ShareHistoryRetryError, ShareHistoryUnreadableError, SharePublishAuthorityError, shareHistoryReason, type ShareHistoryStatus } from "../share/errors.js";
 const SHARE_ORIGIN = "https://share.tinycloud.xyz";
 const NOTIFY_WINDOW_MESSAGE = "Share notification authorization expired (at share expiry or 5 minutes after publication); publish a new share and invite the recipient then.\n";
 
@@ -116,6 +116,9 @@ const SHARE_HISTORY_RECOVER_FS_ERRNO: Record<string, true> = { EACCES: true, EEX
 
 /** @internal Map fs failures from `share history recover`. The original history file is never deleted on these paths. */
 export function shareHistoryRecoverError(error: unknown): CLIError {
+  if (error instanceof ShareHistoryReadError) {
+    return new CLIError("SHARE_HISTORY_RECOVER_FAILED", "could not read the unreadable sender history to move it aside", 1, { hint: "The original history file was not deleted. Check read permission on the history file, then retry." });
+  }
   const code = error instanceof Error ? (error as NodeJS.ErrnoException).code : undefined;
   if (code !== undefined && SHARE_HISTORY_RECOVER_FS_ERRNO[code] === true) {
     return new CLIError("SHARE_HISTORY_RECOVER_FAILED", `could not move the unreadable sender history aside (${code})`, 1, { hint: "The original history file was not deleted. Check write permission on the profile directory, then retry." });
