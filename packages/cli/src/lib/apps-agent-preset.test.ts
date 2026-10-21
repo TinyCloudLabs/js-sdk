@@ -319,18 +319,27 @@ describe("describeGrantScope: the text follows what will be signed", () => {
     expect(scope.extras).toHaveLength(2);
   });
 
-  test("schema is within the preset only on a catalog app's database, and only alongside that app's SQL write", () => {
+  test("schema is within the preset only as part of the exact write variant for its catalog app", () => {
     const schema = (path: string) => ({ service: "tinycloud.sql", space: OWNER_SPACE, path, actions: ["tinycloud.sql/schema"] });
     const write = { service: "tinycloud.sql", space: OWNER_SPACE, path: `${CATALOG}/`, actions: ["tinycloud.sql/write"] };
-    expect(scopeOf([schema(CATALOG_DB), write]).extras).toEqual([]);
-    // a lone schema entry is never the preset: the preset always grants it with the app's write
-    expect(scopeOf([schema(CATALOG_DB)]).extras).toHaveLength(1);
+    // the full write variant for the catalog app is the preset: its schema entry is not beyond it
+    const full = asRequested("write", [CATALOG]);
+    expect(full.some((entry) => entry.actions.includes("tinycloud.sql/schema"))).toBe(true);
+    expect(scopeOf(full).extras).toEqual([]);
+    expect(scopeOf(full).text).toBe(appsAgentScopeNotice("write", [CATALOG]));
+    // a lone schema entry is beyond the preset: listed first with `!`
+    const lone = scopeOf([schema(CATALOG_DB)]);
+    expect(lone.extras).toHaveLength(1);
+    expect(entryLines(lone.text)[0]).toStartWith("! ");
+    expect(lone.text).toContain("create, change and drop tables");
+    // schema beside only the same app's SQL write (not the full variant) is beyond the preset too
+    expect(scopeOf([schema(CATALOG_DB), write]).extras).toHaveLength(1);
+    // schema for the catalog app beside another app's full write variant is beyond the preset
+    expect(scopeOf([...asRequested("write", [HEALTH]), schema(CATALOG_DB)]).extras).toHaveLength(1);
     // the write must be on the same app
     expect(scopeOf([schema(CATALOG_DB), { ...write, path: `${RECIPES}/` }]).extras).toHaveLength(1);
     for (const path of [`${CATALOG_DB}/`, `${CATALOG}/other`, `${HEALTH}/healthlog`]) {
-      const scope = scopeOf([schema(path), write]);
-      expect(scope.extras).toHaveLength(1);
-      expect(scope.text).toContain("create, change and drop tables");
+      expect(scopeOf([schema(path), write]).extras).toHaveLength(1);
     }
   });
 

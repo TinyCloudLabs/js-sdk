@@ -446,19 +446,13 @@ function describeEntry(entry: PermissionEntry, applicationsSpace: string): strin
 /**
  * Whether every action of `entry` is one the preset can grant at that path:
  * reads anywhere, writes only in a named app's write folders (SQL write in
- * the whole named app), schema only on a catalog app's database.
+ * the whole named app). Schema is never within it: the preset grants it only inside the exact write variant, which `matchAppsAgentRequest` recognises first.
  * A path with a `.` or `..` segment is never within it.
  */
 function withinPresetSet(entry: PermissionEntry, applicationsSpace: string): boolean {
   if (!inApplicationsSpace(entry, applicationsSpace) || entry.caveats !== undefined) return false;
   if (entry.path.split("/").some((segment) => segment === "." || segment === "..")) return false;
-  if (entry.actions.includes(SCHEMA_ACTION)) {
-    return (
-      entry.service === "tinycloud.sql" &&
-      entry.actions.length === 1 &&
-      schemaPathsFor(Object.keys(APPS_AGENT_SCHEMA_DATABASES)).includes(entry.path)
-    );
-  }
+  if (entry.actions.includes(SCHEMA_ACTION)) return false;
   const slash = entry.path.indexOf("/");
   const folder = slash > 0 && isAppId(entry.path.slice(0, slash)) ? entry.path.slice(slash + 1) : undefined;
   const grants = Object.values(APPS_AGENT_VARIANTS).flatMap(({ grants: variantGrants }) =>
@@ -470,27 +464,13 @@ function withinPresetSet(entry: PermissionEntry, applicationsSpace: string): boo
 }
 
 /**
- * A schema entry is within the preset only alongside the same app's SQL write:
- * the preset always grants the two together, so a lone schema entry is beyond it.
- */
-function schemaPairedWithWrite(entry: PermissionEntry, requested: readonly PermissionEntry[], applicationsSpace: string): boolean {
-  if (!entry.actions.includes(SCHEMA_ACTION)) return true;
-  const app = entry.path.slice(0, entry.path.indexOf("/"));
-  return requested.some((other) =>
-    other.service === "tinycloud.sql" &&
-    other.actions.includes("tinycloud.sql/write") &&
-    inApplicationsSpace(other, applicationsSpace) &&
-    other.path.replace(/\/$/, "") === app);
-}
-
-/**
  * The scope the owner is about to sign, in plain words. `requested` must be
  * the resolved list from `entriesForSigning` + the profile + `finalizeSigningEntries`,
  * the same list that is then signed. Every entry is described once, whatever
  * its service or space, with text from the request escaped. The preset wording
  * is used only when the list is exactly a preset variant. When the list
  * touches an `applications` space and holds any entry the preset could never
- * grant (another service or space, delete, schema outside a catalog app's database or without its SQL write, delegation, a write outside
+ * grant (another service or space, delete, any schema entry outside the exact write variant, delegation, a write outside
  * a named app's write folders), those entries come first, marked `!`, and need a confirmation.
  */
 export function describeGrantScope(
@@ -504,7 +484,7 @@ export function describeGrantScope(
   }
   const touchesApplications = requested.some((entry) => (entry.space ?? "").split(":").at(-1) === APPS_AGENT_SPACE);
   const extras = touchesApplications
-    ? requested.filter((entry) => !withinPresetSet(entry, applicationsSpace) || !schemaPairedWithWrite(entry, requested, applicationsSpace))
+    ? requested.filter((entry) => !withinPresetSet(entry, applicationsSpace))
     : [];
   const others = requested.filter((entry) => !extras.includes(entry));
 
