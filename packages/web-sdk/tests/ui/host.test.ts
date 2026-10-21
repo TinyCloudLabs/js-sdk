@@ -8,6 +8,7 @@ import { HIDE_KEY_PREFIX } from "../../src/ui/persistence";
 import { text } from "../../src/ui/strings";
 import type { SyncFacade, SyncState } from "../../src/ui/slots";
 import { toastStore } from "../../src/ui/parts/toasts";
+import { mountPrompt } from "../../src/ui/parts/prompts";
 import type { ToastView } from "../../src/ui/toast-store";
 import type { UiPosition } from "../../src/ui/config";
 
@@ -171,6 +172,52 @@ describe("host mount", () => {
     }
     expect(hostEl()).toBeNull();
     expect(warnings).toEqual([["[tinycloud] ui-host-version-mismatch"]]);
+  });
+});
+
+describe("prompts are settled by the client that opened them", () => {
+  // Stands in for a prompt: mounts into the host layer and counts dismissals.
+  function openPrompt(handle: UiClientHandle, dismissed: { count: number }): void {
+    const el = page.document.createElement("div");
+    const mounted = mountPrompt(handle.promptScope, el, () => {
+      el.remove();
+      dismissed.count += 1;
+    });
+    if ("refusal" in mounted) throw new Error(`prompt refused: ${mounted.refusal}`);
+  }
+
+  test("reset settles only the resetting client's prompts", () => {
+    const a = mountClient();
+    const b = mountClient();
+    const aPrompt = { count: 0 };
+    const bPrompt = { count: 0 };
+    openPrompt(a, aPrompt);
+    openPrompt(b, bPrompt);
+
+    a.reset();
+    expect(aPrompt.count).toBe(1);
+    expect(bPrompt.count).toBe(0);
+
+    b.reset();
+    expect(bPrompt.count).toBe(1);
+  });
+
+  test("unregister settles only that client's prompts and keeps the host for the other client", () => {
+    const a = mountClient();
+    const b = mountClient();
+    const aPrompt = { count: 0 };
+    const bPrompt = { count: 0 };
+    openPrompt(a, aPrompt);
+    openPrompt(b, bPrompt);
+
+    a.unregister();
+    expect(aPrompt.count).toBe(1);
+    expect(bPrompt.count).toBe(0);
+    expect(hostEl()).not.toBeNull();
+
+    b.unregister();
+    expect(bPrompt.count).toBe(1);
+    expect(hostEl()).toBeNull();
   });
 });
 

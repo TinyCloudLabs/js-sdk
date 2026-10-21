@@ -60,16 +60,33 @@ const source = {
 };
 
 let handle: UiClientHandle | undefined;
+let keeper: UiClientHandle | undefined;
+
+function register(): UiClientHandle {
+  return registerUiClient({
+    ui: undefined,
+    source: source as never,
+    manifestAppId: () => "e2e-prompts-smoke",
+  });
+}
+
+// Replaces both clients. With a keeper, the host stays mounted when the
+// prompt client unregisters, so only prompt dismissal can remove its prompts.
+function attach(withKeeper: boolean): void {
+  handle?.unregister();
+  keeper?.unregister();
+  keeper = withKeeper ? register() : undefined;
+  handle = register();
+}
 
 const w = window as unknown as Record<string, unknown>;
 w.__tc = {
   mount() {
-    handle?.unregister();
-    handle = registerUiClient({
-      ui: undefined,
-      source: source as never,
-      manifestAppId: () => "e2e-prompts-smoke",
-    });
+    attach(false);
+    return true;
+  },
+  mountWithKeeper() {
+    attach(true);
     return true;
   },
   openSpaceCreation() {
@@ -107,6 +124,10 @@ w.__tc = {
     return true;
   },
   reset() {
+    handle?.reset();
+    return true;
+  },
+  unregister() {
     handle?.unregister();
     handle = undefined;
     return true;

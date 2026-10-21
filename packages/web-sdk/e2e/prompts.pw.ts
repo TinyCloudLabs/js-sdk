@@ -12,9 +12,11 @@ const PERMISSION = "tinycloud-permission-request-modal";
 interface PromptWindow {
   __tc: {
     mount(): boolean;
+    mountWithKeeper(): boolean;
     openSpaceCreation(): boolean;
     openPermission(): boolean;
     reset(): boolean;
+    unregister(): boolean;
   };
   __spaceResult?: boolean;
   __spaceError?: string;
@@ -24,7 +26,7 @@ interface PromptWindow {
 
 // No init script is added. The page only receives the bundle and mounts it.
 // Both prompts and the host use open shadow roots, which Playwright pierces.
-async function mountHarness(page: Page, scheme: "light" | "dark") {
+async function mountHarness(page: Page, scheme: "light" | "dark", withKeeper = false) {
   await page.emulateMedia({ colorScheme: scheme });
   await page.route(`${ORIGIN}/**`, (route) => {
     const path = new URL(route.request().url()).pathname;
@@ -38,7 +40,10 @@ async function mountHarness(page: Page, scheme: "light" | "dark") {
     });
   });
   await page.goto(`${ORIGIN}/`);
-  await page.evaluate(() => (window as unknown as PromptWindow).__tc.mount());
+  await page.evaluate((keeper) => {
+    const tc = (window as unknown as PromptWindow).__tc;
+    return keeper ? tc.mountWithKeeper() : tc.mount();
+  }, withKeeper);
 }
 
 async function openSpaceCreation(page: Page) {
@@ -55,6 +60,15 @@ function spaceResult(page: Page) {
 
 function permResult(page: Page) {
   return page.evaluate(() => (window as unknown as PromptWindow).__permResult);
+}
+
+// True while the host's layer is mounted in some element's open shadow root.
+function hostMounted(page: Page) {
+  return page.evaluate(() =>
+    [...document.querySelectorAll("*")].some(
+      (el) => el.shadowRoot?.querySelector("div.layer[data-position]") != null,
+    ),
+  );
 }
 
 // Walks up from the content box to the nearest opaque background and returns
@@ -311,7 +325,7 @@ for (const scheme of ["light", "dark"] as const) {
   });
 
   // Assertion e: reset dismisses a pending prompt and resolves it false.
-  test(`${scheme}: reset dismisses a pending space prompt and resolves it false`, async ({ page }) => {
+  test(`${scheme}: sole-client reset dismisses a pending space prompt and resolves it false`, async ({ page }) => {
     await mountHarness(page, scheme);
     await openSpaceCreation(page);
 
@@ -324,7 +338,7 @@ for (const scheme of ["light", "dark"] as const) {
     await expect.poll(() => spaceResult(page)).toBe(false);
   });
 
-  test(`${scheme}: reset dismisses a pending permission prompt and resolves it false`, async ({ page }) => {
+  test(`${scheme}: sole-client reset dismisses a pending permission prompt and resolves it false`, async ({ page }) => {
     await mountHarness(page, scheme);
     await openPermission(page);
 
@@ -335,5 +349,61 @@ for (const scheme of ["light", "dark"] as const) {
 
     await expect(permissionModal).toHaveCount(0);
     await expect.poll(() => permResult(page)).toBe(false);
+  });
+
+  test(`${scheme}: keeper reset dismisses a pending space prompt and keeps the host mounted`, async ({ page }) => {
+    await mountHarness(page, scheme, true);
+    await openSpaceCreation(page);
+
+    const spaceModal = page.locator(SPACE);
+    await expect(spaceModal).toHaveCount(1);
+
+    await page.evaluate(() => (window as unknown as PromptWindow).__tc.reset());
+
+    await expect(spaceModal).toHaveCount(0);
+    await expect.poll(() => spaceResult(page)).toBe(false);
+    expect(await hostMounted(page)).toBe(true);
+  });
+
+  test(`${scheme}: keeper reset dismisses a pending permission prompt and keeps the host mounted`, async ({ page }) => {
+    await mountHarness(page, scheme, true);
+    await openPermission(page);
+
+    const permissionModal = page.locator(PERMISSION);
+    await expect(permissionModal).toHaveCount(1);
+
+    await page.evaluate(() => (window as unknown as PromptWindow).__tc.reset());
+
+    await expect(permissionModal).toHaveCount(0);
+    await expect.poll(() => permResult(page)).toBe(false);
+    expect(await hostMounted(page)).toBe(true);
+  });
+
+  test(`${scheme}: unregister dismisses a pending space prompt while the keeper keeps the host mounted`, async ({ page }) => {
+    await mountHarness(page, scheme, true);
+    await openSpaceCreation(page);
+
+    const spaceModal = page.locator(SPACE);
+    await expect(spaceModal).toHaveCount(1);
+
+    await page.evaluate(() => (window as unknown as PromptWindow).__tc.unregister());
+
+    await expect(spaceModal).toHaveCount(0);
+    await expect.poll(() => spaceResult(page)).toBe(false);
+    expect(await hostMounted(page)).toBe(true);
+  });
+
+  test(`${scheme}: unregister dismisses a pending permission prompt while the keeper keeps the host mounted`, async ({ page }) => {
+    await mountHarness(page, scheme, true);
+    await openPermission(page);
+
+    const permissionModal = page.locator(PERMISSION);
+    await expect(permissionModal).toHaveCount(1);
+
+    await page.evaluate(() => (window as unknown as PromptWindow).__tc.unregister());
+
+    await expect(permissionModal).toHaveCount(0);
+    await expect.poll(() => permResult(page)).toBe(false);
+    expect(await hostMounted(page)).toBe(true);
   });
 }
