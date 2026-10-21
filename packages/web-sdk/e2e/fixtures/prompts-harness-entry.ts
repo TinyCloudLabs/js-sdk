@@ -1,11 +1,13 @@
 // Browser harness for the prompts smoke test. Bundled by `build:e2e-prompts`
 // into e2e/.build/prompts.bundle.js and served by the spec. It mounts the real
-// UI host and runs the production space-creation path
-// (ModalSpaceCreationHandler) with the prompt scope the host registered, so a
-// reset dismisses the pending prompt through the same scope. The spec injects
-// no init script; everything is driven through window.__tc.
+// UI host and runs the production prompt paths (ModalSpaceCreationHandler for
+// space creation, showPermissionRequestModal for permissions) with the prompt
+// scope the host registered, so a reset dismisses pending prompts through the
+// same scope. The spec injects no init script; everything is driven through
+// window.__tc.
 import { registerUiClient, type UiClientHandle } from "../../src/ui/index";
 import { ModalSpaceCreationHandler } from "../../src/authorization/WebSpaceCreationHandler";
+import { showPermissionRequestModal } from "../../src/notifications/ModalManager";
 
 type SyncState = { requested: boolean; effective: string; reason?: string };
 
@@ -64,7 +66,7 @@ w.__tc = {
   mount() {
     handle?.unregister();
     handle = registerUiClient({
-      ui: undefined as never,
+      ui: undefined,
       source: source as never,
       manifestAppId: () => "e2e-prompts-smoke",
     });
@@ -88,6 +90,20 @@ w.__tc = {
           w.__spaceError = String(error);
         },
       );
+    return true;
+  },
+  openPermission() {
+    if (handle === undefined) throw new Error("mount() must run first");
+    delete w.__permResult;
+    delete w.__permError;
+    showPermissionRequestModal({ appName: "E2E App", additional: [] }, handle.promptScope).then(
+      (result) => {
+        w.__permResult = result.approved;
+      },
+      (error: unknown) => {
+        w.__permError = String(error);
+      },
+    );
     return true;
   },
   reset() {
