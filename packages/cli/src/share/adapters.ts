@@ -3,7 +3,7 @@ import { kvArtifactStore } from "./artifact-store.js";
 import { artifactSpaceNotReady, failIfSpaceNotReady } from "./space-not-ready.js";
 import { ShareHistoryReadError, ShareHistoryRetryError, ShareHistoryUnreadableError, SharePublishAuthorityError } from "./errors.js";
 import { storageRejection } from "../output/storage.js";
-import { link, open, readFile, stat, unlink } from "node:fs/promises";
+import { chmod, link, open, readFile, stat, unlink } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { createHash } from "node:crypto";
 import { ProfileManager } from "../config/profiles.js";
@@ -197,6 +197,8 @@ export function createEncryptedSessionHistory(): SenderShareRecordStorage {
 
 const SHARE_HISTORY_FILE = "share-history-v2.json";
 const SHARE_HISTORY_LEGACY_FILE = "share-history-v1.bin";
+/** Owner-only, matching the mode the history writer already uses. */
+const PRIVATE_HISTORY_MODE = 0o600;
 
 /** Signs the bytes that seed a profile's sender-history key. Shared by the publish wiring and the rotation guard. */
 export async function signShareHistoryBytes(bytes: Uint8Array, profile: string): Promise<Uint8Array> {
@@ -417,6 +419,7 @@ export function createEncryptedProfileHistory(profileName: () => Promise<string>
       const target = `${found.file}.unreadable-${new Date().toISOString().replace(/[:.]/g, "-")}`;
       // link never replaces an existing target, so a name collision fails instead of clobbering.
       await link(found.file, target);
+      await chmod(target, PRIVATE_HISTORY_MODE);
       await unlink(found.file);
       const directory = await open(dirname(found.file), "r");
       try { await directory.sync(); } finally { await directory.close(); }

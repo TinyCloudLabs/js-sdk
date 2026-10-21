@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, mock } from "bun:test";
 import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { profilePath, withProfileLock, withTinyCloudStateRoot } from "@tinycloud/operations/state";
@@ -1678,10 +1678,11 @@ describe("sender history recovery and key-drop guard (TC-1669)", () => {
 
   it("quarantines an unreadable history file under a new name and keeps its bytes", () =>
     withHistoryDirectory("tc-share-quarantine-", async (cacheDir) => {
-      await writeFile(join(cacheDir, "share-history-v2.json"), "not json");
+      await writeFile(join(cacheDir, "share-history-v2.json"), "not json", { mode: 0o644 });
       const moved = await quarantineUnreadableProfileHistory("history-test");
-      expect(moved).toMatch(/share-history-v2\.json\.unreadable-/);
+      expect(moved).toMatch(/share-history-v2\.json\.unreadable-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z$/);
       expect(await readFile(moved!, "utf8")).toBe("not json");
+      expect((await stat(moved!)).mode & 0o777).toBe(0o600);
       expect(await profileHistoryFileExists("history-test")).toBe(false);
     }));
 
