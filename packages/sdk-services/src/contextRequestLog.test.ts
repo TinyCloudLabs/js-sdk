@@ -165,3 +165,28 @@ test("a stream body without a known length is recorded as unknown bytes and is n
   expect(log.snapshot()[0]!.bytes).toBeNull();
   expect(body.locked).toBe(false);
 });
+
+test("attempts counts every HTTP attempt in a retry loop", async () => {
+  const log = new RequestLog();
+  const script = [() => reply(503, BUSY, "0"), () => reply(503, BUSY, "0"), () => reply(200, "ok")];
+  let calls = 0;
+  const context = contextWith(log, async () => script[calls++]!());
+  await context.invokeWithRetry("https://node.example/invoke", () => ({ method: "POST" }));
+  expect(calls).toBe(3);
+  expect(log.snapshot().map((event) => [event.attempts, event.code])).toEqual([[3, "ok"]]);
+});
+
+test("an attempt that throws still counts toward attempts", async () => {
+  const log = new RequestLog();
+  let calls = 0;
+  const context = contextWith(log, async () => {
+    calls += 1;
+    if (calls === 1) return reply(503, BUSY, "0");
+    throw new Error("socket reset");
+  });
+  await expect(
+    context.invokeWithRetry("https://node.example/invoke", () => ({ method: "POST" })),
+  ).rejects.toThrow("socket reset");
+  expect(calls).toBe(2);
+  expect(log.snapshot().map((event) => [event.attempts, event.code])).toEqual([[2, "ERROR"]]);
+});

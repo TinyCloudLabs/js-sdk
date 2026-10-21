@@ -474,9 +474,10 @@ export class ServiceContext implements IServiceContext {
     build: () => FetchRequestInit | Promise<FetchRequestInit>,
   ): Promise<FetchResponse> {
     this.assertActive();
-    if (this._requestSink === undefined) return this.sendWithRetry(url, build);
+    if (this._requestSink === undefined) return this.sendWithRetry(url, build, { attempts: 0 });
     const at = Date.now();
     const clock = performance.now();
+    const tally = { attempts: 0 };
     let first: FetchRequestInit | undefined;
     let response: FetchResponse | undefined;
     try {
@@ -484,16 +485,17 @@ export class ServiceContext implements IServiceContext {
         const init = await build();
         first ??= init;
         return init;
-      });
+      }, tally);
       return response;
     } finally {
-      this.logRequest({ url, init: first, response, at, clock });
+      this.logRequest({ url, init: first, response, attempts: tally.attempts, at, clock });
     }
   }
 
   private async sendWithRetry(
     url: string,
     build: () => FetchRequestInit | Promise<FetchRequestInit>,
+    tally: { attempts: number },
   ): Promise<FetchResponse> {
     const policy = this._retryPolicy;
     const startedAt = Date.now();
@@ -502,6 +504,7 @@ export class ServiceContext implements IServiceContext {
     for (let attempt = 1; ; attempt++) {
       const init = await build();
       signal ??= this.combineSignals(init.signal);
+      tally.attempts = attempt;
       const response = await this._fetchCore(url, init);
       const done = (): FetchResponse => {
         try { response.retry = { attempts: attempt, backoffMs }; } catch { /* frozen custom response */ }
@@ -587,6 +590,7 @@ export class ServiceContext implements IServiceContext {
     response?: FetchResponse;
     at: number;
     clock: number;
+    attempts?: number;
   }): void {
     const sink = this._requestSink;
     if (sink === undefined) return;
@@ -603,7 +607,7 @@ export class ServiceContext implements IServiceContext {
           url,
           bytes: byteLengthOf(init?.body) ?? declared,
           durationMs: performance.now() - sample.clock,
-          attempts: response?.retry?.attempts ?? 1,
+          attempts: sample.attempts ?? 1,
           ok: response?.ok === true,
           code: response === undefined ? "ERROR" : response.ok ? "ok" : `HTTP_${response.status}`,
           at: sample.at,
