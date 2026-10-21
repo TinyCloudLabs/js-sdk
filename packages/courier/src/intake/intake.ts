@@ -12,7 +12,7 @@ import { getJson, listAll } from '../store.js';
 import { hiddenTextProblem, textVerdict, type TextVerdict } from '../text.js';
 import { jsonLineLog, type WatchLog } from '../wake.js';
 import { FLAG_TABLE, type Flag } from './flags.js';
-import { policyOf, loadPeers, type Peers } from './peers.js';
+import { policyOf, loadPeers, resolvePeersOwner, type Peers } from './peers.js';
 import { acquireLock, ensureRealDir, readState, writeNew, writeState, type IntakeState, type PeerState, type Receipt } from './queue.js';
 
 const STATE_FILE = 'intake-state.json';
@@ -577,13 +577,41 @@ function intervalSeconds(raw: string | undefined): number {
   return n;
 }
 
-export async function cmdIntake(args: ParsedArgs): Promise<void> {
+/** Periodic peers reload. A refused file keeps the last good map and logs `intake-error`. */
+export function reloadPeers(peersFile: string, peersOwner: number | undefined, last: Peers, log: WatchLog): Peers {
+  try {
+    return loadPeers(peersFile, peersOwner);
+  } catch (error) {
+    log('intake-error', { code: errInfo(error).code ?? 'bad-peers' });
+    return last;
+  }
+}
+
+/** Collaborators of the intake loop. Tests replace them to run one iteration without a live node. */
+export interface IntakeLoopDeps {
+  loadProfile: typeof loadProfile;
+  courierNode: typeof courierNode;
+  reloadPeers: typeof reloadPeers;
+  intakeCycle: typeof intakeCycle;
+  sleep: (ms: number) => Promise<void>;
+}
+
+const defaultLoopDeps: IntakeLoopDeps = {
+  loadProfile,
+  courierNode,
+  reloadPeers,
+  intakeCycle,
+  sleep: (ms) => new Promise<void>((resolve) => setTimeout(resolve, ms)),
+};
+
+export async function cmdIntake(args: ParsedArgs, deps: IntakeLoopDeps = defaultLoopDeps): Promise<void> {
   const base = path.join(profileDir(), 'intake');
   const queueRoot = args.get('queue-dir') ?? path.join(base, 'queue');
   const doneRoot = args.get('done-dir') ?? path.join(base, 'done');
   const overflowRoot = args.get('overflow-dir') ?? path.join(base, 'overflow');
   const stateDir = args.get('state-dir') ?? path.join(base, 'state');
   const peersFile = args.get('peers-file') ?? path.join(base, 'peers.json');
+  const peersOwner = resolvePeersOwner(args.get('peers-owner'), process.env.COURIER_PEERS_OWNER);
   const once = args.has('once');
   const intervalMs = intervalSeconds(args.get('interval')) * 1000;
   const log = jsonLineLog();
@@ -601,18 +629,14 @@ export async function cmdIntake(args: ParsedArgs): Promise<void> {
       return;
     }
     const state = readState(path.join(stateDir, STATE_FILE));
-    let peers = loadPeers(peersFile);
+    let peers = loadPeers(peersFile, peersOwner);
     log('intake-start', { once, intervalSeconds: intervalMs / 1000 });
     for (;;) {
       try {
-        const profile = loadProfile();
-        const node = await courierNode(profile);
-        try {
-          peers = loadPeers(peersFile);
-        } catch (error) {
-          log('intake-error', { code: errInfo(error).code ?? 'bad-peers' });
-        }
-        const queued = await intakeCycle({
+        const profile = deps.loadProfile();
+        const node = await deps.courierNode(profile);
+        peers = deps.reloadPeers(peersFile, peersOwner, peers, log);
+        const queued = await deps.intakeCycle({
           kv: node.kv,
           profile,
           peers,
@@ -630,9 +654,7 @@ export async function cmdIntake(args: ParsedArgs): Promise<void> {
         if (once) throw error;
       }
       if (once) return;
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, intervalMs);
-      });
+      await deps.sleep(intervalMs);
     }
   } finally {
     release();
