@@ -135,7 +135,7 @@ jobs:
           passed=()
           skipped=()
           failed=()
-          for file in tests/*.test.ts tests/*.test.js tests/*.bun.ts; do
+          for file in tests/*.test.ts tests/*.test.js tests/*.bun.ts tests/ui/*.test.ts; do
             reason="${skip[$file]:-}"
             if [[ -z "$reason" ]]; then
               echo "::group::$file"
