@@ -5,7 +5,7 @@ import { interpretCredentialFlow } from "../src/credentials/interpreter";
 import { renderCredentialDescriptor } from "../src/credentials/renderer";
 import { CredentialsService } from "../src/credentials/service";
 import { findStoredCredential, storeCredential } from "../src/credentials/storage";
-import { OpenCredentialsHttpTransport } from "../src/credentials/transport";
+import { OpenCredentialsHttpTransport } from "@tinycloud/sdk-core";
 import type { CredentialAcquisitionTransport, CredentialRequestState } from "../src/credentials/types";
 
 const HOLDER = "did:key:z6MkActive"; const OWNER = "did:pkh:eip155:1:0x1234567890123456789012345678901234567890"; const ORIGIN = "https://witness.credentials.org"; const REQUEST = "RRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRR";

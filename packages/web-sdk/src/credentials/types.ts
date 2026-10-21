@@ -14,6 +14,8 @@ import type {
   UnifiedPolicyCapability,
   UnifiedPolicyV2,
 } from "@tinycloud/sdk-core";
+import type { CredentialAcquisitionTransport, CredentialRequestState, PrimitiveStepResult } from "@tinycloud/sdk-core";
+export type { CredentialAcquisitionTransport, CredentialRequestState, PrimitiveStepResult } from "@tinycloud/sdk-core";
 import type { ValidatedRuntimeDelegation } from "@tinycloud/node-sdk/core";
 
 export interface CredentialClient {
@@ -64,7 +66,6 @@ export interface CredentialSigningAdapter {
   readonly requestApproval?: (binding: CredentialHolderBinding, bytes: Uint8Array, signal?: AbortSignal) => Promise<Uint8Array>;
 }
 
-export type PrimitiveStepResult = Readonly<Record<string, string | boolean>>;
 export type PrimitiveStepHandler = (input: {
   readonly descriptor: CredentialFlowDescriptor;
   readonly requirement: CredentialRequirement;
@@ -174,29 +175,6 @@ export interface CredentialRedirectStore {
   clear(): Promise<void>;
 }
 
-export interface CredentialRequestState {
-  readonly type: "OpenCredentialsAcquisitionState";
-  readonly version: 1;
-  readonly requestId: string;
-  readonly transitionId: string;
-  readonly state: "pending" | "ready_to_issue" | "issued" | "complete" | "expired" | "canceled" | "issuer_unready";
-  readonly nextStep?: { readonly id: string; readonly type: "collect_input" | "mailbox_otp" | "holder_signature"; readonly version: 1; readonly constraints: Readonly<Record<string, unknown>> };
-  readonly retryAfterMs?: number;
-  readonly correlationId: string;
-}
-
-export interface CredentialAcquisitionTransport {
-  create(input: { readonly descriptor: CredentialFlowDescriptor; readonly descriptorDigest: string; readonly requirement: CredentialRequirement; readonly requirementDigest: string; readonly holderDid: string; readonly openerOrigin: string; readonly completionVerifierChallenge: string; readonly inputs?: Readonly<Record<string, string>>; readonly signal?: AbortSignal }): Promise<{ readonly requestId: string; readonly locator: string; readonly expiresAt: string; readonly correlationId: string }>;
-  state(requestId: string, verifier: string, signal?: AbortSignal): Promise<CredentialRequestState>;
-  beginStep(requestId: string, verifier: string, stepId: "collect_input" | "mailbox_otp", signal?: AbortSignal): Promise<void>;
-  submitStep(requestId: string, verifier: string, stepId: string, proof: PrimitiveStepResult, signal?: AbortSignal): Promise<void>;
-  holderBinding(requestId: string, verifier: string, signal?: AbortSignal): Promise<CredentialHolderBinding>;
-  submitHolderSignature(requestId: string, verifier: string, signature: string, signal?: AbortSignal): Promise<void>;
-  issue(requestId: string, verifier: string, signal?: AbortSignal): Promise<void>;
-  result(requestId: string, verifier: string, signal?: AbortSignal): Promise<IssuedCredentialEnvelope>;
-  issuerMetadata(signal?: AbortSignal): Promise<CredentialIssuerMetadata>;
-  checkStatus(status: IssuedCredentialEnvelope["status"], signal?: AbortSignal): Promise<boolean>;
-}
 
 export interface CredentialsOperationOptions {
   readonly descriptor?: CredentialFlowDescriptor;

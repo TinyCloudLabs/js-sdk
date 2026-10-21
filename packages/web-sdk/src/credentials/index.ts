@@ -4,5 +4,5 @@ export * from "./interpreter";
 export * from "./renderer";
 export * from "./service";
 export * from "./storage";
-export * from "./transport";
+export { OpenCredentialsHttpTransport } from "@tinycloud/sdk-core";
 export * from "./types";

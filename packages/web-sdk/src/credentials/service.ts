@@ -23,7 +23,7 @@ import { BrowserCredentialInteraction, BrowserCredentialRedirectStore } from "./
 import { CredentialAcquisitionController } from "./element";
 import { interpretCredentialFlow, mailboxSubject } from "./interpreter";
 import { findStoredCredential, storeCredential } from "./storage";
-import { OpenCredentialsHttpTransport } from "./transport";
+import { OpenCredentialsHttpTransport } from "@tinycloud/sdk-core";
 import type { CredentialClient, CredentialInputRequest, CredentialsAcquireOptions, CredentialsEnsureOptions, CredentialsEnsureResult, CredentialsOperationOptions, CredentialsPolicyAdmissionOptions, CredentialsPolicyAdmissionResult } from "./types";
 
 function randomVerifier(): string { return encodeBase64Url(crypto.getRandomValues(new Uint8Array(32))); }
