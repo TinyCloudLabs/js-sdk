@@ -224,7 +224,7 @@ describe("TC-628: a full account", () => {
     });
   });
 
-  test("storage.status() reports the account, and re-arms the event once there is room", async () => {
+  test("storage.status() reports the account, but only a successful write re-arms the own-storage event", async () => {
     const { node, kv, events, host } = fullAccount();
     await kv.put("API_KEY", "v1");
 
@@ -244,12 +244,19 @@ describe("TC-628: a full account", () => {
     await kv.put("API_KEY", "v2");
     expect(events).toHaveLength(1);
 
+    // Room reported by a status read does not end the episode.
     host.full = false;
     const roomy = await node.storage.status();
     expect(roomy.ok && roomy.data.state).toBe("ok");
-
     host.full = true;
     await kv.put("API_KEY", "v3");
+    expect(events).toHaveLength(1);
+
+    // A write that succeeds ends the episode; the next rejection announces itself.
+    host.full = false;
+    expect((await kv.put("API_KEY", "v4")).ok).toBe(true);
+    host.full = true;
+    await kv.put("API_KEY", "v5");
     expect(events).toHaveLength(2);
   });
 
@@ -390,8 +397,8 @@ describe("TC-628: a full account", () => {
     expect(internals.ownStorageFull).toBe(true);
     expect(await internals.bootstrapAccountIfNeeded()).toBe(false);
     expect(runAccountBootstrap).not.toHaveBeenCalled();
-    // Still one episode: the banner was already shown for B.
-    expect(events).toHaveLength(1);
+    // B's banner was shown for B; the account's own storage is a separate episode and announces itself.
+    expect(events.map((e) => e.spaceId)).toEqual([OTHER_SPACE, SPACE_URI]);
   });
 
   test("room on the account's own space clears only the account; a full delegated space stays full", async () => {

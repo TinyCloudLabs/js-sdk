@@ -189,32 +189,58 @@ describe("StorageFullMonitor on a full space", () => {
     }
   });
 
-  test("records each owner apart from the event; the episode ends when no owner is full", async () => {
+  test("own storage is one episode, ended only by a successful own write; delegated owners emit once each", async () => {
     const delegated = fullSpaceNode("tinycloud:pkh:eip155:1:0xbbb:shared");
     const own = fullSpaceNode("tinycloud:pkh:eip155:1:0xaaa:default");
-    const monitor = new StorageFullMonitor((spaceId) => spaceId.split(":").slice(0, 5).join(":"));
+    const monitor = new StorageFullMonitor(
+      (spaceId) => spaceId.split(":").slice(0, 5).join(":"),
+      () => "tinycloud:pkh:eip155:1:0xaaa",
+    );
     monitor.observe(delegated.context);
     monitor.observe(own.context);
     const events: StorageFullEvent[] = [];
     monitor.on((event) => events.push(event));
+    const episodes: boolean[] = [];
+    monitor.onEpisode(() => episodes.push(monitor.rejection !== undefined));
 
     await delegated.kv.put("x", "1");
-    expect(monitor.isFullFor("tinycloud:pkh:eip155:1:0xaaa:account")).toBe(false);
-    await own.kv.put("y", "1");
-    // Same owner, another space: one budget.
-    expect(monitor.isFullFor("tinycloud:pkh:eip155:1:0xaaa:account")).toBe(true);
     expect(events.map((event) => event.spaceId)).toEqual(["tinycloud:pkh:eip155:1:0xbbb:shared"]);
+    expect(monitor.rejection).toBeUndefined();
 
-    monitor.clearFor("tinycloud:pkh:eip155:1:0xbbb:shared");
-    expect(monitor.isFullFor("tinycloud:pkh:eip155:1:0xaaa:default")).toBe(true);
-    await delegated.kv.put("x", "2");
-    expect(events).toHaveLength(1);
-
-    monitor.clearFor("tinycloud:pkh:eip155:1:0xbbb:shared");
-    monitor.clearFor("tinycloud:pkh:eip155:1:0xaaa:default");
-    expect(monitor.isFull).toBe(false);
-    await own.kv.put("y", "2");
+    await own.kv.put("y", "1");
+    expect(monitor.rejection?.spaceId).toBe("tinycloud:pkh:eip155:1:0xaaa:default");
+    expect(episodes).toEqual([true]);
     expect(events).toHaveLength(2);
+
+    // Same episode: no second emit. A status read clears best-effort state but not the episode.
+    await own.kv.put("y", "2");
+    monitor.clearFor("tinycloud:pkh:eip155:1:0xaaa:default");
+    await own.kv.put("y", "3");
+    expect(events).toHaveLength(2);
+    expect(monitor.rejection).toBeDefined();
+    expect(episodes).toEqual([true]);
+
+    // A read that succeeds does not end the episode: only a committing write does.
+    expect((await own.kv.get("y")).ok).toBe(true);
+    expect(monitor.rejection).toBeDefined();
+
+    // The delegated owner was never cleared, so it stays silent; cleared, it emits again.
+    await delegated.kv.put("x", "2");
+    expect(events).toHaveLength(2);
+    monitor.clearFor("tinycloud:pkh:eip155:1:0xbbb:shared");
+    await delegated.kv.put("x", "3");
+    expect(events).toHaveLength(3);
+
+    own.free();
+    expect((await own.kv.put("y", "4")).ok).toBe(true);
+    expect(monitor.rejection).toBeUndefined();
+    expect(episodes).toEqual([true, false]);
+    expect(monitor.isFullFor("tinycloud:pkh:eip155:1:0xaaa:account")).toBe(false);
+    expect(monitor.isFullFor("tinycloud:pkh:eip155:1:0xbbb:shared")).toBe(true);
+
+    delegated.free();
+    expect((await delegated.kv.put("x", "4")).ok).toBe(true);
+    expect(monitor.isFull).toBe(false);
   });
 
   test("a rejection whose space is unknown counts for every owner", async () => {
