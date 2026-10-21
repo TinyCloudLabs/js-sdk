@@ -3,14 +3,16 @@ import {
   encodeSealedInlineShareUrl,
   fromBase64Url,
   parseSealedInlineShareUrl,
+  toBase64Url,
+} from "@tinycloud/share-envelope";
+import {
   parseShortShareUrl,
   rebuildInlineFromShort,
   splitInlineToShort,
   SHORT_LINK_ID_PATTERN,
-  toBase64Url,
   type InlineSharePayload,
   type ParsedShortShareUrl,
-} from "@tinycloud/share-envelope";
+} from "@tinycloud/share-envelope/short-link";
 import type { IKVService } from "@tinycloud/node-sdk";
 import type { PublishedShare, SenderShareRecord } from "@tinycloud/share-sdk";
 

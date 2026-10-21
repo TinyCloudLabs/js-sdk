@@ -3,7 +3,8 @@ import { readFileSync } from "node:fs";
 
 import { fromBase64Url, toBase64Url } from "../src/bytes.js";
 import { computeCid } from "../src/cid.js";
-import { encodeSealedInlineShareUrl, parseShortShareUrl, rebuildInlineFromShort, splitInlineToShort } from "../src/link.js";
+import { encodeSealedInlineShareUrl } from "../src/link.js";
+import { parseShortShareUrl, rebuildInlineFromShort, splitInlineToShort } from "../src/short-link.js";
 
 interface Vector {
   readonly inline: string;

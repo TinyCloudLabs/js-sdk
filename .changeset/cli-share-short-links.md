@@ -13,4 +13,4 @@
 - `share revoke` deletes the stored envelope after the node confirms the revocation. A failed delete only warns; the envelope expires with the share.
 - Sender history and the `--notify` invitation still carry the long link. Bearer links are unchanged.
 
-`@tinycloud/share-envelope` adds `parseShortShareUrl`, `splitInlineToShort` and `rebuildInlineFromShort`, tested against the vectors Share's own codec uses. Details: TC-1737
+`@tinycloud/share-envelope` adds a `@tinycloud/share-envelope/short-link` subpath export with `parseShortShareUrl`, `splitInlineToShort` and `rebuildInlineFromShort`, tested against the vectors Share's own codec uses. They are not in the package root, so bundles that import the root (such as `@tinycloud/web-sdk`) do not grow. Details: TC-1737

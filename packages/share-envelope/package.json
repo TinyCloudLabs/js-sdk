@@ -15,6 +15,13 @@
       "require": "./dist/index.cjs",
       "default": "./dist/index.js"
     },
+    "./short-link": {
+      "types": "./dist/short-link.d.ts",
+      "browser": "./dist/short-link.js",
+      "import": "./dist/short-link.js",
+      "require": "./dist/short-link.cjs",
+      "default": "./dist/short-link.js"
+    },
     "./package.json": "./package.json"
   },
   "sideEffects": false,
