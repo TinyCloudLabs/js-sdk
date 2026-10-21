@@ -145,6 +145,17 @@ describe("legacy notifications.position", () => {
     create({ notifications: { position: "top-left" }, ui: { position: "bottom-center" } });
     expect(layerPosition()).toBe("bottom-center");
   });
+
+  for (const [label, position] of [
+    ["a number", 42],
+    ["an object", { side: "top" }],
+    ["null", null],
+  ] as const) {
+    test(`a legacy position that is ${label} falls back to bottom-right without throwing`, () => {
+      expect(() => create({ notifications: { position } })).not.toThrow();
+      expect(layerPosition()).toBe("bottom-right");
+    });
+  }
 });
 
 describe("legacy notifications.duration and maxVisible", () => {
@@ -199,5 +210,13 @@ describe("legacy key mapping (pure)", () => {
     apply({ notifications: { popups: false } });
     apply({ notifications: { popups: true } });
     expect(warnings.filter((w) => w.includes("notifications.popups"))).toHaveLength(1);
+  });
+
+  test("a throwing console.warn never stops the mapping", async () => {
+    const apply = await freshMapper();
+    console.warn = () => {
+      throw new Error("console unavailable");
+    };
+    expect(apply({ notifications: { popups: false } }).ui).toBe(false);
   });
 });
