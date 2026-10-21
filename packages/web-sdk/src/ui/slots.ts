@@ -42,6 +42,10 @@ export interface HostContext {
   onClientChange(cb: () => void): () => void;
   developerMode(): boolean;
   setStatus(source: string, status: StatusCode | null): void;
+  /** Status currently shown in the panel header (highest priority), or null. */
+  topStatus(): StatusCode | null;
+  /** Fires whenever `topStatus()` changes. Returns the unsubscribe function. */
+  onStatusChange(cb: () => void): () => void;
   toast(t: ToastRequest): string;
   openPanel(): void;
   closePanel(): void;

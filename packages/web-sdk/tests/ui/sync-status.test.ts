@@ -48,6 +48,8 @@ function makeHost(initial: SyncFacade | undefined) {
     setStatus: (source, status) => {
       if (source === "sync") statuses.push(status);
     },
+    topStatus: () => null,
+    onStatusChange: () => () => undefined,
     toast: () => "",
     openPanel: () => undefined,
     closePanel: () => undefined,
