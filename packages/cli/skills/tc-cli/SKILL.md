@@ -94,7 +94,14 @@ Exit code 5 from `knowledge list|read` means the grant does not cover that app; 
 
 ### Install a catalog app
 
-`"$TC" --profile owner apps install xyz.tinycloud.sample.healthlog` installs the pinned version of a catalog app into the owner's `applications` space. Each file is fetched from Share by its pinned digest and checked for size and sha256 before any write. The pinned DDL then runs only if every statement is allowed (`CREATE TABLE/INDEX/VIEW IF NOT EXISTS`, and `DROP VIEW IF EXISTS` for the pinned views); any other statement, including `DROP TABLE`, aborts before a write. The knowledge files under `APP_ID/knowledge/` are created create-only with `index.md` last, then the schema is applied and the pinned views are re-created on every run (`viewsRecreated`).
+An agent installs a catalog app into its own profile. The owner approves the agent's write grant for that one app; the install then runs under that grant without a second approval:
+
+1. `"$TC" --profile agent auth request --preset apps-agent --write --app xyz.tinycloud.sample.healthlog --emit req.json`. The owner approves it in OpenKey, then the agent imports the grant as above (`auth import`).
+2. `"$TC" --profile agent apps install xyz.tinycloud.sample.healthlog` installs the pinned version into the agent's applications space. Then read the notes with `knowledge read`.
+
+The install fetches each file from Share by its pinned digest and checks size and sha256 before any write. The pinned DDL runs only if every statement is one of the installer's own (`CREATE TABLE/INDEX/VIEW IF NOT EXISTS`, and `DROP VIEW IF EXISTS` for the pinned views); any other statement, including `DROP TABLE`, aborts before a write. The knowledge files under `APP_ID/knowledge/` are created create-only with `index.md` last, then the schema is applied and the pinned views are re-created on every run (`viewsRecreated`).
+
+The allowlist covers only the installer's own statements. On nodes before 1.21.6 the grant does not limit the agent's SQL to data statements, so any other CREATE, ALTER or DROP still needs the owner's confirmation first (see the write-access bullets under "Pick up a user's apps"). The owner can run the same command on the owner profile (`"$TC" --profile owner apps install xyz.tinycloud.sample.healthlog`); that needs no grant.
 
 Knowledge files whose bytes differ from the pinned version are left as the owner edited them and listed (`conflicts` in `--json`). That is not an error: the command exits 0 and installs everything else. If the schema fails after notes were written, the command says "notes saved; tables not set up: run again" and exits non-zero; running it again is safe.
 
