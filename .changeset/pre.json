@@ -50,6 +50,8 @@
     "courier-guard",
     "courier-intake",
     "courier-notify-final",
+    "courier-outbox-publish",
+    "courier-outbox-sender-hardening",
     "courier-profile-permissions",
     "courier-wake",
     "courier-watch",
