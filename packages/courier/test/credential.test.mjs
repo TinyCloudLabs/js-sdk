@@ -230,6 +230,23 @@ test('acquire step 2 refuses pending state bound to a different holder and delet
   assert.equal(readdirSync(credDir(home)).length, 0);
 });
 
+test('acquire step 2 accepts pending state for the bare holder DID when the stored key DID carries a #fragment', async () => {
+  const home = freshHome();
+  const withFragment = { v: 1, jwk, did: `${DID}#${DID.slice('did:key:'.length)}`, createdAt: '2026-10-20T10:00:00Z' };
+  savePendingEmailProof(pendingFixture(NOW, { holderDid: DID }), home);
+  let completedFor;
+  await assert.rejects(
+    run(['acquire', '--email', ADDRESS, '--code', CODE], {
+      home,
+      now: () => NOW,
+      loadKey: () => withFragment,
+      completeProof: async (input) => { completedFor = input.holder.did; throw new Error('stop after holder check'); },
+    }).promise,
+    (error) => error.code !== 'credential.session.SESSION_INVALID',
+  );
+  assert.equal(completedFor, DID);
+});
+
 test('a rejected code keeps pending state; a retry reuses the same request and attempts-exhausted deletes it', async () => {
   const home = freshHome();
   savePendingEmailProof(pendingFixture(NOW), home);

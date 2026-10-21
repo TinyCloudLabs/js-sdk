@@ -118,7 +118,7 @@ async function acquire(args: ParsedArgs, deps: Resolved): Promise<void> {
 
   // takePendingEmailProof deletes expired or malformed pending state, then throws.
   const pending = takePendingEmailProof(address, deps.now(), deps.home);
-  if (pending.holderDid !== key.did) {
+  if (pending.holderDid !== holder.did) {
     removePendingEmailProof(pending.requestId, deps.home);
     throw new CourierError('credential.session.SESSION_INVALID', 'Pending verification belongs to a different agent key. Request a new code.');
   }
