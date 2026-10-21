@@ -8,4 +8,6 @@ Existing knowledge files whose bytes differ from the pinned version are left as 
 
 If the schema fails after notes were written, the command says "notes saved; tables not set up: run again" and exits non-zero. Re-running is safe: it reports `already` when nothing needed writing.
 
-Node-version note: the schema-scope grant is the same on every node. Nodes before 1.21.6 do not enforce the schema/data split for `ddl_requires_schema`, so on those nodes the install's DDL allowlist is the only guard. TC-1422
+Node-version note: the schema-scope grant is the same on every node. Nodes before 1.21.6 do not enforce the schema/data split for `ddl_requires_schema`. On those nodes the allowlist covers only the installer's own statements; the grant itself does not limit the agent's SQL to data statements.
+
+Details: TC-1422
