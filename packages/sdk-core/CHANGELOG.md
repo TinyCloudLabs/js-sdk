@@ -1,5 +1,11 @@
 # @tinycloudlabs/sdk-core
 
+## 3.3.0-beta.37
+
+### Minor Changes
+
+- 4ac7592: An issuer set that lists the email profile for any issuer other than `did:web:issuer.credentials.org` now fails to load with `bad-issuer-set`.
+
 ## 3.3.0-beta.36
 
 ### Minor Changes

@@ -37,6 +37,8 @@ const ORG_MEMBERSHIP_TTL_SECONDS = 365 * 24 * 60 * 60;
 const ORG_MEMBERSHIP_FREE_TTL_SECONDS = 30 * 24 * 60 * 60;
 /** Org-family issuer DIDs: `did:web:o` + 26 base32 characters + `.orgs.credentials.org`. */
 const ORG_ISSUER_DID_PATTERN = /^did:web:o[a-z2-7]{26}\.orgs\.credentials\.org$/;
+/** The only issuer the email row admits (held-credential-profile-v1 spec). */
+const EMAIL_ISSUER_DID = "did:web:issuer.credentials.org";
 const ORG_ROLES: readonly string[] = ["member", "admin"];
 const MEMBERSHIP_TYPE_PATTERN = /^[a-z0-9][a-z0-9-]{0,62}$/;
 
@@ -62,8 +64,8 @@ export const EMAIL_HELD_ROW: ProfileRow = freezeRow({
   optionalSignedClaims: [],
   maxLifetimeSeconds: HELD_EMAIL_TTL_SECONDS,
   statusMethods: ["none"],
-  // Any issuer except the org family, which only the org rows admit.
-  permitsIssuer: (issuerDid) => !ORG_ISSUER_DID_PATTERN.test(issuerDid),
+  // The email row admits only its literal issuer. The org family and every other DID are refused.
+  permitsIssuer: (issuerDid) => issuerDid === EMAIL_ISSUER_DID,
   validateDisclosed(claims) {
     const { email, emailDomain } = claims;
     if ((typeof email === "string" && /[^\x00-\x7F]/.test(email)) || (typeof emailDomain === "string" && /[^\x00-\x7F]/.test(emailDomain))) {
@@ -134,10 +136,12 @@ export function findRow(rows: readonly ProfileRow[], profile: string, profileVer
 /**
  * Whether `row` admits `issuerDid`. A row without `permitsIssuer` admits every issuer its issuer
  * entry permits. A `permitsIssuer` that is present but not a function refuses with `bad-config`,
- * so a malformed rule is never read as permissive.
+ * so a malformed rule is never read as permissive. Only a rule that returns exactly `true` admits
+ * the issuer; any other result refuses it.
  */
 export function rowPermitsIssuer(row: ProfileRow, issuerDid: string): boolean {
-  if (row.permitsIssuer === undefined) return true;
-  if (typeof row.permitsIssuer !== "function") refuse("bad-config", "a profile row's permitsIssuer must be a function when present");
-  return row.permitsIssuer(issuerDid);
+  const rule = row.permitsIssuer;
+  if (rule === undefined) return true;
+  if (typeof rule !== "function") refuse("bad-config", "a profile row's permitsIssuer must be a function when present");
+  return rule.call(row, issuerDid) === true;
 }

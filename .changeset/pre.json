@@ -59,6 +59,7 @@
     "direct-owner-revoke",
     "held-credentials-org-rows",
     "held-credentials-verifier",
+    "held-email-issuer-literal",
     "knowledge-pickup-commands",
     "kv-list-matching",
     "mcp-renew-node-approval",
