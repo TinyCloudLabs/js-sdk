@@ -135,10 +135,11 @@ function fullAccount(options: { grantsSpaceInfo?: boolean; grantsOtherSpaceInfo?
   internals.auth = { tinyCloudSession: session, lastActivationSkippedSpaceIds: [] };
   internals.registerPrimarySessionGrant(session);
 
-  const host = { full: true, writes: 0, reads: 0, statusReads: 0 };
+  const host = { full: true, statusFails: false, writes: 0, reads: 0, statusReads: 0 };
   const fetch: FetchFunction = async (_url, init) => {
     const action = (init?.headers as Record<string, string>)["x-action"];
     if (action === SPACE_INFO) {
+      if (host.statusFails) throw new TypeError("network down");
       host.statusReads += 1;
       return new Response(JSON.stringify({
         space: { usedBytes: 155744, limitBytes: host.full ? 0 : 50_000_000 },
@@ -258,6 +259,23 @@ describe("TC-628: a full account", () => {
     host.full = true;
     await kv.put("API_KEY", "v5");
     expect(events).toHaveLength(2);
+  });
+
+  test("a status read that fails on the network neither ends nor re-arms the episode", async () => {
+    const { node, kv, events, host } = fullAccount();
+    await kv.put("API_KEY", "v1");
+    expect(events).toHaveLength(1);
+
+    host.statusFails = true;
+    const failed = await node.storage.status();
+    expect(failed.ok).toBe(false);
+    if (failed.ok) return;
+    expect(failed.error.code).toBe("NETWORK_ERROR");
+
+    // Still full: the rejected write does not announce again and the episode stays set.
+    await kv.put("API_KEY", "v2");
+    expect(events).toHaveLength(1);
+    expect(node.storageEpisode.current()).toBeDefined();
   });
 
   test("storage.status() sends nothing when the session lacks tinycloud.space/info", async () => {

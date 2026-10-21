@@ -373,6 +373,18 @@ export class TinyCloudWeb {
   /** Underlying TinyCloudNode (created after WASM init) */
   private _node: TinyCloudNode | null = null;
   private readonly uiClient: UiClientHandle;
+  /** Listeners for the own-storage episode, forwarded from the current node. */
+  private readonly storageEpisodeListeners = new Set<() => void>();
+  /** The episode the UI reads. Lazy: the node is created after UI registration. */
+  private readonly uiStorageEpisode = {
+    current: () => this._node?.storageEpisode.current(),
+    subscribe: (listener: () => void) => {
+      this.storageEpisodeListeners.add(listener);
+      return () => {
+        this.storageEpisodeListeners.delete(listener);
+      };
+    },
+  };
 
   /** Shows a toast in this instance's host. Returns false when nothing was shown. */
   private readonly showToast: ToastSink = (request) => this.uiClient.toast(request);
@@ -460,6 +472,7 @@ export class TinyCloudWeb {
       source: {
         signedIn: () => this.session() !== undefined,
         storage: { status: () => this.storage.status() },
+        storageEpisode: this.uiStorageEpisode,
       },
       manifestAppId: () => {
         const manifest = this._manifest;
@@ -573,6 +586,15 @@ export class TinyCloudWeb {
           handler(event);
         } catch (error) {
           console.error('Error in "storage.full" handler:', error);
+        }
+      }
+    });
+    this._node.storageEpisode.subscribe(() => {
+      for (const listener of [...this.storageEpisodeListeners]) {
+        try {
+          listener();
+        } catch (error) {
+          console.error("Error in storage episode listener:", error);
         }
       }
     });

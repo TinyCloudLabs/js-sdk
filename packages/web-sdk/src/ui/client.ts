@@ -10,6 +10,7 @@ export interface ClientSource {
   signedIn(): boolean;
   readonly sync?: SyncFacade | undefined;
   readonly storage: Pick<IStorageService, "status">;
+  readonly storageEpisode?: PanelClient["storageEpisode"];
 }
 
 export interface PanelClientHandle {
@@ -36,7 +37,9 @@ export function createPanelClient(id: number, source: ClientSource): PanelClient
     get storage() {
       return source.storage;
     },
-    storageEpisode: undefined,
+    get storageEpisode() {
+      return source.storageEpisode;
+    },
     requestAuthority: undefined,
     requests: undefined,
   };
