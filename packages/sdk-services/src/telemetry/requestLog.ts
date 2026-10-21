@@ -78,15 +78,7 @@ const MAX_PATH = 256;
 const SECRETS_PATH = "secrets/";
 const REDACTED = "[redacted]";
 
-const SERVICES: Record<string, true> = {
-  kv: true,
-  sql: true,
-  duckdb: true,
-  hooks: true,
-  vault: true,
-  space: true,
-  sync: true,
-};
+const SERVICE_NAME = /^(kv|sql|duckdb|hooks|vault|space|sync)$/;
 const OP_SHAPE = /^[a-z]+\/[A-Za-z]+$/;
 const SPACE_LABEL = /^[a-z0-9][a-z0-9_-]{0,31}$/;
 const CODE_SHAPE = /^(ok|HTTP_[1-5]\d\d|[A-Z][A-Z0-9_]{1,63}|ERROR)$/;
@@ -166,7 +158,7 @@ export function invocationMetaOf(headers: unknown): InvocationMeta | undefined {
 
 export function buildRequestEvent(raw: RawRequest): RequestDraft {
   const service: RequestService =
-    raw.service !== undefined && SERVICES[raw.service] === true
+    raw.service !== undefined && SERVICE_NAME.test(raw.service)
       ? (raw.service as RequestService)
       : "other";
   const space = spaceLabel(raw.spaceId);
@@ -242,22 +234,7 @@ export class RequestLog implements RequestSink, RequestLogReader {
   readonly #clearListeners = new Set<Listener<[]>>();
 
   record(draft: RequestDraft): void {
-    const event: RequestEvent = {
-      v: 1,
-      id: this.#nextId++,
-      at: draft.at,
-      service: draft.service,
-      op: draft.op,
-      path: draft.path,
-      space: draft.space,
-      host: draft.host,
-      bytes: draft.bytes,
-      durationMs: draft.durationMs,
-      attempts: draft.attempts,
-      ok: draft.ok,
-      code: draft.code,
-      source: draft.source,
-    };
+    const event: RequestEvent = { ...draft, id: this.#nextId++ };
     this.#slots[this.#head] = event;
     this.#head = (this.#head + 1) % RING_SIZE;
     if (this.#count < RING_SIZE) this.#count++;
