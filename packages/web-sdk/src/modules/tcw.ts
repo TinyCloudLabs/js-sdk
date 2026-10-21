@@ -98,6 +98,7 @@ import {
 
 import { BrowserWalletSigner } from "../adapters/BrowserWalletSigner";
 import { BrowserNotificationHandler } from "../adapters/BrowserNotificationHandler";
+import { registerUiClient, type TinyCloudUI, type UiClientHandle, type UiConfig } from "../ui";
 import { BrowserWasmBindings } from "../adapters/BrowserWasmBindings";
 import { BrowserENSResolver } from "../adapters/BrowserENSResolver";
 import {
@@ -246,6 +247,8 @@ export interface Config extends ClientConfig {
   retryPolicy?: Partial<RetryPolicy>;
   /** Accountless share receiver transport and session-custody configuration. */
   shareReceiver?: ShareReceiverServiceOptions;
+  /** Floating button and panel. `false` creates no host, button, or listeners. See {@link UiConfig}. */
+  ui?: UiConfig | false;
 }
 
 /**
@@ -367,6 +370,7 @@ export class TinyCloudWeb {
 
   /** Underlying TinyCloudNode (created after WASM init) */
   private _node: TinyCloudNode | null = null;
+  private readonly uiClient: UiClientHandle;
 
   /** Browser notification handler */
   private notificationHandler: BrowserNotificationHandler;
@@ -444,6 +448,18 @@ export class TinyCloudWeb {
     this.config = config;
     this._manifest = config.manifest;
     this._capabilityRequest = config.capabilityRequest;
+
+    this.uiClient = registerUiClient({
+      ui: config.ui,
+      source: {
+        signedIn: () => this.session() !== undefined,
+        storage: { status: () => this.storage.status() },
+      },
+      manifestAppId: () => {
+        const manifest = this._manifest;
+        return (Array.isArray(manifest) ? manifest[0] : manifest)?.app_id;
+      },
+    });
 
     // Initialize browser notification handler
     this.notificationHandler = new BrowserNotificationHandler(config.notifications);
@@ -617,6 +633,9 @@ export class TinyCloudWeb {
 
   /** The owner's TinyCloud storage; `storage.status()` reads usage and plan from the node. */
   get storage(): IStorageService { return this.node.storage; }
+
+  /** Browser UI API: `open`, `close`, `toggle`, `isOpen`, and `available`. Inert when `ui: false` or the page cannot render UI. */
+  get ui(): TinyCloudUI { return this.uiClient.api; }
 
   /** Space-scoped SQL service for a non-primary space (e.g. the owner's `applications` space). */
   sqlForSpace(spaceId: string): ISQLService { return this.node.sqlForSpace(spaceId); }
@@ -954,6 +973,7 @@ export class TinyCloudWeb {
         this._shareReceiverService = undefined;
         this._sessionRestoreStatus = "idle";
         this.notificationHandler.cleanup?.();
+        this.uiClient.reset();
         const address = liveAddress ?? await this.resolveRestoreAddress().catch(() => undefined);
         if (address) await this.clearPersistedSession(address);
         for (const pendingAddress of pendingAddresses ?? []) {
@@ -1045,6 +1065,7 @@ export class TinyCloudWeb {
 
   cleanup(): void {
     this.notificationHandler.cleanup?.();
+    this.uiClient.unregister();
   }
 
   connectWallet(
