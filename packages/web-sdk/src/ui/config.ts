@@ -11,8 +11,10 @@ type BottomPosition = "bottom-right" | "bottom-left" | "bottom-center";
 
 /** Config passed as `ui` on TinyCloudWeb. `ui: false` disables the UI entirely (see index.ts). */
 export interface UiConfig {
-  /** Default true. false hides the button; toasts, prompts, and open() still work. */
+  /** Default true. false hides the button only; the panel, prompts, and open() still work. */
   button?: boolean;
+  /** Default true. false shows no toasts and stops the unhandled-rejection listener. Prompts still render. */
+  toasts?: boolean;
   /** Default false. Shows the developer section when true. */
   developerMode?: boolean;
   /** Default "bottom-right". */
@@ -23,6 +25,7 @@ export interface UiConfig {
 
 export interface ResolvedUiConfig {
   readonly button: boolean;
+  readonly toasts: boolean;
   readonly developerMode: boolean;
   readonly position: BottomPosition;
   readonly appId: string | undefined;
@@ -45,6 +48,7 @@ export function resolveUiConfig(ui: UiConfig | undefined): ResolvedUiConfig {
       : "bottom-right";
   return {
     button: ui?.button !== false,
+    toasts: ui?.toasts !== false,
     developerMode: ui?.developerMode === true,
     position,
     appId: ui?.appId,

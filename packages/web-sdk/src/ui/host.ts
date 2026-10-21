@@ -33,7 +33,7 @@ export interface HostRuntime {
   open(): void;
   close(): void;
   isOpen(): boolean;
-  toast(request: ToastRequest, owner?: number): void;
+  toast(request: ToastRequest, owner?: number): boolean;
 }
 
 interface ClientEntry {
@@ -83,17 +83,13 @@ export function createHostRuntime(): HostRuntime {
   let disposers: Array<() => void> = [];
   let rejectionListening = false;
 
-  /** Host-owned: attached on the first register, detached when the last client leaves. */
-  function attachRejectionListener(): void {
-    if (rejectionListening) return;
-    rejectionListening = true;
-    globalThis.addEventListener("unhandledrejection", onUnhandledRejection);
-  }
-
-  function detachRejectionListener(): void {
-    if (!rejectionListening) return;
-    rejectionListening = false;
-    globalThis.removeEventListener("unhandledrejection", onUnhandledRejection);
+  /** Host-owned: listens while a client is registered and the primary client allows toasts. */
+  function syncRejectionListener(): void {
+    const listen = clients.size > 0 && primaryConfig()?.toasts !== false;
+    if (listen === rejectionListening) return;
+    rejectionListening = listen;
+    if (listen) globalThis.addEventListener("unhandledrejection", onUnhandledRejection);
+    else globalThis.removeEventListener("unhandledrejection", onUnhandledRejection);
   }
 
   /** Records the order in which clients were first seen signed in. */
@@ -244,7 +240,7 @@ export function createHostRuntime(): HostRuntime {
   }
 
   function unmount(): void {
-    detachRejectionListener();
+    syncRejectionListener();
     if (!mounted) return;
     closeSections();
     for (const stop of mounted.stopParts) stop();
@@ -265,7 +261,7 @@ export function createHostRuntime(): HostRuntime {
     register(id, registration) {
       clients.set(id, { id, registration, signedIn: false, signedInSeq: 0 });
       observeSignIns();
-      attachRejectionListener();
+      syncRejectionListener();
       ensureMounted();
       notifyClientChange();
     },
@@ -276,6 +272,7 @@ export function createHostRuntime(): HostRuntime {
         unmount();
         return;
       }
+      syncRejectionListener();
       notifyClientChange();
     },
 
@@ -306,7 +303,9 @@ export function createHostRuntime(): HostRuntime {
 
     isOpen: () => isPanelOpen,
     toast(request, owner) {
+      if (primaryConfig()?.toasts === false) return false;
       toastStore.push(request, owner);
+      return true;
     },
   };
 }

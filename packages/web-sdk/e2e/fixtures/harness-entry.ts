@@ -59,14 +59,22 @@ let handle: UiClientHandle | undefined;
 
 const w = window as unknown as Record<string, unknown>;
 w.__tc = {
-  mount() {
+  // `ui` is passed through as given, so a spec can mount with toasts or the button off.
+  mount(ui?: Parameters<typeof registerUiClient>[0]["ui"]) {
     handle?.unregister();
     handle = registerUiClient({
-      ui: undefined as never,
+      ui,
       source: source as never,
       manifestAppId: () => "e2e-settings-smoke",
     });
     w.tc = { ui: handle.api };
+    return true;
+  },
+  // Dispatches the same window rejection the SDK's error path raises for a TinyCloud failure.
+  rejectWithTinyCloudError() {
+    const event = new Event("unhandledrejection");
+    Object.assign(event, { reason: new Error("TinyCloud storage failed") });
+    window.dispatchEvent(event);
     return true;
   },
   // One toast of `kind` through the real store the panel renders from.

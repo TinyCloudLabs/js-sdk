@@ -589,4 +589,37 @@ describe("host toasts", () => {
     expect(buttonEl()).toBeNull();
     ui.unregister();
   });
+
+  test("ui.toasts:false shows no rejection toast and keeps the button", () => {
+    const ui = mountClient({ toasts: false });
+    globalThis.dispatchEvent(rejection(new Error("TinyCloud storage failed")));
+    expect(storedToasts()).toEqual([]);
+    expect(buttonEl()).not.toBeNull();
+    ui.unregister();
+  });
+
+  test("ui.toasts:false makes toast return false and store nothing", () => {
+    const ui = mountClient({ toasts: false });
+    expect(ui.toast(REQUEST)).toBe(false);
+    expect(storedToasts()).toEqual([]);
+    ui.unregister();
+  });
+
+  test("the first client's toasts setting governs a shared rejection listener", () => {
+    const first = mountClient({ toasts: false });
+    const second = mountClient();
+    globalThis.dispatchEvent(rejection(new Error("TinyCloud storage failed")));
+    expect(storedToasts()).toEqual([]);
+    first.unregister();
+    second.unregister();
+  });
+
+  test("when the toasts:false client unregisters, the remaining client's rejections toast again", () => {
+    const first = mountClient({ toasts: false });
+    const second = mountClient();
+    first.unregister();
+    globalThis.dispatchEvent(rejection(new Error("TinyCloud storage failed")));
+    expect(storedToasts().length).toBe(1);
+    second.unregister();
+   });
 });

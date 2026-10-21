@@ -7,7 +7,7 @@ const BUNDLE = readFileSync(resolve("e2e/.build/ui.bundle.js"), "utf8");
 const ORIGIN = "http://tinycloud-ui.test";
 
 interface HarnessWindow {
-  __tc: { mount(): boolean; toast(kind: string): string; dismiss(id: string): void };
+  __tc: { mount(ui?: unknown): boolean; toast(kind: string): string; dismiss(id: string): void; rejectWithTinyCloudError(): boolean };
   tc?: { ui: { open(): void } };
 }
 
@@ -17,7 +17,7 @@ const PANEL_BACKGROUND = {
   dark: "rgb(21, 21, 23)",
 } as const;
 
-async function mountHarness(page: Page, scheme: "light" | "dark") {
+async function mountHarness(page: Page, scheme: "light" | "dark", ui?: Record<string, unknown>) {
   await page.emulateMedia({ colorScheme: scheme });
   await page.route(`${ORIGIN}/**`, (route) => {
     const path = new URL(route.request().url()).pathname;
@@ -31,7 +31,7 @@ async function mountHarness(page: Page, scheme: "light" | "dark") {
     });
   });
   await page.goto(`${ORIGIN}/`);
-  await page.evaluate(() => (window as unknown as HarnessWindow).__tc.mount());
+  await page.evaluate((option) => (window as unknown as HarnessWindow).__tc.mount(option), ui);
 }
 
 for (const scheme of ["light", "dark"] as const) {
@@ -168,4 +168,25 @@ for (const scheme of ["light", "dark"] as const) {
       expect(contrast(computed.stripe, computed.surface)).toBeGreaterThanOrEqual(3);
     });
   }
+}
+
+// The button-off test also proves the mount option reached the host: the launcher is absent and the host renders.
+for (const scheme of ["light", "dark"] as const) {
+  test(`${scheme}: ui.toasts:false shows no toast for a TinyCloud error, and the host stays`, async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await mountHarness(page, scheme, { button: false, toasts: false });
+    await page.evaluate(() => (window as unknown as HarnessWindow).__tc.rejectWithTinyCloudError());
+
+    await expect(page.locator("[data-tinycloud-ui]")).toHaveCount(1);
+    await expect(page.getByRole("button", { name: "TinyCloud settings", exact: true })).toHaveCount(0);
+    await expect(page.locator(".toast")).toHaveCount(0);
+  });
+
+  test(`${scheme}: the same TinyCloud error shows a toast when ui.toasts is not false`, async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await mountHarness(page, scheme);
+    await page.evaluate(() => (window as unknown as HarnessWindow).__tc.rejectWithTinyCloudError());
+
+    await expect(page.locator(".toast")).toHaveCount(1);
+  });
 }
