@@ -1,6 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { spawn, type ChildProcess } from "node:child_process";
-import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -146,5 +146,20 @@ describe.skipIf(!NODE_BIN)("share revoke by ID and history recover, against a re
     const revoked = await cli(["share", "revoke", shareId, "--json"]);
     expect(revoked.exitCode).toBe(0);
     expect(revoked.json<RevokeOutput>().result.state).toBe("revoked");
+  });
+
+  test("share history recover maps a filesystem read failure to SHARE_HISTORY_RECOVER_FAILED and moves nothing", async () => {
+    const cacheDir = await withTinyCloudStateRoot(home, async () => join(profilePath("owner"), "cache"));
+    // A directory at the history path fails the read with a filesystem error, not a parse error.
+    const historyPath = join(cacheDir, "share-history-v2.json");
+    await rm(historyPath, { force: true });
+    await mkdir(historyPath);
+    const before = (await readdir(cacheDir)).sort();
+
+    const failed = await cli(["share", "history", "recover", "--json"]);
+    expect(failed.exitCode).toBe(1);
+    expect(failed.stderr).toContain("SHARE_HISTORY_RECOVER_FAILED");
+    expect((await stat(historyPath)).isDirectory()).toBe(true);
+    expect((await readdir(cacheDir)).sort()).toEqual(before);
   });
 });

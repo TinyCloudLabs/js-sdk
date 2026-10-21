@@ -1,5 +1,6 @@
 import { afterEach, expect, test } from "bun:test";
 import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { profileConfigPath, profilePath, sessionPath, withTinyCloudStateRoot, writeJsonAtomic } from "@tinycloud/operations/state";
@@ -27,10 +28,24 @@ async function run(home: string, args: string[]) {
   return { stdout, stderr, exitCode };
 }
 
-async function seedOpenKeyProfile(home: string, historyBytes?: string): Promise<{ history: string; key: string; session: string }> {
+// A loopback origin with nothing listening, so a command that reaches the node fails at connect.
+async function closedLoopbackOrigin(): Promise<string> {
+  const server = createServer();
+  const port = await new Promise<number>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      const address = server.address();
+      if (address === null || typeof address === "string") return reject(new Error("no port"));
+      server.close(() => resolve(address.port));
+    });
+  });
+  return `http://127.0.0.1:${port}`;
+}
+
+async function seedOpenKeyProfile(home: string, historyBytes?: string, host = "https://node.example.test"): Promise<{ history: string; key: string; session: string }> {
   return withTinyCloudStateRoot(home, async () => {
     await writeJsonAtomic(profileConfigPath(PROFILE), {
-      name: PROFILE, host: "https://node.example.test", chainId: 1, spaceName: "default",
+      name: PROFILE, host, chainId: 1, spaceName: "default",
       did: PRINCIPAL, ownerDid: PRINCIPAL, createdAt: "2026-10-01T00:00:00.000Z",
     });
     await writeJsonAtomic(sessionPath(PROFILE), { ownerDid: PRINCIPAL, delegationCid: "bafy-session" });
@@ -108,4 +123,20 @@ test("replica-enabled login with --force is not refused by the share history che
   expect(forced.exitCode).not.toBe(5);
   expect(await readFile(paths.key, "utf8")).toBe(SESSION_KEY);
   expect(await readFile(paths.history, "utf8")).toBe("not-json-history");
+}, CHILD_TIMEOUT_MS);
+
+test("rotate with --force proceeds past the share history check on unreadable history", async () => {
+  const home = await scratchHome("tc1669-rotate-guard-force-");
+  await seedOpenKeyProfile(home, "not-json-history", await closedLoopbackOrigin());
+  const forced = await run(home, ["auth", "rotate", "--force", "--paste", "--no-popup"]);
+  expect(forced.exitCode).not.toBe(5);
+  expect(forced.stderr).not.toContain("SHARE_HISTORY_");
+}, CHILD_TIMEOUT_MS);
+
+test("logout --revoke skips the share history check on unreadable history", async () => {
+  const home = await scratchHome("tc1669-logout-revoke-skip-");
+  await seedOpenKeyProfile(home, "not-json-history", await closedLoopbackOrigin());
+  const revoked = await run(home, ["auth", "logout", "--revoke"]);
+  expect(revoked.exitCode).not.toBe(5);
+  expect(revoked.stderr).not.toContain("SHARE_HISTORY_");
 }, CHILD_TIMEOUT_MS);

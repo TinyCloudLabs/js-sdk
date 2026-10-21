@@ -1745,6 +1745,26 @@ describe("sender history recovery and key-drop guard (TC-1669)", () => {
       expect(await checkShareHistoryForKeyDrop("history-test", now)).toEqual({ status: "clear" });
     }));
 
+  it("counts a share expiring exactly at the check time as expired, and one millisecond later as unexpired", () =>
+    withHistoryDirectory("tc-share-guard-boundary-", async () => {
+      historyLocalKey = false;
+      const storage = createEncryptedProfileHistory(async () => "history-test", signShareHistoryBytes);
+      await storage.put(liveRecord("expires-at-now", now.toISOString()));
+      await storage.put(liveRecord("expires-after-now", "2026-06-01T00:00:00.001Z"));
+      expect(await checkShareHistoryForKeyDrop("history-test", now)).toEqual({ status: "unexpired", shareIds: ["expires-after-now"] });
+    }));
+
+  it("leaves readable history in place when asked to quarantine it", () =>
+    withHistoryDirectory("tc-share-quarantine-readable-", async (cacheDir) => {
+      const storage = createEncryptedProfileHistory(async () => "history-test");
+      await storage.put(liveRecord("readable-share"));
+      const history = join(cacheDir, "share-history-v2.json");
+      const before = await readFile(history, "utf8");
+      expect(await quarantineUnreadableProfileHistory("history-test")).toBeNull();
+      expect(await readFile(history, "utf8")).toBe(before);
+      expect(await readdir(cacheDir)).toEqual(["share-history-v2.json"]);
+    }));
+
   it("reports unreadable history as unavailable for the key drop", () =>
     withHistoryDirectory("tc-share-guard-unreadable-", async (cacheDir) => {
       historyLocalKey = false;
