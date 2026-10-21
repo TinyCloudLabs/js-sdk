@@ -13,7 +13,7 @@ import {
 
 /** Only the bar needs CSS of its own. Text uses the panel's `busy`, `note` and `action` classes. */
 const STYLE = `
-.storage-bar{height:6px;margin:6px 0 0;border-radius:3px;background:#e5e7eb;overflow:hidden}
+.storage-bar{height:6px;margin:6px 0 8px;border-radius:3px;background:#e5e7eb;overflow:hidden}
 .storage-bar>span{display:block;height:100%;background:#111827}
 `;
 
