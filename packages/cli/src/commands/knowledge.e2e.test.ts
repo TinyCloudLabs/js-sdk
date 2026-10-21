@@ -304,6 +304,24 @@ describe.skipIf(!NODE_BIN)("tinycloud knowledge against a real node", () => {
     expect((await cli("writer", ["kv", "list", "--space", ownerSpace.replace(/:applications$/, ":default")])).exitCode).toBe(5);
   }, 180_000);
 
+  test("a write grant for a catalog app creates and drops tables only in its own database, at the exact path", async () => {
+    const CAT = "xyz.tinycloud.sample.healthlog";
+    const CAT_DB = `${CAT}/healthlog`;
+    await newAgent("catwriter");
+    const { requestNotice, grantNotice } = await grantAgent("catwriter", ["--preset", "apps-agent", "--write", "--app", CAT]);
+    expect(requestNotice).toContain(appsAgentScopeNotice("write", [CAT]));
+    expect(grantNotice).toContain("It can also create, change and drop the tables in");
+
+    expect((await cli("owner", ["sql", "execute", "CREATE TABLE IF NOT EXISTS log (id INTEGER PRIMARY KEY)", "--db", CAT_DB, "--space", "applications"])).exitCode).toBe(0);
+    // Positive: the schema grant covers CREATE and DROP on the exact catalog database.
+    expect((await cli("catwriter", ["sql", "execute", "CREATE TABLE IF NOT EXISTS extra (x TEXT)", "--db", CAT_DB, "--space", ownerSpace])).exitCode).toBe(0);
+    expect((await cli("catwriter", ["sql", "execute", "DROP TABLE extra", "--db", CAT_DB, "--space", ownerSpace])).exitCode).toBe(0);
+    // Refused: another database of the same app, and the same database with a trailing slash. Exit code is 3 or 5 depending on how the node's 401/403 maps, so only non-zero is asserted.
+    expect((await cli("catwriter", ["sql", "execute", "CREATE TABLE IF NOT EXISTS extra (x TEXT)", "--db", `${CAT}/other`, "--space", ownerSpace])).exitCode).not.toBe(0);
+    expect((await cli("catwriter", ["sql", "execute", "CREATE TABLE IF NOT EXISTS extra (x TEXT)", "--db", `${CAT_DB}/`, "--space", ownerSpace])).exitCode).not.toBe(0);
+    expect((await cli("owner", ["sql", "query", "SELECT name FROM sqlite_master WHERE name = 'extra'", "--db", CAT_DB, "--space", "applications"])).json().rows).toEqual([]);
+  }, 180_000);
+
   test("the owner-side text follows what will be signed, not the requester's wording", async () => {
     await newAgent("tamper");
     const long = await grantAgent("tamper", ["--preset", "apps-agent"], (request) => {
