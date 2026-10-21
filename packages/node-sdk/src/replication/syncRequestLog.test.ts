@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { RequestLog, type RequestEvent } from "@tinycloud/sdk-services";
+import { RequestLog, type RequestEvent } from "@tinycloud/sdk-services/telemetry/requestLog";
 import { recordingInfoFetch, syncRequestSink } from "./syncRequestLog";
 
 const HOST = "https://node.example";

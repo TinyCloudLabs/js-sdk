@@ -1,4 +1,5 @@
-import { buildRequestEvent, type RequestSink } from "@tinycloud/sdk-services";
+import type { RequestSink } from "@tinycloud/sdk-services";
+import { buildRequestEvent, observeFetch } from "@tinycloud/sdk-services/telemetry/requestLog";
 
 type Draft = Parameters<RequestSink["record"]>[0];
 
@@ -7,8 +8,12 @@ type Draft = Parameters<RequestSink["record"]>[0];
  * dropped, so replication traffic never carries key or space text into the log.
  */
 export function syncRequestSink(sink: RequestSink): RequestSink {
+  const relabel = (event: Draft) => sink.record({ ...event, service: "sync", path: null, space: null });
   return {
-    record: (event: Draft) => sink.record({ ...event, service: "sync", path: null, space: null }),
+    record: relabel,
+    observe: (observation) => observeFetch(observation, relabel),
+    remember: (headers, meta) => sink.remember(headers, meta),
+    carry: (from, to) => sink.carry(from, to),
   };
 }
 

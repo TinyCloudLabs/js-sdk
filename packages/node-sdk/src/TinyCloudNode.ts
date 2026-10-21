@@ -193,11 +193,10 @@ import {
 import {
   parsePermissionHint,
   tinyCloudDebugLogger,
-  observeReplicaReads,
-  RequestLog,
   type RequestLogReader,
   type RequestSink,
 } from "@tinycloud/sdk-services";
+import { RequestLog, observeReplicaReads } from "@tinycloud/sdk-services/telemetry/requestLog";
 import { NodeUserAuthorization } from "./authorization/NodeUserAuthorization";
 import type { SignStrategy } from "./authorization/strategies";
 import { AccountService } from "./account/AccountService";
