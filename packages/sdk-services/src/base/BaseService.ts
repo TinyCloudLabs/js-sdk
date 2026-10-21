@@ -276,11 +276,13 @@ export abstract class BaseService implements IService {
   ): Promise<FetchResponse> {
     const build = (): FetchRequestInit => {
       const signed = mint();
-      const headers = Array.isArray(signed)
-        ? [...signed, ...Object.entries(extra ?? {})]
-        : { ...signed, ...extra };
-      this.context.requestSink?.carry(signed, headers);
-      return { method: "POST", ...init, headers };
+      return {
+        method: "POST",
+        ...init,
+        headers: Array.isArray(signed)
+          ? [...signed, ...Object.entries(extra ?? {})]
+          : { ...signed, ...extra },
+      };
     };
     return this.context.invokeWithRetry
       ? this.context.invokeWithRetry(url, build)

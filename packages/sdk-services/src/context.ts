@@ -22,7 +22,6 @@ import { tinyCloudDebugLogger } from "./debug";
 import { nodeRetryError } from "./errors";
 import { abortableSleep } from "./sleep";
 import { projectDiagnosticData } from "./diagnostics";
-import type { RequestSink } from "./telemetry/requestLog";
 
 /**
  * Configuration options for ServiceContext.
@@ -42,8 +41,6 @@ export interface ServiceContextConfig {
   retryPolicy?: Partial<RetryPolicy>;
   /** Default-off telemetry event delivery. */
   telemetry?: TelemetryConfig;
-  /** Developer request log; omitted when developer mode is off. */
-  requestSink?: RequestSink;
 }
 
 /**
@@ -77,22 +74,17 @@ export class ServiceContext implements IServiceContext {
   private readonly _invoke: InvokeFunction;
   private readonly _invokeAny?: InvokeAnyFunction;
   private readonly _fetch: FetchFunction;
-  private readonly _fetchCore: FetchFunction;
-  private readonly _requestSink?: RequestSink;
   private readonly _hosts: string[];
   private readonly _retryPolicy: RetryPolicy;
   private readonly _telemetryEnabled: boolean;
   private readonly _telemetryHandler?: TelemetryEventHandler;
 
   constructor(config: ServiceContextConfig) {
-    this._requestSink = config.requestSink;
     this._invoke = this.wrapInvoke(config.invoke);
     this._invokeAny = config.invokeAny
       ? this.wrapInvokeAny(config.invokeAny)
       : undefined;
-    this._fetchCore = this.wrapFetch(config.fetch ?? globalThis.fetch.bind(globalThis));
-    this._fetch =
-      this._requestSink === undefined ? this._fetchCore : this.recordFetch(this._fetchCore);
+    this._fetch = this.wrapFetch(config.fetch ?? globalThis.fetch.bind(globalThis));
     this._hosts = config.hosts;
     this._session = config.session ?? null;
     this._retryPolicy = {
@@ -167,25 +159,6 @@ export class ServiceContext implements IServiceContext {
   get fetch(): FetchFunction {
     this.assertActive();
     return this._fetch;
-  }
-
-  /**
-   * The fetch function without developer request recording. Replication hands this to its own
-   * inner context so each HTTP attempt is recorded once, by that context, not twice.
-   */
-  get unrecordedFetch(): FetchFunction {
-    this.assertActive();
-    return this.uncountedFetch;
-  }
-
-  /** The fetch for one attempt this context does not record. With no sink it is `_fetch`, read at call time, so an override of `_fetch` applies here too. */
-  private get uncountedFetch(): FetchFunction {
-    return this._requestSink === undefined ? this._fetch : this._fetchCore;
-  }
-
-  /** The developer request sink this context records to; undefined when developer mode is off. */
-  get requestSink(): RequestSink | undefined {
-    return this._requestSink;
   }
 
   /**
@@ -384,7 +357,7 @@ export class ServiceContext implements IServiceContext {
     return this._retryPolicy;
   }
 
-  private traceInvoke(invoke: InvokeFunction): InvokeFunction {
+  private wrapInvoke(invoke: InvokeFunction): InvokeFunction {
     return (session, service, path, action, facts) => {
       this.assertActive();
       if (!tinyCloudDebugLogger.isEnabled()) {
@@ -409,24 +382,13 @@ export class ServiceContext implements IServiceContext {
     };
   }
 
-  private wrapInvoke(invoke: InvokeFunction): InvokeFunction {
-    const traced = this.traceInvoke(invoke);
-    const sink = this._requestSink;
-    if (sink === undefined) return traced;
-    return (session, service, path, action, facts) => {
-      const headers = traced(session, service, path, action, facts);
-      sink.remember(headers, { service, path, action, spaceId: session.spaceId });
-      return headers;
-    };
-  }
-
   private assertActive(): void {
     if (this._retired) {
       throw new Error("Service graph has been retired: its session was replaced or signed out.");
     }
   }
 
-  private traceInvokeAny(invokeAny: InvokeAnyFunction): InvokeAnyFunction {
+  private wrapInvokeAny(invokeAny: InvokeAnyFunction): InvokeAnyFunction {
     return (session, entries, facts) => {
       this.assertActive();
       if (!tinyCloudDebugLogger.isEnabled()) {
@@ -449,54 +411,12 @@ export class ServiceContext implements IServiceContext {
     };
   }
 
-  private wrapInvokeAny(invokeAny: InvokeAnyFunction): InvokeAnyFunction {
-    const traced = this.traceInvokeAny(invokeAny);
-    const sink = this._requestSink;
-    if (sink === undefined) return traced;
-    return (session, entries, facts) => {
-      const headers = traced(session, entries, facts);
-      const first = entries[0];
-      if (first !== undefined) {
-        sink.remember(headers, {
-          service: first.service,
-          path: first.path,
-          action: first.action,
-          spaceId: first.spaceId ?? session.spaceId,
-        });
-      }
-      return headers;
-    };
-  }
-
   /** Retry `NODE_BUSY` / `REQUEST_TIMEOUT`; `build` must re-sign per attempt (the node 409s a repeated invocation). */
   async invokeWithRetry(
     url: string,
     build: () => FetchRequestInit | Promise<FetchRequestInit>,
   ): Promise<FetchResponse> {
     this.assertActive();
-    if (this._requestSink === undefined) return this.sendWithRetry(url, build, { attempts: 0 });
-    const at = Date.now();
-    const clock = performance.now();
-    const tally = { attempts: 0 };
-    let first: FetchRequestInit | undefined;
-    let response: FetchResponse | undefined;
-    try {
-      response = await this.sendWithRetry(url, async () => {
-        const init = await build();
-        first ??= init;
-        return init;
-      }, tally);
-      return response;
-    } finally {
-      this.logRequest({ url, init: first, response, attempts: tally.attempts, at, clock });
-    }
-  }
-
-  private async sendWithRetry(
-    url: string,
-    build: () => FetchRequestInit | Promise<FetchRequestInit>,
-    tally: { attempts: number },
-  ): Promise<FetchResponse> {
     const policy = this._retryPolicy;
     const startedAt = Date.now();
     let backoffMs = 0;
@@ -504,8 +424,7 @@ export class ServiceContext implements IServiceContext {
     for (let attempt = 1; ; attempt++) {
       const init = await build();
       signal ??= this.combineSignals(init.signal);
-      tally.attempts = attempt;
-      const response = await this.uncountedFetch(url, init);
+      const response = await this._fetch(url, init);
       const done = (): FetchResponse => {
         try { response.retry = { attempts: attempt, backoffMs }; } catch { /* frozen custom response */ }
         return response;
@@ -566,50 +485,6 @@ export class ServiceContext implements IServiceContext {
         throw error;
       }
     };
-  }
-
-  /** Direct `fetch` calls; retry loops are logged once by `invokeWithRetry`. */
-  private recordFetch(fetchFn: FetchFunction): FetchFunction {
-    return async (url, init) => {
-      const at = Date.now();
-      const clock = performance.now();
-      let response: FetchResponse | undefined;
-      try {
-        response = await fetchFn(url, init);
-        return response;
-      } finally {
-        this.logRequest({ url, init, response, at, clock });
-      }
-    };
-  }
-
-  /** Never throws: logging must not change a request's outcome. */
-  private logRequest(sample: {
-    url: string;
-    init?: FetchRequestInit;
-    response?: FetchResponse;
-    at: number;
-    clock: number;
-    attempts?: number;
-  }): void {
-    const sink = this._requestSink;
-    if (sink === undefined) return;
-    try {
-      const { url, init, response } = sample;
-      sink.observe({
-        url,
-        requestHeaders: init?.headers,
-        requestBody: init?.body,
-        responseContentLength: response?.headers.get("content-length"),
-        ok: response?.ok === true,
-        code: response === undefined ? "ERROR" : response.ok ? "ok" : `HTTP_${response.status}`,
-        durationMs: performance.now() - sample.clock,
-        attempts: sample.attempts ?? 1,
-        at: sample.at,
-      });
-    } catch {
-      /* logging never changes the request's outcome */
-    }
   }
 
   private combineSignals(signal?: AbortSignal): AbortSignal {

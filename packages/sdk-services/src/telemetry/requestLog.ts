@@ -61,8 +61,6 @@ export interface RequestSink {
   observe(observation: FetchObservation): void;
   /** Attach service, path, and action to headers built for an invocation. */
   remember(headers: object, meta: InvocationMeta): void;
-  /** Copy invocation metadata onto headers rebuilt from signed headers (per retry attempt). */
-  carry(from: object, to: object): void;
 }
 
 /** Transport facts for one attempt, read by `observeFetch`. */
@@ -291,12 +289,6 @@ export class RequestLog implements RequestSink, RequestLogReader {
   /** Called only when a sink is set, so developer-off code never writes here. */
   remember(headers: object, meta: InvocationMeta): void {
     invocationMeta.set(headers, meta);
-  }
-
-  /** Copies metadata onto headers rebuilt from signed headers (per retry attempt). */
-  carry(from: object, to: object): void {
-    const meta = invocationMeta.get(from);
-    if (meta !== undefined) invocationMeta.set(to, meta);
   }
 
   observe(observation: FetchObservation): void {

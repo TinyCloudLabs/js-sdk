@@ -284,7 +284,6 @@ export function createKVReplication(deps: KVReplicationDeps): KVReplicationContr
         ...(deps.stamp ? { stamp: deps.stamp } : {}),
         ...(device ? { device } : {}),
         ...(deps.fetch ? { fetch: deps.fetch } : {}),
-        ...(deps.requestSink ? { requestSink: deps.requestSink } : {}),
         onPeerCommit: (info: ReplicaPeerCommit) => {
           if (isClosed || purgeStarted || state!.handle === undefined) return;
           emit({
@@ -1115,7 +1114,7 @@ export function createKVReplication(deps: KVReplicationDeps): KVReplicationContr
     if (!storage.inspectStatus || isClosed || purgeInProgress) return { missing: false };
     const sessionGrant = authority.sessionGrant(prefix);
     const device = "refused" in sessionGrant ? undefined : sessionGrant.device;
-    const spec = { identity, space: session.space, prefix, allowSecrets: options.allowSecrets, ...(device ? { device } : {}), ...(deps.fetch ? { fetch: deps.fetch } : {}), ...(deps.requestSink ? { requestSink: deps.requestSink } : {}) };
+    const spec = { identity, space: session.space, prefix, allowSecrets: options.allowSecrets, ...(device ? { device } : {}), ...(deps.fetch ? { fetch: deps.fetch } : {}) };
     const abort = new AbortController();
     const job = Promise.resolve().then(() => storage.inspectStatus!(spec, { signal: abort.signal }));
     const settled = job.then(() => undefined, () => undefined);

@@ -3,7 +3,6 @@ import type { KVGetOptions, KVListOptions, KVResponse } from "../types";
 import type { ReplicaGateReason, ReplicaLifecycleGate, ReplicaSessionStamp } from "./lifecycle";
 import type { ReplicaQuotaSpec } from "./quota";
 import type { ReplicaConsentAnchor, ReplicaGrantPolicy } from "./grantPolicyTypes";
-import type { RequestSink } from "../../telemetry/requestLog";
 
 export interface ReplicationIdentity {
   /** Canonical HTTP(S) URL: origin + path without trailing slash; no credentials/query/fragment. */
@@ -160,8 +159,6 @@ export interface KVReplicaSpec {
   device?: ReplicaDevice;
   /** Graph-scoped fetch for main-thread adapters; worker adapters ignore it. */
   fetch?: FetchFunction;
-  /** Developer request sink for this graph's sync traffic; absent when developer mode is off. */
-  requestSink?: RequestSink;
   /**
    * The session stamp this handle is bound to; immutable for the handle's life. With a `lifecycle`
    * gate (mandatory when replication is on), a spec without it is refused REPLICA_GATED
@@ -453,8 +450,6 @@ export interface KVReplicationDeps {
   scheduler: ReplicationScheduler;
   emit(event: ReplicationEvent): void;
   fetch?: FetchFunction;
-  /** Developer request sink for this graph's sync traffic; absent when developer mode is off. */
-  requestSink?: RequestSink;
   previous?: Promise<void>;
 }
 
