@@ -30,8 +30,9 @@ Setup & pairing (humans run these):
                                    Accept artifact A, B or C; prints B or C to pass on
   pair renew [peer] [--force]      Renew peer delegations; humans or watcher only
   revoke <peer>                    Stop renewing + drop the peer (access lapses at delegation expiry)
-  invite <handle> --email <address> [--tier strict|trusted] [--ttl 24h] [--call-me h] [--also-ask]
-                                   Create a one-time invite string for an invitee (bearer link)
+  invite <handle> --email <address> [--tier strict|trusted] [--ttl 24h] [--call-me h] [--also-ask] [--invites-public-dir d]
+                                   Create a one-time invite string for an invitee (bearer link). With a public dir
+                                   (flag or COURIER_INVITES_PUBLIC_DIR) also writes a non-secret copy of the record there
   invite list                      Invites on this machine: status and expiry, no secrets
   invite revoke <invite-id>        Delete the sealed invite and any pending hello or welcome
   join --stdin | --file f          Accept an invite read from stdin or a file, then send hello; waits for the reply
