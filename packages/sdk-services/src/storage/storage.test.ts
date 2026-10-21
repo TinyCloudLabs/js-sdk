@@ -239,7 +239,7 @@ describe("storage status", () => {
       parseStorageStatus({
         space: { usedBytes: 155744, limitBytes: 0 },
         account: { usedBytes: 50, limitBytes: 100, plan: "paid" },
-        manageUrl: "https://account.tinycloud.xyz/billing",
+        manageUrl: "https://account.tinycloud.xyz/storage",
       }),
     ).toEqual({
       usedBytes: 155744,
@@ -247,7 +247,7 @@ describe("storage status", () => {
       account: { usedBytes: 50, limitBytes: 100, plan: "paid" },
       plan: "paid",
       state: "ok",
-      manageUrl: "https://account.tinycloud.xyz/billing",
+      manageUrl: "https://account.tinycloud.xyz/storage",
     });
   });
 

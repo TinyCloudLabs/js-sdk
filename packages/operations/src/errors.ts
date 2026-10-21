@@ -58,7 +58,7 @@ export function operationError(
   };
 }
 
-const MANAGE_STORAGE = "Do not retry: the owner must free up space or upgrade at https://account.tinycloud.xyz/billing.";
+const MANAGE_STORAGE = "Do not retry: the owner must free up space or upgrade at https://account.tinycloud.xyz/storage.";
 
 /**
  * A write the node refused because the owner's TinyCloud storage is full
