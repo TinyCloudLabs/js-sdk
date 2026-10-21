@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { loadPeers, resolvePeersOwner, tierOf } from '../dist/intake/peers.js';
-import { cmdIntake } from '../dist/intake/intake.js';
+import { cmdIntake, reloadPeers } from '../dist/intake/intake.js';
 import { cmdOutbox } from '../dist/outbox.js';
 import { parseArgs } from '../dist/args.js';
 
@@ -259,6 +259,72 @@ test('outbox serve refuses an unknown --peers-owner with usage before opening an
     );
     assert.equal(fs.existsSync(path.join(s.dir, 'outbox.sock')), false);
   } finally {
+    s.cleanup();
+  }
+});
+
+test('reloadPeers returns the loaded map when the owner matches', () => {
+  const s = peersFile();
+  try {
+    const events = [];
+    const peers = reloadPeers(s.file, UID, {}, (event, fields) => events.push({ event, ...fields }));
+    assert.equal(tierOf(peers, 'alice'), 'trusted');
+    assert.deepEqual(events, []);
+  } finally {
+    s.cleanup();
+  }
+});
+
+test('reloadPeers keeps the last good map and logs insecure-peers when the owner is refused', () => {
+  const s = peersFile();
+  try {
+    const last = { carol: { tier: 'trusted' } };
+    const events = [];
+    const out = reloadPeers(s.file, UID + 1, last, (event, fields) => events.push({ event, ...fields }));
+    assert.equal(out, last);
+    assert.deepEqual(events, [{ event: 'intake-error', code: 'insecure-peers' }]);
+  } finally {
+    s.cleanup();
+  }
+});
+
+test('intake refresh passes the peers owner to the reload and keeps the last good map on refusal', { timeout: 10000 }, async () => {
+  const s = scratch();
+  const peersPath = path.join(s.dir, 'peers.json');
+  const home = process.env.COURIER_HOME;
+  process.env.COURIER_HOME = s.dir;
+  const seen = {};
+  try {
+    await cmdIntake(parseArgs([
+      '--queue-dir', path.join(s.dir, 'queue'),
+      '--done-dir', path.join(s.dir, 'done'),
+      '--overflow-dir', path.join(s.dir, 'overflow'),
+      '--state-dir', path.join(s.dir, 'state'),
+      '--peers-file', peersPath,
+      '--peers-owner', String(UID + 1),
+      '--once',
+    ]), {
+      // The file is absent at startup. It appears before the first refresh, owned by the running user, so only an owner of UID + 1 can refuse it.
+      loadProfile: () => {
+        fs.writeFileSync(peersPath, JSON.stringify({ alice: { tier: 'trusted' } }), { mode: 0o600 });
+        fs.chmodSync(peersPath, 0o600);
+        return { peers: {} };
+      },
+      courierNode: async () => ({ kv: {} }),
+      reloadPeers: (file, owner, last) => {
+        seen.owner = owner;
+        seen.last = last;
+        seen.events = [];
+        seen.out = reloadPeers(file, owner, last, (event, fields) => seen.events.push({ event, ...fields }));
+        return seen.out;
+      },
+    });
+    assert.equal(seen.owner, UID + 1);
+    assert.equal(seen.out, seen.last);
+    assert.deepEqual(seen.events, [{ event: 'intake-error', code: 'insecure-peers' }]);
+  } finally {
+    if (home === undefined) delete process.env.COURIER_HOME;
+    else process.env.COURIER_HOME = home;
     s.cleanup();
   }
 });

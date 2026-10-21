@@ -577,7 +577,26 @@ function intervalSeconds(raw: string | undefined): number {
   return n;
 }
 
-export async function cmdIntake(args: ParsedArgs): Promise<void> {
+/** Periodic peers reload. A refused file keeps the last good map and logs `intake-error`. */
+export function reloadPeers(peersFile: string, peersOwner: number | undefined, last: Peers, log: WatchLog): Peers {
+  try {
+    return loadPeers(peersFile, peersOwner);
+  } catch (error) {
+    log('intake-error', { code: errInfo(error).code ?? 'bad-peers' });
+    return last;
+  }
+}
+
+/** Collaborators of the intake loop. Tests replace them to run one iteration without a live node. */
+export interface IntakeLoopDeps {
+  loadProfile: typeof loadProfile;
+  courierNode: typeof courierNode;
+  reloadPeers: typeof reloadPeers;
+}
+
+const defaultLoopDeps: IntakeLoopDeps = { loadProfile, courierNode, reloadPeers };
+
+export async function cmdIntake(args: ParsedArgs, deps: IntakeLoopDeps = defaultLoopDeps): Promise<void> {
   const base = path.join(profileDir(), 'intake');
   const queueRoot = args.get('queue-dir') ?? path.join(base, 'queue');
   const doneRoot = args.get('done-dir') ?? path.join(base, 'done');
@@ -606,13 +625,9 @@ export async function cmdIntake(args: ParsedArgs): Promise<void> {
     log('intake-start', { once, intervalSeconds: intervalMs / 1000 });
     for (;;) {
       try {
-        const profile = loadProfile();
-        const node = await courierNode(profile);
-        try {
-          peers = loadPeers(peersFile, peersOwner);
-        } catch (error) {
-          log('intake-error', { code: errInfo(error).code ?? 'bad-peers' });
-        }
+        const profile = deps.loadProfile();
+        const node = await deps.courierNode(profile);
+        peers = deps.reloadPeers(peersFile, peersOwner, peers, log);
         const queued = await intakeCycle({
           kv: node.kv,
           profile,
