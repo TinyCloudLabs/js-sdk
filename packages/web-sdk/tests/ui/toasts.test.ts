@@ -122,20 +122,22 @@ describe("toast store", () => {
     expect(view.latest().length).toBe(0);
   });
 
-  test("keeps only absolute http(s) links and drops the label without a link", () => {
+  test("keeps only absolute https links and drops the label without a link", () => {
     const store = createToastStore({ durationMs: 10_000, maxVisible: 10 });
     const view = collect(store);
     store.push({ kind: "info", textCode: "a", href: "javascript:alert(1)", hrefLabelCode: "x" });
     store.push({ kind: "info", textCode: "b", href: "/relative", hrefLabelCode: "x" });
     store.push({ kind: "info", textCode: "c", href: "https://example.com/ok", hrefLabelCode: "x" });
     store.push({ kind: "info", textCode: "d", hrefLabelCode: "x" });
-    const [javascript, relative, secure, noHref] = view.latest();
+    store.push({ kind: "info", textCode: "e", href: "http://example.com/x", hrefLabelCode: "x" });
+    const [javascript, relative, secure, noHref, insecure] = view.latest();
     expect(javascript?.href).toBeUndefined();
     expect(javascript?.hrefLabelCode).toBeUndefined();
     expect(relative?.href).toBeUndefined();
     expect(secure?.href).toBe("https://example.com/ok");
     expect(secure?.hrefLabelCode).toBe("x");
     expect(noHref?.href).toBeUndefined();
+    expect(insecure?.href).toBeUndefined();
     expect(noHref?.hrefLabelCode).toBeUndefined();
   });
 

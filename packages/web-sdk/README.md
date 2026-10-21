@@ -294,6 +294,12 @@ tc.ui.available; // false in iframes, opaque origins, SSR, or when ui is false
 
 `open()` also clears the user's hidden flag for the button. The hidden flag is stored per origin and app id under `tinycloud:ui:button-hidden:v1:`. The panel shows sections only for capabilities the client exposes.
 
+### Toasts and notification errors
+
+Toasts render in the host panel layer and follow the same `ui` options. `ui: false` renders no host and no toasts. `ui.position` sets placement. Toast copy is fixed text per error kind. The raw error message is written to the console. A toast auto-dismisses after 5 seconds, at most 3 show at once, and an identical visible toast is not shown twice.
+
+`notifications.throwErrors: true` rethrows each error toast that was shown, asynchronously, so global error handlers see it. The `popups`, `position`, `duration`, and `maxVisible` keys under `notifications` are removed. Use `ui` instead.
+
 ## Basic Storage Operations
 
 ### Storing Data

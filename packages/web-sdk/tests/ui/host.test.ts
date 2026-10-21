@@ -7,6 +7,8 @@ import { REGISTRY_KEY } from "../../src/ui/host";
 import { HIDE_KEY_PREFIX } from "../../src/ui/persistence";
 import { text } from "../../src/ui/strings";
 import type { SyncFacade, SyncState } from "../../src/ui/slots";
+import { toastStore } from "../../src/ui/parts/toasts";
+import type { ToastView } from "../../src/ui/toast-store";
 
 type Loose = Record<PropertyKey, unknown>;
 
@@ -481,5 +483,85 @@ describe("messaging and dialog HARD rules", () => {
     expect(spy.calls).toEqual([]);
     expect(shadow().querySelector("dialog, [popover]")).toBeNull();
     expect(page.document.querySelector("dialog, [popover]")).toBeNull();
+  });
+});
+
+describe("host toasts", () => {
+  const UNEXPECTED = text("toast.unexpected_error");
+  const REQUEST = { kind: "error", textCode: "toast.space_creation_failed" } as const;
+
+  function storedToasts(): readonly ToastView[] {
+    let current: readonly ToastView[] = [];
+    toastStore.subscribe((toasts) => {
+      current = toasts;
+    })();
+    return current;
+  }
+
+  function clearToasts(): void {
+    for (const toast of storedToasts()) toastStore.dismiss(toast.id);
+  }
+
+  function rejection(reason: unknown): Event {
+    const NativeEvent = saved.get("Event") as typeof Event;
+    return Object.assign(new NativeEvent("unhandledrejection"), { reason });
+  }
+
+  beforeEach(clearToasts);
+
+  test("an SDK rejection shows the fixed unexpected-error copy in the mounted host", () => {
+    mountClient();
+    globalThis.dispatchEvent(rejection(new Error("TinyCloud storage failed")));
+    expect(shadow().textContent).toContain(UNEXPECTED);
+  });
+
+  test("a rejection without a TinyCloud message is ignored", () => {
+    mountClient();
+    globalThis.dispatchEvent(rejection({ message: "unrelated" }));
+    expect(storedToasts()).toEqual([]);
+  });
+
+  test("the rejection listener survives reset and stops after the last unregister", () => {
+    const ui = mountClient();
+    ui.reset();
+    globalThis.dispatchEvent(rejection(new Error("TinyCloud storage failed")));
+    expect(storedToasts().length).toBe(1);
+    ui.unregister();
+    clearToasts();
+    globalThis.dispatchEvent(rejection(new Error("TinyCloud storage failed")));
+    expect(storedToasts()).toEqual([]);
+  });
+
+  test("toast shows a request through the host and returns true", () => {
+    const ui = mountClient();
+    expect(ui.toast(REQUEST)).toBe(true);
+    expect(shadow().textContent).toContain(text(REQUEST.textCode));
+  });
+
+  test("identical visible requests store one toast", () => {
+    const ui = mountClient();
+    ui.toast(REQUEST);
+    ui.toast(REQUEST);
+    expect(storedToasts().length).toBe(1);
+  });
+
+  test("a headless client returns false and stores nothing", () => {
+    const ui = mountClient(false);
+    expect(ui.toast(REQUEST)).toBe(false);
+    expect(storedToasts()).toEqual([]);
+  });
+
+  test("a framed page returns false and stores nothing", () => {
+    overrideWindowProp("top", {});
+    const ui = mountClient();
+    expect(ui.toast(REQUEST)).toBe(false);
+    expect(storedToasts()).toEqual([]);
+  });
+
+  test("an unregistered client returns false and stores nothing", () => {
+    const ui = mountClient();
+    ui.unregister();
+    expect(ui.toast(REQUEST)).toBe(false);
+    expect(storedToasts()).toEqual([]);
   });
 });

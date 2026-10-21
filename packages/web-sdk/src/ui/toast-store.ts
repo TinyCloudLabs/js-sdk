@@ -54,12 +54,12 @@ interface Entry {
   startedAt: number;
 }
 
-/** Only absolute http(s) links render. Anything else (javascript:, relative) is dropped. */
+/** Only absolute https links render. Anything else (http:, javascript:, relative) is dropped. */
 function safeHref(href: string | undefined): string | undefined {
   if (href === undefined) return undefined;
   try {
     const url = new URL(href);
-    return url.protocol === "https:" || url.protocol === "http:" ? url.href : undefined;
+    return url.protocol === "https:" ? url.href : undefined;
   } catch {
     return undefined;
   }
