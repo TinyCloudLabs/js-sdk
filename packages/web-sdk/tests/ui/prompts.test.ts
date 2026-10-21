@@ -32,6 +32,8 @@ class FakeNode {
     const parent = this.parent;
     if (parent !== undefined) {
       parent.children = parent.children.filter((c) => c !== this);
+      // The DOM calls disconnectedCallback on removal; modals release the scroll lock there.
+      (this as unknown as { disconnectedCallback?: () => void }).disconnectedCallback?.();
     }
     this.parent = undefined;
   }
@@ -395,6 +397,41 @@ describe("opening a prompt while another is open", () => {
 
     dismissPrompts(secondScope);
     expect(await second).toEqual({ success: false, dismissed: true });
+  });
+
+  test("keeps the scroll lock while the displaced permission prompt's hide timer runs", async () => {
+    const manager = modals.ModalManager.getInstance();
+    const firstScope = createPromptScope(true);
+    const secondScope = createPromptScope(true);
+    const first = manager.showPermissionRequestModal(permissionOptions(() => {}), firstScope);
+    const second = manager.showPermissionRequestModal(permissionOptions(() => {}), secondScope);
+
+    expect(await first).toEqual({ approved: false });
+    // Past the displaced modal's 200 ms hide timer.
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    expect(body.style.overflow).toBe("hidden");
+
+    dismissPrompts(secondScope);
+    expect(await second).toEqual({ approved: false });
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    expect(body.style.overflow).toBe("");
+  });
+
+  test("keeps the scroll lock while the displaced space creation prompt's hide timer runs", async () => {
+    const manager = modals.ModalManager.getInstance();
+    const firstScope = createPromptScope(true);
+    const secondScope = createPromptScope(true);
+    const first = manager.showSpaceCreationModal(spaceOptions(() => {}), firstScope);
+    const second = manager.showSpaceCreationModal(spaceOptions(() => {}), secondScope);
+
+    expect(await first).toEqual({ success: false, dismissed: true });
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    expect(body.style.overflow).toBe("hidden");
+
+    dismissPrompts(secondScope);
+    expect(await second).toEqual({ success: false, dismissed: true });
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    expect(body.style.overflow).toBe("");
   });
 });
 

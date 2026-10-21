@@ -22,6 +22,7 @@ import {
   HOOKS,
   ENCRYPTION,
 } from "@tinycloud/sdk-core";
+import { acquireScrollLock } from "./scrollLock";
 
 export interface PermissionRequestModalOptions {
   /** Display name of the app requesting permissions (from the manifest). */
@@ -44,6 +45,7 @@ export interface PermissionRequestResult {
 export class TinyCloudPermissionRequestModal extends HTMLElement {
   private options: PermissionRequestModalOptions;
   private isVisible: boolean = false;
+  private releaseScrollLock: (() => void) | null = null;
   private resolveResult: ((result: PermissionRequestResult) => void) | null =
     null;
   private completionPromise: Promise<PermissionRequestResult>;
@@ -69,7 +71,7 @@ export class TinyCloudPermissionRequestModal extends HTMLElement {
   }
 
   disconnectedCallback() {
-    document.body.style.overflow = "";
+    this.releaseLock();
   }
 
   private render(): void {
@@ -398,7 +400,7 @@ export class TinyCloudPermissionRequestModal extends HTMLElement {
 
   private show(): void {
     this.isVisible = true;
-    document.body.style.overflow = "hidden";
+    if (!this.releaseScrollLock) this.releaseScrollLock = acquireScrollLock();
     requestAnimationFrame(() => {
       const backdrop = this.shadowRoot!.querySelector(".modal-backdrop");
       backdrop?.setAttribute("data-state", "visible");
@@ -410,10 +412,15 @@ export class TinyCloudPermissionRequestModal extends HTMLElement {
     backdrop?.setAttribute("data-state", "hidden");
     setTimeout(() => {
       this.remove();
-      document.body.style.overflow = "";
+      this.releaseLock();
       document.removeEventListener("keydown", this.handleKeyDown);
     }, 200);
     this.isVisible = false;
+  }
+
+  private releaseLock(): void {
+    this.releaseScrollLock?.();
+    this.releaseScrollLock = null;
   }
 
   dismiss(): void {

@@ -117,30 +117,29 @@ for (const scheme of ["light", "dark"] as const) {
   // is null for a closed root, so this fails if a root is closed.
   test(`${scheme}: prompts and host use open shadow roots`, async ({ page }) => {
     await mountHarness(page, scheme);
-    await openSpaceCreation(page);
-    await openPermission(page);
-
     // The prompt lives inside the host's shadow root, so document.querySelector
-    // cannot reach it. Walk open shadow roots to find it and read each root's mode.
-    const modes = await page.evaluate(
-      ([space, permission]) => {
-        const findIn = (root: Document | ShadowRoot, tag: string): Element | null => {
-          const direct = root.querySelector(tag);
+    // cannot reach it. Walk open shadow roots to find it and read its root's mode.
+    // Read each prompt while it is open: a prompt that is displaced is removed.
+    const readMode = (target: string) =>
+      page.evaluate((tag) => {
+        const findIn = (root: Document | ShadowRoot, name: string): Element | null => {
+          const direct = root.querySelector(name);
           if (direct) return direct;
           for (const el of Array.from(root.querySelectorAll("*"))) {
             if (el.shadowRoot) {
-              const found = findIn(el.shadowRoot, tag);
+              const found = findIn(el.shadowRoot, name);
               if (found) return found;
             }
           }
           return null;
         };
-        const modeOf = (tag: string) => findIn(document, tag)?.shadowRoot?.mode ?? null;
-        return { space: modeOf(space), permission: modeOf(permission) };
-      },
-      [SPACE, PERMISSION] as const,
-    );
-    expect(modes).toEqual({ space: "open", permission: "open" });
+        return findIn(document, tag)?.shadowRoot?.mode ?? null;
+      }, target);
+    await openSpaceCreation(page);
+    const space = await readMode(SPACE);
+    await openPermission(page);
+    const permission = await readMode(PERMISSION);
+    expect({ space, permission }).toEqual({ space: "open", permission: "open" });
   });
 
   // Assertion b: Approve, Deny, and Escape each settle the permission prompt.
@@ -294,6 +293,21 @@ for (const scheme of ["light", "dark"] as const) {
 
     await page.locator(PERMISSION).locator('[data-action="approve"]').click();
     await expect.poll(() => permResult(page)).toBe(true);
+  });
+
+  // A displaced prompt's hide timer must not clear the scroll lock of the prompt that replaced it.
+  test(`${scheme}: a displaced prompt keeps the scroll lock of the prompt that replaced it`, async ({ page }) => {
+    await mountHarness(page, scheme);
+    await openSpaceCreation(page);
+    await openPermission(page);
+    await expect(page.locator(SPACE)).toHaveCount(0);
+
+    // Read after the displaced modal's 200 ms hide timer has run.
+    const overflow = await page.evaluate(
+      () => new Promise<string>((resolve) => setTimeout(() => resolve(document.body.style.overflow), 400)),
+    );
+    expect(overflow).toBe("hidden");
+    await expect(page.locator(PERMISSION)).toHaveCount(1);
   });
 
   // Assertion e: reset dismisses a pending prompt and resolves it false.

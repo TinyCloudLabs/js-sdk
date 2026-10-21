@@ -97,11 +97,14 @@ export class ModalManager {
    * Settles the open prompt, if any, as dismissed, so its promise never stays
    * pending. The resolved value matches the prompt's close control. Its caller's
    * onDismiss runs once; a prompt that already settled is not dismissed again.
+   * The element is removed now, not after its hide delay, so its scroll lock is
+   * released before the prompt that replaces it takes the lock.
    */
   public closeActiveModal(): void {
     const modal = this.activeModal;
     if (!modal) return;
     if (modal.isOpen) modal.dismiss();
+    modal.remove();
     this.clearActive(modal);
   }
 

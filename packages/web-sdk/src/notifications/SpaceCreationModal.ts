@@ -1,4 +1,5 @@
 import { debug } from "../utils/debug";
+import { acquireScrollLock } from "./scrollLock";
 
 export interface SpaceCreationModalOptions {
   onCreateSpace: () => Promise<void>;
@@ -13,6 +14,7 @@ export interface SpaceCreationResult {
 export class TinyCloudSpaceModal extends HTMLElement {
   private options: SpaceCreationModalOptions;
   private isVisible: boolean = false;
+  private releaseScrollLock: (() => void) | null = null;
   private isCreating: boolean = false;
   private resolveResult: ((result: SpaceCreationResult) => void) | null = null;
   private completionPromise: Promise<SpaceCreationResult>;
@@ -43,7 +45,7 @@ export class TinyCloudSpaceModal extends HTMLElement {
     // confirmation times out), not just via hide(), so all document-level
     // state has to be released here too.
     this.isVisible = false;
-    document.body.style.overflow = '';
+    this.releaseLock();
     document.removeEventListener('keydown', this.handleKeyDown);
   }
 
@@ -395,7 +397,7 @@ export class TinyCloudSpaceModal extends HTMLElement {
 
   private show(): void {
     this.isVisible = true;
-    document.body.style.overflow = 'hidden';
+    if (!this.releaseScrollLock) this.releaseScrollLock = acquireScrollLock();
 
     requestAnimationFrame(() => {
       const backdrop = this.shadowRoot!.querySelector('.modal-backdrop');
@@ -409,11 +411,16 @@ export class TinyCloudSpaceModal extends HTMLElement {
 
     setTimeout(() => {
       this.remove();
-      document.body.style.overflow = '';
+      this.releaseLock();
       document.removeEventListener('keydown', this.handleKeyDown);
     }, 200);
 
     this.isVisible = false;
+  }
+
+  private releaseLock(): void {
+    this.releaseScrollLock?.();
+    this.releaseScrollLock = null;
   }
 
   dismiss(): void {
