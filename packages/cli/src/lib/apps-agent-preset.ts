@@ -190,8 +190,8 @@ export function appsAgentScopeNotice(mode: AppsAgentMode, appIds: readonly strin
       `It cannot change ${appIds.length === 1 ? "the app's" : "the apps'"} code, manifest or install record: files outside those folders are read-only for it.`,
       `SQL write is separate from that: it can add, change and delete ${appIds.length === 1 ? "this app's" : "these apps'"} table rows.`,
       variant.schemaForCatalogApps && schemaPaths.length > 0
-        ? `It can also create, change and drop tables in ${schemaPaths.join(", ")}, the catalog database of each named catalog app. It cannot create, change or drop tables anywhere else.`
-        : "It cannot create, change or drop tables.",
+        ? `It can also set up and repair the tables and views in ${schemaPaths.join(", ")}, the database of each named catalog app. It has no permission for any other database.`
+        : "This grant does not include permission to create, change or drop tables (tinycloud.sql/schema).",
       "It cannot touch other apps, other spaces or secrets.",
     );
   } else {
