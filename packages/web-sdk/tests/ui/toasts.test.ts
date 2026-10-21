@@ -226,3 +226,19 @@ describe("toasts part", () => {
     expect(view.latest().length).toBe(0);
   });
 });
+
+describe("store defaults", () => {
+  test("shows at most 3 toasts and dismisses all of them after 5 s when no options are passed", () => {
+    const store = createToastStore();
+    const view = collect(store);
+    store.push({ kind: "info", textCode: "a" });
+    store.push({ kind: "info", textCode: "b" });
+    store.push({ kind: "info", textCode: "c" });
+    store.push({ kind: "info", textCode: "d" });
+    expect(view.latest().map((toast) => toast.textCode)).toEqual(["b", "c", "d"]);
+    jest.advanceTimersByTime(4999);
+    expect(view.latest().length).toBe(3);
+    jest.advanceTimersByTime(1);
+    expect(view.latest().length).toBe(0);
+  });
+});
