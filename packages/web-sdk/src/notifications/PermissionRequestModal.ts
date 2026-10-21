@@ -416,7 +416,7 @@ export class TinyCloudPermissionRequestModal extends HTMLElement {
     this.isVisible = false;
   }
 
-  private dismiss(): void {
+  dismiss(): void {
     this.resolveResult?.({ approved: false });
     this.options.onDismiss?.();
     this.hide();

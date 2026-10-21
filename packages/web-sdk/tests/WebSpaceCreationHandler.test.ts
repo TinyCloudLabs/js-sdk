@@ -14,6 +14,8 @@
  */
 
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
+import { prompts } from "../src/ui/parts/prompts";
+import type { HostContext } from "../src/ui/slots";
 
 // ---------------------------------------------------------------------------
 // Minimal DOM shim
@@ -108,6 +110,7 @@ const originalGlobals = {
 };
 
 let documentElement: FakeElement;
+let stopPrompts: (() => void) | undefined;
 
 beforeAll(() => {
   (globalThis as any).HTMLElement = FakeHTMLElement;
@@ -122,18 +125,24 @@ beforeAll(() => {
     removeEventListener: () => {},
   };
   (globalThis as any).CustomEvent = FakeCustomEvent;
-  (globalThis as any).window = {
+  const fakeWindow = {
     dispatchEvent: (event: any) => {
       dispatchedWindowEvents.push({ type: event.type, detail: event.detail });
       return true;
     },
     addEventListener: () => {},
     removeEventListener: () => {},
+    location: { origin: "http://localhost" },
+    top: undefined as unknown,
   };
+  fakeWindow.top = fakeWindow;
+  (globalThis as any).window = fakeWindow;
   (globalThis as any).requestAnimationFrame = (cb: () => void) => {
     cb();
     return 0;
   };
+  // Prompts render into the host layer; start the prompt part so they can mount.
+  stopPrompts = prompts.start(undefined as unknown as HostContext, new FakeElement() as unknown as HTMLElement);
   // The handler intentionally warns when it starts blocking on the user.
   // Keep the test output readable while still recording the calls.
   console.warn = (...args: unknown[]) => {
@@ -145,6 +154,7 @@ afterAll(async () => {
   // The modal's hide() animation runs on a 200ms timer that touches `document`.
   // Let it drain before the globals are restored.
   await new Promise((resolve) => setTimeout(resolve, 300));
+  stopPrompts?.();
   (globalThis as any).HTMLElement = originalGlobals.HTMLElement;
   (globalThis as any).customElements = originalGlobals.customElements;
   (globalThis as any).document = originalGlobals.document;

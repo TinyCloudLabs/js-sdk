@@ -416,11 +416,13 @@ export class TinyCloudSpaceModal extends HTMLElement {
     this.isVisible = false;
   }
 
-  private dismiss(): void {
+  dismiss(): void {
     this.resolveResult?.({ success: false, dismissed: true });
     this.options.onDismiss?.();
     this.hide();
   }
 }
 
-customElements.define('tinycloud-space-modal', TinyCloudSpaceModal);
+if (!customElements.get('tinycloud-space-modal')) {
+  customElements.define('tinycloud-space-modal', TinyCloudSpaceModal);
+}
