@@ -5,6 +5,7 @@ import {
 } from './commands.js';
 import { cmd, programName, setProgramName } from './program.js';
 import { cmdWatch } from './watch-cmd.js';
+import { cmdIntake } from './intake/intake.js';
 import { cmdApproval } from './approval.js';
 import { cmdPause, cmdResume } from './pause.js';
 import { cmdGuard } from './guard/command.js';
@@ -96,6 +97,9 @@ Delivery (one watcher per person per machine; never calls a model):
   watch … --install-launchd | --install-systemd [--dry-run] [--name n]
                                    Install the same watch command as a macOS launchd agent or a Linux
                                    systemd --user unit. --dry-run prints the exact file and commands.
+  intake [--queue-dir d] [--peers-file f] [--state-dir d] [--interval 60] [--once]
+                                   Intake reader: copy paired peers' mirrored messages into the local queue
+                                   (one <msgId>.json per message) with cheap checks. Never calls a model.
 
   pause <peer> <threadId> [--reason "…"]   Humans: stop waking your agent for a thread; tells the peer
   resume <peer> <threadId>                 Humans: wake it again (the wake budget starts over)
@@ -137,6 +141,7 @@ export async function run(argv: string[]): Promise<void> {
     case 'request': return cmdRequest(sub);
     case 'orders': return cmdOrders(sub);
     case 'watch': return cmdWatch(sub);
+    case 'intake': return cmdIntake(sub);
     case 'approval': return cmdApproval(sub);
     case 'pause': return cmdPause(sub);
     case 'resume': return cmdResume(sub);

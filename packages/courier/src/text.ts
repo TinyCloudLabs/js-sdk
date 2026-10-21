@@ -38,12 +38,14 @@ function contentReason(value: string, field: TextField): TextReason | undefined 
   return undefined;
 }
 
-/** Stable cross-runtime API. Limits are UTF-16 units: summary/target 200, multiline 2000. */
-export function textVerdict(value: unknown, field: TextField): TextVerdict {
+/**
+ * Stable cross-runtime API. Limits are UTF-16 units: summary/target 200, multiline 2000 unless `maxUnits` overrides it.
+ */
+export function textVerdict(value: unknown, field: TextField, maxUnits?: number): TextVerdict {
   let reason: TextReason | undefined;
   if (typeof value !== 'string') reason = 'not-string';
   else if (value.length === 0) reason = 'empty';
-  else if (value.length > (field === 'multiline' ? MAX_ACTION : MAX_SUMMARY)) reason = 'too-long';
+  else if (value.length > (maxUnits ?? (field === 'multiline' ? MAX_ACTION : MAX_SUMMARY))) reason = 'too-long';
   else if (field !== 'multiline' && (value.startsWith(' ') || value.endsWith(' '))) reason = 'edge-whitespace';
   else reason = contentReason(value, field);
   return reason ? { allowed: false, reason } : { allowed: true, reason: null };
