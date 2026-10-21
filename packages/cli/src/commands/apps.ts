@@ -1,7 +1,5 @@
 import { Command } from "commander";
 import { CLI_NAME } from "@tinycloud/operations/cli-name";
-import type { TinyCloudNode } from "@tinycloud/node-sdk";
-
 import { ProfileManager } from "../config/profiles.js";
 import { ExitCode } from "../config/constants.js";
 import { ensureAuthenticated } from "../lib/sdk.js";
@@ -40,7 +38,7 @@ Examples:
         const profile = await ProfileManager.getProfile(ctx.profile);
         // Same owner-aware resolution as `knowledge list`: a delegate session's applications space is the owner's, not the delegate's address.
         const spaceUri = operationSpaceResolver(node, profile.spaceId)(APPLICATIONS_SPACE);
-        const io = appsInstallIo(node, spaceUri, entry.database);
+        const io = appsInstallIo(node.kvForSpace(spaceUri), node.sqlForSpace(spaceUri).db(entry.database));
 
         const result = await withSpinner(`Installing ${appId}...`, () => installApp(appId, io)).catch((error: unknown) => {
           throw installFailure(error);
@@ -54,10 +52,20 @@ Examples:
     });
 }
 
-/** Bind installer I/O to the applications space and the app's database. */
-function appsInstallIo(node: TinyCloudNode, spaceUri: string, database: string): InstallIo {
-  const kv = node.kvForSpace(spaceUri);
-  const db = node.sqlForSpace(spaceUri).db(database);
+/** The KV calls the installer makes; structural, so the SDK client and a test fake both satisfy it. */
+export interface InstallKvPort {
+  get(key: string, options: { binary: true }): Promise<PortResult<{ data: unknown }>>;
+  put(key: string, value: Uint8Array, options: { ifNoneMatch: "*" }): Promise<PortResult<unknown>>;
+}
+/** The SQL calls the installer makes on one app database. */
+export interface InstallDbPort {
+  execute(statement: string): Promise<PortResult<unknown>>;
+  query(statement: string): Promise<PortResult<{ rows: unknown[] }>>;
+}
+type PortResult<T> = { ok: true; data: T } | { ok: false; error: { code?: string } };
+
+/** Bind installer I/O to one applications-space KV and one app database. */
+export function appsInstallIo(kv: InstallKvPort, db: InstallDbPort): InstallIo {
   return {
     async fetchBytes(url) {
       const response = await fetch(url, { redirect: "error" });

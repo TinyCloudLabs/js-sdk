@@ -9,6 +9,7 @@ import {
   splitStatements,
   type InstallIo,
 } from "./apps-install.js";
+import { appsInstallIo, type InstallDbPort, type InstallKvPort } from "../commands/apps.js";
 
 const enc = (text: string) => new TextEncoder().encode(text);
 
@@ -249,5 +250,58 @@ describe("installApp", () => {
     await installApp("test.app", io, () => app);
     const drops = sql.filter((s) => s.startsWith("DROP"));
     expect(drops).toEqual(["DROP VIEW IF EXISTS meal_count"]);
+  });
+});
+
+describe("appsInstallIo create-only KV mapping", () => {
+  const noDb: InstallDbPort = {
+    execute: async () => ({ ok: true, data: undefined }),
+    query: async () => ({ ok: true, data: { rows: [] } }),
+  };
+
+  /** A KV that honors ifNoneMatch "*" like the node: an existing key refuses the create. */
+  function honoringKv(initial: Map<string, Uint8Array>) {
+    const putOptions: unknown[] = [];
+    const kv: InstallKvPort = {
+      async get(key) {
+        const bytes = initial.get(key);
+        return bytes ? { ok: true, data: { data: bytes } } : { ok: false, error: { code: "KV_NOT_FOUND" } };
+      },
+      async put(key, value, options) {
+        putOptions.push(options);
+        if (options.ifNoneMatch === "*" && initial.has(key)) {
+          return { ok: false, error: { code: "KV_PRECONDITION_FAILED" } };
+        }
+        initial.set(key, value);
+        return { ok: true, data: undefined };
+      },
+    };
+    return { kv, putOptions };
+  }
+
+  it("creates a missing note with ifNoneMatch * and reports created", async () => {
+    const stored = new Map<string, Uint8Array>();
+    const { kv, putOptions } = honoringKv(stored);
+    const io = appsInstallIo(kv, noDb);
+    expect(await io.kvCreate("notes/a.md", enc("hello"))).toBe("created");
+    expect(putOptions).toEqual([{ ifNoneMatch: "*" }]);
+    expect(stored.get("notes/a.md")).toEqual(enc("hello"));
+  });
+
+  it("never overwrites a note that appeared after inspection and reports exists", async () => {
+    const stored = new Map<string, Uint8Array>([["notes/a.md", enc("the owner's edit")]]);
+    const { kv } = honoringKv(stored);
+    const io = appsInstallIo(kv, noDb);
+    expect(await io.kvCreate("notes/a.md", enc("pinned"))).toBe("exists");
+    expect(stored.get("notes/a.md")).toEqual(enc("the owner's edit"));
+  });
+
+  it("surfaces any other put failure instead of treating it as exists", async () => {
+    const kv: InstallKvPort = {
+      get: async () => ({ ok: false, error: { code: "KV_NOT_FOUND" } }),
+      put: async () => ({ ok: false, error: { code: "KV_UNAVAILABLE" } }),
+    };
+    const io = appsInstallIo(kv, noDb);
+    await expect(io.kvCreate("notes/a.md", enc("x"))).rejects.toThrow("KV_UNAVAILABLE");
   });
 });
