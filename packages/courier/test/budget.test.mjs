@@ -12,6 +12,7 @@ import { createNotifier, noticeText, appendNotice, MAX_NOTICE_LOG_BYTES } from '
 import { k, PREFIX } from '../dist/keys.js';
 import { notifyConfig } from '../dist/watch-cmd.js';
 import { parseArgs } from '../dist/args.js';
+import { getJson, putCreate, putMatch } from '../dist/store.js';
 import { memoryKv } from './memory-kv.mjs';
 
 const DAY = 24 * 3600 * 1000;
@@ -376,6 +377,69 @@ test('human pause checks thread existence; failed inform retries idempotently wi
   assert.equal(kv.rows.get(k.paused('bob', thread)).value.informId, id);
   assert.equal(kv.rows.get(k.paused('bob', thread)).value.informSent, true);
   assert.equal([...kv.rows.keys()].filter(key => key.includes('/msg/')).length, 1);
+});
+
+test('a non-412 write failure is not classified as conflict when the key contains "412"', async () => {
+  const kv = memoryKv();
+  const profile = { peers: { bob: { handle: 'bob', status: 'paired' } }, ownerDid: 'did:pkh:dummy', courierDid: 'did:key:dummy', label: 'Disposable' };
+  const deps = { profile: () => profile, node: async () => ({ kv }) };
+  const thread = '01M5DZW1ED8Q95XH7DJ39YG412'; const args = parseArgs(['bob', thread]);
+  kv.rows.set(k.threadMeta('bob', thread), { value: { subject: 'test' }, etag: 'meta' });
+  const put = kv.put.bind(kv);
+  kv.put = async (key, value, options) => {
+    if (key.includes('/msg/')) return { ok: false, error: { code: 'KV_WRITE_FAILED', message: `Failed to put key "${key}": 503 - down`, service: 'kv', meta: { status: 503 } } };
+    return put(key, value, options);
+  };
+  await assert.rejects(cmdPause(args, deps), { code: 'KV_WRITE_FAILED' });
+  assert.equal(kv.rows.get(k.paused('bob', thread)).value.informSent, false);
+});
+
+test('putCreate and putMatch classify conflict from structured fields only', async () => {
+  const kv = memoryKv();
+  const key = 'msg/01M5DZW1ED8Q95XH7DJ39YG412';
+  const notConflict = [
+    { code: 'KV_WRITE_FAILED', message: `Failed to put key "${key}": 500 - down`, meta: { status: 500 } },
+    { code: 'KV_WRITE_FAILED', message: `Failed to put key "${key}": 503 - down`, meta: { status: 503 } },
+    { code: 'KV_WRITE_FAILED', message: `Failed to put key "${key}": 507 - full`, meta: { status: 507 } },
+    { code: 'KV_ERR', message: `Failed to put key "${key}"`, status: 503 },
+  ];
+  const conflict = [
+    { code: 'KV_PRECONDITION_FAILED', message: 'precondition failed', meta: { status: 412 } },
+    { code: 'KV_WRITE_FAILED', message: 'precondition failed', meta: { status: 412 } },
+    { code: 'KV_ERR', message: 'precondition failed', status: 412 },
+    { code: 'KV_PRECONDITION_FAILED', message: 'precondition failed' },
+  ];
+  for (const error of notConflict) {
+    kv.put = async () => ({ ok: false, error });
+    await assert.rejects(putCreate(kv, key, {}), (e) => { assert.notEqual(e.code, 'conflict'); return true; });
+    await assert.rejects(putMatch(kv, key, {}, 'e1'), (e) => { assert.notEqual(e.code, 'conflict'); return true; });
+  }
+  for (const error of conflict) {
+    kv.put = async () => ({ ok: false, error });
+    await assert.rejects(putCreate(kv, key, {}), { code: 'conflict' });
+    await assert.rejects(putMatch(kv, key, {}, 'e1'), { code: 'conflict' });
+  }
+});
+
+test('getJson treats only KV_NOT_FOUND as a missing key and never by message alone', async () => {
+  const kv = memoryKv();
+  assert.equal(await getJson(kv, 'missing'), undefined);
+  kv.get = async () => ({ ok: false, error: { code: 'KV_READ_FAILED', message: 'access denied: entry not found', meta: { status: 403 } } });
+  await assert.rejects(getJson(kv, 'x'), { code: 'KV_READ_FAILED' });
+  kv.get = async () => ({ ok: false, error: { code: 'KV_NOT_FOUND', message: 'KV 404 - space not found', meta: { status: 404 } } });
+  await assert.rejects(getJson(kv, 'x'), { code: 'no-space' });
+});
+
+test('getJson retries a thrown fetch failure and a transient 5xx read, then succeeds', async () => {
+  const kv = memoryKv(); let calls = 0;
+  kv.get = async () => {
+    calls++;
+    if (calls === 1) throw new TypeError('fetch failed');
+    if (calls === 2) return { ok: false, error: { code: 'KV_READ_FAILED', message: 'down', meta: { status: 503 } } };
+    return { ok: true, data: { data: '{"a":1}', headers: { etag: 'e' } } };
+  };
+  assert.deepEqual(await getJson(kv, 'x'), { value: { a: 1 }, etag: 'e' });
+  assert.equal(calls, 3);
 });
 
 

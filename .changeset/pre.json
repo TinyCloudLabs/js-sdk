@@ -46,6 +46,7 @@
     "cli-wait-openkey-space-setup",
     "courier-approval",
     "courier-budget",
+    "courier-conditional-write-412",
     "courier-guard",
     "courier-notify-final",
     "courier-profile-permissions",
