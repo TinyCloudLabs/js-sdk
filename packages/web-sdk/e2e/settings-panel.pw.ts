@@ -6,17 +6,8 @@ import { expect, test, type Page } from "@playwright/test";
 const BUNDLE = readFileSync(resolve("e2e/.build/ui.bundle.js"), "utf8");
 const ORIGIN = "http://tinycloud-ui.test";
 
-// The panel's shadow root is closed in production. Open it so Playwright can
-// reach the panel's controls; the rendered output is unchanged.
-const OPEN_SHADOW_ROOTS = `(() => {
-  const attach = Element.prototype.attachShadow;
-  Element.prototype.attachShadow = function (init) {
-    return attach.call(this, { ...init, mode: "open" });
-  };
-})();`;
-
 interface HarnessWindow {
-  __tc: { mount(): boolean };
+  __tc: { mount(): boolean; toast(kind: string): string; dismiss(id: string): void };
   tc?: { ui: { open(): void } };
 }
 
@@ -28,7 +19,6 @@ const PANEL_BACKGROUND = {
 
 async function mountHarness(page: Page, scheme: "light" | "dark") {
   await page.emulateMedia({ colorScheme: scheme });
-  await page.addInitScript(OPEN_SHADOW_ROOTS);
   await page.route(`${ORIGIN}/**`, (route) => {
     const path = new URL(route.request().url()).pathname;
     if (path === "/ui.bundle.js") {
@@ -74,4 +64,95 @@ for (const scheme of ["light", "dark"] as const) {
     await expect(panel).toBeVisible();
     await expect(launcher).toBeVisible();
   });
+}
+
+// The launcher's focus ring must clear 3:1 on a light and a dark page. Its
+// outline sits outside the element, so the 6px halo of the opposite ink covers
+// whichever page is behind it.
+for (const scheme of ["light", "dark"] as const) {
+  test(`${scheme}: at least one of launcher focus ring and halo is at least 3:1 on light and dark pages`, async ({ page }) => {
+    await mountHarness(page, scheme);
+    const launcher = page.getByRole("button", { name: "TinyCloud settings" });
+    await launcher.focus();
+    await page.keyboard.press("Shift+Tab");
+    await page.keyboard.press("Tab");
+    const ring = await launcher.evaluate((el) => {
+      const s = getComputedStyle(el);
+      return { focusVisible: el.matches(":focus-visible"), outline: s.outlineColor, shadow: s.boxShadow };
+    });
+    expect(ring.focusVisible).toBe(true);
+    const halo = /(rgba?\([^)]*\)) 0px 0px 0px 6px/.exec(ring.shadow)?.[1];
+    expect(halo, ring.shadow).toBeTruthy();
+    for (const page_bg of ["rgb(255, 255, 255)", "rgb(11, 12, 16)"]) {
+      expect(Math.max(contrast(ring.outline, page_bg), contrast(halo!, page_bg))).toBeGreaterThanOrEqual(3);
+    }
+  });
+}
+
+// The launcher's 1px border is the only edge against the page, so it must clear 3:1 on both.
+for (const scheme of ["light", "dark"] as const) {
+  test(`${scheme}: launcher border is at least 3:1 on light and dark pages`, async ({ page }) => {
+    await mountHarness(page, scheme);
+    const border = await page.getByRole("button", { name: "TinyCloud settings" }).evaluate((el) => getComputedStyle(el).borderTopColor);
+    for (const page_bg of ["rgb(255, 255, 255)", "rgb(11, 12, 16)"]) {
+      expect(contrast(border, page_bg)).toBeGreaterThanOrEqual(3);
+    }
+  });
+}
+
+// Action buttons (Hide button, Close, Erase, Cancel, ...) are identified by their 1px border, so it must clear 3:1 on the button surface.
+for (const scheme of ["light", "dark"] as const) {
+  test(`${scheme}: action button border is at least 3:1 on its surface`, async ({ page }) => {
+    await mountHarness(page, scheme);
+    await page.getByRole("button", { name: "TinyCloud settings", exact: true }).click();
+    const action = page.getByRole("button", { name: "Hide button", exact: true });
+    await expect(action).toHaveClass(/\baction\b/);
+    const colours = await action.evaluate((el) => {
+      const style = getComputedStyle(el);
+      return { border: style.borderTopColor, surface: style.backgroundColor };
+    });
+    expect(contrast(colours.border, colours.surface)).toBeGreaterThanOrEqual(3);
+  });
+}
+
+// Each toast's left stripe must be its kind colour in the rendered page, and at
+// least 3:1 against the toast surface. Dark warning is the only dark override.
+const KINDS = ["info", "success", "warning", "error"] as const;
+const STRIPE = {
+  light: { info: "rgb(37, 99, 235)", success: "rgb(22, 163, 74)", warning: "rgb(217, 119, 6)", error: "rgb(220, 38, 38)" },
+  dark: { info: "rgb(37, 99, 235)", success: "rgb(22, 163, 74)", warning: "rgb(251, 189, 35)", error: "rgb(220, 38, 38)" },
+} as const;
+
+function channel(c: number) {
+  const v = c / 255;
+  return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4;
+}
+
+function luminance(rgb: string) {
+  const [r, g, b] = (rgb.match(/\d+/g) ?? []).map(Number);
+  return 0.2126 * channel(r ?? 0) + 0.7152 * channel(g ?? 0) + 0.0722 * channel(b ?? 0);
+}
+
+function contrast(a: string, b: string) {
+  const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x);
+  return ((hi ?? 0) + 0.05) / ((lo ?? 0) + 0.05);
+}
+
+for (const scheme of ["light", "dark"] as const) {
+  for (const kind of KINDS) {
+    test(`${scheme} ${kind} toast stripe is its kind colour and at least 3:1 on the toast`, async ({ page }) => {
+      await page.setViewportSize({ width: 1280, height: 800 });
+      await mountHarness(page, scheme);
+      await page.evaluate((k) => (window as unknown as HarnessWindow).__tc.toast(k), kind);
+
+      const toast = page.locator(`.toast.toast--${kind}`);
+      await expect(toast).toBeVisible();
+      const computed = await toast.evaluate((el) => {
+        const style = getComputedStyle(el);
+        return { stripe: style.borderLeftColor, surface: style.backgroundColor };
+      });
+      expect(computed.stripe).toBe(STRIPE[scheme][kind]);
+      expect(contrast(computed.stripe, computed.surface)).toBeGreaterThanOrEqual(3);
+    });
+  }
 }

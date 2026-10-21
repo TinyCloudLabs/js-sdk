@@ -22,9 +22,7 @@ const KINDS: readonly ToastKind[] = ["info", "success", "warning", "error"];
 
 let page: Window;
 const saved = new Map<string, unknown>();
-const attached: ShadowRoot[] = [];
 const handles: UiClientHandle[] = [];
-let restoreAttachShadow: () => void = () => undefined;
 
 beforeAll(() => {
   for (const name of GLOBAL_NAMES) saved.set(name, g[name]);
@@ -37,23 +35,9 @@ beforeAll(() => {
   g.Element = page.Element;
   g.Event = page.Event;
   g.KeyboardEvent = page.KeyboardEvent;
-
-  // The host's shadow root is closed. Record each root the host attaches so the
-  // test can read the stylesheet and the rendered nodes.
-  const proto = page.Element.prototype as unknown as { attachShadow(init: ShadowRootInit): ShadowRoot };
-  const original = proto.attachShadow;
-  proto.attachShadow = function attachShadow(this: unknown, init: ShadowRootInit): ShadowRoot {
-    const root = original.call(this, init);
-    attached.push(root);
-    return root;
-  };
-  restoreAttachShadow = () => {
-    proto.attachShadow = original;
-  };
 });
 
 afterAll(() => {
-  restoreAttachShadow();
   for (const name of GLOBAL_NAMES) {
     if (saved.get(name) === undefined) delete g[name];
     else g[name] = saved.get(name);
@@ -62,7 +46,6 @@ afterAll(() => {
 
 beforeEach(() => {
   delete g[REGISTRY_KEY];
-  attached.length = 0;
   page.document.body.innerHTML = "";
   page.localStorage.clear();
 });
@@ -81,8 +64,8 @@ function storedToasts(): readonly ToastView[] {
 }
 
 function shadow(): ShadowRoot {
-  const root = attached.at(-1);
-  if (!root) throw new Error("no shadow root was created");
+  const root = document.querySelector<HTMLElement>("[data-tinycloud-ui]")?.shadowRoot;
+  if (!root) throw new Error("no open shadow root on the TinyCloud host");
   return root;
 }
 
@@ -262,16 +245,13 @@ const CONTRAST_CHECKS: readonly ContrastCheck[] = [
   { name: "panel dim text", fg: [".status", "color"], bg: [".panel", "background"], min: TEXT_MIN },
   { name: "panel error text", fg: [".error", "color"], bg: [".panel", "background"], min: TEXT_MIN },
   { name: "action label", fg: [".action", "color"], bg: [".action", "background"], min: TEXT_MIN },
+  { name: "action border", fg: [".action", "border-color"], bg: [".action", "background"], min: GRAPHIC_MIN },
   { name: "toast text", fg: [".toast", "color"], bg: [".toast", "background"], min: TEXT_MIN },
   { name: "button glyph", fg: [".button", "color"], bg: [".button", "background"], min: GRAPHIC_MIN },
   { name: "button notice dot", fg: [".dot", "background"], bg: [".button", "background"], min: GRAPHIC_MIN },
   { name: "switch track off", fg: [".knob", "background"], bg: [".panel", "background"], min: GRAPHIC_MIN },
   { name: "switch thumb", fg: [".knob::after", "background"], bg: [".knob", "background"], min: GRAPHIC_MIN },
   { name: "switch track on", fg: [".switch[aria-checked=\"true\"] .knob", "background"], bg: [".panel", "background"], min: GRAPHIC_MIN },
-  { name: "toast stripe info", fg: [".toast--info", "border-left-color"], bg: [".toast", "background"], min: GRAPHIC_MIN },
-  { name: "toast stripe success", fg: [".toast--success", "border-left-color"], bg: [".toast", "background"], min: GRAPHIC_MIN },
-  { name: "toast stripe warning", fg: [".toast--warning", "border-left-color"], bg: [".toast", "background"], min: GRAPHIC_MIN },
-  { name: "toast stripe error", fg: [".toast--error", "border-left-color"], bg: [".toast", "background"], min: GRAPHIC_MIN },
 ];
 
 /** Stylesheet text with a warning toast rendered, so every toast rule is present. */
@@ -314,14 +294,12 @@ for (const scheme of ["light", "dark"] as const) {
 /** Interactive controls the panel renders. Each needs its own focus ring rule. */
 const FOCUS_SELECTORS = [".button", ".action", ".switch", ".toast a", ".toast__close"] as const;
 const RING_COLOUR: Record<"light" | "dark", string> = { light: "#111827", dark: "#fafafa" };
-/** The surface each ring is measured against: the element's own, or the panel or toast it sits in. */
-const RING_SURFACE: Record<(typeof FOCUS_SELECTORS)[number], [string, string]> = {
-  ".button": [".button", "background"],
-  ".action": [".panel", "background"],
-  ".switch": [".panel", "background"],
-  ".toast a": [".toast", "background"],
-  ".toast__close": [".toast", "background"],
-};
+/**
+ * Page surfaces a ring can sit on: a light host page and a dark one. A ring is
+ * drawn outside its element, so the page behind it decides its contrast. Each
+ * ring also gets a 6px halo of the opposite ink, so one of the two always clears 3:1.
+ */
+const BACKGROUNDS = ["#ffffff", "#0b0c10"] as const;
 
 describe("focus ring coverage", () => {
   test("every rendered interactive element matches a focus-ring selector", () => {
@@ -346,14 +324,24 @@ for (const scheme of ["light", "dark"] as const) {
         expect(colour).toBe(RING_COLOUR[scheme]);
         expect(decl.get("outline-offset")).toBe("2px");
       });
-      test(`${sel} ring is at least ${GRAPHIC_MIN}:1 against its surface`, () => {
-        const css = renderedCss();
-        const ring = resolvedDeclarations(css, scheme, `${sel}:focus-visible`).get("outline-color")
-          ?? resolvedDeclarations(css, scheme, `${sel}:focus-visible`).get("outline")?.split(/\s+/).at(-1) ?? "";
-        const [surfaceSel, surfaceProp] = RING_SURFACE[sel];
-        const surface = resolvedDeclarations(css, scheme, surfaceSel).get(surfaceProp) ?? "";
-        expect(contrastRatio(ring, surface)).toBeGreaterThanOrEqual(GRAPHIC_MIN);
+      test(`${sel} ring or halo is at least ${GRAPHIC_MIN}:1 on each page background`, () => {
+        const decl = resolvedDeclarations(renderedCss(), scheme, `${sel}:focus-visible`);
+        const ring = decl.get("outline-color") ?? decl.get("outline")?.split(/\s+/).at(-1) ?? "";
+        const halo = /0 0 0 6px (#[0-9a-fA-F]{3,6})/.exec(decl.get("box-shadow") ?? "")?.[1];
+        if (!halo) throw new Error(`${sel} has no 6px halo for ${scheme}`);
+        for (const bg of BACKGROUNDS) {
+          expect(Math.max(contrastRatio(ring, bg), contrastRatio(halo, bg))).toBeGreaterThanOrEqual(GRAPHIC_MIN);
+        }
       });
     }
   });
 }
+
+describe("host shadow root", () => {
+  test("the host root is open and reachable from document", () => {
+    openPanel();
+    const host = document.querySelector<HTMLElement>("[data-tinycloud-ui]");
+    expect(host?.shadowRoot).not.toBeNull();
+    expect(host?.shadowRoot?.querySelector("#tinycloud-ui-panel")).not.toBeNull();
+  });
+});

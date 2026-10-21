@@ -165,14 +165,13 @@ describe("effective states", () => {
     busy?: string;
     note?: string;
   }> = [
-    { name: "off", state: { requested: false, effective: "off" }, checked: "false", disabled: false, busy: "sync.state.off" },
-    { name: "on", state: { requested: true, effective: "on" }, checked: "true", disabled: false, busy: "sync.state.on" },
+    { name: "off", state: { requested: false, effective: "off" }, checked: "false", disabled: false },
+    { name: "on", state: { requested: true, effective: "on" }, checked: "true", disabled: false },
     {
       name: "effective on but requested off: switch follows requested",
       state: { requested: false, effective: "on" },
       checked: "false",
       disabled: false,
-      busy: "sync.state.off",
     },
     {
       name: "enabling",

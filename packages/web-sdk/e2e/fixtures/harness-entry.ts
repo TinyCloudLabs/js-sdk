@@ -2,6 +2,8 @@
 // `build:e2e-ui` into e2e/.build/ui.bundle.js and served by the spec.
 // It mounts the real UI module and exposes window.__tc for the spec to drive.
 import { registerUiClient, type UiClientHandle } from "../../src/ui/index";
+import { toastStore } from "../../src/ui/parts/toasts";
+import type { ToastKind } from "../../src/ui/toast-store";
 
 type SyncState = { requested: boolean; effective: string; reason?: string };
 
@@ -66,5 +68,12 @@ w.__tc = {
     });
     w.tc = { ui: handle.api };
     return true;
+  },
+  // One toast of `kind` through the real store the panel renders from.
+  toast(kind: ToastKind) {
+    return toastStore.push({ kind, textCode: "panel.title" });
+  },
+  dismiss(id: string) {
+    toastStore.dismiss(id);
   },
 };

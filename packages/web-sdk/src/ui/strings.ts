@@ -34,8 +34,6 @@ export const STRINGS = {
 
   "sync.label": "Local copy on this device",
   "sync.switch": "Local copy on this device",
-  "sync.state.on": "Local copy: on",
-  "sync.state.off": "Local copy: off",
   "sync.busy.enabling": "Turning on",
   "sync.busy.wiping": "Erasing",
   "sync.pending": "Erase not confirmed",
