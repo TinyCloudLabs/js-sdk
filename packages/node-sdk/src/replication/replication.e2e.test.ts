@@ -1082,8 +1082,12 @@ describe.skipIf(!REAL_NODE_BIN)("node-sdk replication against a real node", () =
     const originalFetch = globalThis.fetch;
     let counting = false;
     let attempts = 0;
+    const countedUrls: string[] = [];
     globalThis.fetch = (async (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
-      if (counting) attempts += 1;
+      if (counting) {
+        attempts += 1;
+        countedUrls.push(`${init?.method ?? "GET"} ${String(input)}`);
+      }
       return originalFetch(input, init);
     }) as typeof fetch;
     try {
@@ -1107,6 +1111,7 @@ describe.skipIf(!REAL_NODE_BIN)("node-sdk replication against a real node", () =
       expect(serialized).not.toContain("sync-log-seed");
       // One row per logical call, carrying its HTTP attempts (a retried call is one row, attempts > 1).
       // Summing attempts still requires every counted HTTP attempt to appear in some row.
+      console.log("TC848_DIAG " + JSON.stringify({ countedUrls, rows: windowRows.map((r) => ({ service: r.service, op: r.op, code: r.code, attempts: r.attempts })) }));
       expect(syncRows.reduce((total, row) => total + row.attempts, 0)).toBe(attempts);
     } finally {
       counting = false;
