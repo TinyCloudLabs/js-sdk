@@ -53,12 +53,15 @@ const fullNode = {
   duckdb: { db: () => ({ execute: refuse("duckdb.execute") }) },
   vault: { unlock: async () => ({ ok: true }), put: refuse("vault.put") },
   account: { spaces: { syncAccessible: refuse("account.spaces.sync") } },
+  // The account is fully granted; only its storage is full.
+  hasRuntimePermissions: () => true,
 };
 
 mock.module("../config/profiles.js", () => ({
   ProfileManager: {
     resolveContext: async () => ({ profile: "full", host: "https://node.example" }),
     getProfile: async () => ({}),
+    getSession: async () => ({ address: "0x1111111111111111111111111111111111111111" }),
   },
 }));
 mock.module("../lib/sdk.js", () => ({
