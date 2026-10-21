@@ -477,6 +477,8 @@ export function describeGrantScope(
   requested: readonly PermissionEntry[],
   requestedExpiry: string | number | undefined,
   applicationsSpace: string,
+  /** Longest lifetime the grant can actually have; the notice states the capped duration. */
+  maxLifetimeMs?: number,
 ): GrantScope {
   const preset = matchAppsAgentRequest(requested, requestedExpiry, applicationsSpace);
   if (preset !== undefined) {
@@ -502,7 +504,8 @@ export function describeGrantScope(
   }
   const entryLifetimes = requested.filter((entry) => entry.expiry !== undefined).map((entry) => lifetimeMs(entry.expiry));
   const durations = [lifetimeMs(requestedExpiry), ...entryLifetimes]
-    .filter((ms): ms is number => ms !== undefined);
+    .filter((ms): ms is number => ms !== undefined)
+    .map((ms) => Math.min(ms, maxLifetimeMs ?? Number.POSITIVE_INFINITY));
   const longest = Math.max(...durations);
   lines.push(
     durations.length === 0 || !Number.isFinite(longest)

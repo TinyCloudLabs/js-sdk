@@ -304,8 +304,9 @@ export async function callbackFlow(
     // is refused. Structurally invalid requests are answered and ignored, so a
     // stray one can't end the login. This is not sender authentication: a local
     // process that learns the path (it is in the printed URL and the browser's
-    // argv) can forge the header and post a well-formed payload, which ends the
-    // login with a proof error at worst; the per-login OpenKey nonce closes that.
+    // argv) can forge the header and post a well-formed payload. This layer only
+    // checks shape; the caller refuses an unproven payload before any grant is
+    // built (verifySignedSession, scoped-login.ts; TC-1422).
     const callbackPath = `/callback/${randomBytes(16).toString("base64url")}`;
     const openKeyOrigin = new URL(options.openkeyHost ?? DEFAULT_OPENKEY_HOST).origin;
     const cors = { "Access-Control-Allow-Origin": openKeyOrigin, "Vary": "Origin" };
