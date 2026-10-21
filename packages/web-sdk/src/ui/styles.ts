@@ -8,7 +8,8 @@ export const HOST_CSS = `
 .layer{--b:calc(env(safe-area-inset-bottom,0px) + var(--tinycloud-ui-offset-bottom,12px));position:fixed;inset:0;pointer-events:none;font:14px/1.4 system-ui,-apple-system,"Segoe UI",sans-serif;color:#111827}
 .button{position:fixed;bottom:var(--b);width:44px;height:44px;padding:0;display:inline-flex;align-items:center;justify-content:center;border:1px solid #d1d5db;border-radius:50%;background:#fff;color:#111827;box-shadow:0 1px 3px rgba(0,0,0,.16);cursor:pointer;pointer-events:auto}
 .button svg{width:20px;height:20px}
-.button:focus-visible,.action:focus-visible,.switch:focus-visible{outline:2px solid #111827;outline-offset:2px}
+.button:focus-visible{outline:2px solid #111827;outline-offset:2px;box-shadow:0 0 0 6px #fafafa,0 1px 3px rgba(0,0,0,.16)}
+.action:focus-visible,.switch:focus-visible{outline:2px solid #111827;outline-offset:2px;box-shadow:0 0 0 6px #fafafa}
 .dot{position:absolute;top:6px;right:6px;width:8px;height:8px;border-radius:50%;background:#4b5563;border:2px solid #fff}
 .panel{position:fixed;bottom:calc(var(--b) + 52px);box-sizing:border-box;width:min(360px,calc(100vw - 24px));max-width:min(360px,calc(100vw - 24px));max-height:calc(100dvh - 96px);overflow:auto;padding:12px;border:1px solid #d1d5db;border-radius:12px;background:#fff;box-shadow:0 8px 24px rgba(0,0,0,.18);pointer-events:auto}
 .layer[data-position="bottom-right"] .button,.layer[data-position="bottom-right"] .panel{right:var(--tinycloud-ui-offset-inline,12px)}
@@ -42,7 +43,8 @@ export const HOST_CSS = `
 .layer{color:#fafafa}
 .button{border-color:#71717a;background:#151517;color:#fafafa}
 .dot{background:#a1a1aa;border-color:#151517}
-.button:focus-visible,.action:focus-visible,.switch:focus-visible{outline-color:#fafafa}
+.button:focus-visible{outline-color:#fafafa;box-shadow:0 0 0 6px #111827,0 1px 3px rgba(0,0,0,.16)}
+.action:focus-visible,.switch:focus-visible{outline-color:#fafafa;box-shadow:0 0 0 6px #111827}
 .panel{border-color:#69696b;background:#151517}
 .status,.busy,.note{color:#a1a1aa}
 .error{color:#fafafa}

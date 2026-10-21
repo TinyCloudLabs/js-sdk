@@ -66,6 +66,29 @@ for (const scheme of ["light", "dark"] as const) {
   });
 }
 
+// The launcher's focus ring must clear 3:1 on a light and a dark page. Its
+// outline sits outside the element, so the 6px halo of the opposite ink covers
+// whichever page is behind it.
+for (const scheme of ["light", "dark"] as const) {
+  test(`${scheme}: launcher focus ring and halo are each at least 3:1 on light and dark pages`, async ({ page }) => {
+    await mountHarness(page, scheme);
+    const launcher = page.getByRole("button", { name: "TinyCloud settings" });
+    await launcher.focus();
+    await page.keyboard.press("Shift+Tab");
+    await page.keyboard.press("Tab");
+    const ring = await launcher.evaluate((el) => {
+      const s = getComputedStyle(el);
+      return { focusVisible: el.matches(":focus-visible"), outline: s.outlineColor, shadow: s.boxShadow };
+    });
+    expect(ring.focusVisible).toBe(true);
+    const halo = /(rgba?\([^)]*\)) 0px 0px 0px 6px/.exec(ring.shadow)?.[1];
+    expect(halo, ring.shadow).toBeTruthy();
+    for (const page_bg of ["rgb(255, 255, 255)", "rgb(11, 12, 16)"]) {
+      expect(Math.max(contrast(ring.outline, page_bg), contrast(halo!, page_bg))).toBeGreaterThanOrEqual(3);
+    }
+  });
+}
+
 // Each toast's left stripe must be its kind colour in the rendered page, and at
 // least 3:1 against the toast surface. Dark warning is the only dark override.
 const KINDS = ["info", "success", "warning", "error"] as const;

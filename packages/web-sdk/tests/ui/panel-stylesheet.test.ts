@@ -327,14 +327,12 @@ for (const scheme of ["light", "dark"] as const) {
 /** Interactive controls the panel renders. Each needs its own focus ring rule. */
 const FOCUS_SELECTORS = [".button", ".action", ".switch", ".toast a", ".toast__close"] as const;
 const RING_COLOUR: Record<"light" | "dark", string> = { light: "#111827", dark: "#fafafa" };
-/** The surface each ring is measured against: the element's own, or the panel or toast it sits in. */
-const RING_SURFACE: Record<(typeof FOCUS_SELECTORS)[number], [string, string]> = {
-  ".button": [".button", "background"],
-  ".action": [".panel", "background"],
-  ".switch": [".panel", "background"],
-  ".toast a": [".toast", "background"],
-  ".toast__close": [".toast", "background"],
-};
+/**
+ * Page surfaces a ring can sit on: a light host page and a dark one. A ring is
+ * drawn outside its element, so the page behind it decides its contrast. Each
+ * ring also gets a 6px halo of the opposite ink, so one of the two always clears 3:1.
+ */
+const BACKGROUNDS = ["#ffffff", "#0b0c10"] as const;
 
 describe("focus ring coverage", () => {
   test("every rendered interactive element matches a focus-ring selector", () => {
@@ -359,13 +357,14 @@ for (const scheme of ["light", "dark"] as const) {
         expect(colour).toBe(RING_COLOUR[scheme]);
         expect(decl.get("outline-offset")).toBe("2px");
       });
-      test(`${sel} ring is at least ${GRAPHIC_MIN}:1 against its surface`, () => {
-        const css = renderedCss();
-        const ring = resolvedDeclarations(css, scheme, `${sel}:focus-visible`).get("outline-color")
-          ?? resolvedDeclarations(css, scheme, `${sel}:focus-visible`).get("outline")?.split(/\s+/).at(-1) ?? "";
-        const [surfaceSel, surfaceProp] = RING_SURFACE[sel];
-        const surface = resolvedDeclarations(css, scheme, surfaceSel).get(surfaceProp) ?? "";
-        expect(contrastRatio(ring, surface)).toBeGreaterThanOrEqual(GRAPHIC_MIN);
+      test(`${sel} ring or halo is at least ${GRAPHIC_MIN}:1 on each page background`, () => {
+        const decl = resolvedDeclarations(renderedCss(), scheme, `${sel}:focus-visible`);
+        const ring = decl.get("outline-color") ?? decl.get("outline")?.split(/\s+/).at(-1) ?? "";
+        const halo = /0 0 0 6px (#[0-9a-fA-F]{3,6})/.exec(decl.get("box-shadow") ?? "")?.[1];
+        if (!halo) throw new Error(`${sel} has no 6px halo for ${scheme}`);
+        for (const bg of BACKGROUNDS) {
+          expect(Math.max(contrastRatio(ring, bg), contrastRatio(halo, bg))).toBeGreaterThanOrEqual(GRAPHIC_MIN);
+        }
       });
     }
   });
