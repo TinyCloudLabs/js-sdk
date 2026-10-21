@@ -44,6 +44,13 @@ describe("reduceStorage", () => {
     expect(view).toEqual({ kind: "unlimited", usedBytes: 7 });
   });
 
+  test("account totals decide unlimited even when the space has a limit", () => {
+    const view = reduceStorage(
+      ok({ usedBytes: 1, limitBytes: 10, account: { usedBytes: 9, limitBytes: null }, state: "ok" }),
+    );
+    expect(view).toEqual({ kind: "unlimited", usedBytes: 9 });
+  });
+
   test("permission denial asks for permission rather than showing a number", () => {
     expect(reduceStorage(fail("PERMISSION_DENIED"))).toEqual({ kind: "needs_permission" });
   });
@@ -64,6 +71,8 @@ describe("reduceStorage", () => {
       { usedBytes: 3, limitBytes: -10, state: "ok" },
       { usedBytes: 3, limitBytes: 10 },
       { usedBytes: 3, limitBytes: 10, state: "bogus" },
+      { usedBytes: 3, limitBytes: 10, state: "ok", account: { usedBytes: -1, limitBytes: 100 } },
+      { usedBytes: 3, limitBytes: 10, state: "ok", account: null },
     ];
     for (const value of malformed) {
       expect(reduceStorage(ok(value))).toEqual({ kind: "unavailable" });
@@ -102,5 +111,18 @@ describe("afterAuthority", () => {
 
   test("refusal settles on declined", () => {
     expect(afterAuthority({ approved: false })).toEqual({ kind: "declined" });
+  });
+
+  test("an unsupported refusal is unavailable, not a user decline", () => {
+    expect(afterAuthority({ approved: false, code: "unsupported" })).toEqual({
+      kind: "unavailable",
+    });
+  });
+
+  test("a failed authority keeps its code so the panel can offer Retry", () => {
+    expect(afterAuthority({ approved: false, code: "failed" })).toEqual({
+      kind: "error",
+      code: "failed",
+    });
   });
 });

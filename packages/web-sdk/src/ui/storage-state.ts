@@ -1,4 +1,4 @@
-import type { StorageStatus, StorageUsageState } from "@tinycloud/sdk-core";
+import type { StorageStatus, StorageUsage, StorageUsageState } from "@tinycloud/sdk-core";
 
 /**
  * Pure view-state reducer for the storage section. No DOM, no strings.
@@ -30,8 +30,6 @@ export type StorageViewState =
   | { readonly kind: "unavailable" }
   | { readonly kind: "error"; readonly code: string };
 
-const USAGE_STATES: readonly StorageUsageState[] = ["ok", "nearly_full", "full"];
-
 const UNAVAILABLE_CODES: Readonly<Record<string, true>> = {
   unsupported: true,
   STORAGE_STATUS_UNAVAILABLE: true,
@@ -41,13 +39,22 @@ function isByteCount(n: unknown): n is number {
   return typeof n === "number" && Number.isSafeInteger(n) && n >= 0;
 }
 
+function isUsage(value: unknown): value is StorageUsage {
+  if (typeof value !== "object" || value === null) return false;
+  if (!("usedBytes" in value) || !("limitBytes" in value)) return false;
+  return isByteCount(value.usedBytes) && (value.limitBytes === null || isByteCount(value.limitBytes));
+}
+
+function isUsageState(value: unknown): value is StorageUsageState {
+  return value === "ok" || value === "nearly_full" || value === "full";
+}
+
 /** Narrow an untrusted body to a usable status; anything else is unavailable. */
 export function isStorageStatus(value: unknown): value is StorageStatus {
-  if (typeof value !== "object" || value === null) return false;
-  const v = value as Record<string, unknown>;
-  if (!isByteCount(v.usedBytes)) return false;
-  if (v.limitBytes !== null && !isByteCount(v.limitBytes)) return false;
-  return typeof v.state === "string" && USAGE_STATES.includes(v.state as StorageUsageState);
+  if (!isUsage(value)) return false;
+  if (!("state" in value) || !isUsageState(value.state)) return false;
+  // `account` is the budget the owner is held to: a malformed one is as unusable as a malformed top level.
+  return !("account" in value) || value.account === undefined || isUsage(value.account);
 }
 
 /** Reduce a read to the view. `loading` covers the in-flight read. */
@@ -74,9 +81,17 @@ export function reduceStorage(read: StorageRead): StorageViewState {
 }
 
 /**
- * Outcome of the needs-permission action. Approval refetches (back to loading);
- * refusal settles on `declined` with no automatic retry.
+ * Outcome of the needs-permission action. Approval refetches (back to loading).
+ * A refusal without a code, or with `declined`, settles on `declined` with no
+ * automatic retry. `unsupported` is a node/authority limit, not a user choice,
+ * so it is unavailable. Any other code keeps that code and offers Retry.
  */
-export function afterAuthority(outcome: { readonly approved: boolean }): StorageViewState {
-  return outcome.approved ? { kind: "loading" } : { kind: "declined" };
+export function afterAuthority(outcome: {
+  readonly approved: boolean;
+  readonly code?: string;
+}): StorageViewState {
+  if (outcome.approved) return { kind: "loading" };
+  if (outcome.code === undefined || outcome.code === "declined") return { kind: "declined" };
+  if (outcome.code === "unsupported") return { kind: "unavailable" };
+  return { kind: "error", code: outcome.code };
 }
