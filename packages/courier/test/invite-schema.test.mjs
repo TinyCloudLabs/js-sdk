@@ -61,7 +61,7 @@ const blob = () => ({
   helloKey: `${FOLDER}in/hello.json`,
   outPrefix: `${FOLDER}out/`,
   oneTimeKey: { kty: 'OKP', crv: 'Ed25519', x: 'A'.repeat(43), d: 'B'.repeat(43) },
-  permission: 'PERMISSION',
+  permissions: { put: 'PUT-DELEGATION', read: 'READ-DELEGATION', hooks: 'HOOKS-DELEGATION' },
   artifactA: artifactA(),
   expiresAt: LATER,
 });
@@ -96,8 +96,18 @@ const BLOB_REJECTS = [
   ['oneTimeKey extra field', (d) => { d.oneTimeKey.extra = 'x'; return d; }, /oneTimeKey has unknown key "extra"/],
   ['oneTimeKey curve P-256', (d) => { d.oneTimeKey.crv = 'P-256'; return d; }, /Ed25519 OKP key/],
   ['oneTimeKey short d', (d) => { d.oneTimeKey.d = 'B'.repeat(42); return d; }, /oneTimeKey\.d has an invalid format/],
-  ['permission empty', (d) => { d.permission = ''; return d; }, /permission must be a non-empty string/],
-  ['permission over 24 KiB', (d) => { d.permission = 'P'.repeat(24 * 1024 + 1); return d; }, /permission is over/],
+  ['permissions missing put', (d) => { delete d.permissions.put; return d; }, /permissions is missing "put"/],
+  ['permissions missing read', (d) => { delete d.permissions.read; return d; }, /permissions is missing "read"/],
+  ['permissions missing hooks', (d) => { delete d.permissions.hooks; return d; }, /permissions is missing "hooks"/],
+  ['permissions extra key', (d) => { d.permissions.extra = 'X'; return d; }, /permissions has unknown key "extra"/],
+  ['permissions.put not a string', (d) => { d.permissions.put = 42; return d; }, /permissions\.put must be a non-empty string/],
+  ['permissions.read not a string', (d) => { d.permissions.read = ['x']; return d; }, /permissions\.read must be a non-empty string/],
+  ['permissions.hooks not a string', (d) => { d.permissions.hooks = null; return d; }, /permissions\.hooks must be a non-empty string/],
+  ['permissions.put over 16 KiB', (d) => { d.permissions.put = 'P'.repeat(16 * 1024 + 1); return d; }, /permissions\.put is over 16384 bytes/],
+  ['permissions.read over 16 KiB', (d) => { d.permissions.read = 'R'.repeat(16 * 1024 + 1); return d; }, /permissions\.read is over 16384 bytes/],
+  ['permissions.hooks over 16 KiB', (d) => { d.permissions.hooks = 'H'.repeat(16 * 1024 + 1); return d; }, /permissions\.hooks is over 16384 bytes/],
+  ['permissions is the old string shape', (d) => { d.permissions = 'PERMISSION'; return d; }, /permissions must be an object/],
+  ['old permission key still present', (d) => { d.permission = 'PERMISSION'; return d; }, /invite has unknown key "permission"/],
   ['artifactA is step B', (d) => { d.artifactA.step = 'B'; return d; }, /artifactA must be a courier-pair v0 step A/],
   ['artifactA carries a delegation', (d) => { d.artifactA.delegation = 'X'; return d; }, /artifactA has unknown key "delegation"/],
   ['artifactA owner not a DID', (d) => { d.artifactA.from.owner = 'sam@example'; return d; }, /artifactA: Artifact owner must be a did:pkh/],
@@ -116,6 +126,7 @@ test('invite blob: golden object parses and keeps the exact fields', () => {
   assert.equal(parsed.helloKey, `${FOLDER}in/hello.json`);
   assert.equal(parsed.outPrefix, `${FOLDER}out/`);
   assert.deepEqual(parsed.oneTimeKey, { kty: 'OKP', crv: 'Ed25519', x: 'A'.repeat(43), d: 'B'.repeat(43) });
+  assert.deepEqual(parsed.permissions, { put: 'PUT-DELEGATION', read: 'READ-DELEGATION', hooks: 'HOOKS-DELEGATION' });
   assert.equal(parsed.artifactA.step, 'A');
   assert.equal(inviteFolder(INVITE_ID), FOLDER);
 });
@@ -137,8 +148,8 @@ test('invite blob rejects non-JSON, arrays, and duplicate keys', () => {
 
 test('invite blob: duplicate key check ignores escapes-looking text in string values', () => {
   const d = blob();
-  d.permission = '{"a":1,"a":2}';
-  assert.equal(parseInviteBlob(JSON.stringify(d), NOW).permission, '{"a":1,"a":2}');
+  d.permissions.put = '{"a":1,"a":2}';
+  assert.equal(parseInviteBlob(JSON.stringify(d), NOW).permissions.put, '{"a":1,"a":2}');
 });
 
 const HELLO_REJECTS = [
