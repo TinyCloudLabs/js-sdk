@@ -177,15 +177,14 @@ describe.skipIf(!NODE_BIN)("tinycloud knowledge against a real node", () => {
     expect(all.error()).toMatchObject({ code: "PERMISSION_DENIED", message: expect.stringContaining("tinycloud.kv:applications::list") });
     expect(all.error().hint).toContain("--cap tinycloud.kv:applications::get,list");
     expect(all.error().hint).not.toMatch(/<[a-z_.]+>/);
+    expect(all.error().hint).not.toContain("--write");
 
     const other = await cli("one-app", ["knowledge", "read", HEALTH]);
     expect(other.exitCode).toBe(5);
     const hint: string = other.error().hint;
     expect(hint).toContain(`--preset apps-agent --app ${HEALTH} --emit req.json`);
     expect(hint).toContain(`--cap tinycloud.kv:applications:${HEALTH}/knowledge/:get,list`);
-    // The write request is offered for changing the app's data, after the read-only lines.
-    expect(hint).toContain("To change the app's data, ask for write access:");
-    expect(hint).toContain(`--preset apps-agent --write --app ${HEALTH} --emit req.json`);
+    expect(hint).toContain(`--write --app ${HEALTH}`);
     expect(hint).not.toContain("<app_id>");
   }, 120_000);
 
