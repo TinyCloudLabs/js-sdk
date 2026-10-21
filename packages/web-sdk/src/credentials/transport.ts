@@ -1,34 +1,10 @@
-import { CredentialError } from "./errors";
-import { canonicalDigest, decodeBase64Url, encodeBase64Url, sha256Base64Url } from "./digest";
-import { credentialEndpointPath } from "./descriptor";
-import { holderBindingCanonicalBytes, validateCredentialHolderBinding } from "./binding";
-import type { CredentialFlowDescriptor, CredentialHolderBinding, CredentialIssuerMetadata, CredentialRequirement, IssuedCredentialEnvelope } from "./types";
-
-export type PrimitiveStepResult = Readonly<Record<string, string | boolean>>;
-
-export interface CredentialRequestState {
-  readonly type: "OpenCredentialsAcquisitionState";
-  readonly version: 1;
-  readonly requestId: string;
-  readonly transitionId: string;
-  readonly state: "pending" | "ready_to_issue" | "issued" | "complete" | "expired" | "canceled" | "issuer_unready";
-  readonly nextStep?: { readonly id: string; readonly type: "collect_input" | "mailbox_otp" | "holder_signature"; readonly version: 1; readonly constraints: Readonly<Record<string, unknown>> };
-  readonly retryAfterMs?: number;
-  readonly correlationId: string;
-}
-
-export interface CredentialAcquisitionTransport {
-  create(input: { readonly descriptor: CredentialFlowDescriptor; readonly descriptorDigest: string; readonly requirement: CredentialRequirement; readonly requirementDigest: string; readonly holderDid: string; readonly openerOrigin: string; readonly completionVerifierChallenge: string; readonly inputs?: Readonly<Record<string, string>>; readonly signal?: AbortSignal }): Promise<{ readonly requestId: string; readonly locator: string; readonly expiresAt: string; readonly correlationId: string }>;
-  state(requestId: string, verifier: string, signal?: AbortSignal): Promise<CredentialRequestState>;
-  beginStep(requestId: string, verifier: string, stepId: "collect_input" | "mailbox_otp", signal?: AbortSignal): Promise<void>;
-  submitStep(requestId: string, verifier: string, stepId: string, proof: PrimitiveStepResult, signal?: AbortSignal): Promise<void>;
-  holderBinding(requestId: string, verifier: string, signal?: AbortSignal): Promise<CredentialHolderBinding>;
-  submitHolderSignature(requestId: string, verifier: string, signature: string, signal?: AbortSignal): Promise<void>;
-  issue(requestId: string, verifier: string, signal?: AbortSignal): Promise<void>;
-  result(requestId: string, verifier: string, signal?: AbortSignal): Promise<IssuedCredentialEnvelope>;
-  issuerMetadata(signal?: AbortSignal): Promise<CredentialIssuerMetadata>;
-  checkStatus(status: IssuedCredentialEnvelope["status"], signal?: AbortSignal): Promise<boolean>;
-}
+import {
+  CredentialError, canonicalDigest, credentialEndpointPath, decodeBase64Url, encodeBase64Url,
+  holderBindingCanonicalBytes, sha256Base64Url, validateCredentialHolderBinding,
+  type CredentialFlowDescriptor, type CredentialHolderBinding, type CredentialIssuerMetadata,
+  type CredentialRequirement, type IssuedCredentialEnvelope,
+} from "@tinycloud/sdk-core";
+import type { CredentialAcquisitionTransport, CredentialRequestState, PrimitiveStepResult } from "./types";
 
 function object(value: unknown, label: string): Record<string, unknown> { if (typeof value !== "object" || value === null || Array.isArray(value)) throw new CredentialError("VERIFICATION_FAILED", `${label} is invalid`); return value as Record<string, unknown>; }
 function opaque(value: unknown, label: string): string { if (typeof value !== "string" || !/^[A-Za-z0-9_-]{16,128}$/.test(value)) throw new CredentialError("REQUEST_SUBSTITUTED", `${label} is invalid`); return value; }

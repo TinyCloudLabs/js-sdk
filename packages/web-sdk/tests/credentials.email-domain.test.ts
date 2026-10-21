@@ -1,7 +1,6 @@
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { JSDOM } from "jsdom";
 import {
-  OpenCredentialsHttpTransport,
   canonicalDigest,
   canonicalEmailDomain,
   canonicalMailbox,
@@ -117,6 +116,7 @@ test("a caller cannot substitute a different mailbox for an exact-email requirem
 });
 
 test("an issuer rate limit is a recoverable stop, not a verification failure", async () => {
+  const { OpenCredentialsHttpTransport } = await import("../src/credentials/transport");
   const transport = new OpenCredentialsHttpTransport(domainDescriptor, async (url) => String(url).endsWith("/challenge")
     ? new Response(JSON.stringify({ type: "tinycloud.credentials/error/v1", code: "RATE_LIMITED", recoverable: true, state: "rate_limited", correlationId: "C".repeat(16) }), { status: 429 })
     : new Response("{}", { status: 500 }));

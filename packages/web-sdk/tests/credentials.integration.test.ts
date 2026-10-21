@@ -4,7 +4,7 @@ import { createHermeticEncryptedNode, type HermeticEncryptedNode } from "../../n
 import { createEmailDomainCredentialRequirement, createOpenKeyCallbackSigningStrategy, type CredentialFlowDescriptor, type CredentialRequirement } from "@tinycloud/sdk-core";
 import { BrowserCredentialInteraction, BrowserCredentialRedirectStore, InlineCredentialInteraction } from "../src/credentials/browser";
 import { CredentialsService } from "../src/credentials/service";
-import { OpenCredentialsHttpTransport } from "@tinycloud/sdk-core";
+import { OpenCredentialsHttpTransport } from "../src/credentials/transport";
 
 const jsRoot = resolve(import.meta.dir, "../../..");
 const branch = basename(jsRoot);

@@ -1,7 +1,8 @@
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { JSDOM } from "jsdom";
-import { CredentialError, OpenCredentialsHttpTransport, canonicalDigest, createHolderBinding, type CredentialFlowDescriptor, type CredentialRequirement } from "@tinycloud/sdk-core";
+import { CredentialError, canonicalDigest, createHolderBinding, type CredentialFlowDescriptor, type CredentialRequirement } from "@tinycloud/sdk-core";
 import { interpretCredentialFlow } from "../src/credentials/interpreter";
+import { OpenCredentialsHttpTransport } from "../src/credentials/transport";
 import type { CredentialAcquisitionTransport, CredentialRequestState, InlineCredentialProofRequest } from "../src/credentials/types";
 
 const HOLDER = "did:key:z6MkActive";

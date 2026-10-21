@@ -1,7 +1,7 @@
 import { expect, test } from "@playwright/test";
 import { CredentialError } from "../../packages/sdk-core/src/credentials/errors";
 import { BrowserCredentialInteraction } from "../../packages/web-sdk/src/credentials/browser";
-import { OpenCredentialsHttpTransport } from "../../packages/sdk-core/src/credentials/transport";
+import { OpenCredentialsHttpTransport } from "../../packages/web-sdk/src/credentials/transport";
 import type { CredentialFlowDescriptor } from "../../packages/sdk-core/src/credentials/types";
 
 const ORIGIN = "https://issuer.test";
