@@ -79,6 +79,7 @@ jobs:
           bun test packages/cli/src/auth/browser-auth.test.ts
           bun test packages/cli/src/commands/auth.portable-proof.test.ts
           bun test packages/cli/src/commands/auth-logout-gate.integration.test.ts
+          bun test packages/cli/src/commands/auth-logout-history-guard.integration.test.ts
           bun test packages/cli/src/commands/auth-logout-account.integration.test.ts
           bun test packages/cli/src/commands/auth-logout-legacy.integration.test.ts
           bun test packages/cli/src/commands/auth-logout-marker.integration.test.ts

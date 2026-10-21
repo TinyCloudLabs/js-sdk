@@ -17,6 +17,7 @@ import { isReplicaError, ReplicaErrorCode } from "@tinycloud/replica";
 import { REPLICA_GATE_FILE } from "@tinycloud/sdk-services/kv/replication/contractConstants";
 import { ProfileManager } from "../config/profiles.js";
 import { logoutInventorySnapshot, planLogoutRevocations, type LogoutRevocationPlan } from "../lib/logout-revocation.js";
+import { assertShareHistoryAllowsKeyDrop } from "../share/history-guard.js";
 import {
   assertPendingLogoutOwner, assertPendingRemoteLogoutSession, clearProfileCredentials, eraseApprovedLegacyReplicas,
   finishLegacyReplicaCleanup, gateHeldByAnotherAccount, profilePurge, recoverPendingLogout, refuseRestoredGate,
@@ -760,6 +761,7 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
     .option("--revoke", "Revoke owner-controlled grants and the session CID on the node before local logout")
     .option("--discard-local-changes", "Approve deletion of the exact local replica paths and identities listed before logout; with --revoke, deletion waits for every node receipt")
     .option("--approve-inventory <token>", "After a refused pending remote logout, confirm the exact changed paths printed by the previous command; requires --discard-local-changes")
+    .option("--force", "Log out even when recorded shares could not be checked or hold unexpired shares that need the current session key")
     .action(async (options, cmd) => {
       try {
         const globalOpts = cmd.optsWithGlobals();
@@ -780,6 +782,7 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
             "--approve-inventory only applies to a separate plain logout after a refused pending remote revocation.",
             ExitCode.USAGE_ERROR);
         }
+        if (!options.revoke && !options.force) await assertShareHistoryAllowsKeyDrop(ctx.profile, "logout");
         const online = options.revoke ? await revokeForLogout(ctx, options.discardLocalChanges === true) : undefined;
         const replicasRemoved = await finishProfileLogout(ctx, {
           keepReplicas: options.keepReplicas,
@@ -812,6 +815,7 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
     .description("Rotate the active profile session key")
     .option("--paste", "Use manual paste mode instead of browser callback")
     .option("--no-popup", "Print the OpenKey URL without opening a browser")
+    .option("--force", "Rotate even when recorded shares could not be checked or hold unexpired shares that need the current session key")
     .action(async (options, cmd) => {
       try {
         const globalOpts = cmd.optsWithGlobals();
@@ -819,6 +823,7 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
         await rotateAuthKey(ctx.profile, ctx.host, {
           paste: options.paste,
           noPopup: options.popup === false,
+          force: options.force === true,
         });
       } catch (error) {
         return handleError(error);
@@ -2194,7 +2199,7 @@ export function portableFromOpenKeyDelegation(
 async function rotateAuthKey(
   profileName: string,
   host: string,
-  options: { paste?: boolean; noPopup?: boolean } = {},
+  options: { paste?: boolean; noPopup?: boolean; force?: boolean } = {},
 ): Promise<void> {
   await recoverPendingLogout(profileName);
   const profile = await ProfileManager.getProfile(profileName);
@@ -2233,6 +2238,7 @@ async function rotateAuthKey(
       ExitCode.AUTH_REQUIRED);
   }
 
+  if (!options.force) await assertShareHistoryAllowsKeyDrop(profileName, "rotate");
   const { jwk, did } = await withSpinner("Generating session key...", async () => {
     return generateKey();
   });

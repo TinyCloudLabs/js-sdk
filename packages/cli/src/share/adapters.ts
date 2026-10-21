@@ -3,8 +3,8 @@ import { kvArtifactStore } from "./artifact-store.js";
 import { artifactSpaceNotReady, failIfSpaceNotReady } from "./space-not-ready.js";
 import { ShareHistoryReadError, ShareHistoryRetryError, ShareHistoryUnreadableError, SharePublishAuthorityError } from "./errors.js";
 import { storageRejection } from "../output/storage.js";
-import { readFile } from "node:fs/promises";
-import { join } from "node:path";
+import { link, open, readFile, stat, unlink } from "node:fs/promises";
+import { dirname, join } from "node:path";
 import { createHash } from "node:crypto";
 import { ProfileManager } from "../config/profiles.js";
 import { ExitCode, PROFILE_COMMIT_LOCK_TIMEOUT_MS } from "../config/constants.js";
@@ -195,7 +195,27 @@ export function createEncryptedSessionHistory(): SenderShareRecordStorage {
   };
 }
 
-export function createEncryptedProfileHistory(profileName: () => Promise<string>, sessionSigner?: (bytes: Uint8Array, profile: string) => Promise<Uint8Array>): SenderShareRecordStorage {
+const SHARE_HISTORY_FILE = "share-history-v2.json";
+const SHARE_HISTORY_LEGACY_FILE = "share-history-v1.bin";
+
+/** Signs the bytes that seed a profile's sender-history key. Shared by the publish wiring and the rotation guard. */
+export async function signShareHistoryBytes(bytes: Uint8Array, profile: string): Promise<Uint8Array> {
+  // Authentication or delegation replay can use the network. The history
+  // adapter prepares this signature before acquiring the profile lock.
+  const context = await ProfileManager.resolveContext({ profile });
+  if (context.profile !== profile) throw new ShareHistoryRetryError(profile);
+  const { ensureAuthenticated } = await import("../lib/sdk.js");
+  const signer = await ensureAuthenticated(context);
+  return signer.signSessionBytes(bytes);
+}
+
+/** Profile sender history, plus the explicit recovery of an unreadable file. */
+export type ProfileShareHistory = SenderShareRecordStorage & {
+  /** Moves an unreadable history file aside under a new name. Never deletes or overwrites. */
+  quarantineUnreadable(): Promise<string | null>;
+};
+
+export function createEncryptedProfileHistory(profileName: () => Promise<string>, sessionSigner?: (bytes: Uint8Array, profile: string) => Promise<Uint8Array>): ProfileShareHistory {
   const HISTORY_VERSION = 2;
   const identityChanged = new Error("share history profile or key changed");
   const saltChanged = new Error("share history salt changed");
@@ -203,8 +223,8 @@ export function createEncryptedProfileHistory(profileName: () => Promise<string>
   const observedProfiles = new Set<string>();
   let preparedKeys: { readonly profile: string; readonly identity: string; readonly material: CryptoKey; readonly legacyKey: CryptoKey } | undefined;
   let preparedKey: { readonly profile: string; readonly identity: string; readonly salt: string; readonly key: CryptoKey } | undefined;
-  const path = async (profile: string): Promise<string> => join(await ProfileManager.getCacheDir(profile), "share-history-v2.json");
-  const legacyPath = async (profile: string): Promise<string> => join(await ProfileManager.getCacheDir(profile), "share-history-v1.bin");
+  const path = async (profile: string): Promise<string> => join(await ProfileManager.getCacheDir(profile), SHARE_HISTORY_FILE);
+  const legacyPath = async (profile: string): Promise<string> => join(await ProfileManager.getCacheDir(profile), SHARE_HISTORY_LEGACY_FILE);
   const b64 = (value: Uint8Array): string => Buffer.from(value).toString("base64url");
   const unb64 = (value: unknown): Uint8Array => {
     if (typeof value !== "string" || !/^[A-Za-z0-9_-]+$/.test(value)) throw new ShareHistoryUnreadableError();
@@ -353,6 +373,57 @@ export function createEncryptedProfileHistory(profileName: () => Promise<string>
     }
     throw new ShareHistoryRetryError(profile);
   });
+  // Runs without the profile lock: deriving the signer can replay delegations over the network.
+  const firstPresentHistoryFile = async (profile: string): Promise<{ readonly file: string; readonly bytes: Buffer } | undefined> => {
+    for (const file of [await path(profile), await legacyPath(profile)]) {
+      const bytes = await readIfPresent(file);
+      if (bytes !== undefined) return { file, bytes };
+    }
+    return undefined;
+  };
+  const readableWithCurrentKey = async (profile: string): Promise<boolean> => {
+    const snapshot = await identity(profile);
+    const keys = await prepareKeys(profile, snapshot);
+    try {
+      const salt = await preparedSalt(profile);
+      const key = await crypto.subtle.deriveKey(
+        { name: "PBKDF2", salt, iterations: 100_000, hash: "SHA-256" },
+        keys.material, { name: "AES-GCM", length: 256 }, false, ["encrypt", "decrypt"],
+      );
+      await read(profile, { salt, key, legacyKey: keys.legacyKey });
+      return true;
+    } catch (error) {
+      if (error instanceof ShareHistoryUnreadableError) return false;
+      throw error;
+    }
+  };
+  const quarantineUnreadable = (): Promise<string | null> => serial(async () => {
+    const profile = await profileName();
+    const found = await firstPresentHistoryFile(profile);
+    if (found === undefined) return null;
+    let readable: boolean;
+    try {
+      readable = await readableWithCurrentKey(profile);
+    } catch (error) {
+      if (error === identityChanged || error === saltChanged) throw new ShareHistoryRetryError(profile);
+      throw error;
+    }
+    if (readable) return null;
+    return ProfileManager.withLock(profile, async () => {
+      // Confirm under the lock that the bytes probed above are still the bytes on disk.
+      const current = await readIfPresent(found.file);
+      if (current === undefined) return null;
+      if (!current.equals(found.bytes)) throw new ShareHistoryRetryError(profile);
+      const target = `${found.file}.unreadable-${new Date().toISOString().replace(/[:.]/g, "-")}`;
+      // link never replaces an existing target, so a name collision fails instead of clobbering.
+      await link(found.file, target);
+      await unlink(found.file);
+      const directory = await open(dirname(found.file), "r");
+      try { await directory.sync(); } finally { await directory.close(); }
+      return target;
+    });
+  });
+
   return {
     async put(record) { return locked(async (profile, ready) => { const values = await read(profile, ready); const index = values.findIndex((value) => value.shareId === record.shareId); if (index >= 0) values[index] = record; else values.push(record); await write(profile, values, ready); }, true); },
     async update(shareId, change) {
@@ -369,7 +440,27 @@ export function createEncryptedProfileHistory(profileName: () => Promise<string>
     async list() { return locked((profile, ready) => read(profile, ready)); },
     async get(shareId) { return locked(async (profile, ready) => (await read(profile, ready)).find((record) => record.shareId === shareId)); },
     async delete(shareId) { return locked(async (profile, ready) => { await write(profile, (await read(profile, ready)).filter((record) => record.shareId !== shareId), ready); }, true); },
+    quarantineUnreadable,
   };
+}
+
+/** Whether either sender-history file exists for the profile. */
+export async function profileHistoryFileExists(profileName: string): Promise<boolean> {
+  const directory = await ProfileManager.getCacheDir(profileName);
+  for (const file of [join(directory, SHARE_HISTORY_FILE), join(directory, SHARE_HISTORY_LEGACY_FILE)]) {
+    try {
+      await stat(file);
+      return true;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw new ShareHistoryReadError();
+    }
+  }
+  return false;
+}
+
+/** Explicit recovery only: moves an unreadable profile history file aside. Returns the new path, or null when nothing was moved. */
+export function quarantineUnreadableProfileHistory(profileName: string): Promise<string | null> {
+  return createEncryptedProfileHistory(async () => profileName, signShareHistoryBytes).quarantineUnreadable();
 }
 
 /** Default noninteractive authority seams.  They return typed authorization
@@ -931,15 +1022,7 @@ export function createShareAuthorityAdapters(input: {
   };
   return {
     targetAdapter,
-    records: input.profileName === undefined ? createEncryptedSessionHistory() : createEncryptedProfileHistory(profileName, async (bytes, profile) => {
-      // Authentication or delegation replay can use the network. The history
-      // adapter prepares this signature before acquiring the profile lock.
-      const context = await ProfileManager.resolveContext({ profile });
-      if (context.profile !== profile) throw new ShareHistoryRetryError(profile);
-      const { ensureAuthenticated } = await import("../lib/sdk.js");
-      const signer = await ensureAuthenticated(context);
-      return signer.signSessionBytes(bytes);
-    }),
+    records: input.profileName === undefined ? createEncryptedSessionHistory() : createEncryptedProfileHistory(profileName, signShareHistoryBytes),
     delivery,
     revocation,
     assertDomainDelivery,

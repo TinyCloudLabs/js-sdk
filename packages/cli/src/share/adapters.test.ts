@@ -276,7 +276,8 @@ mock.module("../lib/sdk.js", () => ({
   },
 }));
 
-const { createEncryptedProfileHistory, createShareAuthorityAdapters } = await import("./adapters.js");
+const { createEncryptedProfileHistory, createShareAuthorityAdapters, profileHistoryFileExists, quarantineUnreadableProfileHistory, signShareHistoryBytes } = await import("./adapters.js");
+const { assertShareHistoryAllowsKeyDrop, checkShareHistoryForKeyDrop } = await import("./history-guard.js");
 
 afterEach(() => {
   ownerKv.clear();
@@ -1646,4 +1647,144 @@ describe("TinyCloud share authority adapter", () => {
     }
   });
 
+});
+
+describe("sender history recovery and key-drop guard (TC-1669)", () => {
+  const now = new Date("2026-06-01T00:00:00.000Z");
+  const liveRecord = (shareId: string, expiresAt = "2099-01-01T00:00:00.000Z", revokedAt?: string): SenderShareRecord => ({
+    shareId,
+    target: { origin: "https://node.example", nodeAudience: nodeDid, spaceId: "tinycloud:test-space" },
+    resource: { kind: "exact", path: `shares/${shareId}/note.md` },
+    actions: ["tinycloud.kv/get"],
+    recipientMatcher: { kind: "emailDomain", value: "example.com" },
+    registeredAt: "2026-01-01T00:00:00.000Z",
+    expiresAt,
+    ...(revokedAt === undefined ? {} : { revokedAt }),
+  });
+  const withHistoryDirectory = async (prefix: string, run: (cacheDir: string) => Promise<void>): Promise<void> => {
+    const root = await mkdtemp(join(tmpdir(), prefix));
+    try {
+      await withTinyCloudStateRoot(root, async () => {
+        historyCacheDir = join(profilePath("history-test"), "cache");
+        await mkdir(historyCacheDir, { recursive: true });
+        await run(historyCacheDir);
+      });
+    } finally {
+      historyCacheDir = undefined;
+      historyLocalKey = true;
+      await rm(root, { recursive: true, force: true });
+    }
+  };
+
+  it("quarantines an unreadable history file under a new name and keeps its bytes", () =>
+    withHistoryDirectory("tc-share-quarantine-", async (cacheDir) => {
+      await writeFile(join(cacheDir, "share-history-v2.json"), "not json");
+      const moved = await quarantineUnreadableProfileHistory("history-test");
+      expect(moved).toMatch(/share-history-v2\.json\.unreadable-/);
+      expect(await readFile(moved!, "utf8")).toBe("not json");
+      expect(await profileHistoryFileExists("history-test")).toBe(false);
+    }));
+
+  it("does not quarantine on a plain write and leaves the unreadable bytes identical", () =>
+    withHistoryDirectory("tc-share-quarantine-put-", async (cacheDir) => {
+      await writeFile(join(cacheDir, "share-history-v2.json"), "not json");
+      const storage = createEncryptedProfileHistory(async () => "history-test");
+      await expect(storage.put(liveRecord("blocked-write"))).rejects.toBeInstanceOf(ShareHistoryUnreadableError);
+      expect(await readFile(join(cacheDir, "share-history-v2.json"), "utf8")).toBe("not json");
+    }));
+
+  it("leaves a readable history in place", () =>
+    withHistoryDirectory("tc-share-quarantine-readable-", async () => {
+      const storage = createEncryptedProfileHistory(async () => "history-test");
+      await storage.put(liveRecord("kept"));
+      expect(await storage.quarantineUnreadable()).toBeNull();
+      expect((await storage.list()).map((record) => record.shareId)).toEqual(["kept"]);
+      expect(await profileHistoryFileExists("history-test")).toBe(true);
+    }));
+
+  it("returns null when no history file exists", () =>
+    withHistoryDirectory("tc-share-quarantine-missing-", async () => {
+      expect(await quarantineUnreadableProfileHistory("history-test")).toBeNull();
+    }));
+
+  it("starts a fresh readable history after quarantine and keeps the moved bytes untouched", () =>
+    withHistoryDirectory("tc-share-quarantine-fresh-", async (cacheDir) => {
+      await writeFile(join(cacheDir, "share-history-v2.json"), "not json");
+      const moved = await quarantineUnreadableProfileHistory("history-test");
+      const storage = createEncryptedProfileHistory(async () => "history-test");
+      await storage.put(liveRecord("fresh"));
+      expect((await storage.list()).map((record) => record.shareId)).toEqual(["fresh"]);
+      expect(await readFile(moved!, "utf8")).toBe("not json");
+    }));
+
+  it("counts only unexpired, unrevoked recorded shares as stranded by a key drop", () =>
+    withHistoryDirectory("tc-share-guard-count-", async () => {
+      historyLocalKey = false;
+      const storage = createEncryptedProfileHistory(async () => "history-test", signShareHistoryBytes);
+      await storage.put(liveRecord("live-share"));
+      await storage.put(liveRecord("expired-share", "2020-01-01T00:00:00.000Z"));
+      await storage.put(liveRecord("revoked-share", "2099-01-01T00:00:00.000Z", "2026-01-02T00:00:00.000Z"));
+      expect(await checkShareHistoryForKeyDrop("history-test", now)).toEqual({ status: "unexpired", shareIds: ["live-share"] });
+    }));
+
+  it("treats history with no unexpired shares as clear", () =>
+    withHistoryDirectory("tc-share-guard-expired-", async () => {
+      historyLocalKey = false;
+      const storage = createEncryptedProfileHistory(async () => "history-test", signShareHistoryBytes);
+      await storage.put(liveRecord("expired-only", "2020-01-01T00:00:00.000Z"));
+      expect(await checkShareHistoryForKeyDrop("history-test", now)).toEqual({ status: "clear" });
+    }));
+
+  it("exempts local-owner profiles, whose history key does not change on logout", () =>
+    withHistoryDirectory("tc-share-guard-local-", async () => {
+      const storage = createEncryptedProfileHistory(async () => "history-test");
+      await storage.put(liveRecord("local-share"));
+      expect(await checkShareHistoryForKeyDrop("history-test", now)).toEqual({ status: "clear" });
+    }));
+
+  it("reports unreadable history as unavailable for the key drop", () =>
+    withHistoryDirectory("tc-share-guard-unreadable-", async (cacheDir) => {
+      historyLocalKey = false;
+      await writeFile(join(cacheDir, "share-history-v2.json"), "not json");
+      expect(await checkShareHistoryForKeyDrop("history-test", now)).toEqual({ status: "unavailable", reason: "unreadable" });
+    }));
+
+  it("reports no history file as clear", () =>
+    withHistoryDirectory("tc-share-guard-none-", async () => {
+      historyLocalKey = false;
+      expect(await checkShareHistoryForKeyDrop("history-test", now)).toEqual({ status: "clear" });
+    }));
+
+  it("refuses a key drop that would strand unexpired shares, naming them with a bypass hint", () =>
+    withHistoryDirectory("tc-share-guard-refuse-", async () => {
+      historyLocalKey = false;
+      const storage = createEncryptedProfileHistory(async () => "history-test", signShareHistoryBytes);
+      await storage.put(liveRecord("live-share"));
+      const error = await assertShareHistoryAllowsKeyDrop("history-test", "logout").catch((caught: unknown) => caught);
+      expect(error).toBeInstanceOf(CLIError);
+      expect(error).toMatchObject({
+        code: "SHARE_HISTORY_UNEXPIRED",
+        exitCode: 5,
+        message: expect.stringContaining("live-share"),
+        metadata: { hint: expect.stringContaining("--force") },
+      });
+    }));
+
+  it("refuses unreadable history with a recovery hint", () =>
+    withHistoryDirectory("tc-share-guard-refuse-unreadable-", async (cacheDir) => {
+      historyLocalKey = false;
+      await writeFile(join(cacheDir, "share-history-v2.json"), "not json");
+      const error = await assertShareHistoryAllowsKeyDrop("history-test", "rotate").catch((caught: unknown) => caught);
+      expect(error).toMatchObject({
+        code: "SHARE_HISTORY_UNAVAILABLE",
+        exitCode: 5,
+        metadata: { hint: expect.stringContaining("share history recover") },
+      });
+    }));
+
+  it("passes a key drop when no recorded share can be stranded", () =>
+    withHistoryDirectory("tc-share-guard-pass-", async () => {
+      historyLocalKey = false;
+      await expect(assertShareHistoryAllowsKeyDrop("history-test", "logout")).resolves.toBeUndefined();
+    }));
 });

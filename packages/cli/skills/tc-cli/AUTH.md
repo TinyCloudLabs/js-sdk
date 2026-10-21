@@ -162,6 +162,8 @@ Only an explicit `--host` becomes the profile's stored host; `TC_HOST` and a dis
 
 `tinycloud auth logout` clears the local session and keeps the key. It is not node revocation, app disconnection, or removal of an agent's conversation history.
 
+`tinycloud auth logout` and `tinycloud auth rotate` replace the profile's share-history key. Before either runs, the CLI checks the sender history: if it holds unexpired shares, or cannot be read, the command refuses with `SHARE_HISTORY_UNEXPIRED` or `SHARE_HISTORY_UNAVAILABLE` (exit 5) and changes nothing. Pass `--force` to proceed anyway; `auth logout --revoke` also skips the check. After a key change, `share revoke <id>` can no longer revoke a bearer link issued under the old key (`SHARE_ISSUER_KEY_UNAVAILABLE`), so revoke those links first. An unreadable history file is moved aside, never deleted, only by `tinycloud share history recover`, which renames it to `share-history-v2.json.unreadable-<timestamp>`. Plain re-login keeps the key and is not checked. Local-owner profiles are not checked.
+
 ## Verify access
 
 `context` and `auth caps` report local state. A real read of the intended resource is the only proof of access. A 403 can mean a missing capability; a missing or unhosted space means checking the intended location, not switching owner. An expired session needs renewed consent only when a read is needed.

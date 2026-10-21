@@ -66,6 +66,8 @@
     { "command": "share revoke <id>", "status": "legacy" },
     { "command": "share show <id>", "status": "legacy" },
     { "command": "share versions <artifact-id>", "status": "legacy" },
+    { "command": "share history", "status": "legacy" },
+    { "command": "share history recover", "status": "legacy" },
     { "command": "node", "status": "legacy" },
     { "command": "node health", "status": "legacy" },
     { "command": "node version", "status": "legacy" },

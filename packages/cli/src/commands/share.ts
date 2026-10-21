@@ -42,8 +42,10 @@ import { CLIError, handleError, storageFullError, wrapError } from "../output/er
 import { classifyShareFailure } from "../share/failure-class.js";
 import { authorizationRequiredJson, inspectHuman, publishHuman, receiveHuman, receiveJson, writeJson } from "../share/output.js";
 import { MAX_SHARE_STDIN_BYTES, readBoundedUrlStdin, readShareInput, shareInputFilename, writeShareOutput } from "../share/io.js";
+import { quarantineUnreadableProfileHistory } from "../share/adapters.js";
+import { ProfileManager } from "../config/profiles.js";
 
-import { ShareHistoryRetryError, SharePublishAuthorityError, shareHistoryReason, type ShareHistoryStatus } from "../share/errors.js";
+import { ShareHistoryRetryError, ShareHistoryUnreadableError, SharePublishAuthorityError, shareHistoryReason, type ShareHistoryStatus } from "../share/errors.js";
 const SHARE_ORIGIN = "https://share.tinycloud.xyz";
 const NOTIFY_WINDOW_MESSAGE = "Share notification authorization expired (at share expiry or 5 minutes after publication); publish a new share and invite the recipient then.\n";
 
@@ -125,6 +127,14 @@ export function shareCliError(error: unknown, operation: "publish" | "notify" = 
       `sender history for profile ${JSON.stringify(error.profile)} changed or disappeared during this command`,
       1,
       { hint: `Retry this command with --profile ${JSON.stringify(error.profile)}. If this was a revoke, check its node state first: revocation may already have succeeded.` },
+    );
+  }
+  if (error instanceof ShareHistoryUnreadableError) {
+    return new CLIError(
+      "SHARE_HISTORY_UNREADABLE",
+      "sender history cannot be read with the current session key",
+      1,
+      { hint: `Run \`${CLI_NAME} share history recover\` to move the unreadable file aside. The old file is kept, not deleted.` },
     );
   }
   if (error instanceof SharePublishAuthorityError) {
@@ -629,6 +639,20 @@ export function registerShareCommand(program: Command): void {
           throw new CLIError("UNSUPPORTED_TARGET", result.reason, 2);
         }
         if (json) writeJson({ protocol: "tinycloud-share", version: 1, result }); else process.stdout.write(`${result.state}\n`);
+      } catch (error) { return handleError(shareCliError(error)); }
+    });
+
+  const history = share.command("history").description("Inspect and repair the local sender-share history");
+  history.command("recover")
+    .description("Move an unreadable sender-share history file aside. The file is renamed, never deleted, so a new history can start.")
+    .option("--json", "Print versioned JSON")
+    .action(async (options, command: Command) => {
+      try {
+        const json = jsonOutput(options, command);
+        const ctx = await ProfileManager.resolveContext(command.optsWithGlobals(), { storedSession: "unused" });
+        const quarantined = await quarantineUnreadableProfileHistory(ctx.profile);
+        if (json) writeJson({ protocol: "tinycloud-share", version: 1, result: { profile: ctx.profile, quarantined } });
+        else process.stdout.write(quarantined === null ? "no unreadable sender history to recover\n" : `moved unreadable sender history to ${quarantined}\n`);
       } catch (error) { return handleError(shareCliError(error)); }
     });
 }
