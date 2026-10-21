@@ -81,7 +81,15 @@ export class EmailProofError extends Error {
   }
 }
 
-/** Holder key adapter. Courier passes its agent did:key and Ed25519 signer. */
+/**
+ * Holder key adapter. Courier passes its agent did:key and Ed25519 signer.
+ *
+ * `sign` MUST return raw Ed25519 over exactly the bytes it is given: no extra
+ * hashing, prefixing, or domain separation. The presentation v4 signer passes a
+ * 32-byte sha256 digest and the witness holder-binding check passes its own bytes;
+ * each must verify as a 64-byte signature against the holder's did:key public key.
+ * `completeEmailProof` rejects with SESSION_INVALID unless `did === pending.holderDid`.
+ */
 export interface EmailProofHolder {
   readonly did: string;
   readonly sign: (bytes: Uint8Array) => Promise<Uint8Array>;

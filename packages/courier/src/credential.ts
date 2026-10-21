@@ -83,6 +83,14 @@ function mapEmailProofError(error: unknown, fallbackStep: Step): CourierError {
   return new CourierError(`credential.${fallbackStep}.FAILED`, 'Email verification failed.');
 }
 
+/** Step-2 failures the owner can retry with the same pending request before it expires. */
+const RETRYABLE_PROOF_CODES: Record<string, true> = { CODE_REJECTED: true, NETWORK: true, ISSUER_UNAVAILABLE: true, RATE_LIMITED: true };
+
+/** Attempts-exhausted, session, signature, credential, and unknown failures are terminal. */
+function keepsPendingAfterFailure(error: unknown): boolean {
+  return isEmailProofError(error) && RETRYABLE_PROOF_CODES[error.code] === true;
+}
+
 async function acquire(args: ParsedArgs, deps: Resolved): Promise<void> {
   const address = requireFlag(args, 'email', acquireUsage()).trim();
   const key = deps.loadKey(deps.home);
@@ -110,7 +118,7 @@ async function acquire(args: ParsedArgs, deps: Resolved): Promise<void> {
   // takePendingEmailProof deletes expired or malformed pending state, then throws.
   const pending = takePendingEmailProof(address, deps.now(), deps.home);
   if (pending.holderDid !== key.did) {
-    removePendingEmailProof(address, deps.home);
+    removePendingEmailProof(pending.requestId, deps.home);
     throw new CourierError('credential.session.SESSION_INVALID', 'Pending verification belongs to a different agent key. Request a new code.');
   }
 
@@ -118,11 +126,16 @@ async function acquire(args: ParsedArgs, deps: Resolved): Promise<void> {
   try {
     result = await deps.completeProof({ pending, code, holder, fetch: deps.fetch, now: deps.now });
   } catch (error) {
-    // Any failure deletes pending state, so a retry needs a new request.
-    removePendingEmailProof(address, deps.home);
+    if (keepsPendingAfterFailure(error)) {
+      // Retryable: the same pending request stays until its expiry.
+      const mapped = mapEmailProofError(error, 'credential');
+      throw new CourierError(mapped.code, `${mapped.message} Retry with --code before ${pending.expiresAt}.`);
+    }
+    // Terminal: attempts exhausted, session/signature/credential failure, or unknown. A new request is needed.
+    removePendingEmailProof(pending.requestId, deps.home);
     throw mapEmailProofError(error, 'credential');
   }
-  removePendingEmailProof(address, deps.home);
+  removePendingEmailProof(pending.requestId, deps.home);
 
   const requirement = emailCredentialRequirement(address);
   const requirementDigest = await credentialRequirementDigest(requirement);

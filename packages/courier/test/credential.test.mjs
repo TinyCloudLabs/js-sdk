@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { generateKeyPairSync, verify, createPublicKey } from 'node:crypto';
-import { mkdtempSync, readdirSync, statSync, existsSync } from 'node:fs';
+import { generateKeyPairSync, verify, createPublicKey, createHash } from 'node:crypto';
+import { mkdtempSync, readdirSync, statSync, existsSync, chmodSync, renameSync, symlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { parseArgs } from '../dist/args.js';
 import { cmdCredential } from '../dist/credential.js';
@@ -72,7 +72,7 @@ test('acquire step 1 persists pending state 0600 in a 0700 dir and prints no ver
   assert.ok(!text.includes(seen.pending.requestId), 'request id must not be printed');
 });
 
-test('holder adapter signs with the agent key (Ed25519 verifies against the public key)', async () => {
+test('holder.sign is raw Ed25519 over exactly the given bytes: a 32-byte digest and a 64-byte holder binding both verify', async () => {
   const home = freshHome();
   let holder;
   await run(['acquire', '--email', ADDRESS], {
@@ -83,10 +83,14 @@ test('holder adapter signs with the agent key (Ed25519 verifies against the publ
       return pendingFixture(NOW);
     },
   }).promise;
-  const bytes = new TextEncoder().encode('holder binding canonical bytes');
-  const signature = await holder.sign(bytes);
-  assert.equal(signature.length, 64);
-  assert.equal(verify(null, bytes, createPublicKey({ key: publicJwk, format: 'jwk' }), signature), true);
+  const publicKeyObject = createPublicKey({ key: publicJwk, format: 'jwk' });
+  const digest = createHash('sha256').update('presentation v4').digest();
+  const holderBinding = Buffer.alloc(64, 7);
+  for (const bytes of [digest, holderBinding]) {
+    const signature = await holder.sign(bytes);
+    assert.equal(signature.length, 64);
+    assert.equal(verify(null, bytes, publicKeyObject, signature), true);
+  }
 });
 
 test('acquire step 1 maps witness RATE_LIMITED to stable code and whole-minute wait, and stores nothing', async () => {
@@ -209,16 +213,16 @@ test('acquire step 2 refuses pending state bound to a different holder and delet
   assert.equal(readdirSync(credDir(home)).length, 0);
 });
 
-test('a rejected code maps to a per-step code, deletes pending state, and never echoes code or verifier', async () => {
+test('a rejected code keeps pending state; a retry reuses the same request and attempts-exhausted deletes it', async () => {
   const home = freshHome();
   savePendingEmailProof(pendingFixture(NOW), home);
-  let sentCode;
+  const seen = [];
   await assert.rejects(
     run(['acquire', '--email', ADDRESS, '--code', CODE], {
       home,
       now: () => NOW,
       completeProof: async (input) => {
-        sentCode = input.code;
+        seen.push({ code: input.code, requestId: input.pending.requestId });
         throw new EmailProofError('code', 'CODE_REJECTED', 'witness said no');
       },
     }).promise,
@@ -226,14 +230,27 @@ test('a rejected code maps to a per-step code, deletes pending state, and never 
       assert.equal(error.code, 'credential.code.CODE_REJECTED');
       assert.ok(!error.message.includes(CODE));
       assert.ok(!error.message.includes('verifier-secret-value'));
+      assert.match(error.message, /Retry with --code before/);
       return true;
     },
   );
-  assert.equal(sentCode, CODE, 'code is passed to the witness flow only');
-  assert.equal(readdirSync(credDir(home)).length, 0, 'failure deletes pending state');
+  assert.equal(readdirSync(credDir(home)).length, 1, 'recoverable failure keeps pending state');
+  await assert.rejects(
+    run(['acquire', '--email', ADDRESS, '--code', CODE], {
+      home,
+      now: () => NOW,
+      completeProof: async (input) => {
+        seen.push({ code: input.code, requestId: input.pending.requestId });
+        throw new EmailProofError('code', 'CODE_ATTEMPTS_EXHAUSTED', 'too many attempts');
+      },
+    }).promise,
+    (error) => error.code === 'credential.code.CODE_ATTEMPTS_EXHAUSTED',
+  );
+  assert.deepEqual(seen.map((s) => s.requestId), ['req-1', 'req-1'], 'retry reuses the same pending request');
+  assert.equal(readdirSync(credDir(home)).length, 0, 'attempts-exhausted deletes pending state');
 });
 
-test('an attempts-exhausted or unexpected failure also deletes pending state', async () => {
+test('an unexpected failure also deletes pending state and never echoes the code', async () => {
   const home = freshHome();
   savePendingEmailProof(pendingFixture(NOW), home);
   await assert.rejects(
@@ -245,6 +262,43 @@ test('an attempts-exhausted or unexpected failure also deletes pending state', a
     (error) => error.code === 'credential.credential.FAILED' && !error.message.includes(CODE),
   );
   assert.equal(readdirSync(credDir(home)).length, 0);
+});
+
+test('a pending file with group or world access is refused and left in place', async () => {
+  const home = freshHome();
+  savePendingEmailProof(pendingFixture(NOW), home);
+  const [file] = readdirSync(credDir(home));
+  chmodSync(join(credDir(home), file), 0o644);
+  let called = false;
+  await assert.rejects(
+    run(['acquire', '--email', ADDRESS, '--code', CODE], {
+      home,
+      now: () => NOW,
+      completeProof: async () => { called = true; },
+    }).promise,
+    (error) => error.code === 'credential-permissions' && !error.message.includes('verifier-secret-value'),
+  );
+  assert.equal(called, false);
+  assert.equal(readdirSync(credDir(home)).length, 1);
+});
+
+test('a symlinked pending file is refused; its target is never read', async () => {
+  const home = freshHome();
+  savePendingEmailProof(pendingFixture(NOW), home);
+  const [file] = readdirSync(credDir(home));
+  const target = join(home, 'elsewhere.json');
+  renameSync(join(credDir(home), file), target);
+  symlinkSync(target, join(credDir(home), file));
+  let called = false;
+  await assert.rejects(
+    run(['acquire', '--email', ADDRESS, '--code', CODE], {
+      home,
+      now: () => NOW,
+      completeProof: async () => { called = true; },
+    }).promise,
+    (error) => error.code === 'credential-permissions',
+  );
+  assert.equal(called, false);
 });
 
 test('show without a stored credential fails with NOT_FOUND and prints nothing', async () => {
