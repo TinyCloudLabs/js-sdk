@@ -104,6 +104,7 @@
     "tc-841-logout-contract",
     "tc-841-profile-containment",
     "tc-858-s7-parity",
+    "tc1620-write-wording",
     "tc712-courier-broker",
     "tc858-browser-acceptance",
     "tc858-s5-quota",

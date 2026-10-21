@@ -912,7 +912,7 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
     .option("--device", "With --grant: approve on another device (e.g. a phone) through OpenKey device authorization (KV-scoped; SQL needs browser login)")
     .option(
       "--preset <name>",
-      `Request a named permission set instead of --cap: ${APPS_AGENT_PRESET} is READ-ONLY on the applications space (kv get/list + sql read, ${APPS_AGENT_EXPIRY_DAYS} days); add --write --app <app_id> to also write those apps' knowledge and data files`,
+      `Request a named permission set instead of --cap: ${APPS_AGENT_PRESET} is READ-ONLY on the applications space (kv get/list + sql read, ${APPS_AGENT_EXPIRY_DAYS} days); add --write --app <app_id> to also let the agent change that app's data (see --write)`,
     )
     .option(
       "--app <app_id>",
@@ -920,7 +920,7 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
       (value: string, previous: string[]) => [...previous, value],
       [],
     )
-    .option("--write", `With --preset ${APPS_AGENT_PRESET}: also allow writing the named --app apps' knowledge/ and prefs/ files (kv put) and table rows (sql write); their code, manifest and install record stay read-only. SQL write can also change or drop those apps' tables`)
+    .option("--write", `With --preset ${APPS_AGENT_PRESET}: also let the agent add and change the named --app apps' data: write their knowledge/ and prefs/ files (kv put) and change their tables (sql write). Their code, manifest and install record stay read-only. SQL write can also change or drop those apps' tables`)
     .option("--paste", "With --grant on an OpenKey profile: wait up to 5 minutes for a signed code from OpenKey on stdin instead of a browser callback (use when the browser cannot reach this CLI)")
     .action(async (options, cmd) => {
       try {
