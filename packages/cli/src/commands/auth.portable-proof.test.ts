@@ -209,6 +209,20 @@ describe("signed portable OpenKey grants", () => {
     expect(await loadAdditionalDelegations(profileName)).toEqual([]);
   });
 
+  test("refuses a forged callback with no session proof and stores no grant", async () => {
+    const proof = await signedProof();
+    const forgedBodies = [
+      { ...proof, siwe: undefined, signature: undefined, address: undefined },
+      { ...proof, signature: await signer.signMessage("not the session siwe") },
+    ];
+    for (const forged of forgedBodies) {
+      await expect(escalate(forged)).rejects.toMatchObject({ code: "OPENKEY_PROOF_INVALID" });
+    }
+    expect(activated).toEqual([]);
+    expect(await loadAdditionalDelegations(profileName)).toEqual([]);
+    expect(await readGrantHistory(profileName)).toEqual([]);
+  });
+
   test("activation refusal leaves stored delegations unchanged", async () => {
     activationError = new Error("activation refused");
     await expect(escalate(await signedProof())).rejects.toThrow("activation refused");
