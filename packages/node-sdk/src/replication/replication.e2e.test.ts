@@ -1105,7 +1105,9 @@ describe.skipIf(!REAL_NODE_BIN)("node-sdk replication against a real node", () =
       const serialized = JSON.stringify(syncRows);
       expect(serialized).not.toContain("notes/");
       expect(serialized).not.toContain("sync-log-seed");
-      expect(syncRows.length).toBe(attempts);
+      // One row per logical call, carrying its HTTP attempts (a retried call is one row, attempts > 1).
+      // Summing attempts still requires every counted HTTP attempt to appear in some row.
+      expect(syncRows.reduce((total, row) => total + row.attempts, 0)).toBe(attempts);
     } finally {
       counting = false;
       globalThis.fetch = originalFetch;
