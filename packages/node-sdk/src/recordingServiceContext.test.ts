@@ -1,7 +1,8 @@
 import { expect, test } from "bun:test";
 import type { FetchResponse, ServiceSession } from "@tinycloud/sdk-services";
 import { invocationMetaOf, RequestLog } from "@tinycloud/sdk-services/telemetry/requestLog";
-import { createServiceContext, requestSinkOf, unrecordedFetchOf } from "./recordingServiceContext";
+import { createServiceContext } from "./recordingServiceContext";
+import { requestSinkOf, unrecordedFetchOf } from "./recordingRegistry";
 
 const SPACE = "tinycloud:pkh:eip155:1:0x1234:default";
 const session = {
