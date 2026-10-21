@@ -225,8 +225,28 @@ async function inviteRevoke(id: string | undefined): Promise<void> {
 
 export async function cmdJoin(args: ParsedArgs): Promise<void> {
   if (args.has('resume')) return joinResume(args);
-  const input = args.positional[0] ?? fail('usage', `Usage: ${cmd('join <invite-string> [--credential-file f | --credential-stdin]')}`);
-  return joinStart(args, input);
+  return joinStart(args, readInviteArg(args));
+}
+
+/**
+ * The invite string comes from `--stdin` or `--file`. The positional form still works, but argv is visible in `ps`.
+ */
+export function readInviteArg(args: ParsedArgs): string {
+  const file = args.get('file');
+  const stdin = args.has('stdin');
+  const positional = args.positional[0];
+  if ([stdin, file !== undefined, positional !== undefined].filter(Boolean).length > 1) {
+    fail('usage', 'Give the invite string once: as an argument, with --file, or with --stdin.');
+  }
+  if (stdin) {
+    if (args.has('credential-stdin')) fail('usage', '--stdin and --credential-stdin both read stdin; put one of them in a --file.');
+    return fs.readFileSync(0, 'utf8').trim();
+  }
+  if (file !== undefined) {
+    if (file === 'true') fail('usage', '--file needs a path.');
+    return fs.readFileSync(file, 'utf8').trim();
+  }
+  return positional ?? fail('usage', `Usage: ${cmd('join --stdin | --file f | <invite-string> [--credential-file f | --credential-stdin]')}`);
 }
 
 /** Refuses blobs for another host or for this agent's own identity. Shared by start and resume. */
