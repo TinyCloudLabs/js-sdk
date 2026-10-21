@@ -1,6 +1,6 @@
-import { afterEach, describe, expect, it, mock } from "bun:test";
+import { afterEach, describe, expect, it, mock, setSystemTime } from "bun:test";
 import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { profilePath, withProfileLock, withTinyCloudStateRoot } from "@tinycloud/operations/state";
@@ -8,7 +8,7 @@ import { encodeSealedInlineShareUrl, unifiedPolicyV2Schema } from "@tinycloud/sh
 import { historyRecordForPublishedShare, notifyShare, type SenderShareRecord, type TargetPublishInput } from "@tinycloud/share-sdk";
 import { createEmailCredentialRequirement, createEmailDomainCredentialRequirement, credentialRequirementDigest, LocationRecordValidationError, LocationRegistryHttpError } from "@tinycloud/sdk-core";
 import { CLIError } from "../output/errors.js";
-import { ShareHistoryReadError, ShareHistoryUnreadableError, SharePublishAuthorityError, shareHistoryReason } from "./errors.js";
+import { ShareHistoryReadError, ShareHistoryRetryError, ShareHistoryUnreadableError, SharePublishAuthorityError, shareHistoryReason } from "./errors.js";
 
 const transportDid = "did:key:z6Mkon3Necd6NkkyfoGoHxid2znGc59LU3K7mubaRcFbLfLX";
 const credentialHolderDid = "did:key:z6Mko9hTggMwjSTEaJaPUfE6tqcy2xvU6BnNq3e3o8qVBiyH";
@@ -36,6 +36,7 @@ let nodeInfoStatus = 200;
 const nodeInfoRequests: RequestInit[] = [];
 let historyCacheDir: string | undefined;
 let historyLocalKey = true;
+let historySignedOut = false;
 let historyKeyId = "key-one";
 let historySpaceName = "default";
 let historyProfileDirectories = false;
@@ -254,7 +255,7 @@ mock.module("../config/profiles.js", () => ({
       }
       return historyCacheDir === undefined ? { authMethod: "openkey" } : historyLocalKey
         ? { authMethod: "local", privateKey: "test-history-key", spaceName: historySpaceName }
-        : { authMethod: "openkey", spaceName: historySpaceName };
+        : { authMethod: "openkey", spaceName: historySpaceName, authSignedOut: historySignedOut };
     },
     getKey: async () => ({ id: historyKeyId }),
     getSession: async () => ({ id: historyKeyId }),
@@ -297,6 +298,7 @@ afterEach(() => {
   uploadedSpaces.length = 0;
   historyCacheDir = undefined;
   historyLocalKey = true;
+  historySignedOut = false;
   historyKeyId = "key-one";
   historySpaceName = "default";
   historyProfileDirectories = false;
@@ -1787,5 +1789,80 @@ describe("sender history recovery and key-drop guard (TC-1669)", () => {
     withHistoryDirectory("tc-share-guard-pass-", async () => {
       historyLocalKey = false;
       await expect(assertShareHistoryAllowsKeyDrop("history-test", "logout")).resolves.toBeUndefined();
+    }));
+
+  it("counts a share with an unparsable expiry as unexpired, so the key drop is refused", () =>
+    withHistoryDirectory("tc-share-guard-nan-", async () => {
+      historyLocalKey = false;
+      const storage = createEncryptedProfileHistory(async () => "history-test", signShareHistoryBytes);
+      await storage.put(liveRecord("bad-expiry", "not-a-date"));
+      expect(await checkShareHistoryForKeyDrop("history-test", now)).toEqual({ status: "unexpired", shareIds: ["bad-expiry"] });
+    }));
+
+  it("skips the key-drop check for a signed-out profile", () =>
+    withHistoryDirectory("tc-share-guard-signed-out-", async () => {
+      historyLocalKey = false;
+      historySignedOut = true;
+      const storage = createEncryptedProfileHistory(async () => "history-test", signShareHistoryBytes);
+      await storage.put(liveRecord("live-after-signout"));
+      await expect(assertShareHistoryAllowsKeyDrop("history-test", "logout")).resolves.toBeUndefined();
+    }));
+
+  it("never replaces an existing file when the quarantine name is already taken", () =>
+    withHistoryDirectory("tc-share-quarantine-collision-", async (cacheDir) => {
+      const history = join(cacheDir, "share-history-v2.json");
+      const taken = join(cacheDir, "share-history-v2.json.unreadable-2026-06-01T00-00-00-000Z");
+      await writeFile(history, "not json");
+      await writeFile(taken, "earlier evidence");
+      setSystemTime(now);
+      try {
+        await expect(quarantineUnreadableProfileHistory("history-test")).rejects.toMatchObject({ code: "EEXIST" });
+      } finally {
+        setSystemTime();
+      }
+      expect(await readFile(taken, "utf8")).toBe("earlier evidence");
+      expect(await readFile(history, "utf8")).toBe("not json");
+    }));
+
+  it("moves nothing when the history bytes change between the probe and the lock", () =>
+    withHistoryDirectory("tc-share-quarantine-race-", async (cacheDir) => {
+      const history = join(cacheDir, "share-history-v2.json");
+      await writeFile(history, "not json");
+      historyBeforeLock = async () => { await writeFile(history, "rewritten after probe"); };
+      await expect(quarantineUnreadableProfileHistory("history-test")).rejects.toBeInstanceOf(ShareHistoryRetryError);
+      expect(await readFile(history, "utf8")).toBe("rewritten after probe");
+      expect(await readdir(cacheDir)).toEqual(["share-history-v2.json"]);
+    }));
+
+  it("returns null without moving anything when the history disappears before the lock", () =>
+    withHistoryDirectory("tc-share-quarantine-vanished-", async (cacheDir) => {
+      const history = join(cacheDir, "share-history-v2.json");
+      await writeFile(history, "not json");
+      historyBeforeLock = async () => { await rm(history); };
+      await expect(quarantineUnreadableProfileHistory("history-test")).resolves.toBeNull();
+      expect(await readdir(cacheDir)).toEqual([]);
+    }));
+
+  it("quarantines once when two recoveries run at the same time", () =>
+    withHistoryDirectory("tc-share-quarantine-twice-", async (cacheDir) => {
+      await writeFile(join(cacheDir, "share-history-v2.json"), "not json");
+      const results = await Promise.all([
+        quarantineUnreadableProfileHistory("history-test"),
+        quarantineUnreadableProfileHistory("history-test"),
+      ]);
+      const moved = results.filter((path): path is string => path !== null);
+      expect(moved).toHaveLength(1);
+      expect(await readFile(moved[0]!, "utf8")).toBe("not json");
+    }));
+
+  it("leaves the history in place when signing fails, so a sign-in problem is not read as unreadable history", () =>
+    withHistoryDirectory("tc-share-quarantine-signer-", async (cacheDir) => {
+      historyLocalKey = false;
+      const history = join(cacheDir, "share-history-v2.json");
+      await writeFile(history, "not json");
+      historyOnSign = () => { throw new CLIError("AUTH_REQUIRED", "sign in again", 3); };
+      await expect(quarantineUnreadableProfileHistory("history-test")).rejects.toMatchObject({ code: "AUTH_REQUIRED" });
+      expect(await readFile(history, "utf8")).toBe("not json");
+      expect(await readdir(cacheDir)).toEqual(["share-history-v2.json"]);
     }));
 });

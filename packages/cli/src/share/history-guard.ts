@@ -24,7 +24,8 @@ export async function checkShareHistoryForKeyDrop(profileName: string, now: Date
   try {
     const records = await createEncryptedProfileHistory(async () => profileName, signShareHistoryBytes).list();
     shareIds = records
-      .filter((record) => record.revokedAt === undefined && Date.parse(record.expiresAt) > now.getTime())
+      // An expiry that does not parse is not proof of expiry, so the record stays counted as unexpired.
+      .filter((record) => record.revokedAt === undefined && !(Date.parse(record.expiresAt) <= now.getTime()))
       .map((record) => record.shareId);
   } catch (error) {
     return { status: "unavailable", reason: error instanceof ShareHistoryUnreadableError ? "unreadable" : "unavailable" };
@@ -36,7 +37,7 @@ export async function checkShareHistoryForKeyDrop(profileName: string, now: Date
  * Refuses a logout or rotation that would strand unexpired recorded shares.
  * Callers skip this for signed-out profiles and for the explicit bypass flags.
  */
-export async function assertShareHistoryAllowsKeyDrop(profileName: string, action: "logout" | "rotate"): Promise<void> {
+export async function assertShareHistoryAllowsKeyDrop(profileName: string, action: "logout" | "rotate" | "login"): Promise<void> {
   const config = await ProfileManager.getProfile(profileName);
   if (config.authSignedOut === true) return;
   const check = await checkShareHistoryForKeyDrop(profileName);
@@ -60,7 +61,7 @@ export async function assertShareHistoryAllowsKeyDrop(profileName: string, actio
     {
       hint: check.reason === "unreadable"
         ? `Run \`${CLI_NAME} share history recover\` to move the unreadable file aside, or pass ${bypass} to ${action} anyway.`
-        : `Check the session with \`${CLI_NAME} auth status\` and retry, or pass ${bypass} to ${action} anyway.`,
+        : `Sign in with \`${CLI_NAME} auth login\` and retry, or pass ${bypass} to ${action} anyway.`,
     },
   );
 }
