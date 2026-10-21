@@ -184,20 +184,30 @@ describe("panel stylesheet targets", () => {
 
 const DARK_HEADER = "@media (prefers-color-scheme: dark){";
 
-/** Splits the stylesheet into its light rules and the body of the dark media block. */
+/**
+ * Splits the stylesheet into its light rules and the bodies of every dark media
+ * block. The panel and toast stylesheets are separate <style> elements, so there
+ * is more than one block; each one must leave the light rules.
+ */
 function splitScheme(css: string): { light: string; dark: string } {
-  const text = css.replace(/\/\*[\s\S]*?\*\//g, "");
-  const start = text.indexOf(DARK_HEADER);
-  if (start < 0) return { light: text, dark: "" };
-  const bodyStart = start + DARK_HEADER.length;
-  let depth = 1;
-  for (let i = bodyStart; i < text.length; i++) {
-    if (text[i] === "{") depth++;
-    else if (text[i] === "}" && --depth === 0) {
-      return { light: text.slice(0, start) + text.slice(i + 1), dark: text.slice(bodyStart, i) };
+  let rest = css.replace(/\/\*[\s\S]*?\*\//g, "");
+  let light = "";
+  let dark = "";
+  for (;;) {
+    const start = rest.indexOf(DARK_HEADER);
+    if (start < 0) return { light: light + rest, dark };
+    light += rest.slice(0, start);
+    const bodyStart = start + DARK_HEADER.length;
+    let depth = 1;
+    let i = bodyStart;
+    for (; i < rest.length && depth > 0; i++) {
+      if (rest[i] === "{") depth++;
+      else if (rest[i] === "}") depth--;
     }
+    if (depth !== 0) throw new Error("unbalanced dark media block");
+    dark += `\n${rest.slice(bodyStart, i - 1)}`;
+    rest = rest.slice(i);
   }
-  throw new Error("unbalanced dark media block");
 }
 
 /**
@@ -296,6 +306,53 @@ for (const scheme of ["light", "dark"] as const) {
         const fg = resolvedDeclarations(css, scheme, check.fg[0]).get(check.fg[1]) ?? "";
         const bg = resolvedDeclarations(css, scheme, check.bg[0]).get(check.bg[1]) ?? "";
         expect(contrastRatio(fg, bg)).toBeGreaterThanOrEqual(check.min);
+      });
+    }
+  });
+}
+
+/** Interactive controls the panel renders. Each needs its own focus ring rule. */
+const FOCUS_SELECTORS = [".button", ".action", ".switch", ".toast a", ".toast__close"] as const;
+const RING_COLOUR: Record<"light" | "dark", string> = { light: "#111827", dark: "#fafafa" };
+/** The surface each ring is measured against: the element's own, or the panel or toast it sits in. */
+const RING_SURFACE: Record<(typeof FOCUS_SELECTORS)[number], [string, string]> = {
+  ".button": [".button", "background"],
+  ".action": [".panel", "background"],
+  ".switch": [".panel", "background"],
+  ".toast a": [".toast", "background"],
+  ".toast__close": [".toast", "background"],
+};
+
+describe("focus ring coverage", () => {
+  test("every rendered interactive element matches a focus-ring selector", () => {
+    openPanel();
+    toastStore.push({ kind: "warning", textCode: "panel.title", href: "https://example.com/docs", hrefLabelCode: "panel.close" });
+    const found = [...shadow().querySelectorAll("button, a[href], [role='switch'], input, select, textarea")];
+    expect(found.length).toBeGreaterThan(0);
+    const unmatched = found.filter((el) => !FOCUS_SELECTORS.some((sel) => el.matches(sel))).map((el) => el.outerHTML);
+    expect(unmatched).toEqual([]);
+  });
+});
+
+for (const scheme of ["light", "dark"] as const) {
+  describe(`focus ring, ${scheme} scheme`, () => {
+    for (const sel of FOCUS_SELECTORS) {
+      test(`${sel} draws a 2px solid ring at 2px offset`, () => {
+        const decl = resolvedDeclarations(renderedCss(), scheme, `${sel}:focus-visible`);
+        const shorthand = decl.get("outline") ?? "";
+        // A later outline-color (the dark rule) overrides the colour of the shorthand.
+        const colour = decl.get("outline-color") ?? shorthand.split(/\s+/).at(-1);
+        expect(shorthand.startsWith("2px solid")).toBe(true);
+        expect(colour).toBe(RING_COLOUR[scheme]);
+        expect(decl.get("outline-offset")).toBe("2px");
+      });
+      test(`${sel} ring is at least ${GRAPHIC_MIN}:1 against its surface`, () => {
+        const css = renderedCss();
+        const ring = resolvedDeclarations(css, scheme, `${sel}:focus-visible`).get("outline-color")
+          ?? resolvedDeclarations(css, scheme, `${sel}:focus-visible`).get("outline")?.split(/\s+/).at(-1) ?? "";
+        const [surfaceSel, surfaceProp] = RING_SURFACE[sel];
+        const surface = resolvedDeclarations(css, scheme, surfaceSel).get(surfaceProp) ?? "";
+        expect(contrastRatio(ring, surface)).toBeGreaterThanOrEqual(GRAPHIC_MIN);
       });
     }
   });
