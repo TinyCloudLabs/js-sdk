@@ -8,33 +8,47 @@ import type { ParsedArgs } from './args.js';
 import { oneOf, requireFlag } from './args.js';
 import { readTextArg, sendMessage } from './commands.js';
 import type { SendInput } from './commands.js';
-import { requestHash } from './canonical.js';
+import { canonicalJson, requestHash } from './canonical.js';
 import { CourierError, errInfo } from './errors.js';
 import { cmd } from './program.js';
 import { courierNode } from './node.js';
 import { getPeer, loadProfile, profileDir } from './profile.js';
 import type { Profile } from './profile.js';
 import { loadPeers, policyOf } from './intake/peers.js';
-import { acquireLock, ensureRealDir, writeNew, writeReplace } from './intake/queue.js';
+import type { Peers } from './intake/peers.js';
+import { acquireLock, ensureRealDir, fsyncDir, writeNew, writeReplace } from './intake/queue.js';
 import { textVerdict } from './text.js';
 import { jsonLineLog } from './wake.js';
 
-const ULID_RE = /^[0-9A-HJKMNP-TV-Z]{26}$/;
+const ULID_RE = /^[0-7][0-9A-HJKMNP-TV-Z]{25}$/;
 const PEER_RE = /^[A-Za-z0-9_-]{1,64}$/;
-const MAX_REQUEST_BYTES = 256;
+/** The whole request, matched on raw bytes before any JSON parsing: exact key order, no whitespace, `v` is the integer 1. */
+const REQUEST_RE = /^\{"v":1,"itemId":"([0-7][0-9A-HJKMNP-TV-Z]{25})"\}$/;
+const MAX_REQUEST_BYTES = 64;
 const MAX_ITEM_BYTES = 32 * 1024;
 const RATE_WINDOW_MS = 60 * 60 * 1000;
 const PIPE_TIMEOUT_MS = 5000;
+/** Connections held open at once. Over this, a socket is closed without a reply. Independent of the send quota. */
+const MAX_CONNECTIONS = 64;
+/** Requests waiting behind the one being served. Over this, the reply is `refused:busy`. Independent of the send quota. */
+const MAX_PENDING = 32;
+/** Refusal and diagnostic events per fixed window. The rest are counted and reported once when the window rolls over. */
+const LOG_WINDOW_MS = 60 * 1000;
+const LOG_BUDGET = 10;
 const DEFAULT_SOCKET_GROUP = 'courier-sender';
 const DENIED_SOCKET_GROUPS = ['tinycloud', 'tinycloud-dev', 'sudo', 'docker'];
 const SERVE_LOCK = 'serve.lock';
+/** Approval ledger directory under the outbox root: one create-once owner-only file per approved item. */
+const APPROVED_DIR = 'approved';
+/** Owner-only mode for outbox items and ledger entries. */
+const ITEM_MODE = 0o600;
 const ITEM_KEYS = ['v', 'itemId', 'to', 'thread', 'subject', 'text', 'approvedSha256'];
 
 /** The only refusal codes the sender can reply with. Replies never carry item ids, paths, text, or error messages. */
 export const REFUSAL_CODES = [
-  'bad-request', 'not-found', 'ambiguous-item', 'unsafe-item', 'bad-item', 'hash-mismatch',
+  'bad-request', 'not-found', 'ambiguous-item', 'unsafe-item', 'bad-item', 'not-approved', 'hash-mismatch',
   'unpaired-peer', 'invalid-text', 'rate-limited', 'already-used', 'send-failed', 'dry-run',
-  'root-unsafe', 'internal',
+  'root-unsafe', 'busy', 'internal',
 ] as const;
 export type RefusalCode = (typeof REFUSAL_CODES)[number];
 
@@ -95,6 +109,12 @@ function ownerUid(): number {
   return uid;
 }
 
+/** An error code safe to log: a short identifier, or null. Messages and paths are never logged. */
+function safeCode(error: unknown): string | null {
+  const code = errInfo(error).code;
+  return typeof code === 'string' && /^[A-Za-z0-9_-]{1,40}$/.test(code) ? code : null;
+}
+
 /** Hash over the item without its own approvedSha256 field. Shared by `outbox add` and the sender. */
 function itemHash(item: object): string {
   return requestHash(Object.fromEntries(Object.entries(item).filter(([key]) => key !== 'approvedSha256')));
@@ -105,28 +125,19 @@ function textOk(text: string, subject: string | undefined): boolean {
   return subject === undefined || textVerdict(subject, 'summary').allowed;
 }
 
-/** Parses the sender request. Runs before any filesystem access. */
-function parseRequest(line: string): string {
-  if (Buffer.byteLength(line, 'utf8') > MAX_REQUEST_BYTES) throw new Refusal('bad-request');
-  let request: unknown;
-  try {
-    request = JSON.parse(line);
-  } catch {
-    throw new Refusal('bad-request');
-  }
-  if (typeof request !== 'object' || request === null || Array.isArray(request)) throw new Refusal('bad-request');
-  const fields = request as Record<string, unknown>;
-  const keys = Object.keys(fields).sort().join(',');
-  if (keys !== 'itemId,v' || fields.v !== 1 || typeof fields.itemId !== 'string' || !ULID_RE.test(fields.itemId)) {
-    throw new Refusal('bad-request');
-  }
-  return fields.itemId;
+/** Parses the exact request frame (the bytes before its newline). Runs before any filesystem access. */
+function parseRequest(frame: Buffer): string {
+  if (frame.length > MAX_REQUEST_BYTES) throw new Refusal('bad-request');
+  const match = REQUEST_RE.exec(frame.toString('utf8'));
+  if (match === null) throw new Refusal('bad-request');
+  return match[1] as string;
 }
 
 /** Finds the one item file across peer directories. Symlinked peer directories are skipped. */
 function findItem(root: string, itemId: string): { peer: string; file: string } {
   const hits: { peer: string; file: string }[] = [];
   for (const entry of fs.readdirSync(root)) {
+    if (entry === APPROVED_DIR) continue;
     const dir = path.join(root, entry);
     if (lstatOrUndefined(dir)?.isDirectory() !== true) continue;
     const file = path.join(dir, `${itemId}.json`);
@@ -137,8 +148,8 @@ function findItem(root: string, itemId: string): { peer: string; file: string } 
   return hits[0] as { peer: string; file: string };
 }
 
-/** Reads a regular, owner-only-writable item file without following symlinks. */
-function readItemFile(file: string): string {
+/** Reads an owner-only regular item file once, through the descriptor that was checked. */
+function readItemFile(file: string): Buffer {
   let fd: number;
   try {
     fd = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
@@ -147,11 +158,38 @@ function readItemFile(file: string): string {
   }
   try {
     const st = fs.fstatSync(fd);
-    if (!st.isFile() || st.uid !== ownerUid() || (st.mode & 0o022) !== 0) throw new Refusal('unsafe-item');
+    if (!st.isFile() || st.uid !== ownerUid() || (st.mode & 0o077) !== 0) throw new Refusal('unsafe-item');
     const buf = Buffer.alloc(MAX_ITEM_BYTES + 1);
-    const n = fs.readSync(fd, buf, 0, buf.length, 0);
-    if (n > MAX_ITEM_BYTES) throw new Refusal('bad-item');
-    return buf.subarray(0, n).toString('utf8');
+    let total = 0;
+    for (;;) {
+      const n = fs.readSync(fd, buf, total, buf.length - total, total);
+      if (n === 0) break;
+      total += n;
+      if (total > MAX_ITEM_BYTES) throw new Refusal('bad-item');
+    }
+    return buf.subarray(0, total);
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
+/**
+ * Reads the approval ledger entry for an item: the approved hash, or undefined when there is no entry. The entry must be
+ * an owner-only regular file; anything else is unsafe.
+ */
+function readLedger(root: string, itemId: string): string | undefined {
+  const file = path.join(root, APPROVED_DIR, itemId);
+  let fd: number;
+  try {
+    fd = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
+    throw new Refusal('unsafe-item');
+  }
+  try {
+    const st = fs.fstatSync(fd);
+    if (!st.isFile() || st.uid !== ownerUid() || (st.mode & 0o077) !== 0 || st.size > 256) throw new Refusal('unsafe-item');
+    return fs.readFileSync(fd, 'utf8').replace(/\n$/, '');
   } finally {
     fs.closeSync(fd);
   }
@@ -167,10 +205,16 @@ function isOutboxItem(value: unknown, itemId: string, peer: string): value is Ou
     && typeof o.text === 'string' && typeof o.approvedSha256 === 'string' && threadOk;
 }
 
-function parseItem(raw: string, itemId: string, peer: string): OutboxItem {
+/**
+ * Parses the item bytes. The only accepted representation is the canonical one: `canonicalJson(item)` plus one newline.
+ * Whitespace, key order, duplicate keys, a missing final newline, and invalid UTF-8 are all refused as bad-item.
+ */
+function parseItem(raw: Buffer, itemId: string, peer: string): OutboxItem {
   let value: unknown;
   try {
-    value = JSON.parse(raw);
+    const text = new TextDecoder('utf-8', { fatal: true }).decode(raw);
+    value = JSON.parse(text);
+    if (text !== `${canonicalJson(value)}\n`) throw new Refusal('bad-item');
   } catch {
     throw new Refusal('bad-item');
   }
@@ -191,7 +235,10 @@ function readMarker(file: string): { peer: string; at: number } {
   return { peer: m.peer, at };
 }
 
-/** Counts single-use markers for this peer in the rolling hour. An unreadable marker fails closed. */
+/**
+ * Counts single-use markers for this peer in the rolling hour. Markers are persistent, so the window survives a restart.
+ * A receipt dated after `now` (a clock stepped back) still counts. An unreadable marker fails closed.
+ */
 function checkRate(sentDir: string, peer: string, cap: number, now: number): void {
   let recent = 0;
   for (const name of fs.readdirSync(sentDir)) {
@@ -203,13 +250,24 @@ function checkRate(sentDir: string, peer: string, cap: number, now: number): voi
 }
 
 /** Records the outcome beside the marker. Failure to write it is logged; the send outcome is unchanged. */
-function recordResult(sentDir: string, itemId: string, state: 'sent' | 'failed', messageId: string | undefined, now: number, log: OutboxLog): void {
+function recordResult(sentDir: string, itemId: string, state: 'sent' | 'failed' | 'uncertain', messageId: string | undefined, now: number, log: OutboxLog): void {
   const body = JSON.stringify({ v: 1, state, at: new Date(now).toISOString(), messageId });
   try {
     writeReplace(sentDir, `${itemId}.result.json`, `${body}\n`, 0o600);
   } catch (error) {
-    log('outbox.result-write-failed', { code: errInfo(error).code ?? null });
+    log('outbox.result-write-failed', { code: safeCode(error) });
   }
+}
+
+/**
+ * Reservations (markers) with no recorded result. A send may have happened, so they are never resent. Each gets a
+ * durable `uncertain` result beside its marker; the count is all that is logged.
+ */
+function reconcileUncertain(sentDir: string, now: number, log: OutboxLog): number {
+  const pending = fs.readdirSync(sentDir).filter((name) => ULID_RE.test(name)
+    && lstatOrUndefined(path.join(sentDir, `${name}.result.json`)) === undefined);
+  for (const itemId of pending) recordResult(sentDir, itemId, 'uncertain', undefined, now, log);
+  return pending.length;
 }
 
 /** Group id from /etc/group. Injectable in tests through `OutboxOptions.groups`. */
@@ -252,8 +310,9 @@ function nodeSender(): (profile: Profile, peerHandle: string, input: SendInput) 
 }
 
 /**
- * Starts the sender pipe. One request line per connection; one reply line (`ok` or `refused:<code>`); requests are
- * handled one at a time. A connection that sends nothing for PIPE_TIMEOUT_MS is dropped without a reply.
+ * Starts the sender pipe. One request frame per connection (`{"v":1,"itemId":"<ulid>"}` then a newline, or end of stream);
+ * the reply is one line, `ok` or `refused:<code>`. Requests are served one at a time. A connection that sends nothing for
+ * PIPE_TIMEOUT_MS is dropped without a reply.
  */
 export async function startOutbox(opts: OutboxOptions): Promise<OutboxHandle> {
   const log: OutboxLog = opts.log ?? jsonLineLog();
@@ -266,7 +325,9 @@ export async function startOutbox(opts: OutboxOptions): Promise<OutboxHandle> {
 
   ensureRealDir(opts.sentDir, 0o700);
   const releaseLock = acquireLock(path.join(opts.sentDir, SERVE_LOCK));
-  const server = net.createServer(accept);
+  const uncertain = reconcileUncertain(opts.sentDir, Date.now(), log);
+  if (uncertain > 0) log('outbox.uncertain', { count: uncertain });
+  const server = net.createServer({ allowHalfOpen: true }, accept);
   try {
     const gid = checkSocketDir(path.dirname(opts.pipe), opts.socketGroup, gidOf);
     const stale = lstatOrUndefined(opts.pipe);
@@ -275,6 +336,7 @@ export async function startOutbox(opts: OutboxOptions): Promise<OutboxHandle> {
       fs.unlinkSync(opts.pipe);
     }
     await listen(server, opts.pipe);
+    // Same tick as listen: no connection is accepted until the group and mode are set.
     try {
       fs.chownSync(opts.pipe, -1, gid);
       fs.chmodSync(opts.pipe, 0o660);
@@ -292,6 +354,8 @@ export async function startOutbox(opts: OutboxOptions): Promise<OutboxHandle> {
   log('outbox.listening', { once, dryRun });
 
   let chain: Promise<void> = Promise.resolve();
+  let pending = 0;
+  let open = 0;
   let finish: () => void = () => undefined;
   const done = new Promise<void>((resolve) => {
     finish = resolve;
@@ -310,15 +374,50 @@ export async function startOutbox(opts: OutboxOptions): Promise<OutboxHandle> {
     return closing;
   };
 
-  async function processRequest(line: string): Promise<void> {
-    const itemId = parseRequest(line);
+  const budget = { start: 0, used: 0, suppressed: 0 };
+  /** Budgeted diagnostic: at most LOG_BUDGET events per window. Sender logs never carry ids, paths, or text. */
+  function limited(event: string, fields: Record<string, unknown>): void {
+    const t = now();
+    if (t < budget.start || t - budget.start >= LOG_WINDOW_MS) {
+      if (budget.suppressed > 0) log('outbox.log-suppressed', { count: budget.suppressed });
+      budget.start = t;
+      budget.used = 0;
+      budget.suppressed = 0;
+    }
+    if (budget.used < LOG_BUDGET) {
+      budget.used++;
+      log(event, fields);
+    } else {
+      budget.suppressed++;
+    }
+  }
+
+  let peersNow: Peers = Object.create(null) as Peers;
+  /** Loads peers.json for this send. An invalid file keeps the last good policy; the peer id is never logged. */
+  function currentPeers(): Peers {
+    try {
+      peersNow = loadPeers(opts.peersFile);
+    } catch (error) {
+      limited('outbox.peers-invalid', { code: safeCode(error) });
+    }
+    return peersNow;
+  }
+
+  async function processRequest(frame: Buffer): Promise<void> {
+    const itemId = parseRequest(frame);
     if (lstatOrUndefined(opts.outboxRoot)?.isDirectory() !== true) throw new Refusal('root-unsafe');
     const found = findItem(opts.outboxRoot, itemId);
-    const item = parseItem(readItemFile(found.file), itemId, found.peer);
-    if (itemHash(item) !== item.approvedSha256) throw new Refusal('hash-mismatch');
+    // One read: the bytes checked, hashed, and sent are the same buffer.
+    const raw = readItemFile(found.file);
+    const item = parseItem(raw, itemId, found.peer);
+    const digest = itemHash(item);
+    if (digest !== item.approvedSha256) throw new Refusal('hash-mismatch');
+    const approved = readLedger(opts.outboxRoot, itemId);
+    if (approved === undefined) throw new Refusal('not-approved');
+    if (approved !== digest) throw new Refusal('hash-mismatch');
 
     const profile = loadNow();
-    const peers = loadPeers(opts.peersFile, log);
+    const peers = currentPeers();
     const peer = Object.hasOwn(profile.peers, item.to) ? profile.peers[item.to] : undefined;
     if (peer?.status !== 'paired') throw new Refusal('unpaired-peer');
     if (!textOk(item.text, item.subject)) throw new Refusal('invalid-text');
@@ -344,46 +443,84 @@ export async function startOutbox(opts: OutboxOptions): Promise<OutboxHandle> {
       sent = await send(profile, item.to, input);
     } catch (error) {
       recordResult(opts.sentDir, item.itemId, 'failed', undefined, now(), log);
-      log('outbox.send-failed', { code: errInfo(error).code ?? null });
+      log('outbox.send-failed', { code: safeCode(error) });
       throw new Refusal('send-failed');
     }
     recordResult(opts.sentDir, item.itemId, 'sent', sent.messageId, now(), log);
   }
 
-  async function serveRequest(line: string): Promise<string> {
+  function refusal(code: RefusalCode): string {
+    limited('outbox.refused', { code });
+    return `refused:${code}`;
+  }
+
+  async function serveRequest(frame: Buffer): Promise<string> {
     try {
-      await processRequest(line);
+      await processRequest(frame);
       return 'ok';
     } catch (error) {
-      if (error instanceof Refusal) {
-        log('outbox.refused', { code: error.code });
-        return `refused:${error.code}`;
-      }
-      log('outbox.internal', { code: errInfo(error).code ?? null });
+      if (error instanceof Refusal) return refusal(error.code);
+      log('outbox.internal', { code: safeCode(error) });
       return 'refused:internal';
     }
   }
 
+  function respond(socket: net.Socket, reply: string): void {
+    if (!socket.destroyed) socket.end(`${reply}\n`);
+  }
+
+  /** Queues a frame behind the request in progress. A malformed frame is refused at once and never queued. */
+  function enqueue(socket: net.Socket, frame: Buffer | undefined): void {
+    if (frame === undefined) {
+      respond(socket, refusal('bad-request'));
+      return;
+    }
+    if (pending >= MAX_PENDING) {
+      respond(socket, refusal('busy'));
+      return;
+    }
+    pending++;
+    chain = chain.then(async () => {
+      pending--;
+      respond(socket, await serveRequest(frame));
+    });
+  }
+
   function accept(socket: net.Socket): void {
+    if (open >= MAX_CONNECTIONS) {
+      socket.destroy();
+      return;
+    }
+    open++;
     socket.setTimeout(PIPE_TIMEOUT_MS, () => socket.destroy());
-    socket.on('error', (error) => log('outbox.socket-error', { code: errInfo(error).code ?? null }));
+    socket.on('error', (error) => limited('outbox.socket-error', { code: safeCode(error) }));
     socket.on('close', () => {
+      open--;
       if (once) void close();
     });
     let received = Buffer.alloc(0);
+    let decided = false;
+    const decide = (frame: Buffer | undefined): void => {
+      if (decided) return;
+      decided = true;
+      socket.off('data', onData);
+      socket.off('end', onEnd);
+      enqueue(socket, frame);
+    };
+    // Bytes that follow the first newline, in any chunk, make the frame invalid: one request per connection.
     const onData = (chunk: Buffer): void => {
       received = Buffer.concat([received, chunk]);
       const newline = received.indexOf(0x0a);
-      if (newline === -1 && received.length <= MAX_REQUEST_BYTES) return;
-      socket.removeListener('data', onData);
-      // Bytes after the first newline are ignored; the request is the first line only.
-      const line = newline === -1 || newline > MAX_REQUEST_BYTES ? undefined : received.subarray(0, newline).toString('utf8');
-      chain = chain.then(async () => {
-        const reply = line === undefined ? 'refused:bad-request' : await serveRequest(line);
-        if (!socket.destroyed) socket.end(`${reply}\n`);
-      });
+      if (newline === -1) {
+        if (received.length > MAX_REQUEST_BYTES) decide(undefined);
+        return;
+      }
+      decide(newline === received.length - 1 ? received.subarray(0, newline) : undefined);
     };
+    // A complete frame may end at end of stream without a newline; anything else fails REQUEST_RE.
+    const onEnd = (): void => decide(received);
     socket.on('data', onData);
+    socket.on('end', onEnd);
   }
 
   return { close, done };
@@ -428,18 +565,17 @@ export function ensurePeerDir(root: string, peerId: string): string {
     }
     fs.mkdirSync(peerDir, 0o2750);
     fs.chmodSync(peerDir, 0o2750);
+    fsyncDir(root);
   } else if (!existing.isDirectory()) {
     throw new CourierError('root-unsafe', 'peer outbox path is not a real directory');
   }
   return peerDir;
 }
 
-/** Mode of a published item: owner and group read, nothing for others. */
-const ITEM_MODE = 0o640;
-
 /**
- * Publishes `dir/<itemId>.json` with its full body: written to a same-directory `.tmp-` file, fsynced, then hard-linked
- * into place. A reader only ever sees the final name with a complete file. Returns false if that name already exists.
+ * Publishes `dir/<itemId>.json` with its full body: written to a same-directory `.tmp-` file, fsynced, hard-linked into
+ * place, and the directory fsynced. A reader only ever sees the final name with a complete file. Returns false if that
+ * name already exists.
  */
 export function publishItem(dir: string, itemId: string, body: string): boolean {
   const temp = path.join(dir, `.tmp-${randomBytes(9).toString('hex')}`);
@@ -456,6 +592,7 @@ export function publishItem(dir: string, itemId: string, body: string): boolean 
   fs.closeSync(fd);
   try {
     fs.linkSync(temp, path.join(dir, `${itemId}.json`));
+    fsyncDir(dir);
     return true;
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'EEXIST') return false;
@@ -465,9 +602,16 @@ export function publishItem(dir: string, itemId: string, body: string): boolean 
   }
 }
 
+/** Approval ledger directory under the outbox root (0700). */
+function ensureLedgerDir(root: string): string {
+  const dir = path.join(root, APPROVED_DIR);
+  ensureRealDir(dir, 0o700);
+  return dir;
+}
+
 function cmdOutboxAdd(args: ParsedArgs): void {
   const peerId = args.positional[0];
-  if (peerId === undefined || !PEER_RE.test(peerId)) throw new CourierError('usage', ADD_USAGE);
+  if (peerId === undefined || !PEER_RE.test(peerId) || peerId === APPROVED_DIR) throw new CourierError('usage', ADD_USAGE);
   const which = oneOf(args, ['thread', 'new']);
   const thread = which === 'thread' ? requireFlag(args, 'thread', ADD_USAGE) : null;
   if (thread !== null && !ULID_RE.test(thread)) throw new CourierError('usage', ADD_USAGE);
@@ -486,10 +630,15 @@ function cmdOutboxAdd(args: ParsedArgs): void {
   }
   const itemId = ulid();
   const body = { v: 1, itemId, to: peerId, thread, ...(subject === undefined ? {} : { subject }), text };
-  const item = { ...body, approvedSha256: itemHash(body) };
+  const approvedSha256 = itemHash(body);
+  const item = { ...body, approvedSha256 };
 
   const peerDir = ensurePeerDir(root, peerId);
-  if (!publishItem(peerDir, itemId, `${JSON.stringify(item, null, 2)}\n`)) {
+  // The ledger entry is created first: an item without one is never sent, so a crash between the two writes is harmless.
+  if (!writeNew(ensureLedgerDir(root), itemId, `${approvedSha256}\n`, ITEM_MODE)) {
+    throw new CourierError('exists', 'item id collision; retry');
+  }
+  if (!publishItem(peerDir, itemId, `${canonicalJson(item)}\n`)) {
     throw new CourierError('exists', 'item id collision; retry');
   }
   process.stdout.write(`${JSON.stringify({ ok: true, itemId, peer: peerId }, null, 2)}\n`);

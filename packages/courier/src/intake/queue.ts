@@ -26,7 +26,7 @@ export function ensureRealDir(dir: string, mode: number): void {
 }
 
 /** Makes a link or rename in `dir` durable: the directory entry is fsynced, not only the file contents. */
-function fsyncDir(dir: string): void {
+export function fsyncDir(dir: string): void {
   const fd = fs.openSync(dir, 'r');
   try {
     fs.fsyncSync(fd);

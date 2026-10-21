@@ -6,7 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { ulid } from 'ulid';
 import { REFUSAL_CODES, groupGid, startOutbox } from '../dist/outbox.js';
-import { requestHash } from '../dist/canonical.js';
+import { canonicalJson, requestHash } from '../dist/canonical.js';
 import { CourierError } from '../dist/errors.js';
 import * as outboxModule from '../dist/outbox.js';
 
@@ -82,8 +82,9 @@ function requestFor(itemId) {
   return JSON.stringify({ v: 1, itemId });
 }
 
+/** Writes the item in canonical bytes; `outbox add` records its hash in the owner-only `approved/<itemId>` ledger. */
 function writeItem(env, {
-  itemId = ulid(), dir = 'alpha', to = 'alpha', thread = ulid(), subject, text = 'hello', approve = true, mode = 0o644,
+  itemId = ulid(), dir = 'alpha', to = 'alpha', thread = ulid(), subject, text = 'hello', approve = true, ledger = true, mode = 0o600,
 } = {}) {
   const body = subject === undefined
     ? { v: 1, itemId, to, thread, text }
@@ -92,8 +93,13 @@ function writeItem(env, {
   const peerDir = path.join(env.outboxRoot, dir);
   fs.mkdirSync(peerDir, { recursive: true });
   const file = path.join(peerDir, `${itemId}.json`);
-  fs.writeFileSync(file, `${JSON.stringify(item, null, 2)}\n`);
+  fs.writeFileSync(file, `${canonicalJson(item)}\n`);
   fs.chmodSync(file, mode);
+  if (ledger) {
+    const approvedDir = path.join(env.outboxRoot, 'approved');
+    fs.mkdirSync(approvedDir, { recursive: true, mode: 0o700 });
+    fs.writeFileSync(path.join(approvedDir, itemId), `${requestHash(body)}\n`, { mode: 0o600 });
+  }
   return { itemId, file, thread };
 }
 
@@ -373,13 +379,13 @@ test('groupGid reads the numeric gid and rejects unknown groups', () => {
   assert.throws(() => groupGid('missing-group', file), { code: 'unknown-group' });
 });
 
-test('an outbox item is published 0640 in a 2750 peer directory', () => {
+test('an outbox item is published 0600 in a 2750 peer directory', () => {
   const env = makeEnv();
   const peerDir = outboxModule.ensurePeerDir(env.outboxRoot, 'alpha');
   const itemId = ulid();
   assert.equal(outboxModule.publishItem(peerDir, itemId, '{"v":1}\n'), true);
   assert.equal(fs.statSync(peerDir).mode & 0o7777, 0o2750);
-  assert.equal(fs.statSync(path.join(peerDir, `${itemId}.json`)).mode & 0o7777, 0o640);
+  assert.equal(fs.statSync(path.join(peerDir, `${itemId}.json`)).mode & 0o7777, 0o600);
   assert.deepEqual(fs.readdirSync(peerDir), [`${itemId}.json`]);
 });
 
