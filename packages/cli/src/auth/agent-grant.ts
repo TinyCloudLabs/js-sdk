@@ -6,6 +6,7 @@ import { CLIError } from "../output/errors.js";
 import { normalizePkhIdentifier } from "../lib/space.js";
 import type { RequestedExpiry } from "./scoped-login.js";
 import { isRawEncryptionPermission } from "../lib/raw-encryption.js";
+import { matchAppsAgentRequest } from "../lib/apps-agent-preset.js";
 import {
   CLOCK_SKEW_MS,
   expiryLimit,
@@ -233,4 +234,14 @@ export function portableFromAgentApproval(
     host,
     siweProof: { siwe: data.siwe as string, signature: data.signature as string },
   };
+}
+
+/** True when an OpenKey owner's request is the apps-agent preset, which is approved in OpenKey each time. */
+export function requiresAgentApproval(
+  authMethod: string | undefined,
+  requested: readonly PermissionEntry[],
+  requestedExpiry: string | number | undefined,
+  applicationsSpace: string,
+): boolean {
+  return authMethod === "openkey" && matchAppsAgentRequest(requested, requestedExpiry, applicationsSpace) !== undefined;
 }

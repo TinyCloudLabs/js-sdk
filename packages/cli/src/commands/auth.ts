@@ -141,7 +141,7 @@ import {
 } from "../lib/apps-agent-preset.js";
 import { permissionConsentLine, signExtrasQuestion } from "../lib/consent-text.js";
 import { buildReplicationLoginRequest, type ReplicationLoginOptions } from "../auth/replication-login.js";
-import { portableFromAgentApproval, requesterPublicJwk, verifyAgentApproval } from "../auth/agent-grant.js";
+import { portableFromAgentApproval, requiresAgentApproval, requesterPublicJwk, verifyAgentApproval } from "../auth/agent-grant.js";
 
 /** The one function dependency used by owner OpenKey permission acquisition. */
 export type OpenKeyAcquisition = typeof startAuthFlow;
@@ -1343,7 +1343,7 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
         const resolvedRequest = { ...parsed, requested };
         const node = await ensureAuthenticated(ctx);
         let grant: Awaited<ReturnType<typeof grantAuthRequest>>;
-        if (profile.authMethod === "openkey") {
+        if (requiresAgentApproval(profile.authMethod, requested, parsed.requestedExpiry, applications!.space ?? APPS_AGENT_SPACE)) {
           // The owner approves each agent request in OpenKey. Existing runtime
           // authority and --yes do not skip that approval.
           const delegation = await acquireAgentGrant({

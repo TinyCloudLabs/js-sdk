@@ -2,7 +2,8 @@ import { describe, expect, test } from "bun:test";
 import { SiweMessage } from "siwe";
 import { NodeWasmBindings, PrivateKeySigner, type PermissionEntry } from "@tinycloud/node-sdk";
 import { openKeyDelegate } from "../test-support/openkey-delegate.js";
-import { verifyAgentApproval, type AgentApprovalExpectations } from "./agent-grant.js";
+import { requiresAgentApproval, verifyAgentApproval, type AgentApprovalExpectations } from "./agent-grant.js";
+import { APPS_AGENT_SPACE, appsAgentPermissions } from "../lib/apps-agent-preset.js";
 import { parseRequestedExpiry } from "./scoped-login.js";
 
 const wasm = new NodeWasmBindings();
@@ -143,5 +144,21 @@ describe("verifyAgentApproval", () => {
       permissions: requested.map((entry) => entry.path === "demo/" ? { ...entry, path: "" } : entry),
     });
     expect(await refusalCode(data)).toBe("OPENKEY_GRANT_BROADENED");
+  });
+});
+
+describe("requiresAgentApproval", () => {
+  const presetRead = appsAgentPermissions("read", ["demo"]);
+
+  test("requires approval for an apps-agent preset request from an OpenKey owner", () => {
+    expect(requiresAgentApproval("openkey", presetRead, "7d", APPS_AGENT_SPACE)).toBe(true);
+  });
+
+  test("keeps the existing path for a local-key owner", () => {
+    expect(requiresAgentApproval("local", presetRead, "7d", APPS_AGENT_SPACE)).toBe(false);
+  });
+
+  test("keeps the existing path for a request that is not the preset lifetime", () => {
+    expect(requiresAgentApproval("openkey", presetRead, "1d", APPS_AGENT_SPACE)).toBe(false);
   });
 });
