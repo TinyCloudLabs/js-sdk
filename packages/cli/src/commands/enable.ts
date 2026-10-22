@@ -22,7 +22,6 @@ export function registerEnableCommand(program: Command): void {
           nodeOrigin: context.host,
           shareOrigin: DEFAULT_SHARE_ORIGIN,
           permissions: sharePublishingPermissions(),
-          sharePublishingDecrypt: true,
           reason: "Allow this TinyCloud CLI profile to publish Share links.",
           replaceSession: options.replaceSession === true,
           persistHost: globalOptions.host !== undefined,

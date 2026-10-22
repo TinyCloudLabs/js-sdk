@@ -489,6 +489,8 @@ export function createShareAuthorityAdapters(input: {
   readonly revokePolicyRoot?: ShareRevocationAdapter["revokePolicyRoot"];
   /** Bearer-link sharing service: `undefined` host decodes the link, a host reads from that owner Node. */
   readonly nativeSharing?: (host: string | undefined) => TinyCloudNode["sharing"];
+  /** One-hour decrypt approval for an addressed share when this session does not hold decrypt. Throws when the approval is refused or does not complete. */
+  readonly approveShareDecrypt?: (input: { readonly profileName: string; readonly node: TinyCloudNode }) => Promise<void>;
 } = {}): {
   readonly targetAdapter: TargetPublishAdapter;
   readonly records: SenderShareRecordStorage;
@@ -649,7 +651,13 @@ export function createShareAuthorityAdapters(input: {
     // or node request, registry write or upload. A signer-backed (local-key) owner has full authority.
     const addressedEncryptionNetwork = targetInput.target.kind === "bearer" ? undefined : node.getEncryptionNetworkIdForSpace(ownerSpaceId);
     if (addressedEncryptionNetwork !== undefined && node.isSessionOnly && !sessionHoldsEncryptionDecrypt(node, addressedEncryptionNetwork)) {
-      throw new SharePublishAuthorityError({ kind: "decrypt-not-held" });
+      if (input.approveShareDecrypt === undefined || activeProfileName === undefined) throw new SharePublishAuthorityError({ kind: "decrypt-not-held" });
+      try {
+        await input.approveShareDecrypt({ profileName: activeProfileName, node });
+      } catch (cause) {
+        throw new SharePublishAuthorityError({ kind: "decrypt-approval-not-completed" }, { cause });
+      }
+      if (!sessionHoldsEncryptionDecrypt(node, addressedEncryptionNetwork)) throw new SharePublishAuthorityError({ kind: "decrypt-not-held" });
     }
     const config = await publicConfig();
     if (targetInput.origin !== config.shareOrigin) throw new SharePublishAuthorityError({ kind: "origin-mismatch" });

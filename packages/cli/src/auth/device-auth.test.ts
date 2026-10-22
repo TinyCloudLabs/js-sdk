@@ -139,7 +139,6 @@ function acquire(openkey: FakeOpenKey, overrides: Partial<DeviceAuthorizationInp
   return acquireDeviceDelegation({
     sessionDid, jwk: key, nodeOrigin: NODE, shareOrigin: SHARE, permissions: requested,
     fetchFn: openkey.fetchFn, emitInstructions: () => undefined, wait: async () => undefined,
-    sharePublishingDecrypt: true, // `requested` is the builtin manifest, which carries the decrypt entry
     ...overrides,
   });
 }
@@ -183,20 +182,18 @@ describe("OpenKey device authorization", () => {
     expect(new Set(requested.map((permission) => permission.space))).toEqual(new Set(["default"]));
   });
 
-  const shareDecryptEntry = { service: "tinycloud.encryption", space: "default", path: "", actions: ["tinycloud.encryption/decrypt"] };
-
-  test("enable share posts the builtin decrypt entry in the short default space", async () => {
+  test("enable share posts the builtin manifest without any encryption entry", async () => {
     const openkey = fakeOpenKey((start, id) => approved(start, id, { signed: requested }));
-    await acquire(openkey, { permissions: sharePublishingPermissions(), sharePublishingDecrypt: true });
-    expect((openkey.startBodies[0]!.permissions as PermissionEntry[]).filter((p) => p.service === "tinycloud.encryption")).toEqual([shareDecryptEntry]);
+    await acquire(openkey, { permissions: sharePublishingPermissions() });
+    expect((openkey.startBodies[0]!.permissions as PermissionEntry[]).some((p) => p.service === "tinycloud.encryption")).toBe(false);
   });
 
-  test("auth login --device --manifest builtin:share-publishing posts the same decrypt entry", async () => {
+  test("auth login --device --manifest builtin:share-publishing posts no encryption entry", async () => {
     await ProfileManager.setProfile("agent", { name: "agent", host: NODE, chainId: 1, spaceName: "default", ownerDid, did: sessionDid, createdAt: "2026-10-01T00:00:00.000Z" });
     const manifestPermissions = await loadManifestPermissions("builtin:share-publishing", "agent", { device: true, allowLogicalSpaces: true });
     const openkey = fakeOpenKey((start, id) => approved(start, id, { signed: manifestPermissions }));
-    await acquire(openkey, { permissions: manifestPermissions, sharePublishingDecrypt: true });
-    expect((openkey.startBodies[0]!.permissions as PermissionEntry[]).filter((p) => p.service === "tinycloud.encryption")).toEqual([shareDecryptEntry]);
+    await acquire(openkey, { permissions: manifestPermissions });
+    expect((openkey.startBodies[0]!.permissions as PermissionEntry[]).some((p) => p.service === "tinycloud.encryption")).toBe(false);
   });
 
   test("refuses encryption or secrets-space device scopes before starting the device API", async () => {
@@ -215,33 +212,11 @@ describe("OpenKey device authorization", () => {
     }
   });
 
-  test("admits the builtin decrypt entry only under sharePublishingDecrypt", async () => {
-    const admitted = fakeOpenKey((start, id) => approved(start, id, { signed: requested }));
-    await acquire(admitted, { sharePublishingDecrypt: true });
-    expect(admitted.urls.length).toBeGreaterThan(0);
-
+  test("refuses the decrypt entry on the base device login, even alone", async () => {
     const refused = fakeOpenKey(() => response({}), { start: response({ error: "invalid_scope" }, 400) });
-    await expect(acquire(refused, { sharePublishingDecrypt: false })).rejects.toMatchObject({ code: "DEVICE_AUTH_UNSUPPORTED_SCOPE" });
+    const decrypt = { service: "tinycloud.encryption", space: "default", path: "", actions: ["tinycloud.encryption/decrypt"] };
+    await expect(acquire(refused, { permissions: [decrypt] })).rejects.toMatchObject({ code: "DEVICE_AUTH_UNSUPPORTED_SCOPE" });
     expect(refused.urls).toEqual([]);
-  });
-
-  test("refuses every other decrypt shape even under sharePublishingDecrypt", async () => {
-    const decrypt = requested.find((p) => p.service === "tinycloud.encryption")!;
-    const base = requested.filter((p) => p !== decrypt);
-    const variants: PermissionEntry[][] = [
-      [...base, decrypt, { ...decrypt }],
-      [...base, { ...decrypt, path: "x" }],
-      [...base, { ...decrypt, actions: ["tinycloud.encryption/encrypt"] }],
-      [...base, { ...decrypt, space: "secrets" }],
-      [...base, { ...decrypt, caveats: [] }],
-    ];
-    for (const permissions of variants) {
-      const openkey = fakeOpenKey(() => response({}), { start: response({ error: "invalid_scope" }, 400) });
-      await expect(acquire(openkey, { permissions, sharePublishingDecrypt: true })).rejects.toMatchObject({
-        code: expect.stringMatching(/^(DEVICE_AUTH_UNSUPPORTED_SCOPE|INVALID_LOGIN_SCOPE)$/),
-      });
-      expect(openkey.urls).toEqual([]);
-    }
   });
 
   test("still starts device authorization for KV paths named secrets outside the secrets space", async () => {
@@ -259,7 +234,6 @@ describe("OpenKey device authorization", () => {
     expect(result.declined).toEqual([
       { service: "tinycloud.kv", space: spaceId, path: "shares/", actions: addressedPrefix.actions },
       { service: "tinycloud.kv", space: spaceId, path: "artifacts/", actions: artifactsPrefix.actions },
-      { service: "tinycloud.encryption", space: spaceId, path: "", actions: ["tinycloud.encryption/decrypt"] },
     ]);
   });
 
@@ -437,7 +411,7 @@ describe("OpenKey device authorization", () => {
   test("names OpenKey when its device API is unreachable", async () => {
     const fetchFn = Object.assign(async () => { throw new TypeError("fetch failed"); }, { preconnect: () => undefined }) as typeof globalThis.fetch;
     await expect(acquireDeviceDelegation({
-      sessionDid, jwk: key, nodeOrigin: NODE, shareOrigin: SHARE, permissions: requested, sharePublishingDecrypt: true,
+      sessionDid, jwk: key, nodeOrigin: NODE, shareOrigin: SHARE, permissions: requested,
       openkeyHost: "https://openkey.example", fetchFn, emitInstructions: () => undefined, wait: async () => undefined,
     })).rejects.toMatchObject({ code: "OPENKEY_UNREACHABLE", message: expect.stringContaining("https://openkey.example") });
   });
@@ -471,7 +445,7 @@ describe("device login persistence", () => {
     await ProfileManager.setProfile("agent", { name: "agent", host: NODE, chainId: 1, spaceName: "default", did: sessionDid, createdAt: "2026-10-01T00:00:00.000Z" });
     const openkey = fakeOpenKey((start, id) => approved(start, id, { signed: requested }));
 
-    await loginWithDeviceAuthorization({ profileName: "agent", nodeOrigin: NODE, shareOrigin: SHARE, permissions: requested, sharePublishingDecrypt: true, fetchFn: openkey.fetchFn, emitInstructions: () => undefined, wait: async () => undefined });
+    await loginWithDeviceAuthorization({ profileName: "agent", nodeOrigin: NODE, shareOrigin: SHARE, permissions: requested, fetchFn: openkey.fetchFn, emitInstructions: () => undefined, wait: async () => undefined });
 
     expect(await ProfileManager.getProfile("agent")).toMatchObject({ authMethod: "openkey", posture: "owner-openkey", ownerDid, spaceId, sessionDid, host: NODE });
     expect(await ProfileManager.getSession("agent")).toMatchObject({ ownerDid, spaceId, jwk: { d: key.d } });
@@ -492,7 +466,7 @@ describe("device login persistence", () => {
         await ProfileManager.setProfile("agent", { name: "agent", host: NODE, chainId: 1, spaceName: "default", did: sessionDid, createdAt: "2026-10-01T00:00:00.000Z" });
         const openkey = fakeOpenKey((start, id) => approved(start, id, { signed: requested, primary }));
 
-        const { result } = await loginWithDeviceAuthorization({ profileName: "agent", nodeOrigin: NODE, shareOrigin: SHARE, permissions: requested, sharePublishingDecrypt: true, fetchFn: openkey.fetchFn, emitInstructions: () => undefined, wait: async () => undefined, replaceSession: true });
+        const { result } = await loginWithDeviceAuthorization({ profileName: "agent", nodeOrigin: NODE, shareOrigin: SHARE, permissions: requested, fetchFn: openkey.fetchFn, emitInstructions: () => undefined, wait: async () => undefined, replaceSession: true });
 
         expect(result.primary).toBe(primary);
         expect((await ProfileManager.getProfile("agent")).ownerKeyPrimary).toBe(primary);
@@ -509,7 +483,7 @@ describe("device login persistence", () => {
     await ProfileManager.setProfile("agent", before);
     const openkey = fakeOpenKey((start, id) => approved(start, id, { signed: requested, shareOrigin: "https://attacker.example" }));
 
-    await expect(loginWithDeviceAuthorization({ profileName: "agent", nodeOrigin: NODE, shareOrigin: SHARE, permissions: requested, sharePublishingDecrypt: true, fetchFn: openkey.fetchFn, emitInstructions: () => undefined, wait: async () => undefined }))
+    await expect(loginWithDeviceAuthorization({ profileName: "agent", nodeOrigin: NODE, shareOrigin: SHARE, permissions: requested, fetchFn: openkey.fetchFn, emitInstructions: () => undefined, wait: async () => undefined }))
       .rejects.toMatchObject({ code: "DEVICE_AUTH_BINDING_MISMATCH" });
     expect(await ProfileManager.getProfile("agent")).toEqual(before);
     expect(await ProfileManager.getSession("agent")).toBeNull();
@@ -521,7 +495,7 @@ describe("device login persistence", () => {
     await ProfileManager.setProfile("agent", { name: "agent", host: NODE, chainId: 1, spaceName: "default", did: sessionDid, createdAt: "2026-10-01T00:00:00.000Z", openkeyHost: "https://openkey.example" });
     const openkey = fakeOpenKey((start, id) => approved(start, id, { signed: requested }));
 
-    await loginWithDeviceAuthorization({ profileName: "agent", nodeOrigin: NODE, shareOrigin: SHARE, permissions: requested, sharePublishingDecrypt: true, fetchFn: openkey.fetchFn, emitInstructions: () => undefined, wait: async () => undefined });
+    await loginWithDeviceAuthorization({ profileName: "agent", nodeOrigin: NODE, shareOrigin: SHARE, permissions: requested, fetchFn: openkey.fetchFn, emitInstructions: () => undefined, wait: async () => undefined });
 
     expect(new Set(openkey.urls.map((url) => new URL(url).origin))).toEqual(new Set(["https://openkey.example"]));
     expect((await ProfileManager.getProfile("agent")).openkeyHost).toBe("https://openkey.example");
@@ -532,7 +506,7 @@ describe("device login persistence", () => {
     await ProfileManager.setProfile("agent", { name: "agent", host: NODE, chainId: 1, spaceName: "default", did: sessionDid, createdAt: "2026-10-01T00:00:00.000Z" });
     const openkey = fakeOpenKey((start, id) => approved(start, id, { signed: requested }));
 
-    const { result } = await loginWithDeviceAuthorization({ profileName: "agent", nodeOrigin: NODE, shareOrigin: SHARE, permissions: requested.filter((p) => p.service !== "tinycloud.capabilities"), sharePublishingDecrypt: true, fetchFn: openkey.fetchFn, emitInstructions: () => undefined, wait: async () => undefined });
+    const { result } = await loginWithDeviceAuthorization({ profileName: "agent", nodeOrigin: NODE, shareOrigin: SHARE, permissions: requested.filter((p) => p.service !== "tinycloud.capabilities"), fetchFn: openkey.fetchFn, emitInstructions: () => undefined, wait: async () => undefined });
 
     expect(openkey.startBodies[0]!.permissions).toEqual(requested);
     expect(result.declined).toEqual([]);
@@ -569,7 +543,7 @@ describe("device login persistence", () => {
   const OTHER_OWNER = "did:pkh:eip155:1:0x1111111111111111111111111111111111111111";
   const baseProfile = { name: "agent", host: NODE, chainId: 1, spaceName: "default", did: sessionDid, createdAt: "2026-10-01T00:00:00.000Z" };
   const login = (openkey: FakeOpenKey, extra: Record<string, unknown> = {}) => loginWithDeviceAuthorization({
-    profileName: "agent", nodeOrigin: NODE, shareOrigin: SHARE, permissions: requested, sharePublishingDecrypt: true,
+    profileName: "agent", nodeOrigin: NODE, shareOrigin: SHARE, permissions: requested,
     fetchFn: openkey.fetchFn, emitInstructions: () => undefined, wait: async () => undefined, ...extra,
   });
 

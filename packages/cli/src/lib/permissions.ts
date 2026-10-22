@@ -43,8 +43,6 @@ import { resolveSpaceUri } from "./space.js";
 import { isRawEncryptionPermission } from "./raw-encryption.js";
 import { canonicalOwnerDid } from "./owner-did.js";
 import {
-  admitsSharePublishingDecrypt,
-  isSharePublishingDecryptPermission,
   isDeviceRestrictedPermission,
   SHARE_PUBLISHING_MANIFEST,
   SHARE_PUBLISHING_MANIFEST_REF,
@@ -530,18 +528,11 @@ export async function loadManifestPermissions(
           ...(Array.isArray(entry.caveats) ? { caveats: entry.caveats as PermissionEntry["caveats"] } : {}),
         };
       });
-    if (options.device && permissions.some(isDeviceRestrictedPermission) &&
-      !(source === SHARE_PUBLISHING_MANIFEST_REF && admitsSharePublishingDecrypt(permissions))) {
+    if (options.device && permissions.some(isDeviceRestrictedPermission)) {
       throw new CLIError("DEVICE_AUTH_UNSUPPORTED_SCOPE", "--device cannot authorize tinycloud.encryption or the secrets space. Use browser or --paste login.", ExitCode.USAGE_ERROR);
     }
-    // The admitted device entry keeps its logical `default` space. Resolving it would send the owner's full URI.
-    // Device requests emit only the short `default` form; the predicate also accepts the URI-spaced form, which is never sent from this path.
-    const admittedDecrypt = options.device === true && source === SHARE_PUBLISHING_MANIFEST_REF
-      ? permissions.filter(isSharePublishingDecryptPermission)
-      : [];
     permissions.push(...await secretPermissionsFromAppManifest(manifest, profile, options.ownerDid));
-    const resolved = await resolvePermissionSpaces(permissions.filter((entry) => !admittedDecrypt.includes(entry)), profile, options);
-    return [...resolved, ...admittedDecrypt];
+    return resolvePermissionSpaces(permissions, profile, options);
   }
 
   throw new CLIError(

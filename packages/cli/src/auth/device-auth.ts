@@ -26,7 +26,7 @@ import {
 } from "./scoped-login.js";
 import { assertNotLocalOwner, assertSessionReplaceable, commitLogin, readProfileSnapshot } from "./login-commit.js";
 import { announceFirstOwner, openKeyPrimaryFlag, warnIfNotPrimaryKey, withOwnerKeyPrimary } from "./owner-key.js";
-import { admitsSharePublishingDecrypt, isDeviceRestrictedPermission } from "../share/publishing-manifest.js";
+import { isDeviceRestrictedPermission } from "../share/publishing-manifest.js";
 
 /** OpenKey caps device-approved delegations at 30 days. */
 const DEVICE_DELEGATION_MAX_SECONDS = 30 * 24 * 60 * 60;
@@ -89,8 +89,6 @@ export interface DeviceAuthorizationInput {
   shareOrigin: string;
   /** Manifest permissions: one space, fully qualified services and actions. */
   permissions: PermissionEntry[];
-  /** Set only by the builtin share-publishing flow: admits its one decrypt entry. */
-  sharePublishingDecrypt?: boolean;
   /** Requested lifetime or absolute deadline; defaults to the 30-day maximum. */
   expiry?: RequestedExpiry;
   reason?: string;
@@ -424,18 +422,28 @@ function writeApprovalPrompt(prompt: DeviceApprovalPrompt): void {
 /**
  * Request exactly `permissions` through OpenKey device authorization, wait
  * for the owner's approval for the whole approval window, and return the
- * verified session. Nothing is persisted here.
+ * verified session. Nothing is persisted here. Device login cannot carry the
+ * encryption or secrets spaces.
  */
 export async function acquireDeviceDelegation(input: DeviceAuthorizationInput): Promise<DeviceAuthorizationResult> {
-  validateLoginPermissions(input.permissions);
-  const restricted = input.permissions.some(isDeviceRestrictedPermission);
-  if (restricted && !(input.sharePublishingDecrypt === true && admitsSharePublishingDecrypt(input.permissions))) {
+  if (input.permissions.some(isDeviceRestrictedPermission)) {
     throw new CLIError(
       "DEVICE_AUTH_UNSUPPORTED_SCOPE",
       "--device cannot authorize tinycloud.encryption or the secrets space. Use another OpenKey approval method for this manifest.",
       ExitCode.USAGE_ERROR,
     );
   }
+  return runDeviceAuthorization(input);
+}
+
+/**
+ * Run OpenKey device authorization for `input.permissions` without the
+ * restricted-scope check that {@link acquireDeviceDelegation} applies. Base
+ * login goes through `acquireDeviceDelegation`; the share decrypt approval
+ * calls this directly with its single decrypt entry.
+ */
+export async function runDeviceAuthorization(input: DeviceAuthorizationInput): Promise<DeviceAuthorizationResult> {
+  validateLoginPermissions(input.permissions);
   const expiry = input.expiry ?? { durationMs: DEVICE_DELEGATION_MAX_SECONDS * 1000 };
   const ttlSeconds = Math.floor(expiry.durationMs / 1000);
   if (!Number.isSafeInteger(ttlSeconds) || ttlSeconds < 60 || ttlSeconds > DEVICE_DELEGATION_MAX_SECONDS) {

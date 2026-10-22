@@ -681,7 +681,6 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
             nodeOrigin: ctx.host,
             shareOrigin: DEFAULT_SHARE_ORIGIN,
             permissions: loginPermissions!,
-            sharePublishingDecrypt: options.manifest === SHARE_PUBLISHING_MANIFEST_REF,
             ...(options.expiry === undefined ? {} : { expiry: parseRequestedExpiry(parseExpiryOption(options.expiry)!) }),
             reason: "Allow this TinyCloud CLI profile to use the permissions in the requested manifest.",
             expectedOwner: owner,
@@ -1872,7 +1871,7 @@ interface StagedOpenKeyGrant {
 }
 
 /** Validate and activate the complete batch before committing any stored authority. */
-async function activateAndStoreOpenKeyGrants(
+export async function activateAndStoreOpenKeyGrants(
   profileName: string,
   host: string,
   node: TinyCloudNode,
