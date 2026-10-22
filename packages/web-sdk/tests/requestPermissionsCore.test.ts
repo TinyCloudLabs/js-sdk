@@ -250,3 +250,135 @@ describe("requestPermissionsCore: validation", () => {
     expect(showModal).not.toHaveBeenCalled();
   });
 });
+
+// ---------------------------------------------------------------------------
+// expiryMs threading and validation
+// ---------------------------------------------------------------------------
+
+describe("requestPermissionsCore: expiryMs", () => {
+  test("forwards expiryMs to grantPermissions", async () => {
+    const grantPermissions = mock(async () => {});
+
+    await requestPermissionsCore(
+      additional,
+      {
+        manifest: baseManifest,
+        showModal: async () => ({ approved: true }),
+        grantPermissions,
+      },
+      { expiryMs: 3_600_000 },
+    );
+
+    expect(grantPermissions).toHaveBeenCalledWith(additional, { expiryMs: 3_600_000 });
+  });
+
+  test("passes no options to grantPermissions when expiryMs is absent", async () => {
+    const grantPermissions = mock(async () => {});
+
+    await requestPermissionsCore(additional, {
+      manifest: baseManifest,
+      showModal: async () => ({ approved: true }),
+      grantPermissions,
+    });
+
+    expect(grantPermissions.mock.calls[0]?.[1]).toBeUndefined();
+  });
+
+  test.each([Number.NaN, Number.POSITIVE_INFINITY, 0, -1])(
+    "throws before the modal when expiryMs is %p",
+    async (expiryMs) => {
+      const showModal = mock(() => Promise.resolve({ approved: true }));
+      const grantPermissions = mock(async () => {});
+      await expect(
+        requestPermissionsCore(
+          additional,
+          {
+            manifest: baseManifest,
+            showModal,
+            grantPermissions,
+          },
+          { expiryMs },
+        ),
+      ).rejects.toThrow(/expiryMs/);
+      expect(showModal).not.toHaveBeenCalled();
+      expect(grantPermissions).not.toHaveBeenCalled();
+    },
+  );
+});
+
+describe("requestPermissionsCore: decrypt expiry cap", () => {
+  const decryptEntry: PermissionEntry = {
+    service: "tinycloud.encryption",
+    path: "urn:tinycloud:encryption:did:pkh:eip155:1:0x1:default",
+    actions: ["tinycloud.encryption/decrypt"],
+  };
+
+  test("rejects a decrypt grant over one hour before the modal", async () => {
+    const showModal = mock(() => Promise.resolve({ approved: true }));
+    const grantPermissions = mock(async () => {});
+    await expect(
+      requestPermissionsCore(
+        [decryptEntry],
+        { manifest: baseManifest, showModal, grantPermissions },
+        { expiryMs: 3_600_001 },
+      ),
+    ).rejects.toMatchObject({ code: "DECRYPT_EXPIRY_TOO_LONG" });
+    expect(showModal).not.toHaveBeenCalled();
+    expect(grantPermissions).not.toHaveBeenCalled();
+  });
+
+  test.each(["*", "tinycloud.encryption/*"])(
+    "rejects a %p wildcard grant over one hour before the modal",
+    async (action) => {
+      const showModal = mock(() => Promise.resolve({ approved: true }));
+      await expect(
+        requestPermissionsCore(
+          [{ ...decryptEntry, actions: [action] }],
+          { manifest: baseManifest, showModal, grantPermissions: async () => {} },
+          { expiryMs: 3_600_001 },
+        ),
+      ).rejects.toMatchObject({ code: "DECRYPT_EXPIRY_TOO_LONG" });
+      expect(showModal).not.toHaveBeenCalled();
+    },
+  );
+
+  test("allows a decrypt grant at 59 minutes", async () => {
+    const grantPermissions = mock(async () => {});
+    await requestPermissionsCore(
+      [decryptEntry],
+      {
+        manifest: baseManifest,
+        showModal: async () => ({ approved: true }),
+        grantPermissions,
+      },
+      { expiryMs: 3_540_000 },
+    );
+    expect(grantPermissions).toHaveBeenCalledWith([decryptEntry], { expiryMs: 3_540_000 });
+  });
+
+  test("allows a decrypt grant at exactly one hour and reaches the modal", async () => {
+    const showModal = mock(() => Promise.resolve({ approved: true }));
+    const grantPermissions = mock(async () => {});
+    await requestPermissionsCore(
+      [decryptEntry],
+      { manifest: baseManifest, showModal, grantPermissions },
+      { expiryMs: 3_600_000 },
+    );
+    expect(showModal).toHaveBeenCalledTimes(1);
+    expect(grantPermissions).toHaveBeenCalledWith([decryptEntry], { expiryMs: 3_600_000 });
+  });
+
+  test("leaves a non-decrypt grant over one hour unchanged", async () => {
+    const grantPermissions = mock(async () => {});
+    await requestPermissionsCore(
+      additional,
+      {
+        manifest: baseManifest,
+        showModal: async () => ({ approved: true }),
+        grantPermissions,
+      },
+      { expiryMs: 3_600_001 },
+    );
+    expect(grantPermissions).toHaveBeenCalledWith(additional, { expiryMs: 3_600_001 });
+  });
+});

@@ -24,6 +24,7 @@ import {
 import { NodeWasmBindings } from "./NodeWasmBindings";
 import { PrivateKeySigner } from "./signers/PrivateKeySigner";
 import { TinyCloudNode } from "./TinyCloudNode";
+import { DEFAULT_DELEGATION_EXPIRY_MS } from "./delegateToHelpers";
 const revokeTargetCid = "bafkr4id4zlugcezsh7a5op53hdbepyi2buq5wx6s2czglg2xchvxeqqmn4";
 
 function makeFakeSessionManager(): ISessionManager {
@@ -1239,6 +1240,31 @@ describe("TinyCloudNode runtime permission delegations", () => {
     expect(node.hasRuntimePermissions(request("tinycloud.kv/get"))).toBe(true);
     expect(node.hasRuntimePermissions(request("tinycloud.kv/sync"))).toBe(false);
     expect(node.hasRuntimePermissions(request("tinycloud.kv/retain"))).toBe(false);
+  });
+
+  test("hasRuntimePermissions does not count a runtime grant after it expires", () => {
+    const node = makeNode(mock(() => ({})));
+    const spaceId = "tinycloud:pkh:eip155:1:0x71C7656EC7ab88b098defB751B7401B5f6d8976F:default";
+    const operations = [{ spaceId, service: "kv", path: "notes/", action: "tinycloud.kv/get" }];
+    const entries = [{ service: "tinycloud.kv", space: spaceId, path: "notes/", actions: ["tinycloud.kv/get"] }];
+
+    Reflect.set(node, "runtimePermissionGrants", [{
+      session: {},
+      delegation: {},
+      operations,
+      expiresAt: new Date(Date.now() - 1),
+      provenance: "runtime",
+    }]);
+    expect(node.hasRuntimePermissions(entries)).toBe(false);
+
+    Reflect.set(node, "runtimePermissionGrants", [{
+      session: {},
+      delegation: {},
+      operations,
+      expiresAt: new Date(Date.now() + 3_600_000),
+      provenance: "runtime",
+    }]);
+    expect(node.hasRuntimePermissions(entries)).toBe(true);
   });
 
   test("can reinstall a runtime delegation targeted at fragmentless session DID", async () => {
@@ -2833,5 +2859,55 @@ describe("TinyCloudNode primary-session grant precedence (TC-111)", () => {
       "bootstrap-token",
     );
     expect(invoke.mock.calls[1][0].spaceId).toBe(defaultSpaceId);
+  });
+});
+
+describe("TinyCloudNode grantRuntimePermissions issued expiry", () => {
+  const secretsPermission: PermissionEntry = {
+    service: "tinycloud.kv",
+    space: "secrets",
+    path: "vault/secrets/ANTHROPIC_API_KEY",
+    actions: ["tinycloud.kv/put"],
+  };
+  // makeNode() signs in with a SIWE whose expiration is 2999-01-01T00:00:00.000Z.
+  const SESSION_EXPIRY_MS = Date.parse("2999-01-01T00:00:00.000Z");
+
+  test("the issued delegation expires at the requested expiry", async () => {
+    const node = makeNode(mock(() => ({})) as IWasmBindings["invoke"]);
+    await withActivatedDelegations(async () => {
+      const before = Date.now();
+      const delegations = await node.grantRuntimePermissions([secretsPermission], {
+        expiry: 3_600_000,
+      });
+      const after = Date.now();
+      expect(delegations).toHaveLength(1);
+      const issued = new Date(delegations[0].expiry).getTime();
+      expect(issued).toBeGreaterThanOrEqual(before + 3_600_000);
+      expect(issued).toBeLessThanOrEqual(after + 3_600_000);
+    });
+  });
+
+  test("the issued delegation defaults to the 30-day window when no expiry is given", async () => {
+    const node = makeNode(mock(() => ({})) as IWasmBindings["invoke"]);
+    await withActivatedDelegations(async () => {
+      const before = Date.now();
+      const delegations = await node.grantRuntimePermissions([secretsPermission]);
+      const after = Date.now();
+      expect(delegations).toHaveLength(1);
+      const issued = new Date(delegations[0].expiry).getTime();
+      expect(issued).toBeGreaterThanOrEqual(before + DEFAULT_DELEGATION_EXPIRY_MS);
+      expect(issued).toBeLessThanOrEqual(after + DEFAULT_DELEGATION_EXPIRY_MS);
+    });
+  });
+
+  test("the issued delegation never outlives the session", async () => {
+    const node = makeNode(mock(() => ({})) as IWasmBindings["invoke"]);
+    await withActivatedDelegations(async () => {
+      const delegations = await node.grantRuntimePermissions([secretsPermission], {
+        expiry: 2_000 * 365 * 24 * 3_600_000,
+      });
+      expect(delegations).toHaveLength(1);
+      expect(new Date(delegations[0].expiry).getTime()).toBe(SESSION_EXPIRY_MS);
+    });
   });
 });
