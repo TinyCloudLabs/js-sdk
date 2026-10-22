@@ -747,17 +747,7 @@ export class SharingService implements ISharingService {
         return parsed;
       }
       delegation = parsed as Delegation;
-    } else if (params.allowSubDelegation === false) {
-      // Wallet root delegations cannot carry the terminal fact, so a
-      // non-transferable share must be covered by a session-key delegation.
-      return {
-        ok: false,
-        error: createError(
-          DelegationErrorCodes.PERMISSION_DENIED,
-          "A non-transferable share requires a session-key delegation that covers it; the wallet root path cannot issue one.",
-        ),
-      };
-    } else if (this.onRootDelegationNeeded) {
+    } else if (this.onRootDelegationNeeded && params.allowSubDelegation !== false) {
       // No existing key can satisfy the request - try root delegation
       try {
         const rootDelegation = await this.onRootDelegationNeeded({

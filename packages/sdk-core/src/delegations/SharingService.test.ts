@@ -1005,7 +1005,7 @@ describe("SharingService non-transferable shares", () => {
       ok: false,
       error: {
         code: "PERMISSION_DENIED",
-        message: expect.stringContaining("non-transferable"),
+        message: "The active session ReCap does not authorize this sharing delegation.",
       },
     });
     expect(createDelegationWasm).not.toHaveBeenCalled();
