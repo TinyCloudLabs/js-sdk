@@ -682,17 +682,6 @@ if (prBaseSha) {
           }
         }
         console.log("The sdk-services 3.3.1 pin uses its exact absolute-root row, not additive old headroom.");
-      } else if (tc1777 !== undefined && baseLedger.tc1777Ratchet === undefined && prefixMatches && appended.length === 1) {
-        // As for the sdk-services pin: the exact TC-1777 row carries the growth through its absolute root ceiling, so
-        // the cumulative old-headroom entry is zero. The measured growth may not exceed the row.
-        const entry = appended[0];
-        for (const format of formats) {
-          if (entry[format] !== 0 || deltas[format] > tc1777.root.delta[format]) {
-            console.error(`${format}: the TC-1777 entry must be 0 and the measured growth ${deltas[format]} must not exceed the TC-1777 row's ${tc1777.root.delta[format]}.`);
-            failed = true;
-          }
-        }
-        console.log("TC-1777 uses its exact absolute-root row, not additive old headroom.");
       } else if (!prefixMatches || appended.length !== 1) {
         const pr = process.env.REPLICA_BUDGET_PR_NUMBER ? `#${process.env.REPLICA_BUDGET_PR_NUMBER}` : "#<PR>";
         const ticket = process.env.REPLICA_BUDGET_TICKET?.match(/\bTC-\d+\b/i)?.[0] ?? "TC-UNKNOWN";
