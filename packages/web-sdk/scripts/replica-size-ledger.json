@@ -997,5 +997,55 @@
       "ceiling": 822753
     },
     "reason": "expiryMs, hasPermissions and the pre-modal decrypt check add 172 B (mjs) / 174 B (cjs) gzip to each web-sdk root bundle (TC-1777)"
+  },
+  "tc848PanelRatchet": {
+    "label": "developer request log panel (#656): root ceiling raised to the measured CI bytes",
+    "ruling": "Approved by Naomi (2026-10-22, policy review relayed by Amos)",
+    "base": "bf510d9f226c84bd6fd8d9d018c82e84b1fd2cc8",
+    "sourceCommits": [
+      "aae48af0237b05f8673321b332d533aac7fd1a9b"
+    ],
+    "canonicalCI": {
+      "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39869142170",
+      "jobs": [
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39869142170/job/120138846942",
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39869142170/job/120138847243"
+      ]
+    },
+    "root": {
+      "delta": {
+        "index.mjs": 3016,
+        "index.cjs": 2224
+      },
+      "ceiling": {
+        "index.mjs": 1462046,
+        "index.cjs": 1404345
+      }
+    },
+    "firstImport": {
+      "delta": {
+        "replica.mjs": 0,
+        "replica.cjs": 0
+      },
+      "ceiling": {
+        "replica.mjs": 51925,
+        "replica.cjs": 67141
+      }
+    },
+    "activation": {
+      "delta": {
+        "activation.mjs": 0,
+        "activation.cjs": 0
+      },
+      "ceiling": {
+        "activation.mjs": 23117,
+        "activation.cjs": 24700
+      }
+    },
+    "worker": {
+      "delta": 0,
+      "ceiling": 822753
+    },
+    "reason": "developer request log (TC-848 panel): +3016 B (mjs) / +2224 B (cjs) gzip to each web-sdk root bundle"
   }
 }

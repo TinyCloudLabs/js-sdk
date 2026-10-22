@@ -203,6 +203,12 @@ export type Tc1777Ratchet = HardeningRatchet;
  * that of the replication-wiring row. Same shape as the #565 hardening row.
  */
 export type Tc1777ExpiryRatchet = HardeningRatchet;
+/**
+ * One reviewed exact-delta admission of js-sdk #656 (TC-848): the developer request log panel. #656 is not a
+ * replica-owned PR, so this is a plain root row; the root ceilings rise to the bytes canonical CI measured on the #656
+ * code head, every other ceiling stays that of the expiryMs / hasPermissions row. Same shape as the #565 hardening row.
+ */
+export type Tc848PanelRatchet = HardeningRatchet;
 export type Ledger = {
   allowance: GzipSizes;
   entries: LedgerEntry[];
@@ -229,6 +235,7 @@ export type Ledger = {
   tc1757Ratchet?: Tc1757Ratchet;
   tc1777Ratchet?: Tc1777Ratchet;
   tc1777ExpiryRatchet?: Tc1777ExpiryRatchet;
+  tc848PanelRatchet?: Tc848PanelRatchet;
 };
 
 const formats = ["index.mjs", "index.cjs"] as const;
@@ -785,6 +792,7 @@ export function ancestryPins(root: Ledger, hasGatedOnly: boolean): Array<{ row: 
   if (root.tc1757Ratchet !== undefined) pins.push({ row: "tc1757Ratchet", pin: root.tc1757Ratchet.sourceCommits.at(-1)! });
   if (root.tc1777Ratchet !== undefined) pins.push({ row: "tc1777Ratchet", pin: root.tc1777Ratchet.sourceCommits.at(-1)! });
   if (root.tc1777ExpiryRatchet !== undefined) pins.push({ row: "tc1777ExpiryRatchet", pin: root.tc1777ExpiryRatchet.sourceCommits.at(-1)! });
+  if (root.tc848PanelRatchet !== undefined) pins.push({ row: "tc848PanelRatchet", pin: root.tc848PanelRatchet.sourceCommits.at(-1)! });
   if (hasGatedOnly) pins.push({ row: "gatedOnlyRatchet", pin: approvedGatedOnlyRatchet.sourceCommit });
   return pins;
 }
@@ -818,6 +826,7 @@ export function rootCeilings(root: Ledger): Array<{ row: string; ceiling: GzipSi
     ["tc1757Ratchet", root.tc1757Ratchet?.root.ceiling],
     ["tc1777Ratchet", root.tc1777Ratchet?.root.ceiling],
     ["tc1777ExpiryRatchet", root.tc1777ExpiryRatchet?.root.ceiling],
+    ["tc848PanelRatchet", root.tc848PanelRatchet?.root.ceiling],
   ];
   return rows.flatMap(([row, ceiling]) => ceiling === undefined ? [] : [{ row, ceiling }]);
 }
@@ -1044,6 +1053,42 @@ export const approvedTc1777ExpiryRatchet: Tc1777ExpiryRatchet = {
   reason: "expiryMs, hasPermissions and the pre-modal decrypt check add 172 B (mjs) / 174 B (cjs) gzip to each web-sdk root bundle (TC-1777)",
 };
 
+/**
+ * Developer request log panel (js-sdk #656, TC-848), approved by Naomi, 2026-10-22: the root index.mjs / index.cjs
+ * ceilings rise from 1,459,030 / 1,402,121 to 1,462,046 / 1,404,345, the bytes canonical CI printed on the #656 code
+ * head aae48af0 merged into master bf510d9f, which itself measured 1,459,030 / 1,402,121. Measured growth against
+ * master is +3,016 / +2,224. First-import, activation and worker ceilings are unchanged.
+ */
+export const approvedTc848PanelRatchet: Tc848PanelRatchet = {
+  label: "developer request log panel (#656): root ceiling raised to the measured CI bytes",
+  ruling: "Approved by Naomi (2026-10-22, policy review relayed by Amos)",
+  base: "bf510d9f226c84bd6fd8d9d018c82e84b1fd2cc8",
+  sourceCommits: [
+    "aae48af0237b05f8673321b332d533aac7fd1a9b",
+  ],
+  canonicalCI: {
+    run: "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39869142170",
+    jobs: [
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39869142170/job/120138846942",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39869142170/job/120138847243",
+    ],
+  },
+  root: {
+    delta: { "index.mjs": 3016, "index.cjs": 2224 },
+    ceiling: { "index.mjs": 1462046, "index.cjs": 1404345 },
+  },
+  firstImport: {
+    delta: { "replica.mjs": 0, "replica.cjs": 0 },
+    ceiling: { "replica.mjs": 51925, "replica.cjs": 67141 },
+  },
+  activation: {
+    delta: { "activation.mjs": 0, "activation.cjs": 0 },
+    ceiling: { "activation.mjs": 23117, "activation.cjs": 24700 },
+  },
+  worker: { delta: 0, ceiling: 822753 },
+  reason: "developer request log (TC-848 panel): +3016 B (mjs) / +2224 B (cjs) gzip to each web-sdk root bundle",
+};
+
 export type GatedOnlyRatchet = {
   label: string;
   sourceCommit: string;
@@ -1076,7 +1121,7 @@ const historicalToolchain = "Bun 1.4.3; production webpack; gzip -9 -c";
 /** Only a git merge-base ledger may retain the pre-correction toolchain. */
 export function validateLedger(value: Ledger, historicalBase = false): void {
   if (!value || !value.allowance || !Array.isArray(value.entries) ||
-      Object.keys(value).some((key) => key !== "allowance" && key !== "entries" && key !== "phase2Ratchet" && key !== "fixRequiredRatchet" && key !== "canonicalToolchainCorrection" && key !== "masterMergeResolution" && key !== "hardeningRatchet" && key !== "logoutRatchet" && key !== "tc1413Ratchet" && key !== "tc1436Ratchet" && key !== "tc1432Ratchet" && key !== "tc1424Ratchet" && key !== "tc1448Ratchet" && key !== "tc1443Ratchet" && key !== "tc1466Ratchet" && key !== "tc1443bRatchet" && key !== "tc1428Ratchet" && key !== "tc1476Ratchet" && key !== "tc1475Ratchet" && key !== "tc606WorkerRatchet" && key !== "masterDriftRatchet" && key !== "tc1789Ratchet" && key !== "tc1757Ratchet" && key !== "tc1777Ratchet" && key !== "tc1777ExpiryRatchet")) {
+      Object.keys(value).some((key) => key !== "allowance" && key !== "entries" && key !== "phase2Ratchet" && key !== "fixRequiredRatchet" && key !== "canonicalToolchainCorrection" && key !== "masterMergeResolution" && key !== "hardeningRatchet" && key !== "logoutRatchet" && key !== "tc1413Ratchet" && key !== "tc1436Ratchet" && key !== "tc1432Ratchet" && key !== "tc1424Ratchet" && key !== "tc1448Ratchet" && key !== "tc1443Ratchet" && key !== "tc1466Ratchet" && key !== "tc1443bRatchet" && key !== "tc1428Ratchet" && key !== "tc1476Ratchet" && key !== "tc1475Ratchet" && key !== "tc606WorkerRatchet" && key !== "masterDriftRatchet" && key !== "tc1789Ratchet" && key !== "tc1757Ratchet" && key !== "tc1777Ratchet" && key !== "tc1777ExpiryRatchet" && key !== "tc848PanelRatchet")) {
     throw new Error("Invalid packages/web-sdk/scripts/replica-size-ledger.json shape");
   }
   if (Object.keys(value.allowance).some((key) => !formats.includes(key as typeof formats[number]))) {
@@ -1208,6 +1253,10 @@ export function validateLedger(value: Ledger, historicalBase = false): void {
       (!value.tc1777Ratchet || JSON.stringify(value.tc1777ExpiryRatchet) !== JSON.stringify(approvedTc1777ExpiryRatchet))) {
     throw new Error("Only Naomi's exact canonical expiryMs / hasPermissions ratchet is approved.");
   }
+  if (value.tc848PanelRatchet !== undefined &&
+      (!value.tc1777ExpiryRatchet || JSON.stringify(value.tc848PanelRatchet) !== JSON.stringify(approvedTc848PanelRatchet))) {
+    throw new Error("Only Naomi's exact canonical developer request log panel ratchet is approved.");
+  }
 }
 
 /** The #606 worker ratchet is introduced once at its exact canonical bytes and immutable afterwards. */
@@ -1255,6 +1304,14 @@ export function validateTc1777ExpiryRatchetTransition(base?: Tc1777ExpiryRatchet
   if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc1777ExpiryRatchet) ||
       base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
     throw new Error("The exact expiryMs / hasPermissions ratchet may be introduced once and cannot change later.");
+  }
+}
+
+/** The TC-848 developer request log panel ratchet is introduced once at its exact canonical bytes and immutable afterwards. */
+export function validateTc848PanelRatchetTransition(base?: Tc848PanelRatchet, current?: Tc848PanelRatchet): void {
+  if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc848PanelRatchet) ||
+      base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
+    throw new Error("The exact TC-848 developer request log panel ratchet may be introduced once and cannot change later.");
   }
 }
 
