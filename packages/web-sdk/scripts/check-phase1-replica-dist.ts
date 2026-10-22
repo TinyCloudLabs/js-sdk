@@ -11,7 +11,7 @@ import {
   validateOptionalEntryTransition, validateOptionalLedger, type OptionalLedger,
 } from "./replica-optional-size-policy";
 import { assertCiSizeToolchain, approvedCiToolchainCorrection, approvedFixRequiredRatchet, approvedGatedOnlyRatchet, approvedPhase2, ciCorrectionPolicyOnlyPaths, hasAncestor, isPolicyOnlySinceApprovedSource, preexistingS3EntryCommit, validateCiToolchainTransition, validateGatedOnlyRatchet, validateHardeningRatchetTransition, validateLedger, validateLogoutRatchetTransition, validateMasterMergeResolutionTransition, validateTc1413RatchetTransition, validateTc1424RatchetTransition, validateTc1448RatchetTransition, validateTc1432RatchetTransition, validateTc1436RatchetTransition, validateTc1443RatchetTransition, validateTc1443bRatchetTransition, validateTc1428RatchetTransition, validateTc1475RatchetTransition, validateTc606WorkerRatchetTransition, validateMasterDriftRatchetTransition, validateTc1789RatchetTransition, validateTc1476RatchetTransition, validateTc1466RatchetTransition, type GzipSizes, type Ledger, type LedgerEntry } from "./replica-size-policy";
-import { validateTc1757RatchetTransition } from "./replica-size-policy";
+import { activeRootCeiling, validateTc1757RatchetTransition } from "./replica-size-policy";
 import { collectMeasuredArtifactInputs } from "./replica-size-inputs";
 type Baseline = {
   webSdkTestBaseline: { ref: string; unhandledErrors: number; failingNames: string[]; unhandledSignatures: string[] };
@@ -143,10 +143,10 @@ for (const format of formats) {
     }
   }
   console.log(`${format}: current=${currentSizes[format]} gzip-bytes`);
-  const ceiling = ledger.tc1757Ratchet?.root.ceiling[format] ?? ledger.tc1789Ratchet?.root.ceiling[format] ?? ledger.masterDriftRatchet?.root.ceiling[format] ?? ledger.tc1475Ratchet?.root.ceiling[format] ?? ledger.tc1476Ratchet?.root.ceiling[format] ?? ledger.tc1428Ratchet?.root.ceiling[format] ?? ledger.tc1443bRatchet?.root.ceiling[format] ?? ledger.tc1466Ratchet?.root.ceiling[format] ?? ledger.tc1443Ratchet?.root.ceiling[format] ?? ledger.tc1448Ratchet?.root.ceiling[format] ?? ledger.tc1424Ratchet?.root.ceiling[format] ?? ledger.tc1432Ratchet?.root.ceiling[format] ?? ledger.tc1436Ratchet?.root.ceiling[format] ?? ledger.tc1413Ratchet?.root.ceiling[format] ?? ledger.logoutRatchet?.root.ceiling[format] ?? ledger.hardeningRatchet?.root.ceiling[format] ?? ciCorrection?.measured.rootCeiling[format] ??
-    ledger.fixRequiredRatchet?.rootCeiling[format] ?? ledger.phase2Ratchet?.ceiling[format];
+  const active = activeRootCeiling(ledger);
+  const ceiling = active?.ceiling[format];
   if (ceiling !== undefined) {
-    console.log(`${format}: TC-858 Phase 2 absolute root ceiling=${ceiling} gzip-bytes`);
+    console.log(`${format}: TC-858 Phase 2 absolute root ceiling=${ceiling} gzip-bytes (newest row: ${active!.row})`);
     if (currentSizes[format] > ceiling) {
       console.error(`${format}: TC-858 Phase 2 absolute root ceiling exceeded; later growth requires policy review.`);
       failed = true;

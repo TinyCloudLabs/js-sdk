@@ -773,6 +773,45 @@ export function ancestryPins(root: Ledger, hasGatedOnly: boolean): Array<{ row: 
 }
 
 /**
+ * The absolute root ceiling of each root row present in `root`, oldest first. The order is the one the ledger
+ * introduces rows in: validateLedger's prerequisite chain, ancestryPins, and the key order of
+ * replica-size-ledger.json. A new root row goes last here, and in those three places. masterMergeResolution and
+ * tc606WorkerRatchet set no root ceiling and are absent.
+ */
+export function rootCeilings(root: Ledger): Array<{ row: string; ceiling: GzipSizes }> {
+  const rows: Array<[string, GzipSizes | undefined]> = [
+    ["phase2Ratchet", root.phase2Ratchet?.ceiling],
+    ["fixRequiredRatchet", root.fixRequiredRatchet?.rootCeiling],
+    ["canonicalToolchainCorrection", root.canonicalToolchainCorrection?.measured.rootCeiling],
+    ["hardeningRatchet", root.hardeningRatchet?.root.ceiling],
+    ["logoutRatchet", root.logoutRatchet?.root.ceiling],
+    ["tc1413Ratchet", root.tc1413Ratchet?.root.ceiling],
+    ["tc1436Ratchet", root.tc1436Ratchet?.root.ceiling],
+    ["tc1432Ratchet", root.tc1432Ratchet?.root.ceiling],
+    ["tc1424Ratchet", root.tc1424Ratchet?.root.ceiling],
+    ["tc1448Ratchet", root.tc1448Ratchet?.root.ceiling],
+    ["tc1443Ratchet", root.tc1443Ratchet?.root.ceiling],
+    ["tc1466Ratchet", root.tc1466Ratchet?.root.ceiling],
+    ["tc1443bRatchet", root.tc1443bRatchet?.root.ceiling],
+    ["tc1428Ratchet", root.tc1428Ratchet?.root.ceiling],
+    ["tc1476Ratchet", root.tc1476Ratchet?.root.ceiling],
+    ["tc1475Ratchet", root.tc1475Ratchet?.root.ceiling],
+    ["masterDriftRatchet", root.masterDriftRatchet?.root.ceiling],
+    ["tc1789Ratchet", root.tc1789Ratchet?.root.ceiling],
+    ["tc1757Ratchet", root.tc1757Ratchet?.root.ceiling],
+  ];
+  return rows.flatMap(([row, ceiling]) => ceiling === undefined ? [] : [{ row, ceiling }]);
+}
+
+/**
+ * The newest root row's ceiling is the only active one. Older rows stay in the ledger as history and still
+ * validate, but an older, higher row can never shadow a newer, lowered one (#678 lowered the root ceiling).
+ */
+export function activeRootCeiling(root: Ledger): { row: string; ceiling: GzipSizes } | undefined {
+  return rootCeilings(root).at(-1);
+}
+
+/**
  * #606 (security dependency updates), approved by Naomi, 2026-10-19: the kv-storage worker is admitted at exactly the 822,753 B
  * GitHub measured on master 54a2408d (+86 over TC-1475's 822,667). Worker only; nothing else moves.
  */
