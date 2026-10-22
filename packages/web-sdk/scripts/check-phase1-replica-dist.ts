@@ -650,17 +650,6 @@ if (prBaseSha) {
           }
         }
         console.log("Master drift uses its exact absolute-root row, not additive old headroom.");
-      } else if (tc848 !== undefined && baseLedger.tc848Ratchet === undefined && prefixMatches && appended.length === 1) {
-        // As for master drift: the exact TC-848 row carries the growth through its absolute root ceiling, so the
-        // appended entry is zero. The measured growth may not exceed the row.
-        const entry = appended[0];
-        for (const format of formats) {
-          if (entry[format] !== 0 || deltas[format] > tc848.root.delta[format]) {
-            console.error(`${format}: the TC-848 entry must be 0 and the measured growth ${deltas[format]} must not exceed the TC-848 row's ${tc848.root.delta[format]}.`);
-            failed = true;
-          }
-        }
-        console.log("TC-848 uses its exact absolute-root row, not additive old headroom.");
       } else if (!prefixMatches || appended.length !== 1) {
         const pr = process.env.REPLICA_BUDGET_PR_NUMBER ? `#${process.env.REPLICA_BUDGET_PR_NUMBER}` : "#<PR>";
         const ticket = process.env.REPLICA_BUDGET_TICKET?.match(/\bTC-\d+\b/i)?.[0] ?? "TC-UNKNOWN";
