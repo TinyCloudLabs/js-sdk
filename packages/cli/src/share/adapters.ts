@@ -1,5 +1,6 @@
 import type { IKVService } from "@tinycloud/node-sdk";
 import { kvArtifactStore } from "./artifact-store.js";
+import { createShareShortLinks, type ShareShortLinks } from "./short-links.js";
 import { artifactSpaceNotReady, failIfSpaceNotReady } from "./space-not-ready.js";
 import { ShareHistoryReadError, ShareHistoryRetryError, ShareHistoryUnreadableError, SharePublishAuthorityError } from "./errors.js";
 import { storageRejection } from "../output/storage.js";
@@ -63,6 +64,11 @@ function throwKvUploadFailure(error: unknown): never {
   const rejection = storageRejection(error);
   if (rejection) throw new SharePublishAuthorityError({ kind: "storage-full", ...rejection });
   throw new SharePublishAuthorityError({ kind: "upload-failed" });
+}
+
+/** Whether the node's session (or an installed runtime grant) holds decrypt on the encryption network. */
+export function sessionHoldsEncryptionDecrypt(node: Pick<TinyCloudNode, "hasRuntimePermissions">, networkId: string): boolean {
+  return node.hasRuntimePermissions([{ service: "tinycloud.encryption", path: networkId, actions: ["tinycloud.encryption/decrypt"] }]);
 }
 const DEFAULT_SHARE_ORIGIN = "https://share.tinycloud.xyz";
 const MIN_DOMAIN_DELIVERY_VERSION = "1.17.3";
@@ -492,6 +498,8 @@ export function createShareAuthorityAdapters(input: {
   readonly nativeReader: (link: string) => Promise<{ readonly bytes: Uint8Array; readonly filename: string }>;
   /** The authenticated owner's artifact storage (`tc share versions`). */
   readonly artifactStore: () => Promise<ArtifactStore>;
+  /** Short links for addressed shares (TC-1737). */
+  readonly shortLinks: ShareShortLinks;
 } {
   const origin = input.origin ?? DEFAULT_SHARE_ORIGIN;
   const fetchFn = input.fetchFn ?? globalThis.fetch;
@@ -506,13 +514,21 @@ export function createShareAuthorityAdapters(input: {
   };
   let configPromise: Promise<SharePublicConfig> | undefined;
   const publicConfig = async (): Promise<SharePublicConfig> => configPromise ??= (async () => {
-    const response = await fetchFn(`${origin}/.well-known/tinycloud-share/config.json`, {
-      headers: { accept: "application/json" },
-      credentials: "omit",
-      redirect: "error",
-      referrerPolicy: "no-referrer",
-    });
-    if (!response.ok) throw new Error("share public config is unavailable");
+    // The first request of every publish. Without it nothing can be shared, so a failure here names the Share
+    // service rather than the node, and a blackholed host cannot hang the command.
+    let response: Response;
+    try {
+      response = await fetchFn(`${origin}/.well-known/tinycloud-share/config.json`, {
+        headers: { accept: "application/json" },
+        credentials: "omit",
+        redirect: "error",
+        referrerPolicy: "no-referrer",
+        signal: AbortSignal.timeout(10_000),
+      });
+    } catch (error) {
+      throw new SharePublishAuthorityError({ kind: "share-service-unavailable", origin }, { cause: error });
+    }
+    if (!response.ok) throw new SharePublishAuthorityError({ kind: "share-service-unavailable", origin });
     const value = await response.json() as unknown;
     if (typeof value !== "object" || value === null || Array.isArray(value)) throw new Error("share public config is invalid");
     const object = value as Record<string, unknown>;
@@ -576,7 +592,8 @@ export function createShareAuthorityAdapters(input: {
   };
   const targetAdapter: TargetPublishAdapter = { async publish(targetInput) {
     if (input.publishTarget !== undefined) return input.publishTarget(targetInput);
-    const [config, node] = await Promise.all([publicConfig(), authenticatedNode()]);
+    // The Share config is fetched only after the local checks below, so a refusal makes no request.
+    const node = await authenticatedNode();
     const session = node.restorableSession;
     const ownerSpaceId = session?.spaceId;
     const localKey = !node.isSessionOnly;
@@ -592,7 +609,6 @@ export function createShareAuthorityAdapters(input: {
     ) {
       throw new SharePublishAuthorityError({ kind: "owner-space-unresolved", localKey, profileName: activeProfileName });
     }
-    if (targetInput.origin !== config.shareOrigin) throw new SharePublishAuthorityError({ kind: "origin-mismatch" });
     if (node.isSessionOnly && sessionExpiresAt !== undefined) {
       const roundedSessionExpiry = new Date(Math.floor(sessionExpiresAt.getTime() / 1000) * 1000);
       if (roundedSessionExpiry.getTime() <= Date.now() + 60_000) {
@@ -628,6 +644,15 @@ export function createShareAuthorityAdapters(input: {
         profileName: activeProfileName,
       });
     }
+    // An addressed share's policy ceiling includes decrypt on the owner's encryption network, which a
+    // session-only sign-in (e.g. builtin:share-publishing) deliberately lacks. Refuse before any Share
+    // or node request, registry write or upload. A signer-backed (local-key) owner has full authority.
+    const addressedEncryptionNetwork = targetInput.target.kind === "bearer" ? undefined : node.getEncryptionNetworkIdForSpace(ownerSpaceId);
+    if (addressedEncryptionNetwork !== undefined && node.isSessionOnly && !sessionHoldsEncryptionDecrypt(node, addressedEncryptionNetwork)) {
+      throw new SharePublishAuthorityError({ kind: "decrypt-not-held" });
+    }
+    const config = await publicConfig();
+    if (targetInput.origin !== config.shareOrigin) throw new SharePublishAuthorityError({ kind: "origin-mismatch" });
     const activeNode = await node.activeNodeIdentity();
     if (targetInput.notify === true && targetInput.target.kind === "emailDomain") {
       await assertDomainDeliveryForOrigin(activeNode.origin, "publish");
@@ -773,7 +798,7 @@ export function createShareAuthorityAdapters(input: {
         || (error instanceof LocationRegistryHttpError && error.status >= 400 && error.status < 500 && error.status !== 408 && error.status !== 429);
       throw new SharePublishAuthorityError({ kind: rejected ? "registry-rejected" : "registry-unavailable" });
     }
-    const encryptionNetwork = node.getEncryptionNetworkIdForSpace(ownerSpaceId);
+    const encryptionNetwork = addressedEncryptionNetwork!;
     const encrypted = await node.encryption.encryptToNetwork(encryptionNetwork, file.bytes, { metadata: { contentType: mediaType } });
     if (!encrypted.ok) throw new Error("addressed source encryption was rejected");
     const storedBytes = new TextEncoder().encode(canonicalize(encrypted.data as unknown as Record<string, unknown>));
@@ -1023,6 +1048,10 @@ export function createShareAuthorityAdapters(input: {
       list: (prefix) => mapped(() => store.list(prefix)),
     };
   };
+  const shortLinks = createShareShortLinks({
+    kvForSpace: async (spaceId) => (await authenticatedNode()).kvForSpace(spaceId),
+    fetchFn,
+  });
   return {
     targetAdapter,
     records: input.profileName === undefined ? createEncryptedSessionHistory() : createEncryptedProfileHistory(profileName, signShareHistoryBytes),
@@ -1031,6 +1060,7 @@ export function createShareAuthorityAdapters(input: {
     assertDomainDelivery,
     nativeReader,
     artifactStore,
+    shortLinks,
   };
 }
 

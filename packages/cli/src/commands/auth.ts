@@ -1333,9 +1333,11 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
         process.stderr.write(`\n${scope.text}\n\n`);
         // The request file comes from the agent: anything the apps-agent preset could never grant
         // is signed only after an explicit --yes or an interactive confirmation of the list above.
+        // The question is written to stderr and answered on stdin, so those two must be a terminal;
+        // stdout may be a file (scripts capture the grant artifact there) without losing the prompt.
         let confirmedExtras = false;
         if (scope.extras.length > 0 && options.yes !== true) {
-          if (!isInteractive()) {
+          if (!process.stdin.isTTY || !process.stderr.isTTY) {
             throw new CLIError(
               "CONFIRMATION_REQUIRED",
               `This request asks for more than the apps-agent preset (${scope.extras.length} entr${scope.extras.length === 1 ? "y" : "ies"} marked ! in the list above). Nothing was signed. Read the list, then re-run with --yes to sign it.`,

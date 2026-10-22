@@ -13,7 +13,7 @@ This monorepo publishes two families of packages to npm that move on **independe
 
 These are declared as a `linked` group in `.changeset/config.json` and are always bumped to the same version. `@tinycloud/cli` tracks this family closely but is not formally linked (it versions independently so it can have patch-only releases).
 
-Current line: `2.x` (latest stable: `2.0.4`).
+Current line: `3.x` (latest stable: `3.3.0`).
 
 ### WASM bindings family (independent, only bumped on Rust/WASM output changes)
 
@@ -22,7 +22,7 @@ Current line: `2.x` (latest stable: `2.0.4`).
 
 These are wasm-pack outputs from the Rust crates in `packages/sdk-rs/`. They are bumped **only when the generated WASM or its TypeScript glue actually changes**. They are not in the linked group with the TypeScript SDK family and they are not co-bumped on TS-only releases.
 
-Current line: `1.x` (latest stable: `1.7.1`).
+Current line: `1.x` (latest stable: `1.7.7` for `web-sdk-wasm`, `1.7.8` for `node-sdk-wasm`).
 
 **Triggers that warrant a WASM package bump:**
 
@@ -51,22 +51,39 @@ There are two release paths in this repo and you need to know which one you're l
 
 ### Beta releases: via changesets, from master
 
-`.github/workflows/changesets.yml` runs on every push to `master`. If there are pending changeset files under `.changeset/*.md`, it runs `bun changeset version` (which consumes them and emits beta version bumps, because the repo is held in pre-mode), then publishes to npm under the `beta` dist-tag, then commits the version bumps back to master with `[skip ci]`.
+`.github/workflows/changesets.yml` runs on every push to `master`. If there are pending changeset files under `.changeset/*.md`, it runs `bun changeset version` (which consumes them and emits beta version bumps, because the repo is held in pre-mode), commits the bumps as `chore: beta version packages [skip ci]` and pushes that commit to `master`, then publishes to npm under the `beta` dist-tag.
 
 This path only works while `.changeset/pre.json` is present. Do not run `bun changeset pre exit` casually — that file is what makes `changeset version` produce `X.Y.Z-beta.N` instead of a stable bump. The team uses pre-mode as the steady state.
 
-### Stable releases: via raw-publish.yml, manually
+### Stable releases: via the Stable Release job
 
-`.github/workflows/raw-publish.yml` is a break-glass manual publish path. Stable `2.0.x` releases have been cut through this workflow (see PR #180, `chore(release): 2.0.4 stable with SIWE nonce passthrough fix`), **not** through `changesets.yml`. The raw-publish path does its own `package.json` version edits out-of-band and publishes to `latest`. Because of this, stable releases do not flow through `changeset pre exit` / `changeset pre enter beta`, which means:
+Stable releases are cut by the `Stable Release` job in `.github/workflows/changesets.yml`. It runs only on manual dispatch with `confirm` set to `release`, and always checks out and releases `master` (no ref guard):
 
-- `.changeset/pre.json` `initialVersions` can drift from reality and needs to be rebaselined by hand after a manual stable.
-- The `changesets` array in `pre.json` can carry entries for changesets whose content was already shipped in a stable via raw-publish. Leaving them in place is fine — they will replay into the next pre-exit's aggregated changelog.
+```bash
+gh workflow run changesets.yml --ref master -f confirm=release
+```
 
-If you are cutting a stable, expect to manually update `pre.json`'s `initialVersions` afterwards. If you don't, the next beta cycle's computed versions will be based on a stale baseline.
+The job:
+
+1. Exits pre mode (`bun changeset pre exit`) and runs `bun changeset version`, which turns pending changesets into stable versions.
+2. Builds, checks the CLI's node release pin, and commits `chore: release stable packages`.
+3. Commits `chore: enter beta pre-release mode` (`bun changeset pre enter beta`) on top of it.
+4. Pushes both commits to `master` in one push using the release deploy key, then publishes to npm under the `latest` dist-tag.
+5. Confirms npm has every current version, then creates the GitHub release `v<web-sdk version>` at the release commit.
+
+Because the job re-enters beta mode itself, `.changeset/pre.json` needs no manual rebaseline after a stable release.
+
+Guards:
+
+- A stable release fails for any package that would leave pre mode at a higher major than it entered (`check-major-release-signoff.mjs stable`), unless a commit message in the current pre-release cycle, from the commit that added `.changeset/pre.json` through `master`'s HEAD, has an `approve-major-release:` line listing that package. The check reads every commit message in that range, including squash-merge messages, not only empty commits. Recovery runs that finish an unfinished stable release skip this check.
+- If the push fails, nothing is published. Dispatch the job again.
+- If an earlier stable run pushed but did not finish publishing, the next dispatch finishes that release from its commit and graduates nothing new. Beta runs refuse to run until then.
+
+Break-glass only: `.github/workflows/raw-publish.yml` (manual dispatch, optional dist-tag override and dry run) publishes each package at its current version and skips versions npm already has. It does not run the pre-mode, changeset versioning, or GitHub release steps, so afterwards check `.changeset/pre.json` and create the GitHub release by hand.
 
 ### How releases push
 
-`changesets.yml` pushes its release commits (`chore: beta version packages`, `chore: release stable packages`, `chore: enter beta pre-release mode`) to `master` over SSH with a **deploy key**, not a personal access token.
+`changesets.yml` pushes its release commits (`chore: beta version packages [skip ci]`, `chore: release stable packages [skip ci]`, `chore: enter beta pre-release mode [skip ci]`) to `master` over SSH with a **deploy key**, not a personal access token. Every release commit carries `[skip ci]`, so the push does not start another beta run.
 
 - **Secret:** `RELEASE_DEPLOY_KEY` (repository secret) holds the private half of the key. The public half is a deploy key on `TinyCloudLabs/js-sdk` with **write access**.
 - **Ruleset bypass:** when `master` is protected, the deploy key is the only actor allowed to bypass the ruleset, so it is the only way for the workflow to push straight to `master`. Everything else goes through pull requests.
