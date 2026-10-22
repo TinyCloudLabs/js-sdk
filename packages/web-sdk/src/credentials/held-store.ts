@@ -1,15 +1,31 @@
 import { CredentialError, canonicalDigest, type IKVService } from "@tinycloud/sdk-core";
 import {
+  HeldCredentialError,
   parsePkhDid,
   pkhPrincipalsEqual,
   registryKey,
   toChecksumAddress,
+  verifyHeldEmailCredential,
+  type HeldEmailCredentialOptions,
   type VerifiedHeldCredential,
 } from "@tinycloud/sdk-core/held-credentials";
 
-/** A held record expiring within this many milliseconds is not offered; the caller re-acquires. */
+/** A held record whose verified expiry is within this many milliseconds is not offered; the caller re-acquires. */
 export const HELD_REUSE_MARGIN_MS = 600_000;
 
+/** Upper bound on KV list pages under one owner prefix. Beyond it the listing is refused, not partially read. */
+const HELD_LIST_MAX_PAGES = 50;
+
+/** A recordId is a canonicalDigest: 43 base64url characters. Anything else never reaches a key. */
+const RECORD_ID_PATTERN = /^[A-Za-z0-9_-]{43}$/;
+
+/** Issuer policy for the S3.1 verifier. The owner and the clock are supplied per call. */
+export type HeldIssuerPolicy = Omit<HeldEmailCredentialOptions, "owner" | "now">;
+
+/**
+ * Stored shape. Only `credential` is trusted: every read re-verifies it, and no other stored field
+ * (email, expiry, subject) is read.
+ */
 export interface HeldCredentialRecord {
   readonly type: "TinyCloudHeldCredential";
   readonly version: 1;
@@ -17,16 +33,6 @@ export interface HeldCredentialRecord {
   readonly recordId: string;
   readonly credentialDigest: string;
   readonly credential: string;
-  readonly issuer: string;
-  readonly subject: string;
-  readonly subjectAddress: string;
-  readonly credentialId: string;
-  readonly profile: string;
-  readonly profileVersion: number;
-  readonly vct: string;
-  readonly email: string;
-  readonly claims: Readonly<Record<string, unknown>>;
-  readonly expiresAt: string;
   readonly storedAt: string;
 }
 
@@ -37,7 +43,12 @@ export interface HeldStorageReceipt {
   readonly recordId: string;
   readonly recordDigest: string;
   readonly storedAt: string;
-  readonly etag?: string;
+}
+
+/** A stored record that re-verified under the caller's policy, with the verifier's output. */
+export interface HeldMatch {
+  readonly record: HeldCredentialRecord;
+  readonly verified: VerifiedHeldCredential;
 }
 
 /**
@@ -46,7 +57,9 @@ export interface HeldStorageReceipt {
  */
 export function heldAccountOwner(ownerDid: unknown): string {
   const parsed = parsePkhDid(ownerDid);
-  if (!parsed) throw new CredentialError("ACTIVE_SESSION_REQUIRED", "Held credentials require an account owner (did:pkh:eip155)");
+  if (parsed === null) {
+    throw new CredentialError("ACTIVE_SESSION_REQUIRED", "Held credentials require a did:pkh:eip155 account owner");
+  }
   return `did:pkh:eip155:${parsed.chainId}:${toChecksumAddress(parsed.address)}`;
 }
 
@@ -60,9 +73,17 @@ export function heldRecordKey(ownerDid: string, recordId: string): string {
 }
 
 function isHeldRecord(value: unknown): value is HeldCredentialRecord {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
-  const item = value as Record<string, unknown>;
-  return item.type === "TinyCloudHeldCredential" && item.version === 1 && typeof item.ownerDid === "string" && typeof item.recordId === "string" && typeof item.credentialDigest === "string" && typeof item.credential === "string" && typeof item.email === "string" && typeof item.expiresAt === "string" && typeof item.storedAt === "string";
+  if (typeof value !== "object" || value === null) return false;
+  const record = value as Record<string, unknown>;
+  return (
+    record.type === "TinyCloudHeldCredential" &&
+    record.version === 1 &&
+    typeof record.ownerDid === "string" &&
+    typeof record.recordId === "string" &&
+    typeof record.credentialDigest === "string" &&
+    typeof record.credential === "string" &&
+    typeof record.storedAt === "string"
+  );
 }
 
 /** ASCII-only lowercase. Folding of any other kind (dots, plus tags) is deliberately absent. */
@@ -70,149 +91,277 @@ function asciiLowercase(value: string): string {
   return value.replace(/[A-Z]+/g, (run) => run.toLowerCase());
 }
 
-export async function createHeldStorageReceipt(record: HeldCredentialRecord, etag?: string): Promise<HeldStorageReceipt> {
-  return Object.freeze({
+/**
+ * Maps a verifier refusal to a store error. The verifier's subject-owner check surfaces as
+ * `nonce-account-mismatch`; the store reports it as HOLDER_MISMATCH. Non-verifier errors pass through.
+ */
+function refusalFor(error: unknown): unknown {
+  if (!(error instanceof HeldCredentialError)) return error;
+  const code = error.code === "nonce-account-mismatch" ? "HOLDER_MISMATCH" : "VERIFICATION_FAILED";
+  return new CredentialError(code, error.message, { cause: error });
+}
+
+function policyOptions(policy: HeldIssuerPolicy, now: Date, owner: string): HeldEmailCredentialOptions {
+  return {
+    issuerSet: policy.issuerSet,
+    acceptedIssuers: policy.acceptedIssuers,
+    didMethods: policy.didMethods,
+    now,
+    owner,
+  };
+}
+
+export async function createHeldStorageReceipt(record: HeldCredentialRecord): Promise<HeldStorageReceipt> {
+  return {
     type: "TinyCloudHeldStorageReceipt",
     version: 1,
     ownerDid: record.ownerDid,
     recordId: record.recordId,
     recordDigest: await canonicalDigest(record),
     storedAt: record.storedAt,
-    ...(etag === undefined ? {} : { etag }),
-  });
+  };
 }
 
 /** Owner and holder compares use principal equality, never string equality. */
-export async function verifyHeldStorageReceipt(record: HeldCredentialRecord, receipt: HeldStorageReceipt, ownerDid: string): Promise<boolean> {
-  return receipt.type === "TinyCloudHeldStorageReceipt" && receipt.version === 1 && pkhPrincipalsEqual(receipt.ownerDid, ownerDid) && pkhPrincipalsEqual(record.ownerDid, ownerDid) && receipt.recordId === record.recordId && receipt.storedAt === record.storedAt && receipt.recordDigest === (await canonicalDigest(record));
+export async function verifyHeldStorageReceipt(
+  record: HeldCredentialRecord,
+  receipt: HeldStorageReceipt,
+  ownerDid: string,
+): Promise<boolean> {
+  return (
+    receipt.type === "TinyCloudHeldStorageReceipt" &&
+    receipt.version === 1 &&
+    pkhPrincipalsEqual(receipt.ownerDid, ownerDid) &&
+    pkhPrincipalsEqual(record.ownerDid, ownerDid) &&
+    receipt.recordId === record.recordId &&
+    receipt.storedAt === record.storedAt &&
+    receipt.recordDigest === (await canonicalDigest(record))
+  );
+}
+
+export interface StoreHeldCredentialInput extends HeldIssuerPolicy {
+  readonly kv: IKVService;
+  readonly ownerDid: unknown;
+  readonly sdJwt: unknown;
+  readonly now?: Date;
 }
 
 /**
- * Store-on-issue. Writes one record under the owner's prefix, reads it back, and verifies the receipt.
- * Refuses without an account owner before any write.
+ * Store-on-issue. Verifies the SD-JWT itself, writes one record under the owner's prefix, and reads
+ * it back. Refuses before any write unless the credential verifies, belongs to the owner, and stays
+ * outside the reuse margin.
  */
-export async function storeHeldCredential(input: {
-  readonly kv: IKVService;
-  readonly verified: VerifiedHeldCredential;
-  readonly sdJwt: string;
-  readonly ownerDid: string | undefined;
-  readonly now?: Date;
-}): Promise<{ readonly record: HeldCredentialRecord; readonly receipt: HeldStorageReceipt }> {
+export async function storeHeldCredential(
+  input: StoreHeldCredentialInput,
+): Promise<{ readonly record: HeldCredentialRecord; readonly receipt: HeldStorageReceipt }> {
+  const now = input.now ?? new Date();
   const owner = heldAccountOwner(input.ownerDid);
-  if (!pkhPrincipalsEqual(input.verified.subject, owner)) throw new CredentialError("HOLDER_MISMATCH", "Held credential subject is not the account owner");
-  const rawEmail = input.verified.claims.email;
-  if (typeof rawEmail !== "string" || rawEmail.length === 0) throw new CredentialError("VERIFICATION_FAILED", "Held credential has no email claim");
-  const email = asciiLowercase(rawEmail);
-  const credentialDigest = await canonicalDigest(input.sdJwt);
+  let verified: VerifiedHeldCredential;
+  try {
+    verified = verifyHeldEmailCredential(input.sdJwt, policyOptions(input, now, owner));
+  } catch (error) {
+    throw refusalFor(error);
+  }
+  const sdJwt = input.sdJwt;
+  if (typeof sdJwt !== "string") {
+    throw new CredentialError("VERIFICATION_FAILED", "Held credential must be an SD-JWT string");
+  }
+  if (typeof verified.claims.email !== "string") {
+    throw new CredentialError("VERIFICATION_FAILED", "Held credential must disclose an email claim");
+  }
+  if (verified.expiresAt.getTime() <= now.getTime() + HELD_REUSE_MARGIN_MS) {
+    throw new CredentialError("VERIFICATION_FAILED", "Held credential expires within the reuse margin");
+  }
+
+  const credentialDigest = await canonicalDigest(sdJwt);
   const recordId = await canonicalDigest({ credentialDigest, holderDid: owner });
-  const record: HeldCredentialRecord = Object.freeze({
+  const attempt: HeldCredentialRecord = {
     type: "TinyCloudHeldCredential",
     version: 1,
     ownerDid: owner,
     recordId,
     credentialDigest,
-    credential: input.sdJwt,
-    issuer: input.verified.issuer,
-    subject: input.verified.subject,
-    subjectAddress: input.verified.subjectAddress,
-    credentialId: input.verified.credentialId,
-    profile: input.verified.profile,
-    profileVersion: input.verified.profileVersion,
-    vct: input.verified.vct,
-    email,
-    claims: input.verified.claims,
-    expiresAt: input.verified.expiresAt.toISOString(),
-    storedAt: (input.now ?? new Date()).toISOString(),
-  });
-  const key = heldRecordKey(owner, recordId);
-  const written = await input.kv.batchPut([{ key, value: record }]);
-  if (!written.ok) throw new CredentialError("VERIFIED_NOT_SAVED", "Held credential could not be saved");
-  const readback = await input.kv.get<HeldCredentialRecord>(key);
-  if (!readback.ok || !isHeldRecord(readback.data.data) || (await canonicalDigest(readback.data.data)) !== (await canonicalDigest(record))) throw new CredentialError("VERIFIED_NOT_SAVED", "Held credential durable storage could not be confirmed");
-  const stored = readback.data.data;
-  const receipt = await createHeldStorageReceipt(stored, readback.data.headers.etag);
-  if (!(await verifyHeldStorageReceipt(stored, receipt, owner))) throw new CredentialError("VERIFIED_NOT_SAVED", "Held credential storage receipt is invalid");
-  return { record: stored, receipt };
+    credential: sdJwt,
+    storedAt: now.toISOString(),
+  };
+  const durable = await writeAndReadBack(input.kv, heldRecordKey(owner, recordId), attempt);
+  return { record: durable, receipt: await createHeldStorageReceipt(durable) };
+}
+
+/**
+ * Writes the attempt and confirms the stored bytes. The comparison covers the identity of the
+ * credential, not `storedAt`: a concurrent store of the same credential may have written its own
+ * timestamp, and that record is equally valid.
+ */
+async function writeAndReadBack(kv: IKVService, key: string, attempt: HeldCredentialRecord): Promise<HeldCredentialRecord> {
+  const unsaved = () => new CredentialError("VERIFIED_NOT_SAVED", "Held credential could not be confirmed in storage");
+  const written = await kv.batchPut([{ key, value: attempt }]).catch(() => undefined);
+  if (written?.ok !== true) throw unsaved();
+  const readback = await kv.get(key).catch(() => undefined);
+  const value: unknown = readback?.ok === true ? readback.data.data : undefined;
+  if (
+    !isHeldRecord(value) ||
+    value.recordId !== attempt.recordId ||
+    value.credentialDigest !== attempt.credentialDigest ||
+    value.credential !== attempt.credential ||
+    !pkhPrincipalsEqual(value.ownerDid, attempt.ownerDid)
+  ) {
+    throw unsaved();
+  }
+  return value;
+}
+
+type HeldReading =
+  | { readonly kind: "verified"; readonly email: string; readonly match: HeldMatch }
+  | { readonly kind: "expired" }
+  | { readonly kind: "invalid" };
+
+/**
+ * Re-verifies one stored record. The stored `credential` is the only input trusted. The record must sit
+ * under its own recordId key, bind to the owner, and re-verify under the caller's policy.
+ * `expired` means the signature verified and the credential is past its expiry: prune may delete it.
+ * Every other failure is `invalid` and is left alone.
+ */
+async function readHeld(
+  kv: IKVService,
+  key: string,
+  owner: string,
+  policy: HeldIssuerPolicy,
+  now: Date,
+): Promise<HeldReading> {
+  const got = await kv.get(key);
+  const value: unknown = got.ok ? got.data.data : undefined;
+  if (!isHeldRecord(value)) return { kind: "invalid" };
+  if (!pkhPrincipalsEqual(value.ownerDid, owner)) return { kind: "invalid" };
+  const credentialDigest = await canonicalDigest(value.credential);
+  const recordId = await canonicalDigest({ credentialDigest, holderDid: owner });
+  if (value.credentialDigest !== credentialDigest || value.recordId !== recordId || key !== heldRecordKey(owner, recordId)) {
+    return { kind: "invalid" };
+  }
+  let verified: VerifiedHeldCredential;
+  try {
+    verified = verifyHeldEmailCredential(value.credential, policyOptions(policy, now, owner));
+  } catch (error) {
+    if (!(error instanceof HeldCredentialError)) throw error;
+    return { kind: error.code === "expired" ? "expired" : "invalid" };
+  }
+  const email = verified.claims.email;
+  if (typeof email !== "string") return { kind: "invalid" };
+  return { kind: "verified", email, match: { record: value, verified } };
+}
+
+/**
+ * Lists every key under the owner prefix by following cursors. Returns undefined when the KV list call
+ * fails. Refuses a truncated listing with no cursor, and any listing beyond the page limit.
+ */
+async function listHeldKeys(kv: IKVService, prefix: string): Promise<readonly string[] | undefined> {
+  const keys: string[] = [];
+  let cursor: string | undefined;
+  for (let page = 0; page < HELD_LIST_MAX_PAGES; page += 1) {
+    const listing = await kv.list(cursor === undefined ? { prefix } : { prefix, cursor });
+    if (!listing.ok) return undefined;
+    keys.push(...listing.data.keys);
+    if (!listing.data.truncated) return keys;
+    const next = listing.data.nextCursor;
+    if (next === undefined || next === "") {
+      throw new CredentialError("VERIFICATION_FAILED", "Held listing is truncated without a continuation cursor");
+    }
+    cursor = next;
+  }
+  throw new CredentialError("VERIFICATION_FAILED", "Held listing exceeds the page limit");
+}
+
+export interface FindHeldCredentialInput extends HeldIssuerPolicy {
+  readonly kv: IKVService;
+  readonly ownerDid: unknown;
+  readonly email: string;
+  readonly now?: Date;
 }
 
 /**
  * Owner-scoped read. Lists only `v1/held/<registryKey>/`, so `v1/records/` is never considered.
- * Returns the matching record with the latest expiry, or undefined.
+ * Returns the verified record with the latest expiry that still clears the reuse margin, or undefined.
  */
-export async function findHeldCredential(input: {
-  readonly kv: IKVService;
-  readonly ownerDid: string | undefined;
-  readonly email: string;
-  readonly now?: Date;
-}): Promise<HeldCredentialRecord | undefined> {
+export async function findHeldCredential(input: FindHeldCredentialInput): Promise<HeldMatch | undefined> {
+  const now = input.now ?? new Date();
   const owner = heldAccountOwner(input.ownerDid);
+  const keys = await listHeldKeys(input.kv, heldPrefix(owner));
+  if (keys === undefined) return undefined;
   const wanted = asciiLowercase(input.email);
-  const now = (input.now ?? new Date()).getTime();
-  const listing = await input.kv.list({ prefix: heldPrefix(owner) });
-  if (!listing.ok) return undefined;
-  let best: HeldCredentialRecord | undefined;
-  let bestExpiry = Number.NEGATIVE_INFINITY;
-  for (const key of listing.data.keys.sort()) {
-    const result = await input.kv.get<HeldCredentialRecord>(key);
-    if (!result.ok || !isHeldRecord(result.data.data)) continue;
-    const record = result.data.data;
-    if (key !== heldRecordKey(owner, record.recordId)) continue;
-    if (!pkhPrincipalsEqual(record.ownerDid, owner)) continue;
-    if (record.email !== wanted) continue;
-    const expiry = Date.parse(record.expiresAt);
-    if (!Number.isFinite(expiry)) continue;
-    if (expiry <= now) continue;
-    if (expiry - now < HELD_REUSE_MARGIN_MS) continue;
-    if (expiry > bestExpiry) {
-      best = record;
-      bestExpiry = expiry;
-    }
+  let best: HeldMatch | undefined;
+  for (const key of keys) {
+    const reading = await readHeld(input.kv, key, owner, input, now);
+    if (reading.kind !== "verified" || reading.email !== wanted) continue;
+    const expiresAt = reading.match.verified.expiresAt.getTime();
+    if (expiresAt - now.getTime() < HELD_REUSE_MARGIN_MS) continue;
+    if (best === undefined || expiresAt > best.verified.expiresAt.getTime()) best = reading.match;
   }
   return best;
 }
 
-/** Deletes the named record key only. Copies outside this store remain valid until their own expiry. */
-export async function deleteHeldCredential(input: { readonly kv: IKVService; readonly ownerDid: string | undefined; readonly recordId: string }): Promise<boolean> {
+/**
+ * Deletes the named record key only. The recordId is validated first, so a caller-supplied value cannot
+ * address another key. Copies outside this store remain valid until their own expiry.
+ */
+export async function deleteHeldCredential(input: {
+  readonly kv: IKVService;
+  readonly ownerDid: unknown;
+  readonly recordId: string;
+}): Promise<boolean> {
   const owner = heldAccountOwner(input.ownerDid);
-  return (await input.kv.delete(heldRecordKey(owner, input.recordId))).ok;
+  if (!RECORD_ID_PATTERN.test(input.recordId)) {
+    throw new CredentialError("DESCRIPTOR_INVALID", "recordId must be a 43-character base64url digest");
+  }
+  const result = await input.kv.delete(heldRecordKey(owner, input.recordId));
+  return result.ok;
+}
+
+export interface PruneHeldCredentialsInput extends HeldIssuerPolicy {
+  readonly kv: IKVService;
+  readonly ownerDid: unknown;
+  readonly now?: Date;
 }
 
 /**
- * Refresh housekeeping for one owner. Deletes expired records, and for each email keeps only the
- * record with the newest expiry. Returns the keys actually removed.
+ * Refresh housekeeping for one owner. Deletes records whose signature verifies but whose expiry has
+ * passed, and for each email keeps only the verified record with the newest expiry. Unverifiable records
+ * are left in place: prune cannot tell a forgery from a policy mismatch, so it never deletes on that basis.
+ * Returns the keys actually removed.
  */
-export async function pruneHeldCredentials(input: { readonly kv: IKVService; readonly ownerDid: string | undefined; readonly now?: Date }): Promise<readonly string[]> {
+export async function pruneHeldCredentials(input: PruneHeldCredentialsInput): Promise<readonly string[]> {
+  const now = input.now ?? new Date();
   const owner = heldAccountOwner(input.ownerDid);
-  const now = (input.now ?? new Date()).getTime();
-  const listing = await input.kv.list({ prefix: heldPrefix(owner) });
-  if (!listing.ok || listing.data.truncated) return [];
+  const keys = await listHeldKeys(input.kv, heldPrefix(owner));
+  if (keys === undefined) return [];
   const doomed: string[] = [];
-  const newestByEmail = new Map<string, { readonly key: string; readonly expiry: number }>();
-  for (const key of listing.data.keys.sort()) {
-    const result = await input.kv.get<HeldCredentialRecord>(key);
-    if (!result.ok || !isHeldRecord(result.data.data)) continue;
-    const record = result.data.data;
-    if (key !== heldRecordKey(owner, record.recordId)) continue;
-    if (!pkhPrincipalsEqual(record.ownerDid, owner)) continue;
-    const expiry = Date.parse(record.expiresAt);
-    if (!Number.isFinite(expiry)) continue;
-    if (expiry <= now) {
+  const newestByEmail = new Map<string, { readonly key: string; readonly recordId: string; readonly expiresAt: number }>();
+  for (const key of keys) {
+    const reading = await readHeld(input.kv, key, owner, input, now);
+    if (reading.kind === "invalid") continue;
+    if (reading.kind === "expired") {
       doomed.push(key);
       continue;
     }
-    const current = newestByEmail.get(record.email);
+    const candidate = {
+      key,
+      recordId: reading.match.record.recordId,
+      expiresAt: reading.match.verified.expiresAt.getTime(),
+    };
+    const current = newestByEmail.get(reading.email);
     if (current === undefined) {
-      newestByEmail.set(record.email, { key, expiry });
-    } else if (expiry > current.expiry) {
-      doomed.push(current.key);
-      newestByEmail.set(record.email, { key, expiry });
-    } else {
-      doomed.push(key);
+      newestByEmail.set(reading.email, candidate);
+      continue;
     }
+    const candidateWins =
+      candidate.expiresAt > current.expiresAt ||
+      (candidate.expiresAt === current.expiresAt && candidate.recordId > current.recordId);
+    newestByEmail.set(reading.email, candidateWins ? candidate : current);
+    doomed.push(candidateWins ? current.key : candidate.key);
   }
   const removed: string[] = [];
   for (const key of doomed) {
-    if ((await input.kv.delete(key)).ok) removed.push(key);
+    const result = await input.kv.delete(key);
+    if (result.ok) removed.push(key);
   }
   return removed;
 }

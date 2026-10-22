@@ -1,11 +1,14 @@
 import { describe, expect, test } from "bun:test";
-import type { IKVService } from "@tinycloud/sdk-core";
-import { toChecksumAddress, type VerifiedHeldCredential } from "@tinycloud/sdk-core/held-credentials";
+import { createHash, generateKeyPairSync, randomUUID, sign as signEd25519 } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { CredentialError, canonicalDigest, type IKVService } from "@tinycloud/sdk-core";
+import { parseIssuerSet } from "@tinycloud/sdk-core/held-credentials";
 import {
   HELD_REUSE_MARGIN_MS,
   createHeldStorageReceipt,
   deleteHeldCredential,
   findHeldCredential,
+  heldAccountOwner,
   heldRecordKey,
   pruneHeldCredentials,
   storeHeldCredential,
@@ -13,375 +16,476 @@ import {
   type HeldCredentialRecord,
 } from "../src/credentials/held-store";
 
-const RAW_ADDRESS_A = "0xabcdef0123456789abcdef0123456789abcdef01";
-const RAW_ADDRESS_B = "0x1111222233334444555566667777888899990000";
-const OWNER_A = `did:pkh:eip155:1:${toChecksumAddress(RAW_ADDRESS_A)}`;
-const OWNER_B = `did:pkh:eip155:1:${toChecksumAddress(RAW_ADDRESS_B)}`;
-const NOW = Date.parse("2030-01-01T00:00:00.000Z");
-const NOW_DATE = new Date(NOW);
-const HOUR = 3_600_000;
+const ISSUER_DID = "did:web:issuer.credentials.org";
+const KID = `${ISSUER_DID}#controller`;
+const PROFILE = "tinycloud.email-held/v1";
+const VCT = "opencredentials.email/v1";
+const BINDING = "tinycloud.credentials/account-binding/v1";
+const DAY = 86_400;
+const NOW = new Date("2026-10-20T00:00:00.000Z");
+const NOW_S = NOW.getTime() / 1000;
+const OWNER_A = "did:pkh:eip155:1:0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266";
+const OWNER_B = "did:pkh:eip155:1:0x70997970C51812dc3A010C7d01b50e0d17dc79C8";
+
+// Test-only issuer key. The verifier takes the public half through the issuer set.
+const issuerKeys = generateKeyPairSync("ed25519");
+const issuerPublicKey = (issuerKeys.publicKey.export({ format: "jwk" }) as { x: string }).x;
+
+const POLICY = {
+  issuerSet: parseIssuerSet(
+    {
+      format: "tinycloud.credentials-issuers/v1",
+      version: 1,
+      issuers: [
+        {
+          alg: "EdDSA",
+          issuerDid: ISSUER_DID,
+          kid: KID,
+          notAfter: null,
+          notBefore: "2025-01-01T00:00:00Z",
+          profiles: [PROFILE],
+          publicKey: issuerPublicKey,
+          retiredAt: null,
+          vcts: [VCT],
+        },
+      ],
+    },
+    { didMethods: { issuer: ["web"] } },
+  ),
+  acceptedIssuers: [{ issuerDid: ISSUER_DID }],
+  didMethods: { issuer: ["web"] },
+};
+
+// Real vector from the S3.1 fixture. Its own issuer set and account, not the test key.
+const vector = JSON.parse(
+  readFileSync(new URL("../../sdk-core/src/held-credentials/fixtures/held-email-v1/vector.json", import.meta.url), "utf8"),
+) as { now: string; account: string; email: string; sdJwt: string; issuerSet: unknown };
+
+const enc = (text: string) => Buffer.from(text, "utf8").toString("base64url");
+
+function disclosure(name: string, value: unknown) {
+  const text = enc(JSON.stringify([`salt-${name}`, name, value]));
+  return { text, digest: createHash("sha256").update(text, "ascii").digest("base64url") };
+}
+
+interface CredentialSpec {
+  readonly subject?: string;
+  readonly iat?: number;
+  readonly exp?: number;
+  readonly disclosures?: readonly (readonly [string, unknown])[];
+  readonly tamperSignature?: boolean;
+}
+
+/** Signs an SD-JWT with the test issuer key. The holder binding matches the subject. */
+function makeSdJwt(spec: CredentialSpec = {}): string {
+  const subject = spec.subject ?? OWNER_A;
+  const disclosures = (spec.disclosures ?? [["email", "alice@example.com"], ["emailDomain", "example.com"]]).map(([n, v]) =>
+    disclosure(n, v),
+  );
+  const iat = spec.iat ?? NOW_S - 1000;
+  const payload = {
+    iss: ISSUER_DID,
+    sub: subject,
+    iat,
+    nbf: iat,
+    exp: spec.exp ?? iat + 365 * DAY,
+    jti: `urn:uuid:${randomUUID()}`,
+    vct: VCT,
+    profile: PROFILE,
+    profileVersion: 1,
+    holderBinding: { did: subject, signingDomain: BINDING },
+    status: { method: "none" },
+    _sd_alg: "sha-256",
+    _sd: disclosures.map((d) => d.digest),
+  };
+  const header = { alg: "EdDSA", typ: "vc+sd-jwt", kid: KID };
+  const signingInput = `${enc(JSON.stringify(header))}.${enc(JSON.stringify(payload))}`;
+  const signature = signEd25519(null, Buffer.from(signingInput, "ascii"), issuerKeys.privateKey);
+  if (spec.tamperSignature) signature[0] ^= 0x01;
+  const jwt = `${signingInput}.${signature.toString("base64url")}`;
+  return [jwt, ...disclosures.map((d) => d.text)].join("~") + "~";
+}
+
+interface FakeOptions {
+  readonly pageSize?: number;
+  readonly dropCursor?: boolean;
+  readonly putNotOk?: boolean;
+  readonly putThrows?: boolean;
+  readonly corruptReadback?: boolean;
+}
 
 interface FakeKv {
   readonly kv: IKVService;
   readonly data: Map<string, unknown>;
-  readonly calls: { list: number; get: number; batchPut: number; delete: number };
-}
-
-interface FakeOptions {
-  readonly truncated?: boolean;
-  readonly corruptPut?: (value: unknown) => unknown;
-  readonly failPut?: boolean;
+  readonly calls: {
+    list: Array<{ prefix?: string; cursor?: string }>;
+    batchPut: number;
+    delete: string[];
+  };
 }
 
 function fakeKv(options: FakeOptions = {}): FakeKv {
   const data = new Map<string, unknown>();
-  const calls = { list: 0, get: 0, batchPut: 0, delete: 0 };
+  const calls = {
+    list: [] as Array<{ prefix?: string; cursor?: string }>,
+    batchPut: 0,
+    delete: [] as string[],
+  };
   const kv = {
-    list: async (opts?: { prefix?: string }) => {
-      calls.list += 1;
-      const prefix = opts?.prefix ?? "";
-      const keys = [...data.keys()].filter((key) => key.startsWith(prefix));
-      return { ok: true, data: { keys, truncated: options.truncated ?? false } };
+    async list(opts: { prefix?: string; cursor?: string } = {}) {
+      calls.list.push(opts);
+      const keys = [...data.keys()].filter((k) => k.startsWith(opts.prefix ?? "")).sort();
+      const size = options.pageSize ?? Number.MAX_SAFE_INTEGER;
+      const start = opts.cursor === undefined ? 0 : Number(opts.cursor);
+      const end = start + size;
+      const more = end < keys.length;
+      return {
+        ok: true,
+        data: {
+          keys: keys.slice(start, end),
+          truncated: more,
+          nextCursor: more && !options.dropCursor ? String(end) : undefined,
+        },
+      };
     },
-    get: async (key: string) => {
-      calls.get += 1;
-      if (!data.has(key)) return { ok: false, error: { code: "NOT_FOUND", message: key } };
-      return { ok: true, data: { data: data.get(key), headers: { etag: `etag-${key}` } } };
+    async get(key: string) {
+      if (!data.has(key)) return { ok: false, error: { code: "NOT_FOUND" } };
+      const stored = data.get(key) as HeldCredentialRecord;
+      return { ok: true, data: { data: options.corruptReadback ? { ...stored, credentialDigest: "x" } : stored } };
     },
-    batchPut: async (items: Array<{ key: string; value: unknown }>) => {
+    async batchPut(items: Array<{ key: string; value: unknown }>) {
       calls.batchPut += 1;
-      if (options.failPut) return { ok: false, error: { code: "PUT_FAILED", message: "put" } };
-      for (const item of items) data.set(item.key, options.corruptPut ? options.corruptPut(item.value) : item.value);
-      return { ok: true, data: { written: items.length } };
+      if (options.putThrows) throw new Error("kv put failed");
+      if (options.putNotOk) return { ok: false, error: { code: "X" } };
+      for (const item of items) data.set(item.key, item.value);
+      return { ok: true };
     },
-    delete: async (key: string) => {
-      calls.delete += 1;
-      if (!data.delete(key)) return { ok: false, error: { code: "NOT_FOUND", message: key } };
-      return { ok: true, data: undefined };
+    async delete(key: string) {
+      calls.delete.push(key);
+      data.delete(key);
+      return { ok: true };
     },
   };
   return { kv: kv as unknown as IKVService, data, calls };
 }
 
-function verified(input: { email?: string; expiresAt?: Date; subject?: string; credentialId?: string; omitEmail?: boolean }): VerifiedHeldCredential {
-  return {
-    issuer: "did:web:issuer.example",
-    subject: input.subject ?? OWNER_A,
-    subjectAddress: toChecksumAddress(RAW_ADDRESS_A),
-    expiresAt: input.expiresAt ?? new Date(NOW + 2 * HOUR),
-    credentialId: input.credentialId ?? "cred-1",
-    profile: "held-email",
-    profileVersion: 1,
-    vct: "urn:tinycloud:held-email:v1",
-    claims: input.omitEmail ? {} : { email: input.email ?? "alice@example.com" },
-  };
-}
+type Fake = FakeKv;
 
-function errorCode(error: unknown): string | undefined {
-  if (typeof error === "object" && error !== null && "code" in error && typeof error.code === "string") return error.code;
-  return undefined;
-}
-
-async function codeOf(promise: Promise<unknown>): Promise<string | undefined> {
+async function failureOf(run: () => Promise<unknown>): Promise<CredentialError> {
   try {
-    await promise;
-    return undefined;
+    await run();
   } catch (error) {
-    return errorCode(error);
+    if (error instanceof CredentialError) return error;
+    throw error;
   }
+  throw new Error("expected a refusal");
 }
 
-async function storeOne(fake: FakeKv, options: { owner?: string; email?: string; expiresAt?: Date; sdJwt?: string; credentialId?: string } = {}) {
+function store(fake: Fake, overrides: Partial<{ ownerDid: unknown; sdJwt: unknown; now: Date }> = {}) {
   return storeHeldCredential({
     kv: fake.kv,
-    verified: verified({ email: options.email, expiresAt: options.expiresAt, subject: options.owner, credentialId: options.credentialId }),
-    sdJwt: options.sdJwt ?? "sd-jwt-1",
-    ownerDid: options.owner ?? OWNER_A,
-    now: NOW_DATE,
+    ownerDid: OWNER_A,
+    sdJwt: makeSdJwt(),
+    now: NOW,
+    ...POLICY,
+    ...overrides,
   });
 }
 
-describe("held store round trip", () => {
-  test("stored record is found under the owner's prefix and keyed by recordId", async () => {
+/** Places a record directly, as an attacker or a stale writer could. Derives a consistent recordId. */
+async function placeRaw(fake: Fake, owner: string, credential: string, extra: Record<string, unknown> = {}) {
+  const ownerDid = heldAccountOwner(owner);
+  const credentialDigest = await canonicalDigest(credential);
+  const recordId = await canonicalDigest({ credentialDigest, holderDid: ownerDid });
+  const record = {
+    type: "TinyCloudHeldCredential",
+    version: 1,
+    ownerDid,
+    recordId,
+    credentialDigest,
+    credential,
+    storedAt: NOW.toISOString(),
+    ...extra,
+  };
+  fake.data.set(heldRecordKey(ownerDid, recordId), record);
+  return { record, key: heldRecordKey(ownerDid, recordId) };
+}
+
+const findFor = (fake: Fake, email: string, owner = OWNER_A, now = NOW) =>
+  findHeldCredential({ kv: fake.kv, ownerDid: owner, email, now, ...POLICY });
+
+describe("store verifies the SD-JWT before writing", () => {
+  test("refuses a non-credential string with no write", async () => {
     const fake = fakeKv();
-    const { record } = await storeOne(fake);
-    expect(fake.data.has(heldRecordKey(OWNER_A, record.recordId))).toBe(true);
-    expect(record.recordId.length).toBeGreaterThan(0);
-    const found = await findHeldCredential({ kv: fake.kv, ownerDid: OWNER_A, email: "alice@example.com", now: NOW_DATE });
-    expect(found?.recordId).toBe(record.recordId);
-  });
-});
-
-describe("M1 owner isolation", () => {
-  test("two owners with the same email keep separate records; reads return only the caller's", async () => {
-    const fake = fakeKv();
-    const a = await storeOne(fake, { owner: OWNER_A, sdJwt: "sd-a" });
-    const b = await storeOne(fake, { owner: OWNER_B, sdJwt: "sd-b" });
-    expect(a.record.recordId).not.toBe(b.record.recordId);
-    expect(fake.data.size).toBe(2);
-    const foundA = await findHeldCredential({ kv: fake.kv, ownerDid: OWNER_A, email: "alice@example.com", now: NOW_DATE });
-    const foundB = await findHeldCredential({ kv: fake.kv, ownerDid: OWNER_B, email: "alice@example.com", now: NOW_DATE });
-    expect(foundA?.recordId).toBe(a.record.recordId);
-    expect(foundB?.recordId).toBe(b.record.recordId);
-  });
-
-  test("J1: a record stored by A is not returned to B and does not overwrite A", async () => {
-    const fake = fakeKv();
-    const a = await storeOne(fake, { owner: OWNER_A });
-    expect(await findHeldCredential({ kv: fake.kv, ownerDid: OWNER_B, email: "alice@example.com", now: NOW_DATE })).toBeUndefined();
-    await storeOne(fake, { owner: OWNER_B });
-    const stillA = await findHeldCredential({ kv: fake.kv, ownerDid: OWNER_A, email: "alice@example.com", now: NOW_DATE });
-    expect(stillA?.recordId).toBe(a.record.recordId);
-  });
-});
-
-describe("M2 exact email, ASCII-lowercase only", () => {
-  test("requested Alice@Example.com matches stored alice@example.com", async () => {
-    const fake = fakeKv();
-    await storeOne(fake, { email: "alice@example.com" });
-    const found = await findHeldCredential({ kv: fake.kv, ownerDid: OWNER_A, email: "Alice@Example.com", now: NOW_DATE });
-    expect(found?.email).toBe("alice@example.com");
-  });
-
-  test("mixed-case claim is stored lowercased and still matches a lowercase request", async () => {
-    const fake = fakeKv();
-    const { record } = await storeOne(fake, { email: "Alice@Example.com" });
-    expect(record.email).toBe("alice@example.com");
-    expect((await findHeldCredential({ kv: fake.kv, ownerDid: OWNER_A, email: "alice@example.com", now: NOW_DATE }))?.recordId).toBe(record.recordId);
-  });
-});
-
-describe("M3 no provider-specific folding", () => {
-  test("plus-tag and gmail-dot variants do not match", async () => {
-    const fake = fakeKv();
-    await storeOne(fake, { email: "alice@gmail.com" });
-    expect(await findHeldCredential({ kv: fake.kv, ownerDid: OWNER_A, email: "alice+x@gmail.com", now: NOW_DATE })).toBeUndefined();
-    expect(await findHeldCredential({ kv: fake.kv, ownerDid: OWNER_A, email: "a.lice@gmail.com", now: NOW_DATE })).toBeUndefined();
-  });
-});
-
-describe("M4 expiry at or before now is skipped", () => {
-  test("expiresAt equal to now is not returned", async () => {
-    const fake = fakeKv();
-    await storeOne(fake, { expiresAt: new Date(NOW) });
-    expect(await findHeldCredential({ kv: fake.kv, ownerDid: OWNER_A, email: "alice@example.com", now: NOW_DATE })).toBeUndefined();
-  });
-
-  test("expiresAt before now is not returned", async () => {
-    const fake = fakeKv();
-    await storeOne(fake, { expiresAt: new Date(NOW - 1) });
-    expect(await findHeldCredential({ kv: fake.kv, ownerDid: OWNER_A, email: "alice@example.com", now: NOW_DATE })).toBeUndefined();
-  });
-});
-
-describe("M5 near-expiry margin", () => {
-  test("remaining lifetime just under 600 s is skipped", async () => {
-    const fake = fakeKv();
-    await storeOne(fake, { expiresAt: new Date(NOW + HELD_REUSE_MARGIN_MS - 1) });
-    expect(await findHeldCredential({ kv: fake.kv, ownerDid: OWNER_A, email: "alice@example.com", now: NOW_DATE })).toBeUndefined();
-  });
-
-  test("remaining lifetime of exactly 600 s is returned", async () => {
-    const fake = fakeKv();
-    await storeOne(fake, { expiresAt: new Date(NOW + HELD_REUSE_MARGIN_MS) });
-    expect(await findHeldCredential({ kv: fake.kv, ownerDid: OWNER_A, email: "alice@example.com", now: NOW_DATE })).toBeDefined();
-  });
-});
-
-describe("M6 receipt principal check", () => {
-  test("receipt naming a different owner fails verification", async () => {
-    const fake = fakeKv();
-    const { record } = await storeOne(fake);
-    const receipt = await createHeldStorageReceipt(record);
-    expect(await verifyHeldStorageReceipt(record, receipt, OWNER_A)).toBe(true);
-    expect(await verifyHeldStorageReceipt(record, { ...receipt, ownerDid: OWNER_B }, OWNER_A)).toBe(false);
-  });
-
-  test("receipt for the same owner with different address case verifies", async () => {
-    const fake = fakeKv();
-    const { record } = await storeOne(fake);
-    const receipt = await createHeldStorageReceipt(record);
-    const lowercaseOwner = `did:pkh:eip155:1:${RAW_ADDRESS_A}`;
-    expect(await verifyHeldStorageReceipt(record, { ...receipt, ownerDid: lowercaseOwner }, OWNER_A)).toBe(true);
-  });
-});
-
-describe("M7 readback mismatch refuses the store", () => {
-  test("stored value that differs on readback yields VERIFIED_NOT_SAVED", async () => {
-    const fake = fakeKv({ corruptPut: (value) => ({ ...(value as object), email: "mallory@example.com" }) });
-    expect(await codeOf(storeOne(fake))).toBe("VERIFIED_NOT_SAVED");
-  });
-
-  test("failed batchPut yields VERIFIED_NOT_SAVED", async () => {
-    const fake = fakeKv({ failPut: true });
-    expect(await codeOf(storeOne(fake))).toBe("VERIFIED_NOT_SAVED");
-  });
-});
-
-describe("M8/M9/J2 refuse without an account owner, with zero KV calls", () => {
-  test("did:key holder is refused by store and find", async () => {
-    const fake = fakeKv();
-    const didKey = "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK";
-    expect(await codeOf(storeOne(fake, { owner: didKey }))).toBe("ACTIVE_SESSION_REQUIRED");
-    expect(await codeOf(findHeldCredential({ kv: fake.kv, ownerDid: didKey, email: "alice@example.com", now: NOW_DATE }))).toBe("ACTIVE_SESSION_REQUIRED");
-    expect(fake.calls).toEqual({ list: 0, get: 0, batchPut: 0, delete: 0 });
-  });
-
-  test("no account owner: store refused with zero batchPut", async () => {
-    const fake = fakeKv();
-    const result = await codeOf(
-      storeHeldCredential({ kv: fake.kv, verified: verified({}), sdJwt: "sd", ownerDid: undefined, now: NOW_DATE }),
-    );
-    expect(result).toBe("ACTIVE_SESSION_REQUIRED");
-    expect(fake.calls.batchPut).toBe(0);
-    expect(fake.data.size).toBe(0);
-  });
-
-  test("claim without email is refused before any write", async () => {
-    const fake = fakeKv();
-    const result = await codeOf(storeHeldCredential({ kv: fake.kv, verified: verified({ omitEmail: true }), sdJwt: "sd", ownerDid: OWNER_A, now: NOW_DATE }));
-    expect(result).toBe("VERIFICATION_FAILED");
+    const error = await failureOf(() => store(fake, { sdJwt: "not-a-credential" }));
+    expect(error.code).toBe("VERIFICATION_FAILED");
     expect(fake.calls.batchPut).toBe(0);
   });
-});
 
-describe("M10 delete removes only the named record", () => {
-  test("deleting one record leaves the other owner-scoped record in place", async () => {
+  test("refuses a 5,000,000-character SD-JWT before parsing, with no write", async () => {
     const fake = fakeKv();
-    const first = await storeOne(fake, { email: "alice@example.com", sdJwt: "sd-1" });
-    const second = await storeOne(fake, { email: "bob@example.com", sdJwt: "sd-2" });
-    expect(await deleteHeldCredential({ kv: fake.kv, ownerDid: OWNER_A, recordId: first.record.recordId })).toBe(true);
-    expect(fake.data.has(heldRecordKey(OWNER_A, first.record.recordId))).toBe(false);
-    expect(fake.data.has(heldRecordKey(OWNER_A, second.record.recordId))).toBe(true);
-    expect(await findHeldCredential({ kv: fake.kv, ownerDid: OWNER_A, email: "bob@example.com", now: NOW_DATE })).toBeDefined();
+    const error = await failureOf(() => store(fake, { sdJwt: "A".repeat(5_000_000) }));
+    expect(error.code).toBe("VERIFICATION_FAILED");
+    expect(error.message).toContain("bad-presentation");
+    expect(fake.calls.batchPut).toBe(0);
+  });
+
+  test("refuses a credential whose signature does not verify, with no write", async () => {
+    const fake = fakeKv();
+    const error = await failureOf(() => store(fake, { sdJwt: makeSdJwt({ tamperSignature: true }) }));
+    expect(error.code).toBe("VERIFICATION_FAILED");
+    expect(error.message).toContain("bad-signature");
+    expect(fake.calls.batchPut).toBe(0);
+  });
+
+  test("refuses an expired credential with no write", async () => {
+    const fake = fakeKv();
+    const error = await failureOf(() => store(fake, { sdJwt: makeSdJwt({ exp: NOW_S - 1 }) }));
+    expect(error.message).toContain("expired");
+    expect(fake.calls.batchPut).toBe(0);
+  });
+
+  test("refuses a credential that expires inside the reuse margin", async () => {
+    const fake = fakeKv();
+    const error = await failureOf(() => store(fake, { sdJwt: makeSdJwt({ exp: NOW_S + HELD_REUSE_MARGIN_MS / 2000 }) }));
+    expect(error.code).toBe("VERIFICATION_FAILED");
+    expect(fake.calls.batchPut).toBe(0);
+  });
+
+  test("refuses an email that the signed disclosure does not canonically carry", async () => {
+    const fake = fakeKv();
+    const sdJwt = makeSdJwt({
+      disclosures: [
+        ["email", "ALICE+tag@Example.com"],
+        ["emailDomain", "Example.com"],
+      ],
+    });
+    const error = await failureOf(() => store(fake, { sdJwt }));
+    expect(error.code).toBe("VERIFICATION_FAILED");
+    expect(error.message).toContain("bad-disclosure");
+    expect(fake.calls.batchPut).toBe(0);
+  });
+
+  test("refuses a subject that is not the owner as HOLDER_MISMATCH with no write", async () => {
+    const fake = fakeKv();
+    const error = await failureOf(() => store(fake, { ownerDid: OWNER_B, sdJwt: makeSdJwt({ subject: OWNER_A }) }));
+    expect(error.code).toBe("HOLDER_MISMATCH");
+    expect(fake.calls.batchPut).toBe(0);
+  });
+
+  test("refuses a did:key owner before any write", async () => {
+    const fake = fakeKv();
+    const error = await failureOf(() => store(fake, { ownerDid: "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK" }));
+    expect(error.code).toBe("ACTIVE_SESSION_REQUIRED");
+    expect(fake.calls.batchPut).toBe(0);
+  });
+
+  test("stores under the canonical owner when the owner DID is lowercase", async () => {
+    const fake = fakeKv();
+    const lowercase = OWNER_A.replace(/0x[0-9a-fA-F]{40}$/, (address) => address.toLowerCase());
+    const { record } = await store(fake, { ownerDid: lowercase });
+    expect(record.ownerDid).toBe(heldAccountOwner(OWNER_A));
   });
 });
 
-describe("M11 owner compare uses principal equality", () => {
-  test("lowercase address variant of a checksummed owner finds the same record", async () => {
+describe("round trip", () => {
+  test("stores and finds the real vector credential at its own clock", async () => {
     const fake = fakeKv();
-    const { record } = await storeOne(fake);
-    const lowercaseOwner = `did:pkh:eip155:1:${RAW_ADDRESS_A}`;
-    const found = await findHeldCredential({ kv: fake.kv, ownerDid: lowercaseOwner, email: "alice@example.com", now: NOW_DATE });
-    expect(found?.recordId).toBe(record.recordId);
+    const vectorNow = new Date(vector.now);
+    const vectorPolicy = {
+      issuerSet: parseIssuerSet(vector.issuerSet as never, { didMethods: { issuer: ["web"] } }),
+      acceptedIssuers: [{ issuerDid: ISSUER_DID }],
+      didMethods: { issuer: ["web"] },
+    };
+    const { record, receipt } = await storeHeldCredential({
+      kv: fake.kv,
+      ownerDid: vector.account,
+      sdJwt: vector.sdJwt,
+      now: vectorNow,
+      ...vectorPolicy,
+    });
+    expect(record.ownerDid).toBe(heldAccountOwner(vector.account));
+    expect(await verifyHeldStorageReceipt(record, receipt, vector.account)).toBe(true);
+    const match = await findHeldCredential({
+      kv: fake.kv,
+      ownerDid: vector.account,
+      email: vector.email,
+      now: vectorNow,
+      ...vectorPolicy,
+    });
+    expect(match?.verified.claims.email).toBe(vector.email);
+  });
+
+  test("finds the record for a mixed-case query, but not for a plus-tag variant", async () => {
+    const fake = fakeKv();
+    await store(fake);
+    expect((await findFor(fake, "ALICE@EXAMPLE.COM"))?.verified.claims.email).toBe("alice@example.com");
+    expect(await findFor(fake, "alice+tag@example.com")).toBeUndefined();
+  });
+
+  test("receipt compares owner principals and rejects another account", async () => {
+    const fake = fakeKv();
+    const { record } = await store(fake);
+    const receipt = await createHeldStorageReceipt(record);
+    const lowerOwner = OWNER_A.replace(/0x[0-9a-fA-F]{40}$/, (address) => address.toLowerCase());
+    expect(await verifyHeldStorageReceipt(record, receipt, lowerOwner)).toBe(true);
+    expect(await verifyHeldStorageReceipt(record, receipt, OWNER_B)).toBe(false);
   });
 });
 
-describe("M12 email-proof records are not returned by the held reader", () => {
-  test("a held-shaped record under v1/records/ is ignored", async () => {
+describe("readback confirms the credential, not the timestamp", () => {
+  test("two concurrent stores of the same credential both succeed with one record", async () => {
     const fake = fakeKv();
-    const { record } = await storeOne(fake);
-    fake.data.set("v1/records/elsewhere", { ...record, recordId: "elsewhere" });
-    fake.data.delete(heldRecordKey(OWNER_A, record.recordId));
-    expect(await findHeldCredential({ kv: fake.kv, ownerDid: OWNER_A, email: "alice@example.com", now: NOW_DATE })).toBeUndefined();
+    const sdJwt = makeSdJwt();
+    const [first, second] = await Promise.all([
+      store(fake, { sdJwt, now: NOW }),
+      store(fake, { sdJwt, now: new Date(NOW.getTime() + 1000) }),
+    ]);
+    expect(first.record.recordId).toBe(second.record.recordId);
+    expect(fake.data.size).toBe(1);
+  });
+
+  test("a put that returns not ok is VERIFIED_NOT_SAVED", async () => {
+    const error = await failureOf(() => store(fakeKv({ putNotOk: true })));
+    expect(error.code).toBe("VERIFIED_NOT_SAVED");
+  });
+
+  test("a put that throws is VERIFIED_NOT_SAVED", async () => {
+    const error = await failureOf(() => store(fakeKv({ putThrows: true })));
+    expect(error.code).toBe("VERIFIED_NOT_SAVED");
+  });
+
+  test("a readback that does not match the written credential is VERIFIED_NOT_SAVED", async () => {
+    const error = await failureOf(() => store(fakeKv({ corruptReadback: true })));
+    expect(error.code).toBe("VERIFIED_NOT_SAVED");
+  });
+});
+
+describe("find re-verifies every stored record", () => {
+  test("a record whose signature was altered is not returned", async () => {
+    const fake = fakeKv();
+    await placeRaw(fake, OWNER_A, makeSdJwt({ tamperSignature: true }));
+    expect(await findFor(fake, "alice@example.com")).toBeUndefined();
+  });
+
+  test("extra email and expiresAt fields are ignored; the verified email and expiry are used", async () => {
+    const fake = fakeKv();
+    const genuine = makeSdJwt();
+    await placeRaw(fake, OWNER_A, genuine, { email: "mallory@example.com", expiresAt: "2099-01-01T00:00:00Z" });
+    expect(await findFor(fake, "mallory@example.com")).toBeUndefined();
+    const match = await findFor(fake, "alice@example.com");
+    expect(match?.verified.expiresAt.getTime()).toBe((NOW_S - 1000 + 365 * DAY) * 1000);
   });
 
   test("a record stored under a key that does not match its recordId is ignored", async () => {
     const fake = fakeKv();
-    const { record } = await storeOne(fake);
+    const { record } = await placeRaw(fake, OWNER_A, makeSdJwt());
     fake.data.delete(heldRecordKey(OWNER_A, record.recordId));
-    fake.data.set(heldRecordKey(OWNER_A, "misplaced"), record);
-    expect(await findHeldCredential({ kv: fake.kv, ownerDid: OWNER_A, email: "alice@example.com", now: NOW_DATE })).toBeUndefined();
+    fake.data.set(heldRecordKey(OWNER_A, "A".repeat(43)), record);
+    expect(await findFor(fake, "alice@example.com")).toBeUndefined();
   });
-});
 
-describe("prune and refresh", () => {
-  test("expired records are removed and only the newest unexpired record per email is kept", async () => {
+  test("a record whose ownerDid is another principal is ignored", async () => {
     const fake = fakeKv();
-    const expired = await storeOne(fake, { sdJwt: "sd-expired", expiresAt: new Date(NOW - 1), credentialId: "c-expired" });
-    const older = await storeOne(fake, { sdJwt: "sd-older", expiresAt: new Date(NOW + HOUR), credentialId: "c-older" });
-    const newer = await storeOne(fake, { sdJwt: "sd-newer", expiresAt: new Date(NOW + 2 * HOUR), credentialId: "c-newer" });
-    const removed = await pruneHeldCredentials({ kv: fake.kv, ownerDid: OWNER_A, now: NOW_DATE });
-    expect([...removed].sort()).toEqual(
-      [heldRecordKey(OWNER_A, expired.record.recordId), heldRecordKey(OWNER_A, older.record.recordId)].sort(),
-    );
-    expect(fake.data.has(heldRecordKey(OWNER_A, newer.record.recordId))).toBe(true);
-    expect(fake.data.size).toBe(1);
+    await placeRaw(fake, OWNER_A, makeSdJwt(), { ownerDid: OWNER_B });
+    expect(await findFor(fake, "alice@example.com")).toBeUndefined();
   });
 
-  test("a truncated listing prunes nothing", async () => {
-    const fake = fakeKv({ truncated: true });
-    await storeOne(fake, { sdJwt: "sd-x", expiresAt: new Date(NOW - 1) });
-    expect(await pruneHeldCredentials({ kv: fake.kv, ownerDid: OWNER_A, now: NOW_DATE })).toEqual([]);
-    expect(fake.calls.delete).toBe(0);
-  });
-});
-
-describe("J3 held records stay on the held prefix", () => {
-  test("every stored held key begins with v1/held/ and none begins with v1/records/", async () => {
+  test("a record within the reuse margin is not offered", async () => {
     const fake = fakeKv();
-    await storeOne(fake);
-    const keys = [...fake.data.keys()];
-    expect(keys.length).toBeGreaterThan(0);
-    for (const key of keys) {
-      expect(key.startsWith("v1/held/")).toBe(true);
-      expect(key.startsWith("v1/records/")).toBe(false);
+    await placeRaw(fake, OWNER_A, makeSdJwt({ exp: NOW_S + 300 }));
+    expect(await findFor(fake, "alice@example.com")).toBeUndefined();
+  });
+
+  test("returns the verified record with the latest expiry", async () => {
+    const fake = fakeKv();
+    await placeRaw(fake, OWNER_A, makeSdJwt({ exp: NOW_S + 2 * DAY }));
+    const later = await placeRaw(fake, OWNER_A, makeSdJwt({ exp: NOW_S + 5 * DAY }));
+    const match = await findFor(fake, "alice@example.com");
+    expect(match?.record.recordId).toBe(later.record.recordId);
+  });
+
+  test("is scoped to the owner", async () => {
+    const fake = fakeKv();
+    await store(fake);
+    expect(await findFor(fake, "alice@example.com", OWNER_B)).toBeUndefined();
+  });
+
+  test("follows KV cursors across pages", async () => {
+    const fake = fakeKv({ pageSize: 2 });
+    for (let i = 0; i < 5; i += 1) {
+      await store(fake, { sdJwt: makeSdJwt({ disclosures: [["email", `user${i}@example.com`], ["emailDomain", "example.com"]] }) });
     }
+    expect((await findFor(fake, "user4@example.com"))?.verified.claims.email).toBe("user4@example.com");
+    expect(fake.calls.list.some((call) => call.cursor !== undefined)).toBe(true);
+  });
+
+  test("a truncated listing with no cursor is refused loudly", async () => {
+    const fake = fakeKv({ pageSize: 1, dropCursor: true });
+    await store(fake);
+    await placeRaw(fake, OWNER_A, makeSdJwt({ disclosures: [["email", "bob@example.com"], ["emailDomain", "example.com"]] }));
+    const error = await failureOf(() => findFor(fake, "alice@example.com"));
+    expect(error.code).toBe("VERIFICATION_FAILED");
   });
 });
 
-describe("type shape", () => {
-  test("stored record carries the held type tag and a store timestamp", async () => {
+describe("prune deletes only verified expired records and keeps the newest per email", () => {
+  test("removes a verified record whose expiry has passed and leaves a tampered record", async () => {
     const fake = fakeKv();
-    const { record } = await storeOne(fake);
-    const typed: HeldCredentialRecord = record;
-    expect(typed.type).toBe("TinyCloudHeldCredential");
-    expect(typed.storedAt).toBe(NOW_DATE.toISOString());
+    const expired = await placeRaw(fake, OWNER_A, makeSdJwt({ exp: NOW_S + 3600 }));
+    const tampered = await placeRaw(fake, OWNER_A, makeSdJwt({ tamperSignature: true }));
+    const removed = await pruneHeldCredentials({
+      kv: fake.kv,
+      ownerDid: OWNER_A,
+      now: new Date(NOW.getTime() + 2 * 3600 * 1000),
+      ...POLICY,
+    });
+    expect(removed).toEqual([heldRecordKey(OWNER_A, expired.record.recordId)]);
+    expect(fake.data.has(heldRecordKey(OWNER_A, tampered.record.recordId))).toBe(true);
+  });
+
+  test("a forged record cannot evict the genuine one", async () => {
+    const fake = fakeKv();
+    const genuine = await placeRaw(fake, OWNER_A, makeSdJwt({ exp: NOW_S + 10 * DAY }));
+    fake.data.set(heldRecordKey(OWNER_A, "A".repeat(43)), { ...genuine.record, recordId: "A".repeat(43) });
+    const removed = await pruneHeldCredentials({ kv: fake.kv, ownerDid: OWNER_A, now: NOW, ...POLICY });
+    expect(removed).toEqual([]);
+    expect(fake.data.has(genuine.key)).toBe(true);
+    expect((await findFor(fake, "alice@example.com"))?.record.recordId).toBe(genuine.record.recordId);
+  });
+
+  test("keeps only the newest verified record per email", async () => {
+    const fake = fakeKv();
+    const older = await placeRaw(fake, OWNER_A, makeSdJwt({ exp: NOW_S + 10 * DAY }));
+    const newer = await placeRaw(fake, OWNER_A, makeSdJwt({ exp: NOW_S + 20 * DAY }));
+    const removed = await pruneHeldCredentials({ kv: fake.kv, ownerDid: OWNER_A, now: NOW, ...POLICY });
+    expect(removed).toEqual([older.key]);
+    expect(fake.data.has(newer.key)).toBe(true);
   });
 });
 
-describe("owner filter inside the prefix", () => {
-  test("a record whose ownerDid names another account is ignored even under this owner's prefix", async () => {
+describe("delete validates recordId before addressing a key", () => {
+  test("deletes the key for a valid recordId", async () => {
     const fake = fakeKv();
-    const { record } = await storeOne(fake, { owner: OWNER_B });
-    fake.data.delete(heldRecordKey(OWNER_B, record.recordId));
-    fake.data.set(heldRecordKey(OWNER_A, record.recordId), record);
-    expect(await findHeldCredential({ kv: fake.kv, ownerDid: OWNER_A, email: "alice@example.com", now: NOW_DATE })).toBeUndefined();
+    const { record, key } = await placeRaw(fake, OWNER_A, makeSdJwt());
+    expect(await deleteHeldCredential({ kv: fake.kv, ownerDid: OWNER_A, recordId: record.recordId })).toBe(true);
+    expect(fake.calls.delete).toEqual([key]);
   });
 
-  test("a record whose ownerDid is the same account in lowercase is still matched", async () => {
+  test("refuses any recordId that is not a 43-character base64url digest, with no delete", async () => {
     const fake = fakeKv();
-    const { record } = await storeOne(fake);
-    const lowercased: HeldCredentialRecord = { ...record, ownerDid: `did:pkh:eip155:1:${RAW_ADDRESS_A}` };
-    fake.data.set(heldRecordKey(OWNER_A, record.recordId), lowercased);
-    const found = await findHeldCredential({ kv: fake.kv, ownerDid: OWNER_A, email: "alice@example.com", now: NOW_DATE });
-    expect(found?.recordId).toBe(record.recordId);
-  });
-});
-
-describe("verify compares the record owner by principal", () => {
-  test("a record whose ownerDid is the lowercase form of the same account still verifies", async () => {
-    const fake = fakeKv();
-    const { record } = await storeOne(fake);
-    const lowercased: HeldCredentialRecord = { ...record, ownerDid: `did:pkh:eip155:1:${RAW_ADDRESS_A}` };
-    const receipt = await createHeldStorageReceipt(lowercased);
-    expect(await verifyHeldStorageReceipt(lowercased, receipt, OWNER_A)).toBe(true);
+    for (const recordId of ["", "../../records/abc", "A".repeat(42), "A".repeat(44), "A/".repeat(21) + "A"]) {
+      const error = await failureOf(() => deleteHeldCredential({ kv: fake.kv, ownerDid: OWNER_A, recordId }));
+      expect(error.code).toBe("DESCRIPTOR_INVALID");
+    }
+    expect(fake.calls.delete).toEqual([]);
   });
 });
 
-describe("find returns the latest expiry", () => {
-  test("among two valid records for one email, the later expiry is returned", async () => {
-    const fake = fakeKv();
-    await storeOne(fake, { sdJwt: "sd-earlier", expiresAt: new Date(NOW + HOUR), credentialId: "c-earlier" });
-    const later = await storeOne(fake, { sdJwt: "sd-later", expiresAt: new Date(NOW + 3 * HOUR), credentialId: "c-later" });
-    const found = await findHeldCredential({ kv: fake.kv, ownerDid: OWNER_A, email: "alice@example.com", now: NOW_DATE });
-    expect(found?.recordId).toBe(later.record.recordId);
-  });
-});
-
-describe("ASCII-only case folding", () => {
-  test("non-ASCII letters are not case-folded, so a differently cased non-ASCII request does not match", async () => {
-    const fake = fakeKv();
-    await storeOne(fake, { email: "Äx@example.com" });
-    expect(await findHeldCredential({ kv: fake.kv, ownerDid: OWNER_A, email: "äx@example.com", now: NOW_DATE })).toBeUndefined();
-    expect((await findHeldCredential({ kv: fake.kv, ownerDid: OWNER_A, email: "Äx@example.com", now: NOW_DATE }))?.email).toBe("Äx@example.com");
-  });
-});
-
-describe("held key format is pinned", () => {
-  test("record key is v1/held/<lowercase address>/<recordId>, not a checksummed or owner-less path", async () => {
-    const fake = fakeKv();
-    const { record } = await storeOne(fake);
-    expect([...fake.data.keys()]).toEqual([`v1/held/${RAW_ADDRESS_A}/${record.recordId}`]);
+describe("key layout", () => {
+  test("keys are under the owner's lowercase address and the v1/held namespace", () => {
+    const id = "A".repeat(43);
+    const address = OWNER_A.split(":")[4].toLowerCase();
+    expect(heldRecordKey(OWNER_A, id)).toBe(`v1/held/${address}/${id}`);
   });
 });
