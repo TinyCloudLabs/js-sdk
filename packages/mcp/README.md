@@ -110,6 +110,12 @@ and deploys that image to the `tinycloud-mcp` Phala CVM. Its `production`
 environment requires `PHALA_CLOUD_API_KEY`, `CLOUDFLARE_API_TOKEN`, and a stable
 32-byte-or-longer `TC_MCP_STATE_SECRET`.
 
+The workflow fails, before building or deploying, unless the `tinycloud-mcp` CVM
+runs the production OS image pinned in `PHALA_OS_IMAGE` / `PHALA_OS_IMAGE_HASH`
+(`dstack-0.5.12`, not a `dstack-dev-*` image), and checks again after the deploy.
+It never changes the OS. If the check fails, set the OS by hand and re-run:
+`phala api -X PATCH /cvms/<id>/os-image -F os_image_name=dstack-0.5.12`.
+
 ### Post-deploy knowledge smoke
 
 After the `mcp-image.yml` deploy of `tinycloud-mcp` is live, QA runs the
