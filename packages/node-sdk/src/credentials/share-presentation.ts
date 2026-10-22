@@ -11,6 +11,10 @@ import type { EmailProofResult, HolderSigner } from "./email-proof";
 
 export type SharePresentationErrorCode =
   | "CHALLENGE_EXPIRED"
+  | "CHALLENGE_WINDOW_TOO_LONG"
+  | "CHALLENGE_IDENTIFIER_INVALID"
+  | "CHALLENGE_AUDIENCE_MISMATCH"
+  | "CHALLENGE_ACTION_MISMATCH"
   | "RECIPIENT_MISMATCH"
   | "HOLDER_MISMATCH"
   | "CREDENTIAL_MISMATCH"
@@ -30,13 +34,29 @@ export class SharePresentationError extends Error {
   }
 }
 
-/** Challenge as returned by the node. `expiresAt` is required here, unlike sdk-core's optional field. */
+/** Same 60 s ceiling sdk-core clamps the presentation expiry to (credential-admission.ts:461-462). */
+const CHALLENGE_MAX_WINDOW_MS = 60_000;
+
+/**
+ * Floor for challengeId and nonce. A floor, not a security claim: the node's generator
+ * and its minimum length are NOT CONFIRMED from this checkout.
+ */
+const CHALLENGE_IDENTIFIER_MIN_LENGTH = 16;
+
+/**
+ * Challenge as returned by the node. `expiresAt` is required here, unlike sdk-core's optional field.
+ *
+ * NOT CONFIRMED: sdk-core's PolicyChallengeV3 (policy/unified.ts:161-169) declares neither
+ * `action` nor `enforcerDid`. This builder requires `action`, so a node challenge without it
+ * fails closed with CHALLENGE_ACTION_MISMATCH.
+ */
 export type SharePresentationChallenge = {
   readonly challengeId: string;
   readonly nonce: string;
   readonly policyCid: string;
   readonly recipientDid: string;
   readonly nodeAudience: string;
+  readonly action: string;
   readonly expiresAt: string;
 };
 
@@ -47,6 +67,18 @@ export interface BuildSharePresentationInput {
   readonly challenge: SharePresentationChallenge;
   /** Untrusted until validated against challenge.policyCid. */
   readonly policy: unknown;
+  /**
+   * Node audience the CALLER trusts, taken from its own verified share envelope and not from the
+   * relay challenge: `PublishedShareEnvelopeV2.target.nodeAudience` (sdk-core delegations/share-envelope.ts:502)
+   * or `AttestedEnforcerBindingV2.nodeAudience` (sdk-core policy/unified.ts:123). Compared to
+   * `challenge.nodeAudience`. Empty or mismatched fails closed before signing.
+   */
+  readonly expectedNodeAudience: string;
+  /**
+   * Action the CALLER intends to present for, e.g. the action its share envelope grants.
+   * Compared to `challenge.action`. Empty or mismatched fails closed before signing.
+   */
+  readonly expectedAction: string;
 }
 
 export interface SharePresentationMaterial {
@@ -67,18 +99,46 @@ export interface SharePresentationMaterial {
  * Build the signed V4 policy presentation for a Share mint.
  *
  * Checks run in fail-closed order; each failure throws a SharePresentationError
- * with one code. The sdk-core builder re-checks everything else and any builder
- * rejection maps to PRESENTATION_REJECTED. Signing is delegated to the
- * holder signer over the 32-byte V4 digest; no hashing happens here.
+ * with one code. Audience and action are pinned to the caller's expectations first,
+ * so a relay cannot steer the holder into signing for a node it did not name in the
+ * caller's own envelope. The sdk-core builder re-checks everything else and any builder
+ * rejection maps to PRESENTATION_REJECTED. Signing is delegated to the holder signer
+ * over the 32-byte V4 digest; no hashing happens here.
  */
 export async function buildSharePresentation(
   input: BuildSharePresentationInput,
 ): Promise<SharePresentationMaterial> {
   const { holderSigner, result, requirement, challenge } = input;
 
+  if (
+    typeof input.expectedNodeAudience !== "string" ||
+    input.expectedNodeAudience.length === 0 ||
+    challenge.nodeAudience !== input.expectedNodeAudience
+  ) {
+    throw new SharePresentationError("CHALLENGE_AUDIENCE_MISMATCH", "policy challenge audience is not the expected node");
+  }
+  if (
+    typeof input.expectedAction !== "string" ||
+    input.expectedAction.length === 0 ||
+    challenge.action !== input.expectedAction
+  ) {
+    throw new SharePresentationError("CHALLENGE_ACTION_MISMATCH", "policy challenge action is not the expected action");
+  }
+
+  const nowMs = Date.now();
   const expiresMs = Date.parse(challenge.expiresAt);
-  if (!Number.isFinite(expiresMs) || expiresMs <= Date.now()) {
+  if (!Number.isFinite(expiresMs) || expiresMs <= nowMs) {
     throw new SharePresentationError("CHALLENGE_EXPIRED", "policy challenge is expired");
+  }
+  if (expiresMs - nowMs > CHALLENGE_MAX_WINDOW_MS) {
+    throw new SharePresentationError("CHALLENGE_WINDOW_TOO_LONG", "policy challenge expiry is further out than 60 seconds");
+  }
+
+  const identifiersOk = [challenge.challengeId, challenge.nonce].every(
+    (value) => typeof value === "string" && value.length >= CHALLENGE_IDENTIFIER_MIN_LENGTH,
+  );
+  if (!identifiersOk) {
+    throw new SharePresentationError("CHALLENGE_IDENTIFIER_INVALID", "policy challenge identifiers are missing or too short");
   }
 
   const holderDid = result.verified.holderDid;

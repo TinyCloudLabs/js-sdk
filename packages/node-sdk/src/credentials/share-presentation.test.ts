@@ -43,6 +43,7 @@ const seed = Uint8Array.from(Buffer.from(golden.holderSeedBase64Url, "base64url"
 const holderDid = golden.holderDid;
 const holderSign = async (bytes: Uint8Array) => ed25519.sign(bytes, seed);
 const future = () => new Date(Date.now() + 3_600_000).toISOString();
+const soon = () => new Date(Date.now() + 30_000).toISOString();
 
 const capability = {
   kind: "kv" as const,
@@ -126,12 +127,13 @@ async function fixture(): Promise<Fixture> {
     expiresAt: verified.expiresAt,
   };
   const challenge: SharePresentationChallenge = {
-    challengeId: "challenge",
-    nonce: "nonce",
+    challengeId: "challenge-id-0000001",
+    nonce: "nonce-0000000000000001",
     policyCid,
     recipientDid: holderDid,
     nodeAudience: "did:key:zNode",
-    expiresAt: future(),
+    action: "tinycloud.kv/get",
+    expiresAt: soon(),
   };
   const holderSigner = createEd25519HolderSigner(holderDid, holderSign);
   return {
@@ -146,6 +148,8 @@ async function fixture(): Promise<Fixture> {
       requirement: requirementVector.sdkRequirement,
       challenge,
       policy,
+      expectedNodeAudience: "did:key:zNode",
+      expectedAction: "tinycloud.kv/get",
     },
   };
 }
@@ -157,6 +161,19 @@ async function rejectionOf(promise: Promise<unknown>): Promise<SharePresentation
   );
   expect(error).toBeInstanceOf(SharePresentationError);
   return error as SharePresentationError;
+}
+
+/** Holder signer that counts calls, to prove a rejection happens before any signing. */
+function countingSigner(f: Fixture): { holderSigner: HolderSigner; calls: { n: number } } {
+  const calls = { n: 0 };
+  const holderSigner: HolderSigner = {
+    ...f.holderSigner,
+    sign: async (bytes) => {
+      calls.n += 1;
+      return holderSign(bytes);
+    },
+  };
+  return { holderSigner, calls };
 }
 
 describe("buildSharePresentation golden and differential", () => {
@@ -314,13 +331,138 @@ describe("buildSharePresentation fail-closed rejections (one per code)", () => {
     expect(error.code).toBe("REQUIREMENT_MISMATCH");
   });
 
-  test("PRESENTATION_REJECTED when the sdk-core builder rejects the challenge binding", async () => {
+  test("CHALLENGE_AUDIENCE_MISMATCH when the relay names a node other than the expected audience; nothing is signed", async () => {
     const f = await fixture();
+    const { holderSigner, calls } = countingSigner(f);
     const error = await rejectionOf(buildSharePresentation({
       ...f.input,
+      holderSigner,
+      challenge: { ...f.challenge, nodeAudience: "did:key:zRelay" },
+    }));
+    expect(error.code).toBe("CHALLENGE_AUDIENCE_MISMATCH");
+    expect(calls.n).toBe(0);
+  });
+
+  test("CHALLENGE_AUDIENCE_MISMATCH when the expected audience is empty, even if the challenge audience is also empty", async () => {
+    const f = await fixture();
+    const { holderSigner, calls } = countingSigner(f);
+    const error = await rejectionOf(buildSharePresentation({
+      ...f.input,
+      holderSigner,
+      expectedNodeAudience: "",
       challenge: { ...f.challenge, nodeAudience: "" },
     }));
-    expect(error.code).toBe("PRESENTATION_REJECTED");
+    expect(error.code).toBe("CHALLENGE_AUDIENCE_MISMATCH");
+    expect(calls.n).toBe(0);
+  });
+
+  test("CHALLENGE_AUDIENCE_MISMATCH when expectedNodeAudience is missing at runtime", async () => {
+    const f = await fixture();
+    const { holderSigner, calls } = countingSigner(f);
+    const error = await rejectionOf(buildSharePresentation({
+      ...f.input,
+      holderSigner,
+      expectedNodeAudience: undefined as unknown as string,
+    }));
+    expect(error.code).toBe("CHALLENGE_AUDIENCE_MISMATCH");
+    expect(calls.n).toBe(0);
+  });
+
+  test("CHALLENGE_ACTION_MISMATCH when the relay names a different action; nothing is signed", async () => {
+    const f = await fixture();
+    const { holderSigner, calls } = countingSigner(f);
+    const error = await rejectionOf(buildSharePresentation({
+      ...f.input,
+      holderSigner,
+      challenge: { ...f.challenge, action: "tinycloud.kv/put" },
+    }));
+    expect(error.code).toBe("CHALLENGE_ACTION_MISMATCH");
+    expect(calls.n).toBe(0);
+  });
+
+  test("CHALLENGE_ACTION_MISMATCH when the challenge carries no action", async () => {
+    const f = await fixture();
+    const { holderSigner, calls } = countingSigner(f);
+    const error = await rejectionOf(buildSharePresentation({
+      ...f.input,
+      holderSigner,
+      challenge: { ...f.challenge, action: undefined as unknown as string },
+    }));
+    expect(error.code).toBe("CHALLENGE_ACTION_MISMATCH");
+    expect(calls.n).toBe(0);
+  });
+
+  test("CHALLENGE_ACTION_MISMATCH when expectedAction is missing at runtime", async () => {
+    const f = await fixture();
+    const { holderSigner, calls } = countingSigner(f);
+    const error = await rejectionOf(buildSharePresentation({
+      ...f.input,
+      holderSigner,
+      expectedAction: undefined as unknown as string,
+    }));
+    expect(error.code).toBe("CHALLENGE_ACTION_MISMATCH");
+    expect(calls.n).toBe(0);
+  });
+
+  test("expectedNodeAudience and expectedAction are required by the type (checked by tsc, not by runtime)", () => {
+    const withoutAudience = (f: Fixture) => {
+      const rest: Omit<BuildSharePresentationInput, "expectedNodeAudience"> = f.input;
+      // @ts-expect-error expectedNodeAudience is required
+      return buildSharePresentation(rest);
+    };
+    const withoutAction = (f: Fixture) => {
+      const rest: Omit<BuildSharePresentationInput, "expectedAction"> = f.input;
+      // @ts-expect-error expectedAction is required
+      return buildSharePresentation(rest);
+    };
+    expect(typeof withoutAudience).toBe("function");
+    expect(typeof withoutAction).toBe("function");
+  });
+
+  test("CHALLENGE_WINDOW_TOO_LONG when the challenge expires 61 s out; nothing is signed", async () => {
+    const f = await fixture();
+    const { holderSigner, calls } = countingSigner(f);
+    const error = await rejectionOf(buildSharePresentation({
+      ...f.input,
+      holderSigner,
+      challenge: { ...f.challenge, expiresAt: new Date(Date.now() + 61_000).toISOString() },
+    }));
+    expect(error.code).toBe("CHALLENGE_WINDOW_TOO_LONG");
+    expect(calls.n).toBe(0);
+  });
+
+  test("a challenge expiring 59 s out is accepted and its challengeId is bound", async () => {
+    const f = await fixture();
+    const material = await buildSharePresentation({
+      ...f.input,
+      challenge: { ...f.challenge, expiresAt: new Date(Date.now() + 59_000).toISOString() },
+    });
+    expect(material.presentation.challengeId).toBe(f.challenge.challengeId);
+  });
+
+  test("CHALLENGE_IDENTIFIER_INVALID when challengeId or nonce is empty or under 16 characters; nothing is signed", async () => {
+    const f = await fixture();
+    const variants: SharePresentationChallenge[] = [
+      { ...f.challenge, challengeId: "short-id" },
+      { ...f.challenge, nonce: "short" },
+      { ...f.challenge, nonce: "" },
+    ];
+    for (const challenge of variants) {
+      const { holderSigner, calls } = countingSigner(f);
+      const error = await rejectionOf(buildSharePresentation({ ...f.input, holderSigner, challenge }));
+      expect(error.code).toBe("CHALLENGE_IDENTIFIER_INVALID");
+      expect(calls.n).toBe(0);
+    }
+  });
+
+  test("challengeId and nonce of exactly 16 characters are accepted and bound into the presentation", async () => {
+    const f = await fixture();
+    const material = await buildSharePresentation({
+      ...f.input,
+      challenge: { ...f.challenge, challengeId: "0123456789abcdef", nonce: "fedcba9876543210" },
+    });
+    expect(material.presentation.challengeId).toBe("0123456789abcdef");
+    expect(material.presentation.nonce).toBe("fedcba9876543210");
   });
 });
 
