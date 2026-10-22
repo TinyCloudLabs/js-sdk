@@ -157,6 +157,13 @@
       "index.mjs": 0,
       "index.cjs": 0,
       "note": "Replica gzip growth measured against this PR's merge base"
+    },
+    {
+      "pr": "#656",
+      "ticket": "TC-848",
+      "index.mjs": 0,
+      "index.cjs": 0,
+      "note": "Replica gzip growth measured against this PR's merge base"
     }
   ],
   "phase2Ratchet": {
@@ -783,5 +790,34 @@
       "ceiling": 822753
     },
     "reason": "The Phase 1 dist step had not run on master since the kv-storage worker step began aborting first at #606 (78aec0e0); when it ran on #608 it measured root index.mjs 1,475,571 and index.cjs 1,403,924 against the TC-1475 ceilings 1,475,166 and 1,403,595 (+405/+329) and activation.cjs 24,700 against 24,699 (+1). Candidates #606 (security dependency updates), #605, #552; attribution not bisected. The worker is already admitted by tc606WorkerRatchet."
+  },
+  "tc848Ratchet": {
+    "label": "TC-858 Phase 2 absolute root ceiling: developer request log (TC-848 panel, Sam's decision), exact canonical delta",
+    "ruling": "Naomi approved (TC-848, PR #656): one exact root row at the bytes canonical CI printed on head b7d22f30; no other bucket changes",
+    "base": "e2ceb16b",
+    "sourceCommits": [
+      "b7d22f309b310d5139137e00ede8db934d5d205d"
+    ],
+    "canonicalCI": {
+      "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39757260229",
+      "jobs": [
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39757260229/job/119752305464",
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39757260229/job/119752305697"
+      ]
+    },
+    "root": {
+      "delta": { "index.mjs": 2994, "index.cjs": 2093 },
+      "ceiling": { "index.mjs": 1478549, "index.cjs": 1406007 }
+    },
+    "firstImport": {
+      "delta": { "replica.mjs": 0, "replica.cjs": 0 },
+      "ceiling": { "replica.mjs": 51925, "replica.cjs": 67140 }
+    },
+    "activation": {
+      "delta": { "activation.mjs": 0, "activation.cjs": 0 },
+      "ceiling": { "activation.mjs": 23117, "activation.cjs": 24700 }
+    },
+    "worker": { "delta": 0, "ceiling": 822753 },
+    "reason": "developer request log (TC-848 panel, Sam's decision) adds sdk-services telemetry/requestLog.ts and the recording context to the root; the optional replica chunk and the worker are unchanged. Root measured against master e2ceb16b: index.mjs 1,475,555 to 1,478,549 (+2,994), index.cjs 1,403,914 to 1,406,007 (+2,093)."
   }
 }

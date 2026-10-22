@@ -10,7 +10,7 @@ import {
   mergedPinsNotLandedOn, priorOptionalAllowance, relocatedOptionalAllowance, validateIntroducedOptionalSources,
   validateOptionalEntryTransition, validateOptionalLedger, type OptionalLedger,
 } from "./replica-optional-size-policy";
-import { assertCiSizeToolchain, approvedCiToolchainCorrection, approvedFixRequiredRatchet, approvedGatedOnlyRatchet, approvedPhase2, ciCorrectionPolicyOnlyPaths, hasAncestor, isPolicyOnlySinceApprovedSource, preexistingS3EntryCommit, validateCiToolchainTransition, validateGatedOnlyRatchet, validateHardeningRatchetTransition, validateLedger, validateLogoutRatchetTransition, validateMasterMergeResolutionTransition, validateTc1413RatchetTransition, validateTc1424RatchetTransition, validateTc1448RatchetTransition, validateTc1432RatchetTransition, validateTc1436RatchetTransition, validateTc1443RatchetTransition, validateTc1443bRatchetTransition, validateTc1428RatchetTransition, validateTc1475RatchetTransition, validateTc606WorkerRatchetTransition, validateMasterDriftRatchetTransition, validateTc1476RatchetTransition, validateTc1466RatchetTransition, type GzipSizes, type Ledger, type LedgerEntry } from "./replica-size-policy";
+import { assertCiSizeToolchain, approvedCiToolchainCorrection, approvedFixRequiredRatchet, approvedGatedOnlyRatchet, approvedPhase2, ciCorrectionPolicyOnlyPaths, hasAncestor, isPolicyOnlySinceApprovedSource, preexistingS3EntryCommit, validateCiToolchainTransition, validateGatedOnlyRatchet, validateHardeningRatchetTransition, validateLedger, validateLogoutRatchetTransition, validateMasterMergeResolutionTransition, validateTc1413RatchetTransition, validateTc1424RatchetTransition, validateTc1448RatchetTransition, validateTc1432RatchetTransition, validateTc1436RatchetTransition, validateTc1443RatchetTransition, validateTc1443bRatchetTransition, validateTc1428RatchetTransition, validateTc1475RatchetTransition, validateTc606WorkerRatchetTransition, validateMasterDriftRatchetTransition, validateTc848RatchetTransition, validateTc1476RatchetTransition, validateTc1466RatchetTransition, type GzipSizes, type Ledger, type LedgerEntry } from "./replica-size-policy";
 import { collectMeasuredArtifactInputs } from "./replica-size-inputs";
 type Baseline = {
   webSdkTestBaseline: { ref: string; unhandledErrors: number; failingNames: string[]; unhandledSignatures: string[] };
@@ -142,7 +142,7 @@ for (const format of formats) {
     }
   }
   console.log(`${format}: current=${currentSizes[format]} gzip-bytes`);
-  const ceiling = ledger.masterDriftRatchet?.root.ceiling[format] ?? ledger.tc1475Ratchet?.root.ceiling[format] ?? ledger.tc1476Ratchet?.root.ceiling[format] ?? ledger.tc1428Ratchet?.root.ceiling[format] ?? ledger.tc1443bRatchet?.root.ceiling[format] ?? ledger.tc1466Ratchet?.root.ceiling[format] ?? ledger.tc1443Ratchet?.root.ceiling[format] ?? ledger.tc1448Ratchet?.root.ceiling[format] ?? ledger.tc1424Ratchet?.root.ceiling[format] ?? ledger.tc1432Ratchet?.root.ceiling[format] ?? ledger.tc1436Ratchet?.root.ceiling[format] ?? ledger.tc1413Ratchet?.root.ceiling[format] ?? ledger.logoutRatchet?.root.ceiling[format] ?? ledger.hardeningRatchet?.root.ceiling[format] ?? ciCorrection?.measured.rootCeiling[format] ??
+  const ceiling = ledger.tc848Ratchet?.root.ceiling[format] ?? ledger.masterDriftRatchet?.root.ceiling[format] ?? ledger.tc1475Ratchet?.root.ceiling[format] ?? ledger.tc1476Ratchet?.root.ceiling[format] ?? ledger.tc1428Ratchet?.root.ceiling[format] ?? ledger.tc1443bRatchet?.root.ceiling[format] ?? ledger.tc1466Ratchet?.root.ceiling[format] ?? ledger.tc1443Ratchet?.root.ceiling[format] ?? ledger.tc1448Ratchet?.root.ceiling[format] ?? ledger.tc1424Ratchet?.root.ceiling[format] ?? ledger.tc1432Ratchet?.root.ceiling[format] ?? ledger.tc1436Ratchet?.root.ceiling[format] ?? ledger.tc1413Ratchet?.root.ceiling[format] ?? ledger.logoutRatchet?.root.ceiling[format] ?? ledger.hardeningRatchet?.root.ceiling[format] ?? ciCorrection?.measured.rootCeiling[format] ??
     ledger.fixRequiredRatchet?.rootCeiling[format] ?? ledger.phase2Ratchet?.ceiling[format];
   if (ceiling !== undefined) {
     console.log(`${format}: TC-858 Phase 2 absolute root ceiling=${ceiling} gzip-bytes`);
@@ -283,10 +283,17 @@ if (prBaseSha) {
     failed = true;
   }
   validateMasterDriftRatchetTransition(baseLedger.masterDriftRatchet, ledger.masterDriftRatchet);
+  validateTc848RatchetTransition(baseLedger.tc848Ratchet, ledger.tc848Ratchet);
   const masterDrift = ledger.masterDriftRatchet;
   if (masterDrift !== undefined && baseLedger.masterDriftRatchet === undefined &&
       !hasAncestor(repoRoot, masterDrift.sourceCommits.at(-1)!)) {
     console.error("The master-drift ratchet requires its measured source commit.");
+    failed = true;
+  }
+  const tc848 = ledger.tc848Ratchet;
+  if (tc848 !== undefined && baseLedger.tc848Ratchet === undefined &&
+      !hasAncestor(repoRoot, tc848.sourceCommits.at(-1)!)) {
+    console.error("The TC-848 root ratchet requires its measured source commit.");
     failed = true;
   }
   const baseOptionalPath = "packages/web-sdk/scripts/replica-optional-size-ledger.json";
@@ -643,6 +650,17 @@ if (prBaseSha) {
           }
         }
         console.log("Master drift uses its exact absolute-root row, not additive old headroom.");
+      } else if (tc848 !== undefined && baseLedger.tc848Ratchet === undefined && prefixMatches && appended.length === 1) {
+        // As for master drift: the exact TC-848 row carries the growth through its absolute root ceiling, so the
+        // appended entry is zero. The measured growth may not exceed the row.
+        const entry = appended[0];
+        for (const format of formats) {
+          if (entry[format] !== 0 || deltas[format] > tc848.root.delta[format]) {
+            console.error(`${format}: the TC-848 entry must be 0 and the measured growth ${deltas[format]} must not exceed the TC-848 row's ${tc848.root.delta[format]}.`);
+            failed = true;
+          }
+        }
+        console.log("TC-848 uses its exact absolute-root row, not additive old headroom.");
       } else if (!prefixMatches || appended.length !== 1) {
         const pr = process.env.REPLICA_BUDGET_PR_NUMBER ? `#${process.env.REPLICA_BUDGET_PR_NUMBER}` : "#<PR>";
         const ticket = process.env.REPLICA_BUDGET_TICKET?.match(/\bTC-\d+\b/i)?.[0] ?? "TC-UNKNOWN";

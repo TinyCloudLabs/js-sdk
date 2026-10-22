@@ -179,6 +179,7 @@ export type WorkerRatchet = {
  * ledger row because the kv-storage worker step aborted first and hid the Phase 1 dist step.
  */
 export type MasterDriftRatchet = HardeningRatchet;
+export type Tc848Ratchet = HardeningRatchet;
 export type Ledger = {
   allowance: GzipSizes;
   entries: LedgerEntry[];
@@ -201,6 +202,7 @@ export type Ledger = {
   tc1475Ratchet?: Tc1475Ratchet;
   tc606WorkerRatchet?: WorkerRatchet;
   masterDriftRatchet?: MasterDriftRatchet;
+  tc848Ratchet?: Tc848Ratchet;
 };
 
 const formats = ["index.mjs", "index.cjs"] as const;
@@ -753,6 +755,7 @@ export function ancestryPins(root: Ledger, hasGatedOnly: boolean): Array<{ row: 
   if (root.tc1475Ratchet !== undefined) pins.push({ row: "tc1475Ratchet", pin: root.tc1475Ratchet.sourceCommits.at(-1)! });
   if (root.tc606WorkerRatchet !== undefined) pins.push({ row: "tc606WorkerRatchet", pin: root.tc606WorkerRatchet.sourceCommits.at(-1)! });
   if (root.masterDriftRatchet !== undefined) pins.push({ row: "masterDriftRatchet", pin: root.masterDriftRatchet.sourceCommits.at(-1)! });
+  if (root.tc848Ratchet !== undefined) pins.push({ row: "tc848Ratchet", pin: root.tc848Ratchet.sourceCommits.at(-1)! });
   if (hasGatedOnly) pins.push({ row: "gatedOnlyRatchet", pin: approvedGatedOnlyRatchet.sourceCommit });
   return pins;
 }
@@ -814,6 +817,40 @@ export const approvedMasterDriftRatchet: MasterDriftRatchet = {
   reason: "The Phase 1 dist step had not run on master since the kv-storage worker step began aborting first at #606 (78aec0e0); when it ran on #608 it measured root index.mjs 1,475,571 and index.cjs 1,403,924 against the TC-1475 ceilings 1,475,166 and 1,403,595 (+405/+329) and activation.cjs 24,700 against 24,699 (+1). Candidates #606 (security dependency updates), #605, #552; attribution not bisected. The worker is already admitted by tc606WorkerRatchet.",
 };
 
+/**
+ * TC-848 developer request log, approved by Naomi: one absolute root row at the bytes canonical CI printed on the #656
+ * head b7d22f30, on top of master e2ceb16b. Only the root bucket grows; first-import, activation and worker ceilings are unchanged.
+ */
+export const approvedTc848Ratchet: Tc848Ratchet = {
+  label: "TC-858 Phase 2 absolute root ceiling: developer request log (TC-848 panel, Sam's decision), exact canonical delta",
+  ruling: "Naomi approved (TC-848, PR #656): one exact root row at the bytes canonical CI printed on head b7d22f30; no other bucket changes",
+  base: "e2ceb16b",
+  sourceCommits: [
+    "b7d22f309b310d5139137e00ede8db934d5d205d",
+  ],
+  canonicalCI: {
+    run: "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39757260229",
+    jobs: [
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39757260229/job/119752305464",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39757260229/job/119752305697",
+    ],
+  },
+  root: {
+    delta: { "index.mjs": 2994, "index.cjs": 2093 },
+    ceiling: { "index.mjs": 1478549, "index.cjs": 1406007 },
+  },
+  firstImport: {
+    delta: { "replica.mjs": 0, "replica.cjs": 0 },
+    ceiling: { "replica.mjs": 51925, "replica.cjs": 67140 },
+  },
+  activation: {
+    delta: { "activation.mjs": 0, "activation.cjs": 0 },
+    ceiling: { "activation.mjs": 23117, "activation.cjs": 24700 },
+  },
+  worker: { delta: 0, ceiling: 822753 },
+  reason: "developer request log (TC-848 panel, Sam's decision) adds sdk-services telemetry/requestLog.ts and the recording context to the root; the optional replica chunk and the worker are unchanged. Root measured against master e2ceb16b: index.mjs 1,475,555 to 1,478,549 (+2,994), index.cjs 1,403,914 to 1,406,007 (+2,093).",
+};
+
 export type GatedOnlyRatchet = {
   label: string;
   sourceCommit: string;
@@ -846,7 +883,7 @@ const historicalToolchain = "Bun 1.4.3; production webpack; gzip -9 -c";
 /** Only a git merge-base ledger may retain the pre-correction toolchain. */
 export function validateLedger(value: Ledger, historicalBase = false): void {
   if (!value || !value.allowance || !Array.isArray(value.entries) ||
-      Object.keys(value).some((key) => key !== "allowance" && key !== "entries" && key !== "phase2Ratchet" && key !== "fixRequiredRatchet" && key !== "canonicalToolchainCorrection" && key !== "masterMergeResolution" && key !== "hardeningRatchet" && key !== "logoutRatchet" && key !== "tc1413Ratchet" && key !== "tc1436Ratchet" && key !== "tc1432Ratchet" && key !== "tc1424Ratchet" && key !== "tc1448Ratchet" && key !== "tc1443Ratchet" && key !== "tc1466Ratchet" && key !== "tc1443bRatchet" && key !== "tc1428Ratchet" && key !== "tc1476Ratchet" && key !== "tc1475Ratchet" && key !== "tc606WorkerRatchet" && key !== "masterDriftRatchet")) {
+      Object.keys(value).some((key) => key !== "allowance" && key !== "entries" && key !== "phase2Ratchet" && key !== "fixRequiredRatchet" && key !== "canonicalToolchainCorrection" && key !== "masterMergeResolution" && key !== "hardeningRatchet" && key !== "logoutRatchet" && key !== "tc1413Ratchet" && key !== "tc1436Ratchet" && key !== "tc1432Ratchet" && key !== "tc1424Ratchet" && key !== "tc1448Ratchet" && key !== "tc1443Ratchet" && key !== "tc1466Ratchet" && key !== "tc1443bRatchet" && key !== "tc1428Ratchet" && key !== "tc1476Ratchet" && key !== "tc1475Ratchet" && key !== "tc606WorkerRatchet" && key !== "masterDriftRatchet" && key !== "tc848Ratchet")) {
     throw new Error("Invalid packages/web-sdk/scripts/replica-size-ledger.json shape");
   }
   if (Object.keys(value.allowance).some((key) => !formats.includes(key as typeof formats[number]))) {
@@ -962,6 +999,10 @@ export function validateLedger(value: Ledger, historicalBase = false): void {
       (!value.tc606WorkerRatchet || JSON.stringify(value.masterDriftRatchet) !== JSON.stringify(approvedMasterDriftRatchet))) {
     throw new Error("Only Naomi's exact canonical master-drift ratchet is approved.");
   }
+  if (value.tc848Ratchet !== undefined &&
+      (!value.masterDriftRatchet || JSON.stringify(value.tc848Ratchet) !== JSON.stringify(approvedTc848Ratchet))) {
+    throw new Error("Only Naomi's exact canonical TC-848 root ratchet is approved.");
+  }
 }
 
 /** The #606 worker ratchet is introduced once at its exact canonical bytes and immutable afterwards. */
@@ -969,6 +1010,14 @@ export function validateTc606WorkerRatchetTransition(base?: WorkerRatchet, curre
   if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc606WorkerRatchet) ||
       base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
     throw new Error("The exact #606 worker ratchet may be introduced once and cannot change later.");
+  }
+}
+
+/** The TC-848 root ratchet is introduced once at its exact canonical bytes and immutable afterwards. */
+export function validateTc848RatchetTransition(base?: Tc848Ratchet, current?: Tc848Ratchet): void {
+  if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc848Ratchet) ||
+      base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
+    throw new Error("The exact TC-848 root ratchet may be introduced once and cannot change later.");
   }
 }
 
