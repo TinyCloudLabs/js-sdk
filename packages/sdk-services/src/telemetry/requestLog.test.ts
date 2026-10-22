@@ -139,6 +139,13 @@ test("byte length is UTF-8 for strings and null when unknown, never 0", () => {
   expect(build({ bytes: -1 }).bytes).toBeNull();
 });
 
+test("space label is the name after the last colon; a colon-less id is never echoed", () => {
+  expect(build({ spaceId: "tinycloud:pkh:eip155:1:0xabc:default" }).space).toBe("default");
+  expect(build({ spaceId: "hunter2" }).space).toBe("space");
+  expect(build({ spaceId: "hunter2:Bad Name" }).space).toBe("space");
+  expect(build({ spaceId: "" }).space).toBeNull();
+});
+
 test("duration is rounded and clamped at zero; attempts floor at one", () => {
   expect(build({ durationMs: 4.6 }).durationMs).toBe(5);
   expect(build({ durationMs: -3 }).durationMs).toBe(0);

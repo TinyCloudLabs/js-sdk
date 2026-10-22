@@ -129,7 +129,10 @@ function scrubPath(raw: string | null | undefined): string | null {
 
 function spaceLabel(spaceId: string | null | undefined): string | null {
   if (typeof spaceId !== "string" || spaceId === "") return null;
-  const tail = spaceId.slice(spaceId.lastIndexOf(":") + 1);
+  // Only the name after the last colon is kept; an id without a colon has no such name.
+  const colon = spaceId.lastIndexOf(":");
+  if (colon === -1) return "space";
+  const tail = spaceId.slice(colon + 1);
   return SPACE_LABEL.test(tail) ? tail : "space";
 }
 
