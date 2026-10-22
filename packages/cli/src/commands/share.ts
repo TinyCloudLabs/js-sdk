@@ -359,6 +359,8 @@ export async function inspectShareInputOnce(
     assertTrustedShareOrigin(resolved, expectedOrigin);
     return (dependencies.inspect ?? inspectShare)(resolved, { expectedOrigin });
   }
+  // Native bearer links are minted at the Share origin too; one from elsewhere is refused first.
+  assertTrustedShareOrigin(link, expectedOrigin);
   throw new CLIError("UNSUPPORTED_LINK", "native bearer links are opaque; receive the link to verify access", 2);
 }
 
@@ -637,6 +639,8 @@ export function registerShareCommand(program: Command): void {
         let nativeLink = false;
         try { parseNativeShareUrl(link); nativeLink = true; } catch { /* addressed Policy/v3 link */ }
         if (nativeLink) {
+          // Native bearer links are minted at the Share origin too; one from elsewhere is never read.
+          assertTrustedShareOrigin(link, options.viewerOrigin);
           if (shareServices.nativeReader === undefined) throw new CLIError("AUTH_REQUIRED", "native TinyCloud receive is not configured", 3);
           const native = await shareServices.nativeReader(link);
           if (maxBytes !== undefined && native.bytes.byteLength > maxBytes) throw new CLIError("MAX_BYTES_EXCEEDED", "shared content exceeds max-bytes", 7);

@@ -592,7 +592,8 @@ export function createShareAuthorityAdapters(input: {
   };
   const targetAdapter: TargetPublishAdapter = { async publish(targetInput) {
     if (input.publishTarget !== undefined) return input.publishTarget(targetInput);
-    const [config, node] = await Promise.all([publicConfig(), authenticatedNode()]);
+    // The Share config is fetched only after the local checks below, so a refusal makes no request.
+    const node = await authenticatedNode();
     const session = node.restorableSession;
     const ownerSpaceId = session?.spaceId;
     const localKey = !node.isSessionOnly;
@@ -608,7 +609,6 @@ export function createShareAuthorityAdapters(input: {
     ) {
       throw new SharePublishAuthorityError({ kind: "owner-space-unresolved", localKey, profileName: activeProfileName });
     }
-    if (targetInput.origin !== config.shareOrigin) throw new SharePublishAuthorityError({ kind: "origin-mismatch" });
     if (node.isSessionOnly && sessionExpiresAt !== undefined) {
       const roundedSessionExpiry = new Date(Math.floor(sessionExpiresAt.getTime() / 1000) * 1000);
       if (roundedSessionExpiry.getTime() <= Date.now() + 60_000) {
@@ -645,12 +645,14 @@ export function createShareAuthorityAdapters(input: {
       });
     }
     // An addressed share's policy ceiling includes decrypt on the owner's encryption network, which a
-    // session-only sign-in (e.g. builtin:share-publishing) deliberately lacks. Refuse before any network
-    // call, registry write or upload. A signer-backed (local-key) owner has full authority.
+    // session-only sign-in (e.g. builtin:share-publishing) deliberately lacks. Refuse before any Share
+    // or node request, registry write or upload. A signer-backed (local-key) owner has full authority.
     const addressedEncryptionNetwork = targetInput.target.kind === "bearer" ? undefined : node.getEncryptionNetworkIdForSpace(ownerSpaceId);
     if (addressedEncryptionNetwork !== undefined && node.isSessionOnly && !sessionHoldsEncryptionDecrypt(node, addressedEncryptionNetwork)) {
       throw new SharePublishAuthorityError({ kind: "decrypt-not-held" });
     }
+    const config = await publicConfig();
+    if (targetInput.origin !== config.shareOrigin) throw new SharePublishAuthorityError({ kind: "origin-mismatch" });
     const activeNode = await node.activeNodeIdentity();
     if (targetInput.notify === true && targetInput.target.kind === "emailDomain") {
       await assertDomainDeliveryForOrigin(activeNode.origin, "publish");

@@ -993,7 +993,18 @@ describe("TinyCloud share authority adapter", () => {
 
   it("refuses an addressed share before any request when a session-only sign-in lacks decrypt on the encryption network (TC-1753)", async () => {
     holdsDecrypt = false;
-    const error = await addressedAdapter().publish(addressedInput({ kind: "email", address: "owner@example.com" })).then(() => undefined, (caught: unknown) => caught);
+    // Every request the adapter itself makes goes through this fetch; the Share config answers 503,
+    // so a refusal that came after the config fetch would surface as share-service-unavailable.
+    const requests: string[] = [];
+    const adapter = createShareAuthorityAdapters({
+      origin: "https://share.example",
+      profileName: async () => "test",
+      fetchFn: (async (input: string | URL | Request) => {
+        requests.push(String(input instanceof Request ? input.url : input));
+        return new Response(null, { status: 503 });
+      }) as unknown as typeof globalThis.fetch,
+    }).targetAdapter;
+    const error = await adapter.publish(addressedInput({ kind: "email", address: "owner@example.com" })).then(() => undefined, (caught: unknown) => caught);
     expect(error).toBeInstanceOf(SharePublishAuthorityError);
     expect((error as InstanceType<typeof SharePublishAuthorityError>).failure).toEqual({ kind: "decrypt-not-held" });
     expect(decryptChecks).toEqual([[{
@@ -1001,7 +1012,8 @@ describe("TinyCloud share authority adapter", () => {
       path: `urn:tinycloud:encryption:${credentialHolderDid}:default`,
       actions: ["tinycloud.encryption/decrypt"],
     }]]);
-    // No registry write, upload, encryption, signing or policy registration.
+    // No Share config fetch, registry write, upload, encryption, signing, policy registration or node probe.
+    expect(requests).toEqual([]);
     expect(publishEvents).toEqual([]);
     expect(uploadedPaths).toEqual([]);
     expect(encryptions).toBe(0);
