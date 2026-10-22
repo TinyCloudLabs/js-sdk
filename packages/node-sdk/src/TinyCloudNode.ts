@@ -1012,6 +1012,12 @@ export interface DelegateToResult {
 }
 
 /**
+ * Maximum expiry for runtime grants that include decrypt. Automatic
+ * escalations default to this; longer explicit expiries are refused.
+ */
+export const DECRYPT_GRANT_MAX_EXPIRY_MS = 60 * 60 * 1000;
+
+/**
  * Options for runtime permission escalation.
  */
 export interface RuntimePermissionGrantOptions {
@@ -6579,6 +6585,15 @@ export class TinyCloudNode {
     }
 
     const expanded = this.expandPermissionEntries(permissions);
+    const requestsDecrypt = expanded.some((entry) => entry.actions.includes(DECRYPT_ACTION));
+    const explicitExpiryMs = options?.expiry === undefined
+      ? undefined
+      : resolveExpiryMs(options.expiry);
+    if (requestsDecrypt && explicitExpiryMs !== undefined && explicitExpiryMs > DECRYPT_GRANT_MAX_EXPIRY_MS) {
+      throw new Error(
+        `Runtime grants that include decrypt are limited to one hour; requested ${explicitExpiryMs} ms.`,
+      );
+    }
     if (this.sessionCoversPermissionEntries(session, expanded)) {
       return [];
     }
@@ -6613,7 +6628,9 @@ export class TinyCloudNode {
     }
 
     const now = new Date();
-    const requestedExpiryMs = resolveExpiryMs(options?.expiry);
+    const requestedExpiryMs = explicitExpiryMs ?? (requestsDecrypt
+      ? DECRYPT_GRANT_MAX_EXPIRY_MS
+      : resolveExpiryMs(undefined));
     let expiresAt = new Date(now.getTime() + requestedExpiryMs);
     if (sessionExpiry !== undefined && sessionExpiry < expiresAt) {
       expiresAt = sessionExpiry;

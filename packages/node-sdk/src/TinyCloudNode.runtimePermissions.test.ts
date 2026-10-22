@@ -1324,6 +1324,117 @@ describe("TinyCloudNode runtime permission delegations", () => {
     expect(node.hasRuntimePermissions([permission])).toBe(true);
   });
 
+function makeExpiryTestNode(): TinyCloudNode {
+  const invoke = mock((session: { delegationHeader: { Authorization: string } }) => ({
+    Authorization: session.delegationHeader.Authorization,
+  }));
+  // makeNode takes the wasm invoke type; the mock only echoes the auth header.
+  return makeNode(invoke as unknown as IWasmBindings["invoke"]);
+}
+
+function lastPrepareExpiryMs(node: TinyCloudNode): number {
+  // Test-only access to the wasm binding mock recorded by makeFakeWasmBindings.
+  const wasm = node as unknown as {
+    wasmBindings: { prepareSession: { mock: { calls: Array<[{ expirationTime: string }]> } } };
+  };
+  return new Date(wasm.wasmBindings.prepareSession.mock.calls[0][0].expirationTime).getTime();
+}
+
+const DECRYPT_EXPIRY_TEST_ACTIONS = ["tinycloud.encryption/decrypt"];
+
+test("runtime grants that include decrypt default to a one-hour expiry", async () => {
+  const node = makeExpiryTestNode();
+  const permission: PermissionEntry = {
+    service: "tinycloud.encryption",
+    path: node.getDefaultEncryptionNetworkId(),
+    actions: DECRYPT_EXPIRY_TEST_ACTIONS,
+  };
+
+  const before = Date.now();
+  await withActivatedDelegations(async () => {
+    await node.grantRuntimePermissions([permission]);
+  });
+
+  const expirationTime = lastPrepareExpiryMs(node);
+  expect(expirationTime).toBeGreaterThanOrEqual(before + 60 * 60_000);
+  expect(expirationTime).toBeLessThanOrEqual(Date.now() + 60 * 60_000);
+});
+
+test("runtime grants that include decrypt refuse an explicit expiry over one hour", async () => {
+  const node = makeExpiryTestNode();
+  const permission: PermissionEntry = {
+    service: "tinycloud.encryption",
+    path: node.getDefaultEncryptionNetworkId(),
+    actions: DECRYPT_EXPIRY_TEST_ACTIONS,
+  };
+
+  await withActivatedDelegations(async () => {
+    await expect(node.grantRuntimePermissions([permission], { expiry: "2h" }))
+      .rejects.toThrow(/limited to one hour/);
+    await expect(node.grantRuntimePermissions([permission], { expiry: 60 * 60_000 + 1 }))
+      .rejects.toThrow(/limited to one hour/);
+  });
+  expect(
+    (node as unknown as { wasmBindings: { prepareSession: { mock: { calls: unknown[] } } } })
+      .wasmBindings.prepareSession.mock.calls,
+  ).toHaveLength(0);
+});
+
+test("runtime grants that include decrypt honour an explicit expiry of one hour or less", async () => {
+  const node = makeExpiryTestNode();
+  const permission: PermissionEntry = {
+    service: "tinycloud.encryption",
+    path: node.getDefaultEncryptionNetworkId(),
+    actions: DECRYPT_EXPIRY_TEST_ACTIONS,
+  };
+
+  const before = Date.now();
+  await withActivatedDelegations(async () => {
+    await node.grantRuntimePermissions([permission], { expiry: 3_540_000 });
+  });
+
+  const expirationTime = lastPrepareExpiryMs(node);
+  expect(expirationTime).toBeGreaterThanOrEqual(before + 3_540_000);
+  expect(expirationTime).toBeLessThanOrEqual(Date.now() + 3_540_000);
+});
+
+test("runtime grants without decrypt keep the 30-day default", async () => {
+  const node = makeExpiryTestNode();
+  const permission: PermissionEntry = {
+    service: "tinycloud.kv",
+    space: "secrets",
+    path: "vault/",
+    actions: ["tinycloud.kv/get"],
+  };
+
+  const before = Date.now();
+  await withActivatedDelegations(async () => {
+    await node.grantRuntimePermissions([permission]);
+  });
+
+  expect(lastPrepareExpiryMs(node)).toBeGreaterThanOrEqual(before + 30 * 24 * 60 * 60_000);
+});
+
+test("runtime grants that include decrypt stay capped at a shorter session expiry", async () => {
+  const node = makeExpiryTestNode();
+  const permission: PermissionEntry = {
+    service: "tinycloud.encryption",
+    path: node.getDefaultEncryptionNetworkId(),
+    actions: DECRYPT_EXPIRY_TEST_ACTIONS,
+  };
+  const session = (node as unknown as {
+    auth: { tinyCloudSession: { siwe: string } };
+  }).auth.tinyCloudSession;
+  const sessionEnd = new Date(Date.now() + 20 * 60_000);
+  session.siwe = session.siwe.replace("2999-01-01T00:00:00.000Z", sessionEnd.toISOString());
+
+  await withActivatedDelegations(async () => {
+    await node.grantRuntimePermissions([permission]);
+  });
+
+  expect(lastPrepareExpiryMs(node)).toBe(sessionEnd.getTime());
+});
+
   test("grants mixed KV and raw encryption permissions in one runtime delegation", async () => {
     const invoke = mock((session: any) => ({
       Authorization: session.delegationHeader.Authorization,
