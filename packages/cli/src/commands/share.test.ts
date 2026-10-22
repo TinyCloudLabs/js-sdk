@@ -225,6 +225,10 @@ describe("tc share command contract", () => {
     expect([missingNodeInfo.code, missingNodeInfo.exitCode]).toEqual(["UNAVAILABLE", 4]);
     const unavailable = shareCliError(new SharePublishAuthorityError({ kind: "registry-unavailable" }));
     expect([unavailable.code, unavailable.exitCode]).toEqual(["UNAVAILABLE", 4]);
+    const shareService = shareCliError(new SharePublishAuthorityError({ kind: "share-service-unavailable", origin: "https://share.example" }));
+    expect([shareService.code, shareService.exitCode]).toEqual(["SHARE_SERVICE_UNAVAILABLE", 4]);
+    expect(shareService.message).toContain("the Share service at https://share.example could not be reached, so nothing was shared");
+    expect(shareService.message).not.toContain("node");
     const publishInfo = shareCliError(new SharePublishAuthorityError({ kind: "node-info-unavailable" }));
     expect(publishInfo.message).toContain("nothing was shared and no invitation was sent");
     const notifyInfo = shareCliError(new SharePublishAuthorityError({ kind: "node-info-unavailable" }), "notify");

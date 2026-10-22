@@ -722,6 +722,24 @@ describe("TinyCloud share authority adapter", () => {
     }
   });
 
+  it("names the Share service, not the node, when the public config cannot be fetched", async () => {
+    const cases: Array<[string, typeof globalThis.fetch]> = [
+      ["refused", (async () => { throw new TypeError("fetch failed"); }) as unknown as typeof globalThis.fetch],
+      ["HTTP 503", (async () => new Response("down", { status: 503 })) as unknown as typeof globalThis.fetch],
+    ];
+    for (const [label, fetchFn] of cases) {
+      const { targetAdapter } = createShareAuthorityAdapters({ origin: "https://share.example", profileName: async () => "test", fetchFn });
+      const outcome = await targetAdapter.publish({
+        source: new TextEncoder().encode("x"), filename: "readme.txt",
+        target: { kind: "email", address: "alice@example.com" },
+        expiresAt: new Date("2100-01-01T00:00:00.000Z"), expiryWasExplicit: false,
+        origin: "https://share.example", mediaType: "text/plain",
+      }).then(() => undefined, (error: unknown) => error);
+      expect({ label, failure: outcome instanceof SharePublishAuthorityError ? outcome.failure : outcome })
+        .toEqual({ label, failure: { kind: "share-service-unavailable", origin: "https://share.example" } });
+    }
+  });
+
   const addressedAdapter = () => createShareAuthorityAdapters({
     origin: "https://share.example",
     profileName: async () => "test",
