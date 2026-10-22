@@ -8,6 +8,7 @@ import { normalizePkhIdentifier } from "../lib/space.js";
 import { ENCRYPTION_MANIFEST_SPACE } from "../../../sdk-core/src/manifest.js";
 import { isRawEncryptionPermission, isVerifiedRawEncryptionPermission } from "../lib/raw-encryption.js";
 import { canonicalNetworkUrn, rawEncryptionOwnerMatches } from "../lib/owner-did.js";
+import { isSharePublishingDecryptPermission } from "../share/publishing-manifest.js";
 
 /** OpenKey signs a scoped delegation only when it carries this read on the session space. */
 const CAPABILITIES_READ = "tinycloud.capabilities/read";
@@ -314,7 +315,7 @@ export function declinedPermissions(requested: readonly PermissionEntry[], signe
  * network entries (`space: "encryption"`), which are not a second space.
  */
 export function validateLoginPermissions(permissions: PermissionEntry[]): void {
-  const spaced = permissions.filter((p) => !isRawEncryptionPermission(p));
+  const spaced = permissions.filter((p) => !isRawEncryptionPermission(p) && !isSharePublishingDecryptPermission(p));
   if (!spaced.length || permissions.some((p) =>
     !p.service?.startsWith("tinycloud.") || !p.space ||
     (isRawEncryptionPermission(p)
