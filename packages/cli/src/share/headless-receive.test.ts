@@ -21,6 +21,8 @@ import {
   type EmailProofMaterial,
   type ShareAccessPort,
 } from "./headless-receive.js";
+import { createFileEmailProofPendingStore } from "@tinycloud/node-sdk/credential-pending-store";
+import { createNodeEmailProofGate, gateCodeFor, unavailableOpenAddressedShare, unavailablePresentationBuilder } from "./headless-receive-deps.js";
 
 const NOW = Date.parse("2026-01-01T00:00:00.000Z");
 const RESUME = "0123456789abcdef0123456789abcdef";
@@ -240,5 +242,34 @@ describe("stored envelope and recipient", () => {
     })();
     expect(refused).toBeInstanceOf(HeadlessReceiveError);
     expect((refused as HeadlessReceiveError).code).toBe("UNSUPPORTED_PROFILE");
+  });
+});
+
+describe("email-proof gate adapter", () => {
+  test("node-sdk session and code failures map to gate codes the command can act on", () => {
+    expect(gateCodeFor("RATE_LIMITED")).toBe("RATE_LIMITED");
+    expect(gateCodeFor("CODE_REJECTED")).toBe("CODE_REJECTED");
+    expect(gateCodeFor("CODE_INVALID")).toBe("CODE_REJECTED");
+    expect(gateCodeFor("SESSION_EXPIRED")).toBe("REQUEST_EXPIRED");
+    expect(gateCodeFor("CODE_ATTEMPTS_EXHAUSTED")).toBe("REQUEST_EXPIRED");
+    expect(gateCodeFor("NETWORK")).toBe("UNAVAILABLE");
+  });
+
+  test("completing an unknown request id is refused as expired, not as a crash", async () => {
+    const gate = createNodeEmailProofGate({ store: createFileEmailProofPendingStore({ home: dir }), now: () => new Date(NOW) });
+    const failure = await gate.completeEmailProof({ state: { requestId: RESUME }, code: CODE }).then(
+      () => undefined,
+      (caught: unknown) => caught,
+    );
+    expect(failure).toBeInstanceOf(EmailProofGateError);
+    expect((failure as EmailProofGateError).code).toBe("REQUEST_EXPIRED");
+  });
+
+  test("without a presentation builder or share opener, receive fails closed with a fixed message", async () => {
+    const builderFailure = await unavailablePresentationBuilder({} as never).then(() => undefined, (caught: unknown) => caught);
+    expect((builderFailure as HeadlessReceiveError).message).toBe("presentation builder unavailable");
+    const openFailure = await unavailableOpenAddressedShare({} as never).then(() => undefined, (caught: unknown) => caught);
+    expect(openFailure).toBeInstanceOf(HeadlessReceiveError);
+    expect((openFailure as HeadlessReceiveError).code).toBe("UNAVAILABLE");
   });
 });

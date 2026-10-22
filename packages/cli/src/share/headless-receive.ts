@@ -1,6 +1,6 @@
 import { chmod, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import type { SharePresentationMaterial } from "@tinycloud/share-sdk";
+import type { EmailProofResult, HolderSigner } from "@tinycloud/node-sdk/credentials";
 import { shareEnvelopeV3Schema, type ShareEnvelopeV3 } from "@tinycloud/share-envelope";
 import { ExitCode } from "../config/constants.js";
 
@@ -16,8 +16,13 @@ const CODE = /^\d{8}$/;
 
 export type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue };
 
-/** Presentation inputs produced by a verified code ceremony. The presentation itself is built by the access port. */
-export type EmailProofMaterial = Omit<SharePresentationMaterial, "presentation">;
+/** Holder material from a verified code ceremony. The presentation is built later by the access port, from this signer. */
+export interface EmailProofMaterial {
+  readonly holderDid: string;
+  readonly holderSigner: HolderSigner;
+  /** Verified issuer result from `completeEmailProof`. The presentation builder consumes it. */
+  readonly credential: EmailProofResult;
+}
 
 /**
  * Witness driver seam. The acquisition implementation (shared Courier module) plugs in here.

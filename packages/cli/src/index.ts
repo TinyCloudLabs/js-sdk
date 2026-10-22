@@ -16,6 +16,9 @@ import { configureShareCommandServices, registerShareCommand } from "./commands/
 import { createShareAuthorityAdapters } from "./share/adapters.js";
 import { loadCourierEntry } from "./lib/courier-loader.js";
 import { applyNoRetryFlag } from "./lib/retry-policy.js";
+import { CONFIG_DIR } from "./config/constants.js";
+import { createFileEmailProofPendingStore } from "@tinycloud/node-sdk/credential-pending-store";
+import { createNodeEmailProofGate, createShareAccessPort, unavailableOpenAddressedShare, unavailablePresentationBuilder } from "./share/headless-receive-deps.js";
 
 const program = new Command();
 const shareAuthority = createShareAuthorityAdapters({
@@ -98,6 +101,10 @@ configureShareCommandServices({
   nativeReader: shareAuthority.nativeReader,
   artifactStore: shareAuthority.artifactStore,
   shortLinks: shareAuthority.shortLinks,
+  headlessReceive: {
+    gate: createNodeEmailProofGate({ store: createFileEmailProofPendingStore({ home: CONFIG_DIR }) }),
+    access: createShareAccessPort({ buildPresentation: unavailablePresentationBuilder, open: unavailableOpenAddressedShare }),
+  },
 });
 
 const argv = process.argv.slice(2);
