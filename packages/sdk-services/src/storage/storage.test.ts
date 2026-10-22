@@ -370,6 +370,21 @@ describe("StorageFullMonitor on a full space", () => {
     expect(episodes).toEqual([true, false]);
   });
 
+  test("a committed write on another owner's space leaves the own episode on", async () => {
+    const { node, monitor, episodes } = await ownFullEpisode();
+    node.context.setSession({
+      delegationHeader: { Authorization: "Bearer session" },
+      delegationCid: "bafy",
+      spaceId: "tinycloud:pkh:eip155:1:0xbbb:default",
+      verificationMethod: "did:key:test",
+      jwk: {},
+    });
+
+    node.context.emit(TelemetryEvents.SERVICE_RESPONSE, { service: "kv", action: "put", ok: true });
+    expect(monitor.rejection).toBeDefined();
+    expect(episodes).toEqual([true]);
+  });
+
   test("a rejection whose space is unknown counts for every owner", async () => {
     const node = fullSpaceNode();
     node.context.setSession(null);
