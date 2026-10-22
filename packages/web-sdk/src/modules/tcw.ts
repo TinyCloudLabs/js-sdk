@@ -81,6 +81,8 @@ import { showPermissionRequestModal } from "../notifications/ModalManager";
 import {
   requestPermissionsCore,
   validateAdditionalPermissions,
+  validateRequestPermissionsOptions,
+  type RequestPermissionsOptions,
 } from "./requestPermissionsCore";
 import {
   isPermissionPromptSuppressed,
@@ -431,6 +433,7 @@ export class TinyCloudWeb {
     hasRuntimePermissions?: (additional: PermissionEntry[]) => boolean;
     grantPermissions?: (
       additional: PermissionEntry[],
+      options?: RequestPermissionsOptions,
     ) => Promise<readonly PortableDelegation[] | void>;
   };
 
@@ -1205,14 +1208,21 @@ export class TinyCloudWeb {
    * On approve, this does not mutate the manifest or force a new sign-in.
    * The underlying node creates a secondary delegation to the current
    * session key and records it in the invocation permission map.
+   *
+   * `options.expiryMs` sets the requested lifetime of the issued step-up
+   * delegation, in milliseconds. Omitted, the node's default applies. The
+   * node clamps the lifetime to the session expiry, so the issued
+   * delegation never outlives the session.
    */
   async requestPermissions(
     additional: PermissionEntry[],
+    options?: RequestPermissionsOptions,
   ): Promise<RequestPermissionsResult> {
     // Shared validation (also called by the core). Keeping the guard
     // here short-circuits before any manifest lookup so the error text
     // is unambiguous.
     validateAdditionalPermissions(additional);
+    validateRequestPermissionsOptions(options);
 
     const manifest = Array.isArray(this._manifest)
       ? this._manifest[0]
@@ -1244,8 +1254,14 @@ export class TinyCloudWeb {
       suppressPromptFor30Days: () =>
         suppressPermissionPromptFor30Days(manifest),
       grantPermissions: this._testHooks?.grantPermissions ??
-        ((approved) => node.grantRuntimePermissions(approved)),
-    });
+        ((approved, grantOptions) =>
+          node.grantRuntimePermissions(
+            approved,
+            grantOptions?.expiryMs !== undefined
+              ? { expiry: grantOptions.expiryMs }
+              : undefined,
+          )),
+    }, options);
     return result.approved
       ? {
           approved: true,

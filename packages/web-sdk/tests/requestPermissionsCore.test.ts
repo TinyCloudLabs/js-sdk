@@ -250,3 +250,58 @@ describe("requestPermissionsCore: validation", () => {
     expect(showModal).not.toHaveBeenCalled();
   });
 });
+
+// ---------------------------------------------------------------------------
+// expiryMs threading and validation
+// ---------------------------------------------------------------------------
+
+describe("requestPermissionsCore: expiryMs", () => {
+  test("forwards expiryMs to grantPermissions", async () => {
+    const grantPermissions = mock(async () => {});
+
+    await requestPermissionsCore(
+      additional,
+      {
+        manifest: baseManifest,
+        showModal: async () => ({ approved: true }),
+        grantPermissions,
+      },
+      { expiryMs: 3_600_000 },
+    );
+
+    expect(grantPermissions).toHaveBeenCalledWith(additional, { expiryMs: 3_600_000 });
+  });
+
+  test("passes no options to grantPermissions when expiryMs is absent", async () => {
+    const grantPermissions = mock(async () => {});
+
+    await requestPermissionsCore(additional, {
+      manifest: baseManifest,
+      showModal: async () => ({ approved: true }),
+      grantPermissions,
+    });
+
+    expect(grantPermissions.mock.calls[0]?.[1]).toBeUndefined();
+  });
+
+  test.each([Number.NaN, Number.POSITIVE_INFINITY, 0, -1])(
+    "throws before the modal when expiryMs is %p",
+    async (expiryMs) => {
+      const showModal = mock(() => Promise.resolve({ approved: true }));
+      const grantPermissions = mock(async () => {});
+      await expect(
+        requestPermissionsCore(
+          additional,
+          {
+            manifest: baseManifest,
+            showModal,
+            grantPermissions,
+          },
+          { expiryMs },
+        ),
+      ).rejects.toThrow(/expiryMs/);
+      expect(showModal).not.toHaveBeenCalled();
+      expect(grantPermissions).not.toHaveBeenCalled();
+    },
+  );
+});
