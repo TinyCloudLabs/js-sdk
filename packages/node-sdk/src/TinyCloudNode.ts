@@ -6170,6 +6170,7 @@ export class TinyCloudNode {
         grantPermissions: (additional) => this.grantRuntimePermissions(additional),
         canEscalate: () => this.signer !== undefined && this.tc !== undefined,
         getEncryptionNetworkId: () => this.getEncryptionNetworkIdForSpace(resolvedSpace),
+        ensureEncryptionNetwork: (networkId) => this.ensureEncryptionNetwork(networkId),
         resolveSpace: (space) => space.startsWith("tinycloud:") ? space : this.ownedSpaceId(space),
         getUnlockSigner: () => this.signer ?? undefined,
       });

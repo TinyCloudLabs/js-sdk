@@ -447,3 +447,129 @@ describe("NodeSecretsService", () => {
     });
   });
 });
+
+describe("NodeSecretsService first put with network.create only (TC-1777 interim)", () => {
+  const NETWORK_ID =
+    "urn:tinycloud:encryption:did:pkh:eip155:1:0x0000000000000000000000000000000000000001:default";
+
+  // Session holds every kv entry plus the listed encryption actions.
+  function sessionHolding(encryptionActions: string[]) {
+    return (entries: PermissionEntry[]) =>
+      entries.every(
+        (entry) =>
+          entry.service === "tinycloud.kv" ||
+          (entry.service === "tinycloud.encryption" &&
+            entry.actions.every((action) => encryptionActions.includes(action))),
+      );
+  }
+
+  it("creates the default network once before the first put", async () => {
+    const base = makeBaseSecrets();
+    const ensure = mock(async () => ({}));
+    const secrets = new NodeSecretsService({
+      getService: () => base,
+      getManifest: () => undefined,
+      grantPermissions: mock(async () => {}),
+      canEscalate: () => false,
+      hasPermissions: sessionHolding(["network.create"]),
+      getEncryptionNetworkId: () => NETWORK_ID,
+      ensureEncryptionNetwork: ensure,
+    });
+
+    expect((await secrets.put("API_KEY", "one")).ok).toBe(true);
+    expect((await secrets.put("API_KEY", "two")).ok).toBe(true);
+
+    expect(ensure).toHaveBeenCalledTimes(1);
+    expect(ensure).toHaveBeenCalledWith(NETWORK_ID);
+    expect(base.put).toHaveBeenCalledTimes(2);
+  });
+
+  it("shares one in-flight create between concurrent puts", async () => {
+    const base = makeBaseSecrets();
+    const ensure = mock(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    });
+    const secrets = new NodeSecretsService({
+      getService: () => base,
+      getManifest: () => undefined,
+      grantPermissions: mock(async () => {}),
+      canEscalate: () => false,
+      hasPermissions: sessionHolding(["network.create"]),
+      getEncryptionNetworkId: () => NETWORK_ID,
+      ensureEncryptionNetwork: ensure,
+    });
+
+    const [first, second] = await Promise.all([
+      secrets.put("API_KEY", "one"),
+      secrets.put("OTHER_KEY", "two"),
+    ]);
+
+    expect(first.ok).toBe(true);
+    expect(second.ok).toBe(true);
+    expect(ensure).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not create the network when the session also holds decrypt", async () => {
+    const base = makeBaseSecrets();
+    const ensure = mock(async () => ({}));
+    const secrets = new NodeSecretsService({
+      getService: () => base,
+      getManifest: () => undefined,
+      grantPermissions: mock(async () => {}),
+      canEscalate: () => false,
+      hasPermissions: sessionHolding(["network.create", "decrypt"]),
+      getEncryptionNetworkId: () => NETWORK_ID,
+      ensureEncryptionNetwork: ensure,
+    });
+
+    expect((await secrets.put("API_KEY", "one")).ok).toBe(true);
+    expect(ensure).not.toHaveBeenCalled();
+  });
+
+  it("leaves the put unchanged when the session lacks network.create", async () => {
+    const base = makeBaseSecrets();
+    const ensure = mock(async () => ({}));
+    const secrets = new NodeSecretsService({
+      getService: () => base,
+      getManifest: () => undefined,
+      grantPermissions: mock(async () => {}),
+      canEscalate: () => false,
+      hasPermissions: sessionHolding([]),
+      getEncryptionNetworkId: () => NETWORK_ID,
+      ensureEncryptionNetwork: ensure,
+    });
+
+    expect((await secrets.put("API_KEY", "one")).ok).toBe(true);
+    expect(ensure).not.toHaveBeenCalled();
+    expect(base.put).toHaveBeenCalledWith("API_KEY", "one");
+  });
+
+  it("returns the create error without writing, then retries on the next put", async () => {
+    const base = makeBaseSecrets();
+    let attempts = 0;
+    const ensure = mock(async () => {
+      attempts += 1;
+      if (attempts === 1) throw new Error("network create failed");
+    });
+    const secrets = new NodeSecretsService({
+      getService: () => base,
+      getManifest: () => undefined,
+      grantPermissions: mock(async () => {}),
+      canEscalate: () => false,
+      hasPermissions: sessionHolding(["network.create"]),
+      getEncryptionNetworkId: () => NETWORK_ID,
+      ensureEncryptionNetwork: ensure,
+    });
+
+    const first = await secrets.put("API_KEY", "one");
+    expect(first).toMatchObject({
+      ok: false,
+      error: { code: ErrorCodes.NETWORK_ERROR, message: "network create failed" },
+    });
+    expect(base.put).not.toHaveBeenCalled();
+
+    expect((await secrets.put("API_KEY", "two")).ok).toBe(true);
+    expect(ensure).toHaveBeenCalledTimes(2);
+    expect(base.put).toHaveBeenCalledTimes(1);
+  });
+});

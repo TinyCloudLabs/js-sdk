@@ -90,6 +90,18 @@ function secretPermissionEntries(
   return entries;
 }
 
+function encryptionPermissionEntry(
+  networkId: string,
+  action: "decrypt" | "network.create",
+): PermissionEntry {
+  return {
+    service: "tinycloud.encryption",
+    path: networkId,
+    actions: [action],
+    skipPrefix: true,
+  };
+}
+
 function normalizeSpace(
   space: string | undefined,
   resolveSpace?: (space: string) => string,
@@ -119,6 +131,8 @@ export interface NodeSecretsServiceConfig {
   grantPermissions: (additional: PermissionEntry[]) => Promise<unknown>;
   canEscalate: () => boolean;
   getEncryptionNetworkId?: () => string;
+  /** Creates the encryption network if missing. Interim until TC-1777 (named keys). */
+  ensureEncryptionNetwork?: (networkId: string) => Promise<unknown>;
   resolveSpace?: (space: string) => string;
   getUnlockSigner?: () => unknown;
 }
@@ -126,6 +140,7 @@ export interface NodeSecretsServiceConfig {
 export class NodeSecretsService implements ISecretsService {
   private unlockSigner?: unknown;
   private shouldRestoreUnlock = false;
+  private encryptionNetworkReady?: { networkId: string; ready: Promise<void> };
 
   constructor(private readonly config: NodeSecretsServiceConfig) {}
 
@@ -176,6 +191,8 @@ export class NodeSecretsService implements ISecretsService {
   ): ReturnType<ISecretsService["put"]> {
     const permission = await this.ensurePermission(name, options, "put");
     if (!permission.ok) return permission;
+    const network = await this.ensureEncryptionNetworkForPut();
+    if (!network.ok) return network;
     return options === undefined
       ? this.service.put(name, value)
       : this.service.put(name, value, options);
@@ -267,6 +284,55 @@ export class NodeSecretsService implements ISecretsService {
       return ok();
     }
     return this.service.unlock(this.unlockSigner);
+  }
+
+  // Interim until TC-1777 (named keys). Creates the default encryption
+  // network before the first put when the session holds network.create
+  // and no decrypt grant. Other sessions keep the existing put path.
+  private async ensureEncryptionNetworkForPut(): Promise<
+    Result<void, ServiceError>
+  > {
+    const ensure = this.config.ensureEncryptionNetwork;
+    const networkId = this.config.getEncryptionNetworkId?.();
+    if (ensure === undefined || networkId === undefined) {
+      return ok();
+    }
+    if (
+      this.hasPermission([encryptionPermissionEntry(networkId, "decrypt")])
+    ) {
+      return ok();
+    }
+    if (
+      !this.hasPermission([
+        encryptionPermissionEntry(networkId, "network.create"),
+      ])
+    ) {
+      return ok();
+    }
+
+    let pending = this.encryptionNetworkReady;
+    if (pending?.networkId !== networkId) {
+      const ready = ensure(networkId).then(() => undefined);
+      pending = { networkId, ready };
+      this.encryptionNetworkReady = pending;
+      ready.catch(() => {
+        if (this.encryptionNetworkReady?.ready === ready) {
+          this.encryptionNetworkReady = undefined;
+        }
+      });
+    }
+    try {
+      await pending.ready;
+      return ok();
+    } catch (error) {
+      return secretsError(
+        ErrorCodes.NETWORK_ERROR,
+        error instanceof Error
+          ? error.message
+          : `Failed to create encryption network ${networkId}.`,
+        error instanceof Error ? error : undefined,
+      );
+    }
   }
 
   private hasPermission(permissionEntries: PermissionEntry[]): boolean {
