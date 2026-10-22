@@ -140,7 +140,7 @@ export interface NodeSecretsServiceConfig {
 export class NodeSecretsService implements ISecretsService {
   private unlockSigner?: unknown;
   private shouldRestoreUnlock = false;
-  private encryptionNetworkReady?: { networkId: string; ready: Promise<void> };
+  private encryptionNetworkReady?: { networkId: string; ready: Promise<unknown> };
 
   constructor(private readonly config: NodeSecretsServiceConfig) {}
 
@@ -294,37 +294,26 @@ export class NodeSecretsService implements ISecretsService {
   > {
     const ensure = this.config.ensureEncryptionNetwork;
     const networkId = this.config.getEncryptionNetworkId?.();
-    if (ensure === undefined || networkId === undefined) {
-      return ok();
-    }
     if (
-      this.hasPermission([encryptionPermissionEntry(networkId, "decrypt")])
-    ) {
-      return ok();
-    }
-    if (
+      ensure === undefined ||
+      networkId === undefined ||
+      this.hasPermission([encryptionPermissionEntry(networkId, "decrypt")]) ||
       !this.hasPermission([
         encryptionPermissionEntry(networkId, "network.create"),
       ])
     ) {
       return ok();
     }
-
     let pending = this.encryptionNetworkReady;
     if (pending?.networkId !== networkId) {
-      const ready = ensure(networkId).then(() => undefined);
-      pending = { networkId, ready };
+      pending = { networkId, ready: ensure(networkId) };
       this.encryptionNetworkReady = pending;
-      ready.catch(() => {
-        if (this.encryptionNetworkReady?.ready === ready) {
-          this.encryptionNetworkReady = undefined;
-        }
-      });
     }
     try {
       await pending.ready;
       return ok();
     } catch (error) {
+      this.encryptionNetworkReady = undefined;
       return secretsError(
         ErrorCodes.NETWORK_ERROR,
         error instanceof Error
