@@ -221,6 +221,23 @@ test("user kv calls and user requests to the same host are never relabelled sync
   ]);
 });
 
+test("a user kv get with meta is never relabelled sync, even when its url ends in /info", async () => {
+  const log = new RequestLog();
+  const context = contextWith(log, async () => reply(200, "{}"));
+  const headers = context.invoke(session, "kv", "info", "tinycloud.kv/get");
+  await context.invokeWithRetry("https://node.example/info", () => ({ method: "POST", headers }));
+  const [row] = log.snapshot();
+  expect(row).toMatchObject({ service: "kv", op: "kv/get" });
+});
+
+test("a meta-less plain fetch to <host>/info is sync/info with host only", async () => {
+  const log = new RequestLog();
+  const context = contextWith(log, async () => reply(200, "{}"));
+  await context.fetch("https://node.example/info", { method: "GET" });
+  const [row] = log.snapshot();
+  expect(row).toMatchObject({ service: "sync", op: "sync/info", path: null, space: null, host: "node.example" });
+});
+
 test("a sync-looking /info URL from a plain fetch cannot smuggle path, space, or query text into its row", async () => {
   const log = new RequestLog();
   const context = contextWith(log, async () => reply(200, "{}"));
