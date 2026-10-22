@@ -151,7 +151,7 @@ describe("apps-agent scope notice states the facts of the grant", () => {
     expect(notice).not.toContain(`\`${HEALTH}/app/\``);
     expect(notice).not.toContain("READ-ONLY");
     expect(notice).not.toContain("ALL your installed apps");
-    expect(notice).toContain("This grant does not include permission to create, change or drop tables (tinycloud.sql/schema).");
+    expect(notice).toContain("This grant does not include permission to create, change or delete tables (tinycloud.sql/schema).");
     expect(notice).toContain("cannot touch other apps, other spaces or secrets");
     expect(notice).toContain("7 days");
     expect(appsAgentScopeNotice("write", [HEALTH])).toContain("cannot change the app's code, manifest or install record");
@@ -159,10 +159,10 @@ describe("apps-agent scope notice states the facts of the grant", () => {
 
   test("write for a catalog app names its one database as the only database where the agent can set up tables", () => {
     const notice = appsAgentScopeNotice("write", [CATALOG]);
-    expect(notice).toContain(`create, change and drop the tables in \`${CATALOG_DB}\`, which the app needs to set itself up.`);
+    expect(notice).toContain(`create, change and delete the tables in \`${CATALOG_DB}\`, which the app needs to set itself up.`);
     expect(notice).toContain("That grant names no other database for table changes.");
-    expect(notice).toContain("Nodes before 1.21.6 do not enforce that database limit, so the write grant may still let it change tables elsewhere there.");
-    expect(notice).not.toContain("does not include permission to create, change or drop tables");
+    expect(notice).not.toContain("1.21.6");
+    expect(notice).not.toContain("does not include permission to create, change or delete tables");
   });
 });
 
@@ -332,7 +332,7 @@ describe("describeGrantScope: the text follows what will be signed", () => {
     const lone = scopeOf([schema(CATALOG_DB)]);
     expect(lone.extras).toHaveLength(1);
     expect(entryLines(lone.text)[0]).toStartWith("! ");
-    expect(lone.text).toContain("create, change and drop tables");
+    expect(lone.text).toContain("create, change and delete tables");
     // schema beside only the same app's SQL write (not the full variant) is beyond the preset too
     expect(scopeOf([schema(CATALOG_DB), write]).extras).toHaveLength(1);
     // schema for the catalog app beside another app's full write variant is beyond the preset
@@ -363,7 +363,7 @@ describe("describeGrantScope: the text follows what will be signed", () => {
 
   test("a plain sql write beyond the preset never gets the table-change sentence", () => {
     const scope = scopeOf([{ service: "tinycloud.sql", space: OWNER_SPACE, path: `${HEALTH}/`, actions: ["tinycloud.sql/write"] }]);
-    expect(scope.text).not.toContain("create, change and drop tables");
+    expect(scope.text).not.toContain("create, change and delete tables");
   });
 
   test("a hand-made request inside the preset's limits (narrower paths, read, a put inside a write folder) needs no confirmation", () => {

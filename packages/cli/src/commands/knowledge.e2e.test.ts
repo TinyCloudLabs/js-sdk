@@ -260,7 +260,7 @@ describe.skipIf(!NODE_BIN)("tinycloud knowledge against a real node", () => {
 
     const { requestNotice, grantNotice } = await grantAgent("writer", ["--preset", "apps-agent", "--write", "--app", HEALTH]);
     expect(requestNotice).toContain(appsAgentScopeNotice("write", [HEALTH]));
-    expect(requestNotice).toContain("This grant does not include permission to create, change or drop tables (tinycloud.sql/schema).");
+    expect(requestNotice).toContain("This grant does not include permission to create, change or delete tables (tinycloud.sql/schema).");
     expect(grantNotice).toContain(appsAgentScopeNotice("write", [HEALTH]));
 
     const note = `${HEALTH}/knowledge/log.md`;
@@ -310,7 +310,7 @@ describe.skipIf(!NODE_BIN)("tinycloud knowledge against a real node", () => {
     await newAgent("catwriter");
     const { requestNotice, grantNotice } = await grantAgent("catwriter", ["--preset", "apps-agent", "--write", "--app", CAT]);
     expect(requestNotice).toContain(appsAgentScopeNotice("write", [CAT]));
-    expect(grantNotice).toContain("It can also create, change and drop the tables in");
+    expect(grantNotice).toContain("It can also create, change and delete the tables in");
 
     expect((await cli("owner", ["sql", "execute", "CREATE TABLE IF NOT EXISTS log (id INTEGER PRIMARY KEY)", "--db", CAT_DB, "--space", "applications"])).exitCode).toBe(0);
     // Positive: the schema grant covers CREATE and DROP on the exact catalog database.
