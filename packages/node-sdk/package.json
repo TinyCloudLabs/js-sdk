@@ -29,6 +29,11 @@
       "import": "./dist/credentials.js",
       "require": "./dist/credentials.cjs"
     },
+    "./credentials-core": {
+      "types": "./dist/credentials-core.d.ts",
+      "import": "./dist/credentials-core.js",
+      "require": "./dist/credentials-core.cjs"
+    },
     "./replication/runtime": {
       "import": {
         "types": "./dist/replication/runtime.d.ts",

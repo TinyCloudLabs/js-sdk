@@ -6,6 +6,7 @@ export default defineConfig({
     core: 'src/core.ts',
     'credential-pending-store': 'src/credential-pending-store.ts',
     credentials: 'src/credentials/index.ts',
+    'credentials-core': 'src/credentials/core.ts',
     'replication/runtime': 'src/replication/runtime.ts',
     'replication/authority': 'src/replication/authority.ts',
     'replication/gated-network': 'src/replication/gated-network.ts',
