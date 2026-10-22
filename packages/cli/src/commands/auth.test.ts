@@ -102,6 +102,7 @@ const recorded = {
   generateKeyCalls: 0,
   grantedRequests: [] as Array<Record<string, unknown>>,
   grantedExpiries: [] as Array<number | undefined>,
+  runtimeGrantCalls: [] as Array<{ requested: unknown[]; expiry: string | number | undefined }>,
   grantHistory: [] as Array<{ profile: string; entry: Record<string, unknown> }>,
   localGrantArtifacts: [] as Array<{ profile: string; delegation: Record<string, unknown> }>,
   removedReplicaProfiles: [] as string[],
@@ -148,6 +149,7 @@ function resetState(): void {
   recorded.generateKeyCalls = 0;
   recorded.grantedRequests.length = 0;
   recorded.grantedExpiries.length = 0;
+  recorded.runtimeGrantCalls.length = 0;
   recorded.localGrantArtifacts.length = 0;
   recorded.removedReplicaProfiles.length = 0;
   recorded.grantHistory.length = 0;
@@ -384,7 +386,8 @@ let bootstrapDelegatedSessionError: Error | null = null;
 
 const importedNode = {
   hasRuntimePermissions: () => authNodeHasRuntimePermissions,
-  grantRuntimePermissions: async () => {
+  grantRuntimePermissions: async (requested: unknown[], options?: { expiry?: string | number }) => {
+    recorded.runtimeGrantCalls.push({ requested, expiry: options?.expiry });
     await onGrantRuntimePermissions?.();
     return authNodeGrantDelegations;
   },
@@ -2054,6 +2057,113 @@ describe("CLI auth request command", () => {
       expect(recorded.outputs).toEqual([]);
     } finally {
       if (markerPath) await rm(markerPath, { force: true });
+    }
+  });
+});
+
+describe("local-key decrypt grants last at most one hour", () => {
+  const HOUR_MS = 60 * 60 * 1000;
+  const NOTICE = "Decrypt access lasts at most one hour, so this grant expires sooner than requested.";
+  const decrypt = { service: "tinycloud.encryption", space: "default", path: "", actions: ["tinycloud.encryption/decrypt"] };
+  const kvGet = { service: "tinycloud.kv", space: "default", path: "a/", actions: ["tinycloud.kv/get"] };
+  let tempDir: string;
+  let stderrLines: string[];
+  let stderr: { mockRestore(): void };
+
+  beforeEach(async () => {
+    resetState();
+    tempDir = await mkdtemp(join(tmpdir(), "tc-auth-decrypt-cap-"));
+    profiles.set("default", makeProfile());
+    authNodeHasRuntimePermissions = false;
+    stderrLines = [];
+    stderr = spyOn(process.stderr, "write").mockImplementation(((chunk: string | Uint8Array) => {
+      stderrLines.push(String(chunk));
+      return true;
+    }) as never);
+  });
+
+  afterEach(async () => {
+    stderr.mockRestore();
+    await rm(tempDir, { recursive: true, force: true });
+  });
+
+  const notices = () => stderrLines.filter((line) => line.includes(NOTICE));
+
+  async function writeRequest(requested: unknown[], requestedExpiry?: string): Promise<string> {
+    const source = join(tempDir, "request.json");
+    await writeFile(source, JSON.stringify({
+      kind: "tinycloud.auth.request",
+      version: 1,
+      requestId: "req_decrypt_cap",
+      sessionDid: "did:key:z6MkSession",
+      requested,
+      ...(requestedExpiry === undefined ? {} : { requestedExpiry }),
+    }), "utf8");
+    return source;
+  }
+
+  test("auth request --grant --expiry 7d with decrypt is capped at one hour, with one notice", async () => {
+    manifestPermissions = [kvGet, decrypt];
+
+    await runAuthCommand(["auth", "request", "--grant", "--yes", "--manifest", "m.json", "--expiry", "7d"]);
+
+    expect(recorded.errors).toEqual([]);
+    expect(recorded.runtimeGrantCalls).toHaveLength(1);
+    expect(recorded.runtimeGrantCalls[0]?.expiry).toBe(HOUR_MS);
+    expect(notices()).toHaveLength(1);
+  });
+
+  test("auth request --grant with decrypt and no --expiry still passes an explicit lifetime of at most one hour", async () => {
+    manifestPermissions = [decrypt];
+
+    await runAuthCommand(["auth", "request", "--grant", "--yes", "--manifest", "m.json"]);
+
+    expect(recorded.runtimeGrantCalls).toHaveLength(1);
+    expect(recorded.runtimeGrantCalls[0]?.expiry).toBe(HOUR_MS);
+    expect(notices()).toEqual([]);
+  });
+
+  test("a decrypt request already shorter than one hour is passed as given, without a notice", async () => {
+    manifestPermissions = [decrypt];
+
+    await runAuthCommand(["auth", "request", "--grant", "--yes", "--manifest", "m.json", "--expiry", "30m"]);
+
+    expect(recorded.runtimeGrantCalls[0]?.expiry).toBe("30m");
+    expect(notices()).toEqual([]);
+  });
+
+  test("a request without decrypt keeps its 7d lifetime", async () => {
+    manifestPermissions = [kvGet];
+
+    await runAuthCommand(["auth", "request", "--grant", "--yes", "--manifest", "m.json", "--expiry", "7d"]);
+
+    expect(recorded.runtimeGrantCalls).toHaveLength(1);
+    expect(recorded.runtimeGrantCalls[0]?.expiry).toBe("7d");
+    expect(notices()).toEqual([]);
+  });
+
+  test("auth grant of a request with decrypt and requestedExpiry 7d is capped at one hour, with one notice", async () => {
+    const source = await writeRequest([decrypt], "7d");
+
+    await runAuthCommand(["auth", "grant", source, "--yes"]);
+
+    expect(recorded.errors).toEqual([]);
+    expect(recorded.runtimeGrantCalls).toHaveLength(1);
+    expect(recorded.runtimeGrantCalls[0]?.expiry).toBe(HOUR_MS);
+    expect(notices()).toHaveLength(1);
+  });
+
+  test("every grant call made with decrypt carries an explicit lifetime of at most one hour", async () => {
+    manifestPermissions = [kvGet, decrypt];
+    await runAuthCommand(["auth", "request", "--grant", "--yes", "--manifest", "m.json", "--expiry", "7d"]);
+    await runAuthCommand(["auth", "request", "--grant", "--yes", "--manifest", "m.json"]);
+    await runAuthCommand(["auth", "grant", await writeRequest([decrypt], "30d"), "--yes"]);
+    await runAuthCommand(["auth", "grant", await writeRequest([kvGet, decrypt]), "--yes"]);
+
+    const withDecrypt = recorded.runtimeGrantCalls.filter((call) => JSON.stringify(call.requested).includes("encryption/decrypt"));
+    expect(withDecrypt).toHaveLength(4);
+    for (const call of withDecrypt) {
+      expect(typeof call.expiry === "number" ? call.expiry : Number.NaN).toBeLessThanOrEqual(HOUR_MS);
     }
   });
 });

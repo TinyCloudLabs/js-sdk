@@ -32,6 +32,7 @@ import {
   isInteractive,
   withSpinner,
 } from "../output/formatter.js";
+import { boundDecryptExpiryWithNotice } from "../lib/decrypt-cap.js";
 import { handleError, CLIError, cliErrorFromService } from "../output/errors.js";
 import { ExitCode, DEFAULT_CHAIN_ID, DEFAULT_OPENKEY_HOST, DEFAULT_SHARE_ORIGIN } from "../config/constants.js";
 import {
@@ -911,7 +912,7 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
     .option("--manifest <fileOrBase64>", "Manifest file, base64:<json>, or raw base64 JSON")
     .option(
       "--expiry <duration>",
-      "Lifetime of the granted delegation. ms-format string (e.g. \"7d\", \"30m\") or raw milliseconds. Defaults to 7d, capped by the active session's expiry.",
+      "Lifetime of the granted delegation. ms-format string (e.g. \"7d\", \"30m\") or raw milliseconds. Defaults to 7d, capped by the active session's expiry. Grants that include decrypt last at most one hour.",
     )
     .option("--emit [file]", "Emit the request artifact to stdout, or write it to file when provided")
     .option("--grant", "Grant the requested permissions immediately with this owner profile")
@@ -1067,9 +1068,10 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
         // Local-key flow: master's grantRuntimePermissions handles signing
         // through the SDK's wallet-mode signer, groups by space, and skips
         // anything already covered by the session or an existing grant.
+        const grantExpiry = boundDecryptExpiryWithNotice(requested, expiryOption);
         const delegations = await node.grantRuntimePermissions(
           requested,
-          expiryOption !== undefined ? { expiry: expiryOption } : undefined,
+          grantExpiry !== undefined ? { expiry: grantExpiry } : undefined,
         );
         await persistCurrentLocalSession(ctx.profile, profile, node.restorableSession, node.replicaStamp);
         const delegationCids: string[] = [];
@@ -2070,9 +2072,10 @@ export async function ensureDelegationAuthority(params: {
     return;
   }
 
+  const grantExpiry = boundDecryptExpiryWithNotice(params.requested, params.expiryOption);
   const delegations = await params.node.grantRuntimePermissions(
     params.requested,
-    params.expiryOption !== undefined ? { expiry: params.expiryOption } : undefined,
+    grantExpiry !== undefined ? { expiry: grantExpiry } : undefined,
   );
   if (params.persist === false) return delegations[0];
   for (const delegation of delegations) {

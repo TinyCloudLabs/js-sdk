@@ -1,3 +1,4 @@
+import { DECRYPT_EXPIRY_TOO_LONG_MESSAGE } from "../lib/decrypt-cap.js";
 import { closeReplication, registeredReplications } from "../lib/replication-registry.js";
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
@@ -43,6 +44,18 @@ export class CLIError extends Error {
   }
 }
 
+/** The SDK refuses a decrypt lifetime over one hour with this code, on the error or its cause. */
+function decryptExpiryError(error: unknown): CLIError | undefined {
+  for (let current: unknown = error, depth = 0; typeof current === "object" && current !== null && depth < 4; depth += 1) {
+    const { code, cause } = current as { code?: unknown; cause?: unknown };
+    if (code === "DECRYPT_EXPIRY_TOO_LONG") {
+      return new CLIError("DECRYPT_EXPIRY_TOO_LONG", DECRYPT_EXPIRY_TOO_LONG_MESSAGE, ExitCode.USAGE_ERROR);
+    }
+    current = cause;
+  }
+  return undefined;
+}
+
 /**
  * Convert a service or operation result once, before the CLI's own errors
  * become immutable decisions. A typed HTTP status decides first. Without one,
@@ -55,6 +68,8 @@ export function cliErrorFromService(
   message = error.message,
 ): CLIError {
   if (error instanceof CLIError) return error;
+  const decryptExpiry = decryptExpiryError(error);
+  if (decryptExpiry) return decryptExpiry;
   const nodeRetry = nodeRetryError(error);
   if (nodeRetry) return nodeRetry;
   const storageFull = storageFullError(error);
@@ -127,6 +142,8 @@ export function wrapError(error: unknown): CLIError {
   const storageFull = storageFullError(error);
   if (storageFull) return storageFull;
   if (error instanceof CLIError) return error;
+  const decryptExpiry = decryptExpiryError(error);
+  if (decryptExpiry) return decryptExpiry;
   const message = error instanceof Error ? error.message : String(error);
 
   // A typed HTTP refusal wins over misleading response text, including text

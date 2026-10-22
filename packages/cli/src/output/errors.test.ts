@@ -602,3 +602,27 @@ describe("node retry signals (TC-1413)", () => {
     expect(wrapError(new CLIError("NETWORK_ERROR", "fetch failed", 6))).toMatchObject({ code: "NETWORK_ERROR", exitCode: 6 });
   });
 });
+
+describe("DECRYPT_EXPIRY_TOO_LONG", () => {
+  const MESSAGE = "Decrypt access lasts at most one hour; request a shorter lifetime.";
+  const sdkError = () => Object.assign(new Error("decrypt grants last at most one hour"), { code: "DECRYPT_EXPIRY_TOO_LONG" });
+
+  test("wrapError maps the code on the error to a usage error with the fixed message", () => {
+    const error = wrapError(sdkError());
+    expect(error).toMatchObject({ code: "DECRYPT_EXPIRY_TOO_LONG", message: MESSAGE, exitCode: 2 });
+  });
+
+  test("wrapError maps the code on the cause", () => {
+    const error = wrapError(new Error("grant failed", { cause: sdkError() }));
+    expect(error).toMatchObject({ code: "DECRYPT_EXPIRY_TOO_LONG", message: MESSAGE, exitCode: 2 });
+  });
+
+  test("cliErrorFromService maps the code too", () => {
+    const error = cliErrorFromService({ code: "DECRYPT_EXPIRY_TOO_LONG", message: "decrypt grants last at most one hour" });
+    expect(error).toMatchObject({ code: "DECRYPT_EXPIRY_TOO_LONG", message: MESSAGE, exitCode: 2 });
+  });
+
+  test("an unrelated code is not mapped", () => {
+    expect(wrapError(Object.assign(new Error("boom"), { code: "OTHER" })).code).toBe("ERROR");
+  });
+});
