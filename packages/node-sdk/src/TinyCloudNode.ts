@@ -5890,7 +5890,7 @@ export class TinyCloudNode {
         actions: params.actions,
         expiresAt: params.requestedExpiry,
       }, assertActive)).delegation;
-    } catch (err) {
+    } catch {
       assertActive?.();
       return undefined;
     }
