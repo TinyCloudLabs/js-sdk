@@ -1,5 +1,6 @@
 import { debug } from "../utils/debug";
 import { acquireScrollLock } from "./scrollLock";
+import { deepActiveElement, focusableControls, nextTabIndex, restoreFocusTo } from './dialogFocus';
 
 export interface SpaceCreationModalOptions {
   onCreateSpace: () => Promise<void>;
@@ -15,6 +16,7 @@ export class TinyCloudSpaceModal extends HTMLElement {
   private options: SpaceCreationModalOptions;
   private isVisible: boolean = false;
   private releaseScrollLock: (() => void) | null = null;
+  private opener: HTMLElement | null = null;
   private isCreating: boolean = false;
   private resolveResult: ((result: SpaceCreationResult) => void) | null = null;
   private completionPromise: Promise<SpaceCreationResult>;
@@ -45,6 +47,7 @@ export class TinyCloudSpaceModal extends HTMLElement {
     // confirmation times out), not just via hide(), so all document-level
     // state has to be released here too.
     this.isVisible = false;
+    this.restoreFocus();
     this.releaseLock();
     document.removeEventListener('keydown', this.handleKeyDown);
   }
@@ -53,7 +56,7 @@ export class TinyCloudSpaceModal extends HTMLElement {
     this.shadowRoot!.innerHTML = `
       <style>${this.getModalStyles()}</style>
       <div class="modal-backdrop" data-state="hidden">
-        <div class="modal-container">
+        <div class="modal-container" role="dialog" aria-modal="true" aria-labelledby="tc-space-title" aria-describedby="tc-space-description" tabindex="-1">
           <div class="modal-content">
             <div class="modal-header">
               <div class="modal-icon">
@@ -62,7 +65,7 @@ export class TinyCloudSpaceModal extends HTMLElement {
                   <path d="M8 12l2 2 4-4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
                 </svg>
               </div>
-              <h2 class="modal-title">Create Your TinyCloud Space</h2>
+              <h2 class="modal-title" id="tc-space-title">Create Your TinyCloud Space</h2>
               <button class="modal-close" aria-label="Close">
                 <svg width="14" height="14" viewBox="0 0 14 14" fill="none" xmlns="http://www.w3.org/2000/svg">
                   <path d="M1 1L13 13M13 1L1 13" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
@@ -71,7 +74,7 @@ export class TinyCloudSpaceModal extends HTMLElement {
             </div>
 
             <div class="modal-body">
-              <p class="modal-description">
+              <p class="modal-description" id="tc-space-description">
                 A TinyCloud Space is your personal data container where only you control access.
                 Your signature is required for any operations on the data stored there.
               </p>
@@ -330,6 +333,7 @@ export class TinyCloudSpaceModal extends HTMLElement {
           width: 100%;
         }
       }
+      .modal-container:focus { outline: none; }
     `;
   }
 
@@ -368,10 +372,23 @@ export class TinyCloudSpaceModal extends HTMLElement {
   }
 
   private handleKeyDown = (e: KeyboardEvent) => {
-    if (e.key === 'Escape' && this.isVisible && !this.isCreating) {
+    if (!this.isVisible) return;
+    if (e.key === 'Escape' && !this.isCreating) {
       this.dismiss();
+    } else if (e.key === 'Tab') {
+      this.trapTab(e);
     }
   };
+
+  // Keeps Tab and Shift+Tab on this dialog's enabled controls.
+  private trapTab(e: KeyboardEvent): void {
+    const root = this.shadowRoot!;
+    const controls = focusableControls(root);
+    const current = controls.indexOf(root.activeElement as HTMLElement);
+    e.preventDefault();
+    const next = nextTabIndex(controls.length, current, e.shiftKey);
+    if (next >= 0) controls[next].focus();
+  }
 
   private async handleCreateSpace(): Promise<void> {
     this.isCreating = true;
@@ -396,8 +413,11 @@ export class TinyCloudSpaceModal extends HTMLElement {
   }
 
   private show(): void {
+    if (!this.isVisible) this.opener = deepActiveElement();
     this.isVisible = true;
     if (!this.releaseScrollLock) this.releaseScrollLock = acquireScrollLock();
+    // Focus the dialog container, never Create: Enter must not start creation.
+    (this.shadowRoot!.querySelector('.modal-container') as HTMLElement).focus();
 
     requestAnimationFrame(() => {
       const backdrop = this.shadowRoot!.querySelector('.modal-backdrop');
@@ -408,6 +428,7 @@ export class TinyCloudSpaceModal extends HTMLElement {
   private hide(): void {
     const backdrop = this.shadowRoot!.querySelector('.modal-backdrop');
     backdrop?.setAttribute('data-state', 'hidden');
+    this.restoreFocus();
 
     setTimeout(() => {
       this.remove();
@@ -416,6 +437,12 @@ export class TinyCloudSpaceModal extends HTMLElement {
     }, 200);
 
     this.isVisible = false;
+  }
+
+  private restoreFocus(): void {
+    const opener = this.opener;
+    this.opener = null;
+    restoreFocusTo(opener, this.shadowRoot!);
   }
 
   private releaseLock(): void {
@@ -438,9 +465,6 @@ export class TinyCloudSpaceModal extends HTMLElement {
   }
 }
 
-// Deliberately no role or aria-modal: this prompt is not announced as a modal
-// dialog. e2e/prompts.pw.ts pins the absence until consent review decides; adding
-// them is a product change.
 if (!customElements.get('tinycloud-space-modal')) {
   customElements.define('tinycloud-space-modal', TinyCloudSpaceModal);
 }

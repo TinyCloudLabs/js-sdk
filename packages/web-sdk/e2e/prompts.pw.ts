@@ -43,7 +43,7 @@ async function mountHarness(
     return route.fulfill({
       status: 200,
       contentType: "text/html",
-      body: '<!doctype html><html><body><script src="/prompts.bundle.js"></script></body></html>',
+      body: '<!doctype html><html><body><button id="opener">Open</button><script src="/prompts.bundle.js"></script></body></html>',
     });
   });
   await page.goto(`${ORIGIN}/`);
@@ -103,6 +103,39 @@ function surfaceOf(content: import("@playwright/test").Locator) {
       node = parent ?? ((node.getRootNode() as ShadowRoot).host ?? null);
     }
     return { surface, text: getComputedStyle(el).color };
+  });
+}
+
+// How each prompt is found and driven. `tabOrder` is the Tab order from the
+// dialog container; each label is the control's data-action, data-role, or class.
+const PROMPTS = {
+  space: {
+    selector: SPACE,
+    name: "Create Your TinyCloud Space",
+    description: "Your signature is required",
+    open: openSpaceCreation,
+    confirm: /create/i,
+    tabOrder: ["modal-close", "learn-more", "create"],
+    result: spaceResult,
+  },
+  permission: {
+    selector: PERMISSION,
+    name: /is requesting additional permissions$/,
+    description: "This app is asking you to grant scoped permission",
+    open: openPermission,
+    confirm: "Approve",
+    tabOrder: ["modal-close", "suppress-prompt", "decline", "approve"],
+    result: permResult,
+  },
+} as const;
+
+// Label of the focused element, descending through open shadow roots.
+function focusedLabel(page: Page) {
+  return page.evaluate(() => {
+    let el: Element | null = document.activeElement;
+    while (el?.shadowRoot?.activeElement) el = el.shadowRoot.activeElement;
+    if (!el) return null;
+    return el.getAttribute("data-action") ?? el.getAttribute("data-role") ?? el.className;
   });
 }
 
@@ -171,30 +204,76 @@ for (const scheme of ["light", "dark"] as const) {
     expect({ space, permission }).toEqual({ space: "open", permission: "open" });
   });
 
-  // The prompts deliberately carry no role or aria-modal (see the comments in
-  // PermissionRequestModal.ts and SpaceCreationModal.ts). This pins that until
-  // consent review decides otherwise; adding them is a product change.
-  test(`${scheme}: space prompt has no dialog role or aria-modal`, async ({ page }) => {
-    await mountHarness(page, scheme);
-    await openSpaceCreation(page);
-    await expect(page.locator(SPACE)).toHaveCount(1);
-    const attrs = await page.locator(SPACE).evaluate((el) => ({
-      role: el.getAttribute("role"),
-      ariaModal: el.getAttribute("aria-modal"),
-    }));
-    expect(attrs).toEqual({ role: null, ariaModal: null });
-  });
+  // Both prompts are announced as modal dialogs, named by their title and
+  // described by their body text, and they manage focus like a modal.
+  for (const kind of ["space", "permission"] as const) {
+    const p = PROMPTS[kind];
 
-  test(`${scheme}: permission prompt has no dialog role or aria-modal`, async ({ page }) => {
-    await mountHarness(page, scheme);
-    await openPermission(page);
-    await expect(page.locator(PERMISSION)).toHaveCount(1);
-    const attrs = await page.locator(PERMISSION).evaluate((el) => ({
-      role: el.getAttribute("role"),
-      ariaModal: el.getAttribute("aria-modal"),
-    }));
-    expect(attrs).toEqual({ role: null, ariaModal: null });
-  });
+    test(`${scheme}: ${kind} prompt is a modal dialog named by its title`, async ({ page }) => {
+      await mountHarness(page, scheme);
+      await p.open(page);
+      const dialog = page.getByRole("dialog", { name: p.name });
+      await expect(dialog).toHaveCount(1);
+      await expect(dialog).toHaveAttribute("aria-modal", "true");
+      const described = await dialog.evaluate((el) => {
+        const id = el.getAttribute("aria-describedby") ?? "";
+        return (el.getRootNode() as Document | ShadowRoot).getElementById(id)?.textContent ?? "";
+      });
+      expect(described).toContain(p.description);
+    });
+
+    test(`${scheme}: ${kind} prompt takes focus on the dialog, not a control`, async ({ page }) => {
+      await mountHarness(page, scheme);
+      await p.open(page);
+      expect(await focusedLabel(page)).toBe("modal-container");
+    });
+
+    test(`${scheme}: ${kind} prompt: Enter on the dialog does not confirm`, async ({ page }) => {
+      await mountHarness(page, scheme);
+      await p.open(page);
+      await page.keyboard.press("Enter");
+      // Give a stray confirm time to land before asserting that none did.
+      await page.waitForTimeout(300);
+      await expect(page.locator(p.selector)).toHaveCount(1);
+      expect(await p.result(page)).toBeFalsy();
+    });
+
+    test(`${scheme}: ${kind} prompt keeps Tab and Shift+Tab inside the dialog`, async ({ page }) => {
+      await mountHarness(page, scheme);
+      await p.open(page);
+      const order = p.tabOrder;
+      const forward: (string | null)[] = [];
+      for (let i = 0; i <= order.length; i++) {
+        await page.keyboard.press("Tab");
+        forward.push(await focusedLabel(page));
+      }
+      // The last Tab wraps from the final control back to the first.
+      expect(forward).toEqual([...order, order[0]]);
+      await page.keyboard.press("Shift+Tab");
+      expect(await focusedLabel(page)).toBe(order[order.length - 1]);
+    });
+
+    test(`${scheme}: ${kind} prompt returns focus to the opener on Escape`, async ({ page }) => {
+      await mountHarness(page, scheme);
+      await page.locator("#opener").focus();
+      await p.open(page);
+      expect(await focusedLabel(page)).toBe("modal-container");
+      await page.keyboard.press("Escape");
+      // Focus returns when the prompt hides, not when its fade-out removes it (200 ms later).
+      expect(await page.evaluate(() => document.activeElement?.id)).toBe("opener");
+      await expect(page.locator(p.selector)).toHaveCount(0);
+      await expect(page.locator("#opener")).toBeFocused();
+    });
+
+    test(`${scheme}: ${kind} confirm returns focus to the opener`, async ({ page }) => {
+      await mountHarness(page, scheme);
+      await page.locator("#opener").focus();
+      await p.open(page);
+      await page.getByRole("button", { name: p.confirm }).click();
+      await expect(page.locator(p.selector)).toHaveCount(0);
+      await expect(page.locator("#opener")).toBeFocused();
+    });
+  }
 
   // Assertion b: Approve, Deny, and Escape each settle the permission prompt.
   test(`${scheme}: permission Approve resolves true and removes the prompt`, async ({ page }) => {
