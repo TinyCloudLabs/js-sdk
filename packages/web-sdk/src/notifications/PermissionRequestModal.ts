@@ -23,7 +23,7 @@ import {
   ENCRYPTION,
 } from "@tinycloud/sdk-core";
 import { acquireScrollLock } from "./scrollLock";
-import { deepActiveElement, focusableControls, nextTabIndex, restoreFocusTo } from "./dialogFocus";
+import { deepActiveElement, focusableControls, isTopmostControl, nextTabIndex, restoreFocusTo } from "./dialogFocus";
 
 export interface PermissionRequestModalOptions {
   /** Display name of the app requesting permissions (from the manifest). */
@@ -382,7 +382,11 @@ export class TinyCloudPermissionRequestModal extends HTMLElement {
 
     closeButton?.addEventListener("click", () => this.dismiss());
     declineButton?.addEventListener("click", () => this.dismiss());
-    approveButton?.addEventListener("click", () => this.handleApprove());
+    approveButton?.addEventListener("click", () => {
+      // Approve acts only when it is the topmost element at its centre; an overlay
+      // covering it blocks the click and the keyboard Enter/Space that clicks it.
+      if (approveButton && isTopmostControl(approveButton)) this.handleApprove();
+    });
 
     document.addEventListener("keydown", this.handleKeyDown);
   }

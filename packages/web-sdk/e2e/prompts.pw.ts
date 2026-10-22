@@ -152,6 +152,27 @@ function focusInside(page: Page, selector: string) {
   }, selector);
 }
 
+// Adds a full-viewport overlay above the prompts, like OpenKey's. `style` sets how it
+// covers the page. `focusable` gives its closed-root button focus when it is added.
+function addOverlay(page: Page, id: string, style: string, focusable: boolean) {
+  return page.evaluate(
+    ({ id, style, focusable }) => {
+      const overlay = document.createElement("div");
+      overlay.id = id;
+      overlay.setAttribute("style", `position:fixed;inset:0;z-index:999999;${style}`);
+      const shadow = overlay.attachShadow({ mode: "closed" });
+      shadow.innerHTML = '<button type="button">Close overlay</button>';
+      document.body.appendChild(overlay);
+      if (focusable) (shadow.querySelector("button") as HTMLButtonElement).focus();
+    },
+    { id, style, focusable },
+  );
+}
+
+function removeOverlay(page: Page, id: string) {
+  return page.evaluate((overlayId) => document.getElementById(overlayId)?.remove(), id);
+}
+
 for (const scheme of ["light", "dark"] as const) {
   // These locators mirror the ones apps/openkey-example/e2e uses for the space
   // prompt (the tag selector is used 21 times there). Quote style differs; the
@@ -399,8 +420,9 @@ for (const scheme of ["light", "dark"] as const) {
   }
 
   // A Tab pressed in an overlay above the prompt must not pull focus into the prompt.
-  // The overlay comes after the prompt host in the DOM, so the browser's own Tab
-  // order does not reach the prompt; only the dialog's Tab trap could move focus in.
+  // One Tab from an overlay after the host does not reach the prompt in the browser's
+  // own order, so this case isolates the Tab trap. Shift+Tab does reach the covered
+  // control in the browser's order; the Shift+Tab cases below cover that path.
   for (const [name, selector, open, result] of [
     ["space", SPACE, openSpaceCreation, spaceResult],
     ["permission", PERMISSION, openPermission, permResult],
@@ -427,6 +449,104 @@ for (const scheme of ["light", "dark"] as const) {
       await page.waitForTimeout(300);
       await expect(page.locator(selector)).toHaveCount(1);
       expect(await result(page)).toBeUndefined();
+    });
+  }
+
+  // Keyboard activation of a covered control. Shift+Tab from an overlay after the host
+  // lands on the prompt's last control (Create or Approve) in the browser's own order,
+  // which the Tab trap leaves alone. Enter then clicks it. The click handler checks
+  // isTopmostControl at activation, so nothing confirms while the overlay covers it.
+  for (const [name, selector, action, open, result] of [
+    ["space", SPACE, "create", openSpaceCreation, spaceResult],
+    ["permission", PERMISSION, "approve", openPermission, permResult],
+  ] as const) {
+    const coverings = {
+      "semi-transparent (rgba .5)": "background:rgba(0,0,0,.5);",
+      "translucent (opacity .3)": "background:#000;opacity:.3;",
+    };
+    for (const [covering, style] of Object.entries(coverings)) {
+      test(`${scheme}: ${name} prompt is not confirmed by Shift+Tab then Enter under a ${covering} overlay`, async ({ page }) => {
+        await mountHarness(page, scheme);
+        await open(page);
+        await expect(page.locator(`${selector} .modal-content`)).toBeVisible();
+        await addOverlay(page, "e2e-overlay", style, true);
+        await page.keyboard.press("Shift+Tab");
+        expect(await focusedLabel(page), "Shift+Tab did not reach the covered control").toBe(action);
+        await page.keyboard.press("Enter");
+        // Give a stray confirm time to land before asserting that none did.
+        await page.waitForTimeout(300);
+        await expect(page.locator(selector)).toHaveCount(1);
+        expect(await result(page)).toBeUndefined();
+      });
+    }
+
+    // The overlay is added after the prompt opened and still covers the control when
+    // Enter is pressed. The check runs at activation, so the press is blocked.
+    test(`${scheme}: ${name} prompt blocks Enter on its focused control when an overlay appears after it opened`, async ({ page }) => {
+      await mountHarness(page, scheme);
+      await open(page);
+      await expect(page.locator(`${selector} .modal-content`)).toBeVisible();
+      await page.locator(`${selector} [data-action="${action}"]`).focus();
+      expect(await focusedLabel(page)).toBe(action);
+      await addOverlay(page, "e2e-overlay", "background:rgba(0,0,0,.5);", false);
+      await page.keyboard.press("Enter");
+      await page.waitForTimeout(300);
+      await expect(page.locator(selector)).toHaveCount(1);
+      expect(await result(page)).toBeUndefined();
+    });
+
+    // The overlay covers the prompt from before it opens, then is removed. Nothing is
+    // cached at show time, so the control confirms once it is uncovered.
+    test(`${scheme}: ${name} prompt confirms from its focused control once the overlay covering it is removed`, async ({ page }) => {
+      await mountHarness(page, scheme);
+      await addOverlay(page, "e2e-overlay", "background:rgba(0,0,0,.5);", false);
+      await open(page);
+      await expect(page.locator(`${selector} .modal-content`)).toBeVisible();
+      await removeOverlay(page, "e2e-overlay");
+      await page.locator(`${selector} [data-action="${action}"]`).focus();
+      await page.keyboard.press("Enter");
+      await expect.poll(() => result(page)).toBe(true);
+      await expect(page.locator(selector)).toHaveCount(0);
+    });
+
+    // With no overlay, keyboard Tab to the control and Enter still confirms.
+    test(`${scheme}: ${name} prompt confirms from keyboard Tab to ${action} then Enter with no overlay`, async ({ page }) => {
+      await mountHarness(page, scheme);
+      await open(page);
+      await expect(page.locator(`${selector} .modal-content`)).toBeVisible();
+      let label: string | null = null;
+      for (let i = 0; i < 8 && label !== action; i++) {
+        await page.keyboard.press("Tab");
+        label = await focusedLabel(page);
+      }
+      expect(label).toBe(action);
+      await page.keyboard.press("Enter");
+      await expect.poll(() => result(page)).toBe(true);
+      await expect(page.locator(selector)).toHaveCount(0);
+    });
+
+    // With no overlay, a mouse click on the control still confirms.
+    test(`${scheme}: ${name} prompt confirms on a mouse click of ${action} with no overlay`, async ({ page }) => {
+      await mountHarness(page, scheme);
+      await open(page);
+      await page.locator(`${selector} [data-action="${action}"]`).click();
+      await expect.poll(() => result(page)).toBe(true);
+      await expect(page.locator(selector)).toHaveCount(0);
+    });
+
+    // Documents the limit of the hit test, not a guarantee. elementFromPoint skips an
+    // element with pointer-events:none, so an overlay like that does not block the
+    // control even though it is painted on top. Keyboard activation then confirms.
+    test(`${scheme}: ${name} prompt is confirmed by Shift+Tab then Enter under a pointer-events:none overlay (documented limit)`, async ({ page }) => {
+      await mountHarness(page, scheme);
+      await open(page);
+      await expect(page.locator(`${selector} .modal-content`)).toBeVisible();
+      await addOverlay(page, "e2e-overlay", "background:rgba(0,0,0,.5);pointer-events:none;", true);
+      await page.keyboard.press("Shift+Tab");
+      expect(await focusedLabel(page)).toBe(action);
+      await page.keyboard.press("Enter");
+      await expect.poll(() => result(page)).toBe(true);
+      await expect(page.locator(selector)).toHaveCount(0);
     });
   }
 

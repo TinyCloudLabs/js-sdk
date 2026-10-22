@@ -44,3 +44,28 @@ export function restoreFocusTo(opener: HTMLElement | null, owner: ShadowRoot): v
     opener.focus();
   }
 }
+
+/**
+ * True only when `el` is the element that receives a pointer at its own centre,
+ * so a control under another element (an app overlay above the prompt) is not
+ * activated. Checked when the control is activated, never cached.
+ *
+ * This is a hit test, not a visual check:
+ * - An element that covers the control and receives pointer events (including
+ *   one with opacity 0.3 or a translucent background) takes the hit, so the
+ *   control is blocked.
+ * - An element with `pointer-events:none` is skipped by elementFromPoint, so it
+ *   does not block. Its appearance is not considered.
+ * - Script that calls `button.click()` directly bypasses this check. That is
+ *   page code, outside the scope of this gate.
+ *
+ * A zero-size, offscreen, or detached element returns false.
+ */
+export function isTopmostControl(el: Element): boolean {
+  const rect = el.getBoundingClientRect();
+  if (rect.width === 0 || rect.height === 0) return false;
+  const root = el.getRootNode() as Partial<Document & ShadowRoot>;
+  if (typeof root.elementFromPoint !== "function") return false;
+  const hit = root.elementFromPoint.call(root, rect.left + rect.width / 2, rect.top + rect.height / 2);
+  return hit !== null && el.contains(hit);
+}

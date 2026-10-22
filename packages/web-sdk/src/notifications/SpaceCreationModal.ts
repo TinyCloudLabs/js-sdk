@@ -1,6 +1,6 @@
 import { debug } from "../utils/debug";
 import { acquireScrollLock } from "./scrollLock";
-import { deepActiveElement, focusableControls, nextTabIndex, restoreFocusTo } from './dialogFocus';
+import { deepActiveElement, focusableControls, isTopmostControl, nextTabIndex, restoreFocusTo } from './dialogFocus';
 
 export interface SpaceCreationModalOptions {
   onCreateSpace: () => Promise<void>;
@@ -360,7 +360,9 @@ export class TinyCloudSpaceModal extends HTMLElement {
     });
 
     createButton?.addEventListener('click', () => {
-      if (!this.isCreating) {
+      // Create acts only when it is the topmost element at its centre; an overlay
+      // covering it blocks the click and the keyboard Enter/Space that clicks it.
+      if (!this.isCreating && createButton && isTopmostControl(createButton)) {
         this.handleCreateSpace();
       }
     });
