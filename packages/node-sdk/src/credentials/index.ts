@@ -15,6 +15,7 @@ export {
   emailProofRequirement,
   requestEmailProofCode,
 } from "./email-proof";
+export { EMAIL_PROOF_PENDING_MAX_MS, restoreEmailProofPending } from "./email-proof";
 export type {
   EmailProofAcquireInput,
   EmailProofAcquisition,
