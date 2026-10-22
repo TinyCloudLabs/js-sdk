@@ -947,5 +947,55 @@
       "ceiling": 822753
     },
     "reason": "replication wiring moved into its own module; +15 B (mjs) / +29 B (cjs) gzip from the module boundary (TC-1777)"
+  },
+  "tc1777ExpiryRatchet": {
+    "label": "expiryMs, hasPermissions and pre-modal decrypt check (#668): root ceiling raised to the measured CI bytes",
+    "ruling": "Approved by Naomi (2026-10-22, policy review relayed by Amos)",
+    "base": "80d387441dbe87e2309a849c653e2d0adecd400b",
+    "sourceCommits": [
+      "28585593a756f65b47f2aa60be240c5fce3dbd9d"
+    ],
+    "canonicalCI": {
+      "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39861366041",
+      "jobs": [
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39861366041/job/120112619622",
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39861366041/job/120112619857"
+      ]
+    },
+    "root": {
+      "delta": {
+        "index.mjs": 172,
+        "index.cjs": 174
+      },
+      "ceiling": {
+        "index.mjs": 1459030,
+        "index.cjs": 1402121
+      }
+    },
+    "firstImport": {
+      "delta": {
+        "replica.mjs": 0,
+        "replica.cjs": 0
+      },
+      "ceiling": {
+        "replica.mjs": 51925,
+        "replica.cjs": 67141
+      }
+    },
+    "activation": {
+      "delta": {
+        "activation.mjs": 0,
+        "activation.cjs": 0
+      },
+      "ceiling": {
+        "activation.mjs": 23117,
+        "activation.cjs": 24700
+      }
+    },
+    "worker": {
+      "delta": 0,
+      "ceiling": 822753
+    },
+    "reason": "expiryMs, hasPermissions and the pre-modal decrypt check add 172 B (mjs) / 174 B (cjs) gzip to each web-sdk root bundle (TC-1777)"
   }
 }
