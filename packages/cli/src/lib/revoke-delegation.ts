@@ -9,6 +9,12 @@ import { ensureDelegationAuthority, requirePermissionConsent, type OpenKeyAcquis
 import { loadLocalGrantArtifacts, readGrantHistory, type StoredAdditionalDelegation } from "./permissions.js";
 import { lookupOwnerSpaceOnNode } from "./revoke-node-record.js";
 
+/**
+ * Lifetime of the one-use authority a revoke requests. It only has to outlast
+ * the revoke call; OpenKey's minimum is 60 seconds and its default is 7 days.
+ */
+export const REVOKE_AUTHORITY_EXPIRY = "5m";
+
 type ScopeSource = "local-signed-grant-artifact" | "local-stored-grant" | "node-delegation-record";
 type TargetSource = "node" | "local-grant-history" | ScopeSource;
 
@@ -160,7 +166,7 @@ export async function revokeDelegationOnNode(params: {
   if (!rawAuthorityCovered) {
     try {
       const acquired = await ensureDelegationAuthority({
-        ctx, profile, node, requested: [revokePermission], expiryOption: undefined,
+        ctx, profile, node, requested: [revokePermission], expiryOption: REVOKE_AUTHORITY_EXPIRY,
         reason: `Revoke delegation ${cid}`, yes: params.yes, consentAlreadyGiven: true,
         persist: false, openKeyAcquisition: params.openKeyAcquisition,
       });
@@ -198,7 +204,7 @@ export async function revokeDelegationOnNode(params: {
         requested: [{ service: "tinycloud.delegation",
           space: profile.authMethod !== "openkey" && fallback.space === node.accountSpaceId ? "default" : fallback.space,
           path: "", actions: ["tinycloud.delegation/revoke"] }],
-        expiryOption: undefined,
+        expiryOption: REVOKE_AUTHORITY_EXPIRY,
         reason: fallback.source === "node-delegation-record"
           ? `Revoke delegation ${cid} using the node's record of the owner's grant`
           : `Revoke delegation ${cid} using its CID-bound owner-signed grant ${fallback.source === "local-stored-grant" ? "record" : "artifact"}`,
