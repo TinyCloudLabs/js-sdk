@@ -1,5 +1,13 @@
 # @tinycloud/share-sdk
 
+## 1.3.0
+
+### Minor Changes
+
+- 666f60b: Add the `@tinycloud/share-sdk/web-recipient` subpath. It exports `inspectShare`, `ShareRecipientClient`, and the `ShareMetadata` type, so browser bundles can import the recipient surface without the package root barrel. The root barrel's exports are unchanged.
+
+  Details: TC-1757
+
 ## 1.3.0-beta.0
 
 ### Minor Changes
