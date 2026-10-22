@@ -9,6 +9,7 @@ import {
 } from "@tinycloud/share-envelope";
 import { ArtifactPinError, verifyArtifactShare } from "./artifact-pin.js";
 import type { ShareAuthorizationMethod } from "./authorization.js";
+import { ShareRecipientClient, type ShareRecipientClientOptions } from "./recipient.js";
 
 export type ShareErrorCode = "invalid-link" | "fetch-failed" | "max-bytes-exceeded" | "cid-mismatch" | "decrypt-failed" | "envelope-invalid" | "origin-mismatch" | "signature-invalid" | "capability-invalid" | "expired" | "unsupported-target" | "authorization-denied" | "content-integrity-failed";
 
@@ -79,6 +80,7 @@ export interface ShareReceiveAuthorizationRequired {
 export interface ShareReceiveResult extends ShareInspection {
   readonly bytes: Uint8Array;
   readonly text?: string;
+  readonly mediaType?: string;
 }
 
 export type ShareReceiveOutcome = ShareReceiveResult | ShareReceiveAuthorizationRequired;
@@ -156,11 +158,47 @@ export async function inspectShare(link: string, options: ShareFetchOptions = {}
   return { metadata: metadataFor(resolved.envelope, resolved.origin), link: { origin: resolved.origin, cid: resolved.cid, kind: "policy" } };
 }
 
+/** Receiver-side inputs for opening a policy share through its owner node. */
+export interface ShareOpenOptions {
+  readonly holderDid: string;
+  readonly buildPresentation: NonNullable<ShareRecipientClientOptions["buildPresentation"]>;
+  readonly sign: (bytes: Uint8Array) => Promise<Uint8Array>;
+  readonly fetchFn?: typeof fetch;
+}
+
+async function openResolvedShare(resolved: { readonly envelope: ShareEnvelopeV3; readonly origin: string; readonly cid: string }, open: ShareOpenOptions, options: ShareFetchOptions): Promise<ShareReceiveResult> {
+  const client = new ShareRecipientClient({
+    nodeOrigin: resolved.origin,
+    holderDid: open.holderDid,
+    envelope: resolved.envelope,
+    buildPresentation: open.buildPresentation,
+    sign: open.sign,
+    ...(open.fetchFn === undefined ? {} : { fetchFn: open.fetchFn }),
+    ...(options.signal === undefined ? {} : { signal: options.signal }),
+  });
+  await client.establishPolicySession();
+  const response = await client.nativeInvoke({ action: "get", resource: { ...resolved.envelope.resource } });
+  if (!response.ok) throw new ShareReceiveError(response.status === 401 || response.status === 403 ? "authorization-denied" : "fetch-failed", `share content fetch failed (${response.status})`);
+  const limit = options.maxContentBlobBytes ?? DEFAULT_MAX_CONTENT_BLOB_BYTES;
+  const declared = response.headers.get("content-length");
+  if (!Number.isSafeInteger(limit) || limit <= 0 || (declared !== null && Number(declared) > limit)) throw new ShareReceiveError("max-bytes-exceeded", "share content exceeds the configured byte limit");
+  const encrypted = new Uint8Array(await response.arrayBuffer());
+  if (encrypted.byteLength > limit) throw new ShareReceiveError("max-bytes-exceeded", "share content exceeds the configured byte limit");
+  const opened = await client.decryptV3Content(encrypted);
+  return { metadata: metadataFor(resolved.envelope, resolved.origin), link: { origin: resolved.origin, cid: resolved.cid, kind: "policy" }, bytes: opened.bytes, mediaType: opened.mediaType };
+}
+
 /**
- * Resolve and verify invitation metadata only. Actual content access is an
- * invocation against the owner node and is performed by the receiver SDK.
+ * Resolve and verify the share. With `open`, admit the holder through the owner
+ * node, fetch the sealed content, and decrypt it. Without `open`, report the
+ * authorization step only. A missing presentation builder is refused before any
+ * network call.
  */
-export async function receiveShare(link: string, options: ShareFetchOptions = {}): Promise<ShareReceiveOutcome> {
+export async function receiveShare(link: string, options: ShareFetchOptions & { readonly open: ShareOpenOptions }): Promise<ShareReceiveResult>;
+export async function receiveShare(link: string, options?: ShareFetchOptions): Promise<ShareReceiveOutcome>;
+export async function receiveShare(link: string, options: ShareFetchOptions & { readonly open?: ShareOpenOptions } = {}): Promise<ShareReceiveOutcome> {
+  if (options.open !== undefined && typeof options.open.buildPresentation !== "function") throw new ShareReceiveError("authorization-denied", "share presentation builder is required to open a share");
   const resolved = await resolvePolicyShare(link, options);
+  if (options.open !== undefined) return openResolvedShare(resolved, options.open, options);
   return { state: "authorization-required", method: resolved.envelope.recipientMatcher.kind === "recipientDid" ? "openkey-device" : "email-claim" };
 }
