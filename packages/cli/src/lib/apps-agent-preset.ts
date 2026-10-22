@@ -25,8 +25,7 @@ import { normalizePkhIdentifier } from "./space.js";
  *
  * Neither grants KV delete, SQL admin, any other service, or any other space.
  * CREATE, ALTER and DROP TABLE need `tinycloud.sql/schema`, which SQL write does
- * not request. Nodes before 1.21.6 do not enforce that split: SQL write can run
- * those statements there too. The write variant adds `tinycloud.sql/schema` only
+ * not request. The write variant adds `tinycloud.sql/schema` only
  * for an app listed in `APPS_AGENT_SCHEMA_DATABASES`, on that app's one database,
  * at the exact path with no trailing slash (the node matches a SQL path exactly
  * unless it ends in `/`).
