@@ -265,6 +265,24 @@ describe("email-proof gate adapter", () => {
     expect((failure as EmailProofGateError).code).toBe("REQUEST_EXPIRED");
   });
 
+  test("a discovery failure at the code request maps to UNAVAILABLE and stores no pending request", async () => {
+    const store = createFileEmailProofPendingStore({ home: dir });
+    let witnessCalls = 0;
+    const fetch = Object.assign(
+      async (_input: string | URL | Request, _init?: RequestInit): Promise<Response> => {
+        witnessCalls += 1;
+        return new Response("unavailable", { status: 503 });
+      },
+      { preconnect: (_url: string | URL, _options?: unknown): void => undefined },
+    );
+    const gate = createNodeEmailProofGate({ store, fetch, now: () => new Date(NOW) });
+    const failure = await gate.requestCode({ recipient: "reader@example.com" }).then(() => undefined, (caught: unknown) => caught);
+    expect(failure).toBeInstanceOf(EmailProofGateError);
+    expect((failure as EmailProofGateError).code).toBe("UNAVAILABLE");
+    expect(await store.findLive("reader@example.com", new Date(NOW))).toBeUndefined();
+    expect(witnessCalls).toBeGreaterThan(0);
+  });
+
   test("without a presentation builder or share opener, receive fails closed with a fixed message", async () => {
     const builderFailure = await unavailablePresentationBuilder({} as never).then(() => undefined, (caught: unknown) => caught);
     expect((builderFailure as HeadlessReceiveError).message).toBe("presentation builder unavailable");

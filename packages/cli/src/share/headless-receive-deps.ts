@@ -117,6 +117,8 @@ export function requestIdFrom(state: JsonValue): string {
 export interface NodeEmailProofGateOptions {
   /** Node-sdk pending store under the CLI's owner-only config directory. Holds the holder secret. */
   readonly store: FileEmailProofPendingStore;
+  /** Transport override; the CLI uses the global fetch when omitted. Tests inject a fake witness here. */
+  readonly fetch?: typeof fetch;
   readonly now?: () => Date;
 }
 
@@ -134,6 +136,7 @@ export function createNodeEmailProofGate(options: NodeEmailProofGateOptions): Em
           address: recipient,
           holder: holderSignerFor(holder.secret, holder.did),
           now,
+          ...(options.fetch === undefined ? {} : { fetch: options.fetch }),
           ...(signal === undefined ? {} : { signal }),
         }),
       );
@@ -154,6 +157,7 @@ export function createNodeEmailProofGate(options: NodeEmailProofGateOptions): Em
             code,
             holder: holderSigner,
             now,
+            ...(options.fetch === undefined ? {} : { fetch: options.fetch }),
             ...(signal === undefined ? {} : { signal }),
           }),
         );
