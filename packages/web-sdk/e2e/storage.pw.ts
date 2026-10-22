@@ -218,6 +218,30 @@ function overlaps(a: Box, b: Box): boolean {
   return a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height;
 }
 
+interface ToastGeometry {
+  toastBox: Box | null;
+  panelBox: Box | null;
+  manageBox: Box | null;
+  hitsLink: boolean;
+  settled: boolean;
+}
+
+/** One sample of the toast, panel and Manage link. `settled` is true when the toast clears the panel and the link is hit. */
+async function readToastGeometry(toast: Locator, panelLocator: Locator, manage: Locator): Promise<ToastGeometry> {
+  const toastBox = await toast.boundingBox();
+  const panelBox = await panelLocator.boundingBox();
+  const manageBox = await manage.boundingBox();
+  const hitsLink = await manage.evaluate((el) => {
+    const r = el.getBoundingClientRect();
+    // The UI lives in an open shadow root, so ask the root node: document.elementFromPoint would return the host.
+    const root = el.getRootNode() as Document | ShadowRoot;
+    const hit = root.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+    return hit !== null && (hit === el || el.contains(hit));
+  });
+  const settled = toastBox !== null && panelBox !== null && !overlaps(toastBox, panelBox) && hitsLink;
+  return { toastBox, panelBox, manageBox, hitsLink, settled };
+}
+
 for (const scheme of SCHEMES) {
   for (const [viewportName, viewport] of Object.entries(VIEWPORTS)) {
     test(`${scheme} ${viewportName}: a full-state toast clears the open panel and Manage storage stays hit-testable`, async ({ page }) => {
@@ -229,23 +253,30 @@ for (const scheme of SCHEMES) {
       await setEpisode(page, true);
       const toast = page.locator(".toast--info");
       await expect(toast).toBeVisible();
-      const toastBox = await toast.boundingBox();
-      const panelBox = await panel(page).boundingBox();
-      if (!toastBox || !panelBox) throw new Error("toast or panel has no layout box");
-      expect(overlaps(toastBox, panelBox), `toast ${JSON.stringify(toastBox)} overlaps panel ${JSON.stringify(panelBox)}`).toBe(false);
-
       const manage = section(page).getByRole("link", { name: STRINGS["storage.manage"], exact: true });
       await expect(manage).toBeVisible();
-      const hitsLink = await manage.evaluate((el) => {
-        const r = el.getBoundingClientRect();
-        // The UI lives in an open shadow root, so ask the root node: document.elementFromPoint would return the host.
-        const root = el.getRootNode() as Document | ShadowRoot;
-        const hit = root.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
-        return hit !== null && (hit === el || el.contains(hit));
-      });
-      const manageBox = await manage.boundingBox();
-      console.log(`storage geometry ${scheme} ${viewportName}: toast=${JSON.stringify(toastBox)} panel=${JSON.stringify(panelBox)} manage=${JSON.stringify(manageBox)} hit=${hitsLink}`);
-      expect(hitsLink).toBe(true);
+
+      // The toast appears after an async status read and the panel shrinks through a ResizeObserver,
+      // so a single sample can catch a transient frame. Poll until the geometry settles, then assert on the settled sample.
+      let geometry: ToastGeometry | undefined;
+      await expect
+        .poll(
+          async () => {
+            geometry = await readToastGeometry(toast, panel(page), manage);
+            return geometry.settled;
+          },
+          { timeout: 5000 },
+        )
+        .toBe(true);
+      if (!geometry?.toastBox || !geometry.panelBox) throw new Error("toast or panel has no layout box");
+      expect(
+        overlaps(geometry.toastBox, geometry.panelBox),
+        `toast ${JSON.stringify(geometry.toastBox)} overlaps panel ${JSON.stringify(geometry.panelBox)}`,
+      ).toBe(false);
+      console.log(
+        `storage geometry ${scheme} ${viewportName}: toast=${JSON.stringify(geometry.toastBox)} panel=${JSON.stringify(geometry.panelBox)} manage=${JSON.stringify(geometry.manageBox)} hit=${geometry.hitsLink}`,
+      );
+      expect(geometry.hitsLink).toBe(true);
     });
   }
 }
