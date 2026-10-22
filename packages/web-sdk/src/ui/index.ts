@@ -4,6 +4,7 @@ import { resolveUiConfig, type UiConfig } from "./config";
 import { canRenderUi } from "./frame-guard";
 import { HOST_API_VERSION, REGISTRY_KEY, createHostRuntime, type HostRuntime } from "./host";
 import type { ToastRequest } from "./toast-store";
+import { createPromptScope, dismissPrompts, type PromptScope } from "./parts/prompts";
 
 export type { TinyCloudUI } from "./api";
 export type { UiConfig, UiPosition } from "./config";
@@ -17,6 +18,8 @@ export interface UiClientHandle {
   unregister(): void;
   /** Shows a toast in the host. False when this client is headless, detached in a frame, or unregistered. */
   toast(request: ToastRequest): boolean;
+  /** Prompts this client opens. `uiEnabled` is false for `ui: false` and detached clients. */
+  readonly promptScope: PromptScope;
 }
 
 export interface UiClientOptions {
@@ -56,6 +59,7 @@ function detachedHandle(): UiClientHandle {
     reset() {},
     unregister() {},
     toast: () => false,
+    promptScope: createPromptScope(false),
   };
 }
 
@@ -70,6 +74,7 @@ export function registerUiClient(options: UiClientOptions): UiClientHandle {
   if (!runtime) return detachedHandle();
 
   const id = runtime.nextClientId();
+  const promptScope = createPromptScope(true);
   const panel = createPanelClient(id, options.source);
   runtime.register(id, {
     handle: panel,
@@ -86,16 +91,21 @@ export function registerUiClient(options: UiClientOptions): UiClientHandle {
   return {
     api: createUiApi(() => target),
     reset() {
-      if (target) runtime.reset(id);
+      if (target) {
+        dismissPrompts(promptScope);
+        runtime.reset(id);
+      }
     },
     unregister() {
       if (!target) return;
       target = undefined;
+      dismissPrompts(promptScope);
       runtime.unregister(id);
     },
     toast(request) {
       if (target === undefined) return false;
       return runtime.toast(request, id);
     },
+    promptScope,
   };
 }

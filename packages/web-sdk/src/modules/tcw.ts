@@ -564,7 +564,7 @@ export class TinyCloudWeb {
     // explicit handler precedence over `autoCreateSpace`, so always setting one
     // made `autoCreateSpace` dead config in the browser and forced every app
     // through a dialog it may have opted out of.
-    nodeConfig.spaceCreationHandler = resolveSpaceCreationHandler({ ...this.config, toast: this.showToast });
+    nodeConfig.spaceCreationHandler = resolveSpaceCreationHandler({ ...this.config, toast: this.showToast, promptScope: this.uiClient.promptScope });
 
     this._node = new TinyCloudNode(nodeConfig);
     this._node.on("storage.full", (event) => {
@@ -1270,7 +1270,7 @@ export class TinyCloudWeb {
 
     const result = await requestPermissionsCore(additional, {
       manifest,
-      showModal: this._testHooks?.showModal ?? showPermissionRequestModal,
+      showModal: this._testHooks?.showModal ?? ((options) => showPermissionRequestModal(options, this.uiClient.promptScope)),
       isPromptSuppressed: () => isPermissionPromptSuppressed(manifest),
       suppressPromptFor30Days: () =>
         suppressPermissionPromptFor30Days(manifest),

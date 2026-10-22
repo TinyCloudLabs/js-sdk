@@ -9,6 +9,7 @@ import {
   ISpaceCreationHandler,
   SpaceCreationContext,
 } from "@tinycloud/sdk-core";
+import type { PromptScope } from "../ui/parts/prompts";
 import {
   ModalManager,
   showSpaceCreationModal,
@@ -47,7 +48,7 @@ export class SpaceCreationTimeoutError extends Error {
     super(
       `TinyCloud waited ${formatDuration(timeoutMs)} for you to confirm creating your ` +
         `TinyCloud Space and got no answer. The confirmation dialog is a ` +
-        `<tinycloud-space-modal> element appended to <body>; because it renders in a shadow ` +
+        `<tinycloud-space-modal> element rendered in the TinyCloud panel host; because it renders in a shadow ` +
         `root it can sit behind a full-screen loading overlay and never be seen. ` +
         `Fixes: dismiss or lower the z-index of any overlay shown during sign-in and retry; ` +
         `or set autoCreateSpace: true on TinyCloudWeb to create the space without a dialog; ` +
@@ -71,6 +72,8 @@ export interface ModalSpaceCreationHandlerOptions {
   timeoutMs?: number;
   /** Shows the space-creation outcome toasts. Omit to stay silent. */
   toast?: ToastSink;
+  /** Scope of the UI client that owns this prompt. Omit for the default enabled scope. */
+  promptScope?: PromptScope;
 }
 
 /**
@@ -94,10 +97,12 @@ export interface ModalSpaceCreationHandlerOptions {
 export class ModalSpaceCreationHandler implements ISpaceCreationHandler {
   private readonly timeoutMs: number;
   private readonly toast: ToastSink | undefined;
+  private readonly promptScope: PromptScope | undefined;
 
   constructor(options: ModalSpaceCreationHandlerOptions = {}) {
     this.timeoutMs = options.timeoutMs ?? DEFAULT_SPACE_CREATION_TIMEOUT_MS;
     this.toast = options.toast;
+    this.promptScope = options.promptScope;
   }
 
   /**
@@ -128,7 +133,7 @@ export class ModalSpaceCreationHandler implements ISpaceCreationHandler {
         onDismiss: () => {
           resolve(false);
         },
-      });
+      }, this.promptScope);
     });
 
     try {
@@ -197,6 +202,8 @@ export interface SpaceCreationHandlerConfig {
   spaceCreationTimeoutMs?: number;
   /** Shows the space-creation outcome toasts. Omit to stay silent. */
   toast?: ToastSink;
+  /** Scope of the UI client that owns this prompt. Omit for the default enabled scope. */
+  promptScope?: PromptScope;
 }
 
 /**
@@ -226,5 +233,6 @@ export function resolveSpaceCreationHandler(
   return new ModalSpaceCreationHandler({
     timeoutMs: config.spaceCreationTimeoutMs,
     toast: config.toast,
+    promptScope: config.promptScope,
   });
 }
