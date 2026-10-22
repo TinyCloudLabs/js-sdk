@@ -1,4 +1,5 @@
-import { STORAGE_MANAGE_URL, type StorageStatus, type StorageUsage, type StorageUsageState } from "@tinycloud/sdk-core";
+import type { StorageStatus, StorageUsage, StorageUsageState } from "@tinycloud/sdk-core";
+import { STORAGE_MANAGE_URL } from "./manage-url";
 
 /**
  * Pure view-state reducer for the storage section. No DOM, no strings.

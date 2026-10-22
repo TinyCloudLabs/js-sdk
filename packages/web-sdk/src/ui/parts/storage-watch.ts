@@ -1,4 +1,4 @@
-import { STORAGE_MANAGE_URL } from "@tinycloud/sdk-core";
+import { STORAGE_MANAGE_URL } from "../manage-url";
 import type { HostPart, PanelClient } from "../slots";
 import { manageHrefFor } from "../storage-state";
 
