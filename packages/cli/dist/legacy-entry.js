@@ -41374,6 +41374,14 @@ function shareCliError(error, operation = "publish") {
     if (failure.kind === "upload-failed") {
       return new CLIError("UPLOAD_FAILED", "share source upload failed; nothing was shared", 4);
     }
+    if (failure.kind === "decrypt-not-held") {
+      return new CLIError(
+        "PERMISSION_DENIED",
+        "this sign-in can't create email-addressed shares: it has no permission to decrypt with the account's key. Nothing was shared.",
+        5,
+        { hint: "Share it from https://share.tinycloud.xyz while signed in as the account owner, or ask the owner to share it. A link anyone can open works from this sign-in: --to anyone." }
+      );
+    }
   }
   if (error instanceof ShortLinkError) {
     if (error.code === "not-found") return new CLIError("NOT_FOUND", "this short link has expired, was revoked, or never existed", 4);
@@ -41425,6 +41433,11 @@ function inputUrl(value, stdin) {
 function resolveLink(link4, expectedOrigin) {
   return shareServices.shortLinks?.resolve(link4, expectedOrigin) ?? resolveShortLink(link4, { expectedOrigin });
 }
+function assertTrustedShareOrigin(link4, expectedOrigin) {
+  if (URL.canParse(link4) && new URL(link4).origin !== expectedOrigin) {
+    throw new ShareReceiveError("origin-mismatch", "share link origin is not the trusted Share origin");
+  }
+}
 var SHORT_LINK_WARNING = {
   "rate-limited": "the short-link service is rate limiting this client",
   capacity: "the short-link service is at capacity",
@@ -41451,8 +41464,11 @@ async function inspectShareInputOnce(value, stdin, expectedOrigin, dependencies 
   try {
     parseNativeShareUrl(link4);
   } catch {
-    return (dependencies.inspect ?? inspectShare)(await resolveLink(link4, expectedOrigin), { expectedOrigin });
+    const resolved = await resolveLink(link4, expectedOrigin);
+    assertTrustedShareOrigin(resolved, expectedOrigin);
+    return (dependencies.inspect ?? inspectShare)(resolved, { expectedOrigin });
   }
+  assertTrustedShareOrigin(link4, expectedOrigin);
   throw new CLIError("UNSUPPORTED_LINK", "native bearer links are opaque; receive the link to verify access", 2);
 }
 function jsonOutput(options, command) {
@@ -41675,6 +41691,7 @@ function registerShareCommand(program) {
       } catch {
       }
       if (nativeLink) {
+        assertTrustedShareOrigin(link4, options.viewerOrigin);
         if (shareServices.nativeReader === void 0) throw new CLIError("AUTH_REQUIRED", "native TinyCloud receive is not configured", 3);
         const native = await shareServices.nativeReader(link4);
         if (maxBytes !== void 0 && native.bytes.byteLength > maxBytes) throw new CLIError("MAX_BYTES_EXCEEDED", "shared content exceeds max-bytes", 7);
@@ -41687,7 +41704,9 @@ function registerShareCommand(program) {
         else receiveHuman(output3);
         return;
       }
-      const result = await receiveShare(await resolveLink(link4, options.viewerOrigin), {
+      const resolved = await resolveLink(link4, options.viewerOrigin);
+      assertTrustedShareOrigin(resolved, options.viewerOrigin);
+      const result = await receiveShare(resolved, {
         expectedOrigin: options.viewerOrigin,
         ...maxBytes === void 0 ? {} : { maxContentBlobBytes: maxBytes }
       });
@@ -41716,7 +41735,7 @@ function registerShareCommand(program) {
       if (shareServices.records === void 0) throw new CLIError("AUTH_REQUIRED", "sender history storage is not configured", 3);
       const result = await listShares(shareServices.records);
       if (json) writeJson2({ protocol: "tinycloud-share", version: 1, shares: result });
-      else process.stdout.write(result.map((item) => `${item.shareId}	${item.target}	${item.expiresAt}`).join("\n") + (result.length ? "\n" : ""));
+      else process.stdout.write(result.map((item) => `${item.shareId}	${item.target}	${item.expiresAt}	${item.revoked ? "revoked" : Date.parse(item.expiresAt) < Date.now() ? "expired" : "active"}`).join("\n") + (result.length ? "\n" : ""));
     } catch (error) {
       return handleError(shareCliError(error));
     }

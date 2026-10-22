@@ -29,6 +29,7 @@
     "@tinycloud/sdk-services-test": "19.0.0"
   },
   "changesets": [
+    "cli-share-131-fixes",
     "cli-share-short-links"
   ]
 }

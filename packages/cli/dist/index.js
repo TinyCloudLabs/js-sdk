@@ -28462,6 +28462,9 @@ function throwKvUploadFailure(error) {
   if (rejection) throw new SharePublishAuthorityError({ kind: "storage-full", ...rejection });
   throw new SharePublishAuthorityError({ kind: "upload-failed" });
 }
+function sessionHoldsEncryptionDecrypt(node, networkId) {
+  return node.hasRuntimePermissions([{ service: "tinycloud.encryption", path: networkId, actions: ["tinycloud.encryption/decrypt"] }]);
+}
 var DEFAULT_SHARE_ORIGIN = "https://share.tinycloud.xyz";
 var MIN_DOMAIN_DELIVERY_VERSION = "1.17.3";
 function supportsDomainDelivery(version2) {
@@ -28908,7 +28911,7 @@ function createShareAuthorityAdapters(input = {}) {
   };
   const targetAdapter = { async publish(targetInput) {
     if (input.publishTarget !== void 0) return input.publishTarget(targetInput);
-    const [config, node] = await Promise.all([publicConfig(), authenticatedNode()]);
+    const node = await authenticatedNode();
     const session = node.restorableSession;
     const ownerSpaceId = session?.spaceId;
     const localKey = !node.isSessionOnly;
@@ -28921,7 +28924,6 @@ function createShareAuthorityAdapters(input = {}) {
     if (ownerSpaceId === void 0 || node.isSessionOnly && (!session?.siwe || !session.signature || sessionExpiresAt === void 0)) {
       throw new SharePublishAuthorityError({ kind: "owner-space-unresolved", localKey, profileName: activeProfileName2 });
     }
-    if (targetInput.origin !== config.shareOrigin) throw new SharePublishAuthorityError({ kind: "origin-mismatch" });
     if (node.isSessionOnly && sessionExpiresAt !== void 0) {
       const roundedSessionExpiry = new Date(Math.floor(sessionExpiresAt.getTime() / 1e3) * 1e3);
       if (roundedSessionExpiry.getTime() <= Date.now() + 6e4) {
@@ -28955,6 +28957,12 @@ function createShareAuthorityAdapters(input = {}) {
         profileName: activeProfileName2
       });
     }
+    const addressedEncryptionNetwork = targetInput.target.kind === "bearer" ? void 0 : node.getEncryptionNetworkIdForSpace(ownerSpaceId);
+    if (addressedEncryptionNetwork !== void 0 && node.isSessionOnly && !sessionHoldsEncryptionDecrypt(node, addressedEncryptionNetwork)) {
+      throw new SharePublishAuthorityError({ kind: "decrypt-not-held" });
+    }
+    const config = await publicConfig();
+    if (targetInput.origin !== config.shareOrigin) throw new SharePublishAuthorityError({ kind: "origin-mismatch" });
     const activeNode = await node.activeNodeIdentity();
     if (targetInput.notify === true && targetInput.target.kind === "emailDomain") {
       await assertDomainDeliveryForOrigin(activeNode.origin, "publish");
@@ -29075,7 +29083,7 @@ function createShareAuthorityAdapters(input = {}) {
       const rejected = error instanceof LocationRecordValidationError || error instanceof LocationRegistryHttpError && error.status >= 400 && error.status < 500 && error.status !== 408 && error.status !== 429;
       throw new SharePublishAuthorityError({ kind: rejected ? "registry-rejected" : "registry-unavailable" });
     }
-    const encryptionNetwork = node.getEncryptionNetworkIdForSpace(ownerSpaceId);
+    const encryptionNetwork = addressedEncryptionNetwork;
     const encrypted = await node.encryption.encryptToNetwork(encryptionNetwork, file.bytes, { metadata: { contentType: mediaType } });
     if (!encrypted.ok) throw new Error("addressed source encryption was rejected");
     const storedBytes = new TextEncoder().encode(canonicalize3(encrypted.data));
@@ -30644,6 +30652,14 @@ function shareCliError(error, operation = "publish") {
     if (failure.kind === "upload-failed") {
       return new CLIError("UPLOAD_FAILED", "share source upload failed; nothing was shared", 4);
     }
+    if (failure.kind === "decrypt-not-held") {
+      return new CLIError(
+        "PERMISSION_DENIED",
+        "this sign-in can't create email-addressed shares: it has no permission to decrypt with the account's key. Nothing was shared.",
+        5,
+        { hint: "Share it from https://share.tinycloud.xyz while signed in as the account owner, or ask the owner to share it. A link anyone can open works from this sign-in: --to anyone." }
+      );
+    }
   }
   if (error instanceof ShortLinkError) {
     if (error.code === "not-found") return new CLIError("NOT_FOUND", "this short link has expired, was revoked, or never existed", 4);
@@ -30695,6 +30711,11 @@ function inputUrl(value, stdin) {
 function resolveLink(link4, expectedOrigin) {
   return shareServices.shortLinks?.resolve(link4, expectedOrigin) ?? resolveShortLink(link4, { expectedOrigin });
 }
+function assertTrustedShareOrigin(link4, expectedOrigin) {
+  if (URL.canParse(link4) && new URL(link4).origin !== expectedOrigin) {
+    throw new ShareReceiveError("origin-mismatch", "share link origin is not the trusted Share origin");
+  }
+}
 var SHORT_LINK_WARNING = {
   "rate-limited": "the short-link service is rate limiting this client",
   capacity: "the short-link service is at capacity",
@@ -30721,8 +30742,11 @@ async function inspectShareInputOnce(value, stdin, expectedOrigin, dependencies 
   try {
     parseNativeShareUrl(link4);
   } catch {
-    return (dependencies.inspect ?? inspectShare)(await resolveLink(link4, expectedOrigin), { expectedOrigin });
+    const resolved = await resolveLink(link4, expectedOrigin);
+    assertTrustedShareOrigin(resolved, expectedOrigin);
+    return (dependencies.inspect ?? inspectShare)(resolved, { expectedOrigin });
   }
+  assertTrustedShareOrigin(link4, expectedOrigin);
   throw new CLIError("UNSUPPORTED_LINK", "native bearer links are opaque; receive the link to verify access", 2);
 }
 function jsonOutput(options, command) {
@@ -30945,6 +30969,7 @@ function registerShareCommand(program2) {
       } catch {
       }
       if (nativeLink) {
+        assertTrustedShareOrigin(link4, options.viewerOrigin);
         if (shareServices.nativeReader === void 0) throw new CLIError("AUTH_REQUIRED", "native TinyCloud receive is not configured", 3);
         const native = await shareServices.nativeReader(link4);
         if (maxBytes !== void 0 && native.bytes.byteLength > maxBytes) throw new CLIError("MAX_BYTES_EXCEEDED", "shared content exceeds max-bytes", 7);
@@ -30957,7 +30982,9 @@ function registerShareCommand(program2) {
         else receiveHuman(output2);
         return;
       }
-      const result = await receiveShare(await resolveLink(link4, options.viewerOrigin), {
+      const resolved = await resolveLink(link4, options.viewerOrigin);
+      assertTrustedShareOrigin(resolved, options.viewerOrigin);
+      const result = await receiveShare(resolved, {
         expectedOrigin: options.viewerOrigin,
         ...maxBytes === void 0 ? {} : { maxContentBlobBytes: maxBytes }
       });
@@ -30986,7 +31013,7 @@ function registerShareCommand(program2) {
       if (shareServices.records === void 0) throw new CLIError("AUTH_REQUIRED", "sender history storage is not configured", 3);
       const result = await listShares(shareServices.records);
       if (json) writeJson2({ protocol: "tinycloud-share", version: 1, shares: result });
-      else process.stdout.write(result.map((item) => `${item.shareId}	${item.target}	${item.expiresAt}`).join("\n") + (result.length ? "\n" : ""));
+      else process.stdout.write(result.map((item) => `${item.shareId}	${item.target}	${item.expiresAt}	${item.revoked ? "revoked" : Date.parse(item.expiresAt) < Date.now() ? "expired" : "active"}`).join("\n") + (result.length ? "\n" : ""));
     } catch (error) {
       return handleError(shareCliError(error));
     }
