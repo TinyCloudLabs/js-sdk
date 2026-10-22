@@ -1,7 +1,5 @@
 import { parseExpiry, type PermissionEntry } from "@tinycloud/node-sdk";
 
-const DECRYPT_ACTION = "tinycloud.encryption/decrypt";
-
 /** A decrypt grant lives at most this long (ms). */
 export const DECRYPT_MAX_LIFETIME_MS = 60 * 60 * 1000;
 
@@ -11,16 +9,32 @@ export const DECRYPT_CAP_NOTICE = "Decrypt access lasts at most one hour, so thi
 /** DRAFT public wording: the SDK's DECRYPT_EXPIRY_TOO_LONG refusal as the CLI shows it. */
 export const DECRYPT_EXPIRY_TOO_LONG_MESSAGE = "Decrypt access lasts at most one hour; request a shorter lifetime.";
 
-/** Actions that grant decrypt: the exact action and the encryption service wildcard. */
-const DECRYPT_GRANTING_ACTIONS: Record<string, true> = { [DECRYPT_ACTION]: true, "tinycloud.encryption/*": true };
-/** Short forms count only on an encryption entry. */
-const SHORT_DECRYPT_GRANTING_ACTIONS: Record<string, true> = { decrypt: true, "*": true };
+const ENCRYPTION_ACTION_PREFIXES = ["tinycloud.encryption/", "encryption/"];
 
-export function includesDecrypt(requested: readonly Pick<PermissionEntry, "actions" | "service">[]): boolean {
+/** Encryption actions known not to decrypt, as the part after the service prefix. */
+const NON_DECRYPT_ENCRYPTION_ACTIONS: Record<string, true> = { "network.create": true, "network.revoke": true };
+
+function actionGrantsDecrypt(action: unknown, encryptionEntry: boolean): boolean {
+  if (typeof action !== "string") return false;
+  const prefix = ENCRYPTION_ACTION_PREFIXES.find((candidate) => action.startsWith(candidate));
+  const base = prefix === undefined ? action : action.slice(prefix.length);
+  if (prefix === undefined && !encryptionEntry) return false;
+  // Fail closed: on an encryption entry anything not positively known to be non-decrypt counts.
+  return !Object.hasOwn(NON_DECRYPT_ENCRYPTION_ACTIONS, base);
+}
+
+/**
+ * True when any entry grants decrypt: the decrypt action, the encryption wildcard, a short-prefix
+ * form, or any other action on an encryption entry. Non-object entries and non-array actions are
+ * false here so request validation reports them.
+ */
+export function includesDecrypt(requested: readonly unknown[]): boolean {
   return requested.some((entry) => {
-    const encryption = entry.service === "tinycloud.encryption" || entry.service === "encryption";
-    return entry.actions.some((action) =>
-      Object.hasOwn(DECRYPT_GRANTING_ACTIONS, action) || (encryption && Object.hasOwn(SHORT_DECRYPT_GRANTING_ACTIONS, action)));
+    if (typeof entry !== "object" || entry === null) return false;
+    const { service, actions } = entry as { service?: unknown; actions?: unknown };
+    if (!Array.isArray(actions)) return false;
+    const encryptionEntry = service === "tinycloud.encryption" || service === "encryption";
+    return actions.some((action) => actionGrantsDecrypt(action, encryptionEntry));
   });
 }
 
@@ -30,6 +44,10 @@ export const DECRYPT_REQUEST_TOO_LONG_MESSAGE =
 
 /** DRAFT public wording: consent line for a decrypt request, after "It lasts up to <N>." */
 export const DECRYPT_CONSENT_NOTE = "Decrypt access never lasts longer than one hour;";
+
+/** DRAFT public wording: stderr notice when `auth request --emit` gives a decrypt request the one-hour lifetime. */
+export const DECRYPT_EMIT_DEFAULT_NOTICE =
+  "This request includes decrypt access, so it asks for one hour instead of the usual 7 days.";
 
 /** True when a request's lifetime is absent (the default is longer), unreadable, or over one hour. */
 export function exceedsDecryptLifetime(expiry: string | number | undefined): boolean {

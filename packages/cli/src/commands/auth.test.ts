@@ -103,6 +103,7 @@ const recorded = {
   grantedRequests: [] as Array<Record<string, unknown>>,
   grantedExpiries: [] as Array<number | string | undefined>,
   runtimeGrantCalls: [] as Array<{ requested: unknown[]; expiry: string | number | undefined }>,
+  createdArtifacts: [] as Array<Record<string, unknown>>,
   grantHistory: [] as Array<{ profile: string; entry: Record<string, unknown> }>,
   localGrantArtifacts: [] as Array<{ profile: string; delegation: Record<string, unknown> }>,
   removedReplicaProfiles: [] as string[],
@@ -150,6 +151,7 @@ function resetState(): void {
   recorded.grantedRequests.length = 0;
   recorded.grantedExpiries.length = 0;
   recorded.runtimeGrantCalls.length = 0;
+  recorded.createdArtifacts.length = 0;
   recorded.localGrantArtifacts.length = 0;
   recorded.removedReplicaProfiles.length = 0;
   recorded.grantHistory.length = 0;
@@ -449,7 +451,10 @@ mock.module("../lib/permissions.js", () => ({
   appendPermissionRequestArtifact: async (_profile: string, artifact: Record<string, unknown>) => {
     importRecorded.appendedRequests.push(artifact);
   },
-  createPermissionRequestArtifact: () => ({}),
+  createPermissionRequestArtifact: (input: Record<string, unknown>) => {
+    recorded.createdArtifacts.push(input);
+    return {};
+  },
   getLastPermissionRequestArtifact: async () => null,
   getPermissionRequestArtifact: async () => storedImportRequest,
   isDelegationImportArtifact: validateDelegationImportArtifact,
@@ -2220,6 +2225,92 @@ describe("local-key decrypt grants last at most one hour", () => {
     );
   });
 
+  test.each([
+    ["a null entry", [null]],
+    ["an entry without actions", [{ service: "tinycloud.kv", space: "secrets", path: "a/" }]],
+    ["an entry whose actions are not an array", [{ service: "tinycloud.encryption", space: "encryption", path: "", actions: "tinycloud.encryption/decrypt" }]],
+  ])("auth grant of %s keeps the malformed-entry usage error", async (_name, requested) => {
+    await runAuthCommand(["auth", "grant", await writeRequest(requested, "7d"), "--yes"]);
+
+    expect(recorded.errors).toEqual([expect.objectContaining({
+      code: "INVALID_AUTH_REQUEST",
+      exitCode: 2,
+      message: "Entry 1 of the request is malformed: it needs a service, a path and at least one action. Nothing was signed.",
+    })]);
+    expect(recorded.runtimeGrantCalls).toEqual([]);
+    expect(recorded.grantedRequests).toEqual([]);
+  });
+
+  test("auth request --grant treats short-prefix encryption actions as decrypt", async () => {
+    const shortWildcard = { service: "tinycloud.encryption", space: "default", path: "", actions: ["encryption/*"] };
+    manifestPermissions = [shortWildcard];
+
+    await runAuthCommand(["auth", "request", "--grant", "--yes", "--manifest", "m.json", "--expiry", "7d"]);
+
+    expect(recorded.runtimeGrantCalls).toEqual([{ requested: [shortWildcard], expiry: HOUR_MS }]);
+    expect(notices()).toHaveLength(1);
+  });
+
+  describe("auth request --emit", () => {
+    const EMIT_NOTICE = "This request includes decrypt access, so it asks for one hour instead of the usual 7 days.";
+    const emitNotices = () => stderrLines.filter((line) => line.includes(EMIT_NOTICE));
+
+    test("a secrets manifest with no --expiry is emitted with a one-hour lifetime and one notice", async () => {
+      manifestPermissions = secretsManifestEntries;
+
+      await runAuthCommand(["auth", "request", "--manifest", "m.json"]);
+
+      expect(recorded.errors).toEqual([]);
+      expect(recorded.createdArtifacts.map((artifact) => artifact.requestedExpiry)).toEqual(["1h"]);
+      expect(emitNotices()).toHaveLength(1);
+    });
+
+    test("an explicit --expiry over one hour with decrypt is refused before anything is written", async () => {
+      manifestPermissions = secretsManifestEntries;
+
+      await runAuthCommand(["auth", "request", "--manifest", "m.json", "--expiry", "7d"]);
+
+      expect(recorded.errors).toEqual([expect.objectContaining({
+        code: "DECRYPT_EXPIRY_TOO_LONG",
+        exitCode: 2,
+        message: "Decrypt access lasts at most one hour; request a shorter lifetime.",
+      })]);
+      expect(recorded.createdArtifacts).toEqual([]);
+      expect(emitNotices()).toEqual([]);
+    });
+
+    test("an explicit --expiry of one hour or less with decrypt is kept, without a notice", async () => {
+      manifestPermissions = secretsManifestEntries;
+
+      await runAuthCommand(["auth", "request", "--manifest", "m.json", "--expiry", "30m"]);
+
+      expect(recorded.createdArtifacts.map((artifact) => artifact.requestedExpiry)).toEqual(["30m"]);
+      expect(emitNotices()).toEqual([]);
+    });
+
+    test("a request without decrypt is emitted exactly as before", async () => {
+      manifestPermissions = [kvGet];
+      await runAuthCommand(["auth", "request", "--manifest", "m.json"]);
+      await runAuthCommand(["auth", "request", "--manifest", "m.json", "--expiry", "7d"]);
+
+      expect(recorded.createdArtifacts.map((artifact) => artifact.requestedExpiry)).toEqual([undefined, "7d"]);
+      expect(emitNotices()).toEqual([]);
+    });
+
+    test("emit then auth grant of a secrets manifest signs it with one hour", async () => {
+      manifestPermissions = secretsManifestEntries;
+      await runAuthCommand(["auth", "request", "--manifest", "m.json"]);
+      const [emitted] = recorded.createdArtifacts;
+      expect(emitted).toBeDefined();
+
+      await runAuthCommand(["auth", "grant", await writeRequest(emitted!.requested as unknown[], emitted!.requestedExpiry as string | undefined), "--yes"]);
+
+      expect(recorded.errors).toEqual([]);
+      expect(recorded.runtimeGrantCalls.map((call) => call.expiry)).toEqual(["1h"]);
+      expect(recorded.grantedExpiries).toEqual(["1h"]);
+    });
+  });
+
   test("every grant call made with decrypt carries an explicit lifetime of at most one hour", async () => {
     manifestPermissions = [kvGet, decrypt];
     await runAuthCommand(["auth", "request", "--grant", "--yes", "--manifest", "m.json", "--expiry", "7d"]);
@@ -2677,7 +2768,7 @@ describe("auth grant for an OpenKey owner gets a fresh owner approval per agent 
       expect(recorded.localGrantArtifacts).toEqual([]);
     });
 
-    test("decrypt at 30m asks OpenKey for 30 minutes", async () => {
+    test("decrypt at 30m sends a 1800s lifetime to OpenKey and is not refused as too long (not a raw URN entry, so no grant is produced here)", async () => {
       openKeyDelegation = approvalBy(primaryOwner, 30 * 60 * 1000);
       const source = await writeDecryptRequest(decryptEntry, "30m");
 

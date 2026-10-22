@@ -34,6 +34,8 @@ import {
 } from "../output/formatter.js";
 import {
   boundDecryptExpiryWithNotice,
+  DECRYPT_EMIT_DEFAULT_NOTICE,
+  DECRYPT_EXPIRY_TOO_LONG_MESSAGE,
   DECRYPT_REQUEST_TOO_LONG_MESSAGE,
   exceedsDecryptLifetime,
   includesDecrypt,
@@ -965,12 +967,22 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
         }
 
         if (!options.grant) {
+          // A request that includes decrypt asks for at most one hour, so the owner's `auth grant` accepts it.
+          let emitExpiry = expiryOption;
+          if (includesDecrypt(requested)) {
+            if (expiryOption === undefined) {
+              emitExpiry = "1h";
+              process.stderr.write(`${DECRYPT_EMIT_DEFAULT_NOTICE}\n`);
+            } else if (exceedsDecryptLifetime(expiryOption)) {
+              throw new CLIError("DECRYPT_EXPIRY_TOO_LONG", DECRYPT_EXPIRY_TOO_LONG_MESSAGE, ExitCode.USAGE_ERROR);
+            }
+          }
           const artifact = createPermissionRequestArtifact({
             profileName: ctx.profile,
             profile,
             host: ctx.host,
             requested,
-            requestedExpiry: expiryOption,
+            requestedExpiry: emitExpiry,
           });
           await appendPermissionRequestArtifact(ctx.profile, artifact);
           await emitPermissionRequestArtifact(artifact, options.emit);
@@ -1320,19 +1332,18 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
           );
         }
         assertRequestFields(parsed);
-        // Decrypt never lasts longer than one hour: refuse (never shorten) before any prompt,
-        // approval, signature or network request.
-        const decryptRequest = includesDecrypt(parsed.requested as PermissionEntry[]);
-        if (decryptRequest && exceedsDecryptLifetime(parsed.requestedExpiry)) {
-          throw new CLIError("DECRYPT_EXPIRY_TOO_LONG", DECRYPT_REQUEST_TOO_LONG_MESSAGE, ExitCode.USAGE_ERROR);
-        }
-
         // One resolved list is described, gated and signed. The signer's own defaults (an entry with
         // no space is in the owner's `applications` space) and the profile's name resolution are
         // applied once, here, and the signer then consumes this list rather than re-reading the file.
         const requested = finalizeSigningEntries(
           await resolvePermissionSpaces(entriesForSigning(parsed.requested as PermissionEntry[]), ctx.profile),
         );
+        // Decrypt never lasts longer than one hour: refuse (never shorten) on the validated list,
+        // before any prompt, approval, signature or network request.
+        const decryptRequest = includesDecrypt(requested);
+        if (decryptRequest && exceedsDecryptLifetime(parsed.requestedExpiry)) {
+          throw new CLIError("DECRYPT_EXPIRY_TOO_LONG", DECRYPT_REQUEST_TOO_LONG_MESSAGE, ExitCode.USAGE_ERROR);
+        }
         const [applications] = await resolvePermissionSpaces(
           [{ service: "tinycloud.kv", space: APPS_AGENT_SPACE, path: "", actions: ["tinycloud.kv/get"] }],
           ctx.profile,
