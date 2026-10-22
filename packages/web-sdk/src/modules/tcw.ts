@@ -987,6 +987,11 @@ export class TinyCloudWeb {
   address = (): string | undefined => this._node?.address;
   chainId = (): number | undefined => this._node?.session?.chainId;
 
+  /** Returns whether the session or an unexpired runtime grant covers all entries. Never prompts. */
+  hasPermissions(entries: PermissionEntry[]): boolean {
+    return this._node?.hasRuntimePermissions(entries) ?? false;
+  }
+
   get did(): string { return this.node.did; }
   get sessionDid(): string { return this.node.sessionDid; }
   get credentialHolderDid(): string { return this.node.credentialHolderDid; }
