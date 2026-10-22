@@ -190,6 +190,12 @@ export type Tc1789Ratchet = HardeningRatchet;
  * head; every other ceiling stays that of the sdk-services pin row. Same shape as the #565 hardening row.
  */
 export type Tc1757Ratchet = HardeningRatchet;
+/**
+ * One reviewed exact-delta admission of js-sdk #686 (TC-1777): the replication wiring moved into its own module, which
+ * costs a few bytes at the module boundary. The root ceilings rise to the bytes canonical CI measured on the #686
+ * code head; every other ceiling stays that of the web-recipient row. Same shape as the #565 hardening row.
+ */
+export type Tc1777Ratchet = HardeningRatchet;
 export type Ledger = {
   allowance: GzipSizes;
   entries: LedgerEntry[];
@@ -214,6 +220,7 @@ export type Ledger = {
   masterDriftRatchet?: MasterDriftRatchet;
   tc1789Ratchet?: Tc1789Ratchet;
   tc1757Ratchet?: Tc1757Ratchet;
+  tc1777Ratchet?: Tc1777Ratchet;
 };
 
 const formats = ["index.mjs", "index.cjs"] as const;
@@ -768,6 +775,7 @@ export function ancestryPins(root: Ledger, hasGatedOnly: boolean): Array<{ row: 
   if (root.masterDriftRatchet !== undefined) pins.push({ row: "masterDriftRatchet", pin: root.masterDriftRatchet.sourceCommits.at(-1)! });
   if (root.tc1789Ratchet !== undefined) pins.push({ row: "tc1789Ratchet", pin: root.tc1789Ratchet.sourceCommits.at(-1)! });
   if (root.tc1757Ratchet !== undefined) pins.push({ row: "tc1757Ratchet", pin: root.tc1757Ratchet.sourceCommits.at(-1)! });
+  if (root.tc1777Ratchet !== undefined) pins.push({ row: "tc1777Ratchet", pin: root.tc1777Ratchet.sourceCommits.at(-1)! });
   if (hasGatedOnly) pins.push({ row: "gatedOnlyRatchet", pin: approvedGatedOnlyRatchet.sourceCommit });
   return pins;
 }
@@ -799,6 +807,7 @@ export function rootCeilings(root: Ledger): Array<{ row: string; ceiling: GzipSi
     ["masterDriftRatchet", root.masterDriftRatchet?.root.ceiling],
     ["tc1789Ratchet", root.tc1789Ratchet?.root.ceiling],
     ["tc1757Ratchet", root.tc1757Ratchet?.root.ceiling],
+    ["tc1777Ratchet", root.tc1777Ratchet?.root.ceiling],
   ];
   return rows.flatMap(([row, ceiling]) => ceiling === undefined ? [] : [{ row, ceiling }]);
 }
@@ -951,6 +960,43 @@ export const approvedTc1757Ratchet: Tc1757Ratchet = {
   reason: "web-sdk imports share-sdk's narrow web-recipient entry; root ceiling lowered to measured CI bytes (TC-1757)",
 };
 
+/**
+ * Replication wiring in its own module (#686, TC-1777), approved by Naomi, 2026-10-22: the root index.mjs /
+ * index.cjs ceilings rise from 1,458,843 / 1,401,918 to 1,458,858 / 1,401,947, the bytes canonical CI printed on the
+ * #686 code head 187b8a43. Master bc49820c measured 1,458,843 / 1,401,918 (run 39844729108), so the measured
+ * growth against master is +15 / +29, the cost of the module boundary. First-import, activation and worker
+ * ceilings are unchanged.
+ */
+export const approvedTc1777Ratchet: Tc1777Ratchet = {
+  label: "replication wiring in its own module (#686): root ceiling raised to the measured CI bytes",
+  ruling: "Approved by Naomi (2026-10-22, policy review relayed by Amos)",
+  base: "bc49820c1417a449041e9801b60c86a63485b55d",
+  sourceCommits: [
+    "187b8a433a1c02008f066a00e41d36819acbc007",
+  ],
+  canonicalCI: {
+    run: "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39855300327",
+    jobs: [
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39855300327/job/120091843728",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39855300327/job/120091844294",
+    ],
+  },
+  root: {
+    delta: { "index.mjs": 15, "index.cjs": 29 },
+    ceiling: { "index.mjs": 1458858, "index.cjs": 1401947 },
+  },
+  firstImport: {
+    delta: { "replica.mjs": 0, "replica.cjs": 0 },
+    ceiling: { "replica.mjs": 51925, "replica.cjs": 67141 },
+  },
+  activation: {
+    delta: { "activation.mjs": 0, "activation.cjs": 0 },
+    ceiling: { "activation.mjs": 23117, "activation.cjs": 24700 },
+  },
+  worker: { delta: 0, ceiling: 822753 },
+  reason: "replication wiring moved into its own module; +15 B (mjs) / +29 B (cjs) gzip from the module boundary (TC-1777)",
+};
+
 export type GatedOnlyRatchet = {
   label: string;
   sourceCommit: string;
@@ -983,7 +1029,7 @@ const historicalToolchain = "Bun 1.4.3; production webpack; gzip -9 -c";
 /** Only a git merge-base ledger may retain the pre-correction toolchain. */
 export function validateLedger(value: Ledger, historicalBase = false): void {
   if (!value || !value.allowance || !Array.isArray(value.entries) ||
-      Object.keys(value).some((key) => key !== "allowance" && key !== "entries" && key !== "phase2Ratchet" && key !== "fixRequiredRatchet" && key !== "canonicalToolchainCorrection" && key !== "masterMergeResolution" && key !== "hardeningRatchet" && key !== "logoutRatchet" && key !== "tc1413Ratchet" && key !== "tc1436Ratchet" && key !== "tc1432Ratchet" && key !== "tc1424Ratchet" && key !== "tc1448Ratchet" && key !== "tc1443Ratchet" && key !== "tc1466Ratchet" && key !== "tc1443bRatchet" && key !== "tc1428Ratchet" && key !== "tc1476Ratchet" && key !== "tc1475Ratchet" && key !== "tc606WorkerRatchet" && key !== "masterDriftRatchet" && key !== "tc1789Ratchet" && key !== "tc1757Ratchet")) {
+      Object.keys(value).some((key) => key !== "allowance" && key !== "entries" && key !== "phase2Ratchet" && key !== "fixRequiredRatchet" && key !== "canonicalToolchainCorrection" && key !== "masterMergeResolution" && key !== "hardeningRatchet" && key !== "logoutRatchet" && key !== "tc1413Ratchet" && key !== "tc1436Ratchet" && key !== "tc1432Ratchet" && key !== "tc1424Ratchet" && key !== "tc1448Ratchet" && key !== "tc1443Ratchet" && key !== "tc1466Ratchet" && key !== "tc1443bRatchet" && key !== "tc1428Ratchet" && key !== "tc1476Ratchet" && key !== "tc1475Ratchet" && key !== "tc606WorkerRatchet" && key !== "masterDriftRatchet" && key !== "tc1789Ratchet" && key !== "tc1757Ratchet" && key !== "tc1777Ratchet")) {
     throw new Error("Invalid packages/web-sdk/scripts/replica-size-ledger.json shape");
   }
   if (Object.keys(value.allowance).some((key) => !formats.includes(key as typeof formats[number]))) {
@@ -1107,6 +1153,10 @@ export function validateLedger(value: Ledger, historicalBase = false): void {
       (!value.tc1789Ratchet || JSON.stringify(value.tc1757Ratchet) !== JSON.stringify(approvedTc1757Ratchet))) {
     throw new Error("Only Naomi's exact canonical web-recipient entry ratchet is approved.");
   }
+  if (value.tc1777Ratchet !== undefined &&
+      (!value.tc1757Ratchet || JSON.stringify(value.tc1777Ratchet) !== JSON.stringify(approvedTc1777Ratchet))) {
+    throw new Error("Only Naomi's exact canonical replication-wiring boundary ratchet is approved.");
+  }
 }
 
 /** The #606 worker ratchet is introduced once at its exact canonical bytes and immutable afterwards. */
@@ -1138,6 +1188,14 @@ export function validateTc1757RatchetTransition(base?: Tc1757Ratchet, current?: 
   if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc1757Ratchet) ||
       base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
     throw new Error("The exact web-recipient entry ratchet may be introduced once and cannot change later.");
+  }
+}
+
+/** The replication-wiring boundary ratchet is introduced once at its exact canonical bytes and immutable afterwards. */
+export function validateTc1777RatchetTransition(base?: Tc1777Ratchet, current?: Tc1777Ratchet): void {
+  if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc1777Ratchet) ||
+      base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
+    throw new Error("The exact replication-wiring boundary ratchet may be introduced once and cannot change later.");
   }
 }
 
